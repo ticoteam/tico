@@ -3,7 +3,9 @@
 // History, and the Attribution tab with its rules. Edit posts attribute with share_bps (50% → 5000) and refuses a total
 // over 100% before anything is sent; Clear posts splits []; Undo posts attribute_undo; the rules' On switch posts
 // attribution_rule_set with enabled false; Delete asks in the menu first, then posts attribution_rule_delete. The tab
-// is hidden (and its address redirects) from a teammate without finance.attribution. Phone width: no sideways scroll.
+// is hidden (and its address redirects) from a teammate without finance.attribution. The Classes table lists the books'
+// classes and departments with a team picker; Save posts attribution_map with only the changed rows, and a teammate whose
+// dimensions read is refused sees no Classes table. Phone width: no sideways scroll.
 // TICO_UI_SHOTS=<dir> saves screenshots.
 const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
@@ -53,6 +55,11 @@ const RULES = [{id: 'r1', name: 'Google Ads to Rental', match: {kind: 'vendor', 
 {id: 'r2', name: 'Card 0001 split', match: {kind: 'money_account', id: 'm1', label: 'Checking ••0001'}, splits: [{team: 'rental', share_bps: 6000}, {team: 'consumer', share_bps: 4000}],
   enabled: false, apply_from: '2026-11-01', created_by: 'human:ana', updated_at: '2026-11-03T09:00:00Z'}];
 
+// The books' classes and departments (GET /attribution/dimensions): Marketing has a rule to a team, Ops has none.
+const DIMS = [{kind: 'class', id: 'k-mkt', name: 'Marketing', lines: 4, amount: 1470000, rule_id: 'r9', splits: [{team: 'mkt', share_bps: 10000}]},
+  {kind: 'class', id: 'k-ops', name: 'Ops', lines: 3, amount: 3200000, rule_id: null, splits: null},
+  {kind: 'location', id: 'd-austin', name: 'Austin', lines: 1, amount: 70000, rule_id: null, splits: null}];
+
 async function open(browser, {viewport = DESKTOP, viewer = 'ana', hash = '#/finance/transactions'} = {}) {
   const person = people.find(p => p.id === viewer);
   const me = {id: viewer, name: person.name, email: viewer + '@acme.example', role: person.role, company_role: person.role, cloud: true};
@@ -67,7 +74,7 @@ async function open(browser, {viewport = DESKTOP, viewer = 'ana', hash = '#/fina
     if (url.origin !== 'http://tico-ui.test') return route.abort();
     if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
     const file = p.startsWith('/tico/ui/') ? uiFile(p.slice(9)) : p.startsWith('/vendor/') ? path.join(uiDir, p) : '';
-    if (file && fs.existsSync(file)) return route.fulfill({contentType: file.endsWith('.js') ? 'application/javascript' : file.endsWith('.css') ? 'text/css' : file.endsWith('.woff2') ? 'font/woff2' : 'application/octet-stream', body: fs.readFileSync(file)});
+    if (file && fs.existsSync(file)) return route.fulfill({contentType: /\.(?:js|ts)$/.test(file) ? 'application/javascript' : file.endsWith('.css') ? 'text/css' : file.endsWith('.woff2') ? 'font/woff2' : 'application/octet-stream', body: fs.readFileSync(file)});
     if (p === '/api/v2/events') return;
     const body = method === 'GET' ? null : req.postDataJSON?.() ?? null;
     if (method !== 'GET') writes.push([method, p + url.search, body]);
@@ -88,6 +95,7 @@ async function open(browser, {viewport = DESKTOP, viewer = 'ana', hash = '#/fina
     if (p === '/api/v2/finance/transactions') return json({rows: TX, next: null});
     if (p.startsWith('/api/v2/finance/lines/') && p.endsWith('/attribution') && method === 'GET') { const a = ATTR[decodeURIComponent(p.split('/').slice(-2)[0])]; return a ? json(a) : json({detail: 'not found'}, 404); }
     if (p === '/api/v2/finance/attribution-rules' && method === 'GET') return json({rules: viewer === 'ana' ? RULES : [], can_change: viewer === 'ana'});
+    if (p === '/api/v2/finance/attribution/dimensions' && method === 'GET') return viewer === 'ana' ? json({dimensions: DIMS, can_change: true, view_version: 'v1'}) : json({detail: 'denied'}, 403);
     if (p === '/api/v2/finance/actions' && method === 'POST') return json({action_id: 'act-' + writes.length, kind: body.kind, status: 'committed', code: null, reason: null, approver: null, result: {}});
     return json(unrouted(p));
   });
@@ -249,6 +257,32 @@ async function shot(page, name) {
         splits: [{teammate: 'bot:rental-google', share_bps: 10000}], enabled: true}}, tag + ': + Rule');
 
       await shot(page, 'attribution-desktop');
+      assert.deepEqual(errors, [], tag + ': no page errors');
+    }
+
+    // Classes: rows with their kind word and 12-month amount, Save off until a team changes, and only the changed row posts.
+    {
+      const tag = 'classes';
+      const {page, errors, writes} = await open(browser, {hash: '#/finance/attribution'});
+      await page.locator('[aria-label="Classes"] tbody tr').first().waitFor();
+      assert.deepEqual(await page.locator('[aria-label="Classes"] tbody tr td:first-child').allInnerTexts(),
+        ['Marketing Class', 'Ops Class', 'Austin Department'], tag + ': a row per class and department');
+      assert.equal((await page.locator('[data-fin-class-row="0"] td').nth(1).innerText()).trim(), '$14,700', tag + ': 12-month amount');
+      assert.equal(await page.locator('[data-fin-class-save]').isDisabled(), true, tag + ': Save is off until a team changes');
+      await page.locator('[data-fin-class-team="1"]').selectOption('team:mkt');
+      assert.equal(await page.locator('[data-fin-class-save]').isDisabled(), false, tag + ': Save is on after a change');
+      await page.locator('[data-fin-class-save]').click();
+      await settled(() => sent(writes).length === 1);
+      assert.deepEqual(sent(writes).at(-1), {kind: 'attribution_map', payload: {items: [{kind: 'class', id: 'k-ops', team: 'mkt'}]}},
+        tag + ': only the changed row posts');
+      assert.deepEqual(errors, [], tag + ': no page errors');
+    }
+    // A teammate with finance.attribution but no dimensions read sees no Classes table.
+    {
+      const tag = 'classes-hidden';
+      const {page, errors} = await open(browser, {viewer: 'raj', hash: '#/finance/attribution'});
+      await page.waitForTimeout(300);
+      assert.equal(await page.locator('[aria-label="Classes"]').count(), 0, tag + ': no Classes table when the read is refused');
       assert.deepEqual(errors, [], tag + ': no page errors');
     }
 

@@ -1,4 +1,4 @@
-// Market's money, players and value chain (ui/app/redesign-market.js, ui/market-spend.ts, ui/market-page.js) against a
+// Market's money, players and value chain (ui/app/redesign-market.ts, ui/market-spend.ts, ui/market-page.ts) against a
 // stand-in for GET /api/v2/market/spend and /market/value-chain and their writes (fixtures only, the Acme example): the
 // tiles; treemap areas follow the sizes; the segment panel shows each estimate with its params, and the owner's param
 // edit posts and reads again while a member sees no edit, research or cite; the Offering/Buyer and basis switches ask
@@ -68,9 +68,9 @@ const buildData = (dimension = 'offering', basis = 'product') => {
     seg('eco', 'Eco products', null, null)]};
 };
 const chain = {layers: [
-  {key: 'suppliers', title: 'Suppliers', nodes: [{id: 'company/soapco', name: 'SoapCo', type: 'company', self: false}]},
-  {key: 'platforms', title: 'Platforms', nodes: [{id: 'company/bookit', name: 'BookIt', type: 'company', self: false}, {id: 'company/payly', name: 'Payly', type: 'company', self: false}]},
-  {key: 'rivals', title: 'Us and rivals', nodes: [{id: 'company/self', name: 'Acme', type: 'company', self: true}, {id: 'company/cleanco', name: 'CleanCo', type: 'company', self: false}]},
+  {key: 'suppliers', title: 'Suppliers', nodes: [{id: 'company/soapco', name: 'SoapCo', type: 'organization', self: false}]},
+  {key: 'platforms', title: 'Platforms', nodes: [{id: 'company/bookit', name: 'BookIt', type: 'organization', self: false}, {id: 'company/payly', name: 'Payly', type: 'organization', self: false}]},
+  {key: 'rivals', title: 'Us and rivals', nodes: [{id: 'company/self', name: 'Acme', type: 'organization', self: true}, {id: 'company/cleanco', name: 'CleanCo', type: 'organization', self: false}]},
   {key: 'channels', title: 'Channels', nodes: [{id: 'channel/managers', name: 'Property managers', type: 'channel', self: false}]},
   {key: 'buyers', title: 'Buyers', nodes: [{id: 'segment/offices', name: 'Small offices', type: 'segment', self: false}]}],
   edges: [{src: 'company/self', rel: 'integrates_with', dst: 'company/bookit'}, {src: 'company/self', rel: 'sells_to', dst: 'segment/offices'}]};
@@ -88,7 +88,7 @@ async function open(browser, {role = 'owner', route = '#/strategy/market', viewp
     if (url.origin !== 'http://tico-ui.test') return route.abort();
     if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
     const file = p.startsWith('/tico/ui/') ? uiFile(p.slice(9)) : p.startsWith('/vendor/') ? path.join(uiDir, p) : '';
-    if (file && fs.existsSync(file)) return route.fulfill({contentType: file.endsWith('.js') ? 'application/javascript' : file.endsWith('.css') ? 'text/css' : file.endsWith('.woff2') ? 'font/woff2' : 'application/octet-stream', body: fs.readFileSync(file)});
+    if (file && fs.existsSync(file)) return route.fulfill({contentType: /\.(?:js|ts)$/.test(file) ? 'application/javascript' : file.endsWith('.css') ? 'text/css' : file.endsWith('.woff2') ? 'font/woff2' : 'application/octet-stream', body: fs.readFileSync(file)});
     if (p === '/api/v2/events') return;
     if (p === '/api/v2/config') return json({});
     if (p === '/api/employees') return json([]);
@@ -126,8 +126,8 @@ async function open(browser, {role = 'owner', route = '#/strategy/market', viewp
     const bet = p.match(/^\/api\/v2\/strategy\/bets\/([^/]+)$/);
     if (bet && method === 'POST') { sent.push(['POST', p, req.postDataJSON()]); return json({bet: bets.find(b => b.id === bet[1]), revision: 8}); }
     if (p === '/api/v2/librarian/research') { sent.push(['POST', p, req.postDataJSON()]); return json({task_id: 'task-r'}); }
-    if (p === '/api/v2/market/graph') return json({entities: [{id: 'company/self', type: 'company', name: 'Acme'}], edges: []});
-    if (p === '/api/v2/market/entities') return json({entities: [{id: 'company/self', type: 'company', name: 'Acme'}], total: 1});
+    if (p === '/api/v2/market/graph') return json({entities: [{id: 'company/self', type: 'organization', name: 'Acme'}], edges: []});
+    if (p === '/api/v2/market/entities') return json({entities: [{id: 'company/self', type: 'organization', name: 'Acme'}], total: 1});
     if (p === '/api/company-docs') return json({documents: []});
     if (p === '/api/v2/librarian/setup') return json({market: null});
     if (p === '/api/v2/listening/stats') return json({error: {code: 'forbidden', detail: 'Not yours'}}, 403);

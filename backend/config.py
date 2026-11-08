@@ -248,7 +248,7 @@ class Settings:
     server_network: str = "tico_default"
     # TICO_HOSTED: a Tico our team runs for a company ("own" for our own team, "invited" for an invited company), set
     # by the recommended preset; empty is self-hosted. Both behave the same for now: the person has no terminal on the
-    # server, so Settings > Computers signs models in with the provider's link and code only (ui/model-login.js).
+    # server, so Settings > Computers signs models in with the provider's link and code only (ui/model-login.ts).
     hosted: str = ""
     access_issuer: str = ""
     access_audience: str = ""

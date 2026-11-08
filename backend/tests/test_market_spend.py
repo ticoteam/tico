@@ -417,7 +417,7 @@ def test_the_value_chain_puts_each_neighbour_in_its_layer_and_caps_a_layer(api, 
     names = {}
 
     def company(name):
-        names[name] = post(api, "market/entities", {"type": "company", "name": name, "evidence_ids": [proof]})[
+        names[name] = post(api, "market/entities", {"type": "organization", "name": name, "evidence_ids": [proof]})[
             "entity"
         ]["id"]
         return names[name]
@@ -429,7 +429,7 @@ def test_the_value_chain_puts_each_neighbour_in_its_layer_and_caps_a_layer(api, 
         from backend import market as MK
 
         MK.create_entity(
-            c, "human:ana", type="company", name="Our company", entity_id=MK.OWN_COMPANY_ID, evidence_ids=[proof]
+            c, "human:ana", type="organization", name="Our company", entity_id=MK.OWN_COMPANY_ID, evidence_ids=[proof]
         )
     me = "company/self"
     rival, platform, supplier, channel, buyer = (

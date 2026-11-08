@@ -1,4 +1,4 @@
-// No browser: the Liquid Dot's state rules (ui/app/liquid-dot.js). Ask's chat maps to idle, working or talking; a dot
+// No browser: the Liquid Dot's state rules (ui/app/liquid-dot.ts). Ask's chat maps to idle, working or talking; a dot
 // under 20px only idles (or holds still); an unknown state idles; and setting a drawn dot follows the same rules. The
 // idle scheduler swaps variants every 6-14 s and leaves no timer in a hidden tab; every keyframe in liquid-dot.css
 // moves transform or opacity only, and the blob's shape never animates.
@@ -12,8 +12,8 @@ const timers = new Map();
 let nextTimer = 1, onVisibility = null;
 const page = {hidden: false, addEventListener: (type, fn) => { if (type === 'visibilitychange') onVisibility = fn; }, querySelectorAll: () => []};
 const context = vm.createContext({document: page, setTimeout: (fn, ms) => { timers.set(nextTimer, ms); return nextTimer++; },
-  clearTimeout: id => timers.delete(id), matchMedia: () => ({matches: false})});
-vm.runInContext(fs.readFileSync(path.join(__dirname, '../app/liquid-dot.js'), 'utf8')
+  clearTimeout: id => timers.delete(id), matchMedia: () => ({matches: false}), HTMLElement: class HTMLElement {}});
+vm.runInContext(fs.readFileSync(path.join(__dirname, '../../build/ui/app/liquid-dot.js'), 'utf8')
   + '\n;globalThis.api = {ldotState, ldotWord, ldotChatState, ldotHTML, ldotSet, ldotNextIdle, ldotSchedule, ldotScheduled, LDOT_IDLES, LDOT_IDLE_MS};', context);
 const {ldotState, ldotWord, ldotChatState, ldotHTML, ldotSet, ldotNextIdle, ldotSchedule, ldotScheduled, LDOT_IDLES, LDOT_IDLE_MS} = context.api;
 
@@ -39,11 +39,11 @@ assert.match(ldotHTML({state: 'talking', size: 16}), /class="ldot sm" data-state
 assert.match(ldotHTML({state: 'talking', size: 22}), /class="ldot" data-state="talking"/);
 assert.doesNotMatch(ldotHTML(), /glow/);
 
-// A drawn dot moves by the same rules.
-const el = {dataset: {size: '22', state: 'idle'}};
+// A drawn dot moves by the same rules. A drawn dot is an HTMLElement (ldotSet checks it), so the fakes are instances of one.
+const el = Object.assign(new context.HTMLElement(), {dataset: {size: '22', state: 'idle'}});
 ldotSet(el, 'thinking');
 assert.equal(el.dataset.state, 'thinking');
-const small = {dataset: {size: '18', state: 'idle'}};
+const small = Object.assign(new context.HTMLElement(), {dataset: {size: '18', state: 'idle'}});
 ldotSet(small, 'talking');
 assert.equal(small.dataset.state, 'idle');
 ldotSet(null, 'talking');   // nothing drawn: no throw

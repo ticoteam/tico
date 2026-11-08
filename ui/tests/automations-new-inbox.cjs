@@ -1,4 +1,4 @@
-// New inbox (ui/app/automations-new.js) against the fake hub in support/automations-fake.cjs: + New → New inbox on a
+// New inbox (ui/app/automations-new.ts) against the fake hub in support/automations-fake.cjs: + New → New inbox on a
 // person's email inbox offers Person and Bot only (a channel adds Group and Other); a refused template fill shows in
 // the dialog and saves nothing; Create POSTs the filled template's steps and destinations with Turn on now as
 // switched, then opens the new automation as a board; the dialog fits a phone with no sideways scroll.

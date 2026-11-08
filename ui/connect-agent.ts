@@ -8,7 +8,7 @@
    when it closes. The MCP URL is the server's own (GET /api/v2/agent-skill): the runner hostname,
    where a bearer gets through an identity proxy such as Cloudflare Access.
 
-   Logos come from ui/tool-icons.js (Simple Icons, CC0, and Lobe Icons, MIT; see NOTICE), drawn in
+   Logos come from ui/tool-icons.ts (Simple Icons, CC0, and Lobe Icons, MIT; see NOTICE), drawn in
    the theme's ink next to the name only to say which product it is. An agent without one is its
    first letters. Uses the page's helpers: get, post, esc, ago, toast, copyText, setDrawer, errorMessage.
    Classic script: its globals are shared with the other files under ui/, loaded in the order index.html lists them.
@@ -21,7 +21,7 @@ type CaBlock = [label: string, text: string];
 interface CaAgent {
   id: string;
   name: string;
-  // A key in ui/tool-icons.js; '' for an agent without a logo there (its first letters are drawn).
+  // A key in ui/tool-icons.ts; '' for an agent without a logo there (its first letters are drawn).
   logo: string;
   beta?: boolean;
   // Matches the label of an existing token that belongs to this agent (agentOf).
@@ -56,7 +56,7 @@ interface CaIssued {
   expires_at: string;
 }
 
-// The logo helpers of ui/tool-icons.js (window.toolIcons).
+// The logo helpers of ui/tool-icons.ts (window.toolIcons).
 interface CaIcons {
   has(key: string): boolean;
   markup(tool: {logo_key?: string; name?: string}): string;

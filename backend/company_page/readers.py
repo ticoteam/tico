@@ -159,7 +159,20 @@ def add(c, actor, email, audience_ids=(), name=None):
     _link(c, reader_id, ids)
     if added or ids:
         H.event(c, actor, "reader.added" if added else "reader.audiences", reader_id, {"audiences": ids})
+    _ingest_reader(c, reader_id)
     return {"id": reader_id, "added": added}
+
+
+def _ingest_reader(c, reader_id):
+    """What a reader on the list says about the Directory: a board member advises the company, an investor invests in
+    it. The step runs in a savepoint and a failure is logged, so the change to the list always stands."""
+    from ..entities import ingest
+
+    row = c.execute("SELECT email, name FROM readers WHERE id=?", (reader_id,)).fetchone()
+    if row is None:
+        return
+    kinds = [a["kind"] for a in audiences_of(c, reader_id)]
+    ingest.safely(c, "company_page", ingest.from_company_page, c, email=row["email"], name=row["name"], kinds=kinds)
 
 
 def _link(c, reader_id, ids):
@@ -179,6 +192,7 @@ def update(c, actor, reader_id, audience_ids=None, notify=None, name=None):
         c.execute("DELETE FROM audience_readers WHERE reader_id=?", (reader_id,))
         _link(c, reader_id, ids)
         H.event(c, actor, "reader.audiences", reader_id, {"audiences": ids})
+        _ingest_reader(c, reader_id)
     if notify is not None:
         set_notify(c, reader_id, notify)
     if name is not None:

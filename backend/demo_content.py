@@ -3733,7 +3733,7 @@ COMPANIES = [
     {
         "id": "company/self",
         "name": "Acme Lights",
-        "type": "company",
+        "type": "organization",
         "tier": None,
         "aliases": ["Acme Lights", "acme.example"],
         "external_ids": {"domain": "acme.example"},

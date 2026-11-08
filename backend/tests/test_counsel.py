@@ -15,6 +15,7 @@ from backend import assistant as A
 from backend import files as F
 from backend import org_rules as O
 from backend import shared_bots as SB
+from backend.entities import store as ES
 from backend.auth import Identity
 from backend.blobs import register
 from backend.store import H
@@ -1142,7 +1143,7 @@ def test_a_replay_returns_the_saved_answer_and_fetches_nothing(api, monkeypatch)
 
 
 def test_counsels_registries_list_it_as_a_hidden_helper():
-    text = (Path(counsel.__file__).resolve().parents[1] / "ui" / "app" / "state.js").read_text()
+    text = (Path(counsel.__file__).resolve().parents[1] / "ui" / "app" / "state.ts").read_text()
     assert "const COUNSEL_BOT = 'tico-counsel';" in text and "slug === COUNSEL_BOT" in text
     assert "ASSISTANT_HELPERS = ['botops', 'goal-manager', 'librarian', COUNSEL_BOT]" in text
 
@@ -1396,7 +1397,7 @@ def test_read_identity_includes_source_and_receipts_match_persisted_reads(api, m
                 task = c.execute(
                     "SELECT title, body, closed_at, status FROM tasks WHERE id=?", (receipt["task_id"],)
                 ).fetchone()
-                source_row = c.execute("SELECT name, kind FROM rule_sources WHERE id=?", (sid,)).fetchone()
+                source_row = next(r for r in ES.rule_sources(c) if r["id"] == sid)
             assert receipt["source"]["id"] == persisted["source_id"] == sid
             assert f"source {sid})" in task["title"]
             assert receipt["file"]["id"] == persisted["file_id"]

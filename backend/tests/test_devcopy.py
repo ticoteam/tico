@@ -9,6 +9,7 @@ from pathlib import Path
 
 import pytest
 
+from backend.migrations import renames_data
 from backend import devcopy
 from backend.auth import Identity
 from backend.config import Settings
@@ -195,7 +196,7 @@ def test_every_table_is_classified(tmp_path):
         dropped |= set(re.findall(r"DROP TABLE IF EXISTS ([a-z_]+);", text))  # and a migration script drops again
     for source in (Path(devcopy.__file__).parent / "migrations").glob("*.py"):  # and a migration file drops for good
         dropped |= set(re.findall(r"DROP TABLE IF EXISTS ([a-z_]+);", source.read_text()))
-    names -= dropped
+    names -= dropped | {old for old, _new, _wave in renames_data.TABLES}  # an old schema step's name, renamed since
     groups = (devcopy.KEEP, set(devcopy.HISTORY), set(devcopy.EMPTY), set(finance.DEV_COPY_EMPTIED))
     assert {t: n for t in names if (n := sum(t in g for g in groups)) != 1} == {}
 
