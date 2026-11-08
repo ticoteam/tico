@@ -1174,26 +1174,31 @@ def test_a_pending_head_read_failing_with_a_check_still_running_finishes_only_wh
     assert len(_failed_checks(api)) == 1
 
 
-def test_a_running_check_the_stored_copy_left_out_still_finishes_the_head_once(api, monkeypatch):
-    """More than CHECKS_KEPT checks failed and one is still going: the copy keeps the failures and leaves the running
-    one out (checks_dropped). The read that finds it done hands the failure over once."""
+@pytest.mark.parametrize("extra", [0, 1])
+def test_a_running_check_the_stored_copy_left_out_still_finishes_the_head_once(api, monkeypatch, extra):
+    """CHECKS_KEPT checks failed (or one more, so a failure is left out too) and one is still going: the copy keeps
+    failures and leaves the running one out. The read that finds it done hands the failure over once."""
     from backend import github as G
 
     task = ticket(api, step="In QA")
     verdict(api, check(api, task, "QA: PR #412"), "pass")
-    runs = [{"name": f"shard {n}", "status": "completed", "conclusion": "failure"} for n in range(G.CHECKS_KEPT)]
+    failed = G.CHECKS_KEPT + extra
+    runs = [{"name": f"shard {n}", "status": "completed", "conclusion": "failure"} for n in range(failed)]
     runs.append({"name": "late", "status": "in_progress", "conclusion": None})
     service, _ = _github(api, monkeypatch, [], runs)
     _quiet(api, task)
     G.refresh_pending_checks(service)
     link = _link(api, task)
-    assert link["checks"] == "failing" and H._json(link["detail"], {}).get("checks_dropped") == "pending"
+    stored = H._json(link["detail"], {})
+    assert link["checks"] == "failing" and stored.get(G.DROPPED_PENDING) is True
+    assert stored.get("checks_dropped") == ("failing" if extra else "pending")
     assert not _failed_checks(api), "a check is still going"
     runs[-1] = {"name": "late", "status": "completed", "conclusion": "success"}
     _quiet(api, task)
     G._pending_reads.clear()
     G.refresh_pending_checks(service)
     assert len(_failed_checks(api)) == 1
+    assert G.DROPPED_PENDING not in H._json(_link(api, task)["detail"], {})
     _quiet(api, task)
     G._pending_reads.clear()
     G.refresh_pending_checks(service)

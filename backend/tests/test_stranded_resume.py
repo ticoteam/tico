@@ -601,3 +601,22 @@ def test_resumes_the_claim_dropped_before_they_ran_do_not_stop_resuming(api):
         assert SR.handles(c, H.task(c, tid))
         assert SR.run(c, at) == {"resumed": 1, "stopped": 0}
         assert stops(c, tid) == []
+
+
+def test_a_review_ticket_whose_truncated_checks_all_finished_failing_is_resumed(api):
+    """More checks failed than a link keeps: the copy keeps `checks_dropped` "failing" for good, but nothing is going,
+    so the ticket is the builder's to move."""
+    online(api, "ops")
+    tid = dev_ticket(api, "Pipeline manager 1/3", check="done")
+    with api.app.state.store.transaction() as c:
+        c.execute(
+            "UPDATE task_links SET detail=json_set(coalesce(detail,'{}'),'$.checks_dropped','failing') WHERE task_id=?",
+            (tid,),
+        )
+        strand_review(c, tid)
+        assert SR.run(c, H.now()) == {"resumed": 1, "stopped": 0}
+        c.execute(
+            "UPDATE task_links SET detail=json_set(detail,'$.checks_dropped_pending',json('true')) WHERE task_id=?",
+            (tid,),
+        )
+        assert SR._ci_going(c, tid), "a check left out of the copy is still going"

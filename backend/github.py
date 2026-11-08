@@ -637,6 +637,7 @@ def pull_request(c, payload, review_role="", release_repo="", *, read_refresh=Fa
             if detail.get("head_sha") != head_sha:
                 detail.pop("checks", None)
                 detail.pop("checks_dropped", None)
+                detail.pop(DROPPED_PENDING, None)
                 detail.pop("head_login", None)
                 detail.pop("conflict_head", None)
                 detail["health_reviewed_head"] = ""
@@ -872,11 +873,33 @@ def _worst(a, b):
     return "failing" if "failing" in (a, b) else "pending" if "pending" in (a, b) else None
 
 
-def _set_dropped(detail, dropped):
+# Whether a check the stored copy leaves out was still going: `checks_dropped` keeps only the worst state, so a running
+# check left out beside a dropped failure would read "failing" and could never be seen to finish.
+DROPPED_PENDING = "checks_dropped_pending"
+
+
+def _dropped_pending(checks, kept):
+    return any(state == "pending" for key, state in checks.items() if key not in kept)
+
+
+def _set_dropped(detail, dropped, pending=False):
     if dropped:
         detail["checks_dropped"] = dropped
     else:
         detail.pop("checks_dropped", None)
+    if dropped and pending:
+        detail[DROPPED_PENDING] = True
+    else:
+        detail.pop(DROPPED_PENDING, None)
+
+
+def _still_going(detail):
+    """Whether the stored copy says a check on the head was still going: one it kept, or one it left out."""
+    return (
+        "pending" in (detail.get("checks") or {}).values()
+        or detail.get("checks_dropped") == "pending"
+        or bool(detail.get(DROPPED_PENDING))
+    )
 
 
 def _finish(c, task, link, detail, full, checks):
@@ -1038,16 +1061,19 @@ def apply_checks(c, link_id, head, checks, since=None):
         return None
     # The state and the failures named come from the whole read; only the stored copy is cut.
     state, kept = _overall(checks), _kept(checks)
-    dropped = _dropped(checks, kept)
-    if detail.get("checks") == kept and link.get("checks") == state and detail.get("checks_dropped") == dropped:
+    dropped, dropped_pending = _dropped(checks, kept), _dropped_pending(checks, kept)
+    # The stored copy still held a running check (kept or left out): a read that finds none going finishes the head
+    # even when its state stays the same.
+    held = _still_going(detail) and "pending" not in checks.values()
+    if (
+        detail.get("checks") == kept
+        and link.get("checks") == state
+        and detail.get("checks_dropped") == dropped
+        and not held
+    ):
         return state
-    # The stored copy still held a running check (or left some out, which may have been one): a read that finds none
-    # going finishes the head even when its state stays the same.
-    held = ("pending" in (detail.get("checks") or {}).values() or bool(detail.get("checks_dropped"))) and (
-        "pending" not in checks.values()
-    )
     detail["checks"] = kept
-    _set_dropped(detail, dropped)
+    _set_dropped(detail, dropped, dropped_pending)
     changed = state != link.get("checks")
     # As the webhook: a head finishes only once no check on it is still going, whatever has failed already.
     finished = state != "pending" and "pending" not in checks.values() and (changed or held)
@@ -1137,8 +1163,9 @@ def pr_signal(c, event, payload):
                 checks[_suite_key(own, signal)] = "pending"
             kept = _kept(checks)
             dropped = _worst(detail.get("checks_dropped"), _dropped(checks, kept))
+            pending = bool(detail.get(DROPPED_PENDING)) or _dropped_pending(checks, kept)
             detail["checks"] = kept
-            _set_dropped(detail, dropped)
+            _set_dropped(detail, dropped, pending)
             fields["checks"] = _with_dropped(_overall(checks), dropped)
             # One check finishing writes nothing (rule `pr_check`). A suite completes once all of its runs have; a
             # single run or commit status may be one of many. A run or status that finishes after a suite already has

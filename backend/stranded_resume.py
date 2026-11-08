@@ -74,8 +74,8 @@ _MARKS = ",".join("?" * len(LIVE_JOBS))
 _CI_GOING = (
     "l.kind='pr' AND l.state IN ('open','draft') "
     "AND (l.checks='pending' OR json_extract(l.detail,'$.merge_queue.state')='queued' "
-    # A failure outranks a running check, so a failing link may still have CI going, or a check its copy left out.
-    "OR json_extract(l.detail,'$.checks_dropped') IS NOT NULL "
+    # A failure outranks a running check, so a failing link may still have CI going, kept or left out of its copy.
+    "OR json_extract(l.detail,'$.checks_dropped')='pending' OR json_extract(l.detail,'$.checks_dropped_pending')=1 "
     "OR EXISTS (SELECT 1 FROM json_each(l.detail,'$.checks') WHERE value='pending'))"
 )
 _BOOKKEEPING = ",".join("?" * len(BOOKKEEPING))
