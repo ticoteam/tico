@@ -1162,6 +1162,7 @@ ERASE_STATEMENTS: tuple[tuple[str, str], ...] = (
     ("entity_identifiers", "DELETE FROM entity_identifiers WHERE entity_id IN (SELECT value FROM json_each(:ids))"),
     ("entity_notes", "DELETE FROM entity_notes WHERE entity_id IN (SELECT value FROM json_each(:ids))"),
     ("entity_mentions", "DELETE FROM entity_mentions WHERE entity_id IN (SELECT value FROM json_each(:ids))"),
+    ("entity_lookups", "DELETE FROM entity_lookups WHERE entity_id IN (SELECT value FROM json_each(:ids))"),
     ("entity_activities", "DELETE FROM entity_activities WHERE entity_id IN (SELECT value FROM json_each(:ids))"),
     ("entity_connections", "DELETE FROM entity_connections WHERE entity_id IN (SELECT value FROM json_each(:ids))"),
     ("entity_external_refs", "DELETE FROM entity_external_refs WHERE entity_id IN (SELECT value FROM json_each(:ids))"),
