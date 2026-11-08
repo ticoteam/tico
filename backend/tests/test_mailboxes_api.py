@@ -325,6 +325,7 @@ def test_only_a_personal_inbox_s_own_person_switches_its_directory_feed(mb):
     assert feed("ben-test", False).status_code == 403  # nor is an admin
     r = feed("cara-test", False)
     assert r.status_code == 200 and r.json()["feeds_directory"] is False
+    assert get(mb, "mailboxes", "cara-test")["mine"]["feeds_directory"] is False
     assert feed("cara-test", False).json()["feeds_directory"] is False  # unchanged: no second event
     assert events(mb, "mailbox.directory_feed") == 1
     assert feed("cara-test", True).json()["feeds_directory"] is True

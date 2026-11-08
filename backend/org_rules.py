@@ -1614,8 +1614,6 @@ def install(app, store, auth, mutate):
         admins add an Everyone rule. A cite is checked first: a quote that is not in its file is not stored, and the
         answer says `dropped` instead of a rule (the drop is counted in the events)."""
         from . import counsel
-        from .entities import ingest
-        from .task_privacy import private_execution
 
         who = request.state.identity
         data = with_scopes(body, "who", "with")
@@ -1631,11 +1629,7 @@ def install(app, store, auth, mutate):
                         "dropped": {"reason": "quote_not_in_source", "file_id": data["cite"]["file_id"]},
                     }
                 data["cite"] = cite
-            rule = add_rule(c, auth, who, data)
-            # A private run's counterparty is not company-wide, and the Directory's company sources are.
-            if data.get("kind") == "external" and not private_execution(c, who):
-                ingest.safely(c, "counsel", ingest.from_counsel, c, rule_id=rule["id"])
-            return {"rule": rule, "dropped": None}
+            return {"rule": add_rule(c, auth, who, data), "dropped": None}
 
         result = mutate(request, body, work)
         if result["dropped"] is not None:

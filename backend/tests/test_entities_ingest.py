@@ -1,4 +1,4 @@
-"""Directory ingest (backend/entities/ingest.py): what mail, meetings, Counsel rules and Company page readers make, on the API
+"""Directory ingest (backend/entities/ingest.py): what mail, meetings and Company page readers make, on the API
 fixture's team (ana is the owner, ben and cara are members, all at acme.example).
 
 What these pin: a sender becomes a person at their organization, linked, and known from the mailbox alone; a second copy
@@ -17,7 +17,6 @@ from backend.entities import ingest as ING
 from backend.entities import store as ES
 from backend.entities import visible as V
 from backend.tests.test_api import api, get, headers, post  # noqa: F401  (the api fixture)
-from backend.tests.test_org_rules import org, rule
 
 ANA, BEN, CARA = "human:ana", "human:ben", "human:cara"
 
@@ -205,16 +204,6 @@ def test_a_failing_step_is_undone_and_the_action_goes_on(api):
         assert ING.safely(c, "test", broken, c) is None
         assert ES.matching(c, "person", {"email": "half@example.test"}) == []
         assert ING.safely(c, "test", lambda c: 7, c) == 7
-
-
-def test_a_counterparty_of_an_external_rule_is_an_organization_of_its_kind(api):
-    org(api)
-    source = post(api, "rule-sources", {"name": "Acme Tax Office", "kind": "government"})["source"]["id"]
-    rule(api, {"kind": "external", "text": "File the annual return.", "who": {"bots": ["ops"]}, "source_id": source})
-    with tx(api) as c:
-        found = ES.matching(c, "organization", {"name": "Acme Tax Office"})
-        assert len(found) == 1
-        assert ES.card(c, ANA, found[0])["values"]["kind"]["value"] == "government"
 
 
 def test_remove_source_keeps_the_last_source_and_refuses_it(api):

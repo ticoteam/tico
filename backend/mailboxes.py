@@ -189,6 +189,7 @@ class _Reader:
             "level": self.level(box),
             "routines": [{"id": r["id"], "name": r["name"]} for r in self.routines.get(box["address"], [])],
             "used_by": self.used_by(box),
+            "feeds_directory": MA.feeds_directory(self.c, box),
             **self.sync(box),
         }
 

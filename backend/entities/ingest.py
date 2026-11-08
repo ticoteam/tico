@@ -1,6 +1,6 @@
 # pyright: strict
 """Directory ingest (track 6a): the people and organizations the sources a team already uses name, and the links between
-them. Mail, meetings, Counsel rules and Company page readers each call one function here. Every write goes through the
+them. Mail, meetings and Company page readers each call one function here. Every write goes through the
 store (backend/entities/store.py), as the system's own actor, so the writer gate and the read rule hold.
 
 What each source makes (spec §7):
@@ -9,15 +9,15 @@ What each source makes (spec §7):
   An automated sender (no-reply address, list mail, bulk mail) makes its organization only, never a person.
 - Meetings: a person for each outside attendee of a live team meeting, with their organization. A private or
   participants-only meeting makes nothing.
-- Counsel: the counterparty an external rule is from, as an organization.
+- Counsel: none here. A rule's source is an organization entity itself (track 5, org_rules.source_entity_id).
 - Company page: a reader on the board or investors list is a person who advises self or invests in it.
 
 Each step is safe inside the action that caused it: safely() runs it in a savepoint, logs a failure, and returns None,
 so the action goes on. Running a step again adds nothing: an entity found by its identifier is not written again, and a
 link that is already current is not repeated.
 
-Sources and who sees them: a mailbox source is restricted to that mailbox, so only its readers see the entity. Meeting,
-Counsel and Company page sources are company-wide. An entity with no source shows to everyone, and an entity known only
+Sources and who sees them: a mailbox source is restricted to that mailbox, so only its readers see the entity. Meeting
+and Company page sources are company-wide. An entity with no source shows to everyone, and an entity known only
 from a restricted source hides from everyone else, so _record never adds a source that would change who sees an entity.
 """
 
@@ -68,7 +68,7 @@ def safely(c: sqlite3.Connection, what: str, work: Callable[..., T], *args: obje
     c.execute("SAVEPOINT directory_ingest")
     try:
         result = work(*args, **kwargs)
-    except Exception:
+    except Exception:  # noqa: BLE001 - any failed step is undone and logged; the mail, meeting or page action goes on
         c.execute("ROLLBACK TO directory_ingest")
         c.execute("RELEASE directory_ingest")
         log.warning("Directory ingest from %s failed; the action went on without it", what, exc_info=True)
@@ -235,26 +235,6 @@ def from_meeting(
             if org[1]:
                 made.append(org[0])
     return {"people": people, "created": made}
-
-
-def from_counsel(c: sqlite3.Connection, *, rule_id: str) -> dict[str, object]:
-    """The counterparty an external rule is from: an organization named as its rule source names it, of kind government
-    when the source is one. A counterparty already known by that name is left as it is."""
-    row = c.execute(
-        "SELECT s.id, s.name, s.kind FROM org_rules r JOIN rule_sources s ON s.id = r.source_id WHERE r.id = ?",
-        (rule_id,),
-    ).fetchone()
-    if row is None:
-        return {}
-    name = str(row["name"] or "").strip()
-    if not name:
-        return {}
-    values: dict[str, object] | None = {"kind": "government"} if row["kind"] == "government" else None
-    org = _entity(c, "organization", {"name": name}, name, values)
-    if org is None:
-        return {}
-    _record(c, org[0], "counsel", str(row["id"]), created=org[1], visibility="company")
-    return {"organization": org[0], "created": [org[0]] if org[1] else []}
 
 
 def from_company_page(
