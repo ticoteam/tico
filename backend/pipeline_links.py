@@ -363,30 +363,57 @@ def _policy_reads(conn: sqlite3.Connection, actor: str, row: Row) -> bool:
     return True
 
 
-def _pipeline_tasks(conn: sqlite3.Connection, row: Row) -> list[str]:
-    """The tasks an attachment sits on: its file's task and scope task, and the tasks of every blob it reads (task_assets)."""
-    task_ids: list[str] = []
-    blobs: list[str] = [str(row["blob_id"])] if row.get("blob_id") else []
+PROVENANCE_LIMIT = 200  # the nodes a provenance walk may reach; past it the item is unsure, so it is not carried
+
+
+def _pipeline_tasks(conn: sqlite3.Connection, row: Row) -> list[str] | None:
+    """The tasks an attachment's provenance sits on, or None when that cannot be established (a lookup that does not resolve,
+    or a walk past PROVENANCE_LIMIT nodes). The walk runs to a fixed point over blobs, files, runs (attempts) and tasks: a blob
+    leads to its task attachments and to every file version holding it; a file to its task, its `task:` scope, and its versions'
+    blobs and runs; a run to the task it ran on; a task ends the walk. A task with no pipeline, or no task at all, adds nothing."""
+    tasks: list[str] = []
+    queue: list[tuple[str, str]] = []
+    if row.get("blob_id"):
+        queue.append(("blob", str(row["blob_id"])))
     if row.get("file_id"):
-        file = _one(conn, "SELECT task_id, scope FROM bot_files WHERE id = ?", (row["file_id"],))
-        if file is not None:
+        queue.append(("file", str(row["file_id"])))
+    seen: set[tuple[str, str]] = set()
+    while queue:
+        node = queue.pop()
+        if node in seen:
+            continue
+        seen.add(node)
+        if len(seen) > PROVENANCE_LIMIT:
+            return None
+        kind, ident = node
+        if kind == "blob":
+            tasks += [
+                str(r["task_id"]) for r in _rows(conn, "SELECT task_id FROM task_assets WHERE blob_id = ?", (ident,))
+            ]
+            queue += [
+                ("file", str(r["file_id"]))
+                for r in _rows(conn, "SELECT file_id FROM bot_file_versions WHERE blob_id = ?", (ident,))
+            ]
+        elif kind == "file":
+            file = _one(conn, "SELECT task_id, scope FROM bot_files WHERE id = ?", (ident,))
+            if file is None:
+                return None
             if file["task_id"]:
-                task_ids.append(str(file["task_id"]))
+                tasks.append(str(file["task_id"]))
             if str(file["scope"] or "").startswith("task:"):
-                task_ids.append(str(file["scope"])[5:])
-        blobs += [
-            str(r["blob_id"])
-            for r in _rows(
-                conn,
-                "SELECT blob_id FROM bot_file_versions WHERE file_id = ? AND blob_id IS NOT NULL",
-                (row["file_id"],),
-            )
-        ]
-    for blob in blobs:
-        task_ids += [
-            str(r["task_id"]) for r in _rows(conn, "SELECT task_id FROM task_assets WHERE blob_id = ?", (blob,))
-        ]
-    return task_ids
+                tasks.append(str(file["scope"])[5:])
+            for version in _rows(conn, "SELECT blob_id, attempt_id FROM bot_file_versions WHERE file_id = ?", (ident,)):
+                if version["blob_id"]:
+                    queue.append(("blob", str(version["blob_id"])))
+                if version["attempt_id"]:
+                    queue.append(("attempt", str(version["attempt_id"])))
+        elif kind == "attempt":
+            run = _one(conn, "SELECT task_id FROM attempts WHERE id = ?", (ident,))
+            if run is None:
+                return None
+            if run["task_id"]:
+                tasks.append(str(run["task_id"]))
+    return tasks
 
 
 def _on_open_pipelines(conn: sqlite3.Connection, task_ids: list[str], child_type: str, members_child: bool) -> bool:
@@ -416,6 +443,8 @@ def _item_readable(conn: sqlite3.Connection, owner: str, child: Row, row: Row) -
         return False
     child_type = str(child["type_id"] or "")
     task_ids = _pipeline_tasks(conn, row)
+    if task_ids is None:
+        return False
     if H.task_private(conn, child) or not _members_only(conn, child_type):
         return _on_open_pipelines(conn, task_ids, child_type, members_child=False)
     requester = str(child["requester_id"] or "")
