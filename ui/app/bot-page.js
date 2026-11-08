@@ -168,6 +168,7 @@ async function botGoalLoad(slug) {
 // place with the link icon for the goal it supports; the same goals the top line shows and the
 // bot reads.
 async function botGoalsCardLoad(slug) {
+  /** @type {[any, any]} */
   const [r, goals] = await Promise.all([v2Get(`/v2/goals?owner=${encodeURIComponent('bot:' + slug)}`), goalOptions()]);
   const host = $('#bot-goals-list');
   if (!host || BOT?.slug !== slug) return;
