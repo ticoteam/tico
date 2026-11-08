@@ -19,7 +19,8 @@ A bot's ticket in review at a flow check step (Review 1, Review 2, In QA: a step
 `on_fail`) is in the same place once its check is over: the builder owns the next move (merge once CI is green, fix a
 failed CI run, ask for the check again), and nothing else moves it. Nov 8: PR 3055's QA passed, its CI was cancelled,
 and the failure never reached the builder, so the ticket sat at In QA for hours with nothing to catch it. Such a ticket
-is stranded on the same terms, and also needs: no open check (an open subtask is a recorded wait), no CI still going
+is stranded on the same terms, and also needs: no open check (an open subtask is a recorded wait) and none waiting
+for a free reviewer (`_check_waiting`), no CI still going
 or merge queued on an open pull request (`_ci_going`: github wakes the builder when it finishes), and nothing changed
 on it or under it (a check finishing, so the verdict's move goes first) for REVIEW_QUIET_MINUTES. A queued resume is
 dropped at claim once CI starts, the merge is queued or a check under it changes. A resume dropped before it ran does
@@ -320,7 +321,7 @@ def stranded(c: sqlite3.Connection, row: dict[str, Any] | None, at: str) -> bool
         return False
     if cast(bool, auto_tasks.waiting(c, row)):
         return False
-    if row["status"] == "review" and _ci_going(c, row["id"]):
+    if row["status"] == "review" and (_ci_going(c, row["id"]) or _check_waiting(c, row)):
         return False
     # A due date ahead says when to look again at work not begun; work in progress does not wait for it.
     return H.recorded_wait(c, {**row, "due_at": None}, at) is None
@@ -408,7 +409,7 @@ def told(c: sqlite3.Connection, at: str) -> set[str]:
 def obsolete_sql() -> str:
     """The condition, for execution.obsolete_notices_sql (m: the notice's message, j: its queued job, t: its task), that
     a queued stranded resume is out of date: its task is no longer in progress or in review, a review ticket's CI started
-    or its merge was queued (_ci_going) or a check under it changed, its owner changed, or it moved on since
+    or its merge was queued (_ci_going), a check under it changed or began waiting for a reviewer, its owner changed, or it moved on since
     the notice was written by _progress's signal (a step, status or owner change, a note or message its owner wrote, a
     subtask filed under it). The claim cancels it, as it cancels any other out-of-date keeper notice. A resume whose turn
     already started is the rest of that turn, so it is never obsolete. Binds no parameters: the claim's queries bind
@@ -427,7 +428,9 @@ def obsolete_sql() -> str:
         "AND json_extract(n.refs,'$.stranded')=1)) "
         "OR EXISTS (SELECT 1 FROM task_relations r WHERE r.to_task=t.id AND r.kind='parent' AND r.created_at>m.created_at) "
         f"OR t.status='review' AND EXISTS (SELECT 1 FROM task_links l WHERE l.task_id=t.id AND {_CI_GOING}) "
-        # A check under a review ticket reopened or changed: the sweep waits out its quiet time again.
+        # A check under a review ticket reopened or changed, or began waiting for a free reviewer: the sweep looks again.
+        "OR t.status='review' AND EXISTS (SELECT 1 FROM history_events e WHERE e.subject_type='task' "
+        "AND e.subject_id=t.id AND e.kind='check_waiting' AND e.created_at>m.created_at) "
         "OR t.status='review' AND EXISTS (SELECT 1 FROM task_relations r JOIN tasks k ON k.id=r.from_task "
         "WHERE r.to_task=t.id AND r.kind='parent' AND k.updated_at>m.created_at))"
     )
@@ -483,6 +486,15 @@ def _dropped_resumes(c: sqlite3.Connection, row: dict[str, Any], progress: str) 
             (H.KEEPER, progress, row["id"]),
         ).fetchone()[0]
     )
+
+
+def _check_waiting(c: sqlite3.Connection, row: dict[str, Any]) -> bool:
+    """Whether the ticket's check at its step waits for a free reviewer (check_pools: a `check_waits` row, no check
+    filed yet): the pool files it when a member frees up."""
+    from . import check_pools as _check_pools
+
+    check_pools: Any = _check_pools
+    return bool(check_pools.waiting(c, row["id"], row.get("step_id")))
 
 
 def _ci_going(c: sqlite3.Connection, task_id: str) -> bool:

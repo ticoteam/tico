@@ -269,7 +269,7 @@ A task is resumed at most six times a day.
 
 A bot's Dev ticket in review at a check step (Review 1, Review 2, In QA) is resumed the same way once its check is
 over: the builder owns the next move (merge once CI is green, fix or re-run CI that failed or was cancelled, ask for the
-check again). It needs no check open, no CI going and no merge queued on its pull request, and nothing changed on it or
+check again). It needs no check open or waiting for a free reviewer, no CI going and no merge queued on its pull request, and nothing changed on it or
 on a check under it for an hour.
 
 Progress is a status, step or owner change, a note, comment or message by the bot on the task, or a subtask or question

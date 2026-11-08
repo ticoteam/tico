@@ -470,6 +470,17 @@ def strand_review(c, tid, hours=2):
     finish(c, H.actor_id(row["owner_id"]))
 
 
+def wait_for_reviewer(c, tid):
+    """The ticket's check waits for a free reviewer, as check_pools records it: a waiting row and its history line."""
+    row = H.task(c, tid)
+    wid = H.new_id()
+    c.execute(
+        "INSERT INTO check_waits(id,ticket_id,step_id,title,state,created_at,updated_at) VALUES(?,?,?,?,'waiting',?,?)",
+        (wid, tid, row["step_id"], "QA", H.now(), H.now()),
+    )
+    H._task_event(c, tid, H.KEEPER, "check_waiting", None, wid, "QA: waiting, no reviewer free")
+
+
 def test_a_bot_ticket_left_at_a_check_step_after_its_check_is_resumed(api):
     """Nov 8, PR 3055: QA passed, CI was cancelled and the failure never reached the builder; the ticket sat at In QA
     for hours. With its check over, no CI going and nothing recorded to wait on, its builder hears of it."""
@@ -498,8 +509,9 @@ def test_a_review_ticket_someone_else_moves_is_not_resumed(api):
     release = dev_ticket(api, "Merged", n=5, step="Pending Release", checks="passing")
     look = new_task(api, "A person's look")
     rerun = dev_ticket(api, "Failed, re-run going", n=7, checks="failing")
+    pooled = dev_ticket(api, "No reviewer free", n=8, checks="passing")
     plain = dev_ticket(api, "Nothing to wait on", n=6, check="done")
-    held = (checking, ci, queued, fresh, release, look, rerun)
+    held = (checking, ci, queued, fresh, release, look, rerun, pooled)
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE tasks SET status='review' WHERE id=?", (look,))
         c.execute(
@@ -511,6 +523,7 @@ def test_a_review_ticket_someone_else_moves_is_not_resumed(api):
             "UPDATE task_links SET detail=json_set(coalesce(detail,'{}'),'$.checks',json(?)) WHERE task_id=?",
             ('{"suite:github-actions#1": "failing", "suite:github-actions#2": "pending"}', rerun),
         )
+        wait_for_reviewer(c, pooled)
         for tid in held:
             strand_review(c, tid, hours=3)
         strand_review(c, plain, hours=2)  # the newest: the held ones come first and must not use up the bot's resume
@@ -528,7 +541,7 @@ def test_a_review_ticket_someone_else_moves_is_not_resumed(api):
         )
 
 
-@pytest.mark.parametrize("how", ["ci", "failing_running", "merge_queue", "step", "check_reopened"])
+@pytest.mark.parametrize("how", ["ci", "failing_running", "merge_queue", "step", "check_reopened", "pool_busy"])
 def test_a_queued_review_resume_is_dropped_at_claim_once_ci_or_the_merge_queue_takes_over(api, how):
     """The resume waited behind other work; meanwhile CI started again on the head, the pull request joined the merge
     queue, or the ticket left its check step. Its "no CI going" text is stale, so the claim drops it."""
@@ -550,6 +563,8 @@ def test_a_queued_review_resume_is_dropped_at_claim_once_ci_or_the_merge_queue_t
                 "UPDATE task_links SET detail=json_set(coalesce(detail,'{}'),'$.checks',json(?)) WHERE task_id=?",
                 ('{"suite:github-actions#1": "failing", "suite:github-actions#2": "pending"}', tid),
             )
+        elif how == "pool_busy":
+            wait_for_reviewer(c, tid)
         elif how == "check_reopened":
             kid = c.execute("SELECT from_task FROM task_relations WHERE to_task=? AND kind='parent'", (tid,)).fetchone()
             c.execute("UPDATE tasks SET status='doing', updated_at=? WHERE id=?", (H.now(), kid[0]))
