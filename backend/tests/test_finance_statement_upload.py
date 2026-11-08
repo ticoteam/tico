@@ -8,6 +8,7 @@ from typing import Any
 
 import pytest
 
+from backend.finance import banking as BK
 from backend.finance import context as FC
 from backend.finance import statement_upload as SU
 from backend.finance import tab
@@ -16,11 +17,29 @@ from backend.finance.core.errors import CONFLICT, DENIED, INVALID, NOT_AVAILABLE
 from backend.finance.store import banking as SK
 from backend.finance.store import ledger as SL
 from backend.finance.store import statement_uploads as SS
-from backend.tests.test_finance_fixtures import AT, OWNER, account, act, books, finance_template, store  # noqa: F401
+from backend.tests import test_finance_fixtures as FX
+from backend.tests.test_finance_fixtures import AT, OWNER, act, books, finance_template, store  # noqa: F401
 
 FIXTURES = Path(__file__).parent / "fixtures" / "statements"
 LATER = "2026-10-15T12:31:00.000000Z"  # past a preview's 30 minutes
 RECONCILE_OCT = {"statement_end": "2026-10-31", "opening_balance": 1248022, "statement_balance": 1360777}
+
+
+def account(c: Any, code: str) -> str:
+    """A GL line by code. Setup's chart has no card line: 2100 is made the way connecting a card makes it."""
+    if code == BK.CARDS and c.execute("SELECT 1 FROM fin_accounts WHERE code=?", (code,)).fetchone() is None:
+        BK.new_account(FC.load(c, AT), BK.CARDS, "Credit cards", "liability", "credit_card", OWNER)
+    return FX.account(c, code)
+
+
+def book_deposits(c: Any, money: str) -> None:
+    """A deposit nothing matches waits for a person (banking._settle, as a synced one does): book each to Revenue."""
+    waiting = c.execute(
+        "SELECT id FROM fin_feed_txns WHERE money_account_id=? AND amount>0 AND entry_id IS NULL", (money,)
+    ).fetchall()
+    for (fid,) in waiting:
+        done = act(c, OWNER, "categorize", {"feed_id": fid, "account_id": account(c, "4000")})
+        assert done.status == "committed", done.reason
 
 
 def file_b64(name: str) -> str:
@@ -335,6 +354,7 @@ def test_a_gap_is_a_warning_a_post_can_go_past_and_a_reconciliation_clears(books
         assert done.result["off_by"] == -6000
         assert SS.off_by(c, bank) == -6000
         assert (line_of(tab.sources(c, OWNER), bank) or {}).get("off_by") == -6000
+        book_deposits(c, bank)
         tied = act(c, OWNER, "reconcile", {"money_account_id": bank, **RECONCILE_OCT})
         assert (tied.status, tied.result["status"], tied.result["difference"]) == ("committed", "done", 0)
         assert SS.off_by(c, bank) is None
@@ -346,7 +366,7 @@ def test_undo_takes_an_upload_back_and_the_file_can_be_posted_again(books):
         done = post(c, bank, "bofa_checking.csv")
         assert done.status == "committed", done.reason
         upload = done.result["upload_id"]
-        assert gl_sum(c, "1000") == 135364
+        assert gl_sum(c, "1000") == -109636  # the three debits; the 2,450.00 deposit waits for a person
         undone = act(c, OWNER, "statement_undo", {"upload_id": upload})
         assert undone.status == "committed", undone.reason
         assert (feed_count(c, bank), gl_sum(c, "1000")) == (0, 0)
@@ -360,6 +380,7 @@ def test_undo_is_refused_once_the_account_is_reconciled_through_the_upload(books
         opening(c, "1000", 1248022)
         bank = money_account(c, "bank", "1000", "Checking")
         upload = post(c, bank, "ofx_1x.ofx").result["upload_id"]
+        book_deposits(c, bank)
         tied = act(c, OWNER, "reconcile", {"money_account_id": bank, **RECONCILE_OCT})
         assert tied.result["status"] == "done", tied.result
         refused = act(c, OWNER, "statement_undo", {"upload_id": upload})

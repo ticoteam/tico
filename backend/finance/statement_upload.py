@@ -484,7 +484,7 @@ def preview(ctx: Ctx, who: str, p: V.Payload) -> dict[str, Any]:
     """The review of a statement file (POST /api/v2/finance/statements/preview): every row New or Already in Tico, and
     the tie-out. It writes nothing but a short-lived token, which a post presents to show it posts what was shown."""
     V.only(p, ("money_account_id", "file", "file_name", "signs"))
-    if R.BOOK not in ctx.rights(who):
+    if not R.has(ctx.org, who, R.BOOK, ctx.rights(who)):  # the owner holds every right without a grant
         raise denied("posting a statement needs the finance.book right")
     money = _money(ctx, who, V.text(p, "money_account_id", 80))
     gl = banking.gl_account(ctx, money)
