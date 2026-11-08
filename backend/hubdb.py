@@ -7160,7 +7160,7 @@ def task_create(
         if value:  # written public text leaves a record, as a later publication's does
             _task_event(conn, row['id'], actor, field, None, value, '')
     if step is not None:
-        task_update(conn, actor, row["id"], step=step, enter_gate=False)
+        task_update(conn, actor, row["id"], step=step, enter_gate=is_bot(actor))
     if top:
         placed = task(conn, row["id"])
         if placed["step_id"]:
@@ -7429,7 +7429,7 @@ def task_update(
     `verdict` and `verdict_head` record a review or QA subtask's verdict and the head it judged (record_verdict).
     Finishing it (done, or a closed step) closes its open descendants under the same close permissions.
     Automatic callers use `strict=False`: descendants they cannot close stay open and their requesters hear once.
-    `enter_gate` (False only for a create's first stage) holds a card that enters a pipeline to its earlier stages' requirements.
+    `enter_gate` holds a card that enters a pipeline to its earlier stages' requirements; a create holds only a bot's.
     `heard` names bots that already have the news (a person's chat reply that closed their question task): they get
     no notice of it as well.
     """

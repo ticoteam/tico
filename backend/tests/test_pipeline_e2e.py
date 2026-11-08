@@ -1730,3 +1730,18 @@ def test_a_pipeline_editor_keeps_the_override_for_a_card_with_no_stage(co):
     )
     co.c.commit()
     assert co.where(card) == ("Product", "Review")
+
+
+def test_a_bot_cannot_create_a_card_straight_into_a_later_product_stage(co):
+    """Codex GB2 round 3: a bot creating a card at a later stage of a pipeline is held to every earlier stage's exit
+    requirements, as a bot entering one by move is. Its first stage is not held."""
+    with pytest.raises(H.Refused) as refused:
+        H.task_create(
+            co.c, BUILDER, "Dark mode made by a bot", "", BUILDER, type=co.type["Product"], step="Review", lint=False
+        )
+    assert refused.value.rule == "requirement"
+    first = H.task_create(
+        co.c, BUILDER, "Dark mode at Ideas", "", BUILDER, type=co.type["Product"], step="Ideas", lint=False
+    )["id"]
+    co.c.commit()
+    assert co.where(first) == ("Product", "Ideas")
