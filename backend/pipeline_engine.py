@@ -1036,7 +1036,8 @@ def add_held(conn: sqlite3.Connection, typ: dict[str, Any]) -> None:
     """Each step of a pipeline view gets `held`: its open cards (held_by_stage), so a capped stage's count is the one caps are
     enforced against."""
     held = held_by_stage(conn, str(typ["id"]))
-    for step in typ.get("steps") or []:
+    steps: list[dict[str, Any]] = typ.get("steps") or []
+    for step in steps:
         step["held"] = held.get(str(step["id"]), 0)
 
 
