@@ -22,6 +22,13 @@ const taskOverCapWarn = (task: {id: string}, body: {step?: string}, data: {over_
   const step = pipelineType(task)?.steps.find(s => s.id === body.step);
   toast(`${step?.name ?? 'That stage'} is over its cap of ${step?.card_cap ?? ''}.`);
 };
+// A stage's held count on the pipeline (D68): the unfinished cards the task list holds in it now, so a card a live change
+// moved out is not still counted (the server's step.held is only as fresh as the last types read), plus step.unseen: the
+// cards there the pipeline's rule editor cannot read, which the server counts for it. Its count is then never below the
+// one the cap is enforced against.
+function pipelineStageHeld(tasks: {step_id?: string | null; status?: unknown}[], step: {id: string; unseen?: number}): number {
+  return tasks.filter(t => t.step_id === step.id && !BOARD_HIDDEN.has(String(t.status))).length + (step.unseen ?? 0);
+}
 const pipelineStepName = id => TASK_TYPES.flatMap(type => type.steps).find(step => step.id === id)?.name || id;
 // The Product roadmap and Dev tickets types go by their role (backend/roadmap_flow.py), never by who manages them.
 const pipelineRoleType = role => TASK_TYPES.find(type => type.role === role);
@@ -101,10 +108,7 @@ function taskPipelineBoard(items, state, head = '') {
   const backlog = working.slice(0, lead), folds = taskBoardFolds(state, type, backlog.length);
   if (phone) folds.backlog = false;               // a phone shows one stage at a time: every backlog stage is a chip
   const inStep = step => items.filter(item => item.task.step_id === step.id);
-  // A stage's held count is the unfinished cards the task list holds in it now, so a card a live change moved out is
-  // not still counted; the server's step.held is only as fresh as the last types read.
-  const heldIn = (stepId: string) => (state.tasks || []).filter((t: {step_id?: string | null; status?: unknown}) => t.step_id === stepId && !['done', 'closed', 'declined'].includes(String(t.status))).length;
-  const stepColumn = (step: import('../types/api').TaskStep) => ({id: step.id, name: step.name, drop: step.id, items: inStep(step), scope: {type: type.id, step: step.id}, limit: step.limit_minutes, cap: step.card_cap ?? null, held: heldIn(step.id)});
+  const stepColumn = (step: import('../types/api').TaskStep) => ({id: step.id, name: step.name, drop: step.id, items: inStep(step), scope: {type: type.id, step: step.id}, limit: step.limit_minutes, cap: step.card_cap ?? null, held: pipelineStageHeld(state.tasks || [], step)});
   const strip = (fold, run, drop, name) => ({id: 'fold-' + fold, fold, drop, items: [], name: run.length === 1 ? run[0].name : name,
     hint: run.map(step => step.name).join(', '), count: fold === 'backlog' ? run.reduce((n, step) => n + inStep(step).length, 0) : ''});
   const columns = [];

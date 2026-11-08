@@ -78933,7 +78933,11 @@
           },
           "held": {
             "type": "integer",
-            "description": "The open cards the stage holds now, snoozed and hidden ones included: the count its card cap is enforced against"
+            "description": "The open cards the stage holds now that the caller may read, snoozed and hidden ones included. For the pipeline's rule editor, every open card: the count its card cap is enforced against"
+          },
+          "unseen": {
+            "type": "integer",
+            "description": "For the pipeline's rule editor, how many of the held cards it may not read (private ones); 0 for anyone else"
           },
           "flow": {
             "type": "object",

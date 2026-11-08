@@ -28,7 +28,8 @@ def install_task_types(app, store, auth, mutate, mover):
                 typ["can_edit_rules"] = typ["id"] in editable
                 # Whether it has any requirement, so the pipeline keeps its plain layout without one.
                 typ["has_requirements"] = pipeline_engine.has_requirements(c, typ["id"])
-                pipeline_engine.add_held(c, typ)
+                # Each stage's held count: the cards this caller reads, or every card for the editor who sets its caps.
+                pipeline_engine.add_held(c, typ, who, enforced=typ["can_edit_rules"])
             return {"types": listed}
 
     @app.get("/api/v2/task-types/{type_id}")
@@ -40,7 +41,7 @@ def install_task_types(app, store, auth, mutate, mover):
             # Named by id or by name; a pipeline the caller may not see is not found, whichever way it was named.
             if not row or not pipeline_rights.may_see(c, who.actor, row["id"]):
                 raise Problem("not_found", "Task type not found", 404)
-            pipeline_engine.add_held(c, row)
+            pipeline_engine.add_held(c, row, who, enforced=pipeline_rights.may_edit_rules(c, who.actor, row["id"]))
             return {"type": row}
 
     @app.get("/api/v2/check-pool-candidates")

@@ -66,6 +66,7 @@ QUEUE_WAITS = (
     "company_limit",
     "backoff",
     "bot_limit",
+    "on_ice",
 )
 # Keep the stuck threshold compatible with older runners' twenty-minute claim window and fourteen-minute stop.
 # New runners hand unstarted work back immediately and cap active turns at five minutes by default.
@@ -1267,6 +1268,8 @@ HELD = {
         RUNS,
     ),
     "task_cap": ("Its active task limit is full; waiting work frees a place", BOT_SETTINGS),
+    # A card On ice (D69, a stage capped at 0): its queued work waits on purpose until a person moves the card out.
+    "on_ice": ("Its card is On ice: its work starts when a person moves the card out", RUNS),
     "auto_start_off": ("Automatic assigned-task starts are off for this bot", BOT_SETTINGS),
     "paused": ("Paused: its owner or BotOps must resume it", BOT_SETTINGS),
     "no_slot": ("No slot on {computer}: queued behind running turns", RUNS),

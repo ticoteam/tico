@@ -596,3 +596,93 @@ def test_a_card_the_merge_queue_drops_into_a_full_stage_is_listed_waiting_for_ro
     card = H.task_create(c, ANA, "Dropped from the queue", "", ANA, type=typ, step="Review", lint=False)["id"]
     assert E.queue_ejected(c, card, "Dropped from the queue") is False
     assert X.waiting_room(c)[card]["stage_id"] == doing
+
+
+def _private_card(c, typ, title, who, step):
+    card = H.task_create(c, who, title, "", who, type=typ, step=step, lint=False)["id"]
+    c.execute("UPDATE tasks SET private=1 WHERE id=?", (card,))
+    return card
+
+
+def test_a_stage_count_holds_only_the_cards_a_viewer_reads_and_the_pipelines_editor_sees_the_enforced_count(api):
+    """A private card is not counted for a viewer who cannot read it, so its occupancy does not leak. The pipeline's
+    editor, who sets its caps, gets the count the cap is enforced against, with `unseen` naming the cards it cannot
+    read, so its board never shows room a bot is refused."""
+    from backend import task_privacy as privacy
+
+    typ, steps = make_line(api, "Unseen" + uuid.uuid4().hex[:8])
+    set_cap(api, steps["Doing"], 2)
+    with api.app.state.store.transaction() as c:
+        H.task_create(c, ANA, "Open card", "", ANA, type=typ, step="Doing", lint=False)
+        hidden = _private_card(c, typ, "Ben's private card", "human:ben", "Doing")
+        assert not privacy.task_readable(c, Identity(ANA, "human"), H.task(c, hidden))  # the precondition
+        assert not privacy.task_readable(c, Identity("human:cara", "human"), H.task(c, hidden))
+
+    def doing(token, listed=False):
+        if listed:
+            found = next(t for t in get(api, "task-types", token)["types"] if t["id"] == typ)
+        else:
+            found = get(api, f"task-types/{typ}", token)["type"]
+        return next(({"held": s["held"], "unseen": s.get("unseen", 0)} for s in found["steps"] if s["name"] == "Doing"))
+
+    for listed in (False, True):
+        assert doing("cara-test", listed) == {"held": 1, "unseen": 0}  # an outsider: only the card she reads
+        assert doing("ana-test", listed) == {"held": 2, "unseen": 1}  # the editor: what the cap is enforced against
+        assert doing("ben-test", listed) == {"held": 2, "unseen": 0}  # ben reads both cards
+
+
+def test_a_bot_cannot_decline_or_close_a_card_out_of_on_ice(api):
+    """A cancellation lands in the pipeline's closed stage without a stage move's check: a bot's decline or close is held
+    to On ice all the same, so it cannot clear a parked card and reopen it into Backlog. A person can."""
+    typ, steps = make_line(
+        api, "IceClose" + uuid.uuid4().hex[:8], [*ON_ICE_LINE, {"name": "Closed", "status": "closed"}]
+    )
+    set_cap(api, steps["On ice"], 0)
+    with api.app.state.store.transaction() as c:
+        card = H.task_create(c, ANA, "Parked", "", "bot:coo", type=typ, step="On ice", lint=False)["id"]
+        c.execute("UPDATE tasks SET requester_id='bot:coo' WHERE id=?", (card,))  # its requester may close it
+    for write in (
+        lambda c: H.task_update(c, "bot:coo", card, status="declined"),
+        lambda c: H.task_close(c, "bot:coo", card, "Not needed"),
+    ):
+        with api.app.state.store.transaction() as c:
+            c.execute("SAVEPOINT bot_cancel")
+            with pytest.raises(H.Refused) as refused:
+                write(c)
+            c.execute("ROLLBACK TO bot_cancel")
+            c.execute("RELEASE bot_cancel")
+        assert refused.value.rule == "on_ice"
+        assert card_stage(api, card) == steps["On ice"]
+    with api.app.state.store.transaction() as c:
+        H.task_update(c, "bot:coo", card, status="waiting", note="Parked until spring")  # it stays On ice: allowed
+        assert H.task(c, card)["step_id"] == steps["On ice"]
+        H.task_update(c, ANA, card, status="declined")  # a person may decline it
+        assert H.task(c, card)["status"] == "declined"
+
+
+def test_a_private_card_refused_for_room_is_still_listed_as_waiting_for_room(api):
+    """The refusal of a private card's write keeps only what was refused, but the stage it waits for is kept: without it
+    the manager could never list the card as waiting for room."""
+    typ, steps = make_line(api, "PrivRoom" + uuid.uuid4().hex[:8])
+    set_cap(api, steps["Doing"], 1)
+    with api.app.state.store.transaction() as c:
+        H.task_create(c, ANA, "Already doing", "", ANA, type=typ, step="Doing", lint=False)
+        card = H.task_create(c, ANA, "Private card", "", "bot:coo", type=typ, step="Backlog", lint=False)["id"]
+        c.execute("UPDATE tasks SET private=1 WHERE id=?", (card,))
+    problem = bot_move(api, card, "Doing")
+    assert (problem.status, problem.code) == (409, "stage_full")
+    with api.app.state.store.read() as c:
+        assert X.waiting_room(c)[card]["stage_id"] == steps["Doing"]
+        recorded = H._json(c.execute("SELECT detail FROM refusals WHERE rule='stage_full'").fetchone()["detail"], {})
+        assert recorded["detail"] == "Private task write refused"  # what was refused stays private
+        assert recorded["context"] == {"what": None, "stage": steps["Doing"]}
+
+
+def test_a_job_held_for_a_card_on_ice_is_an_intended_wait_for_health():
+    """A queued job for a card On ice waits on purpose (execution.job_refusal "on_ice"): Health lists it as resting, with
+    words of its own, never as a stuck bot or "Not started after 15 min"."""
+    from backend import health
+
+    assert "on_ice" in health.QUEUE_WAITS
+    words, _ = health.HELD["on_ice"]
+    assert "On ice" in words

@@ -2084,7 +2084,10 @@ def refuse(conn, actor, rule, detail="", severity="normal", context=None, task=N
     scope = scope or task_quarantine.source(conn, actor, task or REFUSAL_TASK.get() or (context or {}).get("task"))
     recorded = "Private task write refused" if PRIVATE_WRITE.get() else detail
     if context and PRIVATE_WRITE.get():
-        context = {"what": context.get("what")}
+        # A private task's refusal keeps only what was refused, and the stage a capped move waited for: the actor named
+        # it, and the pipeline manager lists the card as waiting for room from it (pipeline_exceptions.waiting_room),
+        # only to readers of the card.
+        context = {"what": context.get("what"), **({"stage": context["stage"]} if context.get("stage") else {})}
     row = {
         "id": new_id(),
         "created_at": now(),
@@ -4735,6 +4738,9 @@ def _set_status(
         step_id = None
     from . import pipeline_engine
 
+    if row is not None and row.get("step_id") and step_id != row.get("step_id"):
+        # Only a person takes a card out of On ice, whatever the write: a close or a decline too (pipeline_engine).
+        pipeline_engine.may_leave_ice(conn, actor, row, step_id)
     # Every forward stage move is held to the stage's requirements, not only task_update's (pipeline_engine). Cancelling
     # (a close or a decline) is not forward progress: it is never held to exit requirements.
     cancelling = pipeline_engine.is_cancellation(effective, explicit_step=step is not None)

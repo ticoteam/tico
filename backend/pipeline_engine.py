@@ -1018,27 +1018,38 @@ def held_count(conn: sqlite3.Connection, step_id: str, task_id: str = "") -> int
     return int(row["n"]) if row else 0
 
 
-def held_by_stage(conn: sqlite3.Connection, type_id: str) -> dict[str, int]:
-    """Every stage of a pipeline with the open cards it holds, as held_count counts them: a snoozed or hidden card holds its
-    place too. The board shows a capped stage's count from this (D68), not from the cards it has loaded."""
-    return {
-        str(r["step_id"]): int(r["n"])
-        for r in _rows(
-            conn,
-            "SELECT step_id, COUNT(*) AS n FROM tasks WHERE step_id IN (SELECT id FROM task_steps WHERE type_id = ?) "
-            "AND status NOT IN ('done', 'closed', 'declined') GROUP BY step_id",
-            (type_id,),
-        )
-    }
+def add_held(conn: sqlite3.Connection, typ: dict[str, Any], who: Any, *, enforced: bool = False) -> None:
+    """Each step of a pipeline view gets `held`, its open cards as held_count counts them (a snoozed or hidden card holds
+    its place too), and `unseen`. A viewer is counted only the cards it may read: a private card's place is not shown to
+    someone who cannot read it. The pipeline's rule editor, who sets its caps (`enforced`), is counted every card, the
+    count the cap is enforced against, and `unseen` says how many of them it cannot read; the board adds those to the
+    cards it has loaded (ui/app/task-pipelines.ts), so it never shows room a bot is refused. `unseen` is 0 for anyone
+    else."""
+    from . import task_privacy as privacy
 
-
-def add_held(conn: sqlite3.Connection, typ: dict[str, Any]) -> None:
-    """Each step of a pipeline view gets `held`: its open cards (held_by_stage), so a capped stage's count is the one caps are
-    enforced against."""
-    held = held_by_stage(conn, str(typ["id"]))
+    cards = _rows(
+        conn,
+        "SELECT id, step_id FROM tasks WHERE step_id IN (SELECT id FROM task_steps WHERE type_id = ?) "
+        "AND status NOT IN ('done', 'closed', 'declined')",
+        (str(typ["id"]),),
+    )
+    # task_privacy is untyped: its answers are a set of task ids and a bool.
+    private_tasks = cast("Callable[..., set[str]]", privacy.private_tasks)  # pyright: ignore[reportUnknownMemberType]
+    task_readable = cast("Callable[..., bool]", privacy.task_readable)  # pyright: ignore[reportUnknownMemberType]
+    private = private_tasks(conn, [str(card["id"]) for card in cards])
+    held: dict[str, int] = {}
+    unseen: dict[str, int] = {}
+    for card in cards:
+        step_id, task_id = str(card["step_id"]), str(card["id"])
+        readable = task_id not in private or task_readable(conn, who, H.task(conn, task_id))
+        if readable or enforced:
+            held[step_id] = held.get(step_id, 0) + 1
+        if not readable and enforced:
+            unseen[step_id] = unseen.get(step_id, 0) + 1
     steps: list[dict[str, Any]] = typ.get("steps") or []
     for step in steps:
         step["held"] = held.get(str(step["id"]), 0)
+        step["unseen"] = unseen.get(str(step["id"]), 0)
 
 
 def full_stage(conn: sqlite3.Connection, step_id: str | None, task_id: str = "") -> Row | None:
@@ -1157,6 +1168,21 @@ def may_clear_stage(conn: sqlite3.Connection, actor: str, row: Row) -> None:
         "stage_required",
         "A ticket leaves its stage only for another stage; a person takes it out",
         task=str(row.get("id") or ""),
+    )
+
+
+def may_leave_ice(conn: sqlite3.Connection, actor: str, row: Row, step_id: str | None) -> None:
+    """Every status write that takes a card out of On ice (D69) to `step_id` is a person's (hubdb._set_status): a close or a
+    decline that lands in a closed stage, a done, a type change, not only a stage move (_room). A bot, or a write made for a
+    person (H.VIA), is refused (rule on_ice), so it cannot cancel a parked card and reopen it into Backlog. A write that
+    keeps the card On ice (a waiting) stands, and so do Tico's own flows (H.KEEPER), as may_clear_stage allows them."""
+    if actor == H.KEEPER or (H.is_human(actor) and not H.VIA.get()):
+        return
+    here = stage(conn, row.get("step_id"))
+    if here is None or here["card_cap"] != 0 or step_id == here["id"]:
+        return
+    raise room_refusal(
+        "on_ice", f"Only a person moves a card out of {here['name']}", str(row.get("id") or ""), str(here["id"])
     )
 
 
