@@ -1442,6 +1442,54 @@ def test_a_judges_met_on_evidence_older_than_the_work_is_still_out_of_date_when_
     assert _standing(store, task_id, req_id) == "out_of_date"
 
 
+def _older_evidence_ok(store, req_id):
+    with store.transaction() as c:
+        c.execute(
+            "UPDATE stage_requirements SET needs=json_set(needs, '$.newer_than_change', json('false')) WHERE id=?",
+            (req_id,),
+        )
+
+
+def test_the_judge_is_told_when_a_requirement_accepts_evidence_older_than_the_work(tmp_path):
+    """Codex round 8, P2: the prompt says older evidence does not count; on a requirement that does not need evidence
+    newer than the change, the state says so (requirement.older_evidence_ok), and the prompts make that the exception."""
+    path, _, req_id = _judged_world(tmp_path)
+    store = Store(_settings(path))
+    with store.read() as c:
+        (job,) = P._waiting(c, 5)
+    assert "older_evidence_ok" not in P._state({"name": "Review", "rubric": "r"}, job)["requirement"]
+    _older_evidence_ok(store, req_id)
+    with store.read() as c:
+        (job,) = P._waiting(c, 5)
+    assert P._state({"name": "Review", "rubric": "r"}, job)["requirement"]["older_evidence_ok"] is True
+    questions = json.loads((Path(P.__file__).parent.parent / "questions" / "pipeline-requirement.json").read_text())
+    assert "requirement.older_evidence_ok" in json.dumps(questions)
+    assert "requirement.older_evidence_ok" in P.JUDGE_SYSTEM
+
+
+def test_a_judge_answer_a_lapsed_mark_met_came_after_does_not_keep_the_judge_away(tmp_path, monkeypatch):
+    """Codex round 8, P2: the judge failed the evidence, a person marked it met, then the body was edited and put back.
+    The Mark met lapsed with the work version and the old answer's digest matches again, but it is not the latest
+    decision, so it does not stop the judge: the requirement is judged again instead of staying out of date."""
+    path, task_id, req_id = _judged_world(tmp_path)
+    store = Store(_settings(path))
+    _older_evidence_ok(store, req_id)
+    monkeypatch.setattr(P, "_cannot_see", lambda attachment, state: False)
+    monkeypatch.setattr(P, "ENGINE", _engine(0.05))
+    assert P.tick(store) == 1 and _standing(store, task_id, req_id) == "failed"
+    _person_rules(path, task_id, req_id, "override")
+    assert _standing(store, task_id, req_id) == "met"
+    with store.transaction() as c:
+        body = c.execute("SELECT body FROM tasks WHERE id=?", (task_id,)).fetchone()[0]
+        c.execute("UPDATE tasks SET body='Something else' WHERE id=?", (task_id,))
+    with store.transaction() as c:
+        c.execute("UPDATE tasks SET body=? WHERE id=?", (body, task_id))
+    assert _standing(store, task_id, req_id) == "out_of_date"
+    monkeypatch.setattr(P, "ENGINE", _engine(0.95))
+    assert P.tick(store) == 1 and _standing(store, task_id, req_id) == "met"
+    assert P.tick(store) == 0
+
+
 def _more_tickets(path, n, body=""):
     c = hub(path)
     dev = c.execute("SELECT type_id FROM tasks").fetchone()[0]
