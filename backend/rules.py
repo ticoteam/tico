@@ -30,7 +30,7 @@ under `default_note` (the next run carries it), and the bot's own write is ignor
 the filters stays in backend/wake_rules.py and backend/bot_to_bot.py; this module orders them and names them.
 
 Table rows (the `rules` table, `scope_kind` team, type, department, bot or task) override the built-ins. A row
-matches one event (or `*`, every event that is neither always-wake nor awaited) and optional conditions (`when_json`), and the
+matches one event (or `*`, every event that is neither always-wake nor awaited) and optional conditions (`condition`), and the
 first match wins by scope, most specific first: task, bot, department, type, team, then the built-ins; inside a
 scope by `position`. The always-wake classes are a floor no row lowers: a person is never made to wait by a rule.
 A bot's profile plugs in at the bot scope: `profile_of` names it and PROFILE_RULES holds each profile's built-in
@@ -51,6 +51,7 @@ import sqlite3
 from typing import NamedTuple, Optional
 
 from . import event_catalog as CAT, hubdb as H, templating, tico_notices, task_trigger_rules as TTR
+from .migrations import renames
 
 log = logging.getLogger(__name__)
 
@@ -81,6 +82,7 @@ HOLD_ROW, HOLD_IGNORED = "rule", "ignored"
 
 # What a message is, as a rule names it. The always-wake events cannot be lowered by a row.
 FLOOR_EVENTS = {
+    "check_back": "a task follow-up appointment is due",
     "person_message": "a person's message or comment, or a notice of a person's own act",
     "ask": "an ask or a steer: a question to the bot",
     "answer": "the answer to an ask the bot made",
@@ -98,7 +100,7 @@ FLOOR_EVENTS = {
 # Structured task news that wakes at once when no row already wakes it or keeps it quiet.
 URGENT_EVENTS = ("incident_news", "task_action", "task_blocker", "direct_review_request")
 # wake_rules.always_wakes key -> (event, rule id)
-_FLOOR = {"person": "person_message", "approval": "approval", "needs_action": "needs_action", "reply": "reply",
+_FLOOR = {"check_back": "check_back", "person": "person_message", "approval": "approval", "needs_action": "needs_action", "reply": "reply",
           "gate": "verdict", "handoff": "builder_handoff"}
 # wake_rules.AWAITED key -> event
 AWAITED_EVENTS = {
@@ -199,8 +201,8 @@ def _profile_rules():
 
     def add(profile, rule, event, then, words, when=None):
         rows.setdefault(profile, []).append({
-            "id": rule, "event": event, "then_outcome": then, "params_json": "{}", "words": words,
-            "when": when or {}, "when_json": json.dumps(when or {}, sort_keys=True)})
+            "id": rule, "event": event, "then_outcome": then, "params": "{}", "words": words,
+            "when": when or {}, "condition": json.dumps(when or {}, sort_keys=True)})
 
     def timers(profile, which=OWN_TIMERS):
         for event, words in which:
@@ -249,7 +251,7 @@ def profile_of(conn, bot):
     """The profile a bot runs under: its `bot_config.profile`, or `doer` for a bot with none (a database from before
     profiles, a bot seeded since the last start)."""
     try:
-        row = conn.execute("SELECT json_extract(config_json,'$.profile') FROM bot_config WHERE bot=?",
+        row = conn.execute("SELECT json_extract(config,'$.profile') FROM bot_config WHERE bot=?",
                            (H.actor_id(bot),)).fetchone()
     except sqlite3.OperationalError:
         return "doer"
@@ -281,7 +283,7 @@ PARKED_NOTICE = "parked_urgent_notice"
 
 def notice_only(message):
     """Only the keeper's server-stamped urgent notices run without attaching their held task."""
-    return bool(message and message.get("from_actor") == H.KEEPER and message.get("kind") == "notice"
+    return bool(message and message.get("sender_id") == H.KEEPER and message.get("kind") == "notice"
                 and (message.get("refs") or {}).get(PARKED_NOTICE) is True)
 
 
@@ -313,7 +315,7 @@ def _pr_decision(conn, event, target, refs, conv):
         return Decision(WAKE, "awaited_wake_once")
     tid = H.message_task_id({"refs": refs}, conv)
     task = H.task(conn, tid) if tid else None
-    if task and task.get("owner") == target and task.get("status") in WORKING:
+    if task and task.get("owner_id") == target and task.get("status") in WORKING:
         return Decision(WAKE, "pr_checks_done")
     return Decision(NOTE, "pr_checks_note", HOLD_ROW)
 
@@ -365,9 +367,9 @@ BUILTIN_IDS = frozenset(r["id"] for r in BUILTINS)
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS rules(
  id TEXT PRIMARY KEY, scope_kind TEXT NOT NULL, scope_id TEXT NOT NULL DEFAULT '', event TEXT NOT NULL,
- when_json TEXT NOT NULL DEFAULT '{}', then_outcome TEXT NOT NULL, params_json TEXT NOT NULL DEFAULT '{}',
+ condition TEXT NOT NULL DEFAULT '{}', then_outcome TEXT NOT NULL, params TEXT NOT NULL DEFAULT '{}',
  enabled INTEGER NOT NULL DEFAULT 1, position INTEGER NOT NULL DEFAULT 0, note TEXT NOT NULL DEFAULT '',
- created_by TEXT NOT NULL, action_by TEXT, created TEXT NOT NULL, updated TEXT NOT NULL, revision INTEGER NOT NULL DEFAULT 1);
+ created_by TEXT NOT NULL, action_by TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, revision INTEGER NOT NULL DEFAULT 1);
 CREATE INDEX IF NOT EXISTS rules_event ON rules(event, enabled);
 CREATE INDEX IF NOT EXISTS rules_scope ON rules(scope_kind, scope_id);
 """
@@ -416,9 +418,9 @@ def event_of(actor, kind, refs, body, floor=None):
         return "routine"
     if refs.get("auto_start"):
         return "auto_start"
-    trigger = run_triggers.of_message({"refs": refs, "from_actor": actor})[0]
+    trigger = run_triggers.of_message({"refs": refs, "sender_id": actor})[0]
     if trigger in ("comment", "status_or_relation") or actor == H.KEEPER:
-        label = wake_presets.classify({"refs": refs, "from_actor": actor, "body": body, "kind": kind})[0]
+        label = wake_presets.classify({"refs": refs, "sender_id": actor, "body": body, "kind": kind})[0]
         if label == "assignment":
             return "assignment"
         if label == "blocker":
@@ -502,7 +504,8 @@ class _Context:
                 if task.get("status") not in wanted:
                     return False
             elif key in ("owner", "requester"):
-                if task.get(key) not in wanted:
+                # A condition saved before a column rename names the old column; the task row has the new one.
+                if task.get(renames.current_column("tasks", key)) not in wanted:
                     return False
             elif key == "type":
                 names = {str(task.get("type_id") or "").lower()}
@@ -512,8 +515,9 @@ class _Context:
                 if not names & {str(w).lower() for w in wanted}:
                     return False
             elif key == "role":
-                mine = {"owner" if task.get("owner") == self.target else
-                        "requester" if task.get("requester") == self.target else "other"}
+                owner = task.get(renames.current_column("tasks", "owner"))
+                requester = task.get(renames.current_column("tasks", "requester"))
+                mine = {"owner" if owner == self.target else "requester" if requester == self.target else "other"}
                 # QA and the Release Manager are found, never configured per ticket (release_flow): a bot holds
                 # that role here when it is the one the ticket's QA or the team's release setting names.
                 if "qa" in wanted and self.slug == _release_flow().qa_owner(self.conn, task):
@@ -542,7 +546,7 @@ class _Context:
 
 def _row_decision(row, actor):
     outcome = row["then_outcome"]
-    params = H._json(row["params_json"], {}) or {}
+    params = H._json(row["params"], {}) or {}
     if outcome == NOTE:
         return Decision(NOTE, row["id"], HOLD_ROW, params)
     if outcome == IGNORE:
@@ -566,13 +570,13 @@ def _table_decision(conn, event, actor, target, refs, conv, task_row=None):
         return None
     try:
         rows = conn.execute("SELECT * FROM rules WHERE enabled=1 AND event IN (?, '*') "
-                            "ORDER BY position, event='*', created, id", (event,)).fetchall()
+                            "ORDER BY position, event='*', created_at, id", (event,)).fetchall()
     except sqlite3.OperationalError:            # a database from before the table: no rows
         rows = []
     from . import redesign_migration
     converted = redesign_migration.wake_rows(conn, event)   # rules the redesign moved into "What wakes" automations
     if converted:
-        rows = sorted([*rows, *converted], key=lambda r: (r["position"], r["event"] == "*", r["created"], r["id"]))
+        rows = sorted([*rows, *converted], key=lambda r: (r["position"], r["event"] == "*", r["created_at"], r["id"]))
     slug, profile = H.actor_id(target), []
     if PROFILE_RULES:
         profile = [{**r, "scope_kind": "bot", "scope_id": slug} for r in PROFILE_RULES.get(profile_of(conn, slug), ())
@@ -596,10 +600,10 @@ def _table_decision(conn, event, actor, target, refs, conv, task_row=None):
         if scope == "bot":
             found += named
         for row in found:
-            if ctx.in_scope(row) and ctx.matches(H._json(row["when_json"], {}) or {}):
+            if ctx.in_scope(row) and ctx.matches(H._json(row["condition"], {}) or {}):
                 return _row_decision(row, actor)
     for row in rest:                            # the profile's "everything else", after every scope that named an event
-        if ctx.matches(H._json(row["when_json"], {}) or {}):
+        if ctx.matches(H._json(row["condition"], {}) or {}):
             return _row_decision(row, actor)
     return None
 
@@ -625,8 +629,8 @@ def urgent_rule(conn, actor, target, refs, conv, event):
     if task:
         if incident_task(conn, task):
             return "incident_news"
-        party = target in (task.get("owner"), task.get("requester"))
-        if refs.get("stale_check") and target == task.get("owner"):
+        party = target in (task.get("owner_id"), task.get("requester_id"))
+        if refs.get("stale_check") and target == task.get("owner_id"):
             return "task_action"
         if party and (event in ("blocker", "task_blocked") or refs.get("review_gate")):
             return "task_blocker"
@@ -728,6 +732,34 @@ def decide(conn, actor, target, kind, refs, body, conv, in_reply_to=None):
     return (found.outcome, found.rule) if found else None
 
 
+THREAD_WAKE = "thread_wake"
+
+
+def thread_wake(conn, message, bot, thread, mode="queue"):
+    """The thread wake rule (docs/dev/threads-contract.md §4.3) for a bot that a thread message reaches but is not
+    addressed to (a mention, its DM or Home, a sub-thread it posted in): (mode, rule id), or (None, None) for no
+    delivery. backend/threads.py chose the reason by precedence; the engine judges it as it judges a message to the
+    bot, so a table row or a built-in hold still decides: `wake` keeps `mode`, `note` (or a hold) defers it to the
+    bot's next run, `batch` digests it, `ignore` drops it. Fail open: an error wakes."""
+    try:
+        refs = dict(message.get("refs") or {})
+        refs.pop("carries", None)
+        found = judge(conn, message.get("sender_id") or H.KEEPER, bot, message.get("kind") or "say", refs,
+                      message.get("body") or "", thread, message.get("in_reply_to"))
+    except Exception:  # noqa: BLE001 - fail open
+        return mode, FAIL_OPEN
+    if found is None:
+        return mode, THREAD_WAKE
+    rule = found.rule or THREAD_WAKE
+    if found.outcome == IGNORE:
+        return None, None
+    if found.outcome == BATCH:
+        return "digest", rule
+    if found.outcome == WAKE and not found.reason:
+        return mode, rule
+    return "defer", rule
+
+
 def bot_to_bot_decision(conn, actor, target, kind, refs, body, conv, in_reply_to=None):
     """What a plain bot-to-bot message does, when the built-in lets it wait (bot_to_bot.can_wait): `bot_to_bot`, or
     the row that overrides it. None when it does not wait, or a rule wakes it (the engine then judges it again in
@@ -821,14 +853,14 @@ def _ask(conn, decision, row, actor, body):
     if not row:
         raise ValueError("an ask rule needs a task")
     if conn.execute("SELECT 1 FROM events e JOIN tasks t ON t.id=e.target WHERE e.action=? "
-                    "AND json_extract(e.detail_json,'$.rule')=? AND json_extract(e.detail_json,'$.task')=? "
+                    "AND json_extract(e.detail,'$.rule')=? AND json_extract(e.detail,'$.task')=? "
                     f"AND t.status IN ({','.join('?' * len(H.ACTIVE_STATUSES))}) LIMIT 1",
                     (ASKED, decision.rule, row["id"], *H.ACTIVE_STATUSES)).fetchone():
         return
-    who = row["requester"] if H.is_human(row["requester"]) else None
-    if not who and H.is_bot(row["owner"]):
+    who = row["requester_id"] if H.is_human(row["requester_id"]) else None
+    if not who and H.is_bot(row["owner_id"]):
         from . import usage_limits
-        person = usage_limits.recipients(conn, H.actor_id(row["owner"]))
+        person = usage_limits.recipients(conn, H.actor_id(row["owner_id"]))
         who = H.human_actor(person["id"]) if person else None
     if not who:
         raise ValueError("no person to ask")
@@ -987,7 +1019,7 @@ def _message_values(conn, task, message):
     out = {"event": event, "text": str(message.get("body") or ""), "actor": str(message.get("actor") or ""),
            "to": H.actor_id(message.get("target") or "")}
     if task:
-        out["task"] = {key: task.get(key) for key in ("id", "title", "status", "owner", "requester", "step_id")}
+        out["task"] = {key: task.get(renames.current_column("tasks", key)) for key in ("id", "title", "status", "owner", "requester", "step_id")}
     return out
 
 
@@ -997,13 +1029,14 @@ def _bot_room(conn, slug):
     from . import rooms
     if rooms.thread_mode(conn, slug) == rooms.SHARED:
         found = conn.execute("SELECT id FROM conversations WHERE scope='shared' AND room_key=? AND closed_at IS NULL "
-                             "ORDER BY COALESCE(last_message_at,created) DESC LIMIT 1", (slug,)).fetchone()
+                             "ORDER BY COALESCE(last_message_at,created_at) DESC LIMIT 1", (slug,)).fetchone()
         if found:
             return H.conversation(conn, found["id"])
-    stored = conn.execute("SELECT operator FROM bot_config WHERE bot=?", (slug,)).fetchone()
-    if stored and stored["operator"] and H.human(conn, stored["operator"]):
-        name = (H.bot(conn, slug) or {}).get("display_name") or slug
-        return rooms.personal_room(conn, H.human_actor(stored["operator"]), slug, "Chat with " + name)
+    stored = conn.execute("SELECT owner_id FROM bot_config WHERE bot=?", (slug,)).fetchone()
+    if stored and stored["owner_id"] and H.human(conn, stored["owner_id"]):
+        bot = H.bot(conn, slug) or {}
+        name = bot.get("display_name") or bot.get("slug") or slug
+        return rooms.personal_room(conn, H.human_actor(stored["owner_id"]), slug, "Chat with " + name)
     return H._pair_conversation(conn, H.KEEPER, H.bot_actor(slug), "notice", allow_held=True)
 
 
@@ -1015,11 +1048,11 @@ def _tell_bot(conn, rule_id, slug, text, refs, *, wake, task=None, room=None):
     if not found:
         return False, f"No bot {slug}" if slug else "The rule names no bot"
     if found["state"] not in BOT_STATES_OK:
-        return False, f"{slug} is {found['state']}"
+        return False, f"{found['slug']} is {found['state']}"
     target = H.bot_actor(slug)
     if task:
         if not H.task_private_readable(conn, target, task):
-            return False, f"{slug} may not read this task"
+            return False, f"{found['slug']} may not read this task"
         conv = H.conversation(conn, task["conversation_id"])
         refs = {**refs, "task": task["id"]}
     else:
@@ -1056,6 +1089,7 @@ def _wake_text(params, values, ctx, default):
 def _run_wake_bot(conn, rule_id, by, params, values, *, event, subject, revision, task=None, ctx=None):
     ctx = ctx or {}
     slug = _slug(params.get("bot"))
+    slug = (H.resolve_bot(conn, slug) or {}).get("id", slug)
     ok, detail = _tell_bot(conn, rule_id, slug, _wake_text(params, values, ctx, _default_text(event, values)),
                            _wake_refs(event, rule_id, ctx), wake=True, task=task)
     return {"outcome": "wake_bot", "target": slug, "ok": ok, "detail": detail}
@@ -1099,13 +1133,14 @@ def _run_create_task(conn, rule_id, by, params, values, *, event, subject, revis
     carries the call's content and the line that says how to read all of it, as a wake does."""
     ctx = ctx or {}
     slug = _slug(params.get("owner"))
+    slug = (H.resolve_bot(conn, slug) or {}).get("id", slug)
     result = {"outcome": "create_task", "target": slug, "ok": False, "detail": ""}
     found = H.bot(conn, slug) if slug else None
     if not found:
         result["detail"] = f"No bot {slug}" if slug else "The rule names no bot"
         return result
     if found["state"] not in BOT_STATES_OK:
-        result["detail"] = f"{slug} is {found['state']}"
+        result["detail"] = f"{found['slug']} is {found['state']}"
         return result
     title = " ".join(templating.render(str(params.get("title") or ""), values, cap=300).split()) \
         or _default_text(event, values)
@@ -1190,7 +1225,7 @@ def _event_ask(conn, row, name, params, values, ctx):
     if not who:
         return False, "No person to ask"
     if conn.execute("SELECT 1 FROM events e JOIN tasks t ON t.id=e.target WHERE e.action=? "
-                    "AND json_extract(e.detail_json,'$.rule')=? "
+                    "AND json_extract(e.detail,'$.rule')=? "
                     f"AND t.status IN ({','.join('?' * len(H.ACTIVE_STATUSES))}) LIMIT 1",
                     (ASKED, row["id"], *H.ACTIVE_STATUSES)).fetchone():
         return True, "already asked"
@@ -1211,7 +1246,7 @@ def _event_rows(conn, name):
     found += [r for r in redesign_migration.wake_rows(conn) if r["scope_kind"] in ("bot", "department", "team")
               and (r["event"] == name or (r["event"].endswith("*") and r["event"] != "*"))]
     found = [r for r in found if CAT.matches(r["event"], name)]
-    return sorted(found, key=lambda r: (EVENT_PRECEDENCE.index(r["scope_kind"]), r["position"], r["created"], r["id"]))
+    return sorted(found, key=lambda r: (EVENT_PRECEDENCE.index(r["scope_kind"]), r["position"], r["created_at"], r["id"]))
 
 
 def judge_event(conn, event, ctx, *, actor="keeper"):
@@ -1261,10 +1296,12 @@ def _judge_event(conn, event, ctx, actor):
             return []
     values, seen, done, stopped = _event_values(name, ctx), set(), [], False
     for row in rows:
-        if stopped or not _event_when(H._json(row["when_json"], {}) or {}, ctx):
+        if stopped or not _event_when(H._json(row["condition"], {}) or {}, ctx):
             continue
-        params = H._json(row["params_json"], {}) or {}
+        params = H._json(row["params"], {}) or {}
         key = _event_target(row, params)
+        if key[0] == "bot":
+            key = ("bot", (H.resolve_bot(conn, key[1]) or {}).get("id", key[1]))
         if key in seen:
             continue
         seen.add(key)
@@ -1319,7 +1356,7 @@ def steps_renamed(conn, type_id, renamed):
     table exists."""
     lower = {str(k).lower(): v for k, v in renamed.items()}
     try:
-        rows = conn.execute("SELECT id, when_json FROM rules WHERE scope_kind='type' AND scope_id=?", (type_id,)).fetchall()
+        rows = conn.execute("SELECT id, condition FROM rules WHERE scope_kind='type' AND scope_id=?", (type_id,)).fetchall()
     except sqlite3.OperationalError:
         return
     from . import redesign_migration
@@ -1334,7 +1371,7 @@ def steps_renamed(conn, type_id, renamed):
         moved = [lower.get(str(n).lower(), n) for n in names]
         if moved != names:
             when["step"] = moved if isinstance(step, list) else moved[0]
-            conn.execute("UPDATE rules SET when_json=?, updated=?, revision=revision+1 WHERE id=?",
+            conn.execute("UPDATE rules SET condition=?, updated_at=?, revision=revision+1 WHERE id=?",
                          (json.dumps(when, sort_keys=True), H.now(), ident))
 
 
@@ -1350,8 +1387,8 @@ def seed_dev(conn):
             at = H.now()
             for position, (note, when, outcome) in enumerate(DEV_ROWS, 1):
                 conn.execute(
-                    "INSERT INTO rules(id,scope_kind,scope_id,event,when_json,then_outcome,params_json,enabled,"
-                    "position,note,created_by,created,updated,revision) VALUES(?,?,?,?,?,?,?,1,?,?,?,?,?,1)",
+                    "INSERT INTO rules(id,scope_kind,scope_id,event,condition,then_outcome,params,enabled,"
+                    "position,note,created_by,created_at,updated_at,revision) VALUES(?,?,?,?,?,?,?,1,?,?,?,?,?,1)",
                     ("rule-" + H.new_id(), "type", ident, "step_entered", json.dumps(when, sort_keys=True), outcome,
                      "{}", position, note, H.KEEPER, at, at))
             H.event(conn, H.KEEPER, SEEDED, ident, {"rows": len(DEV_ROWS)})
@@ -1375,9 +1412,9 @@ def drop_step_noise(conn):
         flow = _release_flow()
         manager = flow.load(conn)["bot"] or flow.release_manager(conn)   # a paused one's jobs too
         dropped = conn.execute(
-            "UPDATE jobs SET state='cancelled',held=0 WHERE bot=? AND state='queued' AND held=1 AND message_id IN "
-            "(SELECT id FROM messages WHERE json_extract(refs_json,'$.news')='step_entered' "
-            "AND json_extract(refs_json,'$.wake_batch')='rule' AND json_extract(refs_json,'$.rule')='profile_lead_digest')",
+            "UPDATE jobs SET state='canceled',held=0 WHERE bot_id=? AND state='queued' AND held=1 AND message_id IN "
+            "(SELECT id FROM messages WHERE json_extract(refs,'$.news')='step_entered' "
+            "AND json_extract(refs,'$.wake_batch')='rule' AND json_extract(refs,'$.rule')='profile_lead_digest')",
             (manager,)).rowcount if manager else 0
         H.event(conn, H.KEEPER, STEP_NOISE_DROPPED, manager or "", {"jobs": dropped})
         return dropped
@@ -1400,12 +1437,12 @@ def step_entered(conn, actor, row, *, skip=()):
         step = conn.execute("SELECT name FROM task_steps WHERE id=?", (row.get("step_id"),)).fetchone()
         flow = _release_flow()
         qa, manager = flow.qa_owner(conn, row), flow.release_manager(conn)
-        who = [row.get("owner"), row.get("requester"), H.bot_actor(qa) if qa else None,
+        who = [row.get("owner_id"), row.get("requester_id"), H.bot_actor(qa) if qa else None,
                H.bot_actor(manager) if manager else None]
         conv = H.conversation(conn, row.get("conversation_id"))
         for target in dict.fromkeys(a for a in who if a and H.is_bot(a) and a != actor and a not in skip):
             refs = {"task": row["id"], "news": "step_entered"}
-            if (incident and target in (row.get("owner"), row.get("requester"))) or \
+            if (incident and target in (row.get("owner_id"), row.get("requester_id"))) or \
                     _table_decision(conn, "step_entered", actor, target, refs, conv, row):
                 H._wake(conn, row, target, f"{row['title']} entered {step[0] if step else 'a new step'}.",
                         {"news": "step_entered", **({"at_step": row["step_id"]} if row.get("step_id") else {})})
@@ -1417,12 +1454,12 @@ def step_entered(conn, actor, row, *, skip=()):
 def view(row, conn=None):
     """A table row as the API shows it."""
     return {"id": row["id"], "scope_kind": row["scope_kind"], "scope_id": row["scope_id"], "event": row["event"],
-            "when": H._json(row["when_json"], {}) or {}, "then": row["then_outcome"],
-            "params": H._json(row["params_json"], {}) or {}, "enabled": bool(row["enabled"]),
+            "when": H._json(row["condition"], {}) or {}, "then": row["then_outcome"],
+            "params": H._json(row["params"], {}) or {}, "enabled": bool(row["enabled"]),
             "position": row["position"], "note": row["note"], "built_in": False,
             "protected": row["id"] in tico_notices.RULE_IDS,       # Tico Team's notice rules: editable, never deleted
             "created_by": row["created_by"], "action_by": row["action_by"],
-            "created": row["created"], "updated": row["updated"],
+            "created_at": row["created_at"], "updated_at": row["updated_at"],
             "revision": row["revision"],
             **(TTR.state(conn, row["id"]) if conn is not None and row["event"] in TTR.TRIGGERS else {})}
 

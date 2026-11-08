@@ -3,9 +3,10 @@ import json
 
 import pytest
 
-from backend import hubdb as H
+from backend import hubdb as H, task_snooze as TS
 from backend.tests.test_review_gate import api, ticket, move, HEAD, get
 from backend.tests.test_github import post
+from backend.tests.test_api import hold
 
 
 def _team_blocked(api, task):
@@ -13,6 +14,25 @@ def _team_blocked(api, task):
     with api.app.state.store.transaction() as c:
         typ = H.type_get(c, task['type_id'])
         H.type_update(c, H.KEEPER, typ['id'], steps=[*typ['steps'], {'name': 'Blocked', 'status': 'waiting'}])
+
+
+def test_task_view_lists_a_block_and_a_snooze_as_holds(api):
+    """The API shows a hold per kind with who set it and since when (docs/tasks.md, Holds), on a task's read and a list."""
+    task = ticket(api)
+    _team_blocked(api, task)
+    with api.app.state.store.transaction() as c:
+        H.task_update(c, task['owner_id'], task['id'], step='Blocked', note='Waiting for the test machine')
+        row = H.task(c, task['id'])
+        TS.snooze(c, task['owner_id'], task['id'], H.shift(H.now(), days=3)[:10], note='Check the machine')
+    view = get(api, 'tasks/' + task['id'])['task']
+    assert {h['kind'] for h in view['holds']} == {'blocked', 'snoozed'} and len(view['holds']) == 2
+    assert hold(view) == {'kind': 'blocked', 'reason': 'Waiting for the test machine', 'since': row['blocked_since'],
+                          'until': None, 'by': task['owner_id'], 'cause': 'manual'}
+    snoozed = hold(view, 'snoozed')
+    assert (snoozed['reason'], snoozed['by']) == ('Check the machine', task['owner_id']) and snoozed['until'] > snoozed['since']
+    assert not any(k.startswith(('blocked_', 'snoozed_')) for k in view)
+    listed = get(api, 'tasks?snoozed=only')
+    assert [t['holds'] for t in listed['tasks'] if t['id'] == task['id']] == [view['holds']]
 
 
 def test_restart_adds_no_blocked_step_and_a_deleted_one_stays_deleted(api):
@@ -59,14 +79,14 @@ def test_owner_block_keeps_reason_time_and_resume_step(api):
     task = ticket(api)
     _team_blocked(api, task)
     with api.app.state.store.transaction() as c:
-        H.task_update(c, task['owner'], task['id'], step='Blocked', note='Waiting for the test machine')
+        H.task_update(c, task['owner_id'], task['id'], step='Blocked', note='Waiting for the test machine')
         blocked = H.task(c, task['id'])
         assert blocked['status'] == 'waiting'
         assert blocked['blocked_reason'] == 'Waiting for the test machine'
         assert blocked['blocked_since']
-        H.task_update(c, task['owner'], task['id'], note='Still waiting')
+        H.task_update(c, task['owner_id'], task['id'], note='Still waiting')
         assert H.task(c, task['id'])['blocked_since'] == blocked['blocked_since']
-        H.task_update(c, task['owner'], task['id'], status='doing')
+        H.task_update(c, task['owner_id'], task['id'], status='doing')
         resumed = H.task(c, task['id'])
         assert resumed['step_id'] == task['step_id']
         assert resumed['blocked_since'] is None
@@ -79,12 +99,12 @@ def test_a_dependency_hold_keeps_the_step_wakes_nobody_and_clearing_keeps_it_too
     with api.app.state.store.transaction() as c:
         TR.relate(c, H.KEEPER, task['id'], blocker['id'], 'blocked_by')
         from backend import task_blocked
-        before = c.execute('SELECT count(*) FROM messages WHERE to_actor=?', (task['owner'],)).fetchone()[0]
+        before = c.execute('SELECT count(*) FROM messages WHERE recipient_id=?', (task['owner_id'],)).fetchone()[0]
         task_blocked.sweep(c, H.now())
         held = H.task(c, task['id'])
         assert (held['step_id'], held['status'], held['blocked_kind']) == (task['step_id'], 'waiting', 'dependency')
         assert held['blocked_since'] and held['blocked_from_step'] == task['step_id']
-        assert c.execute('SELECT count(*) FROM messages WHERE to_actor=?', (task['owner'],)).fetchone()[0] == before
+        assert c.execute('SELECT count(*) FROM messages WHERE recipient_id=?', (task['owner_id'],)).fetchone()[0] == before
         # Nothing claims a held ticket: its status is what the claim and the wake read.
         assert c.execute("SELECT count(*) FROM tasks WHERE id=? AND status IN ('open','doing')", (task['id'],)).fetchone()[0] == 0
         H.task_update(c, H.KEEPER, blocker['id'], status='done')
@@ -99,13 +119,13 @@ def test_gate_refusal_commits_block_without_advancing_review(api):
     # The hold is a mark on the ticket: it stays in the step it was at, and the refused move is not made.
     assert current['step']['name'] == 'In Progress'
     assert current['status'] == 'waiting'
-    assert 'receipt' in current['blocked_reason']
+    assert 'receipt' in hold(current)['reason'] and hold(current)['by'] == 'keeper'
     # The screen keeps a gate hold's own line instead of a bot wait's (ui/app/tasks.js taskBotWait).
-    assert current['blocked_kind'] == 'gate'
+    assert hold(current)['cause'] == 'gate'
     assert current['version'] > task['version']
     with api.app.state.store.transaction() as c:
         from backend import task_blocked
-        H.task_update(c, task['owner'], task['id'], note=f'Tests: head {HEAD}: 9 passed, 0 failed')
+        H.task_update(c, task['owner_id'], task['id'], note=f'Tests: head {HEAD}: 9 passed, 0 failed')
         task_blocked.reconcile(c, task['id'])
         # Tico still retries the refused move (backend/move_retry.py), so the hold is left for it to make.
         assert H.task(c, task['id'])['blocked_kind'] == 'gate'
@@ -122,7 +142,7 @@ def test_two_dependencies_block_until_both_clear(api):
         for child in children:
             TR.add_blocker(c, H.KEEPER, task['id'], child['id'])
         assert H.task(c, task['id'])['status'] == 'waiting'
-        moved = H.task_update(c, task['owner'], task['id'], step='In Progress')
+        moved = H.task_update(c, task['owner_id'], task['id'], step='In Progress')
         assert 'remains Blocked' in moved['warnings'][0]
         assert H.task(c, task['id'])['status'] == 'waiting', 'an explicit move cannot bypass a live dependency'
         TR.remove_blocker(c, H.KEEPER, task['id'], children[0]['id'])
@@ -158,7 +178,7 @@ def test_scheduler_clears_receipt_gate_without_a_stall_candidate(api):
     assert move(api, task).status_code == 422
     store = api.app.state.store
     with store.transaction() as c:
-        H.task_update(c, task['owner'], task['id'], note=f'Tests: head {HEAD}: 9 passed, 0 failed')
+        H.task_update(c, task['owner_id'], task['id'], note=f'Tests: head {HEAD}: 9 passed, 0 failed')
         assert task['id'] not in [r['id'] for r in H.stalled_tasks(c)]
     Scheduler(store, api.app.state.execution).tick(datetime.now(timezone.utc))
     from backend import move_retry
@@ -179,9 +199,9 @@ def test_scheduler_clears_ci_hold_after_real_green_webhook(api, monkeypatch):
         row = H.task(c, task['id'])
         pr = review_gate.links(c, row)[0]
         with pytest.raises(H.Refused) as refused:
-            review_gate.check(c, row['owner'], row, {pr['id']: {
+            review_gate.check(c, row['owner_id'], row, {pr['id']: {
                 'head_sha': HEAD, 'checks': {'github-actions': 'failing'}, 'at': H.now()}})
-        review_gate.notify(c, row['owner'], refused.value.review_gate)
+        review_gate.notify(c, row['owner_id'], refused.value.review_gate)
         observed = H.shift(H.now(), seconds=1)
     monkeypatch.setattr(H, 'now', lambda: observed)
     _suite(api, 'github-actions', 'completed', 'success')
@@ -196,7 +216,7 @@ def test_note_only_wait_reopens_but_explicit_owner_hold_stays(api):
     task = ticket(api)
     _team_blocked(api, task)
     with api.app.state.store.transaction() as c:
-        H.task_update(c, task['owner'], task['id'], status='waiting', note='Waiting on a vendor reply')
+        H.task_update(c, task['owner_id'], task['id'], status='waiting', note='Waiting on a vendor reply')
         row = H.task(c, task['id'])
         assert row['blocked_kind'] == 'stranded'
         # Startup migration must preserve recovery for legacy note-only waits too.
@@ -204,7 +224,7 @@ def test_note_only_wait_reopens_but_explicit_owner_hold_stays(api):
         task_blocked.backfill(c)
         assert H.task(c, task['id'])['blocked_kind'] == 'stranded'
         assert H.sweep_stranded(c, H.shift(H.now(), hours=3)) == [(task['id'], 'open')]
-        H.task_update(c, task['owner'], task['id'], step='Blocked', note='Waiting for a machine')
+        H.task_update(c, task['owner_id'], task['id'], step='Blocked', note='Waiting for a machine')
         assert H.sweep_stranded(c, H.shift(H.now(), hours=3)) == []
         assert H.task(c, task['id'])['blocked_kind'] == 'manual'
 
@@ -223,7 +243,7 @@ def test_stranded_sweep_leaves_gate_and_worktree_holds_to_reconciliation(api, ki
         after = H.task(c, task['id'])
         assert (after['status'], after['note'], after['blocked_kind'], after['blocked_since']) == (
             'waiting', held['note'], kind, held['blocked_since'])
-    assert get(api, 'tasks/' + task['id'])['task']['blocked_kind'] == kind
+    assert hold(get(api, 'tasks/' + task['id'])['task'])['cause'] == kind
 
 
 def test_stranded_sweep_preserves_general_worktree_hold(api):
@@ -234,7 +254,7 @@ def test_stranded_sweep_preserves_general_worktree_hold(api):
         assert task['type_id'] == H.GENERAL_TYPE
         assert not review_gate.engineering(c, task)
         # Worktree holds can remain after a ticket moves onto another board.
-        H.task_update(c, task['owner'], task['id'], status='waiting', note='Waiting for unlinked pushes')
+        H.task_update(c, task['owner_id'], task['id'], status='waiting', note='Waiting for unlinked pushes')
         c.execute("UPDATE tasks SET blocked_kind='worktree',blocked_reason=? WHERE id=?",
                   ('Waiting for unlinked pushes', task['id']))
         held = H.task(c, task['id'])
@@ -253,9 +273,9 @@ def test_worktree_hold_moved_to_general_resumes_once_after_linking_pushes(api, w
     with api.app.state.store.transaction() as c:
         branch = f"tico/{task['id'][:8]}-offsite-plan"
         tree = H.new_id()
-        c.execute("INSERT INTO task_links(id,task_id,kind,url,state,added_by,created,repo,branch,detail_json) "
+        c.execute("INSERT INTO task_links(id,task_id,kind,url,state,added_by,created_at,repo,branch,detail) "
                   "VALUES(?,?,'worktree',?,'present',?,?,'Acme/product',?,?)",
-                  (tree, task['id'], 'worktree:' + tree, task['owner'], H.now(), branch,
+                  (tree, task['id'], 'worktree:' + tree, task['owner_id'], H.now(), branch,
                    json.dumps({'pushed': 'd' * 40, 'expected_head': 'b' * 40})))
         assert H.unlinked_pushes(c, task['id'])
         task_blocked.hold(c, task['id'], 'Waiting for unlinked pushes', 'worktree')
@@ -295,11 +315,11 @@ def test_worktree_hold_moved_to_general_resumes_once_after_linking_pushes(api, w
         assert resumed['version'] > moved['version']
         task_blocked.sweep(c, H.now())
         assert H.task(c, task['id'])['version'] == resumed['version']
-        wakes = H._rows(c.execute("SELECT * FROM messages WHERE to_actor=? "
-                                  "AND json_extract(refs_json,'$.task')=? AND body LIKE 'Worktree hold cleared:%'",
-                                  (task['owner'], task['id'])))
+        wakes = H._rows(c.execute("SELECT * FROM messages WHERE recipient_id=? "
+                                  "AND json_extract(refs,'$.task')=? AND body LIKE 'Worktree hold cleared:%'",
+                                  (task['owner_id'], task['id'])))
         assert len(wakes) == 1
-        assert json.loads(wakes[0]['refs_json'])['news'] == 'assignment'
+        assert json.loads(wakes[0]['refs'])['news'] == 'assignment'
 
 
 def test_review_fix_steps_accrue_active_building_time(api, monkeypatch):
@@ -311,9 +331,9 @@ def test_review_fix_steps_accrue_active_building_time(api, monkeypatch):
     with api.app.state.store.transaction() as c:
         fixes = c.execute("SELECT id FROM task_steps WHERE type_id=? AND name='Review 1 Fixes'", (task['type_id'],)).fetchone()[0]
         c.execute('UPDATE tasks SET building_started_at=NULL,building_seconds=0 WHERE id=?', (task['id'],))
-        H.task_update(c, task['owner'], task['id'], step=fixes)
+        H.task_update(c, task['owner_id'], task['id'], step=fixes)
         at = '2026-10-26T02:00:00.000000Z'
-        H.task_update(c, task['owner'], task['id'], step='Blocked', note='Waiting for a machine')
+        H.task_update(c, task['owner_id'], task['id'], step='Blocked', note='Waiting for a machine')
         at = '2026-10-26T07:00:00.000000Z'
         assert task_blocked.clocks(H.task(c, task['id']), at)['building_seconds'] == 3600
 
@@ -326,7 +346,7 @@ def test_blocked_time_pauses_build_clock_and_age_alert_is_once(api, monkeypatch)
     monkeypatch.setattr(H, 'now', lambda: at)
     with api.app.state.store.transaction() as c:
         c.execute('UPDATE tasks SET building_started_at=? WHERE id=?', ('2026-10-26T00:00:00.000000Z', task['id']))
-        H.task_update(c, task['owner'], task['id'], step='Blocked', note='Waiting for a machine')
+        H.task_update(c, task['owner_id'], task['id'], step='Blocked', note='Waiting for a machine')
         at = '2026-10-26T06:00:00.000000Z'
         blocked = H.task(c, task['id'])
         assert task_blocked.clocks(blocked, at)['building_seconds'] == 3600
@@ -336,7 +356,7 @@ def test_blocked_time_pauses_build_clock_and_age_alert_is_once(api, monkeypatch)
         task_blocked.sweep(c, at)
         task_blocked.sweep(c, at)
         assert c.execute("SELECT count(*) FROM events WHERE action='task.blocked_age' AND target=?", (task['id'],)).fetchone()[0] == 1
-        H.task_update(c, task['owner'], task['id'], status='doing')
+        H.task_update(c, task['owner_id'], task['id'], status='doing')
         at = '2026-10-26T07:00:00.000000Z'
         assert task_blocked.clocks(H.task(c, task['id']), at)['building_seconds'] == 7200
 
@@ -368,7 +388,7 @@ def test_owner_blocked_move_is_a_manual_hold_that_never_reopens(api):
     task = ticket(api)
     _team_blocked(api, task)
     with api.app.state.store.transaction() as c:
-        parked = H.task_update(c, task['owner'], task['id'], step='Blocked', note='Waiting for a machine')
+        parked = H.task_update(c, task['owner_id'], task['id'], step='Blocked', note='Waiting for a machine')
         assert H.task(c, task['id'])['blocked_kind'] == 'manual'
         assert not any('goes back to open' in w for w in parked.get('warnings') or [])
         H.sweep_stranded(c, at=H.shift(H.now(), hours=48))
@@ -382,14 +402,14 @@ def test_fresh_ci_refusal_cannot_be_cleared_by_older_cached_green(api):
         row = H.task(c, task['id'])
         pr = review_gate.links(c, row)[0]
         with pytest.raises(H.Refused) as refused:
-            review_gate.check(c, row['owner'], row, {pr['id']: {
+            review_gate.check(c, row['owner_id'], row, {pr['id']: {
                 'head_sha': HEAD, 'checks': {'python': 'failing'}, 'at': H.now()}})
-        review_gate.notify(c, row['owner'], refused.value.review_gate)
+        review_gate.notify(c, row['owner_id'], refused.value.review_gate)
         event_count = c.execute('SELECT count(*) FROM events').fetchone()[0]
         task_blocked.reconcile(c, task['id'])
         assert H.task(c, task['id'])['blocked_since']
         assert c.execute('SELECT count(*) FROM events').fetchone()[0] == event_count, 'probing never records another refusal'
-        c.execute('UPDATE task_links SET updated=?,detail_json=? WHERE id=?', (
+        c.execute('UPDATE task_links SET updated_at=?,detail=? WHERE id=?', (
             H.shift(H.now(), seconds=1), json.dumps({'head_sha': HEAD, 'checks': {'python': 'passing'}}), pr['id']))
         task_blocked.reconcile(c, task['id'])
         assert H.task(c, task['id'])['step_id'] == task['step_id']
@@ -419,7 +439,7 @@ def test_undecided_approval_blocks_and_decision_resumes_the_previous_step(api):
     assert move(api, task, 'Review 2').status_code == 200
     with api.app.state.store.transaction() as c:
         review_step = H.task(c, task['id'])['step_id']
-        ask = H.approval_request(c, task['owner'], 'merge', {'repo': 'acme/app', 'pr': 12}, task_id=task['id'])
+        ask = H.approval_request(c, task['owner_id'], 'merge', {'repo': 'acme/app', 'pr': 12}, task_id=task['id'])
         task_blocked.sweep(c, H.now())
         blocked = H.task(c, task['id'])
         assert blocked['status'] == 'waiting' and blocked['blocked_kind'] == 'dependency'
@@ -437,7 +457,7 @@ def test_explicit_milestone_wait_blocks_and_resumes_without_a_task_completion(ap
     from backend import milestone_waits as MW
     task = ticket(api)
     with api.app.state.store.transaction() as c:
-        MW.add(c, task['owner'], H.task(c, task['id']), 'release:acme/app@v1.2.3')
+        MW.add(c, task['owner_id'], H.task(c, task['id']), 'release:acme/app@v1.2.3')
         blocked = H.task(c, task['id'])
         assert blocked['status'] == 'waiting' and blocked['blocked_since']
         MW.happened(c, 'release_published', 'acme/app@v1.2.3')
@@ -473,7 +493,7 @@ def test_pipeline_child_keeps_review_and_allows_fix_move(api, title):
     assert move(api, task).status_code == 200
     store = api.app.state.store
     with store.transaction() as c:
-        child = H.task_create(c, task['owner'], title, 'Check the current candidate.', 'bot:cmo', parent_id=task['id'])
+        child = H.task_create(c, task['owner_id'], title, 'Check the current candidate.', 'bot:cmo', parent_id=task['id'])
         fixes = c.execute("SELECT id FROM task_steps WHERE type_id=? AND name='Review 1 Fixes'", (task['type_id'],)).fetchone()[0]
         review_step = H.task(c, task['id'])['step_id']
     Scheduler(store, api.app.state.execution).tick(datetime.now(timezone.utc))
@@ -484,7 +504,7 @@ def test_pipeline_child_keeps_review_and_allows_fix_move(api, title):
         task_blocked.hold(c, task['id'], 'Waiting on an open child task')
         task_blocked.reconcile(c, task['id'])
         assert H.task(c, task['id'])['step_id'] == review_step
-        H.task_update(c, task['owner'], task['id'], step=fixes)
+        H.task_update(c, task['owner_id'], task['id'], step=fixes)
         assert H.task(c, task['id'])['step_id'] == fixes
         person = H.task_create(c, 'human:ana', 'Security: confirm the vendor contract', 'Choose one.', 'human:ana', parent_id=task['id'])
         task_blocked.sweep(c, H.now(), task_ids=[task['id']])
@@ -500,14 +520,14 @@ def test_person_wait_does_not_replace_owner_manual_hold(api):
     task = ticket(api)
     _team_blocked(api, task)
     with api.app.state.store.transaction() as c:
-        H.task_update(c, task['owner'], task['id'], step='Blocked', note='Waiting for a machine')
-        H.task_comment(c, task['owner'], task['id'], 'Which machine?', ask={'questions': [
+        H.task_update(c, task['owner_id'], task['id'], step='Blocked', note='Waiting for a machine')
+        H.task_comment(c, task['owner_id'], task['id'], 'Which machine?', ask={'questions': [
             {'id': 'machine', 'header': '', 'question': 'Which machine?',
              'options': [{'label': 'A'}, {'label': 'B'}], 'multi': False, 'other': True}], 'who': 'human:ana'})
-        H.task_update(c, task['owner'], task['id'], status='waiting', waiting_on='human:ana')
+        H.task_update(c, task['owner_id'], task['id'], status='waiting', waiting_on='human:ana')
         assert H.task(c, task['id'])['blocked_kind'] == 'manual'
         H.supersede_asks(c, task['id'])
-        H.task_update(c, task['owner'], task['id'], waiting_on='')
+        H.task_update(c, task['owner_id'], task['id'], waiting_on='')
         task_blocked.reconcile(c, task['id'])
         assert H.task(c, task['id'])['blocked_kind'] == 'manual'
         assert H.task(c, task['id'])['blocked_reason'] == 'Waiting for a machine'
@@ -535,7 +555,7 @@ def test_an_old_blocker_does_not_put_a_merged_ticket_back_on_hold(api):
     task = ticket(api)
     old = post(api, 'tasks', {'owner': 'cmo', 'title': 'Restore an old check', 'body': 'Old.'})
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE task_steps SET flow_json=? WHERE id=?", (json.dumps({"can_hold": False}), task['step_id']))
+        c.execute("UPDATE task_steps SET flow=? WHERE id=?", (json.dumps({"can_hold": False}), task['step_id']))
         TR.add_blocker(c, H.KEEPER, task['id'], old['id'])
         row = H.task(c, task['id'])
         assert (row['step_id'], row['blocked_since']) == (task['step_id'], None)

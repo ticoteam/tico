@@ -41,7 +41,7 @@ WORDS = {"per_30m": "30-minute", "hourly": "hourly", "daily": "daily", "weekly":
 
 SCHEMA = (
     "CREATE TABLE IF NOT EXISTS usage_pools (scope TEXT PRIMARY KEY, hourly_usd REAL, daily_usd REAL, "
-    "weekly_usd REAL, monthly_usd REAL, updated TEXT, updated_by TEXT)",
+    "weekly_usd REAL, monthly_usd REAL, updated_at TEXT, updated_by TEXT)",
 )
 
 
@@ -114,6 +114,16 @@ def own(c, bot):
     return _caps(one(c, OWN_SQL, (bot,)))
 
 
+def own_many(c, bots):
+    """{bot: its own limits, as own returns them} for every bot in `bots`, read in set queries (the claim checks each)."""
+    from .hubdb import chunks
+    rows = {}
+    for part in chunks(bots):
+        for row in c.execute(f"SELECT * FROM usage_limits WHERE bot IN ({','.join('?' * len(part))})", part):
+            rows[row["bot"]] = row
+    return {bot: _caps(rows.get(bot)) for bot in bots}
+
+
 def prime_own(c, bots):
     """Every bot's own limits read in one statement, for a page that asks for many bots in one snapshot."""
     from .read_cache import prime
@@ -121,10 +131,11 @@ def prime_own(c, bots):
     prime(c, OWN_SQL, {(bot,): found.get(bot) for bot in bots})
 
 
-def effective(c, bot, default=None):
-    """Each period's cap in USD or None, and where each came from: `bot`, `company` or None."""
+def effective(c, bot, default=None, mine=None):
+    """Each period's cap in USD or None, and where each came from: `bot`, `company` or None. `mine`: the bot's own
+    limits when the caller has them read already (own)."""
     default = default if default is not None else company(c)
-    mine = own(c, bot)
+    mine = own(c, bot) if mine is None else mine
     out, source = {}, {}
     live = {name for name, _ in periods(c)}
     for name, _ in PERIODS:
@@ -196,9 +207,9 @@ def save_pool(c, scope, caps, actor):
         c.execute("DELETE FROM usage_pools WHERE scope=?", (scope,))
         return
     marks = ",".join("?" * len(KEYS))
-    c.execute(f"INSERT INTO usage_pools(scope, {', '.join(KEYS)}, updated, updated_by) VALUES(?,{marks},?,?) "
+    c.execute(f"INSERT INTO usage_pools(scope, {', '.join(KEYS)}, updated_at, updated_by) VALUES(?,{marks},?,?) "
               "ON CONFLICT(scope) DO UPDATE SET " + ", ".join(f"{key}=excluded.{key}" for key in KEYS) +
-              ", updated=excluded.updated, updated_by=excluded.updated_by",
+              ", updated_at=excluded.updated_at, updated_by=excluded.updated_by",
               (scope, *(caps[key] for key in KEYS), H.now(), actor))
 
 
@@ -273,7 +284,7 @@ def by_bot(c, start, end, subscription, default=None):
     if key not in memo:
         from .usage_records import RUNS
         memo[key] = {row[0]: float(row[1] or 0) for row in c.execute(
-            f"SELECT bot, coalesce(sum(est_cost_usd), 0) FROM {RUNS} WHERE started >= ? AND started < ? "
+            f"SELECT bot, coalesce(sum(est_cost_usd), 0) FROM {RUNS} WHERE started_at >= ? AND started_at < ? "
             "AND (? OR coalesce(billing, 'api') != 'subscription') GROUP BY bot", (start, end, 1 if subscription else 0))}
     return memo[key]
 
@@ -336,11 +347,11 @@ def spent_now(c, bot=None, scope=None, at=None, default=None):
     return out
 
 
-def state(c, bot, at=None, default=None):
+def state(c, bot, at=None, default=None, mine=None):
     """Where the bot stands: its own limits and their source, what it has spent, the highest percentage of one of them
     reached, and `blocked` (the period) when a limit is met, its own or a pool's; `blocked_by` then says whose."""
     default = default if default is not None else company(c)
-    limits, source = effective(c, bot, default)
+    limits, source = effective(c, bot, default, mine)
     when = bounds(at)
     result = {**limits, "source": source, **{label_ + "_spent": None for _, label_ in PERIODS},
               "percent": 0, "blocked": None, "blocked_by": None}
@@ -394,9 +405,9 @@ def budget_cutoff(c, bot, at=None, default=None):
     return {"scope": "budget", "name": cut.name, "period": cut.period, "budget_id": cut.budget_id, "until": cut.until}
 
 
-def blocked(c, bot, at=None, default=None):
+def blocked(c, bot, at=None, default=None, mine=None):
     """The period (`hourly`, `daily`, `weekly` or `monthly`) when the bot may take no new job, else None."""
-    return state(c, bot, at, default)["blocked"]
+    return state(c, bot, at, default, mine)["blocked"]
 
 
 def why(met):
@@ -443,7 +454,8 @@ def warning(c, actor, at=None):
     met = over(c, bot, at)
     if not met:
         return None
-    name = (H.bot(c, bot) or {}).get("display_name") or bot
+    found = H.bot(c, bot) or {}
+    name = found.get("display_name") or found.get("slug") or bot
     if met["scope"] == "budget" and not met["until"]:
         return f"{name} is waiting: the {met['name']} budget is used up; it starts again when a person raises it."
     reset = resets(met["period"], datetime.fromisoformat(met["until"][:-1]))
@@ -504,8 +516,8 @@ def after_run(c, bot, owner_email="", at=None):
 
 def recipients(c, bot, owner_email=""):
     """The person to tell: the bot's operator, else the company owner."""
-    row = c.execute("SELECT operator FROM bot_config WHERE bot=?", (bot,)).fetchone() if bot else None
-    person = H.human(c, row["operator"]) if row and row["operator"] else None
+    row = c.execute("SELECT owner_id FROM bot_config WHERE bot=?", (bot,)).fetchone() if bot else None
+    person = H.human(c, row["owner_id"]) if row and row["owner_id"] else None
     if not person and owner_email:
         owner = c.execute("SELECT id FROM humans WHERE lower(email)=?", (owner_email.lower(),)).fetchone()
         person = H.human(c, owner["id"]) if owner else None
@@ -514,7 +526,8 @@ def recipients(c, bot, owner_email=""):
 
 def notify(c, bot, level, label_, amount, cap, owner_email=""):
     person = recipients(c, bot, owner_email)
-    name = (H.bot(c, bot) or {}).get("display_name") or bot
+    found = H.bot(c, bot) or {}
+    name = found.get("display_name") or found.get("slug") or bot
     money = f"${amount:,.2f} of ${cap:,.2f}"
     word = WORDS.get(label_, label_)
     text = (f"{name} is at {level}% of its {word} limit ({money}, estimated)." if level < 100 else

@@ -9,8 +9,10 @@ import socket
 import subprocess
 import sys
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -127,8 +129,36 @@ def test_an_order_and_an_estimate_are_stored_with_their_location_class_and_item(
     assert est[0]["Line"][0]["SalesItemLineDetail"]["ClassRef"] == {"value": "30"}
 
 
+CLASSED = {"account": "Account:12", "amount": 150_000, "description": "work", "item": "Item:40", "location": "Department:20",
+           "class": "30", "project": ""}
+
+
+def test_a_line_class_is_not_sent_when_the_company_does_not_track_classes_per_line(fake_quickbooks):
+    _fake(fake_quickbooks, "POST", "/_fake/seed", SEED)
+    _fake(fake_quickbooks, "POST", "/_fake/classes", {"per_line": False})
+    client = QC.QuickBooks("1234567", lambda force: "local-token", base=fake_quickbooks)
+    made = client.send("estimate.create", {"party": "Customer:50", "number": "EST-2", "day": "2026-10-10", "due": "",
+                                           "memo": "", "lines": [CLASSED]}, "estimate:no-class")
+    assert made.ok, made
+    stored = _read(fake_quickbooks, "SELECT * FROM Estimate STARTPOSITION 1 MAXRESULTS 10")["QueryResponse"]["Estimate"]
+    assert stored[0]["Line"][0]["SalesItemLineDetail"]["ItemRef"] == {"value": "40"}
+    assert "ClassRef" not in stored[0]["Line"][0]["SalesItemLineDetail"]
+
+
+def test_the_company_class_setting_is_read_once_for_a_client(fake_quickbooks):
+    _fake(fake_quickbooks, "POST", "/_fake/seed", SEED)
+    client = QC.QuickBooks("1234567", lambda force: "local-token", base=fake_quickbooks)
+    for n in (1, 2):
+        made = client.send("estimate.create", {"party": "Customer:50", "number": f"EST-{n}", "day": "2026-10-10",
+                                               "due": "", "memo": "", "lines": [CLASSED]}, f"estimate:read-{n}")
+        assert made.ok, made
+    calls = _fake(fake_quickbooks, "GET", "/_fake/calls")["calls"]
+    assert len([call for call in calls if call["path"].endswith("/preferences")]) == 1
+
+
 def test_a_connected_book_backfills_from_quickbooks_and_its_pnl_reads_by_location(books, fake_quickbooks):  # noqa: F811
     _fake(fake_quickbooks, "POST", "/_fake/seed", SEED)
+    _fake(fake_quickbooks, "POST", "/_fake/clock", {"now": AT})     # the book runs on AT's date, not the real one
     client = QC.QuickBooks("1234567", lambda force: "local-token", base=fake_quickbooks)
     cid = _connection(books)
     _mirror(books, cid)
@@ -150,3 +180,90 @@ def test_a_connected_book_backfills_from_quickbooks_and_its_pnl_reads_by_locatio
     queried = {str(call["query"].get("query", "")).split()[3] for call in calls
                if call["method"] == "GET" and "query" in call["query"] and "FROM" in call["query"].get("query", "")}
     assert {"Item", "Department", "Class"} <= queried
+
+
+def test_an_item_made_here_is_created_in_quickbooks_and_given_its_id(fake_quickbooks):
+    _fake(fake_quickbooks, "POST", "/_fake/seed", SEED)
+    client = QC.QuickBooks("1234567", lambda force: "local-token", base=fake_quickbooks)
+    made = client.send("item.create", {"name": "Gadget", "kind": "service", "active": True, "income": "Account:12",
+                                       "sku": "", "price": None, "day": "2026-10-10"}, "item:gadget")
+    assert made.ok and made.external_id, made
+    stored = _read(fake_quickbooks, "SELECT * FROM Item STARTPOSITION 1 MAXRESULTS 10")["QueryResponse"]["Item"]
+    assert [row["Name"] for row in stored] == ["Widget", "Gadget"]
+
+
+def test_an_update_names_its_record_moves_its_sync_token_and_a_stale_one_is_refused(fake_quickbooks):
+    _fake(fake_quickbooks, "POST", "/_fake/seed", SEED)
+    client = QC.QuickBooks("1234567", lambda force: "local-token", base=fake_quickbooks)
+    body = {"ext": "Item:40", "revision": "0", "name": "Widget Pro", "kind": "service", "active": True,
+            "income": "", "sku": "", "price": None}
+    first = client.send("item.update", body, "item:update-1")
+    assert first.ok and first.external_id == "40" and first.revision == "1", first
+    stale = client.send("item.update", body, "item:update-2")
+    assert not stale.ok and stale.final, stale
+    stored = _read(fake_quickbooks, "SELECT * FROM Item STARTPOSITION 1 MAXRESULTS 10")["QueryResponse"]["Item"]
+    assert [(row["Id"], row["Name"], row["SyncToken"]) for row in stored] == [("40", "Widget Pro", "1")]
+
+
+def test_a_delete_removes_the_record_it_names_and_creates_no_other(fake_quickbooks):
+    _fake(fake_quickbooks, "POST", "/_fake/seed", {**SEED, "Bill": [{"Id": "80", "SyncToken": "0",
+                                                                    "TxnDate": "2026-10-10", "Line": []}]})
+    client = QC.QuickBooks("1234567", lambda force: "local-token", base=fake_quickbooks)
+    gone = client.send("bill.void", {"ext": "Bill:80", "revision": "0"}, "bill:void-80")
+    assert gone.ok, gone
+    bills = _read(fake_quickbooks, "SELECT * FROM Bill STARTPOSITION 1 MAXRESULTS 10")["QueryResponse"]
+    assert bills.get("Bill", []) == []
+
+
+def test_a_query_answers_only_the_rows_its_where_clause_names(fake_quickbooks):
+    inactive = {"Id": "41", "SyncToken": "0", "Name": "Bad debt", "Type": "NonInventory", "Active": False}
+    _fake(fake_quickbooks, "POST", "/_fake/seed", {**SEED, "Item": [*SEED["Item"], inactive]})
+    named = _read(fake_quickbooks, "SELECT * FROM Item WHERE Active IN (true,false) AND Name = 'Bad debt' "
+                                   "MAXRESULTS 10")["QueryResponse"]["Item"]
+    assert [row["Id"] for row in named] == ["41"]
+    widget = _read(fake_quickbooks, "SELECT * FROM Item WHERE Name = 'Widget' MAXRESULTS 10")["QueryResponse"]["Item"]
+    assert [row["Id"] for row in widget] == ["40"]
+    count = _read(fake_quickbooks, "SELECT COUNT(*) FROM Item WHERE Name = 'Widget'")["QueryResponse"]["totalCount"]
+    assert count == 1
+
+
+def _cdc(base: str, entity: str, since: datetime) -> dict[str, Any]:
+    """A change feed read as the QuickBooks client sends it: entities and changedSince, answered with the fake's rows."""
+    stamp = since.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    url = f"{base}/v3/company/1234567/cdc?" + urllib.parse.urlencode({"entities": entity, "changedSince": stamp})
+    with _direct.open(urllib.request.Request(url, headers={"Authorization": "Bearer local-token"}), timeout=10) as reply:
+        return json.loads(reply.read())["CDCResponse"][0]["QueryResponse"][0]
+
+
+def test_the_change_feed_reports_writes_and_deletes_again_from_the_same_cursor_and_none_after_it(fake_quickbooks):
+    _fake(fake_quickbooks, "POST", "/_fake/seed", {**SEED, "Bill": [{"Id": "80", "SyncToken": "0",
+                                                                    "TxnDate": "2026-10-10", "Line": []}]})
+    client = QC.QuickBooks("1234567", lambda force: "local-token", base=fake_quickbooks)
+    hour_ago = datetime.now(timezone.utc) - timedelta(hours=1)
+    made = client.send("item.create", {"name": "Gadget", "kind": "service", "active": True, "income": "Account:12",
+                                       "sku": "", "price": None, "day": "2026-10-10"}, "item:feed")
+    gone = client.send("bill.void", {"ext": "Bill:80", "revision": "0"}, "bill:feed-80")
+    assert made.ok and gone.ok, (made, gone)
+    first = _cdc(fake_quickbooks, "Item", hour_ago)
+    assert [row["Name"] for row in first["Item"]] == ["Gadget"]
+    assert _cdc(fake_quickbooks, "Item", hour_ago) == first                    # not consumed by the read
+    assert [(row["Id"], row.get("status")) for row in _cdc(fake_quickbooks, "Bill", hour_ago)["Bill"]] == [
+        ("80", "Deleted")]
+    assert _cdc(fake_quickbooks, "Item", datetime.now(timezone.utc) + timedelta(minutes=5)).get("Item", []) == []
+
+
+def test_a_change_feed_answer_holds_at_most_a_thousand_objects_per_entity(fake_quickbooks):
+    now = datetime.now(timezone.utc)
+    rows = [{"Id": str(i), "SyncToken": "0", "MetaData": {"LastUpdatedTime": (now - timedelta(minutes=5)).isoformat()}}
+            for i in range(1001)]
+    _fake(fake_quickbooks, "POST", "/_fake/change", {"Invoice": rows})
+    assert len(_cdc(fake_quickbooks, "Invoice", now - timedelta(hours=1))["Invoice"]) == 1000
+
+
+def test_a_change_feed_read_from_past_thirty_days_is_refused(fake_quickbooks):
+    since = (datetime.now(timezone.utc) - timedelta(days=31)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    url = f"{fake_quickbooks}/v3/company/1234567/cdc?" + urllib.parse.urlencode({"entities": "Item",
+                                                                              "changedSince": since})
+    with pytest.raises(urllib.error.HTTPError) as refused:
+        _direct.open(urllib.request.Request(url, headers={"Authorization": "Bearer local-token"}), timeout=10)
+    assert refused.value.code == 400

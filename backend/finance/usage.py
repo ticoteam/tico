@@ -31,6 +31,7 @@ from .posting import post_entry
 from .setup import AI, VIDEO
 from .store import budgets as SB
 from .store import ledger as SL
+from .store import raw_totals as SR
 from .store import tico
 from .store import usage as SU
 
@@ -112,7 +113,7 @@ def snapshot(c: sqlite3.Connection, payload: Mapping[str, object], *, fetched_at
 
 def video_models(snap: Mapping[str, object]) -> list[str]:
     """The models a snapshot's meter puts in category `image`."""
-    rows = cast(list[Mapping[str, object]], json.loads(str(snap["rows_json"] or "[]")))
+    rows = cast(list[Mapping[str, object]], json.loads(str(snap["rows"] or "[]")))
     return sorted({str(r.get("model") or "") for r in rows if r.get("line") == "video" and r.get("model")})
 
 
@@ -249,6 +250,12 @@ def _post_one(ctx: Ctx, snap: Mapping[str, object], by: str) -> list[dict[str, o
     models = video_models(snap)
     meter = {"ai": int(str(snap["ai_nano"])), "video": int(str(snap["video_nano"]))}
     holds = _holds_by_line(c, month, as_of, models)
+    if SR.live_entry_in(c, ctx.book.id, f"{month}-01", f"{month}-31") is not None:
+        # The month holds raw totals (spec §4.1), which already carry its spend: nothing posts, and the holds release.
+        for line, _ in LINES:
+            _absorb_into_last(ctx, f"gateway:{month}:{line}:", holds[line], release=True)
+        SU.mark_posted(c, month, as_of, ctx.at)
+        return []
     report: dict[str, object] = {"as_of": as_of}
     done: list[dict[str, object]] = []
     touched: list[tuple[str, str]] = []

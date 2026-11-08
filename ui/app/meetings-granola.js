@@ -64,10 +64,10 @@ async function granolaSync(state, now = false) {
 }
 // Re-read the status while the server says `syncing`: every 3 s, backing off to 15 s, until it stops (or the page
 // closes: granolaStop clears the timer). Then reload the meeting list if anything came in. A server that does not
-// send `syncing` is followed a few times until last_sync moves.
+// send `syncing` is followed a few times until last_synced_at moves.
 function granolaWatch(state, asked) {
   clearTimeout(state.gSyncTimer);
-  const before = {last: state.granola?.last_sync || '', count: Number(state.granola?.imported_count) || 0};
+  const before = {last: state.granola?.last_synced_at || '', count: Number(state.granola?.imported_count) || 0};
   state.gSyncing = true;
   granolaPaint(state);
   let wait = GRANOLA_POLL_FIRST_MS, tries = 0;
@@ -81,7 +81,7 @@ function granolaWatch(state, asked) {
     const now = await granolaStatus(state);
     if (MEET !== state) return;
     tries++;
-    const changed = !!now && ((now.last_sync || '') !== before.last || (Number(now.imported_count) || 0) !== before.count);
+    const changed = !!now && ((now.last_synced_at || '') !== before.last || (Number(now.imported_count) || 0) !== before.count);
     if (!now || !granolaReady(now)) return done(changed);
     if (typeof now.syncing === 'boolean') {
       if (!now.syncing && (tries > 1 || !asked || changed)) return done(changed);
@@ -176,7 +176,7 @@ function granolaTileState(state) {
   const s = state.granola;
   if (!s) return null;
   if (s.needs_signin) return {key: 'error', word: 'Sign in', when: ''};
-  if (s.connected) return {key: 'on', word: 'Connected', when: s.last_sync || ''};
+  if (s.connected) return {key: 'on', word: 'Connected', when: s.last_synced_at || ''};
   return null;
 }
 
@@ -185,7 +185,7 @@ function granolaFacts(s, syncing) {
   const free = s.plan_hint === 'free' ? ' title="Free plan: notes from the last 30 days"' : '';
   return [s.email ? `<span class="mg-email" title="${esc(s.email)}">${esc(s.email)}</span>` : '',
     syncing ? '<span class="mg-syncing"><i class="mg-spin" aria-hidden="true"></i>Syncing…</span>'
-      : `<span>${s.last_sync ? 'Synced ' + esc(ago(s.last_sync)) : 'Not synced yet'}</span>`,
+      : `<span>${s.last_synced_at ? 'Synced ' + esc(ago(s.last_synced_at)) : 'Not synced yet'}</span>`,
     `<span class="mg-count"${free}>${n} ${n === 1 ? 'note' : 'notes'}</span>`,
     skipped ? `<span class="mg-skip" title="${skipped} ${skipped === 1 ? 'note' : 'notes'} from Granola could not be imported">${skipped} skipped</span>` : ''].filter(Boolean).join('');
 }

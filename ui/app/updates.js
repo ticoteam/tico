@@ -80,11 +80,9 @@ function pageUpdates() {
       <button type="button" class="upd-chip" id="upd-layout" aria-pressed="${state.layout === 'list'}" aria-label="List" title="List: every update, newest first"${view === 'archive' ? ' hidden' : ''}><span class="nav-icon" aria-hidden="true">view_agenda</span><span class="upd-lbl">List</span></button>
       <button type="button" class="upd-chip upd-view" id="upd-view" aria-label="${view === 'archive' ? 'Open inbox' : 'Open archive'}" title="${view === 'archive' ? 'Inbox' : 'Archive'}"><span class="nav-icon" aria-hidden="true">${view === 'archive' ? 'inbox' : 'archive'}</span><span class="upd-lbl">${view === 'archive' ? 'Inbox' : 'Archive'}</span></button>
       <button type="button" class="ghost upd-allread" id="upd-allread"${view === 'archive' ? ' hidden' : ''}>Mark all read</button>
-      ${updcButtonHTML()}
     </div>
     <div id="upd-feed" class="upd-feed" aria-live="polite"></div>
   </div>`;
-  updcMount();
   if ($('#upd-day')) $('#upd-day').onclick = () => { location.hash = UPDATES + (state.kind === 'weekly' ? '?kind=weekly' : ''); };
   col.querySelector('.upd-seg').onclick = ev => {
     const b = ev.target.closest('[data-upd-kind]'); if (!b || b.dataset.updKind === state.kind) return;
@@ -171,7 +169,7 @@ function updOrder(state, fresh) {
   const list = state.data?.updates || [];
   if (fresh || !state.order) {
     if (state.order && state.ordered) return;             // keep this visit's order once it is set
-    const sorted = [...list].sort((a, b) => (a.read - b.read) || String(b.created).localeCompare(String(a.created)));
+    const sorted = [...list].sort((a, b) => (a.read - b.read) || String(b.created_at).localeCompare(String(a.created_at)));
     state.order = new Map(sorted.map((u, i) => [u.id, i]));
     state.ordered = !!state.data && !state.fromCache;
     return;
@@ -187,32 +185,22 @@ function updBadge(n) {
   const allRead = $('#upd-allread');
   if (allRead && UPD && updIsTree(UPD)) allRead.hidden = !(n > 0) && !(UPD.list || []).some(u => !u.read && !u.quiet);
 }
-// An update's author is a bot slug or `human:<id>` for a person, who posts in the same shape.
+// An update's author is a bot slug or `human:<id>` for a person, who posts in the same shape. Its avatar is the
+// height of the name's line (--upd-av, ui/styles/updates.css), at the start of it.
+const UPD_AV = 20;
 function updAuthor(key) {
   const person = String(key || '').startsWith('human:');
-  if (!person) return {person, name: empName(key), label: botDisplayName(key), avatar: avatar(key, 36), href: `#/bot/${encodeURIComponent(key)}`};
+  if (!person) return {person, name: empName(key), label: botDisplayName(key), avatar: avatar(key, UPD_AV), href: `#/bot/${encodeURIComponent(key)}`};
   const id = String(key).slice(6), p = (S.people || []).find(x => x.id === id);
-  return {person, name: esc(p?.name || id), label: p?.name || id, avatar: personAvatar(p || {id, name: id}, 36), href: `#/person/${encodeURIComponent(id)}`};
+  return {person, name: esc(p?.name || id), label: p?.name || id, avatar: personAvatar(p || {id, name: id}, UPD_AV), href: `#/person/${encodeURIComponent(id)}`};
 }
 // Today on the queue's clock (backend/updates.py ZONE). Friday's update is the week in review, so your own
 // is written on the Daily tab any day and on the Weekly tab on Friday.
 const updToday = () => new Date().toLocaleDateString('en-CA', {timeZone: 'America/Los_Angeles'});
 const updCanWrite = state => state.kind === 'daily' || new Date(updToday() + 'T12:00:00Z').getUTCDay() === 5;
-// A manager's card links the reports' updates it was written from (only those you may read come back).
-function updFrom(u) {
-  if (!u.inputs?.length) return '';
-  return `<div class="upd-from muted">From: ${u.inputs.map(i => {
-    const who = updAuthor(i.author);
-    return `<a href="${who.href}" data-upd-input="${esc(i.id)}" data-upd-input-author="${esc(i.author)}">${esc(who.label)}</a>`;
-  }).join(', ')}</div>`;
-}
-// A person's update the Assistant drafted says so until they replace it with their own words.
-function updDraftPill(u) {
-  if (!u.drafted_by) return '';
-  return `<span class="upd-pill upd-draft">${u.edited_by ? 'Drafted by ' + esc(botDisplayName(u.drafted_by)) + ', edited' : 'Drafted by ' + esc(botDisplayName(u.drafted_by))}</span>`;
-}
-// The action row is icons; each one's name is its accessible label and its tooltip (title with a mouse, a long press
-// on a phone). Mark read and Archive are swapped in place, so they have their own builders.
+// The actions are icons; each one's name is its accessible label and its tooltip (title with a mouse, a long press
+// on a phone). Reply, Mark read and Archive sit on the name's line; Mark read and Archive are swapped in place, so
+// they have their own builders.
 const updReadBtn = read => read
   ? '<button type="button" class="upd-act" data-upd-toggle aria-label="Mark unread" title="Mark unread"><span class="nav-icon" aria-hidden="true">mark_email_unread</span></button>'
   : '<button type="button" class="upd-act" data-upd-toggle aria-label="Mark read" title="Mark read"><span class="nav-icon" aria-hidden="true">mark_email_read</span></button>';
@@ -226,7 +214,8 @@ function updWriteBtn(u) {
   const label = u.day === updToday() ? 'Edit your update' : 'Write today\'s update';
   return `<button type="button" class="upd-act" data-upd-write aria-label="${label}" title="${label}"><span class="nav-icon" aria-hidden="true">edit</span></button>`;
 }
-// `kids` is the tree's toggle for the cards of this card's reports, at the right end of the action row.
+// `kids` is the tree's toggle for the cards of this card's reports, at the right end of the row under the update
+// (with Edit on your own card); the row is gone when it has neither.
 function updCard(u, i, state, kids = '') {
   const who = updAuthor(u.bot);
   const open = state.open.has(u.id);
@@ -234,19 +223,16 @@ function updCard(u, i, state, kids = '') {
   const body = String(u.body || '').trim();
   const alert = !u.read && !u.quiet;
   return `<article class="upd-card${alert ? ' unread' : ''}${!u.read && u.quiet ? ' upd-quiet' : ''}${!u.slides && state.view === 'inbox' ? ' swipeable' : ''}${open ? ' open' : ''}${i === state.sel ? ' sel' : ''}" data-upd="${esc(u.id)}" data-i="${i}" tabindex="-1">
-    <div class="upd-av">${who.avatar}</div>
     <div class="upd-main">
-      <div class="upd-meta"><a href="${who.href}" class="upd-name" data-upd-bot>${who.name}</a>
-        ${u.kind === 'weekly' ? '<span class="upd-pill">Week in review</span>' : ''}${updDraftPill(u)}
-        <span class="muted">· ${esc(ago(u.updated || u.created))}</span>${alert ? '<span class="upd-dot" aria-label="Unread"></span>' : ''}</div>
+      <div class="upd-meta"><span class="upd-av">${who.avatar}</span><a href="${who.href}" class="upd-name" data-upd-bot>${who.name}</a>
+        ${u.kind === 'weekly' ? '<span class="upd-pill">Week in review</span>' : ''}
+        <span class="muted">· ${esc(ago(u.updated_at || u.created_at))}</span>${alert ? '<span class="upd-dot" aria-label="Unread"></span>' : ''}
+        <span class="upd-corner">${who.person ? '' : updReplyBtn(u)}${updReadBtn(u.read)}${updArchiveBtn(state.view === 'archive', state.archivePending.has(u.id))}</span></div>
       ${u.slides ? updDeck(u, state) : body ? `<div class="upd-body md">${safeMd(body, {shortLinks: true})}</div>` : ''}
-      ${updFrom(u)}
-      <div class="upd-actions">
-        ${who.person ? '' : updReplyBtn(u)}${u.own && updCanWrite(state) ? updWriteBtn(u) : ''}${updReadBtn(u.read)}${updArchiveBtn(state.view === 'archive', state.archivePending.has(u.id))}${kids}
-      </div>
-      ${open ? `<div class="upd-thread">${thread ? thread.map(m => `<div class="upd-msg${String(m.from_actor).startsWith('bot:') ? ' bot' : ''}${m.pending ? ' pending' : ''}">
-          <b>${esc(actorLabel(m.from_actor))}</b> ${String(m.from_actor).startsWith('bot:') ? `<div class="md">${safeMd(m.body || '', {shortLinks: true})}</div>` : esc(String(m.body || '').replace(/^Re your update "[^"]*": /, ''))}
-          <span class="muted">${m.pending ? 'sending…' : esc(ago(m.created))}</span></div>`).join('') : (u.replies ? '<div class="muted">Loading replies…</div>' : '')}
+      <div class="upd-actions">${u.own && updCanWrite(state) ? updWriteBtn(u) : ''}${kids}</div>
+      ${open ? `<div class="upd-thread">${thread ? thread.map(m => `<div class="upd-msg${String(m.sender_id).startsWith('bot:') ? ' bot' : ''}${m.pending ? ' pending' : ''}">
+          <b>${esc(actorLabel(m.sender_id))}</b> ${String(m.sender_id).startsWith('bot:') ? `<div class="md">${safeMd(m.body || '', {shortLinks: true})}</div>` : esc(String(m.body || '').replace(/^Re your update "[^"]*": /, ''))}
+          <span class="muted">${m.pending ? 'sending…' : esc(ago(m.created_at))}</span></div>`).join('') : (u.replies ? '<div class="muted">Loading replies…</div>' : '')}
         <form class="upd-reply" data-upd-form><textarea rows="1" placeholder="Reply to ${esc(who.label)}…" aria-label="Reply">${esc(UPD_DRAFTS.get(u.id) || '')}</textarea>
           <button class="primary" type="submit" aria-label="Send">Send</button></form>
         <div class="muted upd-hint">Goes to ${esc(who.label)}'s chat too.</div></div>` : ''}
@@ -379,7 +365,6 @@ function updEditor(u, n, state, kids = '') {
   return `<form class="upd-card upd-edit" data-upd-editor data-upd-kind="${week ? 'weekly' : 'daily'}">
     <div class="upd-main"><div class="upd-meta"><b>${updAuthor(n.author).name}</b><span class="muted">· ${week ? 'this week in review' : "today's update"}</span></div>
       ${fields}
-      ${u?.drafted_by ? `<label class="upd-own"><input type="checkbox" data-upd-own> These are my own words (drop the Drafted by ${esc(botDisplayName(u.drafted_by))} label)</label>` : ''}
       <div class="upd-actions"><button class="primary" type="submit">Post</button><button type="button" class="ghost" data-upd-cancel>Cancel</button>${kids}</div>
       <div class="err" role="status" data-upd-edit-err></div></div></form>`;
 }
@@ -518,7 +503,7 @@ function updRender(state) {
     return;
   }
   const meId = S.me?.id;
-  const isMine = slug => { const e = S.emps.find(x => x.name === slug); return !e || e.operator === meId || (!e.operator && S.me?.role === 'owner'); };
+  const isMine = slug => { const e = botRow(slug); return !e || e.owner_id === meId || (!e.owner_id && S.me?.role === 'owner'); };
   // Unread first, then newest to oldest; the order is set when the page opens
   // (updOrder) and never moves while you read and scroll, only on the next visit.
   const rank = state.order || new Map();
@@ -585,7 +570,7 @@ async function updOpen(state, id, focusReply) {
 }
 async function updReply(state, id, text) {
   const u = state.data.updates.find(x => x.id === id); if (!u || !text.trim()) return;
-  const mine = {from_actor: myActor() || 'human:me', body: text, pending: true, created: new Date().toISOString()};
+  const mine = {from_actor: myActor() || 'human:me', body: text, pending: true, created_at: new Date().toISOString()};
   state.threads[id] = [...(state.threads[id] || []), mine];
   u.replies = (u.replies || 0) + 1; u.read = true;
   updRender(state);
@@ -785,7 +770,7 @@ async function botLatestUpdate(slug) {
   if (!u) { host.hidden = true; host.innerHTML = ''; return; }
   const all = isKeeper(slug) ? `<a class="rail-ico" href="#/bot/${encodeURIComponent(slug)}/history" aria-label="All updates" title="All updates"><span class="nav-icon" aria-hidden="true">dynamic_feed</span></a>` : '';
   host.innerHTML = `<header class="rail-head"><h2 class="rail-h">Updates</h2>
-      <span class="rail-age" title="${esc(fmt(u.updated || u.created))}">${esc(ago(u.updated || u.created))}</span>${u.read ? '' : '<span class="upd-dot" role="img" aria-label="Unread"></span>'}
+      <span class="rail-age" title="${esc(fmt(u.updated_at || u.created_at))}">${esc(ago(u.updated_at || u.created_at))}</span>${u.read ? '' : '<span class="upd-dot" role="img" aria-label="Unread"></span>'}
       <span class="spacer"></span>${all}</header>
     <div class="upd-body md">${safeMd(u.body || '', {shortLinks: true})}</div>
     <button type="button" class="rail-more" data-latest-more hidden>More</button>`;

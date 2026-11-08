@@ -36,8 +36,8 @@ def put_mail(api, mailbox, **overrides):
         person = c.execute("SELECT id FROM humans WHERE lower(email)=?", (mailbox,)).fetchone()
         c.execute(
             "INSERT INTO mail_messages(mailbox,msg_id,thread_id,epoch,date,from_addr,from_header,"
-            "to_json,cc_json,subject,snippet,labels_json,body,body_truncated,attachments_json,"
-            "list_id,is_internal,has_unsubscribe,rule_hits_json,updated,deleted_at) "
+            "to_addresses,cc,subject,snippet,labels,body,body_truncated,attachments,"
+            "list_id,is_internal,has_unsubscribe,rule_hits,updated_at,deleted_at) "
             "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,NULL)",
             (mailbox, row["msg_id"], row["thread_id"], row["epoch"], row["date"],
              row["from_addr"], row["from_header"], encode(row["to"]), encode(row["cc"]),

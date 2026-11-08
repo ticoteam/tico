@@ -283,8 +283,11 @@ description and an example (`--group task` narrows it). A few:
 | `approval` | `approval.requested`, `decided`, `withdrawn` |
 | `needs_you` | `needs_you.created`, `answered` |
 | `bot` | `bot.run_failed`, `held`, `released` |
+| `thread` | `thread.created`, `message.created` (outgoing webhooks only), `message.held` ([Threads](threads.md)) |
 | other | `release.published`, `meeting.ready`, `strategy.published`, `market.insight.urgent`, `market.briefing`, `inbound.received`, `health.finding` |
 | `custom` | `custom.<name>`, which only a person or a rule sends (below) |
+
+On a thread shared with another company, what that company wrote stays out: see [Federation](federation.md).
 
 `webhook.received` and `tico.notice` are for rules only: an endpoint cannot subscribe to them (use a rule with `forward`).
 An endpoint can hold up to 60 patterns, and an event goes to at most 20 endpoints.
@@ -354,13 +357,13 @@ app.post("/tico", express.raw({ type: "application/json" }), (req, res) => {
 
 A failed send is tried again after 5 seconds, 5 minutes, 30 minutes, 2 hours, 5 hours, 10 hours and 10 hours, each a little
 jittered. That is 8 tries over about 28 hours. After the last, the send is **failed**, the endpoint's Health shows it, and Needs
-you gets at most one task a day per endpoint. **Retry** (`hub webhook retry <id> <send>`) sends a failed, cancelled or delivered one again now.
+you gets at most one task a day per endpoint. **Retry** (`hub webhook retry <id> <send>`) sends a failed, canceled or delivered one again now.
 
 Each try waits up to 30 seconds, and the answer is not read past 1 KB. An endpoint sends 600 an hour by default
 (`--rate-per-hour`); sends over that wait, and none are dropped. Tico keeps events and finished sends for 30 days.
 
 The send log (`hub webhook sends <id>`, `--state failed` to narrow) shows each send's state: ready, sending, delivered, failed,
-cancelled or withheld.
+canceled or withheld.
 
 ### Only some events
 
@@ -438,8 +441,9 @@ is refused (`hub webhook example` too); turn the endpoint back on first.
 - Bots can list endpoints without the full address. They cannot read send logs.
 - A bot sends a custom event only while its **outbound send** switch is on (Settings → Bots → Mail sending, or
   `hub bot mail <slug> --send`), and only to an endpoint that listens for it. The Strategy Bot sends nothing.
-- An endpoint hears about a task, approval or bot only if its owner could read it. Health, inbound and webhook events go only to
-  owner and admin endpoints.
+- An endpoint hears about a task, approval or bot only if its owner could read it. A thread or message event goes only to an
+  endpoint whose owner may read that thread. `message.held` goes to owner and admin endpoints, as does a health, inbound or
+  webhook event. Thread events carry ids and facts, never a message's words.
 - A person can have 50 endpoints.
 
 More in [Permissions](permissions.md#outgoing-webhooks) and the [API](api.md#outgoing-webhooks).

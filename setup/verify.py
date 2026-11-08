@@ -250,6 +250,6 @@ def check_computer_online(url: str, token: str, label: str, get=None) -> Check |
         return Check("Computer in Tico", False, f"no computer labelled {label!r} yet",
                      "Give it a minute after the container starts, then run `python3 -m setup doctor --runner`.")
     now = _when(body.get("server_time")) or datetime.now(timezone.utc)
-    online = any((seen := _when(x.get("last_seen"))) and (now - seen).total_seconds() <= contract.ONLINE_SECONDS for x in mine)
+    online = any((seen := _when(x.get("last_seen_at"))) and (now - seen).total_seconds() <= contract.ONLINE_SECONDS for x in mine)
     return Check("Computer in Tico", online, "online" if online else "registered but not reporting in",
                  "" if online else f"On the box: docker logs {contract.RUNNER_CONTAINER}")

@@ -102,7 +102,7 @@ def bot_proposal(world):
     as BotOps writes it when Builder Claude asks (Builder Claude's rights, which do not reach Dana's automation, so the
     PATCH is a proposal). No model runs."""
     from .harness import CLAUDE, DANA, rows
-    listed = _ok(world.api("get", "/api/v2/automations", who=DANA), "list")
+    listed = _ok(world.api("get", "/api/v2/automations?limit=500", who=DANA), "list")
     auto = next(a for a in rows(listed) if a.get("name") == "Inbox triage")
     full = _ok(world.api("get", f"/api/v2/automations/{auto['id']}", who=DANA), "read")
     steps = [dict(s) for s in full["steps"]]
@@ -151,6 +151,13 @@ def toured(world):
     _ok(world.api("post", "/api/v2/system/usage-count/notice", {"state": "dismissed"}, who=DANA), "usage notice")
 
 
+@seed("judge")
+def judge(world):
+    """A decision model for the org rule checks (SteadyJudge): the hub has no Gateway key, so without this no rule check
+    asks anything and every write passes unchecked (backend/org_rule_check.py check_as, outcome "unchecked")."""
+    world.app.state.judge = SteadyJudge()
+
+
 PAGE_HTML = ('<!doctype html><html><head><title>{title}</title></head><body style="margin:0;font:15px system-ui">'
              '<h1 style="margin:16px">{title}</h1><p style="margin:16px">{text}</p>'
              '<svg viewBox="0 0 300 80" width="300" height="80"><rect x="16" y="10" width="{bar}" height="40" fill="#4a7"/>'
@@ -168,9 +175,9 @@ def pages(world):
     # Written as the harness writes the bots' other fields: the definition route refuses the reports_to it set by hand.
     with world.store.transaction() as c:
         c.execute("UPDATE bots SET display_name='Engineering Lead' WHERE slug='engineering-lead'")
-        config = json.loads(c.execute("SELECT config_json FROM bot_config WHERE bot='engineering-lead'").fetchone()[0]
+        config = json.loads(c.execute("SELECT config FROM bot_config WHERE bot='engineering-lead'").fetchone()[0]
                             or "{}")
-        c.execute("UPDATE bot_config SET config_json=? WHERE bot='engineering-lead'",
+        c.execute("UPDATE bot_config SET config=? WHERE bot='engineering-lead'",
                   (json.dumps({**config, "display_name": "Engineering Lead"}),))
     made = _ok(world.api("post", "/api/v2/tasks", {"title": "Q3 launch", "body": "Plan the Q3 launch.",
                                                     "owner": "engineering-lead"}, who=DANA), "task")
@@ -208,10 +215,10 @@ def counsel(world):
     from backend.store import H
     from .harness import DANA, DANA_ID
     with world.store.transaction() as c:
-        c.execute("INSERT OR REPLACE INTO bots(slug, display_name, state) VALUES(?, 'Counsel', 'active')", (H.COUNSEL,))
-        c.execute("INSERT OR REPLACE INTO bot_config(bot, config_json, team, operator) VALUES(?, '{}', '', ?)",
+        c.execute("INSERT OR REPLACE INTO bots(id, slug, display_name, state) VALUES(?, ?, 'Counsel', 'active')", (H.COUNSEL, H.COUNSEL))
+        c.execute("INSERT OR REPLACE INTO bot_config(bot, config, team, owner_id) VALUES(?, '{}', '', ?)",
                   (H.COUNSEL, DANA_ID))
-        c.execute("INSERT OR REPLACE INTO agents(bot, harness, token_hash, created, created_by) VALUES(?,?,?,?,?)",
+        c.execute("INSERT OR REPLACE INTO agents(bot, harness, token_hash, created_at, created_by) VALUES(?,?,?,?,?)",
                   (H.COUNSEL, "test", "x-counsel", H.now(), "human:" + DANA_ID))
         data = VENDOR_TERMS.encode("utf-8")
         digest = world.app.state.blobs.put(data, "text/plain")
@@ -227,3 +234,43 @@ def counsel(world):
     _ok(world.api("post", "/api/v2/runners/heartbeat", {
         "version": "test", "platform": "test",
         "readiness": {slug: True for slug in [*world.bot_slugs, H.COUNSEL]}}, who=world.runner["token"]), "heartbeat")
+
+
+@seed("roster")
+def roster(world):
+    """A fourth person, Gina, on the roster and the sign-in list (as an invite leaves her), with the test token "gina".
+    She reports to Dana, a plain member with no task of her own: the e2e role journeys make her the one guest of a
+    private bot-only task (ui/tests/e2e-roles.cjs), so she sees that task and nothing else of the private ones."""
+    from backend.access import ACCESS, _load_json, _store
+    from backend.auth import Identity
+    from backend.store import H, encode
+    from .harness import DANA_ID
+    gina = {"id": "gina", "name": "Gina", "email": "gina@acme.example", "reports_to": DANA_ID, "primary_for": []}
+    world.app.state.auth.settings.test_identities["gina-test"] = Identity("human:gina", "human", email="gina@acme.example")
+    with world.store.transaction() as c:
+        people = json.loads(c.execute("SELECT value FROM registry_metadata WHERE key='people'").fetchone()[0])["people"]
+        people = [*people, gina]
+        H.sync_registry(c, {}, {"people": people})
+        c.execute("DELETE FROM registry_metadata WHERE key='people'")
+        c.execute("INSERT INTO registry_metadata VALUES('people',?)", (encode({"people": people}),))
+        access = _load_json(c, ACCESS) or {}
+        _store(c, ACCESS, {**access, "allowed": sorted(set(access.get("allowed") or []) | {"gina@acme.example"})})
+
+
+@seed("finance")
+def finance(world):
+    """Finance set up on the install, as every install has it. The app sets it up at start (backend/app.py), but only
+    once an owner exists, and the scenario's people are written after start, so it is set up here once they are."""
+    from backend.finance import jobs as finance_jobs
+    with world.store.transaction() as c:
+        if not finance_jobs.ensure_setup(c, "dana@acme.example"):
+            raise RuntimeError("finance setup found no owner on the scenario org")
+
+
+@seed("priya-leads")
+def priya_leads(world):
+    """Priya is the engineering manager on the chart: engineering-lead reports to her, so she is above the bots under it
+    (builder-claude, builder-openai) and reads their private tasks, as a manager does (docs/tasks.md). Written the way the
+    harness places bots on the chart (harness.py), since the bot definition route does not take a hand-set reports_to."""
+    with world.store.transaction() as c:
+        c.execute("UPDATE bot_config SET reports_to='priya' WHERE bot='engineering-lead'")

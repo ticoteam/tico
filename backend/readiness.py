@@ -30,11 +30,11 @@ ONLINE_SECONDS = 60
 SIGNED_OUT = ("missing", "failed", "rejected")
 
 
-CONFIG_SQL = "SELECT config_json FROM bot_config WHERE bot=?"
+CONFIG_SQL = "SELECT config FROM bot_config WHERE bot=?"
 # One computer's row, and the row of the computer a bot is on: read through read_cache, so a page that judges the same
 # bot for many harnesses and moves (backend/health.py runtime_choice) reads each once per snapshot, not once per check.
-RUNNER_SQL = "SELECT id,label,last_seen,revoked_at,readiness_json,capabilities_json FROM runners WHERE id=?"
-PLACED_SQL = ("SELECT r.id,r.label,r.last_seen,r.revoked_at,r.readiness_json,r.capabilities_json FROM assignments a "
+RUNNER_SQL = "SELECT id,label,last_seen_at,revoked_at,readiness,capabilities FROM runners WHERE id=?"
+PLACED_SQL = ("SELECT r.id,r.label,r.last_seen_at,r.revoked_at,r.readiness,r.capabilities FROM assignments a "
               "JOIN runners r ON r.id=a.runner_id WHERE a.bot=?")
 HELD_SQL = "SELECT id,env FROM credentials WHERE ciphertext IS NOT NULL AND env!=''"
 
@@ -42,7 +42,7 @@ HELD_SQL = "SELECT id,env FROM credentials WHERE ciphertext IS NOT NULL AND env!
 def _config(c, bot):
     from .read_cache import one
     row = one(c, CONFIG_SQL, (bot,))
-    return H._json(row["config_json"], {}) or {} if row else {}
+    return H._json(row["config"], {}) or {} if row else {}
 
 
 def computer_login(readiness, runtime):
@@ -98,8 +98,8 @@ def can_run(c, bot, runtime, runner=None, harness="", model=""):
                 "problem": "The bot is not on a computer", "fix": "Put it on a computer from its More tab",
                 "link": "#/bot/" + bot + "/more"}
     label = row["label"] or "its computer"
-    online = bool(row["last_seen"] and row["last_seen"] > H.shift(H.now(), seconds=-ONLINE_SECONDS))
-    readiness = readiness_document(row["readiness_json"])
+    online = bool(row["last_seen_at"] and row["last_seen_at"] > H.shift(H.now(), seconds=-ONLINE_SECONDS))
+    readiness = readiness_document(row["readiness"])
     detail = readiness.get("bots", {}).get(bot)
     detail = models_preset.as_served(c, bot, readiness, detail) if isinstance(detail, dict) else {}
     out = {"applicable": True, "computer": {"id": row["id"], "label": row["label"]}, "online": online, "runtime": runtime,

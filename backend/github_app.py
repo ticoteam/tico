@@ -105,20 +105,20 @@ SCHEMA = """
 CREATE TABLE IF NOT EXISTS github_app(
  id TEXT PRIMARY KEY, app_id INTEGER NOT NULL, slug TEXT NOT NULL, client_id TEXT NOT NULL, org TEXT NOT NULL,
  administration INTEGER NOT NULL, installation_id INTEGER, html_url TEXT NOT NULL DEFAULT '',
- ciphertext BLOB NOT NULL, nonce BLOB NOT NULL, created TEXT NOT NULL, created_by TEXT NOT NULL);
+ ciphertext BLOB NOT NULL, nonce BLOB NOT NULL, created_at TEXT NOT NULL, created_by TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS github_app_states(
  nonce TEXT PRIMARY KEY, actor TEXT NOT NULL, org TEXT NOT NULL, administration INTEGER NOT NULL,
- created REAL NOT NULL);
+ created_at REAL NOT NULL);
 -- Unlike the short-lived generic idempotency cache, these operation bindings are retained so an
 -- ambiguous external create can never be retried as a fresh repository write after a timeout/restart.
 CREATE TABLE IF NOT EXISTS github_product_repo_operations(
  actor TEXT NOT NULL, operation TEXT NOT NULL, key TEXT NOT NULL,
  request_hash TEXT NOT NULL, target_org TEXT NOT NULL, target_name TEXT NOT NULL,
  state TEXT NOT NULL CHECK(state IN ('pending','completed','rejected')),
- response_json TEXT, error_code TEXT, error_detail TEXT, error_status INTEGER,
- created TEXT NOT NULL, updated TEXT NOT NULL,
+ response TEXT, error_code TEXT, error_detail TEXT, error_status INTEGER,
+ created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
  PRIMARY KEY(actor,operation,key),
- CHECK(state!='completed' OR response_json IS NOT NULL),
+ CHECK(state!='completed' OR response IS NOT NULL),
  CHECK(state!='rejected' OR (error_code IS NOT NULL AND error_detail IS NOT NULL AND error_status IS NOT NULL)));
 """
 
@@ -383,7 +383,10 @@ class GitHubApp:
 
     def live_permissions(self, refresh=False):
         """The installation's permissions as GitHub reports them now, cached briefly; None when they
-        cannot be learned (not installed, GitHub unreachable or silent), so callers keep what is stored."""
+        cannot be learned (not installed, GitHub unreachable or silent, a stored key that will not sign, or a demo,
+        which never asks GitHub), so callers keep what is stored."""
+        if self.settings.demo:
+            return None
         with self.lock:
             hit = self.live.get("permissions")
             if hit and hit[0] > time.time() and not refresh:
@@ -395,7 +398,7 @@ class GitHubApp:
                 return None
             r = self._call("GET", f"/app/installations/{installation}", headers={"Authorization": "Bearer " + token})
             permissions = r.json().get("permissions") if r.status_code < 300 else None
-        except (Problem, ValueError):
+        except (Problem, ValueError, jwt.PyJWTError):
             return None
         if not isinstance(permissions, dict):
             return None
@@ -589,7 +592,7 @@ class GitHubApp:
                 confirmed.update({name.lower(): confirmed.get(name.lower(), time.time()) if name.lower() in missing else time.time() for name in absent})
                 save_metadata(c, 'repositories-confirmed-missing', confirmed)
                 for name in absent:
-                    c.execute('INSERT INTO repositories(id,full_name,reachable,updated) VALUES(?,?,0,?) '
+                    c.execute('INSERT INTO repositories(id,full_name,reachable,updated_at) VALUES(?,?,0,?) '
                               'ON CONFLICT(full_name) DO UPDATE SET reachable=0', (uuid.uuid4().hex, name, H.now()))
             from .repositories import repository_health
             repository_health(self)
@@ -700,7 +703,9 @@ class GitHubApp:
         row = self.row()
         if not row:
             raise Problem("github_not_connected", "GitHub is not connected. Connect it in Tools first.", 409)
-        name = "bot-" + slug.removeprefix("emp-")
+        with self.store.read() as c:      # the repository is named for the bot (H.bot_repository_name), id or slug in
+            name = H.bot_repository_name(c, slug)
+            slug = (H.resolve_bot(c, slug) or {}).get("slug", slug)
         if not self.can_create_repos(refresh=True):
             from .repo_waits import fixes
             with self.store.read() as c:
@@ -897,7 +902,7 @@ def manifest(settings, name, administration):
 
 
 def extra_repos(c, bot):
-    row = c.execute("SELECT value_json FROM registry_metadata WHERE key=?", (EXTRA_KEY,)).fetchone()
+    row = c.execute("SELECT value FROM registry_metadata WHERE key=?", (EXTRA_KEY,)).fetchone()
     try:
         value = json.loads(row[0]).get(bot, []) if row else []
     except (ValueError, AttributeError):
@@ -906,13 +911,13 @@ def extra_repos(c, bot):
 
 
 def save_extra_repos(c, bot, repos):
-    row = c.execute("SELECT value_json FROM registry_metadata WHERE key=?", (EXTRA_KEY,)).fetchone()
+    row = c.execute("SELECT value FROM registry_metadata WHERE key=?", (EXTRA_KEY,)).fetchone()
     every = json.loads(row[0]) if row else {}
     if repos:
         every[bot] = repos
     else:
         every.pop(bot, None)
-    c.execute("INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json",
+    c.execute("INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
               (EXTRA_KEY, json.dumps(every, sort_keys=True)))
 
 
@@ -985,7 +990,7 @@ def install_github_app(app, settings, store):
         run = {"attempt": attempt_id, "rights": acting.actor if acting else None}
         if acting is None:
             return set(), run
-        bots = [r[0] for r in c.execute("SELECT bc.bot FROM bot_config bc JOIN bots b ON b.slug=bc.bot "
+        bots = [r[0] for r in c.execute("SELECT bc.bot FROM bot_config bc JOIN bots b ON b.id=bc.bot "
                                         "WHERE b.state<>'archived' AND bc.bot<>?", (BOTOPS,))]
         if acting.actor == "bot:" + BOTOPS:
             run["own_run"] = bool(team_rules.load(c)["botops_manages_bots"] and botops_act.own_run(c, auth, attempt_id))
@@ -1001,7 +1006,7 @@ def install_github_app(app, settings, store):
         if who.role == "bot":
             attempts = [who.attempt_id] if who.actor == "bot:" + BOTOPS and not who.via and who.attempt_id else []
         elif who.role == "runner":
-            attempts = [r["id"] for r in c.execute("SELECT id FROM attempts WHERE bot=? AND runner_id=? "
+            attempts = [r["id"] for r in c.execute("SELECT id FROM attempts WHERE bot_id=? AND runner_id=? "
                                                    "AND state IN ('leased','running')", (BOTOPS, who.runner_id))]
         else:
             attempts = []
@@ -1072,7 +1077,7 @@ def install_github_app(app, settings, store):
                 raise Problem("github_key_missing", LOST_KEY, 409)
         nonce = secrets.token_urlsafe(24)
         with store.transaction() as c:
-            c.execute("DELETE FROM github_app_states WHERE created<?", (time.time() - STATE_TTL,))
+            c.execute("DELETE FROM github_app_states WHERE created_at<?", (time.time() - STATE_TTL,))
             c.execute("INSERT INTO github_app_states VALUES(?,?,?,?,?)", (nonce, who.actor, org, int(administration), time.time()))
         body = manifest(settings, (name or f"{settings.company_name} Tico").strip(), administration)
         action = f"https://github.com/organizations/{org}/settings/apps/new?state={nonce}"
@@ -1100,7 +1105,7 @@ def install_github_app(app, settings, store):
             # Single use, and only in the session that started it.
             if row:
                 c.execute("DELETE FROM github_app_states WHERE nonce=?", (state,))
-        if (not row or row["actor"] != who.actor or time.time() - row["created"] > STATE_TTL
+        if (not row or row["actor"] != who.actor or time.time() - row["created_at"] > STATE_TTL
                 or not secrets.compare_digest(row["nonce"], state)):
             raise Problem("github_state", "This GitHub setup link is not valid or has expired; start again from Tools", 400)
         if not code:
@@ -1138,6 +1143,7 @@ def install_github_app(app, settings, store):
         who = request.state.identity
         with store.read_transaction() as c:
             validate_identity(c, who)
+            body.bot = (H.resolve_bot(c, body.bot) or {}).get("id", body.bot)
             # A turn may ask only for its own bot; a runner only for a bot assigned to it.
             if who.role == "bot":
                 allowed = H.actor_id(who.actor) == body.bot
@@ -1363,6 +1369,8 @@ def install_github_app(app, settings, store):
 
     @app.get("/api/v2/bots/{bot}/github-repos")
     def extra_get(request: Request, bot: str):
+        with store.read() as c:
+            bot = (H.resolve_bot(c, bot) or {}).get("id", bot)
         manager(request, bot)
         with store.read() as c:
             row, own = bot_repos(c, bot)
@@ -1371,6 +1379,8 @@ def install_github_app(app, settings, store):
 
     @app.put("/api/v2/bots/{bot}/github-repos")
     def extra_put(request: Request, bot: str, body: ExtraRepos):
+        with store.read() as c:
+            bot = (H.resolve_bot(c, bot) or {}).get("id", bot)
         who = manager(request, bot)
         with store.transaction() as c:
             row, own = bot_repos(c, bot)
@@ -1407,7 +1417,7 @@ def install_github_app(app, settings, store):
                     raise Problem("forbidden", "Only the owner, BotOps or a bot granted repository creation may "
                                   "create bot repositories. Ask BotOps, or ask an Owner or admin to enable "
                                   "Create bot repositories in this bot's settings.", 403)
-                row, bot = service.row(c), H.bot(c, slug)
+                row, bot = service.row(c), H.resolve_bot(c, slug)
             if not row:
                 raise Problem("github_not_connected", "GitHub is not connected. Connect it in Tools first.", 409)
             if not bot or bot.get("state") == "archived":
@@ -1434,18 +1444,18 @@ def install_github_app(app, settings, store):
             # local build and finishes on its own once the repository or the permission appears (repo_waits).
             from .repo_waits import raise_item
             with store.transaction() as c:
-                bot = H.bot(c, slug)
+                bot = H.resolve_bot(c, slug)
                 if builder:
-                    built_on.remember(c, slug, builder)
+                    built_on.remember(c, (bot or {}).get("id", slug), builder)
                 if bot and bot.get("state") != "archived" and service.row(c):
-                    found = raise_item(c, slug, service.row(c), fixer(c), "" if body.empty else template)
+                    found = raise_item(c, bot["id"], service.row(c), fixer(c), "" if body.empty else template)
                     problem.extra = {**problem.extra, "needs_you_task": found["task_id"]}
                     problem.detail += (" The owner has a Needs-you task with both fixes; the bot keeps its local "
                                        "build and finishes on its own once either is done.")
             raise
         with store.transaction() as c:
             if builder:
-                built_on.remember(c, slug, builder)
+                built_on.remember(c, (H.resolve_bot(c, slug) or {}).get("id", slug), builder)
             H.event(c, who.actor, "github.repo_created", result["repository"],
                     {"empty": True} if body.empty else {"template": template})
         return result
@@ -1456,12 +1466,13 @@ def install_github_app(app, settings, store):
         from . import repositories as R
         bot, repository = H.actor_id(who.actor), result["repository"]
         org = repository.split("/")[0]
-        name = (H.bot(c, bot) or {}).get("display_name") or bot
+        bot_row = H.bot(c, bot) or {}
+        name = bot_row.get("display_name") or bot_row.get("slug") or bot
         moved = None
         c.execute("SAVEPOINT product_repo_grant")
         try:
             # Granting needs it on the team list; a bot set to every ticked repository then reaches it too.
-            c.execute("INSERT INTO repositories(id,full_name,enabled,added_by,updated) VALUES(?,?,1,?,?) "
+            c.execute("INSERT INTO repositories(id,full_name,enabled,added_by,updated_at) VALUES(?,?,1,?,?) "
                       "ON CONFLICT(full_name) DO UPDATE SET enabled=1", (uuid.uuid4().hex, repository, who.actor, H.now()))
             before = R.access(c, bot, org)
             if before["mode"] == "all" and before["all_access"] == "write":
@@ -1490,10 +1501,10 @@ def install_github_app(app, settings, store):
             access, moved = "none", None
         others = []
         if access != "none":
-            for r in c.execute("SELECT bc.bot,bc.config_json FROM bot_config bc JOIN bots b ON b.slug=bc.bot "
+            for r in c.execute("SELECT bc.bot,bc.config,b.slug FROM bot_config bc JOIN bots b ON b.id=bc.bot "
                                "WHERE b.state<>'archived' AND bc.bot<>? ORDER BY bc.bot", (bot,)).fetchall():
-                if json.loads(r["config_json"] or "{}").get("repo_access_mode") == "all":
-                    others.append((H.bot(c, r["bot"]) or {}).get("display_name") or r["bot"])
+                if json.loads(r["config"] or "{}").get("repo_access_mode") == "all":
+                    others.append((H.bot(c, r["bot"]) or {}).get("display_name") or r["slug"])
         said = {"write": f"{name} has write access to it.",
                 "none": f"{name} could not be given access to it; an Owner or admin can give it in Settings > "
                         "Repositories."}[access]
@@ -1555,19 +1566,19 @@ def install_github_app(app, settings, store):
                                   f"The result for {previous['target_org']}/{previous['target_name']} is unresolved. Tico will not repeat this operation automatically; check GitHub before taking another action.", 409)
                 if previous["state"] == "rejected":
                     raise Problem(previous["error_code"], previous["error_detail"], previous["error_status"])
-                return json.loads(previous["response_json"])
+                return json.loads(previous["response"])
 
             # Migrate an unexpired receipt from the earlier implementation. It was written only
             # after the external create returned, so it is complete proof and can be retained here.
-            legacy = c.execute("SELECT request_hash,response_json FROM idempotency "
+            legacy = c.execute("SELECT request_hash,response FROM idempotency "
                                "WHERE actor=? AND operation=? AND key=?",
                                (who.actor, operation, key)).fetchone()
             if legacy:
                 if legacy["request_hash"] != request_hash:
                     raise Problem("idempotency_conflict", "This key was used for different content", 409)
-                result = json.loads(legacy["response_json"])
+                result = json.loads(legacy["response"])
                 c.execute("INSERT INTO github_product_repo_operations "
-                          "(actor,operation,key,request_hash,target_org,target_name,state,response_json,created,updated) "
+                          "(actor,operation,key,request_hash,target_org,target_name,state,response,created_at,updated_at) "
                           "VALUES(?,?,?,?,?,?,'completed',?,?,?)",
                           (who.actor, operation, key, request_hash, body.org, name,
                            encode(result), H.now(), H.now()))
@@ -1576,7 +1587,7 @@ def install_github_app(app, settings, store):
             if bind:
                 stamp = H.now()
                 c.execute("INSERT INTO github_product_repo_operations "
-                          "(actor,operation,key,request_hash,target_org,target_name,state,created,updated) "
+                          "(actor,operation,key,request_hash,target_org,target_name,state,created_at,updated_at) "
                           "VALUES(?,?,?,?,?,?,'pending',?,?)",
                           (who.actor, operation, key, request_hash, body.org, name, stamp, stamp))
             return None
@@ -1615,7 +1626,7 @@ def install_github_app(app, settings, store):
                     # remains pending and future requests fail closed instead of issuing another POST.
                     with store.transaction() as c:
                         c.execute("UPDATE github_product_repo_operations "
-                                  "SET state='rejected',error_code=?,error_detail=?,error_status=?,updated=? "
+                                  "SET state='rejected',error_code=?,error_detail=?,error_status=?,updated_at=? "
                                   "WHERE actor=? AND operation=? AND key=? AND request_hash=? AND state='pending'",
                                   (problem.code, problem.detail, problem.status, H.now(),
                                    who.actor, operation, key, request_hash))
@@ -1627,13 +1638,13 @@ def install_github_app(app, settings, store):
             try:
                 with store.transaction() as c:
                     validate_identity(c, who)
-                    current = c.execute("SELECT state,request_hash,response_json FROM github_product_repo_operations "
+                    current = c.execute("SELECT state,request_hash,response FROM github_product_repo_operations "
                                         "WHERE actor=? AND operation=? AND key=?",
                                         (who.actor, operation, key)).fetchone()
                     if not current or current["request_hash"] != request_hash:
                         raise Problem("idempotency_conflict", "The product-repository operation binding changed", 409)
                     if current["state"] == "completed":
-                        return json.loads(current["response_json"])
+                        return json.loads(current["response"])
                     if current["state"] != "pending":
                         raise Problem("github_create_outcome_unknown", "The product-repository operation is no longer pending; no second create was attempted", 409)
                     previous = c.execute("SELECT request_hash FROM idempotency WHERE actor=? AND operation=? AND key=?",
@@ -1651,7 +1662,7 @@ def install_github_app(app, settings, store):
                         c.execute("INSERT INTO idempotency VALUES(?,?,?,?,?,?)",
                                   (who.actor, operation, key, request_hash, encode(result), H.now()))
                     c.execute("UPDATE github_product_repo_operations "
-                              "SET state='completed',response_json=?,updated=? "
+                              "SET state='completed',response=?,updated_at=? "
                               "WHERE actor=? AND operation=? AND key=? AND state='pending'",
                               (encode(result), H.now(), who.actor, operation, key))
             except Problem:

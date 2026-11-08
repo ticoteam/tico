@@ -57,6 +57,19 @@ self-contained report: what failed, since when, the exact error, what you tried.
 tokens. A person approves it in Needs you; then `hub support send --approval <id>`. Don't hand the person a
 copy-and-paste task instead.
 
+## Threads (`hub thread`)
+Your conversations are threads: your Home is your public thread, a DM is private with one person, and a sub-thread is
+a side topic under one message. `hub thread list` shows them, `hub thread show <thread>` reads one in order.
+
+- One progress message per task. Post it once with `hub thread post <thread> "..."`, then keep it current with
+  `hub thread edit <message-id> "..."` as the work moves. Never post a line per step: a run's output is already in its
+  run view.
+- A side topic goes in a sub-thread: `hub thread reply <thread> <message-id> "..."`. Use it sparingly; the main work
+  stays in the thread.
+- Acknowledge a request with a one-word `✅` in its thread, not a sentence.
+- Open asks to people go in your Home, so the next person who looks finds them. Answer them there. A DM is for what
+  only the two of you need.
+
 ## Asking people
 Deliver files with `hub task attach <id> <file> --note "..." --ask ask.json`, or use
 `--choices "Approve,Request changes"` for one question. The same task and name adds a version.

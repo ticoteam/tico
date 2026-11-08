@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pytest
 
-from backend import flight_file
+from backend import flight, flight_file
 from setup import cell, cell_stats as cs
 from setup.cell import Result
 
@@ -190,8 +190,7 @@ def busy_minute(ts):
 def make_db(data, freelist=False):
     c = sqlite3.connect(data / "hub.sqlite")
     c.execute("PRAGMA journal_mode=WAL")
-    c.execute("CREATE TABLE flight_sql(ts INTEGER NOT NULL, fingerprint TEXT NOT NULL, n INTEGER NOT NULL, "
-              "total_ms REAL NOT NULL, p95 REAL, max_ms REAL, hist TEXT, PRIMARY KEY(ts, fingerprint)) WITHOUT ROWID")
+    c.executescript(flight.SCHEMA)
     hour = int(NOW) // 3600 * 3600
     c.executemany("INSERT INTO flight_sql VALUES(?,?,?,?,?,?,?)", [
         (hour, "SELECT id FROM tasks WHERE status = '?' AND n > N", 300, 400.0, 3.0, 50.0, "{}"),
@@ -263,7 +262,7 @@ def test_a_snapshot_from_proc_docker_and_the_volume(box):
     assert b["healthz"] == {"code": 200, "ms": 12}
     server = next(c for c in b["containers"] if c["role"] == "server")
     assert server == {"role": "server", "name": "tico-boatyard-server-1", "state": "running", "health": "healthy",
-                      "restarts": 2, "oom_killed": False, "started": "2026-10-30T08:08:00Z", "cpu_pct": 3.1,
+                      "restarts": 2, "oom_killed": False, "started_at": "2026-10-30T08:08:00Z", "cpu_pct": 3.1,
                       "mem_mb": 612, "mem_limit_mb": 4096, "pids": 41, "net_rx_mb": 120.1, "net_tx_mb": 88.0,
                       "blk_read_mb": 10.0, "blk_write_mb": 900.0}
     assert {c["role"] for c in b["containers"]} == {"server", "updater"}

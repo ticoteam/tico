@@ -1,0 +1,241 @@
+#!/bin/bash
+# Tico's public demo (Acme Lights) on a cell host, beside the companies and apart from them (docs/demo.md, "Tico's
+# public demo"). Run as root on the host. `deploy/demo/deploy-demo <sha>` runs `deploy` over SSM from a checkout.
+#
+#   tico-demo deploy <sha> [--url URL] [--image vX.Y.Z] [--tunnel]
+#       Build <sha> as the idle copy (blue or green), wait for it, stop the other one. Visitors never see a gap: the
+#       router sends them to the first copy that answers /healthz (`cell route`). --tunnel also writes the demo's
+#       hosts into the shared tunnel's routes, which RESTARTS the tunnel (every company drops for a few seconds).
+#   tico-demo rotate    the running sha again, freshly seeded: the demo's dates are relative to its start (daily timer)
+#   tico-demo route     the router entry again, when another core's rewrite dropped it (5-minute timer; no-op otherwise)
+#   tico-demo status
+#
+# Each copy is the systemd unit tico-demo@<blue|green>: user tico-demo, root = the release image's files (its Python,
+# SQLite and screen relay), the commit's source read-only at /opt/demo, a private /tmp for the throwaway company,
+# loopback only (IPAddressDeny=any), 2 GB. It never sees /srv/tico-cell, Docker or another company's data.
+# Nothing here is deleted or moved: every source and runtime gets a new folder, and symlinks point at the current one.
+set -euo pipefail
+umask 022
+
+BASE=/srv/tico-demo
+CONF=/etc/tico-demo
+CELL=/srv/tico-cell
+REPO=ticoteam/tico
+IMAGE_REPO=ghcr.io/ticoteam/tico
+DEMO_USER=tico-demo
+HOSTS=(demo.tico.team demo.tico.dev)
+declare -A PORT=([blue]=19081 [green]=19082)
+DEFAULT_URL=https://demo.tico.team
+TOOLS=$(cd "$(dirname "$(readlink -f "$0")")/../.." && pwd)   # the checkout this script is in: its setup/cell.py
+UNITS=(tico-demo@.service tico-demo-rotate.service tico-demo-rotate.timer tico-demo-route.service tico-demo-route.timer)
+
+log() { echo "tico-demo: $*" >&2; }
+die() { log "$*"; exit 1; }
+stamp() { date -u +%Y%m%dT%H%M%SZ; }
+
+ensure_user() {
+  id -u "$DEMO_USER" >/dev/null 2>&1 ||
+    useradd --system --no-create-home --home-dir /nonexistent --shell /usr/sbin/nologin "$DEMO_USER"
+}
+
+# The commit's source, from GitHub (the commit must be pushed): $BASE/releases/<sha>/src.
+fetch_source() {
+  local sha=$1 rel=$BASE/releases/$1
+  [ -e "$rel/src/backend/demo.py" ] && return 0
+  local dir=$rel/src-$(stamp)
+  install -d -m 755 "$rel" "$dir"
+  curl -fsSL --retry 3 --max-time 300 --max-filesize 500000000 "https://codeload.github.com/$REPO/tar.gz/$sha" |
+    tar -xz -C "$dir" --strip-components=1 --no-same-owner
+  [ -f "$dir/backend/demo.py" ] || die "$sha has no backend/demo.py"
+  chmod -R go-w,go+rX "$dir"
+  ln -sfn "$(basename "$dir")" "$rel/src"
+}
+
+# A release image's files as a root directory: $BASE/runtime/<tag>.
+runtime() {
+  local tag=$1 link=$BASE/runtime/$1
+  # Already exported (the venv's python is an absolute link into the image, so it is not tested from out here).
+  [ -f "$link/opt/tico/.venv/pyvenv.cfg" ] && [ -x "$link/usr/local/bin/tico-screen-relay" ] && return 0
+  docker image inspect "$IMAGE_REPO:$tag" >/dev/null 2>&1 || docker pull -q "$IMAGE_REPO:$tag" >/dev/null
+  local dir=$BASE/runtime/$tag-$(stamp) cid
+  install -d -m 755 "$dir"
+  cid=$(docker create --network none "$IMAGE_REPO:$tag")
+  docker export "$cid" | tar -x -C "$dir" --numeric-owner
+  docker container rm "$cid" >/dev/null
+  printf '127.0.0.1 localhost\n::1 localhost ip6-localhost\n' >"$dir/etc/hosts"
+  echo "$DEMO_USER:x:$(id -u "$DEMO_USER"):$(id -g "$DEMO_USER"):Tico demo:/nonexistent:/usr/sbin/nologin" >>"$dir/etc/passwd"
+  echo "$DEMO_USER:x:$(id -g "$DEMO_USER"):" >>"$dir/etc/group"
+  install -d -m 755 "$dir/opt/demo"
+  ln -sfn "$(basename "$dir")" "$link"
+}
+
+newest_image() {
+  docker image ls "$IMAGE_REPO" --format '{{.Tag}}' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -1
+}
+
+# The commit runs on the image's Python packages and screen relay, so both must be the ones it was written for.
+check_image() {
+  local root=$1 src=$2 want have
+  cmp -s "$root/opt/tico/backend/requirements.txt" "$src/backend/requirements.txt" ||
+    die "backend/requirements.txt differs from the image's; pass --image with a release that has the same one"
+  want=$(python3 -I -c 'import importlib.util, sys
+s = importlib.util.spec_from_file_location("screen_binary", sys.argv[1] + "/backend/screen_binary.py")
+m = importlib.util.module_from_spec(s); s.loader.exec_module(m); print(m.source_id(sys.argv[1]))' "$src")
+  have=$(chroot "$root" /usr/local/bin/tico-screen-relay --build-id)
+  [ "$want" = "$have" ] || die "relay-rs differs from the image's screen relay ($want, image $have); use a newer --image"
+}
+
+install_units() {
+  local changed=0 u
+  for u in "${UNITS[@]}"; do
+    if ! cmp -s "$TOOLS/deploy/demo/$u" "/etc/systemd/system/$u"; then
+      install -m 644 "$TOOLS/deploy/demo/$u" "/etc/systemd/system/$u"
+      changed=1
+    fi
+  done
+  if [ "$changed" = 1 ]; then systemctl daemon-reload; fi
+}
+
+# The demo's hosts in the router. The companies' blocks always stay exactly as they are:
+#   - the router's file is what this checkout's cell writes for the companies (with or without the route): this
+#     checkout's `cell route set --if-router-current` writes it (checked again under the cell lock; a no-op when the
+#     route is already there);
+#   - the file already holds the demo's block: nothing to do;
+#   - another cell core wrote it in a form this checkout does not (one without `cell route`): the demo's block is added
+#     after everything in it, and the file goes back as it was if the router refuses it.
+# A reload happens only when the file changed. Exit status 1 when the router could not be given the block.
+route() {
+  local args=(--name demo --port "${PORT[blue]}" --port "${PORT[green]}" --noindex --if-router-current) h mode answer
+  for h in "${HOSTS[@]}"; do args+=(--host "$h"); done
+  [ "${1:-}" = --tunnel ] || args+=(--router-only)
+  mode=$(cd "$TOOLS" && python3 -I - "$CELL" "${PORT[blue]}" "${PORT[green]}" "${HOSTS[@]}" <<'PY'
+import json, subprocess, sys
+sys.path.insert(0, ".")
+from pathlib import Path
+from setup import cell as C
+root, ports, hosts = Path(sys.argv[1]), [int(p) for p in sys.argv[2:4]], sys.argv[4:]
+c = C.Cell(root, C.System())
+record = {"name": "demo", "hosts": hosts, "ports": ports, "noindex": True}
+site = "\n".join(C.route_site(record))
+path = root / "router" / "Caddyfile"
+with c.lock("cell"):
+    now = path.read_text()
+    companies = c.live_companies()
+    if now in (C.router_config(companies), C.router_config(companies, c.routes())):
+        print("cell")
+    elif site in now:
+        print("present")
+    else:
+        C._write_atomic(root / C.ROUTES / "demo.json", json.dumps(record, indent=2, sort_keys=True) + "\n", 0o600)
+        C._write_atomic(path, now.rstrip("\n") + "\n\n" + site)
+        r = subprocess.run(["docker", "exec", C.ROUTER_CONTAINER, "caddy", "reload", "--config", "/etc/caddy/Caddyfile",
+                            "--adapter", "caddyfile"], capture_output=True, text=True)
+        if r.returncode:
+            C._write_atomic(path, now)
+            sys.exit("the router refused the demo's block: " + (r.stderr or r.stdout).strip()[-300:])
+        print("appended")
+PY
+  ) || { log "router: $mode"; return 1; }
+  if [ "$mode" = cell ]; then
+    answer=$(cd "$TOOLS" && python3 -m setup cell route set "${args[@]}" --json) || { log "cell route: $answer"; return 1; }
+    echo "$answer"
+  else
+    echo "{\"ok\": true, \"route\": \"demo\", \"router\": \"$mode\"}"
+  fi
+}
+
+healthy() {   # port, seconds
+  local i
+  for ((i = 0; i < $2; i += 2)); do
+    [ "$(curl -s -o /dev/null -w '%{http_code}' -m 2 "http://127.0.0.1:$1/healthz")" = 200 ] && return 0
+    sleep 2
+  done
+  return 1
+}
+
+deploy() {
+  local sha="" url="" image="" tunnel=""
+  while [ $# -gt 0 ]; do
+    case $1 in
+      --url) url=$2; shift 2 ;;
+      --image) image=$2; shift 2 ;;
+      --tunnel) tunnel=--tunnel; shift ;;
+      *) sha=$1; shift ;;
+    esac
+  done
+  [[ $sha =~ ^[0-9a-f]{40}$ ]] || die "deploy needs a full 40-character commit"
+  # shellcheck disable=SC1091
+  [ -f "$CONF/demo.conf" ] && . "$CONF/demo.conf"
+  url=${url:-${URL:-$DEFAULT_URL}}
+  [[ $url =~ ^https://[a-z0-9.-]+$ ]] || die "--url is https://<host>"
+  install -d -m 755 "$CONF" "$BASE" "$BASE/releases" "$BASE/runtime" "$BASE/tools"
+  ensure_user
+  fetch_source "$sha"
+  image=${image:-$(newest_image)}
+  [ -n "$image" ] || die "no $IMAGE_REPO image on this host; pass --image vX.Y.Z"
+  runtime "$image"
+  check_image "$BASE/runtime/$image" "$BASE/releases/$sha/src"
+  ln -sfn "../../runtime/$image" "$BASE/releases/$sha/root"
+  install_units
+
+  local old new
+  old=$(cat "$CONF/active" 2>/dev/null || echo green)
+  new=$([ "$old" = blue ] && echo green || echo blue)
+  ln -sfn "releases/$sha" "$BASE/$new"
+  local dropin=/etc/systemd/system/tico-demo@$new.service.d
+  install -d -m 755 "$dropin"
+  printf '[Service]\nRootDirectory=%s\nBindReadOnlyPaths=%s:/opt/demo\n' \
+    "$(readlink -f "$BASE/releases/$sha/root")" "$(readlink -f "$BASE/releases/$sha/src")" >"$dropin/paths.conf"
+  systemctl daemon-reload
+  printf 'TICO_DEMO_URL=%s\nTICO_DEMO_PORT=%s\nTICO_DEMO_SHA=%s\n' "$url" "${PORT[$new]}" "$sha" >"$CONF/$new.env"
+  log "building $sha as $new on 127.0.0.1:${PORT[$new]} (image $image, url $url)"
+  systemctl restart "tico-demo@$new"
+  if ! healthy "${PORT[$new]}" 420; then
+    journalctl -u "tico-demo@$new" -n 40 --no-pager >&2 || true
+    systemctl stop "tico-demo@$new"
+    die "$new did not answer /healthz; the running copy is unchanged"
+  fi
+  # The demo's block names both copies' ports, so the switch below needs no router change once it is there. If the
+  # router could not be given it now, the switch goes ahead anyway (never two copies running); the 5-minute timer
+  # tries again.
+  route $tunnel || log "warning: the router entry was not updated; tico-demo-route.timer tries again"
+  systemctl enable -q "tico-demo@$new"
+  if [ "$old" != "$new" ] && systemctl is-active -q "tico-demo@$old"; then
+    sleep 3                               # the router's health check (every 2 s) has seen the new copy
+    systemctl stop "tico-demo@$old"
+  fi
+  systemctl disable -q "tico-demo@$old" 2>/dev/null || true
+  echo "$new" >"$CONF/active"
+  printf 'SHA=%s\nURL=%s\nIMAGE=%s\n' "$sha" "$url" "$image" >"$CONF/demo.conf"
+  ln -sfn "$(basename "$TOOLS")" "$BASE/tools/current"
+  systemctl enable -q --now tico-demo-rotate.timer tico-demo-route.timer
+  status
+}
+
+rotate() {
+  [ -f "$CONF/demo.conf" ] || die "nothing deployed yet"
+  # shellcheck disable=SC1091
+  . "$CONF/demo.conf"
+  deploy "$SHA" --url "$URL" --image "$IMAGE"
+}
+
+status() {
+  local active sha="" url="" code
+  active=$(cat "$CONF/active" 2>/dev/null || echo none)
+  # shellcheck disable=SC1091
+  [ -f "$CONF/demo.conf" ] && . "$CONF/demo.conf" && sha=$SHA && url=$URL
+  code=$(curl -s -o /dev/null -w '%{http_code}' -m 5 -H "Host: ${HOSTS[0]}" http://127.0.0.1:8080/healthz || true)
+  echo "{\"active\": \"$active\", \"sha\": \"$sha\", \"url\": \"$url\", \"through_router\": \"$code\"," \
+       "\"blue\": \"$(systemctl is-active tico-demo@blue || true)\", \"green\": \"$(systemctl is-active tico-demo@green || true)\"}"
+}
+
+[ "$(id -u)" = 0 ] || die "run as root"
+cmd=${1:-status}
+shift || true
+case $cmd in
+  deploy) deploy "$@" ;;
+  rotate) rotate ;;
+  route) route "$@" >/dev/null ;;
+  status) status ;;
+  *) die "usage: tico-demo deploy <sha> [--url URL] [--image vX.Y.Z] [--tunnel] | rotate | route [--tunnel] | status" ;;
+esac

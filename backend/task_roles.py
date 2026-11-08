@@ -19,7 +19,7 @@ ROLE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,39}$")   # a role name: a short lower-
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS task_roles(
   task_id TEXT NOT NULL REFERENCES tasks(id), role TEXT NOT NULL,
-  actor TEXT NOT NULL, added_by TEXT, created TEXT NOT NULL,
+  actor TEXT NOT NULL, added_by TEXT, created_at TEXT NOT NULL,
   PRIMARY KEY(task_id, role, actor));
 CREATE INDEX IF NOT EXISTS task_roles_actor ON task_roles(actor, role);
 """
@@ -56,7 +56,7 @@ def grouped(conn, task_ids):
         part = ids[i:i + 400]
         marks = ",".join("?" * len(part))
         for row in conn.execute(f"SELECT task_id, role, actor FROM task_roles WHERE task_id IN ({marks}) "
-                                "ORDER BY created, rowid", part):
+                                "ORDER BY created_at, rowid", part):
             out[row[0]].setdefault(row[1], []).append(row[2])
     return out
 
@@ -117,7 +117,7 @@ def _set_roles(conn, actor, task_id, roles, mover, note, checked):
             if not who:
                 H.refuse(conn, actor, "reach", f"{person} is not a bot or a person on the roster")
             if H.task_private(conn, row) and not H.task_private_readable(conn, who, row):
-                H.refuse(conn, actor, "private", f"{H.actor_id(who)} cannot read this private task")
+                H.refuse(conn, actor, "private", f"{H.actor_name(conn, who)} cannot read this private task")
             if who not in resolved:
                 resolved.append(who)
         before = have.get(role, [])
@@ -125,11 +125,11 @@ def _set_roles(conn, actor, task_id, roles, mover, note, checked):
             continue
         conn.execute("DELETE FROM task_roles WHERE task_id=? AND role=?", (task_id, role))
         for who in resolved:
-            conn.execute("INSERT INTO task_roles(task_id,role,actor,added_by,created) VALUES(?,?,?,?,?)",
+            conn.execute("INSERT INTO task_roles(task_id,role,actor,added_by,created_at) VALUES(?,?,?,?,?)",
                          (task_id, role, who, actor, at))
         H._task_event(conn, task_id, actor, "role:" + role, ", ".join(before) or None, ", ".join(resolved) or None, note or "")
         H.event(conn, actor, "task.roles", task_id, {"role": role, "actors": resolved})
         changed = True
     if changed:
-        conn.execute("UPDATE tasks SET updated=? WHERE id=?", (at, task_id))
+        conn.execute("UPDATE tasks SET updated_at=? WHERE id=?", (at, task_id))
     return changed

@@ -107,7 +107,7 @@ def throttled(response):
 def install_reviews(app, store, primary, reviewer):
     with store.transaction() as c:
         c.execute("CREATE TABLE IF NOT EXISTS github_review_operations("
-                  "actor TEXT NOT NULL,key TEXT NOT NULL,request_hash TEXT NOT NULL,response_json TEXT,"
+                  "actor TEXT NOT NULL,key TEXT NOT NULL,request_hash TEXT NOT NULL,response TEXT,"
                   "PRIMARY KEY(actor,key))")
 
     def permitted_repository(c, who, name):
@@ -142,8 +142,8 @@ def install_reviews(app, store, primary, reviewer):
             if previous:
                 if previous["request_hash"] != hashed:
                     raise Problem("idempotency_conflict", "This review key was used for different content", 409)
-                if previous["response_json"]:
-                    return json.loads(previous["response_json"])
+                if previous["response"]:
+                    return json.loads(previous["response"])
                 raise Problem("github_review_unknown", "A review with this key may already have been submitted; check GitHub before a fresh operation", 409)
         issuer = reviewer.for_bot(bot)
         token, _ = issuer.mint([repository], {"pull_requests": "write", "metadata": "read"},
@@ -171,7 +171,7 @@ def install_reviews(app, store, primary, reviewer):
             if response.status_code in (400, 403, 404, 422):
                 # A definite refusal created no review. Ambiguous responses retain the fence.
                 with store.transaction() as c:
-                    c.execute("DELETE FROM github_review_operations WHERE actor=? AND key=? AND response_json IS NULL",
+                    c.execute("DELETE FROM github_review_operations WHERE actor=? AND key=? AND response IS NULL",
                               (who.actor, key))
                     if response.status_code == 403 and not throttled(response):
                         # A permission blocker: DevOps fixes it, not Head of Engineering (backend/blockers.py).
@@ -190,7 +190,7 @@ def install_reviews(app, store, primary, reviewer):
         receipt = {"repository": repository, "number": body.number, "head": body.head, "event": event,
                    "review_id": result.get("id"), "url": result.get("html_url"), "verdict": body.verdict}
         with store.transaction() as c:
-            c.execute("UPDATE github_review_operations SET response_json=? WHERE actor=? AND key=?",
+            c.execute("UPDATE github_review_operations SET response=? WHERE actor=? AND key=?",
                       (encode(receipt), who.actor, key))
             H.event(c, who.actor, "github.review", repository,
                     {"number": body.number, "head": body.head, "event": event, "review_id": result.get("id")})

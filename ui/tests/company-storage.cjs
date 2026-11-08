@@ -38,7 +38,7 @@ const {unrouted} = require('./support/routes.cjs');
             if (sent.access_key_id === 'AKIAEXAMPLEDENY0001')
               return json({error: {code: 'storage_check', detail: "S3 storage can't write: AccessDenied on acme-files/tico (s3:PutObject)"}}, 422);
             storage = {...storage, active: {bucket: sent.bucket, prefix: sent.prefix, region: sent.region, location: sent.bucket + '/' + sent.prefix,
-              access_key_id: '…0001', created: new Date().toISOString(), created_by: 'human:ana'}};
+              access_key_id: '…0001', created_at: new Date().toISOString(), created_by: 'human:ana'}};
           }
           if (req.method() === 'DELETE') storage = {...storage, active: null, earlier: [{...storage.active, retired: new Date().toISOString()}]};
           return json(storage);

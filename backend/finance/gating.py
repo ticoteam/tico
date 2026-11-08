@@ -11,7 +11,6 @@ from .context import Ctx
 from .core import dates
 from .core import gates as G
 from .core import kinds as K
-from .core import rights as R
 from .core import validate as V
 from .core.errors import CONFLICT, DENIED, NOT_FOUND, FinanceError
 from .core.org import SYSTEM, Principal
@@ -42,7 +41,7 @@ def rules(ctx: Ctx) -> list[G.Rule]:
 
 
 def rule_from(row: Any) -> G.Rule:
-    return G.rule_of(str(row["id"]), str(row["name"]), SK.loads(row["when_json"]), SK.loads(row["outcome_json"]),
+    return G.rule_of(str(row["id"]), str(row["name"]), SK.loads(row["condition"]), SK.loads(row["outcome"]),
                      bool(row["active"]))
 
 
@@ -103,6 +102,7 @@ def judge(ctx: Ctx, p: Principal, kind: str, gate: K.Gate, plan: Plan, action_id
     if verdict.outcome == "deny":
         raise Denied(verdict, found, p.actor)
     log(ctx, verdict, found, action_id, p.actor)
+    plan = replace(plan, asks=_asks(gate, verdict, plan))
     if not verdict.counts:
         return Judged(stricter(gate, verdict), plan)
     amount = found.get("amount")
@@ -117,11 +117,19 @@ def judge(ctx: Ctx, p: Principal, kind: str, gate: K.Gate, plan: Plan, action_id
     return Judged(stricter(gate, verdict), replace(plan, apply=apply))
 
 
+def _asks(gate: K.Gate, verdict: G.Verdict, plan: Plan) -> tuple[tuple[str, str], ...]:
+    """Every rule that needs approval: the planned gate, the planner's own asks (a budget past its limit) and the gate
+    rules' verdict, each with its reason. stricter() keeps only one of the gates for the approver, so the others are
+    named here too."""
+    out: dict[str, str] = dict(plan.asks)
+    if gate.outcome == "needs_approval":
+        out.setdefault(gate.rule, "")
+    if verdict.outcome == "needs_approval":
+        out.setdefault(verdict.rule, verdict.reason)
+    return tuple(out.items())
+
+
 # ------------------------------------------------------------------------------------------------ writing rules
-def _is_admin(ctx: Ctx, who: str) -> bool:
-    return R.is_admin(ctx.org, who, ctx.rights(who))
-
-
 def _gate(ctx: Ctx, who: str, kind: str) -> K.Gate:
     """A rule a bot writes or changes always needs a finance admin (§6.2); a person with finance.rules commits."""
     if who in ctx.org.bots:
@@ -166,9 +174,9 @@ def _fixed(row: Any) -> None:
 
 
 def _as_fields(row: Any) -> dict[str, object]:
-    return {"name": str(row["name"]), "words": str(row["words"]), "when": SK.loads(row["when_json"]),
-            "outcome": SK.loads(row["outcome_json"]),
-            "examples": cast(list[dict[str, object]], SK.loads_list(row["examples_json"])),
+    return {"name": str(row["name"]), "words": str(row["words"]), "when": SK.loads(row["condition"]),
+            "outcome": SK.loads(row["outcome"]),
+            "examples": cast(list[dict[str, object]], SK.loads_list(row["examples"])),
             "external_rule_id": row["external_rule_id"], "priority": int(row["priority"])}
 
 
@@ -189,8 +197,8 @@ def rule_create(ctx: Ctx, who: str, p: V.Payload) -> Plan:
 
     def apply(aid: str) -> Result:
         rid = SK.insert(ctx.c, "fin_rules", {
-            "kind": kind, "name": f["name"], "words": f["words"], "when_json": SK.dump(f["when"]),
-            "outcome_json": SK.dump(f["outcome"]), "examples_json": SK.dump(f["examples"]),
+            "kind": kind, "name": f["name"], "words": f["words"], "condition": SK.dump(f["when"]),
+            "outcome": SK.dump(f["outcome"]), "examples": SK.dump(f["examples"]),
             "external_rule_id": f["external_rule_id"], "owner": who, "active": 1, "created_at": ctx.at,
             "created_by": who, **({"priority": f["priority"]} if kind == "posting" else {})})
         return {"rule_id": rid, "kind": kind}
@@ -207,8 +215,8 @@ def rule_update(ctx: Ctx, who: str, p: V.Payload) -> Plan:
 
     def apply(aid: str) -> Result:
         SK.update(ctx.c, "fin_rules", str(row["id"]), {
-            "name": f["name"], "words": f["words"], "when_json": SK.dump(f["when"]),
-            "outcome_json": SK.dump(f["outcome"]), "examples_json": SK.dump(f["examples"]),
+            "name": f["name"], "words": f["words"], "condition": SK.dump(f["when"]),
+            "outcome": SK.dump(f["outcome"]), "examples": SK.dump(f["examples"]),
             "external_rule_id": f["external_rule_id"], "updated_at": ctx.at,
             **({"priority": f["priority"]} if kind == "posting" else {})})
         return {"rule_id": str(row["id"])}
@@ -235,6 +243,11 @@ rule_enable = _toggle(True)
 rule_disable = _toggle(False)
 
 
+# the rule outcomes that leave an action with the status it already has (a limit that still fits leaves a committed
+# action committed, so a rule test does not list it as a change)
+ALREADY = {"committed": ("allow", "limit"), "needs_approval": ("needs_approval",), "denied": ("deny",)}
+
+
 def rule_test(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     """Run a draft (or saved) rule over the last 90 days of actions and feed rows the tester can see and say what it
     would have changed (a posting rule: the feed rows it would post, and where). Writes nothing but the action's own
@@ -253,20 +266,20 @@ def rule_test(ctx: Ctx, who: str, p: V.Payload) -> Plan:
         rule = rule_from(row)
     else:
         rule = G.rule_of("draft", "draft", G.parse_when(p.get("when")), G.parse_outcome(p.get("outcome")))
-    everything = _is_admin(ctx, who)
+    everything = ctx.view(who).everything  # whoever sees everything tests every actor's actions, not only their own
     day = dates.day(ctx.today)
     changed: list[Result] = []
     checked = 0
     for row in SK.actions_since(ctx.c, since, TEST_MOST):
         if not everything and str(row["actor"]) != who:
             continue
-        body = {k: v for k, v in SK.loads(row["payload_json"]).items() if k not in K.SERVER_ONLY_KEYS}
+        body = {k: v for k, v in SK.loads(row["payload"]).items() if k not in K.SERVER_ONLY_KEYS}
         found: dict[str, object] = {"kind": str(row["kind"]), "actor": str(row["actor"]),
                                     "actor.kind": "bot" if str(row["actor"]) in ctx.org.bots else "human",
                                     **{k: v for k, v in body.items() if isinstance(v, (int, str, bool))}}
         checked += 1
         got = G.evaluate([replace(rule, active=True)], found, day).outcome
-        if got != "allow":
+        if got not in ("allow", *ALREADY.get(str(row["status"]), ())):
             changed.append({"action_id": str(row["id"]), "kind": str(row["kind"]), "was": str(row["status"]),
                             "would": got, "at": str(row["created_at"])})
     from .tab import sees_money_account

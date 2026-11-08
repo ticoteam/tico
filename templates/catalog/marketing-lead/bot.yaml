@@ -29,11 +29,11 @@ routines:
     template: playbooks/weekly-meeting.md
     labels: [priority:p2]
     enabled: false
-  - id: monthly-growth-report
-    title: Monthly growth report
-    cron: "0 9 3 * *"
+  - id: weekly-numbers
+    title: Weekly numbers
+    cron: "0 7 * * 1"
     timezone: America/Los_Angeles     # set this to the team's own timezone
-    template: playbooks/monthly-report.md
+    template: playbooks/weekly-numbers.md
     labels: [priority:p2]
     enabled: false
 

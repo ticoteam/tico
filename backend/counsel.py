@@ -66,7 +66,7 @@ _STRAIGHT = str.maketrans({"‘": "'", "’": "'", "‚": "'", "“": '"', "”"
 # backend/files.py asked_to_read) and the From it was asked for. Two people reading one version are two rows.
 RULE_READS = """CREATE TABLE IF NOT EXISTS rule_reads(
  task_id TEXT PRIMARY KEY, file_id TEXT NOT NULL, version INTEGER NOT NULL, requested_by TEXT NOT NULL,
- created TEXT NOT NULL, truncated INTEGER NOT NULL DEFAULT 0, source_id TEXT)"""
+ created_at TEXT NOT NULL, truncated INTEGER NOT NULL DEFAULT 0, source_id TEXT)"""
 RULE_READS_INDEX = "CREATE INDEX IF NOT EXISTS rule_reads_version ON rule_reads(file_id, version)"
 # A quote shorter than this from a private read could be a word that is in any document: too little to tie the
 # suggestion to the version it cites.
@@ -93,8 +93,8 @@ def ensure(c):
         c.execute("ALTER TABLE rule_reads RENAME TO rule_reads_by_version")
         c.execute(RULE_READS)
         source = "source_id" if "source_id" in columns else "NULL"
-        c.execute("INSERT OR IGNORE INTO rule_reads(task_id, file_id, version, requested_by, created, truncated, "
-                  f"source_id) SELECT task_id, file_id, version, requested_by, created, truncated, {source} "
+        c.execute("INSERT OR IGNORE INTO rule_reads(task_id, file_id, version, requested_by, created_at, truncated, "
+                  f"source_id) SELECT task_id, file_id, version, requested_by, created_at, truncated, {source} "
                   "FROM rule_reads_by_version WHERE task_id IS NOT NULL")
         c.execute("DROP TABLE rule_reads_by_version")
     c.execute(RULE_READS)
@@ -179,7 +179,7 @@ def suggested_who(c, source_name):
         return {"groups": [], "bots": []}
     marks = ",".join("?" * len(ids))
     subjects = {r["subject"] for r in c.execute(
-        f"SELECT DISTINCT subject FROM credential_grants WHERE credential_id IN ({marks}) AND revoked IS NULL "
+        f"SELECT DISTINCT subject FROM credential_grants WHERE credential_id IN ({marks}) AND revoked_at IS NULL "
         "AND subject LIKE 'bot:%'", ids)}
     ctx = O._ctx(c)
     bots, groups = [], set()
@@ -213,7 +213,7 @@ def _link_plan(c, who, url, text):
     is its requester's (one per link and person), so it is readable exactly as the requester's task is."""
     digest = hashlib.sha256(text.encode("utf-8")).hexdigest()
     identity = "rule-doc:" + hashlib.sha256(f"{url}\n{who.actor}".encode("utf-8")).hexdigest()[:24]
-    row = c.execute("SELECT * FROM bot_files WHERE bot=? AND identity=?", (SLUG, identity)).fetchone()
+    row = c.execute("SELECT * FROM bot_files WHERE bot_id=? AND identity=?", (SLUG, identity)).fetchone()
     if not row:
         return {"identity": identity, "digest": digest, "row": None, "id": F.new_id(), "number": 1, "changed": True}
     held = c.execute("SELECT COALESCE(v.source_digest, b.digest) AS digest FROM bot_file_versions v "
@@ -289,8 +289,8 @@ def refused(store, who, path, method):
     match = TASK_COMMENT.match(path)
     if match:
         with store.read() as c:
-            row = c.execute("SELECT owner FROM tasks WHERE id=?", (match.group(1),)).fetchone()
-        return bool(row) and row["owner"] != "bot:" + SLUG
+            row = c.execute("SELECT owner_id FROM tasks WHERE id=?", (match.group(1),)).fetchone()
+        return bool(row) and row["owner_id"] != "bot:" + SLUG
     return False
 
 
@@ -410,7 +410,7 @@ def read(c, auth, who, files, blobs, body, found):
     H.event(c, who.actor, "rules.read_requested", file_id, {"source": source["id"], "version": number,
                                                           "task": task["id"], "bot": SLUG, "truncated": cut,
                                                           "screening": verdict["action"]})
-    c.execute("INSERT INTO rule_reads(task_id, file_id, version, requested_by, created, truncated, source_id) "
+    c.execute("INSERT INTO rule_reads(task_id, file_id, version, requested_by, created_at, truncated, source_id) "
               "VALUES(?,?,?,?,?,?,?)", (task["id"], file_id, number, who.actor, H.now(), int(cut), source["id"]))
     screening.note(c, verdict, "document", file_id, task=task["id"])
     return _receipt(source, file_id, number, title, who_hint, cut, verdict["action"], task["id"], existing=False)
@@ -424,7 +424,7 @@ def attempt_read(c, aid):
     tasks = carried_tasks(c, aid)
     if len(tasks) != 1:
         return None
-    row = c.execute("SELECT r.* FROM rule_reads r JOIN tasks t ON t.id=r.task_id WHERE r.task_id=? AND t.owner=?",
+    row = c.execute("SELECT r.* FROM rule_reads r JOIN tasks t ON t.id=r.task_id WHERE r.task_id=? AND t.owner_id=?",
                     (next(iter(tasks)), "bot:" + SLUG)).fetchone()
     return dict(row) if row else None
 
@@ -539,7 +539,7 @@ def cite_readers(c, auth, who):
     readers = []
     for task_id in sorted(carried_tasks(c, who.attempt_id)):
         task = H.task(c, task_id)
-        requester = task["requester"] if task else None
+        requester = task["requester_id"] if task else None
         if not requester or not H.is_human(requester):
             return []
         try:
@@ -559,15 +559,15 @@ def turn_done(c, attempt, outcome, task_id, text):
     read it was allowed to publish from (attempt_read): the task is marked done with the turn's last line other than
     NOT_ADVICE, so it never sits in doing after the work. A run that carried another task copies nothing and finishes
     nothing. A failed,
-    stopped or cancelled turn leaves the task to the normal retry and cleanup; a task Counsel set waiting or already
+    stopped or canceled turn leaves the task to the normal retry and cleanup; a task Counsel set waiting or already
     finished is left as it is."""
-    if attempt["bot"] != SLUG or outcome != "completed" or not task_id:
+    if attempt["bot_id"] != SLUG or outcome != "completed" or not task_id:
         return
     read = attempt_read(c, attempt["id"])
     if not read or read["task_id"] != task_id:
         return          # a run that carried another task: its text stays on the run, the task to the normal cleanup
     row = H.task(c, task_id)
-    if not row or row["owner"] != "bot:" + SLUG or row["status"] not in ("open", "doing"):
+    if not row or row["owner_id"] != "bot:" + SLUG or row["status"] not in ("open", "doing"):
         return
     lines = [line.strip() for line in str(text or "").splitlines() if line.strip() and not _disclaimer(line)]
     H.task_update(c, "bot:" + SLUG, task_id, status="done", note=(lines[-1][:500] if lines else None))

@@ -41,7 +41,7 @@ SCHEMA = (
     "CREATE TABLE IF NOT EXISTS message_links_seen(message_id TEXT PRIMARY KEY) WITHOUT ROWID",
     "CREATE TRIGGER IF NOT EXISTS message_links_insert AFTER INSERT ON messages BEGIN "
     "INSERT OR IGNORE INTO message_links_dirty VALUES(NEW.id); END",
-    "CREATE TRIGGER IF NOT EXISTS message_links_update AFTER UPDATE OF id, refs_json, in_reply_to ON messages BEGIN "
+    "CREATE TRIGGER IF NOT EXISTS message_links_update AFTER UPDATE OF id, refs, in_reply_to ON messages BEGIN "
     "INSERT OR IGNORE INTO message_links_dirty VALUES(NEW.id); END",
     "CREATE TRIGGER IF NOT EXISTS message_links_delete AFTER DELETE ON messages BEGIN "
     "DELETE FROM message_links WHERE message_id=OLD.id; DELETE FROM message_links_dirty WHERE message_id=OLD.id; "
@@ -51,7 +51,7 @@ SCHEMA = (
     # the links, so it never depends on the start-up index on all events. Covering their detail: a run's provenance
     # reads them per run (1.4M a day on Tico Team), and `candidates` searches every one's detail (2.1 s on TIDY when
     # each was a table row). It replaces events_run_task (action, target), dropped here on every start.
-    "CREATE INDEX IF NOT EXISTS events_run_detail ON events(action, target, detail_json) "
+    "CREATE INDEX IF NOT EXISTS events_run_detail ON events(action, target, detail) "
     "WHERE action IN ('task.next-run.carried','attempt.input.moved')",
     "DROP INDEX IF EXISTS events_run_task",
 )
@@ -68,15 +68,15 @@ def ensure(conn):
 
 def _get(conn, key):
     try:
-        row = conn.execute("SELECT value_json FROM registry_metadata WHERE key=?", (key,)).fetchone()
+        row = conn.execute("SELECT value FROM registry_metadata WHERE key=?", (key,)).fetchone()
     except sqlite3.OperationalError:
         return None
     return json.loads(row[0]) if row else None
 
 
 def _set(conn, key, value):
-    conn.execute("CREATE TABLE IF NOT EXISTS registry_metadata(key TEXT PRIMARY KEY, value_json TEXT NOT NULL)")
-    conn.execute("INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json",
+    conn.execute("CREATE TABLE IF NOT EXISTS registry_metadata(key TEXT PRIMARY KEY, value TEXT NOT NULL)")
+    conn.execute("INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
                  (key, json.dumps(value)))
 
 
@@ -85,7 +85,7 @@ def links_for(row):
     task links; a task whose id is not id-shaped is never looked up here (`candidates`). A deleted message
     keeps the links of its current refs: its replies still inherit its tasks."""
     from .task_privacy import _candidates
-    refs = H._json(row["refs_json"], {}) or {}
+    refs = H._json(row["refs"], {}) or {}
     links = set()
     if row["in_reply_to"]:
         links.add(("parent", row["in_reply_to"]))
@@ -112,7 +112,7 @@ def refresh(conn, ids):
         chunk = ids[start:start + 500]
         marks = ",".join("?" * len(chunk))
         conn.execute(f"DELETE FROM message_links WHERE message_id IN ({marks})", chunk)
-        rows = conn.execute(f"SELECT id, refs_json, in_reply_to FROM messages WHERE id IN ({marks})", chunk).fetchall()
+        rows = conn.execute(f"SELECT id, refs, in_reply_to FROM messages WHERE id IN ({marks})", chunk).fetchall()
         conn.executemany("INSERT OR IGNORE INTO message_links VALUES(?,?,?)",
                          [(row["id"], kind, target) for row in rows for kind, target in links_for(row)])
         conn.execute(f"DELETE FROM message_links_seen WHERE message_id IN ({marks})", chunk)
@@ -168,7 +168,7 @@ def _fresh(conn):
     out = {}
     for start in range(0, len(ids), 500):
         chunk = ids[start:start + 500]
-        for row in conn.execute("SELECT id, refs_json, in_reply_to FROM messages WHERE id IN (%s)"
+        for row in conn.execute("SELECT id, refs, in_reply_to FROM messages WHERE id IN (%s)"
                                 % ",".join("?" * len(chunk)), chunk):
             out[row["id"]] = links_for(row)
     return set(ids), out
@@ -243,7 +243,7 @@ def candidates(conn, task_id, cid):
     runs.update(r[0] for r in conn.execute("SELECT carried_by FROM tasks WHERE id=? AND carried_by IS NOT NULL",
                                            (task_id,)))
     runs.update(r[0] for r in conn.execute(
-        "SELECT target FROM events WHERE action IN (" + RUN_TASK_EVENTS_SQL + ") AND instr(detail_json, ?)>0",
+        "SELECT target FROM events WHERE action IN (" + RUN_TASK_EVENTS_SQL + ") AND instr(detail, ?)>0",
         (task_id,)))
     about |= _linked(conn, "attempt", runs, dirty, fresh)
     return _restrict(conn, cid, about)

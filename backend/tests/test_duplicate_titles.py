@@ -54,7 +54,7 @@ def test_the_task_manager_pairs_twins_by_the_same_rule(conn):
     first = H.task_create(conn, ANA, "Renew the domain", "x", OPS, private=False)
     # Made before this rule, or by a path that skips it: a twin that differs by inner spacing and case.
     twin = H.task_create(conn, ANA, "Renew the domain later", "x", OPS, private=False)
-    conn.execute("UPDATE tasks SET title='renew  THE domain', created=? WHERE id=?", (H.shift(H.now(), minutes=1), twin["id"]))
+    conn.execute("UPDATE tasks SET title='renew  THE domain', created_at=? WHERE id=?", (H.shift(H.now(), minutes=1), twin["id"]))
     H.task_create(conn, ANA, "Renew the lease", "x", OPS, private=False)
     found = [i for i in TM._duplicates(conn)]
     assert len(found) == 1 and first["id"] in found[0]["why"] and found[0]["task"] == twin["id"]

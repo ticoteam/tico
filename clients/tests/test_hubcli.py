@@ -22,8 +22,8 @@ import pytest
 from clients import hubcli
 
 HUB = Path(__file__).resolve().parents[2] / "scripts" / "hub"
-SUBCOMMANDS = ["whoami", "inbound", "mail", "meeting", "message", "conversation", "question", "note", "file", "page", "card", "pin", "doc", "chat", "assistant", "tag", "task", "replay", "goal", "kpi",
-               "proposal", "rules", "strategy", "brand", "gtm", "growth", "lens", "market", "listening", "tool", "automation", "audit", "event-types", "trigger", "relay", "sleep", "notice", "settings", "release", "approval", "webhook", "pipeline", "brief", "mcp", "needs-you", "run", "team", "seat", "org", "health",
+SUBCOMMANDS = ["whoami", "inbound", "connections", "mail", "company-page", "audiences", "editions", "readers", "meeting", "message", "conversation", "thread", "question", "note", "feedback", "file", "page", "card", "pin", "doc", "chat", "assistant", "tag", "task", "replay", "goal", "kpi",
+               "proposal", "rules", "strategy", "brand", "growth", "lens", "market", "listening", "tool", "automation", "audit", "event-types", "peer", "trigger", "relay", "call", "sleep", "notice", "settings", "release", "approval", "webhook", "pipeline", "brief", "mcp", "needs-you", "run", "team", "seat", "org", "health",
                "changelog", "update", "grokbot", "external", "calendar", "sql", "db", "classify", "gateway", "decision", "template", "bot", "repo", "skill", "agent", "human", "group", "api", "computer",
                "credential", "slack", "support", "health-monitor", "finance", "task-manager", "stall-triage", "roadmap", "service-key"]
 
@@ -57,6 +57,86 @@ def test_wake_url_commands_reach_the_tools_that_put_the_owners_address(monkeypat
     assert calls == [("GET", "hooks/wake-url"), ("PUT", "hooks/wake-url", {"url": "https://wake.acme.example/start"}),
                      ("PUT", "hooks/wake-url", {"url": None})]
     assert {"hub_relay_wake_url_show", "hub_relay_wake_url_set", "hub_relay_wake_url_off"} <= set(hubtools.BY_NAME)
+
+
+def test_thread_commands_reach_their_routes_with_their_flags(monkeypatch):
+    from clients import hubtools, remotecli
+    from clients.tico import APIError
+    calls = []
+    class Api:
+        def __init__(self, *args, **kw):
+            self.__dict__["_tico_is_botops"] = False
+        def get(self, path, **query):
+            if path == "me":
+                return {"actor": "human:ana"}
+            calls.append(("GET", path, {k: v for k, v in query.items() if v is not None}))
+            return {}
+        def post(self, path, body=None, key=None):
+            calls.append(("POST", path, body))
+            return {}
+        def patch(self, path, body=None, key=None):
+            calls.append(("PATCH", path, body))
+            return {}
+        def call(self, method, path, body=None, key=None, query=None, delegate=False):
+            calls.append((method, path, body))
+            return {}
+    monkeypatch.setattr(remotecli, "Client", Api)
+    monkeypatch.setenv("HUB_API_URL", "https://tico.acme.example/api/v2")
+    runs = [
+        (["thread", "list", "--limit", "10"], ("GET", "threads", {"limit": 10})),
+        (["thread", "list", "--with", "bot:ops", "--cursor", "c2", "--limit", "5"],
+         ("GET", "threads", {"with": "bot:ops", "cursor": "c2", "limit": 5})),
+        (["thread", "show", "th1", "--cursor", "c2"], ("GET", "threads/th1/timeline", {"cursor": "c2"})),
+        (["thread", "home", "bot:ops"], ("GET", "threads/home/bot:ops", {})),
+        (["thread", "home", "group:x"], ("GET", "threads/home/group:x", {})),
+        (["thread", "dm", "human:ben"], ("GET", "threads/dm", {"with": "human:ben"})),
+        (["thread", "dm-group", "human:ana", "bot:ops", "--body", "Hi all"],
+         ("POST", "threads/dm", {"members": ["human:ana", "bot:ops"], "body": "Hi all"})),
+        (["thread", "dm-group", "human:ben"], ("POST", "threads/dm", {"members": ["human:ben"], "body": None})),
+        (["thread", "create", "Refund policy", "--audience", "team", "--group", "grp1", "--member", "human:ana",
+          "--member", "bot:legal", "--body", "Hi"],
+         ("POST", "threads", {"title": "Refund policy", "audience": "team", "audience_group_id": "grp1",
+                              "members": ["human:ana", "bot:legal"], "body": "Hi"})),
+        (["thread", "post", "th1", "Hello", "--kind", "ask", "--to", "human:ana", "--ref", "task:t9", "--ref", "task:t10"],
+         ("POST", "threads/th1/messages", {"text": "Hello", "kind": "ask", "to": "human:ana",
+                                           "refs": {"task": ["t9", "t10"]}})),
+        (["thread", "reply", "th1", "m7", "Side note"],
+         ("POST", "threads/th1/messages", {"text": "Side note", "kind": "say", "parent_message_id": "m7"})),
+        (["thread", "edit", "m7", "Fixed"], ("PATCH", "messages/m7", {"text": "Fixed"})),
+        (["thread", "sub", "m7"], ("POST", "threads", {"parent_message_id": "m7"})),
+        (["thread", "follow", "th1", "--notify", "mentions"], ("PUT", "threads/th1/follow", {"notify": "mentions"})),
+        (["thread", "follow", "th1"], ("PUT", "threads/th1/follow", {"notify": "live"})),
+        (["thread", "unfollow", "th1"], ("DELETE", "threads/th1/follow", None)),
+        (["thread", "read", "th1", "--seq", "42"], ("POST", "threads/th1/read", {"seq": 42})),
+        (["thread", "read", "th1", "--all"], ("POST", "threads/th1/read-all", {})),
+        (["thread", "search", "refund terms"], ("GET", "threads/search", {"q": "refund terms"})),
+        (["thread", "members", "list", "th1"], ("GET", "threads/th1/members", {})),
+        (["thread", "members", "add", "th1", "human:ana", "--owner"],
+         ("POST", "threads/th1/members", {"actor": "human:ana", "role": "owner"})),
+        (["thread", "members", "remove", "th1", "human:ana"], ("DELETE", "threads/th1/members/human:ana", None)),
+        (["thread", "update", "th1", "--title", "Refunds", "--archive"],
+         ("PATCH", "threads/th1", {"title": "Refunds", "archived": True})),
+        (["thread", "update", "th1", "--unarchive"], ("PATCH", "threads/th1", {"archived": False})),
+        (["thread", "react", "m7", ":+1:"], ("PUT", "messages/m7/reactions/:+1:", None)),
+        (["thread", "unreact", "m7", ":+1:"], ("DELETE", "messages/m7/reactions/:+1:", None)),
+        (["thread", "open-earlier", "th1"], ("POST", "threads/th1/open-earlier", {})),
+        (["thread", "task", "m7", "--title", "Ship it", "--owner", "bot:ops"],
+         ("POST", "threads/messages/m7/task", {"title": "Ship it", "owner": "bot:ops"})),
+    ]
+    for words, expected in runs:
+        calls.clear()
+        remotecli.run(hubcli.parser().parse_args(words))
+        assert calls == [expected], words
+    assert {"hub_thread_list", "hub_thread_show", "hub_thread_create", "hub_thread_post", "hub_thread_reply",
+            "hub_thread_sub", "hub_thread_edit", "hub_thread_follow", "hub_thread_unfollow", "hub_thread_read", "hub_thread_search",
+            "hub_thread_members_list", "hub_thread_members_add", "hub_thread_members_remove", "hub_thread_update",
+            "hub_thread_link_slack", "hub_thread_dm_group", "hub_thread_react", "hub_thread_unreact",
+            "hub_thread_open_earlier"} <= set(hubtools.BY_NAME)
+
+
+def test_dm_group_needs_at_least_one_member_on_the_command_line():
+    with pytest.raises(SystemExit):
+        hubcli.parser().parse_args(["thread", "dm-group"])
 
 
 def test_review_command_and_mcp_preserve_head_body_and_retry_identity(tmp_path, monkeypatch):
@@ -656,6 +736,40 @@ def test_market_watch_and_briefing_commands_reach_their_routes(monkeypatch, tmp_
                             'items': [{'text': 'Example Co raised prices.', 'kind': 'change', 'entity_ids': ['company/example-co']}]}
 
 
+def test_thread_link_slack_runs_the_mcp_tool_for_each_of_its_three_behaviours(monkeypatch):
+    """`hub thread link-slack` runs `hub_thread_link_slack` (clients/hubtools.py): a channel asks for the link, the thread
+    alone lists its links, and --off lists them and deletes each one."""
+    from clients import remotecli
+    calls = []
+
+    class Api:
+        def get(self, path, /, **query):
+            if path == "me":
+                return {"actor": "human:ana", "role": "owner", "kind": "owner"}
+            calls.append(("GET", path, query))
+            return {"links": [{"id": "L1", "state": "active"}]}
+
+        def post(self, path, body=None, key=None):
+            calls.append(("POST", path, body))
+            return {"id": "L2", "state": "requested"}
+
+        def call(self, method, path, body=None, key=None, query=None, delegate=False):
+            calls.append((method, path))
+            return {"id": "L1", "state": "unlinked"}
+
+    monkeypatch.setenv("HUB_API_URL", "https://api.example.invalid")
+    monkeypatch.setattr(remotecli, "Client", lambda *a, **kw: Api())
+    for argv in (["thread", "link-slack", "T1", "#marketing", "--history"], ["thread", "link-slack", "T1"],
+                 ["thread", "link-slack", "T1", "--off"]):
+        remotecli.run(hubcli.parser().parse_args(argv))
+    assert calls == [
+        ("POST", "slack/links", {"thread_id": "T1", "channel": "#marketing", "history": True}),
+        ("GET", "slack/links", {"thread": "T1", "limit": 100}),
+        ("GET", "slack/links", {"thread": "T1", "limit": 100}),
+        ("DELETE", "slack/links/L1"),
+    ]
+
+
 WEBHOOK_LEAVES = [  # every leaf of the command table in docs/webhooks.md, with the arguments it needs
     ["event-types", "--group", "webhook"],
     ["trigger", "list"], ["trigger", "create", "Orders"], ["trigger", "show", "orders"],
@@ -837,11 +951,14 @@ def test_growth_cli_flags_become_the_api_bodies_the_playbooks_rely_on(monkeypatc
             self.__dict__["_tico_is_botops"] = False
 
         def get(self, path, **query):
+            if path.startswith("growth/"):
+                sent.append(("GET", path, query))
+                return {}
             return {"actor": "bot:growth", "kind": "bot"}
 
         def call(self, method, path, body=None, key=None, query=None, delegate=False):
             sent.append((method, path, body))
-            return {"idea": {}, "kpi": {}, "segment": {}}
+            return {"kpi": {}}
 
         def post(self, path, body=None, key=None):
             return self.call("POST", path, body)
@@ -854,37 +971,98 @@ def test_growth_cli_flags_become_the_api_bodies_the_playbooks_rely_on(monkeypatc
     def run(*argv):
         remotecli.run(hubcli.parser().parse_args(list(argv)))
         return sent[-1]
-    assert run("growth", "idea", "create", "--title", "Referral card", "--bet", "b1", "--kpi", "k1", "--channel",
-               "referral", "--channel", "door", "--i", "7", "--c", "5", "--e", "8", "--source-kind", "lost_test",
-               "--follow-up-of", "t9", "--assignee", "me") == ("POST", "growth/ideas", {
-        "title": "Referral card", "bet_id": "b1", "kpi_id": "k1", "channels": ["referral", "door"], "source_kind": "lost_test",
-        "ice_i": 7, "ice_c": 5, "ice_e": 8, "follow_up_of": "t9", "assignee": "bot:growth"})
-    assert run("growth", "idea", "start", "t1", "--from", "2026-10-01", "--to", "2026-10-15", "--change", "New card",
-               "--stop-if", "CAC over 80", "--judged-kpi", "k2", "--min-events", "30", "--audience", "Austin")[2] == {
-        "test_from": "2026-10-01", "test_to": "2026-10-15", "change": "New card", "stop_if": "CAC over 80",
-        "judged_kpi_id": "k2", "min_events": 30, "audience": "Austin"}
-    assert run("growth", "idea", "verdict", "t1", "--status", "lost", "--bet-effect", "weakens",
-               "--confidence", "high")[1:] == ("growth/ideas/t1/verdict", {"status": "lost", "bet_effect": "weakens",
-                                                                           "confidence": "high"})
-    assert run("growth", "idea", "score", "t1", "--i", "3", "--c", "4", "--e", "5")[2] == {"i": 3, "c": 4, "e": 5}
+    assert run("growth", "channel", "add", "google-search", "--name", "Google search", "--track", "performance",
+               "--stage", "testing", "--owner", "me", "--budget", "500", "--source", "src1", "--why", "Demand exists",
+               "--guardrail-kpi", "k9", "--guardrail-max", "80", "--sort", "2") == ("POST", "growth/channels", {
+        "slug": "google-search", "name": "Google search", "track": "performance", "stage": "testing",
+        "owner_ref": "bot:growth", "budget_month": 500.0, "source_id": "src1", "why": "Demand exists",
+        "guardrail_kpi_id": "k9", "guardrail_max": 80.0, "sort": 2})
+    assert run("growth", "channel", "update", "door", "--stage", "paused", "--owner", "") == (
+        "PATCH", "growth/channels/door", {"stage": "paused", "owner_ref": None})                  # "" clears
+    assert run("growth", "channel", "retire", "door") == ("POST", "growth/channels/door/retire", {})
+    assert run("growth", "source", "add", "--truth-for", "bookings", "--system", "Stripe", "--reach-kind", "mcp",
+               "--reach-ref", "stripe", "--may", "read only", "--owner", "me") == ("POST", "growth/sources", {
+        "truth_for": "bookings", "system": "Stripe", "reach_kind": "mcp", "reach_ref": "stripe", "may": "read only",
+        "owner_ref": "bot:growth"})
+    assert run("growth", "source", "update", "src1", "--may", "pause ads") == (
+        "PATCH", "growth/sources/src1", {"may": "pause ads"})
     assert run("growth", "cohort", "set", "--channel", "unknown", "--month", "2026-10", "--new", "18",
                "--source", "new_customers=Stripe") == ("PUT", "growth/cohorts", {
         "channel": "unknown", "month": "2026-10", "new_customers": 18, "sources": {"new_customers": "Stripe"}})
-    assert run("growth", "segment", "create", "--name", "Property managers", "--why", "Big portfolios") == (
-        "POST", "growth/segments", {"name": "Property managers", "why": "Big portfolios", "status": "testing"})
-    assert run("growth", "segment", "update", "segment/property-managers", "--status", "serving", "--motion",
-               "sales_led", "--who-buys", "Ops lead", "--owner", "me")[1:] == (
-        "growth/segments/segment/property-managers", {"status": "serving", "motion": "sales_led", "who_buys": "Ops lead",
-                                                      "owner_ref": "bot:growth"})
-    assert run("growth", "idea", "update", "t1", "--segment", "s1", "--segment", "s2")[2] == {"segments": ["s1", "s2"]}
-    assert run("growth", "channel", "update", "door", "--segment", "")[2] == {"segments": []}       # "" clears
-    assert run("growth", "cohort", "set", "--channel", "door", "--month", "2026-10", "--segment", "s1",
-               "--new", "4")[2] == {"channel": "door", "month": "2026-10", "segment_id": "s1", "new_customers": 4}
+    assert run("growth", "cohort", "set", "--channel", "door", "--month", "2026-10", "--spend", "900", "--d30", "42",
+               "--margin", "70", "--quality", "estimate")[2] == {
+        "channel": "door", "month": "2026-10", "spend": 900.0, "kept_d30": 42.0, "margin_pct": 70.0,
+        "quality": "estimate"}
+    assert run("growth", "cohort", "list", "--channel", "door", "--month", "2026-10", "--limit", "5") == (
+        "GET", "growth/cohorts", {"channel": "door", "month": "2026-10", "limit": 5})
+    assert run("growth", "economics", "--month", "2026-10") == ("GET", "growth/economics", {"month": "2026-10"})
+    assert run("growth", "numbers", "--months", "6") == ("GET", "growth/numbers", {"months": 6})
+    assert run("growth", "kpis") == ("GET", "growth/kpis", {})
+    assert run("growth", "settings") == ("GET", "growth/settings", {})
+    assert run("growth", "settings", "--set", "margin_pct=40", "--set", "unit=orders") == (
+        "PUT", "growth/settings", {"margin_pct": 40.0, "unit": "orders"})
     kpi = run("kpi", "update", "k1", "--parent", "k0", "--role", "north_star", "--loop", "referral:2")[2]
     assert (kpi["parent_kpi_id"], kpi["growth_role"], kpi["loop_name"], kpi["loop_step"]) == ("k0", "north_star", "referral", 2)
     assert "stage" not in kpi
     assert run("brand", "draft", "--section", "positioning", "--body", '"Acme cleans homes"')[1:] == (
         "brand/draft", {"sections": {"positioning": "Acme cleans homes"}})
+
+
+def test_finance_card_fill_takes_the_arguments_its_tool_takes():
+    p = hubcli.parser()
+    args = hubcli.parse(p, ["finance", "card-fill", "crd_1", "--merchant", "example.com", "--amount", "1000"])
+    assert (args.fn, args.card_id, args.merchant, args.amount) == ("finance card-fill", "crd_1", "example.com", 1000)
+    assert hubcli.parse(p, ["finance", "card-fill"]).card_id is None
+
+
+def test_the_retired_gtm_and_growth_idea_lines_run_their_new_commands_with_a_notice(monkeypatch, capsys):
+    ran = []
+    monkeypatch.setattr(hubcli, "run", lambda argv, who: ran.append(argv) or 0)
+    for old, new in ((["gtm", "show", "--json"], ["strategy", "show", "--section", "how", "--json"]),
+                     (["gtm", "summary"], ["strategy", "show", "--section", "how"]),
+                     (["gtm", "sources"], ["growth", "source", "list"])):
+        assert hubcli.main(old) == 0
+        assert ran[-1] == new
+    assert '"hub gtm show" is now "hub strategy show --section how"' in capsys.readouterr().err
+
+    assert hubcli.main(["growth", "idea", "create", "--title", "Referral card", "--hypothesis", "Friends bring friends",
+                        "--prediction", "Sign-ups up 10%", "--bet", "b1", "--kpi", "k1", "--channel", "referral",
+                        "--channel", "door", "--assignee", "me", "--i", "7", "--segment", "s1"]) == 0
+    assert ran[-1] == ["task", "create", "--type", "idea", "--owner", "me", "--title", "Referral card", "--body",
+                       "Hypothesis: Friends bring friends\nPrediction: Sign-ups up 10%\nBet: b1\nKPI: k1",
+                       "--label", "channel:referral", "--label", "channel:door"]
+    assert '"hub growth idea create" is now "hub task create --type idea"' in capsys.readouterr().err
+    assert hubcli.main(["growth", "idea", "list", "--status", "testing", "--channel", "referral"]) == 0
+    assert ran[-1] == ["task", "list", "--type", "idea", "--step", "Testing", "--label", "channel:referral"]
+    assert hubcli.main(["growth", "idea", "verdict", "t1", "--status", "won", "--result", "CPA 31",
+                        "--learning", "Video works"]) == 0
+    assert ran[-1] == ["task", "update", "t1", "--step", "Won", "--note", "Result: CPA 31\nLearning: Video works"]
+    assert hubcli.main(["growth", "idea", "verdict", "t1", "--status", "paused", "--result", "CPA 31 so far"]) == 0
+    assert ran[-1] == ["task", "update", "t1", "--step", "Paused", "--note", "Result: CPA 31 so far"]
+    assert hubcli.main(["growth", "idea", "verdict", "t1", "--status", "paused"]) == 0
+    assert ran[-1] == ["task", "update", "t1", "--step", "Paused", "--note", "Test paused"]
+
+
+def test_strategy_show_section_how_prints_the_section_or_says_nothing_is_published(monkeypatch, capsys):
+    from clients import remotecli
+    published = {"current": {"sections": {"how": "- Motion: self serve", "serve": "SMBs"}}}
+
+    class Client:
+        def __init__(self, *args, **kwargs):
+            self.__dict__["_tico_is_botops"] = False
+
+        def get(self, path, **query):
+            return {"actor": "bot:growth", "kind": "bot"} if path == "me" else published
+    monkeypatch.setattr(remotecli, "Client", Client)
+    monkeypatch.setenv("HUB_API_URL", "https://hub.example.test")
+
+    remotecli.main(hubcli.parser().parse_args(["strategy", "show", "--section", "how"]))
+    assert capsys.readouterr().out == "- Motion: self serve\n"
+    remotecli.main(hubcli.parser().parse_args(["strategy", "show", "--section", "how", "--json"]))
+    assert json.loads(capsys.readouterr().out) == published
+    published["current"] = None
+    remotecli.main(hubcli.parser().parse_args(["strategy", "show", "--section", "how"]))
+    assert capsys.readouterr().out == "Nothing published yet.\n"
 
 
 def test_a_json_flag_no_command_takes_is_ignored(monkeypatch, capsys):
@@ -901,3 +1079,147 @@ def test_a_json_flag_no_command_takes_is_ignored(monkeypatch, capsys):
     monkeypatch.setattr(sys, "stdin", io.StringIO('{"vendor": "v_1"}'))                # stdin is read once
     args = hubcli.parse(p, ["finance", "act", "bill_create", "--payload", "-", "--json"])
     assert args.payload == {"vendor": "v_1"}
+
+
+def test_call_commands_run_the_call_tools_on_their_routes(monkeypatch):
+    from clients import remotecli
+    sent = []
+
+    class Api:
+        def __init__(self, *args, **kw):
+            self.__dict__["_tico_is_botops"] = False
+
+        def get(self, path, **query):
+            sent.append(("GET", path, query))
+            return {"kind": "owner"} if path == "me" else {"calls": [], "next_before": None}
+
+        def post(self, path, body=None, key=None):
+            sent.append(("POST", path, body, key))
+            return {"id": "call-1", "state": "live"}
+
+        def call(self, method, path, body=None, key=None, query=None, delegate=False):
+            sent.append((method, path, body, key))
+            return {"id": "call-1"}
+
+    monkeypatch.setattr(remotecli, "Client", Api)
+    monkeypatch.setenv("HUB_API_URL", "https://tico.acme.example/api/v2")
+    for words in (["call", "start", "thread-1", "--title", "Acme standup"], ["call", "bot", "add", "call-1", "ops", "finance"],
+                  ["call", "bot", "remove", "call-1", "ops"], ["call", "list", "thread-1", "--limit", "5"]):
+        remotecli.run(hubcli.parser().parse_args(words))
+    assert sent == [("POST", "threads/thread-1/calls", {"title": "Acme standup"}, None),
+                    ("POST", "calls/call-1/bots", {"bots": ["ops", "finance"]}, None),
+                    ("DELETE", "calls/call-1/bots/ops", {}, None),
+                    ("GET", "threads/thread-1/calls", {"limit": 5})]
+
+
+def test_thread_delete_runs_the_message_delete_route(monkeypatch):
+    """`hub thread delete` runs `hub_thread_delete`: DELETE on the message, with no body."""
+    from clients import remotecli
+    from unittest.mock import Mock
+    client = Mock()
+    client.get.return_value = {"actor": "human:ana"}
+    monkeypatch.setenv("HUB_API_URL", "https://api.example.invalid")
+    monkeypatch.setattr(remotecli, "Client", lambda *a, **kw: client)
+    remotecli.run(hubcli.parser().parse_args(["thread", "delete", "m7"]))
+    client.call.assert_called_once_with("DELETE", "messages/m7", None, key=None)
+
+
+def test_thread_upload_streams_the_file_to_the_thread_message_route(monkeypatch, tmp_path):
+    """`hub thread upload` runs `hub_thread_upload`: the file is streamed (never read whole) as multipart to the thread's
+    upload route, with the text, kind and reply target as form fields."""
+    from pathlib import Path
+    from unittest.mock import Mock
+    from clients import remotecli
+    path = tmp_path / "report.pdf"
+    path.write_bytes(b"%PDF-1.4 test")
+    client = Mock()
+    client.get.return_value = {"actor": "human:ana"}
+    monkeypatch.setenv("HUB_API_URL", "https://api.example.invalid")
+    monkeypatch.setattr(remotecli, "Client", lambda *a, **kw: client)
+    from clients import bot_files
+    monkeypatch.setattr(bot_files, "checkout_root", lambda: tmp_path)
+    monkeypatch.setattr(Path, "read_bytes", lambda _: pytest.fail("whole file read"))
+    remotecli.run(hubcli.parser().parse_args(["thread", "upload", "T1", str(path), "--text", "Q3 numbers",
+                                              "--kind", "ask", "--to", "human:ben", "--under", "m7"]))
+    client.post_multipart.assert_called_once_with(
+        "uploads/threads/T1/messages", {"file": path},
+        {"text": "Q3 numbers", "kind": "ask", "to": "human:ben", "parent_message_id": "m7"}, key=None)
+
+
+def test_thread_slack_resume_posts_to_the_link_resume_route(monkeypatch):
+    """`hub thread slack-resume` runs `hub_thread_slack_resume`: POST on the link's resume route, as the person asking."""
+    from clients import remotecli
+    from unittest.mock import Mock
+    client = Mock()
+    client.get.return_value = {"actor": "human:ana", "role": "owner", "kind": "owner"}
+    monkeypatch.setenv("HUB_API_URL", "https://api.example.invalid")
+    monkeypatch.setattr(remotecli, "Client", lambda *a, **kw: client)
+    remotecli.run(hubcli.parser().parse_args(["thread", "slack-resume", "L1"]))
+    client.post.assert_called_once_with("slack/links/L1/resume", {}, key=None)
+
+
+def test_rules_withdraw_posts_an_empty_body_to_the_hold_withdraw_route(monkeypatch):
+    """`hub rules withdraw <hold-id>` runs `hub_rules_withdraw`: POST rule-holds/{id}/withdraw with an empty body."""
+    from clients import remotecli
+    from unittest.mock import Mock
+    client = Mock()
+    client.get.return_value = {"actor": "bot:ops"}
+    monkeypatch.setenv("HUB_API_URL", "https://api.example.invalid")
+    monkeypatch.setattr(remotecli, "Client", lambda *a, **kw: client)
+    remotecli.run(hubcli.parser().parse_args(["rules", "withdraw", "h7"]))
+    client.post.assert_called_once_with("rule-holds/h7/withdraw", {}, key=None)
+
+
+def test_assistant_withdraw_posts_the_reason_to_the_card_route(monkeypatch):
+    """`hub assistant withdraw <id> --reason ...` runs `hub_assistant_withdraw`: POST assistant/actions/{id}/withdraw."""
+    from clients import remotecli
+    from unittest.mock import Mock
+    client = Mock()
+    client.get.return_value = {"actor": "bot:botops"}
+    monkeypatch.setenv("HUB_API_URL", "https://api.example.invalid")
+    monkeypatch.setattr(remotecli, "Client", lambda *a, **kw: client)
+    remotecli.run(hubcli.parser().parse_args(["assistant", "withdraw", "a7", "--reason", "Wrong person"]))
+    client.post.assert_called_once_with("assistant/actions/a7/withdraw", {"reason": "Wrong person"}, key=None)
+
+
+def test_assistant_proposals_lists_the_callers_waiting_cards(monkeypatch):
+    """`hub assistant proposals` runs `hub_assistant_proposals`: GET assistant/proposals."""
+    from clients import remotecli
+    from unittest.mock import Mock
+    client = Mock()
+    client.get.return_value = {"actions": []}
+    monkeypatch.setenv("HUB_API_URL", "https://api.example.invalid")
+    monkeypatch.setattr(remotecli, "Client", lambda *a, **kw: client)
+    remotecli.run(hubcli.parser().parse_args(["assistant", "proposals"]))
+    client.get.assert_called_with("assistant/proposals")
+
+
+def test_connection_list_reaches_the_connections_route_with_its_paging(monkeypatch):
+    """`hub connections list --limit 5 --cursor c2` runs `hub_connections_list`: GET connections with the page."""
+    from clients import remotecli
+    from unittest.mock import Mock
+    client = Mock()
+    client.get.side_effect = lambda path, **kw: {"actor": "bot:ops"} if path == "me" else {"items": [], "next": None}
+    monkeypatch.setenv("HUB_API_URL", "https://api.example.invalid")
+    monkeypatch.setattr(remotecli, "Client", lambda *a, **kw: client)
+    remotecli.run(hubcli.parser().parse_args(["connections", "list", "--limit", "5", "--cursor", "c2"]))
+    from unittest.mock import call
+    assert call("connections", limit=5, cursor="c2") in client.get.call_args_list
+
+
+def test_task_check_back_reaches_the_same_api_from_cli_and_mcp(monkeypatch):
+    from clients import hubtools, remotecli
+    calls = []
+    class Api:
+        def __init__(self, *args, **kw):
+            self.__dict__["_tico_is_botops"] = False
+        def get(self, path, **query):
+            return {"actor": "human:ana"}
+        def post(self, path, body=None, key=None):
+            calls.append((path, body))
+            return {"task": {"id": "t1", "check_back_at": "2026-11-03T10:00:00Z"}}
+    monkeypatch.setattr(remotecli, "Client", Api)
+    monkeypatch.setenv("HUB_API_URL", "https://tico.acme.example/api/v2")
+    remotecli.run(hubcli.parser().parse_args(["task", "check-back", "t1", "--in", "45m", "--for", "Inspect the result."]))
+    hubtools.task_check_back(Api(), {"id": "t1", "at": "45m", "note": "Inspect the result."})
+    assert calls == [("tasks/t1/check-back", {"at": "45m", "note": "Inspect the result."})] * 2

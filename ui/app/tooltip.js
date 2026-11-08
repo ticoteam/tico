@@ -14,14 +14,14 @@ function tipBox() {
   return TIP;
 }
 function tipHTML(slug) {
-  const e = S.emps.find(x => x.name === slug), s = v2StatusOf(slug);
+  const e = botRow(slug), s = v2StatusOf(slug);
   const rows = [];
   if (s) {
     rows.push(['State', `<span class="pill ${V2_PILL[s.state] ?? ''}">${esc(V2_WORD[s.state] || s.state || 'unknown')}</span>${
-      s.since ? ` <span class="muted">${esc(ago(s.since))}</span>` : ''}`]);
+      s.changed_at ? ` <span class="muted">${esc(ago(s.changed_at))}</span>` : ''}`]);
     if (s.focus) rows.push(['Focus', esc(s.focus)]);
     if (s.last_result) rows.push(['Last result', esc(String(s.last_result).slice(0, 160))]);
-    rows.push(['Next run', s.next_due ? `${esc(until(s.next_due))} <span class="muted">${esc(fmt(s.next_due))}</span>` : '—']);
+    rows.push(['Next run', s.next_due_at ? `${esc(until(s.next_due_at))} <span class="muted">${esc(fmt(s.next_due_at))}</span>` : '—']);
     rows.push(['Open tasks', esc(String(s.open_tasks ?? 0))]);
     rows.push(['Needs humans', esc(String(s.needs_human ?? 0))]);
   } else {
@@ -31,20 +31,20 @@ function tipHTML(slug) {
   if (S.me?.cloud && e && e.agent) {
     rows.push(['Run by', esc(`${agentKind(e.agent)}${e.agent.profile ? ` · ${e.agent.profile}` : ''}`)]);
     rows.push(['Status', agentPresenceLabel(e.agent, e.online)]);
-    if (e.agent.last_seen) rows.push([e.agent.synced ? 'Last sync' : 'Last seen', esc(ago(e.agent.last_seen))]);
+    if (e.agent.last_seen_at) rows.push([e.agent.synced ? 'Last sync' : 'Last seen', esc(ago(e.agent.last_seen_at))]);
   } else if (S.me?.cloud && e) {
     rows.push(['Computer', esc(e.machine?.label || 'Not registered')]);
     rows.push(['Status', e.online ? (e.ready ? 'Online · ready' : 'Online · setup needed') : 'Offline']);
     // Its turns run on the Tico AI Gateway until its subscription is signed in (backend/models_preset.py as_served).
     if (e.online && e.readiness?.gateway) rows.push(['Model', esc(e.readiness.gateway)]);
-    if (e.machine?.last_seen) rows.push(['Last seen', esc(ago(e.machine.last_seen))]);
+    if (e.machine?.last_seen_at) rows.push(['Last seen', esc(ago(e.machine.last_seen_at))]);
   }
   return `<div class="tip-head">${avatar(slug, 18, stateOf(slug))}<strong>${empName(slug)}</strong></div>
     ${e?.description ? `<div class="tip-sub">${esc(e.description)}</div>` : ''}
     <dl>${rows.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${v}</dd>`).join('')}</dl>`;
 }
 function tipShow(el, slug) {
-  if (!slug || !S.emps.some(e => e.name === slug)) return;
+  if (!slug || !botRow(slug)) return;
   clearTimeout(TIP_TIMER); TIP_TIMER = null; TIP_PENDING = null;
   const tip = tipBox();
   tip.innerHTML = tipHTML(slug);
@@ -104,12 +104,12 @@ async function v2HistoryLoad(slug) {
   const el = $('#v2-history'); if (!el) return;
   const d = await v2Get(`/v2/status?bot=${encodeURIComponent(slug)}&since=7d`);
   const box = $('#v2-history'); if (!box) return;
-  const rows = [...(d?.history || [])].sort((a, b) => String(b.since || '').localeCompare(String(a.since || '')));
+  const rows = [...(d?.history || [])].sort((a, b) => String(b.started_at || '').localeCompare(String(a.started_at || '')));
   box.innerHTML = rows.length
     ? `<ul class="sh-list">${rows.map(h => { const by = h.by && h.by !== 'keeper' && actorSlug(h.by) !== slug ? actorLabel(h.by) : '';   // the bot or the hub itself goes without saying
         const why = [h.reason || '', by].filter(Boolean).join(' · ');
         return `<li class="sh-row"><span class="pill ${V2_PILL[h.state] ?? ''}">${esc(V2_WORD[h.state] || h.state || '')}</span>
         <span class="sh-focus"${h.focus || why ? ` title="${esc([h.focus, why].filter(Boolean).join(' · '))}"` : ''}>${esc(h.focus || '')}${why ? ` <span class="muted">${esc(why)}</span>` : ''}</span>
-        <span class="sh-when muted tnum" title="${esc(fmt(h.since))}${h.until ? ' to ' + esc(fmt(h.until)) : ''}">${esc(ago(h.since))}</span></li>`; }).join('')}</ul>`
+        <span class="sh-when muted tnum" title="${esc(fmt(h.started_at))}${h.ended_at ? ' to ' + esc(fmt(h.ended_at)) : ''}">${esc(ago(h.started_at))}</span></li>`; }).join('')}</ul>`
     : '<div class="empty">No status changes in the last week.</div>';
 }

@@ -3,11 +3,11 @@ for the one flat, searchable list in Settings > Routines (`GET /api/v2/system-ro
 
 `JOBS` is every built-in job: its plain name, one line on what it does, its group (now a word search finds, not a
 heading), its schedule in words and in seconds, whether it asks Tico Decide, what it does as catalog actions (`then`,
-read as "WHEN <trigger> THEN <action>"), its one department tag, and whether it is one of the six a person switches and
-reschedules (`control`). The trigger/action catalog (TRIGGERS, ACTIONS) is shared with task rules, so they read and are
+read as "WHEN <trigger> THEN <action>"), its one department tag, and whether a person may switch and
+reschedule it (`control`). The trigger/action catalog (TRIGGERS, ACTIONS) is shared with task rules, so they read and are
 searched the same way.
 
-`CONTROLS` holds what a person may change: on/off and a schedule preset for the six jobs that use AI or reach people,
+`CONTROLS` holds what a person may change: on/off and a schedule preset for the jobs that use AI or reach people,
 and the Topic changed and Stalled task check switches. Stale ticket review, Topic changed and Stalled task check keep their on/off in the team rules
 (backend/team_rules.py), so the value they had in Settings > General carries over; the rest live here in
 `registry_metadata` CONFIG_KEY. An owner or admin changes them; Health scan only the owner. `due` is when a job's
@@ -35,18 +35,18 @@ LOG = logging.getLogger("tico.system_routines")
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS system_runs(
- id TEXT PRIMARY KEY, job TEXT NOT NULL, started TEXT NOT NULL, finished TEXT, ok INTEGER NOT NULL DEFAULT 1,
+ id TEXT PRIMARY KEY, job TEXT NOT NULL, started_at TEXT NOT NULL, finished_at TEXT, ok INTEGER NOT NULL DEFAULT 1,
  result TEXT NOT NULL DEFAULT '', route TEXT, fallback TEXT, cost_usd REAL, runs INTEGER NOT NULL DEFAULT 1,
- first_started TEXT);
-CREATE INDEX IF NOT EXISTS system_runs_job ON system_runs(job, started);
+ first_started_at TEXT);
+CREATE INDEX IF NOT EXISTS system_runs_job ON system_runs(job, started_at);
 """
 
 
 def ensure(c):
-    """Add what SCHEMA's table gained since a database was made: `first_started`, the first of a folded row's quiet
-    repeats (its `started` moves to the latest), so counts can spread `runs` over the time they happened."""
-    if "first_started" not in {row[1] for row in c.execute("PRAGMA table_info(system_runs)")}:
-        c.execute("ALTER TABLE system_runs ADD COLUMN first_started TEXT")
+    """Add what SCHEMA's table gained since a database was made: `first_started_at`, the first of a folded row's quiet
+    repeats (its `started_at` moves to the latest), so counts can spread `runs` over the time they happened."""
+    if "first_started_at" not in {row[1] for row in c.execute("PRAGMA table_info(system_runs)")}:
+        c.execute("ALTER TABLE system_runs ADD COLUMN first_started_at TEXT")
 
 KEEP = 50                   # rows per job
 QUIET_WRITE_SECONDS = 60    # a repeated quiet run moves its row at most this often
@@ -56,6 +56,7 @@ GROUPS = [(CHECKS, "Checks that suggest"), (LEARNING, "Learning"), (REMINDERS, "
           (HOUSEKEEPING, "Housekeeping"), (CHAT, "Chat")]
 GROUP_WORDS = dict(GROUPS)
 DEPARTMENT = "Engineering"  # a built-in's tag until departments are edited (a label only: it changes no permission)
+FINANCE = "Finance"         # the Bookkeeper's checks
 
 # Which route answered a Decide call, from the answering provider (judge.py's order: Gateway, own key, company AI).
 ROUTE_WORDS = {"gateway": "Gateway", "own_key": "Company key", "team_llm": "Company AI"}
@@ -76,7 +77,7 @@ class Job:
     schedule: str               # in words
     every: int | None = None    # seconds between runs, for the next run; None: `next_at` or unknown
     ai: bool = False            # asks Tico Decide
-    control: bool = False       # one of the six a person will switch and reschedule
+    control: bool = False       # a job a person will switch and reschedule
     labels: tuple = ()          # Decide question sets whose spend is this job's
     records: bool = True        # False: each connection keeps its own last run
     then: tuple = ()            # ACTIONS keys: what it does
@@ -132,6 +133,8 @@ ACTIONS = {
                       ("learnings", "chat", "slack", "mail", "meetings")),
     "propose_memory_tidy": ("propose memory and knowledge edits for the pilot bots", ("memory", "tidy", "pilot")),
     "send_learnings": ("send each bot what it should remember", ("learnings", "memory", "send")),
+    "start_dreams": ("start a dream for each bot whose memory changed a lot since its last dream",
+                     ("dream", "memory", "auto", "nightly", "learnings", "tidy", "instructions")),
     "remind_due": ("tell a bot when one of its tasks reaches its due time", ("due", "remind", "tasks")),
     "go_ahead": ("go ahead on a past-deadline question's default answer, or expire it",
                  ("ask", "question", "deadline", "expire")),
@@ -147,6 +150,18 @@ ACTIONS = {
     "turns_finding": ("keep one Health finding per busy-turns incident and hand what it cannot fix to BotOps",
                       ("health", "turns", "incident", "botops", "busy")),
     "wake_stalled": ("wake the bot on a task nothing is moving", ("stalled", "wake", "tasks")),
+    "nudge_asks": ("nudge a person once in their thread when a bot's ask to them stays unanswered for a day",
+                   ("ask", "follow up", "nudge", "remind", "thread", "unanswered")),
+    "wake_digest_bots": ("start one run for each bot with new messages in the threads it follows on digest",
+                         ("bot", "digest", "thread", "wake", "batch")),
+    "route_message": ("have Decide read a person's message that names nobody and wake the bots it is for, three at most",
+                      ("route", "routing", "thread", "bots", "wake", "message")),
+    "resume_capped_wakes": ("let bot wakes the loop guard paused go when a thread's hour has room",
+                            ("loop", "guard", "capped", "paused", "resume", "wake", "thread", "bots")),
+    "purge_thread_messages": ("delete messages past the time their thread keeps them, with what was copied from them",
+                              ("retention", "purge", "delete", "thread", "messages", "keep")),
+    "email_digest": ("email a person once an hour the threads they follow on digest that have new messages: titles, "
+                     "unread counts and links, never the messages", ("email", "digest", "unread", "thread", "notify")),
     "drop_unreadable": ("drop queued work its bot can no longer read", ("queue", "drop")),
     "unstrand": ("send bot tasks waiting on nothing back to work", ("waiting", "tasks")),
     "ask_to_task": ("turn a bot's plain ask to a person into a small task", ("ask", "tasks")),
@@ -171,6 +186,7 @@ ACTIONS = {
     "sync_meetings": ("bring in meeting notes from each person's Granola", ("meetings", "granola", "notes")),
     "sync_docs": ("refresh linked documents from their sources", ("documents", "docs")),
     "start_fresh": ("start a fresh session, like Clear", ("chat", "fresh", "clear", "session")),
+    "rank_threads": ("rank each thread with new messages from 1 to 10", ("threads", "rank", "important", "decide")),
     "triage_quiet": ("have Decide read its last messages: set the wait it names, close it if finished, or let one wake through",
                      ("decide", "stalled", "tasks", "wait", "close", "wake")),
 }
@@ -203,15 +219,15 @@ JOBS = [
     Job("bookkeeper_check", "Books check",
         "Reads the Bookkeeper's Finance work queue in plain code and opens one task for the Bookkeeper only when it has "
         "something new. Nothing new is a quiet run: no task, no model call.",
-        CHECKS, "Hourly", 3600, control=True, then=("check_books", "wake_bookkeeper")),
+        CHECKS, "Hourly", 3600, control=True, then=("check_books", "wake_bookkeeper"), department=FINANCE),
     Job("bookkeeper_watch", "Books watch",
         "Reads runway, unusual spend, duplicate charges and price increases in plain code, and opens one Watch task for "
         "the Bookkeeper only when a check finds something new. Nothing new is a quiet run: no task, no model call.",
-        CHECKS, "Daily", 86400, then=("check_watch", "wake_watch")),
+        CHECKS, "Daily", 86400, then=("check_watch", "wake_watch"), department=FINANCE),
     Job("bookkeeper_rules_digest", "Rules digest",
         "Once a week, lists the posting rules made that week and opens the Bookkeeper's digest task for them. No new "
         "rules is a quiet run.",
-        CHECKS, "Weekly", 7 * 86400, then=("check_rules_digest", "wake_rules_digest")),
+        CHECKS, "Weekly", 7 * 86400, then=("check_rules_digest", "wake_rules_digest"), department=FINANCE),
     Job("engineering_exceptions", "Engineering exceptions",
         "Lists each engineering board's exceptions in plain code and wakes its manager (Manager profile) with them only "
         "when the list has an entry the last one did not. Tickets that move on their own are not listed.",
@@ -222,6 +238,13 @@ JOBS = [
     Job("learnings", "Nightly learnings",
         "Reads yesterday's chats, tasks, Slack, mail and meetings and sends each bot what it should remember.",
         LEARNING, "Nightly at 03:00", ai=True, control=True, labels=("learnings-route",), then=("read_activity", "send_learnings")),
+    Job("task_check_backs", "Task check-backs", "Follows up unfinished bot work and verifies its handoffs.",
+        REMINDERS, "Every 10 seconds", 10, control=True, then=("remind_due",)),
+    Job("auto_dream", "Auto dream",
+        "Starts a dream for each bot whose memory changed a lot since its last dream: at least 200 changed lines over 10 "
+        "memory turns, none in the last 48 hours, three a night at most, most changed first. The dream's requester is the "
+        "bot's nearest human manager, else the owner.",
+        LEARNING, "Nightly at 02:00", control=True, then=("start_dreams",)),
     Job("due_reminders", "Due reminders", "Tells a bot when one of its tasks reaches its due time.",
         REMINDERS, "Every 10 seconds", 10, then=("remind_due",)),
     Job("ask_deadlines", "Ask go-ahead",
@@ -229,6 +252,22 @@ JOBS = [
         REMINDERS, "Hourly", 3600, control=True, then=("go_ahead",)),
     Job("approval_expiry", "Approval expiry", "Takes approvals and asks nobody will act on out of Needs you.",
         REMINDERS, "Hourly", 3600, then=("expire_approvals",)),
+    Job("thread_followups", "Follow-ups",
+        "Nudges a person once, in their thread, when a bot's ask to them stays unanswered for a day. Plain code: no "
+        "model is called, and nothing to nudge is a quiet run.",
+        REMINDERS, "Every 15 minutes", 900, then=("nudge_asks",)),
+    Job("thread_digest", "Email digest",
+        "Emails a person once an hour the threads they follow on digest that have new messages: each title, its unread "
+        "count and a link, never the messages. Nothing unread is a quiet run.",
+        REMINDERS, "Hourly", 3600, then=("email_digest",)),
+    Job("thread_bot_digest", "Bot thread digest",
+        "Starts one run an hour for each bot that follows threads on digest and has new messages in them. Plain code: "
+        "no model is called until a batch has something in it, and nothing new is a quiet run.",
+        REMINDERS, "Hourly", 3600, then=("wake_digest_bots",)),
+    Job("thread_routing", "Thread routing",
+        "Reads a person's message that names nobody in a thread with several bots and wakes the ones it is for, three "
+        "at most. Below the confidence bar, or with Decide off, it wakes none.",
+        REMINDERS, "As messages arrive", ai=True, labels=("slack-route",), records=False, then=("route_message",)),
     Job("still_needed", "Unanswered questions",
         "On weekday mornings, sends questions unanswered for two business days back to their bots.",
         REMINDERS, "Hourly", 3600, then=("resend_questions",)),
@@ -244,6 +283,13 @@ JOBS = [
     Job("snooze_ends", "Snooze ends",
         "Brings snoozed tasks back when their date comes and starts deferred runs that are due.",
         HOUSEKEEPING, "Every 10 seconds", 10, then=("end_snooze", "start_deferred", "start_task")),
+    Job("thread_loop_guard", "Paused bot replies",
+        "Lets bot replies the loop guard paused in a thread go, as many as its hour has room for, with no one having to post.",
+        HOUSEKEEPING, "Every 10 seconds", 10, records=False, then=("resume_capped_wakes",)),
+    Job("thread_retention", "Thread retention",
+        "Deletes messages past the time their thread keeps them, with what was copied from them, in short batches. Plain "
+        "code: nothing past its time is a quiet run.",
+        HOUSEKEEPING, "Every 15 minutes", 900, then=("purge_thread_messages",)),
     Job("invariant_checks", "Production checks",
         "Reads a few production invariants in plain code, shows each failing one on Health and raises one task for its "
         "owner; the task is closed when the check passes.",
@@ -292,6 +338,9 @@ JOBS = [
     Job("topic_fresh", "Start fresh when the topic changes",
         "In a direct chat, a message on a new topic starts a fresh session, like Clear.",
         CHAT, "When it happens", records=False, when="topic_changed", then=("start_fresh",)),
+    Job("thread_rank", "Thread ranking",
+        "Ranks threads with new messages from 1 to 10 for the Important view in Threads, each at most once an hour.",
+        CHAT, "Every 5 minutes", 300, ai=True, labels=("thread-rank",), then=("rank_threads",)),
 ]
 BY_KEY = {job.key: job for job in JOBS}
 
@@ -306,6 +355,7 @@ EVERY_PRESET = (FIFTEEN, HOURLY, FOUR_HOURS, DAILY)
 AI_PRESETS = (HOURLY, FOUR_HOURS, DAILY)        # a job that asks Decide is never offered every 15 minutes
 CONFIG_KEY = "system_routines"
 AT_RE = re.compile(r"^([01]\d|2[0-3]):([0-5]\d)$")
+NIGHT_CLAIMS = ("learnings", "auto_dream")   # one run a night, claimed per company night (next_night reads the claim)
 
 
 @dataclass(frozen=True)
@@ -319,12 +369,16 @@ class Control:
 
 
 CONTROLS = {
+    "task_check_backs": Control(on=False),  # staged rollout; dates are stored while legacy recovery stays enabled
+
     "stale_review": Control(rule="stale_review", presets=AI_PRESETS, preset=HOURLY, at="09:00"),
     "still_wanted": Control(presets=EVERY_PRESET, preset=DAILY, at="09:00"),
     "kpi_asks": Control(presets=EVERY_PRESET, preset=HOURLY, at="09:00"),
     "health_scan": Control(presets=EVERY_PRESET, preset=HOURLY, at="09:00", owner_only=True),
     # One run a night reads the day before (backend/learnings.py claims one per night): the choice is its time.
     "learnings": Control(presets=(DAILY,), preset=DAILY, at="03:00"),
+    # On by default: a bot whose memory changed a lot gets a dream at night (backend/dream_auto.py).
+    "auto_dream": Control(presets=(DAILY,), preset=DAILY, at="02:00"),
     "memory_tidy": Control(on=False, presets=(DAILY,), preset=DAILY, at="03:30"),
     "ask_deadlines": Control(presets=EVERY_PRESET, preset=HOURLY, at="09:00"),
     # Hourly while people are at work: a report outside business hours would wait on nobody to read it.
@@ -338,7 +392,7 @@ CONTROLS = {
 
 QUICK_KEYS = ("still_wanted", "kpi_asks", "health_scan", "ask_deadlines", "task_manager_report",
               "engineering_exceptions", "bookkeeper_check", "bookkeeper_watch",
-              "bookkeeper_rules_digest")   # last runs read by backend/scheduler.py (QUICK and FIXED)
+              "bookkeeper_rules_digest", "thread_followups", "thread_digest", "thread_bot_digest", "thread_retention")   # last runs read by backend/scheduler.py (QUICK and FIXED)
 
 
 def zone():
@@ -347,7 +401,7 @@ def zone():
 
 
 def _stored(c):
-    row = c.execute("SELECT value_json FROM registry_metadata WHERE key=?", (CONFIG_KEY,)).fetchone()
+    row = c.execute("SELECT value FROM registry_metadata WHERE key=?", (CONFIG_KEY,)).fetchone()
     try:
         stored = json.loads(row[0]) if row else {}
     except ValueError:
@@ -379,7 +433,7 @@ def schedule_words(key, cfg):
     if not cfg or not cfg.get("preset"):
         return BY_KEY[key].schedule
     words = PRESETS[cfg["preset"]][0].format(at=cfg.get("at") or "")
-    return "Nightly at " + cfg["at"] if key in ("learnings", "memory_tidy") else words
+    return "Nightly at " + cfg["at"] if key in ("learnings", "memory_tidy", "auto_dream") else words
 
 
 def may_change(auth, who, key):
@@ -430,7 +484,7 @@ def save_config(c, actor, key, on=None, preset=None, at=None):
         mine["at"] = at
     if mine:
         stored[key] = mine
-    c.execute("INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json",
+    c.execute("INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
               (CONFIG_KEY, json.dumps(stored, sort_keys=True)))
     after = config(c)[key]
     if after != before:
@@ -490,7 +544,7 @@ def next_due(cfg, last, now):
 def last_started(c, keys):
     """{job: the start of its newest run} for these jobs."""
     marks = ",".join("?" for _ in keys)
-    rows = c.execute(f"SELECT job, max(started) FROM system_runs WHERE job IN ({marks}) GROUP BY job", tuple(keys))
+    rows = c.execute(f"SELECT job, max(started_at) FROM system_runs WHERE job IN ({marks}) GROUP BY job", tuple(keys))
     return {job: H.parse_ts(started) for job, started in rows.fetchall() if started}
 
 
@@ -564,11 +618,11 @@ def _repeat(c, run, finished):
     """(the job's last row, whether it was moved under a minute ago) when `run` is a quiet repeat of it, else None."""
     if not run.quiet or run.error is not None or run.route is not None:
         return None
-    last = c.execute("SELECT id,ok,result,route,finished FROM system_runs WHERE job=? ORDER BY started DESC LIMIT 1",
+    last = c.execute("SELECT id,ok,result,route,finished_at FROM system_runs WHERE job=? ORDER BY started_at DESC LIMIT 1",
                      (run.job,)).fetchone()
     if not last or not last["ok"] or last["route"] is not None or last["result"] != run.result:
         return None
-    moved = H.parse_ts(last["finished"])
+    moved = H.parse_ts(last["finished_at"])
     return last, bool(moved and H.parse_ts(finished) - moved < timedelta(seconds=QUIET_WRITE_SECONDS))
 
 
@@ -579,10 +633,10 @@ def save(c, run, finished=None):
         last, recent = repeat
         if recent:
             return last["id"]
-        c.execute("UPDATE system_runs SET started=?,finished=?,runs=runs+1 WHERE id=?", (run.started, finished, last["id"]))
+        c.execute("UPDATE system_runs SET started_at=?,finished_at=?,runs=runs+1 WHERE id=?", (run.started, finished, last["id"]))
         return last["id"]
     rid = H.new_id()
-    c.execute("INSERT INTO system_runs(id,job,started,finished,ok,result,route,fallback,cost_usd,first_started) "
+    c.execute("INSERT INTO system_runs(id,job,started_at,finished_at,ok,result,route,fallback,cost_usd,first_started_at) "
               "VALUES(?,?,?,?,?,?,?,?,?,?)",
               (rid, run.job, run.started, finished, 0 if run.error else 1, run.error or run.result or "Done",
                run.route, run.fallback, run.cost_usd, run.started))
@@ -635,7 +689,7 @@ def prune(c):
     """Each job keeps its last KEEP rows."""
     for (job,) in c.execute("SELECT DISTINCT job FROM system_runs").fetchall():
         c.execute("DELETE FROM system_runs WHERE job=? AND id NOT IN "
-                  "(SELECT id FROM system_runs WHERE job=? ORDER BY started DESC LIMIT ?)", (job, job, KEEP))
+                  "(SELECT id FROM system_runs WHERE job=? ORDER BY started_at DESC LIMIT ?)", (job, job, KEEP))
 
 
 # ----------------------------------------------------------------------------- the list
@@ -650,9 +704,9 @@ def next_at(job, last, now, settings=None, c=None, cfg=None):
     if cfg is not None:
         if not cfg["on"]:
             return None
-        if job.key == "learnings" and c is not None:
-            return next_night(c, cfg, now)
-        return next_due(cfg, H.parse_ts(last["started"]) if last else None, now)
+        if job.key in NIGHT_CLAIMS and c is not None:
+            return next_night(c, cfg, now, job.key)
+        return next_due(cfg, H.parse_ts(last["started_at"]) if last else None, now)
     every = job.every
     if job.key == "directory_sync" and c is not None:
         every = (directory_minutes(c) or 0) * 60
@@ -660,18 +714,25 @@ def next_at(job, last, now, settings=None, c=None, cfg=None):
         return None
     if not last:
         return None
-    started = H.parse_ts(last["started"])
+    started = H.parse_ts(last["started_at"])
     return max(started + timedelta(seconds=every), now)
 
 
-def next_night(c, cfg, now):
-    """Nightly learnings runs once per company night (backend/learnings.py `nightly`), not once after each time: tonight's
-    start while tonight has no run, else tomorrow's, whenever its last run started. The scheduled claim never retries a
-    night that has a row (only Run now does), so an unconfigured, capped or failed night also waits for tomorrow."""
+def next_night(c, cfg, now, key="learnings"):
+    """A nightly run (NIGHT_CLAIMS) runs once per company night (backend/learnings.py `nightly`, backend/dream_auto.py
+    `nightly`), not once after each time: tonight's start while tonight is unclaimed, else tomorrow's. The scheduled
+    claim never retries a night that is claimed (only Run now does), so an unconfigured, capped or failed night also
+    waits for tomorrow."""
     from . import learnings
     hour, minute = (int(x) for x in (cfg.get("at") or "03:00").split(":"))
     start = now.astimezone(zone()).replace(hour=hour, minute=minute, second=0, microsecond=0)
-    if c.execute("SELECT 1 FROM learning_runs WHERE night=?", (learnings.night_of(now),)).fetchone():
+    night = learnings.night_of(now)
+    if key == "auto_dream":
+        from . import dream_auto
+        claimed = dream_auto.claimed(c, night)
+    else:
+        claimed = c.execute("SELECT 1 FROM learning_runs WHERE night=?", (night,)).fetchone()
+    if claimed:
         return start + timedelta(days=1)
     return max(start, now)
 
@@ -691,17 +752,17 @@ def spent_this_month(c, labels, at=None):
         return None
     at = at or datetime.now(timezone.utc)
     month = at.astimezone(timezone.utc).strftime("%Y-%m-01T00:00:00")
-    where = " OR ".join("json_extract(detail_json,'$.label') LIKE ?" for _ in labels)
-    total = c.execute("SELECT coalesce(sum(json_extract(detail_json,'$.cost_usd')),0) FROM events "
-                      f"WHERE action='judge.spend' AND ts>=? AND ({where})",
+    where = " OR ".join("json_extract(detail,'$.label') LIKE ?" for _ in labels)
+    total = c.execute("SELECT coalesce(sum(json_extract(detail,'$.cost_usd')),0) FROM events "
+                      f"WHERE action='judge.spend' AND created_at>=? AND ({where})",
                       (month, *[f"{label}@%" for label in labels])).fetchone()[0]
     return round(float(total or 0), 4)
 
 
 def last_runs(c):
     """The newest row per job."""
-    rows = c.execute("SELECT r.* FROM system_runs r JOIN (SELECT job, max(started) AS started FROM system_runs "
-                     "GROUP BY job) m ON m.job=r.job AND m.started=r.started").fetchall()
+    rows = c.execute("SELECT r.* FROM system_runs r JOIN (SELECT job, max(started_at) AS started_at FROM system_runs "
+                     "GROUP BY job) m ON m.job=r.job AND m.started_at=r.started_at").fetchall()
     return {r["job"]: dict(r) for r in rows}
 
 
@@ -710,7 +771,7 @@ def last_ai_runs(c):
     keys = [job.key for job in JOBS if job.ai]
     out = {}
     for key in keys:
-        row = c.execute("SELECT * FROM system_runs WHERE job=? AND route IS NOT NULL ORDER BY started DESC LIMIT 1",
+        row = c.execute("SELECT * FROM system_runs WHERE job=? AND route IS NOT NULL ORDER BY started_at DESC LIMIT 1",
                         (key,)).fetchone()
         if row:
             out[key] = dict(row)
@@ -774,12 +835,9 @@ def listing(c, settings, now=None, who=None, auth=None):
                 "owner_only": bool(ctl and ctl.owner_only),
                 "can_change": bool(ctl and who is not None and auth is not None and can_change(auth, who, job.key)),
                 "last": None, "next": _stamp(following) if following else None}
-        if job.key == "memory_tidy":
-            from . import memory_tidy_controls
-            item["run_unavailable"] = memory_tidy_controls.UNAVAILABLE
         if job.key == "memory_tidy" and item["can_change"]:
             from . import memory_tidy_controls
-            item["pilots"] = memory_tidy_controls.pilots(c)
+            item["pilots"] = memory_tidy_controls.pilot_rows(c)
             item["pilot_models"] = memory_tidy_controls.model_options(c, settings)
         item["search"] = search_words(job, when_words, then_words, department)
         if job.key == "task_manager_report":
@@ -793,7 +851,7 @@ def listing(c, settings, now=None, who=None, auth=None):
             from .health_monitor import active
             item["note"] = None if active(c) else "Finds nothing while the Health Monitor is off (Settings > Health)"
         if row:
-            item["last"] = {"started": row["started"], "finished": row["finished"], "ok": bool(row["ok"]),
+            item["last"] = {"started_at": row["started_at"], "finished_at": row["finished_at"], "ok": bool(row["ok"]),
                             "result": row["result"], "runs": row["runs"]}
         if job.ai:
             answered = ai_last.get(job.key)
@@ -849,7 +907,7 @@ def install(app, store, auth, mutate):
 
     @app.post("/api/v2/system-routines/{key}/run")
     def system_routine_run(key: str, request: Request, body: M.Empty):
-        """Run one of the six controlled jobs once, now, through the code and caps of its scheduled run (a stale ticket
+        """Run one of the controlled jobs once, now, through the code and caps of its scheduled run (a stale ticket
         review still makes at most its hourly Decide calls); its result lands on its row. `running` while a job that
         asks Decide works on its own thread. 409 while it is off or already running."""
         who = request.state.identity

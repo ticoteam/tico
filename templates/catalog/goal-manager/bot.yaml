@@ -11,12 +11,11 @@ max_run_minutes: 60
 # sends nothing outside: it asks goal owners a question and sends the owner a weekly review inside the team.
 outbound_send: false
 
-# Both routines are declared and paused (`enabled: false`), like a starter bot's first routine. The server
+# The first two routines are declared paused (`enabled: false`), like a starter bot's first routine. The server
 # arms `kpi-pass` itself once a KPI exists (it skips its runs while the owner has regular checks off), and starts
-# `goals-review`, the Monday note, while the Strategy Bot is above Passive, which is where every install starts
+# `goals-review`, the Monday note, while the Strategy Bot is above Passive. Every install starts at level 2
 # (backend/strategy_bot.py). The server seeds them once, when the Strategy Bot is built in; from then on Tico's rows are
-# the
-# routines (docs/routines.md). Set the timezone to the team's own.
+# the routines (docs/routines.md). Set the timezone to the team's own.
 routines:
   - id: kpi-pass
     title: KPI pass

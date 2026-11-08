@@ -10,7 +10,7 @@ clash came from a job that ran over.
 Steps:
 1. Take the completed jobs of one type from the last 90 days of exports. Use actual start and finish times, not the
    booked time.
-2. Drop jobs that were not a normal visit: a second visit for a part, a job cancelled on site, a multi-day scope. Count
+2. Drop jobs that were not a normal visit: a second visit for a part, a job canceled on site, a multi-day scope. Count
    what you dropped and why.
 3. Use the median of the rest as the planned length. Use the 80th percentile to set the buffer before a fixed-time job.
    With fewer than eight clean jobs, write "estimate, few jobs" beside the length and keep the booking default visible.
@@ -28,4 +28,4 @@ Checks before you finish:
 
 Example (generic): "Electrical test, median 58 minutes, 80th percentile 74 minutes (34 jobs, 2026-07-01 to 2026-09-27;
 booking default 45). Plan uses 60 minutes and leaves 75 minutes before the next fixed-time job. Dropped: 4 second visits
-for a part, 1 job cancelled on site."
+for a part, 1 job canceled on site."

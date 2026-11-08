@@ -125,7 +125,10 @@ def test_front_doors_have_fixed_edge_addresses_the_server_trusts_and_nothing_wid
     assert "edge" in services["server"]["networks"] and "default" in services["server"]["networks"]
     # Only the server and the tunnel's hold draw from the dynamic range; everything else on the edge network is fixed.
     edge = {name for name, service in services.items() if "edge" in service.get("networks", ())}
-    assert edge == {"server", "caddy", "cloudflared", "hold"} and services["hold"]["networks"] == ["edge"]
+    assert edge == {"server", "caddy", "cloudflared", "hold", "livekit"} and services["hold"]["networks"] == ["edge"]
+    # The media server joins edge so Caddy and the tunnel can reach it, at a fixed address the server never trusts.
+    livekit = ip_address(default(services["livekit"]["networks"]["edge"]["ipv4_address"]))
+    assert livekit in subnet and livekit not in dynamic
     trusted = services["server"]["environment"]["TICO_TRUSTED_PROXIES"]
     resolved = re.sub(r"\$\{\w+:-([^}$]*)\}", r"\1", trusted[len("${TICO_TRUSTED_PROXIES:-"):-1])
     assert resolved.split(",") == ["127.0.0.1/32", "::1/128", f"{doors['caddy']}/32", f"{doors['cloudflared']}/32", str(dynamic)]

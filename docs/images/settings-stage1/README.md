@@ -9,7 +9,7 @@ Two browser answer fixtures are illustrative, not live checks:
 - People: `invite_email=true` shows **Add and send invite**; the demo cannot send mail. No invite was sent.
 - Health: a newer-release answer uses fictional **v0.4.12**, which was not published at capture time. No update was installed.
 
-Google and Email & Phone are unconnected demo states. Archive confirmation was cancelled.
+Google and Email & Phone are unconnected demo states. Archive confirmation was canceled.
 Source pack and capture scripts: Designer repository, `reports/2026-10-26-settings-stage1-screenshots`, commit `5390c4a`.
 Each PNG is copied without modification from that pack. Captions on the Help pages identify the synthetic examples and fixtures.
 

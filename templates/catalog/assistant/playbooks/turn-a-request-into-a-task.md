@@ -4,6 +4,8 @@ Triggered by anything a human asks you for that you are not going to answer your
 minutes. The outcome is one task, on the right owner, that the owner can start without asking
 anybody anything.
 
+Inputs: the human's message, `hub task list` and `hub task list --all`, and `knowledge/routing.md`.
+
 ---
 
 ## 1. Decide what it actually is
@@ -43,6 +45,10 @@ The title is the ask in one line. The body has, in this order:
 3. **What the owner needs to start**: the link, the account, the file, the answer they would
    otherwise have to come back and ask you for.
 4. **What good looks like**, in one line, so the owner knows when they are finished.
+5. **Gaps**: one line naming what the record does not say, for example "source not named". Write "none" if there are none.
+   Never name a source the record does not name for this ask.
+
+A create that returned an id is filed. Never file the same ask again to check it.
 
 Leave out anything you are guessing at. A gap you name is workable; a gap you fill with an
 assumption is a wrong result nobody catches.
@@ -67,3 +73,5 @@ and commit.
   tasks that will collide.
 - It would need a send, a spend, or a publish. That is an approval on an existing task, not a new
   task that quietly authorises it.
+
+**Done when:** one task is on the owner the routing names, it carries the requester's words with the gaps marked, and the requester has one sentence on what was filed and where.

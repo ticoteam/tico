@@ -301,7 +301,7 @@ jobs:
 
   timings:
     name: PR job timings
-    # Failed runs keep their timing receipt, but a cancelled run (a superseded pull request push) ends here: a final
+    # Failed runs keep their timing receipt, but a canceled run (a superseded pull request push) ends here: a final
     # job queued after the cancellation can wait for a runner that never comes, holding the newer head's run pending
     # in the same concurrency group.
     if: ${{ !cancelled() }}

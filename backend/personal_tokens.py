@@ -16,7 +16,7 @@ from . import team_rules
 from .store import H, Problem, digest
 
 PREFIX = "tico_pt_"
-FIELDS = ("id", "label", "created", "last_used", "expires_at", "revoked_at")
+FIELDS = ("id", "label", "created_at", "last_used_at", "expires_at", "revoked_at")
 
 
 def _person(who):
@@ -48,7 +48,7 @@ def listing(c, who):
     """This person's tokens, newest first; never the secret or its hash."""
     _person(who)
     rows = c.execute("SELECT " + ",".join(FIELDS) + " FROM human_tokens WHERE human=? "
-                     "ORDER BY created DESC", (H.actor_id(who.actor),)).fetchall()
+                     "ORDER BY created_at DESC", (H.actor_id(who.actor),)).fetchall()
     return [dict(row) for row in rows]
 
 
@@ -58,7 +58,7 @@ def listing_all(c, auth, who):
     if not auth.bot_admin(who):
         raise Problem("forbidden", "Only the owner and the admins see everyone's tokens", 403)
     rows = c.execute("SELECT " + ",".join("t." + f for f in FIELDS) + ",t.human,h.name,h.email FROM human_tokens t "
-                     "LEFT JOIN humans h ON h.id=t.human ORDER BY t.created DESC").fetchall()
+                     "LEFT JOIN humans h ON h.id=t.human ORDER BY t.created_at DESC").fetchall()
     return [dict(row) for row in rows]
 
 
@@ -71,7 +71,7 @@ def create(c, auth, who, body):
     now = H.now()
     expires_at = H.shift(now, days=body.expires_in_days)
     token_id = H.new_id()
-    c.execute("INSERT INTO human_tokens(id,human,label,token_hash,created,created_by,expires_at) "
+    c.execute("INSERT INTO human_tokens(id,human,label,token_hash,created_at,created_by,expires_at) "
               "VALUES(?,?,?,?,?,?,?)",
               (token_id, H.actor_id(who.actor), body.label, digest(token), now, who.actor, expires_at))
     H.event(c, who.actor, "token.create", token_id, {"label": body.label, "expires_at": expires_at})

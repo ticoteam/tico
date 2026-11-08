@@ -28,7 +28,7 @@ Saving another field keeps that link. Choose **None** to remove it, or choose an
 | `owner` | the one accountable: Team (`company` in the API), a human or a bot |
 | `source_note` | where the number comes from |
 | `definition_version` | starts at 1 and goes up whenever the definition, unit, direction, cadence or source note changes; a rename or a new owner does not change it |
-| `parent_kpi_id` | the KPI this one moves: the inputs under a North Star. Shown as the KPI tree on the Growth tab |
+| `parent_kpi_id` | the KPI this one moves: the inputs under a North Star. Shown as the KPI tree on Strategy's Goals tab |
 | `growth_role` | `north_star` (one per company; setting a new one clears the old), `input`, `guardrail` or blank |
 | `stage` | `reach`, `acquire`, `activate`, `retain` or `refer`: the Journey view |
 | `loop_name`, `loop_step` | a loop such as `referrals` and its step, for the Loops view. Labels on the KPI; there is no loop table |
@@ -62,6 +62,20 @@ collector to run), *stale* (one period missed) or *missing* (never read, or two 
 zero: a KPI with no fresh data has no value and is gray. Freshness comes from the complete reading used to judge
 its value; a newer partial reading cannot make an older complete value fresh. The assessment's `reading_id` names
 that reading.
+
+## How a goal is set
+
+The owner sets their own goals, measures and targets in their [Assistant](assistant.md) DM. The Assistant asks at most three
+questions, and it posts a read-back of exactly what it will save. Nothing is saved until the owner says yes to that read-back,
+within 30 minutes of it, as their next message. The steps are in [Goals agreed in your DM](strategy-bot.md#goals-agreed-in-your-dm).
+A Strategy Bot suggestion can be agreed the same way, and a "no" to one is kept at once, with the owner's words, and does not come back.
+
+Anyone else's goal, measure or target stays a card: the Assistant proposes it, and whoever may change that goal confirms it
+or turns it down ([Proposals](#proposals)).
+
+A colour, done or dropped, archiving, a KPI reading, the company Vision, strategy drafts and bets, and recoveries are never
+agreed in a DM. Each is a click where it lives: the colour, done, dropped and archive on the [Goals page](#the-goals-page), a
+reading on its KPI, the Vision at the top of the Goals page, drafts and bets on the Strategy page, and a recovery on its card.
 
 ## The colours
 
@@ -299,9 +313,9 @@ edited or logged to.
 
 The goals tree is the main column; the Strategy Bot has the right rail (below the tree on narrow windows): one line on what it does (keeps KPIs current and each goal green, yellow or
 red; humans set the goals), its routines as the server has them (when each runs and when it next does, or paused), and its
-last run with the first line of its result. Nobody chats with the Strategy Bot directly, the owner included: ask your
-[Assistant](assistant.md#helpers-through-the-assistant) to change a goal, and it hands the Strategy Bot the work. A goal
-change stays the owner's to confirm. The tree is drawn again when a change is saved. **Open bot** goes to its page. If it is paused or not set up, the owner gets **Turn on** (`POST
+last run with the first line of its result. Nobody chats with the Strategy Bot directly, the owner included. For a goal change, ask your
+[Assistant](assistant.md#helpers-through-the-assistant): in your own DM it reads the change back and saves it on your yes
+([How a goal is set](#how-a-goal-is-set)). Anyone else's goal change is a card for whoever may change that goal to confirm. The tree is drawn again when a change is saved. **Open bot** goes to its page. If it is paused or not set up, the owner gets **Turn on** (`POST
 /api/v2/goal-manager/turn-on`, the same steps as on update); with no computer or model yet, the panel says so.
 
 One tree, built like the team chart: the team on top, then every human and every bot that is not archived, indented
@@ -360,7 +374,7 @@ hub goal create / update [--bet ID]        hub kpi create "<name>" [--goal ID] [
 hub goal status <id> <colour> "<why>"          [--direction ..] [--cadence ..] [--owner ..] [target flags]
 hub goal status <id> auto                         hub kpi update <id> [fields]
 hub goal refresh                           hub kpi link <goal> <kpi> [target flags]  |  hub kpi unlink <goal> <kpi>
-hub kpi update <id> --parent P --role R --stage S --loop NAME:STEP   growth fields; see Growth
+hub kpi update <id> --parent P --role R --stage S --loop NAME:STEP   sets the KPI view fields: tree, loops and journey
 hub goal checkin <id> "<words>"            hub kpi log <kpi> <value> ["<note>"] [--period-end D] [--evidence ..]
 hub goal checkin-list <id>                         [--quality ..] [--supersedes READING]
 hub goal needs-you                         hub kpi show <kpi> [--effective]

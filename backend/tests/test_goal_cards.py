@@ -287,10 +287,10 @@ def test_a_hidden_bots_measure_suggested_for_her_goal_stays_hidden_however_it_is
     sync(api)
     for path in ("goals", "goals?all=true", "goals/tree", f"goals/{hers['id']}", "goals/needs-you"):
         assert leaks(get(api, path, "cara-test")) == [], path
-    assert [a for a in asks(api) if a.get("owner") == "human:cara" and leaks(a)] == []
+    assert [a for a in asks(api) if a.get("owner_id") == "human:cara" and leaks(a)] == []
     # A link made before links were checked shows no line of the KPI to her either.
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO goal_kpis (id, goal_id, kpi_id, kind, created, created_by, updated, updated_by) "
+        c.execute("INSERT INTO goal_kpis (id, goal_id, kpi_id, kind, created_at, created_by_id, updated_at, updated_by_id) "
                   "VALUES ('old-link', ?, ?, 'none', ?, 'human:ana', ?, 'human:ana')",
                   (hers["id"], secret["id"], today, today))
     [mine] = [g for g in get(api, "goals/tree", "cara-test")["goals"] if g["id"] == hers["id"]]
@@ -303,7 +303,7 @@ def test_a_bots_measure_goes_on_its_own_goal_and_not_with_a_goal_handed_to_a_per
     hidden, secret = inbox_measure(api)                     # made on the inbox bot's goal: allowed
     assert "NDAs waiting" in links(api, hidden["id"])
     post(api, f"goals/{hidden['id']}", {"owner": "cara"}, expected=403)
-    assert get(api, f"goals/{hidden['id']}")["goal"]["owner"] == "bot:inbox"
+    assert get(api, f"goals/{hidden['id']}")["goal"]["owner_id"] == "bot:inbox"
 
 
 def test_a_target_suggestion_does_not_link_a_hidden_bots_measure_to_her_goal(api):
@@ -320,7 +320,7 @@ def old_link(api, goal_id, kpi_id, **target):
     import datetime
     now = datetime.datetime.now(datetime.timezone.utc).isoformat()
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO goal_kpis (id, goal_id, kpi_id, kind, max, created, created_by, updated, updated_by) "
+        c.execute("INSERT INTO goal_kpis (id, goal_id, kpi_id, kind, max, created_at, created_by_id, updated_at, updated_by_id) "
                   "VALUES (?, ?, ?, 'maintain', ?, ?, 'human:ana', ?, 'human:ana')",
                   ("old-" + goal_id, goal_id, kpi_id, target.get("max"), now, now))
 

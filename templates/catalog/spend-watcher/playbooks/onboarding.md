@@ -45,7 +45,7 @@ unknown owner is written as "no owner on record". Never write a card or account 
 
 Follow `playbooks/weekly-spend-report.md` on the exports, in the shape of
 `knowledge/examples/spend-report.md`, labelled "First draft, not yet reviewed". Attach it to the task.
-Nothing is cancelled, paid or sent.
+Nothing is canceled, paid or sent.
 
 ## 6. Check the routine
 

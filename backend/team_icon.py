@@ -54,7 +54,7 @@ def install_team_icon(app, store):
     @app.get("/api/v2/team/icon")
     def get_icon(request: Request):
         with store.read() as c:
-            row = c.execute("SELECT value_json FROM registry_metadata WHERE key=?", (KEY,)).fetchone()
+            row = c.execute("SELECT value FROM registry_metadata WHERE key=?", (KEY,)).fetchone()
         if not row:
             raise Problem("not_found", "No team icon is set", 404)
         icon = json.loads(row[0])
@@ -85,7 +85,7 @@ def install_team_icon(app, store):
             c.execute("DELETE FROM blob_locations WHERE digest=?", (old,))
 
         def save(c):
-            previous = c.execute("SELECT value_json FROM registry_metadata WHERE key=?", (KEY,)).fetchone()
+            previous = c.execute("SELECT value FROM registry_metadata WHERE key=?", (KEY,)).fetchone()
             icon = json.loads(previous[0]) if previous else None
             if icon:
                 # Refuse another replacement if the previous cleanup is still failing. At most
@@ -93,15 +93,15 @@ def install_team_icon(app, store):
                 cleanup(c, icon)
             storage.put(data, "image/png")
             if icon:
-                c.execute("UPDATE blobs SET digest=?,size=?,created=? WHERE id=?",
+                c.execute("UPDATE blobs SET digest=?,size=?,created_at=? WHERE id=?",
                           (digest, len(data), H.now(), icon["id"]))
             else:
                 icon = blobs.register(c, who, digest, len(data), "team-icon.png", "image/png")
             value = {"id": icon["id"], "digest": digest}
             if previous and icon["digest"] != digest:
                 value["retired_digest"] = icon["digest"]
-            c.execute("INSERT INTO registry_metadata(key,value_json) VALUES(?,?) "
-                      "ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json", (KEY, encode(value)))
+            c.execute("INSERT INTO registry_metadata(key,value) VALUES(?,?) "
+                      "ON CONFLICT(key) DO UPDATE SET value=excluded.value", (KEY, encode(value)))
             return {"url": "/api/v2/team/icon", "content_type": "image/png"}
 
         def write():
@@ -109,11 +109,11 @@ def install_team_icon(app, store):
             # Cleanup follows the committed replacement. Retries also finish a pending cleanup
             # when the idempotency response is replayed, without storing another logo.
             with store.transaction() as c:
-                row = c.execute("SELECT value_json FROM registry_metadata WHERE key=?", (KEY,)).fetchone()
+                row = c.execute("SELECT value FROM registry_metadata WHERE key=?", (KEY,)).fetchone()
                 icon = json.loads(row[0])
                 cleanup(c, icon)
                 if icon.pop("retired_digest", None):
-                    c.execute("UPDATE registry_metadata SET value_json=? WHERE key=?", (encode(icon), KEY))
+                    c.execute("UPDATE registry_metadata SET value=? WHERE key=?", (encode(icon), KEY))
             return result
 
         return await asyncio.to_thread(write)

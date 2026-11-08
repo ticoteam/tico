@@ -45,8 +45,8 @@ def test_botops_restarts_a_computer_and_starts_a_model_sign_in_without_a_card(ap
     assert act(api, ana, "POST", f"runners/{botops['runner_id']}/logins/{started.json()['id']}/code", {"code": "abcdef"}).status_code == 409
     with api.app.state.store.read() as c:
         assert c.execute("SELECT count(*) FROM assistant_actions").fetchone()[0] == 0
-        row = c.execute("SELECT actor,detail_json FROM events WHERE action='runner.restart'").fetchone()
-        assert row["actor"] == "human:ana" and '"via": "botops"' in row["detail_json"]
+        row = c.execute("SELECT actor,detail FROM events WHERE action='runner.restart'").fetchone()
+        assert row["actor"] == "human:ana" and '"via": "botops"' in row["detail"]
 
 
 def test_botops_keeps_a_computer_for_inbox_bots_as_the_person_who_asked(api, botops):

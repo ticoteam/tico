@@ -37,7 +37,7 @@ window.mountDirectorySync = async function (host, onChange) {
       <div data-ds-scim class="ds-stack" hidden>
         <div class="ds-row">Base URL <code>${text(view.scim.url)}</code></div>
         <div class="ds-row"><button class="ghost" type="button" data-ds-token>${view.scim.enabled ? 'Replace token' : 'Create token'}</button>
-          <span class="muted">${view.scim.enabled ? `Token created ${text(new Date(view.scim.created).toLocaleDateString())}` : ''}</span></div>
+          <span class="muted">${view.scim.enabled ? `Token created ${text(new Date(view.scim.created_at).toLocaleDateString())}` : ''}</span></div>
         <p data-ds-token-out></p>
       </div>
       <div class="ds-row" data-ds-status-row><span class="muted" data-ds-last>${last}</span>

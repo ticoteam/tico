@@ -47,7 +47,11 @@ def clean(c, actor, raw):
         else:
             if not who.startswith(("bot:", "human:")):
                 who = "bot:" + who
-            known = H.bot(c, H.actor_id(who)) if who.startswith("bot:") else H.human(c, H.actor_id(who))
+            if who.startswith("bot:"):
+                known = H.resolve_bot(c, H.actor_id(who))
+                who = "bot:" + known["id"] if known else who
+            else:
+                known = H.human(c, H.actor_id(who))
             if not known:
                 H.refuse(c, actor, "not-found", f"{who} is nobody a step's backlog can notify")
         if who not in out:
@@ -65,8 +69,9 @@ def _targets(c, rule, row, owner):
     for who in rule["notify"]:
         if who == "manager":
             # A manager that works from its exceptions list reads the backlog there, not as a notice.
-            slug = H.type_manager(c, row)
-            who = H.bot_actor(slug) if slug and not reads_list(c, slug) else ""
+            # task_types.manager holds the manager's slug (roadmap_flow.LEGACY_MANAGERS); its actor is the bot's id.
+            found = H.resolve_bot(c, H.type_manager(c, row)) or {}
+            who = H.bot_actor(found["id"]) if found and not reads_list(c, found["id"]) else ""
         elif who == "owner":
             who = owner if per_owner(rule) else ""
         elif who == "owner_manager":
@@ -81,7 +86,7 @@ def per_owner(rule):
 
 
 def _recent(c, key, at, hours):
-    return bool(c.execute("SELECT 1 FROM events WHERE action=? AND json_extract(detail_json,'$.key')=? AND ts>? LIMIT 1",
+    return bool(c.execute("SELECT 1 FROM events WHERE action=? AND json_extract(detail,'$.key')=? AND created_at>? LIMIT 1",
                           (EVENT, key, H.shift(at, seconds=-hours * 3600))).fetchone())
 
 
@@ -93,17 +98,17 @@ def sweep(c, at=None):
     at = at or H.now()
     hidden = {H.bot_actor(slug) for slug in updates.restricted_bots(c)}
     sent = []
-    for step in H._rows(c.execute("SELECT * FROM task_steps WHERE flow_json LIKE '%\"backlog\"%'")):
+    for step in H._rows(c.execute("SELECT * FROM task_steps WHERE flow LIKE '%\"backlog\"%'")):
         rule = step_flow.of(step).get("backlog")
         if not rule:
             continue
         rows = H._rows(c.execute(
             f"SELECT * FROM tasks WHERE step_id=? AND status NOT IN ({','.join('?' * len(FINISHED))}) "
-            "ORDER BY created, id", (step["id"], *FINISHED)))
-        rows = [row for row in rows if not H.task_private(c, row) and not {row["owner"], row["requester"]} & hidden]
+            "ORDER BY created_at, id", (step["id"], *FINISHED)))
+        rows = [row for row in rows if not H.task_private(c, row) and not {row["owner_id"], row["requester_id"]} & hidden]
         groups = {}
         for row in rows:
-            groups.setdefault(row["owner"] if per_owner(rule) else None, []).append(row)
+            groups.setdefault(row["owner_id"] if per_owner(rule) else None, []).append(row)
         for owner, waiting in groups.items():
             if len(waiting) <= rule["over"]:
                 continue
@@ -114,11 +119,11 @@ def sweep(c, at=None):
             told = []
             by_owner = {}
             for row in waiting:
-                by_owner[H.actor_id(row["owner"] or "") or "nobody"] = by_owner.get(
-                    H.actor_id(row["owner"] or "") or "nobody", 0) + 1
+                by_owner[H.actor_id(row["owner_id"] or "") or "nobody"] = by_owner.get(
+                    H.actor_id(row["owner_id"] or "") or "nobody", 0) + 1
             spread = ", ".join(f"{who} {n}" for who, n in sorted(by_owner.items(), key=lambda x: -x[1])[:6])
             text = (f"Backlog: {len(waiting)} tickets wait at {step['name']}"
-                    + (f" for {H.actor_id(owner)}" if owner else "") + f" (over {rule['over']}; {spread}). "
+                    + (f" for {H.actor_name(c, owner)}" if owner else "") + f" (over {rule['over']}; {spread}). "
                     "Spread them to other owners, reprioritise or close some, or raise the step's backlog limit.")
             for who in _targets(c, rule, first, owner or ""):
                 if H._wake(c, first, who, text, {"wake": "blocker", "step_backlog": True}, trigger="stall_check"):

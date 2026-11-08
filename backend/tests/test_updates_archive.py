@@ -16,10 +16,15 @@ def day_offset(offset):
     return (date.fromisoformat(updates.today()) + timedelta(days=offset)).isoformat()
 
 
+def bot_id(c, slug):
+    """A bot's id by its slug: updates are written under the bot's id."""
+    return H.resolve_bot(c, slug)["id"]
+
+
 def allow_redo(api, bot, kind, day):
     with api.app.state.store.transaction() as c:
         c.execute("INSERT INTO update_queue(id,bot,kind,day,rank,state,redo) VALUES(?,?,?,?,0,'queued',1)",
-                  (H.new_id(), bot, kind, day))
+                  (H.new_id(), bot_id(c, bot), kind, day))
 
 
 def publish(api, bot_token, kind, day, key, *, body="- Finished the work", slides=None):
@@ -99,7 +104,7 @@ def test_logical_days_restore_and_archive_are_personal_and_kind_scoped(api):
 
     # Other bots keep independent daily histories.
     with api.app.state.store.transaction() as c:
-        other_bot = updates.post(c, "cpo", "- CPO's daily update", kind="daily", day=current_day)
+        other_bot = updates.post(c, bot_id(c, "cpo"), "- CPO's daily update", kind="daily", day=current_day)
     assert ids(get(api, "updates?bot=cpo&kind=daily")) == [other_bot["id"]]
 
     # A failed publication has no supersession side effects: the already restored older item stays
@@ -121,11 +126,12 @@ def test_the_tree_leaves_out_what_this_reader_archived_and_keeps_the_reports_bel
     bot(api, "boss", "Manager", reports_to="human:ana")
     bot(api, "analyst", "Analyst", reports_to="boss")
     with api.app.state.store.transaction() as c:
-        mine = updates.post(c, "boss", "- Planned the launch", day="2026-09-29")
-        updates.post(c, "analyst", "- Sized the market", day="2026-09-29")
+        boss_id = bot_id(c, "boss")
+        mine = updates.post(c, boss_id, "- Planned the launch", day="2026-09-29")
+        updates.post(c, bot_id(c, "analyst"), "- Sized the market", day="2026-09-29")
     find = lambda nodes, key: next((n for n in nodes if n["key"] == key), None) or next(
         (hit for n in nodes if (hit := find(n["children"], key))), None)
-    boss = lambda token="ana-test": find(get(api, "updates/tree?scope=all", token=token)["roots"], "b:boss")
+    boss = lambda token="ana-test": find(get(api, "updates/tree?scope=all", token=token)["roots"], "b:" + boss_id)
 
     post(api, "updates/archive", {"ids": [mine["id"]], "archived": True}, key="tree-archive")
     archived = boss()
@@ -144,7 +150,8 @@ def test_archive_batches_are_human_only_permission_checked_and_atomic(api):
     _, _, attempt = setup_attempt(api, "ops")
     ops_update = publish(api, attempt["token"], "daily", updates.today(), "ops-visible").json()["update"]
     with api.app.state.store.transaction() as c:
-        private_update = updates.post(c, "inbox", "- Ana's private update", kind="daily", day=updates.today())
+        private_update = updates.post(c, bot_id(c, "inbox"), "- Ana's private update", kind="daily",
+                                      day=updates.today())
         restrict(c, "inbox", people=["ana"])
 
     # Ben can read ops but cannot see Ana's inbox-manager update. A mixed request must reject
@@ -186,7 +193,7 @@ def test_archive_schema_is_created_for_fresh_and_existing_databases():
     # The prior schema has update content/read state but no slides or archive tables.
     c.executescript("""
       CREATE TABLE updates(id TEXT PRIMARY KEY, bot TEXT NOT NULL, kind TEXT NOT NULL, day TEXT NOT NULL,
-        headline TEXT NOT NULL, body TEXT NOT NULL DEFAULT '', created TEXT NOT NULL, updated TEXT NOT NULL,
+        headline TEXT NOT NULL, body TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
         UNIQUE(bot,kind,day));
       CREATE TABLE update_reads(update_id TEXT NOT NULL, actor TEXT NOT NULL, read_at TEXT NOT NULL,
         PRIMARY KEY(update_id,actor));
@@ -201,7 +208,7 @@ def test_archive_schema_is_created_for_fresh_and_existing_databases():
     c.executescript(updates.SCHEMA)
     updates.ensure_schema(c)
     assert c.execute("SELECT id,body FROM updates").fetchone()[:] == ("existing", "- Old content")
-    assert {r["name"] for r in c.execute("PRAGMA table_info(updates)")} >= {"slides_json"}
+    assert {r["name"] for r in c.execute("PRAGMA table_info(updates)")} >= {"slides"}
     assert {r["name"] for r in c.execute("PRAGMA table_info(update_queue)")} >= {"tries", "redo"}
     assert c.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='update_archive_overrides'").fetchone()
     c.close()
@@ -218,7 +225,7 @@ def test_archive_and_explicit_history_filters_are_in_the_stable_contract(api):
     result_schema = operation["responses"]["200"]["content"]["application/json"]["schema"]
     assert result_schema["$ref"].endswith("/UpdateArchiveResult")
     with api.app.state.store.transaction() as c:
-        item = updates.post(c, "ops", "- Retain this history", kind="daily")
+        item = updates.post(c, bot_id(c, "ops"), "- Retain this history", kind="daily")
     response = api.post("/api/v2/updates/archive", json={"ids": [item["id"]], "archived": True}, headers=headers())
     assert response.status_code == 200, response.text
     assert set(response.json()) == {"updated", "archived", "unread"}

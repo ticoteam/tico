@@ -50,7 +50,7 @@ def setup_snapshot(c, who, settings, auth, github, asked_from="health"):
     lines.append("- First bot ready: " + yes("first_output"))
     if "next_bot" not in items:              # what this person's Getting started shows: no bot rows for everyone
         return {"message": "\n".join(lines), "kind": "setup"}
-    parked = c.execute("SELECT count(*) FROM bot_config bc JOIN bots b ON b.slug=bc.bot WHERE bc.onboarding_state IN "
+    parked = c.execute("SELECT count(*) FROM bot_config bc JOIN bots b ON b.id=bc.bot WHERE bc.onboarding_state IN "
                        + PARKED_SQL + " AND b.state!='archived'").fetchone()[0]
     lines.append("- Bots in Needs setup: %d" % parked)
     return {"message": "\n".join(lines), "kind": "setup"}
@@ -66,7 +66,7 @@ def _asked(who):
 
 
 def _load(c, who):
-    row = c.execute("SELECT value_json FROM preferences WHERE actor=? AND key=?", (who.actor, PREFERENCE)).fetchone()
+    row = c.execute("SELECT value FROM preferences WHERE actor=? AND key=?", (who.actor, PREFERENCE)).fetchone()
     try:
         value = json.loads(row[0]) if row else {}
     except ValueError:
@@ -77,7 +77,7 @@ def _load(c, who):
 def _joined(c, actor):
     path = next((r[2] for r in c.execute("PRAGMA database_list") if r[1] == "main"), "")
     if (path, actor) not in JOINED:
-        found = c.execute("SELECT min(ts) FROM events WHERE actor=?", (actor,)).fetchone()[0]
+        found = c.execute("SELECT min(created_at) FROM events WHERE actor=?", (actor,)).fetchone()[0]
         if not found:
             return None
         if len(JOINED) >= 10000:
@@ -128,8 +128,8 @@ def answer_feedback(store, support, who, body):
     with store.transaction() as c:
         record = _load(c, who)
         record[body.moment] = {"at": H.now(), "answered": ticket is not None}
-        c.execute("INSERT INTO preferences(actor,key,value_json,updated) VALUES(?,?,?,?) "
-                  "ON CONFLICT(actor,key) DO UPDATE SET value_json=excluded.value_json, updated=excluded.updated",
+        c.execute("INSERT INTO preferences(actor,key,value,updated_at) VALUES(?,?,?,?) "
+                  "ON CONFLICT(actor,key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at",
                   (who.actor, PREFERENCE, encode(record), H.now()))
         H.event(c, who.actor, "support.feedback", body.moment, {"answered": ticket is not None})
     return {"moment": body.moment, "answered": ticket is not None, "ticket": ticket}

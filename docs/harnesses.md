@@ -72,7 +72,7 @@ too; Muse's default there keeps the token in the login Keychain, outside the con
 into place and Cancel keeps. A saved login that points at the Keychain (from before this setting) shows as not
 ready, asking for a sign-in from Tico; Tico never reads or changes that Keychain item. Sign out runs `muse logout`;
 Switch account signs in to a temporary config folder and replaces the saved login only after success,
-for the computer's login. Cancelling keeps the old login. The runner retains the same protection for
+for the computer's login. Canceling keeps the old login. The runner retains the same protection for
 legacy named profiles, which Settings no longer lists.
 Version checks and sign-ins also set
 `MUSE_NO_AUTO_UPDATE=1` and `TBH_CREDENTIAL_BACKEND=file` (the manifest's `[env]`).
@@ -461,7 +461,7 @@ another bot's home; all turns use the original login in its own home.
 | `tool_events` | The host emits one `tool` event per tool call, so a run with none provably did nothing | No evidence either way |
 | `mcp_transports` / `mcp_unsupported` | The MCP transports a run takes; the reason shown when it takes none | No MCP servers, "it has no MCP support in Tico" |
 | `resume_after_interrupt` | An interrupted thread can be continued | `true`. No longer read: an interrupted session is always kept and resumed ([sessions](sessions.md#checkpoints-and-resume)) |
-| `steer` | A message sent while a turn runs is written into that turn (Claude Code, Codex and pi; Claude Code also needs a CLI that echoes its input) | The message waits for the next turn; chat says so and offers Stop and redirect |
+| `steer` | A message sent while a turn runs is written into that turn (Claude Code, Codex and pi; Claude Code also needs a CLI that echoes its input) | The message waits for the next turn; DM says so and offers Stop and redirect |
 | `persistent_session` | One process per conversation is kept between turns (pi, Antigravity) | One process per turn |
 | `goal_runs_across_turns` | A native goal keeps the thread going after a turn completes, and a clear is reconciled | A goal ends with its turn |
 | `serial_cold_start` | An expired stored token is refreshed by the first turn; the others wait for it | Turns start together |
@@ -473,6 +473,7 @@ another bot's home; all turns use the original login in its own home.
 | `model_list` | `host`: the host adapter lists the models in readiness; `command`: the CLI lists them (`model_list_args`) | No model list |
 | `readiness` | The runner reports install and sign-in for it | `true`; `false` reports nothing, so checks say unknown |
 | `repo_permission_lint` | Readiness warns about permission rules in the bot's repository | No lint |
+| `packet_only` | A tidy check runs from a supplied packet without Hub MCP or checkout tools; Codex also uses its read-only sandbox | The harness cannot run tidy packets |
 | `repo_commands` | The bot's repository skills and commands are offered as chat commands | Built-in commands only |
 
 Goals, chat commands and controls stay probed: the runner reports them per installed version in its heartbeat.

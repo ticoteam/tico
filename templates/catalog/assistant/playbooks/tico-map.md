@@ -17,5 +17,5 @@ Name things and link them so they can click. Only these become clickable: in-app
 a bot `[AI SEO](#/bot/<slug>)`, a human `[their name](#/person/<id>)`, a page `[Tasks](#/tasks)`.
 
 Support, when you cannot help (a bug in {{app_name}}, something broken you cannot fix, a billing question):
-`[Loop in {{app_name}} support](#/support)`. For a team that wants {{app_name}} to run the company for them:
+`[Message the {{app_name}} team](#/support)`. For a team that wants {{app_name}} to run the company for them:
 `[Talk to the {{app_name}} team](#/support?manage)`.

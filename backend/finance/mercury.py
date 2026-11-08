@@ -58,7 +58,8 @@ class Provider(Protocol):
     def users(self) -> Answer: ...
     def transactions(self, start_after: str | None, limit: int = PAGE) -> Answer: ...
     def transaction(self, txn_id: str) -> Answer: ...
-    def account_transactions(self, account_id: str, search: str, start: str, end: str) -> Answer: ...
+    def account_transactions(self, account_id: str, search: str | None, start: str, end: str,
+                             offset: int = 0, request_id: str | None = None) -> Answer: ...
     def events(self, start_after: str | None, limit: int = PAGE, newest: bool = False) -> Answer: ...
     def statements(self, account_id: str, start: str, end: str) -> Answer: ...
     def credit_statements(self, account_id: str) -> Answer: ...
@@ -73,7 +74,7 @@ class Provider(Protocol):
     def create_transaction(self, account_id: str, body: Mapping[str, object]) -> Answer: ...
     def create_transfer(self, body: Mapping[str, object]) -> Answer: ...
     def send_request(self, request_id: str) -> Answer: ...
-    def send_requests(self, account_id: str, start_after: str | None = None) -> Answer: ...
+    def send_requests(self, account_id: str, start_after: str | None = None, status: str | None = None) -> Answer: ...
 
 
 def base_url() -> str:
@@ -161,11 +162,16 @@ class Mercury:
     def transaction(self, txn_id: str) -> Answer:
         return self._call("GET", f"/transaction/{urllib.parse.quote(txn_id)}")
 
-    def account_transactions(self, account_id: str, search: str, start: str, end: str) -> Answer:
-        """One account's transactions that `search` finds (its note, description or counterparty), created from `start`
-        through `end` (YYYY-MM-DD): one page, which an unknown transfer's lookup reads before every transaction."""
+    def account_transactions(self, account_id: str, search: str | None, start: str, end: str,
+                             offset: int = 0, request_id: str | None = None) -> Answer:
+        """One account's transactions created from `start` through `end` (YYYY-MM-DD), a page of up to PAGE from
+        `offset`. Mercury pages this list by offset and its answer carries `total` (every match): a read goes on until
+        offset reaches it (sync.py). `search` finds a transaction by its note, description, recipient memo or
+        counterparty name; `request_id` finds the transaction a send-money request became. The list has no start_after,
+        cursor or nextPage (docs.mercury.com listaccounttransactions)."""
         return self._call("GET", f"/account/{urllib.parse.quote(account_id)}/transactions",
-                          {"search": search, "start": start, "end": end, "limit": PAGE})
+                          {"search": search, "start": start, "end": end, "limit": PAGE, "offset": offset,
+                           "requestId": request_id})
 
     def events(self, start_after: str | None, limit: int = PAGE, newest: bool = False) -> Answer:
         return self._call("GET", "/events", {"limit": limit, "order": "desc" if newest else "asc",
@@ -189,8 +195,10 @@ class Mercury:
     def send_request(self, request_id: str) -> Answer:
         return self._call("GET", f"/request-send-money/{urllib.parse.quote(request_id)}")
 
-    def send_requests(self, account_id: str, start_after: str | None = None) -> Answer:
-        return self._call("GET", "/request-send-money", {"accountId": account_id, "limit": PAGE,
+    def send_requests(self, account_id: str, start_after: str | None = None, status: str | None = None) -> Answer:
+        """One page of the account's send-money requests, filtered to one documented status when `status` is given
+        (pendingApproval, approved, rejected or cancelled; the list does not show a sent status)."""
+        return self._call("GET", "/request-send-money", {"accountId": account_id, "limit": PAGE, "status": status,
                                                          "start_after": start_after})
 
     # writes

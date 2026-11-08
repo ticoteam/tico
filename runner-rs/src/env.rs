@@ -24,7 +24,7 @@ pub const SETTINGS: &[&str] = &[
 ];
 pub const RUNNER_HUB_ENV: &[&str] = &[
     "HUB_TOKEN", "HUB_API_URL", "HUB_WORKSPACE", "HUB_EMPLOYEE", "HUB_OPERATION_ID", "HUB_BOT", "HUB_DIR", "HUB_DB",
-    "HUB_HUMAN_OVERRIDE", "HUB_INGEST_TOKEN", "HUB_RUNNER_CONFIG", "HUB_TASK_ID",
+    "HUB_HUMAN_OVERRIDE", "HUB_INGEST_TOKEN", "HUB_RUNNER_CONFIG", "HUB_TASK_ID", "HUB_BOT_FOLDER",
 ];
 pub const RESERVED_ENV: &[&str] = &["HOME", "PATH", "SHELL", "PYTHONPATH", "PYTHONHOME", "NODE_OPTIONS", "LD_PRELOAD", "DYLD_INSERT_LIBRARIES", "CODEX_HOME", "CLAUDE_CONFIG_DIR"];
 pub const RESERVED_PREFIXES: &[&str] = &["TICO_", "DYLD_", "LD_"];
@@ -305,6 +305,12 @@ pub async fn environment_with(ctx: &EnvContext<'_>, attempt: &Value, vault: &mut
     ] {
         env.insert(k.to_string(), v);
     }
+    // The bot's own checkout folder, as recorded (crate::sessions::named_folder): a bot made with a UUID id is not in
+    // bot-<HUB_BOT>, and a rename keeps its folder, so the connectors that read its manifest find it by this.
+    match crate::sessions::named_folder(&attempt["config"]) {
+        Some(folder) => env.insert("HUB_BOT_FOLDER".into(), folder),
+        None => env.remove("HUB_BOT_FOLDER"),
+    };
     // Headed browsers and computer use draw on the computer's screen, where people can watch (crate::screen).
     if let Some(display) = crate::screen::display() {
         env.insert("DISPLAY".into(), display.into());

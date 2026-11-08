@@ -4,6 +4,7 @@ import base64
 import hashlib
 import hmac
 import json
+import logging
 import urllib.parse
 import uuid
 
@@ -82,18 +83,32 @@ def test_quickbooks_shapes_map_to_mirror_records_with_exact_money():
 
 
 class Wire:
-    """A fake QuickBooks transport: replies in order, and every request it was sent."""
+    """A fake QuickBooks transport: replies in order, and every request it was sent. The company's Preferences are
+    answered here (a company that tracks a class on each line, unless `prefs` says otherwise), not from the replies, and
+    are not counted as sent."""
 
-    def __init__(self, *replies: QC.Reply) -> None:
+    def __init__(self, *replies: QC.Reply, prefs: QC.Reply | None = None) -> None:
         self.replies, self.sent = list(replies), []
+        self.prefs = prefs or QC.Reply(200, {"Preferences": {"AccountingInfoPrefs": {"ClassTrackingPerTxnLine": True}}})
 
     def __call__(self, method: str, url: str, headers: object, data: bytes | None) -> QC.Reply:
+        if method == "GET" and "/preferences?" in url:
+            return self.prefs
         self.sent.append((method, url, dict(headers), data))  # type: ignore[call-overload]
         return self.replies.pop(0)
 
 
 def _client(wire: Wire, tokens=lambda force: "tok") -> QC.QuickBooks:
     return QC.QuickBooks("123", tokens, base="http://127.0.0.1:9", transport=wire, sleep=lambda s: None)
+
+
+def test_a_write_that_cannot_tell_whether_classes_are_tracked_is_not_sent_and_is_not_final():
+    wire = Wire(prefs=QC.Reply(0))
+    body = {"party": "Vendor:9", "number": "B-1", "day": "2026-10-05", "due": "", "memo": "",
+            "lines": [{"account": "Account:2", "amount": 1500, "description": "seats", "class": "30"}]}
+    made = _client(wire).send("bill.create", body, "bill-no-prefs")
+    assert made.ok is False and made.final is False, made
+    assert wire.sent == []
 
 
 def test_a_401_takes_one_new_token_from_hq_and_the_call_is_tried_again():
@@ -230,7 +245,7 @@ def test_disconnect_drops_the_vault_rows_only_after_hq_confirms(books, monkeypat
                                    claim_id="clm_3", name="Acme books", by=OWNER, now=AT)
     with books.read() as c:
         before = dict(SX.books_settings(c, cid))
-    books_link.disconnect_books(books, vault, _link(), cid, "quickbooks", now=AT)
+    books_link.drop(books, vault, _link(), cid, by=OWNER)
     assert hq.calls[1]["path"] == "oauth/quickbooks/disconnect"
     with books.read() as c:
         assert not T.credential_exists(c, str(before["access"]))
@@ -332,6 +347,63 @@ def test_relayed_quickbooks_events_are_kept_for_the_realm_the_connection_holds(b
         assert books_sync.delivery(c, "intuit", _envelope(
             external_id="evt-legacy", payload={"eventNotifications": [{"realmId": "123"}]})) == "kept"
         assert books_sync.delivery(c, "intuit", _envelope(external_id="evt-junk", payload={"events": []})) == "refused"
+
+
+CLOUD = {"specversion": "1.0", "id": "e-1", "source": "//intuit.com/qbo", "type": "qbo.bill.created.v1",
+         "time": "2026-10-15T12:30:00Z", "intuitentityid": "9", "intuitaccountid": "123", "data": {}}
+LEGACY = {"eventNotifications": [{"realmId": "123", "dataChangeEvent": {"entities": []}}]}
+
+
+def _realm_123(books) -> None:
+    _books_connection(books)
+    with books.transaction() as c:
+        SX.set_books_settings(c, "conn-qb", {"realm_id": "123"})
+
+
+def test_a_relayed_quickbooks_event_in_any_known_shape_is_kept_and_wakes_the_worker_once_each(books, monkeypatch):
+    _realm_123(books)
+    rung: list[int] = []
+    monkeypatch.setattr(books_sync, "ring", lambda: rung.append(1))
+    for name, payload in (("legacy", LEGACY), ("cloudevent", CLOUD), ("batch", [CLOUD, {**CLOUD, "id": "e-2"}])):
+        with books.transaction() as c:
+            assert books_sync.delivery(c, "intuit", _envelope(external_id=f"evt-{name}", payload=payload)) == "kept"
+    assert len(rung) == 3
+
+
+def test_a_relayed_quickbooks_event_naming_another_realm_is_refused_in_either_shape(books, monkeypatch):
+    _realm_123(books)
+    rung: list[int] = []
+    monkeypatch.setattr(books_sync, "ring", lambda: rung.append(1))
+    other = {**CLOUD, "intuitaccountid": "999"}
+    with books.transaction() as c:
+        assert books_sync.delivery(c, "intuit", _envelope(external_id="evt-o1", payload=other)) == "refused"
+        assert books_sync.delivery(c, "intuit", _envelope(external_id="evt-o2", payload=[CLOUD, other])) == "refused"
+        assert books_sync.delivery(c, "intuit", _envelope(external_id="evt-o3", payload=LEGACY)) == "kept"   # its own realm
+    assert rung == [1]
+
+
+@pytest.mark.parametrize("payload", [{"events": []}, [], [{"id": "no-specversion"}], "text", {"eventNotifications": "x"},
+                                     {"specversion": 1}, {"unrelated": {"specversion": "1.0"}}])
+def test_a_relayed_quickbooks_payload_in_no_known_shape_is_refused_logged_and_wakes_nothing(books, monkeypatch, caplog,
+                                                                                            payload):
+    _realm_123(books)
+    rung: list[int] = []
+    monkeypatch.setattr(books_sync, "ring", lambda: rung.append(1))
+    with caplog.at_level(logging.WARNING, logger="backend.finance.books_sync"):
+        with books.transaction() as c:
+            assert books_sync.delivery(c, "intuit", _envelope(external_id="evt-x", payload=payload)) == "refused"
+    assert rung == []
+    with books.read() as c:
+        assert c.execute("SELECT COUNT(*) FROM fin_inbox").fetchone()[0] == 0
+    assert any("in no shape this reads" in record.getMessage() for record in caplog.records)
+
+
+@pytest.mark.parametrize("payload", [LEGACY, CLOUD, [CLOUD]])
+def test_the_intuit_signature_of_either_shape_is_checked_over_the_raw_body(payload):
+    body = json.dumps(payload).encode()
+    assert P.verify("intuit", {"intuit-signature": _sign("verifier", body)}, body, "verifier", 0) == (True, "")
+    assert P.verify("intuit", {"intuit-signature": _sign("other", body)}, body, "verifier", 0)[0] is False
+    assert P.verify("intuit", {"intuit-signature": _sign("verifier", body)}, body + b" ", "verifier", 0)[0] is False
 
 
 def test_documents_and_settlements_map_to_mirror_records_with_their_accounts_and_links():
@@ -647,3 +719,41 @@ def test_a_quickbooks_payroll_liability_that_wages_pass_through_is_marked_payrol
     assert Q.account_record({**base, "AccountSubType": "PayrollClearing"}).payroll is True
     assert Q.account_record({**base, "AccountSubType": "PayrollTaxPayable"}).payroll is True
     assert Q.account_record({**base, "AccountSubType": "OtherCurrentLiabilities"}).payroll is False
+
+
+def test_a_lookup_by_name_reads_inactive_records_too_so_a_retry_does_not_make_a_second_account():
+    wire = Wire(QC.Reply(200, {"QueryResponse": {}}))
+    assert _client(wire).find("account.create", {"name": "Checking"}, "account:checking") is None
+    assert "Active IN (true,false)" in urllib.parse.unquote_plus(wire.sent[0][1])
+
+
+def test_a_bad_debt_item_that_is_inactive_is_found_and_not_made_a_second_time():
+    wire = Wire(QC.Reply(200, {"QueryResponse": {}}), QC.Reply(200, {"Item": {"Id": "99", "SyncToken": "0"}}))
+    assert _client(wire)._write_off_item("Account:12", "creditmemo:key") == "99"
+    assert "Active IN (true,false)" in urllib.parse.unquote_plus(wire.sent[0][1])
+
+
+def test_a_change_feed_read_from_scratch_starts_inside_quickbooks_thirty_days_not_on_its_edge():
+    assert M.cdc_since(None, "2026-10-30T12:00:00Z") == "2026-10-01T12:00:00Z"
+
+
+def test_every_quickbooks_call_names_minor_version_75_the_current_one():
+    wire = Wire(QC.Reply(200, {"QueryResponse": {}}))
+    _client(wire).find("account.create", {"name": "Checking"}, "account:checking")
+    assert urllib.parse.parse_qs(urllib.parse.urlsplit(wire.sent[0][1]).query)["minorversion"] == ["75"]
+
+
+def test_a_429_with_no_retry_after_waits_the_sixty_seconds_quickbooks_asks_before_it_is_tried_again():
+    waits: list[float] = []
+    wire = Wire(QC.Reply(429), QC.Reply(200, {"QueryResponse": {}}))
+    client = QC.QuickBooks("123", lambda force: "tok", base="http://127.0.0.1:9", transport=wire, sleep=waits.append)
+    client.find("account.create", {"name": "Checking"}, "account:checking")
+    assert waits == [60.0] and len(wire.sent) == 2
+
+
+def test_a_429_with_retry_after_waits_that_long_and_no_more_than_the_cap():
+    waits: list[float] = []
+    wire = Wire(QC.Reply(429, retry_after=7.0), QC.Reply(429, retry_after=500.0), QC.Reply(200, {"QueryResponse": {}}))
+    client = QC.QuickBooks("123", lambda force: "tok", base="http://127.0.0.1:9", transport=wire, sleep=waits.append)
+    client.find("account.create", {"name": "Checking"}, "account:checking")
+    assert waits == [7.0, QC.MAX_WAIT]

@@ -24,6 +24,13 @@ cloud machine" under Computer).
 - Its computer is "Shared cloud machine", owned by the company owner and open to member bots: a bot that joins is
   assigned to it, one that leaves (to its own machine or a computer) is unassigned, and the machine keeps running.
   When the last bot leaves it idles to a stop like any other.
+- A new cloud machine gets the company's plan when an admin moves a bot onto it. Before this, the bot waited on "login required" until someone
+  signed in to the machine by hand. The machine takes a plan only when all of these hold: the machine is that bot's own cloud
+  machine; the admin's choice put the bot there, either by moving it or by the machine's first enrollment for a bot an admin placed; no other bot on that machine already runs the same tool; and the machine has no plan or sign-in of its own for
+  that tool, with no run in progress. The machine skips plans that need reconnecting, plans at their limit, and API keys. It
+  prefers the plan on the shared machine, then one on another cloud machine, then the plan with the lowest known usage.
+  Nothing is stopped or reset. A member's moves, and any other assignment, never give a plan. When no plan fits, nothing
+  changes and the bot keeps its current message and its Gateway path.
 - Bots on one machine share its disk and `sudo`: they are one trust group, like bots sharing a computer today. Put a
   bot that must not see the others' files on its own machine.
 - Tico models run on a cloud machine even though its bots don't run as their own user: the runner keeps the company's

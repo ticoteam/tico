@@ -46,7 +46,7 @@ def explanation(c, slug, who, auth):
             f"resumes by itself {resumes}; a person who manages it can clear it sooner.")
     if manages:
         row = H._one(c, H.QUARANTINE_DETAIL_SQL, (H.bot_actor(slug),))
-        detail = (H._json(row["detail_json"], {}) or {}) if row else {}
+        detail = (H._json(row["detail"], {}) or {}) if row else {}
         refused = detail.get("refusal") or {}
         if refused.get("rule") and refused.get("detail"):
             text += f" Refused write ({H.escape_preview(refused['rule'])}): {H.escape_preview(refused['detail'])}"

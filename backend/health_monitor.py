@@ -44,11 +44,11 @@ RULE = "health_monitor_reports"
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS health_findings(
  key TEXT PRIMARY KEY, signature TEXT NOT NULL, check_id TEXT NOT NULL, kind TEXT NOT NULL, title TEXT NOT NULL,
- detail TEXT NOT NULL DEFAULT '', fix TEXT NOT NULL DEFAULT '', first_seen TEXT NOT NULL, last_seen TEXT NOT NULL,
- present INTEGER NOT NULL DEFAULT 1, occurrences INTEGER NOT NULL DEFAULT 1, last_woke TEXT NOT NULL DEFAULT '',
+ detail TEXT NOT NULL DEFAULT '', fix TEXT NOT NULL DEFAULT '', first_seen_at TEXT NOT NULL, last_seen_at TEXT NOT NULL,
+ present INTEGER NOT NULL DEFAULT 1, occurrences INTEGER NOT NULL DEFAULT 1, last_woke_at TEXT NOT NULL DEFAULT '',
  severity TEXT NOT NULL DEFAULT 'warn');
 CREATE TABLE IF NOT EXISTS health_reports(
- signature TEXT PRIMARY KEY, ticket_id TEXT, approval_id TEXT, created TEXT NOT NULL, reported_occurrences INTEGER NOT NULL DEFAULT 1);
+ signature TEXT PRIMARY KEY, ticket_id TEXT, approval_id TEXT, created_at TEXT NOT NULL, reported_occurrences INTEGER NOT NULL DEFAULT 1);
 """
 SETUP, BUG = "setup", "tico-bug"
 # A finding's severity, lowest first. `bad` where the Health page says bad for the same thing; a rise wakes the bot.
@@ -148,9 +148,9 @@ def record_local(c, body):
                     "checks in a row on a computer running Tico.",
                     BUG_FIX["local_busy"], subject=public_process(body.process))
     now = H.now()
-    c.execute("INSERT INTO health_findings(key,signature,check_id,kind,title,detail,fix,first_seen,last_seen,present,"
+    c.execute("INSERT INTO health_findings(key,signature,check_id,kind,title,detail,fix,first_seen_at,last_seen_at,present,"
               "occurrences) VALUES(?,?,?,?,?,?,?,?,?,0,1) ON CONFLICT(key) DO UPDATE SET detail=excluded.detail,"
-              "last_seen=excluded.last_seen,occurrences=health_findings.occurrences+1",
+              "last_seen_at=excluded.last_seen_at,occurrences=health_findings.occurrences+1",
               (item["key"], item["signature"], item["check_id"], item["kind"], item["title"], item["detail"],
                item["fix"], now, now))
     return item["key"]
@@ -236,13 +236,13 @@ def _runner_checks(c, settings):
     for x in health.silent_computers(c):
         out.append(_finding("computer_silent:" + x["id"], "computer_silent", SETUP,
                             f"{x['label']} has not checked in for {x['minutes']} minutes",
-                            f"Computer {x['label']} was last heard from at {(x['last_seen'] or '')[:16]}; "
+                            f"Computer {x['label']} was last heard from at {(x['last_seen_at'] or '')[:16]}; "
                             f"{x['queued'] + x['dead']} job(s) wait for {', '.join(x['bots'])}.",
                             f"Ask the person who runs {x['label']} to wake it and check Tico there "
                             "(`tico status`; `tico restart` starts it again), or move its bots to an online computer."))
     starts = None
-    for r in c.execute("SELECT id,label,readiness_json FROM runners WHERE revoked_at IS NULL").fetchall():
-        lines = [str(x) for x in (readiness_document(r["readiness_json"]).get("recent_errors") or [])]
+    for r in c.execute("SELECT id,label,readiness FROM runners WHERE revoked_at IS NULL").fetchall():
+        lines = [str(x) for x in (readiness_document(r["readiness"]).get("recent_errors") or [])]
         for check_id, kind, pattern, least, title, fix in LOG_PATTERNS:
             hits = [line for line in lines if pattern.search(line)]
             if check_id == "event_stream" and hits:
@@ -270,7 +270,7 @@ def _login(c, settings, bot, result, configs):
     if usage.get("runtime"):
         return str(usage["runtime"]), str(usage.get("harness") or "")
     if bot not in configs:
-        row = c.execute("SELECT config_json FROM bot_config WHERE bot=?", (bot,)).fetchone()
+        row = c.execute("SELECT config FROM bot_config WHERE bot=?", (bot,)).fetchone()
         configs[bot] = json.loads(row[0] or "{}") if row else {}
     return providers.bot_choice(c, settings, configs[bot])[0], resolve_harness(configs[bot])
 
@@ -289,12 +289,12 @@ def out_of_quota_logins(c, settings=None):
     that failed for another reason says nothing either way. [{runner_id, runtime, limits, since, resets_at}]"""
     now = H.now()
     seen, configs, out = {}, {}, []
-    for r in c.execute("SELECT bot,runner_id,state,finished,result_json FROM attempts WHERE finished>? "
-                       "AND state IN ('completed','failed','interrupted') AND result_json IS NOT NULL "
-                       "AND json_extract(result_json,'$.profile_used') IS NULL ORDER BY finished DESC",
+    for r in c.execute("SELECT bot_id,runner_id,state,finished_at,result FROM attempts WHERE finished_at>? "
+                       "AND state IN ('completed','failed','interrupted') AND result IS NOT NULL "
+                       "AND json_extract(result,'$.profile_used') IS NULL ORDER BY finished_at DESC",
                        (H.shift(now, hours=-24),)):
-        result = json.loads(r["result_json"])
-        runtime, harness = _login(c, settings, r["bot"], result, configs)
+        result = json.loads(r["result"])
+        runtime, harness = _login(c, settings, r["bot_id"], result, configs)
         if not _computer_login(runtime, harness):
             continue
         login = seen.setdefault((r["runner_id"], runtime), {"runner_id": r["runner_id"], "runtime": runtime,
@@ -307,7 +307,7 @@ def out_of_quota_logins(c, settings=None):
             if not login["limits"]:
                 login["resets_at"] = result.get("limit_resets_at")    # the latest limit's reset is the one that counts
             login["limits"] += 1
-            login["since"] = r["finished"]
+            login["since"] = r["finished_at"]
         elif r["state"] == "completed":
             login["open"] = False                                       # it worked after its last limit
     for login in seen.values():
@@ -321,7 +321,7 @@ def out_of_quota_logins(c, settings=None):
 
 def _login_checks(c, settings):
     from .store import readiness_document
-    runners = {r["id"]: r for r in c.execute("SELECT id,label,readiness_json FROM runners WHERE revoked_at IS NULL")}
+    runners = {r["id"]: r for r in c.execute("SELECT id,label,readiness FROM runners WHERE revoked_at IS NULL")}
     labels = {rid: r["label"] for rid, r in runners.items()}
     record = providers.load(c, settings)
     out = []
@@ -331,7 +331,7 @@ def _login_checks(c, settings):
             continue                                  # a removed computer runs nothing more
         login = models_preset.LOGIN_NAMES.get(x["runtime"])
         if (login and models_preset.fallback_row(record) and record.get("auto_fallback")
-                and models_preset.runs_gateway(readiness_document(runners[x["runner_id"]]["readiness_json"]))):
+                and models_preset.runs_gateway(readiness_document(runners[x["runner_id"]]["readiness"]))):
             # Under the two Gateway choices the bots there finish on Tico Gateway, last: one plain line.
             out.append(_finding(f"default_login_limited:{x['runner_id']}:{x['runtime']}", "default_login_limited", SETUP,
                                 f"{label}'s {login} login is used up",
@@ -361,27 +361,28 @@ def _check_hold_checks(c):
     from . import check_models
     now = H.now()
     out = []
-    limited = "(coalesce(json_extract(result_json,'$.limited'),0) AND state<>'completed')"
-    for t in c.execute("SELECT t.id,t.title,t.private,t.owner FROM registry_metadata r "
+    limited = "(coalesce(json_extract(result,'$.limited'),0) AND state<>'completed')"
+    for t in c.execute("SELECT t.id,t.title,t.private,t.owner_id FROM registry_metadata r "
                        "JOIN tasks t ON t.id=substr(r.key,15) WHERE r.key>='check-limited:' AND r.key<'check-limited;' "
-                       f"AND t.status IN ({','.join('?' * len(H.ACTIVE_STATUSES))}) AND t.owner LIKE 'bot:%'",
+                       f"AND t.status IN ({','.join('?' * len(H.ACTIVE_STATUSES))}) AND t.owner_id LIKE 'bot:%'",
                        H.ACTIVE_STATUSES).fetchall():
-        bot = H.actor_id(t["owner"])
+        bot = H.actor_id(t["owner_id"])
         check = check_models.of(c, t["id"], bot)
         if not check:
             continue
         # The limits on its queued jobs since the last turn on any of them that ended another way. One pool, not the
         # oldest job: the claim hands out a person's message before an older notice, and one turn takes several.
         queued = ("SELECT j.id FROM jobs j CROSS JOIN messages m JOIN conversations cv ON cv.id=m.conversation_id "
-                  f"WHERE j.bot=? AND j.state='queued' AND m.id=j.message_id AND {H.MESSAGE_TASK_SQL}=?")
+                  f"WHERE j.bot_id=? AND j.state='queued' AND m.id=j.message_id AND {H.MESSAGE_TASK_SQL}=?")
         since, tries = c.execute(
-            f"WITH a AS (SELECT finished,{limited} AS hit FROM attempts WHERE job_id IN ({queued}) "
-            "AND finished IS NOT NULL) SELECT min(finished),count(*) FROM a WHERE hit "
-            "AND finished>coalesce((SELECT max(finished) FROM a WHERE NOT hit),'')", (bot, t["id"])).fetchone()
+            f"WITH a AS (SELECT finished_at,{limited} AS hit FROM attempts WHERE job_id IN ({queued}) "
+            "AND finished_at IS NOT NULL) SELECT min(finished_at),count(*) FROM a WHERE hit "
+            "AND finished_at>coalesce((SELECT max(finished_at) FROM a WHERE NOT hit),'')", (bot, t["id"])).fetchone()
         if not tries or since > H.shift(now, hours=-CHECK_HELD_HOURS):
             continue
         hours = int((H.parse_ts(now) - H.parse_ts(since)).total_seconds() // 3600)
-        name = (H.bot(c, bot) or {}).get("display_name") or bot
+        row = H.bot(c, bot) or {}
+        name = row.get("display_name") or row.get("slug") or bot
         model = providers.RUNTIME_LABELS.get(check["runtime"], check["runtime"]) + (
             f" ({check['model']})" if check.get("model") else "")
         title = "a private task" if t["private"] else t["title"]
@@ -406,9 +407,9 @@ def _release_approval_checks(c, settings):
     at = H.now()
     out = []
     for row in H._rows(c.execute("SELECT * FROM approvals WHERE decision IS NULL AND kind='publish' "
-                                 "AND coalesce(ready_since,created)<? ORDER BY created",
+                                 "AND coalesce(ready_since,created_at)<? ORDER BY created_at",
                                  (H.shift(at, minutes=-minutes),))):
-        row["payload"] = H._json(row.get("payload_json"), {}) or {}
+        row["payload"] = H._json(row.get("payload"), {}) or {}
         if not H.is_release_approval(row["kind"], row["payload"]):
             continue
         H.approval_wait(c, row, at)
@@ -440,7 +441,7 @@ def _brief_drops(lines):
 
 def _server_starts(c):
     """When this server started, as epoch seconds: the flight recorder's start events, and this process."""
-    starts = [r[0] for r in c.execute("SELECT ts FROM flight_events WHERE kind='start'")]
+    starts = [r[0] for r in c.execute("SELECT created_at FROM flight_events WHERE kind='start'")]
     return starts + [calendar.timegm(time.strptime(diagnostics.RING.started, "%Y-%m-%dT%H:%M:%SZ"))]
 
 
@@ -475,8 +476,8 @@ def _bot_checks(c, settings=None):
     out = []
     since = H.shift(H.now(), hours=-24)
     limited = {}
-    for r in c.execute("SELECT detail_json FROM events WHERE action='attempt.limited' AND ts>?", (since,)):
-        detail = json.loads(r["detail_json"] or "{}")
+    for r in c.execute("SELECT detail FROM events WHERE action='attempt.limited' AND created_at>?", (since,)):
+        detail = json.loads(r["detail"] or "{}")
         if (detail.get("source") or {}).get("kind") == login_holds.CAPACITY_KIND:
             continue                    # a busy model for two minutes, not a spent subscription or spend limit
         if detail.get("bot"):
@@ -484,8 +485,9 @@ def _bot_checks(c, settings=None):
     record = providers.load(c, settings)
     company = providers.default_fallbacks(record)
     for bot, n in sorted(limited.items()):
-        config = c.execute("SELECT config_json FROM bot_config WHERE bot=?", (bot,)).fetchone()
-        declared = json.loads(config["config_json"] or "{}") if config and config["config_json"] else {}
+        label = (H.bot(c, bot) or {}).get("slug", bot)
+        config = c.execute("SELECT config FROM bot_config WHERE bot=?", (bot,)).fetchone()
+        declared = json.loads(config["config"] or "{}") if config and config["config"] else {}
         # The Gateway row counts only where the bot's computer can run it (a Mac skips it: runner-rs/src/fallback.rs).
         computer = models_preset.computer_of(c, bot)
         here = models_preset.runnable_fallbacks(record, computer, company)
@@ -495,16 +497,16 @@ def _bot_checks(c, settings=None):
         if login and models_preset.fallback_row(record) and record.get("auto_fallback") \
                 and not models_preset.runs_gateway(computer):
             out.append(_finding("limited_no_fallback:" + bot, "limited_no_fallback", SETUP,
-                                f"{bot} stopped: its {login} login is used up",
-                                f"{bot} stopped: its {login} login is used up, and no computer here can run Tico "
+                                f"{label} stopped: its {login} login is used up",
+                                f"{label} stopped: its {login} login is used up, and no computer here can run Tico "
                                 f"Gateway work. {n} turn(s) stopped in the last 24 hours.",
                                 f"Sign in another {login} login, or add a Docker runner."))
         else:
             out.append(_finding("limited_no_fallback:" + bot, "limited_no_fallback", SETUP,
-                                f"{bot} stopped on a usage limit and has no fallback model",
-                                f"{n} turn(s) of {bot} stopped on a subscription or spend limit in the last 24 hours, "
+                                f"{label} stopped on a usage limit and has no fallback model",
+                                f"{n} turn(s) of {label} stopped on a subscription or spend limit in the last 24 hours, "
                                 "and the bot has no fallback model to finish them on.",
-                                f"BotOps: give {bot} a fallback model on another provider (Settings > Bots > {bot} > "
+                                f"BotOps: give {label} a fallback model on another provider (Settings > Bots > {label} > "
                                 "Fallback), or raise its limit if the team chose one."))
     for slug, name, count, what, oldest in health.unfinished_setup(c):
         out.append(_finding("stuck_setup:" + slug, "stuck_setup", SETUP, f"{name} has been stuck in setup since {oldest[:16]}",
@@ -529,15 +531,16 @@ def _bot_checks(c, settings=None):
                                 BUG_FIX["queue_idle"]))
     from .worktrees import current_error, supported
     if supported(c):
-        for r in c.execute("SELECT t.owner,l.state,l.detail_json FROM task_links l JOIN tasks t ON t.id=l.task_id "
+        for r in c.execute("SELECT t.owner_id,l.state,l.detail FROM task_links l JOIN tasks t ON t.id=l.task_id "
                            "WHERE l.kind='worktree' AND l.state<>'removed'"):
-            error = current_error(r["state"], json.loads(r["detail_json"] or "{}"))
+            error = current_error(r["state"], json.loads(r["detail"] or "{}"))
             if error:
-                bot = H.actor_id(r["owner"])
+                bot = H.actor_id(r["owner_id"])
+                label = (H.bot(c, bot) or {}).get("slug", bot)
                 digest = hashlib.sha256(error.encode()).hexdigest()[:8]
                 out.append(_finding(f"worktree_error:{bot}:{digest}", "worktree_error", SETUP,
-                                    f"A task worktree of {bot} failed",
-                                    f"{bot}: {error[:400]}",
+                                    f"A task worktree of {label} failed",
+                                    f"{label}: {error[:400]}",
                                     "BotOps: save any unique work in that worktree on a branch, then remove its link so "
                                     "the computer can make it again (docs/worktrees.md)."))
     out.extend(_quiet_work_checks(c))
@@ -565,7 +568,8 @@ def _profile_checks(c):
                f"BotOps: ask {name}'s owner what it should be doing; a Responder, Monitor or Lead profile may fit better."))}
     out = []
     for kind, bot, count in profiles.mismatches(c):
-        name = (H.bot(c, bot) or {}).get("display_name") or bot
+        row = H.bot(c, bot) or {}
+        name = row.get("display_name") or row.get("slug") or bot
         title, detail, fix = say[kind](name, count)
         out.append(_finding(f"{kind}:{bot}", kind, SETUP, title, detail, fix))
     return out
@@ -578,29 +582,32 @@ def _stop_checks(c):
     out = []
     for hold in run_backoff.held(c):
         bot, kind = hold["bot"], hold["error_class"] or run_backoff.OTHER
-        name = (H.bot(c, bot) or {}).get("display_name") or bot
+        row = H.bot(c, bot) or {}
+        name = row.get("display_name") or row.get("slug") or bot
         out.append(_finding(f"run_hold:{bot}", "run_hold", SETUP,
                             f"{name} was stopped after {hold['fails']} failed runs in a row",
                             f"{name}'s last {hold['fails']} runs each failed within a minute of starting, with "
                             f"{run_backoff.CLASS_WORDS.get(kind, run_backoff.CLASS_WORDS[run_backoff.OTHER])}. Held "
                             f"since {str(hold['held_at'])[:16]} UTC. Last error: {hold['error'] or 'none reported'}.",
-                            f"BotOps: read {name}'s last runs, fix the cause, then release it (hub bot release {bot}). "
+                            f"BotOps: read {name}'s last runs, fix the cause, then release it (hub bot release {row.get('slug', bot)}). "
                             "Tico also tries one run on its own at growing intervals and releases it when one completes. "
                             "Its queued work is kept.", subject=kind, severity=BAD))
     for hold in turn_budgets.held(c):
-        bot = hold["bot"]
-        name = (H.bot(c, bot) or {}).get("display_name") or bot
+        bot = hold["bot_id"]
+        row = H.bot(c, bot) or {}
+        name = row.get("display_name") or row.get("slug") or bot
         out.append(_finding(f"turn_budget:{bot}", "turn_budget", SETUP,
                             f"{name} was stopped: {hold['runs']} runs in the last {hold['window']}",
                             f"{name} started {hold['runs']} runs in the last {hold['window']}, over its budget of "
                             f"{hold['budget']}. Held since {str(hold['held_at'])[:16]} UTC. This looks like a runaway "
                             "loop, not normal work.",
                             f"BotOps: read {name}'s last runs for what keeps waking it, then release it "
-                            f"(hub bot release {bot}) or raise its budget (hub bot budget {bot} --{hold['window']} N).",
+                            f"(hub bot release {row.get('slug', bot)}) or raise its budget (hub bot budget {row.get('slug', bot)} --{hold['window']} N).",
                             subject=hold["window"], severity=BAD))
     for hold in claim_holds.held(c):
-        bot = hold["bot"]
-        name = (H.bot(c, bot) or {}).get("display_name") or bot
+        bot = hold["bot_id"]
+        row = H.bot(c, bot) or {}
+        name = row.get("display_name") or row.get("slug") or bot
         out.append(_finding(f"claim_failed:{bot}", "claim_failed", SETUP,
                             f"Tico could not start {hold['jobs']} queued run{'s' if hold['jobs'] != 1 else ''} "
                             f"for {name}",
@@ -610,12 +617,13 @@ def _stop_checks(c):
                             "Each waits, then Tico tries it again on its own; the wait doubles with each failed try, "
                             "up to an hour. The server log has the traceback.",
                             f"BotOps: read the server log for the traceback and fix its cause. To retry the held runs "
-                            f"now, release {name} (hub bot release {bot}); one that fails again is held with a longer "
+                            f"now, release {name} (hub bot release {row.get('slug', bot)}); one that fails again is held with a longer "
                             "wait.",
                             severity=BAD))
     for failure in claim_holds.check_failures(c):
         bot, error = failure["bot"], failure["error"]
-        name = (H.bot(c, bot) or {}).get("display_name") or bot
+        row = H.bot(c, bot) or {}
+        name = row.get("display_name") or row.get("slug") or bot
         out.append(_finding(f"claim_check:{bot}", "claim_check", SETUP,
                             f"{name}'s claim check is failing: {error}",
                             f"Tico could not check {name}'s queued runs for a claim: the check raised {error} at "
@@ -633,16 +641,17 @@ def _session_checks(c):
     """A bot whose old session keeps being lost (backend/run_triggers.py SESSION_LOST): more than NEW_SESSIONS runs in
     the last 24 h started a new one because the old was not found, would not resume or compact, was interrupted, or was
     too large to send even after compacting. A first run, a person's Clear and a topic change do not count. One grouped
-    read of the last day's runs (`turns.started` is indexed)."""
+    read of the last day's runs (`turns.started_at` is indexed)."""
     from .run_triggers import SESSION_LOST
     since = H.shift(H.now(), hours=-24)
     marks = ",".join("?" * len(SESSION_LOST))
     out = []
     for r in c.execute(f"SELECT bot, count(*) AS n, group_concat(DISTINCT session_why) AS why FROM turns "
-                       f"WHERE started>=? AND session_kind='new' AND session_why IN ({marks}) "
+                       f"WHERE started_at>=? AND session_kind='new' AND session_why IN ({marks}) "
                        f"GROUP BY bot HAVING count(*)>? ORDER BY n DESC, bot", (since, *SESSION_LOST, NEW_SESSIONS)):
         bot = r["bot"]
-        name = (H.bot(c, bot) or {}).get("display_name") or bot
+        row = H.bot(c, bot) or {}
+        name = row.get("display_name") or row.get("slug") or bot
         out.append(_finding(f"new_sessions:{bot}", "new_sessions", SETUP,
                             f"{name} keeps losing its session: {r['n']} new ones in a day",
                             f"{name} started {r['n']} new sessions in the last 24 hours because its old one could not be "
@@ -659,14 +668,15 @@ def _quiet_work_checks(c):
     out = []
     for item in quiet_work.stale(c):
         task, bot = item["task"], item["bot"]
+        label = (H.bot(c, bot) or {}).get("slug", bot)
         # A private task's title stays out of a finding other people read; its number or short id names it.
         name = quiet_work._task_name(task) if H.task_private(c, task) else f"{quiet_work._task_name(task)} {task['title']}"
         out.append(_finding(f"quiet_unworked:{bot}:{task['id']}", "quiet_unworked", SETUP,
-                            f"{bot} was handed a deferred task and has not worked it",
-                            f"{bot} was handed the next-run task {name} at {item['since'][:16]} UTC (run "
+                            f"{label} was handed a deferred task and has not worked it",
+                            f"{label} was handed the next-run task {name} at {item['since'][:16]} UTC (run "
                             f"{str(item['run'] or '')[:8]}) and has not worked it since, with no time set to pick it "
                             "up again.",
-                            f"{bot}: work it, or say when to pick it up (hub task later {task['id']} --after <task> | "
+                            f"{label}: work it, or say when to pick it up (hub task later {task['id']} --after <task> | "
                             "--at <time>). Anyone may press Run now on it to give it a run of its own."))
     return out
 
@@ -765,10 +775,10 @@ def apply(c, auth, found):
     for item in found:
         row = c.execute("SELECT * FROM health_findings WHERE key=?", (item["key"],)).fetchone()
         occurrences = row["occurrences"] + 1 if row else 1
-        c.execute("INSERT INTO health_findings(key,signature,check_id,kind,title,detail,fix,first_seen,last_seen,present,"
+        c.execute("INSERT INTO health_findings(key,signature,check_id,kind,title,detail,fix,first_seen_at,last_seen_at,present,"
                   "occurrences,severity) VALUES(?,?,?,?,?,?,?,?,?,1,?,?) ON CONFLICT(key) DO UPDATE SET "
                   "signature=excluded.signature,kind=excluded.kind,title=excluded.title,detail=excluded.detail,"
-                  "fix=excluded.fix,last_seen=excluded.last_seen,present=1,occurrences=excluded.occurrences,"
+                  "fix=excluded.fix,last_seen_at=excluded.last_seen_at,present=1,occurrences=excluded.occurrences,"
                   "severity=excluded.severity",
                   (item["key"], item["signature"], item["check_id"], item["kind"], item["title"], item["detail"],
                    item["fix"], now, now, occurrences, item["severity"]))
@@ -786,7 +796,7 @@ def apply(c, auth, found):
                                                            "severity": item["severity"], "title": item["title"]},
                H.KEEPER, revision=f"{item['signature']}:{now}")
         if deliver(c, auth, SLUG, _event(item, occurrences, was)):
-            c.execute("UPDATE health_findings SET last_woke=? WHERE key=?", (now, item["key"]))
+            c.execute("UPDATE health_findings SET last_woke_at=? WHERE key=?", (now, item["key"]))
             woke.append(item["key"])
     gone = [r["key"] for r in c.execute("SELECT key FROM health_findings WHERE present=1") if r["key"] not in keys]
     for key in gone:
@@ -802,9 +812,9 @@ def _where(c, row):
     (diagnostics.bot_label, runner_label), so the Tico team can find the bot and computer in it without their names."""
     if row["check_id"] != "queue_idle":
         return ""
-    slug = row["key"].split(":", 1)[1]
-    bot = diagnostics.bot_label(c, slug)
-    place = c.execute("SELECT runner_id FROM assignments WHERE bot=?", (slug,)).fetchone()
+    bot_id = row["key"].split(":", 1)[1]
+    bot = diagnostics.bot_label(c, bot_id)
+    place = c.execute("SELECT runner_id FROM assignments WHERE bot=?", (bot_id,)).fetchone()
     computer = diagnostics.runner_label(c, place["runner_id"]) if place else None
     return f"{bot} on {computer}" if bot and computer else bot or ""
 
@@ -821,7 +831,7 @@ def report_message(c, row):
             + (f"Process: {process}\n" if process else "")
             + (f"Where: {where}\n" if where else "")
             + f"Signature: {row['signature']}\nKind: {row['kind']}\nTico: {releases.version()}\n"
-            f"First seen: {row['first_seen'][:16]} UTC; seen {seen['times'] or 1} time(s) in {seen['n']} place(s).\n\n"
+            f"First seen: {row['first_seen_at'][:16]} UTC; seen {seen['times'] or 1} time(s) in {seen['n']} place(s).\n\n"
             "What it means: " + BUG_FIX.get(row["check_id"], "Tico bug.") + "\n\nThe redacted diagnostics bundle is attached.")
 
 
@@ -855,7 +865,7 @@ def report(c_factory, support, auth, settings, who, key):
                 if not asked or (asked["decision"] and asked["decision"] != "approved"):
                     cleared = filed["approval_id"]   # declined, withdrawn or gone: the signature can be reported again
         since = H.shift(H.now(), hours=-24)
-        today = c.execute("SELECT count(*) FROM health_reports WHERE created>? AND ticket_id IS NOT NULL",
+        today = c.execute("SELECT count(*) FROM health_reports WHERE created_at>? AND ticket_id IS NOT NULL",
                           (since,)).fetchone()[0]
     if cleared:
         with store.transaction() as c:
@@ -870,7 +880,7 @@ def report(c_factory, support, auth, settings, who, key):
             holder = c.execute("SELECT actor FROM support_tickets WHERE id=?", (filed["ticket_id"],)).fetchone()
         holder = Identity(holder["actor"], "human") if holder and holder["actor"] != owner.actor else owner
         support.write(holder, filed["ticket_id"],
-                      f"[Health Monitor] Seen again ({row['occurrences']} times), last at {row['last_seen'][:16]} UTC. "
+                      f"[Health Monitor] Seen again ({row['occurrences']} times), last at {row['last_seen_at'][:16]} UTC. "
                       f"Signature {row['signature']}.")
         with store.transaction() as c:
             c.execute("UPDATE health_reports SET reported_occurrences=? WHERE signature=?",
@@ -886,7 +896,7 @@ def report(c_factory, support, auth, settings, who, key):
             approval = H.approval_request(c, who.actor, "support",
                                           {"message": message, "content_sha256": digest})
             approval_id = approval["id"] if isinstance(approval, dict) else approval
-            c.execute("INSERT INTO health_reports(signature,approval_id,created,reported_occurrences) VALUES(?,?,?,?)",
+            c.execute("INSERT INTO health_reports(signature,approval_id,created_at,reported_occurrences) VALUES(?,?,?,?)",
                       (row["signature"], approval_id, H.now(), row["occurrences"]))
         return {"signature": row["signature"], "approval": approval_id}
     if today >= REPORTS_PER_DAY:
@@ -897,7 +907,7 @@ def report(c_factory, support, auth, settings, who, key):
     ticket = support.file(owner, SupportTicket(message=message, include_ids=True, diagnostics=attachment),
                           "health:" + row["signature"], source="health_monitor")
     with store.transaction() as c:
-        c.execute("INSERT INTO health_reports(signature,ticket_id,created,reported_occurrences) VALUES(?,?,?,?) "
+        c.execute("INSERT INTO health_reports(signature,ticket_id,created_at,reported_occurrences) VALUES(?,?,?,?) "
                   "ON CONFLICT(signature) DO UPDATE SET ticket_id=excluded.ticket_id",
                   (row["signature"], ticket["id"], H.now(), row["occurrences"]))
         H.event(c, who.actor, "health_monitor.reported", row["signature"], {"ticket": ticket["id"]})
@@ -908,10 +918,10 @@ def report(c_factory, support, auth, settings, who, key):
 def view(c):
     row = H.bot(c, SLUG)
     rows = [dict(r) for r in c.execute(
-        "SELECT f.key,f.signature,f.check_id,f.kind,f.title,f.severity,f.first_seen,f.last_seen,f.occurrences,"
+        "SELECT f.key,f.signature,f.check_id,f.kind,f.title,f.severity,f.first_seen_at,f.last_seen_at,f.occurrences,"
         "r.ticket_id,r.approval_id "
         "FROM health_findings f LEFT JOIN health_reports r ON r.signature=f.signature WHERE f.present=1 "
-        "ORDER BY f.last_seen DESC LIMIT 50")]
+        "ORDER BY f.last_seen_at DESC LIMIT 50")]
     return {"state": row["state"] if row else "absent", "on": bool(row) and row["state"] == "active",
             "reports_without_asking": team_rules.load(c)[RULE], "findings": rows}
 

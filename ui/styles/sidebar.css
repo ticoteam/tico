@@ -37,15 +37,20 @@
 .side-section{margin-top:6px}
 .section-toggle{width:100%;display:flex;align-items:center;gap:8px;background:none;border:0;border-radius:6px;padding:7px 8px 5px 10px;color:var(--muted);cursor:pointer;font-size:var(--t-label);font-weight:600;letter-spacing:var(--track-caps);text-align:left;text-transform:uppercase}
 .section-toggle:hover{background:var(--surface2);color:var(--ink)}
+/* A section header that is a link (Inbox): the same look, no chevron, the page's mark when it is open. */
+.section-head{width:100%;display:flex;align-items:center;gap:8px;border-radius:6px;padding:7px 8px 5px 10px;color:var(--muted);font-size:var(--t-label);font-weight:600;letter-spacing:var(--track-caps);text-transform:uppercase;text-decoration:none}
+.section-head:hover{background:var(--surface2);color:var(--ink);text-decoration:none}
+.section-head.cur{color:var(--ink)}
 .section-chev{margin-left:auto;font-size:16px;line-height:var(--lh-none);transform:var(--chev-open)}
 .section-toggle[aria-expanded="false"] .section-chev{transform:none}
 .section-body[hidden]{display:none}
 .nav-row{display:flex;align-items:center;gap:2px}
 .nav-row>.nav-link{flex:1;min-width:0}
 #mobile-more{position:relative}
-.org-head>.section-toggle{flex:1;min-width:0}
+.org-head>.section-toggle,.org-head>.section-head{flex:1;min-width:0}
 .org-history{flex:none;width:28px;height:28px;display:inline-flex;align-items:center;justify-content:center;border:0;border-radius:6px;background:none;cursor:pointer;padding:0}
 .org-history:hover{background:var(--surface2)}
+a.org-history{color:var(--muted);text-decoration:none}a.org-history:hover{color:var(--ink)}
 .org-history .nav-icon{font-size:18px}
 .org-history[aria-pressed="true"]{background:color-mix(in srgb,var(--ink) 8%,transparent);box-shadow:0 0 0 1px color-mix(in srgb,var(--ink) 40%,transparent)}
 .org-history[aria-pressed="true"] .nav-icon{color:var(--ink)}

@@ -23,7 +23,7 @@ the bot on the org chart, as only a person decides one."""
 import logging
 
 from .batch_work import isolated
-from . import strategy_bot
+from . import needs_shape, strategy_bot
 from . import goals as G
 from . import kpis as K
 from . import strategy as S
@@ -38,7 +38,7 @@ WHY_REF = "goals"                                     # one bundled Why ask per 
 
 
 def _org(conn):
-    archived = {row["slug"] for row in H.bots(conn) if row.get("state") == "archived"}
+    archived = {row["id"] for row in H.bots(conn) if row.get("state") == "archived"}
     return views.roster(conn), views.entries(conn), archived, True
 
 
@@ -89,16 +89,16 @@ def wanted(conn, owner_id, at=None, reads=None):
     live = G.goals(conn, live_only=True)
     for goal_id, rows in K.goal_views(conn, [g["id"] for g in live], at).items():
         goal = next(g for g in live if g["id"] == goal_id)
-        who = _acts_for(goal["owner"], owner_id)
+        who = _acts_for(goal["owner_id"], owner_id)
         for k in rows:
             if who and k["status"] == "red":
                 items.append({"kind": "kpi_red", "ref": k["id"], "owner": who, "goal_id": goal_id,
                               "goal_title": goal["title"], "kpi_id": k["id"], "kpi_name": k["name"],
                               "reason": k["reason"]})
-    owned = [dict(r) for r in conn.execute("SELECT * FROM kpis WHERE archived_at IS NULL ORDER BY created")]
+    owned = [dict(r) for r in conn.execute("SELECT * FROM kpis WHERE archived_at IS NULL ORDER BY created_at")]
     data = K.effective_many(conn, [r["id"] for r in owned])
     for record in owned:
-        who = _acts_for(record["owner"], owner_id)
+        who = _acts_for(record["owner_id"], owner_id)
         if K.auto(record["id"]):
             continue
         state = K.assess(record, None, data.get(record["id"], []), at)
@@ -114,7 +114,7 @@ def wanted(conn, owner_id, at=None, reads=None):
             goal = G.goal(conn, p["goal_id"]) if suggests and p["goal_id"] else None
             if goal:
                 org = org or _org(conn)
-                who = _person(conn, goal["owner"], owner_id, org)
+                who = _person(conn, goal["owner_id"], owner_id, org)
                 if who:
                     recovering.add((goal["id"], who))
                     items.append({"kind": "recovery", "ref": p["id"], "owner": who, "proposal": p,
@@ -129,7 +129,7 @@ def wanted(conn, owner_id, at=None, reads=None):
                 continue            # a goal that serves a bet has its why: the bet
             if goal:
                 org = org or _org(conn)
-                who = _person(conn, goal["owner"], owner_id, org)
+                who = _person(conn, goal["owner_id"], owner_id, org)
                 if who and (strategy_proactive or ("why", who) in filed):
                     whys.setdefault(who, {})[goal["id"]] = {"goal_id": goal["id"], "goal_title": goal["title"],
                                                            "why": (p.get("payload") or {}).get("why") or ""}
@@ -137,26 +137,26 @@ def wanted(conn, owner_id, at=None, reads=None):
         goal = G.goal(conn, p["goal_id"]) if p["goal_id"] else None
         record = K.kpi(conn, p["kpi_id"]) if p["kpi_id"] else None
         if p["kind"] == "kpi_definition":
-            decides = record and record["owner"]
+            decides = record and record["owner_id"]
         else:
-            decides = (goal and goal["owner"]) or (record and record["owner"])
+            decides = (goal and goal["owner_id"]) or (record and record["owner_id"])
         org = org or _org(conn)
         who = _person(conn, decides, owner_id, org)
         if who:
             # A private task still exposes its title and body to its owner. Do not file a proposal
             # naming a bot-owned goal or KPI for a person who cannot read that bot.
-            if any(H.is_bot(r["owner"]) and not _may_read(reads, who, r["owner"])
+            if any(H.is_bot(r["owner_id"]) and not _may_read(reads, who, r["owner_id"])
                    for r in (goal, record) if r):
                 continue
             item = {"kind": "proposal", "ref": p["id"], "owner": who, "proposal": p,
                     "goal_title": goal and goal["title"], "kpi_name": record and record["name"]}
             used = K.kpi(conn, (p.get("payload") or {}).get("kpi_id")) if p["kind"] == "goal_kpi" else None
-            if used and not _may_read(reads, who, used["owner"]):
+            if used and not _may_read(reads, who, used["owner_id"]):
                 continue            # they may not add a measure they may not read (goal-proposals decide)
             if used:
                 item["measure_name"] = used["name"]     # an Add a KPI that reuses a measure names it
             # A bot's goal or measure named in the ask is its activity: the ask is the person's and the Strategy Bot's.
-            if p["kind"] in GOAL_KINDS and any(H.is_bot(r["owner"]) for r in (goal, record, used) if r):
+            if p["kind"] in GOAL_KINDS and any(H.is_bot(r["owner_id"]) for r in (goal, record, used) if r):
                 item["private"] = True
             items.append(item)
     for who, goals in whys.items():
@@ -193,9 +193,8 @@ def _change(p, kpi_name):
         if payload.get("bets"):
             parts.append(f"{len(payload['bets'])} bet{'s' if len(payload['bets']) != 1 else ''}")
         return "change the strategy draft: " + ", ".join(parts)
-    if p["kind"] in ("brand_draft", "gtm_draft"):
-        page = "brand" if p["kind"] == "brand_draft" else "go-to-market"
-        return f"change the {page} draft: " + ", ".join(sorted((payload.get("sections") or {})))
+    if p["kind"] == "brand_draft":
+        return "change the brand draft: " + ", ".join(sorted((payload.get("sections") or {})))
     return p["kind"]
 
 
@@ -216,7 +215,7 @@ def _lens_name(p):
     return found["name"] if found else None
 
 
-def _ask(item, manager=strategy_bot.NAME):
+def _ask(conn, item, manager=strategy_bot.NAME):
     """The task's title and body: the ask first, in plain words. `manager` is the bot's name
     (backend/strategy_bot.py)."""
     name, goal = item.get("kpi_name") or "", item.get("goal_title") or ""
@@ -248,10 +247,9 @@ def _ask(item, manager=strategy_bot.NAME):
         return title, body
     p = item["proposal"]
     if p["kind"] in GOAL_KINDS:
-        return _goal_ask(item, manager)
+        return _goal_ask(conn, item, manager)
     title = {"strategy_draft": "Decide a suggested change to your strategy",
-             "brand_draft": "Decide a suggested change to your brand",
-             "gtm_draft": "Decide a suggested change to your go-to-market"}.get(p["kind"], "Confirm or reject a goal proposal")
+             "brand_draft": "Decide a suggested change to your brand"}.get(p["kind"], "Confirm or reject a goal proposal")
     if p["kind"] == S.REALIGN:
         payload = p.get("payload") or {}
         said = {"retired": "retired", "rewritten": "reworded"}
@@ -267,7 +265,7 @@ def _ask(item, manager=strategy_bot.NAME):
         lens = _lens_name(p)
         if lens:
             title += f" from the {lens} lens"
-        body = (f"{title}. {H.actor_id(p['proposed_by'])} proposed it"
+        body = (f"{title}. {H.actor_name(conn, p['proposed_by'])} proposed it"
                 + (" from this week's market briefing" if (p.get("payload") or {}).get("source") == "briefing" else "")
                 + (f" because {p['reason'].rstrip('.')}" if p.get("reason") and not lens else "")
                 + f": {_change(p, name)}. Add to draft writes it to your draft; publishing stays your click on the "
@@ -275,7 +273,7 @@ def _ask(item, manager=strategy_bot.NAME):
                   f"page. {closes}it is decided.")
         return title, body
     said = f" because {p['reason'].rstrip('.')}" if p.get("reason") else ""
-    body = (f"{title}. {H.actor_id(p['proposed_by'])} proposed it{said}: {_change(p, name)}. Confirm or reject it "
+    body = (f"{title}. {H.actor_name(conn, p['proposed_by'])} proposed it{said}: {_change(p, name)}. Confirm or reject it "
             f"under Needs you on the Goals page. {closes}it is decided.")
     return title, body
 
@@ -285,7 +283,7 @@ GOAL_KINDS = ("goal_kpi", "kpi_target", "kpi_definition", "goal_wording", "flag"
 OLD_WORDS = "Confirm or reject "
 
 
-def _goal_ask(item, manager):
+def _goal_ask(conn, item, manager):
     p, payload = item["proposal"], item["proposal"].get("payload") or {}
     name, goal = item.get("kpi_name") or "", item.get("goal_title") or ""
     measure = (payload.get("kpi") or {}).get("name") or item.get("measure_name")
@@ -296,7 +294,7 @@ def _goal_ask(item, manager):
              "flag": f"The {manager} noticed something on {goal}"}[p["kind"]]
     said = f" because {p['reason'].rstrip('.')}" if p.get("reason") else ""
     change = _change(p, measure or "a measure")
-    body = (f"{title.rstrip('?')}. {H.actor_id(p['proposed_by'])} proposed it{said}: {change}. "
+    body = (f"{title.rstrip('?')}. {H.actor_name(conn, p['proposed_by'])} proposed it{said}: {change}. "
             f"Decide it under Needs you on the Goals page.")
     return title, body
 
@@ -306,17 +304,17 @@ def _reword(conn, task, item):
     longer starts with them."""
     if not str(task["title"]).startswith(OLD_WORDS):
         return
-    title, body = _ask(item, strategy_bot.name(conn))
+    title, body = _ask(conn, item, strategy_bot.name(conn))
     if H.TITLE_LINT == "refuse" and H.lint_title(title):
         return
     with isolated(conn, "goal_ask_reword", task["id"]):
-        H.task_update(conn, G.AUTO_ACTOR, task["id"], title=_free_title(conn, task["owner"], title), body=body,
+        H.task_update(conn, G.AUTO_ACTOR, task["id"], title=_free_title(conn, task["owner_id"], title), body=body,
                       private=True if item.get("private") else None, quiet=True)
 
 
 def _relist(conn, task, item):
     """The bundled Why ask lists the goals waiting now: one joined or was settled since it was filed."""
-    body = _ask(item, strategy_bot.name(conn))[1]
+    body = _ask(conn, item, strategy_bot.name(conn))[1]
     if task["body"] != body:
         with isolated(conn, "goal_ask_relist", task["id"]):
             H.task_update(conn, G.AUTO_ACTOR, task["id"], body=body, quiet=True)
@@ -340,7 +338,7 @@ def _resolved(conn, kind, ref):
         if row["status"] == "rejected":
             return f"Resolved: {row['decision_note'] or 'rejected; nothing changed'}."
     if row and row["status"] != "pending":
-        return f"Resolved: the proposal was {row['status']} by {H.actor_id(row['decided_by'] or '')}.".replace(" by .", ".")
+        return f"Resolved: the proposal was {row['status']} by {H.actor_name(conn, row['decided_by'] or '')}.".replace(" by .", ".")
     return "Resolved: nothing is waiting on you here any more."
 
 
@@ -348,7 +346,7 @@ def _free_title(conn, owner, title):
     """task_create refuses a second live task with the same requester, owner and title; two different proposals
     can word the same, so the second one is numbered instead of refused."""
     taken = {r[0] for r in conn.execute(
-        f"SELECT title FROM tasks WHERE requester=? AND owner=? AND status IN ({','.join('?' * len(H.LIVE_STATUSES))})",
+        f"SELECT title FROM tasks WHERE requester_id=? AND owner_id=? AND status IN ({','.join('?' * len(H.LIVE_STATUSES))})",
         (G.AUTO_ACTOR, owner, *H.LIVE_STATUSES))}
     out, n = title[:290], 2
     while out in taken:
@@ -401,7 +399,7 @@ def sync(conn, owner_id, at=None, reads=None):
                 if again:
                     note = f"Still needed: {want[key].get('reason') or 'nothing has changed yet'}. Asked again in a new task."
                 elif moved.get(key[:2]):
-                    note = f"Now asked of {H.actor_id(moved[key[:2]])}, who owns it now."
+                    note = f"Now asked of {H.actor_name(conn, moved[key[:2]])}, who owns it now."
                 else:
                     note = _resolved(conn, row["kind"], row["ref"])
                 H.task_close(conn, G.AUTO_ACTOR, task["id"], note=note, quiet=True)
@@ -416,7 +414,7 @@ def sync(conn, owner_id, at=None, reads=None):
         if not rush and not has_room(item["owner"]):
             continue        # the next day's room, most important first (ORDER)
         with isolated(conn, "goal_ask_file", ":".join(key)):
-            title, body = _ask(item, strategy_bot.name(conn))
+            title, body = _ask(conn, item, strategy_bot.name(conn))
             if H.TITLE_LINT == "refuse" and H.lint_title(title):
                 # A KPI name the title lint refuses would be refused, and counted against the Strategy Bot, every hour.
                 log.warning("Not asking %s: the title lint refuses its KPI's name", item["owner"])
@@ -424,7 +422,7 @@ def sync(conn, owner_id, at=None, reads=None):
             made = H.task_create(conn, G.AUTO_ACTOR, _free_title(conn, item["owner"], title), body, item["owner"],
                                  lint=False, lane="company", top=item["kind"] == "vision",
                                  private=True if item.get("private") else None)
-            conn.execute("INSERT INTO goal_asks (kind, ref, owner, task_id, created) VALUES (?,?,?,?,?)",
+            conn.execute("INSERT INTO goal_asks (kind, ref, owner, task_id, created_at) VALUES (?,?,?,?,?)",
                          (*key, made["id"], H.now()))
             created.append(made["id"])
             if not rush:
@@ -449,8 +447,9 @@ def for_person(conn, actor, items):
             if room <= 0:
                 continue
             room -= 1
-        view = {k: v for k, v in item.items() if k not in ("ref", "owner", "measure_name", "private")}
+        view = {k: v for k, v in item.items() if k not in ("owner", "measure_name", "private")}
         if task:
             view["task"] = {"id": task["id"], "title": task["title"], "status": task["status"]}
-        out.append(view)
+        title, body = _ask(conn, item, strategy_bot.name(conn))
+        out.append(needs_shape.goal_item(view, title, body, task["created_at"] if task else None))
     return out

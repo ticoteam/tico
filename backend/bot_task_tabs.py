@@ -26,8 +26,8 @@ from .store import H, Problem
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS bot_task_tabs (
-  bot TEXT NOT NULL, viewer TEXT NOT NULL DEFAULT '', tabs_json TEXT NOT NULL,
-  updated TEXT NOT NULL, updated_by TEXT NOT NULL, PRIMARY KEY (bot, viewer));
+  bot TEXT NOT NULL, viewer TEXT NOT NULL DEFAULT '', tabs TEXT NOT NULL,
+  updated_at TEXT NOT NULL, updated_by TEXT NOT NULL, PRIMARY KEY (bot, viewer));
 """
 
 ACTIVE = ["open", "doing", "waiting"]
@@ -112,20 +112,20 @@ def widgets_of(stored):
 
 
 def stored(c, settings, who, bot):
-    return c.execute("SELECT tabs_json,widgets_json,updated,updated_by FROM bot_task_tabs WHERE bot=? AND viewer=?",
+    return c.execute("SELECT tabs,widgets,updated_at,updated_by FROM bot_task_tabs WHERE bot=? AND viewer=?",
                      (bot, viewer_key(settings, who, bot))).fetchone()
 
 
 def read(c, settings, who, bot, ctx=None):
     """`ctx` (backend/cards.py Ctx) leaves out the pages its reader may not read, so a widget never names one."""
     row = stored(c, settings, who, bot)
-    tabs = [legacy(t) for t in json.loads(row["tabs_json"])] if row else [legacy(t) for t in DEFAULT]
-    widgets = widgets_of(json.loads(row["widgets_json"]) if row and row["widgets_json"] else None)
+    tabs = [legacy(t) for t in json.loads(row["tabs"])] if row else [legacy(t) for t in DEFAULT]
+    widgets = widgets_of(json.loads(row["widgets"]) if row and row["widgets"] else None)
     if ctx is not None:
         from . import cards
         widgets = [w for w in widgets if cards.readable_item(ctx, w["id"])]
     return {"bot": bot, "tabs": tabs, "widgets": widgets, "saved": bool(row), "personal": personal(settings, bot),
-            "updated": row["updated"] if row else None, "updated_by": row["updated_by"] if row else None}
+            "updated_at": row["updated_at"] if row else None, "updated_by": row["updated_by"] if row else None}
 
 
 def bad(message):
@@ -167,6 +167,8 @@ def condition(c, row):
         if not isinstance(value, str) or not value:
             raise bad("Pick whom for " + field.replace("_", " "))
         if value not in mine:
+            found = H.resolve_bot(c, value) if H.is_bot(value) else None
+            value = H.bot_actor(found["id"]) if found else value
             actor = value if H.actor_kind(value) in ("bot", "human") else None
             if not actor or H.resolve_actor(c, actor) != actor:
                 raise bad("Unknown person or bot: " + value)
@@ -241,9 +243,9 @@ def write_widgets(ctx, bot, widgets):
     if any(ITEM.fullmatch(w["id"]) for w in widgets) and personal(settings, bot):
         raise bad("The Assistant's sidebar holds its own widgets; pin pages to a bot or a team page")
     was = stored(c, settings, who, bot)
-    tabs = was["tabs_json"] if was else json.dumps([legacy(t) for t in DEFAULT])
-    c.execute("INSERT INTO bot_task_tabs(bot,viewer,tabs_json,widgets_json,updated,updated_by) VALUES(?,?,?,?,?,?) "
-              "ON CONFLICT(bot,viewer) DO UPDATE SET widgets_json=excluded.widgets_json,updated=excluded.updated,"
+    tabs = was["tabs"] if was else json.dumps([legacy(t) for t in DEFAULT])
+    c.execute("INSERT INTO bot_task_tabs(bot,viewer,tabs,widgets,updated_at,updated_by) VALUES(?,?,?,?,?,?) "
+              "ON CONFLICT(bot,viewer) DO UPDATE SET widgets=excluded.widgets,updated_at=excluded.updated_at,"
               "updated_by=excluded.updated_by", (bot, viewer_key(settings, who, bot), tabs, json.dumps(widgets),
                                                  H.now(), who.actor))
     if not personal(settings, bot):
@@ -252,7 +254,7 @@ def write_widgets(ctx, bot, widgets):
 
 def saved_widgets(ctx, bot):
     row = stored(ctx.c, ctx.settings, ctx.who, bot)
-    return widgets_of(json.loads(row["widgets_json"]) if row and row["widgets_json"] else None)
+    return widgets_of(json.loads(row["widgets"]) if row and row["widgets"] else None)
 
 
 def add_widget(ctx, bot, item, position=None):
@@ -299,23 +301,23 @@ def bot_wait_sql(visible_sql):
     Person waits/questions and gate/worktree holds keep their own meaning, even with a bot blocker.
     Never infer a bot from waiting_on: that column stores people only.
     """
-    blockers = ("SELECT b.owner FROM task_relations r JOIN tasks b ON b.id=r.from_task "
+    blockers = ("SELECT b.owner_id FROM task_relations r JOIN tasks b ON b.id=r.from_task "
                 "WHERE r.to_task=tasks.id AND r.kind='blocks' AND b.status NOT IN ('done','closed','declined') "
                 f"AND EXISTS (SELECT 1 FROM tasks WHERE tasks.id=b.id AND ({visible_sql}))")
     return ("status='waiting' AND coalesce(waiting_on,'') NOT LIKE 'human:%' "
             "AND coalesce(blocked_kind,'') NOT IN ('gate','worktree') "
-            f"AND ({blockers} ORDER BY r.created,r.rowid LIMIT 1) LIKE 'bot:%' "
-            f"AND NOT EXISTS ({blockers} AND b.owner LIKE 'human:%') "
+            f"AND ({blockers} ORDER BY r.created_at,r.rowid LIMIT 1) LIKE 'bot:%' "
+            f"AND NOT EXISTS ({blockers} AND b.owner_id LIKE 'human:%') "
             "AND NOT EXISTS (SELECT 1 FROM messages m JOIN conversations cv ON cv.id=m.conversation_id "
             f"WHERE m.conversation_id=tasks.conversation_id AND {H.MESSAGE_TASK_SQL}=tasks.id "
             f"AND m.kind='ask' AND m.deleted_at IS NULL AND {H.OPEN_ASK_SQL} "
-            "AND m.to_actor LIKE 'human:%' AND coalesce(m.body,'')!='')")
+            "AND m.recipient_id LIKE 'human:%' AND coalesce(m.body,'')!='')")
 
 
 def tab_sql(tab, bot, viewer, visible_sql="1"):
     """A filter's WHERE over the bot's tasks: every row, then finished tasks only for the window it names (two weeks
     when it names none) and never a routine's finished runs."""
-    where, args, window = ["id IN (SELECT id FROM tasks WHERE owner=? UNION SELECT id FROM tasks WHERE requester=?)"], \
+    where, args, window = ["id IN (SELECT id FROM tasks WHERE owner_id=? UNION SELECT id FROM tasks WHERE requester_id=?)"], \
         ["bot:" + bot, "bot:" + bot], RECENT_DAYS
     for row in tab["conditions"]:
         field, value = row["field"], row["value"]
@@ -327,11 +329,11 @@ def tab_sql(tab, bot, viewer, visible_sql="1"):
         elif field == "type":
             part = many("type_id")
         elif field == "assigned_to":
-            part = party_sql("owner", value, bot, viewer)
+            part = party_sql("owner_id", value, bot, viewer)
         elif field == "asked_by":
-            part = party_sql("requester", value, bot, viewer)
+            part = party_sql("requester_id", value, bot, viewer)
         elif field == "needs":
-            part = "((owner=? AND status IN ('open','doing','waiting')) OR (status='waiting' AND waiting_on=?))", [viewer, viewer]
+            part = "((owner_id=? AND status IN ('open','doing','waiting')) OR (status='waiting' AND waiting_on=?))", [viewer, viewer]
         elif field == "waiting_on":
             part = {"any": ("status='waiting'", []),
                     "person": ("status='waiting' AND waiting_on LIKE 'human:%'", []),
@@ -339,20 +341,20 @@ def tab_sql(tab, bot, viewer, visible_sql="1"):
                     "me": ("status='waiting' AND waiting_on=?", [viewer]),
                     "not_me": ("status='waiting' AND coalesce(waiting_on,'')!=?", [viewer])}[value]
         elif field == "created_within":
-            part = "created>=?", [ago(value)]
+            part = "created_at>=?", [ago(value)]
         elif field == "updated_within":
-            part = "updated>=?", [ago(value)]
+            part = "updated_at>=?", [ago(value)]
         elif field == "done_within":
             window = None
             part = "coalesce(done_at,closed_at,'')>=?", [ago(value)]
         elif field == "due":
             today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
             if value == "overdue":
-                part = ("coalesce(due,'')!='' AND substr(due,1,10)<? AND status NOT IN ('done','closed','declined')",
+                part = ("coalesce(due_at,'')!='' AND substr(due_at,1,10)<? AND status NOT IN ('done','closed','declined')",
                         [today])
             else:
                 until = (datetime.now(timezone.utc) + timedelta(days=value)).strftime("%Y-%m-%d")
-                part = "coalesce(due,'')!='' AND substr(due,1,10) BETWEEN ? AND ?", [today, until]
+                part = "coalesce(due_at,'')!='' AND substr(due_at,1,10) BETWEEN ? AND ?", [today, until]
         else:  # label
             part = ("EXISTS (SELECT 1 FROM task_tags JOIN tags ON tags.id=task_tags.tag_id "
                     "WHERE task_tags.task_id=tasks.id AND tags.key=?)", [value])
@@ -360,14 +362,14 @@ def tab_sql(tab, bot, viewer, visible_sql="1"):
         args += part[1]
     finished = "status IN ('done','closed','declined')"
     if window:
-        where.append(f"(NOT {finished} OR coalesce(done_at,closed_at,updated,'')>=?)")
+        where.append(f"(NOT {finished} OR coalesce(done_at,closed_at,updated_at,'')>=?)")
         args.append(ago(window))
     where.append(f"NOT ({finished} AND (EXISTS (SELECT 1 FROM schedule_occurrences s WHERE s.task_id=tasks.id) "
                  "OR coalesce(body,'') LIKE '%from schedule%'))")
     return " AND ".join(where), args
 
 
-BRIEF = ("body", "acceptance_criteria", "acceptance_json", "public_title", "public_summary", "requester_count",
+BRIEF = ("body", "acceptance_criteria", "acceptance", "public_title", "public_summary", "requester_count",
          "external_requesters", "internal_requesters", "important_requesters", "organization", "size")
 
 
@@ -380,6 +382,7 @@ def install(app, store, auth, mutate, settings, task_views=None):
         layout), and whether the caller may change them. The Assistant's are the caller's own."""
         who = request.state.identity
         with store.read() as c:
+            bot = (H.resolve_bot(c, bot) or {}).get("id", bot)
             if not H.bot(c, bot):
                 raise Problem("not_found", "Bot not found", 404)
             auth.require_see(c, who, bot)
@@ -399,6 +402,7 @@ def install(app, store, auth, mutate, settings, task_views=None):
         if after is not None and (not tab or len(after) != 2):
             raise bad("before needs its tab and is a tab's next")
         with store.read_transaction() as c:
+            bot = (H.resolve_bot(c, bot) or {}).get("id", bot)
             if not H.bot(c, bot):
                 raise Problem("not_found", "Bot not found", 404)
             auth.require_see(c, who, bot)
@@ -413,9 +417,9 @@ def install(app, store, auth, mutate, settings, task_views=None):
                 count = c.execute(f"SELECT count(*) FROM tasks WHERE {where}", args).fetchone()[0]
                 page, page_args = where, list(args)
                 if after:
-                    page += " AND (created<? OR created=? AND id<?)"
+                    page += " AND (created_at<? OR created_at=? AND id<?)"
                     page_args += [after[0], after[0], after[1]]
-                found = c.execute(f"SELECT id, created FROM tasks WHERE {page} ORDER BY created DESC, id DESC "
+                found = c.execute(f"SELECT id, created_at FROM tasks WHERE {page} ORDER BY created_at DESC, id DESC "
                                   "LIMIT ?", (*page_args, ROWS + 1)).fetchall()
                 more = len(found) > ROWS
                 found = found[:ROWS]
@@ -439,6 +443,8 @@ def install(app, store, auth, mutate, settings, task_views=None):
     def task_tabs_save(request: Request, bot: str, body: M.BotTaskTabs):
         """Save the bot's sidebar: the whole tab list in order and, when sent, the widgets in order. `tabs: null` goes
         back to the defaults, widgets and all; leaving `widgets` out keeps the saved ones."""
+        with store.read() as c:
+            bot = (H.resolve_bot(c, bot) or {}).get("id", bot)
         def work(c):
             who = request.state.identity
             if not H.bot(c, bot):
@@ -458,15 +464,15 @@ def install(app, store, auth, mutate, settings, task_views=None):
                     raise bad("Keep at least one tab")
                 was = stored(c, settings, who, bot)
                 tabs = json.dumps(clean(c, body.tabs))
-                c.execute("INSERT INTO bot_task_tabs(bot,viewer,tabs_json,widgets_json,updated,updated_by) "
-                          "VALUES(?,?,?,?,?,?) ON CONFLICT(bot,viewer) DO UPDATE SET tabs_json=excluded.tabs_json,"
-                          "updated=excluded.updated,updated_by=excluded.updated_by",
-                          (bot, viewer, tabs, was["widgets_json"] if was else None, H.now(), who.actor))
+                c.execute("INSERT INTO bot_task_tabs(bot,viewer,tabs,widgets,updated_at,updated_by) "
+                          "VALUES(?,?,?,?,?,?) ON CONFLICT(bot,viewer) DO UPDATE SET tabs=excluded.tabs,"
+                          "updated_at=excluded.updated_at,updated_by=excluded.updated_by",
+                          (bot, viewer, tabs, was["widgets"] if was else None, H.now(), who.actor))
                 if "widgets" in body.model_fields_set:
                     if body.widgets is None:
                         write_widgets(ctx, bot, keep_unread(ctx, saved_widgets(ctx, bot), list(DEFAULT_WIDGETS)))
                         if not any(ITEM.fullmatch(w["id"]) for w in saved_widgets(ctx, bot)):
-                            c.execute("UPDATE bot_task_tabs SET widgets_json=NULL WHERE bot=? AND viewer=?", (bot, viewer))
+                            c.execute("UPDATE bot_task_tabs SET widgets=NULL WHERE bot=? AND viewer=?", (bot, viewer))
                     else:
                         write_widgets(ctx, bot, keep_unread(ctx, saved_widgets(ctx, bot), clean_widgets(body.widgets)))
             if not viewer:

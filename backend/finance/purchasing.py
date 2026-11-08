@@ -1,7 +1,7 @@
 """Purchase orders and estimates (spec §4.4, §4.5). An approved order's unbilled lines hold budget; a bill that
 bills one of its lines takes that part of the hold over; an accepted estimate becomes one invoice draft, once. Each
 planner checks the payload, the asker's view and the document's state; the writes run when the action commits."""
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from typing import Any, cast
 
 from . import budgeting
@@ -52,7 +52,7 @@ def _new_lines_seen(ctx: Ctx, who: str, lines: Sequence[AP.DocLine]) -> None:
 
 def _lines_of(ctx: Ctx, kind: str, parent_id: str) -> list[AP.DocLine]:
     return [AP.DocLine(str(r["account_id"]), int(r["amount"]), str(r["description"]),
-                       cast(dict[str, str], SK.loads(r["tags_json"])),
+                       cast(dict[str, str], SK.loads(r["tags"])),
                        None if kind != "estimate" or r["taxable"] is None else bool(r["taxable"]),
                        str(r["item_id"] or ""))
             for r in SP.lines(ctx.c, kind, parent_id)]
@@ -69,7 +69,7 @@ def _plain_lines(raw: object, *, invoice: bool = False) -> list[AP.DocLine]:
 
 def _line_rows(lines: Sequence[AP.DocLine], who: str, at: str, *, invoice: bool = False) -> list[dict[str, object]]:
     return [{"account_id": x.account_id, "item_id": x.item_id or None, "amount": x.amount,
-             "description": x.description, "tags_json": SK.dump(dict(x.tags)), "created_at": at, "created_by": who,
+             "description": x.description, "tags": SK.dump(dict(x.tags)), "created_at": at, "created_by": who,
              **({"taxable": None if x.taxable is None else int(x.taxable)} if invoice else {})} for x in lines]
 
 
@@ -101,7 +101,7 @@ def _place_holds(ctx: Ctx, who: str, po: Any, owed: Sequence[tuple[Any, int]],
         if left <= 0 or account is None or account.type != "expense":
             budgeting.release_for(ctx, "purchase_order", source_id)
             continue
-        tags = cast(dict[str, str], SK.loads(line["tags_json"]))
+        tags = cast(dict[str, str], SK.loads(line["tags"]))
         decisions.append(budgeting.place(ctx, budget_scope={"account_id": account.id, **DOC.scope_tags(tags),
                                                             "vendor": str(po["vendor_id"])},
                                          amount=left, currency=ctx.book.base_currency, source="purchase_order",
@@ -143,25 +143,73 @@ def sync_orders(ctx: Ctx, who: str, po_ids: Sequence[str]) -> None:
         _settle(ctx, who, po_id)
 
 
+def _line_scope(ctx: Ctx, line: Any) -> dict[str, object] | None:
+    """The budget scope an order line's hold is for: its expense account, the teammate and tags its line names, and its
+    vendor. None for a line that posts to no expense account, which holds nothing."""
+    account = ctx.accounts.get(str(line["account_id"] or ""))
+    if account is None or account.type != "expense":
+        return None
+    tags = cast(dict[str, str], SK.loads(line["tags"]))
+    return {"account_id": account.id, **DOC.scope_tags(tags), "vendor": str(line["vendor_id"])}
+
+
+def _retained_key(bill_id: str, po_line_id: str) -> str:
+    """The source id of the hold a bill keeps for what it stays billed on an order line it no longer names."""
+    return f"{bill_id}:retained:{po_line_id}"
+
+
 def _restore(ctx: Ctx, who: str, line: Any, amount: int) -> None:
     """An order line gets back `amount` of room: its hold grows by it with nothing taken from another hold, since the
     spend it stood for is already reversed in the books. A line that posts to no expense account holds nothing. The
     hold is for the teammate the line's tags name, the one its hold was made for."""
-    account = ctx.accounts.get(str(line["account_id"] or ""))
-    if account is None or account.type != "expense":
+    scope = _line_scope(ctx, line)
+    if scope is None:
         return
-    tags = cast(dict[str, str], SK.loads(line["tags_json"]))
-    budgeting.transfer(ctx, budget_scope={"account_id": account.id, **DOC.scope_tags(tags),
-                                          "vendor": str(line["vendor_id"])},
-                       amount=amount, currency=ctx.book.base_currency, source="purchase_order",
-                       source_id=f"{line['po_id']}:{int(line['line_no'])}", expires_at=None, by=who)
+    budgeting.transfer(ctx, budget_scope=scope, amount=amount, currency=ctx.book.base_currency,
+                       source="purchase_order", source_id=f"{line['po_id']}:{int(line['line_no'])}",
+                       expires_at=None, by=who)
+
+
+def _give_to_line(ctx: Ctx, who: str, line: Any, from_hold: tuple[str, str], amount: int) -> None:
+    """`amount` of a bill's hold moves back onto the order line's hold. Not fit-checked: the room was the order's already.
+    The line keeps the teammate its hold was made for, which the bill's own tags may not name."""
+    tags = cast(dict[str, str], SK.loads(line["tags"]))
+    budgeting.transfer(ctx, amount=amount, currency=ctx.book.base_currency, source="purchase_order",
+                       source_id=f"{line['po_id']}:{int(line['line_no'])}", expires_at=None, by=who,
+                       moved_from=from_hold, target=budgeting.scope_target(DOC.scope_tags(tags)))
+
+
+def set_retained(ctx: Ctx, who: str, bill_id: str, retained: Mapping[str, int]) -> None:
+    """Store what a bill keeps billed on order lines its provider revision no longer names, and hold it. That money
+    stays committed while the bill stands, so the bill holds it on each such line under its own source. A hold that
+    grows takes new money with no fit check: it is the actual the bill stopped being, already out of the budget. One
+    that shrinks gives the difference back to the line's hold, also with no fit check: the room was the order's."""
+    old = SP.bill_retained(ctx.c, bill_id)
+    SP.set_bill_retained(ctx.c, bill_id, retained)
+    for po_line_id in sorted({*old, *retained}):
+        key = _retained_key(bill_id, po_line_id)
+        have, want = budgeting.held_amount(ctx, "bill", key), int(retained.get(po_line_id, 0))
+        if want == have:
+            continue
+        line = SP.po_line(ctx.c, po_line_id)
+        if want > have:
+            scope = None if line is None else _line_scope(ctx, line)
+            if scope is not None:
+                budgeting.transfer(ctx, budget_scope=scope, amount=want - have, currency=ctx.book.base_currency,
+                                   source="bill", source_id=key, expires_at=None, by=who)
+        elif line is not None:
+            _give_to_line(ctx, who, line, ("bill", key), have - want)
+        else:
+            budgeting.release_for(ctx, "bill", key)
 
 
 def give_back(ctx: Ctx, who: str, bill_id: str, *, posted: bool) -> None:
     """A bill that stops billing gives each order line it billed its room back. A bill still holding a line moves that
     hold back to the line; a posted bill's spend has been reversed in the books by now, so the line takes the amount
     back with nothing moved from a hold. Neither is fit-checked. A line the bill keeps billed after a provider revision
-    that no longer names it gives its room back the same way."""
+    that no longer names it gives its room back the same way: the hold the bill keeps for that retained amount moves
+    back to the line, whether or not the bill posted; a retained amount with no hold (stored before holds were kept for
+    it) is restored only when the bill posted, as before."""
     for n, row in enumerate(SAP.lines(ctx.c, "bill", [bill_id])[bill_id]):
         po_line = str(row["po_line_id"] or "")
         line = SP.po_line(ctx.c, po_line) if po_line else None
@@ -169,17 +217,18 @@ def give_back(ctx: Ctx, who: str, bill_id: str, *, posted: bool) -> None:
             continue
         held = budgeting.held_amount(ctx, "bill", f"{bill_id}:{n}")
         if held:
-            # The line keeps the teammate its hold was made for, which the bill's own tags may not name.
-            tags = cast(dict[str, str], SK.loads(line["tags_json"]))
-            budgeting.transfer(ctx, amount=held, currency=ctx.book.base_currency, source="purchase_order",
-                               source_id=f"{line['po_id']}:{int(line['line_no'])}", expires_at=None, by=who,
-                               moved_from=("bill", f"{bill_id}:{n}"),
-                               target=budgeting.scope_target(DOC.scope_tags(tags)))
+            _give_to_line(ctx, who, line, ("bill", f"{bill_id}:{n}"), held)
         elif posted:
             _restore(ctx, who, line, int(row["amount"]))
     for po_line_id, amount in SP.bill_retained(ctx.c, bill_id).items():
         line = SP.po_line(ctx.c, po_line_id)
-        if line is not None and posted:
+        if line is None:
+            continue
+        key = _retained_key(bill_id, po_line_id)
+        held = budgeting.held_amount(ctx, "bill", key)
+        if held:
+            _give_to_line(ctx, who, line, ("bill", key), held)
+        elif posted:
             _restore(ctx, who, line, amount)
 
 
@@ -203,7 +252,7 @@ def link_bill_lines(ctx: Ctx, who: str, vendor_id: str,
         if row is None or str(row["book_id"]) != ctx.book.id:
             raise FinanceError(NOT_FOUND, "no such purchase order line")
         account = str(row["account_id"] or "")
-        tags = cast(dict[str, str], SK.loads(row["tags_json"]))
+        tags = cast(dict[str, str], SK.loads(row["tags"]))
         if private_hidden(ctx, who, account):
             raise FinanceError(NOT_FOUND, "no such purchase order line")
         if not may_write(ctx, who, account, tags):

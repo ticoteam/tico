@@ -73,7 +73,7 @@ def seeded_version(c: sqlite3.Connection, budget_id: str) -> bool:
     if len(rows) != 1 or not rows[0][0]:
         return False
     return c.execute("SELECT 1 FROM fin_actions WHERE kind='budget_create' "
-                     "AND json_extract(result_json, '$.budget_id')=? LIMIT 1", (budget_id,)).fetchone() is None
+                     "AND json_extract(result, '$.budget_id')=? LIMIT 1", (budget_id,)).fetchone() is None
 
 
 def drop_versions(c: sqlite3.Connection, budget_id: str) -> None:
@@ -215,6 +215,11 @@ def insert_hold(c: sqlite3.Connection, *, budget_id: str, amount: int, currency:
     return hid
 
 
+def set_commitment(c: sqlite3.Connection, hold_id: str, commitment_id: str) -> int:
+    """The commitment a hold belongs to: a bill's (its id), or a card authorization's until a bill claims it."""
+    return c.execute("UPDATE fin_holds SET commitment_id=? WHERE id=?", (commitment_id, hold_id)).rowcount
+
+
 def hold(c: sqlite3.Connection, hold_id: str) -> Any:
     return c.execute("SELECT * FROM fin_holds WHERE id=?", (hold_id,)).fetchone()
 
@@ -242,7 +247,7 @@ def set_settled_amount(c: sqlite3.Connection, hold_id: str, amount: int) -> int:
 
 
 def void_settled(c: sqlite3.Connection, hold_id: str, at: str) -> int:
-    """A settled charge the bank cancelled or reversed: it no longer uses anything."""
+    """A settled charge the bank canceled or reversed: it no longer uses anything."""
     return c.execute("UPDATE fin_holds SET status='released', released_at=? WHERE id=? AND status='settled'",
                      (at, hold_id)).rowcount
 
@@ -315,7 +320,7 @@ def projections(c: sqlite3.Connection, book_id: str, first: str, last: str) -> l
 def event(c: sqlite3.Connection, name: str, subject: str, period_key: str, payload: Mapping[str, object], by: str,
           at: str) -> bool:
     """A `finance.*` event for Tico's triggers, once per (name, subject, period). Whether it was new."""
-    return c.execute("INSERT INTO fin_events(id, name, subject, period_key, payload_json, created_at, created_by) "
+    return c.execute("INSERT INTO fin_events(id, name, subject, period_key, payload, created_at, created_by) "
                      "VALUES(?,?,?,?,?,?,?) ON CONFLICT(name, subject, period_key) DO NOTHING",
                      (new_id(), name, subject, period_key, json.dumps(dict(payload), sort_keys=True, default=str),
                       at, by)).rowcount > 0

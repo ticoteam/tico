@@ -6,6 +6,10 @@ same GitHub token"). Budget 5 minutes. The human never leaves the chat, and no v
 The rule: a bot uses only its own credentials and the ones granted to it. A grant is the only way B gets what was A's. Never copy a
 value between bots, files, tasks or messages, and never read a secrets file to do this.
 
+Inputs: the bot that has the credential, the bot that needs it, and the credential's name.
+
+Done when: the bot that needs it holds the credential through a grant and has reported its read-only check in one line, and the first bot's access is unchanged.
+
 ## 1. Find it
 
     hub credential list

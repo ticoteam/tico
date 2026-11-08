@@ -177,7 +177,7 @@ function tbCard(row, i, still) {
   return `<article class="tb-card${team ? ' is-team' : ''}${still ? ' tb-still' : ''}" data-card="${i}" style="--i:${i}">
     <div class="tb-top"><span class="tb-role" title="${esc(role)}">${esc(role)}</span>
       <input class="tb-check" type="checkbox" data-tb-check="${i}" aria-label="Include ${esc(role)}"${row.checked ? ' checked' : ''}${team || cloud ? ' disabled' : ''}></div>
-    <div class="tb-pick">${onBot ? botAvatar({slug: bot.slug, icon: bot.icon}, 30) : botAvatar({slug: pick.template || pick.name, icon: pick.icon}, 30)}
+    <div class="tb-pick">${onBot ? botAvatar({id: bot.id, slug: bot.slug, icon: bot.icon}, 30) : botAvatar({slug: pick.template || pick.name, icon: pick.icon}, 30)}
       <div class="tb-pick-text"><span class="tb-pick-name">${esc(onBot ? bot.name : pick.name)}</span>${cloud ? '<span class="tb-pick-sub">Cloud agent</span>' : ''}</div></div>
     <div class="tb-card-foot">${action}</div>${alts}</article>`;
 }

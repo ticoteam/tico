@@ -53,10 +53,10 @@ def test_nested_answers_and_file_reviews_filter_each_source_message(api):
                    'answers': {'verdict': ['Approve']}, 'other': 'Restricted review'}, 'ben-test')['comment']
     # An answer can carry another task as provenance (for example through its turn inputs).
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE conversations SET scope='direct',participants_json=? WHERE id=?",
+        c.execute("UPDATE conversations SET scope='direct',participants=? WHERE id=?",
                   (encode(['human:ana', 'human:priya', 'bot:ops']), target['conversation_id']))
         refs = H.message(c, answer['id'])['refs']
-        c.execute('UPDATE messages SET refs_json=? WHERE id=?', (encode({**refs, 'source': source['id']}), answer['id']))
+        c.execute('UPDATE messages SET refs=? WHERE id=?', (encode({**refs, 'source': source['id']}), answer['id']))
     file = post(api, f"tasks/{target['id']}/files", {'name': 'draft.md', 'text': 'Public draft'}, 'priya-test')
     with api.app.state.store.transaction() as c:
         c.execute('INSERT OR REPLACE INTO task_file_reviews(file_id,version,note,comment_id,ask_message_id) VALUES(?,1,?,?,?)',
@@ -91,7 +91,7 @@ def test_pipeline_cannot_remap_hidden_done_task_but_names_and_order_are_editable
     steps[0].update(status='doing', position=1)  # Empty steps may change meaning.
     post(api, 'task-types/' + typ['id'], {'steps': steps})
     after = get(api, 'tasks/' + row['id'], 'ben-test')['task']
-    for key in ('status', 'version', 'done_at', 'closed_at', 'closed_by'):
+    for key in ('status', 'version', 'done_at', 'closed_at', 'closed_by_id'):
         assert after[key] == done[key]
     assert after['step']['name'] == 'Completed'
 
@@ -106,5 +106,5 @@ def test_comment_delegation_never_authorizes_bot_acceptance(api):
         for close in ({'close': True}, {'step': 'general-closed'}):
             post(api, 'tasks/' + row['id'], {'version': done['version'], **close}, token, expected=403)
     accepted = post(api, 'tasks/' + row['id'], {'version': done['version'], 'close': True})
-    assert accepted['status'] == 'closed' and accepted['closed_by'] == 'human:ana'
+    assert accepted['status'] == 'closed' and accepted['closed_by_id'] == 'human:ana'
     assert accepted['done_at'] == done['done_at']

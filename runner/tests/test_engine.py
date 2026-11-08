@@ -79,3 +79,15 @@ def test_a_release_checkout_downloads_its_binary_only_when_the_checksum_matches(
     assert engine.fetch(root, env, release="0.3.47") == ""
     assert engine.ready(env, root) == engine.dist(root)
     assert engine.fetch(root, env, release="")                         # a checkout on main has nothing to download
+
+
+def test_a_release_has_a_computers_binary_once_its_checksum_file_lists_it(tmp_path):
+    release = tmp_path / "releases" / "download" / "v0.3.48"
+    release.mkdir(parents=True)
+    env = {"TICO_RUNNER_RELEASES": (tmp_path / "releases").as_uri()}
+    mac = "tico-runner-macos-arm64.gz"
+    assert engine.published("0.3.48", env, name=mac) is None             # no checksum file: cannot tell
+    (release / engine.SUMS).write_text(f"{'1' * 64}  tico-runner-linux-x86_64.gz\n")
+    assert engine.published("v0.3.48", env, name=mac) is False           # published before its Mac binaries
+    (release / engine.SUMS).write_text(f"{'1' * 64}  tico-runner-linux-x86_64.gz\n{'2' * 64}  {mac}\n")
+    assert engine.published("0.3.48", env, name=mac) is True

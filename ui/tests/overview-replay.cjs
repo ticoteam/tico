@@ -20,7 +20,7 @@ const SCENE = `export function createBuilding(data) {
     const page = await browser.newPage({viewport: {width: 1280, height: 860}, serviceWorkers: 'block'});
     const errors = [], replays = [], mode = {fail: false, cut: false};
     page.on('pageerror', e => errors.push(e.message));
-    const bot = (name, over) => ({name, display_name: name.toUpperCase(), host: 'keeper', status: 'active', operator: 'ana', can_chat: true,
+    const bot = (name, over) => ({name, display_name: name.toUpperCase(), host: 'keeper', status: 'active', owner_id: 'ana', can_chat: true,
       machine: {runner_id: 'alpha', label: 'Garden Mac'}, my_access: {see: true, read: true}, ...over});
     const bots = [bot('writer'), bot('editor'), bot('vault', {my_access: {see: true, read: false}})];
     await page.route('**/*', async route => {

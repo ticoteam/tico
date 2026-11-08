@@ -30,7 +30,7 @@ run('redesign-e2e-build', ['org', 'toured', 'automations'], async ({hub, browser
   assert.ok(made, `${tag}: the hub has it`);
   assert.equal(made.version, 1);
   assert.equal(made.enabled, false);
-  assert.equal(made.owner, 'person:dana');
+  assert.equal(made.owner_id, 'person:dana');
   assert.equal(made.trigger.type, 'schedule');
   assert.equal(made.trigger.cron, '0 9 * * 1-5');
   assert.deepEqual(made.steps, []);

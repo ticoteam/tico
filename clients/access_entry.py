@@ -35,7 +35,7 @@ ENV_RE = re.compile(r"^[A-Z_][A-Z0-9_]{0,99}$")
 # The HUB_ names the runner and the `hub` command set themselves. Other HUB_ names (a team's own HUB_BUCKET) are ordinary
 # variables a bot may be granted.
 RUNNER_HUB_ENV = {"HUB_TOKEN", "HUB_API_URL", "HUB_WORKSPACE", "HUB_EMPLOYEE", "HUB_OPERATION_ID", "HUB_BOT", "HUB_DIR",
-                  "HUB_DB", "HUB_HUMAN_OVERRIDE", "HUB_INGEST_TOKEN", "HUB_RUNNER_CONFIG", "HUB_TASK_ID"}
+                  "HUB_DB", "HUB_HUMAN_OVERRIDE", "HUB_INGEST_TOKEN", "HUB_RUNNER_CONFIG", "HUB_TASK_ID", "HUB_BOT_FOLDER"}
 RESERVED_ENV = {"HOME", "PATH", "SHELL", "PYTHONPATH", "PYTHONHOME", "NODE_OPTIONS", "LD_PRELOAD",
                 "DYLD_INSERT_LIBRARIES", "CODEX_HOME", "CLAUDE_CONFIG_DIR"} | RUNNER_HUB_ENV
 RESERVED_PREFIXES = ("TICO_", "DYLD_", "LD_")

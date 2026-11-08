@@ -18,8 +18,8 @@ const {unrouted} = require('./support/routes.cjs');
       efforts: ['low', 'high'], default_effort: 'high', harnesses: ['claude']});
     const choice = id => ({model: id, harness: 'claude', reasoning_effort: 'high'});
     const bot = (name, own, task) => ({name, display_name: name[0].toUpperCase() + name.slice(1), role: 'planner', team: 'research', description: 'Drafts forecasts',
-      status: 'active', operator: 'ana', can_manage: true, users: [], bot_owners: [], revision: 4, ...choice(own), task_model: task ? choice(task) : null,
-      machine: {runner_id: 'r1', label: 'Box', operator: 'ana', generation: 7}});
+      status: 'active', owner_id: 'ana', can_manage: true, users: [], bot_owners: [], revision: 4, ...choice(own), task_model: task ? choice(task) : null,
+      machine: {runner_id: 'r1', label: 'Box', owner_id: 'ana', generation: 7}});
     const bots = ['paused', 'active', 'planned', 'quarantined', 'archived'].map(status => ({...bot(status, opus, null), status, org_parent: 'p:ana', my_access: {see: true, read: true, write: true}}));
     await page.route('**/*', route => {
       const p = new URL(route.request().url()).pathname;
@@ -80,7 +80,7 @@ const {unrouted} = require('./support/routes.cjs');
     await page.locator('.bot-ident').waitFor();
     // A roster refresh removes both marks and restores full node opacity on unpause.
     bots[0].status = 'active';
-    await page.evaluate(async () => { S.emps = await get('/employees'); renderTree(); });
+    await page.evaluate(async () => { S.emps = namedRoster(await get('/employees')); renderTree(); });
     assert.equal(await node.locator('.bot-paused-badge').count(), 0);
     assert.equal(await node.evaluate(e => getComputedStyle(e).opacity), '1');
     await page.evaluate(() => { location.hash = '/settings'; });

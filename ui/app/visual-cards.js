@@ -47,6 +47,7 @@ function nativeVisualRepaint() {
   if (typeof V2C !== 'undefined' && V2C) v2ChatRender(V2C);
   if (typeof TASK_CHAT !== 'undefined' && TASK_CHAT?.data && taskChatCurrent(TASK_CHAT))
     taskCommentsRender(TASK_CHAT, TASK_CHAT.data);
+  if (typeof THV_VIEWS !== 'undefined') for (const v of THV_VIEWS) if (!v.gone && v.state === 'ready') thvDraw(v);
 }
 const visualRef = f => `${f.file_id}@${Number(f.version)}`;
 // Without a separate visual address (Visuals always on, backend/visuals.py mode) a page or SVG is never served from

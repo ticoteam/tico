@@ -35,7 +35,7 @@ def capture(api, machine, bots):
                 "draining": sorted(r[0] for r in c.execute("SELECT bot FROM bot_control WHERE draining=1")),
                 "bot_state": {b: H.bot(c, b)["state"] for b in bots},
                 "status": {b: {k: (H.status(c, b) or {}).get(k) for k in ("state", "focus")} for b in bots},
-                "jobs": {b: [(r[0], r[1]) for r in c.execute("SELECT state,created FROM jobs WHERE bot=? ORDER BY created",
+                "jobs": {b: [(r[0], r[1]) for r in c.execute("SELECT state,created_at FROM jobs WHERE bot_id=? ORDER BY created_at",
                                                              (b,))] for b in bots},
                 "refusal": {b: execution.bot_refusal(c, api.app.state.store.settings, machine["runner_id"], b)
                             for b in bots}}
@@ -48,7 +48,7 @@ def receipt(name, before, after, started):
 
 def drain(api, machine, attempt, how):
     """End a turn the way the runner's drain does: `capped` at the time limit, `waiting` handed back unstarted,
-    `held` a turn that cannot safely continue, `finished` a turn that completed before the drain ended."""
+    `held` a turn that cannot safely continue, `finished_at` a turn that completed before the drain ended."""
     if how == "finished":
         post(api, f"attempts/{attempt['id']}/complete", {"outcome": "completed", "text": "Done.", "last_seq": 0},
              machine["token"])
@@ -75,7 +75,7 @@ def pause(api, bot):
 
 @pytest.mark.parametrize("ending", ["capped", "finished"])
 def test_queued_work_starts_after_the_update_clears_and_an_operator_pause_stays(api, monkeypatch, ending):
-    """A time-limit drain (`capped`) and an ordinary one (`finished`): with no resume, message or poke, the queued work
+    """A time-limit drain (`capped`) and an ordinary one (`finished_at`): with no resume, message or poke, the queued work
     starts as soon as the computer is back current, while the bot a person paused stays paused."""
     monkeypatch.setenv("TICO_VERSION", NEW)
     machine = runner(api)
@@ -110,7 +110,7 @@ def test_queued_work_starts_after_the_update_clears_and_an_operator_pause_stays(
 
 def test_a_capped_turn_continues_after_it_finished_its_own_task(api, monkeypatch):
     """The live v0.4.16 cutover: a turn marked its task done, then reached the drain time limit. The claim's sweep of
-    notices for finished tasks cancelled the continuation, leaving the bot "queued to continue" with nothing queued."""
+    notices for finished tasks canceled the continuation, leaving the bot "queued to continue" with nothing queued."""
     monkeypatch.setenv("TICO_VERSION", NEW)
     machine = runner(api)
     bots = ("ops", "finance")
@@ -183,8 +183,8 @@ def test_holds_that_are_not_the_updates_stay_in_force_when_it_clears(api, monkey
         for bot in bots:
             post(api, "tasks", {"owner": bot, "title": "Check the synthetic report", "body": "Fixture data."})
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO bot_status(bot,state,since,updated_at) VALUES('finance','limited',?,?) "
-                  "ON CONFLICT(bot) DO UPDATE SET state='limited',since=excluded.since", (H.now(), H.now()))
+        c.execute("INSERT INTO bot_status(bot,state,changed_at,updated_at) VALUES('finance','limited',?,?) "
+                  "ON CONFLICT(bot) DO UPDATE SET state='limited',changed_at=excluded.changed_at", (H.now(), H.now()))
     for machine, bots in places:
         beat(api, machine, bots, OLD, {"state": "updating", "target": NEW, "running": 0, "handed_back": 0})
     before = {m["runner_id"]: capture(api, m, bots) for m, bots in places}

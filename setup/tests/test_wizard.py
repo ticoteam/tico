@@ -216,7 +216,7 @@ def test_invalid_or_credential_runtime_choices_stop_before_any_mutation(monkeypa
              (['--caddy-visuals', '1'], 'separate visual origin'),
              (['--front-door','cloudflared','--domain-aliases','old.example.com'], 'explicitly list each app alias'),
              (['--front-door','cloudflared','--domain-aliases','old.example.com','--cors-origins','https://old.example.com',
-               '--visual-origin','https://old.example.com'], 'restricted runner and visual')]
+               '--visual-origin','https://old.example.com'], 'restricted runner, visual and reader')]
     for extra, reason in cases:
         code, out = go(['--target','ssh','--ssh','root@h','--server-ip','203.0.113.7','--yes',*BASE,*extra], deps=d)
         assert code == 2 and reason in out and 'fictional-secret' not in out

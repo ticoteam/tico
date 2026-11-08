@@ -41,7 +41,7 @@ def access(visible_sql):
 def names(c):
     """A tag of the display names an answer is annotated with (backend/names.py)."""
     digest = hashlib.sha256()
-    for row in c.execute("SELECT 'human:'||id, name FROM humans UNION ALL SELECT 'bot:'||slug, display_name FROM bots "
+    for row in c.execute("SELECT 'human:'||id, name FROM humans UNION ALL SELECT 'bot:'||id, display_name FROM bots "
                          "ORDER BY 1"):
         digest.update(f"{row[0]}={row[1]}\n".encode())
     return digest.hexdigest()[:12]
@@ -157,5 +157,5 @@ def _could_read(c, visible_sql, tid, ref):
         owner, requester, private, guest = (json.loads(ref) + [None])[:4]
     except (TypeError, ValueError):
         return False
-    return c.execute(f"SELECT 1 FROM (SELECT ? AS id, ? AS owner, ? AS requester, ? AS private, ? AS guest) "
+    return c.execute(f"SELECT 1 FROM (SELECT ? AS id, ? AS owner_id, ? AS requester_id, ? AS private, ? AS guest) "
                      f"WHERE {visible_sql}", (tid, owner, requester, private, guest)).fetchone() is not None

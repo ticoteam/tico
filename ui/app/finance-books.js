@@ -79,7 +79,7 @@ function finBsDraw() {
         ? `<td class="fin-n">${finNum(was)}</td><td class="fin-n ${ch?.cls || ''}">${ch?.text || ''}</td>` : ''}<td><div class="fin-from">${from}</div></td></tr>`);
     }
     const t = totals[key], tp = prev?.totals?.[key], ch = prev && t != null && tp != null ? finDiff(t - tp) : null;
-    out.push(`<tr class="fin-subt"><td>Total ${label.toLowerCase()}</td><td class="fin-n">${finNum(t)}</td>${prev ? `<td class="fin-n">${finNum(tp)}</td><td class="fin-n ${ch?.cls || ''}">${ch?.text || ''}</td>` : ''}<td></td></tr>`);
+    out.push(`<tr class="fin-subt"><td>${esc(`Total ${label.toLowerCase()}${d.scoped ? finOwnSlice(finCaps()) : ''}`)}</td><td class="fin-n">${finNum(t)}</td>${prev ? `<td class="fin-n">${finNum(tp)}</td><td class="fin-n ${ch?.cls || ''}">${ch?.text || ''}</td>` : ''}<td></td></tr>`);
   }
   if (totals.liability != null || totals.equity != null) {
     const le = (totals.liability || 0) + (totals.equity || 0), lp = prev ? (prev.totals?.liability || 0) + (prev.totals?.equity || 0) : null;
@@ -122,8 +122,8 @@ function finBsTail() {
 }
 
 // ----------------------------------------------------------------- cards
-const FIN_CARD_RANK = {active: 0, frozen: 1, cancelled: 2};
-const FIN_CARD_STATUS = {active: ['ok', 'Active'], frozen: ['waiting', 'Frozen'], cancelled: ['idle', 'Cancelled']};
+const FIN_CARD_RANK = {active: 0, frozen: 1, canceled: 2};
+const FIN_CARD_STATUS = {active: ['ok', 'Active'], frozen: ['waiting', 'Frozen'], canceled: ['idle', 'Canceled']};
 function finCardsPage() {
   const caps = finCaps();
   FIN.cards = {rows: [], next: null, sel: '', load: 0};
@@ -144,7 +144,7 @@ async function finCardsLoad(more) {
   try { d = await get('/v2/finance/cards' + qs + finAs(qs ? '&' : '?'), {fresh: true}); }
   catch (e) { if (FIN?.cards === state && $('#fin-cards')) $('#fin-cards').innerHTML = finFail(e); return; }
   if (FIN?.cards !== state || state.load !== load || !$('#fin-cards')) return;
-  // Live cards first, then frozen, then cancelled; by name within each.
+  // Live cards first, then frozen, then canceled; by name within each.
   state.rows = (more ? [...state.rows, ...(d.cards || [])] : d.cards || [])
     .sort((x, y) => (FIN_CARD_RANK[x.status] ?? 3) - (FIN_CARD_RANK[y.status] ?? 3) || finCardName(x).localeCompare(finCardName(y)));
   state.next = d.next || null;
@@ -172,14 +172,14 @@ function finCardsDraw() {
 function finCardRail() {
   const state = FIN.cards, c = state.rows.find(x => x.id === state.sel);
   if (!c) { finRail(''); return; }
-  const may = finCaps().may('finance.cards') && c.status !== 'cancelled';
+  const may = finCaps().may('finance.cards') && c.status !== 'canceled';
   const [cls, label] = finCardPill(c);
   // A budget's freeze lifts when the budget has room again; only a person's freeze is undone by hand.
   const toggle = c.status === 'frozen' ? (c.frozen_by === 'budget' ? '' : 'Unfreeze') : 'Freeze';
-  const app = c.holder === finMe() && c.status !== 'cancelled' && FIN_CARD_APP[c.provider || 'mercury'];
+  const app = c.holder === finMe() && c.status !== 'canceled' && FIN_CARD_APP[c.provider || 'mercury'];
   const saved = c.saved_on || [], bot = String(c.holder || '').startsWith('bot:');
   finRail(`<div class="fin-rail-title"><h2>${esc(finCardName(c))}</h2><span class="pill ${cls}">${esc(label)}</span></div>
-    ${finKv('Holder', esc(finWho(c.holder)))}${finKv('Budget', c.budget ? esc(c.budget.name) : '—')}
+    ${finKv('Holder', esc(finWho(c.holder)))}${finKv('Budget', c.budget ? esc(c.budget.name) + (c.status === 'canceled' ? '' : finCardLimitsTag({card_limits: true})) : '—')}
     ${finKv('Limit', c.limit == null ? '—' : `${finUsd(c.limit)}${c.limit_interval ? ` <span class="muted">/ ${esc(c.limit_interval.replace(/ly$/, '').replace('dai', 'day'))}</span>` : ''}`)}
     ${finKv('Spent', finUsd(c.spent))}${c.expires_at ? finKv('Expires', esc(finDayLabel(c.expires_at))) : ''}
     ${app ? finKv('Number', `<a href="${esc(app)}" target="_blank" rel="noopener noreferrer">Show in ${esc(c.provider === 'mercury' || !c.provider ? 'Mercury' : c.provider)}</a>`) : ''}
@@ -266,7 +266,9 @@ async function finCardAdd() {
 
 // ----------------------------------------------------------------- transactions
 const FIN_TX = {q: '', source: 'all', status: '', account: '', org: null};
-const FIN_TX_STATUS = [['', 'Any status'], ['new', 'New'], ['matched', 'Matched'], ['posted', 'Posted'], ['pending', 'Pending'], ['ignored', 'Ignored']];
+const FIN_TX_STATUS = [['', 'Any status'], ['new', 'New'], ['matched', 'Matched'], ['posted', 'Posted'], ['pending', 'Pending'], ['ignored', 'Ignored'], ['failed', 'Failed']];
+// A bank row the bank ended (stored as ignored): shown by Mercury's reason, not as a person's ignore.
+const FIN_TX_GONE = {failed: 'failed', blocked: 'failed', cancelled: 'canceled', reversed: 'returned'};
 function finTxPage() {
   const t = FIN_TX;
   if (FIN.q.has('q') || FIN.q.has('account_id')) {
@@ -361,7 +363,7 @@ function finTxDraw() {
   box.innerHTML = `<table class="fin-t fin-tx-t"><thead><tr><th>Date</th><th>Description</th><th>Account</th><th>Line</th><th class="fin-n">Amount</th><th>Teammate</th><th>Vendor</th><th>Status</th></tr></thead><tbody>${state.rows.map(r => {
     const {tags, vendor} = finTxTags(r), key = finTxKey(r);
     const account = r.kind === 'feed' ? `${r.money_account?.name || ''}${r.money_account?.last4 ? ' ••' + r.money_account.last4 : ''}` : '';
-    const status = r.kind === 'feed' ? (r.pending ? 'pending' : r.status) : r.reversed ? 'reversed' : 'posted';
+    const status = r.kind === 'feed' ? (r.pending ? 'pending' : r.status === 'ignored' && FIN_TX_GONE[r.provider_status] || r.status) : r.reversed ? 'reversed' : 'posted';
     return `<tr data-fin-tx="${esc(key)}"${state.sel === key ? ' class="fin-on"' : ''}><td class="fin-nowrap">${esc(finDayLabel(r.date))}</td>
       <td><button type="button" class="fin-link">${esc(r.kind === 'feed' ? r.counterparty || r.description || '' : r.description || r.memo || '')}</button></td><td class="fin-cut">${account ? esc(account) : '<span class="muted">—</span>'}</td><td>${finTxLineCell(r)}</td>
       <td class="fin-n">${finCents(r.amount)}</td><td>${tags.teammate ? esc(finWho(tags.teammate)) : '<span class="muted">—</span>'}</td><td class="fin-cut">${vendor ? esc(vendor) : '<span class="muted">—</span>'}</td>
@@ -408,9 +410,18 @@ async function finTxLineSave(sel) {
     }
     if (res.status === 'committed') toast('Saved');
     if (state.cat?.key === key) state.cat = null;
+    finTxRailHold();
     void finTxLoad(false);
-  } catch (e) { state.busy = false; toast(e.message, true); if (FIN?.tx === state) finTxDraw(); }
+  } catch (e) {
+    state.busy = false; toast(e.message, true);
+    if (FIN?.tx !== state) return;
+    finTxDraw();
+    // A rail drawn while this was out has its Save off.
+    finTxCatRedraw(); $('#fin-rail [data-fin-tag] [type=submit]')?.removeAttribute('disabled');
+  }
 }
+// The reload after a save redraws the rail from the fresh read: no picks until then, they would be dropped.
+const finTxRailHold = () => { const form = $('#fin-rail form'); if (form) form.inert = true; };
 function finTxRail() {
   if (FIN_TX.source === 'transfer') { finXferRail(); return; }
   const state = FIN.tx, r = state.rows.find(x => finTxKey(x) === state.sel);
@@ -442,6 +453,7 @@ function finTxRail() {
   void finTxExpected(r);
   const form = $('#fin-rail [data-fin-tag]');
   form?.elements.project.addEventListener('input', ev => { ev.target.dataset.finTyped = '1'; });
+  if (form) form.onchange = () => { if (!state.busy) form.querySelector('[type=submit]').disabled = false; };
   if (form) form.onsubmit = async ev => {
     ev.preventDefault();
     // Only the fields the person changed are set (or cleared) on each line; every other tag a line has stays.
@@ -461,6 +473,7 @@ function finTxRail() {
       const res = await finAct('categorize', {lines: lines.map(l => ({line_id: l.line_id, tags: pick(l)})), mode: 'replace'});
       if (res.status === 'committed') toast('Saved');
       state.busy = false;
+      finTxRailHold();
       void finTxLoad(false);
     } catch (e) { toast(e.message, true); btn.disabled = false; }
     finally { state.busy = false; }
@@ -622,6 +635,7 @@ function finTxCatDraw(r) {
       // row's stay); otherwise the rail redraws now, with its Save back on.
       if (saved) {
         if (FIN?.tx === state && state.cat?.key === c.key) state.cat = null;
+        finTxRailHold();
         void finTxLoad(false);
       } else finTxCatRedraw();
     }
@@ -652,7 +666,7 @@ function finTxCatDraw(r) {
 // payment_cancel while one is still queued. GET /api/v2/finance/transfers?cursor= ->
 // {transfers: [{id, from: {id, name, last4}, to: {…}, amount, memo, status, last_error, created_at, created_by}], next_cursor}.
 const FIN_XFER_STATUS = {queued: ['waiting', 'Queued'], submitted: ['waiting', 'Sent'], unknown: ['fail', 'Check bank'],
-  failed: ['fail', 'Failed'], posted: ['ok', 'Posted'], cancelled: ['idle', 'Cancelled']};
+  failed: ['fail', 'Failed'], posted: ['ok', 'Posted'], canceled: ['idle', 'Canceled']};
 const finAcctName = a => a ? `${a.name || ''}${a.last4 ? ' ••' + a.last4 : ''}` : '';
 async function finXferLoad(more) {
   const state = FIN.tx, load = ++state.load;
@@ -689,7 +703,7 @@ function finXferRail() {
     ${r.status === 'queued' && finCaps().may('finance.pay') ? '<div class="fin-foot"><button type="button" class="ghost" data-fin-xfer-cancel>Cancel transfer</button></div>' : ''}`);
   $('#fin-rail [data-fin-xfer-cancel]')?.addEventListener('click', async ev => {
     const btn = ev.currentTarget; btn.disabled = true;
-    try { const res = await finAct('payment_cancel', {transfer_id: r.id}); if (res.status === 'committed') toast('Cancelled'); void finTxLoad(false); }
+    try { const res = await finAct('payment_cancel', {transfer_id: r.id}); if (res.status === 'committed') toast('Canceled'); void finTxLoad(false); }
     catch (e) { toast(e.message, true); btn.disabled = false; }
   });
 }

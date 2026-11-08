@@ -72,8 +72,29 @@ def shape_differences(golden, actual, schema, root, where="$"):
             found += shape_differences(golden[key], actual[key], schema.get("properties", {}).get(key, {}), root,
                                        where + "." + key)
         return found
+    if isinstance(golden, dict):
+        # An open object may gain fields, never lose one: a runner in the window may still read it (a renamed
+        # column keeps its old wire name, backend/runner_wire.py).
+        missing = sorted(set(golden) - set(actual))
+        found = ["%s: lost fields %s" % (where, missing)] if missing else []
+        for key in set(golden) & set(actual):
+            found += missing_fields(golden[key], actual[key], where + "." + key)
+        return found
     if isinstance(golden, list) and golden and actual and isinstance(schema.get("items"), dict):
         return shape_differences(golden[0], actual[0], schema["items"], root, where + "[0]")
+    return missing_fields(golden, actual, where)
+
+
+def missing_fields(golden, actual, where):
+    """The fields of `golden`'s objects, at any depth, that `actual` no longer has."""
+    if isinstance(golden, dict) and isinstance(actual, dict):
+        missing = sorted(set(golden) - set(actual))
+        found = ["%s: lost fields %s" % (where, missing)] if missing else []
+        for key in set(golden) & set(actual):
+            found += missing_fields(golden[key], actual[key], where + "." + key)
+        return found
+    if isinstance(golden, list) and isinstance(actual, list) and golden and actual:
+        return missing_fields(golden[0], actual[0], where + "[0]")
     return []
 
 
@@ -137,6 +158,18 @@ def heartbeat_body(bot):
 
 CLAIM = {"next_run": True, "busy_bots": [], "busy_lanes": [], "start_places": True}
 SNAPSHOT = {"at": 1767225600.0, "cpu_pct": 12.5, "mem_pct": 40.0, "running_turns": 1}
+
+
+def test_packet_capability_heartbeat_is_accepted_and_recorded_for_admission(api):
+    computer = runner(api)
+    assign(api, computer, "ops")
+    body = heartbeat_body("ops")
+    body["capabilities"].append("memory_tidy_packets_v1")
+    assert not W.errors(body, ref("Heartbeat"), REQUESTS)
+    post(api, "runners/heartbeat", body, token=computer["token"])
+    from backend import memory_tidy_runs
+    with api.app.state.store.read() as c:
+        assert memory_tidy_runs.packet_runner(c, "ops")
 
 
 def turn(api, bot="ops"):

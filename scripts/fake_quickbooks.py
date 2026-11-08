@@ -1,29 +1,44 @@
 """A stand-in for QuickBooks Online's API for end-to-end runs on a developer's computer: stdlib only, on 127.0.0.1, in
-memory. It answers the calls backend/finance/qbo.py makes (query paging and counts, CDC, creates by RequestId, and the
-journal delete), in the shapes that client parses. Point Tico at it with TICO_QUICKBOOKS_BASE=http://127.0.0.1:<port>.
+memory. It answers the calls backend/finance/qbo.py makes (query paging, WHERE and counts, CDC, creates and updates by
+RequestId and Id, deletes and voids with SyncToken), in the shapes that client parses. Point Tico at it with TICO_QUICKBOOKS_BASE=http://127.0.0.1:<port>.
 Nothing here reaches the network.
 
 Control endpoints under /_fake/ are not QuickBooks':
   POST /_fake/seed     {"Account": [...], "Vendor": [...], "Item": [...], ...} adds records of any entity
   POST /_fake/change   the same shape: records the change feed (CDC) reports next time it is read
   POST /_fake/expire   the next call is refused with 401 once (the token has expired)
-  GET  /_fake/calls    every call made, in order (method, path, query, body; never the token)
+  POST /_fake/clock    {"now": "..."}: the time the 30-day change window is judged by (default: the real time); a
+                       test that runs on a fixed date sets it. Change stamps are always real time.
+  POST /_fake/lose     {"path": "bill", "count": 1}: the next <count> creates at that path are written, then the
+                       answer is lost (the connection closes with no reply); a retry with the same RequestId finds it
+  GET  /_fake/calls    every call made, in order (method, path, query, body; never the token), plus "lost" and
+                       "refused" (401s given) counts
+  POST /_fake/classes  {"per_txn": false, "per_line": true}: whether the company tracks a class on the transaction
+                       (per_txn) and on each line (per_line, the default). GET preferences reports both; a write whose
+                       line names a class is refused while per_line is off (the fake's reading of the docs, unverified)
   POST /_fake/reset    empties everything
 
   python3 scripts/fake_quickbooks.py --port 18791
 """
 import argparse
 import json
+import re
 import sys
 import threading
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from typing import Any
 from urllib.parse import parse_qs, urlsplit
 
 ENTITIES = ("Account", "Vendor", "Customer", "JournalEntry", "Item", "Department", "Class", "PurchaseOrder", "Estimate",
-            "Invoice")
+            "Invoice", "Bill", "BillPayment", "Payment")
 CREATE = {"account": "Account", "vendor": "Vendor", "customer": "Customer", "journalentry": "JournalEntry",
-          "purchaseorder": "PurchaseOrder", "estimate": "Estimate", "invoice": "Invoice"}
+          "purchaseorder": "PurchaseOrder", "estimate": "Estimate", "invoice": "Invoice", "bill": "Bill",
+          "billpayment": "BillPayment", "payment": "Payment", "item": "Item", "department": "Department",
+          "creditmemo": "CreditMemo"}
+CHANGE_CAP = 1000                       # the most objects one change feed answer holds, for each entity
+CHANGE_WINDOW = timedelta(days=30)      # how far back a change feed reaches
 LOCK = threading.Lock()
 STATE: dict[str, object] = {}
 
@@ -31,16 +46,26 @@ STATE: dict[str, object] = {}
 def reset() -> None:
     STATE.clear()
     STATE.update({"books": {e: [] for e in ENTITIES}, "changes": [], "by_request": {}, "calls": [], "expire": False,
-                  "next_id": 100})
+                  # Ids are unique per entity, as in QuickBooks: a new record must not take a seeded id (101 to 706).
+                  "next_id": 1000, "lose": [], "lost": 0, "refused": 0, "window_clock": None,
+                  "classes": {"per_txn": False, "per_line": True}})
 
 
 def _rows(entity: str) -> list[dict[str, object]]:
     return STATE["books"].setdefault(entity, [])  # type: ignore[union-attr,return-value]
 
 
-def _fault(message: str) -> tuple[int, dict[str, object]]:
-    return 400, {"Fault": {"Error": [{"Message": message, "Detail": message, "code": "2010"}],
+def _fault(message: str, code: str = "2010") -> tuple[int, dict[str, object]]:
+    return 400, {"Fault": {"Error": [{"Message": message, "Detail": message, "code": code}],
                            "type": "ValidationFault"}}
+
+
+def _stale() -> tuple[int, dict[str, object]]:
+    return _fault("Stale Object Error: the record changed after it was read (SyncToken)", "5010")
+
+
+def _missing() -> tuple[int, dict[str, object]]:
+    return _fault("Object Not Found", "610")
 
 
 def _balanced(lines: object) -> bool:
@@ -56,56 +81,207 @@ def _balanced(lines: object) -> bool:
     return total == 0
 
 
+def _conditions(sql: str) -> list[tuple[str, str, str]]:
+    """The WHERE conditions of a query as (field, operator, value text), joined by AND: `Name = 'x' AND Active IN (...)`."""
+    found = re.search(r"\sWHERE\s+(.*?)(?=\s+STARTPOSITION\s|\s+MAXRESULTS\s|$)", sql)
+    if found is None:
+        return []
+    out: list[tuple[str, str, str]] = []
+    for part in re.split(r"\s+AND\s+", found.group(1).strip()):
+        clause = re.fullmatch(r"(\w+)\s+(=|IN)\s+(.+)", part)
+        if clause is None:
+            raise ValueError(part)
+        out.append((clause[1], clause[2], clause[3]))
+    return out
+
+
+def _value(text: str) -> Any:
+    text = text.strip()
+    if text.startswith("(") and text.endswith(")"):
+        return [_value(x) for x in text[1:-1].split(",")]
+    if len(text) >= 2 and text[0] == text[-1] == "'":
+        return text[1:-1].replace("\\'", "'")
+    return {"true": True, "false": False}.get(text, text)
+
+
+def _text(value: object) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    return str(value)
+
+
+def _matches(row: dict[str, object], field: str, op: str, wanted: Any) -> bool:
+    have = _text(row.get(field))
+    if op == "IN":
+        return have in {_text(x) for x in wanted}
+    return have == _text(wanted)
+
+
 def query(sql: str) -> tuple[int, dict[str, object]]:
     parts = sql.split()
     entity = parts[3]
+    try:
+        wanted = [(field, op, _value(text)) for field, op, text in _conditions(sql)]
+    except ValueError as e:
+        return _fault(f"not a query the fake answers: {e}")
+    rows = [row for row in _rows(entity) if all(_matches(row, f, op, value) for f, op, value in wanted)]
     if parts[1] == "COUNT(*)":
-        return 200, {"QueryResponse": {"totalCount": len(_rows(entity))}}
+        return 200, {"QueryResponse": {"totalCount": len(rows)}}
     start = int(parts[parts.index("STARTPOSITION") + 1]) if "STARTPOSITION" in parts else 1
-    size = int(parts[parts.index("MAXRESULTS") + 1]) if "MAXRESULTS" in parts else 1000
-    rows = _rows(entity)[start - 1:start - 1 + size]
-    return 200, {"QueryResponse": {entity: rows, "startPosition": start, "maxResults": len(rows)}}
+    size = int(parts[parts.index("MAXRESULTS") + 1]) if "MAXRESULTS" in parts else 100      # QuickBooks' default page
+    page = rows[start - 1:start - 1 + size]
+    return 200, {"QueryResponse": {entity: page, "startPosition": start, "maxResults": len(page)}}
 
 
-def cdc(entities: str) -> tuple[int, dict[str, object]]:
-    wanted = [e for e in entities.split(",") if e]
-    block: dict[str, object] = {e: [] for e in wanted}
-    for entity, row in STATE["changes"]:  # type: ignore[index,misc]
-        if entity in wanted:
-            block[entity].append(row)  # type: ignore[union-attr]
-    STATE["changes"] = []
+def _parse_time(text: str) -> datetime:
+    at = datetime.fromisoformat(text)
+    return at if at.tzinfo is not None else at.replace(tzinfo=timezone.utc)
+
+
+def _now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def _window_now() -> datetime:
+    """The clock the change window is judged by: the time a test set with /_fake/clock, else the real time."""
+    pinned = STATE.get("window_clock")
+    return _parse_time(str(pinned)) if pinned else _now()
+
+
+def _stamp_of(row: dict[str, object]) -> datetime:
+    meta = row.get("MetaData")
+    if isinstance(meta, dict) and meta.get("LastUpdatedTime"):
+        return _parse_time(str(meta["LastUpdatedTime"]))
+    return _now()
+
+
+def _changed(entity: str, row: dict[str, object]) -> None:
+    """Records a change the feed reports: a record written or edited here (its time is its MetaData's, else now), or a
+    deletion (its id and status)."""
+    when = _stamp_of(row)
+    STATE["changes"].append((entity, when, {**row, "MetaData": {"LastUpdatedTime": when.isoformat()}}))  # type: ignore[attr-defined]
+
+
+def cdc(entities: str, since: str) -> tuple[int, dict[str, object]]:
+    """The changes to each entity since `changedSince`, oldest first and at most CHANGE_CAP an entity. Reading does not
+    use them up: the same cursor is answered with the same changes, as QuickBooks' feed is."""
+    try:
+        floor = _parse_time(since)
+    except ValueError:
+        return _fault("changedSince is not a time")
+    if _window_now() - floor > CHANGE_WINDOW:
+        return _fault("changedSince is more than 30 days in the past")
+    block: dict[str, object] = {}
+    for entity in [e for e in entities.split(",") if e]:
+        found = sorted((c for c in STATE["changes"] if c[0] == entity and c[1] >= floor),  # type: ignore[union-attr]
+                       key=lambda c: c[1])
+        block[entity] = [row for _, _, row in found[:CHANGE_CAP]]
     return 200, {"CDCResponse": [{"QueryResponse": [block]}]}
+
+
+def _lose(path: str) -> bool:
+    """True when the next create at this path is one whose answer is lost (the write itself is kept)."""
+    for rule in STATE["lose"]:  # type: ignore[attr-defined]
+        if rule["path"] == path and rule["count"] > 0:
+            rule["count"] -= 1
+            STATE["lost"] = int(STATE["lost"]) + 1  # type: ignore[call-overload]
+            return True
+    return False
+
+
+def _complete(made: dict[str, object], entity: str) -> None:
+    """What QuickBooks adds to a record it keeps: an Id for each line that has none, and a total from the lines when
+    the write leaves it out."""
+    lines = made.get("Line")
+    if not isinstance(lines, list):
+        return
+    for n, line in enumerate(lines, 1):
+        if isinstance(line, dict) and "Id" not in line:
+            line["Id"] = f"{made['Id']}-{n}"
+    if entity in ("Bill", "Invoice", "Payment", "BillPayment") and "TotalAmt" not in made:
+        made["TotalAmt"] = float(sum(Decimal(str(x.get("Amount", 0))) for x in lines if isinstance(x, dict)))
+
+
+def _has_line_class(body: dict[str, object]) -> bool:
+    """True when a line of the write names a class (a ClassRef inside the line's own detail)."""
+    lines = body.get("Line")
+    if not isinstance(lines, list):
+        return False
+    return any(isinstance(line, dict) and any(isinstance(d, dict) and "ClassRef" in d for d in line.values())
+               for line in lines)
 
 
 def create(path: str, body: dict[str, object], request_id: str, operation: str) -> tuple[int, dict[str, object]]:
     if request_id and request_id in STATE["by_request"]:  # type: ignore[operator]
         return STATE["by_request"][request_id]  # type: ignore[index,return-value]
-    if path == "journalentry" and operation == "delete":
-        answer = _delete(str(body.get("Id", "")), str(body.get("SyncToken", "")))
+    entity = CREATE.get(path)
+    if entity is None:
+        return 404, {"Fault": {"Error": [{"Message": "no such entity"}], "type": "ValidationFault"}}
+    classes: dict[str, bool] = STATE["classes"]  # type: ignore[assignment]
+    if operation not in ("delete", "void") and not classes["per_line"] and _has_line_class(body):
+        return _fault("This company does not track a class on each transaction line, so a line cannot name a class")
+    if operation in ("delete", "void"):
+        answer = _remove(entity, str(body.get("Id", "")), str(body.get("SyncToken", "")), operation)
+    elif body.get("Id"):
+        answer = _update(entity, body)
     else:
-        entity = CREATE.get(path)
-        if entity is None:
-            return 404, {"Fault": {"Error": [{"Message": "no such entity"}], "type": "ValidationFault"}}
         if entity == "JournalEntry" and not _balanced(body.get("Line")):
             return _fault("Journal entry does not balance")
         made = {**body, "Id": str(STATE["next_id"]), "SyncToken": "0"}
         STATE["next_id"] = int(made["Id"]) + 1  # type: ignore[call-overload]
+        _complete(made, entity)
         _rows(entity).append(made)
+        _changed(entity, made)
         answer = (200, {entity: made})
     if request_id and answer[0] == 200:
         STATE["by_request"][request_id] = answer  # type: ignore[index]
     return answer
 
 
-def _delete(entry_id: str, token: str) -> tuple[int, dict[str, object]]:
-    rows = _rows("JournalEntry")
+def _revision(row: dict[str, object]) -> str:
+    return str(row.get("SyncToken", "0"))
+
+
+def _next_revision(row: dict[str, object]) -> str:
+    return str(int(_revision(row)) + 1)
+
+
+def _update(entity: str, body: dict[str, object]) -> tuple[int, dict[str, object]]:
+    """A write that names a record's Id updates it (QuickBooks does not make a second one). Its SyncToken must be the
+    record's, or the write is stale; a sparse write sets only the fields it names, and the record moves to its next
+    SyncToken."""
+    for row in _rows(entity):
+        if str(row.get("Id")) != str(body["Id"]):
+            continue
+        if _revision(row) != str(body.get("SyncToken", "")):
+            return _stale()
+        row.update({k: v for k, v in body.items() if k not in ("Id", "SyncToken", "sparse")})
+        row["SyncToken"] = _next_revision(row)
+        _changed(entity, row)
+        return 200, {entity: dict(row)}
+    return _missing()
+
+
+def _remove(entity: str, entry_id: str, token: str, operation: str) -> tuple[int, dict[str, object]]:
+    """A delete removes the record it names (and answers it as deleted). A void keeps the record with a zero total, as
+    QuickBooks does. Either needs the record's current SyncToken."""
+    rows = _rows(entity)
     for row in rows:
-        if str(row["Id"]) == entry_id:
-            if str(row["SyncToken"]) != token:
-                return _fault("Stale object: SyncToken does not match")
-            rows.remove(row)
-            return 200, {"JournalEntry": {"Id": entry_id, "status": "Deleted"}}
-    return _fault("Object not found")
+        if str(row.get("Id")) != entry_id:
+            continue
+        if _revision(row) != token:
+            return _stale()
+        if operation == "void":
+            row["TotalAmt"] = 0
+            row["SyncToken"] = _next_revision(row)
+            _changed(entity, row)
+            return 200, {entity: dict(row)}
+        rows.remove(row)
+        _changed(entity, {"Id": entry_id, "status": "Deleted"})
+        return 200, {entity: {"Id": entry_id, "status": "Deleted"}}
+    return _missing()
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -139,6 +315,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(401, {"Fault": {"Error": [{"Message": "no token"}]}})
             if STATE["expire"]:
                 STATE["expire"] = False
+                STATE["refused"] = int(STATE["refused"]) + 1  # type: ignore[call-overload]
                 return self._send(401, {"Fault": {"Error": [{"Message": "token expired"}]}})
             parts = url.path.strip("/").split("/")
             if len(parts) < 4 or parts[0] != "v3" or parts[1] != "company":
@@ -146,20 +323,38 @@ class Handler(BaseHTTPRequestHandler):
             if method == "GET" and parts[3] == "query":
                 return self._send(*query(query_string.get("query", "")))
             if method == "GET" and parts[3] == "cdc":
-                return self._send(*cdc(query_string.get("entities", "")))
+                return self._send(*cdc(query_string.get("entities", ""), query_string.get("changedSince", "")))
+            if method == "GET" and parts[3] == "preferences":
+                classes: dict[str, bool] = STATE["classes"]  # type: ignore[assignment]
+                return self._send(200, {"Preferences": {"AccountingInfoPrefs": {
+                    "ClassTrackingPerTxn": classes["per_txn"], "ClassTrackingPerTxnLine": classes["per_line"]}}})
             if method == "POST":
-                return self._send(*create(parts[3], body, query_string.get("requestid", ""),
-                                          query_string.get("operation", "")))
+                answer = create(parts[3], body, query_string.get("requestid", ""), query_string.get("operation", ""))
+                if _lose(parts[3]):
+                    # The write is kept above; its answer never leaves (the caller sees the connection close).
+                    self.close_connection = True
+                    return None
+                return self._send(*answer)
             self._send(404, {})
 
     def _control(self, method: str, path: str, body: dict[str, object]) -> None:
         if path == "/_fake/calls":
-            return self._send(200, {"calls": STATE["calls"]})
+            return self._send(200, {"calls": STATE["calls"], "lost": STATE["lost"], "refused": STATE["refused"]})
         if path == "/_fake/reset":
             reset()
             return self._send(200, {"ok": True})
+        if path == "/_fake/clock":
+            STATE["window_clock"] = str(body.get("now") or "") or None
+            return self._send(200, {"ok": True})
         if path == "/_fake/expire":
             STATE["expire"] = True
+            return self._send(200, {"ok": True})
+        if path == "/_fake/lose":
+            STATE["lose"].append({"path": str(body.get("path", "")), "count": int(body.get("count", 1))})  # type: ignore[attr-defined]
+            return self._send(200, {"ok": True})
+        if path == "/_fake/classes":
+            classes: dict[str, bool] = STATE["classes"]  # type: ignore[assignment]
+            classes.update({k: bool(body[k]) for k in ("per_txn", "per_line") if k in body})
             return self._send(200, {"ok": True})
         if path == "/_fake/seed" or path == "/_fake/change":
             for entity, rows in body.items():
@@ -168,7 +363,7 @@ class Handler(BaseHTTPRequestHandler):
                         if path == "/_fake/seed":
                             _rows(entity).append(dict(row))
                         else:
-                            STATE["changes"].append((entity, dict(row)))  # type: ignore[attr-defined]
+                            _changed(entity, row)
             return self._send(200, {"ok": True})
         self._send(404, {})
 

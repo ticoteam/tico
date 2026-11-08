@@ -611,7 +611,7 @@ def elsewhere(base, message, task=None):
     if not count:
         return None
     where = {"task": task} if task else {}
-    sender = str(message.get("from_actor") or "")
+    sender = str(message.get("sender_id") or "")
     if not where and sender.startswith("bot:"):
         # A bot has more than one chat with a person (each Slack thread is a room of its own): name the room.
         where = {"bot": sender[4:], "conversation": message.get("conversation_id") or ""}

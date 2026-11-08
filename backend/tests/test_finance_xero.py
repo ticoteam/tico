@@ -1249,6 +1249,16 @@ def test_refunds_post_against_their_control_account_and_the_bank_in_opposite_dir
     assert {x.account: x.amount for x in ap.lines} == {"Account:acct-2000": -3000, "Account:acct-1000": 3000}
 
 
+def test_an_invoice_and_a_bill_post_against_the_provider_debtors_and_creditors_not_the_native_chart():
+    def system(name: str) -> str:
+        return {"DEBTORS": "Account:acct-1200", "CREDITORS": "Account:acct-2000"}.get(name, "")
+
+    invoice = _invoice("inv-ctl")
+    bill = {**invoice, "InvoiceID": "bill-ctl", "Type": "ACCPAY"}
+    assert X.document_record(invoice, system).control == "Account:acct-1200"
+    assert X.document_record(bill, system).control == "Account:acct-2000"
+
+
 def test_refunding_an_overpayment_is_a_journal_that_moves_the_bank_once(books):
     xbooks = XeroBooks()
     _chart(xbooks)
@@ -2133,7 +2143,7 @@ def test_a_revised_invoice_naming_a_tracking_option_the_books_do_not_hold_keeps_
     with books.read() as c:
         invoice = _local(c, "Invoice:inv-1", "fin_invoices")
         before = tuple(c.execute("SELECT status, total FROM fin_invoices WHERE id=?", (invoice,)).fetchone())
-        tags = c.execute("SELECT tags_json FROM fin_invoice_lines WHERE invoice_id=?", (invoice,)).fetchone()[0]
+        tags = c.execute("SELECT tags FROM fin_invoice_lines WHERE invoice_id=?", (invoice,)).fetchone()[0]
         revision = c.execute("SELECT revision FROM fin_external_refs WHERE external_id='Invoice:inv-1'").fetchone()[0]
     assert sorted(json.loads(tags)) == ["class", "location"]
     gone = [{"Name": "Location", "Option": "Austin"}, {"Name": "Team", "Option": "Gone"}]
@@ -2142,7 +2152,7 @@ def test_a_revised_invoice_naming_a_tracking_option_the_books_do_not_hold_keeps_
     _drain(books, client, cid, now=LATER, passes=2)
     with books.read() as c:
         assert tuple(c.execute("SELECT status, total FROM fin_invoices WHERE id=?", (invoice,)).fetchone()) == before
-        assert c.execute("SELECT tags_json FROM fin_invoice_lines WHERE invoice_id=?", (invoice,)).fetchone()[0] == tags
+        assert c.execute("SELECT tags FROM fin_invoice_lines WHERE invoice_id=?", (invoice,)).fetchone()[0] == tags
         assert c.execute("SELECT revision FROM fin_external_refs WHERE external_id='Invoice:inv-1'").fetchone()[0] \
             == revision
 

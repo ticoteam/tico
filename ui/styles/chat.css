@@ -266,12 +266,6 @@ a.ref::before,.run-did .ref::before{content:'';display:inline-block;width:.8em;h
 /* on a bot page the pill is the composer, at the bottom of the Chat tab */
 #chat-composer{margin-top:12px}
 #chat-composer .ask{margin-bottom:0}
-.bot-chat-tasks{position:relative;flex:none;margin:0 0 8px;border:1px solid var(--line);border-radius:10px;background:var(--surface)}
-.bot-chat-task-groups{max-height:calc(2 * 1.4em + 12px);overflow-y:auto;overscroll-behavior:contain;padding:6px 34px 6px 11px;font-size:var(--t-base);line-height:var(--lh)}
-.bot-chat-task-row{display:block;width:100%;padding:0;border:0;background:none;color:var(--ink);font:inherit;text-align:left;cursor:pointer}
-.bot-chat-task-row+.bot-chat-task-row{margin-top:4px}.bot-chat-task-row:hover{color:var(--ink)}
-.bot-chat-tasks-x{position:absolute;top:2px;right:2px;width:30px;height:30px;border:0;border-radius:6px;background:none;color:var(--muted);font-size:18px;line-height:var(--lh-none);cursor:pointer}
-.bot-chat-tasks-x:hover{color:var(--ink);background:var(--surface2)}
 /* Composer notices and attachment state sit above the input, so the input itself owns the edge. */
 /* The shared .ask class also styles task questions; chat needs no question-card surround. */
 #chat-composer .ask{display:flex;flex-direction:column;padding:0;border:0;background:transparent}
@@ -309,7 +303,6 @@ body:has(#app-nudge:not([hidden])) #main.bot-split-layout>#bot-top{margin-top:8p
 #main.bot-split-layout #pane-chat:not([hidden]){grid-column:1;grid-row:3;margin:0 var(--s4) max(var(--s3),env(safe-area-inset-bottom)) 28px}
 #main.bot-split-layout #pane-tasks:not([hidden]){grid-column:2;grid-row:1/-1;min-height:0;overflow-y:auto;overscroll-behavior:contain;border-left:1px solid var(--line);background:transparent;padding:6px 0 var(--s4)}
 #main.bot-split-layout .rail-sec{padding-left:14px;padding-right:12px}
-#main.bot-split-layout #bot-chat-tasks{display:none!important}
 #pane-tasks .trow :is(summary,.trow-head){grid-template-columns:auto minmax(0,1fr) auto auto}   /* a long state pill never runs into the title */
 #main.chat-layout #conv-thread{flex:1;min-height:0;max-height:none;scrollbar-gutter:stable}
 #main.bot-chat-layout #chat-composer{position:static;flex:none;z-index:auto;margin:var(--s3) 0 0;padding:0;background:transparent}
@@ -320,7 +313,6 @@ body:has(#app-nudge:not([hidden])) #main.bot-split-layout>#bot-top{margin-top:8p
   #main.chat-layout{position:fixed;top:var(--chat-viewport-top,0px);left:0;right:0;height:var(--chat-viewport-height,100dvh);padding:max(var(--s3),env(safe-area-inset-top)) 12px calc(var(--mobile-nav-height) + env(safe-area-inset-bottom) + 8px)}
   body.mobile-composer-focus #main.chat-layout{padding-bottom:max(var(--s2),env(safe-area-inset-bottom))}
   #main.chat-layout .card.conv{padding:10px}
-  .bot-chat-tasks{margin-bottom:8px}
 
   #main.chat-layout .conv-top{margin-bottom:4px}
   #conv-access .muted{display:none}
@@ -385,7 +377,7 @@ body:has(#app-nudge:not([hidden])) #main.bot-split-layout>#bot-top{margin-top:8p
    its run summary and a Confirm card stay on the page without one. The thread pads itself to the column, so
    its scrollbar stays on the pane's edge. */
 #main.bot-chat-layout #conv-thread{font-size:var(--read-size);padding-left:max(0px,calc((100% - var(--read-width)) / 2));padding-right:max(4px,calc((100% - var(--read-width)) / 2))}
-#main.bot-chat-layout #pane-chat>#conv-paused,#main.bot-chat-layout #pane-chat>#chat-composer,#main.bot-chat-layout #pane-chat>.bot-chat-tasks{width:100%;max-width:var(--read-width);margin-left:auto;margin-right:auto}
+#main.bot-chat-layout #pane-chat>#conv-paused,#main.bot-chat-layout #pane-chat>#chat-composer{width:100%;max-width:var(--read-width);margin-left:auto;margin-right:auto}
 .bubble .md,.bubble.you{line-height:var(--read-leading)}
 .bubble.you{max-width:min(94%,96ch);background:var(--bubble);border:0;border-radius:12px;border-bottom-right-radius:4px;padding:7px 13px}
 .sess-turn.user .body{background:var(--bubble)}

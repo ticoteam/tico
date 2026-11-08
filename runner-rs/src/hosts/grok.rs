@@ -120,7 +120,7 @@ pub fn argv(program: &str, model: Option<&str>, effort: Option<&str>) -> Vec<Str
 }
 
 /// The answer to `session/request_permission`: Grok runs with --always-approve, so an allow option is chosen;
-/// an unknown option shape is cancelled rather than guessed.
+/// an unknown option shape is canceled rather than guessed.
 pub fn permission(params: &Value) -> Value {
     let options = params["options"].as_array().cloned().unwrap_or_default();
     let chosen = ["allow_always", "allow_once"].iter().find_map(|kind| options.iter().find(|o| o["kind"] == *kind));

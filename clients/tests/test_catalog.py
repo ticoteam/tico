@@ -113,6 +113,18 @@ class Materialize(unittest.TestCase):
         self.assertIn("already exists", str(caught.exception))
         self.assertIn("A turn happened here.", (path / "state.md").read_text())
 
+    def test_a_bot_given_another_bots_old_slug_is_built_in_the_folder_the_server_recorded(self):
+        # A renamed bot still works in bot-coo; the new bot named coo was given bot-coo-<part of its id>.
+        first = self.make()
+        (first / "state.md").write_text("# State\n\nThe renamed bot's memory.\n")
+        second = self.make(folder="bot-coo-0a1b2c3d")
+        self.assertEqual(second, self.workspace / "bot-coo-0a1b2c3d")
+        self.assertTrue((second / "AGENT.md").is_file())
+        self.assertIn("The renamed bot's memory.", (first / "state.md").read_text())
+        # A recorded value that is not one plain folder name is never a path.
+        with self.assertRaises(ValueError):
+            self.make(folder="../coo")
+
 
 class Refresh(unittest.TestCase):
     """A built-in bot follows the release: the product's instructions and playbooks are brought up when the template

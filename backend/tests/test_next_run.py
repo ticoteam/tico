@@ -28,7 +28,7 @@ def setup(api):
 
 def jobs(api, bot="ops"):
     with api.app.state.store.read() as c:
-        return c.execute("SELECT count(*) FROM jobs WHERE bot=?", (bot,)).fetchone()[0]
+        return c.execute("SELECT count(*) FROM jobs WHERE bot_id=?", (bot,)).fetchone()[0]
 
 
 def listed(api, slug="ops"):
@@ -73,7 +73,7 @@ def test_a_run_that_fails_gives_it_back(api):
          token=r["token"])
     assert get(api, "tasks/" + task["id"])["task"]["next_run_waiting"] is True
     with api.app.state.store.transaction() as c:   # clear the review hold the failure left
-        c.execute("UPDATE jobs SET state='cancelled' WHERE state='uncertain'")
+        c.execute("UPDATE jobs SET state='canceled' WHERE state='uncertain'")
         c.execute("UPDATE run_backoff SET wait_until=NULL")        # the fast failure's wait is over
     post(api, "chat/ops", {"text": "Second"})
     assert [t["id"] for t in claim(api, r)["next_run"]] == [task["id"]]
@@ -91,5 +91,5 @@ def test_run_now_starts_it_as_the_task_not_as_a_chat(api):
     assert attempt["task"]["id"] == task["id"], "the run is the task"
     assert attempt["task"]["body"].startswith("Released today"), "and carries its own text"
     assert attempt["message"]["body"].startswith("Run now: Watch the new refund requests")
-    assert attempt["message"]["from_actor"] != "human:ana", "no chat message in the person's name"
+    assert attempt["message"]["sender_id"] != "human:ana", "no chat message in the person's name"
     assert attempt["next_run"] == [], "and it is not carried a second time"

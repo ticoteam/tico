@@ -187,12 +187,15 @@ def live(grant: Grant, at: str) -> bool:
 
 
 def applies(org: Org, grant: Grant, viewer: str) -> bool:
-    """Whether `grant` reaches `viewer`: its teammate, or a member of its team (a later joiner only if it says so)."""
+    """Whether `grant` reaches `viewer` now: its teammate, or a member of its team. A team grant reaches the members it
+    was made for (`members`, a snapshot) only while they are still on the team, so anyone who leaves loses it at once.
+    A later joiner gets it only with new_members, which reads the team as it is now (spec §7.5)."""
     if grant.subject_kind == "teammate":
         return grant.subject == viewer
+    on_team = org.team_of.get(viewer, "") in org.below(grant.subject)
     if grant.new_members:
-        return org.team_of.get(viewer, "") in org.below(grant.subject)
-    return viewer in grant.members
+        return on_team
+    return viewer in grant.members and on_team
 
 
 def resolve(org: Org, viewer: str, *, grants: Iterable[Grant], defaults: Defaults,
@@ -307,6 +310,15 @@ def standing(org: Org, grant: Grant, defaults: Defaults, accounts: Mapping[str, 
 def unstanding(org: Org, grants: Iterable[Grant], defaults: Defaults, accounts: Mapping[str, Account]) -> list[str]:
     """Active grants their grantor could not make now: what a write path marks suspended."""
     return [g.id for g in grants if g.status == "active" and not standing(org, g, defaults, accounts)]
+
+
+def left_team(org: Org, grant: Grant) -> frozenset[str]:
+    """The members a team grant was made for who are no longer on its team (spec §7.5: they lose it at once). Such a
+    member is forgotten from the grant's snapshot, so rejoining the team does not bring the grant back."""
+    if grant.subject_kind != "team" or grant.new_members:
+        return frozenset()
+    below = org.below(grant.subject)
+    return frozenset(m for m in grant.members if org.team_of.get(m, "") not in below)
 
 
 def may_revoke(org: Org, actor: str, grant: Grant) -> bool:

@@ -1,6 +1,6 @@
 """The org chart as Finance reads it, who is acting, and who decides an approval (spec §5, §7.4, §7.5).
 
-Teammates are actor strings (`human:<id>`, `bot:<slug>`), teams are org group ids. The store builds an `Org` from the
+Teammates are actor strings (`human:<id>`, `bot:<id>`), teams are org group ids. The store builds an `Org` from the
 roster once per request; nothing here reads it.
 """
 from collections.abc import Mapping

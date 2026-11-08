@@ -147,12 +147,13 @@ function botWorking(slug) {
   if (S.v2?.status?.[slug]?.state === 'running' || S.status?.active?.some(a => a.employee === slug)) return true;
   return !!(V2C?.slug === slug && V2C.live && (V2C.live.text || v2PendingText(V2C).mode === 'run'));
 }
-// One avatar for every bot: a slug, or a row or card with {slug|name, icon}. The symbol inside is the
-// template's Material Symbol when it names one, else the built-in art, else initials; the Assistant
-// keeps its mark. `state` is stateOf's word, drawn as the corner dot or ring.
+// One avatar for every bot: its id, or a row or card with {id, slug, icon}. The symbol inside is the
+// template's Material Symbol when it names one, else the built-in art, else the initials of its name; the Assistant
+// keeps its mark. `state` is stateOf's word, drawn as the corner dot or ring. Its shape and colour follow the id, so a
+// renamed bot keeps its face.
 function botAvatar(bot, size = 18, state) {
-  const slug = typeof bot === 'string' ? bot : bot?.slug || bot?.name || '';
-  const row = typeof bot === 'object' && bot ? bot : S.emps?.find(e => e.name === slug);
+  const slug = typeof bot === 'string' ? bot : bot?.id || bot?.slug || bot?.name || '';
+  const row = typeof bot === 'object' && bot ? bot : S.emps?.find(e => e.id === slug);
   const meta = BOT_AVATARS[slug], hue = avHue(slug);
   const icon = !meta?.tico && TEMPLATE_ICON.test(row?.icon || '') ? row.icon : '';
   const kind = meta?.tico ? 'bot-tico' : icon ? 'bot-glyph' : meta?.icon ? 'bot-symbol' : 'av-initials';
@@ -160,7 +161,7 @@ function botAvatar(bot, size = 18, state) {
   const vars = kind === 'bot-symbol' ? `;--bot-color:${meta.color};--bot-icon:url('/assets/bot-symbols/${meta.icon}.svg')`
     : kind === 'av-initials' ? `;--hue:${hue};font-size:${Math.round(size * 0.42)}px` : '';
   const inner = kind === 'bot-glyph' ? `<span class="av-glyph" style="font-size:${Math.round(size * 0.7)}px">${esc(icon)}</span>`
-    : kind === 'av-initials' ? esc(avInitials(slug)) : '';
+    : kind === 'av-initials' ? esc(avInitials(row?.slug || slug)) : '';
   const breathes = size >= BLOB_MORPH_MIN, shape = blobShape(slug, size);
   const working = breathes && (state === 'running' || state === 'working' || botWorking(slug));
   return `<span class="av blob ${kind} ${state || ''}${working ? ' morph' : ''}" data-av="${esc(slug)}"${breathes ? ' data-breathe' : ''} style="width:${size}px;height:${size}px;--av-fill:${fill}${vars}" aria-hidden="true">`
@@ -237,7 +238,7 @@ function runtimeTag(e) {
 // Renaming a bot never changes where it sits: the order field decides, the name does not.
 const botOrder = e => { const n = Number(e?.order); return e?.order == null || e.order === '' || !Number.isFinite(n) ? Infinity : n; };
 const byBotOrder = (a, b) => { const x = botOrder(a), y = botOrder(b); return x === y ? 0 : x < y ? -1 : 1; };
-// Whom a chart node reports to, as a tree key (`p:<id>` or `b:<slug>`); '' at the top.
+// Whom a chart node reports to, as a tree key (`p:<id>` or `b:<bot id>`); '' at the top.
 const orgReportsTo = n => {
   const to = String((n.kind === 'person' ? n.person?.reports_to : n.reports_to) || '');
   return !to ? '' : n.kind === 'person' ? 'p:' + to : to.startsWith('human:') ? 'p:' + to.slice(6) : 'b:' + to;
@@ -260,8 +261,8 @@ const chartFallback = (a, b) => {
   if (human(a) !== human(b)) return human(a) ? -1 : 1;
   if (!human(a) && isTempBot(a) !== isTempBot(b)) return isTempBot(a) - isTempBot(b);
   if (!human(a) && byBotOrder(a, b)) return byBotOrder(a, b);
-  const name = n => chartNameKey(human(n) ? n.person?.name || n.person?.id || n.id : String(n.display_name || n.name || '').replace(TEMP_RE, ''));
-  const id = n => String(human(n) ? n.person?.id || n.id : n.name || '');
+  const name = n => chartNameKey(human(n) ? n.person?.name || n.person?.id || n.id : String(n.display_name || n.slug || n.name || '').replace(TEMP_RE, ''));
+  const id = n => String(human(n) ? n.person?.id || n.id : n.id || n.name || '');
   const x = name(a), y = name(b);
   if (x !== y) return x < y ? -1 : 1;
   return id(a) < id(b) ? -1 : id(a) > id(b) ? 1 : 0;

@@ -49,11 +49,11 @@ reviewed". Nothing is shared and no task is created for anyone.
 
 Setting you up switched your first routine on. List your automations with
 `hub automation list --owner bot:marketing-lead`. If `weekly-marketing-summary` shows off, turn it on with
-`hub automation update <id> --enable`. Then turn on the two growth routines the same way: `weekly-growth-meeting` and
-`monthly-growth-report`, each by its id from that list.
+`hub automation update <id> --enable`. Then turn on the two growth routines the same way: `weekly-numbers` and
+`weekly-growth-meeting`, each by its id from that list.
 
-Tell the human in one line what they do: "I will draft this summary every Friday at 14:00 for you to review, run the
-growth meeting every Monday at 08:00, and file the growth report on the 3rd of each month." They can change or turn off
+Tell the human in one line what they do: "I will draft this summary every Friday at 14:00 for you to review, refresh the
+growth numbers every Monday at 07:00, and run the growth meeting every Monday at 08:00." They can change or turn off
 any of them any time; there is nothing to approve.
 
 Record it in `memory/decisions.md` and set `state.md` to `Setup: finished`. If they asked for a different schedule or to

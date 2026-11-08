@@ -1,27 +1,19 @@
-"""Read access to the `documents` table that holds the market notes (backend/market.py).
-
-The repository mirror that once filled it (a worker importing linked repositories, "Bot Notes",
-proposed documentation changes) is gone: company docs are `backend/docs.py`. Old mirrored rows stay
-in the table untouched and are not shown anywhere; only the market collection is served.
+"""The market notes behind `/api/company-docs`, which the Market page reads (they live in market_pages,
+backend/market.py). Company docs are `backend/docs.py`, served from `/api/v2/docs`.
 """
-
-import json
 
 from fastapi import Request
 
+from . import market
 from .store import Problem
-
-
-def visible(who, row):
-    return who.role == "owner" or row["visibility"] == "external"
 
 
 def document(c, auth, who, doc_id):
     auth.domain(who)
-    row = c.execute("SELECT * FROM documents WHERE id=? AND collection='market'", (doc_id,)).fetchone()
-    if not row or not visible(who, row):
+    page = market.read_page(c, doc_id)
+    if not page:
         raise Problem("not_found", "Document not found or unavailable to this account", 404)
-    return json.loads(row["payload_json"])
+    return page
 
 
 def install_documents(app, store, auth, mutate):
@@ -33,10 +25,9 @@ def install_documents(app, store, auth, mutate):
         if collection != "market":
             raise Problem("collection", "Company docs moved to /api/v2/docs; this lists the market notes only", 422)
         with store.read() as c:
-            rows = [r for r in c.execute("SELECT * FROM documents WHERE collection='market' ORDER BY id")
-                    if visible(who, r)]
-            return {"collection": collection, "collection_counts": {"market": len(rows)},
-                    "documents": [{k: v for k, v in json.loads(r["payload_json"]).items() if k != "content"} for r in rows],
+            pages = market.list_pages(c)
+            return {"collection": collection, "collection_counts": {"market": len(pages)},
+                    "documents": [{k: v for k, v in page.items() if k != "content"} for page in pages],
                     "proposals": [], "errors": [], "sync": {"running": False, "state": None, "error": None}}
 
     @app.get("/api/company-docs/{doc_id:path}")

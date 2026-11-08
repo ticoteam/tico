@@ -15,8 +15,8 @@ def test_general_backfill_is_idempotent_and_does_not_reassign_custom_tasks(tmp_p
     for status in H.TASK_STATUSES:
         c.execute('INSERT INTO tasks(id,title,status,body,note) VALUES(?,?,?,?,?)',
                   (status, 'Keep this task', status, 'Keep these details', 'Keep this note'))
-    H._apply(c, "ALTER TABLE tasks ADD COLUMN labels_json TEXT NOT NULL DEFAULT '[]';")
-    c.execute('UPDATE tasks SET labels_json=?', ('["release","bug"]',))
+    H._apply(c, "ALTER TABLE tasks ADD COLUMN labels TEXT NOT NULL DEFAULT '[]';")
+    c.execute('UPDATE tasks SET labels=?', ('["release","bug"]',))
     H.migrate(c)
     assert c.execute('PRAGMA user_version').fetchone()[0] == len(H.MIGRATIONS)
     for row in c.execute('SELECT * FROM tasks'):
@@ -38,7 +38,7 @@ def test_general_backfill_is_idempotent_and_does_not_reassign_custom_tasks(tmp_p
     assert dict(c.execute('SELECT id, step_rank FROM tasks').fetchall()) == ranks
     assert H.task(c, 'open')['type_id'] == custom['id']
     assert H.task_labels(H.task(c, 'open')) == ['bug']
-    assert H.task(c, 'open')['labels_json'] == '["release","bug"]'
+    assert H.task(c, 'open')['labels'] == '["release","bug"]'
     assert c.execute('SELECT count(*) FROM task_steps WHERE type_id=?', (H.GENERAL_TYPE,)).fetchone()[0] == 6
     assert c.execute('PRAGMA foreign_key_check').fetchall() == []
     c.close()
@@ -53,7 +53,7 @@ def _hub(tmp_path):
 
 def test_wont_do_steps_are_retired_once_and_a_teams_waiting_step_keeps_its_tasks(tmp_path):
     c = _hub(tmp_path)
-    c.execute("INSERT INTO task_types(id,name,created,updated) VALUES('dev','Dev tickets','x','x')")
+    c.execute("INSERT INTO task_types(id,name,created_at,updated_at) VALUES('dev','Dev tickets','x','x')")
     for position, (ident, status) in enumerate([('deck', 'open'), ('progress', 'doing'), ('review', 'review'),
                                                 ('closed', 'closed'), ('waiting', 'waiting'), ('wont', 'declined')]):
         c.execute('INSERT INTO task_steps(id,type_id,name,position,status) VALUES(?,?,?,?,?)',

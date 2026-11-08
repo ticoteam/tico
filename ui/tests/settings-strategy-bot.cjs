@@ -55,7 +55,7 @@ async function open(browser, {role = 'owner', name = 'Strategy Bot'} = {}) {
       return json(state);
     }
     // The Strategy Bot log, two pages: Undo on an entry of the second page.
-    const entry = (id, over) => ({id, kind: 'decision', reason: 'Reason ' + id, state: 'done', undoable: true, created: '2026-10-01T00:00:00Z',
+    const entry = (id, over) => ({id, kind: 'decision', reason: 'Reason ' + id, state: 'done', undoable: true, created_at: '2026-10-01T00:00:00Z',
       done: [{text: 'Close "Task ' + id + '"'}], left: [], note: '', proposal_task: null, undo: null, ...over});
     if (p === '/api/v2/strategy-bot/log') {
       const before = new URL(req.url()).searchParams.get('before');

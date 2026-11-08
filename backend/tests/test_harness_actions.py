@@ -111,10 +111,10 @@ def test_what_a_bot_there_runs_on_its_fallback_included_cannot_be_turned_off(api
     assign(api, r, "cpo")
     # A branch bot: its fallback is its original's (shared_bots.follow), as the runner reads it.
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE bot_config SET config_json=? WHERE bot='finance'", (encode(
+        c.execute("UPDATE bot_config SET config=? WHERE bot='finance'", (encode(
             {"name": "finance", "fallback": {"harness": "gemini", "model": "gemini-3-pro"},
              "task_model": {"harness": "grok", "runtime": "grok", "model": "grok-4.6"}}),))
-        c.execute("UPDATE bot_config SET config_json=? WHERE bot='cpo'", (encode({"name": "cpo", "shared_from": "finance"}),))
+        c.execute("UPDATE bot_config SET config=? WHERE bot='cpo'", (encode({"name": "cpo", "shared_from": "finance"}),))
     beat(api, r, codex=HARNESS, **{"gemini-cli": {**HARNESS, "name": "Gemini CLI", "runtime": "gemini"}},
          grok={**HARNESS, "name": "Grok Build", "runtime": "grok"})
     choose = lambda harness, enabled, **kw: post(api, f"runners/{r['runner_id']}/harness-choices",
@@ -144,7 +144,7 @@ def test_a_computer_with_no_bots_needs_only_the_one_default_it_installs(api):
     # With a bot, what it runs on: here the company's first provider's.
     company(api, enabled=["xai", "openai"], runtime="", model="")
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE bot_config SET config_json='{\"name\": \"cpo\"}' WHERE bot='cpo'")
+        c.execute("UPDATE bot_config SET config='{\"name\": \"cpo\"}' WHERE bot='cpo'")
     assign(api, r, "cpo")
     assert machine(api, r)["needed_runtimes"] == ["grok"]
 

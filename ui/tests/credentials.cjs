@@ -28,7 +28,7 @@ async function open(browser, me, vault) {
     if (p === '/api/employees') return json([{name: 'jira-manager', display_name: 'Jira Manager', status: 'active'}]);
     if (p === '/api/issues') return json([]);
     const jira = {service: 'jira', title: 'Jira', kind: 'api', summary: 'Tickets', access: 'read', credentials: ['JIRA_BASIC_AUTH'], writes: 'never',
-      declared_as: '', owner: 'Ana', aliases: [], status: 'not_configured', bots: [], connections: []};
+      declared_as: '', owner_id: 'Ana', aliases: [], status: 'not_configured', bots: [], connections: []};
     if (p === '/api/v2/tools') return json({integrations: [jira]});
     if (p === '/api/v2/tools/jira') return json({...jira, queries: [], body: 'Tickets.', learnings: []});
     if (p === '/api/v2/groups') return json([]);
@@ -36,7 +36,7 @@ async function open(browser, me, vault) {
     if (p === '/api/v2/credentials' && req.method() === 'POST') {
       const body = JSON.parse(req.postData());
       seen.vault.credentials.push({id: 'c1', name: body.name, username: body.username, kind: body.kind, env: body.env, preview: '••••••', source: '', revision: 1,
-        stored: true, can_reveal: true, last_used: null, last_used_by: '', grants: []});
+        stored: true, can_reveal: true, last_used_at: null, last_used_by: '', grants: []});
       return json({id: 'c1', name: body.name});
     }
     if (p === '/api/v2/credentials/c1/grants') {
@@ -54,7 +54,7 @@ async function open(browser, me, vault) {
     : await chromium.launch({channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined, headless: true});
   try {
     const vault = {credentials: [], can_manage: true, configured: true,
-      people: [{id: 'ana', name: 'Ana', email: 'ana@acme.example'}], bots: [{id: 'jira-manager', name: 'Jira Manager', operator: 'ana'}]};
+      people: [{id: 'ana', name: 'Ana', email: 'ana@acme.example'}], bots: [{id: 'jira-manager', name: 'Jira Manager', owner_id: 'ana'}]};
     {
       const {page, seen} = await open(browser, {id: 'ana', name: 'Ana', role: 'owner', cloud: true, credential_access: true}, vault);
       await page.goto('https://tico-ui.test/#/credentials');

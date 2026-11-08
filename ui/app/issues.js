@@ -4,7 +4,7 @@
 
 // ----------------------------------------------------------------- shared fragments
 const issueLink = i => `<a href="${i.url}" target="_blank" rel="noopener" class="mono">#${i.number}</a>`;
-const statusPill = i => i.state === 'CLOSED' ? `<span class="pill">closed</span>` : `<span class="pill ${i.status || ''}">${esc(i.status || 'no status')}</span>${i.needs_human ? ` <span class="pill needs">${esc(needsLabel(i.owner))}</span>` : ''}`;
+const statusPill = i => i.state === 'CLOSED' ? `<span class="pill">closed</span>` : `<span class="pill ${i.status || ''}">${esc(i.status || 'no status')}</span>${i.needs_human ? ` <span class="pill needs">${esc(needsLabel(i.owner_id))}</span>` : ''}`;
 // "Needs you" only when the viewer is the one it waits on; otherwise "Needs <Name>".
 const needsLabel = owner => {
   const slug = String(owner || '').toLowerCase();
@@ -15,21 +15,28 @@ const needsLabel = owner => {
 const prioPill = i => i.priority ? `<span class="pill ${i.priority}">${i.priority}</span>` : '';
 // Memoized per roster: task rows and sort comparators call this many times per render. Rebuilt when S.emps is
 // replaced (every refresh), grows in place (bot-branches.js) or the assistant's name changes.
+// A bot is named everywhere by its id (S.emps rows' `id`, the `bot:<id>` actor, routes and API paths); its slug is a
+// label people type and read, and it can change. `botRow(id)` is the roster row for an id (a leading `bot:` is
+// dropped); `botByRef(text)` also takes a slug, for what a person typed or an old link; `botSlug(id)` is the label.
+const botRow = id => { const key = String(id || '').replace(/^bot:/, ''); return key ? (S.emps || []).find(e => e.id === key) : undefined; };
+const botByRef = ref => { const key = String(ref || '').replace(/^bot:/, ''); return key ? botRow(key) || (S.emps || []).find(e => e.slug === key) : undefined; };
+const botSlug = id => botRow(id)?.slug || String(id || '').replace(/^bot:/, '');
 let BOT_NAMES = {emps: null, len: -1, key: '', map: new Map()};
-const botDisplayName = slug => {
+const botDisplayName = id => {
   const key = assistantBot() + '\n' + assistantName();
   if (BOT_NAMES.emps !== S.emps || BOT_NAMES.len !== S.emps.length || BOT_NAMES.key !== key)
     BOT_NAMES = {emps: S.emps, len: S.emps.length, key, map: new Map()};
-  const hit = BOT_NAMES.map.get(slug);
+  const hit = BOT_NAMES.map.get(id);
   if (hit !== undefined) return hit;
-  const name = slug === assistantBot() ? assistantName() : S.emps.find(e => e.name === slug)?.display_name || slug || '—';
-  const out = S.emps.filter(e => e.status !== 'archived' && (e.display_name || e.name).toLowerCase() === name.toLowerCase()).length > 1
-    ? `${name} (${slug})` : name;
-  BOT_NAMES.map.set(slug, out);
+  const row = botRow(id);
+  const name = id === assistantBot() ? assistantName() : row?.display_name || row?.slug || id || '—';
+  const out = S.emps.filter(e => e.status !== 'archived' && (e.display_name || e.slug || e.id).toLowerCase() === name.toLowerCase()).length > 1
+    ? `${name} (${row?.slug || id})` : name;
+  BOT_NAMES.map.set(id, out);
   return out;
 };
-const empName = slug => esc(botDisplayName(slug));
-const empChip = slug => slug && S.emps.some(e => e.name === slug) ? `<a class="chip" href="#/bot/${slug}">${avatar(slug, 16)}<span>${empName(slug)}</span></a>` : `<span class="chip">${empName(slug)}</span>`;
+const empName = id => esc(botDisplayName(id));
+const empChip = id => id && botRow(id) ? `<a class="chip" href="#/bot/${encodeURIComponent(id)}">${avatar(id, 16)}<span>${empName(id)}</span></a>` : `<span class="chip">${empName(id)}</span>`;
 
 // A bot's code lives in a repository named by the environment. The server sends repo_url when it
 // knows the full address; otherwise a bare name or owner/name is resolved against github_owner, and
@@ -57,7 +64,7 @@ function botRepoHTML(e) {
 // the local part of their roster email.
 const isHuman = slug => !!slug && (S.people || []).some(p =>
   (p.email || '').split('@')[0].toLowerCase() === String(slug).toLowerCase());
-const requestText = i => (isHuman(i.owner) ? (i.body || i.last_comment) : (i.last_comment || i.body)) || '';
+const requestText = i => (isHuman(i.owner_id) ? (i.body || i.last_comment) : (i.last_comment || i.body)) || '';
 const requestContext = text => String(text || '').split('\n').filter(line => !/^\s*(?:Parent:|Inbox-request:|Requested by\s*$|Full proposal:\s*s3:\/\/\S+\s*$)/i.test(line)).join('\n').trim();
 const REQUEST_HEADS = ['Decision needed','Question','Decision','Why now','Why','If yes','If no or edit','If no','Needed by','By when','Deadline'];
 function requestParts(text) {
@@ -111,16 +118,16 @@ function needsYouBlock(items, limit = Infinity) {
 }
 function needsYouItem(i, folded, showName = true) {
   {
-    const mine = isHuman(i.owner);
+    const mine = isHuman(i.owner_id);
     // a request for the owner: the Issue body if it is their Issue, else the bot's latest comment
     const text = requestText(i);
     const asker = mine ? (text.match(/Requested by\s*\n+\s*([^\n]+)/i) || [])[1] : null;
     const parentNo = +((text.match(/Parent:?\**\s*#?(\d+)/i) || [])[1] || 0);
-    const parentOwner = parentNo ? S.issues.find(x => x.number === parentNo)?.owner : null;
+    const parentOwner = parentNo ? S.issues.find(x => x.number === parentNo)?.owner_id : null;
     const bucketOwner = mine ? (text.match(/s3:\/\/[^/]+\/([^/\s]+)/i) || [])[1] : null;
-    const askerSlug = (asker && S.emps.find(e => e.display_name.toLowerCase() === asker.trim().toLowerCase())?.name)
-      || (bucketOwner && S.emps.some(e => e.name === bucketOwner) ? bucketOwner : null)
-      || (mine ? parentOwner : i.owner);
+    const askerSlug = (asker && S.emps.find(e => String(e.display_name || '').toLowerCase() === asker.trim().toLowerCase())?.id)
+      || (bucketOwner && botByRef(bucketOwner)?.id)
+      || (mine ? parentOwner : i.owner_id);
     // The title is the plain-English decision. Keep the useful context visible, fold away the
     // handoff boilerplate, and retain the authored request in full below it.
     const parts = requestParts(text);
@@ -273,7 +280,7 @@ document.addEventListener('toggle', async ev => {
     const issue = await get(`/issues/${n}`), listed = S.issues.find(i => i.number === n);
     const comments = Array.isArray(issue.comments) ? issue.comments : [];
     const last = comments.length ? String(comments[comments.length - 1]?.body || '') : '';
-    const text = isHuman(listed?.owner) ? String(issue.body || last) : String(last || issue.body || '');
+    const text = isHuman(listed?.owner_id) ? String(issue.body || last) : String(last || issue.body || '');
     if (original) original.innerHTML = safeMd(text);
     const body = $('.req-body', details), originalDetails = $('.req-original', details);
     const known = new Set([...details.querySelectorAll('[data-preview-key]')].map(el => el.dataset.previewKey));
@@ -301,25 +308,27 @@ function issuesTable(list, showOwner) {
   if (!list.length) return `<div class="empty">None.</div>`;
   return `<div class="scroll"><table><tr><th>#</th><th>Title</th>${showOwner ? '<th>Owner</th>' : ''}<th>Status</th><th>Priority</th><th>Updated</th></tr>
   ${list.map(i => `<tr><td>${issueLink(i)}</td><td>${esc(i.title)}${i.last_comment ? `<details><summary>last comment</summary><div class="q">${esc(i.last_comment)}</div></details>` : ''}</td>
-    ${showOwner ? `<td>${empChip(i.owner)}</td>` : ''}<td>${statusPill(i)}</td><td>${prioPill(i)}</td><td class="muted tnum">${ago(i.updatedAt)}</td></tr>`).join('')}</table></div>`;
+    ${showOwner ? `<td>${empChip(i.owner_id)}</td>` : ''}<td>${statusPill(i)}</td><td>${prioPill(i)}</td><td class="muted tnum">${ago(i.updatedAt)}</td></tr>`).join('')}</table></div>`;
 }
 // The models that did a run's work, each with its effort (not the bot's configured one); empty when nothing was counted.
 const ranOn = (made, effort = true) => [...new Set(((made || {}).segments || []).filter(s => s.model)
   .map(s => s.model + (effort && s.effort ? ` (${s.effort})` : '')))].join(' then ');
 // Why a task run was on that model: the bot's task model, the fallback from it, or a check kept (backend/task_models.py).
 const ranOnNote = made => ((made || {}).task_model || {}).note || '';
+// A run that failed or whose lease ran out (run.state, docs/status-and-state.md Runs): its reason shows with it.
+const runUnfinished = r => ['failed', 'expired'].includes(r.state);
 // A failed run offers Report this: Support opens with it attached (ui/support.js).
 function runsReportHTML(r, icon = false) {
   if (!window.supportOn?.() || !window.reportThisHTML) return '';
   const why = r.failure_reason || r.outcome || `exit ${r.exit}`;
-  return `<div>${window.reportThisHTML({kind: 'run', title: `${r.employee || 'Run'} failed: ${why}`, detail: why, ref: r.attempt_id || r.id || '',
+  return `<div>${window.reportThisHTML({kind: 'run', title: `${r.employee ? botDisplayName(r.employee) : 'Run'} failed: ${why}`, detail: why, ref: r.id || '',
     group: 'run:' + String(why).replace(/\d+/g, '#').slice(0, 80)}, icon)}</div>`;
 }
 function runsTable(list, showEmp=true) {
   if (!list.length) return `<div class="empty">No runs yet.</div>`;
   return `<div class="scroll"><table><tr>${showEmp ? '<th>Bot</th>' : ''}<th>Finished</th><th>Result</th><th>Duration</th><th>Cost</th><th>Model</th><th>Picked up</th><th></th></tr>
   ${list.map(r => `<tr>${showEmp ? `<td>${empChip(r.employee)}</td>` : ''}
-    <td class="muted tnum">${ago(r.finished)}</td><td>${r.record_kind === 'attempt' ? `<span class="pill fail">${esc(r.outcome)} attempt</span><div class="mono muted">${esc(r.attempt_id)}</div>${r.failure_reason ? `<div class="muted">${esc(r.failure_reason)}</div>` : ''}${runsReportHTML(r)}` : r.exit === 0 ? '<span class="pill ok">Done</span>' : `<span class="pill fail">${esc(r.outcome || `exit ${r.exit}`)}</span>${runsReportHTML(r)}`}</td>
+    <td class="muted tnum">${ago(r.finished_at)}</td><td>${runUnfinished(r) ? `<span class="pill fail">${esc(r.outcome)} run</span><div class="mono muted">${esc(r.id)}</div>${r.failure_reason ? `<div class="muted">${esc(r.failure_reason)}</div>` : ''}${runsReportHTML(r)}` : r.exit === 0 ? '<span class="pill ok">Done</span>' : `<span class="pill fail">${esc(r.outcome || `exit ${r.exit}`)}</span>${runsReportHTML(r)}`}</td>
     <td class="tnum">${r.duration_s != null ? Math.round(r.duration_s/60) + 'm ' + (r.duration_s%60) + 's' : ''}</td>
     <td class="tnum">${r.cost_usd != null ? '$' + r.cost_usd.toFixed(2) : (r.output_tokens != null ? r.output_tokens.toLocaleString() + ' tokens out' : '')}</td>
     <td class="mono muted" title="${esc(ranOnNote(r.ran_on) || 'the model that actually ran it, which a fallback changes')}">${esc(ranOn(r.ran_on))}${(r.ran_on?.task_model || {}).source === 'fallback' ? ` <span class="pill waiting" title="${esc(ranOnNote(r.ran_on))}">task model off</span>` : ''}</td>

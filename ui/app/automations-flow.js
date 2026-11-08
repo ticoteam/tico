@@ -183,7 +183,7 @@ function auNewStep(type) {
   if (type === 'decide') Object.assign(s, {questions: {question: {type: 'noul', instructions: ''}}, level: 'medium', out: auNextOut('d')});
   if (type === 'llm') Object.assign(s, {as: 'assistant:' + (S.me?.id || ''), prompt: '', out: auNextOut('l')});
   if (type === 'find') Object.assign(s, {source: 'mail', query: '', since: 'last_run', limit: 20});
-  if (type === 'bot_turn') Object.assign(s, {bot: (S.emps || []).find(e => e.name !== AU_BOT)?.name || '', prompt: ''});
+  if (type === 'bot_turn') Object.assign(s, {bot: (S.emps || []).find(e => e.id !== AU_BOT)?.id || '', prompt: ''});
   if (type === 'paths') Object.assign(s, {paths: [{name: 'Path 1', when: [], steps: []}], otherwise: {steps: []}});
   if (type === 'action') Object.assign(s, {do: 'archive', args: {}});
   return s;

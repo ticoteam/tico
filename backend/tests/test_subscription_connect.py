@@ -112,7 +112,7 @@ def test_reconnect_asks_before_the_sign_in_when_runs_would_restart_and_replaces_
     assert [(s["id"], s["name"], s["preview"][-4:]) for s in saved] == [(sid, "Max", OTHER[-4:])]
     with api.app.state.store.read() as c:
         assert c.execute("SELECT revision FROM model_subscriptions WHERE id=?", (sid,)).fetchone()[0] == 2
-        assert c.execute("SELECT stop_requested FROM attempts WHERE id=?", (turn["id"],)).fetchone()[0]
+        assert c.execute("SELECT stop_requested_at FROM attempts WHERE id=?", (turn["id"],)).fetchone()[0]
 
 
 def test_only_a_person_who_may_save_starts_one_and_only_for_a_plan(api):
@@ -141,7 +141,7 @@ def test_connect_needs_a_computer_that_is_online_up_to_date_and_has_the_tool(api
     m = computer(api, label="Good")
     assert post(api, "model-subscriptions/connect", start)["runner_id"] == m["runner_id"]
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE runners SET last_seen=? WHERE id=?", (H.shift(H.now(), minutes=-10), m["runner_id"]))
+        c.execute("UPDATE runners SET last_seen_at=? WHERE id=?", (H.shift(H.now(), minutes=-10), m["runner_id"]))
     assert get(api, "model-subscriptions")["connect"] == ["codex_login"]
 
 

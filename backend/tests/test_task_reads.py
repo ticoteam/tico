@@ -97,7 +97,7 @@ def test_one_change_to_many_tasks_is_one_bulk_change_and_resets_lists(api):
     seed = post(api, "tasks", {"owner": "ben", "title": "Tag the launch work", "body": "Please."})
     store = api.app.state.store
     with store.transaction() as c:
-        c.execute("INSERT INTO tags(id,key,label,created,updated) VALUES('tg1','launch','Launch',?,?)", (H.now(), H.now()))
+        c.execute("INSERT INTO tags(id,key,label,created_at,updated_at) VALUES('tg1','launch','Launch',?,?)", (H.now(), H.now()))
         columns = [row[1] for row in c.execute("PRAGMA table_info(tasks)") if row[1] not in ("id", "number")]
         for n in range(E.FAN_CAP + 1):
             c.execute(f"INSERT INTO tasks(id,{','.join(columns)}) SELECT ?,{','.join(columns)} FROM tasks WHERE id=?",
@@ -188,14 +188,14 @@ def test_task_list_keeps_one_snapshot_and_next_read_sees_revocation(api, monkeyp
         if actor == "ben" and not changed:
             changed = True
             with store.transaction() as write:
-                write.execute("UPDATE tasks SET owner='human:ana' WHERE id=?", (private["id"],))
+                write.execute("UPDATE tasks SET owner_id='human:ana' WHERE id=?", (private["id"],))
         return resolved
 
     monkeypatch.setattr(H, "resolve_actor", revoke_after_owner_read)
     first = tasks(api, ACTIVE + "&owner=ben", token="ben-test")
     assert changed
     rows = [t for t in first["tasks"] if t["id"] == private["id"]]
-    assert len(rows) == 1 and rows[0]["owner"] == "human:ben"
+    assert len(rows) == 1 and rows[0]["owner_id"] == "human:ben"
     assert private["id"] not in str(tasks(api, ACTIVE, token="ben-test"))
     assert private["id"] in {t["id"] for t in tasks(api, ACTIVE, token="ana-test")["tasks"]}
 

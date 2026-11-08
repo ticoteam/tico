@@ -36,7 +36,7 @@ def test_a_claude_bot_that_fell_back_to_codex_shows_codex_and_unknown_stays_unkn
     assert made["family"] == "openai" and made["fallback"] == "codex"
     assert [s["model"] for s in made["segments"]] == ["gpt-6.1-sol"]
     with api.app.state.store.read() as c:
-        detail = c.execute("SELECT detail_json FROM events WHERE action='attempt.fallback' AND target=?",
+        detail = c.execute("SELECT detail FROM events WHERE action='attempt.fallback' AND target=?",
                            (aid,)).fetchone()[0]
     assert '"model": "gpt-6.1-sol"' in detail and '"primary_runtime"' in detail
     assert [r["ran_on"]["family"] for r in get(api, "bots/ops/turns") if r["id"] == aid] == ["openai"]

@@ -23,7 +23,7 @@ async function open(browser, options = {}) {
   const people = [{id: 'ana', name: 'Ana Rivera', email: 'ana@example.test', org_parent: '', team: ''}];
   const bot = (name, display_name, extra = {}) => ({name, display_name, team: '', org_parent: 'p:ana', reports_to: 'human:ana',
     host: 'keeper', status: 'active', state: 'active', can_chat: true, my_access: FULL, users: [{id: 'ana', name: 'Ana'}],
-    operator: 'ana', revision: 1, ...extra});
+    owner_id: 'ana', revision: 1, ...extra});
   const bots = [bot('design', 'Design'), bot('doc-updater', 'Doc Updater'), bot('reviewer', 'Reviewer')];
   await page.route('**/*', async route => {
     const request = route.request(), url = new URL(request.url()), p = url.pathname, method = request.method();

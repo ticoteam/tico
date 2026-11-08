@@ -34,7 +34,10 @@ import secrets
 PRESETS = ("none", "hmac", "github", "standard", "stripe", "slack", "mercury", "stripe_finance", "intuit", "xero")
 # A trigger on one of these is Finance's (spec §3.4): its calls go to Finance, and only a finance admin manages it.
 FINANCE = ("mercury", "stripe_finance", "intuit", "xero")
-TOLERANCE = 300                         # seconds a timestamped signature stays good, either side of now
+# Presets Tico HQ checks: it holds Intuit's and Xero's signing keys, and the install never does (spec §3.4). Such a call
+# counts only when it came over the install's own Gateway relay (`via="gateway"`); the install's address refuses it.
+HQ_CHECKED = ("intuit", "xero")
+TOLERANCE = 300                        # seconds a timestamped signature stays good, either side of now
 TYPE_FROM = {"github": "X-GitHub-Event", "stripe": "/type", "standard": "/type",
              "slack": "/event/type|/type", "mercury": "/resourceType",
              "stripe_finance": "/type"}      # a preset's default `type_from`; `a|b` tries a, then b

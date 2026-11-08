@@ -244,7 +244,7 @@ def test_revocation_races_disconnects_and_duplicate_safe_audit(service):
     def closes():
         with service.api.app.state.store.read() as c:
             return c.execute("SELECT count(*) FROM events WHERE action='runner.screen_close' AND target=? "
-                             "AND json_extract(detail_json,'$.session_id')=?", (rid, opened["session_id"])).fetchone()[0]
+                             "AND json_extract(detail,'$.session_id')=?", (rid, opened["session_id"])).fetchone()[0]
     service.eventually(lambda: closes() == 1)
     # Admission and revocation serialize through durable policy and the grant generation.
     with ThreadPoolExecutor(2) as pool:
@@ -282,7 +282,7 @@ def test_restart_invalidates_old_tickets_and_reconciles_audit(service):
     denied(service, opened["ws_path"])
     with service.api.app.state.store.read() as c:
         count = c.execute("SELECT count(*) FROM events WHERE action='runner.screen_close' AND target=? "
-                          "AND json_extract(detail_json,'$.session_id')=?", (r["runner_id"], opened["session_id"])).fetchone()[0]
+                          "AND json_extract(detail,'$.session_id')=?", (r["runner_id"], opened["session_id"])).fetchone()[0]
     assert count == 1
 
 
@@ -354,7 +354,7 @@ def test_private_protocol_fences_replays_stale_grants_and_lease_loss(service):
         remote._record(c, report)
         remote._record(c, report)
         assert c.execute("SELECT count(*) FROM events WHERE action='runner.screen_close' AND target=? "
-                         "AND json_extract(detail_json,'$.session_id')=?",
+                         "AND json_extract(detail,'$.session_id')=?",
                          (r["runner_id"], opened["session_id"])).fetchone()[0] == 1
     with httpx.Client(base_url=service.relay_url, timeout=3) as client:
         assert client.get("/control/v1/hello").status_code == 403

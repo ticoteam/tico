@@ -49,8 +49,8 @@ HQ ([Tico HQ](tico-hq.md)) is a separate service at `https://updates.tico.team`,
 Tico server image; its source and hosting live in the private ticoteam/tico-services repository. Installs send it no key,
 and its public endpoints need none.
 
-**Storage** (`installs`): `install_id`, `first_seen`, `last_seen`, `last_version`, `last_people`, `last_bots`. Dates are UTC
-days. Nothing else is stored for the count, and rows older than 13 months (by `last_seen`) are deleted daily. Support tickets, which
+**Storage** (`installs`): `install_id`, `first_seen_at`, `last_seen_at`, `last_version`, `last_people`, `last_bots`. Dates are UTC
+days. Nothing else is stored for the count, and rows older than 13 months (by `last_seen_at`) are deleted daily. Support tickets, which
 a human sends on purpose, are in two other tables (`tickets`, `ticket_replies`) and are kept until deleted: see
 [Support tickets](#support-tickets).
 
@@ -86,7 +86,7 @@ a body or an address. The ticket secret goes in the `X-Ticket-Secret` header; an
 | `POST /v1/support/{id}/messages` | ticket secret | `{message, diagnostics?}` from the human: `201 {ticket_id, status: "open", message_id}`; reopens an answered ticket; `409` when closed or at 60 messages. |
 | `DELETE /v1/support/{id}` | ticket secret | The human deletes their ticket: `200 {deleted: true}`. |
 | `GET /v1/staff/stats` | staff key | `{by_version: {"0.2.24": 2, ...}, window_days: 7}`: installs heard from in the last 7 days on each exact release, with no suppression (the public `/v1/stats` still leaves out counts under 5). |
-| `GET /v1/staff/tickets?status=open\|answered\|closed\|all&since=<UTC time>&limit=&source=` | staff key | Oldest activity first. `since` is `YYYY-MM-DDTHH:MM:SSZ` and matches `updated`, which moves when the human writes or the team replies. Each ticket has `body`, `email`, `version`, `install_id`, `email_pending`, `signature` (a Health Monitor `hm-...`, or empty), `has_diagnostics`, `kind`, `source` (`person`, `bot_report`, `botops`, `health_monitor`, `hq_alert`, `website` or `unknown`; `source=` lists only that one) and `messages`, and on a
+| `GET /v1/staff/tickets?status=open\|answered\|closed\|all&since=<UTC time>&limit=&source=` | staff key | Oldest activity first. `since` is `YYYY-MM-DDTHH:MM:SSZ` and matches `updated_at`, which moves when the human writes or the team replies. Each ticket has `body`, `email`, `version`, `install_id`, `email_pending`, `signature` (a Health Monitor `hm-...`, or empty), `has_diagnostics`, `kind`, `source` (`person`, `bot_report`, `botops`, `health_monitor`, `hq_alert`, `website` or `unknown`; `source=` lists only that one) and `messages`, and on a
 setup-website ticket `attachment: {label, parts}` (`show` adds the `note` and `plan` text). `&signature=hm-...` lists only tickets with one signature, so the team works them together. |
 | `GET /v1/staff/tickets/{id}` | staff key | One ticket, with its `diagnostics` bundle when the human attached one (support.md, PRIVACY.md). No other route returns it. |
 | `POST /v1/staff/tickets/{id}/reply` | staff key | `{body}` (up to 8000 characters). Sets the ticket to `answered`; with an email on the ticket it is marked `email_pending`. HQ sends no email. `409` when closed. |

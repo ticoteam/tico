@@ -246,16 +246,16 @@ def one(org, query, args=()):
 
 def wakes(org, bot):
     """The bot's queued turns: a held item must not add one."""
-    return one(org, "SELECT count(*) FROM jobs WHERE bot=? AND state='queued'", (bot,))
+    return one(org, "SELECT count(*) FROM jobs WHERE bot_id=? AND state='queued'", (bot,))
 
 
 def task_row(org, task_id):
-    rows = org.sql("SELECT id,title,body,owner,status,version FROM tasks WHERE id=?", (task_id,))
+    rows = org.sql("SELECT id,title,body,owner_id,status,version FROM tasks WHERE id=?", (task_id,))
     return rows[0] if rows else None
 
 
 def find_task(org, *titles):
-    return one(org, f"SELECT id FROM tasks WHERE title IN ({','.join('?' * len(titles))}) ORDER BY created DESC",
+    return one(org, f"SELECT id FROM tasks WHERE title IN ({','.join('?' * len(titles))}) ORDER BY created_at DESC",
                titles) or ""
 
 
@@ -263,11 +263,11 @@ def classify(task, bot):
     """What a door did, read from the task it opened: held for a person, warned, or passed to the bot as before."""
     if not task:
         return "missing"
-    if task["owner"].startswith("human:") and task["title"].startswith("Held: ") and \
+    if task["owner_id"].startswith("human:") and task["title"].startswith("Held: ") and \
             task["body"].startswith("Held by Tico's screening"):
         return "hold"
-    if task["owner"] != "bot:" + bot:
-        return f"other ({task['owner']})"
+    if task["owner_id"] != "bot:" + bot:
+        return f"other ({task['owner_id']})"
     return "warn" if task["body"].startswith(WARNING) else "pass"
 
 
@@ -431,11 +431,11 @@ def table_lines(table):
 
 def audit_leaks(org, items):
     """Audit rows (judge.call, judge.spend, screening.*) that carry any input's text."""
-    rows = org.sql("SELECT action, target, detail_json FROM events WHERE action IN "
+    rows = org.sql("SELECT action, target, detail FROM events WHERE action IN "
                    "('judge.call','judge.spend','screening.held','screening.warned','screening.modes')")
     leaks = []
     for row in rows:
-        action, blob = row["action"], f"{row['target']} {row['detail_json']}"
+        action, blob = row["action"], f"{row['target']} {row['detail']}"
         for item in items:
             for piece in (item["body"][:40], item["body"][-40:], item["subject"] if len(item["subject"]) > 20 else ""):
                 if piece and piece in blob:

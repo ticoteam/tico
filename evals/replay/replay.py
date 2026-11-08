@@ -92,18 +92,18 @@ def questions(detail, bot):
     replies to it or the person writes on the task after it, which is what the server counts as answering it."""
     found, replied = [], set()
     messages = {m["id"]: m for m in (detail.get("messages") or []) + (detail.get("comments") or [])}.values()
-    for m in sorted(messages, key=lambda m: m["created"]):
+    for m in sorted(messages, key=lambda m: m["created_at"]):
         if m.get("kind") == "answer":
             replied.add(m.get("in_reply_to"))
-        elif _person(m["from_actor"]):
+        elif _person(m["sender_id"]):
             for q in found:
-                if q["to"] == m["from_actor"] and not q["ask"]:
+                if q["to"] == m["sender_id"] and not q["ask"]:
                     q["open"] = False
-        if m.get("kind") == "ask" and m["from_actor"] == "bot:" + bot and m.get("deleted_at") is None:
-            to = (m.get("ask") or {}).get("who") or m.get("to_actor")
+        if m.get("kind") == "ask" and m["sender_id"] == "bot:" + bot and m.get("deleted_at") is None:
+            to = (m.get("ask") or {}).get("who") or m.get("recipient_id")
             if _person(to):
                 found.append({"id": m["id"], "task": detail["task"]["id"], "to": to, "ask": m.get("ask"),
-                              "created": m["created"], "open": not m.get("answers")})
+                              "created_at": m["created_at"], "open": not m.get("answers")})
     for q in found:
         q["open"] = q["open"] and q["id"] not in replied
     return found
@@ -112,14 +112,14 @@ def questions(detail, bot):
 def cards(card_details, bot):
     """The child tasks that put a question to a person: owned by the person, or holding the bot's question to one
     (a question card is owned by the bot that asked and waits on the person). Each is one step for the person."""
-    return [d for d in card_details if _person(d["task"].get("owner")) or _person(d["task"].get("waiting_on"))
+    return [d for d in card_details if _person(d["task"].get("owner_id")) or _person(d["task"].get("waiting_on"))
             or questions(d, bot)]
 
 
 def bot_runs(detail, bot):
     """The case's bot's runs on the task, oldest first: another bot's turns on it are not this bot's work."""
-    return sorted((r for r in detail.get("runs") or [] if r.get("started") and r.get("bot") in (bot, "bot:" + bot)),
-                  key=lambda r: r["started"])
+    return sorted((r for r in detail.get("runs") or [] if r.get("started_at") and r.get("bot") in (bot, "bot:" + bot)),
+                  key=lambda r: r["started_at"])
 
 
 def attached(files, bot):
@@ -133,33 +133,33 @@ def side(detail, files, bot, card_details=()):
     the bot filed for them). `card_details` are the child tasks' details. Capture and the replay both read a task
     through this, so both are counted alike."""
     runs = bot_runs(detail, bot)
-    start = when(runs[0]["started"]) if runs else None
+    start = when(runs[0]["started_at"]) if runs else None
     seen, transcript = set(), []
-    for m in sorted((detail.get("messages") or []) + (detail.get("comments") or []), key=lambda m: m["created"]):
-        if m["id"] in seen or m.get("kind") == "notice" or m.get("deleted_at") or not start or when(m["created"]) < start:
+    for m in sorted((detail.get("messages") or []) + (detail.get("comments") or []), key=lambda m: m["created_at"]):
+        if m["id"] in seen or m.get("kind") == "notice" or m.get("deleted_at") or not start or when(m["created_at"]) < start:
             continue
         seen.add(m["id"])
-        if m["from_actor"] == "bot:" + bot:
+        if m["sender_id"] == "bot:" + bot:
             transcript.append(["bot", m["body"]])
-        elif _person(m["from_actor"]):
+        elif _person(m["sender_id"]):
             transcript.append(["person", m["body"]])
-    minutes = sum((when(r["finished"]) - when(r["started"])).total_seconds() for r in runs if r.get("finished")) / 60
+    minutes = sum((when(r["finished_at"]) - when(r["started_at"])).total_seconds() for r in runs if r.get("finished_at")) / 60
     asked = cards(card_details, bot)
     open_questions = [q for d in (detail, *asked) for q in questions(d, bot) if q["open"]]
     return {"status": detail["task"]["status"], "transcript": transcript, "files": attached(files, bot),
             "runs": len(runs), "minutes": round(minutes, 1),
             "person_steps": sum(1 for who, _ in transcript if who == "person") + len(asked),
-            "open_questions": sorted(open_questions, key=lambda q: q["created"]),
-            "open_cards": [d["task"]["id"] for d in asked if _person(d["task"].get("owner"))
+            "open_questions": sorted(open_questions, key=lambda q: q["created_at"]),
+            "open_cards": [d["task"]["id"] for d in asked if _person(d["task"].get("owner_id"))
                            and d["task"].get("status") not in SETTLED_ASK],
-            "running": not runs or any(not r.get("finished") for r in runs)}
+            "running": not runs or any(not r.get("finished_at") for r in runs)}
 
 
 def as_started(detail, start):
     """The task's title, body and acceptance criteria as they were at `start`: an edit made after it is outcome."""
     task, value = detail["task"], {}
-    for e in sorted(detail.get("events") or [], key=lambda e: e["ts"]):
-        if e.get("field") in ("title", "body", "acceptance_criteria", "acceptance") and when(e["ts"]) >= start:
+    for e in sorted(detail.get("events") or [], key=lambda e: e["created_at"]):
+        if e.get("field") in ("title", "body", "acceptance_criteria", "acceptance") and when(e["created_at"]) >= start:
             value.setdefault("acceptance_criteria" if e["field"].startswith("acceptance") else e["field"], e.get("old"))
     criteria = value.get("acceptance_criteria", task.get("acceptance_criteria") or [])
     if isinstance(criteria, str):
@@ -176,25 +176,25 @@ def split(detail, files, instructions, bot=None, card_details=()):
     instructions snapshot (GET bots/{bot}/instructions). The opening state is the task as it was and everything a
     person wrote or attached before the bot's first run; the original outcome is what followed."""
     task = detail["task"]
-    bot = bot or str(task["owner"]).removeprefix("bot:")
+    bot = bot or str(task["owner_id"]).removeprefix("bot:")
     runs = bot_runs(detail, bot)
     if not runs:
         raise ValueError(f"{bot} never ran on the task")
     if detail.get("has_more"):
         raise ValueError("the task has more messages than one read returns, so its opening may be missing")
-    start = when(runs[0]["started"])
+    start = when(runs[0]["started_at"])
     opening = [{"from": "person", "text": m["body"]}
                for m in sorted({m["id"]: m for m in (detail.get("messages") or []) + (detail.get("comments") or [])}.values(),
-                               key=lambda m: m["created"])
-               if _person(m["from_actor"]) and m.get("kind") != "notice" and not m.get("deleted_at") and when(m["created"]) < start]
+                               key=lambda m: m["created_at"])
+               if _person(m["sender_id"]) and m.get("kind") != "notice" and not m.get("deleted_at") and when(m["created_at"]) < start]
     mine = set(attached(files, bot))
     opened = []
     for f in files.get("files") or []:
         first = min(f.get("versions") or [{}], key=lambda v: v.get("n", 0))
-        if f["name"] not in mine and first.get("created") and when(first["created"]) < start:
+        if f["name"] not in mine and first.get("created_at") and when(first["created_at"]) < start:
             opened.append({"name": f["name"], "text": first.get("text", "")})
     snapshot = instructions.get("content") or ""
-    exact = bool(instructions.get("updated")) and when(instructions["updated"]) <= start
+    exact = bool(instructions.get("updated_at")) and when(instructions["updated_at"]) <= start
     status = task["status"]
     original = side(detail, files, bot, card_details)
     return {
@@ -204,7 +204,7 @@ def split(detail, files, instructions, bot=None, card_details=()):
         "reviewed_by": "",
         "bot": bot,
         # The prompt the original ran on. `exact: false`: the snapshot is newer than the task's first run.
-        "prompt": {"sha256": sha(snapshot), "updated": instructions.get("updated"), "exact": exact},
+        "prompt": {"sha256": sha(snapshot), "updated": instructions.get("updated_at"), "exact": exact},
         "task": as_started(detail, start),
         "conversation": opening,
         "files": opened,

@@ -106,9 +106,9 @@ def register_client(c, body):
         raise OAuthError("invalid_client_metadata", "Only public clients (token_endpoint_auth_method none) are supported")
     # Anyone may register, so a client that never got a token is let go after a day: the cap cannot be filled for good.
     stale, used = H.shift(H.now(), hours=-UNUSED_CLIENT_HOURS), "SELECT client_id FROM oauth_grants WHERE token_id IS NOT NULL"
-    c.execute(f"DELETE FROM oauth_grants WHERE client_id IN (SELECT id FROM oauth_clients WHERE created<? AND id NOT IN ({used}))",
+    c.execute(f"DELETE FROM oauth_grants WHERE client_id IN (SELECT id FROM oauth_clients WHERE created_at<? AND id NOT IN ({used}))",
               (stale,))
-    c.execute(f"DELETE FROM oauth_clients WHERE created<? AND id NOT IN ({used})", (stale,))
+    c.execute(f"DELETE FROM oauth_clients WHERE created_at<? AND id NOT IN ({used})", (stale,))
     if c.execute("SELECT count(*) FROM oauth_clients").fetchone()[0] >= MAX_CLIENTS:
         raise OAuthError("temporarily_unavailable", "Too many registered clients", 503)
     name = " ".join(str(body.get("client_name") or "").split())[:80] or urlsplit(uris[0]).hostname or "An agent"
@@ -132,7 +132,7 @@ def begin(c, settings, who, query):
     register a client under any name, so the page also names the host it returns to."""
     client = c.execute("SELECT * FROM oauth_clients WHERE id=?", (query.get("client_id", ""),)).fetchone()
     redirect = query.get("redirect_uri", "")
-    if not client or redirect not in json.loads(client["redirect_uris_json"]):
+    if not client or redirect not in json.loads(client["redirect_uris"]):
         raise Problem("oauth_client", "This sign-in link is not from an agent Tico knows", 400)
     if query.get("response_type") != "code":
         raise OAuthError("unsupported_response_type", "Only response_type=code")
@@ -144,7 +144,7 @@ def begin(c, settings, who, query):
     if who.role not in ("owner", "human") or who.via_token:
         raise Problem("forbidden", "Sign in to Tico in your browser to connect an agent", 403)
     grant = H.new_id()
-    c.execute("INSERT INTO oauth_grants(id,client_id,human,redirect_uri,code_challenge,state,created) "
+    c.execute("INSERT INTO oauth_grants(id,client_id,human,redirect_uri,code_challenge,state,created_at) "
               "VALUES(?,?,?,?,?,?,?)", (grant, client["id"], H.actor_id(who.actor), redirect,
                                         query["code_challenge"], query.get("state", "")[:500], H.now()))
     return grant, client["name"], urlsplit(redirect).hostname or ""
@@ -161,7 +161,7 @@ def decide(c, auth, settings, who, grant_id, allow):
     """The person's answer. Returns where to send the browser."""
     row = c.execute("SELECT * FROM oauth_grants WHERE id=? AND code_hash IS NULL AND denied_at IS NULL AND human=?",
                     (grant_id, H.actor_id(who.actor))).fetchone()
-    if not row or row["created"] <= H.shift(H.now(), seconds=-REQUEST_SECONDS):
+    if not row or row["created_at"] <= H.shift(H.now(), seconds=-REQUEST_SECONDS):
         raise Problem("oauth_request", "This sign-in request has expired. Start again from the agent", 400)
     if not allow:
         c.execute("UPDATE oauth_grants SET denied_at=? WHERE id=?", (H.now(), grant_id))
@@ -170,7 +170,7 @@ def decide(c, auth, settings, who, grant_id, allow):
     if not personal_tokens.can_create(c, auth, who):
         raise Problem("forbidden", "Your team lets only the owner and admins connect agents", 403)
     code = secrets.token_urlsafe(32)
-    c.execute("UPDATE oauth_grants SET code_hash=?,code_expires=? WHERE id=?",
+    c.execute("UPDATE oauth_grants SET code_hash=?,code_expires_at=? WHERE id=?",
               (digest(code), H.shift(H.now(), seconds=CODE_SECONDS), grant_id))
     return back(row["redirect_uri"], settings, code=code, state=row["state"])
 
@@ -191,12 +191,12 @@ def _tokens(c, grant, client, rotate):
     else:
         token_id = H.new_id()
         label = (client["name"] + " · " + now[:10])[:100]
-        c.execute("INSERT INTO human_tokens(id,human,label,token_hash,created,created_by,expires_at) VALUES(?,?,?,?,?,?,?)",
+        c.execute("INSERT INTO human_tokens(id,human,label,token_hash,created_at,created_by,expires_at) VALUES(?,?,?,?,?,?,?)",
                   (token_id, grant["human"], label, digest(access), now, "human:" + grant["human"], expires))
         H.event(c, "human:" + grant["human"], "token.create", token_id, {"label": label, "oauth_client": client["id"]})
     # One approval lasts REFRESH_DAYS from the Allow, like a personal token's 90 days; then the person is asked again.
-    c.execute("UPDATE oauth_grants SET token_id=?,refresh_hash=?,refresh_expires=coalesce(refresh_expires,?),"
-              "code_expires=NULL WHERE id=?", (token_id, digest(refresh), H.shift(now, days=REFRESH_DAYS), grant["id"]))
+    c.execute("UPDATE oauth_grants SET token_id=?,refresh_hash=?,refresh_expires_at=coalesce(refresh_expires_at,?),"
+              "code_expires_at=NULL WHERE id=?", (token_id, digest(refresh), H.shift(now, days=REFRESH_DAYS), grant["id"]))
     return {"access_token": access, "token_type": "Bearer", "expires_in": ACCESS_SECONDS,
             "refresh_token": refresh, "scope": SCOPE}
 
@@ -207,8 +207,8 @@ def exchange(c, auth, form):
     client = _client(c, form.get("client_id"))
     if kind == "authorization_code":
         grant = c.execute("SELECT * FROM oauth_grants WHERE code_hash=?", (digest(form.get("code", "")),)).fetchone()
-        if not grant or grant["client_id"] != client["id"] or grant["token_id"] or not grant["code_expires"] \
-                or grant["code_expires"] <= H.now():
+        if not grant or grant["client_id"] != client["id"] or grant["token_id"] or not grant["code_expires_at"] \
+                or grant["code_expires_at"] <= H.now():
             refused = OAuthError("invalid_grant", "The code is unknown, used or expired")
             if grant and grant["token_id"]:     # a code used twice: the second use ends the first (RFC 6749 §4.1.2)
                 c.execute("UPDATE human_tokens SET revoked_at=coalesce(revoked_at,?) WHERE id=?", (H.now(), grant["token_id"]))
@@ -225,7 +225,7 @@ def exchange(c, auth, form):
         grant = c.execute("SELECT g.*,t.revoked_at AS token_revoked FROM oauth_grants g JOIN human_tokens t ON "
                           "t.id=g.token_id WHERE g.refresh_hash=?", (digest(form.get("refresh_token", "")),)).fetchone()
         if not grant or grant["client_id"] != client["id"] or grant["token_revoked"] \
-                or grant["refresh_expires"] <= H.now():
+                or grant["refresh_expires_at"] <= H.now():
             raise OAuthError("invalid_grant", "The refresh token is unknown, revoked or expired")
         if not _may_hold(c, auth, grant["human"]):
             raise OAuthError("invalid_grant", "Your team now lets only the owner and admins connect agents")

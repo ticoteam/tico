@@ -51,7 +51,7 @@ def _source(kind: str, link: str, billing_name: str) -> dict[str, Any]:
 def _add(kind: str, amount: int, fee: int, billing_name: str, link: str = "") -> dict[str, Any]:
     NOW[0] += 60
     txn = {"id": _new_id("txn"), "object": "balance_transaction", "type": kind, "amount": amount, "fee": fee,
-           "net": amount - fee, "currency": "usd", "status": "available", "created": NOW[0],
+           "net": amount - fee, "currency": "usd", "status": "available", "created_at": NOW[0],
            "description": f"{kind} {billing_name}".strip(), "source": _source(kind, link, billing_name)}
     TXNS.append(txn)
     return txn

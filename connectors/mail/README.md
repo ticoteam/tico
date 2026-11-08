@@ -275,7 +275,7 @@ is the point.
 
 | value            | what it does |
 | ---------------- | ------------ |
-| `grok:<model>`   | `grok -p '<prompt>' --output-format json -m <model> --max-turns 1 --disable-web-search --permission-mode plan`, run in a scratch directory under `runtime/mail/review/`. Grok Build is a coding agent, so the flags plus a one-line preamble (`GROK_PREAMBLE`: answer from this message alone, no tools, no narration) hold it to one answer and no side effects; without the preamble it spends its turn saying what it is about to do and gets cancelled. The owner's xAI subscription, no key to manage. About ten seconds. |
+| `grok:<model>`   | `grok -p '<prompt>' --output-format json -m <model> --max-turns 1 --disable-web-search --permission-mode plan`, run in a scratch directory under `runtime/mail/review/`. Grok Build is a coding agent, so the flags plus a one-line preamble (`GROK_PREAMBLE`: answer from this message alone, no tools, no narration) hold it to one answer and no side effects; without the preamble it spends its turn saying what it is about to do and gets canceled. The owner's xAI subscription, no key to manage. About ten seconds. |
 | `xai:<model>`    | `https://api.x.ai/v1/chat/completions` with `XAI_API_KEY`, stdlib urllib. |
 | `none`           | returns ok without a model. What the tests use, and the escape hatch if both backends are down and the owner wants drafts anyway. |
 

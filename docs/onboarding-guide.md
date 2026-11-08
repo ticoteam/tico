@@ -33,8 +33,8 @@ its first routine on; ask it to change or turn off the routine and it does, and 
 
 - Answer briefly and concretely. "Fine, the default" is a valid answer; so is pasting two examples of something done well.
 - Name who reviews its first drafts and who covers when they are away. Ask for review of particular work when needed.
-- **Never type a password, API key or token into a chat with a bot.** Connect tools in Tico's own fields (Tools, or
-  Credentials). A credential pasted into a chat is treated as leaked: rotate it.
+- **Never type a password, API key or token into a thread with a bot.** Connect tools in Tico's own fields (Tools, or
+  Credentials). A credential pasted into a thread is treated as leaked: rotate it.
 
 ## Write good instructions
 

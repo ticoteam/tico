@@ -47,8 +47,8 @@ For the usage count, one row per install ID, and nothing else:
 | Column | Value |
 |---|---|
 | `install_id` | the random ID |
-| `first_seen` | the UTC day the ID first arrived |
-| `last_seen` | the UTC day it last arrived |
+| `first_seen_at` | the UTC day the ID first arrived |
+| `last_seen_at` | the UTC day it last arrived |
 | `last_version` | the version in the last request |
 | `last_people` | the last UTC day `active_people` was true |
 | `last_bots` | the last UTC day `active_bots` was true |
@@ -309,7 +309,7 @@ a route confirmed to stay in the US exists.
 
 **A server Tico hosts** (`TICO_HOSTED`) also tells Tico HQ, with the same gateway key, the release it runs, every 15
 minutes (`POST <Gateway URL>/servers/update {"version"}`), and after an update Tico support scheduled for it, how that
-went (`updated`, `failed`, `rolled_back` or `timed_out`, with the updater's message). HQ answers with the release
+went (`updated_at`, `failed`, `rolled_back` or `timed_out`, with the updater's message). HQ answers with the release
 support scheduled, if any (`backend/hosted_updates.py`). A self-run server never sends it.
 
 ## The AI accounts your computers are signed in to
@@ -341,7 +341,7 @@ of the company can read it. The computer's operator or an admin turns it off per
 
 ## Support tickets
 
-Help > **Support** sends the Tico team a message. It is separate from the count, and it works whether counting is on or
+The **?** beside Search (the Tico team chat) sends the Tico team a message. It is separate from the count, and it works whether counting is on or
 off: it is a message you write and send yourself, never automatic, never in demo mode, and only from a signed-in human's own
 browser (not a token, the Assistant or a bot). A bot, the Assistant or a person's token may instead draft a report as an
 approval: it is sent only after a person reads the whole message in Needs you and approves it, then is filed as that person,
@@ -394,8 +394,8 @@ reply which a human approves before it is posted. Ticket text is treated as untr
 HTML, and never followed as an instruction.
 
 **How long:** tickets are kept **until someone deletes them**. Nothing deletes a ticket by itself, closed or not. You can delete your own
-with **Delete** in the selected Support request, which removes it from HQ and from your Tico; or ask the team to delete it (say so in the ticket, or
-open an issue) and they do it with a staff route. A deleted ticket is overwritten in HQ's database file. HQ's optional Litestream backup
+with **Delete chat history** in the Tico team chat, which removes every one of your tickets from HQ and from your Tico; or ask
+the team to delete them (say so in the chat, or open an issue) and they do it with a staff route. A deleted ticket is overwritten in HQ's database file. HQ's optional Litestream backup
 keeps older copies of the file for as long as its retention says, if you turned it on.
 
 **Your Tico** keeps, per ticket: your message, the ticket's ID and secret at HQ, the replies, and whether you have read them. Only you
@@ -441,13 +441,13 @@ Every field:
 |---|---|---|
 | `capture` | Server capture start, event/repeat/eviction counts, omitted entries, memory-only retention, and whether the sender edited the attachment | `{"server_repeats": 12, "truncated": 0, "edited": true}` |
 | `browser` | Up to 20 in-memory browser failure groups: kind, UTC time, known app script filename, line/column, count. No error/rejection text, stack text, raw URL, console output or user input. Uploaded to your server only when building the attachment, and to HQ only on Send. | `{"kind": "error", "file": "app.bundle.js", "line": 42, "count": 2}` |
-| `format`, `created` | The bundle's version and when it was made | `1`, `2026-10-01T09:30:00Z` |
+| `format`, `created_at` | The bundle's version and when it was made | `1`, `2026-10-01T09:30:00Z` |
 | `versions` | Tico, server, each computer's release, the updater's | `{"tico": "0.2.18", "runners": ["0.2.17"], "updater": "v0.2.18"}` |
 | `system` | The server's OS and architecture, Docker and compose versions if the updater is there, whether it runs in Docker | `{"os": "Linux", "arch": "x86_64", "docker": "27.1.2", "compose": "2.29.1", "in_docker": true}` |
 | `containers` | Each container's name, state, health and restart count, from the updater | `{"name": "server", "state": "running", "health": "healthy", "restarts": 0}` |
 | `update` | The last update's result: state, versions, the updater's message, whether the database was restored | `{"state": "rolled_back", "from": "0.2.17", "to": "0.2.18", "message": "Not updated: ..."}` |
 | `health` | Each Health check by name and status; no summary text | `{"name": "Computers", "status": "warn"}` |
-| `runners` | Per computer, numbered `runner-1`: online, last heartbeat time (`last_seen`), platform, kind, release, update state and error, each installed runtime (name, version, ready or not, its sign-in state and detail), how many bots are ready, their problem lines, and the computer's last 50 warning or error log lines | `{"label": "runner-1", "online": true, "runtimes": [{"name": "codex", "ready": true, "detail": "Signed in with ChatGPT"}], "problems": ["bot-2: repository missing at /Users/person-1/work"]}` |
+| `runners` | Per computer, numbered `runner-1`: online, last heartbeat time (`last_seen_at`), platform, kind, release, update state and error, each installed runtime (name, version, ready or not, its sign-in state and detail), how many bots are ready, their problem lines, and the computer's last 50 warning or error log lines | `{"label": "runner-1", "online": true, "runtimes": [{"name": "codex", "ready": true, "detail": "Signed in with ChatGPT"}], "problems": ["bot-2: repository missing at /Users/person-1/work"]}` |
 | `database` | The migration level of the database | `{"migration": 12, "cloud_migration": 44}` |
 | `features` | Which of these are on, as true or false only: `demo`, `updater`, `update_check`, `usage_count`, `backups`, `github_app`, `slack`, `sign_in_proxy`, `blob_storage`, `scheduler`, `observability`, `assistant`, `librarian` | `{"slack": false, "backups": true}` |
 | `counts` | How many bots, humans and routines | `{"bots": 12, "people": 5, "routines": 30}` |

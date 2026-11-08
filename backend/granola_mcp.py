@@ -106,7 +106,7 @@ class GranolaMCP:
 
     def metadata(self, actor):
         with self.store.read() as c:
-            row = c.execute("SELECT metadata_json FROM granola_connections WHERE actor=?", (actor,)).fetchone()
+            row = c.execute("SELECT metadata FROM granola_connections WHERE actor=?", (actor,)).fetchone()
         return json.loads(row[0]) if row else {}
 
     def delete(self, actor):
@@ -129,13 +129,13 @@ class GranolaMCP:
             row = c.execute("SELECT * FROM granola_connections WHERE actor=?", (actor,)).fetchone()
             if not row:
                 return None
-            return dict(row), json.loads(row["metadata_json"]), json.loads(self.app.state.vault.cipher.decrypt(c, row))
+            return dict(row), json.loads(row["metadata"]), json.loads(self.app.state.vault.cipher.decrypt(c, row))
 
     def save(self, row, meta, secret):
         with self.store.transaction() as c:
             ciphertext, nonce = self.app.state.vault.cipher.encrypt(c, row["id"], encode(secret))
             # A disconnect/reconnect invalidates every in-flight operation from the previous connection.
-            c.execute("UPDATE granola_connections SET ciphertext=?,nonce=?,metadata_json=? WHERE actor=? AND id=?",
+            c.execute("UPDATE granola_connections SET ciphertext=?,nonce=?,metadata=? WHERE actor=? AND id=?",
                       (ciphertext, nonce, encode(meta), row["actor"], row["id"]))
 
     async def http(self, method, url, meeting_meta=None, **kwargs):
@@ -181,7 +181,7 @@ class GranolaMCP:
         async with self.registration_lock:
             def read_client():
                 with self.store.read() as c:
-                    return c.execute("SELECT value_json FROM registry_metadata WHERE key='granola-mcp-client'").fetchone()
+                    return c.execute("SELECT value FROM registry_metadata WHERE key='granola-mcp-client'").fetchone()
             row = await asyncio.to_thread(read_client)
             if row and not rejected:
                 return json.loads(row[0])["client_id"]
@@ -199,7 +199,7 @@ class GranolaMCP:
             def save_client():
                 with self.store.transaction() as c:
                     c.execute("INSERT INTO registry_metadata VALUES('granola-mcp-client',?) ON CONFLICT(key) "
-                              "DO UPDATE SET value_json=excluded.value_json", (encode({"client_id": client_id}),))
+                              "DO UPDATE SET value=excluded.value", (encode({"client_id": client_id}),))
             await asyncio.to_thread(save_client)
             return client_id
 
@@ -256,7 +256,7 @@ class GranolaMCP:
                     ciphertext, nonce = self.app.state.vault.cipher.encrypt(c, cid, encode(secret))
                     c.execute("INSERT INTO granola_connections VALUES(?,?,?,?,?,?) ON CONFLICT(actor) DO UPDATE SET "
                               "id=excluded.id,email=excluded.email,ciphertext=excluded.ciphertext,nonce=excluded.nonce,"
-                              "metadata_json=excluded.metadata_json",
+                              "metadata=excluded.metadata",
                               (who.actor, cid, who.email, ciphertext, nonce, encode(meta)))
             await asyncio.to_thread(store_connection)
             return {k: value[k] for k in ("user_code", "verification_uri", "verification_uri_complete", "expires_in")
@@ -275,12 +275,12 @@ class GranolaMCP:
     def status(self, who):
         # Reading status does not decrypt a token.
         with self.store.read() as c:
-            row = c.execute("SELECT email,metadata_json FROM granola_connections WHERE actor=?", (who.actor,)).fetchone()
+            row = c.execute("SELECT email,metadata FROM granola_connections WHERE actor=?", (who.actor,)).fetchone()
             api_key = c.execute("SELECT enabled FROM meeting_importers WHERE source='granola'").fetchone()
-        meta = json.loads(row["metadata_json"]) if row else {}
+        meta = json.loads(row["metadata"]) if row else {}
         return {"mode": "account" if row else "api_key" if api_key and api_key[0] else "off",
                 "connected": meta.get("state") == "connected" or bool(meta.get("previous_meta")), "email": meta.get("email"),
-                "plan_hint": meta.get("plan_hint"), "last_sync": meta.get("last_sync"),
+                "plan_hint": meta.get("plan_hint"), "last_synced_at": meta.get("last_sync"),
                 "last_error": meta.get("last_error"), "imported_count": meta.get("imported_count", 0),
                 "needs_signin": meta.get("needs_signin", False), "syncing": who.actor in self.jobs,
                 "skipped": meta.get("skipped", 0), "skip_reasons": meta.get("skip_reasons", {}),
@@ -1049,19 +1049,19 @@ class GranolaMCP:
 
     async def trigger(self, who, interval=DEBOUNCE, now=False):
         if who.actor in self.changing_connections:
-            return {"state": "off", "last_sync": None}
+            return {"state": "off", "last_synced_at": None}
         if not await asyncio.to_thread(self.eligible, who):
             await self.disconnect(who)
-            return {"state": "off", "last_sync": None}
+            return {"state": "off", "last_synced_at": None}
         status = await asyncio.to_thread(self.status, who)
         if who.actor in self.jobs:
-            return {"state": "syncing", "last_sync": status["last_sync"]}
+            return {"state": "syncing", "last_synced_at": status["last_synced_at"]}
         meta = await asyncio.to_thread(self.metadata, who.actor)
         if meta.get("previous_meta") and self.clock() >= meta.get("expires", 0):
             await self.poll(who)
             meta = await asyncio.to_thread(self.metadata, who.actor)
         if not meta or meta["state"] != "connected":
-            return {"state": "needs_signin" if status["needs_signin"] else "off", "last_sync": status["last_sync"]}
+            return {"state": "needs_signin" if status["needs_signin"] else "off", "last_synced_at": status["last_synced_at"]}
         throttled = (meta.get("last_error") or "").startswith("rate_limited:")
         retry_at = self.next_retry(meta) if interval == SCHEDULE or throttled else 0
         # A person pressing Sync now (`now`, the button only) gets a real attempt once five minutes have passed since
@@ -1069,20 +1069,20 @@ class GranolaMCP:
         if retry_at and now and self.clock() - meta.get("last_attempt", 0) >= RATE_LIMIT_RETRY:
             retry_at = 0
         if retry_at and self.clock() < retry_at:
-            return {"state": "recent", "last_sync": status["last_sync"]}
+            return {"state": "recent", "last_synced_at": status["last_synced_at"]}
         if not retry_at and self.clock() - max(meta.get("last_attempt", 0), meta.get("last_finished", 0)) < interval:
-            return {"state": "recent", "last_sync": status["last_sync"]}
+            return {"state": "recent", "last_synced_at": status["last_synced_at"]}
         if who.actor in self.jobs:
-            return {"state": "syncing", "last_sync": status["last_sync"]}
+            return {"state": "syncing", "last_synced_at": status["last_synced_at"]}
         if who.actor in self.changing_connections:
-            return {"state": "off", "last_sync": status["last_sync"]}
+            return {"state": "off", "last_synced_at": status["last_synced_at"]}
         def record_failure():
             with self.store.transaction() as c:
-                row = c.execute("SELECT metadata_json FROM granola_connections WHERE actor=?", (who.actor,)).fetchone()
+                row = c.execute("SELECT metadata FROM granola_connections WHERE actor=?", (who.actor,)).fetchone()
                 if row:
                     meta = json.loads(row[0])
                     meta.update(last_attempt=self.clock(), last_error="credential_error: load_connection")
-                    c.execute("UPDATE granola_connections SET metadata_json=? WHERE actor=?", (encode(meta), who.actor))
+                    c.execute("UPDATE granola_connections SET metadata=? WHERE actor=?", (encode(meta), who.actor))
         async def run():
             try:
                 await self.sync(who.actor)
@@ -1097,7 +1097,7 @@ class GranolaMCP:
             if self.jobs.get(who.actor) is task:
                 self.jobs.pop(who.actor, None)
         task.add_done_callback(finished)
-        return {"state": "syncing", "last_sync": status["last_sync"]}
+        return {"state": "syncing", "last_synced_at": status["last_synced_at"]}
 
     async def tick(self):
         def connections():

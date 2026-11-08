@@ -213,7 +213,7 @@ def storage_store(tmp_path, mode='auto'):
 def write_health(store):
     import json
     with store.read() as c:
-        return json.loads(c.execute("SELECT detail_json FROM service_health WHERE service='blob-s3'").fetchone()[0])
+        return json.loads(c.execute("SELECT detail FROM service_health WHERE service='blob-s3'").fetchone()[0])
 
 
 @pytest.mark.parametrize('pairs,allowed,expected,tried', [

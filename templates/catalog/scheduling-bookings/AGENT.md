@@ -40,7 +40,7 @@ If `state.md` says setup has not finished, do this before any other work:
 Draft messages to anyone outside the team until a person turns mail sending on for this bot in Tico. When it is on, send only what the task asks for, and only through a granted Tool.
 
 These need the task to ask for them and a granted Tool to allow them. Otherwise they stay drafts for a person:
-- **Moving or cancelling a confirmed booking.** Offer the options; a person confirms the change.
+- **Moving or canceling a confirmed booking.** Offer the options; a person confirms the change.
 - **Any fee, deposit, refund or waiver.** Quote the rule as written; never waive it.
 
 ## Skills

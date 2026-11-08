@@ -10,7 +10,8 @@ from backend.finance import reads as FR
 from backend.finance.store import actions as SX
 from backend.finance.context import load
 from backend.tests.test_finance_fixtures import (  # noqa: F401
-    AT, MERCURY, OWNER, FakeMercury, account, act, books, connect, finance_template, store, sync_once)
+    ACME_ADDRESS, AT, MERCURY, OWNER, FakeMercury, account, act, books, close_month, connect, finance_template,
+    reopen_rows, store, sync_once)
 
 SALARY = -812_345
 
@@ -30,7 +31,8 @@ def _checking(c) -> str:
 def _payee(store, fake) -> str:
     with store.transaction() as c:
         made = act(c, OWNER, "recipient_add", {"name": "Eve Example", "method": "ach",
-                                               "account_number": "000011112222", "routing_number": "000000000"})
+                                               "account_number": "000011112222", "routing_number": "000000000",
+                                               "address": ACME_ADDRESS})
         assert made.status == "committed", made
     sync_once(store, fake)
     return str(made.result["recipient_id"])
@@ -145,7 +147,7 @@ def _october_debit_paid_by_a_november_payroll_bill(c) -> None:
     payroll = str(made.result["account_id"])
     assert act(c, OWNER, "private_lines_set", {"account_id": payroll, "others_see": "totals"}).status == "committed"
     _ingest(c, _txn("txn-pay", -40.0, who="ACME PAYROLL", day="2026-10-14"))
-    assert act(c, OWNER, "close_period", {"month": "2026-10"}, at=NOV).status == "committed"
+    assert close_month(c, "2026-10", at=NOV).status == "committed"
     vendor = act(c, OWNER, "contact_create", {"name": "Acme Payroll", "kind": "vendor"}, at=NOV)
     made = act(c, OWNER, "bill_create", {"vendor_id": str(vendor.result["contact_id"]), "bill_date": "2026-11-03",
                                          "lines": [{"account_id": payroll, "amount": 4_000}], "number": "PR-7"},
@@ -195,6 +197,7 @@ def test_reversing_the_pays_bill_entry_never_re_exposes_the_amount(books):
     connect(books, FakeMercury())
     with books.transaction() as c:
         _october_debit_paid_by_a_november_payroll_bill(c)
+        reopen_rows(c)                       # the October debit is reconciled by its close; its reclass needs it open
         pays = str(c.execute("SELECT id FROM fin_entries WHERE memo='Pays bill PR-7'").fetchone()[0])
         assert act(c, OWNER, "journal", {"reverses": pays}, at=NOV).status == "committed"
     with books.read() as c:
@@ -264,7 +267,7 @@ def _card_charge_paid_by_a_november_payroll_bill(store, fake) -> str:
                              "operationType": "create", "resourceVersion": 1})
     sync_once(store, fake, LATER)
     with store.transaction() as c:
-        assert act(c, OWNER, "close_period", {"month": "2026-10"}, at=NOV).status == "committed"
+        assert close_month(c, "2026-10", at=NOV).status == "committed"
         vendor = act(c, OWNER, "contact_create", {"name": "Acme Payroll", "kind": "vendor"}, at=NOV)
         made = act(c, OWNER, "bill_create", {"vendor_id": str(vendor.result["contact_id"]), "bill_date": "2026-11-03",
                                              "lines": [{"account_id": payroll, "amount": 4_000}], "number": "PR-7"},
@@ -356,7 +359,7 @@ def _card_charge_in_october_paid_by_a_november_payroll_bill(store, fake, holder:
     sync_once(store, fake, LATER)
     with store.transaction() as c:
         payroll = _payroll_line(c)
-        assert act(c, OWNER, "close_period", {"month": "2026-10"}, at=NOV).status == "committed"
+        assert close_month(c, "2026-10", at=NOV).status == "committed"
         vendor = act(c, OWNER, "contact_create", {"name": "Acme Payroll", "kind": "vendor"}, at=NOV)
         made = act(c, OWNER, "bill_create", {"vendor_id": str(vendor.result["contact_id"]), "bill_date": "2026-11-03",
                                              "lines": [{"account_id": payroll, "amount": 4_000}], "number": "PR-8"},
@@ -557,7 +560,7 @@ def test_a_card_limit_approval_that_no_longer_fits_stores_no_figure(books):
         H.approval_decide(c, OWNER, held.approval_id, "approved")
         done = FA.approval_decided(c, held.approval_id, OCT_END)
         assert done.status in ("failed", "denied") and done.code == "invalid", done
-        reason, result = c.execute("SELECT reason, result_json FROM fin_actions WHERE id=?",
+        reason, result = c.execute("SELECT reason, result FROM fin_actions WHERE id=?",
                                    (str(held.action_id),)).fetchone()
         assert not any(ch.isdigit() for ch in str(reason)) and asked["card_id"] in str(result), (reason, result)
         for reader in (OWNER, "human:cara"):
@@ -705,10 +708,10 @@ def test_a_child_budget_under_a_parent_with_a_hidden_figure_gets_one_outcome_for
     assert not any(ch.isdigit() for r in gus.values() for ch in r.reason), gus
 
 
-def test_a_retroactive_budget_change_gets_one_outcome_for_a_reader_whose_figure_for_that_period_is_not_true(books):
-    """A P&L grantee with the budgets right changes Other expenses back to October, in December. Their December figure is
-    true, but October's is not, and the fit reads October: every amount gets the owner's decision and no figure. The
-    owner still gets October's true fit (its 40.00 reserve is named below 4,000)."""
+def test_a_retroactive_budget_change_is_refused_the_same_way_for_a_reader_whose_figure_for_that_period_is_not_true(books):
+    """§12: only future periods are editable. A P&L grantee with the budgets right changes Other expenses back to
+    October, in December: every amount is refused the same way for the owner and for that reader, and the reason names
+    no figure, so the reader learns nothing from which amount was refused."""
     connect(books, FakeMercury())
     with books.transaction() as c:
         budget_id = _other_budget(c, at=AT)
@@ -720,12 +723,12 @@ def test_a_retroactive_budget_change_gets_one_outcome_for_a_reader_whose_figure_
         def change(amount: int, who: str, key: str) -> FA.ActionResult:
             return act(c, who, "budget_update", {"budget_id": budget_id, "amount": amount, "effective_from": "2026-10-01"},
                        key, dry_run=True, at=DEC)
-        owner = {amount: change(amount, OWNER, f"own-{amount}") for amount in (3_999, 4_000)}
-        gus = {amount: change(amount, "human:gus", f"gus-{amount}") for amount in (3_999, 4_000, 4_001, 9_000)}
-    assert owner[3_999].status == "failed" and "40.00" in owner[3_999].reason, owner[3_999]
-    assert owner[4_000].status == "committed", owner[4_000]
-    assert {r.status for r in gus.values()} == {"needs_approval"}, {a: r.status for a, r in gus.items()}
-    assert not any(ch.isdigit() for r in gus.values() for ch in r.reason), gus
+        owner = [change(amount, OWNER, f"own-{amount}") for amount in (3_999, 4_000)]
+        gus = [change(amount, "human:gus", f"gus-{amount}") for amount in (3_999, 4_000, 4_001, 9_000)]
+    results = owner + gus
+    assert {r.status for r in results} == {"failed"}, [r.status for r in results]
+    assert {r.code for r in results} == {"invalid"} and len({r.reason for r in results}) == 1, results
+    assert not any(ch.isdigit() for r in gus for ch in r.reason), gus
 
 
 def test_every_budget_and_card_fit_gives_a_reader_who_cannot_check_one_outcome_and_no_figure(books):

@@ -34,7 +34,7 @@ def _step(conn, row):
 
 
 def _pr(conn, row):
-    found = conn.execute("SELECT url FROM task_links WHERE task_id=? AND kind='pr' ORDER BY created DESC,rowid DESC "
+    found = conn.execute("SELECT url FROM task_links WHERE task_id=? AND kind='pr' ORDER BY created_at DESC,rowid DESC "
                          'LIMIT 1', (row['id'],)).fetchone()
     return found[0] if found else 'none'
 
@@ -65,12 +65,12 @@ def _places(conn, row):
             item = H.task(conn, item_id) if item_id else None
             if not item or item.get('type_id') != product:
                 continue
-            parties = [a for a in dict.fromkeys([item['owner'], item['requester']]) if a and a != H.KEEPER]
+            parties = [a for a in dict.fromkeys([item['owner_id'], item['requester_id']]) if a and a != H.KEEPER]
             to = next((a for a in parties if H.is_bot(a)), None) or (parties[0] if parties else None)
             if to:
                 out.append((item, to))
-    if not out and row.get('requester') and row['requester'] != H.KEEPER:
-        out.append((row, row['requester']))
+    if not out and row.get('requester_id') and row['requester_id'] != H.KEEPER:
+        out.append((row, row['requester_id']))
     return out
 
 
@@ -112,7 +112,7 @@ def moved(conn, actor, task_id, old, new):
         return post(conn, 'done', row, actor)
     if new in STARTED_STATUSES and not conn.execute(
             "SELECT 1 FROM events WHERE actor=? AND action='task.notice' AND target=? "
-            "AND json_extract(detail_json,'$.kind')='started' LIMIT 1", (H.KEEPER, task_id)).fetchone():
+            "AND json_extract(detail,'$.kind')='started' LIMIT 1", (H.KEEPER, task_id)).fetchone():
         return post(conn, 'started', row, actor)
     return []
 

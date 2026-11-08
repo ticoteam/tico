@@ -82,7 +82,7 @@ Only something the Health Monitor has not been told of starts a run:
 Seeing a finding again only counts: each hourly scan that sees it adds one to its count and moves its last-seen time,
 and nobody is woken. That holds while it stays there and when it goes away and comes back while its task is still
 open; then the task gets a quiet note ("Seen again (N times, last ...)") the Health Monitor reads on its next turn
-there. **Settings > Health** shows each finding as "seen N times, last ..." (`occurrences` and `last_seen` in
+there. **Settings > Health** shows each finding as "seen N times, last ..." (`occurrences` and `last_seen_at` in
 `GET /api/v2/health-monitor`, with its `severity`).
 
 ## What it does with a finding

@@ -11,14 +11,14 @@ async function botSettingsMount(slug) {
   if (!host) return;
   await loadSettings();
   if (BOT?.slug !== slug || !host.isConnected) return;
-  const bot = S.emps.find(e => e.name === slug);
+  const bot = botRow(slug);
   if (!bot || !settingsCanManageBot(bot)) {
     host.innerHTML = '<p class="muted">You have read-only access to this bot. Its owner or an admin can change its settings.</p>';
   } else settingsEditBot(slug, true);
   botScreenSettingsPaint(slug);
 }
 function botInstructionsMount(slug) {
-  const host = $('#bot-instructions-editor'), bot = S.emps.find(e => e.name === slug);
+  const host = $('#bot-instructions-editor'), bot = botRow(slug);
   if (!host || !bot || bot.shared_from || !settingsCanManageBot(bot)) return;
   host.innerHTML = `<form class="bot-instructions-form">
     <label for="bot-instructions-changes">Request instruction changes</label>
@@ -34,7 +34,7 @@ function botInstructionsMount(slug) {
     const button = form.querySelector('[type=submit]');
     button.disabled = true; status.textContent = 'Sending…';
     try {
-      await post('/v2/assistant/messages', {text: `Update the Instructions (AGENT.md) for ${bot.display_name} [${slug}]. Apply these changes and verify the file on its computer:\n\n${changes}`});
+      await post('/v2/assistant/messages', {text: `Update the Instructions (AGENT.md) for ${bot.display_name} [${botSlug(slug)}]. Apply these changes and verify the file on its computer:\n\n${changes}`});
       form.reset(); status.textContent = 'Changes sent.';
     } catch (error) { status.textContent = error.message; }
     finally { button.disabled = false; }
@@ -52,11 +52,11 @@ async function botSettingsHistoryLoad(slug) {
 }
 
 function botInfoRefresh(slug) {
-  const bot = S.emps.find(e => e.name === slug), host = $('#bot-setup-card');
+  const bot = botRow(slug), host = $('#bot-setup-card');
   if (!bot || !host || botLimited(bot)) return;
   const title = $('#bot-top h1');
   if (title) title.innerHTML = `${shownName(bot)}${runtimeTag(bot)}${botBetaPill(bot)}`;
-  const boss = S.emps.find(e => e.name === bot.reports_to);
+  const boss = botRow(bot.reports_to);
   const values = {
     Role: botRoleHTML(String(bot.role || bot.description || '').trim()),
     Humans: userChips(bot) || '<span class="muted">Nobody assigned</span>',
@@ -64,7 +64,7 @@ function botInfoRefresh(slug) {
     Harness: esc(harnessWords(bot.harness || bot.runtime || bot.resolved_runtime) || 'Team default'),
     Model: !bot.agent ? esc(bot.model ? settingsChoiceLabel(bot.harness || bot.runtime, bot.model, bot.reasoning_effort || bot.effort) : settingsDefaultLabel(bot))
       + (bot.fallback ? `<span class="muted"> · fallback ${esc(settingsChoiceLabel(bot.fallback.harness, bot.fallback.model, bot.fallback.reasoning_effort || bot.fallback.effort))}</span>` : '') : null,
-    'Reports to': boss ? `<a href="#/bot/${encodeURIComponent(boss.name)}">${esc(boss.display_name)}</a>` : bot.reports_to?.startsWith('human:') ? esc(botPersonName(bot.reports_to.slice(6))) : '<span class="muted">Top level</span>',
+    'Reports to': boss ? `<a href="#/bot/${encodeURIComponent(boss.id)}">${esc(boss.display_name)}</a>` : bot.reports_to?.startsWith('human:') ? esc(botPersonName(bot.reports_to.slice(6))) : '<span class="muted">Top level</span>',
     Repository: botRepoHTML(bot).replace(/^Repository /, ''),
   };
   if (bot.reports_to && ![...host.querySelectorAll('dt')].some(label => label.textContent === 'Reports to'))

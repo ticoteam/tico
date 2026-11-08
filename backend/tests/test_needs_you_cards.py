@@ -44,6 +44,13 @@ def test_cards_are_titled_dated_grouped_and_one_per_blocker(api):
     items = {i["id"]: i for i in page["items"]}
 
     assert items[send["id"]]["title"] == "Send: '$200 for each rental owner you introduce' to Jennie Ooten"
+    # One item shape whatever the kind (backend/needs_shape.py): what it is about and the writes that settle it.
+    common = {"id", "kind", "title", "body", "subject", "created_at", "actions"}
+    assert all(common <= set(i) and i["actions"] for i in page["items"])
+    assert (items[send["id"]]["subject"], items[send["id"]]["actions"]) == ({"type": "approval", "id": send["id"]},
+                                                                            ["decide"])
+    assert items[keys["id"]]["subject"] == {"type": "task", "id": keys["id"]} and "update" in items[keys["id"]]["actions"]
+    assert items[keys["id"]]["body"] == "Rotate them"
     assert items[merge["id"]]["title"] == "Merge: 'Referral deal for rental owners' (acme/site #12)"
     assert (items[send["id"]]["need"], items[merge["id"]]["need"], items[keys["id"]]["need"]) == ("review", "review",
                                                                                                     "connect")
@@ -53,6 +60,7 @@ def test_cards_are_titled_dated_grouped_and_one_per_blocker(api):
 
     card = items[pick["id"]]
     assert card["need"] == "decide" and card["recommend"]["do"] == "Gusto" and card["recommend"]["option"] == "Gusto"
+    assert card["actions"] == ["answer", "update"]
     assert vendor["id"] not in items and fix["id"] not in items
     assert {f["id"] for f in card["folded"]} == {vendor["id"], fix["id"]}
     # The walk-through and brief say the folded waits with the card.
@@ -98,7 +106,7 @@ def test_do_what_you_recommend_answers_and_closes_the_card(api):
     card = next(i for i in get(api, "needs-you")["items"] if i["id"] == tool["id"])
     assert card["recommend"]["do"] == "Go with Apollo" and card["need"] == "decide"
     post(api, "needs-you/recommended", {"ask": plain["id"]}, expected=409)        # no recommendation to take
-    post(api, "needs-you/recommended", {"ask": asked["id"]}, token="ben-test", expected=403)
+    post(api, "needs-you/recommended", {"ask": asked["id"]}, token="ben-test", expected=403)   # reads the task, was not asked
     post(api, "needs-you/recommended", {"ask": asked["id"]})
     with api.app.state.store.read() as c:
         said = c.execute("SELECT body FROM messages WHERE in_reply_to=? AND kind='answer'", (asked["id"],)).fetchone()
@@ -117,7 +125,7 @@ def test_do_what_you_recommend_answers_a_question_on_a_file_version(api):
     with api.app.state.store.transaction() as c:
         ask_id = c.execute("SELECT ask_message_id FROM task_file_reviews WHERE file_id=?", (made["file_id"],)).fetchone()[0]
         asked = H.message(c, ask_id)
-        c.execute("UPDATE messages SET refs_json=?, to_actor='human:ana' WHERE id=?",
+        c.execute("UPDATE messages SET refs=?, recipient_id='human:ana' WHERE id=?",
                   (json.dumps({**asked["refs"], "if_no_answer": {"do": "Approve", "kind": "reversible"}}), ask_id))
     post(api, "needs-you/recommended", {"ask": ask_id})
     assert get(api, f"tasks/{plan['id']}/answers")["answers"][0]["answers"] == {"verdict": ["Approve"]}

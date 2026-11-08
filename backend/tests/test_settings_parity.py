@@ -20,8 +20,8 @@ from backend.tests.test_member_bots import botops, finish, turn  # noqa: F401  (
 
 PEOPLE = {"owner": ("ana-test", "ana"), "admin": ("ben-test", "ben"), "member": ("cara-test", "cara")}
 # Cara neither runs nor owns finance, made nothing below and operates no computer: "the bot's owners", "the person who
-# made it" and "the computer's operator" are Ana's and Ben's (as an admin) here.
-MANAGERS = ("bot", "creator", "operator")
+# made it", "the computer's operator" and the managers of a team rule's scope are Ana's and Ben's (as an admin) here.
+MANAGERS = ("bot", "creator", "operator", "scope")
 
 # A value each entry's route takes. An entry left out sends `{}` (json) or the type's plain sample; a route that does
 # not take it says so with a 422, which the test reports as not proven rather than passing.
@@ -74,6 +74,8 @@ SAMPLES = {
     "inbound.inbox.create": {"bot": "finance"},
     "inbound.inbox": {"enabled": True},
     "inbound.phone_request.cancel": {},
+    "bot.budget": {"turns_per_hour": 10, "expected_revision": 1},
+    "storage.move": {"expect_bytes": 0},
     # A computer given the subscription `_objects` made for it (a real computer and a real subscription, no run to stop).
     "models.computer_subscription": lambda o: {"runner_id": o.get("computers", ""), "runtime": "claude",
                                               "subscription": o.get("model-subscriptions", ""), "confirm": False},
@@ -96,23 +98,26 @@ NOT_PROVEN = {
 "tasks.tag": "422: the body shape",
     "inbound.inbox.create": "422: the body shape", "inbound.inbox": "422: no synthetic inbox yet",
     "inbound.phone_request.cancel": "409: inbound is not configured",
+    "inbound.inbox.audience": "503: inbound is not configured",
     # Confirm entries: the card is made, but the tap can't run on this fixture.
     "bot.agent_credential.revoke": "tap 404: finance has no agent credential",
     "webhooks.gateway.wake": "tap 404: the trigger has no Tico Gateway address (a member's tap is refused first)",
+    "me.tokens.revoke": "tap 404: no synthetic API token",
+    "storage.s3.remove": "tap 409: no company storage is set",
+    "people.person.delete": "tap 409: the fixture person can't be removed for good",
+    "repos.product.create": "422: the body shape (and no GitHub App here)", "listening.destination": "422: the body shape",
+    "listening.destination.remove": "tap 404: no synthetic listening destination",
+    "roadmap.public": "tap 422: the route takes no empty settings", "inbound.inbox.release": "tap 404: no synthetic inbox",
+    "inbound.phone_request": "tap 409: inbound is not configured",
+    "inbound.phone_request.accept": "422: needs the price shown (and inbound is not configured)",
+    "bot.cloud_machine": "tap 409: the fixture company is not on Tico Cloud",
+    "cloud.shared_machine": "tap 409: the fixture company is not on Tico Cloud",
+    "mail.address.order": "422: the body shape (an address order with its Idempotency-Key)",
 }
-# Where the route and the catalogue disagree today, beyond this ticket (Bot repositories and Takes member bots are fixed
-# here): (entry, person) -> what the route does. Settings stage 2 takes these; the test fails when one is fixed (take it
-# out) or a new one appears.
-KNOWN_GAPS = {
-    # "The person who made it" / "the computer's operator": the catalogue leaves it to the route, so a member who made
-    # none of these gets a Confirm card, and the route refuses their tap.
-    ("computer.revoke", "member"): "card, then refused", ("webhooks.incoming.rotate", "member"): "card, then refused",
-    ("webhooks.incoming.delete", "member"): "card, then refused",
-    ("webhooks.gateway.wake", "member"): "card, then refused", ("webhooks.outgoing", "member"): "card, then refused",
-    # An admin changes a person's role, but only the owner makes or removes admins (Review 2 of PR #1700 had the sweep
-    # tap its cards, which found it).
-    ("people.person.role", "admin"): "card, then refused",
-}
+# Where the route and the catalogue disagree: (entry, person) -> what the route does. None now (settings stage 3 made
+# the who-may of creator and operator entries, wake rules and a person's role match their routes); the test fails when
+# a new one appears, or one here is fixed (take it out).
+KNOWN_GAPS = {}
 
 
 def _sample(e, objects=None):
@@ -138,14 +143,15 @@ def _objects(api, machine):
         found[key] = (made or {}).get("id") or (made or {}).get("key")
     now = H.now()
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO repositories(id,full_name,enabled,updated) VALUES(?,?,1,?)",
+        c.execute("INSERT INTO repositories(id,full_name,enabled,updated_at) VALUES(?,?,1,?)",
                   (H.new_id(), "Acme/product", now))
-        c.execute("INSERT INTO bot_transitions(id,bot,kind,target_json,requested_by,expected_revision,state,created,"
-                  "updated) VALUES('tr-parity','finance','model',?,'human:ana',1,'prepared',?,?)",
+        c.execute("INSERT INTO bot_transitions(id,bot,kind,target,requested_by,expected_revision,state,created_at,"
+                  "updated_at) VALUES('tr-parity','finance','model',?,'human:ana',1,'prepared',?,?)",
                   ('{"model": "fake-model", "runtime": "fake", "effort": ""}', now, now))
         system = c.execute("SELECT id FROM system_routines LIMIT 1").fetchone() if c.execute(
             "SELECT 1 FROM sqlite_master WHERE name='system_routines'").fetchone() else None
     found["repositories"] = "Acme/product"
+    found["usage/pools"] = "company"
     found["settings/transitions"] = "tr-parity"
     found["system-routines"] = system[0] if system else "daily_update"
     found["computers"] = machine["runner_id"]
@@ -205,7 +211,7 @@ def outcome(answer):
 def tapped(api, card, token):
     """The person's own tap on a card: what the setting's route did with it (ran, refused, or the status it gave),
     with the test database put back as it was before the tap, so the next entry starts from the same fixture. The
-    card is then cancelled, so the next one isn't over the cap on open cards."""
+    card is then canceled, so the next one isn't over the cap on open cards."""
     path = api.app.state.store.settings.db_path
     with closing(sqlite3.connect(":memory:")) as kept:
         with closing(sqlite3.connect(path)) as live:

@@ -5,6 +5,7 @@
 //! exits. Claude stays up for its background tasks either way; open stdin lets a follow-up in meanwhile.
 
 use std::collections::{HashMap, HashSet};
+use std::io::{Read, Seek, SeekFrom};
 use std::process::Stdio;
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
@@ -584,9 +585,13 @@ impl ClaudeHost {
         // `--strict-mcp-config` keeps out the operator's own servers (~/.claude.json, user settings, plugins,
         // claude.ai connectors) (hosts/claude.py _argv).
         if t.settings.shared {
-            argv.extend(["--setting-sources".into(), "project,local".into()]);
+            argv.extend(["--setting-sources".into(), if t.settings.packet_only { "".into() } else { "project,local".into() }]);
         }
         argv.push("--strict-mcp-config".into());
+        if t.settings.packet_only {
+            argv.extend(["--tools".into(), "".into(), "--disable-slash-commands".into(),
+                "--settings".into(), "{\"disableAllHooks\":true}".into()]);
+        }
         let project = std::fs::read_to_string(std::path::Path::new(&t.settings.cwd).join(".mcp.json"))
             .ok()
             .and_then(|text| serde_json::from_str::<Value>(&text).ok())
@@ -1415,7 +1420,8 @@ impl ClaudeHost {
         Ok(turn)
     }
 
-    /// Goal records this session's transcript gained since the turn began (Claude writes some only there).
+    /// Goal records this session's transcript gained since the turn began (Claude writes some only there). A pass
+    /// reads only the bytes past the offset, which stops at the last whole line: a transcript can be tens of MB.
     pub fn poll_goal(&self, thread_id: &str) {
         let (path, offset) = {
             let inner = self.inner();
@@ -1423,9 +1429,31 @@ impl ClaudeHost {
             let Some(path) = transcript(&t.settings, &session_of(thread_id, t)) else { return };
             (path, inner.goal_offsets.get(thread_id).copied().unwrap_or(0))
         };
-        let Ok(bytes) = std::fs::read(&path) else { return };
-        let start = (offset as usize).min(bytes.len());
-        let rest = &bytes[start..];
+        let Ok(mut file) = std::fs::File::open(&path) else { return };
+        let Ok(len) = file.metadata().map(|m| m.len()) else { return };
+        if len <= offset {
+            // Nothing new. A transcript cut below the offset is read again from its new end.
+            if len < offset {
+                self.inner().goal_offsets.insert(thread_id.into(), len);
+            }
+            return;
+        }
+        if file.seek(SeekFrom::Start(offset)).is_err() {
+            return;
+        }
+        let mut rest = Vec::with_capacity((len - offset) as usize);
+        if (&mut file).take(len - offset).read_to_end(&mut rest).is_err() {
+            return;
+        }
+        if (rest.len() as u64) < len - offset {
+            // Cut while it was read: start again from its end now, as a whole read would have.
+            if let Ok(now) = file.metadata().map(|m| m.len()) {
+                if now < offset {
+                    self.inner().goal_offsets.insert(thread_id.into(), now);
+                    return;
+                }
+            }
+        }
         let complete = rest.iter().rposition(|b| *b == b'\n').map_or(0, |i| i + 1);
         for line in rest[..complete].split(|b| *b == b'\n') {
             let Ok(message) = serde_json::from_slice::<Value>(line) else { continue };
@@ -1433,7 +1461,7 @@ impl ClaudeHost {
                 self.emit(event("goal", Some(thread_id), None, Value::Object(status)));
             }
         }
-        self.inner().goal_offsets.insert(thread_id.into(), (start + complete) as u64);
+        self.inner().goal_offsets.insert(thread_id.into(), offset + complete as u64);
     }
 
     /// Write `text` into the running turn, or refuse with nothing written once it is over or ending.
@@ -1549,6 +1577,10 @@ pub fn error_text(result: Option<&Value>, rc: i32, stderr: &str) -> String {
 fn turn_env(settings: &Settings) -> crate::env::Env {
     let mut env: crate::env::Env = if settings.env.is_empty() { std::env::vars().collect() } else { settings.env.clone() };
     env.insert("CLAUDE_CODE_DISABLE_AUTO_MEMORY".into(), "1".into());
+    if settings.packet_only {
+        env.insert("CLAUDE_CODE_DISABLE_CLAUDE_MDS".into(), "1".into());
+        env.insert("CLAUDE_CODE_DISABLE_CRON".into(), "1".into());
+    }
     // Belt and braces: `--strict-mcp-config` already skips the claude.ai connectors.
     env.insert("ENABLE_CLAUDEAI_MCP_SERVERS".into(), "false".into());
     // The login and the session files live under HOME; a trimmed environment must keep it.
@@ -1566,6 +1598,19 @@ fn turn_env(settings: &Settings) -> crate::env::Env {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn packet_turns_keep_the_login_but_drop_memory_hooks_and_tools() {
+        let host = ClaudeHost::new("synthetic", vec!["claude".into()], tokio::sync::mpsc::unbounded_channel().0);
+        let settings = Settings { packet_only: true, shared: true, ..Settings::default() };
+        let thread = host.start_thread(&settings);
+        let argv = host.argv(&thread, &host.inner().threads[&thread].clone(), Some("low"));
+        assert!(argv.windows(2).any(|w| w == ["--tools", ""]));
+        assert!(argv.windows(2).any(|w| w == ["--setting-sources", ""]));
+        assert!(argv.contains(&"{\"disableAllHooks\":true}".into()));
+        assert_eq!(turn_env(&settings)["CLAUDE_CODE_DISABLE_CLAUDE_MDS"], "1");
+        assert!(!argv.contains(&"--bare".into()), "subscription login must remain available");
+    }
 
     #[tokio::test]
     async fn a_crashed_turn_keeps_stderr_out_of_failure_events() {
@@ -2318,5 +2363,85 @@ mod tests {
         assert_eq!(autocompact_window(&json!(10)), 100_000);
         assert_eq!(version_tuple("2.1.296 (Claude Code)"), Some((2, 1, 296)));
         assert_eq!(usage_tokens(&json!({"input_tokens": 3, "cache_creation_input_tokens": 4, "cache_read_input_tokens": "5", "output_tokens": 7})), (12, 7));
+    }
+
+    /// A transcript the poll tests write into: this thread's session file under HOME, where Claude keeps it.
+    fn poll_transcript(dir: &std::path::Path) -> (ClaudeHost, mpsc::UnboundedReceiver<Value>, String, std::path::PathBuf) {
+        let (tx, rx) = mpsc::unbounded_channel();
+        let host = ClaudeHost::new("acme", vec![], tx);
+        let mut settings = Settings { cwd: dir.display().to_string(), ..Default::default() };
+        settings.env.insert("HOME".into(), dir.display().to_string());
+        let thread = host.start_thread(&settings);
+        let folder = dir.join(".claude/projects/acme");
+        std::fs::create_dir_all(&folder).unwrap();
+        let path = folder.join(format!("{thread}.jsonl"));
+        (host, rx, thread, path)
+    }
+
+    fn append_transcript(path: &std::path::Path, text: &str) {
+        use std::io::Write as _;
+        std::fs::OpenOptions::new().create(true).append(true).open(path).unwrap().write_all(text.as_bytes()).unwrap();
+    }
+
+    /// A goal record as Claude writes it to the transcript while the goal is still being worked on.
+    fn goal_line(uuid: &str) -> String {
+        format!("{}\n", json!({"uuid": uuid, "type": "attachment", "attachment": {"type": "goal_status", "condition": "ship it", "reason": "not yet"}}))
+    }
+
+    /// The record ids of the goal events a poll emitted, in order.
+    fn goal_records(rx: &mut mpsc::UnboundedReceiver<Value>) -> Vec<String> {
+        std::iter::from_fn(|| rx.try_recv().ok()).filter(|ev| ev["kind"] == "goal").map(|ev| text_of(&ev["record"])).collect()
+    }
+
+    #[test]
+    fn transcript_goal_records_are_each_seen_once_across_polls() {
+        let dir = std::env::temp_dir().join(format!("claude-goal-poll-{}", uuid::Uuid::new_v4().simple()));
+        let (host, mut rx, thread, path) = poll_transcript(&dir);
+        host.poll_goal(&thread); // no transcript yet: nothing read, nothing said
+        assert!(goal_records(&mut rx).is_empty());
+        // Record b is cut mid-line: it is read whole on the poll that completes it, never half.
+        append_transcript(&path, &(goal_line("a") + &goal_line("b")[..20]));
+        host.poll_goal(&thread);
+        assert_eq!(goal_records(&mut rx), ["a"]);
+        append_transcript(&path, &goal_line("b")[20..]);
+        host.poll_goal(&thread);
+        assert_eq!(goal_records(&mut rx), ["b"]);
+        append_transcript(&path, &(goal_line("c") + &goal_line("d")[..5]));
+        host.poll_goal(&thread);
+        host.poll_goal(&thread); // nothing new since: nothing again
+        assert_eq!(goal_records(&mut rx), ["c"]);
+        append_transcript(&path, &goal_line("d")[5..]);
+        host.poll_goal(&thread);
+        assert_eq!(goal_records(&mut rx), ["d"]);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// `cargo test bench_poll_goal -- --ignored --nocapture`: the bytes a poll asks the allocator for, and its wall
+    /// time, over a 10 MB transcript that gains one 1 KB line before each of 50 polls (the drive loop's 1 s pass).
+    #[test]
+    #[ignore]
+    fn bench_poll_goal_on_a_10_mb_transcript() {
+        let dir = std::env::temp_dir().join(format!("claude-goal-bench-{}", uuid::Uuid::new_v4().simple()));
+        let (host, mut rx, thread, path) = poll_transcript(&dir);
+        let line = format!("{}\n", json!({"uuid": "x", "type": "assistant", "message": {"content": "y".repeat(1000)}}));
+        append_transcript(&path, &line.repeat(10 * 1024 * 1024 / line.len()));
+        host.poll_goal(&thread); // reads the 10 MB once; the offset is now its end
+        assert!(goal_records(&mut rx).is_empty());
+        let (mut bytes, mut micros) = (Vec::new(), Vec::new());
+        for _ in 0..50 {
+            append_transcript(&path, &line);
+            let asked = crate::util::alloc_probe::requested();
+            let started = std::time::Instant::now();
+            host.poll_goal(&thread);
+            micros.push(started.elapsed().as_secs_f64() * 1e6);
+            bytes.push(crate::util::alloc_probe::requested() - asked);
+        }
+        bytes.sort_unstable();
+        micros.sort_by(|a, b| a.total_cmp(b));
+        eprintln!(
+            "poll_goal, 10 MB transcript, +1 KB per poll (50 polls): bytes requested median {} (min {}, max {}), wall time median {:.1} us",
+            bytes[25], bytes[0], bytes[49], micros[25]
+        );
+        std::fs::remove_dir_all(dir).unwrap();
     }
 }

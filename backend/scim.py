@@ -241,7 +241,7 @@ def install_scim(app, settings, store):
     def _recent_leaves(c):
         since = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
         return c.execute("SELECT COUNT(*) FROM events INDEXED BY events_task_origin "
-                         "WHERE action='directory.person_left' AND actor=? AND ts>=?",
+                         "WHERE action='directory.person_left' AND actor=? AND created_at>=?",
                          (lock_actor, since)).fetchone()[0]
 
     def refresh():

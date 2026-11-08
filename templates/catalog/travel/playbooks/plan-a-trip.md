@@ -48,5 +48,5 @@ task rather than working around it.
 ## 5. After it is booked
 
 File the confirmation numbers in `knowledge/trips.md`. Build the itinerary: local times, addresses, check-in rules, the
-local contact, and what to do if a leg is cancelled. Send it to the traveller with
+local contact, and what to do if a leg is canceled. Send it to the traveller with
 `hub message send --fyi <traveller> "<one line and the link>"`.

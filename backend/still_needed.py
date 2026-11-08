@@ -68,7 +68,7 @@ def crossed(conn, at):
 
 
 def _line(asked, task):
-    who = H.actor_id(asked["to_actor"])
+    who = H.actor_id(asked["recipient_id"])
     where = f' on "{H._clip(task["title"], 80)}" ({task["id"]})' if task else ""
     return f'- To {who}{where}: "{H._clip(asked.get("body") or "", 160)}" (asked {str(H.ask_clock(asked))[:10]})'
 
@@ -79,7 +79,7 @@ def send_back(conn, bot, items):
     people = set()
     for asked, task in items:
         conn.execute("UPDATE messages SET superseded_at=? WHERE id=?", (stamp, asked["id"]))
-        person = asked["to_actor"]
+        person = asked["recipient_id"]
         people.add(person)
         if task:
             H._task_event(conn, task["id"], H.KEEPER, "asks_superseded", None, "1",
@@ -117,7 +117,7 @@ def sweep(conn, at=None):
         return {}
     by_bot = {}
     for asked, task in crossed(conn, at):
-        by_bot.setdefault(asked["from_actor"], []).append((asked, task))
+        by_bot.setdefault(asked["sender_id"], []).append((asked, task))
     sent = {}
     for bot, items in by_bot.items():
         with isolated(conn, "still_needed", bot):

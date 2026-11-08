@@ -52,21 +52,21 @@ def test_a_follow_up_says_which_run_took_it_and_the_reply_lists_both(api):
     def by_id(messages):
         return {m["id"]: m for m in messages}
     snap = by_id(get(api, f"conversations/{cid}/snapshot")["messages"])
-    assert snap[first["id"]]["run"] == {"job_id": starter_job, "attempt_id": aid, "state": "started_run"}
-    assert snap[follow["id"]]["run"] == {"job_id": starter_job, "attempt_id": aid, "state": "added_to_run"}
+    assert snap[first["id"]]["run"] == {"job_id": starter_job, "run_id": aid, "state": "started_run"}
+    assert snap[follow["id"]]["run"] == {"job_id": starter_job, "run_id": aid, "state": "added_to_run"}
     assert job != starter_job, "the follow-up has a job of its own, but the run it joined is the first one"
 
     send_events(api, r, aid, [("message", {"text": "Both done.", "final": True})])
     post(api, f"attempts/{aid}/complete", {"outcome": "completed", "text": "Both done.", "last_seq": 1}, token=r["token"])
     for messages in (get(api, f"conversations/{cid}/snapshot")["messages"], get(api, f"conversations/{cid}/messages")):
         shown = by_id(messages)
-        reply = next(m for m in messages if m["from_actor"] == "bot:ops")
+        reply = next(m for m in messages if m["sender_id"] == "bot:ops")
         assert reply["answers"] == [first["id"], follow["id"]]
-        assert (reply["run"]["job_id"], reply["run"]["attempt_id"]) == (starter_job, aid)
+        assert (reply["run"]["job_id"], reply["run"]["run_id"]) == (starter_job, aid)
         assert shown[first["id"]]["run"]["state"] == "started_run" and shown[follow["id"]]["run"]["state"] == "added_to_run"
     # What the reply says is stored with it, so it is still there after a restart.
     with api.app.state.store.read() as c:
-        stored = json.loads(c.execute("SELECT refs_json FROM messages WHERE from_actor='bot:ops'").fetchone()[0])
+        stored = json.loads(c.execute("SELECT refs FROM messages WHERE sender_id='bot:ops'").fetchone()[0])
     assert stored["answers"] == [first["id"], follow["id"]] and stored["run"] == {"job_id": starter_job, "attempt_id": aid}
 
 

@@ -6,7 +6,7 @@ const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
 const {openAutomations, PHONE, DESKTOP, sideways, shot} = require('./support/automations-fake.cjs');
 
-const base = {owner: 'person:dana', enabled: true, version: 1, steps: []};
+const base = {owner_id: 'person:dana', enabled: true, version: 1, steps: []};
 const tweak = fx => fx.automations.push(
   // The built-ins the converter writes (backend/redesign_migration.py): read only, with rules on internal event names.
   {...base, id: 'au_wakes', name: 'What wakes bots', builtin: true, readonly: true, can_edit: false,

@@ -17,6 +17,7 @@ import queue
 import sys
 import threading
 import time
+from memory_tidy_fixture import custody, reply as packet_reply
 
 GRANTED = ("ACME_API_KEY", "HUB_TOKEN", "HUB_API_URL", "HUB_BOT", "TICO_CRED_SOCKET", "HOME", "CODEX_HOME")
 
@@ -162,7 +163,7 @@ def main():
             turn = "acme-turn-%d-%d" % (os.getpid(), turns)
             text = " ".join(part.get("text", "") for part in params.get("input", []))
             record({"harness": "codex", "method": method, "thread": thread, "turn": turn, "prompt": text,
-                    "cwd": cwds.get(thread), "env": {k: os.environ.get(k) for k in GRANTED}, "at": time.time()})
+                    "cwd": cwds.get(thread), "env": {k: os.environ.get(k) for k in GRANTED}, "at": time.time(), **custody(cwds.get(thread))})
             if "REMEMBER" in text and cwds.get(thread):
                 # As a bot does: a lesson left uncommitted in memory/.
                 os.makedirs(os.path.join(cwds[thread], "memory"), exist_ok=True)
@@ -194,6 +195,8 @@ def main():
                 with open(os.path.join(cwds.get(thread) or os.getcwd(), "reports", "acme.md"), "w") as report:
                     report.write("# Acme report\n")
             reply = "Acme reply."
+            if os.environ.get("FAKE_MEMORY_TIDY"):
+                reply = packet_reply(text)
             if os.environ.get("ACME_API_KEY"):
                 reply += " The key is " + os.environ["ACME_API_KEY"]
             finish(thread, turn, turns, reply)

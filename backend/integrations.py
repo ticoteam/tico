@@ -231,17 +231,17 @@ def inventory(c, settings, auth, who, aliases=None):
     found = {}
     for bot in H.bots(c):
         slug = bot["slug"]
-        if bot["state"] == "archived" or not auth.bot_access(c, who, slug)["read"]:
+        if bot["state"] == "archived" or not auth.bot_access(c, who, bot["id"])["read"]:
             continue
-        for tool in bot_tools.listing(c, settings, slug)["tools"]:
+        for tool in bot_tools.listing(c, settings, bot["id"])["tools"]:
             service = tool["service"]
             service = (aliases or {}).get(str(service).lower(), service)
             item = found.setdefault(service, {"service": service, "title": tool["name"], "bots": [], "connections": []})
-            if slug not in item["bots"]:
-                item["bots"].append(slug)
+            if bot["id"] not in item["bots"]:
+                item["bots"].append(bot["id"])
             # The problem a computer or the hub found (a missing credential, an MCP server that refused it) and the
             # variable it is read from: Library › Tools lists them as the tool's issues. Names only, never a value.
-            item["connections"].append({"bot": slug, "status": tool["status"], "identity": tool["identity"], "can": tool["can"],
+            item["connections"].append({"bot": bot["id"], "slug": slug, "status": tool["status"], "identity": tool["identity"], "can": tool["can"],
                                         **({"problem": tool["problem"]} if tool.get("problem") else {}),
                                         **({"env": tool["env"]} if tool.get("env") else {}),
                                         **({"mcp": tool["mcp"]} if tool.get("mcp") else {})})
@@ -256,14 +256,14 @@ def custom_page(item):
             "summary": "Configured by a bot",
             "access": "", "credentials": [], "declared_as": "",
             "writes": "allowed" if any(verb not in READ_VERBS
-                                       for connection in item["connections"] for verb in connection["can"]) else "never", "owner": "owner", "aliases": [], "queries": [], "query_count": 0,
+                                       for connection in item["connections"] for verb in connection["can"]) else "never", "owner_id": "owner", "aliases": [], "queries": [], "query_count": 0,
             "body": "", **item}   # who has it is Library › Tools' Access card
 
 
 def learnings(c, service):
     return [dict(row) for row in c.execute(
-        "SELECT id, integration, actor, text, created FROM learnings "
-        "WHERE integration=? AND deleted_at IS NULL ORDER BY created DESC, id", (service,))]
+        "SELECT id, integration, actor, text, created_at FROM learnings "
+        "WHERE integration=? AND deleted_at IS NULL ORDER BY created_at DESC, id", (service,))]
 
 
 def learning_counts(c):
@@ -275,13 +275,13 @@ def add_learning(c, who, service, text):
     if privacy.private_execution(c, who):
         raise Problem("privacy", "Private task work cannot be published as a company learning", 403)
     day = H.now()[:10]
-    n = c.execute("SELECT count(*) FROM learnings WHERE actor=? AND substr(created,1,10)=?",
+    n = c.execute("SELECT count(*) FROM learnings WHERE actor=? AND substr(created_at,1,10)=?",
                   (who.actor, day)).fetchone()[0]
     if n >= LEARNINGS_PER_DAY:
         raise Problem("cap", f"{n} learnings today; the cap is {LEARNINGS_PER_DAY} a day. "
                              "Fold what you know into the page instead.", 429)
-    row = {"id": H.new_id(), "integration": service, "actor": who.actor, "text": text.strip(), "created": H.now()}
-    c.execute("INSERT INTO learnings(id, integration, actor, text, created) VALUES(:id, :integration, :actor, :text, :created)", row)
+    row = {"id": H.new_id(), "integration": service, "actor": who.actor, "text": text.strip(), "created_at": H.now()}
+    c.execute("INSERT INTO learnings(id, integration, actor, text, created_at) VALUES(:id, :integration, :actor, :text, :created_at)", row)
     H.event(c, who.actor, "learning.add", service, {"id": row["id"], "chars": len(row["text"])})
     return row
 
@@ -311,7 +311,7 @@ def install_integrations(app, store, auth, mutate):
         if str(page.get("owner", "")).strip().lower() != "owner":
             return page
         row = c.execute("SELECT name FROM humans WHERE id=?", (auth.owner_id(c),)).fetchone() if auth.owner_id(c) else None
-        return page | {"owner": (row and row["name"]) or store.settings.owner_email or "owner"}
+        return page | {"owner_id": (row and row["name"]) or store.settings.owner_email or "owner"}
 
     def retained(service):
         return {**custom_page({"service": service, "title": service, "connections": [], "bots": []}),

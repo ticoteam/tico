@@ -246,7 +246,7 @@ def preservation_flags(before: Mapping[str, str], after: Mapping[str, str]) -> l
 def evaluate(snapshot: Mapping[str, str], raw: str, *, since: datetime | None, today: date,
              checkout_before: Mapping[str, str], checkout_after: Mapping[str, str],
              conflict_check: Callable[[str, tuple[str, ...]], list[str]] | None,
-             previous_learnings: str | None = None) -> Result:
+             previous_learnings: str | None = None, rechecking: bool = False) -> Result:
     """Build scratch changes, check them, then return an offer or a flag, never writes.
 
     Manifests cover ALL child checkout paths (including untracked files, modes and
@@ -276,7 +276,7 @@ def evaluate(snapshot: Mapping[str, str], raw: str, *, since: datetime | None, t
         model_edit_count = len(edits)
         # Old history stays outside the model's read scope. Code can mechanically
         # archive it when building an otherwise nonempty proposal, with reviewable edits.
-        if edits and packet.layout_found:
+        if edits and packet.layout_found and not rechecking:
             for entry in packet.all_logs:
                 if (entry.entry_id not in available and entry.day is not None
                         and today - entry.day > timedelta(days=30)):

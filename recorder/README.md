@@ -15,6 +15,30 @@ bash recorder/package-macos.sh
 
 The bundle is described by `tauri.conf.json` (product name "Tico Recorder", identifier `team.tico.recorder.native`, icons, macOS 14.2 minimum, hardened runtime), `Info.plist` (the microphone and meeting-audio usage text and the `tico-recorder://` link scheme) and `entitlements.plist` (audio input and network client; the app is not sandboxed). The identifier and the data folder `~/Library/Application Support/Tico Recorder Native` stay as they are, so microphone permission, keychain entries and recordings carry over from the earlier build. The folder name is read in `src/settings.rs`.
 
+## Screen sharing and meeting links
+
+
+People and More offer **Copy meeting link**. Copying a local recording first asks which Tico
+will receive its transcript and confirms a private live meeting; it never makes the meeting
+public. Add people in People so a private link works for them. Existing and ended meetings
+open directly after sign-in. A filed recording links to its filed meeting. Links use Tico's
+browser address, including when the recorder signs in through a runner hostname.
+
+**Share screen** opens a confirmation naming the audience, then the macOS system picker.
+A selected window or display is sent as a bounded live image feed (up to 5 fps, 1920 px),
+for documents and slides. It is not a full-motion video transport. Screen images are never
+saved or sent to bots. Recorder's own windows are excluded from display captures; if that
+cannot be done on the OS version, or Screen Recording permission is absent, the picker offers windows only. Capture does not begin at launch,
+on Record, on copying a link, or on reconnect. Other platforms currently report unsupported.
+
+A red **Sharing · Stop** control stays available in other recordings and the library. Stop, Pause or Discard,
+sending/finishing/deleting that meeting, sign-out, macOS stop and connection loss end the share.
+Stop revokes the server share independently of uploads; sign-out and quit attempt this before releasing credentials. Slow uploads have a size-based deadline and an independent heartbeat; oversized frames are compressed further or skipped. A restart never resumes it. Making a meeting public while sharing asks to stop first; the
+server also clears frames on visibility changes. An abandoned stream expires after ten seconds.
+The viewer requires sign-in and current meeting access and clears images when access is lost. A separate status check clears stopped shares even while an image is downloading.
+
+Older servers refuse the feature before the picker opens. Physical source selection, macOS permission prompts and the system clipboard require manual validation on a Mac.
+
 ## Releases and updates
 
 - `.github/workflows/recorder.yml` builds a universal (Apple silicon and Intel) `Tico-Recorder_<version>_universal.dmg`, the updater archive `Tico-Recorder.app.tar.gz` with its `.sig`, and `Tico-Recorder.dmg`, a copy under a stable name for the download link. GitHub turns spaces in asset names into dots, so the release names have no spaces; the product name keeps its space. It uses the desktop app's signing and updater secrets (see `app.yml`). Notarization runs when the Apple ID secrets are set.
@@ -42,6 +66,8 @@ The bundle is described by `tauri.conf.json` (product name "Tico Recorder", iden
 - Bot questions run in explicit circuits, three context reviews at a time. A full circuit repeats bounded batches. Direct reports go first. Coverage distinguishes waiting, running, questions, no questions, interrupted, and failed reviews. This mode bypasses full-agent dispatch on transcript/chat messages.
 - The question board keeps canonical wording, original contributions, uncertain deduplication, and host controls for answered/dismissed/split.
 - Tasks/doc changes are proposals with supporting transcript quotes. Suggestions are optional, routed through Tico, and unselected until reviewed. Selected tasks require verified owners before creation. Document changes create a review task through Tico's existing document-update flow; they do not edit documents automatically.
+- Pause sharing keeps capture running locally. Paused capture-time words never enter the shared outbox, including finished-chunk corrections after Resume, retry or recovery; Send files only shared words. Without word timings an overlapping chunk stays local in full. A pause first discovered in Tico has no capture timestamp, so the uncertain interval since the last acknowledged capture stays local conservatively; queued turns keep their sequence numbers as removal markers. Resume sharing before Finish or Send so pending public words upload before filing. Send requires review of kept titles and quotes on recordings with paused speech, including reworded text. This conservative warning covers every kept item on those recordings; it does not guess whether a common word or paraphrase is private. Discard (after Stop) ends the shared meeting without filing it and keeps the local audio and transcript; a failed Discard stays visibly pending and can be retried. With no acknowledged capture at a remotely discovered pause, the uncertain interval starts at zero; this deliberately withholds earlier public words rather than risk sharing paused speech.
+- Individual action-item Send also requires Resume and is disabled after Discard. If a recording contains pauses, an item with a title or quote requires explicit review before sending, rechecked after edits. Its surrounding transcript always omits paused speech; explicit review includes the selected title and quote, not hidden neighboring lines.
 - Finish Meeting finalizes the live meeting. Send approves the finalized record and creates only explicitly selected outputs when requested. Retries preserve one canonical meeting and durable item receipts.
 - Empty or silent shared sessions can be ended without creating a fabricated imported meeting. Closed sessions and recordings whose delivery has begun cannot reopen capture; retries keep the original frozen transcript.
 - Settings → Import an older recorder library copies existing recordings, transcripts, action drafts, destination metadata, and delivery receipts. Source audio and metadata are not modified. Credentials must be saved in the native app's keychain separately.
@@ -62,6 +88,8 @@ TICO_NATIVE_CLI=/absolute/path/to/recorder/target/debug/tico-recorder-cli \
 ```
 
 The native tests cover shared-line edits and removals (one revision each, retries, a person's edit kept over a later automatic correction, Send refusing an edit Tico never received), audio filtering/resampling, silence, queue overflow, recovery, exclusive STT claims, legacy migration, lost import acknowledgements, ordered live delivery, explicit output creation, and the desktop review/share controls. `ui/preview` runs the page against a mock `invoke` with fixture scenes; `node ui/preview/shoot.mjs` (Playwright WebKit, `PLAYWRIGHT` pointing at a playwright install) renders them at 1040×690 and 760×490 in light and dark into `ui/screenshots/` and checks delete confirmation, sending an item and Esc. The Tico integration replay runs the native executable against a local Tico server and synthetic STT/gateway fixtures, including finalization and task retry.
+
+For the opt-in Pause/Resume/Discard replay, build `tico-recorder-cli` with `--features cli`, then run `TICO_NATIVE_CLI=/absolute/path/to/tico-recorder-cli python3 -m pytest backend/tests/test_native_recorder.py -q -n 0 -m slow`. It starts an actual isolated Tico backend and drives the production native store/transport with synthetic timed words and WAV buffers. It uses no capture, provider, bot attachment or bot run; reviewed action items go to a synthetic human. The hidden `privacy-replay-test` driver requires loopback and an explicit isolated library. This replay does not replace installed desktop or real Mac capture checks.
 
 The 200-context test verifies circuit scheduling, first-layer priority, coverage, grouping, and contribution preservation with synthetic inference. **It is not evidence of real routed model latency, cost, or quality.** Fresh device/meeting checks, the published Mercury profile, and the real 200-context gateway sweep remain release gates. Windows/Linux system-audio capture, voice participation, onboarding voice, calendar OAuth inside Recorder, and automatic document editing are outside this V1.
 

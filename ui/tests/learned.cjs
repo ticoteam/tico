@@ -8,7 +8,7 @@ const {unrouted} = require('./support/routes.cjs');
 
 const now = new Date().toISOString();
 const bot = (name, display_name) => ({name, display_name, host: 'keeper', status: 'active', can_chat: false});
-const entry = (id, layer, text, taught) => ({id, layer, text, created: now, updated: null, taught_in_chat: taught});
+const entry = (id, layer, text, taught) => ({id, layer, text, created_at: now, updated_at: null, taught_in_chat: taught});
 
 async function open(browser, me, learned, chat) {
   const page = await browser.newPage({viewport: {width: 1280, height: 900}, serviceWorkers: 'block'});
@@ -36,7 +36,7 @@ async function open(browser, me, learned, chat) {
     if (one) {
       const body = req.postDataJSON?.() ?? null;
       writes.push([req.method(), one[1], body]);
-      if (req.method() === 'PATCH') return json({entry: {...entry(one[1], 'personal', body.text, true), updated: now}});
+      if (req.method() === 'PATCH') return json({entry: {...entry(one[1], 'personal', body.text, true), updated_at: now}});
       if (req.method() === 'DELETE') return json({deleted: one[1]});
     }
     if (p.endsWith('/watch')) return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});

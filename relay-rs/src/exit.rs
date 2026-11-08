@@ -109,11 +109,35 @@ pub(super) fn civil_date(unix_days: i64) -> String {
     format!("{year:04}-{month:02}-{day:02}")
 }
 
-fn utc_today() -> String {
+/// The relay's UTC day, as days since 1970-01-01.
+fn utc_day() -> u32 {
     let secs = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_or(0, |d| d.as_secs());
-    civil_date((secs / 86_400) as i64)
+    (secs / 86_400) as u32
+}
+
+#[cfg(test)]
+fn utc_today() -> String {
+    civil_date(i64::from(utc_day()))
+}
+
+/// The day number of a YYYY-MM-DD date: `civil_date` the other way, for the test day override.
+#[cfg(test)]
+fn days_from_civil(date: &str) -> u32 {
+    let mut parts = date.split('-').map(|p| p.parse::<i64>().unwrap());
+    let (year, month, day) = (
+        parts.next().unwrap(),
+        parts.next().unwrap(),
+        parts.next().unwrap(),
+    );
+    let year = if month <= 2 { year - 1 } else { year };
+    let era = year.div_euclid(400);
+    let yoe = year - era * 400;
+    let mp = (month + 9) % 12;
+    let doy = (153 * mp + 2) / 5 + day - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    (era * 146_097 + doe - 719_468) as u32
 }
 
 struct Link {
@@ -124,10 +148,10 @@ struct Link {
 
 struct Tunnel {
     exit: String,
-    runner_id: String,
     bot: String,
-    host: String,
     bot_generation: u64,
+    /// The tunnel's slot in `Exits::rows`, where its bytes are counted.
+    usage: u32,
     client_ticket: Option<String>,
     exit_ticket: Option<String>,
     client: Option<oneshot::Sender<WebSocket>>,
@@ -135,29 +159,64 @@ struct Tunnel {
     cancel: watch::Sender<Option<Close>>,
 }
 
-impl Tunnel {
-    fn usage_key(&self, day: String) -> UsageKey {
-        (
-            self.exit.clone(),
-            self.runner_id.clone(),
-            self.bot.clone(),
-            self.host.clone(),
-            day,
-        )
+/// What one tunnel has counted in its slot. `spend` adds to it by index; `flush` moves the counts into the day's
+/// totals under the key they belong to.
+#[derive(Default)]
+struct TunnelUsage {
+    /// Set while the tunnel is open. A closed tunnel keeps its slot until its task releases it, so a frame that
+    /// still arrives is refused rather than counted into a slot another tunnel has taken.
+    open: bool,
+    /// Something was counted since the last flush. A zero-byte frame still counts its key, as it always did.
+    dirty: bool,
+    exit: String,
+    /// The exit's number in `Budgets`: where its day budget and policy are.
+    exit_no: u32,
+    runner_id: String,
+    bot: String,
+    host: String,
+    /// The UTC day the counts belong to, as days since 1970-01-01.
+    day: u32,
+    bytes: u64,
+    tunnels: u64,
+}
+
+/// Each exit the relay has seen, numbered in the order it first appeared. A number is an index: a frame reads its
+/// exit's day budget and policy from arrays by it, with no hash lookup.
+#[derive(Default)]
+struct Budgets {
+    numbers: HashMap<String, u32>,
+    /// Per exit: the UTC day its budget counts, as days since 1970-01-01 (`u32::MAX` before its first byte).
+    days: Vec<u32>,
+    /// Per exit: that same day as YYYY-MM-DD, and the bytes counted on it. Kept across a Python restart: a fresh
+    /// relay starts each exit from the bytes Python has recorded.
+    counted: Vec<(String, u64)>,
+}
+
+#[cfg(test)]
+impl std::ops::Index<&str> for Budgets {
+    type Output = (String, u64);
+
+    fn index(&self, exit: &str) -> &(String, u64) {
+        &self.counted[self.numbers[exit] as usize]
     }
 }
 
 #[derive(Default)]
 pub(super) struct Exits {
-    policies: HashMap<String, Policy>,
+    budgets: Budgets,
+    /// Per exit number: the policy Python pushed. Its cap is read on every frame.
+    policies: Vec<Option<Policy>>,
     links: HashMap<String, Link>,
     tunnels: HashMap<String, Tunnel>,
+    /// Usage of each tunnel, by slot. A released slot goes to `free` and is reused.
+    rows: Vec<TunnelUsage>,
+    free: Vec<u32>,
+    /// The last day a slot counted on. The first count on another day moves every slot's earlier-day counts into the
+    /// day's totals before anything is counted on it, so earlier days' keys take their rows first, as when each frame
+    /// counted straight into the totals.
+    counted_day: u32,
     /// Per bot, the oldest selection generation still admitted.
     bot_generations: HashMap<String, u64>,
-    /// Per exit: the relay's UTC day and the bytes counted that day. Kept across a Python restart (it only ever counts
-    /// real bytes); a fresh relay starts each exit from the bytes Python has recorded. Only the relay's own clock
-    /// moves it to a new day, so a grant read on another day never resets it.
-    budgets: HashMap<String, (String, u64)>,
     /// Bytes and closed tunnels not yet in a batch, each on the UTC day it happened.
     usage: BTreeMap<UsageKey, (u64, u64)>,
     batch: Option<UsageBatch>,
@@ -185,12 +244,13 @@ pub(super) struct Grant {
     pub policy: Policy,
 }
 
-/// The bot computer's ticket, the two socket slots and the tunnel's cancellation.
+/// The bot computer's ticket, the two socket slots, the tunnel's cancellation and its usage slot.
 type Admitted = (
     String,
     oneshot::Receiver<WebSocket>,
     oneshot::Receiver<WebSocket>,
     watch::Receiver<Option<Close>>,
+    u32,
 );
 
 #[derive(Clone, Copy, PartialEq, Debug)]
@@ -215,12 +275,103 @@ pub(super) fn valid_host(host: &str) -> bool {
 }
 
 impl Exits {
-    fn today(&self) -> String {
+    fn today(&self) -> u32 {
         #[cfg(test)]
         if let Some(day) = &self.day {
-            return day.clone();
+            return days_from_civil(day);
         }
-        utc_today()
+        utc_day()
+    }
+
+    /// The number of an exit, numbered on first sight.
+    fn number(&mut self, exit: &str) -> usize {
+        if let Some(&n) = self.budgets.numbers.get(exit) {
+            return n as usize;
+        }
+        let n = self.budgets.counted.len();
+        self.budgets.numbers.insert(exit.to_owned(), n as u32);
+        self.budgets.days.push(u32::MAX);
+        self.budgets.counted.push((String::new(), 0));
+        self.policies.push(None);
+        n
+    }
+
+    /// The exit's byte count for `day`; a new day starts at zero.
+    fn budget(&mut self, exit_no: usize, day: u32) -> &mut u64 {
+        if self.budgets.days[exit_no] != day {
+            self.budgets.days[exit_no] = day;
+            self.budgets.counted[exit_no] = (civil_date(i64::from(day)), 0);
+        }
+        &mut self.budgets.counted[exit_no].1
+    }
+
+    /// Moves a slot's counts into the day's totals, under the key they were counted on.
+    fn flush(&mut self, usage: u32) {
+        let row = &mut self.rows[usage as usize];
+        if !row.dirty {
+            return;
+        }
+        row.dirty = false;
+        let (bytes, tunnels) = (
+            std::mem::take(&mut row.bytes),
+            std::mem::take(&mut row.tunnels),
+        );
+        let key = self.key_of(usage);
+        self.count(key, bytes, tunnels);
+    }
+
+    /// The (exit, runner, bot, host, day) key slot `usage` counts under.
+    fn key_of(&self, usage: u32) -> UsageKey {
+        let row = &self.rows[usage as usize];
+        (
+            row.exit.clone(),
+            row.runner_id.clone(),
+            row.bot.clone(),
+            row.host.clone(),
+            civil_date(i64::from(row.day)),
+        )
+    }
+
+    fn flush_all(&mut self) {
+        for usage in 0..self.rows.len() {
+            self.flush(usage as u32);
+        }
+    }
+
+    /// Starts slot `usage` on `day`: the counts it has move to the day they were counted on first.
+    fn roll(&mut self, usage: u32, day: u32) {
+        if self.counted_day != day {
+            self.counted_day = day;
+            for other in 0..self.rows.len() {
+                if self.rows[other].day != day {
+                    self.flush(other as u32);
+                }
+            }
+        }
+        if self.rows[usage as usize].day != day {
+            self.flush(usage);
+            self.rows[usage as usize].day = day;
+        }
+    }
+
+    fn alloc_row(&mut self, row: TunnelUsage) -> u32 {
+        match self.free.pop() {
+            Some(usage) => {
+                self.rows[usage as usize] = row;
+                usage
+            }
+            None => {
+                self.rows.push(row);
+                (self.rows.len() - 1) as u32
+            }
+        }
+    }
+
+    /// The tunnel's task is over: its counts go into the day's totals and the slot is free for the next tunnel.
+    fn release(&mut self, usage: u32) {
+        self.flush(usage);
+        self.rows[usage as usize] = TunnelUsage::default();
+        self.free.push(usage);
     }
 
     fn count(&mut self, key: UsageKey, bytes: u64, tunnels: u64) {
@@ -234,8 +385,15 @@ impl Exits {
     pub(super) fn close(&mut self, tid: &str, close: Close) {
         if let Some(t) = self.tunnels.remove(tid) {
             let _ = t.cancel.send(Some(close));
-            let key = t.usage_key(self.today());
-            self.count(key, 0, 1);
+            let day = self.today();
+            self.roll(t.usage, day);
+            let row = &mut self.rows[t.usage as usize];
+            row.open = false;
+            row.dirty = true;
+            row.tunnels += 1;
+            // Into the day's totals now, not at release: admission counts those totals, so a tunnel admitted
+            // before this one's task releases its slot must see its row.
+            self.flush(t.usage);
         }
     }
 
@@ -270,7 +428,7 @@ impl Exits {
     /// day's budgets stay: they are bytes that moved.
     pub(super) fn restart(&mut self, close: Close) {
         self.close_all(close);
-        self.policies.clear();
+        self.policies.iter_mut().for_each(|p| *p = None);
         self.bot_generations.clear();
     }
 
@@ -294,9 +452,9 @@ impl Exits {
         exit: &str,
         policy: Policy,
     ) -> std::result::Result<usize, &'static str> {
-        if self
-            .policies
-            .get(exit)
+        let exit_no = self.number(exit);
+        if self.policies[exit_no]
+            .as_ref()
             .is_some_and(|p| p.generation > policy.generation)
         {
             return Err("stale exit policy");
@@ -308,7 +466,7 @@ impl Exits {
         if !policy.sharing {
             self.drop_link(exit, Close::new(4403, "sharing turned off"));
         }
-        self.policies.insert(exit.to_owned(), policy);
+        self.policies[exit_no] = Some(policy);
         Ok(closed)
     }
 
@@ -325,36 +483,44 @@ impl Exits {
         )
     }
 
-    /// The exit's budget for the relay's today: a new day starts at zero.
-    fn budget(&mut self, exit: &str) -> &mut (String, u64) {
-        let today = self.today();
-        let budget = self
-            .budgets
-            .entry(exit.to_owned())
-            .or_insert_with(|| (today.clone(), 0));
-        if budget.0 != today {
-            *budget = (today, 0);
+    /// Counts `n` bytes against the tunnel in slot `usage` and its exit's day budget, on the day they move: an index
+    /// and adds, no allocation. Past the cap every tunnel through that exit closes.
+    fn spend_row(&mut self, usage: u32, n: u64) -> std::result::Result<(), Close> {
+        if !self.rows[usage as usize].open {
+            return Err(Close::new(1000, ""));
         }
-        budget
+        let day = self.today();
+        self.roll(usage, day);
+        if !self.rows[usage as usize].dirty {
+            // The slot's first count since it was flushed: its key takes its row in the totals now, in first-count
+            // order, as when every frame counted straight into them. Later frames only add in the slot.
+            let key = self.key_of(usage);
+            self.count(key, 0, 0);
+        }
+        let row = &mut self.rows[usage as usize];
+        row.dirty = true;
+        row.bytes += n;
+        let exit_no = row.exit_no as usize;
+        let cap = self.policies[exit_no].as_ref().map_or(0, |p| p.cap);
+        let budget = self.budget(exit_no, day);
+        *budget += n;
+        if *budget <= cap {
+            return Ok(());
+        }
+        let exit = self.rows[usage as usize].exit.clone();
+        let close = Close::new(4429, "exit_over_cap");
+        self.close_where(|t| t.exit != exit, close.clone());
+        Err(close)
     }
 
-    /// Count `n` bytes against the tunnel's exit on the day they move. Past the cap every tunnel through that exit
-    /// closes.
-    pub(super) fn spend(&mut self, tid: &str, n: u64) -> std::result::Result<(), Close> {
+    /// `spend_row` for a tunnel id, for the tests, which name their tunnels.
+    #[cfg(test)]
+    fn spend(&mut self, tid: &str, n: u64) -> std::result::Result<(), Close> {
         let Some(t) = self.tunnels.get(tid) else {
             return Err(Close::new(1000, ""));
         };
-        let (key, exit) = (t.usage_key(self.today()), t.exit.clone());
-        self.count(key, n, 0);
-        let cap = self.policies.get(&exit).map_or(0, |p| p.cap);
-        let budget = self.budget(&exit);
-        budget.1 += n;
-        if budget.1 > cap {
-            let close = Close::new(4429, "exit_over_cap");
-            self.close_where(|t| t.exit != exit, close.clone());
-            return Err(close);
-        }
-        Ok(())
+        let usage = t.usage;
+        self.spend_row(usage, n)
     }
 
     /// Admit a tunnel: the exit shares with this bot, is connected and is under its cap. Returns the bot computer's
@@ -376,16 +542,20 @@ impl Exits {
         if g.bot_generation < oldest {
             return Err(error(StatusCode::CONFLICT, "exit_stale"));
         }
-        match self.policies.get(&g.exit) {
-            Some(p) if p.generation > g.policy.generation => {
-                return Err(error(StatusCode::CONFLICT, "exit_stale"))
-            }
-            Some(p) if p.generation == g.policy.generation => {}
-            _ => {
-                self.policies.insert(g.exit.clone(), g.policy.clone());
-            }
+        let exit_no = self.number(&g.exit);
+        if self.policies[exit_no]
+            .as_ref()
+            .is_some_and(|p| p.generation > g.policy.generation)
+        {
+            return Err(error(StatusCode::CONFLICT, "exit_stale"));
         }
-        let policy = &self.policies[&g.exit];
+        if self.policies[exit_no]
+            .as_ref()
+            .is_none_or(|p| p.generation < g.policy.generation)
+        {
+            self.policies[exit_no] = Some(g.policy.clone());
+        }
+        let policy = self.policies[exit_no].as_ref().unwrap_or(&g.policy);
         if !policy.allows(&g.bot) {
             return Err(error(StatusCode::FORBIDDEN, "exit_not_shared"));
         }
@@ -396,13 +566,16 @@ impl Exits {
         let link_open = link.open.clone();
         // What Python recorded counts only for the day it was read on; it never lowers what is counted here.
         let today = self.today();
-        let budget = self.budget(&g.exit);
-        if g.day == today {
-            budget.1 = budget.1.max(g.used);
+        let budget = self.budget(exit_no, today);
+        if g.day == civil_date(i64::from(today)) {
+            *budget = (*budget).max(g.used);
         }
-        if budget.1 >= cap {
+        if *budget >= cap {
             return Err(error(StatusCode::TOO_MANY_REQUESTS, "exit_over_cap"));
         }
+        // Every slot's counts into the day's totals first, so the row limit sees each key counted so far (a tunnel open
+        // across midnight holds yesterday's key in its slot): once per admit, never per frame.
+        self.flush_all();
         if self.tunnels.len() >= TUNNELS
             || self.usage.len() + self.tunnels.len() >= USAGE_ROWS
             || self.tunnels.values().filter(|t| t.exit == g.exit).count() >= TUNNELS_PER_EXIT
@@ -417,15 +590,24 @@ impl Exits {
         self.fence_bot(&g.bot, g.bot_generation, "browser exit changed");
         let (ctx, crx) = oneshot::channel();
         let (etx, erx) = oneshot::channel();
-        let (cancel, cancelled) = watch::channel(None);
+        let (cancel, canceled) = watch::channel(None);
+        let usage = self.alloc_row(TunnelUsage {
+            open: true,
+            exit: g.exit.clone(),
+            exit_no: exit_no as u32,
+            runner_id: g.runner_id.clone(),
+            bot: g.bot.clone(),
+            host: g.host.clone(),
+            day: today,
+            ..TunnelUsage::default()
+        });
         self.tunnels.insert(
             g.id.clone(),
             Tunnel {
                 exit: g.exit.clone(),
-                runner_id: g.runner_id.clone(),
                 bot: g.bot.clone(),
-                host: g.host.clone(),
                 bot_generation: g.bot_generation,
+                usage,
                 client_ticket: Some(client_ticket.clone()),
                 exit_ticket: Some(exit_ticket),
                 client: Some(ctx),
@@ -433,7 +615,7 @@ impl Exits {
                 cancel,
             },
         );
-        Ok((client_ticket, crx, erx, cancelled))
+        Ok((client_ticket, crx, erx, canceled, usage))
     }
 
     /// The socket slot a ticket opens, once.
@@ -462,6 +644,9 @@ impl Exits {
     /// The batch for this heartbeat: the unacknowledged one, or the usage counted since, open tunnels included, so a
     /// restart loses at most one heartbeat's bytes.
     pub(super) fn usage_batch(&mut self) -> Option<UsageBatch> {
+        if self.batch.is_none() {
+            self.flush_all();
+        }
         if self.batch.is_none() && !self.usage.is_empty() {
             let keys = self
                 .usage
@@ -495,13 +680,14 @@ impl Exits {
         self.batch.clone()
     }
 
-    /// Whether every byte counted has reached Python.
+    /// Whether every byte counted has reached Python: none waits in a slot, in the usage map or in a batch.
     pub(super) fn drained(&self) -> bool {
-        self.usage.is_empty() && self.batch.is_none()
+        self.usage.is_empty() && self.batch.is_none() && self.rows.iter().all(|row| !row.dirty)
     }
 
     /// Rows not yet acknowledged by Python.
-    pub(super) fn backlog(&self) -> usize {
+    pub(super) fn backlog(&mut self) -> usize {
+        self.flush_all();
         self.usage.len() + self.batch.as_ref().map_or(0, |b| b.rows.len())
     }
 
@@ -524,8 +710,15 @@ impl Exits {
 
 /// The control command: admit the tunnel and start its task. The answer carries the bot computer's ticket.
 pub(super) fn grant(app: &App, exits: &mut Exits, g: Grant) -> std::result::Result<Value, Error> {
-    let (ticket, client, exit, cancelled) = exits.admit(&g)?;
-    tokio::spawn(tunnel_task(app.clone(), g.id, client, exit, cancelled));
+    let (ticket, client, exit, canceled, usage) = exits.admit(&g)?;
+    tokio::spawn(tunnel_task(
+        app.clone(),
+        g.id,
+        client,
+        exit,
+        canceled,
+        usage,
+    ));
     Ok(json!({"ticket": ticket}))
 }
 
@@ -598,7 +791,7 @@ async fn link_task(app: App, exit: String, mut socket: WebSocket, seen: Option<s
         return;
     }
     let (open, mut opens) = mpsc::unbounded_channel();
-    let (cancel, mut cancelled) = watch::channel(None);
+    let (cancel, mut canceled) = watch::channel(None);
     let serial = {
         let mut hub = app.hub.lock().unwrap();
         hub.exits.serial += 1;
@@ -621,7 +814,7 @@ async fn link_task(app: App, exit: String, mut socket: WebSocket, seen: Option<s
     let mut ping = tokio::time::interval(LINK_PING);
     let outcome = loop {
         tokio::select! {
-            _ = cancelled.changed() => break cancelled.borrow().clone().unwrap_or_else(|| Close::new(1012, "relay stopped")),
+            _ = canceled.changed() => break canceled.borrow().clone().unwrap_or_else(|| Close::new(1012, "relay stopped")),
             Some(text) = opens.recv() => {
                 if !matches!(tokio::time::timeout(WRITE, socket.send(Message::Text(text.into()))).await, Ok(Ok(()))) {
                     break Close::new(1011, "slow exit");
@@ -699,19 +892,20 @@ async fn tunnel_task(
     tid: String,
     mut client_rx: oneshot::Receiver<WebSocket>,
     mut exit_rx: oneshot::Receiver<WebSocket>,
-    mut cancelled: watch::Receiver<Option<Close>>,
+    mut canceled: watch::Receiver<Option<Close>>,
+    usage: u32,
 ) {
     let deadline = Instant::now() + ANSWER;
     let (mut client, mut exit) = (None, None);
     let outcome = loop {
-        if let Some(close) = cancelled.borrow().clone() {
+        if let Some(close) = canceled.borrow().clone() {
             break close;
         }
         if let (Some(c), Some(e)) = (&mut client, &mut exit) {
-            break pump(&app, &tid, c, e, &mut cancelled).await;
+            break pump(&app, usage, c, e, &mut canceled).await;
         }
         tokio::select! {
-            _ = cancelled.changed() => { if let Some(close) = cancelled.borrow().clone() { break close; } },
+            _ = canceled.changed() => { if let Some(close) = canceled.borrow().clone() { break close; } },
             _ = tokio::time::sleep_until(deadline.into()) => break Close::new(4404, if client.is_none() { "bot computer did not connect" } else { "exit_no_answer" }),
             socket = &mut client_rx, if client.is_none() => match socket {
                 Ok(s) => client = Some(s), Err(_) => break Close::new(1000, "closed"),
@@ -721,7 +915,11 @@ async fn tunnel_task(
             },
         }
     };
-    app.hub.lock().unwrap().exits.close(&tid, outcome.clone());
+    {
+        let mut hub = app.hub.lock().unwrap();
+        hub.exits.close(&tid, outcome.clone());
+        hub.exits.release(usage);
+    }
     if let Some(s) = client.as_mut() {
         close_socket(s, &outcome).await;
     }
@@ -734,7 +932,7 @@ async fn tunnel_task(
 /// The exit's own close reason (a refused address) reaches the bot computer unchanged.
 async fn pump(
     app: &App,
-    tid: &str,
+    usage: u32,
     client: &mut WebSocket,
     exit: &mut WebSocket,
     cancel: &mut watch::Receiver<Option<Close>>,
@@ -742,7 +940,7 @@ async fn pump(
     let deadline = Instant::now() + TUNNEL_SESSION;
     let (mut cs, mut cr) = client.split();
     let (mut es, mut er) = exit.split();
-    let spend = |n: usize| app.hub.lock().unwrap().exits.spend(tid, n as u64);
+    let spend = |n: usize| app.hub.lock().unwrap().exits.spend_row(usage, n as u64);
     let up = async {
         while let Some(Ok(message)) = cr.next().await {
             match message {
@@ -799,6 +997,42 @@ async fn pump(
         close = down => close,
         _ = tokio::time::sleep_until(deadline.into()) => Close::new(4408, "time limit"),
         _ = cancel.changed() => cancel.borrow().clone().unwrap_or_else(|| Close::new(1012, "relay stopped")),
+    }
+}
+
+/// Test benches count the allocations a call makes, on the thread that makes it (the runner's `util::alloc_probe`
+/// counts bytes the same way). Per thread, so the tests running beside a bench do not count in it.
+#[cfg(test)]
+pub(super) mod alloc_probe {
+    use std::alloc::{GlobalAlloc, Layout, System};
+    use std::cell::Cell;
+
+    thread_local! {
+        static ALLOCS: Cell<u64> = const { Cell::new(0) };
+    }
+
+    pub struct Counting;
+
+    unsafe impl GlobalAlloc for Counting {
+        unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+            ALLOCS.with(|n| n.set(n.get() + 1));
+            unsafe { System.alloc(layout) }
+        }
+        unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
+            unsafe { System.dealloc(ptr, layout) }
+        }
+        unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
+            ALLOCS.with(|n| n.set(n.get() + 1));
+            unsafe { System.realloc(ptr, layout, new_size) }
+        }
+    }
+
+    #[global_allocator]
+    static GLOBAL: Counting = Counting;
+
+    /// Allocation calls this thread has made so far.
+    pub fn count() -> u64 {
+        ALLOCS.with(|n| n.get())
     }
 }
 
@@ -1194,6 +1428,166 @@ mod tests {
                 rows[0].bot.as_str()
             ),
             (11, 1, "www.acme.example", "ops")
+        );
+    }
+
+    #[test]
+    fn a_tunnels_key_takes_its_row_at_its_first_count() {
+        let mut exits = exits();
+        let _opens = exits.connect_link("laptop");
+        exits
+            .set_policy("laptop", policy(1, &["ops"], 10_000))
+            .unwrap();
+        exits.admit(&grant("a", "ops", 1, 0)).unwrap();
+        exits.spend("a", 100).unwrap();
+        // Not flushed yet, but the key holds its row, so a later key cannot take the last one ahead of it.
+        assert_eq!(exits.usage.len(), 1);
+        exits.spend("a", 1).unwrap();
+        assert_eq!(exits.usage.len(), 1);
+        assert_eq!(exits.usage_batch().unwrap().rows[0].bytes, 101);
+    }
+
+    #[test]
+    fn the_first_count_on_a_new_day_moves_every_open_tunnels_earlier_counts_first() {
+        let mut exits = exits();
+        let _opens = exits.connect_link("laptop");
+        exits
+            .set_policy("laptop", policy(1, &["ops"], 10_000))
+            .unwrap();
+        exits.admit(&grant("a", "ops", 1, 0)).unwrap();
+        let mut docs = grant("b", "ops", 1, 0);
+        docs.host = "docs.acme.example".into();
+        exits.admit(&docs).unwrap();
+        exits.spend("a", 5).unwrap();
+        exits.spend("b", 7).unwrap();
+        exits.day = Some("2026-11-02".into());
+        exits.close("a", Close::new(1000, ""));
+        // b has done nothing on the new day; its bytes from the day before are already in the totals.
+        let mut totals: Vec<(u64, u64)> = exits.usage.values().copied().collect();
+        totals.sort();
+        assert_eq!(totals, vec![(0, 1), (5, 0), (7, 0)]);
+    }
+
+    #[test]
+    fn an_admit_sees_the_keys_open_tunnels_counted_on_earlier_days() {
+        let mut exits = exits();
+        let _opens = exits.connect_link("laptop");
+        exits
+            .set_policy("laptop", policy(1, &["ops"], 10_000))
+            .unwrap();
+        exits.admit(&grant("a", "ops", 1, 0)).unwrap();
+        exits.spend("a", 5).unwrap();
+        exits.day = Some("2026-11-02".into());
+        exits.admit(&grant("b", "ops", 1, 0)).unwrap();
+        // Tunnel a is still open; its bytes from the day before are in the totals the row limit counts.
+        assert_eq!(
+            exits.usage.values().copied().collect::<Vec<_>>(),
+            vec![(5, 0)]
+        );
+    }
+
+    #[test]
+    fn a_closed_tunnel_is_in_the_day_totals_before_its_slot_is_released() {
+        let mut exits = exits();
+        let _opens = exits.connect_link("laptop");
+        exits
+            .set_policy("laptop", policy(1, &["ops"], 10_000))
+            .unwrap();
+        exits.admit(&grant("a", "ops", 1, 0)).unwrap();
+        exits.spend("a", 5).unwrap();
+        exits.close("a", Close::new(1000, ""));
+        // Its task has not released the slot yet; admission already sees the row (else a new key could pass the
+        // usage-row limit and later lose its counts).
+        assert_eq!(
+            exits.usage.values().copied().collect::<Vec<_>>(),
+            vec![(5, 1)]
+        );
+    }
+
+    /// Tunnels on two hosts and two bots, one whose bytes and close fall across UTC midnight: the batch has each
+    /// (exit, runner, bot, host, day) key's bytes and tunnels, the day they moved on, in key order, and a tunnel open
+    /// across the export counts into the next batch.
+    #[test]
+    fn a_batch_across_midnight_has_each_key_and_day_as_before() {
+        let row = |bot: &str, host: &str, day: &str, bytes: u64, tunnels: u64| UsageRow {
+            exit: "laptop".into(),
+            runner_id: "bot-computer".into(),
+            bot: bot.into(),
+            host: host.into(),
+            day: day.into(),
+            bytes,
+            tunnels,
+        };
+        let mut exits = exits();
+        let _opens = exits.connect_link("laptop");
+        exits
+            .set_policy("laptop", policy(1, &["ops", "sales"], 10_000))
+            .unwrap();
+        exits.admit(&grant("a", "ops", 1, 0)).unwrap();
+        let mut docs = grant("b", "ops", 1, 0);
+        docs.host = "docs.acme.example".into();
+        exits.admit(&docs).unwrap();
+        let mut sales = grant("s", "sales", 1, 0);
+        sales.policy = policy(1, &["ops", "sales"], 10_000);
+        exits.admit(&sales).unwrap();
+        exits.spend("a", 100).unwrap();
+        exits.spend("b", 10).unwrap();
+        exits.spend("s", 1).unwrap();
+        exits.day = Some("2026-11-02".into());
+        exits.spend("a", 1000).unwrap();
+        exits.spend("s", 2).unwrap();
+        exits.close("b", Close::new(1000, ""));
+        let first = exits.usage_batch().unwrap();
+        assert_eq!(
+            first.rows,
+            [
+                row("ops", "docs.acme.example", "2026-11-01", 10, 0),
+                row("ops", "docs.acme.example", "2026-11-02", 0, 1),
+                row("ops", "www.acme.example", "2026-11-01", 100, 0),
+                row("ops", "www.acme.example", "2026-11-02", 1000, 0),
+                row("sales", "www.acme.example", "2026-11-01", 1, 0),
+                row("sales", "www.acme.example", "2026-11-02", 2, 0),
+            ]
+        );
+        exits.acknowledge(std::slice::from_ref(&first.id));
+        exits.spend("a", 5).unwrap();
+        assert_eq!(
+            exits.usage_batch().unwrap().rows,
+            [row("ops", "www.acme.example", "2026-11-02", 5, 0)]
+        );
+    }
+
+    /// Per binary frame: 1M `spend` calls on one live tunnel, allocations per call and the median wall time per call
+    /// over 50 runs. Uses the real clock (the test day override allocates by itself).
+    /// `cargo test --release bench_spend_1m -- --ignored --nocapture`.
+    #[test]
+    #[ignore]
+    fn bench_spend_1m() {
+        const CALLS: u64 = 1_000_000;
+        let mut nanos = Vec::new();
+        let mut allocs = Vec::new();
+        for _ in 0..50 {
+            let mut exits = Exits::default();
+            let _opens = exits.connect_link("laptop");
+            let mut g = grant("t1", "ops", 1, 0);
+            g.policy.cap = u64::MAX;
+            exits.admit(&g).unwrap();
+            let usage = exits.tunnels["t1"].usage;
+            let (allocs_before, start) = (alloc_probe::count(), Instant::now());
+            for _ in 0..CALLS {
+                std::hint::black_box(exits.spend_row(usage, 1500)).unwrap();
+            }
+            nanos.push(start.elapsed().as_nanos() as f64 / CALLS as f64);
+            allocs.push((alloc_probe::count() - allocs_before) as f64 / CALLS as f64);
+        }
+        nanos.sort_by(f64::total_cmp);
+        allocs.sort_by(f64::total_cmp);
+        eprintln!(
+            "bench_spend_1m: allocations per call {:.3}, median ns per call {:.1} (p10 {:.1}, p90 {:.1}), 50 runs",
+            allocs[25],
+            nanos[25],
+            nanos[5],
+            nanos[45]
         );
     }
 }

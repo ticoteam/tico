@@ -218,7 +218,9 @@ def test_a_body_over_the_servers_limit_is_refused_before_a_start(asleep, upstrea
 
 
 def test_held_requests_are_capped_per_company(asleep):
-    Slow(asleep.system, 0.6)
+    # The start takes 3 s, far longer than the bound below: a refusal that waited for the start would fail clearly,
+    # while a slow VM only adds a little time to an immediate refusal.
+    Slow(asleep.system, 3.0)
     svc = asleep.start(max_held_per_company=1)
     first = threading.Thread(target=send, args=(svc,))
     first.start()

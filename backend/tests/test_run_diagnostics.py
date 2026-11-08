@@ -138,12 +138,12 @@ def test_stderr_export_is_capped_redacted_private_and_survives_missing_stream(ap
 @pytest.mark.parametrize(('outcome', 'text', 'stopped', 'expected'), [
     ('completed', 'done', False, 'Finished'),
     ('interrupted', 'Runner restarted during execution', False, 'Runner restarted during execution'),
-    ('interrupted', '', True, 'Cancelled by human:ana'),
+    ('interrupted', '', True, 'Canceled by human:ana'),
 ])
-def test_finished_restart_and_cancelled_reasons(api, outcome, text, stopped, expected):
+def test_finished_restart_and_canceled_reasons(api, outcome, text, stopped, expected):
     machine, _, a = start(api)
     if stopped:
-        post(api, 'bots/ops/stop', {'attempt_id': a['id']})
+        post(api, 'bots/ops/stop', {'run_id': a['id']})
     post(api, f"attempts/{a['id']}/complete", {'outcome': outcome, 'text': text, 'last_seq': 0}, machine['token'])
     assert listed(api, a['id'])['end_reason'] == expected
 
@@ -156,9 +156,9 @@ def test_failed_reply_text_never_becomes_list_reason(api):
 
 
 def silent_since(api, aid, started):
-    """A run started at `started`, with no heartbeat and no event since: its computer went quiet at that moment."""
+    """A run started at `started_at`, with no heartbeat and no event since: its computer went quiet at that moment."""
     with api.app.state.store.transaction() as c:
-        c.execute('UPDATE attempts SET started=?,created=?,lease_until=? WHERE id=?',
+        c.execute('UPDATE attempts SET started_at=?,created_at=?,lease_until=? WHERE id=?',
                   (started, started, H.shift(H.now(), hours=2), aid))
         c.execute('UPDATE attempt_diagnostics SET heartbeat_at=NULL,last_event_at=? WHERE attempt_id=?', (started, aid))
 

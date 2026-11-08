@@ -57,7 +57,7 @@ def _bot(c, value):
 def _live_bot_task(c, task_id):
     """A task a recovery may move: live, owned by a bot, and one the Strategy Bot may read."""
     row = H.task(c, str(task_id or ""))
-    if not row or row["status"] not in H.ACTIVE_STATUSES or not H.is_bot(row["owner"]):
+    if not row or row["status"] not in H.ACTIVE_STATUSES or not H.is_bot(row["owner_id"]):
         return None
     if not H.task_private_readable(c, STRATEGY_BOT, row):
         return None
@@ -126,7 +126,7 @@ def _action_error(c, action):
 # ----------------------------------------------------------------------------- what the person reads
 def _name(c, actor):
     found = H.bot(c, H.actor_id(actor)) if H.is_bot(actor) else None
-    return (found or {}).get("display_name") or H.actor_id(actor or "")
+    return (found or {}).get("display_name") or (found or {}).get("slug") or H.actor_id(actor or "")
 
 
 def _title(c, task_id):
@@ -140,14 +140,14 @@ def describe(c, action):
         return f'New task for {_name(c, action["owner"])}: "{action["title"]}"'
     if action["do"] == "reorder":
         row = H.task(c, action["task_id"]) or {}
-        return f'Move {_title(c, action["task_id"])} to the top of {_name(c, row.get("owner", ""))}\'s queue'
+        return f'Move {_title(c, action["task_id"])} to the top of {_name(c, row.get("owner_id", ""))}\'s queue'
     return f'Settle a clash: {_title(c, action["first"])} goes before {_title(c, action["then"])} ({action["why"]})'
 
 
 def offline(c, action):
     """Why the bot this action reaches can't take it now, in plain words, or None."""
     owners = [action["owner"]] if action["do"] == "create" else \
-        [(H.task(c, action.get(k)) or {}).get("owner") for k in ("task_id", "first", "then") if action.get(k)]
+        [(H.task(c, action.get(k)) or {}).get("owner_id") for k in ("task_id", "first", "then") if action.get(k)]
     for owner in owners:
         state = (H.bot(c, H.actor_id(owner or "")) or {}).get("state") if owner else None
         if owner and state != "active":
@@ -222,10 +222,10 @@ def _apply(c, action, goal_id, approver, proposal_id):
         return {"task_id": made["id"]}
     if action["do"] == "reorder":
         row = H.task(c, action["task_id"])
-        H.task_update(c, STRATEGY_BOT, row["id"], rank=H._queue_end(c, row["owner"], top=True), mover=True, quiet=True)
+        H.task_update(c, STRATEGY_BOT, row["id"], rank=H._queue_end(c, row["owner_id"], top=True), mover=True, quiet=True)
         return {"task_id": row["id"]}
     first, then = H.task(c, action["first"]), H.task(c, action["then"])
-    H.task_update(c, STRATEGY_BOT, first["id"], rank=H._queue_end(c, first["owner"], top=True), mover=True, quiet=True)
+    H.task_update(c, STRATEGY_BOT, first["id"], rank=H._queue_end(c, first["owner_id"], top=True), mover=True, quiet=True)
     said = (f"The {strategy_bot.name(c)} settled a clash, approved by {who}: \"{first['title']}\" goes before "
             f"\"{then['title']}\". {action['why']}")
     for row in (first, then):
@@ -278,7 +278,7 @@ def result_text(c, proposal):
         return None
     done = [describe(c, x["action"]) for x in result["done"]]
     left = [f"{describe(c, x['action'])}: {x['why']}" for x in result["left"]]
-    text = f"Approved by {H.actor_id(proposal['decided_by'] or '')}; option {result['option'] + 1} applied by the " \
+    text = f"Approved by {H.actor_name(c, proposal['decided_by'] or '')}; option {result['option'] + 1} applied by the " \
            f"{strategy_bot.name(c)}."
     if done:
         text += " Done: " + "; ".join(done) + "."
@@ -301,11 +301,11 @@ def streak(c):
     """How many of its recovery suggestions in a row the owner approved with the Strategy Bot's pick unchanged, newest
     first. A rejection or another option ends it; a withdrawn one is no decision and is passed over."""
     n = 0
-    for row in H._rows(c.execute("SELECT status, decided_by, decision_note, result_json FROM goal_proposals "
+    for row in H._rows(c.execute("SELECT status, decided_by, decision_note, result FROM goal_proposals "
                                  "WHERE kind=? AND status!='pending' ORDER BY decided_at DESC", (KIND,))):
         if row["decision_note"] == WITHDRAWN or not H.is_human(row["decided_by"] or ""):
             continue
-        result = H._json(row["result_json"], None) or {}
+        result = H._json(row["result"], None) or {}
         if row["status"] != "confirmed" or not result.get("unchanged"):
             break
         n += 1

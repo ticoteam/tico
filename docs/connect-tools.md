@@ -264,3 +264,21 @@ none, or it is OAuth-only, write [a REST skill](#a-rest-skill) that calls its RE
 
 When a custom tool's last declaration is removed, its saved learnings remain in Tools as a read-only page.
 The Owner can still delete a learning there.
+
+## Connections
+
+**Library → Connections** (`#/library/connections`) lists every way the outside world reaches the company: Slack, the
+GitHub App, the mail bots' mailboxes, Email & Phone inboxes, meeting importers, incoming and outgoing webhooks, physical
+mail and Listening. Each row shows its status, whose it is (company, a team or a person), who reads what it brings in,
+the bots on it, and **Configure**, which opens the card that changes it (Slack and GitHub under Tools, the others in
+Settings, Meetings or Strategy).
+
+The owner and admins see every row. Anyone else sees their own (their mailbox, webhooks they made) and the company's rows
+they may read: Slack and GitHub once connected, Email & Phone inboxes in their audience, meeting importers if they read
+meetings, incoming webhooks except Finance's, physical mail, and Listening when they receive or read a destination. Bots
+named are only those you may see.
+
+`GET /api/v2/connections?limit=&cursor=` answers `{connections: [{id, kind, name, detail, status, scope, readers, bots,
+more_bots, configure, can_configure}], next}`, at most 100 rows and 96 KB a page; follow `next` with `cursor` (an
+opaque place in the list: rows you may not see never fill a page). CLI:
+`hub connections list`; MCP: `hub_connections_list` (BotOps reads it with the rights of the person who asked).

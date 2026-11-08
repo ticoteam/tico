@@ -85,9 +85,14 @@ class Facts:
     def slug(self, given):
         return given or self.bound.get("bot", "")
 
+    def bot_id(self, slug):
+        """The bot's id: computers, grants and task owners name a bot by its id, scenarios by slug."""
+        return (self.bot(slug) or {}).get("id") or slug if slug else slug
+
 
 def _placed(facts, slug):
-    return any(slug in (c.get("bots") or []) for c in facts.get("computers").get("computers", []))
+    bid = facts.bot_id(slug)
+    return any(bid in (c.get("bots") or []) for c in facts.get("computers").get("computers", []))
 
 
 def check(predicate, facts):
@@ -112,10 +117,10 @@ def check(predicate, facts):
     if name == "credential_granted":
         listing = facts.get("credentials").get("credentials", [])
         hit = any(re.search(args.get("env_matches", "."), c.get("env") or "", re.I)
-                  and any(g.get("subject") == "bot:" + slug for g in c.get("grants", [])) for c in listing)
+                  and any(g.get("subject") == "bot:" + facts.bot_id(slug) for g in c.get("grants", [])) for c in listing)
         return name, hit, "no matching credential is granted to the bot"
     if name == "task_for_bot":
-        tasks = facts.get("tasks?owner=bot:" + slug + "&limit=50").get("tasks", [])
+        tasks = facts.get("tasks?owner=bot:" + facts.bot_id(slug) + "&limit=50").get("tasks", [])
         return name, bool(tasks), f"no task was given to {slug}"
     if name == "bot_model_changed":
         now = (facts.bot(slug).get("model") or "")

@@ -113,17 +113,17 @@ def test_the_card_says_what_it_holds_up_and_decide_puts_a_building_item_first(ap
         # The archive question was asked yesterday; the Building one an hour ago.
         for tid, hours in ((old["task"]["id"], 30), (building["task"]["id"], 1)):
             at = H.shift(H.now(), seconds=-hours * 3600)
-            c.execute("UPDATE messages SET created=? WHERE kind='ask' AND json_extract(refs_json,'$.task')=?", (at, tid))
-            c.execute("UPDATE tasks SET created=? WHERE id=?", (at, tid))
+            c.execute("UPDATE messages SET created_at=? WHERE kind='ask' AND json_extract(refs,'$.task')=?", (at, tid))
+            c.execute("UPDATE tasks SET created_at=? WHERE id=?", (at, tid))
     items = {i["id"]: i for i in get(api, "needs-you")["items"]}
     card, other = items[building["task"]["id"]], items[old["task"]["id"]]
     assert card["holds_up"] == {"id": item["id"], "title": "Website sales chat build", "kind": "roadmap", "step": "Building",
-                                "due": None, "soonest": None}
+                                "due_at": None, "soonest": None}
     assert other["holds_up"]["title"] == "Tidy the drafts folder" and other["holds_up"]["kind"] == "task"
     assert (card["tier"], other["tier"]) == (1, 2)
     # The why line never carries the body's ids, paths or errors; a plain first paragraph is one.
     assert card["why"] == "" and other["why"] == "Clearing space before the October drafts."
-    assert card["ask"]["from_actor"] == "bot:ops"
+    assert card["ask"]["sender_id"] == "bot:ops"
 
 
 def test_due_or_going_ahead_within_two_working_days_comes_first_and_weekends_do_not_count():
@@ -147,7 +147,7 @@ def test_a_dated_task_under_an_undated_building_item_keeps_its_urgency(api):
     asked = _ask(api, attempt["token"], "u1", question="Website sales chat: go with these picks?", multi=True,
                  options=PICKS, parent=ticket["id"]).json()
     card = next(i for i in get(api, "needs-you")["items"] if i["id"] == asked["task"]["id"])
-    assert card["holds_up"]["kind"] == "roadmap" and card["holds_up"]["due"] is None
+    assert card["holds_up"]["kind"] == "roadmap" and card["holds_up"]["due_at"] is None
     assert card["holds_up"]["soonest"] == tomorrow and card["tier"] == 0
 
 

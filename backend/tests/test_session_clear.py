@@ -1,7 +1,7 @@
 """A person's Clear on a direct chat (POST /api/employees/{bot}/session/clear): the conversation's session epoch moves,
-every later turn carries it as `session_epoch`, and its history starts after the clear. The bot's epoch moves too
-(`bot_session_epoch`): its direct chats share one provider thread, which the runner starts anew when it changes
-(runner-rs/src/execute.rs)."""
+every later turn carries it as `session_epoch`, and its history starts after the clear. With native threads each chat
+is its own thread tree with its own provider session (clients/sessions.py root keys), so the bot's epoch
+(`bot_session_epoch`, for the one thread `session: bot` keeps) stays where it was and no other chat is touched."""
 from backend.tests.test_api import api, assign, claim, headers, post, ready, runner  # noqa: F401  (api is a fixture)
 
 
@@ -37,7 +37,8 @@ def test_a_clear_moves_the_epoch_every_later_turn_carries_and_starts_history_aft
         assert c.execute("SELECT epoch FROM session_epochs WHERE conversation_id=?", (conversation,)).fetchone()[0] == 1
     post(api, "chat/ops", {"text": "Start over: a new question"})
     third = claim(api, machine)
-    assert third["conversation"]["id"] == conversation and third["session_epoch"] == third["bot_session_epoch"] == 1
+    assert third["conversation"]["id"] == conversation and third["session_epoch"] == 1
+    assert third["bot_session_epoch"] == 0, "the chat has its own session: the bot's shared thread is not moved"
     assert [m["body"] for m in third["history"]] == ["Start over: a new question"]
     finish(api, machine, third)
 
@@ -64,8 +65,8 @@ def test_a_clear_waits_for_the_running_turn_and_touches_only_the_persons_own_cha
     again = claim(api, machine)
     assert again["conversation"]["id"] == ana and again["session_epoch"] == 0, "Ben's clear leaves Ana's history alone"
     assert "A long job" in [m["body"] for m in again["history"]]
-    # Ana's turns continue the bot thread Ben's chat shared, so they carry his clear: the runner starts it anew.
-    assert again["bot_session_epoch"] == 1
+    # Ana's chat has its own session, apart from Ben's: his clear does not start hers anew.
+    assert again["bot_session_epoch"] == 0
 
 
 def test_a_clear_with_no_chat_yet_is_a_no_op(api):
@@ -73,3 +74,15 @@ def test_a_clear_with_no_chat_yet_is_a_no_op(api):
     assert response.status_code == 200 and response.json() == {"cleared": True}
     with api.app.state.store.read() as c:
         assert not c.execute("SELECT 1 FROM session_epochs").fetchone()
+
+
+def test_a_runner_without_threads_gets_each_chat_its_own_session_not_the_bots_shared_thread(api):
+    """A runner that lacks threads_v1 keys a `session: bot` turn on the bot's one provider thread, which every chat
+    shares. Its chat turns are sent as `session: task` instead, so each conversation keeps its own session."""
+    old = runner(api)
+    assign(api, old, "ops")
+    ready(api, old, ["ops"])
+    post(api, "chat/ops", {"text": "Old runner question"})
+    turn = claim(api, old)
+    assert turn["config"]["session"] == "task", "an older runner: one session per chat"
+    finish(api, old, turn)

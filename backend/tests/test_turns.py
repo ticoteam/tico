@@ -29,7 +29,7 @@ def test_messages_include_readable_tasks_created_during_the_turn(api, reader):
     for path in ("messages", "snapshot"):
         result = get(api, f"conversations/{msg['conversation_id']}/{path}", token)
         messages = result["messages"] if path == "snapshot" else result
-        reply = next(m for m in messages if m["from_actor"] == "bot:ops")
+        reply = next(m for m in messages if m["sender_id"] == "bot:ops")
         created = {item["task_id"] for item in reply["run"]["did"] if item["kind"] == "task"}
         assert visible["id"] in created
         assert child["id"] in reply["ref_tasks"]
@@ -62,7 +62,7 @@ def test_a_loose_message_says_what_kind_of_sender_started_its_run(api):
 
 
 def test_a_run_that_failed_before_starting_does_not_claim_later_messages(api):
-    """An attempt that failed on its computer before it started has no `finished`; it must not stay open and fold
+    """An attempt that failed on its computer before it started has no `finished_at`; it must not stay open and fold
     every later message from that bot."""
     r = runner(api)
     assign(api, r, "ops")
@@ -71,7 +71,7 @@ def test_a_run_that_failed_before_starting_does_not_claim_later_messages(api):
         H.say(c, "bot:finance", "bot:ops", "Please tell Ana the census is delivered.", refs={"needs_action": True})
     failed = claim(api, r)
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE attempts SET state='failed', started=NULL, finished=NULL WHERE id=?", (failed["id"],))
+        c.execute("UPDATE attempts SET state='failed', started_at=NULL, finished_at=NULL WHERE id=?", (failed["id"],))
         loose = H.say(c, "bot:ops", "human:ana", "The census is delivered.")
     asked = post(api, "chat/ops", {"text": "What is next?"})
     attempt = claim(api, r)

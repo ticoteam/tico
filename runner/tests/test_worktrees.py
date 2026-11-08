@@ -439,6 +439,22 @@ def test_release_of_an_open_task_never_moves_unsaved_or_unpushed_work(trees):
     assert not path.exists()
 
 
+@pytest.mark.slow
+def test_removal_keeps_a_changed_name_that_is_not_utf8_and_saves_nothing(trees):
+    workspace, base, remote, row, client = trees
+    client.get.return_value['repositories'][0]['setup_command'] = None
+    path = Path(W.command(client, 'add', 'org/product')['workspace_path'])
+    odd = path / os.fsdecode(b'notes-\xff.txt')
+    odd.write_text('ghp_abcdefghijklmnopqrstuvwxyz0123\n')
+    (path / 'draft.txt').write_text('half done')
+    head = git(path, 'rev-parse', 'HEAD')
+    with pytest.raises(UnicodeDecodeError):
+        W.act(workspace, row, 'remove', os.environ.copy())
+    assert odd.exists() and (path / 'draft.txt').read_text() == 'half done'
+    assert git(path, 'rev-parse', 'HEAD') == head
+    assert 'refs/heads/' + W.wip_branch(row) not in git(remote, 'for-each-ref', '--format=%(refname)', 'refs/heads').split()
+
+
 @pytest.mark.parametrize('name', ['.env.local'])
 def test_cleanup_keeps_unsafe_large_and_ignored_files(trees, name):
     workspace, base, remote, row, client = trees

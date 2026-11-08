@@ -183,24 +183,24 @@ class Org(World):
             c.execute("DELETE FROM registry_metadata WHERE key='people'")
             c.execute("INSERT INTO registry_metadata VALUES('people',?)", (encode({"people": people}),))
             for bot in (LEAD_ID, CLAUDE_ID, OPENAI_ID):   # the agent credentials the test tokens stand for
-                c.execute("INSERT INTO agents(bot,harness,token_hash,created,created_by) VALUES(?,?,?,?,?)",
+                c.execute("INSERT INTO agents(bot,harness,token_hash,created_at,created_by) VALUES(?,?,?,?,?)",
                           (bot, "test", "x-" + bot, H.now(), "human:dana"))
             for bot, boss in reports.items():
                 c.execute("UPDATE bot_config SET reports_to=? WHERE bot=?", (boss, bot))
             # The factory seeds one owner and one operator for every bot and its runner. Dana is the owner here: the
             # stored owner (backend/access.py OWNER, read once at seed time) and those operators move to her.
             from backend.access import OWNER
-            owner = json.loads(c.execute("SELECT value_json FROM registry_metadata WHERE key=?", (OWNER,)).fetchone()[0])
+            owner = json.loads(c.execute("SELECT value FROM registry_metadata WHERE key=?", (OWNER,)).fetchone()[0])
             owner.update(email="dana@acme.example", updated_by="environment")
-            c.execute("UPDATE registry_metadata SET value_json=? WHERE key=?", (json.dumps(owner, sort_keys=True), OWNER))
+            c.execute("UPDATE registry_metadata SET value=? WHERE key=?", (json.dumps(owner, sort_keys=True), OWNER))
             # Dana admits her team to the sign-in list (backend/access.py ACCESS). The Slack gateway hears only an admitted
             # sender (backend/slack_gateway.py verify_sender), so a teammate's channel message is heard once they are on it.
             from backend.access import ACCESS, _load_json, _store
             access = _load_json(c, ACCESS) or {}
             _store(c, ACCESS, {**access, "allowed": sorted(set(access.get("allowed") or [])
                                                           | {"omar@acme.example", "priya@acme.example"})})
-            c.execute("UPDATE bot_config SET operator=? WHERE operator<>?", (DANA_ID, DANA_ID))
-            c.execute("UPDATE runners SET operator=? WHERE operator<>?", (DANA_ID, DANA_ID))   # the runner the mail publish checks
+            c.execute("UPDATE bot_config SET owner_id=? WHERE owner_id<>?", (DANA_ID, DANA_ID))
+            c.execute("UPDATE runners SET owner_id=? WHERE owner_id<>?", (DANA_ID, DANA_ID))   # the runner the mail publish checks
         if self.first_tick:   # startup's cutover ran before Dana was the owner: the first tick makes her built-ins
             from backend import redesign_migration
             redesign_migration.catch_up(self.store)
@@ -412,7 +412,7 @@ def hub_notices(org, slug, who=DANA):
     for room in rooms.body.get("conversations") or []:
         page = org.api("get", f"/api/v2/conversations/{room['id']}/messages", who=who, wave=W2)
         found += [m for m in (page.body.get("messages") or []) if isinstance(page.body, dict)
-                  and m.get("from_actor") == "keeper" and m.get("kind") == "notice"]
+                  and m.get("sender_id") == "keeper" and m.get("kind") == "notice"]
     return found
 
 

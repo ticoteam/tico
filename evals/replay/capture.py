@@ -48,7 +48,7 @@ def capture(server, base, token, task_id):
         for v in f.get("versions") or []:
             text_like = str(v.get("mime") or "").startswith("text/") or v.get("mime") in ("application/json", "application/yaml")
             v["text"] = fetch_text(v["url"], base, token) if text_like and v.get("url") else ""
-    bot = str(detail["task"]["owner"]).removeprefix("bot:")
+    bot = str(detail["task"]["owner_id"]).removeprefix("bot:")
     instructions = server.request("GET", f"bots/{bot}/instructions", token=token)[1] or {}
     children = [server.request("GET", f"tasks/{c['id']}", token=token)[1] or {} for c in detail.get("children") or []]
     return replay.split(detail, files, instructions, bot, [c for c in children if c.get("task")])

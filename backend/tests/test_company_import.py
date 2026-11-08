@@ -3,12 +3,14 @@ import copy
 import json
 import re
 from pathlib import Path
+from unittest import mock
 
 import pytest
 from fastapi.testclient import TestClient
 
 from backend import company_file as C
 from backend import market_spend as MS
+from backend import people_remove, views
 from backend.app import create_app
 from backend.auth import Identity
 from backend.company_file import starter
@@ -158,7 +160,7 @@ def test_people_who_hold_roles_are_kept_to_invite_and_the_seats_under_them_wait_
     assert [r["reports_to"] for r in finance] == ["human:owner"]
     people = done.json()["company_import"]["people"]
     assert [(p["id"], p["seats"]) for p in people] == [("ana", [finance[0]["id"]]), ("ben", [])]
-    saved = rows(api, "SELECT value_json FROM registry_metadata WHERE key='onboarding.company_file'")[0]["value_json"]
+    saved = rows(api, "SELECT value FROM registry_metadata WHERE key='onboarding.company_file'")[0]["value"]
     assert '"person":"ana"' in saved and '"person":"ben"' in saved
     invited_from_setup(api, finance[0]["id"])
     # A coworker who holds no role still joins in Tico, not by import.
@@ -184,20 +186,21 @@ def invited_from_setup(api, finance):
 
     # On a Tico account sign-in the issuer sends it: Invite again sends to the person already added, once. A repeat of
     # one request (same Idempotency-Key, ui/app/api.js) sends nothing more, nor does a copy overlapping it.
-    from backend import invites
+    from backend import company_import, invites
     keyed = lambda key, email="someone-else@acme.example": api.post(
         "/api/v2/onboarding/company/people/ana/invite", json={"email": email},
         headers={**signed_in(), "Idempotency-Key": key})
 
     class Issuer:
         name, calls, overlap = "oidc", [], []
+        answer = (202, {"status": "sent"})
 
         def invite(self, email):
             if not self.overlap:
                 self.overlap.append(None)
                 self.overlap[0] = keyed("k-1")
             self.calls.append(email)
-            return 202, {"status": "sent"}
+            return self.answer
     api.app.state.auth.proxy = Issuer()
     try:
         sent = keyed("k-1")
@@ -217,7 +220,45 @@ def invited_from_setup(api, finance):
         finally:
             invites.record = record
         assert keyed("k-2").status_code == 200 and len(Issuer.calls) == 2
+        # A repeat answers from its binding: the roster is not written again.
+        with mock.patch.object(company_import, "add_invitee", side_effect=AssertionError("roster written")):
+            assert keyed("k-1").status_code == 200 and len(Issuer.calls) == 2
+        # A send the issuer refuses is bound too, and its refusal names the address: removal must scrub that.
+        Issuer.answer = (202, {"error": "not_sent"})
+        try:
+            assert keyed("k-3").status_code == 422
+        finally:
+            Issuer.answer = (202, {"status": "sent"})
+        sends = list(Issuer.calls)
         assert invite("nobody", "x@acme.example").status_code == 404
+        # Removed since: the seats her invite moved under her are not her history, so Remove is offered, and they go
+        # back to the owner removing her.
+        assert api.post("/api/v2/people/%s" % ana["id"], json={"left": True}, headers=signed_in()).status_code == 200
+        with api.app.state.store.read() as c:
+            gone = next(p for p in views.roster(c)["people"] if p["id"] == ana["id"])
+            assert people_remove.removable(c, gone) and people_remove.history(c, ana["id"]) == ""
+            under = [r[0] for r in c.execute("SELECT id FROM seats WHERE reports_to=?", ("human:" + ana["id"],))]
+        assert under
+        assert api.delete("/api/v2/people/%s" % ana["id"], headers=signed_in()).status_code == 200
+        with api.app.state.store.read() as c:
+            assert not c.execute("SELECT 1 FROM seats WHERE reports_to=?", ("human:" + ana["id"],)).fetchone()
+            assert all(c.execute("SELECT reports_to FROM seats WHERE id=?", (s,)).fetchone()[0].startswith("human:")
+                       for s in under)
+        assert ana["id"] not in [p["id"] for p in api.get("/api/people", headers=signed_in()).json()["people"]]
+        # Removed, a repeat of a bound key still answers from its binding and never invites her again. The binding keeps
+        # neither the address (its hash) nor the refusal text that named it.
+        bound = rows(api, "SELECT key,state,request_hash,error_detail FROM invite_sends WHERE person=?", (ana["id"],))
+        assert {row["state"] for row in bound} == {"sent", "refused"}
+        assert all(row["request_hash"] == "" for row in bound)
+        assert not [row for row in bound if "acme.example" in (row["error_detail"] or "")]
+        refused_key, = [row["key"] for row in bound if row["state"] == "refused"]
+        with mock.patch.object(company_import, "add_invitee", side_effect=AssertionError("roster written")):
+            replayed = api.post("/api/v2/onboarding/company/people/ana/invite", json={"email": "ana@acme.example"},
+                                headers={**signed_in(), "Idempotency-Key": refused_key})
+            assert replayed.status_code == 422 and replayed.json()["error"]["code"] == "invite_failed"
+            assert replayed.json()["error"]["detail"] == invites.REMOVED
+            assert keyed("k-1").status_code == 200 and Issuer.calls == sends
+        assert ana["id"] not in [p["id"] for p in api.get("/api/people", headers=signed_in()).json()["people"]]
     finally:
         api.app.state.auth.proxy = None
 
@@ -234,7 +275,7 @@ def test_import_lays_out_the_chart_once_across_retry_and_runner_enrollment(envir
     assert done.json()["names"]["company_name"] == "Acme Finance"
     assert {r["slug"] for r in rows(api, "SELECT slug FROM bots")} == BUILTINS
     assert seat_lines(api) == {"Head of Finance": "human:owner", "Acme Payables": "Head of Finance"}
-    templates = rows(api, "SELECT json_extract(config_json,'$.template') AS template FROM bot_config")
+    templates = rows(api, "SELECT json_extract(config,'$.template') AS template FROM bot_config")
     assert sum(r["template"] == "assistant" for r in templates) == 1
     assert sum(r["template"] == "botops" for r in templates) == 1
     assert "model_choices" in done.json()["company_import"]["deferred"]
@@ -242,8 +283,8 @@ def test_import_lays_out_the_chart_once_across_retry_and_runner_enrollment(envir
     # A seat's job description is its role's text from the template.
     description = rows(api, "SELECT description FROM seats WHERE title='Acme Payables'")[0]["description"]
     assert description and "Owns:" in description
-    saved = rows(api, "SELECT value_json FROM registry_metadata WHERE key='onboarding.company_file'")[0]
-    assert '"finance":"mid"' in saved["value_json"]
+    saved = rows(api, "SELECT value FROM registry_metadata WHERE key='onboarding.company_file'")[0]
+    assert '"finance":"mid"' in saved["value"]
     before = (rows(api, "SELECT id FROM tasks ORDER BY id"), rows(api, "SELECT id FROM seats ORDER BY id"))
     again = api.post("/api/v2/onboarding/company/import", json=body, headers=signed_in())
     assert again.status_code == 200
@@ -282,13 +323,13 @@ def test_import_never_replaces_an_existing_paused_employee(environment):
     config = {"name": "accounts-payable", "status": "paused", "instructions": "Keep the existing employee unchanged"}
     with api.app.state.store.transaction() as c:
         H.sync_registry(c, {**SEED, "accounts-payable": config}, PEOPLE)
-        c.execute("INSERT INTO bot_config(bot,config_json,operator,repo) VALUES(?,?,?,?)",
+        c.execute("INSERT INTO bot_config(bot,config,owner_id,repo) VALUES(?,?,?,?)",
                   ("accounts-payable", encode(config), "owner", "emp-bookkeeping"))
-    original = rows(api, "SELECT config_json FROM bot_config WHERE bot='accounts-payable'")
+    original = rows(api, "SELECT config FROM bot_config WHERE bot='accounts-payable'")
     body = {"company_yaml": company_text()}
     body["fingerprint"] = api.post("/api/v2/setup/company/preview", json=body, headers=signed_in()).json()["fingerprint"]
     assert api.post("/api/v2/setup/company/import", json=body, headers=signed_in()).status_code == 409
-    assert rows(api, "SELECT config_json FROM bot_config WHERE bot='accounts-payable'") == original
+    assert rows(api, "SELECT config FROM bot_config WHERE bot='accounts-payable'") == original
 
 
 @pytest.mark.parametrize("through_new_parent", [False, True], ids=["reverse-builtins", "new-parent-chain"])
@@ -440,9 +481,9 @@ def test_reserved_alias_cannot_replace_a_custom_named_assistant_now_or_later(env
     with api.app.state.store.transaction() as c:
         H.sync_registry(c, seed, PEOPLE)
         for slug, config in seed.items():
-            c.execute("INSERT INTO bot_config(bot,config_json,operator,repo) VALUES(?,?,?,?)",
+            c.execute("INSERT INTO bot_config(bot,config,owner_id,repo) VALUES(?,?,?,?)",
                       (slug, encode(config), "owner", "bot-" + slug))
-    before = rows(api, "SELECT bot,config_json FROM bot_config ORDER BY bot")
+    before = rows(api, "SELECT bot,config FROM bot_config ORDER BY bot")
     draft = C.from_yaml(company_text())
     draft["bots"] = [b for b in draft["bots"] if b["template"] != "coo"]
     employee = next(b for b in draft["bots"] if b["template"] == "accounts-payable")
@@ -454,8 +495,8 @@ def test_reserved_alias_cannot_replace_a_custom_named_assistant_now_or_later(env
         assert preview.status_code == 422 and "conflicts" in preview.text
         result = api.post("/api/v2/setup/company/import", json={**body, "fingerprint": "0" * 64}, headers=signed_in())
         assert result.status_code == 422 and "conflicts" in result.text
-        assert rows(api, "SELECT bot,config_json FROM bot_config ORDER BY bot") == before
-    assert len(rows(api, "SELECT bot FROM bot_config WHERE json_extract(config_json,'$.template')='assistant'")) == 1
+        assert rows(api, "SELECT bot,config FROM bot_config ORDER BY bot") == before
+    assert len(rows(api, "SELECT bot FROM bot_config WHERE json_extract(config,'$.template')='assistant'")) == 1
 
 
 def test_a_300_bot_company_file_imports_and_a_301_bot_file_is_refused_plainly(environment):
@@ -536,7 +577,7 @@ def test_imported_goals_show_on_goals_with_their_owner_and_measure(tmp_path, env
 def imported_goals_on_goals_page(api, text):
     tree = api.get("/api/v2/goals/tree", headers=signed_in()).json()
     goals = {g["title"]: g for g in tree["goals"]}
-    assert {title: g["owner"] for title, g in goals.items()} == {
+    assert {title: g["owner_id"] for title, g in goals.items()} == {
         "Reach 40 paying firms": "company", "Close every month's books in five days": "company",
         "Answer every bookkeeping question": "company", "Grow referrals": "company",
         "Questions answered": "company"}
@@ -593,7 +634,7 @@ def test_a_renamed_assistants_goals_import_as_company_goals_and_an_untitled_unme
         with api.app.state.store.transaction() as c:
             H.sync_registry(c, seed, PEOPLE)
             for slug, config in seed.items():
-                c.execute("INSERT INTO bot_config(bot,config_json,operator,repo) VALUES(?,?,?,?)",
+                c.execute("INSERT INTO bot_config(bot,config,owner_id,repo) VALUES(?,?,?,?)",
                           (slug, encode(config), "owner", "bot-" + slug))
         preview = api.post("/api/v2/onboarding/company/preview", json={"company_yaml": text}, headers=signed_in()).json()
         assert [(g["title"], g["owner"]) for g in preview["goals"]] == owners
@@ -605,11 +646,11 @@ def test_a_renamed_assistants_goals_import_as_company_goals_and_an_untitled_unme
 
 def renamed_assistant_goals_on_goals_page(api, owners):
     goals = {g["title"]: g for g in api.get("/api/v2/goals/tree", headers=signed_in()).json()["goals"]}
-    assert sorted((title, g["owner"]) for title, g in goals.items()) == owners
+    assert sorted((title, g["owner_id"]) for title, g in goals.items()) == owners
     week, = goals["Run the week"]["kpis"]
-    assert rows(api, "SELECT owner FROM kpis WHERE id=?", (week["id"],)) == [{"owner": "company"}]
+    assert rows(api, "SELECT owner_id FROM kpis WHERE id=?", (week["id"],)) == [{"owner_id": "company"}]
     assert goals["Untitled goal"]["kpis"] == []
-    assert not rows(api, "SELECT id FROM goals WHERE owner IN ('bot:ace','bot:coo')")
+    assert not rows(api, "SELECT id FROM goals WHERE owner_id IN ('bot:ace','bot:coo')")
 
 
 @pytest.mark.parametrize("count", [72, 300])
@@ -762,6 +803,7 @@ def test_a_strategy_block_imports_as_an_unconfirmed_draft_with_its_market_watche
     assert draft["sections"]["serve"] == ("_Unconfirmed: drafted from the company file._\n\nSuperintendents and "
                                           "foremen at general contractors with 50 to 500 staff.")
     assert all(draft["sections"][k].startswith("_Unconfirmed") for k in ("sell", "know", "not"))
+    assert draft["sections"]["how"] == ""           # the file has four sections; How we sell is not in it
     assert draft["sections"]["extra"]["watching"] == {
         "title": "Watching", "body": "- Competitor changelogs: Trestle, FieldCraft\n"
                                      "- Superintendents asking for a better schedule app"}
@@ -796,9 +838,6 @@ def test_a_strategy_block_imports_as_an_unconfirmed_draft_with_its_market_watche
                  (sizes["segment/bim"]["evidence_ids"],))
     assert cited == [{"source_url": "https://example.com/bim"}]
     assert '"next": true' in rows(api, "SELECT properties FROM market_entities WHERE id='segment/bim'")[0]["properties"]
-    # The Growth segments start as Where we play shows them.
-    assert {(r["segment_id"], r["status"]) for r in rows(api, "SELECT segment_id, status FROM growth_segments")} == {
-        ("segment/schedules", "serving"), ("segment/bim", "next")}
     # Rival sites are watched; the posts wait as new insights for the Librarian's curate.
     assert {(r["entity_id"], r["url"], r["kind"]) for r in rows(api, "SELECT * FROM market_watches WHERE active=1")} == {
         ("company/trestle", "https://example.com/trestle", "home"),

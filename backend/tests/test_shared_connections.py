@@ -19,7 +19,7 @@ def labels(machine_or_info):
 def by_name(api, cid, machine):
     """Share credential `cid` with `machine` by name, as Add connection does."""
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO credential_grants(id,credential_id,subject,granted_by,created) VALUES(?,?,?,?,?)",
+        c.execute("INSERT INTO credential_grants(id,credential_id,subject,granted_by,created_at) VALUES(?,?,?,?,?)",
                   (H.new_id(), cid, "computer:" + machine["runner_id"], "human:ana", H.now()))
 
 
@@ -61,9 +61,9 @@ def test_the_every_computer_key_is_a_shared_connection_on_every_computer(environ
     own = computer(api, "Charlie", source="terminal")
     account = computer(api, "Delta", source="")   # signed in, but with no key: an account login
     with api.app.state.store.transaction() as c:
-        row = c.execute("SELECT readiness_json FROM runners WHERE id=?", (account["runner_id"],)).fetchone()
+        row = c.execute("SELECT readiness FROM runners WHERE id=?", (account["runner_id"],)).fetchone()
         assert '"authenticated": "missing"' in row[0] or '"authenticated":"missing"' in row[0]
-        c.execute("UPDATE runners SET readiness_json=replace(readiness_json, 'missing', 'ready') WHERE id=?",
+        c.execute("UPDATE runners SET readiness=replace(readiness, 'missing', 'ready') WHERE id=?",
                   (account["runner_id"],))
     for machine in (ready, fresh):
         row = listed(api, machine)["shared_with"]["codex"]
@@ -198,7 +198,7 @@ def test_a_cleared_computer_given_a_shared_key_is_told_to_take_it_again(environm
     job = call(api, "POST", f"computers/{one['runner_id']}/keys/clear", {"runtime": "codex"})["computers"][0]["login"]
     report(api, one, job["id"], "signed_out")
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE runners SET last_seen=? WHERE id=?", (H.shift(H.now(), seconds=-3600), one["runner_id"]))
+        c.execute("UPDATE runners SET last_seen_at=? WHERE id=?", (H.shift(H.now(), seconds=-3600), one["runner_id"]))
     refused = call(api, "POST", f"computers/{two['runner_id']}/keys",
                    {"runtime": "codex", "secret": "sk-proj-second-key-0123456789", "share": [one["runner_id"]]},
                    expected=409)

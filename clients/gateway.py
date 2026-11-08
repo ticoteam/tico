@@ -137,10 +137,9 @@ def _code(body):
 
 
 def state_of(payload):
-    """(state, used share or None) from a 200 answer of `<base>/key`."""
+    """(state, used share or None) from a 200 answer of `<base>/key`. A revoked key never gets one: it is a 401
+    `revoked_key` (state_of_error)."""
     payload = payload if isinstance(payload, dict) else {}
-    if str(payload.get("status") or "active") == "revoked":
-        return "revoked", None
     try:
         used = float(payload.get("used")) if payload.get("used") is not None else None
     except (TypeError, ValueError):

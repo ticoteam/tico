@@ -57,12 +57,13 @@ def _tasks(c, auth, who, attrs, base):
     clauses, args = ["status='waiting'", "waiting_on=?", "(snoozed_until IS NULL OR snoozed_until<=?)",
                      "(" + auth.task_sql(c, who) + ")"], [who.actor, H.now()]
     if attrs.get("bot"):
-        clauses.append("owner=?")
-        args.append("bot:" + attrs["bot"])
+        bot = (H.resolve_bot(c, attrs["bot"]) or {}).get("id", attrs["bot"])
+        clauses.append("owner_id=?")
+        args.append("bot:" + bot)
     if attrs.get("parent"):
         clauses.append("parent_id=?")
         args.append(attrs["parent"])
-    rows = c.execute("SELECT id,title FROM tasks WHERE " + " AND ".join(clauses) + " ORDER BY created LIMIT ?",
+    rows = c.execute("SELECT id,title FROM tasks WHERE " + " AND ".join(clauses) + " ORDER BY created_at LIMIT ?",
                      (*args, _limit(attrs.get("limit")))).fetchall()
     if not rows:
         return '<p class="tico-live-empty">Nothing waiting on you</p>'

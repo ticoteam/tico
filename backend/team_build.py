@@ -90,14 +90,15 @@ def _department(value, group):
 
 
 def _filled(c, group):
-    """{template: the bot's slug} for the live bots on the team, by the template each one was built from."""
+    """{template: the bot's id} for the live bots on the team, by the template each one was built from."""
     configs = Groups._configs(c)
     return {configs[slug].get("template"): slug for slug in group["bots"] if configs.get(slug, {}).get("template")}
 
 
 def _bot(c, slug, icon):
-    """The bot on the team that fills a role: its slug, the name it goes by, and its template's icon."""
-    return {"slug": slug, "name": (H.bot(c, slug) or {}).get("display_name") or slug, "icon": icon}
+    """The bot on the team that fills a role: its id and slug, the name it goes by, and its template's icon."""
+    row = H.bot(c, slug) or {}
+    return {"id": slug, "slug": row.get("slug") or slug, "name": row.get("display_name") or slug, "icon": icon}
 
 
 def _about(c, who):
@@ -220,6 +221,7 @@ def hire(auth, onboarding, c, who, team, reports_to, picks):
     filled = _filled(c, group)
     head_bot = filled.get(R.head_of(value, dept)) if dept else None
     owner = str(reports_to or "").strip() or who.actor
+    owner = (H.resolve_bot(c, owner) or {}).get("id", owner)
     seats, head_seat = [], None
     for role, card in chosen:
         if card["lead"]:
@@ -236,11 +238,12 @@ def hire(auth, onboarding, c, who, team, reports_to, picks):
     bots = []
     for role, card, seat_id in seats:
         hired = recruiting.hire(auth, onboarding, c, who, seat_id, M.SeatHire(template=card["template"]))
-        if (Groups._configs(c).get(hired["slug"]) or {}).get("team") != team:
-            Groups._set_bot(c, hired["slug"], team)     # the team's group is the bot's own (backend/groups.py)
-        bots.append({"slug": hired["slug"], "name": card["name"], "template": card["template"], "role": role,
+        bot_id = (H.resolve_bot(c, hired["slug"]) or {}).get("id", hired["slug"])
+        if (Groups._configs(c).get(bot_id) or {}).get("team") != team:
+            Groups._set_bot(c, bot_id, team)     # the team's group is the bot's own (backend/groups.py)
+        bots.append({"id": bot_id, "slug": hired["slug"], "name": card["name"], "template": card["template"], "role": role,
                      "stage": hired["stage"]})
-    H.event(c, who.actor, "team.built", team, {"bots": [bot["slug"] for bot in bots]})
+    H.event(c, who.actor, "team.built", team, {"bots": [bot["id"] for bot in bots]})
     return {"team": team, "bots": bots}
 
 

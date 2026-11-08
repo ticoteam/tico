@@ -30,15 +30,15 @@ const THEMES = ['light', 'dark'];
 // capture never assumes the one it wants is the one showing). steps: what to do before the picture (click,
 // open a dialog).
 const PAGES = [
-  {name: 'updates', route: '#/updates', ready: 'Reply'},
+  {name: 'updates', route: '#/updates', ready: 'Write your update'},
   {name: 'tasks', route: '#/tasks', ready: 'Needs you', steps: async page => {
     await page.click('#task-view [data-view="list"]');
     await page.getByText('Draft replies for the open support tickets').first().waitFor();
   }},
-  {name: 'needs-you', route: '#/tasks', ready: 'Approve the follow-up email to Dana Reyes'},
-  {name: 'org-chart', route: '#/goals', ready: 'Grow to 200 paying studios by December'},
-  {name: 'bot-chat', route: '#/bot/support', ready: 'How many tickets are waiting on the refund decision?'},
-  {name: 'meetings', route: '#/meetings', ready: 'Brightline renewal call with Dana Reyes'},
+  {name: 'needs-you', route: '#/tasks', ready: 'Raise Home Pro from $449 to $479 for December?'},
+  {name: 'org-chart', route: '#/goals', ready: 'Ship 6,000 units and 40 business installs this season'},
+  {name: 'bot-chat', route: '#/bot/support', ready: 'Threads with Support Agent'},
+  {name: 'meetings', route: '#/meetings', ready: 'Larkford town bid call'},
   {name: 'meeting', route: async page => '#/meetings?meeting=' + encodeURIComponent(await page.evaluate(async () => {
     const list = await (await fetch('/api/meetings')).json();
     return list.find(m => m.title === 'Weekly ops sync').id;
@@ -46,13 +46,13 @@ const PAGES = [
     await page.getByText('Transcript \u00b7 Zoom').click();
     await page.getByText('Ana').first().waitFor();
   }},
-  {name: 'usage', route: '#/usage', ready: 'Estimated', steps: async page => {
+  {name: 'usage', route: '#/usage', ready: 'Support Agent', steps: async page => {
     await page.locator('.use-line').first().click();
     await page.locator('.use-col').first().waitFor();
   }},
-  {name: 'settings-health', route: '#/settings', tab: 'health', ready: 'Failed runs'},
+  {name: 'settings-health', route: '#/settings', tab: 'health', ready: 'Setup check'},
   {name: 'devices', route: '#/settings', tab: 'devices', ready: "Ana's MacBook"},
-  {name: 'support', route: '#/updates', ready: 'Reply', steps: async page => {
+  {name: 'support', route: '#/updates', ready: 'Write your update', steps: async page => {
     await page.evaluate(() => window.supportOpen());
     await page.locator('#support-pop[open] [data-compose] [name=message], #support-pop[open] [data-off]:not([hidden])').first().waitFor();
     await page.waitForTimeout(300);
@@ -68,8 +68,8 @@ const PAGES = [
   }},
   {name: 'docs', route: async page => '#/docs/' + encodeURIComponent(await page.evaluate(async () => {
     const {docs} = await (await fetch('/api/v2/docs?limit=500')).json();
-    return docs.find(doc => doc.title === 'Refund policy').id;
-  })), ready: 'Support may refund up to the limit Ana sets.', steps: async page => {
+    return docs.find(doc => doc.title === 'Returns and replacements').id;
+  })), ready: 'Support may send a replacement lens set without asking.', steps: async page => {
     if (page.viewportSize().width < 600) {
       await page.locator('#docs-reader .docs-back').click();
       await page.locator('#docs-h-linked').waitFor();
@@ -79,7 +79,17 @@ const PAGES = [
     await page.locator('#docs-h-internal').waitFor();
     await page.locator('#docs-h-linked').waitFor();
   }},
-  {name: 'market', route: '#/strategy/market?note=company%2Fnorthwind', ready: 'Cheapest starter plan'},
+  {name: 'market', route: '#/strategy/market?note=company%2Fbrightyard', ready: 'It launched a free scene tier for home projectors last month.'},
+  {name: 'strategy', route: '#/strategy', ready: 'Who we serve'},
+  {name: 'growth', route: '#/growth', ready: 'Growth'},
+  {name: 'finance', route: '#/finance', ready: 'P&L'},
+  {name: 'rules', route: '#/rules', ready: 'Rules'},
+  {name: 'automations', route: '#/automations', ready: 'Automations'},
+  {name: 'learnings', route: '#/learnings', ready: 'set the phone on a flat surface before calibrating'},
+  {name: 'threads', route: '#/threads', ready: 'Threads'},
+  {name: 'recruit', route: async page => '#/seat/' + encodeURIComponent(await page.evaluate(async () =>
+    (await (await fetch('/api/v2/seats')).json()).seats[0].id)), ready: 'Job post'},
+  {name: 'settings-email-phone', route: '#/settings', tab: 'inbound', ready: 'Email & Phone'},
 ];
 
 function argument(name, fallback = '') {
@@ -161,9 +171,17 @@ async function main() {
           if (only && !only.has(spec.name)) continue;
           const label = `${spec.name}-${width}-${theme}`;
           where = label;
+          // A popover left open by the page before would cover the next one's controls.
+          await page.keyboard.press('Escape').catch(() => {});
           const route = typeof spec.route === 'function' ? await spec.route(page) : spec.route;
           await page.evaluate(hash => { location.hash = hash; }, route);
-          if (spec.tab) await page.locator(`[data-settings-tab="${spec.tab}"]`).click().catch(error => problems.push(`${label}: no ${spec.tab} tab: ${error.message.split('\n')[0]}`));
+          // Settings renders after the route, and keeps Health, Email & Phone and Mail in a More group that starts closed.
+          if (spec.tab) {
+            const tab = page.locator(`[data-settings-tab="${spec.tab}"]`);
+            await page.locator('#settings-more').waitFor({state: 'attached'}).catch(() => {});
+            if (!await tab.isVisible()) await page.locator('#settings-more > summary').click().catch(() => {});
+            await tab.click().catch(error => problems.push(`${label}: no ${spec.tab} tab: ${error.message.split('\n')[0]}`));
+          }
           await page.getByText(spec.ready).first().waitFor({timeout: 20000}).catch(() => problems.push(`${label}: never showed "${spec.ready}"`));
           if (spec.steps) await spec.steps(page).catch(error => problems.push(`${label}: ${error.message.split('\n')[0]}`));
           await page.waitForTimeout(600);

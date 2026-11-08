@@ -2,7 +2,7 @@
 
 A step's flow may say `assign: {"pool": [bot slugs], "slots": n}` (backend/step_flow.py). A ticket at that step that
 no bot of the pool owns yet goes, on each scheduler pass, to the pool bot with the fewest tickets in hand on that type
-(ties: the fewest open tickets of any kind, then the slug), when it has a free slot. A ticket in hand is one the bot
+(ties: the fewest open tickets of any kind, then the id), when it has a free slot. A ticket in hand is one the bot
 owns past the assigning step and before the type's merged step: work, checks waiting, fixes. Only active bots with
 free slots, completed onboarding and a profile that accepts the ticket take it; otherwise the ticket waits for
 the next pass, oldest first.
@@ -23,6 +23,7 @@ def clean(c, actor, raw):
     pool = []
     for value in raw.get("pool") or []:
         slug = H.actor_id(str(value or "").strip())
+        slug = (H.resolve_bot(c, slug) or {}).get("id", slug)
         if not slug or slug in pool:
             continue
         if not H.bot(c, slug):
@@ -37,7 +38,7 @@ def clean(c, actor, raw):
 
 
 def _available(c, slug):
-    found = c.execute("SELECT coalesce(state,'') FROM bots WHERE slug=?", (slug,)).fetchone()
+    found = c.execute("SELECT coalesce(state,'') FROM bots WHERE id=?", (slug,)).fetchone()
     return bool(found) and found[0] == "active" and not H._onboarding(c, slug)
 
 
@@ -52,13 +53,13 @@ def in_hand(c, slug, type_id, assign_step):
     """The bot's tickets on the type past the assigning step and before its merged step."""
     after, before = held_between(c, type_id, assign_step)
     return c.execute(
-        "SELECT count(*) FROM tasks t JOIN task_steps s ON s.id=t.step_id WHERE t.owner=? AND t.type_id=? "
+        "SELECT count(*) FROM tasks t JOIN task_steps s ON s.id=t.step_id WHERE t.owner_id=? AND t.type_id=? "
         f"AND t.status NOT IN ({','.join('?' * len(FINISHED))}) AND s.position>? AND s.position<?",
         ("bot:" + slug, type_id, *FINISHED, after, before)).fetchone()[0]
 
 
 def _open(c, slug):
-    return c.execute(f"SELECT count(*) FROM tasks WHERE owner=? AND status NOT IN ({','.join('?' * len(FINISHED))})",
+    return c.execute(f"SELECT count(*) FROM tasks WHERE owner_id=? AND status NOT IN ({','.join('?' * len(FINISHED))})",
                      ("bot:" + slug, *FINISHED)).fetchone()[0]
 
 
@@ -68,7 +69,7 @@ def allocate(c, at=None):
     if not F._ready(c):
         return []
     given = []
-    steps = [dict(r) for r in c.execute("SELECT * FROM task_steps WHERE flow_json LIKE '%\"assign\"%'")]
+    steps = [dict(r) for r in c.execute("SELECT * FROM task_steps WHERE flow LIKE '%\"assign\"%'")]
     for step in steps:
         rule = F.of(step).get("assign")
         if not rule:
@@ -76,8 +77,8 @@ def allocate(c, at=None):
         pool = [s for s in rule["pool"] if _available(c, s)]
         owners = {"bot:" + s for s in rule["pool"]}
         waiting = c.execute(
-            f"SELECT id, owner FROM tasks WHERE step_id=? AND status NOT IN ({','.join('?' * len(FINISHED))}) "
-            "ORDER BY created, id", (step["id"], *FINISHED)).fetchall()
+            f"SELECT id, owner_id FROM tasks WHERE step_id=? AND status NOT IN ({','.join('?' * len(FINISHED))}) "
+            "ORDER BY created_at, id", (step["id"], *FINISHED)).fetchall()
         for ticket_id, owner in waiting:
             if owner in owners:
                 continue
@@ -90,9 +91,10 @@ def allocate(c, at=None):
             if not free:
                 continue
             slug = min(free)[2]
+            label = (H.bot(c, slug) or {}).get("slug", slug)
             H.task_update(c, H.KEEPER, ticket_id, owner="bot:" + slug,
-                          note=f"Tico gave this to {slug}: the least busy of the {step['name']} pool "
+                          note=f"Tico gave this to {label}: the least busy of the {step['name']} pool "
                                f"({min(free)[0]} of {rule['slots']} slots in use).")
             H._task_event(c, ticket_id, H.KEEPER, "allocated", owner, "bot:" + slug, step["name"])
-            given.append((ticket_id, slug))
+            given.append((ticket_id, label))
     return given

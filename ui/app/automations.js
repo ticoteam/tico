@@ -288,7 +288,7 @@ function auDrawHead() {
   const name = a?.name || row?.name || '';
   const seg = ['flow', 'runs'].map(v => `<a role="tab" href="${auHref(AU.id, v)}" aria-selected="${AU.view === v}">${v === 'flow' ? 'Flow' : 'Runs'}</a>`).join('');
   hd.innerHTML = `<h2 class="au-name">${esc(name)}</h2>
-    ${a ? `<span class="au-own" title="${esc(auActorName(a.owner))}">${personCircle(auActorName(a.owner), 18)}<span class="au-own-n">${esc(auActorName(a.owner))}</span></span>
+    ${a ? `<span class="au-own" title="${esc(auActorName(a.owner_id))}">${personCircle(auActorName(a.owner_id), 18)}<span class="au-own-n">${esc(auActorName(a.owner_id))}</span></span>
     <span class="au-sp"></span>
     <div class="au-hd2">
       ${auHeadSwitch(a, name)}
@@ -400,7 +400,7 @@ async function auMoreAct(what) {
   auMenuClose();
   const a = AU.cur, state = AU;
   if (what === 'versions') { auEdOpen({kind: 'versions'}); return; }
-  if (what === 'run') { auEdOpen({kind: 'run', text: auSample(a.trigger, a.next_due)}); return; }
+  if (what === 'run') { auEdOpen({kind: 'run', text: auSample(a.trigger, a.next_due_at)}); return; }
   if (what !== 'delete' || a.builtin || !confirm(`Delete ${a.name}?`)) return;
   try {
     await writeRequest('DELETE', auApi(a.id));

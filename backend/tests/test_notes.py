@@ -26,7 +26,7 @@ def note(api, text="Cancellations are flat; nothing for Ben today.", to="ops", t
 
 def jobs(api, bot="ops"):
     with api.app.state.store.read() as c:
-        return c.execute("SELECT count(*) FROM jobs WHERE bot=?", (bot,)).fetchone()[0]
+        return c.execute("SELECT count(*) FROM jobs WHERE bot_id=?", (bot,)).fetchone()[0]
 
 
 def listed(api, slug="ops"):
@@ -52,7 +52,7 @@ def test_a_failed_run_gives_them_back_and_a_finished_one_does_not(api):
     post(api, f"attempts/{first['id']}/started", {"thread_id": "t1"}, token=r["token"])
     post(api, f"attempts/{first['id']}/complete", {"outcome": "failed", "text": "boom", "last_seq": 0}, token=r["token"])
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE jobs SET state='cancelled' WHERE state='uncertain'")
+        c.execute("UPDATE jobs SET state='canceled' WHERE state='uncertain'")
         c.execute("UPDATE run_backoff SET wait_until=NULL")        # the fast failure's wait is over
     post(api, "chat/ops", {"text": "Second"})
     second = claim(api, r)
@@ -94,7 +94,7 @@ def test_the_note_a_lifted_quarantine_leaves_reaches_the_next_run_ahead_of_a_bac
     with api.app.state.store.transaction() as c:
         H.quarantine(c, "ops", "10 repeated refusals today", refusal={"rule": "identity", "detail": "lane is a person's"})
         for i in range(50):
-            c.execute("INSERT INTO notes(id,from_actor,to_actor,body,created) VALUES(?,?,?,?,?)",
+            c.execute("INSERT INTO notes(id,from_actor,to_actor,body,created_at) VALUES(?,?,?,?,?)",
                       (H.new_id(), "human:ana", "bot:ops", f"Older note {i}", H.shift(H.now(), seconds=-600 + i)))
         H.status_set(c, "human:ana", "ops", state="active", reason="reviewed")
     post(api, "chat/ops", {"text": "Back to the exports"})
@@ -120,7 +120,7 @@ def test_a_completed_run_settles_its_notes_and_a_failed_one_does_not(api):
     with api.app.state.store.read() as c:
         assert [x["id"] for x in H.notes_waiting(c, "ops")] == [n["id"]]
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE jobs SET state='cancelled' WHERE state='uncertain'")
+        c.execute("UPDATE jobs SET state='canceled' WHERE state='uncertain'")
         c.execute("UPDATE run_backoff SET wait_until=NULL")
     post(api, "chat/ops", {"text": "Second"})
     second = claim(api, r)
@@ -180,9 +180,57 @@ def test_the_waiting_scan_reads_only_the_unsettled_index(api):
     store = api.app.state.store
     with store.read() as c:
         for sql, args in ((f"SELECT n.* FROM notes n WHERE n.to_actor=? AND {H.NOTE_WAITING_SQL} "
-                           "ORDER BY NOT (n.from_actor=? AND n.message_id IS NULL),n.created,n.id LIMIT ?",
+                           "ORDER BY NOT (n.from_actor=? AND n.message_id IS NULL),n.created_at,n.id LIMIT ?",
                            ("bot:ops", "tico", 50)),
                           (f"SELECT n.to_actor,count(*) FROM notes n WHERE n.to_actor IN (?) AND {H.NOTE_WAITING_SQL} "
                            "GROUP BY n.to_actor", ("bot:ops",))):
             plan = " ".join(str(row[3]) for row in c.execute("EXPLAIN QUERY PLAN " + sql, args))
             assert "notes_waiting" in plan, plan
+
+
+def test_a_deferred_thread_note_the_bot_lost_access_to_is_cancelled_not_carried(api):
+    # A thread message deferred into a bot's notes must not outlive the bot's access: removing the bot from the thread
+    # cancels what it would carry; the one it still reads goes to a run in its own thread, not the bot's next unrelated one.
+    from backend import threads
+    from backend.tests.test_threads_delivery import new_thread, say
+    r = setup(api)
+    store = api.app.state.store
+    lost = new_thread(api, members=("human:ben", "bot:ops"), title="Lost")
+    kept = new_thread(api, members=("human:ben", "bot:ops"), title="Kept")
+    lost_msg = say(api, lost["id"], "Private: the payroll numbers")
+    kept_msg = say(api, kept["id"], "Ben's note for ops")
+    with store.transaction() as c:
+        threads._defer_note(c, H.message(c, lost_msg["id"]), "bot:ops")
+        threads._defer_note(c, H.message(c, kept_msg["id"]), "bot:ops")
+        ana = api.app.state.auth.identity_for_actor(c, "human:ana")
+        threads.remove_member(c, ana, lost["id"], "bot:ops")
+    post(api, "chat/ops", {"text": "Unrelated run"})
+    run = claim(api, r)
+    carried = [n["text"] for n in run["notes"]]
+    assert not any("payroll" in text for text in carried), carried
+    assert not any("Ben's note for ops" in text for text in carried), carried   # private: it waits for its own thread
+    post(api, f"attempts/{run['id']}/started", {"thread_id": "t-run"}, token=r["token"])
+    post(api, f"attempts/{run['id']}/complete", {"outcome": "completed", "text": "ok", "last_seq": 0}, token=r["token"])
+    own = claim(api, r)
+    assert any("Ben's note for ops" in n["text"] for n in own["notes"]), own["notes"]
+    with store.read() as c:
+        cancelled = c.execute("SELECT canceled_at FROM notes WHERE message_id=?", (lost_msg["id"],)).fetchone()[0]
+    assert cancelled
+
+
+def test_a_note_whose_source_the_bot_lost_is_not_read_back_through_the_notes_list(api):
+    # Before the next claim, /notes must not return a copied body the recipient can no longer read.
+    from backend import threads
+    from backend.tests.test_threads_delivery import new_thread, say
+    r = setup(api)
+    store = api.app.state.store
+    lost = new_thread(api, members=("human:ben", "bot:ops"), title="Lost")
+    lost_msg = say(api, lost["id"], "Private: the payroll numbers")
+    with store.transaction() as c:
+        threads._defer_note(c, H.message(c, lost_msg["id"]), "bot:ops")
+        ana = api.app.state.auth.identity_for_actor(c, "human:ana")
+        threads.remove_member(c, ana, lost["id"], "bot:ops")
+    post(api, "chat/ops", {"text": "Unrelated turn"})
+    turn = claim(api, r, next_run=False)                  # an active turn: its notes are not carried
+    visible = get(api, "notes", token=turn["token"])["notes"]
+    assert not any("payroll" in (n.get("text") or "") for n in visible), visible

@@ -39,9 +39,12 @@
 .p-thumb{flex:none;width:44px;height:44px;padding:0;border:0;border-radius:7px;overflow:hidden;background:var(--bg);cursor:zoom-in}
 .p-thumb img{display:block;width:100%;height:100%;object-fit:cover}
 @media (max-width:760px){
-  .p-pill{flex-wrap:wrap;border-radius:14px;padding:8px}
+  /* One line on a phone too, as the bot chat's pill was: Attach on the left, then the words, Goal and Send. The box
+     grows only when the words wrap. (#chat-composer lays its row out on a grid, ui/styles/chat.css.) */
+  .p-pill>.p-attach,.p-pill>.thv-attach-wrap{order:-1}
+  .p-pill .p-attach,.p-pill .p-goal{width:36px;height:36px;padding:0;justify-content:center}
   /* iOS Safari zooms focused controls below 16px. Keep page zoom available, but not automatic. */
-  .ask textarea{order:-1;flex:1 0 100%;padding:4px 6px;font-size:16px;touch-action:manipulation}
+  .ask textarea{font-size:16px;touch-action:manipulation}
   .p-chips{padding-left:var(--s1);padding-right:var(--s1)}
   .p-go{margin-left:0}
   /* the bot page composer stays in reach while the thread scrolls */

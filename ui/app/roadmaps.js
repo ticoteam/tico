@@ -70,7 +70,7 @@ function roadmapRequesterEditor(parent, task, requester = null) {
   const dialog = document.createElement('dialog'); dialog.className = 'tmodal requester-editor';
   dialog.setAttribute('aria-label', requester ? 'Edit requester' : 'Add requester');
   const fields = [['name', 'Name', 200], ['email', 'Email', 320], ['phone', 'Phone', 100], ['other', 'Other contact', 500]];
-  const actors = [...S.people.map(p => ({value: 'human:' + p.id, text: p.name || p.id})), ...S.emps.map(b => ({value: 'bot:' + b.name, text: b.display_name || b.name}))];
+  const actors = [...S.people.map(p => ({value: 'human:' + p.id, text: p.name || p.id})), ...S.emps.map(b => ({value: 'bot:' + b.id, text: b.display_name || b.slug}))];
   dialog.innerHTML = `<div class="tmodal-head"><h2>${requester ? 'Edit requester' : 'Add requester'}</h2><span class="spacer"></span><button type="button" class="ghost" data-close aria-label="Close">✕</button></div>
     <form class="tmodal-body roadmap-form"><label>Requester<select name="actor" ${requester ? 'disabled' : ''}><option value="">Someone outside the team</option>${actors.map(a => `<option value="${esc(a.value)}"${requester?.actor === a.value ? ' selected' : ''}>${esc(a.text)}</option>`).join('')}</select></label>
       <div class="roadmap-fields" data-external-fields>${fields.map(([key, label, max]) => `<label>${label}<input name="${key}" maxlength="${max}" value="${esc(requester?.[key] || '')}"></label>`).join('')}</div>
@@ -129,7 +129,7 @@ function pageRoadmap() {
     <div class="roadmap-sort"><button type="button" class="tl-chip tl-chip-main tl-groupchip" data-roadmap-sort aria-haspopup="menu"><span class="k">Sort</span><span data-sort-word>Requests</span>${TL_ICON.caret}</button><button class="ghost" type="button" data-roadmap-direction aria-label="Sort ascending">↓</button></div>
     <div data-roadmap-table></div><div class="row roadmap-pager"><button class="ghost" type="button" data-roadmap-back disabled>Previous</button><button class="ghost" type="button" data-roadmap-next disabled>Next</button><span class="err" role="status" data-roadmap-error></span></div></div><div id="task-filter-pop" class="tl-pop" popover></div>`;
   $('#task-filter-pop').onkeydown = tasksMenuKeys;
-  $('[data-roadmap-new]').onclick = () => { void taskTypesLoad().then(() => { const product = pipelineProductType(); const manager = S.emps.find(e => e.name === product?.manager || product?.manager && e.template === product.manager); openTaskCreate(manager?.name || '', {type: product?.id || 'product-roadmap'}); }); };
+  $('[data-roadmap-new]').onclick = () => { void taskTypesLoad().then(() => { const product = pipelineProductType(); const manager = botByRef(product?.manager) || S.emps.find(e => product?.manager && e.template === product.manager); openTaskCreate(manager?.id || '', {type: product?.id || 'product-roadmap'}); }); };
   $('[data-roadmap-sort]').onclick = ev => tasksMenu(state, ev.currentTarget, `<div class="tl-menu" role="menu" aria-label="Sort roadmap">${ROADMAP_SORTS.map(([key, label]) => `<button type="button" class="tl-mi" role="menuitemradio" aria-checked="${state.sort === key}" data-sort="${key}">${label}</button>`).join('')}</div>`, pop => pop.onclick = e => { const button = e.target.closest('[data-sort]'); if (button) { state.sort = button.dataset.sort; state.offset = 0; state.previous = []; tasksMenuClose(); void roadmapRankingLoad(state); } });
   $('[data-roadmap-direction]').onclick = () => { state.direction = state.direction === 'desc' ? 'asc' : 'desc'; state.offset = 0; state.previous = []; void roadmapRankingLoad(state); };
   $('[data-roadmap-back]').onclick = () => { state.offset = state.previous.pop() || 0; void roadmapRankingLoad(state); };
@@ -166,14 +166,14 @@ function roadmapReceiverText(settings) {
   return `The bot chosen for roadmap suggestions ${why}; ` + (to ? `suggestions now go to ${to}` : 'no bot can take suggestions');
 }
 function roadmapReceiverOptions(settings) {
-  const chosen = settings.suggestions_bot || '', source = settings.suggestions_receiver?.source;
+  const picked = settings.suggestions_bot || '', chosen = botByRef(picked)?.id || picked, source = settings.suggestions_receiver?.source;
   const active = (S.emps || []).filter(e => e.status === 'active')
-    .map(e => ({slug: e.name, name: botDisplayName(e.name)})).sort((a, b) => a.name.localeCompare(b.name));
+    .map(e => ({slug: e.id, name: botDisplayName(e.id)})).sort((a, b) => a.name.localeCompare(b.name));
   const option = (value, text, extra = '') => `<option value="${esc(value)}"${value === chosen ? ' selected' : ''}${extra}>${esc(text)}</option>`;
   // A chosen bot that stopped being active stays visible as itself, never as a blank or as Automatic.
   const gone = !chosen || active.some(bot => bot.slug === chosen) ? ''
     : source === 'chosen' ? option(chosen, settings.suggestions_receiver.name || roadmapBotName(chosen)) : (() => {
-    const state = source === 'chosen_archived' ? 'archived' : ({paused: 'paused', planned: 'setting up', quarantined: 'quarantined'})[(S.emps || []).find(e => e.name === chosen)?.status] || 'not active';
+    const state = source === 'chosen_archived' ? 'archived' : ({paused: 'paused', planned: 'setting up', quarantined: 'quarantined'})[botRow(chosen)?.status] || 'not active';
     return option(chosen, `${roadmapBotName(chosen)} (${state})`, ' disabled');
   })();
   return option('', chosen ? 'Automatic' : roadmapReceiverText(settings)) + gone + active.map(bot => option(bot.slug, bot.name)).join('');
@@ -187,7 +187,7 @@ function roadmapSettingsRender(host, settings, tags) {
       <label>Visitor suggestions waiting for review<input class="roadmap-limit" type="number" name="suggestion_limit" min="1" max="1000" required value="${settings.suggestion_limit ?? 20}"></label>
       <label class="roadmap-check">${peopleSwitch('name="bot_public_approval"', settings.bot_public_approval, false, 'Bots need approval to post publicly')}Bots need approval to post publicly</label></fieldset>
       <div class="row">${edit ? '<button class="primary" type="submit">Save</button>' : '<span class="muted">Only owners and admins change these.</span>'}<span class="muted" data-status role="status"></span></div></form>`;
-  const form = $('form', host), picker = form.elements.suggestions_bot, saved = settings.suggestions_bot || '';
+  const form = $('form', host), picker = form.elements.suggestions_bot, saved = botByRef(settings.suggestions_bot)?.id || settings.suggestions_bot || '';
   picker.onchange = () => { $('[data-receiver]', form).textContent = picker.value !== saved ? 'Takes effect for the next suggestion once you save.' : saved ? roadmapReceiverText(settings) : ''; };
   form.onsubmit = async ev => {
     ev.preventDefault(); const values = new FormData(form), button = $('[type=submit]', form), status = $('[data-status]', form);
@@ -220,7 +220,7 @@ async function roadmapSettingsMount() {
   try {
     const [settings, tags] = await Promise.all([get('/v2/roadmaps/settings'), get('/v2/tags')]);
     const chosen = settings.suggestions_bot;
-    if (chosen && !(S.emps || []).some(e => e.name === chosen))
+    if (chosen && !botByRef(chosen))
       ROADMAP_BOT_NAMES[chosen] = await get('/v2/bots/' + encodeURIComponent(chosen)).then(bot => bot.display_name || '', () => '');
     if (!host.isConnected) return;
     roadmapSettingsRender(host, settings, tags);

@@ -55,8 +55,8 @@ def ensure(c, owner=None):
     if not owner:
         return False
     for row in RULES:
-        c.execute("INSERT OR IGNORE INTO rules(id,scope_kind,scope_id,event,when_json,then_outcome,params_json,enabled,"
-                  "position,note,created_by,created,updated,revision) VALUES(?,?,?,?,?,?,?,1,?,?,?,?,?,1)",
+        c.execute("INSERT OR IGNORE INTO rules(id,scope_kind,scope_id,event,condition,then_outcome,params,enabled,"
+                  "position,note,created_by,created_at,updated_at,revision) VALUES(?,?,?,?,?,?,?,1,?,?,?,?,?,1)",
                   (row["id"], "team", "", EVENT, json.dumps(row["when"], sort_keys=True), row["then"],
                    json.dumps(row["params"], sort_keys=True), RULE_POSITION + row["order"], row["note"], owner, now, now))
     # The owner can change; their built-in rows keep asking whoever is the owner now.
@@ -112,7 +112,7 @@ def record_relay(c, relay_id):
     if relay(c) == relay_id:
         return True
     c.execute("DELETE FROM trigger_relays WHERE trigger_id=? AND deleted_at IS NULL", (ID,))
-    c.execute("INSERT OR REPLACE INTO trigger_relays(relay_id,trigger_id,address_prefix,created_by,created,deleted_at,hq_gone) "
+    c.execute("INSERT OR REPLACE INTO trigger_relays(relay_id,trigger_id,address_prefix,created_by,created_at,deleted_at,hq_gone) "
               "VALUES(?,?,?,?,?,NULL,0)", (relay_id, ID, "", H.KEEPER, H.now()))
     return True
 

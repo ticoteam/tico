@@ -28,7 +28,7 @@ A deal with no dated buyer step is open but unproven. Say so in the review; do n
 
 - The unit is one booked demo: its booked-at time, slot time, who booked it and through which channel.
 - Group bookings by the week they were made. Close each one after a fixed window (for example, the slot plus two business
-  days) and record one disposition: held, rescheduled then held, cancelled by the buyer, cancelled by us, no-show, or
+  days) and record one disposition: held, rescheduled then held, canceled by the buyer, canceled by us, no-show, or
   ghosted (no reply after booking, once the window has closed).
 - Do not infer a disposition from silence while the window is open.
 - Cut the bookings by hours from booking to slot (same day, one to two days, three to six, seven or more). This is the

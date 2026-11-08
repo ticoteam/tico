@@ -29,7 +29,7 @@ def fixture(nodes, edges):
     conn.executescript(H.MARKET_SCHEMA)
     H.ensure_market_reads(conn)
     ids = ['company/self'] + [f'company/node-{i:05}' for i in range(1, nodes)]
-    conn.executemany('INSERT INTO market_entities(id,type,name,summary,created,created_by,updated) VALUES(?,?,?,?,?,?,?)',
+    conn.executemany('INSERT INTO market_entities(id,type,name,summary,created_at,created_by,updated_at) VALUES(?,?,?,?,?,?,?)',
                      [(eid, 'company' if i == 0 or i % 3 else 'person', f'Entity {i:05}',
                        'Synthetic market summary. ' * 8, '2026-10-12', 'seed', '2026-10-12') for i, eid in enumerate(ids)])
     rng = random.Random(400)
@@ -40,7 +40,7 @@ def fixture(nodes, edges):
         a, b = rng.randrange(nodes), rng.randrange(nodes)
         if a != b:
             pairs.add((a, b))
-    conn.executemany('INSERT INTO market_edges(id,src,rel,dst,created,created_by,updated) VALUES(?,?,?,?,?,?,?)',
+    conn.executemany('INSERT INTO market_edges(id,src,rel,dst,created_at,created_by,updated_at) VALUES(?,?,?,?,?,?,?)',
                      [(f'edge-{i:06}', ids[a], 'employs', ids[b], '2026-10-12', 'seed', '2026-10-12')
                       for i, (a, b) in enumerate(sorted(pairs))])
     evidence_count = nodes * 4

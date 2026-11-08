@@ -82,7 +82,7 @@ async function settingsRecruitFlow(seed = {}) {
       creating=true;results.querySelectorAll('[data-recruit-create]').forEach(x=>x.disabled=true);status.textContent='Creating a bot that waits for setup…';
       const title=draft.title.trim()||card.name;
       const slugBase=title.toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/^-|-$/g,'').slice(0,55)||card.slug;
-      let slug=slugBase;for(let n=2;S.emps.some(x=>x.name===slug);n++)slug=slugBase+'-'+n;
+      let slug=slugBase;for(let n=2;S.emps.some(x=>x.slug===slug);n++)slug=slugBase+'-'+n;
       const brief='\n\n## Role brief\n'+(draft.brief.trim()||'Not set')+'\nTools and sources: '+String(data.get('tools')||'Not set')+'\nReviewer: '+String(data.get('reviewer')||'Ask the owner during setup');
       try{await post('/v2/bots',{slug,display_name:title,description:draft.brief,template:card.template,
         instructions:(card.instructions||'')+brief,reports_to:null,status:'planned',repo:'bot-'+slug,thread_mode:'personal',
@@ -107,11 +107,11 @@ function recruitPlaces() {
   const owner = S.me?.role === 'owner', me = recruitMe();
   const people = owner ? (S.people || []).filter(p => !p.hidden).map(p => ['human:' + p.id, p.name || p.id]) : [];
   const bots = (S.emps || []).filter(e => e.status !== 'archived' && !isHelperBot(e) && (owner || e.can_manage))
-    .map(e => [e.name, e.display_name || e.name]);
+    .map(e => [e.id, e.display_name || e.slug]);
   return [[me, 'You'], ...people.filter(([id]) => id !== me), ...bots];
 }
 const recruitPlaceName = value => recruitPlaces().find(([id]) => id === value)?.[1]
-  || (S.emps || []).find(e => e.name === value)?.display_name
+  || botRow(value)?.display_name
   || (S.people || []).find(p => 'human:' + p.id === value)?.name || value;
 const recruitGroupName = id => (S.orgGroups || []).find(g => g.id === id)?.name || '';
 const recruitOptions = (rows, value) => rows.map(([id, name]) => `<option value="${esc(id)}"${id === value ? ' selected' : ''}>${esc(name)}</option>`).join('');
@@ -417,6 +417,8 @@ function recruitApplicant(main, found, c) {
   const seat = found.seat, hire = recruitCanHire(seat), prefs = RECRUIT.prefs[seat.id] || {};
   const days = (c.owns || []).slice(0, 3), needs = c.prerequisites || [];
   const models = found.models || [], model = models.some(m => m.id === prefs.model) ? prefs.model : '';
+  // Under a seat that is still open, the bot reports above it: the one line that says who, until that seat is hired.
+  const manager = seat.reports_now, managerLabel = manager ? (manager.until ? `${manager.until}, not hired yet` : manager.name || 'Seat above') : '';
   const more = [
     c.summary && c.summary !== c.line ? `<p>${esc(c.summary)}</p>` : '',
     c.never?.length ? `<h3>Never</h3><ul>${c.never.map(x => `<li>${esc(x)}</li>`).join('')}</ul>` : '',
@@ -433,7 +435,8 @@ function recruitApplicant(main, found, c) {
     </article>
     ${hire ? `<aside class="rc-hire"><form data-recruit-hire-form><h2>Hire</h2>
       <label class="rp-field"><span>Name</span><input name="name" maxlength="100" value="${esc(seat.title)}"></label>
-      <label class="rp-field"><span>Reports to</span><select name="reports_to">${recruitOptions(recruitPlaces().some(([id]) => id === seat.reports_to) ? recruitPlaces() : [[seat.reports_to, recruitPlaceName(seat.reports_to)], ...recruitPlaces()], seat.reports_to)}</select></label>
+      <label class="rp-field"><span>Reports to</span><select name="reports_to">${recruitOptions(recruitPlaces().some(([id]) => id === seat.reports_to) ? recruitPlaces() : [[seat.reports_to, managerLabel || recruitPlaceName(seat.reports_to)], ...recruitPlaces()], seat.reports_to)}</select></label>
+      ${manager?.until ? `<p class="muted" data-reports-now>Reports to ${esc(manager.name || 'the person or bot above')} until ${esc(manager.until)} is hired.</p>` : ''}
       <label class="rp-field"><span>Computer</span><select name="runner_id"><option value="">Default</option></select></label>
       <details class="rc-settings"><summary>More settings</summary>
         <label class="rp-field"><span>Model</span><select name="model"><option value="">Suggested: ${esc(c.model_name || '')}</option>${recruitOptions(models.filter(m => m.id !== c.model).map(m => [m.id, m.name]), model)}</select></label></details>
@@ -444,6 +447,9 @@ function recruitApplicant(main, found, c) {
   </div>`;
   const page = main.querySelector('.rc-applicant'), form = page.querySelector('[data-recruit-hire-form]');
   if (!form) return;
+  // The line says where the bot reports only while the seat's own line is what is picked: a new manager replaces it.
+  const reportsNow = form.querySelector('[data-reports-now]');
+  if (reportsNow) form.elements.reports_to.addEventListener('change', () => { reportsNow.hidden = form.elements.reports_to.value !== seat.reports_to; });
   void recruitComputers().then(rows => {
     if (!form.isConnected) return;
     form.elements.runner_id.insertAdjacentHTML('beforeend', recruitOptions(rows, prefs.runner_id || ''));
@@ -485,7 +491,7 @@ async function recruitHire(found, c, card, choice, errorEl = null) {
     await refresh(true);
     const where = recruitGroupName(seat.team);
     toast(`${hired.name || choice.name || seat.title} joined ${where || 'the team'}.`);
-    location.hash = '#/bot/' + encodeURIComponent(hired.slug);
+    location.hash = '#/bot/' + encodeURIComponent(hired.bot);
   } catch (e) { fail(e.message); }
 }
 function recruitStamp(card) {

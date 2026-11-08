@@ -344,7 +344,7 @@ class Service:
                 return 409, {"error": "an update is already running", **s,
                              "message": "This company is going to sleep; try again when it wakes."}
             if self.sleeps.pop(slug, None):     # a pending sleep gives way: its work finds no reservation and stops
-                log(f"{slug}: sleep cancelled by an update to {version}")
+                log(f"{slug}: sleep canceled by an update to {version}")
             before = dict(s)
             s.update(state="pulling", to=version, message="", snapshot="", restored=False, **{"from": running})
         try:                            # staff's `cell update` (or add, stop...) holds the company: not now

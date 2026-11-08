@@ -85,7 +85,7 @@ def test_existing_key_only_no_mint_and_no_new_census_or_database(tmp_path, monke
         runtime.census(database)
     assert not database.exists()
     with sqlite3.connect(database) as conn:
-        conn.execute("CREATE TABLE registry_metadata(key TEXT,value_json TEXT)")
+        conn.execute("CREATE TABLE registry_metadata(key TEXT,value TEXT)")
         conn.execute("INSERT INTO registry_metadata VALUES('usage-count',?)", (wire.encoded({"install_id": ID}).decode(),))
     before = database.read_bytes()
     assert runtime.census(database) == ID
@@ -120,6 +120,24 @@ def test_actual_generated_bytes_and_supervisor_are_bound_to_observed_process(tmp
     (generated / "caddy.json").write_bytes(altered)
     with pytest.raises(wire.Pending, match="generated_configuration_mismatch"):
         runtime.observe(root=root, environ=env, directory=generated)
+
+
+def test_a_generated_reader_site_is_observed_the_way_it_was_written(tmp_path, monkeypatch):
+    """The Company page's reader site is in the generated file only when a reader origin is set. Observing must read that
+    same setting, or a correctly written file would never match the observation."""
+    root, generated = tmp_path / "source", tmp_path / "generated"
+    (root / "docker").mkdir(parents=True)
+    generated.mkdir()
+    (root / "docker/caddy-supervisor.sh").write_bytes(b"approved supervisor")
+    (generated / "supervisor.sh").write_bytes(b"approved supervisor")
+    env = {"TICO_DOMAIN": "acme.tico.dev", "TICO_READER_ORIGIN": "https://reader.acme.example",
+           **wire.configuration(request())}
+    caddy_assets.prepare(env | {"TICO_CADDY_DIR": str(generated)})
+    assert b"reader.acme.example" in (generated / "caddy.json").read_bytes()
+    monkeypatch.setattr(runtime, "capabilities", lambda root: {"revision": "a" * 40, "runtime_files": {}})
+    monkeypatch.setattr(runtime, "census", lambda path: ID)
+    observed = runtime.observe(root=root, environ=env, directory=generated)
+    assert observed["file_sha256"] == hashlib.sha256((generated / "caddy.json").read_bytes()).hexdigest()
 
 
 def test_discovery_verifies_actual_code_without_backend_initialization_or_census(tmp_path, monkeypatch):

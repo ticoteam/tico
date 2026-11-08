@@ -19,6 +19,6 @@ Checks before you finish:
 - Each clash names both bookings and the rule.
 - The time zone is stated.
 - Open slots are counted after the rules, not before.
-- Nothing is moved or cancelled in this check.
+- Nothing is moved or canceled in this check.
 
 Example (generic): "Thu 10:00, crew B: booking X (made 22 Sept) and booking Y (made 29 Sept) overlap. X holds the slot. Options for Y that keep the 30-minute buffer: 13:00 or next day 09:00. Open slots this week after the rules: 6 of 11 raw gaps."

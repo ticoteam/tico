@@ -23,9 +23,9 @@ const shots = process.env.TICO_SHOTS || '';
       computers: [], waiting: [], slow: [], failures: [], checked: new Date().toISOString()};
     const monitor = {state: 'active', on: true, reports_without_asking: true, findings: [
       {key: 'computer_silent:r1', signature: 'hm-aaaaaaaaaaaa', check_id: 'computer_silent', kind: 'setup', severity: 'warn',
-       title: 'Studio Mac has not checked in for 40 minutes', first_seen: iso(5 * 60), last_seen: iso(3), occurrences: 6},
+       title: 'Studio Mac has not checked in for 40 minutes', first_seen_at: iso(5 * 60), last_seen_at: iso(3), occurrences: 6},
       {key: 'server_cpu', signature: 'hm-bbbbbbbbbbbb', check_id: 'server_cpu', kind: 'tico-bug', severity: 'warn',
-       title: 'The server used 55% CPU for an hour while idle', first_seen: iso(120), last_seen: iso(120), occurrences: 1,
+       title: 'The server used 55% CPU for an hour while idle', first_seen_at: iso(120), last_seen_at: iso(120), occurrences: 1,
        ticket_id: 't1', approval_id: null}]};
     await page.route('**/*', route => {
       const p = new URL(route.request().url()).pathname;

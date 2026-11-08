@@ -1,6 +1,6 @@
 // Offline browser regression: what moved off the Help page has its own home. Settings shows the version lines and,
 // inside the desktop app, Show the app's log; Settings > Health runs the Setup check with each fix, keeps the result
-// through Health's redraw and sends it to support attached; What's new opens with the Beta features and the known
+// through Health's redraw and sends it to the Tico team attached; What's new opens with the Beta features and the known
 // issues in this version. (Take the tour in the account menu is in getting-started.cjs.)
 const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
@@ -89,11 +89,10 @@ const CHECKS = [{name: 'HTTPS certificate', status: 'bad', detail: 'could not co
     // Health redraws its list every minute; the result is not part of it and stays.
     await v.page.evaluate(() => hlMount());
     assert.equal(await v.page.locator('[data-hl-setup-row]').count(), 2);
-    // Send to support attaches the result, as from Help today.
+    // Send to Tico team opens the Tico team chat with the result attached (a new conversation goes as kind setup).
     await v.page.locator('[data-hl-setup-send]').click();
     await v.page.locator('[data-report]').waitFor();
     assert.match(await v.page.locator('[data-report]').innerText(), /Setup check/);
-    assert.match(await v.page.locator('[data-sent]').innerText(), /message marked setup/, 'a Setup check goes as a setup request');
     await v.page.locator('[data-compose] [data-preview]').click();
     await v.page.locator('dialog.support-modal [data-use]:not([disabled])').waitFor();
     const previewed = JSON.parse(v.calls.filter(c => c.startsWith('POST diagnostics/capture')).at(-1).slice('POST diagnostics/capture '.length)).report;

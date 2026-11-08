@@ -52,6 +52,10 @@ impl AudioSink {
             consumer,
         )
     }
+    #[cfg(test)]
+    pub(crate) fn queued_capacity(&self) -> usize {
+        self.producer.slots() * PACKET_SAMPLES
+    }
     /// Called by the native audio thread. No heap allocation, locks, disk or network I/O.
     pub fn push_interleaved(&mut self, data: &[f32], channels: usize) {
         if channels == 0 {

@@ -69,7 +69,12 @@ def report(e, kind):
 # `tools:` (older `access:`), the folder bot-<slug> (older emp-<slug>) and HUB_BOT (older HUB_EMPLOYEE).
 
 def repo_dir(projects, slug):
-    """The bot's folder under the projects directory: bot-<slug> if it exists, else emp-<slug> if that does, else bot-<slug>."""
+    """The bot's folder under the projects directory: for this run's own bot the folder the runner names (HUB_BOT_FOLDER:
+    a bot made with a UUID id is not in bot-<id>, and a rename keeps its folder), else bot-<slug> if it exists, else
+    emp-<slug> if that does, else bot-<slug>."""
+    own = os.environ.get("HUB_BOT_FOLDER") or ""
+    if own and re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", own) and str(slug).lower() == hub_bot().lower():
+        return Path(projects) / own
     for prefix in ("bot-", "emp-"):
         if (Path(projects) / (prefix + slug)).exists():
             return Path(projects) / (prefix + slug)

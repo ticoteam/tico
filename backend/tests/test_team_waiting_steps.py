@@ -77,7 +77,7 @@ def _dev(tmp_path):
     c = sqlite3.connect(tmp_path / 'hub.db', isolation_level=None)
     c.row_factory = sqlite3.Row
     H.migrate(c)
-    c.execute("INSERT INTO task_types(id,name,created,updated) VALUES('dev','Dev tickets','x','x')")
+    c.execute("INSERT INTO task_types(id,name,created_at,updated_at) VALUES('dev','Dev tickets','x','x')")
     for position, (ident, name, status) in enumerate([
             ('deck', 'On Deck', 'open'), ('progress', 'In Progress', 'doing'),
             ('staging', 'Pending Push To Staging', 'doing'), ('closed', 'Closed', 'closed')]):
@@ -167,7 +167,7 @@ def test_a_person_parks_a_bots_own_ticket_in_a_teams_waiting_step_without_a_note
     parked = ticket(api)
     step = _park_step(api, parked)
     with api.app.state.store.transaction() as c:
-        c.execute('UPDATE tasks SET requester=owner WHERE id=?', (parked['id'],))    # the bot asked for it itself
+        c.execute('UPDATE tasks SET requester_id=owner_id WHERE id=?', (parked['id'],))    # the bot asked for it itself
         # The bot's own move still says why: nobody else will answer a ticket it parks for itself.
         with pytest.raises(H.Refused) as refused:
             H.task_update(c, 'bot:cpo', parked['id'], step='Waiting On Dependency')

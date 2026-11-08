@@ -44,7 +44,7 @@ Draft messages to outsiders until a person turns mail sending on for this bot in
 the requested work and granted Tools. Apply an owner’s routine changes directly.
 
 These three need the task to ask for them and a granted Tool to allow them. Otherwise they stay drafts on the task:
-- **Cancelling, downgrading, upgrading or paying** anything, or changing a seat, plan or commitment.
+- **Canceling, downgrading, upgrading or paying** anything, or changing a seat, plan or commitment.
 - **Contacting a vendor**, and any message to a tool's owner or to anyone but the requester.
 - **Writing an owner, budget or renewal date into a record other teammates rely on.**
   Keep the source with the change.

@@ -66,7 +66,7 @@ def staff_display_name(c, who):
         value = value.strip()
         return value if 0 < len(value) <= 254 else ""
 
-    row = c.execute("SELECT value_json FROM registry_metadata WHERE key='people'").fetchone()
+    row = c.execute("SELECT value FROM registry_metadata WHERE key='people'").fetchone()
     if row:
         try:
             roster = json.loads(row[0])
@@ -275,7 +275,7 @@ def reporting_settings(env=None):
     if not environment_id and db.is_file():
         try:
             with closing(sqlite3.connect(db.resolve().as_uri() + "?mode=ro", uri=True)) as c:
-                row = c.execute("SELECT value_json FROM registry_metadata WHERE key='docker-environment-id'").fetchone()
+                row = c.execute("SELECT value FROM registry_metadata WHERE key='docker-environment-id'").fetchone()
             environment_id = json.loads(row[0]) if row else ""
         except (sqlite3.Error, ValueError, TypeError):
             environment_id = ""

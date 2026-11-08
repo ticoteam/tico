@@ -177,7 +177,7 @@ const WITHHELD: &str = "[output withheld: the runner restarted while this comman
 /// recorded) and whose redactor this runner no longer has, after a restart, gets no output at all: fail closed.
 fn report(turn: &Value, redactor: Option<&Arc<Redactor>>) -> Value {
     let blind = redactor.is_none() && turn["secrets"] != false;
-    let scrub = |t: &str| redactor.map(|r| r.scrub_text(t)).unwrap_or_else(|| t.to_string());
+    let scrub = |t: &str| redactor.map(|r| r.scrub_text(t).into_owned()).unwrap_or_else(|| t.to_string());
     let description = |c: &Value| if blind && turn["secrets"].is_null() { UNNAMED.to_string() } else { scrub(&text_of(&c["description"])) };
     let output = |c: &Value| if blind { WITHHELD.to_string() } else { scrub(&tail(&text_of(&c["output_file"]))) };
     let commands: Vec<Value> = turn["commands"]

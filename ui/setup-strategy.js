@@ -92,7 +92,7 @@ function ssJobHTML(state) {
   if (job.state === 'gave_up') return ssFoundHTML(state);
   return (job.written?.bets || []).length ? `<p class="ss-job muted" role="status">Drafted from ${from}. Keep, edit or strike each.</p>` : '';
 }
-// What a run drafts besides bets (backend/strategy_prompt.py): the summary and vision, then the four sections.
+// What a run drafts besides bets (backend/strategy_prompt.py): the summary and vision, then the sections.
 const SS_LINES = {summary: 'Summary', vision: 'Vision'};
 const ssFoundKeys = () => [...Object.keys(SS_LINES), ...STRAT_SECTIONS.map(sec => sec.key)];
 const ssFoundTitle = k => SS_LINES[k] || STRAT_SECTIONS.find(sec => sec.key === k).title;
@@ -150,7 +150,7 @@ function ssSideHTML(state) {
   return `<p class="ss-side-head"><b>Draft</b> <span class="muted">· not published</span></p>
     ${block(STRAT_SECTIONS[0].title, text('serve'))}${block(STRAT_SECTIONS[1].title, text('sell'))}
     ${block(label, kept.length ? `<ol class="ss-side-bets">${kept.map(b => `<li>${esc(b.statement)}</li>`).join('')}</ol>` : '<p class="muted strat-empty">None kept yet</p>')}
-    ${block(STRAT_SECTIONS[3].title, not ? `<p class="strat-text">${esc(not)}</p>` : none)}`;
+    ${block(STRAT_SECTIONS.find(sec => sec.key === 'not').title, not ? `<p class="strat-text">${esc(not)}</p>` : none)}`;
 }
 
 // Entering the step reads the draft and the newest run, then polls a run still going.

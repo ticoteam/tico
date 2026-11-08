@@ -22,6 +22,7 @@ import json
 from fastapi import Request
 
 from clients import access_entry, harness_manifests, mcp_servers
+from . import model_subscriptions
 from . import models as M
 from . import providers, read_cache, routines
 from .harnesses import EXTERNAL_HARNESSES, resolve_harness
@@ -29,9 +30,9 @@ from .store import H, Problem, encode, readiness_document, repo_url
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS bot_tool_requests(
- id TEXT PRIMARY KEY, bot TEXT NOT NULL REFERENCES bots(slug), kind TEXT NOT NULL,
- service TEXT NOT NULL, identity TEXT NOT NULL DEFAULT '', entry_json TEXT NOT NULL,
- task_id TEXT, requested_by TEXT NOT NULL, created TEXT NOT NULL, state TEXT NOT NULL DEFAULT 'pending');
+ id TEXT PRIMARY KEY, bot TEXT NOT NULL REFERENCES bots(id), kind TEXT NOT NULL,
+ service TEXT NOT NULL, identity TEXT NOT NULL DEFAULT '', entry TEXT NOT NULL,
+ task_id TEXT, requested_by TEXT NOT NULL, created_at TEXT NOT NULL, state TEXT NOT NULL DEFAULT 'pending');
 CREATE INDEX IF NOT EXISTS bot_tool_requests_bot ON bot_tool_requests(bot, state, kind);
 """
 CREDENTIALS_NOTE = ("Store a needed Credential through Credentials or its chat card, and grant it to this bot. "
@@ -79,12 +80,11 @@ def _unique(used, base):
     return name
 
 
-def _model_tool(c, settings, bot, config, readiness, label):
+def _model_tool(c, settings, bot, config, readiness, label, runner=None):
     row = H.bot(c, bot) or {}
     runtime, model = providers.bot_choice(c, settings, config)
-    runtime = runtime or row.get("runtime") or ""
+    runtime, model = runtime or "", model or ""
     harness = resolve_harness(config, runtime)
-    model = model or row.get("model") or ""
     catalog = providers.MODEL_BY_ID.get(model) or {}
     provider = catalog.get("provider") or ""
     scope = {}
@@ -99,7 +99,10 @@ def _model_tool(c, settings, bot, config, readiness, label):
     if isinstance(state, dict):
         if not state.get("installed"):
             status, problem = "problem", "Runtime is not installed on " + label
-        elif state.get("authenticated") in ("missing", "failed", "rejected"):
+        elif state.get("authenticated") in ("missing", "failed", "rejected") and not (
+                # The computer's company subscription signs this bot's turns in (backend/model_subscriptions.py).
+                runner and runtime in model_subscriptions.covered_runtimes(
+                    c, runner, providers.fill(providers.load(c, settings), config))):
             status, problem = "problem", state.get("detail") or "Runtime is not signed in on " + label
         else:
             status = "ready"
@@ -246,15 +249,16 @@ def agent_report(c, bot, tools):
             raise Problem(exc.code, str(exc), 422) from None
         raw.append({key: entry[key] for key in ("service", "identity", "can", "env", "note", "mcp") if key in entry}
                    | {"scope": access_entry.scope_of(entry), "credential": "not-declared"})
-    c.execute("INSERT INTO registry_metadata(key,value_json) VALUES(?,?) "
-              "ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json",
+    c.execute("INSERT INTO registry_metadata(key,value) VALUES(?,?) "
+              "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
               ("agent-tools:" + bot, encode({"tools": raw, "reported_at": H.now()})))
     reconcile(c, {bot: raw}, complete=True)
 
 
-STATE_CONFIG_SQL = "SELECT config_json,repo FROM bot_config WHERE bot=?"
-STATE_RUNNER_SQL = "SELECT r.label,r.last_seen,r.revoked_at,r.readiness_json FROM assignments a JOIN runners r ON r.id=a.runner_id WHERE a.bot=?"
-REQUESTS_SQL = "SELECT * FROM bot_tool_requests WHERE bot=? AND state='pending' ORDER BY created,id"
+STATE_CONFIG_SQL = "SELECT config,repo FROM bot_config WHERE bot=?"
+STATE_RUNNER_SQL = ("SELECT r.id,r.label,r.last_seen_at,r.revoked_at,r.readiness,r.capabilities FROM assignments a "
+                    "JOIN runners r ON r.id=a.runner_id WHERE a.bot=?")
+REQUESTS_SQL = "SELECT * FROM bot_tool_requests WHERE bot=? AND state='pending' ORDER BY created_at,id"
 
 
 def prime_state(c, bots):
@@ -266,15 +270,19 @@ def prime_state(c, bots):
     for part in H.chunks(sorted(set(bots))):
         marks = ",".join("?" * len(part))
         configs = {r["bot"]: r for r in c.execute(
-            f"SELECT bot,config_json,repo FROM bot_config WHERE bot IN ({marks})", part)}
+            f"SELECT bot,config,repo FROM bot_config WHERE bot IN ({marks})", part)}
         prime(c, STATE_CONFIG_SQL, {(s,): configs.get(s) for s in part})
         runners = {r["bot"]: r for r in c.execute(
-            "SELECT a.bot,r.label,r.last_seen,r.revoked_at,r.readiness_json FROM assignments a "
+            "SELECT a.bot,r.id,r.label,r.last_seen_at,r.revoked_at,r.readiness,r.capabilities FROM assignments a "
             f"JOIN runners r ON r.id=a.runner_id WHERE a.bot IN ({marks})", part)}
         prime(c, STATE_RUNNER_SQL, {(s,): runners.get(s) for s in part})
+        # The same computers, for the subscription lookups each Model row may make.
+        prime(c, model_subscriptions.RUNNER_READINESS_SQL, {(r["id"],): r for r in runners.values()})
+        prime(c, model_subscriptions.RUNNER_CAPABILITIES_SQL,
+              {(r["id"],): None if r["revoked_at"] else r for r in runners.values()})
         requests = {}
         for r in c.execute(f"SELECT * FROM bot_tool_requests WHERE bot IN ({marks}) AND state='pending' "
-                           "ORDER BY created,id", part):
+                           "ORDER BY created_at,id", part):
             requests.setdefault(r["bot"], []).append(r)
         prime_rows(c, REQUESTS_SQL, {(s,): requests.get(s, ()) for s in part})
 
@@ -282,17 +290,17 @@ def prime_state(c, bots):
 def _state(c, settings, bot):
     from .read_cache import one
     row = one(c, STATE_CONFIG_SQL, (bot,))
-    config = H._json(row["config_json"], {}) if row else {}
+    config = H._json(row["config"], {}) if row else {}
     config = config if isinstance(config, dict) else {}
     runner = one(c, STATE_RUNNER_SQL, (bot,))
-    readiness = readiness_document(runner["readiness_json"]) if runner else {}
+    readiness = readiness_document(runner["readiness"]) if runner else {}
     report = (readiness.get("bots") or {}).get(bot)
     report = report if isinstance(report, dict) else {}
     label = (runner["label"] if runner else "") or "its computer"
     external = resolve_harness(config) in EXTERNAL_HARNESSES
-    agent = c.execute("SELECT profile,last_seen,revoked_at FROM agents WHERE bot=?", (bot,)).fetchone() if external else None
+    agent = c.execute("SELECT profile,last_seen_at,revoked_at FROM agents WHERE bot=?", (bot,)).fetchone() if external else None
     if external:
-        stored = c.execute("SELECT value_json FROM registry_metadata WHERE key=?", ("agent-tools:" + bot,)).fetchone()
+        stored = c.execute("SELECT value FROM registry_metadata WHERE key=?", ("agent-tools:" + bot,)).fetchone()
         report = H._json(stored[0], {}) if stored else {}
         label = (agent["profile"] if agent else "") or "its external profile"
     used = {"model", "repo"}
@@ -303,7 +311,7 @@ def _state(c, settings, bot):
 
 def _requests(c, bot):
     from .read_cache import rows
-    return [dict(row, entry=H._json(row["entry_json"], {}) or {}) for row in rows(c, REQUESTS_SQL, (bot,))]
+    return [dict(row, entry=H._json(row["entry"], {}) or {}) for row in rows(c, REQUESTS_SQL, (bot,))]
 
 
 def _pending_tool(request):
@@ -320,10 +328,11 @@ def _pending_tool(request):
 def listing(c, settings, bot, reads=None):
     """Everything the row shows for one bot, from records this server already holds. `reads` (a repositories.Reads
     covering `bot`) when the caller lists many bots."""
+    slug = (H.bot(c, bot) or {}).get("slug") or bot
     state = _state(c, settings, bot)
     runner, report, label = state["runner"], state["report"], state["label"]
-    online = bool(runner and not runner["revoked_at"] and runner["last_seen"]
-                  and runner["last_seen"] > H.shift(H.now(), seconds=-ONLINE_WITHIN_S))
+    online = bool(runner and not runner["revoked_at"] and runner["last_seen_at"]
+                  and runner["last_seen_at"] > H.shift(H.now(), seconds=-ONLINE_WITHIN_S))
     declared = state["declared"]
     external = resolve_harness(state["config"]) in EXTERNAL_HARNESSES
     if external:
@@ -351,16 +360,16 @@ def listing(c, settings, bot, reads=None):
         for tool, entry in zip(declared, state["raw"]):
             if google(entry):
                 tool.update(status="problem", held=True, detail="", problem=(
-                    f"{label} holds the Google key, but {bot} is nobody's message bot on the server, so its runs get no mail "
+                    f"{label} holds the Google key, but {slug} is nobody's message bot on the server, so its runs get no mail "
                     "token. An owner or admin names it: POST /api/v2/access/people/<person> "
-                    '{"inbox_bot": "' + bot + '", "mailbox": "<address>"}'))
+                    '{"inbox_bot": "' + slug + '", "mailbox": "<address>"}'))
     adding = [_pending_tool(r) for r in requests if r["kind"] == "add"
               and not any(_same(entry, r["entry"]) for entry in state["raw"])]
     if external:
         for tool in adding:
             tool["detail"] = "Waiting for this external profile to configure and report the tool"
-    tools = [_model_tool(c, settings, bot, state["config"], state["readiness"], label)]
-    repo = _repo_tool(settings, bot, state["row"] and state["row"]["repo"], report)
+    tools = [_model_tool(c, settings, bot, state["config"], state["readiness"], label, state["runner"])]
+    repo = _repo_tool(settings, slug, state["row"] and state["row"]["repo"], report)
     if repo:
         matching = next((tool for tool in declared if tool["service"].lower() in ("github", "github-app")
                          and str(tool["scope"].get("repo") or tool["identity"]).lower() == repo["identity"].lower()), None)
@@ -388,8 +397,8 @@ def listing(c, settings, bot, reads=None):
                       "detail": "Granted repository"})
     agent = state["agent"]
     if agent:
-        online = bool(not agent["revoked_at"] and agent["last_seen"] and
-                      agent["last_seen"] > H.shift(H.now(), seconds=-180))
+        online = bool(not agent["revoked_at"] and agent["last_seen_at"] and
+                      agent["last_seen_at"] > H.shift(H.now(), seconds=-180))
     report_error = next((warning for warning in report.get("warnings") or []
                          if warning.startswith("Tool report rejected: ")), "")
     for tool in adding:
@@ -397,7 +406,7 @@ def listing(c, settings, bot, reads=None):
             tool.update(status="problem", problem=report_error, detail=report_error)
     return {"bot": bot, "tools": tools + declared + adding, **({"report_error": report_error} if report_error else {}),
             "computer": label if runner else None, "online": online,
-            "reported_at": runner["last_seen"] if runner else report.get("reported_at")}
+            "reported_at": runner["last_seen_at"] if runner else report.get("reported_at")}
 
 
 # ----------------------------------------------------------------------------- registering
@@ -431,10 +440,11 @@ def _task_text(verb, bot, name, entry, computer, repo=None):
 
 def _request_task(c, auth, who, verb, bot, name, entry, computer, taken, repo=None, title_prefix=""):
     from . import getting_started as G
-    external = resolve_harness(H._json(c.execute("SELECT config_json FROM bot_config WHERE bot=?", (bot,)).fetchone()[0], {})) in EXTERNAL_HARNESSES
+    external = resolve_harness(H._json(c.execute("SELECT config FROM bot_config WHERE bot=?", (bot,)).fetchone()[0], {})) in EXTERNAL_HARNESSES
     if not external:
         G._botops(c)
-    title = f"{VERBS[verb][0]} {name} access {VERBS[verb][1]} {bot}"
+    slug = (H.bot(c, bot) or {}).get("slug") or bot
+    title = f"{VERBS[verb][0]} {name} access {VERBS[verb][1]} {slug}"
     if title_prefix:
         title = title_prefix.strip() + " " + title
     if taken:
@@ -447,11 +457,12 @@ def _request_task(c, auth, who, verb, bot, name, entry, computer, taken, repo=No
                 "hub_tool_report (or python3 hermes_agent.py call --profile <name> hub_tool_report '{\"tools\": [...]}'). "
                 "Use an empty list when the last tool was removed. Then finish this task.")
         return G._task(c, auth, who, bot, title, text)
-    return G._task(c, auth, who, G.BOTOPS, title, _task_text(verb, bot, name, entry, computer, repo))
+    return G._task(c, auth, who, G.BOTOPS, title, _task_text(verb, slug, name, entry, computer, repo))
 
 
 def register(c, auth, settings_admin, settings, who, bot, body):
     auth.domain(who)
+    bot = (H.resolve_bot(c, bot) or {}).get("id", bot)
     settings_admin._manager(c, who, bot, botops=True)      # Auth.bot_manager, or BotOps' own run
     if not H.bot(c, bot):
         raise Problem("not_found", "Bot not found", 404)
@@ -471,7 +482,7 @@ def register(c, auth, settings_admin, settings, who, bot, body):
     task = _request_task(c, auth, who, "add", bot, name, entry, state["runner"] and state["label"], taken,
                          state["row"] and state["row"]["repo"], body.title_prefix)
     rid = H.new_id()
-    c.execute("INSERT INTO bot_tool_requests(id,bot,kind,service,identity,entry_json,task_id,requested_by,created) "
+    c.execute("INSERT INTO bot_tool_requests(id,bot,kind,service,identity,entry,task_id,requested_by,created_at) "
               "VALUES(?,?,?,?,?,?,?,?,?)", (rid, bot, "add", entry["service"], entry.get("identity", ""), encode(entry),
                                             task["id"], who.actor, H.now()))
     H.event(c, who.actor, "bot.tool_requested", bot, {"service": entry["service"], "task": task["id"]})
@@ -483,6 +494,7 @@ def register(c, auth, settings_admin, settings, who, bot, body):
 
 def unregister(c, auth, settings_admin, settings, who, bot, tool_id):
     auth.domain(who)
+    bot = (H.resolve_bot(c, bot) or {}).get("id", bot)
     settings_admin._manager(c, who, bot, botops=True)      # Auth.bot_manager, or BotOps' own run
     if not H.bot(c, bot):
         raise Problem("not_found", "Bot not found", 404)
@@ -491,11 +503,11 @@ def unregister(c, auth, settings_admin, settings, who, bot, tool_id):
         found = next((r for r in requests if "pending-" + r["id"] == tool_id and r["kind"] == "add"), None)
         if not found:
             raise Problem("not_found", "That request is not waiting any more", 404)
-        c.execute("UPDATE bot_tool_requests SET state='cancelled' WHERE id=?", (found["id"],))
+        c.execute("UPDATE bot_tool_requests SET state='canceled' WHERE id=?", (found["id"],))
         H.task_close(c, H.KEEPER, found["task_id"], note="Tool request withdrawn; do not apply this change.")
         c.execute("UPDATE tasks SET version=version+1 WHERE id=?", (found["task_id"],))
-        H.event(c, who.actor, "bot.tool_request_cancelled", bot, {"service": found["service"], "task": found["task_id"]})
-        return {"cancelled": True, "task_id": found["task_id"],
+        H.event(c, who.actor, "bot.tool_request_canceled", bot, {"service": found["service"], "task": found["task_id"]})
+        return {"canceled": True, "task_id": found["task_id"],
                 "detail": "The request is withdrawn. If BotOps already added the entry it stays until you remove it."}
     if tool_id in ("model", "repo"):
         raise Problem("tool", "A bot always has read, write, issues and pull requests on its own repository, and its model is chosen in "
@@ -518,7 +530,7 @@ def unregister(c, auth, settings_admin, settings, who, bot, tool_id):
     name = service_name(entry["service"])
     task = _request_task(c, auth, who, "remove", bot, name, flat, state["label"], taken,
                          state["row"] and state["row"]["repo"])
-    c.execute("INSERT INTO bot_tool_requests(id,bot,kind,service,identity,entry_json,task_id,requested_by,created) "
+    c.execute("INSERT INTO bot_tool_requests(id,bot,kind,service,identity,entry,task_id,requested_by,created_at) "
               "VALUES(?,?,?,?,?,?,?,?,?)", (H.new_id(), bot, "remove", entry["service"], entry.get("identity", ""),
                                             encode(entry), task["id"], who.actor, H.now()))
     H.event(c, who.actor, "bot.tool_removal_requested", bot, {"service": entry["service"], "task": task["id"]})
@@ -553,6 +565,7 @@ def update(c, auth, settings_admin, settings, who, bot, tool_id, body):
     """Change a declared tool in place: only `can`, `scope`, `note` and an MCP server's `mcp` block. The server holds no bot repository, so this is
     the add path's way: a pending request and one task for BotOps with the whole changed entry. Nothing is removed."""
     auth.domain(who)
+    bot = (H.resolve_bot(c, bot) or {}).get("id", bot)
     settings_admin._manager(c, who, bot, botops=True)      # Auth.bot_manager, or BotOps' own run
     if not H.bot(c, bot):
         raise Problem("not_found", "Bot not found", 404)
@@ -590,7 +603,7 @@ def update(c, auth, settings_admin, settings, who, bot, tool_id, body):
                       (bot, entry["service"])).fetchone()[0]
     task = _request_task(c, auth, who, "update", bot, service_name(entry["service"]), entry, state["label"], taken,
                          state["row"] and state["row"]["repo"], body.title_prefix)
-    c.execute("INSERT INTO bot_tool_requests(id,bot,kind,service,identity,entry_json,task_id,requested_by,created) "
+    c.execute("INSERT INTO bot_tool_requests(id,bot,kind,service,identity,entry,task_id,requested_by,created_at) "
               "VALUES(?,?,?,?,?,?,?,?,?)", (H.new_id(), bot, "update", entry["service"], entry.get("identity", ""),
                                             encode(entry), task["id"], who.actor, H.now()))
     H.event(c, who.actor, "bot.tool_update_requested", bot, {"service": entry["service"], "task": task["id"]})
@@ -613,7 +626,7 @@ def reconcile(c, reported, complete=False):
                 settled = any(_same(entry, request["entry"]) and _changed(request["entry"], entry) for entry in raw)
             else:
                 settled = listed if request["kind"] == "add" else (not listed and (
-                    complete or raw or request["created"] < H.shift(H.now(), seconds=-600)))
+                    complete or raw or request["created_at"] < H.shift(H.now(), seconds=-600)))
             if settled:
                 c.execute("UPDATE bot_tool_requests SET state='done' WHERE id=?", (request["id"],))
 
@@ -628,6 +641,7 @@ def install(app, store, auth, mutate, settings_admin, requester=None):
         who = request.state.identity
         auth.domain(who)
         with store.read() as c:
+            bot = (H.resolve_bot(c, bot) or {}).get("id", bot)
             auth.require_read(c, who, bot)      # a 404 for someone who cannot even see the bot
             if not H.bot(c, bot):
                 raise Problem("not_found", "Bot not found", 404)

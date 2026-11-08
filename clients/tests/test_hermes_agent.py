@@ -305,7 +305,7 @@ class Pair(Base):
         self.assertEqual(stat.S_IMODE((self.profile / ".env").stat().st_mode), 0o600)
         self.assertIn("mcp_servers", (self.profile / "config.yaml").read_text())
         self.assertEqual(stat.S_IMODE((self.config_dir / "scout.json").stat().st_mode), 0o600)
-        self.assertEqual(self.credential()["bot"], "scout")
+        self.assertEqual(self.credential()["bot_id"], "scout")
         self.assertEqual(self.hub.count("/api/v2/agents/heartbeat"), 1)
         self.assertTrue((self.home / "Library/LaunchAgents/team.tico-agent.scout.plist").exists())
         self.assertTrue(self.fake.ran("launchctl", "bootstrap"))
@@ -384,6 +384,17 @@ class Doctor(Base):
         jobs.write_text(json.dumps(data) + "\n")
         (self.profile / "memories").mkdir()
         (self.profile / "memories" / "MEMORY.md").write_text("- a\n- mark with hub_ack, status via hub_status_set\n")
+
+class OldCredential(Base):
+    def test_a_credential_file_saved_with_bot_still_loads_as_bot_id(self):
+        path = self.config_dir / "scout.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps({"url": "http://hub", "bot": "scout", "slug": "scout", "token": TOKEN}))
+        path.chmod(0o600)
+        config = H.load_config("scout")
+        self.assertEqual(config["bot_id"], "scout")
+        self.assertNotIn("bot", config)
+
 
 class OldLabels(Base):
     def old_plist(self, label, program="hermes_agent.py", profile="scout"):
@@ -503,7 +514,7 @@ class Sync(Base):
         self.assertEqual(code, 0, err)
         self.assertIn("WARNING: the sync job is not in place", out)
         self.assertIn("no scheduler", out)
-        self.assertEqual(self.credential()["bot"], "scout")
+        self.assertEqual(self.credential()["bot_id"], "scout")
         code, out, err = self.run_cli("doctor", "--profile", "scout")
         self.assertEqual(code, 1)
         self.assertIn("the sync job was not created", out)
@@ -592,7 +603,7 @@ class OpenClaw(Base):
         self.assertFalse((self.state / "config.yaml").exists())
         self.assertIn("no MCP entry in OpenClaw", out)
         saved = json.loads((self.config_dir / "openclaw-claw.json").read_text())
-        self.assertEqual((saved["bot"], saved["harness"], saved["sync"]), ("claw", "openclaw", "1h"))
+        self.assertEqual((saved["bot_id"], saved["harness"], saved["sync"]), ("claw", "openclaw", "1h"))
         self.assertEqual(stat.S_IMODE((self.config_dir / "openclaw-claw.json").stat().st_mode), 0o600)
         # The skill, rendered for this profile, in OpenClaw's managed skills folder.
         text = (self.state / "skills" / "tico-sync" / "SKILL.md").read_text()
@@ -674,7 +685,7 @@ class OpenClaw(Base):
         self.assertTrue((self.state / "skills" / "tico-sync" / "SKILL.md").is_file())
         self.assertEqual([j["name"] for j in self.jobs()], ["tico-sync"])
         saved = json.loads((self.config_dir / "openclaw-claw.json").read_text())
-        self.assertEqual((saved["bot"], saved["heartbeat_mode"], saved["sync"]), ("claw", "manual", "1h"))
+        self.assertEqual((saved["bot_id"], saved["heartbeat_mode"], saved["sync"]), ("claw", "manual", "1h"))
         self.assertIn(self.REFUSED, saved["timer_error"])
         self.assertNotIn("timer", saved)
         self.assertFalse((self.home / self.PLIST).exists(), "no half-installed plist is left for the next login")

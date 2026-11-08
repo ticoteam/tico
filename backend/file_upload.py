@@ -12,7 +12,7 @@ from .store import Problem
 
 
 async def parser_work(fn, *args):
-    # A cancelled request must not close spools while a worker is still writing.
+    # A canceled request must not close spools while a worker is still writing.
     worker = asyncio.create_task(asyncio.to_thread(fn, *args))
     try:
         return await asyncio.shield(worker)

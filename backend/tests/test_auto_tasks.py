@@ -14,7 +14,7 @@ def deck(api, n=5):
                                 'step': typ['steps'][0]['id']}) for i in range(n)]
     # These old assignments have no pending notice: they previously needed a person's nudge.
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE jobs SET state='cancelled'")
+        c.execute("UPDATE jobs SET state='canceled'")
         for i, task in enumerate(tasks):
             c.execute('UPDATE tasks SET rank=? WHERE id=?', (n-i, task['id']))
     return tasks
@@ -115,7 +115,7 @@ def test_review_children_are_independent_and_uncapped_but_computer_capacity_stil
     children = [post(api, 'tasks', {'owner': 'ops', 'title': f'Review change {i}', 'body': 'Review the change.',
                  'relations': [{'kind': 'parent', 'task': parent['id']}]}) for i in range(11)]
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE jobs SET state='cancelled'")
+        c.execute("UPDATE jobs SET state='canceled'")
     set_cap(api, 1)
     attempts = [take(api, machine) for _ in range(10)]
     assert all(attempts), 'the optional task cap never holds review children'
@@ -160,9 +160,9 @@ def test_a_bot_limited_to_one_task_starts_only_it_and_queues_no_other_start(api)
 
     def starts():
         with api.app.state.store.read() as c:
-            return {r[0] for r in c.execute("SELECT json_extract(m.refs_json,'$.task') FROM jobs j "
-                                            "JOIN messages m ON m.id=j.message_id WHERE j.bot='ops' "
-                                            "AND j.state='queued' AND json_extract(m.refs_json,'$.auto_start')")}
+            return {r[0] for r in c.execute("SELECT json_extract(m.refs,'$.task') FROM jobs j "
+                                            "JOIN messages m ON m.id=j.message_id WHERE j.bot_id='ops' "
+                                            "AND j.state='queued' AND json_extract(m.refs,'$.auto_start')")}
 
     control(action='scope', task_id=tasks[0]['id'])           # ranked last: the higher ranked two stay queued
     assert take(api, machine)['task']['id'] == tasks[0]['id']

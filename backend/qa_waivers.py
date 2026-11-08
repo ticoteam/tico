@@ -38,7 +38,7 @@ def _reviews(c, row, head):
         name = found["name"]
         if child["status"] in H.ACTIVE_STATUSES:
             return f"{name} is still open (task {child['id']}); a waiver comes after the reviews"
-        if name not in latest or (child.get("created") or "") >= (latest[name].get("created") or ""):
+        if name not in latest or (child.get("created_at") or "") >= (latest[name].get("created_at") or ""):
             latest[name] = child
     if not slots:
         return "the ticket's board has no review step, so no review can cover this head"
@@ -100,7 +100,7 @@ def waive(c, actor, task_id, head, reason, step=None, snapshots=None, manager=Fa
     if not H.is_human(actor):
         _refuse(c, actor, row, "A QA waiver is a person's decision: the ticket's owner or a manager records it. "
                                "A bot asks QA for a verdict instead.", "identity")
-    if actor != row["owner"] and not manager:
+    if actor != row["owner_id"] and not manager:
         _refuse(c, actor, row, "Only the ticket's owner or a manager may waive its QA step.", "identity")
     if not review_gate.engineering(c, row):
         _refuse(c, actor, row, "Only a Dev ticket's QA step can be waived.")
@@ -140,8 +140,8 @@ def waive(c, actor, task_id, head, reason, step=None, snapshots=None, manager=Fa
                                    f"({detail.get('why') or 'GitHub read failed'}); retry.")
         # The read ran outside the write lock: a push recorded since then makes it stale, as for a review move
         # (review_gate.check). An older cache never overrides a newer read.
-        cached = str((H._json(pr.get("detail_json"), {}) or {}).get("head_sha") or "").lower()
-        if (pr.get("updated") or "") > (detail.get("at") or "") and cached != str(detail.get("head_sha") or "").lower():
+        cached = str((H._json(pr.get("detail"), {}) or {}).get("head_sha") or "").lower()
+        if (pr.get("updated_at") or "") > (detail.get("at") or "") and cached != str(detail.get("head_sha") or "").lower():
             _refuse(c, actor, row, f"{pr['url']} changed while GitHub was read (now {cached[:12] or 'unknown'}); "
                                    "retry the waiver.")
         reads.append((pr, detail))
@@ -167,8 +167,8 @@ def waive(c, actor, task_id, head, reason, step=None, snapshots=None, manager=Fa
         _refuse(c, actor, row, f"QA is already waived for {head[:12]} on this ticket.", "duplicate")
     record = {"head": head, "step": current, "pr": pr["url"]}
     H._task_event(c, row["id"], actor, FIELD, None, json.dumps(record, sort_keys=True), reason)
-    if row["owner"] != actor:
-        H._wake(c, row, row["owner"], f"{H.actor_id(actor)} waived QA for {pr['url']} at head {head}: {reason}\n\n"
+    if row["owner_id"] != actor:
+        H._wake(c, row, row["owner_id"], f"{H.actor_name(c, actor)} waived QA for {pr['url']} at head {head}: {reason}\n\n"
                 "This is a waiver, not a QA pass: no QA verdict was recorded. CI and both reviews stay required, "
                 "and the waiver covers this exact head only.", refs={"qa_waiver": head})
     return next(w for w in waivers(c, row) if w["head"] == head)
@@ -182,11 +182,11 @@ def waivers(c, row, links=None):
     heads = {}
     for link in H.task_links(c, row["id"]) if links is None else links:
         if link["kind"] == "pr":
-            heads[link["url"]] = str((H._json(link.get("detail_json"), {}) or {}).get("head_sha") or "").lower()
+            heads[link["url"]] = str((H._json(link.get("detail"), {}) or {}).get("head_sha") or "").lower()
     out = []
-    for e in c.execute("SELECT * FROM task_events WHERE task_id=? AND field=? ORDER BY ts, rowid", (row["id"], FIELD)):
+    for e in c.execute("SELECT * FROM task_events WHERE task_id=? AND field=? ORDER BY created_at, rowid", (row["id"], FIELD)):
         record = H._json(e["new"], {}) or {}
         out.append({"head": record.get("head"), "step": record.get("step"), "pr": record.get("pr"),
-                    "actor": e["actor"], "reason": e["note"], "at": e["ts"],
+                    "actor": e["actor"], "reason": e["note"], "at": e["created_at"],
                     "current": bool(record.get("head")) and heads.get(record.get("pr")) == record.get("head")})
     return out

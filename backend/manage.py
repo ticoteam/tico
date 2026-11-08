@@ -31,7 +31,7 @@ def registry_dir():
 def bots_by_operator(c):
     """Who hosts what after an import, so an operator can check the split at a glance."""
     result = {}
-    for bot, operator in c.execute("SELECT bot,operator FROM bot_config ORDER BY operator,bot"):
+    for bot, operator in c.execute("SELECT bot,owner_id FROM bot_config ORDER BY owner_id,bot"):
         result.setdefault(operator, []).append(bot)
     return result
 
@@ -72,15 +72,14 @@ def migrate_legacy(source, destination, runtime, projects, *, queue_backlog=Fals
     if not seeded:
         store.seed(entries=entries)
     with store.transaction() as c:
-        # Legacy bot tokens, machine paths, runtime hosts and provider sessions
-        # are local capabilities/history, never cloud execution credentials.
-        c.execute("UPDATE bots SET token_hash=NULL,thread_id=NULL,cwd='',host='remote'")
+        # Legacy provider sessions are local history, never cloud execution credentials. The bot's machine path,
+        # its host and any token are no longer stored on bots at all (migration 0043).
         c.execute("DELETE FROM rate_limits")
         H.event(c, H.KEEPER, "legacy.execution_fenced", "database",
                 {"source_sha256": source_report["sha256"]})
     with store.read() as c:
         pending_messages = c.execute(
-            "SELECT count(*) FROM messages WHERE to_actor LIKE 'bot:%' AND delivered_at IS NULL"
+            "SELECT count(*) FROM messages WHERE recipient_id LIKE 'bot:%' AND delivered_at IS NULL"
         ).fetchone()[0]
     if queue_backlog:
         store.enqueue_existing()
@@ -96,15 +95,13 @@ def migrate_legacy(source, destination, runtime, projects, *, queue_backlog=Fals
                  "queued_jobs": c.execute("SELECT count(*) FROM jobs WHERE state='queued'").fetchone()[0],
                  "assignments": c.execute("SELECT count(*) FROM assignments").fetchone()[0],
                  "runners": c.execute("SELECT count(*) FROM runners").fetchone()[0],
-                 "legacy_tokens": c.execute("SELECT count(*) FROM bots WHERE token_hash IS NOT NULL").fetchone()[0],
-                 "legacy_paths": c.execute("SELECT count(*) FROM bots WHERE cwd<>'' OR host<>'remote'").fetchone()[0],
                  "bots_by_operator": bots_by_operator(c)}
-        if state["assignments"] or state["runners"] or state["legacy_tokens"] or state["legacy_paths"]:
+        if state["assignments"] or state["runners"]:
             raise RuntimeError("Legacy execution authority was not fully fenced")
         manifest = {"format": "tico-legacy-import-v1", "source": str(source),
                     "source_sha256": source_report["sha256"], "history": counts,
                     "archives": archives, "execution": state}
-        c.execute("INSERT INTO registry_metadata VALUES('legacy-import',?) ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json",
+        c.execute("INSERT INTO registry_metadata VALUES('legacy-import',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
                   (encode(manifest),))
     # Produce one portable file for transfer. The cloud server will return it to WAL mode on
     # first startup, but no accepted migration write may remain only in a local sidecar.
@@ -242,20 +239,21 @@ def main(argv=None):
             fd = os.open(args.out, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
             with os.fdopen(fd, "w") as stream:
                 json.dump(code, stream)
-        report = {"written": str(args.out), "expires": code["expires"]}
+        report = {"written": str(args.out), "expires": code["expires_at"]}
     elif args.command == "set-repo":
         from .models import repo_reference
         store = Store(Settings(db_path=args.database, registry_dir=registry_dir()))
         repo = repo_reference(args.repo)
         with store.transaction() as c:
-            row = c.execute("SELECT config_json FROM bot_config WHERE bot=?", (args.bot,)).fetchone()
+            bot = (H.resolve_bot(c, args.bot) or {}).get("id", args.bot)
+            row = c.execute("SELECT config FROM bot_config WHERE bot=?", (bot,)).fetchone()
             if not row:
                 raise SystemExit("Unknown bot: " + args.bot)
-            config = {**json.loads(row["config_json"] or "{}"), "repo": repo}
-            c.execute("UPDATE bot_config SET repo=?,config_json=?,revision=revision+1 WHERE bot=?",
-                      (repo, encode(config), args.bot))
-            H.event(c, H.KEEPER, "bot.repo_set", args.bot, {"repo": repo})
-        report = {"bot": args.bot, "repo": repo,
+            config = {**json.loads(row["config"] or "{}"), "repo": repo}
+            c.execute("UPDATE bot_config SET repo=?,config=?,revision=revision+1 WHERE bot=?",
+                      (repo, encode(config), bot))
+            H.event(c, H.KEEPER, "bot.repo_set", bot, {"repo": repo})
+        report = {"bot": bot, "repo": repo,
                   "repo_url": repo_url(repo, store.settings.github_owner)}
     elif args.command == "delete-tasks":
         from .task_delete import delete_tasks

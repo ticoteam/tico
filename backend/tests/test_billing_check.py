@@ -68,7 +68,7 @@ def age(api, hours):
     with api.app.state.store.transaction() as c:
         stored = B._row(c)
         stored["failing_since"] = stamp(hours)
-        c.execute("UPDATE registry_metadata SET value_json=? WHERE key=?", (json.dumps(stored), B.KEY))
+        c.execute("UPDATE registry_metadata SET value=? WHERE key=?", (json.dumps(stored), B.KEY))
 
 
 def test_15_a_seeded_mismatch_is_a_red_health_item_naming_the_company_and_the_dollar_difference(api, hq):

@@ -39,7 +39,7 @@ def task_days_of(body, key="task_days"):
 def _flow(row, rule_text, days, before=None):
     title = " ".join(str(rule_text or "").split())
     owner = "person:" + row["owner"][6:] if row["owner"].startswith("human:") else row["owner"]
-    trigger = {"type": "due", "first_due": row["first_due"], "repeats": row["repeats"], "open_days": days,
+    trigger = {"type": "due", "first_due": row["first_due_on"], "repeats": row["repeats"], "open_days": days,
                "tz": row["timezone"], "rule_due_id": row["id"]}
     step = {"id": STEP_ID, "type": "action", "do": "create_task",
             "args": {"title": title[:TITLE_MAX], "owner": row["owner"]}}

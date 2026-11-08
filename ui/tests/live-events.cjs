@@ -1,10 +1,11 @@
 // Live events (ui/app/live.js, GET /api/v2/events), offline: the fixture holds each stream open until the test sends
 // what changed, as the server does when a write commits.
-//  - the chat follows its conversation on the page's one stream and reads its snapshot once per change, not on a timer;
+//  - the Assistant's chat follows its conversation on the page's one stream and reads its snapshot once per change, not
+//    on a timer;
 //  - the Needs-you count beside a bot follows the `needs` topic: the event names what changed, and only that is read;
 //  - the task board takes a task changed or created elsewhere from the event itself, without reading the list again,
 //    and does not redraw for a write that shows nothing new (a worktree heartbeat); a bot's page is sent only its tasks',
-//    a page with no task on it none;
+//    a page with no task on it (the Assistant's) none;
 //  - each reconnect resumes from the last change number;
 //  - the 2-minute refresh asks only for the tasks changed since the list's cursor and applies them, and asks for the
 //    labels with the tag it was given (a 304 then).
@@ -13,19 +14,33 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const {html, uiFile} = require('./support/page.cjs');
 const {unrouted} = require('./support/routes.cjs');
+const {assistantView} = require('./support/assistant-chat.cjs');
+const {threadsFake} = require('./support/threads-fake.cjs');
 const {t} = (() => { try { return require('./support/load.cjs'); } catch { return {t: ms => ms}; } })();   // load.cjs arrives with #254
 
 const now = new Date().toISOString();
-const task = over => ({id: 't1', title: 'Draft the release notes', body: 'Details.', owner: 'bot:ops', requester: 'human:ana',
-  status: 'doing', lane: 'company', labels: [], tags: [], links: [], parts: {total: 0, done: 0}, version: 3, created: now, updated: now, ...over});
+const task = over => ({id: 't1', title: 'Draft the release notes', body: 'Details.', owner_id: 'bot:ops', requester_id: 'human:ana',
+  status: 'doing', lane: 'company', labels: [], tags: [], links: [], parts: {total: 0, done: 0}, version: 3, created_at: now, updated_at: now, ...over});
 const block = (seq, event, data) => `id: ${seq}\nevent: ${event}\ndata: ${JSON.stringify({seq, ...data})}\n\n`;
 
 (async () => {
   const browser = await chromium.launch();
   const page = await browser.newPage({viewport: {width: 1300, height: 820}, serviceWorkers: 'block'});
+  // Counts the live event streams each document opens, so send() knows the newest one has reached the route.
+  await page.addInitScript(() => {
+    const Native = window.EventSource;
+    window.EventSource = class extends Native {
+      constructor(url, ...rest) {
+        super(url, ...rest);
+        if (new URL(url, location.href).pathname === '/api/v2/events') window.__liveStreams = (window.__liveStreams || 0) + 1;
+      }
+    };
+  });
+  const made = new Map();   // per document: event streams that reached the route
   const errors = [], streams = [], reads = {snapshot: 0, tasks: 0, active: 0, changed: [], labels: [], needs: []};
   page.on('pageerror', e => errors.push(e.message));
-  let snapshot = {messages: [{id: 'm1', from_actor: 'human:ana', body: 'Draft the release notes', created: now}], execution: null};
+  const threads = threadsFake({bot: 'ops'});
+  let snapshot = {messages: [{id: 'm1', sender_id: 'human:ana', body: 'Draft the release notes', created_at: now}], execution: null};
   await page.route('**/*', route => {
     const url = new URL(route.request().url()), p = url.pathname;
     const json = body => route.fulfill({contentType: 'application/json', body: JSON.stringify(body)});
@@ -35,12 +50,18 @@ const block = (seq, event, data) => `id: ${seq}\nevent: ${event}\ndata: ${JSON.s
       return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]), 'utf8')});
     if (p.endsWith('.js')) return route.fulfill({contentType: 'application/javascript', body: ''});
     if (p === '/api/me') return json({id: 'ana', name: 'Ana', role: 'owner', cloud: true, registered: true});
-    if (p === '/api/employees') return json([{name: 'ops', display_name: 'Ops', host: 'keeper', status: 'active', state: 'active', can_chat: true, schedules: []}]);
+    if (p === '/api/employees') return json([{name: 'coo', display_name: 'Assistant', host: 'keeper', status: 'active', state: 'active', can_chat: true, schedules: []},
+      {name: 'ops', display_name: 'Ops', host: 'keeper', status: 'active', state: 'active', can_chat: true, schedules: []}]);
     if (p === '/api/humans') return json({people: [{id: 'ana', name: 'Ana'}]});
     if (p === '/api/issues') return json([]);
-    if (p === '/api/v2/events') { streams.push({url, route}); return; }        // held open until the test sends
-    if (p === '/api/v2/conversations') return json({conversations: url.searchParams.get('chat_with')
-      ? [{id: 'c-ops', kind: 'chat', scope: 'personal', participants: ['human:ana', 'bot:ops']}] : []});
+    if (p === '/api/v2/events') {                                                        // held open until the test sends
+      const document = route.request().headers().referer;
+      made.set(document, (made.get(document) || 0) + 1);
+      streams.push({url, route, document}); return;
+    }
+    const answer = threads(p, url, route.request().method());
+    if (answer !== undefined) return json(answer);
+    if (p === '/api/v2/assistant') return json(assistantView('c-ops', snapshot));
     if (p === '/api/v2/conversations/c-ops/snapshot') { reads.snapshot++; return json(snapshot); }
     if (p === '/api/v2/tasks' && url.searchParams.get('changed_after')) {
       reads.changed.push(url.searchParams.get('changed_after'));
@@ -60,16 +81,22 @@ const block = (seq, event, data) => `id: ${seq}\nevent: ${event}\ndata: ${JSON.s
     if (p === '/api/v2/needs-you') {
       reads.needs.push(url.search);
       if (url.searchParams.get('ids') === 't9') return json({count: 1, version: 'v1', positions: {t9: 0}, items: [{id: 't9', kind: 'task',
-        title: 'Approve the notes', owner: 'human:ana', requester: 'bot:ops', status: 'open', created: now}]});
+        title: 'Approve the notes', owner_id: 'human:ana', requester_id: 'bot:ops', status: 'open', created_at: now}]});
       return json(url.searchParams.get('version') === 'v0' ? {count: 0, version: 'v0', unchanged: true} : {items: [], version: 'v0'});
     }
     return json(unrouted(p));
   });
-  // The newest stream the page holds that `match` accepts, answered with `blocks` (it then ends, and the page reconnects).
+  // Navigation and thread subscriptions can leave canceled routes queued. Deliver only to the page's active stream.
+  // A reconnect can reopen the same URL: wait until the page's newest EventSource has reached the route, or the
+  // blocks go to the closed one and are lost.
   const send = async (match, ...blocks) => {
     const deadline = Date.now() + t(8000);
+    const document = new URL(page.url()); document.hash = '';
     let stream;
-    while (!(stream = streams.filter(s => match(s.url)).at(-1))) {
+    for (;;) {
+      const [active, started] = await page.evaluate(() => [LIVE.es?.url, window.__liveStreams || 0]);
+      stream = streams.filter(s => s.document === document.href && s.url.href === active && match(s.url)).at(-1);
+      if (stream && (made.get(document.href) || 0) >= started) break;
       if (Date.now() > deadline) throw new Error('no stream: ' + streams.map(s => s.url.search).join(' | '));
       await new Promise(r => setTimeout(r, 50));
     }
@@ -80,15 +107,15 @@ const block = (seq, event, data) => `id: ${seq}\nevent: ${event}\ndata: ${JSON.s
   };
   const following = url => url.searchParams.get('conversation') === 'c-ops';
 
-  await page.goto('https://tico-ui.test/#/bot/ops/chat');
+  await page.goto('https://tico-ui.test/#/assistant');
   await page.waitForFunction(() => V2C?.rendered && V2C.liveOff);
   const opened = reads.snapshot;
 
   // The chat: one stream for the page, following this conversation; a change to it reads the snapshot once.
-  snapshot = {messages: [...snapshot.messages, {id: 'm2', from_actor: 'bot:ops', body: 'The notes are in the doc.', created: now}], execution: null};
+  snapshot = {messages: [...snapshot.messages, {id: 'm2', sender_id: 'bot:coo', body: 'The notes are in the doc.', created_at: now}], execution: null};
   const first = await send(following, block(10, 'ready', {}), block(11, 'messages', {id: 'm2', conversation_id: 'c-ops', message: snapshot.messages[1]}));
-  assert.deepEqual(first.searchParams.get('topics').split(',').sort(), ['bots', 'messages', 'needs', 'runs', 'tasks']);
-  assert.equal(first.searchParams.get('party'), 'bot:ops', "a bot's page is sent its own tasks' changes, not every task's");
+  assert.deepEqual(first.searchParams.get('topics').split(',').sort(), ['bots', 'messages', 'needs', 'runs', 'threads'], 'no task changes on a page with no task');
+  assert.equal(first.searchParams.get('party'), null);
   await page.getByText('The notes are in the doc.').waitFor();
   // Settled: no snapshot read queued, running or asked for again.
   await page.waitForFunction(() => !LIVE_SOON.has('chat:c-ops') && !V2C.reading && !V2C.readAgain, null, {timeout: t(5000)});
@@ -145,11 +172,11 @@ const block = (seq, event, data) => `id: ${seq}\nevent: ${event}\ndata: ${JSON.s
   await page.waitForFunction(() => !LIVE_SOON.has('tasks') && !LIVE_THROTTLE.get('tasks-bulk')?.timer, null, {timeout: t(5000)});   // the batch is applied
   assert.equal(reads.tasks, listed, 'a new task does not read the list again');
   // A computer's heartbeat on a worktree rewrites only the link's own time: the board is not drawn again.
-  const link = updated => ({kind: 'worktree', ref: 'wt-1', label: 'release-notes', updated});
+  const link = updated => ({kind: 'worktree', ref: 'wt-1', label: 'release-notes', updated_at: updated});
   const settled = () => page.waitForFunction(() => !LIVE_SOON.has('tasks') && !LIVE_THROTTLE.get('tasks-bulk')?.timer, null, {timeout: t(5000)});   // a throttled draw still due would count below
   await send(() => true, block(15, 'tasks', {id: 't1', actor: 'bot:ops', task: task({title: 'Draft the final release notes', version: 4, links: [link('a')]})}));
   // An empty queue can precede EventSource delivery; wait for the setup change before counting heartbeat draws.
-  await page.waitForFunction(() => TASKS_ST.tasks.find(x => x.id === 't1').links[0]?.updated === 'a', null, {timeout: t(5000)});
+  await page.waitForFunction(() => TASKS_ST.tasks.find(x => x.id === 't1').links[0]?.updated_at === 'a', null, {timeout: t(5000)});
   await settled();
   // Only draws the event itself makes count: on a loaded machine a page read started earlier (types, labels) can
   // still land and draw the board for its own reason.
@@ -161,10 +188,10 @@ const block = (seq, event, data) => `id: ${seq}\nevent: ${event}\ndata: ${JSON.s
     liveTasksApply = (...a) => { applying = true; try { return apply(...a); } finally { applying = false; } };
   });
   await send(() => true, block(16, 'tasks', {id: 't1', actor: 'bot:ops', task: task({title: 'Draft the final release notes', version: 4, links: [link('b')]})}));
-  await page.waitForFunction(() => TASKS_ST.tasks.find(x => x.id === 't1').links[0]?.updated === 'b', null, {timeout: t(5000)});   // settled alone can pass before the event is queued
+  await page.waitForFunction(() => TASKS_ST.tasks.find(x => x.id === 't1').links[0]?.updated_at === 'b', null, {timeout: t(5000)});   // settled alone can pass before the event is queued
   await settled();
   assert.equal(await page.evaluate(() => window.boardDraws), 0, 'a heartbeat-only change does not redraw the board');
-  assert.equal(await page.evaluate(() => TASKS_ST.tasks.find(x => x.id === 't1').links[0].updated), 'b', 'the list keeps the newest copy');
+  assert.equal(await page.evaluate(() => TASKS_ST.tasks.find(x => x.id === 't1').links[0].updated_at), 'b', 'the list keeps the newest copy');
 
   // The 2-minute refresh: only what changed since the list's cursor, applied in place; the labels come back as a 304.
   const active = reads.active;
@@ -182,17 +209,27 @@ const block = (seq, event, data) => `id: ${seq}\nevent: ${event}\ndata: ${JSON.s
   for (const width of [1280, 390]) {
     await page.setViewportSize({width, height: 820});
     // Each viewport gets a fresh stream: these finite fixture responses otherwise accumulate reconnect backoff.
-    await page.goto(`https://tico-ui.test/?tooltip=${width}#/bot/ops/chat`);
-    await page.waitForFunction(() => V2C?.rendered && V2C.liveOff);
+    await page.goto(`https://tico-ui.test/?tooltip=${width}#/bot/ops`);
+    await page.locator('.bot-ident [data-tip-bot="ops"]').waitFor();
+    // The thread's first render can scroll; a scroll intentionally dismisses a tooltip.
+    // Open it after that render and the thread subscription have settled.
+    await page.waitForFunction(() => BOT?.slug === 'ops' && [...THV_VIEWS]
+      .filter(v => v.host.isConnected).every(v => v.state !== 'loading'));
     await page.locator('.bot-ident [data-tip-bot="ops"]').focus();
     await page.locator('#bot-tip:not([hidden])').waitFor();
     assert.doesNotMatch(await page.locator('#bot-tip').innerText(), /Waiting for.*ChatGPT/);
     const waiting = 'Waiting for the ChatGPT login (held by Scribe on #7 Count the words since 19:06Z; position 2)';
-    await send(following, block(seq++, 'bots', {bot: 'ops', status: {bot: 'ops', state: 'waiting_bot', focus: waiting,
-      waiting, since: now, open_tasks: 1, needs_human: 0}}));
+    const onBotPage = await send(url => url.searchParams.get('party') === 'bot:ops', block(seq++, 'bots', {bot: 'ops', status: {bot: 'ops', state: 'waiting_bot', focus: waiting,
+      waiting, changed_at: now, open_tasks: 1, needs_human: 0}}));
+    assert.equal(onBotPage.searchParams.get('party'), 'bot:ops', "a bot's page is sent its own tasks' changes, not every task's");
     await page.waitForFunction(text => !document.querySelector('#bot-tip').hidden
-      && document.querySelector('#bot-tip').textContent.includes(text) && !LIVE_SOON.has('bots'), waiting);
-    await send(following, block(seq++, 'bots', {bot: 'ops', status: null}));
+      && document.querySelector('#bot-tip').textContent.includes(text) && !LIVE_SOON.has('bots'), waiting).catch(async error => {
+      console.error('tooltip live state', await page.evaluate(() => ({width: innerWidth,
+        hidden: document.querySelector('#bot-tip')?.hidden, text: document.querySelector('#bot-tip')?.textContent,
+        status: S.v2.status.ops, stream: LIVE.es?.url, cursor: LIVE.after, queued: [...LIVE_SOON.keys()]})));
+      throw error;
+    });
+    await send(() => true, block(seq++, 'bots', {bot: 'ops', status: null}));
     await page.waitForFunction(() => !document.querySelector('#bot-tip').hidden
       && !document.querySelector('#bot-tip').textContent.includes('Waiting for the ChatGPT') && !LIVE_SOON.has('bots'));
     assert.equal(await page.evaluate(() => S.v2.status.ops), undefined);

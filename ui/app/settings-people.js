@@ -71,7 +71,7 @@ async function renderSettingsPeople() {
   const el = $('#set-people'); if (!el) return;
   try {
     const view = await get('/v2/access');
-    if (!$('#set-people')) return;
+    if (!el.isConnected) return;   // Settings redrew while this loaded
     const owner = S.me?.role === 'owner', home = view.home_domain || '', added = PEOPLE_ADDED;
     PEOPLE_ADDED = '';                                     // the reminder shows once, right after the add
     const mode = PEOPLE_MODE || (view.directory ? 'sync' : 'manual');
@@ -222,7 +222,7 @@ async function renderSettingsPeople() {
       if (count >= 0 && count <= 50) change(() => put('/v2/access/rules', {[box.dataset.ruleCount]: count}), 'Saved', box);
       else settingsFieldError(box, 'Choose a number from 0 to 50.');
     });
-    $('#member-bot-limit').onchange = event => change(() => put('/v2/access/limits', {member_bot_limit: Number(event.target.value)}), 'Saved', event.target);
+    el.querySelector('#member-bot-limit').onchange = event => change(() => put('/v2/access/limits', {member_bot_limit: Number(event.target.value)}), 'Saved', event.target);
     el.querySelectorAll('.people-row').forEach(row => {
       const p = person(row.dataset.person), path = `/v2/access/humans/${encodeURIComponent(p.id)}`;
       const role = row.querySelector('[data-person-role]');

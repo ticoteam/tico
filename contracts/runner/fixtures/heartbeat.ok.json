@@ -17,10 +17,12 @@
     "mail_agent": false,
     "onboarding_state": null,
     "operator": "ana",
+    "owner_id": "ana",
     "repository": "",
     "runner_id": "00000000-0000-4000-8000-000000000001",
     "state": "active",
     "updated": "2026-01-01T00:00:00.000000Z",
+    "updated_at": "2026-01-01T00:00:00.000000Z",
     "updated_by": "human:ana"
    }
   ],

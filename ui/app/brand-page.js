@@ -3,8 +3,7 @@
    is the subsections on the left, one editor in the middle and a rail with the proposed changes (brand_draft proposals,
    decided through /api/v2/proposals), Check copy (POST /api/v2/brand/check) and the versions. The draft saves with its
    revision; a draft changed elsewhere (409) is read again and drawn as it is now. Publishing takes a note.
-   Also the draft, publish and versions pieces the go-to-market shares (Growth's Buyers and Learning, growth-buyers.js
-   and growth-learning.js), and the list editor's rows.
+   Also its draft, publish and versions pieces and the list editor's rows.
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
 'use strict';
 

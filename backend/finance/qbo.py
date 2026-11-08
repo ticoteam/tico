@@ -16,7 +16,7 @@ import urllib.request
 import uuid
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, cast
 
 from . import books_link
 from .core import mirror as M
@@ -30,7 +30,8 @@ OVERRIDE_HOSTS = frozenset({"127.0.0.1", "localhost", "::1", "sandbox-quickbooks
 NAMESPACE = M.REFERENCE_NAMESPACE      # RequestIds are uuid5 of the outbox key in this namespace (core/mirror.reference)
 TIMEOUT = 20
 TRIES_429 = 3
-MAX_WAIT = 30.0
+MAX_WAIT = 30.0                        # the longest wait a Retry-After header may ask for
+RATE_WAIT = 60.0                       # QuickBooks asks for 60 seconds before a throttled call is tried, when no Retry-After
 MAX_TEXT = 300
 PAGE = 1000                            # QuickBooks' most rows in one query or one change-feed entity
 MAX_PAGES = 100                        # a list of items larger than this is refused rather than read forever
@@ -143,6 +144,11 @@ class QuickBooks:
 
     entities: tuple[str, ...] = tuple(Q.PAGES)
     feeds: tuple[str, ...] = Q.ENTITIES
+    # A change feed the window or the cap cut short is not trusted: the books are read in full, and a record not returned
+    # by that read is deleted at the provider (mirror._sweep). The kinds a full read covers are the only ones swept; a
+    # job (a Customer read as a Project) is a project.
+    full_reread: bool = True
+    read_kinds: tuple[str, ...] = (*Q.ENTITIES, "Project")
 
     def __init__(self, realm: str, tokens: Callable[[bool], str], *, base: str | None = None,
                  transport: Transport | None = None, sleep: Callable[[float], None] = time.sleep) -> None:
@@ -151,6 +157,7 @@ class QuickBooks:
         self.transport = transport or _urllib
         self.sleep = sleep
         self._items: dict[str, dict[str, str]] | None = None      # one read of the items per pass, when a document needs it
+        self._per_line: bool | None = None                        # whether the company tracks a class on each line, read once
 
     def _call(self, method: str, path: str, *, query: Mapping[str, str] | None = None,
               body: Mapping[str, Any] | None = None, request_id: str = "") -> Reply:
@@ -179,7 +186,7 @@ class QuickBooks:
                 continue
             if reply.status == 429 and tries < TRIES_429:
                 tries += 1
-                self.sleep(min(max(reply.retry_after, 1.0), MAX_WAIT))
+                self.sleep(RATE_WAIT if reply.retry_after <= 0 else min(reply.retry_after, MAX_WAIT))
                 continue
             return reply
 
@@ -210,6 +217,21 @@ class QuickBooks:
                     return self._items
             return f"more than {MAX_PAGES * PAGE} items: the item list is too long to read"
         return self._items
+
+    def _line_classes(self) -> bool | str:
+        """Whether the company tracks a class on each transaction line (its Preferences), read once per client. A read that
+        does not say is an error and the write is tried again: nothing is sent that the company may not take."""
+        if self._per_line is None:
+            reply = self._call("GET", "preferences")
+            if reply.status != 200:
+                return _fault(reply.body, reply.status) if reply.status else "QuickBooks did not answer the preferences read"
+            prefs: dict[str, Any] = Q.as_map(reply.body.get("Preferences")) or {}
+            info: dict[str, Any] = Q.as_map(prefs.get("AccountingInfoPrefs")) or {}
+            flag = info.get("ClassTrackingPerTxnLine")
+            if not isinstance(flag, bool):
+                return "QuickBooks did not say whether classes are tracked on each transaction line"
+            self._per_line = flag
+        return self._per_line
 
     def _query(self, entity: str, start: int, size: int) -> Read:
         sql = f"SELECT * FROM {entity}{_where(entity)} STARTPOSITION {start} MAXRESULTS {size}"
@@ -288,7 +310,8 @@ class QuickBooks:
         key, so a retry does not make a second). One that sells to another account is refused, since the write-off
         would post there."""
         account = account_key.partition(":")[2]
-        found = self._call("GET", "query", query={"query": f"SELECT * FROM Item WHERE Name = '{Q.WRITE_OFF_ITEM}'"})
+        found = self._call("GET", "query", query={
+            "query": f"SELECT * FROM Item WHERE Active IN (true,false) AND Name = '{Q.WRITE_OFF_ITEM}'"})
         if found.status == 0:
             return Sent(False, error="QuickBooks did not answer")
         if found.status != 200:
@@ -330,7 +353,10 @@ class QuickBooks:
             where, mark = f"{field} = '{_quote(body['name'])}'" + (" AND Job = true" if op == "project.create" else ""), ""
         else:
             return None
-        reply = self._call("GET", "query", query={"query": f"SELECT * FROM {entity} WHERE {where} MAXRESULTS 1000"})
+        # An inactive record is found too: a retry that does not see it would create a second one under the same name.
+        active = "Active IN (true,false) AND " if entity in Q.ACTIVE_FILTERED else ""
+        reply = self._call("GET", "query", query={
+            "query": f"SELECT * FROM {entity} WHERE {active}{where} MAXRESULTS 1000"})
         if reply.status in (0, 429) or reply.status >= 500:
             return Sent(False, error="QuickBooks did not answer the lookup")
         if reply.status != 200:
@@ -361,6 +387,12 @@ class QuickBooks:
             if isinstance(found, str):
                 return Sent(False, error=found)
             items = found
+        if op in CLASS_OPS:
+            tracked = self._line_classes()
+            if isinstance(tracked, str):
+                return Sent(False, error=tracked)
+            if not tracked:
+                body = _without_classes(body)
         body = {**body, "marker": _marker(key)}
         if op == "writeoff.create":
             item = self._write_off_item(str(body["account"]), key)
@@ -386,6 +418,24 @@ class QuickBooks:
             # The estimate link is best effort: a refusal sends the invoice again without it, under its own request.
             return self._send(op, {k: v for k, v in body.items() if k != "linked_estimate"}, key, f"{key}:unlinked")
         return Sent(False, error=_fault(reply.body, reply.status), final=final)
+
+
+# The writes that carry a class on their lines (a journal's, a bill's or order's or estimate's, an invoice's).
+CLASS_OPS = ("journal.create", "bill.create", "invoice.create", "purchaseorder.create", "estimate.create")
+
+
+def _without_classes(body: Mapping[str, Any]) -> dict[str, Any]:
+    """The write with no line class: a company that does not track classes per line has no line to name one on."""
+    lines = body.get("lines")
+    if not isinstance(lines, list):
+        return dict(body)
+    kept: list[Any] = []
+    for x in cast(list[Any], lines):
+        if isinstance(x, dict):
+            kept.append({k: v for k, v in cast(dict[str, Any], x).items() if k not in ("class", "classes")})
+        else:
+            kept.append(x)
+    return {**body, "lines": kept}
 
 
 def _write_of(op: str, body: Mapping[str, Any],

@@ -32,7 +32,7 @@ def test_only_the_operator_or_an_admin_sets_or_opens_a_screen_and_only_once_the_
     post(api, f"computers/{rid}/screen", {"mode": "view"}, token="cara-test", expected=403)
     assert post(api, f"computers/{rid}/screen", {"mode": "view"}) == {"screen": "view", "screen_available": True}
     row = next(m for m in get(api, "operations")["computers"] if m["id"] == rid)
-    assert (row["screen"], row["screen_available"]) == ("view", True) and "capabilities_json" not in row
+    assert (row["screen"], row["screen_available"]) == ("view", True) and "capabilities" not in row
     ops = next(e for e in api.get("/api/employees", headers=headers()).json() if e["name"] == "ops")
     assert {"screen": "view", "screen_available": True}.items() <= ops["machine"].items()      # the bot page
 
@@ -84,9 +84,9 @@ def test_turn_on_from_off_at_control_is_the_operators_or_an_admins_and_they_driv
         assert post(api, f"computers/{rid}/screen", {"mode": "control"}, token=token) == {
             "screen": "control", "screen_available": True}
         with api.app.state.store.read() as c:
-            event = c.execute("SELECT actor,detail_json FROM events WHERE action='runner.screen' AND target=? "
+            event = c.execute("SELECT actor,detail FROM events WHERE action='runner.screen' AND target=? "
                               "ORDER BY rowid DESC LIMIT 1", (rid,)).fetchone()
-        assert (event["actor"], json.loads(event["detail_json"])) == (actor, {"mode": "control"})
+        assert (event["actor"], json.loads(event["detail"])) == (actor, {"mode": "control"})
         assert post(api, f"computers/{rid}/screen/sessions", {"control": True}, token=token)["control"]
     post(api, f"computers/{anas['runner_id']}/screen", {"mode": "off"}, token="ben-test")
     for mode in ("control", "view"):                 # a member, not Ana's computer's operator

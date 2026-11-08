@@ -13,7 +13,6 @@ from typing import Any, cast
 
 from . import banking, stripe_post
 from .context import Ctx, load
-from .core import dates
 from .core import feeds as F
 from .core import kinds as K
 from .core import validate as V
@@ -45,7 +44,7 @@ def _after(at: str, seconds: float) -> str:
 
 
 def _settings(row: Any) -> dict[str, Any]:
-    return SK.loads(row["settings_json"])
+    return SK.loads(row["settings"])
 
 
 def _rows(body: Mapping[str, Any], key: str) -> list[dict[str, Any]]:
@@ -130,7 +129,7 @@ def connection_create(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     def apply(aid: str) -> Result:
         cid = SK.insert(ctx.c, "fin_connections", {
             "provider": "stripe", "purpose": "payments", "credential_ref": cred, "status": "active", "name": name,
-            "settings_json": SK.dump({"backfilled": False, "account": acct}), "next_sync_at": ctx.at,
+            "settings": SK.dump({"backfilled": False, "account": acct}), "next_sync_at": ctx.at,
             "created_at": ctx.at, "created_by": who})
         if live is None:
             gl = banking.new_account(ctx, BALANCE_CODE, BALANCE_NAME, "asset", "bank", who)
@@ -168,7 +167,7 @@ def connection(store: Any, vault: Any, cid: str, *, rehearsal: bool = False, mak
         return "idle"
     provider = _provider(store, vault, str(row["credential_ref"] or ""), make)
     if provider is None:
-        _failed(store, cid, "the Stripe key is missing; store it again in Settings", now)
+        _failed(store, cid, "the Stripe key is missing; store it again in Settings", now, str(row["status"]))
         return "no_token"
     problems: list[str] = []
     if due:
@@ -181,22 +180,24 @@ def connection(store: Any, vault: Any, cid: str, *, rehearsal: bool = False, mak
     with store.transaction() as c:
         if due:
             stripe_post.stale(load(c, now))
+            banking.refresh_connection_openings(load(c, now), cid)    # the pass's balance and rows agree now
         fields: dict[str, object] = {"last_sync_at": now, "updated_at": now}
         if due:
             fields["next_sync_at"] = _after(now, POLL_MINUTES * 60)
         if problems:
             fields.update({"status": "error", "last_error": problems[0][:300]})
-            banking.event(load(c, now), "finance.sync.failed", cid, {"connection_id": cid}, now[:13])
+            banking.sync_failed(load(c, now), cid, str(row["status"]), problems[0])
         else:
             fields.update({"status": "active", "last_error": None, "last_ok_at": now})
         SK.update(c, "fin_connections", cid, fields)
     return "failed" if problems else "ok"
 
 
-def _failed(store: Any, cid: str, why: str, now: str) -> None:
+def _failed(store: Any, cid: str, why: str, now: str, prior: str) -> None:
     with store.transaction() as c:
         SK.update(c, "fin_connections", cid, {"status": "error", "last_error": why, "updated_at": now,
                                               "next_sync_at": _after(now, POLL_MINUTES * 60)})
+        banking.sync_failed(load(c, now), cid, prior, why)
 
 
 def balances(store: Any, provider: Provider, cid: str, now: str) -> list[str]:
@@ -308,7 +309,7 @@ def _walk(store: Any, provider: Provider, cid: str, conf: dict[str, Any], cursor
 def _save(store: Any, cid: str, now: str, conf: Mapping[str, Any], cursor: str, head: str | None) -> None:
     state = {**conf, "head": head} if head else dict(conf)
     with store.transaction() as c:
-        SK.update(c, "fin_connections", cid, {"cursor": cursor, "settings_json": SK.dump(state), "updated_at": now})
+        SK.update(c, "fin_connections", cid, {"cursor": cursor, "settings": SK.dump(state), "updated_at": now})
 
 
 def _complete(store: Any, cid: str, now: str, conf: Mapping[str, Any], head: str | None, backfill: bool) -> None:
@@ -323,12 +324,9 @@ def _complete(store: Any, cid: str, now: str, conf: Mapping[str, Any], head: str
             for m in SK.money_accounts(c, ctx.book.id):
                 if str(m["connection_id"] or "") != cid or str(m["kind"]) != "stripe":
                     continue
-                mid = str(m["id"])
-                first = SK.first_feed_day(c, mid)
-                day = (dates.day(first) - timedelta(days=1)).isoformat() if first else ctx.today
-                banking.set_opening(ctx, m, int(conf["held"]) - SK.feed_total(c, mid), day)
+                banking.open_at(ctx, m, int(conf["held"]))
             done["backfilled"] = True
-        SK.update(c, "fin_connections", cid, {"settings_json": SK.dump(done), "cursor": None, "updated_at": now})
+        SK.update(c, "fin_connections", cid, {"settings": SK.dump(done), "cursor": None, "updated_at": now})
 
 
 def _take(store: Any, cid: str, acct: str, rows: list[dict[str, Any]], now: str, *, stop: str | None) -> list[str]:

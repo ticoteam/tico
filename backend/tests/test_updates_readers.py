@@ -39,7 +39,7 @@ def test_a_draft_that_drew_on_meetings_is_read_only_by_meeting_readers(api, monk
     with store.transaction() as c:
         restrict(c, "finance", people=["ana"])
         c.execute("INSERT INTO humans(id,name,email) VALUES('dan','Dan',NULL)")
-        c.execute("INSERT INTO meetings(id,title,owner,metadata_json,notes,created,updated,review_state) "
+        c.execute("INSERT INTO meetings(id,title,owner,metadata,notes,created_at,updated_at,review_state) "
                   "VALUES('m1','Synthetic sync','zed@acme.example',?,?,?,?,'live')",
                   (json.dumps({"kind": "meeting", "calendar": {"attendees": ["ben@acme.example"]}}), NOTE, H.now(), H.now()))
     ben, facts = draft(store, "human:ben", "- Synthetic draft bullet one")
@@ -113,16 +113,16 @@ def test_a_bot_managers_request_names_a_flagged_report_without_its_text(api, mon
 def test_the_migration_flags_every_existing_assistant_drafted_person_update(tmp_path):
     c = sqlite3.connect(tmp_path / "old.db", isolation_level=None)
     c.executescript(updates.SCHEMA)
-    for column in ("slides_json", "drafted_by", "edited_by", "inputs_json"):
+    for column in ("slides", "drafted_by", "edited_by", "inputs"):
         c.execute(f"ALTER TABLE updates ADD COLUMN {column} TEXT")
     rows = [("d", "human:ben", "coo", None), ("e", "human:cara", "coo", "human:cara"), ("o", "human:ana", None, None),
             ("b", "ops", None, None)]
     for uid, bot, drafted, edited in rows:
-        c.execute("INSERT INTO updates(id,bot,kind,day,headline,body,created,updated,drafted_by,edited_by) "
+        c.execute("INSERT INTO updates(id,bot,kind,day,headline,body,created_at,updated_at,drafted_by,edited_by) "
                   "VALUES(?,?,'daily',?,'h','- b','t','t',?,?)", (uid, bot, uid, drafted, edited))
     updates.ensure_schema(c)
     assert dict(c.execute("SELECT id, meetings FROM updates")) == {"d": 1, "e": 1, "o": 0, "b": 0}
-    c.execute("INSERT INTO updates(id,bot,kind,day,headline,body,created,updated,drafted_by,meetings) "
+    c.execute("INSERT INTO updates(id,bot,kind,day,headline,body,created_at,updated_at,drafted_by,meetings) "
               "VALUES('n','human:dan','daily','n','h','- b','t','t','coo',0)")
     updates.ensure_schema(c)
     assert c.execute("SELECT meetings FROM updates WHERE id='n'").fetchone()[0] == 0, "it runs once, not on every start"
