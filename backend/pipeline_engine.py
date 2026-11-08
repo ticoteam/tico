@@ -1062,7 +1062,8 @@ def _room(conn: sqlite3.Connection, actor: str, task_id: str, here: Row | None, 
     says so. Returns False for a stage with room."""
     if target is None:
         return False
-    automated = not H.is_human(actor)
+    # Delegated writes are automated too: BotOps or the Assistant writing for a person (H.VIA) gets no person's override.
+    automated = not H.is_human(actor) or bool(H.VIA.get())
     if automated and here is not None and here["card_cap"] == 0:
         raise room_refusal("on_ice", f"Only a person moves a card out of {here['name']}", task_id, str(here["id"]))
     full = full_stage(conn, str(target["id"]), task_id)
