@@ -438,13 +438,13 @@ checks on that merge commit, and moves main only when they pass.
 - **A ready pull request from this repository** (GitHub-hosted): the selected Python and browser tests and
   the factory sim, on each push. A failed leg cancels the run (`gh run cancel`), so `checks` fails within minutes. A fork's
   pull request runs none of them.
-- **A queue group** (GitHub-hosted, 2 and 4 vCPU): plan (which also checks the merge commit's migration timestamps,
-  OpenAPI document and runner wire contract), the selected Python and browser tests, the Caddy image when the change
+- **A queue group** (GitHub-hosted, 2 and 4 vCPU): plan (which also runs the whole-tree static checks on the merge
+  commit, `scripts/ci/merge_commit_checks.sh`), the selected Python and browser tests, the Caddy image when the change
   reaches it, Rust lint and the desktop app when those changed, the macOS recorder tests when `recorder/` changed, and
   the `checks` gate. A job the change does not reach starts no VM. The group's base is the head of the group ahead of it,
-  so it selects from its own pull request's change. Its tests pack into at most about 6 test jobs of up to 12 minutes
-  each (`CEILING`, `QUEUE_MAX_JOB_SECONDS` in `scripts/pr_checks.py`): every group shares the organisation's concurrent
-  hosted jobs.
+  so it selects from its own pull request's change. Its tests pack toward 6 test jobs of up to 12 minutes each
+  (`CEILING`, `QUEUE_MAX_JOB_SECONDS` in `scripts/pr_checks.py`), since every group shares the organisation's concurrent
+  hosted jobs; a selection too big for that keeps 12-minute VMs.
 - **The factory simulation** (GitHub-hosted, one 4-vCPU runner per group): seed 1 of every scenario, in a queue group or on a ready
   pull request, only when the change
   reaches what the sim runs (`evals/factory/call_path.json`, measured; see `evals/factory/README.md`). A failed scenario

@@ -9,7 +9,7 @@
 # so an untouched job starts no VM). The group's base is the head of the group queued ahead of it (main for the first),
 # so it selects from its own pull request's change, tested on top of everything ahead of it. The static checks job runs
 # on the pull request only; the group's plan job checks what a change queued ahead can break in the merge commit that
-# lands on main: migration timestamps, the generated OpenAPI document and the runner wire contract.
+# lands on main (scripts/ci/merge_commit_checks.sh: the whole-tree static checks).
 # A failed `tests` or `factory-sim` leg cancels its whole run (its last step), in a queue group or a pull request. The
 # `checks` job still runs (always()) and fails, so the queue drops a failing group within about a minute.
 # `checks` is the one required check. It fails when a job it needs failed or was cancelled; a skipped job passes. A draft
@@ -111,23 +111,31 @@ jobs:
             gh api --paginate --slurp "repos/$GITHUB_REPOSITORY/actions/workflows/pr-checks.yml/runs?event=merge_group&status=$status&per_page=100" > "$RUNNER_TEMP/runs-$status.json"
           done
           "$RUNNER_TEMP/venv/bin/python" scripts/pr_checks.py cancel-superseded --head-ref "$HEAD_REF" --run-number "$GITHUB_RUN_NUMBER" "$RUNNER_TEMP/runs-queued.json" "$RUNNER_TEMP/runs-in_progress.json"
+      # A queue group's merge commit is what lands on main. A change queued ahead can collide with this one in what is
+      # checked across the whole tree (scripts/ci/merge_commit_checks.sh: migration timestamps, the OpenAPI document,
+      # the wire contract, Python and UI types, UI routes), so the group checks it here, beside the test selection
+      # (which uses one core), rather than on a static checks VM. The step after the selection reports the result.
+      - name: Start the merge commit checks
+        if: github.event_name == 'merge_group'
+        env:
+          QUEUE_HEAD: ${{ github.event.merge_group.head_sha }}
+        run: |
+          # set +e: the step's shell runs with -e, and a failed check must still write its status.
+          ( set +e; PATH="$RUNNER_TEMP/venv/bin:$PATH" bash scripts/ci/merge_commit_checks.sh "$BASE_SHA" "$QUEUE_HEAD"
+            echo "$?" > "$RUNNER_TEMP/merge-checks.status" ) > "$RUNNER_TEMP/merge-checks.log" 2>&1 &
       - name: Select affected tests and size measured Python and browser groups
         id: plan
         env:
           EVENT: ${{ github.event_name }}
           CHECK_HEAD: ${{ github.event.merge_group.head_sha || 'HEAD' }}
         run: '"$RUNNER_TEMP/venv/bin/python" scripts/pr_checks.py plan --event "$EVENT" --base "$BASE_SHA" --head "$CHECK_HEAD" --timings previous-timings/durations.json'
-      # A queue group's merge commit is what lands on main. A change queued ahead can collide with this one in what is
-      # checked across the whole tree, so the group checks it here rather than on a static checks VM: migration
-      # timestamps, the generated OpenAPI document and the runner wire contract. Seconds each on the installed venv.
-      - name: Merge commit checks (migration timestamps, OpenAPI document, runner wire contract)
+      - name: Merge commit checks
         if: github.event_name == 'merge_group'
-        env:
-          QUEUE_HEAD: ${{ github.event.merge_group.head_sha }}
+        timeout-minutes: 8
         run: |
-          python3 scripts/check_migration_order.py --base "$BASE_SHA" --head "$QUEUE_HEAD" --base-name main
-          PATH="$RUNNER_TEMP/venv/bin:$PATH" python3 -m backend.openapi_v2 --check
-          "$RUNNER_TEMP/venv/bin/python" scripts/check_wire_contract.py
+          until [ -f "$RUNNER_TEMP/merge-checks.status" ]; do sleep 2; done
+          cat "$RUNNER_TEMP/merge-checks.log"
+          exit "$(cat "$RUNNER_TEMP/merge-checks.status")"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: pr-check-plan

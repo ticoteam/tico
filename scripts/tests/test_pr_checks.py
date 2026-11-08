@@ -1490,9 +1490,10 @@ def test_size_groups_raises_the_target_to_meet_a_ceiling_and_stops_at_the_cap():
     assert capped["target"] == checks.MAX_JOB_SECONDS and capped["tests"] > 8
 
 
-def test_a_queue_group_packs_into_at_most_six_test_jobs_of_up_to_twelve_minutes():
+def test_a_queue_group_packs_toward_six_test_jobs_of_up_to_twelve_minutes():
     """Every queue group shares the organisation's ~60 concurrent hosted jobs, so a group packs its tests into fewer,
-    longer VMs than a pull request: each VM spends about two minutes on setup."""
+    longer VMs than a pull request: each VM spends about two minutes on setup. A selection too big for six VMs at the cap
+    keeps the cap's VMs: only a narrower selection brings it within six."""
     assert checks.CEILING["merge_group"] == 6 and checks.QUEUE_MAX_JOB_SECONDS > checks.MAX_JOB_SECONDS
     # Nov 8's typical backend group: about 930 files, 22,300 one-worker seconds, a browser group, the contract tests and
     # two factory legs. At the pull request's cap it takes 13 Python VMs; the queue's cap takes fewer.
@@ -1510,6 +1511,8 @@ def test_a_queue_group_packs_into_at_most_six_test_jobs_of_up_to_twelve_minutes(
         cap=checks.QUEUE_MAX_JOB_SECONDS,
     )
     assert queue["target"] == checks.QUEUE_MAX_JOB_SECONDS and len(queue["split"]) < len(pr["split"])
+    # 13 test jobs (9 Python, a browser, the contracts, 2 factory legs) against 17 at the pull request's cap.
+    assert queue["tests"] == 13 and pr["tests"] == 17
     # No VM is planned past the cap by more than one file's worth.
     assert max(queue["loads"]) / checks.WORKERS + checks.SETUP_SECONDS["python"] <= checks.QUEUE_MAX_JOB_SECONDS + 30
     # A small group stays at the usual target in one or two VMs: 30 minutes of one-worker tests is one VM.
@@ -1567,16 +1570,57 @@ def test_the_plan_decides_the_queue_jobs_and_a_group_checks_its_merge_commit_wit
         assert not any("git diff" in str(step.get("run", "")) for step in jobs[job]["steps"]), job
     # The static checks VM runs on pull requests only; a queue group's plan checks its merge commit in its place.
     assert "github.event_name == 'pull_request'" in jobs["static"]["if"]
-    step = next(s for s in jobs["plan"]["steps"] if str(s.get("name", "")).startswith("Merge commit checks"))
-    assert step["if"] == "github.event_name == 'merge_group'"
-    for check in (
-        "check_migration_order.py --base \"$BASE_SHA\" --head \"$QUEUE_HEAD\"",
-        "openapi_v2 --check",
-        "check_wire_contract.py",
-    ):
-        assert check in step["run"], check
-    install = next(i for i, s in enumerate(jobs["plan"]["steps"]) if str(s.get("name", "")).startswith("Install"))
-    assert jobs["plan"]["steps"].index(step) > install  # the venv the checks run on
+
+
+def test_a_queue_group_runs_every_whole_tree_static_check_on_its_merge_commit_beside_its_selection(tmp_path):
+    """Two pull requests can pass their own static checks and break a whole-tree one together (a route one removes and
+    the other calls), so a queue group runs those on its merge commit. The plan job starts them before the selection and
+    reports them after it, so they cost no VM and little wall time."""
+    jobs = workflow_jobs()["jobs"]
+    steps = jobs["plan"]["steps"]
+    names = [str(step.get("name", "")) for step in steps]
+    start = names.index("Start the merge commit checks")
+    select = names.index("Select affected tests and size measured Python and browser groups")
+    report = names.index("Merge commit checks")
+    assert names.index("Install (five minutes per attempt, one retry)") < start < select < report
+    for index in (start, report):
+        assert steps[index]["if"] == "github.event_name == 'merge_group'"
+    assert 'merge_commit_checks.sh "$BASE_SHA" "$QUEUE_HEAD"' in steps[start]["run"]
+    assert "set +e" in steps[start]["run"] and steps[start]["run"].rstrip().endswith("&")
+    assert steps[report]["timeout-minutes"] <= 10 and 'exit "$(cat' in steps[report]["run"]
+    script = (ROOT / "scripts/ci/merge_commit_checks.sh").read_text()
+    # Every static check that reads across files runs on the merge commit too; the per-file ones (lint, shellcheck,
+    # actionlint) cannot break between two pull requests and run on the pull request only.
+    per_file = ("lint.sh", "check_ui_lint.sh", "shell_lint.sh", "actionlint", "npm ci", "ci_install.sh")
+    static = [str(step.get("run", "")) for step in jobs["static"]["steps"] if step.get("run")]
+    whole_tree = [run for run in static if "scripts/" in run and not any(name in run for name in per_file)]
+    found = {re.search(r"scripts/[\w/]+\.(?:py|sh)", run).group(0) for run in whole_tree}
+    found |= {"-m backend.openapi_v2 --check"} if any("backend.openapi_v2 --check" in run for run in static) else set()
+    assert found >= {"scripts/check_migration_order.py", "scripts/check_types.sh", "scripts/check_ui_routes.sh"}
+    for name in found:
+        assert name in script, name
+
+    # Each check runs even after one fails, and any failure fails the script.
+    fake = tmp_path / "repo"
+    (fake / "scripts/ci").mkdir(parents=True)
+    (fake / "scripts/ci/merge_commit_checks.sh").write_text(script)
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    log = tmp_path / "calls"
+    for tool, code in (("python3", 0), ("bash", 1), ("uvx", 0)):
+        stub = bin_dir / tool
+        stub.write_text(f'#!/bin/sh\necho "{tool} $*" >> {log}\nexit {code}\n')
+        stub.chmod(0o755)
+    result = subprocess.run(
+        ["/bin/bash", str(fake / "scripts/ci/merge_commit_checks.sh"), "base", "head"],
+        env={"PATH": f"{bin_dir}:/usr/bin:/bin", "HOME": str(tmp_path)},
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 1
+    calls = log.read_text().splitlines()
+    assert sum(call.startswith("bash ") for call in calls) == 3  # every bash check ran past the first failure
+    assert calls[-1] == "python3 scripts/check_ui_source_suffixes.py"
 
 
 def test_a_queue_group_supersedes_only_the_older_queue_groups_of_its_own_pull_request():
