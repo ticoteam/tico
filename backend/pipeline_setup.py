@@ -362,9 +362,10 @@ def _adopt(conn: sqlite3.Connection, actor: str, row: Row, spec: Row, made: list
 
 
 def _name_pipeline(conn: sqlite3.Connection, requirement_id: str, pipeline_id: str) -> bool:
-    """Writes the pipeline a `subtasks` run waits on into the requirement's current needs, so the engine counts only that
-    pipeline's subtasks (D64). Its version history is append-only and keeps what was written, so it is not rewritten. A row
-    that already names the pipeline is left alone, so a second setup run changes nothing. True when it wrote the name."""
+    """Names the pipeline on a `subtasks` run setup made before runs named one, so the engine counts only that pipeline's
+    subtasks (D64). It writes the current needs only: a new version would bump the version approvals were given at, and
+    the history is append-only. A row that already names it is left alone, so a second run changes nothing. True when it
+    wrote the name."""
     row = _one(conn, "SELECT needs FROM stage_requirements WHERE id = ?", (requirement_id,))
     if row is None:
         return False
@@ -406,14 +407,12 @@ def _requirement(
     body = {
         "name": spec["name"],
         "kind": spec["kind"],
-        "needs": spec.get("needs", {}),
+        "needs": {**spec.get("needs", {}), **({"pipeline": target} if target else {})},
         "reviewed_by": spec["reviewed_by"],
         "reviewer_id": actor if "person" in spec["reviewed_by"] else None,
         "rubric": spec.get("rubric"),
     }
-    created = pipeline_requirements.add(conn, actor, str(stage["id"]), body)
-    if target:
-        _name_pipeline(conn, str(created["id"]), target)
+    pipeline_requirements.add(conn, actor, str(stage["id"]), body)
     made.append(f"requirement {spec['name']} on {spec['stage']}")
 
 

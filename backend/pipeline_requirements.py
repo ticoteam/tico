@@ -169,7 +169,11 @@ def check_definition(body: dict[str, Any]) -> dict[str, Any]:
     elif kind == "run":
         if needs.get("source") not in RUN_SOURCES:
             raise Problem("validation", f"A run needs a source from: {', '.join(RUN_SOURCES)}", 422)
-        needs = {"source": needs["source"], "at_head": True}
+        named = needs.get("pipeline")
+        if named is not None and (needs["source"] != "subtasks" or not isinstance(named, str) or not named):
+            raise Problem("validation", "Only a subtasks run names a pipeline, by its id", 422)
+        # A subtasks run may name the one pipeline whose subtasks count (D64); without it, every pipeline it spawns into.
+        needs = {"source": needs["source"], "at_head": True, **({"pipeline": named} if named else {})}
     else:
         needs = {}
     if kind == "approval" and reviewed_by != "person":
@@ -209,11 +213,18 @@ def _name_free(conn: "sqlite3.Connection", stage_id: str, name: str, except_id: 
         raise Problem("conflict", f"This stage already has a requirement named {name}", 409)
 
 
+def _known_pipeline(conn: "sqlite3.Connection", definition: dict[str, Any]) -> None:
+    named = definition["needs"].get("pipeline")
+    if named and conn.execute("SELECT 1 FROM task_types WHERE id=?", (named,)).fetchone() is None:
+        raise Problem("validation", "The pipeline this run waits on does not exist", 422)
+
+
 def add(conn: "sqlite3.Connection", actor: str, stage_id: str, body: dict[str, Any]) -> dict[str, Any]:
     """A new requirement on a stage, at version 1."""
     pipeline_id, _ = _stage(conn, stage_id)
     _may_edit(conn, actor, pipeline_id)
     definition = check_definition(body)
+    _known_pipeline(conn, definition)
     _name_free(conn, stage_id, definition["name"])
     now = H.now()
     position = definition["position"]
@@ -271,6 +282,12 @@ def edit(conn: "sqlite3.Connection", actor: str, requirement_id: str, body: dict
     pipeline_id, _ = _stage(conn, current["pipeline_stage_id"])
     _may_edit(conn, actor, pipeline_id)
     definition = check_definition(body)
+    kept = (current.get("needs") or {}).get("pipeline")
+    needs = definition["needs"]
+    if kept and definition["kind"] == "run" and needs.get("source") == "subtasks" and "pipeline" not in needs:
+        # An editor that does not show the named pipeline keeps it: dropping it would count every spawned pipeline again.
+        definition["needs"] = {**needs, "pipeline": kept}
+    _known_pipeline(conn, definition)
     if definition["position"] is None:
         definition["position"] = current["position"]
     stored = {k: current[k] for k in DEFINITION}
