@@ -3868,23 +3868,69 @@ _SUBTREE = "conversations s LEFT JOIN thread_followers f ON f.thread_id=s.id AND
 _SUBTREE_OPEN = "s.archived_at IS NULL AND s.closed_at IS NULL"
 
 
-def task_open_sql(r="r"):
-    """SQL: a thread on a task is open unless its task is done, closed or declined and nobody has posted in its subtree
-    since. A notice (what the task's own changes write into its thread) is not a post. The finish is the task's latest
-    status event, so a later edit to the task neither hides a thread someone posted in nor brings a finished one back."""
-    finish = (
-        "COALESCE((SELECT MAX(h.created_at) FROM history_events h WHERE h.subject_type='task' "
-        "AND h.subject_id=t.id AND h.kind='status' AND h.new IN ('done','closed','declined')),"
-        "t.closed_at,t.done_at,t.updated_at)"
-    )
-    posted = (
-        f"EXISTS (SELECT 1 FROM conversations s JOIN messages m ON m.conversation_id=s.id WHERE s.root_id={r}.id "
-        f"AND m.kind<>'notice' AND m.deleted_at IS NULL AND m.created_at>{finish})"
-    )
+FINISHED_TASKS = "'done','closed','declined'"
+
+
+def _finish_sql(t="t"):
+    """SQL: when the task `t` last finished: its latest status event to done, closed or declined, else its timestamps."""
     return (
-        f"NOT EXISTS (SELECT 1 FROM tasks t WHERE t.id={r}.task_id AND t.status IN ('done','closed','declined') "
-        f"AND NOT {posted})"
+        f"COALESCE((SELECT MAX(h.created_at) FROM history_events h WHERE h.subject_type='task' "
+        f"AND h.subject_id={t}.id AND h.kind='status' AND h.new IN ({FINISHED_TASKS})),"
+        f"{t}.closed_at,{t}.done_at,{t}.updated_at)"
     )
+
+
+def revived_roots(c, v, roots=None):
+    """The root ids (of `roots`, else every finished-task thread) that a post the viewer reads brings back. A plain post
+    (not restricted, no legacy audience) is counted in SQL by task_open_sql. A restricted or legacy post is read as any
+    other message is (message_readable: its thread, task privacy, meetings, legacy readers), so a reader who may not
+    read it is not shown that the thread has moved again."""
+    v = viewer(None, v) if not isinstance(v, Viewer) else v
+    scope = f" AND r.id IN {_qlist(sorted(roots))}" if roots is not None else ""
+    rows = c.execute(
+        "SELECT m.id, r.id FROM tasks t JOIN conversations r ON r.task_id=t.id AND r.parent_id IS NULL "
+        "JOIN conversations s ON s.root_id=r.id JOIN messages m ON m.conversation_id=s.id "
+        f"WHERE t.status IN ({FINISHED_TASKS}) AND {readable_sql(c, v, 'r')}{scope} "
+        "AND m.kind<>'notice' AND m.deleted_at IS NULL "
+        "AND (m.restricted IS NULL OR m.restricted<>0 OR m.legacy_audience IS NOT NULL) "
+        f"AND m.created_at>{_finish_sql('t')}"
+    ).fetchall()
+    found = set()
+    for message_id, root_id in rows:
+        if root_id in found:
+            continue
+        message = H.message(c, message_id, include_deleted=False)
+        if message and message_readable(c, v, message):
+            found.add(root_id)
+    return found
+
+
+def task_open_sql(c, v, r="r", revived=frozenset()):
+    """SQL: a thread on a task is open unless its task is done, closed or declined and no post the viewer reads has come
+    since: a plain post in its subtree (readable_sql on the sub-thread), or a root in `revived` (revived_roots). A notice
+    (what the task's own changes write into its thread) is not a post. The finish is the task's latest status event, so
+    a later edit to the task neither hides a thread someone posted in nor brings a finished one back."""
+    v = viewer(None, v) if not isinstance(v, Viewer) else v
+    plain = (
+        f"EXISTS (SELECT 1 FROM conversations s JOIN messages m ON m.conversation_id=s.id WHERE s.root_id={r}.id "
+        f"AND m.kind<>'notice' AND m.deleted_at IS NULL AND m.restricted=0 AND m.legacy_audience IS NULL "
+        f"AND m.created_at>{_finish_sql('t')} AND {readable_sql(c, v, 's')})"
+    )
+    kept = f" OR {r}.id IN {_qlist(sorted(revived))}" if revived else ""
+    return (
+        f"NOT EXISTS (SELECT 1 FROM tasks t WHERE t.id={r}.task_id AND t.status IN ({FINISHED_TASKS}) "
+        f"AND NOT ({plain}{kept}))"
+    )
+
+
+def task_hidden(c, v, root_id):
+    """Whether the rail leaves this root out for its task: finished, and no post the viewer reads since."""
+    v = viewer(None, v) if not isinstance(v, Viewer) else v
+    row = c.execute(
+        f"SELECT {task_open_sql(c, v, 'r', revived_roots(c, v, [root_id]))} FROM conversations r WHERE r.id=?",
+        (root_id,),
+    ).fetchone()
+    return row is not None and not row[0]
 
 
 def _subtree_mark(c, v):
@@ -4366,6 +4412,10 @@ def view(c, principal, row, *, follower=None, summary=None, dm=None, pins=None):
             out["new_at"] = summary["new_at"]
         if out["audience"] in ("personal", "participants") and not row.get("parent_id"):
             out.update(dm or dm_with(c, v, [root]).get(root["id"]) or {})
+        # The rail hides a root its finished task hides; a single view says so, for the live stream to match the list.
+        # A list's rows are the rail's own, already filtered, so they are not asked again (summary is set).
+        if summary is None and root.get("task_id") and task_hidden(c, v, root["id"]):
+            out["task_hidden"] = True
     return out
 
 

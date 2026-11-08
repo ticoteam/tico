@@ -71,7 +71,17 @@ PINNED_SQL = (
     "(r.pinned_for_everyone_at IS NOT NULL AND NOT EXISTS (SELECT 1 FROM thread_pins p WHERE p.thread_id=r.id "
     "AND p.actor=:me AND p.pinned=0)))"
 )
-ROOT_OPEN = f"r.parent_id IS NULL AND r.archived_at IS NULL AND r.closed_at IS NULL AND {T.task_open_sql('r')}"
+
+
+def root_open(c, v):
+    """The roots the rail, Browse and Catch up list for this reader: not archived or closed, and not hidden for a
+    finished task (T.task_open_sql, which a post the reader reads brings back)."""
+    return (
+        "r.parent_id IS NULL AND r.archived_at IS NULL AND r.closed_at IS NULL AND "
+        f"{T.task_open_sql(c, v, 'r', T.revived_roots(c, v))}"
+    )
+
+
 ACTIVITY = (
     f"COALESCE((SELECT MAX(s.last_seq) FROM conversations s WHERE s.root_id=r.id AND {T._SUBTREE_OPEN}),r.last_seq,0)"
 )
@@ -286,7 +296,7 @@ def rail(c, v, *, cursor=None, limit=RAIL_LIMIT):
     extra, marks = _names(v, c)
     args = {"me": v.actor, **extra}
     kind = f"({_audience()} IN ('company','team','members') OR {_group_dm()})"
-    base = [ROOT_OPEN, kind, T.readable_sql(c, v, "r")]
+    base = [root_open(c, v), kind, T.readable_sql(c, v, "r")]
     v._members = {}
     try:
         pinned_rows, pinned_more = (
@@ -331,7 +341,7 @@ def browse(c, v, *, q=None, cursor=None, limit=BROWSE_LIMIT):
     after = _decode(cursor, 2)
     extra, marks = _names(v, c)
     args = {"me": v.actor, **extra}
-    where = [ROOT_OPEN, f"{_audience()} IN ('company','team')", T.readable_sql(c, v, "r"), f"NOT {_in(marks)}"]
+    where = [root_open(c, v), f"{_audience()} IN ('company','team')", T.readable_sql(c, v, "r"), f"NOT {_in(marks)}"]
     text = str(q or "").strip()
     if text:
         args["q"] = "%" + text.lower().replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
@@ -548,7 +558,7 @@ def _walk(c, v, flags, after=None):
     is_mention = "r.id IN (SELECT value FROM json_each(:mentions))"
     audience = _audience()
     where = [
-        ROOT_OPEN,
+        root_open(c, v),
         T.readable_sql(c, v, "r"),
         f"(({audience} IN ('company','team','members','personal','participants','task') AND "
         f"({_in(marks)} OR {PINNED_SQL})) OR ({audience}='home' AND r.owner_id=:me) OR {is_flagged})",
