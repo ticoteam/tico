@@ -58,7 +58,7 @@ from .auth import Identity
 from .batch_work import isolated, report, shared_check, shared_scope, storage_error
 from .harnesses import bot_keyed, reports_tool_calls
 from .run_diagnostics import HANDED_BACK, RESTART_TEXT, clean_stop_reported
-from . import lifecycle
+from . import company_pause, lifecycle
 from .verdict_moves import HANDOFF_FIRST_SQL
 from .store import H, P, Problem, bot_readiness, digest, encode, message_page, readiness_document
 from .config import Settings
@@ -2405,6 +2405,11 @@ def _claim_refusal(
         caps = capability_set(runner["capabilities"])
     if draining:
         return "draining", None
+    if company_pause.record(c) is not None:
+        return (
+            "company_paused",
+            None,
+        )  # the company pause: nothing new starts until someone resumes (backend/company_pause.py)
     if cloud_access.locked(c, loads.access if loads is not None else cloud_access.access(c)):
         return "cloud_locked", None  # a locked Tico Cloud company runs no bot (backend/cloud_access.py)
     if bot in held_bots:
