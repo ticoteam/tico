@@ -13,6 +13,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 import xml.etree.ElementTree as ET
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -1651,8 +1652,14 @@ def local(base=LOCAL_BASE, jobs=LOCAL_JOBS, ready=False, root=ROOT, execute=subp
         print(f"pr_checks local: {message}", file=sys.stderr)
         return code
 
-    if git("status", "--porcelain", "--untracked-files=no"):
-        return stop("commit or set aside your changes first: a receipt names a commit, not a working tree")
+    def unchanged():
+        """The checkout is the commit and nothing else: no edit, and no untracked file a test could pick up."""
+        return not git("status", "--porcelain")
+
+    if not unchanged():
+        return stop(
+            "commit or set aside your changes and new files first: a receipt names a commit, not a working tree"
+        )
     head = git("rev-parse", "HEAD").lower()
     try:
         git("rev-parse", "--verify", "--quiet", base + "^{commit}")
@@ -1689,12 +1696,22 @@ def local(base=LOCAL_BASE, jobs=LOCAL_JOBS, ready=False, root=ROOT, execute=subp
     picked = selection(changed, "pull_request", root=root, base=base, added=changed_files(base, "HEAD", root, "A"))
     python = [f for f in picked["python"] or () if (root / f).is_file()]
     browser = browser_scripts(picked["browser"], root) if picked["browser"] else []
-    pytest = [sys.executable, "-m", "pytest", "-q", "-n", str(jobs), *PYTEST_FLAGS]
+    # On a RunsOn VM (scripts/heavy.sh with TICO_HEAVY_REMOTE=1) the venv is python3 on its PATH, not this path.
+    remote = os.environ.get("TICO_HEAVY_REMOTE") == "1"
+    reports = Path(tempfile.mkdtemp(prefix="pr-checks-local-"))
+    pytest = ["python3" if remote else sys.executable, "-m", "pytest", "-q", "-n", str(jobs), *PYTEST_FLAGS]
     legs = []
     if python:
-        legs.append((f"{len(python)} test file{'s' * (len(python) != 1)}", [*pytest, *python]))
+        legs.append(
+            (
+                f"{len(python)} test file{'s' * (len(python) != 1)}",
+                [*pytest, f"--junitxml={reports / 'python.xml'}", *python],
+            )
+        )
     if picked["contracts"]:
-        legs.append(("the contract tests", [*pytest, "-m", "slow", *CONTRACT_TESTS]))
+        legs.append(
+            ("the contract tests", [*pytest, f"--junitxml={reports / 'contracts.xml'}", "-m", "slow", *CONTRACT_TESTS])
+        )
     if browser:
         legs.append(
             (
@@ -1711,17 +1728,28 @@ def local(base=LOCAL_BASE, jobs=LOCAL_JOBS, ready=False, root=ROOT, execute=subp
         if on
     ]
     print(f"Selected for {head[:12]} against {base}: {picked.get('reason', '')}", flush=True)
+    # CI sets no PYTEST_ADDOPTS; one inherited here (a -k, a -m) could deselect the selection.
+    env = {k: v for k, v in os.environ.items() if k != "PYTEST_ADDOPTS"}
     failed = None
     for name, command in legs:
         print("$ " + " ".join(command), flush=True)
-        code = execute(["bash", str(HEAVY), *command], cwd=root).returncode
+        code = execute(["bash", str(HEAVY), *command], cwd=root, env=env).returncode
         if code in (75, 76):
             # scripts/remote.py (TICO_HEAVY_REMOTE=1) never ran it or lost its result: no result, so no receipt.
-            return stop(f"{name} gave no result (exit {code}); run this again")
-        # pytest's 5: every selected file holds only slow tests, which the release gate runs.
-        if code not in (0, 5):
+            return stop(f"{name} gave no result (exit {code}): a remote run needs this head pushed; run this again")
+        report = next((Path(a.split("=", 1)[1]) for a in command if a.startswith("--junitxml=")), None)
+        # pytest's 5: every selected file holds only slow tests, which the release gate runs (CI drops those files).
+        # As CI's run(), a Python leg that ran tests must have passed one, not skipped them all. A remote run writes
+        # its report on the VM, so only its exit code is read here.
+        if code == 0 and report and not remote:
+            passed_one = report.is_file() and any(c.find("skipped") is None for c in ET.parse(report).iter("testcase"))
+        else:
+            passed_one = True  # the exit code alone decides
+        if code not in (0, 5) or not passed_one:
             failed = name
             break
+    if not unchanged() or git("rev-parse", "HEAD").lower() != head:
+        return stop(f"the checkout changed during the run, so it did not test {head} alone: run this again")
     ran = ", ".join(name for name, _ in legs) or "no tests selected for this change"
     rest = f"; left to CI: {', '.join(ci_only)}" if ci_only else ""
     if failed:

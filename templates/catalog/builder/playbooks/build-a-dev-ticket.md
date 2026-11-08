@@ -36,7 +36,9 @@ pull request as a draft, then link it:
     hub task link <id> <pull request url> --wake-once
 
 If {{app_name}} already opened a draft for the branch, `gh pr create` says so: edit that one with `gh pr edit`. A draft
-runs no CI, so push as often as you like while you work. Keep it a draft until step 6.
+gets no review request. Where the repository's CI skips drafts ({{app_name}}'s own does; `knowledge/standards.md` says
+whether yours does), a draft runs no CI either, so push as often as you like while you work; otherwise each push runs CI,
+so push less often. Keep it a draft until step 6.
 
 ## 3. Test first
 
@@ -64,7 +66,7 @@ it ready:
     gh pr ready <n> -R <repo>
 
 In {{app_name}}'s own repository, `python3 scripts/pr_checks.py local --ready` runs step 5 and marks the pull request
-ready after a pass. Marking it ready starts CI, and every later push runs it again, so batch the fixes that follow.
+ready after a pass. Every push to a ready pull request runs CI, so batch the fixes that follow.
 
 ## 7. Move the ticket
 

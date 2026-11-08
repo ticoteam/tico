@@ -373,7 +373,9 @@ Open the pull request as a draft and run tests on your computer while you work: 
 free. When the change is done, `python3 scripts/pr_checks.py local --ready` runs the tests the plan selects for the
 branch (the same selection a pull request's run makes, through `scripts/heavy.sh`), prints a receipt line naming the full
 head sha and the result for the ticket's review gate, and marks the draft ready after a pass; without `--ready` it only
-runs and prints. It names what only CI runs (Rust conformance, the factory simulation). Mark a pull request ready once:
+runs and prints. It names what only CI runs (Rust conformance, the factory simulation). A change that reaches most of
+the suite (a catalog template, a shared module) selects most of it: with `TICO_HEAVY_REMOTE=1` each part runs on a RunsOn
+VM against the pushed head instead. Mark a pull request ready once:
 each later push runs its checks again. A push to a ready pull request runs the cheap checks on free GitHub-hosted runners:
 lint, the generated UI types, the runner wire contract, the migration names, shell scripts and workflows, and whether
 the recorder changed. A ready pull request from this repository also runs the tests and the factory sim its plan selects, on GitHub-hosted runners; the required check `checks` aggregates them all. A fork's pull request runs the cheap checks

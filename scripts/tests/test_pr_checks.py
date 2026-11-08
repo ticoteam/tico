@@ -1570,11 +1570,21 @@ def branch(tmp_path, monkeypatch):
     monkeypatch.setattr(checks, "selection", select)
     monkeypatch.setattr(checks, "browser_scripts", lambda args, root=None: list(args))
     monkeypatch.setattr(checks, "factory_reason", lambda changed, call_path=None, root=None: None)
+    monkeypatch.delenv("TICO_HEAVY_REMOTE", raising=False)
     commands = []
     answers = {}
+    during = {}  # what happens in the checkout while a command runs
+    envs = []
 
     def execute(command, **kwargs):
         commands.append(command)
+        envs.append(kwargs.get("env") or {})
+        report = next((a.split("=", 1)[1] for a in command if a.startswith("--junitxml=")), None)
+        if report:  # pytest's JUnit file: one test that ran and passed
+            Path(report).write_text('<testsuite><testcase name="t"/></testsuite>')
+        for key, act in during.items():
+            if key in " ".join(command):
+                act()
         key = next((k for k in answers if k in " ".join(command)), None)
         answer = answers.get(key, (0, ""))
         # A list answers each call in turn, its last item from then on.
@@ -1587,6 +1597,8 @@ def branch(tmp_path, monkeypatch):
         seen=seen,
         commands=commands,
         answers=answers,
+        during=during,
+        envs=envs,
         run=lambda **kw: checks.local(base="main", root=tmp_path, execute=execute, **kw),
     )
 
@@ -1633,6 +1645,48 @@ def test_uncommitted_changes_get_no_receipt_and_run_nothing(branch, capsys):
     assert not test_receipts.SHA.search(out.out)
 
 
+def test_an_untracked_file_gets_no_receipt_and_runs_nothing(branch, capsys):
+    # An uncommitted module or fixture could make the tests pass where the named commit fails.
+    (branch.root / "helper.py").write_text("x = 1\n")
+    assert branch.run() == 2
+    assert branch.commands == [] and not test_receipts.SHA.search(capsys.readouterr().out)
+
+
+def test_a_commit_or_edit_during_the_run_gets_no_receipt_and_leaves_the_draft_alone(branch, capsys):
+    view = {"number": 7, "headRefOid": branch.head, "isDraft": True, "url": "https://github.com/acme/app/pull/7"}
+    branch.answers["gh pr view"] = (0, json.dumps(view))
+    for change in ("edit", "commit"):
+        branch.commands.clear()
+
+        def during(change=change):
+            (branch.root / "app.py").write_text(f"x = {change!r}\n")
+            if change == "commit":
+                local_git(branch.root, "commit", "-qam", "During the run")
+
+        branch.during["pytest"] = during
+        assert branch.run(ready=True) == 2, change
+        assert not any(c[:3] == ["gh", "pr", "ready"] for c in branch.commands), change
+        assert not test_receipts.SHA.search(capsys.readouterr().out), change
+
+
+def test_a_python_leg_that_runs_no_test_is_no_pass(branch, capsys):
+    # As CI's run(): a leg whose every test skipped proves nothing. The report is pytest's JUnit file.
+    def skipped():
+        command = branch.commands[-1]
+        report = next(a.split("=", 1)[1] for a in command if a.startswith("--junitxml="))
+        Path(report).write_text('<testsuite><testcase name="t"><skipped/></testcase></testsuite>')
+
+    branch.during["pytest"] = skipped
+    assert branch.run() == 1
+    assert gate(receipt_line(capsys.readouterr().out), branch.head) == "failed"
+
+
+def test_an_inherited_pytest_addopts_never_reaches_the_selected_run(branch, monkeypatch):
+    monkeypatch.setenv("PYTEST_ADDOPTS", "-k nothing")
+    assert branch.run() == 0
+    assert branch.envs[0] and "PYTEST_ADDOPTS" not in branch.envs[0]
+
+
 def test_what_ci_alone_runs_is_named_and_the_receipt_still_passes(branch, monkeypatch, capsys):
     branch.seen["plan"] = {**LOCAL_PLAN, "conformance": True, "rust": ["runner-rs"], "browser": []}
     monkeypatch.setattr(checks, "factory_reason", lambda changed, call_path=None, root=None: "the sim runs app.py")
@@ -1649,6 +1703,16 @@ def test_contract_tests_run_as_the_pull_request_runs_them(branch):
     (command,) = branch.commands
     assert command[command.index("-m", command.index("pytest") + 1) + 1] == "slow"
     assert command[-len(checks.CONTRACT_TESTS) :] == list(checks.CONTRACT_TESTS)
+
+
+def test_a_remote_run_names_the_interpreter_the_vm_has_not_this_computers_path(branch, monkeypatch):
+    # scripts/heavy.sh sends the command to a RunsOn VM (TICO_HEAVY_REMOTE=1), whose venv is python3 on its PATH.
+    assert branch.run() == 0
+    assert branch.commands[0][2] == sys.executable
+    branch.commands.clear()
+    monkeypatch.setenv("TICO_HEAVY_REMOTE", "1")
+    assert branch.run() == 0
+    assert branch.commands[0][2:5] == ["python3", "-m", "pytest"]
 
 
 def test_a_change_that_selects_no_tests_still_gets_a_passing_receipt(branch, capsys):
