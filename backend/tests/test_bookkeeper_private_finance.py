@@ -121,9 +121,16 @@ def test_a_person_without_finance_access_does_not_see_the_books_check_or_watch(a
         assert all(tid not in searched.text for tid in made.values()), who
 
 
+def _asks_and_tasks(api):
+    """What a refusal must leave alone: the task rows, the approvals a person decides, and the messages a person reads."""
+    with api.app.state.store.read() as c:
+        return {t: c.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0] for t in ("tasks", "approvals", "messages")}
+
+
 def test_a_refusal_for_another_reason_is_one_plain_sentence_and_the_row_stays(api):
-    token, made, _ = private_run(api)
+    token, made, _ = private_run(api, carried=("books", "watch"))
     feed_id = deposit_feed_id(api, token)
+    before = _asks_and_tasks(api)
     refused = post_finance(
         api, token, "categorize", {"feed_id": feed_id, "account_id": "acc-no-such-account"}, "cat:bad-account"
     )
@@ -131,8 +138,16 @@ def test_a_refusal_for_another_reason_is_one_plain_sentence_and_the_row_stays(ap
     out = refused.json()
     assert out["status"] == "failed" and out.get("reason"), out
     assert PRIVACY not in str(out)
+    reason = out["reason"]
+    assert isinstance(reason, str) and "\n" not in reason and len(reason) <= 200, reason
     err, left = call(api, "hub_finance_inbox", {"kind": "uncategorized"}, token=token)
     assert not err and feed_id in {r["feed_id"] for r in left["items"]}, left
+    assert _asks_and_tasks(api) == before, "a refusal files no task, asks for no approval and sends no message"
+    with api.app.state.store.read() as c:
+        for tid in made.values():
+            row = H.task(c, tid)
+            assert row["status"] not in ("done", "closed", "declined"), dict(row)
+            assert H.task_private(c, row), dict(row)
 
 
 def test_a_month_close_from_its_own_private_run_waits_for_the_owner(api):
