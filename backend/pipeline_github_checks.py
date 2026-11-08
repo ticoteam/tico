@@ -100,53 +100,23 @@ def _heads(conn: "sqlite3.Connection", task_id: str) -> list[str]:
     )
 
 
-def _record(conn: "sqlite3.Connection", task: dict[str, Any], requirements: list[dict[str, Any]]) -> int:
-    """The check each of these requirements shows at each pull request head of the ticket. Returns how many were recorded."""
-    from . import pipeline_review  # the requirement's standing is the review module's reading of the same facts
+def publish_affected(conn: "sqlite3.Connection", task_id: str) -> int:
+    """Records, in the caller's transaction, the check of every requirement whose standing the ticket's work or decisions can
+    change: each requirement of its current stage and of each stage it has left, at each pull request head the ticket has.
+    The standings are the engine's (pipeline_engine.task_standings). Every write that can change one calls this in its own
+    transaction: an approval, an undo, a Mark met, a Not validated, an attachment, its removal, and a change of work. Returns
+    how many checks were recorded; nothing is posted here."""
+    from . import pipeline_engine  # the requirement's standing is the engine's reading of the same facts
 
-    heads = _heads(conn, task["id"])
+    heads = _heads(conn, task_id)
+    if not heads:
+        return 0
     recorded = 0
-    for requirement in requirements:
-        if not heads:
-            break
-        state = pipeline_review.requirement_state(conn, task, requirement)
+    for requirement_id, standing in pipeline_engine.task_standings(conn, [task_id]).get(task_id, {}).items():
         for head in heads:
-            publish(conn, task["id"], requirement["id"], state, head)
+            publish(conn, task_id, requirement_id, standing, head)
             recorded += 1
     return recorded
-
-
-def publish_task(conn: "sqlite3.Connection", task_id: str) -> int:
-    """Records the check each requirement of the ticket's current stage shows at each pull request head the ticket has.
-    Called by `publish_open` (the scheduler's pass), so a decision or an undo reaches GitHub on the next pass. Returns
-    how many checks were recorded."""
-    found = conn.execute("SELECT * FROM tasks WHERE id=?", (task_id,)).fetchone()
-    task: dict[str, Any] = dict(found) if found else {}
-    if not task.get("step_id"):
-        return 0
-    requirements: list[dict[str, Any]] = [
-        dict(r)
-        for r in conn.execute(
-            "SELECT * FROM stage_requirements WHERE pipeline_stage_id=? AND retired_at IS NULL ORDER BY id",
-            (task["step_id"],),
-        ).fetchall()
-    ]
-    return _record(conn, task, requirements)
-
-
-def publish_changed(conn: "sqlite3.Connection", task_id: str, requirement_id: str | None) -> int:
-    """Records, in the caller's transaction, the checks a decision, an undo or an attachment changed: the requirement's own
-    check (it may be on a stage the ticket has left, so an approval that moved the ticket on still shows passed) and the
-    ticket's current stage, whose standing a new attachment or a moved ticket can change too. Returns how many checks were
-    recorded; nothing is posted here."""
-    recorded = publish_task(conn, task_id)
-    if not requirement_id:
-        return recorded
-    found = conn.execute("SELECT * FROM tasks WHERE id=?", (task_id,)).fetchone()
-    requirement = conn.execute("SELECT * FROM stage_requirements WHERE id=?", (requirement_id,)).fetchone()
-    if found is None or requirement is None or requirement["retired_at"]:
-        return recorded
-    return recorded + _record(conn, dict(found), [dict(requirement)])
 
 
 def _cursor_of(conn: "sqlite3.Connection") -> str:
@@ -175,7 +145,7 @@ def publish_open(store: "Store", limit: int = PUBLISH_BATCH) -> int:
     recorded = 0
     for task_id in ids:
         with cast(Any, store).transaction() as conn:
-            recorded += publish_task(conn, task_id)
+            recorded += publish_affected(conn, task_id)
     with cast(Any, store).transaction() as conn:
         conn.execute(
             "INSERT INTO pipeline_check_cursor (id, task_id) VALUES (1, ?) ON CONFLICT(id) DO UPDATE SET task_id=excluded.task_id",

@@ -326,7 +326,7 @@ def attach(
     )
     from . import pipeline_github_checks
 
-    pipeline_github_checks.publish_changed(conn, task_id, requirement_id)
+    pipeline_github_checks.publish_affected(conn, task_id)
     return {**(current(conn, task_id, requirement_id) or {}), "reviewed_by": req["reviewed_by"]}
 
 
@@ -348,7 +348,7 @@ def remove(conn: "sqlite3.Connection", auth: "Auth", who: Any, attachment_id: st
     H.event(conn, actor, "requirement.detach", found["task_id"], {"attachment": attachment_id})
     from . import pipeline_github_checks
 
-    pipeline_github_checks.publish_changed(conn, found["task_id"], found["stage_requirement_id"])
+    pipeline_github_checks.publish_affected(conn, found["task_id"])
     return {**dict(found), "removed_at": now, "removed_by": actor}
 
 

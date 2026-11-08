@@ -1,6 +1,9 @@
 """The pipeline check run on a pull request's commit (backend/pipeline_github_checks.py): recorded in the engine's
 transaction, posted once per state, retried after a failure, and withheld until Checks: write is accepted."""
 
+import json
+from types import SimpleNamespace
+
 import httpx
 import pytest
 
@@ -9,7 +12,21 @@ from backend import hubdb as H
 from backend import pipeline_github_checks as C
 from backend.tests.test_github_app import api, auth, connect, gh  # noqa: F401
 from backend import pipeline_review as R
+from backend import requirement_attachments as A
 from backend.tests.test_pipeline_review import ANA, World
+
+
+def _attach_link(w, requirement, url):
+    """The real attach API, as the review tests attach evidence."""
+    return A.attach(
+        w.c,
+        SimpleNamespace(task=lambda *a: None),
+        SimpleNamespace(actor=ANA),
+        w.task,
+        requirement,
+        {"source": "link", "url": url},
+    )
+
 
 SHA = "a" * 40
 
@@ -202,3 +219,22 @@ def test_a_mark_met_that_the_work_outdates_is_waiting_on_the_check_too(setup):
         c.execute("UPDATE tasks SET work_revision=work_revision+1 WHERE id=?", (w.task,))  # the work changed
     C.publish_open(app.store)
     assert states(app)[w.mockup] == "waiting"
+
+
+def test_new_work_in_a_later_stage_puts_the_checks_of_the_stage_it_left_back_to_waiting(setup):
+    """Codex W3 #1: new work evidence (an is_work attachment) outdates the approvals of the stage the ticket left, and their
+    checks say so in the same transaction, not only on the next pass."""
+    app, fake, gh, w = setup
+    gh.permissions = {"checks": "write", "metadata": "read"}
+    with app.store.transaction() as c:
+        w.c = c
+        w.attach()
+        w.approve(w.mockup)
+        assert w.approve(w.signoff)["advanced"] is True and w.step_of() == w.shipped
+        build = w.requirement("Build", "attachment", "person", stage=w.shipped, needs=json.dumps({"is_work": True}))
+    assert states(app)[w.mockup] == "met" and states(app)[w.signoff] == "met"
+    with app.store.transaction() as c:
+        w.c = c
+        _attach_link(w, build, "https://example.test/build")
+    assert states(app)[w.mockup] == "waiting"
+    assert states(app)[w.signoff] == "waiting"
