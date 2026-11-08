@@ -241,8 +241,9 @@ let browser = null;
     await send(block('threads', {kind: 'activity', thread_id: 't-task', root_id: 't-task', message_id: 'm9', unread: true, unread_count: 1,
       counters: {last_seq: 5, last_unread_seq: 5}}));
     await until(async () => (await page.locator('.tr-row[data-thread="t-task"]').count()) === 1, 'a post after the finish brings its row back');
+    // Launch plan's card was already counted; the revived thread's makes two.
     await page.locator('[data-tr-catch] .tr-badge').waitFor({state: 'visible'});
-    assert.equal(await page.locator('[data-tr-catch] .tr-badge').textContent(), '1');
+    assert.equal(await page.locator('[data-tr-catch] .tr-badge').textContent(), '2', 'Catch up counts the revived thread');
     assert.deepEqual(seen.errors, []);
     await page.close();
   }
