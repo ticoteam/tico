@@ -9753,7 +9753,8 @@ def stalled_tasks(conn, at=None, task_ids=None, queued_here=None):
             f"SELECT t.* FROM {TASKS} t JOIN bots b ON t.owner_id='bot:'||b.id WHERE b.state='active' "
             "AND (t.status IN ('open','doing') OR t.status='waiting' AND EXISTS "
             "(SELECT 1 FROM task_relations r WHERE r.to_task=t.id AND r.kind='blocks')) "
-            "AND t.updated_at<?"
+            "AND t.updated_at<? AND NOT "
+            + ON_ICE % "t"
             + (" AND t.id IN (" + ",".join("?" * len(task_ids)) + ")" if task_ids else "")
             + " ORDER BY t.updated_at",
             (shift(at, seconds=-STALL_MINUTES * 60), *(task_ids or ())),
