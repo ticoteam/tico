@@ -286,5 +286,26 @@ let browser = null;
     await page.close();
   }
 
+  // A toast clears the phone tab bar where the bar shows, and sits at its normal place where setup hides the bar (the
+  // Undo toast of a phone list is the one that must be tappable above it).
+  if (!only || only === 'toast-tab-bar') {
+    const {page, seen} = await open(browser);
+    await page.goto('https://tico-ui.test/#/threads');
+    await page.locator('.tr-row[data-thread="t-plan"]').waitFor();
+    assert.equal(await page.locator('#mobile-nav').isVisible(), true, 'the tab bar shows on the Threads page');
+    await page.evaluate(() => toast('Tab bar shows'));
+    const shown = page.locator('.toast', {hasText: 'Tab bar shows'});
+    await shown.waitFor();
+    assert.equal(await shown.evaluate(el => getComputedStyle(el).bottom), '76px', 'the 64px bar and 12px above it');
+
+    await page.evaluate(() => { document.documentElement.classList.add('in-setup'); toast('No tab bar'); });
+    const plain = page.locator('.toast', {hasText: 'No tab bar'});
+    await plain.waitFor();
+    assert.equal(await page.locator('#mobile-nav').isVisible(), false, 'setup hides the tab bar');
+    assert.equal(await plain.evaluate(el => getComputedStyle(el).bottom), '20px', 'no tab bar, so no lift');
+    assert.deepEqual(seen.errors, []);
+    await page.close();
+  }
+
   console.log('PASS: Threads archive: a phone row shows Archive for a managed thread (44px, always shown), taking it and its Catch up count off at once with an Undo that brings it back; the open thread\'s header archives it back to the list, and Unarchive restores it in place; a thread the viewer does not manage has neither; no sideways scroll at 390px; on a desktop the row Archive shows on hover and keyboard focus');
 })().catch(e => { console.error(e); process.exitCode = 1; }).finally(() => browser?.close());
