@@ -24,6 +24,10 @@ const world = () => ({
   't-plan': thread('t-plan', 'Launch plan', {me: me({can_manage: true, unread: 2, activity: true})}),
   't-read': thread('t-read', 'Team lunch', {me: me({can_manage: false})}),
 });
+// The same, with a thread that belongs to a task (its row and Catch up card follow the task's state).
+const liveWorld = () => ({...world(), 't-task': thread('t-task', 'Pricing', {task_id: 'task-9'})});
+// TICO_ONLY=<block name> runs one of the live blocks alone, so each block's own failure can be seen.
+const only = process.env.TICO_ONLY || '';
 // What the server sends for a thread: `hidden` stands for its task having finished, which takes it off the list and out of
 // Catch up, and its view says so (`task_hidden`, present only then).
 const view = t => {
@@ -191,6 +195,54 @@ let browser = null;
     await page.keyboard.press('Tab');
     assert.equal(await page.evaluate(() => document.activeElement?.dataset.trArch), 't-plan', 'Tab from the row reaches its Archive');
     await until(async () => (await opacity()) === '1', 'the row Archive shows on keyboard focus');
+    assert.deepEqual(seen.errors, []);
+    await page.close();
+  }
+
+  // A task's thread follows its task on the live stream, as it does on the list. Its closing notice reaches the thread as
+  // an activity event; the thread's view then says the task hides it, so its row leaves Threads.
+  if (!only || only === 'live-close') {
+    const {page, seen, send, block, threads} = await open(browser, {threads: liveWorld()});
+    await page.goto('https://tico-ui.test/#/threads');
+    await page.locator('.tr-row[data-thread="t-task"]').waitFor();
+    threads['t-task'].hidden = true;
+    await send(block('threads', {kind: 'activity', thread_id: 't-task', root_id: 't-task', message_id: 'n1', unread: false}));
+    await until(async () => (await page.locator('.tr-row[data-thread="t-task"]').count()) === 0, 'a finished task leaves Threads on the live stream');
+    assert.deepEqual(seen.errors, []);
+    await page.close();
+  }
+
+  // A rename of a finished task's thread does not put its row back: the view it sends still says the task hides it.
+  if (!only || only === 'live-rename') {
+    const {page, seen, send, block, threads} = await open(browser, {threads: liveWorld()});
+    threads['t-task'].hidden = true;
+    await page.goto('https://tico-ui.test/#/threads');
+    await page.locator('.tr-row[data-thread="t-plan"]').waitFor();
+    assert.equal(await page.locator('.tr-row[data-thread="t-task"]').count(), 0, 'the finished task is not listed');
+    threads['t-task'].title = 'Pricing (renamed)';
+    const gen = await page.evaluate(() => THREADS.gen);
+    await send(block('threads', {kind: 'renamed', thread_id: 't-task', root_id: 't-task', thread: view(threads['t-task'])}));
+    await page.waitForFunction(was => THREADS.gen > was, gen);
+    assert.equal(await page.locator('.tr-row[data-thread="t-task"]').count(), 0, 'a rename does not bring a finished task back');
+    assert.deepEqual(seen.errors, []);
+    await page.close();
+  }
+
+  // A post in a finished task's thread brings its row back, unread, and Catch up counts it: activity for a row that is
+  // not listed is read, and the thread's view says whether it is on the list now.
+  if (!only || only === 'live-revive') {
+    const {page, seen, send, block, threads} = await open(browser, {threads: liveWorld()});
+    threads['t-task'].hidden = true;
+    await page.goto('https://tico-ui.test/#/threads');
+    await page.locator('.tr-row[data-thread="t-plan"]').waitFor();
+    assert.equal(await page.locator('.tr-row[data-thread="t-task"]').count(), 0, 'the finished task is not listed');
+    threads['t-task'].hidden = false;
+    threads['t-task'].me.unread = 1;
+    await send(block('threads', {kind: 'activity', thread_id: 't-task', root_id: 't-task', message_id: 'm9', unread: true, unread_count: 1,
+      counters: {last_seq: 5, last_unread_seq: 5}}));
+    await until(async () => (await page.locator('.tr-row[data-thread="t-task"]').count()) === 1, 'a post after the finish brings its row back');
+    await page.locator('[data-tr-catch] .tr-badge').waitFor({state: 'visible'});
+    assert.equal(await page.locator('[data-tr-catch] .tr-badge').textContent(), '1');
     assert.deepEqual(seen.errors, []);
     await page.close();
   }
