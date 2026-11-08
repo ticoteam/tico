@@ -1556,3 +1556,38 @@ def test_a_legacy_bot_then_person_field_row_is_not_listed_as_waiting_on_a_judge(
     field = w.requirement("Owner set", "field", "bot_then_person", reviewer=ANA)
     assert not _queued(w, field)
     refused("not_person_reviewed", R.approve, w.c, ANA, w.task, field, work_version=0, requirement_version=1)
+
+
+def test_a_mark_met_expires_on_a_work_change_even_when_its_attachment_takes_no_freshness(world):
+    """Codex W3 #2: a Mark met is an override, and the engine expires it with the work whatever the attachment's own
+    freshness rule says. The review reads the same standing, so the item is waiting again and is listed."""
+    w = world
+    w.c.execute("UPDATE stage_requirements SET needs=? WHERE id=?", ('{"newer_than_change": false}', w.mockup))
+    R.mark_met(w.c, ANA, w.task, w.mockup, "Checked by hand")
+    w.push()
+    assert _engine_state(w, w.mockup) == "out_of_date"
+    mockup = dict(w.c.execute("SELECT * FROM stage_requirements WHERE id=?", (w.mockup,)).fetchone())
+    assert R.requirement_state(w.c, H.task(w.c, w.task), mockup) == "waiting"
+    assert _queued(w, w.mockup)
+
+
+def test_a_mark_met_survives_a_different_digest_replacing_its_attachment_and_the_last_approval_advances(world):
+    """Codex W3 #2: an override names no attachment (the engine's binding rule), so replacing the evidence with another
+    digest leaves it met, and the stage's last approval moves the ticket on."""
+    w = world
+    R.mark_met(w.c, ANA, w.task, w.mockup, "Checked by hand")
+    w.c.execute("UPDATE requirement_attachments SET removed_at=?, removed_by=? WHERE task_id=?", (H.now(), ANA, w.task))
+    w.attach(digest="d2", attachment_id="a-replacement")
+    assert _engine_state(w, w.mockup) == "met"
+    assert w.approve(w.signoff)["advanced"] is True
+    assert w.step_of() == w.shipped
+
+
+def test_a_satisfied_legacy_bot_then_person_field_lets_the_last_approval_advance(world):
+    """Codex W3 #3: a field whose source is set is met by the engine, whatever its legacy review says. The review reads the
+    same standing, so the stage's last approval advances the ticket instead of leaving the queue empty and the card stuck."""
+    w = world
+    w.requirement("Owner set", "field", "bot_then_person", reviewer=ANA, needs=json.dumps({"field": "assignee"}))
+    w.approve(w.mockup)
+    assert w.approve(w.signoff)["advanced"] is True
+    assert w.step_of() == w.shipped

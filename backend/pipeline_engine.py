@@ -1255,3 +1255,19 @@ def install(app: "FastAPI", store: "Store", mutate: Callable[..., Any], auth: "A
             return {"requirements": detail(c, ident)}
 
     pipeline_setup.install(app, store, mutate, auth)
+
+
+def task_standings(conn: sqlite3.Connection, task_ids: list[str]) -> dict[str, dict[str, str]]:
+    """{task id: {requirement id: the engine's state}} for every requirement that counts on each ticket: those of its current
+    stage and of the stages it has left. The review queue, Approve, Mark met and the GitHub checks all read a requirement's
+    standing from here. Unlike `standings`, a closed ticket is answered too, so its checks keep the engine's state."""
+    ids = list(dict.fromkeys(str(t) for t in task_ids if t))
+    rows: list[Row] = []
+    for part in _chunks(ids):
+        rows.extend(_rows(conn, f"SELECT id, type_id, step_id, status FROM tasks WHERE id IN ({_marks(part)})", part))
+    visited = _visited(conn, [str(r["id"]) for r in rows])
+    seen = [stage_id for left in visited.values() for stage_id in left]
+    pipelines = list(dict.fromkeys([str(r["type_id"]) for r in rows if r["type_id"]] + _pipelines_of(conn, seen)))
+    by_stage = _requirements(conn, pipelines)
+    found = _evaluate(conn, _scopes(rows, visited), by_stage) if by_stage else {}
+    return {task_id: {standing.id: standing.state for standing in found.get(task_id, [])} for task_id in ids}

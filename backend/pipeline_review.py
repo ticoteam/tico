@@ -58,7 +58,6 @@ def _review_of(requirement: dict[str, Any]) -> str:
     return str(requirement["reviewed_by"])
 
 
-MET_VERDICTS = ("met", "override")
 Row = dict[str, Any]
 CURRENT: Any = object()  # approve(): no version named, so the current one is taken (a caller inside the engine)
 
@@ -203,79 +202,9 @@ def _open_visit(c: "sqlite3.Connection", task_id: str) -> Row | None:
     return _one(c, "SELECT * FROM stage_visits WHERE task_id=? AND left_at IS NULL", (task_id,))
 
 
-def _decisions(c: "sqlite3.Connection", task_id: str, requirement_id: str) -> list[Row]:
-    """The decisions not undone about one requirement of one ticket, newest first."""
-    return _rows(
-        c,
-        "SELECT * FROM stage_decisions WHERE task_id=? AND stage_requirement_id=? AND undone_at IS NULL "
-        "ORDER BY created_at DESC, rowid DESC",
-        (task_id, requirement_id),
-    )
-
-
-def _needs(requirement: Row) -> dict[str, Any]:
-    try:
-        value = json.loads(requirement.get("needs") or "{}")
-    except ValueError:
-        return {}
-    return cast("dict[str, Any]", value) if isinstance(value, dict) else {}
-
-
-def _fresh_required(requirement: Row) -> bool:
-    """Whether a met decision must be at the current work version: always, except an attachment that opted out."""
-    if requirement["kind"] != "attachment":
-        return True
-    return _needs(requirement).get("newer_than_change", True) is not False
-
-
-def _met_in(requirement: Row, attachment: Row | None, decisions: list[Row], revision: int) -> Row | None:
-    """The decision that makes the requirement met, from its decisions (newest first), or None. The newest met, override,
-    withdrawn or failed decision decides; a met one counts only at `revision` and while the attachment it judged is still
-    the one attached (taking it away unmeets it; an override is not about the attachment). No override stands in for an
-    approval (D10, D34)."""
-    for decision in decisions:
-        if decision["verdict"] not in (*MET_VERDICTS, "withdrawn", "failed"):
-            continue
-        if decision["verdict"] not in MET_VERDICTS:
-            return None
-        if decision["verdict"] == "override" and requirement["kind"] == "approval":
-            return None
-        if not pipeline_engine.verdict_binds_attachment(decision, attachment):
-            return None  # the attachment it judged is no longer the one attached (the engine's rule, shared)
-        if _fresh_required(requirement) and decision["work_version"] != revision:
-            return None
-        digest = decision["attachment_digest"]
-        if digest and attachment is not None and attachment["digest"] != digest:
-            return None
-        if digest and attachment is None and decision["verdict"] == "met":
-            return None
-        return decision
-    return None
-
-
-def _met_decision(c: "sqlite3.Connection", task: Row, requirement: Row, attachment: Row | None) -> Row | None:
-    """The decision that makes the requirement met now, or None (see `_met_in`)."""
-    return _met_in(requirement, attachment, _decisions(c, task["id"], requirement["id"]), _revision(task))
-
-
 def _later(created_at: Any, than: Any) -> bool:
     """Whether `created_at` is after `than`. A missing time is never after, as SQL reads a comparison with NULL."""
     return created_at is not None and than is not None and created_at > than
-
-
-def _state_in(requirement: Row, revision: int, attachment: Row | None, decisions: list[Row]) -> str:
-    """`met`, `failed` (the latest judgement at this work version), `waiting` (a reviewer is to decide) or `missing`
-    (an attachment requirement with nothing attached), from the decisions (newest first) and the newest attachment."""
-    if _met_in(requirement, attachment, decisions, revision):
-        return "met"
-    for decision in decisions:
-        if decision["verdict"] in ("met", "override", "withdrawn", "failed"):
-            if decision["verdict"] == "failed" and decision["work_version"] == revision:
-                return "failed"
-            break
-    if requirement["kind"] == "attachment" and attachment is None:
-        return "missing"
-    return "waiting"
 
 
 def _routed_in(decisions: list[Row]) -> str | None:
@@ -333,9 +262,11 @@ def _waits_in(requirement: Row, state: str, decisions: list[Row], revision: int,
 class _Facts:
     """What the review rules read about (ticket, requirement) pairs, each kind fetched once for all of them: the decisions
     not undone, the newest attachment, each ticket's open visit, and the visits the manager asked the backup about. The
-    queue and the single-row helpers read the rules through this, so they cannot disagree about an item."""
+    queue and the single-row helpers read the rules through this, so they cannot disagree about an item. A requirement's
+    standing is the engine's (pipeline_engine.task_standings), never a second reading of the decisions."""
 
     def __init__(self) -> None:
+        self.standing: dict[str, dict[str, str]] = {}  # ticket id -> {requirement id: the engine's state}
         self.decisions: dict[Key, list[Row]] = {}
         self.attachments: dict[Key, Row] = {}
         self.visits: dict[str, Row] = {}
@@ -375,6 +306,7 @@ class _Facts:
             tasks,
         ):
             facts.labels.setdefault(label["task_id"], set()).add(str(label["key"]))
+        facts.standing = pipeline_engine.task_standings(c, tasks)
         visit_ids = [visit["id"] for visit in facts.visits.values()]
         for asked in _read(
             c,
@@ -387,9 +319,19 @@ class _Facts:
             facts.asked.add((asked["stage_visit_id"], asked["stage_requirement_id"]))
         return facts
 
+    def counts(self, task: Row, requirement: Row) -> bool:
+        """Whether the engine holds the ticket to this requirement where it stands (its current stage, or a stage it left)."""
+        return str(requirement["id"]) in self.standing.get(str(task["id"]), {})
+
     def state(self, task: Row, requirement: Row) -> str:
-        key = (task["id"], requirement["id"])
-        return _state_in(requirement, _revision(task), self.attachments.get(key), self.decisions.get(key, []))
+        """`met`, `failed`, `missing` (an attachment requirement with nothing attached) or `waiting` (anything else: a
+        reviewer is to decide, or the requirement is out of date). The engine's standing, mapped to the review's words."""
+        engine = self.standing.get(str(task["id"]), {}).get(str(requirement["id"]), "")
+        if engine in ("met", "failed"):
+            return engine
+        if engine == "none" and requirement["kind"] == "attachment":
+            return "missing"
+        return "waiting"
 
     def applies(self, task: Row, requirement: Row) -> bool:
         return pipeline_engine.applies(requirement, self.labels.get(task["id"], set()))
@@ -669,8 +611,7 @@ def _moves_to(
             continue  # a mirror of the review gate, which still decides it (as in `_stage_met`)
         if not pipeline_engine.applies(other, labels):
             continue
-        key = (item["task_id"], other["id"])
-        if _met_in(other, facts.attachments.get(key), facts.decisions.get(key, []), item["work_version"]) is None:
+        if facts.state({"id": item["task_id"]}, other) != "met":
             return None
     destination = _destination_in(item["stage_id"], item["pipeline_id"], links.get(item["stage_id"]), steps)
     if destination is None:
@@ -778,7 +719,12 @@ def queue_for(
     for pair in pairs:
         task = tasks.get(pair["task_id"])
         requirement = requirements.get(pair["requirement_id"])
-        if task is None or requirement is None or not facts.applies(task, requirement):
+        if (
+            task is None
+            or requirement is None
+            or not facts.applies(task, requirement)
+            or not facts.counts(task, requirement)
+        ):
             continue
         why = facts.why_sees(actor, task["id"], requirement)
         if why and facts.waits_on_person(task, requirement):
@@ -1061,7 +1007,7 @@ def approve(
             raise Declined("stale", "The attachment changed since you looked", 409, extra={"reason": "attachment"})
         if requirement_version != requirement["version"]:
             raise Declined("stale", "The requirement changed since you looked", 409, extra={"reason": "requirement"})
-        if _met_decision(c, task, requirement, current):
+        if requirement_state(c, task, requirement) == "met":
             raise Declined("already_met", "This requirement is already met", 409)
         problem = pipeline_engine.approval_problem(c, task_id, requirement, current)
         if problem is not None:
@@ -1376,7 +1322,7 @@ def mark_met(c: "sqlite3.Connection", actor: str, task_id: str, requirement_id: 
         if requirement["kind"] == "approval":
             raise Declined("protected_approval", "A spec or release approval needs its named person to approve it", 409)
         current = _current_attachment(c, task_id, requirement_id)
-        if _met_decision(c, task, requirement, current):
+        if requirement_state(c, task, requirement) == "met":
             raise Declined("already_met", "This requirement is already met", 409)
         decision = _decide(c, actor, task, requirement, "override", reason, current)
         pipeline_github_checks.publish_changed(c, task_id, requirement_id)

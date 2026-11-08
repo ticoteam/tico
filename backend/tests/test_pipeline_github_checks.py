@@ -185,3 +185,20 @@ def test_the_scheduler_reaches_every_ticket_in_two_passes_and_resumes_from_its_c
     assert reached() == 250  # the rest on the second pass, and the cursor wraps for the one after
     with app.store.read() as c:
         assert c.execute("SELECT task_id FROM pipeline_check_cursor").fetchone()[0] == ""  # wrapped after a short pass
+
+
+def test_a_mark_met_that_the_work_outdates_is_waiting_on_the_check_too(setup):
+    """Codex W3 #2 on the check: the check reads the engine's standing, so an override that the work change expired is
+    no longer a passed check on the commit."""
+    app, fake, gh, w = setup
+    gh.permissions = {"checks": "write", "metadata": "read"}
+    with app.store.transaction() as c:
+        w.c = c
+        c.execute("UPDATE stage_requirements SET needs=? WHERE id=?", ('{"newer_than_change": false}', w.mockup))
+        R.mark_met(c, ANA, w.task, w.mockup, "Checked by hand")
+    C.publish_open(app.store)
+    assert states(app)[w.mockup] == "met"
+    with app.store.transaction() as c:
+        c.execute("UPDATE tasks SET work_revision=work_revision+1 WHERE id=?", (w.task,))  # the work changed
+    C.publish_open(app.store)
+    assert states(app)[w.mockup] == "waiting"
