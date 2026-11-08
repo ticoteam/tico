@@ -150,6 +150,46 @@ def test_a_refusal_for_another_reason_is_one_plain_sentence_and_the_row_stays(ap
             assert H.task_private(c, row), dict(row)
 
 
+def test_the_refusal_is_noted_on_the_task_in_one_sentence_and_nobody_is_asked(api):
+    """The Bookkeeper's follow-up after a refused write, scripted in the order AGENT.md's Each Books check gives it: the
+    row stays, one plain sentence goes on the task, and the run goes on. The steps are scripted, not a live model, so
+    this pins what the product allows and what those steps leave behind; a model's wording is not tested here."""
+    token, made, _ = private_run(api, carried=("books",))
+    feed_id = deposit_feed_id(api, token)
+    before = _asks_and_tasks(api)
+    refused = post_finance(
+        api, token, "categorize", {"feed_id": feed_id, "account_id": "acc-no-such-account"}, "cat:bad-account"
+    )
+    reason = refused.json()["reason"]
+    sentence = f"The categorize was refused ({reason}), so the row stays for the next check."
+    err, noted = call(api, "hub_task_comment", {"id": made["books"], "text": sentence}, token=token)
+    assert not err, noted
+
+    err, shown = call(api, "hub_task_show", {"id": made["books"]}, token=token)
+    assert not err, shown
+    notes = [c["body"] for c in shown["comments"] if c["sender_id"] == BK.ACTOR]
+    assert notes == [sentence], notes
+    assert "\n" not in sentence and sentence.count(".") == 1 and sentence.endswith("."), sentence
+    assert not any(word in sentence.lower() for word in ("reissue", "publish", "resubmit")), sentence
+
+    # Nothing asks a person to reissue or publish it: the bot may not make its task company-visible.
+    err, widened = call(
+        api,
+        "hub_task_update",
+        {"id": made["books"], "visibility": "public", "public_title": "Books check"},
+        token=token,
+    )
+    assert err and widened.get("error") == "private", widened
+    with api.app.state.store.read() as c:
+        assert H.task_private(c, H.task(c, made["books"])), "the Books check stays private"
+        assert H.task(c, made["books"])["status"] not in ("done", "closed", "declined")
+    after = _asks_and_tasks(api)
+    assert after["tasks"] == before["tasks"] and after["approvals"] == before["approvals"], (before, after)
+    assert after["messages"] == before["messages"] + 1, "only the note itself is written: no message to anyone"
+    err, left = call(api, "hub_finance_inbox", {"kind": "uncategorized"}, token=token)
+    assert not err and feed_id in {r["feed_id"] for r in left["items"]}, left
+
+
 def test_a_month_close_from_its_own_private_run_waits_for_the_owner(api):
     token, made, _ = private_run(
         api, feed=False
