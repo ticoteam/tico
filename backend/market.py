@@ -60,7 +60,7 @@ LEGACY_RELATIONS = {
 }
 SYMMETRIC = frozenset({"competes_with", "partners_with"})
 CLAIM_KINDS = ("entity", "edge", "evidence", "document")
-ENTITY_TYPES = ("company", "product", "person", "segment", "channel", "geography", "regulation", "event")
+ENTITY_TYPES = ("organization", "product", "person", "segment", "channel", "place", "document", "event")
 TIERS = ("core", "lookalike", "phrase-stealer", "secondary")
 CONFIDENCE = ("high", "medium", "low")
 # A link stores its confidence as a number; the API keeps the label.
@@ -1761,11 +1761,11 @@ def delta_body(conn, today):
 
 def narrative(conn, today):
     """The market pages, from the rows the seed just wrote. Not a standing placeholder."""
-    companies = _listed(conn, "company")
+    companies = _listed(conn, "organization")
     segments = _listed(conn, "segment")
     channels = _listed(conn, "channel")
     people = _listed(conn, "person")
-    regulations = _listed(conn, "regulation")
+    regulations = _listed(conn, "document")
     core = [row for row in companies if row.get("tier") == "core"]
     look = [row for row in companies if row.get("tier") == "lookalike"]
     questions = H._rows(
@@ -2000,7 +2000,7 @@ def companies_from_watchlist(document):
         rows.append(
             {
                 "id": "company/" + slug(entry["name"]),
-                "type": "company",
+                "type": "organization",
                 "name": str(entry["name"]).strip(),
                 "tier": entry.get("tier"),
                 "aliases": queries,
@@ -2014,7 +2014,7 @@ def companies_from_watchlist(document):
     rows.append(
         {
             "id": OWN_COMPANY_ID,
-            "type": "company",
+            "type": "organization",
             "name": own_name,
             "tier": None,
             "aliases": own_aliases,
@@ -2126,7 +2126,7 @@ def _import_entity(conn, row):
         conn,
         {
             "id": row["id"],
-            "type": row.get("type") or "company",
+            "type": row.get("type") or "organization",
             "name": row["name"],
             "aliases": row.get("aliases") or [],
             "external_ids": row.get("external_ids") or {},

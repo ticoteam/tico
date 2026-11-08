@@ -965,7 +965,7 @@ def _players(conn, ids, figures):
 # ----------------------------------------------------------------------------- figures
 def create_figure(conn, actor, f):
     ent = MK.entity(conn, f["entity_id"])
-    if not ent or ent["type"] not in ("company", "product") or ent["status"] != "active":
+    if not ent or ent["type"] not in ("organization", "product") or ent["status"] != "active":
         raise Problem("not_found", f"{f['entity_id']} is not a company or product in the market graph", 404)
     seg = _segment(conn, f["segment_id"])
     as_of = str(f.get("as_of") or "").strip()

@@ -939,7 +939,7 @@ class MarketEvidenceCreate(Contract):
 
 class MarketEntityCreate(Contract):
     id: str | None = Field(default=None, max_length=200)
-    type: Literal["company", "product", "person", "segment", "channel", "geography", "regulation", "event"]
+    type: Literal["organization", "product", "person", "segment", "channel", "place", "document", "event"]
     name: str = Field(min_length=1, max_length=300)
     aliases: list[str] = Field(default_factory=list, max_length=50)
     external_ids: dict = Field(default_factory=dict)

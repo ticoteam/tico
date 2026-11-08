@@ -83,7 +83,7 @@ def test_the_librarian_gets_the_market_routines_and_the_old_market_analyst_is_re
 
 def test_the_server_enforces_writers_evidence_vocabulary_and_no_delete(api, tmp_path):
     _seed(api, tmp_path)
-    body = {"type": "company", "name": "Newco", "summary": "A company."}
+    body = {"type": "organization", "name": "Newco", "summary": "A company."}
     post(api, "market/entities", body, token="ben-test", expected=403)
     post(api, "market/entities", body, expected=422)
     evidence = post(
@@ -111,14 +111,14 @@ def test_the_server_enforces_writers_evidence_vocabulary_and_no_delete(api, tmp_
     post(
         api,
         "market/entities",
-        {"type": "company", "name": "Also Northwind", "aliases": ["Northwind"], "evidence_ids": [evidence["id"]]},
+        {"type": "organization", "name": "Also Northwind", "aliases": ["Northwind"], "evidence_ids": [evidence["id"]]},
         expected=422,
     )
     forced = post(
         api,
         "market/entities",
         {
-            "type": "company",
+            "type": "organization",
             "name": "Also Northwind",
             "aliases": ["Northwind"],
             "evidence_ids": [evidence["id"]],
@@ -141,7 +141,7 @@ def test_the_server_enforces_writers_evidence_vocabulary_and_no_delete(api, tmp_
     created = post(
         api,
         "market/entities",
-        {"type": "company", "name": "Curated Co", "evidence_ids": [evidence["id"]]},
+        {"type": "organization", "name": "Curated Co", "evidence_ids": [evidence["id"]]},
         token=librarian["token"],
     )["entity"]
     assert created["created_by"] == "bot:librarian"
@@ -160,7 +160,7 @@ def _ev(quote):
 
 def test_market_import_is_for_the_librarian_and_the_owner(api, tmp_path):
     _seed(api, tmp_path)
-    lines = _jsonl({"kind": "entity", "type": "company", "name": "Turno", "evidence": _ev("Turno cleans.")})
+    lines = _jsonl({"kind": "entity", "type": "organization", "name": "Turno", "evidence": _ev("Turno cleans.")})
     post(api, "market/import", {"lines": lines}, token="ben-test", expected=403)
     with api.app.state.store.read() as c:
         assert not M.entity(c, "company/turno")
@@ -168,7 +168,7 @@ def test_market_import_is_for_the_librarian_and_the_owner(api, tmp_path):
 
 def test_market_import_refuses_a_batch_over_the_line_cap(api, tmp_path):
     _seed(api, tmp_path)
-    one = _jsonl({"kind": "entity", "type": "company", "name": "Turno", "evidence": _ev("Turno cleans.")}).strip()
+    one = _jsonl({"kind": "entity", "type": "organization", "name": "Turno", "evidence": _ev("Turno cleans.")}).strip()
     lines = "\n".join([one] * (M.IMPORT_MAX_LINES + 1)) + "\n\n"
     with api.app.state.store.read() as c:
         before = c.execute("SELECT COUNT(*) FROM market_insights").fetchone()[0]
@@ -193,7 +193,7 @@ def test_market_import_resolves_cites_skips_and_dry_runs(api, tmp_path):
         {
             "kind": "entity",
             "id": "company/turno",
-            "type": "company",
+            "type": "organization",
             "name": "Turno",
             "aliases": ["Turno Inc"],
             "external_ids": {"domain": "turno.example"},
@@ -203,7 +203,7 @@ def test_market_import_resolves_cites_skips_and_dry_runs(api, tmp_path):
         {
             "kind": "entity",
             "id": "company/brightline-inc",
-            "type": "company",
+            "type": "organization",
             "name": "Brightline Inc",
             "external_ids": {"domain": "brightline.example"},
             "summary": "",
@@ -226,7 +226,7 @@ def test_market_import_resolves_cites_skips_and_dry_runs(api, tmp_path):
         },
         {
             "kind": "entity",
-            "type": "company",
+            "type": "organization",
             "name": "Harborly",
             "aliases": ["Fernwood"],
             "summary": "Both?",
@@ -348,7 +348,7 @@ def test_a_market_ask_is_audited_and_capped_per_person_per_day(api, tmp_path, mo
 def test_graph_reads_share_market_permissions_and_hide_inactive_entities(api):
     with api.app.state.store.transaction() as c:
         for name in ('Self', 'Neighbor', 'Retired', 'Merged'):
-            M.create_entity(c, M.SEED_ACTOR, type='company', name=name)
+            M.create_entity(c, M.SEED_ACTOR, type='organization', name=name, entity_id=f'company/{name.lower()}')
         M.create_edge(c, M.SEED_ACTOR, src='company/self', dst='company/neighbor', rel='employs')
         M.create_edge(c, M.SEED_ACTOR, src='company/self', dst='company/retired', rel='employs')
         M.create_edge(c, M.SEED_ACTOR, src='company/merged', dst='company/self', rel='employs')
@@ -368,7 +368,7 @@ def test_graph_reads_share_market_permissions_and_hide_inactive_entities(api):
 def test_graph_and_entity_pages_are_bounded_and_focus_works_beyond_the_first_page(api):
     with api.app.state.store.transaction() as c:
         for i in range(16):
-            M.create_entity(c, M.SEED_ACTOR, type='company', name=f'Node {i:02}', entity_id=f'company/n{i}')
+            M.create_entity(c, M.SEED_ACTOR, type='organization', name=f'Node {i:02}', entity_id=f'company/n{i}')
         for i in range(12):
             for j in range(12):
                 if i != j:
@@ -467,7 +467,12 @@ def test_applying_an_insight_makes_an_entity_and_sets_its_verified_date(api, tmp
         "market/insights/i1/apply",
         {
             "evidence": evidence,
-            "entity": {"id": "company/contoso", "type": "company", "name": "Contoso", "last_verified_at": "2026-10-01"},
+            "entity": {
+                "id": "company/contoso",
+                "type": "organization",
+                "name": "Contoso",
+                "last_verified_at": "2026-10-01",
+            },
         },
     )
     post(
@@ -501,7 +506,7 @@ def test_applying_a_verified_date_to_an_entity_with_none_sets_it_and_applies_the
     post(
         api,
         "market/insights/i-new/apply",
-        {"evidence": evidence, "entity": {"id": "company/fabrikam", "type": "company", "name": "Fabrikam"}},
+        {"evidence": evidence, "entity": {"id": "company/fabrikam", "type": "organization", "name": "Fabrikam"}},
     )
     with api.app.state.store.read() as c:
         assert c.execute("SELECT last_verified_at FROM entities WHERE id='company/fabrikam'").fetchone()[0] is None
@@ -526,7 +531,12 @@ def test_a_new_entity_applied_with_a_verified_date_keeps_it(api, tmp_path):
         "market/insights/i-made/apply",
         {
             "evidence": evidence,
-            "entity": {"id": "company/initech", "type": "company", "name": "Initech", "last_verified_at": "2026-11-03"},
+            "entity": {
+                "id": "company/initech",
+                "type": "organization",
+                "name": "Initech",
+                "last_verified_at": "2026-11-03",
+            },
         },
     )
     with api.app.state.store.read() as c:
@@ -593,7 +603,12 @@ def test_an_impossible_calendar_day_is_refused_on_apply_to_an_entity_or_a_new_on
         headers=headers(),
         json={
             "evidence": new_evidence,
-            "entity": {"id": "company/ghostco", "type": "company", "name": "Ghostco", "last_verified_at": "2026-02-31"},
+            "entity": {
+                "id": "company/ghostco",
+                "type": "organization",
+                "name": "Ghostco",
+                "last_verified_at": "2026-02-31",
+            },
         },
     )
     assert r.status_code >= 400 and "calendar" in r.text, r.text

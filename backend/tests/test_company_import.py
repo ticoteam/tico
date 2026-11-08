@@ -1198,9 +1198,9 @@ def test_a_strategy_block_imports_as_an_unconfirmed_draft_with_its_market_watche
         ("segment/bim", "member_of", root),
         ("segment/specialty-pm", "member_of", root),
         ("company/self", "operates_in", "segment/schedules"),
-        ("company/trestle", "operates_in", "segment/gc-suites"),
-        ("company/fieldcraft", "operates_in", "segment/schedules"),
-        ("company/trestle", "competes_with", "company/self"),
+        ("organization/trestle", "operates_in", "segment/gc-suites"),
+        ("organization/fieldcraft", "operates_in", "segment/schedules"),
+        ("organization/trestle", "competes_with", "company/self"),
     } <= edges
     sizes = {r["segment_id"]: r for r in rows(api, "SELECT * FROM market_sizes")}
     assert set(sizes) == {"segment/gc-suites", "segment/schedules", "segment/bim"}  # no evidence, no size
@@ -1218,8 +1218,8 @@ def test_a_strategy_block_imports_as_an_unconfirmed_draft_with_its_market_watche
     assert {
         (r["entity_id"], r["url"], r["kind"]) for r in rows(api, "SELECT * FROM entity_watches WHERE active=1")
     } == {
-        ("company/trestle", "https://example.com/trestle", "home"),
-        ("company/fieldcraft", "https://example.com/fieldcraft", "home"),
+        ("organization/trestle", "https://example.com/trestle", "home"),
+        ("organization/fieldcraft", "https://example.com/fieldcraft", "home"),
     }
     insights = rows(api, "SELECT claim, source_url, status FROM market_insights ORDER BY reported_at")
     assert [(i["source_url"], i["status"]) for i in insights] == [
@@ -1259,7 +1259,7 @@ def test_a_segment_named_like_the_root_gets_its_own_id_and_keeps_its_size_childr
     assert {
         ("segment/gc-suites-2", "member_of", "segment/gc-suites"),
         ("segment/schedules", "member_of", "segment/gc-suites-2"),
-        ("company/trestle", "operates_in", "segment/gc-suites-2"),
+        ("organization/trestle", "operates_in", "segment/gc-suites-2"),
     } <= edges
     assert "segment/gc-suites-2" in {r["segment_id"] for r in rows(api, "SELECT segment_id FROM market_sizes")}
     assert api.get("/api/v2/setup", headers=signed_in()).json()["company_import"]["strategy"]["skipped"] == []
@@ -1279,9 +1279,9 @@ def test_an_address_with_a_user_name_never_lands_in_market_evidence_whatever_wro
         CI.import_strategy(c, "human:owner", strategy, "Acme Build")
     assert not [r for r in rows(api, "SELECT source_url FROM market_evidence") if "alice" in r["source_url"]]
     assert not [r for r in rows(api, "SELECT source_url FROM market_insights") if "alice" in r["source_url"]]
-    assert {r["entity_id"] for r in rows(api, "SELECT entity_id FROM entity_watches")} == {"company/fieldcraft"}
+    assert {r["entity_id"] for r in rows(api, "SELECT entity_id FROM entity_watches")} == {"organization/fieldcraft"}
     assert "segment/gc-suites" not in {r["segment_id"] for r in rows(api, "SELECT segment_id FROM market_sizes")}
-    assert rows(api, "SELECT id FROM entities WHERE id='company/trestle'")  # the player still lands
+    assert rows(api, "SELECT id FROM entities WHERE id='organization/trestle'")  # the player still lands
 
 
 # A made-up company (Acme Build): two sales teams, a sales seat with no team, and one whose team is "sales" in lower
