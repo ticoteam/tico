@@ -1,0 +1,104 @@
+"""The legacy roadmap sync (roadmap_flow.sync): a Product card follows its linked Engineering tickets whether the hub
+still has the seed's stage names (Approved, Building, Shipped) or pipeline_setup renamed them (Review, In development,
+Done). Setup keeps the stage ids, so the sync finds each stage by its id or by either name."""
+
+from backend import hubdb as H
+from backend import pipeline_setup, roadmap_flow
+from backend.tests.test_pipeline_foundation import ANA, boot, hub, step_id
+
+T = "2026-11-07T09:00:00.000000Z"
+
+
+def seed(tmp_path):
+    boot(tmp_path / "hub.sqlite")
+    return hub(tmp_path / "hub.sqlite")
+
+
+def setup_ran(tmp_path):
+    c = seed(tmp_path)
+    pipeline_setup.apply_factory_setup(c, ANA)
+    c.commit()
+    return c
+
+
+def retire_requirements(c, pipeline_id):
+    """The setup's requirements are the off switch of the legacy sync (has_requirements). A pipeline without them is
+    the one the sync still drives, so these tests retire them to exercise the name mapping on a setup database."""
+    c.execute(
+        "UPDATE stage_requirements SET retired_at = ? WHERE pipeline_id = ? AND retired_at IS NULL", (T, pipeline_id)
+    )
+    c.commit()
+
+
+def card_in(c, stage_name, stage_id=None):
+    product = roadmap_flow.role_type(c, roadmap_flow.PRODUCT)
+    step = stage_id or step_id(c, product, stage_name)
+    row = H.task_create(c, ANA, "Dark mode", "", ANA, type=product, step=step, lint=False)
+    c.commit()
+    return row["id"]
+
+
+def ticket(c, card, eng_stage):
+    eng = roadmap_flow.role_type(c, roadmap_flow.ENGINEERING)
+    row = H.task_create(
+        c, ANA, "Build it", "", ANA, type=eng, step=step_id(c, eng, eng_stage), parent_id=card, lint=False
+    )
+    c.commit()
+    return row["id"]
+
+
+def move(c, task_id, eng_stage):
+    eng = H.task(c, task_id)["type_id"]
+    H.task_update(c, ANA, task_id, step=step_id(c, eng, eng_stage), mover=True)
+    c.commit()
+
+
+def stage_of(c, task_id):
+    return c.execute(
+        "SELECT s.name FROM tasks k JOIN task_steps s ON s.id = k.step_id WHERE k.id = ?", (task_id,)
+    ).fetchone()[0]
+
+
+def test_a_seed_card_in_approved_moves_to_building_when_its_ticket_starts(tmp_path):
+    c = seed(tmp_path)
+    card = card_in(c, "Approved")
+    task = ticket(c, card, "Todo")
+    move(c, task, "Doing")
+    assert stage_of(c, card) == "Building"
+
+
+def test_after_setup_a_card_in_review_moves_to_in_development_when_its_ticket_starts(tmp_path):
+    c = setup_ran(tmp_path)
+    product = roadmap_flow.role_type(c, roadmap_flow.PRODUCT)
+    retire_requirements(c, product)
+    card = card_in(c, "Review")
+    task = ticket(c, card, "Todo")
+    move(c, task, "Doing")
+    assert stage_of(c, card) == "In development"
+
+
+def test_after_setup_a_card_follows_its_shipped_ticket_to_done(tmp_path):
+    c = setup_ran(tmp_path)
+    product = roadmap_flow.role_type(c, roadmap_flow.PRODUCT)
+    retire_requirements(c, product)
+    card = card_in(c, "In development")
+    task = ticket(c, card, "Todo")
+    move(c, task, "Done")
+    assert stage_of(c, card) == "Done"
+
+
+def test_after_setup_with_requirements_live_the_legacy_sync_moves_nothing(tmp_path):
+    c = setup_ran(tmp_path)
+    card = card_in(c, "Review")
+    task = ticket(c, card, "Todo")
+    move(c, task, "Doing")
+    assert stage_of(c, card) == "Review"
+
+
+def test_after_setup_a_card_with_no_linked_tickets_does_not_move(tmp_path):
+    c = setup_ran(tmp_path)
+    retire_requirements(c, roadmap_flow.role_type(c, roadmap_flow.PRODUCT))
+    card = card_in(c, "Review")
+    roadmap_flow.changed(c, card)
+    c.commit()
+    assert stage_of(c, card) == "Review"
