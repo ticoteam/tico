@@ -1406,10 +1406,17 @@ def refresh_task_prs(service, task_id):
                             except Exception:
                                 logging.getLogger("tico.github").debug("Head identity unavailable for %s #%s", *key)
                         # Pending checks, and a copy that dropped a check, are read afresh: a suite that never starts sends
-                        # no webhook (Dev 646), and a dropped check's own webhook cannot say the others are green.
+                        # no webhook (Dev 646), and a dropped check's own webhook cannot say the others are green. So is
+                        # a failing link that still holds a running check: this refresh moves the link's updated_at, so
+                        # task reads every few minutes would keep refresh_pending_checks from ever reading it (PR 3055).
                         checks = None
-                        dropped = (H._json(link.get("detail"), {}) or {}).get("checks_dropped")
-                        if head and (link.get("checks") == "pending" or dropped) and pr.get("state") == "open":
+                        stored = H._json(link.get("detail"), {}) or {}
+                        dropped = stored.get("checks_dropped")
+                        if (
+                            head
+                            and (link.get("checks") == "pending" or dropped or _still_going(stored))
+                            and pr.get("state") == "open"
+                        ):
                             try:
                                 checks = _fresh_checks(service, link["repo"], head)
                             except Exception:

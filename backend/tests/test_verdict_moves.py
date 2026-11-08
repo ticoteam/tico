@@ -851,6 +851,34 @@ def test_a_task_read_rebuilds_pending_checks_from_github(api, monkeypatch):
     assert [m["refs"]["pr_head"] for m in builder_jobs(api) if m["refs"].get(V.HANDOFF) == "merge"] == [HEAD]
 
 
+def test_a_task_read_finishes_a_failed_head_behind_a_suite_that_never_started(api, monkeypatch):
+    """Each task read refreshes the link and moves its updated_at, so with the task open the pending sweep never finds
+    the link quiet: the read itself must read the checks of a failing link that still holds a running one."""
+    import threading
+    from backend import github as G
+
+    task = ticket(api, step="In QA")
+    _suite(api, "tico-team-bots", "queued", sha=HEAD, id=STUCK)
+    _suite(api, "github-actions", "completed", "cancelled", sha=HEAD, id=1)
+    verdict(api, check(api, task, "QA: PR #412"), "pass")
+    assert _link(api, task)["checks"] == "failing" and not _failed_checks(api)
+    service, _ = _github(
+        api,
+        monkeypatch,
+        [
+            _suite_row(1, "github-actions", "completed", "cancelled", runs=2),
+            _suite_row(STUCK, "tico-team-bots", "queued"),
+        ],
+        [{"name": "tests", "status": "completed", "conclusion": "cancelled"}],
+    )
+    G.refresh_task_prs(service, task["id"])
+    for worker in threading.enumerate():
+        if worker.name == "tico-pr-refresh":
+            worker.join(5)
+    assert "pending" not in H._json(_link(api, task)["detail"], {})["checks"].values()
+    assert len(_failed_checks(api)) == 1
+
+
 # The suites are made when the test runs: a "queued 2 minutes ago" made at collection is stuck by the time a long suite
 # reaches it (github.STUCK_SUITE_MINUTES).
 @pytest.mark.parametrize(
