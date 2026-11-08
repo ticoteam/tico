@@ -260,6 +260,10 @@ def observations(gh, repo, runs):
     return out
 
 
+# The suites pr_checks.run selects with `-m slow` (scripts/pr_checks.py); the others run `not slow`.
+SLOW_SUITES = ("conformance", "contracts")
+
+
 def _passed(test, failure, failing, other, files):
     """Whether `other` (an attempt of the same commit) passed `test`: a leg of it that ran the test's file passed. A
     leg's log names its files; an older log does not, and then only the same leg of the same plan job counts (a
@@ -267,6 +271,10 @@ def _passed(test, failure, failing, other, files):
     path = test.split("::")[0]
     for leg in other["legs"]:
         if leg["conclusion"] != "success":
+            continue
+        # pytest runs only `-m slow` in the conformance and contracts suites and deselects them everywhere else, so a leg
+        # of the other kind never ran this test: a slow test that fails every time is not proven passing by a python leg.
+        if (leg["name"].split("-")[0] in SLOW_SUITES) != (failure["leg"].split("-")[0] in SLOW_SUITES):
             continue
         same_plan = other["run"] == failing["run"] and other["plan"] is not None and other["plan"] == failing["plan"]
         if same_plan and leg["name"] == failure["leg"]:

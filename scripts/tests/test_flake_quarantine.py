@@ -441,3 +441,21 @@ def test_the_root_conftest_wires_the_quarantine(request, tmp_path):
     assert [nodeid for nodeid, _ in marked] == ["x.py::test_a"]
     mark = marked[0][1]
     assert mark.name == "xfail" and mark.kwargs["strict"] is False and mark.kwargs.get("run", True)
+
+
+def test_a_slow_test_that_fails_every_time_is_not_proven_passing_by_a_python_leg():
+    """pytest deselects the slow tests in python legs, so a python pass says nothing about a slow test's contracts failure."""
+    slow = "fixture_tests/test_slow_fixture.py::test_every_call"
+    gh = FakeGitHub(
+        runs=[run(1, attempts=2)],
+        jobs={
+            (1, 1): [job(10, "plan", "success"), job(11, "contracts", "failure"), job(12, "python-1", "success")],
+            (1, 2): [job(10, "plan", "success"), job(21, "contracts", "failure"), job(12, "python-1", "success")],
+        },
+        logs={
+            11: log(f"FAILED {slow} - AssertionError", "Test files: fixture_tests/test_slow_fixture.py"),
+            21: log(f"FAILED {slow} - AssertionError", "Test files: fixture_tests/test_slow_fixture.py"),
+            12: log("Test files: fixture_tests/test_slow_fixture.py", "1 passed, 1 deselected"),
+        },
+    )
+    assert flips_of(gh) == {}
