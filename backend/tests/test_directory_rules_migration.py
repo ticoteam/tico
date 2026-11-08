@@ -1,5 +1,5 @@
 """The directory_rules migration (track 5, 20261108044824): rule_sources moves onto organization entities, every row is
-kept, org_rules names its From by entity, and a name the migration cannot place raises, which rolls it back.
+kept, org_rules names its From by entity, and a name the migration cannot place gets a new organization of its own.
 
 The hub is the track 3 fixture with its small graph (test_directory_tables_migration). The pre-migration state is built
 after it boots, since boot already ran this migration on an empty rule_sources table."""
@@ -169,7 +169,7 @@ def _company_oakridge(conn):
         pytest.param("Oakridge", "government", _company_oakridge, id="a government whose one match is a company"),
     ],
 )
-def test_refuses_a_name_it_cannot_place_and_keeps_every_row(tmp_path, name, kind, setup):
+def test_a_name_it_cannot_place_gets_its_own_organization_and_startup_goes_on(tmp_path, name, kind, setup):
     conn = sqlite3.connect(_hub(tmp_path), isolation_level=None)
     _before(conn)
     conn.execute(
@@ -177,14 +177,18 @@ def test_refuses_a_name_it_cannot_place_and_keeps_every_row(tmp_path, name, kind
         (name, kind, NOW),
     )
     _rule(conn, "rule-ambiguous", "Keep records for 7 years", "src-ambiguous")
+    _rule(conn, "rule-dangling", "Pointed at nothing", "src-gone")
     setup(conn)
-    entities_before = conn.execute("SELECT COUNT(*) FROM entities").fetchone()
-    with pytest.raises(RuntimeError):
-        _run(conn, _load())
-    # The raise rolled the whole migration back: the table, its row, and the rule's source_id are as they were.
-    assert conn.execute("SELECT COUNT(*) FROM rule_sources").fetchone() == (1,)
-    assert "source_id" in _columns(conn, "org_rules")
-    assert conn.execute("SELECT COUNT(*) FROM entities").fetchone() == entities_before
+    entities_before = conn.execute("SELECT COUNT(*) FROM entities").fetchone()[0]
+    _run(conn, _load())
+    placed = conn.execute("SELECT source_entity_id FROM org_rules WHERE id = 'rule-ambiguous'").fetchone()[0]
+    row = conn.execute(
+        "SELECT name, self, json_extract(properties, '$.rule_source.id') FROM entities WHERE id = ?", (placed,)
+    )
+    assert row.fetchone() == (name, 0, "src-ambiguous")
+    assert conn.execute("SELECT COUNT(*) FROM entities").fetchone()[0] == entities_before + 1
+    assert conn.execute("SELECT source_entity_id FROM org_rules WHERE id = 'rule-dangling'").fetchone() == (None,)
+    assert "rule_sources" not in {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
 
 
 def test_a_fresh_hub_has_the_rule_columns_and_no_rule_sources(tmp_path):

@@ -15,18 +15,20 @@ Built on 20261108020258_directory_tables (entities, entity_links, entity_values,
   self. Those links rest on the source (source_type rule_source).
 - org_rules.source_entity_id and rule_reads.source_id take the new entity ids. Then rule_sources is dropped.
 
-It refuses rather than guesses, and a raise rolls the whole migration back, so startup stops until the data is fixed
-by hand: a name that is the company itself (self), a name that more than one live organization carries, a name whose
-one match has a kind the rule source's kind does not accept, a second rule source for an entity that already took one,
-and an org_rules row whose source_id matches no rule source.
+It never guesses and never stops startup (live hubs run this on boot): a name it cannot place on exactly one existing
+organization gets a new organization of its own, which a person can merge later. That covers a name that is the company
+itself (self), a name more than one live organization carries, a match whose kind the source's kind does not accept, and
+a second rule source for an entity that already took one. An org_rules source_id that matches no rule source already
+pointed at nothing, so its source_entity_id stays NULL. Ids are derived from the rule source's id, so a replay of the
+same data builds the same rows.
 
 Track 5 changes the code that reads these tables in the same change: org_rules.py, counsel.py and the Directory store.
 """
 
 import json
 import re
-import uuid
-from datetime import datetime, timezone
+
+from backend import hubdb as H
 
 FOREIGN_KEYS_OFF = False  # columns are added and dropped, and rule_sources is dropped whole; nothing is rebuilt
 
@@ -51,7 +53,8 @@ ORG_RULE_COLUMNS = (
 
 
 def _now():
-    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f") + "Z"
+    # The hub's clock, so a demo build dated in the past writes no later rows.
+    return H.now()
 
 
 def _has_table(conn, name):
@@ -91,8 +94,23 @@ def _link(conn, source_entity_id, link_key, to_entity_id, source_id, created_by,
         "INSERT INTO entity_links (id, from_entity_id, link_key, to_entity_id, valid_from_on, valid_until_on, confidence, "
         "source_type, source_id, properties, created_by, created_by_type, created_by_id, created_at, updated_at) "
         "VALUES (?, ?, ?, ?, NULL, NULL, 0.9, 'rule_source', ?, '{}', ?, 'system', '', ?, ?)",
-        (f"lnk_{uuid.uuid4().hex}", source_entity_id, link_key, to_entity_id, source_id, created_by, now, now),
+        (f"lnk_rule_source_{source_id}", source_entity_id, link_key, to_entity_id, source_id, created_by, now, now),
     )
+
+
+def _placeable(conn, matches, kind):
+    """Whether a rule source can go onto its one match: exactly one live organization, not self, of a kind the source's
+    kind accepts, and not already taken by another rule source."""
+    if len(matches) != 1 or matches[0][1]:
+        return False
+    entity_id = matches[0][0]
+    accepts, current = ACCEPTS[kind], _kind_of(conn, entity_id)
+    if accepts is not None and current is not None and current not in accepts:
+        return False
+    taken = conn.execute(
+        "SELECT 1 FROM entities WHERE id = ? AND json_extract(properties, '$.rule_source') IS NOT NULL", (entity_id,)
+    ).fetchone()
+    return taken is None
 
 
 def _move_sources(conn, now):
@@ -110,29 +128,8 @@ def _move_sources(conn, now):
             (name,),
         ).fetchall()
         provenance = json.dumps({"id": source_id, "kind": kind, "created_by": created_by, "created_at": created_at})
-        if any(row[1] for row in matches):
-            raise RuntimeError(f"rule source {name!r} names the company itself (self): name its entity by hand first")
-        if len(matches) > 1:
-            ids = ", ".join(row[0] for row in matches)
-            raise RuntimeError(
-                f"rule source {name!r} matches {len(matches)} organizations ({ids}): choose one by hand first"
-            )
-        if matches:
+        if _placeable(conn, matches, kind):
             entity_id = matches[0][0]
-            accepts = ACCEPTS[kind]
-            current = _kind_of(conn, entity_id)
-            if accepts is not None and current is not None and current not in accepts:
-                raise RuntimeError(
-                    f"rule source {name!r} is a {kind} but its one match, {entity_id}, is a {current}: fix the kind by hand"
-                )
-            taken = conn.execute(
-                "SELECT 1 FROM entities WHERE id = ? AND json_extract(properties, '$.rule_source') IS NOT NULL",
-                (entity_id,),
-            ).fetchone()
-            if taken:
-                raise RuntimeError(
-                    f"rule source {name!r} and another rule source both match {entity_id}: merge them first"
-                )
             conn.execute(
                 "UPDATE entities SET properties = json_set(CASE WHEN json_valid(properties) THEN properties ELSE '{}' END, "
                 "'$.rule_source', json(?)), updated_at = ? WHERE id = ?",
@@ -161,7 +158,7 @@ def _move_sources(conn, now):
             conn.execute(
                 "INSERT INTO entity_sources (id, entity_id, source_type, source_id, visibility, created_at) "
                 "VALUES (?, ?, 'rule_source', ?, 'company', ?)",
-                (f"src_{uuid.uuid4().hex}", entity_id, source_id, now),
+                (f"src_rule_source_{source_id}", entity_id, source_id, now),
             )
         if self_id is not None and kind in LINK_TO_SELF:
             _link(conn, entity_id, LINK_TO_SELF[kind], self_id, source_id, created_by, now)
@@ -176,10 +173,6 @@ def _org_rules(conn, moved):
             conn.execute(f"ALTER TABLE org_rules ADD COLUMN {name} {definition}")
     if "source_id" not in columns:
         return
-    values = {row[0] for row in conn.execute("SELECT DISTINCT source_id FROM org_rules WHERE source_id IS NOT NULL")}
-    unknown = sorted(values - set(moved))
-    if unknown:
-        raise RuntimeError(f"org_rules name source ids that are no rule source: {', '.join(unknown)}")
     for old, new in moved.items():
         conn.execute("UPDATE org_rules SET source_entity_id = ? WHERE source_id = ?", (new, old))
     conn.execute("DROP INDEX IF EXISTS org_rules_source")
