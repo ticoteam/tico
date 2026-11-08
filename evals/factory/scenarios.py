@@ -141,7 +141,8 @@ def board_keeps_moving(since, waits=(), fallback=False):
     """From `since` on, each claim round that has a free slot and a ready bot starts as many turns as the smaller of its
     free slots and its ready bots. A bot is ready when the records say it can run then (sim.Run.readiness): its computer
     is awake, and a login it can run on is free, its own (no hold, no probe out, not cooling off) or a fallback that is
-    signed in and not held. The claim's own answer is not the judge: a round the server passes over while work is ready
+    signed in and not held, and no usage limit holds it (usage_limits.blocked, the claim's own check). The claim's own
+    answer is not the judge: a round the server passes over while work is ready
     is a stall whatever its reason, and that reason is printed with the round (sim.Run.reasons). `waits` are (from, to)
     windows of the scenario's clock in which a team-wide or group-wide cap holds every login: a round inside one is not
     judged. `fallback` also requires a judged round in which a bot started on a fallback login, for a scenario whose
