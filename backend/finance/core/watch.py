@@ -26,7 +26,7 @@ UNUSED_IDLE_DAYS = 30  # ... on a card whose bot is archived or ran no turn in t
 @dataclass(frozen=True)
 class Charge:
     id: str
-    payee: str  # the counterparty, lower-cased: the grouping key
+    payee: str  # the vendor's id (its contact id, else its merchant key): the grouping key
     amount: int  # cents, a positive charge
     day: date
     shown: str = ""  # the counterparty as the bank names it: what a label says

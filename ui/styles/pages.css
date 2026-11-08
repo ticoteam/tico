@@ -1,4 +1,4 @@
-/* Pages (ui/app/pages.js): a page's card and status line, its full view at #/page/<id>, a task's pages and
+/* Pages (ui/app/pages.ts): a page's card and status line, its full view at #/page/<id>, a task's pages and
    Library › Files. The frame is white whatever the theme: a page brings its own colours. */
 .pg-card{display:flex;flex-direction:column;gap:6px;min-width:0}
 .pg-status{color:var(--muted);font-size:var(--t-sm);line-height:var(--lh-tight);overflow-wrap:anywhere}

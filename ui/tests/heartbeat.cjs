@@ -1,4 +1,4 @@
-// The Heartbeat on the Automations page (ui/app/automations-heartbeat.js) against the fake hub's heartbeat routes
+// The Heartbeat on the Automations page (ui/app/automations-heartbeat.ts) against the fake hub's heartbeat routes
 // (support/automations-fake.cjs, `heartbeat: true`). The Heartbeat is a built-in system row right after Maintenance,
 // with its runs and counts; its screen shows the interval, the last beat and the day's count, and each step grouped by
 // kind (Due times, Recovery, Outside polls) with its cadence, last result, day counts, time and last error, and Ask

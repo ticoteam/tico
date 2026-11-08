@@ -86,7 +86,7 @@ def research_target(c, target):
     if page:
         return "market page", page[0], page[1]
     row = c.execute(
-        "SELECT id,name FROM market_entities WHERE id=? AND status NOT IN ('retired','merged')", (target,)
+        "SELECT id,name FROM entities WHERE id=? AND status NOT IN ('retired','merged')", (target,)
     ).fetchone()
     if row:
         return "market entity", row["id"], row["name"] or row["id"]

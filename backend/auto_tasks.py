@@ -102,14 +102,15 @@ def back_off(c, row):
         return False
     if c.execute('SELECT 1 FROM attempts WHERE task_id=? AND settled_at IS NOT NULL LIMIT 1', (row['id'],)).fetchone():
         return False
-    H._set_status(
+    if not H.try_auto_move(
         c,
         H.KEEPER,
         row,
         status='open',
         note='Automatic start returned to the queue: a blocker was linked',
         skip_step_wake=(row['owner_id'],),
-    )
+    ):
+        return False
     c.execute('UPDATE tasks SET version=version+1 WHERE id=?', (row['id'],))
     H.recount(c, [row['owner_id'], row['requester_id']])
     return True
@@ -680,7 +681,10 @@ def started(c, row, *, message=None):
         )
     steps = H.type_get(c, row['type_id'])['steps']
     step = next((s['id'] for s in steps if s['name'] == 'In Progress' and s['status'] == 'doing'), None)
-    H._set_status(c, H.KEEPER, row, status='doing', step=step, note=START_NOTE)
+    # A pipeline's requirements (or a subtask the rules won't file) hold the ticket where it is: the start is logged on
+    # the ticket as auto_start_refused and nothing moves; the rest of the job goes on.
+    if not H.try_auto_move(c, H.KEEPER, row, kind='auto_start_refused', status='doing', step=step, note=START_NOTE):
+        return H.task(c, row['id'])
     c.execute('UPDATE tasks SET version=version+1 WHERE id=?', (row['id'],))
     H.recount(c, [row['owner_id'], row['requester_id']])
     # Each start is one run of Start assigned tasks (Settings > Routines, Automations).

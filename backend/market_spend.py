@@ -710,7 +710,7 @@ def add_segment(conn, actor, name, parent_id=None, summary=""):
         MK.update_entity(conn, actor, seg_id, status="active")
         day = _today()
         held = conn.execute(
-            "SELECT 1 FROM market_edges WHERE src=? AND rel='member_of' AND (valid_from_on IS NULL OR "
+            "SELECT 1 FROM entity_links WHERE from_entity_id=? AND link_key='member_of' AND (valid_from_on IS NULL OR "
             "substr(valid_from_on,1,10)<=?) AND (valid_until_on IS NULL OR substr(valid_until_on,1,10)>=?)",
             (seg_id, day, day),
         ).fetchone()
@@ -739,14 +739,12 @@ def _tree(conn, root):
     rows = {
         r["id"]: r
         for r in H._rows(
-            conn.execute(
-                "SELECT id, name, summary, properties FROM market_entities WHERE type='segment' AND status='active'"
-            )
+            conn.execute("SELECT id, name, summary, properties FROM entities WHERE type='segment' AND status='active'")
         )
     }
     children = {}
     for edge in conn.execute(
-        "SELECT src, dst FROM market_edges WHERE rel='member_of' AND (valid_from_on IS NULL OR substr(valid_from_on,1,10)<=?) "
+        "SELECT from_entity_id AS src, to_entity_id AS dst FROM entity_links WHERE link_key='member_of' AND (valid_from_on IS NULL OR substr(valid_from_on,1,10)<=?) "
         "AND (valid_until_on IS NULL OR substr(valid_until_on,1,10)>=?)",
         (day, day),
     ):
@@ -856,7 +854,7 @@ def spend(conn, dimension="offering", basis="product", year=None):
         r["id"]: r["name"]
         for r in H._rows(
             conn.execute(
-                "SELECT id, name FROM market_entities WHERE id IN (SELECT value FROM json_each(?)) AND status='active'",
+                "SELECT id, name FROM entities WHERE id IN (SELECT value FROM json_each(?)) AND status='active'",
                 (json.dumps(sorted({e for seg in members.values() for e in seg})),),
             )
         )
@@ -948,9 +946,9 @@ def _players(conn, ids, figures):
     day = _today()
     current = "(valid_from_on IS NULL OR substr(valid_from_on,1,10)<=?) AND (valid_until_on IS NULL OR substr(valid_until_on,1,10)>=?)"
     for edge in conn.execute(
-        f"SELECT src, dst, rel, CASE WHEN json_valid(properties) THEN json_extract(properties,'$.segment') END AS segment "
-        f"FROM market_edges WHERE {current} AND ((rel='operates_in' AND dst IN (SELECT value FROM json_each(?))) "
-        "OR (rel='competes_with' AND CASE WHEN json_valid(properties) THEN json_extract(properties,'$.segment') END "
+        f"SELECT from_entity_id AS src, to_entity_id AS dst, link_key AS rel, CASE WHEN json_valid(properties) THEN json_extract(properties,'$.segment') END AS segment "
+        f"FROM entity_links WHERE {current} AND ((link_key='operates_in' AND to_entity_id IN (SELECT value FROM json_each(?))) "
+        "OR (link_key='competes_with' AND CASE WHEN json_valid(properties) THEN json_extract(properties,'$.segment') END "
         "IN (SELECT value FROM json_each(?))))",
         (day, day, marks, marks),
     ):
@@ -967,7 +965,7 @@ def _players(conn, ids, figures):
 # ----------------------------------------------------------------------------- figures
 def create_figure(conn, actor, f):
     ent = MK.entity(conn, f["entity_id"])
-    if not ent or ent["type"] not in ("company", "product") or ent["status"] != "active":
+    if not ent or ent["type"] not in ("organization", "product") or ent["status"] != "active":
         raise Problem("not_found", f"{f['entity_id']} is not a company or product in the market graph", 404)
     seg = _segment(conn, f["segment_id"])
     as_of = str(f.get("as_of") or "").strip()
@@ -1087,14 +1085,14 @@ def value_chain(conn):
     day = _today()
     me = MK.OWN_COMPANY_ID
     empty = {"layers": [{"key": k, "title": t, "nodes": []} for k, t in LAYERS], "edges": []}
-    if not conn.execute("SELECT 1 FROM market_entities WHERE id=? AND status='active'", (me,)).fetchone():
+    if not conn.execute("SELECT 1 FROM entities WHERE id=? AND status='active'", (me,)).fetchone():
         return empty
     current = "(valid_from_on IS NULL OR substr(valid_from_on,1,10)<=?) AND (valid_until_on IS NULL OR substr(valid_until_on,1,10)>=?)"
     rivals = {
         e["dst"] if e["src"] == me else e["src"]
         for e in H._rows(
             conn.execute(
-                f"SELECT src, dst FROM market_edges WHERE rel='competes_with' AND (src=? OR dst=?) AND {current}",
+                f"SELECT from_entity_id AS src, to_entity_id AS dst FROM entity_links WHERE link_key='competes_with' AND (from_entity_id=? OR to_entity_id=?) AND {current}",
                 (me, me, day, day),
             )
         )
@@ -1113,9 +1111,9 @@ def value_chain(conn):
     kept = []
     for edge in H._rows(
         conn.execute(
-            f"SELECT src, rel, dst, CASE WHEN json_valid(properties) THEN properties END AS properties FROM market_edges "
-            f"WHERE rel IN ('integrates_with','partners_with','distributes_through','sells_to') AND {current} "
-            "AND (src IN (SELECT value FROM json_each(?)) OR (rel IN ('integrates_with','partners_with') AND dst IN "
+            f"SELECT from_entity_id AS src, link_key AS rel, to_entity_id AS dst, CASE WHEN json_valid(properties) THEN properties END AS properties FROM entity_links "
+            f"WHERE link_key IN ('integrates_with','partners_with','distributes_through','sells_to') AND {current} "
+            "AND (from_entity_id IN (SELECT value FROM json_each(?)) OR (link_key IN ('integrates_with','partners_with') AND to_entity_id IN "
             "(SELECT value FROM json_each(?))))",
             (day, day, marks, marks),
         )
@@ -1143,15 +1141,15 @@ def value_chain(conn):
         r["id"]: r
         for r in H._rows(
             conn.execute(
-                "SELECT id, name, type FROM market_entities WHERE status='active' AND id IN (SELECT value FROM json_each(?))",
+                "SELECT id, name, type FROM entities WHERE status='active' AND id IN (SELECT value FROM json_each(?))",
                 (json.dumps(every),),
             )
         )
     }
     degree = {}
     for edge in conn.execute(
-        f"SELECT src, dst FROM market_edges WHERE {current} AND (src IN (SELECT value FROM json_each(?)) "
-        "OR dst IN (SELECT value FROM json_each(?)))",
+        f"SELECT from_entity_id AS src, to_entity_id AS dst FROM entity_links WHERE {current} AND (from_entity_id IN (SELECT value FROM json_each(?)) "
+        "OR to_entity_id IN (SELECT value FROM json_each(?)))",
         (day, day, json.dumps(every), json.dumps(every)),
     ):
         degree[edge["src"]] = degree.get(edge["src"], 0) + 1
@@ -1219,7 +1217,18 @@ def research(conn, auth, who, description):
     if not (defn or {}).get("description"):
         set_definition(conn, who.actor, {"description": description})
     safe = MK._for_task(description)
-    text = "\n".join([f"Define and size our market: {safe}", "", f"Follow {PLAYBOOK}."])
+    from . import onboarding
+
+    serves = onboarding.regions(conn)  # the sizes are for the places the company serves
+    where = "Serves: " + MK._for_task("; ".join(serves)) + ". Size the market for these places." if serves else ""
+    text = "\n".join(
+        [
+            f"Define and size our market: {safe}",
+            "",
+            *([where, ""] if where else []),
+            f"Follow {PLAYBOOK}.",
+        ]
+    )
     task = H.task_create(
         conn,
         who.actor,

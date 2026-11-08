@@ -375,6 +375,7 @@ class Cell:
     location: str = ""  # the location, class and project tag values of its lines ("" when none)
     class_id: str = ""
     project: str = ""
+    lines: int = 0  # the lines this total is made of (a rollup's line_count; 0 for a linked cell)
 
 
 @dataclass(frozen=True)
