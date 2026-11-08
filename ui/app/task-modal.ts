@@ -550,6 +550,9 @@ const TASK_EVENT_WORDS = {step: id => id ? `moved it to ${pipelineStepName(id)}`
   qa_waiver: v => { let w = {}; try { w = JSON.parse(v || '{}'); } catch { /* an unreadable record still says what it is */ }
     return `waived QA${w.head ? ` on ${String(w.head).slice(0, 7)}` : ''}: a waiver, not a QA pass`; },
   verdict: v => `recorded the verdict ${v || 'none'}`,
+  // A hand-off through a link: `new` is the pipeline sent to (on the source) or the pipeline it came from (on the target).
+  handoff: (v: string) => `sent it to ${TASK_TYPES.find(type => type.id === v)?.name || 'another pipeline'}`,
+  handoff_from: (v: string) => `received it from ${TASK_TYPES.find(type => type.id === v)?.name || 'another pipeline'}`,
   lint: v => `noted: ${v}`, rank: () => 'moved it in the queue', children: v => String(v || ''), note: v => `noted: ${clipLine(String(v || ''), 200)}`, comment: () => 'deleted a comment'};
 // `files`: the task's files (ui/app/task-files.ts), for the files a comment carried.
 function commentLineHTML(x, i, all, files = [], taskId = '', canAnswer = true) {
