@@ -137,6 +137,22 @@ def first_stage(conn: sqlite3.Connection, pipeline_id: str) -> Row | None:
     return next((s for s in stages(conn, pipeline_id) if s["status"] not in CLOSED and s["card_cap"] != 0), None)
 
 
+def frozen_entry(conn: sqlite3.Connection, pipeline_id: str) -> Row | None:
+    """When every working stage of a pipeline (not a closing one, not a done one) is On ice (D69), the first of them: a
+    ticket a link hands in has nowhere to start, so the card that would hand it waits at its stage (a stage_full refusal)
+    rather than land in Done or be dropped. None when a working stage takes cards."""
+    working = [s for s in stages(conn, pipeline_id) if s["status"] not in CLOSED and s["status"] != "done"]
+    return working[0] if working and all(s["card_cap"] == 0 for s in working) else None
+
+
+def frozen_refusal(conn: sqlite3.Connection, pipeline_id: str, task_id: str, what: str) -> Exception | None:
+    """The stage_full refusal for a link into a pipeline whose working stages are all On ice (frozen_entry), or None."""
+    parked = frozen_entry(conn, pipeline_id)
+    if parked is None:
+        return None
+    return room_refusal("stage_full", f"{full_detail(parked)}, so {what} waits", task_id, str(parked["id"]))
+
+
 def next_stage(conn: sqlite3.Connection, step_id: str | None) -> Row | None:
     """The stage after this one, in the pipeline's order, skipping a closing stage; None at the end."""
     here = stage(conn, step_id)
@@ -961,6 +977,18 @@ def override_reason(note: str | None) -> str:
 # The actor whose decision prescribes the move now being made (a named reviewer's "Not validated"). Only that actor's backward
 # move skips the rule-editor test; the reviewer is still recorded as the actor of the move.
 _DECIDED_MOVE: ContextVar[str | None] = ContextVar("pipeline_engine_decided_move", default=None)
+# An automation acting as Tico (rules._act): every write it makes, a close's cascade to subtasks too, is held to On ice as
+# an automation's (may_leave_ice), though its actor is H.KEEPER.
+AUTOMATION: ContextVar[bool] = ContextVar("pipeline_engine_automation", default=False)
+
+
+@contextmanager
+def automation() -> "Generator[None, None, None]":
+    token = AUTOMATION.set(True)
+    try:
+        yield
+    finally:
+        AUTOMATION.reset(token)
 
 
 @contextmanager
@@ -1165,17 +1193,16 @@ def may_clear_stage(conn: sqlite3.Connection, actor: str, row: Row) -> None:
     )
 
 
-def may_leave_ice(
-    conn: sqlite3.Connection, actor: str, row: Row, step_id: str | None, *, automation: bool = False
-) -> None:
+def may_leave_ice(conn: sqlite3.Connection, actor: str, row: Row, step_id: str | None) -> None:
     """Every status write that takes a card out of On ice (D69) to `step_id` is a person's (hubdb._set_status): a close or a
     decline that lands in a closed stage, a done, a type change, not only a stage move (_room). A bot, or a write made for a
     person (H.VIA), is refused (rule on_ice), so it cannot cancel a parked card and reopen it into Backlog. A write that
     keeps the card On ice (a waiting) stands. Tico's own bookkeeping (H.KEEPER) stands too: the cleanup that follows a
     person's decision (a rule review's holds decided, an automation's guard task released) closes its task wherever it is.
-    An automation that acts as Tico is held all the same (`automation`, rules._close); a sweep that would close a parked
-    card passes it over instead (ask_deadlines, question_tasks.open_rows)."""
-    if (actor == H.KEEPER and not automation) or (H.is_human(actor) and not H.VIA.get()):
+    An automation that acts as Tico is held all the same (AUTOMATION, for every write of rules._act, a close's cascade to
+    subtasks too); a sweep that would close a parked card passes it over instead (ask_deadlines,
+    question_tasks.open_rows)."""
+    if (actor == H.KEEPER and not AUTOMATION.get()) or (H.is_human(actor) and not H.VIA.get()):
         return
     here = stage(conn, row.get("step_id"))
     if here is None or here["card_cap"] != 0 or step_id == here["id"]:
@@ -1373,6 +1400,12 @@ def advance(conn: sqlite3.Connection, actor: str, task_id: str) -> dict[str, Any
     link = pipeline_links.link_for_stage(conn, str(row["step_id"]))
     target: Row | None
     if link is not None and link["mode"] == "move":
+        frozen = frozen_refusal(conn, str(link["to_pipeline_id"]), task_id, "the ticket")
+        if frozen is not None:
+            # Every working stage there is On ice: the card stays, and an automated move is listed as waiting for room.
+            if not H.is_human(actor) or H.VIA.get():
+                record_waiting(conn, actor, task_id, cast("hubdb.Refused", frozen))
+            return {**none, "reason": str(cast("hubdb.Refused", frozen).detail)}
         target = first_stage(conn, str(link["to_pipeline_id"]))
     else:
         link, target = None, next_stage(conn, str(row["step_id"]))

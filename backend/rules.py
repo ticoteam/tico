@@ -1072,16 +1072,20 @@ def _act(conn, decision, row, message=None):
         raise ValueError("the rule's writer cannot read this private task")
     note = str(params.get("note") or params.get("text") or "")[:1000]
     said = f"Rule {decision.rule}: {note}" if note else f"Rule {decision.rule}"
-    done = runner(conn, row["id"], params, said) or {}
+    from . import pipeline_engine
+
+    # The action is an automation's though it writes as Tico: no write of it takes a card out of On ice (D69).
+    with pipeline_engine.automation():
+        done = runner(conn, row["id"], params, said) or {}
     H.event(conn, H.KEEPER, "rule.action", row["id"], {"rule": decision.rule, "action": action, **done})
 
 
 def _close(conn, tid, params, said):
     from . import pipeline_engine
 
-    # An automation acts as Tico but is held as one: it never closes a card out of On ice (D69); only a person does.
-    pipeline_engine.may_leave_ice(conn, H.KEEPER, H.task(conn, tid) or {}, None, automation=True)
-    H.task_close(conn, H.KEEPER, tid, note=said, strict=False)
+    # An automation acts as Tico but is held as one (_act): it never closes a card, or a subtask with it, out of On ice.
+    with pipeline_engine.automation():
+        H.task_close(conn, H.KEEPER, tid, note=said, strict=False)
 
 
 def _move_step(conn, tid, params, said):

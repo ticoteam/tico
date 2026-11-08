@@ -830,3 +830,61 @@ def test_a_job_held_for_a_card_on_ice_is_never_an_aged_queue_refusal(api, monkey
         assert QR.current(c, api.app.state.store.settings, bot) == {}
         held["why"] = "bot_limit"  # the control: any other refusal is watched
         assert QR.current(c, api.app.state.store.settings, bot)["reason"] == "bot_limit"
+
+
+FROZEN_LINE = [{"name": "Intake", "status": "open"}, {"name": "Done", "status": "done"}]
+
+
+def test_a_spawn_into_a_pipeline_whose_working_stages_are_on_ice_never_files_the_ticket_into_done(api):
+    """A target whose only working stage is On ice takes no linked ticket: the spawn waits (stage_full on that stage)
+    rather than file the new ticket straight into Done."""
+    typ, steps = make_line(api, "SpawnSrc" + uuid.uuid4().hex[:8])
+    target, tsteps = make_line(api, "SpawnFrozen" + uuid.uuid4().hex[:8], FROZEN_LINE)
+    set_cap(api, tsteps["Intake"], 0)
+    with api.app.state.store.transaction() as c:
+        card = H.task_create(c, ANA, "Makes follow-up", "", ANA, type=typ, step="Doing", lint=False)["id"]
+        link = {"id": "L" + uuid.uuid4().hex[:8], "mode": "spawn", "to_pipeline_id": target}
+        link["from_pipeline_stage_id"] = steps["Doing"]
+        with pytest.raises(H.Refused) as refused:
+            L.spawn(c, link, card)
+        assert not c.execute("SELECT 1 FROM tasks WHERE type_id=?", (target,)).fetchone()
+    assert refused.value.rule == "stage_full"
+    assert refused.value.context == {"stage": tsteps["Intake"]}
+
+
+def test_a_move_link_into_a_pipeline_whose_working_stages_are_on_ice_leaves_the_card_waiting_for_room(tmp_path):
+    """A move link into a pipeline whose working stages are all On ice moves nothing, never into its Done stage: the card
+    stays, and the manager lists it as waiting for room in the parked stage."""
+    c, sales, _, _ = two(tmp_path)
+    frozen = H.type_create(c, ANA, "Frozen", FROZEN_LINE, mover=True)
+    c.execute("UPDATE task_types SET pipeline_owner_id=? WHERE id=?", (ANA, frozen["id"]))
+    intake = step_id(c, frozen["id"], "Intake")
+    R.set_stage(c, ANA, intake, {"card_cap": 0})
+    L.create_link(c, ANA, step_id(c, sales["id"], "Lead"), frozen["id"], "move")
+    task = H.task_create(c, ANA, "Acme deal", "", ANA, type=sales["id"], step="Lead", lint=False)["id"]
+
+    out = E.advance(c, H.KEEPER, task)
+    assert not out["moved"]
+    assert "so the ticket waits" in out["reason"]
+    assert c.execute("SELECT step_id FROM tasks WHERE id=?", (task,)).fetchone()[0] == step_id(c, sales["id"], "Lead")
+    assert X.waiting_room(c)[task]["stage_id"] == intake
+
+
+def test_an_automation_close_leaves_a_subtask_on_ice_open(api):
+    """An automation's close (rules._close) of a parent closes its other subtasks, but not one On ice: the cascade writes
+    as Tico on the automation's behalf, and only a person takes a card out of On ice."""
+    typ, steps = make_line(api, "IceKid" + uuid.uuid4().hex[:8], [*ON_ICE_LINE, {"name": "Closed", "status": "closed"}])
+    set_cap(api, steps["On ice"], 0)
+    with api.app.state.store.transaction() as c:
+        parent = H.task_create(c, ANA, "Parent", "", ANA, type=typ, step="Backlog", lint=False)["id"]
+        parked = H.task_create(c, ANA, "Parked kid", "", ANA, type=typ, step="On ice", parent_id=parent, lint=False)[
+            "id"
+        ]
+        loose = H.task_create(c, ANA, "Loose kid", "", ANA, type=typ, step="Backlog", parent_id=parent, lint=False)[
+            "id"
+        ]
+        RU._close(c, parent, {}, "Rule tidy")
+        assert H.task(c, parent)["status"] == "closed"
+        assert H.task(c, loose)["status"] == "closed"
+        assert H.task(c, parked)["status"] == "open"
+    assert card_stage(api, parked) == steps["On ice"]
