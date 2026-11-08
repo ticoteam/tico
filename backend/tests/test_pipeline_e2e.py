@@ -1693,3 +1693,40 @@ def test_a_pipeline_editor_may_still_override_the_spec_page_when_a_card_enters_r
         "SELECT COUNT(*) FROM stage_decisions WHERE task_id=? AND verdict='override'", (card,)
     ).fetchone()[0]
     assert overrides >= 1
+
+
+def test_a_card_with_no_stage_in_product_is_held_to_the_spec_page_when_it_enters_review(co):
+    """Codex GB2 finding 1: a bot puts a card into Product with no stage, then moves it to Review. The second move is a
+    card entering the pipeline at a stage, so the Spec page holds it."""
+    card = H.task_create(co.c, ANA, "Dark mode, no stage", "", BUILDER, lint=False)["id"]
+    co.c.commit()
+    H.task_update(co.c, BUILDER, card, type=co.type["Product"], step="")
+    co.c.commit()
+    assert co.c.execute("SELECT step_id FROM tasks WHERE id=?", (card,)).fetchone()[0] is None
+    with pytest.raises(H.Refused) as refused:
+        H.task_update(co.c, BUILDER, card, step="Review")
+    assert refused.value.rule == "requirement"
+    assert co.c.execute("SELECT step_id FROM tasks WHERE id=?", (card,)).fetchone()[0] is None
+
+
+def test_a_bot_may_not_clear_the_stage_of_a_card_in_a_pipeline(co):
+    """Codex GB2 finding 1: a bot clears a card's stage with step="" and is refused, as a backward move is. The card keeps
+    its stage."""
+    card = co.ticket("Engineering", "Todo")
+    with pytest.raises(H.Refused) as refused:
+        H.task_update(co.c, BUILDER, card, step="")
+    assert refused.value.rule == "requirement"
+    assert co.where(card) == ("Engineering", "Todo")
+
+
+def test_a_pipeline_editor_keeps_the_override_for_a_card_with_no_stage(co):
+    """A person who can edit the pipeline still moves a stage-less card past the Spec page with an override."""
+    card = H.task_create(co.c, ANA, "Dark mode, Ana's", "", BUILDER, lint=False)["id"]
+    co.c.commit()
+    H.task_update(co.c, ANA, card, type=co.type["Product"], step="")
+    co.c.commit()
+    H.task_update(
+        co.c, ANA, card, step="Review", mover=True, override_requirements=True, note="The spec is in the meeting notes"
+    )
+    co.c.commit()
+    assert co.where(card) == ("Product", "Review")

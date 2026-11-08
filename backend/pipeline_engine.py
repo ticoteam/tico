@@ -1007,6 +1007,25 @@ def completion_target(
     return completion_stage(conn, type_id)
 
 
+def check_clear(conn: sqlite3.Connection, actor: str, row: Row) -> None:
+    """A bot may not take a card out of its stage (step ""), as it may not move one back a stage. The card keeps its stage; a
+    person's clear is unchanged, and a pipeline editor's override applies when the card next enters a stage."""
+    task_id = str(row.get("id") or "")
+    if not task_id or not row.get("step_id") or not H.is_bot(actor):
+        return
+    if str(row.get("type_id") or H.GENERAL_TYPE) == H.GENERAL_TYPE:  # a General ticket is in no pipeline
+        return
+    if stage(conn, str(row["step_id"])) is None:
+        return
+    H.refuse(
+        conn,
+        actor,
+        "requirement",
+        "A bot can't take a ticket out of its stage; move it to a stage instead",
+        task=task_id,
+    )
+
+
 def check_move(
     conn: sqlite3.Connection,
     actor: str,
@@ -1014,6 +1033,8 @@ def check_move(
     step_id: str | None,
     override: bool = False,
     override_note: str | None = None,
+    *,
+    entering: bool = False,
 ) -> None:
     """Before a ticket changes to `step_id`: refuse the move (rule "requirement") when the requirements that count do not
     allow it, unless a rule editor overrides them (logged). A pipeline with no requirements allows every move.
@@ -1033,7 +1054,13 @@ def check_move(
     pipeline_id = str(now["type_id"])
     here = stage(conn, str(now["step_id"])) if now["step_id"] else None
     target = stage(conn, step_id)
-    entering = target is not None and str(target["type_id"]) != str(now["type_id"] or "")
+    # Entering (task_update only): a type change, or a card with no stage, enters the pipeline at `target` and is held to
+    # every stage before it. A status write (check_forward) and a create keep the move gate they always had.
+    entering = (
+        entering
+        and target is not None
+        and (str(target["type_id"]) != str(now["type_id"] or "") or now["step_id"] is None)
+    )
     if here is None and not entering:
         return
     editor = pipeline_rights.may_edit_rules(conn, actor, pipeline_id)
