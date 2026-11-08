@@ -14,12 +14,13 @@ is the same whichever form was stored.
 
 from collections import defaultdict
 from collections.abc import Mapping, Sequence
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 if TYPE_CHECKING:
     import sqlite3
 
 from . import access as Access
+from . import read_cache
 
 
 def canonical(c: "sqlite3.Connection", ref: object) -> str:
@@ -67,9 +68,11 @@ def visible_pipeline_ids(c: "sqlite3.Connection", actor: str, ids: Sequence[obje
     if not wanted:
         return set()
     marks = ",".join("?" * len(wanted))
-    rows = c.execute(
-        f"SELECT id, pipeline_visibility, pipeline_owner_id, manager FROM task_types WHERE id IN ({marks})", wanted
-    ).fetchall()
+    # A neutral row, reused within the request's snapshot: a task page checks every related ticket's pipeline.
+    found = read_cache.rows(  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]
+        c, f"SELECT id, pipeline_visibility, pipeline_owner_id, manager FROM task_types WHERE id IN ({marks})", wanted
+    )
+    rows = cast("tuple[tuple[object, ...], ...]", found)
     visible = {str(r[0]) for r in rows if str(r[1] or "company") != "members"}
     private = [r for r in rows if str(r[1] or "company") == "members"]
     me = str(actor or "")
