@@ -437,7 +437,7 @@ def statement_undo(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     if not may_write(ctx, who, gl.id, {}):
         raise denied(OUTSIDE)
     upload_id = str(up["id"])
-    rows = SS.upload_rows(ctx.c, upload_id)
+    rows = SS.upload_rows(ctx.c, str(money["id"]), upload_id)
     last = SK.last_reconciliation(ctx.c, str(money["id"]))
     cleared = any(r["reconciliation_id"] for r in rows)
     if cleared or (last is not None and str(last["statement_end"]) >= str(up["start_date"])):
@@ -453,7 +453,7 @@ def statement_undo(ctx: Ctx, who: str, p: V.Payload) -> Plan:
             if r["entry_id"]:  # a transfer or card payment's other side shares the entry: it waits again once unposted
                 partners |= {str(x["id"]) for x in SK.rows_of_entry(ctx.c, str(r["entry_id"]))} - ours
             banking.unsettle_uploaded(ctx, r, f"statement upload {upload_id} undone")
-        removed = SS.delete_rows(ctx.c, upload_id)
+        removed = SS.delete_rows(ctx.c, str(money["id"]), upload_id)
         SS.clear_refund_links(ctx.c, sorted(ours), ctx.at)
         banking.settle_again(ctx, sorted(partners))
         if up["statement_id"]:

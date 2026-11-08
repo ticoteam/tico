@@ -4,10 +4,11 @@ synced row. The file's content hash is kept per money account, so the same file 
 A preview keeps only the hash of the token it hands out, so a post can check it posts what was shown
 (fin_statement_previews); preview rows expire.
 
-fin_feed_txns.upload_id is also in store/schema.ADDED and its index in store/schema.INDEXES, which `create` makes on a
-new install (there the feed table does not exist yet when this runs, so only the two new tables come from here). An
-install whose feed table exists gets the column and index here, with the same text, so both paths end in one shape.
-Both are idempotent: IF NOT EXISTS, and the column is added only when the table lacks it.
+fin_feed_txns.upload_id is also in store/schema.ADDED, which `create` adds on a new install (there the feed table does
+not exist yet when this runs, so only the two new tables come from here). An install whose feed table exists gets the
+column here, with the same type, so both paths end in one shape. The column has no index: its one reader (undo) asks by
+money account too, which fin_feed_txns_account covers. Idempotent: IF NOT EXISTS, and the column is added only when the
+table lacks it.
 """
 
 TABLES = (
@@ -32,9 +33,7 @@ TABLES = (
 
 def up(conn):
     columns = {row[1] for row in conn.execute("PRAGMA table_info(fin_feed_txns)")}
-    if columns:  # the feed table exists: its column and index now; a fresh install gets both from store/schema.create
-        if "upload_id" not in columns:
-            conn.execute("ALTER TABLE fin_feed_txns ADD COLUMN upload_id TEXT")
-        conn.execute("CREATE INDEX IF NOT EXISTS fin_feed_txns_upload ON fin_feed_txns(upload_id)")
+    if columns and "upload_id" not in columns:  # a fresh install gets the column from store/schema.create
+        conn.execute("ALTER TABLE fin_feed_txns ADD COLUMN upload_id TEXT")
     for statement in TABLES:
         conn.execute(statement)

@@ -115,6 +115,8 @@ TABLES = {
     rows.EntityValueRow: "entity_values",
     rows.EntityViewRow: "entity_views",
     rows.LinkTypeRow: "link_types",
+    rows.FinStatementUploadRow: "fin_statement_uploads",
+    rows.FinStatementPreviewRow: "fin_statement_previews",
 }
 
 

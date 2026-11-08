@@ -45,9 +45,13 @@ def upload_get(c: sqlite3.Connection, upload_id: str) -> Any:
     return c.execute("SELECT * FROM fin_statement_uploads WHERE id=?", (upload_id,)).fetchone()
 
 
-def upload_rows(c: sqlite3.Connection, upload_id: str) -> list[Any]:
-    """The feed rows an upload put in (the rows still in the feed)."""
-    return c.execute("SELECT * FROM fin_feed_txns WHERE upload_id=? ORDER BY txn_date, id", (upload_id,)).fetchall()
+def upload_rows(c: sqlite3.Connection, money_account_id: str, upload_id: str) -> list[Any]:
+    """The feed rows an upload put in (the rows still in the feed). By account first: upload_id has no index of its own,
+    so the account's index (fin_feed_txns_account) narrows the scan for this rare read (undo)."""
+    return c.execute(
+        "SELECT * FROM fin_feed_txns WHERE money_account_id=? AND upload_id=? ORDER BY txn_date, id",
+        (money_account_id, upload_id),
+    ).fetchall()
 
 
 def insert_upload(c: sqlite3.Connection, row: Mapping[str, object]) -> None:
@@ -71,9 +75,11 @@ def insert_feed(c: sqlite3.Connection, row: Mapping[str, object]) -> str:
     return SK.insert(c, "fin_feed_txns", row)
 
 
-def delete_rows(c: sqlite3.Connection, upload_id: str) -> int:
+def delete_rows(c: sqlite3.Connection, money_account_id: str, upload_id: str) -> int:
     """Remove the feed rows an upload put in. Their entries are reversed by the caller first."""
-    return c.execute("DELETE FROM fin_feed_txns WHERE upload_id=?", (upload_id,)).rowcount
+    return c.execute(
+        "DELETE FROM fin_feed_txns WHERE money_account_id=? AND upload_id=?", (money_account_id, upload_id)
+    ).rowcount
 
 
 def clear_refund_links(c: sqlite3.Connection, feed_ids: Sequence[str], at: str) -> None:

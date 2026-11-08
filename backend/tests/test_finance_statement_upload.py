@@ -16,7 +16,7 @@ from backend.finance.core.errors import CONFLICT, DENIED, INVALID, NOT_AVAILABLE
 from backend.finance.store import banking as SK
 from backend.finance.store import ledger as SL
 from backend.finance.store import statement_uploads as SS
-from backend.tests.test_finance_fixtures import AT, OWNER, account, act, books, store  # noqa: F401
+from backend.tests.test_finance_fixtures import AT, OWNER, account, act, books, finance_template, store  # noqa: F401
 
 FIXTURES = Path(__file__).parent / "fixtures" / "statements"
 LATER = "2026-10-15T12:31:00.000000Z"  # past a preview's 30 minutes
