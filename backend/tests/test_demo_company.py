@@ -11,7 +11,7 @@ import pytest
 import time_machine
 from fastapi.testclient import TestClient
 
-from backend import demo, demo_seed, hubdb
+from backend import demo, demo_seed, hubdb, pipeline_engine
 from backend import demo_content as D
 from backend import usage_limits as U
 from backend.demo_sections import budgets as B
@@ -300,9 +300,23 @@ def test_the_demo_clock_also_reads_the_spend_windows(built):
 
 
 def test_the_same_date_builds_the_same_company(built):
-    """Every table, with the machine's clock either side of 07:00 UTC: the usage limits the builds save match too."""
+    """Every table, with the machine's clock either side of 07:00 UTC: the usage limits the builds save match too.
+    The one column left out is created_at on pipeline_engine.seeded events: boot stamps each from the machine's clock to
+    the microsecond, so it differs between two builds. Every other column of those rows is compared."""
     first, rows, again = built
-    assert again == rows
+    with closing(sqlite3.connect(first.db_path)) as db:
+        event_columns = [column[1] for column in db.execute("PRAGMA table_info(events)")]
+    created, action = event_columns.index("created_at"), event_columns.index("action")
+
+    def unclocked(events):
+        return [
+            tuple(None if i == created else value for i, value in enumerate(row))
+            if row[action] == pipeline_engine.SEEDED
+            else row
+            for row in events
+        ]
+
+    assert {**again, "events": unclocked(again["events"])} == {**rows, "events": unclocked(rows["events"])}
     with closing(sqlite3.connect(first.db_path)) as db:
         columns = [column[1] for column in db.execute("PRAGMA table_info(idempotency)")]
     operation, response = columns.index("operation"), columns.index("response")
