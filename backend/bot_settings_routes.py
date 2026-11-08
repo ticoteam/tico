@@ -400,10 +400,13 @@ def register(
 
     @app.get("/api/v2/company/pause")
     def company_pause_state(request: Request):
-        """The company-wide pause every bot on the team is under: whether it is on, who paused and when, the bots that
-        stay paused on their own, and whether the viewer may pause or resume it."""
+        """The company-wide pause: whether it is on, who paused and when, the bots that stay paused on their own, and
+        whether the viewer may pause or resume it. People only."""
         who = request.state.identity
         auth.domain(who)
+        if who.role not in ("owner", "human"):
+            # The pause and who paused it are for people on the team; a bot or a service key does not read them.
+            raise Problem("forbidden", "Only a person on Tico Team can see the company pause", 403)
         with store.read() as c:
             value: dict[str, object] = {**company_pause.read(c)}
             value["can_control"] = company_pause.may_control(auth, who)
