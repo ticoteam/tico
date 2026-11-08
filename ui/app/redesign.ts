@@ -150,6 +150,7 @@ function redesignNavCurrent(nav) {
   if (nav === 'tools') return rdUnder(r, TOOLS_ROUTE);
   if (nav === 'files') return rdUnder(r, RD_FILES);
   if (nav === 'skills') return rdUnder(r, SKILLS_ROUTE);
+  if (nav === 'directory') return rdUnder(r, DIR_ROUTE);
   if (nav === 'strategy') return rdUnder(r, '#/strategy');
   if (nav === 'growth') return rdUnder(r, GR_ROUTE);
   if (nav === 'finance') return rdUnder(r, FIN_ROUTE);
@@ -180,6 +181,7 @@ function redesignRoute(r) {
   if (rdUnder(r, GR_ROUTE)) { pageGrowth(); return true; }   // ui/app/growth-page.ts
   if (rdUnder(r, RULES_ROUTE)) { pageRules(); return true; }   // ui/app/org-rules.ts
   if (skillsRoute(r)) return true;   // Library › Skills (ui/app/skills.ts)
+  if (directoryRoute(r)) return true;   // Library › Directory (ui/app/directory.ts)
   if (pagesRoute(r)) return true;   // Library › Files and #/page/<id> (ui/app/pages.ts)
   if (rdUnder(r, RD_GOALS)) { pageGoals(); return true; }
   if (rdUnder(r, RD_ORG)) { pageRdOrg(); return true; }
@@ -195,6 +197,7 @@ function redesignAfterRoute() {
   if (!rdUnder(S.route || '', RULES_ROUTE)) rulesStop();
   pagesStop(S.route || '');
   skillsStop(S.route || '');
+  directoryStop(S.route || '');
   rdLibSync();
   financeStop();
   growthStop();
