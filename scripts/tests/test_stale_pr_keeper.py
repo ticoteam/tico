@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 import hashlib
 import json
 from pathlib import Path
+import re
 import subprocess
 
 import pytest
@@ -14,11 +15,13 @@ from scripts import stale_pr_keeper as keeper
 
 FIXTURES = Path(__file__).parent / "stale_pr_keeper"
 NOW = datetime(2026, 11, 8, 18, 0, tzinfo=timezone.utc)
-RECRUITING = (
-    "backend/tests/test_recruiting.py::"
-    "test_marketing_and_engineering_titles_draft_from_the_template_that_is_the_job_by_any_of_its_names"
-)
-CRASHED = "backend/tests/test_turn_fixer.py::test_dead_sweep_walks_live_runs_not_every_attempt"
+# The tests and UI script the real logs name, read from them: a literal path to a test here would make pr_checks.py select
+# this file for every change to that test (and its folder).
+RECRUITING = re.search(r" FAILED (\S+) - ", (FIXTURES / "pytest-failed.log").read_text()).group(1)  # quarantined
+CRASHED = re.search(r" FAILED (\S+) - worker", (FIXTURES / "worker-crashed.log").read_text()).group(1)
+UI_SCRIPT = re.search(r"UI scripts failed: (\S+)", (FIXTURES / "browser-failed.log").read_text()).group(1)
+# Made-up test ids live under a folder no checkout has.
+OTHER = "made_up/test_x.py"
 QUARANTINE = frozenset({RECRUITING})
 
 
@@ -176,12 +179,12 @@ def test_a_crash_pytest_never_summarised_still_names_its_test():
 
 
 def test_a_failed_line_outside_the_summary_is_test_output_not_a_failure():
-    lines = ["2026-11-08T20:00:00.0Z FAILED backend/tests/test_x.py::test_printed - from a test's own output\n"]
+    lines = ["2026-11-08T20:00:00.0Z FAILED made_up/test_x.py::test_printed - from a test's own output\n"]
     assert keeper.read_log(lines) == ([], [], [])
 
 
 def test_the_browser_suite_names_its_failed_ui_scripts():
-    assert keeper.read_log(log_lines("browser-failed.log")) == ([], ["tasks-page.cjs"], [])
+    assert keeper.read_log(log_lines("browser-failed.log")) == ([], [UI_SCRIPT], [])
 
 
 def test_the_factory_sim_names_each_scenario_with_a_fail_line():
@@ -197,12 +200,12 @@ def test_a_test_that_only_quotes_a_worker_crash_is_not_a_crash():
     quote = f"worker 'gw3' crashed while running '{CRASHED}'"
     tests, _, _ = keeper.read_log(summary(f"FAILED {CRASHED} - AssertionError: {quote}"))
     assert tests == [(CRASHED, False)]
-    other = "backend/tests/test_x.py::test_y"
+    other = f"{OTHER}::test_y"
     assert keeper.read_log(summary(f"FAILED {other} - {quote}"))[0] == [(other, False)]  # another test's crash
     assert keeper.read_log([f"E   AssertionError: {quote}\n"])[0] == []  # test output, not xdist's line
 
 
-@pytest.mark.parametrize("test", ["backend/tests/test_x.py::test_y[can't]", "backend/tests/test_x.py::test_y[a\\b]"])
+@pytest.mark.parametrize("test", [f"{OTHER}::test_y[can't]", f"{OTHER}::test_y[a\\b]"])
 def test_a_worker_crash_names_its_test_as_repr_writes_it(test):
     line = f"FAILED {test} - worker 'gw1' crashed while running {test!r}"
     assert keeper.read_log(summary(line))[0] == [(test, True)]
@@ -217,7 +220,7 @@ def test_a_log_that_ends_inside_the_summary_is_never_a_flake():
 
 
 def test_a_parameter_id_holding_a_dash_is_read_whole():
-    test = "backend/tests/test_x.py::test_split[a - b]"
+    test = f"{OTHER}::test_split[a - b]"
     assert keeper.read_log(summary(f"FAILED {test} - AssertionError: x - y"))[0] == [(test, False)]
     assert keeper.read_log(summary(f"FAILED {test}"))[0] == [(test, False)]
 
@@ -233,9 +236,9 @@ def test_a_coloured_summary_still_reads():
 
 def test_a_collection_error_in_the_summary_is_named_and_is_never_a_crash():
     tests, _, _ = keeper.read_log(
-        summary(f"FAILED {CRASHED} - worker 'gw3' crashed while running '{CRASHED}'", "ERROR backend/tests/test_x.py")
+        summary(f"FAILED {CRASHED} - worker 'gw3' crashed while running '{CRASHED}'", f"ERROR {OTHER}")
     )
-    assert tests == [(CRASHED, True), ("backend/tests/test_x.py", False)]
+    assert tests == [(CRASHED, True), (OTHER, False)]
     assert not keeper.flaky([finding(*tests)], set())
 
 
@@ -351,12 +354,12 @@ def finding(*tests, job="python-5", step="Run selected tests", **kw):
         ([finding((CRASHED, True), job="contracts")], True),
         ([finding((RECRUITING, False), (CRASHED, True))], True),
         ([finding((RECRUITING + "[a]", False))], True),  # a parameter of a quarantined test function
-        ([finding(("backend/tests/test_x.py::test_y", False))], False),
-        ([finding((RECRUITING, False)), finding(("backend/tests/test_x.py::test_y", False))], False),
+        ([finding((f"{OTHER}::test_y", False))], False),
+        ([finding((RECRUITING, False)), finding((f"{OTHER}::test_y", False))], False),
         ([finding()], False),  # a failed step that named no test
         ([finding((CRASHED, True), log_missing=True)], False),
         ([finding(step="Shell scripts (shellcheck, pinned)")], False),
-        ([finding(scripts=["tasks-page.cjs"])], False),
+        ([finding(scripts=[UI_SCRIPT])], False),
         # conformance runs cargo tests in the same step: a Rust failure there leaves no pytest summary line
         ([finding((CRASHED, True), job="conformance")], False),
         ([finding((CRASHED, True), job="browser-1")], False),
@@ -382,13 +385,13 @@ def entry(test, **overrides):
 def test_the_quarantine_applies_flake_quarantines_rules_until_that_script_is_in_the_checkout(tmp_path):
     folder = tmp_path / "ci" / "quarantine"
     folder.mkdir(parents=True)
-    (tmp_path / "backend/tests").mkdir(parents=True)
-    (tmp_path / "backend/tests/test_recruiting.py").write_text("")
-    (tmp_path / "backend/tests/test_turn_fixer.py").write_text("")
+    for test in (RECRUITING, CRASHED):
+        (tmp_path / test.split("::")[0]).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / test.split("::")[0]).write_text("")
     (folder / keeper.entry_name(RECRUITING)).write_text(json.dumps(entry(RECRUITING)))
     (folder / "misnamed.json").write_text(json.dumps(entry(CRASHED)))
     (folder / keeper.entry_name(CRASHED)).write_text(json.dumps(entry(CRASHED, runs=[])))  # no run url
-    gone = "backend/tests/test_gone.py::test_x"
+    gone = "made_up/test_gone.py::test_x"
     (folder / keeper.entry_name(gone)).write_text(json.dumps(entry(gone)))  # its test file is gone
     (folder / "broken.json").write_text("{not json")
     assert keeper.quarantined(tmp_path) == {RECRUITING}
@@ -401,10 +404,9 @@ def test_entry_names_match_flake_quarantine():
 
 
 def test_the_quarantine_uses_flake_quarantine_load_when_the_checkout_has_it(tmp_path):
-    (tmp_path / "scripts").mkdir()
-    (tmp_path / "scripts/flake_quarantine.py").write_text(
-        "def load(root):\n    return {'from/flake_quarantine.py::test_load': {'file': str(root)}}\n"
-    )
+    script = tmp_path / keeper.QUARANTINE_SCRIPT
+    script.parent.mkdir()
+    script.write_text("def load(root):\n    return {'from/flake_quarantine.py::test_load': {'file': str(root)}}\n")
     assert keeper.quarantined(tmp_path) == {"from/flake_quarantine.py::test_load"}
 
 
@@ -459,7 +461,7 @@ def test_a_ui_script_failure_names_the_script():
     gh = FakeGitHub()
     run(gh)
     (call,) = written_to(gh, 3033)
-    assert call[0] == "comment" and "`tasks-page.cjs` (UI script) in [browser-1]" in call[2]
+    assert call[0] == "comment" and f"`{UI_SCRIPT}` (UI script) in [browser-1]" in call[2]
 
 
 def test_a_head_already_commented_on_costs_no_run_lookup():
@@ -541,13 +543,13 @@ def test_without_a_queue_token_the_flake_comment_is_marked_deferred_and_requeued
 
 def test_a_quarantine_change_that_touches_none_of_a_comments_tests_costs_no_reads():
     gh = FakeGitHub(comments={2966: [comment_marker(sha("c2"), sha("7a"))]})
-    run(gh, tests=QUARANTINE | {"backend/tests/test_other.py::test_z"})
+    run(gh, tests=QUARANTINE | {"made_up/test_other.py::test_z"})
     assert written_to(gh, 2966) == [] and not any(c[0] == "edit_comment" and c[1] == 2966000 for c in gh.calls)
     assert ("queue_run", sha("7a")) not in gh.calls
 
 
 def test_a_comment_naming_tests_with_an_html_comment_end_still_reads():
-    test = "backend/tests/test_x.py::test_y[-->]"
+    test = f"{OTHER}::test_y[-->]"
     pr = keeper.parse_prs(json.loads((FIXTURES / "open-prs.json").read_text()))[0]
     body = keeper.comment_body(pr, [finding((test, False))], {test}, None)
     assert "-->]" not in body.split("<!-- stale-pr-keeper:tests")[1]
@@ -577,7 +579,7 @@ def test_a_conflicting_flake_is_re_enqueued_once_the_conflict_is_gone():
 
 
 def test_huge_test_ids_keep_the_comment_small_and_are_never_a_flake():
-    many = [(f"backend/tests/test_x.py::test_y[{i}{'p' * 1000}]", True) for i in range(200)]
+    many = [(f"{OTHER}::test_y[{i}{'p' * 1000}]", True) for i in range(200)]
     findings = [finding(*many, job=f"python-{n}") for n in range(1, 6)]
     pr = keeper.parse_prs(json.loads((FIXTURES / "open-prs.json").read_text()))[0]
     body = keeper.comment_body(pr, findings, set(), "https://x")
@@ -604,7 +606,7 @@ def test_a_timed_out_removal_names_its_failing_tests_and_is_never_re_enqueued():
 
 
 def test_ids_holding_an_html_comment_end_stay_inside_the_budget():
-    many = [(f"backend/tests/test_x.py::test_y[{i}{'-->' * 160}]", False) for i in range(40)]
+    many = [(f"{OTHER}::test_y[{i}{'-->' * 160}]", False) for i in range(40)]
     findings = [finding(*many[n * 8 : n * 8 + 8], job=f"python-{n}") for n in range(5)]
     pr = keeper.parse_prs(json.loads((FIXTURES / "open-prs.json").read_text()))[0]
     body = keeper.comment_body(pr, findings, {t for t, _ in many}, "https://x")

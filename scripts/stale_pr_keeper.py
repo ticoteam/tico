@@ -41,6 +41,7 @@ import sys
 
 ROOT = Path(__file__).resolve().parents[1]
 QUARANTINE = "ci/quarantine"
+QUARANTINE_SCRIPT = "scripts/flake_quarantine.py"
 WORKFLOW = "pr-checks.yml"
 LABEL = "needs-main-merge"
 STALE_DAYS = 7
@@ -270,7 +271,7 @@ def _valid_entry(path, data, root):
 def quarantined(root=ROOT):
     """The quarantined test ids: flake_quarantine.load() when the checkout has it, else the same rules here."""
     root = Path(root)
-    script = root / "scripts" / "flake_quarantine.py"
+    script = root / QUARANTINE_SCRIPT
     if script.is_file():
         spec = importlib.util.spec_from_file_location("tico_flake_quarantine_for_keeper", script)
         assert spec and spec.loader
