@@ -1190,7 +1190,7 @@ def _route_candidates(
 def _delivered_links(c: "sqlite3.Connection", task_ids: "Iterable[str]") -> dict[str, list[str]]:
     """{ticket id: the spawn link ids whose live handoffs filed a subtask that has shipped, in handoff order}, from one read
     per chunk of tickets. A handoff counts only when its subtask is in the link's target pipeline, and "shipped" is the
-    engine's own reading (pipeline_engine._facts), so a cancelled subtask never delivers the work."""
+    engine's own reading (pipeline_engine.shipped), so a cancelled subtask never delivers the work."""
     ids = list(task_ids)
     filed = _read(
         c,
@@ -1203,7 +1203,7 @@ def _delivered_links(c: "sqlite3.Connection", task_ids: "Iterable[str]") -> dict
     )
     if not filed:
         return {}
-    shipped = pipeline_engine._facts(c, ids, [], {"run"}).shipped  # pyright: ignore[reportPrivateUsage]
+    shipped = pipeline_engine.shipped(c, [str(row["child"]) for row in filed])
     out: dict[str, list[str]] = {}
     for row in filed:
         if str(row["child"]) not in shipped:

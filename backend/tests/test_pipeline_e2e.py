@@ -719,6 +719,8 @@ def test_late_card_is_asked_once_and_the_factory_manager_sees_the_bottleneck(co)
 
 
 def test_a_pipeline_manager_that_stops_opens_one_botops_task(co):
+    # The manager was set a day ago (the watchdog judges passes from the assignment, F11).
+    co.c.execute("UPDATE task_types SET manager_since=? WHERE id=?", (stamp(24 * 60), co.type["Engineering"]))
     co.insert(
         "pipeline_manager_runs",
         id="run-old",
