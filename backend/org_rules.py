@@ -75,7 +75,7 @@ SCHEMA = (
     "author TEXT NOT NULL, destinations TEXT NOT NULL DEFAULT '[]', rule_ids TEXT NOT NULL DEFAULT '[]', "
     "verdict TEXT NOT NULL DEFAULT '{}', why TEXT NOT NULL DEFAULT '', nonce TEXT NOT NULL, "
     "state TEXT NOT NULL CHECK (state IN ('held','sent','kept')), reviewer TEXT, task_id TEXT, created_at TEXT NOT NULL, "
-    "decided_at TEXT, decided_by TEXT)",
+    "decided_at TEXT, decided_by TEXT, check_kind TEXT NOT NULL DEFAULT 'judged')",
     "CREATE INDEX IF NOT EXISTS org_rule_holds_author ON org_rule_holds(author, state)",
 )
 
@@ -835,6 +835,23 @@ def _scope_checked(c, auth, who, value):
     return scope
 
 
+def _structured_terms(toward, applies):
+    """A structured rule's toward_scope (its terms, as backend/entities/rules.py reads them) and applies_when (a
+    condition on self). A rule with no toward_scope is judged, so it takes no applies_when."""
+    from .entities import rules as DR
+
+    terms = [str(t).strip() for t in toward or []]
+    try:
+        DR.parse_scope(terms)
+        if applies:
+            DR.parse_condition(applies)
+    except DR.ScopeError as exc:
+        raise Problem("validation", str(exc), 422) from exc
+    if applies and not terms:
+        raise Problem("validation", "A rule with a condition needs a toward scope", 422)
+    return terms, (str(applies).strip() if applies else None)
+
+
 def add_rule(c, auth, who, body):
     H._writer(c, who.actor)
     kind = body["kind"]
@@ -870,6 +887,7 @@ def add_rule(c, auth, who, body):
         else {"groups": [], "bots": [], "people": []}
     )
     where = _where_terms(c, body.get("where"))
+    toward, applies = _structured_terms(body.get("toward_scope"), body.get("applies_when"))
     # A bot's add is a suggestion, and so is a person's add they may not manage (the rule is theirs to suggest). Whoever may
     # manage the rule, Everyone included, makes it active at once.
     status = "active" if who.role != "bot" and may_manage(c, auth, who, scope, ctx) else "suggested"
@@ -884,6 +902,8 @@ def add_rule(c, auth, who, body):
         "who": _json(scope),
         "with_scope": _json(with_scope),
         "where_terms": _json(where),
+        "toward_scope": _json(toward),
+        "applies_when": applies,
         "if_broken": _if_broken(body.get("if_broken") or "block"),
         "reviewer": _reviewer(c, body.get("reviewer")),
         "status": status,
@@ -897,10 +917,10 @@ def add_rule(c, auth, who, body):
     }
     c.execute(
         "INSERT INTO org_rules (id, kind, text, description, source_entity_id, cite, who, with_scope, "
-        "where_terms, if_broken, reviewer, status, suggested_by, decided_by, decided_at, via, version, "
-        "created_at, updated_at) VALUES (:id, :kind, :text, :description, :source_id, :cite, :who, "
-        ":with_scope, :where_terms, :if_broken, :reviewer, :status, :suggested_by, :decided_by, :decided_at, "
-        ":via, :version, :created_at, :updated_at)",
+        "where_terms, toward_scope, applies_when, if_broken, reviewer, status, suggested_by, decided_by, decided_at, "
+        "via, version, created_at, updated_at) VALUES (:id, :kind, :text, :description, :source_id, :cite, :who, "
+        ":with_scope, :where_terms, :toward_scope, :applies_when, :if_broken, :reviewer, :status, :suggested_by, "
+        ":decided_by, :decided_at, :via, :version, :created_at, :updated_at)",
         row,
     )
     stored = _get(c, row["id"])
@@ -1461,6 +1481,8 @@ class RuleCreate(Contract):
     if_broken: Literal["block", "escalate", "warn"] | None = None
     reviewer: str | None = Field(default=None, max_length=200)
     where: list[str] = Field(default_factory=list, max_length=WHERE_MAX)
+    toward_scope: list[str] = Field(default_factory=list, max_length=WHERE_MAX)
+    applies_when: str | None = Field(default=None, max_length=200)
 
 
 class RuleEdit(Contract):

@@ -89,6 +89,11 @@ def _structured(c: sqlite3.Connection) -> list[dict[str, Any]]:
     return [row for row in _active(c) if row["toward_scope"]]
 
 
+def in_force(c: sqlite3.Connection) -> bool:
+    """Whether any structured rule is in force: the checks skip the walk when none is."""
+    return bool(_structured(c))
+
+
 def _binds(c: sqlite3.Connection, who: str, row: dict[str, Any]) -> bool:
     """Whether the rule's Who names the actor (the same reading `matching` gives a write's author)."""
     ctx = _ctx(c)
@@ -184,10 +189,13 @@ def rules_for(
         rules.append(
             {
                 "id": row["id"],
+                "version": row["version"],
                 "text": row["text"],
                 "cite": row["cite"],
                 "source": sources.get(str(row["source_id"] or ""), ""),
                 "if_broken": row["if_broken"],
+                "reviewer": row["reviewer"],
+                "suggested_by": row["suggested_by"],
                 "effect": effect,
                 "path": _path(hit, reached[hit] if hit else [], names, visible),
                 "reason": reason,
