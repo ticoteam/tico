@@ -248,5 +248,20 @@ let browser = null;
     await page.close();
   }
 
+  // An open Catch up drops a card when its task finishes, even when the Needs you change that prompts the rail's refresh
+  // brings back nothing (the rail counts no thread for Catch up any more).
+  if (!only || only === 'catch-up-task') {
+    const {page, seen, send, block, threads} = await open(browser, {threads: {'t-task': thread('t-task', 'Pricing', {task_id: 'task-9', me: me({unread: 2, activity: true})})}});
+    await page.goto('https://tico-ui.test/#/threads');
+    await page.locator('[data-tr-catch]').click();
+    await page.locator('.cu-card[data-thread="t-task"]').waitFor();
+    threads['t-task'].hidden = true;
+    await send(block('needs', {version: 'v2'}));
+    await until(async () => (await page.locator('.cu-card[data-thread="t-task"]').count()) === 0, 'an open Catch up drops a card whose task finished');
+    await page.locator('.cu-empty').waitFor();
+    assert.deepEqual(seen.errors, []);
+    await page.close();
+  }
+
   console.log('PASS: Threads archive: a phone row shows Archive for a managed thread (44px, always shown), taking it and its Catch up count off at once with an Undo that brings it back; the open thread\'s header archives it back to the list, and Unarchive restores it in place; a thread the viewer does not manage has neither; no sideways scroll at 390px; on a desktop the row Archive shows on hover and keyboard focus');
 })().catch(e => { console.error(e); process.exitCode = 1; }).finally(() => browser?.close());
