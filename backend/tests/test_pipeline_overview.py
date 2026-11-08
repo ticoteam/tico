@@ -348,6 +348,20 @@ def test_factory_done_counts_real_moves_into_the_output_stage_without_requiremen
         assert c.execute("SELECT COUNT(*) FROM stage_visits").fetchone()[0] == 0
 
 
+def test_a_closed_unfinished_card_is_not_a_factory_done_count(api):
+    # Finding F7: the done count uses the engine's shipment predicate. One shipped card and one card closed unfinished
+    # (a Close lands it in the output stage) count as one done card.
+    growth = make_factory(api, "Gro")
+    done_closed = [{"name": "Doing", "status": "doing"}, {"name": "Done", "status": "closed"}]
+    sales, steps = make_type(api, "Sls", steps=done_closed, factory=growth)
+    shipped = card(api, sales, steps["Doing"])
+    cancelled = card(api, sales, steps["Doing"])
+    move(api, shipped["id"], step=steps["Done"])
+    with api.app.state.store.transaction() as c:
+        H.task_close(c, H.KEEPER, cancelled["id"], note="Dropped")
+    assert overview(api)["factories"][0]["done"] == 1
+
+
 def test_the_migration_picks_the_output_stage_by_flow_order_not_creation_order(api):
     # Engineering was made first, but Product feeds it: the factory's output is Engineering's done stage.
     import importlib.util

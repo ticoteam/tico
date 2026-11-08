@@ -1128,6 +1128,21 @@ def test_a_subtask_moved_into_the_engineering_done_stage_ships_its_product_card(
     assert co.where(card) == ("Product", "Validate")
 
 
+def test_a_step_move_into_engineering_done_is_held_to_a_waiting_approval(co):
+    """Finding F1: Engineering's Done stage has status closed, but a move into it is progress, not a cancellation. A named
+    person's approval waiting in Doing refuses the move, the subtask stays in Doing and the card does not advance."""
+    card = review_card(co)
+    approve_spec(co, card)
+    (d41,) = subtasks(co, card)
+    co.require("Engineering", "Doing", "Ana signs off", kind="approval", reviewed_by="person")
+    co.move(d41, "Doing", actor=ANA)
+    with pytest.raises(H.Refused):
+        co.move(d41, "Done", actor=ANA)
+    co.c.rollback()
+    assert co.where(d41) == ("Engineering", "Doing")
+    assert co.where(card) == ("Product", "In development")
+
+
 def test_a_person_approved_due_date_stops_standing_once_the_date_is_cleared(co):
     """Finding R6: Ben approves a populated due-date requirement, Ana clears the date, and the requirement is no longer met.
     The card does not move on with the spec approval, and the due-date dot shows the requirement as not met. The person's
@@ -1157,6 +1172,52 @@ def test_a_subtask_that_shipped_then_closed_still_counts_as_shipped(co):
     co.close(d41, actor=ANA)
     assert H.task(co.c, d41)["status"] == "closed"
     assert standing_names(co, card)["Engineering shipped"] == "met"
+
+
+def test_a_closed_subtask_reopened_and_finished_ships_the_card(co):
+    """Finding F6: shipment is judged per transition. The subtask's Close into Done is a cancellation; reopened and genuinely
+    moved into Done, it finished, so Engineering shipped is met."""
+    card = review_card(co)
+    approve_spec(co, card)
+    (d41,) = subtasks(co, card)
+    # A requirement on Engineering's first stage makes its moves write stage visits, as a real pipeline's do.
+    signed = co.require("Engineering", "Todo", "Ana signs off", kind="approval", reviewed_by="person")
+    co.approve(d41, signed)
+    co.close(d41, actor=ANA)
+    assert standing_names(co, card)["Engineering shipped"] == "failed"
+    co.set_status(d41, "doing", actor=ANA)  # reopened
+    co.move(d41, "Done", actor=ANA)
+    assert H.task(co.c, d41)["status"] == "closed"
+    assert co.where(card) == ("Product", "Validate")
+    assert standing_names(co, card)["Engineering shipped"] == "met"
+
+
+def test_a_close_into_done_with_no_marker_from_before_the_update_does_not_ship(co):
+    """Finding F6: a Close written before the stage_closed marker existed leaves no marker in history, and a pipeline with
+    no requirements writes no visit. The subtask sits in Done, so it must not count as shipped."""
+    card = review_card(co)
+    approve_spec(co, card)
+    (d41,) = subtasks(co, card)
+    co.close(d41, actor=ANA)
+    co.c.execute("DELETE FROM history_events WHERE subject_id = ? AND kind = 'stage_closed'", (d41,))
+    co.c.commit()
+    assert co.where(d41) == ("Engineering", "Done")
+    assert standing_names(co, card)["Engineering shipped"] == "failed"
+    assert co.advance(card, actor=ANA)["moved"] is False
+
+
+def test_a_subtask_closed_in_done_after_it_shipped_still_counts_as_shipped(co):
+    """Finding F6 (the decision in pipeline_engine._shipped_ids): a ticket that finished and reached Done keeps its
+    shipment when someone later closes it in place. The finish is a marker, and a close in place writes nothing to take it back."""
+    card = review_card(co)
+    approve_spec(co, card)
+    (d41,) = subtasks(co, card)
+    co.move(d41, "Doing", actor=ANA)
+    co.move(d41, "Done", actor=ANA)
+    assert co.where(card) == ("Product", "Validate")
+    co.close(d41, actor=ANA)
+    assert H.task(co.c, d41)["status"] == "closed"
+    assert pipeline_engine.shipped(co.c, [d41]) == {d41}
 
 
 def test_a_spawn_does_not_carry_a_members_only_source_to_a_non_member_owner(co):
