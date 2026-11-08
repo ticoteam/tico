@@ -337,3 +337,19 @@ def test_a_ticket_that_keeps_failing_is_skipped_after_its_passes_so_later_ticket
     )  # the third failed pass: the ticket is skipped, the rest recorded, the cursor wraps
     assert set(ids[2:]) <= _recorded(app) and broken not in _recorded(app)
     assert _cursor(app) == ""
+
+
+def test_a_body_edit_puts_a_passed_check_back_to_waiting_in_the_same_write(setup):
+    """Codex W3 #1, the body path: a new body is new work, so an approval's passed check is out of date at once, not on the
+    next scheduler pass."""
+    app, fake, gh, w = setup
+    gh.permissions = {"checks": "write", "metadata": "read"}
+    with app.store.transaction() as c:
+        w.c = c
+        w.attach()
+        w.approve(w.mockup)
+    C.publish_open(app.store)
+    assert states(app)[w.mockup] == "met"
+    with app.store.transaction() as c:
+        H.task_update(c, ANA, w.task, body="A new plan.")
+    assert states(app)[w.mockup] == "waiting"
