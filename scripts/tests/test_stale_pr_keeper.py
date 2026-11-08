@@ -124,8 +124,8 @@ class FakeGitHub:
         if call[0] in self.fail:
             raise subprocess.CalledProcessError(1, ["gh"], stderr=self.stderr.format(call[0]))
 
-    def enqueue(self, number, head):
-        self._write("enqueue", number, head)
+    def enqueue(self, pr):
+        self._write("enqueue", pr.number, pr.head)
 
     def comment(self, number, body):
         self._write("comment", number, body)
@@ -423,7 +423,7 @@ def test_a_quarantined_failure_is_re_enqueued_at_its_head_with_its_marker_first(
     assert [c[0] for c in calls] == ["comment", "enqueue"]
     assert requeued_marker(sha("a"), sha("1"), failed=(RECRUITING,)) in calls[0][2]
     assert f"`{RECRUITING}` (quarantined)" in calls[0][2]
-    assert calls[1] == ("enqueue", 2984, sha("a"))  # gh pr merge --match-head-commit: a newer push is not queued
+    assert calls[1] == ("enqueue", 2984, sha("a"))  # expectedHeadOid: a newer push is not queued
     assert "#2984" in text.split("### Re-enqueued")[1].split("###")[0]
 
 
@@ -808,6 +808,7 @@ def test_parse_prs_reads_the_tested_head_and_the_push_time():
     prs = {pr.number: pr for pr in keeper.parse_prs(json.loads((FIXTURES / "open-prs.json").read_text()))}
     assert prs[2999].queue_commit == sha("5") and prs[2999].tested_head == sha("9") and prs[2999].head == sha("e")
     assert prs[3017].removed_reason is None and prs[3017].in_queue
+    assert prs[2984].node_id == "PR_kwDO2984"
     assert prs[3061].checks is None and prs[3061].draft
     assert prs[2975].pushed == datetime(2026, 11, 7, 20, 0, tzinfo=timezone.utc)
 
@@ -916,18 +917,54 @@ def test_comment_bodies_go_through_stdin(monkeypatch):
 
 def test_enqueue_uses_the_queue_token_and_the_inspected_head(monkeypatch):
     seen = {}
+    reply = {"data": {"enqueuePullRequest": {"mergeQueueEntry": {"id": "MQE_1"}}}}
 
     def fake_run(args, env=None, **_):
         seen.update(args=args, token=env["GH_TOKEN"])
-        return subprocess.CompletedProcess(args, 0, stdout="")
+        return subprocess.CompletedProcess(args, 0, stdout=json.dumps(reply))
 
     monkeypatch.setattr(keeper.subprocess, "run", fake_run)
     monkeypatch.setenv("GH_TOKEN", "workflow-token")
     gh = keeper.GitHub("ticoteam/tico", queue_token="app-token")
     assert gh.can_enqueue and not keeper.GitHub("ticoteam/tico").can_enqueue
-    gh.enqueue(12, sha("a"))
-    assert seen["args"] == ["gh", "pr", "merge", "12", "--repo", "ticoteam/tico", "--match-head-commit", sha("a")]
+    pr = keeper.PR(12, "t", "u", False, "main", sha("a"), "MERGEABLE", False, [], None, "SUCCESS", node_id="PR_12")
+    gh.enqueue(pr)
+    assert seen["args"][:3] == ["gh", "api", "graphql"] and "enqueuePullRequest" in seen["args"][4]
+    assert "id=PR_12" in seen["args"] and f"head={sha('a')}" in seen["args"]  # never a newer push
     assert seen["token"] == "app-token"
+    reply = {"data": {"enqueuePullRequest": {"mergeQueueEntry": None}}}
+    with pytest.raises(subprocess.CalledProcessError) as raised:
+        gh.enqueue(pr)
+    assert keeper.REFUSED.search(raised.value.stderr)  # nothing queued: the marker is taken back
+
+
+@pytest.mark.parametrize(
+    ("label_stderr", "calls", "raises"),
+    [
+        ("gh: Not Found (HTTP 404)", 4, False),  # no such label: created (never --force), then added
+        (None, 2, True),  # the label exists: the first error stands
+        ("HTTP 502: Bad Gateway", 2, True),
+    ],
+)
+def test_add_label_creates_the_label_only_when_it_is_missing(monkeypatch, label_stderr, calls, raises):
+    seen = []
+
+    def fake_gh(*args, **_):
+        seen.append(args)
+        if len(seen) == 1:
+            raise subprocess.CalledProcessError(1, ["gh"], stderr="HTTP 502: Bad Gateway")
+        if len(seen) == 2 and label_stderr:
+            raise subprocess.CalledProcessError(1, ["gh"], stderr=label_stderr)
+        return ""
+
+    gh = keeper.GitHub("ticoteam/tico")
+    monkeypatch.setattr(gh, "_gh", fake_gh)
+    if raises:
+        with pytest.raises(subprocess.CalledProcessError):
+            gh.add_label(1, "needs-main-merge")
+    else:
+        gh.add_label(1, "needs-main-merge")
+    assert len(seen) == calls and not any("--force" in args for args in seen)
 
 
 def test_the_workflow_is_hourly_and_on_demand_and_keeps_the_queue_token_apart():

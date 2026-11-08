@@ -1,6 +1,6 @@
 # Stale PR keeper (scripts/stale_pr_keeper.py), hourly and on demand. For each open pull request to main:
 # - dropped by the merge queue for failed checks where every failure is a quarantined test (ci/quarantine/) or a crashed
-#   pytest-xdist worker: re-enqueued (`gh pr merge N`), at most once per head sha;
+#   pytest-xdist worker: re-enqueued (enqueuePullRequest), at most once per head sha;
 # - dropped for any other failure: one comment per head sha naming the failing test;
 # - conflicting with main and its own checks red: labelled needs-main-merge (removed once it merges cleanly).
 # It closes nothing and never merges main into a branch. The run summary lists pull requests with no push in 7 days.

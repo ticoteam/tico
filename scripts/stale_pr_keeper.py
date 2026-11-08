@@ -6,8 +6,8 @@ Hourly and on demand (.github/workflows/stale-pr-keeper.yml). For each open pull
 1. Dropped by the queue (its last queue event is REMOVED_FROM_MERGE_QUEUE_EVENT and it is not back in the queue):
    - failed_checks, and every failure in the failing queue run is a quarantined test (ci/quarantine/, read as
      scripts/flake_quarantine.py reads it) or a pytest-xdist "worker ... crashed" in a pytest-only leg: re-enqueued
-     (`gh pr merge N --match-head-commit <head>`), at most once per head sha. Re-enqueueing needs QUEUE_TOKEN (GitHub
-     refuses the workflow's own token); without it the comment says to re-enqueue by hand.
+     (enqueuePullRequest with expectedHeadOid=<head>), at most once per head sha. Re-enqueueing needs QUEUE_TOKEN
+     (GitHub refuses the workflow's own token); without it the comment says to re-enqueue by hand.
    - otherwise one comment per head sha naming the failing tests (or the job and step when no test is named). When the
      quarantine list or the queue run changes for that head, the same comment is updated, and a flake is re-enqueued.
    - merge_conflict is left to the label below; a manual removal is a person's choice and is left alone. A pull request
@@ -19,8 +19,8 @@ Hourly and on demand (.github/workflows/stale-pr-keeper.yml). For each open pull
    GitHub record of its push; the commit date when it has none).
 
 The keeper writes one comment per head, edited as things change. Its hidden marker
-`<!-- stale-pr-keeper:comment <head> queue=<sha> quarantine=<hash>[ requeued][ deferred] -->` records what it was written
-for, so a later run never repeats it, and never re-enqueues a head twice.
+`<!-- stale-pr-keeper:comment <head> queue=<sha> quarantine=<hash>[ requeued][ deferred] -->` (after a line naming the
+failed tests) records what it was written for, so a later run never repeats it, and never re-enqueues a head twice.
 GitHub calls: one GraphQL page per 50 open pull requests; then, for dropped pull requests only, one GraphQL query per 25
 for their markers, and only where the markers leave something to decide: the queue run (by the removal's merge group
 commit), its jobs, and the log of each failed job (streamed; only summary lines are kept).
@@ -75,7 +75,8 @@ RATE_LIMITED = re.compile(r"rate limit|HTTP 429", re.I)
 # reply, an internal GraphQL error) may still have queued it, so its marker stays and the head is never re-enqueued.
 REFUSED = re.compile(
     r"HTTP 4\d\d|(?i:not mergeable|unmergeable|already (?:queued|in the merge queue)|head branch was modified"
-    r"|resource not accessible|does not have permission|could not resolve to a pullrequest)"
+    r"|expected head|resource not accessible|does not have permission|could not resolve to a pullrequest"
+    r"|no merge queue entry)"
 )
 # The removals whose queue run is read for the failing tests. Only failed_checks can be re-enqueued.
 DIAGNOSED = ("failed_checks", "checks_timed_out")
@@ -98,7 +99,7 @@ query($owner: String!, $name: String!, $after: String) {
     pullRequests(states: OPEN, first: 50, after: $after, orderBy: {field: CREATED_AT, direction: ASC}) {
       pageInfo { hasNextPage endCursor }
       nodes {
-        number title url isDraft baseRefName headRefOid mergeable isInMergeQueue
+        id number title url isDraft baseRefName headRefOid mergeable isInMergeQueue
         labels(first: 30) { nodes { name } }
         commits(last: 1) {
           nodes { commit { committedDate statusCheckRollup { state } checkSuites(first: 10) { nodes { createdAt } } } }
@@ -117,7 +118,15 @@ query($owner: String!, $name: String!, $after: String) {
   }
 }
 """
-COMMENTS = "comments(last: 100{before}) {{ pageInfo {{ hasPreviousPage startCursor }} nodes {{ databaseId viewerDidAuthor body }} }}"
+ENQUEUE = """
+mutation($id: ID!, $head: GitObjectID!) {
+  enqueuePullRequest(input: {pullRequestId: $id, expectedHeadOid: $head}) { mergeQueueEntry { id } }
+}
+"""
+COMMENTS = (
+    "comments(last: 100{before}) {{ pageInfo {{ hasPreviousPage startCursor }} "
+    "nodes {{ databaseId viewerDidAuthor body }} }}"
+)
 
 
 @dataclass
@@ -136,6 +145,7 @@ class PR:
     removed_reason: str | None = None  # set when the last queue event is a removal
     queue_commit: str | None = None  # the merge group commit the queue tested (the removal's beforeCommit)
     tested_head: str | None = None  # the pull request head that merge group merged, when it is a merge commit
+    node_id: str | None = None  # the GraphQL id, for enqueuePullRequest
 
 
 @dataclass
@@ -176,6 +186,7 @@ def parse_prs(pages):
                 labels=[label["name"] for label in node["labels"]["nodes"]],
                 pushed=min(suites) if suites else _when(commit.get("committedDate")),
                 checks=rollup.get("state"),
+                node_id=node.get("id"),
             )
             events = node["timelineItems"]["nodes"]
             if events and events[-1]["__typename"] == "RemovedFromMergeQueueEvent":
@@ -597,10 +608,15 @@ class GitHub:
             return None
         raise _checked(subprocess.CalledProcessError(proc.returncode, command, stderr=error))
 
-    def enqueue(self, number, head):
-        """Adds the pull request to the merge queue only while its head is still `head`."""
+    def enqueue(self, pr):
+        """Adds the pull request to the merge queue only while its head is still the inspected one. enqueuePullRequest,
+        not `gh pr merge`: that turns on auto-merge instead when the pull request cannot enter the queue right now, and
+        an auto-merge request is no queue entry."""
         env = {**os.environ, "GH_TOKEN": self.queue_token or ""}
-        self._gh("pr", "merge", str(number), "--repo", self.repo, "--match-head-commit", head, env=env)
+        args = ["api", "graphql", "-f", f"query={ENQUEUE}", "-f", f"id={pr.node_id}", "-f", f"head={pr.head}"]
+        data = json.loads(self._gh(*args, env=env))
+        if not ((data.get("data") or {}).get("enqueuePullRequest") or {}).get("mergeQueueEntry"):
+            raise subprocess.CalledProcessError(1, ["gh", *args[:3]], stderr="no merge queue entry in the reply")
 
     def comment(self, number, body):
         """Posts a comment; its id."""
@@ -617,24 +633,26 @@ class GitHub:
         self._gh("api", "-X", "DELETE", f"repos/{self.repo}/issues/comments/{comment_id}")
 
     def add_label(self, number, label):
+        """Adds the label, creating it first only when the repository has none by that name."""
         try:
             self._gh("api", f"repos/{self.repo}/issues/{number}/labels", "-f", f"labels[]={label}")
         except RateLimited:
             raise
-        except subprocess.CalledProcessError:
-            self._gh(
-                "label",
-                "create",
-                label,
-                "--repo",
-                self.repo,
-                "--force",
-                "--color",
-                "fbca04",
-                "--description",
-                "Conflicts with main: merge main into the branch",
-            )
-            self._gh("api", f"repos/{self.repo}/issues/{number}/labels", "-f", f"labels[]={label}")
+        except subprocess.CalledProcessError as error:
+            try:
+                self._gh("api", f"repos/{self.repo}/labels/{label}")
+            except RateLimited:
+                raise
+            except subprocess.CalledProcessError as missing:
+                if "HTTP 404" not in (missing.stderr or ""):
+                    raise error from None
+                description = "Conflicts with main: merge main into the branch"
+                self._gh(
+                    "label", "create", label, "--repo", self.repo, "--color", "fbca04", "--description", description
+                )
+                self._gh("api", f"repos/{self.repo}/issues/{number}/labels", "-f", f"labels[]={label}")
+                return
+            raise error from None  # the label exists: the failure was something else
 
     def remove_label(self, number, label):
         self._gh("api", "-X", "DELETE", f"repos/{self.repo}/issues/{number}/labels/{label}")
@@ -666,7 +684,7 @@ def requeue(gh, pr, body, existing=None):
     else:
         comment_id = gh.comment(pr.number, body)
     try:
-        gh.enqueue(pr.number, pr.head)
+        gh.enqueue(pr)
     except subprocess.CalledProcessError as error:
         if not isinstance(error, RateLimited) and REFUSED.search(error.stderr or ""):
             try:
