@@ -708,15 +708,17 @@ pub async fn finish(path: &Path, aid: &str, turn: &Env, skip: &[String], memory:
                 reset.extend(held.iter().map(String::as_str));
                 g(path, &env, &reset, 15).await?;
             }
-            if !g(path, &env, &["diff", "--cached", "--quiet"], 15)
-                .await?
-                .ok()
-            {
+            // The memory commit takes only the memory folders, never what else the bot had staged (a deletion of
+            // AGENT.md, say): a pathspec limits both the check and the commit, and a held path stays out of it.
+            let mut scope: Vec<String> = folders.iter().map(|f| f.to_string()).collect();
+            scope.extend(held.iter().map(|h| format!(":(exclude,literal){h}")));
+            let mut staged: Vec<&str> = vec!["diff", "--cached", "--quiet", "--"];
+            staged.extend(scope.iter().map(String::as_str));
+            if !g(path, &env, &staged, 15).await?.ok() {
                 let message = format!("Memory from run {aid}\n\nTico-Run: {aid}");
-                if !g(path, &env, &["commit", "-q", "-m", &message], 15)
-                    .await?
-                    .ok()
-                {
+                let mut commit: Vec<&str> = vec!["commit", "-q", "-m", &message, "--"];
+                commit.extend(scope.iter().map(String::as_str));
+                if !g(path, &env, &commit, 15).await?.ok() {
                     return Ok("the memory commit failed".into());
                 }
             }

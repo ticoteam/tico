@@ -946,6 +946,56 @@ async fn a_stateless_task_lane_commits_no_memory_and_leaves_what_it_wrote_in_mem
 }
 
 #[tokio::test]
+async fn a_memory_commit_takes_only_the_memory_folders_and_leaves_other_staged_changes_staged() {
+    let tmp = Tmp::new();
+    let (bare, _seed) = remote(&tmp.0, "bot-memory");
+    let projects = tmp.0.join("projects");
+    std::fs::create_dir_all(&projects).unwrap();
+    let main = projects.join("bot-memory");
+    sh(
+        &projects,
+        &[
+            "clone",
+            "-q",
+            bare.to_str().unwrap(),
+            main.to_str().unwrap(),
+        ],
+    );
+    let env = turn_env(&tmp.0, &[]);
+
+    // The bot staged the deletion of its own AGENT.md, then wrote a lesson under memory/.
+    sh(&main, &["rm", "-q", "AGENT.md"]);
+    std::fs::create_dir_all(main.join("memory")).unwrap();
+    std::fs::write(main.join("memory/lesson.md"), "keep tests fast\n").unwrap();
+
+    assert_eq!(sessions::finish(&main, "run-3", &env, &[], true).await, "");
+    let memory_commit = sh(&main, &["show", "--name-only", "--format=%B", "HEAD"]);
+    assert!(
+        memory_commit.starts_with("Memory from run run-3"),
+        "{memory_commit}"
+    );
+    assert!(
+        memory_commit.contains("memory/lesson.md"),
+        "{memory_commit}"
+    );
+    assert!(!memory_commit.contains("AGENT.md"), "{memory_commit}");
+    assert_eq!(
+        sh(&main, &["ls-tree", "--name-only", "HEAD", "AGENT.md"]),
+        "AGENT.md",
+        "the memory commit must not delete AGENT.md"
+    );
+    // The later rebase autostashes and restores a dirty tree, so the deletion comes back unstaged: still
+    // uncommitted, which is what the bot's own next commit needs.
+    let status = sh(&main, &["status", "--porcelain"]);
+    assert!(
+        status
+            .lines()
+            .any(|l| l.contains('D') && l.ends_with("AGENT.md")),
+        "the deletion stays uncommitted: {status}"
+    );
+}
+
+#[tokio::test]
 async fn a_memory_pass_checkout_drops_its_edits_and_commits_and_leaves_main_alone() {
     let tmp = Tmp::new();
     let (bare, _seed) = remote(&tmp.0, "bot-pass");
