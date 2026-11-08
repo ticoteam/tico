@@ -313,11 +313,18 @@ def _restage(conn: sqlite3.Connection, actor: str, row: Row, stages: list[dict[s
     made.append(f"set up the stages of {row['name']}")
 
 
-def _adopt(conn: sqlite3.Connection, actor: str, row: Row, spec: Row, made: list[str]) -> None:
+def _has_open_subtask(conn: sqlite3.Connection, task_id: str) -> bool:
+    """Whether a card has an open task below it (any depth). Finishing the card would close it."""
+    return any(str(kid["status"]) in H.ACTIVE_STATUSES for kid in H.descendants(conn, task_id))
+
+
+def _adopt(conn: sqlite3.Connection, actor: str, row: Row, spec: Row, made: list[str], unresolved: list[str]) -> None:
     """An existing pipeline takes the preset's stage names. A renamed stage keeps its id, so its cards stay. A retired
     stage's links and requirements retire, its cards move to the stage that replaces it, and it goes once it is empty
-    (a stage the move refuses stays, and the refusal stands for the whole setup). Preset stages the pipeline lacks are
-    added in the preset's order; stages the preset does not name are kept at the end."""
+    (a stage the move refuses stays, and the refusal stands for the whole setup). A card with an open subtask stays where
+    it is: moving it to a done or closed stage would close that subtask, and cleanup never cancels work. Such a stage stays
+    until it is empty, and each card left is named under `unresolved`. Preset stages the pipeline lacks are added in the
+    preset's order; stages the preset does not name are kept at the end."""
     from . import pipeline_links
 
     steps = _rows(conn, "SELECT id, name, status FROM task_steps WHERE type_id = ? ORDER BY position", (row["id"],))
@@ -355,11 +362,18 @@ def _adopt(conn: sqlite3.Connection, actor: str, row: Row, spec: Row, made: list
         link = pipeline_links.link_for_stage(conn, str(gone["id"]))
         if link is not None:
             pipeline_links.retire_link(conn, actor, str(link["id"]))
-        cards = _rows(conn, "SELECT id FROM tasks WHERE step_id = ?", (gone["id"],))
+        cards = _rows(conn, "SELECT id, title FROM tasks WHERE step_id = ?", (gone["id"],))
+        held = [card for card in cards if _has_open_subtask(conn, str(card["id"]))]
         for card in cards:
+            if card in held:
+                continue
             H.task_update(conn, actor, str(card["id"]), step=str(into["id"]), mover=True)
-        if cards:
-            made.append(f"moved {len(cards)} {old} cards to {target}")
+        if len(cards) > len(held):
+            made.append(f"moved {len(cards) - len(held)} {old} cards to {target}")
+        for card in held:
+            unresolved.append(
+                f"{card['title']} is still in {old}: finish or close its open subtasks, then re-run setup"
+            )
         conn.execute(
             "UPDATE stage_requirements SET retired_at = ? WHERE pipeline_stage_id = ? AND retired_at IS NULL",
             (H.now(), gone["id"]),
@@ -468,7 +482,7 @@ def _pipeline(
         if not row.get("numbered"):
             H.type_update(conn, actor, row["id"], numbered=True, mover=True)
     if existing is not None and spec.get("adopt"):
-        _adopt(conn, actor, row, spec, made)
+        _adopt(conn, actor, row, spec, made, unresolved)
     ident = str(row["id"])
     _public_names(conn, ident, spec["name"], made)
     current = (
@@ -491,14 +505,13 @@ def _pipeline(
         updates["factory_id"] = factories[spec["factory"]]
     if not current.get("pipeline_owner_id"):
         updates["pipeline_owner_id"] = actor
-    # An active manager is never replaced. Any other manager (archived, paused, missing, or not yet set up) counts as
-    # none: the matching bot takes its place, or the pipeline is reported as having no active manager. An unset manager is
-    # left unset, as it always was.
+    # An active manager is never replaced. Any other manager (archived, paused, missing, or none at all) counts as none:
+    # the matching bot takes its place, or the pipeline is reported under unresolved. A NULL manager is no exception.
     if not _active_manager(conn, current.get("manager")):
         manager = _manager(conn, spec["manager"])
         if manager:
             updates["manager"] = manager
-        elif current.get("manager"):
+        else:
             unresolved.append(f"{spec['name']} has no active manager: name a bot {spec['manager'][0]}")
     if spec.get("private"):
         updates["pipeline_visibility"] = "members"

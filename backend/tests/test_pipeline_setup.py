@@ -45,6 +45,14 @@ def manager_of(c, pipeline):
     return rows(c, "SELECT manager FROM task_types WHERE name=?", pipeline)[0]["manager"]
 
 
+UNMANAGED = [
+    "Marketing has no active manager: name a bot Marketing Pipeline Manager",
+    "Sales has no active manager: name a bot Sales Pipeline Manager",
+    "Success has no active manager: name a bot Success Pipeline Manager",
+    "Legal has no active manager: name a bot Legal Pipeline Manager",
+]
+
+
 def test_setup_makes_the_factories_pipelines_links_and_goals(tmp_path):
     c = fresh(tmp_path)
     out = S.apply_factory_setup(c, ANA)
@@ -150,16 +158,17 @@ def test_replace_on_a_booted_hub_makes_every_declared_link_and_a_second_run_chan
     # A booted hub's Product and Engineering name managers that do not exist yet; their setup-named bots resolve them.
     bot(c, "product-pipeline-manager", "Product Pipeline Manager")
     bot(c, "engineering-pipeline-manager", "Engineering Pipeline Manager")
-    assert S.apply_factory_setup(c, ANA)["unresolved"] == []
+    # Only Product and Engineering have a bot; the other four preset pipelines have no manager to name.
+    assert S.apply_factory_setup(c, ANA)["unresolved"] == UNMANAGED
     out = S.apply_factory_setup(c, ANA, replace=True)
-    assert out["unresolved"] == []
+    assert out["unresolved"] == UNMANAGED
     ids = {r["name"]: r["id"] for r in rows(c, "SELECT id, name FROM task_types")}
     for link in S.PRESETS["tico_default"]["links"]:
         stage = step_id(c, ids[link["from"]], link["stage"])
         assert L.link_for_stage(c, stage)["to_pipeline_id"] == ids[link["to"]]
     before = snapshot(c)
     again = S.apply_factory_setup(c, ANA, replace=True)
-    assert again["changes"] == [] and again["unresolved"] == []
+    assert again["changes"] == [] and again["unresolved"] == UNMANAGED
     assert snapshot(c) == before
 
 
@@ -278,7 +287,7 @@ def test_two_replace_runs_in_a_row_change_nothing_the_second_time(tmp_path):
     events = rows(c, "SELECT COUNT(*) AS n FROM history_events")[0]["n"]
     cards = rows(c, "SELECT id, step_id, status FROM tasks ORDER BY id")
     again = S.apply_factory_setup(c, ANA, "tico_default", replace=True)
-    assert again["changes"] == [] and again["unresolved"] == []
+    assert again["changes"] == [] and again["unresolved"] == UNMANAGED
     assert snapshot(c) == before
     assert rows(c, "SELECT COUNT(*) AS n FROM history_events")[0]["n"] == events
     assert rows(c, "SELECT id, step_id, status FROM tasks ORDER BY id") == cards
@@ -554,3 +563,31 @@ def test_a_run_after_the_name_fixes_changes_nothing(tmp_path):
     again = S.apply_factory_setup(c, ANA)
     assert again["changes"] == [] and again["unresolved"] == first["unresolved"]
     assert snapshot(c) == before
+
+
+def test_retiring_ready_to_ship_leaves_an_open_subtask_open(tmp_path):
+    """Codex GB2 finding 1: retiring Ready to ship moves its cards into Done, and a Done move closes open descendants. A card
+    with an unfinished subtask stays on Ready to ship, and the subtask stays open."""
+    c = fresh(tmp_path)
+    product = _type(c, "Product roadmap")
+    card = H.task_create(c, ANA, "Export the roadmap", "", ANA, type=product, step="Ready to ship", lint=False)["id"]
+    child = H.task_create(c, ANA, "Write the export", "", ANA, parent_id=card, lint=False)["id"]
+    out = S.apply_factory_setup(c, ANA)
+    assert rows(c, "SELECT status FROM tasks WHERE id=?", child) == [{"status": "open"}]
+    assert any("Export the roadmap" in u for u in out["unresolved"]), out["unresolved"]
+    assert rows(c, "SELECT s.name AS step FROM tasks k JOIN task_steps s ON s.id=k.step_id WHERE k.id=?", card) == [
+        {"step": "Ready to ship"}
+    ]
+    assert rows(c, "SELECT id FROM task_steps WHERE type_id=? AND name='Ready to ship'", product) != []
+
+
+def test_with_no_matching_bots_every_unmanaged_pipeline_is_listed_as_unresolved(tmp_path):
+    """Codex GB2 finding 3: a pipeline with no manager (NULL) is reported too, not only one whose manager was set and
+    stopped working. With no bots at all, all six preset pipelines are listed."""
+    c = fresh(tmp_path)
+    out = S.apply_factory_setup(c, ANA)
+    for name in ("Product", "Engineering", "Marketing", "Sales", "Success", "Legal"):
+        assert any(u.startswith(f"{name} has no active manager") for u in out["unresolved"]), (name, out["unresolved"])
+    assert manager_of(c, "Marketing") is None
+    again = S.apply_factory_setup(c, ANA)
+    assert again["unresolved"] == out["unresolved"]
