@@ -1173,6 +1173,45 @@ def test_a_judges_met_from_before_the_work_digest_does_not_stand_and_is_judged_a
     assert P.tick(store) == 0
 
 
+def test_a_persons_ruling_after_a_judge_verdict_that_no_longer_stands_is_never_judged_over(tmp_path, monkeypatch):
+    """Codex round 3, P2: a person who approved after a judge's verdict from before the digest has the last word; the
+    judge does not read the evidence again and replace their approval."""
+    path, task_id, req_id = _judged_world(tmp_path)
+    store = Store(_settings(path))
+    attachment = _attachment_id(store, task_id)
+    with store.transaction() as c:
+        revision, stage = c.execute("SELECT work_revision, step_id FROM tasks WHERE id=?", (task_id,)).fetchone()
+        for decision, judge, verdict in (("legacy", "llm", "failed"), ("approved", "person", "met")):
+            c.execute(
+                "INSERT INTO stage_decisions (id, task_id, pipeline_stage_id, stage_requirement_id, requirement_version, "
+                "requirement_attachment_id, work_version, judge, judge_actor, verdict, created_at) "
+                "VALUES (?,?,?,?,1,?,?,?,?,?,?)",
+                (decision, task_id, stage, req_id, attachment, revision, judge, ANA, verdict, H.now()),
+            )
+    assert _standing(store, task_id, req_id) == "met"
+    monkeypatch.setattr(P, "ENGINE", _engine(0.05))
+    monkeypatch.setattr(P, "_cannot_see", lambda attachment, state: False)
+    assert P.tick(store) == 0 and _standing(store, task_id, req_id) == "met"
+
+
+def test_a_route_from_a_judge_verdict_that_no_longer_stands_does_not_stop_the_judge(tmp_path, monkeypatch):
+    """Codex round 3, P2: an unsure answer routes the requirement to a person; once the title or PR changes, that answer
+    no longer stands, so its route does not hold the judge off and the evidence is judged again."""
+    path, task_id, req_id = _judged_world(tmp_path)
+    store = Store(_settings(path))
+    monkeypatch.setattr(P, "_cannot_see", lambda attachment, state: False)
+    monkeypatch.setattr(P, "ENGINE", _engine(0.5))
+    assert P.tick(store) == 1
+    with store.read() as c:
+        assert c.execute("SELECT route_next_to FROM stage_decisions").fetchone()[0] == ANA
+    assert P.tick(store) == 0  # the routed answer still stands: a person answers it, not the judge
+    with store.transaction() as c:
+        _pr_link(c, task_id, 92, "open", author="octo-bo")
+    assert _standing(store, task_id, req_id) == "waiting"
+    monkeypatch.setattr(P, "ENGINE", _engine(0.95))
+    assert P.tick(store) == 1 and _standing(store, task_id, req_id) == "met"
+
+
 def _more_tickets(path, n, body=""):
     c = hub(path)
     dev = c.execute("SELECT type_id FROM tasks").fetchone()[0]

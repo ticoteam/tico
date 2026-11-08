@@ -90,19 +90,24 @@ def percentile(values, q):
     return ordered[min(len(ordered) - 1, round(q * (len(ordered) - 1)))]
 
 
-def score(name, judge, cases, pause=time.sleep):
+def score(name, judge, cases, pause=time.sleep, clock=time.monotonic):
     """Every case through `judge(case) -> (p, cost_usd, ms)`: one model's row and its mistakes. A call that raises is tried
-    once more after RETRY_WAIT_S (`pause` is the wait, injectable); a second failure is an error."""
+    once more after RETRY_WAIT_S (`pause` is the wait, injectable); a second failure is an error. A retried case's time is
+    the whole wait for its answer: the failed call (timed by `clock`), the RETRY_WAIT_S pause and the retry, so a retry
+    cannot hide a case from the p95 bar."""
     rows, mistakes, errors = [], [], []
     for case in cases:
         retries = 0
+        started = clock()
         try:
             p, cost, ms = judge(case)
         except J.JudgeError:
             retries = 1
+            spent = round((clock() - started) * 1000) + RETRY_WAIT_S * 1000  # the failed call and the pause
             pause(RETRY_WAIT_S)
             try:
                 p, cost, ms = judge(case)
+                ms = spent + ms
             except J.JudgeError as exc:
                 errors.append(f"{case['id']}: {exc.code}")
                 p, cost, ms = 0.5, 0.0, 0  # a failed call is unsure: it goes to a person and never passes the work

@@ -193,10 +193,27 @@ def test_a_failed_call_is_retried_once_after_five_seconds_and_the_retry_is_count
         return 0.95 if case["expected"] == "met" else 0.05, 0.0, 5
 
     cases = run.load()[:3]
-    result = run.score("flaky", flaky, cases, pause=waits.append)
+    result = run.score("flaky", flaky, cases, pause=waits.append, clock=lambda: 0.0)
     assert waits == [5] * 3
     assert result["retries"] == 3 and all(r["retries"] == 1 for r in result["rows"])
     assert result["errors"] == []
+    # The failed call's time and the five-second pause count toward the case's latency, not only the retry's 5 ms.
+    assert all(r["ms"] == 5005 for r in result["rows"])
+
+
+def test_a_retry_cannot_hide_a_slow_case_from_the_p95_bar():
+    """Codex round 3, P3: a failed call, the pause and a 29 s retry take over 30 s, so the case fails the p95 bar."""
+    calls, ticks = {}, iter([0.0, 1.0] * 3)
+
+    def flaky(case):
+        calls[case["id"]] = calls.get(case["id"], 0) + 1
+        if calls[case["id"]] == 1:
+            raise J.JudgeError("unavailable", "down")
+        return 0.95 if case["expected"] == "met" else 0.05, 0.0, 29000
+
+    result = run.score("slow", flaky, run.load()[:3], pause=lambda s: None, clock=lambda: next(ticks))
+    assert result["p95_ms"] == 35000
+    assert any("p95" in f for f in result["bar_failures"])
 
 
 def test_a_call_that_fails_twice_is_still_an_error_and_fails_the_bar():
