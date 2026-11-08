@@ -1146,3 +1146,106 @@ def test_a_decisions_work_digest_never_changes(tmp_path, monkeypatch):
     with pytest.raises(sqlite3.DatabaseError, match="append-only"):
         with store.transaction() as c:
             c.execute("UPDATE stage_decisions SET work_digest='other'")
+
+
+def _attachment_id(store, task_id):
+    with store.read() as c:
+        return c.execute("SELECT id FROM requirement_attachments WHERE task_id=?", (task_id,)).fetchone()[0]
+
+
+def test_a_judges_met_from_before_the_work_digest_does_not_stand_and_is_judged_again(tmp_path, monkeypatch):
+    """Codex round 2, P1: a judge's verdict recorded before work_digest existed was judged without the work, so after the
+    upgrade it does not stand for whatever the ticket is now; the judge reads the evidence again."""
+    path, task_id, req_id = _judged_world(tmp_path)
+    store = Store(_settings(path))
+    with store.transaction() as c:
+        revision, stage = c.execute("SELECT work_revision, step_id FROM tasks WHERE id=?", (task_id,)).fetchone()
+        c.execute(
+            "INSERT INTO stage_decisions (id, task_id, pipeline_stage_id, stage_requirement_id, requirement_version, "
+            "requirement_attachment_id, work_version, judge, judge_actor, verdict, confidence, created_at) "
+            "VALUES ('legacy',?,?,?,1,?,?,'llm','tico-low','met',0.95,?)",
+            (task_id, stage, req_id, _attachment_id(store, task_id), revision, H.now()),
+        )
+    assert _standing(store, task_id, req_id) == "waiting"
+    monkeypatch.setattr(P, "ENGINE", _engine(0.95))
+    monkeypatch.setattr(P, "_cannot_see", lambda attachment, state: False)
+    assert P.tick(store) == 1 and _standing(store, task_id, req_id) == "met"
+    assert P.tick(store) == 0
+
+
+def _more_tickets(path, n, body=""):
+    c = hub(path)
+    dev = c.execute("SELECT type_id FROM tasks").fetchone()[0]
+    req = c.execute("SELECT id FROM stage_requirements").fetchone()[0]
+    for i in range(n):
+        task = H.task_create(c, ANA, f"Other {i}", body, ANA, type=dev, step="Review", lint=False)
+        A.attach(
+            c,
+            SimpleNamespace(task=lambda *a: None),
+            SimpleNamespace(actor=ANA),
+            task["id"],
+            req,
+            {"source": "link", "url": f"https://x{i}.example"},
+        )
+    c.commit()
+    c.close()
+
+
+def test_the_waiting_read_reads_only_as_many_rows_as_it_judges(tmp_path, monkeypatch):
+    """Codex round 2, P2: answered evidence is filtered in SQL, so a pass never loads every ticket's spec to judge five."""
+    path, _, _ = _judged_world(tmp_path)
+    store = Store(_settings(path))
+    monkeypatch.setattr(P, "ENGINE", _engine(0.95))
+    assert P.tick(store) == 1  # the first ticket's evidence is answered for its work
+    _more_tickets(path, 3, body="x" * 100)
+    fetched = []
+
+    class Counting:
+        def __init__(self, conn):
+            self.conn = conn
+
+        def __getattr__(self, name):
+            return getattr(self.conn, name)
+
+        def execute(self, *args):
+            rows = self.conn.execute(*args).fetchall()
+            fetched.append(len(rows))
+            return SimpleNamespace(fetchall=lambda: rows, fetchone=lambda: rows[0] if rows else None)
+
+    c = hub(path)
+    rows = P._waiting(Counting(c), 1)
+    c.close()
+    assert [r["task_title"] for r in rows] == ["Other 0"]
+    assert fetched == [1]
+
+
+def test_standings_read_the_work_of_judged_tickets_in_one_query(tmp_path, monkeypatch):
+    """Codex round 2, P2: the engine reads the work digests of a page of judged tickets as a set, not one per ticket."""
+    path, _, _ = _judged_world(tmp_path)
+    _more_tickets(path, 3)
+    store = Store(_settings(path))
+    monkeypatch.setattr(P, "ENGINE", _engine(0.95))
+    monkeypatch.setattr(P, "_cannot_see", lambda attachment, state: False)
+    assert P.tick(store) == 4
+    c = hub(path)
+    ids = [r[0] for r in c.execute("SELECT id FROM tasks").fetchall()]
+    statements = []
+    c.set_trace_callback(statements.append)
+    standings = E.task_standings(c, ids)
+    c.set_trace_callback(None)
+    c.close()
+    assert sorted(s for row in standings.values() for s in row.values()) == ["met"] * 4
+    assert len([s for s in statements if "LEFT JOIN task_links l" in s]) == 1
+
+
+def test_no_evidence_is_not_met_even_over_the_cap_or_with_an_unknown_model(tmp_path, monkeypatch):
+    """Codex round 2, P2: missing evidence is decided before the model and the cap are looked at."""
+    path = tmp_path / "hub.sqlite"
+    boot(path)
+    c = hub(path)
+    no_evidence = _work_fields()
+    del no_evidence["id"]
+    assert P.judge_once(c, REQ, no_evidence, "no-such-model")["verdict"] == "not_met"
+    monkeypatch.setattr(backend_judge, "over_spend_cap", lambda conn, settings, *a, **k: (12.0, 10.0))
+    result = P.judge_once(c, REQ, no_evidence, "haiku-5.5", settings=_settings(path), engine=_engine(0.95))
+    assert result["verdict"] == "not_met" and result["p"] == 0.0

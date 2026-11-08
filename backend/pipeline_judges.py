@@ -89,6 +89,7 @@ PR_LINK = (
     "WHEN l.state IN ('merged', 'shipped') THEN 1 ELSE 2 END, l.created_at DESC, l.rowid DESC LIMIT 1"
 )
 WORK_KEYS = ("title", "spec", "repo", "pr", "author")  # the work context a judge's verdict is bound to (work_digest)
+DIGEST_SQL = "tico_judge_work_digest"  # _digest_of_row as a SQL function on _waiting's connection
 # The engine a test or a harness may set: (model, state, questions, label) -> {p, reason, provider, model, cost_usd,
 # latency_ms}. None, with no installed store, asks no one, so every answer is unsure until a caller sets one.
 ENGINE: "Callable[[str, dict[str, Any], dict[str, Any], str], dict[str, Any]] | None" = None
@@ -186,9 +187,28 @@ def work_digest(work: dict[str, Any]) -> str:
     return hashlib.sha256(json.dumps(fields, sort_keys=True).encode()).hexdigest()
 
 
-def judged_work_current(c: sqlite3.Connection, task_id: str, digest: str) -> bool:
-    """Whether a judge's verdict recorded with this work digest is still about the ticket's work as it is now."""
-    return work_digest(work_context(c, task_id)) == digest
+def _digest_of_row(title: object, spec: object, repo: object, number: object, detail: object) -> str:
+    """work_digest from a ticket's title and body and its PR link's repo, number and detail: what work_context reads."""
+    return work_digest(
+        {"task_title": title, "task_spec": spec, **pr_work({"repo": repo, "number": number, "detail": detail})}
+    )
+
+
+def work_digests(c: sqlite3.Connection, task_ids: list[str]) -> dict[str, str]:
+    """{task id: work_digest of its work as it is now}, one query per 500 tickets (the engine's standings read them as a
+    set). A ticket that is gone is left out."""
+    out: dict[str, str] = {}
+    ids = list(dict.fromkeys(task_ids))
+    for start in range(0, len(ids), 500):
+        part = ids[start : start + 500]
+        for found in c.execute(
+            "SELECT t.id, t.title, t.body, l.repo, l.number, l.detail FROM tasks t "
+            "LEFT JOIN task_links l ON l.id = (" + PR_LINK.format(task="t.id") + ") "
+            "WHERE t.id IN (" + ",".join("?" * len(part)) + ")",
+            part,
+        ).fetchall():
+            out[str(found[0])] = _digest_of_row(found[1], found[2], found[3], found[4], found[5])
+    return out
 
 
 def _state(requirement: dict[str, Any], attachment: dict[str, Any]) -> dict[str, Any]:
@@ -377,6 +397,8 @@ def judge_once(
     def unsure(why: str) -> dict[str, Any]:
         return {**base, "verdict": "unsure", "p": 0.5, "reason": why}
 
+    if not attachment.get("id"):
+        return _ask(base, requirement, attachment, None)  # no evidence is not met, whatever the model or the cap
     if chosen not in MODELS:
         return unsure("This pipeline's judge model is not available")
     if settings is not None and judge.over_spend_cap(c, settings) is not None:
@@ -446,20 +468,18 @@ def _cannot_see(attachment: dict[str, Any], state: dict[str, Any]) -> bool:
 
 
 def _waiting(c: sqlite3.Connection, limit: int) -> list[dict[str, Any]]:
-    """The current attachment on each bot-reviewed requirement of their ticket's current stage that no judge has answered
-    for the work as it is now (its title, spec and PR: work_digest), and that no person was routed to (route_next_to: a
-    bot does not judge what a person now answers). An attachment that newer evidence replaced is not judged. A Mark met
-    stands only for the work it was made on (the decision's version), so one made before a change does not stop the judge
-    (R8). A judge's answer recorded before work_digest existed (NULL) stands as it did."""
+    """The current attachment on each bot-reviewed requirement of their ticket's current stage whose latest judge answer is
+    not for the work as it is now (none, one for another title, spec or PR: work_digest, or one from before the digest),
+    and that no person was routed to (route_next_to: a bot does not judge what a person now answers). An attachment that
+    newer evidence replaced is not judged. A Mark met stands only for the work it was made on (the decision's version), so
+    one made before a change does not stop the judge (R8). The digest is compared in SQL through DIGEST_SQL, a function
+    registered on this connection, so only `limit` rows are read."""
+    c.create_function(DIGEST_SQL, 5, _digest_of_row, deterministic=True)
     rows = c.execute(
         """SELECT a.id AS id, a.task_id, a.stage_requirement_id, a.digest, a.work_version, a.source, a.url, a.file_version,
                   t.work_revision AS task_work_version, t.owner_id AS task_owner_id,
                   t.title AS task_title, t.body AS task_spec,
                   pl.repo AS pr_repo, pl.number AS pr_number, pl.detail AS pr_detail,
-                  EXISTS (SELECT 1 FROM stage_decisions d WHERE d.requirement_attachment_id = a.id AND d.judge = 'llm')
-                    AS judged,
-                  (SELECT d.work_digest FROM stage_decisions d WHERE d.requirement_attachment_id = a.id AND d.judge = 'llm'
-                   ORDER BY d.created_at DESC, d.rowid DESC LIMIT 1) AS judged_digest,
                   r.name, r.rubric,
                   r.version AS requirement_version, r.pipeline_id, r.pipeline_stage_id, r.reviewed_by, r.reviewer_id,
                   (SELECT goal FROM task_types WHERE id = r.pipeline_id) AS goal,
@@ -492,24 +512,22 @@ def _waiting(c: sqlite3.Connection, limit: int) -> list[dict[str, Any]]:
              AND NOT EXISTS (SELECT 1 FROM stage_decisions d
                              WHERE d.task_id = a.task_id AND d.stage_requirement_id = a.stage_requirement_id
                                AND d.route_next_to IS NOT NULL)
-           ORDER BY a.created_at, a.id""".replace("{active}", ",".join("?" * len(H.ACTIVE_STATUSES))).replace(
-            "{pr_link}", PR_LINK.format(task="a.task_id")
-        ),
-        H.ACTIVE_STATUSES,
+             AND NOT EXISTS (SELECT 1 FROM stage_decisions d
+                             WHERE d.rowid = (SELECT x.rowid FROM stage_decisions x
+                                              WHERE x.requirement_attachment_id = a.id AND x.judge = 'llm'
+                                              ORDER BY x.created_at DESC, x.rowid DESC LIMIT 1)
+                               AND d.work_digest = {digest}(t.title, t.body, pl.repo, pl.number, pl.detail))
+           ORDER BY a.created_at, a.id
+           LIMIT ?""".replace("{active}", ",".join("?" * len(H.ACTIVE_STATUSES)))
+        .replace("{pr_link}", PR_LINK.format(task="a.task_id"))
+        .replace("{digest}", DIGEST_SQL),
+        (*H.ACTIVE_STATUSES, limit),
     ).fetchall()
-    # Which answered ones are about other work is a digest over the ticket's text, so it is checked here, not in SQL: the
-    # rows are the bot-reviewed evidence on open tickets, a short list.
     jobs: list[dict[str, Any]] = []
     for r in rows:
         row = dict(r)
         link = {"repo": row.pop("pr_repo"), "number": row.pop("pr_number"), "detail": row.pop("pr_detail")}
-        job = {**row, **pr_work(link)}
-        judged, digest = job.pop("judged"), job.pop("judged_digest")
-        if judged and (digest is None or digest == work_digest(job)):
-            continue
-        jobs.append(job)
-        if len(jobs) >= limit:
-            break
+        jobs.append({**row, **pr_work(link)})
     return jobs
 
 

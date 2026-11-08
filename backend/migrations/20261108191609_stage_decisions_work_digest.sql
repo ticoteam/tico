@@ -15,3 +15,5 @@ WHEN NEW.id IS NOT OLD.id OR NEW.task_id IS NOT OLD.task_id OR NEW.pipeline_stag
   OR NEW.judge_call_id IS NOT OLD.judge_call_id OR NEW.cost_cents IS NOT OLD.cost_cents
   OR NEW.created_at IS NOT OLD.created_at OR NEW.work_digest IS NOT OLD.work_digest
 BEGIN SELECT RAISE(ABORT, 'stage_decisions is append-only: only its outcome and undo change'); END;
+-- The judge looks up its latest answer on an attachment every pass (pipeline_judges._waiting).
+CREATE INDEX IF NOT EXISTS stage_decisions_attachment ON stage_decisions(requirement_attachment_id, created_at);
