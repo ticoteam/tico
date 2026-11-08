@@ -3609,3 +3609,7 @@ class MailboxAccessCreate(Contract):
 
 class MailboxAccessUpdate(Contract):
     level: MailboxLevel
+
+
+class MailboxDirectoryUpdate(Contract):
+    on: StrictBool
