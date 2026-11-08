@@ -39,11 +39,11 @@ const view = t => {
 // would (the page then reconnects, and the next send finds the new stream); `block(event, data)` makes one SSE block.
 async function open(browser, {viewport = {width: 390, height: 844}, phone = true, threads = world()} = {}) {
   const page = await browser.newPage({viewport, isMobile: phone, hasTouch: phone, serviceWorkers: 'block', reducedMotion: 'reduce'});
-  const seen = {errors: [], patches: []}, streams = [];
+  const seen = {errors: [], patches: [], deletes: []}, streams = [];
   let seq = 0;
   page.on('pageerror', e => seen.errors.push(e.message));
   page.on('dialog', d => d.accept());
-  const visible = t => !t.archived_at && !t.hidden;
+  const visible = t => !t.archived_at && !t.hidden && !t.deleted;
   const rail = () => Object.values(threads).filter(t => visible(t) && t.audience !== 'personal').map(view);
   const catchUp = () => Object.values(threads).filter(t => visible(t) && t.me.unread > 0);
   const dms = () => Object.fromEntries(Object.values(threads).filter(t => visible(t) && t.audience === 'personal').map(t => [t.dm_with[0].actor, t.me.unread]));
@@ -65,6 +65,8 @@ async function open(browser, {viewport = {width: 390, height: 844}, phone = true
     if (p === '/api/v2/threads' && method === 'GET') return json({attention: [], threads: rail(), dms: [], bot_dms: {}, next_cursor: null});
     if (p === '/api/v2/threads/rail') return json({pinned: [], threads: rail(), catch_up: catchUp().length, catch_up_ids: catchUp().map(t => t.id), dms: dms(), next_cursor: null});
     if (p === '/api/v2/threads/catch-up') return json({items: catchUp().map(t => ({thread: view(t), new_count: t.me.unread, mention: false, messages: [], more: 0})), count: catchUp().length, next_cursor: null});
+    if (p === '/api/v2/threads/browse') return json({threads: [], next_cursor: null});
+    if (p === '/api/v2/threads/archived') return json({threads: Object.values(threads).filter(t => t.archived_at && !t.deleted).map(view), next_cursor: null});
     const m = p.match(/^\/api\/v2\/threads\/([^/]+)(?:\/([a-z-]+))?$/);
     const t = m && threads[m[1]];
     if (t) {
@@ -78,6 +80,10 @@ async function open(browser, {viewport = {width: 390, height: 844}, phone = true
         const b = body(); seen.patches.push({id: t.id, ...b});
         if ('archived' in b) t.archived_at = b.archived ? at(0) : null;
         return json(view(t));
+      }
+      if (!what && method === 'DELETE') {
+        seen.deletes.push(t.id); t.deleted = true; t.archived_at = t.archived_at || at(0);
+        return json({deleted: t.id});
       }
       if (!what && method === 'GET') return json(view(t));
     }
@@ -201,6 +207,40 @@ let browser = null;
 
   // A task's thread follows its task on the live stream, as it does on the list. Its closing notice reaches the thread as
   // an activity event; the thread's view then says the task hides it, so its row leaves Threads.
+  // Browse threads' Archived tab lists the archived thread; Unarchive brings it back to Threads.
+  if (!only || only === 'browse-archived') {
+    const threads = world();
+    threads['t-plan'].archived_at = at(0);
+    const {page, seen} = await open(browser, {viewport: {width: 1280, height: 800}, phone: false, threads});
+    await page.goto('https://tico-ui.test/#/threads');
+    await page.locator('#thread-rail [data-tr-browse]').click();
+    const br = page.locator('#thread-browse[open]');
+    await br.locator('[data-tab="archived"]').click();
+    await br.locator('li[data-thread="t-plan"] [data-unarchive]').click();
+    await until(async () => (await br.locator('li[data-thread="t-plan"]').count()) === 0, 'Unarchive takes the row off the Archived list');
+    assert.deepEqual(seen.patches, [{id: 't-plan', archived: false}]);
+    await page.keyboard.press('Escape');
+    await page.locator('.tr-row[data-thread="t-plan"]').waitFor();
+    assert.deepEqual(seen.errors, []);
+    await page.close();
+  }
+
+  // Delete is offered in the thread header only when the server says the thread is deletable; it asks first, sends one
+  // DELETE, and the thread leaves Threads.
+  if (!only || only === 'header-delete') {
+    const threads = world();
+    threads['t-plan'].deletable = true;
+    const {page, seen} = await open(browser, {viewport: {width: 1280, height: 800}, phone: false, threads});
+    await page.goto('https://tico-ui.test/#/thread/t-plan');
+    await page.getByText('Morning.').waitFor();
+    await page.locator('.thv-head [data-thv-delete]').click();
+    await until(async () => seen.deletes.length === 1, 'Delete sends one DELETE');
+    assert.deepEqual(seen.deletes, ['t-plan']);
+    await until(async () => (await page.locator('.tr-row[data-thread="t-plan"]').count()) === 0, 'a deleted thread leaves Threads');
+    assert.deepEqual(seen.errors, []);
+    await page.close();
+  }
+
   if (!only || only === 'live-close') {
     const {page, seen, send, block, threads} = await open(browser, {threads: liveWorld()});
     await page.goto('https://tico-ui.test/#/threads');

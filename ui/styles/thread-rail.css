@@ -34,11 +34,13 @@
 /* Archive is a row action: a desktop shows it on hover or keyboard focus, a touch screen always. */
 .tr-item{display:flex;align-items:center;gap:2px;min-width:0}
 .tr-item>.tr-row{flex:1 1 auto}
-.tr-arch,.thv-arch{flex:none;display:inline-grid;place-items:center;width:26px;height:26px;padding:0;border:0;border-radius:var(--r-ctl);background:none;color:var(--muted);cursor:pointer}
+.tr-arch,.thv-arch,.thv-del{flex:none;display:inline-grid;place-items:center;width:26px;height:26px;padding:0;border:0;border-radius:var(--r-ctl);background:none;color:var(--muted);cursor:pointer}
 .tr-arch{opacity:0}
 .tr-arch .nav-icon,.thv-arch .nav-icon{font-size:18px;color:inherit}
 .tr-item:hover .tr-arch,.tr-arch:focus-visible{opacity:1}
-.tr-arch:hover,.thv-arch:hover{background:var(--surface2);color:var(--ink)}
+.tr-arch:hover,.thv-arch:hover,.thv-del:hover{background:var(--surface2);color:var(--ink)}
+.tr-browse-tabs{display:flex;gap:6px;margin-bottom:8px}
+.tr-browse-tabs .on{font-weight:600}
 @media (hover:none){.tr-arch{opacity:1}}
 .tr-row.unread{color:var(--ink);font-weight:600}
 .tr-row.cur{background:var(--hover);color:var(--ink);font-weight:500}

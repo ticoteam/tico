@@ -533,7 +533,7 @@ def denial(c, v, row):
     Auth.conversation all ask it."""
     v = viewer(None, v) if not isinstance(v, Viewer) else v
     row = thread_row(c, row)
-    if row is None:
+    if row is None or row.get("deleted_at"):
         return _MISSING
     if v.is_person and not v.in_good_standing(c):
         return _MISSING
@@ -3748,6 +3748,50 @@ def update(c, principal, thread_id, *, title=None, archived=None):
     return view(c, principal, after)
 
 
+def delete_problem(c, actor, row):
+    """Why this thread cannot be deleted, or None. A reply is never deleted on its own; every message in the thread (its
+    whole tree) must already be deleted; and nobody but `actor` may be in it, as a member or a follower."""
+    if row.get("parent_id"):
+        return "Delete the whole thread, not one of its replies"
+    if audience_of(root_of(c, row)) == "home":
+        return "A Home can't be deleted"
+    live = c.execute(
+        "SELECT 1 FROM messages m JOIN conversations s ON s.id=m.conversation_id "
+        "WHERE (s.id=? OR s.root_id=?) AND m.deleted_at IS NULL LIMIT 1",
+        (row["id"], row["id"]),
+    ).fetchone()
+    if live:
+        return "A thread can be deleted only after every message in it is deleted"
+    others = c.execute(
+        "SELECT 1 FROM (SELECT actor FROM thread_members WHERE thread_id=? UNION "
+        "SELECT actor FROM thread_followers WHERE thread_id=? AND following=1) WHERE actor<>? LIMIT 1",
+        (row["id"], row["id"], actor),
+    ).fetchone()
+    if others:
+        return "A thread can be deleted only when no one else is in it"
+    return None
+
+
+def delete(c, principal, thread_id):
+    """Delete a thread the viewer manages, when delete_problem allows it. It leaves every list at once and reads as not
+    found; its title is cleared. Refused with a plain reason (409) otherwise, and nothing is removed."""
+    actor, v, row = _require_thread(c, principal, thread_id)
+    if v is not None and not can_manage(c, v, row):
+        raise Problem("forbidden", "Only the thread's owner deletes it", 403)
+    problem = delete_problem(c, actor, row)
+    if problem:
+        raise Problem("not_deletable", problem, 409)
+    now = _now()
+    c.execute(
+        "UPDATE conversations SET deleted_at=?, archived_at=COALESCE(archived_at,?), subject='', updated_at=? "
+        "WHERE id=? OR root_id=?",
+        (now, now, now, row["id"], row["id"]),
+    )
+    _event(c, actor, "thread.deleted", row["id"], {})
+    _audit(c, actor, "thread:" + row["id"], {"deleted": False}, {"deleted": True})
+    return {"deleted": row["id"]}
+
+
 # ----------------------------------------------------------------------------- C4: read state
 def mark_read(c, v, thread_id, seq):
     """Advance the viewer's read mark in this thread (max wins: another device may be ahead)."""
@@ -4470,7 +4514,8 @@ def breadcrumb(c, v, row):
 def get(c, v, thread_id):
     v = viewer(None, v) if not isinstance(v, Viewer) else v
     row = require(c, v, thread_id)
-    return {**view(c, v, row), "breadcrumb": breadcrumb(c, v, row)}
+    deletable = can_manage(c, v, row) and delete_problem(c, v.actor, row) is None
+    return {**view(c, v, row), "breadcrumb": breadcrumb(c, v, row), "deletable": deletable}
 
 
 def _message_out(m):

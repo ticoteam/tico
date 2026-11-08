@@ -8,6 +8,7 @@ type ThvBotRow = import('../types/api').ThreadBotStatusRow;
 type ThvCrumb = import('../types/api').ThreadCrumb;
 // ---- shapes this file owns (the thread row itself is ThreadRow, ui/app/threads.ts)
 interface ThvThread extends ThreadRow {
+  deletable?: boolean;
   root_id?: string;
   audience_group_id?: string;
   earlier?: unknown;
@@ -518,6 +519,8 @@ const thvCanPost = (view: ThvView) => view.opts.canPost ?? (view.thread ? !!view
 // one offers Unarchive.
 const thvArchivable = (t: ThvThread | null | undefined) => !!t && !t.parent_id && t.audience !== 'home' && !!t.me?.can_manage;
 const thvArchiveHTML = (t: ThvThread | null | undefined) => thvArchivable(t) && t ? `<button type="button" class="ghost thv-arch" data-thv-archive aria-label="${t.archived_at ? 'Unarchive' : 'Archive'}" title="${t.archived_at ? 'Unarchive' : 'Archive'}"><span class="nav-icon" aria-hidden="true">${t.archived_at ? 'unarchive' : 'archive'}</span></button>` : '';
+// Delete, only when the server says the thread is deletable: every message deleted and nobody else in it.
+const thvDeleteHTML = (t: ThvThread | null | undefined) => thvArchivable(t) && t?.deletable ? `<button type="button" class="ghost thv-del" data-thv-delete aria-label="Delete thread" title="Delete thread"><span class="nav-icon" aria-hidden="true">delete</span></button>` : '';
 function thvActsHTML(view: ThvView) {
   const t = view.thread!, list = view.memberList;
   const members = !t.parent_id && ['members', 'personal', 'company', 'team'].includes(t.audience);
@@ -527,7 +530,7 @@ function thvActsHTML(view: ThvView) {
       list.slice(0, 3).map(m => actorAvatar(m.actor, 22)).join('')}<span class="thv-people-n">${n}${more}</span></button>`
     : members ? '<button type="button" class="ghost small" data-thv-members>Members</button>' : '';
   return `${callHeadHTML(view)}
-      ${people}${thvArchiveHTML(t)}
+      ${people}${thvArchiveHTML(t)}${thvDeleteHTML(t)}
       ${view.opts.menu === false ? '' : `<button type="button" class="ghost thv-menu-btn" data-thv-menu aria-haspopup="dialog" aria-label="Thread settings" title="Thread settings"><span class="nav-icon" aria-hidden="true">more_horiz</span></button>`}`;
 }
 // The viewer's own pin, on a thread the rail lists (a server with pins says `me.pinned`).
@@ -591,6 +594,20 @@ async function thvArchive(view: ThvView, button: HTMLButtonElement) {
     view.thread = {...t, ...r};
     threadsUnarchived(view.thread);
     thvDraw(view);
+  } catch (e) { toast(errorMessage(e, ''), true); button.disabled = false; }
+}
+// Delete asks first. The thread leaves Threads and Catch up at once and reads as not found after that.
+async function thvDelete(view: ThvView, button: HTMLButtonElement) {
+  const t = view.thread; if (!t || !confirm("Delete this thread? It can't be undone.")) return;
+  button.disabled = true;
+  try {
+    await writeRequest('DELETE', thvPath(t.id));
+    const gone = {...t, archived_at: t.archived_at || new Date().toISOString()};
+    threadsPut(gone);
+    threadsArchivedGone(t.id, threadsRootLearn(gone)?.dm);
+    threadsRecount();
+    if (threadsLastGet() === t.id) threadsLastSet('');
+    location.hash = THREADS_ROUTE;
   } catch (e) { toast(errorMessage(e, ''), true); button.disabled = false; }
 }
 // A message the viewer may not read is one quiet row, never its words. Earlier shared history folds into one "Earlier
@@ -1559,6 +1576,8 @@ async function thvClick(view: ThvView, ev: Event) {
   if (pin) { void thvPinToggle(view, pin); return; }
   const arch = t.closest<HTMLButtonElement>('[data-thv-archive]');
   if (arch) { void thvArchive(view, arch); return; }
+  const del = t.closest<HTMLButtonElement>('[data-thv-delete]');
+  if (del) { void thvDelete(view, del); return; }
   const call = t.closest<HTMLElement>('[data-call]');
   if (call) { void callAction(view, call.dataset.call); return; }
   if (t.closest('[data-thv-menu]')) { threadSettingsOpen(view); return; }

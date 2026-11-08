@@ -9289,6 +9289,15 @@ STABLE.extend(
             "ThreadBrowse",
         ),
         (
+            "/api/v2/threads/archived",
+            "get",
+            "Threads",
+            "listArchivedThreads",
+            "The threads the viewer archived and may still manage, newest first: Browse threads' Archived view. Unarchive is "
+            "PATCH with `archived` false. A deleted thread is not listed",
+            "ThreadBrowse",
+        ),
+        (
             "/api/v2/threads/catch-up",
             "get",
             "Threads",
@@ -9356,6 +9365,15 @@ STABLE.extend(
             "Threads",
             "getThread",
             "A thread as the viewer sees it: its unread count, read mark, what they may do and its first page of members",
+            "ThreadView",
+        ),
+        (
+            "/api/v2/threads/{thread_id}",
+            "delete",
+            "Threads",
+            "deleteThread",
+            "Delete a thread the viewer manages, when every message in it is deleted and no one else is in it; it leaves every "
+            "list and reads as not found. Otherwise 409 `not_deletable` with the reason, and nothing is removed",
             "ThreadView",
         ),
         (

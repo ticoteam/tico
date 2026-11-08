@@ -438,6 +438,14 @@ def install(app, store, auth, mutate, rule_check):
         with store.read_transaction() as c:
             return thread_rail.browse(c, v, q=q, cursor=cursor, limit=limit)
 
+    @app.get("/api/v2/threads/archived")
+    def archived(request: Request, limit: int | None = None):
+        """The threads the viewer archived and may still manage, newest first: Browse threads' Archived view. Unarchive is
+        PATCH with `archived` false."""
+        v = threads.viewer(auth, request.state.identity)
+        with store.read_transaction() as c:
+            return thread_rail.archived(c, v, limit=limit)
+
     @app.get("/api/v2/threads/catch-up")
     def catch_up(request: Request, cursor: str | None = None, limit: int | None = None):
         """Each thread with something new for the viewer, and each open Needs attention item, mentions first, with its
@@ -776,6 +784,13 @@ def install(app, store, auth, mutate, rule_check):
         """Unpin a root thread for me, over a pin for everyone too. The answer is the thread view."""
         who = request.state.identity
         return mutate(request, Nothing(), lambda c: thread_rail.unpin(c, threads.viewer(auth, who), thread_id))
+
+    @app.delete("/api/v2/threads/{thread_id}")
+    def delete_thread(request: Request, thread_id: str):
+        """Delete a thread whose messages are all deleted and that no one else is in. Refused with a plain reason (409)
+        otherwise. It leaves every list and reads as not found."""
+        who = request.state.identity
+        return mutate(request, Nothing(), lambda c: threads.delete(c, threads.viewer(auth, who), thread_id))
 
     @app.delete("/api/v2/threads/{thread_id}/follow")
     def unfollow(request: Request, thread_id: str):

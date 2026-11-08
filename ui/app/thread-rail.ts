@@ -132,14 +132,16 @@ function threadBrowseOpen() {
   const dlg = threadDialog('thread-browse', 'Browse threads');
   dlg.className = 'tmodal tmodal-shell dash-dialog thd-dialog tr-browse-dlg';
   dlg.innerHTML = `<form>${threadDialogHead('Browse threads')}<div class="dash-form">
+      <div class="tr-browse-tabs" role="group" aria-label="Which threads"><button type="button" class="ghost small on" data-tab="threads" aria-pressed="true">Threads</button><button type="button" class="ghost small" data-tab="archived" aria-pressed="false">Archived</button></div>
       <input type="search" class="tr-browse-q" placeholder="Find a thread" aria-label="Find a thread" autocomplete="off">
       <ul class="tr-browse-list" aria-live="polite"><li class="muted">Loading…</li></ul>
       <button type="button" class="ghost small tr-browse-more" hidden>More</button></div></form>`;
   threadDialogWire(dlg);
   const form = dlg.querySelector('form'), q = form.querySelector('.tr-browse-q'), list = form.querySelector('.tr-browse-list'), more = form.querySelector('.tr-browse-more');
   form.onsubmit = ev => ev.preventDefault();
-  let next = null, seq = 0;
+  let next = null, seq = 0, mode = 'threads';
   const rowHTML = t => {
+    if (mode === 'archived') return `<li data-thread="${esc(t.id)}"><a class="tr-browse-name" href="${esc(threadHref(t))}" data-close>${threadHashHTML(t)}<span>${esc(threadTitle(t))}</span></a><button type="button" class="ghost small" data-unarchive>Unarchive</button></li>`;
     const n = Number(t.member_count) || 0;
     return `<li data-thread="${esc(t.id)}"><a class="tr-browse-name" href="${esc(threadHref(t))}" data-close>${threadHashHTML(t)}<span>${esc(threadTitle(t))}</span></a>
       ${n ? `<span class="muted tr-browse-n">${n}</span>` : ''}<button type="button" class="ghost small" data-join>Join</button></li>`;
@@ -147,19 +149,37 @@ function threadBrowseOpen() {
   const load = async (add = false) => {
     const mine = ++seq, words = q.value.trim();
     try {
-      const r = await get('/v2/threads/browse?limit=50&q=' + encodeURIComponent(words) + (add && next ? '&cursor=' + encodeURIComponent(next) : ''), {fresh: true});
+      const path = mode === 'archived' ? '/v2/threads/archived?limit=50' : '/v2/threads/browse?limit=50&q=' + encodeURIComponent(words) + (add && next ? '&cursor=' + encodeURIComponent(next) : '');
+      const r = await get(path, {fresh: true});
       if (mine !== seq) return;
       const rows = (r?.threads || r?.items || []).map(rowHTML).join('');
       if (add) list.insertAdjacentHTML('beforeend', rows);
-      else list.innerHTML = rows || '<li class="muted">No threads</li>';
+      else list.innerHTML = rows || (mode === 'archived' ? '<li class="muted">No archived threads</li>' : '<li class="muted">No threads</li>');
       next = r?.next_cursor || null; more.hidden = !next;
     } catch (e) { if (mine === seq) list.innerHTML = `<li class="err">${esc(e.message)}</li>`; }
   };
   let timer = 0;
   q.oninput = () => { clearTimeout(timer); timer = setTimeout(() => load(), 200); };
   more.onclick = () => load(true);
+  form.addEventListener('click', ev => {
+    const tab = ev.target.closest('[data-tab]'); if (!tab) return;
+    mode = tab.dataset.tab;
+    form.querySelectorAll('[data-tab]').forEach(b => { const on = b === tab; b.classList.toggle('on', on); b.setAttribute('aria-pressed', String(on)); });
+    q.hidden = mode === 'archived'; more.hidden = true; next = null;
+    void load();
+  });
   list.onclick = async ev => {
     if (ev.target.closest('[data-close]')) { dlg.close(); return; }
+    const u = ev.target.closest('[data-unarchive]');
+    if (u) {
+      const row = u.closest('[data-thread]'); u.disabled = true;
+      try {
+        threadsUnarchived(await patch(thvPath(row.dataset.thread), {archived: false}));
+        row.remove();
+        if (!list.querySelector('[data-thread]')) list.innerHTML = '<li class="muted">No archived threads</li>';
+      } catch (e) { u.disabled = false; toast(e.message, true); }
+      return;
+    }
     const b = ev.target.closest('[data-join]'); if (!b) return;
     const id = b.closest('[data-thread]').dataset.thread;
     b.disabled = true;

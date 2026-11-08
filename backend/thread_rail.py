@@ -387,6 +387,29 @@ def browse(c, v, *, q=None, cursor=None, limit=BROWSE_LIMIT):
     }
 
 
+def archived(c, v, *, limit=None):
+    """The roots the reader archived and may still manage (only a manager can unarchive), newest activity first: Browse
+    threads' Archived view. A deleted thread is not listed. Each row is the thread view, as a list shows it."""
+    v = _viewer(v)
+    limit = _limit(limit, BROWSE_LIMIT, T.MAX_PAGE)
+    found = [
+        T.thread_row(c, dict(r))
+        for r in c.execute(
+            f"SELECT * FROM (SELECT r.*, {ACTIVITY} AS activity FROM conversations r WHERE r.parent_id IS NULL "
+            f"AND r.archived_at IS NOT NULL AND r.deleted_at IS NULL AND {T.readable_sql(c, v, 'r')}) "
+            "ORDER BY activity DESC, id DESC LIMIT :fetch",
+            {"fetch": limit * 4, **{f"name{i}": n for i, n in enumerate(v.member_names(c))}, "me": v.actor},
+        )
+    ]
+    rows = [r for r in found if T.thread_readable(c, v, r) and T.can_manage(c, v, r)][:limit]
+    v._members = {}
+    try:
+        shown = _views(c, v, rows)
+    finally:
+        v._members = None
+    return {"threads": [shown[r["id"]] for r in rows], "next_cursor": None}
+
+
 def _member_counts(c, ids):
     """{root id: how many teammates are in it}: its members and its followers, each once."""
     out = {}

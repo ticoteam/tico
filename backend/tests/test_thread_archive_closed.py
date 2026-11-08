@@ -161,3 +161,72 @@ def test_only_a_manager_archives_a_thread(api):
     refused = api.patch(f"/api/v2/threads/{thread['id']}", json={"archived": True}, headers=headers("cara-test"))
     assert refused.status_code == 403, refused.text
     assert shows(api, thread["id"]) == (True, True)
+
+
+def archived_ids(api, token="ana-test"):
+    response = api.get("/api/v2/threads/archived", headers=headers(token))
+    assert response.status_code == 200, response.text
+    return [t["id"] for t in response.json()["threads"]]
+
+
+def delete_thread(api, thread_id, token="ana-test"):
+    return api.delete(f"/api/v2/threads/{thread_id}", headers=headers(token))
+
+
+def test_a_thread_with_a_live_message_is_not_deleted_and_says_why(api):
+    thread = new_thread(api, title="Live")
+    say(api, thread["id"], "Still here")
+    refused = delete_thread(api, thread["id"])
+    assert refused.status_code == 409, refused.text
+    assert refused.json()["error"]["code"] == "not_deletable", refused.text
+    assert view_of(api, thread["id"], token="ana-test")["deletable"] is False
+    assert api.get(f"/api/v2/threads/{thread['id']}", headers=headers("ana-test")).status_code == 200
+
+
+def test_a_thread_with_another_member_is_not_deleted_even_when_its_messages_are_gone(api):
+    thread = new_thread(api, title="Shared", members=("human:ben",))
+    message = say(api, thread["id"], "Gone soon")
+    assert api.delete(f"/api/v2/messages/{message['id']}", headers=headers("ana-test")).status_code == 200
+    refused = delete_thread(api, thread["id"])
+    assert refused.status_code == 409, refused.text
+    assert refused.json()["error"]["code"] == "not_deletable", refused.text
+    assert shows(api, thread["id"], token="ben-test")[0] is True
+
+
+def test_only_a_manager_deletes_a_thread(api):
+    thread = new_thread(api, title="Budget", members=("human:ben", "human:cara"))
+    refused = delete_thread(api, thread["id"], token="cara-test")
+    assert refused.status_code == 403, refused.text
+
+
+def test_an_empty_thread_alone_is_deleted_and_leaves_every_list(api):
+    thread = new_thread(api, title="Release check (delete me)", members=())
+    message = say(api, thread["id"], "Dead message")
+    assert api.delete(f"/api/v2/messages/{message['id']}", headers=headers("ana-test")).status_code == 200
+    assert view_of(api, thread["id"], token="ana-test")["deletable"] is True
+    deleted = delete_thread(api, thread["id"])
+    assert deleted.status_code == 200, deleted.text
+    assert shows(api, thread["id"], token="ana-test") == (False, False)
+    assert thread["id"] not in archived_ids(api)
+    assert api.get(f"/api/v2/threads/{thread['id']}", headers=headers("ana-test")).status_code == 404
+
+
+def test_an_archived_thread_is_listed_under_archived_and_unarchive_brings_it_back(api):
+    thread = new_thread(api, title="Old budget")
+    say(api, thread["id"], "Numbers")
+    assert thread["id"] not in archived_ids(api)
+    archived = api.patch(f"/api/v2/threads/{thread['id']}", json={"archived": True}, headers=headers("ana-test"))
+    assert archived.status_code == 200, archived.text
+    assert thread["id"] in archived_ids(api)
+    restored = api.patch(f"/api/v2/threads/{thread['id']}", json={"archived": False}, headers=headers("ana-test"))
+    assert restored.status_code == 200, restored.text
+    assert thread["id"] not in archived_ids(api)
+    assert shows(api, thread["id"], token="ana-test")[0] is True
+
+
+def test_a_home_is_never_deleted(api):
+    response = api.get("/api/v2/threads/home/human:ana", headers=headers("ana-test"))
+    assert response.status_code == 200, response.text
+    refused = delete_thread(api, response.json()["id"])
+    assert refused.status_code == 409, refused.text
+    assert refused.json()["error"]["code"] == "not_deletable", refused.text
