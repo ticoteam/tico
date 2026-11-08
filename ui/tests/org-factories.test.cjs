@@ -1,4 +1,4 @@
-// The Factories section under the Org chart (ui/app/org-factories.ts) and the people chart beside it (ui/app/redesign-org.js),
+// The Factories section under the Org chart (ui/app/org-factories.ts) and the people chart beside it (ui/app/redesign-org.ts),
 // checked without a browser: the classic scripts are compiled with esbuild's transform and run in one vm context, with the
 // few shared globals they read stubbed. The sidebar's tree helpers (orgTreeByParent and friends) are stubbed to a fixed
 // tree, so the combined page is checked from the chart's own functions.
@@ -63,7 +63,7 @@ function context(get = async () => { throw new Error('the test sets get'); }) {
     document: {addEventListener() {}},
     get,
   });
-  for (const file of ['overview-factories.ts', 'org-factories.ts', 'redesign-org.js']) {
+  for (const file of ['overview-factories.ts', 'org-factories.ts', 'redesign-org.ts']) {
     const loader = file.endsWith('.ts') ? 'ts' : 'js';
     const js = transformSync(fs.readFileSync(path.join(APP, file), 'utf8'), {loader, target: 'es2022'}).code;
     vm.runInContext(js, ctx, {filename: file});
@@ -103,7 +103,7 @@ const count = (html, re) => (html.match(re) || []).length;
 const decode = s => s.replace(/&amp;/g, '&');
 const ref = id => `data-rdo-ref="bot:${id}"`;
 
-// The combined page: the Factories section mounted, then the people chart drawn, as redesign-org.js does.
+// The combined page: the Factories section mounted, then the people chart drawn, as redesign-org.ts does.
 async function page(map = overview(), {mounted = true} = {}) {
   const ctx = context(async () => map);
   const host = {isConnected: true, innerHTML: ''};
@@ -138,7 +138,7 @@ test('a chip opens its pipeline by the route the map uses', async () => {
   const chip = box(html, 'f-growth').match(/<a class="org-fac-chip" href="([^"]*)"[^>]*>Marketing/);
   assert.ok(chip, 'the Marketing card has its chip');
   assert.equal(decode(chip[1]), vm.runInContext('ofPipelineHref("marketing")', ctx));
-  assert.equal(decode(chip[1]), '#/tasks?type=marketing&view=list');
+  assert.equal(decode(chip[1]), '#/tasks?type=marketing&view=board');
 });
 
 test('a manager stored as a slug is shown by its roster id, name and avatar', async () => {
@@ -183,7 +183,7 @@ test('a pipeline with no manager keeps its chip', async () => {
   map.pipelines[0] = pipe('marketing', 'Marketing', null, 'f-growth');
   const html = ctx.orgFactoriesHtml(map);
   assert.match(box(html, 'f-growth'), /No manager/);
-  assert.match(box(html, 'f-growth'), /<a class="org-fac-chip" href="#\/tasks\?type=marketing&amp;view=list"/);
+  assert.match(box(html, 'f-growth'), /<a class="org-fac-chip" href="#\/tasks\?type=marketing&amp;view=board"/);
 });
 
 test('names from the overview are escaped', async () => {

@@ -370,6 +370,8 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
     await page.locator('#task-modal [data-modal-close]').click();
     // Blocked is a real engineering column, before the active build, on desktop and phone.
     const dev = types.find(type => type.id === 'dev-tickets');
+    // The one-stage phone layout is for a pipeline with requirements; one without keeps the board.
+    dev.has_requirements = true;
     dev.steps = [
       {id: 'dev-deck', name: 'On Deck', status: 'open'},
       {id: 'dev-blocked', name: 'Blocked', status: 'waiting'},
