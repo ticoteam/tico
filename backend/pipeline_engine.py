@@ -1196,6 +1196,9 @@ def check_forward(conn: sqlite3.Connection, actor: str, row: Row, type_id: str |
     before, after = stage(conn, row.get("step_id")), stage(conn, step_id)
     if before is not None and after is not None and after["type_id"] == before["type_id"]:
         if after["position"] < before["position"]:
+            # A backward move is left to the legacy flows, but not the caps: nothing automatic moves into a full stage or out of
+            # On ice (_room), whichever way the card goes.
+            _room(conn, actor, str(row.get("id") or ""), before, after)
             return
     _decline_preflight(conn, actor, row, type_id, step_id)
     check_move(conn, actor, {**row, "type_id": type_id}, step_id)
