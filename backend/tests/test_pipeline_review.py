@@ -2104,17 +2104,20 @@ def test_a_held_subtask_carries_its_body_criteria_and_files_and_a_question_none_
     assert by_subject[question]["task_files"] == []
 
 
+PAGE_DIGEST = "9" * 64  # a page version's content digest, which its file attachment carries too
+
+
 def _page_version(c, fid, name):
     """A page's first version, named as the library names it: its name is what a review item's attachment shows."""
     blob = "blob-" + fid
     c.execute(
         "INSERT INTO blobs(id,owner,digest,size,name,content_type,created_at) VALUES(?,?,?,?,?,?,?)",
-        (blob, CHRIS, "9" * 64, 10, name, "text/html", H.now()),
+        (blob, CHRIS, PAGE_DIGEST, 10, name, "text/html", H.now()),
     )
     c.execute(
         "INSERT INTO bot_file_versions(file_id,version,blob_id,digest,size,name,mime,actor,created_at) "
         "VALUES(?,?,?,?,?,?,?,?,?)",
-        (fid, 1, blob, "9" * 64, 10, name, "text/html", ANA, H.now()),
+        (fid, 1, blob, PAGE_DIGEST, 10, name, "text/html", ANA, H.now()),
     )
 
 
@@ -2123,22 +2126,28 @@ def _file_attachment(w, fid):
     w.c.execute(
         "INSERT INTO requirement_attachments(id, task_id, stage_requirement_id, source, file_id, file_version, digest, "
         "work_version, created_at) VALUES(?,?,?,?,?,?,?,?,?)",
-        ("a-page", w.task, w.mockup, "file", fid, 1, "f" * 64, w.revision(), H.now()),
+        ("a-page", w.task, w.mockup, "file", fid, 1, PAGE_DIGEST, w.revision(), H.now()),
     )
 
 
-def _page_attachment_queue(tmp_path, people):
+def _page_attachment_queue(tmp_path, people, ticket=False):
     """Chris reviews the Mockup, whose attachment is a page open only to `people`; he reads his queue as a plain human
-    (an owner may manage every page, so the page rule only shows for a human)."""
+    (an owner may manage every page, so the page rule only shows for a human). `ticket` attaches the page to the
+    ticket instead of the requirement, which is shown when the requirement has no attachment of its own."""
     ids = {"chris-test": Identity(CHRIS, "human", "chris@acme.example")}
     app = create_app(Settings(db_path=tmp_path / "hub.db", company_name="Acme", test_identities=ids))
     with TestClient(app) as client:
         with app.state.store.transaction() as c:
             w = World(tmp_path / "hub.db", conn=c)
-            c.execute("UPDATE stage_requirements SET reviewer_id=? WHERE id=?", (CHRIS, w.mockup))
+            # A ticket's file is shown on a requirement with no attachment of its own: the Sign-off approval.
+            reviewed = w.signoff if ticket else w.mockup
+            c.execute("UPDATE stage_requirements SET reviewer_id=? WHERE id=?", (CHRIS, reviewed))
             fid = _restricted_page(c, "Pipeline spec v1.md", people)
             _page_version(c, fid, "Pipeline spec v1.md")
-            _file_attachment(w, fid)
+            if ticket:
+                c.execute("INSERT INTO task_assets(task_id, blob_id) VALUES(?,?)", (w.task, "blob-" + fid))
+            else:
+                _file_attachment(w, fid)
         chris = {"Authorization": "Bearer chris-test", "Idempotency-Key": "k-chris"}
         queue = client.get("/api/v2/pipelines/review/queue", headers=chris)
         assert queue.status_code == 200, queue.text
@@ -2146,17 +2155,32 @@ def _page_attachment_queue(tmp_path, people):
         return fid, item
 
 
-def test_a_review_item_attachment_redacts_a_page_the_reader_cannot_open_as_the_task_view_does(tmp_path):
-    fid, item = _page_attachment_queue(tmp_path, ["ben"])  # an audience names people by id, as _restricted_page does
+@pytest.mark.parametrize("ticket", [False, True], ids=["attachment", "ticket_file"])
+def test_a_review_item_attachment_redacts_a_page_the_reader_cannot_open_as_the_task_view_does(tmp_path, ticket):
+    fid, item = _page_attachment_queue(tmp_path, ["ben"], ticket=ticket)  # an audience names people by id, as above
     shown = json.dumps(item)
-    assert "Pipeline spec v1.md" not in shown and fid not in shown, shown
-    assert item["attachment"]["name"] == "A page you can't open", item["attachment"]
-    assert item["attachment"]["href"] is None
-    assert item["attachment"]["source"] == "file"
-    assert item["attachment"]["id"] == "a-page"  # the requirement's own row, which Not validated names back
+    for secret in ("Pipeline spec v1.md", fid, "blob-" + fid, PAGE_DIGEST, "a-page"):
+        assert secret not in shown, (secret, shown)
+    assert item["attachment_digest"] is None, item
+    assert item["attachment"] == {
+        "id": None,
+        "source": "ticket" if ticket else "file",
+        "format": "file",
+        "name": "A page you can't open",
+        "url": None,
+        "href": None,
+        "file_id": None,
+        "file_version": None,
+        "blob_id": None,
+        "commit_sha": None,
+        "removed": True,
+    }, item["attachment"]
 
 
-def test_a_review_item_attachment_shows_a_page_the_reader_may_open(tmp_path):
-    fid, item = _page_attachment_queue(tmp_path, ["chris"])
+@pytest.mark.parametrize("ticket", [False, True], ids=["attachment", "ticket_file"])
+def test_a_review_item_attachment_shows_a_page_the_reader_may_open(tmp_path, ticket):
+    fid, item = _page_attachment_queue(tmp_path, ["chris"], ticket=ticket)
     assert item["attachment"]["name"] == "Pipeline spec v1.md", item["attachment"]
-    assert item["attachment"]["href"] == f"/api/v2/files/{fid}/versions/1", item["attachment"]
+    if not ticket:
+        assert item["attachment"]["href"] == f"/api/v2/files/{fid}/versions/1", item["attachment"]
+        assert item["attachment_digest"] == PAGE_DIGEST, item

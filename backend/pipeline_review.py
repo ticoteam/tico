@@ -692,7 +692,9 @@ def _read_snapshot(c: "sqlite3.Connection") -> "Generator[None]":
 def _redact_attachments(c: "sqlite3.Connection", items: list[Row], who: "Identity", auth: "Auth | None") -> None:
     """Each review item's attachment is redacted for this reader the way the task view redacts a page
     (files.readable_page_refs, the function the question view uses): a page the reader cannot open shows the task view's
-    notice in place of its name, and keeps no file id or address. The item stays in the queue, so the counts do not move."""
+    notice in place of its name. The denied attachment is built fresh, so nothing of the page's row survives: no id, blob
+    id, digest, version, title or address, and the item's own attachment digest goes too. The item stays in the queue, so
+    the counts do not move."""
     shown = [item for item in items if item["attachment"]]
     if not shown:
         return
@@ -704,16 +706,19 @@ def _redact_attachments(c: "sqlite3.Connection", items: list[Row], who: "Identit
     for item, view in zip(shown, views, strict=True):
         if view.get("removed") is True:
             item["attachment"] = {
-                **item["attachment"],
-                "name": view["label"],
+                "id": None,
+                "source": item["attachment"]["source"],
                 "format": "file",
-                "href": None,
+                "name": view["label"],
                 "url": None,
+                "href": None,
                 "file_id": None,
                 "file_version": None,
                 "blob_id": None,
+                "commit_sha": None,
                 "removed": True,
             }
+            item["attachment_digest"] = None
 
 
 def _moves_to(
