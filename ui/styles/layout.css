@@ -78,7 +78,8 @@ body.native #app-nudge{display:none}
   .org-fan-item.org-fan-menu{min-width:0;width:52px;padding:8px;justify-content:center}
   .org-fan-search-icon{width:34px;height:34px;border-radius:50%;background:var(--surface2);color:var(--ink);font-size:20px}
   .org-fan-item .org-fan-recent{color:var(--muted);font-size:var(--t-xs);font-weight:400}
-  .toast{bottom:calc(var(--mobile-nav-height) + env(safe-area-inset-bottom) + 12px)}
+  /* body: tasks.css loads later and sets .toast's base bottom, so this rule needs the extra specificity to lift toasts above the tab bar */
+  body .toast{bottom:calc(var(--mobile-nav-height) + env(safe-area-inset-bottom) + 12px)}
   body.mobile-composer-focus .toast{bottom:12px}
   .ln .who{max-width:96px}.ln .age{font-size:var(--t-xs)}
   form.task .r1{grid-template-columns:1fr 1fr}form.task .r1 input{grid-column:1/-1}
