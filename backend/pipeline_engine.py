@@ -1165,13 +1165,17 @@ def may_clear_stage(conn: sqlite3.Connection, actor: str, row: Row) -> None:
     )
 
 
-def may_leave_ice(conn: sqlite3.Connection, actor: str, row: Row, step_id: str | None) -> None:
+def may_leave_ice(
+    conn: sqlite3.Connection, actor: str, row: Row, step_id: str | None, *, automation: bool = False
+) -> None:
     """Every status write that takes a card out of On ice (D69) to `step_id` is a person's (hubdb._set_status): a close or a
     decline that lands in a closed stage, a done, a type change, not only a stage move (_room). A bot, or a write made for a
-    person (H.VIA), is refused (rule on_ice), so it cannot cancel a parked card and reopen it into Backlog. Tico's own
-    flows (H.KEEPER) are automation too, as a stage move's check (_room) holds them: an automation rule's close, an old
-    ask's expiry. A write that keeps the card On ice (a waiting) stands."""
-    if H.is_human(actor) and not H.VIA.get():
+    person (H.VIA), is refused (rule on_ice), so it cannot cancel a parked card and reopen it into Backlog. A write that
+    keeps the card On ice (a waiting) stands. Tico's own bookkeeping (H.KEEPER) stands too: the cleanup that follows a
+    person's decision (a rule review's holds decided, an automation's guard task released) closes its task wherever it is.
+    An automation that acts as Tico is held all the same (`automation`, rules._close); a sweep that would close a parked
+    card passes it over instead (ask_deadlines, question_tasks.open_rows)."""
+    if (actor == H.KEEPER and not automation) or (H.is_human(actor) and not H.VIA.get()):
         return
     here = stage(conn, row.get("step_id"))
     if here is None or here["card_cap"] != 0 or step_id == here["id"]:

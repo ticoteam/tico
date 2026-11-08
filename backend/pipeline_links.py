@@ -564,8 +564,22 @@ def spawn(
     target = str(link["to_pipeline_id"])
     first = pipeline_engine.first_stage(conn, target)
     source = H.task(conn, source_id)
-    if first is None or source is None:
+    if source is None:
         return None
+    if first is None:
+        # Every open stage of the target is On ice (D69): it takes no linked ticket, so the card waits at its stage, as
+        # for a full first stage, until a person opens a stage there. Nothing is dropped.
+        parked = next(
+            (s for s in pipeline_engine.stages(conn, target) if s["status"] not in pipeline_engine.CLOSED), None
+        )
+        if parked is None:
+            return None
+        raise pipeline_engine.room_refusal(
+            "stage_full",
+            f"{pipeline_engine.full_detail(parked)}, so the linked ticket waits",
+            source_id,
+            str(parked["id"]),
+        )
     full = pipeline_engine.full_stage(conn, str(first["id"]), source_id)
     if full is not None:
         # The linked ticket waits for room (D68): the move that would have filed it is refused, so the card stays where it is.

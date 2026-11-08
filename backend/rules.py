@@ -1077,6 +1077,10 @@ def _act(conn, decision, row, message=None):
 
 
 def _close(conn, tid, params, said):
+    from . import pipeline_engine
+
+    # An automation acts as Tico but is held as one: it never closes a card out of On ice (D69); only a person does.
+    pipeline_engine.may_leave_ice(conn, H.KEEPER, H.task(conn, tid) or {}, None, automation=True)
     H.task_close(conn, H.KEEPER, tid, note=said, strict=False)
 
 

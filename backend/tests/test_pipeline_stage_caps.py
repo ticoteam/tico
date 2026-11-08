@@ -717,34 +717,82 @@ def test_a_stage_count_leaves_out_a_card_whose_bot_the_viewer_may_not_read(api):
     assert doing("ana-test") == (1, 1)
 
 
-def test_tico_itself_cannot_close_a_card_out_of_on_ice_and_an_old_ask_on_ice_never_expires(api):
-    """Tico's own flows are automation too: an automation rule's close or an old ask's expiry does not take a card out of
-    On ice, and the ask sweep passes a parked card over instead of failing on it."""
+def test_an_automation_cannot_close_a_card_out_of_on_ice_and_no_sweep_expires_a_parked_ask(api):
+    """An automation acts as Tico but is held as one: its close does not take a card out of On ice. A parked card is never
+    late: the ask sweep passes it over instead of closing it or failing on it, and a parked question is no open question
+    to send back or expire. Tico's own cleanup after a person's decision still closes its task wherever it is."""
     from backend import ask_deadlines as AD
+    from backend import question_tasks as QT
 
     typ, steps = make_line(
         api, "IceKeeper" + uuid.uuid4().hex[:8], [*ON_ICE_LINE, {"name": "Closed", "status": "closed"}]
     )
     set_cap(api, steps["On ice"], 0)
+    old = H.shift(H.now(), days=-(AD.EXPIRE_DAYS + 5))
     with api.app.state.store.transaction() as c:
         card = H.task_create(c, ANA, "Parked ask", "", ANA, type=typ, step="On ice", lint=False)["id"]
-        old = H.shift(H.now(), days=-(AD.EXPIRE_DAYS + 5))
-        c.execute("UPDATE tasks SET created_at=?, updated_at=?, requester_id='bot:coo' WHERE id=?", (old, old, card))
-        c.execute("UPDATE history_events SET created_at=? WHERE subject_type='task' AND subject_id=?", (old, card))
+        question = H.task_create(c, ANA, "Parked question", "", ANA, type=typ, step="On ice", lint=False)["id"]
+        for tid in (card, question):
+            c.execute("UPDATE tasks SET created_at=?, updated_at=?, requester_id='bot:coo' WHERE id=?", (old, old, tid))
+            c.execute("UPDATE history_events SET created_at=? WHERE subject_type='task' AND subject_id=?", (old, tid))
+        c.execute("UPDATE tasks SET questions=? WHERE id=?", ('[{"text": "Which one?"}]', question))
     with api.app.state.store.transaction() as c:
-        c.execute("SAVEPOINT keeper_close")
+        c.execute("SAVEPOINT rule_close")
         with pytest.raises(H.Refused) as refused:
-            H.task_close(c, H.KEEPER, card, "Closed by an automation", strict=False)
-        c.execute("ROLLBACK TO keeper_close")
-        c.execute("RELEASE keeper_close")
+            RU._close(c, card, {}, "Rule tidy")
+        c.execute("ROLLBACK TO rule_close")
+        c.execute("RELEASE rule_close")
     assert refused.value.rule == "on_ice"
     with api.app.state.store.transaction() as c:
+        assert question not in {row["id"] for row in QT.open_rows(c)}
         done = AD.sweep(c)
         assert card not in done["closed"]
         assert not c.execute("SELECT 1 FROM service_health WHERE service LIKE ?", ("%" + card,)).fetchone()
     assert card_stage(api, card) == steps["On ice"]
-    with api.app.state.store.read() as c:
+    with api.app.state.store.transaction() as c:
         assert H.task(c, card)["status"] == "open"
+        H.task_close(c, H.KEEPER, card, "Every hold on this task is decided.", strict=False)  # Tico's own cleanup
+        assert H.task(c, card)["status"] == "closed"
+
+
+def test_a_verdict_move_into_a_full_stage_is_listed_as_waiting_for_room(api):
+    """A verdict's automatic move (verdict_moves.move) into a full stage leaves the card where it is, and the manager
+    lists it as waiting for room."""
+    from backend import verdict_moves as VM
+
+    typ, steps = make_line(api, "Verdict" + uuid.uuid4().hex[:8])
+    set_cap(api, steps["Doing"], 1)
+    with api.app.state.store.transaction() as c:
+        H.task_create(c, ANA, "Already doing", "", ANA, type=typ, step="Doing", lint=False)
+        card = H.task_create(c, ANA, "Reviewed", "", "bot:coo", type=typ, step="Backlog", lint=False)["id"]
+        assert VM.move(c, H.task(c, card), steps["Doing"], "Approved") is False
+    assert card_stage(api, card) == steps["Backlog"]
+    with api.app.state.store.read() as c:
+        assert X.waiting_room(c)[card]["stage_id"] == steps["Doing"]
+
+
+def test_a_spawn_into_a_pipeline_all_on_ice_waits_instead_of_dropping_the_ticket(api):
+    """A spawn link whose target pipeline has no open stage but On ice files nothing there: the card that would have
+    spawned it waits at its stage (stage_full), so the linked work is never silently dropped."""
+    typ, steps = make_line(api, "SpawnSrc" + uuid.uuid4().hex[:8])
+    target, tsteps = make_line(
+        api,
+        "SpawnIce" + uuid.uuid4().hex[:8],
+        [{"name": "Intake", "status": "open"}, {"name": "Closed", "status": "closed"}],
+    )
+    set_cap(api, tsteps["Intake"], 0)
+    with api.app.state.store.transaction() as c:
+        card = H.task_create(c, ANA, "Makes follow-up", "", ANA, type=typ, step="Doing", lint=False)["id"]
+        link = {
+            "id": "L" + uuid.uuid4().hex[:8],
+            "mode": "spawn",
+            "to_pipeline_id": target,
+            "from_pipeline_stage_id": steps["Doing"],
+        }
+        with pytest.raises(H.Refused) as refused:
+            L.spawn(c, link, card)
+    assert refused.value.rule == "stage_full"
+    assert refused.value.context == {"stage": tsteps["Intake"]}
 
 
 def test_an_automatic_move_of_a_private_card_refused_for_room_is_recorded_as_private(api):
