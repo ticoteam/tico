@@ -559,7 +559,8 @@ function tasksRowStatusMenu(state, anchor) {
     ? (it.value === cur.step_id ? null : {step: it.value, ...(it.step?.status === 'done' ? {status: 'done'} : {})})
     : (it.value === cur.status ? null : {status: it.value}))});
 }
-// One update with the task's version; a 409 reads it again and tries once more; a refusal is named.
+// One update with the task's version; a 409 reads it again and tries once more; a refusal is named, and a move over a
+// stage's cap is said (taskOverCapWarn).
 async function tasksRowStatusSave(state, id, bodyFor) {
   let t = tasksById(state).get(id);
   for (let attempt = 0; t && attempt < 2; attempt++) {
@@ -567,7 +568,7 @@ async function tasksRowStatusSave(state, id, bodyFor) {
     if (!body) return;
     if (attempt === 0 && body.status === 'done') taskDoneMotion('t' + id);   // its check draws while the list catches up
     state.refused?.delete(id);
-    try { await post(`/v2/tasks/${encodeURIComponent(t.id)}`, {version: t.version, ...body}); break; }
+    try { taskOverCapWarn(t, body, await post(`/v2/tasks/${encodeURIComponent(t.id)}`, {version: t.version, ...body})); break; }
     catch (e) {
       if (e.status === 409 && attempt === 0) { t = (await v2Get(`/v2/tasks/${encodeURIComponent(id)}`))?.task; continue; }
       taskRefusedSet(state, t, `Not changed: ${e.message || 'not saved'}`);

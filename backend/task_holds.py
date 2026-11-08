@@ -55,7 +55,7 @@ def _line(text, limit=160):
 def holds(conn, row):
     """Every hold Tico tracks on a task, in the order `wait_detail` reads them: [{"kind", "on", "what"}]. `on` is the
     actor holding it (None for an external hold or an approval with nobody named), `what` a short subject. A child or
-    blocker named by its title also carries its id as `task`."""
+    blocker named by its title, or the task a blocked check waits on, also carries its id as `task`."""
     from . import hubdb as H, task_relations as TR, profiles, review_gate
 
     out = []
@@ -75,7 +75,14 @@ def holds(conn, row):
 
                 check = check_detail(conn, row) or False
                 if check:
-                    out.append({"kind": "check", "on": check.get("on"), "what": _line(check.get("why"))})
+                    # The task the check waits on, when a live blocker holds it (check_blocked.blocked), as `task`.
+                    held = H.task(conn, check["check"]) or {}
+                    named = (
+                        TR.live_blocker(conn, held["id"], H.ACTIVE_STATUSES)
+                        if held and held.get("status") != "waiting"
+                        else None
+                    )
+                    out.append({"kind": "check", "on": check.get("on"), "what": _line(check.get("why")), "task": named})
             continue
         out.append(_task_hold(conn, row, "child", child))
     own = {r[0] for r in conn.execute(TR.CHILD_IDS, (row["id"],))}
@@ -344,6 +351,8 @@ def unstrand(conn, at=None):
         for r in conn.execute(
             "SELECT t.id FROM task_holds h JOIN tasks t ON t.id=h.task_id WHERE h.kind='blocked' AND h.released_at IS NULL "
             "AND h.cause='stranded' AND t.status='waiting' AND t.owner_id LIKE 'bot:%' "
+            # A card On ice (D69) waits for the person who parked it: the pass leaves it, as every sweep does.
+            f"AND NOT {H.ON_ICE % 't'} "
             "AND coalesce(h.cleared_at,h.created_at)<=? ORDER BY h.created_at,t.id",
             (H.shift(at, hours=-GRACE_HOURS),),
         )

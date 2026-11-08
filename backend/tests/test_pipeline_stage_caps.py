@@ -1300,3 +1300,41 @@ def test_no_task_manager_item_names_a_card_on_ice_as_the_other_of_a_pair(api, mo
         by, _ = TM.collect(c, api.app.state.store.settings, at)
     reported = [item for items in by.values() for item in items if item["kind"] == "review_duplicate"]
     assert [(item["task"], item["about"]) for item in reported] == [(third, [second])]
+
+
+def test_the_hourly_reopen_pass_leaves_a_card_on_ice_and_still_reopens_the_rest(api):
+    """A bot's card waiting on nothing tracked goes back to open after the grace (task_holds.unstrand), but one a person
+    parked On ice stays where it is, and the pass carries on for the others rather than failing."""
+    from backend import task_holds
+    from backend.tests.test_task_holds import bot_task, wait
+
+    typ, steps = make_line(api, "IceReopen" + uuid.uuid4().hex[:8], ON_ICE_LINE)
+    with api.app.state.store.transaction() as c:
+        loose, parked = (bot_task(c, f"Draft the post {n}") for n in range(2))
+        for tid in (loose, parked):
+            assert wait(c, tid, note="Waiting on the vendor")["blocked_kind"] == "stranded"
+        c.execute("UPDATE tasks SET type_id=?, step_id=? WHERE id=?", (typ, steps["Doing"], parked))
+        c.execute("UPDATE task_steps SET card_cap=0 WHERE id=?", (steps["Doing"],))  # a person parks its stage
+        assert task_holds.unstrand(c, H.shift(H.now(), hours=3))["opened"] == 1
+        assert H.task(c, loose)["status"] == "open"
+        assert H.task(c, parked)["status"] == "waiting"
+
+
+def test_a_question_sent_back_then_parked_on_ice_is_no_roundup_line_for_its_asker(api):
+    """A question that went back unanswered (still_needed.send_back) and that a person then parks On ice is theirs now:
+    the asker's roundup does not tell it to ask again."""
+    from backend import still_needed, task_roundup as RD
+    from backend.tests.test_task_holds import ask, bot_task, wait
+
+    typ, steps = make_line(api, "IceAsk" + uuid.uuid4().hex[:8], ON_ICE_LINE)
+    with api.app.state.store.transaction() as c:
+        tid = bot_task(c, "Order the mail key")
+        question = ask(c, tid, "Which mailbox gets the key?")
+        wait(c, tid)
+        still_needed.send_back(c, "bot:ops", [question])
+        assert [item["tid"] for _, _, item in RD._asks_back(c, "ops", "bot:ops", H.now())] == [tid]  # the control
+        c.execute(  # a person reopens the question and parks it
+            "UPDATE tasks SET status='open', type_id=?, step_id=? WHERE id=?", (typ, steps["On ice"], question["id"])
+        )
+        c.execute("UPDATE task_steps SET card_cap=0 WHERE id=?", (steps["On ice"],))
+        assert RD._asks_back(c, "ops", "bot:ops", H.now()) == []
