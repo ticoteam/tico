@@ -5,12 +5,12 @@
    its `href`.
    Addresses:
      #/tools[?show=needs|api|mail|websites]          the list
-     #/tools/api/<id>[/activity]                      one API tool (ui/app/tools-api.js)
+     #/tools/api/<id>[/activity]                      one API tool (ui/app/tools-api.ts)
      #/tools/mailbox/<address or id>[/activity]       one mailbox  ┐
      #/tools/number/<id>                              one Tico address or phone number │ the inbox kinds' pages
      #/tools/address/<id>, #/tools/address/outbox     one mailing address, letters out  │ (ui/app/inboxes*.js)
      #/tools/settings[/<section>], #/tools/messages   mail and number settings, texts   ┘
-     #/tools/keys[/<service> | /credentials/<id>]     every credential, by tool (ui/app/redesign-library.js)
+     #/tools/keys[/<service> | /credentials/<id>]     every credential, by tool (ui/app/redesign-library.ts)
      #/tools/webhooks[/<id>]                          outgoing webhooks, and one (ui/app/settings-webhooks.js)
      #/tools/<service>                                a declared tool's page, Slack's and GitHub's (same file)
    The old homes of all of it redirect here (toolsRoute): Library › Tools and › Connections, Settings › Inboxes and
@@ -26,14 +26,6 @@ interface ToolsWho { kind: string; id: string; name?: string; }
 interface ToolsRow { id: string; kind: string; name: string; detail?: string; way?: string; href?: string; private?: boolean; needs_you?: boolean; status?: ToolsStatus; who?: ToolsWho[]; who_total?: number; }
 // The list's state: its run (a newer pageTools wins), its rows and counts once read, the error, the search and the filter.
 interface ToolsListState { run: number; rows: ToolsRow[] | null; counts: Record<string, number> | null; error: string; q: string; show: string; }
-// An inbox kind as ui/app/inboxes.js registers it: the order it lists in, and its Add tool item when it has one.
-interface ToolsInboxKind { key: string; order: number; add?: { label: string; admin?: boolean; open: (ctx: unknown) => unknown }; }
-
-// The inbox kind registered under a key. INBOX_KINDS is declared `{}` in inboxes.js, so its entries have no type this
-// file can check. Reflect.get reads the same property as INBOX_KINDS[key], inherited names included as before; the return
-// type is the shape this file uses.
-const toolsInboxKind = (key: string): ToolsInboxKind | undefined => Reflect.get(INBOX_KINDS, key);
-
 const TOOLS_ROUTE = '#/tools';
 const TOOLS_KEYS = '#/tools/keys';
 // The list's filters: key, label, which rows, and the counts field that numbers it.
@@ -150,7 +142,7 @@ function toolsDraw() {
 // An API (POST /api-tools) for whoever manages keys, then each inbox kind's own Add (ui/app/inboxes*.js).
 function toolsAddMenu(): string {
   const admin = settingsIsAdmin();
-  const kinds: ToolsInboxKind[] = Object.values(INBOX_KINDS).filter((k: ToolsInboxKind) => k.add && (!k.add.admin || admin)).sort((a: ToolsInboxKind, b: ToolsInboxKind) => a.order - b.order);
+  const kinds: InboxKind[] = Object.values(INBOX_KINDS).filter((k: InboxKind) => k.add && (!k.add.admin || admin)).sort((a: InboxKind, b: InboxKind) => a.order - b.order);
   const items = [...(S.me?.credential_access || admin ? [['api', 'API']] : []), ...kinds.map(k => ['kind:' + k.key, k.add?.label]),
     ['webhook', 'Outgoing webhook']];
   if (!items.length) return '';
@@ -164,12 +156,12 @@ function toolsAddBind(root: HTMLElement) {
     const item = b.dataset.tlAddItem ?? '';
     if (item === 'api') { toolsApiCreate(); return; }
     if (item === 'webhook') { location.hash = WH_HOOKS_ROUTE; void whHookDialog(null); return; }
-    toolsInboxKind(item.slice(5))?.add?.open(inboxesCtx(IB.run));
+    INBOX_KINDS[item.slice(5)]?.add?.open(inboxesCtx(IB.run));
   });
 }
 
 // ----------------------------------------------------------------- routes
-// The redesign's router asks first (ui/app/redesign.js). Old addresses are replaced, so Back skips them.
+// The redesign's router asks first (ui/app/redesign.ts). Old addresses are replaced, so Back skips them.
 function toolsRoute(r: string): boolean {
   const [path = '', query = ''] = r.split('?'), q = query ? '?' + query : '';
   const go = (to: string) => { location.replace(to); return true; };
@@ -214,10 +206,10 @@ function toolsFromInboxes(rest: string): string {
     return '#/tools/settings' + (INBOX_SECTIONS.some(([k]) => k === section) ? '/' + section : '');
   }
   if (head === 'messages') return '#/tools/messages';
-  if (toolsInboxKind(head) && id) return inboxesLink(head, decodeURIComponent(id));
+  if (INBOX_KINDS[head] && id) return inboxesLink(head, decodeURIComponent(id));
   return TOOLS_ROUTE + '?show=mail';
 }
-// One inbox kind's page, mail settings or Messages, drawn by ui/app/inboxes.js into a host kept while the address stays
+// One inbox kind's page, mail settings or Messages, drawn by ui/app/inboxes.ts into a host kept while the address stays
 // under the same page, so a redraw keeps what it drew.
 function toolsInboxPage(view: string) {
   INBOXES_VIEW = view;

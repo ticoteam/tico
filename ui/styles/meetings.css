@@ -71,7 +71,7 @@
 .notes-filters select{flex:none;width:auto;max-width:220px;height:var(--ctl);font:inherit;font-size:var(--t-base);color:var(--ink);padding:0 26px 0 8px}
 .notes-filters .notes-count{margin-left:auto;padding-left:8px;font-size:var(--t-sm);font-variant-numeric:tabular-nums;white-space:nowrap}
 .notes-rows{overflow:auto}
-/* The viewer's own Granola account on Tools > Granola (ui/app/meetings-granola.js mountGranolaTool). */
+/* The viewer's own Granola account on Tools > Granola (ui/app/meetings-granola.ts mountGranolaTool). */
 .mg-row{display:flex;align-items:center;gap:10px;padding:6px 8px 6px 12px;border:1px solid var(--line);border-radius:10px;background:var(--surface)}
 .mg-row.mg-flat{border:0;padding:0;background:none}
 .mg-body{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px}
@@ -100,7 +100,7 @@
 @media (max-width:760px){
   .mg-actions button.primary,.mg-actions button.ghost,.mg-code-row .ghost{min-height:32px;padding:4px 10px}
 }
-/* Sources (ui/app/meetings-sources.js): connected rows first, then the ones to connect. */
+/* Sources (ui/app/meetings-sources.ts): connected rows first, then the ones to connect. */
 .msrc-dialog{width:min(500px,calc(100vw - 32px));padding:16px 18px 10px}
 .msrc-list{list-style:none;margin:0;padding:0}
 .msrc-list+.msrc-list{margin-top:4px;border-top:1px solid var(--line)}

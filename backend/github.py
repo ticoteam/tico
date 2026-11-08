@@ -555,6 +555,9 @@ def _settle_removal(c, link_id, pr):
         return
     task = H.task(c, link["task_id"])
     H._task_event(c, task["id"], H.KEEPER, "merge_queue_failed", None, f"{link['url']}@{head}", reason)
+    from . import pipeline_engine
+
+    pipeline_engine.queue_ejected(c, link["task_id"], reason)  # the card goes back a stage with the reason
     queue_wake(
         c,
         task,
@@ -638,6 +641,9 @@ def pull_request(c, payload, review_role="", release_repo="", *, read_refresh=Fa
                 detail.pop("conflict_head", None)
                 detail["health_reviewed_head"] = ""
                 c.execute("UPDATE task_links SET checks='pending' WHERE id=?", (link["id"],))
+                from . import pipeline_engine
+
+                pipeline_engine.work_changed(c, link["task_id"])  # a new head is a work change
             detail["head_sha"] = head_sha
             login = (
                 str((payload.get("sender") or {}).get("login") or "").lower()
@@ -675,6 +681,11 @@ def pull_request(c, payload, review_role="", release_repo="", *, read_refresh=Fa
             check_flow=step_flow.has_flow(c, task.get("type_id")),
         )
         c.execute("UPDATE task_links SET detail=? WHERE id=?", (json.dumps(detail), link["id"]))
+        if new_head:
+            from . import pipeline_github_checks
+
+            # The new head is saved: its checks show the out-of-date standing from this same write.
+            pipeline_github_checks.publish_affected(c, link["task_id"])
         if state == "merged" and link["state"] not in ("merged", "shipped"):
             from . import review_pages, verdict_moves
 

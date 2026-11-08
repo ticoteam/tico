@@ -313,3 +313,20 @@ def test_each_row_says_who_uses_it_and_how_its_last_sync_went(mb, monkeypatch):
         op for ops in document["paths"].values() for op in ops.values() if op.get("operationId") == "listMailboxes"
     )["responses"]["200"]["content"]["application/json"]["schema"]
     assert conforms(listed, schema, document) is None
+
+
+def test_only_a_personal_inbox_s_own_person_switches_its_directory_feed(mb):
+    cara = connect(mb, "cara@acme.example")["mailbox"]["id"]
+
+    def feed(token, on):
+        return call(mb, "PATCH", f"mailboxes/{cara}/directory", token, {"on": on})
+
+    assert feed("ana-test", False).status_code == 403  # the owner of the workspace is not Cara
+    assert feed("ben-test", False).status_code == 403  # nor is an admin
+    r = feed("cara-test", False)
+    assert r.status_code == 200 and r.json()["feeds_directory"] is False
+    assert get(mb, "mailboxes", "cara-test")["mine"]["feeds_directory"] is False
+    assert feed("cara-test", False).json()["feeds_directory"] is False  # unchanged: no second event
+    assert events(mb, "mailbox.directory_feed") == 1
+    assert feed("cara-test", True).json()["feeds_directory"] is True
+    assert events(mb, "mailbox.directory_feed") == 2

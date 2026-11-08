@@ -142,7 +142,7 @@ def test_gate_refusal_commits_block_without_advancing_review(api):
     assert current['step']['name'] == 'In Progress'
     assert current['status'] == 'waiting'
     assert 'receipt' in hold(current)['reason'] and hold(current)['by'] == 'keeper'
-    # The screen keeps a gate hold's own line instead of a bot wait's (ui/app/tasks.js taskBotWait).
+    # The screen keeps a gate hold's own line instead of a bot wait's (ui/app/tasks.ts taskBotWait).
     assert hold(current)['cause'] == 'gate'
     assert current['version'] > task['version']
     with api.app.state.store.transaction() as c:

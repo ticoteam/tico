@@ -116,7 +116,7 @@ def test_the_slack_gateway_gets_every_sign_in_setting_the_server_gets():
 
 def test_the_server_and_the_slack_gateway_get_the_hosted_mark_as_set_in_env():
     # Compose passes settings only through each service's list, so without these entries a hosted Tico's server
-    # reads TICO_HOSTED as unset and its sign-in offers the terminal again (ui/model-login.js). Both load Settings.
+    # reads TICO_HOSTED as unset and its sign-in offers the terminal again (ui/model-login.ts). Both load Settings.
     import yaml
 
     services = yaml.safe_load((ROOT / "compose.yaml").read_text())["services"]

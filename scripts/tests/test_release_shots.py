@@ -59,8 +59,8 @@ def repo(tmp_path: Path) -> Path:
     commit(
         root,
         {
-            'ui/app/updates.js': 'updates\n',
-            'ui/app/tasks.js': 'tasks\n',
+            'ui/app/updates.ts': 'updates\n',
+            'ui/app/tasks.ts': 'tasks\n',
             'ui/styles/base.css': 'base\n',
             'backend/x.py': 'x = 1\n',
         },
@@ -81,7 +81,7 @@ def all_page_names(repo: Path) -> set[str]:
 
 
 def test_a_mapped_file_picks_only_the_pages_that_draw_it(repo: Path) -> None:
-    selection = picked(repo, {'ui/app/updates.js': 'updates changed\n'})
+    selection = picked(repo, {'ui/app/updates.ts': 'updates changed\n'})
     # The support popover draws the updates file too, so both pages are shot, and no others.
     assert selection.pages == ['updates', 'support']
     assert not selection.every
@@ -114,14 +114,14 @@ def test_a_new_ui_file_that_no_table_names_picks_every_page(repo: Path) -> None:
 
 
 def test_an_unshown_file_picks_no_page_and_is_named(repo: Path) -> None:
-    selection = picked(repo, {'ui/app/vault.js': 'vault\n'})
+    selection = picked(repo, {'ui/app/vault.ts': 'vault\n'})
     assert selection.pages == []
-    assert selection.unshown == ['ui/app/vault.js']
-    assert 'not shown: ui/app/vault.js' in selection.reason
+    assert selection.unshown == ['ui/app/vault.ts']
+    assert 'not shown: ui/app/vault.ts' in selection.reason
 
 
 def test_a_dark_line_turns_the_dark_pictures_on(repo: Path) -> None:
-    assert picked(repo, {'ui/app/updates.js': 'updates in dark mode\n'}).dark
+    assert picked(repo, {'ui/app/updates.ts': 'updates in dark mode\n'}).dark
 
 
 def test_a_dark_theme_file_turns_the_dark_pictures_on(repo: Path) -> None:

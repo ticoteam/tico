@@ -1,0 +1,69 @@
+/* ui/styles/overview-factories.css — Overview › Factories (ui/app/overview-factories.ts): factory boxes, pipeline nodes,
+   the lines between them and the input circles. Dashes move gently, and stand still under prefers-reduced-motion. */
+.of-page{display:flex;flex-direction:column;min-height:0}
+.of-bar{flex:none;display:flex;align-items:center;gap:var(--s3);padding:var(--s2) 28px;border-bottom:1px solid var(--line)}
+.of-main{flex:1;min-height:0;display:flex}
+.of-body{flex:1;min-width:0;overflow:auto;padding:var(--s4) 28px}
+.of-empty{margin:var(--s4) 0}
+.of-inputs{display:flex;flex-wrap:wrap;gap:var(--s3);margin:0 0 var(--s3)}
+.of-input{display:inline-flex;align-items:center;gap:6px}
+.of-dot{display:inline-flex;align-items:center;justify-content:center;box-sizing:border-box;min-width:28px;height:28px;padding:0 4px;border-radius:14px;border:1.5px solid var(--g5);background:var(--surface);font-size:11px}
+.of-in-l{font-size:var(--t-sm);color:var(--muted)}
+.of-stage{position:relative}
+.of-lines{position:absolute;left:0;top:0;pointer-events:none;overflow:visible}
+.of-edge{fill:none;stroke:var(--g5);stroke-linecap:round}
+/* A move is a solid line; a spawn makes new cards, so its line is dashed. Outside work (inputs) is dashed too. */
+.of-edge-spawn,.of-edge-in{stroke-dasharray:6 6}
+.of-edge-in{stroke:var(--g4)}
+.of-new{display:flex;flex-wrap:wrap;gap:10px;align-items:flex-end;margin:0 0 12px}
+.of-new label{display:flex;flex-direction:column;gap:4px;font-size:12px}
+.of-new-acts{display:flex;gap:8px}
+.of-edge-l{fill:var(--muted);font-size:11px;stroke:var(--surface);stroke-width:3px;paint-order:stroke}
+@media (prefers-reduced-motion:no-preference){
+  .of-edge{animation:of-flow 1.6s linear infinite}
+}
+@keyframes of-flow{to{stroke-dashoffset:-24}}
+.of-factories{position:relative;display:flex;flex-direction:column;gap:var(--s4)}
+.of-factory{border:1px solid var(--line);border-radius:var(--r-card, 8px);background:var(--surface);padding:var(--s3)}
+.of-factory header{display:flex;align-items:baseline;gap:var(--s3);margin:0 0 var(--s3)}
+.of-factory h2{margin:0;font-size:var(--t-md, 14px);font-weight:600}
+.of-sub{font-size:var(--t-sm);color:var(--muted)}
+.of-row{display:flex;flex-wrap:wrap;gap:56px;align-items:stretch}
+.of-node{position:relative;min-width:150px;max-width:240px;border:1px solid var(--line);border-radius:var(--r-ctl);background:var(--bg)}
+.of-node:hover{background:var(--hover)}
+.of-link{display:flex;flex-direction:column;gap:4px;height:100%;box-sizing:border-box;padding:var(--s2) 36px var(--s2) var(--s3);color:var(--ink);text-decoration:none}
+.of-link:focus-visible{outline:var(--focus-ring);outline-offset:var(--focus-inset)}
+.of-node .of-chat{position:absolute;top:4px;right:4px}
+.of-chat{display:inline-flex;align-items:center;justify-content:center;min-width:28px;min-height:28px;padding:0;color:var(--muted)}
+.of-chat[aria-pressed="true"]{color:var(--ink)}
+.of-factory header .of-chat{margin-left:auto}
+.of-name{font-weight:600}
+.of-stats{font-size:var(--t-sm);color:var(--muted)}
+.of-late{color:var(--fail)}
+.of-run{color:var(--run)}
+.of-you{align-self:flex-start;padding:0 8px;border-radius:10px;background:var(--wait-bg);color:var(--wait-ink);font-size:var(--t-xs)}
+.of-phone-only{display:none}
+.of-rail{flex:none;width:320px;min-height:0;border-left:1px solid var(--line);background:var(--surface);display:flex;flex-direction:column}
+.of-rail[hidden]{display:none}
+.of-rail-head{flex:none;display:flex;align-items:center;gap:var(--s2);padding:var(--s2) var(--s2) var(--s2) var(--s3);border-bottom:1px solid var(--line)}
+.of-chips{flex:1;min-width:0;display:flex;flex-wrap:wrap;gap:6px}
+.of-chip{min-height:28px;padding:0 10px;border:1px solid var(--line);border-radius:14px;background:var(--bg);color:var(--muted);font:inherit;font-size:var(--t-sm);cursor:pointer}
+.of-chip[aria-pressed="true"]{background:var(--hover);color:var(--ink)}
+.of-chip:focus-visible,.of-rail-hide:focus-visible{outline:var(--focus-ring);outline-offset:var(--focus-inset)}
+.of-rail-hide{flex:none;min-width:28px;min-height:28px;padding:0;color:var(--muted)}
+.of-rail-chat{flex:1 1 0;min-height:160px;display:flex;flex-direction:column;overflow:hidden}
+.of-rail-chat > .thv{flex:1 1 auto;min-height:0}
+@media (max-width:720px){
+  .of-bar,.of-body{padding-left:12px;padding-right:12px}
+  .of-lines,.of-inputs{display:none}
+  .of-row{flex-direction:column;gap:0}
+  .of-node{max-width:none;min-width:0}
+  .of-node + .of-node{margin-top:22px}
+  .of-rail{position:fixed;inset:0;z-index:50;width:auto;border-left:0}
+  .of-chip,.of-rail-hide{min-height:44px}
+  .of-rail-hide{min-width:44px}
+  .of-chat{min-width:44px;min-height:44px}
+  .of-phone-only{display:flex;flex-wrap:wrap;gap:6px}
+  .of-in-chip,.of-onward{font-size:var(--t-xs);color:var(--muted);padding:0 8px;border:1px solid var(--line);border-radius:10px}
+  .of-gap{height:22px;border-left:2px dashed var(--g5);margin-left:24px}
+}

@@ -1,4 +1,4 @@
-// Offline regression for moving teammates in the sidebar's team list (ui/app/sidebar.js orgDropAsk). Fixtures only.
+// Offline regression for moving teammates in the sidebar's team list (ui/app/sidebar.ts orgDropAsk). Fixtures only.
 //  - a drop saves nothing at once: the tree shows the new place and a strip under the moved row asks "Move Doc Updater
 //    under Design?" with Move and Cancel, focus on Move; Cancel, Escape and a press elsewhere put the chart back with
 //    no request and focus back on the row (not for a press elsewhere);
@@ -29,7 +29,7 @@ async function open(browser, options = {}) {
     const request = route.request(), url = new URL(request.url()), p = url.pathname, method = request.method();
     const json = body => route.fulfill({contentType: 'application/json', body: JSON.stringify(body)});
     if (url.origin !== 'https://tico-ui.test') return route.abort();
-    const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|css))$/);
+    const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/);
     if (ui && fs.existsSync(uiFile(ui[1])))
       return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]), 'utf8')});
     if (p.startsWith('/vendor/')) {

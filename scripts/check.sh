@@ -189,15 +189,15 @@ else
   skip "ui routes (API paths)" "no UI or backend Python changed"
 fi
 
-# 7c. New UI code is TypeScript, and every .ts file type-checks strictly (scripts/check_ui_strict.py).
+# 7c. Every UI script is TypeScript, and every .ts file type-checks strictly (scripts/check_ui_strict.py).
 if [ "$ALL" = 1 ] || changed_matches '^ui/|^scripts/(check_ui_strict|ui_baseline)\.py$'; then
   if [ -n "$base" ]; then
-    run "ui strict (new .ts, legacy list)" python3 scripts/check_ui_strict.py --base "$base"
+    run "ui strict (every script TypeScript, strict ratchet)" python3 scripts/check_ui_strict.py --base "$base"
   else
-    run "ui strict (new .ts, legacy list)" python3 scripts/check_ui_strict.py
+    run "ui strict (every script TypeScript, strict ratchet)" python3 scripts/check_ui_strict.py
   fi
 else
-  skip "ui strict (new .ts, legacy list)" "no UI file changed"
+  skip "ui strict (every script TypeScript, strict ratchet)" "no UI file changed"
 fi
 
 # 8. Python types: basedpyright on pyrightconfig.json's include list, against its baseline and the strict-module ratchet.

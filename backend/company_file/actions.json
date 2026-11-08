@@ -198,6 +198,19 @@
    "lead",
    "market",
    "rival"
+  ],
+  "channels": [
+   "cro",
+   "seo",
+   "social-ads",
+   "search-ads",
+   "email",
+   "content",
+   "community",
+   "pr",
+   "app-store",
+   "affiliates",
+   "events"
   ]
  },
  "limits": {
@@ -243,7 +256,10 @@
   "post_title": 200,
   "url": 1000,
   "regions": 12,
-  "region": 60
+  "region": 60,
+  "channels": 11,
+  "bet_name": 40,
+  "bet_segment": 80
  },
  "actions": [
   {

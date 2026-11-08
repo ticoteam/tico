@@ -1,4 +1,4 @@
-// Org rule checks in the app (ui/app/org-rule-holds.js, backend/org_rule_check.py): a rule review task shows each held
+// Org rule checks in the app (ui/app/org-rule-holds.ts, backend/org_rule_check.py): a rule review task shows each held
 // output with its rule and Keep blocked / Send anyway / Edit rule (the list is summaries, each card opens its hold for the
 // text, and Show more reads the next page); Keep blocked and Send anyway post once and the card says what was decided; a held reply in a chat is one line naming the rule, never the text; the Rules header carries
 // "Checks on · N today · N unchecked · $N left", and Edit rule opens that rule's side panel on the Rules page. No sideways

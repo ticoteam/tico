@@ -44,7 +44,7 @@
 .section-chev{margin-left:auto;font-size:16px;line-height:var(--lh-none);transform:var(--chev-open)}
 .section-toggle[aria-expanded="false"] .section-chev{transform:none}
 .section-body[hidden]{display:none}
-/* The Team fold before the app's code runs (ui/theme.js; sidebar.js renderNavSections keeps the mark after). */
+/* The Team fold before the app's code runs (ui/theme.ts; sidebar.js renderNavSections keeps the mark after). */
 html.nav-team-shut #nav-organisation{display:none}
 html.nav-team-shut .section-toggle[data-section-toggle="organisation"] .section-chev{transform:none}
 .nav-row{display:flex;align-items:center;gap:2px}
@@ -70,7 +70,7 @@ a.org-history{color:var(--muted);text-decoration:none}a.org-history:hover{color:
 .tree ul.node-sources a:hover,.tree ul.node-sources a.cur{color:var(--ink)}
 .side-footer{flex:none;border-top:1px solid var(--line);padding:3px 0 max(3px,env(safe-area-inset-bottom))}
 .side-utility{display:flex;align-items:center;gap:var(--s2);padding:6px 10px;min-width:0}
-/* The account button's one status dot, left of the name, and the lines that say why (ui/app/heartbeat.js) */
+/* The account button's one status dot, left of the name, and the lines that say why (ui/app/heartbeat.ts) */
 .account-dot{width:8px;height:8px;flex:none;border-radius:50%}.account-dot[hidden]{display:none}
 .account-dot[data-level="bad"]{background:var(--fail)}.account-dot[data-level="warn"]{background:var(--wait)}
 .account-status[hidden]{display:none}
@@ -137,7 +137,7 @@ html.in-setup #nav-inboxes-section,html.in-setup #gs-org-hint,html.in-setup #cha
 .tree li.org-group>.noderow{--tree-from:calc(50% + var(--t-label) / 2)}
 .tree li.dept{--tree-up:4px}
 .tree li.dept>.noderow .node{font-weight:600}
-/* The top of the chart (ui/app/sidebar.js renderTree): its row reads as a manager's without the chevron; what reports to it
+/* The top of the chart (ui/app/sidebar.ts renderTree): its row reads as a manager's without the chevron; what reports to it
    sits beside it, not under it. */
 .tree li.org-top>.noderow .node{font-weight:600}
 /* A bot or human after a group at the top is spaced like the next group, so it does not read as the group's last row. */
@@ -156,7 +156,7 @@ html.in-setup #nav-inboxes-section,html.in-setup #gs-org-hint,html.in-setup #cha
 .tree li.org-new{padding:2px 0 2px var(--tree-lead);display:flex}
 /* Over the tree's lines, which are drawn above the rows. */
 .tree .noderow.drop-target,.tree .org-no-group.drop-target{position:relative;z-index:1;outline:var(--focus-ring);outline-offset:var(--focus-offset);border-radius:6px}
-/* A report's place among its manager's reports: a line where it will go (ui/app/sidebar.js). */
+/* A report's place among its manager's reports: a line where it will go (ui/app/sidebar.ts). */
 #tree .node:is(.drop-before,.drop-after,.drop-refused){position:relative;z-index:1}
 #tree .node.drop-before{box-shadow:0 -2px 0 var(--ink)}#tree .node.drop-after{box-shadow:0 2px 0 var(--ink)}
 #tree .node.drop-refused{outline:2px dashed var(--muted);outline-offset:1px;border-radius:6px;cursor:not-allowed}
@@ -192,7 +192,7 @@ html.in-setup #nav-inboxes-section,html.in-setup #gs-org-hint,html.in-setup #cha
 .tree a.node.cur{background:var(--surface2);font-weight:600}
 .tree a.node.planned{color:var(--muted)}.tree a.node.planned .av{opacity:.35;filter:saturate(.4)}
 .tree a.node.paused{opacity:.6}
-/* A Recruiting seat: a role with no bot yet (ui/app/sidebar.js renderTree). */
+/* A Recruiting seat: a role with no bot yet (ui/app/sidebar.ts renderTree). */
 .tree .node.seat{flex:1;display:flex;align-items:center;gap:var(--s2);padding:6px;border-radius:6px;color:var(--muted);font-size:var(--t-base);min-width:0;cursor:pointer;text-decoration:none}
 .tree .node.seat .nm{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .tree .node.seat .seat-icon{font-size:16px;width:20px;text-align:center}
@@ -206,7 +206,7 @@ html.in-setup #nav-inboxes-section,html.in-setup #gs-org-hint,html.in-setup #cha
 
 .bot-paused-badge{display:inline-flex;align-items:center;gap:3px;white-space:nowrap;flex-shrink:0}
 
-/* ---- The current row's bar (ui/app/motion.js navIndicator). Kept apart from the rules above: one 2px ink bar in
+/* ---- The current row's bar (ui/app/motion.ts navIndicator). Kept apart from the rules above: one 2px ink bar in
    the scrolling list, moved onto whichever row is current (a page link, a teammate, a group, a mailbox) and sliding
    there when the page changes. The row keeps its own background, so without the script it reads as before. Transform
    only; it snaps (no slide) on first paint, when the list itself moves, and under reduced motion. The one bar the

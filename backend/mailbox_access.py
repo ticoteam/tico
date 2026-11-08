@@ -197,6 +197,28 @@ def row_by_id(c, mailbox_id):
     return dict(found) if found else None
 
 
+def row_by_address(c, address):
+    """The mailbox row for an address, or None. Reads only: nothing is made."""
+    return _row(c, address)
+
+
+def feeds_directory(c, row):
+    """Whether this mailbox's mail feeds the Directory (backend/entities/ingest.py). It does unless its owner turned it
+    off. A bot's inbox, a mailbox no person owns that a bot is granted on, always does."""
+    if not row:
+        return False
+    if row.get("feeds_directory", 1):
+        return True
+    if row.get("person_id"):
+        return False
+    return (
+        c.execute(
+            "SELECT 1 FROM mailbox_accesses WHERE mailbox_id=? AND grantee_type='bot' LIMIT 1", (row["id"],)
+        ).fetchone()
+        is not None
+    )
+
+
 def stopped(c):
     """The addresses an admin or their person stopped using in Tico: no computer syncs or acts for them."""
     try:
@@ -569,6 +591,18 @@ def stop(c, actor, mailbox_id):
         return row
     c.execute("UPDATE mailboxes SET status='stopped', updated_at=? WHERE id=?", (H.now(), row["id"]))
     H.event(c, _actor_ref(actor), "mailbox.stopped", row["id"], {"address": row["address"]})
+    return row_by_id(c, row["id"])
+
+
+def set_feeds_directory(c, actor, mailbox_id, on):
+    """Turn a mailbox's feed into the Directory on or off. Its person (or an admin, for a shared inbox) decides. Turning it
+    off stops new ingest; what it alone made stops showing (visible.py counts only feeding mailboxes)."""
+    row = _require_row(c, mailbox_id)
+    _manager(c, actor, row, "switch its feed into the Directory")
+    if bool(row.get("feeds_directory", 1)) == bool(on):
+        return row
+    c.execute("UPDATE mailboxes SET feeds_directory=?, updated_at=? WHERE id=?", (1 if on else 0, H.now(), row["id"]))
+    H.event(c, _actor_ref(actor), "mailbox.directory_feed", row["id"], {"address": row["address"], "on": bool(on)})
     return row_by_id(c, row["id"])
 
 
