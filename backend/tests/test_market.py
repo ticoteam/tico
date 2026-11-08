@@ -353,8 +353,8 @@ def test_graph_reads_share_market_permissions_and_hide_inactive_entities(api):
         M.create_edge(c, M.SEED_ACTOR, src='company/self', dst='company/retired', rel='employs')
         M.create_edge(c, M.SEED_ACTOR, src='company/merged', dst='company/self', rel='employs')
         M.create_edge(c, M.SEED_ACTOR, src='company/self', dst='company/neighbor', rel='formerly', until='2000-01-01')
-        c.execute("UPDATE market_entities SET status='retired' WHERE id='company/retired'")
-        c.execute("UPDATE market_entities SET status='merged' WHERE id='company/merged'")
+        c.execute("UPDATE entities SET status='retired' WHERE id='company/retired'")
+        c.execute("UPDATE entities SET status='merged' WHERE id='company/merged'")
     get(api, 'market/graph', token='invalid-token', expected=401)
     computer = runner(api)
     get(api, 'market/graph', token=computer['token'], expected=403)
@@ -476,7 +476,7 @@ def test_applying_an_insight_makes_an_entity_and_sets_its_verified_date(api, tmp
         {"evidence": evidence, "entity_id": "company/contoso", "last_verified_at": "2026-10-02"},
     )
     with api.app.state.store.read() as c:
-        row = c.execute("SELECT last_verified_at FROM market_entities WHERE id='company/contoso'").fetchone()
+        row = c.execute("SELECT last_verified_at FROM entities WHERE id='company/contoso'").fetchone()
     assert row[0] == "2026-10-02"
 
 
@@ -504,9 +504,7 @@ def test_applying_a_verified_date_to_an_entity_with_none_sets_it_and_applies_the
         {"evidence": evidence, "entity": {"id": "company/fabrikam", "type": "company", "name": "Fabrikam"}},
     )
     with api.app.state.store.read() as c:
-        assert (
-            c.execute("SELECT last_verified_at FROM market_entities WHERE id='company/fabrikam'").fetchone()[0] is None
-        )
+        assert c.execute("SELECT last_verified_at FROM entities WHERE id='company/fabrikam'").fetchone()[0] is None
     post(
         api,
         "market/insights/i-check/apply",
@@ -514,8 +512,7 @@ def test_applying_a_verified_date_to_an_entity_with_none_sets_it_and_applies_the
     )
     with api.app.state.store.read() as c:
         assert (
-            c.execute("SELECT last_verified_at FROM market_entities WHERE id='company/fabrikam'").fetchone()[0]
-            == "2026-11-03"
+            c.execute("SELECT last_verified_at FROM entities WHERE id='company/fabrikam'").fetchone()[0] == "2026-11-03"
         )
         assert c.execute("SELECT status FROM market_insights WHERE id='i-check'").fetchone()[0] == "applied"
 
@@ -534,8 +531,7 @@ def test_a_new_entity_applied_with_a_verified_date_keeps_it(api, tmp_path):
     )
     with api.app.state.store.read() as c:
         assert (
-            c.execute("SELECT last_verified_at FROM market_entities WHERE id='company/initech'").fetchone()[0]
-            == "2026-11-03"
+            c.execute("SELECT last_verified_at FROM entities WHERE id='company/initech'").fetchone()[0] == "2026-11-03"
         )
 
 
@@ -566,8 +562,8 @@ def test_a_core_company_verified_31_days_ago_is_reported_stale_by_the_sweep(api,
     _librarian(api)
     today = date(2026, 11, 4)
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE market_entities SET tier='core', last_verified_at='2026-10-04' WHERE id='company/acme'")
-        c.execute("UPDATE market_entities SET tier='core', last_verified_at='2026-10-06' WHERE id='company/brightline'")
+        c.execute("UPDATE entities SET tier='core', last_verified_at='2026-10-04' WHERE id='company/acme'")
+        c.execute("UPDATE entities SET tier='core', last_verified_at='2026-10-06' WHERE id='company/brightline'")
         out = M.sweep(
             c,
             "bot:librarian",
@@ -583,7 +579,7 @@ def test_an_impossible_calendar_day_is_refused_on_apply_to_an_entity_or_a_new_on
     _seed(api, tmp_path)
     _apply_insights(api, "i-feb", "i-feb-new")
     with api.app.state.store.read() as c:
-        before = c.execute("SELECT last_verified_at FROM market_entities WHERE id='company/acme'").fetchone()[0]
+        before = c.execute("SELECT last_verified_at FROM entities WHERE id='company/acme'").fetchone()[0]
     evidence = {"source_kind": "site", "source_url": "https://acme.example/feb", "quote": "Q", "our_read": "R"}
     r = api.post(
         "/api/v2/market/insights/i-feb/apply",
@@ -615,5 +611,5 @@ def test_an_impossible_calendar_day_is_refused_on_apply_to_an_entity_or_a_new_on
             ).fetchone()[0]
             == 0
         )
-        assert c.execute("SELECT COUNT(*) FROM market_entities WHERE id='company/ghostco'").fetchone()[0] == 0
-        assert c.execute("SELECT last_verified_at FROM market_entities WHERE id='company/acme'").fetchone()[0] == before
+        assert c.execute("SELECT COUNT(*) FROM entities WHERE id='company/ghostco'").fetchone()[0] == 0
+        assert c.execute("SELECT last_verified_at FROM entities WHERE id='company/acme'").fetchone()[0] == before
