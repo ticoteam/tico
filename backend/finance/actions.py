@@ -28,6 +28,7 @@ from . import (
     handlers,
     jobs,
     mirror,
+    receipts,
     payments,
     subscriptions,
 )
@@ -143,6 +144,7 @@ PLANNERS: dict[str, handlers.Planner] = {
     **topups.PLANNERS,
     **attribution.PLANNERS,
     **campaigns.PLANNERS,
+    **receipts.PLANNERS,
     **subscriptions.PLANNERS,
     **vendors.PLANNERS,
 }
@@ -1129,6 +1131,7 @@ DEV_COPY_KEPT = (
     "fin_invoice_reminders",
     "fin_ad_accounts",
     "fin_ad_campaigns",
+    "fin_receipts",
     "fin_ad_spends",
     "fin_ad_warnings",
     "fin_attributions",
