@@ -769,7 +769,10 @@ pub async fn finish(path: &Path, aid: &str, turn: &Env, skip: &[String], memory:
             .map(|a| crate::gitcred::shell_quote(a))
             .collect::<Vec<_>>()
             .join(" ");
-        let stashed = !g(
+        // A rebase autostashes a dirty tree, and git restores that stash without its index: a staged version would
+        // come back as the working tree's. So with any change left in the tree, the commits wait for the next turn
+        // (or the push's catch-up merge), as they do for a merge.
+        if !g(
             path,
             &env,
             &["status", "--porcelain", "--untracked-files=no"],
@@ -778,12 +781,11 @@ pub async fn finish(path: &Path, aid: &str, turn: &Env, skip: &[String], memory:
         .await?
         .stdout
         .trim()
-        .is_empty();
-        let mut rebase = vec!["rebase", "--quiet"];
-        if stashed {
-            rebase.push("--autostash");
+        .is_empty()
+        {
+            return Ok(String::new());
         }
-        rebase.extend(["--exec", &stamp, "@{u}"]);
+        let rebase = ["rebase", "--quiet", "--exec", &stamp, "@{u}"];
         if g(path, &env, &rebase, timeout).await?.ok() {
             return Ok(String::new());
         }
@@ -1387,7 +1389,7 @@ impl Lanes {
     }
 
     /// The checkout if it is free and no person waits for it (a task turn's refresh).
-    fn try_checkout(&self, bot: &str) -> Option<OwnedMutexGuard<()>> {
+    pub fn try_checkout(&self, bot: &str) -> Option<OwnedMutexGuard<()>> {
         if self.person_waiting(bot) {
             return None;
         }

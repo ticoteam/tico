@@ -984,14 +984,57 @@ async fn a_memory_commit_takes_only_the_memory_folders_and_leaves_other_staged_c
         "AGENT.md",
         "the memory commit must not delete AGENT.md"
     );
-    // The later rebase autostashes and restores a dirty tree, so the deletion comes back unstaged: still
-    // uncommitted, which is what the bot's own next commit needs.
-    let status = sh(&main, &["status", "--porcelain"]);
-    assert!(
-        status
-            .lines()
-            .any(|l| l.contains('D') && l.ends_with("AGENT.md")),
-        "the deletion stays uncommitted: {status}"
+    assert_eq!(
+        sh(&main, &["diff", "--cached", "--name-only"]),
+        "AGENT.md",
+        "the deletion stays staged for the bot's own commit"
+    );
+}
+
+#[tokio::test]
+async fn a_memory_pass_keeps_a_file_staged_in_one_version_and_edited_in_another() {
+    let tmp = Tmp::new();
+    let (bare, _seed) = remote(&tmp.0, "bot-versions");
+    let projects = tmp.0.join("projects");
+    std::fs::create_dir_all(&projects).unwrap();
+    let main = projects.join("bot-versions");
+    sh(
+        &projects,
+        &[
+            "clone",
+            "-q",
+            bare.to_str().unwrap(),
+            main.to_str().unwrap(),
+        ],
+    );
+    let env = turn_env(&tmp.0, &[]);
+    std::fs::write(main.join("code.txt"), "base\n").unwrap();
+    sh(&main, &["add", "code.txt"]);
+    sh(&main, &["commit", "-qm", "code"]);
+    sh(&main, &["push", "-q", "origin", "HEAD:main"]);
+
+    // Version A is staged; the working tree then moves on to version B.
+    std::fs::write(main.join("code.txt"), "version A\n").unwrap();
+    sh(&main, &["add", "code.txt"]);
+    std::fs::write(main.join("code.txt"), "version B\n").unwrap();
+    std::fs::create_dir_all(main.join("memory")).unwrap();
+    std::fs::write(main.join("memory/lesson.md"), "keep tests fast\n").unwrap();
+
+    assert_eq!(sessions::finish(&main, "run-4", &env, &[], true).await, "");
+    assert_eq!(
+        sh(&main, &["show", ":code.txt"]),
+        "version A",
+        "the staged snapshot survives"
+    );
+    assert_eq!(
+        std::fs::read_to_string(main.join("code.txt")).unwrap(),
+        "version B\n",
+        "the working tree survives"
+    );
+    assert_eq!(
+        sh(&main, &["show", "--name-only", "--format=", "HEAD"]),
+        "memory/lesson.md",
+        "the memory commit takes only memory/"
     );
 }
 
@@ -1515,6 +1558,111 @@ async fn a_checkout_with_an_unpushed_commit_is_left_alone_and_still_reports_the_
         "no commit is dropped"
     );
     assert!(path.join(".git").is_dir(), "the folder stays");
+}
+
+/// A clone whose own commit deleted AGENT.md and was pushed; then GitHub's copy is reverted from the seed.
+async fn wiped_clone(root: &Path, name: &str, env: &Env) -> (PathBuf, PathBuf) {
+    let (bare, seed) = remote(root, name);
+    let path = root.join("projects").join(name);
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    assert_eq!(
+        fetchrepo::clone_repository(
+            &path,
+            &format!("org/{name}"),
+            env,
+            Some(&bare.display().to_string())
+        )
+        .await,
+        ("cloned", String::new())
+    );
+    sh(&path, &["rm", "-q", "AGENT.md"]);
+    sh(&path, &["commit", "-qm", "Memory from run wipe"]);
+    sh(&path, &["push", "-q", "origin", "HEAD:main"]);
+    sh(&seed, &["pull", "-q"]);
+    sh(&seed, &["revert", "--no-edit", "HEAD"]);
+    sh(&seed, &["push", "-q", "origin", "HEAD:main"]);
+    assert!(!path.join("AGENT.md").exists());
+    (path, seed)
+}
+
+#[tokio::test]
+async fn healing_never_overwrites_an_ignored_local_file_that_github_now_tracks() {
+    let tmp = Tmp::new();
+    let env = turn_env(&tmp.0, &[]);
+    let (path, seed) = wiped_clone(&tmp.0, "bot-ignored", &env).await;
+
+    // GitHub now tracks notes.txt; this checkout ignores it and holds new work in it.
+    std::fs::write(seed.join("notes.txt"), "upstream\n").unwrap();
+    sh(&seed, &["add", "-A"]);
+    sh(&seed, &["commit", "-qm", "notes"]);
+    sh(&seed, &["push", "-q", "origin", "HEAD:main"]);
+    std::fs::write(path.join(".git/info/exclude"), "notes.txt\n").unwrap();
+    std::fs::write(path.join("notes.txt"), "local work\n").unwrap();
+    let head = sh(&path, &["rev-parse", "HEAD"]);
+
+    let problem = fetchrepo::heal_checkout(&path, &env).await;
+    assert!(!problem.is_empty(), "the heal refuses and reports");
+    assert_eq!(
+        std::fs::read_to_string(path.join("notes.txt")).unwrap(),
+        "local work\n"
+    );
+    assert_eq!(sh(&path, &["rev-parse", "HEAD"]), head);
+    assert!(!path.join("AGENT.md").exists());
+}
+
+#[tokio::test]
+async fn a_checkout_held_by_a_turn_is_not_healed_until_the_turn_lets_go() {
+    let tmp = Tmp::new();
+    let env = turn_env(&tmp.0, &[]);
+    let (path, _seed) = wiped_clone(&tmp.0, "bot-busy", &env).await;
+    let client = crate::client::Client::new("http://127.0.0.1:9", "t", 1, 0).unwrap();
+    let lanes = crate::sessions::Lanes::new(std::sync::Arc::new(
+        crate::repositories::Repositories::new(&tmp.0, &tmp.0, client),
+    ));
+
+    let turn = lanes.checkout("bot-busy").lock_owned().await;
+    let problem = fetchrepo::heal_free_checkout(&lanes, "bot-busy", &path, &env).await;
+    assert!(!problem.is_empty(), "a busy checkout is skipped");
+    assert!(!path.join("AGENT.md").exists(), "and left as it is");
+    drop(turn);
+
+    assert_eq!(
+        fetchrepo::heal_free_checkout(&lanes, "bot-busy", &path, &env).await,
+        ""
+    );
+    assert!(path.join("AGENT.md").is_file());
+}
+
+#[tokio::test]
+async fn a_missing_agent_file_inside_the_retry_window_answers_from_the_cache_without_git() {
+    let tmp = Tmp::new();
+    let projects = tmp.0.join("workspace");
+    std::fs::create_dir_all(&projects).unwrap();
+    let bot = format!("cache-{}", uuid::Uuid::new_v4().simple());
+    let config_path = tmp.0.join("runner.json");
+    std::fs::write(
+        &config_path,
+        json!({"projects_dir": projects, "repos": {}}).to_string(),
+    )
+    .unwrap();
+    let config = crate::config::Config::load(&config_path).unwrap();
+    let client = crate::client::Client::new("http://127.0.0.1:9", "t", 1, 0).unwrap();
+    let runner = crate::runner::Runner::new(
+        config,
+        client,
+        crate::state::State::open(&tmp.0.join("state")).unwrap(),
+    );
+    let entry = json!({"bot": bot, "repository": "org/cache-bot", "config": {}, "generation": 1});
+    let path = projects.join("cache-bot");
+
+    // No GitHub access here: the first try is recorded as this bot's problem.
+    let first = runner.fetch_repository(&bot, &entry, &path).await;
+    assert!(!first.is_empty());
+
+    // The folder becomes a link into the install, which the repository-identity checks refuse. Inside the
+    // retry window the recorded answer comes back, and those checks (which run git) are never reached.
+    std::os::unix::fs::symlink(crate::env::root(), &path).unwrap();
+    assert_eq!(runner.fetch_repository(&bot, &entry, &path).await, first);
 }
 
 #[tokio::test]

@@ -200,6 +200,20 @@ pub async fn heal_checkout(path: &Path, env: &Env) -> String {
     }
 }
 
+/// heal_checkout under the bot's checkout lock, held for the whole heal: a turn holding the checkout (or a person
+/// waiting for it) is never raced, since a turn may switch branches under the heal. A busy checkout is skipped.
+pub async fn heal_free_checkout(
+    lanes: &crate::sessions::Lanes,
+    bot: &str,
+    path: &Path,
+    env: &Env,
+) -> String {
+    let Some(_checkout) = lanes.try_checkout(bot) else {
+        return "its checkout is busy with a turn; it is healed at a later check".into();
+    };
+    heal_checkout(path, env).await
+}
+
 async fn fast_forward(path: &Path, env: &Env) -> Result<(), String> {
     let fetched = gitrun::git_as_bot(path, env, &["fetch", "--quiet", "--no-tags"], 120)
         .await
@@ -236,9 +250,21 @@ async fn fast_forward(path: &Path, env: &Env) -> Result<(), String> {
     if !ancestor.ok() {
         return Err("it has local commits GitHub does not have, so it cannot fast-forward".into());
     }
-    let merged = gitrun::git_as_bot(path, env, &["merge", "--ff-only", "--quiet", &tip], 120)
-        .await
-        .map_err(|f| fault_text(&f))?;
+    // Ignored local files are never overwritten: a file the bot ignores and holds work in is refused, not replaced.
+    let merged = gitrun::git_as_bot(
+        path,
+        env,
+        &[
+            "merge",
+            "--ff-only",
+            "--quiet",
+            "--no-overwrite-ignore",
+            &tip,
+        ],
+        120,
+    )
+    .await
+    .map_err(|f| fault_text(&f))?;
     if !merged.ok() {
         return Err(format!(
             "fast-forward refused: {}",
@@ -295,9 +321,6 @@ impl Runner {
     /// Clone the bot's repository when it is assigned here and has no checkout. The readiness problem to show,
     /// or "" when the checkout is now here (or an independent bot has no link).
     pub async fn fetch_repository(&self, bot: &str, entry: &Value, path: &Path) -> String {
-        if let Err(problem) = crate::repo_safety::outside_installation(path) {
-            return problem;
-        }
         let mut repository = text_of(&entry["repository"]);
         let config = &entry["config"];
         let personal = repository.is_empty() && truthy(config.get("shared_from"));
@@ -314,18 +337,22 @@ impl Runner {
             path.display(),
             entry["generation"]
         );
+        // The retry window's answer comes first: the repository-identity checks below run git on every call.
         let last = note(bot);
         if let Some((k, at, problem)) = &last {
             if *k == key && at.elapsed() < Duration::from_secs(FETCH_RETRY_S) {
                 return problem.clone();
             }
         }
+        if let Err(problem) = crate::repo_safety::outside_installation(path) {
+            return problem;
+        }
         if path.join(".git").exists() && empty_clone(path).await {
             discard_partial(path, true); // an older runner's clone of the still-empty repository
         }
         let mut problem = if path.join(".git").exists() {
             let healed = match self.github_access(bot, entry).await {
-                Ok(env) => heal_checkout(path, &env).await,
+                Ok(env) => heal_free_checkout(&self.lanes, bot, path, &env).await,
                 Err(why) => why,
             };
             if healed.is_empty() {
