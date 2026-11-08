@@ -154,7 +154,9 @@ def modify(config, items):
 # GitHub's job logs prefix every line with a timestamp (the first with a byte order mark); pytest colours its summary.
 LOG_PREFIX = re.compile(r"^﻿?\d{4}-\d\d-\d\dT[\d:.]+Z ")
 ANSI = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
-SUMMARY = re.compile(r"^(?:FAILED|ERROR) (?P<test>[^\s:]+\.py::.+?)(?: - .*)?$")
+# A parameter id may hold " - " itself: the shortest bracketed id that leaves either the end or " - message" wins.
+SUMMARY = re.compile(r"^(?:FAILED|ERROR) (?P<test>[^\s:]+\.py::[^\s\[]+(?:\[.*?\])?)(?: - .*)?$")
+FILES = "Test files: "  # pr_checks.run prints the files a leg runs on this line
 
 
 def _lines(log):
@@ -171,6 +173,14 @@ def failed_tests(log):
         if hit and hit.group("test") not in found:
             found.append(hit.group("test"))
     return found
+
+
+def test_files(log):
+    """The files a leg ran, from the line pr_checks.run prints; None for a log without one (older runs)."""
+    for line in _lines(log):
+        if line.startswith(FILES):
+            return line[len(FILES) :].split()
+    return None
 
 
 def tested_commit(log):
@@ -199,8 +209,8 @@ def candidates(runs):
 
 
 def observations(gh, repo, runs):
-    """One observation per attempt of each run: the commit it tested (`key`), whether every pytest leg passed, and the
-    tests that failed with the job that failed them. A merge queue group's head sha is the commit it tested; a pull
+    """One observation per attempt of each run: the commit it tested (`key`), its plan job, its pytest legs, and the
+    tests that failed with the leg that failed them. A merge queue group's head sha is the commit it tested; a pull
     request run tested the branch merged into main, which only a job log names."""
     out = []
     for r in runs:
@@ -208,35 +218,41 @@ def observations(gh, repo, runs):
         attempts = []
         for attempt in range(1, r["run_attempt"] + 1):
             jobs = gh.api(f"repos/{repo}/actions/runs/{r['id']}/attempts/{attempt}/jobs?per_page=100")["jobs"]
-            legs = [j for j in jobs if TEST_JOB.fullmatch(j["name"])]
+            plan = next((j["id"] for j in jobs if j["name"] == "plan"), None)
+            legs = [
+                {"id": j["id"], "name": j["name"], "conclusion": j["conclusion"], "url": j["html_url"]}
+                for j in jobs
+                if TEST_JOB.fullmatch(j["name"])
+            ]
             failed, crowded = {}, []
-            for j in legs:
-                if j["conclusion"] != "failure":
+            for leg in legs:
+                if leg["conclusion"] != "failure":
                     continue
-                log = gh.log(j["id"])
+                log = gh.log(leg["id"])
                 if log is None:
                     continue
                 commit = commit or tested_commit(log)
                 names = failed_tests(log)
                 if len(names) > MAX_FAILURES_PER_JOB:
-                    crowded.append(j["html_url"])
+                    crowded.append(leg["url"])
                     continue
                 for name in names:
-                    failed.setdefault(name, j["html_url"])
-            passed = bool(legs) and all(j["conclusion"] == "success" for j in legs)
-            attempts.append((attempt, legs, passed, failed, crowded))
+                    failed.setdefault(name, {"url": leg["url"], "leg": leg["name"]})
+            attempts.append((attempt, plan, legs, failed, crowded))
         if commit is None:
             # A pull request run with no failed leg to read: any pytest leg's log names its merge commit.
-            legs = next((legs for _, legs, _, _, _ in reversed(attempts) if legs), [])
+            legs = next((legs for _, _, legs, _, _ in reversed(attempts) if legs), [])
             log = gh.log(legs[0]["id"]) if legs else None
             commit = tested_commit(log) if log else None
-        for attempt, _, passed, failed, crowded in attempts:
+        for attempt, plan, legs, failed, crowded in attempts:
             out.append(
                 {
                     "key": commit or f"run {r['id']}",
+                    "run": r["id"],
+                    "plan": plan,
                     "url": f"{r['html_url']}/attempts/{attempt}",
                     "created": r["created_at"][:10],
-                    "passed": passed,
+                    "legs": legs,
                     "failed": failed,
                     "crowded": crowded,
                 }
@@ -244,24 +260,42 @@ def observations(gh, repo, runs):
     return out
 
 
-def flips(observed):
-    """The tests that failed in one observation and passed in another of the same commit, by test id. A passing
-    observation ran every selected test (same commit, same selection) and none failed."""
+def _passed(test, failure, failing, other, files):
+    """Whether `other` (an attempt of the same commit) passed `test`: a leg of it that ran the test's file passed. A
+    leg's log names its files; an older log does not, and then only the same leg of the same plan job counts (a
+    "re-run failed jobs" attempt keeps the plan job, so each leg runs the files it ran before)."""
+    path = test.split("::")[0]
+    for leg in other["legs"]:
+        if leg["conclusion"] != "success":
+            continue
+        same_plan = other["run"] == failing["run"] and other["plan"] is not None and other["plan"] == failing["plan"]
+        if same_plan and leg["name"] == failure["leg"]:
+            return True
+        listed = files(leg["id"])
+        if listed is not None and path in listed:
+            return True
+    return False
+
+
+def flips(observed, files):
+    """The tests that failed in one observation and passed in another of the same commit, by test id. `files(job id)`
+    is the list of files a leg ran, or None when its log does not say."""
     by_key = {}
     for o in observed:
         by_key.setdefault(o["key"], []).append(o)
     found = {}
     for key, group in by_key.items():
-        passes = [o["url"] for o in group if o["passed"]]
-        if not passes:
-            continue
         for o in group:
-            for test, job_url in o["failed"].items():
-                flip = found.setdefault(
-                    test, {"commit": key, "failed": [], "passed": passes, "first_seen": o["created"]}
-                )
-                if flip["commit"] == key and job_url not in flip["failed"]:
-                    flip["failed"].append(job_url)
+            for test, failure in o["failed"].items():
+                passes = [p["url"] for p in group if p is not o and _passed(test, failure, o, p, files)]
+                if not passes:
+                    continue
+                flip = found.setdefault(test, {"commit": key, "failed": [], "passed": [], "first_seen": o["created"]})
+                if flip["commit"] != key:
+                    continue
+                if failure["url"] not in flip["failed"]:
+                    flip["failed"].append(failure["url"])
+                flip["passed"] += [u for u in passes if u not in flip["passed"]]
                 flip["first_seen"] = min(flip["first_seen"], o["created"])
     return found
 
@@ -371,7 +405,15 @@ def detect(gh, repo, days, today, quarantined):
     """(markdown, proposed entries)."""
     runs = candidates(runs_since(gh, repo, days, today))
     observed = observations(gh, repo, runs)
-    found = flips(observed)
+    listed = {}
+
+    def files(job_id):
+        if job_id not in listed:
+            log = gh.log(job_id)
+            listed[job_id] = test_files(log) if log else None
+        return listed[job_id]
+
+    found = flips(observed, files)
     proposed = propose(found, quarantined)
     lines = [f"Read {len(runs)} PR-check run(s) that could flip, over {days + 1} day(s).", ""]
     proposed_tests = {p["test"] for p in proposed}

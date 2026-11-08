@@ -112,10 +112,48 @@ def run_pytest(tmp_path, *args):
 
 
 def test_pr_checks_run_a_quarantined_test_without_failing_on_it(tmp_path):
-    result = run_pytest(tmp_path, "--quarantine")
+    result = run_pytest(tmp_path, "--quarantine", "-o", "junit_family=xunit1", "--junitxml=r.xml")
     assert result.returncode == 0, result.stdout + result.stderr
     assert "1 passed, 3 xfailed" in result.stdout
     assert "quarantined: ci/quarantine/" in result.stdout
+    # pr_checks.run reads the report: a quarantined test that ran is a skipped element of type pytest.xfail.
+    report = (tmp_path / "r.xml").read_text()
+    assert report.count('type="pytest.xfail"') == 3 and 'type="pytest.skip"' not in report
+
+
+def junit(*skips):
+    cases = "".join(
+        f'<testcase classname="t" name="n{i}">'
+        + (f'<skipped type="{kind}" message="m"/>' if kind else "")
+        + "</testcase>"
+        for i, kind in enumerate(skips)
+    )
+    return f'<?xml version="1.0"?><testsuites><testsuite name="pytest">{cases}</testsuite></testsuites>'
+
+
+def test_a_suite_whose_only_tests_are_quarantined_failures_passes_but_an_all_skipped_one_does_not(
+    tmp_path, monkeypatch
+):
+    """pr_checks.run fails a Python suite that skipped every test. A quarantined test that failed ran: it is an xfail,
+    which JUnit writes as a skipped element too, and must not make the suite fail."""
+    plan = {"matrix": {"include": [{"suite": "python-1", "files": ["backend/tests/test_x.py"]}]}}
+    (tmp_path / "backend/tests").mkdir(parents=True)
+    (tmp_path / "backend/tests/test_x.py").touch()
+    (tmp_path / "plan.json").write_text(json.dumps(plan))
+    report = {}
+
+    def fake(command, **kw):
+        (tmp_path / "ci-results/python-1.xml").write_text(report["xml"])
+        return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(checks.subprocess, "run", fake)
+    report["xml"] = junit("pytest.xfail")
+    assert checks.run(tmp_path / "plan.json", "python-1", root=tmp_path, quarantine=True) == 0
+    report["xml"] = junit("pytest.skip", None)
+    assert checks.run(tmp_path / "plan.json", "python-1", root=tmp_path, quarantine=True) == 0
+    report["xml"] = junit("pytest.skip", "pytest.skip")
+    with pytest.raises(RuntimeError, match="skip every test"):
+        checks.run(tmp_path / "plan.json", "python-1", root=tmp_path, quarantine=True)
 
 
 def test_without_the_flag_a_quarantined_test_still_fails(tmp_path):
@@ -125,7 +163,7 @@ def test_without_the_flag_a_quarantined_test_still_fails(tmp_path):
 
 def test_the_root_conftest_wires_the_quarantine(request, tmp_path):
     """The repository's conftest registers --quarantine and marks quarantined items only when it is passed."""
-    assert request.config.getoption("--quarantine") is False
+    assert request.config.getoption("--quarantine") in (True, False)  # registered; CI runs this file with it on
     plugin = request.config.pluginmanager.get_plugin(str(ROOT / "conftest.py"))
     assert plugin is not None and hasattr(plugin, "pytest_collection_modifyitems")
     (tmp_path / "x.py").write_text("def test_a(): pass\n")
@@ -146,7 +184,7 @@ def test_the_root_conftest_wires_the_quarantine(request, tmp_path):
     assert mark.name == "xfail" and mark.kwargs["strict"] is False and mark.kwargs.get("run", True)
 
 
-def test_the_queue_and_pr_suites_pass_the_flag_and_release_validation_never_does(tmp_path, monkeypatch):
+def test_the_queue_and_pr_suites_pass_the_flag_and_release_validation_never_does(tmp_path, monkeypatch, capsys):
     plan = {"matrix": {"include": [{"suite": "python-1", "files": ["backend/tests/test_x.py"]}]}}
     (tmp_path / "backend/tests").mkdir(parents=True)
     (tmp_path / "backend/tests/test_x.py").touch()
@@ -159,6 +197,8 @@ def test_the_queue_and_pr_suites_pass_the_flag_and_release_validation_never_does
     assert "--quarantine" not in calls[-1]  # the release gate's incremental VMs call run() without it
     assert checks.run(tmp_path / "plan.json", "python-1", root=tmp_path, quarantine=True) == 1
     assert "--quarantine" in calls[-1] and calls[-1][-1] == "backend/tests/test_x.py"
+    # The job log names the files a leg ran: the pass evidence detection needs for a test in it.
+    assert quarantine.test_files(capsys.readouterr().out) == ["backend/tests/test_x.py"]
     workflows = ROOT / ".github/workflows"
     tests = yaml.safe_load((workflows / "pr-checks.yml").read_text())["jobs"]["tests"]
     step = next(s for s in tests["steps"] if s.get("name") == "Run selected tests")
@@ -185,6 +225,8 @@ def test_failed_tests_are_read_from_the_pytest_summary_of_a_job_log():
         "ERROR backend/tests/test_c.py::test_three - RuntimeError: fixture",
         "ERROR backend/tests/test_d.py - ImportError: no module",  # a collection error names no test
         "FAILED backend/tests/test_e.py::TestKind::test_four",
+        "FAILED backend/tests/test_f.py::test_five[foo - bar] - AssertionError: x[1] - y",
+        "FAILED backend/tests/test_g.py::test_six[a] - assert b[0] == 1",
         "some FAILED text that is not a summary line",
         "\x1b[31m===== 4 failed, 10 passed in 3.2s =====\x1b[0m",
     )
@@ -193,34 +235,49 @@ def test_failed_tests_are_read_from_the_pytest_summary_of_a_job_log():
         "backend/tests/test_b.py::test_two[case a-1]",
         "backend/tests/test_c.py::test_three",
         "backend/tests/test_e.py::TestKind::test_four",
+        "backend/tests/test_f.py::test_five[foo - bar]",
+        "backend/tests/test_g.py::test_six[a]",
     ]
     assert quarantine.tested_commit(text) == "b" * 40
     assert quarantine.tested_commit("no checkout here\n") is None
 
 
-def observation(key, passed=False, failed=(), crowded=(), url="https://github.com/r/actions/runs/1/attempts/1"):
+def observation(key, ran=(), failed=(), crowded=(), url="https://github.com/r/actions/runs/1/attempts/1", run=1):
+    """`ran`: the files a passing leg of this attempt ran; `failed`: tests that failed in its leg python-1."""
+    legs = [{"id": f"{url}:ok", "name": "python-2", "conclusion": "success", "url": url + "/ok"}] if ran else []
+    legs += [{"id": f"{url}:bad", "name": "python-1", "conclusion": "failure", "url": url + "/job"}] if failed else []
     return {
         "key": key,
+        "run": run,
+        "plan": None,
         "url": url,
         "created": "2026-11-07",
-        "passed": passed,
-        "failed": {test: url + "/job" for test in failed},
+        "legs": legs,
+        "failed": {test: {"url": url + "/job", "leg": "python-1"} for test in failed},
         "crowded": list(crowded),
+        "_ran": list(ran),
     }
 
 
+def files_from(observed):
+    return lambda job_id: next((o["_ran"] for o in observed if job_id == f"{o['url']}:ok"), None)
+
+
 def test_a_test_that_fails_and_passes_on_the_same_commit_is_a_flip():
-    found = quarantine.flips(
-        [
-            observation("c1", failed=["a.py::test_flaky", "a.py::test_broken"], url="u1"),
-            observation("c1", passed=True, url="u2"),
-            observation("c2", failed=["a.py::test_broken"], url="u3"),  # failed only: a real failure
-            observation("c2", failed=["a.py::test_broken"], url="u4"),
-            observation("c3", failed=["a.py::test_branch"], url="u5"),
-            observation("c4", passed=True, url="u6"),  # a pass on another commit proves nothing
-        ]
-    )
-    assert set(found) == {"a.py::test_flaky", "a.py::test_broken"}
+    observed = [
+        observation("c1", failed=["a.py::test_flaky", "a.py::test_broken"], url="u1"),
+        observation("c1", ran=["a.py"], url="u2"),
+        observation("c2", failed=["a.py::test_broken"], url="u3"),  # failed only: a real failure
+        observation("c2", failed=["a.py::test_broken"], url="u4"),
+        observation("c3", failed=["a.py::test_branch"], url="u5"),
+        observation("c4", ran=["a.py"], url="u6"),  # a pass on another commit proves nothing
+        observation("c5", failed=["b.py::test_alone"], url="u7"),
+        observation("c5", ran=["c.py"], failed=["d.py::test_other"], url="u8"),  # b.py never ran again
+        observation("c6", failed=["e.py::test_new"], url="u9"),
+        observation("c6", ran=["e.py"], failed=["f.py::test_new"], url="u10"),  # e.py passed though f.py failed
+    ]
+    found = quarantine.flips(observed, files_from(observed))
+    assert set(found) == {"a.py::test_flaky", "a.py::test_broken", "e.py::test_new"}
     assert found["a.py::test_flaky"] == {
         "commit": "c1",
         "failed": ["u1/job"],
@@ -231,8 +288,10 @@ def test_a_test_that_fails_and_passes_on_the_same_commit_is_a_flip():
 
 def test_a_job_with_many_failures_is_a_breakage_not_flakes():
     many = [f"a.py::test_{n}" for n in range(quarantine.MAX_FAILURES_PER_JOB + 1)]
-    observations = [observation("c1", failed=many), observation("c1", passed=True)]
-    assert quarantine.flips(observations)  # flips() trusts its input: the cap is applied when logs are read
+    observations = [observation("c1", failed=many), observation("c1", ran=["a.py"], url="u2")]
+    assert quarantine.flips(
+        observations, files_from(observations)
+    )  # flips() trusts its input: the cap is applied when logs are read
     gh = FakeGitHub(
         runs=[run(1, attempts=2)],
         jobs={
@@ -261,6 +320,10 @@ def job(ident, name, conclusion):
     return {"id": ident, "name": name, "conclusion": conclusion, "html_url": f"https://github.com/job/{ident}"}
 
 
+def flips_of(gh):
+    return quarantine.flips(quarantine.observations(gh, REPO, gh.runs), gh.files)
+
+
 class FakeGitHub:
     def __init__(self, runs, jobs, logs):
         self.runs, self.jobs, self.logs, self.calls = runs, jobs, logs, []
@@ -275,22 +338,66 @@ class FakeGitHub:
         self.calls.append(f"log {job_id}")
         return self.logs.get(job_id)
 
+    def files(self, job_id):
+        log = self.log(job_id)
+        return quarantine.test_files(log) if log else None
+
 
 def test_a_rerun_attempt_that_passes_flips_the_test_its_first_attempt_failed():
     flaky = "backend/tests/test_hub_command_tree.py::test_the_runner_lists_exactly_the_command_paths"
     gh = FakeGitHub(
         runs=[run(1, attempts=2)],
         jobs={
+            # "Re-run failed jobs": the plan job carries over (one id), so python-1 ran the same files again.
             (1, 1): [job(10, "plan", "success"), job(11, "python-1", "failure"), job(12, "python-2", "cancelled")],
-            (1, 2): [job(20, "plan", "success"), job(21, "python-1", "success"), job(22, "python-2", "success")],
+            (1, 2): [job(10, "plan", "success"), job(21, "python-1", "success"), job(22, "python-2", "success")],
         },
         logs={11: log(f"FAILED {flaky} - AssertionError")},
     )
-    found = quarantine.flips(quarantine.observations(gh, REPO, gh.runs))
+    found = flips_of(gh)
     assert list(found) == [flaky] and found[flaky]["commit"] == "c" * 40
     assert found[flaky]["passed"] == [f"https://github.com/{REPO}/actions/runs/1/attempts/2"]
-    # A browser or factory leg has no pytest ids, and a passing attempt needs no log at all.
+    # The same leg of the same plan passed: no log is needed for that.
     assert "log 21" not in gh.calls and "log 22" not in gh.calls
+
+
+def test_a_rerun_is_a_pass_only_for_the_tests_it_ran_again():
+    """A failed test passed only when a leg that ran its file passed: rerunning another leg proves nothing about it,
+    and a rerun of the whole run may pack files into other legs, so only a leg's own file list counts then."""
+    flaky = "backend/tests/test_runner_wire_contract.py::test_wire"
+    other = "backend/tests/test_other.py::test_other"
+    single = FakeGitHub(
+        runs=[run(1, attempts=2)],
+        jobs={
+            (1, 1): [job(10, "plan", "success"), job(11, "python-1", "failure"), job(12, "python-2", "failure")],
+            # Only python-2 was re-run; python-1 carries over, still failed.
+            (1, 2): [job(10, "plan", "success"), job(11, "python-1", "failure"), job(22, "python-2", "success")],
+        },
+        logs={
+            11: log(f"FAILED {flaky} - AssertionError", "Test files: backend/tests/test_runner_wire_contract.py"),
+            12: log(f"FAILED {other} - AssertionError", "Test files: backend/tests/test_other.py"),
+            22: log("Test files: backend/tests/test_other.py", "1 passed"),
+        },
+    )
+    assert list(flips_of(single)) == [other]
+    rerun_all = {
+        (1, 1): [job(10, "plan", "success"), job(11, "python-1", "failure"), job(12, "python-2", "success")],
+        (1, 2): [job(20, "plan", "success"), job(21, "python-1", "success"), job(22, "python-2", "success")],
+    }
+    failing = log(f"FAILED {flaky} - AssertionError")
+    unlisted = FakeGitHub(runs=[run(1, attempts=2)], jobs=rerun_all, logs={11: failing, 21: log("1 passed")})
+    assert flips_of(unlisted) == {}  # a new plan, and no file list to show python-1 ran the same file
+    listed = FakeGitHub(
+        runs=[run(1, attempts=2)],
+        jobs=rerun_all,
+        logs={
+            11: failing,
+            21: log("Test files: backend/tests/test_a.py"),
+            22: log(f"Test files: {flaky.split('::')[0]}"),
+        },
+    )
+    assert list(flips_of(listed)) == [flaky]
+    assert flips_of(listed)[flaky]["passed"] == [f"https://github.com/{REPO}/actions/runs/1/attempts/2"]
 
 
 def test_pull_request_runs_are_keyed_by_the_merge_commit_they_tested_not_the_branch_head():
@@ -311,11 +418,11 @@ def test_pull_request_runs_are_keyed_by_the_merge_commit_they_tested_not_the_bra
         },
         logs={
             11: log(f"FAILED {flaky} - TimeoutError", commit="1" * 40),
-            21: log("all passed", commit="2" * 40),  # main moved: another merge commit
-            31: log("all passed", commit="1" * 40),  # the same merge commit
+            21: log("Test files: backend/tests/test_e2e_mcp.py", commit="2" * 40),  # main moved: another commit
+            31: log("Test files: backend/tests/test_e2e_mcp.py", commit="1" * 40),  # the same merge commit
         },
     )
-    found = quarantine.flips(quarantine.observations(gh, REPO, gh.runs))
+    found = flips_of(gh)
     assert list(found) == [flaky] and found[flaky]["commit"] == "1" * 40
     assert found[flaky]["passed"] == [f"https://github.com/{REPO}/actions/runs/3/attempts/1"]
 

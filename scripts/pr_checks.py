@@ -1512,12 +1512,15 @@ def run(plan_path, suite, root=None, quarantine=False):
         if quarantine:
             command.append("--quarantine")
         command += files
+        print("Test files: " + " ".join(files), flush=True)  # flake_quarantine.test_files: what a rerun ran again
     (root / "ci-results").mkdir(exist_ok=True)
     rust = cargo_tests(job.get("crates", [])) if suite == "conformance" else 0
     result = subprocess.run(command, cwd=root, env=env)
     if result.returncode == 0 and not suite.startswith("browser-"):
         cases = list(ET.parse(root / "ci-results" / f"{suite}.xml").iter("testcase"))
-        if not any(t.find("skipped") is None for t in cases):
+        # A test that ran: no skipped element, or an xfail (a quarantined failure is one), which JUnit writes as one.
+        ran = [t for t in cases if t.find("skipped") is None or t.find("skipped").get("type") == "pytest.xfail"]
+        if not ran:
             raise RuntimeError("A Python job must pass at least one test, not skip every test")
     return result.returncode or rust
 
