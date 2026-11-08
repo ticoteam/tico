@@ -368,6 +368,53 @@ def test_the_migration_picks_the_output_stage_by_flow_order_not_creation_order(a
     assert stored == e_steps["Done"]
 
 
+# The stages the boot gives the legacy Product roadmap and Engineering types (roadmap_flow): Engineering's Done is closed.
+BOOTED_PRODUCT = [
+    {"name": "Suggested", "status": "open"},
+    {"name": "Exploring", "status": "doing"},
+    {"name": "Spec", "status": "review"},
+    {"name": "Approved", "status": "review"},
+    {"name": "Building", "status": "doing"},
+    {"name": "Shipped", "status": "done"},
+]
+BOOTED_ENGINEERING = [
+    {"name": "Todo", "status": "open"},
+    {"name": "Doing", "status": "doing"},
+    {"name": "In review", "status": "review"},
+    {"name": "Ready to ship", "status": "ready"},
+    {"name": "Done", "status": "closed"},
+]
+
+
+def test_booted_engineering_output_is_its_closed_done_stage_in_migration_and_overview(api):
+    # Product feeds a booted Engineering type, which has no done stage: its output is the closed Done stage (D56).
+    import importlib.util
+    from pathlib import Path
+
+    path = Path(__file__).resolve().parents[1] / "migrations" / "20261107210000_factory_output_stage.py"
+    spec = importlib.util.spec_from_file_location("migration_factory_output_stage_booted", path)
+    assert spec and spec.loader
+    migration = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(migration)
+
+    growth = make_factory(api, "Gro")
+    eng, e_steps = make_type(api, "Eng", steps=BOOTED_ENGINEERING, factory=growth)
+    prod, p_steps = make_type(api, "Prod", steps=BOOTED_PRODUCT, factory=growth)
+    link(api, prod, p_steps["Building"], eng)
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE factories SET output_stage_id=NULL WHERE id=?", (growth,))
+        migration.up(c)
+        stored = c.execute("SELECT output_stage_id FROM factories WHERE id=?", (growth,)).fetchone()[0]
+    assert stored == e_steps["Done"]
+
+    # Before any migration the overview falls back to the same stage: a card that reaches Done counts for the factory.
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE factories SET output_stage_id=NULL WHERE id=?", (growth,))
+    shipped = card(api, eng, e_steps["Todo"])
+    move(api, shipped["id"], step=e_steps["Done"])
+    assert overview(api)["factories"][0]["done"] == 1
+
+
 def test_a_lap_that_left_before_the_period_counts_when_it_returns_in_it(api):
     growth = make_factory(api, "Gro")
     prod, p_steps = make_type(api, "Prod", factory=growth)
@@ -382,18 +429,50 @@ def test_a_lap_that_left_before_the_period_counts_when_it_returns_in_it(api):
     assert overview(api, "1d")["loops"][0]["laps"] == 0
 
 
-def test_a_spawned_subtask_returning_ends_its_parents_lap(api):
+SPAWN_PRODUCT = [
+    {"name": "Doing", "status": "doing"},
+    {"name": "Waiting", "status": "review"},
+    {"name": "Validate", "status": "review"},
+    {"name": "Done", "status": "done"},
+]
+SPAWN_ENGINEERING = [{"name": "Doing", "status": "doing"}, {"name": "Done", "status": "done"}]
+
+
+def test_a_real_spawn_then_ship_then_resume_makes_one_spawn_lap(api):
+    # Product's Doing spawns a subtask on the way to Waiting; the subtask ships, and the parent resumes into Validate. No
+    # handoff records the parent's return (D64), so the lap is read from its own history.
     growth = make_factory(api, "Gro")
-    prod, p_steps = make_type(api, "Prod", factory=growth)
-    eng, e_steps = make_type(api, "Eng", factory=growth)
-    spawn = link(api, prod, p_steps["Doing"], eng, mode="spawn")
-    back = link(api, eng, e_steps["Doing"], prod)
+    prod, p_steps = make_type(api, "Prod", steps=SPAWN_PRODUCT, factory=growth)
+    eng, e_steps = make_type(api, "Eng", steps=SPAWN_ENGINEERING, factory=growth)
+    link(api, prod, p_steps["Doing"], eng, mode="spawn")
+    link(api, eng, e_steps["Done"], prod)  # the way back that makes a loop
     parent = card(api, prod, p_steps["Doing"])
-    subtask = card(api, eng, e_steps["Doing"])
-    handoff(api, spawn, subtask["id"], ago(hours=5), source=parent["id"])
-    handoff(api, back, subtask["id"], ago(hours=1))
+    move(api, parent["id"], step=p_steps["Waiting"])  # leaves the spawn stage: the subtask is filed
+    with api.app.state.store.read() as c:
+        (subtask,) = c.execute("SELECT target_task_id FROM pipeline_handoffs WHERE source_task_id=?", (parent["id"],))
+    move(api, subtask[0], step=e_steps["Done"])  # ships
+    move(api, parent["id"], step=p_steps["Validate"])  # resumes
     (loop,) = overview(api)["loops"]
     assert loop["laps"] == 1
+
+
+def test_a_spawn_that_left_before_the_period_counts_when_the_parent_resumes_in_it(api):
+    growth = make_factory(api, "Gro")
+    prod, p_steps = make_type(api, "Prod", steps=SPAWN_PRODUCT, factory=growth)
+    eng, e_steps = make_type(api, "Eng", steps=SPAWN_ENGINEERING, factory=growth)
+    spawn = link(api, prod, p_steps["Doing"], eng, mode="spawn")
+    link(api, eng, e_steps["Done"], prod)
+    parent = card(api, prod, p_steps["Waiting"])
+    subtask = card(api, eng, e_steps["Doing"])
+    handoff(api, spawn, subtask["id"], ago(days=8), source=parent["id"])  # left eight days ago
+    with api.app.state.store.transaction() as c:  # the parent resumed into Validate six days ago
+        c.execute(
+            "INSERT INTO history_events (id, subject_type, subject_id, created_at, actor_id, kind, old, new, note) "
+            "VALUES (?, 'task', ?, ?, 'ana-test', 'step', ?, ?, '')",
+            (H.new_id(), parent["id"], ago(days=6), p_steps["Waiting"], p_steps["Validate"]),
+        )
+    assert overview(api, "7d")["loops"][0]["laps"] == 1
+    assert overview(api, "1d")["loops"][0]["laps"] == 0
 
 
 def test_rights_answer_a_hidden_pipeline_the_same_as_a_missing_one(api):

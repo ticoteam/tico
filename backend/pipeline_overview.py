@@ -22,6 +22,7 @@ from typing import TYPE_CHECKING, Any, cast
 from fastapi import Request
 
 from . import hubdb, pipeline_manager as PM, pipeline_review, pipeline_rights
+from .pipeline_setup import completion_stage
 from .store import Problem
 
 if TYPE_CHECKING:
@@ -299,11 +300,43 @@ def _laps(seq: list[Row]) -> list[tuple[float, Any]]:
     return out
 
 
+def _spawn_laps(c: "sqlite3.Connection", members: list[str], seen: str) -> list[tuple[str, str, float, Any]]:
+    """The spawn laps among `members` (D64), as (from pipeline, to pipeline, minutes, the time the lap ended). A spawn lap
+    starts when the parent leaves its spawn stage (the spawn handoff) and ends when the parent resumes: its first step into
+    a stage past the one it waits in (the stage after the spawn stage). The subtask's own return is not recorded, so the
+    parent's history is the evidence. Every departure is read, not only those in the period, so a lap that left before it
+    still counts when the parent resumes in it; unfinished laps are left out."""
+    m = _marks(members)
+    rows = _rows(
+        c,
+        "SELECT l.from_pipeline_id AS a, l.to_pipeline_id AS b, h.created_at AS departed, ("
+        " SELECT MIN(e.created_at) FROM history_events e WHERE e.subject_type='task' AND e.kind='step'"
+        " AND e.subject_id=h.source_task_id AND e.created_at>=h.created_at"
+        " AND e.new IN (SELECT w.id FROM task_steps w WHERE w.type_id=l.from_pipeline_id AND w.position > ("
+        "  SELECT MIN(x.position) FROM task_steps x WHERE x.type_id=l.from_pipeline_id AND x.position > s.position))"
+        ") AS resumed "
+        "FROM pipeline_handoffs h JOIN pipeline_links l ON l.id=h.pipeline_link_id "
+        "JOIN task_steps s ON s.id=l.from_pipeline_stage_id "
+        f"WHERE l.mode='spawn' AND l.retired_at IS NULL AND h.returned_at IS NULL "
+        f"AND l.from_pipeline_id IN ({m}) AND l.to_pipeline_id IN ({m}) "
+        f"AND h.source_task_id IN (SELECT id FROM tasks WHERE ({seen})) "
+        f"AND h.target_task_id IN (SELECT id FROM tasks WHERE ({seen}))",
+        [*members, *members],
+    )
+    out: list[tuple[str, str, float, Any]] = []
+    for r in rows:
+        departed = H.parse_ts(r["departed"])
+        resumed = H.parse_ts(r["resumed"]) if r["resumed"] else None
+        if departed and resumed:
+            out.append((str(r["a"]), str(r["b"]), max(0.0, (resumed - departed).total_seconds() / 60), resumed))
+    return out
+
+
 def _loops(c: "sqlite3.Connection", ordered: list[str], links: list[Row], seen: str, since: str) -> list[Row]:
-    """Cycles in the links the reader sees, with their completed laps in the period. A lap is one card's hops round a cycle
-    (move handoffs, and a spawned subtask's hops count under its parent, so the subtask's return ends the parent's lap). The
-    hops of a card that came back in the period are loaded whole, so a lap that left before the period still counts when it
-    returns in it. The median lap time shows only from LOOP_MEDIAN_LAPS laps."""
+    """Cycles in the links the reader sees, with their completed laps in the period. A move lap is one card's hops round a
+    cycle; the hops of a card that came back in the period are loaded whole, so a lap that left before the period still
+    counts when it returns in it. A spawn lap is read from the parent's departure and resumption (_spawn_laps). The median
+    lap time shows only from LOOP_MEDIAN_LAPS laps."""
     groups = _sccs(ordered, [(str(r["from_pipeline_id"]), str(r["to_pipeline_id"])) for r in links])
     if not groups or not _columns(c, "pipeline_handoffs"):
         return []
@@ -311,22 +344,19 @@ def _loops(c: "sqlite3.Connection", ordered: list[str], links: list[Row], seen: 
     m = _marks(members)
     hops = _rows(
         c,
-        "SELECT h.source_task_id AS source, h.target_task_id AS task, l.mode AS mode, l.from_pipeline_id AS a, "
-        "l.to_pipeline_id AS b, h.created_at AS at FROM pipeline_handoffs h JOIN pipeline_links l ON l.id=h.pipeline_link_id "
-        f"WHERE l.retired_at IS NULL AND l.from_pipeline_id IN ({m}) AND l.to_pipeline_id IN ({m}) "
+        "SELECT h.target_task_id AS task, l.from_pipeline_id AS a, l.to_pipeline_id AS b, h.created_at AS at "
+        "FROM pipeline_handoffs h JOIN pipeline_links l ON l.id=h.pipeline_link_id "
+        f"WHERE l.retired_at IS NULL AND l.mode='move' AND l.from_pipeline_id IN ({m}) AND l.to_pipeline_id IN ({m}) "
         "AND h.returned_at IS NULL AND h.target_task_id IN (SELECT target_task_id FROM pipeline_handoffs "
         "WHERE created_at>=? AND returned_at IS NULL) "
         f"AND h.target_task_id IN (SELECT id FROM tasks WHERE ({seen})) "
-        f"AND (l.mode<>'spawn' OR h.source_task_id IN (SELECT id FROM tasks WHERE ({seen}))) "
         "ORDER BY h.created_at, h.id",
         [*members, *members, since],
     )
-    # A spawned subtask's hops belong to its parent's lap.
-    parent_of = {str(h["task"]): str(h["source"]) for h in hops if h["mode"] == "spawn"}
     by_card: dict[str, list[Row]] = defaultdict(list)
     for h in hops:
-        key = str(h["source"]) if h["mode"] == "spawn" else parent_of.get(str(h["task"]), str(h["task"]))
-        by_card[key].append(h)
+        by_card[str(h["task"])].append(h)
+    spawned = _spawn_laps(c, members, seen)
     since_at = H.parse_ts(since)
     rank = {pid: i for i, pid in enumerate(ordered)}
     out: list[Row] = []
@@ -339,6 +369,7 @@ def _loops(c: "sqlite3.Connection", ordered: list[str], links: list[Row], seen: 
                 for minutes, ended in _laps([h for h in seq if str(h["a"]) in inside and str(h["b"]) in inside])
                 if ended >= since_at
             )
+        laps.extend(minutes for a, b, minutes, ended in spawned if a in inside and b in inside and ended >= since_at)
         out.append(
             {
                 "pipelines": sorted(group, key=lambda p: rank.get(p, 0)),
@@ -347,15 +378,6 @@ def _loops(c: "sqlite3.Connection", ordered: list[str], links: list[Row], seen: 
             }
         )
     return out
-
-
-def _last_done(c: "sqlite3.Connection", pipeline_id: str) -> str:
-    """A pipeline's last stage of done kind: where its finished work ends, the default output stage of its factory."""
-    row = c.execute(
-        "SELECT id FROM task_steps WHERE type_id=? AND status='done' ORDER BY position DESC, id DESC LIMIT 1",
-        (pipeline_id,),
-    ).fetchone()
-    return str(row[0]) if row else ""
 
 
 def _done(c: "sqlite3.Connection", stages: dict[str, str], seen: str, since: str) -> dict[str, int]:
@@ -499,12 +521,12 @@ def read(
         }
         for pid in ordered
     ]
-    # A factory's output stage: its own, else the last done stage of its last pipeline in flow order.
+    # A factory's output stage: its own, else the completion stage of its last pipeline in flow order.
     outputs: dict[str, str] = {}
     for fid in factory_order:
         stage = str(factories[fid].get("output_stage_id") or "")
         if not stage and chains[fid]:
-            stage = _last_done(c, chains[fid][-1])
+            stage = completion_stage(c, chains[fid][-1]) or ""
         if stage:
             outputs[fid] = stage
     finished = _done(c, outputs, seen, since)

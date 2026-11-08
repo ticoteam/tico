@@ -72,6 +72,9 @@ interface PipelineReviewItem {
   can_mark_met?: boolean;
   /** Whether the viewer may send it Not validated (the server's follow-up rule, D66). */
   can_not_validate?: boolean;
+  /** The attachment and the stage visit the item shows, which Not validated names back to the server. */
+  attachment_id?: string | null;
+  stage_visit_id?: string | null;
   attachments: PipelineAttachment[];
   /** Another reviewer holding the item, or null. `label` is the server's words for it ("Ana is reviewing"). */
   claim: { by: string; label: string } | null;
@@ -184,6 +187,7 @@ interface ServerQueueItem {
   reviewer_id: string | null;
   can_mark_met: boolean;
   can_not_validate: boolean;
+  stage_visit_id: string | null;
 }
 
 interface ServerRun {
@@ -255,6 +259,8 @@ function reviewItemFromRow(row: ServerQueueItem): PipelineReviewItem {
     work_version: row.work_version,
     attachment_digest: row.attachment_digest,
     requirement_version: row.requirement_version,
+    attachment_id: a?.id ?? null,
+    stage_visit_id: row.stage_visit_id ?? null,
   };
 }
 
@@ -367,6 +373,9 @@ async function pipelineNotValidated(item: PipelineReviewItem, reason: string):
     note: reason,
     work_version: item.work_version,
     requirement_version: item.requirement_version,
+    attachment_id: item.attachment_id ?? null,
+    attachment_digest: item.attachment_digest,
+    stage_visit_id: item.stage_visit_id ?? null,
   }) as Promise<{ decision_id: string; moved_back_to: string | null; follow_up: string | null }>;
 }
 
@@ -395,11 +404,20 @@ interface PipelineLateClock {
   limit_hours: number;
 }
 
-/** The pipeline's Late tickets (GET .../late), keyed by task id: every live ticket past its stage's Warn after, uncapped,
-    from the server's one Late rule. It needs no manager, so a pipeline without one still shows its late time. */
-async function pipelineLateTickets(pipelineId: string): Promise<Map<string, PipelineLateClock>> {
-  const res = await get(pipelineRoute(`/${encodeURIComponent(pipelineId)}/late`)) as { late?: Record<string, PipelineLateClock> };
-  return new Map(Object.entries(res.late ?? {}));
+/** Ticket ids asked for per request (GET .../late?ids=): the server answers at most 500 at a time, and a short URL stays well under it. */
+const LATE_ASK_CHUNK = 100;
+
+/** The Late clocks of the named tickets of a pipeline (GET .../late?ids=), keyed by task id, from the server's one Late rule.
+    Only the tickets on screen are asked for, in chunks, so a pipeline of any size shows its late time for each of them. A
+    ticket the server does not clock (not late, or not one this person may see) is absent. It needs no manager. */
+async function pipelineLateTickets(pipelineId: string, ids: string[]): Promise<Map<string, PipelineLateClock>> {
+  const out = new Map<string, PipelineLateClock>();
+  for (let start = 0; start < ids.length; start += LATE_ASK_CHUNK) {
+    const part = ids.slice(start, start + LATE_ASK_CHUNK);
+    const res = await get(pipelineRoute(`/${encodeURIComponent(pipelineId)}/late?ids=${encodeURIComponent(part.join(','))}`)) as { late?: Record<string, PipelineLateClock> };
+    Object.entries(res.late ?? {}).forEach(([id, clock]) => out.set(id, clock));
+  }
+  return out;
 }
 
 /** The manager's status for one pipeline: last run, late cards, the log. */

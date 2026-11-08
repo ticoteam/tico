@@ -30,7 +30,7 @@ from typing import TYPE_CHECKING, Any, cast
 from pydantic import Field
 
 from . import models as M
-from . import pipeline_engine, pipeline_links, pipeline_rights, requirement_attachments
+from . import pipeline_engine, pipeline_github_checks, pipeline_links, pipeline_rights, requirement_attachments
 from .store import H, Problem
 
 if TYPE_CHECKING:
@@ -47,7 +47,17 @@ UNDO_SECONDS = 10
 NOTE_BYTES = 500
 ACTIVE = ("open", "doing", "waiting", "review", "ready")
 PERSON_REVIEWED = ("person", "bot_then_person")
-MET_VERDICTS = ("met", "override")
+
+
+def _review_of(requirement: dict[str, Any]) -> str:
+    """The review that applies to a requirement. A field or run is a rule (D60): only a person's review of one waits on its
+    source, and a bot or bot-then-person review of one (rows from before the API refused it) reads as nobody's, as
+    pipeline_engine._standing reads it."""
+    if requirement["kind"] in ("field", "run") and requirement["reviewed_by"] != "person":
+        return "nobody"
+    return str(requirement["reviewed_by"])
+
+
 Row = dict[str, Any]
 CURRENT: Any = object()  # approve(): no version named, so the current one is taken (a caller inside the engine)
 
@@ -192,77 +202,9 @@ def _open_visit(c: "sqlite3.Connection", task_id: str) -> Row | None:
     return _one(c, "SELECT * FROM stage_visits WHERE task_id=? AND left_at IS NULL", (task_id,))
 
 
-def _decisions(c: "sqlite3.Connection", task_id: str, requirement_id: str) -> list[Row]:
-    """The decisions not undone about one requirement of one ticket, newest first."""
-    return _rows(
-        c,
-        "SELECT * FROM stage_decisions WHERE task_id=? AND stage_requirement_id=? AND undone_at IS NULL "
-        "ORDER BY created_at DESC, rowid DESC",
-        (task_id, requirement_id),
-    )
-
-
-def _needs(requirement: Row) -> dict[str, Any]:
-    try:
-        value = json.loads(requirement.get("needs") or "{}")
-    except ValueError:
-        return {}
-    return cast("dict[str, Any]", value) if isinstance(value, dict) else {}
-
-
-def _fresh_required(requirement: Row) -> bool:
-    """Whether a met decision must be at the current work version: always, except an attachment that opted out."""
-    if requirement["kind"] != "attachment":
-        return True
-    return _needs(requirement).get("newer_than_change", True) is not False
-
-
-def _met_in(requirement: Row, attachment: Row | None, decisions: list[Row], revision: int) -> Row | None:
-    """The decision that makes the requirement met, from its decisions (newest first), or None. The newest met, override,
-    withdrawn or failed decision decides; a met one counts only at `revision` and while the attachment it judged is still
-    the one attached (taking it away unmeets it; an override is not about the attachment). No override stands in for an
-    approval (D10, D34)."""
-    for decision in decisions:
-        if decision["verdict"] not in (*MET_VERDICTS, "withdrawn", "failed"):
-            continue
-        if decision["verdict"] not in MET_VERDICTS:
-            return None
-        if decision["verdict"] == "override" and requirement["kind"] == "approval":
-            return None
-        if _fresh_required(requirement) and decision["work_version"] != revision:
-            return None
-        digest = decision["attachment_digest"]
-        if digest and attachment is not None and attachment["digest"] != digest:
-            return None
-        if digest and attachment is None and decision["verdict"] == "met":
-            return None
-        return decision
-    return None
-
-
-def _met_decision(c: "sqlite3.Connection", task: Row, requirement: Row, attachment: Row | None) -> Row | None:
-    """The decision that makes the requirement met now, or None (see `_met_in`)."""
-    return _met_in(requirement, attachment, _decisions(c, task["id"], requirement["id"]), _revision(task))
-
-
 def _later(created_at: Any, than: Any) -> bool:
     """Whether `created_at` is after `than`. A missing time is never after, as SQL reads a comparison with NULL."""
     return created_at is not None and than is not None and created_at > than
-
-
-def _state_in(requirement: Row, revision: int, attachment: Row | None, decisions: list[Row]) -> str:
-    """`met`, `failed` (the latest judgement at this work version), `waiting` (a reviewer is to decide) or `missing`
-    (an attachment requirement with nothing attached), from the decisions (newest first) and the newest attachment."""
-    if _met_in(requirement, attachment, decisions, revision):
-        return "met"
-    for decision in decisions:
-        if decision["verdict"] in ("met", "override", "withdrawn", "failed"):
-            if decision["verdict"] == "failed" and decision["work_version"] == revision:
-                return "failed"
-            break
-    if requirement["kind"] == "attachment" and attachment is None:
-        return "missing"
-    return "waiting"
 
 
 def _routed_in(decisions: list[Row]) -> str | None:
@@ -306,13 +248,13 @@ def _why_in(actor: str, requirement: Row, routed: str | None, asked: bool) -> st
 def _waits_in(requirement: Row, state: str, decisions: list[Row], revision: int, attachment: Row | None) -> bool:
     """Whether the requirement now waits for a person's decision: not met, something to decide on, not held off by a
     send-back, and for bot_then_person the bot passed it up or a send-back routed it to a person."""
-    if requirement.get("retired_at") or requirement["reviewed_by"] not in PERSON_REVIEWED:
+    if requirement.get("retired_at") or _review_of(requirement) not in PERSON_REVIEWED:
         return False
     if state in ("met", "missing"):
         return False
     if _sent_back_in(decisions, revision, attachment):
         return False
-    if requirement["reviewed_by"] == "bot_then_person":
+    if _review_of(requirement) == "bot_then_person":
         return _routed_in(decisions) is not None or _bot_passed_in(decisions, revision)
     return True
 
@@ -320,9 +262,11 @@ def _waits_in(requirement: Row, state: str, decisions: list[Row], revision: int,
 class _Facts:
     """What the review rules read about (ticket, requirement) pairs, each kind fetched once for all of them: the decisions
     not undone, the newest attachment, each ticket's open visit, and the visits the manager asked the backup about. The
-    queue and the single-row helpers read the rules through this, so they cannot disagree about an item."""
+    queue and the single-row helpers read the rules through this, so they cannot disagree about an item. A requirement's
+    standing is the engine's (pipeline_engine.task_standings), never a second reading of the decisions."""
 
     def __init__(self) -> None:
+        self.standing: dict[str, dict[str, str]] = {}  # ticket id -> {requirement id: the engine's state}
         self.decisions: dict[Key, list[Row]] = {}
         self.attachments: dict[Key, Row] = {}
         self.visits: dict[str, Row] = {}
@@ -362,6 +306,7 @@ class _Facts:
             tasks,
         ):
             facts.labels.setdefault(label["task_id"], set()).add(str(label["key"]))
+        facts.standing = pipeline_engine.task_standings(c, tasks)
         visit_ids = [visit["id"] for visit in facts.visits.values()]
         for asked in _read(
             c,
@@ -374,9 +319,19 @@ class _Facts:
             facts.asked.add((asked["stage_visit_id"], asked["stage_requirement_id"]))
         return facts
 
+    def counts(self, task: Row, requirement: Row) -> bool:
+        """Whether the engine holds the ticket to this requirement where it stands (its current stage, or a stage it left)."""
+        return str(requirement["id"]) in self.standing.get(str(task["id"]), {})
+
     def state(self, task: Row, requirement: Row) -> str:
-        key = (task["id"], requirement["id"])
-        return _state_in(requirement, _revision(task), self.attachments.get(key), self.decisions.get(key, []))
+        """`met`, `failed`, `missing` (an attachment requirement with nothing attached) or `waiting` (anything else: a
+        reviewer is to decide, or the requirement is out of date). The engine's standing, mapped to the review's words."""
+        engine = self.standing.get(str(task["id"]), {}).get(str(requirement["id"]), "")
+        if engine in ("met", "failed"):
+            return engine
+        if engine == "none" and requirement["kind"] == "attachment":
+            return "missing"
+        return "waiting"
 
     def applies(self, task: Row, requirement: Row) -> bool:
         return pipeline_engine.applies(requirement, self.labels.get(task["id"], set()))
@@ -550,6 +505,7 @@ class _Queue:
             "late": self.late(task, since),
             "claimed_by": claim_row["claimed_by"] if claim_row and claim_row["claimed_by"] != actor else None,
             "claimed_by_me": bool(claim_row and claim_row["claimed_by"] == actor),
+            "stage_visit_id": (self.facts.visits.get(task["id"]) or {}).get("id"),
         }
 
 
@@ -571,7 +527,7 @@ def _queue_fields(
         r["id"]: r
         for r in _read(c, "SELECT id, display_name, slug FROM bots WHERE id IN (SELECT value FROM json_each(?))", bare)
     }
-    links = {
+    raw_links = {
         r["from_pipeline_stage_id"]: r["to_pipeline_id"]
         for r in _read(
             c,
@@ -580,6 +536,10 @@ def _queue_fields(
             [item["stage_id"] for item in items],
         )
     }
+    # A move link into a pipeline the reader may not see names nothing: its stage is left out of the destinations (D67).
+    targets = pipeline_rights.visible_pipeline_ids(c, actor, sorted(set(raw_links.values())))
+    blocked = {stage for stage, target in raw_links.items() if target not in targets}
+    links = {stage: target for stage, target in raw_links.items() if stage not in blocked}
     pipeline_ids = {item["pipeline_id"] for item in items}
     steps = _read(
         c,
@@ -601,7 +561,7 @@ def _queue_fields(
         if key not in candidates:
             candidates[key] = _route_candidates(c, actor, *key)
         found = candidates[key]
-        return found is not None and _pick_link(found[1], handed.get(item["task_id"], set())) is not None
+        return found is not None and _pick_link(found[1], handed.get(item["task_id"], [])) is not None
 
     for item in items:
         key = (item["task_id"], item["requirement_id"])
@@ -615,8 +575,10 @@ def _queue_fields(
         # An approval is never overridden (mark_met refuses protected_approval), so the action is not offered for one.
         item["can_mark_met"] = bool(rights[item["pipeline_id"]]) and item["kind"] != "approval"
         at_stage = tasks[item["task_id"]].get("step_id") == item["stage_id"]
-        item["can_not_validate"] = at_stage and _route_ok(item)
-        item["moves_to"] = _moves_to(item, live, queue.facts, links, steps, names) if at_stage else None
+        # Another reviewer's claim holds the item: Not validated is theirs to send, so it is not offered to anyone else.
+        # Another reviewer's claim holds the item: Not validated is theirs to send, so it is not offered to anyone else.
+        item["can_not_validate"] = at_stage and item["claimed_by"] is None and _route_ok(item)
+        item["moves_to"] = _moves_to(item, live, queue.facts, links, steps, names, blocked) if at_stage else None
 
 
 def _attachment_views(c: "sqlite3.Connection", items: list[Row], facts: "_Facts") -> None:
@@ -634,9 +596,13 @@ def _moves_to(
     links: dict[str, str],
     steps: list[Row],
     names: dict[str, str],
+    blocked: set[str] | None = None,
 ) -> Row | None:
     """Where the ticket goes if this item is the stage's last unmet requirement, the same destination approve uses;
-    None while another requirement of the stage is unmet, or at the last stage."""
+    None while another requirement of the stage is unmet, at the last stage, or when the stage's move link leads to a
+    pipeline the reader may not see (`blocked`)."""
+    if blocked and item["stage_id"] in blocked:
+        return None
     labels = facts.labels.get(item["task_id"], set())
     for other in live:
         if other["pipeline_stage_id"] != item["stage_id"] or other["id"] == item["requirement_id"]:
@@ -645,8 +611,7 @@ def _moves_to(
             continue  # a mirror of the review gate, which still decides it (as in `_stage_met`)
         if not pipeline_engine.applies(other, labels):
             continue
-        key = (item["task_id"], other["id"])
-        if _met_in(other, facts.attachments.get(key), facts.decisions.get(key, []), item["work_version"]) is None:
+        if facts.state({"id": item["task_id"]}, other) != "met":
             return None
     destination = _destination_in(item["stage_id"], item["pipeline_id"], links.get(item["stage_id"]), steps)
     if destination is None:
@@ -654,18 +619,62 @@ def _moves_to(
     return {"stage_id": destination[1], "name": names.get(destination[1], "")}
 
 
+def _authorized(
+    c: "sqlite3.Connection",
+    actor: str,
+    task_ids: "Iterable[str]",
+    pipeline_ids: "Iterable[str]",
+    visible_sql: str | None,
+) -> tuple[set[str], set[str]]:
+    """The tickets the reader may open now and the pipelines they may see, of those given. A ticket is readable when its
+    current pipeline is visible to them or they are its owner or requester (D67: a ticket's own parties keep it wherever
+    it is now), it passes the task rules (`visible_sql`, the route's list clause, when given) and
+    `hubdb.task_private_readable` admits them. Whether the requirement's own pipeline is visible is checked by the caller.
+    Reads only the ticket rows, never their tags, decisions or attachments."""
+    found: dict[str, Row] = {}
+    ids = sorted({str(t) for t in task_ids if t})
+    for chunk in _chunks(ids):
+        sql = "SELECT * FROM tasks WHERE id IN (SELECT value FROM json_each(?))"
+        if visible_sql:
+            sql += f" AND id IN (SELECT id FROM tasks WHERE {visible_sql})"
+        found.update({str(row["id"]): row for row in _rows(c, sql, (chunk,))})
+    types = {str(row["type_id"]) for row in found.values() if row.get("type_id")}
+    visible = pipeline_rights.visible_pipeline_ids(c, actor, sorted(types | {str(p) for p in pipeline_ids if p}))
+    # The copied-page provenance is read once; a public ticket with no copy is open to everyone, so only the private or
+    # copied tickets need the per-ticket rule.
+    from . import counsel
+
+    copies = cast(dict[str, Any], cast(Any, counsel.page_copies)(c))
+    allowed: set[str] = set()
+    for tid, row in found.items():
+        party = actor in (row.get("owner_id"), row.get("requester_id"))
+        if row.get("type_id") and str(row["type_id"]) not in visible and not party:
+            continue
+        open_to_all = tid not in copies and not _hub().task_private(c, row)
+        if open_to_all or _hub().task_private_readable(c, actor, row):
+            allowed.add(tid)
+    return allowed, visible
+
+
 def queue_for(
-    c: "sqlite3.Connection", actor: str, pipeline_id: str | None = None, stage_id: str | None = None
+    c: "sqlite3.Connection",
+    actor: str,
+    pipeline_id: str | None = None,
+    stage_id: str | None = None,
+    visible_sql: str | None = None,
 ) -> list[Row]:
     """The items waiting for this reviewer, Late first, then oldest. `pipeline_id` and `stage_id` narrow it to one
     pipeline or one stage. Only a reviewer, a send-back's route or an asked backup sees an item; a bot sees none. An item
-    is a requirement of the ticket's current stage, or a stale one of a stage it has left (D33), reviewed in place."""
+    is a requirement of the ticket's current stage, or a stale one of a stage it has left (D33), reviewed in place. The
+    tickets the reader may not open, and the items on pipelines they may not see, are left out (`visible_sql` is the
+    route's task list clause, which also applies the bot activity controls)."""
     if not str(actor or "").startswith("human:"):
         return []
     people = ",".join("?" * len(PERSON_REVIEWED))
     open_status = ",".join("?" * len(ACTIVE))
     where = (
-        f"r.retired_at IS NULL AND r.reviewed_by IN ({people}) AND t.status IN ({open_status}) "
+        f"r.retired_at IS NULL AND r.reviewed_by IN ({people}) AND NOT (r.kind IN ('field', 'run') AND r.reviewed_by<>'person') "
+        f"AND t.status IN ({open_status}) "
         "AND (r.reviewer_id=? OR r.backup_reviewer_id=? OR EXISTS (SELECT 1 FROM stage_decisions d "
         "WHERE d.task_id=t.id AND d.stage_requirement_id=r.id AND d.route_next_to=?))"
     )
@@ -686,7 +695,6 @@ def queue_for(
     )
     now = _now()
     pairs = _rows(c, sql, tuple([*args, *args]))
-    tasks = _tasks(c, [pair["task_id"] for pair in pairs])
     live = _read(
         c,
         "SELECT * FROM stage_requirements WHERE pipeline_stage_id IN (SELECT value FROM json_each(?)) "
@@ -694,12 +702,32 @@ def queue_for(
         [pair["stage_id"] for pair in pairs],
     )
     requirements = {r["id"]: r for r in live}
+    # Who may open what is decided before any ticket is hydrated or any attachment, decision or visit is read: a ticket the
+    # reader may not open, and an item on a pipeline they may not see, are dropped here (D67).
+    allowed, visible = _authorized(
+        c,
+        actor,
+        [pair["task_id"] for pair in pairs],
+        [requirement["pipeline_id"] for requirement in requirements.values()],
+        visible_sql,
+    )
+    pairs = [
+        pair
+        for pair in pairs
+        if pair["task_id"] in allowed and requirements.get(pair["requirement_id"], {}).get("pipeline_id") in visible
+    ]
+    tasks = _tasks(c, [pair["task_id"] for pair in pairs])
     facts = _Facts.load(c, tasks, live)
     waiting: list[tuple[Row, Row, str]] = []
     for pair in pairs:
         task = tasks.get(pair["task_id"])
         requirement = requirements.get(pair["requirement_id"])
-        if task is None or requirement is None or not facts.applies(task, requirement):
+        if (
+            task is None
+            or requirement is None
+            or not facts.applies(task, requirement)
+            or not facts.counts(task, requirement)
+        ):
             continue
         why = facts.why_sees(actor, task["id"], requirement)
         if why and facts.waits_on_person(task, requirement):
@@ -718,7 +746,7 @@ def _guard_item(c: "sqlite3.Connection", actor: str, task_id: str, requirement_i
     _person(actor)
     task = _task(c, task_id)
     requirement = _requirement(c, requirement_id)
-    if requirement.get("retired_at") or requirement["reviewed_by"] not in PERSON_REVIEWED:
+    if requirement.get("retired_at") or _review_of(requirement) not in PERSON_REVIEWED:
         raise Declined("not_person_reviewed", "A person does not review this requirement", 409)
     if task.get("status") not in ACTIVE or not pipeline_engine.counts_on_card(c, task_id, requirement):
         raise Declined("moved", "The ticket is no longer at this stage", 409)
@@ -982,7 +1010,7 @@ def approve(
             raise Declined("stale", "The attachment changed since you looked", 409, extra={"reason": "attachment"})
         if requirement_version != requirement["version"]:
             raise Declined("stale", "The requirement changed since you looked", 409, extra={"reason": "requirement"})
-        if _met_decision(c, task, requirement, current):
+        if requirement_state(c, task, requirement) == "met":
             raise Declined("already_met", "This requirement is already met", 409)
         problem = pipeline_engine.approval_problem(c, task_id, requirement, current)
         if problem is not None:
@@ -996,6 +1024,7 @@ def approve(
                 (json.dumps({"advanced": moved}), _now(), decision["id"]),
             )
         _release_in(c, actor, task_id, requirement_id)
+        pipeline_github_checks.publish_affected(c, task_id)
     return {
         "decision_id": decision["id"],
         "verdict": "met",
@@ -1092,6 +1121,7 @@ def undo(c: "sqlite3.Connection", actor: str, decision_id: str) -> Row:
             if decision["stage_visit_id"] and (visit is None or visit["id"] != decision["stage_visit_id"]):
                 raise Declined("moved_on", "The ticket has moved on", 409)
         c.execute("UPDATE stage_decisions SET undone_at=?, undone_by=? WHERE id=?", (now, actor, decision_id))
+        pipeline_github_checks.publish_affected(c, decision["task_id"])
     return {"decision_id": decision_id, "undone": True, "moved_back": moved is not None}
 
 
@@ -1157,24 +1187,27 @@ def _route_candidates(
     return (back, links) if links else None
 
 
-def _handed_links(c: "sqlite3.Connection", task_ids: "Iterable[str]") -> dict[str, set[str]]:
-    """{ticket id: the spawn link ids whose live handoff filed that ticket's subtasks}, from one read."""
-    out: dict[str, set[str]] = {}
+def _handed_links(c: "sqlite3.Connection", task_ids: "Iterable[str]") -> dict[str, list[str]]:
+    """{ticket id: the spawn link ids whose live handoffs filed that ticket's subtasks, the earliest handoff first}, from
+    one read."""
+    out: dict[str, list[str]] = {}
     for part in _chunks(task_ids):
         for row in _rows(
             c,
-            "SELECT source_task_id AS task_id, pipeline_link_id AS link_id FROM pipeline_handoffs "
-            "WHERE returned_at IS NULL AND source_task_id IN (SELECT value FROM json_each(?))",
+            "SELECT source_task_id AS task_id, pipeline_link_id AS link_id, MIN(created_at) AS first_at "
+            "FROM pipeline_handoffs WHERE returned_at IS NULL AND source_task_id IN (SELECT value FROM json_each(?)) "
+            "GROUP BY source_task_id, pipeline_link_id ORDER BY first_at, pipeline_link_id",
             (part,),
         ):
-            out.setdefault(str(row["task_id"]), set()).add(str(row["link_id"]))
+            out.setdefault(str(row["task_id"]), []).append(str(row["link_id"]))
     return out
 
 
-def _pick_link(links: list[Row], handed: set[str]) -> Row | None:
-    """The spawn link the follow-up goes through: the one whose handoff filed this ticket's subtasks (D64), else the nearest
-    live spawn link before the stage (a ticket no handoff filed)."""
-    return next((link for link in links if str(link["id"]) in handed), links[0] if links else None)
+def _pick_link(links: list[Row], handed: list[str]) -> Row | None:
+    """The spawn link the follow-up goes through: the link of the earliest live handoff that filed this ticket's subtasks
+    (D64), not the nearest stage. A ticket no handoff filed takes the nearest live spawn link before the stage."""
+    by_id = {str(link["id"]): link for link in links}
+    return next((by_id[link_id] for link_id in handed if link_id in by_id), links[0] if links else None)
 
 
 def _not_validated_route(
@@ -1187,7 +1220,7 @@ def _not_validated_route(
     if found is None:
         return None
     back, links = found
-    link = _pick_link(links, _handed_links(c, [task_id]).get(task_id, set()))
+    link = _pick_link(links, _handed_links(c, [task_id]).get(task_id, []))
     return (back, link) if link is not None else None
 
 
@@ -1199,11 +1232,17 @@ def not_validated(
     reason: str,
     work_version: int | None = None,
     requirement_version: int | None = None,
+    attachment_id: Any = CURRENT,
+    attachment_digest: Any = CURRENT,
+    stage_visit_id: Any = CURRENT,
 ) -> Row:
     """Validate's "Not validated" (D64), a person's call on the validation requirement. The spec's measures did not hold:
     the card goes back to the stage before Validate (In development, which then waits on the new subtask), and one
     follow-up Engineering subtask is filed under it, with the reason and the source's links. The follow-up is a second
-    spawn on purpose, so it is its own handoff. Person only, at Validate, on an item the person is waiting on."""
+    spawn on purpose, so it is its own handoff. Person only, at Validate, on an item the person is waiting on.
+
+    `attachment_id`, `attachment_digest` and `stage_visit_id` are the attachment and the stage visit the reviewer saw; when
+    given, they must still be the current ones, checked inside the write (stale otherwise, reason attachment or visit)."""
     text = _clip(reason)
     if text is None:
         raise Declined("reason_required", "Say what did not validate", 422)
@@ -1216,13 +1255,22 @@ def not_validated(
             raise Declined("stale", "The work changed since you looked", 409, extra={"reason": "work"})
         if requirement_version is not None and requirement_version != requirement["version"]:
             raise Declined("stale", "The requirement changed since you looked", 409, extra={"reason": "requirement"})
+        current = _current_attachment(c, task_id, requirement_id)
+        if attachment_id is not CURRENT or attachment_digest is not CURRENT:
+            same = (current["id"] if current else None) == attachment_id and (
+                current["digest"] if current else None
+            ) == attachment_digest
+            if not same:
+                raise Declined("stale", "The attachment changed since you looked", 409, extra={"reason": "attachment"})
+        visit = _open_visit(c, task_id)
+        if stage_visit_id is not CURRENT and (visit["id"] if visit else None) != stage_visit_id:
+            raise Declined("stale", "The stage changed since you looked", 409, extra={"reason": "visit"})
         if requirement_state(c, task, requirement) == "met":
             raise Declined("already_met", "This requirement is already met", 409)
         route = _not_validated_route(c, actor, str(task["type_id"]), str(requirement["pipeline_stage_id"]), task_id)
         if route is None:
             raise Declined("not_validatable", "Not validated is not offered at this stage", 409)
         back, spawn_link = route
-        current = _current_attachment(c, task_id, requirement_id)
         decision = _decide(c, actor, task, requirement, "failed", text, current)
         with pipeline_engine.decided_move(actor):  # the reviewer decided it; the move is recorded as theirs
             _hub().task_update(c, actor, task_id, step=str(back["id"]), mover=True, note=f"Not validated: {text}")
@@ -1234,6 +1282,7 @@ def not_validated(
             (json.dumps({"moved_back": str(back["id"]), "follow_up": child}), _now(), decision["id"]),
         )
         _release_in(c, actor, task_id, requirement_id)
+        pipeline_github_checks.publish_affected(c, task_id)
     return {
         "decision_id": decision["id"],
         "verdict": "failed",
@@ -1279,9 +1328,10 @@ def mark_met(c: "sqlite3.Connection", actor: str, task_id: str, requirement_id: 
         if requirement["kind"] == "approval":
             raise Declined("protected_approval", "A spec or release approval needs its named person to approve it", 409)
         current = _current_attachment(c, task_id, requirement_id)
-        if _met_decision(c, task, requirement, current):
+        if requirement_state(c, task, requirement) == "met":
             raise Declined("already_met", "This requirement is already met", 409)
         decision = _decide(c, actor, task, requirement, "override", reason, current)
+        pipeline_github_checks.publish_affected(c, task_id)
     return {"decision_id": decision["id"], "verdict": "override", "work_version": decision["work_version"]}
 
 
@@ -1298,10 +1348,14 @@ class ReviewNote(M.Contract):
 
 
 class NotValidated(ReviewNote):
-    """Not validated names the work and the requirement the reviewer saw; either changing since refuses it (stale)."""
+    """Not validated names the work, the requirement, the attachment (id and digest, null when none) and the stage visit the
+    reviewer saw; any of them changing since refuses it (stale)."""
 
     work_version: int = Field(ge=0)
     requirement_version: int = Field(ge=1)
+    attachment_id: str | None = Field(max_length=128)
+    attachment_digest: str | None = Field(max_length=200)
+    stage_visit_id: str | None = Field(max_length=128)
 
 
 class ReviewMessage(M.Contract):
@@ -1328,12 +1382,14 @@ def install(app: "FastAPI", store: "Store", mutate: "Callable[..., Any]", auth: 
         who = request.state.identity
         human_only(who)
         with cast(Any, store).read() as c:
-            # A members-only pipeline the reader may not see has no queue for them: its items are left out, and its own
-            # queue is the same answer as a pipeline that is not there.
-            hidden = pipeline_rights.hidden_pipeline_ids(c, who.task_actor or who.actor)
-            if pipeline_id and pipeline_id in hidden:
+            # A pipeline the reader may not see has no queue for them, and it answers exactly as one that is not there.
+            # Items on members-only pipelines they may not see are left out, and so are tickets they may not open.
+            reader_actor = who.task_actor or who.actor
+            if pipeline_id and not pipeline_rights.may_see(c, reader_actor, pipeline_id):
                 raise Problem("not_found", "No such pipeline", 404)
-            items = queue_for(c, who.actor, pipeline_id, stage_id)
+            hidden = pipeline_rights.hidden_pipeline_ids(c, reader_actor)
+            scope = pipeline_rights.list_sql(c, who.actor, cast(Any, auth).task_sql(c, who))
+            items = queue_for(c, who.actor, pipeline_id, stage_id, visible_sql=scope)
             return {"items": [item for item in items if item["pipeline_id"] not in hidden]}
 
     @app.get("/api/v2/pipelines/review/queue")
@@ -1412,6 +1468,9 @@ def install(app: "FastAPI", store: "Store", mutate: "Callable[..., Any]", auth: 
                 body.note,
                 work_version=body.work_version,
                 requirement_version=body.requirement_version,
+                attachment_id=body.attachment_id,
+                attachment_digest=body.attachment_digest,
+                stage_visit_id=body.stage_visit_id,
             ),
         )
 

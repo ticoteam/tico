@@ -487,6 +487,20 @@ def _retire_obsolete(
             made.append(f"retired link {live['from_pipeline_stage_id']} to {live['to_pipeline_id']}")
 
 
+def completion_stage(c: sqlite3.Connection, pipeline_id: str) -> str | None:
+    """A pipeline's completion stage (D56): its last stage whose status is done, else its last closed stage. A factory's
+    output stage is its last pipeline's completion stage. The booted Engineering type has no done stage (its Done is
+    closed), so it falls to the closed one. Used by the factory output migration, the setup and the overview."""
+    for status in ("done", "closed"):
+        row = c.execute(
+            "SELECT id FROM task_steps WHERE type_id = ? AND status = ? ORDER BY position DESC, id DESC LIMIT 1",
+            (pipeline_id, status),
+        ).fetchone()
+        if row:
+            return str(row[0])
+    return None
+
+
 def apply_factory_setup(
     c: sqlite3.Connection, actor: str, preset: str = "tico_default", replace: bool = False
 ) -> dict[str, Any]:
@@ -515,19 +529,16 @@ def apply_factory_setup(
                 unresolved.append(missing)
         if replace:
             _retire_obsolete(c, actor, spec, pipelines, made)
-        # A factory's output stage (D56): the last done stage of its last pipeline, unless one is already set.
+        # A factory's output stage (D56): the completion stage of its last pipeline, unless one is already set.
         for f in spec["factories"]:
             in_factory = [p["name"] for p in spec["pipelines"] if p.get("factory") == f["name"]]
             if not in_factory:
                 continue
-            done = c.execute(
-                "SELECT id FROM task_steps WHERE type_id = ? AND status = 'done' ORDER BY position DESC, id DESC LIMIT 1",
-                (pipelines[in_factory[-1]],),
-            ).fetchone()
-            if done:
+            stage = completion_stage(c, pipelines[in_factory[-1]])
+            if stage:
                 c.execute(
                     "UPDATE factories SET output_stage_id = COALESCE(output_stage_id, ?) WHERE id = ?",
-                    (done[0], factories[f["name"]]),
+                    (stage, factories[f["name"]]),
                 )
         for pipe in spec["pipelines"]:
             for req in pipe.get("requirements", []):

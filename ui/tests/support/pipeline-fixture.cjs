@@ -73,7 +73,7 @@ function queue(state) {
     pipeline: 'Dev tickets', stage_id: stage.toLowerCase(), stage, requirement_id, requirement, requirement_version: 1, kind: attachment.format,
     work_version: 3, attachment, attachment_digest: 'sha256:aa', why, since: stamp, late: false, claimed_by: null, claimed_by_me: false,
     assignee: {id: 'bot:b1', name: 'Builder'}, bot_note: task_id === 'D52' ? 'Shot 2 is cropped' : '', moves_to: task_id === 'D61' ? {stage_id: 'build', name: 'Build'} : null,
-    reviewer_id: ME, can_mark_met: true, can_not_validate: stage === 'Validate'});
+    reviewer_id: ME, can_mark_met: true, can_not_validate: stage === 'Validate', stage_visit_id: stage === 'Validate' ? 'v-validate' : null});
   const all = [
     row('D52', 'Assistant can approve a spec', 'Build', 'r-shots', 'Screenshots', 'The bot is unsure about shot 2',
       {id: 'a1', source: 'link', format: 'image', name: 'shot.png', href: 'https://example.test/shot.png', file_id: null, file_version: null}),
@@ -120,7 +120,11 @@ async function install(page, {refuseApprove = false, manager = false, refuseMove
     if (p === '/api/v2/pipelines/dev-tickets/late') {
       // The Late list the cards read (no manager needed): every late ticket of the pipeline, keyed by id.
       state.lateReads = (state.lateReads || 0) + 1;
-      return json({late: Object.fromEntries(late.map(item => [item.task_id, {since: item.since, hours: item.hours, limit_hours: item.limit_hours}]))});
+      // Like the server: `ids` asks for those tickets only; without it the list is capped at 500 (LATE_CAP).
+      const ids = url.searchParams.get('ids');
+      state.lateAsks = [...(state.lateAsks || []), ids];
+      const pick = ids === null ? late.slice(0, 500) : late.filter(item => ids.split(',').includes(item.task_id));
+      return json({late: Object.fromEntries(pick.map(item => [item.task_id, {since: item.since, hours: item.hours, limit_hours: item.limit_hours}]))});
     }
     if (p === '/api/v2/pipelines/dev-tickets/manager') {
       state.managerReads++;

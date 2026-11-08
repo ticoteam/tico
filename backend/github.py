@@ -681,6 +681,11 @@ def pull_request(c, payload, review_role="", release_repo="", *, read_refresh=Fa
             check_flow=step_flow.has_flow(c, task.get("type_id")),
         )
         c.execute("UPDATE task_links SET detail=? WHERE id=?", (json.dumps(detail), link["id"]))
+        if new_head:
+            from . import pipeline_github_checks
+
+            # The new head is saved: its checks show the out-of-date standing from this same write.
+            pipeline_github_checks.publish_affected(c, link["task_id"])
         if state == "merged" and link["state"] not in ("merged", "shipped") and not read_refresh:
             # The merge the builder was woken for: a ticket whose last check passed goes to Pending Release.
             from . import verdict_moves

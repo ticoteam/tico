@@ -543,15 +543,26 @@ def test_closing_a_product_card_closes_its_open_subtasks_and_keeps_the_shipped_o
 
 
 def test_subtasks_all_closed_with_none_shipped_does_not_pass(co):
-    """A subtask declined is closed without shipping: with nothing shipped the card does not pass. (A close lands a
-    subtask in the Done stage, which the visit rule counts as shipped, so a decline is the not-shipped case.)"""
+    """Finding R5: a subtask closed without finishing is cancelled, not shipped. A Close lands it in Engineering's Done
+    column (status closed), and that must not meet "Engineering shipped" or move the card to Validate. A decline is
+    the same: with nothing shipped the card does not pass."""
     card = review_card(co)
     approve_spec(co, card)
     (d41,) = subtasks(co, card)
-    co.set_status(d41, "declined")
+    co.close(d41, actor=ANA)
+    assert H.task(co.c, d41)["status"] == "closed"
+    assert co.where(d41) == ("Engineering", "Done")
     assert co.where(card) == ("Product", "In development")
     assert co.dots(card)["Engineering shipped"]["state"] == "failed"
     assert co.advance(card, actor=ANA)["moved"] is False
+
+    other = review_card(co, "Dark mode, second try")
+    approve_spec(co, other)
+    (d44,) = subtasks(co, other)
+    co.set_status(d44, "declined")
+    assert co.where(other) == ("Product", "In development")
+    assert co.dots(other)["Engineering shipped"]["state"] == "failed"
+    assert co.advance(other, actor=ANA)["moved"] is False
 
 
 def test_a_subtask_starting_work_does_not_move_its_product_card(co):
@@ -845,6 +856,12 @@ def test_a_pr_head_that_moves_is_new_work_that_makes_evidence_out_of_date_and_re
     assert after == before + 1
     assert json.loads(H.task_links(co.c, task)[0]["detail"])["head_sha"] == "def456"
     assert co.dots(task)["Screenshots"]["state"] == "out_of_date"
+    # The same webhook write records the new head's check from the engine's standing (not met) itself, not a later pass.
+    check = co.c.execute(
+        "SELECT state FROM pipeline_check_runs WHERE task_id=? AND stage_requirement_id=? AND head_sha=?",
+        (task, shots, "def456"),
+    ).fetchone()
+    assert check is not None and check[0] == "waiting"  # stored as waiting: not met, no failure
     assert co.refused(task, "In review")
 
     G.pull_request(
@@ -1111,6 +1128,87 @@ def test_a_subtask_moved_into_the_engineering_done_stage_ships_its_product_card(
     assert co.where(card) == ("Product", "Validate")
 
 
+def test_a_person_approved_due_date_stops_standing_once_the_date_is_cleared(co):
+    """Finding R6: Ben approves a populated due-date requirement, Ana clears the date, and the requirement is no longer met.
+    The card does not move on with the spec approval, and the due-date dot shows the requirement as not met. The person's
+    approval stood only while the date did."""
+    due = co.require(
+        "Product", "Review", "Due date", kind="field", reviewed_by="person", reviewer_id=BEN, needs={"field": "due"}
+    )
+    card = review_card(co)
+    H.task_update(co.c, ANA, card, due="2026-11-20T17:00:00.000000Z")
+    co.c.commit()
+    co.approve(card, due, actor=BEN)
+    H.task_update(co.c, ANA, card, due="")
+    co.c.commit()
+    approve_spec(co, card)
+    assert co.where(card) == ("Product", "Review")
+    assert co.dots(card)["Due date"]["state"] != "met"
+
+
+def test_a_subtask_that_shipped_then_closed_still_counts_as_shipped(co):
+    """Finding R5: a subtask marked done ships the card, and closing it afterwards does not take the shipment back. The
+    done history is the evidence, so the requirement stays met on the card."""
+    card = review_card(co)
+    approve_spec(co, card)
+    (d41,) = subtasks(co, card)
+    co.set_status(d41, "done")
+    assert co.where(card) == ("Product", "Validate")
+    co.close(d41, actor=ANA)
+    assert H.task(co.c, d41)["status"] == "closed"
+    assert standing_names(co, card)["Engineering shipped"] == "met"
+
+
+def test_a_spawn_does_not_carry_a_members_only_source_to_a_non_member_owner(co):
+    """Finding R1 (D67): a Legal card (members-only) spawns an Engineering ticket owned by Cal, who is not a member of
+    Legal. Cal's ticket gets no link to the confidential source, and the skip is logged on the child by requirement name
+    only, never the URL. The ticket's own owner still reads it."""
+    from backend import pipeline_links
+
+    confidential = "https://counsel.example.test/memo"
+    card = co.ticket("Legal", "Review", "NDA with Acme")
+    H.task_link(co.c, ANA, card, confidential, "Counsel memo")
+    child = H.task_create(
+        co.c,
+        ANA,
+        "Build the NDA intake",
+        "",
+        CAL,
+        type=co.type["Engineering"],
+        step=co.stage("Engineering", "Todo"),
+        parent_id=card,
+        lint=False,
+    )["id"]
+    co.c.commit()
+    pipeline_links._carry(co.c, BUILDER, card, child, "Review")
+    co.c.commit()
+    assert confidential not in [link["url"] for link in H.task_links(co.c, child)]
+    skipped = co.c.execute(
+        "SELECT new, note FROM history_events WHERE subject_id = ? AND kind = 'carry_skipped'", (child,)
+    ).fetchall()
+    assert (
+        len(skipped) == 1
+        and confidential not in str(tuple(skipped[0]))
+        and "Counsel memo" not in str(tuple(skipped[0]))
+    )
+
+    mine = H.task_create(
+        co.c,
+        ANA,
+        "Owned by the Legal owner",
+        "",
+        ANA,
+        type=co.type["Engineering"],
+        step=co.stage("Engineering", "Todo"),
+        parent_id=card,
+        lint=False,
+    )["id"]
+    co.c.commit()
+    pipeline_links._carry(co.c, BUILDER, card, mine, "Review")
+    co.c.commit()
+    assert confidential in [link["url"] for link in H.task_links(co.c, mine)]
+
+
 def test_a_subtask_closed_by_a_cascade_is_neither_shipped_nor_blocking(co):
     """Finding 6: a subtask closed with its card is gone. d41 shipped through its Done visit; d42 closed with the card.
     The shipped one meets the requirement and the cascade-closed one neither counts nor blocks."""
@@ -1148,6 +1246,19 @@ def test_a_subtask_that_only_closed_with_its_card_never_passes_the_card(co):
 
 
 # ----------------------------------------------------------------------------- finding 7: decline cascades like close
+def test_the_owner_can_decline_a_card_with_an_unmet_approval_without_an_override(co):
+    """Finding R7: a cancellation is not progress, so the explicit move into Declined is not held to the stage's completion
+    requirements (the same exemption the status write has). The owner declines the card in Review, where the spec approval
+    is unmet, with no override. A bystander still cannot decline it."""
+    card = review_card(co)
+    declined = co.stage("Product", "Declined")
+    with pytest.raises(H.Refused):
+        H.task_update(co.c, CAL, card, step=declined, note="Dropped")  # not the owner: the decline is refused
+    co.c.rollback()
+    co.move(card, "Declined", actor=ANA, note="Dropped")
+    assert co.where(card) == ("Product", "Declined")
+
+
 def test_declining_a_product_card_closes_its_open_subtask_and_keeps_the_shipped_one(co):
     """Finding 7 (D66): an authorized move of a Product card into the Declined stage closes its open Engineering subtask
     with "Parent declined"; a subtask already done stays done. The editor passes the card's open requirements with an
