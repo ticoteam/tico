@@ -375,7 +375,7 @@ def _adopt(conn: sqlite3.Connection, actor: str, row: Row, spec: Row, made: list
         if len(cards) > len(held):
             made.append(f"moved {len(cards) - len(held)} {old} cards to {target}")
         # A held card is named only to a caller who can read it; the rest are counted, with no title.
-        hidden = []
+        hidden: list[Row] = []
         for card in held:
             if H.task_private_readable(conn, actor, H.task(conn, str(card["id"]))):
                 unresolved.append(
