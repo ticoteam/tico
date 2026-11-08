@@ -80,7 +80,8 @@ def test_a_merge_redirects_and_an_unmerge_puts_every_row_back(api):
     with tx(api) as c:
         _setup_types(c)
         ES.ensure_self(c, company_name="Acme Lights", domain="acme.example")
-        keep = ES.upsert(c, ANA, "organization", match={"domain": "acme.example"}, name="Acme Lights")["id"]
+        # Not our company: a domain of ours resolves to the self row now, and a merge into self is a self-loop.
+        keep = ES.upsert(c, ANA, "organization", match={"domain": "acme-group.example"}, name="Acme Group")["id"]
         drop = ES.upsert(c, ANA, "organization", match={"domain": "old.example"}, name="Acme Old")["id"]
         ES.link(c, ANA, drop, "customer_of", ES.SELF_ID)
         ES.note(c, ANA, drop, "Asked for the old price list")
