@@ -181,6 +181,8 @@
  "hub_release_now": "404 not_found",
  "hub_repo_product_create": "422 github_repo",
  "hub_repo_update": "405 http_error",
+ "hub_requirement_attach": "404 not_found",
+ "hub_requirements": "404 not_found",
  "hub_rules_accept": "404 not_found",
  "hub_rules_add": "422 validation",
  "hub_rules_ask": "409 counsel_off",

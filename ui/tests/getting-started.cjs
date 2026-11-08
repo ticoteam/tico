@@ -214,7 +214,7 @@ const bots = [['coo', 'Ace'], ['botops', 'BotOps']].map(([name, display_name]) =
     assert.equal(polls.length, beforePolls + 1);
     // The market gets its first content a minute in: the notice stays out its two minutes.
     market = {entities: [
-      {id: 'company/cleanco', name: 'CleanCo', type: 'company', tier: 'core', aliases: [], summary: '', status: 'active'}],
+      {id: 'company/cleanco', name: 'CleanCo', type: 'organization', tier: 'core', aliases: [], summary: '', status: 'active'}],
       docs: [{id: 'market/overview', title: 'Overview', fetched: '2026-09-29T10:00:00Z'}]};
     await page.clock.fastForward(30000);
     await pollsReach(beforePolls + 2);

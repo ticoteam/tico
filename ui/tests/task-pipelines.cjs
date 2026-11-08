@@ -127,9 +127,7 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
     assert.deepEqual(await page.locator('#task-body [data-col="draft"] .bcard .tl-waiting').allTextContents(), ['Waiting'],
       'a waiting task stays in its step with a tag');
     assert.equal(await page.locator('#task-body .tl-waiting').count(), 1);
-    assert.deepEqual(await page.locator('#task-body [data-task-key="ttask-3"] [data-step-age].late').allTextContents(), ['5h in step']);
-    assert.deepEqual(await page.locator('#task-body [data-task-key="ttask-1"] [data-step-age]:not(.late)').allTextContents(), ['30m in step']);
-    assert.equal(await page.locator('#task-body [data-step-age]').count(), 2, 'only a ticket with a step clock shows one');
+    assert.equal(await page.locator('#task-body [data-step-age]').count(), 0, 'time in step shows only past the stage limit');
     // An unfolded finished strip is remembered: a fresh page opened straight on the board, before Done or Closed was ever
     // visited, reads the finished tasks for it, and the ordinary refresh keeps them current.
     const boardLoaded = () => page.waitForFunction(() => TASKS_ST && !TASKS_ST.loading && TASKS_ST.type === 'marketing' && document.querySelector('#task-body .bcard'));
@@ -372,6 +370,8 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
     await page.locator('#task-modal [data-modal-close]').click();
     // Blocked is a real engineering column, before the active build, on desktop and phone.
     const dev = types.find(type => type.id === 'dev-tickets');
+    // The one-stage phone layout is for a pipeline with requirements; one without keeps the board.
+    dev.has_requirements = true;
     dev.steps = [
       {id: 'dev-deck', name: 'On Deck', status: 'open'},
       {id: 'dev-blocked', name: 'Blocked', status: 'waiting'},
@@ -386,11 +386,19 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
       await page.setViewportSize({width, height: 900});
       await page.evaluate(() => { location.hash = '#/tasks?view=board&type=dev-tickets'; });
       await page.waitForFunction(() => TASKS_ST?.type === 'dev-tickets' && document.querySelector('[data-task-key="tdev-held"]'));
-      assert.deepEqual(await page.locator('#task-body .bcol h2').allTextContents(), ['On Deck', 'Blocked', 'In Progress', 'Review 1']);
+      if (width === 375) {
+        // A phone shows one stage at a time, with a chip for each; the stage with tickets is the one on show.
+        assert.deepEqual(await page.locator('#task-body .pchips [data-pipe-chip]').evaluateAll(els => els.map(el => el.dataset.pipeChip)),
+          ['dev-deck', 'dev-blocked', 'dev-building', 'dev-review']);
+        // The phone's stage has no column box: its name is the stage line, and its tickets sit under it.
+        assert.deepEqual(await page.locator('#task-body .pipe-stage-name').allTextContents(), ['Blocked']);
+      } else {
+        assert.deepEqual(await page.locator('#task-body .bcol h2').allTextContents(), ['On Deck', 'Blocked', 'In Progress', 'Review 1']);
+        assert.equal(await page.locator('[data-col="dev-building"] .bcard').count(), 0);
+      }
       assert.equal(await page.locator('[data-col="dev-blocked"] [data-task-key="tdev-held"]').count(), 1);
-      assert.equal(await page.locator('[data-col="dev-building"] .bcard').count(), 0);
       assert.equal(await page.locator('[data-col="dev-blocked"] [data-board-select]').isVisible(), true, 'select all in a column at every width');
-      assert.equal(await page.locator('[data-col="dev-building"] [data-board-select]').count(), 0, 'an empty column has nothing to select');
+      if (width !== 375) assert.equal(await page.locator('[data-col="dev-building"] [data-board-select]').count(), 0, 'an empty column has nothing to select');
       assert.match(await page.locator('[data-task-key="tdev-held"] .bcard-blocked').innerText(), /^Blocked \d+d: Waiting for a test machine <script>$/);
       assert.match(await page.locator('[data-task-key="tdev-held"] .bcard-blocked').getAttribute('title'), /^Waiting for a test machine <script> · since /);
       assert.equal(await page.locator('[data-task-key="tdev-held"] script').count(), 0);

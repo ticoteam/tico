@@ -1149,6 +1149,39 @@ def task_worktree_attach(api, args):
 
 
 @tool(
+    "hub_requirements",
+    "The rules a pipeline stage sets (its requirements, with their kind, reviewer and version). Read-only.",
+    {"stage_id": _s("The pipeline stage (a task step id)")},
+    required=("stage_id",),
+)
+def requirements(api, args):
+    return api.get("pipeline-stages/" + args["stage_id"] + "/requirements")
+
+
+@tool(
+    "hub_requirement_attach",
+    "Attach evidence to a requirement of the ticket's current stage: a company file (source file, with file_id and "
+    "optionally file_version), an uploaded blob (source blob, with blob_id) or a link (source link, with url). The "
+    "requirement's reviewer must be able to read the ticket. Returns the attachment with its digest and work version.",
+    {
+        "task_id": TASK_ID,
+        "requirement_id": _s("The stage requirement to attach to"),
+        "source": {"type": "string", "enum": ["file", "blob", "link"]},
+        "file_id": _s("A company file (source file)"),
+        "file_version": {"type": "integer", "minimum": 1, "description": "The file version; left out, the current one"},
+        "blob_id": _s("An uploaded blob (source blob)"),
+        "url": _s("An http or https address (source link)"),
+    },
+    required=("task_id", "requirement_id", "source"),
+    writes=True,
+)
+def requirement_attach(api, args):
+    body = {k: args[k] for k in ("source", "file_id", "file_version", "blob_id", "url") if args.get(k) is not None}
+    path = f"tasks/{args['task_id']}/requirements/{args['requirement_id']}/attachments"
+    return api.post(path, body, key=_key(args))
+
+
+@tool(
     "hub_task_show",
     "One task with its history and conversation. For several tasks, hub_task_show_many reads them in one call.",
     {"id": TASK_ID},
@@ -3517,7 +3550,7 @@ def lens_runs(api, args):
 @tool(
     "hub_market_show",
     "One market entity: its edges both ways, the evidence behind it, and the last ten events.",
-    {"id": _s("Entity id, like company/globex")},
+    {"id": _s("Entity id, like organization/globex")},
     required=("id",),
 )
 def market_show(api, args):
@@ -3545,7 +3578,7 @@ def market_find(api, args):
         "as_of": _s("YYYY-MM-DD"),
     },
 )
-def market_edges(api, args):
+def entity_links(api, args):
     return api.get(
         "market/edges", src=args.get("src"), dst=args.get("dst"), rel=args.get("rel"), as_of=args.get("as_of")
     )
@@ -3652,7 +3685,7 @@ def market_day(value):
         "source_kind": _s("reddit, x, news, site, other", default="other"),
         "quote": _s("What the source said", default=""),
         "our_read": _s("The curator's sentence", default=""),
-        "entity_type": _s("company, person, segment, channel, ..."),
+        "entity_type": _s("organization, person, segment, channel, ..."),
         "entity_name": _s("Name, when creating an entity"),
         "entity_id": _s("Existing entity to update"),
         "summary": _s("New summary"),
@@ -3782,7 +3815,7 @@ def market_page(api, args):
     "kind release watches a product's releases instead: the url is github:owner/repo or a release feed, and it needs the "
     "Tico AI Gateway.",
     {
-        "entity_id": _s("The market entity, like company/globex"),
+        "entity_id": _s("The market entity, like organization/globex"),
         "url": _s("The page's public address, or github:owner/repo for a release"),
         "kind": {
             "type": "string",
@@ -10196,7 +10229,7 @@ def bot_repos_set(api, args):
 @tool(
     "hub_bot_repo_create",
     "Owner or the BotOps bot: create the private repository bot-<slug> in the "
-    "connected GitHub organization from a template (default ticoteam/botops), or empty when the bot's "
+    "connected GitHub account or organization from a template (default ticoteam/botops), or empty when the bot's "
     "repository already exists on a computer. Answers with how to create it by hand when the team's "
     "GitHub App was not given permission to.",
     {
@@ -10245,7 +10278,7 @@ def repo_review(api, args):
     "The Owner, or a bot with Create product repositories (every bot, unless the Owner "
     "or an admin switched it off in the bot's settings under Repositories). Private only; a bot that creates one gets write to it and the Owner "
     "is told. First call with `name` and a stable `operation_id` to preview the "
-    "connected organization, exact repository name, private visibility, empty initialization, and live App "
+    "connected account or organization, exact repository name, private visibility, empty initialization, and live App "
     "capability. If capability is available, review the preview and call again with `confirm_repository` set "
     "to the exact `org/name`. The create request uses the same stable operation id, so retries replay the saved "
     "receipt and never issue a second GitHub create.",

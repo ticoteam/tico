@@ -72217,64 +72217,6 @@
         "type": "object",
         "title": "ReviewSettings"
       },
-      "ReviewTarget": {
-        "properties": {
-          "comment": {
-            "anyOf": [
-              {
-                "type": "string",
-                "maxLength": 200,
-                "minLength": 1
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Comment"
-          },
-          "file": {
-            "anyOf": [
-              {
-                "type": "string",
-                "maxLength": 200,
-                "minLength": 1
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "File"
-          },
-          "version": {
-            "anyOf": [
-              {
-                "type": "integer",
-                "minimum": 1.0
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Version"
-          },
-          "task": {
-            "anyOf": [
-              {
-                "type": "string",
-                "maxLength": 200,
-                "minLength": 1
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Task"
-          }
-        },
-        "additionalProperties": false,
-        "type": "object",
-        "title": "ReviewTarget"
-      },
       "ReviewedMeeting": {
         "type": "object",
         "properties": {
@@ -76640,6 +76582,13 @@
             "type": "string",
             "description": "A Dev ticket at a working step (In Progress, a Fixes step): when it entered that step or came back to work; absent otherwise"
           },
+          "requirements": {
+            "type": "array",
+            "description": "Where each stage requirement of the ticket's current step stands (backend/pipeline_engine.py); absent when the step has none",
+            "items": {
+              "type": "object"
+            }
+          },
           "relations": {
             "type": "object",
             "description": "Related tasks the reader may open, by kind (parent, blocks, related, duplicate_of, follow_up): each {id, title, status, owner, direction}; direction is out when this task is the subtask, blocker, duplicate or follow-up, in for the other end, both for related. Subtasks are in the task's children.",
@@ -76810,7 +76759,7 @@
       "TaskAnswer": {
         "properties": {
           "target": {
-            "$ref": "#/components/schemas/ReviewTarget"
+            "$ref": "#/components/schemas/backend__models__ReviewTarget"
           },
           "answers": {
             "additionalProperties": {
@@ -77922,6 +77871,43 @@
           "children": {
             "type": "array"
           },
+          "parent": {
+            "oneOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "id": {
+                    "type": "string"
+                  },
+                  "title": {
+                    "type": "string"
+                  },
+                  "label": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "step": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  }
+                },
+                "required": [
+                  "id",
+                  "label",
+                  "step",
+                  "title"
+                ],
+                "additionalProperties": true
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "comments": {
             "type": "array",
             "items": {
@@ -78931,6 +78917,13 @@
           "check_limit": {
             "type": "integer"
           },
+          "limit_minutes": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "The stage's Warn after time in minutes (the flow's late_hours x 60), or null"
+          },
           "flow": {
             "type": "object",
             "description": "What the step does with a ticket (docs/tasks.md, Step flow). On a check step, other_company is prefer (the default) or require."
@@ -79099,6 +79092,14 @@
               "public",
               "private"
             ]
+          },
+          "has_requirements": {
+            "type": "boolean",
+            "description": "On the list (GET /api/v2/task-types): whether the pipeline has any live stage requirement. A pipeline without one keeps today's phone layout; the one-stage phone view is for pipelines with requirements (backend/pipeline_engine.py)"
+          },
+          "can_edit_rules": {
+            "type": "boolean",
+            "description": "On the list (GET /api/v2/task-types): whether the caller may change this pipeline's rules, the pipeline's owner or an Admin (backend/pipeline_rights.py)"
           },
           "manager": {
             "type": [
@@ -79616,6 +79617,11 @@
               }
             ],
             "title": "Number"
+          },
+          "override_requirements": {
+            "type": "boolean",
+            "title": "Override Requirements",
+            "default": false
           },
           "verdict": {
             "anyOf": [
@@ -83591,6 +83597,64 @@
         "additionalProperties": false,
         "type": "object",
         "title": "Settings"
+      },
+      "backend__models__ReviewTarget": {
+        "properties": {
+          "comment": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 200,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Comment"
+          },
+          "file": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 200,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "File"
+          },
+          "version": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 1.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Version"
+          },
+          "task": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 200,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Task"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "ReviewTarget"
       },
       "backend__models__ToolUpdate": {
         "properties": {

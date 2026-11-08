@@ -325,6 +325,26 @@ def test_an_incremental_validation_is_a_plan_on_an_anchor_and_the_gate_runs_only
     assert "--suite" in steps["Run the candidate's unchanged release gate, this part"]["run"]
 
 
+def test_the_full_validation_ceiling_is_hosted_and_every_runson_job_waits_for_it():
+    """A ceiling of 10 full validations a UTC day, manual dispatches included: a hosted job counts today's full runs
+    before any RunsOn VM starts, and every job that would start a VM waits for it."""
+    ci, on = _workflow("ci.yml")
+    jobs = ci["jobs"]
+    assert jobs["ceiling"]["runs-on"] == "ubuntu-24.04"
+    assert jobs["ceiling"]["permissions"] == {"actions": "read"}
+    step = next(step for step in jobs["ceiling"]["steps"] if "ceiling reached" in step.get("run", ""))
+    assert step["if"] == "inputs.plan == ''" and step["env"]["CAP"] == "10"
+    assert "$CAP full runs today; ceiling reached" in step["run"] and "created=$today" in step["run"]
+
+    def waits_for_ceiling(name):
+        needs = jobs[name].get("needs", [])
+        needs = [needs] if isinstance(needs, str) else needs
+        return "ceiling" in needs or any(waits_for_ceiling(dep) for dep in needs)
+
+    vms = [name for name, job in jobs.items() if "runs-on=" in str(job["runs-on"])]
+    assert "candidate" in vms and all(waits_for_ceiling(name) for name in vms)
+
+
 def test_the_window_checks_out_the_whole_tree_it_diffs_and_never_keeps_its_token():
     train, _ = _workflow("train.yml")
     checkout = next(step for step in train["jobs"]["window"]["steps"] if step.get("id") == "checkout")
@@ -473,3 +493,30 @@ def test_the_pictures_artifact_is_the_one_release_shots_uploads_on_a_spot_4cpu_r
     assert "spot=false" not in job["runs-on"] and "runner=4cpu-linux-x64" in job["runs-on"]
     train, _ = _workflow("train.yml")
     assert all("macos" not in str(job.get("runs-on", "")) for job in train["jobs"].values())
+
+
+def _loads(path):
+    """The repo scripts a script needs at import: ROOT / "....py" paths it loads and sibling modules it imports."""
+    text = path.read_text()
+    needed = set(re.findall(r'ROOT / "([^"]+\.py)"', text))
+    for name in re.findall(r"^(?:import|from) (\w+)", text, re.M):
+        sibling = path.parent / f"{name}.py"
+        if sibling.exists():
+            needed.add(str(sibling.relative_to(ROOT)))
+    return needed
+
+
+def test_every_sparse_checkout_carries_what_its_scripts_load():
+    # A guard that checked out only release_train.py failed every window once it began loading release_increment.py.
+    for workflow in sorted((ROOT / ".github/workflows").glob("*.yml")):
+        for job in (yaml.safe_load(workflow.read_text()).get("jobs") or {}).values():
+            for step in job.get("steps") or []:
+                listed = set(((step.get("with") or {}).get("sparse-checkout") or "").split())
+                seen, todo = set(), [p for p in listed if p.endswith(".py")]
+                while todo:
+                    script = todo.pop()
+                    if script in seen or not (ROOT / script).exists():
+                        continue
+                    seen.add(script)
+                    todo.extend(_loads(ROOT / script))
+                assert seen <= listed, f"{workflow.name}: {sorted(seen - listed)} missing from a sparse checkout"

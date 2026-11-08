@@ -50,6 +50,8 @@ SUBCOMMANDS = [
     "assistant",
     "tag",
     "task",
+    "requirements",
+    "requirement",
     "replay",
     "goal",
     "kpi",
