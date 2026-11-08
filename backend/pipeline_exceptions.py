@@ -387,34 +387,43 @@ def _outages(c, out, typ, rows, at):
             out.add("bot:" + slug, "outage", f"{row['slug']}'s computer is offline", seen or at, bot=row["slug"])
 
 
-def waiting_room(c: sqlite3.Connection, at: str) -> dict[str, dict[str, str]]:
-    """The tickets a link or a bot could not move into a full stage (D68, rule stage_full) in the last REFUSAL_HOURS and that
-    are still outside that stage, as {task_id: {type_id, stage_id, created_at}}: the latest refusal of each. The card stays
-    where it is until the stage has room and someone moves it."""
-    since = H.shift(at, hours=-REFUSAL_HOURS)
+def waiting_room(c: sqlite3.Connection) -> dict[str, dict[str, str]]:
+    """The tickets a link, a bot or an automation could not move into a full stage (D68, rule stage_full), as
+    {task_id: {type_id, stage_id, created_at}}: the latest refusal of each. There is no time limit: the card waits, where it
+    is, until its stage has room, or it moves, or it finishes. A refusal is dropped when the card has a step change after it,
+    when it is no longer active or already in that stage, or when the stage is no longer full."""
+    from . import pipeline_engine
+
     waiting: dict[str, dict[str, str]] = {}
-    for event in c.execute(
-        "SELECT created_at, detail FROM refusals WHERE rule='stage_full' AND created_at>=? ORDER BY created_at, id",
-        (since,),
-    ):
+    for event in c.execute("SELECT created_at, detail FROM refusals WHERE rule='stage_full' ORDER BY created_at, id"):
         facts = H._json(event["detail"], {}) or {}
         task_id, stage_id = facts.get("task"), (facts.get("context") or {}).get("stage")
         if not task_id or not stage_id:
             continue
         found = c.execute("SELECT type_id, step_id, status FROM tasks WHERE id=?", (task_id,)).fetchone()
-        if found is None or found["status"] not in H.ACTIVE_STATUSES or found["step_id"] == stage_id:
+        moved = c.execute(
+            "SELECT 1 FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='step' AND created_at>? LIMIT 1",
+            (task_id, event["created_at"]),
+        ).fetchone()
+        if (
+            found is None
+            or found["status"] not in H.ACTIVE_STATUSES
+            or found["step_id"] == stage_id
+            or moved is not None
+            or pipeline_engine.full_stage(c, stage_id, task_id) is None
+        ):
             waiting.pop(task_id, None)
             continue
         waiting[task_id] = {"type_id": found["type_id"], "stage_id": stage_id, "created_at": event["created_at"]}
     return waiting
 
 
-def _waiting_for_room(c: sqlite3.Connection, out: _List, rows: list[Any], at: str) -> None:
+def _waiting_for_room(c: sqlite3.Connection, out: _List, rows: list[Any]) -> None:
     """The waiting tickets among these rows, for the manager's list (waiting_room)."""
     tickets = {r["id"]: r for r in rows}
     if not tickets:
         return
-    for task_id, waiting in waiting_room(c, at).items():
+    for task_id, waiting in waiting_room(c).items():
         row = tickets.get(task_id)
         if row is None:
             continue
@@ -528,7 +537,7 @@ def build(c, typ, rows=None, at=None, reader=None):
     _slots(c, out, typ, rows)
     _outages(c, out, typ, rows, at)
     _refusals(c, out, rows, at)
-    _waiting_for_room(c, out, rows, at)
+    _waiting_for_room(c, out, rows)
     _merges(c, out, rows)
     return sorted(out.items.values(), key=lambda e: (e["since"], e["key"]))[:MAX_EXCEPTIONS]
 

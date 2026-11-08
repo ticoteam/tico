@@ -535,7 +535,7 @@ def _pass(c: "sqlite3.Connection", pipeline: dict[str, Any], at: datetime) -> di
     # A card a link or a bot could not move into a full stage waits for room (pipeline_exceptions._waiting_for_room).
     exceptions += [
         f"room:{task_id}"
-        for task_id, waiting in pipeline_exceptions.waiting_room(c, stamp_of(at)).items()
+        for task_id, waiting in pipeline_exceptions.waiting_room(c).items()
         if waiting["type_id"] == pid
     ]
     actions = 0
