@@ -132,6 +132,44 @@ def gone(c, visible_sql, was, matched):
     return out
 
 
+_SUMMARY_LABELS = {"closed": "Closed with it", "open": "Still open", "kept": "Still closed from when it closed"}
+
+
+def children_text(c, visible_sql, history):
+    """The task's history with each subtask summary's text written for this reader. A summary keeps the ids of its
+    subtasks, not their titles (hubdb._finish_children): a title shows only where the reader may open that subtask
+    (`visible_sql`, the list rule), and "a subtask" otherwise, a deleted one too. A summary written before ids were kept
+    keeps only its label, since its text names subtasks the reader may not see."""
+    summaries = []
+    for event in history:
+        if event.get("field", event.get("kind")) != "children":  # app rows name it field, history rows kind
+            continue
+        try:
+            data = json.loads(event.get("data") or "{}")
+        except (TypeError, ValueError):
+            data = {}
+        key = next(
+            (k for k in ("closed", "open", "kept") if isinstance(data, dict) and isinstance(data.get(k), list)), None
+        )
+        if key is None:
+            event["new"] = str(event.get("new") or "").split(":", 1)[0]
+            continue
+        summaries.append((event, _SUMMARY_LABELS[key], [str(tid) for tid in data[key]]))
+    wanted = sorted({tid for _, _, ids in summaries for tid in ids})
+    if not wanted:
+        return history
+    shown = {
+        row[0]: row[1]
+        for row in c.execute(
+            f"SELECT id, title FROM tasks WHERE id IN (SELECT value FROM json_each(?)) AND ({visible_sql})",
+            (json.dumps(wanted),),
+        )
+    }
+    for event, label, ids in summaries:
+        event["new"] = label + ": " + "; ".join(shown.get(tid, "a subtask") for tid in ids)
+    return history
+
+
 def _pipeline_of(c, tid):
     """(known, type_id): the pipeline a ticket the change log names was on, from the ticket itself or, once it is deleted,
     from the row its trash kept. When neither says, the pipeline is unknown: with no members-only pipeline in the company
