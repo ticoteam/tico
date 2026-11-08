@@ -117,7 +117,7 @@ async function settingsMailSummary(root, slug) {
     cell.textContent = mailSettingText(m);
   } catch { cell.textContent = ''; }
 }
-async function settingsEditMail(slug, after, {stage} = {}) {
+async function settingsEditMail(slug, after?: (() => unknown) | null, {stage} = {}) {
   const e = S.emps.find(row => row.id === slug);
   if (!e) return;
   let dialog = botSettingsPanel('bot-mail-editor', 'owner-picker', 'bot-mail-title') || $('#bot-mail-editor');
