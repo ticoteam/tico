@@ -2405,11 +2405,10 @@ def _claim_refusal(
         caps = capability_set(runner["capabilities"])
     if draining:
         return "draining", None
-    if company_pause.record(c) is not None:
-        return (
-            "company_paused",
-            None,
-        )  # the company pause: nothing new starts until someone resumes (backend/company_pause.py)
+    company = loads.company if loads is not None else company_pause.record(c)
+    if company is not None:
+        # The company pause: nothing new starts until someone resumes (backend/company_pause.py).
+        return "company_paused", None
     if cloud_access.locked(c, loads.access if loads is not None else cloud_access.access(c)):
         return "cloud_locked", None  # a locked Tico Cloud company runs no bot (backend/cloud_access.py)
     if bot in held_bots:
