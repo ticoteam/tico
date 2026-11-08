@@ -248,6 +248,9 @@ const composerInside = async (page, panel) => {
       assert.equal(await page.locator('#task-body .pipe-stage').count() > 0, true, label + ': the one-stage phone view');
       assert.equal(await page.locator('#task-body .pchips [data-pipe-chip]').count() > 0, true, label + ': stage chips');
       assert.equal(await page.locator('#task-body .bcol h2').count(), 0, label + ': no board columns');
+      // Finished stages are chips on a phone too, not folded away.
+      await page.evaluate(() => { const type = TASK_TYPES.find(type => type.id === 'dev-tickets'); type.steps.push({id: 'done-step', name: 'Done', status: 'done', position: 9, type_id: type.id}); tasksRender(TASKS_ST); });
+      await page.waitForSelector('#task-body .pchips [data-pipe-chip="done-step"]', {timeout: t(5000)});
       // The picker names a pipeline by its own current name, never a fixed "Dev tickets" or "Roadmap".
       assert.equal(await page.evaluate(() => { TASK_TYPES.find(type => type.id === 'dev-tickets').name = 'Engineering'; return taskPipelineLabel('dev-tickets'); }), 'Engineering', label + ': picker label');
       assert.deepEqual(errors, [], label + ': no page errors');
