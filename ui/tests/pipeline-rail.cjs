@@ -239,13 +239,17 @@ const composerInside = async (page, panel) => {
       await context.close();
     }
 
-    // E-extra: the phone's one-stage view is for a pipeline with requirements; a pipeline without them keeps the board.
+    // E-extra: a phone shows every pipeline one stage at a time, with requirements or without (no old board).
     for (const [has, label] of [[false, 'no requirements'], [true, 'with requirements']]) {
       const {context, page, errors} = await newPage(browser, {width: 390, height: 844}, {hasTouch: true});
       await install(page, {noRequirements: !has});
       await page.goto('http://tico-ui.test/#/tasks?type=dev-tickets&view=board');
       await page.waitForSelector('#task-body [data-task-key]', {state: 'attached', timeout: t(8000)});
-      assert.equal(await page.locator('#task-body .pipe-stage').count() > 0, has, label + ': the one-stage phone view');
+      assert.equal(await page.locator('#task-body .pipe-stage').count() > 0, true, label + ': the one-stage phone view');
+      assert.equal(await page.locator('#task-body .pchips [data-pipe-chip]').count() > 0, true, label + ': stage chips');
+      assert.equal(await page.locator('#task-body .bcol h2').count(), 0, label + ': no board columns');
+      // The picker names a pipeline by its own current name, never a fixed "Dev tickets" or "Roadmap".
+      assert.equal(await page.evaluate(() => { TASK_TYPES.find(type => type.id === 'dev-tickets').name = 'Engineering'; return taskPipelineLabel('dev-tickets'); }), 'Engineering', label + ': picker label');
       assert.deepEqual(errors, [], label + ': no page errors');
       await context.close();
     }
