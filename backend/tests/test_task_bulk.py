@@ -2,6 +2,7 @@
 its single update would (permissions, refusals and events alike), is capped, and a dry run writes nothing."""
 
 from backend import hubdb as H
+from backend import pipeline_review
 from backend.tests.test_tasks_board import api, bot_token, get, pipeline, post  # noqa: F401
 
 
@@ -151,6 +152,52 @@ def test_nobody_bulk_changes_a_task_they_could_not_change_one_by_one(api):
     assert get(api, "tasks/" + owned["id"])["task"]["status"] == "open"
     with api.app.state.store.read() as c:
         assert c.execute("SELECT count(*) FROM refusals WHERE actor='bot:ops'").fetchone()[0] >= 1
+
+
+def test_a_bulk_done_is_held_to_a_waiting_approval_like_a_single_done(api):
+    """Finding B1, the bulk route: a bulk status done is the single update each task gets, so a waiting approval on the
+    task's stage refuses it, and it goes through once the person has approved."""
+    # Booted Engineering's shape: its finish stage is closed, so a status done resolves to no step of its own.
+    typ = post(
+        api,
+        "task-types",
+        {"name": "Build", "steps": [{"name": "Draft", "status": "open"}, {"name": "Done", "status": "closed"}]},
+        token="ana-test",
+    )["type"]
+    draft = next(s["id"] for s in typ["steps"] if s["name"] == "Draft")
+    t = task(api, "Ship the campaign", type=typ["id"], step=draft)
+    with api.app.state.store.transaction() as c:
+        c.execute(
+            "INSERT INTO stage_requirements (id, pipeline_id, pipeline_stage_id, name, kind, needs, reviewed_by, reviewer_id, "
+            "version, created_by, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+            (
+                "req-campaign-signoff",
+                typ["id"],
+                draft,
+                "Ana signs off",
+                "approval",
+                "{}",
+                "person",
+                "human:ana",
+                1,
+                "human:ana",
+                "2026-11-07T12:00:00.000000Z",
+                "2026-11-07T12:00:00.000000Z",
+            ),
+        )
+        c.execute(
+            "INSERT INTO stage_requirement_versions (stage_requirement_id, version, definition, changed_by, created_at) "
+            "VALUES (?,?,?,?,?)",
+            ("req-campaign-signoff", 1, "{}", "human:ana", "2026-11-07T12:00:00.000000Z"),
+        )
+    out = bulk(api, {"ids": [t["id"]]}, "status", status="done")
+    assert (out["changed"], out["skipped"]) == (0, 1)
+    assert get(api, "tasks/" + t["id"])["task"]["status"] == "open"
+    with api.app.state.store.transaction() as c:
+        pipeline_review.approve(c, "human:ana", t["id"], "req-campaign-signoff", requirement_version=1)
+    out = bulk(api, {"ids": [t["id"]]}, "status", status="done")
+    assert (out["changed"], out["skipped"]) == (1, 0)
+    assert get(api, "tasks/" + t["id"])["task"]["status"] == "done"
 
 
 def test_more_tasks_than_the_cap_are_refused_whole(api):

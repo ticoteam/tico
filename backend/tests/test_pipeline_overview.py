@@ -249,7 +249,9 @@ def test_the_map_counts_each_window_the_same_as_direct_sql(api):
             c.execute("UPDATE tasks SET created_at=? WHERE id=?", (ago(hours=hours), t["id"]))
         for t, hours in zip(finished, ages, strict=True):
             c.execute(
-                "UPDATE history_events SET created_at=? WHERE subject_type='task' AND kind='step' AND subject_id=?",
+                # The whole finish is dated: its step, its done status and its finish marker.
+                "UPDATE history_events SET created_at=? WHERE subject_type='task' "
+                "AND kind IN ('step', 'status', 'stage_finished') AND subject_id=?",
                 (ago(hours=hours), t["id"]),
             )
     for t, hours in zip(arrived, ages, strict=True):
@@ -359,6 +361,41 @@ def test_a_closed_unfinished_card_is_not_a_factory_done_count(api):
     move(api, shipped["id"], step=steps["Done"])
     with api.app.state.store.transaction() as c:
         H.task_close(c, H.KEEPER, cancelled["id"], note="Dropped")
+    assert overview(api)["factories"][0]["done"] == 1
+
+
+def test_a_card_shipped_last_month_and_cancelled_this_week_is_no_done_card_this_week(api):
+    # Finding B4: the done count is per period. The card shipped last month (its finish is then dated last month), was
+    # reopened and cancelled this week; its cancellation writes a step into the output stage this week, but it is not
+    # counted. A card shipped this week is.
+    growth = make_factory(api, "Gro")
+    done_closed = [{"name": "Doing", "status": "doing"}, {"name": "Done", "status": "closed"}]
+    sales, steps = make_type(api, "Sls", steps=done_closed, factory=growth)
+    old = card(api, sales, steps["Doing"])
+    move(api, old["id"], step=steps["Done"])
+    with api.app.state.store.transaction() as c:
+        c.execute(
+            "UPDATE history_events SET created_at=? WHERE subject_type='task' AND subject_id=? "
+            "AND kind IN ('step', 'stage_finished')",
+            (ago(days=30), old["id"]),
+        )
+    move(api, old["id"], step=steps["Doing"])  # reopened
+    with api.app.state.store.transaction() as c:
+        H.task_close(c, H.KEEPER, old["id"], note="Dropped")  # cancelled this week
+    assert overview(api)["factories"][0]["done"] == 0
+    fresh = card(api, sales, steps["Doing"])
+    move(api, fresh["id"], step=steps["Done"])
+    assert overview(api)["factories"][0]["done"] == 1
+
+
+def test_a_card_finished_by_a_done_status_counts_as_done(api):
+    # Codex r5 blocker 4: `status=done` on a pipeline whose Done stage is closed moves no step, so the done count, which
+    # read step entries only, missed a card that shipped (and that moved its Product card on).
+    growth = make_factory(api, "Gro")
+    done_closed = [{"name": "Doing", "status": "doing"}, {"name": "Done", "status": "closed"}]
+    sales, steps = make_type(api, "Sls", steps=done_closed, factory=growth)
+    won = card(api, sales, steps["Doing"])
+    move(api, won["id"], status="done")
     assert overview(api)["factories"][0]["done"] == 1
 
 

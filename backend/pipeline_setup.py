@@ -7,6 +7,7 @@ preset's stages, only with `replace=True`. A link whose stage does not exist is 
 
 The route is POST /api/v2/pipelines/setup, for the company's owner and Admins."""
 
+import json
 import sqlite3
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any, cast
@@ -75,6 +76,7 @@ PRESETS: dict[str, dict[str, Any]] = {
                         "name": "Engineering shipped",
                         "kind": "run",
                         "needs": {"source": "subtasks"},
+                        "into": "Engineering",  # the pipeline whose subtasks count (its id is written into needs)
                         "reviewed_by": "nobody",
                     },
                     {
@@ -359,8 +361,30 @@ def _adopt(conn: sqlite3.Connection, actor: str, row: Row, spec: Row, made: list
         made.append(f"removed {old}")
 
 
-def _requirement(conn: sqlite3.Connection, actor: str, pipeline_id: str, spec: Row, made: list[str]) -> None:
-    """A preset requirement on its stage, once. A person signs off a spec, so only a person's setup names reviewers."""
+def _name_pipeline(conn: sqlite3.Connection, requirement_id: str, pipeline_id: str) -> bool:
+    """Names the pipeline on a `subtasks` run setup made before runs named one, so the engine counts only that pipeline's
+    subtasks (D64). It writes the current needs only: a new version would bump the version approvals were given at, and
+    the history is append-only. A row that already names it is left alone, so a second run changes nothing. True when it
+    wrote the name."""
+    row = _one(conn, "SELECT needs FROM stage_requirements WHERE id = ?", (requirement_id,))
+    if row is None:
+        return False
+    needs: Row = json.loads(row["needs"] or "{}")
+    if needs.get("pipeline") == pipeline_id:
+        return False
+    needs["pipeline"] = pipeline_id
+    conn.execute(
+        "UPDATE stage_requirements SET needs = ?, updated_at = ? WHERE id = ?",
+        (json.dumps(needs), H.now(), requirement_id),
+    )
+    return True
+
+
+def _requirement(
+    conn: sqlite3.Connection, actor: str, pipeline_id: str, spec: Row, made: list[str], pipelines: dict[str, str]
+) -> None:
+    """A preset requirement on its stage, once. A person signs off a spec, so only a person's setup names reviewers. A spec
+    with `into` names the pipeline its `subtasks` run waits on (written into needs, also on an existing row)."""
     from . import pipeline_requirements
 
     if not actor.startswith("human:"):
@@ -368,16 +392,22 @@ def _requirement(conn: sqlite3.Connection, actor: str, pipeline_id: str, spec: R
     stage = _one(
         conn, "SELECT id FROM task_steps WHERE type_id = ? AND name = ? COLLATE NOCASE", (pipeline_id, spec["stage"])
     )
-    if stage is None or _one(
+    if stage is None:
+        return
+    target = pipelines.get(str(spec["into"])) if spec.get("into") else None
+    existing = _one(
         conn,
         "SELECT id FROM stage_requirements WHERE pipeline_stage_id = ? AND name = ? AND retired_at IS NULL",
         (stage["id"], spec["name"]),
-    ):
+    )
+    if existing is not None:
+        if target and _name_pipeline(conn, str(existing["id"]), target):
+            made.append(f"requirement {spec['name']} on {spec['stage']} now names its pipeline")
         return
     body = {
         "name": spec["name"],
         "kind": spec["kind"],
-        "needs": spec.get("needs", {}),
+        "needs": {**spec.get("needs", {}), **({"pipeline": target} if target else {})},
         "reviewed_by": spec["reviewed_by"],
         "reviewer_id": actor if "person" in spec["reviewed_by"] else None,
         "rubric": spec.get("rubric"),
@@ -542,7 +572,7 @@ def apply_factory_setup(
                 )
         for pipe in spec["pipelines"]:
             for req in pipe.get("requirements", []):
-                _requirement(c, actor, pipelines[pipe["name"]], req, made)
+                _requirement(c, actor, pipelines[pipe["name"]], req, made, pipelines)
         if unresolved and replace:
             raise Problem(
                 "unresolved",

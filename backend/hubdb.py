@@ -1784,19 +1784,17 @@ def migrate(conn, adopt_legacy=False):
     task_blocked.ensure(conn)
     blocker_asks.ensure(conn)
     migrate_roadmap_roles(conn)
-    from .roadmap_flow import PRODUCT as ROADMAP_PRODUCT, role_type as roadmap_role_type
 
     if "manager" not in {r[1] for r in conn.execute("PRAGMA table_info(task_types)")}:
         add_column(conn, "task_types", "manager", "TEXT")
         ensure_roadmap_types(conn)
     elif (
-        roadmap_role_type(conn, ROADMAP_PRODUCT) is None
-        and conn.execute("SELECT 1 FROM task_types WHERE manager IS NOT NULL AND manager <> '' LIMIT 1").fetchone()
-        is None
+        conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='first_start_seeds'").fetchone()
+        and conn.execute("SELECT 1 FROM first_start_seeds WHERE name='roadmap_types'").fetchone()
     ):
-        # A new database: migration 20261108011313 (manager_since) adds `manager` before this step runs, so the missing
-        # column no longer marks the first start. No Product pipeline and no managed pipeline at all says it instead.
+        # Migration 20261108011313 (manager_since) added `manager` before this step ran and left this note in its place.
         ensure_roadmap_types(conn)
+        conn.execute("DELETE FROM first_start_seeds WHERE name='roadmap_types'")
     from .roadmaps import migrate as migrate_roadmaps
 
     migrate_roadmaps(conn)
@@ -4777,8 +4775,16 @@ def _set_status(
     # Every forward stage move is held to the stage's requirements, not only task_update's (pipeline_engine). Cancelling
     # (a close or a decline) is not forward progress: it is never held to exit requirements.
     cancelling = pipeline_engine.is_cancellation(effective, explicit_step=step is not None)
-    if row is not None and step_id and step_id != row.get("step_id") and not cancelling:
-        pipeline_engine.check_forward(conn, actor, row, type_id, step_id)
+    held_to = (
+        pipeline_engine.completion_target(conn, row, type_id, step_id, effective, explicit_step=step is not None)
+        if row is not None
+        else None
+    )
+    if held_to and held_to != row.get("step_id"):
+        pipeline_engine.check_forward(conn, actor, row, type_id, held_to)
+    elif row is not None and pipeline_engine.is_completion(row, effective):
+        # Marked done where it stands (already in its Done stage, or a pipeline with none): held all the same.
+        pipeline_engine.check_completion(conn, actor, row)
     # Direct internal writers (roadmap sync, hold restoration) have the automatic finish contract.
     # task_update/task_close preflight explicit finishes before any write and handle their own cascade.
     finishing = cascade and effective in ("done", "closed") and row.get("status") != effective
@@ -7713,15 +7719,18 @@ def task_update(
         # A stage's requirements (backend/pipeline_engine.py) may refuse the move before the review gate does.
         # A cancellation (a Close or a Decline) is not progress: it is never held to completion requirements. A move into a
         # closed stage such as Engineering's Done is progress, so it is held (pipeline_engine.is_cancellation).
-        if (
-            step_id
-            and row
-            and step_id != row.get("step_id")
-            and not pipeline_engine.is_cancellation(effective, explicit_step=step is not None)
-        ):
+        # A status done with no step is held as a move into the completion stage (pipeline_engine.completion_target).
+        held_to = (
+            pipeline_engine.completion_target(conn, row, type_id, step_id, effective, explicit_step=step is not None)
+            if row
+            else None
+        )
+        if held_to and row and held_to != row.get("step_id"):
             pipeline_engine.check_move(
-                conn, actor, {**row, "type_id": type_id}, step_id, override_requirements, override_note=note
+                conn, actor, {**row, "type_id": type_id}, held_to, override_requirements, override_note=note
             )
+        elif row and pipeline_engine.is_completion(row, effective):
+            pipeline_engine.check_completion(conn, actor, row, override_requirements, override_note=note)
 
         if target_step and step_flow.gated(conn, step_id) and step_id != row.get("step_id"):
             from . import review_gate

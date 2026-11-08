@@ -1,6 +1,8 @@
 """The Tico Team pipeline setup (Track A): it makes the factories, pipelines, stages, links and goals, adopts what exists,
 changes nothing on a second run, sets managers only where a matching bot exists, and wipes cards only with replace."""
 
+import json
+
 from backend import hubdb as H
 from backend import pipeline_links as L
 from backend import pipeline_setup as S
@@ -352,3 +354,42 @@ def test_replace_retires_the_revenue_links_an_older_setup_made_and_keeps_their_h
     review = step_id(c, _type(c, "Product"), "Review")
     assert L.link_for_stage(c, review)["to_pipeline_id"] == _type(c, "Engineering")
     assert L.link_for_stage(c, marketing_done) is None and L.link_for_stage(c, sales_won) is None
+
+
+def _engineering_shipped(c):
+    """The preset's "Engineering shipped" requirement row (its needs, decoded) on Product's In development stage."""
+    row = c.execute(
+        "SELECT r.id, r.needs FROM stage_requirements r JOIN task_steps s ON s.id = r.pipeline_stage_id "
+        "JOIN task_types t ON t.id = s.type_id WHERE t.name = 'Product' AND s.name = 'In development' "
+        "AND r.name = 'Engineering shipped' AND r.retired_at IS NULL"
+    ).fetchone()
+    assert row is not None
+    return row[0], json.loads(row[1])
+
+
+def test_setup_names_engineering_as_the_pipeline_engineering_shipped_waits_on(tmp_path):
+    """D64, Codex blocker 5: the subtasks run names the pipeline it counts, and a second setup run keeps that name and
+    changes nothing."""
+    c = fresh(tmp_path)
+    out = S.apply_factory_setup(c, ANA)
+    _, needs = _engineering_shipped(c)
+    assert needs["source"] == "subtasks" and needs["pipeline"] == out["pipelines"]["Engineering"]
+    before = snapshot(c)
+    again = S.apply_factory_setup(c, ANA)
+    assert again["changes"] == [] and snapshot(c) == before
+    assert _engineering_shipped(c)[1]["pipeline"] == out["pipelines"]["Engineering"]
+
+
+def test_a_rerun_names_the_pipeline_on_a_legacy_engineering_shipped_row_and_the_next_run_changes_nothing(tmp_path):
+    """A requirement written before the name existed has no pipeline in its needs. Re-running setup names Engineering on it,
+    the change is reported, and the next run changes nothing."""
+    c = fresh(tmp_path)
+    out = S.apply_factory_setup(c, ANA)
+    req_id, needs = _engineering_shipped(c)
+    needs.pop("pipeline")
+    c.execute("UPDATE stage_requirements SET needs = ? WHERE id = ?", (json.dumps(needs), req_id))
+    c.commit()
+    again = S.apply_factory_setup(c, ANA)
+    assert again["changes"] == [f"requirement Engineering shipped on In development now names its pipeline"]
+    assert _engineering_shipped(c)[1]["pipeline"] == out["pipelines"]["Engineering"]
+    assert S.apply_factory_setup(c, ANA)["changes"] == []

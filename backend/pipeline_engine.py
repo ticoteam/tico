@@ -51,7 +51,7 @@ CLOSED = ("closed", "declined")  # a stage a card is closed into, not advanced i
 DONE = ("done", "closed", "declined")  # a ticket that has finished has no requirements left to show
 STATE_WORDS = {"none": "missing", "waiting": "waiting", "out_of_date": "out of date", "failed": "failed"}
 CHUNK = 500
-# History markers a stage move writes for the shipment reading (_shipped_ids): a Close or a Decline that placed a ticket in a
+# History markers a stage move writes for the shipment reading (_shipments): a Close or a Decline that placed a ticket in a
 # stage (a cancellation), and a move that finished a ticket into a done or closed stage (a completion).
 CLOSED_INTO = "stage_closed"
 FINISHED_INTO = "stage_finished"
@@ -306,7 +306,7 @@ def _facts(conn: sqlite3.Connection, task_ids: list[str], requirement_ids: list[
             "SELECT from_pipeline_id, to_pipeline_id FROM pipeline_links WHERE mode = 'spawn' AND retired_at IS NULL",
         ):
             spawns.setdefault(str(record["from_pipeline_id"]), set()).add(str(record["to_pipeline_id"]))
-    shipped = _shipped_ids(conn, [str(child['id']) for rows in children.values() for child in rows])
+    shipped = set(_shipments(conn, [str(child['id']) for rows in children.values() for child in rows]))
     return _Facts(tasks, labels, decisions, attachments, links, children, spawns, shipped)
 
 
@@ -332,21 +332,25 @@ def output_stage(conn: sqlite3.Connection, pipeline_id: str) -> str | None:
 def shipped(conn: sqlite3.Connection, task_ids: list[str]) -> set[str]:
     """The tickets among `task_ids` that shipped: each finished, which is a completion and never a cancellation. The
     subtask standing and the factory done count both read this one predicate."""
-    return _shipped_ids(conn, list(dict.fromkeys(task_ids)))
+    return set(shipped_at(conn, task_ids))
 
 
-def _shipped_ids(conn: sqlite3.Connection, task_ids: list[str]) -> set[str]:
-    """The tickets that shipped, judged per transition and never by where they sit now. A ticket shipped when it was marked
-    done at some point (a `done` status in its history, which still counts after it is closed or archived), or when a move
-    finished it into the output stage of its own pipeline (a `stage_finished` marker). A Close or a Decline into the output
-    stage writes a `stage_closed` marker instead, so a ticket whose only entries there are cancellations never shipped. A
-    later genuine finish still ships a ticket that was closed unfinished and reopened, and closing a shipped ticket in
-    place takes nothing back.
+def shipped_at(conn: sqlite3.Connection, task_ids: list[str]) -> dict[str, str]:
+    """{ticket: when it first shipped} for the tickets among `task_ids` that shipped (see _shipments). The factory done count
+    counts a ticket in a period only when this moment is in the period."""
+    return _shipments(conn, list(dict.fromkeys(task_ids)))
 
-    History from before the markers has none, so for it the reading is the one the markers replace: a ticket counts when it
-    entered the output stage by a forward or handoff visit and no marker says it was cancelled there. A pipeline with no
-    stage requirements writes no visits, so its old moves into the output stage do not count (the conservative reading)."""
-    shipped_ids: set[str] = set()
+
+def _shipments(conn: sqlite3.Connection, task_ids: list[str]) -> dict[str, str]:
+    """The tickets that shipped, judged per transition and never by where they sit now, with the moment of their first
+    shipment. A transition ships a ticket when it is a completion: a `done` status in its history (which still counts after
+    it is closed or archived), or a move that finished it into the output stage of its own pipeline (a `stage_finished`
+    marker). Nothing else ships. A Close or a Decline writes a `stage_closed` marker and is never a completion, so a ticket
+    whose only entries in the output stage are cancellations never shipped; a later genuine finish still ships a ticket
+    that was closed unfinished and reopened, and closing a shipped ticket in place takes nothing back.
+
+    A visit into a stage is not evidence of a finish: a move with no marker (history from before the markers) does not count.
+    Markers and visits were released together, so no real hub has visits without markers."""
     cards: dict[str, Row] = {}
     for part in _chunks(task_ids):
         for record in _rows(
@@ -356,52 +360,39 @@ def _shipped_ids(conn: sqlite3.Connection, task_ids: list[str]) -> set[str]:
         ):
             cards[str(record["id"])] = record
     if not cards:
-        return shipped_ids
+        return {}
     outputs: dict[str, str | None] = {}
     for card in cards.values():
         type_id = str(card["type_id"] or "")
         if type_id and type_id not in outputs:
             outputs[type_id] = output_stage(conn, type_id)
-    done: set[str] = set()
-    finished: set[tuple[str, str]] = set()  # (ticket, stage) a move finished into
-    cancelled: set[tuple[str, str]] = set()  # (ticket, stage) a Close or a Decline placed it in
-    entered: set[tuple[str, str]] = set()  # (ticket, stage) a forward or handoff visit entered
+    first: dict[str, str] = {}
+
+    def shipped_on(task_id: str, at: object) -> None:
+        when = str(at or "")
+        if when and (task_id not in first or when < first[task_id]):
+            first[task_id] = when
+
     for part in _chunks(list(cards)):
         marks = _marks(part)
         for record in _rows(
             conn,
-            "SELECT DISTINCT subject_id FROM history_events WHERE subject_type = 'task' AND kind = 'status' "
-            f"AND new = 'done' AND subject_id IN ({marks})",
+            "SELECT subject_id, MIN(created_at) AS at FROM history_events WHERE subject_type = 'task' AND kind = 'status' "
+            f"AND new = 'done' AND subject_id IN ({marks}) GROUP BY subject_id",
             part,
         ):
-            done.add(str(record["subject_id"]))
+            shipped_on(str(record["subject_id"]), record["at"])
         for record in _rows(
             conn,
-            "SELECT DISTINCT subject_id, kind, new FROM history_events WHERE subject_type = 'task' "
-            f"AND kind IN (?, ?) AND subject_id IN ({marks})",
-            [CLOSED_INTO, FINISHED_INTO, *part],
+            "SELECT subject_id, new, MIN(created_at) AS at FROM history_events WHERE subject_type = 'task' "
+            f"AND kind = ? AND subject_id IN ({marks}) GROUP BY subject_id, new",
+            [FINISHED_INTO, *part],
         ):
-            pair = (str(record["subject_id"]), str(record["new"]))
-            (cancelled if record["kind"] == CLOSED_INTO else finished).add(pair)
-        for record in _rows(
-            conn,
-            "SELECT DISTINCT task_id, pipeline_stage_id FROM stage_visits "
-            f"WHERE direction IN ('forward', 'handoff') AND task_id IN ({marks})",
-            part,
-        ):
-            entered.add((str(record["task_id"]), str(record["pipeline_stage_id"])))
-    for task_id, card in cards.items():
-        if task_id in done:
-            shipped_ids.add(task_id)
-            continue
-        output = outputs.get(str(card["type_id"] or ""))
-        if not output:
-            continue
-        if (task_id, output) in finished:
-            shipped_ids.add(task_id)
-        elif (task_id, output) not in cancelled and (task_id, output) in entered:
-            shipped_ids.add(task_id)  # history from before the markers: a visit in, and no Close marker says otherwise
-    return shipped_ids
+            task_id = str(record["subject_id"])
+            output = outputs.get(str(cards[task_id]["type_id"] or ""))
+            if output and str(record["new"]) == output:
+                shipped_on(task_id, record["at"])
+    return first
 
 
 def _mark_stage(conn: sqlite3.Connection, actor: str, task_id: str, kind: str, stage_id: str, at: str) -> None:
@@ -423,13 +414,14 @@ def _mark_stage(conn: sqlite3.Connection, actor: str, task_id: str, kind: str, s
     )
 
 
-def _subtasks_state(task_id: str, facts: _Facts) -> str:
-    """Engineering shipped: the ticket has subtasks in the pipelines its pipeline spawns into. A subtask shipped when it is
+def _subtasks_state(task_id: str, facts: _Facts, pipeline: str | None = None) -> str:
+    """Engineering shipped: the ticket has subtasks in the pipelines its pipeline spawns into, or only in `pipeline` when the
+    requirement names one (D64: a subtask in another pipeline neither meets nor blocks it). A subtask shipped when it is
     done or visited its pipeline's output stage (its Done, whatever its status column says). A subtask closed with its
     card or declined is gone: it neither counts as shipped nor blocks. Every live subtask must be finished, and at least
     one must have shipped; a set that is all closed with none shipped is failed (the PM is asked), never passed."""
     card = facts.tasks.get(task_id) or {}
-    wanted = facts.spawns.get(str(card.get("type_id") or ""), set())
+    wanted = {pipeline} if pipeline else facts.spawns.get(str(card.get("type_id") or ""), set())
     kids = [child for child in facts.children.get(task_id, []) if str(child["type_id"]) in wanted]
     if not kids:
         return "none"
@@ -446,7 +438,8 @@ def _run_state(task_id: str, requirement: Row, facts: _Facts, conn: sqlite3.Conn
     """The state a run requirement's source gives the work as it is now."""
     source = requirement["needs"].get("source")
     if source == "subtasks":
-        return _subtasks_state(task_id, facts)
+        named = requirement["needs"].get("pipeline")
+        return _subtasks_state(task_id, facts, str(named) if named else None)
     prs = [link for link in facts.links.get(task_id, []) if link["state"] != "closed"]
     if not prs:
         return "none"
@@ -990,6 +983,30 @@ def is_cancellation(status: str | None, *, explicit_step: bool = False) -> bool:
     return status == "closed" and not explicit_step
 
 
+def completion_target(
+    conn: sqlite3.Connection,
+    row: Row,
+    type_id: str | None,
+    step_id: str | None,
+    effective: str | None,
+    *,
+    explicit_step: bool,
+) -> str | None:
+    """The stage a write is held to as progress, or None when it is not progress. A move to a stage is held to that stage.
+    A status done with no step of its own (booted Engineering's Done is closed, so `status=done` resolves to none) is a
+    completion, and it is held as a move into the pipeline's completion stage (pipeline_setup.completion_stage). Cancellations
+    (a Close with no step, a Decline) and every other status write are not held here."""
+    if is_cancellation(effective, explicit_step=explicit_step):
+        return None
+    if step_id:
+        return step_id
+    if effective != "done" or row.get("status") == "done" or not type_id:
+        return None
+    from .pipeline_setup import completion_stage
+
+    return completion_stage(conn, type_id)
+
+
 def check_move(
     conn: sqlite3.Connection,
     actor: str,
@@ -1031,6 +1048,49 @@ def check_move(
             )
         return
     scope = _forward_scope(conn, task_id, here, target)
+    _hold(conn, actor, task_id, pipeline_id, f"Can't leave {here['name']} yet", scope, override, override_note)
+
+
+def is_completion(row: Row, effective: str | None) -> bool:
+    """Whether a write marks the ticket done now: a `done` status event, which ships it (_shipments)."""
+    return effective == "done" and row.get("status") != "done"
+
+
+def check_completion(
+    conn: sqlite3.Connection, actor: str, row: Row, override: bool = False, override_note: str | None = None
+) -> None:
+    """A ticket marked done where it stands (no move: it already sits in its Done stage, for instance after a Close put it
+    there, or its pipeline has no Done stage) is held to everything a finish is held to: its current stage and every stage
+    it visited and left, as check_move holds a forward move. Without this, Close into Done then `status=done` shipped work
+    whose approval was still waiting."""
+    task_id = str(row.get("id") or "")
+    now = _one(conn, "SELECT type_id, step_id FROM tasks WHERE id = ?", (task_id,)) if task_id else None
+    if now is None:
+        return
+    here = stage(conn, str(now["step_id"])) if now["step_id"] else None
+    scope: dict[str, str | None]
+    if here is not None:
+        scope = _forward_scope(conn, task_id, here, None)
+    else:
+        # No stage now (a Close on a pipeline with no Done stage clears it): the stages it visited still hold it.
+        scope = dict(_visited(conn, [task_id]).get(task_id, {}))
+    if not scope:
+        return
+    _hold(conn, actor, task_id, str(now["type_id"] or ""), "Can't mark it done yet", scope, override, override_note)
+
+
+def _hold(
+    conn: sqlite3.Connection,
+    actor: str,
+    task_id: str,
+    pipeline_id: str,
+    blocked: str,
+    scope: dict[str, str | None],
+    override: bool,
+    override_note: str | None,
+) -> None:
+    """Refuse (rule "requirement") unless every requirement of `scope` is met, or a rule editor overrides the ones that
+    are not (never a protected approval)."""
     by_stage = _requirements(conn, _pipelines_of(conn, list(scope)) or [pipeline_id])
     if not any(by_stage.get(stage_id) for stage_id in scope):
         return  # the off switch: nothing this move is held to has requirements
@@ -1048,14 +1108,14 @@ def check_move(
                 conn,
                 actor,
                 "requirement",
-                f"Can't leave {here['name']} yet: {_names(protected)}. A spec or release approval needs its named "
+                f"{blocked}: {_names(protected)}. A spec or release approval needs its named "
                 "person, so an override can't stand in for it.",
                 task=task_id,
             )
         _record_override(conn, actor, task_id, unmet, override_reason(override_note))
         return
     hint = "" if editable else " A pipeline editor can move it on anyway."
-    H.refuse(conn, actor, "requirement", f"Can't leave {here['name']} yet: {_names(unmet)}.{hint}", task=task_id)
+    H.refuse(conn, actor, "requirement", f"{blocked}: {_names(unmet)}.{hint}", task=task_id)
 
 
 def check_forward(conn: sqlite3.Connection, actor: str, row: Row, type_id: str | None, step_id: str | None) -> None:

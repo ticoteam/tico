@@ -118,3 +118,50 @@ def test_a_field_or_run_is_a_rule_so_a_bot_or_judge_cannot_review_it(tmp_path):
             assert refused.value.status == 422
     nobody = R.add(c, ANA, stage, _body(kind="field", needs={"field": "due"}, reviewed_by="nobody", rubric=None))
     assert nobody["reviewed_by"] == "nobody"
+
+
+def test_editing_a_subtasks_run_keeps_the_pipeline_it_names(tmp_path):
+    """r5: check_definition rebuilt a run's needs as {source, at_head}, so an edit through the editor dropped the named
+    pipeline and the run counted every spawned pipeline again (Marketing meeting Engineering shipped)."""
+    path = tmp_path / "hub.sqlite"
+    boot(path)
+    c = hub(path)
+    _, stage = _review_stage(c, "Plans")
+    target, _ = _review_stage(c, "Builds")
+    run = {"name": "Shipped", "kind": "run", "reviewed_by": "nobody"}
+    made = R.add(c, ANA, stage, {**run, "needs": {"source": "subtasks", "pipeline": target["id"]}})
+    assert made["needs"]["pipeline"] == target["id"]
+    assert R.versions(c, made["id"])[0]["definition"]["needs"]["pipeline"] == target["id"]
+    edited = R.edit(c, ANA, made["id"], {**run, "name": "Shipped it", "needs": {"source": "subtasks"}})
+    assert edited["needs"]["pipeline"] == target["id"]
+    with pytest.raises(Problem):
+        R.add(c, ANA, stage, {**run, "name": "Other", "needs": {"source": "github_checks", "pipeline": target["id"]}})
+    with pytest.raises(Problem):
+        R.add(c, ANA, stage, {**run, "name": "Gone", "needs": {"source": "subtasks", "pipeline": "no-such-pipeline"}})
+
+
+def test_a_ticket_closed_off_a_pipeline_with_no_done_stage_is_still_held_when_marked_done(tmp_path):
+    """Codex r6 blocker 1: on a pipeline with no Done stage a Close clears the ticket's stage, and check_completion read
+    only the current stage, so `status=done` then shipped it past a waiting approval. The stages it visited still hold it."""
+    path = tmp_path / "hub.sqlite"
+    boot(path)
+    c = hub(path)
+    build = H.type_create(c, ANA, "Build only", [{"name": "Build", "status": "doing"}], mover=True)
+    stage = step_id(c, build["id"], "Build")
+    R.add(
+        c,
+        ANA,
+        stage,
+        {"name": "Ana signs off", "kind": "approval", "needs": {}, "reviewed_by": "person", "reviewer_id": ANA},
+    )
+    ticket = H.task_create(c, ANA, "Card", "", ANA, type=build["id"], step="Build", lint=False)
+    c.commit()
+    with pytest.raises(H.Refused):
+        H.task_update(c, ANA, ticket["id"], status="done")
+    c.rollback()
+    H.task_close(c, ANA, ticket["id"], note="Dropped")
+    c.commit()
+    with pytest.raises(H.Refused):
+        H.task_update(c, ANA, ticket["id"], status="done")
+    c.rollback()
+    assert H.task(c, ticket["id"])["status"] == "closed"

@@ -177,3 +177,21 @@ def test_a_refused_parent_move_after_a_subtask_finishes_keeps_the_subtasks_chang
     )
     [logged] = rows(c, "SELECT note FROM history_events WHERE subject_id=? AND kind='auto_move_refused'", parent)
     assert "could not be filed" in logged["note"]
+
+
+def test_a_blob_shared_by_many_tasks_is_skipped_in_a_few_statements(tmp_path):
+    """Codex r6 blocker 2: the provenance walk counted blobs and files but not tasks, and read every row of each lookup, so
+    one blob on 10,000 tasks ran 20,000 statements under the writer. Tasks count toward the budget and each lookup reads
+    at most the budget left plus one: past it the item is unsure (skipped), after a handful of statements."""
+    path = tmp_path / "hub.sqlite"
+    boot(path)
+    c = hub(path)
+    c.execute("PRAGMA foreign_keys=OFF")  # bare rows: only the walk's reads matter here
+    c.executemany(
+        "INSERT INTO task_assets VALUES(?,?)", [(f"t{n}", "shared-blob") for n in range(L.PROVENANCE_LIMIT + 300)]
+    )
+    statements: list[str] = []
+    c.set_trace_callback(statements.append)
+    assert L._pipeline_tasks(c, {"blob_id": "shared-blob"}) is None
+    c.set_trace_callback(None)
+    assert len(statements) < 10
