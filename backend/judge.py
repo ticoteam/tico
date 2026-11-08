@@ -235,27 +235,26 @@ NEW_SPEND_SQL = (
 )
 # A budget is the settings field holding its monthly cap and the event action its spend rows are written as. Decide's
 # own is the default; org rule checks keep a separate one (backend/org_rule_check.py), so neither can spend the other's.
-DECIDE_BUDGET = ("decisions_monthly_usd", "judge.spend")
+DECIDE_BUDGET = ("decisions_monthly_usd", "judge.spend", "monthly_cap_usd")
 
 
-def saved_cap(c):
-    """The monthly cap saved in Settings > Maintenance (registry_metadata `maintenance`, monthly_cap_usd), or None when
-    none is saved: the environment's TICO_DECISIONS_MONTHLY_USD then holds."""
+def saved_cap(c, key="monthly_cap_usd"):
+    """The monthly cap saved in Automations > Maintenance (registry_metadata `maintenance`, `key`: Decide's monthly_cap_usd,
+    the rules' rules_monthly_cap_usd), or None when none is saved: the environment's setting then holds."""
     row = c.execute("SELECT value FROM registry_metadata WHERE key='maintenance'").fetchone()
     try:
         stored = json.loads(row[0]) if row else {}
     except (TypeError, ValueError):
         return None
-    cap = stored.get("monthly_cap_usd") if isinstance(stored, dict) else None
+    cap = stored.get(key) if isinstance(stored, dict) else None
     return float(cap) if isinstance(cap, (int, float)) and not isinstance(cap, bool) and cap >= 0 else None
 
 
 def budget_cap(c, settings, budget=DECIDE_BUDGET):
-    """The cap a budget enforces: Decide's saved cap when one is saved, else the settings field (the environment's)."""
-    if budget == DECIDE_BUDGET:
-        saved = saved_cap(c)
-        if saved is not None:
-            return saved
+    """The cap a budget enforces: its saved cap when one is saved (`budget[2]`), else the settings field (the environment's)."""
+    saved = saved_cap(c, budget[2])
+    if saved is not None:
+        return saved
     return float(getattr(settings, budget[0], 0) or 0)
 
 
@@ -601,7 +600,7 @@ def primary_engine(settings, store=None, vault=None):
     return ordered([gateway(settings, store, vault), jev(settings)])
 
 
-def server_engine(store, c, primary=None, budget=DECIDE_BUDGET):
+def server_engine(store, c, primary=None, budget=DECIDE_BUDGET, backup=True):
     """The decision model every server-side caller uses, or None for "carry on as if Decide were off": rehearsal, no
     model at all, a demo, or the month's spend at the cap. `primary` is the Gateway and the own TypeSafe key
     (`primary_engine(settings)`, or the test's fake); when they are slow, down or refused, the company's own model answers
@@ -613,7 +612,7 @@ def server_engine(store, c, primary=None, budget=DECIDE_BUDGET):
     # never an answer, and a seed that waits on either builds a different company from run to run.
     if settings.rehearsal or settings.demo or over_spend_cap(c, settings, None, budget):
         return None
-    backup = fallback_engine(providers.load(c, settings))
+    backup = fallback_engine(providers.load(c, settings)) if backup else None
     steps = live(primary, c, settings)
     chain = ordered(steps + [backup])
     if chain is None:

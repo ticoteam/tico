@@ -899,3 +899,26 @@ def test_a_rule_check_calls_spend_counts_under_its_set_in_the_readout(api):
         )
     sets = {row["set"]: row for row in get(api, "decisions/readout")["sets"]}
     assert sets["rule-check"]["cost_usd"] == 0.00875
+
+
+def test_the_rules_cap_is_saved_in_maintenance_then_the_environment_then_fifty_and_apart_from_decides(api):
+    from backend import org_rule_check as K
+
+    store = api.app.state.store
+    settings = store.settings
+    settings.rules_monthly_usd = 50.0
+    with store.read() as c:
+        assert B.budget_cap(c, settings, K.BUDGET) == 50.0
+    with store.transaction() as c:
+        c.execute(
+            "INSERT INTO registry_metadata VALUES('maintenance', ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+            (json.dumps({"rules_monthly_cap_usd": 80}),),
+        )
+    with store.read() as c:
+        assert B.budget_cap(c, settings, K.BUDGET) == 80.0
+        assert B.budget_cap(c, settings) == settings.decisions_monthly_usd  # Decide's own cap is not the rules one
+    settings.rules_monthly_usd = 20.0  # the environment holds only while nothing is saved
+    with store.transaction() as c:
+        c.execute("UPDATE registry_metadata SET value=? WHERE key='maintenance'", (json.dumps({}),))
+    with store.read() as c:
+        assert B.budget_cap(c, settings, K.BUDGET) == 20.0
