@@ -58,7 +58,9 @@ def comment_marker(head, queue, tests=QUARANTINE):
 
 
 class FakeGitHub:
-    def __init__(self, comments=None, fail=(), can_enqueue=True, status="completed", stderr="{} refused"):
+    def __init__(
+        self, comments=None, fail=(), can_enqueue=True, status="completed", stderr="GraphQL: {} refused", limited=()
+    ):
         self.pages = json.loads((FIXTURES / "open-prs.json").read_text())
         # {number: [body, ...]}; comment ids are number * 1000 + position
         self.existing = {n: [(n * 1000 + i, b) for i, b in enumerate(bodies)] for n, bodies in (comments or {}).items()}
@@ -66,6 +68,7 @@ class FakeGitHub:
         self.can_enqueue = can_enqueue
         self.status = status
         self.stderr = stderr
+        self.limited = set(limited)  # calls refused for the rate limit
         self.calls = []
 
     def open_prs(self):
@@ -101,6 +104,8 @@ class FakeGitHub:
 
     def _write(self, *call):
         self.calls.append(call)
+        if call[0] in self.limited:
+            raise keeper.RateLimited(1, ["gh"], stderr="HTTP 403: API rate limit exceeded")
         if call[0] in self.fail:
             raise subprocess.CalledProcessError(1, ["gh"], stderr=self.stderr.format(call[0]))
 
@@ -166,6 +171,17 @@ def test_the_factory_sim_names_each_scenario_with_a_fail_line():
     assert keeper.read_log(log_lines("factory-sim-failed.log")) == ([], [], ["stranded_doing seed 1"])
 
 
+def summary(*lines, results="1 failed, 3 passed in 1.0s"):
+    header = "=========================== short test summary info ============================"
+    return [f"{line}\n" for line in (header, *lines, results)]
+
+
+def test_a_parameter_id_holding_a_dash_is_read_whole():
+    test = "backend/tests/test_x.py::test_split[a - b]"
+    assert keeper.read_log(summary(f"FAILED {test} - AssertionError: x - y"))[0] == [(test, False)]
+    assert keeper.read_log(summary(f"FAILED {test}"))[0] == [(test, False)]
+
+
 def test_a_coloured_summary_still_reads():
     lines = [
         "\x1b[31m=========================== short test summary info ============================\x1b[0m\n",
@@ -173,11 +189,6 @@ def test_a_coloured_summary_still_reads():
         "\x1b[31m1 failed\x1b[0m, 3 passed in 1.0s\n",
     ]
     assert keeper.read_log(lines)[0] == [(RECRUITING, False)]
-
-
-def summary(*lines, results="1 failed, 3 passed in 1.0s"):
-    header = "=========================== short test summary info ============================"
-    return [f"{line}\n" for line in (header, *lines, results)]
 
 
 def test_a_collection_error_in_the_summary_is_named_and_is_never_a_crash():
@@ -220,21 +231,38 @@ def test_a_job_that_timed_out_with_no_failed_step_still_counts():
     assert [step for _, step in keeper.failed_jobs(jobs)] == ["timed out"]
 
 
-def test_the_attempt_that_failed_counts_though_a_later_rerun_passed():
-    failed = jobs_with("python-5")
-    passed = copy.deepcopy(failed)
-    for job in failed:
-        job["run_attempt"] = 1
-    for job in passed:
-        job["run_attempt"], job["conclusion"] = 2, "success"
-        for step in job["steps"]:
-            step["conclusion"] = "success"
-    assert [job["name"] for job, _ in keeper.failed_attempt(passed + failed)] == ["python-5"]
-    rerun = copy.deepcopy(failed)
-    for job in rerun:
-        job["run_attempt"] = 2
-        job["name"] = job["name"].replace("python-5", "python-7")
-    assert [job["name"] for job, _ in keeper.failed_attempt(failed + rerun)] == ["python-7"]  # the newest failure
+def attempt(jobs, number, **changes):
+    jobs = copy.deepcopy(jobs)
+    for job in jobs:
+        job["run_attempt"] = number
+        job.update(changes)
+    return jobs
+
+
+def test_a_failure_in_any_attempt_counts_though_a_later_rerun_passed():
+    first = attempt(jobs_with("python-5"), 1)
+    rerun = attempt([j for j in first if j["name"] == "python-5"], 2, conclusion="success", steps=[])
+    assert [(job["name"], job["run_attempt"]) for job, _ in keeper.failed_jobs(first + rerun)] == [("python-5", 1)]
+
+
+def test_a_partial_rerun_keeps_the_failures_it_did_not_rerun():
+    # Attempt 1: a browser leg and python-5 failed. Attempt 2 reran python-5 only, which failed again.
+    first = attempt(jobs_with("python-5"), 1)
+    first += attempt([j for j in first if j["name"] == "python-5"], 1, name="browser-1", id=99)
+    rerun = attempt([j for j in first if j["name"] == "python-5"], 2, id=100)
+    failed = [(job["name"], job["run_attempt"]) for job, _ in keeper.failed_jobs(first + rerun)]
+    assert failed == [("python-5", 1), ("browser-1", 1), ("python-5", 2)]
+
+
+def test_every_failed_step_of_a_job_counts():
+    (job,) = [j for j in jobs_with("python-5") if j["name"] == "python-5"]
+    job["steps"].append({"name": "Upload test results", "conclusion": "failure"})
+    assert [step for _, step in keeper.failed_jobs([job])] == ["Run selected tests", "Upload test results"]
+    gh = FakeGitHub()
+    gh.jobs = lambda run_id: [{**job, "id": f"{run_id}:{job['id']}"}]
+    run(gh)
+    assert [c[0] for c in written_to(gh, 2984)] == ["comment"]  # a quarantined test, but the upload failed too
+    assert sum(1 for c in gh.calls if c[0] == "log" and c[1].startswith(sha("1"))) == 1
 
 
 def finding(*tests, job="python-5", step="Run selected tests", **kw):
@@ -400,10 +428,12 @@ def test_a_second_flake_on_the_same_head_is_commented_not_re_enqueued():
 
 
 def test_a_comment_written_after_a_requeue_says_so_without_the_older_requeue_marker():
-    # The requeue marker may be older than the last 100 comments; the comment marker carries it.
+    # The requeue marker may be out of sight; the comment marker carries it. A new queue run is diagnosed, not requeued.
     gh = FakeGitHub(comments={2953: [comment_marker(sha("d3"), sha("0"), set()).replace(" -->", " requeued -->")]})
     run(gh)
-    assert written_to(gh, 2953) == [] and gh.writes("edit_comment") == []
+    assert written_to(gh, 2953) == []
+    (edit,) = gh.writes("edit_comment")
+    assert edit[1] == 2953000 and "Already re-queued once for this commit" in edit[2]
 
 
 def test_a_requeued_head_s_comment_marker_records_the_requeue():
@@ -419,6 +449,8 @@ def test_a_requeued_head_is_never_re_enqueued_again_when_the_quarantine_changes(
     gh = FakeGitHub(comments={2966: [comment_marker(sha("c2"), sha("7a"), set()).replace(" -->", " requeued -->")]})
     run(gh)
     assert written_to(gh, 2966) == []
+    (edit,) = gh.writes("edit_comment")
+    assert "Already re-queued once for this commit" in edit[2]
 
 
 def test_without_a_queue_token_the_flake_comment_is_marked_deferred_and_requeued_once_a_token_is_added():
@@ -434,9 +466,20 @@ def test_without_a_queue_token_the_flake_comment_is_marked_deferred_and_requeued
     assert [c[0] for c in written_to(later, 2984)] == ["comment", "enqueue"]
 
 
+def test_a_diagnosed_then_quarantined_then_requeued_head_gets_its_next_failure_diagnosed():
+    # #2966: commented on queue run 7a, then requeued once its test was quarantined; the queue dropped it again (6a).
+    gh = FakeGitHub(
+        comments={2966: [comment_marker(sha("c2"), sha("55"), set()), f"<!-- stale-pr-keeper:requeue {sha('c2')} -->"]}
+    )
+    run(gh)
+    assert all(c[1] != 2966 for c in gh.writes("enqueue"))
+    (edit,) = gh.writes("edit_comment")
+    assert edit[1] == 2966000 and "Already re-queued once for this commit" in edit[2]
+
+
 def test_a_requeued_and_commented_head_is_done():
     gh = FakeGitHub(
-        comments={2953: [f"<!-- stale-pr-keeper:requeue {sha('d3')} -->", comment_marker(sha("d3"), sha("0"), set())]}
+        comments={2953: [f"<!-- stale-pr-keeper:requeue {sha('d3')} -->", comment_marker(sha("d3"), sha("8a"))]}
     )
     run(gh)
     assert written_to(gh, 2953) == [] and gh.writes("edit_comment") == []
@@ -520,17 +563,50 @@ def test_a_failed_enqueue_takes_its_marker_back_and_fails_the_run_after_the_rest
     gh = FakeGitHub(fail={"enqueue"})
     text, ok = run(gh)
     assert not ok
-    assert "#2984 requeued: enqueue refused" in text
+    assert "#2984 requeued: GraphQL: enqueue refused" in text
     assert ("delete_comment", 777) in gh.calls
     assert [c[0] for c in written_to(gh, 3060)] == ["comment", "enqueue"]  # later pull requests were still handled
     assert [c[0] for c in written_to(gh, 3033)] == ["comment"]
 
 
-def test_an_enqueue_that_failed_in_transit_keeps_its_marker():
-    gh = FakeGitHub(fail={"enqueue"}, stderr="Post https://api.github.com/graphql: net/http: TLS handshake timeout")
+@pytest.mark.parametrize(
+    "stderr",
+    ["Post https://api.github.com/graphql: net/http: TLS handshake timeout", "unexpected end of JSON input", ""],
+)
+def test_an_enqueue_whose_outcome_is_unknown_keeps_its_marker(stderr):
+    gh = FakeGitHub(fail={"enqueue"}, stderr=stderr)
     _, ok = run(gh)
     assert not ok and ("enqueue", 2984, sha("a")) in gh.calls
     assert not any(c[0] == "delete_comment" for c in gh.calls)
+
+
+def test_a_rate_limited_enqueue_keeps_its_marker_and_stops_the_run():
+    gh = FakeGitHub(limited={"enqueue"})
+    text, ok = run(gh)
+    assert not ok and not any(c[0] == "delete_comment" for c in gh.calls)
+    assert written_to(gh, 3060) == [] and "#3060: not read (rate limit)" in text
+
+
+def test_a_rate_limit_while_labelling_stops_the_run_before_the_comments_are_read():
+    gh = FakeGitHub(limited={"add_label"})
+    text, ok = run(gh)
+    assert not ok and gh.writes("remove_label") == []
+    assert not any(c[0] == "comments" for c in gh.calls)
+    assert "#2984: not read (rate limit)" in text
+
+
+def test_add_label_does_not_try_to_create_the_label_under_the_rate_limit(monkeypatch):
+    calls = []
+
+    def limited(*args, **_):
+        calls.append(args)
+        raise keeper.RateLimited(1, ["gh"], stderr="API rate limit exceeded")
+
+    gh = keeper.GitHub("ticoteam/tico")
+    monkeypatch.setattr(gh, "_gh", limited)
+    with pytest.raises(keeper.RateLimited):
+        gh.add_label(1, "needs-main-merge")
+    assert len(calls) == 1
 
 
 def test_the_rate_limit_stops_the_run_at_once(monkeypatch):
@@ -622,11 +698,7 @@ def test_comments_page_back_until_the_heads_marker_is_found(monkeypatch):
     head = sha("a")
     replies = [
         {"data": {"repository": {**comments_page(1, ["chatter"] * 100, previous="c1"), **comments_page(2, ["x"])}}},
-        {
-            "data": {
-                "repository": comments_page(1, ["chatter"] * 99 + [f"<!-- stale-pr-keeper:requeue {head} -->"], "c2")
-            }
-        },
+        {"data": {"repository": comments_page(1, ["chatter"] * 99 + [comment_marker(head, sha("1"))], "c2")}},
     ]
     seen = []
 
@@ -638,8 +710,25 @@ def test_comments_page_back_until_the_heads_marker_is_found(monkeypatch):
     out = keeper.GitHub("ticoteam/tico").comments({1: head, 2: sha("b")})
     assert len(seen) == 2  # the second page had the marker: the third is never read
     assert 'before: "c1"' in seen[1][4]
-    assert len(out[1]) == 200 and [m.kind for m in keeper.markers(out[1])] == ["requeue"]
+    assert len(out[1]) == 200 and [m.kind for m in keeper.markers(out[1])] == ["comment"]
     assert out[2] == [(2000, "x")]
+
+
+def test_comments_page_back_past_a_requeue_marker_to_the_heads_comment(monkeypatch):
+    head = sha("a")
+    replies = [
+        {"data": {"repository": comments_page(1, [f"<!-- stale-pr-keeper:requeue {head} -->"], previous="c1")}},
+        {"data": {"repository": comments_page(1, [comment_marker(head, sha("1"))])}},
+    ]
+    seen = []
+
+    def fake_run(args, **_):
+        seen.append(args)
+        return subprocess.CompletedProcess(args, 0, stdout=json.dumps(replies[len(seen) - 1]))
+
+    monkeypatch.setattr(keeper.subprocess, "run", fake_run)
+    out = keeper.GitHub("ticoteam/tico").comments({1: head})
+    assert len(seen) == 2 and [m.kind for m in keeper.markers(out[1])] == ["comment", "requeue"]
 
 
 def test_only_the_keepers_own_comments_count(monkeypatch):
@@ -705,7 +794,14 @@ def test_the_workflow_is_hourly_and_on_demand_and_keeps_the_queue_token_apart():
     triggers = workflow[True]  # PyYAML reads the bare `on` key as True
     assert "workflow_dispatch" in triggers
     assert triggers["schedule"][0]["cron"].split()[1:] == ["*", "*", "*", "*"]
-    assert workflow["permissions"]["contents"] == "read"
+    assert workflow["permissions"] == {
+        "contents": "read",
+        "pull-requests": "write",
+        "issues": "write",
+        "actions": "read",
+        "checks": "read",
+        "statuses": "read",
+    }
     (job,) = workflow["jobs"].values()
     (step,) = [s for s in job["steps"] if "scripts/stale_pr_keeper.py" in s.get("run", "")]
     assert step["env"]["GH_TOKEN"] == "${{ github.token }}"

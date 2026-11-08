@@ -58,8 +58,9 @@ MAX_NAMED = 8
 GONE = re.compile(r"HTTP 404|HTTP 410")  # an expired or deleted log; anything else is retried next run
 # GitHub's primary and secondary rate limits (HTTP 403 or 429): the run stops reading and writing at once.
 RATE_LIMITED = re.compile(r"rate limit|HTTP 429", re.I)
-# An enqueue that failed in transit may still have reached GitHub: its marker stays, so it is never repeated.
-IN_TRANSIT = re.compile(r"timeout|timed out|connection|EOF|TLS|i/o|HTTP 5\d\d", re.I)
+# An enqueue GitHub answered with a refusal; any other failure (a timeout, a dropped connection, a garbled reply) may
+# still have queued it, so its marker stays and the head is never re-enqueued again.
+REFUSED = re.compile(r"GraphQL: |HTTP 4\d\d|(?i:not mergeable|already (?:queued|in the merge queue))")
 
 
 class RateLimited(subprocess.CalledProcessError):
@@ -262,7 +263,9 @@ def is_quarantined(nodeid, tests):
 LOG_PREFIX = re.compile(r"^﻿?\d{4}-\d\d-\d\dT[\d:.]+Z ")
 ANSI = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
 SUMMARY_HEADER = re.compile(r"^=+ short test summary info =+$")
-SUMMARY = re.compile(r"^(?:FAILED|ERROR) (?P<test>[^\s:]+\.py::.+?)(?: - (?P<message>.*))?$")
+# A parameter id may hold " - " itself: the shortest bracketed id that leaves either the end or " - message" wins
+# (as flake_quarantine.py reads it).
+SUMMARY = re.compile(r"^(?:FAILED|ERROR) (?P<test>[^\s:]+\.py::[^\s\[]+(?:\[.*?\])?)(?: - (?P<message>.*))?$")
 UNLISTED = re.compile(r"^(?:FAILED|ERROR) (?P<name>\S+)")  # a collection error: a file, not a test id
 RESULTS = re.compile(r"^=*\s*\d+ (?:failed|passed|errors?|skipped|xfailed|xpassed|deselected)\b")
 COUNTS = re.compile(r"(\d+) (failed|errors?)\b")
@@ -326,17 +329,18 @@ def read_log(lines):
 
 
 def failed_jobs(jobs):
-    """(job, failed step name) for each job of a run that failed on its own. A failed shard cancels its run
-    (pr-checks.yml), so its job ends cancelled; its failed step still says failure. The `checks` gate only repeats it."""
+    """(job, failed step name) for each failed step of each job that failed on its own, across every attempt of the run
+    (a rerun, whole or partial, after the removal does not undo the failure that removed it). A failed shard cancels its
+    run (pr-checks.yml), so its job ends cancelled; its failed step still says failure. The `checks` gate only repeats
+    it."""
     out = []
     for job in jobs:
         if job["name"] in REPORTING_JOBS:
             continue
-        step = next((s["name"] for s in job.get("steps") or [] if s.get("conclusion") == "failure"), None)
-        if step is None and job.get("conclusion") in ("failure", "timed_out"):
-            step = job["conclusion"].replace("_", " ")
-        if step is not None:
-            out.append((job, step))
+        steps = [s["name"] for s in job.get("steps") or [] if s.get("conclusion") == "failure"]
+        if not steps and job.get("conclusion") in ("failure", "timed_out"):
+            steps = [job["conclusion"].replace("_", " ")]
+        out += [(job, step) for step in steps]
     return out
 
 
@@ -476,16 +480,19 @@ class GitHub:
 
     def comments(self, heads):
         """{number: [(comment id, body)]} for each pull request in {number: head}: the last 100 comments, 25 pull
-        requests a query, and older pages one pull request at a time only while that head has no marker yet (a comment
-        marker written after a re-enqueue says so, so the older requeue marker is not needed). Only the keeper's own
-        comments (the token's) count: a marker anyone else pastes is ignored."""
+        requests a query, and older pages one pull request at a time only while that head has no comment marker yet.
+        Every newer marker is then in hand too (a comment marker written after a re-enqueue says so, so an older requeue
+        marker is not needed). Only the keeper's own comments (the token's) count: a marker anyone else pastes is
+        ignored."""
         out = {}
         numbers = list(heads)
         for start in range(0, len(numbers), 25):
             for n, comments in self._comment_pages(numbers[start : start + 25]).items():
                 out[n] = [(c["databaseId"], c["body"]) for c in comments["nodes"] if c.get("viewerDidAuthor")]
                 info = comments["pageInfo"]
-                while info.get("hasPreviousPage") and not any(m.sha == heads[n] for m in markers(out[n])):
+                while info.get("hasPreviousPage") and not any(
+                    m.sha == heads[n] and m.kind == "comment" for m in markers(out[n])
+                ):
                     older = self._comment_pages([n], before=info["startCursor"])[n]
                     out[n] = [(c["databaseId"], c["body"]) for c in older["nodes"] if c.get("viewerDidAuthor")] + out[n]
                     info = older["pageInfo"]
@@ -541,6 +548,8 @@ class GitHub:
     def add_label(self, number, label):
         try:
             self._gh("api", f"repos/{self.repo}/issues/{number}/labels", "-f", f"labels[]={label}")
+        except RateLimited:
+            raise
         except subprocess.CalledProcessError:
             self._gh(
                 "label",
@@ -560,24 +569,14 @@ class GitHub:
         self._gh("api", "-X", "DELETE", f"repos/{self.repo}/issues/{number}/labels/{label}")
 
 
-def failed_attempt(jobs):
-    """failed_jobs() of the newest attempt that has any (the one that removed the pull request; a later passing rerun
-    does not bring it back)."""
-    attempts = {}
-    for job in jobs:
-        attempts.setdefault(job.get("run_attempt", 1), []).append(job)
-    for attempt in sorted(attempts, reverse=True):
-        failed = failed_jobs(attempts[attempt])
-        if failed:
-            return failed
-    return []
-
-
 def findings_for(gh, run):
-    out = []
-    for job, step in failed_attempt(gh.jobs(run["id"])):
-        finding = Finding(job=job["name"], step=step, url=job["html_url"])
-        if step == TEST_STEP or job["name"].startswith("factory sim"):
+    out, read = [], set()
+    for job, step in failed_jobs(gh.jobs(run["id"])):
+        attempt = job.get("run_attempt", 1)
+        name = job["name"] + (f" (attempt {attempt})" if attempt > 1 else "")
+        finding = Finding(job=name, step=step, url=job["html_url"])
+        if (step == TEST_STEP or job["name"].startswith("factory sim")) and job["id"] not in read:
+            read.add(job["id"])
             found = gh.read_job_log(job["id"])
             if found is None:
                 finding.log_missing = True
@@ -588,13 +587,14 @@ def findings_for(gh, run):
 
 
 def requeue(gh, pr, body):
-    """The marker comment first, so a head is never re-enqueued twice. It is taken back when GitHub refused the
-    enqueue; an enqueue that failed in transit may have landed, so its marker stays."""
+    """The marker comment first, so a head is never re-enqueued twice. It is taken back only when GitHub answered with
+    a refusal; any other failure may have queued it, so its marker stays (as it does under the rate limit, when another
+    call would be refused too)."""
     comment_id = gh.comment(pr.number, body)
     try:
         gh.enqueue(pr.number, pr.head)
     except subprocess.CalledProcessError as error:
-        if not IN_TRANSIT.search(error.stderr or ""):
+        if not isinstance(error, RateLimited) and REFUSED.search(error.stderr or ""):
             try:
                 gh.delete_comment(comment_id)
             except subprocess.CalledProcessError:
@@ -648,7 +648,7 @@ def keep(gh, tests, now, dry_run=False):
         else:
             candidates.append(pr)
     try:
-        seen = gh.comments({pr.number: pr.head for pr in candidates}) if candidates else {}
+        seen = gh.comments({pr.number: pr.head for pr in candidates}) if candidates and not halted else {}
     except subprocess.CalledProcessError as error:
         done["errors"].append(f"reading comments: {_error(error)}")
         candidates, seen = [], {}
@@ -666,7 +666,7 @@ def keep(gh, tests, now, dry_run=False):
             and comment.quarantine == key
             and not (comment.deferred and gh.can_enqueue)  # a queue token has been added since
         )
-        if comment is not None and (requeued or current):
+        if current:  # a re-enqueue only stops another enqueue: a new failure is still diagnosed
             done["skipped"].append(f"#{pr.number}: already commented on {pr.head[:10]}")
             continue
         try:

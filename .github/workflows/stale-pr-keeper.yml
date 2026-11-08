@@ -27,6 +27,8 @@ permissions:
   pull-requests: write # comments and labels
   issues: write # comments and labels through the issues API
   actions: read # queue runs, jobs and logs
+  checks: read # check suites and the status rollup of each head
+  statuses: read # the status rollup of each head
 
 concurrency:
   group: stale-pr-keeper
