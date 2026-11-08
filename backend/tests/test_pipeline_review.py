@@ -1702,3 +1702,98 @@ def test_a_satisfied_legacy_bot_then_person_field_lets_the_last_approval_advance
     w.approve(w.mockup)
     assert w.approve(w.signoff)["advanced"] is True
     assert w.step_of() == w.shipped
+
+
+def _spawn_row(w, link_id):
+    return w.c.execute("SELECT * FROM pipeline_links WHERE id=?", (link_id,)).fetchone()
+
+
+def test_named_not_validated_files_into_the_nearest_link_when_two_links_into_the_named_pipeline_both_shipped(tmp_path):
+    """Codex r5 blocker 3: the subtasks run names Engineering, and two spawn links into Engineering (Planning's and
+    Making's) both delivered shipped work. Every candidate files into the named pipeline, so the route is not ambiguous:
+    Not validated files one Engineering subtask through the nearest link (Making's), and the queue offers it."""
+    w = World(tmp_path / "hub.sqlite", steps=[{"name": "Planning", "status": "doing"}, *STEPS])
+    w.attach()
+    engineering = H.type_create(w.c, ANA, "Build Team", STEPS, mover=True)["id"]
+    planning_link = L.create_link(w.c, ANA, w.step("Planning"), engineering, mode="spawn")["id"]
+    making_link = L.create_link(w.c, ANA, w.making, engineering, mode="spawn")["id"]
+    w.requirement(
+        "Subtasks", "run", "bot", stage=w.making, needs=json.dumps({"source": "subtasks", "pipeline": engineering})
+    )
+    first = L.spawn(w.c, _spawn_row(w, planning_link), w.task)
+    assert first is not None
+    _reassign(w, first)
+    _ship(w, first)
+    second = L.spawn(w.c, _spawn_row(w, making_link), w.task)
+    assert second is not None
+    _ship(w, second)
+    item = lambda: next(i for i in R.queue_for(w.c, ANA) if i["requirement_id"] == w.mockup)  # noqa: E731
+    assert item()["can_not_validate"] is True
+    done = R.not_validated(
+        w.c, ANA, w.task, w.mockup, "Screens never validated", work_version=w.revision(), requirement_version=1
+    )
+    assert done["moved_back_to"] == "Making"
+    assert w.c.execute("SELECT type_id FROM tasks WHERE id=?", (done["follow_up"],)).fetchone()[0] == engineering
+    filed = w.c.execute(
+        "SELECT pipeline_link_id FROM pipeline_handoffs WHERE target_task_id=?", (done["follow_up"],)
+    ).fetchone()[0]
+    assert filed == making_link
+
+
+def test_named_not_validated_files_through_the_one_delivering_link_of_two_into_the_named_pipeline(tmp_path):
+    """With the subtasks run naming Engineering, and two spawn links into it, only Planning's link delivered shipped work
+    (Making's subtask is still open). Not validated files through Planning's link, the farther one, and the queue offers it."""
+    w = World(tmp_path / "hub.sqlite", steps=[{"name": "Planning", "status": "doing"}, *STEPS])
+    w.attach()
+    engineering = H.type_create(w.c, ANA, "Build Team", STEPS, mover=True)["id"]
+    planning_link = L.create_link(w.c, ANA, w.step("Planning"), engineering, mode="spawn")["id"]
+    making_link = L.create_link(w.c, ANA, w.making, engineering, mode="spawn")["id"]
+    w.requirement(
+        "Subtasks", "run", "bot", stage=w.making, needs=json.dumps({"source": "subtasks", "pipeline": engineering})
+    )
+    shipped = L.spawn(w.c, _spawn_row(w, planning_link), w.task)
+    assert shipped is not None
+    _reassign(w, shipped)
+    _ship(w, shipped)
+    open_child = L.spawn(w.c, _spawn_row(w, making_link), w.task)
+    assert open_child is not None
+    _reassign(w, open_child)
+    item = lambda: next(i for i in R.queue_for(w.c, ANA) if i["requirement_id"] == w.mockup)  # noqa: E731
+    assert item()["can_not_validate"] is True
+    done = R.not_validated(
+        w.c, ANA, w.task, w.mockup, "Screens never validated", work_version=w.revision(), requirement_version=1
+    )
+    filed = w.c.execute(
+        "SELECT pipeline_link_id FROM pipeline_handoffs WHERE target_task_id=?", (done["follow_up"],)
+    ).fetchone()[0]
+    assert filed == planning_link
+
+
+def test_named_not_validated_still_refuses_when_no_link_files_into_the_named_pipeline(tmp_path):
+    """The 409 stays: the subtasks run names Engineering, but the only spawn link from an earlier stage files into Support.
+    Not validated refuses (`development_link`), the queue does not offer it, and nothing is written."""
+    w = World(tmp_path / "hub.sqlite", steps=[{"name": "Planning", "status": "doing"}, *STEPS])
+    w.attach()
+    engineering = H.type_create(w.c, ANA, "Build Team", STEPS, mover=True)["id"]
+    support = H.type_create(w.c, ANA, "Support Team", STEPS, mover=True)["id"]
+    support_link = L.create_link(w.c, ANA, w.making, support, mode="spawn")["id"]
+    w.requirement(
+        "Subtasks", "run", "bot", stage=w.making, needs=json.dumps({"source": "subtasks", "pipeline": engineering})
+    )
+    child = L.spawn(w.c, _spawn_row(w, support_link), w.task)
+    assert child is not None
+    _ship(w, child)
+    item = lambda: next(i for i in R.queue_for(w.c, ANA) if i["requirement_id"] == w.mockup)  # noqa: E731
+    assert item()["can_not_validate"] is False
+    refused(
+        "development_link",
+        R.not_validated,
+        w.c,
+        ANA,
+        w.task,
+        w.mockup,
+        "No",
+        work_version=w.revision(),
+        requirement_version=1,
+    )
+    assert w.c.execute("SELECT count(*) FROM stage_decisions WHERE task_id=?", (w.task,)).fetchone()[0] == 0

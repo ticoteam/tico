@@ -1226,11 +1226,17 @@ def _pick_link(links: list[Row], delivered: list[str]) -> Row | None:
 
 
 def _choose_link(links: list[Row], named: str | None, delivered: list[str]) -> Row | None:
-    """The spawn link Not validated files through (D64). When the waited-on requirement names its pipeline, the links are
-    already the ones into that pipeline: the one such link is the route, and several fall back to _pick_link. Without a name,
-    it is _pick_link: the one candidate whose shipped subtask delivered the work, or none."""
-    if named is not None and len(links) == 1:
-        return links[0]
+    """The spawn link Not validated files through (D64). When the waited-on requirement names its pipeline, every candidate
+    link already files into that pipeline, so the destination is never ambiguous: the one candidate whose shipped subtask
+    delivered the work when exactly one did, otherwise the nearest link (links are nearest first). None only when no link
+    files into the named pipeline. Without a name, it is _pick_link: the one candidate whose shipped subtask delivered the
+    work, or none."""
+    if named is not None:
+        if not links:
+            return None
+        wanted = set(delivered)
+        matched = [link for link in links if str(link["id"]) in wanted]
+        return matched[0] if len(matched) == 1 else links[0]
     return _pick_link(links, delivered)
 
 
