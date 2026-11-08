@@ -1645,6 +1645,14 @@ def test_a_local_failure_stops_and_prints_a_failed_receipt_that_blocks_the_head(
     assert test_receipts.recognise(line)["status"] == "failed" and gate(line, branch.head) == "failed"
 
 
+def test_a_leg_that_collects_nothing_fails_like_ci(branch, capsys):
+    # pytest exits 5 when it runs no test, such as every module skipping at import; CI's run counts that as red.
+    branch.answers["pytest"] = (5, "")
+    assert branch.run() == 1
+    line = receipt_line(capsys.readouterr().out)
+    assert gate(line, branch.head) == "failed"
+
+
 def test_uncommitted_changes_get_no_receipt_and_run_nothing(branch, capsys):
     (branch.root / "app.py").write_text("x = 3\n")
     assert branch.run() == 2

@@ -1749,7 +1749,7 @@ def local(base=LOCAL_BASE, jobs=LOCAL_JOBS, ready=False, root=ROOT, execute=subp
         if code in (75, 76):
             # scripts/remote.py (TICO_HEAVY_REMOTE=1) never ran it or lost its result: no result, so no receipt.
             return stop(f"{name} gave no result (exit {code}): a remote run needs this head pushed; run this again")
-        if code not in (0, 5):
+        if code:  # as in CI's run, 5 (pytest ran no test) is red too
             failed = name
             break
     if not unchanged() or git("rev-parse", "HEAD").lower() != head:
