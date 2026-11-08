@@ -173,7 +173,10 @@ def refresh(conn, task_id, cleared=None, at=None):
             task_blocked.bump(conn, row)
             return "open"
         note = f"{cleared}; nothing left to wait on"
-        H._set_status(conn, H.KEEPER, row, "open", note=note)
+        # The restore is automatic, so the stage's rules may refuse it: then only the restore is undone, it is logged on the
+        # parent (auto_move_refused), and the child's change that cleared the hold stands.
+        if not H.try_auto_move(conn, H.KEEPER, row, status="open", note=note):
+            return None
         conn.execute("UPDATE tasks SET note=? WHERE id=?", (note, task_id))
         task_blocked.bump(conn, row)
         H._task_event(conn, task_id, H.KEEPER, "note", row.get("note"), note, "")

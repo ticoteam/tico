@@ -1168,6 +1168,9 @@ class Builder:
             c.execute("UPDATE jobs SET state='completed' WHERE state IN ('queued','leased','running','input')")
             c.execute("DELETE FROM update_queue")
             when = stamp(self.now)
+            # A manager's assignment is stamped by a trigger on SQLite's clock; the demo assigned it at its build time.
+            # Before the stamps below: this update writes change-feed rows of its own.
+            c.execute("UPDATE task_types SET manager_since=? WHERE manager_since IS NOT NULL", (when,))
             for (table,) in c.execute(
                 "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
             ).fetchall():

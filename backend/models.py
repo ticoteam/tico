@@ -328,6 +328,9 @@ class TaskUpdate(Contract):
     step: str | None = Field(default=None, max_length=200)  # "" clears the step
     step_rank: float | None = Field(default=None, allow_inf_nan=False)  # its place within its step
     number: TaskNumber | None = None  # a mover's, for a task that has none
+    # A rule editor's override of a stage's unmet requirements, logged (backend/pipeline_engine.py check_move). The
+    # reason it is logged with is this update's note.
+    override_requirements: bool = False
     # A review or QA subtask's verdict and the pull request head it judged; its parent's owner is woken with both.
     verdict: Literal["approve", "changes", "pass", "fail"] | None = None
     verdict_head: str | None = Field(default=None, pattern=r"^[0-9a-fA-F]{7,40}$")

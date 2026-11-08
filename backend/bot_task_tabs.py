@@ -22,6 +22,7 @@ from datetime import datetime, timedelta, timezone
 from fastapi import Request
 
 from . import models as M
+from . import pipeline_rights
 from . import question_tasks as QT
 from .store import H, Problem
 
@@ -484,7 +485,7 @@ def install(app, store, auth, mutate, settings, task_views=None):
             if not H.bot(c, bot):
                 raise Problem("not_found", "Bot not found", 404)
             auth.require_see(c, who, bot)
-            visible = auth.task_sql(c, who)
+            visible = pipeline_rights.list_sql(c, who.task_actor or who.actor, auth.task_sql(c, who))
             out, ids = [], []
             for at, layout_tab in enumerate(read(c, settings, who, bot)["tabs"]):
                 key = layout_tab.get("builtin") or "c" + str(at)

@@ -2260,7 +2260,11 @@ def approval_files(c, auth, who, payload):
 
 
 # The roadmap steps at which a question that holds up an item comes before the rest in Decide.
-ROADMAP_LIVE_STEPS = ("Approved", "Building")
+ROADMAP_LIVE_STEPS = (
+    "Approved",
+    "Building",
+    "In development",
+)  # the last is the Tico Team name (D64); the others predate it
 SOON_BUSINESS_DAYS = 2
 
 

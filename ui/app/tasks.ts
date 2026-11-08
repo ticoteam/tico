@@ -32,6 +32,8 @@ interface BoardColumn {
   id: string; name: string; hint?: string; kind?: string; items: TaskItem[];
   drop?: string; fold?: string; foldable?: string; count?: number | string | null;
   scope?: {type: string; step: string} | null;
+  play?: string;
+  limit?: number | null | undefined;
 }
 // A refused move, kept on the row or card it was tried on until that task changes (taskRefusedSet).
 interface TaskRefusal { message: string; version: number; }
@@ -51,6 +53,8 @@ interface TaskState {
   layoutAbort?: AbortController;
   refused?: Map<string, TaskRefusal>;
   peekTimer?: number;
+  // The stage chosen on a phone, by step id (pipeline-rail.ts).
+  pipeStage?: string;
 }
 
 // ----------------------------------------------------------------- tasks (#/tasks)
@@ -426,11 +430,10 @@ function taskRelChip(t: TaskRow | null | undefined) {
   const words = `${n} related task${n === 1 ? '' : 's'}`;
   return `<span class="bcard-rel tnum" role="img" aria-label="${esc(words)}" title="${esc(words)}"><svg viewBox="0 0 12 12" width="12" height="12" aria-hidden="true" focusable="false"><path d="M5 7l2-2M4.2 5.6L3 6.8a1.7 1.7 0 0 0 2.4 2.4L6.6 8M7.8 6.4L9 5.2A1.7 1.7 0 0 0 6.6 2.8L5.4 4" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>${n}</span>`;
 }
-// A Dev ticket at a working step says how long it has been there; past four hours it turns amber, when its manager is
-// told (backend/step_age.py). Time spent waiting is not counted: the server restarts the clock when it comes back.
-const STEP_LATE_MS = 4 * 3600e3;
+// A ticket says how long it has been at its step only once it is past the stage's limit (pipelineLateClock). Time spent
+// waiting is not counted: the server restarts the clock when it comes back (backend/step_age.py).
 // Status belongs to the bot, not the ticket: its live changes must also reach an unchanged card or open page.
-function taskBuilderActors(t: TaskRow | null | undefined) {
+function taskBuilderActors(t: TaskRow | null | undefined): string[] {
   if (!t || taskFinished(t) || t.status === 'declined' || pipelineType(t)?.role !== 'engineering') return [];
   return [...new Set([t.owner_id, ...(t.roles?.builder || [])].map(actorSlug).filter(Boolean))];
 }
@@ -452,10 +455,11 @@ function taskBuilderNoticesRefresh() {
   }
 }
 function taskStepAge(t: TaskRow) {
-  const since = Date.parse(t?.step_since || ''); if (!since) return '';
-  const late = Date.now() - since >= STEP_LATE_MS, age = ageShort(t.step_since);
-  const words = `At ${t.step?.name || 'this step'} for ${age === 'now' ? 'under a minute' : age}${late ? ': over 4 hours' : ''}`;
-  return `<span class="bcard-step-age tnum${late ? ' late' : ''}" data-step-age title="${esc(words)}" aria-label="${esc(words)}">${esc(age)} in step</span>`;
+  const late = pipelineLateClock(t);            // the server's clock; no time shows unless it is past the stage's limit (pipeline-rail.ts)
+  if (!late) return '';
+  const age = late.hours < 1 ? '<1h' : `${Math.floor(late.hours)}h`;
+  const words = `At ${t.step?.name || 'this step'} for ${age}: past its limit`;
+  return `<span class="bcard-step-age tnum" data-step-age title="${esc(words)}" aria-label="${esc(words)}">${esc(age)} in step</span>`;
 }
 // The same card the list's peek opens: a cover when the task has a picture, the title, its chips, a dot for an open
 // question, the owner's face and the age.
@@ -468,7 +472,7 @@ function taskCard(it: TaskItem) {
       <span class="bcard-title">${esc(it.title)}</span></button>
     ${taskBuilderNotices(taskBuilderActors(t))}
     ${t?.building_started_at ? `<div class="muted bcard-clock">Building ${esc(Math.floor(((t.building_seconds || 0) + Math.max(0, (Date.now() - Date.parse(t.building_started_at)) / 1000)) / 60))}m</div>` : ''}
-    <div class="bcard-foot">${chips ? `<span class="bcard-chips">${chips}</span>` : ''}${t ? taskWaitTag(t) + taskStepAge(t) : ''}<span class="spacer"></span>${t ? taskRelChip(t) : ''}${t ? taskAskDot(t) : ''}
+    <div class="bcard-foot">${chips ? `<span class="bcard-chips">${chips}</span>` : ''}${t ? pipelineDotsHTML(t) + taskWaitTag(t) + taskStepAge(t) : ''}<span class="spacer"></span>${t ? taskRelChip(t) : ''}${t ? taskAskDot(t) : ''}
       ${t && taskPropRights(t).edit
         ? `<button type="button" class="tl-face bcard-owner" data-card-owner="${esc(it.key)}" aria-haspopup="true" aria-label="${esc(`Owner: ${actorLabel(it.actor)}. Change`)}" title="${esc(actorLabel(it.actor))}">${actorFace(it.actor, 16)}</button>`
         : `<span class="tl-face" aria-hidden="true">${actorFace(it.actor, 16)}</span>`}
@@ -508,12 +512,12 @@ function taskStatusGroups(items: TaskItem[], {always = []}: {always?: string[]} 
 // a card dropped on the column moves to; a board with any is one cards are dragged on.
 // The Dev tickets step a release ships from; its header gets Release now (settings-release.ts fills it).
 const RELEASE_COLUMN = /^pending release$/i;
-function boardColumnsHTML(columns: BoardColumn[], {head = ''}: {head?: string} = {}) {
+function boardColumnsHTML(columns: BoardColumn[], {head = '', cls = ''}: {head?: string; cls?: string} = {}) {
   const anyWork = columns.some(c => c.items.length);
   const narrow = (c: BoardColumn) => c.fold || anyWork && !c.items.length;
   const sizes = columns.map(c => narrow(c) ? '34px' : 'minmax(260px,1fr)').join(' ');
   const drag = columns.some(c => c.drop);
-  return `${head}<div class="board work"${drag ? ' data-board-drag' : ''} style="--board-cols:${esc(sizes)}">${columns.map(column => {
+  return `${head}<div class="board work${cls ? ' ' + cls : ''}"${drag ? ' data-board-drag' : ''} style="--board-cols:${esc(sizes)}">${columns.map(column => {
     const empty = !column.fold && anyWork && !column.items.length;
     const count = column.fold ? column.count ?? '' : column.items.length;
     const drop = column.drop ? ` data-drop-step="${esc(column.drop)}"` : '';
@@ -525,7 +529,7 @@ function boardColumnsHTML(columns: BoardColumn[], {head = ''}: {head?: string} =
     const all = column.items.length && tasksCanSelect()
       ? `<button type="button" class="bcol-all" data-board-select="${esc(column.id)}"${scope} aria-label="${esc(`Select all in ${column.name}`)}" title="Select all in this column">${TL_ICON.all}</button>` : '';
     return `<section class="bcol${empty ? ' is-empty' : ''}" data-col="${esc(column.id)}"${drop} aria-label="${esc(column.name)}${column.hint ? `: ${esc(column.hint)}` : ''}">
-      <header${column.hint ? ` title="${esc(column.hint)}"` : ''}><h2>${esc(column.name)}</h2><span class="cnt tnum">${count}</span>${RELEASE_COLUMN.test(column.name) ? '<span class="board-release-slot" data-release-slot></span>' : ''}${all}${fold}</header>
+      <header${column.hint ? ` title="${esc(column.hint)}"` : ''}><h2>${esc(column.name)}</h2><span class="cnt tnum">${count}</span>${column.play || ''}${RELEASE_COLUMN.test(column.name) ? '<span class="board-release-slot" data-release-slot></span>' : ''}${all}${fold}</header>
       ${taskBuilderNotices([...new Set(column.items.flatMap(it => taskBuilderActors(it.task)))], true)}
       ${empty ? '' : `<div class="bcol-body">${column.items.map(taskCard).join('') || '<div class="empty">Nothing here</div>'}</div>`}
     </section>`;

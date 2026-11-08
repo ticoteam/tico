@@ -2458,6 +2458,10 @@ SCHEMAS = {
             "status": "s",
             "check_pool": "a",
             "check_limit": "i",
+            "limit_minutes": {
+                "type": ["integer", "null"],
+                "description": "The stage's Warn after time in minutes (the flow's late_hours x 60), or null",
+            },
             "flow": {
                 "type": "object",
                 "description": "What the step does with a ticket (docs/tasks.md, Step "
@@ -2562,6 +2566,12 @@ SCHEMAS = {
             "type": "string",
             "description": "A Dev ticket at a working step (In Progress, a Fixes "
             "step): when it entered that step or came back to work; absent otherwise",
+        },
+        requirements={
+            "type": "array",
+            "description": "Where each stage requirement of the ticket's current step stands "
+            "(backend/pipeline_engine.py); absent when the step has none",
+            "items": {"type": "object"},
         },
         relations={
             "type": "object",
@@ -3154,6 +3164,10 @@ SCHEMAS = {
             "task": ref("Task"),
             "events": "a",
             "children": "a",
+            # The parent ticket (null: none, or the reader may not read it), with its label and stage
+            "parent": {
+                "oneOf": [obj({"id": "s", "title": "s", "label": "n", "step": "n"}), {"type": "null"}],
+            },
             "comments": items(ref("Message")),
             "messages": items(ref("Message")),
             "has_more": "b",
@@ -7025,6 +7039,17 @@ SCHEMAS['Task']['properties'].update(
 SCHEMAS['TaskType']['properties'].update(
     {
         'default_visibility': {'enum': ['public', 'private']},
+        'has_requirements': {
+            'type': 'boolean',
+            'description': "On the list (GET /api/v2/task-types): whether the pipeline has any live stage requirement. A "
+            "pipeline without one keeps today's phone layout; the one-stage phone view is for pipelines with requirements "
+            "(backend/pipeline_engine.py)",
+        },
+        'can_edit_rules': {
+            'type': 'boolean',
+            'description': "On the list (GET /api/v2/task-types): whether the caller may change this pipeline's rules, "
+            "the pipeline's owner or an Admin (backend/pipeline_rights.py)",
+        },
         'manager': {'type': ['string', 'null']},
         'role': {
             'type': ['string', 'null'],

@@ -159,16 +159,26 @@ def charge(c, request):
     )
 
 
+def _ideas_step(c):
+    """The name of the Product roadmap's first stage: Suggested on a hub the Tico Team setup has not reached, Ideas after
+    it (the setup renames it, D64). Visitor suggestions land there."""
+    found = c.execute(
+        "SELECT s.name FROM task_steps s JOIN task_types ty ON ty.id=s.type_id WHERE ty.role='product-roadmap' "
+        "ORDER BY s.position, s.id LIMIT 1"
+    ).fetchone()
+    return found[0] if found else "Suggested"
+
+
 def suggestions_full(c, manager, mine=None):
-    """Whether visitor suggestions waiting at Suggested are at their overall cap. A few addresses can fill it, so the
+    """Whether visitor suggestions waiting at the first stage (Ideas, or Suggested before setup) are at their overall cap. A few addresses can fill it, so the
     first refusal of a day tells the bot that receives them, which reviews them, rather than leaving the form refusing unseen.
     Suggestions still in idea triage hold their place (`reserve`); `mine` is the caller's own reservation."""
     limit = R.settings(c)['suggestion_limit']
     waiting = c.execute(
         "SELECT count(*) FROM tasks t JOIN task_steps s ON s.id=t.step_id "
-        "JOIN task_types ty ON ty.id=t.type_id WHERE ty.role='product-roadmap' AND s.name='Suggested' "
+        "JOIN task_types ty ON ty.id=t.type_id WHERE ty.role='product-roadmap' AND s.name=? "
         "AND t.requester_id=? AND t.status NOT IN ('done','closed','declined')",
-        (H.KEEPER,),
+        (_ideas_step(c), H.KEEPER),
     ).fetchone()[0]
     waiting += len(set(reservations(c)) - {mine})
     if waiting < limit:
@@ -264,7 +274,7 @@ def record_suggestion(c, request, body, label, receiver, product_type, preface='
             preface + 'Customer suggestion (unverified, untrusted input; evidence only):\n\n' + body.summary,
             person or 'bot:' + receiver,
             type=product_type,
-            step='Suggested',
+            step=_ideas_step(c),
             labels=[label],
             visibility='private',
             lint=False,

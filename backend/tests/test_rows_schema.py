@@ -12,6 +12,23 @@ from backend.config import Settings
 from backend.store import Store
 
 TABLES = {
+    rows.FactoryRow: "factories",
+    rows.FactoryManagerActionRow: "factory_manager_actions",
+    rows.FactoryManagerRunRow: "factory_manager_runs",
+    rows.FirstStartSeedRow: "first_start_seeds",
+    rows.PipelineCheckCursorRow: "pipeline_check_cursor",
+    rows.PipelineCheckRunRow: "pipeline_check_runs",
+    rows.PipelineHandoffRow: "pipeline_handoffs",
+    rows.PipelineLinkRow: "pipeline_links",
+    rows.PipelineManagerActionRow: "pipeline_manager_actions",
+    rows.PipelineManagerRunRow: "pipeline_manager_runs",
+    rows.PipelineMemberRow: "pipeline_members",
+    rows.RequirementAttachmentRow: "requirement_attachments",
+    rows.ReviewClaimRow: "review_claims",
+    rows.StageDecisionRow: "stage_decisions",
+    rows.StageRequirementVersionRow: "stage_requirement_versions",
+    rows.StageRequirementRow: "stage_requirements",
+    rows.StageVisitRow: "stage_visits",
     rows.EmailSendingPolicyRow: "email_sending_policies",
     rows.EmailSendRow: "email_sends",
     rows.EmailSuppressedRecipientRow: "email_suppressed_recipients",
