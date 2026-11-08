@@ -108,7 +108,7 @@ function auMaintSettingsHTML(m) {
   const s = m.settings, off = !m.can_change || AU.mtBusy, open = AU.mtOpen || new Set();
   const opts = (pairs, cur) => pairs.map(([v, l]) => `<option value="${esc(v)}"${String(v) === String(cur) ? ' selected' : ''}>${esc(l)}</option>`).join('');
   const cap = s.monthly_cap_usd ?? s.monthly_cap_usd_in_effect ?? 0;
-  const capPairs = (list, cur) => [...new Set([...list, Number(cur) || 0])].sort((x, y) => x - y)
+  const capPairs = (list: number[], cur: unknown) => [...new Set([...list, Number(cur) || 0])].sort((x, y) => x - y)
     .map(v => [v, v ? '$' + (Number.isInteger(v) ? v : v.toFixed(2)) + ' a month' : 'No cap']);
   const caps = capPairs(AU_MAINT_CAPS, cap);
   const rulesCap = s.rules_monthly_cap_usd ?? s.rules_monthly_cap_usd_in_effect ?? 0;
