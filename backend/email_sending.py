@@ -1055,30 +1055,42 @@ def drain(store, auth, limit=20):
 
 
 def rule_gate(app, store, who, snap):
-    """The org rule check of a bot's own email, before its write (backend/org_rule_check.py): the in-write half for
-    `enqueue`, or None when the sender is not a bot writing (a person's own mail is not checked). Like every rule
-    check it fails open: an error is a `rules.unchecked` outcome, never a lost send."""
+    """The org rule checks of a bot's own email, before its write: the in-write half for `enqueue`, or None when the
+    sender is not a bot writing (a person's own mail is not checked). The Directory's structured rules and the judged
+    check meet the mail in one verdict (org_rule_check.mail_prepare). A structured rule holds the mail on the same held
+    path as a judged one, and a check that cannot complete holds it too (fail closed). The judged check fails open, as
+    it always has: an error is a `rules.unchecked` outcome, never a lost send. When the judged check cannot be prepared
+    at all, the structured rules still decide the mail inside the write."""
     from . import org_rule_check as rules
 
     found = rules.checked_as(who, store.settings.assistant_bot)
     if not found or not H.is_bot(found[1]):
         return None
     groups = snap["recipient_headers"]
+    to, cc = groups["to"], [*groups["cc"], *groups["bcc"]]
+    addresses = [*groups["to"], *groups["cc"], *groups["bcc"]]
     try:
         prep = rules.mail_prepare(
             store,
             app.state.judge,
             who,
             found[0],
-            groups["to"],
-            [*groups["cc"], *groups["bcc"]],
+            to,
+            cc,
             snap["subject"],
             snap["body"],
+            contacts=addresses,
         )
-    except Exception as exc:  # noqa: BLE001  (fails open, as every rule check does)
+    except Exception as exc:  # noqa: BLE001  (the judged check fails open, as every judged check does)
         LOG.warning("The org rule check of an email failed: %s", type(exc).__name__)
-        return lambda c: {"outcome": "unchecked"}
-    return lambda c: rules.mail_decide(c, prep)
+        prep = None
+
+    def gate(c):
+        if prep is None:
+            return rules.mail_unprepared(c, found, to, cc, snap["subject"], snap["body"], addresses)
+        return rules.mail_decide(c, prep)
+
+    return gate
 
 
 IMPORTED = "email_sending.registry_imported"
