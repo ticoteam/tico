@@ -1181,6 +1181,7 @@ const HUB_PATHS: &[&str] = &[
     "pin remove",
     "pin update",
     "pipeline",
+    "pipeline manager",
     "proposal",
     "proposal create",
     "proposal decide",

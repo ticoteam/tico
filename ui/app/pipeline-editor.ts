@@ -21,6 +21,8 @@ interface PeLink { id: string; from_pipeline_id: string; from_pipeline_stage_id:
 interface PeState {
   type: PeType; reqs: Map<string, PeReq[]>; links: PeLink[] | null; requirements: boolean;
   mover: boolean; warn: string; link: string;
+  /** Whether the reader may change the pipeline's rules (its owner and admins): the manager is a choice only then. */
+  mayEdit: boolean;
   /** The settings block's server view (goal, judge, factory, privacy, members), or null when the route did not answer. */
   settings: PipelineSettings | null;
   /** The live factories for the Factory choice, or null when the list did not load (the choice is then left out). */
@@ -49,7 +51,9 @@ const PE_RIGHTS = new Map<string, {may: boolean; at: number}>();
 const peOptions = (rows: [string, string][], on: string | null | undefined): string =>
   rows.map(([v, l]) => `<option value="${esc(v)}"${v === on ? ' selected' : ''}>${esc(l)}</option>`).join('');
 const pePeople = (): {id: string; name: string}[] => (S.people || []).filter(p => !p.hidden).map(p => ({id: 'human:' + p.id, name: p.name || p.id}));
-const peBots = (): {id: string; name: string}[] => (S.emps || []).filter(e => e.state !== 'archived').map(e => ({id: 'bot:' + e.id, name: botDisplayName(e.id)}));
+// A pipeline's manager is an active bot: paused, planned and archived bots are not offered. The roster carries the bot's
+// state as `state` (`status` on the org roster, the same value).
+const peBots = (): {id: string; name: string}[] => (S.emps || []).filter(e => (e.state ?? e.status) === 'active').map(e => ({id: 'bot:' + e.id, name: botDisplayName(e.id)}));
 /** A choice of one person or bot. A clearable choice offers `none` as an empty value. One that cannot be cleared (an owner
     or a manager: the server refuses an empty one) shows `none` only while nothing is set, as a disabled placeholder. */
 const peWho = (rows: {id: string; name: string}[], on: string | null | undefined, none: string, clearable = true): string => {
@@ -88,7 +92,8 @@ async function pipelineEditSync(pipelineId: string | null | undefined): Promise<
 
 async function peLoad(id: string): Promise<PeState> {
   const type: PeType = (await get(`/v2/task-types/${encodeURIComponent(id)}`, {fresh: true})).type;
-  const state: PeState = {type, reqs: new Map(), links: null, requirements: true, mover: canMove(), warn: '', link: '', settings: null, factories: null};
+  const state: PeState = {type, reqs: new Map(), links: null, requirements: true, mover: canMove(), mayEdit: false, warn: '', link: '', settings: null, factories: null};
+  try { state.mayEdit = !!(await get(`/v2/pipelines/${encodeURIComponent(id)}/rights`, {fresh: true})).may_edit_rules; } catch { state.mayEdit = false; }
   try { state.settings = await pipelineSettings(id); } catch { state.settings = null; }
   try { state.factories = await pipelineFactories(); } catch { state.factories = null; }
   try { state.links = (await get(peRoute(`/v2/pipeline-links?pipeline=${encodeURIComponent(id)}`), {fresh: true})).links; } catch { state.links = null; }
@@ -173,6 +178,20 @@ function peGoalHTML(state: PeState): string {
       ${members}`;
 }
 
+/** The Pipeline Manager field. An owner or admin picks an active bot, or Not set; anyone else reads the name. A saved
+    manager that is not an active bot (archived, paused, planned or gone) shows as Not set, with a line saying so. */
+function peManagerHTML(state: PeState): string {
+  const bots = peBots();
+  const saved = (state.type.manager ?? '').replace(/^bot:/, '');
+  const current = bots.some(b => b.id === 'bot:' + saved) ? saved : '';
+  const stale = !!saved && !current;
+  if (!state.mayEdit) return `<span class="pe-readonly" data-pe-manager-readonly>${esc(current ? botDisplayName(current) : 'Not set')}</span>`;
+  const hint = `<span class="pe-hint">The bot that checks this pipeline's stuck tasks. Only active bots can be picked.</span>`;
+  const warn = stale ? `<span class="pe-hint pe-warn-line" data-pe-manager-stale>The saved manager is not an active bot. Pick one.</span>` : '';
+  if (!bots.length) return `<select data-pe-setting="manager_id" disabled><option value="">No active bots</option></select>${hint}${warn}`;
+  return `<select data-pe-setting="manager_id">${peWho(bots, current ? 'bot:' + current : '', 'Not set')}</select>${hint}${warn}`;
+}
+
 function peBodyHTML(state: PeState): string {
   const t = state.type;
   const from = (state.links ?? []).filter(l => l.to_pipeline_id === t.id).map(l => {
@@ -182,7 +201,7 @@ function peBodyHTML(state: PeState): string {
   return `<div class="pe-settings">
       <label class="pe-f"><span>Prefix</span><input name="prefix" maxlength="2" value="${esc(t.prefix ?? '')}" data-pe-setting="prefix" autocomplete="off"></label>
       <label class="pe-f"><span>Owner</span><select data-pe-setting="owner_id">${peWho(pePeople(), t.pipeline_owner_id, 'Not set', false)}</select></label>
-      <label class="pe-f"><span>Pipeline Manager</span><select data-pe-setting="manager_id">${peWho(peBots(), t.manager, 'Not set', false)}</select></label>
+      <label class="pe-f"><span>Pipeline Manager</span>${peManagerHTML(state)}</label>
       ${peGoalHTML(state)}
       ${from ? `<p class="pe-froms"><span>From</span> ${from}</p>` : ''}</div>
     <ol class="pe-stages">${t.steps.map((s, i) => peStageHTML(state, s, i, t.steps.length)).join('')}</ol>

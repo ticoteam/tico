@@ -9365,6 +9365,38 @@ def pipeline(api, args):
     )
 
 
+def _pipeline_id(api, ref):
+    """A pipeline's id from its id or its name (the task types are its pipelines)."""
+    types = api.get("task-types")["types"]
+    named = [t for t in types if t["id"] == ref] or [t for t in types if str(t.get("name", "")).lower() == ref.lower()]
+    if not named:
+        raise ValueError(f"No pipeline named {ref!r}")
+    if len(named) > 1:
+        raise ValueError(f"{ref!r} names more than one pipeline: use its id")
+    return named[0]["id"]
+
+
+@tool(
+    "hub_pipeline_manager",
+    "Set or clear a pipeline's manager bot: the bot that runs the pipeline's manager pass and judges its stuck tasks. "
+    "Give `bot` to set it or `clear` to clear it, not both. Only the pipeline's owner and admins may; the bot must be "
+    "active (an archived, paused or planned bot is refused, and the manager stays as it was).",
+    {
+        "pipeline": _s("The pipeline: its id or its name"),
+        "bot": _s("The bot to manage the pipeline: its id or slug (an active bot)"),
+        "clear": {"type": "boolean", "description": "Clear the manager instead of setting one"},
+    },
+    required=("pipeline",),
+    writes=True,
+)
+def pipeline_manager(api, args):
+    if bool(args.get("bot")) == bool(args.get("clear")):
+        raise ValueError("Name the bot to set as the manager, or clear the manager; not both and not neither")
+    pipeline_id = _pipeline_id(api, args["pipeline"])
+    value = "" if args.get("clear") else args["bot"]
+    return api.patch("pipelines/" + pipeline_id + "/settings", {"manager_id": value}, key=_key(args))
+
+
 @tool(
     "hub_run_export",
     "Owners and engineering bots: whether a run's raw provider stream was captured, and its size. "

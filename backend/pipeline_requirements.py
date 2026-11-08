@@ -74,8 +74,8 @@ class RequirementBody(Contract):
 
 class PipelineSettingsBody(Contract):
     """What a pipeline's owner or an admin sets. Every field is optional; a field left out stays as it is. The route
-    passes only the fields the body sent, so for goal, judge_model and factory_id an empty value (or null) clears it;
-    visibility and members are left alone when null."""
+    passes only the fields the body sent, so for goal, judge_model, manager_id and factory_id an empty value (or null)
+    clears it; visibility and members are left alone when null. manager_id is `bot:<id>` or `<id>`, an active bot."""
 
     prefix: str | None = Field(default=None, max_length=2)
     owner_id: str | None = Field(default=None, max_length=128)
@@ -146,6 +146,30 @@ def _may_edit(conn: "sqlite3.Connection", actor: str, pipeline_id: str) -> None:
 def _human(actor: object) -> bool:
     text = str(actor or "")
     return text.startswith("human:") and len(text) > len("human:")
+
+
+def manager_bot(conn: "sqlite3.Connection", value: object) -> str | None:
+    """The bare id of the bot a pipeline's manager is set to, or None to clear it. `bot:<id>`, `<id>` and a bot's slug all
+    name a bot; it must be active. An archived, paused, planned or unknown bot is a 422 and nothing is written (the pass
+    wakes only the stored manager, so a refused one never reaches it)."""
+    text = str(value or "").strip()
+    if not text:
+        return None
+    bot = H.resolve_bot(conn, text)
+    if bot is None or bot.get("state") != "active":
+        raise Problem(
+            "validation", f"No active bot {text.removeprefix('bot:')!r}: pick an active bot, or clear the manager", 422
+        )
+    return str(bot["id"])
+
+
+def set_manager(conn: "sqlite3.Connection", actor: str, pipeline_id: str, value: object) -> None:
+    """Set or clear a pipeline's manager for the pipeline's owner and admins. The task-type route (backend/task_types.py)
+    calls this; the settings route checks the same way inside update_settings. The manager is stored as the bare bot id."""
+    _may_edit(conn, actor, pipeline_id)
+    conn.execute(
+        "UPDATE task_types SET manager=?, updated_at=? WHERE id=?", (manager_bot(conn, value), H.now(), pipeline_id)
+    )
 
 
 def check_definition(body: dict[str, Any]) -> dict[str, Any]:
@@ -416,8 +440,8 @@ def update_settings(conn: "sqlite3.Connection", actor: str, pipeline_id: str, bo
     _may_edit(conn, actor, pipeline_id)
     if body.get("owner_id") is not None and not _human(body["owner_id"]):
         raise Problem("validation", "A pipeline's owner is a person", 422)
-    if body.get("manager_id") is not None and not str(body["manager_id"]).startswith("bot:"):
-        raise Problem("validation", "A pipeline manager is a bot", 422)
+    manager_sent = body.get("manager_id") is not None
+    manager = manager_bot(conn, body["manager_id"]) if manager_sent else None  # checked before anything is written
     visibility = str(body.get("visibility") or found[1] or "company")
     sets: dict[str, Any] = {}
     if "goal" in body:
@@ -443,8 +467,8 @@ def update_settings(conn: "sqlite3.Connection", actor: str, pipeline_id: str, bo
         conn.execute(
             "UPDATE task_types SET pipeline_owner_id=?, updated_at=? WHERE id=?", (body["owner_id"], now, pipeline_id)
         )
-    if body.get("manager_id") is not None:
-        conn.execute("UPDATE task_types SET manager=?, updated_at=? WHERE id=?", (body["manager_id"], now, pipeline_id))
+    if manager_sent:
+        conn.execute("UPDATE task_types SET manager=?, updated_at=? WHERE id=?", (manager, now, pipeline_id))
     if body.get("manager_every_minutes") is not None:
         conn.execute(
             "UPDATE task_types SET manager_every_minutes=?, updated_at=? WHERE id=?",

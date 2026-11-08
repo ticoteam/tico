@@ -239,6 +239,9 @@
 .pe-settings{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:var(--s3)}
 .pe-f{display:flex;flex-direction:column;gap:4px;font-size:var(--t-sm)}
 .pe-f>span{color:var(--muted)}
+.pe-hint{font-size:var(--t-xs,12px);color:var(--muted)}
+.pe-warn-line{color:var(--fail)}
+.pe-f>.pe-readonly{color:var(--ink);font-size:var(--t-sm)}
 .pe-goal,.pe-froms{grid-column:1/-1;margin:0;font-size:var(--t-sm)}
 .pe-goal span,.pe-froms span:first-child{color:var(--muted)}
 .pe-from+.pe-from::before{content:", "}

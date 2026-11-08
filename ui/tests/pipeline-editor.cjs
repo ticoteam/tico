@@ -22,13 +22,15 @@ const steps = () => [
   {id: 's3', name: 'Done', status: 'done', limit_minutes: null},
 ];
 
-async function open(browser, {viewport = {width: 1280, height: 820}, may = true, mover = true} = {}) {
+const LEAD = {name: 'lead', display_name: 'Lead Manager', status: 'active', state: 'active', users: [], bot_owners: [], my_access: {see: true, read: true, write: true}};
+
+async function open(browser, {viewport = {width: 1280, height: 820}, may = true, mover = true, emps = [LEAD], manager = null} = {}) {
   const page = await browser.newPage({viewport, serviceWorkers: 'block', hasTouch: viewport.width < 600, isMobile: viewport.width < 600});
   const errors = [], writes = [];
-  const state = {type: {id: 'dev', name: 'Dev tickets', prefix: 'D', pipeline_owner_id: 'human:ana', manager: null, steps: steps()},
+  const state = {type: {id: 'dev', name: 'Dev tickets', prefix: 'D', pipeline_owner_id: 'human:ana', manager, steps: steps()},
     reqs: {s2: [{id: 'r1', name: 'Screenshot', kind: 'attachment', needs: {formats: ['image'], newer_than_change: true, is_work: false}, reviewed_by: 'nobody', reviewer_id: null}]},
     links: [], stageReads: 0,
-    settings: {id: 'dev', name: 'Dev tickets', prefix: 'D', goal: 'Ship tickets fast', judge_model: null, visibility: 'company', factory_id: 'f1', owner_id: 'human:ana', manager_id: null, members: [], judge_models: ['haiku-5.5', 'jev', 'sonnet'], default_judge_model: 'haiku-5.5'},
+    settings: {id: 'dev', name: 'Dev tickets', prefix: 'D', goal: 'Ship tickets fast', judge_model: null, visibility: 'company', factory_id: 'f1', owner_id: 'human:ana', manager_id: manager, members: [], judge_models: ['haiku-5.5', 'jev', 'sonnet'], default_judge_model: 'haiku-5.5'},
     factories: [{id: 'f1', name: 'Product', goal: null, owner_id: null, manager_id: null, position: 0}, {id: 'f2', name: 'Growth', goal: null, owner_id: null, manager_id: null, position: 1}]};
   page.on('pageerror', e => errors.push(e.message));
   await page.addInitScript(() => { try { localStorage.setItem('tico.theme', 'dark'); } catch {} });
@@ -47,7 +49,7 @@ async function open(browser, {viewport = {width: 1280, height: 820}, may = true,
     const body = method === 'GET' ? null : req.postDataJSON();
     if (method !== 'GET') writes.push({method, p, body});
     if (p === '/api/me') return json(me);
-    if (p === '/api/employees') return json([{name: 'lead', display_name: 'Lead Manager', status: 'active', state: 'active', users: [], bot_owners: [], my_access: {see: true, read: true, write: true}}]);
+    if (p === '/api/employees') return json(emps);
     if (p === '/api/humans') return json({people: [{id: 'ana', name: 'Ana Ruiz', role: 'owner'}, {id: 'sam', name: 'Sam Okafor', role: 'member'}], teams: {}, org_groups: []});
     if (p === '/api/status') return json({cloud: true, active: [], queued: [], recent_runs: [], keeper_alive: true, health_issues: []});
     if (p === '/api/v2/status') return json({bots: []});
@@ -249,7 +251,7 @@ async function nobodySaves(browser) {
   await page.close();
 }
 
-// FHI11: an owner cannot be cleared, so there is no empty choice; an unset manager shows a disabled "Not set".
+// FHI11: an owner cannot be cleared, so there is no empty choice. The manager can be cleared, so Not set is a choice.
 async function unsetChoices(browser) {
   const {page, errors} = await open(browser);
   await page.waitForFunction(() => !document.getElementById('task-pipeline-edit').hidden);
@@ -257,11 +259,56 @@ async function unsetChoices(browser) {
   await page.locator('.pe-stage').first().waitFor();
   const enabled = sel => page.locator(`${sel} option:not([disabled])`).evaluateAll(os => os.map(o => o.value));
   assert.deepEqual(await enabled('[data-pe-setting=owner_id]'), ['human:ana', 'human:sam'], 'the owner has no empty choice');
-  assert.deepEqual(await enabled('[data-pe-setting=manager_id]'), ['bot:lead'], 'an unset manager has no empty choice');
+  assert.deepEqual(await enabled('[data-pe-setting=manager_id]'), ['', 'bot:lead'], 'the manager can be cleared to Not set');
   assert.equal(await page.locator('[data-pe-setting=manager_id] option').first().innerText(), 'Not set', 'an unset manager says so');
-  assert.equal(await page.locator('[data-pe-setting=manager_id] option').first().evaluate(o => o.disabled), true, 'the placeholder cannot be chosen');
+  assert.equal(await page.locator('[data-pe-setting=manager_id] option').first().evaluate(o => o.disabled), false, 'Not set can be chosen');
+  assert.equal(await page.locator('[data-pe-manager-stale]').count(), 0, 'an unset manager has no warning line');
   assert.deepEqual(errors, [], 'unset choices: no page errors');
   await page.close();
+}
+
+// The Pipeline Manager field: only active bots are offered; a saved manager that is not active shows Not set with a line
+// under it; with no active bot the field reads No active bots and is disabled; anyone who may not change the rules reads the name.
+async function managerChoices(browser) {
+  const PAUSED = {name: 'pausy', display_name: 'Paused Bot', status: 'paused', state: 'paused'};
+  const PLANNED = {name: 'later', display_name: 'Planned Bot', status: 'planned', state: 'planned'};
+  const roster = [LEAD, PAUSED, PLANNED];
+  {
+    const {page, errors} = await open(browser, {emps: roster, manager: 'pausy'});
+    await page.waitForFunction(() => !document.getElementById('task-pipeline-edit').hidden);
+    await page.locator('#task-pipeline-edit').click();
+    await page.locator('.pe-stage').first().waitFor();
+    const options = await page.locator('[data-pe-setting=manager_id] option').evaluateAll(os => os.map(o => o.value));
+    assert.deepEqual(options, ['', 'bot:lead'], 'paused and planned bots are not offered');
+    assert.equal(await page.locator('[data-pe-setting=manager_id]').inputValue(), '', 'a paused saved manager shows as Not set');
+    assert.equal(await page.locator('[data-pe-manager-stale]').innerText(), 'The saved manager is not an active bot. Pick one.');
+    await page.locator('[data-pe-setting=manager_id]').selectOption('bot:lead');
+    await settled(page);
+    assert.equal(await page.locator('[data-pe-manager-stale]').count(), 0, 'the warning goes once an active bot is picked');
+    assert.deepEqual(errors, [], 'manager choices: no page errors');
+    await page.close();
+  }
+  {
+    const {page, errors} = await open(browser, {emps: [PAUSED, PLANNED], manager: null});
+    await page.waitForFunction(() => !document.getElementById('task-pipeline-edit').hidden);
+    await page.locator('#task-pipeline-edit').click();
+    await page.locator('.pe-stage').first().waitFor();
+    assert.equal(await page.locator('[data-pe-setting=manager_id]').isDisabled(), true, 'no active bot: the field is disabled');
+    assert.equal(await page.locator('[data-pe-setting=manager_id] option').innerText(), 'No active bots');
+    assert.deepEqual(errors, [], 'no active bots: no page errors');
+    await page.close();
+  }
+  {
+    // A reader who may not change the rules reads the name; the picker is not offered (the pencil is hidden to them, so the
+    // editor is opened directly here).
+    const {page, errors} = await open(browser, {may: false, manager: 'lead'});
+    await page.evaluate(() => openPipelineEditor('dev'));
+    await page.locator('.pe-stage').first().waitFor();
+    assert.equal(await page.locator('[data-pe-manager-readonly]').innerText(), 'Lead Manager', 'the manager name is read-only');
+    assert.equal(await page.locator('[data-pe-setting=manager_id]').count(), 0, 'no manager picker for a reader who may not change it');
+    assert.deepEqual(errors, [], 'read-only: no page errors');
+    await page.close();
+  }
 }
 
 // FHI16: a new requirement says how many open cards it would apply to right now, and reads again when the label changes.
@@ -353,7 +400,7 @@ async function phone(browser) {
   try {
     await desktop(browser); await hiddenAndRestricted(browser); await phone(browser);
     await nobodySaves(browser); await unsetChoices(browser); await affectedNote(browser); await keepsMembers(browser); await goalEnter(browser);
-    await typingSurvivesRedraw(browser);
+    await typingSurvivesRedraw(browser); await managerChoices(browser);
     console.log('pipeline-editor: ok');
   } finally { await browser.close(); }
 })().catch(e => { console.error(e); process.exit(1); });

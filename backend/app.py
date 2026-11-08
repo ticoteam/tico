@@ -569,18 +569,7 @@ def create_app(settings=None):
     @app.exception_handler(RequestValidationError)
     async def validation_error(request, exc):
         # Field names and reasons are useful; invalid input can hold credentials and is never echoed.
-        def reason(error):
-            if (
-                error["type"] == "extra_forbidden"
-                and tuple(error["loc"])[-1:] == ("manager",)
-                and request.url.path.startswith("/api/v2/task-types")
-            ):
-                return M.MANAGER_FIXED
-            return error["msg"]
-
-        detail = "; ".join(
-            ".".join(str(part) for part in error["loc"]) + ": " + reason(error) for error in exc.errors()
-        )
+        detail = "; ".join(".".join(str(part) for part in error["loc"]) + ": " + error["msg"] for error in exc.errors())
         return JSONResponse({"error": {"code": "validation", "detail": detail, "retryable": False}}, status_code=422)
 
     app.state.observability = telemetry
