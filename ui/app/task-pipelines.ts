@@ -51,14 +51,14 @@ function taskPipelineDevType() {
   const engineering = TASK_TYPES.filter(type => type.role === 'engineering');
   return engineering.find(dev) || engineering[0] || TASK_TYPES.find(dev);
 }
-// The types the scope menu lists (task-list.js tasksScopeMenu): General, Roadmap and Engineering (or Dev tickets) by
-// their role, then the team's other types.
+// The types the scope menu lists (task-list.js tasksScopeMenu): General, the product and engineering pipelines by
+// their role, then the team's other types. Each goes by its own current name.
 function taskPipelineScopeTypes() {
   const dev = taskPipelineDevType();
   const product = pipelineProductType();
   const other = TASK_TYPES.filter(type => type.id !== 'general' && type.id !== dev?.id && type.id !== product?.id);
-  return [{id: 'general', label: 'General'}, ...(product ? [{id: product.id, label: 'Roadmap'}] : []),
-    ...(dev ? [{id: dev.id, label: dev.id === 'engineering' ? 'Engineering' : 'Dev tickets'}] : []),
+  return [{id: 'general', label: 'General'}, ...(product ? [{id: product.id, label: product.name}] : []),
+    ...(dev ? [{id: dev.id, label: dev.name}] : []),
     ...other.map(type => ({id: type.id, label: type.name, other: true}))];
 }
 const taskPipelineLabel = id => taskPipelineScopeTypes().find(t => t.id === id)?.label || 'General';
@@ -90,8 +90,8 @@ function taskPipelineBoard(items, state, head = '') {
   const finished = steps.slice(end), working = steps.slice(0, end).filter(step => !BOARD_HIDDEN.has(step.status));
   let lead = 0;
   while (lead < working.length && working[lead].status === 'open') lead++;
-  // A pipeline with no requirements keeps the board as it always was; the one-stage phone layout is for pipelines with them.
-  const phone = pipelinePhone() && !!type.has_requirements;
+  // A phone shows every pipeline one stage at a time, with a chip per stage, requirements or not.
+  const phone = pipelinePhone();
   const backlog = working.slice(0, lead), folds = taskBoardFolds(state, type, backlog.length);
   if (phone) folds.backlog = false;               // a phone shows one stage at a time: every backlog stage is a chip
   const inStep = step => items.filter(item => item.task.step_id === step.id);
