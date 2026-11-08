@@ -26,8 +26,11 @@ function initialSteps() {
   ].map((s, position) => ({...s, type_id: 'dev', position}));
 }
 
+// Like the server's pipeline payload: each stage's held count is its unfinished cards, snoozed ones included (D68).
 function typeOf(state) {
-  return {id: 'dev', name: 'Dev tickets', prefix: 'D', pipeline_owner_id: 'human:ana', manager: null, role: 'engineering', has_requirements: true, steps: state.steps};
+  const held = step => tasksOf(state).filter(t => t.step_id === step && !['done', 'closed'].includes(t.status)).length;
+  return {id: 'dev', name: 'Dev tickets', prefix: 'D', pipeline_owner_id: 'human:ana', manager: null, role: 'engineering', has_requirements: true,
+    steps: state.steps.map(s => ({...s, held: held(s.id)}))};
 }
 
 // Where each card sits: the three specs in Specifying, and Build the export in In development until a person moves it.
@@ -36,18 +39,19 @@ function taskOf(state, id) {
   const where = state.where[id] ?? HOME[id];
   const step = state.steps.find(s => s.id === where);
   const title = {T41: 'Spec the export', T42: 'Spec the import', T43: 'Spec the sync', T44: 'Build the export'}[id];
+  const holds = state.snoozed.includes(id) ? [{kind: 'snoozed', until: '2099-06-01T09:00:00Z'}] : [];
   return {id, number: Number(id.slice(1)), title, body: '', owner_id: 'bot:builder', requester_id: 'human:ana', status: step.status, lane: 'company',
-    version: 1, labels: [], links: [], parts: {total: 0, done: 0}, rank: Number(id.slice(1)), created_at: stamp, updated_at: stamp, step_since: stamp,
+    version: 1, labels: [], links: [], holds, parts: {total: 0, done: 0}, rank: Number(id.slice(1)), created_at: stamp, updated_at: stamp, step_since: stamp,
     type_id: 'dev', type: {id: 'dev', name: 'Dev tickets'}, step_id: where, step: {...step, type_id: 'dev'}};
 }
 function tasksOf(state) {
   return Object.keys(HOME).map(id => taskOf(state, id));
 }
 
-async function open(browser) {
+async function open(browser, opts = {}) {
   const page = await browser.newPage({viewport: {width: 390, height: 844}, serviceWorkers: 'block', hasTouch: true, isMobile: true});
   const errors = [], writes = [];
-  const state = {steps: initialSteps(), where: {}, moves: []};
+  const state = {steps: initialSteps(), where: {}, moves: [], snoozed: opts.snoozed || []};
   page.on('pageerror', e => errors.push(e.message));
   await page.addInitScript(() => { try { localStorage.setItem('tico.theme', 'dark'); } catch {} });
   const me = {id: 'ana', role: 'owner', name: 'Ana Ruiz', email: 'ana@example.com', cloud: true, registered: true, owner_id: 'ana', mover: true, config: {company_name: 'Acme Bikes'}};
@@ -180,6 +184,16 @@ const lastPatch = (writes, id) => writes.filter(w => w.method === 'PATCH' && w.p
     assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), 'no sideways scroll in the editor');
     assert.deepEqual(errors, [], 'no page errors');
     await page.close();
+
+    // Three snoozed specs hold Specifying (D68): none shows on the board, yet its chip reads 3/3, the count the cap is
+    // enforced against, not the 0 of the cards on show.
+    const quiet = await open(browser, {snoozed: ['T41', 'T42', 'T43']});
+    await quiet.page.locator('.pchip', {hasText: 'Specifying'}).waitFor();
+    assert.equal(await quiet.page.locator('.bcard-open', {hasText: 'Spec the'}).count(), 0, 'the snoozed specs are off the board');
+    assert.match(await quiet.page.locator('.pchip', {hasText: 'Specifying'}).innerText(), /3\/3/, 'the Specifying chip counts its snoozed cards');
+    await shot(quiet.page, 'phone-chip-snoozed-3of3.png');
+    assert.deepEqual(quiet.errors, [], 'no page errors with snoozed cards');
+    await quiet.page.close();
     console.log('stage-caps: ok');
   } finally {
     await browser.close();
