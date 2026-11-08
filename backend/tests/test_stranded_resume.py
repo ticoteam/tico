@@ -521,3 +521,49 @@ def test_a_review_ticket_someone_else_moves_is_not_resumed(api):
         assert SR.state(c, H.task(c, fresh), H.shift(H.now(), minutes=SR.REVIEW_QUIET_MINUTES)), (
             "an hour after its check finished, it is stranded"
         )
+
+
+@pytest.mark.parametrize("how", ["ci", "merge_queue", "step"])
+def test_a_queued_review_resume_is_dropped_at_claim_once_ci_or_the_merge_queue_takes_over(api, how):
+    """The resume waited behind other work; meanwhile CI started again on the head, the pull request joined the merge
+    queue, or the ticket left its check step. Its "no CI going" text is stale, so the claim drops it."""
+    machine = online(api, "ops")
+    tid = dev_ticket(api, "Pipeline manager 1/3", check="done")
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE jobs SET state='canceled' WHERE bot_id='ops' AND state='queued'")
+        strand_review(c, tid)
+        assert SR.run(c, H.now()) == {"resumed": 1, "stopped": 0}
+        message, job = c.execute(
+            "SELECT m.id, j.id FROM messages m JOIN jobs j ON j.message_id=m.id WHERE j.bot_id='ops' "
+            "AND j.state='queued' AND json_extract(m.refs,'$.stranded')=1"
+        ).fetchone()
+        c.execute("UPDATE messages SET created_at=? WHERE id=?", (H.shift(H.now(), minutes=-30), message))
+        if how == "ci":
+            c.execute("UPDATE task_links SET checks='pending' WHERE task_id=?", (tid,))
+        elif how == "merge_queue":
+            c.execute(
+                "UPDATE task_links SET detail=json_set(coalesce(detail,'{}'),'$.merge_queue.state','queued') "
+                "WHERE task_id=?",
+                (tid,),
+            )
+        else:
+            H._task_event(c, tid, H.KEEPER, "step", "In QA", "QA Fixes")
+    attempt = claim(api, machine)
+    assert attempt is None or attempt["job_id"] != job, "the claim does not hand the stale resume out"
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT state FROM jobs WHERE id=?", (job,)).fetchone()[0] == "canceled"
+
+
+def test_a_queued_review_resume_still_stranded_is_handed_out_at_claim(api):
+    machine = online(api, "ops")
+    tid = dev_ticket(api, "Pipeline manager 1/3", check="done")
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE jobs SET state='canceled' WHERE bot_id='ops' AND state='queued'")
+        strand_review(c, tid)
+        assert SR.run(c, H.now()) == {"resumed": 1, "stopped": 0}
+        job = c.execute(
+            "SELECT j.id FROM messages m JOIN jobs j ON j.message_id=m.id WHERE j.bot_id='ops' "
+            "AND j.state='queued' AND json_extract(m.refs,'$.stranded')=1"
+        ).fetchone()[0]
+    attempt = claim(api, machine)
+    assert attempt is not None and attempt["job_id"] == job

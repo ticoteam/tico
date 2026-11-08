@@ -1116,6 +1116,7 @@ def test_a_failed_head_behind_a_suite_that_never_started_hands_the_failure_to_th
     assert len(failed) == 1 and (failed[0]["refs"]["pr_head"], failed[0]["refs"]["pr_result"]) == (HEAD, "fail")
     # Nothing is pending any more: the next pass reads nothing and hands nothing over again.
     _quiet(api, task)
+    G._pending_reads.clear()
     G.refresh_pending_checks(service)
     assert len(_failed_checks(api)) == 1
 
@@ -1141,6 +1142,36 @@ def test_a_failed_head_with_a_check_still_running_on_github_is_not_finished_by_t
     G.refresh_pending_checks(service)
     assert "pending" in H._json(_link(api, task)["detail"], {})["checks"].values()
     assert not _failed_checks(api)
+
+
+def test_a_pending_head_read_failing_with_a_check_still_running_finishes_only_when_the_last_one_ends(api, monkeypatch):
+    """A read that finds one check failed while another is still going does not finish the head (as the webhook does
+    not); the read that finds the last one done hands the failure over once."""
+    from backend import github as G
+
+    task = ticket(api, step="In QA")
+    _suite(api, "tico-team-bots", "queued", sha=HEAD, id=STUCK)
+    verdict(api, check(api, task, "QA: PR #412"), "pass")
+    assert _link(api, task)["checks"] == "pending"
+    rows = [
+        _suite_row(1, "github-actions", "completed", "failure", runs=2),
+        _suite_row(STUCK, "tico-team-bots", "in_progress", runs=1),
+    ]
+    service, _ = _github(api, monkeypatch, rows, [{"name": "tests", "status": "completed", "conclusion": "failure"}])
+    _quiet(api, task)
+    G.refresh_pending_checks(service)
+    assert _link(api, task)["checks"] == "failing"
+    assert not _failed_checks(api), "a check is still going"
+    rows[1] = _suite_row(STUCK, "tico-team-bots", "completed", "success", runs=1)
+    _quiet(api, task)
+    G._pending_reads.clear()  # ten minutes on: the link's next read is due
+    G.refresh_pending_checks(service)
+    failed = _failed_checks(api)
+    assert len(failed) == 1 and failed[0]["refs"]["pr_head"] == HEAD
+    _quiet(api, task)
+    G._pending_reads.clear()
+    G.refresh_pending_checks(service)
+    assert len(_failed_checks(api)) == 1
 
 
 def test_a_check_github_sends_while_the_read_is_in_flight_is_not_overwritten_by_the_read(api, monkeypatch):

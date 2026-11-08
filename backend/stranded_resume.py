@@ -68,6 +68,11 @@ LIVE_JOBS = ("queued", "leased", "running", "input", "uncertain")
 # What a run writes on its own task that is bookkeeping, not progress.
 BOOKKEEPING = ("lint", "number", "reader", "private", "check_model", "rank", "session", "run_model", RESUMED, STOPPED)
 _MARKS = ",".join("?" * len(LIVE_JOBS))
+# An open pull request link `l` with CI still going or queued to merge (_ci_going). Binds nothing.
+_CI_GOING = (
+    "l.kind='pr' AND l.state IN ('open','draft') "
+    "AND (l.checks='pending' OR json_extract(l.detail,'$.merge_queue.state')='queued')"
+)
 _BOOKKEEPING = ",".join("?" * len(BOOKKEEPING))
 
 
@@ -397,7 +402,8 @@ def told(c: sqlite3.Connection, at: str) -> set[str]:
 
 def obsolete_sql() -> str:
     """The condition, for execution.obsolete_notices_sql (m: the notice's message, j: its queued job, t: its task), that
-    a queued stranded resume is out of date: its task is no longer in progress or in review, its owner changed, or it moved on since
+    a queued stranded resume is out of date: its task is no longer in progress or in review, a review ticket's CI started
+    or its merge was queued (_ci_going), its owner changed, or it moved on since
     the notice was written by _progress's signal (a step, status or owner change, a note or message its owner wrote, a
     subtask filed under it). The claim cancels it, as it cancels any other out-of-date keeper notice. A resume whose turn
     already started is the rest of that turn, so it is never obsolete. Binds no parameters: the claim's queries bind
@@ -414,7 +420,8 @@ def obsolete_sql() -> str:
         "AND s.deleted_at IS NULL AND s.created_at>m.created_at "
         f"AND NOT EXISTS (SELECT 1 FROM messages n WHERE n.id=s.in_reply_to AND n.sender_id='{H.KEEPER}' "
         "AND json_extract(n.refs,'$.stranded')=1)) "
-        "OR EXISTS (SELECT 1 FROM task_relations r WHERE r.to_task=t.id AND r.kind='parent' AND r.created_at>m.created_at))"
+        "OR EXISTS (SELECT 1 FROM task_relations r WHERE r.to_task=t.id AND r.kind='parent' AND r.created_at>m.created_at) "
+        f"OR t.status='review' AND EXISTS (SELECT 1 FROM task_links l WHERE l.task_id=t.id AND {_CI_GOING}))"
     )
 
 
@@ -460,11 +467,7 @@ def _ci_going(c: sqlite3.Connection, task_id: str) -> bool:
     """Whether an open pull request on the task has CI still going or sits in a merge queue: github wakes the builder
     when either ends (pr_checks_done, the merge or its failure)."""
     return (
-        c.execute(
-            "SELECT 1 FROM task_links WHERE task_id=? AND kind='pr' AND state IN ('open','draft') "
-            "AND (checks='pending' OR json_extract(detail,'$.merge_queue.state')='queued') LIMIT 1",
-            (task_id,),
-        ).fetchone()
+        c.execute(f"SELECT 1 FROM task_links l WHERE l.task_id=? AND {_CI_GOING} LIMIT 1", (task_id,)).fetchone()
         is not None
     )
 

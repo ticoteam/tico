@@ -1045,7 +1045,8 @@ def apply_checks(c, link_id, head, checks, since=None):
     detail["checks"] = kept
     _set_dropped(detail, dropped)
     changed = state != link.get("checks")
-    finished = state != "pending" and (changed or held)
+    # As the webhook: a head finishes only once no check on it is still going, whatever has failed already.
+    finished = state != "pending" and "pending" not in checks.values() and (changed or held)
     finished_head = _finish(c, task, link, detail, head, checks) if finished else None
     record_health_wait({**link, "checks": state}, detail, check_flow=step_flow.has_flow(c, task.get("type_id")))
     c.execute(
