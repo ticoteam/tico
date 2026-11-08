@@ -82,7 +82,7 @@ def _own(c, actor, name, ev):
         MK.create_entity(
             c,
             actor,
-            type="company",
+            type="organization",
             name=name or "Our company",
             summary=(name or "Our company") + ".",
             evidence_ids=ev,
@@ -197,7 +197,7 @@ def competitors(c):
         ids.add(edge["dst"] if edge["src"] == MK.OWN_COMPANY_ID else edge["src"])
     ids.discard(MK.OWN_COMPANY_ID)
     rows = [MK.entity(c, i) for i in ids]
-    rows = [r for r in rows if r and r["status"] == "active" and r["type"] in ("company", "product")]
+    rows = [r for r in rows if r and r["status"] == "active" and r["type"] in ("organization", "product")]
     rows.sort(key=lambda r: (r["name"].lower(), r["id"]))
     return [{"id": r["id"], "name": r["name"], "url": _site(r)} for r in rows[:COMPETITORS_MAX]]
 
@@ -215,7 +215,7 @@ def add_competitor(c, actor, text, company=""):
     found = [
         r
         for r in MK._resolve_existing(c, name, [], {"domain": host} if host else {})
-        if r["status"] == "active" and r["type"] in ("company", "product") and r["id"] != MK.OWN_COMPANY_ID
+        if r["status"] == "active" and r["type"] in ("organization", "product") and r["id"] != MK.OWN_COMPANY_ID
     ]
     if found:
         entity = found[0]
@@ -230,7 +230,7 @@ def add_competitor(c, actor, text, company=""):
         entity, _ = MK.create_entity(
             c,
             actor,
-            type="company",
+            type="organization",
             name=name,
             external_ids={"domain": host} if host else None,
             evidence_ids=[proof["id"]],

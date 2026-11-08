@@ -2330,6 +2330,11 @@ class Store:
                 from . import market as Market
 
                 Market.mark_seeded_pages(c)
+                # The Directory's boot step: flags Market's company/self as self, and the kind of each organization Market
+                # wrote without one (backend/entities/store.py boot). Idempotent.
+                from .entities import store as Directory
+
+                Directory.boot(c)
                 # Finished tasks still holding an earlier close time (H.clear_finished_close_times). Idempotent.
                 H.clear_finished_close_times(c)
                 # Teams, org groups and derived departments become groups, once (backend/groups.py). Idempotent,

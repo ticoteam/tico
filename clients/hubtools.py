@@ -3517,7 +3517,7 @@ def lens_runs(api, args):
 @tool(
     "hub_market_show",
     "One market entity: its edges both ways, the evidence behind it, and the last ten events.",
-    {"id": _s("Entity id, like company/globex")},
+    {"id": _s("Entity id, like organization/globex")},
     required=("id",),
 )
 def market_show(api, args):
@@ -3652,7 +3652,7 @@ def market_day(value):
         "source_kind": _s("reddit, x, news, site, other", default="other"),
         "quote": _s("What the source said", default=""),
         "our_read": _s("The curator's sentence", default=""),
-        "entity_type": _s("company, person, segment, channel, ..."),
+        "entity_type": _s("organization, person, segment, channel, ..."),
         "entity_name": _s("Name, when creating an entity"),
         "entity_id": _s("Existing entity to update"),
         "summary": _s("New summary"),
@@ -3782,7 +3782,7 @@ def market_page(api, args):
     "kind release watches a product's releases instead: the url is github:owner/repo or a release feed, and it needs the "
     "Tico AI Gateway.",
     {
-        "entity_id": _s("The market entity, like company/globex"),
+        "entity_id": _s("The market entity, like organization/globex"),
         "url": _s("The page's public address, or github:owner/repo for a release"),
         "kind": {
             "type": "string",

@@ -1110,3 +1110,201 @@ class SkillDeviceCodeRow(TypedDict):
     created_at: str
     updated_at: str
     client_hash: str | None
+
+
+# The Directory (backend/entities/): one row shape per table the Directory's tables migration makes.
+
+
+class EntityActivityRow(TypedDict):
+    id: str
+    entity_id: str
+    kind: str
+    occurred_at: str
+    subject_type: str | None
+    subject_id: str | None
+    external_ref: str | None
+    actor_type: str | None
+    actor_id: str | None
+    direction: str | None
+    summary: str
+
+
+class EntityAttributeRow(TypedDict):
+    id: str
+    entity_type: str
+    key: str
+    name: str
+    value_type: str
+    multiple: int
+    unique_value: int
+    required: int
+    options: str
+    owner_type: str
+    owner_id: str
+    description: str
+    sensitive: int
+    position: int
+    created_by_type: str
+    created_by_id: str
+    created_at: str
+    archived_at: str | None
+
+
+class EntityConnectionRow(TypedDict):
+    id: str
+    entity_id: str
+    actor_type: str
+    actor_id: str
+    first_interaction_at: str | None
+    last_interaction_at: str | None
+    interactions_count: int
+    strength: float
+
+
+class EntityExternalRefRow(TypedDict):
+    id: str
+    entity_id: str
+    connection_id: str
+    system: str
+    external_type: str
+    external_id: str
+    url: str
+    revision: str
+    synced_at: str | None
+    status: str
+
+
+class EntityMentionRow(TypedDict):
+    id: str
+    mentionable_type: str
+    mentionable_id: str
+    mentionable_revision: str
+    entity_id: str
+    role: str
+    quote: str
+    occurrence: int
+    confidence: float
+    method: str
+    status: str
+    created_at: str
+
+
+class EntityMergeRow(TypedDict):
+    id: str
+    entity_id: str
+    into_entity_id: str
+    moved: str
+    prior: str
+    actor_type: str
+    actor_id: str
+    created_at: str
+    undone_at: str | None
+
+
+class EntityNoteRow(TypedDict):
+    id: str
+    entity_id: str
+    author_type: str
+    author_id: str
+    body: str
+    audience: str
+    pinned_at: str | None
+    evidence_id: str | None
+    created_at: str
+
+
+class EntitySourceRow(TypedDict):
+    id: str
+    entity_id: str
+    source_type: str
+    source_id: str
+    visibility: str
+    created_at: str
+
+
+class EntitySuppressionRow(TypedDict):
+    id: str
+    kind: str
+    value_hash: str
+    created_at: str
+    reason: str
+
+
+class EntityTypeRow(TypedDict):
+    id: str
+    key: str
+    name: str
+    plural_name: str
+    icon: str
+    built_in: int
+    mode: str
+    linked_connection_id: str | None
+    description: str
+    created_by_type: str
+    created_by_id: str
+    created_at: str
+    archived_at: str | None
+
+
+class EntityValueHistoryRow(TypedDict):
+    id: str
+    entity_id: str
+    entity_attribute_id: str
+    value: str
+    source_type: str | None
+    source_id: str | None
+    evidence_id: str | None
+    confidence: float | None
+    active_from: str
+    active_until: str
+
+
+class EntityValueRow(TypedDict):
+    id: str
+    entity_id: str
+    entity_attribute_id: str
+    single_value: int
+    text_value: str | None
+    number_value: float | None
+    currency: str | None
+    date_value: str | None
+    timestamp_value: str | None
+    option_key: str | None
+    json_value: str | None
+    source_type: str | None
+    source_id: str | None
+    evidence_id: str | None
+    confidence: float
+    updated_at: str
+
+
+class EntityViewRow(TypedDict):
+    id: str
+    entity_type: str
+    name: str
+    layout: str
+    filters: str
+    columns: str
+    sort: str
+    group_attribute_id: str | None
+    owner_type: str
+    owner_id: str
+    shared: int
+    created_at: str
+
+
+class LinkTypeRow(TypedDict):
+    id: str
+    key: str
+    name: str
+    inverse_name: str
+    from_entity_type: str | None
+    to_entity_type: str | None
+    inherits_rules: int
+    symmetric: int
+    description: str
+    built_in: int
+    created_by_type: str
+    created_by_id: str
+    created_at: str
+    archived_at: str | None

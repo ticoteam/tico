@@ -436,7 +436,7 @@ class Builder:
                 {
                     "id": row["id"],
                     "name": row["name"],
-                    "type": "company",
+                    "type": "organization",
                     "tier": row["tier"],
                     "aliases": row["aliases"],
                     "external_ids": row["external_ids"],
