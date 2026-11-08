@@ -309,6 +309,25 @@ async function managerChoices(browser) {
     assert.deepEqual(errors, [], 'read-only: no page errors');
     await page.close();
   }
+  {
+    // A reader who may not change the rules still sees whose the manager is when it is paused, with its state.
+    const {page, errors} = await open(browser, {may: false, emps: [LEAD, PAUSED], manager: 'pausy'});
+    await page.evaluate(() => openPipelineEditor('dev'));
+    await page.locator('.pe-stage').first().waitFor();
+    assert.equal(await page.locator('[data-pe-manager-readonly]').innerText(), 'Paused Bot (paused)', 'a paused manager is named read-only');
+    assert.equal(await page.locator('[data-pe-setting=manager_id]').count(), 0, 'no picker for the paused manager either');
+    assert.deepEqual(errors, [], 'read-only paused: no page errors');
+    await page.close();
+  }
+  {
+    // An archived manager is left out of the roster: the reader is told it is no longer on the team.
+    const {page, errors} = await open(browser, {may: false, manager: 'gone'});
+    await page.evaluate(() => openPipelineEditor('dev'));
+    await page.locator('.pe-stage').first().waitFor();
+    assert.equal(await page.locator('[data-pe-manager-readonly]').innerText(), 'A bot no longer on the team', 'an archived manager is not shown as Not set');
+    assert.deepEqual(errors, [], 'read-only archived: no page errors');
+    await page.close();
+  }
 }
 
 // FHI16: a new requirement says how many open cards it would apply to right now, and reads again when the label changes.

@@ -74,8 +74,9 @@ class RequirementBody(Contract):
 
 class PipelineSettingsBody(Contract):
     """What a pipeline's owner or an admin sets. Every field is optional; a field left out stays as it is. The route
-    passes only the fields the body sent, so for goal, judge_model, manager_id and factory_id an empty value (or null)
-    clears it; visibility and members are left alone when null. manager_id is `bot:<id>` or `<id>`, an active bot."""
+    passes only the fields the body sent, so for goal, judge_model and factory_id an empty value (or null) clears it;
+    visibility and members are left alone when null. manager_id is `bot:<id>` or `<id>`, an active bot: an empty string
+    clears it, and null leaves it as it is."""
 
     prefix: str | None = Field(default=None, max_length=2)
     owner_id: str | None = Field(default=None, max_length=128)

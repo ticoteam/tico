@@ -178,6 +178,16 @@ function peGoalHTML(state: PeState): string {
       ${members}`;
 }
 
+/** The manager as a reader who may not change it sees it: the saved bot's name, with its state when it is not active. The
+    roster leaves archived bots out, so a saved bot it does not list is said to be no longer on the team. */
+function peManagerName(saved: string): string {
+  if (!saved) return 'Not set';
+  const bot = (S.emps || []).find(e => e.id === saved);
+  if (!bot) return 'A bot no longer on the team';
+  const botState = bot.state ?? bot.status;
+  return botState === 'active' ? botDisplayName(saved) : `${botDisplayName(saved)} (${botState})`;
+}
+
 /** The Pipeline Manager field. An owner or admin picks an active bot, or Not set; anyone else reads the name. A saved
     manager that is not an active bot (archived, paused, planned or gone) shows as Not set, with a line saying so. */
 function peManagerHTML(state: PeState): string {
@@ -185,7 +195,7 @@ function peManagerHTML(state: PeState): string {
   const saved = (state.type.manager ?? '').replace(/^bot:/, '');
   const current = bots.some(b => b.id === 'bot:' + saved) ? saved : '';
   const stale = !!saved && !current;
-  if (!state.mayEdit) return `<span class="pe-readonly" data-pe-manager-readonly>${esc(current ? botDisplayName(current) : 'Not set')}</span>`;
+  if (!state.mayEdit) return `<span class="pe-readonly" data-pe-manager-readonly>${esc(peManagerName(saved))}</span>`;
   const hint = `<span class="pe-hint">The bot that checks this pipeline's stuck tasks. Only active bots can be picked.</span>`;
   const warn = stale ? `<span class="pe-hint pe-warn-line" data-pe-manager-stale>The saved manager is not an active bot. Pick one.</span>` : '';
   if (!bots.length) return `<select data-pe-setting="manager_id" disabled><option value="">No active bots</option></select>${hint}${warn}`;
