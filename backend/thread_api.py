@@ -439,12 +439,12 @@ def install(app, store, auth, mutate, rule_check):
             return thread_rail.browse(c, v, q=q, cursor=cursor, limit=limit)
 
     @app.get("/api/v2/threads/archived")
-    def archived(request: Request, limit: int | None = None):
+    def archived(request: Request, cursor: str | None = None, limit: int | None = None):
         """The threads the viewer archived and may still manage, newest first: Browse threads' Archived view. Unarchive is
         PATCH with `archived` false."""
         v = threads.viewer(auth, request.state.identity)
         with store.read_transaction() as c:
-            return thread_rail.archived(c, v, limit=limit)
+            return thread_rail.archived(c, v, cursor=cursor, limit=limit)
 
     @app.get("/api/v2/threads/catch-up")
     def catch_up(request: Request, cursor: str | None = None, limit: int | None = None):

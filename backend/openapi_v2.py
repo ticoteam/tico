@@ -9243,6 +9243,7 @@ SCHEMAS.update(
         "ThreadReadAll": obj({"threads": "i"}, required=["threads"]),
         "ThreadFollow": obj({"thread_id": "s", "following": "b", "notify": "s"}, required=["thread_id", "following"]),
         "ThreadMessageDeleted": obj({"id": "s", "deleted": "b", "revision": "i"}, required=["id", "deleted"]),
+        "ThreadDeleted": obj({"deleted": "s"}, required=["deleted"]),
     }
 )
 SCHEMAS["ThreadMessage"]["properties"]["source"] = ref("MessageSource")
@@ -9374,7 +9375,7 @@ STABLE.extend(
             "deleteThread",
             "Delete a thread the viewer manages, when every message in it is deleted and no one else is in it; it leaves every "
             "list and reads as not found. Otherwise 409 `not_deletable` with the reason, and nothing is removed",
-            "ThreadView",
+            "ThreadDeleted",
         ),
         (
             "/api/v2/threads/{thread_id}",

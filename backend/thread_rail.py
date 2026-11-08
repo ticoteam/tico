@@ -387,27 +387,54 @@ def browse(c, v, *, q=None, cursor=None, limit=BROWSE_LIMIT):
     }
 
 
-def archived(c, v, *, limit=None):
+def archived(c, v, *, cursor=None, limit=None):
     """The roots the reader archived and may still manage (only a manager can unarchive), newest activity first: Browse
-    threads' Archived view. A deleted thread is not listed. Each row is the thread view, as a list shows it."""
+    threads' Archived view, in pages. A deleted thread is not listed. Each row is the thread view, as a list shows it.
+    The page is filled from the rows that pass the read and manage checks, so a reader with many archived threads they
+    cannot manage still gets a full page and the cursor reaches the rest."""
     v = _viewer(v)
     limit = _limit(limit, BROWSE_LIMIT, T.MAX_PAGE)
-    found = [
-        T.thread_row(c, dict(r))
-        for r in c.execute(
-            f"SELECT * FROM (SELECT r.*, {ACTIVITY} AS activity FROM conversations r WHERE r.parent_id IS NULL "
-            f"AND r.archived_at IS NOT NULL AND r.deleted_at IS NULL AND {T.readable_sql(c, v, 'r')}) "
-            "ORDER BY activity DESC, id DESC LIMIT :fetch",
-            {"fetch": limit * 4, **{f"name{i}": n for i, n in enumerate(v.member_names(c))}, "me": v.actor},
-        )
-    ]
-    rows = [r for r in found if r and T.thread_readable(c, v, r) and T.can_manage(c, v, r)][:limit]
+    after = _decode(cursor, 2)
+    args = {"me": v.actor, **{f"name{i}": n for i, n in enumerate(v.member_names(c))}}
+    where = ["r.parent_id IS NULL", "r.archived_at IS NOT NULL", "r.deleted_at IS NULL", T.readable_sql(c, v, "r")]
+    rows, position, fetch = [], after, limit + 20
+    more = False
+    while True:
+        cond, at = "", {}
+        if position:
+            cond = " WHERE activity<:at_seq OR (activity=:at_seq AND id<:at_id)"
+            at = {"at_seq": int(position[0]), "at_id": str(position[1])}
+        found = [
+            T.thread_row(c, dict(r))
+            for r in c.execute(
+                f"SELECT * FROM (SELECT r.*, {ACTIVITY} AS activity FROM conversations r WHERE {' AND '.join(where)})"
+                f"{cond} ORDER BY activity DESC, id DESC LIMIT :fetch",
+                {**args, **at, "fetch": fetch},
+            )
+        ]
+        for r in found:
+            if not r:
+                continue
+            position = [r["activity"], r["id"]]
+            if not (T.thread_readable(c, v, r) and T.can_manage(c, v, r)):
+                continue
+            if len(rows) >= limit:
+                more = True
+                break
+            rows.append(r)
+        if more or len(found) < fetch:
+            break
     v._members = {}
     try:
         shown = _views(c, v, rows)
     finally:
         v._members = None
-    return {"threads": [shown[r["id"]] for r in rows], "next_cursor": None}
+    items, cut = _fits([shown[r["id"]] for r in rows], T.MAX_PAGE_BYTES // 2)
+    last = rows[len(items) - 1] if items else None
+    return {
+        "threads": items,
+        "next_cursor": _encode([last["activity"], last["id"]]) if (more or cut) and last else None,
+    }
 
 
 def _member_counts(c, ids):

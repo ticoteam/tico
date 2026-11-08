@@ -3,6 +3,7 @@ task reopens or someone posts in it again (a close's own notice does not count);
 leaves both at once, comes back when unarchived, and only a manager archives. Fictional people only: ana (owner), ben
 and cara (humans)."""
 
+from backend import threads
 from backend.tests.slug_ids import bot_ids_are_their_slugs  # noqa: F401  (each bot's id is its slug)
 from backend.tests.test_api import api, headers  # noqa: F401  (the fixture and its helper)
 from backend.tests.test_thread_rail import ids, listed, new_thread, post_as, private_ref, say
@@ -206,6 +207,7 @@ def test_an_empty_thread_alone_is_deleted_and_leaves_every_list(api):
     assert view_of(api, thread["id"], token="ana-test")["deletable"] is True
     deleted = delete_thread(api, thread["id"])
     assert deleted.status_code == 200, deleted.text
+    assert deleted.json() == {"deleted": thread["id"]}
     assert shows(api, thread["id"], token="ana-test") == (False, False)
     assert thread["id"] not in archived_ids(api)
     assert api.get(f"/api/v2/threads/{thread['id']}", headers=headers("ana-test")).status_code == 404
@@ -222,6 +224,42 @@ def test_an_archived_thread_is_listed_under_archived_and_unarchive_brings_it_bac
     assert restored.status_code == 200, restored.text
     assert thread["id"] not in archived_ids(api)
     assert shows(api, thread["id"], token="ana-test")[0] is True
+
+
+def test_the_archived_view_pages_through_every_thread_the_reader_manages(api):
+    made = [new_thread(api, title=f"Old {n}") for n in range(4)]
+    for thread in made:
+        archived = api.patch(f"/api/v2/threads/{thread['id']}", json={"archived": True}, headers=headers("ana-test"))
+        assert archived.status_code == 200, archived.text
+    seen, cursor = [], None
+    for _ in range(4):
+        query = "/api/v2/threads/archived?limit=2" + (f"&cursor={cursor}" if cursor else "")
+        page = api.get(query, headers=headers("ana-test"))
+        assert page.status_code == 200, page.text
+        seen += [t["id"] for t in page.json()["threads"]]
+        cursor = page.json()["next_cursor"]
+        if cursor is None:
+            break
+    assert sorted(seen) == sorted(t["id"] for t in made)
+    assert len(seen) == len(set(seen)) == 4
+
+
+def test_the_archived_view_fills_its_page_past_threads_the_reader_only_reads(api, monkeypatch):
+    # Test identities include an admin, who manages every thread; here no one is one, so Ben is only a member of Ana's
+    # twelve archived threads: he reads them but may not manage them. Ben's own archived thread is the oldest, so the
+    # newest rows Ben reads first are all ones he cannot manage.
+    monkeypatch.setattr(threads.Viewer, "admin", lambda self, c: False)
+    mine = new_thread(api, title="Ben's old budget", members=("human:ana",), token="ben-test")
+    archived = api.patch(f"/api/v2/threads/{mine['id']}", json={"archived": True}, headers=headers("ben-test"))
+    assert archived.status_code == 200, archived.text
+    for n in range(12):
+        thread = new_thread(api, title=f"Ana's {n}", members=("human:ben",))
+        archived = api.patch(f"/api/v2/threads/{thread['id']}", json={"archived": True}, headers=headers("ana-test"))
+        assert archived.status_code == 200, archived.text
+    page = api.get("/api/v2/threads/archived?limit=2", headers=headers("ben-test"))
+    assert page.status_code == 200, page.text
+    assert [t["id"] for t in page.json()["threads"]] == [mine["id"]]
+    assert page.json()["next_cursor"] is None
 
 
 def test_a_home_is_never_deleted(api):

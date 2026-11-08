@@ -155,7 +155,8 @@ function threadBrowseOpen(): void {
   const load = async (add = false): Promise<void> => {
     const mine = ++seq, words = q.value.trim();
     try {
-      const path = mode === 'archived' ? '/v2/threads/archived?limit=50' : '/v2/threads/browse?limit=50&q=' + encodeURIComponent(words) + (add && next ? '&cursor=' + encodeURIComponent(next) : '');
+      const cur = add && next ? '&cursor=' + encodeURIComponent(next) : '';
+      const path = mode === 'archived' ? '/v2/threads/archived?limit=50' + cur : '/v2/threads/browse?limit=50&q=' + encodeURIComponent(words) + cur;
       const r = await get<BrowsePage>(path, {fresh: true});
       if (mine !== seq) return;
       const rows = (r.threads || r.items || []).map(rowHTML).join('');

@@ -42225,6 +42225,22 @@
         "operationId": "listArchivedThreads",
         "parameters": [
           {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cursor"
+            }
+          },
+          {
             "name": "limit",
             "in": "query",
             "required": false,
@@ -42929,7 +42945,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ThreadView"
+                  "$ref": "#/components/schemas/ThreadDeleted"
                 }
               }
             }
@@ -80241,6 +80257,18 @@
         "required": [
           "id",
           "title"
+        ],
+        "additionalProperties": true
+      },
+      "ThreadDeleted": {
+        "type": "object",
+        "properties": {
+          "deleted": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "deleted"
         ],
         "additionalProperties": true
       },
