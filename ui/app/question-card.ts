@@ -172,7 +172,7 @@ function qcardSaid(it, q, labels) {
   return labels.length === q.options.length ? `Yes to all · sent to ${to}` : `Sent ${labels.length} ticked · sent to ${to}`;
 }
 // The labels a card's action says yes to: one pick, all of them, or the ticked ones.
-function qcardLabels(q, what, i, ticked) {
+function qcardLabels(q, what, i, ticked?) {
   if (what === 'pick') return [q.options[i].label];
   if (what === 'all') return q.options.map(o => o.label);
   return q.options.filter((o, n) => ticked.has(n)).map(o => o.label);
