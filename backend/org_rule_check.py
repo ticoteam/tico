@@ -759,13 +759,17 @@ def _structured_apply(c, verdict, payload, replay, tell):
         "cached": bool(judged and judged["cached"]),
         "call": judged.get("call") if judged else None,
     }
+    # The same repeat rule as a judged block (`apply`): the 3rd block of this rule by this author in a day escalates.
+    mode, repeat = strictest["if_broken"], False
+    if mode == "block" and strictest["id"] and _repeats(c, verdict["author"], strictest["id"]) >= REPEAT_BLOCKS - 1:
+        mode, repeat = "escalate", True
     return _write_hold(
         c,
         hold_verdict,
         broken,
         strictest,
-        strictest["if_broken"],
-        False,
+        mode,
+        repeat,
         False,
         payload,
         replay,
