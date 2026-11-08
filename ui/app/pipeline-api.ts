@@ -63,6 +63,13 @@ interface PipelineReviewItem {
   stage_id?: string;
   /** The assignee for "Message <assignee>", or null. */
   assignee?: { id: string; name: string } | null;
+  /** The pipeline's manager bot for "Message <manager>", or null (the button is then not offered). */
+  manager: { id: string; name: string } | null;
+  /** The card, shown when nothing is attached: the ticket's body, acceptance criteria and checkpoint. */
+  body: string;
+  acceptance_criteria: string[];
+  checkpoint: string;
+  /** Why it is the viewer's, in words: the requirement and the pipeline ("Screenshots · Dev tickets"), with who sent it. */
   why: string;
   /** The bot's note, or empty. */
   bot_note: string;
@@ -72,7 +79,8 @@ interface PipelineReviewItem {
   can_mark_met?: boolean;
   /** Whether the viewer may send it Not validated (the server's follow-up rule, D66). */
   can_not_validate?: boolean;
-  /** The attachment and the stage visit the item shows, which Not validated names back to the server. */
+  /** The requirement's attachment (never a file on the ticket), and the stage visit the item shows: Not validated names
+      them back to the server. */
   attachment_id?: string | null;
   stage_visit_id?: string | null;
   attachments: PipelineAttachment[];
@@ -171,9 +179,10 @@ interface ServerQueueItem {
   requirement_version: number;
   kind: string;
   work_version: number;
-  /** The evidence the item waits on, with its content address (queue read view). */
-  attachment: { id: string; source: 'file' | 'blob' | 'link'; url: string | null; file_id?: string | null;
-    file_version?: number | null; format: PipelineReqAttachment['format']; name: string; href: string | null } | null;
+  /** What the item shows, with its content address (queue read view). `ticket` is a file on the ticket itself, shown
+      when nothing is attached to the requirement: it is not the requirement's evidence. */
+  attachment: { id: string; source: 'file' | 'blob' | 'link' | 'ticket'; url: string | null; file_id?: string | null;
+    file_version?: number | null; format: PipelineReqAttachment['format'] | 'text'; name: string; href: string | null } | null;
   attachment_digest: string | null;
   why: string;
   since: string;
@@ -181,6 +190,12 @@ interface ServerQueueItem {
   claimed_by: string | null;
   claimed_by_me: boolean;
   assignee: { id: string; name: string } | null;
+  /** The pipeline's manager bot, or null. */
+  manager: { id: string; name: string } | null;
+  /** The ticket's body, acceptance criteria and checkpoint: the card shown when nothing is attached. */
+  body: string;
+  acceptance_criteria: string[];
+  checkpoint: string;
   bot_note: string;
   moves_to: { stage_id: string; name: string } | null;
   /** The claimant, else the configured reviewer. */
@@ -234,6 +249,14 @@ function requirementFromDot(dot: ServerDot | PipelineRequirement): PipelineRequi
   return { ...dot, state: mapped, next_actor: ('next_actor' in dot ? dot.next_actor : null) ?? null } as PipelineRequirement;
 }
 
+/** Who sent the item to the viewer, for the server's code; a reviewer's own item names nobody. */
+const REVIEW_SENT_BY: Record<string, string> = { sent_back: 'Sent back to you', backup: 'Asked as backup' };
+
+/** "Why you": who sent it (if anyone), the requirement, and the pipeline, as "Spec approved · Product". */
+function reviewWhy(row: ServerQueueItem): string {
+  return [REVIEW_SENT_BY[row.why], row.requirement, row.pipeline].filter(Boolean).join(' · ');
+}
+
 /** A queue row, as the review view shows it. The row has one attachment; the view takes a list. */
 function reviewItemFromRow(row: ServerQueueItem): PipelineReviewItem {
   const a = row.attachment;
@@ -245,7 +268,11 @@ function reviewItemFromRow(row: ServerQueueItem): PipelineReviewItem {
     pipeline_id: row.pipeline_id,
     stage_id: row.stage_id,
     assignee: row.assignee ?? null,
-    why: row.why,
+    manager: row.manager ?? null,
+    body: row.body ?? '',
+    acceptance_criteria: row.acceptance_criteria ?? [],
+    checkpoint: row.checkpoint ?? '',
+    why: reviewWhy(row),
     bot_note: row.bot_note ?? '',
     reviewer_id: row.reviewer_id ?? null,
     can_mark_met: !!row.can_mark_met,
@@ -259,7 +286,7 @@ function reviewItemFromRow(row: ServerQueueItem): PipelineReviewItem {
     work_version: row.work_version,
     attachment_digest: row.attachment_digest,
     requirement_version: row.requirement_version,
-    attachment_id: a?.id ?? null,
+    attachment_id: a && a.source !== 'ticket' ? a.id : null,
     stage_visit_id: row.stage_visit_id ?? null,
   };
 }

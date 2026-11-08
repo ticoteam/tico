@@ -111,6 +111,25 @@ async function pipelineReviewOpen(pipelineId: string, stage = ''): Promise<void>
   host.querySelector<HTMLButtonElement>('[data-review-exit]')?.focus();
 }
 
+/** The card when nothing is attached: "No spec attached", then the ticket's body, acceptance criteria and checkpoint. */
+function pipelineReviewSpec(item: PipelineReviewItem): string {
+  const body = item.body.trim() ? `<p class="pipe-review-text">${esc(item.body)}</p>` : '';
+  const criteria = item.acceptance_criteria.length
+    ? `<h3 class="pipe-h">Acceptance criteria</h3><ul class="pipe-review-criteria">${item.acceptance_criteria.map(text => `<li>${esc(text)}</li>`).join('')}</ul>`
+    : '';
+  const checkpoint = item.checkpoint.trim() ? `<h3 class="pipe-h">Checkpoint</h3><p class="pipe-review-text">${esc(item.checkpoint)}</p>` : '';
+  return `<p class="muted pipe-review-nospec">No spec attached</p><div class="pipe-review-spec">${body}${criteria}${checkpoint}</div>`;
+}
+
+/** A card's title cut to about `max` characters, at a word break, for a line of text. */
+function pipelineReviewClip(text: string, max = 40): string {
+  const clean = text.trim();
+  if (clean.length <= max) return clean;
+  const cut = clean.slice(0, max);
+  const word = cut.lastIndexOf(' ');
+  return `${(word > max / 2 ? cut.slice(0, word) : cut).trimEnd()}…`;
+}
+
 function pipelineReviewRender(): void {
   const host = document.querySelector<HTMLElement>('.pipe-review');
   const state = pipelineReviewState;
@@ -127,8 +146,9 @@ function pipelineReviewRender(): void {
   }
   const attachments = item.attachments;
   const tab = attachments[state.tab] ?? attachments[0];
-  const preview = !tab ? '<p class="muted">Nothing attached yet.</p>'
+  const preview = !tab ? ''
     : tab.kind === 'image' && tab.url ? `<img class="pipe-review-img" src="${esc(tab.url)}" alt="${esc(tab.label)}">`
+    : tab.kind === 'text' && tab.url ? `<div class="pipe-review-file" data-review-text="${esc(tab.url)}"><p class="muted">Loading…</p></div><a class="pipe-review-open" href="${esc(tab.url)}" target="_blank" rel="noopener">Open</a>`
     : `<div class="pipe-review-card"><strong>${esc(tab.label)}</strong>${tab.detail ? `<span class="muted">${esc(tab.detail)}</span>` : ''}${tab.url ? `<a href="${esc(tab.url)}" target="_blank" rel="noopener">Open</a>` : ''}</div>`;
   const assignee = item.assignee?.name ?? 'assignee';
   // The item on show is claimed for ten minutes (once per item); another reviewer's claim disables Approve.
@@ -137,16 +157,19 @@ function pipelineReviewRender(): void {
   host.innerHTML = `<header class="pipe-review-head">
       ${PIPELINE_REVIEW_EXIT}
       <div class="pipe-review-title"><span class="pipe-review-count">For you · ${state.index + 1} of ${total}</span>
-        <span class="muted pipe-review-stage">${esc(item.stage_name || '')}${item.task_title ? `<span class="pipe-review-where"> · ${esc(item.task_title)}</span>` : ''}</span></div>
+        <span class="muted pipe-review-stage">${esc(item.stage_name || '')}</span></div>
       <span class="spacer"></span>
       <button type="button" class="ghost" data-review-prev aria-label="Previous" ${state.index === 0 ? 'disabled' : ''}>‹</button>
       <button type="button" class="ghost" data-review-next aria-label="Next" ${state.index >= total - 1 ? 'disabled' : ''}>›</button>
     </header>
     <div class="pipe-review-body">
       <section class="pipe-review-main">
-        <nav class="pipe-review-tabs" aria-label="Attachments">${attachments.map((a, i) =>
-          `<button type="button" class="pipe-review-tab${i === state.tab ? ' on' : ''}" data-review-tab="${i}">${esc(a.label)}</button>`).join('')}</nav>
-        <div class="pipe-review-view">${preview}</div>
+        ${item.task_title ? `<h2 class="pipe-review-card-title">${esc(item.task_title)}</h2>` : ''}
+        ${attachments.length
+          ? `<nav class="pipe-review-tabs" aria-label="Attachments">${attachments.map((a, i) =>
+              `<button type="button" class="pipe-review-tab${i === state.tab ? ' on' : ''}" data-review-tab="${i}">${esc(a.label)}</button>`).join('')}</nav>
+            <div class="pipe-review-view${tab?.kind === 'text' ? ' pipe-review-view-text' : ''}">${preview}</div>`
+          : `<div class="pipe-review-view pipe-review-view-text">${pipelineReviewSpec(item)}</div>`}
         ${item.bot_note ? `<p class="pipe-review-bot">Bot: ${esc(item.bot_note)}</p>` : ''}
       </section>
       <aside class="pipe-review-side">
@@ -157,17 +180,44 @@ function pipelineReviewRender(): void {
         ${state.message ? `<p class="pipe-review-err" role="alert">${esc(state.message)}</p>` : ''}
         <div class="pipe-review-sendback">
           <button type="button" class="btn" data-review-send="assignee">Message ${esc(assignee)}</button>
-          <button type="button" class="btn" data-review-send="manager">Message manager</button>
+          ${item.manager ? `<button type="button" class="btn" data-review-send="manager">Message ${esc(item.manager.name)}</button>` : ''}
         </div>
         ${item.claim ? `<p class="pipe-review-claim" role="status">${esc(item.claim.label)}</p>` : ''}
         <button type="button" class="pipe-review-approve" data-review-approve ${state.busy || item.claim ? 'disabled' : ''}>Approve <kbd class="pipe-review-kbd">⌘⏎</kbd></button>
         ${item.can_mark_met ? '<button type="button" class="pipe-review-met" data-review-send="met">Mark met</button>' : ''}
         ${item.can_not_validate ? '<button type="button" class="pipe-review-met" data-review-not-validated>Not validated</button>' : ''}
-        <p class="muted pipe-review-moves">${item.moves_to ? `Last requirement · moves ${esc(item.task_id)} to ${esc(item.moves_to)}` : ''}</p>
+        <p class="muted pipe-review-moves">${item.moves_to ? `Last requirement · moves ${esc(item.task_title ? pipelineReviewClip(item.task_title) : 'the card')} to ${esc(item.moves_to)}` : ''}</p>
         ${notice}
       </aside>
     </div>
     ${undo}`;
+  pipelineReviewLoadText(host);
+}
+
+/** Fills each text preview on the page with its file's text, as plain text (markdown is shown as written). A file that does
+    not load says so; its Open link stays beside it. Only the elements of the newest render are filled. */
+function pipelineReviewLoadText(host: HTMLElement): void {
+  host.querySelectorAll<HTMLElement>('[data-review-text]').forEach(slot => {
+    fetch(slot.dataset.reviewText ?? '', { credentials: 'same-origin' })
+      .then(res => {
+        if (!res.ok) throw new Error(`The file did not load (${res.status}).`);
+        return res.text();
+      })
+      .then(text => {
+        if (!slot.isConnected) return;
+        const pre = document.createElement('pre');
+        pre.className = 'pipe-review-file-text';
+        pre.textContent = text;
+        slot.replaceChildren(pre);
+      })
+      .catch(() => {
+        if (!slot.isConnected) return;
+        const note = document.createElement('p');
+        note.className = 'muted';
+        note.textContent = 'Could not load the file.';
+        slot.replaceChildren(note);
+      });
+  });
 }
 
 function pipelineReviewNoteValue(): string {

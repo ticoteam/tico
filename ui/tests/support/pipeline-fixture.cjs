@@ -40,7 +40,7 @@ function tasks() {
     task('D55', 'Review page: missing', 'review1', [
       {id: 'r-shots55', name: 'Screenshots', state: 'out_of_date', next_actor: 'bot:b1', detail: 'Shots out of date'},
       {id: 'r-tests55', name: 'Tests pass', state: 'met', next_actor: null}]),
-    task('D61', 'Pipeline stages + manager', 'spec', [
+    task('D61', 'Pipeline stages, requirements and the manager rules', 'spec', [
       {id: 'r-spec61', name: 'Spec page', state: 'waiting', next_actor: ME},
       // No dot is drawn for a requirement the stage does not have yet: the server sends "none", drawn hollow.
       {id: 'r-tests61', name: 'Tests pass', state: 'none', next_actor: null}]),
@@ -66,22 +66,46 @@ const ATTACHED = {
     file_version: 3, attached_by: ME, created_at: stamp}],
 };
 
+// The card each ticket shows when nothing is attached: the queue row carries its body, acceptance criteria and checkpoint.
+const CARDS = {
+  D52: {body: 'Assistant can approve a spec when every check passes.', acceptance: ['Approved in one tap', 'Works on a phone'],
+    checkpoint: 'Screenshots taken on the dev branch; shot 2 is cropped.'},
+};
+
+// The markdown file on D61 when `state.text` is set (a ticket file, not the requirement's): the preview shows it as text.
+const SPEC_MARKDOWN = '# Pipeline manager spec\n\nThe manager asks for a spec before a card moves on.\n\n- Every stage names its reviewer\n- Markdown shows as written\n';
+// A stand-in picture for the example.test links (the screenshot's shot.png), drawn as SVG so the card looks like a screen.
+const PLACEHOLDER_SVG = '<svg xmlns="http://www.w3.org/2000/svg" width="640" height="400" viewBox="0 0 640 400"><rect width="640" height="400" fill="#334155"/>'
+  + '<rect x="60" y="60" width="520" height="280" rx="16" fill="#1e293b"/><circle cx="200" cy="170" r="48" fill="#38bdf8"/>'
+  + '<rect x="290" y="140" width="250" height="18" rx="9" fill="#94a3b8"/><rect x="290" y="176" width="200" height="18" rx="9" fill="#64748b"/>'
+  + '<rect x="100" y="260" width="440" height="24" rx="12" fill="#475569"/></svg>';
+
 // The review queue for the pipeline, as the server sends it (GET /v2/pipelines/{id}/review/queue): two items for Ana.
 // `state.removed` holds the items an approval or send-back took out, so a reload shows the queue as it now is.
+// `state.bare`: D52 has nothing attached, so its card shows the body, acceptance criteria and checkpoint instead.
+// `state.text`: D61's attachment is the ticket's own markdown file (source ticket, format text), not a requirement's PDF.
+// `why` is the server's code (reviewer, sent_back or backup); the review words it with the requirement and pipeline.
 function queue(state) {
-  const row = (task_id, title, stage, requirement_id, requirement, why, attachment) => ({task_id, title, pipeline_id: 'dev-tickets',
-    pipeline: 'Dev tickets', stage_id: stage.toLowerCase(), stage, requirement_id, requirement, requirement_version: 1, kind: attachment.format,
-    work_version: 3, attachment, attachment_digest: 'sha256:aa', why, since: stamp, late: false, claimed_by: null, claimed_by_me: false,
-    assignee: {id: 'bot:b1', name: 'Builder'}, bot_note: task_id === 'D52' ? 'Shot 2 is cropped' : '', moves_to: task_id === 'D61' ? {stage_id: 'build', name: 'Build'} : null,
-    reviewer_id: ME, can_mark_met: true, can_not_validate: stage === 'Validate', stage_visit_id: stage === 'Validate' ? 'v-validate' : null});
+  const row = (task_id, title, stage, requirement_id, requirement, why, attachment) => {
+    const card = CARDS[task_id] || {body: '', acceptance: [], checkpoint: ''};
+    const shown = state.bare && task_id === 'D52' ? null : attachment;
+    return {task_id, title, pipeline_id: 'dev-tickets', pipeline: 'Dev tickets', stage_id: stage.toLowerCase(), stage, requirement_id, requirement,
+      requirement_version: 1, kind: shown ? shown.format : 'approval', work_version: 3, attachment: shown,
+      attachment_digest: shown && shown.source !== 'ticket' ? 'sha256:aa' : null, why, since: stamp, late: false, claimed_by: null, claimed_by_me: false,
+      assignee: {id: 'bot:product-owner', name: 'Product Manager'}, manager: {id: 'bot:product-manager', name: 'Product Pipeline Manager'},
+      body: card.body, acceptance_criteria: card.acceptance, checkpoint: card.checkpoint,
+      bot_note: task_id === 'D52' ? 'Shot 2 is cropped' : '', moves_to: task_id === 'D61' ? {stage_id: 'build', name: 'Build'} : null,
+      reviewer_id: ME, can_mark_met: true, can_not_validate: stage === 'Validate', stage_visit_id: stage === 'Validate' ? 'v-validate' : null};
+  };
   const all = [
-    row('D52', 'Assistant can approve a spec', 'Build', 'r-shots', 'Screenshots', 'The bot is unsure about shot 2',
+    row('D52', 'Assistant can approve a spec', 'Build', 'r-shots', 'Screenshots', 'reviewer',
       {id: 'a1', source: 'link', format: 'image', name: 'shot.png', href: 'https://example.test/shot.png', file_id: null, file_version: null}),
-    row('D61', 'Pipeline stages + manager', 'Spec', 'r-spec61', 'Spec page', 'Spec needs your sign-off',
-      {id: 'b1', source: 'file', format: 'pdf', name: 'spec.pdf', href: '/api/v2/files/f1/versions/2', file_id: 'f1', file_version: 2}),
+    row('D61', 'Pipeline stages, requirements and the manager rules', 'Spec', 'r-spec61', 'Spec page', 'reviewer', state.text
+      ? {id: 'blob-spec', source: 'ticket', format: 'text', name: 'Pipeline manager spec v1.md', href: '/api/v2/files/blob-spec', url: null, file_id: null, file_version: null}
+      : {id: 'b1', source: 'file', format: 'pdf', name: 'spec.pdf', href: '/api/v2/files/f1/versions/2', file_id: 'f1', file_version: 2}),
   ];
   // `validate`: a Validate item comes first, so a test can reach it without stepping through the others.
-  if (state.validate) all.unshift(row('D70', 'Validate the spec', 'Validate', 'r-val70', 'Validation', 'Measures did not hold',
+  if (state.validate) all.unshift(row('D70', 'Validate the spec', 'Validate', 'r-val70', 'Validation', 'reviewer',
     {id: 'c1', source: 'link', format: 'page', name: 'Measures', href: 'https://example.test/measures', file_id: null, file_version: null}));
   return {items: all.filter(r => !state.removed.has(`${r.task_id}:${r.requirement_id}`))};
 }
@@ -90,9 +114,9 @@ function queue(state) {
 // `ownerOnly`: the type carries no can_edit_rules, only its owner, and the viewer is a member (E3: the rules controls follow
 // the server's answer, and the owner check reads pipeline_owner_id). `claimedBy`: another reviewer holds every item.
 async function install(page, {refuseApprove = false, manager = false, refuseMove = false, late = [{task_id: 'D17', title: 'Sim stuck checks', stage: 'Build', hours: 52, limit_hours: 48, since: stamp}],
-  ownerOnly = false, member = false, claimedBy = null, noRequirements = false, validate = false} = {}) {
+  ownerOnly = false, member = false, claimedBy = null, noRequirements = false, validate = false, bare = false, text = false} = {}) {
   const state = {posts: [], queueReads: 0, refuseApprove, refuseMove, moves: [], prefs: {}, attachments: [], managerReads: 0, claims: [], claimedBy,
-    removed: new Set(), lastDone: null, affectedReads: [], requirementReads: {}, attachmentReads: 0, validate,
+    removed: new Set(), lastDone: null, affectedReads: [], requirementReads: {}, attachmentReads: 0, validate, bare, text,
     // The stage each ticket was moved to by an approval, and the stage an undo puts it back in (keyed by the decision).
     stage: {}, moved: {}};
   let shown = manager ? {...type, manager: 'product-manager'} : type;
@@ -102,14 +126,17 @@ async function install(page, {refuseApprove = false, manager = false, refuseMove
   await page.route('**/*', async route => {
     const req = route.request(), url = new URL(req.url()), p = url.pathname;
     const json = (body, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
+    if (url.hostname === 'example.test') return route.fulfill({contentType: 'image/svg+xml', body: PLACEHOLDER_SVG});
     if (url.origin !== 'http://tico-ui.test') return route.abort();
     if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
-    const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|css))$/);
+    // theme.ts is a classic script the page loads as TypeScript: uiFile serves its compiled file, so the theme (data-theme) applies.
+    const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|css|ts))$/);
     if (ui) { const file = uiFile(ui[1]); if (fs.existsSync(file)) return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(file, 'utf8')}); }
     if (p === '/api/me') return json(me);
     if (p === '/api/employees') return json([]);
     if (p === '/api/humans') return json({people: [{id: 'ana', name: 'Ana', email: 'ana@acme.example'}]});
     if (p === '/api/v2/status') return json({bots: []});
+    if (p === '/api/v2/files/blob-spec') return route.fulfill({contentType: 'text/markdown; charset=utf-8', body: SPEC_MARKDOWN});
     if (p === '/api/v2/task-types') return json({types: [shown]});
     const affected = p.match(/^\/api\/v2\/pipeline-stages\/([^/]+)\/affected$/);
     if (affected && req.method() === 'GET') {
