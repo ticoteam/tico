@@ -128,7 +128,9 @@ function railRender() {
 
 // ----------------------------------------------------------------- browse
 // Company and team threads the viewer reads but is not in (GET /v2/threads/browse); Join follows one.
-function threadBrowseOpen() {
+function threadBrowseOpen(): void {
+  type BrowseRow = ThreadRow & {member_count?: number};
+  type BrowsePage = {threads?: BrowseRow[]; items?: BrowseRow[]; next_cursor?: string | null};
   const dlg = threadDialog('thread-browse', 'Browse threads');
   dlg.className = 'tmodal tmodal-shell dash-dialog thd-dialog tr-browse-dlg';
   dlg.innerHTML = `<form>${threadDialogHead('Browse threads')}<div class="dash-form">
@@ -137,58 +139,68 @@ function threadBrowseOpen() {
       <ul class="tr-browse-list" aria-live="polite"><li class="muted">Loading…</li></ul>
       <button type="button" class="ghost small tr-browse-more" hidden>More</button></div></form>`;
   threadDialogWire(dlg);
-  const form = dlg.querySelector('form'), q = form.querySelector('.tr-browse-q'), list = form.querySelector('.tr-browse-list'), more = form.querySelector('.tr-browse-more');
+  const form = dlg.querySelector<HTMLFormElement>('form')!;
+  const q = form.querySelector<HTMLInputElement>('.tr-browse-q')!;
+  const list = form.querySelector<HTMLUListElement>('.tr-browse-list')!;
+  const more = form.querySelector<HTMLButtonElement>('.tr-browse-more')!;
   form.onsubmit = ev => ev.preventDefault();
-  let next = null, seq = 0, mode = 'threads';
-  const rowHTML = t => {
+  let next: string | null = null, seq = 0;
+  let mode: 'threads' | 'archived' = 'threads';
+  const rowHTML = (t: BrowseRow): string => {
     if (mode === 'archived') return `<li data-thread="${esc(t.id)}"><a class="tr-browse-name" href="${esc(threadHref(t))}" data-close>${threadHashHTML(t)}<span>${esc(threadTitle(t))}</span></a><button type="button" class="ghost small" data-unarchive>Unarchive</button></li>`;
     const n = Number(t.member_count) || 0;
     return `<li data-thread="${esc(t.id)}"><a class="tr-browse-name" href="${esc(threadHref(t))}" data-close>${threadHashHTML(t)}<span>${esc(threadTitle(t))}</span></a>
       ${n ? `<span class="muted tr-browse-n">${n}</span>` : ''}<button type="button" class="ghost small" data-join>Join</button></li>`;
   };
-  const load = async (add = false) => {
+  const load = async (add = false): Promise<void> => {
     const mine = ++seq, words = q.value.trim();
     try {
       const path = mode === 'archived' ? '/v2/threads/archived?limit=50' : '/v2/threads/browse?limit=50&q=' + encodeURIComponent(words) + (add && next ? '&cursor=' + encodeURIComponent(next) : '');
-      const r = await get(path, {fresh: true});
+      const r = await get<BrowsePage>(path, {fresh: true});
       if (mine !== seq) return;
-      const rows = (r?.threads || r?.items || []).map(rowHTML).join('');
+      const rows = (r.threads || r.items || []).map(rowHTML).join('');
       if (add) list.insertAdjacentHTML('beforeend', rows);
       else list.innerHTML = rows || (mode === 'archived' ? '<li class="muted">No archived threads</li>' : '<li class="muted">No threads</li>');
-      next = r?.next_cursor || null; more.hidden = !next;
-    } catch (e) { if (mine === seq) list.innerHTML = `<li class="err">${esc(e.message)}</li>`; }
+      next = r.next_cursor || null; more.hidden = !next;
+    } catch (e) { if (mine === seq) list.innerHTML = `<li class="err">${esc(errorMessage(e, ''))}</li>`; }
   };
-  let timer = 0;
-  q.oninput = () => { clearTimeout(timer); timer = setTimeout(() => load(), 200); };
+  let timer: number | undefined;
+  q.oninput = () => { clearTimeout(timer); timer = window.setTimeout(() => load(), 200); };
   more.onclick = () => load(true);
-  form.addEventListener('click', ev => {
-    const tab = ev.target.closest('[data-tab]'); if (!tab) return;
-    mode = tab.dataset.tab;
-    form.querySelectorAll('[data-tab]').forEach(b => { const on = b === tab; b.classList.toggle('on', on); b.setAttribute('aria-pressed', String(on)); });
+  form.addEventListener('click', (ev: MouseEvent) => {
+    const tab = (ev.target as Element | null)?.closest<HTMLElement>('[data-tab]');
+    if (!tab) return;
+    mode = tab.dataset.tab === 'archived' ? 'archived' : 'threads';
+    form.querySelectorAll<HTMLElement>('[data-tab]').forEach(b => { const on = b === tab; b.classList.toggle('on', on); b.setAttribute('aria-pressed', String(on)); });
     q.hidden = mode === 'archived'; more.hidden = true; next = null;
     void load();
   });
-  list.onclick = async ev => {
-    if (ev.target.closest('[data-close]')) { dlg.close(); return; }
-    const u = ev.target.closest('[data-unarchive]');
+  list.onclick = async (ev: MouseEvent): Promise<void> => {
+    const target = ev.target as Element | null;
+    if (target?.closest('[data-close]')) { dlg.close(); return; }
+    const u = target?.closest<HTMLButtonElement>('[data-unarchive]');
     if (u) {
-      const row = u.closest('[data-thread]'); u.disabled = true;
+      const row = u.closest<HTMLElement>('[data-thread]');
+      if (!row) return;
+      u.disabled = true;
       try {
         threadsUnarchived(await patch(thvPath(row.dataset.thread), {archived: false}));
         row.remove();
         if (!list.querySelector('[data-thread]')) list.innerHTML = '<li class="muted">No archived threads</li>';
-      } catch (e) { u.disabled = false; toast(e.message, true); }
+      } catch (e) { u.disabled = false; toast(errorMessage(e, ''), true); }
       return;
     }
-    const b = ev.target.closest('[data-join]'); if (!b) return;
-    const id = b.closest('[data-thread]').dataset.thread;
+    const b = target?.closest<HTMLButtonElement>('[data-join]');
+    if (!b) return;
+    const id = b.closest<HTMLElement>('[data-thread]')?.dataset.thread;
+    if (!id) return;
     b.disabled = true;
     try {
       const r = await put(thvPath(id) + '/follow', {notify: 'live'});
       b.textContent = 'Joined';
       const t = await get(thvPath(id), {fresh: true}).catch(() => null);
       if (t?.id) threadsPut({...t, me: {...t.me, following: true, notify: r?.notify || 'live'}});
-    } catch (e) { b.disabled = false; toast(e.message, true); }
+    } catch (e) { b.disabled = false; toast(errorMessage(e, ''), true); }
   };
   dlg.showModal();
   q.focus();

@@ -401,7 +401,7 @@ def archived(c, v, *, limit=None):
             {"fetch": limit * 4, **{f"name{i}": n for i, n in enumerate(v.member_names(c))}, "me": v.actor},
         )
     ]
-    rows = [r for r in found if T.thread_readable(c, v, r) and T.can_manage(c, v, r)][:limit]
+    rows = [r for r in found if r and T.thread_readable(c, v, r) and T.can_manage(c, v, r)][:limit]
     v._members = {}
     try:
         shown = _views(c, v, rows)

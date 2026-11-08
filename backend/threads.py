@@ -352,7 +352,8 @@ class Viewer:
         self._backfill = None
         self._threads = {}
         self._legacy = {}
-        self._members = None  # {thread id: whether a member}, while a sidebar page reads (`_prefetch_members`)
+        # {thread id: whether a member}, while a sidebar page reads (`_prefetch_members`)
+        self._members: dict | None = None
         self._member_rows = {}  # {thread id: its member actors}, read once a request (`_member_rows`)
 
     @property
