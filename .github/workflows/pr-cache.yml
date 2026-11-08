@@ -18,6 +18,7 @@ on:
       - scripts/ci_install.sh
       - scripts/playwright-system-packages.json
       - scripts/rust_checks.sh
+      - scripts/pinned_tool.sh
       - '**/Cargo.lock'
       - '**/Cargo.toml'
       - .github/workflows/pr-cache.yml
@@ -31,6 +32,25 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  pinned-tools:
+    # shellcheck's and actionlint's verified release archives (scripts/pinned_tool.sh): what the static checks unpack,
+    # so a GitHub release download that fails (Nov 8: four 504s) no longer fails a run.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - id: pinned
+        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        with:
+          path: ~/.cache/tico/tools/downloads
+          key: pinned-tools-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/pinned_tool.sh') }}
+          lookup-only: true
+      - name: Fill the missing cache (saved when the job ends)
+        if: steps.pinned.outputs.cache-hit != 'true'
+        run: bash scripts/pinned_tool.sh fetch shellcheck actionlint
+
   python-browser:
     # pip, npm, the Playwright browsers and the browser system packages: what a browser shard's Install fills.
     runs-on: ubuntu-24.04

@@ -852,6 +852,7 @@ def test_the_main_cache_warm_up_saves_the_keys_pr_checks_restore():
             "pr-desktop",
             "pr-conformance",
             "pr-recorder",
+            "pinned-tools-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/pinned_tool.sh') }}",
             "playwright-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('package-lock.json') }}",
             "playwright-system-ubuntu24-x64-${{ steps.image.outputs.version }}-${{ hashFiles('package-lock.json', "
             "'scripts/ci_install.sh', 'scripts/playwright-system-packages.json') }}",
