@@ -355,9 +355,28 @@ function taskPropLoops(t: PropTask, key: string, rows: PropTask[]): Set<string> 
   return out;
 }
 // Wires the rows of a drawn task. `change(body)` saves (task-modal.ts taskModalBind) and redraws.
+/** The hand-off this card was sent from (a spawn link): read once the properties are in the page, and shown as a From
+ *  row just under Part of. A reader who cannot open the source sees "a private card", with no link. */
+interface HandoffFrom { pipeline: string | null; task_id: string | null; title: string | null; readable: boolean; }
+async function taskFromPaint(box: HTMLElement, id: string): Promise<void> {
+  const res: {cards: Record<string, {from: HandoffFrom | null} | undefined>} = await get(`/v2/pipeline-links/handoffs?tasks=${encodeURIComponent(id)}`, {fresh: true});
+  const from = res.cards[id]?.from, after = box.querySelector('[data-prop-row="parent"]');
+  if (!from || !after || box.querySelector('[data-prop-row="from"]')) return;
+  const name = esc(from.pipeline || 'card');
+  const value = from.readable && from.task_id
+    ? `<button type="button" class="prop-v prop-link" data-open-task="t${esc(from.task_id)}" aria-label="From ${name}: ${esc(from.title || '')}. Open it"><span class="prop-txt">${esc(from.title || '')}</span></button>`
+    : '<span class="prop-v ro"><span class="prop-txt">a private card</span></span>';
+  const row = document.createElement('div');
+  row.className = 'prop';
+  row.dataset['propRow'] = 'from';
+  row.innerHTML = `<span class="prop-k" aria-hidden="true">From ${name}</span><span class="prop-vwrap">${value}</span>`;
+  after.after(row);
+}
+
 function taskPropsBind(d: TaskDialog, task: PropTask, change: PropChange): void {
   const box = $('[data-task-props]', d) as HTMLElement | null; if (!box) return;
   taskPropsMsgPaint(d);
+  taskFromPaint(box, String(task.id)).catch(() => { /* no From row: the reader sees the card without its source */ });
   const save: TaskSave = (key, body) => {
     d.focusProp = key;
     const done = change(body);

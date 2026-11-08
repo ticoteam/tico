@@ -114,6 +114,9 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
         return json({dry_run: false, matched: picked.length, cap: 200, changed: changed.length, unchanged: 0, skipped: skipped.length,
           tasks: {changed: changed.map(row), skipped: skipped.map(task => ({...row(task), code: 'identity', reason: 'not yours to change'}))}});
       }
+      // The card task-1 was sent from task-0 (a spawn link); the source is readable, so its title links back.
+      if (p === '/api/v2/pipeline-links/handoffs') return json({cards: {'task-1': {chip: null,
+        from: {pipeline: 'Marketing', task_id: 'task-0', title: 'Write the campaign', readable: true}}}});
       if (p === '/api/v2/conversations') return json({conversations: []});
       if (p.endsWith('/messages')) return json({messages: []});
       if (p === '/api/v2/models') return json({models: [], harnesses: []});
@@ -189,6 +192,9 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
     assert.match(await step.innerText(), /Copy review/);
     assert.match(await peek.locator('[data-prop="type"]').innerText(), /Marketing/);
     assert.equal(await peek.locator('[data-prop-row="step"] .prop-txt').innerText(), 'Copy review');
+    // A card sent from another card (a spawn link) names its source in a From row, under Part of.
+    await peek.locator('[data-prop-row="from"]').waitFor();
+    assert.equal(await peek.locator('[data-prop-row="from"] .prop-txt').innerText(), 'Write the campaign');
     assert.equal(await peek.locator('.tmodal-head .pill').count(), 0, 'the header carries no state pill');
     assert.equal(await peek.locator('[data-tag-key]').innerText(), 'release · Oct 2');
     assert.equal(await peek.locator('[data-prop="tags"]').count(), 1);

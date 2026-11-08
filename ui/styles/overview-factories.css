@@ -10,7 +10,7 @@
 .of-dot{display:inline-flex;align-items:center;justify-content:center;box-sizing:border-box;min-width:28px;height:28px;padding:0 4px;border-radius:14px;border:1.5px solid var(--g5);background:var(--surface);font-size:11px}
 .of-in-l{font-size:var(--t-sm);color:var(--muted)}
 .of-stage{position:relative}
-.of-lines{position:absolute;left:0;top:0;pointer-events:none;overflow:visible}
+.of-lines{position:absolute;left:0;top:0;z-index:1;pointer-events:none;overflow:visible}
 .of-edge{fill:none;stroke:var(--g5);stroke-linecap:round}
 /* A move is a solid line; a spawn makes new cards, so its line is dashed. Outside work (inputs) is dashed too. */
 .of-edge-spawn,.of-edge-in{stroke-dasharray:6 6}
