@@ -327,6 +327,30 @@ def deliver(c, body, count, *, name=TITLE, event=EVENT):
     return made["id"], "opened"
 
 
+def private_finance_run(c, who) -> bool:
+    """Whether a run may make Finance actions (`hub finance act`) while it works the Bookkeeper's own private work: the
+    Books check and Watch tasks, which the system opens for it (`deliver`) and no person files. Every task the run
+    carries must be one of them, and the run must be the Bookkeeper's own; anything else keeps the private refusal.
+    Nothing here widens who reads a task or lets anyone publish it: the task stays private (task_privacy.guard_write)."""
+    from . import task_privacy as TP
+
+    if not getattr(who, "attempt_id", None) or who.role != "bot" or who.actor != ACTOR:
+        return False
+    carried = TP.attempt_tasks(c, who.attempt_id)
+    return bool(carried) and all(_own_private_work(c, tid) for tid in carried)
+
+
+def _own_private_work(c, task_id: str) -> bool:
+    row = H.task(c, task_id)
+    return bool(
+        row
+        and row["owner_id"] == ACTOR
+        and row["requester_id"] == H.KEEPER
+        and H.task_private(c, row)
+        and row["title"].startswith((TITLE + " (", WATCH_TITLE + " ("))
+    )
+
+
 # ----------------------------------------------------------------------------- watch and the rules digest
 WATCH_HINTS = {
     "runway": "cash covers little burn: tell the owner once, with the number",

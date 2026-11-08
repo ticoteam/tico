@@ -1433,6 +1433,11 @@ def guard_write(c, who, path, auth):
 
         if counsel.run_read(c, who):
             return  # Counsel's suggestions from its own read task; the route checks each (counsel.private_suggestion)
+    if path == "/api/v2/finance/actions":
+        from . import bookkeeper
+
+        if bookkeeper.private_finance_run(c, who):
+            return  # the Bookkeeper's Finance actions from its own Books check or Watch task (bookkeeper.py)
     raise Problem("privacy", "Private task work cannot publish into company-wide resources", 403)
 
 
