@@ -58,16 +58,20 @@ async function finSubsLoad(): Promise<void> {
   const box = document.getElementById('fin-subs');
   if (!box) return;
   const may = finCaps()?.may('finance.book') === true;
-  let read: FinSubRead;
+  let read: FinSubRead | null = null;
   try {
     read = await get<FinSubRead>('/v2/finance/subscriptions' + finAs('?'), {fresh: true});
   } catch {
+    read = null;
+  }
+  // A failed read, or one without a rows list (not the shape the endpoint sends), hides the section like an empty one.
+  if (!read || !Array.isArray(read.rows) || read.rows.length === 0) {
     box.hidden = true;
     box.innerHTML = '';
     return;
   }
-  box.hidden = read.rows.length === 0;
-  box.innerHTML = read.rows.length ? finSubTable(read, may) : '';
+  box.hidden = false;
+  box.innerHTML = finSubTable(read, may);
   box.onclick = ev => {
     const btn = eventElement(ev)?.closest<HTMLButtonElement>('button[data-fin-sub-id]');
     if (btn) void finSubSet(btn);

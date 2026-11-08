@@ -110,12 +110,12 @@ async function shot(page, name) {
       const sec = page.locator('#fin-subs');
       await sec.locator('tr[data-fin-sub]').first().waitFor();
       assert.equal(await sec.locator('tr[data-fin-sub]').count(), 3, `${tag}: one row per subscription`);
-      // The heading's total counts the active subscriptions only ($10.00 a month: Adobe's twelfth).
-      assert.match(await sec.locator('h2').textContent(), /Subscriptions\s*\$10\.00 \/ mo/, `${tag}: monthly total`);
+      // The heading's total counts the active subscriptions only ($10 a month: Adobe's twelfth). finUsd drops the cents on whole dollars.
+      assert.match(await sec.locator('h2').textContent(), /Subscriptions\s*\$10 \/ mo/, `${tag}: monthly total`);
       assert.deepEqual([await cell(page, 'sub-1', 0).innerText(), await cell(page, 'sub-1', 1).innerText(), await cell(page, 'sub-1', 2).innerText(), await cell(page, 'sub-1', 4).innerText()],
-        ['Figma', '$15.00', 'Monthly', '—'], `${tag}: suggested row figures`);
+        ['Figma', '$15', 'Monthly', '—'], `${tag}: suggested row figures`);
       assert.deepEqual([await cell(page, 'sub-2', 1).innerText(), await cell(page, 'sub-2', 2).innerText(), await cell(page, 'sub-2', 4).innerText()],
-        ['$10.00', 'Annual', '5'], `${tag}: annual row figures`);
+        ['$10', 'Annual', '5'], `${tag}: annual row figures`);
       // The owner may confirm: the suggestion has Confirm and Ignore; the active one has its pill and no buttons.
       assert.equal(await page.locator('#fin-subs tr[data-fin-sub="sub-1"] button[data-fin-sub-status="active"]').count(), 1, `${tag}: Confirm on the suggestion`);
       assert.equal(await page.locator('#fin-subs tr[data-fin-sub="sub-1"] button[data-fin-sub-status="ignored"]').count(), 1, `${tag}: Ignore on the suggestion`);
@@ -126,7 +126,7 @@ async function shot(page, name) {
       await page.locator('#fin-subs tr[data-fin-sub="sub-1"] button[data-fin-sub-status="active"]').click();
       await page.waitForFunction(() => document.querySelector('#fin-subs tr[data-fin-sub="sub-1"] .pill')?.textContent?.trim() === 'Active');
       assert.deepEqual(writes.at(-1), {kind: 'subscription_confirm', payload: {subscription_id: 'sub-1', status: 'active'}}, `${tag}: confirm write`);
-      assert.match(await sec.locator('h2').textContent(), /\$25\.00 \/ mo/, `${tag}: total after confirm`);
+      assert.match(await sec.locator('h2').textContent(), /\$25 \/ mo/, `${tag}: total after confirm`);
       await shot(page, `${tag}-after`);
       assert.equal(await sideways(page), false, `${tag}: no sideways scroll`);
       assert.deepEqual(errors, [], `${tag}: page errors`);
