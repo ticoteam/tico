@@ -104,6 +104,7 @@ TABLES = {
     rows.EntityAttributeRow: "entity_attributes",
     rows.EntityConnectionRow: "entity_connections",
     rows.EntityExternalRefRow: "entity_external_refs",
+    rows.EntityLookupRow: "entity_lookups",
     rows.EntityMentionRow: "entity_mentions",
     rows.EntityMergeRow: "entity_merges",
     rows.EntityNoteRow: "entity_notes",

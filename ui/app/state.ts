@@ -211,11 +211,11 @@ function betaMark(root: ParentNode = document): void {
 // ----------------------------------------------------------------- derived state
 // Returns one of planned, paused, running, needs, idle. Typed as string because bot-page.js compares it with 'failed', which
 // this never returns: the comparison is a dead branch in that file, and a literal union would make it a new tsc finding.
-function stateOf(slug: string): string {
+function stateOf(slug: string | undefined): string {
   const e = botRow(slug);
   if (!e || e.status === 'planned') return 'planned';
   if (e.status === 'paused') return 'paused';
-  const live = S.v2?.status?.[slug];
+  const live = S.v2?.status?.[slug ?? ''];
   if (live) return live.state === 'running' ? 'running' : ['waiting_human', 'blocked', 'crashed', 'quarantined'].includes(live.state) ? 'needs' : 'idle';
   if (S.status?.active?.some(a => a.employee === slug)) return 'running';
   return 'idle';
