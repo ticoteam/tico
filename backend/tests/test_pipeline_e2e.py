@@ -1128,6 +1128,21 @@ def test_a_subtask_moved_into_the_engineering_done_stage_ships_its_product_card(
     assert co.where(card) == ("Product", "Validate")
 
 
+def test_a_step_move_into_engineering_done_is_held_to_a_waiting_approval(co):
+    """Finding F1: Engineering's Done stage has status closed, but a move into it is progress, not a cancellation. A named
+    person's approval waiting in Doing refuses the move, the subtask stays in Doing and the card does not advance."""
+    card = review_card(co)
+    approve_spec(co, card)
+    (d41,) = subtasks(co, card)
+    co.require("Engineering", "Doing", "Ana signs off", kind="approval", reviewed_by="person")
+    co.move(d41, "Doing", actor=ANA)
+    with pytest.raises(H.Refused):
+        co.move(d41, "Done", actor=ANA)
+    co.c.rollback()
+    assert co.where(d41) == ("Engineering", "Doing")
+    assert co.where(card) == ("Product", "In development")
+
+
 def test_a_person_approved_due_date_stops_standing_once_the_date_is_cleared(co):
     """Finding R6: Ben approves a populated due-date requirement, Ana clears the date, and the requirement is no longer met.
     The card does not move on with the spec approval, and the due-date dot shows the requirement as not met. The person's

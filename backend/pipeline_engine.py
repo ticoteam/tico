@@ -948,11 +948,15 @@ def decided_move(actor: str) -> "Generator[None, None, None]":
         _DECIDED_MOVE.reset(token)
 
 
-def is_cancellation(status: str | None) -> bool:
-    """The one test for "a cancellation, not progress": a ticket that is closed or declined. Both gates ask it (the move
-    gate in hubdb.task_update and the status gate in hubdb._set_status), so a cancellation is never held to completion
-    requirements. Who may cancel is still checked by the close and decline paths."""
-    return status in CLOSED
+def is_cancellation(status: str | None, *, explicit_step: bool = False) -> bool:
+    """The one test for "a cancellation, not progress", decided by intent and not by the stage's status. A decline (status
+    declined) is a cancellation, and so is a Close (status closed with no step of its own). A step move into a stage whose
+    status is closed is forward progress: Engineering's Done is such a stage, so it meets every requirement. Both gates ask
+    this (hubdb.task_update's move gate and hubdb._set_status's status gate), and the close marker that shipment accounting
+    reads is written from the same answer. Who may cancel is still checked by the close and decline paths."""
+    if status == "declined":
+        return True
+    return status == "closed" and not explicit_step
 
 
 def check_move(

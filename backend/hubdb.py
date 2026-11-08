@@ -4766,7 +4766,8 @@ def _set_status(
 
     # Every forward stage move is held to the stage's requirements, not only task_update's (pipeline_engine). Cancelling
     # (a close or a decline) is not forward progress: it is never held to exit requirements.
-    if row is not None and step_id and step_id != row.get("step_id") and not pipeline_engine.is_cancellation(effective):
+    cancelling = pipeline_engine.is_cancellation(effective, explicit_step=step is not None)
+    if row is not None and step_id and step_id != row.get("step_id") and not cancelling:
         pipeline_engine.check_forward(conn, actor, row, type_id, step_id)
     # Direct internal writers (roadmap sync, hold restoration) have the automatic finish contract.
     # task_update/task_close preflight explicit finishes before any write and handle their own cascade.
@@ -4805,10 +4806,8 @@ def _set_status(
         from . import pipeline_engine
 
         if row:
-            # A Close with no step of its own cancels the ticket (pipeline_engine._shipped_ids); a move onto a stage does not.
-            pipeline_engine.on_step_change(
-                conn, actor, row, type_id, step_id, ts, closing=status == "closed" and step is None
-            )
+            # A Close or a Decline cancels the ticket (pipeline_engine.is_cancellation); a move onto a stage does not.
+            pipeline_engine.on_step_change(conn, actor, row, type_id, step_id, ts, closing=cancelling)
     if row.get("status") != effective:
         _task_event(conn, row["id"], actor, "status", row.get("status"), effective, note)
         if row.get("occurrence"):
@@ -7702,8 +7701,14 @@ def task_update(
         from . import pipeline_engine, step_flow
 
         # A stage's requirements (backend/pipeline_engine.py) may refuse the move before the review gate does.
-        # A cancellation (a Close or a Decline) is not progress: it is never held to completion requirements.
-        if step_id and row and step_id != row.get("step_id") and not pipeline_engine.is_cancellation(effective):
+        # A cancellation (a Close or a Decline) is not progress: it is never held to completion requirements. A move into a
+        # closed stage such as Engineering's Done is progress, so it is held (pipeline_engine.is_cancellation).
+        if (
+            step_id
+            and row
+            and step_id != row.get("step_id")
+            and not pipeline_engine.is_cancellation(effective, explicit_step=step is not None)
+        ):
             pipeline_engine.check_move(
                 conn, actor, {**row, "type_id": type_id}, step_id, override_requirements, override_note=note
             )
