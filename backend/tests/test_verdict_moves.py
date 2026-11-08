@@ -1193,6 +1193,8 @@ def test_a_running_check_the_stored_copy_left_out_still_finishes_the_head_once(a
     assert link["checks"] == "failing" and stored.get(G.DROPPED_PENDING) is True
     assert stored.get("checks_dropped") == ("failing" if extra else "pending")
     assert not _failed_checks(api), "a check is still going"
+    _suite(api, "github-actions", "completed", "failure", sha=HEAD, id=9)  # a webhook: the copy shows no check going
+    assert not _failed_checks(api), "the left-out check is still going"
     runs[-1] = {"name": "late", "status": "completed", "conclusion": "success"}
     _quiet(api, task)
     G._pending_reads.clear()
@@ -1203,6 +1205,27 @@ def test_a_running_check_the_stored_copy_left_out_still_finishes_the_head_once(a
     G._pending_reads.clear()
     G.refresh_pending_checks(service)
     assert len(_failed_checks(api)) == 1
+
+
+def test_a_check_starting_beside_a_truncated_finished_failure_is_saved_as_still_going(api, monkeypatch):
+    """More than CHECKS_KEPT checks finished failing; a re-run then starts. The copy, its state and its worst dropped
+    state are all unchanged, but the read must still save that a left-out check is going."""
+    from backend import github as G
+    from backend import stranded_resume as SR
+
+    task = ticket(api, step="In QA")
+    runs = [{"name": f"shard {n}", "status": "completed", "conclusion": "failure"} for n in range(G.CHECKS_KEPT + 1)]
+    service, _ = _github(api, monkeypatch, [], runs)
+    _quiet(api, task)
+    G.refresh_pending_checks(service)
+    assert G.DROPPED_PENDING not in H._json(_link(api, task)["detail"], {})
+    runs.insert(0, {"name": "re-run", "status": "in_progress", "conclusion": None})  # oldest: left out of the copy
+    _quiet(api, task)
+    G._pending_reads.clear()
+    G.refresh_pending_checks(service)
+    assert H._json(_link(api, task)["detail"], {}).get(G.DROPPED_PENDING) is True
+    with api.app.state.store.read() as c:
+        assert SR._ci_going(c, task["id"])
 
 
 def test_a_check_github_sends_while_the_read_is_in_flight_is_not_overwritten_by_the_read(api, monkeypatch):

@@ -1069,6 +1069,7 @@ def apply_checks(c, link_id, head, checks, since=None):
         detail.get("checks") == kept
         and link.get("checks") == state
         and detail.get("checks_dropped") == dropped
+        and bool(detail.get(DROPPED_PENDING)) == dropped_pending
         and not held
     ):
         return state
@@ -1186,6 +1187,8 @@ def pr_signal(c, event, payload):
                 and not set(checks.values()) <= {"skipped"}
                 # A copy that dropped a check cannot finish the head green: only its own failure finishes it.
                 and (not dropped or "failing" in checks.values())
+                # A check the copy left out may still be going: the next fresh read (apply_checks) finishes the head.
+                and not _still_going(detail)
             ):
                 # GitHub sends a suite's `requested` only to its own App, so a single run or status still pending
                 # is often the only sign that another service's checks are not done.
