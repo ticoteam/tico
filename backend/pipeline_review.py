@@ -551,7 +551,7 @@ def _queue_fields(
     requirements = {r["id"]: r for r in live}
     rights = {p: pipeline_rights.may_edit_rules(c, actor, p) for p in pipeline_ids}
     candidates: dict[
-        tuple[str, str], tuple[Row, list[Row]] | None
+        tuple[str, str], tuple[Row, list[Row], str | None] | None
     ] = {}  # Not validated's candidates per stage, read once
     at_stage_tasks = [item["task_id"] for item in items if tasks[item["task_id"]].get("step_id") == item["stage_id"]]
     delivered = _delivered_links(c, at_stage_tasks)
@@ -561,7 +561,7 @@ def _queue_fields(
         if key not in candidates:
             candidates[key] = _route_candidates(c, actor, *key)
         found = candidates[key]
-        return found is not None and _pick_link(found[1], delivered.get(item["task_id"], [])) is not None
+        return found is not None and _choose_link(found[1], found[2], delivered.get(item["task_id"], [])) is not None
 
     for item in items:
         key = (item["task_id"], item["requirement_id"])
@@ -1159,32 +1159,35 @@ def _back_stage(c: "sqlite3.Connection", stage_id: str) -> Row | None:
 
 def _route_candidates(
     c: "sqlite3.Connection", actor: str, pipeline_id: str, stage_id: str
-) -> tuple[Row, list[Row]] | None:
-    """The back stage and the spawn links that could file the follow-up for a card at this stage, nearest first. None when
-    Not validated is not offered here at all: the reader is not a person, there is no stage before, or the stage before does
-    not wait on a `subtasks` run. The queue flag and the action both read this."""
+) -> tuple[Row, list[Row], str | None] | None:
+    """The back stage, the spawn links that could file the follow-up for a card at this stage (nearest first), and the
+    pipeline the back stage's `subtasks` run names (None for a requirement that names none). The links are the ones from a
+    stage at or before the back stage; with a named pipeline, only the links into it. None when Not validated is not
+    offered here at all: the reader is not a person, there is no stage before, or the stage before does not wait on a
+    `subtasks` run. The links list may be empty: the caller refuses. The queue flag and the action both read this."""
     if not str(actor or "").startswith("human:"):
         return None
     back = _back_stage(c, stage_id)
     if back is None:
         return None
-    waits_on_subtasks = _one(
+    run = _one(
         c,
-        "SELECT 1 AS found FROM stage_requirements WHERE pipeline_stage_id=? AND kind='run' AND retired_at IS NULL "
-        "AND json_extract(needs, '$.source')='subtasks' LIMIT 1",
+        "SELECT needs FROM stage_requirements WHERE pipeline_stage_id=? AND kind='run' AND retired_at IS NULL "
+        "AND json_extract(needs, '$.source')='subtasks' ORDER BY position, id LIMIT 1",
         (back["id"],),
     )
-    if waits_on_subtasks is None:
+    if run is None:
         return None
+    named = str(json.loads(run["needs"] or "{}").get("pipeline") or "") or None
     links = _rows(
         c,
         "SELECT l.* FROM pipeline_links l JOIN task_steps s ON s.id = l.from_pipeline_stage_id "
-        "WHERE s.type_id = ? AND s.position < (SELECT position FROM task_steps WHERE id = ?) "
+        "WHERE s.type_id = ? AND s.position <= (SELECT position FROM task_steps WHERE id = ?) "
         "AND s.status NOT IN ('closed','declined') AND l.mode = 'spawn' AND l.retired_at IS NULL "
-        "ORDER BY s.position DESC, l.id",
-        (pipeline_id, stage_id),
+        "AND (? IS NULL OR l.to_pipeline_id = ?) ORDER BY s.position DESC, l.id",
+        (pipeline_id, back["id"], named, named),
     )
-    return (back, links) if links else None
+    return back, links, named
 
 
 def _delivered_links(c: "sqlite3.Connection", task_ids: "Iterable[str]") -> dict[str, list[str]]:
@@ -1222,21 +1225,37 @@ def _pick_link(links: list[Row], delivered: list[str]) -> Row | None:
     return matched[0] if len(matched) == 1 else None
 
 
+def _choose_link(links: list[Row], named: str | None, delivered: list[str]) -> Row | None:
+    """The spawn link Not validated files through (D64). When the waited-on requirement names its pipeline, the links are
+    already the ones into that pipeline: the one such link is the route, and several fall back to _pick_link. Without a name,
+    it is _pick_link: the one candidate whose shipped subtask delivered the work, or none."""
+    if named is not None and len(links) == 1:
+        return links[0]
+    return _pick_link(links, delivered)
+
+
 def _not_validated_route(
     c: "sqlite3.Connection", actor: str, pipeline_id: str, stage_id: str, task_id: str
 ) -> tuple[Row, Row] | None:
     """Where "Not validated" sends a card from this stage (D66), or None when it is not offered: the back stage and the
-    spawn link the follow-up files through (see _pick_link). It is offered only on a stage that comes directly after a
-    live In development stage that waits on its `subtasks`. The reader must be a person. When the stage has spawn links
-    but none, or several, delivered shipped work, it refuses (`development_link`) instead of guessing."""
+    spawn link the follow-up files through (see _choose_link). It is offered only on a stage that comes directly after a
+    live In development stage that waits on its `subtasks`. The reader must be a person. When that requirement names a
+    pipeline and no spawn link files into it from an earlier stage, or no name and the links are ambiguous or none delivered
+    shipped work, it refuses (`development_link`) instead of guessing."""
     found = _route_candidates(c, actor, pipeline_id, stage_id)
     if found is None:
         return None
-    back, links = found
+    back, links, named = found
     delivered = _delivered_links(c, [task_id]).get(task_id, [])
-    link = _pick_link(links, delivered)
+    link = _choose_link(links, named, delivered)
     if link is None:
         matched = [str(row["id"]) for row in links if str(row["id"]) in delivered]
+        if not links:
+            raise Declined(
+                "development_link",
+                "No spawn link files into the pipeline this stage waits on, so Not validated has no link to file through",
+                409,
+            )
         if not matched:
             raise Declined(
                 "development_link",

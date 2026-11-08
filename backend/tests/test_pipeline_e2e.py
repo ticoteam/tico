@@ -1502,3 +1502,45 @@ def test_an_automatic_move_the_rules_refuse_is_logged_and_the_rest_of_the_write_
     assert co.where(task) == ("Engineering", "Todo")
     assert co.c.execute("SELECT note FROM tasks WHERE id=?", (task,)).fetchone()[0] == "kept"
     assert co.count("history_events", "subject_type='task' AND subject_id=? AND kind='auto_move_refused'", task) == 1
+
+
+def _card_with_marketing_and_engineering(co):
+    """Codex's repro through real setup: Specifying spawns Marketing, the card moves to Review and Marketing's lead ships,
+    then the person approves the spec, which spawns Engineering into In development. Returns (card, marketing lead,
+    engineering subtask)."""
+    card = co.ticket("Product", "Specifying", "Dark mode")
+    co.create_spawn_link("Product", "Specifying", "Marketing")
+    co.move(card, "Review", actor=ANA)
+    (lead,) = subtasks(co, card)
+    assert co.where(lead)[0] == "Marketing"
+    co.set_status(lead, "done")
+    co.attach(card, co.requirement("Product", "Review", "Spec approved"), url=SPEC)
+    approve_spec(co, card)
+    assert co.where(card) == ("Product", "In development")
+    (build,) = [kid for kid in subtasks(co, card) if co.where(kid)[0] == "Engineering"]
+    return card, lead, build
+
+
+def test_a_cancelled_engineering_subtask_does_not_meet_engineering_shipped_because_marketing_shipped(co):
+    """Codex blocker 5: Marketing's shipped subtask must not stand in for the Engineering subtask the requirement counts. With
+    Engineering cancelled, the card stays in development and does not reach Validate."""
+    card, _, build = _card_with_marketing_and_engineering(co)
+    co.close(build, actor=ANA)
+    assert co.dots(card)["Engineering shipped"]["state"] == "failed"
+    assert co.advance(card, actor=ANA)["moved"] is False
+    assert co.where(card) == ("Product", "In development")
+
+
+def test_not_validated_files_into_engineering_when_engineering_and_marketing_both_shipped(co):
+    """Codex blocker 5, the other half: with Engineering shipped as well, Not validated files the follow-up into Engineering,
+    the pipeline the requirement names, and not into Marketing, whose work also shipped through an earlier stage."""
+    card, _, build = _card_with_marketing_and_engineering(co)
+    co.move(build, "Doing", actor=ANA)
+    co.move(build, "Done", actor=ANA)
+    assert co.where(card) == ("Product", "Validate")
+    checked = co.requirement("Product", "Validate", "Validated")
+    co.attach(card, checked, url=VALIDATION)
+    result = pipeline_review.not_validated(co.c, ANA, card, checked, "Load time stayed over 4 s")
+    co.c.commit()
+    assert co.where(result["follow_up"]) == ("Engineering", "Todo")
+    assert co.where(card) == ("Product", "In development")
