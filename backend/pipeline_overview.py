@@ -21,7 +21,7 @@ from typing import TYPE_CHECKING, Any, cast
 
 from fastapi import Request
 
-from . import hubdb, pipeline_manager as PM, pipeline_review, pipeline_rights
+from . import hubdb, pipeline_engine, pipeline_manager as PM, pipeline_review, pipeline_rights
 from .pipeline_setup import completion_stage
 from .store import Problem
 
@@ -381,18 +381,25 @@ def _loops(c: "sqlite3.Connection", ordered: list[str], links: list[Row], seen: 
 
 
 def _done(c: "sqlite3.Connection", stages: dict[str, str], seen: str, since: str) -> dict[str, int]:
-    """Per output stage: the cards that entered it in the period (a factory's done count). Read from the step history, which
-    every move writes, so a pipeline with no stage requirements counts too; a card that re-enters a stage counts once."""
+    """Per output stage: the cards that shipped into it in the period (a factory's done count). The candidates are the cards
+    that entered the stage in the period, read from the step history, which every move writes, so a pipeline with no stage
+    requirements counts too. Each candidate counts only when the engine says it shipped (pipeline_engine.shipped), so a
+    Close that lands an unfinished card in the output stage is not a done card. A card that re-enters a stage counts once."""
     if not stages:
         return {}
     rows = _rows(
         c,
-        "SELECT e.new AS sid, COUNT(DISTINCT e.subject_id) AS n FROM history_events e "
+        "SELECT DISTINCT e.new AS sid, e.subject_id AS tid FROM history_events e "
         f"WHERE e.subject_type='task' AND e.kind='step' AND e.new IN ({_marks(list(stages.values()))}) "
-        f"AND e.created_at>=? AND e.subject_id IN (SELECT id FROM tasks WHERE ({seen})) GROUP BY e.new",
+        f"AND e.created_at>=? AND e.subject_id IN (SELECT id FROM tasks WHERE ({seen}))",
         [*stages.values(), since],
     )
-    return {str(r["sid"]): int(r["n"] or 0) for r in rows}
+    won = pipeline_engine.shipped(c, sorted({str(r["tid"]) for r in rows}))
+    counted: dict[str, set[str]] = {}
+    for r in rows:
+        if str(r["tid"]) in won:
+            counted.setdefault(str(r["sid"]), set()).add(str(r["tid"]))
+    return {sid: len(cards) for sid, cards in counted.items()}
 
 
 def _label(raw: str) -> str:
