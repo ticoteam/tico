@@ -384,7 +384,7 @@ CREATE = (
   id TEXT PRIMARY KEY,
   entity_id TEXT NOT NULL REFERENCES entities(id),
   entity_attribute_id TEXT NOT NULL REFERENCES entity_attributes(id),
-  value_json TEXT NOT NULL,
+  value TEXT NOT NULL,  -- JSON
   source_type TEXT,
   source_id TEXT,
   evidence_id TEXT,

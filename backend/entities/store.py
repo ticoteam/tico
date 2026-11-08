@@ -465,7 +465,7 @@ def _set_value(
         return current["id"]
     if current:
         c.execute(
-            "INSERT INTO entity_value_history (id, entity_id, entity_attribute_id, value_json, source_type, source_id, "
+            "INSERT INTO entity_value_history (id, entity_id, entity_attribute_id, value, source_type, source_id, "
             "evidence_id, confidence, active_from, active_until) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 _id("hist"),
@@ -1186,5 +1186,5 @@ def history(
     more = len(rows) > limit
     rows = rows[:limit]
     for row in rows:
-        row["value"] = json.loads(row.pop("value_json"))
+        row["value"] = json.loads(row["value"])
     return {"rows": rows, "next": _encode([rows[-1]["active_until"], rows[-1]["id"]]) if more and rows else None}
