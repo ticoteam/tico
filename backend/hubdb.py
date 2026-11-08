@@ -1475,6 +1475,8 @@ TASKS = (
 HELD_IDS = "SELECT task_id FROM task_holds WHERE kind='%s' AND released_at IS NULL"
 # The open snooze of the task aliased `t`, for a filter: `NOT {SNOOZED % 't'}` keeps the tasks not snoozed.
 SNOOZED = "EXISTS (SELECT 1 FROM task_holds sh WHERE sh.task_id=%s.id AND sh.kind='snoozed' AND sh.released_at IS NULL)"
+# A card On ice (D69): its stage's cap is 0. It wakes no bot, starts no run, and is no bot's work until a person moves it.
+ON_ICE = "EXISTS (SELECT 1 FROM task_steps ps WHERE ps.id=%s.step_id AND ps.card_cap=0)"
 
 
 def add_column(conn, table, column, declaration):

@@ -61,6 +61,30 @@ def wanted(sender, recipient, refs):
     return not (isinstance(kind, str) and kind in LIVE_HISTORY)
 
 
+def parked_sql():
+    """SQL true when the message `m` (with its conversation as `cv`) is about a card On ice (D69): such a message starts no
+    run, whichever writer made it. The card is the message's task (hubdb.MESSAGE_TASK_SQL)."""
+    from .hubdb import MESSAGE_TASK_SQL, ON_ICE
+
+    return f"EXISTS (SELECT 1 FROM tasks t WHERE t.id={MESSAGE_TASK_SQL} AND {ON_ICE % 't'})"
+
+
+def parked(conn, message_id):
+    """Whether the stored message `message_id` is about a card On ice (parked_sql). A bare hub database (no task tables) has
+    no such card, so nothing is parked there."""
+    from .hubdb import _has_table
+
+    if not all(_has_table(conn, name) for name in ("tasks", "task_steps", "conversations")):
+        return False
+    row = conn.execute(
+        "SELECT "
+        + parked_sql()
+        + " FROM messages m LEFT JOIN conversations cv ON cv.id=m.conversation_id WHERE m.id=?",
+        (message_id,),
+    ).fetchone()
+    return bool(row and row[0])
+
+
 def enqueue(conn, message):
     """Queue the job `message` (a just-inserted row as a dict: id, sender_id, recipient_id, refs, created_at) starts.
     Returns the job id, or None when it starts none."""
@@ -68,6 +92,8 @@ def enqueue(conn, message):
 
     recipient = message.get("recipient_id")
     if not wanted(message.get("sender_id"), recipient, message.get("refs")) or not _has_table(conn, "jobs"):
+        return None
+    if parked(conn, message["id"]):
         return None
     if conn.execute("SELECT " + external_bot_sql("?"), (recipient,)).fetchone()[0]:
         return None

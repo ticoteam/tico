@@ -2824,12 +2824,15 @@ class Store:
         ring(self, seq)
 
     def enqueue_existing(self):
-        from .enqueue import external_bot_sql
+        from .enqueue import external_bot_sql, parked_sql
 
         with self.transaction() as c:
             c.execute(
                 "INSERT OR IGNORE INTO jobs(id,message_id,bot_id,created_at) "
                 "SELECT m.id,m.id,substr(m.recipient_id,5),m.created_at FROM messages m "
+                "LEFT JOIN conversations cv ON cv.id=m.conversation_id "
                 "WHERE m.recipient_id LIKE 'bot:%' AND m.delivered_at IS NULL AND m.deleted_at IS NULL AND NOT "
                 + external_bot_sql("m.recipient_id")
+                + " AND NOT "
+                + parked_sql()  # a card On ice starts no run (backend/enqueue.py)
             )
