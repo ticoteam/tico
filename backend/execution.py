@@ -2747,6 +2747,10 @@ def job_refusal(c, job, followed, ready, busy, lanes, roots, live=frozenset(), *
     message = H.message(c, job["message_id"])
     if not job_message_readable(c, job["bot_id"], message):
         return "unreadable"
+    from . import enqueue
+
+    if enqueue.parked(c, job["message_id"]):
+        return "on_ice"  # a card On ice starts no run, even one queued before a person parked it (backend/enqueue.py)
     # The bot's budget and back-off are the bot's own state: an error reading them is shared_check's, and the whole
     # bot is passed over. The checks below depend on this job, so an error in them holds this job alone.
     with shared_check():
