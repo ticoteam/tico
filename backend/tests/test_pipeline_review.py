@@ -1952,9 +1952,11 @@ def test_named_not_validated_still_refuses_when_no_link_files_into_the_named_pip
     assert w.c.execute("SELECT count(*) FROM stage_decisions WHERE task_id=?", (w.task,)).fetchone()[0] == 0
 
 
-def _question(w, text, on, options=("Yes", "No")):
-    """A question for `on` that holds the ticket: a subtask of it that carries the question (question_tasks.store)."""
+def _question(w, text, on, options=("Yes", "No"), sources=None):
+    """A question for `on` that holds the ticket: a subtask of it that carries the question (question_tasks.store).
+    `sources` maps an option label to the page file it names (an option's `source`)."""
     qid = H.task_create(w.c, ANA, text, "", on, parent_id=w.task, lint=False)["id"]
+    sources = sources or {}
     QT.store(
         w.c,
         qid,
@@ -1965,7 +1967,16 @@ def _question(w, text, on, options=("Yes", "No")):
                     "header": "",
                     "question": text,
                     "why": "",
-                    "options": [{"label": o, "description": "", "then": "", "recommended": False} for o in options],
+                    "options": [
+                        {
+                            "label": o,
+                            "description": "",
+                            "then": "",
+                            "recommended": False,
+                            **({"source": {"file": sources[o]}} if o in sources else {}),
+                        }
+                        for o in options
+                    ],
                     "multi": False,
                 }
             ]
@@ -2014,3 +2025,80 @@ def test_the_queue_puts_a_stage_before_a_later_one_then_the_oldest_first(world):
     assert [i["subject_id"] for i in R.queue_for(w.c, CHRIS, w.pipeline, w.review) if i["form"] != "review"] == [
         later_question
     ]
+
+
+def _restricted_page(c, title, people):
+    """A page only `people` may open: any other reader sees it as a page they can't open (page_audience)."""
+    fid = "file-" + format(5, "024x")
+    stamp = H.now()
+    c.execute(
+        "INSERT INTO bot_files(id,bot_id,scope,identity,title,kind,mime,locator,current_version,first_activity_at,last_activity_at) "
+        "VALUES(?,'cmo','bot',?,?,'page','text/html','tico_blob',1,?,?)",
+        (fid, fid, title, stamp, stamp),
+    )
+    c.execute(
+        "INSERT INTO pages(file_id,audience,created_at,updated_at) VALUES(?,?,?,?)",
+        (fid, json.dumps({"people": people}), stamp, stamp),
+    )
+    return fid
+
+
+def test_a_held_question_redacts_a_source_page_the_reader_cannot_open_as_the_question_view_does(tmp_path):
+    ids = {
+        "ana-test": Identity("human:ana", "owner", "ana@acme.example"),
+        "chris-test": Identity("human:chris", "human", "chris@acme.example"),
+    }
+    app = create_app(Settings(db_path=tmp_path / "hub.db", company_name="Acme", test_identities=ids))
+    with TestClient(app) as client:
+        with app.state.store.transaction() as c:
+            w = World(tmp_path / "hub.db", conn=c)
+            w.attach()
+            fid = _restricted_page(c, "Pipeline spec v1.md", ["ben"])
+            question = _question(
+                w,
+                "Which spec wins?",
+                CHRIS,
+                options=("Pipeline spec v1.md", "Neither"),
+                sources={"Pipeline spec v1.md": fid},
+            )
+        chris = {"Authorization": "Bearer chris-test", "Idempotency-Key": "k-chris"}
+        queue = client.get("/api/v2/pipelines/review/queue", headers=chris)
+        assert queue.status_code == 200, queue.text
+        (held,) = [i for i in queue.json()["items"] if i["form"] == "question"]
+        shown = json.dumps(held)
+        assert held["subject_id"] == question
+        assert "Pipeline spec v1.md" not in shown and fid not in shown, shown
+        assert "A page you can't open" in shown
+        # The question view redacts the same refs the same way (task_view runs readable_page_refs over the task).
+        task = client.get(f"/api/v2/tasks/{question}", headers=chris).json()["task"]
+        assert held["ask"]["refs"] == task["ask"]["refs"]
+        assert held["ask"]["refs"]["questions"][0]["options"][0] == {"removed": True, "label": "A page you can't open"}
+
+
+def test_a_held_subtask_carries_its_body_criteria_and_files_and_a_question_none_of_them(world):
+    w = world
+    subtask = _subtask(w, "Check the bulk close", CHRIS)
+    question = _question(w, "Does close all include bot tasks?", CHRIS)
+    w.c.execute(
+        "UPDATE tasks SET body=?, acceptance=? WHERE id=?",
+        ("Crop the second shot to the frame.", json.dumps(["Shot 2 is cropped", " "]), subtask),
+    )
+    w.c.execute(
+        "INSERT INTO blobs(id,owner,digest,size,name,content_type,created_at) VALUES(?,?,?,?,?,?,?)",
+        ("blob-crop-notes", CHRIS, "e" * 64, 120, "crop-notes.txt", "text/plain", H.now()),
+    )
+    w.c.execute("INSERT INTO task_assets VALUES(?,?)", (subtask, "blob-crop-notes"))
+    by_subject = {i["subject_id"]: i for i in R.queue_for(w.c, CHRIS) if i["form"] != "review"}
+    assert by_subject[subtask]["body"] == "Crop the second shot to the frame."
+    assert by_subject[subtask]["acceptance_criteria"] == ["Shot 2 is cropped"]
+    assert by_subject[subtask]["task_files"] == [
+        {
+            "id": "blob-crop-notes",
+            "name": "crop-notes.txt",
+            "size": 120,
+            "content_type": "text/plain",
+            "url": "/api/v2/files/blob-crop-notes",
+        }
+    ]
+    assert by_subject[question]["body"] == "" and by_subject[question]["acceptance_criteria"] == []
+    assert by_subject[question]["task_files"] == []

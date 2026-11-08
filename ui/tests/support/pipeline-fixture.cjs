@@ -97,9 +97,13 @@ const QUESTION = {id: 'Q1', kind: 'ask', question_task: true, sender_id: 'bot:pr
   created_at: RECENT_SINCE, conversation_id: null, read_at: null, delivered_at: null,
   refs: {questions: [{id: 'decision', question: QUESTION_TEXT, options: [{label: 'Yes'}, {label: 'No'}]}], task: 'Q1', task_question: true,
     target: {task: 'Q1'}}};
-function subtask(id, title) {
+// A plain question (`plain` option): no picks, so the ▶ answers it in words, as the task page does.
+const PLAIN_QUESTION = {...QUESTION, refs: {...QUESTION.refs, questions: [{id: 'decision', question: QUESTION_TEXT, options: []}]}};
+// A subtask's card carries what the task view shows: its body, acceptance criteria and files (the server's held item).
+function subtask(id, title, card = {}) {
   return {form: 'subtask', task_id: 'D52', title: 'Assistant can approve a spec', number: 52, pipeline_id: 'dev-tickets', pipeline: 'Dev tickets',
     stage_id: 'build', stage: 'Build', subject_id: id, subject_title: title, subject_version: 2, ask: null, holds_up: null,
+    body: '', acceptance_criteria: [], task_files: [], ...card,
     why: 'Your subtask · Dev tickets', since: stamp, late: false, reviewer_id: ME};
 }
 
@@ -133,10 +137,16 @@ function queue(state) {
   // `held`: the question and the two subtasks follow the reviews (the server orders the whole queue by stage, then age; the
   // fixture lists them here, after the reviews the walk starts on). Answering or finishing one removes it by its subject.
   if (state.held) {
-    all.push({form: 'question', task_id: 'D17', title: 'Sim stuck checks', number: 17, pipeline_id: 'dev-tickets', pipeline: 'Dev tickets',
-      stage_id: 'build', stage: 'Build', subject_id: 'Q1', subject_title: QUESTION_TEXT, subject_version: 1, ask: QUESTION,
-      holds_up: {id: 'D17', title: 'Sim stuck checks'}, why: 'Question for you · Dev tickets', since: stamp, late: false, reviewer_id: ME});
-    all.push(subtask('S1', 'Check the shot crop'), subtask('S2', 'Write the release note'));
+    const ask = state.plain ? PLAIN_QUESTION : QUESTION;
+    const questionRow = (task_id, title, number) => ({form: 'question', task_id, title, number, pipeline_id: 'dev-tickets', pipeline: 'Dev tickets',
+      stage_id: 'build', stage: 'Build', subject_id: 'Q1', subject_title: QUESTION_TEXT, subject_version: 1, ask,
+      holds_up: {id: task_id, title}, why: 'Question for you · Dev tickets', since: stamp, late: false, reviewer_id: ME});
+    all.push(questionRow('D17', 'Sim stuck checks', 17));
+    // `twoCards`: the same question holds a second card, so the queue has a row for each (answering takes both out).
+    if (state.twoCards) all.push(questionRow('D52', 'Assistant can approve a spec', 52));
+    all.push(subtask('S1', 'Check the shot crop', {body: 'Crop the second shot to the frame.', acceptance_criteria: ['Shot 2 is cropped to the frame'],
+      task_files: [{id: 'blob-crop', name: 'crop-notes.txt', size: 120, content_type: 'text/plain', url: '/api/v2/files/blob-crop'}]}),
+    subtask('S2', 'Write the release note'));
   }
   return {items: all.filter(r => !state.removed.has(r.form === 'review' ? `${r.task_id}:${r.requirement_id}` : r.subject_id))};
 }
@@ -146,9 +156,10 @@ function queue(state) {
 // `ownerOnly`: the type carries no can_edit_rules, only its owner, and the viewer is a member (E3: the rules controls follow
 // the server's answer, and the owner check reads pipeline_owner_id). `claimedBy`: another reviewer holds every item.
 async function install(page, {refuseApprove = false, manager = false, refuseMove = false, late = [{task_id: 'D17', title: 'Sim stuck checks', stage: 'Build', hours: 52, limit_hours: 48, since: stamp}],
-  ownerOnly = false, member = false, claimedBy = null, noRequirements = false, validate = false, bare = false, text = false, held = false} = {}) {
+  ownerOnly = false, member = false, claimedBy = null, noRequirements = false, validate = false, bare = false, text = false, held = false,
+  plain = false, twoCards = false} = {}) {
   const state = {posts: [], queueReads: 0, refuseApprove, refuseMove, moves: [], prefs: {}, attachments: [], managerReads: 0, claims: [], claimedBy,
-    removed: new Set(), lastDone: null, affectedReads: [], requirementReads: {}, attachmentReads: 0, validate, bare, text, held,
+    removed: new Set(), lastDone: null, affectedReads: [], requirementReads: {}, attachmentReads: 0, validate, bare, text, held, plain, twoCards,
     // The stage each ticket was moved to by an approval, and the stage an undo puts it back in (keyed by the decision).
     stage: {}, moved: {}};
   let shown = manager ? {...type, manager: 'product-manager'} : type;

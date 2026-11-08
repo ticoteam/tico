@@ -85,6 +85,8 @@ interface PipelineReviewItem {
   body: string;
   acceptance_criteria: string[];
   checkpoint: string;
+  /** A subtask's files, as the task page lists them (empty for the other forms). */
+  task_files?: TfAttachment[];
   /** Why it is the viewer's, in words: the requirement and the pipeline ("Screenshots · Dev tickets"), with who sent it. */
   why: string;
   /** The bot's note, or empty. */
@@ -241,6 +243,10 @@ interface ServerHeldItem {
   since: string;
   late: boolean;
   reviewer_id: string;
+  /** A subtask's body, acceptance criteria and files (empty for a question). */
+  body: string;
+  acceptance_criteria: string[];
+  task_files: TfAttachment[];
 }
 
 interface ServerRun {
@@ -415,9 +421,10 @@ function heldItemFromRow(row: ServerHeldItem): PipelineReviewItem {
     since: row.since,
     assignee: null,
     manager: null,
-    body: '',
-    acceptance_criteria: [],
+    body: row.body ?? '',
+    acceptance_criteria: row.acceptance_criteria ?? [],
     checkpoint: '',
+    task_files: row.task_files ?? [],
     why: row.why,
     bot_note: '',
     reviewer_id: row.reviewer_id,
@@ -440,10 +447,11 @@ async function pipelineReviewQueue(pipelineId: string): Promise<PipelineReviewQu
   return { items: res.items.map(row => row.form === 'review' ? reviewItemFromRow(row) : heldItemFromRow(row)) };
 }
 
-/** Done on a subtask of the reader's: the task is finished, as its own Done does (the Decide card's call, decide.ts). */
-async function pipelineSubjectDone(item: PipelineReviewItem): Promise<void> {
+/** Done on a subtask of the reader's: the task is finished, as its own Done does (the Decide card's call, decide.ts), with
+    the note typed in the box when there is one. */
+async function pipelineSubjectDone(item: PipelineReviewItem, note = ''): Promise<void> {
   await post(`/v2/tasks/${encodeURIComponent(item.subject_id ?? '')}`,
-    { status: 'done', version: item.subject_version ?? 1 }, newRequestId());
+    { status: 'done', version: item.subject_version ?? 1, ...(note ? { note } : {}) }, newRequestId());
 }
 
 /** Send back on a subtask of the reader's: it is declined with the note, which goes to its owner as the answer does. */

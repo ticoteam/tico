@@ -26,7 +26,7 @@ import itertools
 import json
 import uuid
 from contextlib import contextmanager
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, Callable, cast
 
 from pydantic import Field
 
@@ -47,7 +47,7 @@ if TYPE_CHECKING:
 
     from fastapi import FastAPI
 
-    from .auth import Auth
+    from .auth import Auth, Identity
     from .store import Store
 
 CLAIM_MINUTES = 10
@@ -747,13 +747,20 @@ def queue_for(
     pipeline_id: str | None = None,
     stage_id: str | None = None,
     visible_sql: str | None = None,
+    *,
+    who: "Identity | None" = None,
+    auth: "Auth | None" = None,
 ) -> list[Row]:
     """The items waiting for this reviewer, in one queue: each pipeline's stages left to right, then oldest. Each item
     has a `form`: a review, or a question or subtask (`_held_items`). `pipeline_id` and `stage_id` narrow it to one
     pipeline or one stage. Only a reviewer, a send-back's route or an asked backup sees an item; a bot sees none. An item
     is a requirement of the ticket's current stage, or a stale one of a stage it has left (D33), reviewed in place. The
     tickets the reader may not open, and the items on pipelines they may not see, are left out (`visible_sql` is the
-    route's task list clause, which also applies the bot activity controls)."""
+    route's task list clause, which also applies the bot activity controls). `who` and `auth` are the route's reader: a
+    question or subtask shows only what that reader may see of its pages (files.readable_page_refs); without them the
+    reader is the actor alone, which the counts use."""
+    from .auth import Identity
+
     if not str(actor or "").startswith("human:"):
         return []
     people = ",".join("?" * len(PERSON_REVIEWED))
@@ -822,7 +829,7 @@ def queue_for(
     items = [queue.item(actor, task, requirement, why) for task, requirement, why in waiting]
     _queue_fields(c, actor, items, live, tasks, queue)
     _attachment_views(c, items, facts)
-    items.extend(_held_items(c, actor, pipeline_id, stage_id, visible_sql))
+    items.extend(_held_items(c, actor, pipeline_id, stage_id, visible_sql, who or Identity(actor, "human"), auth))
     _in_queue_order(c, items)
     return items
 
@@ -864,11 +871,19 @@ def _held_rows(
 
 
 def _held_items(
-    c: "sqlite3.Connection", actor: str, pipeline_id: str | None, stage_id: str | None, visible_sql: str | None
+    c: "sqlite3.Connection",
+    actor: str,
+    pipeline_id: str | None,
+    stage_id: str | None,
+    visible_sql: str | None,
+    who: "Identity",
+    auth: "Auth | None",
 ) -> list[Row]:
     """The queue's other two forms, for the reader only: their questions that hold an open card of a pipeline, and their
     subtasks of such cards. A card the reader may not open, or a pipeline they may not see, leaves its items out, as the
-    review rows are (`_authorized`). Each item is on its card (`task_id`), with the subject it asks about or works on."""
+    review rows are (`_authorized`). Each item is on its card (`task_id`), with the subject it asks about or works on.
+    Its pages are redacted for this reader by the task view's own function (files.readable_page_refs): an option whose
+    page the reader may not open shows as removed, with no title and no file id."""
     found: dict[tuple[str, str], tuple[Row, str]] = {}
     for form in (QUESTION_FORM, SUBTASK_FORM):
         for row in _held_rows(c, actor, form, pipeline_id, stage_id):
@@ -890,6 +905,23 @@ def _held_items(
             [row["card_stage"] for row, _ in found.values()],
         )
     }
+    # The blob and page helpers are unannotated in their modules, so they are typed here where this block calls them.
+    from . import blobs as blob_module
+    from . import files as file_module
+
+    brief_of = cast(Callable[[Row], Row], blob_module.brief)
+    readable_refs = cast(Callable[..., list[Row]], file_module.readable_page_refs)
+    subtasks = [subject_id for (subject_id, _), (_, form) in found.items() if form == SUBTASK_FORM]
+    # A subtask's files are its attachments, as the task view lists them (the blobs attached to the task).
+    files: dict[str, list[Row]] = {}
+    if subtasks:
+        for r in _read(
+            c,
+            "SELECT a.task_id AS held_task, b.* FROM blobs b JOIN task_assets a ON a.blob_id=b.id "
+            "WHERE a.task_id IN (SELECT value FROM json_each(?)) ORDER BY b.created_at, b.id",
+            subtasks,
+        ):
+            files.setdefault(str(r["held_task"]), []).append(brief_of(r))
     items: list[Row] = []
     for (subject_id, card_id), (row, form) in found.items():
         pipeline = str(row["card_pipeline"])
@@ -912,13 +944,20 @@ def _held_items(
                 "subject_version": int(row["version"] or 1),
                 "ask": question_tasks.as_ask(row) if question else None,
                 "holds_up": {"id": card_id, "title": card_title} if question else None,
+                # The subtask's card as the review card shows it: its body, acceptance criteria and files.
+                "body": "" if question else str(row["body"] or ""),
+                "acceptance_criteria": [] if question else _criteria(row["acceptance"]),
+                "task_files": [] if question else files.get(str(subject_id), []),
                 "why": f"{'Question for you' if question else 'Your subtask'} · {names.get(pipeline, '')}",
                 "since": (question_tasks.asked_at(row) if question else row.get("created_at")) or "",
                 "late": False,
                 "reviewer_id": actor,
             }
         )
-    return items
+    # The task view's redaction (app.task_view), over the whole item: its ask and any subtask's files alike. An item whose
+    # own text names a page the reader may not open is left out, as a removed marker is no item the queue can show.
+    shown = readable_refs(c, auth, who, items)
+    return [item for item in shown if item.get("removed") is not True]
 
 
 def _in_queue_order(c: "sqlite3.Connection", items: list[Row]) -> None:
@@ -1645,7 +1684,7 @@ def install(app: "FastAPI", store: "Store", mutate: "Callable[..., Any]", auth: 
                 raise Problem("not_found", "No such pipeline", 404)
             hidden = pipeline_rights.hidden_pipeline_ids(c, reader_actor)
             scope = pipeline_rights.list_sql(c, who.actor, cast(Any, auth).task_sql(c, who))
-            items = queue_for(c, who.actor, pipeline_id, stage_id, visible_sql=scope)
+            items = queue_for(c, who.actor, pipeline_id, stage_id, visible_sql=scope, who=who, auth=auth)
             return {"items": [item for item in items if item["pipeline_id"] not in hidden]}
 
     @app.get("/api/v2/pipelines/review/queue")
