@@ -845,6 +845,12 @@ def test_a_pr_head_that_moves_is_new_work_that_makes_evidence_out_of_date_and_re
     assert after == before + 1
     assert json.loads(H.task_links(co.c, task)[0]["detail"])["head_sha"] == "def456"
     assert co.dots(task)["Screenshots"]["state"] == "out_of_date"
+    # The same webhook write records the new head's check from the engine's standing (not met) itself, not a later pass.
+    check = co.c.execute(
+        "SELECT state FROM pipeline_check_runs WHERE task_id=? AND stage_requirement_id=? AND head_sha=?",
+        (task, shots, "def456"),
+    ).fetchone()
+    assert check is not None and check[0] == "waiting"  # stored as waiting: not met, no failure
     assert co.refused(task, "In review")
 
     G.pull_request(
