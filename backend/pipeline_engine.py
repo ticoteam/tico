@@ -1122,6 +1122,21 @@ def check_move(
     return over
 
 
+def may_clear_stage(conn: sqlite3.Connection, actor: str, row: Row) -> None:
+    """Taking a ticket out of its stage without putting it in another (step "") is a person's move (D69): a bot or
+    automation may not do it, so a card On ice cannot slip out of it, nor a stage's requirements be skipped. Tico itself
+    (the keeper's legacy flows) and a person may."""
+    if not row.get("step_id") or actor == H.KEEPER or (H.is_human(actor) and not H.VIA.get()):
+        return
+    H.refuse(
+        conn,
+        actor,
+        "stage_required",
+        "A ticket leaves its stage only for another stage; a person takes it out",
+        task=str(row.get("id") or ""),
+    )
+
+
 def is_completion(row: Row, effective: str | None) -> bool:
     """Whether a write marks the ticket done now: a `done` status event, which ships it (_shipments)."""
     return effective == "done" and row.get("status") != "done"
