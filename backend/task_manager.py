@@ -437,7 +437,10 @@ def collect(c, settings, at):
         *_duplicates(c),
     ]
     seen, by = set(), {}
+    parked = H.on_ice_ids(c, {item["task"] for item in found})  # a card On ice (D69) is no one's to tidy, nor a wake
     for item in found:
+        if item["task"] in parked:
+            continue
         key = f"{item['kind']}:{item['task'] or item['owner_id']}"
         if key in seen:
             continue

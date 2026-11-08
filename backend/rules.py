@@ -983,6 +983,11 @@ def carry_out(conn, decision, actor, target, kind, refs, body, conv):
         conn.execute("ROLLBACK TO rule_carry")
         conn.execute("RELEASE rule_carry")
         log.warning("Rule %s could not %s: %s", decision.rule, decision.outcome, exc)
+        if isinstance(exc, H.Refused) and exc.rule == "stage_full" and exc.task:
+            from . import pipeline_engine
+
+            # The rule's move waited for room (D68): recorded after the rollback, so the manager lists the card waiting.
+            pipeline_engine.record_waiting(conn, H.KEEPER, str(exc.task), exc)
         return Decision(WAKE, FAIL_OPEN)
     finally:
         _CARRYING.reset(token)

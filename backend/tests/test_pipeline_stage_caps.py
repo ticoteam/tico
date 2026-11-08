@@ -1138,3 +1138,54 @@ def test_an_automatic_move_into_another_pipelines_full_stage_keeps_waiting_while
         assert H.try_auto_move(c, "bot:coo", H.task(c, card), type=other, step=osteps["Doing"]) is False
     with api.app.state.store.read() as c:
         assert X.waiting_room(c)[card]["stage_id"] == osteps["Doing"]
+
+
+def test_a_message_rule_move_into_a_full_stage_is_listed_as_waiting_for_room(api):
+    """A message rule's move (rules.carry_out) into a full stage fails open, but the wait is recorded after the rollback:
+    the card stays and the manager lists it as waiting for room."""
+    typ, steps = make_line(api, "MsgRule" + uuid.uuid4().hex[:8])
+    set_cap(api, steps["Doing"], 1)
+    with api.app.state.store.transaction() as c:
+        H.task_create(c, ANA, "Already doing", "", ANA, type=typ, step="Doing", lint=False)
+        card = H.task_create(c, ANA, "Moved by a message", "", ANA, type=typ, step="Backlog", lint=False)["id"]
+        decision = RU.Decision(RU.ACTION, "rule-msg", params={"action": "move_step", "step": "Doing"}, by=ANA)
+        out = RU.carry_out(c, decision, ANA, "bot:coo", "chat", {"task": card}, "Move it", None)
+        assert out.outcome == RU.WAKE
+    assert card_stage(api, card) == steps["Backlog"]
+    with api.app.state.store.read() as c:
+        assert X.waiting_room(c)[card]["stage_id"] == steps["Doing"]
+
+
+def test_no_roundup_line_and_no_task_manager_item_names_a_card_on_ice(api, monkeypatch):
+    """Whichever source would name a parked card (a question sent back, a resume stop, a merged pull request), the bot's
+    roundup and the Task Manager's report leave it out, so it wakes no bot."""
+    from backend import task_manager as TM
+    from backend import task_roundup as RD
+
+    typ, steps = make_line(api, "IceLines" + uuid.uuid4().hex[:8], ON_ICE_LINE)
+    set_cap(api, steps["On ice"], 0)
+    with api.app.state.store.transaction() as c:
+        ids = {
+            stage: H.task_create(c, ANA, "Line " + stage, "", "bot:coo", type=typ, step=stage, lint=False)["id"]
+            for stage in ("Backlog", "On ice")
+        }
+    at = H.now()
+
+    def stops(c, slug, actor, at):
+        return [(RD.STOPPED, at, RD._item(tid, "No progress " + tid[:8], "stop:" + tid)) for tid in ids.values()]
+
+    monkeypatch.setattr(RD, "_resume_stops", stops)
+    with api.app.state.store.read() as c:
+        named = {item["tid"] for item in RD._items(c, "coo", at, {})}
+    assert ids["Backlog"] in named  # the control
+    assert ids["On ice"] not in named
+
+    def merged(c, at):
+        return [TM._item("merged", H.task(c, tid), "its pull request merged", "close it") for tid in ids.values()]
+
+    monkeypatch.setattr(TM, "_merged", merged)
+    with api.app.state.store.read() as c:
+        by, _ = TM.collect(c, api.app.state.store.settings, at)
+    reported = {item["task"] for items in by.values() for item in items}
+    assert ids["Backlog"] in reported  # the control
+    assert ids["On ice"] not in reported

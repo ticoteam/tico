@@ -1479,6 +1479,19 @@ SNOOZED = "EXISTS (SELECT 1 FROM task_holds sh WHERE sh.task_id=%s.id AND sh.kin
 ON_ICE = "EXISTS (SELECT 1 FROM task_steps ps WHERE ps.id=%s.step_id AND ps.card_cap=0)"
 
 
+def on_ice_ids(conn, ids):
+    """The ids among these that name a card On ice (ON_ICE): what a list that would wake a bot leaves out."""
+    found = set()
+    for part in chunks(sorted({str(i) for i in ids if i})):
+        found.update(
+            r[0]
+            for r in conn.execute(
+                f"SELECT t.id FROM tasks t WHERE t.id IN ({','.join('?' * len(part))}) AND {ON_ICE % 't'}", part
+            )
+        )
+    return found
+
+
 def add_column(conn, table, column, declaration):
     """ALTER TABLE ... ADD COLUMN unless the column is there: SQLite has no IF NOT EXISTS for it."""
     if column not in {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}:

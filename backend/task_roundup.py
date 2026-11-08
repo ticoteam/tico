@@ -415,8 +415,12 @@ def _items(c, slug, at, shared, skip_tasks=(), *, allowed=None):
         if sweeping
         else _backlogs(c, slug, actor, at, shared, managed_only=True)
     )
-    for group, sort, item in _asks_back(c, slug, actor, at) + _resume_stops(c, slug, actor, at) + sweep_lines:
-        groups[group].append((sort, item))
+    found = _asks_back(c, slug, actor, at) + _resume_stops(c, slug, actor, at) + sweep_lines
+    # A card On ice (D69) wakes no bot, whichever line would name it: a question sent back, a stop, a backlog, a blocker.
+    parked = H.on_ice_ids(c, {item["tid"] for _, _, item in found})
+    for group, sort, item in found:
+        if item["tid"] not in parked:
+            groups[group].append((sort, item))
     ordered, seen = [], set()
     for group in range(QUIET + 1):
         for sort, item in sorted(groups[group], key=lambda found: found[0], reverse=group == MISSED):
