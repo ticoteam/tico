@@ -52,7 +52,7 @@ async function pipelineMineSync(pipelineId: string, force = false): Promise<void
   const same = next.size === pipelineMine.size && [...next].every(([id, n]) => pipelineMine.get(id) === n);
   if (same) return;
   pipelineMine.clear();
-  next.forEach((n, id) => pipelineMine.set(id, n));
+  next.forEach((n, id) => { pipelineMine.set(id, n); });
   tasksRender(TASKS_ST);
 }
 

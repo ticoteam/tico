@@ -415,7 +415,7 @@ async function pipelineLateTickets(pipelineId: string, ids: string[]): Promise<M
   for (let start = 0; start < ids.length; start += LATE_ASK_CHUNK) {
     const part = ids.slice(start, start + LATE_ASK_CHUNK);
     const res = await get(pipelineRoute(`/${encodeURIComponent(pipelineId)}/late?ids=${encodeURIComponent(part.join(','))}`)) as { late?: Record<string, PipelineLateClock> };
-    Object.entries(res.late ?? {}).forEach(([id, clock]) => out.set(id, clock));
+    Object.entries(res.late ?? {}).forEach(([id, clock]) => { out.set(id, clock); });
   }
   return out;
 }

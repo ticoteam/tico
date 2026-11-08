@@ -262,7 +262,7 @@ async function pipelineLateLoad(): Promise<void> {
   if (gen !== pipelineLateGen || seq !== pipelineLateSeq) return;
   const changed = !pipelineLateSame(next, pipelineLateClocks);
   pipelineLateClocks.clear();
-  next.forEach((clock, id) => pipelineLateClocks.set(id, clock));
+  next.forEach((clock, id) => { pipelineLateClocks.set(id, clock); });
   if (changed && TASKS_ST) tasksRender(TASKS_ST);
 }
 
@@ -375,7 +375,7 @@ function pipelineRailLeave(): void {
   if (rail.chat) threadUnmount(rail.chat);
   document.querySelector('.tasks-page')?.classList.remove('has-rail', 'rail-hidden');
   document.body.classList.remove('pipe-sheet-open');
-  document.querySelectorAll('.pr-scrim, #pipe-rail-bar').forEach(node => node.remove());
+  document.querySelectorAll('.pr-scrim, #pipe-rail-bar').forEach(node => { node.remove(); });
   rail.host.remove();
   pipelineRail = null;
 }
