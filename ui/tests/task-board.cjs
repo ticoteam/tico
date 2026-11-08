@@ -423,15 +423,15 @@ const screenshotDir = process.env.TICO_SCREENSHOT_DIR;
       return {rows: tops.size, right: head.querySelector('#task-new').getBoundingClientRect().right, edge: head.getBoundingClientRect().right};
     });
     assert(mobile.rows <= 2 && mobile.right <= mobile.edge + 1, 'phone header fits: ' + JSON.stringify(mobile));
-    // The phone + is the row's 30-wide icon width at the 32px control height, centred on the search icon beside it.
+    // The phone + is the row's 30-wide icon width at the 32px control height, centred on the first row's ⋯ beside it.
     const phonePlus = await page.evaluate(() => {
       const r = s => document.querySelector(s).getBoundingClientRect();
-      const add = r('#task-new'), search = r('.tl-search');
-      return {w: add.width, h: add.height, mid: add.top + add.height / 2, searchMid: search.top + search.height / 2};
+      const add = r('#task-new'), more = r('#task-more');
+      return {w: add.width, h: add.height, mid: add.top + add.height / 2, searchMid: more.top + more.height / 2};
     });
     assert.equal(phonePlus.w, 30, 'phone + width: ' + JSON.stringify(phonePlus));
     assert.equal(phonePlus.h, 32, 'phone + height: ' + JSON.stringify(phonePlus));
-    assert.ok(Math.abs(phonePlus.mid - phonePlus.searchMid) < 1, 'phone + is centred on the search row: ' + JSON.stringify(phonePlus));
+    assert.ok(Math.abs(phonePlus.mid - phonePlus.searchMid) < 1, 'phone + is centred on the first row: ' + JSON.stringify(phonePlus));
     // An empty search is its icon; tapped, it takes the row; emptied, it is an icon again.
     const searchRow = () => page.evaluate(() => {
       const r = s => document.querySelector(s).getBoundingClientRect();
