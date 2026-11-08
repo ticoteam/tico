@@ -483,7 +483,9 @@ def _waiting(c: sqlite3.Connection, limit: int) -> list[dict[str, Any]]:
     holds the judge off only while its verdict stands: it is the requirement's latest decision (LATEST_DECISION, as the
     engine reads it), on this attachment, and its digest is the work's now. A judge's answer on this attachment counts
     only while it is the latest decision, the one the engine reads: after newer evidence was ruled on and taken away, or
-    after a person's ruling that no longer stands, the requirement waits and the judge answers again. A person's or a
+    after a person's ruling that no longer stands, the requirement waits and the judge answers again. On a requirement
+    that does not need evidence newer than the change, its answer is recorded for the work version (_decision_version),
+    and a not met or unsure stands only for that version, as in the engine: a new commit has it answered again. A person's or a
     rule's ruling that is the latest decision, on this attachment, and still standing in the engine (this work version,
     or a met on a requirement that does not need evidence newer than the change: _fresh_needed), holds it off too, so
     re-judging never replaces a person's verdict, whatever evidence the judge saw before. An attachment that newer
@@ -544,7 +546,9 @@ def _waiting(c: sqlite3.Connection, limit: int) -> list[dict[str, Any]]:
                                               WHERE x.requirement_attachment_id = a.id AND x.judge = 'llm'
                                               ORDER BY x.created_at DESC, x.rowid DESC LIMIT 1)
                                AND d.work_digest = {digest}(t.title, t.body, pl.repo, pl.number, pl.detail)
-                               AND d.rowid = ({latest}))
+                               AND d.rowid = ({latest})
+                               AND (d.work_version IS NULL OR d.work_version = t.work_revision OR d.verdict = 'met'
+                                    OR json_type(r.needs, '$.newer_than_change') IS NOT 'false'))
            ORDER BY a.created_at, a.id
            LIMIT ?""".replace("{active}", ",".join("?" * len(H.ACTIVE_STATUSES)))
         .replace("{latest}", LATEST_DECISION)

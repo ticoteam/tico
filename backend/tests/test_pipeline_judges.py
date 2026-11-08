@@ -1566,3 +1566,23 @@ def test_no_evidence_is_not_met_even_over_the_cap_or_with_an_unknown_model(tmp_p
     monkeypatch.setattr(backend_judge, "over_spend_cap", lambda conn, settings, *a, **k: (12.0, 10.0))
     result = P.judge_once(c, REQ, no_evidence, "haiku-5.5", settings=_settings(path), engine=_engine(0.95))
     assert result["verdict"] == "not_met" and result["p"] == 0.0
+
+
+def test_a_judges_not_met_that_lapses_with_a_new_commit_is_judged_again(tmp_path, monkeypatch):
+    """Codex round 9, P2: on a requirement that does not need evidence newer than the change, a judge's not met stands
+    only for the work version it was made on. A new commit (the title, spec, PR and author unchanged, so the digest
+    matches) makes the engine drop it and wait, so the judge answers again for the work now; its met still stands."""
+    path, task_id, req_id = _judged_world(tmp_path)
+    store = Store(_settings(path))
+    _older_evidence_ok(store, req_id)
+    monkeypatch.setattr(P, "_cannot_see", lambda attachment, state: False)
+    monkeypatch.setattr(P, "ENGINE", _engine(0.05))
+    assert P.tick(store) == 1 and _standing(store, task_id, req_id) == "failed"
+    with store.transaction() as c:
+        c.execute("UPDATE tasks SET work_revision = work_revision + 1 WHERE id=?", (task_id,))
+    assert _standing(store, task_id, req_id) == "waiting"
+    monkeypatch.setattr(P, "ENGINE", _engine(0.95))
+    assert P.tick(store) == 1 and _standing(store, task_id, req_id) == "met"
+    with store.transaction() as c:
+        c.execute("UPDATE tasks SET work_revision = work_revision + 1 WHERE id=?", (task_id,))
+    assert _standing(store, task_id, req_id) == "met" and P.tick(store) == 0

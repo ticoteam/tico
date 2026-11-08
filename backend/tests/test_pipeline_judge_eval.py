@@ -232,9 +232,16 @@ def test_a_call_that_fails_twice_is_still_an_error_and_fails_the_bar():
     assert not result["passes_bar"] and any("failed calls" in f for f in result["bar_failures"])
 
 
-def test_the_four_cases_the_rubric_says_do_not_count_are_not_met():
+def test_the_cases_the_rubric_says_do_not_count_are_not_met():
+    """Readable evidence that fails the rubric is not met, not unsure (Codex round 9, P3: a lead with no named person)."""
     by_id = {c["id"]: c["expected"] for c in run.load()}
-    for case_id in ("dev-tests-truncated", "dev-review-partial", "mkt-brief-comment", "mkt-page-timeout"):
+    for case_id in (
+        "dev-tests-truncated",
+        "dev-review-partial",
+        "mkt-brief-comment",
+        "mkt-page-timeout",
+        "mkt-lead-generic-email",
+    ):
         assert by_id[case_id] == "not_met", case_id
 
 
