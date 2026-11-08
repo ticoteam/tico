@@ -320,7 +320,7 @@ function threadSettingsOpen(view: ThvView): void {
     const el = eventElement(ev) as HTMLInputElement | null; if (!el) return;
     if (el.id === 'ths-name') {
       const title = el.value.trim();
-      if (!title || title === (view.thread.title || '')) { el.value = view.thread.title || ''; return; }
+      if (!title || title === (view.thread?.title || '')) { el.value = view.thread?.title || ''; return; }
       void save(async path => patch(path, {title}));
     } else if (el.closest('.thd-aud')) {
       const audience = box.querySelector<HTMLInputElement>('[name=audience]:checked')?.value || 'members', sel = box.querySelector<HTMLSelectElement>('[name=group]');

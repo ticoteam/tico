@@ -28,6 +28,7 @@ interface ThreadMe {
 interface ThreadRow {
   id: string;
   title?: string | null | undefined;
+  name?: string | null | undefined;   // the server's name for an untitled thread (backend _thread_name)
   audience: string;
   parent_id?: string | null | undefined;
   archived_at?: string | null | undefined;
@@ -167,17 +168,17 @@ function threadTitle(t: ThreadRow | null | undefined, messages?: { sender_id?: s
   // The server's name, for someone in this DM the viewer's people list leaves out.
   const name = (a: string | undefined) => t.dm_with?.find(m => m.actor === a)?.name || actorName(a);
   const people = others.length ? others.slice(0, 3).map(name).join(', ') + (total > 3 ? ` +${total - 3}` : '') : '';
-  const own = String(t.title || '').trim();
+  const own = String(t.title || '').trim(), named = String(t.name || '');
   if (threadIsDm(t) && !t.parent_id && people && !(total >= 2 && own && !/^(chat with|private\b)/i.test(own))) return people;
   if (own) return own;
   if (t.audience === 'home' && t.home?.actor) return actorName(t.home.actor);
-  if (t.name && !threadIsDm(t)) return t.name;
+  if (named && !threadIsDm(t)) return named;
   if (people) return people;
   if (threadIsDm(t) && !t.parent_id) {
     const authors = [...new Set((messages || []).map(m => m?.sender_id).filter(a => a && a !== myActor()))];
     if (authors.length) return authors.slice(0, 3).map(actorName).join(', ') + (authors.length > 3 ? ` +${authors.length - 3}` : '');
   }
-  return t.name || 'Thread';
+  return named || 'Thread';
 }
 // Where a row opens: its root, or the sub-thread holding what is new (a reply there may be pages up the root's timeline).
 const threadRowHref = (t: ThreadRow | null | undefined) => !t?.new_at?.thread_id ? threadHref(t)
