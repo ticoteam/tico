@@ -349,7 +349,9 @@ def _items(c, slug, at, shared, skip_tasks=(), *, allowed=None):
     groups = {group: [] for group in range(QUIET + 1)}
     rows = H._rows(
         c.execute(
-            "SELECT * FROM " + H.TASKS + " tasks WHERE owner_id=? AND status IN (" + _marks() + ") ORDER BY updated_at",
+            "SELECT * FROM " + H.TASKS + " tasks WHERE owner_id=? AND status IN (" + _marks() + ") "
+            # A card On ice (D69, a stage with cap 0) wakes nobody: no owner line, no follow-up due.
+            "AND (step_id IS NULL OR step_id NOT IN (SELECT id FROM task_steps WHERE card_cap = 0)) ORDER BY updated_at",
             (actor, *H.ACTIVE_STATUSES),
         )
     )

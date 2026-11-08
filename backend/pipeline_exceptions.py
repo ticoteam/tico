@@ -516,7 +516,8 @@ def build(c, typ, rows=None, at=None, reader=None):
             )
             if H.bot_reads_task(c, reader, r)
         ][:5000]
-    rows = [dict(r) for r in rows if r["status"] in H.ACTIVE_STATUSES]
+    on_ice = {str(r["id"]) for r in H._rows(c.execute("SELECT id FROM task_steps WHERE card_cap = 0"))}
+    rows = [dict(r) for r in rows if r["status"] in H.ACTIVE_STATUSES and str(r.get("step_id")) not in on_ice]
     out = _List()
     children = _check_children(c, {r["id"] for r in rows})
     _stuck(c, out, rows, children, at, reader)

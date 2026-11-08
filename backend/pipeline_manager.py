@@ -182,6 +182,7 @@ def _visits(c: "sqlite3.Connection", pipeline_id: str) -> list[dict[str, Any]]:
         c.execute(
             "SELECT v.id AS visit_id, v.task_id, v.pipeline_stage_id, v.entered_at FROM stage_visits v "
             f"JOIN tasks t ON t.id = v.task_id WHERE v.pipeline_id=? AND v.left_at IS NULL AND t.status IN ({marks}) "
+            "AND v.pipeline_stage_id NOT IN (SELECT id FROM task_steps WHERE card_cap = 0) "  # On ice (D69): no manager pass
             "ORDER BY v.entered_at, v.id",
             (pipeline_id, *H.ACTIVE_STATUSES),
         )
@@ -215,7 +216,9 @@ def late_tickets(c: "sqlite3.Connection", rows: list[dict[str, Any]], at: Any) -
     now = when_of(at)
     limits: dict[str, int] = {
         str(r["id"]): r["limit_minutes"]
-        for r in H._rows(c.execute("SELECT id, limit_minutes FROM task_steps WHERE limit_minutes IS NOT NULL"))
+        for r in H._rows(
+            c.execute("SELECT id, limit_minutes FROM task_steps WHERE limit_minutes IS NOT NULL AND card_cap IS NOT 0")
+        )  # a stage On ice (cap 0, D69) is never late
     }
     live = [
         r

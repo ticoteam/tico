@@ -10121,6 +10121,15 @@ def notes_waiting_counts(conn, bots, limit=500):
     return out
 
 
+def _on_ice(conn, task_row):
+    """Whether a ticket sits in a stage whose cap is 0 (D69, "On ice"): its cards wake no bot."""
+    step_id = (task_row or {}).get("step_id")
+    return (
+        bool(step_id)
+        and _one(conn, "SELECT 1 AS on_ice FROM task_steps WHERE id=? AND card_cap=0", (step_id,)) is not None
+    )
+
+
 def _wake(
     conn,
     task_row,
@@ -10180,6 +10189,9 @@ def _wake(
     ):
         # Nobody plans to get to a snoozed task before its date: news about it waits for its bot's next run.
         # Anyone else (a requester bot handed it for review) hears as usual.
+        refs = {**(refs or {}), "quiet": True}
+    if is_bot(target) and _on_ice(conn, task_row):
+        # On ice (D69): a card there wakes no bot, whoever it is for. The notice is written; no run starts.
         refs = {**(refs or {}), "quiet": True}
     if not target or not _actor_exists(conn, target) or not task_private_readable(conn, target, task_row):
         return None

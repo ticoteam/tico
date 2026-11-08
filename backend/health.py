@@ -2790,6 +2790,7 @@ def _dev_board_check(c, who, auth):
         "WHERE tasks.number IS NOT NULL AND y.numbered=1 AND (y.role='engineering' OR y.name='Dev tickets') "
         f"AND tasks.owner_id LIKE 'bot:%' AND tasks.status IN ({','.join('?' * len(H.ACTIVE_STATUSES))}) "
         "AND tasks.updated_at<? "
+        "AND NOT EXISTS (SELECT 1 FROM task_steps oi WHERE oi.id=tasks.step_id AND oi.card_cap=0) "  # On ice (D69) is kept, not stuck
         "AND NOT EXISTS (SELECT 1 FROM jobs j JOIN messages m ON m.id=j.message_id "
         "JOIN conversations cv ON cv.id=m.conversation_id "
         f"WHERE j.bot_id=substr(tasks.owner_id,5) AND j.state IN ({','.join('?' * len(LIVE_JOBS))}) "

@@ -15,6 +15,8 @@ from backend import pipeline_exceptions as X
 from backend import pipeline_links as L
 from backend import pipeline_manager as PM
 from backend import pipeline_requirements as R
+from backend import task_check_backs as CB
+from backend import task_roundup as TR
 from backend.auth import Identity
 from backend.store import Problem
 from backend.store import refused as answer_refusal
@@ -212,3 +214,60 @@ def test_a_spawn_into_a_full_stage_is_refused_so_the_card_waits_at_its_stage(tmp
         c, intake["id"], "Intake"
     )
 
+
+def runs(c, slug):
+    """Runs queued for a bot that no hold keeps back: what a notice to it would start."""
+    return c.execute(
+        "SELECT count(*) FROM jobs WHERE bot_id=? AND state='queued' AND coalesce(held,0)=0", (slug,)
+    ).fetchone()[0]
+
+
+def test_a_card_on_ice_starts_no_run_for_its_bot_owner_when_a_person_moves_it_in_or_news_reaches_it(api):
+    typ, steps = make_line(api, "Wake" + uuid.uuid4().hex[:8], ON_ICE_LINE)
+    set_cap(api, steps["On ice"], 0)
+    with api.app.state.store.transaction() as c:
+        H.task_create(c, ANA, "Live", "", "bot:coo", type=typ, step="Doing", lint=False)
+        assert runs(c, "coo") == 1  # the control: a card made in an ordinary stage starts its owner's run
+        c.execute("DELETE FROM jobs WHERE bot_id='coo'")
+
+        parked = H.task_create(c, ANA, "Parked", "", "bot:coo", type=typ, step="Backlog", lint=False)["id"]
+        c.execute("DELETE FROM jobs WHERE bot_id='coo'")
+        H.task_update(c, ANA, parked, step="On ice")  # a person moves it in: no run starts
+        assert runs(c, "coo") == 0
+        news = {"news": "assignment", "rule": "assignment", "trigger": "status_or_relation"}
+        H._wake(c, H.task(c, parked), "bot:coo", "News about the parked card", news)
+        assert runs(c, "coo") == 0
+
+
+def test_a_follow_up_on_a_card_on_ice_is_never_listed_for_its_bot(api):
+    typ, steps = make_line(api, "Follow" + uuid.uuid4().hex[:8], ON_ICE_LINE)
+    set_cap(api, steps["On ice"], 0)
+    earlier = H.shift(H.now(), minutes=-10)
+    with api.app.state.store.transaction() as c:
+        live = H.task_create(c, ANA, "Live", "", "bot:coo", type=typ, step="Doing", lint=False)
+        parked = H.task_create(c, ANA, "Parked", "", "bot:coo", type=typ, step="On ice", lint=False)
+        for card in (live, parked):  # a person sets a follow-up that is due now
+            CB.set_time(c, H.task(c, card["id"]), "5m", "Look at it", actor=ANA, at=earlier)
+        listed = [item["tid"] for item in TR._items(c, "coo", H.now(), {})]
+        assert live["id"] in listed  # the control: a due follow-up on an ordinary stage is listed for its owner
+        assert parked["id"] not in listed
+
+
+def test_a_card_on_ice_is_never_late_and_leaves_the_managers_visits(api):
+    typ, steps = make_line(api, "Pass" + uuid.uuid4().hex[:8], ON_ICE_LINE)
+    set_cap(api, steps["On ice"], 0)
+    with api.app.state.store.transaction() as c:
+        for stage in ("On ice", "Doing"):
+            R.set_stage(c, ANA, steps[stage], {"limit_minutes": 30})
+        parked = H.task_create(c, ANA, "Parked", "", "bot:coo", type=typ, step="On ice", lint=False)["id"]
+        live = H.task_create(c, ANA, "Live", "", "bot:coo", type=typ, step="Doing", lint=False)["id"]
+        long_ago = H.shift(H.now(), hours=-3)
+        c.execute("UPDATE stage_visits SET entered_at=? WHERE task_id IN (?, ?)", (long_ago, parked, live))
+        c.execute(
+            "UPDATE history_events SET created_at=? WHERE subject_type='task' AND subject_id IN (?, ?)",
+            (long_ago, parked, live),
+        )
+        late = PM.late_tickets(c, [H.task(c, parked), H.task(c, live)], H.now())
+        assert live in late  # the control: an ordinary stage past its Warn after is late
+        assert parked not in late
+        assert parked not in [v["task_id"] for v in PM._visits(c, typ)]

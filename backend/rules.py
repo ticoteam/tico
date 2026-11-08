@@ -1776,6 +1776,11 @@ def step_entered(conn, actor, row, *, skip=()):
     else hears nothing. Incident tasks also notify their owner and requester without a configured step rule.
     Ordinary step moves need a row naming `step_entered`. The owner, the requester, the ticket's QA and the Release Manager are the ones a row can reach.
     Callers can skip recipients already notified by the event that moved the task."""
+    if (
+        row.get("step_id")
+        and conn.execute("SELECT 1 FROM task_steps WHERE id=? AND card_cap=0", (row["step_id"],)).fetchone()
+    ):
+        return  # On ice (D69): a card moved into a stage with cap 0 wakes nobody
     try:
         incident = incident_task(conn, row)
         from . import redesign_migration
