@@ -116,7 +116,7 @@
         "next_run": {"type": "array", "items": {"type": "object", "additionalProperties": true}},
         "notes": {"type": "array", "items": {"type": "object", "additionalProperties": true}},
         "deferred": {"type": "string", "x-note": "The prompt's block on what was deferred to this turn: its count line (\"Deferred since your last turn: 2 comments, 1 task\"), then the deferred comments and messages themselves, one a line, a bounded page; empty when nothing; an older server omits it."},
-        "finance": {"type": ["array", "null"], "items": {"type": "string"}, "x-note": "The bot's Finance brief lines (backend/finance/brief.py for_turn), sent only when they changed since the brief it last got; null otherwise. The runner puts them in the prompt's standing part. An older server omits it."},
+        "finance": {"oneOf": [{"type": "object", "additionalProperties": false, "required": ["lines", "as_of", "changed_since"], "properties": {"lines": {"type": "array", "items": {"type": "string"}}, "as_of": {"type": ["string", "null"]}, "changed_since": {"type": ["string", "null"]}}}, {"type": "null"}], "x-note": "The bot's Finance brief (backend/finance/brief.py for_turn): its lines, as_of and changed_since, sent only when they changed since the brief it last got; null otherwise. The runner puts the lines in the prompt's standing part. An older server omits it."},
         "credential_vault": {"type": "boolean"},
         "gateway": {"type": "boolean"},
         "continue_thread": {"type": "string"},
