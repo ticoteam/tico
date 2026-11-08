@@ -544,3 +544,55 @@ def test_a_task_type_reports_each_stage_held_count_snoozed_cards_included_for_it
     problem = bot_move(api, waiting, "Doing")  # the refusal the board's 3 stands for
     assert isinstance(problem, Problem)
     assert (problem.status, problem.code, problem.detail) == (409, "stage_full", "Doing is full (3 of 3)")
+
+
+def test_a_queued_assignment_for_a_card_parked_before_its_claim_is_refused_at_the_claim(api):
+    """A bot's assignment queued while its card sat in Backlog is not claimed once a person parks the card On ice."""
+    from backend import execution
+
+    typ, steps = make_line(api, "Queued" + uuid.uuid4().hex[:8], ON_ICE_LINE)
+    set_cap(api, steps["On ice"], 0)
+    with api.app.state.store.transaction() as c:
+        c.execute("DELETE FROM jobs WHERE bot_id='coo'")
+        card = H.task_create(c, ANA, "Assigned", "", "bot:coo", type=typ, step="Backlog", lint=False)["id"]
+        queued = [dict(row) for row in c.execute("SELECT * FROM jobs WHERE bot_id='coo'").fetchall()]
+        assert queued  # the assignment is queued for the bot
+        assert all(execution.job_refusal(c, job, {}, {}, set(), set(), set()) is None for job in queued)  # control
+        H.task_update(c, ANA, card, step="On ice")  # a person parks it before any claim
+        assert all(execution.job_refusal(c, job, {}, {}, set(), set(), set()) is not None for job in queued)
+
+
+def test_a_bot_cannot_clear_a_card_out_of_on_ice_by_a_type_or_a_status_with_no_stage_for_it(api):
+    typ, steps = make_line(api, "ClearWay" + uuid.uuid4().hex[:8], ON_ICE_LINE)
+    set_cap(api, steps["On ice"], 0)
+    with api.app.state.store.transaction() as c:
+        shipped = H.type_create(
+            c, H.KEEPER, "Shipped only" + uuid.uuid4().hex[:8], [{"name": "Shipped", "status": "done"}]
+        )
+        card = H.task_create(c, ANA, "Parked", "", "bot:coo", type=typ, step="On ice", lint=False)["id"]
+    for change in ({"type": shipped["id"]}, {"status": "declined"}):
+        with api.app.state.store.transaction() as c:
+            with pytest.raises(H.Refused) as refused:
+                H.task_update(c, "bot:coo", card, **change)
+            assert refused.value.rule == "stage_required", change
+        assert card_stage(api, card) == steps["On ice"], change
+
+
+def test_a_card_the_merge_queue_drops_into_a_full_stage_is_listed_waiting_for_room(tmp_path):
+    boot(tmp_path / "hub.sqlite")
+    c = hub(tmp_path / "hub.sqlite")
+    typ = H.type_create(
+        c,
+        ANA,
+        "Ship" + uuid.uuid4().hex[:8],
+        [{"name": "Doing", "status": "doing"}, {"name": "Review", "status": "review"}],
+        mover=True,
+    )["id"]
+    c.execute("UPDATE task_types SET pipeline_owner_id=? WHERE id=?", (ANA, typ))
+    doing, review = step_id(c, typ, "Doing"), step_id(c, typ, "Review")
+    R.add(c, ANA, review, {"name": "Due date", "kind": "field", "needs": {"field": "due"}, "reviewed_by": "nobody"})
+    H.task_create(c, ANA, "Already in Doing", "", ANA, type=typ, step="Doing", lint=False)
+    R.set_stage(c, ANA, doing, {"card_cap": 1})  # Doing is full
+    card = H.task_create(c, ANA, "Dropped from the queue", "", ANA, type=typ, step="Review", lint=False)["id"]
+    assert E.queue_ejected(c, card, "Dropped from the queue") is False
+    assert X.waiting_room(c)[card]["stage_id"] == doing

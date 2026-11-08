@@ -51,7 +51,7 @@ function tasksOf(state) {
 async function open(browser, opts = {}) {
   const page = await browser.newPage({viewport: {width: 390, height: 844}, serviceWorkers: 'block', hasTouch: true, isMobile: true});
   const errors = [], writes = [];
-  const state = {steps: initialSteps(), where: {}, moves: [], snoozed: opts.snoozed || []};
+  const state = {steps: initialSteps(), where: {}, moves: [], snoozed: opts.snoozed || [], liveGo: false, liveServed: false};
   page.on('pageerror', e => errors.push(e.message));
   await page.addInitScript(() => { try { localStorage.setItem('tico.theme', 'dark'); } catch {} });
   const me = {id: 'ana', role: 'owner', name: 'Ana Ruiz', email: 'ana@example.com', cloud: true, registered: true, owner_id: 'ana', mover: true, config: {company_name: 'Acme Bikes'}};
@@ -109,12 +109,21 @@ async function open(browser, opts = {}) {
     }
     if (p.startsWith('/api/v2/preferences/')) return json({key: 'tasks.view', value: null});
     if (p === '/api/v2/conversations') return json({conversations: []});
+    // The live stream (ui/app/live.ts): with opts.live it waits for the test to send a card's change, then carries that
+    // card as a `tasks` event, the way the server does when someone else moves it. No types are read again.
+    if (opts.live && p === '/api/v2/events') {
+      while (!state.liveGo) await new Promise(resolve => setTimeout(resolve, 25));
+      state.liveServed = true;
+      const moved = taskOf(state, 'T41');
+      const body = 'event: ready\ndata: {"seq": 1}\n\n' + `event: tasks\nid: 2\ndata: ${JSON.stringify({seq: 2, id: moved.id, task: moved})}\n\n`;
+      return route.fulfill({contentType: 'text/event-stream', body});
+    }
     if (p.endsWith('/watch')) return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});
     return json(unrouted(p));
   });
   await page.goto('https://tico-ui.test/#/tasks?view=board&type=dev&who=all');
   await page.locator('.pchips').waitFor();
-  return {page, errors, writes};
+  return {page, errors, writes, state};
 }
 
 const settled = async page => { await page.waitForTimeout(100); await page.waitForLoadState('networkidle'); };
@@ -184,6 +193,19 @@ const lastPatch = (writes, id) => writes.filter(w => w.method === 'PATCH' && w.p
     assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), 'no sideways scroll in the editor');
     assert.deepEqual(errors, [], 'no page errors');
     await page.close();
+
+    // Another person moves Spec the export out of Specifying (full at 3/3). The change arrives on the live stream, which
+    // carries the card but reads no types: the chip reads 2/3, the count the cap now enforces, not the 3/3 it loaded with.
+    const leave = await open(browser, {live: true});
+    await leave.page.locator('.pchip', {hasText: 'Specifying'}).filter({hasText: '3/3'}).waitFor();
+    leave.state.where.T41 = 'dev';
+    leave.state.liveGo = true;
+    for (let i = 0; i < 200 && !leave.state.liveServed; i++) await leave.page.waitForTimeout(25);
+    assert.ok(leave.state.liveServed, 'the live stream carried the change');
+    await leave.page.locator('.pchip', {hasText: 'Specifying'}).filter({hasText: '2/3'}).waitFor({timeout: 5000});
+    assert.match(await leave.page.locator('.pchip', {hasText: 'Specifying'}).innerText(), /2\/3/, 'a card that left Specifying leaves 2/3');
+    assert.deepEqual(leave.errors, [], 'no page errors when a card leaves a full stage');
+    await leave.page.close();
 
     // Three snoozed specs hold Specifying (D68): none shows on the board, yet its chip reads 3/3, the count the cap is
     // enforced against, not the 0 of the cards on show.
