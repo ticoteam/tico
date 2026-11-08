@@ -767,6 +767,220 @@ def add_source(
     return entity_id
 
 
+# Rule sources: the organizations that impose external rules. rule_sources retired into entities (migration
+# 20261108044824): a rule source is an organization whose properties.rule_source says what it was (its kind, creator
+# and creation time, and the id rule_sources gave it, which is the entity's own id for a new one).
+
+RULE_SOURCE_KINDS = ("vendor", "customer", "government", "other")
+RULE_SOURCE_ORG_KIND = {"vendor": "company", "customer": "company", "government": "government", "other": "company"}
+RULE_SOURCE_LINK = {"vendor": "vendor_to", "customer": "customer_of", "government": "governs"}
+RULE_SOURCE_ACCEPTS: dict[str, tuple[str, ...] | None] = {
+    "vendor": ("company", "platform"),
+    "customer": ("company", "nonprofit", "school", "platform"),
+    "government": ("government", "agency", "court"),
+    "other": None,
+}
+WALK_DEPTH = 4
+_SOURCE_SQL = (
+    "SELECT id, name, json_extract(properties, '$.rule_source.kind') AS kind, "
+    "json_extract(properties, '$.rule_source.created_by') AS created_by, "
+    "json_extract(properties, '$.rule_source.created_at') AS created_at FROM entities "
+    "WHERE type = 'organization' AND json_extract(properties, '$.rule_source') IS NOT NULL "
+    "AND merged_into_id IS NULL AND deleted_at IS NULL"
+)
+_STEPS_SQL = (
+    "SELECT l.id AS id, l.from_entity_id AS node, l.link_key AS link_key, l.to_entity_id AS other FROM entity_links l "
+    "JOIN link_types t ON t.key = l.link_key WHERE l.from_entity_id = :node AND t.inherits_rules = 1 "
+    "AND (l.valid_from_on IS NULL OR l.valid_from_on <= :today) "
+    "AND (l.valid_until_on IS NULL OR l.valid_until_on >= :today) "
+    "UNION ALL SELECT l.id, l.to_entity_id, l.link_key, l.from_entity_id FROM entity_links l "
+    "JOIN link_types t ON t.key = l.link_key WHERE l.to_entity_id = :node AND t.symmetric = 1 AND t.inherits_rules = 1 "
+    "AND (l.valid_from_on IS NULL OR l.valid_from_on <= :today) "
+    "AND (l.valid_until_on IS NULL OR l.valid_until_on >= :today)"
+)
+
+
+def _kind_value(c: sqlite3.Connection, entity_id: str) -> str | None:
+    row = _one(
+        c,
+        "SELECT option_key FROM entity_values WHERE entity_id = ? AND entity_attribute_id = 'attr_organization_kind'",
+        (entity_id,),
+    )
+    return str(row["option_key"]) if row and row["option_key"] is not None else None
+
+
+def rule_sources(c: sqlite3.Connection) -> list[Row]:
+    """Every rule source, by name. Company metadata: not filtered by visibility, as rule_sources was not."""
+    return _rows(c, _SOURCE_SQL + " ORDER BY lower(name), id")
+
+
+def rule_source_named(c: sqlite3.Connection, value: object) -> list[Row]:
+    """The rule sources an id or a name (case-insensitive) matches: none, one, or several."""
+    text = str(value or "").strip()
+    return [r for r in rule_sources(c) if r["id"] == text or str(r["name"]).strip().lower() == text.lower()]
+
+
+def rule_source_add(c: sqlite3.Connection, actor: str, name: str, kind: str) -> Row:
+    """A rule source by name, found or made. A name one live organization carries is that organization, which becomes
+    a rule source with its visibility left alone; a new name makes an organization the company can see. Self, several
+    matches and a kind the organization cannot be are refused."""
+    _writer(c, actor)
+    if kind not in RULE_SOURCE_KINDS:
+        _refuse(c, actor, "kind", "a rule source's kind is " + ", ".join(RULE_SOURCE_KINDS))
+    key = name.strip().lower()
+    found = _rows(
+        c,
+        "SELECT id, self, json_extract(properties, '$.rule_source') AS source FROM entities "
+        "WHERE type = 'organization' AND name_key = ? AND merged_into_id IS NULL AND deleted_at IS NULL ORDER BY id",
+        (key,),
+    )
+    if any(int(r["self"]) for r in found):
+        _refuse(c, actor, "conflict", f"{name} is the company itself, so it cannot be a rule source")
+    if len(found) > 1:
+        ids = ", ".join(str(r["id"]) for r in found)
+        _refuse(c, actor, "conflict", f"{name} matches {len(found)} organizations ({ids}): choose one by id")
+    now = H.now()
+    if found:
+        entity_id = str(found[0]["id"])
+        known = [r for r in rule_sources(c) if r["id"] == entity_id]
+        if known:
+            if known[0]["kind"] != kind:
+                _refuse(c, actor, "conflict", f"{name} is already a {known[0]['kind']} rule source")
+            return known[0]
+        accepts = RULE_SOURCE_ACCEPTS[kind]
+        current = _kind_value(c, entity_id)
+        if accepts is not None and current is not None and current not in accepts:
+            _refuse(c, actor, "conflict", f"{name} is a {current}, which a {kind} rule source cannot be")
+    else:
+        entity_id = _new_entity_id(c, "organization", name)
+        c.execute(
+            "INSERT INTO entities (id, type, name, name_key, created_by, created_by_type, created_by_id, created_at, "
+            "updated_at) VALUES (?, 'organization', ?, ?, ?, ?, ?, ?, ?)",
+            (entity_id, name, key, actor, _actor_kind(actor) or "system", _actor_id(actor) or "", now, now),
+        )
+        add_source(c, actor, entity_id, "rule_source", entity_id)
+    provenance = {"id": entity_id, "kind": kind, "created_by": actor, "created_at": now}
+    c.execute(
+        "UPDATE entities SET properties = json_set(CASE WHEN json_valid(properties) THEN properties ELSE '{}' END, "
+        "'$.rule_source', json(?)), updated_at = ? WHERE id = ?",
+        (json.dumps(provenance), now, entity_id),
+    )
+    _set_kind(c, entity_id, RULE_SOURCE_ORG_KIND[kind], "rule_source")
+    me = self_id(c)
+    if me is not None and kind in RULE_SOURCE_LINK:
+        seed_link(c, from_id=entity_id, key=RULE_SOURCE_LINK[kind], to_id=me, confidence=0.9, actor=actor)
+    found_row = _one(c, _SOURCE_SQL + " AND id = ?", (entity_id,))
+    assert found_row is not None  # written just above
+    return found_row
+
+
+def walk(c: sqlite3.Connection, starts: Sequence[str], depth: int = WALK_DEPTH) -> tuple[dict[str, list[Row]], bool]:
+    """The entities reached from `starts` along links whose type inherits rules, each with the steps that reach it
+    (shortest first), and whether the walk was cut off: a link still leads from the last level to an unreached entity.
+    A symmetric link is walked both ways. No visibility applies here; the caller decides what it shows."""
+    today = _today()
+    reached: dict[str, list[Row]] = {}
+    for start in starts:
+        reached.setdefault(start, [])
+    frontier = list(reached)
+    for _ in range(depth):
+        nxt: list[str] = []
+        for node in frontier:
+            for step in _rows(c, _STEPS_SQL, {"node": node, "today": today}):
+                other = str(step["other"])
+                if other in reached:
+                    continue
+                reached[other] = [*reached[node], {"from": node, "key": step["link_key"], "to": other}]
+                nxt.append(other)
+        frontier = nxt
+        if not frontier:
+            return reached, False
+    for node in frontier:
+        for step in _rows(c, _STEPS_SQL, {"node": node, "today": today}):
+            if str(step["other"]) not in reached:
+                return reached, True
+    return reached, False
+
+
+def contact_entities(c: sqlite3.Connection, addresses: Sequence[str]) -> list[str]:
+    """The entities an address points at: a person or organization that has it as an email identifier, and the
+    organization whose primary domain is its domain. Names are never matched: two people can share one."""
+    ids: list[str] = []
+    for address in addresses:
+        text = address.strip().lower()
+        if not text:
+            continue
+        ids += [
+            str(r["entity_id"])
+            for r in _rows(
+                c, "SELECT entity_id FROM entity_identifiers WHERE kind = 'email' AND normalized_value = ?", (text,)
+            )
+        ]
+        domain = text.rpartition("@")[2]
+        if domain:
+            ids += [
+                str(r["id"])
+                for r in _rows(
+                    c,
+                    "SELECT id FROM entities WHERE type = 'organization' AND primary_domain = ? "
+                    "AND merged_into_id IS NULL AND deleted_at IS NULL",
+                    (domain,),
+                )
+            ]
+    return sorted(set(ids))
+
+
+def entity_names(c: sqlite3.Connection, ids: Iterable[str]) -> dict[str, str]:
+    """The names of entities, read whole. Callers show a name only to a reader `visible_ids` names."""
+    found = _rows(
+        c, "SELECT id, name FROM entities WHERE id IN (SELECT value FROM json_each(?))", (json.dumps(list(ids)),)
+    )
+    return {str(r["id"]): str(r["name"]) for r in found}
+
+
+def linked_from(c: sqlite3.Connection, from_id: str, key: str) -> list[str]:
+    """The entities `from_id` has a current link of this key to (the links a condition reads)."""
+    today = _today()
+    rows = _rows(
+        c,
+        "SELECT to_entity_id AS other FROM entity_links WHERE from_entity_id = ? AND link_key = ? "
+        "AND (valid_from_on IS NULL OR valid_from_on <= ?) AND (valid_until_on IS NULL OR valid_until_on >= ?)",
+        (from_id, key, today, today),
+    )
+    return sorted(str(r["other"]) for r in rows)
+
+
+def linked_to(c: sqlite3.Connection, to_id: str, key: str) -> list[str]:
+    """The entities with a current link of this key to `to_id`: customer_of self finds the customers."""
+    today = _today()
+    rows = _rows(
+        c,
+        "SELECT from_entity_id AS other FROM entity_links WHERE to_entity_id = ? AND link_key = ? "
+        "AND (valid_from_on IS NULL OR valid_from_on <= ?) AND (valid_until_on IS NULL OR valid_until_on >= ?)",
+        (to_id, key, today, today),
+    )
+    return sorted(str(r["other"]) for r in rows)
+
+
+def entity_facts(c: sqlite3.Connection, ids: Iterable[str]) -> dict[str, Row]:
+    """Each entity's type and, for an organization, its kind (the scope terms type: and kind: read these)."""
+    rows = _rows(
+        c,
+        "SELECT e.id AS id, e.type AS type, "
+        "(SELECT v.option_key FROM entity_values v WHERE v.entity_id = e.id "
+        "AND v.entity_attribute_id = 'attr_organization_kind') AS kind FROM entities e "
+        "WHERE e.id IN (SELECT value FROM json_each(?))",
+        (json.dumps(list(ids)),),
+    )
+    return {str(r["id"]): {"type": r["type"], "kind": r["kind"]} for r in rows}
+
+
+def visible_ids(c: sqlite3.Connection, who: str | V.Reader, ids: Iterable[str]) -> set[str]:
+    """The ids of the entities a reader may see (the read rule, visible.clause)."""
+    r = V.reader(c, who) if isinstance(who, str) else who
+    return {str(row["id"]) for row in _visible_rows(c, r, list(ids))}
+
+
 def merge(c: sqlite3.Connection, actor: str, keep_id: str, drop_id: str) -> str:
     """Merges `drop` into `keep`: the drop's identifiers, links, values, notes, mentions, activities, external refs and
     sources move to the kept entity, and the drop redirects to it. The move is logged (entity_merges) so unmerge reverses

@@ -1055,15 +1055,18 @@ def drain(store, auth, limit=20):
 
 
 def rule_gate(app, store, who, snap):
-    """The org rule check of a bot's own email, before its write (backend/org_rule_check.py): the in-write half for
-    `enqueue`, or None when the sender is not a bot writing (a person's own mail is not checked). Like every rule
-    check it fails open: an error is a `rules.unchecked` outcome, never a lost send."""
+    """The org rule checks of a bot's own email, before its write: the in-write half for `enqueue`, or None when the
+    sender is not a bot writing (a person's own mail is not checked). The Directory's structured rules run first and
+    fail closed: a check that cannot complete holds the email (backend/entities/rules.py). The judged check (org_rule_check)
+    fails open, as it always has: an error is a `rules.unchecked` outcome, never a lost send."""
     from . import org_rule_check as rules
+    from .entities import rules as directory
 
     found = rules.checked_as(who, store.settings.assistant_bot)
     if not found or not H.is_bot(found[1]):
         return None
     groups = snap["recipient_headers"]
+    addresses = [*groups["to"], *groups["cc"], *groups["bcc"]]
     try:
         prep = rules.mail_prepare(
             store,
@@ -1075,10 +1078,31 @@ def rule_gate(app, store, who, snap):
             snap["subject"],
             snap["body"],
         )
-    except Exception as exc:  # noqa: BLE001  (fails open, as every rule check does)
+    except Exception as exc:  # noqa: BLE001  (fails open, as every judged check does)
         LOG.warning("The org rule check of an email failed: %s", type(exc).__name__)
-        return lambda c: {"outcome": "unchecked"}
-    return lambda c: rules.mail_decide(c, prep)
+        prep = None
+        judged_error = True
+    else:
+        judged_error = False
+
+    def gate(c):
+        structured = directory.check(c, found[1], None, "email", contacts=addresses)
+        if structured["outcome"] == "held":
+            return {"outcome": "held", "held": {"id": "", "text": _held_text(structured)}}
+        outcome = {"outcome": "unchecked"} if judged_error else rules.mail_decide(c, prep)
+        if structured["outcome"] == "warn" and outcome["outcome"] == "pass":
+            return {"outcome": "warn", "warning_line": structured["warned"][0]["text"]}
+        return outcome
+
+    return gate
+
+
+def _held_text(verdict):
+    """The line a held email shows: the Directory rules that hold it, with the path each applies through."""
+    if verdict["error"]:
+        return str(verdict["held"][0]["text"])
+    parts = [f"{rule['text']} ({rule['path'][0]})" if rule["path"] else str(rule["text"]) for rule in verdict["held"]]
+    return "A Directory rule holds this email: " + "; ".join(parts)
 
 
 IMPORTED = "email_sending.registry_imported"

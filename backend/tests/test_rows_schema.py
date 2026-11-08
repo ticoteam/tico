@@ -470,7 +470,6 @@ UNTYPED = frozenset(
         "rule_due_status",
         "rule_events_seen",
         "rule_reads",
-        "rule_sources",
         "rule_suggestions",
         "rule_task_runs",
         "rule_task_state",
