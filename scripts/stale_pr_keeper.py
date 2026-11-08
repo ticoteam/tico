@@ -18,8 +18,9 @@ Hourly and on demand (.github/workflows/stale-pr-keeper.yml). For each open pull
 3. Closes nothing. The run summary lists open pull requests with no push in 7 days (the head's first check suite, the
    GitHub record of its push; the commit date when it has none).
 
-Each re-enqueue and comment carries a hidden marker, so a later run never repeats it for the same head:
-`<!-- stale-pr-keeper:requeue <head> -->` and `<!-- stale-pr-keeper:comment <head> queue=<sha> quarantine=<hash> -->`.
+The keeper writes one comment per head, edited as things change. Its hidden marker
+`<!-- stale-pr-keeper:comment <head> queue=<sha> quarantine=<hash>[ requeued][ deferred] -->` records what it was written
+for, so a later run never repeats it, and never re-enqueues a head twice.
 GitHub calls: one GraphQL page per 50 open pull requests; then, for dropped pull requests only, one GraphQL query per 25
 for their markers, and only where the markers leave something to decide: the queue run (by the removal's merge group
 commit), its jobs, and the log of each failed job (streamed; only summary lines are kept).
@@ -50,7 +51,7 @@ PYTEST_JOB = re.compile(r"python-\d+|contracts")
 # The jobs that only report another job's failure: pr-checks.yml's required gate and its timing receipt.
 REPORTING_JOBS = {"checks", "PR job timings"}
 MARKER = re.compile(
-    r"<!-- stale-pr-keeper:(?P<kind>requeue|comment) (?P<sha>[0-9a-f]{40})"
+    r"<!-- stale-pr-keeper:comment (?P<sha>[0-9a-f]{40})"
     r"(?: queue=(?P<queue>[0-9a-f]{40}|none))?(?: quarantine=(?P<quarantine>[0-9a-f]+))?"
     r"(?P<flags>(?: requeued| deferred)*) -->"
 )
@@ -127,6 +128,7 @@ class Finding:
     job: str
     step: str
     url: str
+    attempt: int = 1
     tests: list = field(default_factory=list)  # [(pytest node id, worker crashed)]
     scripts: list = field(default_factory=list)  # browser UI scripts
     scenarios: list = field(default_factory=list)  # factory sim scenarios
@@ -173,20 +175,18 @@ def parse_prs(pages):
 
 @dataclass
 class Marker:
-    kind: str  # requeue or comment
     sha: str  # the pull request head it was written for
     comment_id: int | None = None
-    queue: str | None = None  # comment: the merge group commit it diagnosed
-    quarantine: str | None = None  # comment: quarantine_key() when it was written
-    requeued: bool = False  # comment: written after this head's re-enqueue (so its requeue marker need not be read)
-    deferred: bool = False  # comment: a flake left for a person because there was no queue token
+    queue: str | None = None  # the merge group commit it diagnosed
+    quarantine: str | None = None  # quarantine_key() when it was written
+    requeued: bool = False  # this head has been re-enqueued
+    deferred: bool = False  # a flake left for a person because there was no queue token
 
 
 def markers(comments):
     """The keeper's markers in [(comment id, body)]."""
     return [
         Marker(
-            m["kind"],
             m["sha"],
             comment_id,
             m["queue"],
@@ -270,7 +270,8 @@ UNLISTED = re.compile(r"^(?:FAILED|ERROR) (?P<name>\S+)")  # a collection error:
 RESULTS = re.compile(r"^=*\s*\d+ (?:failed|passed|errors?|skipped|xfailed|xpassed|deselected)\b")
 COUNTS = re.compile(r"(\d+) (failed|errors?)\b")
 INTERNAL = re.compile(r"^INTERNALERROR")
-CRASH = re.compile(r"worker '[^']+' crashed while running '(?P<test>[^']+)'")
+# pytest-xdist's own words, the whole line or message: a test that merely quotes them is not a crash.
+CRASH = re.compile(r"^worker 'gw\d+' crashed while running '(?P<test>[^']+)'$")
 UI_SCRIPTS = re.compile(r"^\d+ of \d+ UI scripts failed: (?P<names>.+?)(?: \(all .*\))?$")
 SIM_HEADER = re.compile(r"^== (?P<scenario>\S+) seed (?P<seed>\d+)\b")
 SIM_FAIL = re.compile(r"^\s+FAIL ")
@@ -296,7 +297,8 @@ def read_log(lines):
         if in_summary:
             hit = SUMMARY.match(line)
             if hit:
-                crashed = bool(CRASH.search(hit.group("message") or ""))
+                crash = CRASH.match(hit.group("message") or "")
+                crashed = bool(crash) and crash.group("test") == hit.group("test")
                 tests[hit.group("test")] = tests.get(hit.group("test"), True) and crashed
                 listed += 1
                 continue
@@ -311,7 +313,7 @@ def read_log(lines):
                     blockers.append(f"{counted - listed} failure(s) the summary does not list")
                 in_summary = False
             continue
-        crash = CRASH.search(line)
+        crash = CRASH.match(line)
         if crash:
             crashes.setdefault(crash.group("test"), True)
         ui = UI_SCRIPTS.match(line)
@@ -372,7 +374,8 @@ def describe(findings, tests):
         if not names:
             names = [f"{f.step} (no test named{'; log expired' if f.log_missing else ''})"]
         shown = names[:MAX_NAMED] + ([f"{len(names) - MAX_NAMED} more"] if len(names) > MAX_NAMED else [])
-        lines += [f"- {name} in [{f.job}]({f.url})" for name in shown]
+        job = f.job + (f" (attempt {f.attempt})" if f.attempt > 1 else "")
+        lines += [f"- {name} in [{job}]({f.url})" for name in shown]
     return "\n".join(lines)
 
 
@@ -383,9 +386,11 @@ REASONS = {
 }
 
 
-def comment_body(pr, findings, tests, run_url, note="", requeued=False, deferred=False):
+def comment_body(pr, findings, tests, run_url, note="", requeued=False, deferred=False, header=None):
+    """The keeper's one comment for a head. Its marker records the queue run and quarantine list it was written for,
+    and whether the head was re-enqueued (requeued) or a flake was left for a person for want of a token (deferred)."""
     why = REASONS.get(pr.removed_reason, pr.removed_reason.replace("_", " "))
-    lines = [f"The merge queue removed this: {why}."]
+    lines = [header or f"The merge queue removed this: {why}."]
     if findings:
         lines += ["", describe(findings, tests)]
     elif pr.removed_reason == "failed_checks":
@@ -401,17 +406,8 @@ def comment_body(pr, findings, tests, run_url, note="", requeued=False, deferred
 
 
 def requeue_body(pr, findings, tests, run_url):
-    return "\n".join(
-        [
-            "Back in the merge queue. The queue run failed only on flakes:",
-            "",
-            describe(findings, tests),
-            "",
-            f"Queue run: {run_url}",
-            "",
-            f"<!-- stale-pr-keeper:requeue {pr.head} -->",
-        ]
-    )
+    header = "Back in the merge queue. The queue run failed only on flakes:"
+    return comment_body(pr, findings, tests, run_url, requeued=True, header=header)
 
 
 def needs_label(pr):
@@ -480,19 +476,15 @@ class GitHub:
 
     def comments(self, heads):
         """{number: [(comment id, body)]} for each pull request in {number: head}: the last 100 comments, 25 pull
-        requests a query, and older pages one pull request at a time only while that head has no comment marker yet.
-        Every newer marker is then in hand too (a comment marker written after a re-enqueue says so, so an older requeue
-        marker is not needed). Only the keeper's own comments (the token's) count: a marker anyone else pastes is
-        ignored."""
+        requests a query, and older pages one pull request at a time only while that head has no marker yet. Only the
+        keeper's own comments (the token's) count: a marker anyone else pastes is ignored."""
         out = {}
         numbers = list(heads)
         for start in range(0, len(numbers), 25):
             for n, comments in self._comment_pages(numbers[start : start + 25]).items():
                 out[n] = [(c["databaseId"], c["body"]) for c in comments["nodes"] if c.get("viewerDidAuthor")]
                 info = comments["pageInfo"]
-                while info.get("hasPreviousPage") and not any(
-                    m.sha == heads[n] and m.kind == "comment" for m in markers(out[n])
-                ):
+                while info.get("hasPreviousPage") and not any(m.sha == heads[n] for m in markers(out[n])):
                     older = self._comment_pages([n], before=info["startCursor"])[n]
                     out[n] = [(c["databaseId"], c["body"]) for c in older["nodes"] if c.get("viewerDidAuthor")] + out[n]
                     info = older["pageInfo"]
@@ -570,12 +562,12 @@ class GitHub:
 
 
 def findings_for(gh, run):
+    """A Finding per failed step. Each failed job's log is read once, for its first failed step: any step may run pytest
+    (the Caddy leg does), and only "Run selected tests" in a pytest leg can make a flake."""
     out, read = [], set()
     for job, step in failed_jobs(gh.jobs(run["id"])):
-        attempt = job.get("run_attempt", 1)
-        name = job["name"] + (f" (attempt {attempt})" if attempt > 1 else "")
-        finding = Finding(job=name, step=step, url=job["html_url"])
-        if (step == TEST_STEP or job["name"].startswith("factory sim")) and job["id"] not in read:
+        finding = Finding(job=job["name"], step=step, url=job["html_url"], attempt=job.get("run_attempt", 1))
+        if job["id"] not in read:
             read.add(job["id"])
             found = gh.read_job_log(job["id"])
             if found is None:
@@ -586,17 +578,25 @@ def findings_for(gh, run):
     return out
 
 
-def requeue(gh, pr, body):
-    """The marker comment first, so a head is never re-enqueued twice. It is taken back only when GitHub answered with
-    a refusal; any other failure may have queued it, so its marker stays (as it does under the rate limit, when another
-    call would be refused too)."""
-    comment_id = gh.comment(pr.number, body)
+def requeue(gh, pr, body, existing=None):
+    """The requeued marker first, so a head is never re-enqueued twice: written into the head's comment, `existing`
+    (comment id, body) when there is one. It is taken back only when GitHub answered with a refusal; any other failure
+    may have queued it, so it stays (as it does under the rate limit, when another call would be refused too)."""
+    if existing:
+        gh.edit_comment(existing[0], body)
+    else:
+        comment_id = gh.comment(pr.number, body)
     try:
         gh.enqueue(pr.number, pr.head)
     except subprocess.CalledProcessError as error:
         if not isinstance(error, RateLimited) and REFUSED.search(error.stderr or ""):
             try:
-                gh.delete_comment(comment_id)
+                if existing:
+                    gh.edit_comment(*existing)
+                else:
+                    gh.delete_comment(comment_id)
+            except RateLimited:
+                raise
             except subprocess.CalledProcessError:
                 pass  # the marker stays: this head is not re-enqueued again, and the error below says why
         raise
@@ -658,8 +658,8 @@ def keep(gh, tests, now, dry_run=False):
             done["errors"].append(f"#{pr.number}: not read (rate limit)")
             continue
         mine = [m for m in markers(seen.get(pr.number, [])) if m.sha == pr.head]
-        requeued = any(m.kind == "requeue" or m.requeued for m in mine)
-        comment = next((m for m in reversed(mine) if m.kind == "comment"), None)
+        comment = mine[-1] if mine else None
+        requeued = any(m.requeued for m in mine)
         current = (
             comment is not None
             and comment.queue == (pr.queue_commit or "none")
@@ -685,7 +685,8 @@ def keep(gh, tests, now, dry_run=False):
         is_flake = flaky(findings, tests)
         if is_flake and not requeued and pr.mergeable != "CONFLICTING" and gh.can_enqueue:
             body = requeue_body(pr, findings, tests, run_url)
-            act("requeued", pr, lambda pr=pr, body=body: requeue(gh, pr, body))
+            existing = (comment.comment_id, dict(seen[pr.number])[comment.comment_id]) if comment else None
+            act("requeued", pr, lambda pr=pr, body=body, existing=existing: requeue(gh, pr, body, existing))
             continue
         note, deferred = "", False
         if requeued:

@@ -53,8 +53,12 @@ RUNS = {
 }
 
 
-def comment_marker(head, queue, tests=QUARANTINE):
-    return f"<!-- stale-pr-keeper:comment {head} queue={queue} quarantine={keeper.quarantine_key(tests)} -->"
+def comment_marker(head, queue, tests=QUARANTINE, flags=""):
+    return f"<!-- stale-pr-keeper:comment {head} queue={queue} quarantine={keeper.quarantine_key(tests)}{flags} -->"
+
+
+def requeued_marker(head, queue, tests=QUARANTINE):
+    return comment_marker(head, queue, tests, " requeued")
 
 
 class FakeGitHub:
@@ -176,6 +180,15 @@ def summary(*lines, results="1 failed, 3 passed in 1.0s"):
     return [f"{line}\n" for line in (header, *lines, results)]
 
 
+def test_a_test_that_only_quotes_a_worker_crash_is_not_a_crash():
+    quote = f"worker 'gw3' crashed while running '{CRASHED}'"
+    tests, _, _ = keeper.read_log(summary(f"FAILED {CRASHED} - AssertionError: {quote}"))
+    assert tests == [(CRASHED, False)]
+    other = "backend/tests/test_x.py::test_y"
+    assert keeper.read_log(summary(f"FAILED {other} - {quote}"))[0] == [(other, False)]  # another test's crash
+    assert keeper.read_log([f"E   AssertionError: {quote}\n"])[0] == []  # test output, not xdist's line
+
+
 def test_a_parameter_id_holding_a_dash_is_read_whole():
     test = "backend/tests/test_x.py::test_split[a - b]"
     assert keeper.read_log(summary(f"FAILED {test} - AssertionError: x - y"))[0] == [(test, False)]
@@ -252,6 +265,29 @@ def test_a_partial_rerun_keeps_the_failures_it_did_not_rerun():
     rerun = attempt([j for j in first if j["name"] == "python-5"], 2, id=100)
     failed = [(job["name"], job["run_attempt"]) for job, _ in keeper.failed_jobs(first + rerun)]
     assert failed == [("python-5", 1), ("browser-1", 1), ("python-5", 2)]
+
+
+def test_a_rerun_that_failed_only_on_flakes_again_is_still_re_enqueued():
+    gh = FakeGitHub()
+    real = gh.jobs
+    gh.jobs = lambda run_id: (
+        attempt(real(run_id), 1) + [{**job, "id": f"{job['id']}-2"} for job in attempt(real(run_id), 2)]
+    )
+    run(gh)
+    calls = written_to(gh, 2984)
+    assert [c[0] for c in calls] == ["comment", "enqueue"]
+    assert "[python-5 (attempt 2)]" in calls[0][2]
+
+
+def test_a_failure_in_a_step_that_runs_pytest_names_its_test_but_is_never_a_flake():
+    caddy = "Actual pinned Linux Caddy runtime and lifecycle"
+    gh = FakeGitHub()
+    gh.jobs = lambda run_id: [
+        {**job, "id": f"{run_id}:{job['id']}"} for job in jobs_with("caddy-linux-amd64", failing_step=caddy)
+    ]
+    run(gh)
+    (call,) = written_to(gh, 2984)
+    assert call[0] == "comment" and f"`{RECRUITING}` (quarantined) in [caddy-linux-amd64]" in call[2]
 
 
 def test_every_failed_step_of_a_job_counts():
@@ -347,7 +383,7 @@ def test_a_quarantined_failure_is_re_enqueued_at_its_head_with_its_marker_first(
     assert ok
     calls = written_to(gh, 2984)
     assert [c[0] for c in calls] == ["comment", "enqueue"]
-    assert f"<!-- stale-pr-keeper:requeue {sha('a')} -->" in calls[0][2]
+    assert requeued_marker(sha("a"), sha("1")) in calls[0][2]
     assert f"`{RECRUITING}` (quarantined)" in calls[0][2]
     assert calls[1] == ("enqueue", 2984, sha("a"))  # gh pr merge --match-head-commit: a newer push is not queued
     assert "#2984" in text.split("### Re-enqueued")[1].split("###")[0]
@@ -367,7 +403,7 @@ def test_without_a_queue_token_a_flake_is_commented_with_the_command_and_its_one
     assert gh.writes("enqueue") == []
     (call,) = written_to(gh, 2984)
     assert "Only flakes failed. Re-enqueue it: `gh pr merge 2984`." in call[2]
-    assert "stale-pr-keeper:requeue" not in call[2]
+    assert not keeper.markers([(1, call[2])])[0].requeued
 
 
 def test_a_real_failure_gets_one_comment_naming_the_test_and_no_enqueue():
@@ -402,11 +438,22 @@ def test_a_comment_on_an_older_head_does_not_count():
     assert [c[0] for c in written_to(gh, 2966)] == ["comment"]
 
 
-def test_a_test_quarantined_after_the_comment_gets_its_head_re_enqueued():
+def test_a_test_quarantined_after_the_comment_gets_its_head_re_enqueued_in_the_same_comment():
     # #2966 was commented on before the recruiting test was quarantined.
     gh = FakeGitHub(comments={2966: [comment_marker(sha("c2"), sha("7a"), set())]})
     run(gh)
-    assert [c[0] for c in written_to(gh, 2966)] == ["comment", "enqueue"]
+    assert [c[0] for c in written_to(gh, 2966)] == ["enqueue"]
+    (edit,) = gh.writes("edit_comment")
+    assert edit[1] == 2966000 and requeued_marker(sha("c2"), sha("7a")) in edit[2]
+    assert gh.calls.index(edit) < gh.calls.index(("enqueue", 2966, sha("c2")))  # the marker first
+
+
+def test_a_refused_enqueue_puts_the_existing_comment_back():
+    old = comment_marker(sha("c2"), sha("7a"), set())
+    gh = FakeGitHub(comments={2966: [old]}, fail={"enqueue"})
+    _, ok = run(gh)
+    assert not ok
+    assert [c[1:] for c in gh.writes("edit_comment") if c[1] == 2966000][-1] == (2966000, old)
 
 
 def test_a_new_queue_run_of_the_same_head_updates_the_comment_instead_of_adding_one():
@@ -418,35 +465,20 @@ def test_a_new_queue_run_of_the_same_head_updates_the_comment_instead_of_adding_
     assert "#2966 Mail from the source: updated" in text
 
 
-def test_a_second_flake_on_the_same_head_is_commented_not_re_enqueued():
-    gh = FakeGitHub(comments={2953: [f"<!-- stale-pr-keeper:requeue {sha('d3')} -->"]})
-    run(gh)
-    (call,) = written_to(gh, 2953)
-    assert call[0] == "comment"
-    assert "Already re-queued once for this commit" in call[2]
-    assert f"`{CRASHED}` (worker crashed)" in call[2]
-
-
-def test_a_comment_written_after_a_requeue_says_so_without_the_older_requeue_marker():
-    # The requeue marker may be out of sight; the comment marker carries it. A new queue run is diagnosed, not requeued.
-    gh = FakeGitHub(comments={2953: [comment_marker(sha("d3"), sha("0"), set()).replace(" -->", " requeued -->")]})
+def test_a_head_dropped_again_after_its_requeue_is_diagnosed_in_the_same_comment_and_not_re_enqueued():
+    # #2953 was re-enqueued after queue run 0; the queue dropped it again (8a), a crash again.
+    gh = FakeGitHub(comments={2953: [requeued_marker(sha("d3"), sha("0"))]})
     run(gh)
     assert written_to(gh, 2953) == []
     (edit,) = gh.writes("edit_comment")
     assert edit[1] == 2953000 and "Already re-queued once for this commit" in edit[2]
-
-
-def test_a_requeued_head_s_comment_marker_records_the_requeue():
-    gh = FakeGitHub(comments={2953: [f"<!-- stale-pr-keeper:requeue {sha('d3')} -->"]})
-    run(gh)
-    (call,) = written_to(gh, 2953)
-    (marker,) = keeper.markers([(1, call[2])])
-    assert marker.kind == "comment" and marker.requeued and marker.queue == sha("8a")
+    assert f"`{CRASHED}` (worker crashed)" in edit[2]
+    (marker,) = keeper.markers([(1, edit[2])])
+    assert marker.requeued and marker.queue == sha("8a")
 
 
 def test_a_requeued_head_is_never_re_enqueued_again_when_the_quarantine_changes():
-    # The comment marker says re-queued (its requeue marker is out of sight) and the recruiting test is quarantined now.
-    gh = FakeGitHub(comments={2966: [comment_marker(sha("c2"), sha("7a"), set()).replace(" -->", " requeued -->")]})
+    gh = FakeGitHub(comments={2966: [requeued_marker(sha("c2"), sha("7a"), set())]})
     run(gh)
     assert written_to(gh, 2966) == []
     (edit,) = gh.writes("edit_comment")
@@ -463,24 +495,14 @@ def test_without_a_queue_token_the_flake_comment_is_marked_deferred_and_requeued
     assert written_to(again, 2984) == [] and again.writes("edit_comment") == []
     later = FakeGitHub(comments={2984: [call[2]]})
     run(later)
-    assert [c[0] for c in written_to(later, 2984)] == ["comment", "enqueue"]
+    assert [c[0] for c in written_to(later, 2984)] == ["enqueue"]
+    (edit,) = later.writes("edit_comment")
+    marker = keeper.markers([(1, edit[2])])[0]
+    assert marker.requeued and not marker.deferred
 
 
-def test_a_diagnosed_then_quarantined_then_requeued_head_gets_its_next_failure_diagnosed():
-    # #2966: commented on queue run 7a, then requeued once its test was quarantined; the queue dropped it again (6a).
-    gh = FakeGitHub(
-        comments={2966: [comment_marker(sha("c2"), sha("55"), set()), f"<!-- stale-pr-keeper:requeue {sha('c2')} -->"]}
-    )
-    run(gh)
-    assert all(c[1] != 2966 for c in gh.writes("enqueue"))
-    (edit,) = gh.writes("edit_comment")
-    assert edit[1] == 2966000 and "Already re-queued once for this commit" in edit[2]
-
-
-def test_a_requeued_and_commented_head_is_done():
-    gh = FakeGitHub(
-        comments={2953: [f"<!-- stale-pr-keeper:requeue {sha('d3')} -->", comment_marker(sha("d3"), sha("8a"))]}
-    )
+def test_a_requeued_head_whose_comment_is_current_is_done():
+    gh = FakeGitHub(comments={2953: [requeued_marker(sha("d3"), sha("8a"))]})
     run(gh)
     assert written_to(gh, 2953) == [] and gh.writes("edit_comment") == []
     assert ("queue_run", sha("8a")) not in gh.calls
@@ -584,6 +606,13 @@ def test_a_rate_limited_enqueue_keeps_its_marker_and_stops_the_run():
     gh = FakeGitHub(limited={"enqueue"})
     text, ok = run(gh)
     assert not ok and not any(c[0] == "delete_comment" for c in gh.calls)
+    assert written_to(gh, 3060) == [] and "#3060: not read (rate limit)" in text
+
+
+def test_a_rate_limit_while_taking_a_refused_marker_back_stops_the_run():
+    gh = FakeGitHub(fail={"enqueue"}, limited={"delete_comment"})
+    text, ok = run(gh)
+    assert not ok and "#2984 requeued: HTTP 403: API rate limit exceeded" in text
     assert written_to(gh, 3060) == [] and "#3060: not read (rate limit)" in text
 
 
@@ -710,30 +739,13 @@ def test_comments_page_back_until_the_heads_marker_is_found(monkeypatch):
     out = keeper.GitHub("ticoteam/tico").comments({1: head, 2: sha("b")})
     assert len(seen) == 2  # the second page had the marker: the third is never read
     assert 'before: "c1"' in seen[1][4]
-    assert len(out[1]) == 200 and [m.kind for m in keeper.markers(out[1])] == ["comment"]
+    assert len(out[1]) == 200 and len(keeper.markers(out[1])) == 1
     assert out[2] == [(2000, "x")]
-
-
-def test_comments_page_back_past_a_requeue_marker_to_the_heads_comment(monkeypatch):
-    head = sha("a")
-    replies = [
-        {"data": {"repository": comments_page(1, [f"<!-- stale-pr-keeper:requeue {head} -->"], previous="c1")}},
-        {"data": {"repository": comments_page(1, [comment_marker(head, sha("1"))])}},
-    ]
-    seen = []
-
-    def fake_run(args, **_):
-        seen.append(args)
-        return subprocess.CompletedProcess(args, 0, stdout=json.dumps(replies[len(seen) - 1]))
-
-    monkeypatch.setattr(keeper.subprocess, "run", fake_run)
-    out = keeper.GitHub("ticoteam/tico").comments({1: head})
-    assert len(seen) == 2 and [m.kind for m in keeper.markers(out[1])] == ["comment", "requeue"]
 
 
 def test_only_the_keepers_own_comments_count(monkeypatch):
     head = sha("a")
-    page = comments_page(1, [f"<!-- stale-pr-keeper:requeue {head} -->", "mine"])
+    page = comments_page(1, [requeued_marker(head, sha("1")), "mine"])
     page["pr1"]["comments"]["nodes"][0]["viewerDidAuthor"] = False  # pasted by someone else
     monkeypatch.setattr(keeper.subprocess, "run", completed(json.dumps({"data": {"repository": page}})))
     assert keeper.GitHub("ticoteam/tico").comments({1: head}) == {1: [(1001, "mine")]}
