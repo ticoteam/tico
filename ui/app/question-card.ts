@@ -33,7 +33,7 @@ function qcardSub(it) {
   return [qcardAge(it.ask?.created_at || it.created_at), held].filter(Boolean).join(' · ');
 }
 // The picks ticked when the card opens: the recommended ones.
-const qcardRecommended = q => new Set((q.options || []).map((o, i) => o.recommended ? i : -1).filter(i => i >= 0));
+const qcardRecommended = (q): Set<number> => new Set((q.options || []).map((o, i) => o.recommended ? i : -1).filter(i => i >= 0));
 const qcardThen = text => text ? `<span class="qc-then">${esc(text)}</span>` : '';
 // A button's "what happens" line: the asker's own, else what is true of every answer, that the asker hears it (a
 // Yes / No asked with no options, or a person's question, has none of its own).
@@ -90,7 +90,7 @@ function qcardSpendHTML(it) {
 
 // The question, its why line and its picks. `attr` names the data attribute its buttons carry (Decide's `dc`, the
 // task page's `qc`); `ticked` is the set of ticked picks; `pic(o)` draws an option's picture, when the page has one.
-function qcardBodyHTML(it, q, {attr = 'qc', ticked = qcardRecommended(q), pic = () => ''} = {}) {
+function qcardBodyHTML(it, q, {attr = 'qc', ticked = qcardRecommended(q), pic = () => ''}: {attr?: string; ticked?: Set<number>; pic?: (o: unknown) => string} = {}) {
   const why = String(it.why || q.why || '').trim(), review = qcardReview(it);
   let picks = '';
   if (review?.pick) picks = qcardReviewPicksHTML(it, q, review, attr);

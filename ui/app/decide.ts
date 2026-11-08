@@ -75,18 +75,7 @@ interface DecOther {
   q?: undefined;
 }
 /** A task file as tfNorm (task-files.ts) keeps it for the card. */
-interface DecFile {
-  name: string;
-  mime?: string;
-  archived?: boolean;
-  versions: DecFileVersion[];
-}
-interface DecFileVersion {
-  n: number;
-  url: string;
-  mime?: string;
-  size?: number;
-}
+type DecFile = TfFile;
 /** A task comment as the card reads it (a note, a say, an ask). */
 interface DecComment {
   kind?: string;
@@ -97,9 +86,8 @@ interface DecComment {
   refs?: { note?: unknown } | null;
 }
 /** The frozen email an approval to send shows (`email_send_id`). */
-interface DecEmail {
-  preview_complete?: boolean;
-  send: { content_sha256?: string | null };
+interface DecEmail extends EmailSendPreview {
+  send: EmailSendPreviewSend;
 }
 /** What a card has read for its item: a task's files and comments, or a frozen email; `error` when that read failed. */
 interface DecData {
@@ -146,7 +134,7 @@ interface DecState {
   ticks: Map<string, Set<number>>;
   off: (() => void)[];
   fromList: boolean;
-  opener?: Element | null;
+  opener?: HTMLElement | null;
   shown?: string | null;
   busy?: boolean;
   lockUntil?: number;
@@ -338,7 +326,7 @@ function decideOpen(key: string = ''): boolean {
     const keys = (ev: KeyboardEvent) => decideKey(st, ev);
     document.addEventListener('keydown', keys);
     st.off.push(() => document.removeEventListener('keydown', keys));
-    st.opener = document.activeElement;
+    st.opener = document.activeElement as HTMLElement | null;
   }
   st.at = to;
   if (TASKS_ST && $('#task-peek')?.open) taskPeekClose(TASKS_ST);
@@ -365,7 +353,7 @@ function decideStop() {
   if (history.state?.needCard && !DEC_BACK) { DEC_BACK = true; history.back(); }
   needsListsRedraw();
   // Back to where the card was opened from, or the row of the card last shown.
-  const row = st.at && document.querySelector<HTMLElement>(`[data-need-card="${CSS.escape(st.at)}"]`);
+  const row = st.at ? document.querySelector<HTMLElement>(`[data-need-card="${CSS.escape(st.at)}"]`) : null;
   const to = st.opener?.isConnected ? st.opener : row?.querySelector<HTMLElement>('.tl-open') || row;
   to?.focus?.({preventScroll: true});
 }
@@ -508,11 +496,12 @@ function decideRender(st: DecState, enter = false) {
   // A card the note goes with: a comment on a task, a note with a decision, the answer to a question.
   const note = c.type === 'stale' ? '' : `<div class="dc-note"><textarea rows="1" maxlength="4000" aria-label="${decide ? 'Note' : 'Comment'}" placeholder="${decide ? 'Add a note' : 'Add a comment'}"></textarea>
       ${decide ? '' : `<button type="button" class="dc-send" data-dc="comment" aria-label="Send comment" title="${DC_SEND_WHY}" disabled>${ICON_SEND}</button>`}</div>`;
+  const due = decideDue(c.it);
   stage.innerHTML = `<article class="dc-card${enter ? ' in' : ''}" data-key="${esc(c.key)}">
     <div class="dc-who">${face}
       <div class="dc-who-text"><div class="dc-who-name">${chat ? `<a class="dc-who-link" href="${esc(chat)}" title="${esc(`Open ${name}`)}">${esc(name)}</a>` : esc(name)}${origin ? `<span class="dc-origin"> · ${esc(origin)}</span>` : ''}</div>
         <div class="dc-who-sub">${esc(sub)}</div></div>
-      ${decideDue(c.it) ? `<span class="tl-due${decideDue(c.it).late ? ' late' : ''}">${esc(decideDue(c.it).words)}</span>` : ''}
+      ${due ? `<span class="tl-due${due.late ? ' late' : ''}">${esc(due.words)}</span>` : ''}
       <span class="pill needs">${esc(chip)}</span>${fbButtonsHTML(decideFeedbackKey(c), {fixed: true})}</div>
     <div class="dc-body"></div>${note}
   </article>`;
@@ -562,7 +551,7 @@ function decideStalePaint(st: DecState) {
 }
 const decideTwo = (c: DecCard): boolean => c.type === 'pick' && !c.q.multi && c.q.options.length === 2;
 // Yes / No reads No, Yes like an approval: the affirmative on the right.
-const decideYesNo = (c: DecCard) => decideTwo(c) && c.q.options.map(o => String(o.label).toLowerCase()).join() === 'yes,no';
+const decideYesNo = (c: DecCard) => c.type === 'pick' && decideTwo(c) && c.q.options.map(o => String(o.label).toLowerCase()).join() === 'yes,no';
 const decideRecommends = (c: DecCard) => c.type === 'task' && !!c.it.recommend?.ask;
 function decideActionsHTML(c: DecCard): string {
   const k = (key: string) => `<kbd>${key}</kbd>`;
@@ -596,7 +585,7 @@ function decidePickHTML(st: DecState, c: DecPick): string {
     + qcardFallbackHTML(c.it) + qcardDetailsHTML(c.it, c.q);
 }
 // Several picks: the ones ticked on this card, the recommended ones until the person changes them.
-function decideTicked(st: DecState | null | undefined, c: DecCard | undefined): Set<number> {
+function decideTicked(st: DecState | null | undefined, c: DecCard | null | undefined): Set<number> {
   if (!st || c?.type !== 'pick' || !c.q.multi) return new Set();
   if (!st.ticks.has(c.key)) st.ticks.set(c.key, qcardRecommended(c.q));
   return st.ticks.get(c.key)!;
@@ -873,7 +862,8 @@ async function decideSend(st: DecState | null, p: DecPending) {
     decideSave();
     needsListsRedraw();
     if (!st) return;                            // sent again from an earlier page: nothing on screen to put back
-    const changed = err.status === 409 || err.body?.error?.code === 'version_conflict';
+    const cerr = err.body?.error;
+    const changed = err.status === 409 || typeof cerr === 'object' && cerr.code === 'version_conflict';
     needsSay(changed ? 'That task changed. Look again.' : err.message, true);
     st.data.delete(String(p.key).replace(/^task:/, ''));
     if (DEC === st) {
