@@ -3049,6 +3049,10 @@ class LimitRetry(Contract):
     pass
 
 
+class CompanyPause(Contract):
+    """Pause or resume every bot on the team. No fields: the one company pause on record is the whole state."""
+
+
 class StopTurn(Contract):
     run_id: ID | None = None  # the run the person saw; a newer one is not stopped by mistake
     redirect: ID | None = None  # the caller's queued message the next turn starts with (Stop and redirect)
