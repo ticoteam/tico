@@ -21,6 +21,7 @@ Nothing here reads a table directly: the store layer (store/ap.py, store/attribu
 
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
+from typing import Any
 
 from . import attribution as ATTR
 from . import platform_share as PS
@@ -231,3 +232,35 @@ def campaigns_visible(ctx: Ctx, viewer: str, owners: Iterable[Owner], first: str
             if (platform, team, mate) in attributed:
                 seen.add(owner)
     return seen
+
+
+def feed_rows_visible(ctx: Ctx, viewer: str, feed_ids: Iterable[str]) -> set[str]:
+    """The bank and card rows of these ids the viewer sees: the rule the feed tab applies (their money account or card, and
+    not a private line the viewer has no full detail for)."""
+    from .banking import seen
+    from .tab import private_feed
+
+    ids = sorted({str(x) for x in feed_ids if x})
+    if not ids:
+        return set()
+    view = ctx.view(viewer)
+    if view.everything:
+        return set(ids)
+    marks = ",".join("?" * len(ids))
+    rows = [
+        r
+        for r in ctx.c.execute(f"SELECT * FROM fin_feed_txns WHERE id IN ({marks})", ids).fetchall()
+        if seen(ctx, viewer, r)
+    ]
+    return {str(r["id"]) for r in rows} - private_feed(ctx, view, rows)
+
+
+def receipts_visible(ctx: Ctx, viewer: str, rows: Sequence[Any]) -> set[str]:
+    """The receipts (fin_receipts rows) the viewer sees: all of them for a full-detail reader; otherwise the ones they
+    uploaded, and the ones matched to a bank or card row they see (receipts.py). A listing shows a match only when the
+    viewer sees its feed row."""
+    if ctx.view(viewer).everything:
+        return {str(r["id"]) for r in rows}
+    own = {str(r["id"]) for r in rows if str(r["created_by"]) == viewer}
+    shown = feed_rows_visible(ctx, viewer, [str(r["match_feed_id"]) for r in rows if r["match_feed_id"]])
+    return own | {str(r["id"]) for r in rows if r["match_feed_id"] and str(r["match_feed_id"]) in shown}

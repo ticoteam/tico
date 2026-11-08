@@ -12262,6 +12262,7 @@ FINANCE_SEARCH = [
     "project",
     "vendor",
     "campaign",
+    "receipt",
 ]
 FINANCE_INBOX = [
     "uncategorized",
@@ -12486,8 +12487,10 @@ def _fin_paged(api, path, query, key, budget):
     "Search the books you may see: entries, bank and card rows, bills, invoices, contacts, "
     "rules and cards (each card with the vendor accounts it is saved on). account finds the chart's lines by code or "
     "name, with their ids, for categorize, bill_create and rule_create. campaign finds an ad campaign by name with its "
-    "owner and the month's spend, clicks and conversions (month: YYYY-MM, default this month). Name a kind to page with "
-    "cursor; without one you get the first few of each kind (not accounts, vendors or campaigns: name that kind).",
+    "owner and the month's spend, clicks and conversions (month: YYYY-MM, default this month). receipt finds a receipt by "
+    "its file name or vendor, with what it reads as and its suggested or filed match (status: unread, suggested, "
+    "unmatched, attached or rejected). Name a kind to page with cursor; without one you get the first few of each kind "
+    "(not accounts, vendors, campaigns or receipts: name that kind).",
     {
         "kind": _s("What to search", enum=FINANCE_SEARCH),
         "q": _s("Words to match"),

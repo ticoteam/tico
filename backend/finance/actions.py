@@ -28,6 +28,7 @@ from . import (
     handlers,
     jobs,
     mirror,
+    receipts,
     payments,
 )
 from . import prepaids, purchasing, topups
@@ -142,6 +143,7 @@ PLANNERS: dict[str, handlers.Planner] = {
     **topups.PLANNERS,
     **attribution.PLANNERS,
     **campaigns.PLANNERS,
+    **receipts.PLANNERS,
     **vendors.PLANNERS,
 }
 assert set(PLANNERS) == set(K.LIVE)
@@ -1127,6 +1129,7 @@ DEV_COPY_KEPT = (
     "fin_invoice_reminders",
     "fin_ad_accounts",
     "fin_ad_campaigns",
+    "fin_receipts",
     "fin_ad_spends",
     "fin_ad_warnings",
     "fin_attributions",

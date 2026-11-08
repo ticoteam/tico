@@ -5174,6 +5174,15 @@ STABLE.extend(
             "FinanceCampaigns",
         ),
         (
+            "/api/v2/finance/receipts",
+            "get",
+            "Finance",
+            "listFinanceReceipts",
+            "The receipts the caller sees, newest first: each Library file with what it reads as (amount, date, vendor) and "
+            "its suggested or filed bank or card row; ?status= narrows them, and a cursor pages them",
+            "FinanceReceipts",
+        ),
+        (
             "/api/v2/finance/ad-accounts",
             "get",
             "Finance",
@@ -6356,6 +6365,39 @@ SCHEMAS.update(
                 "as_of": "s",
             },
             required=["month", "campaigns", "totals", "as_of"],
+        ),
+        "FinanceReceipts": obj(
+            {
+                "rows": items(
+                    obj(
+                        {
+                            "id": "s",
+                            "file": obj({"id": "s", "name": "s"}),
+                            "read": obj(
+                                {
+                                    "amount": {"type": ["integer", "null"]},
+                                    "date": {"type": ["string", "null"]},
+                                    "vendor": {**obj({"id": "s", "name": "s"}), "type": ["object", "null"]},
+                                }
+                            ),
+                            "match": {
+                                **obj(
+                                    {
+                                        "feed": obj({"id": "s", "date": "s", "amount": "i", "description": "s"}),
+                                        "confidence": {"type": ["number", "null"]},
+                                    }
+                                ),
+                                "type": ["object", "null"],
+                            },
+                            "status": "s",
+                            "as_of": "s",
+                        }
+                    )
+                ),
+                "next": {"type": ["string", "null"]},
+                "as_of": "s",
+            },
+            required=["rows", "next", "as_of"],
         ),
         "FinanceMetric": obj(
             {
