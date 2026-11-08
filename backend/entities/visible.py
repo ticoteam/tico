@@ -25,7 +25,6 @@ from typing import Any, cast
 
 from backend import mailbox_access as MA
 from backend.finance import context as FC
-from backend.finance.core import view as VW
 from backend.finance.visible import named_all_time
 
 SYSTEM = "system"
@@ -61,7 +60,7 @@ def actor_key(c: sqlite3.Connection, who: object) -> str:
     return ""
 
 
-def _finance(c: sqlite3.Connection, actor: str) -> tuple[FC.Ctx, VW.View] | None:
+def _finance(c: sqlite3.Connection, actor: str) -> tuple[FC.Ctx, Any] | None:
     """(ctx, view) for this reader when Finance is set up, else None."""
     if not FC.is_set_up(c):
         return None
@@ -73,7 +72,7 @@ def _mailboxes(c: sqlite3.Connection, r: Reader, fin: object) -> tuple[str, ...]
     return tuple(sorted(str(m["id"]) for m in _mailbox_rows(c, r.actor) if m.get("id")))
 
 
-def _finance_book(c: sqlite3.Connection, r: Reader, fin: tuple[FC.Ctx, VW.View] | None) -> tuple[str, ...] | None:
+def _finance_book(c: sqlite3.Connection, r: Reader, fin: tuple[FC.Ctx, Any] | None) -> tuple[str, ...] | None:
     if fin is None:
         return ()
     ctx, view = fin

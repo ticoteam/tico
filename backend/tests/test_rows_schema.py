@@ -83,6 +83,20 @@ TABLES = {
     rows.SkillSuggestionRow: "skill_suggestions",
     rows.SkillDeviceRow: "skill_devices",
     rows.SkillDeviceCodeRow: "skill_device_codes",
+    rows.EntityActivityRow: "entity_activities",
+    rows.EntityAttributeRow: "entity_attributes",
+    rows.EntityConnectionRow: "entity_connections",
+    rows.EntityExternalRefRow: "entity_external_refs",
+    rows.EntityMentionRow: "entity_mentions",
+    rows.EntityMergeRow: "entity_merges",
+    rows.EntityNoteRow: "entity_notes",
+    rows.EntitySourceRow: "entity_sources",
+    rows.EntitySuppressionRow: "entity_suppressions",
+    rows.EntityTypeRow: "entity_types",
+    rows.EntityValueHistoryRow: "entity_value_history",
+    rows.EntityValueRow: "entity_values",
+    rows.EntityViewRow: "entity_views",
+    rows.LinkTypeRow: "link_types",
 }
 
 
