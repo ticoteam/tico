@@ -8,6 +8,7 @@
   confidence high/medium/low -> 0.9/0.6/0.3 (REAL).
 - market_entity_keys -> entity_identifiers: one row per name, domain or alias, with its kind inferred from the text. Not
   unique: a shared inbox or a parent and subsidiary on one domain is real, and a lookup that hits two entities is ambiguous.
+  The id is an INTEGER PRIMARY KEY, so the same data gives the same ids (the demo builds the same company twice).
 - market_watches -> entity_watches (columns unchanged).
 - market_fts is rebuilt on stable rowids: an entity's seq, an evidence row's fts_rowid (a negative number, so the two never
   meet). The delete triggers name a row by that rowid instead of scanning kind and ref.
@@ -113,7 +114,7 @@ LINK_INDEXES = (
     "CREATE INDEX IF NOT EXISTS entity_links_key_pair ON entity_links(link_key, from_entity_id, to_entity_id)",
 )
 IDENTIFIERS = """CREATE TABLE entity_identifiers_next (
-  id TEXT PRIMARY KEY,
+  id INTEGER PRIMARY KEY,
   entity_id TEXT NOT NULL,
   kind TEXT NOT NULL,
   value TEXT NOT NULL,
@@ -202,8 +203,8 @@ def _identifier_rows(ref):
 
 def _sync_insert(ref):
     return (
-        "INSERT INTO entity_identifiers (id, entity_id, kind, value, normalized_value, primary_identifier) "
-        f"SELECT 'idn_' || lower(hex(randomblob(8))), {ref}.id, kind, key, key, prim FROM ({_identifier_rows(ref)})"
+        "INSERT INTO entity_identifiers (entity_id, kind, value, normalized_value, primary_identifier) "
+        f"SELECT {ref}.id, kind, key, key, prim FROM ({_identifier_rows(ref)}) ORDER BY key"
     )
 
 
@@ -261,12 +262,12 @@ def up(conn):
     # Identifiers are copied from market_entity_keys (key, entity_id): the kind comes from the text, a domain from the
     # entity's domain, and primary marks the entity's own name or domain.
     identifiers_copy = (
-        "INSERT INTO entity_identifiers_next (id, entity_id, kind, value, normalized_value, primary_identifier) "
-        "SELECT 'idn_' || lower(hex(randomblob(8))), k.entity_id, "
+        "INSERT INTO entity_identifiers_next (entity_id, kind, value, normalized_value, primary_identifier) "
+        "SELECT k.entity_id, "
         "CASE WHEN EXISTS (SELECT 1 FROM entities e WHERE e.id = k.entity_id AND e.primary_domain = k.key) "
         f"THEN 'domain' ELSE {_infer('k.key')} END, k.key, k.key, "
         "CASE WHEN EXISTS (SELECT 1 FROM entities e WHERE e.id = k.entity_id AND (e.name_key = k.key "
-        "OR e.primary_domain = k.key)) THEN 1 ELSE 0 END FROM entity_identifiers k"
+        "OR e.primary_domain = k.key)) THEN 1 ELSE 0 END FROM entity_identifiers k ORDER BY k.entity_id, k.key"
     )
     _rebuild(conn, "entity_identifiers", IDENTIFIERS, identifiers_copy, IDENTIFIER_INDEXES)
 
