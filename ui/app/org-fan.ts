@@ -38,6 +38,11 @@ function orgFanChatBots(current: string | undefined): OrgFanBot[] {
     .map(slug => ({slug, recent: true, n: needsMeCount(slug)}));
 }
 let ORG_FAN_FROM: HTMLElement | null = null;
+// The "Your branch" mark for a bot row; no row (botRow found nothing) means no mark, where orgBranchMark would throw.
+function orgFanBranchMark(slug: string): string {
+  const row = botRow(slug);
+  return row ? orgBranchMark(row) : '';
+}
 function orgFanOpen(opts: {chat?: string; anchor?: Element | null} = {}) {
   const fan = $('#org-fan');
   clearTimeout(ORG_FAN_HIDE);        // a close just before (a back navigation) must not hide it again
@@ -45,7 +50,7 @@ function orgFanOpen(opts: {chat?: string; anchor?: Element | null} = {}) {
   const bots = chat ? orgFanChatBots(opts.chat) : orgFanBots();
   if (!bots.length && !chat) { searchOpen(); return; }  // nothing recent and nothing waiting: pick one
   const item = (b: OrgFanBot, i: number) => `<li><button class="org-fan-item" type="button" role="menuitem" data-org-bot="${esc(b.slug)}" style="--i:${i}">
-      ${avatar(b.slug, 34)}<span>${empName(b.slug)}</span>${orgBranchMark(botRow(b.slug))}${treeLimitMark(b.slug)}${b.n ? `<span class="org-fan-badge" aria-label="${b.n} need you">${b.n}</span>` : ''}</button></li>`;
+      ${avatar(b.slug, 34)}<span>${empName(b.slug)}</span>${orgFanBranchMark(b.slug)}${treeLimitMark(b.slug)}${b.n ? `<span class="org-fan-badge" aria-label="${b.n} need you">${b.n}</span>` : ''}</button></li>`;
   // In a chat the bottom bar is hidden, so a menu button left of Search is the way back to the side menu.
   const search = (i: number) => `<li class="org-fan-row"><button class="org-fan-item org-fan-menu" type="button" role="menuitem" data-org-menu aria-label="Open menu" aria-controls="side" aria-expanded="false" style="--i:${i}">
       <span class="nav-icon org-fan-search-icon" aria-hidden="true">menu</span></button><button class="org-fan-item org-fan-search" type="button" role="menuitem" data-org-search style="--i:${i}">

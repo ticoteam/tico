@@ -5,12 +5,12 @@
 
 const RD_GOALS = '#/strategy/goals', RD_ORG = '#/strategy/org', RD_BUDGET = '#/strategy/budget';
 const RD_LISTENING = '#/strategy/market/listening', RD_AUTOMATIONS = '#/automations';
-const rdUnder = (r, base) => r === base || r.startsWith(base + '/') || r.startsWith(base + '?');
+const rdUnder = (r: string, base: string): boolean => r === base || r.startsWith(base + '/') || r.startsWith(base + '?');
 // Where Goals lives: a Strategy tab.
 const goalsBase = () => RD_GOALS;
 
 // One "?" per panel: the explanation a row would otherwise carry, on hover, focus or tap.
-const helpBubble = (text, attrs = '') => `<span class="rd-help"${attrs ? ' ' + attrs : ''} tabindex="0" role="button" aria-label="${esc(text)}">?<span class="rd-help-pop" role="tooltip">${esc(text)}</span></span>`;
+const helpBubble = (text: string, attrs = ''): string => `<span class="rd-help"${attrs ? ' ' + attrs : ''} tabindex="0" role="button" aria-label="${esc(text)}">?<span class="rd-help-pop" role="tooltip">${esc(text)}</span></span>`;
 
 // ----------------------------------------------------------------- the sidebar
 // The rail is drawn whole in index.html, so the first paint is the one that stays: nothing here adds or moves a row.
@@ -25,14 +25,19 @@ const helpBubble = (text, attrs = '') => `<span class="rd-help"${attrs ? ' ' + a
 // person too, so nothing is written there until its own next /me. The epoch is read as boot's reads go out, so a
 // sign-out elsewhere while they are out leaves this visit's /me keeping nothing.
 const RD_NAV_KEPT = 'tico.nav.kept';
-const RD_NAV_ROWS = {finance: 'nav-finance', welcome: 'nav-welcome'};
+/** The sidebar rows that wait on an answer. */
+type RdNavName = 'finance' | 'welcome';
+/** What this browser keeps for the sidebar: the epoch, whose answers they are, and each row's last answer. */
+interface RdNavKept { epoch?: unknown; who?: string; finance?: boolean; welcome?: boolean; }
+const RD_NAV_ROWS: Record<RdNavName, string> = {finance: 'nav-finance', welcome: 'nav-welcome'};
+const RD_NAV_NAMES = Object.keys(RD_NAV_ROWS) as RdNavName[];
 let RD_NAV_WHO = '', RD_NAV_EPOCH = 0;     // whose answers are kept now ('' until /me answers), and the epoch boot read
 let RD_NAV_STOPPED = false;                // another tab signed out since boot's reads went out
-function rdNavKept() {
-  try { const kept = JSON.parse(localStorage.getItem(RD_NAV_KEPT) || 'null'); return kept && typeof kept === 'object' ? kept : {}; }
+function rdNavKept(): RdNavKept {
+  try { const kept = JSON.parse(localStorage.getItem(RD_NAV_KEPT) || 'null') as RdNavKept | null; return kept && typeof kept === 'object' ? kept : {}; }
   catch { return {}; }
 }
-const rdNavEpoch = kept => Number(kept.epoch) || 0;
+const rdNavEpoch = (kept: RdNavKept): number => Number(kept.epoch) || 0;
 // Told another tab signed out: this one keeps nothing more until its own /me.
 function rdNavStop() { RD_NAV_WHO = ''; RD_NAV_STOPPED = true; }
 // Boot's reads go out: the epoch they answer for.
@@ -46,13 +51,13 @@ function rdNavForget() {
 }
 // The row and the mark on <html> together: the mark draws it before this file runs (styles/redesign.css), `hidden` after
 // (search.js lists only rows that are not hidden).
-function rdNavPaint(name, shown) {
+function rdNavPaint(name: RdNavName, shown: boolean): void {
   document.documentElement.classList.toggle(RD_NAV_ROWS[name], shown);
   const row = document.getElementById(RD_NAV_ROWS[name]);
   if (row && row.hidden !== !shown) row.hidden = !shown;   // an unchanged `hidden` is not written again (ask-panel.js askSet)
 }
 // This visit's answer: shown as it says, and kept for the next first paint while no sign-out came since this tab's /me.
-function rdNavShow(name, shown) {
+function rdNavShow(name: RdNavName, shown: boolean): void {
   rdNavPaint(name, shown);
   if (!RD_NAV_WHO || SESSION.out) return;
   const kept = rdNavKept();
@@ -65,40 +70,40 @@ function rdNavShow(name, shown) {
 }
 // /me answered: someone else's answers go, and their rows with them, until this person's own come in. A sign-out
 // anywhere since boot's reads went out (the epoch moved, or the stop came) leaves this visit keeping nothing.
-function rdNavWho(me) {
+function rdNavWho(me: SelfPerson | null | undefined): void {
   const who = me ? snapWho(me) : '', kept = rdNavKept();
   if (RD_NAV_STOPPED || rdNavEpoch(kept) !== RD_NAV_EPOCH) {
     RD_NAV_WHO = '';
-    for (const name of Object.keys(RD_NAV_ROWS)) rdNavPaint(name, false);
+    for (const name of RD_NAV_NAMES) rdNavPaint(name, false);
     return;
   }
   if (!who || kept.who !== who) {
     if (kept.who || !who) rdNavForget();
-    for (const name of Object.keys(RD_NAV_ROWS)) rdNavPaint(name, false);
+    for (const name of RD_NAV_NAMES) rdNavPaint(name, false);
   }
   RD_NAV_WHO = who;
 }
-for (const name of Object.keys(RD_NAV_ROWS)) rdNavPaint(name, document.documentElement.classList.contains(RD_NAV_ROWS[name]));
+for (const name of RD_NAV_NAMES) rdNavPaint(name, document.documentElement.classList.contains(RD_NAV_ROWS[name]));
 // Library open or folded: what this browser chose, opened while a Library page is showing (a fold there holds until
 // the next visit). A browser that will not store it keeps Library open.
 const RD_LIB_KEY = 'tico.nav.library';
 const RD_LIB = {inside: false, was: false};
-const rdInLibrary = r => [DOCS, MEETINGS, '#/library'].some(base => rdUnder((r || '').split('?')[0], base));
-function rdLibRemember(open) { try { localStorage.setItem(RD_LIB_KEY, open ? 'open' : 'closed'); } catch { /* not kept */ } }
+const rdInLibrary = (r: string): boolean => [DOCS, MEETINGS, '#/library'].some(base => rdUnder((r || '').split('?')[0] ?? '', base));
+function rdLibRemember(open: boolean): void { try { localStorage.setItem(RD_LIB_KEY, open ? 'open' : 'closed'); } catch { /* not kept */ } }
 function rdLibSaved() { try { return localStorage.getItem(RD_LIB_KEY) !== 'closed'; } catch { return true; } }
 const rdLibOpen = () => RD_LIB.inside || rdLibSaved();
 // Company folds the same way: open unless folded here, opened while Strategy, Finance or Growth is showing (its own
 // page, #/home, shows its row whatever the fold).
 const RD_CO_KEY = 'tico.nav.company';
 const RD_CO = {inside: false, was: false};
-const rdInCompany = r => ['#/strategy', GR_ROUTE, FIN_ROUTE].some(base => rdUnder((r || '').split('?')[0], base));
-function rdCoRemember(open) { try { localStorage.setItem(RD_CO_KEY, open ? 'open' : 'closed'); } catch { /* not kept */ } }
+const rdInCompany = (r: string): boolean => ['#/strategy', GR_ROUTE, FIN_ROUTE].some(base => rdUnder((r || '').split('?')[0] ?? '', base));
+function rdCoRemember(open: boolean): void { try { localStorage.setItem(RD_CO_KEY, open ? 'open' : 'closed'); } catch { /* not kept */ } }
 function rdCoSaved() { try { return localStorage.getItem(RD_CO_KEY) !== 'closed'; } catch { return true; } }
 const rdCoOpen = () => RD_CO.inside || rdCoSaved();
 // Rules folds the other way round: folded unless this browser opened it, opened while a Rules page is showing.
 const RD_RULES_KEY = 'tico.nav.rules';
 const RD_RULES = {inside: false, was: false};
-function rdRulesRemember(open) { try { localStorage.setItem(RD_RULES_KEY, open ? 'open' : 'closed'); } catch { /* not kept */ } }
+function rdRulesRemember(open: boolean): void { try { localStorage.setItem(RD_RULES_KEY, open ? 'open' : 'closed'); } catch { /* not kept */ } }
 function rdRulesSaved() { try { return localStorage.getItem(RD_RULES_KEY) === 'open'; } catch { return false; } }
 const rdRulesOpen = () => RD_RULES.inside || rdRulesSaved();
 function rdLibSync() {
@@ -130,7 +135,7 @@ function rdCoSync() {
 function rdRulesSync() {
   const subs = document.getElementById('rd-rules'), toggle = document.querySelector('.rd-rules-toggle');
   if (!subs || !toggle) return;
-  const here = rdUnder((S.route || '').split('?')[0], RULES_ROUTE);
+  const here = rdUnder((S.route || '').split('?')[0] ?? '', RULES_ROUTE);
   if (here && !RD_RULES.was) RD_RULES.inside = true;
   if (!here) RD_RULES.inside = false;
   RD_RULES.was = here;
@@ -144,7 +149,8 @@ $('#side .rd-lib-toggle:not(.rd-rules-toggle):not(.rd-co-toggle)').onclick = () 
 $('#side .rd-co-toggle').onclick = () => { const open = rdCoOpen(); RD_CO.inside = false; rdCoRemember(!open); rdLibSync(); };
 $('#side .rd-rules-toggle').onclick = () => { const open = rdRulesOpen(); RD_RULES.inside = false; rdRulesRemember(!open); rdLibSync(); };
 // The current page's highlight for what the redesign adds or moves (sidebar.js asks, after its own checks).
-function redesignNavCurrent(nav) {
+function redesignNavCurrent(nav: string | undefined): boolean {
+  if (!nav) return false;   // sidebar.ts passes a row's data-nav, which a row without one lacks (the old code threw here)
   const r = S.route || '';
   if (nav === 'automations') return rdUnder(r, RD_AUTOMATIONS);
   if (nav === 'tools') return rdUnder(r, TOOLS_ROUTE);
@@ -161,7 +167,7 @@ function redesignNavCurrent(nav) {
 
 // ----------------------------------------------------------------- routes
 // Runs before the router's own list (router.js); true when it handled the address.
-function redesignRoute(r) {
+function redesignRoute(r: string): boolean {
   // Old addresses of what moved.
   if (rdUnder(r, GOALS)) { location.replace(RD_GOALS + r.slice(GOALS.length)); return true; }
   if (r === '#/settings/listening') { location.replace(RD_LISTENING); return true; }
@@ -169,7 +175,7 @@ function redesignRoute(r) {
   if (rdUnder(r, GR_OLD_ROUTE)) { location.replace(GR_ROUTE + r.slice(GR_OLD_ROUTE.length)); return true; }
   if (rdUnder(r, GTM_OLD_ROUTE + '/sources')) { location.replace(GR_SOURCES); return true; }   // Sources is growth's now
   if (rdUnder(r, GTM_OLD_ROUTE)) { location.replace('#/strategy'); return true; }
-  if (['#/recurring', '#/tasks/routines'].includes(r.split('?')[0])) { location.replace(RD_AUTOMATIONS); return true; }   // the Tasks page's Routines view
+  if (['#/recurring', '#/tasks/routines'].includes(r.split('?')[0] ?? '')) { location.replace(RD_AUTOMATIONS); return true; }   // the Tasks page's Routines view
   if (rdUnder(r, RD_AUTOMATIONS)) {
     // The Automations page is its own files (ui/app/automations*.js); until they load, an empty mount point.
     if (typeof window.pageAutomations === 'function') window.pageAutomations();
@@ -207,7 +213,7 @@ function redesignAfterRoute() {
 
 // The Strategy section's heading with the redesign's tabs. Lenses are the Strategy tab's second view; Brand opens
 // from the Strategy tab and keeps it lit.
-function redesignStrategyHead(tab) {
+function redesignStrategyHead(tab: string): string {
   const on = ['lenses', 'brand'].includes(tab) ? 'strategy' : tab;
   const tabs = [['market', MARKET_ROUTE, 'Market'], ['strategy', '#/strategy', 'Strategy'], ['org', RD_ORG, 'Org'],
     ['goals', RD_GOALS, 'Goals'], ['budget', RD_BUDGET, 'Budget']];
