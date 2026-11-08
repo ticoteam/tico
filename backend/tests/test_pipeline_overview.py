@@ -362,6 +362,30 @@ def test_a_closed_unfinished_card_is_not_a_factory_done_count(api):
     assert overview(api)["factories"][0]["done"] == 1
 
 
+def test_a_card_shipped_last_month_and_cancelled_this_week_is_no_done_card_this_week(api):
+    # Finding B4: the done count is per period. The card shipped last month (its finish is then dated last month), was
+    # reopened and cancelled this week; its cancellation writes a step into the output stage this week, but it is not
+    # counted. A card shipped this week is.
+    growth = make_factory(api, "Gro")
+    done_closed = [{"name": "Doing", "status": "doing"}, {"name": "Done", "status": "closed"}]
+    sales, steps = make_type(api, "Sls", steps=done_closed, factory=growth)
+    old = card(api, sales, steps["Doing"])
+    move(api, old["id"], step=steps["Done"])
+    with api.app.state.store.transaction() as c:
+        c.execute(
+            "UPDATE history_events SET created_at=? WHERE subject_type='task' AND subject_id=? "
+            "AND kind IN ('step', 'stage_finished')",
+            (ago(days=30), old["id"]),
+        )
+    move(api, old["id"], step=steps["Doing"])  # reopened
+    with api.app.state.store.transaction() as c:
+        H.task_close(c, H.KEEPER, old["id"], note="Dropped")  # cancelled this week
+    assert overview(api)["factories"][0]["done"] == 0
+    fresh = card(api, sales, steps["Doing"])
+    move(api, fresh["id"], step=steps["Done"])
+    assert overview(api)["factories"][0]["done"] == 1
+
+
 def test_the_migration_picks_the_output_stage_by_flow_order_not_creation_order(api):
     # Engineering was made first, but Product feeds it: the factory's output is Engineering's done stage.
     import importlib.util

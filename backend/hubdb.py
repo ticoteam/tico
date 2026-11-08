@@ -4777,8 +4777,13 @@ def _set_status(
     # Every forward stage move is held to the stage's requirements, not only task_update's (pipeline_engine). Cancelling
     # (a close or a decline) is not forward progress: it is never held to exit requirements.
     cancelling = pipeline_engine.is_cancellation(effective, explicit_step=step is not None)
-    if row is not None and step_id and step_id != row.get("step_id") and not cancelling:
-        pipeline_engine.check_forward(conn, actor, row, type_id, step_id)
+    held_to = (
+        pipeline_engine.completion_target(conn, row, type_id, step_id, effective, explicit_step=step is not None)
+        if row is not None
+        else None
+    )
+    if held_to and held_to != row.get("step_id"):
+        pipeline_engine.check_forward(conn, actor, row, type_id, held_to)
     # Direct internal writers (roadmap sync, hold restoration) have the automatic finish contract.
     # task_update/task_close preflight explicit finishes before any write and handle their own cascade.
     finishing = cascade and effective in ("done", "closed") and row.get("status") != effective
@@ -7713,14 +7718,15 @@ def task_update(
         # A stage's requirements (backend/pipeline_engine.py) may refuse the move before the review gate does.
         # A cancellation (a Close or a Decline) is not progress: it is never held to completion requirements. A move into a
         # closed stage such as Engineering's Done is progress, so it is held (pipeline_engine.is_cancellation).
-        if (
-            step_id
-            and row
-            and step_id != row.get("step_id")
-            and not pipeline_engine.is_cancellation(effective, explicit_step=step is not None)
-        ):
+        # A status done with no step is held as a move into the completion stage (pipeline_engine.completion_target).
+        held_to = (
+            pipeline_engine.completion_target(conn, row, type_id, step_id, effective, explicit_step=step is not None)
+            if row
+            else None
+        )
+        if held_to and row and held_to != row.get("step_id"):
             pipeline_engine.check_move(
-                conn, actor, {**row, "type_id": type_id}, step_id, override_requirements, override_note=note
+                conn, actor, {**row, "type_id": type_id}, held_to, override_requirements, override_note=note
             )
 
         if target_step and step_flow.gated(conn, step_id) and step_id != row.get("step_id"):

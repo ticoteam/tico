@@ -1145,6 +1145,37 @@ def test_a_step_move_into_engineering_done_is_held_to_a_waiting_approval(co):
     assert co.where(card) == ("Product", "In development")
 
 
+def test_a_status_done_on_an_engineering_subtask_is_held_to_a_waiting_approval(co):
+    """Finding B1: a status-only completion has no step of its own (booted Engineering's Done is closed, so `status=done`
+    resolves to none), and it is progress all the same. The waiting approval in Doing refuses it, the card does not
+    advance, and it goes through once the person has approved."""
+    card = review_card(co)
+    approve_spec(co, card)
+    (d41,) = subtasks(co, card)
+    signed = co.require("Engineering", "Doing", "Ana signs off", kind="approval", reviewed_by="person")
+    co.move(d41, "Doing", actor=ANA)
+    with pytest.raises(H.Refused):
+        co.set_status(d41, "done", actor=ANA)
+    co.c.rollback()
+    assert co.where(d41) == ("Engineering", "Doing")
+    assert co.where(card) == ("Product", "In development")
+    co.approve(d41, signed)
+    co.set_status(d41, "done", actor=ANA)
+    assert H.task(co.c, d41)["status"] == "done"
+    assert co.where(card) == ("Product", "Validate")
+
+
+def test_a_status_done_write_with_no_approval_waiting_still_finishes_the_subtask(co):
+    """Finding B1, the other side: with nothing waiting, a status-only completion is progress that the gate lets through,
+    and it ships the subtask."""
+    card = review_card(co)
+    approve_spec(co, card)
+    (d41,) = subtasks(co, card)
+    co.set_status(d41, "done", actor=ANA)
+    assert H.task(co.c, d41)["status"] == "done"
+    assert co.where(card) == ("Product", "Validate")
+
+
 def test_a_person_approved_due_date_stops_standing_once_the_date_is_cleared(co):
     """Finding R6: Ben approves a populated due-date requirement, Ana clears the date, and the requirement is no longer met.
     The card does not move on with the spec approval, and the due-date dot shows the requirement as not met. The person's
@@ -1206,6 +1237,36 @@ def test_a_close_into_done_with_no_marker_from_before_the_update_does_not_ship(c
     assert co.where(d41) == ("Engineering", "Done")
     assert standing_names(co, card)["Engineering shipped"] == "failed"
     assert co.advance(card, actor=ANA)["moved"] is False
+
+
+def test_a_closed_subtask_with_its_close_marker_removed_still_does_not_ship(co):
+    """Finding B4: shipment is per transition, and a visit is not a finish. The Close of an unfinished subtask into Done
+    writes a visit (this pipeline has requirements) and a `stage_closed` marker. With the marker gone the visit alone
+    must not ship the card: the markerless fallback is dropped."""
+    card = review_card(co)
+    approve_spec(co, card)
+    (d41,) = subtasks(co, card)
+    co.require("Engineering", "Todo", "Ana signs off", kind="approval", reviewed_by="person")
+    co.close(d41, actor=ANA)
+    co.c.execute("DELETE FROM history_events WHERE subject_id = ? AND kind = 'stage_closed'", (d41,))
+    co.c.commit()
+    assert co.where(d41) == ("Engineering", "Done")
+    assert standing_names(co, card)["Engineering shipped"] == "failed"
+    assert pipeline_engine.shipped(co.c, [d41]) == set()
+
+
+def test_a_shipment_reports_the_moment_it_first_shipped(co):
+    """Finding B4: shipped_at gives each shipped ticket the moment of its first completion, the finish marker's time, and
+    a ticket that only ever closed has none."""
+    card = review_card(co)
+    approve_spec(co, card)
+    (d41,) = subtasks(co, card)
+    co.move(d41, "Doing", actor=ANA)
+    co.move(d41, "Done", actor=ANA)
+    finished = co.c.execute(
+        "SELECT created_at FROM history_events WHERE subject_id = ? AND kind = 'stage_finished'", (d41,)
+    ).fetchone()[0]
+    assert pipeline_engine.shipped_at(co.c, [d41]) == {d41: finished}
 
 
 def test_a_subtask_closed_in_done_after_it_shipped_still_counts_as_shipped(co):

@@ -390,8 +390,9 @@ def _loops(c: "sqlite3.Connection", ordered: list[str], links: list[Row], seen: 
 def _done(c: "sqlite3.Connection", stages: dict[str, str], seen: str, since: str) -> dict[str, int]:
     """Per output stage: the cards that shipped into it in the period (a factory's done count). The candidates are the cards
     that entered the stage in the period, read from the step history, which every move writes, so a pipeline with no stage
-    requirements counts too. Each candidate counts only when the engine says it shipped (pipeline_engine.shipped), so a
-    Close that lands an unfinished card in the output stage is not a done card. A card that re-enters a stage counts once."""
+    requirements counts too. A candidate counts only when its shipment (pipeline_engine.shipped_at, the first time it
+    shipped) is in the period: a card shipped last month, reopened and cancelled this week is not a done card this week, and
+    a Close that lands an unfinished card in the output stage is not one either. A card that re-enters a stage counts once."""
     if not stages:
         return {}
     rows = _rows(
@@ -401,10 +402,11 @@ def _done(c: "sqlite3.Connection", stages: dict[str, str], seen: str, since: str
         f"AND e.created_at>=? AND e.subject_id IN (SELECT id FROM tasks WHERE ({seen}))",
         [*stages.values(), since],
     )
-    won = pipeline_engine.shipped(c, sorted({str(r["tid"]) for r in rows}))
+    shipments = pipeline_engine.shipped_at(c, sorted({str(r["tid"]) for r in rows}))
     counted: dict[str, set[str]] = {}
     for r in rows:
-        if str(r["tid"]) in won:
+        when = shipments.get(str(r["tid"]))
+        if when is not None and when >= since:
             counted.setdefault(str(r["sid"]), set()).add(str(r["tid"]))
     return {sid: len(cards) for sid, cards in counted.items()}
 
