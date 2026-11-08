@@ -6,15 +6,19 @@ or money account, with its cadence (monthly or annual), its expected amount, its
   latest charges 11 to 13 months apart, on the same day of the month within ANNUAL_SLACK days.
 - active, ignored, cancelled: confirmed by a person or the Bookkeeper (subscription_confirm). Ignored rows raise no
   Watch findings and are never suggested again. A suggested or active row with no charge for MISSED_PERIODS cadence
-  periods past its next charge becomes cancelled on its own; detect() is the only thing that does that.
+  periods past its next charge becomes cancelled on its own (detect() is the only thing that does that), and that
+  automatic cancel clears the row's confirmation (confirmed_by, confirmed_at).
+- Revival: a cancelled row charged again (a charge later than its last_charge_on) goes back to suggested when the system
+  cancelled it (confirmed_by is empty). A row a person or the Bookkeeper cancelled stays cancelled; its charges still
+  show up in Watch's generic checks, so a price rise or an idle card on it is raised.
 
 detect() runs once a day from the scheduler's Finance upkeep (scheduler.finance_tick, through actions.detect_subscriptions),
 over the posted debits Watch reads, as the system (every charge). Nothing here writes to a provider's books: no outbox rows.
 
 Watch (price_findings, unused_findings): with no confirmed rows, Watch is what it was. With them, a charge on an active
 subscription is judged against its expected amount (a price increase at PRICE_RISE_PERCENT or more above it), an unused
-check runs as it always does, a charge on an ignored or cancelled subscription raises no finding, and every other charge
-keeps today's checks. Duplicate charges are unchanged.
+check runs as it always does, a charge on an ignored subscription raises no finding, and every other charge (a cancelled
+subscription's too) keeps today's checks. Duplicate charges are unchanged.
 
 Reads: rows (GET /api/v2/finance/subscriptions, the subscriptions report, the subscription search kind), summary (the
 subscriptions_monthly metric), brief_lines (the briefing). Visibility is visible.subscriptions_visible: a full-detail reader,
@@ -163,12 +167,14 @@ def watch_rows(c: sqlite3.Connection) -> list[Row]:
 
 
 def price_findings(charges: Sequence[W.Charge], rows: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
-    """The Watch price increases. With no confirmed rows, today's check over every charge (the same output as before)."""
+    """The Watch price increases. With no confirmed rows, today's check over every charge (the same output as before).
+    An ignored subscription's charges raise nothing; an active one's are judged against its expected amount; every other
+    charge, a cancelled subscription's included, keeps today's check."""
     if not rows:
         return W.price_increases(charges)
-    confirmed = {_rows_key(r) for r in rows}
+    ignored = {_rows_key(r) for r in rows if r["status"] == "ignored"}
     active = {_rows_key(r): r for r in rows if r["status"] == "active"}
-    generic = [ch for ch in charges if _key(ch) not in confirmed]  # ignored and cancelled charges raise nothing
+    generic = [ch for ch in charges if _key(ch) not in ignored and _key(ch) not in active]
     latest = _latest_by_key([ch for ch in charges if _key(ch) in active])
     items = [(latest[k], int(active[k]["amount"]), "") for k in sorted(active) if k in latest]
     return W.price_increases(generic) + W.subscription_price_increases(items)
@@ -178,12 +184,11 @@ def unused_findings(
     charges: Sequence[W.Charge], rows: Sequence[Mapping[str, Any]], idle: Mapping[str, str], today: date
 ) -> list[dict[str, Any]]:
     """The Watch unused subscriptions. With no confirmed rows, today's check over every charge; with them, the charges
-    that are not on an ignored or cancelled subscription are judged by the same rule."""
+    that are not on an ignored subscription are judged by the same rule (active and cancelled ones alike)."""
     if not rows:
         return W.unused_subscriptions(charges, idle, today)
-    confirmed = {_rows_key(r) for r in rows}
-    active = {_rows_key(r) for r in rows if r["status"] == "active"}
-    kept = [ch for ch in charges if _key(ch) not in confirmed or _key(ch) in active]
+    ignored = {_rows_key(r) for r in rows if r["status"] == "ignored"}
+    kept = [ch for ch in charges if _key(ch) not in ignored]
     return W.unused_subscriptions(kept, idle, today)
 
 
@@ -230,8 +235,9 @@ def _upsert_found(c: sqlite3.Connection, book_id: str, found: Found, today: date
 
 def detect(c: sqlite3.Connection, at: str | None = None) -> dict[str, int]:
     """The daily look (scheduler Finance upkeep): suggest new repeats; move each row's last charge and next charge on from
-    the book's latest charge with its key (confirmed rows included: only their dates and last amount move); and cancel a
-    suggested or active row that has missed MISSED_PERIODS cadence periods. Returns how many repeats were found, how many
+    the book's latest charge with its key (confirmed rows included: only their dates and last amount move); revive a
+    cancelled row the system cancelled when it is charged again (suggested); and cancel a suggested or active row that has
+    missed MISSED_PERIODS cadence periods (clearing its confirmation). Returns how many repeats were found, how many
     suggestions were made, and how many rows were cancelled."""
     from . import reads as FR  # reads imports this module
 
@@ -248,22 +254,25 @@ def detect(c: sqlite3.Connection, at: str | None = None) -> dict[str, int]:
     for row in SS.book_rows(c, book_id):
         ch = latest.get(_rows_key(row))
         if ch is not None and ch.day.isoformat() > str(row["last_charge_on"] or ""):
-            SS.update(
-                c,
-                str(row["id"]),
-                {
-                    "last_charge_on": ch.day.isoformat(),
-                    "last_charge_id": ch.id,
-                    "last_amount": ch.amount,
-                    "next_charge_on": next_on(ch.day, str(row["cadence"])).isoformat(),
-                    "updated_at": ctx.at,
-                },
-            )
+            moved: dict[str, object] = {
+                "last_charge_on": ch.day.isoformat(),
+                "last_charge_id": ch.id,
+                "last_amount": ch.amount,
+                "next_charge_on": next_on(ch.day, str(row["cadence"])).isoformat(),
+                "updated_at": ctx.at,
+            }
+            if row["status"] == "cancelled" and not row["confirmed_by"]:
+                moved["status"] = "suggested"  # the system cancelled it, and the vendor charges again: ask once more
+            SS.update(c, str(row["id"]), moved)
             row = SS.get(c, str(row["id"]))
         due = str(row["next_charge_on"] or "")
         if row["status"] in ("suggested", "active") and due:
             if today > deadline(date.fromisoformat(due), str(row["cadence"])):
-                SS.update(c, str(row["id"]), {"status": "cancelled", "updated_at": ctx.at})
+                SS.update(
+                    c,
+                    str(row["id"]),
+                    {"status": "cancelled", "confirmed_at": None, "confirmed_by": None, "updated_at": ctx.at},
+                )
                 cancelled += 1
     return {"found": len(found), "new": new, "cancelled": cancelled}
 

@@ -1,6 +1,8 @@
 """Subscriptions (subscriptions.py, step 6): the repeats the daily look finds (pure, then from the books), the Watch findings
-on confirmed rows, confirm and undo by the owner and the Bookkeeper, the cancel after missed periods, and the reads (report,
-metric, search, briefing) with who sees each subscription."""
+on confirmed rows (a cancelled one's charges are checked like any charge, an ignored one's raise nothing), a cancelled
+repeat charged again (suggested again when the system cancelled it, left cancelled when a person did), confirm and undo by
+the owner and the Bookkeeper, the cancel after missed periods, and the reads (report, metric, search, briefing) with who
+sees each subscription, including through the attribution of its latest charge."""
 
 import sqlite3
 from datetime import date
@@ -14,11 +16,12 @@ from backend.finance.core import watch as W
 from backend.finance.store import ledger as SL
 from backend.finance.store import subscriptions as SS
 from backend.store import Store
-from backend.tests.test_finance_fixtures import AT, OWNER, act, books, finance_template, store  # noqa: F401
+from backend.tests.test_finance_fixtures import AT, OWNER, account, act, books, finance_template, store  # noqa: F401
 from backend.tests.test_finance_watch import PRIOR_MONTHS, WATCH_AT, _bot_card_charges
 
 TODAY = date(2026, 11, 1)
 MONTHLY = ("2026-08-05", "2026-09-05", "2026-10-05")
+LAPSED_AT = "2027-01-06T00:00:00.000000Z"  # two monthly periods past the November charge the repeat was due
 
 
 def charge(i: str, payee: str, amount: int, day: str, card: str = "", shown: str = "") -> W.Charge:
@@ -35,6 +38,20 @@ def only_row(c: sqlite3.Connection) -> dict[str, Any]:
     found = rows_of(c)
     assert len(found) == 1, found
     return found[0]
+
+
+def _card_charge(c: sqlite3.Connection, card: str, day: str, amount: int) -> str:
+    """One more posted charge on a card _bot_card_charges made (a bank feed row for it). Its id: the Watch charge id."""
+    book = SL.book(c)
+    assert book is not None
+    money = str(c.execute("SELECT money_account_id FROM fin_cards WHERE id=?", (card,)).fetchone()[0])
+    row_id = SL.new_id()
+    c.execute(
+        "INSERT INTO fin_feed_txns(id, money_account_id, provider_id, txn_date, amount, currency, counterparty, "
+        "status, created_at, created_by, card_id) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+        (row_id, money, f"txn-{row_id[:8]}", day, -amount, book.base_currency, "ACME CLOUD", "new", AT, OWNER, card),
+    )
+    return row_id
 
 
 # ------------------------------------------------------------------------------------------------ detection (pure)
@@ -138,7 +155,19 @@ def test_an_ignored_subscription_raises_no_price_finding_and_no_rows_is_todays_c
     assert SUB.price_findings(FIGMA_RISES, []) == W.price_increases(FIGMA_RISES)
 
 
-def test_an_ignored_subscription_on_an_idle_card_raises_no_unused_finding():
+def test_a_cancelled_subscription_is_checked_like_any_charge_and_an_ignored_one_is_not():
+    risen = [
+        charge("1", "figma", 5_000, "2026-08-05", card="card_a"),
+        charge("2", "figma", 5_000, "2026-09-05", card="card_a"),
+        charge("3", "figma", 6_000, "2026-10-05", card="card_a"),
+    ]
+    cancelled = [{**ACTIVE_FIGMA[0], "status": "cancelled"}]
+    ignored = [{**ACTIVE_FIGMA[0], "status": "ignored"}]
+    assert [f["key"] for f in SUB.price_findings(risen, cancelled)] == ["price_increase:3"]
+    assert SUB.price_findings(risen, ignored) == []
+
+
+def test_an_ignored_subscription_on_an_idle_card_raises_no_unused_finding_but_a_cancelled_one_does():
     def on(i: str, day: str) -> W.Charge:
         return W.Charge(
             id=i, payee="acme cloud", amount=4_900, day=date.fromisoformat(day), shown="ACME CLOUD", card="card_a"
@@ -147,7 +176,11 @@ def test_an_ignored_subscription_on_an_idle_card_raises_no_unused_finding():
     months = [on("8", "2026-08-05"), on("9", "2026-09-05"), on("10", "2026-10-05")]
     idle = {"card_a": "archived-bot"}
     ignored = [{"vendor_key": "acme cloud", "source_key": "card_a", "status": "ignored", "amount": 4_900}]
+    cancelled = [{**ignored[0], "status": "cancelled"}]
     assert SUB.unused_findings(months, ignored, idle, TODAY) == []
+    assert [f["key"] for f in SUB.unused_findings(months, cancelled, idle, TODAY)] == [
+        "unused_subscription:card_a:acme cloud"
+    ]
     assert [f["key"] for f in SUB.unused_findings(months, [], idle, TODAY)] == ["unused_subscription:card_a:acme cloud"]
 
 
@@ -218,8 +251,91 @@ def test_a_repeat_with_no_charge_for_two_periods_is_cancelled_by_the_daily_look(
         _bot_card_charges(c, "coder", "card_coder", PRIOR_MONTHS)
         SUB.detect(c, WATCH_AT)
         assert SUB.detect(c, "2027-01-04T00:00:00.000000Z")["cancelled"] == 0
-        assert SUB.detect(c, "2027-01-06T00:00:00.000000Z") == {"found": 0, "new": 0, "cancelled": 1}
+        assert SUB.detect(c, LAPSED_AT) == {"found": 0, "new": 0, "cancelled": 1}
         assert only_row(c)["status"] == "cancelled"
+
+
+def test_an_automatically_cancelled_repeat_that_is_charged_again_is_suggested_once_more(books: Store):
+    with books.transaction() as c:
+        _bot_card_charges(c, "coder", "card_coder", PRIOR_MONTHS)
+        SUB.detect(c, WATCH_AT)
+        assert SUB.detect(c, LAPSED_AT)["cancelled"] == 1
+        _card_charge(c, "card_coder", "2027-01-05", 4_900)
+        assert SUB.detect(c, LAPSED_AT) == {"found": 0, "new": 0, "cancelled": 0}
+        row = only_row(c)
+    assert (row["status"], row["last_charge_on"], row["next_charge_on"]) == ("suggested", "2027-01-05", "2027-02-05")
+
+
+def test_a_bookkeeper_confirmed_repeat_that_lapses_then_charges_again_is_suggested_not_left_cancelled(books: Store):
+    with books.transaction() as c:
+        _bot_card_charges(c, "coder", "card_coder", PRIOR_MONTHS)
+        SUB.detect(c, WATCH_AT)
+        sid = str(only_row(c)["id"])
+        FA.grant_defaults(c, "bot:bookkeeper", at=AT)
+        kept = act(
+            c, "bot:bookkeeper", "subscription_confirm", {"subscription_id": sid, "status": "active"}, at=WATCH_AT
+        )
+        assert kept.status == "committed", kept
+        assert SUB.detect(c, LAPSED_AT)["cancelled"] == 1
+        lapsed = only_row(c)
+        assert (lapsed["status"], lapsed["confirmed_by"]) == (
+            "cancelled",
+            None,
+        )  # an automatic cancel clears the confirmation
+        _card_charge(c, "card_coder", "2027-01-05", 4_900)
+        SUB.detect(c, LAPSED_AT)
+        assert only_row(c)["status"] == "suggested"
+
+
+def test_a_person_cancelled_repeat_that_is_charged_again_stays_cancelled(books: Store):
+    with books.transaction() as c:
+        _bot_card_charges(c, "coder", "card_coder", PRIOR_MONTHS)
+        SUB.detect(c, WATCH_AT)
+        sid = str(only_row(c)["id"])
+        ended = act(
+            c,
+            OWNER,
+            "subscription_confirm",
+            {"subscription_id": sid, "status": "cancelled"},
+            at="2026-10-20T00:00:00.000000Z",
+        )
+        assert ended.status == "committed", ended
+        _card_charge(c, "card_coder", "2026-10-25", 4_900)
+        SUB.detect(c, WATCH_AT)
+        assert only_row(c)["status"] == "cancelled"
+
+
+# ------------------------------------------------------------------------------------------------ watch (books)
+def test_a_cancelled_subscription_charged_thirty_percent_more_is_a_price_increase_on_watch(books: Store):
+    with books.transaction() as c:
+        _bot_card_charges(c, "coder", "card_coder", PRIOR_MONTHS)
+        SUB.detect(c, WATCH_AT)
+        sid = str(only_row(c)["id"])
+        ended = act(
+            c,
+            OWNER,
+            "subscription_confirm",
+            {"subscription_id": sid, "status": "cancelled"},
+            at="2026-10-20T00:00:00.000000Z",
+        )
+        assert ended.status == "committed", ended
+        late = _card_charge(c, "card_coder", "2026-10-25", 6_370)  # 30% above the 49.00 it was
+        found = [f for f in RD.watch_findings(c, OWNER, WATCH_AT) if f["kind"] == "price_increase"]
+    assert [f["key"] for f in found] == [f"price_increase:{late}"], found
+    assert found[0]["label"].endswith(": 63.70 now, 49.00 before"), found
+
+
+def test_an_active_subscription_at_15_dollars_then_charged_20_is_a_price_increase_on_watch(books: Store):
+    with books.transaction() as c:
+        _bot_card_charges(c, "coder", "card_coder", PRIOR_MONTHS, amount=1_500)
+        SUB.detect(c, WATCH_AT)
+        sid = str(only_row(c)["id"])
+        kept = act(c, OWNER, "subscription_confirm", {"subscription_id": sid, "status": "active"}, at=WATCH_AT)
+        assert kept.status == "committed", kept
+        late = _card_charge(c, "card_coder", "2026-10-25", 2_000)
+        found = [f for f in RD.watch_findings(c, OWNER, WATCH_AT) if f["kind"] == "price_increase"]
+    assert [f["key"] for f in found] == [f"price_increase:{late}"], found
+    assert found[0]["label"].endswith(": 15.00 → 20.00"), found
 
 
 # ------------------------------------------------------------------------------------------------ reads
@@ -283,3 +399,42 @@ def test_the_owner_sees_every_subscription_and_a_coder_bot_with_no_attribution_s
     with books.read() as c:
         assert len(SUB.read(c, OWNER, at=WATCH_AT)["rows"]) == 2
         assert SUB.read(c, "bot:coder", at=WATCH_AT)["rows"] == []
+
+
+def _expense_line_of(c: sqlite3.Connection, feed_id: str) -> str:
+    """The expense line a posted bank row made."""
+    return str(
+        c.execute(
+            "SELECT l.id FROM fin_lines l JOIN fin_accounts a ON a.id=l.account_id "
+            "JOIN fin_feed_txns f ON f.entry_id=l.entry_id WHERE f.id=? AND a.type='expense'",
+            (feed_id,),
+        ).fetchone()[0]
+    )
+
+
+def test_the_attribution_of_the_latest_charge_decides_who_sees_a_subscription(books: Store):
+    """The coder bot's card repeat: its latest charge is posted and attributed. Cara, who the bot reports to, sees it
+    through the bot's manager; Eve, a member of web (the bot's team), sees it once the charge is attributed to web; the
+    seller bot, of sales, never does."""
+    with books.transaction() as c:
+        _bot_card_charges(c, "coder", "card_coder", PRIOR_MONTHS)
+        SUB.detect(c, WATCH_AT)
+        latest = str(
+            c.execute("SELECT id FROM fin_feed_txns WHERE card_id='card_coder' ORDER BY txn_date DESC").fetchone()[0]
+        )
+        posted = act(c, OWNER, "categorize", {"feed_id": latest, "account_id": account(c, "6100")}, at=WATCH_AT)
+        assert posted.status == "committed", posted.reason
+        line = _expense_line_of(c, latest)
+
+        def seen(who: str) -> list[dict[str, Any]]:
+            return SUB.read(c, who, at=WATCH_AT)["rows"]
+
+        to_bot = {"teammate": "bot:coder", "share_bps": 10_000}
+        assert act(c, OWNER, "attribute", {"line_id": line, "splits": [to_bot]}, at=WATCH_AT).status == "committed"
+        assert [r["attribution"] for r in seen("human:cara")] == [[{"to": "bot:coder", "share": 100.0}]]
+        assert seen("bot:seller") == []
+
+        to_team = {"team": "web", "share_bps": 10_000}
+        assert act(c, OWNER, "attribute", {"line_id": line, "splits": [to_team]}, at=WATCH_AT).status == "committed"
+        assert [r["attribution"] for r in seen("human:eve")] == [[{"to": "web", "share": 100.0}]]
+        assert seen("bot:seller") == []
