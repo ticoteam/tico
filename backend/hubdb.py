@@ -8071,10 +8071,11 @@ def task_update(
     args["updated_at"] = ts
     if sets:
         conn.execute(f"UPDATE tasks SET {', '.join(sets)}, updated_at=:updated_at WHERE id=:id", args)
-    if body is not None and body != (row or {}).get("body"):
+    if (body is not None and body != (row or {}).get("body")) or any(v is not None for v in (due, owner, labels)):
         from . import pipeline_github_checks
 
-        # A new body is new work (the tasks_body_work_revision trigger): its checks go out of date in this same write.
+        # A new body is new work (the tasks_body_work_revision trigger), and the due date, owner and labels are facts field
+        # requirements read: either way the checks follow the new standing in this same write (none for a ticket without a PR).
         pipeline_github_checks.publish_affected(conn, task_id)
     if args.get("private"):
         # Made private: a reconnect card's person may not read it now (backend/reconnects.py).

@@ -374,3 +374,22 @@ def test_a_date_cleared_after_a_stage_the_ticket_left_is_waiting_on_the_next_sch
         H.task_update(c, ANA, w.task, due="")  # the date is cleared; the pass is what publishes it
     C.publish_open(app.store)
     assert states(app)[due] == "waiting"
+
+
+def test_a_cleared_due_date_puts_a_met_field_check_back_to_waiting_in_the_same_write(setup):
+    """A field fact changed through task_update (the due date here) publishes the affected checks in the same write, so a
+    visited stage's met check does not wait for the scheduler pass."""
+    app, fake, gh, w = setup
+    gh.permissions = {"checks": "write", "metadata": "read"}
+    with app.store.transaction() as c:
+        w.c = c
+        due = w.requirement("Due", "field", "person", needs=json.dumps({"field": "due"}))
+        w.attach()
+        w.approve(w.mockup)
+        w.approve(w.signoff)
+        H.task_update(c, ANA, w.task, due="2026-11-20T17:00:00Z")
+        assert w.approve(due)["advanced"] is True and w.step_of() == w.shipped
+    assert states(app)[due] == "met"
+    with app.store.transaction() as c:
+        H.task_update(c, ANA, w.task, due="")
+    assert states(app)[due] == "waiting"
