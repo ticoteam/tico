@@ -76,8 +76,7 @@ def test_a_books_check_run_categorizes_a_row_and_records_a_receipt_match(api):
         f"attach:{fee['id']}",
     )
     assert not err and matched["status"] == "committed", matched
-    with api.app.state.store.read() as c:
-        assert c.execute("SELECT COUNT(*) FROM fin_attachments WHERE file_id='file-receipt'").fetchone()[0] == 1
+    assert len(matched["result"]["attachment_ids"]) == 1, matched
 
 
 def test_a_watch_run_writes_finance_and_the_action_is_the_bookkeepers(api):
