@@ -1010,6 +1010,25 @@ def visible_ids(c: sqlite3.Connection, who: str | V.Reader, ids: Iterable[str]) 
     return {str(row["id"]) for row in _visible_rows(c, r, list(ids))}
 
 
+def remove_source(c: sqlite3.Connection, actor: str, entity_id: str, source_type: str, source_id: str) -> bool:
+    """Forgets one source an entity is known from. True when a row was removed. The last source is refused: an entity
+    with no sources shows to everyone, so removing it would publish what the source hid. Ending the last one is the
+    deletion path's job, not this."""
+    _writer(c, actor)
+    _live(c, actor, entity_id)
+    row = _one(
+        c,
+        "SELECT id FROM entity_sources WHERE entity_id = ? AND source_type = ? AND source_id = ?",
+        (entity_id, source_type, source_id),
+    )
+    if row is None:
+        return False
+    if _count(c, "SELECT count(*) FROM entity_sources WHERE entity_id = ?", (entity_id,)) <= 1:
+        _refuse(c, actor, "last_source", "that is the only source this entity is known from; it would show to everyone")
+    c.execute("DELETE FROM entity_sources WHERE id = ?", (row["id"],))
+    return True
+
+
 def merge(c: sqlite3.Connection, actor: str, keep_id: str, drop_id: str) -> str:
     """Merges `drop` into `keep`: the drop's identifiers, links, values, notes, mentions, activities, external refs and
     sources move to the kept entity, and the drop redirects to it. The move is logged (entity_merges) so unmerge reverses
@@ -1819,3 +1838,16 @@ def history(
     for row in rows:
         row["value"] = json.loads(row["value"])
     return {"rows": rows, "next": _encode([rows[-1]["active_until"], rows[-1]["id"]]) if more and rows else None}
+
+
+def matching(c: sqlite3.Connection, type_key: str, match: Mapping[str, object]) -> list[str]:
+    """The live entities of one type a match names (an email, a domain, a name or an id), all of them: ingest asks this
+    before it creates, so an existing entity is found without its name or values being written again. It reads every
+    entity, not what a reader may see, so only the system's ingest calls it."""
+    return _match(c, type_key, match)
+
+
+def has_sources(c: sqlite3.Connection, entity_id: str) -> bool:
+    """Whether an entity records any source. One with none shows to everyone, so a restricted source added to it would
+    narrow it. Ingest checks this before it adds one to an entity it did not just create."""
+    return _count(c, "SELECT count(*) FROM entity_sources WHERE entity_id = ?", (entity_id,)) > 0

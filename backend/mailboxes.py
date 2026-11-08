@@ -16,7 +16,7 @@ from fastapi import Request
 from . import hubdb as H
 from . import mailbox_access as MA
 from . import people as P
-from .models import MailboxAccessCreate, MailboxAccessUpdate, MailboxCreate
+from .models import MailboxAccessCreate, MailboxAccessUpdate, MailboxCreate, MailboxDirectoryUpdate
 from .store import Problem
 
 PATH = "/api/v2/mailboxes"
@@ -443,6 +443,17 @@ def install(app, store):
             MA.revoke(c, who, box["id"], access_id)  # writes mailbox.access_revoked
         with store.read() as c:
             return detail(c, who, mid)
+
+    @app.patch(PATH + "/{mid}/directory")
+    def set_mailbox_directory(request: Request, mid: str, body: MailboxDirectoryUpdate):
+        """Switch whether this inbox's mail feeds the Directory. Its person decides (an admin, for a shared inbox). A bot's
+        inbox always feeds it, whatever this says."""
+        who = request.state.identity
+        _person(who)
+        with store.transaction() as c:
+            MA.set_feeds_directory(c, who, mid, body.on)  # writes mailbox.directory_feed
+        with store.read() as c:
+            return {**detail(c, who, mid), "feeds_directory": MA.feeds_directory(c, MA.row_by_id(c, mid))}
 
     @app.delete(PATH + "/{mid}")
     def stop_mailbox(request: Request, mid: str):

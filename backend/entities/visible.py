@@ -8,8 +8,9 @@ An entity shows to a reader when the reader can see at least one thing it is kno
 - an entity with no source rows shows to everyone (an organization typed in by hand, and self);
 - a source with visibility company shows to everyone (a sync, a Market seed, a mail sender at company level);
 - a restricted source shows when its type's checker says the reader can read it (CHECKERS below): a mailbox the reader
-  holds a level on (backend/mailbox_access.py), a Finance book contact the reader sees a name for
-  (backend/finance/visible.py named_all_time), or the reader's own `me` note.
+  holds a level on (backend/mailbox_access.py) and that feeds the Directory, a Finance book contact the reader sees a name
+  for (backend/finance/visible.py named_all_time), or the reader's own `me` note. A mailbox switched off stops counting, so
+  what came only from it hides from everyone, its owner included, until it is switched back on.
 
 Sensitive attributes (tax, payment) show to Finance's owner and to the system only. A note with audience `me` shows to its
 author only. The system (jobs that run without a reader) sees everything; no other reader does.
@@ -68,8 +69,13 @@ def _finance(c: sqlite3.Connection, actor: str) -> tuple[FC.Ctx, Any] | None:
     return ctx, ctx.view(actor)
 
 
+def _feeds(c: sqlite3.Connection, mailbox_id: str) -> bool:
+    return bool(MA.feeds_directory(c, MA.row_by_id(c, mailbox_id)))  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]
+
+
 def _mailboxes(c: sqlite3.Connection, r: Reader, fin: object) -> tuple[str, ...]:
-    return tuple(sorted(str(m["id"]) for m in _mailbox_rows(c, r.actor) if m.get("id")))
+    feeding = [str(m["id"]) for m in _mailbox_rows(c, r.actor) if m.get("id") and _feeds(c, str(m["id"]))]
+    return tuple(sorted(feeding))
 
 
 def _finance_book(c: sqlite3.Connection, r: Reader, fin: tuple[FC.Ctx, Any] | None) -> tuple[str, ...] | None:
