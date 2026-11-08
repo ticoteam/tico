@@ -1160,6 +1160,12 @@ def may_clear_stage(conn: sqlite3.Connection, actor: str, row: Row) -> None:
     )
 
 
+def on_ice(conn: sqlite3.Connection, row: Row) -> bool:
+    """Whether a ticket sits On ice: its stage's cap is 0 (D69)."""
+    found = stage(conn, row.get("step_id"))
+    return found is not None and found["card_cap"] == 0
+
+
 def is_completion(row: Row, effective: str | None) -> bool:
     """Whether a write marks the ticket done now: a `done` status event, which ships it (_shipments)."""
     return effective == "done" and row.get("status") != "done"

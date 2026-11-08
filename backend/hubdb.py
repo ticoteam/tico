@@ -7680,8 +7680,10 @@ def task_update(
         target_step = _one(conn, "SELECT name FROM task_steps WHERE id=?", (step_id,))
         from . import pipeline_engine, step_flow
 
-        if step == "" and row:
-            pipeline_engine.may_clear_stage(conn, actor, row)  # a bot takes no card out of its stage (D69)
+        # A bot takes no card out of its stage (D69): a step move to nothing, or a type or status that finds the card no
+        # stage, while it sits On ice (a card On ice has no stage to fall back on).
+        if row and (step == "" or step_id is None and pipeline_engine.on_ice(conn, row)):
+            pipeline_engine.may_clear_stage(conn, actor, row)
 
         # A stage's requirements (backend/pipeline_engine.py) may refuse the move before the review gate does.
         # A cancellation (a Close or a Decline) is not progress: it is never held to completion requirements. A move into a
