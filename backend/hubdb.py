@@ -11630,10 +11630,15 @@ def needs_you(conn, who):
     # The same goes for a numbered type's tickets, a board of its own.
     # A snoozed task is nobody's to act on before its date (backend/task_snooze.py).
     # Every one: a person's list does not stop at a page of their tasks (the caller pages the items).
+    # A question task is on the list whatever its lane or type: the board that holds it does not hide a question the
+    # person has to answer. Without a question, a product-lane or numbered-type task stays off.
+    from . import question_tasks
+
+    numbered = {r["id"] for r in conn.execute("SELECT id FROM task_types WHERE numbered=1")}
     owned = [
         t
-        for t in tasks(conn, owner=actor, status=ACTIVE_STATUSES, tickets=False, snoozed="hide", limit=None)
-        if (t.get("lane") or "company") != "product"
+        for t in tasks(conn, owner=actor, status=ACTIVE_STATUSES, snoozed="hide", limit=None)
+        if question_tasks.is_open(t) or ((t.get("lane") or "company") != "product" and t.get("type_id") not in numbered)
     ]
     seen = {t["id"] for t in owned}
     # A bot's task stopped on an account this person fixes (backend/reconnects.py): its card, as a wait on them. A
