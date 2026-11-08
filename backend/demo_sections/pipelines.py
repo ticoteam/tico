@@ -123,6 +123,8 @@ def seed(b: Any) -> None:
             entered = b.ago(hours=hours).strftime("%Y-%m-%dT%H:%M:%SZ")
             task = ids[key]
             c.execute("UPDATE stage_visits SET left_at=? WHERE task_id=? AND left_at IS NULL", (entered, task))
+            # Worked an hour ago: a ticket's Late clock is its stage visit, and a demo ticket is not stuck work.
+            c.execute("UPDATE tasks SET updated_at=? WHERE id=?", (b.ago(hours=1).strftime("%Y-%m-%dT%H:%M:%SZ"), task))
             c.execute(
                 "INSERT INTO stage_visits (id, task_id, pipeline_id, pipeline_stage_id, direction, entered_by, entered_at) "
                 "VALUES (?,?,?,?,'initial',?,?)",

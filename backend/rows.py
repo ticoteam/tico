@@ -183,6 +183,7 @@ class TaskRow(TypedDict):
     spend: str | None
     answer: str | None
     asked_at: str | None
+    work_revision: int
 
 
 class PresenceRow(TypedDict):
@@ -1110,3 +1111,258 @@ class SkillDeviceCodeRow(TypedDict):
     created_at: str
     updated_at: str
     client_hash: str | None
+
+
+class FactoryRow(TypedDict):
+    """One `factories` row (SELECT *)."""
+
+    id: str
+    name: str
+    owner_id: str | None
+    position: int | None
+    created_at: str
+    updated_at: str
+    retired_at: str | None
+    goal: str | None
+    manager_id: str | None
+    output_stage_id: str | None
+
+
+class FactoryManagerActionRow(TypedDict):
+    """One `factory_manager_actions` row (SELECT *)."""
+
+    id: str
+    factory_id: str
+    factory_manager_run_id: str
+    action: str
+    target_actor: str | None
+    note: str | None
+    created_at: str
+
+
+class FactoryManagerRunRow(TypedDict):
+    """One `factory_manager_runs` row (SELECT *)."""
+
+    id: str
+    factory_id: str
+    started_at: str
+    finished_at: str | None
+    status: str
+    bottleneck_stage_id: str | None
+    judgment_count: int
+    wake_key: str | None
+    woke: int
+    model_called: int
+    error: str | None
+
+
+class FirstStartSeedRow(TypedDict):
+    """One `first_start_seeds` row (SELECT *)."""
+
+    name: str
+
+
+class PipelineCheckCursorRow(TypedDict):
+    """One `pipeline_check_cursor` row (SELECT *)."""
+
+    id: int
+    task_id: str
+    lease_until: str | None
+    lease_token: str | None
+    failed_task_id: str
+    failed_passes: int
+
+
+class PipelineCheckRunRow(TypedDict):
+    """One `pipeline_check_runs` row (SELECT *)."""
+
+    id: str
+    task_id: str
+    stage_requirement_id: str
+    repo: str
+    head_sha: str
+    state: str
+    posted_state: str | None
+    check_run_id: int | None
+    attempts: int
+    retry_at: str | None
+    last_error: str | None
+    created_at: str
+    updated_at: str
+    posted_at: str | None
+    lease_until: str | None
+    lease_token: str | None
+
+
+class PipelineHandoffRow(TypedDict):
+    """One `pipeline_handoffs` row (SELECT *)."""
+
+    id: str
+    pipeline_link_id: str
+    source_task_id: str
+    target_task_id: str
+    created_at: str
+    returned_at: str | None
+
+
+class PipelineLinkRow(TypedDict):
+    """One `pipeline_links` row (SELECT *)."""
+
+    id: str
+    from_pipeline_id: str
+    from_pipeline_stage_id: str
+    to_pipeline_id: str
+    mode: str
+    return_stage_id: str | None
+    created_by: str | None
+    created_at: str
+    retired_at: str | None
+
+
+class PipelineManagerActionRow(TypedDict):
+    """One `pipeline_manager_actions` row (SELECT *)."""
+
+    id: str
+    pipeline_id: str
+    pipeline_manager_run_id: str
+    task_id: str | None
+    stage_visit_id: str | None
+    stage_requirement_id: str | None
+    action: str
+    target_actor: str | None
+    note: str | None
+    created_at: str
+
+
+class PipelineManagerRunRow(TypedDict):
+    """One `pipeline_manager_runs` row (SELECT *)."""
+
+    id: str
+    pipeline_id: str
+    started_at: str
+    finished_at: str | None
+    status: str
+    exceptions_count: int
+    actions_count: int
+    model_called: int
+    error: str | None
+
+
+class PipelineMemberRow(TypedDict):
+    """One `pipeline_members` row (SELECT *)."""
+
+    pipeline_id: str
+    actor_id: str
+    created_at: str
+
+
+class RequirementAttachmentRow(TypedDict):
+    """One `requirement_attachments` row (SELECT *)."""
+
+    id: str
+    task_id: str
+    stage_requirement_id: str
+    source: str
+    blob_id: str | None
+    file_id: str | None
+    file_version: int | None
+    task_link_id: str | None
+    url: str | None
+    digest: str
+    work_version: int
+    commit_sha: str | None
+    attached_by: str | None
+    created_at: str
+    removed_at: str | None
+    removed_by: str | None
+
+
+class ReviewClaimRow(TypedDict):
+    """One `review_claims` row (SELECT *)."""
+
+    id: str
+    task_id: str
+    stage_requirement_id: str
+    claimed_by: str
+    work_version: int | None
+    attachment_digest: str | None
+    claimed_at: str
+    expires_at: str | None
+    released_at: str | None
+
+
+class StageDecisionRow(TypedDict):
+    """One `stage_decisions` row (SELECT *)."""
+
+    id: str
+    task_id: str
+    pipeline_stage_id: str
+    stage_visit_id: str | None
+    stage_requirement_id: str | None
+    requirement_version: int | None
+    requirement_attachment_id: str | None
+    attachment_digest: str | None
+    work_version: int | None
+    judge: str
+    judge_actor: str | None
+    verdict: str
+    confidence: float | None
+    reason: str | None
+    route_next_to: str | None
+    inputs_digest: str | None
+    judge_call_id: str | None
+    cost_cents: int
+    outcome: str | None
+    outcome_at: str | None
+    undone_at: str | None
+    undone_by: str | None
+    created_at: str
+
+
+class StageRequirementVersionRow(TypedDict):
+    """One `stage_requirement_versions` row (SELECT *)."""
+
+    id: int
+    stage_requirement_id: str
+    version: int
+    definition: str
+    changed_by: str | None
+    created_at: str
+
+
+class StageRequirementRow(TypedDict):
+    """One `stage_requirements` row (SELECT *)."""
+
+    id: str
+    pipeline_id: str
+    pipeline_stage_id: str
+    name: str
+    kind: str
+    needs: str
+    reviewed_by: str
+    reviewer_id: str | None
+    backup_reviewer_id: str | None
+    rubric: str | None
+    applies_to_label: str | None
+    position: int
+    version: int
+    enforced_by: str | None
+    created_by: str | None
+    created_at: str
+    updated_at: str
+    retired_at: str | None
+    retired_by: str | None
+
+
+class StageVisitRow(TypedDict):
+    """One `stage_visits` row (SELECT *)."""
+
+    id: str
+    task_id: str
+    pipeline_id: str
+    pipeline_stage_id: str
+    entered_from_stage_id: str | None
+    direction: str
+    entered_by: str | None
+    entered_at: str
+    left_at: str | None
