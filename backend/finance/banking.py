@@ -23,6 +23,7 @@ from datetime import timedelta
 from typing import Any, cast
 
 from . import budgeting, documents, payments, posting, posting_rules, shared
+from . import receipts as RCP
 from .context import Ctx
 from .core import dates
 from .core import feeds as F
@@ -667,6 +668,8 @@ def ingest(ctx: Ctx, connection_id: str, t: F.FeedTxn, by: str = SYSTEM) -> str 
             return fid
         SK.update(ctx.c, "fin_feed_txns", fid, fields)
     _settle(ctx, SK.get(ctx.c, "fin_feed_txns", fid), money, card, t)
+    if not t.pending and not (t.void or t.reversed) and (row is None or int(row["pending"])):
+        RCP.feed_changed(ctx, fid)  # a settled row a receipt may match (receipts.py)
     if (
         row is None
         and not t.pending

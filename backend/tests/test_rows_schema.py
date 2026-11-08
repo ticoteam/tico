@@ -124,6 +124,8 @@ TABLES = {
 # in the same change, and adding a name here is a visible decision in review, not a way around the row shapes.
 UNTYPED = frozenset(
     {
+        # Finance receipts (backend/finance/receipts.py): a Library file read and matched to a feed row.
+        "fin_receipts",
         # Native threads (backend/threads.py, calls, Slack threads), merged before their row shapes.
         "call_holds",
         "call_participants",
@@ -339,6 +341,7 @@ UNTYPED = frozenset(
         "fin_settings",
         "fin_settlements",
         "fin_statements",
+        "fin_subscriptions",
         "fin_tax_jurisdictions",
         "fin_tax_seeds",
         "fin_transfers",

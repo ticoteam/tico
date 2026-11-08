@@ -19,11 +19,12 @@ from pydantic import Field
 
 from . import company_server, hook_relay
 from .finance import actions as finance
-from .finance import books_link
+from .finance import books_link, statement_upload
 from .finance import brief as finance_brief_mod
 from .finance import context as finance_context
 from .finance import reads as finance_reads
-from .finance import statement_upload
+from .finance import receipts as finance_receipts_mod
+from .finance import subscriptions as finance_subscriptions
 from .models import ID, Contract
 from .store import Problem
 
@@ -63,6 +64,7 @@ Report = Literal[
     "ar_aging",
     "spend_by",
     "campaigns",
+    "subscriptions",
 ]
 Metric = Literal[
     "cash",
@@ -81,6 +83,7 @@ Metric = Literal[
     "unattributed",
     "ad_spend",
     "per_conversion",
+    "subscriptions_monthly",
 ]
 
 
@@ -121,6 +124,8 @@ class FinanceStatementPreviewRequest(Contract):
 
 # The payload field of each action kind that names Library files to attach (backend/finance/documents.py).
 FILE_FIELDS = {"attach": "file_ids", "bill_create": "attachments", "bill_update": "attachments"}
+# Actions on a receipt act on the Library file the receipt holds: the asker must be able to read that file.
+RECEIPT_FILE_KINDS = ("receipt_read", "receipt_match")
 
 
 class FinanceBooksRequest(Contract):
@@ -251,6 +256,18 @@ def install(app, store, auth, mutate):
         `at` in the period holding that day: the amount of the version in effect then."""
         actor = as_viewer(request, view_as)
         return read(lambda c: finance_reads.budgets(c, actor, include_inactive=include_inactive, limit=limit, on=at))
+
+    @app.get("/api/v2/finance/subscriptions")
+    def finance_subscriptions_list(
+        request: Request,
+        status: Literal["suggested", "active", "ignored", "cancelled"] | None = None,
+        view_as: str | None = None,
+    ):
+        """The subscriptions the caller sees: recurring charges the daily look suggests and the Bookkeeper confirms, each
+        with its cadence, expected amount, monthly cost, next charge, card, seats and attribution, and the monthly total of
+        the active ones. `status` narrows them."""
+        actor = as_viewer(request, view_as)
+        return read(lambda c: finance_subscriptions.read(c, actor, status))
 
     @app.get("/api/v2/finance/brief")
     def finance_brief(request: Request, view_as: str | None = None):
@@ -862,6 +879,7 @@ def install(app, store, auth, mutate):
             "account",
             "vendor",
             "campaign",
+            "subscription",
         ]
         | None = None,
         q: str = Query("", max_length=100),
@@ -1161,12 +1179,30 @@ def install(app, store, auth, mutate):
             )
         )
 
+    @app.get("/api/v2/finance/receipts")
+    def finance_receipts(
+        request: Request,
+        status: Literal["unread", "suggested", "unmatched", "attached", "rejected"] | None = None,
+        cursor: str | None = Query(None, max_length=600),
+        limit: int = Query(50, ge=1, le=200),
+        view_as: str | None = None,
+    ):
+        """Receipts the caller sees, newest first: the file, what it reads as (amount, date, vendor), and its suggested or
+        filed match. A cursor pages them; a status narrows them."""
+        actor = as_viewer(request, view_as)
+        return read(lambda c: finance_receipts_mod.read(c, actor, status=status, cursor=cursor, limit=limit))
+
     def readable_files(request, who, body):
         """The Library files an action files (attach's `file_ids`, a bill's `attachments`) must exist and be ones the
         asker may read (files.file_visible, the check every file read makes), before anything is attached: Finance's
         own records hold only the ids. A deleted file is gone. The refusal names the first id that fails."""
         field = FILE_FIELDS.get(body.kind)
         ids = body.payload.get(field) if field else None
+        if body.kind in RECEIPT_FILE_KINDS:
+            rid = body.payload.get("receipt_id")
+            with store.read() as c:
+                held = finance_receipts_mod.file_of(c, rid) if isinstance(rid, str) else None
+            ids = [held] if held else []
         if not isinstance(ids, list):
             return  # absent or malformed: the action's own checks answer
         files, cache = request.app.state.files, {}
