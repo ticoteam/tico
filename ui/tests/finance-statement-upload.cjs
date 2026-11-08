@@ -18,9 +18,9 @@ const access = {teams: [], private_lines: [], defaults: {manager: 'team_expenses
   teammates: [{teammate: 'human:ana', kind: 'person', team: '', reports_to: '', default: 'everything', grants: [], rights: ALL_RIGHTS}],
   can_view_as: false, can_edit_defaults: false};
 const BANK = {kind: 'bank', id: 'm-chase', name: 'Chase Checking', provider: '', last4: '2210', account: {id: 'a-1000', name: 'Cash', code: '1000'},
-  balance: 1360777, balance_as_of: '2026-10-31', feed: {}, cards: {}, sync: null, access: [], off_by: -6000};
+  balance: 1360777, balance_as_of: '2026-10-31', sync: null, access: [], off_by: -6000};
 const CARD = {kind: 'card_program', id: 'm-amex', name: 'Amex Gold', provider: '', last4: '5555', account: {id: 'a-2100', name: 'Credit card', code: '2100'},
-  balance: 123456, balance_as_of: '2026-10-31', feed: {}, cards: {}, sync: null, access: [], off_by: null};
+  balance: 123456, balance_as_of: '2026-10-31', sync: null, access: [], off_by: null};
 const SOURCES = {groups: [{group: 'banks', name: 'Banks', count: 1, rows: [BANK]}, {group: 'cards', name: 'Cards', count: 1, rows: [CARD]}]};
 const FILE_TEXT = 'OFXHEADER:100\n<OFX>chase-oct</OFX>\n';
 // The preview a post shows: the books $60.00 short of the statement (ends at $13,607.77, the statement says $13,667.77).
@@ -75,10 +75,9 @@ async function open(browser, {viewport = DESKTOP, hash = '#/finance/sources'} = 
   return {page, errors, writes};
 }
 
-// The bank row open on the rail, with the Upload statement button that opens the file picker.
-async function openUpload(page, row = 'bank:m-chase') {
-  const group = row.startsWith('bank') ? 'banks' : 'cards';
-  await page.locator(`[data-fin-group="${group}"]`).click();
+// Opens the row's group if it is shut, selects the row, and opens its Upload statement dialog from the rail.
+async function openUpload(page, row = 'bank:m-chase', group = 'banks') {
+  if (!(await page.locator(`tr[data-fin-src="${row}"]`).count())) await page.locator(`[data-fin-group="${group}"]`).click();
   await page.locator(`tr[data-fin-src="${row}"] .fin-src-name`).click();
   await page.locator('[data-fin-statement]').click();
   await page.locator('dialog.fin-dlg input[type=file]').waitFor();
@@ -138,7 +137,7 @@ const sideways = page => page.evaluate(() => [document.documentElement, document
     }
     {
       const {page, errors} = await open(browser);
-      await openUpload(page, 'card:m-amex');
+      await openUpload(page, 'card_program:m-amex', 'cards');
       assert.equal(await page.locator('dialog.fin-dlg').count(), 1, 'card: the same upload opens for a card account');
       await page.locator('dialog.fin-dlg .fin-foot [data-close]').click();
       await page.locator('dialog.fin-dlg').waitFor({state: 'detached'});
