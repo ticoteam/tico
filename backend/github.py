@@ -1041,7 +1041,11 @@ def apply_checks(c, link_id, head, checks, since=None):
     dropped = _dropped(checks, kept)
     if detail.get("checks") == kept and link.get("checks") == state and detail.get("checks_dropped") == dropped:
         return state
-    held = "pending" in (detail.get("checks") or {}).values() and "pending" not in checks.values()
+    # The stored copy still held a running check (or left some out, which may have been one): a read that finds none
+    # going finishes the head even when its state stays the same.
+    held = ("pending" in (detail.get("checks") or {}).values() or bool(detail.get("checks_dropped"))) and (
+        "pending" not in checks.values()
+    )
     detail["checks"] = kept
     _set_dropped(detail, dropped)
     changed = state != link.get("checks")

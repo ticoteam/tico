@@ -21,7 +21,9 @@ failed CI run, ask for the check again), and nothing else moves it. Nov 8: PR 30
 and the failure never reached the builder, so the ticket sat at In QA for hours with nothing to catch it. Such a ticket
 is stranded on the same terms, and also needs: no open check (an open subtask is a recorded wait), no CI still going
 or merge queued on an open pull request (`_ci_going`: github wakes the builder when it finishes), and nothing changed
-on it or under it (a check finishing, so the verdict's move goes first) for REVIEW_QUIET_MINUTES. Any other review (a
+on it or under it (a check finishing, so the verdict's move goes first) for REVIEW_QUIET_MINUTES. A queued resume is
+dropped at claim once CI starts, the merge is queued or a check under it changes. A resume dropped before it ran does
+not count toward NO_PROGRESS_LIMIT. Any other review (a
 person's look, Pending Release, Post Release QA) waits on someone else and is not the sweep's.
 
 Such a task gets one wake for its owner on the task (`refs.wake` "resume", `refs.stranded` true) through the ordinary
@@ -71,7 +73,10 @@ _MARKS = ",".join("?" * len(LIVE_JOBS))
 # An open pull request link `l` with CI still going or queued to merge (_ci_going). Binds nothing.
 _CI_GOING = (
     "l.kind='pr' AND l.state IN ('open','draft') "
-    "AND (l.checks='pending' OR json_extract(l.detail,'$.merge_queue.state')='queued')"
+    "AND (l.checks='pending' OR json_extract(l.detail,'$.merge_queue.state')='queued' "
+    # A failure outranks a running check, so a failing link may still have CI going, or a check its copy left out.
+    "OR json_extract(l.detail,'$.checks_dropped') IS NOT NULL "
+    "OR EXISTS (SELECT 1 FROM json_each(l.detail,'$.checks') WHERE value='pending'))"
 )
 _BOOKKEEPING = ",".join("?" * len(BOOKKEEPING))
 
@@ -263,7 +268,7 @@ def state(c: sqlite3.Connection, row: dict[str, Any], at: str) -> dict[str, Any]
     quiet = QUIET_MINUTES if row["status"] == "doing" else REVIEW_QUIET_MINUTES
     if quiet_since > cast(str, H.shift(at, minutes=-quiet)):
         return None
-    since = sum(1 for r in resumes if r > progress)
+    since = sum(1 for r in resumes if r > progress) - _dropped_resumes(c, row, progress)
     if since >= NO_PROGRESS_LIMIT:
         if c.execute(
             "SELECT 1 FROM history_events WHERE subject_type='task' AND subject_id=? AND kind=? AND created_at>? LIMIT 1",
@@ -348,7 +353,7 @@ def handles(c: sqlite3.Connection, row: dict[str, Any] | None) -> bool:
         "SELECT count(*) FROM history_events WHERE subject_type='task' AND subject_id=? AND kind=? AND created_at>?",
         (row["id"], RESUMED, progress),
     ).fetchone()[0]
-    return since < NO_PROGRESS_LIMIT
+    return since - _dropped_resumes(c, row, progress) < NO_PROGRESS_LIMIT
 
 
 def hears(c: sqlite3.Connection, row: dict[str, Any]) -> str:
@@ -403,7 +408,7 @@ def told(c: sqlite3.Connection, at: str) -> set[str]:
 def obsolete_sql() -> str:
     """The condition, for execution.obsolete_notices_sql (m: the notice's message, j: its queued job, t: its task), that
     a queued stranded resume is out of date: its task is no longer in progress or in review, a review ticket's CI started
-    or its merge was queued (_ci_going), its owner changed, or it moved on since
+    or its merge was queued (_ci_going) or a check under it changed, its owner changed, or it moved on since
     the notice was written by _progress's signal (a step, status or owner change, a note or message its owner wrote, a
     subtask filed under it). The claim cancels it, as it cancels any other out-of-date keeper notice. A resume whose turn
     already started is the rest of that turn, so it is never obsolete. Binds no parameters: the claim's queries bind
@@ -421,7 +426,10 @@ def obsolete_sql() -> str:
         f"AND NOT EXISTS (SELECT 1 FROM messages n WHERE n.id=s.in_reply_to AND n.sender_id='{H.KEEPER}' "
         "AND json_extract(n.refs,'$.stranded')=1)) "
         "OR EXISTS (SELECT 1 FROM task_relations r WHERE r.to_task=t.id AND r.kind='parent' AND r.created_at>m.created_at) "
-        f"OR t.status='review' AND EXISTS (SELECT 1 FROM task_links l WHERE l.task_id=t.id AND {_CI_GOING}))"
+        f"OR t.status='review' AND EXISTS (SELECT 1 FROM task_links l WHERE l.task_id=t.id AND {_CI_GOING}) "
+        # A check under a review ticket reopened or changed: the sweep waits out its quiet time again.
+        "OR t.status='review' AND EXISTS (SELECT 1 FROM task_relations r JOIN tasks k ON k.id=r.from_task "
+        "WHERE r.to_task=t.id AND r.kind='parent' AND k.updated_at>m.created_at))"
     )
 
 
@@ -460,6 +468,20 @@ def _live(c: sqlite3.Connection, row: dict[str, Any]) -> bool:
             (slug, row["id"]),
         ).fetchone()
         is not None
+    )
+
+
+def _dropped_resumes(c: sqlite3.Connection, row: dict[str, Any], progress: str) -> int:
+    """Resumes since `progress` that the claim dropped before they ran (obsolete_sql): they gave the bot no run, so they
+    do not count toward NO_PROGRESS_LIMIT."""
+    return int(
+        c.execute(
+            "SELECT count(*) FROM messages m JOIN jobs j ON j.message_id=m.id WHERE m.sender_id=? AND m.created_at>? "
+            "AND json_extract(m.refs,'$.wake')='resume' AND json_extract(m.refs,'$.stranded')=1 "
+            "AND json_extract(m.refs,'$.task')=? AND j.state='canceled' "
+            "AND NOT EXISTS (SELECT 1 FROM attempts a WHERE a.id=j.attempt_id AND a.started_at IS NOT NULL)",
+            (H.KEEPER, progress, row["id"]),
+        ).fetchone()[0]
     )
 
 

@@ -497,14 +497,19 @@ def test_a_review_ticket_someone_else_moves_is_not_resumed(api):
     fresh = dev_ticket(api, "Check just finished", n=4, check="done")
     release = dev_ticket(api, "Merged", n=5, step="Pending Release", checks="passing")
     look = new_task(api, "A person's look")
+    rerun = dev_ticket(api, "Failed, re-run going", n=7, checks="failing")
     plain = dev_ticket(api, "Nothing to wait on", n=6, check="done")
-    held = (checking, ci, queued, fresh, release, look)
+    held = (checking, ci, queued, fresh, release, look, rerun)
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE tasks SET status='review' WHERE id=?", (look,))
         c.execute(
             "UPDATE task_links SET detail=json_set(coalesce(detail,'{}'),'$.merge_queue',json('{\"state\":\"queued\"}')) "
             "WHERE task_id=?",
             (queued,),
+        )
+        c.execute(
+            "UPDATE task_links SET detail=json_set(coalesce(detail,'{}'),'$.checks',json(?)) WHERE task_id=?",
+            ('{"suite:github-actions#1": "failing", "suite:github-actions#2": "pending"}', rerun),
         )
         for tid in held:
             strand_review(c, tid, hours=3)
@@ -523,7 +528,7 @@ def test_a_review_ticket_someone_else_moves_is_not_resumed(api):
         )
 
 
-@pytest.mark.parametrize("how", ["ci", "merge_queue", "step"])
+@pytest.mark.parametrize("how", ["ci", "failing_running", "merge_queue", "step", "check_reopened"])
 def test_a_queued_review_resume_is_dropped_at_claim_once_ci_or_the_merge_queue_takes_over(api, how):
     """The resume waited behind other work; meanwhile CI started again on the head, the pull request joined the merge
     queue, or the ticket left its check step. Its "no CI going" text is stale, so the claim drops it."""
@@ -540,6 +545,14 @@ def test_a_queued_review_resume_is_dropped_at_claim_once_ci_or_the_merge_queue_t
         c.execute("UPDATE messages SET created_at=? WHERE id=?", (H.shift(H.now(), minutes=-30), message))
         if how == "ci":
             c.execute("UPDATE task_links SET checks='pending' WHERE task_id=?", (tid,))
+        elif how == "failing_running":  # failing already, a re-run of the failed job still going
+            c.execute(
+                "UPDATE task_links SET detail=json_set(coalesce(detail,'{}'),'$.checks',json(?)) WHERE task_id=?",
+                ('{"suite:github-actions#1": "failing", "suite:github-actions#2": "pending"}', tid),
+            )
+        elif how == "check_reopened":
+            kid = c.execute("SELECT from_task FROM task_relations WHERE to_task=? AND kind='parent'", (tid,)).fetchone()
+            c.execute("UPDATE tasks SET status='doing', updated_at=? WHERE id=?", (H.now(), kid[0]))
         elif how == "merge_queue":
             c.execute(
                 "UPDATE task_links SET detail=json_set(coalesce(detail,'{}'),'$.merge_queue.state','queued') "
@@ -567,3 +580,24 @@ def test_a_queued_review_resume_still_stranded_is_handed_out_at_claim(api):
         ).fetchone()[0]
     attempt = claim(api, machine)
     assert attempt is not None and attempt["job_id"] == job
+
+
+def test_resumes_the_claim_dropped_before_they_ran_do_not_stop_resuming(api):
+    """CI started again three times while a review resume waited, and each was dropped at claim: the bot had no run,
+    so the fourth time the ticket is stranded it is resumed again, not stopped."""
+    online(api, "ops")
+    tid = dev_ticket(api, "Pipeline manager 1/3", check="done")
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE jobs SET state='canceled' WHERE bot_id='ops' AND state='queued'")
+        strand_review(c, tid)
+        at = H.now()
+        for _ in range(SR.NO_PROGRESS_LIMIT):
+            assert SR.run(c, at) == {"resumed": 1, "stopped": 0}
+            c.execute(
+                "UPDATE jobs SET state='canceled' WHERE bot_id='ops' AND state='queued' AND message_id IN "
+                "(SELECT id FROM messages WHERE json_extract(refs,'$.stranded')=1)"
+            )
+            at = H.shift(at, minutes=SR.REVIEW_QUIET_MINUTES + 1)
+        assert SR.handles(c, H.task(c, tid))
+        assert SR.run(c, at) == {"resumed": 1, "stopped": 0}
+        assert stops(c, tid) == []
