@@ -6,6 +6,8 @@ import uuid
 from datetime import datetime, timedelta, timezone
 
 from backend import hubdb as H
+from backend import pipeline_review
+from backend import pipeline_setup as S
 from backend.tests.test_api import api, get, post  # noqa: F401  (api is a fixture)
 
 
@@ -346,6 +348,20 @@ def test_factory_done_counts_real_moves_into_the_output_stage_without_requiremen
         assert c.execute("SELECT COUNT(*) FROM stage_visits").fetchone()[0] == 0
 
 
+def test_a_closed_unfinished_card_is_not_a_factory_done_count(api):
+    # Finding F7: the done count uses the engine's shipment predicate. One shipped card and one card closed unfinished
+    # (a Close lands it in the output stage) count as one done card.
+    growth = make_factory(api, "Gro")
+    done_closed = [{"name": "Doing", "status": "doing"}, {"name": "Done", "status": "closed"}]
+    sales, steps = make_type(api, "Sls", steps=done_closed, factory=growth)
+    shipped = card(api, sales, steps["Doing"])
+    cancelled = card(api, sales, steps["Doing"])
+    move(api, shipped["id"], step=steps["Done"])
+    with api.app.state.store.transaction() as c:
+        H.task_close(c, H.KEEPER, cancelled["id"], note="Dropped")
+    assert overview(api)["factories"][0]["done"] == 1
+
+
 def test_the_migration_picks_the_output_stage_by_flow_order_not_creation_order(api):
     # Engineering was made first, but Product feeds it: the factory's output is Engineering's done stage.
     import importlib.util
@@ -439,20 +455,28 @@ SPAWN_ENGINEERING = [{"name": "Doing", "status": "doing"}, {"name": "Done", "sta
 
 
 def test_a_real_spawn_then_ship_then_resume_makes_one_spawn_lap(api):
-    # Product's Doing spawns a subtask on the way to Waiting; the subtask ships, and the parent resumes into Validate. No
-    # handoff records the parent's return (D64), so the lap is read from its own history.
-    growth = make_factory(api, "Gro")
-    prod, p_steps = make_type(api, "Prod", steps=SPAWN_PRODUCT, factory=growth)
-    eng, e_steps = make_type(api, "Eng", steps=SPAWN_ENGINEERING, factory=growth)
-    link(api, prod, p_steps["Doing"], eng, mode="spawn")
-    link(api, eng, e_steps["Done"], prod)  # the way back that makes a loop
-    parent = card(api, prod, p_steps["Doing"])
-    move(api, parent["id"], step=p_steps["Waiting"])  # leaves the spawn stage: the subtask is filed
+    # The company's real setup (pipeline_setup, tico_default): Product's Review spawns an Engineering ticket and there is no
+    # return link. The parent's own resumption (D64) closes the loop, so the Product/Engineering loop shows one spawn lap.
+    with api.app.state.store.transaction() as c:
+        out = S.apply_factory_setup(c, "human:ana")
+    prod, eng = out["pipelines"]["Product"], out["pipelines"]["Engineering"]
+    with api.app.state.store.read() as c:
+        steps = {(str(t), str(n)): str(i) for t, n, i in c.execute("SELECT type_id, name, id FROM task_steps")}
+    parent = card(api, prod, steps[(prod, "Review")])
+    with (
+        api.app.state.store.transaction() as c
+    ):  # the person approves the spec: the card leaves Review, the subtask is filed
+        req_id, req_version = c.execute(
+            "SELECT id, version FROM stage_requirements WHERE pipeline_stage_id=? AND name='Spec approved'",
+            (steps[(prod, "Review")],),
+        ).fetchone()
+        pipeline_review.approve(c, "human:ana", parent["id"], req_id, requirement_version=req_version)
     with api.app.state.store.read() as c:
         (subtask,) = c.execute("SELECT target_task_id FROM pipeline_handoffs WHERE source_task_id=?", (parent["id"],))
-    move(api, subtask[0], step=e_steps["Done"])  # ships
-    move(api, parent["id"], step=p_steps["Validate"])  # resumes
+    move(api, subtask[0], step=steps[(eng, "Done")])  # ships (the booted Engineering type keeps its own stages)
+    move(api, parent["id"], step=steps[(prod, "Validate")])  # resumes
     (loop,) = overview(api)["loops"]
+    assert sorted(loop["pipelines"]) == sorted([prod, eng])
     assert loop["laps"] == 1
 
 

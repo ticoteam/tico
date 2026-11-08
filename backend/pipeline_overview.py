@@ -21,7 +21,7 @@ from typing import TYPE_CHECKING, Any, cast
 
 from fastapi import Request
 
-from . import hubdb, pipeline_manager as PM, pipeline_review, pipeline_rights
+from . import hubdb, pipeline_engine, pipeline_manager as PM, pipeline_review, pipeline_rights
 from .pipeline_setup import completion_stage
 from .store import Problem
 
@@ -333,11 +333,18 @@ def _spawn_laps(c: "sqlite3.Connection", members: list[str], seen: str) -> list[
 
 
 def _loops(c: "sqlite3.Connection", ordered: list[str], links: list[Row], seen: str, since: str) -> list[Row]:
-    """Cycles in the links the reader sees, with their completed laps in the period. A move lap is one card's hops round a
-    cycle; the hops of a card that came back in the period are loaded whole, so a lap that left before the period still
-    counts when it returns in it. A spawn lap is read from the parent's departure and resumption (_spawn_laps). The median
-    lap time shows only from LOOP_MEDIAN_LAPS laps."""
-    groups = _sccs(ordered, [(str(r["from_pipeline_id"]), str(r["to_pipeline_id"])) for r in links])
+    """Cycles in the links the reader sees, with their completed laps in the period. A spawn link also closes a cycle: the
+    parent resumes in its own pipeline (D64). A move lap is one card's hops round a cycle; the hops of a card that came back
+    in the period are loaded whole, so a lap that left before the period still counts when it returns in it. A spawn lap
+    is read from the parent's departure and resumption (_spawn_laps). The median lap time shows only from LOOP_MEDIAN_LAPS
+    laps."""
+    edges: list[tuple[str, str]] = []
+    for r in links:
+        a, b = str(r["from_pipeline_id"]), str(r["to_pipeline_id"])
+        edges.append((a, b))
+        if str(r["mode"]) == "spawn":
+            edges.append((b, a))  # the parent resumes in its own pipeline (D64): that is the way back, no link needed
+    groups = _sccs(ordered, edges)
     if not groups or not _columns(c, "pipeline_handoffs"):
         return []
     members = sorted({p for g in groups for p in g})
@@ -381,18 +388,25 @@ def _loops(c: "sqlite3.Connection", ordered: list[str], links: list[Row], seen: 
 
 
 def _done(c: "sqlite3.Connection", stages: dict[str, str], seen: str, since: str) -> dict[str, int]:
-    """Per output stage: the cards that entered it in the period (a factory's done count). Read from the step history, which
-    every move writes, so a pipeline with no stage requirements counts too; a card that re-enters a stage counts once."""
+    """Per output stage: the cards that shipped into it in the period (a factory's done count). The candidates are the cards
+    that entered the stage in the period, read from the step history, which every move writes, so a pipeline with no stage
+    requirements counts too. Each candidate counts only when the engine says it shipped (pipeline_engine.shipped), so a
+    Close that lands an unfinished card in the output stage is not a done card. A card that re-enters a stage counts once."""
     if not stages:
         return {}
     rows = _rows(
         c,
-        "SELECT e.new AS sid, COUNT(DISTINCT e.subject_id) AS n FROM history_events e "
+        "SELECT DISTINCT e.new AS sid, e.subject_id AS tid FROM history_events e "
         f"WHERE e.subject_type='task' AND e.kind='step' AND e.new IN ({_marks(list(stages.values()))}) "
-        f"AND e.created_at>=? AND e.subject_id IN (SELECT id FROM tasks WHERE ({seen})) GROUP BY e.new",
+        f"AND e.created_at>=? AND e.subject_id IN (SELECT id FROM tasks WHERE ({seen}))",
         [*stages.values(), since],
     )
-    return {str(r["sid"]): int(r["n"] or 0) for r in rows}
+    won = pipeline_engine.shipped(c, sorted({str(r["tid"]) for r in rows}))
+    counted: dict[str, set[str]] = {}
+    for r in rows:
+        if str(r["tid"]) in won:
+            counted.setdefault(str(r["sid"]), set()).add(str(r["tid"]))
+    return {sid: len(cards) for sid, cards in counted.items()}
 
 
 def _label(raw: str) -> str:

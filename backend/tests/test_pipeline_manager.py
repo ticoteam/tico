@@ -2,6 +2,7 @@
 Limit, pauses the Limit while a ticket is on hold, opens one BotOps task when its passes stop, and takes no action
 outside the allowed set. An empty exception list makes no model call."""
 
+import importlib
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -30,8 +31,10 @@ def stamp(at):
 
 
 def pipeline(c, manager="coo", every=10, name="Launch"):
+    """A pipeline whose manager was assigned a day ago, so the watchdog's clock starts before the test's own times."""
     typ = H.type_create(c, ANA, name, STAGES, mover=True)
     c.execute("UPDATE task_types SET manager=?, manager_every_minutes=? WHERE id=?", (manager, every, typ["id"]))
+    c.execute("UPDATE task_types SET manager_since=? WHERE id=?", (stamp(now() - timedelta(days=1)), typ["id"]))
     return typ["id"]
 
 
@@ -253,6 +256,7 @@ def test_a_pass_that_raises_is_recorded_as_a_failed_run_and_the_others_still_run
     store = api.app.state.store
     failures: list[dict[str, str]] = []
     with store.transaction() as c:
+        botops_roster(c)
         broken = pipeline(c, name="Broken")
         healthy = pipeline(c, name="Healthy")
 
@@ -504,26 +508,26 @@ def test_the_late_list_costs_the_same_queries_for_many_tickets_and_is_capped(api
             statements: list[str] = []
             c.set_trace_callback(statements.append)
             try:
-                listing, more = PM.late_listing(c, ANA, "1=1", type_id, base, wanted)
+                listing, cursor = PM.late_listing(c, ANA, "1=1", type_id, base, wanted)
             finally:
                 c.set_trace_callback(None)
-        return sum(1 for s in statements if s.lstrip().upper().startswith("SELECT")), listing, more
+        return sum(1 for s in statements if s.lstrip().upper().startswith("SELECT")), listing, cursor
 
     add(4, 0)
-    few, listing, more = selects()
-    assert len(listing) == 4 and more is False
+    few, listing, cursor = selects()
+    assert len(listing) == 4 and cursor is None
     add(96, 4)
-    many, listing, more = selects()
-    assert len(listing) == 100 and more is False
+    many, listing, cursor = selects()
+    assert len(listing) == 100 and cursor is None
     assert many == few and many < 15
 
     add(401, 100)
-    _, listing, more = selects()
-    assert len(listing) == PM.LATE_CAP == 500 and more is True
+    _, listing, cursor = selects()
+    assert len(listing) == PM.LATE_CAP == 500 and cursor is not None
 
     picked = [sorted(listing)[0], sorted(listing)[1], "not-late"]
-    _, listing, more = selects(set(picked))
-    assert sorted(listing) == sorted(picked[:2]) and more is False
+    _, listing, cursor = selects(set(picked))
+    assert sorted(listing) == sorted(picked[:2]) and cursor is None
 
 
 def test_one_asked_ticket_among_5000_is_the_only_row_whose_clock_is_computed(api, monkeypatch):
@@ -549,15 +553,15 @@ def test_one_asked_ticket_among_5000_is_the_only_row_whose_clock_is_computed(api
 
     monkeypatch.setattr(PM, "late_tickets", counting)
     with store.read() as c:
-        listing, more = PM.late_listing(c, ANA, "1=1", type_id, base, {ids[4321]})
-    assert list(listing) == [ids[4321]] and more is False
+        listing, cursor = PM.late_listing(c, ANA, "1=1", type_id, base, {ids[4321]})
+    assert list(listing) == [ids[4321]] and cursor is None
     assert sum(evaluated) == 1
 
     evaluated.clear()
     with store.read() as c:
-        listing, more = PM.late_listing(c, ANA, "1=1", type_id, base, None)
-    assert len(listing) == PM.LATE_CAP and more is True
-    assert max(evaluated) <= PM.LATE_PAGE
+        listing, cursor = PM.late_listing(c, ANA, "1=1", type_id, base, None)
+    assert len(listing) == PM.LATE_CAP and cursor is not None
+    assert max(evaluated) <= PM.LATE_PAGE and sum(evaluated) <= PM.LATE_SCAN
 
 
 def test_a_manager_set_on_an_old_pipeline_is_not_judged_on_its_first_tick(api):
@@ -566,8 +570,166 @@ def test_a_manager_set_on_an_old_pipeline_is_not_judged_on_its_first_tick(api):
     store = api.app.state.store
     with store.transaction() as c:
         botops_roster(c)
-        type_id = pipeline(c)
+        type_id = assign_manager(c)  # assigned now; the pipeline itself is three days old
         c.execute("UPDATE task_types SET created_at=? WHERE id=?", (stamp(now() - timedelta(days=3)), type_id))
     PM.watchdog(store, now())
     with store.read() as c:
         assert botops_tasks(c) == 0
+
+
+def test_a_members_only_pipelines_stopped_task_names_it_to_no_one_outside_botops(api):
+    """F4: the watchdog's task for a members-only pipeline is private to BotOps. A company member who is not on the
+    pipeline reads neither the task nor its title in the task list or the Log; the company sees the pipeline's name
+    nowhere in the stall's record."""
+    store = api.app.state.store
+    t0 = now()
+    with store.transaction() as c:
+        botops_roster(c)
+        pid = pipeline(c, name="Legal")
+        c.execute("UPDATE task_types SET pipeline_visibility='members' WHERE id=?", (pid,))
+    PM.tick(store, t0)
+    PM.watchdog(store, t0 + timedelta(minutes=40))
+    with store.read() as c:
+        [(tid, private)] = c.execute(
+            "SELECT id, private FROM tasks WHERE owner_id='bot:botops' AND title='Pipeline manager stopped: Legal'"
+        ).fetchall()
+        assert private == 1
+        assert H.task_private_readable(c, "bot:botops", H.task(c, tid))
+    get(api, f"tasks/{tid}", "cara-test", expected=404)
+    assert "Pipeline manager stopped: Legal" not in str(get(api, "tasks", "cara-test"))
+    assert "Pipeline manager stopped: Legal" not in str(get(api, "history?limit=200", "cara-test"))
+
+
+def assign_manager(c, name="Launch"):
+    """A pipeline given a manager now: the manager_since trigger stamps the assignment."""
+    typ = H.type_create(c, ANA, name, STAGES, mover=True)
+    c.execute("UPDATE task_types SET manager=?, manager_every_minutes=10 WHERE id=?", ("coo", typ["id"]))
+    return typ["id"]
+
+
+def test_a_manager_that_never_ran_is_stalled_once_its_grace_from_the_assignment_has_passed(api):
+    """F11 (Codex repro 1): a manager assigned ten days ago and never run is stalled. Its clock is the assignment, and
+    nothing is missed until one run interval and the stall limit have passed."""
+    store = api.app.state.store
+    with store.transaction() as c:
+        botops_roster(c)
+        since = now()
+        pid = assign_manager(c)
+    with store.read() as c:
+        row = dict(c.execute(PM.SELECT_PIPELINE + " WHERE id=?", (pid,)).fetchone())
+        assert PM.stalled(c, row, since + timedelta(minutes=30)) == 0
+        assert PM.stalled(c, row, since + timedelta(days=10)) >= PM.MISSED_RUNS
+    PM.watchdog(store, since + timedelta(days=10))
+    with store.read() as c:
+        assert botops_tasks(c) == 1
+
+
+def test_a_run_from_before_the_assignment_is_no_health_history_for_the_new_manager(api):
+    """F11 (Codex repro 2): a manager assigned to a pipeline whose last pass was twelve hours ago is not stalled on its
+    first tick. The old pass is not this manager's, so it starts no clock."""
+    store = api.app.state.store
+    with store.transaction() as c:
+        botops_roster(c)
+        since = now()
+        pid = assign_manager(c)
+    PM.tick(store, since - timedelta(hours=12))  # a pass from before the assignment
+    with store.read() as c:
+        row = dict(c.execute(PM.SELECT_PIPELINE + " WHERE id=?", (pid,)).fetchone())
+        assert PM.stalled(c, row, since + timedelta(minutes=1)) == 0
+    PM.watchdog(store, since + timedelta(minutes=1))
+    with store.read() as c:
+        assert botops_tasks(c) == 0
+
+
+def test_a_reassigned_manager_starts_a_new_clock_and_clearing_it_stops_the_clock(api):
+    store = api.app.state.store
+    with store.transaction() as c:
+        pid = assign_manager(c)
+        first = c.execute("SELECT manager_since FROM task_types WHERE id=?", (pid,)).fetchone()[0]
+        assert first is not None
+        c.execute("UPDATE task_types SET manager=NULL WHERE id=?", (pid,))
+        assert c.execute("SELECT manager_since FROM task_types WHERE id=?", (pid,)).fetchone()[0] is None
+        c.execute("UPDATE task_types SET manager='coo' WHERE id=?", (pid,))
+        again = c.execute("SELECT manager_since FROM task_types WHERE id=?", (pid,)).fetchone()[0]
+        assert H.parse_ts(again) >= H.parse_ts(first)
+
+
+def test_the_migration_backfills_existing_managed_pipelines_to_the_migration_time(api):
+    """F11: a pipeline managed before the migration is stamped with the upgrade's time, not left without a clock."""
+    migration = importlib.import_module("backend.migrations.20261108011313_pipeline_manager_since")
+    store = api.app.state.store
+    with store.transaction() as c:
+        managed = assign_manager(c, name="Managed")
+        unmanaged = H.type_create(c, ANA, "Unmanaged", STAGES, mover=True)["id"]
+        c.execute("UPDATE task_types SET manager_since=NULL WHERE id=?", (managed,))
+        before = now()
+        migration.up(c)
+        stamps = dict(c.execute("SELECT id, manager_since FROM task_types WHERE id IN (?, ?)", (managed, unmanaged)))
+    assert H.parse_ts(stamps[managed]) >= before
+    assert stamps[unmanaged] is None
+
+
+def test_the_pipeline_wide_late_list_reads_a_bounded_window_and_a_cursor_visits_every_ticket_once(api, monkeypatch):
+    """F10 (Codex): 5,000 live tickets, none late. One request evaluates at most LATE_SCAN of them and returns a `next`
+    cursor; following the cursors evaluates every ticket exactly once."""
+    store = api.app.state.store
+    base = now()
+    with store.transaction() as c:
+        type_id = pipeline(c)
+        c.execute("UPDATE task_steps SET limit_minutes=60 WHERE id=?", (step(c, type_id, "Building"),))
+        ids = [
+            H.task_create(c, ANA, f"Fresh {n}", "", ANA, type=type_id, step="Building", lint=False)["id"]
+            for n in range(5000)
+        ]
+        for ticket in ids:
+            visit(c, ticket, type_id, "Building", base - timedelta(minutes=5))
+    evaluated: list[str] = []
+    real = PM.late_tickets
+
+    def counting(c, rows, at):
+        evaluated.extend(str(r["id"]) for r in rows)
+        return real(c, rows, at)
+
+    monkeypatch.setattr(PM, "late_tickets", counting)
+    per_request: list[int] = []
+    cursor = None
+    while True:
+        before = len(evaluated)
+        query = "" if cursor is None else f"?after={cursor}"
+        body = get(api, f"pipelines/{type_id}/late{query}")
+        per_request.append(len(evaluated) - before)
+        assert body["late"] == {}
+        cursor = body["next"]
+        if cursor is None:
+            break
+    assert per_request[0] == PM.LATE_SCAN and max(per_request) <= PM.LATE_SCAN
+    assert len(per_request) == 3
+    assert len(evaluated) == len(set(evaluated)) == 5000 and set(evaluated) == set(ids)
+
+
+def test_more_late_tickets_than_the_cap_are_listed_across_cursors_without_a_gap_or_a_repeat(api):
+    """F10: 600 late tickets: the first answer lists LATE_CAP of them and a cursor; the cursor's answer lists the rest."""
+    store = api.app.state.store
+    base = now()
+    with store.transaction() as c:
+        type_id = pipeline(c)
+        c.execute("UPDATE task_steps SET limit_minutes=60 WHERE id=?", (step(c, type_id, "Building"),))
+        ids = [
+            H.task_create(c, ANA, f"Overdue {n}", "", ANA, type=type_id, step="Building", lint=False)["id"]
+            for n in range(600)
+        ]
+        for ticket in ids:
+            visit(c, ticket, type_id, "Building", base - timedelta(hours=2))
+    listed: list[str] = []
+    cursor = None
+    requests = 0
+    while True:
+        with store.read() as c:
+            listing, cursor_out = PM.late_listing(c, ANA, "1=1", type_id, base, None, cursor or "")
+        requests += 1
+        listed.extend(listing)
+        cursor = cursor_out
+        if cursor is None:
+            break
+    assert requests == 2
+    assert len(listed) == len(set(listed)) == 600 and set(listed) == set(ids)

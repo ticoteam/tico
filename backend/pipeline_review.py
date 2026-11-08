@@ -554,14 +554,14 @@ def _queue_fields(
         tuple[str, str], tuple[Row, list[Row]] | None
     ] = {}  # Not validated's candidates per stage, read once
     at_stage_tasks = [item["task_id"] for item in items if tasks[item["task_id"]].get("step_id") == item["stage_id"]]
-    handed = _handed_links(c, at_stage_tasks)
+    delivered = _delivered_links(c, at_stage_tasks)
 
     def _route_ok(item: Row) -> bool:
         key = (str(item["pipeline_id"]), str(item["stage_id"]))
         if key not in candidates:
             candidates[key] = _route_candidates(c, actor, *key)
         found = candidates[key]
-        return found is not None and _pick_link(found[1], handed.get(item["task_id"], [])) is not None
+        return found is not None and _pick_link(found[1], delivered.get(item["task_id"], [])) is not None
 
     for item in items:
         key = (item["task_id"], item["requirement_id"])
@@ -1187,27 +1187,39 @@ def _route_candidates(
     return (back, links) if links else None
 
 
-def _handed_links(c: "sqlite3.Connection", task_ids: "Iterable[str]") -> dict[str, list[str]]:
-    """{ticket id: the spawn link ids whose live handoffs filed that ticket's subtasks, the earliest handoff first}, from
-    one read."""
+def _delivered_links(c: "sqlite3.Connection", task_ids: "Iterable[str]") -> dict[str, list[str]]:
+    """{ticket id: the spawn link ids whose live handoffs filed a subtask that has shipped, in handoff order}, from one read
+    per chunk of tickets. A handoff counts only when its subtask is in the link's target pipeline, and "shipped" is the
+    engine's own reading (pipeline_engine.shipped), so a cancelled subtask never delivers the work."""
+    ids = list(task_ids)
+    filed = _read(
+        c,
+        "SELECT h.source_task_id AS task_id, h.pipeline_link_id AS link_id, h.target_task_id AS child "
+        "FROM pipeline_handoffs h JOIN pipeline_links l ON l.id = h.pipeline_link_id AND l.mode = 'spawn' "
+        "AND l.retired_at IS NULL JOIN tasks t ON t.id = h.target_task_id AND t.type_id = l.to_pipeline_id "
+        "WHERE h.returned_at IS NULL AND h.source_task_id IN (SELECT value FROM json_each(?)) "
+        "ORDER BY h.created_at, h.id",
+        ids,
+    )
+    if not filed:
+        return {}
+    shipped = pipeline_engine.shipped(c, [str(row["child"]) for row in filed])
     out: dict[str, list[str]] = {}
-    for part in _chunks(task_ids):
-        for row in _rows(
-            c,
-            "SELECT source_task_id AS task_id, pipeline_link_id AS link_id, MIN(created_at) AS first_at "
-            "FROM pipeline_handoffs WHERE returned_at IS NULL AND source_task_id IN (SELECT value FROM json_each(?)) "
-            "GROUP BY source_task_id, pipeline_link_id ORDER BY first_at, pipeline_link_id",
-            (part,),
-        ):
-            out.setdefault(str(row["task_id"]), []).append(str(row["link_id"]))
+    for row in filed:
+        if str(row["child"]) not in shipped:
+            continue
+        links = out.setdefault(str(row["task_id"]), [])
+        if str(row["link_id"]) not in links:
+            links.append(str(row["link_id"]))
     return out
 
 
-def _pick_link(links: list[Row], handed: list[str]) -> Row | None:
-    """The spawn link the follow-up goes through: the link of the earliest live handoff that filed this ticket's subtasks
-    (D64), not the nearest stage. A ticket no handoff filed takes the nearest live spawn link before the stage."""
-    by_id = {str(link["id"]): link for link in links}
-    return next((by_id[link_id] for link_id in handed if link_id in by_id), links[0] if links else None)
+def _pick_link(links: list[Row], delivered: list[str]) -> Row | None:
+    """The spawn link the follow-up goes through: the one candidate link whose shipped subtask delivered this ticket's work
+    (D64). None unless exactly one candidate did: Not validated is not guessed from chronology or the nearest stage."""
+    wanted = set(delivered)
+    matched = [link for link in links if str(link["id"]) in wanted]
+    return matched[0] if len(matched) == 1 else None
 
 
 def _not_validated_route(
@@ -1215,13 +1227,28 @@ def _not_validated_route(
 ) -> tuple[Row, Row] | None:
     """Where "Not validated" sends a card from this stage (D66), or None when it is not offered: the back stage and the
     spawn link the follow-up files through (see _pick_link). It is offered only on a stage that comes directly after a
-    live In development stage that waits on its `subtasks`. The reader must be a person."""
+    live In development stage that waits on its `subtasks`. The reader must be a person. When the stage has spawn links
+    but none, or several, delivered shipped work, it refuses (`development_link`) instead of guessing."""
     found = _route_candidates(c, actor, pipeline_id, stage_id)
     if found is None:
         return None
     back, links = found
-    link = _pick_link(links, _handed_links(c, [task_id]).get(task_id, []))
-    return (back, link) if link is not None else None
+    delivered = _delivered_links(c, [task_id]).get(task_id, [])
+    link = _pick_link(links, delivered)
+    if link is None:
+        matched = [str(row["id"]) for row in links if str(row["id"]) in delivered]
+        if not matched:
+            raise Declined(
+                "development_link",
+                "No shipped subtask came through a spawn link, so Not validated has no link to file through",
+                409,
+            )
+        raise Declined(
+            "development_link",
+            "Shipped subtasks came through more than one spawn link, so Not validated cannot tell which one to file through",
+            409,
+        )
+    return back, link
 
 
 def not_validated(

@@ -1784,8 +1784,18 @@ def migrate(conn, adopt_legacy=False):
     task_blocked.ensure(conn)
     blocker_asks.ensure(conn)
     migrate_roadmap_roles(conn)
+    from .roadmap_flow import PRODUCT as ROADMAP_PRODUCT, role_type as roadmap_role_type
+
     if "manager" not in {r[1] for r in conn.execute("PRAGMA table_info(task_types)")}:
         add_column(conn, "task_types", "manager", "TEXT")
+        ensure_roadmap_types(conn)
+    elif (
+        roadmap_role_type(conn, ROADMAP_PRODUCT) is None
+        and conn.execute("SELECT 1 FROM task_types WHERE manager IS NOT NULL AND manager <> '' LIMIT 1").fetchone()
+        is None
+    ):
+        # A new database: migration 20261108011313 (manager_since) adds `manager` before this step runs, so the missing
+        # column no longer marks the first start. No Product pipeline and no managed pipeline at all says it instead.
         ensure_roadmap_types(conn)
     from .roadmaps import migrate as migrate_roadmaps
 
@@ -4766,7 +4776,8 @@ def _set_status(
 
     # Every forward stage move is held to the stage's requirements, not only task_update's (pipeline_engine). Cancelling
     # (a close or a decline) is not forward progress: it is never held to exit requirements.
-    if row is not None and step_id and step_id != row.get("step_id") and not pipeline_engine.is_cancellation(effective):
+    cancelling = pipeline_engine.is_cancellation(effective, explicit_step=step is not None)
+    if row is not None and step_id and step_id != row.get("step_id") and not cancelling:
         pipeline_engine.check_forward(conn, actor, row, type_id, step_id)
     # Direct internal writers (roadmap sync, hold restoration) have the automatic finish contract.
     # task_update/task_close preflight explicit finishes before any write and handle their own cascade.
@@ -4805,10 +4816,8 @@ def _set_status(
         from . import pipeline_engine
 
         if row:
-            # A Close with no step of its own cancels the ticket (pipeline_engine._shipped_ids); a move onto a stage does not.
-            pipeline_engine.on_step_change(
-                conn, actor, row, type_id, step_id, ts, closing=status == "closed" and step is None
-            )
+            # A Close or a Decline cancels the ticket (pipeline_engine.is_cancellation); a move onto a stage does not.
+            pipeline_engine.on_step_change(conn, actor, row, type_id, step_id, ts, closing=cancelling)
     if row.get("status") != effective:
         _task_event(conn, row["id"], actor, "status", row.get("status"), effective, note)
         if row.get("occurrence"):
@@ -7702,8 +7711,14 @@ def task_update(
         from . import pipeline_engine, step_flow
 
         # A stage's requirements (backend/pipeline_engine.py) may refuse the move before the review gate does.
-        # A cancellation (a Close or a Decline) is not progress: it is never held to completion requirements.
-        if step_id and row and step_id != row.get("step_id") and not pipeline_engine.is_cancellation(effective):
+        # A cancellation (a Close or a Decline) is not progress: it is never held to completion requirements. A move into a
+        # closed stage such as Engineering's Done is progress, so it is held (pipeline_engine.is_cancellation).
+        if (
+            step_id
+            and row
+            and step_id != row.get("step_id")
+            and not pipeline_engine.is_cancellation(effective, explicit_step=step is not None)
+        ):
             pipeline_engine.check_move(
                 conn, actor, {**row, "type_id": type_id}, step_id, override_requirements, override_note=note
             )
@@ -8079,10 +8094,11 @@ def task_update(
     args["updated_at"] = ts
     if sets:
         conn.execute(f"UPDATE tasks SET {', '.join(sets)}, updated_at=:updated_at WHERE id=:id", args)
-    if body is not None and body != (row or {}).get("body"):
+    if (body is not None and body != (row or {}).get("body")) or any(v is not None for v in (due, owner, labels)):
         from . import pipeline_github_checks
 
-        # A new body is new work (the tasks_body_work_revision trigger): its checks go out of date in this same write.
+        # A new body is new work (the tasks_body_work_revision trigger), and the due date, owner and labels are facts field
+        # requirements read: either way the checks follow the new standing in this same write (none for a ticket without a PR).
         pipeline_github_checks.publish_affected(conn, task_id)
     if args.get("private"):
         # Made private: a reconnect card's person may not read it now (backend/reconnects.py).

@@ -353,3 +353,43 @@ def test_a_body_edit_puts_a_passed_check_back_to_waiting_in_the_same_write(setup
     with app.store.transaction() as c:
         H.task_update(c, ANA, w.task, body="A new plan.")
     assert states(app)[w.mockup] == "waiting"
+
+
+def test_a_date_cleared_after_a_stage_the_ticket_left_is_waiting_on_the_next_scheduler_pass(setup):
+    """Codex R3 F5: a due-date approval in the stage the ticket left stays met on its check until a pass reconciles it. The
+    pass selects tickets with requirements in their visited stages, so clearing the date (a field fact, not new work)
+    puts the check back to waiting."""
+    app, fake, gh, w = setup
+    gh.permissions = {"checks": "write", "metadata": "read"}
+    with app.store.transaction() as c:
+        w.c = c
+        due = w.requirement("Due", "field", "person", needs=json.dumps({"field": "due"}))
+        w.attach()
+        w.approve(w.mockup)
+        assert w.approve(w.signoff)["advanced"] is False  # the due date is still unmet, so the stage holds
+        H.task_update(c, ANA, w.task, due="2026-11-20T17:00:00Z")
+        assert w.approve(due)["advanced"] is True and w.step_of() == w.shipped
+    assert states(app)[due] == "met"
+    with app.store.transaction() as c:
+        H.task_update(c, ANA, w.task, due="")  # the date is cleared; the pass is what publishes it
+    C.publish_open(app.store)
+    assert states(app)[due] == "waiting"
+
+
+def test_a_cleared_due_date_puts_a_met_field_check_back_to_waiting_in_the_same_write(setup):
+    """A field fact changed through task_update (the due date here) publishes the affected checks in the same write, so a
+    visited stage's met check does not wait for the scheduler pass."""
+    app, fake, gh, w = setup
+    gh.permissions = {"checks": "write", "metadata": "read"}
+    with app.store.transaction() as c:
+        w.c = c
+        due = w.requirement("Due", "field", "person", needs=json.dumps({"field": "due"}))
+        w.attach()
+        w.approve(w.mockup)
+        w.approve(w.signoff)
+        H.task_update(c, ANA, w.task, due="2026-11-20T17:00:00Z")
+        assert w.approve(due)["advanced"] is True and w.step_of() == w.shipped
+    assert states(app)[due] == "met"
+    with app.store.transaction() as c:
+        H.task_update(c, ANA, w.task, due="")
+    assert states(app)[due] == "waiting"
