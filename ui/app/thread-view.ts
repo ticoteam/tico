@@ -392,7 +392,7 @@ async function thvLoad(view: ThvView): Promise<void> {
 function threadsReloadDM(actor: string) {
   for (const v of THV_VIEWS) if (v.opts.dm === actor && !v.gone) { if (v.id) void thvRefresh(v); else void thvLoad(v); }
 }
-function threadsReloadHome(actor) {
+function threadsReloadHome(actor: string) {
   for (const v of THV_VIEWS) if (v.opts.home === actor && !v.gone) { if (v.id) void thvRefresh(v); else void thvLoad(v); }
 }
 // The viewer's own held messages in this thread come back after a reload, still with Edit and Discard. A held edit (made
