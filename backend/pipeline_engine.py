@@ -1047,7 +1047,8 @@ def check_move(
                 task=task_id,
             )
         return
-    _hold(conn, actor, task_id, pipeline_id, here, _forward_scope(conn, task_id, here, target), override, override_note)
+    scope = _forward_scope(conn, task_id, here, target)
+    _hold(conn, actor, task_id, pipeline_id, f"Can't leave {here['name']} yet", scope, override, override_note)
 
 
 def is_completion(row: Row, effective: str | None) -> bool:
@@ -1064,13 +1065,18 @@ def check_completion(
     whose approval was still waiting."""
     task_id = str(row.get("id") or "")
     now = _one(conn, "SELECT type_id, step_id FROM tasks WHERE id = ?", (task_id,)) if task_id else None
-    if now is None or not now["step_id"]:
+    if now is None:
         return
-    here = stage(conn, str(now["step_id"]))
-    if here is None:
+    here = stage(conn, str(now["step_id"])) if now["step_id"] else None
+    scope: dict[str, str | None]
+    if here is not None:
+        scope = _forward_scope(conn, task_id, here, None)
+    else:
+        # No stage now (a Close on a pipeline with no Done stage clears it): the stages it visited still hold it.
+        scope = dict(_visited(conn, [task_id]).get(task_id, {}))
+    if not scope:
         return
-    scope = _forward_scope(conn, task_id, here, None)
-    _hold(conn, actor, task_id, str(now["type_id"]), here, scope, override, override_note)
+    _hold(conn, actor, task_id, str(now["type_id"] or ""), "Can't mark it done yet", scope, override, override_note)
 
 
 def _hold(
@@ -1078,7 +1084,7 @@ def _hold(
     actor: str,
     task_id: str,
     pipeline_id: str,
-    here: Row,
+    blocked: str,
     scope: dict[str, str | None],
     override: bool,
     override_note: str | None,
@@ -1102,14 +1108,14 @@ def _hold(
                 conn,
                 actor,
                 "requirement",
-                f"Can't leave {here['name']} yet: {_names(protected)}. A spec or release approval needs its named "
+                f"{blocked}: {_names(protected)}. A spec or release approval needs its named "
                 "person, so an override can't stand in for it.",
                 task=task_id,
             )
         _record_override(conn, actor, task_id, unmet, override_reason(override_note))
         return
     hint = "" if editable else " A pipeline editor can move it on anyway."
-    H.refuse(conn, actor, "requirement", f"Can't leave {here['name']} yet: {_names(unmet)}.{hint}", task=task_id)
+    H.refuse(conn, actor, "requirement", f"{blocked}: {_names(unmet)}.{hint}", task=task_id)
 
 
 def check_forward(conn: sqlite3.Connection, actor: str, row: Row, type_id: str | None, step_id: str | None) -> None:

@@ -370,50 +370,76 @@ def _pipeline_tasks(conn: sqlite3.Connection, row: Row) -> list[str] | None:
     """The tasks an attachment's provenance sits on, or None when that cannot be established (a lookup that does not resolve,
     or a walk past PROVENANCE_LIMIT nodes). The walk runs to a fixed point over blobs, files, runs (attempts) and tasks: a blob
     leads to its task attachments and to every file version holding it; a file to its task, its `task:` scope, and its versions'
-    blobs and runs; a run to the task it ran on; a task ends the walk. A task with no pipeline, or no task at all, adds nothing."""
-    tasks: list[str] = []
+    blobs and runs; a run to the task it ran on; a task ends the walk. A task with no pipeline, or no task at all, adds nothing.
+
+    The budget counts every distinct node, tasks included, and each lookup reads at most the budget left plus one row, so a
+    blob shared by thousands of tasks costs a handful of statements and is skipped, not walked (it runs under the writer)."""
+    tasks: set[str] = set()
     queue: list[tuple[str, str]] = []
-    if row.get("blob_id"):
-        queue.append(("blob", str(row["blob_id"])))
-    if row.get("file_id"):
-        queue.append(("file", str(row["file_id"])))
     seen: set[tuple[str, str]] = set()
-    while queue:
-        node = queue.pop()
+
+    def reach(kind: str, ident: str) -> bool:
+        """Adds a node once; False once the walk is past its budget."""
+        node = (kind, ident)
         if node in seen:
-            continue
+            return True
         seen.add(node)
         if len(seen) > PROVENANCE_LIMIT:
-            return None
-        kind, ident = node
+            return False
+        if kind == "task":
+            tasks.add(ident)
+        else:
+            queue.append(node)
+        return True
+
+    def room() -> int:
+        return PROVENANCE_LIMIT - len(seen) + 1
+
+    if row.get("blob_id") and not reach("blob", str(row["blob_id"])):
+        return None
+    if row.get("file_id") and not reach("file", str(row["file_id"])):
+        return None
+    while queue:
+        kind, ident = queue.pop()
+        found: list[tuple[str, str]] = []
         if kind == "blob":
-            tasks += [
-                str(r["task_id"]) for r in _rows(conn, "SELECT task_id FROM task_assets WHERE blob_id = ?", (ident,))
+            found += [
+                ("task", str(r["task_id"]))
+                for r in _rows(
+                    conn, "SELECT DISTINCT task_id FROM task_assets WHERE blob_id = ? LIMIT ?", (ident, room())
+                )
             ]
-            queue += [
+            found += [
                 ("file", str(r["file_id"]))
-                for r in _rows(conn, "SELECT file_id FROM bot_file_versions WHERE blob_id = ?", (ident,))
+                for r in _rows(
+                    conn, "SELECT DISTINCT file_id FROM bot_file_versions WHERE blob_id = ? LIMIT ?", (ident, room())
+                )
             ]
         elif kind == "file":
             file = _one(conn, "SELECT task_id, scope FROM bot_files WHERE id = ?", (ident,))
             if file is None:
                 return None
             if file["task_id"]:
-                tasks.append(str(file["task_id"]))
+                found.append(("task", str(file["task_id"])))
             if str(file["scope"] or "").startswith("task:"):
-                tasks.append(str(file["scope"])[5:])
-            for version in _rows(conn, "SELECT blob_id, attempt_id FROM bot_file_versions WHERE file_id = ?", (ident,)):
+                found.append(("task", str(file["scope"])[5:]))
+            for version in _rows(
+                conn, "SELECT blob_id, attempt_id FROM bot_file_versions WHERE file_id = ? LIMIT ?", (ident, room())
+            ):
                 if version["blob_id"]:
-                    queue.append(("blob", str(version["blob_id"])))
+                    found.append(("blob", str(version["blob_id"])))
                 if version["attempt_id"]:
-                    queue.append(("attempt", str(version["attempt_id"])))
+                    found.append(("attempt", str(version["attempt_id"])))
         elif kind == "attempt":
             run = _one(conn, "SELECT task_id FROM attempts WHERE id = ?", (ident,))
             if run is None:
                 return None
             if run["task_id"]:
-                tasks.append(str(run["task_id"]))
-    return tasks
+                found.append(("task", str(run["task_id"])))
+        for node in found:
+            if not reach(*node):
+                return None
+    return sorted(tasks)
 
 
 def _on_open_pipelines(conn: sqlite3.Connection, task_ids: list[str], child_type: str, members_child: bool) -> bool:
