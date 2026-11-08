@@ -435,7 +435,7 @@ function batchStatic(root: THREE.Object3D, owner: Character | null = null) {
   originals.forEach(o => o.removeFromParent());
 }
 for (const b of BUILDINGS) { batchStatic(b.roof); batchStatic(b.base); b.floors.forEach(f => batchStatic(f.groupObj)); }
-for (const ch of characters) { if (ch.antenna) batchStatic(ch.antenna, ch); [ch.head, ...ch.arms, ch.body].forEach(p => batchStatic(p, ch)); }
+for (const ch of characters) { if (ch.antenna) batchStatic(ch.antenna, ch); if (!ch.head) throw new Error('character without a head'); [ch.head, ...ch.arms, ch.body].forEach(p => batchStatic(p, ch)); }
 batchStatic(landscape); batchStatic(paths); movers.forEach(m => batchStatic(m.root)); clouds.forEach(c => batchStatic(c.root));
 
 // ---------------------------------------------------------------- tweens
@@ -732,6 +732,7 @@ function animateCharacter(ch: Character, dt: number, t: number, still: boolean, 
   }
   if (still) return;
   if (here) {
+    if (!ch.head) throw new Error('character without a head');
     ch.head.rotation.x += ((inside ? -.32 : 0) - ch.head.rotation.x) * .08;
     ch.face += ((inside ? facing() : 0) - ch.face) * .08;
     ch.head.rotation.y = ch.type === 'bot' && !working ? Math.sin(t * .6 + i * 1.7) * .3 : 0;

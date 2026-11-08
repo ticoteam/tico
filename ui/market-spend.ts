@@ -45,7 +45,7 @@ interface MktEstimate {
 interface MktSegment {
   id: string;
   name: string;
-  parent?: string | null;
+  parent?: string | null | undefined;
   depth?: number;
   summary?: string | null;
   size?: MktSize | null;

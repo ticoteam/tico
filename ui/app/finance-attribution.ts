@@ -142,7 +142,7 @@ function finShareRead(root: ParentNode): FinShare[] {
 
 // ----------------------------------------------------------------- the rail's "Attributed to"
 // The line ids a Transactions row holds (a bank row's lines, or an entry's own line) and the rail's section for each.
-async function finShareRailLoad(key: string, lines: {line_id: string; account?: string}[]): Promise<void> {
+async function finShareRailLoad(key: string, lines: {line_id: string; account?: string | undefined}[]): Promise<void> {
   const box = document.getElementById('fin-tx-share');
   if (!box || !lines.length) return;
   const reads = await Promise.all(lines.map(l => get(`/v2/finance/lines/${encodeURIComponent(l.line_id)}/attribution${finAs('?')}`, {fresh: true})
