@@ -1189,3 +1189,53 @@ def test_no_roundup_line_and_no_task_manager_item_names_a_card_on_ice(api, monke
     reported = {item["task"] for items in by.values() for item in items}
     assert ids["Backlog"] in reported  # the control
     assert ids["On ice"] not in reported
+
+
+def test_a_card_parked_after_its_run_carried_it_is_no_quiet_unworked_warning(api):
+    """Health's "handed to a run and not worked" warning (quiet_work.stale) leaves out a card parked On ice since."""
+    from backend import maintenance_health as MH
+    from backend import quiet_work as Q
+    from backend.tests.test_quiet_work import finish, later, setup, wake
+
+    r = setup(api)
+    task = later(api)
+    finish(api, r, wake(api, r))
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE events SET created_at=? WHERE action=?", (H.shift(H.now(), hours=-3), Q.CARRIED))
+        assert [f["key"] for f in MH._quiet_work_checks(c)] == [f"quiet_unworked:ops:{task['id']}"]  # the control
+        c.execute("UPDATE task_steps SET card_cap=0 WHERE id=?", (H.task(c, task["id"])["step_id"],))
+        assert MH._quiet_work_checks(c) == []
+
+
+def test_a_card_on_ice_is_never_stuck_stranded_or_a_stuck_blocker(api):
+    """A parked card is no stuck task (hubdb.stuck_tasks, the stuck API), no stranded work the resume sweep pushes on
+    (stranded_resume.stranded), and a parked subtask never makes its parent "held by its own stuck subtasks"."""
+    from backend import stranded_resume as SR2
+
+    typ, steps = make_line(api, "IceStuck" + uuid.uuid4().hex[:8], ON_ICE_LINE)
+    set_cap(api, steps["On ice"], 0)
+    old = H.shift(H.now(), hours=-26)
+    with api.app.state.store.transaction() as c:
+        ids = {}
+        for stage in ("Backlog", "On ice"):
+            tid = H.task_create(c, ANA, "Stuck " + stage, "", "bot:coo", type=typ, step=stage, lint=False)["id"]
+            ids[stage] = tid
+        parent = H.task_create(c, ANA, "Parent", "", "bot:coo", type=typ, step="Doing", lint=False)["id"]
+        kid = H.task_create(c, ANA, "Kid", "", "bot:coo", type=typ, step="Doing", parent_id=parent, lint=False)["id"]
+        c.execute(
+            "INSERT INTO task_relations(from_task,to_task,kind,created_by,created_at) VALUES(?,?,'blocks',?,?)",
+            (kid, parent, ANA, old),
+        )
+        c.execute("UPDATE tasks SET updated_at=?, next_run=0 WHERE id IN (?,?,?,?)", (old, *ids.values(), parent, kid))
+        c.execute("UPDATE jobs SET state='completed' WHERE bot_id='coo'")
+        stuck = {row["id"] for row in H.stuck_tasks(c)}
+        assert ids["Backlog"] in stuck and ids["On ice"] not in stuck
+        assert H.own_stuck_blockers(c, H.task(c, parent)) == [kid]  # the control
+        c.execute("UPDATE tasks SET step_id=? WHERE id=?", (steps["On ice"], kid))
+        assert H.own_stuck_blockers(c, H.task(c, parent)) == []
+
+        doing = H.task_create(c, ANA, "Doing work", "", "bot:coo", type=typ, step="Doing", lint=False)["id"]
+        c.execute("UPDATE jobs SET state='completed' WHERE bot_id='coo'")
+        assert SR2.stranded(c, H.task(c, doing), H.now())  # the control
+        c.execute("UPDATE tasks SET step_id=? WHERE id=?", (steps["On ice"], doing))
+        assert not SR2.stranded(c, H.task(c, doing), H.now())

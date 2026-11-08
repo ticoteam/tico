@@ -9609,7 +9609,7 @@ def own_stuck_blockers(conn, row, at=None, blockers=None):
     parent's window is released is the case seen; a question for a person in a subtask is not (it
     belongs to the person), nor is a subtask with a future due date, a snooze, a stored resume or a pending
     milestone wait (each brings it back by itself; once the date or snooze has passed, or the milestone has
-    woken it, it is quiet again). Review and a queued or active run of the subtask also move it independently.
+    woken it, it is quiet again), nor a subtask On ice (a person parked it). Review and a queued or active run of the subtask also move it independently.
     A parent or subtask waiting on a person belongs to that person. These waits exempt the parent from the
     stalled-task list."""
     from .milestone_waits import pending as milestone_pending
@@ -9636,6 +9636,7 @@ def own_stuck_blockers(conn, row, at=None, blockers=None):
             or block.get("resume")
             or milestone_pending(conn, block["id"])
             or own_job(conn, block, claimable=True)
+            or on_ice_ids(conn, [block["id"]])  # parked On ice (D69) by a person: the wait is theirs, never stuck
         ):
             return []
     return [block["id"] for block in blockers]
@@ -9657,7 +9658,7 @@ def prime_own_stuck(conn, blockers):
 def stuck_tasks(conn, hours=STUCK_HOURS, hidden=()):
     """Open work on an active bot that has not moved in `hours` and is waiting on nobody: no person
     owes an answer, no open task blocks it, it is not a quiet task, and no run for its bot is queued
-    or going. One BotOps sweep finds these instead of a daily run per bot.
+    or going. One BotOps sweep finds these instead of a daily run per bot. A card On ice (D69) is parked, never stuck.
 
     Also, at any age and even `waiting`, a task held only by its own quiet subtasks (own_stuck_blockers):
     that wait never ends by itself. Those carry `own_blockers`, under the same busy and next-run rules."""
@@ -9669,7 +9670,7 @@ def stuck_tasks(conn, hours=STUCK_HOURS, hidden=()):
             "AND (t.status IN ('open','doing','ready') AND coalesce(t.next_run,0)=0 AND t.updated_at<? "
             f"OR t.status IN ({','.join(repr(x) for x in ACTIVE_STATUSES)}) AND t.updated_at<? "
             "AND EXISTS (SELECT 1 FROM task_relations r WHERE r.to_task=t.id AND r.kind='blocks')) "
-            "ORDER BY t.updated_at",
+            f"AND NOT {ON_ICE % 't'} ORDER BY t.updated_at",
             (cutoff, shift(at, seconds=-STALL_MINUTES * 60)),
         )
     )

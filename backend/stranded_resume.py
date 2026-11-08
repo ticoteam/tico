@@ -257,6 +257,8 @@ def stranded(c: sqlite3.Connection, row: dict[str, Any] | None, at: str) -> bool
 
     if not row or row.get("status") != "doing" or not cast(bool, H.is_bot(row.get("owner_id"))):
         return False
+    if H.on_ice_ids(c, [row["id"]]):  # parked On ice (D69): it starts no run, so no resume is owed
+        return False
     row = cast(dict[str, Any] | None, task_holds.with_holds(c, row))
     if row is None:
         return False
