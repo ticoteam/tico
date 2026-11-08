@@ -947,6 +947,7 @@ const HUB_PATHS: &[&str] = &[
     "finance",
     "finance act",
     "finance action",
+    "finance brief",
     "finance inbox",
     "finance metric",
     "finance report",

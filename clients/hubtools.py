@@ -12224,6 +12224,17 @@ def finance_metric(api, args):
 
 
 @tool(
+    "hub_finance_brief",
+    "What changed in Finance for you: a few short lines about the money you may see (your budgets, your team's, "
+    "cash and burn where you see the company), with as_of (when those numbers last moved) and changed_since.",
+    {},
+    (),
+)
+def finance_brief(api, args):
+    return api.get("finance/brief")
+
+
+@tool(
     "hub_finance_act",
     "Ask for one Finance action: committed, sent for approval, denied or failed. kind=help lists "
     "every kind; kind=help with payload {\"kind\": k} gives k's fields. dry_run says what would happen. "
