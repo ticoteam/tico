@@ -142,7 +142,7 @@ there is no promised undo window.
 
 ## Tools
 
-Each address is a Letters in row in Tools (`#/tools?show=mail`), with open orders as Pending and the
+Each address is a row under Tools > Settings > Letters in (`#/tools/settings/letters-in`), with open orders as Pending and the
 email-in inbox as Mail by email (still listed, as Not in use, once it is turned off while letters it brought in remain,
 so a failed one can be retried). An address's page shows its Form 1583 progress until it is active, who reads it (an
 owner or admin gives and removes Read on that address there), its automations and its letters (date, sender, kind,
