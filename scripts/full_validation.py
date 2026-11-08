@@ -9,7 +9,8 @@ gated it: its merge queue group's (pr-checks.yml on the merge commit) and its pu
 whose plans all left the test out is one the selector skipped it for; one with no plan to read is listed as unknown.
 The run summary lists both, and the issue ISSUE_TITLE gets the test, the commit range and those pull requests (a new
 issue, or a comment on the open one). Nothing is reverted. Each run's record (its commit, failures and passes) is the
-next run's previous one, written only once the run has reported.
+next run's previous one, written only once the run has reported; a suite with no results keeps its tests' previous
+passes in it.
 """
 
 import argparse
@@ -177,15 +178,20 @@ class GitHub:
         return json.loads(out)
 
     def download(self, run_id, name):
-        """The artifact's JSON file, or None when the run has no such artifact (expired, never uploaded)."""
+        """The artifact's JSON file, or None when the run has no such artifact (expired, never uploaded). Any other
+        failure (network, rate limit, server) raises: treating it as "no record" would make this run a first run and
+        its failures the next run's baseline, so they would never be reported."""
+        listed = self.api(f"repos/{self.repo}/actions/runs/{run_id}/artifacts?name={name}&per_page=10")
+        if not any(a.get("name") == name and not a.get("expired") for a in listed.get("artifacts", [])):
+            return None
         with tempfile.TemporaryDirectory() as folder:
-            done = subprocess.run(
+            subprocess.run(
                 ["gh", "run", "download", str(run_id), "-R", self.repo, "-n", name, "-D", folder],
                 capture_output=True,
                 text=True,
-                check=False,
+                check=True,
             )
-            files = sorted(Path(folder).glob("*.json")) if done.returncode == 0 else []
+            files = sorted(Path(folder).glob("*.json"))
             return json.loads(files[0].read_text()) if files else None
 
     def runs(self, sha, event):
@@ -274,8 +280,16 @@ def report(plan_path, results, record_path, gh, env, git_log):
         text += f"\nIssue: {gh.file_issue(issue_text(head, previous, new, found, server, repo, run_url))}\n"
     # The record is the next run's baseline only once this run has reported: after a failed lookup or issue the next
     # run compares with the older record again, so a new failure is not lost.
-    Path(record_path).write_text(json.dumps({"sha": head, "failed": sorted(failed), "passed": sorted(passed)}) + "\n")
+    Path(record_path).write_text(json.dumps(record(failed, passed, missing, previous, head)) + "\n")
     return text
+
+
+def record(failed, passed, missing, previous, head):
+    """This run's record. When a suite left no results, its tests were not seen: the ones that passed on the previous
+    run stay passed, so a later failure of one is still new (a partial run must not erase the baseline)."""
+    if missing and previous is not None:
+        passed = passed | (set(previous.get("passed", ())) - failed)
+    return {"sha": head, "failed": sorted(failed), "passed": sorted(passed)}
 
 
 def git_log(base, head):
