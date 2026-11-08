@@ -101,6 +101,24 @@ async function closeDropsHeld(browser, theme) {
   await context.close();
 }
 
+// A page the reader cannot open has no Approve, and the one line says why, beside the send-back controls. Ctrl or Cmd+Enter
+// in the note does not approve it either.
+const UNOPENABLE_LINE = "You can't open this page, so you can't approve it. Send it back or ask its owner to share it.";
+async function unopenableCopy(browser, theme) {
+  const {context, page, state, errors} = await openReview(browser, theme, {unopenable: true});
+  assert.equal(await page.locator('.pipe-review-approve').count(), 0, theme + ': no Approve for a page the reader cannot open');
+  const line = page.locator('.pipe-review-sendback .pipe-review-unopenable');
+  assert.equal((await line.innerText()).trim(), UNOPENABLE_LINE, theme + ': the one line beside Send back');
+  assert.ok(await line.isVisible(), theme + ': the line is visible');
+  assert.ok(await page.locator('.pipe-review-sendback [data-review-send="assignee"]').isVisible(), theme + ': Send back stays');
+  await page.locator('textarea[name="note"]').click();
+  await page.keyboard.press('Control+Enter');
+  await page.waitForTimeout(300);
+  assert.equal(state.posts.filter(p => p.path.endsWith('/approve')).length, 0, theme + ': Ctrl+Enter does not approve it');
+  assert.deepEqual(errors, [], theme + ': no page errors');
+  await context.close();
+}
+
 // A question that holds two cards has a row for each: answering takes both out, and the count is the queue's.
 async function twoCardsOneAnswer(browser, theme) {
   const {context, page, state, errors} = await openReview(browser, theme, {twoCards: true});
@@ -147,7 +165,7 @@ async function doneNote(browser, theme) {
 (async () => {
   const browser = await chromium.launch({channel: process.env.TICO_BROWSER_CHANNEL ?? 'chrome', headless: true});
   const failures = [];
-  const scenarios = [plainQuestion, heldCopy, closeDropsHeld, twoCardsOneAnswer, subtaskCard, doneNote];
+  const scenarios = [plainQuestion, heldCopy, closeDropsHeld, twoCardsOneAnswer, subtaskCard, doneNote, unopenableCopy];
   try {
     for (const theme of ['dark', 'light']) {
       for (const scenario of scenarios) {

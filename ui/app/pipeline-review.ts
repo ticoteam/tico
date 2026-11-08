@@ -251,9 +251,10 @@ function pipelineReviewRender(): void {
         <div class="pipe-review-sendback">
           <button type="button" class="btn" data-review-send="assignee">Message ${esc(assignee)}</button>
           ${item.manager ? `<button type="button" class="btn" data-review-send="manager">Message ${esc(item.manager.name)}</button>` : ''}
+          ${item.attachment_removed ? `<p class="muted pipe-review-unopenable">You can't open this page, so you can't approve it. Send it back or ask its owner to share it.</p>` : ''}
         </div>
         ${item.claim ? `<p class="pipe-review-claim" role="status">${esc(item.claim.label)}</p>` : ''}
-        <button type="button" class="pipe-review-approve" data-review-approve ${state.busy || item.claim ? 'disabled' : ''}>Approve <kbd class="pipe-review-kbd">⌘⏎</kbd></button>
+        ${item.attachment_removed ? '' : `<button type="button" class="pipe-review-approve" data-review-approve ${state.busy || item.claim ? 'disabled' : ''}>Approve <kbd class="pipe-review-kbd">⌘⏎</kbd></button>`}
         ${item.can_mark_met ? '<button type="button" class="pipe-review-met" data-review-send="met">Mark met</button>' : ''}
         ${item.can_not_validate ? '<button type="button" class="pipe-review-met" data-review-not-validated>Not validated</button>' : ''}
         <p class="muted pipe-review-moves">${item.moves_to ? `Last requirement · moves ${esc(item.task_title ? pipelineReviewClip(item.task_title) : 'the card')} to ${esc(item.moves_to)}` : ''}</p>
@@ -329,7 +330,7 @@ function pipelineReviewStep(delta: number): void {
 async function pipelineReviewApprove(): Promise<void> {
   const state = pipelineReviewState;
   const item = state?.items[state.index];
-  if (!state || !item || item.form !== 'review' || state.busy || item.claim) return;
+  if (!state || !item || item.form !== 'review' || state.busy || item.claim || item.attachment_removed) return;
   state.busy = true; state.message = '';
   pipelineReviewRender();
   try {

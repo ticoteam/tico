@@ -100,6 +100,9 @@ interface PipelineReviewItem {
   /** The requirement's attachment (never a file on the ticket), and the stage visit the item shows: Not validated names
       them back to the server. */
   attachment_id?: string | null;
+  /** The attachment is a page the reader cannot open: the server sends it removed, with no id, digest or address. Approve
+      is not offered for it; the one line says why. */
+  attachment_removed?: boolean;
   stage_visit_id?: string | null;
   attachments: PipelineAttachment[];
   /** Another reviewer holding the item, or null. `label` is the server's words for it ("Ana is reviewing"). */
@@ -201,7 +204,7 @@ interface ServerQueueItem {
   /** What the item shows, with its content address (queue read view). `ticket` is a file on the ticket itself, shown
       when nothing is attached to the requirement: it is not the requirement's evidence. */
   attachment: { id: string; source: 'file' | 'blob' | 'link' | 'ticket'; url: string | null; file_id?: string | null;
-    file_version?: number | null; format: PipelineReqAttachment['format'] | 'text'; name: string; href: string | null } | null;
+    file_version?: number | null; format: PipelineReqAttachment['format'] | 'text'; name: string; href: string | null; removed?: boolean } | null;
   attachment_digest: string | null;
   why: string;
   since: string;
@@ -332,6 +335,7 @@ function reviewItemFromRow(row: ServerQueueItem): PipelineReviewItem {
     attachment_digest: row.attachment_digest,
     requirement_version: row.requirement_version,
     attachment_id: a && a.source !== 'ticket' ? a.id : null,
+    attachment_removed: a?.removed === true,
     stage_visit_id: row.stage_visit_id ?? null,
   };
 }

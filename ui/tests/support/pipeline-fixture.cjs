@@ -107,6 +107,10 @@ function subtask(id, title, card = {}) {
     why: 'Your subtask · Dev tickets', since: stamp, late: false, reviewer_id: ME};
 }
 
+// `state.unopenable`: D52's page is one the reader cannot open. The server sends it redacted, with no id, blob or digest.
+const UNOPENABLE = {id: null, source: 'file', format: 'file', name: "A page you can't open", url: null, href: null, file_id: null,
+  file_version: null, blob_id: null, commit_sha: null, removed: true};
+
 // The review queue for the pipeline, as the server sends it (GET /v2/pipelines/{id}/review/queue): two items for Ana.
 // `state.removed` holds the items an approval or send-back took out, so a reload shows the queue as it now is.
 // `state.bare`: D52 has nothing attached, so its card shows the body, acceptance criteria and checkpoint instead.
@@ -115,10 +119,10 @@ function subtask(id, title, card = {}) {
 function queue(state) {
   const row = (task_id, title, stage, requirement_id, requirement, why, attachment) => {
     const card = CARDS[task_id] || {body: '', acceptance: [], checkpoint: ''};
-    const shown = state.bare && task_id === 'D52' ? null : attachment;
+    const shown = state.bare && task_id === 'D52' ? null : state.unopenable && task_id === 'D52' ? UNOPENABLE : attachment;
     return {form: 'review', task_id, title, pipeline_id: 'dev-tickets', pipeline: 'Dev tickets', stage_id: stage.toLowerCase(), stage, requirement_id, requirement,
       requirement_version: 1, kind: shown ? shown.format : 'approval', work_version: 3, attachment: shown,
-      attachment_digest: shown && shown.source !== 'ticket' ? 'sha256:aa' : null, why, since: stamp, late: false, claimed_by: null, claimed_by_me: false,
+      attachment_digest: shown && shown.source !== 'ticket' && !shown.removed ? 'sha256:aa' : null, why, since: stamp, late: false, claimed_by: null, claimed_by_me: false,
       assignee: {id: 'bot:product-owner', name: 'Product Manager'}, manager: {id: 'bot:product-manager', name: 'Product Pipeline Manager'},
       body: card.body, acceptance_criteria: card.acceptance, checkpoint: card.checkpoint,
       bot_note: task_id === 'D52' ? 'Shot 2 is cropped' : '', moves_to: task_id === 'D61' ? {stage_id: 'build', name: 'Build'} : null,
@@ -157,9 +161,9 @@ function queue(state) {
 // the server's answer, and the owner check reads pipeline_owner_id). `claimedBy`: another reviewer holds every item.
 async function install(page, {refuseApprove = false, manager = false, refuseMove = false, late = [{task_id: 'D17', title: 'Sim stuck checks', stage: 'Build', hours: 52, limit_hours: 48, since: stamp}],
   ownerOnly = false, member = false, claimedBy = null, noRequirements = false, validate = false, bare = false, text = false, held = false,
-  plain = false, twoCards = false} = {}) {
+  plain = false, twoCards = false, unopenable = false} = {}) {
   const state = {posts: [], queueReads: 0, refuseApprove, refuseMove, moves: [], prefs: {}, attachments: [], managerReads: 0, claims: [], claimedBy,
-    removed: new Set(), lastDone: null, affectedReads: [], requirementReads: {}, attachmentReads: 0, validate, bare, text, held, plain, twoCards,
+    removed: new Set(), lastDone: null, affectedReads: [], requirementReads: {}, attachmentReads: 0, validate, bare, text, held, plain, twoCards, unopenable,
     // The stage each ticket was moved to by an approval, and the stage an undo puts it back in (keyed by the decision).
     stage: {}, moved: {}};
   let shown = manager ? {...type, manager: 'product-manager'} : type;

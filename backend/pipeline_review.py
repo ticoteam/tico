@@ -721,6 +721,29 @@ def _redact_attachments(c: "sqlite3.Connection", items: list[Row], who: "Identit
             item["attachment_digest"] = None
 
 
+UNOPENABLE_APPROVE = "You can't open this page, so you can't approve it. Send it back or ask its owner to share it."
+
+
+def _refuse_unopenable(
+    c: "sqlite3.Connection", who: "Identity", auth: "Auth", task_id: str, requirement_id: str
+) -> None:
+    """Refuses an approval whose attachment is a page the reader cannot open, as the queue shows the item: the
+    requirement's own attachment, else the ticket's newest file. Runs before the work and digest checks: the reader never
+    saw that page, so it is not a change to report."""
+    facts = _Facts.load(c, [task_id], [{"id": requirement_id}])
+    attachment = facts.attachments.get((task_id, requirement_id))
+    shown = _attachment_of(attachment, None if attachment else facts.task_files.get(task_id))
+    if shown is None:
+        return
+    from . import files as file_module
+
+    readable_refs = cast(Callable[..., list[Row]], file_module.readable_page_refs)
+    with _read_snapshot(c):
+        (view,) = readable_refs(c, auth, who, [shown])
+    if view.get("removed") is True:
+        raise Problem("forbidden", UNOPENABLE_APPROVE, 403)
+
+
 def _moves_to(
     item: Row,
     live: list[Row],
@@ -1776,11 +1799,11 @@ def install(app: "FastAPI", store: "Store", mutate: "Callable[..., Any]", auth: 
     @app.post(base + "/approve")
     def review_approve(request: Request, tid: str, rid: str, body: ReviewTarget) -> Row:  # pyright: ignore[reportUnusedFunction]
         """Approve what you saw. Refused when the work, attachment or requirement changed since. Undo it within 10 s."""
-        return write(
-            request,
-            tid,
-            body,
-            lambda c, actor: approve(
+        who = request.state.identity
+
+        def run(c: "sqlite3.Connection", actor: str) -> Row:
+            _refuse_unopenable(c, who, auth, tid, rid)
+            return approve(
                 c,
                 actor,
                 tid,
@@ -1789,8 +1812,9 @@ def install(app: "FastAPI", store: "Store", mutate: "Callable[..., Any]", auth: 
                 attachment_digest=body.attachment_digest,
                 requirement_version=body.requirement_version,
                 note=body.note,
-            ),
-        )
+            )
+
+        return write(request, tid, body, run)
 
     @app.post(base + "/send-back")
     def review_send_back(request: Request, tid: str, rid: str, body: ReviewNote) -> Row:  # pyright: ignore[reportUnusedFunction]

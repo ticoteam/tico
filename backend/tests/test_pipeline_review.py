@@ -5,6 +5,7 @@ file: the database decides, not a Python lock."""
 import json
 import threading
 import time
+from contextlib import contextmanager
 from types import SimpleNamespace
 from pathlib import Path
 
@@ -2105,6 +2106,7 @@ def test_a_held_subtask_carries_its_body_criteria_and_files_and_a_question_none_
 
 
 PAGE_DIGEST = "9" * 64  # a page version's content digest, which its file attachment carries too
+CHRIS_HEADERS = {"Authorization": "Bearer chris-test"}
 
 
 def _page_version(c, fid, name):
@@ -2130,10 +2132,12 @@ def _file_attachment(w, fid):
     )
 
 
-def _page_attachment_queue(tmp_path, people, ticket=False):
+@contextmanager
+def _page_review(tmp_path, people, ticket=False):
     """Chris reviews the Mockup, whose attachment is a page open only to `people`; he reads his queue as a plain human
     (an owner may manage every page, so the page rule only shows for a human). `ticket` attaches the page to the
-    ticket instead of the requirement, which is shown when the requirement has no attachment of its own."""
+    ticket instead of the requirement, which is shown when the requirement has no attachment of its own. Yields the
+    client, the page's id and the one review item that shows the page, as Chris sees it."""
     ids = {"chris-test": Identity(CHRIS, "human", "chris@acme.example")}
     app = create_app(Settings(db_path=tmp_path / "hub.db", company_name="Acme", test_identities=ids))
     with TestClient(app) as client:
@@ -2148,39 +2152,70 @@ def _page_attachment_queue(tmp_path, people, ticket=False):
                 c.execute("INSERT INTO task_assets(task_id, blob_id) VALUES(?,?)", (w.task, "blob-" + fid))
             else:
                 _file_attachment(w, fid)
-        chris = {"Authorization": "Bearer chris-test", "Idempotency-Key": "k-chris"}
-        queue = client.get("/api/v2/pipelines/review/queue", headers=chris)
+        queue = client.get("/api/v2/pipelines/review/queue", headers=CHRIS_HEADERS)
         assert queue.status_code == 200, queue.text
         (item,) = [i for i in queue.json()["items"] if i["form"] == "review" and i["attachment"]]
-        return fid, item
+        yield client, fid, item
 
 
 @pytest.mark.parametrize("ticket", [False, True], ids=["attachment", "ticket_file"])
 def test_a_review_item_attachment_redacts_a_page_the_reader_cannot_open_as_the_task_view_does(tmp_path, ticket):
-    fid, item = _page_attachment_queue(tmp_path, ["ben"], ticket=ticket)  # an audience names people by id, as above
-    shown = json.dumps(item)
-    for secret in ("Pipeline spec v1.md", fid, "blob-" + fid, PAGE_DIGEST, "a-page"):
-        assert secret not in shown, (secret, shown)
-    assert item["attachment_digest"] is None, item
-    assert item["attachment"] == {
-        "id": None,
-        "source": "ticket" if ticket else "file",
-        "format": "file",
-        "name": "A page you can't open",
-        "url": None,
-        "href": None,
-        "file_id": None,
-        "file_version": None,
-        "blob_id": None,
-        "commit_sha": None,
-        "removed": True,
-    }, item["attachment"]
+    with _page_review(tmp_path, ["ben"], ticket=ticket) as (_client, fid, item):  # an audience names people by id
+        shown = json.dumps(item)
+        for secret in ("Pipeline spec v1.md", fid, "blob-" + fid, PAGE_DIGEST, "a-page"):
+            assert secret not in shown, (secret, shown)
+        assert item["attachment_digest"] is None, item
+        assert item["attachment"] == {
+            "id": None,
+            "source": "ticket" if ticket else "file",
+            "format": "file",
+            "name": "A page you can't open",
+            "url": None,
+            "href": None,
+            "file_id": None,
+            "file_version": None,
+            "blob_id": None,
+            "commit_sha": None,
+            "removed": True,
+        }, item["attachment"]
+
+
+@pytest.mark.parametrize("ticket", [False, True], ids=["attachment", "ticket_file"])
+def test_approve_is_refused_for_an_attachment_the_reader_cannot_open(tmp_path, ticket):
+    with _page_review(tmp_path, ["ben"], ticket=ticket) as (client, _fid, item):
+        path = f"/api/v2/pipelines/tasks/{item['task_id']}/requirements/{item['requirement_id']}/approve"
+        body = {
+            "work_version": item["work_version"],
+            "attachment_digest": item["attachment_digest"],
+            "requirement_version": item["requirement_version"],
+        }
+        refused = client.post(path, json=body, headers={**CHRIS_HEADERS, "Idempotency-Key": "k-approve"})
+        assert refused.status_code == 403, refused.text
+        error = refused.json()["error"]
+        assert error["code"] == "forbidden", refused.text
+        detail = "You can't open this page, so you can't approve it. Send it back or ask its owner to share it."
+        assert error["detail"] == detail, refused.text
+        queue = client.get("/api/v2/pipelines/review/queue", headers=CHRIS_HEADERS).json()["items"]
+        assert item["requirement_id"] in [i["requirement_id"] for i in queue], "the item still waits, undecided"
+
+
+@pytest.mark.parametrize("ticket", [False, True], ids=["attachment", "ticket_file"])
+def test_approve_goes_ahead_for_an_attachment_the_reader_may_open(tmp_path, ticket):
+    with _page_review(tmp_path, ["chris"], ticket=ticket) as (client, _fid, item):
+        path = f"/api/v2/pipelines/tasks/{item['task_id']}/requirements/{item['requirement_id']}/approve"
+        body = {
+            "work_version": item["work_version"],
+            "attachment_digest": item["attachment_digest"],
+            "requirement_version": item["requirement_version"],
+        }
+        done = client.post(path, json=body, headers={**CHRIS_HEADERS, "Idempotency-Key": "k-approve"})
+        assert done.status_code == 200, done.text
 
 
 @pytest.mark.parametrize("ticket", [False, True], ids=["attachment", "ticket_file"])
 def test_a_review_item_attachment_shows_a_page_the_reader_may_open(tmp_path, ticket):
-    fid, item = _page_attachment_queue(tmp_path, ["chris"], ticket=ticket)
-    assert item["attachment"]["name"] == "Pipeline spec v1.md", item["attachment"]
-    if not ticket:
-        assert item["attachment"]["href"] == f"/api/v2/files/{fid}/versions/1", item["attachment"]
-        assert item["attachment_digest"] == PAGE_DIGEST, item
+    with _page_review(tmp_path, ["chris"], ticket=ticket) as (_client, fid, item):
+        assert item["attachment"]["name"] == "Pipeline spec v1.md", item["attachment"]
+        if not ticket:
+            assert item["attachment"]["href"] == f"/api/v2/files/{fid}/versions/1", item["attachment"]
+            assert item["attachment_digest"] == PAGE_DIGEST, item
