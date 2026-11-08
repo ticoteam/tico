@@ -442,7 +442,7 @@ async function pageLibraryFiles() {
 }
 function lfControls() {
   const root = LF.root, f = LF.filter;
-  const bots = (S.emps || []).filter(e => e.status !== 'archived').map(e => [e.id, botDisplayName(e.id)])
+  const bots = (S.emps || []).filter(e => e.status !== 'archived').map((e): [string, string] => [e.id, botDisplayName(e.id)])
     .sort((a, b) => a[1].localeCompare(b[1], undefined, {numeric: true}));
   const opt = (v, l) => `<option value="${esc(v)}">${esc(l)}</option>`;
   const bot = root.querySelector('.lf-bot'), team = root.querySelector('.lf-team');
