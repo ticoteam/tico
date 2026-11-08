@@ -3,10 +3,11 @@
 # exit if any fails. Run it before you push. `git config core.hooksPath .githooks` runs it on every push.
 #   scripts/check.sh          the files changed since the merge-base with origin/main, plus uncommitted and new files
 #   scripts/check.sh --all    every tracked file, every check (CI runs these too)
-# Checks: lint.sh (Python baseline), ruff format (once ruff.toml has a [format] section), shell_lint.sh (shellcheck),
-# actionlint (workflows), cargo fmt (the Rust crates scripts/rust_checks.sh formats), migration order,
-# check_ui_types.sh, check_ui_strict.py (new UI code is strict TypeScript), check_types.sh (basedpyright on the backend
-# against its baseline), and the OpenAPI document's drift check. Each runs only when its inputs changed.
+# Checks: lint.sh (Python baseline), check_test_imports.py (no file imports a test module), ruff format (once ruff.toml
+# has a [format] section), shell_lint.sh (shellcheck), actionlint (workflows), cargo fmt (the Rust crates
+# scripts/rust_checks.sh formats), migration order, check_ui_types.sh, check_ui_strict.py (new UI code is strict
+# TypeScript), check_types.sh (basedpyright on the backend against its baseline), and the OpenAPI document's drift
+# check. Each runs only when its inputs changed.
 set -uo pipefail
 cd "$(dirname "$0")/.." || exit 2
 
@@ -103,6 +104,13 @@ if [ "$ALL" = 1 ] || changed_matches '\.py$|^ruff(-baseline)?\.toml$|^ruff-basel
   run "lint (ruff baseline)" env LINT_BASE_REF="$base" bash scripts/lint.sh
 else
   skip "lint (ruff baseline)" "no Python or ruff config changed"
+fi
+
+# 1a. No Python file imports a test module (scripts/check_test_imports.py): shared names live in the tests' helpers/.
+if [ "$ALL" = 1 ] || changed_matches '\.py$|^scripts/test-imports-allowed\.txt$'; then
+  run "test imports (no test module imported)" python3 scripts/check_test_imports.py
+else
+  skip "test imports (no test module imported)" "no Python file changed"
 fi
 
 # 2. Python format: only once ruff.toml has a [format] section.

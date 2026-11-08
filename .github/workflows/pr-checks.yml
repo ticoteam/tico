@@ -335,6 +335,8 @@ jobs:
         run: '"$RUNNER_TEMP/venv/bin/python" scripts/check_ui_source_suffixes.py'
       - name: Runner wire contract
         run: '"$RUNNER_TEMP/venv/bin/python" scripts/check_wire_contract.py'
+      - name: Test imports (no file imports a test module; shared names live in helpers/)
+        run: python3 scripts/check_test_imports.py
       - name: Shell scripts (shellcheck, pinned)
         run: bash scripts/shell_lint.sh
       - name: Workflows (actionlint, pinned)
