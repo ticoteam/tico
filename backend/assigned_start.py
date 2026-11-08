@@ -87,6 +87,7 @@ def candidates(
         c.execute(
             f"SELECT t.* FROM {H.TASKS} t JOIN bots b ON t.owner_id='bot:'||b.id "
             "WHERE t.status='open' AND b.state IN ('active','paused','quarantined') AND t.created_at<=? "
+            + f"AND NOT {H.ON_ICE % 't'} "
             + scope
             + visibility
             + " ORDER BY t.id LIMIT ?",
