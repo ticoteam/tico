@@ -311,6 +311,10 @@ HISTORY = {
     # Run steps before their runs: a step row points at its run.
     "maintenance_run_steps": "started_at",
     "maintenance_runs": "started_at",
+    # The Directory's logs: a value's past values, what happened with an entity, and the mentions a message or evidence made.
+    "entity_value_history": "active_from",
+    "entity_activities": "occurred_at",
+    "entity_mentions": "created_at",
 }
 # Kept whole, except rows whose parent went (a pruned attempt's events). Tokens on runners are replaced.
 KEEP = (
@@ -447,6 +451,19 @@ KEEP = (
             "entity_links",
             "entities",
             "entity_identifiers",
+            # The Directory's tables (the store's own; backend/entities/store.py): the types, attributes and values
+            # the team set, what each entity is known from, notes, views, merges and external references.
+            "entity_types",
+            "link_types",
+            "entity_attributes",
+            "entity_values",
+            "entity_external_refs",
+            "entity_connections",
+            "entity_notes",
+            "entity_views",
+            "entity_suppressions",
+            "entity_sources",
+            "entity_merges",
             "market_evidence",
             "market_figures",
             "market_insights",
