@@ -27,6 +27,7 @@ commit), its jobs, and the log of each failed job (streamed; only summary lines 
 """
 
 import argparse
+import ast
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
 import hashlib
@@ -45,9 +46,14 @@ LABEL = "needs-main-merge"
 STALE_DAYS = 7
 BASE = "main"
 TEST_STEP = "Run selected tests"
-# The legs whose "Run selected tests" step is pytest alone. conformance also runs cargo tests in that step, and browser
-# legs run UI scripts, so neither can be judged a flake from pytest's summary.
-PYTEST_JOB = re.compile(r"python-\d+|contracts")
+# The (job, step) pairs that run pytest alone, so pytest's summary tells the whole story of their failure. conformance
+# also runs cargo tests in its "Run selected tests" step, and browser legs run UI scripts: neither can be a flake.
+PYTEST_STEPS = [
+    (re.compile(r"python-\d+|contracts"), TEST_STEP),
+    (re.compile(r"caddy-linux-[\w-]+"), "Actual pinned Linux Caddy runtime and lifecycle"),
+]
+# More failed tests than this in one queue run is a breakage, not flakes; the marker names at most this many.
+MAX_MARKED = 200
 # The jobs that only report another job's failure: pr-checks.yml's required gate and its timing receipt.
 REPORTING_JOBS = {"checks", "PR job timings"}
 MARKER = re.compile(
@@ -55,6 +61,8 @@ MARKER = re.compile(
     r"(?: queue=(?P<queue>[0-9a-f]{40}|none))?(?: quarantine=(?P<quarantine>[0-9a-f]+))?"
     r"(?P<flags>(?: requeued| deferred)*) -->"
 )
+# The failed tests a comment named, as JSON (with "-->" escaped), on the line before its marker.
+TESTS_LINE = re.compile(r"<!-- stale-pr-keeper:tests (?P<json>\[.*?\]) -->", re.S)
 MAX_NAMED = 8
 GONE = re.compile(r"HTTP 404|HTTP 410")  # an expired or deleted log; anything else is retried next run
 # GitHub's primary and secondary rate limits (HTTP 403 or 429): the run stops reading and writing at once.
@@ -178,9 +186,18 @@ class Marker:
     sha: str  # the pull request head it was written for
     comment_id: int | None = None
     queue: str | None = None  # the merge group commit it diagnosed
-    quarantine: str | None = None  # quarantine_key() when it was written
+    quarantine: str | None = None  # quarantine_key() of its failed tests when it was written
     requeued: bool = False  # this head has been re-enqueued
     deferred: bool = False  # a flake left for a person because there was no queue token
+    tests: list = field(default_factory=list)  # the failed tests it named
+
+
+def _marked_tests(body):
+    hit = TESTS_LINE.search(body)
+    try:
+        return json.loads(hit.group("json")) if hit else []
+    except ValueError:
+        return []
 
 
 def markers(comments):
@@ -193,6 +210,7 @@ def markers(comments):
             m["quarantine"],
             " requeued" in m["flags"],
             " deferred" in m["flags"],
+            _marked_tests(body),
         )
         for comment_id, body in comments
         for m in MARKER.finditer(body or "")
@@ -251,8 +269,11 @@ def quarantined(root=ROOT):
     return tests
 
 
-def quarantine_key(tests):
-    return hashlib.sha256("\n".join(sorted(tests)).encode()).hexdigest()[:12]
+def quarantine_key(failed, tests):
+    """Which of a run's failed tests are quarantined, as a short hash: a quarantine change that touches none of them
+    leaves a comment current, so it costs no reads."""
+    marked = sorted({test for test in failed if is_quarantined(test, tests)})
+    return hashlib.sha256("\n".join(marked).encode()).hexdigest()[:12]
 
 
 def is_quarantined(nodeid, tests):
@@ -270,8 +291,22 @@ UNLISTED = re.compile(r"^(?:FAILED|ERROR) (?P<name>\S+)")  # a collection error:
 RESULTS = re.compile(r"^=*\s*\d+ (?:failed|passed|errors?|skipped|xfailed|xpassed|deselected)\b")
 COUNTS = re.compile(r"(\d+) (failed|errors?)\b")
 INTERNAL = re.compile(r"^INTERNALERROR")
-# pytest-xdist's own words, the whole line or message: a test that merely quotes them is not a crash.
-CRASH = re.compile(r"^worker 'gw\d+' crashed while running '(?P<test>[^']+)'$")
+# pytest-xdist's own words, the whole line or message, with the test id as Python's repr() writes it: a test that merely
+# quotes them is not a crash.
+CRASH = re.compile(r"""^worker 'gw\d+' crashed while running (?P<test>'(?:[^'\\]|\\.)*'|"(?:[^"\\]|\\.)*")$""")
+
+
+def crashed_test(text):
+    """The test id an xdist worker crash names in `text`, or None."""
+    hit = CRASH.match(text)
+    if not hit:
+        return None
+    try:
+        return ast.literal_eval(hit.group("test"))
+    except (SyntaxError, ValueError):
+        return None
+
+
 UI_SCRIPTS = re.compile(r"^\d+ of \d+ UI scripts failed: (?P<names>.+?)(?: \(all .*\))?$")
 SIM_HEADER = re.compile(r"^== (?P<scenario>\S+) seed (?P<seed>\d+)\b")
 SIM_FAIL = re.compile(r"^\s+FAIL ")
@@ -297,8 +332,7 @@ def read_log(lines):
         if in_summary:
             hit = SUMMARY.match(line)
             if hit:
-                crash = CRASH.match(hit.group("message") or "")
-                crashed = bool(crash) and crash.group("test") == hit.group("test")
+                crashed = crashed_test(hit.group("message") or "") == hit.group("test")
                 tests[hit.group("test")] = tests.get(hit.group("test"), True) and crashed
                 listed += 1
                 continue
@@ -313,9 +347,9 @@ def read_log(lines):
                     blockers.append(f"{counted - listed} failure(s) the summary does not list")
                 in_summary = False
             continue
-        crash = CRASH.match(line)
+        crash = crashed_test(line)
         if crash:
-            crashes.setdefault(crash.group("test"), True)
+            crashes.setdefault(crash, True)
         ui = UI_SCRIPTS.match(line)
         if ui:
             scripts += [name.strip() for name in ui.group("names").split(",") if name.strip() not in scripts]
@@ -340,8 +374,8 @@ def failed_jobs(jobs):
         if job["name"] in REPORTING_JOBS:
             continue
         steps = [s["name"] for s in job.get("steps") or [] if s.get("conclusion") == "failure"]
-        if not steps and job.get("conclusion") in ("failure", "timed_out"):
-            steps = [job["conclusion"].replace("_", " ")]
+        if job.get("conclusion") == "timed_out" or (not steps and job.get("conclusion") == "failure"):
+            steps.append(job["conclusion"].replace("_", " "))
         out += [(job, step) for step in steps]
     return out
 
@@ -349,10 +383,10 @@ def failed_jobs(jobs):
 def flaky(findings, tests):
     """True when every failure is a quarantined test or a crashed xdist worker in a pytest-only leg, and there is at
     least one."""
-    if not findings:
+    if not findings or sum(len(f.tests) for f in findings) > MAX_MARKED:
         return False
     for f in findings:
-        if not PYTEST_JOB.fullmatch(f.job) or f.step != TEST_STEP or f.log_missing:
+        if not any(job.fullmatch(f.job) and f.step == step for job, step in PYTEST_STEPS) or f.log_missing:
             return False
         if not f.tests or f.scripts or f.scenarios:
             return False
@@ -399,9 +433,11 @@ def comment_body(pr, findings, tests, run_url, note="", requeued=False, deferred
         lines += ["", f"Queue run: {run_url}"]
     if note:
         lines += ["", note]
+    failed = list(dict.fromkeys(test for f in findings for test, _ in f.tests))[:MAX_MARKED]
     flags = (" requeued" if requeued else "") + (" deferred" if deferred else "")
-    marker = f"queue={pr.queue_commit or 'none'} quarantine={quarantine_key(tests)}{flags}"
-    lines += ["", f"<!-- stale-pr-keeper:comment {pr.head} {marker} -->"]
+    marker = f"queue={pr.queue_commit or 'none'} quarantine={quarantine_key(failed, tests)}{flags}"
+    named = json.dumps(failed).replace("-->", "--\\u003e")
+    lines += ["", f"<!-- stale-pr-keeper:tests {named} -->\n<!-- stale-pr-keeper:comment {pr.head} {marker} -->"]
     return "\n".join(lines)
 
 
@@ -563,7 +599,7 @@ class GitHub:
 
 def findings_for(gh, run):
     """A Finding per failed step. Each failed job's log is read once, for its first failed step: any step may run pytest
-    (the Caddy leg does), and only "Run selected tests" in a pytest leg can make a flake."""
+    (the Caddy leg does); only a PYTEST_STEPS step can make a flake."""
     out, read = [], set()
     for job, step in failed_jobs(gh.jobs(run["id"])):
         finding = Finding(job=job["name"], step=step, url=job["html_url"], attempt=job.get("run_attempt", 1))
@@ -610,7 +646,6 @@ def keep(gh, tests, now, dry_run=False):
     """(markdown summary, every action succeeded)."""
     prs = parse_prs(gh.open_prs())
     done = {"requeued": [], "commented": [], "labelled": [], "unlabelled": [], "skipped": [], "errors": []}
-    key = quarantine_key(tests)
 
     halted = []  # set once the rate limit refuses a call: nothing more is read or written this run
 
@@ -663,7 +698,7 @@ def keep(gh, tests, now, dry_run=False):
         current = (
             comment is not None
             and comment.queue == (pr.queue_commit or "none")
-            and comment.quarantine == key
+            and comment.quarantine == quarantine_key(comment.tests, tests)
             and not (comment.deferred and gh.can_enqueue)  # a queue token has been added since
         )
         if current:  # a re-enqueue only stops another enqueue: a new failure is still diagnosed

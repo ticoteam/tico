@@ -53,12 +53,17 @@ RUNS = {
 }
 
 
-def comment_marker(head, queue, tests=QUARANTINE, flags=""):
-    return f"<!-- stale-pr-keeper:comment {head} queue={queue} quarantine={keeper.quarantine_key(tests)}{flags} -->"
+def comment_marker(head, queue, tests=QUARANTINE, flags="", failed=(RECRUITING, CRASHED)):
+    """A comment's marker lines, written when `tests` were quarantined and naming `failed`."""
+    key = keeper.quarantine_key(failed, tests)
+    return (
+        f"<!-- stale-pr-keeper:tests {json.dumps(list(failed))} -->\n"
+        f"<!-- stale-pr-keeper:comment {head} queue={queue} quarantine={key}{flags} -->"
+    )
 
 
-def requeued_marker(head, queue, tests=QUARANTINE):
-    return comment_marker(head, queue, tests, " requeued")
+def requeued_marker(head, queue, tests=QUARANTINE, failed=(RECRUITING, CRASHED)):
+    return comment_marker(head, queue, tests, " requeued", failed)
 
 
 class FakeGitHub:
@@ -189,6 +194,13 @@ def test_a_test_that_only_quotes_a_worker_crash_is_not_a_crash():
     assert keeper.read_log([f"E   AssertionError: {quote}\n"])[0] == []  # test output, not xdist's line
 
 
+@pytest.mark.parametrize("test", ["backend/tests/test_x.py::test_y[can't]", "backend/tests/test_x.py::test_y[a\\b]"])
+def test_a_worker_crash_names_its_test_as_repr_writes_it(test):
+    line = f"FAILED {test} - worker 'gw1' crashed while running {test!r}"
+    assert keeper.read_log(summary(line))[0] == [(test, True)]
+    assert keeper.read_log([f"worker 'gw1' crashed while running {test!r}\n"])[0] == [(test, True)]
+
+
 def test_a_parameter_id_holding_a_dash_is_read_whole():
     test = "backend/tests/test_x.py::test_split[a - b]"
     assert keeper.read_log(summary(f"FAILED {test} - AssertionError: x - y"))[0] == [(test, False)]
@@ -279,15 +291,26 @@ def test_a_rerun_that_failed_only_on_flakes_again_is_still_re_enqueued():
     assert "[python-5 (attempt 2)]" in calls[0][2]
 
 
-def test_a_failure_in_a_step_that_runs_pytest_names_its_test_but_is_never_a_flake():
-    caddy = "Actual pinned Linux Caddy runtime and lifecycle"
+@pytest.mark.parametrize(
+    ("job", "step", "requeued"),
+    [
+        ("caddy-linux-amd64", "Actual pinned Linux Caddy runtime and lifecycle", True),  # pytest alone
+        ("lint", "Python lint", False),  # any failed step's log is read for names
+    ],
+)
+def test_any_failed_step_names_its_tests_and_only_pytest_steps_can_be_flakes(job, step, requeued):
     gh = FakeGitHub()
-    gh.jobs = lambda run_id: [
-        {**job, "id": f"{run_id}:{job['id']}"} for job in jobs_with("caddy-linux-amd64", failing_step=caddy)
-    ]
+    gh.jobs = lambda run_id: [{**j, "id": f"{run_id}:{j['id']}"} for j in jobs_with(job, failing_step=step)]
     run(gh)
-    (call,) = written_to(gh, 2984)
-    assert call[0] == "comment" and f"`{RECRUITING}` (quarantined) in [caddy-linux-amd64]" in call[2]
+    calls = written_to(gh, 2984)
+    assert [c[0] for c in calls] == (["comment", "enqueue"] if requeued else ["comment"])
+    assert f"`{RECRUITING}` (quarantined) in [{job}]" in calls[0][2]
+
+
+def test_a_job_that_timed_out_after_a_failed_step_counts_both():
+    (job,) = [j for j in jobs_with("python-5") if j["name"] == "python-5"]
+    job["conclusion"] = "timed_out"
+    assert [step for _, step in keeper.failed_jobs([job])] == ["Run selected tests", "timed out"]
 
 
 def test_every_failed_step_of_a_job_counts():
@@ -383,7 +406,7 @@ def test_a_quarantined_failure_is_re_enqueued_at_its_head_with_its_marker_first(
     assert ok
     calls = written_to(gh, 2984)
     assert [c[0] for c in calls] == ["comment", "enqueue"]
-    assert requeued_marker(sha("a"), sha("1")) in calls[0][2]
+    assert requeued_marker(sha("a"), sha("1"), failed=(RECRUITING,)) in calls[0][2]
     assert f"`{RECRUITING}` (quarantined)" in calls[0][2]
     assert calls[1] == ("enqueue", 2984, sha("a"))  # gh pr merge --match-head-commit: a newer push is not queued
     assert "#2984" in text.split("### Re-enqueued")[1].split("###")[0]
@@ -414,7 +437,7 @@ def test_a_real_failure_gets_one_comment_naming_the_test_and_no_enqueue():
     body = calls[0][2]
     assert f"`{RECRUITING}` in [python-8]" in body
     assert "a check failed" in body
-    assert comment_marker(sha("c"), sha("3"), set()) in body
+    assert comment_marker(sha("c"), sha("3"), set(), failed=(RECRUITING,)) in body
 
 
 def test_a_ui_script_failure_names_the_script():
@@ -444,7 +467,7 @@ def test_a_test_quarantined_after_the_comment_gets_its_head_re_enqueued_in_the_s
     run(gh)
     assert [c[0] for c in written_to(gh, 2966)] == ["enqueue"]
     (edit,) = gh.writes("edit_comment")
-    assert edit[1] == 2966000 and requeued_marker(sha("c2"), sha("7a")) in edit[2]
+    assert edit[1] == 2966000 and requeued_marker(sha("c2"), sha("7a"), failed=(RECRUITING,)) in edit[2]
     assert gh.calls.index(edit) < gh.calls.index(("enqueue", 2966, sha("c2")))  # the marker first
 
 
@@ -461,7 +484,7 @@ def test_a_new_queue_run_of_the_same_head_updates_the_comment_instead_of_adding_
     text, _ = run(gh, tests=set())
     assert written_to(gh, 2966) == []
     (edit,) = gh.writes("edit_comment")
-    assert edit[1] == 2966000 and comment_marker(sha("c2"), sha("7a"), set()) in edit[2]
+    assert edit[1] == 2966000 and comment_marker(sha("c2"), sha("7a"), set(), failed=(RECRUITING,)) in edit[2]
     assert "#2966 Mail from the source: updated" in text
 
 
@@ -499,6 +522,22 @@ def test_without_a_queue_token_the_flake_comment_is_marked_deferred_and_requeued
     (edit,) = later.writes("edit_comment")
     marker = keeper.markers([(1, edit[2])])[0]
     assert marker.requeued and not marker.deferred
+
+
+def test_a_quarantine_change_that_touches_none_of_a_comments_tests_costs_no_reads():
+    gh = FakeGitHub(comments={2966: [comment_marker(sha("c2"), sha("7a"))]})
+    run(gh, tests=QUARANTINE | {"backend/tests/test_other.py::test_z"})
+    assert written_to(gh, 2966) == [] and not any(c[0] == "edit_comment" and c[1] == 2966000 for c in gh.calls)
+    assert ("queue_run", sha("7a")) not in gh.calls
+
+
+def test_a_comment_naming_tests_with_an_html_comment_end_still_reads():
+    test = "backend/tests/test_x.py::test_y[-->]"
+    pr = keeper.parse_prs(json.loads((FIXTURES / "open-prs.json").read_text()))[0]
+    body = keeper.comment_body(pr, [finding((test, False))], {test}, None)
+    assert "-->]" not in body.split("<!-- stale-pr-keeper:tests")[1]
+    (marker,) = keeper.markers([(1, body)])
+    assert marker.tests == [test] and marker.quarantine == keeper.quarantine_key([test], {test})
 
 
 def test_a_requeued_head_whose_comment_is_current_is_done():
