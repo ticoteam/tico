@@ -207,7 +207,7 @@
 .fin-private{display:flex;flex-wrap:wrap;gap:6px}
 .fin-private .fin-chip{white-space:normal}
 
-/* Payables and Receivables (ui/app/finance-docs.js): plain rows, a rail with the document and its decisions. */
+/* Payables and Receivables (ui/app/finance-docs.ts): plain rows, a rail with the document and its decisions. */
 .fin-t tbody tr[data-fin-doc]:hover td{background:var(--surface2)}
 .fin-doc-email:empty{display:none}
 .fin-copy{display:inline-flex;align-items:center;gap:6px;max-width:100%;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -291,3 +291,11 @@ th .fin-tag{display:block;width:max-content;margin:2px 0 0 auto}
 @media (max-width:640px){
   .fin-share-row{grid-template-columns:minmax(0,1fr) 76px 36px}
 }
+
+/* What changed: the briefing at the top of Finance (ui/app/finance-brief.ts). Short lines; the block is absent when empty. */
+.fin-brief{margin:0 0 16px;padding:12px 14px;border:1px solid var(--line, #e5e5e5);border-radius:10px}
+.fin-brief-head{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap}
+.fin-brief-head h2{margin:0;font-size:15px}
+.fin-brief-at{font-size:12px}
+.fin-brief-lines{margin:6px 0 0;padding-left:18px;font-size:14px;line-height:1.5}
+.fin-brief-lines li{overflow-wrap:anywhere}

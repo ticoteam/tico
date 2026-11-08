@@ -1,4 +1,4 @@
-// Tools (ui/app/tools.js, tools-api.js and the inbox pages under it) over a fake API in backend/api_tools.py's shapes: GET
+// Tools (ui/app/tools.ts, tools-api.js and the inbox pages under it) over a fake API in backend/api_tools.py's shapes: GET
 // /api/v2/tool-index (rows, counts), one API tool (GET/PATCH /api/v2/api-tools/<id>, PUT …/access/<subject>, POST
 // …/check, GET …/activity) and the mailboxes fake (support/mailboxes-fake.cjs) for a mailbox's page and its Limits.
 // Covers: the list, its filters and Needs you; an API tool's level change, Check now and Move to proxy; the Activity

@@ -50,13 +50,14 @@ ICON_CLASSES = (
 PATTERNS = [
     # 1. An element with an icon class whose only content is the name: <span class="nav-icon">check_circle</span>
     re.compile(r'class="[^"]*\b(?:%s)\b[^"]*"[^>]*>\s*(%s)\s*<' % ("|".join(ICON_CLASSES), NAME)),
-    # 2. Names inside an icon map: const TASK_VIEW_ICONS = {list: 'view_list', ...}
-    ("map", re.compile(r"\b\w*_ICONS\s*=\s*\{([^}]*)\}")),
+    # 2. Names inside an icon map: const TASK_VIEW_ICONS = {list: 'view_list', ...} (in TypeScript the name may carry a
+    #    type: const X_ICONS: Record<string, string> = {...}; the same for 4)
+    ("map", re.compile(r"\b\w*_ICONS\s*(?::[^=\n]*)?=\s*\{([^}]*)\}")),
     # 3. Fallbacks: MAP[key] || 'more_horiz'  and  ...querySelector('.nav-icon')?.textContent || 'article'
     re.compile(r"_ICONS\[[^\]]*\]\s*\|\|\s*'(%s)'" % NAME),
     re.compile(r"\.nav-icon'\)\?\.textContent\s*\|\|\s*'(%s)'" % NAME),
     # 4. A name picked into an `icon` variable: const icon = done ? 'a' : 'b';
-    ("icon-var", re.compile(r"\bconst icon\s*=\s*([^;\n]*);")),
+    ("icon-var", re.compile(r"\bconst icon\s*(?::[^=\n]*)?=\s*([^;\n]*);")),
 ]
 
 
@@ -77,7 +78,10 @@ def template_icons():
 
 def sources():
     files = (
-        [UI / "index.html"] + sorted(UI.glob("*.js")) + sorted(UI.glob("app/*.js")) + sorted(UI.glob("styles/*.css"))
+        [UI / "index.html"]
+        + sorted([*UI.glob("*.js"), *UI.glob("*.ts")])
+        + sorted([*UI.glob("app/*.js"), *UI.glob("app/*.ts")])
+        + sorted(UI.glob("styles/*.css"))
     )
     return [f for f in files if f.is_file()]
 
@@ -113,7 +117,7 @@ def fetch(url):
 
 
 # The files that name the font's URL: the page's preload, the @font-face rule and the Overview's own FontFace.
-FONT_URL_FILES = [UI / "index.html", UI / "styles" / "tokens.css", UI / "overview" / "building.js"]
+FONT_URL_FILES = [UI / "index.html", UI / "styles" / "tokens.css", UI / "overview" / "building.ts"]
 FONT_URL = re.compile(r"(?<![\w/])/vendor/fonts/material-symbols-outlined\.woff2(?:\?v=[0-9a-f]*)?")
 
 

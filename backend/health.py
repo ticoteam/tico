@@ -1664,6 +1664,8 @@ def token_failure(c):
 
 
 def _github(c, github):
+    from .github_app import account_word
+
     row = github.row(c) if github else None
     failure = token_failure(c) if row else None
     fix = _fix("Open GitHub settings", "#/settings", "cloud")
@@ -1672,7 +1674,9 @@ def _github(c, github):
             "github", "GitHub", "info", "Not connected. Optional: connect it to keep bot work in your GitHub.", [fix]
         )
     if not row["installation_id"]:
-        return _check("github", "GitHub", "warn", "The app is created but not installed on your organization.", [fix])
+        return _check(
+            "github", "GitHub", "warn", f"The app is created but not installed on your {account_word(row)}.", [fix]
+        )
     if failure is not None:
         return _check(
             "github",
@@ -1688,10 +1692,13 @@ def _github(c, github):
 def _github_repo_create(c, github):
     """An App without Administration (write) cannot create bot repositories, so every new bot stops for a person.
     The stored flag follows the installation's live permission whenever Tico asks GitHub, so this reads no network."""
-    row = github.row(c) if github else None
-    if not row or row["administration"]:
-        return None
+    from .github_app import ORGANIZATION, account_kind
     from .repo_waits import fixes, waits
+
+    row = github.row(c) if github else None
+    # A personal account gets no BotOps creation to offer: a person creates each bot's repository there.
+    if not row or row["administration"] or account_kind(row) != ORGANIZATION:
+        return None
 
     waiting = waits(c)
     named = sorted(waiting)

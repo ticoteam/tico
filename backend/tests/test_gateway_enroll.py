@@ -229,7 +229,7 @@ def test_the_app_holds_to_the_same_contract_as_hq():
     secret, slug = "gis_" + "k" * 43, "ops"
     expected = "gb_" + hmac.new(secret.encode(), slug.encode(), hashlib.sha256).hexdigest()[:16]
     assert G.bot_id(secret, slug) == expected and re.fullmatch(CONTRACT["patterns"]["bot"], expected)
-    ui = (pathlib.Path(__file__).parents[2] / "ui" / "app" / "settings-providers.js").read_text()
+    ui = (pathlib.Path(__file__).parents[2] / "ui" / "app" / "settings-providers.ts").read_text()
     assert CONTRACT["app"]["settings_line"] in ui
 
 
