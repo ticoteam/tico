@@ -5963,6 +5963,9 @@ def create_app(settings=None):
     from . import finance_routes
 
     finance_routes.install(app, store, auth, mutate)  # Finance: budgets, P&L, expenses, actions (backend/finance)
+    from .entities import routes as entity_routes
+
+    entity_routes.install(app, store, auth, mutate)  # The Directory: `hub directory` (backend/entities/routes.py)
     from . import finance_ads_routes
 
     finance_ads_routes.install(app, store, auth, mutate)  # Finance: ad spend import settings on ad tools' pages

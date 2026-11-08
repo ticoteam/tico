@@ -139,7 +139,7 @@ const threadIsDm = (t: ThreadRow | null | undefined): t is ThreadRow => t?.audie
 // A DM with one bot and no one else: its bot's page holds it, so lists leave it to the Team list's count.
 const threadIsBotDm = (t: ThreadRow) => threadIsDm(t) && !t.parent_id && Number(t.dm_with_count) === 1 && String(t.dm_with?.[0]?.actor || '').startsWith('bot:');
 const threadIsGroupDm = (t: ThreadRow | null | undefined) => threadIsDm(t) && !t?.parent_id && (Number(t.dm_with_count) || threadOthers(t).length) >= 2;
-const threadPrivate = (t: ThreadRow | null | undefined) => ['members', 'personal', 'participants', 'meeting'].includes(t?.audience);
+const threadPrivate = (t: ThreadRow | null | undefined) => ['members', 'personal', 'participants', 'meeting'].includes(t?.audience ?? '');
 // What the rail lists (and what may be pinned): a root that is a public, team or members thread, or a group DM.
 const threadOnRail = (t: ThreadRow | null | undefined) => !!t && !t.parent_id && !t.archived_at && (['company', 'team', 'members'].includes(t.audience) || threadIsGroupDm(t));
 // The other people in a DM: `dm_with` on a thread view, or a members list read for it. The viewer is left out.
@@ -191,7 +191,7 @@ const threadUnread = (t: ThreadRow | null | undefined) => Number(t?.me?.unread) 
 const threadActivity = (t: ThreadRow | null | undefined) => !threadUnread(t) && !!t?.me?.activity;
 const threadsCountText = (n: number) => n > 99 ? '99+' : String(n);
 // The server's order (contract §10.1): by title, case-insensitively, unnamed last, then id.
-const threadsByTitle = (a: ThreadRow, b: ThreadRow) => (!a.title - !b.title) || String(a.title || '').localeCompare(String(b.title || ''), undefined, {sensitivity: 'base'})
+const threadsByTitle = (a: ThreadRow, b: ThreadRow) => (Number(!a.title) - Number(!b.title)) || String(a.title || '').localeCompare(String(b.title || ''), undefined, {sensitivity: 'base'})
   || String(a.id).localeCompare(String(b.id));
 
 // ----------------------------------------------------------------- loading
@@ -410,7 +410,7 @@ function threadsSync() {
     // open Catch up goes.
     else if (d.kind === 'read' && d.read) {
       const root = d.root_id || d.thread_id;
-      threadsAllRead(root);
+      threadsAllRead(root ?? '');
       if (typeof catchUpGone === 'function') catchUpGone(root);
     }
     else if (d.kind === 'pinned' && d.thread_id) void threadsPinned(d);

@@ -109,6 +109,7 @@ SUBCOMMANDS = [
     "slack",
     "support",
     "finance",
+    "directory",
     "task-manager",
     "maintenance",
     "roadmap",

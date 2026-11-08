@@ -46,7 +46,7 @@ function pageTasks(forced, openId = '') {
       <header class="tl-head">
         <h1>Tasks</h1>
         <button type="button" class="tl-scope" id="task-scope" aria-haspopup="menu" aria-expanded="false"></button>
-        <button type="button" class="tl-ib tl-pipeline-edit" id="task-pipeline-edit" aria-label="Edit pipeline" title="Edit pipeline" hidden>✎</button>
+        <button type="button" class="tl-ib tl-pipeline-edit" id="task-pipeline-edit" aria-label="Edit pipeline" title="Edit pipeline" hidden><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M4 20h4L19 9l-4-4L4 16v4z"/><path d="M13.5 6.5l4 4"/></svg></button>
         <span class="tl-play" id="task-play" hidden></span>
         <span class="spacer"></span>
         <span class="tl-who-wrap" id="task-who-wrap" hidden></span>
