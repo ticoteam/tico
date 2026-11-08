@@ -355,7 +355,9 @@ def _adopt(conn: sqlite3.Connection, actor: str, row: Row, spec: Row, made: list
     for old, target in retired.items():
         gone = _one(conn, "SELECT id FROM task_steps WHERE type_id = ? AND name = ? COLLATE NOCASE", (row["id"], old))
         into = _one(
-            conn, "SELECT id FROM task_steps WHERE type_id = ? AND name = ? COLLATE NOCASE", (row["id"], target)
+            conn,
+            "SELECT id, status FROM task_steps WHERE type_id = ? AND name = ? COLLATE NOCASE",
+            (row["id"], target),
         )
         if gone is None or into is None:
             continue
@@ -363,16 +365,29 @@ def _adopt(conn: sqlite3.Connection, actor: str, row: Row, spec: Row, made: list
         if link is not None:
             pipeline_links.retire_link(conn, actor, str(link["id"]))
         cards = _rows(conn, "SELECT id, title FROM tasks WHERE step_id = ?", (gone["id"],))
-        held = [card for card in cards if _has_open_subtask(conn, str(card["id"]))]
+        # Only a move into a done or closed stage closes open subtasks; any other move leaves them alone.
+        closes = str(into["status"]) in ("done", "closed")
+        held = [card for card in cards if closes and _has_open_subtask(conn, str(card["id"]))]
         for card in cards:
             if card in held:
                 continue
             H.task_update(conn, actor, str(card["id"]), step=str(into["id"]), mover=True)
         if len(cards) > len(held):
             made.append(f"moved {len(cards) - len(held)} {old} cards to {target}")
+        # A held card is named only to a caller who can read it; the rest are counted, with no title.
+        hidden = []
         for card in held:
+            if H.task_private_readable(conn, actor, H.task(conn, str(card["id"]))):
+                unresolved.append(
+                    f"{card['title']} is still in {old}: finish or close its open subtasks, then re-run setup"
+                )
+            else:
+                hidden.append(card)
+        if hidden:
             unresolved.append(
-                f"{card['title']} is still in {old}: finish or close its open subtasks, then re-run setup"
+                f"{len(hidden)} card{'s' if len(hidden) > 1 else ''} you can't see "
+                f"{'are' if len(hidden) > 1 else 'is'} still in {old}: "
+                f"{'their owners' if len(hidden) > 1 else 'its owner'} finish or close the open subtasks"
             )
         conn.execute(
             "UPDATE stage_requirements SET retired_at = ? WHERE pipeline_stage_id = ? AND retired_at IS NULL",

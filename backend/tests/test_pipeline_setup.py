@@ -591,3 +591,45 @@ def test_with_no_matching_bots_every_unmanaged_pipeline_is_listed_as_unresolved(
     assert manager_of(c, "Marketing") is None
     again = S.apply_factory_setup(c, ANA)
     assert again["unresolved"] == out["unresolved"]
+
+
+def test_retiring_approved_moves_a_card_with_an_open_subtask_into_in_development(tmp_path):
+    """Codex GB2 finding 3: only a retirement into a done or closed stage closes descendants. Approved moves into In
+    development, so its card moves and its open subtask stays open."""
+    c = fresh(tmp_path)
+    product = _type(c, "Product roadmap")
+    card = H.task_create(c, ANA, "Approved export", "", ANA, type=product, step="Approved", lint=False)["id"]
+    child = H.task_create(c, ANA, "Write the export", "", ANA, parent_id=card, lint=False)["id"]
+    S.apply_factory_setup(c, ANA)
+    assert rows(c, "SELECT s.name AS step FROM tasks k JOIN task_steps s ON s.id=k.step_id WHERE k.id=?", card) == [
+        {"step": "In development"}
+    ]
+    assert rows(c, "SELECT status FROM tasks WHERE id=?", child) == [{"status": "open"}]
+
+
+def test_a_card_held_back_from_done_is_named_only_where_the_caller_can_read_it(tmp_path):
+    """Codex GB2 finding 2: setup's report names a held card only to a caller who can read it. A private card the setup
+    actor cannot read is reported generically, with no title."""
+    c = fresh(tmp_path)
+    product = _type(c, "Product roadmap")
+    public = H.task_create(c, ANA, "Public export", "", ANA, type=product, step="Ready to ship", lint=False)["id"]
+    H.task_create(c, ANA, "Finish the export", "", ANA, parent_id=public, lint=False)
+    secret = H.task_create(
+        c,
+        "human:ben",
+        "Confidential acquisition plan",
+        "",
+        "human:ben",
+        type=product,
+        step="Ready to ship",
+        lint=False,
+        private=True,
+    )["id"]
+    child = H.task_create(c, "human:ben", "Draft the plan", "", "human:ben", parent_id=secret, lint=False)["id"]
+    assert rows(c, "SELECT private FROM tasks WHERE id=?", secret) == [{"private": 1}]
+    out = S.apply_factory_setup(c, ANA)
+    text = " | ".join(out["unresolved"])
+    assert "Confidential" not in text and "Draft the plan" not in text, text
+    assert "Public export" in text
+    assert any("1 card you can't see is still in Ready to ship" in u for u in out["unresolved"]), out["unresolved"]
+    assert rows(c, "SELECT status FROM tasks WHERE id=?", child) == [{"status": "open"}]
