@@ -99,6 +99,12 @@ declare var DocsEditor: DocsEditorApi;
     return box;
   }
 
+  // A lookup into markup a template just drew. A missing element throws where the old `!` assertion would have thrown.
+  function drawn<T>(element: T | null, what: string): T {
+    if (element === null) throw new Error(`The docs dialog did not draw ${what}`);
+    return element;
+  }
+
   // ------------------------------------------------------------------ the editor
   function editor({doc = null, folder = '', onSaved, onCancel, onReload}: DocsEditorOptions): DocsEditorForm {
     const isNew = !doc;
@@ -124,8 +130,8 @@ declare var DocsEditor: DocsEditorApi;
     form.elements.path.value = doc?.path || (folder ? folder + '/' : '');
     form.elements.body.value = doc?.body || '';
     const area = form.elements.body, preview = form.querySelector<HTMLElement>('.docs-preview')!; // `!`: drawn by the template above
-    const say = (text: string) => { form.querySelector<HTMLElement>('[data-status]')!.textContent = text || ''; }; // `!`: drawn by the template above
-    const fail = (text: string) => { const line = form.querySelector<HTMLElement>('[data-error]')!; line.textContent = text || ''; line.hidden = !text; }; // `!`: drawn by the template above
+    const say = (text: string) => { drawn(form.querySelector<HTMLElement>('[data-status]'), 'the save status line').textContent = text || ''; };
+    const fail = (text: string) => { const line = drawn(form.querySelector<HTMLElement>('[data-error]'), 'the error line'); line.textContent = text || ''; line.hidden = !text; };
 
     form.querySelectorAll<HTMLButtonElement>('[data-tab]').forEach(button => {
       button.onclick = () => {
@@ -151,7 +157,7 @@ declare var DocsEditor: DocsEditorApi;
     });
 
     const conflict = (info: DocsConflict) => {
-      const box = form.querySelector<HTMLElement>('.docs-conflict')!; // `!`: drawn by the template above
+      const box = drawn(form.querySelector<HTMLElement>('.docs-conflict'), 'the conflict box');
       box.hidden = false; box.textContent = '';
       const who = info.updated_by_name || 'Someone';
       const text = document.createElement('p');
@@ -167,8 +173,9 @@ declare var DocsEditor: DocsEditorApi;
 
     form.onsubmit = async event => {
       event.preventDefault();
-      const button = form.querySelector<HTMLButtonElement>('[type=submit]')!; // `!`: drawn by the template above
-      button.disabled = true; fail(''); say('Saving…'); form.querySelector<HTMLElement>('.docs-conflict')!.hidden = true; // `!`: drawn by the template above
+      const button = drawn(form.querySelector<HTMLButtonElement>('[type=submit]'), 'the save button');
+      button.disabled = true; fail(''); say('Saving…');
+      drawn(form.querySelector<HTMLElement>('.docs-conflict'), 'the conflict box').hidden = true;
       const title = form.elements.title.value.trim(), path = form.elements.path.value.trim(), note = form.elements.note.value.trim();
       try {
         let saved: DocsResult;
@@ -221,7 +228,11 @@ declare var DocsEditor: DocsEditorApi;
           restore.onclick = async () => {
             restore.disabled = true;
             try { const result: DocsResult = await post(`/v2/docs/${encodeURIComponent(doc.id)}/restore`, {version: number}); box.close(); onRestored?.(result.doc); }
-            catch (error) { restore.disabled = false; view.querySelector<HTMLElement>('.err')!.textContent = errorMessage(error, ''); view.querySelector<HTMLElement>('.err')!.hidden = false; } // `!`: the .err below is drawn by show()
+            catch (error) {
+              restore.disabled = false;
+              const failure = drawn(view.querySelector<HTMLElement>('.err'), 'the version error line');
+              failure.textContent = errorMessage(error, ''); failure.hidden = false;
+            }
           };
           head.append(restore);
         }
@@ -267,24 +278,26 @@ declare var DocsEditor: DocsEditorApi;
       <div class="gs-card-actions"><button class="primary" type="submit">${link ? 'Save' : 'Add source'}</button>
         <button class="ghost" type="button" data-close>Cancel</button>
         ${link ? '<button class="ghost docs-danger" type="button" data-remove>Remove source</button>' : ''}</div></form>`, {label: link ? 'Edit source' : 'Add source'});
-    const form = box.querySelector<DocsLinkForm>('form')!, detected = box.querySelector<HTMLElement>('[data-detected]')!; // `!`: drawn by the template above
+    const form = drawn(box.querySelector<DocsLinkForm>('form'), 'the source form'), detected = box.querySelector<HTMLElement>('[data-detected]')!; // `!`: drawn by the template above
     form.elements.url.value = link?.url || ''; form.elements.title.value = link?.title || ''; form.elements.description.value = link?.description || '';
     form.elements.reference.value = link?.reference_override || '';
     const detect = () => {
       const scope = DocsSearch.sourceScope(form.elements.url.value);
       detected.textContent = scope ? `${scope.repo}${scope.tail ? ' · ' + scope.tail : ''}` : form.elements.url.value ? 'Link only' : '';
-      form.querySelector<HTMLDetailsElement>('.docs-source-scope')!.hidden = !scope?.tail; // `!`: drawn by the template above
-      if (link?.error_code === 'reference_needed') form.querySelector<HTMLDetailsElement>('.docs-source-scope')!.open = true; // `!`: drawn above
+      const scopeFold = drawn(form.querySelector<HTMLDetailsElement>('.docs-source-scope'), 'the source scope');
+      scopeFold.hidden = !scope?.tail;
+      if (link?.error_code === 'reference_needed') scopeFold.open = true;
     };
     form.elements.url.oninput = detect; detect(); form.elements.url.focus();
-    const fail = (text: string) => { const line = form.querySelector<HTMLElement>('[data-error]')!; line.textContent = text; line.hidden = !text; }; // `!`: drawn above
+    const fail = (text: string) => { const line = drawn(form.querySelector<HTMLElement>('[data-error]'), 'the error line'); line.textContent = text; line.hidden = !text; };
     const send = async (body: {url?: string; title?: string; description?: string; reference?: string; archived?: boolean}) => {
-      form.querySelector<HTMLButtonElement>('[type=submit]')!.disabled = true; fail(''); // `!`: drawn above
+      const submit = drawn(form.querySelector<HTMLButtonElement>('[type=submit]'), 'the submit button');
+      submit.disabled = true; fail('');
       try {
         const result = link ? await writeRequest('PATCH', '/v2/doc-sources/' + encodeURIComponent(link.id), body) : await post('/v2/doc-sources', body);
         box.close(); onDone?.(result.source);
       } catch (error) {
-        form.querySelector<HTMLButtonElement>('[type=submit]')!.disabled = false; // `!`: drawn above
+        submit.disabled = false;
         fail(errorCode(error) === 'already_linked' ? 'That address is already linked.' : errorMessage(error, 'That did not save.'));
       }
     };
@@ -308,13 +321,14 @@ declare var DocsEditor: DocsEditorApi;
       <p class="err" data-error role="alert" hidden></p>
       <div class="gs-card-actions"><button class="primary" type="submit">Start research</button>
         <button class="ghost" type="button" data-close>Cancel</button></div></form>`, {label: 'Research'});
-    const form = box.querySelector<DocsResearchForm>('form')!, line = box.querySelector<HTMLElement>('[data-error]')!; // `!`: drawn above
+    const form = drawn(box.querySelector<DocsResearchForm>('form'), 'the research form'), line = box.querySelector<HTMLElement>('[data-error]')!; // `!`: drawn above
     form.elements.instructions.focus();
     form.onsubmit = async event => {
       event.preventDefault();
       const instructions = form.elements.instructions.value.trim();
       if (!instructions) { line.textContent = 'Say what to find.'; line.hidden = false; return; }
-      form.querySelector<HTMLButtonElement>('[type=submit]')!.disabled = true; line.hidden = true; // `!`: drawn above
+      const submit = drawn(form.querySelector<HTMLButtonElement>('[type=submit]'), 'the submit button');
+      submit.disabled = true; line.hidden = true;
       try {
         const sent: DocsResearchFiled = await post('/v2/librarian/research', {target, section: form.elements.section?.value || '', instructions});
         form.innerHTML = `<header><h2>Research</h2><button class="ghost tmodal-x" type="button" data-close aria-label="Close">✕</button></header>
@@ -322,7 +336,7 @@ declare var DocsEditor: DocsEditorApi;
           <div class="gs-card-actions"><a class="primary" role="button" href="#/task/${esc(sent.task_id)}" data-close>View task</a>
             <button class="ghost" type="button" data-close>Close</button></div>`;
       } catch (error) {
-        form.querySelector<HTMLButtonElement>('[type=submit]')!.disabled = false; // `!`: drawn above
+        submit.disabled = false;
         line.textContent = errorCode(error) === 'librarian_off' ? 'Research is off right now.' : errorMessage(error, 'That did not go through.');
         line.hidden = false;
       }
@@ -341,16 +355,17 @@ declare var DocsEditor: DocsEditorApi;
       <p class="err" data-error role="alert" hidden></p><p class="muted" data-status role="status"></p>
       <div class="gs-card-actions"><button class="primary" type="submit">Import</button><button class="ghost" type="button" data-close>Cancel</button></div></form>`,
       {label: 'Import a file'});
-    const form = box.querySelector<DocsImportForm>('form')!; // `!`: drawn by the template above
+    const form = drawn(box.querySelector<DocsImportForm>('form'), 'the import form');
     form.onsubmit = async event => {
       event.preventDefault();
       // `files!`: a file input always has a FileList (the DOM types it nullable for other input kinds).
-      const file = form.elements.file.files![0], line = form.querySelector<HTMLElement>('[data-error]')!; // `!`: drawn above
+      const file = form.elements.file.files![0], line = drawn(form.querySelector<HTMLElement>('[data-error]'), 'the error line');
       line.hidden = true;
       if (!file) return;
       if (file.size > 20_000_000) { line.textContent = 'That file is larger than 20 MB.'; line.hidden = false; return; }
-      form.querySelector<HTMLButtonElement>('[type=submit]')!.disabled = true; // `!`: drawn above
-      form.querySelector<HTMLElement>('[data-status]')!.textContent = 'Importing…'; // `!`: drawn above
+      const submit = drawn(form.querySelector<HTMLButtonElement>('[type=submit]'), 'the submit button');
+      const status = drawn(form.querySelector<HTMLElement>('[data-status]'), 'the import status line');
+      submit.disabled = true; status.textContent = 'Importing…';
       const body = new FormData();
       body.append('file', file);
       if (form.elements.title.value.trim()) body.append('title', form.elements.title.value.trim());
@@ -361,9 +376,9 @@ declare var DocsEditor: DocsEditorApi;
         if (!response.ok) throw new Error(apiError(result, response));
         box.close(); onDone?.(result.doc);
       } catch (error) {
-        form.querySelector<HTMLElement>('[data-status]')!.textContent = ''; // `!`: drawn above
+        status.textContent = '';
         line.textContent = errorMessage(error, 'That file could not be imported.'); line.hidden = false;
-        form.querySelector<HTMLButtonElement>('[type=submit]')!.disabled = false; // `!`: drawn above
+        submit.disabled = false;
       }
     };
     return box;

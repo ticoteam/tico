@@ -1,4 +1,4 @@
-// Settings changes a page at a time (ui/app/settings-history.js), on the owner's Settings > History > Changes and on a
+// Settings changes a page at a time (ui/app/settings-history.ts), on the owner's Settings > History > Changes and on a
 // bot's History tab. A page with next_before ends in "Show older", which fetches the page after it (before=) and draws
 // its rows below the ones shown; the control goes after the last page. Undo works on a row from a later page, and the
 // list then reads its first page again. The Log (GET /api/v2/history) opens from a shared address with its filters
@@ -40,7 +40,7 @@ const {unrouted} = require('./support/routes.cjs');
       const request = route.request(), url = new URL(request.url()), p = url.pathname;
       const json = body => route.fulfill({contentType: 'application/json', body: JSON.stringify(body)});
       if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
-      const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|css))$/);
+      const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/);
       if (ui && fs.existsSync(uiFile(ui[1]))) {
         return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript',
           body: fs.readFileSync(uiFile(ui[1]), 'utf8')});

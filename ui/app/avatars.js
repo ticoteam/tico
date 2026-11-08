@@ -143,6 +143,7 @@ function blobShape(slug, size) {
 }
 const blobBreath = shape => `animation-delay:${shape.delay}s`;
 // Working: running a turn by the status poll, or answering in the chat that is open (the dots are moving).
+/** @param {string} slug */
 function botWorking(slug) {
   if (S.v2?.status?.[slug]?.state === 'running' || S.status?.active?.some(a => a.employee === slug)) return true;
   return !!(V2C?.slug === slug && V2C.live && (V2C.live.text || v2PendingText(V2C).mode === 'run'));

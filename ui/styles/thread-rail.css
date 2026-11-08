@@ -1,5 +1,5 @@
 /* ui/styles/thread-rail.css — The Threads page: the thread rail beside one thread, Catch up, New thread and Browse
-   threads. Markup: ui/app/thread-rail.js, ui/app/catch-up.js, ui/app/threads-page.js (New thread). */
+   threads. Markup: ui/app/thread-rail.ts, ui/app/catch-up.ts, ui/app/threads-page.ts (New thread). */
 
 #nav-threads .nav-icon svg,#mobile-threads .mobile-nav-icon svg{display:block}
 

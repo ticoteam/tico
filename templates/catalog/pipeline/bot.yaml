@@ -1,0 +1,52 @@
+name: pipeline                      # the slug: it matches the repository bot-pipeline and the label owner:pipeline
+display_name: "Pipeline Owner"
+labels: [owner:pipeline]
+reads: []                        # other bot repositories this one may clone read-only
+
+# These must agree with the bot's settings on the server, or be left out of this file entirely.
+reasoning_effort: medium
+max_run_minutes: 60
+
+# The routines are declared off (`enabled: false`) and switched on when a human starts the bot's setup
+# (Start setup, go-live). `hub bot create` seeds them once; from then on Tico's rows are the routines (docs/routines.md).
+routines:
+  - id: weekly-delivery-pipeline-report
+    title: Weekly delivery pipeline report
+    cron: "30 9 * * 1"
+    timezone: America/Los_Angeles     # set this to the team's own timezone
+    template: playbooks/weekly-delivery-report.md
+    labels: [priority:p2]
+    enabled: false
+  - id: weekly-release-notes-draft
+    title: Weekly release notes draft
+    cron: "0 14 * * 5"
+    timezone: America/Los_Angeles     # set this to the team's own timezone
+    template: playbooks/release-notes-draft.md
+    labels: [priority:p2]
+    enabled: false
+  - id: daily-merge-queue-watch
+    title: Daily merge queue watch
+    cron: "0 9 * * *"
+    timezone: America/Los_Angeles     # set this to the team's own timezone
+    template: playbooks/merge-queue-watch.md
+    labels: [priority:p3]
+    enabled: false
+
+# What this bot may touch. Not listed is not allowed. The team's GitHub App gives the bot a short-lived
+# token for the repositories the owner lists for it in Settings (docs/github-app.md).
+tools:
+  - service: github
+    identity: "the product repositories the owner lists for this bot"
+    can: [read]
+    note: "reads merge timings, workflow runs, check results and releases; never reruns, cancels, triggers or edits a workflow, never deploys, rolls back or merges"
+# Tagging an approved release (playbooks/rollout.md, step 1) needs write access on each repository, granted by the owner with
+# `hub bot repos pipeline --chosen <owner>/<repo>:write`. This file never grants it. The token can trigger workflows, so the only
+# things between this bot and a rerun or a deploy are this entry, the write grant and .claude/settings.json, which denies every
+# run, workflow, cache, credential, api, merge, release and tag command the agent could type.
+#
+# For the rollout, one entry per install in knowledge/rollout.json, uncommented when its key is granted:
+#  - service: tico-updates
+#    identity: "the update key of the other install (hub service-key create --scope update)"
+#    can: [update]
+#    env: UPDATE_KEY_OTHER
+#    note: "checks for, starts and follows an update of that install after the owner approves the release; nothing else"

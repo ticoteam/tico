@@ -1,13 +1,13 @@
-# Two tiers. Each push to a pull request runs the cheap checks (plan, static) on free GitHub-hosted Ubuntu runners, so a
-# push costs no RunsOn minutes. Hosted runners cannot read RunsOn's cache, so those jobs start cold.
-# A ready pull request from this repository also runs the plan's selected tests and factory simulation on RunsOn Spot
-# VMs, on the same labels the merge queue uses, so its `checks` passes only when they pass. A fork's pull request keeps
-# the cheap checks only, and a draft runs nothing.
-# A merge queue group (the merge_group event, once per queue group) runs everything else on RunsOn Spot VMs in Tico's
-# own AWS account: the tests the group's merged change selects, the factory simulation when the change reaches what it
-# runs (scripts/pr_checks.py factory_reason), the Rust and desktop checks, the macOS recorder tests and the Linux Caddy
-# image. The group selects from its own base and head. Static checks run in the group too: its merge
-# commit is the one that lands on main, and a migration timestamp can collide with a change queued ahead of it.
+# PR checks and the merge queue run on GitHub-hosted Ubuntu runners (free for this public repository), so they cost no
+# RunsOn minutes. RunsOn runs only release validation (ci.yml) and remote-run.yml.
+# Two tiers. Each push to a pull request runs the cheap checks (plan, static). A ready pull request from this repository
+# also runs the plan's selected tests and factory simulation, so its `checks` passes only when they pass. A fork's pull
+# request keeps the cheap checks only, and a draft runs nothing.
+# A merge queue group (the merge_group event, once per queue group) runs everything else: the tests the group's merged
+# change selects, the factory simulation when the change reaches what it runs (scripts/pr_checks.py factory_reason), the
+# Rust and desktop checks, the macOS recorder tests and the Linux Caddy image. The group selects from its own base and
+# head. Static checks run in the group too: its merge commit is the one that lands on main, and a migration timestamp can
+# collide with a change queued ahead of it.
 # A failed `tests` or `factory-sim` leg cancels its whole run (its last step), in a queue group or a pull request. The
 # `checks` job still runs (always()) and fails, so the queue drops a failing group within about a minute.
 # `checks` is the one required check. It fails when a job it needs failed or was cancelled; a skipped job passes. A draft
@@ -15,10 +15,8 @@
 # A skipped run proves nothing on its own: Tico reads a head whose every check was skipped as pending (backend/github.py
 # _overall). Converting a pull request back to a draft starts no run: such a run would cancel the one in progress on the
 # same head, and a cancelled check keeps the review gate blocking that head (backend/review_gate.py).
-# A pull request's own push runs the cheap checks on hosted runners whether or not it comes from a fork. A fork's tests
-# run on RunsOn only once a maintainer queues it.
-# Repository variable TICO_CI_HOSTED=true runs every RunsOn job here on GitHub-hosted runners instead
-# (docs/releasing.md#tests-on-a-pr); unset, RunsOn is the default.
+# A pull request's own push runs the cheap checks whether or not it comes from a fork. A fork's tests run only once a
+# maintainer queues it.
 # Without main pushes, pr-cache.yml keeps the main-branch caches the queue groups restore from fresh.
 name: PR checks
 
@@ -45,8 +43,11 @@ concurrency:
 jobs:
   plan:
     if: ${{ !github.event.pull_request.draft }}
-    runs-on: ${{ vars.TICO_CI_HOSTED == 'true' && 'ubuntu-24.04' || (github.event_name == 'merge_group' && format('runs-on={0}/volume=30gb:gp3:125mbs:3000iops/runner=2cpu-linux-x64/family=m8+m7+m6+r8+r7/extras=s3-cache', github.run_id) || 'ubuntu-24.04') }}
+    runs-on: ubuntu-24.04
     timeout-minutes: 12
+    permissions:
+      contents: read
+      actions: write # cancels the older merge queue groups of the same pull request
     outputs:
       matrix: ${{ steps.plan.outputs.matrix }}
       caddy: ${{ steps.plan.outputs.caddy }}
@@ -91,6 +92,21 @@ jobs:
             case $log in *'failed permanently'*) ;; *) break ;; esac
           done
           [ -f previous-timings/durations.json ] || echo "No measured timings yet; use collected counts this run"
+      # A merge queue group supersedes the older groups of its pull request: a rebuilt queue entry has a new head. The
+      # concurrency group cannot key on the number (an expression cannot read it from head_ref), so this step cancels
+      # those older queued and running runs. It runs for merge_group only, so a pull request's own runs are never listed,
+      # and it never cancels its own run. Continue-on-error: a failed cancel leaves the older group to finish alone.
+      - name: Cancel older queue groups for this pull request
+        if: github.event_name == 'merge_group'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HEAD_REF: ${{ github.event.merge_group.head_ref }}
+        run: |
+          for status in queued in_progress; do
+            gh api --paginate --slurp "repos/$GITHUB_REPOSITORY/actions/workflows/pr-checks.yml/runs?event=merge_group&status=$status&per_page=100" > "$RUNNER_TEMP/runs-$status.json"
+          done
+          "$RUNNER_TEMP/venv/bin/python" scripts/pr_checks.py cancel-superseded --head-ref "$HEAD_REF" --run-number "$GITHUB_RUN_NUMBER" "$RUNNER_TEMP/runs-queued.json" "$RUNNER_TEMP/runs-in_progress.json"
       - name: Select affected tests and size measured Python and browser groups
         id: plan
         env:
@@ -123,7 +139,7 @@ jobs:
       contents: read
       actions: write # the last step cancels the run when a suite fails
     name: ${{ matrix.suite }}
-    runs-on: ${{ vars.TICO_CI_HOSTED == 'true' && 'ubuntu-24.04' || format('runs-on={0}/volume=30gb:gp3:125mbs:3000iops/runner=4cpu-linux-x64/family=m8+m7+m6+r8+r7/extras=s3-cache', github.run_id) }}
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     strategy:
       fail-fast: false
@@ -132,9 +148,8 @@ jobs:
       PYTHONUNBUFFERED: '1'
       TICO_BROWSER_CHANNEL: ''
     steps:
-      - name: Free disk on a GitHub-hosted runner (about 14 GB free there; RunsOn's volume is 30 GB)
-        if: vars.TICO_CI_HOSTED == 'true'
-        run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc
+      - name: Free disk (GitHub-hosted runners start with about 14 GB free)
+        run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc && df -h /
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           persist-credentials: false
@@ -213,7 +228,7 @@ jobs:
       contents: read
       actions: write # the last step cancels the run when the sim fails
     name: factory sim ${{ matrix.shard }}
-    runs-on: ${{ vars.TICO_CI_HOSTED == 'true' && 'ubuntu-24.04' || format('runs-on={0}/volume=30gb:gp3:125mbs:3000iops/runner=4cpu-linux-x64/family=m8+m7+m6+r8+r7/extras=s3-cache', github.run_id) }}
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     strategy:
       fail-fast: false
@@ -265,7 +280,7 @@ jobs:
     # once installed; tools are pinned. The UI's strict TypeScript rule (scripts/check_ui_strict.py) runs here too.
     name: static checks
     if: ${{ !github.event.pull_request.draft }}
-    runs-on: ${{ vars.TICO_CI_HOSTED == 'true' && 'ubuntu-24.04' || (github.event_name == 'merge_group' && format('runs-on={0}/volume=30gb:gp3:125mbs:3000iops/runner=2cpu-linux-x64/family=m8+m7+m6+r8+r7/extras=s3-cache', github.run_id) || 'ubuntu-24.04') }}
+    runs-on: ubuntu-24.04
     timeout-minutes: 12
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
@@ -316,6 +331,8 @@ jobs:
         run: python3 scripts/check_ui_strict.py --base "$BASE_SHA"
       - name: UI routes
         run: PATH="$RUNNER_TEMP/venv/bin:$PATH" bash scripts/check_ui_routes.sh --base "$BASE_SHA"
+      - name: UI source suffixes (each .js UI scanner also reads .ts; text only)
+        run: '"$RUNNER_TEMP/venv/bin/python" scripts/check_ui_source_suffixes.py'
       - name: Runner wire contract
         run: '"$RUNNER_TEMP/venv/bin/python" scripts/check_wire_contract.py'
       - name: Shell scripts (shellcheck, pinned)
@@ -324,16 +341,14 @@ jobs:
         run: bash scripts/pinned_tool.sh actionlint
 
   rust-lint:
-    # Merge queue groups only: a cold clippy build on a hosted runner (no RunsOn cache) is slower than a pull request's
-    # checks should be. rustfmt and clippy -D warnings (scripts/rust_checks.sh) when a crate it checks changed.
+    # Merge queue groups only: rustfmt and clippy -D warnings (scripts/rust_checks.sh) when a crate it checks changed.
     name: rust lint
     if: ${{ github.event_name == 'merge_group' }}
-    runs-on: ${{ vars.TICO_CI_HOSTED == 'true' && 'ubuntu-24.04' || format('runs-on={0}/volume=30gb:gp3:125mbs:3000iops/runner=4cpu-linux-x64/family=m8+m7+m6+r8+r7/extras=s3-cache', github.run_id) }}
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
-      - name: Free disk on a GitHub-hosted runner (about 14 GB free there; RunsOn's volume is 30 GB)
-        if: vars.TICO_CI_HOSTED == 'true'
-        run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc
+      - name: Free disk (GitHub-hosted runners start with about 14 GB free)
+        run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc && df -h /
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           persist-credentials: false
@@ -361,12 +376,11 @@ jobs:
     # the build dependencies app.yml installs. Nothing runs when no app file changed.
     name: desktop app
     if: ${{ github.event_name == 'merge_group' }}
-    runs-on: ${{ vars.TICO_CI_HOSTED == 'true' && 'ubuntu-24.04' || format('runs-on={0}/volume=30gb:gp3:125mbs:3000iops/runner=4cpu-linux-x64/family=m8+m7+m6+r8+r7/extras=s3-cache', github.run_id) }}
+    runs-on: ubuntu-24.04
     timeout-minutes: 45
     steps:
-      - name: Free disk on a GitHub-hosted runner (about 14 GB free there; RunsOn's volume is 30 GB)
-        if: vars.TICO_CI_HOSTED == 'true'
-        run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc
+      - name: Free disk (GitHub-hosted runners start with about 14 GB free)
+        run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc && df -h /
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           persist-credentials: false
@@ -451,7 +465,7 @@ jobs:
     needs: plan
     if: ${{ github.event_name == 'merge_group' && needs.plan.outputs.caddy == 'true' }}
     name: caddy-linux-${{ matrix.arch }}
-    runs-on: ${{ vars.TICO_CI_HOSTED == 'true' && (matrix.arch == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-24.04') || format('runs-on={0}/volume=30gb:gp3:125mbs:3000iops/runner=4cpu-linux-{1}{2}/extras=s3-cache', github.run_id, matrix.arch == 'arm64' && 'arm64' || 'x64', matrix.arch != 'arm64' && '/family=m8+m7+m6+r8+r7' || '') }}
+    runs-on: ${{ matrix.arch == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
     timeout-minutes: 35
     strategy:
       fail-fast: false
@@ -466,9 +480,8 @@ jobs:
       TICO_CADDY_TEST_IMAGE: tico-caddy-qa:current
       DOCKER_BUILD_RECORD_UPLOAD: 'false'
     steps:
-      - name: Free disk on a GitHub-hosted runner (about 14 GB free there; RunsOn's volume is 30 GB)
-        if: vars.TICO_CI_HOSTED == 'true'
-        run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc
+      - name: Free disk (GitHub-hosted runners start with about 14 GB free)
+        run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc && df -h /
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           persist-credentials: false
@@ -516,7 +529,7 @@ jobs:
     # queued after the cancellation can wait for a RunsOn runner that never comes. It gates nothing: the receipt is cosmetic.
     if: ${{ !cancelled() && github.event_name == 'merge_group' }}
     needs: [plan, tests, factory-sim, caddy-linux, static, rust-lint, desktop-app, recorder]
-    runs-on: ${{ vars.TICO_CI_HOSTED == 'true' && 'ubuntu-24.04' || format('runs-on={0}/volume=30gb:gp3:125mbs:3000iops/runner=2cpu-linux-x64/family=m8+m7+m6+r8+r7/extras=s3-cache', github.run_id) }}
+    runs-on: ubuntu-24.04
     # Four minutes: checkout and the artifact download run before the receipt, which is capped at one minute below.
     # A hang in the receipt canceled the whole job at three minutes on #2487.
     timeout-minutes: 4

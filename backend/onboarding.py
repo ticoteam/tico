@@ -69,10 +69,13 @@ EMPTY_ANSWERS = {
     "software_product": "",
     "departments": [],
     "briefings": {},
+    # Where the company serves (a company file's company.regions); [] is none given.
+    "regions": [],
 }
 ANSWER_LABELS = (
     ("building", "What we're building"),
     ("what_we_do", "What we do"),
+    ("regions", "Serves"),
     ("customers", "Customers"),
     ("team_size", "Team size"),
     ("work_arrives", "Work arrives by"),
@@ -335,6 +338,11 @@ def load(c):
     }
 
 
+def regions(c):
+    """Where the company serves (a company file's company.regions, or the setup page's): [] when none is given."""
+    return list(load(c)["answers"].get("regions") or [])
+
+
 def display_names(settings, record):
     """The environment's configured names, with whatever onboarding saved on top."""
     configured = {
@@ -423,7 +431,7 @@ def config_view(c, settings, who=None):
         value["visual_files"] = "" if settings.visual_origin else tico_storage.visual_address(c)[0]
     value["in_docker"] = running_in_docker()  # the first run offers a Linux computer first when the server is one
     value["version"] = releases.version()
-    value["ui_build"] = ui_bundle.build_id(settings.ui_dir)  # an open page compares it with its own (ui/app/notices.js)
+    value["ui_build"] = ui_bundle.build_id(settings.ui_dir)  # an open page compares it with its own (ui/app/notices.ts)
     value["update"] = hosted_updates.notice(c, settings)  # with the release Tico support scheduled, if any
     if who is not None and who.role in ("owner", "human"):
         value["changelog"] = changelog.summary(c, settings, who.actor)
@@ -433,7 +441,7 @@ def config_view(c, settings, who=None):
     value["support_on"] = support_asks.support_on(settings)  # the page hides "Want help setting up?" without it
     value["backup"] = replication.status()
     value["runner_compat"] = runner_versions.desired()
-    value["beta"] = beta.listing()  # the Beta pill and Help's Beta list (ui/app/state.js betaPill)
+    value["beta"] = beta.listing()  # the Beta pill and Help's Beta list (ui/app/state.ts betaPill)
     from . import update_feeds
 
     value["update_feeds"] = update_feeds.status()  # what Subscribe to updates can send (settings-bot-editor.js)
@@ -444,7 +452,10 @@ def _answer_lines(answers):
     lines = []
     for key, label in ANSWER_LABELS:
         value = answers.get(key)
-        text = ", ".join(str(item) for item in value) if isinstance(value, list) else str(value or "")
+        if key == "regions" and not value:
+            continue  # a team that names no places gets the setup text it always had
+        joiner = "; " if key == "regions" else ", "  # places are free text, so they are split by a semicolon
+        text = joiner.join(str(item) for item in value) if isinstance(value, list) else str(value or "")
         lines.append("- " + label + ": " + (text or "not answered"))
     # What the owner said about each department in the org builder, so a bot starts from their own words.
     for department, text in (answers.get("briefings") or {}).items():
@@ -701,6 +712,8 @@ class Onboarding:
             if "building" in body.answers.model_fields_set
             else record["answers"].get("building") or ""
         )
+        if "regions" not in body.answers.model_fields_set:  # a client that never asks keeps where the company serves
+            answers["regions"] = record["answers"].get("regions") or []
         if (
             not names["website"]
             and not answers["building"]
@@ -850,7 +863,7 @@ class Onboarding:
                 who,
                 LIBRARIAN,
                 GS._market_title(c, "bot:" + LIBRARIAN, who.actor),
-                LS.market_text(answers),
+                LS.market_text(answers, record["answers"].get("regions") or []),
             )
         except (H.Refused, Problem):
             c.execute("ROLLBACK TO setup_market_task")

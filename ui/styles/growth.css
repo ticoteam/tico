@@ -1,4 +1,4 @@
-/* Growth and Brand (ui/app/growth-page.js: the Growth cards, growth-charts.js, growth-channels.js, growth-sources.js, brand-page.js), and
+/* Growth and Brand (ui/app/growth-page.ts: the Growth cards, growth-charts.js, growth-channels.js, growth-sources.js, brand-page.js), and
    the Brand strip on the Strategy page. Each works at phone width; the Growth cards' tables stack on a narrow card. */
 
 /* ---------- shared */
