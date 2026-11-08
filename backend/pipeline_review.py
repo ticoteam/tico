@@ -973,7 +973,7 @@ def _advance(c: "sqlite3.Connection", actor: str, task: Row, requirement: Row) -
         if link is not None and link["mode"] == "move" and link["to_pipeline_id"] == to_type:
             # The same record the engine writes for a move through a link, so the flow map counts this handoff. Undo
             # keeps its id to mark it returned.
-            handoff = pipeline_links.record_handoff(c, str(link["id"]), task["id"], task["id"])
+            handoff = pipeline_links.record_handoff(c, str(link["id"]), task["id"], task["id"], actor)
     except _hub().Refused:
         c.execute("ROLLBACK TO pipeline_advance")
         c.execute("RELEASE pipeline_advance")
@@ -1326,7 +1326,7 @@ def not_validated(
         decision = _decide(c, actor, task, requirement, "failed", text, current)
         with pipeline_engine.decided_move(actor):  # the reviewer decided it; the move is recorded as theirs
             _hub().task_update(c, actor, task_id, step=str(back["id"]), mover=True, note=f"Not validated: {text}")
-        child = pipeline_links.spawn(c, spawn_link, task_id, again=True, note=text)
+        child = pipeline_links.spawn(c, spawn_link, task_id, again=True, note=text, actor=actor)
         if child is None:
             raise Declined("not_filed", "The follow-up ticket could not be filed", 409)
         c.execute(

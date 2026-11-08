@@ -149,14 +149,54 @@ def retire_link(conn: sqlite3.Connection, actor: str, link_id: str) -> Row:
     return link
 
 
-def record_handoff(conn: sqlite3.Connection, link_id: str, source_task_id: str, target_task_id: str) -> str:
-    """One row for a ticket sent through a link: the same ticket for a `move`, the new one for a `spawn`."""
+def approval_of(conn: sqlite3.Connection, task_id: str, stage_id: str | None, actor: str) -> tuple[str, dict[str, Any]]:
+    """What let a ticket leave `stage_id`, as the hand-off's activity line words it and as its data: the newest met or
+    override decision the stage holds (its judge and verdict), else the actor who moved it (no gate)."""
+    name = _rows(conn, "SELECT name FROM task_steps WHERE id = ?", (stage_id,)) if stage_id else []
+    stage = str(name[0]["name"]) if name else ""
+    decided = _rows(
+        conn,
+        "SELECT judge, judge_actor, verdict FROM stage_decisions WHERE task_id = ? AND pipeline_stage_id = ? "
+        "AND verdict IN ('met', 'override') ORDER BY created_at DESC, id DESC LIMIT 1",
+        (task_id, stage_id),
+    )
+    if decided:
+        judge = str(decided[0]["judge_actor"] or decided[0]["judge"] or "")
+        verdict = str(decided[0]["verdict"])
+        return f"approved by {judge} ({verdict}) at {stage}", {
+            "judge": decided[0]["judge"],
+            "judge_actor": decided[0]["judge_actor"],
+            "verdict": verdict,
+            "stage": stage,
+        }
+    return f"moved by {actor}", {"judge": None, "judge_actor": None, "verdict": None, "stage": stage, "moved_by": actor}
+
+
+def record_handoff(
+    conn: sqlite3.Connection, link_id: str, source_task_id: str, target_task_id: str, actor: str | None = None
+) -> str:
+    """One row for a ticket sent through a link: the same ticket for a `move`, the new one for a `spawn`. Each hand-off
+    also writes its activity: "handoff" on the source (its new pipeline in `new`), and for a spawn "handoff_from" on the
+    target (the source in `old`). Both carry the hand-off id in their data, so the Overview list reads the same line."""
     ident = cast(str, H.new_id())
+    link = _rows(conn, "SELECT from_pipeline_stage_id, to_pipeline_id FROM pipeline_links WHERE id = ?", (link_id,))
     conn.execute(
         "INSERT INTO pipeline_handoffs (id, pipeline_link_id, source_task_id, target_task_id, created_at, returned_at) "
         "VALUES (?,?,?,?,?,NULL)",
         (ident, link_id, source_task_id, target_task_id, H.now()),
     )
+    if link:
+        by = actor or H.KEEPER
+        line, data = approval_of(conn, source_task_id, link[0]["from_pipeline_stage_id"], by)
+        data = {**data, "handoff_id": ident, "link_id": link_id}
+        to = str(link[0]["to_pipeline_id"])
+        H._task_event(  # pyright: ignore[reportPrivateUsage]
+            conn, source_task_id, by, "handoff", None, to, line, data=data
+        )
+        if target_task_id != source_task_id:
+            H._task_event(  # pyright: ignore[reportPrivateUsage]
+                conn, target_task_id, by, "handoff_from", source_task_id, to, line, data=data
+            )
     return ident
 
 
@@ -534,7 +574,13 @@ def _carry(conn: sqlite3.Connection, filer: str, source_id: str, child_id: str, 
 
 
 def spawn(
-    conn: sqlite3.Connection, link: Row, source_id: str, *, again: bool = False, note: str | None = None
+    conn: sqlite3.Connection,
+    link: Row,
+    source_id: str,
+    *,
+    again: bool = False,
+    note: str | None = None,
+    actor: str | None = None,
 ) -> str | None:
     """File the ticket a `spawn` link makes when `source_id` leaves the linked stage: a subtask of the source, in the target
     pipeline's first stage, titled and labelled as the source when everyone who can read the new ticket may read the source
@@ -595,7 +641,7 @@ def spawn(
     conn.execute("RELEASE pipeline_spawn")
     child_id = str(child["id"])
     _carry(conn, filer, source_id, child_id, str(link["from_pipeline_stage_id"]))
-    record_handoff(conn, str(link["id"]), source_id, child_id)
+    record_handoff(conn, str(link["id"]), source_id, child_id, actor or filer)
     return child_id
 
 
@@ -606,6 +652,89 @@ def handoffs(conn: sqlite3.Connection, link_id: str) -> list[Row]:
         "WHERE pipeline_link_id = ? ORDER BY created_at, id",
         (link_id,),
     )
+
+
+HANDOFF_CARDS = 200  # the cards one board read asks about
+
+
+def card_handoffs(conn: sqlite3.Connection, reader_sql: str, card_ids: list[str]) -> dict[str, dict[str, Any]]:
+    """For each card the reader may open: `chip`, the card it sent to another pipeline by a spawn link (the latest open
+    hand-off only; a returned one counts for nothing), and `from`, the card it was spawned from. The chip names the
+    pipeline; the card it leads to and that card's stage are given only to a reader who may open it (none otherwise).
+    A move is one card, so it has no chip and no From. A card or link that no longer exists gives no chip."""
+    if not card_ids:
+        return {}
+    marks = ",".join("?" * len(card_ids))
+    shown = {
+        str(r["id"]) for r in _rows(conn, f"SELECT id FROM tasks WHERE id IN ({marks}) AND ({reader_sql})", card_ids)
+    }
+    if not shown:
+        return {}
+    out: dict[str, dict[str, Any]] = {cid: {"chip": None, "from": None} for cid in shown}
+
+    def may_open(ids: set[str]) -> set[str]:
+        if not ids:
+            return set()
+        at = ",".join("?" * len(ids))
+        return {
+            str(r["id"]) for r in _rows(conn, f"SELECT id FROM tasks WHERE id IN ({at}) AND ({reader_sql})", list(ids))
+        }
+
+    sent = _rows(
+        conn,
+        "SELECT h.id AS handoff_id, h.source_task_id AS source_id, h.target_task_id AS target_id, "
+        "l.to_pipeline_id AS to_type, tt.name AS to_name, s.name AS stage_name, "
+        "l.from_pipeline_id AS from_type, ft.name AS from_name, src.title AS source_title "
+        "FROM pipeline_handoffs h JOIN pipeline_links l ON l.id = h.pipeline_link_id AND l.mode = 'spawn' "
+        "JOIN tasks t ON t.id = h.target_task_id "
+        "LEFT JOIN task_types tt ON tt.id = l.to_pipeline_id "
+        "LEFT JOIN task_types ft ON ft.id = l.from_pipeline_id "
+        "LEFT JOIN task_steps s ON s.id = t.step_id "
+        "LEFT JOIN tasks src ON src.id = h.source_task_id "
+        f"WHERE h.returned_at IS NULL AND h.source_task_id IN ({marks}) ORDER BY h.created_at, h.id",
+        card_ids,
+    )
+    latest: dict[str, Row] = {str(r["source_id"]): r for r in sent}  # the newest open hand-off per card wins
+    open_to = may_open({str(r["target_id"]) for r in latest.values()})
+    for cid, r in latest.items():
+        if cid not in shown:
+            continue
+        target = str(r["target_id"])
+        can = target in open_to
+        out[cid]["chip"] = {
+            "handoff_id": r["handoff_id"],
+            "to_pipeline_id": r["to_type"],
+            "pipeline": r["to_name"],
+            "task_id": target if can else None,
+            "stage": r["stage_name"] if can else None,
+            "readable": can,
+        }
+
+    received = _rows(
+        conn,
+        "SELECT h.id AS handoff_id, h.source_task_id AS source_id, h.target_task_id AS target_id, "
+        "fl.name AS from_name, src.title AS source_title "
+        "FROM pipeline_handoffs h JOIN pipeline_links l ON l.id = h.pipeline_link_id AND l.mode = 'spawn' "
+        "LEFT JOIN task_types fl ON fl.id = l.from_pipeline_id "
+        "LEFT JOIN tasks src ON src.id = h.source_task_id "
+        f"WHERE h.returned_at IS NULL AND h.target_task_id IN ({marks}) ORDER BY h.created_at, h.id",
+        card_ids,
+    )
+    came = {str(r["target_id"]): r for r in received}
+    open_from = may_open({str(r["source_id"]) for r in came.values()})
+    for cid, r in came.items():
+        if cid not in shown:
+            continue
+        source = str(r["source_id"])
+        can = source in open_from
+        out[cid]["from"] = {
+            "handoff_id": r["handoff_id"],
+            "pipeline": r["from_name"],
+            "task_id": source if can else None,
+            "title": r["source_title"] if can else None,
+            "readable": can,
+        }
+    return out
 
 
 class PipelineLinkBody(BaseModel):
@@ -638,6 +767,19 @@ def install(app: "FastAPI", store: "Store", mutate: Callable[..., Any], auth: "A
         with reader.read() as read:
             guard.domain(who)
             return visible_links(cast("sqlite3.Connection", read), who.actor, pipeline, limit, after)
+
+    @app.get("/api/v2/pipeline-links/handoffs")  # pyright: ignore[reportUntypedFunctionDecorator]
+    def handoffs_of(request: Request, tasks: str = "") -> dict[str, Any]:  # pyright: ignore[reportUnusedFunction]
+        """The chip and From of each card asked for (?tasks=a,b), for the cards the reader may open."""
+        who = request.state.identity
+        guard: Any = auth
+        reader: Any = store
+        ids = [t for t in tasks.split(",") if t][:HANDOFF_CARDS]
+        with reader.read() as read:
+            guard.domain(who)
+            c = cast("sqlite3.Connection", read)
+            rule = pipeline_rights.list_sql(c, who.task_actor or who.actor, guard.task_sql(c, who))
+            return {"cards": card_handoffs(c, rule, ids)}
 
     @app.post("/api/v2/pipeline-links")  # pyright: ignore[reportUntypedFunctionDecorator]
     def add_link(request: Request, body: PipelineLinkBody) -> dict[str, Any]:  # pyright: ignore[reportUnusedFunction]

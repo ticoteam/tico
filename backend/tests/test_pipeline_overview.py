@@ -550,3 +550,36 @@ def test_rights_answer_a_hidden_pipeline_the_same_as_a_missing_one(api):
     assert get(api, f"pipelines/{visible}/rights", "ben-test") == {"may_edit_rules": True}
     assert get(api, f"pipelines/{hidden}/rights", "ben-test") == get(api, "pipelines/nope/rights", "ben-test")
     assert get(api, f"pipelines/{hidden}/rights", "ben-test") == {"may_edit_rules": False}
+
+
+def test_the_list_behind_an_arrow_is_the_arrow_count_for_the_same_reader_and_period(api):
+    growth = make_factory(api, "Gro")
+    sales, sales_steps = make_type(api, "Sls", factory=growth)
+    marketing, marketing_steps = make_type(api, "Mkt", factory=growth)
+    lead = link(api, marketing, marketing_steps["Doing"], sales)
+    kept = card(api, sales, sales_steps["Doing"])
+    private = card(api, sales, sales_steps["Doing"], private=True)  # Ana's: Ben may not open it
+    returned = card(api, sales, sales_steps["Doing"])
+    old = card(api, sales, sales_steps["Doing"])
+    handoff(api, lead, kept["id"], ago(hours=2))
+    handoff(api, lead, private["id"], ago(hours=3))
+    handoff(api, lead, returned["id"], ago(hours=4), returned=ago(hours=1))  # undone: in neither
+    handoff(api, lead, old["id"], ago(days=20))  # outside 7 days
+
+    def behind(token, period):
+        return get(
+            api, f"pipelines/overview/crossings?from_id={marketing}&to_id={sales}&mode=move&period={period}", token
+        )["cards"]
+
+    def count(token, period):
+        edges = overview(api, period, token)["edges"]
+        return next((e["count"] for e in edges if e["from"] == marketing and e["to"] == sales), 0)
+
+    for token, period in (("ana-test", "7d"), ("ana-test", "30d"), ("ben-test", "7d"), ("ana-test", "1d")):
+        rows = behind(token, period)
+        assert len(rows) == count(token, period), (token, period)
+    assert [r["task_id"] for r in behind("ana-test", "7d")] == [kept["id"], private["id"]]  # newest first
+    assert [r["task_id"] for r in behind("ana-test", "30d")] == [kept["id"], private["id"], old["id"]]
+    assert [r["task_id"] for r in behind("ben-test", "7d")] == [kept["id"]]
+    assert behind("ana-test", "7d")[0]["title"] == kept["title"]
+    assert get(api, f"pipelines/overview/crossings?from_id={marketing}&to_id={sales}&mode=bogus", expected=422)

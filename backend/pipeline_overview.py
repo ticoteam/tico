@@ -223,21 +223,59 @@ def _edges(c: "sqlite3.Connection", ids: list[str], seen: str, since: str) -> li
         if _columns(c, "stage_visits")
         else "NULL"
     )
-    m = _marks(ids)
+    where, args = _crossings(ids, seen, since)
     sql = (
         "WITH hops AS (SELECT l.from_pipeline_id AS a, l.to_pipeline_id AS b, l.mode AS mode, "
         f"MAX(0, (julianday(h.created_at) - julianday(coalesce({start}, t.created_at))) * 1440.0) AS age "
         "FROM pipeline_handoffs h JOIN pipeline_links l ON l.id=h.pipeline_link_id "
-        "LEFT JOIN tasks t ON t.id=h.source_task_id "
-        f"WHERE l.retired_at IS NULL AND l.from_pipeline_id IN ({m}) AND l.to_pipeline_id IN ({m}) "
-        f"AND h.created_at>=? AND h.returned_at IS NULL AND h.target_task_id IN (SELECT id FROM tasks WHERE ({seen})) "
-        f"AND (l.mode<>'spawn' OR h.source_task_id IN (SELECT id FROM tasks WHERE ({seen})))), "
+        f"LEFT JOIN tasks t ON t.id=h.source_task_id {where}), "
         "ranked AS (SELECT a, b, mode, age, ROW_NUMBER() OVER (PARTITION BY a, b, mode ORDER BY age) AS rn, "
         "COUNT(*) OVER (PARTITION BY a, b, mode) AS n FROM hops) "
         "SELECT a, b, mode, n AS count, AVG(age) AS median_age FROM ranked "
         "WHERE rn IN ((n+1)/2, (n+2)/2) GROUP BY a, b, mode ORDER BY a, b, mode"
     )
-    return _rows(c, sql, [*ids, *ids, since])
+    return _rows(c, sql, args)
+
+
+def _crossings(ids: list[str], seen: str, since: str) -> tuple[str, list[Any]]:
+    """The WHERE of the hand-offs that cross an arrow in the period, shared by the arrow counts (_edges) and the list
+    behind an arrow (crossings), so the two always agree: live links between the shown pipelines, live hand-offs in the
+    period, targets the reader may open, and a spawn only where the reader may also open its source."""
+    m = _marks(ids)
+    where = (
+        f"WHERE l.retired_at IS NULL AND l.from_pipeline_id IN ({m}) AND l.to_pipeline_id IN ({m}) "
+        f"AND h.created_at>=? AND h.returned_at IS NULL AND h.target_task_id IN (SELECT id FROM tasks WHERE ({seen})) "
+        f"AND (l.mode<>'spawn' OR h.source_task_id IN (SELECT id FROM tasks WHERE ({seen})))"
+    )
+    return where, [*ids, *ids, since]
+
+
+def crossings(
+    c: "sqlite3.Connection", actor: str, period: str, visible_sql: str | None, a: str, b: str, mode: str
+) -> list[Row]:
+    """The cards that crossed one arrow (a to b, by `mode`) in `period`, newest first: the card (its title), when it
+    crossed and the approval its activity line names. The same rows the arrow counts (_crossings), visibility included."""
+    days = PERIODS.get(period)
+    if days is None:
+        raise Problem("validation", "Period is 1d, 7d or 30d", 422)
+    seen = pipeline_rights.list_sql(c, actor, visible_sql or _own_cards(actor))
+    since = _stamp(H.parse_ts(str(H.now())) - timedelta(days=days))
+    ids = [str(p["id"]) for p in _pipelines(c, actor)[:MAX_PIPELINES]]
+    if a not in ids or b not in ids or not _columns(c, "pipeline_handoffs"):
+        return []
+    where, args = _crossings(ids, seen, since)
+    rows = _rows(
+        c,
+        "SELECT h.id AS handoff_id, h.target_task_id AS task_id, t.title AS title, h.created_at AS crossed_at, "
+        "e.note AS approval FROM pipeline_handoffs h JOIN pipeline_links l ON l.id=h.pipeline_link_id "
+        "JOIN tasks t ON t.id=h.target_task_id "
+        "LEFT JOIN history_events e ON e.subject_type='task' AND e.subject_id=h.source_task_id AND e.kind='handoff' "
+        "AND json_extract(e.data, '$.handoff_id')=h.id "
+        f"{where} AND l.from_pipeline_id=? AND l.to_pipeline_id=? AND l.mode=? "
+        "ORDER BY h.created_at DESC, h.id DESC",
+        [*args, a, b, mode],
+    )
+    return rows
 
 
 def _sccs(nodes: list[str], edges: list[tuple[str, str]]) -> list[list[str]]:
@@ -600,6 +638,23 @@ def install(app: "FastAPI", store: "Store", mutate: "Callable[..., Any]", auth: 
         with reader.read() as c:
             guard.domain(who)
             return read(cast("sqlite3.Connection", c), who.actor, period, guard.task_sql(c, who))
+
+    @app.get("/api/v2/pipelines/overview/crossings")
+    def crossed(  # pyright: ignore[reportUnusedFunction]
+        request: Request, from_id: str, to_id: str, mode: str = "move", period: str = "7d"
+    ) -> dict[str, list[Any]]:
+        """The cards behind one Overview arrow (from_id to to_id, by mode) in the period, newest first."""
+        who = request.state.identity
+        guard: Any = auth
+        reader: Any = store
+        if mode not in ("move", "spawn"):
+            raise Problem("validation", "Mode is move or spawn", 422)
+        with reader.read() as c:
+            guard.domain(who)
+            c = cast("sqlite3.Connection", c)
+            return {
+                "cards": crossings(c, who.actor, period, guard.task_sql(c, who), from_id, to_id, mode),
+            }
 
     @app.get("/api/v2/pipelines/{pipeline_id}/rights")
     def rights(request: Request, pipeline_id: str) -> dict[str, bool]:  # pyright: ignore[reportUnusedFunction]

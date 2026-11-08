@@ -751,7 +751,7 @@ def on_step_change(
         elif target is not None and target["status"] in ("done", "closed"):
             _mark_stage(conn, actor, task_id, FINISHED_INTO, step_id, ts)  # a move finished it into a done stage
     current = open_visit(conn, task_id)
-    _leave_spawn_stage(conn, row, type_id, step_id)
+    _leave_spawn_stage(conn, row, type_id, step_id, actor)
     _move_visit(conn, actor, row, type_id, step_id, ts, current)
     target = stage(conn, step_id)
     if target is not None and target["status"] == "declined" and row.get("status") != "declined":
@@ -801,7 +801,9 @@ def _move_visit(
         H._task_event(conn, task_id, actor, "stage_move_back", old_step, step_id, "")  # pyright: ignore[reportPrivateUsage]
 
 
-def _leave_spawn_stage(conn: sqlite3.Connection, row: Row, type_id: str | None, step_id: str | None) -> None:
+def _leave_spawn_stage(
+    conn: sqlite3.Connection, row: Row, type_id: str | None, step_id: str | None, actor: str
+) -> None:
     """A card that moves forward out of a stage with a spawn link files its spawned ticket (pipeline_links.spawn), once
     per card while that handoff is live. A move back, a move into a closing stage or a move to another pipeline files
     nothing."""
@@ -818,7 +820,7 @@ def _leave_spawn_stage(conn: sqlite3.Connection, row: Row, type_id: str | None, 
         return
     if after["position"] <= before["position"] or after["status"] in CLOSED:
         return
-    pipeline_links.spawn(conn, link, str(row.get("id")))
+    pipeline_links.spawn(conn, link, str(row.get("id")), actor=actor)
 
 
 def _settle_parent(conn: sqlite3.Connection, child_id: str) -> None:
@@ -1239,7 +1241,7 @@ def advance(conn: sqlite3.Connection, actor: str, task_id: str) -> dict[str, Any
     try:
         if link is not None:
             H.task_update(conn, actor, task_id, type=target["type_id"], step=target["id"])
-            pipeline_links.record_handoff(conn, str(link["id"]), task_id, task_id)
+            pipeline_links.record_handoff(conn, str(link["id"]), task_id, task_id, actor)
         else:
             H.task_update(conn, actor, task_id, step=target["id"])
     except H.Refused as exc:
