@@ -493,3 +493,30 @@ def test_the_pictures_artifact_is_the_one_release_shots_uploads_on_a_spot_4cpu_r
     assert "spot=false" not in job["runs-on"] and "runner=4cpu-linux-x64" in job["runs-on"]
     train, _ = _workflow("train.yml")
     assert all("macos" not in str(job.get("runs-on", "")) for job in train["jobs"].values())
+
+
+def _loads(path):
+    """The repo scripts a script needs at import: ROOT / "....py" paths it loads and sibling modules it imports."""
+    text = path.read_text()
+    needed = set(re.findall(r'ROOT / "([^"]+\.py)"', text))
+    for name in re.findall(r"^(?:import|from) (\w+)", text, re.M):
+        sibling = path.parent / f"{name}.py"
+        if sibling.exists():
+            needed.add(str(sibling.relative_to(ROOT)))
+    return needed
+
+
+def test_every_sparse_checkout_carries_what_its_scripts_load():
+    # A guard that checked out only release_train.py failed every window once it began loading release_increment.py.
+    for workflow in sorted((ROOT / ".github/workflows").glob("*.yml")):
+        for job in (yaml.safe_load(workflow.read_text()).get("jobs") or {}).values():
+            for step in job.get("steps") or []:
+                listed = set(((step.get("with") or {}).get("sparse-checkout") or "").split())
+                seen, todo = set(), [p for p in listed if p.endswith(".py")]
+                while todo:
+                    script = todo.pop()
+                    if script in seen or not (ROOT / script).exists():
+                        continue
+                    seen.add(script)
+                    todo.extend(_loads(ROOT / script))
+                assert seen <= listed, f"{workflow.name}: {sorted(seen - listed)} missing from a sparse checkout"
