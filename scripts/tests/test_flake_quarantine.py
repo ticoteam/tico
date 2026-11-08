@@ -288,6 +288,24 @@ def test_a_rerun_attempt_that_passes_flips_the_test_its_first_attempt_failed():
     assert found[flaky]["passed"] == [f"https://github.com/{REPO}/actions/runs/1/attempts/2"]
 
 
+def test_a_passing_testcase_in_a_leg_that_failed_on_another_test_still_proves_it():
+    """A leg fails on test B; its report still shows test A passed, and A's own testcase is the evidence."""
+    flaky = "fixture_tests/test_quarantine_fixture_c.py::test_flaky"
+    other = "fixture_tests/test_quarantine_fixture_c.py::test_still_failing"
+    gh = FakeGitHub(
+        runs=[run(1, attempts=2)],
+        jobs={
+            (1, 1): [job(10, "plan", "success"), job(11, "python-1", "failure")],
+            (1, 2): [job(20, "plan", "success"), job(21, "python-1", "failure")],
+        },
+        logs={11: log(f"FAILED {flaky} - AssertionError"), 21: log(f"FAILED {other} - AssertionError")},
+        xml={21: junit_for((flaky, None), (other, "failed"))},
+    )
+    found = flips_of(gh)
+    assert list(found) == [flaky]
+    assert found[flaky]["passed"] == [f"https://github.com/{REPO}/actions/runs/1/attempts/2"]
+
+
 def test_a_rerun_passes_only_the_tests_its_report_shows_as_passed():
     """A failed test passed only when a leg's own JUnit report shows that exact test as passed."""
     flaky = "fixture_tests/test_quarantine_fixture_d.py::test_wire"

@@ -235,8 +235,9 @@ def observations(gh, repo, runs):
                 if TEST_JOB.fullmatch(j["name"])
             ]
             for leg in legs:
-                if leg["conclusion"] == "success":
-                    leg["passed"] = gh.results(r["id"], leg)
+                # Every leg's report counts, failed legs included: a test that passed in a leg that failed on another
+                # test is still proof that it passed.
+                leg["passed"] = gh.results(r["id"], leg)
             failed, crowded = {}, []
             for leg in legs:
                 if leg["conclusion"] != "failure":
@@ -277,7 +278,7 @@ def observations(gh, repo, runs):
 def _passed(test, other):
     """Whether `other` (an attempt of the same commit) passed `test`: one of its legs' JUnit reports shows that exact
     testcase as passed. A file that passed, or a sibling test in it, proves nothing about `test`."""
-    return any(leg["conclusion"] == "success" and test in (leg.get("passed") or ()) for leg in other["legs"])
+    return any(test in (leg.get("passed") or ()) for leg in other["legs"])
 
 
 def flips(observed):
