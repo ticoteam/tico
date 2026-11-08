@@ -209,14 +209,17 @@ def lead_heard_of(word):
 
 def late_told(run):
     """Every ticket late at a step was named to Head of Engineering: the step's late hours (the product's default for
-    a working step, backend/step_age.LATE_HOURS) and one scheduler pass more. Sooner, a quiet ticket is its owner's
-    to hear of (a status check), and a check that runs long is its timeout's."""
+    a working step, backend/step_age.LATE_HOURS), one lead sweep (Head of Engineering hears of a late ticket on its
+    sweep, so a ticket late for less than one sweep may leave before any sweep sees it) and one scheduler pass more.
+    Sooner, a quiet ticket is its owner's to hear of (a status check), and a check that runs long is its timeout's."""
     from backend.step_age import LATE_HOURS
 
     rows = run.w.sql("SELECT body, refs FROM messages WHERE recipient_id='bot:engineering-lead'")
     told = " ".join((r["body"] or "") + (r["refs"] or "") for r in rows)
     named = {tid for _, tid in run.w.stuck_told}
-    slack = 2 * run.scenario.tick_minutes / 60
+    board = run.w.board
+    sweep = board.lead_sweep_hours if board.lead_sweep else 0
+    slack = sweep + 2 * run.scenario.tick_minutes / 60
     late = []
     for t in run.final:
         spans = run.w.step_spans(t["id"], until=run.end.strftime("%Y-%m-%dT%H:%M:%S.%fZ"))
