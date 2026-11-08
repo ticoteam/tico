@@ -177,9 +177,14 @@ def record_handoff(
 ) -> str:
     """One row for a ticket sent through a link: the same ticket for a `move`, the new one for a `spawn`. Each hand-off
     also writes its activity: "handoff" on the source (its new pipeline in `new`), and for a spawn "handoff_from" on the
-    target (the source in `old`). Both carry the hand-off id in their data, so the Overview list reads the same line."""
+    target (the source in `old`, the pipeline it came from in `new`). Both carry the hand-off id in their data, so the
+    Overview list reads the same line."""
     ident = cast(str, H.new_id())
-    link = _rows(conn, "SELECT from_pipeline_stage_id, to_pipeline_id FROM pipeline_links WHERE id = ?", (link_id,))
+    link = _rows(
+        conn,
+        "SELECT from_pipeline_stage_id, from_pipeline_id, to_pipeline_id FROM pipeline_links WHERE id = ?",
+        (link_id,),
+    )
     conn.execute(
         "INSERT INTO pipeline_handoffs (id, pipeline_link_id, source_task_id, target_task_id, created_at, returned_at) "
         "VALUES (?,?,?,?,?,NULL)",
@@ -195,7 +200,14 @@ def record_handoff(
         )
         if target_task_id != source_task_id:
             H._task_event(  # pyright: ignore[reportPrivateUsage]
-                conn, target_task_id, by, "handoff_from", source_task_id, to, line, data=data
+                conn,
+                target_task_id,
+                by,
+                "handoff_from",
+                source_task_id,
+                str(link[0]["from_pipeline_id"]),
+                line,
+                data=data,
             )
     return ident
 
@@ -666,7 +678,8 @@ def card_handoffs(conn: sqlite3.Connection, reader_sql: str, card_ids: list[str]
         return {}
     marks = ",".join("?" * len(card_ids))
     shown = {
-        str(r["id"]) for r in _rows(conn, f"SELECT id FROM tasks WHERE id IN ({marks}) AND ({reader_sql})", card_ids)
+        str(r["id"])
+        for r in _rows(conn, f"SELECT id FROM tasks WHERE id IN ({marks}) AND ({reader_sql})", tuple(card_ids))
     }
     if not shown:
         return {}
@@ -677,7 +690,7 @@ def card_handoffs(conn: sqlite3.Connection, reader_sql: str, card_ids: list[str]
             return set()
         at = ",".join("?" * len(ids))
         return {
-            str(r["id"]) for r in _rows(conn, f"SELECT id FROM tasks WHERE id IN ({at}) AND ({reader_sql})", list(ids))
+            str(r["id"]) for r in _rows(conn, f"SELECT id FROM tasks WHERE id IN ({at}) AND ({reader_sql})", tuple(ids))
         }
 
     sent = _rows(
@@ -692,7 +705,7 @@ def card_handoffs(conn: sqlite3.Connection, reader_sql: str, card_ids: list[str]
         "LEFT JOIN task_steps s ON s.id = t.step_id "
         "LEFT JOIN tasks src ON src.id = h.source_task_id "
         f"WHERE h.returned_at IS NULL AND h.source_task_id IN ({marks}) ORDER BY h.created_at, h.id",
-        card_ids,
+        tuple(card_ids),
     )
     latest: dict[str, Row] = {str(r["source_id"]): r for r in sent}  # the newest open hand-off per card wins
     open_to = may_open({str(r["target_id"]) for r in latest.values()})
@@ -718,7 +731,7 @@ def card_handoffs(conn: sqlite3.Connection, reader_sql: str, card_ids: list[str]
         "LEFT JOIN task_types fl ON fl.id = l.from_pipeline_id "
         "LEFT JOIN tasks src ON src.id = h.source_task_id "
         f"WHERE h.returned_at IS NULL AND h.target_task_id IN ({marks}) ORDER BY h.created_at, h.id",
-        card_ids,
+        tuple(card_ids),
     )
     came = {str(r["target_id"]): r for r in received}
     open_from = may_open({str(r["source_id"]) for r in came.values()})
