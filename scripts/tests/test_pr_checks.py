@@ -1589,16 +1589,16 @@ def test_a_queue_group_runs_every_whole_tree_static_check_on_its_merge_commit_be
     assert "set +e" in steps[start]["run"] and steps[start]["run"].rstrip().endswith("&")
     assert steps[report]["timeout-minutes"] <= 10 and 'exit "$(cat' in steps[report]["run"]
     script = (ROOT / "scripts/ci/merge_commit_checks.sh").read_text()
-    # Every static check that reads across files runs on the merge commit too; the per-file ones (lint, shellcheck,
-    # actionlint) cannot break between two pull requests and run on the pull request only.
-    per_file = ("lint.sh", "check_ui_lint.sh", "shell_lint.sh", "actionlint", "npm ci", "ci_install.sh")
+    # Every static check runs on the merge commit too, the per-file ones included: they share configuration (a lint rule
+    # one pull request turns on can fail the other's new code).
     static = [str(step.get("run", "")) for step in jobs["static"]["steps"] if step.get("run")]
-    whole_tree = [run for run in static if "scripts/" in run and not any(name in run for name in per_file)]
-    found = {re.search(r"scripts/[\w/]+\.(?:py|sh)", run).group(0) for run in whole_tree}
-    found |= {"-m backend.openapi_v2 --check"} if any("backend.openapi_v2 --check" in run for run in static) else set()
-    assert found >= {"scripts/check_migration_order.py", "scripts/check_types.sh", "scripts/check_ui_routes.sh"}
+    found = {re.search(r"scripts/[\w/]+\.(?:py|sh)", run).group(0) for run in static if "scripts/" in run}
+    found -= {"scripts/ci_install.sh"}  # the static job's install, which the plan job has already done
+    found |= {"-m backend.openapi_v2 --check", "npm ci --ignore-scripts", "pinned_tool.sh actionlint"}
+    assert found >= {"scripts/check_migration_order.py", "scripts/lint.sh", "scripts/check_ui_lint.sh"}
     for name in found:
         assert name in script, name
+    assert 'LINT_BASE_REF="$base"' in script and 'PYRIGHT_BASE_REF="$base"' in script
 
     # Each check runs even after one fails, and any failure fails the script.
     fake = tmp_path / "repo"
@@ -1607,7 +1607,7 @@ def test_a_queue_group_runs_every_whole_tree_static_check_on_its_merge_commit_be
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
     log = tmp_path / "calls"
-    for tool, code in (("python3", 0), ("bash", 1), ("uvx", 0)):
+    for tool, code in (("python3", 0), ("bash", 1), ("uvx", 0), ("npm", 0)):
         stub = bin_dir / tool
         stub.write_text(f'#!/bin/sh\necho "{tool} $*" >> {log}\nexit {code}\n')
         stub.chmod(0o755)
@@ -1619,8 +1619,9 @@ def test_a_queue_group_runs_every_whole_tree_static_check_on_its_merge_commit_be
     )
     assert result.returncode == 1
     calls = log.read_text().splitlines()
-    assert sum(call.startswith("bash ") for call in calls) == 3  # every bash check ran past the first failure
-    assert calls[-1] == "python3 scripts/check_ui_source_suffixes.py"
+    bash_checks = sum(line.startswith("check bash ") for line in script.splitlines())
+    assert sum(call.startswith("bash ") for call in calls) == bash_checks  # every check ran past the first failure
+    assert calls[-1] == "bash scripts/pinned_tool.sh actionlint"
 
 
 def test_a_queue_group_supersedes_only_the_older_queue_groups_of_its_own_pull_request():

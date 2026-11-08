@@ -9,7 +9,7 @@
 # so an untouched job starts no VM). The group's base is the head of the group queued ahead of it (main for the first),
 # so it selects from its own pull request's change, tested on top of everything ahead of it. The static checks job runs
 # on the pull request only; the group's plan job checks what a change queued ahead can break in the merge commit that
-# lands on main (scripts/ci/merge_commit_checks.sh: the whole-tree static checks).
+# lands on main (scripts/ci/merge_commit_checks.sh: every static check).
 # A failed `tests` or `factory-sim` leg cancels its whole run (its last step), in a queue group or a pull request. The
 # `checks` job still runs (always()) and fails, so the queue drops a failing group within about a minute.
 # `checks` is the one required check. It fails when a job it needs failed or was cancelled; a skipped job passes. A draft
@@ -111,10 +111,10 @@ jobs:
             gh api --paginate --slurp "repos/$GITHUB_REPOSITORY/actions/workflows/pr-checks.yml/runs?event=merge_group&status=$status&per_page=100" > "$RUNNER_TEMP/runs-$status.json"
           done
           "$RUNNER_TEMP/venv/bin/python" scripts/pr_checks.py cancel-superseded --head-ref "$HEAD_REF" --run-number "$GITHUB_RUN_NUMBER" "$RUNNER_TEMP/runs-queued.json" "$RUNNER_TEMP/runs-in_progress.json"
-      # A queue group's merge commit is what lands on main. A change queued ahead can collide with this one in what is
-      # checked across the whole tree (scripts/ci/merge_commit_checks.sh: migration timestamps, the OpenAPI document,
-      # the wire contract, Python and UI types, UI routes), so the group checks it here, beside the test selection
-      # (which uses one core), rather than on a static checks VM. The step after the selection reports the result.
+      # A queue group's merge commit is what lands on main, and a change queued ahead can break this one's static checks
+      # (a migration timestamp, a route one removes and the other calls, a lint rule one turns on). The group runs every
+      # static check on it here (scripts/ci/merge_commit_checks.sh), beside the test selection (which uses one core),
+      # rather than on a static checks VM. The step after the selection reports the result.
       - name: Start the merge commit checks
         if: github.event_name == 'merge_group'
         env:

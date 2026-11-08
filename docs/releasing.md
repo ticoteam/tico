@@ -438,8 +438,8 @@ checks on that merge commit, and moves main only when they pass.
 - **A ready pull request from this repository** (GitHub-hosted): the selected Python and browser tests and
   the factory sim, on each push. A failed leg cancels the run (`gh run cancel`), so `checks` fails within minutes. A fork's
   pull request runs none of them.
-- **A queue group** (GitHub-hosted, 2 and 4 vCPU): plan (which also runs the whole-tree static checks on the merge
-  commit, `scripts/ci/merge_commit_checks.sh`), the selected Python and browser tests, the Caddy image when the change
+- **A queue group** (GitHub-hosted, 2 and 4 vCPU): plan (which also runs every static check on the merge commit,
+  `scripts/ci/merge_commit_checks.sh`), the selected Python and browser tests, the Caddy image when the change
   reaches it, Rust lint and the desktop app when those changed, the macOS recorder tests when `recorder/` changed, and
   the `checks` gate. A job the change does not reach starts no VM. The group's base is the head of the group ahead of it,
   so it selects from its own pull request's change. Its tests pack toward 6 test jobs of up to 12 minutes each
