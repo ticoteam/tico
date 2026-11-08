@@ -10,7 +10,9 @@ import sys
 from types import SimpleNamespace
 
 import pytest
+import yaml
 
+from scripts import flake_quarantine as quarantine
 from scripts import pr_checks as checks
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -911,6 +913,53 @@ def test_a_merge_group_diffs_its_queue_base_to_its_queue_head_not_the_checkout(t
     assert checks.changed_files(base, root=tmp_path) == []
 
 
+def test_a_queue_group_diffs_the_same_files_its_pull_request_run_did_plus_the_changes_queued_ahead(tmp_path, mapped):
+    """PR checks == queue checks. A pull request run diffs its merge commit from main as it was then (merge_parent, even
+    when the event's base sha is stale); its queue group diffs the group's head from the group's base. For the same
+    change the two lists match, and a group behind another holds the union, so the queue never selects less."""
+
+    def git(*args):
+        return subprocess.check_output(
+            ["git", "-c", "user.name=t", "-c", "user.email=t@acme.example", *args], cwd=tmp_path, text=True
+        ).strip()
+
+    def commit(name, text, message):
+        (tmp_path / name).write_text(text)
+        git("add", "-A")
+        git("commit", "-qm", message)
+        return git("rev-parse", "HEAD")
+
+    git("init", "-q", "-b", "main")
+    stale = commit("app.py", "x = 1\n", "Start")
+    git("checkout", "-qb", "one")
+    commit("one.py", "a = 1\n", "One")
+    git("checkout", "-qb", "two", "main")
+    commit("two.py", "b = 1\n", "Two")
+    git("checkout", "-q", "main")
+    base = commit("other.py", "c = 1\n", "Main moves on")
+    # GitHub's refs/pull/N/merge: the branch merged into main as main is when the run starts.
+    git("checkout", "-q", "--detach", base)
+    git("merge", "-q", "--no-ff", "--no-edit", "two")
+    pr_merge = git("rev-parse", "HEAD")
+    pr_base = checks.merge_parent(stale, pr_merge, root=tmp_path)
+    assert pr_base == base
+    pr_files = checks.changed_files(pr_base, pr_merge, root=tmp_path)
+    # Alone in its group: the group's head is the same merge onto the same base.
+    git("checkout", "-q", "--detach", base)
+    git("merge", "-q", "--no-ff", "--no-edit", "two")
+    alone = git("rev-parse", "HEAD")
+    assert checks.changed_files(base, alone, root=tmp_path) == pr_files == ["two.py"]
+    # Behind `one` in a group: its head carries both changes, so it selects at least what its pull request run did.
+    git("checkout", "-q", "--detach", base)
+    git("merge", "-q", "--no-ff", "--no-edit", "one")
+    git("merge", "-q", "--no-ff", "--no-edit", "two")
+    behind = git("rev-parse", "HEAD")
+    assert checks.changed_files(base, behind, root=tmp_path) == ["one.py", "two.py"]
+    for files in (["backend/task_loops.py"], ["conftest.py"], ["ui/app/chat.ts"], [checks.PR_WORKFLOW]):
+        pr, queue = checks.selection(files, "pull_request"), checks.selection(files, "merge_group")
+        assert pr == queue, files
+
+
 def test_a_merge_group_plans_its_own_selection_and_never_runs_the_pull_request_gates(tmp_path, monkeypatch, mapped):
     files = {"backend/tests/test_task_loops.py": 2, "backend/tests/test_auth.py": 10}
     monkeypatch.setattr(checks, "collect", lambda: Counter(files))
@@ -955,16 +1004,39 @@ def test_every_job_runs_on_a_github_hosted_runner_and_only_a_ready_pull_request_
         "caddy-linux": "${{ matrix.arch == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}",
     }
     assert {name: job["runs-on"] for name, job in jobs.items()} == expected
-    # A ready pull request and a merge queue group run the tests and the factory sim.
-    for name in ("tests", "factory-sim"):
-        assert "github.event_name == 'merge_group'" in jobs[name]["if"], name
-        assert "github.event_name == 'pull_request'" in jobs[name]["if"], name
-    # Everything else runs in the merge queue alone.
-    queue_only = ("rust-lint", "desktop-app", "recorder", "caddy-linux", "timings")
-    for name in queue_only:
-        assert "github.event_name == 'merge_group'" in str(jobs[name]["if"]), name
-        assert "github.event_name == 'pull_request'" not in str(jobs[name]["if"]), name
-    assert set(jobs) == {"plan", "static", "tests", "factory-sim", "checks", *queue_only}
+    # PR checks == queue checks: every job the gate needs runs on a ready pull request from this repository as well as
+    # in a queue group, under the same condition, so a failure shows on the pull request before it is enqueued.
+    ready = (
+        "github.event_name == 'merge_group' || (github.event_name == 'pull_request' && "
+        "!github.event.pull_request.draft && github.event.pull_request.head.repo.full_name == github.repository)"
+    )
+    for name in ("tests", "factory-sim", "rust-lint", "desktop-app", "recorder", "caddy-linux"):
+        assert ready in jobs[name]["if"], name
+    for name, output in (
+        ("factory-sim", "factory"),
+        ("rust-lint", "rust_lint"),
+        ("desktop-app", "desktop"),
+        ("recorder", "recorder"),
+        ("caddy-linux", "caddy"),
+    ):
+        assert f"needs.plan.outputs.{output} == 'true'" in jobs[name]["if"], name
+    # Only the cosmetic timing receipt runs in the merge queue alone; nothing waits on it.
+    assert "github.event_name == 'merge_group'" in jobs["timings"]["if"]
+    assert "github.event_name == 'pull_request'" not in jobs["timings"]["if"]
+    queue_only = {name for name, job in jobs.items() if "pull_request" not in str(job.get("if", "pull_request"))}
+    assert queue_only == {"timings"}
+    assert set(jobs) == {
+        "plan",
+        "static",
+        "tests",
+        "factory-sim",
+        "checks",
+        "rust-lint",
+        "desktop-app",
+        "recorder",
+        "caddy-linux",
+        "timings",
+    }
 
 
 def test_a_draft_or_a_fork_runs_no_test_or_sim_leg():
@@ -1543,7 +1615,7 @@ def test_queue_jobs_start_only_for_a_change_to_their_folders_and_all_start_for_a
     assert checks.queue_jobs([]) == dict.fromkeys(checks.QUEUE_JOB_PATHS, True)
 
 
-def test_the_plan_decides_the_queue_jobs_and_a_group_checks_its_merge_commit_without_a_static_vm(
+def test_the_plan_decides_the_queue_jobs_on_both_tiers_and_a_group_checks_its_merge_commit_without_a_static_vm(
     tmp_path, monkeypatch, mapped
 ):
     monkeypatch.setattr(checks, "collect", lambda: Counter({"backend/tests/test_task_loops.py": 2}))
@@ -1559,6 +1631,14 @@ def test_the_plan_decides_the_queue_jobs_and_a_group_checks_its_merge_commit_wit
     assert plan["queue_jobs"] == {"rust_lint": False, "desktop": True, "recorder": False}
     lines = output.read_text().splitlines()
     assert {"rust_lint=false", "desktop=true", "recorder=false"} <= set(lines)
+    # A ready pull request runs the same jobs under the same conditions (PR checks == queue checks), so its plan writes
+    # the same outputs from its own diff.
+    monkeypatch.setattr(checks, "merge_parent", lambda base: base)
+    monkeypatch.setattr(checks, "guard_changelog", lambda base: None)
+    output.write_text("")
+    plan = checks.prepare("pull_request", "pr-base", tmp_path / "plan.json")
+    assert plan["queue_jobs"] == {"rust_lint": False, "desktop": True, "recorder": False}
+    assert {"rust_lint=false", "desktop=true", "recorder=false"} <= set(output.read_text().splitlines())
 
     jobs = workflow_jobs()["jobs"]
     outputs = jobs["plan"]["outputs"]
@@ -1648,3 +1728,61 @@ def test_a_queue_group_cancels_older_groups_for_its_pull_request_and_no_pull_req
     assert "cancel-superseded" in step["run"] and "--head-ref" in step["run"] and "--run-number" in step["run"]
     # Pull requests keep their own group, keyed on the number, so no queue group can share it.
     assert doc["concurrency"]["group"] == "pr-checks-${{ github.event.pull_request.number || github.ref }}"
+
+
+def junit(*skips):
+    cases = "".join(
+        f'<testcase classname="t" name="n{i}">'
+        + (f'<skipped type="{kind}" message="m"/>' if kind else "")
+        + "</testcase>"
+        for i, kind in enumerate(skips)
+    )
+    return f'<?xml version="1.0"?><testsuites><testsuite name="pytest">{cases}</testsuite></testsuites>'
+
+
+def test_a_suite_whose_only_tests_are_quarantined_failures_passes_but_an_all_skipped_one_does_not(
+    tmp_path, monkeypatch
+):
+    """pr_checks.run fails a Python suite that skipped every test. A quarantined test that failed ran: it is an xfail,
+    which JUnit writes as a skipped element too, and must not make the suite fail."""
+    plan = {"matrix": {"include": [{"suite": "python-1", "files": ["fixture_tests/test_x.py"]}]}}
+    (tmp_path / "fixture_tests").mkdir(parents=True)
+    (tmp_path / "fixture_tests/test_x.py").touch()
+    (tmp_path / "plan.json").write_text(json.dumps(plan))
+    report = {}
+
+    def fake(command, **kw):
+        (tmp_path / "ci-results/python-1.xml").write_text(report["xml"])
+        return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(checks.subprocess, "run", fake)
+    report["xml"] = junit("pytest.xfail")
+    assert checks.run(tmp_path / "plan.json", "python-1", root=tmp_path, quarantine=True) == 0
+    report["xml"] = junit("pytest.skip", None)
+    assert checks.run(tmp_path / "plan.json", "python-1", root=tmp_path, quarantine=True) == 0
+    report["xml"] = junit("pytest.skip", "pytest.skip")
+    with pytest.raises(RuntimeError, match="skip every test"):
+        checks.run(tmp_path / "plan.json", "python-1", root=tmp_path, quarantine=True)
+
+
+def test_the_queue_and_pr_suites_pass_the_flag_and_release_validation_never_does(tmp_path, monkeypatch, capsys):
+    plan = {"matrix": {"include": [{"suite": "python-1", "files": ["fixture_tests/test_x.py"]}]}}
+    (tmp_path / "fixture_tests").mkdir(parents=True)
+    (tmp_path / "fixture_tests/test_x.py").touch()
+    (tmp_path / "plan.json").write_text(json.dumps(plan))
+    calls = []
+    monkeypatch.setattr(
+        checks.subprocess, "run", lambda command, **kw: calls.append(command) or SimpleNamespace(returncode=1)
+    )
+    assert checks.run(tmp_path / "plan.json", "python-1", root=tmp_path) == 1
+    assert "--quarantine" not in calls[-1]  # the release gate's incremental VMs call run() without it
+    assert checks.run(tmp_path / "plan.json", "python-1", root=tmp_path, quarantine=True) == 1
+    assert "--quarantine" in calls[-1] and calls[-1][-1] == "fixture_tests/test_x.py"
+    # The job log names the files a leg ran: the pass evidence detection needs for a test in it.
+    assert quarantine.test_files(capsys.readouterr().out) == ["fixture_tests/test_x.py"]
+    workflows = ROOT / ".github/workflows"
+    tests = yaml.safe_load((workflows / "pr-checks.yml").read_text())["jobs"]["tests"]
+    step = next(s for s in tests["steps"] if s.get("name") == "Run selected tests")
+    assert "scripts/pr_checks.py run --quarantine" in step["run"]
+    for name in ("ci.yml", "release.yml", "hotfix.yml", "train.yml"):
+        assert "quarantine" not in (workflows / name).read_text(), name

@@ -385,7 +385,7 @@ a workflow change also builds the Caddy image. Conftest, `pytest.ini`, dependenc
 run the tests that name or read them and the smoke set (`scripts/queue-smoke.json`). A conftest runs the tests below it
 while there are at most 25; a test that reaches a changed file only through a conftest fixture adds the smoke set. Runner/harness changes also run slow conformance on
 the Rust runner and all its fake harnesses; UI changes select their browser scripts, including imported-history for chat
-changes, or the core browser scripts plus the smoke set when the UI mapping is uncertain. The Rust and desktop checks run in the queue when a
+changes, or the core browser scripts plus the smoke set when the UI mapping is uncertain. The Rust and desktop checks run on a ready pull request and in the queue when a
 crate or `app/` changed, and the macOS recorder tests when `recorder/` changed. A draft pull request runs no checks
 (every job is skipped); marking it ready for review runs the lint checks and the selected tests. A skipped run is not a pass, so the
 ready-for-review run's `checks` must show passing, not skipped. Main has no check run of its own: the queue tests each
@@ -435,20 +435,28 @@ then enqueue it with `gh pr merge <N> --merge`. The queue adds the pull request 
 checks on that merge commit, and moves main only when they pass.
 
 - **Each push to a pull request** (GitHub-hosted, free): plan, static checks and the `checks` gate. A draft runs nothing.
-- **A ready pull request from this repository** (GitHub-hosted): the selected Python and browser tests and
-  the factory sim, on each push. A failed leg cancels the run (`gh run cancel`), so `checks` fails within minutes. A fork's
-  pull request runs none of them.
-- **A queue group** (GitHub-hosted, 2 and 4 vCPU): plan (which also runs every static check on the merge commit,
-  `scripts/ci/merge_commit_checks.sh`), the selected Python and browser tests, the Caddy image when the change
-  reaches it, Rust lint and the desktop app when those changed, the macOS recorder tests when `recorder/` changed, and
-  the `checks` gate. A job the change does not reach starts no VM. The group's base is the head of the group ahead of it,
-  so it selects from its own pull request's change. Its tests pack toward 6 test jobs of up to 12 minutes each
-  (`CEILING`, `QUEUE_MAX_JOB_SECONDS` in `scripts/pr_checks.py`), since every group shares the organisation's concurrent
-  hosted jobs; a selection too big for that keeps 12-minute VMs.
+- **A ready pull request from this repository** (GitHub-hosted): the selected Python and browser tests, the factory
+  sim, and every other job a queue group runs under the same conditions (the Caddy image, Rust lint, the desktop app and
+  the macOS recorder tests when the change reaches them), on each push, so a failure shows before the change is enqueued.
+  The plan decides which of those the change reaches, so a job it does not reach starts no VM. Only the cosmetic timing
+  receipt is queue-only. A failed leg cancels the run (`gh run cancel`), so `checks` fails within minutes. A fork's pull
+  request runs none of them.
+- **A queue group** (GitHub-hosted, 2 and 4 vCPU): the same jobs again on the merge commit. Its plan job also runs every
+  static check on that commit (`scripts/ci/merge_commit_checks.sh`), in place of a static checks VM. A job the change does
+  not reach starts no VM. The group's base is the head of the group ahead of it, so it selects from its own pull
+  request's change. Its tests pack toward 6 test jobs of up to 12 minutes each (`CEILING`, `QUEUE_MAX_JOB_SECONDS` in
+  `scripts/pr_checks.py`), since every group shares the organisation's concurrent hosted jobs; a selection too big for
+  that keeps 12-minute VMs.
 - **The factory simulation** (GitHub-hosted, one 4-vCPU runner per group): seed 1 of every scenario, in a queue group or on a ready
   pull request, only when the change
   reaches what the sim runs (`evals/factory/call_path.json`, measured; see `evals/factory/README.md`). A failed scenario
   check fails the group. Release validation runs seeds 1-3 as before.
+- **Quarantined tests**: a test that failed and passed on the same commit (a rerun attempt, or two runs of one commit)
+  is flaky. Its entry in `ci/quarantine/` (one JSON file per test: test id, first seen, run urls, ticket) makes PR checks
+  and queue groups run it as a non-strict xfail (`scripts/pr_checks.py run --quarantine`), so it cannot fail them.
+  Release validation never passes the flag and still fails on it. `.github/workflows/flaky-tests.yml` reads PR-check runs
+  daily and proposes entries (`python3 scripts/flake_quarantine.py detect --write ci/quarantine` writes them), and its
+  weekly report fails when an entry is older than 14 days. The fix deletes the entry file.
 - **Required check**: `checks` on main. It fails when a job it needs failed or was cancelled; a skipped job passes.
 
 Agents run the tests they touched with `scripts/remote.py` before they mark a PR ready; the queue runs the selected set
