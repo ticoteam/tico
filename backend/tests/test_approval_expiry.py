@@ -4,7 +4,7 @@ from backend import approval_expiry
 from backend import hubdb as H
 from backend import milestone_waits
 from backend import release_flow as RF
-from backend.tests.test_hubdb import ANA, CMO, HubCase
+from backend.tests.helpers.hubdb import ANA, CMO, HubCase
 
 MERGE = {"repo": "acme/site", "pr": 12}
 

@@ -17,8 +17,7 @@ from fastapi.testclient import TestClient
 from backend import demo, demo_seed, screen_binary, usage_limits
 from backend import server as serving
 from backend.app import create_app
-
-NOW = datetime(2026, 9, 25, 18, 30, tzinfo=timezone.utc)  # a Friday, so a week in review exists
+from backend.tests.helpers.demo import NOW, signed_in
 
 
 @pytest.fixture(scope="module", autouse=True)
@@ -50,12 +49,6 @@ def rows(path):
             ).fetchall()
             for table in tables
         }
-
-
-def signed_in(settings):
-    client = TestClient(create_app(settings), base_url="http://127.0.0.1:8765")
-    client.headers["Authorization"] = "Bearer " + settings.local_owner_token_file.read_text().strip()
-    return client
 
 
 def test_saved_demo_reopens_with_edits_and_the_same_owner_session(built, monkeypatch):

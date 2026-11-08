@@ -4,55 +4,18 @@ Dashboard and team pages); a page pinned there by a person is readable by the pl
 task's file; a team page's audience; and pages and cards as bot sidebar widgets."""
 
 import re
-import uuid
 from types import SimpleNamespace
 
 import pytest
 
-from backend.store import H
-from backend.tests.test_api import api, as_member, get, headers, post, put, restrict, setup_attempt  # noqa: F401
-from backend.tests.test_groups import send
-
-
-def place(api, name, token="ana-test", expected=200):
-    return get(api, "places/" + name, token, expected)
+from backend.tests.helpers.api import as_member, get, headers, post, put, restrict, setup_attempt  # noqa: F401
+from backend.tests.test_api import api  # noqa: F401
+from backend.tests.helpers.groups import send
+from backend.tests.helpers.cards import delete, page, patch, place, task
 
 
 def cards_of(view):
     return [(p["card"]["template"], p["card"]["settings"].get("team", "")) for p in view["pins"] if "card" in p]
-
-
-def page(api, bot, title="Weekly numbers", task=None):
-    """A page straight into the database: a bot-wide file, or a task's."""
-    fid = "file-" + uuid.uuid4().hex[:24]
-    with api.app.state.store.transaction() as c:
-        c.execute(
-            "INSERT INTO bot_files(id,bot_id,scope,identity,title,kind,mime,locator,task_id,first_activity_at,"
-            "last_activity_at) VALUES(?,?,?,?,?,'file','text/html','tico_blob',?,?,?)",
-            (fid, bot, "task:" + task if task else "bot", fid, title, task, H.now(), H.now()),
-        )
-        c.execute("INSERT INTO pages(file_id,created_at,updated_at) VALUES(?,?,?)", (fid, H.now(), H.now()))
-    return fid
-
-
-def task(api, owner, title, private=False, **columns):
-    with api.app.state.store.transaction() as c:
-        tid = H.task_create(c, "human:ana", title, "Details.", owner, lint=False, private=private)["id"]
-        for name, value in columns.items():
-            c.execute(f"UPDATE tasks SET {name}=? WHERE id=?", (value, tid))
-    return tid
-
-
-def delete(api, path, token="ana-test", expected=200):
-    r = api.delete("/api/v2/" + path, headers=headers(token))
-    assert r.status_code == expected, r.text
-    return r.json()
-
-
-def patch(api, path, body, token="ana-test", expected=200):
-    r = api.patch("/api/v2/" + path, json=body, headers=headers(token))
-    assert r.status_code == expected, r.text
-    return r.json()
 
 
 def test_the_dashboard_starts_with_its_defaults_and_counts_only_what_each_reader_may_read(api):

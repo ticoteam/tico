@@ -16,7 +16,7 @@ from backend.config import Settings
 from backend.entities import rules as D
 from backend.entities import store as S
 from backend.store import Store
-from backend.tests.test_directory_tables_migration import FIXTURE, SAMPLE
+from backend.tests.helpers.directory_tables_migration import FIXTURE, SAMPLE
 
 NOW = "2026-10-01T00:00:00Z"
 ACTOR = "bot:ops"

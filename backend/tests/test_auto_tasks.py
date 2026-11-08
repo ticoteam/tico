@@ -3,75 +3,16 @@
 import pytest
 
 from backend.store import H
-from backend.tests.test_api import api, get, post  # noqa: F401
-from backend.tests.test_task_lanes import task_bot
+from backend.tests.helpers.api import get, post  # noqa: F401
+from backend.tests.test_api import api  # noqa: F401
+from backend.tests.helpers.task_lanes import task_bot
 from backend.tests.hold_rows import set_holds
-
-
-def deck(api, n=5):
-    typ = post(
-        api,
-        'task-types',
-        {
-            'name': 'Development',
-            'steps': [
-                {'name': 'On Deck', 'status': 'open'},
-                {'name': 'In Progress', 'status': 'doing'},
-                {'name': 'Review 1', 'status': 'review'},
-                {'name': 'Done', 'status': 'done'},
-            ],
-        },
-    )['type']
-    tasks = [
-        post(
-            api,
-            'tasks',
-            {
-                'owner': 'ops',
-                'title': f'Implement item {i}',
-                'body': 'Build the requested feature.',
-                'type': typ['id'],
-                'step': typ['steps'][0]['id'],
-            },
-        )
-        for i in range(n)
-    ]
-    # These old assignments have no pending notice: they previously needed a person's nudge.
-    with api.app.state.store.transaction() as c:
-        c.execute("UPDATE jobs SET state='canceled'")
-        for i, task in enumerate(tasks):
-            c.execute('UPDATE tasks SET rank=? WHERE id=?', (n - i, task['id']))
-    return tasks
-
-
-def take(api, machine):
-    return post(api, 'jobs/claim', {}, token=machine['token'])['attempt']
+from backend.tests.helpers.auto_tasks import deck, finish, set_cap, take
 
 
 def take_with_places(api, machine):
     """A claim from a runner that negotiates start places: the claim bound is twice the computer's turn limit."""
     return post(api, 'jobs/claim', {'start_places': True}, token=machine['token'])['attempt']
-
-
-def finish(api, machine, attempt, task):
-    post(api, f"attempts/{attempt['id']}/started", {'thread_id': attempt['lane']}, machine['token'])
-    post(
-        api,
-        'tasks/' + task['id'],
-        {'step': 'Done', 'version': get(api, 'tasks/' + task['id'])['task']['version']},
-        attempt['token'],
-    )
-    post(
-        api,
-        f"attempts/{attempt['id']}/complete",
-        {'outcome': 'completed', 'last_seq': 0, 'text': 'Finished.'},
-        machine['token'],
-    )
-
-
-def set_cap(api, n):
-    revision = get(api, 'bots/ops')['revision']
-    return post(api, 'bots/ops/keep-tasks-going', {'keep_tasks_going': n, 'expected_revision': revision})
 
 
 def test_three_start_and_finishing_one_starts_next_by_rank(api):
@@ -139,7 +80,7 @@ def test_usage_hold_and_off_start_none_and_waiting_work_frees_cap(api):
 
 
 def test_setting_revision_permissions_and_private_counters(api):
-    from backend.tests.test_api import as_member
+    from backend.tests.helpers.api import as_member
 
     as_member(api, 'ben@acme.example')
     revision = get(api, 'bots/ops')['revision']
@@ -219,7 +160,7 @@ def test_another_owners_task_notice_never_starts_their_task_or_uses_our_cap(api)
 
 
 def test_automatic_backfill_uses_free_places_while_waiters_still_fence_their_lanes(api):
-    from backend.tests.test_api import claim
+    from backend.tests.helpers.api import claim
 
     machine = task_bot(api, lanes=True, capacity=2, others=('finance',))
     tasks = deck(api, 4)

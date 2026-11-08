@@ -7,8 +7,9 @@ from backend import check_pools, pipeline_exceptions as PE, pipeline_stats, rule
 from backend import task_relations
 from backend.auth import Identity
 from backend.store import H
-from backend.tests.test_api import api, get  # noqa: F401
-from backend.tests.test_dev_ticket_rules import dev_type
+from backend.tests.helpers.api import get  # noqa: F401
+from backend.tests.test_api import api  # noqa: F401
+from backend.tests.helpers.dev_ticket_rules import dev_type
 from backend import bot_settings as BS
 from backend.tests.hold_rows import set_holds
 
@@ -476,7 +477,7 @@ def unread(c, typ, title, step="In QA", owner="bot:finance"):
 
 
 def outside_the_chart(c, typ):
-    from backend.tests.test_api import unrelated_task_managers
+    from backend.tests.helpers.api import unrelated_task_managers
 
     unrelated_task_managers(c, "coo", "ops", "finance", "cpo")
     hidden = unread(c, typ, "Hidden probe")

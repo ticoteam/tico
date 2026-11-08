@@ -12,7 +12,8 @@ import uuid
 import pytest
 
 from backend.store import H
-from backend.tests.test_api import api, assign, claim, headers, post, ready, runner  # noqa: F401
+from backend.tests.helpers.api import assign, claim, headers, post, ready, runner
+from backend.tests.test_api import api  # noqa: F401
 
 
 @pytest.mark.slow

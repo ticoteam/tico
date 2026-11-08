@@ -5,32 +5,13 @@ thread is admitted (the native message route), while a post to any other thread 
 ben (requester), ana (company), the bot ops. The run's task is private, so its readers are the requester and the owner.
 """
 
-import pytest
-
 from backend.tests.slug_ids import bot_ids_are_their_slugs  # noqa: F401  (each bot's id is its slug)
 from backend import threads
 from backend.store import H
-from backend.tests.test_api import api, assign, claim, headers, ready, runner  # noqa: F401
-from backend.tests.test_thread_api import new_thread, say  # noqa: F401
-
-
-def task(api, *, requester="human:ben", owner="human:ana", private=True, title="Sensitive packet"):
-    with api.app.state.store.transaction() as c:
-        return H.task_create(
-            c, requester, title, "Confidential attachment and comment.", owner, private=private, lint=False
-        )
-
-
-def private_run(api, bot="ops"):
-    """A private task owned by the bot, and the bot's run on it: (task row, its attempt)."""
-    row = task(api, requester="human:ben", owner="bot:" + bot)
-    machine = runner(api)
-    assign(api, machine, bot)
-    ready(api, machine, [bot])
-    attempt = claim(api, machine, bot)
-    with api.app.state.store.transaction() as c:  # the run carries its private task (its work)
-        c.execute("UPDATE tasks SET carried_by=? WHERE id=?", (attempt["id"], row["id"]))
-    return row, attempt
+from backend.tests.helpers.api import headers, runner
+from backend.tests.test_api import api
+from backend.tests.helpers.thread_api import new_thread, say  # noqa: F401
+from backend.tests.helpers.threads_private_execution import private_run, task
 
 
 def company_message_by_bot(api, bot="ops", text="Company status"):
@@ -39,14 +20,6 @@ def company_message_by_bot(api, bot="ops", text="Company status"):
     with api.app.state.store.transaction() as c:
         posted = threads.post(c, "bot:" + bot, thread["id"], text)
     return thread, posted
-
-
-@pytest.fixture(autouse=True)
-def private_tasks_have_an_unrelated_manager(api):
-    from backend.tests.test_api import unrelated_task_managers
-
-    with api.app.state.store.transaction() as c:
-        unrelated_task_managers(c)
 
 
 def test_a_private_run_cannot_edit_its_company_message_into_private_words(api):
@@ -338,8 +311,8 @@ def test_a_stored_derived_title_is_cleared_when_its_parent_task_turns_private(ap
 def test_a_removed_bot_cannot_fetch_a_message_addressed_to_it(api):
     """A bot removed from a members thread keeps its addressed message only while it reads the thread: its
     sender/addressee shortcut must not answer before the thread's readers are checked."""
-    from backend.tests.test_api import setup_attempt
-    from backend.tests.test_thread_api import new_thread
+    from backend.tests.helpers.api import setup_attempt
+    from backend.tests.helpers.thread_api import new_thread
 
     _, _, attempt = setup_attempt(api, "ops")
     thread = new_thread(api, members=("bot:ops",))

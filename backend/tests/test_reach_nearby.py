@@ -12,8 +12,9 @@ from backend import bot_settings as BS
 from backend import reach, task_allocator
 from backend.auth import Identity
 from backend.store import H, encode
-from backend.tests.test_api import api, get, headers, post  # noqa: F401  (the api fixture)
-from backend.tests.test_task_caps import as_bot
+from backend.tests.helpers.api import get, headers, post  # noqa: F401  (the api fixture)
+from backend.tests.test_api import api  # noqa: F401  (the api fixture)
+from backend.tests.helpers.task_caps import as_bot
 import pytest
 
 
@@ -290,7 +291,7 @@ def refused_code(r):
 
 
 def test_a_refusal_never_names_a_teammate_the_bot_may_not_see(api):
-    from backend.tests.test_api import restrict
+    from backend.tests.helpers.api import restrict
 
     chart(api)
     with api.app.state.store.transaction() as c:

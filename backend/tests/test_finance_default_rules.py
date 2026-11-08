@@ -7,7 +7,7 @@ from datetime import date
 from backend.finance import tab_money
 from backend.finance.core import gates as G
 from backend.finance.store import banking as SK
-from backend.tests.test_finance_fixtures import OWNER, act, books, finance_template, store  # noqa: F401
+from backend.tests.helpers.finance_fixtures import OWNER, act, books, finance_template, store  # noqa: F401
 
 DAY = date(2026, 10, 31)
 

@@ -6,13 +6,14 @@ import pytest
 
 from backend import automation_actions as A, automations as M, gmail_live as G, google_workspace as W, mailbox_access
 from backend.store import H
-from backend.tests.test_api import api, post, runner  # noqa: F401
-from backend.tests.test_automation_mail_actions import BOX, automate, claim, computer, last_run, later, owned_by_ana  # noqa: F401
-from backend.tests.test_gmail_live import gmail_http  # noqa: F401
-from backend.tests.test_google_workspace import personal
-from backend.tests.test_google_workspace_authz import place, publish, workspace_key  # noqa: F401
-from backend.tests.test_mail_api import seed_org
-from backend.tests.test_mail_targets import declare
+from backend.tests.helpers.api import post, runner  # noqa: F401
+from backend.tests.test_api import api  # noqa: F401
+from backend.tests.helpers.automation_mail_actions import BOX, automate, claim, computer, last_run, later, owned_by_ana  # noqa: F401
+from backend.tests.helpers.gmail_live import gmail_http  # noqa: F401
+from backend.tests.helpers.google_workspace import personal
+from backend.tests.helpers.google_workspace_authz import place, publish, workspace_key  # noqa: F401
+from backend.tests.helpers.mail_api import seed_org
+from backend.tests.helpers.mail_targets import declare
 from connectors.mail.actions import label_name
 from connectors.mail.labels import NEEDS_OWNER
 

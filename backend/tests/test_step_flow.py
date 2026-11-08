@@ -5,8 +5,8 @@ import json
 import pytest
 
 from backend import hubdb as H, step_flow as F, verdict_moves as V
-from backend.tests.test_github import PR, _suite, api, hook, pr_event  # noqa: F401
-from backend.tests.test_verdict_moves import HEAD, NEW, builder_jobs, check, step, verdict
+from backend.tests.helpers.github import PR, _suite, api, hook, pr_event  # noqa: F401
+from backend.tests.helpers.verdict_moves import HEAD, NEW, builder_jobs, check, step, verdict
 
 
 @pytest.mark.parametrize(

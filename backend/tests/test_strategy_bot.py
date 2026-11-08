@@ -4,23 +4,23 @@ and the bots that report to no one under it. There is no switch a person sees. O
 `reports_to` stays as it was, and so does who may do what. Only the owner renames it."""
 
 import json
-import uuid
 
 from backend import strategy_bot, strategy_suggest
 from backend.auth import Identity
 from backend.store import H
-from backend.tests.test_goal_manager import BASE, with_goal_manager
-from backend.tests.test_onboarding import (
+from backend.tests.helpers.goal_manager import BASE, with_goal_manager
+from backend.tests.helpers.onboarding import (
     SUPPORT_AGENT,
     SUPPORT_CARD,
     as_person,
     build_team,
-    draft,  # noqa: F401
+    draft,
     environment,
     machine,
     signed_in,
 )
 from backend import bot_settings as BS
+from backend.tests.helpers.strategy_bot import as_bot
 
 LEAD_CARD = {
     "template": "sales-lead",
@@ -137,21 +137,6 @@ def stored(api):
         }
         display = {r["slug"]: r["display_name"] for r in c.execute("SELECT slug,display_name FROM bots")}
     return reports, display
-
-
-def as_bot(api, slug):
-    """The bot itself, as an agent credential (the way backend/tests/test_health.py signs one in)."""
-    token = slug + "-test"
-    with api.app.state.store.transaction() as c:
-        bot_id = (H.resolve_bot(c, slug) or {}).get("id", slug)
-        c.execute("UPDATE bots SET state='active' WHERE id=?", (bot_id,))
-        c.execute(
-            "INSERT OR IGNORE INTO agents(bot,harness,token_hash,created_at,created_by) "
-            "VALUES(?,'hermes',?,?,'human:morgan')",
-            (bot_id, "x-" + bot_id, H.now()),
-        )
-    api.app.state.store.settings.test_identities[token] = Identity(H.bot_actor(bot_id), "bot", agent="hermes")
-    return {"Authorization": "Bearer " + token, "Idempotency-Key": str(uuid.uuid4())}
 
 
 def definition(api, body, headers=None):

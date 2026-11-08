@@ -9,8 +9,10 @@ import pytest
 from backend import inbound
 from backend.auth import Identity
 from backend.store import Problem
-from backend.tests.test_api import api, headers, setup_attempt  # noqa: F401
+from backend.tests.helpers.api import headers, setup_attempt  # noqa: F401
+from backend.tests.test_api import api  # noqa: F401
 from clients import hubcli, hubtools, remotecli
+from backend.tests.helpers.inbound import page, seed
 
 
 CONNECTION_CODE = 'synthetic_' + 'x' * 33
@@ -49,7 +51,7 @@ def connection_reply(status, body, **kwargs):
 
 def test_connection_requires_actual_direct_human_management_before_secret_parsing(api, monkeypatch):
     from dataclasses import replace
-    from backend.tests.test_api import as_member
+    from backend.tests.helpers.api import as_member
 
     calls = []
     svc = connection_ready(api, monkeypatch, lambda request: calls.append(request))
@@ -125,7 +127,7 @@ def test_connection_validation_and_missing_identity_never_persist_or_echo_code(a
 
 
 def test_connection_preview_connect_fixed_transport_and_fresh_role(api, monkeypatch, caplog):
-    from backend.tests.test_api import as_member
+    from backend.tests.helpers.api import as_member
 
     calls = []
 
@@ -223,25 +225,6 @@ def test_connection_bounds_upstream_response_and_refuses_redirects_and_false_suc
     assert 'canceled' in closed and CONNECTION_CODE not in response.text
 
 
-@pytest.fixture(autouse=True)
-def no_live_inbound(monkeypatch):
-    monkeypatch.delenv('TICO_INBOUND_KEY', raising=False)
-    monkeypatch.setenv('TICO_INBOUND_URL', 'https://hq.example.test')
-
-    # Isolate before the API fixture starts: replacing tick later cannot stop an already-submitted callback.
-    # These contract tests exercise sync/tick explicitly, with no concurrent timer competing for their state.
-    async def idle_loop(self, stop):
-        await stop.wait()
-
-    monkeypatch.setattr(inbound.Inbound, 'loop', idle_loop)
-
-    # These tests invoke sync/tick explicitly; the app's real timer must not race their fake HQ.
-    async def no_background_sync(self, stop):
-        pass
-
-    monkeypatch.setattr(inbound.Inbound, 'loop', no_background_sync)
-
-
 @pytest.fixture
 def retention_api(monkeypatch, request):
     # This test drives real ticks explicitly; the app's autonomous worker must
@@ -251,45 +234,6 @@ def retention_api(monkeypatch, request):
 
     monkeypatch.setattr(inbound.Inbound, 'loop', manual_ticks_only)
     return request.getfixturevalue('api')
-
-
-def seed(api):
-    svc = api.app.state.inbound
-    with svc.store.transaction() as c:
-        for ident in ('ibx_a', 'ibx_b', 'ibx_c'):
-            inbound.save_inbox(
-                c,
-                {
-                    'inbox_id': ident,
-                    'kind': 'email',
-                    'name': ident,
-                    'address': ident + '@example.test',
-                    'state': 'active',
-                    'created_by': 'human:ana',
-                    'period_end': None,
-                    'cancel_pending': 0,
-                },
-            )
-    return svc
-
-
-def page(seq=1, inbox='ibx_b', ident='ses:msg:ibx_b', body='Your verification code is 123456.'):
-    return {
-        'deliveries': [
-            {
-                'hq_seq': seq,
-                'delivery_id': ident,
-                'inbox_id': inbox,
-                'kind': 'email',
-                'received_at': time.time(),
-                'from': 'Login <login@example.test>',
-                'subject': 'Sign in',
-                'text': body,
-            }
-        ],
-        'gaps': [],
-        'cursor': seq,
-    }
 
 
 def test_company_members_share_non_consuming_reads_and_waits(api):

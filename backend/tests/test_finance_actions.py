@@ -10,7 +10,7 @@ from backend.config import Settings
 from backend.finance import actions as FA
 from backend.finance import reads as FR
 from backend.store import Store
-from backend.tests.test_finance_fixtures import open_views, AT, OWNER, account, act, books, finance_template, store  # noqa: F401
+from backend.tests.helpers.finance_fixtures import open_views, AT, OWNER, account, act, books, finance_template, store  # noqa: F401
 
 
 def _software(c):

@@ -19,7 +19,8 @@ from fastapi.testclient import TestClient
 
 from backend.app import create_app
 from backend.store import H
-from backend.tests.test_api import api, assign, claim, expire, headers, post, ready, runner, setup_attempt  # noqa: F401
+from backend.tests.helpers.api import assign, claim, expire, headers, post, ready, runner, setup_attempt  # noqa: F401
+from backend.tests.test_api import api  # noqa: F401
 
 
 def started(api, attempt, token):

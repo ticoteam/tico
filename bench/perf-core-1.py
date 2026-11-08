@@ -18,9 +18,10 @@ import uuid
 
 from backend import assigned_start as A, auto_tasks, bot_settings as BS, provenance_clock, queue_refusals as Q
 from backend.store import H, encode
-from backend.tests import test_api
+from backend.tests.helpers import api as test_api
+from backend.tests import test_api as api_fixture  # the api fixture itself
 
-api = test_api.api  # the fixture, bound so that tests can take it
+api = api_fixture.api  # the fixture, bound so that tests can take it
 BOTS = [f"bot{n:02d}" for n in range(20)]
 TASKS = 200
 RUNS = 50
@@ -161,10 +162,10 @@ def refuse(api, values):
 
 
 def test_health_statements_by_refused_queues(api, monkeypatch):
-    from backend.tests.test_api import headers
-    from backend.tests.test_health_queries import counted
-    from backend.tests.test_run_backoff import at, setup
-    from backend.tests.test_status_reads import busy
+    from backend.tests.helpers.api import headers
+    from backend.tests.helpers.health_queries import counted
+    from backend.tests.helpers.run_backoff import at, setup
+    from backend.tests.helpers.status_reads import busy
 
     rng = random.Random(7)
 

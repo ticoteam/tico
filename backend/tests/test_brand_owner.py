@@ -12,8 +12,8 @@ from backend import routines as R
 from backend.app import create_app
 from backend.auth import Identity
 from backend.store import H
-from backend.tests.test_goal_manager import BASE
-from backend.tests.test_onboarding import draft, environment, machine, signed_in  # noqa: F401
+from backend.tests.helpers.goal_manager import BASE
+from backend.tests.helpers.onboarding import draft, environment, machine, signed_in  # noqa: F401
 from backend import bot_settings as BS
 
 TEMPLATE = Path(__file__).resolve().parents[2] / "templates" / "catalog" / "brand"

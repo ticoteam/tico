@@ -9,8 +9,8 @@ import pytest
 
 from backend import hubdb as H
 from backend import idea_triage as I
-from backend.tests.test_roadmaps import ORIGIN, public_setup
-from backend.tests.test_tasks_board import api, get, post  # noqa: F401
+from backend.tests.helpers.roadmaps import ORIGIN, public_setup
+from backend.tests.helpers.tasks_board import api, get, post  # noqa: F401
 from clients import judge as J
 from backend import bot_settings as BS
 

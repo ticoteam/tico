@@ -9,7 +9,7 @@ from backend.finance import reads as FR
 from backend.finance.core.errors import DENIED, NOT_FOUND, FinanceError
 from backend.finance.store import catalog as SC
 from backend.records import store as RS
-from backend.tests.test_finance_fixtures import AT, OWNER, account, act, books, finance_template, store  # noqa: F401
+from backend.tests.helpers.finance_fixtures import AT, OWNER, account, act, books, finance_template, store  # noqa: F401
 
 DAY = "2026-10-10"
 WINDOW = ("2026-10-01", "2026-10-31")

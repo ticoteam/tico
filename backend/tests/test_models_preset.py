@@ -6,28 +6,11 @@ import json
 import pytest
 
 from backend import models_preset, providers
-from backend.tests.test_api import api, assign, claim, post, runner  # noqa: F401
-from backend.tests.test_gateway_connection import KEY, fake_gateway, handed_to, save, setup
+from backend.tests.helpers.api import assign, claim, post, runner  # noqa: F401
+from backend.tests.test_api import api  # noqa: F401
+from backend.tests.helpers.gateway_connection import KEY, fake_gateway, handed_to, save, setup
 from backend import bot_settings as BS
-
-CLAUDE = {"runtime": "claude", "harness": "claude-code", "model": "claude-opus-5-5"}
-
-
-def choose(api, preset, enabled=("anthropic", "openai")):
-    with api.app.state.store.transaction() as c:
-        record = providers.load(c, api.app.state.store.settings)
-        providers.save(
-            c,
-            "human:ana",
-            {
-                "enabled": list(enabled),
-                "runtime": "claude",
-                "model": CLAUDE["model"],
-                "preset": preset,
-                "expected_revision": record["revision"],
-            },
-            "2026-10-19T00:00:00Z",
-        )
+from backend.tests.helpers.models_preset import CLAUDE, choose, connected, on_tico, says
 
 
 def on_claude(api, bot):
@@ -65,22 +48,6 @@ def heartbeat(api, machine, bot, signed_in, isolated):
     )
 
 
-def says(readiness, isolated):
-    """`readiness` saying it isolates bots (True/False), nothing (None), or "cloud": a cloud machine, not isolated
-    but one company's trust group (runner-rs/src/cloud_machine.rs), which runs Tico models too."""
-    if isolated == "cloud":
-        readiness.update(isolated=False, trust="cloud_machine")
-    elif isolated is not None:
-        readiness["isolated"] = isolated
-
-
-def connected(api, monkeypatch):
-    setup(api, monkeypatch)
-    with fake_gateway() as fake:
-        fake.active(KEY, 0.1)
-        save(api, fake)
-
-
 @pytest.mark.parametrize("isolated", [True, False, None])
 def test_before_sign_in_a_bot_runs_on_the_gateway_only_where_bots_run_as_their_own_user(api, monkeypatch, isolated):
     connected(api, monkeypatch)
@@ -111,8 +78,8 @@ def test_before_sign_in_a_bot_runs_on_the_gateway_only_where_bots_run_as_their_o
 
 
 def test_a_new_computer_prepares_the_gateway_before_its_first_subscription_turn(api, monkeypatch):
-    from backend.tests.test_api import get
-    from backend.tests.test_gateway_connection import delete
+    from backend.tests.helpers.api import get
+    from backend.tests.helpers.gateway_connection import delete
 
     connected(api, monkeypatch)
     choose(api, models_preset.RECOMMENDED)
@@ -263,7 +230,7 @@ def test_the_installer_choice_seeds_claude_and_chatgpt_and_an_unknown_choice_is_
 
 
 def needs(api, token="ana-test"):
-    from backend.tests.test_api import get
+    from backend.tests.helpers.api import get
 
     return [it for it in get(api, "needs-you", token)["items"] if it["kind"] == "setup"]
 
@@ -311,7 +278,7 @@ def test_no_sign_in_card_under_the_other_choices(api):
 @pytest.mark.parametrize("isolated", [True, False, None, "cloud"])
 def test_a_computer_that_cannot_run_gateway_work_says_so_and_the_picker_marks_tico_models(api, monkeypatch, isolated):
     from backend import readiness
-    from backend.tests.test_api import get
+    from backend.tests.helpers.api import get
 
     connected(api, monkeypatch)
     choose(api, models_preset.RECOMMENDED, enabled=("anthropic", "openai", "tico"))
@@ -336,33 +303,6 @@ def test_a_computer_that_cannot_run_gateway_work_says_so_and_the_picker_marks_ti
     assert "pi" not in marked or marked["pi"]["short"] != "not on this computer"
 
 
-def on_tico(api, machine, isolated):
-    """ops on Tico Medium 1.0 itself, ready on `machine`, which says (or does not say) it runs bots as their own user."""
-    from backend.tests.test_gateway_connection import put_bot_on
-
-    put_bot_on(api, "ops", "tico-medium-1.0")
-    readiness = {
-        "schema_version": 1,
-        "runtimes": {"pi": {"installed": True, "authenticated": "missing"}},
-        "bots": {
-            "ops": {
-                "ready": True,
-                "runtime": "pi",
-                "model": "tico-medium-1.0",
-                "repository_present": True,
-                "configuration_valid": True,
-            }
-        },
-    }
-    says(readiness, isolated)
-    post(
-        api,
-        "runners/heartbeat",
-        {"version": "test", "platform": "test", "readiness": readiness},
-        token=machine["token"],
-    )
-
-
 @pytest.mark.parametrize("preset", [models_preset.RECOMMENDED, ""])
 @pytest.mark.parametrize("isolated", [True, False, None, "cloud"])
 def test_a_bot_on_a_tico_model_waits_where_the_computer_does_not_say_it_runs_bots_as_their_own_user(
@@ -371,7 +311,7 @@ def test_a_bot_on_a_tico_model_waits_where_the_computer_does_not_say_it_runs_bot
     """A Tico model the bot names itself, under any choice: no attempt is handed out that its runner must refuse
     (runner-rs/src/gateway_relay.rs NOT_ISOLATED). The work stays queued and Health says why."""
     from backend import health
-    from backend.tests.test_claim_refusals import health_admin, held
+    from backend.tests.helpers.claim_refusals import health_admin, held
 
     connected(api, monkeypatch)
     choose(api, preset, enabled=("anthropic", "openai", "tico"))
@@ -384,7 +324,7 @@ def test_a_bot_on_a_tico_model_waits_where_the_computer_does_not_say_it_runs_bot
         assert attempt["config"]["model"] == "tico-medium-1.0" and attempt["gateway"] is True
         if isolated == "cloud":
             # The runner says `trust` only to a server whose config answer takes it (runner-rs/src/readiness.rs).
-            from backend.tests.test_api import get
+            from backend.tests.helpers.api import get
 
             assert get(api, "config", machine["token"])["readiness_trust"] is True
         return
@@ -436,7 +376,7 @@ def waiting_heartbeat(api, machine, change):
 def test_waiting_for_a_sign_in_lets_through_only_the_missing_sign_in(api, monkeypatch, change):
     """The Gateway turn before sign-in passes over the bot's missing subscription and nothing else: its checkout, its
     settings and the Gateway's own runtime must still be ready, and the computer must have reported the bot."""
-    from backend.tests.test_claim_refusals import held
+    from backend.tests.helpers.claim_refusals import held
 
     connected(api, monkeypatch)
     choose(api, models_preset.RECOMMENDED)
@@ -497,7 +437,7 @@ def test_a_gateway_segment_records_the_key_its_runner_was_handed_and_the_install
     """The key id is the one handed with the credentials: a key rotated or cleared before the run ends doesn't change
     which key paid. A turn that used up Claude and finished on the Gateway records it on the Gateway segment only."""
     from backend import gateway_connection
-    from backend.tests.test_gateway_connection import OTHER, delete
+    from backend.tests.helpers.gateway_connection import OTHER, delete
 
     connected(api, monkeypatch)
     choose(api, models_preset.RECOMMENDED)
@@ -552,7 +492,7 @@ def test_a_gateway_segment_records_the_key_its_runner_was_handed_and_the_install
 
 
 def test_the_owner_saves_the_choice_through_the_api_and_reads_it_back(api):
-    from backend.tests.test_api import get, put
+    from backend.tests.helpers.api import get, put
 
     view = get(api, "providers")
     assert view["presets"] == list(models_preset.PRESETS) and view["preset"] == ""

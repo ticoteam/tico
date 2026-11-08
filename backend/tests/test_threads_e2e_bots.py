@@ -6,7 +6,8 @@ remote browser and runner journeys (scripts/remote.py --setup rust); these tests
 """
 
 from backend.tests.slug_ids import bot_ids_are_their_slugs  # noqa: F401  (each bot's id is its slug)
-from backend.tests.test_api import api, claim, assign, post, ready, runner  # noqa: F401  (the api fixture)
+from backend.tests.helpers.api import claim, assign, post, ready, runner  # noqa: F401  (the api fixture)
+from backend.tests.test_api import api  # noqa: F401  (the api fixture)
 from backend.tests.threads_e2e import call, create_thread, home_id, ok, read_status, require_threads_api, say, timeline
 
 

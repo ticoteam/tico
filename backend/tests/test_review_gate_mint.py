@@ -9,8 +9,8 @@ from jwt.exceptions import InvalidKeyError
 
 from backend import github_app, review_gate
 from backend.store import Problem
-from backend.tests.test_review_gate import api, get, HEAD, move, ticket
-from backend.tests.test_api import hold
+from backend.tests.helpers.review_gate import api, get, HEAD, move, ticket
+from backend.tests.helpers.api import hold
 
 
 @pytest.mark.parametrize(

@@ -6,8 +6,8 @@ from types import SimpleNamespace
 import pytest
 
 from backend import hubdb as H, test_receipts, review_gate
-from backend.tests.test_github import api, get, headers, hook, post, pr_event, PR
-from backend.tests.test_review_gate import HEAD, OLD, ticket, move, another_ticket
+from backend.tests.helpers.github import api, get, headers, hook, post, pr_event, PR
+from backend.tests.helpers.review_gate import HEAD, OLD, ticket, move, another_ticket
 from backend import bot_settings as BS
 
 

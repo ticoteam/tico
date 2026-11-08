@@ -11,21 +11,11 @@ from backend import pipeline_requirements as R
 from backend import requirement_attachments
 from backend import task_relations as TR
 from backend.auth import Identity
-from backend.tests.test_api import api, get, headers, post  # noqa: F401  (api is a fixture)
-from backend.tests.test_pipeline_engine import decide
-from backend.tests.test_pipeline_foundation import T, insert, rows
-
-STEPS = [{"name": "Doing", "status": "doing"}, {"name": "Done", "status": "done"}]
-
-
-def make_pipeline(api, name, *, private=False):
-    with api.app.state.store.transaction() as c:
-        typ = H.type_create(c, H.KEEPER, name, STEPS)
-        c.execute(
-            "UPDATE task_types SET pipeline_owner_id=?, pipeline_visibility=? WHERE id=?",
-            ("human:ana", "members" if private else "company", typ["id"]),
-        )
-    return typ["id"], {s["name"]: s["id"] for s in typ["steps"]}
+from backend.tests.helpers.api import get, headers, post  # noqa: F401  (api is a fixture)
+from backend.tests.test_api import api  # noqa: F401  (api is a fixture)
+from backend.tests.helpers.pipeline_engine import decide
+from backend.tests.helpers.pipeline_foundation import T, insert, rows
+from backend.tests.helpers.pipeline_members_only import make_pipeline, ticket
 
 
 def surfaces(api, token, ids):
@@ -135,14 +125,6 @@ def test_links_leave_out_a_members_only_pipeline_and_list_a_page_at_a_time(api):
     assert set(made) <= set(insider) and hidden in insider
     assert get(api, f"pipeline-links?pipeline={legal}", "cara-test")["links"] == []
     assert [link["id"] for link in get(api, f"pipeline-links?pipeline={legal}", "ana-test")["links"]] == [hidden]
-
-
-def ticket(api, typ, title, owner, requester="human:ana"):
-    """A ticket on a pipeline, public to the company but for the pipeline's own privacy."""
-    with api.app.state.store.transaction() as c:
-        task = H.task_create(c, requester, title, "", owner, type=typ, step="Doing", lint=False)
-        c.execute("UPDATE tasks SET private=0 WHERE id=?", (task["id"],))
-    return task["id"]
 
 
 def test_a_tickets_owner_and_requester_read_it_on_a_members_only_pipeline_they_are_not_on(api):

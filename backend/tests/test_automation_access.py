@@ -10,18 +10,9 @@ import pytest
 
 from backend import automation_actions, automations, mailbox_access
 from backend.store import H
-from backend.tests.test_api import api, get, headers, post  # noqa: F401
-
-WAKE = {"id": "tell", "type": "action", "do": "wake_bot", "args": {"bot": "ops", "text": "{{message.subject}}"}}
-
-
-def flow(owner="person:ana", trigger=None, steps=(WAKE,)):
-    return {
-        "name": "Test",
-        "owner": owner,
-        "trigger": trigger or {"type": "event", "name": "x.y"},
-        "steps": list(steps),
-    }
+from backend.tests.helpers.api import get, headers, post  # noqa: F401
+from backend.tests.test_api import api  # noqa: F401
+from backend.tests.helpers.automation_access import WAKE, flow
 
 
 def mail(msg_id="m1"):

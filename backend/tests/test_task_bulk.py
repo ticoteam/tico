@@ -3,7 +3,7 @@ its single update would (permissions, refusals and events alike), is capped, and
 
 from backend import hubdb as H
 from backend import pipeline_review
-from backend.tests.test_tasks_board import api, bot_token, get, pipeline, post  # noqa: F401
+from backend.tests.helpers.tasks_board import api, bot_token, get, pipeline, post  # noqa: F401
 
 
 def bulk(api, filter, action, token="ana-test", expected=200, **change):
@@ -65,7 +65,7 @@ def test_tags_close_and_reopen_by_filter(api):
     tasks = [label(api, task(api, f"Draft the brief {i}"), "brief") for i in range(2)]
     out = bulk(api, {"label": "brief"}, "tags", add=["Q4"], remove=["brief"])
     assert out["changed"] == 2
-    from backend.tests.test_openapi_v2 import conforms
+    from backend.tests.helpers.openapi_v2 import conforms
 
     assert conforms(out, {"$ref": "#/components/schemas/TaskBulkResult"}, get(api, "openapi.json")) is None
     assert {tuple(get(api, "tasks/" + t["id"])["task"]["labels"]) for t in tasks} == {("q4",)}
@@ -214,7 +214,7 @@ def test_more_tasks_than_the_cap_are_refused_whole(api):
 
 def test_the_cli_and_the_mcp_tool_send_the_bulk_change_the_route_takes(api):
     from clients import hubcli, remotecli
-    from backend.tests.test_mcp import call
+    from backend.tests.helpers.mcp import call
 
     sent = []
 
@@ -311,7 +311,7 @@ def test_one_bulk_call_counts_once_toward_a_bots_quarantine(api):
 
 
 def test_repeated_bulk_calls_count_every_source_even_when_each_call_counts_once(api):
-    from backend.tests.test_agents import credential, hermes_bot
+    from backend.tests.helpers.agents import credential, hermes_bot
 
     hermes_bot(api)
     token = credential(api)["token"]

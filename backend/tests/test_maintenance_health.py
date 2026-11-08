@@ -39,10 +39,12 @@ from backend import (
 from backend.enqueue import enqueue_stored
 from backend.maintenance_steps import check_health
 from backend.store import H, Problem
-from backend.tests.test_api import api, get  # noqa: F401  (fixture)
-from backend.tests.test_goal_manager import BASE
-from backend.tests.test_onboarding import draft, environment, machine, signed_in  # noqa: F401
-from backend.tests.test_support import FakeHQ
+from backend.tests.helpers.api import get  # noqa: F401  (fixture)
+from backend.tests.test_api import api  # noqa: F401  (fixture)
+from backend.tests.helpers.goal_manager import BASE
+from backend.tests.helpers.onboarding import draft, environment, machine, signed_in  # noqa: F401
+from backend.tests.helpers.support import FakeHQ
+from backend.tests.helpers.maintenance_health import turn
 
 MIGRATION = Path(__file__).resolve().parents[1] / "migrations" / "0096_retire_health_monitor.py"
 HM_SLUG = "health-monitor"  # the retired Health Monitor's slug: migration 0096 archives its row
@@ -231,28 +233,6 @@ def limited(api, bot=SECRET_BOT, config=None):
             c.execute("INSERT OR REPLACE INTO bot_config(bot,owner_id) VALUES(?,'ana')", (bot,))
             BS.write(c, bot, config)
         H.event(c, H.KEEPER, "attempt.limited", "a-" + bot, {"bot": bot})
-
-
-def turn(api, runner_id, result, minutes_ago, bot="coo", state=None):
-    """A finished turn on `runner_id` with the runner's result (backend/execution.py stores it as result)."""
-    with api.app.state.store.transaction() as c:
-        at = H.shift(H.now(), minutes=-minutes_ago)
-        mid = "m-" + H.new_id()
-        c.execute(
-            "INSERT INTO messages(id,sender_id,recipient_id,kind,body,created_at) VALUES(?,'human:ana',?,'chat','hi',?)",
-            (mid, "bot:" + bot, at),
-        )
-        c.execute(
-            "INSERT OR IGNORE INTO jobs(id,message_id,bot_id,state,created_at) VALUES(?,?,?,'completed',?)",
-            ("j-" + mid, mid, bot, at),
-        )
-        job = c.execute("SELECT id FROM jobs WHERE message_id=?", (mid,)).fetchone()["id"]
-        aid = "a-" + mid
-        c.execute(
-            "INSERT INTO attempts(id,job_id,bot_id,runner_id,generation,token_hash,state,lease_until,created_at,finished_at,"
-            "result) VALUES(?,?,?,?,1,?,?,?,?,?,?)",
-            (aid, job, bot, runner_id, "hash-" + aid, state or result["outcome"], at, at, at, json.dumps(result)),
-        )
 
 
 def login_findings(api, rid=""):

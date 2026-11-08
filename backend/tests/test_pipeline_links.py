@@ -7,8 +7,8 @@ from backend import hubdb as H
 from backend import pipeline_engine as E
 from backend import pipeline_links as L
 from backend import task_delete
-from backend.tests.test_pipeline_engine import BEN, requirement, states
-from backend.tests.test_pipeline_foundation import ANA, boot, hub, rows, step_id
+from backend.tests.helpers.pipeline_engine import BEN, requirement, states
+from backend.tests.helpers.pipeline_foundation import ANA, boot, hub, rows, step_id
 
 
 def two(tmp_path):
@@ -124,7 +124,7 @@ def test_a_handoff_row_follows_its_ticket_through_delete_and_restore(tmp_path):
 def test_a_move_link_handoff_keeps_the_source_approval_in_force_once_the_work_changes(tmp_path):
     """The source pipeline's approval, given before the handoff, still gates the target: new work makes it out of date
     and the ticket cannot move on in the target pipeline until it is approved again."""
-    from backend.tests.test_pipeline_engine import decide
+    from backend.tests.helpers.pipeline_engine import decide
 
     c, sales, success, _ = two(tmp_path)
     L.create_link(c, ANA, step_id(c, sales["id"], "Won"), success["id"], "move")

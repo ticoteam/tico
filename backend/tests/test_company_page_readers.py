@@ -19,13 +19,14 @@ from fastapi.testclient import TestClient
 from PIL import Image
 
 import backend.company_page as package
-import backend.tests.test_api as test_api
+import backend.tests.helpers.api as test_api
 from backend import automations, oidc, screening, task_trigger_rules, team_icon, webhooks
 from backend import hubdb as H
 from backend.company_page import reader_app, readers as R, release, render
 from backend.store import digest
-from backend.tests.test_api import api, get, headers, post  # noqa: F401  (the api fixture)
-from backend.tests.test_oidc import CLIENT, SECRET, provider  # noqa: F401  (the provider fixture)
+from backend.tests.helpers.api import get, headers, post  # noqa: F401  (the api fixture)
+from backend.tests.test_api import api  # noqa: F401  (the api fixture)
+from backend.tests.helpers.oidc import CLIENT, SECRET, provider  # noqa: F401  (the provider fixture)
 
 ORIGIN = "https://open.acme.example"
 UI = Path(__file__).resolve().parents[2] / "ui" / "assets"
@@ -724,7 +725,7 @@ def test_an_invite_cannot_take_over_a_row_another_account_holds(site):
 
 # ----------------------------------------------------------------------------------------------- the list
 def test_only_owners_and_admins_manage_readers_and_the_list_pages(site):
-    from backend.tests.test_api import as_member
+    from backend.tests.helpers.api import as_member
 
     as_member(site.api, "ben@acme.example")
     assert site.api.get("/api/v2/readers", headers=headers("ben-test")).status_code == 403

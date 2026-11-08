@@ -14,41 +14,16 @@ from backend.auth import Identity
 from backend.blobs import register
 from backend.files import series
 from backend.store import H, task_message_page
-from backend.tests.test_api import api, headers, post, restrict  # noqa: F401  (the fixture; post is a helper)
-from backend.tests.test_threads_private_execution import (  # noqa: F401  (the helper and the fixture it needs)
-    private_run,
-    private_tasks_have_an_unrelated_manager,
-)
+from backend.tests.helpers.api import headers, post, restrict  # noqa: F401  (the fixture; post is a helper)
+from backend.tests.test_api import api  # noqa: F401  (the fixture; post is a helper)
+from backend.tests.helpers.threads_private_execution import private_run, private_tasks_have_an_unrelated_manager
+from backend.tests.helpers.bot_home_merge import merge, room, store
 
 PEOPLE = ("human:ana", "human:ben", "human:cara")
 
 
-def store(api):
-    return api.app.state.store
-
-
-def room(c, person, bot):
-    """A person's personal room with a bot, as rooms.personal_room opened them before Homes (a legacy chat)."""
-    return H.open_conversation(
-        c,
-        person,
-        [person, "bot:" + bot],
-        kind="chat",
-        subject="Chat with " + bot,
-        scope=rooms.PERSONAL,
-        owner_actor=person,
-        room_key=bot,
-        allow_held=True,
-    )["id"]
-
-
 def say(c, sender, to, body, conversation_id, **kwargs):
     return H.say(c, sender, to, body, conversation_id=conversation_id, **kwargs)
-
-
-def merge(api):
-    with store(api).transaction() as c:
-        return bot_home_merge.merge(c)
 
 
 def seqs(c, thread_id):
@@ -386,7 +361,7 @@ def test_a_moved_rooms_read_marks_are_discarded_for_root_and_sub_threads(api):
 def test_a_tasks_history_is_read_from_its_room_and_the_homes_it_is_in(api, ops_rooms):
     """Finding 5: a task whose messages were written in a room reads them from the room, the Home they moved into, and the
     Home it is in now, even after that Home is archived and a new one takes the writes."""
-    from backend.tests.test_api import post
+    from backend.tests.helpers.api import post
 
     task = post(api, "tasks", {"owner": "ops", "title": "Summarize", "body": "Please summarize the current work."})
     task_id = task["id"] if "id" in task else task["task"]["id"]
@@ -491,7 +466,7 @@ def test_an_unread_home_message_between_moved_messages_stays_unread(api):
 def test_a_tasks_history_keeps_every_home_through_two_archives(api, ops_rooms):
     """Finding 3 (P2): a task's history reads every Home its bot has had, archived ones included. Each comment written
     through the old room after its Home was archived lands in the next Home, and all three stay in the task's history."""
-    from backend.tests.test_api import post
+    from backend.tests.helpers.api import post
 
     task = post(api, "tasks", {"owner": "ops", "title": "Summarize", "body": "Please summarize the current work."})
     task_id = task["id"] if "id" in task else task["task"]["id"]

@@ -18,10 +18,11 @@ import time
 
 from backend import bot_settings as BS
 from backend.store import H
-from backend.tests import test_api
-from backend.tests.test_api import assign, headers, post, ready, runner
+from backend.tests.helpers import api as test_api
+from backend.tests import test_api as api_fixture  # the api fixture itself
+from backend.tests.helpers.api import assign, headers, post, ready, runner
 
-api = test_api.api  # the fixture, bound so that tests can take it
+api = api_fixture.api  # the fixture, bound so that tests can take it
 KS = (5, 20, 50)
 RUNS = 50
 CURRENT = [

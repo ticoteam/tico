@@ -18,7 +18,7 @@ from backend.finance import actions as FA
 from backend.finance import delivery
 from backend.finance import jobs
 from backend.finance.core.errors import CONFLICT, DENIED, NOT_AVAILABLE, FinanceError
-from backend.tests.test_finance_fixtures import AT, OWNER, account, act, books, finance_template, store  # noqa: F401
+from backend.tests.helpers.finance_fixtures import AT, OWNER, account, act, books, finance_template, store  # noqa: F401
 
 BOT = "bot:bookkeeper"
 EMAIL = "ap@acme-retail.example"

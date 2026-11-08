@@ -3,28 +3,16 @@
 import json
 from backend import shared_bots
 from backend.store import H
-from backend.tests.test_api import api, get, post, runner, restrict, ready, claim  # noqa: F401
+from backend.tests.helpers.api import get, post, runner, restrict, ready, claim  # noqa: F401
+from backend.tests.test_api import api  # noqa: F401
 from backend import bot_settings as BS
-
-
-def revision(api, bot):
-    return get(api, 'bots/' + bot)['revision']
+from backend.tests.helpers.shared_bots import branch, revision, share
 
 
 def bot_id(api, slug):
     """The id a bot is stored under: actors, readiness reports, claims and most tables use it, not the slug."""
     with api.app.state.store.read() as c:
         return H.resolve_bot(c, slug)['id']
-
-
-def share(api, enabled=True):
-    post(api, 'bots/cpo/definition', {'shared': enabled, 'expected_revision': revision(api, 'cpo')})
-
-
-def branch(api, computer=None, token='cara-test', bot='cpo', expected=200):
-    return post(
-        api, f'bots/{bot}/copies', {'runner_id': computer['runner_id']} if computer else {}, token, expected=expected
-    )
 
 
 def test_creation_is_personal_idempotent_and_requires_read_and_own_computer(api):

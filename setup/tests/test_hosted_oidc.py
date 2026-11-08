@@ -9,7 +9,7 @@ import json
 import pytest
 
 from setup import hosted, settings as st, signin, state, verify
-from setup.tests.test_hosted import DOMAIN, HOSTED, INVITE, env_sent, go, link_token, over_ssh
+from setup.tests.helpers.hosted import DOMAIN, HOSTED, INVITE, env_sent, go, link_token, over_ssh
 from setup.tests.fakes import FakeShell
 
 ISSUER = "https://accounts.example"

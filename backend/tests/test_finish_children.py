@@ -10,7 +10,8 @@ from backend import task_reads
 from backend import task_relations as TR
 from backend.config import Settings
 from backend.store import Store
-from backend.tests.test_api import api, get, headers, post, setup_attempt  # noqa: F401
+from backend.tests.helpers.api import get, headers, post, setup_attempt  # noqa: F401
+from backend.tests.test_api import api  # noqa: F401
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -419,7 +420,7 @@ def test_cascade_bumps_child_version_and_rejects_a_prepared_update(api, operatio
 
 @pytest.mark.parametrize("run_state", ["leased", "running", "input"])
 def test_a_cascaded_child_with_a_live_run_gets_the_direct_close_notice(api, run_state):
-    from backend.tests.test_api import assign, claim, ready, runner
+    from backend.tests.helpers.api import assign, claim, ready, runner
 
     machine = runner(api)
     assign(api, machine, "cpo")
@@ -456,8 +457,8 @@ def test_a_cascaded_child_with_a_live_run_gets_the_direct_close_notice(api, run_
 
 
 def test_a_runner_goal_finish_keeps_its_event_batch_and_final_result_with_unclosable_children(api):
-    from backend.tests.test_api import claim
-    from backend.tests.test_chat_goals import task_goal_world
+    from backend.tests.helpers.api import claim
+    from backend.tests.helpers.chat_goals import task_goal_world
 
     machine, parent = task_goal_world(api)
     attempt = claim(api, machine)
@@ -709,7 +710,7 @@ def test_rolled_back_completion_does_not_suppress_a_later_unblock_in_the_same_wr
     "error", [H.Refused("close", "State changed after preflight"), RuntimeError("Close hook failed")]
 )
 def test_automatic_finish_rolls_back_a_failed_descendant_and_its_queued_triggers(api, monkeypatch, error):
-    from backend.tests.test_task_trigger_rules import rule
+    from backend.tests.helpers.task_trigger_rules import rule
 
     with api.app.state.store.transaction() as c:
         parent = make(c, "bot:ops", "Plan the launch", "bot:ops")

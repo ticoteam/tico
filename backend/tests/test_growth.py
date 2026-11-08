@@ -4,8 +4,9 @@ Examples use Acme, a home-cleaning company."""
 import pytest
 
 from backend import growth as G
-from backend.tests.test_api import api, get, headers, post, put  # noqa: F401
-from backend.tests.test_company import bot
+from backend.tests.helpers.api import get, headers, post, put  # noqa: F401
+from backend.tests.test_api import api  # noqa: F401
+from backend.tests.helpers.company import bot
 
 
 def patch(api, path, body, token="ana-test", expected=200):

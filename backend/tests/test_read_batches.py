@@ -1,20 +1,10 @@
 """Read costs stay bounded when every row has different provenance."""
 
-import pytest
-
 from backend import read_cache, task_privacy as privacy
 from backend.store import H
-from backend.tests.test_api import api, get, unrelated_task_managers  # noqa: F401
-from backend.tests.test_task_privacy_reads import traced_get
-
-
-@pytest.fixture(autouse=True)
-def privacy_parties(api):
-    with api.app.state.store.transaction() as c:
-        unrelated_task_managers(c)
-        c.execute(
-            "INSERT INTO runners(id,label,owner_id,token_hash,created_at) VALUES('rn','Mac','ana','th',?)", (H.now(),)
-        )
+from backend.tests.helpers.api import get
+from backend.tests.test_api import api
+from backend.tests.helpers.task_privacy_reads import traced_get
 
 
 def blob(c, bid):

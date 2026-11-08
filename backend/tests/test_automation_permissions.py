@@ -4,8 +4,9 @@ refused, and seeing follows the same rule. BotOps has whoever asked it's rights 
 
 from backend import automations as AU
 from backend.auth import Identity
-from backend.tests.test_api import api, get, headers, post  # noqa: F401
-from backend.tests.test_automation_api import as_bot
+from backend.tests.helpers.api import get, headers, post  # noqa: F401
+from backend.tests.test_api import api  # noqa: F401
+from backend.tests.helpers.automation_api import as_bot
 
 
 class Chart:

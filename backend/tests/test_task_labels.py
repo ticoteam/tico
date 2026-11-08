@@ -4,8 +4,8 @@ it asked for, or one of a type it manages); a label on a public roadmap or one T
 import json
 
 from backend import hubdb as H
-from backend.tests.test_roadmaps import public_setup
-from backend.tests.test_tasks_board import api, bot_token, get, headers, post  # noqa: F401 (fixture)
+from backend.tests.helpers.roadmaps import public_setup
+from backend.tests.helpers.tasks_board import api, bot_token, get, headers, post  # noqa: F401 (fixture)
 
 
 def manage(api, type_name, slug):

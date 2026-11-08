@@ -2,31 +2,12 @@
 a required bootstrap card, routines that start paused, a company from before it gets it on update, nobody
 archives it, only the owner edits it, and its daily pass starts once the first KPI exists."""
 
-import shutil
-from pathlib import Path
-
 from fastapi.testclient import TestClient
 
 from backend import routines as R
 from backend.app import create_app
-from backend.tests.test_onboarding import (
-    ASSISTANT_AGENT,
-    ASSISTANT_CARD,
-    BOTOPS_CARD,
-    as_person,
-    draft,  # noqa: F401
-    environment,
-    machine,
-    signed_in,
-)
-
-TEMPLATE = Path(__file__).resolve().parents[2] / "templates" / "catalog" / "goal-manager"
-BASE = [(ASSISTANT_CARD, ASSISTANT_AGENT), (BOTOPS_CARD, "")]
-
-
-def with_goal_manager(api):
-    """The catalog a release ships: the real template, copied next to the test's own cards."""
-    shutil.copytree(TEMPLATE, Path(api.app.state.store.settings.catalog_dir) / "goal-manager")
+from backend.tests.helpers.onboarding import as_person, draft, environment, machine, signed_in
+from backend.tests.helpers.goal_manager import BASE, with_goal_manager
 
 
 def routines(api):

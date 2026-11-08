@@ -3,42 +3,17 @@ question titled Review 1 or Review 2 reads GitHub as a review child does, and a 
 once a fresh read finds every hosted check passing (PR 1603)."""
 
 import uuid
-from types import SimpleNamespace
 
 import pytest
 
 from backend import hubdb as H, task_blocked
-from backend.tests.test_github import api, headers, hook, post, pr_event, PR  # noqa: F401
-from backend.tests.test_review_gate import HEAD, OLD, BASE, ticket, get, move
-from backend.tests.test_api import hold
+from backend.tests.helpers.github import api, headers, hook, post, pr_event, PR  # noqa: F401
+from backend.tests.helpers.review_gate import HEAD, OLD, BASE, ticket, get, move
+from backend.tests.helpers.api import hold
+from backend.tests.helpers.review_gate_fresh import github
 
 STALE = f'Tests: head {OLD}: 9 passed, 0 failed'
 GREEN = {f'check {i}': 'success' for i in range(16)}
-
-
-def github(api, monkeypatch, checks, head=HEAD):
-    """A configured GitHub App whose PR #412 has this head and check-run conclusions; returns the paths read."""
-    service = api.app.state.github_app
-    monkeypatch.setattr(service, 'row', lambda c: {'org': 'ticoteam'})
-    monkeypatch.setattr(service, 'mint', lambda *a: ('synthetic', 'later'))
-    reads = []
-
-    def fetch(method, path, **kw):
-        reads.append(path)
-        if '/pulls/' in path:
-            data = {'head': {'sha': head}}
-        elif path.endswith('check-runs'):
-            data = {
-                'check_runs': [
-                    {'id': i, 'name': name, 'conclusion': result} for i, (name, result) in enumerate(checks.items(), 1)
-                ]
-            }
-        else:
-            data = []
-        return SimpleNamespace(status_code=200, json=lambda: data)
-
-    monkeypatch.setattr(service, '_call', fetch)
-    return reads
 
 
 def test_fresh_ci_reads_write_only_to_close_an_open_access_outage(api, monkeypatch):
@@ -258,7 +233,7 @@ def test_stale_receipt_review_moves_without_passing_checks_are_still_refused(api
 def test_a_same_head_failure_landing_during_the_read_keeps_the_hold(api, monkeypatch):
     """A check webhook changes the PR link but not the task version: a green read it supersedes must not clear."""
     from backend import review_gate
-    from backend.tests.test_github import _suite
+    from backend.tests.helpers.github import _suite
 
     task = ticket(api, STALE)
     held(api, task)
@@ -325,7 +300,7 @@ def test_reads_that_keep_failing_take_turns_with_the_other_holds(api, monkeypatc
 def test_a_held_review_question_sent_anyway_reads_github_afresh_and_is_filed(api, monkeypatch):
     """Send anyway on a held Review 2 question is the same gate as a new one: all-green hosted checks at the current
     head count from a fresh read, with no receipt at that head."""
-    from backend.tests.test_org_rule_check import COLOR, Judge
+    from backend.tests.helpers.org_rule_check import COLOR, Judge
 
     task = ticket(api, STALE)
     token = bot_token(api)

@@ -97,8 +97,8 @@ def test_saves_write_and_clear_nodes_and_the_readers_answer_as_before(api):
 def test_limits_set_through_the_api_read_back_identically_after_the_move(api):
     """Amounts the API stored as REAL USD (rounded to six decimals) become nanodollars and read back as the same floats:
     the API's own answer before and after the migration is identical."""
-    from backend.tests.test_api import get
-    from backend.tests.test_usage_limits import put
+    from backend.tests.helpers.api import get
+    from backend.tests.helpers.usage_limits import put
 
     awkward = {"per_30m_usd": 0.35, "daily_usd": 1234.567891, "weekly_usd": 9999999.999999, "monthly_usd": 0.000001}
     put(api, "usage/limits/ops", awkward)
@@ -173,8 +173,8 @@ def test_a_limit_the_api_stored_as_zero_still_overrides_the_default_and_caps_not
     """The API keeps six decimals, so $0.0000001 is stored as 0.0. A bot's own 0 is its own value: the company default
     does not apply to that period, and a cap of 0 holds nothing back. A pool's 0 beside a real cap is kept the same way;
     a pool with nothing above zero is no pool."""
-    from backend.tests.test_api import get
-    from backend.tests.test_usage_limits import put
+    from backend.tests.helpers.api import get
+    from backend.tests.helpers.usage_limits import put
 
     put(api, "usage/limits", {"daily_usd": 5, "weekly_usd": 0.0000001})
     put(api, "usage/limits/ops", {"daily_usd": 0.0000001, "monthly_usd": 7})

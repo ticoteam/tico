@@ -9,13 +9,13 @@ from pathlib import Path
 
 
 from backend import releases, routines
-from backend.tests.test_api import claim, headers, post, ready
-from backend.tests.test_onboarding import (
+from backend.tests.helpers.api import claim, headers, post, ready
+from backend.tests.helpers.onboarding import (
     ASSISTANT_AGENT,
     ASSISTANT_CARD,
     BOTOPS_CARD,
     as_person,
-    build_team,  # noqa: F401
+    build_team,
     draft,
     environment,
     machine,

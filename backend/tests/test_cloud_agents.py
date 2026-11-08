@@ -12,8 +12,8 @@ from backend import cloud_agents, lifecycle, support
 from backend import hubdb as H
 from backend.auth import Identity
 from backend.store import Problem
-from backend.tests.test_onboarding import as_person, environment, signed_in  # noqa: F401
-from backend.tests.test_support import hq  # noqa: F401
+from backend.tests.helpers.onboarding import as_person, environment, signed_in  # noqa: F401
+from backend.tests.helpers.support import hq  # noqa: F401
 from backend import bot_settings as BS
 
 SHIPPED = Path(__file__).resolve().parents[2] / "templates" / "catalog"  # Recruit's candidates

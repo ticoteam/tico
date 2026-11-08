@@ -11,8 +11,8 @@ from backend import routines
 from backend import views
 from backend.auth import Identity
 from backend.store import H
-from backend.tests.test_onboarding import OWNER_EMAIL, environment, signed_in  # noqa: F401
-from backend.tests.test_people_access import HeaderProxy, call, person_headers, view
+from backend.tests.helpers.onboarding import OWNER_EMAIL, environment, signed_in  # noqa: F401
+from backend.tests.helpers.people_access import HeaderProxy, call, person_headers, view
 from backend import bot_settings as BS
 
 NEW = "morgan@new.example"

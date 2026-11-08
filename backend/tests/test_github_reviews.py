@@ -7,8 +7,8 @@ import jwt
 
 from backend import bot_settings as BS
 from backend import github_app as G
-from backend.tests.test_github_app import api, gh, auth, runner_token, turn_token, PEM, KEY  # noqa: F401
-from backend.tests.test_bot_product_repos import ready
+from backend.tests.helpers.github_app import api, gh, auth, runner_token, turn_token, PEM, KEY  # noqa: F401
+from backend.tests.helpers.bot_product_repos import ready
 
 HEAD = "a" * 40
 REPO = "Acme/product"

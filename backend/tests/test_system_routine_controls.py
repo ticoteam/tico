@@ -13,8 +13,9 @@ from backend import system_routines as SR
 from backend import team_rules
 from backend.scheduler import Scheduler, stamp
 from backend.store import H
-from backend.tests.test_api import api, get, post, put  # noqa: F401  (fixture)
-from backend.tests.test_stale_review import FakeDecide
+from backend.tests.helpers.api import get, post, put  # noqa: F401  (fixture)
+from backend.tests.test_api import api  # noqa: F401  (fixture)
+from backend.tests.helpers.stale_review import FakeDecide
 
 TIMED = {
     "stale_review",

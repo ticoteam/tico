@@ -3,9 +3,11 @@ it takes do not grow with how many pins a place has (or how many cards of the sa
 
 import contextlib
 
-from backend.tests import test_api as T
-from backend.tests.test_api import api, post, put  # noqa: F401  (the api fixture)
-from backend.tests.test_cards import page, task
+from backend.tests.helpers import api as T
+from backend.tests import test_api as api_fixture  # the api fixture itself
+from backend.tests.helpers.api import post, put  # noqa: F401  (the api fixture)
+from backend.tests.test_api import api  # noqa: F401  (the api fixture)
+from backend.tests.helpers.cards import page, task
 
 # Card kinds a Dashboard can take, each read per card.
 KINDS = [
@@ -65,7 +67,7 @@ def test_the_dashboard_takes_the_same_statements_however_many_pins_it_shows(tmp_
     counted = {}
     for name, count in (("small", 1), ("big", 5)):
         (tmp_path / name).mkdir()
-        install = T.api.__wrapped__(tmp_path / name, None)
+        install = api_fixture.api.__wrapped__(tmp_path / name, None)
         api = next(install)
         try:
             fill(api, count)

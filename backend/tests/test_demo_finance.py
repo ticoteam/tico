@@ -17,6 +17,7 @@ from backend import demo
 from backend.app import create_app
 from backend.bookkeeper import VIEW_TITLE
 from backend.demo_sections.finance import BOOKKEEPER, CONTENT as C
+from backend.tests.helpers.demo_finance import signed_in
 
 EARLY_MONTH = datetime(2026, 11, 2, 18, 30, tzinfo=timezone.utc)
 
@@ -26,12 +27,6 @@ def book(tmp_path_factory):
     with time_machine.travel(EARLY_MONTH, tick=False):
         settings = demo.build(tmp_path_factory.mktemp("demo-finance"), now=EARLY_MONTH)
         yield settings, EARLY_MONTH
-
-
-def signed_in(settings):
-    client = TestClient(create_app(settings), base_url="http://127.0.0.1:8765")
-    client.headers["Authorization"] = "Bearer " + settings.local_owner_token_file.read_text().strip()
-    return client
 
 
 def months(now):

@@ -5,7 +5,7 @@ import json
 import pytest
 
 from backend import health, hubdb as H
-from backend.tests.test_health import add_bot, environment, signed_in  # noqa: F401
+from backend.tests.helpers.health import add_bot, environment, signed_in  # noqa: F401
 
 HEAD, OLD = 'a' * 40, 'b' * 40
 

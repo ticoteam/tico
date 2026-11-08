@@ -1,38 +1,11 @@
 import json
 
-import pytest
 
-from setup import cli, dns, state, verify
+from setup import dns, state, verify
 from setup.remote import Result
 from setup.tests import fakes
-from setup.tests.fakes import CaptureIO, FakeShell, aws_clients
-
-SECRET = "GOCSPX-supersecret"
-BASE = [
-    "--non-interactive",
-    "--domain",
-    "tico.example.com",
-    "--auth",
-    "google",
-    "--client-id",
-    "cid.apps.googleusercontent.com",
-    "--company",
-    "Acme",
-    "--owner-email",
-    "me@example.com",
-]
-
-
-@pytest.fixture(autouse=True)
-def secret_env(monkeypatch):
-    monkeypatch.setenv("TICO_OIDC_CLIENT_SECRET", SECRET)
-    monkeypatch.setattr(verify, "run_all", lambda **kw: [verify.Check("stub", True, "ok")])
-
-
-def go(argv, deps=None, io=None):
-    io = io or CaptureIO()
-    code = cli.main(argv, deps=deps or fakes.deps(), io=io)
-    return code, io.text
+from setup.tests.fakes import FakeShell, aws_clients
+from setup.tests.helpers.wizard import BASE, SECRET, go
 
 
 def test_dry_run_aws_caddy_google_prints_the_plan_and_changes_nothing(tmp_path):
@@ -99,7 +72,7 @@ def test_private_inbox_values_are_scrubbed_from_failed_server_command_output(mon
 
 
 def test_cloudflare_tunnel_flow_creates_tunnel_and_uses_its_token(monkeypatch):
-    from setup.tests.test_cloudflare import Api
+    from setup.tests.helpers.cloudflare import Api
 
     api = Api(
         {
@@ -170,7 +143,7 @@ ACCESS = [
 
 
 def _tunnel_run(argv, runner_record=None, tunnels=()):
-    from setup.tests.test_cloudflare import Api
+    from setup.tests.helpers.cloudflare import Api
 
     api = Api(
         {

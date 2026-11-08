@@ -12,7 +12,7 @@ import pytest
 
 from backend.config import Settings
 from backend.store import Store
-from backend.tests.test_directory_tables_migration import FIXTURE, SAMPLE
+from backend.tests.helpers.directory_tables_migration import FIXTURE, SAMPLE
 
 MIGRATION = Path(__file__).resolve().parents[1] / "migrations" / "20261108044824_directory_rules.py"
 NOW = "2026-10-01T00:00:00Z"

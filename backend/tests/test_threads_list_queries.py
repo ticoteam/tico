@@ -4,25 +4,11 @@ roots, sub-threads, task threads, one DM per bot Ana owns, and group DMs. Each k
 import collections
 import re
 
-from backend import bot_settings as BS
-from backend import hubdb
 from backend.tests.slug_ids import bot_ids_are_their_slugs  # noqa: F401  (each bot's id is its slug)
-from backend.tests.test_api import api, headers  # noqa: F401  (the fixture and its helper)
-from backend.tests.test_health_reads import counted
-
-
-def add_bots(api, start, count):
-    """`count` more bots Ana owns, as a company has them: each gets a DM with Ana on her sidebar (bot_dm_unread)."""
-    with api.app.state.store.transaction() as c:
-        bots = {
-            f"desk-{n}": {"name": f"desk-{n}", "runtime": "fake", "status": "active"}
-            for n in range(start, start + count)
-        }
-        hubdb.sync_registry(c, bots, {"people": []})
-        for slug, config in bots.items():
-            c.execute("INSERT INTO bot_config(bot,team,owner_id) VALUES(?,?,?)", (slug, None, "ana"))
-            BS.write(c, slug, config)
-    return [f"bot:{slug}" for slug in bots]
+from backend.tests.helpers.api import headers  # noqa: F401  (the fixture and its helper)
+from backend.tests.test_api import api  # noqa: F401  (the fixture and its helper)
+from backend.tests.helpers.health_reads import counted
+from backend.tests.helpers.threads_list_queries import add_bots
 
 
 def seed_bot_dms(api, bots):

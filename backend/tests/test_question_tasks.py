@@ -7,25 +7,25 @@ import pytest
 
 from backend import ask_deadlines, still_needed, hubdb as H, task_relations as TR
 
-from backend.tests.test_api import api, assign, claim, get, headers, post, ready, runner, setup_attempt  # noqa: F401
-from backend.tests.test_mcp import call
+from backend.tests.helpers.api import get, headers, post, setup_attempt
+from backend.tests.test_api import api
+from backend.tests.helpers.mcp import call
+from backend.tests.helpers.question_tasks import (
+    _answer,
+    _bot_only_private_parent,
+    _mark,
+    _read,
+    _to,
+    _to_ops,
+    _work,
+    keep_asking,
+)
 
 
 def _ask(api, token, question, **extra):
     err, out = call(api, "hub_task_question", {"question": question, "on": "ana", **extra}, token=token)
     assert not err, out
     return out
-
-
-def _work(api, title="Pick a launch date", **extra):
-    """A task of the bot's and a run on it: a question asked from that run is filed under it."""
-    r = runner(api, "ana")
-    assign(api, r, "ops")
-    ready(api, r, ["ops"])
-    work = post(
-        api, "tasks", {"owner": "ops", "title": title, "body": "Choose when the Acme launch goes out.", **extra}
-    )
-    return work, claim(api, r)
 
 
 def strip_sources(conn, tid):
@@ -40,28 +40,6 @@ def strip_sources(conn, tid):
     conn.execute(
         "UPDATE tasks SET questions=?, if_no_answer=? WHERE id=?", (json.dumps(questions), json.dumps(default), tid)
     )
-
-
-def _read(api, sql, args=()):
-    with api.app.state.store.read() as c:
-        return c.execute(sql, args).fetchall()
-
-
-def _mark(api):
-    return _read(api, "SELECT coalesce(max(rowid), 0) FROM messages")[0][0]
-
-
-def _to_ops(api, since):
-    return [
-        r[0]
-        for r in _read(
-            api, "SELECT body FROM messages WHERE recipient_id='bot:ops' AND rowid>? ORDER BY rowid", (since,)
-        )
-    ]
-
-
-def _answer(api, task_id, body, token="ana-test", expected=200):
-    return post(api, f"tasks/{task_id}/answers", {"target": {"task": task_id}, **body}, token=token, expected=expected)
 
 
 def _cards(api, token="ana-test"):
@@ -289,24 +267,6 @@ def test_a_private_parents_question_task_is_only_for_its_readers(api):
 # ---- review fixes ------------------------------------------------------------------------------------------------
 
 
-def _bot_only_private_parent(api):
-    """A private task with no person on it, another bot's request of ops, and an ops run on it."""
-    from backend.tests.test_api import unrelated_task_managers
-    from backend.tests.test_task_readers import run_on, task
-
-    with api.app.state.store.transaction() as c:
-        unrelated_task_managers(c)
-    parent = task(api, "bot:cpo", "bot:ops", "Zip triage")
-    return parent, run_on(api)
-
-
-def _to(api, who, since):
-    return [
-        r[0]
-        for r in _read(api, "SELECT body FROM messages WHERE recipient_id=? AND rowid>? ORDER BY rowid", (who, since))
-    ]
-
-
 def test_a_private_bot_parents_question_makes_the_person_its_reader_and_wakes_its_bot_once(api):
     parent, attempt = _bot_only_private_parent(api)
     card = post(
@@ -382,7 +342,7 @@ def test_a_question_task_never_moves_to_a_bot(api):
 
 
 def test_a_done_naming_an_option_is_the_pick_with_its_spend_and_file_verdicts(api):
-    from backend.tests.test_file_reviews import approved, ask as review_ask, publish
+    from backend.tests.helpers.file_reviews import approved, ask as review_ask, publish
 
     _, _, attempt = setup_attempt(api)
     bot = attempt["token"]
@@ -456,10 +416,10 @@ def test_a_default_on_a_restricted_page_title_leaves_no_event_naming_it_to_outsi
     naming it), and the events that close writes stay redacted for a person outside the page's audience."""
     keep_asking(api)  # this case asks with a reversible default on purpose (backend/ask_refusals.py)
     from backend.auth import Identity
-    from backend.tests.test_file_reviews import ask as review_ask
-    from backend.tests.test_files import turn
-    from backend.tests.test_page_audience import edit
-    from backend.tests.test_pages import HTML, page
+    from backend.tests.helpers.file_reviews import ask as review_ask
+    from backend.tests.helpers.files import turn
+    from backend.tests.helpers.page_audience import edit
+    from backend.tests.helpers.pages import HTML, page
 
     reader = post(api, "access/people", {"name": "Reader", "email": "reader@acme.example"})
     assert reader["person"] == "reader"
@@ -501,10 +461,10 @@ def test_answer_and_file_reviews_filter_each_source_page_for_a_reader_who_cannot
     """The question-task form of the nested case: a question with review files, one of them a page the person asked
     may open and an outsider may not. The answer copies that page's title (the pick's label), so the answer, the file
     verdicts and the receipts (comments, events) show the outsider none of it, and the person still sees all of it."""
-    from backend.tests.test_file_reviews import answer as review_answer, ask as review_ask
-    from backend.tests.test_page_audience import edit
-    from backend.tests.test_pages import HTML, page
-    from backend.tests.test_files import turn
+    from backend.tests.helpers.file_reviews import answer as review_answer, ask as review_ask
+    from backend.tests.helpers.page_audience import edit
+    from backend.tests.helpers.pages import HTML, page
+    from backend.tests.helpers.files import turn
 
     secret = "Quarterly forecast draft"
     tid = post(api, "tasks", {"owner": "ops", "title": "Review folios", "body": "Review", "private": False})["id"]
@@ -538,12 +498,3 @@ def test_answer_and_file_reviews_filter_each_source_page_for_a_reader_who_cannot
     sql = api.post("/api/v2/sql", json={"sql": "SELECT * FROM events"}, headers=headers("cara-test"))
     assert sql.status_code == 200, sql.text
     assert secret not in json.dumps(sql.json()["rows"]), "an event naming the restricted page reached an outsider"
-
-
-def keep_asking(api, on=False):
-    """Set the team's "bots go ahead" rule. Off, a bot may ask with a reversible default (backend/ask_refusals.py);
-    turned back on after, that ask goes ahead at its deadline, as one filed before the refusal does."""
-    from backend import team_rules
-
-    with api.app.state.store.transaction() as c:
-        team_rules.save(c, "human:ana", {"bots_go_ahead": on})

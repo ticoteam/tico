@@ -20,55 +20,10 @@ from backend import hubdb as H
 from backend.company_page import release, render
 from backend.config import Settings
 from backend.store import Store
+from backend.tests.helpers.company_page_release import view_model
 
 AT = datetime(2026, 11, 1, tzinfo=timezone.utc)
 PAYLOAD = """<script>alert(1)</script>"'><img src=x onerror=alert(1)>&lt;b&gt;"""
-
-
-def view_model(**over):
-    stat = {
-        "id": "s1",
-        "label": "Revenue",
-        "definition": "Money in.",
-        "chart": "bars",
-        "period": "2026-10",
-        "as_of": "2026-11-01",
-        "display": "$118k",
-        "stale": False,
-        "series": [
-            {"period": "2026-09", "value": 104, "display": "$104k"},
-            {"period": "2026-10", "value": 118, "display": "$118k"},
-        ],
-    }
-    update = {
-        "anchor": "2026-10",
-        "title": "October",
-        "author": {"name": "Maya R.", "kind": "person"},
-        "period": "2026-10",
-        "published_at": "2026-11-01T12:00:00Z",
-        "version": 1,
-        "correction_note": None,
-        "sections": [
-            {"key": "highlights", "items": [{"body": "Revenue grew.", "ask_id": None}]},
-            {"key": "asks", "items": [{"body": "Intros please.", "ask_id": "ask-1"}]},
-        ],
-    }
-    view = {
-        "company": {
-            "name": "Acme",
-            "logo_url": "",
-            "mission": "Quotes in seconds.",
-            "badge": "public",
-            "accent": "#1E4FD8",
-            "updated_at": "2026-11-01T12:00:00Z",
-        },
-        "audience": {"kind": "public", "name": "Public"},
-        "stats": [stat],
-        "updates": [update],
-        "next_before": None,
-    }
-    view.update(over)
-    return view
 
 
 class Doc(HTMLParser):

@@ -4,8 +4,9 @@ import pytest
 
 from backend import auto_tasks, execution, health, quiet_work
 from backend.store import H
-from backend.tests.test_api import api, get, post  # noqa: F401
-from backend.tests.test_task_lanes import task_bot
+from backend.tests.helpers.api import get, post  # noqa: F401
+from backend.tests.test_api import api  # noqa: F401
+from backend.tests.helpers.task_lanes import task_bot
 from backend.tests.hold_rows import set_holds
 
 

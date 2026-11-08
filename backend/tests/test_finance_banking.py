@@ -18,9 +18,10 @@ from backend.finance import reads as FR
 from backend.finance import sync
 from backend.finance.core import feeds as F
 from backend.finance.mercury import IP_HINT, Answer, Mercury, dollars, error_text
-from backend.tests.test_api import api, post  # noqa: F401
-from backend.tests.test_triggers import hook
-from backend.tests.test_finance_fixtures import (  # noqa: F401
+from backend.tests.helpers.api import post  # noqa: F401
+from backend.tests.test_api import api  # noqa: F401
+from backend.tests.helpers.triggers import hook
+from backend.tests.helpers.finance_fixtures import (
     AT,
     MERCURY,
     OWNER,
@@ -35,8 +36,8 @@ from backend.tests.test_finance_fixtures import (  # noqa: F401
     store,
     sync_once,
 )
+from backend.tests.helpers.finance_banking import LATER, _arrives, _card_for_eve, _card_holds, _card_use, _txn
 
-LATER = "2026-10-15T12:30:00.000000Z"
 NEXT_DAY = "2026-10-16T12:30:00.000000Z"
 
 
@@ -220,58 +221,8 @@ def test_connecting_maps_bank_assets_and_io_liability_and_payments_need_another_
         assert bot.status in ("denied", "failed") and bot.code == "denied"
 
 
-def _card_for_eve(store, fake):
-    """A Cloud budget on 6100 and a 200.00 card for eve on it, synced to Mercury (provider id card-eve)."""
-    with store.transaction() as c:
-        b = act(
-            c,
-            OWNER,
-            "budget_create",
-            {"name": "Cloud", "account_id": account(c, "6100"), "amount": 100_000, "at_limit": "decline"},
-        )
-        made = act(
-            c,
-            OWNER,
-            "card_create",
-            {
-                "holder": "human:eve",
-                "budget_id": b.result["budget_id"],
-                "amount": 20_000,
-                "provider_user_id": "user-eve",
-            },
-        )
-        assert made.status == "committed", made
-    return str(b.result["budget_id"]), str(made.result["card_id"])
-
-
 def _entries(c, source):
     return c.execute("SELECT count(*) FROM fin_entries WHERE source=?", (source,)).fetchone()[0]
-
-
-def _card_use(c, card_id, month):
-    """What a card used in a month, as the allocation reserve reads it (the ledger, plus authorizations held)."""
-    from backend.finance.store import budgets as SB
-
-    budget = str(c.execute("SELECT budget_id FROM fin_cards WHERE id=?", (card_id,)).fetchone()[0])
-    return SB.target_used(c, [budget], f"{month}-01", f"{month}-31", f"card:{card_id}", True)
-
-
-def _card_holds(c):
-    return [tuple(r) for r in c.execute("SELECT amount, status FROM fin_holds WHERE source='card'")]
-
-
-def _arrives(fake, raw, version, event_id):
-    """Mercury has the transaction at this version, and an event says so."""
-    fake.txns[str(raw["id"])] = dict(raw)
-    fake.events_list.append(
-        {
-            "id": event_id,
-            "resourceType": "transaction",
-            "resourceId": raw["id"],
-            "operationType": "create" if version == 1 else "update",
-            "resourceVersion": version,
-        }
-    )
 
 
 def test_an_authorization_holds_settles_in_place_posts_once_and_the_io_bill_clears_it(books):
@@ -474,21 +425,6 @@ def test_a_rehearsal_copy_calls_nothing(books):
     assert Answer(None, {}).ok is False
 
 
-# ------------------------------------------------------------------------------------------------ review fixes
-def _txn(raw_id, account, amount, kind, day="2026-10-14", **extra):
-    return {
-        **MERCURY["txn_bank_fee"],
-        "id": raw_id,
-        "accountId": account,
-        "amount": amount,
-        "kind": kind,
-        "createdAt": f"{day}T10:00:00Z",
-        "postedAt": f"{day}T10:00:00Z",
-        "counterpartyName": "Acme",
-        **extra,
-    }
-
-
 def _row(c, provider_id):
     return c.execute("SELECT status, entry_id FROM fin_feed_txns WHERE provider_id=?", (provider_id,)).fetchone()
 
@@ -645,7 +581,7 @@ def test_the_same_mercury_accounts_through_a_new_token_are_the_same_money_accoun
 
 def test_a_payment_settles_on_its_payees_contact_so_the_vendor_hold_and_actual_meet(books):
     """K: the settled line carries the recipient's contact, not the bank's counterparty text."""
-    from backend.tests.test_finance_payments import _checking, _payee
+    from backend.tests.helpers.finance_payments import _checking, _payee
 
     fake = FakeMercury()
     connect(books, fake)

@@ -17,13 +17,25 @@ from backend import org_rule_check as K
 from backend import thread_attention
 from backend import approval_expiry
 from backend import threads
-from backend.tests.test_question_tasks import keep_asking
+from backend.tests.helpers.question_tasks import keep_asking
 from backend import updates
 from backend.auth import Identity
 from backend.store import H
-from backend.tests.test_api import claim, get, headers, post, setup_attempt  # noqa: F401
-from backend.tests.test_org_rules import api, as_bot, edit, org, rule  # noqa: F401
+from backend.tests.helpers.api import claim, get, headers, post, setup_attempt  # noqa: F401
+from backend.tests.helpers.org_rules import api, as_bot, edit, org, rule  # noqa: F401
 from backend import bot_settings as BS
+from backend.tests.helpers.org_rule_check import (
+    COLOR,
+    NEEDLE,
+    bodies,
+    chat,
+    color_rule,
+    events,
+    hold_row,
+    ruled,
+    say,
+    sql,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -32,68 +44,6 @@ def _not_a_friday(monkeypatch):
     from backend import updates as _updates
 
     monkeypatch.setattr(_updates, "today", lambda at=None: "2026-09-29")
-
-
-COLOR = "Never tell anyone Acme's favorite color."
-NEEDLE = "favorite color is"
-
-
-class Judge:
-    """Answers rule-check@1: a rule is broken when the output holds that rule's needle. It notes whether the store's
-    write lock was held when it was asked, which must never happen."""
-
-    def __init__(self, store, needles=None):
-        self.store, self.needles = store, dict(needles or {COLOR: NEEDLE})
-        self.calls, self.locked, self.fail, self.hold = [], [], None, None
-
-    def __call__(self, state, questions, label=None, level=None):
-        self.locked.append(bool(self.store.writer.queue))
-        self.calls.append({"state": state, "questions": questions, "label": label, "level": level})
-        if self.hold:
-            self.hold.wait(5)
-        if self.fail:
-            raise self.fail
-        text = (state["output"] + " " + json.dumps(state.get("context") or {})).lower()
-        answers = {}
-        for rule_row in state["rules"]:
-            broken = any(key in rule_row["text"] and needle.lower() in text for key, needle in self.needles.items())
-            answers[rule_row["id"]] = {"type": "noul", "noul": 0.95 if broken else 0.05}
-        return {"model": "jev-1.14", "usage": {"input_tokens": 300, "output_tokens": 0}, "ms": 40, "answers": answers}
-
-
-@pytest.fixture
-def ruled(api):
-    org(api)
-    judge = Judge(api.app.state.store)
-    api.app.state.judge = judge
-    return api, judge
-
-
-def color_rule(api, if_broken="block", **more):
-    return rule(api, {"kind": "internal", "text": COLOR, "who": {"bots": ["ops"]}, "if_broken": if_broken, **more})
-
-
-def say(api, text, to="ana", token="ops-test", **more):
-    r = api.post("/api/v2/messages", json={"to": to, "text": text, **more}, headers=headers(token))
-    assert r.status_code == 200, r.text
-    return r.json()
-
-
-def sql(api, query, args=()):
-    with api.app.state.store.read() as c:
-        return [dict(r) for r in c.execute(query, args)]
-
-
-def events(api, action):
-    return sql(api, "SELECT actor, target, detail FROM events WHERE action=? ORDER BY rowid", (action,))
-
-
-def bodies(api, text):
-    return sql(api, "SELECT id FROM messages WHERE body LIKE ?", (f"%{text}%",))
-
-
-def hold_row(api, hold_id):
-    return sql(api, "SELECT * FROM org_rule_holds WHERE id=?", (hold_id,))[0]
 
 
 # ---- what is checked ----------------------------------------------------------------------------------------------
@@ -817,9 +767,9 @@ def test_no_engine_call_happens_under_the_write_lock(ruled):
 
 
 def test_hub_rules_check_and_appeal_over_the_cli_and_mcp(ruled):
-    from backend.tests.test_org_rules_surfaces import cli, mcp
+    from backend.tests.helpers.org_rules_surfaces import cli, mcp
     from clients import hubcli, remotecli
-    from backend.tests.test_automation_cli import Client
+    from backend.tests.helpers.automation_cli import Client
 
     api, judge = ruled
     color_rule(api, reviewer="ben")
@@ -942,7 +892,7 @@ def test_automation_assign_judges_the_task_handed_over_and_replies_reach_their_p
 
 def review_turn(api):
     """A review subtask for ops in its own room, claimed and started: its reply waits until the task is done."""
-    from backend.tests.test_api import assign, ready, runner
+    from backend.tests.helpers.api import assign, ready, runner
 
     r = runner(api, "ana")
     assign(api, r, "ops")
@@ -1669,12 +1619,6 @@ def test_a_conversation_post_whose_recipient_moved_needs_a_new_check(ruled, monk
 # ---- chat, updates and task questions; the author of a replay; public task text; the fast path ----------------------
 
 
-def chat(api, text, to="finance", token="ops-test"):
-    r = api.post(f"/api/v2/chat/{to}", json={"text": text}, headers=headers(token))
-    assert r.status_code == 200, r.text
-    return r.json()
-
-
 def ask(api, question, token="ops-test", **more):
     r = api.post(
         "/api/v2/task-questions", json={"on": "human:ana", "question": question, **more}, headers=headers(token)
@@ -1709,7 +1653,7 @@ def test_chat_updates_and_task_questions_are_held_under_a_block_rule(ruled, monk
 
 
 def test_the_update_tool_answers_with_the_hold_or_the_warning(ruled, monkeypatch):
-    from backend.tests.test_org_rules_surfaces import mcp
+    from backend.tests.helpers.org_rules_surfaces import mcp
 
     api, _ = ruled
     monkeypatch.setattr(updates, "today", lambda at=None: "2026-09-29")  # a Tuesday: a daily, whatever today is
@@ -2357,7 +2301,7 @@ def test_the_send_queue_checks_a_bots_own_email_against_the_rules(ruled, monkeyp
     # The mail CLI only queues: POST email/sends runs the org rule check itself (backend/email_sending.py rule_gate).
     import base64
     from backend import email_sending as S, mailbox_access as MA
-    from backend.tests.test_email_sending import BOX, mime
+    from backend.tests.helpers.email_sending import BOX, mime
 
     api, judge = ruled
     monkeypatch.setattr(

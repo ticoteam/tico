@@ -10,10 +10,10 @@ import pytest
 from backend import github_app as G
 from backend import hubdb as H
 from backend import pipeline_github_checks as C
-from backend.tests.test_github_app import api, auth, connect, gh  # noqa: F401
+from backend.tests.helpers.github_app import api, auth, connect, gh  # noqa: F401
 from backend import pipeline_review as R
 from backend import requirement_attachments as A
-from backend.tests.test_pipeline_review import ANA, World
+from backend.tests.helpers.pipeline_review import ANA, World
 
 
 def _attach_link(w, requirement, url):

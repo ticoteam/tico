@@ -6,7 +6,7 @@ import json
 from backend import hubdb as H
 from backend import pipeline_links as L
 from backend import pipeline_setup as S
-from backend.tests.test_pipeline_foundation import ANA, boot, hub, rows, step_id
+from backend.tests.helpers.pipeline_foundation import ANA, boot, hub, rows, step_id
 
 
 def fresh(tmp_path):

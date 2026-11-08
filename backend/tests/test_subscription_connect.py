@@ -7,10 +7,10 @@ from backend import model_login as ML
 from backend import model_subscriptions as MS
 from backend.auth import Identity
 from backend.store import H
-from backend.tests.test_api import assign, claim, get, headers, post, runner
+from backend.tests.helpers.api import assign, claim, get, headers, post, runner
 from backend.tests.test_api import api  # noqa: F401
-from backend.tests.test_credentials import setup
-from backend.tests.test_model_subscriptions import OTHER, TOKEN, codex_file, company, give, on
+from backend.tests.helpers.credentials import setup
+from backend.tests.helpers.model_subscriptions import OTHER, TOKEN, codex_file, company, give, on
 
 CAPS = [MS.CAPABILITY, ML.SIGN_OUT_CAPABILITY, ML.CONNECT_CAPABILITY]
 

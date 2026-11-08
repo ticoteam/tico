@@ -12,9 +12,9 @@ import pytest
 
 from backend.entities import store as ES
 from backend.store import H
-from backend.tests.test_api import get, post  # noqa: F401
-from backend.tests.test_org_rule_check import COLOR, Judge, color_rule, events, hold_row, ruled, say, sql  # noqa: F401
-from backend.tests.test_org_rules import api, edit, org, rule  # noqa: F401
+from backend.tests.helpers.api import get, post  # noqa: F401
+from backend.tests.helpers.org_rule_check import COLOR, Judge, color_rule, events, hold_row, ruled, say, sql  # noqa: F401
+from backend.tests.helpers.org_rules import api, edit, org, rule  # noqa: F401
 
 ACME = "Nothing goes to Acme Lights."
 

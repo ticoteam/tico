@@ -17,19 +17,13 @@ from backend import company_file as C
 from backend.company_file import actions as A
 from backend.company_file import draft as D
 from backend.company_file import starter
+from backend.tests.helpers.company_file import TODAY, chart, started, tag
 
-TODAY = dt.date(2026, 10, 17)
 CREATED = dt.datetime(2026, 10, 17, 9, 30, tzinfo=dt.timezone.utc)
 # Built at run time so no scanner mistakes the test for a leak.
 OPENAI = "sk-" + "proj" + "A1b2C3d4E5f6G7h8J9k0L1m2"
 GITHUB = "ghp" + "_" + "Zx9Yw8Vu7Ts6Rq5Po4Nm3Lk2Ji1Hg0Fe"
 AWS = "AKIA" + "IOSFODNN7EXAMPLE"
-
-
-def started(**fields):
-    """A draft as the page sends it after the first turn: the Everything model on the chart (no signals yet)."""
-    turn = C.Turn(C.blank(), TODAY)
-    return {**turn.finish(), **fields}
 
 
 def run(draft, *steps):
@@ -1035,36 +1029,6 @@ def test_the_copy_tico_hq_serves_runs_the_same_engine(tmp_path):
     finally:
         for name in [n for n in sys.modules if n == spec.name or n.startswith(spec.name + ".")]:
             del sys.modules[name]
-
-
-# ------------------------------------------------------------------------------- seat guard (Org chart models 2/7)
-def tag(i):
-    """A title suffix without digits: a title like "Account Manager 7" slugs to an id the key scrubber can cut."""
-    return "".join("ABCDEFGHIJKLMNOPQRSTUVWXYZ"[d] for d in (i // 26, i % 26))
-
-
-def chart(bots, people=1):
-    """The starter chart grown (or cut) to `bots` bots and `people` people, through the chat's own actions."""
-    draft = started()
-    draft["bots"] = draft["bots"][:bots]
-    roles = [r for r in C.ROLES if not r["core"]]  # built-ins stay one each
-    turn = C.Turn(draft, TODAY)
-    for i in range(bots - len(turn.draft["bots"])):
-        role = roles[i % len(roles)]
-        result = turn.apply(
-            "bot_add",
-            {
-                "template": role["slug"],
-                "title": "%s %s" % (role["name"], tag(i)),
-                "reason": "The owner asked for one more.",
-            },
-        )
-        assert result["ok"], result
-    for i in range(people - len(turn.draft["people"])):
-        assert turn.apply("person_set", {"name": "Person %s" % tag(i), "role": "Account Manager"})["ok"]
-    draft = turn.finish()
-    assert (len(draft["bots"]), len(draft["people"])) == (bots, people)
-    return draft
 
 
 @pytest.mark.parametrize("seat", [61, 100, 300])

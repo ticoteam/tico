@@ -8,8 +8,8 @@ import json
 from backend.finance import actions as FA
 from backend.finance import reads as FR
 from backend.finance.store import ledger as SL
-from backend.tests.test_finance_ap import LATER, _balance, _bill, _events, _ingest, _pnl, _txn, _vendor
-from backend.tests.test_finance_fixtures import (  # noqa: F401
+from backend.tests.helpers.finance_ap import LATER, _balance, _events, _ingest, _pnl, _txn, _vendor
+from backend.tests.helpers.finance_fixtures import (
     AT,
     MERCURY,
     OWNER,
@@ -22,21 +22,10 @@ from backend.tests.test_finance_fixtures import (  # noqa: F401
     store,
     sync_once,
 )
-from backend.tests.test_finance_payments import HOURS, _checking, _payee
+from backend.tests.helpers.finance_payments import HOURS, _checking, _payee
+from backend.tests.helpers.finance_ap_review import _approved, _mark
 
 NOV = "2026-11-05T12:00:00.000000Z"
-
-
-def _approved(c, vendor, amount, code="6100", **more) -> str:
-    bid = _bill(c, vendor, [{"account_id": account(c, code), "amount": amount, **more.pop("line", {})}], **more)
-    assert act(c, OWNER, "bill_approve", {"bill_id": bid}).status == "committed"
-    return bid
-
-
-def _mark(c, bid, **more):
-    done = act(c, OWNER, "bill_mark_paid", {"bill_id": bid, "money_account_id": _checking(c), **more})
-    assert done.status == "committed", done
-    return done
 
 
 def test_a_bill_payment_must_pay_the_bill_to_ap_and_asks_when_its_budget_is_spent(books):  # noqa: F811
@@ -275,7 +264,7 @@ def test_a_payment_still_takes_its_unbooked_row_when_no_other_payment_waits_for_
 
 
 def test_a_tico_card_charge_paying_an_entered_bill_clears_ap_instead_of_a_second_expense(books):  # noqa: F811
-    from backend.tests.test_finance_banking import _arrives, _card_for_eve, _card_holds, _card_use
+    from backend.tests.helpers.finance_banking import _arrives, _card_for_eve, _card_holds, _card_use
 
     fake = FakeMercury()
     fake.balances["credit-io"] = 0

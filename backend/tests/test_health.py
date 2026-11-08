@@ -7,22 +7,18 @@ import pytest
 from backend import releases, replication
 from backend.auth import Identity
 from backend.store import H
-from backend.tests.test_getting_started import SIGNED_IN, add_bot, enrolled, heartbeat  # noqa: F401
-from backend.tests.test_onboarding import as_person, environment, signed_in  # noqa: F401
+from backend.tests.helpers.getting_started import SIGNED_IN, add_bot, enrolled, heartbeat  # noqa: F401
+from backend.tests.helpers.onboarding import as_person, environment, signed_in  # noqa: F401
 from backend.enqueue import enqueue_stored
 from backend.tests.usage_rows import segment
 from backend import bot_settings as BS
+from backend.tests.helpers.health import health_of
 
 
 @pytest.fixture(autouse=True)
 def quiet(monkeypatch):
     monkeypatch.setattr(releases, "CHECKER", releases.Checker())
     monkeypatch.setenv("TICO_UPDATE_CHECK", "off")
-
-
-def health_of(api, headers=None):
-    body = api.get("/api/v2/health", headers=headers or signed_in()).json()
-    return body, {row["id"]: row for row in body["checks"]}
 
 
 def with_backup(monkeypatch, backup):
@@ -166,7 +162,7 @@ def machine_issue(api, headers):
 
 
 def test_a_computer_silent_with_work_queued_goes_to_its_owner(environment):
-    from backend.tests.test_people_access import person_headers
+    from backend.tests.helpers.people_access import person_headers
 
     api = environment()
     runner = silent_computer(api, 300)
@@ -198,7 +194,7 @@ def test_a_computer_silent_with_work_queued_goes_to_its_owner(environment):
 
 def test_a_computer_stops_on_all_its_queued_work_not_what_the_viewer_may_read(environment, monkeypatch):
     from backend import views
-    from backend.tests.test_people_access import person_headers
+    from backend.tests.helpers.people_access import person_headers
 
     api = environment()
     silent_computer(api, 1900)

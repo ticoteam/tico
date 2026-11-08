@@ -14,7 +14,7 @@ from backend.finance import mirror as M
 from backend.finance.context import load
 from clients import hubtools
 from backend.finance.core.errors import NOT_FOUND, FinanceError
-from backend.tests.test_finance_fixtures import (  # noqa: F401
+from backend.tests.helpers.finance_fixtures import (
     AT,
     MERCURY,
     OWNER,

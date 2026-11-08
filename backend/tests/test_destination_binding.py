@@ -12,12 +12,13 @@ from backend import gateway_connection
 from backend import webhook_delivery as D
 from backend import webhooks as W
 from backend.store import H
-from backend.tests.test_api import api, assign, claim, get, headers, post, put, ready, runner  # noqa: F401  (fixture)
-from backend.tests.test_botops_confirm_cards import confirm
-from backend.tests.test_botops_parity import act
-from backend.tests.test_gateway_connection import KEY, OTHER, fake_gateway, save, setup
-from backend.tests.test_member_bots import botops, finish, turn  # noqa: F401  (fixtures)
-from backend.tests.test_webhooks import net, run  # noqa: F401  (fixture)
+from backend.tests.helpers.api import assign, claim, get, headers, post, put, ready, runner  # noqa: F401  (fixture)
+from backend.tests.test_api import api  # noqa: F401  (fixture)
+from backend.tests.helpers.botops_confirm_cards import confirm
+from backend.tests.helpers.botops_parity import act
+from backend.tests.helpers.gateway_connection import KEY, OTHER, fake_gateway, save, setup
+from backend.tests.helpers.member_bots import botops, finish, turn  # noqa: F401  (fixtures)
+from backend.tests.helpers.webhooks import net, run  # noqa: F401  (fixture)
 
 SECRET = "hdr-synthetic-secret-value-7781"
 HOOK = "https://hooks.acme.example/tico/team-a?route=alpha"

@@ -15,8 +15,9 @@ from backend import usage_facts, usage_limits
 from backend.maintenance_steps import suggest as step
 from backend.maintenance_steps import update as update_step
 from backend.store import H, Problem
-from backend.tests.test_api import api, get, put  # noqa: F401
-from backend.tests.test_maintenance_learn_step import complete, queue, start
+from backend.tests.helpers.api import get, put  # noqa: F401
+from backend.tests.test_api import api  # noqa: F401
+from backend.tests.helpers.maintenance_learn_step import complete, queue, start
 
 
 @pytest.fixture(autouse=True)
@@ -273,7 +274,7 @@ def test_limited_suggest_skip_leaves_it_due_later_the_same_day(install, http, ap
 
 def test_install_owned_suggestions_are_hidden_from_sql(install, http, api):
     run_step(install)
-    from backend.tests.test_sql import query
+    from backend.tests.helpers.sql import query
 
     query(api, "SELECT * FROM suggestions", expected=422)
 
@@ -591,7 +592,7 @@ def test_saved_gateway_target_is_used_without_an_environment_key(install, http, 
 
 
 def test_saved_gateway_key_rewrap_uses_the_writer_with_kms_outside_it(install, http, monkeypatch):
-    from backend.tests.test_credential_sharing import KMSWithEncrypt
+    from backend.tests.helpers.credential_sharing import KMSWithEncrypt
 
     vault = credentials.Vault(install)
     with install.transaction() as c:

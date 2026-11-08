@@ -12,9 +12,10 @@ import pytest
 
 from backend import changelog, releases
 from backend.store import H
-from backend.tests.test_api import api, headers  # noqa: F401
-from backend.tests.test_mcp import call, rpc
-from backend.tests.test_openapi_v2 import conforms
+from backend.tests.helpers.api import headers  # noqa: F401
+from backend.tests.test_api import api  # noqa: F401
+from backend.tests.helpers.mcp import call, rpc
+from backend.tests.helpers.openapi_v2 import conforms
 from scripts.changelog_notes import section
 
 ROOT = Path(__file__).resolve().parents[2]

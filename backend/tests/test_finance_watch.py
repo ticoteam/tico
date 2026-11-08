@@ -8,7 +8,7 @@ from backend.finance import reads as FR
 from backend.finance.core import watch as W
 from backend.finance.store import ledger as SL
 from backend.finance.store import tico as ST
-from backend.tests.test_finance_fixtures import AT, OWNER, account, act, books, finance_template, store  # noqa: F401
+from backend.tests.helpers.finance_fixtures import AT, OWNER, account, act, books, finance_template, store  # noqa: F401
 
 
 def charge(i: str, payee: str, amount: int, day: str) -> W.Charge:

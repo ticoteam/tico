@@ -12,7 +12,7 @@ from backend.finance.context import load
 from backend.finance.core import tax as T
 from backend.finance.store import banking as SK
 from backend.finance.store import schema
-from backend.tests.test_finance_fixtures import (  # noqa: F401
+from backend.tests.helpers.finance_fixtures import (
     AT,
     OWNER,
     PEOPLE,

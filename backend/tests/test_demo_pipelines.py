@@ -9,7 +9,7 @@ import pytest
 import time_machine
 
 from backend import demo
-from backend.tests.test_demo_finance import signed_in
+from backend.tests.helpers.demo_finance import signed_in
 
 EARLY_MONTH = datetime(2026, 11, 2, 18, 30, tzinfo=timezone.utc)
 
