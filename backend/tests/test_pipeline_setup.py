@@ -4,8 +4,11 @@ changes nothing on a second run, sets managers only where a matching bot exists,
 import json
 
 from backend import hubdb as H
+from backend import pipeline_engine as E
 from backend import pipeline_links as L
+from backend import pipeline_requirements as R
 from backend import pipeline_setup as S
+from backend import public_roadmaps
 from backend.tests.test_pipeline_foundation import ANA, boot, hub, rows, step_id
 
 
@@ -20,7 +23,7 @@ def snapshot(c):
             c,
             "SELECT id, name, prefix, goal, factory_id, manager, pipeline_visibility, numbered FROM task_types ORDER BY id",
         ),
-        "steps": rows(c, "SELECT id, type_id, name, status, position FROM task_steps ORDER BY id"),
+        "steps": rows(c, "SELECT id, type_id, name, status, position, card_cap FROM task_steps ORDER BY id"),
         "factories": rows(c, "SELECT id, name, goal FROM factories ORDER BY id"),
         "links": rows(c, "SELECT id, from_pipeline_stage_id, to_pipeline_id, mode FROM pipeline_links ORDER BY id"),
     }
@@ -393,3 +396,41 @@ def test_a_rerun_names_the_pipeline_on_a_legacy_engineering_shipped_row_and_the_
     assert again["changes"] == [f"requirement Engineering shipped on In development now names its pipeline"]
     assert _engineering_shipped(c)[1]["pipeline"] == out["pipelines"]["Engineering"]
     assert S.apply_factory_setup(c, ANA)["changes"] == []
+
+
+def test_product_starts_on_ice_with_the_default_caps_and_a_second_run_changes_nothing(tmp_path):
+    c = fresh(tmp_path)
+    S.apply_factory_setup(c, ANA)
+    product = _type(c, "Product")
+    steps = rows(c, "SELECT name, card_cap FROM task_steps WHERE type_id=? ORDER BY position, id", product)
+    assert [s["name"] for s in steps][:3] == ["On ice", "Ideas", "Specifying"]
+    caps = {s["name"]: s["card_cap"] for s in steps}
+    assert caps["On ice"] == 0 and caps["Specifying"] == 3 and caps["In development"] == 3
+    assert caps["Ideas"] is None and caps["Review"] is None
+    before = snapshot(c)
+    S.apply_factory_setup(c, ANA)
+    assert snapshot(c) == before
+
+
+def test_adopting_a_product_adds_on_ice_and_keeps_the_caps_a_person_set(tmp_path):
+    c = fresh(tmp_path)
+    S.apply_factory_setup(c, ANA)
+    product = _type(c, "Product")
+    R.set_stage(c, ANA, step_id(c, product, "Specifying"), {"card_cap": 5})
+    R.set_stage(c, ANA, step_id(c, product, "In development"), {"card_cap": None})  # a person's No cap
+    kept = rows(
+        c, "SELECT id, name, status FROM task_steps WHERE type_id=? AND name<>'On ice' ORDER BY position", product
+    )
+    H.type_update(c, ANA, product, steps=kept, mover=True)  # a Product from before On ice existed
+    S.apply_factory_setup(c, ANA)
+    caps = {s["name"]: s["card_cap"] for s in rows(c, "SELECT name, card_cap FROM task_steps WHERE type_id=?", product)}
+    assert caps["On ice"] == 0
+    assert caps["Specifying"] == 5 and caps["In development"] is None
+
+
+def test_new_work_enters_product_at_ideas_and_visitor_suggestions_do_too(tmp_path):
+    c = fresh(tmp_path)
+    S.apply_factory_setup(c, ANA)
+    product = _type(c, "Product")
+    assert E.first_stage(c, product)["name"] == "Ideas"
+    assert public_roadmaps._ideas_step(c) == "Ideas"

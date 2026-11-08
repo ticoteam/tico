@@ -126,14 +126,15 @@ def stages(conn: sqlite3.Connection, pipeline_id: str) -> list[Row]:
     """A pipeline's stages in order."""
     return _rows(
         conn,
-        "SELECT id, type_id, name, position, status FROM task_steps WHERE type_id = ? ORDER BY position, id",
+        "SELECT id, type_id, name, position, status, card_cap FROM task_steps WHERE type_id = ? ORDER BY position, id",
         (pipeline_id,),
     )
 
 
 def first_stage(conn: sqlite3.Connection, pipeline_id: str) -> Row | None:
-    """The stage a ticket enters a pipeline at: its first that is not a closing one."""
-    return next((s for s in stages(conn, pipeline_id) if s["status"] not in CLOSED), None)
+    """The stage a ticket enters a pipeline at: its first that is not a closing one and not On ice (a stage capped at 0,
+    D69): new work arrives past a parking stage, it is never filed on one."""
+    return next((s for s in stages(conn, pipeline_id) if s["status"] not in CLOSED and s["card_cap"] != 0), None)
 
 
 def next_stage(conn: sqlite3.Connection, step_id: str | None) -> Row | None:
