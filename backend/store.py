@@ -434,17 +434,20 @@ def refused(c, identity, exc, savepoint="domain_write"):
             exc.severity,
             task=getattr(exc, 'task', None),
             scope=getattr(exc, 'scope', None),
+            context=getattr(exc, 'context', None),
         )
     except H.Refused:
         pass
     finally:
         H.PRIVATE_WRITE.reset(token)
-    return Problem(
-        exc.rule,
-        exc.detail,
-        403 if exc.rule in ("identity", "label", "escape", "quarantined", "close") else 422,
-        retryable=getattr(exc, "retryable", False),
-    )
+    # A stage's cap or On ice refuses the move (pipeline_engine._room): it is not allowed now, so 409.
+    if exc.rule in ("stage_full", "on_ice"):
+        status = 409
+    elif exc.rule in ("identity", "label", "escape", "quarantined", "close"):
+        status = 403
+    else:
+        status = 422
+    return Problem(exc.rule, exc.detail, status, retryable=getattr(exc, "retryable", False))
 
 
 # A client retries a failed write with the same Idempotency-Key within seconds, so two

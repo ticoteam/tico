@@ -4113,6 +4113,7 @@ def create_app(settings=None):
             if fields.get("owner") and body.owner and new_owner != row["owner_id"]:
                 task_caps.record(c, task_id, who.actor, new_owner)
             warnings = after.get("warnings")
+            over_cap = after.get("over_cap")
             for verdict, gate in waits:
                 # A wait on a person asks in a card of its own (hubdb._ask_in_subtask): that card is what reaches
                 # their Needs you, so the gate's row names it.
@@ -4122,6 +4123,7 @@ def create_app(settings=None):
         return {
             **({"task": task_view(H.task(c, task_id), c, visible_sql=auth.task_sql(c, who), who=who)} if view else {}),
             **({"warnings": warnings} if warnings else {}),
+            **({"over_cap": True} if over_cap else {}),
             **(ask_ingest.reply(*gates) if not body.close else {}),
             **org_rule_check.answer(rule_gate),
         }

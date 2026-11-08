@@ -545,8 +545,9 @@ def spawn(
     and is recorded as its own handoff; `note` leads its body as "Follow-up: <note>".
 
     A ticket the rules refuse to file raises Problem 409 `spawn_refused` with the reason, so the move that made the spawn
-    rolls back with it: a card never advances past a stage whose linked work was not filed. Returns the new ticket's id,
-    or None when nothing was to be filed (a move back, a link of another mode, a spawn already filed)."""
+    rolls back with it: a card never advances past a stage whose linked work was not filed. A first stage with no room
+    (D68) raises the stage_full refusal instead, so the card waits at its stage. Returns the new ticket's id, or None when
+    nothing was to be filed (a move back, a link of another mode, a spawn already filed)."""
     from .store import Problem
 
     if link["mode"] != "spawn":
@@ -565,6 +566,15 @@ def spawn(
     source = H.task(conn, source_id)
     if first is None or source is None:
         return None
+    full = pipeline_engine.full_stage(conn, str(first["id"]), source_id)
+    if full is not None:
+        # The linked ticket waits for room (D68): the move that would have filed it is refused, so the card stays where it is.
+        raise pipeline_engine.room_refusal(
+            "stage_full",
+            f"{pipeline_engine.full_detail(full)}, so the linked ticket waits",
+            source_id,
+            str(first["id"]),
+        )
     filer = str(source["owner_id"])
     owner = _owner_for(conn, target, filer)
     lead = f"Follow-up: {note}. " if note else ""

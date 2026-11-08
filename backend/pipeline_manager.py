@@ -34,6 +34,7 @@ from typing import TYPE_CHECKING, Any
 
 from . import hubdb
 from . import pipeline_engine as E
+from . import pipeline_exceptions
 from . import pipeline_rights
 from . import step_age
 
@@ -528,6 +529,12 @@ def _pass(c: "sqlite3.Connection", pipeline: dict[str, Any], at: datetime) -> di
     over = over_limit(c, pid, at)
     over_ids = {item["task_id"] for item in over}
     exceptions: list[str] = [f"over:{item['task_id']}" for item in over]
+    # A card a link or a bot could not move into a full stage waits for room (pipeline_exceptions._waiting_for_room).
+    exceptions += [
+        f"room:{task_id}"
+        for task_id, waiting in pipeline_exceptions.waiting_room(c, stamp_of(at)).items()
+        if waiting["type_id"] == pid
+    ]
     actions = 0
     visits = _visits(c, pid)
     tasks = _task_rows(c, list({str(v["task_id"]) for v in visits}))

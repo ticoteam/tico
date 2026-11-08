@@ -119,7 +119,7 @@ def stage(conn: sqlite3.Connection, step_id: str | None) -> Row | None:
     """A stage (task step) as a row, or None."""
     if not step_id:
         return None
-    return _one(conn, "SELECT id, type_id, name, position, status FROM task_steps WHERE id = ?", (step_id,))
+    return _one(conn, "SELECT id, type_id, name, position, status, card_cap FROM task_steps WHERE id = ?", (step_id,))
 
 
 def stages(conn: sqlite3.Connection, pipeline_id: str) -> list[Row]:
@@ -1007,6 +1007,59 @@ def completion_target(
     return completion_stage(conn, type_id)
 
 
+def held_count(conn: sqlite3.Connection, step_id: str, task_id: str = "") -> int:
+    """How many open cards a stage holds, not counting the ticket that asks (a finished card holds no place)."""
+    row = _one(
+        conn,
+        "SELECT COUNT(*) AS n FROM tasks WHERE step_id = ? AND id <> ? AND status NOT IN ('done', 'closed', 'declined')",
+        (step_id, task_id),
+    )
+    return int(row["n"]) if row else 0
+
+
+def full_stage(conn: sqlite3.Connection, step_id: str | None, task_id: str = "") -> Row | None:
+    """The stage with its cap and its count (`held`) when it can take no more cards (D68), else None. A stage with no cap is
+    never full; a cap of 0 (On ice, D69) is always full."""
+    target = stage(conn, step_id)
+    if target is None or target["card_cap"] is None:
+        return None
+    held = held_count(conn, str(target["id"]), task_id)
+    return {**target, "held": held} if held >= int(target["card_cap"]) else None
+
+
+def room_refusal(rule: str, detail: str, task_id: str, step_id: str) -> Exception:
+    """The refusal a stage cap raises (rule "stage_full" or "on_ice"). Its context names the stage, so the pipeline manager
+    can list the ticket as waiting for room (pipeline_manager). Raised, not recorded: the write that asked is rolled back,
+    and whoever catches it records it (store.refused for a request, advance for a link's move)."""
+    exc: Any = H.Refused(rule, detail, task=task_id)
+    exc.context = {"stage": step_id}
+    return cast("Exception", exc)
+
+
+def full_detail(full: Row) -> str:
+    """What a full stage says: "Specifying is full (3 of 3)"; On ice takes no card from a bot."""
+    if int(full["card_cap"]) == 0:
+        return f"{full['name']} takes no cards from a bot or automation"
+    return f"{full['name']} is full ({full['held']} of {full['card_cap']})"
+
+
+def _room(conn: sqlite3.Connection, actor: str, task_id: str, here: Row | None, target: Row | None) -> bool:
+    """The stage caps (D68, D69) on one move: a bot or automation may not move a card out of On ice (cap 0), nor into a
+    full stage. A person may move a card into a full stage; the answer is True, so the move is an over-cap one and the app
+    says so. Returns False for a stage with room."""
+    if target is None:
+        return False
+    automated = not H.is_human(actor)
+    if automated and here is not None and here["card_cap"] == 0:
+        raise room_refusal("on_ice", f"Only a person moves a card out of {here['name']}", task_id, str(here["id"]))
+    full = full_stage(conn, str(target["id"]), task_id)
+    if full is None:
+        return False
+    if automated:
+        raise room_refusal("stage_full", full_detail(full), task_id, str(target["id"]))
+    return True
+
+
 def check_move(
     conn: sqlite3.Connection,
     actor: str,
@@ -1014,9 +1067,11 @@ def check_move(
     step_id: str | None,
     override: bool = False,
     override_note: str | None = None,
-) -> None:
+) -> bool:
     """Before a ticket changes to `step_id`: refuse the move (rule "requirement") when the requirements that count do not
-    allow it, unless a rule editor overrides them (logged). A pipeline with no requirements allows every move.
+    allow it, unless a rule editor overrides them (logged). A pipeline with no requirements allows every move. A stage's
+    cap is checked first (_room): a bot or automation cannot move into a full stage, and a person's move into one stands
+    and returns True (`over_cap`).
 
     Forward, every requirement that counts must be met: the stage the ticket is at, the stages it passes through and the
     ones it visited (in any pipeline it has been in). A rule editor may move it past them with `override`, which writes one
@@ -1026,14 +1081,15 @@ def check_move(
     `on_step_change`."""
     task_id = str(row.get("id") or "")
     if not step_id or not task_id:
-        return
+        return False
     now = _one(conn, "SELECT type_id, step_id FROM tasks WHERE id = ?", (task_id,))
-    if now is None or not now["step_id"] or step_id == now["step_id"]:
-        return
-    pipeline_id = str(now["type_id"])
-    here, target = stage(conn, str(now["step_id"])), stage(conn, step_id)
+    if now is None or step_id == now["step_id"]:
+        return False
+    here, target = stage(conn, str(now["step_id"]) if now["step_id"] else None), stage(conn, step_id)
+    over = _room(conn, actor, task_id, here, target)
     if here is None:
-        return
+        return over
+    pipeline_id = str(now["type_id"])
     editor = pipeline_rights.may_edit_rules(conn, actor, pipeline_id)
     if target is not None and target["type_id"] == here["type_id"] and target["position"] < here["position"]:
         if (
@@ -1046,9 +1102,10 @@ def check_move(
                 "Only the pipeline's owner or an Admin moves a ticket back a stage",
                 task=task_id,
             )
-        return
+        return over
     scope = _forward_scope(conn, task_id, here, target)
     _hold(conn, actor, task_id, pipeline_id, f"Can't leave {here['name']} yet", scope, override, override_note)
+    return over
 
 
 def is_completion(row: Row, effective: str | None) -> bool:
@@ -1245,6 +1302,8 @@ def advance(conn: sqlite3.Connection, actor: str, task_id: str) -> dict[str, Any
     except H.Refused as exc:
         conn.execute("ROLLBACK TO pipeline_advance")
         conn.execute("RELEASE pipeline_advance")
+        if exc.rule == "stage_full":
+            _record_waiting(conn, actor, task_id, exc)
         return {**none, "reason": str(exc.detail or exc)}
     conn.execute("RELEASE pipeline_advance")
     return {
@@ -1254,6 +1313,15 @@ def advance(conn: sqlite3.Connection, actor: str, task_id: str) -> dict[str, Any
         "handoff": link["id"] if link else None,
         "reason": "",
     }
+
+
+def _record_waiting(conn: sqlite3.Connection, actor: str, task_id: str, exc: H.Refused) -> None:
+    """A link's move that waited for room is recorded after its own write is undone, so the refusal outlives the rollback:
+    the pipeline manager lists the ticket as waiting for room (pipeline_manager). Nothing is raised."""
+    try:
+        H.refuse(conn, actor, exc.rule, exc.detail, task=task_id, context=getattr(exc, "context", None))
+    except H.Refused:
+        pass
 
 
 def queue_ejected(conn: sqlite3.Connection, task_id: str, reason: str) -> bool:
@@ -1266,7 +1334,14 @@ def queue_ejected(conn: sqlite3.Connection, task_id: str, reason: str) -> bool:
     before = previous_stage(conn, str(row["step_id"]))
     if before is None:
         return False
-    H.task_update(conn, H.KEEPER, task_id, step=before["id"])
+    conn.execute("SAVEPOINT queue_ejected")
+    try:
+        H.task_update(conn, H.KEEPER, task_id, step=before["id"])
+    except H.Refused:  # the stage it goes back to is full, or the card is On ice (_room): it stays, and says so
+        conn.execute("ROLLBACK TO queue_ejected")
+        conn.execute("RELEASE queue_ejected")
+        return False
+    conn.execute("RELEASE queue_ejected")
     H._task_event(  # pyright: ignore[reportPrivateUsage]
         conn, task_id, H.KEEPER, "queue_ejected", row["step_id"], before["id"], reason or "Removed from the merge queue"
     )

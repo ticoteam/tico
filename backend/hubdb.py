@@ -2299,7 +2299,7 @@ def _escalate(conn, actor, rule, detail, severity, ts, context=None):
     # A writing correction ("start the title with a verb") is fixed by retrying, not a sign the bot
     # is reaching where it should not: it neither counts nor quarantines. A bot was quarantined by
     # ten refusals, three of them lint on one task title.
-    if rule in ("lint", "queue_full"):
+    if rule in ("lint", "queue_full", "stage_full", "on_ice"):
         return
     slug = actor_id(actor)
     day = ts[:10]
@@ -2329,7 +2329,7 @@ def _escalate(conn, actor, rule, detail, severity, ts, context=None):
     for refused in _rows(
         conn.execute(
             "SELECT rule, detail, created_at FROM refusals WHERE actor=? AND created_at>=? "
-            "AND rule NOT IN ('lint','queue_full') ORDER BY created_at, id",
+            "AND rule NOT IN ('lint','queue_full','stage_full','on_ice') ORDER BY created_at, id",
             (actor, since),
         )
     ):
@@ -7583,6 +7583,7 @@ def task_update(
             f'hub task update {task_id} --status open --note "why it goes back"',
         )
     left_open = set()
+    over_cap = False  # a person's move into a full stage (pipeline_engine._room)
     if state_change:
         type_id, step_id, effective = _task_state(conn, actor, row, status, type, step)
         if status is not None or step is not None:
@@ -7671,7 +7672,8 @@ def task_update(
             else None
         )
         if held_to and row and held_to != row.get("step_id"):
-            pipeline_engine.check_move(
+            # A person's move into a full stage stands and comes back as over_cap (pipeline_engine._room).
+            over_cap = pipeline_engine.check_move(
                 conn, actor, {**row, "type_id": type_id}, held_to, override_requirements, override_note=note
             )
         elif row and pipeline_engine.is_completion(row, effective):
@@ -8328,6 +8330,8 @@ def task_update(
         _parent_finished(conn, after, row["status"], actor, told=heard, wake=wake_others)
     if asked_in:
         after = {**after, "asked_in": {k: asked_in[k] for k in ("id", "title", "owner_id")}}
+    if over_cap:
+        after = {**after, "over_cap": True}
     return {**after, "warnings": plain} if plain else after
 
 

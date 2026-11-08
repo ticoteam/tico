@@ -384,6 +384,48 @@ def _outages(c, out, typ, rows, at):
             out.add("bot:" + slug, "outage", f"{row['slug']}'s computer is offline", seen or at, bot=row["slug"])
 
 
+def waiting_room(c, at):
+    """The tickets a link or a bot could not move into a full stage (D68, rule stage_full) in the last REFUSAL_HOURS and that
+    are still outside that stage, as {task_id: {type_id, stage_id, created_at}}: the latest refusal of each. The card stays
+    where it is until the stage has room and someone moves it."""
+    since = H.shift(at, hours=-REFUSAL_HOURS)
+    waiting: dict[str, dict[str, str]] = {}
+    for event in c.execute(
+        "SELECT created_at, detail FROM refusals WHERE rule='stage_full' AND created_at>=? ORDER BY created_at, id",
+        (since,),
+    ):
+        facts = H._json(event["detail"], {}) or {}
+        task_id, stage_id = facts.get("task"), (facts.get("context") or {}).get("stage")
+        if not task_id or not stage_id:
+            continue
+        found = c.execute("SELECT type_id, step_id, status FROM tasks WHERE id=?", (task_id,)).fetchone()
+        if found is None or found["status"] not in H.ACTIVE_STATUSES or found["step_id"] == stage_id:
+            waiting.pop(task_id, None)
+            continue
+        waiting[task_id] = {"type_id": found["type_id"], "stage_id": stage_id, "created_at": event["created_at"]}
+    return waiting
+
+
+def _waiting_for_room(c, out, rows, at):
+    """The waiting tickets among these rows, for the manager's list (waiting_room)."""
+    tickets = {r["id"]: r for r in rows}
+    if not tickets:
+        return
+    for task_id, waiting in waiting_room(c, at).items():
+        row = tickets.get(task_id)
+        if row is None:
+            continue
+        found = c.execute("SELECT name FROM task_steps WHERE id=?", (waiting["stage_id"],)).fetchone()
+        name = str(found["name"]) if found else "its stage"
+        out.add(
+            "ticket:" + task_id,
+            "room",
+            f"waiting for room in {name}",
+            waiting["created_at"],
+            ticket=_label(c, row),
+        )
+
+
 def _refusals(c, out, rows, at):
     """Refused moves no longer retried, and one rule refusing the same ticket twice in a day with no retry pending."""
     from . import move_retry
@@ -482,6 +524,7 @@ def build(c, typ, rows=None, at=None, reader=None):
     _slots(c, out, typ, rows)
     _outages(c, out, typ, rows, at)
     _refusals(c, out, rows, at)
+    _waiting_for_room(c, out, rows, at)
     _merges(c, out, rows)
     return sorted(out.items.values(), key=lambda e: (e["since"], e["key"]))[:MAX_EXCEPTIONS]
 
