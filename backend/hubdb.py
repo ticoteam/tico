@@ -4496,7 +4496,7 @@ def _task_state(conn, actor, row, status=None, type=None, step=None):
 
         # A status with no step named lands in the stage pipeline_engine.default_step picks: never On ice while a stage has room.
         chosen = (
-            pipeline_engine.default_step(conn, typ["steps"], effective, row.get("id") or "")
+            pipeline_engine.default_step(conn, typ["steps"], effective, (row or {}).get("id") or "")
             if effective != "waiting"
             else None
         )
