@@ -51,7 +51,7 @@ backend/message_links.py:10
 backend/milestone_waits.py:4
 backend/model_subscriptions.py:7
 backend/org_rule_check.py:3
-backend/org_rules.py:7
+backend/org_rules.py:4
 backend/org_turns.py:1
 backend/owner_link.py:1
 backend/pages.py:2

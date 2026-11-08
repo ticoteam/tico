@@ -13,7 +13,7 @@ function taskBoardFoldsSaved() {
 }
 // Two or more backlog steps start folded and a single one open; the finished steps start folded.
 function taskBoardFolds(state, type, backlogSteps = 0) {
-  // A phone shows one stage at a time: no stage folds, so every stage of the type is a chip.
+  // A phone shows one stage at a time, each a chip, finished stages included: nothing folds there.
   if (pipelinePhone()) return {backlog: false, finished: false};
   const saved = taskBoardFoldsSaved()[type.id] || {};
   return {backlog: saved.backlog ?? backlogSteps > 1, finished: saved.finished ?? true};

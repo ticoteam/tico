@@ -155,6 +155,8 @@ DROPPED_INDEXES |= {
     "messages_superseded_asks_to",
 }
 DROPPED_TRIGGERS |= {"changes_task_asks_insert", "changes_task_asks_update"}
+# Dropped by backend/migrations/20261108044824_directory_rules.py: rule sources are organization entities now.
+DROPPED_INDEXES |= {"org_rules_source", "rule_sources_name", "sqlite_autoindex_rule_sources_1"}
 
 
 @pytest.fixture(scope="module")

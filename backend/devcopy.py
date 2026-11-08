@@ -526,7 +526,6 @@ KEEP = (
             "rule_due_dates",
             "rule_due_status",
             "rule_reads",
-            "rule_sources",
             "rule_suggestions",
             "rules",
             "run_backoff",
