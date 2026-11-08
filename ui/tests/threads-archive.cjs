@@ -2,6 +2,10 @@
 // a Threads row has an Archive button for a thread the viewer manages. Tapping it takes the thread off the list and its
 // Catch up count with it, at once, and an Undo toast brings it back. The open thread's header has the same Archive,
 // which goes back to the list; on an archived thread it says Unarchive. A thread the viewer does not manage has neither.
+// On a desktop the row's Archive shows on hover and on keyboard focus.
+// The page holds the live stream (GET /api/v2/events) open, and `send` answers it with the blocks the server would send:
+// a task's thread leaves Threads when its task finishes, a rename does not bring it back, a post after the finish does;
+// an open Catch up drops a card whose task finished; a 1:1 DM archived in another window leaves Catch up and its count.
 // Screenshots go to TICO_SCREENSHOT_DIR (default: the gd-shots folder in the scratchpad).
 const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
@@ -20,15 +24,25 @@ const world = () => ({
   't-plan': thread('t-plan', 'Launch plan', {me: me({can_manage: true, unread: 2, activity: true})}),
   't-read': thread('t-read', 'Team lunch', {me: me({can_manage: false})}),
 });
+// What the server sends for a thread: `hidden` stands for its task having finished, which takes it off the list and out of
+// Catch up, and its view says so (`task_hidden`, present only then).
+const view = t => {
+  const {hidden, ...rest} = t;
+  return hidden ? {...rest, task_hidden: true} : rest;
+};
 
-async function open(browser) {
-  const page = await browser.newPage({viewport: {width: 390, height: 844}, isMobile: true, hasTouch: true, serviceWorkers: 'block', reducedMotion: 'reduce'});
-  const threads = world();
-  const seen = {errors: [], patches: []};
+// `threads` is the world the mock serves. `send(...blocks)` answers the newest live stream the page holds, as the server
+// would (the page then reconnects, and the next send finds the new stream); `block(event, data)` makes one SSE block.
+async function open(browser, {viewport = {width: 390, height: 844}, phone = true, threads = world()} = {}) {
+  const page = await browser.newPage({viewport, isMobile: phone, hasTouch: phone, serviceWorkers: 'block', reducedMotion: 'reduce'});
+  const seen = {errors: [], patches: []}, streams = [];
+  let seq = 0;
   page.on('pageerror', e => seen.errors.push(e.message));
   page.on('dialog', d => d.accept());
-  const rail = () => Object.values(threads).filter(t => !t.archived_at);
-  const catchUp = () => rail().filter(t => t.me.unread > 0);
+  const visible = t => !t.archived_at && !t.hidden;
+  const rail = () => Object.values(threads).filter(t => visible(t) && t.audience !== 'personal').map(view);
+  const catchUp = () => Object.values(threads).filter(t => visible(t) && t.me.unread > 0);
+  const dms = () => Object.fromEntries(Object.values(threads).filter(t => visible(t) && t.audience === 'personal').map(t => [t.dm_with[0].actor, t.me.unread]));
   await page.route('**/*', async route => {
     const req = route.request(), url = new URL(req.url()), p = url.pathname, method = req.method();
     const json = (body, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
@@ -42,16 +56,16 @@ async function open(browser) {
     if (p === '/api/employees') return json([{name: 'ops', display_name: 'Ops', host: 'keeper', status: 'active', state: 'active', can_chat: true, schedules: [],
       my_access: {see: true, read: true, write: true}}]);
     if (p === '/api/humans') return json({people: [{id: 'ana', name: 'Ana', email: 'ana@acme.example'}, {id: 'ben', name: 'Ben', email: 'ben@acme.example'}], org_groups: []});
-    if (p === '/api/v2/events') return route.abort();
+    if (p === '/api/v2/events') { streams.push({url, route}); return; }        // held open until the test sends
     if (p === '/api/v2/slack/links') return json({links: [], available: false, next_cursor: null});
     if (p === '/api/v2/threads' && method === 'GET') return json({attention: [], threads: rail(), dms: [], bot_dms: {}, next_cursor: null});
-    if (p === '/api/v2/threads/rail') return json({pinned: [], threads: rail(), catch_up: catchUp().length, catch_up_ids: catchUp().map(t => t.id), dms: {}, next_cursor: null});
-    if (p === '/api/v2/threads/catch-up') return json({items: catchUp().map(t => ({thread: t, new_count: t.me.unread, mention: false, messages: [], more: 0})), count: catchUp().length, next_cursor: null});
+    if (p === '/api/v2/threads/rail') return json({pinned: [], threads: rail(), catch_up: catchUp().length, catch_up_ids: catchUp().map(t => t.id), dms: dms(), next_cursor: null});
+    if (p === '/api/v2/threads/catch-up') return json({items: catchUp().map(t => ({thread: view(t), new_count: t.me.unread, mention: false, messages: [], more: 0})), count: catchUp().length, next_cursor: null});
     const m = p.match(/^\/api\/v2\/threads\/([^/]+)(?:\/([a-z-]+))?$/);
     const t = m && threads[m[1]];
     if (t) {
       const what = m[2];
-      if (what === 'timeline') return json({thread: t, breadcrumb: [{id: t.id, title: t.title}], next_cursor: null,
+      if (what === 'timeline') return json({thread: view(t), breadcrumb: [{id: t.id, title: t.title}], next_cursor: null,
         messages: [{id: 'x1-' + t.id, seq: 1, thread_id: t.id, sender_id: 'human:ben', body: 'Morning.', created_at: at(10), depth: 0}]});
       if (what === 'members') return json({members: [{actor: 'human:ana', role: 'owner'}, {actor: 'human:ben'}], next_cursor: null});
       if (what === 'read') return json({ok: true});
@@ -59,13 +73,24 @@ async function open(browser) {
       if (!what && method === 'PATCH') {
         const b = body(); seen.patches.push({id: t.id, ...b});
         if ('archived' in b) t.archived_at = b.archived ? at(0) : null;
-        return json(t);
+        return json(view(t));
       }
-      if (!what && method === 'GET') return json(t);
+      if (!what && method === 'GET') return json(view(t));
     }
     return json(unrouted(p));
   });
-  return {page, seen};
+  const send = async (...blocks) => {
+    const deadline = Date.now() + 8000;
+    while (!streams.length) {
+      if (Date.now() > deadline) throw new Error('no live stream from the page');
+      await new Promise(r => setTimeout(r, 50));
+    }
+    const stream = streams.pop();
+    for (const old of streams.splice(0)) await old.route.abort().catch(() => {});
+    await stream.route.fulfill({contentType: 'text/event-stream', body: blocks.join('')});
+  };
+  const block = (event, data) => `id: ${++seq}\nevent: ${event}\ndata: ${JSON.stringify({seq, ...data})}\n\n`;
+  return {page, seen, send, block, threads};
 }
 async function shot(page, name) {
   fs.mkdirSync(shots, {recursive: true});
@@ -148,5 +173,27 @@ let browser = null;
     await page.close();
   }
 
-  console.log('PASS: Threads archive: a phone row shows Archive for a managed thread (44px, always shown), taking it and its Catch up count off at once with an Undo that brings it back; the open thread\'s header archives it back to the list, and Unarchive restores it in place; a thread the viewer does not manage has neither; no sideways scroll at 390px');
+  // On a desktop the row's Archive is hidden until the row is hovered, and shows when its button takes keyboard focus
+  // (Tab from the row reaches it).
+  {
+    const {page, seen} = await open(browser, {viewport: {width: 1280, height: 800}, phone: false});
+    await page.goto('https://tico-ui.test/#/threads');
+    const row = page.locator('.tr-row[data-thread="t-plan"]');
+    await row.waitFor();
+    const archive = page.locator('[data-tr-arch="t-plan"]');
+    const opacity = () => archive.evaluate(el => getComputedStyle(el).opacity);
+    await until(async () => (await opacity()) === '0', 'the row Archive is hidden with the pointer away');
+    await row.hover();
+    await until(async () => (await opacity()) === '1', 'the row Archive shows on hover');
+    await page.mouse.move(0, 0);
+    await until(async () => (await opacity()) === '0', 'the row Archive hides when the pointer leaves');
+    await row.focus();
+    await page.keyboard.press('Tab');
+    assert.equal(await page.evaluate(() => document.activeElement?.dataset.trArch), 't-plan', 'Tab from the row reaches its Archive');
+    await until(async () => (await opacity()) === '1', 'the row Archive shows on keyboard focus');
+    assert.deepEqual(seen.errors, []);
+    await page.close();
+  }
+
+  console.log('PASS: Threads archive: a phone row shows Archive for a managed thread (44px, always shown), taking it and its Catch up count off at once with an Undo that brings it back; the open thread\'s header archives it back to the list, and Unarchive restores it in place; a thread the viewer does not manage has neither; no sideways scroll at 390px; on a desktop the row Archive shows on hover and keyboard focus');
 })().catch(e => { console.error(e); process.exitCode = 1; }).finally(() => browser?.close());
