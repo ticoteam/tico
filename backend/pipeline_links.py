@@ -18,7 +18,7 @@ H: Any = hubdb
 if TYPE_CHECKING:
     from fastapi import FastAPI
 
-    from .auth import Auth
+    from .auth import Auth, Identity
     from .store import Store
 
 Row = dict[str, Any]
@@ -314,14 +314,32 @@ def _shares_source(conn: sqlite3.Connection, owner: str, source: Row, pipeline_i
     return str(source["type_id"] or "") == pipeline_id and _readable_ticket(conn, owner, source)
 
 
+def _identity(conn: sqlite3.Connection, actor: str) -> "Identity":
+    """The identity the file policy reads `actor` as: a bot, the company owner, or a person."""
+    from .auth import Identity
+
+    if actor.startswith("bot:"):
+        return Identity(actor, "bot")
+    return Identity(actor, "owner" if actor == pipeline_rights.company_owner(conn) else "human")
+
+
 def _item_readable(conn: sqlite3.Connection, owner: str, row: Row) -> bool:
-    """Whether the owner may read an attachment the spawn would carry: the company file's version (and its attempt) or the
-    blob behind it. A link has no file to check, so the ticket's readability decides it alone."""
-    from . import task_privacy
+    """Whether an attachment the spawn would carry may go to `owner`'s ticket. A company file must pass the file and page policy
+    for the owner (files.file_visible: audience, pipeline and task privacy), its version's blob and attempt must be readable
+    to the owner, and a page with an audience is not carried at all: its other readers cannot be listed here, so when unsure
+    it is skipped. A blob is checked by its privacy alone. A link has no file, so the sharing decision decides it."""
+    from . import files, task_privacy
+    from .auth import Auth
 
     blob_readable: Callable[..., bool] = task_privacy.blob_readable  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]
     attempt_readable: Callable[..., bool] = task_privacy.attempt_readable  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]
+    file_visible: Callable[..., bool] = files.file_visible  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]
+    restricted_pages: Callable[..., Any] = files.restricted_pages  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]
+    read_policy: Callable[..., Any] = Auth.read_policy  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]
     if row.get("file_id"):
+        file = _one(conn, "SELECT * FROM bot_files WHERE id = ?", (row["file_id"],))
+        if file is None or row["file_id"] in restricted_pages(conn):
+            return False
         versions = _rows(
             conn,
             "SELECT blob_id, attempt_id FROM bot_file_versions WHERE file_id = ? AND version = ?",
@@ -334,7 +352,7 @@ def _item_readable(conn: sqlite3.Connection, owner: str, row: Row) -> bool:
                 return False
             if version["attempt_id"] and not attempt_readable(conn, owner, version["attempt_id"]):
                 return False
-        return True
+        return bool(file_visible(conn, read_policy(conn), _identity(conn, owner), file, {}))
     if row.get("blob_id"):
         return blob_readable(conn, owner, row["blob_id"])
     return True

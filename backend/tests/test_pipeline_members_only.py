@@ -8,9 +8,11 @@ import uuid
 from backend import hubdb as H
 from backend import pipeline_links as L
 from backend import pipeline_requirements as R
+from backend import requirement_attachments
 from backend import task_relations as TR
 from backend.auth import Identity
 from backend.tests.test_api import api, get, headers, post  # noqa: F401  (api is a fixture)
+from backend.tests.test_pipeline_engine import decide
 from backend.tests.test_pipeline_foundation import T, insert, rows
 
 STEPS = [{"name": "Doing", "status": "doing"}, {"name": "Done", "status": "done"}]
@@ -407,3 +409,96 @@ def test_a_spawn_from_a_members_only_pipeline_gives_its_child_neutral_content_a_
     with api.app.state.store.read() as c:
         body = c.execute("SELECT body FROM tasks WHERE id = ?", (child,)).fetchone()[0]
     assert "COUNSEL" not in body and label not in body and "may not open" in body
+
+
+def test_a_spawn_carries_no_restricted_page_its_child_owner_or_readers_may_not_open_through_the_real_spawn(api):
+    """Codex F3: a company-wide Legal ticket holds a page restricted to Ana. Its Engineering child is owned by Cal, who may not
+    open the page. Neither the page's version URL nor its title reaches the child; the skip is logged by requirement name only.
+    The restriction is the page's audience, which the carry must check through the file policy (files.file_visible)."""
+    tag = uuid.uuid4().hex[:8]
+    legal, lsteps = make_pipeline(api, "Legal" + tag)
+    eng, _ = make_pipeline(api, "Engineering" + tag)
+    memo = "Restricted memo " + tag
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE task_types SET manager=? WHERE id=?", ("human:cara", eng))
+        link = L.create_link(c, "human:ana", lsteps["Doing"], eng, "spawn")
+        req = R.add(
+            c,
+            "human:ana",
+            lsteps["Doing"],
+            {
+                "name": "Memo",
+                "kind": "attachment",
+                "needs": {"formats": ["page"]},
+                "reviewed_by": "person",
+                "reviewer_id": "human:ana",
+            },
+        )
+    source = ticket(api, legal, "Merger " + tag, owner="human:ana")
+    with api.app.state.store.transaction() as c:
+        insert(c, "bots", id="b-memo", slug="memo-bot", display_name="Memo Bot", state="active", created_at=T)
+        insert(
+            c,
+            "bot_files",
+            id="file-memo-" + tag,
+            bot_id="b-memo",
+            scope="task:" + source,
+            identity="memo",
+            title=memo,
+            kind="file",
+            mime="text/html",
+            locator="tico_blob",
+            current_version=1,
+            first_activity_at=T,
+            last_activity_at=T,
+        )
+        insert(
+            c,
+            "blobs",
+            id="blob-memo-" + tag,
+            owner="human:ana",
+            digest="sha-" + tag,
+            size=10,
+            name="memo.html",
+            content_type="text/html",
+            created_at=T,
+        )
+        insert(
+            c,
+            "bot_file_versions",
+            file_id="file-memo-" + tag,
+            version=1,
+            blob_id="blob-memo-" + tag,
+            digest="sha-" + tag,
+            size=10,
+            name="memo.html",
+            mime="text/html",
+            actor="human:ana",
+            created_at=T,
+        )
+        insert(c, "pages", file_id="file-memo-" + tag, created_at=T, updated_at=T)
+        c.execute(
+            "UPDATE pages SET audience=? WHERE file_id=?",
+            (json.dumps({"everyone": False, "people": ["human:ana"], "teams": [], "bots": []}), "file-memo-" + tag),
+        )
+        requirement_attachments.attach(
+            c,
+            api.app.state.auth,
+            Identity("human:ana", "human"),
+            source,
+            req["id"],
+            {"source": "file", "file_id": "file-memo-" + tag},
+        )
+        decide(c, source, req["id"])
+        H.task_update(c, "human:ana", source, step=lsteps["Done"])
+        [handoff] = L.handoffs(c, link["id"])
+    child = handoff["target_task_id"]
+    with api.app.state.store.read() as c:
+        assert H.task(c, child)["owner_id"] == "human:cara"
+    listed = json.dumps(get(api, f"tasks/{child}", "cara-test"))
+    assert "file-memo-" + tag not in listed and memo not in listed
+    with api.app.state.store.read() as c:
+        assert rows(c, "SELECT url FROM task_links WHERE task_id = ?", child) == []
+        skipped = rows(c, "SELECT new FROM history_events WHERE subject_id = ? AND kind = 'carry_skipped'", child)
+    assert [s["new"] for s in skipped] == ["Memo"]
+    assert memo not in json.dumps(skipped)
