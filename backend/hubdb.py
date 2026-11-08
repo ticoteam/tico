@@ -4490,7 +4490,14 @@ def _task_state(conn, actor, row, status=None, type=None, step=None):
         chosen = next((s for s in reversed(typ["steps"]) if s["status"] == "closed"), None)
     else:
         # A team's own waiting step takes a task only when someone moves it there, never by a status change.
-        chosen = next((s for s in typ["steps"] if s["status"] == effective), None) if effective != "waiting" else None
+        from . import pipeline_engine
+
+        # A status with no step named lands in the stage pipeline_engine.default_step picks: never On ice while a stage has room.
+        chosen = (
+            pipeline_engine.default_step(conn, typ["steps"], effective, row.get("id") or "")
+            if effective != "waiting"
+            else None
+        )
         if effective == 'open' and row.get('status') in ('doing', 'waiting', 'review', 'done'):
             from .review_gate import engineering
 
@@ -4708,13 +4715,18 @@ def _set_status(
     skip_step_wake=(),
     notify_parties=True,
     cascade=True,
+    landing=False,
 ):
     """Every task status write keeps its type and step consistent, including old runners. A task
-    that enters a step joins its end; one that lands on a numbered type without a number gets one."""
+    that enters a step joins its end; one that lands on a numbered type without a number gets one.
+    `landing` is a ticket being made with a step of its own: it is not placed in the default stage first, so the step
+    its creation names is checked on its own (task_create, then task_update)."""
     from . import task_holds
 
     row = task_holds.with_holds(conn, row)
     type_id, step_id, effective = _task_state(conn, actor, row, status, type, step)
+    if landing:
+        step_id = None
     from . import pipeline_engine
 
     # Every forward stage move is held to the stage's requirements, not only task_update's (pipeline_engine). Cancelling
@@ -7136,7 +7148,7 @@ def task_create(
         conn.execute("UPDATE conversations SET task_id=? WHERE id=?", (row["id"], conv["id"]))
     if number is not None:
         _task_event(conn, row["id"], actor, "number", None, number, "")
-    _set_status(conn, actor, {**row, "status": None}, status="open", type=type)
+    _set_status(conn, actor, {**row, "status": None}, status="open", type=type, landing=step is not None)
     if parent:
         # A waiting parent now waits on this subtask too: its reason names it (backend/task_holds.py).
         from . import task_holds

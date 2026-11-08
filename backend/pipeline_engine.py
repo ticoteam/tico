@@ -1028,6 +1028,18 @@ def full_stage(conn: sqlite3.Connection, step_id: str | None, task_id: str = "")
     return {**target, "held": held} if held >= int(target["card_cap"]) else None
 
 
+def default_step(conn: sqlite3.Connection, steps: list[Row], status: str, task_id: str = "") -> Row | None:
+    """The stage a ticket lands in when a write names only its status (D69): the first stage of that status with room that is
+    not On ice (cap 0), else the first such stage even when it is full (the cap then refuses a bot as for any move), else the
+    first stage of that status. A stage with no cap always has room, so an uncapped pipeline keeps its first stage."""
+    of_status = [s for s in steps if s["status"] == status]
+    ordinary = [s for s in of_status if s.get("card_cap") != 0]
+    roomy = [
+        s for s in ordinary if s.get("card_cap") is None or held_count(conn, str(s["id"]), task_id) < int(s["card_cap"])
+    ]
+    return next(iter(roomy or ordinary or of_status), None)
+
+
 def room_refusal(rule: str, detail: str, task_id: str, step_id: str) -> Exception:
     """The refusal a stage cap raises (rule "stage_full" or "on_ice"). Its context names the stage, so the pipeline manager
     can list the ticket as waiting for room (pipeline_manager). Raised, not recorded: the write that asked is rolled back,
