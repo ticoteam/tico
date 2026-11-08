@@ -19,7 +19,7 @@ from fastapi.testclient import TestClient
 from PIL import Image
 
 import backend.company_page as package
-import backend.tests.test_api as test_api  # the api fixture reads api_settings here
+from backend.tests.helpers import api_app  # the api fixture reads api_settings here
 from backend import automations, oidc, screening, task_trigger_rules, team_icon, webhooks
 from backend import hubdb as H
 from backend.company_page import reader_app, readers as R, release, render
@@ -40,7 +40,7 @@ def fake(provider):  # noqa: F811
 @pytest.fixture
 def configured(monkeypatch, fake):
     """Runs before `api`, which then builds its app with a reader origin and a sign-in provider."""
-    real = test_api.api_settings
+    real = api_app.api_settings
 
     def settings(tmp_path):
         made = real(tmp_path)
@@ -49,7 +49,7 @@ def configured(monkeypatch, fake):
         made.session_secret = "s" * 40
         return made
 
-    monkeypatch.setattr(test_api, "api_settings", settings)
+    monkeypatch.setattr(api_app, "api_settings", settings)
 
 
 def anchor_of(row):
