@@ -181,9 +181,10 @@ def _label(conn: sqlite3.Connection, task_id: str) -> str:
 def _owner_for(conn: sqlite3.Connection, pipeline_id: str, filer: str) -> str:
     """Who owns a spawned ticket, as a new ticket filed at the target's first stage would be owned: the least busy bot of
     that stage's assign pool with a free slot (the allocator's rule, Fix V-11); else the least busy available pool bot
-    over its slots, since the pool is the role holder (spec A5); else the filer. A stage with an assign pool never gives
-    the ticket to the pipeline's manager. A pipeline with no assign pool goes to its manager when it is on the roster,
-    else the filer, since a ticket always has an owner."""
+    over its slots. The pool is the pipeline's role holder (spec A5), and no stored record names any other holder: a
+    bot-to-role link does not exist, and a holder the hub refuses cannot own a ticket. So when no pool bot is available
+    the filer owns the ticket, and a stage with an assign pool never gives it to the pipeline's manager. A pipeline with
+    no assign pool goes to its manager when it is on the roster, else the filer, since a ticket always has an owner."""
     from . import pipeline_engine, step_flow
 
     first = pipeline_engine.first_stage(conn, pipeline_id)
