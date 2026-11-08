@@ -1330,10 +1330,11 @@ def test_the_queue_leaves_out_a_ticket_the_reader_cannot_open(world):
     assert {i["task_id"] for i in R.queue_for(w.c, ANA)} == {w.task}
 
 
-def test_the_queue_leaves_out_a_visited_stage_row_once_the_ticket_is_on_a_hidden_pipeline(world, monkeypatch):
+def test_the_queue_keeps_a_visited_stage_row_for_the_ticket_requester_on_a_hidden_pipeline(world, monkeypatch):
     """Design's Review is left (both its requirements were approved), then the work changes, so Mockup is out of date on
-    a stage the ticket has left and waits on ana. The ticket then moves to a members-only pipeline ana may not see: its
-    stale row is left out of her queue."""
+    a stage the ticket has left and waits on ana. The ticket then moves to a members-only pipeline ana may not see. Ana
+    requested the ticket, so she keeps her review item (D67: a ticket's own owner and requester still read it), while the
+    requirement's own pipeline is the one that decides what she is shown."""
     w = world
     _company_owner_is_chris(monkeypatch)
     legal, legal_step = _members_only(w, "Legal", BEN)
@@ -1348,7 +1349,24 @@ def test_the_queue_leaves_out_a_visited_stage_row_once_the_ticket_is_on_a_hidden
     # The card is now on Legal (its row is written as the move would leave it: Shipped's requirements are out of date, so
     # the engine would hold a move out of Shipped; the visibility rule is what this test is about).
     w.c.execute("UPDATE tasks SET type_id=?, step_id=? WHERE id=?", (legal, legal_step, w.task))
-    assert [i["task_id"] for i in R.queue_for(w.c, ANA)].count(w.task) == 0
+    assert {i["requirement_id"] for i in R.queue_for(w.c, ANA) if i["task_id"] == w.task} == {w.mockup, w.signoff}
+
+
+def test_a_reviewer_who_is_not_the_ticket_owner_or_requester_loses_its_visited_row_on_a_hidden_pipeline(
+    world, monkeypatch
+):
+    """The same stale row, for a reviewer who is neither the ticket's owner nor its requester: once the ticket is on a
+    members-only pipeline they may not see, the row is left out (D67)."""
+    w = world
+    _company_owner_is_chris(monkeypatch)
+    legal, legal_step = _members_only(w, "Legal", BEN)
+    w.approve(w.mockup)
+    w.approve(w.signoff)
+    w.c.execute("UPDATE tasks SET status='doing', owner_id=?, requester_id=? WHERE id=?", (BEN, BEN, w.task))
+    w.push()
+    assert any(i["requirement_id"] == w.mockup for i in R.queue_for(w.c, ANA))
+    w.c.execute("UPDATE tasks SET type_id=?, step_id=? WHERE id=?", (legal, legal_step, w.task))
+    assert [i for i in R.queue_for(w.c, ANA) if i["task_id"] == w.task] == []
 
 
 def test_moves_to_never_names_a_destination_pipeline_the_reader_may_not_see(world, monkeypatch):

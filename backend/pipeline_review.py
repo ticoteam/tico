@@ -627,8 +627,10 @@ def _authorized(
     visible_sql: str | None,
 ) -> tuple[set[str], set[str]]:
     """The tickets the reader may open now and the pipelines they may see, of those given. A ticket is readable when its
-    current pipeline is visible to them, it passes the task rules (`visible_sql`, the route's list clause, when given) and
-    `hubdb.task_private_readable` admits them. Reads only the ticket rows, never their tags, decisions or attachments."""
+    current pipeline is visible to them or they are its owner or requester (D67: a ticket's own parties keep it wherever
+    it is now), it passes the task rules (`visible_sql`, the route's list clause, when given) and
+    `hubdb.task_private_readable` admits them. Whether the requirement's own pipeline is visible is checked by the caller.
+    Reads only the ticket rows, never their tags, decisions or attachments."""
     found: dict[str, Row] = {}
     ids = sorted({str(t) for t in task_ids if t})
     for chunk in _chunks(ids):
@@ -645,7 +647,8 @@ def _authorized(
     copies = cast(dict[str, Any], cast(Any, counsel.page_copies)(c))
     allowed: set[str] = set()
     for tid, row in found.items():
-        if row.get("type_id") and str(row["type_id"]) not in visible:
+        party = actor in (row.get("owner_id"), row.get("requester_id"))
+        if row.get("type_id") and str(row["type_id"]) not in visible and not party:
             continue
         open_to_all = tid not in copies and not _hub().task_private(c, row)
         if open_to_all or _hub().task_private_readable(c, actor, row):
