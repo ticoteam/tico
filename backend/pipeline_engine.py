@@ -239,6 +239,8 @@ class _Facts:
     children: dict[str, list[Row]]  # a ticket's subtasks: id, status, type_id, cascaded (closed with its parent)
     spawns: dict[str, set[str]]  # a pipeline id -> the pipelines its spawn links file tickets into
     shipped: set[str] = field(default_factory=set)  # subtask ids that visited their pipeline's output stage
+    # A ticket id -> its work digest now, for the tickets with a judge's verdict (_judged_current).
+    work_digests: dict[str, str] = field(default_factory=dict)
 
 
 def _facts(conn: sqlite3.Connection, task_ids: list[str], requirement_ids: list[str], kinds: set[str]) -> _Facts:
@@ -307,7 +309,13 @@ def _facts(conn: sqlite3.Connection, task_ids: list[str], requirement_ids: list[
         ):
             spawns.setdefault(str(record["from_pipeline_id"]), set()).add(str(record["to_pipeline_id"]))
     shipped = set(_shipments(conn, [str(child['id']) for rows in children.values() for child in rows]))
-    return _Facts(tasks, labels, decisions, attachments, links, children, spawns, shipped)
+    judged = [task for (task, _), decision in decisions.items() if _judge_bound(decision)]
+    digests: dict[str, str] = {}
+    if judged:
+        from . import pipeline_judges
+
+        digests = pipeline_judges.work_digests(conn, judged)
+    return _Facts(tasks, labels, decisions, attachments, links, children, spawns, shipped, digests)
 
 
 def output_stage(conn: sqlite3.Connection, pipeline_id: str) -> str | None:
@@ -533,6 +541,22 @@ def _rule_source(conn: sqlite3.Connection, task_id: str, requirement: Row, facts
     return _run_state(task_id, requirement, facts, conn)
 
 
+def _judge_bound(decision: Row) -> bool:
+    """Whether a verdict is the requirement judge's on an attachment (backend/pipeline_judges.py writes every one with the
+    work digest it saw), and so stands only for that work."""
+    return decision.get("judge") == "llm" and bool(decision.get("requirement_attachment_id"))
+
+
+def _judged_current(task_id: str, decision: Row, facts: _Facts) -> bool:
+    """Whether a judge's verdict is about the ticket's work as it is now: the title, spec, PR and PR author it was told
+    (stage_decisions.work_digest). One from before the digest (NULL) was judged without the work, so it does not stand
+    either; the judge reads the evidence again (pipeline_judges._waiting). Other verdicts are not bound to a digest."""
+    if not _judge_bound(decision):
+        return True
+    digest = decision.get("work_digest")
+    return bool(digest) and facts.work_digests.get(task_id) == str(digest)
+
+
 def _standing(conn: sqlite3.Connection, task_id: str, requirement: Row, facts: _Facts) -> Standing:
     task = facts.tasks.get(task_id) or {"id": task_id, "work_revision": 0}
     revision = int(task.get("work_revision") or 0)
@@ -540,6 +564,9 @@ def _standing(conn: sqlite3.Connection, task_id: str, requirement: Row, facts: _
     decision, attachment = facts.decisions.get(key), facts.attachments.get(key)
     if decision is not None and not verdict_binds_attachment(decision, attachment):
         decision = None  # the evidence it judged was replaced or taken away
+    if decision is not None and not _judged_current(task_id, decision, facts):
+        # A judge's verdict on another title, spec or PR says nothing about this work; it is judged again.
+        decision = None
     if decision is not None and requirement["kind"] == "approval" and decision["verdict"] == "override":
         decision = None  # no override stands in for a named person's approval (D10, D34)
     if decision is not None and requirement["kind"] in ("field", "run") and decision["verdict"] == "met":
