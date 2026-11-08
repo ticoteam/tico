@@ -51,6 +51,10 @@ TICKETS = (
 )
 
 
+# A run requirement reads its source as it is now (R6): Tests pass reads the GitHub checks on the ticket's pull request.
+NEEDS: dict[str, dict[str, str]] = {"Tests pass": {"source": "github_checks"}}
+
+
 def _id() -> str:
     return H.new_id()
 
@@ -100,7 +104,7 @@ def seed(b: Any) -> None:
                     stage[stage_name],
                     name,
                     kind,
-                    "{}",
+                    json.dumps(NEEDS.get(name, {})),
                     reviewed_by,
                     reviewer,
                     position,
@@ -132,6 +136,12 @@ def seed(b: Any) -> None:
                         "VALUES (?,?,?,?,1,1,'rule','system','met','Passed on 3f2a9c1',?)",
                         (_id(), task, stage[stage_name], req[name], entered),
                     )
+                    if name in NEEDS:  # the passing checks that rule judged
+                        c.execute(
+                            "INSERT INTO task_links (id, task_id, kind, url, title, state, checks, added_by, created_at, "
+                            "updated_at) VALUES (?,?,'pr',?,?,'open','passing','bot:devops',?,?)",
+                            (_id(), task, "https://github.com/acme/app/pull/" + key[1:], key, entered, entered),
+                        )
                 elif state in ("waiting", "out_of_date"):
                     attach_id = _id()
                     link = "https://acme.example/shots/" + key.lower()
