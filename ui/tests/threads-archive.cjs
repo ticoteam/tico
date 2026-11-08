@@ -307,5 +307,5 @@ let browser = null;
     await page.close();
   }
 
-  console.log('PASS: Threads archive: a phone row shows Archive for a managed thread (44px, always shown), taking it and its Catch up count off at once with an Undo that brings it back; the open thread\'s header archives it back to the list, and Unarchive restores it in place; a thread the viewer does not manage has neither; no sideways scroll at 390px; on a desktop the row Archive shows on hover and keyboard focus');
+  console.log(only ? `PASS: Threads archive, block ${only} only` : 'PASS: Threads archive: a phone row shows Archive for a managed thread (44px, always shown), taking it and its Catch up count off at once with an Undo that brings it back; the open thread\'s header archives it back to the list, and Unarchive restores it in place; a thread the viewer does not manage has neither; no sideways scroll at 390px; on a desktop the row Archive shows on hover and keyboard focus; over a live stream a close, rename or revive moves the row as the list does; an open Catch up card leaves when its task finishes; an archived 1:1 DM leaves Catch up and its teammate\'s count; a phone toast lifts above the tab bar only where the bar shows');
 })().catch(e => { console.error(e); process.exitCode = 1; }).finally(() => browser?.close());
