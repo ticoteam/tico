@@ -3,8 +3,17 @@
 `preview` parses a file and says what posting it would do: each row New or Already in Tico, its vendor, the rule that
 would attribute it, and the tie-out against the statement's balances. `statement_post` puts the New rows into the feed
 as settled rows, which then post through the same path as a synced row. `statement_undo` takes back what one upload
-put in, while nothing it added is reconciled. The file is kept nowhere but in its action's payload, as raw totals keep
-theirs."""
+put in, while nothing it added is reconciled.
+
+Storage: a preview stores only a token row (fin_statement_previews: the token's hash, the file's hash, the digest of
+the New rows' ids, 30 minutes to live); the file itself is not kept. A post keeps the file (base64) in its action's
+payload, as raw totals keep their sheet, so the action is its own record of what posted; the file is capped at
+SF.MAX_BYTES (1 MB, ~1.4 MB of base64) for that reason and for the request size limit. Tico never writes an upload's
+rows to QuickBooks or Xero: a mirrored book refuses both kinds (no fin_outbox row is ever made here).
+
+Signs: `signs` ("auto" | "as_shown" | "flipped", default auto) says how the file's amounts read; statement_files says how
+auto decides. The review returns what was decided (`signs: {flipped, by}`) and a post must pass the same choice as its
+preview (the preview token covers the New rows' ids, which carry their signs)."""
 
 import base64
 import hashlib
@@ -90,6 +99,10 @@ def _money(ctx: Ctx, who: str, money_account_id: str) -> Any:
     return money
 
 
+def _signs(p: V.Payload) -> str:
+    return V.choice(p, "signs", SF.SIGNS, "auto")
+
+
 def _raw(p: V.Payload) -> bytes:
     try:
         raw = base64.b64decode(V.text(p, "file", B64_MAX), validate=True)
@@ -98,15 +111,19 @@ def _raw(p: V.Payload) -> bytes:
     if not raw:
         raise invalid("the statement file is empty")
     if len(raw) > SF.MAX_BYTES:
-        raise invalid("a statement file is 4 MB at most")
+        raise invalid(f"a statement file is {SF.MAX_LABEL} at most")
     return raw
 
 
-def _parse(raw: bytes) -> SF.Parsed:
+def _parse(money: Any, raw: bytes, signs: str) -> SF.Parsed:
     try:
-        return SF.parse(raw)
+        parsed = SF.parse(raw, signs)
     except SF.StatementError as e:
         raise invalid(str(e)) from e
+    if parsed.facts.card and str(money["kind"]) != "card_program":
+        # An OFX credit card statement (CCSTMTRS) on a bank account would post charges as cash leaving the bank.
+        raise invalid(f"this is a credit card statement: upload it to the card account, not {money['name']}")
+    return parsed
 
 
 def _feed_keys(row: Any) -> set[str]:
@@ -153,7 +170,7 @@ def _judge(ctx: Ctx, who: str, money: Any, gl_id: str, parsed: SF.Parsed) -> lis
             taken_feed.add(str(hit["id"]))
     for r in rows:
         key = merchant_key(r.description)
-        if r.external_id in duplicate or not key:
+        if r.external_id in duplicate:
             continue
         feed_hit = next(
             (
@@ -162,7 +179,7 @@ def _judge(ctx: Ctx, who: str, money: Any, gl_id: str, parsed: SF.Parsed) -> lis
                 if str(f["id"]) not in taken_feed
                 and int(f["amount"]) == r.amount
                 and _near(r.date, str(f["txn_date"]))
-                and key in _feed_keys(f)
+                and (key in _feed_keys(f) if key else not _feed_keys(f))
             ),
             None,
         )
@@ -254,13 +271,13 @@ def _checked_token(ctx: Ctx, p: V.Payload, money_id: str, file_hash: str, digest
 
 
 def statement_post(ctx: Ctx, who: str, p: V.Payload) -> Plan:
-    V.only(p, ("money_account_id", "file", "file_name", "preview_token", "skip"))
+    V.only(p, ("money_account_id", "file", "file_name", "preview_token", "skip", "signs"))
     money = _money(ctx, who, V.text(p, "money_account_id", 80))
     gl = banking.gl_account(ctx, money)
     if not may_write(ctx, who, gl.id, {}):
         raise denied(OUTSIDE)
     raw = _raw(p)
-    parsed = _parse(raw)
+    parsed = _parse(money, raw, _signs(p))
     file_hash = hashlib.sha256(raw).hexdigest()
     prior = SS.upload_by_hash(ctx.c, str(money["id"]), file_hash)
     if prior is not None:
@@ -430,9 +447,15 @@ def statement_undo(ctx: Ctx, who: str, p: V.Payload) -> Plan:
         )
 
     def apply(aid: str) -> Result:
+        ours = {str(r["id"]) for r in rows}
+        partners: set[str] = set()
         for r in rows:
+            if r["entry_id"]:  # a transfer or card payment's other side shares the entry: it waits again once unposted
+                partners |= {str(x["id"]) for x in SK.rows_of_entry(ctx.c, str(r["entry_id"]))} - ours
             banking.unsettle_uploaded(ctx, r, f"statement upload {upload_id} undone")
         removed = SS.delete_rows(ctx.c, upload_id)
+        SS.clear_refund_links(ctx.c, sorted(ours), ctx.at)
+        banking.settle_again(ctx, sorted(partners))
         if up["statement_id"]:
             SS.delete_statement(ctx.c, str(up["statement_id"]))
         SS.set_upload(ctx.c, upload_id, {"undone_at": ctx.at, "undone_by": who})
@@ -460,7 +483,7 @@ def _tie_out(t: Tie) -> dict[str, Any]:
 def preview(ctx: Ctx, who: str, p: V.Payload) -> dict[str, Any]:
     """The review of a statement file (POST /api/v2/finance/statements/preview): every row New or Already in Tico, and
     the tie-out. It writes nothing but a short-lived token, which a post presents to show it posts what was shown."""
-    V.only(p, ("money_account_id", "file", "file_name"))
+    V.only(p, ("money_account_id", "file", "file_name", "signs"))
     if R.BOOK not in ctx.rights(who):
         raise denied("posting a statement needs the finance.book right")
     money = _money(ctx, who, V.text(p, "money_account_id", 80))
@@ -468,7 +491,7 @@ def preview(ctx: Ctx, who: str, p: V.Payload) -> dict[str, Any]:
     if not may_write(ctx, who, gl.id, {}):
         raise denied(OUTSIDE)
     raw = _raw(p)
-    parsed = _parse(raw)
+    parsed = _parse(money, raw, _signs(p))
     file_hash = hashlib.sha256(raw).hexdigest()
     judged = _judge(ctx, who, money, gl.id, parsed)
     tie = _tie(ctx, money, gl.id, parsed, [j.row.amount for j in judged])
@@ -496,8 +519,9 @@ def preview(ctx: Ctx, who: str, p: V.Payload) -> dict[str, Any]:
         "file_format": parsed.facts.format,
         "start": parsed.facts.start,
         "end": parsed.facts.end,
-        "card": parsed.facts.card,
+        "card": str(money["kind"]) == "card_program",
         "last4": parsed.facts.last4,
+        "signs": {"flipped": parsed.facts.flipped, "by": parsed.facts.signs_by},
         "new": sum(1 for j in judged if j.status == NEW),
         "duplicate": sum(1 for j in judged if j.status == DUPLICATE),
         "tie": _tie_out(tie),

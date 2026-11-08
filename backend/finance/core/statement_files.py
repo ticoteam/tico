@@ -3,8 +3,19 @@ OFX), and CSV from a bank's or card's download. Pure: no I/O, no store. A file b
 else; upload (backend/finance/statement_upload.py) decides what posts.
 
 Sign: every row's `amount` is in cents with money in positive and money out negative, the feed's convention for a bank
-account and for a card (a charge is negative, a payment or refund positive). A CSV whose export shows charges positive
-(American Express's) is flipped here; OFX is read as the standard says (TRNAMT is the money's direction).
+account and for a card (a charge is negative, a payment or refund positive). Some exports show money out positive
+(American Express's and Discover's card CSVs, some credit unions' bank CSVs), so each file's signs are decided, in this
+order, and the decision is kept in its facts (`flipped`, `signs_by`) for the review to show:
+  1. `signs` passed by the caller: "as_shown" or "flipped" (the person ticked or cleared the box). signs_by "chosen".
+  2. OFX and QFX: as the file shows them. The standard says TRNAMT is the money's direction from the account holder's
+     side, for a bank (STMTRS) and a card (CCSTMTRS) alike, so a card charge is negative. signs_by "file".
+  3. A CSV with a type column (Type, Details, Transaction type) that names rows as money out (sale, purchase, debit,
+     charge, withdrawal...): when every such row is positive and no row it names as money in (payment, credit, refund,
+     deposit...) is, the file is flipped; when every such row is negative, it is read as shown. signs_by "type column".
+  4. A CSV whose headers are American Express's (Extended Details, Appears On Your Statement As): flipped. signs_by
+     "amex headers".
+  5. Otherwise as shown. signs_by "as shown". The review shows a "Money out shows positive" box, so a person who sees
+     the signs backwards (Discover's CSV has no hint) ticks it and the file is read again with signs "flipped".
 
 Facts: `start` and `end` are ISO days; `opening` and `closing` are the statement's own balances in cents, or None when
 the file does not give them. A bank's balance is the balance; a card's `closing` is what is owed, positive, as the card
@@ -25,7 +36,11 @@ from dataclasses import dataclass
 from datetime import date
 from decimal import Decimal, InvalidOperation
 
-MAX_BYTES = 4 * 1024 * 1024
+# 1 MB: a month of a busy card is ~50 KB of CSV or ~150 KB of OFX, so this is years of rows. The base64 text of the file
+# rides in the action's JSON body (under the server's 2 MB limit for a request) and is kept in its stored payload.
+MAX_BYTES = 1024 * 1024
+MAX_LABEL = "1 MB"
+SIGNS = ("auto", "as_shown", "flipped")
 MAX_ROWS = 5000
 MAX_SHOWN_HEADERS = 8
 
@@ -59,6 +74,10 @@ CREDIT_NAMES = ("credit", "credits", "deposit", "deposits", "money in", "amount 
 BALANCE_NAMES = ("balance", "running balance", "running bal.", "running bal", "ending balance", "available balance")
 # An export whose headers name these shows charges as positive numbers (American Express's CSV).
 FLIPPED_HEADERS = ("extended details", "appears on your statement as")
+# A column that names each row's direction, and the words in it (folded, "_" and "-" as spaces) for each direction.
+TYPE_NAMES = ("type", "transaction type", "trans type", "details", "debit/credit", "dr/cr")
+OUT_WORDS = ("sale", "purchase", "debit", "charge", "withdrawal", "fee", "ach debit", "debit card", "dr", "check")
+IN_WORDS = ("payment", "credit", "refund", "return", "deposit", "ach credit", "cr", "adjustment credit")
 
 _OFX_MARK = re.compile(r"<OFX>|OFXHEADER|<STMTTRN>", re.IGNORECASE)
 _LEAF = re.compile(r"<([A-Za-z0-9.]+)>([^<\r\n]*)")
@@ -94,7 +113,9 @@ class Facts:
     opening: int | None
     closing: int | None
     card: bool
-    last4: str
+    last4: str | None
+    flipped: bool
+    signs_by: str
 
 
 @dataclass(frozen=True)
@@ -175,7 +196,7 @@ def _csv_id(day: str, amount: int, description: str, occurrence: int) -> str:
 
 def _text(data: bytes) -> str:
     if len(data) > MAX_BYTES:
-        raise StatementError("the file is larger than 4 MB")
+        raise StatementError(f"the file is larger than {MAX_LABEL}")
     try:
         text = data.decode("utf-8-sig")
     except UnicodeDecodeError:
@@ -186,12 +207,15 @@ def _text(data: bytes) -> str:
 # ------------------------------------------------------------------------------------------------ entry
 
 
-def parse(data: bytes) -> Parsed:
-    """A statement file (OFX, QFX or CSV, told apart by their text) as its rows and facts. Raises StatementError."""
+def parse(data: bytes, signs: str = "auto") -> Parsed:
+    """A statement file (OFX, QFX or CSV, told apart by their text) as its rows and facts. `signs` is "auto" (decide as
+    the module docstring says), "as_shown" or "flipped". Raises StatementError."""
+    if signs not in SIGNS:
+        raise StatementError(f"signs is one of {', '.join(SIGNS)}")
     text = _text(data)
     if _OFX_MARK.search(text):
-        return _ofx(text)
-    return _csv(text)
+        return _ofx(text, signs)
+    return _csv(text, signs)
 
 
 # ------------------------------------------------------------------------------------------------ OFX / QFX
@@ -216,7 +240,7 @@ def _section(text: str, opener: str) -> str:
     return rest[: cut.start()] if cut else rest
 
 
-def _ofx(text: str) -> Parsed:
+def _ofx(text: str, signs: str) -> Parsed:
     upper = text.upper()
     if "<INVSTMTRS>" in upper:
         raise StatementError("investment statements are not supported: upload the bank or card statement")
@@ -241,6 +265,8 @@ def _ofx(text: str) -> Parsed:
             amount = parse_amount(leaves["TRNAMT"])
         except ValueError:
             raise StatementError(f"transaction {n} has an amount that is not money") from None
+        if signs == "flipped":
+            amount = -amount
         description = leaves.get("NAME", "") or leaves.get("MEMO", "")
         fitid = leaves.get("FITID", "")
         if not fitid:
@@ -261,7 +287,7 @@ def _ofx(text: str) -> Parsed:
             raise StatementError("the ledger balance is not money") from None
         if card:
             closing = -closing  # a card's balance is negative while it is owed; the card shows what is owed, positive
-    last4 = re.sub(r"\D", "", _leaves(text).get("ACCTID", ""))[-4:]
+    last4 = re.sub(r"\D", "", _leaves(text).get("ACCTID", ""))[-4:] or None
     if not rows and "DTASOF" not in ledger and "DTEND" not in trans:
         raise StatementError("the OFX file has no dates")
     days = [r.date for r in rows]
@@ -273,7 +299,7 @@ def _ofx(text: str) -> Parsed:
         raise StatementError("the OFX statement dates are not dates") from None
     if not end:
         raise StatementError("the OFX file has no end date")
-    facts = Facts("ofx", start, end, None, closing, card, last4)
+    facts = Facts("ofx", start, end, None, closing, card, last4, signs == "flipped", _by(signs, "file"))
     return Parsed(tuple(rows), facts)
 
 
@@ -289,7 +315,8 @@ class _Columns:
     debit: int | None
     credit: int | None
     balance: int | None
-    flipped: bool
+    kind: int | None
+    amex: bool
 
 
 def _find(names: tuple[str, ...], headers: list[str]) -> int | None:
@@ -310,7 +337,8 @@ def _columns(rows: list[list[str]]) -> _Columns:
         credit_at = _find(CREDIT_NAMES, headers)
         if date_at is None or desc_at is None or (amount_at is None and debit_at is None and credit_at is None):
             continue
-        flipped = any(h in FLIPPED_HEADERS for h in headers)
+        amex = any(h in FLIPPED_HEADERS for h in headers)
+        kind_at = _find(TYPE_NAMES, headers)
         return _Columns(
             header=i,
             date=date_at,
@@ -319,7 +347,8 @@ def _columns(rows: list[list[str]]) -> _Columns:
             debit=debit_at,
             credit=credit_at,
             balance=_find(BALANCE_NAMES, headers),
-            flipped=flipped,
+            kind=None if kind_at == desc_at else kind_at,
+            amex=amex,
         )
     shown = [c for c in (_fold(c) for c in (rows[0] if rows else [])) if c][:MAX_SHOWN_HEADERS]
     found = ", ".join(f'"{c[:40]}"' for c in shown) or "none"
@@ -358,13 +387,38 @@ def _balances(pairs: list[tuple[int, int]]) -> tuple[int | None, int | None]:
     return None, None
 
 
-def _csv(text: str) -> Parsed:
+def _by(signs: str, auto: str) -> str:
+    return auto if signs == "auto" else "chosen"
+
+
+def _direction(text: str) -> int:
+    """What a type column's word says of a row: -1 money out, 1 money in, 0 neither (or not said)."""
+    word = " ".join(text.casefold().replace("_", " ").replace("-", " ").split())
+    if word in OUT_WORDS or word.endswith(" debit") or word.startswith(("debit ", "pos ", "atm ")):
+        return -1
+    if word in IN_WORDS or word.endswith(" credit") or word.startswith("credit "):
+        return 1
+    return 0
+
+
+def _typed_flip(pairs: list[tuple[int, int]]) -> bool | None:
+    """From each row's (direction its type column says, amount as shown): True when the file shows money out positive
+    (every money-out row positive, no money-in row positive), False when it shows money out negative, None when the
+    column does not say (no typed rows, or they disagree)."""
+    out = {a > 0 for d, a in pairs if d < 0 and a}
+    into = {a > 0 for d, a in pairs if d > 0 and a}
+    if out == {True} and True not in into:
+        return True
+    if out == {False}:
+        return False
+    return None
+
+
+def _csv(text: str, signs: str) -> Parsed:
     grid = list(csv.reader(io.StringIO(text), delimiter=_sniff(text)))
     cols = _columns(grid)
-    rows: list[Row] = []
-    pairs: list[tuple[int, int]] = []
-    occurrences: dict[tuple[str, int, str], int] = {}
-    balance_ok = cols.balance is not None and not cols.flipped
+    # First pass: each row as the file shows it, (day, amount, description, balance text, direction its type says).
+    shown: list[tuple[str, int, str, str, int]] = []
     width = len(grid[cols.header])
     for line_no, cells in enumerate(grid[cols.header + 1 :], start=cols.header + 2):
         if not any(c.strip() for c in cells):
@@ -380,12 +434,11 @@ def _csv(text: str) -> Parsed:
             day = csv_date(raw_date)
         except ValueError:
             raise StatementError(f"line {line_no}: {raw_date[:20]!r} is not a date") from None
-        if len(rows) >= MAX_ROWS:
+        if len(shown) >= MAX_ROWS:
             raise StatementError(f"the file has more than {MAX_ROWS} transactions")
         if cols.amount is not None and _cell(cells, cols.amount):
-            amount_text = _cell(cells, cols.amount)
             try:
-                amount = parse_amount(amount_text)
+                amount = parse_amount(_cell(cells, cols.amount))
             except ValueError:
                 raise StatementError(f"line {line_no}: the amount is not money") from None
         elif cols.debit is not None or cols.credit is not None:
@@ -394,28 +447,41 @@ def _csv(text: str) -> Parsed:
                 money_out = parse_amount(_cell(cells, cols.debit) or "0")
             except ValueError:
                 raise StatementError(f"line {line_no}: the amount is not money") from None
-            amount = abs(money_in) - abs(money_out)
+            amount = abs(money_in) - abs(money_out)  # separate columns say the direction: no flip needed or done
         else:
             raise StatementError(f"line {line_no} has no amount")
         description = " ".join(_cell(cells, cols.description).split())
+        shown.append((day, amount, description, _cell(cells, cols.balance), _direction(_cell(cells, cols.kind))))
+    if not shown:
+        raise StatementError("the file has no transactions under its header")
+    signed_by_column = cols.amount is None or all(not _cell(c, cols.amount) for c in grid[cols.header + 1 :])
+    typed = _typed_flip([(d, a) for _, a, _, _, d in shown]) if cols.kind is not None else None
+    if signs != "auto":
+        flipped, by = signs == "flipped", "chosen"
+    elif signed_by_column:
+        flipped, by = False, "debit and credit columns"
+    elif typed is not None:
+        flipped, by = typed, "type column"
+    elif cols.amex:
+        flipped, by = True, "amex headers"
+    else:
+        flipped, by = False, "as shown"
+    rows: list[Row] = []
+    pairs: list[tuple[int, int]] = []
+    balance_ok = cols.balance is not None
+    occurrences: dict[tuple[str, int, str], int] = {}
+    for day, as_shown, description, balance_text, _ in shown:
+        amount = -as_shown if flipped else as_shown
         key = (day, amount, description.casefold())
         occurrence = occurrences.get(key, 0)
         occurrences[key] = occurrence + 1
         if balance_ok:
-            balance_text = _cell(cells, cols.balance)
-            if not balance_text:
+            try:
+                pairs.append((amount, parse_amount(balance_text)))
+            except ValueError:
                 balance_ok = False
-            else:
-                try:
-                    pairs.append((amount, parse_amount(balance_text)))
-                except ValueError:
-                    balance_ok = False
-        if cols.flipped:
-            amount = -amount  # an export that shows charges positive: money out is negative in Tico's feed
         rows.append(Row(day, amount, description, _csv_id(day, amount, description, occurrence)))
-    if not rows:
-        raise StatementError("the file has no transactions under its header")
     days = [r.date for r in rows]
     opening, closing = _balances(pairs) if balance_ok else (None, None)
-    facts = Facts("csv", min(days), max(days), opening, closing, False, "")
+    facts = Facts("csv", min(days), max(days), opening, closing, False, None, flipped, by)
     return Parsed(tuple(rows), facts)

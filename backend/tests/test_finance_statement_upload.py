@@ -395,8 +395,12 @@ def test_a_mirror_book_takes_no_statement(books):
     with books.transaction() as c:
         bank = money_account(c, "bank", "1000", "Checking")
         c.execute("UPDATE fin_books SET mode='mirror'")
+        outbox = c.execute("SELECT COUNT(*) FROM fin_outbox").fetchone()[0]
         refused = post(c, bank, "chase_checking.csv")
         assert (refused.status, refused.code) == ("denied", NOT_AVAILABLE)
+        assert c.execute("SELECT COUNT(*) FROM fin_outbox").fetchone()[0] == outbox  # never written to the provider
+        added = act(c, OWNER, "money_account_add", {"kind": "bank", "name": "Chase Checking"})
+        assert (added.status, added.code) == ("denied", NOT_AVAILABLE)
         with pytest.raises(FinanceError) as previewed:
             review(c, bank, "chase_checking.csv")
         assert previewed.value.code == NOT_AVAILABLE
@@ -412,3 +416,92 @@ def test_posting_or_reviewing_a_statement_needs_the_book_right(books):
             review(c, bank, "chase_checking.csv", who="human:dan")
         assert previewed.value.code == DENIED
         assert feed_count(c, bank) == 0
+
+
+@pytest.mark.parametrize(
+    "name, signs, flipped, by, amounts",
+    [
+        ("chase_card.csv", "auto", False, "type column", [-4210, -1999, 50000, -31840, -2315]),
+        ("card_type_positive.csv", "auto", True, "type column", [-4820, 30000, -9137]),
+        ("amex.csv", "auto", True, "amex headers", [-5999, -31840, 50000, -675]),
+        ("debit_credit.csv", "auto", False, "debit and credit columns", [-5999, 421280, -31840, -123450]),
+        ("discover.csv", "auto", False, "as shown", [4820, -30000, 9137]),
+        ("discover.csv", "flipped", True, "chosen", [-4820, 30000, -9137]),
+        ("amex.csv", "as_shown", False, "chosen", [5999, 31840, -50000, 675]),
+        ("card_ofx.ofx", "auto", False, "file", [-4210, -1999, 50000]),
+    ],
+)
+def test_signs_come_from_the_choice_the_file_or_its_type_column_then_amex_headers(name, signs, flipped, by, amounts):
+    parsed = SF.parse((FIXTURES / name).read_bytes(), signs)
+    assert (parsed.facts.flipped, parsed.facts.signs_by) == (flipped, by)
+    assert [r.amount for r in parsed.rows] == amounts
+
+
+def test_a_card_file_read_flipped_posts_charges_as_money_out_and_the_post_keeps_the_previews_signs(books):
+    with books.transaction() as c:
+        card = money_account(c, "card_program", "2100", "Discover")
+        shown = review(c, card, "discover.csv")
+        assert (shown["card"], shown["signs"]) == (True, {"flipped": False, "by": "as shown"})
+        payload = {"money_account_id": card, "file": file_b64("discover.csv"), "file_name": "discover.csv"}
+        turned = SU.preview(FC.load(c, AT), OWNER, {**payload, "signs": "flipped"})
+        assert turned["signs"] == {"flipped": True, "by": "chosen"}
+        assert [row["amount"] for row in turned["rows"]] == [-4820, 30000, -9137]
+        unflipped = post(c, card, "discover.csv", preview_token=turned["token"])
+        assert (unflipped.status, unflipped.code) == ("failed", CONFLICT)  # not what the preview showed
+        done = post(c, card, "discover.csv", preview_token=turned["token"], signs="flipped")
+        assert done.status == "committed", done.reason
+        amounts = c.execute(
+            "SELECT amount FROM fin_feed_txns WHERE money_account_id=? ORDER BY txn_date", (card,)
+        ).fetchall()
+        assert [int(a[0]) for a in amounts] == [-4820, 30000, -9137]
+
+
+def test_a_credit_card_ofx_is_refused_on_a_bank_account(books):
+    with books.transaction() as c:
+        bank = money_account(c, "bank", "1000", "Checking")
+        with pytest.raises(FinanceError) as refused:
+            review(c, bank, "card_ofx.ofx")
+        assert refused.value.code == INVALID and "card account" in str(refused.value)
+
+
+def test_a_file_over_the_size_cap_is_refused(books):
+    with books.transaction() as c:
+        bank = money_account(c, "bank", "1000", "Checking")
+        big = b"Date,Description,Amount\n" + b"10/02/2026,X,1.00\n" * (SF.MAX_BYTES // 18 + 1)
+        payload = {"money_account_id": bank, "file": base64.b64encode(big).decode()}
+        with pytest.raises(FinanceError) as refused:
+            SU.preview(FC.load(c, AT), OWNER, payload)
+        assert refused.value.code == INVALID
+
+
+def test_a_bank_tico_cannot_connect_is_added_then_takes_a_statement(books):
+    with books.transaction() as c:
+        added = act(c, OWNER, "money_account_add", {"kind": "bank", "name": "Chase Checking", "last4": "2210"})
+        assert added.status == "committed", added.reason
+        money = SK.get(c, "fin_money_accounts", added.result["money_account_id"])
+        assert (money["kind"], money["subtype"], money["provider"], money["connection_id"]) == (
+            "bank",
+            "checking",
+            "",
+            None,
+        )
+        gl = c.execute("SELECT type, subtype, name FROM fin_accounts WHERE id=?", (money["account_id"],)).fetchone()
+        assert tuple(gl) == ("asset", "bank", "Chase Checking ••2210")
+        done = post(c, str(money["id"]), "chase_checking.csv")
+        assert (done.status, done.result["new"]) == ("committed", 6)
+        card = act(
+            c,
+            OWNER,
+            "money_account_add",
+            {"kind": "card_program", "name": "Amex Gold", "account_id": account(c, "2100")},
+        )
+        assert card.status == "committed", card.reason
+        assert card.result["account_id"] == account(c, "2100")
+        taken = act(
+            c, OWNER, "money_account_add", {"kind": "card_program", "name": "Other", "account_id": account(c, "2100")}
+        )
+        assert (taken.status, taken.code) == ("failed", CONFLICT)
+        wrong = act(c, OWNER, "money_account_add", {"kind": "bank", "name": "Other", "account_id": account(c, "2100")})
+        assert (wrong.status, wrong.code) == ("failed", INVALID)
+        outsider = act(c, "human:dan", "money_account_add", {"kind": "bank", "name": "Mine"})
+        assert outsider.status == "denied"

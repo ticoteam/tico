@@ -2,13 +2,15 @@
    A CSV, OFX or QFX file is previewed first: the tie-out (opening, in, out, ends at, what the statement says), then each
    row New or Already in Tico, with its vendor and the rule that would attribute it. Post puts the New rows in (statement_
    post, finance.book) with the preview's token, so it posts what was shown. A gap in the tie-out is a warning: the post
-   still goes through, and the account shows "Off by" until a reconciliation clears it.
+   still goes through, and the account shows "Off by" until a reconciliation clears it. The server decides which way the
+   file's amounts read (statement_files.py); the "shows positive" box turns that over and previews again, and the post
+   sends the same choice.
    Reads and writes: POST /api/v2/finance/statements/preview; statement_post through POST /api/v2/finance/actions.
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
 'use strict';
 
 // The most a statement file may be (backend/finance/core/statement_files.py MAX_BYTES).
-const FIN_STMT_MAX_BYTES = 4 * 1024 * 1024;
+const FIN_STMT_MAX_BYTES = 1024 * 1024;
 
 // The money account a statement is for, as the Sources page has it.
 interface FinStmtMoney { id: string; name: string; last4: string | null; kind: string }
@@ -20,15 +22,18 @@ interface FinStmtRow {
 // A preview (backend/finance/statement_upload.py preview): what a post would do, and the token that says it posts it.
 interface FinStmtReview {
   token: string; expires_at: string; money_account_id: string; file_name: string; file_format: string; start: string;
-  end: string; card: boolean; last4: string | null; new: number; duplicate: number; tie: FinStmtTie; rows: FinStmtRow[];
+  end: string; card: boolean; last4: string | null; signs: {flipped: boolean; by: string}; new: number; duplicate: number;
+  tie: FinStmtTie; rows: FinStmtRow[];
 }
-// The file being reviewed: its bytes as base64 (the server keeps none), and its preview.
-interface FinStmtState { file: File; data: string; review: FinStmtReview }
+// How the file's amounts read: the server decides (auto), or the person turned it over.
+type FinStmtSigns = 'auto' | 'as_shown' | 'flipped';
+// The file being reviewed: its bytes as base64 (the server keeps none), the signs it was read with, and its preview.
+interface FinStmtState { file: File; data: string; signs: FinStmtSigns; review: FinStmtReview }
 
 // Money in cents, signed, two decimals: "−$59.99", "$4,212.80".
 const finStmtUsd = (c: number): string =>
   (c < 0 ? '−$' : '$') + (Math.abs(c) / 100).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2});
-// The file's bytes as base64, which is what the server reads. Built in slices, so a 4 MB file does not overflow the stack.
+// The file's bytes as base64, which is what the server reads. Built in slices, so a large file does not overflow the stack.
 async function finStmtBase64(file: File): Promise<string> {
   const bytes = new Uint8Array(await file.arrayBuffer());
   let text = '';
@@ -56,10 +61,12 @@ function finStmtReviewHtml(money: FinStmtMoney, r: FinStmtReview): string {
   const t = r.tie, [inWord, outWord] = r.card ? ['Charges', 'Payments'] : ['In', 'Out'];
   const says = t.statement_says == null ? '' : ` | Statement says ${esc(finStmtUsd(t.statement_says))}`;
   const off = t.off_by ? ` <span class="pill needs">${esc(finStmtUsd(Math.abs(t.off_by)))} off</span>` : '';
+  const flip = `<label class="fin-check"><input type="checkbox" data-fin-stmt-flip${r.signs.flipped ? ' checked' : ''}>${r.card ? 'Charges show positive' : 'Money out shows positive'}</label>`;
   const head = `${esc(money.name)}${money.last4 ? ` ··${esc(money.last4)}` : ''} · ${esc(finStmtMonth(r.end))} · ${esc(r.file_name)}`;
   return `<p class="fin-stmt-head">${head}</p>
     <p class="fin-stmt-tie">Opening ${esc(finStmtUsd(t.opening))} + ${inWord} ${esc(finStmtUsd(t.added))} − ${outWord} ${esc(finStmtUsd(t.removed))}
       = Ends at ${esc(finStmtUsd(t.ends))}${says}${off}</p>
+    ${flip}
     <div class="fin-scroll"><table class="fin-t fin-stmt-t"><thead><tr><th>Date</th><th>Description</th><th>Amount</th><th>Vendor</th>
       <th>Attributed to</th><th>Status</th></tr></thead><tbody>${r.rows.map(finStmtRowHtml).join('')}</tbody></table></div>`;
 }
@@ -80,35 +87,48 @@ function finStmtReset(form: HTMLFormElement): void {
   finNeed(form.querySelector<HTMLButtonElement>('[type=submit]'), 'the submit button').textContent = 'Preview';
 }
 
-// Upload statement for a money account: pick the file, Preview it, then Post its New rows. Cancel closes it.
+// Upload statement for a money account: pick the file, Preview it, then Post its New rows. Cancel closes it. The signs box
+// previews the same file again read the other way.
 function finStatementUpload(money: FinStmtMoney): void {
   let state: FinStmtState | null = null;
   const body = `<label>File<input type="file" name="file" accept=".csv,.ofx,.qfx,text/csv" required></label>
     <div class="fin-stmt" data-fin-stmt-review hidden></div>`;
+  const review = async (form: HTMLFormElement, file: File, data: string, signs: FinStmtSigns): Promise<void> => {
+    const shown: FinStmtReview = await post('/v2/finance/statements/preview', {money_account_id: money.id, file: data, file_name: file.name, signs});
+    state = {file, data, signs, review: shown};
+    finStmtShow(form, money, shown);
+    form.querySelector<HTMLInputElement>('[data-fin-stmt-flip]')?.addEventListener('change', ev => {
+      const flipped = (ev.currentTarget as HTMLInputElement).checked;
+      const err = form.querySelector<HTMLElement>('[data-error]');
+      review(form, file, data, flipped ? 'flipped' : 'as_shown').catch((e: unknown) => {
+        if (err) { err.textContent = e instanceof Error ? e.message : 'Not read'; err.hidden = false; }
+      });
+    });
+  };
   const dlg = finDialog('Upload statement', body, 'Preview', async (form: HTMLFormElement) => {
     const input = finNeed(form.querySelector<HTMLInputElement>('input[type=file]'), 'the file input');
     const file = input.files?.[0];
     if (!file) throw new Error('Pick a CSV, OFX or QFX file');
-    if (file.size > FIN_STMT_MAX_BYTES) throw new Error('A statement file is 4 MB at most');
+    if (file.size > FIN_STMT_MAX_BYTES) throw new Error('A statement file is 1 MB at most');
     if (!state || state.file !== file) {
-      const data = await finStmtBase64(file);
-      const review: FinStmtReview = await post('/v2/finance/statements/preview', {money_account_id: money.id, file: data, file_name: file.name});
-      state = {file, data, review};
-      finStmtShow(form, money, review);
+      await review(form, file, await finStmtBase64(file), 'auto');
       return false;
     }
-    const {data, review} = state;
-    if (review.new === 0) throw new Error('No new rows to post');
+    const {data, signs, review: shown} = state;
+    if (shown.new === 0) throw new Error('No new rows to post');
     let done: {status?: string; result?: {new?: number}};
     try {
-      done = await finAct('statement_post', {money_account_id: money.id, file: data, file_name: file.name, preview_token: review.token});
+      done = await finAct('statement_post', {
+        money_account_id: money.id, file: data, file_name: file.name, preview_token: shown.token,
+        ...(signs === 'auto' ? {} : {signs}),
+      });
     } catch (e) {
       // The preview may be stale (its token lapses after 30 minutes, or the books moved): the next Preview starts again.
       state = null;
       finStmtReset(form);
       throw e;
     }
-    if (done.status === 'committed') toast(`Posted ${done.result?.new ?? review.new} rows`);
+    if (done.status === 'committed') toast(`Posted ${done.result?.new ?? shown.new} rows`);
     void finSrcLoad();
     return true;
   });

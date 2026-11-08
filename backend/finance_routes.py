@@ -109,12 +109,14 @@ class FinanceActionRequest(Contract):
 
 
 class FinanceStatementPreviewRequest(Contract):
-    """A bank or card statement file to review before it posts: CSV, OFX or QFX, base64 encoded (4 MB at most), for a
-    money account Tico cannot connect. Nothing is written but a short-lived preview token."""
+    """A bank or card statement file to review before it posts: CSV, OFX or QFX, base64 encoded (1 MB at most), for a
+    money account Tico cannot connect. `signs` says how its amounts read (auto, as_shown or flipped; a post passes the
+    same). Nothing is written but a short-lived preview token."""
 
     money_account_id: str = Field(min_length=1, max_length=80)
     file: str = Field(min_length=1, max_length=statement_upload.B64_MAX)
     file_name: str | None = Field(None, max_length=200)
+    signs: Literal["auto", "as_shown", "flipped"] = "auto"
 
 
 # The payload field of each action kind that names Library files to attach (backend/finance/documents.py).
@@ -473,6 +475,8 @@ def install(app, store, auth, mutate):
         payload: dict[str, Any] = {"money_account_id": body.money_account_id, "file": body.file}
         if body.file_name:
             payload["file_name"] = body.file_name
+        if body.signs != "auto":
+            payload["signs"] = body.signs
         try:
             with store.transaction() as c:
                 review = statement_upload.preview(finance_context.load(c), who.actor, payload)

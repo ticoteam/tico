@@ -5562,6 +5562,7 @@ SCHEMAS.update(
                 "end": "s",
                 "card": "b",
                 "last4": "n",
+                "signs": obj({"flipped": "b", "by": "s"}),
                 "new": "i",
                 "duplicate": "i",
                 "tie": obj(

@@ -3,7 +3,7 @@ against, the uploads (each found again by its file's hash, per money account), t
 makes, and the short-lived preview tokens. Callers pass plain values; no provider is called from here."""
 
 import sqlite3
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import Any
 
 from . import banking as SK
@@ -74,6 +74,12 @@ def insert_feed(c: sqlite3.Connection, row: Mapping[str, object]) -> str:
 def delete_rows(c: sqlite3.Connection, upload_id: str) -> int:
     """Remove the feed rows an upload put in. Their entries are reversed by the caller first."""
     return c.execute("DELETE FROM fin_feed_txns WHERE upload_id=?", (upload_id,)).rowcount
+
+
+def clear_refund_links(c: sqlite3.Connection, feed_ids: Sequence[str], at: str) -> None:
+    """Rows that refunded a row now removed no longer point at it (fin_feed_txns.refund_of)."""
+    for fid in feed_ids:
+        c.execute("UPDATE fin_feed_txns SET refund_of=NULL, updated_at=? WHERE refund_of=?", (at, fid))
 
 
 def insert_statement(c: sqlite3.Connection, row: Mapping[str, object]) -> None:

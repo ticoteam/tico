@@ -60095,7 +60095,7 @@
           },
           "file": {
             "type": "string",
-            "maxLength": 5592408,
+            "maxLength": 1398104,
             "minLength": 1,
             "title": "File"
           },
@@ -60110,6 +60110,16 @@
               }
             ],
             "title": "File Name"
+          },
+          "signs": {
+            "type": "string",
+            "enum": [
+              "auto",
+              "as_shown",
+              "flipped"
+            ],
+            "title": "Signs",
+            "default": "auto"
           }
         },
         "additionalProperties": false,
@@ -60119,7 +60129,7 @@
           "file"
         ],
         "title": "FinanceStatementPreviewRequest",
-        "description": "A bank or card statement file to review before it posts: CSV, OFX or QFX, base64 encoded (4 MB at most), for a\nmoney account Tico cannot connect. Nothing is written but a short-lived preview token."
+        "description": "A bank or card statement file to review before it posts: CSV, OFX or QFX, base64 encoded (1 MB at most), for a\nmoney account Tico cannot connect. `signs` says how its amounts read (auto, as_shown or flipped; a post passes the\nsame). Nothing is written but a short-lived preview token."
       },
       "FinanceStatementReview": {
         "type": "object",
@@ -60153,6 +60163,22 @@
               "string",
               "null"
             ]
+          },
+          "signs": {
+            "type": "object",
+            "properties": {
+              "flipped": {
+                "type": "boolean"
+              },
+              "by": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "by",
+              "flipped"
+            ],
+            "additionalProperties": true
           },
           "new": {
             "type": "integer"

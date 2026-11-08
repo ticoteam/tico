@@ -125,6 +125,7 @@ PLANNERS: dict[str, handlers.Planner] = {
     "connection_sync": banking.connection_sync,
     "connection_disconnect": banking.connection_disconnect,
     "connection_map": banking.connection_map,
+    "money_account_add": banking.money_account_add,
     "connection_settings": banking.connection_settings,
     "bills_address_set": bills_address_set,
     "books_disconnect": books_disconnect,

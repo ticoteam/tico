@@ -1,7 +1,8 @@
 // Finance › Sources, Upload statement (ui/app/finance-statement-upload.ts) against a fake hub: a bank account whose books are
 // $60.00 short of its statement shows "Off by $60.00" on its row; Upload statement on its rail picks a file, previews it
 // (the tie-out, the rows with New and Already in Tico, the warning) and Post sends statement_post with the preview's token;
-// Cancel closes the review without a write; a card account offers the same; no sideways scroll on a phone.
+// Cancel closes the review without a write; a card account offers the same; the "Charges show positive" box previews the
+// file again read the other way and the post sends that choice; no sideways scroll on a phone.
 const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -25,7 +26,7 @@ const SOURCES = {groups: [{group: 'banks', name: 'Banks', count: 1, rows: [BANK]
 const FILE_TEXT = 'OFXHEADER:100\n<OFX>chase-oct</OFX>\n';
 // The preview a post shows: the books $60.00 short of the statement (ends at $13,607.77, the statement says $13,667.77).
 const REVIEW = {token: 'tok-1', expires_at: '2026-10-15T12:30:00.000000Z', money_account_id: 'm-chase', file_name: 'chase-oct.ofx', file_format: 'ofx',
-  start: '2026-10-01', end: '2026-10-31', card: false, last4: '2210', new: 2, duplicate: 1,
+  start: '2026-10-01', end: '2026-10-31', card: false, last4: '2210', signs: {flipped: false, by: 'file'}, new: 2, duplicate: 1,
   tie: {opening: 1248022, added: 810000, removed: 697245, ends: 1360777, statement_says: 1366777, off_by: -6000},
   rows: [
     {id: '20261002001', date: '2026-10-02', description: 'ADOBE *CREATIVE CLD', amount: -5999, vendor: {id: '', name: 'Adobe'}, attribution: {account: 'Design', rule: 'Adobe'}, status: 'new'},
@@ -61,7 +62,10 @@ async function open(browser, {viewport = DESKTOP, hash = '#/finance/sources'} = 
     if (p === '/api/v2/finance/access') return json(access);
     if (p === '/api/v2/finance/sources') return json(SOURCES);
     if (p === '/api/v2/finance/balance-sheet') return json({assets: [], liabilities: [], equity: []});
-    if (p === '/api/v2/finance/statements/preview' && method === 'POST') return json(REVIEW);
+    if (p === '/api/v2/finance/statements/preview' && method === 'POST') {
+      const flipped = body.signs === 'flipped', card = body.money_account_id === 'm-amex';
+      return json({...REVIEW, money_account_id: body.money_account_id, card, signs: {flipped, by: body.signs === 'auto' ? 'file' : 'chosen'}});
+    }
     if (p === '/api/v2/finance/actions' && method === 'POST' && body.kind === 'statement_post') {
       return json({action_id: 'act-post', kind: 'statement_post', status: 'committed', code: null, reason: null, approver: null,
         result: {upload_id: 'up-1', new: 2, duplicate: 1, skipped: 0, off_by: -6000, statement_id: null}});
@@ -136,11 +140,24 @@ const sideways = page => page.evaluate(() => [document.documentElement, document
       await page.close();
     }
     {
-      const {page, errors} = await open(browser);
+      const {page, errors, writes} = await open(browser);
       await openUpload(page, 'card_program:m-amex', 'cards');
       assert.equal(await page.locator('dialog.fin-dlg').count(), 1, 'card: the same upload opens for a card account');
-      await page.locator('dialog.fin-dlg .fin-foot [data-close]').click();
+      await previewFile(page);
+      const flip = page.locator('dialog.fin-dlg [data-fin-stmt-flip]');
+      assert.equal((await page.locator('dialog.fin-dlg label.fin-check').innerText()).trim(), 'Charges show positive', 'card: the signs box');
+      assert.equal(await flip.isChecked(), false, 'card: read as the file shows');
+      await flip.check();
+      const previewed = () => writes.filter(w => w[1] === '/api/v2/finance/statements/preview');
+      for (let i = 0; i < 50 && previewed().length < 2; i++) await page.waitForTimeout(100);
+      await page.waitForTimeout(100);  // the second review renders
+      assert.equal(await flip.isChecked(), true, 'card: the second review reads flipped');
+      const previews = previewed();
+      assert.deepEqual(previews.map(w => w[2].signs), ['auto', 'flipped'], 'card: the box previews the file again, flipped');
+      await page.locator('dialog.fin-dlg [type=submit]').click();
       await page.locator('dialog.fin-dlg').waitFor({state: 'detached'});
+      const post = writes.find(w => w[2]?.kind === 'statement_post');
+      assert.equal(post?.[2].payload.signs, 'flipped', 'card: the post sends the same signs');
       assert.deepEqual(errors, [], 'card: no page errors');
       await page.close();
     }
