@@ -1018,14 +1018,15 @@ async function tasksBulkApply(state, describe, bodyFor, action) {
   tasksMenuClose();
   state.bulkBusy = true; state.bulkFail = new Map(); state.bulkUndo = null; state.bulkMsg = `Updating ${tasks.length}…`;
   tasksBulkBar(state);
-  const failed = new Map(), closed = [];
+  const failed = new Map(), closed = [], overCap = new Map();
   let changed = 0, already = 0;
   for (let t of tasks) {
     let body = bodyFor(t);
     if (body === null) { already++; continue; }
     for (let attempt = 0; attempt < 2; attempt++) {
       try {
-        await post(`/v2/tasks/${encodeURIComponent(t.id)}`, {version: t.version, ...body});
+        const data = await post(`/v2/tasks/${encodeURIComponent(t.id)}`, {version: t.version, ...body});
+        if (data?.over_cap) overCap.set(body.step || '', [t, body, data]);   // one line per stage, as one move says
         changed++;
         if (describe.close) closed.push({id: t.id, title: t.title, status: t.status, step_id: t.step_id || '', owner: t.owner_id, typed: pipelineTypeId(t) !== 'general',
           told: !!actorSlug(taskRequester(t))});
@@ -1044,6 +1045,7 @@ async function tasksBulkApply(state, describe, bodyFor, action) {
       }
     }
   }
+  for (const [t, body, data] of overCap.values()) taskOverCapWarn(t, body, data);
   if (TASKS_ST !== state) return;
   state.bulkBusy = false;
   state.bulkFail = failed;

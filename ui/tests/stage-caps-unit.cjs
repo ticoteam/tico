@@ -25,12 +25,16 @@ console.log('stage-caps-unit: ok');
 // The Tasks list's row picker (ui/app/task-list.ts tasksRowStatusSave) says a move over a stage's cap, as the board and
 // the task do: the server's over_cap reaches taskOverCapWarn.
 const listSource = fs.readFileSync(path.join(__dirname, '../../build/ui/app/task-list.js'), 'utf8');
-const start = listSource.indexOf('async function tasksRowStatusSave(');
-assert.ok(start >= 0, 'tasksRowStatusSave is defined');
-let depth = 0, end = listSource.indexOf('{', start);
-for (; end < listSource.length; end++) {
-  if (listSource[end] === '{') depth++;
-  else if (listSource[end] === '}' && --depth === 0) break;
+// One function's source from the built list, read up to its closing brace.
+function listFunction(name) {
+  const start = listSource.indexOf(`async function ${name}(`);
+  assert.ok(start >= 0, `${name} is defined`);
+  let depth = 0, end = listSource.indexOf('{', start);
+  for (; end < listSource.length; end++) {
+    if (listSource[end] === '{') depth++;
+    else if (listSource[end] === '}' && --depth === 0) break;
+  }
+  return listSource.slice(start, end + 1);
 }
 const warned = [];
 const card = {id: 'T1', version: 3, type_id: 'line'};
@@ -41,8 +45,23 @@ const rowContext = vm.createContext({
   taskDoneMotion: () => {}, taskRefusedSet: () => {}, v2Get: async () => null, tasksLoad: async () => {},
   TASKS_ST: null,
 });
-vm.runInContext(listSource.slice(start, end + 1), rowContext);
+vm.runInContext(listFunction('tasksRowStatusSave'), rowContext);
 rowContext.tasksRowStatusSave({}, 'T1', () => ({step: 'doing'})).then(() => {
   assert.deepEqual(warned, [['T1', 'doing', true]], 'the row picker says the stage is over its cap');
   console.log('stage-caps-unit: row picker ok');
+});
+
+// A hand-picked bulk move (tasksBulkApply) says it too: one line per stage over its cap, however many cards went.
+const bulkWarned = [];
+const picked = [{id: 'T1', version: 1, type_id: 'line'}, {id: 'T2', version: 1, type_id: 'line'}];
+const bulkContext = vm.createContext({
+  tasksSelectedTasks: () => picked, tasksCanSelect: () => true, tasksMenuClose: () => {}, tasksBulkBar: () => {},
+  post: async () => ({over_cap: true}), v2Get: async () => null, pipelineTypeId: () => 'line', actorSlug: () => '',
+  taskRequester: () => '', TASKS_ST: null,
+  taskOverCapWarn: (task, body, data) => bulkWarned.push([task.id, body.step, data?.over_cap]),
+});
+vm.runInContext(listFunction('tasksBulkApply'), bulkContext);
+bulkContext.tasksBulkApply({}, {done: 'moved to Doing'}, () => ({step: 'doing'})).then(() => {
+  assert.deepEqual(bulkWarned, [['T2', 'doing', true]], 'a bulk move says the stage is over its cap once');
+  console.log('stage-caps-unit: bulk move ok');
 });

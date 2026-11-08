@@ -392,20 +392,25 @@ def test_a_person_filing_is_never_joined_and_bad_blockers_are_refused(api):
         create(api, "qa", {"owner": "human:ana", "title": "Refused", "body": "x", "blocker": bad}, expected=422)
 
 
-def test_a_check_waiting_on_a_task_on_ice_asks_no_bot_about_the_ticket(api):
-    """The check hold names the task its check waits on, so when a person parks that task On ice (D69) the roundup asks
-    its bot nothing about the ticket: it waits on the person who parked it."""
+@pytest.mark.parametrize("check_waits", [False, True])
+def test_a_check_waiting_on_a_task_on_ice_asks_no_bot_about_the_ticket(api, check_waits):
+    """The check hold names the task its check waits on, whether the check is open or waiting itself, so when a person
+    parks that task On ice (D69) the roundup asks its bot nothing about the ticket: it waits on the person who parked it."""
     from backend import task_holds, task_relations as TR, task_roundup
 
     with api.app.state.store.transaction() as c:
         ticket, check = in_qa_ticket(c)
         dependency = H.task_create(c, "bot:qa", "Set up the runner", "The devops bot does it.", "bot:devops-engineer")
         TR.add_blocker(c, "bot:qa", check["id"], dependency["id"])
+        if check_waits:
+            H.task_update(c, "bot:qa", check["id"], status="waiting", note="Waits on the runner")
+            assert H.task(c, check["id"])["status"] == "waiting"
         row = H.task(c, ticket["id"])
         assert row["status"] == "waiting"
         assert [(h["kind"], h["task"]) for h in task_holds.holds(c, row)] == [("check", dependency["id"])]
         waits = task_roundup._blocked_waits(c, H.now())
-        assert [r["id"] for r, _ in waits.get("devops-engineer", [])] == [ticket["id"]]  # the control
+        # The control: the ticket is on the dependency's bot's list (and a waiting check is too, on its own blocker).
+        assert ticket["id"] in [r["id"] for r, _ in waits.get("devops-engineer", [])]
         ice = H.type_create(c, H.KEEPER, "Ice", [{"name": "On ice", "status": "open"}])
         stage = c.execute("SELECT id FROM task_steps WHERE type_id=?", (ice["id"],)).fetchone()[0]
         c.execute("UPDATE task_steps SET card_cap=0 WHERE id=?", (stage,))

@@ -75,13 +75,15 @@ def holds(conn, row):
 
                 check = check_detail(conn, row) or False
                 if check:
-                    # The task the check waits on, when a live blocker holds it (check_blocked.blocked), as `task`.
+                    # The task the check waits on, as `task`: its live blocker (check_blocked.blocked), or for a
+                    # waiting check the task its own first hold names, as its reason does (words).
                     held = H.task(conn, check["check"]) or {}
-                    named = (
-                        TR.live_blocker(conn, held["id"], H.ACTIVE_STATUSES)
-                        if held and held.get("status") != "waiting"
-                        else None
-                    )
+                    if not held:
+                        named = None
+                    elif held.get("status") == "waiting":
+                        named = next(iter(holds(conn, held)), {}).get("task")
+                    else:
+                        named = TR.live_blocker(conn, held["id"], H.ACTIVE_STATUSES)
                     out.append({"kind": "check", "on": check.get("on"), "what": _line(check.get("why")), "task": named})
             continue
         out.append(_task_hold(conn, row, "child", child))
