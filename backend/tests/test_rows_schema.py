@@ -336,6 +336,7 @@ UNTYPED = frozenset(
         "fin_settings",
         "fin_settlements",
         "fin_statements",
+        "fin_subscriptions",
         "fin_tax_jurisdictions",
         "fin_tax_seeds",
         "fin_transfers",

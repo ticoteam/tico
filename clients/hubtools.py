@@ -12226,6 +12226,7 @@ FINANCE_REPORTS = [
     "ar_aging",
     "spend_by",
     "campaigns",
+    "subscriptions",
     "close",
     "sales_tax",
     "1099",
@@ -12248,6 +12249,7 @@ FINANCE_METRICS = [
     "unattributed",
     "ad_spend",
     "per_conversion",
+    "subscriptions_monthly",
 ]
 FINANCE_SEARCH = [
     "entry",
@@ -12262,6 +12264,7 @@ FINANCE_SEARCH = [
     "project",
     "vendor",
     "campaign",
+    "subscription",
 ]
 FINANCE_INBOX = [
     "uncategorized",
@@ -12486,8 +12489,10 @@ def _fin_paged(api, path, query, key, budget):
     "Search the books you may see: entries, bank and card rows, bills, invoices, contacts, "
     "rules and cards (each card with the vendor accounts it is saved on). account finds the chart's lines by code or "
     "name, with their ids, for categorize, bill_create and rule_create. campaign finds an ad campaign by name with its "
-    "owner and the month's spend, clicks and conversions (month: YYYY-MM, default this month). Name a kind to page with "
-    "cursor; without one you get the first few of each kind (not accounts, vendors or campaigns: name that kind).",
+    "owner and the month's spend, clicks and conversions (month: YYYY-MM, default this month). subscription finds a "
+    "recurring charge by vendor name, with its status, monthly cost and next charge. Name a kind to page with "
+    "cursor; without one you get the first few of each kind (not accounts, vendors, campaigns or subscriptions: name "
+    "that kind).",
     {
         "kind": _s("What to search", enum=FINANCE_SEARCH),
         "q": _s("Words to match"),
@@ -12557,7 +12562,8 @@ def finance_search(api, args):
 @tool(
     "hub_finance_report",
     "One report cut to your view: pnl, balance_sheet, cash_flow, budget_vs_actual, ap_aging, "
-    "ar_aging, spend_by, campaigns (the ad campaigns with their owner, spend, clicks and conversions), or close (a "
+    "ar_aging, spend_by, campaigns (the ad campaigns with their owner, spend, clicks and conversions), subscriptions "
+    "(recurring charges with their monthly total and the renewals in the next 30 days), or close (a "
     "month's close checklist). Rows past top_n fold into \"Other · n\". sales_tax and "
     "1099 are the tax workpapers for a year: whole or not at all, and only for someone who sees everything.",
     {
@@ -12615,7 +12621,8 @@ def finance_report(api, args):
     "One number you may see, with when it was worked out: cash, burn, runway_months, revenue, "
     "spend, budget_remaining, budget_pct_used, ap_due, ar_overdue, uncategorized_count, unreconciled_days, "
     "unattributed, ad_spend (your campaigns' spend over start..end, this month by default), per_conversion (that spend "
-    "over the conversions, null with none).",
+    "over the conversions, null with none), subscriptions_monthly (the monthly cost of your active subscriptions, "
+    "with their count).",
     {
         "name": _s("The metric", enum=FINANCE_METRICS),
         "budget_id": _s("budget_remaining/budget_pct_used: the budget"),

@@ -17080,7 +17080,8 @@
                 "price_increases",
                 "unattributed",
                 "ad_spend",
-                "per_conversion"
+                "per_conversion",
+                "subscriptions_monthly"
               ],
               "type": "string",
               "title": "Name"
@@ -17826,7 +17827,8 @@
                 "ap_aging",
                 "ar_aging",
                 "spend_by",
-                "campaigns"
+                "campaigns",
+                "subscriptions"
               ],
               "type": "string",
               "title": "Kind"
@@ -18104,7 +18106,8 @@
                     "estimate",
                     "account",
                     "vendor",
-                    "campaign"
+                    "campaign",
+                    "subscription"
                   ],
                   "type": "string"
                 },
@@ -18557,6 +18560,87 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/FinanceStatements"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Finance"
+        ]
+      }
+    },
+    "/api/v2/finance/subscriptions": {
+      "get": {
+        "summary": "The subscriptions the caller sees: recurring charges the daily look suggests and the Bookkeeper confirms, each with its cadence, expected amount and monthly cost in cents, next charge, card, seats and attribution, and the monthly total of the active ones. status narrows them",
+        "operationId": "listFinanceSubscriptions",
+        "parameters": [
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "suggested",
+                    "active",
+                    "ignored",
+                    "cancelled"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Status"
+            }
+          },
+          {
+            "name": "view_as",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "View As"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FinanceSubscriptions"
                 }
               }
             }
@@ -60074,6 +60158,128 @@
         },
         "required": [
           "statements"
+        ],
+        "additionalProperties": true
+      },
+      "FinanceSubscriptionRow": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "vendor": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "name"
+            ],
+            "additionalProperties": true
+          },
+          "status": {
+            "type": "string"
+          },
+          "cadence": {
+            "type": "string"
+          },
+          "amount": {
+            "type": "integer"
+          },
+          "monthly": {
+            "type": "integer"
+          },
+          "seats": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "next_charge_on": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "card": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              }
+            }
+          },
+          "attribution": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "to": {
+                  "type": "string"
+                },
+                "share": {
+                  "type": "number"
+                }
+              },
+              "required": [
+                "share",
+                "to"
+              ],
+              "additionalProperties": true
+            }
+          },
+          "source": {
+            "type": "string"
+          },
+          "as_of": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "amount",
+          "attribution",
+          "cadence",
+          "card",
+          "id",
+          "monthly",
+          "next_charge_on",
+          "status",
+          "vendor"
+        ],
+        "additionalProperties": true
+      },
+      "FinanceSubscriptions": {
+        "type": "object",
+        "properties": {
+          "rows": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/FinanceSubscriptionRow"
+            }
+          },
+          "monthly_total": {
+            "type": "integer"
+          },
+          "as_of": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "as_of",
+          "monthly_total",
+          "rows"
         ],
         "additionalProperties": true
       },
