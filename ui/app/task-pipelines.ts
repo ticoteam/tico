@@ -95,7 +95,7 @@ function taskPipelineBoard(items, state, head = '') {
   const backlog = working.slice(0, lead), folds = taskBoardFolds(state, type, backlog.length);
   if (phone) folds.backlog = false;               // a phone shows one stage at a time: every backlog stage is a chip
   const inStep = step => items.filter(item => item.task.step_id === step.id);
-  const stepColumn = (step: import('../types/api').TaskStep) => ({id: step.id, name: step.name, drop: step.id, items: inStep(step), scope: {type: type.id, step: step.id}, limit: step.limit_minutes});
+  const stepColumn = (step: import('../types/api').TaskStep) => ({id: step.id, name: step.name, label: stageHandoffLabel(type.id, step.id) || undefined, drop: step.id, items: inStep(step), scope: {type: type.id, step: step.id}, limit: step.limit_minutes});
   const strip = (fold, run, drop, name) => ({id: 'fold-' + fold, fold, drop, items: [], name: run.length === 1 ? run[0].name : name,
     hint: run.map(step => step.name).join(', '), count: fold === 'backlog' ? run.reduce((n, step) => n + inStep(step).length, 0) : ''});
   const columns = [];
@@ -131,7 +131,7 @@ function pipePhoneStageHTML(column: BoardColumn, type: import('../types/api').Ta
   const notices = taskBuilderNotices([...new Set(column.items.flatMap(it => taskBuilderActors(it.task)))], true);
   const cards = column.items.map(taskCard).join('') || '<div class="empty">Nothing here</div>';
   return `<div class="pipe-phone"><section class="pipe-stage" data-col="${esc(column.id)}" aria-label="${esc(column.name)}">
-    <div class="pipe-stage-line"><span class="pipe-stage-name">${esc(column.name + limit)}</span>${pipelineForYouHTML(pipelineForYouCount(column.items), type.id, column.id, true)}${RELEASE_COLUMN.test(column.name) ? '<span class="board-release-slot" data-release-slot></span>' : ''}${all}</div>
+    <div class="pipe-stage-line"><span class="pipe-stage-name">${esc((column.label ? `${column.label} · ${column.items.length}` : column.name) + limit)}</span>${pipelineForYouHTML(pipelineForYouCount(column.items), type.id, column.id, true)}${RELEASE_COLUMN.test(column.name) ? '<span class="board-release-slot" data-release-slot></span>' : ''}${all}</div>
     ${notices}<div class="pipe-stage-cards">${cards}</div></section></div>`;
 }
 const taskByStepRank = (a, b) => (a.task.step_rank ?? Infinity) - (b.task.step_rank ?? Infinity)

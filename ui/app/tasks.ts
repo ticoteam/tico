@@ -29,7 +29,7 @@ interface TaskItem {
 }
 // A column of the board (boardColumnsHTML): a status group, a pipeline step, or a fold.
 interface BoardColumn {
-  id: string; name: string; hint?: string; kind?: string; items: TaskItem[];
+  id: string; name: string; label?: string; hint?: string; kind?: string; items: TaskItem[];
   drop?: string; fold?: string; foldable?: string; count?: number | string | null;
   scope?: {type: string; step: string} | null;
   play?: string;
@@ -476,6 +476,30 @@ function handoffChipHTML(id: string) {
     ? `<button type="button" class="handoff-chip" data-open-task="t${esc(chip.task_id)}" title="${esc(`Open ${label}`)}">${esc(label)}</button>`
     : `<span class="handoff-chip" title="${esc(label)}">${esc(label)}</span>`;
 }
+// The stage a spawn link leaves: its header names the pipeline the cards were sent to, "In Engineering · N", where N is
+// the cards in the stage (the spawn leaves them there). Read per pipeline, with the chips, and repainted when it changes.
+interface PipeLink { from_pipeline_id: string; from_pipeline_stage_id: string; to_pipeline_id: string; mode: string; }
+const STAGE_OUT = new Map<string, {at: number; to: Map<string, string>}>();   // pipeline id -> stage id -> pipeline sent to
+async function stageLinksLoad(typeIds: string[]): Promise<void> {
+  const now = Date.now();
+  const want = [...new Set(typeIds)].filter(id => { const hit = STAGE_OUT.get(id); return !hit || now - hit.at > HANDOFF_CHIP_TTL; }).slice(0, 20);
+  let changed = false;
+  for (const id of want) {
+    const res: {links: PipeLink[]} = await get(`/v2/pipeline-links?pipeline=${encodeURIComponent(id)}`, {fresh: true});
+    const to = new Map<string, string>();
+    for (const l of res.links) if (l.from_pipeline_id === id && l.mode === 'spawn' && !to.has(l.from_pipeline_stage_id)) to.set(l.from_pipeline_stage_id, l.to_pipeline_id);
+    const old = STAGE_OUT.get(id);
+    if (JSON.stringify([...old?.to ?? []]) !== JSON.stringify([...to])) changed = true;
+    STAGE_OUT.set(id, {at: Date.now(), to});
+  }
+  if (changed && TASKS_ST) tasksRender(TASKS_ST);
+}
+// "In Engineering" for a stage a spawn link leaves, else '' (the stage keeps its own name).
+function stageHandoffLabel(typeId: string, stageId: string): string {
+  const to = STAGE_OUT.get(typeId)?.to.get(stageId);
+  const name = to ? TASK_TYPES.find(type => type.id === to)?.name : '';
+  return name ? `In ${name}` : '';
+}
 // Reads the chips the board's cards do not have yet or have from an old read; a read that changes one repaints the board.
 async function handoffChipsLoad(ids: string[]): Promise<void> {
   const now = Date.now();
@@ -558,7 +582,7 @@ function boardColumnsHTML(columns: BoardColumn[], {head = '', cls = ''}: {head?:
     const all = column.items.length && tasksCanSelect()
       ? `<button type="button" class="bcol-all" data-board-select="${esc(column.id)}"${scope} aria-label="${esc(`Select all in ${column.name}`)}" title="Select all in this column">${TL_ICON.all}</button>` : '';
     return `<section class="bcol${empty ? ' is-empty' : ''}" data-col="${esc(column.id)}"${drop} aria-label="${esc(column.name)}${column.hint ? `: ${esc(column.hint)}` : ''}">
-      <header${column.hint ? ` title="${esc(column.hint)}"` : ''}><h2>${esc(column.name)}</h2><span class="cnt tnum">${count}</span>${column.play || ''}${RELEASE_COLUMN.test(column.name) ? '<span class="board-release-slot" data-release-slot></span>' : ''}${all}${fold}</header>
+      <header${column.hint ? ` title="${esc(column.hint)}"` : ''}><h2>${esc(column.label || column.name)}</h2><span class="cnt tnum">${column.label ? '· ' : ''}${count}</span>${column.play || ''}${RELEASE_COLUMN.test(column.name) ? '<span class="board-release-slot" data-release-slot></span>' : ''}${all}${fold}</header>
       ${taskBuilderNotices([...new Set(column.items.flatMap(it => taskBuilderActors(it.task)))], true)}
       ${empty ? '' : `<div class="bcol-body">${column.items.map(taskCard).join('') || '<div class="empty">Nothing here</div>'}</div>`}
     </section>`;

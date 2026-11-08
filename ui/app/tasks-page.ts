@@ -642,6 +642,7 @@ function tasksRender(state) {
   if (paged) html += needsMoreButton();
   tasksPatch(el, html);
   void handoffChipsLoad(items.map((it: TaskItem) => it.task?.id).map((id: unknown) => String(id ?? '')).filter((id: string) => id !== '')).catch(() => { /* the cards keep no chip */ });
+  void stageLinksLoad(items.map((it: TaskItem) => it.task?.type_id).map((id: unknown) => String(id ?? '')).filter((id: string) => id !== '')).catch(() => { /* the stage keeps its own name */ });
   if (state.view === 'board') boardReleaseSlots();
   needsMoreWatch(paged ? el : null);
   if (focusWhat && !el.contains(document.activeElement)) {

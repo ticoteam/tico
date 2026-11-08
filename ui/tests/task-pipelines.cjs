@@ -118,6 +118,8 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
       if (p === '/api/v2/pipeline-links/handoffs') return json({cards: {'task-1': {
         chip: {handoff_id: 'h2', pipeline: 'Engineering', task_id: 'task-2', stage: 'Copy review', readable: true},
         from: {pipeline: 'Marketing', task_id: 'task-0', title: 'Write the campaign', readable: true}}}});
+      if (p === '/api/v2/pipeline-links') return json({next: null, links: url.searchParams.get('pipeline') === 'marketing'
+        ? [{id: 'link-copy', from_pipeline_id: 'marketing', from_pipeline_stage_id: 'copy', to_pipeline_id: 'engineering', mode: 'spawn'}] : []});
       if (p === '/api/v2/conversations') return json({conversations: []});
       if (p.endsWith('/messages')) return json({messages: []});
       if (p === '/api/v2/models') return json({models: [], harnesses: []});
@@ -126,7 +128,7 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
     await page.goto('http://tico-ui.test/#/tasks');
     await page.waitForFunction(() => TASKS_ST && !TASKS_ST.loading && TASKS_ST.type === 'marketing' && document.querySelector('#task-body .bcard'));
     assert.deepEqual(await page.locator('#task-body .bcol h2').allTextContents(),
-      ['Draft', 'Legal review', 'Copy review', 'Doing', 'Finished'], 'done and closed steps fold into one strip');
+      ['Draft', 'Legal review', 'In Engineering', 'Doing', 'Finished'], 'done and closed steps fold into one strip; a stage a spawn link leaves is headed by the pipeline it sends to');
     assert.equal(await page.locator('#task-body .bcard').count(), 3, 'finished work leaves the board');
     assert.deepEqual(await page.locator('#task-body [data-col="draft"] .bcard .tl-waiting').allTextContents(), ['Waiting'],
       'a waiting task stays in its step with a tag');
@@ -199,6 +201,9 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
     // The card on the board names the card it went to and that card's stage (its chip opens that card).
     await page.locator('#task-body .bcard[data-task-key="ttask-1"] .handoff-chip').waitFor();
     assert.equal(await page.locator('#task-body .bcard[data-task-key="ttask-1"] .handoff-chip').innerText(), 'Engineering · Copy review');
+    // The stage a spawn link leaves is headed by the pipeline it sends to, with its count.
+    await page.locator('#task-body section[data-col="copy"] h2', {hasText: 'In Engineering'}).waitFor();
+    assert.match(await page.locator('#task-body section[data-col="copy"] .cnt').innerText(), /^· \d+$/);
     assert.equal(await peek.locator('.tmodal-head .pill').count(), 0, 'the header carries no state pill');
     assert.equal(await peek.locator('[data-tag-key]').innerText(), 'release · Oct 2');
     assert.equal(await peek.locator('[data-prop="tags"]').count(), 1);
