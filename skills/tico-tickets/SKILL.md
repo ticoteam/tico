@@ -59,8 +59,11 @@ Loop until nothing is left that you can move:
    failure against main before calling it yours.
 4. **PR**: title in plain words; body **What / Why / Surfaces / How it was checked**, and `Closes #<n>`.
    **Surfaces** lists which entries of CLAUDE.md's "Hit every surface" applied and what was done for each.
-5. **Merge** when the PR is reviewed and the tests you changed pass with `scripts/remote.py`: mark the PR ready for
-   review, then enqueue it with `gh pr merge <n> --merge`. That puts the PR in main's merge queue, which runs
+5. **Merge**: open the PR as a draft (`gh pr create --draft`) and push freely; a draft runs no CI. When the change is
+   done, run `python3 scripts/pr_checks.py local --ready` once: it runs the tests the PR checks select for the diff on
+   this computer, prints a receipt line with the head sha, and marks the PR ready after a pass. Each push to a ready PR
+   runs CI again, so batch fixes. When the PR is reviewed and its `checks` are green, enqueue it with
+   `gh pr merge <n> --merge`. That puts the PR in main's merge queue, which runs
    the selected checks on the merged result and lands it only if they pass; a red run removes the PR from the queue.
    Enqueue once. Don't rebase or merge main to be current; rebase only for a conflict. If the queue removes the PR,
    read why before you push again. Never `--admin` or the REST merge endpoint: both skip the queue.

@@ -60,8 +60,11 @@ never ship around a known failure. If a test may fail, it shouldn't exist.
 Run scripts/check.sh before pushing; `git config core.hooksPath .githooks` runs it on every push.
 
 ## How we work
-Trunk-based: branches are `<who>/<topic>`, one ticket per PR. Draft PRs run no CI. The flow: work in draft and run the tests you touched locally, run
-`gh pr ready` when done, wait for green `checks` on that run (not skipped), and once it is reviewed, enqueue it with
+Trunk-based: branches are `<who>/<topic>`, one ticket per PR. Draft PRs run no CI. The flow: open the PR as a draft
+(`gh pr create --draft`) and push freely; when done, run `python3 scripts/pr_checks.py local --ready`, which runs the
+tests the PR checks select for your diff on this computer, prints a receipt line with the head sha for the ticket, and
+marks the PR ready after a pass. Mark ready once: each push to a ready PR runs CI again, so batch later fixes. Wait for
+green `checks` on that run (not skipped), and once it is reviewed, enqueue it with
 `gh pr merge <N> --merge`: the merge queue tests the PR merged onto current main before it lands. Enqueue once.
 After a queue failure, fix it and get green PR checks before enqueuing again.
 Don't rebase or merge main to be current; rebase only when GitHub reports a conflict. If the queue removes the PR,

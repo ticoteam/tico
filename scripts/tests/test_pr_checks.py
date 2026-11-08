@@ -975,6 +975,21 @@ def test_a_draft_or_a_fork_runs_no_test_or_sim_leg():
         assert "github.event.pull_request.head.repo.full_name == github.repository" in jobs[name]["if"], name
 
 
+def test_a_draft_starts_no_job_and_marking_it_ready_or_pushing_to_a_ready_pull_request_runs_the_checks():
+    """Builders push a draft freely: no job runs on it. Marking it ready runs the pull request jobs, and so does each
+    later push while it stays ready. `checks` is skipped on a draft, and GitHub never enqueues a draft."""
+    doc = workflow_jobs()
+    assert {"ready_for_review", "synchronize", "opened", "reopened"} <= set(doc[True]["pull_request"]["types"])
+    for name, job in doc["jobs"].items():
+        condition = str(job.get("if", ""))
+        queue_only = "github.event_name == 'merge_group'" in condition and "pull_request" not in condition
+        assert queue_only or "!github.event.pull_request.draft" in condition, name
+    # On a ready pull request nothing but the draft flag holds back the plan, the static checks and the gate.
+    assert doc["jobs"]["plan"]["if"] == "${{ !github.event.pull_request.draft }}"
+    assert doc["jobs"]["static"]["if"] == "${{ !github.event.pull_request.draft }}"
+    assert doc["jobs"]["checks"]["if"] == "${{ always() && !github.event.pull_request.draft }}"
+
+
 def test_a_failed_suite_or_sim_leg_cancels_its_run_and_checks_still_reports():
     jobs = workflow_jobs()["jobs"]
     for name in ("tests", "factory-sim"):

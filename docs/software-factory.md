@@ -66,6 +66,11 @@ approval before merge even when the team's task review policy allows a fixes-onl
 
 ## Dev tickets: the steps
 
+The Builder opens its PR as a draft and pushes freely: a draft runs no CI and gets no review request. When the change
+is done it runs the checks its pull request would run on its own computer (in Tico's repository,
+`python3 scripts/pr_checks.py local --ready`, which prints a receipt line for the ticket) and marks the PR ready once.
+Each push to a ready PR runs CI again, so fixes go in one push.
+
 A bot PR on a General task, or any board with no check steps, uses the company's Dev ticket review pools too.
 Tico files `Review 1: PR #N` with the PR link and head, then Review 2 if the ticket flow has two reviews.
 The same pool rules pick the reviewer. A `qa` task also needs QA. Code and docs use the same route, including

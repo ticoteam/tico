@@ -26,11 +26,13 @@ of reason. A blocking comment (a bug, a broken rule, or cost or data to undo) is
 ## 3. Fix
 
 Fix on the same branch. Write the test that would have caught the problem first, as in
-`playbooks/build-a-dev-ticket.md` step 3. Push with a normal push. Never force-push over a reviewer's commit.
+`playbooks/build-a-dev-ticket.md` step 3. Never force-push over a reviewer's commit.
 
-## 4. Check
+## 4. Check, then push once
 
-Run the checks at the new head and record the head commit. A check that did not run is "not checked".
+The pull request is ready, so every push runs CI. Make all the fixes first, run the checks on your computer at the new
+head as in `playbooks/build-a-dev-ticket.md` step 5, then push once with a normal push. Record the head commit. A check
+that did not run is "not checked".
 
 ## 5. Move on
 
