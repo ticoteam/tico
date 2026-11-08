@@ -1665,10 +1665,19 @@ mod tests {
             let module = args.iter().position(|a| a == "-m").unwrap();
             assert_eq!(args[module + 1], "runner_support.release_update");
             // Execute only origin/main's real parser, without starting an update or touching its status.
+            // A checkout without an origin/main ref (a release candidate's clone) reads the checkout's own parser instead.
+            let checkout_parser = Path::new(env!("CARGO_MANIFEST_DIR"))
+                .parent()
+                .unwrap()
+                .join("runner_support/release_update.py");
             let out = Command::new("python3").arg("-c").arg(r#"
-import argparse, ast, subprocess, sys
+import argparse, ast, os, subprocess, sys
 from pathlib import Path
-source = subprocess.check_output(['git', 'show', 'origin/main:runner_support/release_update.py'], text=True)
+if subprocess.run(['git', 'rev-parse', '--verify', '--quiet', 'origin/main^{commit}'], capture_output=True).returncode == 0:
+    source = subprocess.check_output(['git', 'show', 'origin/main:runner_support/release_update.py'], text=True)
+else:
+    print('no origin/main ref here; checking the checkout parser', file=sys.stderr)
+    source = Path(os.environ['TICO_UPDATER_CHECKOUT_PARSER']).read_text()
 main = next(n for n in ast.parse(source).body if isinstance(n, ast.FunctionDef) and n.name == 'main')
 parse = next(n for n in ast.walk(main) if isinstance(n, ast.Assign) and isinstance(n.value, ast.Call)
              and isinstance(n.value.func, ast.Attribute) and n.value.func.attr == 'parse_args')
@@ -1676,7 +1685,7 @@ main.body = [n for n in main.body if n.end_lineno < parse.lineno] + [parse]
 scope = {'argparse': argparse, 'ROOT': Path('.')}
 exec(compile(ast.Module(body=[main], type_ignores=[]), '<origin/main updater parser>', 'exec'), scope)
 scope['main'](sys.argv[1:])
-"#).args(&args[module + 2..]).env("TICO_GIT_OWNED_ROOTS", owned).current_dir(env!("CARGO_MANIFEST_DIR")).output().unwrap();
+"#).args(&args[module + 2..]).env("TICO_GIT_OWNED_ROOTS", owned).env("TICO_UPDATER_CHECKOUT_PARSER", &checkout_parser).current_dir(env!("CARGO_MANIFEST_DIR")).output().unwrap();
             assert!(
                 out.status.success(),
                 "{}",
