@@ -116,6 +116,7 @@ OPERATIONS = {
     "automation": "an automation's write",
     "slack": "a Slack reply",
     "mail": "an email",
+    "payment": "a payment",
     "update": "an update",
     "task_question": "a question put to a person",
     "slack_message": "a Slack message",

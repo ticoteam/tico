@@ -375,9 +375,13 @@ def act(
     idempotency_key: str,
     dry_run: bool = False,
     at: str | None = None,
+    *,
+    route: tuple[str, str, str] | None = None,
 ) -> ActionResult:
     """Request one Finance action. The same key returns the first result and does nothing again. A dry run writes
-    nothing and says what would happen: the outcome, the rule, the approver and the budget impact."""
+    nothing and says what would happen: the outcome, the rule, the approver and the budget impact. `route` is the HTTP
+    caller's org rule identity (org_rule_check.checked_as): a payment a bot sends is checked against the Directory's
+    rules (backend/payment_rules.py) and may be held, status "held", with nothing written to Finance."""
     p = O.principal(principal)
     key = (idempotency_key or "").strip()
     if not key or len(key) > MAX_KEY:
@@ -431,6 +435,17 @@ def act(
         gate, plan = _plan(ctx, p, kind, body, action_id)
         approver = _approver(ctx, gate, p.who)
         body = {**body, **plan.resolved}
+        rule_check = _payment_rules(c, p, kind, body, ctx.book.id, plan.summary, route)
+        if rule_check is not None and dry_run and _held_by_rules(rule_check):
+            _rollback(c, "fin_act", mark)
+            return ActionResult(status="held", kind=kind, code="held", dry_run=True)
+        if rule_check is not None and not dry_run:
+            if _held_by_rules(rule_check):
+                raise _Held(rule_check)  # nothing of the payment is written; its hold is, below, past the savepoint
+            spent = cast(dict[str, object] | None, tico.payment_rules().settle(c, rule_check))
+            if spent is not None:  # another payment used that waiver first
+                _rollback(c, "fin_act", mark)
+                return ActionResult(status="held", kind=kind, code="held", reason=str(spent.get("text") or ""))
         would = "needs_approval" if approver else "committed"
         if dry_run:
             _rollback(c, "fin_act", mark)
@@ -497,6 +512,11 @@ def act(
         return ActionResult(
             status="committed", kind=kind, action_id=action_id, result=result, rule=gate.rule, impact=plan.impact
         )
+    except _Held as h:
+        _rollback(c, "fin_act", mark)
+        held = cast(dict[str, object] | None, tico.payment_rules().settle(c, h.prep)) or {}
+        reason = str(held.get("text") or "This payment is held by the Directory rules.")
+        return ActionResult(status="held", kind=kind, code="held", reason=reason, result={"hold": held} if held else {})
     except FinanceError as e:
         _rollback(c, "fin_act", mark)
         if isinstance(e, gating.Denied) and not dry_run:
@@ -508,6 +528,37 @@ def act(
     except BaseException:
         _rollback(c, "fin_act", mark)
         raise
+
+
+class _Held(Exception):
+    """A payment the Directory's rules hold: `act` undoes its plan, then writes the hold."""
+
+    def __init__(self, prep: dict[str, object]) -> None:
+        super().__init__("held")
+        self.prep = prep
+
+
+def _payment_rules(
+    c: sqlite3.Connection,
+    p: O.Principal,
+    kind: str,
+    body: Mapping[str, object],
+    book_id: str,
+    summary: str,
+    route: tuple[str, str, str] | None,
+) -> dict[str, object] | None:
+    """The Directory's check of a payment to an outside payee (not a move between our own accounts), read only: None
+    when nothing is checked or nothing holds it."""
+    if kind != "payment_create" or body.get("method") == payments.INTERNAL:
+        return None
+    R: Any = tico.payment_rules()
+    found = R.checked(p.actor, p.for_actor, route)
+    return cast(dict[str, object] | None, R.prepare(c, found, body, book_id, summary))
+
+
+def _held_by_rules(prep: Mapping[str, object]) -> bool:
+    """Whether the check holds the payment (a waiver it may spend lets it go on)."""
+    return bool(prep.get("failed")) or prep.get("verdict") is not None
 
 
 def carries_card_number(payload: Mapping[str, object]) -> bool:

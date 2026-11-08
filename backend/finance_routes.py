@@ -17,7 +17,8 @@ from fastapi import Path, Query, Request, Response
 from fastapi.responses import RedirectResponse
 from pydantic import Field
 
-from . import company_server, hook_relay
+from . import company_server, hook_relay, org_rule_check
+from . import payment_rules  # noqa: F401  (registers the held-payment replayer before the app is sealed)
 from .finance import actions as finance
 from .finance import books_link
 from .finance import brief as finance_brief_mod
@@ -1155,17 +1156,21 @@ def install(app, store, auth, mutate):
         readable_files(request, who, body)
         audit_private_read(request, who.actor)  # the receipt and a dry run both carry the action's impact (spec 7.5)
         key = (request.headers.get("idempotency-key") or "").strip()
+        # Who the org rules check this as: a person's request through the Assistant or BotOps is a bot's send.
+        route = org_rule_check.checked_as(who, store.settings.assistant_bot)
         if body.dry_run:
             try:
                 with store.transaction() as c:
-                    tried = finance.act(c, who.actor, body.kind, body.payload, key or "dry-run", dry_run=True).as_dict()
+                    tried = finance.act(
+                        c, who.actor, body.kind, body.payload, key or "dry-run", dry_run=True, route=route
+                    ).as_dict()
             except finance.FinanceError as e:
                 raise problem(e) from None
             return audited(tried)
         first = {}
 
         def work(c):
-            done = finance.act(c, who.actor, body.kind, body.payload, key)
+            done = finance.act(c, who.actor, body.kind, body.payload, key, route=route)
             first["result"] = done
             return {"action_id": done.action_id, "kind": done.kind, "status": done.status}
 

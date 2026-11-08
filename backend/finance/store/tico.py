@@ -615,3 +615,11 @@ def watch_org(c: sqlite3.Connection) -> None:
     c.execute("INSERT OR IGNORE INTO fin_view_versions(id, version, reason, updated_at) VALUES(1, 0, '', ?)", (now(),))
     for name, when, why in ORG_TRIGGERS:
         c.execute(f"CREATE TRIGGER IF NOT EXISTS {name} {when} BEGIN {_BUMP.format(why=why)}; END")
+
+
+# ------------------------------------------------------------------------------------------------ Directory rules
+def payment_rules() -> Any:
+    """backend/payment_rules.py: the Directory's structured check of a payment a bot makes (untyped, so Any)."""
+    from ... import payment_rules as PR
+
+    return PR
