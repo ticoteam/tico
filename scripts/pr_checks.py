@@ -1489,7 +1489,13 @@ def run(plan_path, suite, root=None):
         if not files:
             raise RuntimeError("A browser check requires an explicit nonempty script list")
         command = ["node", "scripts/ui-tests.cjs", "-j", str(WORKERS), *files]
-        env = {**os.environ, "TICO_UI_TIMINGS": str(root / "ci-results" / f"{suite}.json")}
+        # The browser tests start their Python servers from TICO_PYTHON. A bare python3 on the browser VM lacks the
+        # backend requirements (uvicorn, cryptography), so use this run's interpreter, as release_checks.py does.
+        env = {
+            **os.environ,
+            "TICO_PYTHON": sys.executable,
+            "TICO_UI_TIMINGS": str(root / "ci-results" / f"{suite}.json"),
+        }
     else:
         if not files or any(not (root / f).is_file() for f in files):
             raise RuntimeError("Python check requires an explicit nonempty existing file list")

@@ -705,6 +705,7 @@ def test_groups_are_sized_to_the_job_target_and_browser_scripts_split_by_measure
 
     # A browser job runs exactly its scripts at full width and records their times for the next split.
     monkeypatch.setattr(checks, "ROOT", tmp_path)
+    monkeypatch.delenv("TICO_PYTHON", raising=False)  # as on a release browser VM, where nothing sets it
     calls = []
     monkeypatch.setattr(
         checks.subprocess,
@@ -720,6 +721,8 @@ def test_groups_are_sized_to_the_job_target_and_browser_scripts_split_by_measure
     command, env = calls[-1]
     assert command == ["node", "scripts/ui-tests.cjs", "-j", str(checks.WORKERS), "chat"]
     assert env["TICO_UI_TIMINGS"] == str(tmp_path / "ci-results" / "browser-1.json")
+    # The browser servers run on this run's interpreter (the one with the backend requirements), not a bare python3.
+    assert env["TICO_PYTHON"] == sys.executable
     with pytest.raises(RuntimeError, match="nonempty"):
         checks.run(tmp_path / "plan.json", "browser-2")
     recorded = tmp_path / "browser-1.json"
