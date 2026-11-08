@@ -1,0 +1,615 @@
+[
+ {
+  "data": {
+   "repository": {
+    "pullRequests": {
+     "pageInfo": {
+      "hasNextPage": true,
+      "endCursor": "Y3Vyc29yOjk="
+     },
+     "nodes": [
+      {
+       "number": 2984,
+       "title": "Stop committing the generated API spec",
+       "url": "https://github.com/ticoteam/tico/pull/2984",
+       "isDraft": false,
+       "baseRefName": "main",
+       "headRefOid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+       "mergeable": "MERGEABLE",
+       "isInMergeQueue": false,
+       "labels": {
+        "nodes": []
+       },
+       "commits": {
+        "nodes": [
+         {
+          "commit": {
+           "committedDate": "2026-11-08T10:00:00Z",
+           "statusCheckRollup": {
+            "state": "SUCCESS"
+           }
+          }
+         }
+        ]
+       },
+       "timelineItems": {
+        "nodes": [
+         {
+          "__typename": "RemovedFromMergeQueueEvent",
+          "createdAt": "2026-11-08T12:00:00Z",
+          "reason": "failed_checks",
+          "beforeCommit": {
+           "oid": "1111111111111111111111111111111111111111",
+           "parents": {
+            "nodes": [
+             {
+              "oid": "0000000000000000000000000000000000000000"
+             },
+             {
+              "oid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+             }
+            ]
+           }
+          }
+         }
+        ]
+       }
+      },
+      {
+       "number": 3060,
+       "title": "Queue: one gh poller",
+       "url": "https://github.com/ticoteam/tico/pull/3060",
+       "isDraft": false,
+       "baseRefName": "main",
+       "headRefOid": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+       "mergeable": "MERGEABLE",
+       "isInMergeQueue": false,
+       "labels": {
+        "nodes": []
+       },
+       "commits": {
+        "nodes": [
+         {
+          "commit": {
+           "committedDate": "2026-11-08T10:00:00Z",
+           "statusCheckRollup": {
+            "state": "PENDING"
+           }
+          }
+         }
+        ]
+       },
+       "timelineItems": {
+        "nodes": [
+         {
+          "__typename": "RemovedFromMergeQueueEvent",
+          "createdAt": "2026-11-08T12:00:00Z",
+          "reason": "failed_checks",
+          "beforeCommit": {
+           "oid": "2222222222222222222222222222222222222222",
+           "parents": {
+            "nodes": [
+             {
+              "oid": "0000000000000000000000000000000000000000"
+             },
+             {
+              "oid": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+             }
+            ]
+           }
+          }
+         }
+        ]
+       }
+      },
+      {
+       "number": 3034,
+       "title": "Reach dry run",
+       "url": "https://github.com/ticoteam/tico/pull/3034",
+       "isDraft": false,
+       "baseRefName": "main",
+       "headRefOid": "cccccccccccccccccccccccccccccccccccccccc",
+       "mergeable": "MERGEABLE",
+       "isInMergeQueue": false,
+       "labels": {
+        "nodes": []
+       },
+       "commits": {
+        "nodes": [
+         {
+          "commit": {
+           "committedDate": "2026-11-08T10:00:00Z",
+           "statusCheckRollup": {
+            "state": "SUCCESS"
+           }
+          }
+         }
+        ]
+       },
+       "timelineItems": {
+        "nodes": [
+         {
+          "__typename": "RemovedFromMergeQueueEvent",
+          "createdAt": "2026-11-08T12:00:00Z",
+          "reason": "failed_checks",
+          "beforeCommit": {
+           "oid": "3333333333333333333333333333333333333333",
+           "parents": {
+            "nodes": [
+             {
+              "oid": "0000000000000000000000000000000000000000"
+             },
+             {
+              "oid": "cccccccccccccccccccccccccccccccccccccccc"
+             }
+            ]
+           }
+          }
+         }
+        ]
+       }
+      },
+      {
+       "number": 2991,
+       "title": "Routines rename",
+       "url": "https://github.com/ticoteam/tico/pull/2991",
+       "isDraft": false,
+       "baseRefName": "main",
+       "headRefOid": "dddddddddddddddddddddddddddddddddddddddd",
+       "mergeable": "CONFLICTING",
+       "isInMergeQueue": false,
+       "labels": {
+        "nodes": []
+       },
+       "commits": {
+        "nodes": [
+         {
+          "commit": {
+           "committedDate": "2026-11-08T10:00:00Z",
+           "statusCheckRollup": {
+            "state": "FAILURE"
+           }
+          }
+         }
+        ]
+       },
+       "timelineItems": {
+        "nodes": [
+         {
+          "__typename": "RemovedFromMergeQueueEvent",
+          "createdAt": "2026-11-08T12:00:00Z",
+          "reason": "merge_conflict",
+          "beforeCommit": {
+           "oid": null,
+           "parents": {
+            "nodes": [
+             {
+              "oid": "0000000000000000000000000000000000000000"
+             }
+            ]
+           }
+          }
+         }
+        ]
+       }
+      },
+      {
+       "number": 2999,
+       "title": "GitHub connect push",
+       "url": "https://github.com/ticoteam/tico/pull/2999",
+       "isDraft": false,
+       "baseRefName": "main",
+       "headRefOid": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+       "mergeable": "MERGEABLE",
+       "isInMergeQueue": false,
+       "labels": {
+        "nodes": []
+       },
+       "commits": {
+        "nodes": [
+         {
+          "commit": {
+           "committedDate": "2026-11-08T10:00:00Z",
+           "statusCheckRollup": {
+            "state": "SUCCESS"
+           }
+          }
+         }
+        ]
+       },
+       "timelineItems": {
+        "nodes": [
+         {
+          "__typename": "RemovedFromMergeQueueEvent",
+          "createdAt": "2026-11-08T12:00:00Z",
+          "reason": "failed_checks",
+          "beforeCommit": {
+           "oid": "5555555555555555555555555555555555555555",
+           "parents": {
+            "nodes": [
+             {
+              "oid": "0000000000000000000000000000000000000000"
+             },
+             {
+              "oid": "9999999999999999999999999999999999999999"
+             }
+            ]
+           }
+          }
+         }
+        ]
+       }
+      },
+      {
+       "number": 3017,
+       "title": "Docs: routines",
+       "url": "https://github.com/ticoteam/tico/pull/3017",
+       "isDraft": false,
+       "baseRefName": "main",
+       "headRefOid": "ffffffffffffffffffffffffffffffffffffffff",
+       "mergeable": "MERGEABLE",
+       "isInMergeQueue": true,
+       "labels": {
+        "nodes": []
+       },
+       "commits": {
+        "nodes": [
+         {
+          "commit": {
+           "committedDate": "2026-11-08T10:00:00Z",
+           "statusCheckRollup": {
+            "state": "SUCCESS"
+           }
+          }
+         }
+        ]
+       },
+       "timelineItems": {
+        "nodes": [
+         {
+          "__typename": "AddedToMergeQueueEvent"
+         }
+        ]
+       }
+      },
+      {
+       "number": 3061,
+       "title": "Brand book draft",
+       "url": "https://github.com/ticoteam/tico/pull/3061",
+       "isDraft": true,
+       "baseRefName": "main",
+       "headRefOid": "6666666666666666666666666666666666666666",
+       "mergeable": "MERGEABLE",
+       "isInMergeQueue": false,
+       "labels": {
+        "nodes": []
+       },
+       "commits": {
+        "nodes": [
+         {
+          "commit": {
+           "committedDate": "2026-10-20T09:00:00Z",
+           "statusCheckRollup": null
+          }
+         }
+        ]
+       },
+       "timelineItems": {
+        "nodes": []
+       }
+      },
+      {
+       "number": 3045,
+       "title": "Ticket filters",
+       "url": "https://github.com/ticoteam/tico/pull/3045",
+       "isDraft": false,
+       "baseRefName": "main",
+       "headRefOid": "7777777777777777777777777777777777777777",
+       "mergeable": "MERGEABLE",
+       "isInMergeQueue": false,
+       "labels": {
+        "nodes": [
+         {
+          "name": "needs-main-merge"
+         }
+        ]
+       },
+       "commits": {
+        "nodes": [
+         {
+          "commit": {
+           "committedDate": "2026-10-30T09:00:00Z",
+           "statusCheckRollup": {
+            "state": "SUCCESS"
+           }
+          }
+         }
+        ]
+       },
+       "timelineItems": {
+        "nodes": []
+       }
+      },
+      {
+       "number": 2917,
+       "title": "Factory sim stuck tickets",
+       "url": "https://github.com/ticoteam/tico/pull/2917",
+       "isDraft": false,
+       "baseRefName": "main",
+       "headRefOid": "8888888888888888888888888888888888888888",
+       "mergeable": "MERGEABLE",
+       "isInMergeQueue": false,
+       "labels": {
+        "nodes": []
+       },
+       "commits": {
+        "nodes": [
+         {
+          "commit": {
+           "committedDate": "2026-11-08T10:00:00Z",
+           "statusCheckRollup": {
+            "state": "SUCCESS"
+           }
+          }
+         }
+        ]
+       },
+       "timelineItems": {
+        "nodes": [
+         {
+          "__typename": "RemovedFromMergeQueueEvent",
+          "createdAt": "2026-11-08T12:00:00Z",
+          "reason": "manual",
+          "beforeCommit": {
+           "oid": "4444444444444444444444444444444444444444",
+           "parents": {
+            "nodes": [
+             {
+              "oid": "0000000000000000000000000000000000000000"
+             },
+             {
+              "oid": "8888888888888888888888888888888888888888"
+             }
+            ]
+           }
+          }
+         }
+        ]
+       }
+      }
+     ]
+    }
+   }
+  }
+ },
+ {
+  "data": {
+   "repository": {
+    "pullRequests": {
+     "pageInfo": {
+      "hasNextPage": false,
+      "endCursor": null
+     },
+     "nodes": [
+      {
+       "number": 3033,
+       "title": "Tasks page saves",
+       "url": "https://github.com/ticoteam/tico/pull/3033",
+       "isDraft": false,
+       "baseRefName": "main",
+       "headRefOid": "1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b",
+       "mergeable": "MERGEABLE",
+       "isInMergeQueue": false,
+       "labels": {
+        "nodes": []
+       },
+       "commits": {
+        "nodes": [
+         {
+          "commit": {
+           "committedDate": "2026-11-08T10:00:00Z",
+           "statusCheckRollup": {
+            "state": "SUCCESS"
+           }
+          }
+         }
+        ]
+       },
+       "timelineItems": {
+        "nodes": [
+         {
+          "__typename": "RemovedFromMergeQueueEvent",
+          "createdAt": "2026-11-08T12:00:00Z",
+          "reason": "failed_checks",
+          "beforeCommit": {
+           "oid": "6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a",
+           "parents": {
+            "nodes": [
+             {
+              "oid": "0000000000000000000000000000000000000000"
+             },
+             {
+              "oid": "1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b"
+             }
+            ]
+           }
+          }
+         }
+        ]
+       }
+      },
+      {
+       "number": 2966,
+       "title": "Mail from the source",
+       "url": "https://github.com/ticoteam/tico/pull/2966",
+       "isDraft": false,
+       "baseRefName": "main",
+       "headRefOid": "c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2",
+       "mergeable": "MERGEABLE",
+       "isInMergeQueue": false,
+       "labels": {
+        "nodes": []
+       },
+       "commits": {
+        "nodes": [
+         {
+          "commit": {
+           "committedDate": "2026-11-08T10:00:00Z",
+           "statusCheckRollup": {
+            "state": "SUCCESS"
+           }
+          }
+         }
+        ]
+       },
+       "timelineItems": {
+        "nodes": [
+         {
+          "__typename": "RemovedFromMergeQueueEvent",
+          "createdAt": "2026-11-08T12:00:00Z",
+          "reason": "failed_checks",
+          "beforeCommit": {
+           "oid": "7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a",
+           "parents": {
+            "nodes": [
+             {
+              "oid": "0000000000000000000000000000000000000000"
+             },
+             {
+              "oid": "c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2"
+             }
+            ]
+           }
+          }
+         }
+        ]
+       }
+      },
+      {
+       "number": 2953,
+       "title": "Held runs E",
+       "url": "https://github.com/ticoteam/tico/pull/2953",
+       "isDraft": false,
+       "baseRefName": "main",
+       "headRefOid": "d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3",
+       "mergeable": "MERGEABLE",
+       "isInMergeQueue": false,
+       "labels": {
+        "nodes": []
+       },
+       "commits": {
+        "nodes": [
+         {
+          "commit": {
+           "committedDate": "2026-11-08T10:00:00Z",
+           "statusCheckRollup": {
+            "state": "SUCCESS"
+           }
+          }
+         }
+        ]
+       },
+       "timelineItems": {
+        "nodes": [
+         {
+          "__typename": "RemovedFromMergeQueueEvent",
+          "createdAt": "2026-11-08T12:00:00Z",
+          "reason": "failed_checks",
+          "beforeCommit": {
+           "oid": "8a8a8a8a8a8a8a8a8a8a8a8a8a8a8a8a8a8a8a8a",
+           "parents": {
+            "nodes": [
+             {
+              "oid": "0000000000000000000000000000000000000000"
+             },
+             {
+              "oid": "d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3"
+             }
+            ]
+           }
+          }
+         }
+        ]
+       }
+      },
+      {
+       "number": 2962,
+       "title": "Old fork",
+       "url": "https://github.com/ticoteam/tico/pull/2962",
+       "isDraft": false,
+       "baseRefName": "main",
+       "headRefOid": "e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4",
+       "mergeable": "CONFLICTING",
+       "isInMergeQueue": false,
+       "labels": {
+        "nodes": []
+       },
+       "commits": {
+        "nodes": [
+         {
+          "commit": {
+           "committedDate": "2026-11-08T10:00:00Z",
+           "statusCheckRollup": {
+            "state": "SUCCESS"
+           }
+          }
+         }
+        ]
+       },
+       "timelineItems": {
+        "nodes": []
+       }
+      },
+      {
+       "number": 2970,
+       "title": "Release notes base",
+       "url": "https://github.com/ticoteam/tico/pull/2970",
+       "isDraft": false,
+       "baseRefName": "release",
+       "headRefOid": "f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5",
+       "mergeable": "MERGEABLE",
+       "isInMergeQueue": false,
+       "labels": {
+        "nodes": []
+       },
+       "commits": {
+        "nodes": [
+         {
+          "commit": {
+           "committedDate": "2026-11-08T10:00:00Z",
+           "statusCheckRollup": {
+            "state": "SUCCESS"
+           }
+          }
+         }
+        ]
+       },
+       "timelineItems": {
+        "nodes": [
+         {
+          "__typename": "RemovedFromMergeQueueEvent",
+          "createdAt": "2026-11-08T12:00:00Z",
+          "reason": "failed_checks",
+          "beforeCommit": {
+           "oid": "9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a",
+           "parents": {
+            "nodes": [
+             {
+              "oid": "0000000000000000000000000000000000000000"
+             },
+             {
+              "oid": "f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5"
+             }
+            ]
+           }
+          }
+         }
+        ]
+       }
+      }
+     ]
+    }
+   }
+  }
+ }
+]
