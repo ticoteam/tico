@@ -1165,6 +1165,28 @@ def test_a_status_done_on_an_engineering_subtask_is_held_to_a_waiting_approval(c
     assert co.where(card) == ("Product", "Validate")
 
 
+def test_closing_into_done_then_marking_it_done_is_still_held_to_the_waiting_approval(co):
+    """Codex r5 blocker 1: a Close puts the subtask in Engineering's Done without its approval (a cancellation), and a
+    `status=done` there changed no stage, so neither gate ran: it shipped and Product reached Validate. Marking it done
+    in place is held to its stages' requirements like any finish."""
+    card = review_card(co)
+    approve_spec(co, card)
+    (d41,) = subtasks(co, card)
+    signed = co.require("Engineering", "Todo", "Ana signs off", kind="approval", reviewed_by="person")
+    co.close(d41, actor=ANA)
+    assert co.where(d41) == ("Engineering", "Done")
+    with pytest.raises(H.Refused):
+        co.set_status(d41, "done", actor=ANA)
+    co.c.rollback()
+    assert H.task(co.c, d41)["status"] == "closed"
+    assert co.where(card) == ("Product", "In development")
+    co.move(d41, "Todo", actor=ANA)  # reopened where its approval waits
+    co.approve(d41, signed)
+    co.set_status(d41, "done", actor=ANA)
+    assert H.task(co.c, d41)["status"] == "done"
+    assert co.where(card) == ("Product", "Validate")
+
+
 def test_a_status_done_write_with_no_approval_waiting_still_finishes_the_subtask(co):
     """Finding B1, the other side: with nothing waiting, a status-only completion is progress that the gate lets through,
     and it ships the subtask."""

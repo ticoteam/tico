@@ -249,7 +249,9 @@ def test_the_map_counts_each_window_the_same_as_direct_sql(api):
             c.execute("UPDATE tasks SET created_at=? WHERE id=?", (ago(hours=hours), t["id"]))
         for t, hours in zip(finished, ages, strict=True):
             c.execute(
-                "UPDATE history_events SET created_at=? WHERE subject_type='task' AND kind='step' AND subject_id=?",
+                # The whole finish is dated: its step, its done status and its finish marker.
+                "UPDATE history_events SET created_at=? WHERE subject_type='task' "
+                "AND kind IN ('step', 'status', 'stage_finished') AND subject_id=?",
                 (ago(hours=hours), t["id"]),
             )
     for t, hours in zip(arrived, ages, strict=True):
@@ -383,6 +385,17 @@ def test_a_card_shipped_last_month_and_cancelled_this_week_is_no_done_card_this_
     assert overview(api)["factories"][0]["done"] == 0
     fresh = card(api, sales, steps["Doing"])
     move(api, fresh["id"], step=steps["Done"])
+    assert overview(api)["factories"][0]["done"] == 1
+
+
+def test_a_card_finished_by_a_done_status_counts_as_done(api):
+    # Codex r5 blocker 4: `status=done` on a pipeline whose Done stage is closed moves no step, so the done count, which
+    # read step entries only, missed a card that shipped (and that moved its Product card on).
+    growth = make_factory(api, "Gro")
+    done_closed = [{"name": "Doing", "status": "doing"}, {"name": "Done", "status": "closed"}]
+    sales, steps = make_type(api, "Sls", steps=done_closed, factory=growth)
+    won = card(api, sales, steps["Doing"])
+    move(api, won["id"], status="done")
     assert overview(api)["factories"][0]["done"] == 1
 
 
