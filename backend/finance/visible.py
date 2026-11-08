@@ -244,9 +244,7 @@ def _owns(ctx: Ctx, viewer: str, split: CA.Split, under: frozenset[str], led: fr
     return False
 
 
-def subscriptions_visible(
-    ctx: Ctx, viewer: str, items: Iterable[tuple[str, Sequence[CA.Split], bool]]
-) -> set[str]:
+def subscriptions_visible(ctx: Ctx, viewer: str, items: Iterable[tuple[str, Sequence[CA.Split], bool]]) -> set[str]:
     """The subscription kind of the view rule (subscriptions.py): which subscriptions the viewer sees. Subscriptions are
     not ledger cells, so the rule works on each one's owners and its latest charge: items are (id, the attribution in force
     on its latest charge line, whether the viewer sees that line). A full-detail reader sees all. Otherwise the viewer sees

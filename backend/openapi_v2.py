@@ -6350,7 +6350,17 @@ SCHEMAS.update(
                 "source": "s",
                 "as_of": "s",
             },
-            required=["id", "vendor", "status", "cadence", "amount", "monthly", "next_charge_on", "card", "attribution"],
+            required=[
+                "id",
+                "vendor",
+                "status",
+                "cadence",
+                "amount",
+                "monthly",
+                "next_charge_on",
+                "card",
+                "attribution",
+            ],
         ),
         "FinanceSubscriptions": obj(
             {"rows": items(ref("FinanceSubscriptionRow")), "monthly_total": "i", "as_of": "s"},
