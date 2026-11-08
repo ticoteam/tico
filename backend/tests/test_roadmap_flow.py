@@ -102,3 +102,16 @@ def test_after_setup_a_card_with_no_linked_tickets_does_not_move(tmp_path):
     roadmap_flow.changed(c, card)
     c.commit()
     assert stage_of(c, card) == "Review"
+
+
+def test_a_new_hub_starts_with_its_product_and_engineering_pipelines(tmp_path):
+    """The manager_since migration adds task_types.manager before the hub's first-start step, which used to seed the two
+    role pipelines only when that column was missing. A new hub still gets both, each with its manager stamped."""
+    c = H.connect(str(tmp_path / "fresh.db"))
+    for role in (roadmap_flow.PRODUCT, roadmap_flow.ENGINEERING):
+        found = roadmap_flow.role_type(c, role)
+        assert found is not None
+        assert c.execute("SELECT manager_since FROM task_types WHERE id=?", (found,)).fetchone()[0]
+    c.close()
+    again = H.connect(str(tmp_path / "fresh.db"))  # a second start adds nothing
+    assert again.execute("SELECT COUNT(*) FROM task_types WHERE role IS NOT NULL AND role<>''").fetchone()[0] == 2

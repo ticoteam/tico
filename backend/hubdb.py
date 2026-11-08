@@ -1784,8 +1784,18 @@ def migrate(conn, adopt_legacy=False):
     task_blocked.ensure(conn)
     blocker_asks.ensure(conn)
     migrate_roadmap_roles(conn)
+    from .roadmap_flow import PRODUCT as ROADMAP_PRODUCT, role_type as roadmap_role_type
+
     if "manager" not in {r[1] for r in conn.execute("PRAGMA table_info(task_types)")}:
         add_column(conn, "task_types", "manager", "TEXT")
+        ensure_roadmap_types(conn)
+    elif (
+        roadmap_role_type(conn, ROADMAP_PRODUCT) is None
+        and conn.execute("SELECT 1 FROM task_types WHERE manager IS NOT NULL AND manager <> '' LIMIT 1").fetchone()
+        is None
+    ):
+        # A new database: migration 20261108011313 (manager_since) adds `manager` before this step runs, so the missing
+        # column no longer marks the first start. No Product pipeline and no managed pipeline at all says it instead.
         ensure_roadmap_types(conn)
     from .roadmaps import migrate as migrate_roadmaps
 
