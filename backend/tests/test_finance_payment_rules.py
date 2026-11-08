@@ -152,3 +152,32 @@ def test_an_ordinary_payee_and_a_persons_own_payment_go_on(paying):
         assert _pay(c, "human:ben", blocked).status in ("committed", "needs_approval")  # as a person's own mail
         assert _holds(c) == []
         assert _money(c)[1] == 2
+
+
+def test_send_anyway_lets_that_exact_payment_through_once(paying):
+    """The rule's editor waives the hold through the route mail's Send anyway uses; the bot's next try of that same
+    payment goes through, and the one after it is held again."""
+    from fastapi.testclient import TestClient
+
+    from backend.app import create_app
+    from backend.tests.test_api import get, post
+
+    books, blocked, _plain = paying
+    with books.transaction() as c:
+        held = _pay(c, BOT, blocked)
+    assert held.status == "held", held
+    hold_id = str(held.result["hold"]["id"])
+    with TestClient(create_app(books.settings)) as api:
+        view = get(api, f"rule-holds/{hold_id}")  # Ana wrote the rule, so she may waive it
+        assert view["can_send"]
+        sent = post(api, f"rule-holds/{hold_id}/send", {"nonce": view["nonce"]})
+        assert sent["hold"]["state"] == "sent"
+    with books.transaction() as c:
+        assert _money(c) == (0, 0)  # the waiver itself pays nothing
+        paid = _pay(c, BOT, blocked)
+        assert paid.status in ("committed", "needs_approval"), paid
+        assert _money(c)[1] == 1
+        again = _pay(c, BOT, blocked)
+        assert again.status == "held", again
+        assert _money(c)[1] == 1
+        assert [h["state"] for h in sorted(_holds(c), key=lambda h: h["created_at"])] == ["sent", "held"]
