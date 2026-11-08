@@ -1,0 +1,264 @@
+/* ui/styles/pipeline.css: the pipeline editor's entry point and the pipeline surfaces that follow it. */
+
+/* The Edit pipeline button by the pipeline picker. An icon button's own display would win over the hidden attribute. */
+.tl-pipeline-edit[hidden] {
+  display: none;
+}
+
+/* Requirement dots on a ticket card. A dot is a button with a bigger hit area than its 8px mark; the names open on hover,
+   on a tap or a long press (data-open, set by ui/app/pipeline-dots.ts). */
+.pdots { position: relative; display: inline-flex; gap: 3px; align-items: center; flex: none; }
+.pdot { position: relative; width: 8px; height: 8px; border-radius: 4px; box-sizing: border-box; padding: 0; margin: 0;
+  border: 0; background: none; cursor: pointer; flex: none; }
+.pdot::before { content: ""; position: absolute; inset: -6px; }
+.pdot:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.pdot-met { background: var(--accent); }
+.pdot-waiting { border: 1.5px solid var(--accent); background: linear-gradient(90deg, var(--accent) 50%, transparent 50%); }
+.pdot-out_of_date { border: 1.5px solid var(--wait); }
+.pdot-failed { background: var(--wait); }
+.pdot-missing { border: 1.5px solid var(--idle); }
+.pdots-tip { display: none; position: absolute; left: -6px; top: calc(100% + 6px); z-index: 30; min-width: max-content;
+  background: var(--surface2); border: 1px solid var(--line); border-radius: 6px; padding: 6px 8px; box-shadow: 0 4px 12px rgba(0, 0, 0, .3); }
+.pdots-tip ul { margin: 0; padding: 0; list-style: none; font-size: 12px; line-height: 18px; color: var(--ink); }
+.pdots:hover > .pdots-tip, .pdots[data-open] > .pdots-tip { display: block; }
+
+/* A ticket's requirements (ui/app/task-requirements.ts). */
+.task-requirements { display: flex; flex-direction: column; }
+.task-req { position: relative; display: grid; grid-template-columns: 10px minmax(0, 1fr) auto 32px; gap: 10px; align-items: center;
+  padding: 10px 0; border-bottom: 1px solid var(--line); font-size: 13px; }
+.task-req .pdot { cursor: default; }
+.task-req-state { font-size: 12px; color: var(--muted); white-space: nowrap; }
+.task-req-name { min-width: 0; overflow-wrap: anywhere; }
+.task-req-more { width: 28px; height: 28px; padding: 0; border-radius: 6px; }
+.task-req-mark { position: absolute; right: 0; top: calc(100% + 4px); z-index: 10; width: 260px; box-sizing: border-box; padding: 10px;
+  border-radius: 8px; border: 1px solid var(--line); background: var(--surface2); box-shadow: 0 6px 16px rgba(0, 0, 0, .3);
+  display: flex; flex-direction: column; gap: 8px; }
+.task-req-mark[hidden] { display: none; }
+.task-req-mark label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--muted); }
+.task-req-mark input { height: 32px; box-sizing: border-box; padding: 0 10px; border-radius: 6px; border: 1px solid var(--line); background: var(--bg); color: var(--ink); font: inherit; }
+.task-req-err { font-size: 12px; color: var(--fail); }
+
+/* The "▶ N for you" buttons: the header's, beside the pipeline picker (#task-play), and a column's or a phone stage's compact
+   chip, as tall as its count (ui/app/pipeline-review.ts). */
+.tl-play { display: inline-flex; align-items: center; flex: none; margin-left: 8px; }
+.tl-play[hidden] { display: none; }
+.pipe-play { display: inline-flex; align-items: center; gap: 5px; height: 26px; padding: 0 10px; border-radius: 13px; border: 0;
+  background: var(--accent); color: var(--accent-ink); font: inherit; font-size: 12px; font-weight: 600; white-space: nowrap; cursor: pointer; flex: none; }
+.pipe-play-chip { gap: 4px; height: 18px; padding: 0 7px; border-radius: 9px; font-size: 11px; line-height: 18px; }
+.pipe-play-tri { width: 0; height: 0; border-style: solid; border-width: 4px 0 4px 6px; border-color: transparent transparent transparent currentColor; }
+.pipe-play-chip .pipe-play-tri { border-width: 3px 0 3px 5px; }
+
+/* Review mode: one full-window dialog. Desktop puts the attachment beside the decision; a phone stacks them. */
+.pipe-review { position: fixed; inset: 0; z-index: 1000; background: var(--bg); color: var(--ink); display: flex; flex-direction: column;
+  font-size: 13px; overflow: hidden; }
+.pipe-review-head { display: flex; align-items: center; gap: 12px; padding: 12px 20px; border-bottom: 1px solid var(--line); background: var(--surface); flex-wrap: wrap; }
+.pipe-review-title { display: flex; flex-wrap: wrap; align-items: baseline; gap: 12px; min-width: 0; }
+.pipe-review-count { font-weight: 600; }
+.pipe-review-x { display: none; font-size: 22px; line-height: 1; }
+.pipe-review-body { flex: 1 1 auto; display: flex; min-height: 0; }
+.pipe-review-main { flex: 1 1 auto; display: flex; flex-direction: column; gap: 12px; padding: 16px 24px; min-width: 0; }
+.pipe-review-tabs { display: flex; gap: 4px; flex-wrap: wrap; }
+.pipe-review-tab { font: inherit; font-size: 12px; padding: 4px 10px; border-radius: 5px; border: 0; background: none; color: var(--muted); cursor: pointer; }
+.pipe-review-tab.on { background: var(--surface2); color: var(--ink); }
+.pipe-review-view { flex: 1 1 auto; min-height: 0; display: flex; align-items: center; justify-content: center; border: 1px solid var(--line);
+  border-radius: 8px; background: var(--surface); padding: 16px; overflow: auto; }
+.pipe-review-img { max-width: 100%; max-height: 100%; object-fit: contain; }
+.pipe-review-card { display: flex; flex-direction: column; gap: 6px; }
+.pipe-review-bot { margin: 0; font-size: 12px; color: var(--wait-ink); }
+.pipe-review-side { width: 360px; flex: none; border-left: 1px solid var(--line); background: var(--surface); padding: 16px 18px;
+  display: flex; flex-direction: column; gap: 12px; overflow-y: auto; }
+.pipe-h { margin: 0; font-size: 11px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+.pipe-review-side textarea { box-sizing: border-box; width: 100%; padding: 8px 10px; border-radius: 6px; border: 1px solid var(--line);
+  background: var(--bg); color: var(--ink); font: inherit; resize: vertical; }
+.pipe-review-note-label { display: flex; flex-direction: column; gap: 4px; color: var(--muted); font-size: 12px; }
+.pipe-review-sendback { display: flex; gap: 8px; }
+.pipe-review-sendback .btn { flex: 1 1 0; min-width: 0; height: 36px; padding: 0 10px; border-radius: 6px; border: 1px solid var(--line); background: var(--surface2);
+  color: var(--ink); font: inherit; font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: pointer; }
+.pipe-review-approve { height: 56px; border-radius: 8px; border: 0; background: var(--accent); color: var(--accent-ink); font: inherit; font-size: 17px;
+  font-weight: 600; cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 10px; }
+.pipe-review-approve:disabled { opacity: .6; cursor: default; }
+.pipe-review-kbd { font-size: 12px; padding: 0 6px; border-radius: 3px; border: 1px solid currentColor; opacity: .8; font-family: inherit; }
+.pipe-review-met { align-self: center; min-height: 36px; padding: 0 10px; border: 0; background: none; color: var(--muted); font: inherit; font-size: 13px;
+  text-decoration: underline; cursor: pointer; }
+.pipe-review-moves { text-align: center; margin: 0; font-size: 12px; color: var(--muted); }
+.pipe-review-err { margin: 0; color: var(--fail); font-size: 12px; }
+.pipe-review-empty { padding: 40px 20px; color: var(--muted); }
+.pipe-review-toast { position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%); display: flex; gap: 12px; align-items: center;
+  padding: 10px 14px; border-radius: 8px; background: var(--surface2); border: 1px solid var(--line); box-shadow: 0 6px 16px rgba(0, 0, 0, .3); }
+.pipe-review .linkish { font: inherit; background: none; border: 0; color: var(--accent); cursor: pointer; padding: 0; text-decoration: underline; }
+/* A touch screen has no keyboard to hint at: Esc and ⌘⏎ show only where a hover can. */
+@media (hover: none) {
+  .pipe-review kbd { display: none; }
+}
+
+@media (max-width: 600px) {
+  .pipe-review-head { padding: 10px 16px; gap: 8px; }
+  .pipe-review-title { flex-direction: column; align-items: flex-start; gap: 2px; }
+  .pipe-review-where { display: none; }
+  .pipe-review-exit { width: 44px; height: 44px; padding: 0; border-radius: 22px; display: inline-flex; align-items: center; justify-content: center; }
+  .pipe-review-exit-word { display: none; }
+  .pipe-review-x { display: inline; }
+  .pipe-review-head button[data-review-prev], .pipe-review-head button[data-review-next] { width: 44px; height: 44px; padding: 0; font-size: 20px; }
+  .pipe-review-body { flex-direction: column; overflow-y: auto; }
+  .pipe-review-main { padding: 12px 16px; flex: none; }
+  .pipe-review-view { min-height: 260px; }
+  .pipe-review-side { width: auto; border-left: 0; border-top: 1px solid var(--line); padding: 14px 16px 20px; flex: none; }
+  .pipe-review-sendback .btn { height: 44px; }
+  .pipe-review-met { min-height: 44px; }
+  .pipe-review-approve { height: 56px; }
+  .pipe-review-toast { left: 16px; right: 16px; transform: none; justify-content: space-between; }
+}
+
+/* The manager's rail beside the stages (ui/app/pipeline-rail.ts). It is a column of the Tasks page; folded it is a strip
+   with the avatar. A ticket's peek takes its place while open. */
+.tasks-page.has-rail { --rail-w: 320px; grid-template-columns: minmax(0, 1fr) var(--rail-w); }
+.tasks-page.has-rail.rail-hidden { --rail-w: 44px; }
+.tasks-page.has-rail.peek-open { grid-template-columns: minmax(0, 1fr) var(--peek-w); }
+.tasks-page.has-rail.peek-open > .pipe-rail { display: none; }
+.pipe-rail { min-width: 0; min-height: 0; display: flex; flex-direction: column; border-left: 1px solid var(--line); background: var(--surface); color: var(--ink); font-size: 13px; }
+.pr-strip { display: none; align-items: flex-start; justify-content: center; width: 100%; padding: 14px 0; border: 0; background: none; cursor: pointer; }
+.pipe-rail.collapsed .pr-strip { display: flex; }
+.pipe-rail.collapsed .pr-panel { display: none; }
+.pr-panel { display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0; }
+.pr-head { display: flex; align-items: center; gap: 10px; padding: 14px 16px 8px; }
+.pr-who { display: flex; flex-direction: column; min-width: 0; flex: 1 1 auto; }
+.pr-who b { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pr-ran { font-size: 12px; color: var(--muted); }
+.pr-ran.warn { color: var(--wait-ink); }
+.pr-x { width: 32px; height: 32px; padding: 0; border: 0; border-radius: 6px; background: none; color: var(--muted); font-size: 20px; line-height: 1;
+  display: inline-flex; align-items: center; justify-content: center; cursor: pointer; flex: none; }
+.pr-x:hover { background: var(--surface2); color: var(--ink); }
+.pr-tabs { display: flex; gap: 4px; padding: 0 12px 8px; border-bottom: 1px solid var(--line); }
+.pr-tab { font: inherit; font-size: 12px; height: 28px; padding: 0 10px; border-radius: 5px; border: 0; background: none; color: var(--muted); cursor: pointer; }
+.pr-tab.on { background: var(--surface2); color: var(--ink); }
+.pr-body { flex: 0 1 auto; max-height: 46%; overflow-y: auto; padding: 4px 0 8px; border-bottom: 1px solid var(--line); }
+.pr-sec { padding-bottom: 6px; }
+.pr-sec > .pipe-h { padding: 10px 16px 4px; }
+.pr-list { margin: 0; padding: 0; list-style: none; }
+.pr-late { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 10px; align-items: baseline; width: 100%; padding: 6px 16px; border: 0;
+  background: none; color: var(--ink); font: inherit; text-align: left; cursor: pointer; }
+.pr-late:hover { background: var(--surface2); }
+.pr-late-id { font-weight: 600; }
+.pr-late-what { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pr-late-age { color: var(--wait-ink); }
+.pr-line { display: grid; grid-template-columns: 40px 8px minmax(0, 1fr); gap: 8px; align-items: baseline; padding: 4px 16px; font-size: 12px; }
+.pr-when { color: var(--muted); }
+.pr-dot { width: 6px; height: 6px; border-radius: 3px; background: var(--idle); align-self: center; }
+.pr-warn .pr-dot { background: var(--wait); }
+.pr-error .pr-dot { background: var(--fail); }
+.pr-text { overflow-wrap: anywhere; }
+.pr-empty { margin: 0; padding: 10px 16px; color: var(--muted); }
+.pr-chat { flex: 1 1 0; min-height: 160px; display: flex; flex-direction: column; overflow: hidden; box-sizing: border-box; padding: 0 16px 14px; }
+.pr-chat > .thv { flex: 1 1 auto; min-height: 0; }
+.pr-bar, .pr-scrim { display: none; }
+
+/* A phone: one stage at a time under a row of stage chips; the rail is a bar above the bottom navigation that opens the
+   same panel as a sheet. */
+.pchips { display: flex; gap: 8px; overflow-x: auto; padding: 6px 0; scrollbar-width: none; scroll-snap-type: x proximity; }
+.pchips::-webkit-scrollbar { display: none; }
+.pchip { position: relative; display: inline-flex; align-items: center; gap: 6px; flex: none; height: 32px; padding: 0 12px; border-radius: 16px;
+  border: 1px solid var(--line); background: var(--surface); color: var(--ink); font: inherit; font-size: 13px; white-space: nowrap; cursor: pointer; scroll-snap-align: start; }
+.pchip::before { content: ""; position: absolute; inset: -6px -2px; }
+.pchip.on { background: var(--surface2); border-color: var(--accent); }
+.pchip-n { color: var(--muted); font-size: 12px; }
+.pchip-dot { width: 6px; height: 6px; border-radius: 3px; background: var(--accent); }
+.pipe-next { display: block; width: 100%; min-height: 44px; margin-top: 8px; border: 0; background: none; color: var(--muted); font: inherit; font-size: 13px; cursor: pointer; }
+.pipe-phone { min-height: 40vh; }
+/* A phone's stage: its name and limit on a quiet line, then the cards full width (ui/app/task-pipelines.js). */
+.pipe-stage { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.pipe-stage-line { display: flex; align-items: center; justify-content: flex-start; gap: 8px; padding: 6px 16px 0; color: var(--muted); font-size: 13px; }
+.pipe-stage-line .pipe-play-chip { margin-left: auto; }
+.pipe-stage-cards { display: flex; flex-direction: column; gap: 8px; padding: 0 16px 6px; }
+.pipe-stage-cards .bcard { width: 100%; box-sizing: border-box; }
+.pipe-stage-cards .empty { padding: 6px 4px; color: var(--muted); font-size: 13px; }
+@media (max-width: 600px) {
+  .tl-play .pipe-play-word { display: none; }
+}
+
+@media (min-width: 601px) and (max-width: 760px) {
+  .tasks-page.has-rail { display: grid; }
+  .tasks-page.has-rail .tasks-pane { overflow-y: auto; }
+}
+@media (max-width: 600px) {
+  .tasks-page.has-rail { display: block; }
+  .tasks-page.has-rail > .pipe-rail { position: fixed; z-index: 41; left: 0; right: 0; bottom: 0; top: 12vh; border-left: 0; border-top: 1px solid var(--line);
+    border-radius: 14px 14px 0 0; transform: translateY(105%); visibility: hidden; transition: transform .2s ease, visibility .2s; box-shadow: 0 -8px 24px rgba(0, 0, 0, .35); }
+  .tasks-page.has-rail > .pipe-rail.sheet-open { transform: none; visibility: visible; }
+  .pipe-rail.collapsed .pr-panel { display: flex; }
+  .pr-strip { display: none !important; }
+  .pr-body { max-height: 40%; }
+  .pr-tab { height: 44px; padding: 0 12px; }
+  .pr-x { width: 44px; height: 44px; }
+  .pr-late { min-height: 44px; align-items: center; }
+  .pr-bar { position: fixed; z-index: 17; left: 12px; right: 12px; bottom: calc(var(--mobile-nav-height) + env(safe-area-inset-bottom) + 8px);
+    display: flex; align-items: center; gap: 10px; min-height: 56px; padding: 8px 12px; border: 1px solid var(--line); border-radius: 12px;
+    background: var(--surface); color: var(--ink); font: inherit; font-size: 13px; text-align: left; cursor: pointer; box-shadow: 0 4px 16px rgba(0, 0, 0, .3); }
+  .pr-bar-text { display: flex; flex-direction: column; min-width: 0; flex: 1 1 auto; }
+  .pr-bar-text b { font-weight: 600; }
+  .pr-bar-text span { color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .pr-bar-late { color: var(--wait-ink); font-size: 12px; white-space: nowrap; }
+  .pr-chev { color: var(--muted); }
+  .pr-scrim { position: fixed; inset: 0; z-index: 40; background: rgba(0, 0, 0, .4); }
+  body.pipe-sheet-open .pr-scrim { display: block; }
+  body.pipe-sheet-open .pr-bar { display: none; }
+  .tasks-pane { padding-bottom: calc(var(--mobile-nav-height) + env(safe-area-inset-bottom) + 84px); }
+}
+
+/* Evidence on a requirement, and Attach to (ui/app/task-requirements.ts). */
+.task-req-files { margin: 4px 0 0; padding: 0; list-style: none; font-size: 12px; }
+.task-req-files li { padding: 2px 0; overflow-wrap: anywhere; }
+.task-req-old { color: var(--wait-ink); }
+.task-req-attach { position: relative; display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding-top: 10px; }
+.task-req-attach-menu { position: absolute; left: 0; top: calc(100% - 4px); z-index: 10; min-width: 200px; display: flex; flex-direction: column; padding: 4px;
+  border-radius: 8px; border: 1px solid var(--line); background: var(--surface2); box-shadow: 0 6px 16px rgba(0, 0, 0, .3); }
+.task-req-attach-menu[hidden], .task-req-attach-form[hidden] { display: none; }
+.task-req-attach-menu button { min-height: 32px; padding: 0 10px; border: 0; border-radius: 6px; background: none; color: var(--ink); font: inherit; text-align: left; cursor: pointer; }
+.task-req-attach-menu button:hover { background: var(--surface); }
+.task-req-attach-form { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; flex: 1 1 100%; }
+.task-req-attach-for { font-weight: 600; }
+.task-req-attach-form input[type=url] { flex: 1 1 160px; min-width: 0; height: 32px; box-sizing: border-box; padding: 0 10px; border-radius: 6px; border: 1px solid var(--line); background: var(--bg); color: var(--ink); font: inherit; }
+.task-req-file { display: inline-flex; align-items: center; height: 32px; padding: 0 12px; border-radius: 6px; border: 1px solid var(--line); cursor: pointer; }
+@media (max-width: 600px) {
+  .task-req-attach .ghost, .task-req-attach .primary, .task-req-attach-form input[type=url], .task-req-file, .task-req-attach-menu button { min-height: 44px; }
+}
+
+/* Move anyway: a refused drag past unmet requirements, for a pipeline editor. */
+.pipe-override { width: min(360px, calc(100vw - 32px)); padding: 16px; border-radius: 10px; border: 1px solid var(--line); background: var(--surface2); color: var(--ink); }
+.pipe-override::backdrop { background: rgba(0, 0, 0, .4); }
+.pipe-override form { display: flex; flex-direction: column; gap: 10px; }
+.pipe-override p { margin: 0; }
+.pipe-override label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--muted); }
+.pipe-override input { height: 36px; box-sizing: border-box; padding: 0 10px; border-radius: 6px; border: 1px solid var(--line); background: var(--bg); color: var(--ink); font: inherit; }
+.pipe-override-actions { display: flex; justify-content: flex-end; gap: 8px; }
+.pipe-override-actions button { min-height: 36px; }
+@media (max-width: 600px) { .pipe-override-actions button { min-height: 44px; } }
+
+/* The pipeline editor (ui/app/pipeline-editor.ts). */
+.pe-dialog{width:min(720px,calc(100vw - 32px))}
+.pe-body{display:flex;flex-direction:column;gap:var(--s3);overflow:auto}
+.pe-settings{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:var(--s3)}
+.pe-f{display:flex;flex-direction:column;gap:4px;font-size:var(--t-sm)}
+.pe-f>span{color:var(--muted)}
+.pe-goal,.pe-froms{grid-column:1/-1;margin:0;font-size:var(--t-sm)}
+.pe-goal span,.pe-froms span:first-child{color:var(--muted)}
+.pe-from+.pe-from::before{content:", "}
+.pe-members{grid-column:1/-1;margin:0;display:flex;flex-wrap:wrap;gap:var(--s2) var(--s3);border:1px solid var(--line);border-radius:var(--r-ctl);padding:var(--s2) var(--s3)}
+.pe-members legend{color:var(--muted);font-size:var(--t-sm);padding:0 4px}
+.pe-stages{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:var(--s2)}
+.pe-stage{border:1px solid var(--line);border-radius:var(--r-ctl);padding:var(--s2) var(--s3);background:var(--surface)}
+.pe-stage-head,.pe-stage-tools{display:flex;align-items:center;gap:var(--s2);flex-wrap:wrap}
+.pe-stage-name{flex:1;min-width:0;font-weight:600}
+.pe-order{display:inline-flex;gap:2px}
+.pe-pop{display:inline-flex;align-items:center;gap:6px;flex-wrap:wrap}
+.pe-reqs{list-style:none;margin:var(--s2) 0 0;padding:0;display:flex;flex-direction:column;gap:2px}
+.pe-req-main{display:flex;gap:var(--s2);align-items:baseline;width:100%;text-align:left;background:none;border:0;padding:4px 0;color:var(--ink);font:inherit;cursor:pointer}
+.pe-req-meta{color:var(--muted);font-size:var(--t-sm)}
+.pe-form{display:flex;flex-direction:column;gap:var(--s2);margin-top:var(--s2);padding-top:var(--s2);border-top:1px solid var(--line)}
+.pe-needs{display:flex;flex-wrap:wrap;gap:var(--s3)}
+.pe-needs[hidden],.pe-form [hidden]{display:none}
+.pe-check{display:inline-flex;align-items:center;gap:6px;font-size:var(--t-sm)}
+.pe-form-foot,.pe-add-stage{display:flex;gap:var(--s2);align-items:center}
+.pe-add-stage input{flex:1}
+@media (max-width:720px){
+  .pe-dialog{width:100vw;max-width:100vw;max-height:92dvh;margin:auto 0 0;border-radius:14px 14px 0 0}
+}

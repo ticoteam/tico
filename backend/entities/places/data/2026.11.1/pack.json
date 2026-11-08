@@ -1,0 +1,85 @@
+{
+  "pack": "places",
+  "version": "2026.11.1",
+  "built_on": "2026-11-07",
+  "generator": "scripts/build_places_pack.py",
+  "file": "places.csv",
+  "file_sha256": "4ea8445ba3eddc968937b4b51ca9fe6632b1e75b10f52adae96446526471f0e1",
+  "file_bytes": 284313,
+  "rows": 4343,
+  "rows_by_kind": {
+    "country": 249,
+    "state": 51,
+    "territory": 5,
+    "county": 3221,
+    "city": 817
+  },
+  "sources": [
+    {
+      "key": "iso3166-1",
+      "title": "ISO 3166-1 codes and English names, from pycountry 26.2.16 (pycountry/databases/iso3166-1.json)",
+      "url": "https://files.pythonhosted.org/packages/9c/42/7703bd45b62fecd44cd7d3495423097e2f7d28bc2e99e7c1af68892ab157/pycountry-26.2.16-py3-none-any.whl",
+      "license": "Codes and names are facts. The pycountry package is LGPL-2.1-only; only its ISO data file is read.",
+      "sha256": "115c4baf7cceaa30f59a4694d79483c9167dbce7a9de4d3d571c5f3ea77c305a",
+      "bytes": 8044600
+    },
+    {
+      "key": "census-states-2020",
+      "title": "Census 2020 national state codes",
+      "url": "https://www2.census.gov/geo/docs/reference/codes2020/national_state2020.txt",
+      "license": "Public domain: U.S. Census Bureau data (17 U.S.C. 105)",
+      "sha256": "167942161ec455bf7b0ee81b6ad76c109eb65e63136125d3683f8a44f51bbc66",
+      "bytes": 1515
+    },
+    {
+      "key": "census-counties-2020",
+      "title": "Census 2020 national county codes",
+      "url": "https://www2.census.gov/geo/docs/reference/codes2020/national_county2020.txt",
+      "license": "Public domain: U.S. Census Bureau data (17 U.S.C. 105)",
+      "sha256": "9f6e5f6eb6ac2f5e9a36d5fd01dec77991bddc75118f748a069441a4782970d6",
+      "bytes": 126639
+    },
+    {
+      "key": "census-place-by-county-2020",
+      "title": "Census 2020 place-by-county reference",
+      "url": "https://www2.census.gov/geo/docs/reference/codes2020/national_place_by_county2020.txt",
+      "license": "Public domain: U.S. Census Bureau data (17 U.S.C. 105)",
+      "sha256": "9996494d33cf6ee4527491508aa1b8dae85dcff3a979886e19b0b375e5d06ec6",
+      "bytes": 2736928
+    },
+    {
+      "key": "census-gazetteer-places-2025",
+      "title": "Census 2025 Gazetteer, places (names and GEOIDs)",
+      "url": "https://www2.census.gov/geo/docs/maps-data/data/gazetteer/2025_Gazetteer/2025_Gaz_place_national.zip",
+      "license": "Public domain: U.S. Census Bureau data (17 U.S.C. 105)",
+      "sha256": "49644173a453469d9bd77fb7a493b027f87567e209edaf2078aac7543ac2ee29",
+      "bytes": 1214053
+    },
+    {
+      "key": "census-popest-subcounty-2024",
+      "title": "Census Vintage 2024 population estimates, sub-county file (incorporated places, POPESTIMATE2024)",
+      "url": "https://www2.census.gov/programs-surveys/popest/datasets/2020-2024/cities/totals/sub-est2024.csv",
+      "license": "Public domain: U.S. Census Bureau data (17 U.S.C. 105)",
+      "sha256": "af9cd4835c93552a2161fc88bf4d7aa31e81b4f16f7457980b95295cf91e49e9",
+      "bytes": 7087080
+    }
+  ],
+  "rules": [
+    "Country id place:<ISO alpha-2 lowercase>. Name is the ISO common name where ISO has one, else the ISO English short name; the ISO short name and official name are aliases. iso_alpha3 holds the ISO alpha-3.",
+    "Country governing_body is 'Government of <name>' (with 'the' for a few countries), derived from the name. It is a label, not a legal name.",
+    "US state and DC id place:us-<USPS lowercase>. DC is a Census state-equivalent, so kind state.",
+    "Territories (AS, GU, MP, PR, VI) are kind territory. U.S. Minor Outlying Islands (UM) has no row.",
+    "County id place:us-<USPS>-<5-digit county GEOID> from the Census 2020 county list (50 states, DC, Puerto Rico municipios). Census 2020 lists Connecticut's eight counties; the 2022 planning regions are not in this pack. Territory counties are not in this pack.",
+    "City (incorporated place) id place:us-<USPS>-<7-digit place GEOID>. Included when POPESTIMATE2024 is at least 50,000. Name from the Census 2025 Gazetteer, without its type word ('city', 'town', 'village'...). A consolidated city-government's '(balance)' row is the city itself, so it keeps its name.",
+    "City parent is its county when the Census 2020 place-by-county reference lists exactly one county for the place and that county is in the pack. Otherwise the parent is the state.",
+    "Aliases: AP state abbreviations, DC and territory names, ISO alternate country names, a few city short names (NYC, LA, SF), and 'St.' for 'Saint' city names. Curated by hand, not from a source.",
+    "find() matches names, aliases, USPS codes and ISO alpha-3 codes, ignoring case, accents and punctuation."
+  ],
+  "counts": {
+    "city_balance_name_cleaned": 6,
+    "city_in_county": 694,
+    "city_in_state_no_county_match": 3,
+    "city_in_state_spans_counties": 120
+  },
+  "license": "U.S. Census Bureau data: public domain. ISO 3166-1 codes and names are facts; the packaged country data is read from pycountry (LGPL-2.1-only). The rules and curated aliases are part of this repository."
+}

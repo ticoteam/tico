@@ -46,6 +46,8 @@ function pageTasks(forced, openId = '') {
       <header class="tl-head">
         <h1>Tasks</h1>
         <button type="button" class="tl-scope" id="task-scope" aria-haspopup="menu" aria-expanded="false"></button>
+        <button type="button" class="tl-ib tl-pipeline-edit" id="task-pipeline-edit" aria-label="Edit pipeline" title="Edit pipeline" hidden>✎</button>
+        <span class="tl-play" id="task-play" hidden></span>
         <span class="spacer"></span>
         <span class="tl-who-wrap" id="task-who-wrap" hidden></span>
         <div class="tl-search">${TL_ICON.search}<input type="search" id="task-q" spellcheck="false" aria-label="Search tasks" placeholder="Search" autocomplete="off"><kbd aria-hidden="true">/</kbd></div>
@@ -652,6 +654,8 @@ function tasksRender(state) {
     row?.classList.add('peeked'); row?.querySelector('[data-open-task]')?.setAttribute('aria-current', 'true');
   }
   tasksSelectionPaint(state);
-  if (tasksScopePaint(state)) tasksHeadFit(state);
+  const scopeChanged = tasksScopePaint(state), playChanged = pipelinePlayPaint(state);
+  if (scopeChanged || playChanged) tasksHeadFit(state);
+  pipelineRailSync(state);
   fbSync();
 }

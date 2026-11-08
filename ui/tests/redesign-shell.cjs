@@ -84,7 +84,7 @@ async function open(browser, {route = '#/updates', viewport = PHONE, goalsDelay 
     if (p.startsWith('/api/v2/usage/')) return json({ok: true});
     if (p === '/api/v2/tasks' && method === 'POST') return json(CAP_409, 409);
     if (p === '/api/v2/market/graph') return json({entities: [], edges: []});
-    if (p === '/api/v2/market/entities') return json({entities: [{id: 'company/self', type: 'company', name: 'Acme'}], total: 1});
+    if (p === '/api/v2/market/entities') return json({entities: [{id: 'company/self', type: 'organization', name: 'Acme'}], total: 1});
     if (p === '/api/v2/librarian/setup') return json({market: null});
     return json(unrouted(p));
   });

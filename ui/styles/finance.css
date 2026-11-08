@@ -291,3 +291,11 @@ th .fin-tag{display:block;width:max-content;margin:2px 0 0 auto}
 @media (max-width:640px){
   .fin-share-row{grid-template-columns:minmax(0,1fr) 76px 36px}
 }
+
+/* What changed: the briefing at the top of Finance (ui/app/finance-brief.ts). Short lines; the block is absent when empty. */
+.fin-brief{margin:0 0 16px;padding:12px 14px;border:1px solid var(--line, #e5e5e5);border-radius:10px}
+.fin-brief-head{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap}
+.fin-brief-head h2{margin:0;font-size:15px}
+.fin-brief-at{font-size:12px}
+.fin-brief-lines{margin:6px 0 0;padding-left:18px;font-size:14px;line-height:1.5}
+.fin-brief-lines li{overflow-wrap:anywhere}

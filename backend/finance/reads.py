@@ -14,6 +14,7 @@ from typing import Any, cast
 from .. import hubdb as H
 from ..records import reads as RR
 from . import budgeting, limits, tab, tab_ap, tab_hooks, tab_money, usage
+from . import campaigns as CP
 from . import visible as VB
 from .tab_purchasing import estimate as estimate, estimates as estimates, order as order, orders as orders
 from . import closing as CL
@@ -1535,6 +1536,8 @@ METRICS = (
     "duplicate_charges",
     "price_increases",
     "unattributed",
+    "ad_spend",
+    "per_conversion",
 )
 STALE_HOURS = 24  # bank data older than this marks a cash metric stale
 WATCH_LABELS = 10  # the Watch findings a metric names (its count is the whole)
@@ -1644,7 +1647,8 @@ def metric(
     `days` (default 7, overdue included); ar_overdue: invoices at least `days` (default 1) late;
     uncategorized_count: settled rows waiting for a category (last 90 days); unreconciled_days: days since the
     oldest reconciliation of the money accounts the viewer sees; duplicate_charges, price_increases: how many Watch
-    findings of that kind the posted debits show now, with their first labels."""
+    findings of that kind the posted debits show now, with their first labels; ad_spend: the viewer's campaigns' spend
+    over the window (this month by default); per_conversion: that spend over the conversions (amount null with none)."""
     if name not in METRICS:
         raise invalid(f"a metric is {'|'.join(METRICS)}")
     s = _open(c, viewer, at)
@@ -1660,6 +1664,30 @@ def metric(
             "amount": amount,
             "lines": count,
             "excl": lost,
+            "start": a.isoformat(),
+            "end": z.isoformat(),
+            "unit": "minor",
+            "currency": currency,
+        }
+    if name in ("ad_spend", "per_conversion"):
+        a, z = _window(start, end, s.ctx)
+        if name == "ad_spend":
+            got = CP.ad_spend(s.ctx, viewer, a.isoformat(), z.isoformat())
+            return {
+                **base,
+                "value": got["amount"],
+                "amount": got["amount"],
+                "start": a.isoformat(),
+                "end": z.isoformat(),
+                "unit": "minor",
+                "currency": currency,
+            }
+        got = CP.ad_per_conversion(s.ctx, viewer, a.isoformat(), z.isoformat())
+        return {
+            **base,
+            "value": got["amount"],
+            "amount": got["amount"],
+            "conversions": got["conversions"],
             "start": a.isoformat(),
             "end": z.isoformat(),
             "unit": "minor",
@@ -1806,7 +1834,17 @@ def _uncategorized(s: _Seen, a: date, z: date, most: int, skip: int = 0) -> tupl
 
 
 # ------------------------------------------------------------------------------------------------ reports
-REPORTS = ("pnl", "pnl_by", "balance_sheet", "cash_flow", "budget_vs_actual", "ap_aging", "ar_aging", "spend_by")
+REPORTS = (
+    "pnl",
+    "pnl_by",
+    "balance_sheet",
+    "cash_flow",
+    "budget_vs_actual",
+    "ap_aging",
+    "ar_aging",
+    "spend_by",
+    "campaigns",
+)
 
 
 def _prior(a: date, z: date) -> tuple[date, date]:
@@ -1897,6 +1935,18 @@ def _cash_flow(c: sqlite3.Connection, viewer: str, a: date, z: date, period: str
     }
 
 
+def _campaigns_report(ctx: Ctx, viewer: str, a: date, z: date, top: int) -> Row:
+    """The campaigns the viewer sees over [a, z], by spend: the first `top` rows, with totals over all of them."""
+    found = CP.rows(ctx, viewer, a.isoformat(), z.isoformat())
+    return {
+        "rows": found[:top],
+        "count": len(found),
+        "totals": CP.totals(found),
+        "start": a.isoformat(),
+        "end": z.isoformat(),
+    }
+
+
 def report(
     c: sqlite3.Connection,
     viewer: str,
@@ -1912,7 +1962,8 @@ def report(
     at: str | None = None,
 ) -> Row:
     """One report (§7.1): pnl (accrual or cash), balance_sheet (as of `end`), cash_flow, budget_vs_actual, ap_aging,
-    ar_aging, spend_by (`by` department|team|teammate|bot|person|vendor|account|location|class|project or a pair) or
+    ar_aging, spend_by (`by` department|team|teammate|bot|person|vendor|account|location|class|project or a pair),
+    campaigns (the ad campaigns by spend, with totals) or
     pnl_by
     (`by` location|class|project or a pair). `compare=prior` adds the window before it. Payloads are capped: `top_n`
     rows
@@ -1938,6 +1989,8 @@ def report(
             return _cash_flow(c, viewer, p, q, period, at)
         if kind == "budget_vs_actual":
             return budget_vs_actual(c, viewer, p.isoformat(), q.isoformat(), period, limit=top, at=at)
+        if kind == "campaigns":
+            return _campaigns_report(ctx, viewer, p, q, top)
         return spend_by(c, viewer, by or "vendor", p.isoformat(), q.isoformat(), top_n=top, at=at)
 
     out: Row = {"kind": kind, **one(a, z)}
@@ -1965,6 +2018,7 @@ SEARCH_KINDS = (
 NAMED_ONLY_KINDS = (
     "account",
     "vendor",
+    "campaign",
 )  # searched when named (the chart a bot codes lines to, vendors), not in the first few of each
 RECORD_KINDS = {"item": "items", "location": "locations", "project": "projects"}
 SEARCH_EACH = 10  # results per kind when no kind is named
@@ -2008,6 +2062,14 @@ def _search_rules(
         }
         for r in page
     ], (str(page[-1]["id"]) if len(rows) > most else None)
+
+
+def _search_campaigns(ctx: Ctx, viewer: str, q: str, f: Mapping[str, object], most: int) -> list[Row]:
+    """The campaigns the viewer sees whose name matches, in the month `month` names (this month by default), by spend."""
+    month = _filter(f, "month") or dates.day(ctx.today).strftime("%Y-%m")
+    first, last = CP.month_window(month)
+    needle = q.lower()
+    return [r for r in CP.rows(ctx, viewer, first, last) if needle in str(r["name"]).lower()][:most]
 
 
 def _search_accounts(ctx: Ctx, viewer: str, q: str, most: int, cursor: str | None) -> tuple[list[Row], str | None]:
@@ -2288,7 +2350,8 @@ def search(
     start, end; bill/invoice: status, contact_id, start, end, aging; contact: kind, active; rule: kind (gate|posting);
     card: status, vendor (the cards saved on that vendor, so `vendor` answers "which of my cards works at X");
     po/estimate: status, contact_id, and a search over number, memo and contact name;
-    item/location/project: active (1 keeps only active records); account (named only): a search over code and name,
+    item/location/project: active (1 keeps only active records); campaign (named only): a search over name, in the month
+    `month` names (default this month), with each campaign's month as the viewer sees it; account (named only): a search over code and name,
     the active accounts the forms list, in code order; vendor (named only): a search over name, each with this month's
     spend as the viewer sees it (visible.py), listing only the vendors whose name may show."""
     if kind is not None and kind not in (*SEARCH_KINDS, *NAMED_ONLY_KINDS):
@@ -2417,6 +2480,8 @@ def search(
             elif k == "vendor":
                 listed_vendors, nxt = _search_vendors(_open(c, viewer, at), text, most, cursor)
                 results += listed_vendors
+            elif k == "campaign":
+                results += _search_campaigns(ctx, viewer, text, f, most)
             elif k in RECORD_KINDS:
                 _in_view_or_refuse(view)
                 parts = tab.decode_cursor(cursor)

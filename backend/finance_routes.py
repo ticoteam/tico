@@ -20,6 +20,7 @@ from pydantic import Field
 from . import company_server, hook_relay
 from .finance import actions as finance
 from .finance import books_link
+from .finance import brief as finance_brief_mod
 from .finance import reads as finance_reads
 from .models import ID, Contract
 from .store import Problem
@@ -50,7 +51,17 @@ Group = Literal[
 ]
 DAY = r"^\d{4}-\d{2}-\d{2}$"
 Aging = Literal["current", "1_30", "31_60", "61_90", "over_90"]
-Report = Literal["pnl", "pnl_by", "balance_sheet", "cash_flow", "budget_vs_actual", "ap_aging", "ar_aging", "spend_by"]
+Report = Literal[
+    "pnl",
+    "pnl_by",
+    "balance_sheet",
+    "cash_flow",
+    "budget_vs_actual",
+    "ap_aging",
+    "ar_aging",
+    "spend_by",
+    "campaigns",
+]
 Metric = Literal[
     "cash",
     "burn",
@@ -66,6 +77,8 @@ Metric = Literal[
     "duplicate_charges",
     "price_increases",
     "unattributed",
+    "ad_spend",
+    "per_conversion",
 ]
 
 
@@ -225,6 +238,18 @@ def install(app, store, auth, mutate):
         `at` in the period holding that day: the amount of the version in effect then."""
         actor = as_viewer(request, view_as)
         return read(lambda c: finance_reads.budgets(c, actor, include_inactive=include_inactive, limit=limit, on=at))
+
+    @app.get("/api/v2/finance/brief")
+    def finance_brief(request: Request, view_as: str | None = None):
+        """What changed in Finance for the caller: a few short lines about the money they may see (their budgets, their
+        team's, cash and burn where they see the company), with `as_of` when those numbers last moved and `changed_since`
+        the `as_of` before. Empty `lines` when there is nothing to say (backend/finance/brief.py)."""
+        actor = as_viewer(request, view_as)
+        try:
+            with store.transaction() as c:
+                return finance_brief_mod.brief(c, actor)
+        except finance.FinanceError as e:
+            raise problem(e) from None
 
     @app.get("/api/v2/finance/pnl")
     def finance_pnl(
@@ -804,6 +829,7 @@ def install(app, store, auth, mutate):
             "estimate",
             "account",
             "vendor",
+            "campaign",
         ]
         | None = None,
         q: str = Query("", max_length=100),
@@ -818,6 +844,7 @@ def install(app, store, auth, mutate):
         contact_kind: Literal["vendor", "customer", "both"] | None = None,
         active: bool | None = None,
         rule_kind: Literal["gate", "posting"] | None = None,
+        month: str | None = Query(None, pattern=r"^\d{4}-(0[1-9]|1[0-2])$"),
         cursor: str | None = Query(None, max_length=600),
         limit: int = Query(50, ge=1, le=200),
         view_as: str | None = None,
@@ -834,6 +861,7 @@ def install(app, store, auth, mutate):
             "start": start,
             "end": end,
             "aging": aging,
+            "month": month,
             "kind": contact_kind if kind == "contact" else rule_kind if kind == "rule" else None,
             "active": None if active is None else ("1" if active else "0"),
         }

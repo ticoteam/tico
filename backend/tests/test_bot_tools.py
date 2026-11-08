@@ -324,7 +324,10 @@ def test_a_github_gh_token_counts_present_when_the_github_app_mints_it(api):
 
     assert status() == ("problem", [("GitHub", "Test Mac")])
     with store.transaction() as c:
-        c.execute("INSERT INTO github_app VALUES('app',1,'s','c','Acme-Co',0,NULL,'',x'00',x'00','t','ana')")
+        c.execute(
+            "INSERT INTO github_app(id,app_id,slug,client_id,org,administration,installation_id,html_url,ciphertext,nonce,"
+            "created_at,created_by) VALUES('app',1,'s','c','Acme-Co',0,NULL,'',x'00',x'00','t','ana')"
+        )
     assert status() == ("ready", [])
     with store.transaction() as c:
         c.execute("UPDATE github_app SET org='elsewhere'")  # the App mints only inside its own org
