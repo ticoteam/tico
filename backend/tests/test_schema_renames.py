@@ -16,11 +16,14 @@ import pytest
 from backend.enqueue import enqueue_stored
 from backend.migrations import renames as schema_renames
 from backend.config import Settings
-from backend.migrations.renames_data import COLUMNS
+from backend.migrations.renames_data import COLUMNS, TABLES
 from backend.store import Store
 
 FIXTURE = Path(__file__).parent / "fixtures" / "schema_pre_cleanup.sql"
 NEW = {(table, old): new for table, old, new, _wave in COLUMNS}
+# The Directory moved four market tables (the directory migration; their own indexes and triggers are checked there).
+TABLE_NEW = {old: new for old, new, _wave in TABLES}
+DIRECTORY_OLD = ("market_entities", "market_edges", "market_entity_keys", "market_watches", "market_keys_")
 NOW = "2026-10-01T00:00:00Z"
 
 
@@ -190,7 +193,9 @@ def test_every_column_has_its_new_name_and_the_rows_kept_their_values(upgraded):
             assert columns(conn, MOVED[(table, old)]), MOVED[(table, old)]
             continue
         renamed = NEW.get((table, renamed), renamed)
-        have = columns(conn, "runner_states" if table == "runners" and renamed in RUNNER_STATE else table)
+        have = columns(
+            conn, "runner_states" if table == "runners" and renamed in RUNNER_STATE else TABLE_NEW.get(table, table)
+        )
         if (table, renamed) in DROPPED:
             assert renamed not in have and old not in have, (table, old, renamed)
             continue
@@ -219,10 +224,14 @@ def test_indexes_triggers_and_views_survive_and_name_no_old_column(upgraded):
             name
             for name in before[kind + "es" if kind == "index" else kind + "s"]
             if not any(table in name for table in RETIRED)
+            and not any(table in name for table in DIRECTORY_OLD)
             and not name.startswith("growth_idea")
             and name not in DROPPED_INDEXES | DROPPED_TRIGGERS
         }
         assert kept <= now, kind
+    assert {"entities_name", "entity_links_from", "entity_identifiers_value", "entity_watches_active"} <= {
+        r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='index'")
+    }
     # An old name may live on as a column elsewhere (or as another rename's new name), so look only for names
     # that no table has any more, outside string literals.
     current = set().union(

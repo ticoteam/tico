@@ -100,6 +100,20 @@ TABLES = {
     rows.SkillSuggestionRow: "skill_suggestions",
     rows.SkillDeviceRow: "skill_devices",
     rows.SkillDeviceCodeRow: "skill_device_codes",
+    rows.EntityActivityRow: "entity_activities",
+    rows.EntityAttributeRow: "entity_attributes",
+    rows.EntityConnectionRow: "entity_connections",
+    rows.EntityExternalRefRow: "entity_external_refs",
+    rows.EntityMentionRow: "entity_mentions",
+    rows.EntityMergeRow: "entity_merges",
+    rows.EntityNoteRow: "entity_notes",
+    rows.EntitySourceRow: "entity_sources",
+    rows.EntitySuppressionRow: "entity_suppressions",
+    rows.EntityTypeRow: "entity_types",
+    rows.EntityValueHistoryRow: "entity_value_history",
+    rows.EntityValueRow: "entity_values",
+    rows.EntityViewRow: "entity_views",
+    rows.LinkTypeRow: "link_types",
 }
 
 
@@ -136,6 +150,8 @@ UNTYPED = frozenset(
         # Finance attribution (migration 20261106230500): read only through backend/finance/store/attribution.py.
         "fin_attribution_rules",
         "fin_attributions",
+        # Finance briefing (migration 20261107074031): a per-reader cache of the lines (backend/finance/brief.py).
+        "fin_briefs",
         # Finance's combined build (migration 0037): prepaid postings and invoice reminders.
         "fin_invoice_reminders",
         "fin_prepaid_postings",
@@ -406,9 +422,9 @@ UNTYPED = frozenset(
         "main_pushes",
         "market_briefings",
         "market_citations",
-        "market_edges",
-        "market_entities",
-        "market_entity_keys",
+        "entity_links",
+        "entities",
+        "entity_identifiers",
         "market_evidence",
         "market_figures",
         "market_insights",
@@ -416,7 +432,7 @@ UNTYPED = frozenset(
         "market_sizes",
         "market_sources",
         "market_turn_sources",
-        "market_watches",
+        "entity_watches",
         "media_assets",
         "media_control",
         "meeting_brain",

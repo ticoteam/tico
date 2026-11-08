@@ -15414,6 +15414,65 @@
         ]
       }
     },
+    "/api/v2/finance/brief": {
+      "get": {
+        "summary": "What changed in Finance for the caller: a few short lines about the money they may see, with as_of (when those numbers last moved) and changed_since. Empty lines when there is nothing to say. The owner may pass view_as",
+        "operationId": "getFinanceBrief",
+        "parameters": [
+          {
+            "name": "view_as",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "View As"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FinanceBrief"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Finance"
+        ]
+      }
+    },
     "/api/v2/finance/budgets": {
       "get": {
         "summary": "The budgets the caller sees, each with where it stands today, or with at=YYYY-MM-DD in the period holding that day (the version in effect then); amounts in cents. The owner may pass view_as",
@@ -57248,6 +57307,33 @@
         "required": [
           "bills_email",
           "inbox_id"
+        ],
+        "additionalProperties": true
+      },
+      "FinanceBrief": {
+        "type": "object",
+        "properties": {
+          "lines": {
+            "type": "array",
+            "items": "s"
+          },
+          "as_of": {
+            "type": "string"
+          },
+          "changed_since": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "version": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "as_of",
+          "lines",
+          "version"
         ],
         "additionalProperties": true
       },

@@ -12,7 +12,7 @@ A place's parent is the place one level up; countries have none. The data is gen
 scripts/build_places_pack.py from public sources (see data/<version>/pack.json). Do not edit it by hand.
 
 The pack is reference data. A hub writes only the places a record refers to, through ensure_places and an adapter
-(see market_adapter.py for the current market tables); it never copies the whole pack.
+(see adapter.py for the Directory's tables); it never copies the whole pack.
 """
 
 from __future__ import annotations

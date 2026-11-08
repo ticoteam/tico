@@ -489,11 +489,12 @@ def test_hub_change_selects_every_test_that_imports_it_transitively_and_no_other
     # test_ddl_guard scans all of backend/ (it skips tests at run time, which the map cannot see), so it is the twentieth;
     # test_schema_every_table reads every table the source makes in the same way, so it is the twenty-first;
     # test_system_jobs_list scans all of backend/ for recorded job keys, so it is one more.
+    # test_entities_visible_lint scans all of backend/ for reads of the Directory's tables, so it is one more.
     # scripts/release_train.py plans incremental release validations through pr_checks.py, which lists every test file,
     # so its five script tests (release_train, release_increment, release_notes, release_workflow, hosted_release_check;
     # seconds each) run for any test file change too.
     alone = checks.selection(["backend/tests/test_task_loops.py"])["python"]
-    assert "backend/tests/test_task_loops.py" in alone and len(alone) < 31
+    assert "backend/tests/test_task_loops.py" in alone and len(alone) < 32
     loops = checks.selection(["backend/task_loops.py"])
     assert "backend/tests/test_scheduler.py" in loops["python"] and not loops["caddy"]
     assert checks.selection(["backend/caddy_assets.py"])["caddy"]

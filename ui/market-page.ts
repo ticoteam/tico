@@ -24,13 +24,13 @@ function marketAt(route) {
 }
 
 const MARKET_TYPES = [
-  ['company', 'Organizations'],
+  ['organization', 'Organizations'],
   ['segment', 'Segments'],
   ['channel', 'Channels'],
   ['person', 'People'],
   ['product', 'Products'],
-  ['regulation', 'Regulation'],
-  ['geography', 'Places'],
+  ['document', 'Documents'],
+  ['place', 'Places'],
   ['event', 'Events'],
 ];
 
