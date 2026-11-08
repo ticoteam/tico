@@ -94,6 +94,14 @@ async function flow(page, tag) {
           assert.match(await page.locator('[data-dirs-type="person"]').innerText(), /4/);
           await page.locator('[data-dirs-field="title"]').count();
           await page.locator('[data-dirs-places-on]').waitFor({timeout: t(10000)});
+          // Where we operate: the owner removes Texas, then finds it by name and adds it back (the phone pass needs it).
+          const texas = page.locator('[data-dirs-place="place:us-tx"]');
+          await texas.waitFor({timeout: t(10000)});
+          await texas.locator('[data-dirs-unplace]').click();
+          await texas.waitFor({state: 'detached', timeout: t(10000)});
+          await page.locator('[data-dirs-place-q]').fill('Tex');
+          await page.locator('[data-dirs-pick="place:us-tx"]').click();
+          await texas.waitFor({timeout: t(10000)});
           await shot(page, 'settings-desktop');
           // Light theme too: the page uses theme tokens only.
           await page.evaluate(() => { document.documentElement.dataset.theme = 'light'; });
@@ -104,6 +112,16 @@ async function flow(page, tag) {
       } finally {
         await page.context().close();
       }
+    }
+    // A member sees where we operate without the controls (the hub refuses their writes too).
+    const member = await pageAs(browser, hub, 'omar');
+    try {
+      await member.waitForFunction(() => document.querySelector('#main')?.children.length > 0, null, {timeout: t(20000)});
+      await member.goto(member.url().split('#')[0] + '#/settings/directory');
+      await member.locator('[data-dirs-place="place:us-tx"]').waitFor({timeout: t(20000)});
+      assert.equal(await member.locator('[data-dirs-unplace], [data-dirs-place-q]').count(), 0);
+    } finally {
+      await member.context().close();
     }
     console.log('directory: ok');
   } finally {
