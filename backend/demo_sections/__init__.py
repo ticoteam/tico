@@ -10,6 +10,7 @@ from . import (
     alerts,
     automations_learnings,
     budgets,
+    directory,
     finance,
     growth,
     meeting_links,
@@ -44,6 +45,7 @@ SECTIONS = (
     pipelines,
     alerts,
     skills,
+    directory,
 )
 
 

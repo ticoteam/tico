@@ -86,7 +86,7 @@ const composerInside = async (page, panel) => {
         await page.locator('.pchips .pchip').nth(1).click();
         await page.waitForFunction(() => document.querySelector('.pchip.on')?.dataset.pipeChip === 'build');
         await stepAge();
-        assert.equal((await page.locator('.pipe-stage-name').innerText()).trim(), 'Build · warn after 1d', label + ': the stage line names its limit');
+        assert.equal((await page.locator('.pipe-stage-limit').innerText()).trim(), 'warn after 1d', label + ': the stage line names its limit');
         const stageCards = await page.locator('.pipe-stage-cards').boundingBox(), card = await page.locator('[data-task-key="tD52"]').boundingBox();
         assert.ok(Math.abs(card.x - (stageCards.x + 16)) <= 1 && Math.abs(card.width - (stageCards.width - 32)) <= 1, label + ': cards run full width with 16px gutters');
         assert.ok(await page.locator('[data-task-key="tD52"]').count(), label + ': Build shows D52');
