@@ -1544,3 +1544,42 @@ def test_not_validated_files_into_engineering_when_engineering_and_marketing_bot
     co.c.commit()
     assert co.where(result["follow_up"]) == ("Engineering", "Todo")
     assert co.where(card) == ("Product", "In development")
+
+
+def test_not_validated_files_one_engineering_ticket_when_specifying_and_review_both_spawned_shipped_engineering(co):
+    """Codex r5 blocker 3: Specifying and Review each spawn Engineering work, and both ships. The subtasks run names
+    Engineering, so every candidate link files into it and the destination is not ambiguous. Not validated files one
+    Engineering ticket through the nearest link, Review's, and does not refuse with `development_link`."""
+    card = co.ticket("Product", "Specifying", "Dark mode")
+    co.create_spawn_link("Product", "Specifying", "Engineering")
+    specifying_link = co.c.execute(
+        "SELECT id FROM pipeline_links WHERE from_pipeline_stage_id=? AND mode='spawn'",
+        (co.stage("Product", "Specifying"),),
+    ).fetchone()[0]
+    co.move(card, "Review", actor=ANA)
+    (lead,) = subtasks(co, card)
+    H.task_update(co.c, ANA, lead, owner=BEN)  # an open twin under the same owner would be refused as a duplicate
+    co.c.commit()
+    co.attach(card, co.requirement("Product", "Review", "Spec approved"), url=SPEC)
+    approve_spec(co, card)
+    assert co.where(card) == ("Product", "In development")
+    review_link = co.c.execute(
+        "SELECT id FROM pipeline_links WHERE from_pipeline_stage_id=? AND mode='spawn' AND to_pipeline_id=?",
+        (co.stage("Product", "Review"), co.type["Engineering"]),
+    ).fetchone()[0]
+    builds = [kid for kid in subtasks(co, card) if co.where(kid)[0] == "Engineering"]
+    assert len(builds) == 2
+    for build in builds:
+        co.move(build, "Doing", actor=ANA)
+        co.move(build, "Done", actor=ANA)
+    assert co.where(card) == ("Product", "Validate")
+    checked = co.requirement("Product", "Validate", "Validated")
+    co.attach(card, checked, url=VALIDATION)
+    result = pipeline_review.not_validated(co.c, ANA, card, checked, "Load time stayed over 4 s")
+    co.c.commit()
+    assert co.where(result["follow_up"]) == ("Engineering", "Todo")
+    filed = co.c.execute(
+        "SELECT pipeline_link_id FROM pipeline_handoffs WHERE target_task_id=?", (result["follow_up"],)
+    ).fetchone()[0]
+    assert filed == review_link and filed != specifying_link
+    assert co.where(card) == ("Product", "In development")
