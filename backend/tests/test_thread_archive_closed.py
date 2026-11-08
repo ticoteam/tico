@@ -5,7 +5,7 @@ and cara (humans)."""
 
 from backend.tests.slug_ids import bot_ids_are_their_slugs  # noqa: F401  (each bot's id is its slug)
 from backend.tests.test_api import api, headers  # noqa: F401  (the fixture and its helper)
-from backend.tests.test_thread_rail import ids, listed, new_thread, say
+from backend.tests.test_thread_rail import ids, listed, new_thread, post_as, private_ref, say
 
 FINISHES = ({"status": "done"}, {"status": "declined"}, {"close": True})
 
@@ -34,6 +34,12 @@ def shows(api, thread_id, token="ben-test"):
     in_threads = thread_id in ids(rail["pinned"] + rail["threads"])
     in_catch_up = thread_id in [item["thread"]["id"] for item in catch_up["items"]]
     return in_threads, in_catch_up
+
+
+def view_of(api, thread_id, token="ben-test"):
+    response = api.get(f"/api/v2/threads/{thread_id}", headers=headers(token))
+    assert response.status_code == 200, response.text
+    return response.json()
 
 
 def task_thread(api, task, title="Pricing"):
@@ -111,6 +117,30 @@ def test_the_close_notice_in_the_tasks_own_thread_does_not_bring_it_back(api):
         ).fetchone()[0]
     assert notices >= 1  # the close did write its notice into the thread
     assert shows(api, conversation)[1] is False
+
+
+def test_a_restricted_post_brings_a_closed_task_thread_back_only_for_a_reader_who_may_read_it(api):
+    # A post that names a private task is restricted: cara, who owns that task, reads it, and ben does not, so it
+    # revives the thread for cara and not for ben (it would leak that the post exists to him otherwise).
+    task = make_task(api)
+    thread = task_thread(api, task)
+    change_task(api, task, {"status": "done"})
+    assert shows(api, thread["id"], "cara-test") == (False, False)
+    secret = private_ref(api)
+    post_as(api, thread["id"], "human:cara", "Private numbers", refs={"task": secret})
+    assert shows(api, thread["id"], "cara-test") == (True, True)
+    assert shows(api, thread["id"], "ben-test") == (False, False)
+
+
+def test_a_thread_view_says_when_its_task_hides_it_and_a_post_clears_that(api):
+    # The live stream sends this view, so a client that patches a row from it hides the row the rail hides.
+    task = make_task(api)
+    thread = task_thread(api, task)
+    assert not view_of(api, thread["id"]).get("task_hidden")
+    change_task(api, task, {"status": "done"})
+    assert view_of(api, thread["id"])["task_hidden"] is True
+    say(api, thread["id"], "Back to it")
+    assert not view_of(api, thread["id"]).get("task_hidden")
 
 
 def test_archive_hides_a_thread_from_threads_and_catch_up_at_once_and_unarchive_brings_it_back(api):
