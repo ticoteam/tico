@@ -597,6 +597,21 @@ def primary_engine(settings, store=None, vault=None):
     return ordered([gateway(settings, store, vault), jev(settings)])
 
 
+class _Unreachable:
+    """The engine a demo build gets (`demo_seeding`): it asks no model and makes no call. It fails as a provider that
+    cannot be reached does, so the caller records the same `unavailable` call as it would with the network down, and the
+    build's reader sets stay what they were (test_threads_migration_e2e.py)."""
+
+    model = ""
+    provider = ""
+
+    def __call__(self, state, questions, label=None, level=None):
+        raise J.JudgeError("unavailable", "a demo build asks no decision model")
+
+
+_unreachable = _Unreachable()
+
+
 def server_engine(store, c, primary=None, budget=DECIDE_BUDGET):
     """The decision model every server-side caller uses, or None for "carry on as if Decide were off": rehearsal, no
     model at all, a demo, or the month's spend at the cap. `primary` is the Gateway and the own TypeSafe key
@@ -607,10 +622,15 @@ def server_engine(store, c, primary=None, budget=DECIDE_BUDGET):
     settings = store.settings
     # A demo's provider keys are made up (demo_sections/services.py): asking with them is a refused key or a timeout,
     # never an answer, and a seed that waits on either builds a different company from run to run.
-    if settings.rehearsal or settings.demo or settings.demo_seeding or over_spend_cap(c, settings, None, budget):
+    if settings.rehearsal or settings.demo or over_spend_cap(c, settings, None, budget):
         return None
     backup = fallback_engine(providers.load(c, settings))
     steps = live(primary, c, settings)
+    if settings.demo_seeding:
+        # A demo build makes no call: every step it would ask (and the company's own model) fails as an unreachable
+        # provider does. The chain, and whether there is one, stays what it is for a server with no network.
+        steps = [_unreachable] * len(steps)
+        backup = _unreachable if backup is not None else None
     chain = ordered(steps + [backup])
     if chain is None:
         return None

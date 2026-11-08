@@ -353,6 +353,21 @@ def test_each_department_lead_has_a_goal_that_rolls_up_to_the_company_goal(ana):
 def test_building_the_demo_makes_no_outbound_call(tmp_path):
     """A demo build never reaches the network: its rule checks and replies run with no model, a fixed result, the same
     on every machine. Any connection to another computer (a model's API, the Gateway) is refused and recorded."""
-    with demo.network_blocked() as attempts:
+    before = len(demo.ATTEMPTS)  # ATTEMPTS is process-wide: only this build's entries count
+    with demo.network_blocked():
         demo.build(tmp_path / "company", now=NOW)
-    assert attempts == [], f"the demo build tried to connect: {sorted(set(attempts))}"
+    made = demo.ATTEMPTS[before:]
+    assert made == [], f"the demo build tried to connect: {sorted(set(made))}"
+
+
+def test_the_demo_seed_polls_no_inbound_deliveries(monkeypatch):
+    """With an inbound key set, the seed's app must not poll for real deliveries (they would be fetched and acknowledged).
+    The control case, the same settings without the seed, polls: so the gate is what turns it off."""
+    from types import SimpleNamespace
+
+    from backend.inbound import Inbound
+
+    monkeypatch.setenv("TICO_INBOUND_KEY", "demo-key")
+    base = dict(demo=False, rehearsal=False, demo_seeding=False)
+    assert Inbound(None, SimpleNamespace(**base), None).off is False
+    assert Inbound(None, SimpleNamespace(**{**base, "demo_seeding": True}), None).off is True
