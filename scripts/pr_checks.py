@@ -10,10 +10,10 @@ import math
 import os
 from pathlib import Path
 import re
+import shlex
 import shutil
 import subprocess
 import sys
-import tempfile
 import xml.etree.ElementTree as ET
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -1626,6 +1626,23 @@ def superseded_runs(runs, head_ref, run_number):
     return ids
 
 
+def junit_ran(path):
+    """Whether a pytest JUnit report holds a test that ran (passed or failed), not only skipped ones."""
+    path = Path(path)
+    return path.is_file() and any(case.find("skipped") is None for case in ET.parse(path).iter("testcase"))
+
+
+def pytest_leg(interpreter, jobs, suite, args):
+    """pytest, then, where it passed, a check of its JUnit report in the same command (on the VM too): as in CI's
+    run(), a leg whose every test skipped is no pass. pytest's 5 (no test collected) passes through: every selected
+    file holds only slow tests, which the release gate runs and CI drops. The report path is relative and ignored
+    (/ci-results/), so a RunsOn VM can write it."""
+    report = f"ci-results/local-{suite}.xml"
+    test = [interpreter, "-m", "pytest", "-q", "-n", str(jobs), *PYTEST_FLAGS, f"--junitxml={report}", *args]
+    check = [interpreter, "scripts/pr_checks.py", "junit-ran", report]
+    return ["bash", "-c", f'{shlex.join(test)}; code=$?; [ "$code" = 0 ] && exec {shlex.join(check)}; exit "$code"']
+
+
 LOCAL_BASE = "origin/main"
 LOCAL_JOBS = 2  # a builder's computer runs other bots' turns too
 HEAVY = Path(__file__).resolve().parent / "heavy.sh"
@@ -1654,7 +1671,7 @@ def local(base=LOCAL_BASE, jobs=LOCAL_JOBS, ready=False, root=ROOT, execute=subp
 
     def unchanged():
         """The checkout is the commit and nothing else: no edit, and no untracked file a test could pick up."""
-        return not git("status", "--porcelain")
+        return not git("status", "--porcelain", "--untracked-files=all")
 
     if not unchanged():
         return stop(
@@ -1698,20 +1715,15 @@ def local(base=LOCAL_BASE, jobs=LOCAL_JOBS, ready=False, root=ROOT, execute=subp
     browser = browser_scripts(picked["browser"], root) if picked["browser"] else []
     # On a RunsOn VM (scripts/heavy.sh with TICO_HEAVY_REMOTE=1) the venv is python3 on its PATH, not this path.
     remote = os.environ.get("TICO_HEAVY_REMOTE") == "1"
-    reports = Path(tempfile.mkdtemp(prefix="pr-checks-local-"))
-    pytest = ["python3" if remote else sys.executable, "-m", "pytest", "-q", "-n", str(jobs), *PYTEST_FLAGS]
+    interpreter = "python3" if remote else sys.executable
+
     legs = []
     if python:
         legs.append(
-            (
-                f"{len(python)} test file{'s' * (len(python) != 1)}",
-                [*pytest, f"--junitxml={reports / 'python.xml'}", *python],
-            )
+            (f"{len(python)} test file{'s' * (len(python) != 1)}", pytest_leg(interpreter, jobs, "python", python))
         )
     if picked["contracts"]:
-        legs.append(
-            ("the contract tests", [*pytest, f"--junitxml={reports / 'contracts.xml'}", "-m", "slow", *CONTRACT_TESTS])
-        )
+        legs.append(("the contract tests", pytest_leg(interpreter, jobs, "contracts", ["-m", "slow", *CONTRACT_TESTS])))
     if browser:
         legs.append(
             (
@@ -1732,20 +1744,12 @@ def local(base=LOCAL_BASE, jobs=LOCAL_JOBS, ready=False, root=ROOT, execute=subp
     env = {k: v for k, v in os.environ.items() if k != "PYTEST_ADDOPTS"}
     failed = None
     for name, command in legs:
-        print("$ " + " ".join(command), flush=True)
+        print("$ " + shlex.join(command), flush=True)
         code = execute(["bash", str(HEAVY), *command], cwd=root, env=env).returncode
         if code in (75, 76):
             # scripts/remote.py (TICO_HEAVY_REMOTE=1) never ran it or lost its result: no result, so no receipt.
             return stop(f"{name} gave no result (exit {code}): a remote run needs this head pushed; run this again")
-        report = next((Path(a.split("=", 1)[1]) for a in command if a.startswith("--junitxml=")), None)
-        # pytest's 5: every selected file holds only slow tests, which the release gate runs (CI drops those files).
-        # As CI's run(), a Python leg that ran tests must have passed one, not skipped them all. A remote run writes
-        # its report on the VM, so only its exit code is read here.
-        if code == 0 and report and not remote:
-            passed_one = report.is_file() and any(c.find("skipped") is None for c in ET.parse(report).iter("testcase"))
-        else:
-            passed_one = True  # the exit code alone decides
-        if code not in (0, 5) or not passed_one:
+        if code not in (0, 5):
             failed = name
             break
     if not unchanged() or git("rev-parse", "HEAD").lower() != head:
@@ -1787,6 +1791,8 @@ def main():
     mine.add_argument("--base", default=LOCAL_BASE)
     mine.add_argument("--jobs", type=int, default=LOCAL_JOBS, help="pytest workers and browser scripts at once")
     mine.add_argument("--ready", action="store_true", help="after a pass, mark this branch's draft pull request ready")
+    ran = sub.add_parser("junit-ran", help="exit 1 unless a pytest JUnit report holds a test that was not skipped")
+    ran.add_argument("report")
     sub.add_parser("durations")
     sub.add_parser("receipt")
     sub.add_parser("smoke-check")
@@ -1810,6 +1816,10 @@ def main():
         prepare(args.event, args.base, args.output, args.timings, args.head)
     elif args.action == "run":
         return run(args.plan, args.suite, Path(args.root))
+    elif args.action == "junit-ran":
+        if not junit_ran(args.report):
+            print(f"{args.report}: every test skipped or none ran", file=sys.stderr)
+            return 1
     elif args.action == "local":
         return local(base=args.base, jobs=args.jobs, ready=args.ready)
     elif args.action == "durations":

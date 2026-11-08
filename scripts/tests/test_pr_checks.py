@@ -5,6 +5,7 @@ import json
 import os
 from pathlib import Path
 import re
+import shlex
 import subprocess
 import sys
 from types import SimpleNamespace
@@ -1579,9 +1580,6 @@ def branch(tmp_path, monkeypatch):
     def execute(command, **kwargs):
         commands.append(command)
         envs.append(kwargs.get("env") or {})
-        report = next((a.split("=", 1)[1] for a in command if a.startswith("--junitxml=")), None)
-        if report:  # pytest's JUnit file: one test that ran and passed
-            Path(report).write_text('<testsuite><testcase name="t"/></testsuite>')
         for key, act in during.items():
             if key in " ".join(command):
                 act()
@@ -1603,6 +1601,13 @@ def branch(tmp_path, monkeypatch):
     )
 
 
+def pytest_leg(command):
+    """The pytest command and the report check of a Python leg, as heavy.sh is given them: bash -c '<pytest>; ...'."""
+    script = command[command.index("-c") + 1]
+    first, rest = script.split("; code=$?;", 1)
+    return shlex.split(first), shlex.split(rest.split("exec ", 1)[1].split(";", 1)[0])
+
+
 def receipt_line(out):
     return out.strip().splitlines()[-1]
 
@@ -1618,7 +1623,10 @@ def test_a_local_pass_runs_the_ci_selection_and_prints_a_receipt_the_review_gate
     # The same selection a pull request's plan makes: the branch's own change, as a pull request event.
     assert branch.seen["changed"] == ["app.py", "tests/test_app.py"] and branch.seen["event"] == "pull_request"
     python, browser = branch.commands
-    assert python[-1] == "tests/test_app.py" and "pytest" in python and python[python.index("-n") + 1] == "2"
+    assert python[2:4] == ["bash", "-c"]
+    test, check = pytest_leg(python)
+    assert test[-1] == "tests/test_app.py" and "pytest" in test and test[test.index("-n") + 1] == "2"
+    assert check[1:3] == ["scripts/pr_checks.py", "junit-ran"]  # a leg whose every test skipped is no pass
     assert "scripts/ui-tests.cjs" in browser and browser[-1] == "chat"
     # Heavy local runs share the computer's slots (scripts/heavy.sh), as a bot's full suite does.
     assert all(c[1].endswith("scripts/heavy.sh") for c in branch.commands)
@@ -1646,8 +1654,10 @@ def test_uncommitted_changes_get_no_receipt_and_run_nothing(branch, capsys):
 
 
 def test_an_untracked_file_gets_no_receipt_and_runs_nothing(branch, capsys):
-    # An uncommitted module or fixture could make the tests pass where the named commit fails.
-    (branch.root / "helper.py").write_text("x = 1\n")
+    # An uncommitted module or fixture could make the tests pass where the named commit fails, whatever git status
+    # is set to show.
+    local_git(branch.root, "config", "status.showUntrackedFiles", "no")
+    (branch.root / "tests" / "helper.py").write_text("x = 1\n")
     assert branch.run() == 2
     assert branch.commands == [] and not test_receipts.SHA.search(capsys.readouterr().out)
 
@@ -1669,16 +1679,34 @@ def test_a_commit_or_edit_during_the_run_gets_no_receipt_and_leaves_the_draft_al
         assert not test_receipts.SHA.search(capsys.readouterr().out), change
 
 
-def test_a_python_leg_that_runs_no_test_is_no_pass(branch, capsys):
-    # As CI's run(): a leg whose every test skipped proves nothing. The report is pytest's JUnit file.
-    def skipped():
-        command = branch.commands[-1]
-        report = next(a.split("=", 1)[1] for a in command if a.startswith("--junitxml="))
-        Path(report).write_text('<testsuite><testcase name="t"><skipped/></testcase></testsuite>')
+def test_a_python_leg_that_runs_no_test_is_no_pass(tmp_path, monkeypatch):
+    # As CI's run(): a leg whose every test skipped proves nothing. The check runs inside the leg's own command, so it
+    # holds on a RunsOn VM too, where the report is written.
+    report = tmp_path / "local-python.xml"
+    assert not checks.junit_ran(report)
+    report.write_text(
+        '<testsuite><testcase name="a"><skipped/></testcase><testcase name="b"><skipped/></testcase></testsuite>'
+    )
+    assert not checks.junit_ran(report)
+    monkeypatch.setattr("sys.argv", ["pr_checks.py", "junit-ran", str(report)])
+    assert checks.main() == 1
+    report.write_text('<testsuite><testcase name="a"><skipped/></testcase><testcase name="b"/></testsuite>')
+    assert checks.junit_ran(report)
+    monkeypatch.setattr("sys.argv", ["pr_checks.py", "junit-ran", str(report)])
+    assert checks.main() == 0
 
-    branch.during["pytest"] = skipped
-    assert branch.run() == 1
-    assert gate(receipt_line(capsys.readouterr().out), branch.head) == "failed"
+
+def test_a_leg_passes_only_when_pytest_passed_and_a_test_ran_and_keeps_pytests_own_code(tmp_path):
+    # A stand-in interpreter answers pytest with $PYTEST and the report check with $CHECK.
+    python = tmp_path / "python"
+    python.write_text(
+        '#!/bin/sh\ncase "$*" in *"-m pytest"*) exit "$PYTEST" ;; *junit-ran*) exit "$CHECK" ;; esac\nexit 9\n'
+    )
+    python.chmod(0o755)
+    leg = checks.pytest_leg(str(python), 2, "python", ["tests/test_app.py"])
+    for pytest_code, check_code, expected in ((0, 0, 0), (0, 1, 1), (1, 0, 1), (5, 0, 5), (5, 1, 5)):
+        env = {**os.environ, "PYTEST": str(pytest_code), "CHECK": str(check_code)}
+        assert subprocess.run(leg, cwd=tmp_path, env=env).returncode == expected, (pytest_code, check_code)
 
 
 def test_an_inherited_pytest_addopts_never_reaches_the_selected_run(branch, monkeypatch):
@@ -1701,18 +1729,24 @@ def test_contract_tests_run_as_the_pull_request_runs_them(branch):
     branch.seen["plan"] = {**LOCAL_PLAN, "python": [], "browser": [], "contracts": True}
     assert branch.run() == 0
     (command,) = branch.commands
-    assert command[command.index("-m", command.index("pytest") + 1) + 1] == "slow"
-    assert command[-len(checks.CONTRACT_TESTS) :] == list(checks.CONTRACT_TESTS)
+    test, _ = pytest_leg(command)
+    assert test[test.index("-m", test.index("pytest") + 1) + 1] == "slow"
+    assert test[-len(checks.CONTRACT_TESTS) :] == list(checks.CONTRACT_TESTS)
 
 
 def test_a_remote_run_names_the_interpreter_the_vm_has_not_this_computers_path(branch, monkeypatch):
     # scripts/heavy.sh sends the command to a RunsOn VM (TICO_HEAVY_REMOTE=1), whose venv is python3 on its PATH.
     assert branch.run() == 0
-    assert branch.commands[0][2] == sys.executable
+    test, check = pytest_leg(branch.commands[0])
+    assert test[0] == check[0] == sys.executable
     branch.commands.clear()
     monkeypatch.setenv("TICO_HEAVY_REMOTE", "1")
     assert branch.run() == 0
-    assert branch.commands[0][2:5] == ["python3", "-m", "pytest"]
+    test, check = pytest_leg(branch.commands[0])
+    assert test[:3] == ["python3", "-m", "pytest"] and check[0] == "python3"
+    # The report path is relative and ignored, so the VM can write it and the checkout stays clean.
+    report = next(a.split("=", 1)[1] for a in test if a.startswith("--junitxml="))
+    assert report.startswith("ci-results/") and check[-1] == report
 
 
 def test_a_change_that_selects_no_tests_still_gets_a_passing_receipt(branch, capsys):
