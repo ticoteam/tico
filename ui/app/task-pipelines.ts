@@ -103,7 +103,7 @@ function taskPipelineBoard(items, state, head = '') {
   const inStep = step => items.filter(item => item.task.step_id === step.id);
   // A stage's held count is the unfinished cards the task list holds in it now, so a card a live change moved out is
   // not still counted; the server's step.held is only as fresh as the last types read.
-  const heldIn = (stepId: string) => (state.tasks || []).filter(t => t.step_id === stepId && !['done', 'closed', 'declined'].includes(String(t.status))).length;
+  const heldIn = (stepId: string) => (state.tasks || []).filter((t: {step_id?: string | null; status?: unknown}) => t.step_id === stepId && !['done', 'closed', 'declined'].includes(String(t.status))).length;
   const stepColumn = (step: import('../types/api').TaskStep) => ({id: step.id, name: step.name, drop: step.id, items: inStep(step), scope: {type: type.id, step: step.id}, limit: step.limit_minutes, cap: step.card_cap ?? null, held: heldIn(step.id)});
   const strip = (fold, run, drop, name) => ({id: 'fold-' + fold, fold, drop, items: [], name: run.length === 1 ? run[0].name : name,
     hint: run.map(step => step.name).join(', '), count: fold === 'backlog' ? run.reduce((n, step) => n + inStep(step).length, 0) : ''});
