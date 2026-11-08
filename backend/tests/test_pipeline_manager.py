@@ -526,6 +526,40 @@ def test_the_late_list_costs_the_same_queries_for_many_tickets_and_is_capped(api
     assert sorted(listing) == sorted(picked[:2]) and more is False
 
 
+def test_one_asked_ticket_among_5000_is_the_only_row_whose_clock_is_computed(api, monkeypatch):
+    """R13: the ids and visibility narrow the tickets before any clock is computed. Asking for one of 5,000 live tickets
+    evaluates one row, not the pipeline; the pipeline-wide list reads bounded pages."""
+    store = api.app.state.store
+    base = now()
+    with store.transaction() as c:
+        type_id = pipeline(c)
+        c.execute("UPDATE task_steps SET limit_minutes=60 WHERE id=?", (step(c, type_id, "Building"),))
+        ids = [
+            H.task_create(c, ANA, f"Live {n}", "", ANA, type=type_id, step="Building", lint=False)["id"]
+            for n in range(5000)
+        ]
+        for ticket in ids:
+            visit(c, ticket, type_id, "Building", base - timedelta(hours=2))
+    evaluated: list[int] = []
+    real = PM.late_tickets
+
+    def counting(c, rows, at):
+        evaluated.append(len(rows))
+        return real(c, rows, at)
+
+    monkeypatch.setattr(PM, "late_tickets", counting)
+    with store.read() as c:
+        listing, more = PM.late_listing(c, ANA, "1=1", type_id, base, {ids[4321]})
+    assert list(listing) == [ids[4321]] and more is False
+    assert sum(evaluated) == 1
+
+    evaluated.clear()
+    with store.read() as c:
+        listing, more = PM.late_listing(c, ANA, "1=1", type_id, base, None)
+    assert len(listing) == PM.LATE_CAP and more is True
+    assert max(evaluated) <= PM.LATE_PAGE
+
+
 def test_a_manager_set_on_an_old_pipeline_is_not_judged_on_its_first_tick(api):
     """R4: the watchdog's first tick after an update found no ok pass and judged the pipeline from its creation, so every
     managed pipeline got a "stopped" task. A manager with no run yet is not behind."""
