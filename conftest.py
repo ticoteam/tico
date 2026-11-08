@@ -68,6 +68,26 @@ def pytest_addoption(parser):
         action="store_true",
         help="Build API fixture databases from empty paths (migration checks and benchmarks)",
     )
+    _flake_quarantine().addoption(parser)
+
+
+def _flake_quarantine():
+    """scripts/flake_quarantine.py, loaded by path like scripts/heavy_slot.py (scripts/ is not on every sys.path)."""
+    import importlib.util
+
+    name = "tico_flake_quarantine"
+    if name not in sys.modules:
+        spec = importlib.util.spec_from_file_location(name, Path(__file__).parent / "scripts/flake_quarantine.py")
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[name] = module
+        spec.loader.exec_module(module)
+    return sys.modules[name]
+
+
+def pytest_collection_modifyitems(config, items):
+    """PR checks and the merge queue pass --quarantine (scripts/pr_checks.py run --quarantine): each test listed in
+    ci/quarantine/ runs as a non-strict xfail. Release validation never passes it."""
+    _flake_quarantine().modify(config, items)
 
 
 def unix_socket_path_under_tmp_path(address, basetemp=None):

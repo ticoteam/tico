@@ -1470,9 +1470,11 @@ def browser_scripts(args, root=ROOT):
     return out
 
 
-def run(plan_path, suite, root=None):
+def run(plan_path, suite, root=None, quarantine=False):
     """Runs one suite of a plan from `root`'s checkout: the merge queue's VMs, and the release gate's incremental ones.
-    `root` defaults to ROOT as it is when the suite runs (a default argument would freeze the import-time value)."""
+    `root` defaults to ROOT as it is when the suite runs (a default argument would freeze the import-time value).
+    `quarantine` (PR checks and the merge queue only, never release validation) runs the tests in ci/quarantine/ as
+    non-strict xfail (scripts/flake_quarantine.py)."""
     root = ROOT if root is None else Path(root)
     plan = json.loads(Path(plan_path).read_text())
     # A merge queue plan lists its VMs as matrix.include (suite); an incremental release plan lists them as jobs (name).
@@ -1507,6 +1509,8 @@ def run(plan_path, suite, root=None):
         ]
         if suite in ("conformance", "contracts"):
             command += ["-m", "slow"]
+        if quarantine:
+            command.append("--quarantine")
         command += files
     (root / "ci-results").mkdir(exist_ok=True)
     rust = cargo_tests(job.get("crates", [])) if suite == "conformance" else 0
@@ -1638,6 +1642,11 @@ def main():
     execute.add_argument("suite")
     execute.add_argument("--plan", default="ci-plan.json")
     execute.add_argument("--root", default=str(ROOT), help="the checkout the suite runs in")
+    execute.add_argument(
+        "--quarantine",
+        action="store_true",
+        help="run ci/quarantine/ tests as non-strict xfail (PR checks and the queue)",
+    )
     sub.add_parser("durations")
     sub.add_parser("receipt")
     sub.add_parser("smoke-check")
@@ -1660,7 +1669,7 @@ def main():
     if args.action == "plan":
         prepare(args.event, args.base, args.output, args.timings, args.head)
     elif args.action == "run":
-        return run(args.plan, args.suite, Path(args.root))
+        return run(args.plan, args.suite, Path(args.root), quarantine=args.quarantine)
     elif args.action == "durations":
         measured = durations(Path("ci-results").glob("python-*.xml"), Path("ci-results").glob("browser-*.json"))
         if not measured:

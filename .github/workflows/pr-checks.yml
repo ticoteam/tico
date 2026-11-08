@@ -3,11 +3,15 @@
 # Two tiers. Each push to a pull request runs the cheap checks (plan, static). A ready pull request from this repository
 # also runs the plan's selected tests and factory simulation, so its `checks` passes only when they pass. A fork's pull
 # request keeps the cheap checks only, and a draft runs nothing.
-# A merge queue group (the merge_group event, once per queue group) runs everything else: the tests the group's merged
-# change selects, the factory simulation when the change reaches what it runs (scripts/pr_checks.py factory_reason), the
-# Rust and desktop checks, the macOS recorder tests and the Linux Caddy image. The group selects from its own base and
-# head. Static checks run in the group too: its merge commit is the one that lands on main, and a migration timestamp can
-# collide with a change queued ahead of it.
+# A ready pull request from this repository also runs every other job a queue group runs, under the same conditions, so
+# a failure shows before the change is enqueued: the Rust and desktop checks when they changed, the macOS recorder tests
+# when recorder/ changed and the Linux Caddy image when the plan selects it. Only the cosmetic timing receipt is
+# queue-only.
+# A merge queue group (the merge_group event, once per queue group) runs them all again on its merge commit: the tests
+# the group's merged change selects, the factory simulation when the change reaches what it runs (scripts/pr_checks.py
+# factory_reason), the Rust and desktop checks, the macOS recorder tests and the Linux Caddy image. The group selects
+# from its own base and head, so a group behind others selects their union. Static checks run in the group too: its
+# merge commit is the one that lands on main, and a migration timestamp can collide with a change queued ahead of it.
 # A failed `tests` or `factory-sim` leg cancels its whole run (its last step), in a queue group or a pull request. The
 # `checks` job still runs (always()) and fails, so the queue drops a failing group within about a minute.
 # `checks` is the one required check. It fails when a job it needs failed or was cancelled; a skipped job passes. A draft
@@ -201,7 +205,9 @@ jobs:
         env:
           SUITE: ${{ matrix.suite }}
           TICO_PYTHON: ${{ runner.temp }}/venv/bin/python
-        run: PATH="$RUNNER_TEMP/venv/bin:$PATH" "$RUNNER_TEMP/venv/bin/python" scripts/pr_checks.py run "$SUITE"
+        # --quarantine: a test listed in ci/quarantine/ (it failed and passed on one commit) runs but cannot fail the
+        # suite. Release validation never passes it (scripts/flake_quarantine.py).
+        run: PATH="$RUNNER_TEMP/venv/bin:$PATH" "$RUNNER_TEMP/venv/bin/python" scripts/pr_checks.py run --quarantine "$SUITE"
       - if: always() && (startsWith(matrix.suite, 'python-') || startsWith(matrix.suite, 'browser-') || matrix.suite == 'contracts')
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
@@ -341,9 +347,10 @@ jobs:
         run: bash scripts/pinned_tool.sh actionlint
 
   rust-lint:
-    # Merge queue groups only: rustfmt and clippy -D warnings (scripts/rust_checks.sh) when a crate it checks changed.
+    # Merge queue groups, and a ready pull request from this repository: rustfmt and clippy -D warnings
+    # (scripts/rust_checks.sh) when a crate it checks changed. Nothing runs when none did.
     name: rust lint
-    if: ${{ github.event_name == 'merge_group' }}
+    if: ${{ github.event_name == 'merge_group' || (github.event_name == 'pull_request' && !github.event.pull_request.draft && github.event.pull_request.head.repo.full_name == github.repository) }}
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
@@ -372,10 +379,11 @@ jobs:
         run: bash scripts/rust_checks.sh
 
   desktop-app:
-    # Merge queue groups only. The Tauri desktop app (app/): rustfmt, clippy -D warnings and its unit tests, on Linux with
-    # the build dependencies app.yml installs. Nothing runs when no app file changed.
+    # Merge queue groups, and a ready pull request from this repository. The Tauri desktop app (app/): rustfmt, clippy
+    # -D warnings and its unit tests, on Linux with the build dependencies app.yml installs. Nothing runs when no app file
+    # changed.
     name: desktop app
-    if: ${{ github.event_name == 'merge_group' }}
+    if: ${{ github.event_name == 'merge_group' || (github.event_name == 'pull_request' && !github.event.pull_request.draft && github.event.pull_request.head.repo.full_name == github.repository) }}
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     steps:
@@ -432,10 +440,10 @@ jobs:
 
   recorder:
     # The Rust crate with the desktop feature (the window, the updater), on macOS: it links the system frameworks.
-    # Merge queue groups only, when the plan sees a change under recorder/.
+    # Merge queue groups, and a ready pull request from this repository, when the plan sees a change under recorder/.
     name: recorder tests
     needs: plan
-    if: ${{ github.event_name == 'merge_group' && needs.plan.outputs.recorder == 'true' }}
+    if: ${{ (github.event_name == 'merge_group' || (github.event_name == 'pull_request' && !github.event.pull_request.draft && github.event.pull_request.head.repo.full_name == github.repository)) && needs.plan.outputs.recorder == 'true' }}
     runs-on: macos-latest
     timeout-minutes: 45
     steps:
@@ -461,9 +469,9 @@ jobs:
         run: cargo test --locked --features desktop,cli
 
   caddy-linux:
-    # Merge queue groups only, when the plan selects the Caddy image.
+    # Merge queue groups, and a ready pull request from this repository, when the plan selects the Caddy image.
     needs: plan
-    if: ${{ github.event_name == 'merge_group' && needs.plan.outputs.caddy == 'true' }}
+    if: ${{ (github.event_name == 'merge_group' || (github.event_name == 'pull_request' && !github.event.pull_request.draft && github.event.pull_request.head.repo.full_name == github.repository)) && needs.plan.outputs.caddy == 'true' }}
     name: caddy-linux-${{ matrix.arch }}
     runs-on: ${{ matrix.arch == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
     timeout-minutes: 35
@@ -555,8 +563,8 @@ jobs:
 
   checks:
     # The one required check, on every pull request to main and on the merge queue. It fails when a job it needs failed or
-    # was cancelled. A skipped job passes: a pull request skips the queue-only jobs, a fork's skips the tests and the sim,
-    # and a draft pull request skips every job.
+    # was cancelled. A skipped job passes: a change that does not reach a job skips it, a fork's pull request skips the
+    # tests, the sim and the Rust, desktop, recorder and Caddy jobs, and a draft pull request skips every job.
     name: checks
     if: ${{ always() && !github.event.pull_request.draft }}
     needs: [plan, static, tests, factory-sim, rust-lint, desktop-app, recorder, caddy-linux]

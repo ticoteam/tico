@@ -909,6 +909,53 @@ def test_a_merge_group_diffs_its_queue_base_to_its_queue_head_not_the_checkout(t
     assert checks.changed_files(base, root=tmp_path) == []
 
 
+def test_a_queue_group_diffs_the_same_files_its_pull_request_run_did_plus_the_changes_queued_ahead(tmp_path, mapped):
+    """PR checks == queue checks. A pull request run diffs its merge commit from main as it was then (merge_parent, even
+    when the event's base sha is stale); its queue group diffs the group's head from the group's base. For the same
+    change the two lists match, and a group behind another holds the union, so the queue never selects less."""
+
+    def git(*args):
+        return subprocess.check_output(
+            ["git", "-c", "user.name=t", "-c", "user.email=t@acme.example", *args], cwd=tmp_path, text=True
+        ).strip()
+
+    def commit(name, text, message):
+        (tmp_path / name).write_text(text)
+        git("add", "-A")
+        git("commit", "-qm", message)
+        return git("rev-parse", "HEAD")
+
+    git("init", "-q", "-b", "main")
+    stale = commit("app.py", "x = 1\n", "Start")
+    git("checkout", "-qb", "one")
+    commit("one.py", "a = 1\n", "One")
+    git("checkout", "-qb", "two", "main")
+    commit("two.py", "b = 1\n", "Two")
+    git("checkout", "-q", "main")
+    base = commit("other.py", "c = 1\n", "Main moves on")
+    # GitHub's refs/pull/N/merge: the branch merged into main as main is when the run starts.
+    git("checkout", "-q", "--detach", base)
+    git("merge", "-q", "--no-ff", "--no-edit", "two")
+    pr_merge = git("rev-parse", "HEAD")
+    pr_base = checks.merge_parent(stale, pr_merge, root=tmp_path)
+    assert pr_base == base
+    pr_files = checks.changed_files(pr_base, pr_merge, root=tmp_path)
+    # Alone in its group: the group's head is the same merge onto the same base.
+    git("checkout", "-q", "--detach", base)
+    git("merge", "-q", "--no-ff", "--no-edit", "two")
+    alone = git("rev-parse", "HEAD")
+    assert checks.changed_files(base, alone, root=tmp_path) == pr_files == ["two.py"]
+    # Behind `one` in a group: its head carries both changes, so it selects at least what its pull request run did.
+    git("checkout", "-q", "--detach", base)
+    git("merge", "-q", "--no-ff", "--no-edit", "one")
+    git("merge", "-q", "--no-ff", "--no-edit", "two")
+    behind = git("rev-parse", "HEAD")
+    assert checks.changed_files(base, behind, root=tmp_path) == ["one.py", "two.py"]
+    for files in (["backend/task_loops.py"], ["conftest.py"], ["ui/app/chat.ts"], [checks.PR_WORKFLOW]):
+        pr, queue = checks.selection(files, "pull_request"), checks.selection(files, "merge_group")
+        assert pr == queue, files
+
+
 def test_a_merge_group_plans_its_own_selection_and_never_runs_the_pull_request_gates(tmp_path, monkeypatch, mapped):
     files = {"backend/tests/test_task_loops.py": 2, "backend/tests/test_auth.py": 10}
     monkeypatch.setattr(checks, "collect", lambda: Counter(files))
@@ -953,16 +1000,33 @@ def test_every_job_runs_on_a_github_hosted_runner_and_only_a_ready_pull_request_
         "caddy-linux": "${{ matrix.arch == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}",
     }
     assert {name: job["runs-on"] for name, job in jobs.items()} == expected
-    # A ready pull request and a merge queue group run the tests and the factory sim.
-    for name in ("tests", "factory-sim"):
-        assert "github.event_name == 'merge_group'" in jobs[name]["if"], name
-        assert "github.event_name == 'pull_request'" in jobs[name]["if"], name
-    # Everything else runs in the merge queue alone.
-    queue_only = ("rust-lint", "desktop-app", "recorder", "caddy-linux", "timings")
-    for name in queue_only:
-        assert "github.event_name == 'merge_group'" in str(jobs[name]["if"]), name
-        assert "github.event_name == 'pull_request'" not in str(jobs[name]["if"]), name
-    assert set(jobs) == {"plan", "static", "tests", "factory-sim", "checks", *queue_only}
+    # PR checks == queue checks: every job the gate needs runs on a ready pull request from this repository as well as
+    # in a queue group, under the same condition, so a failure shows on the pull request before it is enqueued.
+    ready = (
+        "github.event_name == 'merge_group' || (github.event_name == 'pull_request' && "
+        "!github.event.pull_request.draft && github.event.pull_request.head.repo.full_name == github.repository)"
+    )
+    for name in ("tests", "factory-sim", "rust-lint", "desktop-app", "recorder", "caddy-linux"):
+        assert ready in jobs[name]["if"], name
+    for name, output in (("factory-sim", "factory"), ("recorder", "recorder"), ("caddy-linux", "caddy")):
+        assert f"needs.plan.outputs.{output} == 'true'" in jobs[name]["if"], name
+    # Only the cosmetic timing receipt runs in the merge queue alone; nothing waits on it.
+    assert "github.event_name == 'merge_group'" in jobs["timings"]["if"]
+    assert "github.event_name == 'pull_request'" not in jobs["timings"]["if"]
+    queue_only = {name for name, job in jobs.items() if "pull_request" not in str(job.get("if", "pull_request"))}
+    assert queue_only == {"timings"}
+    assert set(jobs) == {
+        "plan",
+        "static",
+        "tests",
+        "factory-sim",
+        "checks",
+        "rust-lint",
+        "desktop-app",
+        "recorder",
+        "caddy-linux",
+        "timings",
+    }
 
 
 def test_a_draft_or_a_fork_runs_no_test_or_sim_leg():
