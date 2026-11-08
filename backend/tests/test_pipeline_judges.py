@@ -1268,6 +1268,92 @@ def test_a_route_from_an_answer_a_newer_judge_answer_replaced_does_not_come_back
     assert P.tick(store) == 0
 
 
+def _attach_more(path, task_id, req_id, url):
+    """Attaches newer evidence to the requirement; returns its id."""
+    c = hub(path)
+    A.attach(
+        c,
+        SimpleNamespace(task=lambda *a: None),
+        SimpleNamespace(actor=ANA),
+        task_id,
+        req_id,
+        {"source": "link", "url": url},
+    )
+    newest = c.execute(
+        "SELECT id FROM requirement_attachments WHERE task_id=? ORDER BY created_at DESC, rowid DESC LIMIT 1",
+        (task_id,),
+    ).fetchone()[0]
+    c.commit()
+    c.close()
+    return newest
+
+
+def _person_rules(path, task_id, req_id, verdict, attachment=None, decision="ruled"):
+    c = hub(path)
+    revision, stage = c.execute("SELECT work_revision, step_id FROM tasks WHERE id=?", (task_id,)).fetchone()
+    c.execute(
+        "INSERT INTO stage_decisions (id, task_id, pipeline_stage_id, stage_requirement_id, requirement_version, "
+        "requirement_attachment_id, work_version, judge, judge_actor, verdict, created_at) "
+        "VALUES (?,?,?,?,1,?,?,'person',?,?,?)",
+        (decision, task_id, stage, req_id, attachment, revision, ANA, verdict, H.now()),
+    )
+    c.commit()
+    c.close()
+
+
+def test_a_ruling_made_while_the_judge_reads_its_jobs_is_never_answered_over(tmp_path, monkeypatch):
+    """Codex round 5, P2: a person's Mark met committed while _waiting runs is a ruling made since the read, so the
+    judge's answer is not recorded over it."""
+    path, task_id, req_id = _judged_world(tmp_path)
+    store = Store(_settings(path))
+    read = P._waiting
+
+    def ruled_while_reading(c, limit):
+        jobs = read(c, limit)
+        _person_rules(path, task_id, req_id, "override")
+        return jobs
+
+    monkeypatch.setattr(P, "_waiting", ruled_while_reading)
+    monkeypatch.setattr(P, "_cannot_see", lambda attachment, state: False)
+    monkeypatch.setattr(P, "ENGINE", _engine(0.05))
+    P.tick(store)
+    with store.read() as c:
+        assert c.execute("SELECT count(*) FROM stage_decisions WHERE judge='llm'").fetchone()[0] == 0
+    assert _standing(store, task_id, req_id) == "met"
+
+
+def test_a_route_on_evidence_that_was_replaced_does_not_stop_the_judge(tmp_path, monkeypatch):
+    """Codex round 5, P2: an unsure answer on attachment A routed to a person; newer evidence B replaced A, so A's verdict
+    no longer stands and its route does not keep the judge from B."""
+    path, task_id, req_id = _judged_world(tmp_path)
+    store = Store(_settings(path))
+    monkeypatch.setattr(P, "_cannot_see", lambda attachment, state: False)
+    monkeypatch.setattr(P, "ENGINE", _engine(0.5))
+    assert P.tick(store) == 1
+    _attach_more(path, task_id, req_id, "https://y.example")
+    assert _standing(store, task_id, req_id) == "waiting"
+    monkeypatch.setattr(P, "ENGINE", _engine(0.95))
+    assert P.tick(store) == 1 and _standing(store, task_id, req_id) == "met"
+
+
+def test_evidence_back_after_newer_evidence_was_ruled_on_and_taken_away_is_judged_again(tmp_path, monkeypatch):
+    """Codex round 5, P2: A was judged, B replaced it and a person approved B, then B was taken away. The latest decision is
+    about B, so the engine reads none for A and it waits; the judge answers A again instead of leaving it waiting."""
+    path, task_id, req_id = _judged_world(tmp_path)
+    store = Store(_settings(path))
+    monkeypatch.setattr(P, "_cannot_see", lambda attachment, state: False)
+    monkeypatch.setattr(P, "ENGINE", _engine(0.05))
+    assert P.tick(store) == 1 and _standing(store, task_id, req_id) == "failed"
+    newer = _attach_more(path, task_id, req_id, "https://y.example")
+    _person_rules(path, task_id, req_id, "met", attachment=newer)
+    assert _standing(store, task_id, req_id) == "met"
+    with store.transaction() as c:
+        c.execute("UPDATE requirement_attachments SET removed_at=? WHERE id=?", (H.now(), newer))
+    assert _standing(store, task_id, req_id) == "waiting"
+    assert P.tick(store) == 1 and _standing(store, task_id, req_id) == "failed"
+    assert P.tick(store) == 0
+
+
 def _more_tickets(path, n, body=""):
     c = hub(path)
     dev = c.execute("SELECT type_id FROM tasks").fetchone()[0]

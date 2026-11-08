@@ -476,13 +476,16 @@ def _cannot_see(attachment: dict[str, Any], state: dict[str, Any]) -> bool:
 def _waiting(c: sqlite3.Connection, limit: int) -> list[dict[str, Any]]:
     """The current attachment on each bot-reviewed requirement of their ticket's current stage whose latest judge answer is
     not for the work as it is now (none, one for another title, spec or PR: work_digest, or one from before the digest),
-    and that no person was routed to (route_next_to: a bot does not judge what a person now answers). A judge's route holds
-    the judge off only while its verdict stands: it is the requirement's latest decision (LATEST_DECISION, as the engine
-    reads it) and its digest is the work's now. A person's or a rule's ruling that is the latest decision, on this
-    attachment and this work version, holds it off too, so re-judging never replaces a person's verdict, whatever evidence
-    the judge saw before. An attachment that newer evidence replaced is not judged. A Mark met stands only for the work it was made on (the decision's version), so
-    one made before a change does not stop the judge (R8). The digest is compared in SQL through DIGEST_SQL, a function
-    registered on this connection, so only `limit` rows are read."""
+    and that no person was routed to (route_next_to: a bot does not judge what a person now answers). A judge's route
+    holds the judge off only while its verdict stands: it is the requirement's latest decision (LATEST_DECISION, as the
+    engine reads it), on this attachment, and its digest is the work's now. A judge's answer on this attachment no
+    longer counts once the latest decision is about other evidence (the engine then reads none for it), as when newer
+    evidence was ruled on and then taken away. A person's or a rule's ruling that is the latest decision, on this
+    attachment and this work version, holds it off too, so re-judging never replaces a person's verdict, whatever
+    evidence the judge saw before. An attachment that newer evidence replaced is not judged. A Mark met stands only for
+    the work it was made on (the decision's version), so one made before a change does not stop the judge (R8). The
+    digest is compared in SQL through DIGEST_SQL, a function registered on this connection, so only `limit` rows are
+    read."""
     c.create_function(DIGEST_SQL, 5, _digest_of_row, deterministic=True)
     rows = c.execute(
         """SELECT a.id AS id, a.task_id, a.stage_requirement_id, a.digest, a.work_version, a.source, a.url, a.file_version,
@@ -522,7 +525,7 @@ def _waiting(c: sqlite3.Connection, limit: int) -> list[dict[str, Any]]:
                              WHERE d.task_id = a.task_id AND d.stage_requirement_id = a.stage_requirement_id
                                AND d.route_next_to IS NOT NULL
                                AND (COALESCE(d.judge, '') <> 'llm' OR d.requirement_attachment_id IS NULL
-                                    OR (d.rowid = ({latest})
+                                    OR (d.rowid = ({latest}) AND d.requirement_attachment_id = a.id
                                         AND d.work_digest = {digest}(t.title, t.body, pl.repo, pl.number, pl.detail))))
              AND NOT EXISTS (SELECT 1 FROM stage_decisions d
                              WHERE d.rowid = ({latest}) AND COALESCE(d.judge, '') <> 'llm'
@@ -533,7 +536,11 @@ def _waiting(c: sqlite3.Connection, limit: int) -> list[dict[str, Any]]:
                              WHERE d.rowid = (SELECT x.rowid FROM stage_decisions x
                                               WHERE x.requirement_attachment_id = a.id AND x.judge = 'llm'
                                               ORDER BY x.created_at DESC, x.rowid DESC LIMIT 1)
-                               AND d.work_digest = {digest}(t.title, t.body, pl.repo, pl.number, pl.detail))
+                               AND d.work_digest = {digest}(t.title, t.body, pl.repo, pl.number, pl.detail)
+                               AND NOT EXISTS (SELECT 1 FROM stage_decisions o
+                                               WHERE o.rowid = ({latest}) AND o.verdict <> 'override'
+                                                 AND o.requirement_attachment_id IS NOT NULL
+                                                 AND o.requirement_attachment_id <> a.id))
            ORDER BY a.created_at, a.id
            LIMIT ?""".replace("{active}", ",".join("?" * len(H.ACTIVE_STATUSES)))
         .replace("{latest}", LATEST_DECISION)
@@ -747,6 +754,9 @@ def tick(store: "Store", at: Any = None) -> int:
     job's inputs and is left before the model is asked; the answer is written in its own transaction, and only if it still
     applies to the work as it is then (_superseded)."""
     db: Any = store
+    # The state these answers are asked about; _superseded compares later work with it. Taken before the read starts, so a
+    # person's ruling committed while the jobs are being read counts as one made since.
+    read_at = H.now()
     with db.read() as c:
         if (
             c.execute(
@@ -756,7 +766,6 @@ def tick(store: "Store", at: Any = None) -> int:
         ):
             return 0
         jobs = _waiting(c, TICK_LIMIT)
-        read_at = H.now()  # the state these answers are asked about; _superseded compares later work with it
         asks: list[tuple[dict[str, Any], dict[str, Any], dict[str, Any]]] = []
         for job in jobs:
             requirement = {
