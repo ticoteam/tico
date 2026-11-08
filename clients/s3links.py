@@ -2,7 +2,7 @@
 
 The server names each bucket's https base in TICO_S3_VIEW_URLS (`bucket=https://base[/prefix]`, comma-separated;
 docs/files.md) and hands the mapping to signed-in clients in `GET /api/v2/config` as `s3_view_urls`. The UI renders
-with it (ui/app/markdown.js) and the `hub` CLI and MCP tools rewrite a bot's text with it before sending, so a
+with it (ui/app/markdown.ts) and the `hub` CLI and MCP tools rewrite a bot's text with it before sending, so a
 person gets a link rather than a URI nothing opens. Pure stdlib: the server, the runner and the CLI all import it.
 """
 
@@ -12,7 +12,7 @@ from urllib.parse import quote, unquote, urlsplit
 
 # S3's own rule for bucket names: 3-63 lower-case letters, digits, dots and hyphens, starting and ending alphanumeric.
 BUCKET = re.compile(r"[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]")
-# An s3:// URI in free text, by the rules ui/app/markdown.js (autolink) links with; ui/tests/support/s3-link-vectors.json
+# An s3:// URI in free text, by the rules ui/app/markdown.ts (autolink) links with; ui/tests/support/s3-link-vectors.json
 # holds the cases both are tested on. `<s3://...>` is one unit, spaces and all. A bare URI runs to whitespace or
 # <>"'` and then gives back trailing punctuation and a closing bracket it did not open.
 URI = re.compile(r"<(s3://[^<>\n]+)>|\bs3://[^\s<>\"'`]+", re.I)

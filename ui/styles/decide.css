@@ -138,7 +138,7 @@
 }
 @media (prefers-reduced-motion:reduce){.dc-card{transition:none}}
 
-/* the question card (ui/app/question-card.js), the same in Decide and the task page's Needs you box: several picks
+/* the question card (ui/app/question-card.ts), the same in Decide and the task page's Needs you box: several picks
    are checkboxes, every pick and button has its "what happens" line, the fallback is a small line at the foot */
 .qc-why{color:var(--ink)}
 .qc-picks{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:8px}

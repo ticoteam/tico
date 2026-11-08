@@ -9,48 +9,50 @@
 // Paths outside ui/ draw no page. A glob's `*` stays within one path segment; `**` crosses segments.
 
 const NON_RENDERING = [
-  'ui/tests/**', 'ui/README.md', 'ui/**/*.md', 'ui/*-baseline.json', 'ui/types/**', 'ui/tsconfig.json', 'ui/tsconfig.*.json', 'ui/strict-legacy.json',
+  'ui/tests/**', 'ui/README.md', 'ui/**/*.md', 'ui/*-baseline.json', 'ui/baselines/**', 'ui/types/**', 'ui/tsconfig.json', 'ui/tsconfig.*.json',
   'ui/package.json', 'ui/package-lock.json', 'ui/**/LICENSE*', 'ui/**/AUTHORS',
 ];
 
 const SHARED = [
-  'ui/index.html', 'ui/theme.js', 'ui/sw.js', 'ui/manifest.webmanifest', 'ui/observability*.js',
+  'ui/index.html', 'ui/theme.ts', 'ui/sw.js', 'ui/manifest.webmanifest', 'ui/observability*.ts',
   'ui/styles/tokens.css', 'ui/styles/base.css', 'ui/styles/layout.css', 'ui/styles/components.css',
   'ui/styles/sidebar.css', 'ui/styles/forms.css', 'ui/styles/motion.css', 'ui/styles/skeleton.css',
   'ui/styles/avatars.css', 'ui/styles/tree-lines.css', 'ui/styles/liquid-dot.css', 'ui/styles/brand.css',
   'ui/styles/rails.css', 'ui/styles/search.css', 'ui/styles/viewer.css', 'ui/styles/ask.css',
-  'ui/app/router.js', 'ui/app/core.js', 'ui/app/state.js', 'ui/app/format.js', 'ui/app/api.js',
-  'ui/app/session.js', 'ui/app/notices.js', 'ui/app/sidebar.js', 'ui/app/drawer.js', 'ui/app/viewport.js',
-  'ui/app/refresh.js', 'ui/app/boot.js', 'ui/app/boot-snap.js', 'ui/app/boot-timing.js', 'ui/app/nav-events.js',
-  'ui/app/markdown.js', 'ui/app/tooltip.js', 'ui/app/avatars.js', 'ui/app/liquid-dot.js', 'ui/app/heartbeat.js',
-  'ui/app/pill.js', 'ui/app/live.js', 'ui/app/motion.js', 'ui/app/rails.js', 'ui/app/stick-scroll.js',
-  'ui/app/org-fan.js', 'ui/app/native.js', 'ui/app/ask-panel.js', 'ui/app/ask-rules.js', 'ui/assistant.js',
-  'ui/app/search.js', 'ui/app/viewer.js', 'ui/tool-icons.js', 'ui/assets/**', 'ui/vendor/fonts/**',
+  'ui/app/router.ts', 'ui/app/core.ts', 'ui/app/state.ts', 'ui/app/format.ts', 'ui/app/api.ts', 'ui/app/errors.ts', 'ui/app/dom.ts',
+  'ui/app/session.ts', 'ui/app/notices.ts', 'ui/app/sidebar.ts', 'ui/app/drawer.ts', 'ui/app/viewport.ts',
+  'ui/app/refresh.ts', 'ui/app/boot.ts', 'ui/app/boot-snap.ts', 'ui/app/boot-timing.ts', 'ui/app/nav-events.ts',
+  'ui/app/markdown.ts', 'ui/app/tooltip.ts', 'ui/app/avatars.js', 'ui/app/liquid-dot.ts', 'ui/app/heartbeat.ts',
+  'ui/app/pill.ts', 'ui/app/live.ts', 'ui/app/motion.ts', 'ui/app/rails.ts', 'ui/app/stick-scroll.ts',
+  'ui/app/org-fan.ts', 'ui/app/native.ts', 'ui/app/ask-panel.ts', 'ui/app/ask-rules.ts', 'ui/assistant.ts',
+  'ui/app/search.ts', 'ui/app/viewer.ts', 'ui/tool-icons.ts', 'ui/assets/**', 'ui/vendor/fonts/**',
   'ui/vendor/marked.min.js', 'ui/vendor/js-yaml.min.js', 'ui/vendor/livekit-client.umd.min.js',
 ];
 
 // Files of features no PAGES entry shows. A change to one says so in the reason instead of shooting every page. A
 // page's own `ui` globs win over this list: a file both name belongs to the page.
 const UNSHOWN = [
-  'ui/vendor/**', 'ui/app/settings-*.js', 'ui/app/vault.js', 'ui/app/catalog.js', 'ui/app/cloud-*.js', 'ui/app/team-add.js',
-  'ui/app/integrations.js', 'ui/app/mail.js', 'ui/app/email-preview.js', 'ui/app/messaging.js', 'ui/app/sql.js',
-  'ui/app/assistant-page.js', 'ui/app/skills*.js', 'ui/app/tags.js', 'ui/app/roadmaps.js', 'ui/app/company-page.js',
-  'ui/app/computer-*.js', 'ui/app/dashboard.js', 'ui/app/overview*.js', 'ui/app/pages.js', 'ui/app/replay.js',
-  'ui/app/person-page.js', 'ui/app/shared-edit.js', 'ui/overview/**', 'ui/replay-player.js', 'ui/first-run.js',
-  'ui/changelog.js', 'ui/lenses-page.js', 'ui/org-builder.js', 'ui/connect-agent.js', 'ui/credential-card.js',
-  'ui/directory-sync.js', 'ui/github-connect.js', 'ui/google-connect.js', 'ui/model-login.js',
-  'ui/slack-channels.js', 'ui/slack-connect.js', 'ui/setup-strategy.js',
+  'ui/vendor/**', 'ui/app/settings-*.js', 'ui/app/settings-*.ts', 'ui/app/vault.ts', 'ui/app/catalog.ts', 'ui/app/cloud-*.ts', 'ui/app/team-add.ts',
+  'ui/app/integrations.ts', 'ui/app/mail.ts', 'ui/app/email-preview.ts', 'ui/app/messaging.ts', 'ui/app/sql.ts',
+  'ui/app/assistant-page.ts', 'ui/app/skills*.ts', 'ui/app/tags.ts', 'ui/app/roadmaps.ts', 'ui/app/company-page.ts',
+  'ui/app/computer-*.ts', 'ui/app/dashboard.ts', 'ui/app/overview*.ts', 'ui/app/pages.ts', 'ui/app/replay.ts',
+  'ui/app/person-page.ts', 'ui/app/shared-edit.ts', 'ui/overview/**', 'ui/replay-player.ts', 'ui/first-run.ts',
+  'ui/changelog.ts', 'ui/lenses-page.ts', 'ui/org-builder.ts', 'ui/connect-agent.ts', 'ui/credential-card.ts',
+  'ui/directory-sync.ts', 'ui/github-connect.ts', 'ui/google-connect.ts', 'ui/model-login.ts',
+  'ui/slack-channels.ts', 'ui/slack-connect.ts', 'ui/setup-strategy.ts',
   'ui/styles/company-page.css', 'ui/styles/computer-*.css', 'ui/styles/dashboard.css', 'ui/styles/overview*.css',
   'ui/styles/pages.css', 'ui/styles/skills.css', 'ui/styles/mail.css', 'ui/styles/messaging.css',
   'ui/styles/replay.css', 'ui/styles/roadmaps.css', 'ui/styles/tags.css', 'ui/styles/first-run.css',
   'ui/styles/lenses.css', 'ui/styles/credentials.css', 'ui/styles/cloud-agents.css', 'ui/styles/team-add.css',
   // The Settings Inboxes tab is gone (its page was removed from the table); its files are a feature no page shows now.
-  'ui/app/inboxes*.js', 'ui/app/tools*.js', 'ui/app/redesign-library.js', 'ui/styles/inboxes.css', 'ui/styles/inbound.css',
+  'ui/app/inboxes*.js', 'ui/app/inboxes*.ts', 'ui/app/tools*.ts', 'ui/app/redesign-library.ts', 'ui/styles/inboxes.css', 'ui/styles/inbound.css',
   'ui/styles/tools.css', 'ui/styles/redesign-library.css',
+  // Library › Directory: the demo seeds no people or organizations yet, so no page has a line to wait for.
+  'ui/app/directory*.ts', 'ui/styles/directory.css',
 ];
 
 // A change to one of these can change the dark theme on every page, whatever its lines say.
-const DARK_FILES = ['ui/styles/tokens.css', 'ui/theme.js'];
+const DARK_FILES = ['ui/styles/tokens.css', 'ui/theme.ts'];
 
 // A glob as a regular expression over a slash-separated path.
 function globToRegExp(glob) {
@@ -65,6 +67,9 @@ function globToRegExp(glob) {
       out += c.replace(/[.+^${}()|[\]\\]/g, '\\$&');
     }
   }
+  // A UI script is .js until it converts to TypeScript, so a glob ending in .js also matches the .ts of the same name:
+  // a conversion changes no table here.
+  if (out.endsWith('\\.js')) out = out.slice(0, -'\\.js'.length) + '\\.(?:js|ts)';
   return new RegExp('^' + out + '$');
 }
 

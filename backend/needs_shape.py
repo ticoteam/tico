@@ -24,7 +24,7 @@ TASK_KINDS = ("task", "question", "waiting", "declined")
 GOAL_SUBJECTS = {
     "vision": "strategy",
     "kpi_red": "kpi",
-    "kpi_stale": "kpi",
+    "kpi_stale": None,  # one ask for all of a person's out-of-date measures: it stands for several
     "recovery": "proposal",
     "proposal": "proposal",
     "why": None,
@@ -64,7 +64,7 @@ def goal_item(x, title, body, created):
     kind, ref = x["kind"], x["ref"]
     kind_of = GOAL_SUBJECTS[kind]
     subject = {"type": kind_of, "id": ref} if kind_of else None
-    actions = {"recovery": ("decide",), "proposal": ("decide",), "kpi_stale": ("add_reading",)}.get(kind, ("open",))
+    actions = {"recovery": ("decide",), "proposal": ("decide",)}.get(kind, ("open",))
     # `ref` is the asks table's key; `id` and `subject` carry it.
     shown = {k: v for k, v in x.items() if k != "ref"}
     return item({**shown, "id": f"{kind}:{ref}", "title": title, "created_at": created}, subject, actions, body)

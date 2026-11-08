@@ -265,12 +265,13 @@ Tasks and Decide (backend/goal_asks.py):
 | Kind | Asked of | Closes by itself when |
 |---|---|---|
 | `kpi_red`: a KPI off track on a goal | the goal's owner | the KPI is back on track, or no longer on that goal |
-| `kpi_stale`: a KPI's reading is out of date or missing | the KPI's owner | a fresh reading is logged |
+| `kpi_stale`: the measures whose reading is out of date or missing, listed together | the measures' owner | every one of them has a current reading |
 | `proposal`: a change to confirm or reject | the goal's owner (the KPI's for a definition) | it is decided |
 
 A company goal or KPI is asked of the owner of the environment; a proposal about a bot's goal or KPI goes to the
 nearest person above the bot on the org chart. A bot's own red or stale KPI files no task: it is the bot's work.
-There is one task per KPI or proposal, kind and person, never two. Tico brings them up to date after every goals
+There is one task per KPI off track or per proposal, kind and person, never two. A person's out-of-date measures are one
+task that names each of them, so it never piles up one task per measure. Tico brings them up to date after every goals
 write and once an hour, when time passing makes data stale. When what it was about becomes someone else's, the
 first task closes and the new owner gets one. A task the person closes or declines while its cause stands is
 not asked again until the cause clears and comes back; one they mark done while it stands is accepted and asked

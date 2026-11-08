@@ -29,6 +29,7 @@ import jwt
 from fastapi import Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
+from . import brand_icons
 from .config import PRODUCT_NAME
 from .store import H, Problem, digest
 
@@ -783,7 +784,12 @@ def _page(settings, status, title, message, action=None):
     body = (
         "<!doctype html><html lang=en><head><meta charset=utf-8>"
         '<meta name=viewport content="width=device-width,initial-scale=1">'
-        "<title>" + html.escape(title) + " - " + html.escape(settings.app_name) + "</title>"
+        + brand_icons.HEAD
+        + "<title>"
+        + html.escape(title)
+        + " - "
+        + html.escape(settings.app_name)
+        + "</title>"
         "<style>body{font:16px/1.5 system-ui,sans-serif;background:#f6f6f4;color:#1c1c1a;margin:0;"
         "display:grid;place-items:center;min-height:100vh}main{max-width:26rem;padding:2rem;background:#fff;"
         "border-radius:12px;box-shadow:0 1px 8px #0002;margin:1rem}h1{font-size:1.25rem;margin:0 0 .5rem}"

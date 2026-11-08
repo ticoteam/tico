@@ -33,6 +33,7 @@ const botTabs = slug => {
 };
 const botLimited = e => !!e?.my_access && !e.my_access.read;
 const botPersonName = id => (S.people || []).find(p => p.id === id)?.name || settingsPersonName(id);
+/** @type {any} bridged: .ts files read it through botPageView() (ui/app/bot-page-view.ts); typed when this file converts */
 let BOT = null;
 function botStopped() {
   BOT?.settingsCleanup?.();
@@ -167,6 +168,7 @@ async function botGoalLoad(slug) {
 // place with the link icon for the goal it supports; the same goals the top line shows and the
 // bot reads.
 async function botGoalsCardLoad(slug) {
+  /** @type {[any, any]} */
   const [r, goals] = await Promise.all([v2Get(`/v2/goals?owner=${encodeURIComponent('bot:' + slug)}`), goalOptions()]);
   const host = $('#bot-goals-list');
   if (!host || BOT?.slug !== slug) return;

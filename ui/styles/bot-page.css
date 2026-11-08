@@ -128,7 +128,7 @@ button.rail-ico{border:0;padding:0;background:none;font:inherit;cursor:pointer}
 .rail-fold[open]>summary::before{transform:var(--chev-open)}
 .rail-fold>summary:hover{color:var(--ink)}
 .rail-fold>summary:focus:not(:focus-visible){outline:none}
-/* The sidebar's widgets (ui/app/bot-sidebar.js), in the bot's order. A hidden one is not drawn; a set height is the
+/* The sidebar's widgets (ui/app/bot-sidebar.ts), in the bot's order. A hidden one is not drawn; a set height is the
    most it grows to, scrolling inside past that. Tasks stops at 500px unless set, and a short list stays short. */
 #pane-tasks{position:relative}
 .bot-w>.rail-sec{border-top:1px solid var(--line)}
