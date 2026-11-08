@@ -4,7 +4,7 @@ import base64
 import hashlib
 
 from backend.doc_sources import FetchFailure
-from backend.tests.helpers.docs import api, call, make  # noqa: F401
+from backend.tests.helpers.docs import call, make  # noqa: F401
 from clients import github_scope
 
 

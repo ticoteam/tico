@@ -646,7 +646,7 @@ def test_session_keys_never_share_a_thread_across_audience_classes():
 
 # ----------------------------------------------------------------------------- migration: crafted per-message cases
 from backend.tests.helpers.api import post as api_post  # noqa: E402
-from backend.tests.helpers.live_meetings import api, live  # noqa: E402,F401  (fixtures)
+from backend.tests.helpers.live_meetings import live  # noqa: E402,F401  (fixtures)
 from backend.tests.helpers.threads_core import made_threads, owner_of, people, world, demo_template
 
 UNSTAMPED = (

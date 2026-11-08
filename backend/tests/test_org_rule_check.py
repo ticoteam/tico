@@ -22,7 +22,7 @@ from backend import updates
 from backend.auth import Identity
 from backend.store import H
 from backend.tests.helpers.api import claim, get, headers, post, setup_attempt  # noqa: F401
-from backend.tests.helpers.org_rules import api, as_bot, edit, org, rule  # noqa: F401
+from backend.tests.helpers.org_rules import as_bot, edit, org, rule  # noqa: F401
 from backend import bot_settings as BS
 from backend.tests.helpers.org_rule_check import (
     COLOR,
