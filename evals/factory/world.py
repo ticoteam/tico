@@ -148,8 +148,13 @@ class World:
                 (encode({"people": [{"id": "ana", "email": "ana@acme.example", "primary_for": ["*"]}]}),),
             )
             for slug, config in bots.items():
-                config = self.chart(c, slug, config)
-                c.execute("INSERT INTO bot_config(bot,team,owner_id) VALUES(?,?,?)", (slug, "engineering", "ana"))
+                config, boss = self.chart(c, slug, config)
+                # The manager is an org-chart field, so it goes on bot_config as a team's install writes it: task rights
+                # and reach read the chart from that column alone (views.entries), not from the declared settings.
+                c.execute(
+                    "INSERT INTO bot_config(bot,team,owner_id,reports_to) VALUES(?,?,?,?)",
+                    (slug, "engineering", "ana", boss),
+                )
                 bot_settings.write(c, slug, config)
             if "release-manager" in bots:  # signed in as an agent, as an external Release Manager is
                 c.execute(
@@ -180,9 +185,10 @@ class World:
         return self
 
     def chart(self, c, slug, config):
-        """The bot's declaration as a team's bot of its name has it: its profile from its template (profiles.default_for,
-        the rule the upgrade applies by name), unless a scenario sets one, and its manager (`reports_to`): Head of
-        Engineering for the builders, reviewers, QA and architect, the owner for Head of Engineering itself."""
+        """The bot's declaration as a team's bot of its name has it, and its manager: (declaration, reports_to). The
+        declaration carries its profile from its template (profiles.default_for, the rule the upgrade applies by name),
+        unless a scenario sets one. The manager is Head of Engineering for the builders, reviewers, QA, architect and
+        fleet, the owner for Head of Engineering itself."""
         from backend import profiles
 
         if slug in self.profiles:
@@ -195,7 +201,7 @@ class World:
             else "engineering-lead"
         )
         self.manager_of[slug] = boss.split(":")[-1]
-        return {**config, **options, "profile": name, "reports_to": boss}
+        return {**config, **options, "profile": name}, boss
 
     def configure(self):
         """Set the board up as a team would, through the API only: each step's flow and check pool, and the lead's
