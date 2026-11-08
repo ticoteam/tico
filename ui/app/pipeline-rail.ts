@@ -405,6 +405,7 @@ interface PipelinePhoneColumn {
   name: string;
   fold?: string;
   cap?: number | null;
+  held?: number;
   items: { task: { id: string } }[];
 }
 

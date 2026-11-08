@@ -2467,6 +2467,11 @@ SCHEMAS = {
                 "description": "The most cards the stage holds at once (0 is On ice: it takes no card from a bot and "
                 "its cards wake no one), or null for no cap",
             },
+            "held": {
+                "type": "integer",
+                "description": "The open cards the stage holds now, snoozed and hidden ones included: the count its card cap "
+                "is enforced against",
+            },
             "flow": {
                 "type": "object",
                 "description": "What the step does with a ticket (docs/tasks.md, Step "

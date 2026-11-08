@@ -1018,6 +1018,28 @@ def held_count(conn: sqlite3.Connection, step_id: str, task_id: str = "") -> int
     return int(row["n"]) if row else 0
 
 
+def held_by_stage(conn: sqlite3.Connection, type_id: str) -> dict[str, int]:
+    """Every stage of a pipeline with the open cards it holds, as held_count counts them: a snoozed or hidden card holds its
+    place too. The board shows a capped stage's count from this (D68), not from the cards it has loaded."""
+    return {
+        str(r["step_id"]): int(r["n"])
+        for r in _rows(
+            conn,
+            "SELECT step_id, COUNT(*) AS n FROM tasks WHERE step_id IN (SELECT id FROM task_steps WHERE type_id = ?) "
+            "AND status NOT IN ('done', 'closed', 'declined') GROUP BY step_id",
+            (type_id,),
+        )
+    }
+
+
+def add_held(conn: sqlite3.Connection, typ: dict[str, Any]) -> None:
+    """Each step of a pipeline view gets `held`: its open cards (held_by_stage), so a capped stage's count is the one caps are
+    enforced against."""
+    held = held_by_stage(conn, str(typ["id"]))
+    for step in typ.get("steps") or []:
+        step["held"] = held.get(str(step["id"]), 0)
+
+
 def full_stage(conn: sqlite3.Connection, step_id: str | None, task_id: str = "") -> Row | None:
     """The stage with its cap and its count (`held`) when it can take no more cards (D68), else None. A stage with no cap is
     never full; a cap of 0 (On ice, D69) is always full."""

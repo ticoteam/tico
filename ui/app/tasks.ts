@@ -36,6 +36,8 @@ interface BoardColumn {
   limit?: number | null | undefined;
   /** The stage's cap (D68): its count shows against it ("3/3"); null or absent is no cap. */
   cap?: number | null;
+  /** The stage's held count from the server (D68): every unfinished card it holds, snoozed and hidden ones included. */
+  held?: number;
 }
 // A refused move, kept on the row or card it was tried on until that task changes (taskRefusedSet).
 interface TaskRefusal { message: string; version: number; }
@@ -515,8 +517,11 @@ function taskStatusGroups(items: TaskItem[], {always = []}: {always?: string[]} 
 // The Dev tickets step a release ships from; its header gets Release now (settings-release.ts fills it).
 const RELEASE_COLUMN = /^pending release$/i;
 // A column's count: its cards, against its cap when it has one (D68).
-function boardCountText(column: {items: unknown[]; cap?: number | null}): string {
-  return column.cap == null ? String(column.items.length) : `${column.items.length}/${column.cap}`;
+// A capped stage counts what its cap is enforced against (D68), the server's held count, not only the cards on show. A
+// card moved in since the last types read is among the items until the next read, hence the larger of the two.
+function boardCountText(column: {items: unknown[]; cap?: number | null; held?: number}): string {
+  if (column.cap == null) return String(column.items.length);
+  return `${Math.max(column.held ?? 0, column.items.length)}/${column.cap}`;
 }
 function boardColumnsHTML(columns: BoardColumn[], {head = '', cls = ''}: {head?: string; cls?: string} = {}) {
   const anyWork = columns.some(c => c.items.length);
