@@ -2,8 +2,9 @@
 """Review mode: the ▶ queue a reviewer works through, claims, Approve with its 10-second undo, send-back to the
 assignee, Message manager and Mark met. Track C owns this module.
 
-A person reviews one requirement of one ticket at a time. The queue lists what waits on them (a requirement whose
-reviewer is them, a send-back routed to them, or a backup after the manager asked), Late first and then oldest. A claim
+A person reviews one requirement of one ticket at a time. The queue lists what waits on them: a requirement whose
+reviewer is them, a send-back routed to them, or a backup after the manager asked; a question of theirs that holds an
+open card; and their subtasks of open cards. It is one queue, each pipeline's stages left to right, then oldest. A claim
 tells a second reviewer "Chris is reviewing" for ten minutes.
 
 Every write here is one atomic step: `_atomic` opens a write transaction (or a savepoint inside the caller's, which is
@@ -30,7 +31,14 @@ from typing import TYPE_CHECKING, Any, cast
 from pydantic import Field
 
 from . import models as M
-from . import pipeline_engine, pipeline_github_checks, pipeline_links, pipeline_rights, requirement_attachments
+from . import (
+    pipeline_engine,
+    pipeline_github_checks,
+    pipeline_links,
+    pipeline_rights,
+    question_tasks,
+    requirement_attachments,
+)
 from .store import H, Problem
 
 if TYPE_CHECKING:
@@ -540,6 +548,7 @@ class _Queue:
         since = self.since(task)
         stage = self.stages.get(requirement["pipeline_stage_id"]) or {}
         return {
+            "form": "review",
             "task_id": task["id"],
             "title": task.get("title") or "",
             "body": str(task.get("body") or ""),
@@ -739,7 +748,8 @@ def queue_for(
     stage_id: str | None = None,
     visible_sql: str | None = None,
 ) -> list[Row]:
-    """The items waiting for this reviewer, Late first, then oldest. `pipeline_id` and `stage_id` narrow it to one
+    """The items waiting for this reviewer, in one queue: each pipeline's stages left to right, then oldest. Each item
+    has a `form`: a review, or a question or subtask (`_held_items`). `pipeline_id` and `stage_id` narrow it to one
     pipeline or one stage. Only a reviewer, a send-back's route or an asked backup sees an item; a bot sees none. An item
     is a requirement of the ticket's current stage, or a stale one of a stage it has left (D33), reviewed in place. The
     tickets the reader may not open, and the items on pipelines they may not see, are left out (`visible_sql` is the
@@ -812,8 +822,126 @@ def queue_for(
     items = [queue.item(actor, task, requirement, why) for task, requirement, why in waiting]
     _queue_fields(c, actor, items, live, tasks, queue)
     _attachment_views(c, items, facts)
-    items.sort(key=lambda item: (not item["late"], item["since"], item["task_id"], item["requirement_id"]))
+    items.extend(_held_items(c, actor, pipeline_id, stage_id, visible_sql))
+    _in_queue_order(c, items)
     return items
+
+
+# ----------------------------------------------------------------------------- questions and subtasks
+QUESTION_FORM = "question"  # a question of the reader's that holds an open card: answered as the question card answers
+SUBTASK_FORM = "subtask"  # a subtask the reader owns of an open card: Done, or Send back with a note
+
+
+def _held_rows(
+    c: "sqlite3.Connection", actor: str, form: str, pipeline_id: str | None, stage_id: str | None
+) -> list[Row]:
+    """The reader's open subjects of one form, each with the open card it holds: a question (unanswered, a subtask or a
+    blocker of the card) or a subtask (a subtask of the card with no question on it). The card's pipeline and stage
+    narrow it as the queue's filters do."""
+    active = tuple(H.ACTIVE_STATUSES)
+    marks = ",".join("?" * len(active))
+    if form == QUESTION_FORM:
+        link, asked = "('parent','blocks')", "s.questions IS NOT NULL AND s.answer IS NULL"
+    else:
+        link, asked = "('parent')", "s.questions IS NULL"
+    args: list[Any] = [actor, *active, *active]
+    narrow = ""
+    if pipeline_id:
+        narrow += " AND card.type_id=?"
+        args.append(pipeline_id)
+    if stage_id:
+        narrow += " AND card.step_id=?"
+        args.append(stage_id)
+    return _rows(
+        c,
+        "SELECT s.*, card.id AS card_id, card.title AS card_title, card.number AS card_number, "
+        "card.type_id AS card_pipeline, card.step_id AS card_stage "
+        "FROM task_relations wr JOIN tasks s ON s.id=wr.from_task JOIN tasks card ON card.id=wr.to_task "
+        f"WHERE wr.kind IN {link} AND s.owner_id=? AND {asked} AND s.status IN ({marks}) "
+        f"AND card.type_id IS NOT NULL AND card.status IN ({marks}){narrow} ORDER BY s.created_at, s.id, card.id",
+        tuple(args),
+    )
+
+
+def _held_items(
+    c: "sqlite3.Connection", actor: str, pipeline_id: str | None, stage_id: str | None, visible_sql: str | None
+) -> list[Row]:
+    """The queue's other two forms, for the reader only: their questions that hold an open card of a pipeline, and their
+    subtasks of such cards. A card the reader may not open, or a pipeline they may not see, leaves its items out, as the
+    review rows are (`_authorized`). Each item is on its card (`task_id`), with the subject it asks about or works on."""
+    found: dict[tuple[str, str], tuple[Row, str]] = {}
+    for form in (QUESTION_FORM, SUBTASK_FORM):
+        for row in _held_rows(c, actor, form, pipeline_id, stage_id):
+            found.setdefault((str(row["id"]), str(row["card_id"])), (row, form))
+    if not found:
+        return []
+    cards = {card for _, card in found}
+    pipelines = {str(row["card_pipeline"]) for row, _ in found.values()}
+    allowed, visible = _authorized(c, actor, cards, pipelines, visible_sql)
+    names = {
+        str(r["id"]): str(r["name"])
+        for r in _read(c, "SELECT id, name FROM task_types WHERE id IN (SELECT value FROM json_each(?))", pipelines)
+    }
+    stages = {
+        str(r["id"]): str(r["name"])
+        for r in _read(
+            c,
+            "SELECT id, name FROM task_steps WHERE id IN (SELECT value FROM json_each(?))",
+            [row["card_stage"] for row, _ in found.values()],
+        )
+    }
+    items: list[Row] = []
+    for (subject_id, card_id), (row, form) in found.items():
+        pipeline = str(row["card_pipeline"])
+        if card_id not in allowed or pipeline not in visible:
+            continue
+        question = form == QUESTION_FORM
+        card_title = str(row["card_title"] or "")
+        items.append(
+            {
+                "form": form,
+                "task_id": card_id,
+                "title": card_title,
+                "number": row["card_number"],
+                "pipeline_id": pipeline,
+                "pipeline": names.get(pipeline, ""),
+                "stage_id": row["card_stage"],
+                "stage": stages.get(str(row["card_stage"]), ""),
+                "subject_id": subject_id,
+                "subject_title": str(row["title"] or ""),
+                "subject_version": int(row["version"] or 1),
+                "ask": question_tasks.as_ask(row) if question else None,
+                "holds_up": {"id": card_id, "title": card_title} if question else None,
+                "why": f"{'Question for you' if question else 'Your subtask'} · {names.get(pipeline, '')}",
+                "since": (question_tasks.asked_at(row) if question else row.get("created_at")) or "",
+                "late": False,
+                "reviewer_id": actor,
+            }
+        )
+    return items
+
+
+def _in_queue_order(c: "sqlite3.Connection", items: list[Row]) -> None:
+    """Sorts the one queue in place: by pipeline, then each stage left to right, then age (the oldest first)."""
+    positions = {
+        str(r["id"]): int(r["position"])
+        for r in _read(
+            c,
+            "SELECT id, position FROM task_steps WHERE id IN (SELECT value FROM json_each(?))",
+            [item["stage_id"] for item in items if item.get("stage_id")],
+        )
+    }
+    items.sort(
+        key=lambda item: (
+            str(item["pipeline"]).lower(),
+            str(item["pipeline_id"]),
+            positions.get(str(item.get("stage_id")), 1 << 30),
+            str(item["since"]),
+            str(item["task_id"]),
+            str(item.get("requirement_id") or ""),
+            str(item.get("subject_id") or ""),
+        )
+    )
 
 
 # ----------------------------------------------------------------------------- claims

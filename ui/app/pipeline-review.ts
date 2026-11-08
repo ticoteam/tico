@@ -1,8 +1,10 @@
-/* ui/app/pipeline-review.ts — Review mode: the items a reviewer works through one at a time, across the pipeline's
-   stages. Each item shows its attachments, why it is the reviewer's, and what the bot found. Approve (⌘/Ctrl+⏎ only
-   while the note has focus) moves the ticket on, with a 10-second Undo. Send back and Message manager take a note.
-   On a phone the same layout stacks. Classic script: its globals are shared with the other files under ui/app/,
-   loaded in the order index.html lists them. */
+/* ui/app/pipeline-review.ts — Review mode (▶): the items a reviewer works through one at a time, across the pipeline's
+   stages, one queue in stage order then age. A review item shows its attachments, why it is the reviewer's, and what the
+   bot found. Approve (⌘/Ctrl+⏎ only while the note has focus) moves the ticket on, with a 10-second Undo. Send back and
+   Message manager take a note. A question shows the question card (question-card.ts, the same box Decide draws); a
+   subtask shows Done and Send back. Answering or finishing one takes it out of the queue. On a phone the same layout
+   stacks. Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html
+   lists them. */
 'use strict';
 
 const PIPELINE_UNDO_MS = 10000;
@@ -130,6 +132,49 @@ function pipelineReviewClip(text: string, max = 40): string {
   return `${(word > max / 2 ? cut.slice(0, word) : cut).trimEnd()}…`;
 }
 
+/** A question or a subtask in ▶: the question card for a question (the box Decide draws, answered the same way), and the
+    subtask with Done and Send back. Its card's title stays above both. */
+function pipelineHeldRender(host: HTMLElement, state: NonNullable<typeof pipelineReviewState>, item: PipelineReviewItem,
+    total: number, notice: string, undo: string): void {
+  const head = `<header class="pipe-review-head">
+      ${PIPELINE_REVIEW_EXIT}
+      <div class="pipe-review-title"><span class="pipe-review-count">For you · ${state.index + 1} of ${total}</span>
+        <span class="muted pipe-review-stage">${esc(item.stage_name || '')}</span></div>
+      <span class="spacer"></span>
+      <button type="button" class="ghost" data-review-prev aria-label="Previous" ${state.index === 0 ? 'disabled' : ''}>‹</button>
+      <button type="button" class="ghost" data-review-next aria-label="Next" ${state.index >= total - 1 ? 'disabled' : ''}>›</button>
+    </header>`;
+  const title = `<h2 class="pipe-review-card-title">${esc(item.task_title || '')}</h2>`;
+  const why = `<h2 class="pipe-h">Why you</h2><p>${esc(item.why)}</p>`;
+  let main: string;
+  let side: string;
+  if (item.form === 'question') {
+    const id = String(item.subject_id ?? '');
+    qcardHold({ id, kind: 'question', title: item.subject_title ?? '', ask: item.ask, holds_up: item.holds_up,
+      created_at: item.since, body: '' });
+    const box = qcardBoxHTML({ id }) || `<p class="pipe-review-text">${esc(item.subject_title ?? '')}</p>`
+      + `<a href="#/task/${encodeURIComponent(id)}">Open the task</a>`;
+    main = `${title}<div class="pipe-review-held">${box}</div>`;
+    side = why;
+  } else {
+    main = `${title}<div class="pipe-review-held"><p class="pipe-review-subject">${esc(item.subject_title ?? '')}</p></div>`;
+    side = `${why}
+      <label class="pipe-review-note-label">Note
+        <textarea name="note" rows="3" placeholder="Note">${esc(state.note)}</textarea></label>
+      ${state.message ? `<p class="pipe-review-err" role="alert">${esc(state.message)}</p>` : ''}
+      <div class="pipe-review-sendback">
+        <button type="button" class="btn primary" data-review-subject="done" ${state.busy ? 'disabled' : ''}>Done</button>
+        <button type="button" class="btn" data-review-subject="back" ${state.busy ? 'disabled' : ''}>Send back</button>
+      </div>`;
+  }
+  host.innerHTML = `${head}
+    <div class="pipe-review-body">
+      <section class="pipe-review-main">${main}</section>
+      <aside class="pipe-review-side">${side}${notice}</aside>
+    </div>
+    ${undo}`;
+}
+
 function pipelineReviewRender(): void {
   const host = document.querySelector<HTMLElement>('.pipe-review');
   const state = pipelineReviewState;
@@ -144,6 +189,7 @@ function pipelineReviewRender(): void {
       <p class="pipe-review-empty" role="status">${esc(state.message || 'Nothing is waiting on you.')}</p>${notice}${undo}`;
     return;
   }
+  if (item.form !== 'review') { pipelineHeldRender(host, state, item, total, notice, undo); return; }
   const attachments = item.attachments;
   const tab = attachments[state.tab] ?? attachments[0];
   const preview = !tab ? ''
@@ -236,7 +282,7 @@ function pipelineReviewKey(event: KeyboardEvent): void {
 async function pipelineReviewClaimShown(): Promise<void> {
   const state = pipelineReviewState;
   const item = state?.items[state.index];
-  if (!state || !item || item.claim) return;
+  if (!state || !item || item.form !== 'review' || item.claim) return;
   try { await pipelineClaim(item.task_id, item.requirement_id); }
   catch (error) {
     const failure = error as ApiFailure & { body?: { error?: { claimed_by?: string } } };
@@ -259,7 +305,7 @@ function pipelineReviewStep(delta: number): void {
 async function pipelineReviewApprove(): Promise<void> {
   const state = pipelineReviewState;
   const item = state?.items[state.index];
-  if (!state || !item || state.busy || item.claim) return;
+  if (!state || !item || item.form !== 'review' || state.busy || item.claim) return;
   state.busy = true; state.message = '';
   pipelineReviewRender();
   try {
@@ -314,7 +360,7 @@ async function pipelineReviewNotValidated(): Promise<void> {
   const state = pipelineReviewState;
   const item = state?.items[state.index];
   const note = pipelineReviewNoteValue();
-  if (!state || !item || state.busy) return;
+  if (!state || !item || item.form !== 'review' || state.busy) return;
   if (!note) { state.message = 'Write a note first.'; pipelineReviewRender(); return; }
   state.busy = true; state.message = ''; state.notice = '';
   try {
@@ -338,7 +384,7 @@ async function pipelineReviewSend(to: 'assignee' | 'manager' | 'met'): Promise<v
   const state = pipelineReviewState;
   const item = state?.items[state.index];
   const note = pipelineReviewNoteValue();
-  if (!state || !item || state.busy) return;
+  if (!state || !item || item.form !== 'review' || state.busy) return;
   if (!note) { state.message = 'Write a note first.'; pipelineReviewRender(); return; }
   state.busy = true; state.message = ''; state.notice = '';
   try {
@@ -358,6 +404,46 @@ async function pipelineReviewSend(to: 'assignee' | 'manager' | 'met'): Promise<v
   }
 }
 
+/** Takes an item out of the queue on show: the next one (or the last) comes up, with no note carried over. */
+function pipelineReviewDrop(item: PipelineReviewItem): void {
+  const state = pipelineReviewState;
+  if (!state) return;
+  state.items = state.items.filter(other => other !== item);
+  state.index = Math.min(state.index, Math.max(0, state.items.length - 1));
+  state.tab = 0; state.note = '';
+}
+
+/** A question in ▶ was answered on its card: it leaves the queue and the count drops at once. */
+function pipelineReviewAnswered(subjectId: string): void {
+  const state = pipelineReviewState;
+  const item = state?.items.find(other => other.form === 'question' && other.subject_id === subjectId);
+  if (!state || !item) return;
+  pipelineReviewDrop(item);
+  void pipelineMineSync(state.pipelineId, true);
+  pipelineReviewRender();
+}
+
+/** Done or Send back on the subtask on show. Send back needs its note; either one takes the subtask out of the queue. */
+async function pipelineReviewSubject(how: 'done' | 'back'): Promise<void> {
+  const state = pipelineReviewState;
+  const item = state?.items[state.index];
+  if (!state || !item || item.form !== 'subtask' || state.busy) return;
+  const note = pipelineReviewNoteValue();
+  if (how === 'back' && !note) { state.message = 'Write a note first.'; pipelineReviewRender(); return; }
+  state.busy = true; state.message = '';
+  try {
+    if (how === 'done') await pipelineSubjectDone(item);
+    else await pipelineSubjectBack(item, note);
+    void pipelineMineSync(state.pipelineId, true);
+    if (pipelineReviewState) pipelineReviewDrop(item);
+  } catch (error) {
+    if (pipelineReviewState) state.message = error instanceof Error ? error.message : 'Not saved.';
+  } finally {
+    if (pipelineReviewState) pipelineReviewState.busy = false;
+    pipelineReviewRender();
+  }
+}
+
 async function pipelineReviewReload(): Promise<void> {
   const state = pipelineReviewState;
   if (!state) return;
@@ -366,6 +452,10 @@ async function pipelineReviewReload(): Promise<void> {
   if (pipelineReviewState) pipelineReviewRender();
 }
 
+document.addEventListener('qcard:answered', (event: Event) => {
+  const id = (event as CustomEvent<{ id?: string }>).detail?.id;
+  if (id) pipelineReviewAnswered(id);
+});
 document.addEventListener('input', (event: Event) => {
   if (pipelineReviewState && event.target instanceof HTMLTextAreaElement && event.target.name === 'note') pipelineReviewState.note = event.target.value;
 });
@@ -381,6 +471,8 @@ document.addEventListener('click', (event: MouseEvent) => {
   if (target.closest('[data-review-approve]')) return void pipelineReviewApprove();
   if (target.closest('[data-review-undo]')) return void pipelineReviewUndo();
   if (target.closest('[data-review-not-validated]')) return void pipelineReviewNotValidated();
+  const subject = target.closest<HTMLElement>('[data-review-subject]');
+  if (subject) return void pipelineReviewSubject(subject.dataset.reviewSubject === 'back' ? 'back' : 'done');
   const tab = target.closest<HTMLElement>('[data-review-tab]');
   if (tab && pipelineReviewState) { pipelineReviewState.tab = Number(tab.dataset.reviewTab) || 0; pipelineReviewRender(); return; }
   const send = target.closest<HTMLElement>('[data-review-send]');

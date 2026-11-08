@@ -6,6 +6,11 @@ const {unrouted} = require('./routes.cjs');
 
 const ME = 'human:ana';
 const stamp = '2026-11-07T12:00:00Z';
+// The bots the queue names, as /api/employees lists them: a person reads a bot's display name, never its slug.
+const EMPLOYEES = [
+  {id: 'product-owner', slug: 'product-owner', display_name: 'Product Manager', status: 'active'},
+  {id: 'product-manager', slug: 'product-manager', display_name: 'Product Pipeline Manager', status: 'active'},
+];
 const steps = [
   {id: 'spec', name: 'Spec', status: 'open', position: 0},
   {id: 'build', name: 'Build', status: 'doing', position: 1},
@@ -53,9 +58,14 @@ function tasks() {
 // The tasks with the stage the fake server has moved them to (state.stage), so a list or a ticket read shows the move.
 function placed(list, state) {
   return list.map(t => {
+    // With `held`, D17 waits on Ana's question as the server sends it: a waiting card, its open question as the blocker, and
+    // whom it waits on (backend/question_tasks.py waiting_on), so the board says "Waiting on Ana", not "Blocked:".
+    const base = state.held && t.id === 'D17'
+      ? {...t, status: 'waiting', waiting_on: ME, relations: {blocks: [{id: 'Q1', title: QUESTION_TEXT, status: 'open', direction: 'in', owner_id: ME}]}}
+      : t;
     const stage = state.stage[t.id];
-    if (!stage) return t;
-    return {...t, step_id: stage, step: {...steps.find(s => s.id === stage), type_id: 'dev-tickets'}};
+    if (!stage) return base;
+    return {...base, step_id: stage, step: {...steps.find(s => s.id === stage), type_id: 'dev-tickets'}};
   });
 }
 
@@ -80,6 +90,19 @@ const PLACEHOLDER_SVG = '<svg xmlns="http://www.w3.org/2000/svg" width="640" hei
   + '<rect x="290" y="140" width="250" height="18" rx="9" fill="#94a3b8"/><rect x="290" y="176" width="200" height="18" rx="9" fill="#64748b"/>'
   + '<rect x="100" y="260" width="440" height="24" rx="12" fill="#475569"/></svg>';
 
+// The held forms (`held` option): a question Ana is asked on D17's card (the question task is the answer's target, as
+// backend/question_tasks.py as_ask builds it) and two subtasks of Ana's on D52.
+const QUESTION_TEXT = "Does 'close all' include bot-owned tasks?";
+const QUESTION = {id: 'Q1', kind: 'ask', question_task: true, sender_id: 'bot:product-owner', recipient_id: ME, body: QUESTION_TEXT,
+  created_at: RECENT_SINCE, conversation_id: null, read_at: null, delivered_at: null,
+  refs: {questions: [{id: 'decision', question: QUESTION_TEXT, options: [{label: 'Yes'}, {label: 'No'}]}], task: 'Q1', task_question: true,
+    target: {task: 'Q1'}}};
+function subtask(id, title) {
+  return {form: 'subtask', task_id: 'D52', title: 'Assistant can approve a spec', number: 52, pipeline_id: 'dev-tickets', pipeline: 'Dev tickets',
+    stage_id: 'build', stage: 'Build', subject_id: id, subject_title: title, subject_version: 2, ask: null, holds_up: null,
+    why: 'Your subtask · Dev tickets', since: stamp, late: false, reviewer_id: ME};
+}
+
 // The review queue for the pipeline, as the server sends it (GET /v2/pipelines/{id}/review/queue): two items for Ana.
 // `state.removed` holds the items an approval or send-back took out, so a reload shows the queue as it now is.
 // `state.bare`: D52 has nothing attached, so its card shows the body, acceptance criteria and checkpoint instead.
@@ -89,7 +112,7 @@ function queue(state) {
   const row = (task_id, title, stage, requirement_id, requirement, why, attachment) => {
     const card = CARDS[task_id] || {body: '', acceptance: [], checkpoint: ''};
     const shown = state.bare && task_id === 'D52' ? null : attachment;
-    return {task_id, title, pipeline_id: 'dev-tickets', pipeline: 'Dev tickets', stage_id: stage.toLowerCase(), stage, requirement_id, requirement,
+    return {form: 'review', task_id, title, pipeline_id: 'dev-tickets', pipeline: 'Dev tickets', stage_id: stage.toLowerCase(), stage, requirement_id, requirement,
       requirement_version: 1, kind: shown ? shown.format : 'approval', work_version: 3, attachment: shown,
       attachment_digest: shown && shown.source !== 'ticket' ? 'sha256:aa' : null, why, since: stamp, late: false, claimed_by: null, claimed_by_me: false,
       assignee: {id: 'bot:product-owner', name: 'Product Manager'}, manager: {id: 'bot:product-manager', name: 'Product Pipeline Manager'},
@@ -107,16 +130,25 @@ function queue(state) {
   // `validate`: a Validate item comes first, so a test can reach it without stepping through the others.
   if (state.validate) all.unshift(row('D70', 'Validate the spec', 'Validate', 'r-val70', 'Validation', 'reviewer',
     {id: 'c1', source: 'link', format: 'page', name: 'Measures', href: 'https://example.test/measures', file_id: null, file_version: null}));
-  return {items: all.filter(r => !state.removed.has(`${r.task_id}:${r.requirement_id}`))};
+  // `held`: the question and the two subtasks follow the reviews (the server orders the whole queue by stage, then age; the
+  // fixture lists them here, after the reviews the walk starts on). Answering or finishing one removes it by its subject.
+  if (state.held) {
+    all.push({form: 'question', task_id: 'D17', title: 'Sim stuck checks', number: 17, pipeline_id: 'dev-tickets', pipeline: 'Dev tickets',
+      stage_id: 'build', stage: 'Build', subject_id: 'Q1', subject_title: QUESTION_TEXT, subject_version: 1, ask: QUESTION,
+      holds_up: {id: 'D17', title: 'Sim stuck checks'}, why: 'Question for you · Dev tickets', since: stamp, late: false, reviewer_id: ME});
+    all.push(subtask('S1', 'Check the shot crop'), subtask('S2', 'Write the release note'));
+  }
+  return {items: all.filter(r => !state.removed.has(r.form === 'review' ? `${r.task_id}:${r.requirement_id}` : r.subject_id))};
 }
 
-// Installs the fake server on a page. `state` collects what the tests check: posts, refusals and queue reads.
+// Installs the fake server on a page. `state` collects what the tests check: posts, refusals and queue reads. `held` adds
+// the question and the subtasks to the queue (see queue()).
 // `ownerOnly`: the type carries no can_edit_rules, only its owner, and the viewer is a member (E3: the rules controls follow
 // the server's answer, and the owner check reads pipeline_owner_id). `claimedBy`: another reviewer holds every item.
 async function install(page, {refuseApprove = false, manager = false, refuseMove = false, late = [{task_id: 'D17', title: 'Sim stuck checks', stage: 'Build', hours: 52, limit_hours: 48, since: stamp}],
-  ownerOnly = false, member = false, claimedBy = null, noRequirements = false, validate = false, bare = false, text = false} = {}) {
+  ownerOnly = false, member = false, claimedBy = null, noRequirements = false, validate = false, bare = false, text = false, held = false} = {}) {
   const state = {posts: [], queueReads: 0, refuseApprove, refuseMove, moves: [], prefs: {}, attachments: [], managerReads: 0, claims: [], claimedBy,
-    removed: new Set(), lastDone: null, affectedReads: [], requirementReads: {}, attachmentReads: 0, validate, bare, text,
+    removed: new Set(), lastDone: null, affectedReads: [], requirementReads: {}, attachmentReads: 0, validate, bare, text, held,
     // The stage each ticket was moved to by an approval, and the stage an undo puts it back in (keyed by the decision).
     stage: {}, moved: {}};
   let shown = manager ? {...type, manager: 'product-manager'} : type;
@@ -133,7 +165,7 @@ async function install(page, {refuseApprove = false, manager = false, refuseMove
     const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|css|ts))$/);
     if (ui) { const file = uiFile(ui[1]); if (fs.existsSync(file)) return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(file, 'utf8')}); }
     if (p === '/api/me') return json(me);
-    if (p === '/api/employees') return json([]);
+    if (p === '/api/employees') return json(EMPLOYEES);
     if (p === '/api/humans') return json({people: [{id: 'ana', name: 'Ana', email: 'ana@acme.example'}]});
     if (p === '/api/v2/status') return json({bots: []});
     if (p === '/api/v2/files/blob-spec') return route.fulfill({contentType: 'text/markdown; charset=utf-8', body: SPEC_MARKDOWN});
@@ -182,9 +214,22 @@ async function install(page, {refuseApprove = false, manager = false, refuseMove
         return json({attachment: {id: 'att-' + state.attachments.length, source: body.source, url: body.url || null, file_id: body.file_id || null, by: ME, at: stamp, work_version: 1}}); }
       return json({attachments: state.attachments.map((a, i) => ({id: 'att-' + (i + 1), source: a.source, url: a.url || null, file_id: a.file_id || null, by: ME, at: stamp, work_version: 1}))});
     }
+    // A question's answer (the question card's call) closes it; a subtask's Done or Send back is a status POST on that task
+    // (decide.ts). Either one takes the item out of the queue, as the server does.
+    const answers = p.match(/^\/api\/v2\/tasks\/([^/]+)\/answers$/);
+    if (answers && req.method() === 'POST') {
+      state.posts.push({path: `/v2/tasks/${answers[1]}/answers`, body: req.postDataJSON() || {}});
+      state.removed.add(answers[1]);
+      return json({ok: true});
+    }
     const mv = p.match(/^\/api\/v2\/tasks\/([^/]+)$/);
     if (mv && req.method() === 'POST') {
       const body = req.postDataJSON() || {};
+      if (body.status && !body.step) {
+        state.posts.push({path: `/v2/tasks/${mv[1]}`, body});
+        state.removed.add(mv[1]);
+        return json({task: {id: mv[1], status: body.status, version: (body.version || 1) + 1}});
+      }
       state.moves.push(body);
       if (state.refuseMove && !body.override_requirements) return json({error: {code: 'requirement', detail: 'Screenshots is not met'}}, 422);
       return json({task: {...tasks().find(t => t.id === mv[1]), ...(body.step ? {step_id: body.step, step: {...steps.find(x => x.id === body.step), type_id: 'dev-tickets'}} : {}), version: 2}});

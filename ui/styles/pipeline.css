@@ -64,6 +64,8 @@
   border-radius: 8px; background: var(--surface); padding: 16px; overflow: auto; }
 .pipe-review-img { max-width: 100%; max-height: 100%; object-fit: contain; }
 .pipe-review-card-title { margin: 0; font-size: 18px; line-height: 1.3; font-weight: 600; overflow-wrap: anywhere; }
+.pipe-review-held { display: grid; gap: 12px; min-width: 0; }
+.pipe-review-subject { margin: 0; font-size: 16px; line-height: 1.4; overflow-wrap: anywhere; }
 .pipe-review-view-text { display: flex; flex-direction: column; align-items: stretch; justify-content: flex-start; gap: 10px; }
 .pipe-review-nospec { margin: 0; font-size: 13px; }
 .pipe-review-spec { display: flex; flex-direction: column; gap: 10px; }

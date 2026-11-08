@@ -17,6 +17,7 @@ from backend import pipeline_links as L
 from backend import pipeline_overview
 from backend import pipeline_engine as E
 from backend import pipeline_review as R
+from backend import question_tasks as QT
 from backend import requirement_attachments as A
 from backend.app import create_app
 from backend.auth import Identity
@@ -204,7 +205,7 @@ def test_only_the_reviewer_the_route_and_the_asked_backup_see_an_item(world):
     assert R.queue_for(w.c, CHRIS) == []
 
 
-def test_the_queue_lists_late_first_then_oldest_and_narrows_to_a_stage(world):
+def test_the_queue_lists_oldest_first_within_a_stage_and_narrows_to_a_stage(world):
     w = world
     w.c.execute("UPDATE task_steps SET limit_minutes=60 WHERE id=?", (w.review,))
     now = H.now()
@@ -240,8 +241,8 @@ def test_late_counts_only_the_time_off_hold_and_a_held_card_is_not_late(world):
     task_holds.put(w.c, held, "blocked", H.shift(now, minutes=-120))
     task_holds.release(w.c, held, "blocked", H.shift(now, minutes=-10))
     items = [i for i in R.queue_for(w.c, ANA) if i["requirement_id"] == w.mockup and i["task_id"] != w.task]
-    assert [i["task_id"] for i in items] == [late, held]
-    assert [i["late"] for i in items] == [True, False]
+    assert [i["task_id"] for i in items] == [held, late]
+    assert [i["late"] for i in items] == [False, True]
     # Still on hold: never late, however long the hold has run.
     task_holds.put(w.c, late, "blocked", H.shift(now, minutes=-80))
     items = [i for i in R.queue_for(w.c, ANA) if i["requirement_id"] == w.mockup and i["task_id"] != w.task]
@@ -1190,7 +1191,16 @@ def test_a_mixed_queue_gives_the_rows_the_one_row_at_a_time_queue_gave(tmp_path,
             },
         ],
     }
-    assert {who: shaped_rows(w, titles, R.queue_for(w.c, who)) for who in (ANA, BEN)} == expected
+    actual = {who: shaped_rows(w, titles, R.queue_for(w.c, who)) for who in (ANA, BEN)}
+    # The rows are the same as before, with their form; the order is now each pipeline's stages left to right, then age.
+    order = {"Making": 0, "Review": 1, "Shipped": 2}
+    by_value = lambda rows: sorted(rows, key=lambda row: json.dumps(row, sort_keys=True))  # noqa: E731
+    assert {who: by_value(rows) for who, rows in actual.items()} == {
+        who: by_value([{"form": "review", **row} for row in rows]) for who, rows in expected.items()
+    }
+    for rows in actual.values():
+        keys = [(order[row["stage_id"]], row["since"]) for row in rows]
+        assert keys == sorted(keys)
     w.c.close()
 
 
@@ -1940,3 +1950,67 @@ def test_named_not_validated_still_refuses_when_no_link_files_into_the_named_pip
         requirement_version=1,
     )
     assert w.c.execute("SELECT count(*) FROM stage_decisions WHERE task_id=?", (w.task,)).fetchone()[0] == 0
+
+
+def _question(w, text, on, options=("Yes", "No")):
+    """A question for `on` that holds the ticket: a subtask of it that carries the question (question_tasks.store)."""
+    qid = H.task_create(w.c, ANA, text, "", on, parent_id=w.task, lint=False)["id"]
+    QT.store(
+        w.c,
+        qid,
+        {
+            "questions": [
+                {
+                    "id": "decision",
+                    "header": "",
+                    "question": text,
+                    "why": "",
+                    "options": [{"label": o, "description": "", "then": "", "recommended": False} for o in options],
+                    "multi": False,
+                }
+            ]
+        },
+    )
+    return qid
+
+
+def _subtask(w, text, owner, card=None):
+    return H.task_create(w.c, ANA, text, "", owner, parent_id=card or w.task, lint=False)["id"]
+
+
+def test_a_question_and_a_subtask_of_mine_on_an_open_card_are_in_my_queue_and_nobody_elses(world):
+    w = world
+    question = _question(w, "Does close all include bot tasks?", CHRIS)
+    subtask = _subtask(w, "Check the bulk close", CHRIS)
+    _question(w, "Anas question", ANA)  # asked of Ana, not Chris
+    ben_subtask = _subtask(w, "Bens subtask", BEN)
+    mine = [i for i in R.queue_for(w.c, CHRIS) if i["form"] != "review"]
+    assert {(i["form"], i["subject_id"]) for i in mine} == {("question", question), ("subtask", subtask)}
+    for item in mine:
+        assert (item["task_id"], item["pipeline_id"], item["stage_id"]) == (w.task, w.pipeline, w.review)
+    held = next(i for i in mine if i["form"] == "question")
+    assert held["ask"]["recipient_id"] == CHRIS and held["ask"]["refs"]["questions"][0]["options"]
+    assert held["holds_up"] == {"id": w.task, "title": "Logo"}
+    assert {i["subject_id"] for i in R.queue_for(w.c, BEN) if i["form"] != "review"} == {ben_subtask}
+    # The count on the Overview's ▶ is the same queue: a held question and an owned subtask are both one each.
+    assert pipeline_overview._for_you(w.c, CHRIS, [w.pipeline], "1=1") == {w.pipeline: 2}
+    # Answered or done, they leave the queue and the count drops.
+    w.c.execute("UPDATE tasks SET answer='{}' WHERE id=?", (question,))
+    w.c.execute("UPDATE tasks SET status='done' WHERE id=?", (subtask,))
+    assert pipeline_overview._for_you(w.c, CHRIS, [w.pipeline], "1=1") == {}
+
+
+def test_the_queue_puts_a_stage_before_a_later_one_then_the_oldest_first(world):
+    w = world
+    early = w.ticket("Early", step="Making")
+    later_question = _question(w, "Review-stage question", CHRIS)  # asked first, so it is the older one
+    early_subtask = _subtask(w, "Making-stage subtask", CHRIS, card=early)
+    rows = [i for i in R.queue_for(w.c, CHRIS) if i["form"] != "review"]
+    assert [i["subject_id"] for i in rows] == [early_subtask, later_question]
+    assert [i["stage_id"] for i in rows] == [w.making, w.review]
+    assert [i["subject_id"] for i in R.queue_for(w.c, CHRIS, w.pipeline, w.making) if i["form"] != "review"] == [
+        early_subtask
+    ]
+    assert [i["subject_id"] for i in R.queue_for(w.c, CHRIS, w.pipeline, w.review) if i["form"] != "review"] == [
+        later_question
+    ]

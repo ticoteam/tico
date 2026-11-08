@@ -213,8 +213,12 @@ function qcardShown(box) {
 function qcardRedraw(box) {
   box.outerHTML = qcardBoxHTML({id: box.dataset.qcard});
 }
+// Questions shown outside Needs you (the pipeline review's ▶ queue) are held here by id, so the same box and answer
+// serve them. An answered one is dropped and "qcard:answered" tells the view that drew it.
+const QC_HELD = new Map();
+function qcardHold(it: { id: unknown; [key: string]: unknown }): void { QC_HELD.set(String(it.id), it); }
 function qcardItem(t) {
-  const it = [...(S.v2?.needs || []), needsOneHeld(t?.id)].find(x => x && String(x.id) === String(t?.id) && ['question', 'waiting', 'task'].includes(x.kind));
+  const it = QC_HELD.get(String(t?.id)) || [...(S.v2?.needs || []), needsOneHeld(t?.id)].find(x => x && String(x.id) === String(t?.id) && ['question', 'waiting', 'task'].includes(x.kind));
   const q = it && qcardQuestion(it);
   return q ? {it, q} : null;
 }
@@ -276,6 +280,8 @@ document.addEventListener('click', async ev => {
     for (const w of qcardWrites(it, q, labels, note)) await post(w.path, w.body, newRequestId());
     QC_DRAFTS.delete(qcardDraftKey(it, q));
     toast(qcardSaid(it, q, labels));
+    QC_HELD.delete(String(it.id));
+    document.dispatchEvent(new CustomEvent('qcard:answered', {detail: {id: String(it.id)}}));
     void v2Refresh();
   } catch (e) {
     box.querySelectorAll('button, input, textarea').forEach(x => { x.disabled = false; });

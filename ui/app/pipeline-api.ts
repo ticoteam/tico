@@ -52,10 +52,26 @@ interface PipelineAttachment {
   detail?: string;
 }
 
-/** One item of the ▶ queue: a requirement of one ticket that waits on this reviewer. Built from the queue row. */
+/** The ▶ queue's forms: a requirement to review, a question of the reader's that holds a card, or a subtask of theirs. */
+type PipelineReviewForm = 'review' | 'question' | 'subtask';
+
+/** One item of the ▶ queue: a requirement of one ticket that waits on this reviewer, or (question, subtask) a task of the
+    reader's on that ticket. Built from the queue row. A question or subtask has no requirement and no attachments. */
 interface PipelineReviewItem {
+  form: PipelineReviewForm;
+  /** The ticket on the board: the card a question holds or a subtask belongs to, else the reviewed ticket. */
   task_id: string;
+  /** The requirement reviewed (review items only; '' for the other forms). */
   requirement_id: string;
+  /** The question or subtask itself (the other forms). */
+  subject_id?: string | null;
+  subject_title?: string;
+  subject_version?: number;
+  /** A question's ask, as the question card reads it (the same shape as a Needs you item's ask). */
+  ask?: Record<string, unknown> | null;
+  /** The card a question holds ("holds up" on the question card). */
+  holds_up?: { id: string; title: string } | null;
+  since?: string;
   task_title?: string;
   stage_name?: string;
   pipeline_id?: string;
@@ -168,6 +184,7 @@ interface ServerRequirementDetail {
 }
 
 interface ServerQueueItem {
+  form: 'review';
   task_id: string;
   title: string;
   pipeline_id: string;
@@ -203,6 +220,27 @@ interface ServerQueueItem {
   can_mark_met: boolean;
   can_not_validate: boolean;
   stage_visit_id: string | null;
+}
+
+/** A question or subtask of the reader's on an open card (backend pipeline_review._held_items). */
+interface ServerHeldItem {
+  form: 'question' | 'subtask';
+  task_id: string;
+  title: string;
+  number: number | null;
+  pipeline_id: string;
+  pipeline: string;
+  stage_id: string | null;
+  stage: string;
+  subject_id: string;
+  subject_title: string;
+  subject_version: number;
+  ask: Record<string, unknown> | null;
+  holds_up: { id: string; title: string } | null;
+  why: string;
+  since: string;
+  late: boolean;
+  reviewer_id: string;
 }
 
 interface ServerRun {
@@ -261,6 +299,7 @@ function reviewWhy(row: ServerQueueItem): string {
 function reviewItemFromRow(row: ServerQueueItem): PipelineReviewItem {
   const a = row.attachment;
   return {
+    form: 'review',
     task_id: row.task_id,
     requirement_id: row.requirement_id,
     task_title: row.title,
@@ -358,9 +397,59 @@ async function pipelineTaskRequirements(taskId: string): Promise<PipelineRequire
 }
 
 /** The reviewer's queue for one pipeline: Late items first, then the oldest. */
+/** A question or subtask of the reader's, as the ▶ view shows it. The review-only fields take their empty values. */
+function heldItemFromRow(row: ServerHeldItem): PipelineReviewItem {
+  return {
+    form: row.form,
+    task_id: row.task_id,
+    requirement_id: '',
+    task_title: row.title,
+    stage_name: row.stage,
+    pipeline_id: row.pipeline_id,
+    stage_id: row.stage_id ?? '',
+    subject_id: row.subject_id,
+    subject_title: row.subject_title,
+    subject_version: row.subject_version,
+    ask: row.ask,
+    holds_up: row.holds_up,
+    since: row.since,
+    assignee: null,
+    manager: null,
+    body: '',
+    acceptance_criteria: [],
+    checkpoint: '',
+    why: row.why,
+    bot_note: '',
+    reviewer_id: row.reviewer_id,
+    can_mark_met: false,
+    can_not_validate: false,
+    attachments: [],
+    claim: null,
+    moves_to: null,
+    late: row.late,
+    work_version: 0,
+    attachment_digest: null,
+    requirement_version: 0,
+    attachment_id: null,
+    stage_visit_id: null,
+  };
+}
+
 async function pipelineReviewQueue(pipelineId: string): Promise<PipelineReviewQueue> {
-  const res = await get(pipelineRoute(`/${encodeURIComponent(pipelineId)}/review/queue`)) as { items: ServerQueueItem[] };
-  return { items: res.items.map(reviewItemFromRow) };
+  const res = await get(pipelineRoute(`/${encodeURIComponent(pipelineId)}/review/queue`)) as { items: (ServerQueueItem | ServerHeldItem)[] };
+  return { items: res.items.map(row => row.form === 'review' ? reviewItemFromRow(row) : heldItemFromRow(row)) };
+}
+
+/** Done on a subtask of the reader's: the task is finished, as its own Done does (the Decide card's call, decide.ts). */
+async function pipelineSubjectDone(item: PipelineReviewItem): Promise<void> {
+  await post(`/v2/tasks/${encodeURIComponent(item.subject_id ?? '')}`,
+    { status: 'done', version: item.subject_version ?? 1 }, newRequestId());
+}
+
+/** Send back on a subtask of the reader's: it is declined with the note, which goes to its owner as the answer does. */
+async function pipelineSubjectBack(item: PipelineReviewItem, note: string): Promise<void> {
+  await post(`/v2/tasks/${encodeURIComponent(item.subject_id ?? '')}`,
+    { status: 'declined', version: item.subject_version ?? 1, note }, newRequestId());
 }
 
 /**
