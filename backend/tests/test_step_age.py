@@ -120,3 +120,22 @@ def test_a_steps_limit_column_is_its_warn_after_and_replaces_the_default(api):
         c.execute("UPDATE task_steps SET limit_minutes=30 WHERE id=?", (row["step_id"],))
         assert late_ids(c, 0.4) == []
         assert late_ids(c, 0.6) == [row["id"]]
+
+
+def test_a_late_hours_a_step_save_changes_becomes_the_stages_warn_after(api):
+    # One stored threshold: a flow's late_hours sent in a step save sets limit_minutes, which the Late clock reads; a save
+    # that leaves late_hours as it was keeps a Warn after set since.
+    with api.app.state.store.transaction() as c:
+        row = ticket(c)
+        steps = [
+            dict(s) for s in c.execute("SELECT id, name, status FROM task_steps WHERE type_id=?", (row["type_id"],))
+        ]
+        for s in steps:
+            if s["id"] == row["step_id"]:
+                s["flow"] = {"late_hours": 6}
+        H._type_steps(c, H.KEEPER, row["type_id"], steps)  # pyright: ignore[reportPrivateUsage]
+        assert c.execute("SELECT limit_minutes FROM task_steps WHERE id=?", (row["step_id"],)).fetchone()[0] == 360
+        assert late_ids(c, 4.5) == [] and late_ids(c, 6.5) == [row["id"]]
+        c.execute("UPDATE task_steps SET limit_minutes=120 WHERE id=?", (row["step_id"],))  # Warn after set since
+        H._type_steps(c, H.KEEPER, row["type_id"], steps)  # pyright: ignore[reportPrivateUsage]
+        assert c.execute("SELECT limit_minutes FROM task_steps WHERE id=?", (row["step_id"],)).fetchone()[0] == 120

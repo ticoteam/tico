@@ -4379,6 +4379,16 @@ def _type_steps(conn, actor, type_id, steps):
                 "UPDATE task_steps SET flow=? WHERE id=?",
                 (json.dumps(row["flow"], sort_keys=True) if row["flow"] else None, row["id"]),
             )
+            # One stored Late threshold: a late_hours this save changes becomes the stage's Warn after (limit_minutes),
+            # which the Late clock reads (step_age, pipeline_manager.late_tickets).
+            late = (row["flow"] or {}).get("late_hours")
+            was = step_flow.of(existing.get(row["id"])).get("late_hours")
+            if (
+                late is not None
+                and late != was
+                and "limit_minutes" in {r[1] for r in conn.execute("PRAGMA table_info(task_steps)")}
+            ):
+                conn.execute("UPDATE task_steps SET limit_minutes=? WHERE id=?", (round(float(late) * 60), row["id"]))
     renamed = {
         existing[r["id"]]["name"]: r["name"]
         for r in clean
