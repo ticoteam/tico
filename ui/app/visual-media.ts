@@ -5,23 +5,26 @@
 // so seeking a large file asks for that part only. Nothing here ever calls play(): a clip starts when a person
 // presses play. Classic script, loaded right after visual-cards.js.
 'use strict';
-const VM_TYPE = {'video/mp4': 'MP4', 'video/webm': 'WebM', 'video/quicktime': 'MOV', 'video/x-m4v': 'M4V',
+type VMKind = 'video' | 'audio';
+// The attachment fields the card body reads; the rest is visualSrc's.
+interface VMFile { kind?: string; content_type?: string; width?: number | string | null; height?: number | string | null }
+const VM_TYPE: Record<string, string> = {'video/mp4': 'MP4', 'video/webm': 'WebM', 'video/quicktime': 'MOV', 'video/x-m4v': 'M4V',
   'audio/mpeg': 'MP3', 'audio/mp4': 'M4A', 'audio/x-m4a': 'M4A', 'audio/wav': 'WAV', 'audio/x-wav': 'WAV',
   'audio/wave': 'WAV', 'audio/vnd.wave': 'WAV', 'audio/ogg': 'OGG', 'audio/aac': 'AAC'};
-const vmWord = kind => kind === 'video' ? 'video' : 'audio';
+const vmWord = (kind: VMKind) => kind === 'video' ? 'video' : 'audio';
 // Whether this device says it can't play the type at all ('' from canPlayType); 'maybe' and 'probably' get a try.
-function vmUnplayable(kind, type) {
+function vmUnplayable(kind: VMKind, type: string | undefined): boolean {
   if (!type) return false;
   return document.createElement(kind === 'video' ? 'video' : 'audio').canPlayType(type) === '';
 }
-function vmReason(kind, type, code) {
-  const word = VM_TYPE[type] || '';
+function vmReason(kind: VMKind, type: string | undefined, code: number | null | undefined): string {
+  const word = VM_TYPE[type ?? ''] || '';
   if (code === 2) return `Couldn't load this ${vmWord(kind)}. Check the connection, or download it.`;
   return `This device can't play ${word ? word + ' ' : 'this '}${vmWord(kind)}.`;
 }
 // The card body. A video sits in a box of its own shape no taller than the card's cap (a portrait clip is narrower,
 // never cropped); the frame's held space gives way to it (visual-cards.css, .vcard[data-kind=video]).
-function vmBodyHTML(f) {
+function vmBodyHTML(f: VMFile): string {
   const kind = f.kind === 'audio' ? 'audio' : 'video', src = visualSrc(f);
   if (vmUnplayable(kind, f.content_type)) return `<div class="vm-cant" data-vm-reason="${esc(vmReason(kind, f.content_type, 4))}"></div>`;
   const at = ` data-vm-src="${esc(src)}" data-vm-type="${esc(f.content_type || '')}"`;
@@ -32,7 +35,7 @@ function vmBodyHTML(f) {
 }
 // A clip this device can't play: the frame's failed card with the reason, and Download right there (the menu's
 // signed-in download, a click like a chip's).
-function vmFail(card, reason) {
+function vmFail(card: HTMLElement, reason: string | undefined): void {
   visualFail(card, reason);
   const dl = card.querySelector('.vcard-menu-list a[download]');
   if (dl) card.querySelector('.vcard-note')?.insertAdjacentHTML('beforeend',
@@ -41,12 +44,13 @@ function vmFail(card, reason) {
 // After the card is in the page: ready on metadata; on an error, first try the newest address the thread handed
 // the card (visualKeep keeps a playing card and copies the new tree's src to data-fresh-src) at the same position
 // and play state; only then show the reason and Download.
-function vmWire(card) {
-  const cant = card.querySelector('.vm-cant');
+function vmWire(card: HTMLElement): void {
+  const cant = card.querySelector<HTMLElement>('.vm-cant');
   if (cant) return vmFail(card, cant.dataset.vmReason);
-  const m = card.querySelector('video[data-vm-src], audio[data-vm-src]');
+  const m = card.querySelector<HTMLMediaElement>('video[data-vm-src], audio[data-vm-src]');
   if (!m) return;
-  const body = card.querySelector('.vcard-body'), wrap = m.closest('.tf-media');
+  const body = card.querySelector<HTMLElement>('.vcard-body'), wrap = m.closest<HTMLElement>('.tf-media');
+  if (!body || !wrap) throw new Error('visual media card has no body or media frame');
   const ready = () => { wrap.classList.add('ready'); body.classList.add('ready'); };
   if (wrap.classList.contains('ready') || m.readyState >= 1) ready();
   m.addEventListener('loadedmetadata', ready);
@@ -55,15 +59,15 @@ function vmWire(card) {
   m.addEventListener('play', () => { m.dataset.vmPlaying = '1'; });
   // Where the person is. A seek is where they chose, the start included; a time update at 0 is a load or a failed
   // load resetting the clip (it can read 0 by the time its error arrives), so that keeps the last place it showed.
-  m.addEventListener('timeupdate', () => { if (m.currentTime) m.dataset.vmAt = m.currentTime; });
-  m.addEventListener('seeking', () => { m.dataset.vmAt = m.currentTime; });
+  m.addEventListener('timeupdate', () => { if (m.currentTime) m.dataset.vmAt = String(m.currentTime); });
+  m.addEventListener('seeking', () => { m.dataset.vmAt = String(m.currentTime); });
   m.addEventListener('pause', () => setTimeout(() => { if (!m.error) delete m.dataset.vmPlaying; }));
   m.addEventListener('error', () => {
     if (vmRecover(m, card)) return;
     vmFail(card, vmReason(m.tagName === 'AUDIO' ? 'audio' : 'video', m.dataset.vmType, m.error && m.error.code));
   });
 }
-function vmRecover(m, card) {
+function vmRecover(m: HTMLMediaElement, card: HTMLElement): boolean {
   const fresh = visualSrc({src: card.dataset.freshSrc});
   if (!fresh || fresh === m.dataset.vmSrc || m.dataset.vmTried === fresh) return false;
   const at = m.currentTime || Number(m.dataset.vmAt) || 0;
@@ -85,7 +89,7 @@ function vmRecover(m, card) {
 // One clip at a time: starting any video or audio on the page pauses the one already playing, and a clip that is
 // reloading from a newer address no longer resumes when it loads.
 document.addEventListener('play', e => {
-  for (const m of document.querySelectorAll('video, audio')) {
+  for (const m of document.querySelectorAll<HTMLMediaElement>('video, audio')) {
     if (m === e.target) continue;
     delete m.dataset.vmResume;
     delete m.dataset.vmPlaying;
