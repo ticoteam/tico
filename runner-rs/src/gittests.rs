@@ -1090,6 +1090,100 @@ async fn a_dirty_checkout_still_catches_up_pushes_its_memory_commit_and_keeps_it
 }
 
 #[tokio::test]
+async fn a_dirty_catch_up_never_overwrites_an_ignored_local_file_the_upstream_now_tracks() {
+    let tmp = Tmp::new();
+    let (bare, seed) = remote(&tmp.0, "bot-catchup-ignored");
+    commit_and_push(&seed, "notes.txt", "base\n");
+    let projects = tmp.0.join("projects");
+    std::fs::create_dir_all(&projects).unwrap();
+    let main = projects.join("bot-catchup-ignored");
+    sh(
+        &projects,
+        &[
+            "clone",
+            "-q",
+            bare.to_str().unwrap(),
+            main.to_str().unwrap(),
+        ],
+    );
+    let env = turn_env(&tmp.0, &[]);
+
+    // The bot ignores ignored.txt and holds work in it, and an unrelated tracked edit stays in the tree.
+    std::fs::write(main.join(".git/info/exclude"), "ignored.txt\n").unwrap();
+    std::fs::write(main.join("ignored.txt"), "local work\n").unwrap();
+    std::fs::write(main.join("notes.txt"), "unrelated edit\n").unwrap();
+    // Another lane makes GitHub track ignored.txt.
+    commit_and_push(&seed, "ignored.txt", "upstream\n");
+
+    let reason = sessions::catch_up(&main, &env).await;
+    assert!(!reason.is_empty(), "the catch-up refuses and reports");
+    assert_eq!(
+        std::fs::read_to_string(main.join("ignored.txt")).unwrap(),
+        "local work\n",
+        "the ignored local file is unchanged"
+    );
+    assert_eq!(
+        std::fs::read_to_string(main.join("notes.txt")).unwrap(),
+        "unrelated edit\n"
+    );
+}
+
+#[tokio::test]
+async fn a_catch_up_held_by_staged_changes_names_them_and_merges_nothing() {
+    let tmp = Tmp::new();
+    let (bare, seed) = remote(&tmp.0, "bot-staged");
+    commit_and_push(&seed, "code.txt", "base\n");
+    let projects = tmp.0.join("projects");
+    std::fs::create_dir_all(&projects).unwrap();
+    let main = projects.join("bot-staged");
+    sh(
+        &projects,
+        &[
+            "clone",
+            "-q",
+            bare.to_str().unwrap(),
+            main.to_str().unwrap(),
+        ],
+    );
+    let env = turn_env(&tmp.0, &[]);
+
+    // A staged leftover outside the memory folders: the catch-up must not merge over it.
+    std::fs::write(main.join("code.txt"), "staged\n").unwrap();
+    sh(&main, &["add", "code.txt"]);
+    commit_and_push(&seed, "other.md", "another lane\n");
+
+    let reason = sessions::catch_up(&main, &env).await;
+    assert!(
+        reason.contains("staged") && reason.contains("code.txt"),
+        "the refusal names the staged paths: {reason}"
+    );
+    assert!(!main.join("other.md").exists(), "nothing is merged");
+    assert_eq!(sh(&main, &["diff", "--cached", "--name-only"]), "code.txt");
+}
+
+#[tokio::test]
+async fn a_busy_checkout_skips_the_heal_without_fetching() {
+    let tmp = Tmp::new();
+    let env = turn_env(&tmp.0, &[]);
+    let (path, _seed) = wiped_clone(&tmp.0, "bot-busyfetch", &env).await;
+    let client = crate::client::Client::new("http://127.0.0.1:9", "t", 1, 0).unwrap();
+    let lanes = crate::sessions::Lanes::new(std::sync::Arc::new(
+        crate::repositories::Repositories::new(&tmp.0, &tmp.0, client),
+    ));
+    let tip_before = sh(&path, &["rev-parse", "origin/main"]);
+
+    let turn = lanes.checkout("bot-busyfetch").lock_owned().await;
+    let problem = fetchrepo::heal_free_checkout(&lanes, "bot-busyfetch", &path, &env).await;
+    drop(turn);
+    assert!(!problem.is_empty(), "a busy checkout is skipped");
+    assert_eq!(
+        sh(&path, &["rev-parse", "origin/main"]),
+        tip_before,
+        "no fetch ran while the checkout was busy"
+    );
+}
+
+#[tokio::test]
 async fn a_memory_pass_checkout_drops_its_edits_and_commits_and_leaves_main_alone() {
     let tmp = Tmp::new();
     let (bare, _seed) = remote(&tmp.0, "bot-pass");

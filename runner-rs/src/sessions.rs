@@ -1066,12 +1066,25 @@ pub async fn catch_up(path: &Path, turn: &Env) -> String {
         let up = Some(g(path, &env, &["rev-parse", "--abbrev-ref", "@{u}"], 15).await?.stdout.trim().to_string()).filter(|u| !u.is_empty()).unwrap_or_else(|| "its upstream".into());
         let behind = Some(g(path, &env, &["rev-list", "--count", "HEAD..@{u}"], 15).await?.stdout.trim().to_string()).filter(|b| !b.is_empty()).unwrap_or_else(|| "some".into());
         let missing = format!("{up} has {behind} commits this checkout doesn't");
+        // Staged leftovers outside the memory folders hold the push, on purpose: a staged change is how the bot's wipe
+        // got committed, so the runner never merges over one. The refusal names the paths, so the bot and its manager
+        // can see why the push waits.
+        let staged = g(path, &env, &["diff", "--cached", "--name-only", "--", ".", ":(exclude)memory", ":(exclude)knowledge"], 15).await?;
+        let staged: Vec<&str> = staged.stdout.lines().filter(|l| !l.is_empty()).collect();
+        if !staged.is_empty() {
+            let mut shown = staged.iter().take(3).copied().collect::<Vec<_>>().join(", ");
+            if staged.len() > 3 {
+                shown.push_str(&format!(" and {} more", staged.len() - 3));
+            }
+            return Ok(format!("{missing}, and staged changes ({shown}) hold the push; in {}, commit or unstage them, then push", path.display()));
+        }
         // A dirty tree gets a plain merge, never a rebase or an autostash (which git restores without its index).
-        // git refuses that merge only when it would overwrite a local change, and then nothing is touched.
+        // git refuses that merge only when it would overwrite a local change, and then nothing is touched; an ignored
+        // local file that the upstream now tracks is refused too, never replaced.
         if !dirty.stdout.trim().is_empty() || !g(path, &env, &["rev-list", "--merges", "@{u}..HEAD"], 15).await?.stdout.trim().is_empty() {
             step = "merge";
         }
-        let args: &[&str] = if step == "merge" { &["merge", "--no-edit", "--quiet", "@{u}"] } else { &["rebase", "--quiet", "@{u}"] };
+        let args: &[&str] = if step == "merge" { &["merge", "--no-edit", "--quiet", "--no-overwrite-ignore", "@{u}"] } else { &["rebase", "--quiet", "@{u}"] };
         let done = g(path, &env, args, 45).await?;
         if done.ok() {
             return Ok(String::new());

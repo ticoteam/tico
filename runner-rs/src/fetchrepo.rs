@@ -213,18 +213,24 @@ pub async fn heal_free_checkout(
     if path.join("AGENT.md").is_file() {
         return String::new();
     }
+    let busy = || "its checkout is busy with a turn; it is healed at a later check".to_string();
+    // A busy checkout costs no fetch this tick.
+    if lanes.try_checkout(bot).is_none() {
+        return busy();
+    }
     let env = crate::safegit::environment(env);
     if let Err(why) = fetch_origin(path, &env).await {
         return why;
     }
     let Some(_checkout) = lanes.try_checkout(bot) else {
-        return "its checkout is busy with a turn; it is healed at a later check".into();
+        return busy();
     };
     finish_heal(path, &env).await
 }
 
+/// The heal's fetch, run outside the repository's command gate (gitrun::fetch_ungated_as_bot) for the reason given there.
 async fn fetch_origin(path: &Path, env: &Env) -> Result<(), String> {
-    let fetched = gitrun::git_as_bot(path, env, &["fetch", "--quiet", "--no-tags"], 120)
+    let fetched = gitrun::fetch_ungated_as_bot(path, env, &["fetch", "--quiet", "--no-tags"], 120)
         .await
         .map_err(|f| fault_text(&f))?;
     if !fetched.ok() {
