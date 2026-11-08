@@ -72,7 +72,7 @@ def items(c, auth, who, skip=(), with_capped=True):
                     "thread_capped",
                     row["root_id"],
                     row["root_id"],
-                    _clip(root["subject"] or "Thread") + ": bot replies paused",
+                    _clip(threads.shown_name(c, viewer, dict(root))) + ": bot replies paused",
                     row["since"],
                 )
             )
@@ -108,20 +108,22 @@ def _items(c, viewer):
                 kind,
                 row["id"],
                 row["conversation_id"],
-                first or _clip(row["subject"] or "Thread"),
+                first or _clip(row["subject"] or threads.shown_name(c, viewer, row["conversation_id"])),
                 row["created_at"],
                 known.name(row["sender_id"], row["conversation_id"]),
                 message_id=row["id"],
                 first_line=first,
             )
         )
-    for row in _unread_dms(c, viewer, me):
+    dms = _unread_dms(c, viewer, me)
+    dm_names = threads.shown_names(c, viewer, [row["id"] for row in dms if not row["subject"]])
+    for row in dms:
         out.append(
             _item(
                 "thread_dm",
                 row["id"],
                 row["id"],
-                _clip(row["subject"] or "Direct message"),
+                _clip(row["subject"] or dm_names.get(row["id"], "")),
                 row["created_at"],
                 known.name(row["sender_id"], row["id"]),
             )
