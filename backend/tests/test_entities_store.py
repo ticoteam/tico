@@ -119,16 +119,15 @@ def test_a_mailbox_source_shows_only_to_the_person_who_holds_that_mailbox(api):
         assert listed["rows"] == [] and listed["count"] == 0
 
 
-def test_a_me_note_hides_its_entity_from_everyone_but_its_author(api):
+def test_a_me_note_shows_only_to_its_author_and_never_hides_its_entity(api):
     with tx(api) as c:
         _setup_types(c)
-        private = ES.upsert(c, BEN, "organization", match={"domain": "private.example"}, name="Private Co")["id"]
-        ES.note(c, BEN, private, "Prefers phone; the CFO decides", audience="me")
+        shared = ES.upsert(c, BEN, "organization", match={"domain": "shared.example"}, name="Shared Co")["id"]
+        ES.note(c, BEN, shared, "Prefers phone; the CFO decides", audience="me")
 
-        assert [e["id"] for e in ES.get(c, BEN, "private.example")] == [private]
-        assert ES.get(c, ANA, "private.example") == []
-        assert ES.card(c, CARA, private) is None
-        notes = ES.card(c, BEN, private)["notes"]
+        assert [e["id"] for e in ES.get(c, ANA, "shared.example")] == [shared]
+        assert ES.card(c, CARA, shared)["notes"] == []
+        notes = ES.card(c, BEN, shared)["notes"]
         assert [note["body"] for note in notes] == ["Prefers phone; the CFO decides"]
 
 

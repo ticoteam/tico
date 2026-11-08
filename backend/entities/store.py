@@ -745,8 +745,8 @@ def note(
     audience: str = "company",
     evidence_id: str | None = None,
 ) -> str:
-    """A note on an entity. A `me` note is visible to its author only, and it is a restricted source the entity is known
-    from, so an entity known only from one hides from everyone else."""
+    """A note on an entity. A `me` note is visible to its author only. It never changes who sees the entity: the entity
+    exists before the note, and adding a restricted source to one with none would hide it from everyone else."""
     _writer(c, actor)
     text = _required(c, actor, body, "note")
     if audience not in ("me", "company"):
@@ -762,12 +762,6 @@ def note(
         "VALUES (?, ?, ?, ?, ?, ?, NULL, ?, ?)",
         (note_id, entity_id, author_type, author_id, text, audience, evidence_id, now),
     )
-    if audience == "me":
-        c.execute(
-            "INSERT OR IGNORE INTO entity_sources (id, entity_id, source_type, source_id, visibility, created_at) "
-            "VALUES (?, ?, 'note_me', ?, 'restricted', ?)",
-            (_id("src"), entity_id, key, now),
-        )
     return note_id
 
 
