@@ -2,6 +2,7 @@
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
 'use strict';
 
+window.dispatchEvent(new Event('tico:app-loaded'));
 setDrawer(false);
 if (/TicoHub/.test(navigator.userAgent)) document.body.classList.add('native');
 // installable app: the server maps /manifest.webmanifest and /sw.js at the root like /assets/. Reading
