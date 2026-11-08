@@ -12,9 +12,12 @@ on the end when that is taken. Other rows get a prefixed random id.
 """
 
 import base64
+import hashlib
+import hmac
 import json
 import math
 import re
+import secrets
 import sqlite3
 import uuid
 from collections.abc import Iterable, Mapping, Sequence
@@ -564,6 +567,14 @@ def upsert(
     found = _match(c, type_key, match)
     if len(found) > 1:
         _refuse(c, actor, "ambiguous", f"{', '.join(found)} all match; name one by id")
+    # An identifier erased at its owner's request is not written again: a new entity made from it is refused, and so is
+    # a value that sets it. The refusal names no identifier, so the refusal audit keeps none.
+    checks = _email_and_phone_values(c, type_key, values)
+    if not found and match.get("email"):
+        checks.append(("email", match["email"]))
+    for kind, value in checks:
+        if is_suppressed(c, kind, value):
+            _refuse(c, actor, "suppressed", "That was erased at its owner's request; it is not created again")
     created = not found
     if found:
         entity_id = found[0]
@@ -885,6 +896,254 @@ def unmerge(c: sqlite3.Connection, actor: str, drop_id: str) -> str:
     _refresh_self_keys(c, keep_id)
     _refresh_self_keys(c, drop_id)
     return drop_id
+
+
+# ------------------------------------------------------------------------------------------ erase and suppression
+SALT_KEY = "directory_suppression_salt"  # the company's salt, in registry_metadata: a hash key, never an identifier
+# The identifiers that name one person. A domain or a name is shared by many entities, so it is never suppressed.
+SUPPRESSED_KINDS = ("email", "phone", "url", "external")
+# Every table that names an entity by entity_id, and the Market tables that name one by subject. Each statement takes the
+# erased entity ids (:ids) or the erased link ids (:links) as one JSON array.
+ERASE_STATEMENTS: tuple[tuple[str, str], ...] = (
+    ("entity_values", "DELETE FROM entity_values WHERE entity_id IN (SELECT value FROM json_each(:ids))"),
+    ("entity_value_history", "DELETE FROM entity_value_history WHERE entity_id IN (SELECT value FROM json_each(:ids))"),
+    ("entity_identifiers", "DELETE FROM entity_identifiers WHERE entity_id IN (SELECT value FROM json_each(:ids))"),
+    ("entity_notes", "DELETE FROM entity_notes WHERE entity_id IN (SELECT value FROM json_each(:ids))"),
+    ("entity_mentions", "DELETE FROM entity_mentions WHERE entity_id IN (SELECT value FROM json_each(:ids))"),
+    ("entity_activities", "DELETE FROM entity_activities WHERE entity_id IN (SELECT value FROM json_each(:ids))"),
+    ("entity_connections", "DELETE FROM entity_connections WHERE entity_id IN (SELECT value FROM json_each(:ids))"),
+    ("entity_external_refs", "DELETE FROM entity_external_refs WHERE entity_id IN (SELECT value FROM json_each(:ids))"),
+    ("entity_sources", "DELETE FROM entity_sources WHERE entity_id IN (SELECT value FROM json_each(:ids))"),
+    ("entity_watches", "DELETE FROM entity_watches WHERE entity_id IN (SELECT value FROM json_each(:ids))"),
+    ("market_figures", "DELETE FROM market_figures WHERE entity_id IN (SELECT value FROM json_each(:ids))"),
+    (
+        "entity_links",
+        "DELETE FROM entity_links WHERE from_entity_id IN (SELECT value FROM json_each(:ids)) "
+        "OR to_entity_id IN (SELECT value FROM json_each(:ids))",
+    ),
+    (
+        "market_citations",
+        "DELETE FROM market_citations WHERE (claim_kind = 'entity' AND claim_id IN (SELECT value FROM json_each(:ids))) "
+        "OR (claim_kind = 'edge' AND claim_id IN (SELECT value FROM json_each(:links)))",
+    ),
+    (
+        "market_events",
+        "DELETE FROM market_events WHERE (subject_kind = 'entity' AND subject_id IN (SELECT value FROM json_each(:ids))) "
+        "OR (subject_kind = 'edge' AND subject_id IN (SELECT value FROM json_each(:links)))",
+    ),
+    (
+        "market_turn_sources",
+        "DELETE FROM market_turn_sources WHERE (subject_kind = 'entity' AND subject_id IN (SELECT value FROM json_each(:ids))) "
+        "OR (subject_kind = 'edge' AND subject_id IN (SELECT value FROM json_each(:links)))",
+    ),
+    (
+        "entity_merges",
+        "DELETE FROM entity_merges WHERE entity_id IN (SELECT value FROM json_each(:ids)) "
+        "OR into_entity_id IN (SELECT value FROM json_each(:ids))",
+    ),
+)
+# The history of the erased entities and of their links. Run after those rows are deleted (see erase_rows).
+HISTORY_OF_ERASED = (
+    "DELETE FROM history_events WHERE (subject_type = 'market_entity' AND subject_id IN (SELECT value FROM json_each(:ids))) "
+    "OR (subject_type = 'market_edge' AND subject_id IN (SELECT value FROM json_each(:links)))"
+)
+# The evidence the erased rows rest on (a value, a note, a link, a citation of the entity or of its links).
+EVIDENCE_OF = (
+    "SELECT evidence_id FROM entity_values WHERE entity_id IN (SELECT value FROM json_each(:ids)) AND evidence_id IS NOT NULL "
+    "UNION SELECT evidence_id FROM entity_value_history WHERE entity_id IN (SELECT value FROM json_each(:ids)) "
+    "AND evidence_id IS NOT NULL "
+    "UNION SELECT evidence_id FROM entity_notes WHERE entity_id IN (SELECT value FROM json_each(:ids)) AND evidence_id IS NOT NULL "
+    "UNION SELECT evidence_id FROM entity_links WHERE id IN (SELECT value FROM json_each(:links)) AND evidence_id IS NOT NULL "
+    "UNION SELECT evidence_id FROM market_citations WHERE (claim_kind = 'entity' AND claim_id IN (SELECT value FROM json_each(:ids))) "
+    "OR (claim_kind = 'edge' AND claim_id IN (SELECT value FROM json_each(:links)))"
+)
+
+
+def _email_and_phone_values(
+    c: sqlite3.Connection, type_key: str, values: Mapping[str, object]
+) -> list[tuple[str, object]]:
+    """The raw values in a values map that are emails or phones, by their attribute's type."""
+    found: list[tuple[str, object]] = []
+    for key, raw in values.items():
+        attr = _one(
+            c,
+            "SELECT value_type FROM entity_attributes WHERE entity_type = ? AND key = ? AND archived_at IS NULL",
+            (type_key, key),
+        )
+        if attr and attr["value_type"] in ("email", "phone") and raw:
+            found.append((str(attr["value_type"]), raw))
+    return found
+
+
+def _normal_identifier(kind: str, value: object) -> str:
+    text = str(value or "").strip()
+    if kind == "phone":
+        return re.sub(r"[^0-9+]", "", text)
+    if kind == "external":
+        return text  # system, external type and id joined by the unit separator; an external id's case is the system's
+    return text.lower()
+
+
+def _hash_identifier(kind: str, value: object, salt: str) -> str:
+    return hmac.new(salt.encode(), f"{kind}\x1f{_normal_identifier(kind, value)}".encode(), hashlib.sha256).hexdigest()
+
+
+def _existing_salt(c: sqlite3.Connection) -> str | None:
+    row = _one(c, "SELECT value FROM registry_metadata WHERE key = ?", (SALT_KEY,))
+    return str(json.loads(row["value"])) if row else None
+
+
+def _salt(c: sqlite3.Connection) -> str:
+    """The company's salt, made on the first erase."""
+    salt = _existing_salt(c)
+    if salt is None:
+        c.execute(
+            "INSERT OR IGNORE INTO registry_metadata (key, value) VALUES (?, ?)",
+            (SALT_KEY, json.dumps(secrets.token_hex(32))),
+        )
+        salt = _existing_salt(c) or ""
+    return salt
+
+
+def is_suppressed(c: sqlite3.Connection, kind: str, value: object) -> bool:
+    """Whether an identifier was erased. upsert refuses to create an entity from one, and the ingest paths check it before
+    they create anyone from a sender or a contact. The table keeps only keyed hashes, so this compares hashes; a company
+    that has erased no one has no salt and no suppressions."""
+    if kind not in SUPPRESSED_KINDS or not str(value or "").strip():
+        return False
+    salt = _existing_salt(c)
+    if salt is None:
+        return False
+    hit = _one(
+        c,
+        "SELECT 1 AS hit FROM entity_suppressions WHERE kind = ? AND value_hash = ?",
+        (kind, _hash_identifier(kind, value, salt)),
+    )
+    return hit is not None
+
+
+def _erased_ids(c: sqlite3.Connection, entity_id: str) -> list[str]:
+    """The entity and every entity merged into it, and into those: a merged-away duplicate is the same person."""
+    ids = [entity_id]
+    frontier = [entity_id]
+    while frontier:
+        frontier = [
+            row[0]
+            for row in c.execute(
+                "SELECT id FROM entities WHERE merged_into_id IN (SELECT value FROM json_each(?)) "
+                "AND id NOT IN (SELECT value FROM json_each(?))",
+                (json.dumps(frontier), json.dumps(ids)),
+            )
+        ]
+        ids += frontier
+    return ids
+
+
+def _suppress_identifiers(c: sqlite3.Connection, ids: list[str], reason: str) -> int:
+    """Hashes the erased entities' identifiers into entity_suppressions: their emails, phones and urls, and their external
+    refs. Returns how many suppressions are new."""
+    params = {"ids": json.dumps(ids)}
+    pairs: list[tuple[str, object]] = [
+        (str(row[0]), row[1])
+        for row in c.execute(
+            "SELECT kind, normalized_value FROM entity_identifiers WHERE entity_id IN (SELECT value FROM json_each(:ids)) "
+            "AND kind IN ('email', 'phone', 'url')",
+            params,
+        )
+    ]
+    pairs += [
+        ("email", row[0])
+        for row in c.execute(
+            "SELECT primary_email FROM entities WHERE id IN (SELECT value FROM json_each(:ids)) AND primary_email IS NOT NULL",
+            params,
+        )
+    ]
+    pairs += [
+        ("external", "\x1f".join(str(part) for part in row))
+        for row in c.execute(
+            "SELECT system, external_type, external_id FROM entity_external_refs "
+            "WHERE entity_id IN (SELECT value FROM json_each(:ids))",
+            params,
+        )
+    ]
+    if not pairs:
+        return 0
+    salt, now, new = _salt(c), H.now(), 0
+    for kind, value in pairs:
+        new += c.execute(
+            "INSERT OR IGNORE INTO entity_suppressions (id, kind, value_hash, created_at, reason) VALUES (?, ?, ?, ?, ?)",
+            (_id("supp"), kind, _hash_identifier(kind, value, salt), now, reason),
+        ).rowcount
+    return new
+
+
+def _evidence_cited(c: sqlite3.Connection, evidence_id: str) -> bool:
+    return (
+        _one(
+            c,
+            "SELECT 1 AS hit WHERE EXISTS (SELECT 1 FROM entity_values WHERE evidence_id = :ev) "
+            "OR EXISTS (SELECT 1 FROM entity_value_history WHERE evidence_id = :ev) "
+            "OR EXISTS (SELECT 1 FROM entity_links WHERE evidence_id = :ev) "
+            "OR EXISTS (SELECT 1 FROM entity_notes WHERE evidence_id = :ev) "
+            "OR EXISTS (SELECT 1 FROM market_citations WHERE evidence_id = :ev)",
+            {"ev": evidence_id},
+        )
+        is not None
+    )
+
+
+def erase_rows(c: sqlite3.Connection, actor: str, entity_id: str, reason: str) -> dict[str, Any]:
+    """Erases one entity, the entities merged into it, and every row that names them, in the caller's transaction (spec
+    "Deleting a person"). Their identifiers (email, phone, url) and external refs are suppressed first, as salted hashes,
+    so sync and ingest cannot create them again. Then each table that names them loses those rows, the evidence nothing
+    else cites goes, and the full-text row goes with its entity. Returns the entity's type and the rows removed per table:
+    never a name, an id or an identifier. The caller decides who may erase (backend/entities/erase.py)."""
+    _writer(c, actor)
+    root = _one(c, "SELECT * FROM entities WHERE id = ?", (entity_id,))
+    if root is None:
+        _refuse(c, actor, "not_found", "no such entity")
+    if root["self"]:
+        _refuse(c, actor, "kind", "self cannot be erased")
+    ids = _erased_ids(c, entity_id)
+    ids_json = json.dumps(ids)
+    link_ids = [
+        row[0]
+        for row in c.execute(
+            "SELECT id FROM entity_links WHERE from_entity_id IN (SELECT value FROM json_each(:ids)) "
+            "OR to_entity_id IN (SELECT value FROM json_each(:ids))",
+            {"ids": ids_json},
+        )
+    ]
+    params = {"ids": ids_json, "links": json.dumps(link_ids)}
+    tables = {row[0] for row in c.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
+    suppressed = _suppress_identifiers(c, ids, reason)
+    evidence = [row[0] for row in c.execute(EVIDENCE_OF, params)]
+    removed: dict[str, int] = {}
+    # The full-text index keys an entity on its seq, so its row goes by that rowid.
+    c.execute(
+        "DELETE FROM market_fts WHERE rowid IN (SELECT seq FROM entities WHERE id IN (SELECT value FROM json_each(:ids)))",
+        params,
+    )
+    for table, sql in ERASE_STATEMENTS:
+        if table in tables:
+            count = c.execute(sql, params).rowcount
+            if count:
+                removed[table] = count
+    removed["entities"] = c.execute(
+        "DELETE FROM entities WHERE id IN (SELECT value FROM json_each(:ids))", params
+    ).rowcount
+    # After the entities and links are gone: the history trigger (migration 20261108045025) allows a row of a subject that
+    # no longer exists, and only those, so the history of live entities stays append-only.
+    if "history_events" in tables:
+        count = c.execute(HISTORY_OF_ERASED, params).rowcount
+        if count:
+            removed["history_events"] = count
+    for evidence_id in evidence:
+        if not _evidence_cited(c, evidence_id):
+            count = c.execute("DELETE FROM market_evidence WHERE id = ?", (evidence_id,)).rowcount
+            if count:
+                removed["market_evidence"] = removed.get("market_evidence", 0) + count
+    return {"type": root["type"], "removed": removed, "suppressed": suppressed}
 
 
 def add_type(
