@@ -16,6 +16,12 @@ const pipelineType = task => TASK_TYPES.find(type => type.id === pipelineTypeId(
 const pipelineStepsOnly = task => !!pipelineType(task)?.steps_only;
 const pipelineSelectedType = state => TASK_TYPES.find(type => type.id === state?.type);
 const pipelineActionStatus = (task, body) => body.status || pipelineType(task)?.steps.find(step => step.id === body.step)?.status;
+// A person's move into a full stage stands, and the server says so (over_cap, D68): one line, not a refusal.
+const taskOverCapWarn = (task: {id: string}, body: {step?: string}, data: {over_cap?: boolean} | null | undefined): void => {
+  if (!data?.over_cap) return;
+  const step = pipelineType(task)?.steps.find(s => s.id === body.step);
+  toast(`${step?.name ?? 'That stage'} is over its cap of ${step?.card_cap ?? ''}.`);
+};
 const pipelineStepName = id => TASK_TYPES.flatMap(type => type.steps).find(step => step.id === id)?.name || id;
 // The Product roadmap and Dev tickets types go by their role (backend/roadmap_flow.py), never by who manages them.
 const pipelineRoleType = role => TASK_TYPES.find(type => type.role === role);
@@ -95,7 +101,7 @@ function taskPipelineBoard(items, state, head = '') {
   const backlog = working.slice(0, lead), folds = taskBoardFolds(state, type, backlog.length);
   if (phone) folds.backlog = false;               // a phone shows one stage at a time: every backlog stage is a chip
   const inStep = step => items.filter(item => item.task.step_id === step.id);
-  const stepColumn = (step: import('../types/api').TaskStep) => ({id: step.id, name: step.name, drop: step.id, items: inStep(step), scope: {type: type.id, step: step.id}, limit: step.limit_minutes});
+  const stepColumn = (step: import('../types/api').TaskStep) => ({id: step.id, name: step.name, drop: step.id, items: inStep(step), scope: {type: type.id, step: step.id}, limit: step.limit_minutes, cap: step.card_cap ?? null});
   const strip = (fold, run, drop, name) => ({id: 'fold-' + fold, fold, drop, items: [], name: run.length === 1 ? run[0].name : name,
     hint: run.map(step => step.name).join(', '), count: fold === 'backlog' ? run.reduce((n, step) => n + inStep(step).length, 0) : ''});
   const columns = [];

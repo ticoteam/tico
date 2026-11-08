@@ -34,6 +34,8 @@ interface BoardColumn {
   scope?: {type: string; step: string} | null;
   play?: string;
   limit?: number | null | undefined;
+  /** The stage's cap (D68): its count shows against it ("3/3"); null or absent is no cap. */
+  cap?: number | null;
 }
 // A refused move, kept on the row or card it was tried on until that task changes (taskRefusedSet).
 interface TaskRefusal { message: string; version: number; }
@@ -512,6 +514,10 @@ function taskStatusGroups(items: TaskItem[], {always = []}: {always?: string[]} 
 // a card dropped on the column moves to; a board with any is one cards are dragged on.
 // The Dev tickets step a release ships from; its header gets Release now (settings-release.ts fills it).
 const RELEASE_COLUMN = /^pending release$/i;
+// A column's count: its cards, against its cap when it has one (D68).
+function boardCountText(column: {items: unknown[]; cap?: number | null}): string {
+  return column.cap == null ? String(column.items.length) : `${column.items.length}/${column.cap}`;
+}
 function boardColumnsHTML(columns: BoardColumn[], {head = '', cls = ''}: {head?: string; cls?: string} = {}) {
   const anyWork = columns.some(c => c.items.length);
   const narrow = (c: BoardColumn) => c.fold || anyWork && !c.items.length;
@@ -519,7 +525,7 @@ function boardColumnsHTML(columns: BoardColumn[], {head = '', cls = ''}: {head?:
   const drag = columns.some(c => c.drop);
   return `${head}<div class="board work${cls ? ' ' + cls : ''}"${drag ? ' data-board-drag' : ''} style="--board-cols:${esc(sizes)}">${columns.map(column => {
     const empty = !column.fold && anyWork && !column.items.length;
-    const count = column.fold ? column.count ?? '' : column.items.length;
+    const count = column.fold ? column.count ?? '' : boardCountText(column);
     const drop = column.drop ? ` data-drop-step="${esc(column.drop)}"` : '';
     if (column.fold) return `<section class="bcol is-empty bfold" data-col="${esc(column.id)}"${drop} aria-label="${esc(column.name)}">
       <button type="button" class="bfold-open" data-board-unfold="${esc(column.fold)}" title="${esc(column.hint || 'Show')}" aria-label="${esc(`Show ${column.name}`)}"><h2>${esc(column.name)}</h2><span class="cnt tnum">${esc(String(count))}</span></button>

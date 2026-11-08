@@ -337,6 +337,7 @@ function taskBoardSave(state, t, body, fields, refused) {
   void (async () => {
     try {
       const data = await post(`/v2/tasks/${encodeURIComponent(id)}`, body);
+      taskOverCapWarn(t, body, data);
       if (TASKS_ST !== state) return;
       const move = state.boardMoves.get(id); if (move) move.pending = false;
       if (data?.task) state.tasks = mergeTaskRows(state.tasks, [data.task]);
