@@ -11260,7 +11260,7 @@ def tasks(
     owner=None,
     requester=None,
     status=None,
-    limit=500,
+    limit: int | None = 500,
     lane=None,
     label=None,
     offset=0,
