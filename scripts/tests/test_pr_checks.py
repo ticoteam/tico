@@ -500,6 +500,39 @@ def test_hub_change_selects_every_test_that_imports_it_transitively_and_no_other
     assert checks.selection(["backend/caddy_assets.py"])["caddy"]
 
 
+def test_a_function_level_import_counts_only_in_a_test_a_conftest_or_a_listed_file(tmp_path):
+    # Code other than a test or a conftest runs a module it imports inside a function only when that function is
+    # called: the tests that import the code do not reach the module through it. A module-level import still counts,
+    # and so does a function-level import in a test, a conftest (whose tests get the smoke set, rule 2) or a file
+    # scripts/lazy-imports-counted.txt lists.
+    source(tmp_path, "backend/__init__.py", "")
+    source(tmp_path, "backend/hub.py", "VALUE = 1\n")
+    source(tmp_path, "backend/lazy.py", "def f():\n    from backend import hub\n    return hub\n")
+    source(tmp_path, "backend/eager.py", "from backend import hub\n")
+    source(tmp_path, "backend/tests/test_lazy.py", "from backend import lazy\ndef test_x(): pass\n")
+    source(tmp_path, "backend/tests/test_eager.py", "from backend import eager\ndef test_x(): pass\n")
+    source(tmp_path, "backend/tests/test_late.py", "def test_x():\n    from backend import hub\n")
+    smoke_tree(tmp_path)
+    smoke_tests, _ = checks.smoke(tmp_path)
+    hub = checks.selection(["backend/hub.py"], root=tmp_path, core=[])
+    assert "backend/tests/test_lazy.py" not in hub["python"]
+    assert {"backend/tests/test_eager.py", "backend/tests/test_late.py"} <= set(hub["python"])
+    assert not hub["uncertain"]
+    # A gone module is still named by the function that imports it (rule 1).
+    assert "backend.hub" in checks.DependencyMap(tmp_path).imports["backend/lazy.py"]
+
+    source(tmp_path, "backend/tests/conftest.py", "def helper():\n    from backend import hub\n    return hub\n")
+    reached = checks.selection(["backend/hub.py"], root=tmp_path, core=[])
+    assert any("backend/tests/conftest.py is reached" in note for note in reached["uncertain"])
+    assert set(smoke_tests) <= set(reached["python"])
+    (tmp_path / "backend/tests/conftest.py").unlink()
+
+    for entry in ("backend/lazy.py", "backend/"):
+        source(tmp_path, checks.LAZY_COUNTED, f"# why\n{entry}  # a miss on main\n")
+        listed = checks.selection(["backend/hub.py"], root=tmp_path, core=[])
+        assert "backend/tests/test_lazy.py" in listed["python"], entry
+
+
 def test_docs_changelog_and_workflow_edits_run_the_tests_that_read_them_not_the_suite(tmp_path, mapped):
     # The manual reads docs/ and the app imports the manual: a page edit runs the tests that read docs/ and the tests of
     # the manual itself, not every test that imports the app. A deleted page still runs everything.

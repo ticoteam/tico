@@ -1,0 +1,4 @@
+# The test selector (scripts/pr_checks.py lazy_imports) ignores an import inside a function in code other than a test
+# or a conftest: the function's callers run it, not the module's importers. A file listed here (or every file below a
+# folder ending in /) keeps its function-level imports, as a test's count. Add one when the full validation of main
+# finds a test the selector skipped because it reached the change only through such an import.

@@ -254,11 +254,25 @@ CONTENT = {
 }
 
 
+LAZY_COUNTED = "scripts/lazy-imports-counted.txt"
+
+
+def lazy_counted(root):
+    """The files and folders (ending in /) LAZY_COUNTED lists: their function-level imports count, as a test's do."""
+    path = Path(root) / LAZY_COUNTED
+    lines = path.read_text().splitlines() if path.is_file() else []
+    return {line.split("#", 1)[0].strip() for line in lines} - {""}
+
+
+def counts_lazy(path, counted):
+    return path in counted or any(entry.endswith("/") and path.startswith(entry) for entry in counted)
+
+
 class DependencyMap:
     """What each tracked file runs and reads, measured statically, so a change selects every test that can reach it.
 
-    A file *runs* the Python modules it imports (at module level or in a function, with their packages' __init__
-    files), literal importlib/__import__/pytest_plugins and `-m` names, dotted literals naming a tracked module
+    A file *runs* the Python modules it imports (at module level, with their packages' __init__ files; in a function
+    too for a test, a conftest or a file LAZY_COUNTED lists: see lazy_imports), literal importlib/__import__/pytest_plugins and `-m` names, dotted literals naming a tracked module
     (`"backend.app:app"`, monkeypatch targets) and code files it names by path (scripts, shell, JavaScript). It *reads*
     the other tracked files and folders it names: path joins, open(), Path(), subprocess arguments, cwd=, globs. Shell
     and JavaScript files are scanned for the paths and dotted modules they name. A change reaches whoever runs the
@@ -289,6 +303,7 @@ class DependencyMap:
         self.fixtures = defaultdict(dict)  # conftest -> {fixture: (runs, reads)}
         self.names = {}  # Python file -> its identifiers and strings (fixture names it uses)
         self.imports = {}  # Python file -> the dotted names it imports (for a gone file's importers, named_by)
+        self.counted = lazy_counted(root)  # files whose function-level imports still run what they import
         self._tokens = None  # built on first use by tokens()
         trees = {}
         for path in self.files:
@@ -447,10 +462,29 @@ class DependencyMap:
                 for token in TOKEN.findall(text):
                     self.path(token, runs, reads, bare_word=True)
 
+    def lazy_imports(self, path, nodes, parents):
+        """The ids of the import statements inside a function that do not count as running what they import: every one
+        in code other than a test, a conftest or a file LAZY_COUNTED lists. Such an import runs only when that function
+        is called, so the file's tests do not reach the module through it; the full validation of main every 6 hours
+        catches what this misses (.github/workflows/full-validation.yml). The import still names its module for a gone
+        file (named_by)."""
+        if is_test(path) or Path(path).name == "conftest.py" or counts_lazy(path, self.counted):
+            return set()
+        lazy = set()
+        for node in nodes:
+            if isinstance(node, (ast.Import, ast.ImportFrom)):
+                parent = parents.get(id(node))
+                while parent is not None and not isinstance(parent, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    parent = parents.get(id(parent))
+                if parent is not None:
+                    lazy.add(id(node))
+        return lazy
+
     def python(self, path, tree, walked):
         runs, reads, names = set(), set(), set()
         package = path.split("/")[:-1]
         nodes, parents = walked
+        lazy = self.lazy_imports(path, nodes, parents)
         self.consts = {}
         for statement in tree.body:
             if (
@@ -539,7 +573,9 @@ class DependencyMap:
                 names.add(node.arg)
             elif isinstance(node, ast.Name):
                 names.add(node.id)
-            if isinstance(node, ast.Import):
+            if id(node) in lazy:
+                pass
+            elif isinstance(node, ast.Import):
                 for alias in node.names:
                     runs_ |= self.module(alias.name, bare=True)
             elif isinstance(node, ast.ImportFrom):
