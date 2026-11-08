@@ -1018,30 +1018,24 @@ def held_count(conn: sqlite3.Connection, step_id: str, task_id: str = "") -> int
     return int(row["n"]) if row else 0
 
 
-def add_held(conn: sqlite3.Connection, typ: dict[str, Any], who: Any, *, enforced: bool = False) -> None:
+def add_held(conn: sqlite3.Connection, typ: dict[str, Any], visible_sql: str, *, enforced: bool = False) -> None:
     """Each step of a pipeline view gets `held`, its open cards as held_count counts them (a snoozed or hidden card holds
-    its place too), and `unseen`. A viewer is counted only the cards it may read: a private card's place is not shown to
-    someone who cannot read it. The pipeline's rule editor, who sets its caps (`enforced`), is counted every card, the
-    count the cap is enforced against, and `unseen` says how many of them it cannot read; the board adds those to the
+    its place too), and `unseen`. A viewer is counted only the cards it may read, by `visible_sql`, the rule its task list
+    reads with (pipeline_rights.list_sql over Auth.task_sql): a private card, or one a bot it may not read works on, is not
+    shown to it, not even as a count. The pipeline's rule editor, who sets its caps (`enforced`), is counted every card,
+    the count the cap is enforced against, and `unseen` says how many of them it cannot read; the board adds those to the
     cards it has loaded (ui/app/task-pipelines.ts), so it never shows room a bot is refused. `unseen` is 0 for anyone
     else."""
-    from . import task_privacy as privacy
-
     cards = _rows(
         conn,
-        "SELECT id, step_id FROM tasks WHERE step_id IN (SELECT id FROM task_steps WHERE type_id = ?) "
-        "AND status NOT IN ('done', 'closed', 'declined')",
+        f"SELECT step_id, CASE WHEN ({visible_sql}) THEN 1 ELSE 0 END AS readable FROM tasks "
+        "WHERE step_id IN (SELECT id FROM task_steps WHERE type_id = ?) AND status NOT IN ('done', 'closed', 'declined')",
         (str(typ["id"]),),
     )
-    # task_privacy is untyped: its answers are a set of task ids and a bool.
-    private_tasks = cast("Callable[..., set[str]]", privacy.private_tasks)  # pyright: ignore[reportUnknownMemberType]
-    task_readable = cast("Callable[..., bool]", privacy.task_readable)  # pyright: ignore[reportUnknownMemberType]
-    private = private_tasks(conn, [str(card["id"]) for card in cards])
     held: dict[str, int] = {}
     unseen: dict[str, int] = {}
     for card in cards:
-        step_id, task_id = str(card["step_id"]), str(card["id"])
-        readable = task_id not in private or task_readable(conn, who, H.task(conn, task_id))
+        step_id, readable = str(card["step_id"]), bool(card["readable"])
         if readable or enforced:
             held[step_id] = held.get(step_id, 0) + 1
         if not readable and enforced:
@@ -1174,9 +1168,10 @@ def may_clear_stage(conn: sqlite3.Connection, actor: str, row: Row) -> None:
 def may_leave_ice(conn: sqlite3.Connection, actor: str, row: Row, step_id: str | None) -> None:
     """Every status write that takes a card out of On ice (D69) to `step_id` is a person's (hubdb._set_status): a close or a
     decline that lands in a closed stage, a done, a type change, not only a stage move (_room). A bot, or a write made for a
-    person (H.VIA), is refused (rule on_ice), so it cannot cancel a parked card and reopen it into Backlog. A write that
-    keeps the card On ice (a waiting) stands, and so do Tico's own flows (H.KEEPER), as may_clear_stage allows them."""
-    if actor == H.KEEPER or (H.is_human(actor) and not H.VIA.get()):
+    person (H.VIA), is refused (rule on_ice), so it cannot cancel a parked card and reopen it into Backlog. Tico's own
+    flows (H.KEEPER) are automation too, as a stage move's check (_room) holds them: an automation rule's close, an old
+    ask's expiry. A write that keeps the card On ice (a waiting) stands."""
+    if H.is_human(actor) and not H.VIA.get():
         return
     here = stage(conn, row.get("step_id"))
     if here is None or here["card_cap"] != 0 or step_id == here["id"]:
@@ -1405,11 +1400,16 @@ def advance(conn: sqlite3.Connection, actor: str, task_id: str) -> dict[str, Any
 def record_waiting(conn: sqlite3.Connection, actor: str, task_id: str, exc: hubdb.Refused) -> None:
     """A move that waited for room (a link's, or an automatic one: hubdb.try_auto_move) is recorded after its own write is
     undone, so the refusal outlives the rollback: the pipeline manager lists the ticket as waiting for room
-    (pipeline_manager). Nothing is raised."""
+    (pipeline_manager). A private card's refusal is recorded as private, as its own write's would have been (hubdb.refuse):
+    the task write that raised it has ended, so its privacy is carried here. Nothing is raised."""
+    private = bool(getattr(exc, "private", False)) or bool(H.task_private(conn, H.task(conn, task_id)))
+    token = H.PRIVATE_WRITE.set(H.PRIVATE_WRITE.get() or private)
     try:
         H.refuse(conn, actor, exc.rule, exc.detail, task=task_id, context=getattr(exc, "context", None))
     except H.Refused:
         pass
+    finally:
+        H.PRIVATE_WRITE.reset(token)
 
 
 def queue_ejected(conn: sqlite3.Connection, task_id: str, reason: str) -> bool:

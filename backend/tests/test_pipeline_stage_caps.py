@@ -686,3 +686,99 @@ def test_a_job_held_for_a_card_on_ice_is_an_intended_wait_for_health():
     assert "on_ice" in health.QUEUE_WAITS
     words, _ = health.HELD["on_ice"]
     assert "On ice" in words
+
+
+def test_a_stage_count_leaves_out_a_card_whose_bot_the_viewer_may_not_read(api):
+    """A stage's count follows the rule the task list reads with, not privacy alone: a card a bot works on whose activity
+    the viewer may not read is not counted for that viewer, as its task list leaves it out."""
+    typ, steps = make_line(api, "BotRead" + uuid.uuid4().hex[:8])
+    set_cap(api, steps["Doing"], 2)
+    with api.app.state.store.transaction() as c:
+        card = H.task_create(c, "bot:coo", "Coo's own card", "", "bot:coo", type=typ, step="Doing", lint=False)["id"]
+        c.execute("UPDATE tasks SET private=0 WHERE id=?", (card,))
+    current = get(api, "bots/coo/access", "ana-test")
+    everyone = current["see"]
+    r = api.put(
+        "/api/v2/bots/coo/access",
+        json={"see": everyone, "read": {"people": ["ana"]}, "write": everyone, "revision": current["revision"]},
+        headers=headers("ana-test"),
+    )
+    assert r.status_code == 200, r.text
+    assert api.get("/api/v2/tasks/" + card, headers=headers("cara-test")).status_code in (403, 404)  # the precondition
+
+    def doing(token):
+        found = get(api, f"task-types/{typ}", token)["type"]
+        listed = next(t for t in get(api, "task-types", token)["types"] if t["id"] == typ)
+        return {s["name"]: s["held"] for s in found["steps"]}["Doing"], {s["name"]: s["held"] for s in listed["steps"]}[
+            "Doing"
+        ]
+
+    assert doing("cara-test") == (0, 0)
+    assert doing("ana-test") == (1, 1)
+
+
+def test_tico_itself_cannot_close_a_card_out_of_on_ice_and_an_old_ask_on_ice_never_expires(api):
+    """Tico's own flows are automation too: an automation rule's close or an old ask's expiry does not take a card out of
+    On ice, and the ask sweep passes a parked card over instead of failing on it."""
+    from backend import ask_deadlines as AD
+
+    typ, steps = make_line(
+        api, "IceKeeper" + uuid.uuid4().hex[:8], [*ON_ICE_LINE, {"name": "Closed", "status": "closed"}]
+    )
+    set_cap(api, steps["On ice"], 0)
+    with api.app.state.store.transaction() as c:
+        card = H.task_create(c, ANA, "Parked ask", "", ANA, type=typ, step="On ice", lint=False)["id"]
+        old = H.shift(H.now(), days=-(AD.EXPIRE_DAYS + 5))
+        c.execute("UPDATE tasks SET created_at=?, updated_at=?, requester_id='bot:coo' WHERE id=?", (old, old, card))
+        c.execute("UPDATE history_events SET created_at=? WHERE subject_type='task' AND subject_id=?", (old, card))
+    with api.app.state.store.transaction() as c:
+        c.execute("SAVEPOINT keeper_close")
+        with pytest.raises(H.Refused) as refused:
+            H.task_close(c, H.KEEPER, card, "Closed by an automation", strict=False)
+        c.execute("ROLLBACK TO keeper_close")
+        c.execute("RELEASE keeper_close")
+    assert refused.value.rule == "on_ice"
+    with api.app.state.store.transaction() as c:
+        done = AD.sweep(c)
+        assert card not in done["closed"]
+        assert not c.execute("SELECT 1 FROM service_health WHERE service LIKE ?", ("%" + card,)).fetchone()
+    assert card_stage(api, card) == steps["On ice"]
+    with api.app.state.store.read() as c:
+        assert H.task(c, card)["status"] == "open"
+
+
+def test_an_automatic_move_of_a_private_card_refused_for_room_is_recorded_as_private(api):
+    """An automatic move (hubdb.try_auto_move) runs outside the private task write that redacts a refusal: the wait it
+    records for the manager still keeps only the stage, never the refusal's text."""
+    typ, steps = make_line(api, "PrivAuto" + uuid.uuid4().hex[:8])
+    set_cap(api, steps["Doing"], 1)
+    with api.app.state.store.transaction() as c:
+        H.task_create(c, ANA, "Already doing", "", ANA, type=typ, step="Doing", lint=False)
+        card = _private_card(c, typ, "Private automatic", ANA, "Backlog")
+        assert H.try_auto_move(c, "bot:coo", H.task(c, card), step=steps["Doing"]) is False
+    with api.app.state.store.read() as c:
+        assert X.waiting_room(c)[card]["stage_id"] == steps["Doing"]
+        refusal = c.execute("SELECT detail FROM refusals WHERE rule='stage_full' ORDER BY created_at DESC").fetchone()
+        recorded = H._json(refusal["detail"], {})
+        assert recorded["detail"] == "Private task write refused"
+        assert recorded["context"] == {"what": None, "stage": steps["Doing"]}
+        audit = c.execute(
+            "SELECT detail FROM events WHERE action='refused' AND target='stage_full' ORDER BY created_at DESC"
+        ).fetchone()
+        assert H._json(audit["detail"], {})["detail"] == "Private task write refused"
+
+
+def test_a_job_held_for_a_card_on_ice_is_never_an_aged_queue_refusal(api, monkeypatch):
+    """A queued job held for a card On ice waits on purpose: the 12-hour refusal watch (queue_refusals) never records it,
+    so Health raises no "needs attention" warning and Maintenance no finding for it."""
+    from backend import queue_refusals as QR
+    from backend import read_cache
+
+    bot = "coo"
+    monkeypatch.setattr(read_cache, "one", lambda c, sql, args: {"bot": bot, "runner_id": "r1", "display_name": "COO"})
+    held = {"why": "on_ice"}
+    monkeypatch.setattr(QR.E, "bot_claimable", lambda *a, **k: (held["why"], H.now(), None, "job-1"))
+    with api.app.state.store.read() as c:
+        assert QR.current(c, api.app.state.store.settings, bot) == {}
+        held["why"] = "bot_limit"  # the control: any other refusal is watched
+        assert QR.current(c, api.app.state.store.settings, bot)["reason"] == "bot_limit"

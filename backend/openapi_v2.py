@@ -2474,8 +2474,8 @@ SCHEMAS = {
             },
             "unseen": {
                 "type": "integer",
-                "description": "For the pipeline's rule editor, how many of the held cards it may not read (private ones); "
-                "0 for anyone else",
+                "description": "For the pipeline's rule editor, how many of the held cards it may not read (private ones, "
+                "or ones a bot it may not read works on); 0 for anyone else",
             },
             "flow": {
                 "type": "object",
