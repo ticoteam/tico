@@ -81,7 +81,7 @@ from . import models as M
 from .auth import LOCAL_SIGNIN_PATH, LOGOUT_PATH, Auth, Identity
 from .config import Settings
 from .observability import Observability, route as error_route
-from .execution import Execution, bot_repository, bump_bot_session_epoch, flag_cut
+from .execution import Execution, bot_repository, flag_cut, reset_bot_sessions
 from .onboarding import BOTOPS, Onboarding
 from .recruit import Recruiter
 from . import rooms
@@ -148,22 +148,6 @@ STABLE_PATH = re.compile(
 
 # Gateway image calls in flight per process (each holds a thread up to 130 s); more answer 429 with Retry-After.
 GATEWAY_IMAGE_SLOTS = 4
-
-
-def reset_bot_sessions(c, bot):
-    """Keep durable history while fencing local provider sessions for one bot."""
-    bump_bot_session_epoch(c, bot)
-    reset = 0
-    for conversation in c.execute("SELECT id,participants FROM conversations").fetchall():
-        if "bot:" + bot not in json.loads(conversation["participants"]):
-            continue
-        c.execute(
-            "INSERT INTO session_epochs VALUES(?,1,?) ON CONFLICT(conversation_id) DO UPDATE SET "
-            "epoch=epoch+1,updated_at=excluded.updated_at",
-            (conversation["id"], H.now()),
-        )
-        reset += 1
-    return reset
 
 
 def create_app(settings=None):
