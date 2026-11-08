@@ -3775,9 +3775,10 @@ def delete_problem(c, actor, row):
 
 def delete(c, principal, thread_id):
     """Delete a thread the viewer manages, when delete_problem allows it. It leaves every list at once and reads as not
-    found; its title is cleared. Refused with a plain reason (409) otherwise, and nothing is removed."""
+    found; its title is cleared, and what its messages still hold goes with it (`_clear_tree_words`). Refused with a plain
+    reason (409) otherwise, and nothing is removed."""
     actor, v, row = _require_thread(c, principal, thread_id)
-    if v is not None and not can_manage(c, v, row):
+    if v is None or not can_manage(c, v, row):
         raise Problem("forbidden", "Only the thread's owner deletes it", 403)
     problem = delete_problem(c, actor, row)
     if problem:
@@ -3788,9 +3789,36 @@ def delete(c, principal, thread_id):
         "WHERE id=? OR root_id=?",
         (now, now, now, row["id"], row["id"]),
     )
+    _clear_tree_words(c, row, actor)
     _event(c, actor, "thread.deleted", row["id"], {})
     _audit(c, actor, "thread:" + row["id"], {"deleted": False}, {"deleted": True})
     return {"deleted": row["id"]}
+
+
+def _clear_tree_words(c, row, actor):
+    """A deleted thread keeps no words, attachment references or files. For every message in its tree (the root and its
+    sub-threads), the older revisions' bodies are blanked (the message's own and the copies of its origin), its
+    attachment references go and only its origin stays, and its files go by the file delete path
+    (file_library.release_message_files). The tombstones and sequence numbers stay, as retention keeps them."""
+    from . import file_library  # lazy: the file library reads thread rows too
+
+    ids = [
+        r[0]
+        for r in c.execute(
+            "SELECT m.id FROM messages m JOIN conversations s ON s.id=m.conversation_id WHERE s.id=? OR s.root_id=?",
+            (row["id"], row["id"]),
+        )
+    ]
+    for message_id in ids:
+        message = H.message(c, message_id, include_deleted=True) or {}
+        origin = (message.get("refs") or {}).get("origin")
+        c.execute(
+            "UPDATE message_revisions SET body=NULL WHERE (message_id=? OR origin_id=?) AND body IS NOT NULL",
+            (message_id, message.get("origin_id") or message_id),
+        )
+        c.execute("UPDATE messages SET refs=? WHERE id=?", (H._dump({"origin": origin} if origin else {}), message_id))
+        file_library.release_message_files(c, actor, message_id)
+    return len(ids)
 
 
 # ----------------------------------------------------------------------------- C4: read state

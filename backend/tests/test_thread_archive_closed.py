@@ -3,6 +3,8 @@ task reopens or someone posts in it again (a close's own notice does not count);
 leaves both at once, comes back when unarchived, and only a manager archives. Fictional people only: ana (owner), ben
 and cara (humans)."""
 
+import json
+
 from backend import threads
 from backend.tests.slug_ids import bot_ids_are_their_slugs  # noqa: F401  (each bot's id is its slug)
 from backend.tests.test_api import api, headers  # noqa: F401  (the fixture and its helper)
@@ -260,6 +262,38 @@ def test_the_archived_view_fills_its_page_past_threads_the_reader_only_reads(api
     assert page.status_code == 200, page.text
     assert [t["id"] for t in page.json()["threads"]] == [mine["id"]]
     assert page.json()["next_cursor"] is None
+
+
+def test_a_thread_delete_removes_its_words_attachment_references_and_files(api):
+    thread = new_thread(api, title="Budget (to delete)", members=())
+    sent = api.post(
+        f"/api/v2/uploads/threads/{thread['id']}/messages",
+        data={"text": "Budget draft"},
+        files={"files": ("budget.txt", b"line items", "text/plain")},
+        headers=headers("ana-test"),
+    )
+    assert sent.status_code == 200, sent.text
+    message_id = sent.json()["message"]["id"]
+    edited = api.patch(f"/api/v2/messages/{message_id}", json={"text": "Budget final"}, headers=headers("ana-test"))
+    assert edited.status_code == 200, edited.text
+    with api.app.state.store.read() as c:
+        kept = c.execute(
+            "SELECT COUNT(*) FROM message_revisions WHERE message_id=? AND body IS NOT NULL", (message_id,)
+        ).fetchone()[0]
+    assert kept >= 1  # the earlier words are stored before the delete, so the check below means something
+    assert api.delete(f"/api/v2/messages/{message_id}", headers=headers("ana-test")).status_code == 200
+    deleted = delete_thread(api, thread["id"])
+    assert deleted.status_code == 200, deleted.text
+    with api.app.state.store.read() as c:
+        refs = json.loads(c.execute("SELECT refs FROM messages WHERE id=?", (message_id,)).fetchone()[0] or "{}")
+        assert "attachments" not in refs
+        assert c.execute("SELECT COUNT(*) FROM message_assets WHERE message_id=?", (message_id,)).fetchone()[0] == 0
+        words = c.execute(
+            "SELECT COUNT(*) FROM message_revisions WHERE message_id=? AND body IS NOT NULL", (message_id,)
+        ).fetchone()[0]
+        assert words == 0
+        tombstone = c.execute("SELECT body, deleted_at FROM messages WHERE id=?", (message_id,)).fetchone()
+        assert tombstone[0] == "" and tombstone[1] is not None
 
 
 def test_a_home_is_never_deleted(api):
