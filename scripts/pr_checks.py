@@ -852,6 +852,36 @@ FACTORY_TEMPLATES = ("templates/catalog/",)
 FACTORY_PINS = re.compile(r"backend/requirements[\w.-]*\.(txt|in)")
 
 
+# Data folders that one tool owns. A changed, added or deleted file under one of these folders runs exactly the tests
+# listed for it, and no other test. The generic data path would instead run every module that globs *.json on an
+# unknown folder, and those reach conftest: one baseline piece selected 930 Python tests. The gates do not depend on
+# this table. The static job in .github/workflows/pr-checks.yml runs scripts/lint.sh (ruff against its baseline) and
+# scripts/check_types.sh (basedpyright against its baseline) on every pull request that is not a draft, and on every
+# merge group. A draft skips the static job until it is marked ready. The table chooses only the tests. No ui/ folder
+# has an owner yet, so none is listed.
+OWNED_DATA = {
+    "baselines/": (
+        "scripts/tests/test_lint_baseline.py",  # scripts/lint_baseline.py: baselines/ruff
+        "scripts/tests/test_pyright_baseline.py",  # scripts/pyright_baseline.py and check_pyright_ratchet.py
+        "scripts/tests/test_baseline_files.py",  # scripts/baseline_files.py: the folders the two scripts share
+    ),
+}
+
+
+def owned_data(name):
+    """(folder, owning tests) for a file under an OWNED_DATA folder, else None."""
+    for folder, tests in OWNED_DATA.items():
+        if name.startswith(folder):
+            return folder, tests
+    return None
+
+
+def owned_reason(owned):
+    """The reason line for the changed files that OWNED_DATA covers."""
+    folders = sorted({owned_data(name)[0] for name in owned})
+    return f"owned data: {', '.join(folders)} runs its owners' tests"
+
+
 def unread(name):
     """No test or script reads screenshots, retired designs or the top-level pages other than CHANGELOG.md."""
     return name.startswith(("docs/images/", "docs/history/")) or (
@@ -957,6 +987,7 @@ def selection(changed, event="pull_request", root=ROOT, graph=None, base=None, a
     script (release validation runs both). Main and scheduled runs keep the full suite (python None). A rule that departs
     from the measured dependency map says so in `uncertain`, and `reason` names the rules that applied:
 
+    0. A file under an OWNED_DATA folder runs the tests listed for that folder, and no other test.
     1. A file gone from the tree (a deletion, or the old side of a rename) runs the tests and browser scripts that name,
        import or read it directly. Data that code reads (docs, CHANGELOG.md, GitHub files) runs the tests that read it.
        A gone file that code other than a check names or reads adds the smoke set.
@@ -1009,7 +1040,12 @@ def selection(changed, event="pull_request", root=ROOT, graph=None, base=None, a
         uncertain.append("empty diff: nothing to map")
         return plan(*smoke(root), reason="empty diff: smoke set")
     names = [n for n in changed if not unread(n)]
+    owned = [n for n in names if owned_data(n)]  # OWNED_DATA first: these never reach the generic data path
+    owned_tests = {test for n in owned for test in owned_data(n)[1]}
+    names = [n for n in names if n not in owned]
     if not names:
+        if owned:
+            return plan(owned_tests, reason=owned_reason(owned))
         return plan(reason="documentation that no test or script reads")
     graph = graph or DependencyMap(root)
     added = set(names) if added is None else set(added)
@@ -1120,6 +1156,9 @@ def selection(changed, event="pull_request", root=ROOT, graph=None, base=None, a
             python |= set(smoke_tests)
         if smoke_browser:
             browser |= set(smoke_scripts)
+    if owned:
+        python |= owned_tests
+        notes.append(owned_reason(owned))
     if any(n in CI_INPUTS for n in names) and not browser:
         browser.add(SMOKE_SCRIPT)
     caddy = any(n.startswith(CADDY_INPUTS) for n in names) or bool(touched & set(CADDY_ROOTS)) or PR_WORKFLOW in names

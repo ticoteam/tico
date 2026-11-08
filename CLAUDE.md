@@ -102,6 +102,7 @@ flight file, not the database.
   `YYYYMMDDHHMMSS_name.sql|py`, UTC. Keep existing `NNNN_` files and applied checksums unchanged. Each migration
   stands alone and must not depend on another unmerged migration's schema; pending files run even below applied ones.
 - Format the Python files you change with `uvx ruff@0.15.9 format <files>` before committing; `scripts/lint.sh` fails on unformatted code. Branches older than the format commit: `scripts/format_rebase.sh`.
+- The Python lint and type baselines are per source file: `baselines/ruff/<path>.json` and `baselines/pyright/<path>.json`. After fixing findings, run `python3 scripts/lint_baseline.py --write` (types: `scripts/check_types.sh --writebaseline`). Never commit `ruff-baseline.toml` or `.basedpyright/baseline.json`: they are generated and git-ignored. A bare `uvx ruff@0.15.9 check` reads `ruff.toml` alone and reports every finding, baselined or not; `scripts/lint.sh` is the gate that counts them against the baseline (`ruff-baseline.toml` extends `ruff.toml`, never the other way round).
 - Keep real team names, human names, domains, buckets and credentials out of the repository. Examples use
   the fictional team Acme (`acme.example`).
 - The UI loads nothing from the network: vendored libraries live in `ui/vendor/` with their licenses. Write a new

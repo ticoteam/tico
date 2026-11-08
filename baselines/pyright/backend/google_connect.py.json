@@ -1,0 +1,14 @@
+{
+    "files": {
+        "./backend/google_connect.py": [
+            {
+                "code": "reportOptionalSubscript",
+                "range": {
+                    "startColumn": 37,
+                    "endColumn": 43,
+                    "lineCount": 1
+                }
+            }
+        ]
+    }
+}
