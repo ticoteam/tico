@@ -1752,7 +1752,7 @@ def _part_github(api, runner, monkeypatch, hq=None, comments=None, clock=None):
 
     def view(c, who, settings, auth_, github, config):
         seen["github"] = github
-        return {"checks": [health._github(c, github)]}
+        return {"checks": [health._github(c, github, settings)]}
 
     monkeypatch.setattr(health, "view", view)
     run(api)

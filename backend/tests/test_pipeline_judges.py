@@ -22,7 +22,7 @@ from backend.config import Settings
 from backend.store import Store
 from clients import judge as J
 
-from .test_pipeline_foundation import ANA, boot, hub, step_id
+from backend.tests.helpers.pipeline_foundation import ANA, boot, hub, step_id
 
 FIXTURES = Path(__file__).parent / "fixtures"
 BEN = "human:ben"

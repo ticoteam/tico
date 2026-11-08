@@ -750,3 +750,17 @@ def test_a_refused_workflows_write_token_falls_back_and_keeps_the_grants_actions
     assert one['workflows_withheld']['repositories'] == ['Acme/product'] and 'workflow_edits_withheld' not in one
     assert write_tokens(one) == {'Acme/product': ('workflows',)}
     assert not api.app_state.github_app.raise_refused(github_app.RAISES[1])
+
+
+def test_teammates_read_whether_github_is_connected_and_installed(api, gh):
+    """The bot and Settings pages read GET /v2/repositories, which any teammate may read, so it carries the connection
+    state that GET /v2/github/app (owner only) would otherwise keep from them."""
+
+    def team():
+        return api.get('/api/v2/repositories', headers=auth('person-test')).json()
+
+    assert not team()['github_connected'] and not team()['github_installed']
+    connect(api)
+    assert team()['github_connected'] and not team()['github_installed']
+    assert api.get('/api/v2/github/app/installed', headers=auth()).status_code == 302
+    assert team()['github_connected'] and team()['github_installed']

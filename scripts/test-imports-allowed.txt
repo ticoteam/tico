@@ -1,0 +1,9 @@
+# Imports of a test module that stay on purpose (scripts/check_test_imports.py): `importer -> module`, `*` for any
+# importer. Anything else imports from the helpers/ package beside the tests instead.
+
+# The api fixture: the next change moves it to backend/tests/helpers/api_app.py and narrows this line.
+* -> backend.tests.test_api
+
+# The old-runner skew tests re-run these tests against an older runner, so they import the tests themselves.
+runner_support/tests/test_old_runner_skew.py -> runner_support.tests.test_threads_e2e_turns
+runner_support/tests/test_old_runner_skew.py -> runner_support.tests.test_conformance
