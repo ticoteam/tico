@@ -1399,9 +1399,11 @@ def queue_ejected(conn: sqlite3.Connection, task_id: str, reason: str) -> bool:
     conn.execute("SAVEPOINT queue_ejected")
     try:
         H.task_update(conn, H.KEEPER, task_id, step=before["id"])
-    except H.Refused:  # the stage it goes back to is full, or the card is On ice (_room): it stays, and says so
+    except H.Refused as exc:  # the stage it goes back to is full, or the card is On ice (_room): it stays, and says so
         conn.execute("ROLLBACK TO queue_ejected")
         conn.execute("RELEASE queue_ejected")
+        if exc.rule == "stage_full":  # a wait for room: recorded after the undo, so the manager lists it (record_waiting)
+            record_waiting(conn, H.KEEPER, task_id, exc)
         return False
     conn.execute("RELEASE queue_ejected")
     H._task_event(  # pyright: ignore[reportPrivateUsage]
