@@ -9,7 +9,7 @@ gated it: its merge queue group's (pr-checks.yml on the merge commit) and its pu
 whose plans all left the test out is one the selector skipped it for; one with no plan to read is listed as unknown.
 The run summary lists both, and the issue ISSUE_TITLE gets the test, the commit range and those pull requests (a new
 issue, or a comment on the open one). Nothing is reverted. Each run's record (its commit, failures and passes) is the
-next run's previous one.
+next run's previous one, written only once the run has reported.
 """
 
 import argparse
@@ -75,11 +75,13 @@ def file_of(test):
 
 
 def included(plan, test):
-    """Whether a pr-checks plan ran this test: its file was selected (python None: the full suite)."""
+    """Whether a pr-checks plan ran this test: its file was selected (python None: the full suite), or a job of the
+    plan runs it (the contracts and conformance jobs run slow tests the default list leaves out)."""
     path = file_of(test)
     if path.startswith("ui/tests/") and path.endswith(".cjs"):
         return plan.get("browser") is None or Path(path).stem in plan["browser"]
-    return plan.get("python") is None or path in plan["python"]
+    jobs = plan.get("matrix", {}).get("include", [])
+    return plan.get("python") is None or path in plan["python"] or any(path in job.get("files", ()) for job in jobs)
 
 
 def merged_prs(log):
@@ -261,7 +263,6 @@ def report(plan_path, results, record_path, gh, env, git_log):
     server, repo = env.get("GITHUB_SERVER_URL", "https://github.com"), env["GITHUB_REPOSITORY"]
     run_url = f"{server}/{repo}/actions/runs/{run_id}"
     failed, passed, missing = outcomes(plan, results)
-    Path(record_path).write_text(json.dumps({"sha": head, "failed": sorted(failed), "passed": sorted(passed)}) + "\n")
     previous = gh.previous(run_id)
     new, found = set(), {}
     if previous is not None:
@@ -271,6 +272,9 @@ def report(plan_path, results, record_path, gh, env, git_log):
     text = report_text(head, previous, failed, new, found, missing, server, repo, run_url)
     if new:
         text += f"\nIssue: {gh.file_issue(issue_text(head, previous, new, found, server, repo, run_url))}\n"
+    # The record is the next run's baseline only once this run has reported: after a failed lookup or issue the next
+    # run compares with the older record again, so a new failure is not lost.
+    Path(record_path).write_text(json.dumps({"sha": head, "failed": sorted(failed), "passed": sorted(passed)}) + "\n")
     return text
 
 

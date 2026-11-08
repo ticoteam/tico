@@ -115,6 +115,9 @@ def test_plan_keeps_full_collection_on_main_and_conftest_and_never_runs_bare_pyt
     groups = [j for j in main["matrix"]["include"] if j["suite"].startswith("python-")]
     # 48 measured seconds fit one VM; the time target, not a fixed count, sets the number of groups.
     assert len(groups) == 1 and sorted(sum([j["files"] for j in groups], [])) == sorted(files)
+    # The full selection runs every browser script (the scheduled full validation), not the CORE set.
+    browser = sum([j["files"] for j in main["matrix"]["include"] if j["suite"].startswith("browser-")], [])
+    assert sorted(browser) == sorted(checks.browser_scripts(["--all"])) != sorted(checks.browser_scripts([]))
     monkeypatch.setattr(checks, "changed_files", lambda base, head="HEAD", only=None: [] if only else ["conftest.py"])
     # A root conftest runs the smoke set and the tests that name it, never all of the tests below it.
     conftest_python = checks.prepare("pull_request", "base", target)["python"]

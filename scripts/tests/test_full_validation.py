@@ -4,6 +4,8 @@ in between whose plans left it out, in the summary and on one issue; nothing els
 import json
 from pathlib import Path
 
+import pytest
+
 from scripts import full_validation as fv
 
 HEAD, PREV = "b" * 40, "a" * 40
@@ -140,3 +142,25 @@ def _plan(tmp_path):
     path = tmp_path / "ci-plan.json"
     path.write_text(json.dumps(PLAN))
     return Path(path)
+
+
+def test_a_slow_test_a_plans_job_runs_counts_as_included():
+    plan = {
+        "python": ["backend/tests/test_a.py"],
+        "matrix": {"include": [{"suite": "contracts", "files": ["e2e/tests/test_contract.py"]}]},
+    }
+    assert fv.included(plan, "e2e/tests/test_contract.py::test_x")
+    assert not fv.included(plan, "e2e/tests/test_roles.py::test_x")
+
+
+def test_a_failed_report_leaves_no_record_so_the_next_run_compares_with_the_older_one(tmp_path):
+    previous = {"sha": PREV, "passed": ["backend/tests/test_a.py::test_broke"]}
+
+    class Down(FakeGitHub):
+        def file_issue(self, body):
+            raise RuntimeError("GitHub API error")
+
+    record = tmp_path / "record.json"
+    with pytest.raises(RuntimeError):
+        fv.report(_plan(tmp_path), results(tmp_path), record, Down(previous, {}), ENV, lambda b, h: "")
+    assert not record.exists()

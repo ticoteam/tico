@@ -1440,7 +1440,8 @@ def prepare(event, base, output, timings_path=None, head="HEAD"):
     factory = factory_plan(event, changed)
     browser = None
     if picked["browser"] != []:
-        scripts = browser_scripts(picked["browser"] or [])
+        # None is the full selection (a scheduled full validation): every script, not CORE.
+        scripts = browser_scripts(["--all"] if picked["browser"] is None else picked["browser"])
         browser_times = {name: timings.get(f"ui/tests/{name}.cjs") for name in scripts}
         browser = (Counter(dict.fromkeys(scripts, 1)), browser_times)
     fixed = int(bool(picked["conformance"])) + int(bool(picked["contracts"]))
