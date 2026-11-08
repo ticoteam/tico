@@ -4,7 +4,7 @@ and the Library text a receipt is read from. Every write is an explicit column l
 import json
 import sqlite3
 from collections.abc import Sequence
-from typing import Any
+from typing import Any, cast
 
 Row = dict[str, Any]
 OPEN = ("unmatched", "suggested", "rejected")  # receipts a match may still be found for
@@ -178,7 +178,9 @@ def library_file_ok(c: sqlite3.Connection, file_id: str) -> bool:
 def rejected(row: Row) -> list[str]:
     """The feed rows a receipt was refused for (a JSON list on the row)."""
     try:
-        got = json.loads(str(row.get("rejected_feed_ids") or "[]"))
+        got: object = json.loads(str(row.get("rejected_feed_ids") or "[]"))
     except (TypeError, ValueError):
         return []
-    return [str(x) for x in got] if isinstance(got, list) else []
+    if not isinstance(got, list):
+        return []
+    return [str(x) for x in cast("list[object]", got)]

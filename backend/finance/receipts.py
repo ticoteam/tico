@@ -466,7 +466,9 @@ def filed(ctx: Ctx, who: str, kind: str, subject: str, file_ids: Sequence[str]) 
             RS.insert(c, _new_row(book, fid, who, ctx.at, {**_read_fields(c, fid), **filing}))
         else:
             RS.update(c, str(row["id"]), {**_cleared(), **filing, "updated_at": ctx.at})
-    targets = list(dict.fromkeys([*freed, *([subject] if kind == "feed" and subject else [])]))
+    targets: list[str] = list(dict.fromkeys(freed))
+    if kind == "feed" and subject and subject not in targets:
+        targets.append(subject)
     for feed_id in targets:
         _around(ctx, feed_id)
     fresh = [r for r in (RS.by_file(c, book, fid) for fid in file_ids) if r is not None]
