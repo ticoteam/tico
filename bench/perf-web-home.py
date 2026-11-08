@@ -22,7 +22,6 @@ if __name__ == "__main__":
 
 from backend import bot_settings as BS, threads
 from backend.store import H, Problem
-from backend.tests.helpers import api as test_api
 from backend.tests import test_api as api_fixture  # the api fixture itself
 from backend.tests.helpers.api import headers
 

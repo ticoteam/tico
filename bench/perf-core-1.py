@@ -18,7 +18,6 @@ import uuid
 
 from backend import assigned_start as A, auto_tasks, bot_settings as BS, provenance_clock, queue_refusals as Q
 from backend.store import H, encode
-from backend.tests.helpers import api as test_api
 from backend.tests import test_api as api_fixture  # the api fixture itself
 
 api = api_fixture.api  # the fixture, bound so that tests can take it

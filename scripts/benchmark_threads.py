@@ -46,7 +46,6 @@ import conftest  # noqa: F401  isolates the registry and AWS credentials, as the
 import uvicorn
 
 from backend import hubdb as H
-from backend.tests.helpers import api as test_api
 from backend.tests import test_api as api_fixture  # the api fixture itself
 
 WRITE_P95_MS, EVENT_P95_S, BURST_P95_S = 150, 1.0, 2.0

@@ -18,7 +18,6 @@ import time
 
 from backend import bot_settings as BS
 from backend.store import H
-from backend.tests.helpers import api as test_api
 from backend.tests import test_api as api_fixture  # the api fixture itself
 from backend.tests.helpers.api import assign, headers, post, ready, runner
 
