@@ -21,7 +21,9 @@ from . import company_server, hook_relay
 from .finance import actions as finance
 from .finance import books_link
 from .finance import brief as finance_brief_mod
+from .finance import context as finance_context
 from .finance import reads as finance_reads
+from .finance import statement_upload
 from .models import ID, Contract
 from .store import Problem
 
@@ -104,6 +106,15 @@ class FinanceActionRequest(Contract):
     kind: str = Field(min_length=1, max_length=80)
     payload: dict[str, Any] = Field(default_factory=dict)
     dry_run: bool = False
+
+
+class FinanceStatementPreviewRequest(Contract):
+    """A bank or card statement file to review before it posts: CSV, OFX or QFX, base64 encoded (4 MB at most), for a
+    money account Tico cannot connect. Nothing is written but a short-lived preview token."""
+
+    money_account_id: str = Field(min_length=1, max_length=80)
+    file: str = Field(min_length=1, max_length=statement_upload.B64_MAX)
+    file_name: str | None = Field(None, max_length=200)
 
 
 # The payload field of each action kind that names Library files to attach (backend/finance/documents.py).
@@ -451,6 +462,23 @@ def install(app, store, auth, mutate):
         """Bank and card statements for the money accounts the caller sees."""
         actor = as_viewer(request, view_as)
         return read(lambda c: finance_reads.statements(c, actor, money_account_id=money_account_id, limit=limit))
+
+    @app.post("/api/v2/finance/statements/preview")
+    def finance_statement_preview(request: Request, body: FinanceStatementPreviewRequest):
+        """Review a bank or card statement file before it posts: each row New or Already in Tico, its vendor and the rule
+        that would attribute it, and the tie-out against the statement's balances. Writes nothing but a short-lived token
+        that a post presents to show it posts what was shown."""
+        who = viewer(request)
+        audit_private_read(request, who.actor)
+        payload: dict[str, Any] = {"money_account_id": body.money_account_id, "file": body.file}
+        if body.file_name:
+            payload["file_name"] = body.file_name
+        try:
+            with store.transaction() as c:
+                review = statement_upload.preview(finance_context.load(c), who.actor, payload)
+        except finance.FinanceError as e:
+            raise problem(e) from None
+        return audited(review)
 
     @app.get("/api/v2/finance/rules")
     def finance_rules(request: Request, external_rule_id: str | None = Query(None, max_length=120)):

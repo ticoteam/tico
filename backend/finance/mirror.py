@@ -73,6 +73,9 @@ REFUSED = (
     "project_update",
     # a mirrored book's history is the provider's: a sheet of raw totals posts nothing, dry run included
     "import_raw_totals",
+    # a statement file is a bank or card's own rows: the provider's books hold them (statement_upload.py)
+    "statement_post",
+    "statement_undo",
 )
 
 Record = (

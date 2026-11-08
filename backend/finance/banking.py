@@ -680,6 +680,25 @@ def ingest(ctx: Ctx, connection_id: str, t: F.FeedTxn, by: str = SYSTEM) -> str 
     return fid
 
 
+def settle_taken_in(ctx: Ctx, fid: str, money: Any, t: F.FeedTxn) -> None:
+    """A settled row a statement upload put in: settled as ingest settles a row first seen (statement_upload.py).
+    On a connected account whose backfill is done, its opening moves for it (_before_opening)."""
+    _settle(ctx, SK.get(ctx.c, "fin_feed_txns", fid), money, None, t)
+    if ctx.book.mode != "mirror" and _backfilled(ctx, money):
+        if str(SK.get(ctx.c, "fin_feed_txns", fid)["status"]) not in ("covered", "ignored"):
+            _before_opening(ctx, money, t)
+
+
+def unsettle_uploaded(ctx: Ctx, row: Any, memo: str) -> None:
+    """A statement upload's row leaving the books (statement_upload.statement_undo): its hold is released and its entry
+    reversed, as undo does for a canceled row, with `memo` on the reversal."""
+    if row["hold_id"]:
+        budgeting.release(ctx, str(row["hold_id"]))
+        SB.void_settled(ctx.c, str(row["hold_id"]), ctx.at)
+    if row["entry_id"]:
+        unpost_row(ctx, row, memo)
+
+
 def _txn_of(row: Any) -> F.FeedTxn:
     """A stored feed row as the provider transaction it came from, to settle it again."""
     return F.FeedTxn(

@@ -588,6 +588,9 @@ ADDED = (
     # set on an alias a vendor_merge added: '' for a name nobody had, the contact id it moved from otherwise (the
     # contact's id itself for the alias that routes that contact's lines to the vendor). NULL for every other alias.
     ("fin_vendor_aliases", "merged_from", "TEXT"),
+    # the statement upload a row came in by (backend/finance/statement_upload.py); NULL for every synced row.
+    # Migration 20261108120000 adds it to a table that exists then, and the tables it makes live in that migration.
+    ("fin_feed_txns", "upload_id", "TEXT"),
 )
 
 

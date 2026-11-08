@@ -112,6 +112,9 @@ ALL = (
     # vendor identity: one vendor per merchant (backend/finance/vendors.py)
     "vendor_merge",
     "vendor_unmerge",
+    # statement uploads: a CSV or OFX statement for a bank or card account (backend/finance/statement_upload.py)
+    "statement_post",
+    "statement_undo",
 )
 # The kinds not yet carried out: listed (act help says so) and refused with not_available. Every kind is live today.
 NOT_LIVE: frozenset[str] = frozenset()
@@ -197,6 +200,8 @@ NEEDS: dict[str, str | tuple[str, ...]] = {
     "campaign_owner_undo": R.ATTRIBUTION,
     "vendor_merge": R.BOOK,
     "vendor_unmerge": R.BOOK,
+    "statement_post": R.BOOK,
+    "statement_undo": R.BOOK,
 }
 # Kinds whose authority is a who-may rule rather than a right: grants, privacy, rights.
 ADMIN_ONLY = (
@@ -827,6 +832,14 @@ SHAPES: dict[str, tuple[Field, ...]] = {
     "estimate_accept": (("estimate_id", "str", "a sent estimate is accepted"),),
     "estimate_decline": (("estimate_id", "str", "a sent estimate is declined"),),
     "estimate_convert": (("estimate_id", "str", "an accepted estimate becomes one invoice draft, once"),),
+    "statement_post": (
+        ("money_account_id", "str", ""),
+        ("file", "str", "the statement file, base64: CSV, OFX or QFX, 4 MB at most"),
+        ("file_name?", "str", "what the file was called, for the record"),
+        ("preview_token?", "str", "from the preview of this file: post only what it showed"),
+        ("skip?", "list[str]", "row external ids to leave out of the post"),
+    ),
+    "statement_undo": (("upload_id", "str", "a statement upload with no reconciled row"),),
 }
 WORDS: dict[str, str] = {
     "journal": "Post a balanced entry, or reverse one.",
@@ -923,6 +936,8 @@ WORDS: dict[str, str] = {
     "estimate_accept": "Record that the customer accepted an estimate.",
     "estimate_decline": "Record that the customer declined an estimate.",
     "estimate_convert": "Make an accepted estimate one invoice draft (once).",
+    "statement_post": "Post a bank or card statement file: its new rows enter the feed and post by the usual rules.",
+    "statement_undo": "Undo a statement upload: its rows leave the feed, unless a reconciliation has cleared one.",
 }
 
 
