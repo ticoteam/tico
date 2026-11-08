@@ -282,7 +282,8 @@ def edit(conn: "sqlite3.Connection", actor: str, requirement_id: str, body: dict
     pipeline_id, _ = _stage(conn, current["pipeline_stage_id"])
     _may_edit(conn, actor, pipeline_id)
     definition = check_definition(body)
-    kept = (current.get("needs") or {}).get("pipeline")
+    stored_needs: dict[str, Any] = current.get("needs") or {}
+    kept = str(stored_needs.get("pipeline") or "")
     needs = definition["needs"]
     if kept and definition["kind"] == "run" and needs.get("source") == "subtasks" and "pipeline" not in needs:
         # An editor that does not show the named pipeline keeps it: dropping it would count every spawned pipeline again.

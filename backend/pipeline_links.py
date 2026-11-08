@@ -372,8 +372,9 @@ def _pipeline_tasks(conn: sqlite3.Connection, row: Row) -> list[str] | None:
     leads to its task attachments and to every file version holding it; a file to its task, its `task:` scope, and its versions'
     blobs and runs; a run to the task it ran on; a task ends the walk. A task with no pipeline, or no task at all, adds nothing.
 
-    The budget counts every distinct node, tasks included, and each lookup reads at most the budget left plus one row, so a
-    blob shared by thousands of tasks costs a handful of statements and is skipped, not walked (it runs under the writer)."""
+    The budget counts every distinct node, tasks included. Each lookup reads distinct values, at most the budget left plus
+    one: a lookup that reaches that cap may have more unread, so the walk is unsure and the item is skipped. A blob shared by
+    thousands of tasks costs a handful of statements and is skipped, not walked (it runs under the writer)."""
     tasks: set[str] = set()
     queue: list[tuple[str, str]] = []
     seen: set[tuple[str, str]] = set()
@@ -392,8 +393,12 @@ def _pipeline_tasks(conn: sqlite3.Connection, row: Row) -> list[str] | None:
             queue.append(node)
         return True
 
-    def room() -> int:
-        return PROVENANCE_LIMIT - len(seen) + 1
+    def bounded(sql: str, ident: str) -> list[Row] | None:
+        """The distinct rows of a lookup, read up to the budget left plus one; None when it reached that cap, since the
+        rows it did not read could hold provenance the walk never sees (unsure, so the item is skipped)."""
+        cap = PROVENANCE_LIMIT - len(seen) + 1
+        found = _rows(conn, f"{sql} LIMIT ?", (ident, cap))
+        return None if len(found) >= cap else found
 
     if row.get("blob_id") and not reach("blob", str(row["blob_id"])):
         return None
@@ -403,18 +408,12 @@ def _pipeline_tasks(conn: sqlite3.Connection, row: Row) -> list[str] | None:
         kind, ident = queue.pop()
         found: list[tuple[str, str]] = []
         if kind == "blob":
-            found += [
-                ("task", str(r["task_id"]))
-                for r in _rows(
-                    conn, "SELECT DISTINCT task_id FROM task_assets WHERE blob_id = ? LIMIT ?", (ident, room())
-                )
-            ]
-            found += [
-                ("file", str(r["file_id"]))
-                for r in _rows(
-                    conn, "SELECT DISTINCT file_id FROM bot_file_versions WHERE blob_id = ? LIMIT ?", (ident, room())
-                )
-            ]
+            assets = bounded("SELECT DISTINCT task_id FROM task_assets WHERE blob_id = ?", ident)
+            holders = bounded("SELECT DISTINCT file_id FROM bot_file_versions WHERE blob_id = ?", ident)
+            if assets is None or holders is None:
+                return None
+            found += [("task", str(r["task_id"])) for r in assets]
+            found += [("file", str(r["file_id"])) for r in holders]
         elif kind == "file":
             file = _one(conn, "SELECT task_id, scope FROM bot_files WHERE id = ?", (ident,))
             if file is None:
@@ -423,13 +422,16 @@ def _pipeline_tasks(conn: sqlite3.Connection, row: Row) -> list[str] | None:
                 found.append(("task", str(file["task_id"])))
             if str(file["scope"] or "").startswith("task:"):
                 found.append(("task", str(file["scope"])[5:]))
-            for version in _rows(
-                conn, "SELECT blob_id, attempt_id FROM bot_file_versions WHERE file_id = ? LIMIT ?", (ident, room())
-            ):
-                if version["blob_id"]:
-                    found.append(("blob", str(version["blob_id"])))
-                if version["attempt_id"]:
-                    found.append(("attempt", str(version["attempt_id"])))
+            blobs = bounded(
+                "SELECT DISTINCT blob_id FROM bot_file_versions WHERE file_id = ? AND blob_id IS NOT NULL", ident
+            )
+            runs = bounded(
+                "SELECT DISTINCT attempt_id FROM bot_file_versions WHERE file_id = ? AND attempt_id IS NOT NULL", ident
+            )
+            if blobs is None or runs is None:
+                return None
+            found += [("blob", str(r["blob_id"])) for r in blobs]
+            found += [("attempt", str(r["attempt_id"])) for r in runs]
         elif kind == "attempt":
             run = _one(conn, "SELECT task_id FROM attempts WHERE id = ?", (ident,))
             if run is None:

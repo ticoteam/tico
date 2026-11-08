@@ -4780,7 +4780,7 @@ def _set_status(
         if row is not None
         else None
     )
-    if held_to and held_to != row.get("step_id"):
+    if row is not None and held_to and held_to != row.get("step_id"):
         pipeline_engine.check_forward(conn, actor, row, type_id, held_to)
     elif row is not None and pipeline_engine.is_completion(row, effective):
         # Marked done where it stands (already in its Done stage, or a pipeline with none): held all the same.
