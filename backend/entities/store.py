@@ -933,12 +933,41 @@ def walk(c: sqlite3.Connection, starts: Sequence[str], depth: int = WALK_DEPTH) 
     return reached, False
 
 
+NAME_CONTACT = "name:"  # a contact that is only a name (a letter's addressee), as `contact_entities` reads it
+PHONE_CONTACT = re.compile(r"\+[0-9]{7,15}")  # an E.164 number once its formatting is stripped
+PHONE_SQL = "replace(replace(replace(replace(replace(normalized_value, ' ', ''), '-', ''), '(', ''), ')', ''), '.', '')"
+
+
 def contact_entities(c: sqlite3.Connection, addresses: Sequence[str]) -> list[str]:
-    """The entities an address points at: a person or organization that has it as an email identifier, and the
-    organization whose primary domain is its domain. Names are never matched: two people can share one."""
+    """The entities a contact points at. An email address: a person or organization that has it as an email identifier,
+    and the organization whose primary domain is its domain. A phone number (+ and digits, formatting ignored): one
+    that has it as a phone identifier. `name:<name>` (a letter's addressee, which has no other identity): every entity
+    with that name, so a name two entities share reaches both and a rule on either holds the send. Otherwise names are
+    never matched."""
     ids: list[str] = []
     for address in addresses:
         text = address.strip().lower()
+        if text.startswith(NAME_CONTACT):
+            name = text[len(NAME_CONTACT) :].strip()
+            if name:
+                ids += [
+                    str(r["entity_id"])
+                    for r in _rows(
+                        c,
+                        "SELECT entity_id FROM entity_identifiers WHERE kind = 'name' AND normalized_value = ?",
+                        (name,),
+                    )
+                ]
+            continue
+        phone = _normal_identifier("phone", text)
+        if "@" not in text and PHONE_CONTACT.fullmatch(phone):
+            ids += [
+                str(r["entity_id"])
+                for r in _rows(
+                    c, f"SELECT entity_id FROM entity_identifiers WHERE kind = 'phone' AND {PHONE_SQL} = ?", (phone,)
+                )
+            ]
+            continue
         if not text:
             continue
         ids += [
