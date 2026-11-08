@@ -51,8 +51,8 @@ function taskPipelineDevType() {
   const engineering = TASK_TYPES.filter(type => type.role === 'engineering');
   return engineering.find(dev) || engineering[0] || TASK_TYPES.find(dev);
 }
-// The types the scope menu lists (task-list.js tasksScopeMenu): General, the product pipeline and Engineering (or Dev
-// tickets) by their role, then the team's other types. Each is listed under its current name.
+// The types the scope menu lists (task-list.js tasksScopeMenu): General, the product and engineering pipelines by
+// their role, then the team's other types. Each goes by its own current name.
 function taskPipelineScopeTypes() {
   const dev = taskPipelineDevType();
   const product = pipelineProductType();
@@ -90,8 +90,8 @@ function taskPipelineBoard(items, state, head = '') {
   const finished = steps.slice(end), working = steps.slice(0, end).filter(step => !BOARD_HIDDEN.has(step.status));
   let lead = 0;
   while (lead < working.length && working[lead].status === 'open') lead++;
-  // A pipeline with no requirements keeps the board as it always was; the one-stage phone layout is for pipelines with them.
-  const phone = pipelinePhone() && !!type.has_requirements;
+  // A phone shows every pipeline one stage at a time, with a chip per stage, requirements or not.
+  const phone = pipelinePhone();
   const backlog = working.slice(0, lead), folds = taskBoardFolds(state, type, backlog.length);
   if (phone) folds.backlog = false;               // a phone shows one stage at a time: every backlog stage is a chip
   const inStep = step => items.filter(item => item.task.step_id === step.id);
