@@ -72,7 +72,7 @@ from datetime import datetime, timedelta, timezone
 from urllib.parse import urlsplit
 from pathlib import Path
 from collections.abc import Iterable
-from typing import Any
+from typing import Any, NoReturn
 
 from .batch_work import isolated
 from . import delivery
@@ -1541,60 +1541,6 @@ def _refuse_foreign(conn):
         )
 
 
-def ensure_market_reads(conn):
-    """Additive indexes and exact resolution keys, shared by local and cloud boot."""
-    conn.execute("SAVEPOINT market_read_indexes")
-    try:
-        for name, spec in (
-            ("market_entities_name", "market_entities(name, id)"),
-            ("market_entities_status_name", "market_entities(status, name, id)"),
-            ("market_entities_type_name", "market_entities(type, name, id)"),
-            ("market_edges_rel_pair", "market_edges(rel, src, dst)"),
-        ):
-            conn.execute(f"CREATE INDEX IF NOT EXISTS {name} ON {spec}")
-        exists = conn.execute("SELECT 1 FROM sqlite_master WHERE name='market_entity_keys'").fetchone()
-        conn.execute(
-            "CREATE TABLE IF NOT EXISTS market_entity_keys (key TEXT NOT NULL, entity_id TEXT NOT NULL, "
-            "PRIMARY KEY(key, entity_id)) WITHOUT ROWID"
-        )
-        conn.execute("CREATE INDEX IF NOT EXISTS market_entity_keys_entity ON market_entity_keys(entity_id)")
-        conn.execute(
-            "CREATE INDEX IF NOT EXISTS market_entity_keys_unicode ON market_entity_keys(entity_id) "
-            "WHERE key GLOB '*[^ -~]*'"
-        )
-
-        def keys(ref):
-            return f"""SELECT lower(trim({ref}.name)) AS key
-                UNION SELECT lower(trim(json_extract(CASE WHEN json_valid({ref}.external_ids) THEN {ref}.external_ids ELSE '{{}}' END, '$.domain')))
-                UNION SELECT lower(trim(value)) FROM json_each(CASE WHEN json_valid({ref}.aliases) THEN {ref}.aliases ELSE '[]' END)"""
-
-        if not exists:
-            conn.execute("""INSERT OR IGNORE INTO market_entity_keys
-                SELECT lower(trim(name)), id FROM market_entities WHERE trim(name)<>''
-                UNION SELECT lower(trim(json_extract(CASE WHEN json_valid(external_ids) THEN external_ids ELSE '{}' END,'$.domain'))), id
-                    FROM market_entities WHERE coalesce(trim(json_extract(CASE WHEN json_valid(external_ids) THEN external_ids ELSE '{}' END,'$.domain')),'')<>''
-                UNION SELECT lower(trim(j.value)), e.id FROM market_entities e, json_each(CASE WHEN json_valid(e.aliases) THEN e.aliases ELSE '[]' END) j
-                    WHERE trim(j.value)<>''""")
-        for event, before in (
-            ("INSERT", ""),
-            ("UPDATE OF name, aliases, external_ids", "DELETE FROM market_entity_keys WHERE entity_id=old.id;"),
-        ):
-            suffix = "insert" if event == "INSERT" else "update"
-            conn.execute(f"""CREATE TRIGGER IF NOT EXISTS market_keys_{suffix} AFTER {event} ON market_entities BEGIN
-                {before}
-                INSERT OR IGNORE INTO market_entity_keys SELECT key, new.id FROM ({keys('new')})
-                    WHERE key IS NOT NULL AND key<>'';
-            END""")
-        conn.execute("""CREATE TRIGGER IF NOT EXISTS market_keys_delete AFTER DELETE ON market_entities BEGIN
-            DELETE FROM market_entity_keys WHERE entity_id=old.id;
-        END""")
-    except Exception:
-        conn.execute("ROLLBACK TO market_read_indexes")
-        raise
-    finally:
-        conn.execute("RELEASE market_read_indexes")
-
-
 def _holds_table(conn):
     """task_holds, empty, before any step runs: task reads join it (TASKS), and the numbered steps below and the code
     after the migration files read tasks on a file migration 0075 has not reached yet. The legacy hold columns still
@@ -1657,7 +1603,6 @@ def migrate(conn, adopt_legacy=False):
     from . import migrations
 
     migrations.apply(conn)
-    ensure_market_reads(conn)
     # conversations.scope, owner_id and room_key (cloud room scopes) and their two room indexes are migration 0047's.
     # Deleted tasks wait here until restored or purged (backend/task_delete.py).
     from .task_delete import ensure as ensure_task_trash
@@ -2118,7 +2063,7 @@ def writing_refusal(rule, detail):
     )
 
 
-def refuse(conn, actor, rule, detail="", severity="normal", context=None, task=None, scope=None):
+def refuse(conn, actor, rule, detail="", severity="normal", context=None, task=None, scope=None) -> NoReturn:
     """Record a refusal, escalate it (rule 8), and raise. Never returns. `context` is what a person
     reviewing the refusal reads; a private task write keeps only what was refused. `task` is the task
     a `label` refusal was about, which _escalate counts it by."""

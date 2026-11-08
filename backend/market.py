@@ -15,6 +15,7 @@ import json
 import re
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
+from typing import Any
 from urllib.parse import urlparse
 
 import yaml
@@ -30,6 +31,9 @@ CURATOR = "bot:librarian"
 WRITERS = (CURATOR,)
 RETIRED_CURATOR = "market-analyst"  # the old separate curator bot, archived once at boot (`ensure_curator`)
 SEED_ACTOR = "seed"
+# The Directory's link keys (track 1). A link reads from its `from` end to its `to` end. The keys the market first used
+# are still accepted on every write and read: LEGACY_RELATIONS maps each to its key, swaps the ends when the direction
+# changed, and adds the properties it means (led_by is a works_at with role leader).
 RELATIONS = (
     "competes_with",
     "partners_with",
@@ -38,21 +42,29 @@ RELATIONS = (
     "sells_to",
     "operates_in",
     "acquired",
-    "invested_in",
-    "employs",
-    "led_by",
+    "invests_in",
+    "works_at",
     "founded",
     "formerly",
-    "regulated_by",
     "subject_of",
     "member_of",
     "mentioned_in",
+    "regulates",
+    "located_in",
 )
+LEGACY_RELATIONS = {
+    "employs": ("works_at", True, {}),
+    "led_by": ("works_at", True, {"role": "leader"}),
+    "regulated_by": ("regulates", True, {}),
+    "invested_in": ("invests_in", False, {}),
+}
 SYMMETRIC = frozenset({"competes_with", "partners_with"})
 CLAIM_KINDS = ("entity", "edge", "evidence", "document")
 ENTITY_TYPES = ("company", "product", "person", "segment", "channel", "geography", "regulation", "event")
 TIERS = ("core", "lookalike", "phrase-stealer", "secondary")
 CONFIDENCE = ("high", "medium", "low")
+# A link stores its confidence as a number; the API keeps the label.
+CONFIDENCE_VALUE = {"high": 0.9, "medium": 0.6, "low": 0.3}
 INSIGHT_KINDS = ("new-entity", "edge", "property-change", "correction", "question", "other")
 INSIGHT_STATUSES = ("applied", "merged", "rejected", "needs-human")
 SOURCE_KINDS = (
@@ -268,10 +280,82 @@ def with_turn_sources(conn, view):
     return view
 
 
+def _normalize_link(rel, src, dst, properties=None):
+    """The canonical key, ends and properties of a link written under any key the market has used."""
+    if rel in LEGACY_RELATIONS:
+        key, flip, extra = LEGACY_RELATIONS[rel]
+        if flip:
+            src, dst = dst, src
+        return key, src, dst, {**(properties or {}), **extra}
+    return rel, src, dst, properties
+
+
+def _confidence_label(value):
+    """A stored confidence as the label the API has always returned."""
+    if value is None:
+        return "medium"
+    if isinstance(value, str):
+        return value
+    number = float(value)
+    return "high" if number >= 0.75 else "medium" if number >= 0.45 else "low"
+
+
+def _actor_parts(actor):
+    """A writer's `type` and `id`: `bot:librarian` is a bot; a bare name such as `seed` is the system's."""
+    kind, sep, who = str(actor or "").partition(":")
+    return (kind, who) if sep else ("system", str(actor or ""))
+
+
+def _name_key(name):
+    return str(name or "").strip().lower()
+
+
+def _primary_domain(external_ids):
+    return str((external_ids or {}).get("domain") or "").strip().lower() or None
+
+
+ENTITY_INSERT = (
+    "INSERT INTO entities (id, type, name, name_key, aliases, external_ids, tier, summary, properties, status, "
+    "merged_into_id, last_verified_at, primary_domain, created_by, created_by_type, created_by_id, created_at, updated_at) "
+    "VALUES (:id,:type,:name,:name_key,:aliases,:external_ids,:tier,:summary,:properties,:status,:merged_into_id,"
+    ":last_verified_at,:primary_domain,:created_by,:created_by_type,:created_by_id,:created_at,:updated_at)"
+)
+
+
+def _insert_entity(conn, row):
+    """One entity row from Python values (lists and dicts); the derived columns are made here."""
+    kind, who = _actor_parts(row["created_by"])
+    conn.execute(
+        ENTITY_INSERT,
+        {
+            "id": row["id"],
+            "type": row["type"],
+            "name": row["name"],
+            "name_key": _name_key(row["name"]),
+            "aliases": dumps(row.get("aliases") or []),
+            "external_ids": dumps(row.get("external_ids") or {}),
+            "tier": row.get("tier"),
+            "summary": row.get("summary") or "",
+            "properties": dumps(row.get("properties") or {}),
+            "status": row.get("status") or "active",
+            "merged_into_id": row.get("merged_into"),
+            "last_verified_at": row.get("last_verified_at"),
+            "primary_domain": _primary_domain(row.get("external_ids")),
+            "created_by": row["created_by"],
+            "created_by_type": kind,
+            "created_by_id": who,
+            "created_at": row["created_at"],
+            "updated_at": row["updated_at"],
+        },
+    )
+
+
 def _entity_row(row):
-    if not row:
-        return None
     row = dict(row)
+    row.pop("seq", None)
+    row.pop("name_key", None)
+    if "merged_into_id" in row:
+        row["merged_into"] = row.pop("merged_into_id")
     row["aliases"] = loads(row.get("aliases"), [])
     row["external_ids"] = loads(row.get("external_ids"), {})
     row["properties"] = loads(row.get("properties"), {})
@@ -279,19 +363,24 @@ def _entity_row(row):
 
 
 def _edge_row(row):
-    if not row:
-        return None
+    """A link row under the API's names: src, rel, dst, and the confidence label."""
     row = dict(row)
+    for column, api in (("from_entity_id", "src"), ("link_key", "rel"), ("to_entity_id", "dst")):
+        if column in row:
+            row[api] = row.pop(column)
+    row["confidence"] = _confidence_label(row.get("confidence"))
     row["properties"] = loads(row.get("properties"), {})
     return row
 
 
 def entity(conn, entity_id):
-    return _entity_row(H._one(conn, "SELECT * FROM market_entities WHERE id=?", (entity_id,)))
+    row = H._one(conn, "SELECT * FROM entities WHERE id=?", (entity_id,))
+    return _entity_row(row) if row else None
 
 
 def edge(conn, edge_id):
-    return _edge_row(H._one(conn, "SELECT * FROM market_edges WHERE id=?", (edge_id,)))
+    row = H._one(conn, "SELECT * FROM entity_links WHERE id=?", (edge_id,))
+    return _edge_row(row) if row else None
 
 
 def evidence(conn, evidence_id_):
@@ -343,26 +432,30 @@ def edges_of(conn, *, src=None, dst=None, rel=None, as_of=None):
     `as_of` keeps an edge whose since/until span covers that date. A null since or until is
     an unknown start or a current end, and both still cover the date.
     """
+    if rel:
+        rel, src, dst, _ = _normalize_link(rel, src, dst)
     where, args = [], []
     if rel:
-        where.append("rel=?")
+        where.append("link_key=?")
         args.append(rel)
     if src and dst:
-        where.append("((src=? AND dst=?) OR (rel IN (?,?) AND src=? AND dst=?))")
+        where.append(
+            "((from_entity_id=? AND to_entity_id=?) OR (link_key IN (?,?) AND from_entity_id=? AND to_entity_id=?))"
+        )
         args.extend([src, dst, *SYMMETRIC, dst, src])
     elif src:
-        where.append("(src=? OR (rel IN (?,?) AND dst=?))")
+        where.append("(from_entity_id=? OR (link_key IN (?,?) AND to_entity_id=?))")
         args.extend([src, *SYMMETRIC, src])
     elif dst:
-        where.append("(dst=? OR (rel IN (?,?) AND src=?))")
+        where.append("(to_entity_id=? OR (link_key IN (?,?) AND from_entity_id=?))")
         args.extend([dst, *SYMMETRIC, dst])
     if as_of:
         day = str(as_of)[:10]
         where.append("(valid_from_on IS NULL OR substr(valid_from_on,1,10)<=?)")
         where.append("(valid_until_on IS NULL OR substr(valid_until_on,1,10)>=?)")
         args.extend([day, day])
-    sql = "SELECT * FROM market_edges" + (" WHERE " + " AND ".join(where) if where else "")
-    return [_edge_row(r) for r in H._rows(conn.execute(sql + " ORDER BY rel, src, dst", args))]
+    sql = "SELECT * FROM entity_links" + (" WHERE " + " AND ".join(where) if where else "")
+    return [_edge_row(r) for r in H._rows(conn.execute(sql + " ORDER BY link_key, from_entity_id, to_entity_id", args))]
 
 
 def graph(conn, focus=OWN_COMPANY_ID, limit=250, as_of=None, fill=False, include=None):
@@ -370,7 +463,7 @@ def graph(conn, focus=OWN_COMPANY_ID, limit=250, as_of=None, fill=False, include
     if (
         not fill
         and not include
-        and not conn.execute("SELECT 1 FROM market_entities WHERE id=? AND status='active'", (focus,)).fetchone()
+        and not conn.execute("SELECT 1 FROM entities WHERE id=? AND status='active'", (focus,)).fetchone()
     ):
         return {"entities": [], "edges": [], "focus": focus, "edges_truncated": False}
     limit = max(1, min(300, limit))
@@ -381,21 +474,21 @@ def graph(conn, focus=OWN_COMPANY_ID, limit=250, as_of=None, fill=False, include
         conn.execute(
             f"""
         WITH wanted AS (SELECT value AS id FROM json_each(:include)),
-        live AS MATERIALIZED (SELECT id FROM market_entities WHERE status='active'),
+        live AS MATERIALIZED (SELECT id FROM entities WHERE status='active'),
         degrees AS (
             SELECT id, count(*) AS degree FROM (
-                SELECT src AS id FROM market_edges WHERE {current}
-                    AND src IN live AND dst IN live
+                SELECT from_entity_id AS id FROM entity_links WHERE {current}
+                    AND from_entity_id IN live AND to_entity_id IN live
                 UNION ALL
-                SELECT dst AS id FROM market_edges WHERE {current}
-                    AND src IN live AND dst IN live
+                SELECT to_entity_id AS id FROM entity_links WHERE {current}
+                    AND from_entity_id IN live AND to_entity_id IN live
             ) GROUP BY id
         ), neighbors AS (
-            SELECT dst AS id FROM market_edges WHERE src=:focus AND {current}
-            UNION SELECT src FROM market_edges WHERE dst=:focus AND {current}
+            SELECT to_entity_id AS id FROM entity_links WHERE from_entity_id=:focus AND {current}
+            UNION SELECT from_entity_id FROM entity_links WHERE to_entity_id=:focus AND {current}
         )
         SELECT e.id, e.name, e.type, e.tier, coalesce(d.degree,0) AS degree
-        FROM market_entities e LEFT JOIN degrees d ON d.id=e.id
+        FROM entities e LEFT JOIN degrees d ON d.id=e.id
         WHERE e.status='active' AND (e.id=:focus OR e.id IN wanted OR e.id IN neighbors OR :fill)
         ORDER BY CASE WHEN e.id=:focus THEN 0 WHEN e.id IN wanted THEN 1 WHEN e.id IN neighbors THEN 2 ELSE 3 END,
             degree DESC, e.name, e.id LIMIT :limit
@@ -412,11 +505,11 @@ def graph(conn, focus=OWN_COMPANY_ID, limit=250, as_of=None, fill=False, include
     edges = H._rows(
         conn.execute(
             f"""
-        SELECT id, src, dst, rel FROM market_edges
-        WHERE src IN ({marks}) AND dst IN ({marks})
+        SELECT id, from_entity_id AS src, to_entity_id AS dst, link_key AS rel FROM entity_links
+        WHERE from_entity_id IN ({marks}) AND to_entity_id IN ({marks})
             AND (valid_from_on IS NULL OR substr(valid_from_on,1,10)<=?)
             AND (valid_until_on IS NULL OR substr(valid_until_on,1,10)>=?)
-        ORDER BY CASE WHEN src=? OR dst=? THEN 0 ELSE 1 END, id LIMIT ?
+        ORDER BY CASE WHEN from_entity_id=? OR to_entity_id=? THEN 0 ELSE 1 END, id LIMIT ?
     """,
             (*ids, *ids, day, day, focus, focus, edge_limit + 1),
         )
@@ -464,12 +557,16 @@ def _overlaps(since_a, until_a, since_b, until_b):
 
 
 def _same_pair(conn, rel, src, dst):
-    return H._rows(
-        conn.execute(
-            "SELECT * FROM market_edges WHERE rel=? AND ((src=? AND dst=?) OR (src=? AND dst=?))",
-            (rel, src, dst, dst, src),
+    return [
+        _edge_row(r)
+        for r in H._rows(
+            conn.execute(
+                "SELECT * FROM entity_links WHERE link_key=? AND ((from_entity_id=? AND to_entity_id=?) "
+                "OR (from_entity_id=? AND to_entity_id=?))",
+                (rel, src, dst, dst, src),
+            )
         )
-    )
+    ]
 
 
 def show(conn, entity_id, today=None):
@@ -542,7 +639,7 @@ def find(conn, text, limit=20):
         )
 
     entity_sql = (
-        "SELECT * FROM market_entities WHERE "
+        "SELECT * FROM entities WHERE "
         + matches(("name", "aliases", "summary"))
         + " ORDER BY ("
         + score(("name", "aliases", "summary"))
@@ -741,8 +838,9 @@ def create_evidence(
         "blob_id": blob_id,
     }
     conn.execute(
-        "INSERT INTO market_evidence (id, source_url, source_kind, captured_at, captured_by, quote, our_read, blob_id) "
-        "VALUES (:id,:source_url,:source_kind,:captured_at,:captured_by,:quote,:our_read,:blob_id)",
+        "INSERT INTO market_evidence (id, source_url, source_kind, captured_at, captured_by, quote, our_read, blob_id, "
+        "fts_rowid) VALUES (:id,:source_url,:source_kind,:captured_at,:captured_by,:quote,:our_read,:blob_id,"
+        "(SELECT coalesce(min(fts_rowid), 0) - 1 FROM market_evidence))",
         row,
     )
     event_id = _event(
@@ -768,9 +866,9 @@ def _resolve_existing(conn, name, aliases, external_ids):
     # SQLite lower()/trim() cover ASCII names. The partial index also brings in Unicode
     # and control-character keys for Python's original case and whitespace normalization.
     rows = conn.execute(
-        f"SELECT * FROM market_entities WHERE id IN "
-        f"(SELECT entity_id FROM market_entity_keys WHERE key IN ({marks}) "
-        "UNION SELECT entity_id FROM market_entity_keys WHERE key GLOB '*[^ -~]*')",
+        f"SELECT * FROM entities WHERE id IN "
+        f"(SELECT entity_id FROM entity_identifiers WHERE normalized_value IN ({marks}) "
+        "UNION SELECT entity_id FROM entity_identifiers WHERE normalized_value GLOB '*[^ -~]*')",
         list(keys),
     )
     return [
@@ -811,6 +909,7 @@ def create_entity(
     eid = entity_id or f"{type}/{slug(name)}"
     if entity(conn, eid):
         H.refuse(conn, actor, "duplicate", f"{eid} already exists")
+    # Fail closed: a name, alias or domain that already resolves to an entity is a duplicate unless the caller forces it.
     clash = [] if force else [row for row in _resolve_existing(conn, name, aliases, external_ids) if row["id"] != eid]
     if clash:
         H.refuse(conn, actor, "duplicate", f"{name} matches {clash[0]['id']}; pass force to create it anyway")
@@ -823,11 +922,11 @@ def create_entity(
         "id": eid,
         "type": type,
         "name": name,
-        "aliases": dumps(aliases),
-        "external_ids": dumps(external_ids),
+        "aliases": aliases,
+        "external_ids": external_ids,
         "tier": tier or None,
         "summary": str(summary or ""),
-        "properties": dumps(properties or {}),
+        "properties": dict(properties or {}),
         "status": "active",
         "merged_into": None,
         "last_verified_at": last_verified_at,
@@ -835,13 +934,7 @@ def create_entity(
         "created_by": actor,
         "updated_at": now,
     }
-    conn.execute(
-        "INSERT INTO market_entities (id, type, name, aliases, external_ids, tier, summary, properties, "
-        "status, merged_into, last_verified_at, created_at, created_by, updated_at) VALUES "
-        "(:id,:type,:name,:aliases,:external_ids,:tier,:summary,:properties,:status,:merged_into,"
-        ":last_verified_at,:created_at,:created_by,:updated_at)",
-        row,
-    )
+    _insert_entity(conn, row)
     events = [_event(conn, "entity", eid, actor, "created", None, name, insight_id)]
     if ids:
         _cite(conn, actor, "entity", eid, ids, insight_id)
@@ -868,7 +961,7 @@ def update_entity(
     if actor != SEED_ACTOR:
         H._writer(conn, actor)
     row = _need_entity(conn, actor, entity_id)
-    changes = {}
+    changes: dict[str, Any] = {}
     if name is not None and str(name).strip() and str(name).strip() != row["name"]:
         changes["name"] = str(name).strip()
     if aliases is not None:
@@ -915,10 +1008,16 @@ def update_entity(
     assignments = []
     args = {"id": entity_id, "updated_at": H.now()}
     for field, value in changes.items():
-        column = field
-        args[column] = dumps(value) if field in ("aliases", "external_ids", "properties") else value
-        assignments.append(f"{column}=:{column}")
-    conn.execute(f"UPDATE market_entities SET {', '.join(assignments)}, updated_at=:updated_at WHERE id=:id", args)
+        args[field] = dumps(value) if field in ("aliases", "external_ids", "properties") else value
+        assignments.append(f"{field}=:{field}")
+    # The derived columns follow the fields they come from; the identifier rows follow by trigger.
+    if "name" in changes:
+        args["name_key"] = _name_key(changes["name"])
+        assignments.append("name_key=:name_key")
+    if "external_ids" in changes:
+        args["primary_domain"] = _primary_domain(changes["external_ids"])
+        assignments.append("primary_domain=:primary_domain")
+    conn.execute(f"UPDATE entities SET {', '.join(assignments)}, updated_at=:updated_at WHERE id=:id", args)
     if ids and actor != SEED_ACTOR:
         _cite(conn, actor, "entity", entity_id, ids, insight_id)
     return entity(conn, entity_id), events
@@ -941,6 +1040,7 @@ def create_edge(
 ):
     if actor != SEED_ACTOR:
         H._writer(conn, actor)
+    rel, src, dst, properties = _normalize_link(rel, src, dst, properties)
     if rel not in RELATIONS:
         H.refuse(conn, actor, "kind", f"a relation is {'|'.join(RELATIONS)}, not {rel}")
     if confidence not in CONFIDENCE:
@@ -955,29 +1055,33 @@ def create_edge(
         # that falls before the new since can sit beside it.
         for found in _same_pair(conn, rel, src, dst):
             if _overlaps(since_day, until_day, found.get("valid_from_on"), found.get("valid_until_on")):
-                return _edge_row(found), []
+                return found, []
     eid = edge_id or H.new_id()
     if edge(conn, eid):
         return edge(conn, eid), []
     ids = [] if actor == SEED_ACTOR else _need_evidence(conn, actor, evidence_ids)
     now = H.now()
-    row = {
-        "id": eid,
-        "src": src,
-        "rel": rel,
-        "dst": dst,
-        "valid_from_on": since_day,
-        "valid_until_on": until_day,
-        "confidence": confidence,
-        "properties": dumps(properties or {}),
-        "created_at": now,
-        "created_by": actor,
-        "updated_at": now,
-    }
+    kind, who = _actor_parts(actor)
     conn.execute(
-        "INSERT INTO market_edges (id, src, rel, dst, valid_from_on, valid_until_on, confidence, properties, created_at, created_by, updated_at) "
-        "VALUES (:id,:src,:rel,:dst,:valid_from_on,:valid_until_on,:confidence,:properties,:created_at,:created_by,:updated_at)",
-        row,
+        "INSERT INTO entity_links (id, from_entity_id, link_key, to_entity_id, valid_from_on, valid_until_on, "
+        "confidence, source_type, source_id, properties, created_by, created_by_type, created_by_id, created_at, "
+        "updated_at) VALUES (:id,:src,:rel,:dst,:valid_from_on,:valid_until_on,:confidence,NULL,NULL,:properties,"
+        ":created_by,:created_by_type,:created_by_id,:created_at,:updated_at)",
+        {
+            "id": eid,
+            "src": src,
+            "rel": rel,
+            "dst": dst,
+            "valid_from_on": since_day,
+            "valid_until_on": until_day,
+            "confidence": CONFIDENCE_VALUE[confidence],
+            "properties": dumps(properties or {}),
+            "created_by": actor,
+            "created_by_type": kind,
+            "created_by_id": who,
+            "created_at": now,
+            "updated_at": now,
+        },
     )
     events = [_event(conn, "edge", eid, actor, "created", None, f"{src} {rel} {dst}", insight_id)]
     if ids:
@@ -1005,11 +1109,16 @@ def update_edge(
     row = edge(conn, edge_id)
     if not row:
         H.refuse(conn, actor, "not-found", f"no edge {edge_id}")
-    changes = {}
+    changes: dict[str, Any] = {}
     if rel is not None and rel != row["rel"]:
-        if rel not in RELATIONS:
+        if rel not in RELATIONS and rel not in LEGACY_RELATIONS:
             H.refuse(conn, actor, "kind", f"a relation is {'|'.join(RELATIONS)}, not {rel}")
-        changes["rel"] = rel
+        key, src_now, dst_now, extra = _normalize_link(rel, row["src"], row["dst"], row["properties"])
+        for field, value in (("rel", key), ("src", src_now), ("dst", dst_now)):
+            if value != row[field]:
+                changes[field] = value
+        if extra != row["properties"]:
+            changes["properties"] = extra
     if confidence is not None and confidence != row["confidence"]:
         if confidence not in CONFIDENCE:
             H.refuse(conn, actor, "kind", f"confidence is {'|'.join(CONFIDENCE)}, not {confidence}")
@@ -1028,7 +1137,7 @@ def update_edge(
         H.refuse(conn, actor, "date", "until must be on or after since")
     rel_now = changes.get("rel", row["rel"])
     if rel_now in SYMMETRIC:
-        for found in _same_pair(conn, rel_now, row["src"], row["dst"]):
+        for found in _same_pair(conn, rel_now, changes.get("src", row["src"]), changes.get("dst", row["dst"])):
             if found["id"] == edge_id:
                 continue
             if _overlaps(new_since, new_until, found.get("valid_from_on"), found.get("valid_until_on")):
@@ -1051,13 +1160,16 @@ def update_edge(
                 insight_id,
             )
         )
-    args = {
-        "id": edge_id,
-        "updated_at": H.now(),
-        **{k: (dumps(v) if k == "properties" else v) for k, v in changes.items()},
-    }
-    sets = ", ".join(f"{k}=:{k}" for k in changes)
-    conn.execute(f"UPDATE market_edges SET {sets}, updated_at=:updated_at WHERE id=:id", args)
+    # API names map to the link's columns; a confidence label is stored as its number.
+    columns = {"src": "from_entity_id", "rel": "link_key", "dst": "to_entity_id"}
+    args = {"id": edge_id, "updated_at": H.now()}
+    for field, value in changes.items():
+        column = columns.get(field, field)
+        if field == "confidence":
+            value = CONFIDENCE_VALUE[value]
+        args[column] = dumps(value) if field == "properties" else value
+    sets = ", ".join(f"{columns.get(field, field)}=:{columns.get(field, field)}" for field in changes)
+    conn.execute(f"UPDATE entity_links SET {sets}, updated_at=:updated_at WHERE id=:id", args)
     if ids:
         _cite(conn, actor, "edge", edge_id, ids, insight_id)
     after = edge(conn, edge_id)
@@ -1074,15 +1186,17 @@ def merge_entities(conn, actor, entity_id, into_id, insight_id=None):
         H.refuse(conn, actor, "kind", "an entity cannot merge into itself")
     aliases = list(dict.fromkeys([*dst["aliases"], src["name"], *src["aliases"]]))
     _event(conn, "entity", into_id, actor, "aliases", dumps(dst["aliases"]), dumps(aliases), insight_id)
-    conn.execute("UPDATE market_entities SET aliases=?, updated_at=? WHERE id=?", (dumps(aliases), H.now(), into_id))
-    for row in conn.execute("SELECT * FROM market_edges WHERE src=? OR dst=?", (entity_id, entity_id)):
+    conn.execute("UPDATE entities SET aliases=?, updated_at=? WHERE id=?", (dumps(aliases), H.now(), into_id))
+    for row in conn.execute(
+        "SELECT * FROM entity_links WHERE from_entity_id=? OR to_entity_id=?", (entity_id, entity_id)
+    ):
         item = _edge_row(row)
         new_src = into_id if item["src"] == entity_id else item["src"]
         new_dst = into_id if item["dst"] == entity_id else item["dst"]
         if new_src == new_dst:
             today = datetime.now(timezone.utc).date().isoformat()
             conn.execute(
-                "UPDATE market_edges SET valid_until_on=?, updated_at=? WHERE id=? AND valid_until_on IS NULL",
+                "UPDATE entity_links SET valid_until_on=?, updated_at=? WHERE id=? AND valid_until_on IS NULL",
                 (today, H.now(), item["id"]),
             )
             _event(
@@ -1090,12 +1204,13 @@ def merge_entities(conn, actor, entity_id, into_id, insight_id=None):
             )
         else:
             conn.execute(
-                "UPDATE market_edges SET src=?, dst=?, updated_at=? WHERE id=?", (new_src, new_dst, H.now(), item["id"])
+                "UPDATE entity_links SET from_entity_id=?, to_entity_id=?, updated_at=? WHERE id=?",
+                (new_src, new_dst, H.now(), item["id"]),
             )
             _event(conn, "edge", item["id"], actor, "src", item["src"], new_src, insight_id)
             _event(conn, "edge", item["id"], actor, "dst", item["dst"], new_dst, insight_id)
     conn.execute(
-        "UPDATE market_entities SET status='merged', merged_into=?, updated_at=? WHERE id=?",
+        "UPDATE entities SET status='merged', merged_into_id=?, updated_at=? WHERE id=?",
         (into_id, H.now(), entity_id),
     )
     _event(conn, "entity", entity_id, actor, "status", src["status"], "merged", insight_id)
@@ -1333,8 +1448,8 @@ def _import_entity_line(conn, actor, item, index, insight_id):
 
 
 def _import_edge_line(conn, actor, item, ids, insight_id, today):
-    rel = item.get("rel")
     src, dst = ids.get(item.get("src"), item.get("src")), ids.get(item.get("dst"), item.get("dst"))
+    rel, src, dst, properties = _normalize_link(item.get("rel"), src, dst, item.get("properties") or {})
     same = [
         e
         for e in _same_pair(conn, rel, src, dst)
@@ -1353,7 +1468,7 @@ def _import_edge_line(conn, actor, item, ids, insight_id, today):
             since=item.get("since"),
             until=item.get("until"),
             confidence=item.get("confidence") or "medium",
-            properties=item.get("properties") or {},
+            properties=properties,
             evidence_ids=ev_ids,
             insight_id=insight_id,
         )
@@ -1403,7 +1518,7 @@ def import_batch(conn, actor, text, *, source="", note="", dry_run=False, today=
     ]
     index, ids, applied = {}, {}, []
     # Keyed by type too: a product that shares its company's domain is its own entity.
-    for row in conn.execute("SELECT id, type, name, aliases, external_ids FROM market_entities"):
+    for row in conn.execute("SELECT id, type, name, aliases, external_ids FROM entities"):
         for key in _keys(row["name"], loads(row["aliases"], []), loads(row["external_ids"], {})):
             index.setdefault((row["type"], key), set()).add(row["id"])
     for number, item in lines:
@@ -1615,9 +1730,7 @@ def write_page(conn, actor, doc_id, title, body, category, *, replace=False, ins
 
 def _listed(conn, kind):
     return H._rows(
-        conn.execute(
-            "SELECT id, name, tier FROM market_entities WHERE type=? AND status='active' ORDER BY name", (kind,)
-        )
+        conn.execute("SELECT id, name, tier FROM entities WHERE type=? AND status='active' ORDER BY name", (kind,))
     )
 
 
@@ -2009,25 +2122,24 @@ def _import_entity(conn, row):
     if entity(conn, row["id"]):
         return False
     now = H.now()
-    conn.execute(
-        "INSERT INTO market_entities (id, type, name, aliases, external_ids, tier, summary, properties, "
-        "status, merged_into, last_verified_at, created_at, created_by, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-        (
-            row["id"],
-            row.get("type") or "company",
-            row["name"],
-            dumps(row.get("aliases") or []),
-            dumps(row.get("external_ids") or {}),
-            row.get("tier"),
-            row.get("summary") or "",
-            dumps(row.get("properties") or {}),
-            "active",
-            None,
-            now[:10],
-            now,
-            SEED_ACTOR,
-            now,
-        ),
+    _insert_entity(
+        conn,
+        {
+            "id": row["id"],
+            "type": row.get("type") or "company",
+            "name": row["name"],
+            "aliases": row.get("aliases") or [],
+            "external_ids": row.get("external_ids") or {},
+            "tier": row.get("tier"),
+            "summary": row.get("summary") or "",
+            "properties": row.get("properties") or {},
+            "status": "active",
+            "merged_into": None,
+            "last_verified_at": now[:10],
+            "created_at": now,
+            "created_by": SEED_ACTOR,
+            "updated_at": now,
+        },
     )
     _event(conn, "entity", row["id"], SEED_ACTOR, "created", None, row["name"])
     return True
@@ -2251,7 +2363,7 @@ def install(app, store, auth, mutate):
             body["neighbors"] = [
                 dict(row)
                 for row in conn.execute(
-                    "SELECT id, name FROM market_entities WHERE id IN (SELECT value FROM json_each(?))",
+                    "SELECT id, name FROM entities WHERE id IN (SELECT value FROM json_each(?))",
                     (dumps(list(ids)),),
                 )
             ]
@@ -2295,10 +2407,10 @@ def install(app, store, auth, mutate):
                     args.append(" AND ".join('"' + token + '"*' for token in tokens))
                 where.append("(" + search + ")")
             clause = " WHERE " + " AND ".join(where) if where else ""
-            sql = "SELECT * FROM market_entities" + clause + " ORDER BY name, id"
+            sql = "SELECT * FROM entities" + clause + " ORDER BY name, id"
             if limit is None:
                 return {"entities": [_entity_row(r) for r in H._rows(c.execute(sql, args))]}
-            total = c.execute("SELECT count(*) FROM market_entities" + clause, args).fetchone()[0]
+            total = c.execute("SELECT count(*) FROM entities" + clause, args).fetchone()[0]
             rows = [_entity_row(r) for r in c.execute(sql + " LIMIT ? OFFSET ?", (*args, limit, offset))]
             return {"entities": rows, "total": total, "next_offset": offset + limit if offset + limit < total else None}
 

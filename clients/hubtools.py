@@ -3545,7 +3545,7 @@ def market_find(api, args):
         "as_of": _s("YYYY-MM-DD"),
     },
 )
-def market_edges(api, args):
+def entity_links(api, args):
     return api.get(
         "market/edges", src=args.get("src"), dst=args.get("dst"), rel=args.get("rel"), as_of=args.get("as_of")
     )

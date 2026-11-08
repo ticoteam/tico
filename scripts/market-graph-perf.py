@@ -7,6 +7,7 @@ Outputs fixtures and measurements under .market-perf/ in this checkout.
 
 import argparse
 from contextlib import nullcontext
+import importlib
 import json
 from pathlib import Path
 import random
@@ -28,10 +29,11 @@ def fixture(nodes, edges):
     conn = sqlite3.connect(':memory:', check_same_thread=False)
     conn.row_factory = sqlite3.Row
     conn.executescript(H.MARKET_SCHEMA)
-    H.ensure_market_reads(conn)
+    # The Directory names: the market tables become entities, entity_links, entity_identifiers.
+    importlib.import_module('backend.migrations.20261108011017_directory_core').up(conn)
     ids = ['company/self'] + [f'company/node-{i:05}' for i in range(1, nodes)]
     conn.executemany(
-        'INSERT INTO market_entities(id,type,name,summary,created_at,created_by,updated_at) VALUES(?,?,?,?,?,?,?)',
+        'INSERT INTO entities(id,type,name,summary,created_at,created_by,updated_at) VALUES(?,?,?,?,?,?,?)',
         [
             (
                 eid,
@@ -54,9 +56,9 @@ def fixture(nodes, edges):
         if a != b:
             pairs.add((a, b))
     conn.executemany(
-        'INSERT INTO market_edges(id,src,rel,dst,created_at,created_by,updated_at) VALUES(?,?,?,?,?,?,?)',
+        'INSERT INTO entity_links(id,from_entity_id,link_key,to_entity_id,confidence,created_by,created_by_type,created_by_id,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?)',
         [
-            (f'edge-{i:06}', ids[a], 'employs', ids[b], '2026-10-12', 'seed', '2026-10-12')
+            (f'edge-{i:06}', ids[a], 'works_at', ids[b], 0.9, 'seed', 'system', 'seed', '2026-10-12', '2026-10-12')
             for i, (a, b) in enumerate(sorted(pairs))
         ],
     )
