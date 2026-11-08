@@ -15571,6 +15571,59 @@
         ]
       }
     },
+    "/api/v2/finance/campaigns": {
+      "get": {
+        "summary": "The ad campaigns the caller sees for a month (YYYY-MM): each with its owner (a team or teammate, inherited when it is the account's bot), its spend, clicks, conversions and cost per conversion in cents, by spend, with totals",
+        "operationId": "listFinanceCampaigns",
+        "parameters": [
+          {
+            "name": "month",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^\\d{4}-(0[1-9]|1[0-2])$",
+              "title": "Month"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FinanceCampaigns"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Finance"
+        ]
+      }
+    },
     "/api/v2/finance/cards": {
       "get": {
         "summary": "The cards the caller follows, last 4 only, with allocation and spend this period",
@@ -17003,7 +17056,7 @@
     },
     "/api/v2/finance/metrics/{name}": {
       "get": {
-        "summary": "One number with when it was worked out (and for bank-backed numbers how fresh the data is): cash, burn, runway_months, revenue, spend, budget_remaining, budget_pct_used, ap_due, ar_overdue, uncategorized_count, unreconciled_days",
+        "summary": "One number with when it was worked out (and for bank-backed numbers how fresh the data is): cash, burn, runway_months, revenue, spend, budget_remaining, budget_pct_used, ap_due, ar_overdue, uncategorized_count, unreconciled_days, unattributed, ad_spend, per_conversion",
         "operationId": "getFinanceMetric",
         "parameters": [
           {
@@ -17025,7 +17078,9 @@
                 "unreconciled_days",
                 "duplicate_charges",
                 "price_increases",
-                "unattributed"
+                "unattributed",
+                "ad_spend",
+                "per_conversion"
               ],
               "type": "string",
               "title": "Name"
@@ -17754,7 +17809,7 @@
     },
     "/api/v2/finance/reports/{kind}": {
       "get": {
-        "summary": "pnl (cash or accrual), balance_sheet, cash_flow, budget_vs_actual, ap_aging, ar_aging or spend_by, cut to the caller's view; compare=prior adds the window before; rows past top_n fold into one Other row (key \" other\"; the group with no vendor, team or teammate is keyed \" unattributed\": no real key starts with a space)",
+        "summary": "pnl (cash or accrual), balance_sheet, cash_flow, budget_vs_actual, ap_aging, ar_aging, spend_by or campaigns, cut to the caller's view; compare=prior adds the window before; rows past top_n fold into one Other row (key \" other\"; the group with no vendor, team or teammate is keyed \" unattributed\": no real key starts with a space)",
         "operationId": "getFinanceReport",
         "parameters": [
           {
@@ -17770,7 +17825,8 @@
                 "budget_vs_actual",
                 "ap_aging",
                 "ar_aging",
-                "spend_by"
+                "spend_by",
+                "campaigns"
               ],
               "type": "string",
               "title": "Kind"
@@ -18047,7 +18103,8 @@
                     "po",
                     "estimate",
                     "account",
-                    "vendor"
+                    "vendor",
+                    "campaign"
                   ],
                   "type": "string"
                 },
@@ -18266,6 +18323,23 @@
                 }
               ],
               "title": "Rule Kind"
+            }
+          },
+          {
+            "name": "month",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "pattern": "^\\d{4}-(0[1-9]|1[0-2])$"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Month"
             }
           },
           {
@@ -57422,6 +57496,144 @@
         ],
         "additionalProperties": true
       },
+      "FinanceCampaigns": {
+        "type": "object",
+        "properties": {
+          "month": {
+            "type": "string"
+          },
+          "campaigns": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "name": {
+                  "type": "string"
+                },
+                "platform": {
+                  "type": "string"
+                },
+                "ad_account": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "name": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "name"
+                  ],
+                  "additionalProperties": true
+                },
+                "owner": {
+                  "type": "object",
+                  "properties": {
+                    "team": {
+                      "type": "string"
+                    },
+                    "teammate": {
+                      "type": "string"
+                    },
+                    "inherited": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "inherited",
+                    "team",
+                    "teammate"
+                  ],
+                  "additionalProperties": true
+                },
+                "month": {
+                  "type": "object",
+                  "properties": {
+                    "spend": {
+                      "type": "integer"
+                    },
+                    "clicks": {
+                      "type": "integer"
+                    },
+                    "conversions": {
+                      "type": "number"
+                    },
+                    "per_conversion": {
+                      "type": [
+                        "integer",
+                        "null"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "clicks",
+                    "conversions",
+                    "per_conversion",
+                    "spend"
+                  ],
+                  "additionalProperties": true
+                },
+                "as_of": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "ad_account",
+                "as_of",
+                "id",
+                "month",
+                "name",
+                "owner",
+                "platform"
+              ],
+              "additionalProperties": true
+            }
+          },
+          "totals": {
+            "type": "object",
+            "properties": {
+              "spend": {
+                "type": "integer"
+              },
+              "clicks": {
+                "type": "integer"
+              },
+              "conversions": {
+                "type": "number"
+              },
+              "per_conversion": {
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "clicks",
+              "conversions",
+              "per_conversion",
+              "spend"
+            ],
+            "additionalProperties": true
+          },
+          "as_of": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "as_of",
+          "campaigns",
+          "month",
+          "totals"
+        ],
+        "additionalProperties": true
+      },
       "FinanceCards": {
         "type": "object",
         "properties": {
@@ -59519,7 +59731,8 @@
               "budget_vs_actual",
               "ap_aging",
               "ar_aging",
-              "spend_by"
+              "spend_by",
+              "campaigns"
             ]
           },
           "prior": {

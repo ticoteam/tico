@@ -51,7 +51,17 @@ Group = Literal[
 ]
 DAY = r"^\d{4}-\d{2}-\d{2}$"
 Aging = Literal["current", "1_30", "31_60", "61_90", "over_90"]
-Report = Literal["pnl", "pnl_by", "balance_sheet", "cash_flow", "budget_vs_actual", "ap_aging", "ar_aging", "spend_by"]
+Report = Literal[
+    "pnl",
+    "pnl_by",
+    "balance_sheet",
+    "cash_flow",
+    "budget_vs_actual",
+    "ap_aging",
+    "ar_aging",
+    "spend_by",
+    "campaigns",
+]
 Metric = Literal[
     "cash",
     "burn",
@@ -67,6 +77,8 @@ Metric = Literal[
     "duplicate_charges",
     "price_increases",
     "unattributed",
+    "ad_spend",
+    "per_conversion",
 ]
 
 
@@ -817,6 +829,7 @@ def install(app, store, auth, mutate):
             "estimate",
             "account",
             "vendor",
+            "campaign",
         ]
         | None = None,
         q: str = Query("", max_length=100),
@@ -831,6 +844,7 @@ def install(app, store, auth, mutate):
         contact_kind: Literal["vendor", "customer", "both"] | None = None,
         active: bool | None = None,
         rule_kind: Literal["gate", "posting"] | None = None,
+        month: str | None = Query(None, pattern=r"^\d{4}-(0[1-9]|1[0-2])$"),
         cursor: str | None = Query(None, max_length=600),
         limit: int = Query(50, ge=1, le=200),
         view_as: str | None = None,
@@ -847,6 +861,7 @@ def install(app, store, auth, mutate):
             "start": start,
             "end": end,
             "aging": aging,
+            "month": month,
             "kind": contact_kind if kind == "contact" else rule_kind if kind == "rule" else None,
             "active": None if active is None else ("1" if active else "0"),
         }

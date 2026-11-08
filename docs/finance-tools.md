@@ -9,9 +9,9 @@ everyone. The tools call the Finance API under `/api/v2/finance/`; nothing else 
 
 | Tool | Command | Input | Output |
 |---|---|---|---|
-| `hub_finance_search` | `hub finance search` | `kind` (entry, feed, bill, invoice, contact, rule, card, account, item, project, vendor; leave it out to search all but account and vendor), `q`, filters (`status`, `contact_id`, `vendor`, `account_id`, `money_account_id`, `start`, `end`, `aging`, `contact_kind`, `active`, `rule_kind`), `cursor`, `limit` (up to 200) | `{results, next_cursor, view_version}` |
-| `hub_finance_report` | `hub finance report <kind>` | `kind` (pnl, balance_sheet, cash_flow, budget_vs_actual, ap_aging, ar_aging, spend_by, close, sales_tax, 1099), `start`, `end`, `period`, `basis`, `compare`, `top_n`, `by`; `month` for close; `year` for sales_tax and 1099 | the report, rows past `top_n` folded into "Other · n"; sales_tax and 1099 are whole or an error, and only for someone who sees everything |
-| `hub_finance_metric` | `hub finance metric <name>` | `name` (cash, burn, runway_months, revenue, spend, budget_remaining, budget_pct_used, ap_due, ar_overdue, uncategorized_count, unreconciled_days, unattributed) and its filters | `{value, as_of, ...}`; the budget metrics add `pace_month_end`, `spent_from` (books, platform or mixed: an ad budget reads its platform's daily spend in each month a healthy import covers, in place of that platform's charges), `platform` and `platform_as_of` |
+| `hub_finance_search` | `hub finance search` | `kind` (entry, feed, bill, invoice, contact, rule, card, account, item, project, vendor, campaign; leave it out to search all but account, vendor and campaign), `q`, filters (`status`, `contact_id`, `vendor`, `account_id`, `money_account_id`, `start`, `end`, `aging`, `contact_kind`, `active`, `rule_kind`, `month` for campaigns), `cursor`, `limit` (up to 200) | `{results, next_cursor, view_version}` |
+| `hub_finance_report` | `hub finance report <kind>` | `kind` (pnl, balance_sheet, cash_flow, budget_vs_actual, ap_aging, ar_aging, spend_by, campaigns, close, sales_tax, 1099), `start`, `end`, `period`, `basis`, `compare`, `top_n`, `by`; `month` for close; `year` for sales_tax and 1099 | the report, rows past `top_n` folded into "Other · n"; sales_tax and 1099 are whole or an error, and only for someone who sees everything |
+| `hub_finance_metric` | `hub finance metric <name>` | `name` (cash, burn, runway_months, revenue, spend, budget_remaining, budget_pct_used, ap_due, ar_overdue, uncategorized_count, unreconciled_days, unattributed, ad_spend, per_conversion) and its filters | `{value, as_of, ...}`; the budget metrics add `pace_month_end`, `spent_from` (books, platform or mixed: an ad budget reads its platform's daily spend in each month a healthy import covers, in place of that platform's charges), `platform` and `platform_as_of` |
 | `hub_finance_brief` | `hub finance brief` | none | `{lines, as_of, changed_since, version}`: a few short lines about the money you may see (your budgets, your team's, cash and burn where you see the company, Watch findings, unattributed spend); `as_of` is when those numbers last moved (backend/finance/brief.py) |
 | `hub_finance_act` | `hub finance act <kind>` | `kind`, `payload` (JSON), `dry_run`, `operation_id` | `{status, action_id, code, reason, result?, impact?}` |
 | `hub_finance_action` | `hub finance action <id>` | `action_id` | the action's current status |
@@ -42,6 +42,16 @@ for each vendor whose name shows (this month's spend by default), and leaves the
 
 `GET /api/v2/finance/unattributed` (and the `unattributed` metric: `{amount, lines, excl}`) is the Unattributed queue: P&L
 lines in the period with no team, teammate or attribution in force, the reader's slice only.
+
+Campaigns (`GET /api/v2/finance/campaigns?month=YYYY-MM`, `hub_finance_search` `kind: campaign`, the `campaigns` report and the
+`ad_spend` and `per_conversion` metrics) are the ad campaigns an ad account reports. Each has an owner: a team or a teammate
+set by the `campaign_owner_set` action (`campaign_id`, plus `team` or `teammate`; neither returns it to the account's
+owner), undone by `campaign_owner_undo`. With no owner set it is the account's bot (`inherited: true`). A campaign's
+platform charges are split across owners by their campaigns' spend (`platform_share.py`), and budgets count it for the
+owner. A reader sees a campaign when they see everything, own it, manage its owner, or see a charge attributed through it;
+zero-spend campaigns follow the same rule. Clicks and conversions come from the platform: Google Ads' conversions, and
+Meta's `conversions` (or its `actions`) summed over the offsite and onsite conversion action types. `per_conversion` is
+the spend over the conversions in cents, null when there are none.
 
 `vendor_merge {into, merge}` folds names and vendor contacts into `into` (a vendor). `merge` takes name keys (as a row reads
 them) or contact ids; every name a merged contact went by moves to `into`, and a native book archives the merged contact.

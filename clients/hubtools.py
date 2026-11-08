@@ -11870,6 +11870,7 @@ FINANCE_REPORTS = [
     "ap_aging",
     "ar_aging",
     "spend_by",
+    "campaigns",
     "close",
     "sales_tax",
     "1099",
@@ -11890,8 +11891,23 @@ FINANCE_METRICS = [
     "duplicate_charges",
     "price_increases",
     "unattributed",
+    "ad_spend",
+    "per_conversion",
 ]
-FINANCE_SEARCH = ["entry", "feed", "bill", "invoice", "contact", "rule", "card", "account", "item", "project", "vendor"]
+FINANCE_SEARCH = [
+    "entry",
+    "feed",
+    "bill",
+    "invoice",
+    "contact",
+    "rule",
+    "card",
+    "account",
+    "item",
+    "project",
+    "vendor",
+    "campaign",
+]
 FINANCE_INBOX = [
     "uncategorized",
     "bill_to_enter",
@@ -12114,8 +12130,9 @@ def _fin_paged(api, path, query, key, budget):
     "hub_finance_search",
     "Search the books you may see: entries, bank and card rows, bills, invoices, contacts, "
     "rules and cards (each card with the vendor accounts it is saved on). account finds the chart's lines by code or "
-    "name, with their ids, for categorize, bill_create and rule_create. Name a kind to page with cursor; without "
-    "one you get the first few of each kind (not accounts or vendors: name that kind).",
+    "name, with their ids, for categorize, bill_create and rule_create. campaign finds an ad campaign by name with its "
+    "owner and the month's spend, clicks and conversions (month: YYYY-MM, default this month). Name a kind to page with "
+    "cursor; without one you get the first few of each kind (not accounts, vendors or campaigns: name that kind).",
     {
         "kind": _s("What to search", enum=FINANCE_SEARCH),
         "q": _s("Words to match"),
@@ -12130,6 +12147,7 @@ def _fin_paged(api, path, query, key, budget):
         "contact_kind": _s("Contacts: vendor, customer or both", enum=["vendor", "customer", "both"]),
         "active": {"type": "boolean", "description": "Contacts: active or not"},
         "rule_kind": _s("Rules: gate or posting", enum=["gate", "posting"]),
+        "month": _s("Campaigns: the month, YYYY-MM (default this month)"),
         "cursor": _s("next_cursor from the last page (needs kind)"),
         "limit": {"type": "integer", "minimum": 1, "maximum": 200, "description": "Rows per page (default 50)"},
     },
@@ -12150,6 +12168,7 @@ def finance_search(api, args):
             "aging",
             "contact_kind",
             "rule_kind",
+            "month",
             "cursor",
             "limit",
         ),
@@ -12183,7 +12202,8 @@ def finance_search(api, args):
 @tool(
     "hub_finance_report",
     "One report cut to your view: pnl, balance_sheet, cash_flow, budget_vs_actual, ap_aging, "
-    "ar_aging, spend_by, or close (a month's close checklist). Rows past top_n fold into \"Other · n\". sales_tax and "
+    "ar_aging, spend_by, campaigns (the ad campaigns with their owner, spend, clicks and conversions), or close (a "
+    "month's close checklist). Rows past top_n fold into \"Other · n\". sales_tax and "
     "1099 are the tax workpapers for a year: whole or not at all, and only for someone who sees everything.",
     {
         "kind": _s("The report", enum=FINANCE_REPORTS),
@@ -12238,7 +12258,9 @@ def finance_report(api, args):
 @tool(
     "hub_finance_metric",
     "One number you may see, with when it was worked out: cash, burn, runway_months, revenue, "
-    "spend, budget_remaining, budget_pct_used, ap_due, ar_overdue, uncategorized_count, unreconciled_days.",
+    "spend, budget_remaining, budget_pct_used, ap_due, ar_overdue, uncategorized_count, unreconciled_days, "
+    "unattributed, ad_spend (your campaigns' spend over start..end, this month by default), per_conversion (that spend "
+    "over the conversions, null with none).",
     {
         "name": _s("The metric", enum=FINANCE_METRICS),
         "budget_id": _s("budget_remaining/budget_pct_used: the budget"),
