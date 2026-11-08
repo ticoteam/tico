@@ -9506,7 +9506,7 @@ def tasks_only(conn, actor):
 # carries it again, and so does one that finished without working it or saying when to (backend/quiet_work.py
 # settle); a task the bot already moved on (doing, done) is its own business by then.
 NEXT_RUN_WAITING_SQL = (
-    "t.next_run=1 AND t.status='open' AND NOT " + SNOOZED % "t" + " AND t.resume IS NULL "
+    "t.next_run=1 AND t.status='open' AND NOT " + SNOOZED % "t" + " AND NOT " + ON_ICE % "t" + " AND t.resume IS NULL "
     "AND (t.carried_by IS NULL OR NOT EXISTS("
     "SELECT 1 FROM attempts a WHERE a.id=t.carried_by AND a.state IN ('leased','running','completed')))"
 )
@@ -9528,6 +9528,7 @@ def next_run_waiting(conn, row):
         or row.get("status") != "open"
         or row.get("snoozed_until")
         or row.get("resume")
+        or _on_ice(conn, row)
     ):
         return False
     if not row.get("carried_by"):
