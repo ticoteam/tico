@@ -11,7 +11,7 @@ import pytest
 import time_machine
 from fastapi.testclient import TestClient
 
-from backend import demo, demo_seed, hubdb, pipeline_engine
+from backend import demo, demo_seed, hubdb, judge, pipeline_engine
 from backend import demo_content as D
 from backend import usage_limits as U
 from backend.demo_sections import budgets as B
@@ -75,6 +75,9 @@ def built(tmp_path_factory):
     crosses 07:00 UTC (a usage-limit window edge) between them: the first build runs just after it, the second just
     before."""
     with pytest.MonkeyPatch.context() as patch:
+        # The build asks no model. Without this, a person's message check dials the Gateway the demo saved a key for,
+        # and the answer ("auth" or "unavailable") depends on timing, so the two builds' judge rows differ.
+        patch.setattr(judge, "server_engine", lambda *args, **kwargs: None)
         real_clock_at(patch, datetime(2026, 11, 6, 7, 0, 1, tzinfo=timezone.utc))
         first = demo.build(tmp_path_factory.mktemp("company"), now=NOW)
         rows = stored(first.db_path)
@@ -316,7 +319,19 @@ def test_the_same_date_builds_the_same_company(built):
             for row in events
         ]
 
-    assert {**again, "events": unclocked(again["events"])} == {**rows, "events": unclocked(rows["events"])}
+    left = {**again, "events": unclocked(again["events"])}
+    right = {**rows, "events": unclocked(rows["events"])}
+    if left != right:
+        # Say which tables and which event row differ: a CI log cuts a pytest diff short.
+        first = next(
+            ((n, a, b) for n, (a, b) in enumerate(zip(left["events"], right["events"])) if a != b),
+            None,
+        )
+        differing = sorted(name for name in set(left) | set(right) if left.get(name) != right.get(name))
+        raise AssertionError(
+            f"builds differ in {differing}; events {len(left['events'])} vs {len(right['events'])}; "
+            f"first differing event row {str(first)[:600]}"
+        )
     with closing(sqlite3.connect(first.db_path)) as db:
         columns = [column[1] for column in db.execute("PRAGMA table_info(idempotency)")]
     operation, response = columns.index("operation"), columns.index("response")
