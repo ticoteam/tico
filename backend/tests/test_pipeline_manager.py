@@ -571,3 +571,26 @@ def test_a_manager_set_on_an_old_pipeline_is_not_judged_on_its_first_tick(api):
     PM.watchdog(store, now())
     with store.read() as c:
         assert botops_tasks(c) == 0
+
+
+def test_a_members_only_pipelines_stopped_task_names_it_to_no_one_outside_botops(api):
+    """F4: the watchdog's task for a members-only pipeline is private to BotOps. A company member who is not on the
+    pipeline reads neither the task nor its title in the task list or the Log; the company sees the pipeline's name
+    nowhere in the stall's record."""
+    store = api.app.state.store
+    t0 = now()
+    with store.transaction() as c:
+        botops_roster(c)
+        pid = pipeline(c, name="Legal")
+        c.execute("UPDATE task_types SET pipeline_visibility='members' WHERE id=?", (pid,))
+    PM.tick(store, t0)
+    PM.watchdog(store, t0 + timedelta(minutes=40))
+    with store.read() as c:
+        [(tid, private)] = c.execute(
+            "SELECT id, private FROM tasks WHERE owner_id='bot:botops' AND title='Pipeline manager stopped: Legal'"
+        ).fetchall()
+        assert private == 1
+        assert H.task_private_readable(c, "bot:botops", H.task(c, tid))
+    get(api, f"tasks/{tid}", "cara-test", expected=404)
+    assert "Pipeline manager stopped: Legal" not in str(get(api, "tasks", "cara-test"))
+    assert "Pipeline manager stopped: Legal" not in str(get(api, "history?limit=200", "cara-test"))

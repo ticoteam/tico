@@ -633,6 +633,10 @@ def watchdog(store: Any, at: Any) -> None:
             ).fetchone()
             if opened is not None:
                 continue
+            # A members-only pipeline's stall is private to BotOps: its name is not public company information (F4).
+            members_only = (
+                c.execute("SELECT pipeline_visibility FROM task_types WHERE id=?", (pid,)).fetchone()[0] == "members"
+            )
             made = H.task_create(
                 c,
                 H.KEEPER,
@@ -642,7 +646,7 @@ def watchdog(store: Any, at: Any) -> None:
                 BOTOPS,
                 deduplicate=False,
                 lint=False,
-                private=False,
+                private=members_only,
                 trigger="schedule",
                 trigger_source="pipeline_manager.watchdog",
             )
