@@ -1057,11 +1057,11 @@ def check_move(
     if entering and target is not None:
         # A card that enters a pipeline at a stage is held to the exit requirements of every stage of that pipeline before
         # it, as a move inside the pipeline would be, and to the stages it came from (its visits, and its stage if any).
-        scope = (
-            _forward_scope(conn, task_id, here, None)
-            if here is not None
-            else dict(_visited(conn, [task_id]).get(task_id, {}))
-        )
+        scope: dict[str, str | None] = {}
+        if here is not None:
+            scope.update(_forward_scope(conn, task_id, here, None))
+        else:
+            scope.update(_visited(conn, [task_id]).get(task_id, {}))
         for before in stages(conn, str(target["type_id"])):
             if before["position"] < target["position"]:
                 scope.setdefault(str(before["id"]), None)
