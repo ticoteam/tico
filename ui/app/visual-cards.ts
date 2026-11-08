@@ -103,7 +103,7 @@ function visualCardHTML(f, key, state) {
 // The cards for `files` (a message's refs.attachments) and, after them, `chips(rest, shown)` for everything else:
 // `rest` the attachments that are not cards, `shown` the set of "<file id>@<version>" that are. `key` is the
 // message's id: a card is keyed "<message>:<file>@<version>", so a new version is a new card.
-function visualCardsHTML(files, {key = '', chips = () => ''}: {key?: string; chips?: (rest: unknown[], shown?: unknown) => string} = {}) {
+function visualCardsHTML<T = unknown>(files, {key = '', chips = () => ''}: {key?: string; chips?: (rest: T[], shown?: unknown) => string} = {}) {
   const cards = [], rest = [], shown = new Set(), keys = new Set();
   for (const f of Array.isArray(files) ? files : []) {
     if (f?.removed && f.label && !f.file_id) {

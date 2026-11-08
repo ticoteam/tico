@@ -240,5 +240,5 @@ function directoryRoute(r: string): boolean {
 }
 // Leaving the page drops its state, so a late answer draws nothing.
 function directoryStop(r: string): void {
-  if (!rdUnder((r || '').split('?')[0], DIR_ROUTE)) { DIRP = null; DIRL = null; }
+  if (!rdUnder((r || '').split('?')[0] ?? '', DIR_ROUTE)) { DIRP = null; DIRL = null; }
 }

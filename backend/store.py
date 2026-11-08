@@ -1213,6 +1213,15 @@ class Store:
             factory=factory or self.factory,
             check_same_thread=check_same_thread,
         )
+        try:
+            self._configure(c)
+        except BaseException:
+            # The caller never receives the connection, so nothing else would close it.
+            c.close()
+            raise
+        return c
+
+    def _configure(self, c):
         H.leave_wal_for_litestream(c)
         c.row_factory = sqlite3.Row
         c.execute("PRAGMA foreign_keys=ON")
@@ -1230,7 +1239,6 @@ class Store:
         c.execute("PRAGMA mmap_size=268435456")
         # The WAL file is cut back to this size after a checkpoint; a large write (a migration) otherwise keeps its peak.
         c.execute(f"PRAGMA journal_size_limit={H.WAL_SIZE_LIMIT}")
-        return c
 
     @SRC.scoped("system:migration")
     def migrate(self):
