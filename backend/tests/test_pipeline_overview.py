@@ -429,18 +429,50 @@ def test_a_lap_that_left_before_the_period_counts_when_it_returns_in_it(api):
     assert overview(api, "1d")["loops"][0]["laps"] == 0
 
 
-def test_a_spawned_subtask_returning_ends_its_parents_lap(api):
+SPAWN_PRODUCT = [
+    {"name": "Doing", "status": "doing"},
+    {"name": "Waiting", "status": "review"},
+    {"name": "Validate", "status": "review"},
+    {"name": "Done", "status": "done"},
+]
+SPAWN_ENGINEERING = [{"name": "Doing", "status": "doing"}, {"name": "Done", "status": "done"}]
+
+
+def test_a_real_spawn_then_ship_then_resume_makes_one_spawn_lap(api):
+    # Product's Doing spawns a subtask on the way to Waiting; the subtask ships, and the parent resumes into Validate. No
+    # handoff records the parent's return (D64), so the lap is read from its own history.
     growth = make_factory(api, "Gro")
-    prod, p_steps = make_type(api, "Prod", factory=growth)
-    eng, e_steps = make_type(api, "Eng", factory=growth)
-    spawn = link(api, prod, p_steps["Doing"], eng, mode="spawn")
-    back = link(api, eng, e_steps["Doing"], prod)
+    prod, p_steps = make_type(api, "Prod", steps=SPAWN_PRODUCT, factory=growth)
+    eng, e_steps = make_type(api, "Eng", steps=SPAWN_ENGINEERING, factory=growth)
+    link(api, prod, p_steps["Doing"], eng, mode="spawn")
+    link(api, eng, e_steps["Done"], prod)  # the way back that makes a loop
     parent = card(api, prod, p_steps["Doing"])
-    subtask = card(api, eng, e_steps["Doing"])
-    handoff(api, spawn, subtask["id"], ago(hours=5), source=parent["id"])
-    handoff(api, back, subtask["id"], ago(hours=1))
+    move(api, parent["id"], step=p_steps["Waiting"])  # leaves the spawn stage: the subtask is filed
+    with api.app.state.store.read() as c:
+        (subtask,) = c.execute("SELECT target_task_id FROM pipeline_handoffs WHERE source_task_id=?", (parent["id"],))
+    move(api, subtask[0], step=e_steps["Done"])  # ships
+    move(api, parent["id"], step=p_steps["Validate"])  # resumes
     (loop,) = overview(api)["loops"]
     assert loop["laps"] == 1
+
+
+def test_a_spawn_that_left_before_the_period_counts_when_the_parent_resumes_in_it(api):
+    growth = make_factory(api, "Gro")
+    prod, p_steps = make_type(api, "Prod", steps=SPAWN_PRODUCT, factory=growth)
+    eng, e_steps = make_type(api, "Eng", steps=SPAWN_ENGINEERING, factory=growth)
+    spawn = link(api, prod, p_steps["Doing"], eng, mode="spawn")
+    link(api, eng, e_steps["Done"], prod)
+    parent = card(api, prod, p_steps["Waiting"])
+    subtask = card(api, eng, e_steps["Doing"])
+    handoff(api, spawn, subtask["id"], ago(days=8), source=parent["id"])  # left eight days ago
+    with api.app.state.store.transaction() as c:  # the parent resumed into Validate six days ago
+        c.execute(
+            "INSERT INTO history_events (id, subject_type, subject_id, created_at, actor_id, kind, old, new, note) "
+            "VALUES (?, 'task', ?, ?, 'ana-test', 'step', ?, ?, '')",
+            (H.new_id(), parent["id"], ago(days=6), p_steps["Waiting"], p_steps["Validate"]),
+        )
+    assert overview(api, "7d")["loops"][0]["laps"] == 1
+    assert overview(api, "1d")["loops"][0]["laps"] == 0
 
 
 def test_rights_answer_a_hidden_pipeline_the_same_as_a_missing_one(api):
