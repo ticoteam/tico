@@ -58,13 +58,14 @@ def comment_marker(head, queue, tests=QUARANTINE):
 
 
 class FakeGitHub:
-    def __init__(self, comments=None, fail=(), can_enqueue=True, status="completed"):
+    def __init__(self, comments=None, fail=(), can_enqueue=True, status="completed", stderr="{} refused"):
         self.pages = json.loads((FIXTURES / "open-prs.json").read_text())
         # {number: [body, ...]}; comment ids are number * 1000 + position
         self.existing = {n: [(n * 1000 + i, b) for i, b in enumerate(bodies)] for n, bodies in (comments or {}).items()}
         self.fail = set(fail)
         self.can_enqueue = can_enqueue
         self.status = status
+        self.stderr = stderr
         self.calls = []
 
     def open_prs(self):
@@ -101,7 +102,7 @@ class FakeGitHub:
     def _write(self, *call):
         self.calls.append(call)
         if call[0] in self.fail:
-            raise subprocess.CalledProcessError(1, ["gh"], stderr=f"{call[0]} refused")
+            raise subprocess.CalledProcessError(1, ["gh"], stderr=self.stderr.format(call[0]))
 
     def enqueue(self, number, head):
         self._write("enqueue", number, head)
@@ -174,6 +175,32 @@ def test_a_coloured_summary_still_reads():
     assert keeper.read_log(lines)[0] == [(RECRUITING, False)]
 
 
+def summary(*lines, results="1 failed, 3 passed in 1.0s"):
+    header = "=========================== short test summary info ============================"
+    return [f"{line}\n" for line in (header, *lines, results)]
+
+
+def test_a_collection_error_in_the_summary_is_named_and_is_never_a_crash():
+    tests, _, _ = keeper.read_log(
+        summary(f"FAILED {CRASHED} - worker 'gw3' crashed while running '{CRASHED}'", "ERROR backend/tests/test_x.py")
+    )
+    assert tests == [(CRASHED, True), ("backend/tests/test_x.py", False)]
+    assert not keeper.flaky([finding(*tests)], set())
+
+
+def test_an_internalerror_is_named_and_is_never_a_crash():
+    crash = f"FAILED {CRASHED} - worker 'gw3' crashed while running '{CRASHED}'"
+    lines = [*summary(crash), "INTERNALERROR> Traceback\n", "INTERNALERROR> x\n"]
+    tests, _, _ = keeper.read_log(lines)
+    assert tests == [(CRASHED, True), ("pytest INTERNALERROR", False)]
+
+
+def test_failures_the_summary_does_not_list_are_named():
+    tests, _, _ = keeper.read_log(summary(f"FAILED {RECRUITING} - x", results="2 failed, 1 error, 3 passed in 1.0s"))
+    assert tests == [(RECRUITING, False), ("2 failure(s) the summary does not list", False)]
+    assert not keeper.flaky([finding(*tests)], QUARANTINE)
+
+
 # Jobs and verdicts
 
 
@@ -191,6 +218,23 @@ def test_a_job_that_timed_out_with_no_failed_step_still_counts():
         }
     ]
     assert [step for _, step in keeper.failed_jobs(jobs)] == ["timed out"]
+
+
+def test_the_attempt_that_failed_counts_though_a_later_rerun_passed():
+    failed = jobs_with("python-5")
+    passed = copy.deepcopy(failed)
+    for job in failed:
+        job["run_attempt"] = 1
+    for job in passed:
+        job["run_attempt"], job["conclusion"] = 2, "success"
+        for step in job["steps"]:
+            step["conclusion"] = "success"
+    assert [job["name"] for job, _ in keeper.failed_attempt(passed + failed)] == ["python-5"]
+    rerun = copy.deepcopy(failed)
+    for job in rerun:
+        job["run_attempt"] = 2
+        job["name"] = job["name"].replace("python-5", "python-7")
+    assert [job["name"] for job, _ in keeper.failed_attempt(failed + rerun)] == ["python-7"]  # the newest failure
 
 
 def finding(*tests, job="python-5", step="Run selected tests", **kw):
@@ -355,6 +399,41 @@ def test_a_second_flake_on_the_same_head_is_commented_not_re_enqueued():
     assert f"`{CRASHED}` (worker crashed)" in call[2]
 
 
+def test_a_comment_written_after_a_requeue_says_so_without_the_older_requeue_marker():
+    # The requeue marker may be older than the last 100 comments; the comment marker carries it.
+    gh = FakeGitHub(comments={2953: [comment_marker(sha("d3"), sha("0"), set()).replace(" -->", " requeued -->")]})
+    run(gh)
+    assert written_to(gh, 2953) == [] and gh.writes("edit_comment") == []
+
+
+def test_a_requeued_head_s_comment_marker_records_the_requeue():
+    gh = FakeGitHub(comments={2953: [f"<!-- stale-pr-keeper:requeue {sha('d3')} -->"]})
+    run(gh)
+    (call,) = written_to(gh, 2953)
+    (marker,) = keeper.markers([(1, call[2])])
+    assert marker.kind == "comment" and marker.requeued and marker.queue == sha("8a")
+
+
+def test_a_requeued_head_is_never_re_enqueued_again_when_the_quarantine_changes():
+    # The comment marker says re-queued (its requeue marker is out of sight) and the recruiting test is quarantined now.
+    gh = FakeGitHub(comments={2966: [comment_marker(sha("c2"), sha("7a"), set()).replace(" -->", " requeued -->")]})
+    run(gh)
+    assert written_to(gh, 2966) == []
+
+
+def test_without_a_queue_token_the_flake_comment_is_marked_deferred_and_requeued_once_a_token_is_added():
+    first = FakeGitHub(can_enqueue=False)
+    run(first)
+    (call,) = written_to(first, 2984)
+    assert keeper.markers([(1, call[2])])[0].deferred
+    again = FakeGitHub(comments={2984: [call[2]]}, can_enqueue=False)
+    run(again)
+    assert written_to(again, 2984) == [] and again.writes("edit_comment") == []
+    later = FakeGitHub(comments={2984: [call[2]]})
+    run(later)
+    assert [c[0] for c in written_to(later, 2984)] == ["comment", "enqueue"]
+
+
 def test_a_requeued_and_commented_head_is_done():
     gh = FakeGitHub(
         comments={2953: [f"<!-- stale-pr-keeper:requeue {sha('d3')} -->", comment_marker(sha("d3"), sha("0"), set())]}
@@ -447,6 +526,31 @@ def test_a_failed_enqueue_takes_its_marker_back_and_fails_the_run_after_the_rest
     assert [c[0] for c in written_to(gh, 3033)] == ["comment"]
 
 
+def test_an_enqueue_that_failed_in_transit_keeps_its_marker():
+    gh = FakeGitHub(fail={"enqueue"}, stderr="Post https://api.github.com/graphql: net/http: TLS handshake timeout")
+    _, ok = run(gh)
+    assert not ok and ("enqueue", 2984, sha("a")) in gh.calls
+    assert not any(c[0] == "delete_comment" for c in gh.calls)
+
+
+def test_the_rate_limit_stops_the_run_at_once(monkeypatch):
+    gh = FakeGitHub()
+    real = gh.read_job_log
+
+    def limited(job_id):
+        if job_id.startswith(sha("2")):
+            raise keeper.RateLimited(1, ["gh"], stderr="HTTP 403: API rate limit exceeded")
+        return real(job_id)
+
+    monkeypatch.setattr(gh, "read_job_log", limited)
+    text, ok = run(gh)
+    assert not ok
+    assert [c[0] for c in written_to(gh, 2984)] == ["comment", "enqueue"]  # before the limit
+    for number in (3060, 3034, 3033, 2966, 2953):
+        assert written_to(gh, number) == [], number
+    assert "#3034: not read (rate limit)" in text
+
+
 def test_a_queue_run_that_is_gone_is_still_commented_on(monkeypatch):
     monkeypatch.delitem(RUNS, sha("3"))
     gh = FakeGitHub()
@@ -510,7 +614,7 @@ def test_the_github_client_pages_open_prs_with_one_graphql_call_each(monkeypatch
 
 def comments_page(number, bodies, previous=None):
     info = {"hasPreviousPage": previous is not None, "startCursor": previous}
-    nodes = [{"databaseId": number * 1000 + i, "body": b} for i, b in enumerate(bodies)]
+    nodes = [{"databaseId": number * 1000 + i, "viewerDidAuthor": True, "body": b} for i, b in enumerate(bodies)]
     return {f"pr{number}": {"comments": {"pageInfo": info, "nodes": nodes}}}
 
 
@@ -538,6 +642,23 @@ def test_comments_page_back_until_the_heads_marker_is_found(monkeypatch):
     assert out[2] == [(2000, "x")]
 
 
+def test_only_the_keepers_own_comments_count(monkeypatch):
+    head = sha("a")
+    page = comments_page(1, [f"<!-- stale-pr-keeper:requeue {head} -->", "mine"])
+    page["pr1"]["comments"]["nodes"][0]["viewerDidAuthor"] = False  # pasted by someone else
+    monkeypatch.setattr(keeper.subprocess, "run", completed(json.dumps({"data": {"repository": page}})))
+    assert keeper.GitHub("ticoteam/tico").comments({1: head}) == {1: [(1001, "mine")]}
+
+
+def test_a_rate_limited_call_raises_rate_limited(monkeypatch):
+    def fake_run(args, **_):
+        raise subprocess.CalledProcessError(1, args, stderr="gh: API rate limit exceeded for installation (HTTP 403)")
+
+    monkeypatch.setattr(keeper.subprocess, "run", fake_run)
+    with pytest.raises(keeper.RateLimited):
+        keeper.GitHub("ticoteam/tico").api("rate_limit")
+
+
 def test_an_expired_log_reads_as_gone_and_any_other_error_raises(monkeypatch, tmp_path):
     def fake_gh(stderr, code):
         script = tmp_path / "gh"
@@ -550,6 +671,12 @@ def test_an_expired_log_reads_as_gone_and_any_other_error_raises(monkeypatch, tm
     assert gh.read_job_log(1) is None
     fake_gh("HTTP 502: Bad Gateway", 1)
     with pytest.raises(subprocess.CalledProcessError, match="returned non-zero"):
+        gh.read_job_log(1)
+    fake_gh("gh: Resource not accessible by integration (HTTP 403)", 1)  # a permission problem is not an expired log
+    with pytest.raises(subprocess.CalledProcessError, match="returned non-zero"):
+        gh.read_job_log(1)
+    fake_gh("gh: API rate limit exceeded (HTTP 403)", 1)
+    with pytest.raises(keeper.RateLimited):
         gh.read_job_log(1)
     fake_gh("", 0)
     assert gh.read_job_log(1) == ([], [], [])
