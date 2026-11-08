@@ -703,3 +703,47 @@ def test_a_spawn_carries_no_company_file_whose_version_a_members_only_attempt_ma
         assert rows(c, "SELECT url FROM task_links WHERE task_id = ?", child) == []
         skipped = rows(c, "SELECT new FROM history_events WHERE subject_id = ? AND kind = 'carry_skipped'", child)
     assert [s["new"] for s in skipped] == ["Memo"]
+
+
+def test_a_spawn_carries_no_file_whose_legal_version_sits_past_many_repeated_versions(api, monkeypatch):
+    """Codex r7: the provenance walk read each lookup up to its budget and took a cut-off list as complete. Two hundred
+    versions sharing one blob pushed the one version a Legal run made past the cap, and the file reached a public child. A
+    lookup now reads distinct values and an overflow is unsure, so the file is skipped."""
+    monkeypatch.setattr(L, "hub_origin", "https://hub.example.test")
+    tag = uuid.uuid4().hex[:8]
+    legal, _ = make_pipeline(api, "Legal" + tag, private=True)
+    sales, ssteps = make_pipeline(api, "Sales" + tag)
+    eng, _ = make_pipeline(api, "Engineering" + tag)
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE task_types SET manager=? WHERE id=?", ("human:ana", eng))
+        link = L.create_link(c, "human:ana", ssteps["Doing"], eng, "spawn")
+    legal_task = ticket(api, legal, "Legal work " + tag, owner="human:ana")
+    file_id = "file-pub-" + tag
+    blob = "blob-pub-" + tag
+    with api.app.state.store.transaction() as c:
+        insert(c, "attempts", id="attempt-legal-" + tag, bot_id="b-" + file_id, created_at=T, task_id=legal_task)
+        add_company_file(c, file_id, "bot", "Public memo " + tag, blob)
+        last = L.PROVENANCE_LIMIT + 3
+        for version in range(2, last + 1):
+            insert(
+                c,
+                "bot_file_versions",
+                file_id=file_id,
+                version=version,
+                blob_id=blob,
+                digest="sha-" + blob,
+                size=10,
+                name="memo.html",
+                mime="text/html",
+                actor="human:ana",
+                created_at=T,
+                attempt_id="attempt-legal-" + tag if version == last else None,
+            )
+    source = ticket(api, sales, "Public " + tag, owner="human:ana")
+    child = ship_with_file(api, ssteps, link, source, file_id)
+
+    listed = json.dumps(get(api, f"tasks/{child}", "cara-test"))
+    assert file_id not in listed and "hub.example.test" not in listed
+    with api.app.state.store.read() as c:
+        skipped = rows(c, "SELECT new FROM history_events WHERE subject_id = ? AND kind = 'carry_skipped'", child)
+    assert [s["new"] for s in skipped] == ["Memo"]
