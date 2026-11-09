@@ -111,7 +111,7 @@ function dashPageEl(page, size) {
 // A card names its team, except on that team's own page.
 const dashTeamShown = (card, view) => card.team_name && !(view?.kind === 'team' && card.settings?.team === view.group) ? card.team_name : '';
 const dashHeading = card => (!card.title && DASH_HEADING[card.template]?.(card)) || card.heading;
-const dashPinTitle = (pin, view) => pin.card ? dashHeading(pin.card) + (dashTeamShown(pin.card, view) ? ' · ' + pin.card.team_name : '') : pin.page?.title || 'Page';
+const dashPinTitle = (pin, view?) => pin.card ? dashHeading(pin.card) + (dashTeamShown(pin.card, view) ? ' · ' + pin.card.team_name : '') : pin.page?.title || 'Page';
 // Who sees a team page, in a few words: Everyone, the one team or person, else how many.
 function dashAudienceWords(aud) {
   if (!aud || aud.everyone !== false) return 'Everyone';
