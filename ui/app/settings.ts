@@ -23,11 +23,13 @@ type SettingsRunnable = Record<string, Record<string, SettingsRunAnswer> | undef
 type SettingsTierVersion = {version: string; model: string; context?: number | null; price: {input: number; output: number}};
 type SettingsTier = {name: string; level: string; fast: boolean; current: string; versions: SettingsTierVersion[]};
 type SettingsGatewayTiers = {tiers: Record<string, SettingsTier>; levels: {id: string; name: string}[]};
+// GET /v2/usage/limits: each bot's use limit and the company's default (ui/app/usage.ts draws them).
+type SettingsLimits = {bots?: Record<string, unknown>; default?: unknown};
 // GET /v2/operations: the computers, services and issues that the Computers and Health views draw.
 type SettingsOperations = {machines: SettingsMachine[]; services: SettingsService[]; issues?: SettingsIssue[]; runnable?: SettingsRunnable; agents?: unknown; scheduler_enabled?: boolean};
 // GET /v2/models: the model catalogue, the harness manifests (HARNESS_ROWS), the Tico Gateway and the enabled providers.
 type SettingsCatalog = {models: SettingsModel[]; harnesses?: HarnessRow[]; gateway?: SettingsGatewayTiers | null; enabled_providers?: string[]; default?: {model?: string}};
-type SettingsData = {people: SettingsPerson[]; machines: SettingsMachine[]; services: SettingsService[]; models: SettingsModel[]; issues: SettingsIssue[]; history: SettingsHistory; loaded?: boolean; schedulerEnabled?: boolean; runnable?: SettingsRunnable; agents?: unknown; harnesses?: HarnessRow[]; gateway?: SettingsGatewayTiers | null; enabledProviders?: string[]; defaultModel?: string; limits?: unknown};
+type SettingsData = {people: SettingsPerson[]; machines: SettingsMachine[]; services: SettingsService[]; models: SettingsModel[]; issues: SettingsIssue[]; history: SettingsHistory; loaded?: boolean; schedulerEnabled?: boolean; runnable?: SettingsRunnable; agents?: unknown; harnesses?: HarnessRow[]; gateway?: SettingsGatewayTiers | null; enabledProviders?: string[]; defaultModel?: string; limits?: SettingsLimits | null};
 type SettingsPresence = {interval: number; timeout: number; at: number; checking: boolean; failed: boolean; timer: number | null; pending: Promise<unknown> | null; request: number; applied: number};
 type SettingsDestinationHeld = {name?: string; credentials?: string[]; old?: {address?: string}; new?: {address?: string}; path?: string};
 type SettingsAssistantDecision = {id: string; decision: string; what: string; decided_at: string; decided_for?: {words?: string} | null; consumed_at?: string | null; can_undo?: boolean};

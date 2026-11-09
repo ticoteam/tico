@@ -14,6 +14,14 @@ interface SettingsChoice { harness: string; model: string; effort: string; }
 interface SettingsTierPick { tier: string; level: string; fast: boolean; version: string; }
 // The three picker kinds a bot has: its own model, its fallback, and the model its tasks run on.
 type SettingsChoiceKind = 'model' | 'fallback' | 'task';
+// One harness the bot's computer cannot run, with its way out (settingsRuntimeBlock).
+type SettingsRunBlock = NonNullable<ReturnType<typeof settingsRuntimeBlock>>;
+// The Bots view's search, selection and open task rows; they last while the page is open.
+interface SettingsBotsView { q: string; selected: Set<string>; picking: boolean; taskOpen: Set<string>; }
+// An archived bot as GET /v2/bots?include_archived=1 lists it (Restore).
+interface SettingsArchivedBot { id?: string; slug?: string; display_name?: string; state?: string; owner_id?: string | null; bot_owners?: BriefPerson[]; }
+// A template card as GET /v2/templates lists it (catalogCards, ui/app/catalog.ts).
+interface SettingsCatalogCard { slug: string; name?: string; summary?: string; when?: string; owns?: string[]; template?: string; model?: string; reasoning_effort?: string; }
 interface SettingsChoiceKindSpec { name: string; of: (e: SettingsBot) => SettingsBotChoice | null | undefined; none?: boolean | string; }
 // A bot row as the Bots settings read it (GET /api/employees): its model choices, revision and readiness.
 interface SettingsBot extends CloudMachineBot {
@@ -123,21 +131,22 @@ function settingsRuntimeBlock(e: SettingsBot | null | undefined, harness: string
 }
 const settingsMachineOperator = (id: string | undefined) => (SETTINGS_DATA.machines || []).find(row => row.id === id)?.owner_id;
 // One line per harness this computer cannot run that has a way out: sign in here, or move the bot.
-function settingsBlockedNote(e, harnesses) {
-  return harnesses.map(id => [id, settingsRuntimeBlock(e, id)]).filter(([, block]) => block && (block.move || block.signIn))
+function settingsBlockedNote(e: SettingsBot | null | undefined, harnesses: (string | undefined)[]) {
+  return harnesses.map((id): [string | undefined, SettingsRunBlock | null] => [id, settingsRuntimeBlock(e, id)])
+    .filter((row): row is [string | undefined, SettingsRunBlock] => !!row[1] && !!(row[1].move || row[1].signIn))
     .filter(([, block], i, rows) => rows.findIndex(([, other]) => other.runtime === block.runtime) === i)
-    .map(([id, block]) => `<p class="settings-choice-block" data-choice-block="${esc(block.runtime)}"><span>${block.reason.toLowerCase().includes(block.runtime) ? '' : esc(harnessWords(block.runtime) || settingsHarnessName(id)) + ': '}${esc(block.reason)}</span>
+    .map(([id, block]) => `<p class="settings-choice-block" data-choice-block="${esc(block.runtime)}"><span>${block.reason.toLowerCase().includes(String(block.runtime)) ? '' : esc(harnessWords(block.runtime) || settingsHarnessName(id)) + ': '}${esc(block.reason)}</span>
       ${block.signIn ? `<button class="ghost" type="button" data-model-login data-runner="${esc(block.signIn.runner_id)}" data-runtime="${esc(block.runtime)}" data-machine="${esc(block.signIn.computer)}">Sign in</button>` : ''}
       ${block.move ? `<button class="ghost" type="button" data-choice-move="${esc(block.move.id)}" data-machine="${esc(block.move.label)}">Move to ${esc(block.move.label)}</button>` : ''}</p>`).join('');
 }
-async function settingsMoveForModel(button) {
-  const box = button.closest('[data-bot-choice]'), e = S.emps.find(row => row.id === box?.dataset.botChoice);
+async function settingsMoveForModel(button: HTMLElement) {
+  const box = button.closest<HTMLElement>('[data-bot-choice]'), e = S.emps.find(row => row.id === box?.dataset.botChoice);
   if (!e || !await settingsConfirmTransition(e, 'machine', button.dataset.machine)) return;
   await settingsBeginTransition(button, e, {kind: 'machine', runner_id: button.dataset.choiceMove,
     expected_generation: e.machine?.generation || 0, expected_revision: e.revision});
 }
 document.addEventListener('click', event => {
-  const move = event.target.closest('[data-choice-move]');
+  const move = eventElement(event)?.closest<HTMLElement>('[data-choice-move]');
   if (move) void settingsMoveForModel(move);
 });
 // What each picker kind sets on a bot: its own model, its fallback, or the model its tasks run on (task_model,
@@ -151,7 +160,7 @@ const settingsContextName = (tokens: number | null | undefined) => !tokens ? '' 
   || (tokens >= 1e6 && tokens % 1e6 === 0 ? `${tokens / 1e6}M` : `${Math.round(tokens / 1000)}k`);
 // The model a bot's tasks run on: its task model, else its own (or the team default it follows).
 const settingsTaskRunsOn = (e: SettingsBot, model: string | null | undefined = e.task_model?.model) => model || e.model || e.resolved_model || '';
-function settingsMachineSelect(e) {
+function settingsMachineSelect(e: SettingsBot) {
   if (e.agent) return settingsAgentCell(e);
   // On Tico Cloud the shared and the bot's own cloud machine are two choices; no cloud machine is offered as a computer.
   const cloud = e.cloud_machine, current = cloudMachineValue(e) || e.machine?.runner_id || '';
@@ -168,48 +177,49 @@ function settingsMachineSelect(e) {
     </select>`;
 }
 // A problem worth a badge on the bot's row; a bot that is fine shows nothing.
-function settingsBotProblem(e) {
+function settingsBotProblem(e: SettingsBot) {
   if (e.status !== 'active') return '';
   if (e.agent?.synced) return e.online ? '' : 'history not synced';
   if (e.agent) return !e.agent.credential ? 'no credential' : e.online ? '' : 'not reporting';
-  if (cloudMachineOn(e)) return e.cloud_machine.problem || '';
+  if (cloudMachineOn(e)) return e.cloud_machine?.problem || '';
   return !e.machine ? 'no computer' : e.online && e.ready ? '' : e.online ? (e.readiness?.problems?.[0] || 'Computer not ready') : 'offline';
 }
 // Search lasts while the page is open; selection is trimmed to matching manageable bots.
 // Remove the retired filters so an older browser preference can never hide search results.
 try { localStorage.removeItem('hub.settings.bots.filters'); } catch {}
-const SETTINGS_BOTS_VIEW = {q: '', selected: new Set(), picking: false, taskOpen: new Set()};
+const SETTINGS_BOTS_VIEW: SettingsBotsView = {q: '', selected: new Set(), picking: false, taskOpen: new Set()};
 const settingsBotHarness = (e: SettingsBotChoice) => e.harness || e.runtime || '';
 const settingsBotEffort = (e: SettingsBotChoice) => e.reasoning_effort || e.effort || '';
 const settingsBotSelectable = (e: SettingsBot) => !e.agent && settingsCanManageBot(e);
-const settingsBotSearchModels = e => {
+const settingsBotSearchModels = (e: SettingsBot) => {
   const bot = e.agent ? {model: e.agent.model} : e.model ? e : {model: e.resolved_model, harness: e.resolved_runtime};
   return {bot, task: e.agent ? null : e.task_model?.model ? e.task_model : bot};
 };
-const settingsSearchModelWords = model => model ? [model.model, settingsModelName(model.model)] : [];
+const settingsSearchModelWords = (model: SettingsBotChoice | null | undefined) => model ? [model.model, settingsModelName(model.model)] : [];
 // A bot's owners as the Owners column shows them.
-const settingsBotOwners = e => (e.bot_owners || []).length ? e.bot_owners : (e.users || []);
+const settingsBotOwners = (e: SettingsBot) => e.bot_owners?.length ? e.bot_owners : (e.users || []);
 // Every word can occur in the name, slug, role, description, team, bot model or effective task model, the label and
 // owner's name of the bot's computer (as the Computer column shows them), its cloud machine's name, or an owner's name.
-const settingsBotMatches = (e, q) => {
+const settingsBotMatches = (e: SettingsBot, q: string) => {
   const {bot, task} = settingsBotSearchModels(e);
   return !q.trim() || searchIncludes([e.display_name, botDisplayName(e.id), e.slug, e.role,
     e.description, e.team && teamLabel(e.team), ...settingsSearchModelWords(bot), ...settingsSearchModelWords(task),
     e.machine?.label, e.machine && settingsPersonName(e.machine.owner_id), cloudMachineLabel(e),
     ...settingsBotOwners(e).map(o => o.name || o.id)], q);
 };
-function settingsBotSearchMatch(e) {
+function settingsBotSearchMatch(e: SettingsBot) {
   const words = SETTINGS_BOTS_VIEW.q.trim().split(/\s+/).filter(Boolean);
   if (!words.length) return '';
   const {bot, task} = settingsBotSearchModels(e);
-  const matches = model => model?.model && words.some(word => searchIncludes(settingsSearchModelWords(model), word));
-  const labels = [[bot, 'Bot model'], [task, 'Task model']].filter(([model]) => matches(model));
-  return labels.length ? `<small class="sb-model-match" data-model-match>${labels.map(([model, label]) => `${label}: ${esc(settingsModelName(model.model))}`).join(' · ')}</small>` : '';
+  const matches = (model: SettingsBotChoice | null | undefined) => model?.model && words.some(word => searchIncludes(settingsSearchModelWords(model), word));
+  const labels: [SettingsBotChoice | null | undefined, string][] = [[bot, 'Bot model'], [task, 'Task model']];
+  const shown = labels.filter(([model]) => matches(model));
+  return shown.length ? `<small class="sb-model-match" data-model-match>${shown.map(([model, label]) => `${label}: ${esc(settingsModelName(model?.model))}`).join(' · ')}</small>` : '';
 }
-function settingsBotsVisible(rows) {
+function settingsBotsVisible(rows: SettingsBot[]) {
   return rows.filter(e => settingsBotMatches(e, SETTINGS_BOTS_VIEW.q));
 }
-function settingsBotsSearchHTML(shown, total) {
+function settingsBotsSearchHTML(shown: number, total: number) {
   const view = SETTINGS_BOTS_VIEW, picking = view.picking || view.selected.size > 0;
   return `<div class="settings-bots-filters">
     <span class="sb-search"><input class="settings-filter-search" type="search" autocomplete="off" spellcheck="false" enterkeyhint="search" data-bots-search
@@ -221,20 +231,20 @@ function settingsBotsSearchHTML(shown, total) {
     <div class="settings-bulk" data-bots-bulk hidden><strong data-bulk-count></strong>
       <button class="primary" type="button" data-bulk-model>Change model…</button><button class="ghost" type="button" data-bulk-clear>Clear</button></div>`;
 }
-function settingsBotsSyncSelection(el, visible) {
+function settingsBotsSyncSelection(el: HTMLElement, visible: SettingsBot[]) {
   const selectable = visible.filter(settingsBotSelectable).map(e => e.id);
   const picked = selectable.filter(slug => SETTINGS_BOTS_VIEW.selected.has(slug)).length;
-  const all = el.querySelector('[data-bots-select-all]');
+  const all = el.querySelector<HTMLInputElement>('[data-bots-select-all]');
   if (all) { all.checked = !!selectable.length && picked === selectable.length; all.indeterminate = picked > 0 && picked < selectable.length; all.disabled = !selectable.length; }
-  const bar = el.querySelector('[data-bots-bulk]');
-  if (bar) { bar.hidden = !SETTINGS_BOTS_VIEW.selected.size; bar.querySelector('[data-bulk-count]').textContent = `${SETTINGS_BOTS_VIEW.selected.size} selected`; }
+  const bar = el.querySelector<HTMLElement>('[data-bots-bulk]');
+  if (bar) { bar.hidden = !SETTINGS_BOTS_VIEW.selected.size; bar.querySelector('[data-bulk-count]')!.textContent = `${SETTINGS_BOTS_VIEW.selected.size} selected`; }
 }
 // Archived bots the person may bring back (Restore), listed under the bots table. One read is kept for a while.
-let SETTINGS_ARCHIVED = null;
-const settingsMayRestore = b => settingsIsAdmin() || b.owner_id === S.me?.id || (b.bot_owners || []).some(o => o.id === S.me?.id);
-async function settingsArchivedBots(el) {
+let SETTINGS_ARCHIVED: {at: number; bots: SettingsArchivedBot[]} | null = null;
+const settingsMayRestore = (b: SettingsArchivedBot) => settingsIsAdmin() || b.owner_id === S.me?.id || (b.bot_owners || []).some(o => o.id === S.me?.id);
+async function settingsArchivedBots(el: HTMLElement) {
   if (!SETTINGS_ARCHIVED || Date.now() - SETTINGS_ARCHIVED.at > 30000) {
-    try { SETTINGS_ARCHIVED = {at: Date.now(), bots: (await get('/v2/bots?include_archived=1')).filter(b => b.state === 'archived' && settingsMayRestore(b))}; }
+    try { SETTINGS_ARCHIVED = {at: Date.now(), bots: (await get<SettingsArchivedBot[]>('/v2/bots?include_archived=1')).filter(b => b.state === 'archived' && settingsMayRestore(b))}; }
     catch { return; }
   }
   if (!el.isConnected || !SETTINGS_ARCHIVED.bots.length) return;
@@ -244,14 +254,14 @@ async function settingsArchivedBots(el) {
     <span class="spacer"></span><button class="ghost" type="button" data-bot-restore="${esc(b.id ?? b.slug)}" data-label="${esc(b.display_name || b.slug)}">Restore</button></div>`).join('')}`;
   el.appendChild(box);
 }
-async function settingsRestoreBot(slug, button, label = slug) {
+async function settingsRestoreBot(slug: string, button: HTMLButtonElement, label = slug) {
   button.disabled = true;
   try {
-    const done = await post(`/v2/bots/${encodeURIComponent(slug)}/restore`, {});
+    const done: {agent?: {credential?: unknown} | null} = await post(`/v2/bots/${encodeURIComponent(slug)}/restore`, {});
     SETTINGS_ARCHIVED = null;
     toast(`Restored ${label}${done.agent && !done.agent.credential ? '; pair or create its credential' : ''}`);
     await loadSettings();
-  } catch (error) { toast(error.message, true); button.disabled = false; }
+  } catch (error) { toast(errorMessage(error, ''), true); button.disabled = false; }
 }
 function renderSettingsBots() {
   const el = $('#set-bots'); if (!el) return;
@@ -259,15 +269,15 @@ function renderSettingsBots() {
   const rows = settingsBotsVisible(all);
   const shownSelectable = new Set(rows.filter(settingsBotSelectable).map(e => e.id));
   [...SETTINGS_BOTS_VIEW.selected].forEach(slug => { if (!shownSelectable.has(slug)) SETTINGS_BOTS_VIEW.selected.delete(slug); });
-  const pick = e => settingsBotSelectable(e)
+  const pick = (e: SettingsBot) => settingsBotSelectable(e)
     ? `<input type="checkbox" data-bot-pick="${esc(e.id)}" aria-label="Select ${esc(e.display_name)}" ${SETTINGS_BOTS_VIEW.selected.has(e.id) ? 'checked' : ''}>`
     : `<input type="checkbox" disabled aria-label="${esc(e.display_name)} cannot be changed here" title="${e.agent ? 'An external agent uses its own model' : 'You do not own this bot'}">`;
-  const stack = e => {
+  const stack = (e: SettingsBot) => {
     const owners = settingsBotOwners(e);
     const names = owners.map(o => o.name || o.id);
     return `<span class="sb-stack" title="${esc(names.join(', ') || 'No owner')}">${owners.slice(0, 3).map(o => personCircle(o.name || o.id, 22)).join('')}${owners.length > 3 ? `<span class="more">+${owners.length - 3}</span>` : ''}${owners.length ? '' : '<span class="muted">None</span>'}</span>`;
   };
-  const row = e => {
+  const row = (e: SettingsBot) => {
     const problem = settingsBotProblem(e);
     const badges = `${isBuiltInBot(e.id) ? '<span class="pill" data-built-in>Built-in</span>' : ''}${botPausedBadge(e.id, true) || (e.status && e.status !== 'active' ? `<span class="pill">${esc(statusWord(e.status))}</span>` : '')}`;
     const model = e.agent ? `<span class="muted" title="${esc(e.agent.model ? `profile's model · ${e.agent.model}` : "the profile's own model")}">${esc(agentKind(e.agent))}</span>` : settingsChoiceCell(e, 'model');
@@ -291,7 +301,7 @@ function renderSettingsBots() {
   const search = tools?.querySelector('[data-bots-search]');
   if (all.length && search && search === document.activeElement) {
     const next = document.createElement('template'); next.innerHTML = html;
-    const fresh = next.content.querySelector('.settings-bots-filters');
+    const fresh = next.content.querySelector<HTMLElement>('.settings-bots-filters')!;
     tools.className = fresh.className;
     for (const part of ['[data-bots-count]', '.sb-pick-tools']) tools.querySelector(part).replaceWith(fresh.querySelector(part));
     tools.querySelector('[data-bots-search-clear]').hidden = !SETTINGS_BOTS_VIEW.q;
@@ -303,85 +313,94 @@ function renderSettingsBots() {
   void settingsArchivedBots(el);
   // A control that redraws the list takes the keyboard back to itself, or to the search box when it is gone
   // (hidden on a computer, or no longer drawn): a redraw must not drop focus to the page.
-  const redraw = selector => {
+  const redraw = (selector: string) => {
     renderSettingsBots();
     const target = [...el.querySelectorAll(selector)].find(node => node.getClientRects().length);
     (target || el.querySelector('[data-bots-search]'))?.focus();
   };
-  el.onclick = event => {
-    const restore = event.target.closest('[data-bot-restore]');
-    if (restore) { void settingsRestoreBot(restore.dataset.botRestore, restore, restore.dataset.label); return; }
-    const choice = event.target.closest('[data-choice-open]');
+  el.onclick = (event: MouseEvent) => {
+    const target = eventElement(event);
+    if (!target) return;
+    const restore = target.closest<HTMLButtonElement>('[data-bot-restore]');
+    if (restore) { void settingsRestoreBot(String(restore.dataset.botRestore), restore, restore.dataset.label); return; }
+    const choice = target.closest<HTMLElement>('[data-choice-open]');
     if (choice) { settingsChoicePopover(choice); return; }
-    const task = event.target.closest('[data-task-open],[data-task-close]');
+    const task = target.closest<HTMLElement>('[data-task-open],[data-task-close]');
     if (task) {
-      const slug = task.dataset.taskOpen || task.dataset.taskClose, open = SETTINGS_BOTS_VIEW.taskOpen;
+      const slug = String(task.dataset.taskOpen || task.dataset.taskClose), open = SETTINGS_BOTS_VIEW.taskOpen;
       open.has(slug) ? open.delete(slug) : open.add(slug);
       const back = `[data-task-open="${CSS.escape(slug)}"]`;
       redraw(open.has(slug) ? `[data-task-row="${CSS.escape(slug)}"] select:not(:disabled)` : back); return;
     }
-    if (event.target.closest('[data-bulk-model]')) { settingsBulkModelDialog(); return; }
-    if (event.target.closest('[data-bulk-clear]')) { SETTINGS_BOTS_VIEW.selected.clear(); redraw('[data-bots-picking]'); return; }
-    if (event.target.closest('[data-bots-search-clear]')) {
+    if (target.closest<HTMLElement>('[data-bulk-model]')) { settingsBulkModelDialog(); return; }
+    if (target.closest<HTMLElement>('[data-bulk-clear]')) { SETTINGS_BOTS_VIEW.selected.clear(); redraw('[data-bots-picking]'); return; }
+    if (target.closest<HTMLElement>('[data-bots-search-clear]')) {
       SETTINGS_BOTS_VIEW.q = ''; renderSettingsBots(); el.querySelector('[data-bots-search]')?.focus(); return;
     }
     // On a phone the checkbox cell is the tap target, not just the 16px box.
-    const pickCell = event.target.closest('td.settings-pick');
-    if (pickCell && event.target === pickCell) { pickCell.querySelector('input:not(:disabled)')?.click(); return; }
+    const pickCell = target.closest<HTMLElement>('td.settings-pick');
+    if (pickCell && target === pickCell) { pickCell.querySelector<HTMLInputElement>('input:not(:disabled)')?.click(); return; }
     // Done also drops the selection: nothing stays picked behind checkboxes that are no longer shown.
-    if (event.target.closest('[data-bots-picking]')) {
+    if (target.closest<HTMLElement>('[data-bots-picking]')) {
       SETTINGS_BOTS_VIEW.picking = !(SETTINGS_BOTS_VIEW.picking || SETTINGS_BOTS_VIEW.selected.size);
       if (!SETTINGS_BOTS_VIEW.picking) SETTINGS_BOTS_VIEW.selected.clear();
       redraw('[data-bots-picking]'); return;
     }
-    if (event.target.closest('[data-bots-pick-all]')) {
+    if (target.closest<HTMLElement>('[data-bots-pick-all]')) {
       const pickable = rows.filter(settingsBotSelectable), on = !pickable.every(e => SETTINGS_BOTS_VIEW.selected.has(e.id));
       pickable.forEach(e => on ? SETTINGS_BOTS_VIEW.selected.add(e.id) : SETTINGS_BOTS_VIEW.selected.delete(e.id));
-      el.querySelectorAll('[data-bot-pick]').forEach(box => { box.checked = on; });
+      el.querySelectorAll('[data-bot-pick]').forEach((box: HTMLInputElement) => { box.checked = on; });
       settingsBotsSyncSelection(el, rows); return;
     }
-    const cap = event.target.closest('[data-use-limit]');
+    const cap = target.closest<HTMLElement>('[data-use-limit]');
     if (cap) {
-      const slug = cap.dataset.useLimit, name = settingsBotName(slug);
+      const slug = String(cap.dataset.useLimit), name = settingsBotName(slug);
       useLimitDialog(slug, name, SETTINGS_DATA.limits?.bots?.[slug], SETTINGS_DATA.limits?.default, async () => {
         try { SETTINGS_DATA.limits = await get('/v2/usage/limits'); } catch {}
         renderSettingsBots();
       });
       return;
     }
-    const bot = event.target.closest('[data-edit-bot]');
-    const credential = event.target.closest('[data-agent-credential]');
-    const revoke = event.target.closest('[data-agent-revoke]');
-    const pairing = event.target.closest('[data-agent-pair]');
+    const bot = target.closest<HTMLElement>('[data-edit-bot]');
+    const credential = target.closest<HTMLElement>('[data-agent-credential]');
+    const revoke = target.closest<HTMLElement>('[data-agent-revoke]');
+    const pairing = target.closest<HTMLElement>('[data-agent-pair]');
     if (pairing) void settingsAgentPair(pairing.dataset.agentPair);
     if (bot) settingsEditBot(bot.dataset.editBot);
     if (credential) void settingsAgentCredential(credential.dataset.agentCredential);
     if (revoke) void settingsAgentRevoke(revoke.dataset.agentRevoke);
   };
-  el.oninput = event => {
-    const search = event.target.closest('[data-bots-search]');
+  el.oninput = (event: Event) => {
+    const target = eventElement(event);
+    if (!target) return;
+    const search = target.closest<HTMLInputElement>('[data-bots-search]');
     if (search) { SETTINGS_BOTS_VIEW.q = search.value; renderSettingsBots(); }
   };
   // Escape empties the search box (as a search field does in Chrome and Safari); an empty box lets it through.
-  el.onkeydown = event => {
-    const search = event.key === 'Escape' && event.target.closest('[data-bots-search]');
+  el.onkeydown = (event: KeyboardEvent) => {
+    const target = eventElement(event);
+    if (!target) return;
+    const search = event.key === 'Escape' && target.closest<HTMLInputElement>('[data-bots-search]');
     if (!search || !search.value) return;
     event.preventDefault(); event.stopPropagation();
     search.value = ''; SETTINGS_BOTS_VIEW.q = ''; renderSettingsBots();
   };
-  el.onchange = event => {
-    if (event.target.closest('[data-bots-search]')) return;
-    const one = event.target.closest('[data-bot-pick]');
-    if (one) { one.checked ? SETTINGS_BOTS_VIEW.selected.add(one.dataset.botPick) : SETTINGS_BOTS_VIEW.selected.delete(one.dataset.botPick); settingsBotsSyncSelection(el, rows); return; }
-    if (event.target.closest('[data-bots-select-all]')) {
-      const on = event.target.checked;
+  el.onchange = (event: Event) => {
+    const target = eventElement(event);
+    if (!target) return;
+    if (target.closest<HTMLElement>('[data-bots-search]')) return;
+    const one = target.closest<HTMLInputElement>('[data-bot-pick]');
+    if (one) { one.checked ? SETTINGS_BOTS_VIEW.selected.add(String(one.dataset.botPick)) : SETTINGS_BOTS_VIEW.selected.delete(String(one.dataset.botPick)); settingsBotsSyncSelection(el, rows); return; }
+    const allBox = target.closest<HTMLInputElement>('[data-bots-select-all]');
+    if (allBox) {
+      const on = allBox.checked;
       rows.filter(settingsBotSelectable).forEach(e => on ? SETTINGS_BOTS_VIEW.selected.add(e.id) : SETTINGS_BOTS_VIEW.selected.delete(e.id));
-      el.querySelectorAll('[data-bot-pick]').forEach(box => { box.checked = on; });
+      el.querySelectorAll('[data-bot-pick]').forEach((box: HTMLInputElement) => { box.checked = on; });
       settingsBotsSyncSelection(el, rows); return;
     }
-    const machine = event.target.closest('[data-bot-machine]');
+    const machine = target.closest<HTMLElement>('[data-bot-machine]');
     if (machine) void settingsMoveBot(machine);
-    const part = event.target.closest('[data-task-row] [data-task-effort],[data-task-row] [data-task-context]');
+    const part = target.closest<HTMLSelectElement>('[data-task-row] [data-task-effort],[data-task-row] [data-task-context]');
     if (part) void settingsSaveTaskPart(part);
   };
   settingsWireCombos(el);
@@ -413,12 +432,12 @@ async function settingsCatalogPicker() {
     window.removeEventListener('hashchange', leave); dialog.innerHTML = '';
     if (temporary) { dialog.remove(); teamAddReturnFocus(); }
   };
-  dialog.querySelectorAll('[data-catalog-close]').forEach(button => button.onclick = () => dialog.close());
+  dialog.querySelectorAll('[data-catalog-close]').forEach((button: HTMLButtonElement) => button.onclick = () => dialog.close());
   dialog.showModal();
-  let cards;
+  let cards: SettingsCatalogCard[];
   try { cards = catalogCards(await get('/v2/templates')); }
   catch (error) {
-    const body = $('#catalog-picker-body'); if (body) body.innerHTML = `<div class="err">${esc(error.message)}</div>`;
+    const body = $('#catalog-picker-body'); if (body) body.innerHTML = `<div class="err">${esc(errorMessage(error, ''))}</div>`;
     return;
   }
   if (!dialog.open) return;
@@ -436,10 +455,10 @@ async function settingsCatalogPicker() {
   const filter = () => {
     const words = search.value.trim().toLowerCase().split(/\s+/).filter(Boolean);
     let shown = 0;
-    grid.querySelectorAll('[data-cat-card]').forEach(node => {
+    grid.querySelectorAll('[data-cat-card]').forEach((node: HTMLElement) => {
       const card = catalogCard(state, node.dataset.catCard);
       const text = [card.name, card.slug, card.summary, card.when, ...(card.owns || []), catalogName(state, card)].join(' ').toLowerCase();
-      node.hidden = !words.every(word => text.includes(word));
+      node.hidden = !words.every((word: string) => text.includes(word));
       if (!node.hidden) shown++;
     });
     $('#catalog-picker-count').textContent = `${shown} of ${state.cards.length} templates · ${state.picked.size} selected`;
@@ -448,12 +467,12 @@ async function settingsCatalogPicker() {
   // Keep cards mounted: filtering must preserve edited instructions, choices and selections.
   catalogWire(grid, state, filter);
   search.oninput = filter;
-  search.onkeydown = event => { if (event.key === 'Enter') event.preventDefault(); };
+  search.onkeydown = (event: KeyboardEvent) => { if (event.key === 'Enter') event.preventDefault(); };
   filter();
   search.focus();
-  dialog.querySelectorAll('[data-catalog-close]').forEach(button => button.onclick = () => dialog.close());
+  dialog.querySelectorAll('[data-catalog-close]').forEach((button: HTMLButtonElement) => button.onclick = () => dialog.close());
   const form = dialog.querySelector('form'), status = $('#catalog-picker-status');
-  form.onsubmit = async event => {
+  form.onsubmit = async (event: SubmitEvent) => {
     event.preventDefault();
     const submit = form.querySelector('[type=submit]');
     const chosen = state.cards.filter(card => state.picked.has(card.slug));
@@ -485,8 +504,8 @@ async function settingsCatalogPicker() {
       if (S.route === SETTINGS) { await loadSettings(); settingsShow('bots'); }
       toast(hints.length ? hints.join('; ') : chosen.length === 1 ? `Added ${catalogName(state, chosen[0])}` : `Added ${chosen.length} bots`);
     } catch (error) {
-      status.innerHTML = `<span class="err">${esc(error.message)}</span>`;
-      if (String(error.message).includes('Team default')) {
+      status.innerHTML = `<span class="err">${esc(errorMessage(error, ''))}</span>`;
+      if (String(errorMessage(error, '')).includes('Team default')) {
         const link = document.createElement('button'); link.type = 'button'; link.className = 'linkish'; link.textContent = 'Models';
         link.onclick = () => {
           dialog.close();

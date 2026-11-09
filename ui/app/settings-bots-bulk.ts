@@ -27,7 +27,7 @@ function settingsBulkModelDialog() {
         <ul class="settings-bulk-list" data-bulk-list>${bots.map(e => `<li data-bulk-bot="${esc(e.id)}" data-state="pending"><span>${esc(e.display_name || e.slug)}</span><span class="settings-cell-note">${esc(settingsChoiceLabel(settingsBotHarness(e), e.model, settingsBotEffort(e)))}</span></li>`).join('')}</ul>
         <p role="status" data-bulk-summary></p>
         <div class="transition-actions"><button class="primary" type="button" data-bulk-apply ${choice ? '' : 'disabled'}>Change ${bots.length} bot${bots.length === 1 ? '' : 's'}</button><button class="ghost" type="button" data-bulk-close>Cancel</button></div></div>`;
-    dialog.querySelectorAll<HTMLButtonElement>('[data-bulk-close]').forEach(button => button.onclick = () => dialog.close());
+    dialog.querySelectorAll<HTMLButtonElement>('[data-bulk-close]').forEach(button => { button.onclick = () => dialog.close(); });
     const preview = () => {
       part<HTMLElement>('[data-bulk-explanation]').innerHTML = target === 'task'
         ? '<strong>Only task models change.</strong><p>New task sessions use this choice. If unavailable, tasks use the bot model and say so.</p>'
@@ -58,7 +58,7 @@ function settingsBulkModelDialog() {
     if (apply) apply.disabled = true;
     const retry = dialog.querySelector<HTMLButtonElement>('[data-bulk-retry]');
     if (retry) retry.disabled = true;
-    dialog.querySelectorAll<HTMLSelectElement | HTMLButtonElement>('[data-bot-choice] select,[data-choice-apply],[data-bulk-target]').forEach(control => control.disabled = true);
+    dialog.querySelectorAll<HTMLSelectElement | HTMLButtonElement>('[data-bot-choice] select,[data-choice-apply],[data-bulk-target]').forEach(control => { control.disabled = true; });
     const results: SettingsBulkTally = {changed: 0, partial: 0, skipped: 0, blocked: 0, failed: []};
     for (const e of targets) {
       mark(e.id, 'working', 'Changing…');

@@ -207,7 +207,7 @@ function settingsWireCombos(root: ParentNode, onPick: (box: SettingsChoiceBox, v
       button.onclick = async () => {
         if (!picker.valid()) return;
         const value = picker.value();
-        box.querySelectorAll<HTMLSelectElement | HTMLButtonElement>('select,button').forEach(control => control.disabled = true);
+        box.querySelectorAll<HTMLSelectElement | HTMLButtonElement>('select,button').forEach(control => { control.disabled = true; });
         try { await onPick(box, value); }
         finally { if (box.isConnected) mount(); }
       };

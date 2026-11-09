@@ -76,7 +76,7 @@ function catalogCardHTML(state, card, note) {
 }
 // Required first (BotOps), then what is ticked by default (the assistant), then whatever the
 // answers recommend, then the rest of the menu.
-function catalogGridHTML(state, note) {
+function catalogGridHTML(state, note?: (card: unknown) => unknown) {
   const rank = card => card.required ? 0 : card.default ? 1 : note && note(card) ? 2 : 3;
   const rows = state.cards.slice().sort((a, b) =>
     rank(a) - rank(b) || String(a.name || a.slug).localeCompare(String(b.name || b.slug)));
