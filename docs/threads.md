@@ -138,8 +138,8 @@ sub-thread under it.
 
 - **Threads**: the company and team threads you can read but are not in. Type in **Find a thread** to narrow the list.
   **Join** follows the thread.
-- **Archived**: the threads you archived that you may still manage, newest activity first. **Unarchive** on a row puts the
-  thread back on the Threads list. **Find a thread** is not shown on this tab.
+- **Archived**: the archived threads you can read and manage, whoever archived them, newest activity first. **Unarchive**
+  on a row puts the thread back on the Threads list. **Find a thread** is not shown on this tab.
 
 Each tab loads 50 threads at a time. **More** loads the next page.
 
@@ -335,8 +335,8 @@ and `/api/v2/messages/{id}`, and are described in the [API guide](api.md). The t
 - `POST /api/v2/uploads/threads/{id}/messages`: a person posts a message with files attached (multipart, `text` and
   `file`), under the chat upload size caps: `hub thread upload`.
 - `DELETE /api/v2/messages/{id}`: delete your message (`hub thread delete`).
-- `GET /api/v2/threads/archived?limit=&cursor=`: the threads you archived and may still manage (the **Archived** tab in
-  [Browse threads](#browse-threads)).
+- `GET /api/v2/threads/archived?limit=&cursor=`: the archived threads you can read and manage, whoever archived them
+  (the **Archived** tab in [Browse threads](#browse-threads)).
 - `PATCH /api/v2/threads/{id}` with `archived`: `true` archives the thread, `false` unarchives it (`hub thread update
   --archive` or `--unarchive`).
 - `DELETE /api/v2/threads/{id}`: deletes the thread when [its rules](#archive-and-delete-a-thread) allow it. Otherwise it
