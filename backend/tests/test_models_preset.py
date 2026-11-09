@@ -565,7 +565,7 @@ def test_a_gateway_segment_records_the_key_its_runner_was_handed_and_the_install
 
 
 def test_the_owner_saves_the_choice_through_the_api_and_reads_it_back(api):
-    from backend.tests.test_api import get, put
+    from backend.tests.helpers.api import get, put
 
     view = get(api, "providers")
     assert view["presets"] == list(models_preset.PRESETS) and view["preset"] == ""
