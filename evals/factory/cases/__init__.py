@@ -37,6 +37,9 @@ SCENARIOS += _receipt_wording
 from .recovery import SCENARIOS as _recovery
 
 SCENARIOS += _recovery
+from .review_pages import SCENARIOS as _review_pages
+
+SCENARIOS += _review_pages
 from .snoozed_ticket import SCENARIOS as _snoozed_ticket
 
 SCENARIOS += _snoozed_ticket

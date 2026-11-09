@@ -32,7 +32,7 @@ const HOSTILE_SCRIPT = 'parent.postMessage({ticoVisualHeight: 50, navigate: "htt
   + 'try { top.location = "https://evil.test/top" } catch (e) {} try { parent.document.body.dataset.owned = "yes" } catch (e) {}'
   + 'try { document.cookie = "x=1" } catch (e) { document.title = "opaque" }';
 // The app's own treatment (backend/visuals.py): cleaned, the height reporter appended; the slots as the app writes them.
-const app = JSON.parse(execFileSync('python3', ['-I', '-c', `
+const app = JSON.parse(execFileSync(process.env.TICO_PYTHON || 'python3', ['-I', '-c', `
 import json, sys
 sys.path.insert(0, ${JSON.stringify(ROOT)})
 from backend import visuals

@@ -304,10 +304,11 @@ class World:
         if getattr(self, "github_reads", False):
             # With the GitHub App connected the app's loop also retries refused review moves and reads gate holds
             # afresh (backend/app.py); both read GitHub, so without the App there is nothing for them to do.
-            from backend import move_retry, task_blocked
+            from backend import move_retry, review_pages, task_blocked
 
             move_retry.tick(self.app.state.github_app, force=True)
             task_blocked.fresh(self.app.state.github_app, force=True)
+            review_pages.tick(self.app.state.github_app, pages=self.app.state.pages, blobs=self.app.state.blobs)
 
     def retry_moves(self):
         """The server's retry of refused review moves (backend/move_retry.py), which the app runs beside its GitHub
@@ -676,7 +677,22 @@ class World:
                 return answer(status, {"message": "Server Error" if status >= 500 else "Too Many Requests"})
             if found := re.fullmatch(rf"/repos/{REPO}/pulls/(\d+)", path):
                 pr = self.prs.get(int(found[1]))
-                return answer(200, {"head": {"sha": pr["head"]}, "merged": pr["merged"]}) if pr else answer(404, {})
+                if not pr:
+                    return answer(404, {})
+                if method == "PATCH":  # the review page line (backend/review_pages.py) writes the body
+                    pr["body"] = (kw.get("json") or {}).get("body", "")
+                    return answer(200, {"number": int(found[1])})
+                return answer(
+                    200,
+                    {
+                        "number": int(found[1]),
+                        "title": f"Change {found[1]}",
+                        "html_url": f"https://github.example/{REPO}/pull/{found[1]}",
+                        "body": pr.get("body", ""),
+                        "head": {"sha": pr["head"]},
+                        "merged": pr["merged"],
+                    },
+                )
             if found := re.fullmatch(rf"/repos/{REPO}/commits/(\w+)/(check-runs|statuses)", path):
                 if found[2] == "statuses":
                     return answer(200, [])

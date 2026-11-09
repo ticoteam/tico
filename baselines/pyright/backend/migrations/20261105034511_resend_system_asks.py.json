@@ -1,0 +1,14 @@
+{
+    "files": {
+        "./backend/migrations/20261105034511_resend_system_asks.py": [
+            {
+                "code": "reportAttributeAccessIssue",
+                "range": {
+                    "startColumn": 24,
+                    "endColumn": 35,
+                    "lineCount": 1
+                }
+            }
+        ]
+    }
+}
