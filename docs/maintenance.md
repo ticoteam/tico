@@ -23,12 +23,17 @@ In order:
 | Update | Builds the day's update queue from 05:00, skipping bots with no work unless learnings or suggestions are waiting. The server keeps sending requests and drafting people's updates after the run ends. | Once a day |
 | Dream | The auto dream: starts a dream for up to "Most bots per run" bots (three by default, 1 to 20). | Once a day |
 
+A held queued job does not hide a due follow-up from Find stuck's task list.
+
 ## How often
 
 - Every run: each run.
 - Day: once per company day, after 05:00.
 - Week: seven days after the step's last attempt.
 - Custom: every N hours or days, counted from the step's last attempt. A failed attempt counts, so a broken step does not retry on every run.
+- Week and Custom count as due up to five minutes early. A step's clock is its run's start, which lands a few seconds
+  into a schedule bucket; without the slack a run a few seconds earlier in its bucket than the last one finds the step
+  not due and puts it off a whole bucket (on Nov 8 a 6-hour Find stuck ran 7 hours apart).
 
 Suggest waits at least 24 hours between successful fetches, measured from the request time. A skip inside that window keeps its daily attempt for a later run that day.
 
@@ -51,7 +56,7 @@ Update skips before 05:00 company time without using up its cadence, so it can b
 
 ## Spend cap
 
-The monthly judge spend cap is saved here as `monthly_cap_usd`. When it is saved, the judge enforces it. When it is not, the environment setting `TICO_DECISIONS_MONTHLY_USD` applies (default 50).
+The monthly judge spend cap is saved here as `monthly_cap_usd`. When it is saved, the judge enforces it. When it is not, the environment setting `TICO_DECISIONS_MONTHLY_USD` applies (default 50). The rules' monthly cap (org rule checks, which ask Jev only) is saved here too, as `rules_monthly_cap_usd`; when it is not saved, `TICO_RULES_MONTHLY_USD` applies (default 50).
 
 ## Who can do what
 

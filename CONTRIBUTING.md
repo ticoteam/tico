@@ -27,34 +27,54 @@ npx playwright install chromium
 npm run test:ui                                # the core browser scripts (CORE in scripts/ui-tests.cjs)
 ```
 
-Run both locally before you open a pull request. GitHub Actions runs them again on the pull request (the PR checks
-workflow), so a failure shows there too. The default run leaves out
+Run both locally before you open a pull request. GitHub Actions lints the pull request again and, once it is ready, runs its selected tests (the PR checks workflow);
+the merge queue runs them again on the merged result before a change lands. The default run leaves out
 tests marked `@pytest.mark.slow` (real git, Docker, servers, long timers) and the browser scripts outside the core
 list; `python -m pytest -q -m slow` and `node scripts/ui-tests.cjs --all` run them, and the release check does. Run
 them too when you change what they cover. To run less while you work: `python -m pytest -q backend/tests/test_x.py`
 for one file, `node scripts/ui-tests.cjs <name>` for one browser script. If you touch `app/`, also run `cargo check`
-there.
+there. `python3 scripts/remote.py -- <command>` runs a command on a fresh VM instead: it exits 75 when it never dispatched
+the run and 76 when the run ended without a result; any other code is the command's own (`--help` lists them).
 
 ## Before you push
 
 `scripts/check.sh` is the fast local gate. It runs each static check that applies to what you changed (the Python
-lint baseline, shellcheck, actionlint, cargo fmt, the migration order, the UI API types and the pyright boundary
-modules), one line per check with its time, and exits non-zero if one fails. It compares against the merge-base
+lint baseline, shellcheck, actionlint, cargo fmt, the migration order, the UI API types and basedpyright on the
+backend against its baseline), one line per check with its time, and exits non-zero if one fails. It compares against the merge-base
 with origin/main, so committed, uncommitted and new files are all checked. `scripts/check.sh --all` runs every check
 on every tracked file; CI runs the same checks. Turn on the pre-push hook once per clone:
 
 ```bash
 git config core.hooksPath .githooks
+git config merge.tico-json.driver 'python3 scripts/json_merge.py %O %A %B'
 ```
 
 After that, each `git push` runs `scripts/check.sh` first. To push without it once, use `git push --no-verify`.
+The second line makes a rebase merge two edits to `docs/openapi/v2.json` by key (`scripts/json_merge.py`), so they stop
+conflicting; without it git merges that file as text. The lint and type baselines need no driver: each source file's
+findings are one file under `baselines/ruff/` and `baselines/pyright/`, so two branches that fix different files change
+different files and merge as text. (GitHub's "Update branch" button and the merge queue merge as text too; the merge
+queue runs no drivers at all, which is why the baselines are split.) `ruff-baseline.toml` and `.basedpyright/baseline.json`
+are generated from those files and git-ignored: `scripts/lint.sh` and `scripts/check_types.sh` write them. The gate runs
+ruff against `ruff-baseline.toml`, which extends `ruff.toml`; `ruff.toml` never refers to it. A bare
+`uvx ruff@0.15.9 check` (an editor, or a plain run) reads `ruff.toml` alone and reports every finding, baselined or not,
+and `uvx ruff@0.15.9 format` needs no generated file. A branch from before the split tracks the old single files: rebase
+it, then run
+`python3 scripts/lint_baseline.py --migrate` and `python3 scripts/pyright_baseline.py --migrate` on its own counts and
+entries, and commit. The generated `ui/types/api.d.ts` is not committed: `scripts/check_ui_types.sh` writes it.
 shellcheck and actionlint are pinned versions downloaded on first use and checked against their SHA-256 (see
 `scripts/pinned_tool.sh`); they are cached under `~/.cache/tico/tools`.
 
-The UI's JavaScript has a type check and a Biome lint, both seconds long: `bash scripts/check_ui_types.sh` and
-`bash scripts/check_ui_lint.sh`. Each counts findings per file against `ui/types-baseline.json` or
-`ui/lint-baseline.json`. The counts only shrink: after you fix findings, lower the baseline with
-`python3 scripts/ui_baseline.py tsc --write` (or `biome`).
+The UI's scripts have a strict type check (`python3 scripts/check_ui_strict.py`, run by `scripts/check.sh`), a loose
+type check of the `.js` files left (`bash scripts/check_ui_types.sh`) and a Biome lint (`bash scripts/check_ui_lint.sh`),
+all seconds long. Each counts findings per file against its own baseline file: `ui/baselines/strict/<path>.json` for a
+`.ts` file with strict findings (a new `.ts` file must be at zero), `ui/baselines/tsc/<path>.json` for a `.js` file, or
+`ui/baselines/biome/<path>.json` (a file with no findings has none). Flipping a `.js` file to `.ts` is
+`python3 scripts/ui_flip.py`: it moves the file and its baselines, and changes its references and its script tag in
+`ui/index.html`, which keeps a blank line between script tags so that flips of different files do not conflict in a
+merge. The counts only shrink: after you fix findings, lower the baseline with
+`python3 scripts/check_ui_strict.py --write` (or `python3 scripts/ui_baseline.py tsc --write`, or `biome`).
+`ui/index.html` must keep the blank lines: `python3 scripts/ui_baseline.py migrate` adds them.
 The UI's API calls are checked against the backend's routes by `bash scripts/check_ui_routes.sh`: it imports the app and
 walks its routes (no server), and counts the calls that match no route per file in `ui/routes-baseline.json`, which
 only shrinks the same way. Fix a call by pointing it at the route it should reach; the baseline is written with
@@ -130,20 +150,31 @@ company already owns, so their commits need no sign-off, and their pull requests
 - Keep real team names, human names, domains and credentials out of the repository. Examples use
   the fictional team Acme (`acme.example`).
 - Describe the behavior change and how you checked it in the pull request.
+- Fill in the template's Spec, Demo steps and Risk sections. The release notes that approvers read are built from them:
+  the Spec link, the steps to see the change work in the Acme Lights demo company, and the risk level with what could go
+  wrong.
 
 ## How we work
 
 - Trunk-based: everything lands on `main` through short-lived branches named `<who>/<topic>`, one ticket per PR.
-- Draft PRs run no CI. Mark the PR ready for review to start the checks.
-- The author merges, once the checks are green and the PR is reviewed.
+- Draft PRs run no CI. Mark the PR ready for review to start its checks (lint and the selected tests); each later push runs them again.
+- Once the PR is reviewed, its `checks` pass, and the tests you touched pass with `scripts/remote.py`, enqueue it with
+  `gh pr merge <N> --merge`. The merge queue tests the PR merged onto current main before the change lands.
+- After a queue failure, fix it and get green PR checks before you enqueue again.
+- Enqueue once. Don't rebase or merge main just to be current; rebase only when GitHub reports a conflict.
+- If the queue removes the PR, read why before you push again. Never use `--admin` or the REST merge endpoint:
+  both skip the queue.
 - If a release candidate goes red because of your merge, fixing it comes before anything else.
 
 ## Releases
 
 Don't edit CHANGELOG.md in a PR. The Technical Writer writes each release's notes after it is published.
 
-A release is a version tag, and contributors do not tag. Tico releases from two windows a day (14:30 and 22:00 UTC):
-GitHub Actions validates main's head, ships the first green candidate to Tico Team's install, and promotes it to
-stable after it has baked. A hotfix is for major production issues only. The Release Manager bot no longer tags or
-rolls out Tico releases; it only monitors them. The details are in
-[docs/releasing.md](docs/releasing.md#release-windows).
+A release is a version tag, and contributors do not tag. Tico releases from release windows (weekdays 07:30, 11:00,
+14:00 and 20:30 Los Angeles time, weekends 07:30 and 15:00):
+GitHub Actions validates main's head and ships the first green candidate to Tico Team's install (the canary). Stable
+(TIDY) takes a canary release only after a person with write access approves its release notes, on that release's
+`release-approval` issue (the `approved` label, or a `/approve` comment). A hotfix is for major production issues only.
+The Release Manager bot no longer tags or rolls out Tico releases; it only monitors them. The details are in
+[docs/releasing.md](docs/releasing.md#release-windows), and the approval steps are in
+[docs/releasing.md](docs/releasing.md#approval).

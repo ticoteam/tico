@@ -29,7 +29,7 @@ import yaml
 ROOT = Path(__file__).resolve().parents[1]
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT))
-from clients import docs_ask  # noqa: E402
+from clients import docs_ask
 
 PREFIX = "eval-fixture/"
 
@@ -263,7 +263,7 @@ def summary(results):
     hits = [r["score"]["cited"] for r in results if r["score"]["cited"] is not None]
     unknowns = [r["score"]["unknown_ok"] for r in results if r["score"]["unknown_ok"] is not None]
     facts = [r["score"]["facts"] for r in results if r["score"]["facts"] is not None]
-    rate = lambda xs: (sum(bool(x) for x in xs) / len(xs)) if xs else None  # noqa: E731
+    rate = lambda xs: (sum(bool(x) for x in xs) / len(xs)) if xs else None
     seconds = [r["seconds"] for r in results if r["seconds"] is not None]
     return {
         "citation_hit_rate": rate(hits),
@@ -396,7 +396,7 @@ def main(argv=None):
         elif id_by_path:
             print("Retained fixture IDs: " + ", ".join(id_by_path.values()), file=sys.stderr)
     totals = summary(results)
-    pct = lambda x: "n/a" if x is None else f"{x:.0%}"  # noqa: E731
+    pct = lambda x: "n/a" if x is None else f"{x:.0%}"
     print(
         f"\nCitation hit rate  {totals['citation_hits'][0]}/{totals['citation_hits'][1]}  {pct(totals['citation_hit_rate'])}"
         f"\nSaid unknown       {totals['unknown_hits'][0]}/{totals['unknown_hits'][1]}  {pct(totals['unknown_rate'])}"

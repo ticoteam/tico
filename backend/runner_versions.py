@@ -303,7 +303,7 @@ def health_check(computers, server=None):
     behind = [x for x in online if x["update"]["state"] in ("needs_update", "updating")]
     failed = [x for x in online if x["update"]["error"]]
     fixes = [{"label": "Open Computers", "href": "#/settings", "tab": "devices", "click": ""}]
-    names = lambda rows: ", ".join(x["label"] for x in rows[:5])  # noqa: E731
+    names = lambda rows: ", ".join(x["label"] for x in rows[:5])
     unknown = [x for x in online if x["update"]["state"] == "unknown"]
     newer = [
         x

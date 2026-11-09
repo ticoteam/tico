@@ -1541,7 +1541,7 @@ mod tests {
         // beta runs the company's gateway model, which needs no key of its own, so only alpha's refusal can stop it.
         let assignments = vec![
             assignment("readiness-alpha", "openrouter/model"),
-            assignment("readiness-beta", "tico-mid-1.0"),
+            assignment("readiness-beta", "tico-medium-1.0"),
         ];
         let runtimes = map(json!({"pi": {"installed": true, "authenticated": "ready"}}));
         let rows = preflight(&config, &sign, &assignments, &runtimes, false).await;
@@ -1632,7 +1632,7 @@ mod tests {
         let pi_bots = [
             json!({"bot": "has-key", "config": {"runtime": "pi", "harness": "pi", "model": "kimi-k3"}}),
             json!({"bot": "no-key", "config": {"runtime": "pi", "harness": "pi", "model": "kimi-k3"}}),
-            json!({"bot": "gateway", "config": {"runtime": "pi", "harness": "pi", "model": "tico-mid-1.0"}}),
+            json!({"bot": "gateway", "config": {"runtime": "pi", "harness": "pi", "model": "tico-medium-1.0"}}),
         ];
         let gemini_bots = [
             json!({"bot": "g-key", "config": {"runtime": "gemini", "harness": "gemini", "model": "gemini-3.7-flash"}}),

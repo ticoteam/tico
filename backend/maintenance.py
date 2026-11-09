@@ -103,7 +103,12 @@ def run_settings(c):
         "schedule": stored.get("schedule") if stored.get("schedule") in SCHEDULES else "hourly",
         "paused": stored.get("paused") is True,
         "monthly_cap_usd": float(cap) if isinstance(cap, (int, float)) and not isinstance(cap, bool) else None,
+        "rules_monthly_cap_usd": _cap_or_none(stored.get("rules_monthly_cap_usd")),
     }
+
+
+def _cap_or_none(value):
+    return float(value) if isinstance(value, (int, float)) and not isinstance(value, bool) else None
 
 
 def steps_of(c):
@@ -117,18 +122,25 @@ def day_start(at):
     return start if local >= start else start - timedelta(days=1)
 
 
+# How early a week or custom step still counts as due: a run starts a few seconds into its bucket.
+DUE_SLACK = timedelta(minutes=5)
+
+
 def due(row, at):
     """Whether a step is due at `at` by its "How often". The clock counts from its last attempt, not its last success:
-    a step that failed does not retry every run."""
+    a step that failed does not retry every run. A week or custom cadence is due DUE_SLACK early: a step's clock is its
+    run's start, which lands a few seconds into a bucket, so an exact comparison misses the bucket it was meant for by
+    seconds and slips a whole bucket (a 6-hour Find stuck ran 7 hours apart)."""
     if row["frequency"] == "run" or not row["last_started_at"]:
         return True
     last = H.parse_ts(row["last_started_at"])
     if row["frequency"] == "day":
         return last < day_start(at)
     if row["frequency"] == "week":
-        return at - last >= timedelta(days=7)
+        return at - last >= timedelta(days=7) - DUE_SLACK
     every = row["custom_every"] or 1
-    return at - last >= (timedelta(hours=every) if row["custom_unit"] == "hours" else timedelta(days=every))
+    gap = timedelta(hours=every) if row["custom_unit"] == "hours" else timedelta(days=every)
+    return at - last >= gap - DUE_SLACK
 
 
 def bucket(schedule, at):
@@ -582,8 +594,8 @@ def _finish(store, run_id, tally, error):
         LOG.exception("could not finish maintenance run %s; recovery will end it", run_id)
 
 
-def save_settings(c, actor, schedule=None, paused=None, monthly_cap_usd=None):
-    """The run's schedule, pause and monthly cap; only what is sent changes."""
+def save_settings(c, actor, schedule=None, paused=None, monthly_cap_usd=None, rules_monthly_cap_usd=None):
+    """The run's schedule, pause, Decide's monthly cap and the rules' monthly cap; only what is sent changes."""
     if schedule is not None and schedule not in SCHEDULES:
         raise Problem("invalid", "Run every hour, every 2, 3, 6 or 12 hours, or once a day", 422)
     before, stored = run_settings(c), _stored(c)
@@ -593,6 +605,8 @@ def save_settings(c, actor, schedule=None, paused=None, monthly_cap_usd=None):
         stored["paused"] = bool(paused)
     if monthly_cap_usd is not None:
         stored["monthly_cap_usd"] = round(float(monthly_cap_usd), 2)
+    if rules_monthly_cap_usd is not None:
+        stored["rules_monthly_cap_usd"] = round(float(rules_monthly_cap_usd), 2)
     c.execute(
         "INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
         (REGISTRY_KEY, json.dumps(stored, sort_keys=True)),
@@ -685,6 +699,7 @@ def runs(c, limit=25, before=None):
 def listing(c, settings, auth, who):
     """What GET /api/v2/maintenance returns: the run's settings, every step, the last and the live run, and the next run."""
     from .judge import budget_cap
+    from .org_rule_check import BUDGET as RULES_BUDGET
 
     cfg, steps, now = run_settings(c), steps_of(c), H.parse_ts(H.now())
     rows = []
@@ -712,7 +727,11 @@ def listing(c, settings, auth, who):
     last = c.execute("SELECT id FROM maintenance_runs ORDER BY started_at DESC LIMIT 1").fetchone()
     live = live_run(c, H.now())
     return {
-        "settings": {**cfg, "monthly_cap_usd_in_effect": budget_cap(c, settings)},
+        "settings": {
+            **cfg,
+            "monthly_cap_usd_in_effect": budget_cap(c, settings),
+            "rules_monthly_cap_usd_in_effect": budget_cap(c, settings, RULES_BUDGET),
+        },
         "steps": rows,
         "last_run": _run_view(c, c.execute("SELECT * FROM maintenance_runs WHERE id=?", (last[0],)).fetchone())
         if last
@@ -762,7 +781,7 @@ def install(app, store, auth, mutate):
         may_change(auth, who)
 
         def work(c):
-            save_settings(c, who.actor, body.schedule, body.paused, body.monthly_cap_usd)
+            save_settings(c, who.actor, body.schedule, body.paused, body.monthly_cap_usd, body.rules_monthly_cap_usd)
             for change in body.steps or []:
                 save_step(c, who.actor, change.model_dump())
 

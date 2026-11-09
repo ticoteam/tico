@@ -219,7 +219,7 @@ def live_masks(unsettled):
     removed, so the rest of the result stays readable); every other column of the run reads as it is."""
     if not unsettled:
         return {}
-    hidden = lambda column: f"CASE WHEN source.id IN ({unsettled}) THEN NULL ELSE source.{column} END"  # noqa: E731
+    hidden = lambda column: f"CASE WHEN source.id IN ({unsettled}) THEN NULL ELSE source.{column} END"
     return {
         "attempts": {
             "final_text": hidden("final_text"),
@@ -634,14 +634,14 @@ def guarded(c, auth, who, inner, function, columns=None, unseen=None):
         # run only discusses what is published.
         "lens_runs": "id IS NOT NULL" if owner else "on_draft=0",
         # The market graph is the company's, the same way goals are.
-        "market_entities": "1",
-        "market_edges": "1",
+        "entities": "1",
+        "entity_links": "1",
         "market_evidence": "1",
         "market_citations": "1",
         "market_insights": "1",
         # Page monitors and the weekly briefings (backend/market_watch.py, backend/market_briefing.py): public pages the
         # team watches and what the Librarian wrote about them, the market's to read.
-        "market_watches": "1",
+        "entity_watches": "1",
         "market_briefings": "1",
         # One history table (backend/migrations/0064_history_events.py), each row read as its subject is: a task's
         # with the task (and its words through the content gate), a goal's with the goal, the company's and the
@@ -1011,9 +1011,9 @@ def connect(path, c, auth, who, trace=None, seconds=None):
     `seconds` bounds building this request's visibility sets as `run` bounds the query itself."""
     deadline = None if seconds is None else time.monotonic() + seconds
     prefix = "v" + secrets.token_hex(12) + "_"
-    inner = lambda table: f'"{prefix}{table}"'  # noqa: E731
-    function = lambda name: f'"{prefix}privacy_{name}"'  # noqa: E731
-    private = lambda name: prefix + name  # noqa: E731
+    inner = lambda table: f'"{prefix}{table}"'
+    function = lambda name: f'"{prefix}privacy_{name}"'
+    private = lambda name: prefix + name
     # Internal provenance SELECTs cannot leave authorized prepared statements for callers.
     conn = sqlite3.connect(
         f"file:{path}?mode=ro", uri=True, timeout=5, isolation_level=None, cached_statements=0, factory=ReadConnection
@@ -1109,6 +1109,11 @@ def connect(path, c, auth, who, trace=None, seconds=None):
 
         source = index.c
         audience_cache = {}
+        from .api_tools import hidden_ids
+
+        # A tool `who` may not see leaves no event: not its own, not its keys', live or deleted (api_tools `visible`).
+        # Its rules need no credential administrators: an Only listed tool ignores them.
+        unseen_targets = hidden_ids(c, who, (), auth)
 
         def visible_file(fid):
             row = restricted_pages(source).get(fid)
@@ -1134,7 +1139,9 @@ def connect(path, c, auth, who, trace=None, seconds=None):
             "event": (
                 4,
                 lambda target, actor, ts, detail: (
-                    page_event_readable(source, auth, who, target, detail) and index.event(target, actor, ts, detail)
+                    target not in unseen_targets
+                    and page_event_readable(source, auth, who, target, detail)
+                    and index.event(target, actor, ts, detail)
                 ),
             ),
             "tag": (2, index.tag),
@@ -1257,12 +1264,12 @@ def connect(path, c, auth, who, trace=None, seconds=None):
             # These are visible in full (predicate 1). SQLite answers count(*) by reading
             # the base table with no view context; that read is the same rows as the view.
             if table in {
-                "market_entities",
-                "market_edges",
+                "entities",
+                "entity_links",
                 "market_evidence",
                 "market_citations",
                 "market_insights",
-                "market_watches",
+                "entity_watches",
                 "market_briefings",
                 "market_sizes",
                 "market_figures",

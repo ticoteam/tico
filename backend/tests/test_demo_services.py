@@ -107,7 +107,7 @@ def test_letters_carry_the_mailing_address_and_reach_their_owners(built):
         }
 
 
-def test_gateway_connection_and_models_in_use_per_department(built):
+def test_gateway_connection_and_models_in_use_per_level(built):
     with as_ana(built) as api:
         body = api.get("/api/v2/gateway").json()
         assert body["connection"]["connected"] is True

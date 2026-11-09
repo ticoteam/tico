@@ -4,7 +4,7 @@
 The server's routes come from the app itself: backend/app.py's create_app, built with a temporary database. No server,
 network or sign-in is involved. The UI's calls come from ui/**/*.js and ui/**/*.ts, excluding ui/vendor/, the built
 ui/assets/ bundle and .d.ts declarations. A call is a helper that sends a request (get, post, put, patch, v2Get,
-writeRequest, cloudCompose, fetch, formFetch, EventSource, WebSocket, and ui/support.js's call), or a string that
+writeRequest, cloudCompose, fetch, formFetch, EventSource, WebSocket, and ui/support.ts's call), or a string that
 names a path under /api. Its path is read from string and template literals, `+` joins, `?:`, and one-expression
 functions and constants. A name is read only when the UI declares it once and never takes it as a parameter, so a
 local variable is not mistaken for a constant elsewhere. Each part of a path that is not known statically is a
@@ -36,7 +36,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
-import ui_baseline  # noqa: E402  (the baseline file format, shared with the tsc and Biome ratchets)
+import ui_baseline  # the baseline file format, shared with the tsc and Biome ratchets
 
 BASELINE_REL = "ui/routes-baseline.json"
 EXCLUDED = ("ui/vendor/", "ui/assets/")  # third-party code, and the bundle built from it
@@ -45,7 +45,7 @@ MAX_ALTERNATIVES = 64
 MAX_DEPTH = 24
 
 HTTP_METHODS = ("GET", "POST", "PUT", "PATCH", "DELETE")
-# Helpers that take a path relative to /api (ui/app/api.js), and the method they send.
+# Helpers that take a path relative to /api (ui/app/api.ts), and the method they send.
 RELATIVE_HELPERS = {
     "get": "GET",
     "v2Get": "GET",
@@ -63,8 +63,8 @@ RELATIVE_HELPERS = {
 ABSOLUTE_HELPERS = {"formFetch": "POST", "EventSource": "GET", "WebSocket": "WS"}
 NEEDS_NEW = ("EventSource", "WebSocket")
 HELPER_NAMES = set(RELATIVE_HELPERS) | set(ABSOLUTE_HELPERS) | {"writeRequest", "fetch"}
-# ui/support.js's own `call(method, path)`, which fetches API_BASE() + path (that is /api/v2).
-LOCAL_WRAPPERS = {("ui/support.js", "call"): "/api/v2"}
+# ui/support.ts's own `call(method, path)`, which fetches API_BASE() + path (that is /api/v2).
+LOCAL_WRAPPERS = {("ui/support.ts", "call"): "/api/v2"}
 NOT_A_PARAMETER_LIST = ("if", "for", "while", "switch", "with")
 
 
@@ -974,7 +974,7 @@ def shadow_ranges(toks):
     """(start, end, name, top) for each name this token list declares with const, let, var, function, a parameter or a
     single-parameter arrow: the name is in scope from start to end. top is set for a declaration at the top of the
     file, which is that file's own definition (api.js defines get, post and the rest). A destructured name is not
-    listed: ui/assistant.js takes the page's get and post from deps, which are the helpers themselves."""
+    listed: ui/assistant.ts takes the page's get and post from deps, which are the helpers themselves."""
     n = len(toks)
     enclosing, match = enclosing_closers(toks)
     out = []

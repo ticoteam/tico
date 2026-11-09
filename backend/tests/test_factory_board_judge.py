@@ -140,6 +140,27 @@ def test_the_world_runs_maintenance_inline_so_its_roundup_lands_before_the_round
     assert calls == [True]
 
 
+def test_a_world_sends_nothing_to_tico_hq_and_puts_the_environment_back(monkeypatch):
+    """Every run of a seed is the same install (its ids come from the seed): its Health Monitor once filed a ticket to
+    production HQ on every run of the release check."""
+    import os
+
+    from evals.factory.board import dev_board
+    from evals.factory.sim import TEAM
+    from evals.factory.world import World
+    from backend import census, support
+
+    monkeypatch.setenv("TICO_HQ_URL", "https://hq.acme.example")
+    for name in ("TICO_SUPPORT", "TICO_TELEMETRY", "DO_NOT_TRACK"):
+        monkeypatch.delenv(name, raising=False)
+    with World(dev_board(), TEAM) as world:
+        assert support.off_reason(world.settings) == "TICO_SUPPORT"
+        assert world.app.state.census.off_reason() == "TICO_TELEMETRY"
+        assert census.hq_url() == "http://127.0.0.1:9"
+    assert os.environ["TICO_HQ_URL"] == "https://hq.acme.example"
+    assert "TICO_SUPPORT" not in os.environ and "TICO_TELEMETRY" not in os.environ
+
+
 def turn(started, finished, cost, bot="fleet-01"):
     """A turn row as the sim reads it: start and finish clock offsets, and its estimated cost."""
     text = lambda offset: (START + offset).strftime("%Y-%m-%dT%H:%M:%S.000000Z")
@@ -171,4 +192,4 @@ def test_a_turn_that_starts_after_the_half_hour_reached_its_cap_fails():
 
 def test_a_window_that_never_reached_the_cap_fails_so_the_check_cannot_pass_on_nothing():
     passed, detail = spend_under(3, at(1, 30), at(1, 42))(turns_run([turn(at(1, 30), at(1, 35), 0.5)]))
-    assert not passed and "short of the $1.5 window cap" in detail, detail
+    assert not passed and "short of the $1.5 half-hour cap" in detail, detail

@@ -50,6 +50,7 @@
             "pinned": false,
             "unread": 1
           },
+          "name": "Thread",
           "owner_id": null,
           "parent_id": null,
           "parent_message_id": null,
@@ -182,6 +183,7 @@
             "pinned": false,
             "unread": 0
           },
+          "name": "Ben",
           "owner_id": null,
           "parent_id": null,
           "parent_message_id": null,
@@ -302,6 +304,7 @@
             "pinned": false,
             "unread": 1
           },
+          "name": "Chat with ops",
           "owner_id": "human:ana",
           "parent_id": null,
           "parent_message_id": null,
@@ -543,6 +546,7 @@
             "pinned": false,
             "unread": 0
           },
+          "name": "Draft the launch plan",
           "owner_id": null,
           "parent_id": null,
           "parent_message_id": null,
@@ -1012,6 +1016,7 @@
           "status": "closed",
           "step": {
             "id": "general-closed",
+            "limit_minutes": null,
             "name": "Closed",
             "position": 5,
             "public_name": "Closed",
@@ -1067,6 +1072,7 @@
             "pinned": false,
             "unread": 0
           },
+          "name": "Check the vendor list",
           "owner_id": null,
           "parent_id": null,
           "parent_message_id": null,
@@ -1318,6 +1324,7 @@
           "status": "open",
           "step": {
             "id": "general-open",
+            "limit_minutes": null,
             "name": "Open",
             "position": 0,
             "public_name": "Open",
@@ -1506,6 +1513,7 @@
             "pinned": false,
             "unread": 2
           },
+          "name": "ops",
           "owner_id": null,
           "parent_id": null,
           "parent_message_id": null,

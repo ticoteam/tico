@@ -244,7 +244,7 @@ def _draft_body(raw, thread_id=""):
         body["message"]["threadId"] = thread_id
     if len(raw or "") <= INLINE_RAW_LIMIT:
         return body, {}
-    from googleapiclient.http import MediaInMemoryUpload  # noqa: PLC0415  (only real sends get here)
+    from googleapiclient.http import MediaInMemoryUpload  # (only real sends get here)
 
     s = str(raw).replace("-", "+").replace("_", "/")
     mime = base64.b64decode(s + "=" * (-len(s) % 4))

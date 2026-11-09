@@ -79,7 +79,7 @@
 .rp-fade.playing.rp-idle .rp-bar{opacity:0}
 .rp-fade.playing.rp-idle{cursor:none}
 body.rp-presenting{display:block}
-/* Present's own button rides in the transport bar (ui/app/replay.js), so it fades with the controls. */
+/* Present's own button rides in the transport bar (ui/app/replay.ts), so it fades with the controls. */
 body.rp-presenting #side,body.rp-presenting #topbar,body.rp-presenting #mobile-nav,body.rp-presenting .rp-head,
 body.rp-presenting .rp-note{display:none!important}
 body.rp-presenting #main{padding:20px 24px;height:calc(100vh - var(--demo-h,0px));height:calc(100dvh - var(--demo-h,0px));overflow:hidden}

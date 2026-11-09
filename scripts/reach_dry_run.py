@@ -29,10 +29,10 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from backend import reach as R  # noqa: E402
-from backend import groups as G  # noqa: E402
-from backend.store import H  # noqa: E402
-from backend.updates import ZONE  # noqa: E402
+from backend import reach as R
+from backend import groups as G
+from backend.store import H
+from backend.updates import ZONE
 
 CHECKED = ("dm", "mention", "ask", "assign", "addressed", "home")  # what threads.post's reach check covers
 TS = "%Y-%m-%dT%H:%M:%S.%fZ"
@@ -153,10 +153,15 @@ def replay(c, ctx, writes):
 
         found = R.decide(ctx, w["sender"], w["receiver"], w["kind"], count=count)
         if not found.allowed:
-            shared = w["task_id"] and R.on_task(c, w["task_id"], w["sender"], w["receiver"], before=w["at"])
-            asked = shared or R.solicited(
-                c, w["sender"], w["receiver"], w["conversation_id"], w["in_reply_to"], before=w["at"]
-            )
+            if w["receiver"].startswith("human:"):
+                asked = R.person_asked(
+                    c, w["sender"], w["receiver"], w["task_id"], w["conversation_id"], w["in_reply_to"], before=w["at"]
+                )
+            else:
+                shared = w["task_id"] and R.on_task(c, w["task_id"], w["sender"], w["receiver"], before=w["at"])
+                asked = shared or R.solicited(
+                    c, w["sender"], w["receiver"], w["conversation_id"], w["in_reply_to"], before=w["at"]
+                )
             if not asked:
                 refused.append({**w, "code": found.why, "via": found.via})
         sent[(w["sender"], w["kind"], today)] += 1

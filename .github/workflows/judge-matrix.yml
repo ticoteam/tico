@@ -1,0 +1,64 @@
+# Runs the pipeline judge matrix (evals/pipeline_judge/run.py) against the Tico AI Gateway with the repository's
+# TICO_GATEWAY_KEY secret, on demand only. It makes real model calls, so it never runs on a pull request or a push.
+# The report (JSON and a markdown table) is uploaded as an artifact and printed in the job summary.
+name: Judge matrix
+run-name: Judge matrix ${{ inputs.models }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      models:
+        description: Comma-separated models (haiku-5.5, jev, sonnet)
+        type: string
+        default: haiku-5.5,jev
+
+permissions:
+  contents: read
+
+concurrency:
+  group: judge-matrix
+  cancel-in-progress: false
+
+jobs:
+  run:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      MODELS: ${{ inputs.models }}
+      PYTHONUNBUFFERED: '1'
+    steps:
+      - name: Check the inputs
+        run: |
+          [[ "$MODELS" =~ ^[a-z0-9.-]+(,[a-z0-9.-]+)*$ ]] || { echo "::error::models must be a comma-separated list of names"; exit 1; }
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.15'
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Install
+        run: |
+          bash scripts/ci_install.sh python
+          echo "$RUNNER_TEMP/venv/bin" >> "$GITHUB_PATH"
+      - name: Check the harness (no calls)
+        run: python -m evals.pipeline_judge.run --models "$MODELS" --dry-run --out "$RUNNER_TEMP/judge-dry"
+      - name: Run the matrix
+        env:
+          TICO_GATEWAY_KEY: ${{ secrets.TICO_GATEWAY_KEY }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/judge"
+          python -m evals.pipeline_judge.run --models "$MODELS" --out "$RUNNER_TEMP/judge"
+      - name: Summary
+        if: always()
+        run: cat "$RUNNER_TEMP"/judge/*.md >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || echo "No report was written." >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: judge-matrix-${{ github.run_id }}
+          path: ${{ runner.temp }}/judge
+          retention-days: 30
+          if-no-files-found: warn

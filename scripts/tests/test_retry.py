@@ -150,7 +150,8 @@ def test_remote_reports_missing_results_and_recovers_from_transient_downloads(
     shutil.copyfile(ROOT / 'scripts/ci/retry.sh', wrapper)
     monkeypatch.setattr(remote, 'ROOT', downloads)
     monkeypatch.setattr(remote, 'git', lambda *args: 'pushed')
-    monkeypatch.setattr(remote, 'gh', lambda *args: '')
+    monkeypatch.setattr(remote, 'gh', lambda *args, **kwargs: '')
+    monkeypatch.setattr(remote, 'wait_for_capacity', lambda *args: True)  # the cap has its own tests
     monkeypatch.setattr(remote, 'find_run', lambda *args: {'databaseId': 7, 'url': 'https://acme.example/run/7'})
     monkeypatch.setattr(remote, 'wait', lambda *args: 'cancelled' if expected is None else 'success')
     code, logs = remote.run(['python', '-V'])

@@ -128,7 +128,7 @@ def merge(c, *, assistant=None):
         except Skip as why:
             summary["pending"].append(bot_id)
             summary["skipped"].append({"bot": bot_id, "reason": str(why)})
-        except Exception as error:  # noqa: BLE001 - one bot's failure must not stop the start or the other bots
+        except Exception as error:  # one bot's failure must not stop the start or the other bots
             log.exception("bot chats to Home: %s failed", bot_id)
             summary["errors"].append({"bot": bot_id, "error": f"{type(error).__name__}: {error}"})
     return summary

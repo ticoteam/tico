@@ -62,6 +62,20 @@ TABLE = (
 NAME = re.compile(r"(\d{4}|\d{14})_[a-z0-9_]+\.(sql|py)")
 LEGACY_USER = re.compile(r"legacy_user_version_(\d+)")
 LEGACY_CLOUD = re.compile(r"legacy_cloud_(\d+)")
+# A shipped file whose work a later file does now. Its up() is not run: it imports ask_routing, which step 6c removed,
+# and 20261106131713_asks_to_question_tasks moves every open ask, system asks included. Its row and checksum stay.
+SUPERSEDED = {"20261105034511_resend_system_asks"}
+# A shipped file from before the directory rename reads the market graph's old names (0030_growth_segments reads
+# market_entities and market_edges). A replay of it on a file the rename already moved, as when a database without
+# schema_migrations is adopted, sees those names as temporary views over the new tables for that one run.
+DIRECTORY_RENAME = "20261108011017_directory_core"
+OLD_NAME_VIEWS = {
+    "market_entities": "SELECT id, type, name, status, properties FROM main.entities",
+    "market_edges": (
+        "SELECT id, from_entity_id AS src, link_key AS rel, to_entity_id AS dst, valid_from_on, valid_until_on "
+        "FROM main.entity_links"
+    ),
+}
 
 
 class MigrationError(RuntimeError):
@@ -200,6 +214,18 @@ def _broken_references(conn):
     return Counter((row[0], row[2]) for row in conn.execute("PRAGMA foreign_key_check"))
 
 
+def _old_name_views(conn, migration):
+    """The old market names as temporary views, for a replay of a migration from before the rename on a moved file."""
+    if migration.version >= DIRECTORY_RENAME:
+        return []
+    present = {row[0] for row in conn.execute("SELECT name FROM main.sqlite_master WHERE type='table'")}
+    if "entities" not in present or "market_entities" in present:
+        return []
+    for name, select in OLD_NAME_VIEWS.items():
+        conn.execute(f"CREATE TEMP VIEW {name} AS {select}")
+    return list(OLD_NAME_VIEWS)
+
+
 def _run(conn, migration):
     """One migration in one transaction with its row, so a failure rolls back both. `conn` must be in autocommit."""
     module = _module(migration) if migration.kind == "py" else None
@@ -213,7 +239,13 @@ def _run(conn, migration):
         try:
             before = _broken_references(conn) if keys_off else None
             if module:
-                module.up(conn)
+                if migration.version not in SUPERSEDED:
+                    views = _old_name_views(conn, migration)
+                    try:
+                        module.up(conn)
+                    finally:
+                        for name in views:
+                            conn.execute(f"DROP VIEW IF EXISTS temp.{name}")
             else:
                 for statement in statements(migration.path.read_text(encoding="utf-8")):
                     conn.execute(statement)

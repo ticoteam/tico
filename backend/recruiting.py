@@ -43,9 +43,9 @@ REWRITE_BYTES = 64 * 1024  # the most of the model's answer read
 REWRITE_CHUNK = 8 * 1024  # read in pieces, so the deadline is checked as the answer arrives
 _REWRITES = threading.BoundedSemaphore(2)  # rewrites at once; a third keeps the composed text instead of queueing
 REWRITE_MODEL = "gemini-3.7-flash"
-# With no Gemini key (a hosted install), the Tico AI Gateway's General · Low tier at version 1.0 (Claude Haiku 5.5, the
-# cheapest general chat tier; backend/gateway_tiers.py). Pinned, so a later version never changes what a draft runs on.
-GATEWAY_REWRITE_MODEL = "tico-general-low-1.0"
+# With no Gemini key (a hosted install), the Tico AI Gateway's Low tier at version 1.0 (Claude Haiku 5.5;
+# backend/gateway_tiers.py). Pinned, so a later version never changes what a draft runs on.
+GATEWAY_REWRITE_MODEL = "tico-low-1.0"
 # Gateway models reason before they answer, and the reasoning counts against the cap: 400 left a rewrite (the longer
 # prompt) with no answer at all. The least reasoning, and room for it plus a 150-word answer.
 GATEWAY_MAX_TOKENS = 2000
@@ -394,7 +394,7 @@ def _fit(card, t):
         # rank on the work itself ("Release Engineer" is the Release Manager, "Social Media Coordinator" the Social
         # Media Manager), never on a field ("Product Designer" is not the Product Manager) nor a head's, and only in the
         # departments its words name ("Software Development Engineer" is not the Learning and Development Specialist;
-        # "Brand Designer" may be Marketing's Brand Manager).
+        # "Brand Designer" may be Marketing's Brand Owner).
         return 0
     if t["heads"] and card.get("lead"):
         # A head's title names the field it heads, which the head's card may not: "Head of HR" is the Head of People,

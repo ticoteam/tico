@@ -371,7 +371,6 @@ def test_a_reply_the_parked_bot_waits_on_wakes_it(api, parked_on):
         assert W.parked(c, task) == parked_on
         room = task["conversation_id"]
         asked = [
-            H.say(c, "bot:cpo", "bot:ops", "Which release has the fix?", room, kind="ask", refs={"task": task["id"]}),
             H.say(c, "bot:cpo", "bot:ops", "Need the build now", room, refs={"task": task["id"], "needs_action": True}),
             H.say(c, "bot:cpo", "bot:ops", "Send me the log", room, refs={"task": task["id"]}, wait_s=600),
         ]

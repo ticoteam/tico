@@ -43,8 +43,8 @@ def test_the_app_gets_the_list_and_diagnostics_name_what_is_on(environment):
 
 
 UI = Path(__file__).resolve().parents[2] / "ui"
-# A pill the app draws by id: `betaPill('id')` in a script, or `data-beta="id"` in a static spot. ui/app/state.js
-# defines both and is left out.
+# A pill the app draws by id: `betaPill('id')` in a script (.js, or .ts once converted), or `data-beta="id"` in a static
+# spot. ui/app/state.ts defines both and is left out.
 SPOT = re.compile(r"""betaPill\(['"]([a-z_]+)['"]\)|data-beta="([a-z_]+)\"""")
 
 
@@ -52,7 +52,7 @@ def _spots():
     used = {}
     for path in sorted(UI.rglob("*")):
         rel = path.relative_to(UI)
-        if path.suffix not in (".js", ".html") or "tests" in rel.parts or rel.as_posix() == "app/state.js":
+        if path.suffix not in (".js", ".ts", ".html") or "tests" in rel.parts or rel.as_posix() == "app/state.ts":
             continue
         for match in SPOT.finditer(path.read_text()):
             used.setdefault(match.group(1) or match.group(2), []).append(rel.as_posix())

@@ -14922,6 +14922,88 @@
         ]
       }
     },
+    "/api/v2/finance/attribution-rules": {
+      "get": {
+        "summary": "The attribution rules in the book (vendor, P&L account or money account matches, their shares, enabled and apply_from); needs the finance.attribution right or admin",
+        "operationId": "listFinanceAttributionRules",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FinanceAttributionRules"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Finance"
+        ]
+      }
+    },
+    "/api/v2/finance/attribution/dimensions": {
+      "get": {
+        "summary": "The classes, departments (locations) and projects seen on P&L lines in the last 12 months the caller sees, largest amount first, each with its line count, amount and rule (its shares, or null); needs the finance.attribution right or admin. Set them with the attribution_map action",
+        "operationId": "listFinanceAttributionDimensions",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FinanceAttributionDimensions"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Finance"
+        ]
+      }
+    },
     "/api/v2/finance/balance-sheet": {
       "get": {
         "summary": "Assets, liabilities and equity on a day, each line with its sources. Owner-only unless granted",
@@ -15332,6 +15414,65 @@
         ]
       }
     },
+    "/api/v2/finance/brief": {
+      "get": {
+        "summary": "What changed in Finance for the caller: a few short lines about the money they may see, with as_of (when those numbers last moved) and changed_since. Empty lines when there is nothing to say. The owner may pass view_as",
+        "operationId": "getFinanceBrief",
+        "parameters": [
+          {
+            "name": "view_as",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "View As"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FinanceBrief"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Finance"
+        ]
+      }
+    },
     "/api/v2/finance/budgets": {
       "get": {
         "summary": "The budgets the caller sees, each with where it stands today, or with at=YYYY-MM-DD in the period holding that day (the version in effect then); amounts in cents. The owner may pass view_as",
@@ -15400,6 +15541,59 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/FinanceBudgets"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Finance"
+        ]
+      }
+    },
+    "/api/v2/finance/campaigns": {
+      "get": {
+        "summary": "The ad campaigns the caller sees for a month (YYYY-MM): each with its owner (a team or teammate, inherited when it is the account's bot), its spend, clicks, conversions and cost per conversion in cents, by spend, with totals",
+        "operationId": "listFinanceCampaigns",
+        "parameters": [
+          {
+            "name": "month",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^\\d{4}-(0[1-9]|1[0-2])$",
+              "title": "Month"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FinanceCampaigns"
                 }
               }
             }
@@ -16751,6 +16945,74 @@
         ]
       }
     },
+    "/api/v2/finance/lines/{line_id}/attribution": {
+      "get": {
+        "summary": "One posted P&L line's attribution: the shares in force (source: person, bot, rule or tags), their amounts, and the line's history newest first, as far as the caller sees the line",
+        "operationId": "getFinanceLineAttribution",
+        "parameters": [
+          {
+            "name": "line_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Line Id"
+            }
+          },
+          {
+            "name": "view_as",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "View As"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FinanceLineAttribution"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Finance"
+        ]
+      }
+    },
     "/api/v2/finance/mercury-users": {
       "get": {
         "summary": "Mercury's users as last synced, to pick a card holder, for teammates who may issue cards; emails (masked) only for a finance admin",
@@ -16794,7 +17056,7 @@
     },
     "/api/v2/finance/metrics/{name}": {
       "get": {
-        "summary": "One number with when it was worked out (and for bank-backed numbers how fresh the data is): cash, burn, runway_months, revenue, spend, budget_remaining, budget_pct_used, ap_due, ar_overdue, uncategorized_count, unreconciled_days",
+        "summary": "One number with when it was worked out (and for bank-backed numbers how fresh the data is): cash, burn, runway_months, revenue, spend, budget_remaining, budget_pct_used, ap_due, ar_overdue, uncategorized_count, unreconciled_days, unattributed, ad_spend, per_conversion",
         "operationId": "getFinanceMetric",
         "parameters": [
           {
@@ -16815,7 +17077,11 @@
                 "uncategorized_count",
                 "unreconciled_days",
                 "duplicate_charges",
-                "price_increases"
+                "price_increases",
+                "unattributed",
+                "ad_spend",
+                "per_conversion",
+                "subscriptions_monthly"
               ],
               "type": "string",
               "title": "Name"
@@ -17414,6 +17680,117 @@
         ]
       }
     },
+    "/api/v2/finance/receipts": {
+      "get": {
+        "summary": "The receipts the caller sees, newest first: each Library file with what it reads as (amount, date, vendor) and its suggested or filed bank or card row; ?status= narrows them, and a cursor pages them",
+        "operationId": "listFinanceReceipts",
+        "parameters": [
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "unread",
+                    "suggested",
+                    "unmatched",
+                    "attached",
+                    "rejected"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Status"
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 600
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cursor"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 200,
+              "minimum": 1,
+              "default": 50,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "view_as",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "View As"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FinanceReceipts"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Finance"
+        ]
+      }
+    },
     "/api/v2/finance/recipients": {
       "get": {
         "summary": "Current payment recipients, last 4 only, for teammates who may pay",
@@ -17544,7 +17921,7 @@
     },
     "/api/v2/finance/reports/{kind}": {
       "get": {
-        "summary": "pnl (cash or accrual), balance_sheet, cash_flow, budget_vs_actual, ap_aging, ar_aging or spend_by, cut to the caller's view; compare=prior adds the window before; rows past top_n fold into one Other row (key \" other\"; the group with no vendor, team or teammate is keyed \" unattributed\": no real key starts with a space)",
+        "summary": "pnl (cash or accrual), balance_sheet, cash_flow, budget_vs_actual, ap_aging, ar_aging, spend_by or campaigns, cut to the caller's view; compare=prior adds the window before; rows past top_n fold into one Other row (key \" other\"; the group with no vendor, team or teammate is keyed \" unattributed\": no real key starts with a space)",
         "operationId": "getFinanceReport",
         "parameters": [
           {
@@ -17560,7 +17937,9 @@
                 "budget_vs_actual",
                 "ap_aging",
                 "ar_aging",
-                "spend_by"
+                "spend_by",
+                "campaigns",
+                "subscriptions"
               ],
               "type": "string",
               "title": "Kind"
@@ -17836,7 +18215,10 @@
                     "project",
                     "po",
                     "estimate",
-                    "account"
+                    "account",
+                    "vendor",
+                    "campaign",
+                    "subscription"
                   ],
                   "type": "string"
                 },
@@ -18058,6 +18440,23 @@
             }
           },
           {
+            "name": "month",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "pattern": "^\\d{4}-(0[1-9]|1[0-2])$"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Month"
+            }
+          },
+          {
             "name": "cursor",
             "in": "query",
             "required": false,
@@ -18272,6 +18671,87 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/FinanceStatements"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Finance"
+        ]
+      }
+    },
+    "/api/v2/finance/subscriptions": {
+      "get": {
+        "summary": "The subscriptions the caller sees: recurring charges the daily look suggests and the Bookkeeper confirms, each with its cadence, expected amount and monthly cost in cents, next charge, card, seats and attribution, and the monthly total of the active ones. status narrows them",
+        "operationId": "listFinanceSubscriptions",
+        "parameters": [
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "suggested",
+                    "active",
+                    "ignored",
+                    "cancelled"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Status"
+            }
+          },
+          {
+            "name": "view_as",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "View As"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FinanceSubscriptions"
                 }
               }
             }
@@ -18939,6 +19419,128 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/FinanceTransfers"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Finance"
+        ]
+      }
+    },
+    "/api/v2/finance/unattributed": {
+      "get": {
+        "summary": "The Unattributed queue: the P&L lines in the period (this month by default) with no team, teammate or attribution in force, newest first, paged by cursor, cut to what the caller sees",
+        "operationId": "listFinanceUnattributed",
+        "parameters": [
+          {
+            "name": "start",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Start"
+            }
+          },
+          {
+            "name": "end",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "End"
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 600
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cursor"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 200,
+              "minimum": 1,
+              "default": 50,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "view_as",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "View As"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FinanceUnattributed"
                 }
               }
             }
@@ -20878,6 +21480,124 @@
             "content": {
               "application/json": {
                 "schema": {}
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Health"
+        ]
+      }
+    },
+    "/api/v2/heartbeat": {
+      "get": {
+        "summary": "The Heartbeat: seconds between beats, the last beat, beats in the last day and quiet beats, each step in order with its kind, cadence, switch and day counts, and the beats that did something, newest first (pass `next` back as `before`)",
+        "operationId": "getHeartbeat",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 20,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "before",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Before"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HeartbeatView"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Health"
+        ]
+      },
+      "put": {
+        "summary": "The owner or an admin: set the seconds between beats, 5 to 60",
+        "operationId": "saveHeartbeat",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/HeartbeatUpdate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HeartbeatView"
+                }
               }
             }
           },
@@ -28194,75 +28914,6 @@
         ]
       }
     },
-    "/api/v2/messages/{mid}/answer": {
-      "post": {
-        "summary": "Answer a question a bot asked",
-        "operationId": "answerMessage",
-        "parameters": [
-          {
-            "name": "mid",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "title": "Mid"
-            }
-          },
-          {
-            "name": "Idempotency-Key",
-            "in": "header",
-            "required": true,
-            "schema": {
-              "type": "string"
-            },
-            "description": "1-200 characters. Reusing a key with the same body replays the first answer."
-          }
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/Answer"
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            }
-          },
-          "401": {
-            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            }
-          }
-        },
-        "tags": [
-          "Needs you"
-        ]
-      }
-    },
     "/api/v2/model-subscriptions": {
       "get": {
         "summary": "Saved subscriptions and the kinds that can be added",
@@ -28657,66 +29308,6 @@
         },
         "tags": [
           "Needs you"
-        ]
-      }
-    },
-    "/api/v2/needs-you/clarify": {
-      "post": {
-        "summary": "Ask the bot behind a stale question whether it still matters, in clearer words",
-        "operationId": "clarifyAsk",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/ClarifyAsk"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            }
-          },
-          "401": {
-            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            }
-          }
-        },
-        "tags": [
-          "Needs you"
-        ],
-        "parameters": [
-          {
-            "name": "Idempotency-Key",
-            "in": "header",
-            "required": true,
-            "schema": {
-              "type": "string"
-            },
-            "description": "1-200 characters. Reusing a key with the same body replays the first answer."
-          }
         ]
       }
     },
@@ -37987,7 +38578,7 @@
     },
     "/api/v2/system-routines/{key}": {
       "put": {
-        "summary": "The owner or an admin: switch a system routine on or off, pick its schedule preset (15m, hourly, 4h, daily, business) or its daily time",
+        "summary": "The owner or an admin: switch a system routine on or off, pick its schedule preset (15m, hourly, 4h, daily, business) or its daily time; answers {job}: the routine's listing row, or for ask_deadlines (a Heartbeat step with its own switch) its HeartbeatStep row",
         "operationId": "saveSystemRoutine",
         "parameters": [
           {
@@ -38016,7 +38607,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/SystemRoutineUpdate"
+                  "$ref": "#/components/schemas/SystemRoutineSaved"
                 }
               }
             }
@@ -40336,86 +40927,6 @@
         ]
       }
     },
-    "/api/v2/tasks/{tid}/comments/{mid}/resolve": {
-      "post": {
-        "summary": "Settle an open question answered elsewhere ({quote}: its asker or the task's owner bot), or withdraw it ({}: its asker); it leaves every Needs you list and wakes nobody",
-        "operationId": "resolveTaskQuestion",
-        "parameters": [
-          {
-            "name": "tid",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "title": "Tid"
-            }
-          },
-          {
-            "name": "mid",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "title": "Mid"
-            }
-          },
-          {
-            "name": "Idempotency-Key",
-            "in": "header",
-            "required": true,
-            "schema": {
-              "type": "string"
-            },
-            "description": "1-200 characters. Reusing a key with the same body replays the first answer."
-          }
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/TaskAskResolve"
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "OK",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/CommentResult"
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            }
-          }
-        },
-        "tags": [
-          "Tasks"
-        ]
-      }
-    },
     "/api/v2/tasks/{tid}/context": {
       "get": {
         "summary": "Up to 10 pages and 10 meetings, newest first, filtered by your current read access; metadata only",
@@ -40694,184 +41205,6 @@
                       }
                     ],
                     "title": "Note"
-                  },
-                  "ask": {
-                    "anyOf": [
-                      {
-                        "additionalProperties": false,
-                        "properties": {
-                          "questions": {
-                            "items": {
-                              "additionalProperties": false,
-                              "properties": {
-                                "id": {
-                                  "maxLength": 40,
-                                  "minLength": 1,
-                                  "title": "Id",
-                                  "type": "string"
-                                },
-                                "header": {
-                                  "maxLength": 30,
-                                  "title": "Header",
-                                  "type": "string"
-                                },
-                                "question": {
-                                  "maxLength": 300,
-                                  "minLength": 1,
-                                  "title": "Question",
-                                  "type": "string"
-                                },
-                                "why": {
-                                  "default": "",
-                                  "maxLength": 200,
-                                  "title": "Why",
-                                  "type": "string"
-                                },
-                                "options": {
-                                  "items": {
-                                    "additionalProperties": false,
-                                    "properties": {
-                                      "label": {
-                                        "maxLength": 60,
-                                        "minLength": 1,
-                                        "title": "Label",
-                                        "type": "string"
-                                      },
-                                      "description": {
-                                        "default": "",
-                                        "maxLength": 200,
-                                        "title": "Description",
-                                        "type": "string"
-                                      },
-                                      "file": {
-                                        "anyOf": [
-                                          {
-                                            "pattern": "^[^@]+@[1-9][0-9]*$",
-                                            "type": "string"
-                                          },
-                                          {
-                                            "type": "null"
-                                          }
-                                        ],
-                                        "title": "File"
-                                      },
-                                      "then": {
-                                        "default": "",
-                                        "maxLength": 120,
-                                        "title": "Then",
-                                        "type": "string"
-                                      },
-                                      "recommended": {
-                                        "default": false,
-                                        "title": "Recommended",
-                                        "type": "boolean"
-                                      }
-                                    },
-                                    "required": [
-                                      "label"
-                                    ],
-                                    "title": "QuestionOption",
-                                    "type": "object"
-                                  },
-                                  "maxItems": 6,
-                                  "title": "Options",
-                                  "type": "array"
-                                },
-                                "multi": {
-                                  "default": false,
-                                  "title": "Multi",
-                                  "type": "boolean"
-                                },
-                                "other": {
-                                  "default": true,
-                                  "title": "Other",
-                                  "type": "boolean"
-                                }
-                              },
-                              "required": [
-                                "id",
-                                "header",
-                                "question"
-                              ],
-                              "title": "ReviewQuestion",
-                              "type": "object"
-                            },
-                            "maxItems": 4,
-                            "minItems": 1,
-                            "title": "Questions",
-                            "type": "array"
-                          },
-                          "who": {
-                            "anyOf": [
-                              {
-                                "maxLength": 200,
-                                "minLength": 1,
-                                "type": "string"
-                              },
-                              {
-                                "type": "null"
-                              }
-                            ],
-                            "title": "Who"
-                          },
-                          "if_no_answer": {
-                            "anyOf": [
-                              {
-                                "additionalProperties": false,
-                                "description": "What the bot does if the person does not answer by `by` (backend/ask_deadlines.py). `kind` says what that step is:\nonly a `reversible` internal step goes ahead on its own; a send, a payment or a delete waits for an answer.",
-                                "properties": {
-                                  "do": {
-                                    "maxLength": 300,
-                                    "minLength": 1,
-                                    "title": "Do",
-                                    "type": "string"
-                                  },
-                                  "kind": {
-                                    "enum": [
-                                      "reversible",
-                                      "send",
-                                      "spend",
-                                      "delete"
-                                    ],
-                                    "title": "Kind",
-                                    "type": "string"
-                                  },
-                                  "by": {
-                                    "anyOf": [
-                                      {
-                                        "maxLength": 40,
-                                        "type": "string"
-                                      },
-                                      {
-                                        "type": "null"
-                                      }
-                                    ],
-                                    "title": "By"
-                                  }
-                                },
-                                "required": [
-                                  "do",
-                                  "kind"
-                                ],
-                                "title": "IfNoAnswer",
-                                "type": "object"
-                              },
-                              {
-                                "type": "null"
-                              }
-                            ]
-                          }
-                        },
-                        "required": [
-                          "questions"
-                        ],
-                        "title": "ReviewAsk",
-                        "type": "object"
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ]
                   }
                 },
                 "required": [
@@ -40913,10 +41246,6 @@
                     "type": "string",
                     "format": "binary",
                     "description": "Optional PNG or JPEG poster."
-                  },
-                  "ask": {
-                    "type": "string",
-                    "description": "JSON-encoded structured ask, with questions and optional who."
                   }
                 },
                 "required": [
@@ -48406,27 +48735,6 @@
         ],
         "additionalProperties": true
       },
-      "Answer": {
-        "properties": {
-          "text": {
-            "type": "string",
-            "maxLength": 200000,
-            "minLength": 1,
-            "title": "Text"
-          },
-          "unknown": {
-            "type": "boolean",
-            "title": "Unknown",
-            "default": false
-          }
-        },
-        "additionalProperties": false,
-        "type": "object",
-        "required": [
-          "text"
-        ],
-        "title": "Answer"
-      },
       "ApiTool": {
         "type": "object",
         "properties": {
@@ -51106,7 +51414,7 @@
                           },
                           "mine": {
                             "type": "boolean",
-                            "description": "The question is put to the caller, who answers it at POST /api/v2/messages/{mid}/answer"
+                            "description": "The question is put to the caller, who answers it at POST /api/v2/tasks/{tid}/answers with target {task}"
                           }
                         },
                         "required": [
@@ -52752,6 +53060,9 @@
           "shipped_at": {
             "type": "string"
           },
+          "published_at": {
+            "type": "string"
+          },
           "unread": {
             "type": "boolean"
           },
@@ -53025,22 +53336,6 @@
           "message"
         ],
         "additionalProperties": true
-      },
-      "ClarifyAsk": {
-        "properties": {
-          "ask": {
-            "type": "string",
-            "maxLength": 100,
-            "minLength": 1,
-            "title": "Ask"
-          }
-        },
-        "additionalProperties": false,
-        "type": "object",
-        "required": [
-          "ask"
-        ],
-        "title": "ClarifyAsk"
       },
       "CloudAgent": {
         "type": "object",
@@ -53758,7 +54053,6 @@
             "type": "string",
             "enum": [
               "chat",
-              "ask",
               "notice"
             ],
             "title": "Kind",
@@ -55853,16 +56147,6 @@
               }
             ],
             "title": "Note"
-          },
-          "ask": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/ReviewAsk"
-              },
-              {
-                "type": "null"
-              }
-            ]
           }
         },
         "additionalProperties": false,
@@ -56067,11 +56351,22 @@
                     "type": "string"
                   }
                 },
+                "attribute": {
+                  "type": [
+                    "boolean",
+                    "null"
+                  ]
+                },
                 "may_grant": {
                   "type": "boolean"
+                },
+                "budgets": {
+                  "type": "integer"
                 }
               },
               "required": [
+                "attribute",
+                "budgets",
                 "default",
                 "default_team",
                 "grants",
@@ -56499,12 +56794,17 @@
               "object",
               "null"
             ],
+            "description": "One of this tool's ad accounts another enabled import already reads (one import per ad account), so this one can't be switched on; null when none",
             "properties": {
               "tool_id": {
                 "type": "string"
               },
               "tool_name": {
                 "type": "string"
+              },
+              "account": {
+                "type": "string",
+                "description": "The ad account, as its platform shows it"
               }
             }
           },
@@ -56655,6 +56955,181 @@
         ],
         "title": "FinanceAdRunRequest",
         "description": "Import a tool's ad spend now instead of at the next 4-hourly run."
+      },
+      "FinanceAttributionDimensions": {
+        "type": "object",
+        "properties": {
+          "dimensions": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "type": "string"
+                },
+                "id": {
+                  "type": "string"
+                },
+                "name": {
+                  "type": "string"
+                },
+                "lines": {
+                  "type": "integer"
+                },
+                "amount": {
+                  "type": "integer"
+                },
+                "rule_id": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "splits": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "teammate": {
+                        "type": "string"
+                      },
+                      "team": {
+                        "type": "string"
+                      },
+                      "share_bps": {
+                        "type": "integer"
+                      }
+                    },
+                    "required": [
+                      "share_bps",
+                      "team",
+                      "teammate"
+                    ],
+                    "additionalProperties": true
+                  }
+                }
+              },
+              "required": [
+                "amount",
+                "id",
+                "kind",
+                "lines",
+                "name",
+                "rule_id",
+                "splits"
+              ],
+              "additionalProperties": true
+            }
+          },
+          "can_change": {
+            "type": "boolean"
+          },
+          "view_version": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "can_change",
+          "dimensions",
+          "view_version"
+        ],
+        "additionalProperties": true
+      },
+      "FinanceAttributionRules": {
+        "type": "object",
+        "properties": {
+          "rules": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "name": {
+                  "type": "string"
+                },
+                "match": {
+                  "type": "object",
+                  "properties": {
+                    "kind": {
+                      "type": "string"
+                    },
+                    "id": {
+                      "type": "string"
+                    },
+                    "label": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "kind",
+                    "label"
+                  ],
+                  "additionalProperties": true
+                },
+                "splits": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "teammate": {
+                        "type": "string"
+                      },
+                      "team": {
+                        "type": "string"
+                      },
+                      "share_bps": {
+                        "type": "integer"
+                      }
+                    },
+                    "required": [
+                      "share_bps",
+                      "team",
+                      "teammate"
+                    ],
+                    "additionalProperties": true
+                  }
+                },
+                "enabled": {
+                  "type": "boolean"
+                },
+                "apply_from": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "created_by": {
+                  "type": "string"
+                },
+                "updated_at": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "apply_from",
+                "created_by",
+                "enabled",
+                "id",
+                "match",
+                "name",
+                "splits",
+                "updated_at"
+              ],
+              "additionalProperties": true
+            }
+          },
+          "can_change": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "can_change",
+          "rules"
+        ],
+        "additionalProperties": true
       },
       "FinanceBalanceSheet": {
         "type": "object",
@@ -57104,14 +57579,98 @@
         ],
         "additionalProperties": true
       },
+      "FinanceBrief": {
+        "type": "object",
+        "properties": {
+          "lines": {
+            "type": "array",
+            "items": "s"
+          },
+          "as_of": {
+            "type": "string"
+          },
+          "changed_since": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "version": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "as_of",
+          "lines",
+          "version"
+        ],
+        "additionalProperties": true
+      },
+      "FinanceBudgetRow": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "platform": {
+            "type": "string"
+          },
+          "state": {
+            "$ref": "#/components/schemas/FinanceBudgetState"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "platform",
+          "state"
+        ],
+        "additionalProperties": true
+      },
+      "FinanceBudgetState": {
+        "type": "object",
+        "properties": {
+          "spent_from": {
+            "type": "string",
+            "enum": [
+              "books",
+              "platform",
+              "mixed"
+            ],
+            "description": "Where an ad budget's actual comes from: the books, the ad platform's daily spend or both (by month)"
+          },
+          "as_of": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The ad platforms' last import, when their spend counts"
+          },
+          "reported": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "Cents: an ad budget's platform spend shown beside actual and never in it (its vendor is not the platform's own contact, so nothing is swapped); null otherwise"
+          }
+        },
+        "required": [
+          "as_of",
+          "reported",
+          "spent_from"
+        ],
+        "additionalProperties": true
+      },
       "FinanceBudgets": {
         "type": "object",
         "properties": {
           "budgets": {
             "type": "array",
             "items": {
-              "type": "object",
-              "additionalProperties": true
+              "$ref": "#/components/schemas/FinanceBudgetRow"
             }
           },
           "more": {
@@ -57129,6 +57688,144 @@
           "more",
           "on",
           "view_version"
+        ],
+        "additionalProperties": true
+      },
+      "FinanceCampaigns": {
+        "type": "object",
+        "properties": {
+          "month": {
+            "type": "string"
+          },
+          "campaigns": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "name": {
+                  "type": "string"
+                },
+                "platform": {
+                  "type": "string"
+                },
+                "ad_account": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "name": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "name"
+                  ],
+                  "additionalProperties": true
+                },
+                "owner": {
+                  "type": "object",
+                  "properties": {
+                    "team": {
+                      "type": "string"
+                    },
+                    "teammate": {
+                      "type": "string"
+                    },
+                    "inherited": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "inherited",
+                    "team",
+                    "teammate"
+                  ],
+                  "additionalProperties": true
+                },
+                "month": {
+                  "type": "object",
+                  "properties": {
+                    "spend": {
+                      "type": "integer"
+                    },
+                    "clicks": {
+                      "type": "integer"
+                    },
+                    "conversions": {
+                      "type": "number"
+                    },
+                    "per_conversion": {
+                      "type": [
+                        "integer",
+                        "null"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "clicks",
+                    "conversions",
+                    "per_conversion",
+                    "spend"
+                  ],
+                  "additionalProperties": true
+                },
+                "as_of": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "ad_account",
+                "as_of",
+                "id",
+                "month",
+                "name",
+                "owner",
+                "platform"
+              ],
+              "additionalProperties": true
+            }
+          },
+          "totals": {
+            "type": "object",
+            "properties": {
+              "spend": {
+                "type": "integer"
+              },
+              "clicks": {
+                "type": "integer"
+              },
+              "conversions": {
+                "type": "number"
+              },
+              "per_conversion": {
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "clicks",
+              "conversions",
+              "per_conversion",
+              "spend"
+            ],
+            "additionalProperties": true
+          },
+          "as_of": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "as_of",
+          "campaigns",
+          "month",
+          "totals"
         ],
         "additionalProperties": true
       },
@@ -58264,6 +58961,156 @@
         ],
         "additionalProperties": true
       },
+      "FinanceLineAttribution": {
+        "type": "object",
+        "properties": {
+          "line_id": {
+            "type": "string"
+          },
+          "source": {
+            "type": "string"
+          },
+          "rule_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "rule_name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "set_by": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "set_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "can_change": {
+            "type": "boolean"
+          },
+          "tags": {
+            "type": "object"
+          },
+          "amount": {
+            "type": "integer"
+          },
+          "splits": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "teammate": {
+                  "type": "string"
+                },
+                "team": {
+                  "type": "string"
+                },
+                "share_bps": {
+                  "type": "integer"
+                },
+                "amount": {
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "amount",
+                "share_bps",
+                "team",
+                "teammate"
+              ],
+              "additionalProperties": true
+            }
+          },
+          "history": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "source": {
+                  "type": "string"
+                },
+                "rule_id": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "splits": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "teammate": {
+                        "type": "string"
+                      },
+                      "team": {
+                        "type": "string"
+                      },
+                      "share_bps": {
+                        "type": "integer"
+                      }
+                    },
+                    "required": [
+                      "share_bps",
+                      "team",
+                      "teammate"
+                    ],
+                    "additionalProperties": true
+                  }
+                },
+                "set_by": {
+                  "type": "string"
+                },
+                "set_at": {
+                  "type": "string"
+                },
+                "superseded_at": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                }
+              },
+              "required": [
+                "id",
+                "rule_id",
+                "set_at",
+                "set_by",
+                "source",
+                "splits",
+                "superseded_at"
+              ],
+              "additionalProperties": true
+            }
+          }
+        },
+        "required": [
+          "amount",
+          "can_change",
+          "history",
+          "line_id",
+          "rule_id",
+          "rule_name",
+          "set_at",
+          "set_by",
+          "source",
+          "splits",
+          "tags"
+        ],
+        "additionalProperties": true
+      },
       "FinanceMercuryUsers": {
         "type": "object",
         "properties": {
@@ -58914,6 +59761,153 @@
         ],
         "additionalProperties": true
       },
+      "FinanceReceipts": {
+        "type": "object",
+        "properties": {
+          "rows": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "file": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "name": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "name"
+                  ],
+                  "additionalProperties": true
+                },
+                "read": {
+                  "type": "object",
+                  "properties": {
+                    "amount": {
+                      "type": [
+                        "integer",
+                        "null"
+                      ]
+                    },
+                    "date": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "vendor": {
+                      "type": [
+                        "object",
+                        "null"
+                      ],
+                      "properties": {
+                        "id": {
+                          "type": "string"
+                        },
+                        "name": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "id",
+                        "name"
+                      ],
+                      "additionalProperties": true
+                    }
+                  },
+                  "required": [
+                    "amount",
+                    "date",
+                    "vendor"
+                  ],
+                  "additionalProperties": true
+                },
+                "match": {
+                  "type": [
+                    "object",
+                    "null"
+                  ],
+                  "properties": {
+                    "feed": {
+                      "type": "object",
+                      "properties": {
+                        "id": {
+                          "type": "string"
+                        },
+                        "date": {
+                          "type": "string"
+                        },
+                        "amount": {
+                          "type": "integer"
+                        },
+                        "description": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "amount",
+                        "date",
+                        "description",
+                        "id"
+                      ],
+                      "additionalProperties": true
+                    },
+                    "confidence": {
+                      "type": [
+                        "number",
+                        "null"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "confidence",
+                    "feed"
+                  ],
+                  "additionalProperties": true
+                },
+                "status": {
+                  "type": "string"
+                },
+                "as_of": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "as_of",
+                "file",
+                "id",
+                "match",
+                "read",
+                "status"
+              ],
+              "additionalProperties": true
+            }
+          },
+          "next": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "as_of": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "as_of",
+          "next",
+          "rows"
+        ],
+        "additionalProperties": true
+      },
       "FinanceRecipients": {
         "type": "object",
         "properties": {
@@ -59079,7 +60073,8 @@
               "budget_vs_actual",
               "ap_aging",
               "ar_aging",
-              "spend_by"
+              "spend_by",
+              "campaigns"
             ]
           },
           "prior": {
@@ -59276,7 +60271,8 @@
                     "card",
                     "item",
                     "location",
-                    "project"
+                    "project",
+                    "vendor"
                   ]
                 },
                 "id": {
@@ -59423,6 +60419,128 @@
         ],
         "additionalProperties": true
       },
+      "FinanceSubscriptionRow": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "vendor": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "name"
+            ],
+            "additionalProperties": true
+          },
+          "status": {
+            "type": "string"
+          },
+          "cadence": {
+            "type": "string"
+          },
+          "amount": {
+            "type": "integer"
+          },
+          "monthly": {
+            "type": "integer"
+          },
+          "seats": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "next_charge_on": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "card": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              }
+            }
+          },
+          "attribution": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "to": {
+                  "type": "string"
+                },
+                "share": {
+                  "type": "number"
+                }
+              },
+              "required": [
+                "share",
+                "to"
+              ],
+              "additionalProperties": true
+            }
+          },
+          "source": {
+            "type": "string"
+          },
+          "as_of": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "amount",
+          "attribution",
+          "cadence",
+          "card",
+          "id",
+          "monthly",
+          "next_charge_on",
+          "status",
+          "vendor"
+        ],
+        "additionalProperties": true
+      },
+      "FinanceSubscriptions": {
+        "type": "object",
+        "properties": {
+          "rows": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/FinanceSubscriptionRow"
+            }
+          },
+          "monthly_total": {
+            "type": "integer"
+          },
+          "as_of": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "as_of",
+          "monthly_total",
+          "rows"
+        ],
+        "additionalProperties": true
+      },
       "FinanceTransactions": {
         "type": "object",
         "properties": {
@@ -59497,7 +60615,27 @@
                   "type": "string"
                 },
                 "vendor": {
-                  "type": "string"
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "id": {
+                          "type": "string"
+                        },
+                        "name": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "id",
+                        "name"
+                      ],
+                      "additionalProperties": true
+                    }
+                  ]
                 },
                 "vendor_name": {
                   "type": "string"
@@ -59663,6 +60801,117 @@
         "required": [
           "next_cursor",
           "transfers"
+        ],
+        "additionalProperties": true
+      },
+      "FinanceUnattributed": {
+        "type": "object",
+        "properties": {
+          "lines": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "date": {
+                  "type": "string"
+                },
+                "entry_id": {
+                  "type": "string"
+                },
+                "account": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "code": {
+                      "type": "string"
+                    },
+                    "name": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "code",
+                    "id",
+                    "name"
+                  ],
+                  "additionalProperties": true
+                },
+                "amount": {
+                  "type": "integer"
+                },
+                "description": {
+                  "type": "string"
+                },
+                "memo": {
+                  "type": "string"
+                },
+                "vendor": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "name": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "name"
+                  ],
+                  "additionalProperties": true
+                },
+                "source": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "account",
+                "amount",
+                "date",
+                "description",
+                "entry_id",
+                "id",
+                "memo",
+                "source",
+                "vendor"
+              ],
+              "additionalProperties": true
+            }
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "start": {
+            "type": "string"
+          },
+          "end": {
+            "type": "string"
+          },
+          "as_of": {
+            "type": "string"
+          },
+          "currency": {
+            "type": "string"
+          },
+          "view_version": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "as_of",
+          "end",
+          "lines",
+          "start",
+          "view_version"
         ],
         "additionalProperties": true
       },
@@ -61253,14 +62502,13 @@
                   "type": "array",
                   "items": {
                     "enum": [
-                      "answer",
                       "update",
                       "decide",
                       "add_reading",
                       "open"
                     ]
                   },
-                  "description": "The writes that settle it: `answer` POST /api/v2/messages/{ask id}/answer: answer the question it carries; `update` POST /api/v2/tasks/{task id}: finish, decline, move or comment on the task; a question task is answered by its close (a pick: POST /api/v2/tasks/{task id}/answers with target {task}); `decide` the subject's decision: POST /api/v2/approvals/{id}, /api/v2/proposals/{id}/decide, or /api/v2/stale-review/{row id} for each row; `add_reading` POST /api/v2/kpis/{kpi id}/readings; `open` nothing to send from the card: it opens its page (`link`, the subject, or the Goals page)"
+                  "description": "The writes that settle it: `update` POST /api/v2/tasks/{task id}: finish, decline, move or comment on the task; a question task is answered by its close (a pick: POST /api/v2/tasks/{task id}/answers with target {task}); `decide` the subject's decision: POST /api/v2/approvals/{id}, /api/v2/proposals/{id}/decide, or /api/v2/stale-review/{row id} for each row; `add_reading` POST /api/v2/kpis/{kpi id}/readings; `open` nothing to send from the card: it opens its page (`link`, the subject, or the Goals page)"
                 },
                 "goal_id": {
                   "type": "string"
@@ -61297,8 +62545,12 @@
                 "reason": {
                   "type": "string"
                 },
-                "freshness": {
-                  "type": "string"
+                "kpis": {
+                  "type": "array",
+                  "description": "kind kpi_stale: each of the person's measures whose reading is out of date, in the one ask: {kpi_id, kpi_name, freshness, reason}",
+                  "items": {
+                    "type": "object"
+                  }
                 },
                 "proposal": {
                   "type": "object"
@@ -62383,6 +63635,300 @@
         ],
         "additionalProperties": true
       },
+      "HeartbeatBeat": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "started_at": {
+            "type": "string"
+          },
+          "total_ms": {
+            "type": "integer"
+          },
+          "did": {
+            "type": "integer"
+          },
+          "failed": {
+            "type": "integer"
+          },
+          "repeats": {
+            "type": "integer"
+          },
+          "last_repeated_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "steps": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "key": {
+                  "type": "string"
+                },
+                "name": {
+                  "type": "string"
+                },
+                "text": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "ms": {
+                  "type": "integer"
+                },
+                "error": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                }
+              },
+              "required": [
+                "key",
+                "ms"
+              ],
+              "additionalProperties": true
+            }
+          }
+        },
+        "required": [
+          "did",
+          "failed",
+          "id",
+          "last_repeated_at",
+          "repeats",
+          "started_at",
+          "steps",
+          "total_ms"
+        ],
+        "additionalProperties": true
+      },
+      "HeartbeatStep": {
+        "type": "object",
+        "properties": {
+          "key": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "due",
+              "recovery",
+              "poll"
+            ]
+          },
+          "kind_name": {
+            "type": "string"
+          },
+          "every_s": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "every": {
+            "type": "string"
+          },
+          "switch": {
+            "type": "boolean"
+          },
+          "on": {
+            "type": "boolean"
+          },
+          "can_change": {
+            "type": "boolean"
+          },
+          "last_run_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "last_ms": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "last_result": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "last_did_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "last_did": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "last_error": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "last_error_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "failing": {
+            "type": "boolean"
+          },
+          "runs_24h": {
+            "type": "integer"
+          },
+          "did_24h": {
+            "type": "integer"
+          },
+          "failed_24h": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "can_change",
+          "did_24h",
+          "every",
+          "every_s",
+          "failed_24h",
+          "failing",
+          "key",
+          "kind",
+          "kind_name",
+          "last_did",
+          "last_did_at",
+          "last_error",
+          "last_error_at",
+          "last_ms",
+          "last_result",
+          "last_run_at",
+          "name",
+          "on",
+          "runs_24h",
+          "switch"
+        ],
+        "additionalProperties": true
+      },
+      "HeartbeatUpdate": {
+        "properties": {
+          "interval_s": {
+            "type": "integer",
+            "maximum": 60.0,
+            "minimum": 5.0,
+            "title": "Interval S"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "interval_s"
+        ],
+        "title": "HeartbeatUpdate",
+        "description": "The seconds between Heartbeat beats (backend/heartbeat.py), 5 to 60."
+      },
+      "HeartbeatView": {
+        "type": "object",
+        "properties": {
+          "interval_s": {
+            "type": "integer"
+          },
+          "interval_min": {
+            "type": "integer"
+          },
+          "interval_max": {
+            "type": "integer"
+          },
+          "last_beat_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "beats_24h": {
+            "type": "integer"
+          },
+          "quiet_beats": {
+            "type": "integer"
+          },
+          "quiet_since_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "kinds": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "key": {
+                  "type": "string"
+                },
+                "name": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "key",
+                "name"
+              ],
+              "additionalProperties": true
+            }
+          },
+          "steps": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/HeartbeatStep"
+            }
+          },
+          "beats": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/HeartbeatBeat"
+            }
+          },
+          "next": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "can_change": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "beats",
+          "beats_24h",
+          "can_change",
+          "interval_max",
+          "interval_min",
+          "interval_s",
+          "kinds",
+          "last_beat_at",
+          "next",
+          "quiet_beats",
+          "quiet_since_at",
+          "steps"
+        ],
+        "additionalProperties": true
+      },
       "HeldAction": {
         "properties": {
           "action": {
@@ -62432,46 +63978,6 @@
           "nonce"
         ],
         "title": "HoldSend"
-      },
-      "IfNoAnswer": {
-        "properties": {
-          "do": {
-            "type": "string",
-            "maxLength": 300,
-            "minLength": 1,
-            "title": "Do"
-          },
-          "kind": {
-            "type": "string",
-            "enum": [
-              "reversible",
-              "send",
-              "spend",
-              "delete"
-            ],
-            "title": "Kind"
-          },
-          "by": {
-            "anyOf": [
-              {
-                "type": "string",
-                "maxLength": 40
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "By"
-          }
-        },
-        "additionalProperties": false,
-        "type": "object",
-        "required": [
-          "do",
-          "kind"
-        ],
-        "title": "IfNoAnswer",
-        "description": "What the bot does if the person does not answer by `by` (backend/ask_deadlines.py). `kind` says what that step is:\nonly a `reversible` internal step goes ahead on its own; a send, a payment or a delete waits for an answer."
       },
       "InboundCompanyConnection": {
         "oneOf": [
@@ -66332,6 +67838,19 @@
             ],
             "title": "Monthly Cap Usd"
           },
+          "rules_monthly_cap_usd": {
+            "anyOf": [
+              {
+                "type": "number",
+                "maximum": 100000.0,
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rules Monthly Cap Usd"
+          },
           "steps": {
             "anyOf": [
               {
@@ -66864,7 +68383,6 @@
             "type": "string",
             "enum": [
               "say",
-              "ask",
               "notice",
               "steer"
             ],
@@ -67559,14 +69077,13 @@
             "type": "array",
             "items": {
               "enum": [
-                "answer",
                 "update",
                 "decide",
                 "add_reading",
                 "open"
               ]
             },
-            "description": "The writes that settle it: `answer` POST /api/v2/messages/{ask id}/answer: answer the question it carries; `update` POST /api/v2/tasks/{task id}: finish, decline, move or comment on the task; a question task is answered by its close (a pick: POST /api/v2/tasks/{task id}/answers with target {task}); `decide` the subject's decision: POST /api/v2/approvals/{id}, /api/v2/proposals/{id}/decide, or /api/v2/stale-review/{row id} for each row; `add_reading` POST /api/v2/kpis/{kpi id}/readings; `open` nothing to send from the card: it opens its page (`link`, the subject, or the Goals page)"
+            "description": "The writes that settle it: `update` POST /api/v2/tasks/{task id}: finish, decline, move or comment on the task; a question task is answered by its close (a pick: POST /api/v2/tasks/{task id}/answers with target {task}); `decide` the subject's decision: POST /api/v2/approvals/{id}, /api/v2/proposals/{id}/decide, or /api/v2/stale-review/{row id} for each row; `add_reading` POST /api/v2/kpis/{kpi id}/readings; `open` nothing to send from the card: it opens its page (`link`, the subject, or the Goals page)"
           }
         },
         "required": [
@@ -70149,51 +71666,6 @@
         ],
         "additionalProperties": true
       },
-      "QuestionOption": {
-        "properties": {
-          "label": {
-            "type": "string",
-            "maxLength": 60,
-            "minLength": 1,
-            "title": "Label"
-          },
-          "description": {
-            "type": "string",
-            "maxLength": 200,
-            "title": "Description",
-            "default": ""
-          },
-          "file": {
-            "anyOf": [
-              {
-                "type": "string",
-                "pattern": "^[^@]+@[1-9][0-9]*$"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "File"
-          },
-          "then": {
-            "type": "string",
-            "maxLength": 120,
-            "title": "Then",
-            "default": ""
-          },
-          "recommended": {
-            "type": "boolean",
-            "title": "Recommended",
-            "default": false
-          }
-        },
-        "additionalProperties": false,
-        "type": "object",
-        "required": [
-          "label"
-        ],
-        "title": "QuestionOption"
-      },
       "QuestionSets": {
         "type": "object",
         "properties": {
@@ -70964,10 +72436,14 @@
           },
           "github_connected": {
             "type": "boolean"
+          },
+          "github_installed": {
+            "type": "boolean"
           }
         },
         "required": [
           "github_connected",
+          "github_installed",
           "new_bot_default",
           "repositories"
         ],
@@ -71157,48 +72633,6 @@
           }
         ]
       },
-      "ReviewAsk": {
-        "properties": {
-          "questions": {
-            "items": {
-              "$ref": "#/components/schemas/ReviewQuestion"
-            },
-            "type": "array",
-            "maxItems": 4,
-            "minItems": 1,
-            "title": "Questions"
-          },
-          "who": {
-            "anyOf": [
-              {
-                "type": "string",
-                "maxLength": 200,
-                "minLength": 1
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Who"
-          },
-          "if_no_answer": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/IfNoAnswer"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          }
-        },
-        "additionalProperties": false,
-        "type": "object",
-        "required": [
-          "questions"
-        ],
-        "title": "ReviewAsk"
-      },
       "ReviewMany": {
         "properties": {
           "action": {
@@ -71230,59 +72664,6 @@
           "action"
         ],
         "title": "ReviewMany"
-      },
-      "ReviewQuestion": {
-        "properties": {
-          "id": {
-            "type": "string",
-            "maxLength": 40,
-            "minLength": 1,
-            "title": "Id"
-          },
-          "header": {
-            "type": "string",
-            "maxLength": 30,
-            "title": "Header"
-          },
-          "question": {
-            "type": "string",
-            "maxLength": 300,
-            "minLength": 1,
-            "title": "Question"
-          },
-          "why": {
-            "type": "string",
-            "maxLength": 200,
-            "title": "Why",
-            "default": ""
-          },
-          "options": {
-            "items": {
-              "$ref": "#/components/schemas/QuestionOption"
-            },
-            "type": "array",
-            "maxItems": 6,
-            "title": "Options"
-          },
-          "multi": {
-            "type": "boolean",
-            "title": "Multi",
-            "default": false
-          },
-          "other": {
-            "type": "boolean",
-            "title": "Other",
-            "default": true
-          }
-        },
-        "additionalProperties": false,
-        "type": "object",
-        "required": [
-          "id",
-          "header",
-          "question"
-        ],
-        "title": "ReviewQuestion"
       },
       "ReviewSettings": {
         "properties": {
@@ -71316,64 +72697,6 @@
         "additionalProperties": false,
         "type": "object",
         "title": "ReviewSettings"
-      },
-      "ReviewTarget": {
-        "properties": {
-          "comment": {
-            "anyOf": [
-              {
-                "type": "string",
-                "maxLength": 200,
-                "minLength": 1
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Comment"
-          },
-          "file": {
-            "anyOf": [
-              {
-                "type": "string",
-                "maxLength": 200,
-                "minLength": 1
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "File"
-          },
-          "version": {
-            "anyOf": [
-              {
-                "type": "integer",
-                "minimum": 1.0
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Version"
-          },
-          "task": {
-            "anyOf": [
-              {
-                "type": "string",
-                "maxLength": 200,
-                "minLength": 1
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Task"
-          }
-        },
-        "additionalProperties": false,
-        "type": "object",
-        "title": "ReviewTarget"
       },
       "ReviewedMeeting": {
         "type": "object",
@@ -71701,6 +73024,26 @@
             "type": "array",
             "maxItems": 20,
             "title": "Where"
+          },
+          "toward_scope": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "maxItems": 20,
+            "title": "Toward Scope"
+          },
+          "applies_when": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 200
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Applies When"
           }
         },
         "additionalProperties": false,
@@ -75170,6 +76513,39 @@
         ],
         "title": "Suggestion"
       },
+      "SystemRoutineSaved": {
+        "type": "object",
+        "properties": {
+          "job": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/HeartbeatStep"
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "key": {
+                    "type": "string"
+                  },
+                  "name": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "key",
+                  "name"
+                ],
+                "additionalProperties": true
+              }
+            ],
+            "description": "The saved routine's row: a HeartbeatStep for ask_deadlines, else its GET /system-routines row"
+          }
+        },
+        "required": [
+          "job"
+        ],
+        "additionalProperties": true
+      },
       "SystemRoutineUpdate": {
         "properties": {
           "on": {
@@ -75707,6 +77083,13 @@
             "type": "string",
             "description": "A Dev ticket at a working step (In Progress, a Fixes step): when it entered that step or came back to work; absent otherwise"
           },
+          "requirements": {
+            "type": "array",
+            "description": "Where each stage requirement of the ticket's current step stands (backend/pipeline_engine.py); absent when the step has none",
+            "items": {
+              "type": "object"
+            }
+          },
           "relations": {
             "type": "object",
             "description": "Related tasks the reader may open, by kind (parent, blocks, related, duplicate_of, follow_up): each {id, title, status, owner, direction}; direction is out when this task is the subtask, blocker, duplicate or follow-up, in for the other end, both for related. Subtasks are in the task's children.",
@@ -75877,7 +77260,7 @@
       "TaskAnswer": {
         "properties": {
           "target": {
-            "$ref": "#/components/schemas/ReviewTarget"
+            "$ref": "#/components/schemas/backend__models__ReviewTarget"
           },
           "answers": {
             "additionalProperties": {
@@ -75959,26 +77342,6 @@
           "answers"
         ],
         "additionalProperties": true
-      },
-      "TaskAskResolve": {
-        "properties": {
-          "quote": {
-            "anyOf": [
-              {
-                "type": "string",
-                "maxLength": 4000,
-                "minLength": 1
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Quote"
-          }
-        },
-        "additionalProperties": false,
-        "type": "object",
-        "title": "TaskAskResolve"
       },
       "TaskBlocker": {
         "properties": {
@@ -76432,16 +77795,6 @@
             "maxLength": 200000,
             "minLength": 1,
             "title": "Text"
-          },
-          "ask": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/ReviewAsk"
-              },
-              {
-                "type": "null"
-              }
-            ]
           },
           "attachments": {
             "items": {
@@ -77018,6 +78371,43 @@
           },
           "children": {
             "type": "array"
+          },
+          "parent": {
+            "oneOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "id": {
+                    "type": "string"
+                  },
+                  "title": {
+                    "type": "string"
+                  },
+                  "label": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "step": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  }
+                },
+                "required": [
+                  "id",
+                  "label",
+                  "step",
+                  "title"
+                ],
+                "additionalProperties": true
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "comments": {
             "type": "array",
@@ -78028,6 +79418,13 @@
           "check_limit": {
             "type": "integer"
           },
+          "limit_minutes": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "The stage's Warn after time in minutes (the flow's late_hours x 60), or null"
+          },
           "flow": {
             "type": "object",
             "description": "What the step does with a ticket (docs/tasks.md, Step flow). On a check step, other_company is prefer (the default) or require."
@@ -78196,6 +79593,14 @@
               "public",
               "private"
             ]
+          },
+          "has_requirements": {
+            "type": "boolean",
+            "description": "On the list (GET /api/v2/task-types): whether the pipeline has any live stage requirement. A pipeline without one keeps today's phone layout; the one-stage phone view is for pipelines with requirements (backend/pipeline_engine.py)"
+          },
+          "can_edit_rules": {
+            "type": "boolean",
+            "description": "On the list (GET /api/v2/task-types): whether the caller may change this pipeline's rules, the pipeline's owner or an Admin (backend/pipeline_rights.py)"
           },
           "manager": {
             "type": [
@@ -78713,6 +80118,11 @@
               }
             ],
             "title": "Number"
+          },
+          "override_requirements": {
+            "type": "boolean",
+            "title": "Override Requirements",
+            "default": false
           },
           "verdict": {
             "anyOf": [
@@ -82688,6 +84098,64 @@
         "additionalProperties": false,
         "type": "object",
         "title": "Settings"
+      },
+      "backend__models__ReviewTarget": {
+        "properties": {
+          "comment": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 200,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Comment"
+          },
+          "file": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 200,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "File"
+          },
+          "version": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 1.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Version"
+          },
+          "task": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 200,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Task"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "ReviewTarget"
       },
       "backend__models__ToolUpdate": {
         "properties": {

@@ -8,13 +8,14 @@ import pytest
 from backend import files
 from backend.auth import Identity
 from backend.store import H
+from backend.tests.old_asks import with_refs
 from backend.tests.test_api import api, get, headers, post  # noqa: F401
 from backend.tests.test_file_reviews import ask as review_ask, answer as review_answer
 from backend.tests.test_files import turn
 from backend.tests.test_org_rules import org
 from backend.tests.test_page_audience import edit
 from backend.tests.test_pages import HTML, page
-from backend.tests.test_task_review import ask
+from backend.tests.test_question_tasks import keep_asking
 
 
 def public_page(api):
@@ -24,42 +25,6 @@ def public_page(api):
     made = page(api, attempt, task=tid, title="Confidential draft")
     assert made.status_code == 200, made.text
     return tid, attempt, made.json()["page"]["file_id"]
-
-
-def test_sibling_file_review_options_and_copied_answers_are_scrubbed(api):
-    tid, _, fid = public_page(api)
-    question = ask("ben")
-    question["questions"][0]["options"][0].update(label="Confidential draft", file=fid + "@1")
-    sibling = post(api, f"tasks/{tid}/files", {"name": "ordinary.txt", "text": "Public notes", "ask": question})
-    post(
-        api,
-        f"tasks/{tid}/answers",
-        {"target": {"file": sibling["file_id"], "version": 1}, "answers": {"verdict": ["Confidential draft"]}},
-        token="ben-test",
-    )
-    # Leave a second ordinary review open to exercise its raw question projection too.
-    post(api, f"tasks/{tid}/files", {"name": "sibling.txt", "text": "Other notes", "ask": question})
-    with api.app.state.store.read() as c:
-        messages = [
-            H._json(r[0], {})
-            for r in c.execute("SELECT refs FROM messages WHERE json_extract(refs,'$.task')=?", (tid,))
-        ]
-        assert any(
-            m.get("answer", {}).get("label_sources") == {"verdict": {"Confidential draft": {"file": fid, "version": 1}}}
-            for m in messages
-        )
-        assert any(
-            m.get("body_sources") == [{"file": fid, "version": 1}, {"file": sibling["file_id"], "version": 1}]
-            for m in messages
-        )
-    edit(api, fid, {"people": ["ben"]})
-    for deleted in (False, True):
-        if deleted:
-            assert api.delete("/api/v2/files/" + fid, headers=headers()).status_code == 200
-        for token in ("cara-test", "finance-test"):
-            for path in ("tasks/" + tid, f"tasks/{tid}/files", f"tasks/{tid}/comments", f"tasks/{tid}/answers"):
-                shown = json.dumps(get(api, path, token=token))
-                assert fid not in shown and "Confidential draft" not in shown, (path, shown)
 
 
 def test_real_pick_labels_and_generated_answer_bodies_retain_sources(api):
@@ -163,11 +128,22 @@ def test_legacy_exact_title_labels_are_task_local_and_survive_title_purge(api, p
     if pinned:
         tid = post(api, "tasks", {"owner": "ops", "title": "Pinned draft", "body": "Review", "private": False})["id"]
         post(api, "pins", {"place": "task:" + tid, "item": "page:" + fid})
-    question = ask("ben")
-    question["questions"][0]["options"][0]["label"] = "Confidential draft"
-    comment = post(api, f"tasks/{tid}/comments", {"text": "Pick one", "ask": question})["comment"]
+    # Old comments that carry a question (read as history; nothing writes one now), seeded as an old file holds them.
+    questions = [
+        {
+            "id": "verdict",
+            "header": "Review",
+            "question": "Pick one",
+            "options": [{"label": "Confidential draft"}, {"label": "Other"}],
+            "multi": False,
+        }
+    ]
+    comment = post(api, f"tasks/{tid}/comments", {"text": "Pick one"})["comment"]
     unrelated = post(api, "tasks", {"owner": "ops", "title": "Unrelated", "body": "Review", "private": False})["id"]
-    other = post(api, f"tasks/{unrelated}/comments", {"text": "Pick one", "ask": question})["comment"]
+    other = post(api, f"tasks/{unrelated}/comments", {"text": "Pick one"})["comment"]
+    with api.app.state.store.transaction() as c:
+        with_refs(c, comment["id"], questions=questions)
+        with_refs(c, other["id"], questions=questions)
     edit(api, fid, {"people": ["ben"]})
     for deleted in (False, True):
         if deleted:
@@ -185,6 +161,7 @@ def test_legacy_exact_title_labels_are_task_local_and_survive_title_purge(api, p
 def test_automatic_defaults_keep_label_and_body_provenance(api, kind, outcome):
     from backend import ask_deadlines
 
+    keep_asking(api)
     tid, _, fid = public_page(api)
     ordinary = post(api, f"tasks/{tid}/files", {"name": "public.txt", "text": "Public choice"})["file_id"]
     made = review_ask(
@@ -198,6 +175,7 @@ def test_automatic_defaults_keep_label_and_body_provenance(api, kind, outcome):
         if_no_answer={"do": "Confidential draft", "kind": kind, "by": H.shift(H.now(), days=1)},
     )
     assert made["question"]["refs"]["if_no_answer"]["source"] == {"file": fid, "version": 1}
+    keep_asking(api, on=True)
     with api.app.state.store.transaction() as c:
         settled = ask_deadlines.sweep(c, H.shift(H.now(), days=6))
         assert made["question"]["id"] in settled[outcome]
@@ -243,12 +221,20 @@ def test_identical_content_in_another_task_resolves_its_own_live_review(api):
         }
 
 
-def test_sibling_review_defaults_are_scrubbed_on_the_recipients_needs_you(api):
+def test_review_defaults_are_scrubbed_on_the_recipients_needs_you(api):
+    keep_asking(api)
     tid, _, fid = public_page(api)
-    question = ask("cara")
-    question["questions"][0]["options"][0].update(label="Confidential draft", file=fid + "@1")
-    question["if_no_answer"] = {"do": "Confidential draft", "kind": "reversible"}
-    post(api, f"tasks/{tid}/files", {"name": "ordinary.txt", "text": "Public notes", "ask": question}, token="ops-test")
+    ordinary = post(api, f"tasks/{tid}/files", {"name": "public.txt", "text": "Public choice"})["file_id"]
+    review_ask(
+        api,
+        "ops-test",
+        [{"file": fid}, {"file": ordinary}],
+        on="cara",
+        parent=tid,
+        private=False,
+        pick=True,
+        if_no_answer={"do": "Confidential draft", "kind": "reversible", "by": H.shift(H.now(), days=1)},
+    )
     assert "Confidential draft" in json.dumps(get(api, "needs-you", token="cara-test"))
     edit(api, fid, {"people": ["ben"]})
     for deleted in (False, True):

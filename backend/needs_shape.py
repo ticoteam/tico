@@ -1,6 +1,6 @@
 """One item shape for everything in a person's Needs you (OpenAPI `NeedsYouItem`).
 
-Each producer builds its item with what its card needs (a task's view, an ask, an approval row, a card's rows); `item`
+Each producer builds its item with what its card needs (a task's view, a question, an approval row, a card's rows); `item`
 adds the fields every item has, whatever its kind, so a client lists, orders and acts on them without a branch per kind:
 
 - `id`, `kind`, `title`, `created_at` (when it began waiting on the person);
@@ -12,7 +12,6 @@ adds the fields every item has, whatever its kind, so a client lists, orders and
 
 # Each action, and the write it is (docs/openapi/v2.json has them all).
 ACTIONS = {
-    "answer": "POST /api/v2/messages/{ask id}/answer: answer the question it carries",
     "update": "POST /api/v2/tasks/{task id}: finish, decline, move or comment on the task; a question task is "
     "answered by its close (a pick: POST /api/v2/tasks/{task id}/answers with target {task})",
     "decide": "the subject's decision: POST /api/v2/approvals/{id}, /api/v2/proposals/{id}/decide, or "
@@ -25,7 +24,7 @@ TASK_KINDS = ("task", "question", "waiting", "declined")
 GOAL_SUBJECTS = {
     "vision": "strategy",
     "kpi_red": "kpi",
-    "kpi_stale": "kpi",
+    "kpi_stale": None,  # one ask for all of a person's out-of-date measures: it stands for several
     "recovery": "proposal",
     "proposal": "proposal",
     "why": None,
@@ -51,12 +50,8 @@ def needs_item(x, reader):
     """An item of `GET /api/v2/needs-you` (views.needs_items) in the common shape."""
     kind = x["kind"]
     if kind in TASK_KINDS:
-        ask = x.get("ask") or {}
         # A question task's answer is its close, an update (backend/question_tasks.py).
-        answer = ("answer",) if ask.get("recipient_id") == reader and not ask.get("question_task") else ()
-        return item(x, {"type": "task", "id": x["id"]}, answer + ("update",), x.get("body"))
-    if kind == "ask":
-        return item(x, {"type": "message", "id": x["message_id"]}, ("answer",), x.get("body"))
+        return item(x, {"type": "task", "id": x["id"]}, ("update",), x.get("body"))
     if kind == "approval":
         return item(x, {"type": "approval", "id": x["id"]}, ("decide",))
     if kind == "stale":
@@ -69,7 +64,7 @@ def goal_item(x, title, body, created):
     kind, ref = x["kind"], x["ref"]
     kind_of = GOAL_SUBJECTS[kind]
     subject = {"type": kind_of, "id": ref} if kind_of else None
-    actions = {"recovery": ("decide",), "proposal": ("decide",), "kpi_stale": ("add_reading",)}.get(kind, ("open",))
+    actions = {"recovery": ("decide",), "proposal": ("decide",)}.get(kind, ("open",))
     # `ref` is the asks table's key; `id` and `subject` carry it.
     shown = {k: v for k, v in x.items() if k != "ref"}
     return item({**shown, "id": f"{kind}:{ref}", "title": title, "created_at": created}, subject, actions, body)

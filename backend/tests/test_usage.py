@@ -300,22 +300,23 @@ def test_without_each_request_the_estimate_may_be_low_and_other_models_are_uncha
     )
 
 
-def test_tico_cheap_1_1_bills_a_prompt_over_100k_whole_at_its_long_rate():
-    # 100,000 prompt tokens is the standard Cheap price; one more and the whole request is at $0.75 / $3.75, cached 10%.
-    assert providers.estimate("tico-cheap-1.1", 100_000, 0, 1_000, [[100_000, 0, 1_000]]) == (
+def test_tico_low_bills_a_prompt_over_100k_whole_at_its_long_rate():
+    # 100,000 prompt tokens is the standard Low price (Haiku 5.5); one more and the whole request is at $0.75 / $3.75, cached 10%.
+    assert providers.estimate("tico-low-1.0", 100_000, 0, 1_000, [[100_000, 0, 1_000]]) == (
         pytest.approx(0.01575),
         False,
     )
-    assert providers.estimate("tico-cheap-1.1", 100_001, 0, 1_000, [[100_001, 0, 1_000]]) == (
+    assert providers.estimate("tico-low-1.0", 100_001, 0, 1_000, [[100_001, 0, 1_000]]) == (
         pytest.approx(0.07875075),
         False,
     )
-    assert providers.estimate("tico-cheap-1.1", 1, 100_000, 0, [[1, 100_000, 0]])[0] == pytest.approx(
+    assert providers.estimate("tico-low-1.0", 1, 100_000, 0, [[1, 100_000, 0]])[0] == pytest.approx(
         (1 * 0.75 + 100_000 * 0.075) / 1e6
     )
-    # Cheap 1.0 keeps its one price.
-    assert providers.estimate("tico-cheap-1.0", 100_001, 0, 1_000, [[100_001, 0, 1_000]])[0] == pytest.approx(
-        (100_001 * 0.15 + 1_000 * 0.75) / 1e6
+    # An id from before lineup 3 is priced as the id it is now.
+    assert providers.estimate("tico-cheap-1.1", 100_001, 0, 1_000, [[100_001, 0, 1_000]]) == (
+        pytest.approx(0.07875075),
+        False,
     )
 
 
@@ -371,7 +372,7 @@ def test_gpt_6_1_terra_is_priced_at_tico_s_approved_rate_for_a_run_and_its_estim
     assert row["est_cost_usd"] == pytest.approx(expected)
 
 
-@pytest.mark.parametrize("model", ["tico-cheap-1.1", "tico-mid-1.0"])
+@pytest.mark.parametrize("model", ["tico-low-1.0", "tico-medium-1.0"])
 def test_a_tico_run_prices_each_request_on_its_own_tier_and_other_tico_models_keep_their_totals(api, model):
     r, _, attempt = setup_attempt(api)
     short, long = [1_000, 50_000, 800], [5_000, 115_000, 2_000]  # prompts of 51,000 and 120,000 tokens
@@ -385,7 +386,7 @@ def test_a_tico_run_prices_each_request_on_its_own_tier_and_other_tico_models_ke
         "requests": [short, long],
     }
     complete(api, r, attempt, {**part, "segments": [part]})
-    if model == "tico-cheap-1.1":
+    if model == "tico-low-1.0":
         expected = (1_000 * 0.15 + 50_000 * 0.015 + 800 * 0.75 + 5_000 * 0.75 + 115_000 * 0.075 + 2_000 * 3.75) / 1e6
     else:
         expected = price(model, 6_000, 165_000, 2_800)

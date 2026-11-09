@@ -9,6 +9,7 @@ import hashlib
 import re
 import logging
 import threading
+import time
 from datetime import timedelta
 from urllib.parse import quote
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -598,10 +599,12 @@ class Alerts:
                             enqueue(c, ident, "bot_stuck", task["id"], "stuck:" + task["id"] + ":" + task["updated_at"])
 
     def run(self):
-        # One pass is one run of Personal alerts (Settings > Routines, Automations); a pass with nothing to send folds.
+        # One pass is the Heartbeat's Personal alerts step (backend/heartbeat.py), whose outcome lands here, on its own
+        # thread, after the beat: a pass with nothing to send writes nothing.
+        from . import heartbeat
         from . import system_routines as SR
 
-        run = SR.Run("personal_alerts").did("Nothing to send", quiet=True)
+        words, quiet, error, begun = "Nothing to send", True, None, time.monotonic()
         try:
             self.collect()
             with self.store.read() as c:
@@ -616,19 +619,24 @@ class Alerts:
             for ident in ids:
                 self.dispatch(ident)
             if ids:
-                run.did(SR.count_words(len(ids), "alert tried", "alerts tried"))
+                words, quiet = SR.count_words(len(ids), "alert tried", "alerts tried"), False
         except Exception as exc:
-            run.error = SR.failure_words(exc)
+            error = SR.failure_words(exc)
             logging.getLogger("tico.alerts").exception("Personal alert worker failed")
         finally:
-            SR.write(self.store, run)
+            heartbeat.record_late(
+                self.store, "personal_alerts", words, quiet, error, round((time.monotonic() - begun) * 1000)
+            )
             self.worker_lock.release()
 
     def tick(self):
+        """Start a pass on its own thread unless one is running. Returns whether it started one."""
         if self.settings.demo or self.settings.rehearsal:
-            return
+            return False
         if self.worker_lock.acquire(blocking=False):
             threading.Thread(target=self.run, name="personal-alerts", daemon=True).start()
+            return True
+        return False
 
 
 def legal_mail(c, auth, task_id, mail_id):

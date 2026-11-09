@@ -17,7 +17,7 @@ def set_fallback(api, bot, fallback):
         BS.write(c, bot, {**config, **({'fallback': fallback} if fallback else {})})
 
 
-TICO_CHECK = {"runtime": "pi", "model": "tico-mid-1.0", "harness": "pi", "effort": "", "role": "review"}
+TICO_CHECK = {"runtime": "pi", "model": "tico-medium-1.0", "harness": "pi", "effort": "", "role": "review"}
 
 
 @pytest.mark.parametrize("change", ["fallback_added", "fallback_removed", "check_reassigned"])
@@ -30,7 +30,7 @@ def test_the_key_follows_the_claims_fallback_and_check(api, monkeypatch, change)
         save(api, fake)
     put_bot_on(api, "ops", "kimi-k3")
     if change == "fallback_removed":
-        set_fallback(api, "ops", {"harness": "pi", "model": "tico-mid-1.0"})
+        set_fallback(api, "ops", {"harness": "pi", "model": "tico-medium-1.0"})
     machine = runner(api)
     assign(api, machine, "ops")
     ready(api, machine, ["ops"])
@@ -45,10 +45,10 @@ def test_the_key_follows_the_claims_fallback_and_check(api, monkeypatch, change)
         post(api, "chat/ops", {"text": "Use only the synthetic fixture"})
     attempt = claim(api, machine, "ops")
     on_tico = change != "fallback_added"
-    assert attempt["config"]["model"] == ("tico-mid-1.0" if change == "check_reassigned" else "kimi-k3")
+    assert attempt["config"]["model"] == ("tico-medium-1.0" if change == "check_reassigned" else "kimi-k3")
     # While the run is under way, the setting moves.
     if change == "fallback_added":
-        set_fallback(api, "ops", {"harness": "pi", "model": "tico-mid-1.0"})
+        set_fallback(api, "ops", {"harness": "pi", "model": "tico-medium-1.0"})
     elif change == "fallback_removed":
         set_fallback(api, "ops", None)
     else:

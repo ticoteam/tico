@@ -3,15 +3,16 @@
 Read from the inbox (`message_deliveries`), the thread counters and the writes held for review (`org_rule_holds`), each
 row checked against the per-message rule (`threads.readable`) before it is listed. An item clears by what the person
 does, not by a click:
-- a mention or an ask is open until the person posts in its thread after it (or it is deleted);
+- a mention is open until the person posts in its thread after it (or it is deleted);
 - an unread DM is open until the person reads past its last message from a person or one addressed to them. A DM with
   one bot and no one else is not: the bot is on the Team chart, which shows its unread (threads.bot_dm_unread), and a
-  bot's question or mention there is still an item;
+  bot's mention there is still an item;
 - a write held for review (a native thread post or edit, a chat message, a run's reply) is open until it is decided:
   its reviewer releases or keeps it, or the person it is held for withdraws it (the hold leaves `held`);
 - a capped thread (the loop guard, spec 4.5) is open until its capped deliveries resume;
-A bot's mention of the person and a bot's ask are the thread's questions to the person and count; a bot's post that
-names nobody is activity, not attention.
+A bot's mention of the person is the thread's question to the person and counts; a bot's post that names nobody is
+activity, not attention. A bot's question to a person is a question task, listed as a task; an ask message left from
+before step 6c is history and not listed.
 
 Every item is listed. The caller pages the whole list (views.needs_items), so nothing is cut here. A person the reader
 may not see is named only to someone in the same thread (`teammate_access.Known`), as everywhere a thread is read.
@@ -71,7 +72,7 @@ def items(c, auth, who, skip=(), with_capped=True):
                     "thread_capped",
                     row["root_id"],
                     row["root_id"],
-                    _clip(root["subject"] or "Thread") + ": bot replies paused",
+                    _clip(threads.shown_name(c, viewer, dict(root))) + ": bot replies paused",
                     row["since"],
                 )
             )
@@ -100,27 +101,29 @@ def _items(c, viewer):
         if not message or not threads.message_readable(c, viewer, message):
             continue
         seen.add(row["id"])
-        kind = "thread_ask" if row["kind"] == "ask" else "thread_mention"
+        kind = "thread_mention"
         first = _clip((row["body"] or "").strip().splitlines()[0] if (row["body"] or "").strip() else "")
         out.append(
             _item(
                 kind,
                 row["id"],
                 row["conversation_id"],
-                first or _clip(row["subject"] or "Thread"),
+                first or _clip(row["subject"] or threads.shown_name(c, viewer, row["conversation_id"])),
                 row["created_at"],
                 known.name(row["sender_id"], row["conversation_id"]),
                 message_id=row["id"],
                 first_line=first,
             )
         )
-    for row in _unread_dms(c, viewer, me):
+    dms = _unread_dms(c, viewer, me)
+    dm_names = threads.shown_names(c, viewer, [row["id"] for row in dms if not row["subject"]])
+    for row in dms:
         out.append(
             _item(
                 "thread_dm",
                 row["id"],
                 row["id"],
-                _clip(row["subject"] or "Direct message"),
+                _clip(row["subject"] or dm_names.get(row["id"], "")),
                 row["created_at"],
                 known.name(row["sender_id"], row["id"]),
             )
@@ -138,7 +141,7 @@ def _items(c, viewer):
 
 
 def _addressed(c, me):
-    """Messages a person may have to answer: a person's, a bot's ask, or a message that names or replies to this
+    """Messages a person may have to answer: a person's, or a message that names or replies to this
     person, that they have not answered since in the same thread. A bot's plain post, one that names nobody, is not
     theirs to answer."""
     return [
@@ -152,9 +155,8 @@ def _addressed(c, me):
             "WHERE d.recipient=? AND d.reason IN ('mention','ask','assign','addressed','reply') "
             "AND d.state IN ('pending','delivered','read') AND m.sender_id<>? "
             f"AND {H.delivery_counts_sql('m', 'd.recipient', 'd.reason')} "
-            "AND (m.sender_id LIKE 'human:%' OR m.kind='ask' OR d.reason IN ('mention','reply')) "
+            "AND (m.sender_id LIKE 'human:%' OR d.reason IN ('mention','reply')) "
             "AND m.deleted_at IS NULL AND m.superseded_at IS NULL "
-            "AND (m.kind<>'ask' OR m.answered_by_id IS NULL) "
             "AND cv.task_id IS NULL AND cv.closed_at IS NULL AND cv.archived_at IS NULL "
             "AND NOT EXISTS (SELECT 1 FROM messages r WHERE r.conversation_id=m.conversation_id AND r.sender_id=? "
             "AND r.created_at>m.created_at AND r.deleted_at IS NULL) "

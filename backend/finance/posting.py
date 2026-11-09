@@ -6,13 +6,16 @@ from collections.abc import Mapping, Sequence
 from dataclasses import replace
 
 from . import budgeting
+from . import platform_share as PS
 from .context import Ctx, load
+from .core import attribution as CA
 from .core import dates
 from .core import ledger as L
 from .core import validate as V
 from .core.errors import CONFLICT, NOT_FOUND, PERIOD_CLOSED, FinanceError, invalid
 from .core.org import SYSTEM
 from .store import ap as SAP
+from .store import attribution as ATT
 from .store import budgets as SB
 from .store import ledger as SL
 from .store import raw_totals as SR
@@ -46,9 +49,11 @@ def post(
     reversing: bool = False,
     touch: bool = True,
     importing: bool = False,
+    claims: Mapping[int, ATT.Claim] | None = None,
 ) -> tuple[str, list[str]]:
     """Check and post one entry. The entry id and its line ids. `touch=False` leaves the budget crossings to the
-    caller, for once everything that goes with the entry is written."""
+    caller, for once everything that goes with the entry is written. `claims` gives lines an attribution by index: a
+    reversal carries its original's over; otherwise the book's rules judge each P&L line as it posts."""
     # A plain vendor name is keyed folded (L.name_key; a contact's id is its own key) and keeps its text as the key's
     # label; a reversal keeps its keys.
     if not reversing:
@@ -69,18 +74,63 @@ def post(
         _no_raw_month(ctx, e.entry_date)
     period_id = ensure_period(ctx, e.entry_date)
     entry_id = SL.new_id()
+    if claims is None:
+        claims = {} if reversing else _claims(ctx, e)
     line_ids = SL.insert_entry(
-        ctx.c, e, entry_id=entry_id, period_id=period_id, action_id=action_id, reverses_id=reverses_id, by=by, at=ctx.at
+        ctx.c,
+        e,
+        entry_id=entry_id,
+        period_id=period_id,
+        action_id=action_id,
+        reverses_id=reverses_id,
+        by=by,
+        at=ctx.at,
+        claims=claims,
+        team_of=ctx.org.team_of,
     )
     if not e.cash_view():
         # The cash P&L leaves this entry's P&L lines out; a bill's or invoice's come back as it is paid (settlements).
-        for x in e.lines:
+        # Each line's correction moves with its parts, as its accrual rollups do.
+        for n, x in enumerate(e.lines):
             account = ctx.accounts.get(x.account_id)
             if account is not None and account.type in L.PNL_TYPES:
-                SAP.cash_roll(ctx.c, ctx.book.id, e.entry_date, x.account_id, x.tags, x.contact_id, -x.amount)
+                splits = claims[n].splits if n in claims else ()
+                for tags, amount in CA.spread(x.tags, -x.amount, splits, ctx.org.team_of):
+                    SAP.cash_roll(ctx.c, ctx.book.id, e.entry_date, x.account_id, tags, x.contact_id, amount)
+    if not reversing:
+        # A charge posting changes the window of the charge after it on its vendor (platform_share.py).
+        from .attribution import after_post  # lazy: attribution imports this module
+
+        after_post(ctx, e.lines, e.entry_date, by)
     if touch:
         touched(ctx, e.lines, by)
     return entry_id, line_ids
+
+
+def _claims(ctx: Ctx, e: L.Entry) -> dict[int, ATT.Claim]:
+    """The attribution each P&L line of an entry takes as it posts: the enabled rule its vendor, its money account (the
+    entry's first line on a balance sheet account), its account, or its class, location or project matches, by
+    precedence (ATT.PRECEDENCE); else an ad platform's share (platform_share.py) when its vendor is a platform's own
+    contact."""
+    rules = ATT.rules(ctx.c, ctx.book.id)
+    money = ""
+    for x in e.lines:
+        account = ctx.accounts.get(x.account_id)
+        if account is not None and account.type not in L.PNL_TYPES:
+            money = x.account_id
+            break
+    out: dict[int, ATT.Claim] = {}
+    for n, x in enumerate(e.lines):
+        account = ctx.accounts.get(x.account_id)
+        if account is None or account.type not in L.PNL_TYPES:
+            continue
+        keys = ATT.vendor_keys_of(ctx.c, ctx.book.id, x.contact_id)
+        claim = ATT.claim_for(rules, ATT.facts_of_tags(x.account_id, keys, money, x.tags)) if rules else None
+        if claim is None:
+            claim = PS.claim_at_posting(ctx, keys, e.entry_date)
+        if claim is not None:
+            out[n] = claim
+    return out
 
 
 def _raw_entry(e: L.Entry) -> bool:
@@ -124,7 +174,12 @@ def reverse(ctx: Ctx, entry_id: str, *, day: str | None, memo: str, by: str, act
         raise FinanceError(CONFLICT, "that entry is already reversed")
     if row["reverses_id"]:
         raise FinanceError(CONFLICT, "that entry is itself a reversal; post a new entry instead")
-    lines = [line for _, line in SL.entry_lines(ctx.c, entry_id)]
+    rows = SL.entry_lines(ctx.c, entry_id)
+    lines = [line for _, line in rows]
+    # The reversal takes each line's attribution as it stands, so it undoes exactly the parts the original rolled.
+    claims = {
+        n: claim for n, (r, _) in enumerate(rows) if (claim := ATT.claim_of_line(ctx.c, str(r["id"]))) is not None
+    }
     when = day or str(row["entry_date"])
     if SL.closed_on(ctx.c, ctx.book.id, when):
         raise FinanceError(PERIOD_CLOSED, f"the period holding {when} is closed; reverse on an open date")
@@ -143,9 +198,12 @@ def reverse(ctx: Ctx, entry_id: str, *, day: str | None, memo: str, by: str, act
         lines=L.reversal(lines),
         basis=str(row["basis"] or "both"),
     )
-    rid, _ = post(ctx, e, by=by, action_id=action_id, reverses_id=entry_id, reversing=True)
+    rid, _ = post(ctx, e, by=by, action_id=action_id, reverses_id=entry_id, reversing=True, claims=claims)
     if SL.mark_reversed(ctx.c, entry_id) != 1:
         raise FinanceError(CONFLICT, "that entry is already reversed")
+    from .attribution import after_reversal  # lazy: attribution imports this module
+
+    after_reversal(ctx, entry_id, by)  # the charges it undid leave the windows of the charges after them
     if raw_month:
         refresh_covered(ctx, before)  # a reversed raw-totals month uncovers the feed rows behind it (§4.1)
     return rid

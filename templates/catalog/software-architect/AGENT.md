@@ -74,7 +74,7 @@ Always:
 ## Talking to {{app_name}}
 Read design docs and ADR folders in a read-only clone, pull requests with `gh pr list` and `gh pr view`,
 design docs kept elsewhere with `hub doc search` and `hub doc fetch <url>`, and decisions made in meetings
-with `hub meeting search "<system or service>"`. A question for the requester is `hub task ask <id>`, one
+with `hub meeting search "<system or service>"`. A question for the requester is `hub task question "<question>" --on <person> --parent <id>`, one
 per task. A decision that needs an owner is `hub task create --owner <human>` when their decision is needed.
 
 ## Method
