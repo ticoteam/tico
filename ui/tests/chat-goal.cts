@@ -2,25 +2,25 @@
 // target and pinned-goal bar are in thread-composer.cjs). Only what the thread itself draws is here: the server's
 // notice for a met goal (refs.chat_goal, refs.goal_status) is the compact goal line, not a "Task" line, and the /goal
 // messages the goal controls sent are not bubbles.
-const {chromium} = require('playwright');
-const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const {html, uiFile} = require('./support/page.cjs');
-const {unrouted} = require('./support/routes.cjs');
-const {assistantView} = require('./support/assistant-chat.cjs');
-const launch = () => chromium.launch({headless: true, channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined});
+const {chromium}: typeof import('playwright') = require('playwright');
+const assert: typeof import('node:assert/strict') = require('node:assert/strict');
+const fs: typeof import('node:fs') = require('node:fs');
+const {html, uiFile} = require('./support/page.cjs') as typeof import('./support/page.cjs');
+const {unrouted} = require('./support/routes.cjs') as typeof import('./support/routes.cjs');
+const {assistantView} = require('./support/assistant-chat.cjs') as typeof import('./support/assistant-chat.cjs');
+const launch = () => chromium.launch({headless: true, channel: (process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined) as string});
 
-async function open(browser, viewport, touch, {messages, goal, theme = ''}) {
+async function open(browser: import('playwright').Browser, viewport: {width: number; height: number}, touch: boolean, {messages, goal, theme = ''}: {messages: unknown[]; goal: unknown; theme?: string}): Promise<{errors: string[]; page: import('playwright').Page}> {
   const page = await browser.newPage({viewport, serviceWorkers: 'block', ...(touch ? {hasTouch: true, isMobile: true} : {})});
-  if (theme) await page.addInitScript(t => { try { localStorage.setItem('tico.theme', t); } catch {} }, theme);
-  const errors = [];
+  if (theme) await page.addInitScript((t: string) => { try { localStorage.setItem('tico.theme', t); } catch {} }, theme);
+  const errors: string[] = [];
   page.on('pageerror', e => errors.push(e.message));
-  await page.route('**/*', async route => {
+  await page.route('**/*', async (route: import('playwright').Route) => {
     const url = new URL(route.request().url()), p = url.pathname;
-    const json = body => route.fulfill({contentType: 'application/json', body: JSON.stringify(body)});
+    const json = (body: unknown) => route.fulfill({contentType: 'application/json', body: JSON.stringify(body)});
     const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/);
-    if (ui && fs.existsSync(uiFile(ui[1])))
-      return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]), 'utf8')});
+    if (ui && fs.existsSync(uiFile(ui[1]!)))
+      return route.fulfill({contentType: ui[1]!.endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]!), 'utf8')});
     if (/\.(?:js|ts)$/.test(p)) return route.fulfill({contentType: 'application/javascript', body: ''});
     if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
     if (p === '/api/me') return json({id: 'ana', name: 'Ana', role: 'owner', cloud: true});
@@ -38,8 +38,8 @@ async function open(browser, viewport, touch, {messages, goal, theme = ''}) {
   return {errors, page};
 }
 
-async function serverNotice(browser) {
-  const t = (m, s) => `2026-10-01T09:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}Z`;
+async function serverNotice(browser: import('playwright').Browser) {
+  const t = (m: number, s: number) => `2026-10-01T09:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}Z`;
   const messages = [
     {id: 'm1', kind: 'say', sender_id: 'human:ana', body: '/goal Produce the revised Acme summary', created_at: t(1, 0),
      refs: {command: true, goal_action: 'set', goal_id: 'g9', goal_revision: t(1, 0), goal_objective: 'Produce the revised Acme summary'}},
@@ -52,7 +52,7 @@ async function serverNotice(browser) {
   ];
   const goal = {id: 'g9', conversation_id: 'c1', bot: 'coo', objective: 'Produce the revised Acme summary\nwith the Q3 numbers', status: 'met',
     note: 'The condition holds.', set_at: t(1, 0), updated_at: t(9, 5), ended_at: t(9, 5)};
-  for (const [viewport, touch, name] of [[{width: 1280, height: 860}, false, 'desktop'], [{width: 390, height: 844}, true, 'phone']]) {
+  for (const [viewport, touch, name] of [[{width: 1280, height: 860}, false, 'desktop'], [{width: 390, height: 844}, true, 'phone']] as [{width: number; height: number}, boolean, string][]) {
     const api = await open(browser, viewport, touch, {messages, goal, theme: 'dark'}), {page} = api;
     await page.locator('#conv-thread .chat-goal-line').waitFor();
     const thread = page.locator('#conv-thread');
@@ -63,7 +63,7 @@ async function serverNotice(browser) {
     assert.doesNotMatch(await thread.innerText(), /\/goal/, 'no raw /goal bubbles');
     assert.equal(await thread.locator('.bubble').count(), 1, 'only the bot\'s reply is a bubble');
     assert.equal(await page.locator('#chat-goal').isHidden(), true, 'an ended goal has no bar');
-    const box = await thread.locator('.chat-goal-line').boundingBox();
+    const box = (await thread.locator('.chat-goal-line').boundingBox())!;
     assert.ok(box.height < 40 && box.x >= 0 && box.x + box.width <= viewport.width, `${name}: one compact line`);
     if (process.env.CHAT_GOAL_SHOTS) {
       fs.mkdirSync(process.env.CHAT_GOAL_SHOTS, {recursive: true});

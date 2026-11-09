@@ -7,17 +7,26 @@
 // A browser does not hand a redirect's target to Playwright's routes, so the edge is a real server on this computer
 // that the browser's resolver sends the files host to (Chromium only), all on plain http (the app at localhost, which
 // the edge's ancestors slot accepts); the signed links and the edge's code are those of https.
-const {chromium} = require('playwright');
-const assert = require('node:assert/strict');
-const crypto = require('node:crypto');
-const fs = require('node:fs');
-const http = require('node:http');
-const path = require('node:path');
-const vm = require('node:vm');
-const {execFileSync} = require('node:child_process');
-const {html, uiFile} = require('./support/page.cjs');
-const {unrouted} = require('./support/routes.cjs');
-const {threadsFake} = require('./support/threads-fake.cjs');
+import type * as PageSupport from './support/page.cjs';
+import type * as Routes from './support/routes.cjs';
+import type * as ThreadsFake from './support/threads-fake.cjs';
+import type {IncomingMessage, ServerResponse} from 'node:http';
+import type {AddressInfo} from 'node:net';
+import type {Locator} from 'playwright';
+const {chromium}: typeof import('playwright') = require('playwright');
+const assert: typeof import('node:assert/strict') = require('node:assert/strict');
+const crypto: typeof import('node:crypto') = require('node:crypto');
+const fs: typeof import('node:fs') = require('node:fs');
+const http: typeof import('node:http') = require('node:http');
+const path: typeof import('node:path') = require('node:path');
+const vm: typeof import('node:vm') = require('node:vm');
+const {execFileSync}: typeof import('node:child_process') = require('node:child_process');
+const {html, uiFile} = require('./support/page.cjs') as typeof PageSupport;
+const {unrouted} = require('./support/routes.cjs') as typeof Routes;
+const {threadsFake} = require('./support/threads-fake.cjs') as typeof ThreadsFake;
+type Obj = {type: string; body: string; meta: Record<string, string>; path?: string};
+type Template = {Resources: Record<string, {Properties: {FunctionCode: string | {'Fn::Join': [string, Array<string | Record<string, string>>]}}}>};
+type FrameEl = HTMLIFrameElement & {visualHeight?: number};
 
 const ROOT = path.resolve(__dirname, '..', '..');
 const ORIGIN = 'http://localhost:8765';
@@ -40,12 +49,12 @@ page, svg = json.loads(sys.stdin.read())
 print(json.dumps({"page": visuals.with_reporter(visuals.clean(page.encode(), "page")[0]).decode(),
                   "svg": visuals.clean(svg.encode(), "svg")[0].decode(), "hash": visuals.REPORTER_HASH}))
 `], {input: JSON.stringify(['<!doctype html><html><body style="margin:0"><div style="height:300px;background:#eee">Funnel page</div>'
-  + '<script>steal()</script></body></html>', SVG]), encoding: 'utf8'}));
+  + '<script>steal()</script></body></html>', SVG]), encoding: 'utf8'})) as {page: string; svg: string; hash: string};
 const ANCESTORS = "'self' " + ORIGIN;
-const sha = text => crypto.createHash('sha256').update(text).digest('hex');
+const sha = (text: string) => crypto.createHash('sha256').update(text).digest('hex');
 const hostileBody = '<!doctype html><html><body style="margin:0"><p style="height:90px">Company page</p><script>' + HOSTILE_SCRIPT + '</script></body></html>';
 // What is in the company's folder of Tico's bucket, by path below it: the copies the app stored (and the company's).
-const OBJECTS = {
+const OBJECTS: Record<'page' | 'svg' | 'hostile' | 'plain', Obj> = {
   page: {type: 'text/html; charset=utf-8', body: app.page, meta: {'tico-visual-policy-version': '1', 'tico-visual-ancestors': ANCESTORS, 'tico-visual-script': `'${app.hash}'`}},
   svg: {type: 'image/svg+xml', body: app.svg, meta: {'tico-visual-policy-version': '1', 'tico-visual-ancestors': ANCESTORS}},
   hostile: {type: 'text/html', body: hostileBody, meta: {'tico-visual-policy-version': '1', 'tico-visual-ancestors': ANCESTORS + ' *',
@@ -56,40 +65,40 @@ for (const [name, o] of Object.entries(OBJECTS)) { const h = sha('copy ' + name)
 const BY_PATH = Object.fromEntries(Object.values(OBJECTS).map(o => ['/c/' + INSTALL + o.path, o]));
 // The signed link the app's route sends to (backend/tico_storage.py _signed), on this computer's edge port.
 let EDGE_PORT = 0;
-const link = o => {
+const link = (o: Obj) => {
   const e = String(Math.floor(Date.now() / 1000) + 300);
   const s = crypto.createHmac('sha256', SECRET).update(HOST + '\n' + o.path + '\n' + e).digest('base64url');
   return `http://${HOST}:${EDGE_PORT}${o.path}?e=${e}&k=k1&s=${s}`;
 };
 
 // Tico's edge, exactly as rendered into its CloudFormation template; only the key store is replaced.
-const template = JSON.parse(execFileSync('python3', [path.join(ROOT, 'infra', 'files-edge', 'template.py')]));
-function edge(name) {
-  let source = template.Resources[name].Properties.FunctionCode;
+const template = JSON.parse(execFileSync('python3', [path.join(ROOT, 'infra', 'files-edge', 'template.py')]) as unknown as string) as Template;
+function edge(name: string) {
+  let source = template.Resources[name]!.Properties.FunctionCode;
   if (typeof source !== 'string') source = source['Fn::Join'][1].map(x => typeof x === 'string' ? x : DOMAIN).join('');
   source = source.replace("import cf from 'cloudfront';", '').replace("import crypto from 'crypto';", '');
   const record = {v: 1, prefix: 'c/' + INSTALL + '/', signing: {key_id: 'k1', secret: SECRET}};
-  const context = vm.createContext({crypto, Date, cf: {kvs: () => ({get: async key => {
+  const context = vm.createContext({crypto, Date, cf: {kvs: () => ({get: async (key: string) => {
     if (key !== 'acme-files') throw Error('unknown');
     return JSON.stringify(record);
   }})}});
   vm.runInContext(source, context);
-  return async event => JSON.parse(JSON.stringify(await context.handler(JSON.parse(JSON.stringify(event)))));
+  return async (event: unknown) => JSON.parse(JSON.stringify(await context.handler(JSON.parse(JSON.stringify(event)))));
 }
 const gate = edge('Gate'), visualsResponse = edge('VisualsResponse');
-const headersOut = h => Object.fromEntries(Object.entries(h || {}).map(([k, v]) => [k, v.value]));
+const headersOut = (h?: Record<string, {value: string}>) => Object.fromEntries(Object.entries(h || {}).map(([k, v]) => [k, (v as {value: string}).value]));
 
-const A = (id, kind) => ({id, file_id: id, version: 1, ref: id + '@1', title: 'Title ' + id, kind, name: id + (kind === 'svg' ? '.svg' : '.html'), size: 1000,
+const A = (id: string, kind: 'page' | 'svg') => ({id, file_id: id, version: 1, ref: id + '@1', title: 'Title ' + id, kind, name: id + (kind === 'svg' ? '.svg' : '.html'), size: 1000,
   content_type: kind === 'svg' ? 'image/svg+xml' : 'text/html', url: `/api/v2/files/${id}?v=1`, removed: false, current_version: 1,
   src: '/visuals/tok-' + id});      // backend/visuals.py decorate: on the app's own route (tico_storage.visual_ready)
 
-const edgeAnswers = [];
+const edgeAnswers: [string, number][] = [];
 // Tico's edge on the company's address: the request gate, the bucket's object, then the visuals response function.
-const edgeServer = http.createServer(async (req, res) => {
+const edgeServer = http.createServer(async (req: IncomingMessage, res: ServerResponse) => {
   try {
-    const url = new URL(req.url, 'http://' + HOST);
+    const url = new URL(req.url!, 'http://' + HOST);
     // CloudFront's Host has no port; the link was signed for the host alone.
-    const event = {request: {method: req.method, uri: url.pathname, headers: {host: {value: req.headers.host.split(':')[0]}},
+    const event = {request: {method: req.method, uri: url.pathname, headers: {host: {value: req.headers.host!.split(':')[0]}},
       cookies: Object.fromEntries((req.headers.cookie || '').split(/;\s*/).filter(Boolean).map(c => [c.split('=')[0], {value: c.split('=')[1]}])),
       querystring: Object.fromEntries([...url.searchParams].map(([k, v]) => [k, {value: v}]))}};
     const gated = await gate(event);
@@ -104,15 +113,15 @@ const edgeServer = http.createServer(async (req, res) => {
     edgeAnswers.push([url.pathname, answer.statusCode]);
     assert.deepEqual(answer.cookies || {}, {}, 'the edge sets no cookie');
     res.writeHead(answer.statusCode, headersOut(answer.headers));
-    res.end(answer.statusCode === 200 ? o.body : '');
+    res.end(answer.statusCode === 200 ? o!.body : '');
   } catch (e) { console.error(e); res.writeHead(500); res.end(); }
 });
 
 (async () => {
   if (process.env.TICO_BROWSER === 'webkit') { console.log('visual hosted: Chromium only (resolver rules)'); return; }
-  await new Promise(done => edgeServer.listen(0, '127.0.0.1', done));
-  EDGE_PORT = edgeServer.address().port;
-  const browser = await chromium.launch({channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined, headless: true,
+  await new Promise<void>(done => edgeServer.listen(0, '127.0.0.1', () => done()));
+  EDGE_PORT = (edgeServer.address() as AddressInfo).port;
+  const browser = await chromium.launch({channel: (process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined) as string, headless: true,
     args: ['--host-resolver-rules=MAP ' + HOST + ' 127.0.0.1',
            // The app page comes from the fixture routes, so Chrome can't tell it is on this computer too.
            '--disable-features=BlockInsecurePrivateNetworkRequests,PrivateNetworkAccessChecks,LocalNetworkAccessChecks,PrivateNetworkAccessSendPreflights']});
@@ -121,27 +130,27 @@ const edgeServer = http.createServer(async (req, res) => {
     {id: 'm1', sender_id: 'bot:designer', body: 'The funnel page and the logo.', created_at: now, refs: {attachments: [A('f-page', 'page'), A('f-svg', 'svg')]}},
     {id: 'm2', sender_id: 'bot:designer', body: 'A page the company wrote, and a plain one.', created_at: now, refs: {attachments: [A('f-hostile', 'page'), A('f-plain', 'page')]}},
   ];
-  const run = async ({viewport, hasTouch = false, label}) => {
+  const run = async ({viewport, hasTouch = false, label}: {viewport: {width: number; height: number}; hasTouch?: boolean; label: string}) => {
     const context = await browser.newContext({viewport, hasTouch, isMobile: hasTouch, serviceWorkers: 'block'});
     await context.addCookies([{name: 'tico_session', value: 'secret', domain: 'localhost', path: '/', httpOnly: true}]);
     const page = await context.newPage();
-    const errors = [], outside = [], appRoute = [];
+    const errors: string[] = [], outside: string[] = [], appRoute: string[] = [];
     edgeAnswers.length = 0;
     page.on('pageerror', e => { if (!/sandboxed|steal/i.test(e.message)) errors.push(e.message); });
     const threads = threadsFake({bot: 'designer', messages: () => MESSAGES});
     await context.route('**/*', async route => {
       const req = route.request(), url = new URL(req.url()), p = url.pathname;
-      const json = body => route.fulfill({contentType: 'application/json', body: JSON.stringify(body)});
+      const json = (body: unknown) => route.fulfill({contentType: 'application/json', body: JSON.stringify(body)});
       if (url.hostname === 'evil.test') { outside.push(url.href); return route.fulfill({contentType: 'text/plain', body: 'no'}); }
       if (p.startsWith('/visuals/tok-')) {
         // The app's route: the reader was checked (backend/visuals.py serve), then sent on; it never serves the page.
         const id = p.slice('/visuals/tok-f-'.length);
         appRoute.push(id);
-        return route.fulfill({status: 302, headers: {Location: link(OBJECTS[id]), 'Cache-Control': 'private, no-store', 'Referrer-Policy': 'no-referrer'}, body: ''});
+        return route.fulfill({status: 302, headers: {Location: link(OBJECTS[id as keyof typeof OBJECTS]), 'Cache-Control': 'private, no-store', 'Referrer-Policy': 'no-referrer'}, body: ''});
       }
       if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
       const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/);
-      if (ui && fs.existsSync(uiFile(ui[1]))) return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]), 'utf8')});
+      if (ui && fs.existsSync(uiFile(ui[1]!))) return route.fulfill({contentType: ui[1]!.endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]!), 'utf8')});
       if (p === '/api/v2/config') return json({company_name: 'Acme', visuals: 'media', visual_origin: ''});
       if (p === '/api/me') return json({id: 'ana', name: 'Ana', role: 'owner', cloud: true});
       if (p === '/api/employees') return json([{name: 'designer', display_name: 'Designer', host: 'keeper', status: 'active', can_chat: true, schedules: []}]);
@@ -155,37 +164,37 @@ const edgeServer = http.createServer(async (req, res) => {
 
     await page.goto(ORIGIN + '/#/bot/designer/dm');
     const m1 = page.locator('[data-message="m1"]'), m2 = page.locator('[data-message="m2"]');
-    const card = (m, id) => m.locator(`figure.vcard[data-file="${id}"]`);
+    const card = (m: Locator, id: string) => m.locator(`figure.vcard[data-file="${id}"]`);
     await card(m1, 'f-page').locator('.vcard-body.ready').waitFor();
     await card(m1, 'f-svg').locator('.vcard-body.ready').waitFor();
-    assert.deepEqual(await m1.locator('figure.vcard').evaluateAll(els => els.map(e => [e.dataset.kind, e.dataset.state])),
+    assert.deepEqual(await m1.locator('figure.vcard').evaluateAll(els => els.map(e => [(e as HTMLElement).dataset.kind, (e as HTMLElement).dataset.state])),
       [['page', 'ready'], ['svg', 'ready']], `${label}: a page and an SVG in Tico file hosting show inline, not as Open cards`);
     assert.equal(await card(m1, 'f-page').locator('iframe').getAttribute('src'), ORIGIN + '/visuals/tok-f-page', `${label}: the frame asks the app's own route`);
     assert.equal(await card(m1, 'f-page').locator('iframe').getAttribute('sandbox'), 'allow-scripts allow-popups allow-popups-to-escape-sandbox');
     // The frame landed on the company's address through the edge, sandboxed in an opaque origin by the edge's policy.
-    const frameOf = id => page.frames().find(f => f.url().startsWith(`http://${HOST}:${EDGE_PORT}${OBJECTS[id].path}?`));
+    const frameOf = (id: keyof typeof OBJECTS) => page.frames().find(f => f.url().startsWith(`http://${HOST}:${EDGE_PORT}${OBJECTS[id].path}?`));
     const pageFrame = frameOf('page');
     assert(pageFrame, `${label}: the page frame is on ${HOST}: ${page.frames().map(f => f.url())}`);
-    assert.deepEqual(await pageFrame.evaluate(() => { let cookie; try { cookie = document.cookie; } catch (e) { cookie = 'throws'; } return [origin, cookie]; }),
+    assert.deepEqual(await pageFrame.evaluate(() => { let cookie: string; try { cookie = document.cookie; } catch (e) { cookie = 'throws'; } return [origin, cookie]; }),
       ['null', 'throws'], `${label}: opaque origin, no cookies`);
-    const height = await card(m1, 'f-page').evaluate(c => Math.round(c.querySelector('iframe').getBoundingClientRect().height));
+    const height = await card(m1, 'f-page').evaluate(c => Math.round(c.querySelector('iframe')!.getBoundingClientRect().height));
     assert(height >= 300 && height < 340, `${label}: the reporter sized the card to the page ${height}`);
-    assert(await card(m1, 'f-svg').locator('img.vcard-img').evaluate(img => img.naturalWidth > 0), `${label}: the SVG rendered`);
+    assert(await card(m1, 'f-svg').locator('img.vcard-img').evaluate(img => (img as HTMLImageElement).naturalWidth > 0), `${label}: the SVG rendered`);
 
     // A page the company wrote itself, with its own script in the slot and a wide ancestors list: its height is
     // clamped and sizes only its own card; nothing else it posts does anything.
     const plain = card(m2, 'f-plain'), hostile = card(m2, 'f-hostile');
     await plain.scrollIntoViewIfNeeded();
     await plain.locator('.vcard-body.ready').waitFor();
-    const plainH = () => plain.evaluate(c => [c.querySelector('iframe').visualHeight, Math.round(c.querySelector('iframe').getBoundingClientRect().height)]);
+    const plainH = () => plain.evaluate(c => [c.querySelector<FrameEl>('iframe')!.visualHeight, Math.round(c.querySelector('iframe')!.getBoundingClientRect().height)]);
     const before = await plainH();
     await hostile.scrollIntoViewIfNeeded();
-    await page.waitForFunction(() => document.querySelector('figure.vcard[data-file="f-hostile"] iframe')?.visualHeight);
+    await page.waitForFunction(() => document.querySelector<FrameEl>('figure.vcard[data-file="f-hostile"] iframe')?.visualHeight);
     await page.waitForTimeout(300);
     const hostileFrame = frameOf('hostile');
     assert(hostileFrame, `${label}: the company's page loaded on ${HOST}`);
     assert.equal(await hostileFrame.evaluate(() => document.title), 'opaque', `${label}: its script ran, in an opaque origin`);
-    assert.equal(await hostile.evaluate(c => c.querySelector('iframe').visualHeight), 20000, `${label}: its huge height is clamped to 20000`);
+    assert.equal(await hostile.evaluate(c => c.querySelector<FrameEl>('iframe')!.visualHeight), 20000, `${label}: its huge height is clamped to 20000`);
     assert.deepEqual(await plainH(), before, `${label}: a message from another card's frame does not resize this card`);
     assert.equal(page.url(), ORIGIN + '/#/bot/designer/dm', `${label}: nothing navigated the app`);
     assert.equal(context.pages().length, 1, `${label}: nothing opened`);
@@ -196,9 +205,9 @@ const edgeServer = http.createServer(async (req, res) => {
     assert(edgeAnswers.length >= 4 && edgeAnswers.every(([, s]) => s === 200), `${label}: edge answers ${JSON.stringify(edgeAnswers)}`);
     // A link with a tampered signature, or to a path the company did not get signed, is refused by the edge.
     const signed = new URL(link(OBJECTS.page));
-    const status = u => new Promise((done, fail) => http.get({host: '127.0.0.1', port: EDGE_PORT, path: u.pathname + u.search,
+    const status = (u: URL) => new Promise<number | undefined>((done, fail) => http.get({host: '127.0.0.1', port: EDGE_PORT, path: u.pathname + u.search,
       headers: {host: HOST}}, r => { r.resume(); done(r.statusCode); }).on('error', fail));
-    const forged = new URL(signed.href.replace(/s=[^&]+/, 's=' + 'A'.repeat(43))), other = new URL(signed.href.replace(OBJECTS.page.path, OBJECTS.svg.path));
+    const forged = new URL(signed.href.replace(/s=[^&]+/, 's=' + 'A'.repeat(43))), other = new URL(signed.href.replace(OBJECTS.page.path!, OBJECTS.svg.path!));
     assert.deepEqual([await status(signed), await status(forged), await status(other)], [200, 403, 403], `${label}: only the signed link opens`);
     assert.deepEqual(errors, [], String(errors));
     await context.close();

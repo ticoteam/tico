@@ -4,24 +4,32 @@
 // Second, the way a person meets it: from another page a hash change opens the Assistant, its stream's snapshots land on
 // their own schedule, the box is clicked after a few seconds and 250 characters are typed; a snapshot the server built
 // before the send (a lagging stream) arrives afterwards and must not take the message off the page.
-const {chromium} = require('playwright');
-const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const {html, uiFile} = require('./support/page.cjs');
-const {unrouted} = require('./support/routes.cjs');
-const {assistantView} = require('./support/assistant-chat.cjs');
-const {t} = (() => { try { return require('./support/load.cjs'); } catch { return {t: ms => ms}; } })();   // load.cjs arrives with #254
-const until = async cond => { for (const end = Date.now() + t(10000); !cond() && Date.now() < end;) await new Promise(r => setTimeout(r, 50)); };
-const launch = () => chromium.launch({headless: true, channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined});
-async function whileLoading(browser) {
+import type * as PageSupport from './support/page.cjs';
+import type * as Routes from './support/routes.cjs';
+import type * as AssistantChat from './support/assistant-chat.cjs';
+const {chromium}: typeof import('playwright') = require('playwright');
+const assert: typeof import('node:assert/strict') = require('node:assert/strict');
+const fs: typeof import('node:fs') = require('node:fs');
+const {html, uiFile} = require('./support/page.cjs') as typeof PageSupport;
+const {unrouted} = require('./support/routes.cjs') as typeof Routes;
+const {assistantView} = require('./support/assistant-chat.cjs') as typeof AssistantChat;
+declare const V2C: {loaded: boolean; liveOff: boolean};
+declare const applied: string[][];
+declare const v2ChatApply: (state: unknown, d: {messages?: {id: string}[]}) => void;
+declare function route(): void;
+interface PageWin { applied: string[][]; v2ChatApply: (state: unknown, d: {messages?: {id: string}[]}) => void }
+const {t}: {t: (ms: number) => number} = (() => { try { return require('./support/load.cjs') as {t: (ms: number) => number}; } catch { return {t: (ms: number) => ms}; } })();   // load.cjs arrives with #254
+const until = async (cond: () => unknown) => { for (const end = Date.now() + t(10000); !cond() && Date.now() < end;) await new Promise(r => setTimeout(r, 50)); };
+const launch = () => chromium.launch({headless: true, channel: (process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined) as string});
+async function whileLoading(browser: import('playwright').Browser) {
     const page = await browser.newPage({viewport: {width: 1200, height: 800}, serviceWorkers: 'block'});
-    const errors = [], sends = [];
+    const errors: string[] = [], sends: string[] = [];
     page.on('pageerror', e => errors.push(e.message));
-    let release; const snapshotHeld = new Promise(done => release = done);
+    let release!: () => void; const snapshotHeld = new Promise<void>(done => release = done);
     await page.route('**/*', async route => {
       const url = new URL(route.request().url()), p = url.pathname;
-      const json = body => route.fulfill({contentType: 'application/json', body: JSON.stringify(body)});
-      const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/);
+      const json = (body: unknown) => route.fulfill({contentType: 'application/json', body: JSON.stringify(body)});
+      const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/) as [string, string] | null;
       if (ui && fs.existsSync(uiFile(ui[1])))
         return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]), 'utf8')});
       if (/\.(?:js|ts)$/.test(p)) return route.fulfill({contentType: 'application/javascript', body: ''});
@@ -33,7 +41,7 @@ async function whileLoading(browser) {
       if (p.endsWith('/snapshot')) { await snapshotHeld; return json({messages: [], execution: null}); }   // the slow, empty load
       if (p.endsWith('/watch')) return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});
       if (p === '/api/v2/assistant/messages') {
-        sends.push(route.request().postDataJSON().text);
+        sends.push((route.request().postDataJSON() as {text: string}).text);
         return json({message: {id: 'm1', sender_id: 'human:ana', body: sends[0], created_at: new Date().toISOString()}});
       }
       return json(unrouted(p));
@@ -48,7 +56,7 @@ async function whileLoading(browser) {
     assert.equal(await box.inputValue(), text, 'the text survives the redraw');
     assert.equal(await page.evaluate(() => document.activeElement?.matches('#chat-composer textarea')), true, 'the cursor stays in the box');
     await page.keyboard.press('Enter');
-    await page.waitForFunction(() => !document.querySelector('#chat-composer textarea').value);
+    await page.waitForFunction(() => !document.querySelector<HTMLTextAreaElement>('#chat-composer textarea')!.value);
     assert.deepEqual(sends, [text], 'Return sends it once');
     release();                                       // the load that started before the send finishes
     await page.waitForFunction(() => V2C.loaded);
@@ -59,18 +67,18 @@ async function whileLoading(browser) {
     console.log('typing while loading: ok');
     await page.close();
 }
-async function afterHashNav(browser) {
+async function afterHashNav(browser: import('playwright').Browser) {
   const page = await browser.newPage({viewport: {width: 1200, height: 800}, serviceWorkers: 'block'});
-  const errors = [], sends = [], served = [], streams = [];
+  const errors: string[] = [], sends: string[] = [], served: string[] = [], streams: import('playwright').Route[] = [];
   page.on('pageerror', e => errors.push(e.message));
   const now = () => new Date().toISOString();
   let server = [{id: 'old', sender_id: 'bot:coo', body: 'Welcome back', created_at: '2026-01-01T00:00:00Z'}], sentAt = 0;
-  let releaseCurrent;
-  const currentHeld = new Promise(done => releaseCurrent = done);
+  let releaseCurrent!: () => void;
+  const currentHeld = new Promise<void>(done => releaseCurrent = done);
   await page.route('**/*', async route => {
     const url = new URL(route.request().url()), p = url.pathname;
-    const json = body => route.fulfill({contentType: 'application/json', body: JSON.stringify(body)});
-    const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/);
+    const json = (body: unknown) => route.fulfill({contentType: 'application/json', body: JSON.stringify(body)});
+    const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/) as [string, string] | null;
     if (ui && fs.existsSync(uiFile(ui[1])))
       return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]), 'utf8')});
     if (/\.(?:js|ts)$/.test(p)) return route.fulfill({contentType: 'application/javascript', body: ''});
@@ -88,8 +96,8 @@ async function afterHashNav(browser) {
       return json({messages: phase === 'lagging' ? server.slice(0, 1) : server.slice(), execution: null});
     }
     if (p === '/api/v2/assistant/messages') {
-      sends.push(route.request().postDataJSON().text);
-      const message = {id: 'm1', sender_id: 'human:ana', body: sends[0], created_at: now()};
+      sends.push((route.request().postDataJSON() as {text: string}).text);
+      const message = {id: 'm1', sender_id: 'human:ana', body: sends[0] as string, created_at: now()};
       server = [...server, message]; sentAt = Date.now();
       return json({message});
     }
@@ -102,12 +110,12 @@ async function afterHashNav(browser) {
   await box.waitFor();
   await page.waitForFunction(() => V2C?.loaded && V2C.liveOff);
   // Record each snapshot the chat puts on the page from here on (the ids it listed).
-  await page.evaluate(() => { const apply = v2ChatApply; window.applied = []; window.v2ChatApply = (state, d) => { apply(state, d); applied.push((d.messages || []).map(m => m.id)); }; });
+  await page.evaluate(() => { const apply = v2ChatApply; (window as unknown as PageWin).applied = []; (window as unknown as PageWin).v2ChatApply = (state, d) => { apply(state, d); applied.push((d.messages || []).map(m => m.id)); }; });
   const text = 'Please set up a bot for our support inbox. '.repeat(6).slice(0, 250);
   await box.click(); await box.pressSequentially(text);
   assert.equal(await box.inputValue(), text, 'everything typed is in the box');
   await page.keyboard.press('Enter');
-  await page.waitForFunction(() => !document.querySelector('#chat-composer textarea').value);
+  await page.waitForFunction(() => !document.querySelector<HTMLTextAreaElement>('#chat-composer textarea')!.value);
   assert.deepEqual(sends, [text], 'Return sends it once');
   await page.waitForFunction(() => applied.length >= 1, null, {timeout: t(10000)});   // the lagging snapshot is on the page
   assert.deepEqual([served.includes('lagging'), await page.evaluate(() => applied[0])], [true, ['old']]);
@@ -116,7 +124,7 @@ async function afterHashNav(browser) {
   releaseCurrent();
   await until(() => streams.length);
   assert.ok(streams.length, 'the live stream is open');
-  await streams.at(-1).fulfill({contentType: 'text/event-stream', body: 'id: 5\nevent: messages\ndata: ' +
+  await streams.at(-1)!.fulfill({contentType: 'text/event-stream', body: 'id: 5\nevent: messages\ndata: ' +
     JSON.stringify({seq: 5, id: 'm1', conversation_id: 'c1'}) + '\n\n'});
   await page.waitForFunction(() => applied.some(ids => ids.includes('m1')), null, {timeout: t(10000)});
   assert.equal(served.includes('current'), true);

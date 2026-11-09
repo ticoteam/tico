@@ -6,31 +6,36 @@
 // refused sign-in or a failing sync shows on the page with its reason; Check connection asks Google for a Workspace
 // mailbox and reads the page again; Recent lists its newest mail. A card another file registers with inboxesPanel
 // shows under the mailbox's own.
-const {chromium} = require('playwright');
-const assert = require('node:assert/strict');
-const {googleFake} = require('./support/google-fake.cjs');
-const {mailboxesFake, open, shot} = require('./support/mailboxes-fake.cjs');
-const launch = () => chromium.launch({headless: true, channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined});
+import type {Browser, Page} from 'playwright';
+import type {MailboxesFake} from './support/mailboxes-fake.cjs';
+const {chromium}: typeof import('playwright') = require('playwright');
+const assert: typeof import('node:assert/strict') = require('node:assert/strict');
+const {googleFake} = require('./support/google-fake.cjs') as typeof import('./support/google-fake.cjs');
+const {mailboxesFake, open, shot} = require('./support/mailboxes-fake.cjs') as typeof import('./support/mailboxes-fake.cjs');
+const launch = () => chromium.launch({headless: true, channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined} as import('playwright').LaunchOptions);
+declare function inboxesPanel(id: string, options: {kinds: string[]; order: number; render: (host: HTMLElement, inbox: {kind: string; address: string; can_manage: boolean}) => void}): void;
+declare function inboxesRender(): void;
+declare function esc(text: string): string;
 
 const READY = '#mailbox-access tr[data-mb-access-row]';
-const at = id => ({hash: `#/tools/mailbox/${id}`, ready: READY});
-const accessRows = page => page.$$eval('#mailbox-access tr[data-mb-access-row]', rows => rows.map(row => {
+const at = (id: string) => ({hash: `#/tools/mailbox/${id}`, ready: READY});
+const accessRows = (page: Page) => page.$$eval('#mailbox-access tr[data-mb-access-row]', rows => rows.map(row => {
   const cells = [...row.querySelectorAll('td')];
   const picked = row.querySelector('[data-mb-level][aria-checked=true]');
-  return [cells[0].lastElementChild.textContent.replace(/\s+/g, ' ').trim(), picked ? `[${picked.textContent}]` : cells[1].textContent.trim(),
+  return [cells[0]!.lastElementChild!.textContent!.replace(/\s+/g, ' ').trim(), picked ? `[${picked.textContent}]` : cells[1]!.textContent!.trim(),
     !!row.querySelector('[data-mb-remove]')];
 }));
-const writes = (fake, method, path) => fake.writes.filter(w => w.method === method && w.path === path).map(w => w.body);
-const until = async (page, check, what) => {
+const writes = (fake: MailboxesFake, method: string, path: string) => fake.writes.filter(w => w.method === method && w.path === path).map(w => w.body);
+const until = async (page: Page, check: () => unknown, what: string) => {
   const end = Date.now() + 8000;
   while (!check()) {
     if (Date.now() > end) throw new Error(`Timed out waiting for ${what}`);
     await page.waitForTimeout(50);
   }
 };
-const pill = page => page.locator('#inbox-head [data-ib-status]');
+const pill = (page: Page) => page.locator('#inbox-head [data-ib-status]');
 
-const scenarios = {
+const scenarios: Record<string, (browser: Browser) => Promise<void>> = {
   'an admin on a shared inbox adds, changes and removes access; the Admins row has no controls': async browser => {
     const fake = mailboxesFake();
     const {page, seen} = await open(browser, fake, googleFake(), at('mb-support'));
@@ -42,7 +47,7 @@ const scenarios = {
     assert.equal(await page.locator('#tools-root').count(), 0, 'the list is not drawn under the page');
     await page.locator('#inbox-sending [data-send-bot-row]').first().waitFor();
     // Shown in the page's order: who can use it, its limits and what waits to send, then keys, automations, recent.
-    const cards = await page.locator('.ib-detail .card').evaluateAll(cs => cs.map(c => [c.getBoundingClientRect().top, c.querySelector('header h2').textContent])
+    const cards = await page.locator('.ib-detail .card').evaluateAll(cs => cs.map((c): [number, string | null] => [c.getBoundingClientRect().top, c.querySelector('header h2')!.textContent])
       .sort((a, b) => a[0] - b[0]).map(([, h]) => h));
     assert.deepEqual(cards, ['Who can use it', 'Limits', 'Waiting to send', 'Keys', 'Automations', 'Recent']);
     assert.deepEqual(await page.locator('#inbox-sending .tt-limits th').allTextContents(), ['Bot', 'Sends', 'What', 'A day']);
@@ -83,28 +88,28 @@ const scenarios = {
     const {page, seen} = await open(browser, fake, googleFake(), at('mb-support'));
     const row = page.locator('[data-mb-routine-row=au-triage]');
     assert.equal(await row.locator('a').getAttribute('href'), '#/automations/au-triage');
-    assert.equal(await row.locator('a').evaluate(a => a.lastChild.textContent), 'Support triage', 'its name, after its icon');
+    assert.equal(await row.locator('a').evaluate(a => a.lastChild!.textContent), 'Support triage', 'its name, after its icon');
     const on = row.locator('[data-mb-routine]');
     assert.equal(await on.isChecked(), true);
     await on.click();   // a click, not uncheck(): a second draw of the page may replace the switch mid-click
     await until(page, () => writes(fake, 'PATCH', '/api/v2/automations/au-triage').length, 'the routine PATCH');
-    await page.waitForFunction(() => document.querySelector('[data-mb-routine=au-triage]')?.checked === false);
+    await page.waitForFunction(() => document.querySelector<HTMLInputElement>('[data-mb-routine=au-triage]')?.checked === false);
     assert.deepEqual(writes(fake, 'PATCH', '/api/v2/automations/au-triage'), [{enabled: false}]);
     await page.close();
     // Without the right to change it, the switch is off limits.
-    fake.state.routines['support@acme.example'][0].can_edit = false;
+    fake.state.routines['support@acme.example']![0]!.can_edit = false;
     const second = await open(browser, fake, googleFake(), at('mb-support'));
     assert.equal(await second.page.locator('[data-mb-routine=au-triage]').isDisabled(), true);
     await second.page.close();
     // A refusal from the server.
-    Object.assign(fake.state.routines['support@acme.example'][0], {can_edit: true, enabled: true});
+    Object.assign(fake.state.routines['support@acme.example']![0]!, {can_edit: true, enabled: true});
     const third = await open(browser, fake, googleFake(), {...at('mb-support'), automations: {refuse: 'Not yours to change'}});
     const box = third.page.locator('[data-mb-routine=au-triage]');
-    await third.page.waitForFunction(() => document.querySelector('[data-mb-routine=au-triage]')?.checked === true);
+    await third.page.waitForFunction(() => document.querySelector<HTMLInputElement>('[data-mb-routine=au-triage]')?.checked === true);
     await box.click();
     await until(third.page, () => writes(fake, 'PATCH', '/api/v2/automations/au-triage').length === 2, 'the refused PATCH');
     await third.page.waitForFunction(() => {
-      const el = document.querySelector('[data-mb-routine=au-triage]');
+      const el = document.querySelector<HTMLInputElement>('[data-mb-routine=au-triage]');
       return el && !el.disabled && el.checked;
     });
     assert.deepEqual([...seen.errors, ...third.seen.errors, ...second.seen.errors], []);
@@ -170,7 +175,7 @@ const scenarios = {
 
   'someone with Read access sees who can use it, and no controls': async browser => {
     const fake = mailboxesFake({admin: false, me: 'cara'});
-    fake.state.mailboxes.find(m => m.id === 'mb-support').level = 'read';
+    fake.state.mailboxes.find(m => m.id === 'mb-support')!.level = 'read';
     const google = googleFake();
     google.state.can_admin = false;
     const {page, seen} = await open(browser, fake, google, at('mb-support'));
@@ -193,13 +198,13 @@ const scenarios = {
 
   'a refused sign-in shows on the page with the last sync and where to sign in again': async browser => {
     const fake = mailboxesFake();
-    const support = fake.state.mailboxes.find(m => m.id === 'mb-support');
+    const support = fake.state.mailboxes.find(m => m.id === 'mb-support')!;
     Object.assign(support, {sync: 'signin', sync_error: 'Google refused the sign-in (invalid_grant)', synced_at: new Date(Date.now() - 3 * 3600e3).toISOString()});
     const {page, seen} = await open(browser, fake, googleFake(), at('mb-support'));
     assert.equal(await pill(page).textContent(), 'Sign-in expired');
     assert.equal(await pill(page).getAttribute('data-ib-status'), 'attention');
     assert.equal(await page.locator('[data-mb-sync-error]').textContent(), 'Google refused the sign-in (invalid_grant)');
-    assert.match(await page.locator('[data-mb-status]').textContent(), /^Shared inbox · Last sync 3h ago · Tico may/);
+    assert.match((await page.locator('[data-mb-status]').textContent())!, /^Shared inbox · Last sync 3h ago · Tico may/);
     assert.equal(await page.locator('[data-mb-signin] a').getAttribute('href'), '#/tools/settings/email');
     assert.deepEqual(seen.errors, []);
     await page.close();
@@ -210,7 +215,7 @@ const scenarios = {
     const google = googleFake();
     google.checks.push('ok');
     const {page, seen} = await open(browser, fake, google, at('mb-support'));
-    fake.state.mailboxes.find(m => m.id === 'mb-support').synced_at = new Date(Date.now() - 60e3).toISOString();
+    fake.state.mailboxes.find(m => m.id === 'mb-support')!.synced_at = new Date(Date.now() - 60e3).toISOString();
     await page.locator('[data-mb-check]').click();
     await page.locator('[data-mb-status]', {hasText: 'Last sync'}).waitFor();
     assert.deepEqual(google.writes.filter(w => w.path === '/api/v2/google/workspace/check').map(w => w.body), [{mailbox: 'support@acme.example'}]);

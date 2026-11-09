@@ -9,18 +9,33 @@
 //  - a task row a bot asked for takes the pair on hover without opening the task; a person's request has none;
 //  - a thread message keeps its emoji reactions apart from the thumbs, and copies its own words.
 // FEEDBACK_SHOTS=<dir> saves phone and desktop screenshots of each state.
-const {chromium} = require('playwright');
-const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const path = require('node:path');
-const {html, uiFile} = require('./support/page.cjs');
-const {unrouted} = require('./support/routes.cjs');
-const {assistantView} = require('./support/assistant-chat.cjs');
-const {threadsFake} = require('./support/threads-fake.cjs');
-const {open} = require('./tasks-page.cjs');
+import type {Browser, Locator, Page} from 'playwright';
+import type {ThreadsMessage} from './support/threads-fake.cjs';
+const {chromium}: typeof import('playwright') = require('playwright');
+const assert: typeof import('node:assert/strict') = require('node:assert/strict');
+const fs: typeof import('node:fs') = require('node:fs');
+const path: typeof import('node:path') = require('node:path');
+const {html, uiFile} = require('./support/page.cjs') as typeof import('./support/page.cjs');
+const {unrouted} = require('./support/routes.cjs') as typeof import('./support/routes.cjs');
+const {assistantView} = require('./support/assistant-chat.cjs') as typeof import('./support/assistant-chat.cjs');
+const {threadsFake} = require('./support/threads-fake.cjs') as typeof import('./support/threads-fake.cjs');
+const {open} = require('./tasks-page.cjs') as typeof import('./tasks-page.cjs');
+
+interface Row {id: string; subject_type: string; subject_id: string; rating?: string; reason?: string; [key: string]: unknown}
+interface Write {method: string; p: string; body: {subject_type?: string; [key: string]: unknown} | null}
+interface Fake {rows: Row[]; reads: (string | {type: string | null; ids: string[]})[]; writes: Write[]}
+interface PageWin {copied?: string}
+declare const FB: {on: boolean | null};
+declare const V2C: {rendered: boolean; loaded: boolean};
+declare const DEC: {shown: string};
+declare const DEC_OUTBOX: {size: number};
+declare const TASKS_ST: unknown;
+declare function v2Refresh(): Promise<void>;
+declare function tasksRender(state: unknown): void;
+declare function decideOpen(key: string): void;
 const SHOTS = process.env.FEEDBACK_SHOTS || '';
 const iso = () => new Date().toISOString();
-const shot = async (page, name) => {
+const shot = async (page: Page, name: string) => {
   if (!SHOTS) return;
   fs.mkdirSync(SHOTS, {recursive: true});
   await page.evaluate(() => document.fonts.ready);
@@ -29,16 +44,16 @@ const shot = async (page, name) => {
 };
 
 // The routes, kept in memory: one row per person and subject, as the server's upsert keeps it.
-function feedbackFake(page, {off = false, seed = []} = {}) {
-  const rows = [...seed], reads = [], writes = [];
+function feedbackFake(page: Page, {off = false, seed = []}: {off?: boolean; seed?: Row[]} = {}): Promise<Fake> {
+  const rows: Row[] = [...seed], reads: Fake['reads'] = [], writes: Write[] = [];
   let n = 0;
   const reasons = [{text: 'Too long', count: 2}, {text: 'Wrong numbers', count: 1}];
   return page.route('**/api/v2/feedback**', route => {
     const req = route.request(), url = new URL(req.url()), p = url.pathname, method = req.method();
-    const json = (body, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
+    const json = (body: unknown, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
     if (off) { reads.push(p); return json({detail: 'Not Found'}, 404); }
     if (p === '/api/v2/feedback' && method === 'GET') {
-      const type = url.searchParams.get('subject_type'), ids = url.searchParams.get('subject_ids').split(',');
+      const type = url.searchParams.get('subject_type'), ids = url.searchParams.get('subject_ids')!.split(',');
       reads.push({type, ids});
       return json({items: rows.filter(r => r.subject_type === type && ids.includes(r.subject_id))});
     }
@@ -57,8 +72,8 @@ function feedbackFake(page, {off = false, seed = []} = {}) {
     const row = one && rows.find(r => r.id === one[1]);
     if (!row) return json({detail: 'Not found'}, 404);
     if (method === 'DELETE') { rows.splice(rows.indexOf(row), 1); return route.fulfill({status: 204, body: ''}); }
-    if (one[2] === 'rule-draft') return json({text: 'Keep replies to five lines or fewer.'});
-    if (one[2] === 'rule') {
+    if (one![2] === 'rule-draft') return json({text: 'Keep replies to five lines or fewer.'});
+    if (one![2] === 'rule') {
       Object.assign(row, {outcome: 'rule', org_rule_id: 'r-1', rule_status: 'active'});
       return json({feedback: row, rule: {id: 'r-1', status: 'active', text: body.text}});
     }
@@ -67,9 +82,9 @@ function feedbackFake(page, {off = false, seed = []} = {}) {
 }
 
 const BOTS = [{name: 'coo', display_name: 'Assistant', host: 'keeper', status: 'active', can_chat: true, schedules: []}];
-async function chatPage(browser, {phone = false, theme = 'dark', off = false, hash = '#/assistant', seed = []} = {}) {
+async function chatPage(browser: Browser, {phone = false, theme = 'dark', off = false, hash = '#/assistant', seed = []}: {phone?: boolean; theme?: string; off?: boolean; hash?: string; seed?: Row[]} = {}) {
   const page = await browser.newPage({viewport: phone ? {width: 390, height: 844} : {width: 1200, height: 800}, hasTouch: phone, serviceWorkers: 'block'});
-  const errors = [];
+  const errors: string[] = [];
   page.on('pageerror', e => errors.push(e.message));
   await page.addInitScript(theme => { try { localStorage.setItem('tico.theme', theme); } catch {} }, theme);
   const snapshot = {execution: null, messages: [
@@ -78,10 +93,10 @@ async function chatPage(browser, {phone = false, theme = 'dark', off = false, ha
     {id: 'm3', sender_id: 'bot:coo', body: 'Revenue was $41,200, up from $38,900.', created_at: iso()}]};
   await page.context().route('**/*', route => {
     const p = new URL(route.request().url()).pathname;
-    const json = body => route.fulfill({contentType: 'application/json', body: JSON.stringify(body)});
+    const json = (body: unknown) => route.fulfill({contentType: 'application/json', body: JSON.stringify(body)});
     if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
     const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/);
-    if (ui && fs.existsSync(uiFile(ui[1]))) return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]), 'utf8')});
+    if (ui && fs.existsSync(uiFile(ui[1]!))) return route.fulfill({contentType: ui[1]!.endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]!), 'utf8')});
     if (/\/marked\.min\.js$/.test(p)) return route.fulfill({contentType: 'application/javascript', body: fs.readFileSync(uiFile('vendor/marked.min.js'), 'utf8')});
     if (p.startsWith('/vendor/fonts/') && fs.existsSync(uiFile(p.slice(1)))) return route.fulfill({contentType: 'font/woff2', body: fs.readFileSync(uiFile(p.slice(1)))});
     if (p === '/api/me') return json({id: 'ana', name: 'Ana', role: 'owner', cloud: true});
@@ -93,14 +108,14 @@ async function chatPage(browser, {phone = false, theme = 'dark', off = false, ha
     return json(unrouted(p));
   });
   const fake = await feedbackFake(page, {off, seed});
-  await page.addInitScript(() => { Object.defineProperty(navigator, 'clipboard', {configurable: true, value: {writeText: async t => { window.copied = t; }}}); });
+  await page.addInitScript(() => { Object.defineProperty(navigator, 'clipboard', {configurable: true, value: {writeText: async (t: string) => { (window as unknown as PageWin).copied = t; }}}); });
   await page.goto('https://tico-ui.test/' + hash);
   if (hash === '#/assistant') await page.waitForFunction(() => V2C?.rendered && V2C.loaded);
   return {page, errors, ...fake};
 }
-const posts = (writes, type) => writes.filter(w => w.method === 'POST' && w.p === '/api/v2/feedback' && (!type || w.body.subject_type === type)).map(w => w.body);
+const posts = (writes: Write[], type?: string) => writes.filter(w => w.method === 'POST' && w.p === '/api/v2/feedback' && (!type || w.body!.subject_type === type)).map(w => w.body);
 
-async function olderServer(browser) {
+async function olderServer(browser: Browser) {
   const {page, errors, reads} = await chatPage(browser, {off: true});
   await page.waitForFunction(() => FB.on === false);
   await page.locator('.bubble.bot').first().hover();
@@ -112,26 +127,26 @@ async function olderServer(browser) {
   console.log('feedback older server: ok');
 }
 
-async function chatDesktop(browser, theme = 'dark') {
+async function chatDesktop(browser: Browser, theme = 'dark') {
   const {page, errors, reads, writes, rows} = await chatPage(browser, {theme});
   const t = theme === 'dark' ? '' : '-' + theme;
   await page.waitForFunction(() => document.body.classList.contains('fb-on'));
   // One read for the drawn bot messages; the person's own message is never rated.
-  assert.deepEqual(reads.filter(r => r.type), [{type: 'message', ids: ['m2', 'm3']}]);
+  assert.deepEqual(reads.filter(r => (r as {type?: string}).type), [{type: 'message', ids: ['m2', 'm3']}]);
   assert.equal(await page.locator('.bubble.you [data-fb]').count(), 0);
   const reply = page.locator('.bubble.bot').first(), up = reply.getByRole('button', {name: 'Good', exact: true}), down = reply.getByRole('button', {name: 'Not good', exact: true});
   await reply.hover();
   assert.equal(await up.isVisible(), true);
   // One row under the reply, in order Copy, 👍, 👎; its room is kept, so hovering moves nothing.
-  const row = await reply.evaluate(b => { const md = b.querySelector('.md').getBoundingClientRect(), a = b.querySelector('.chat-message-actions');
-    return {under: a.getBoundingClientRect().top >= md.bottom - 1, labels: [...a.querySelectorAll('button')].map(x => x.getAttribute('aria-label')), h: b.offsetHeight}; });
+  const row = await reply.evaluate(b => { const md = (b as HTMLElement).querySelector('.md')!.getBoundingClientRect(), a = (b as HTMLElement).querySelector('.chat-message-actions')!;
+    return {under: a.getBoundingClientRect().top >= md.bottom - 1, labels: [...a.querySelectorAll('button')].map(x => x.getAttribute('aria-label')), h: (b as HTMLElement).offsetHeight}; });
   assert.equal(row.under, true, 'the row sits under the reply text');
   // A reply nobody rated keeps its height: the row floats below its words.
-  assert.equal(await reply.evaluate(b => getComputedStyle(b.querySelector('.chat-message-actions')).position), 'absolute');
-  assert.ok(await reply.evaluate(b => b.offsetHeight - b.querySelector('.md').offsetHeight) < 4, 'no room kept under an unrated reply');
+  assert.equal(await reply.evaluate(b => getComputedStyle((b as HTMLElement).querySelector('.chat-message-actions')!).position), 'absolute');
+  assert.ok(await reply.evaluate(b => (b as HTMLElement).offsetHeight - (b as HTMLElement).querySelector<HTMLElement>('.md')!.offsetHeight) < 4, 'no room kept under an unrated reply');
   assert.deepEqual(row.labels, ['Copy message', 'Good', 'Not good']);
   await page.mouse.move(0, 0);
-  assert.equal(await reply.evaluate(b => b.offsetHeight), row.h, 'no jump when the hover ends');
+  assert.equal(await reply.evaluate(b => (b as HTMLElement).offsetHeight), row.h, 'no jump when the hover ends');
   await page.waitForFunction(b => getComputedStyle(b).opacity === '0', await up.elementHandle());     // the row rests hidden, after its fade
   await reply.hover();
   await shot(page, 'chat-desktop-hover' + t);
@@ -141,7 +156,7 @@ async function chatDesktop(browser, theme = 'dark') {
   await page.mouse.move(0, 0);
   await page.waitForTimeout(300);
   assert.equal(await up.evaluate(b => getComputedStyle(b).opacity), '1', 'the chosen thumb stays when the hover ends');
-  assert.equal(await reply.evaluate(b => getComputedStyle(b.querySelector('.chat-message-actions')).position), 'static', 'a rated reply keeps its row');
+  assert.equal(await reply.evaluate(b => getComputedStyle((b as HTMLElement).querySelector('.chat-message-actions')!).position), 'static', 'a rated reply keeps its row');
   assert.equal(await up.locator('.fb-i').evaluate(i => getComputedStyle(i).fontVariationSettings.includes('"FILL" 1')), true, 'filled');
   await shot(page, 'chat-desktop-rated' + t);
   await reply.hover();
@@ -149,7 +164,7 @@ async function chatDesktop(browser, theme = 'dark') {
   assert.deepEqual(posts(writes), [{subject_type: 'message', subject_id: 'm2', rating: 'up'}]);
   await up.click();
   await page.waitForFunction(() => !document.querySelector('[data-fb="message:m2"] [aria-pressed="true"]'));
-  assert.equal(writes.at(-1).method, 'DELETE');
+  assert.equal(writes.at(-1)!.method, 'DELETE');
   assert.equal(rows.length, 0);
   // 👎: saved at once, then the sheet. Chips are the person's recent reasons; a message has no task chips.
   await reply.hover();
@@ -176,8 +191,8 @@ async function chatDesktop(browser, theme = 'dark') {
   await sheet.getByRole('button', {name: 'Make a rule'}).click();
   const rule = page.locator('dialog.fb-rule[open]');
   await rule.waitFor();
-  assert.equal(rows[0].reason, 'Too long');
-  assert.deepEqual(writes.slice(-2).map(w => w.p), ['/api/v2/feedback', `/api/v2/feedback/${rows[0].id}/rule-draft`]);
+  assert.equal(rows[0]!.reason, 'Too long');
+  assert.deepEqual(writes.slice(-2).map(w => w.p), ['/api/v2/feedback', `/api/v2/feedback/${rows[0]!.id}/rule-draft`]);
   const text = rule.getByRole('textbox', {name: 'Rule'});
   assert.equal(await text.getAttribute('maxlength'), '1000', "the API's cap");
   assert.equal(await text.inputValue(), 'Keep replies to five lines or fewer.');
@@ -186,7 +201,7 @@ async function chatDesktop(browser, theme = 'dark') {
   await shot(page, 'chat-desktop-rule' + t);
   await rule.getByRole('button', {name: 'Save rule'}).click();
   await page.locator('.toast', {hasText: 'Rule added'}).waitFor();
-  assert.deepEqual(writes.at(-1).body, {text: 'Keep replies to five lines.', all_bots: true});
+  assert.deepEqual(writes.at(-1)!.body, {text: 'Keep replies to five lines.', all_bots: true});
   assert.equal(await page.locator('dialog.fb-sheet[open]').count(), 0);
   // Its chosen 👎: the reason, a link to the rule, and Remove.
   await reply.hover();
@@ -194,7 +209,7 @@ async function chatDesktop(browser, theme = 'dark') {
   const show = page.locator('dialog.fb-show[open]');
   await show.waitFor();
   assert.equal(await show.locator('.fb-reason').innerText(), 'Too long');
-  assert.match(await show.getByRole('link', {name: 'Rule'}).getAttribute('href'), /^#\/rules\?.*rule=r-1/);
+  assert.match((await show.getByRole('link', {name: 'Rule'}).getAttribute('href'))!, /^#\/rules\?.*rule=r-1/);
   await show.getByRole('button', {name: 'Remove'}).click();
   await page.waitForFunction(() => !document.querySelector('dialog.fb-show[open]') && !document.querySelector('[data-fb="message:m2"] [aria-pressed="true"]'));
   // Tell the bot: the reason as typed goes with tell_bot; the mark then says it was sent.
@@ -218,10 +233,10 @@ async function chatDesktop(browser, theme = 'dark') {
   await page.keyboard.press('Escape');
   await page.waitForFunction(() => !document.querySelector('dialog.fb-sheet[open]'));
   await new Promise(r => setTimeout(r, 300));
-  assert.equal(rows.find(r => r.subject_id === 'm3').reason, 'Totals are off by a month');
+  assert.equal(rows.find(r => r.subject_id === 'm3')!.reason, 'Totals are off by a month');
   // Both rated replies at rest: each keeps only its chosen thumb, filled, on its row.
   await page.mouse.move(0, 0);
-  await page.evaluate(() => document.activeElement?.blur());      // the resting look, not the keyboard's ring
+  await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());      // the resting look, not the keyboard's ring
   await shot(page, 'chat-desktop-rest' + t);
   assert.deepEqual(errors, []);
   await page.close();
@@ -229,8 +244,8 @@ async function chatDesktop(browser, theme = 'dark') {
 }
 
 // A long press through the browser's own touch input: pointer events with pointerType touch.
-async function press(page, locator, {ms = 650, move = 0} = {}) {
-  const box = await locator.boundingBox(), x = box.x + box.width / 2, y = box.y + Math.min(box.height / 2, 30);
+async function press(page: Page, locator: Locator, {ms = 650, move = 0}: {ms?: number; move?: number} = {}) {
+  const box = (await locator.boundingBox())!, x = box.x + box.width / 2, y = box.y + Math.min(box.height / 2, 30);
   const cdp = await page.context().newCDPSession(page);
   await cdp.send('Input.dispatchTouchEvent', {type: 'touchStart', touchPoints: [{x, y}]});
   if (move) await cdp.send('Input.dispatchTouchEvent', {type: 'touchMove', touchPoints: [{x, y: y + move}]});
@@ -238,7 +253,7 @@ async function press(page, locator, {ms = 650, move = 0} = {}) {
   await cdp.send('Input.dispatchTouchEvent', {type: 'touchEnd', touchPoints: []});
   await cdp.detach();
 }
-async function chatPhone(browser, theme = 'dark') {
+async function chatPhone(browser: Browser, theme = 'dark') {
   const {page, errors, writes} = await chatPage(browser, {phone: true, theme});
   const t = theme === 'dark' ? '' : '-' + theme;
   await page.waitForFunction(() => document.body.classList.contains('fb-on'));
@@ -262,29 +277,29 @@ async function chatPhone(browser, theme = 'dark') {
   assert.equal(fits, true, 'a bottom sheet across the phone');
   await shot(page, 'chat-phone-longpress' + t);
   await menu.getByRole('button', {name: 'Copy'}).tap();
-  await page.waitForFunction(() => window.copied?.startsWith('Signups rose 18%'));
+  await page.waitForFunction(() => (window as unknown as PageWin).copied?.startsWith('Signups rose 18%'));
   await press(page, reply);
   await menu.getByRole('button', {name: 'Not good', exact: true}).tap();
   const sheet = page.locator('dialog.fb-down[open]');
   await sheet.waitFor();
   await page.waitForFunction(() => document.querySelectorAll('dialog.fb-down .fb-chip').length === 2);
   await sheet.getByRole('button', {name: 'Too long'}).tap();
-  await page.evaluate(() => document.activeElement?.blur());
+  await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, 'no sideways scroll');
   const gutter = await sheet.locator('.fb-chips').evaluate(el => Math.round(el.getBoundingClientRect().left));
   assert.equal(gutter, 16, '16px gutter');
   await shot(page, 'chat-phone-down-sheet' + t);
   await sheet.getByRole('button', {name: 'Make a rule'}).tap();
   await page.locator('dialog.fb-rule[open]').waitFor();
-  await page.evaluate(() => document.activeElement?.blur());
+  await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
   await shot(page, 'chat-phone-rule' + t);
   assert.equal(posts(writes).length, 2, 'the 👎, then its reason');
   // At rest a phone shows only the chosen thumb, filled, where the row puts it.
   await page.keyboard.press('Escape');
   await page.waitForFunction(() => !document.querySelector('dialog.fb-sheet[open]'));
-  const rest = await reply.evaluate(b => { const a = b.querySelector('.chat-message-actions'), v = el => getComputedStyle(el).visibility;
-    return {acts: b.classList.contains('acts'), shown: getComputedStyle(a).display !== 'none', down: v(a.querySelector('[data-fb-rate="down"]')),
-      up: v(a.querySelector('[data-fb-rate="up"]')), copy: v(a.querySelector('.chat-message-copy'))}; });
+  const rest = await reply.evaluate(b => { const a = (b as HTMLElement).querySelector('.chat-message-actions')!, v = (el: Element) => getComputedStyle(el).visibility;
+    return {acts: b.classList.contains('acts'), shown: getComputedStyle(a).display !== 'none', down: v(a.querySelector('[data-fb-rate="down"]')!),
+      up: v(a.querySelector('[data-fb-rate="up"]')!), copy: v(a.querySelector('.chat-message-copy')!)}; });
   assert.deepEqual(rest, {acts: false, shown: true, down: 'visible', up: 'hidden', copy: 'hidden'});
   await shot(page, 'chat-phone-rated' + t);
   assert.deepEqual(errors, []);
@@ -294,8 +309,8 @@ async function chatPhone(browser, theme = 'dark') {
 
 const APPROVAL = {id: 'ap-1', kind: 'approval', what: 'send', title: 'Approve this send', requester_id: 'bot:writer', requested_by: 'bot:writer',
   created_at: iso(), payload: {to: ['ava@customer.example'], subject: 'Your renewal', body: 'Hi Ava, your plan renews on the 14th.'}};
-async function decideCard(browser, {phone, theme = 'dark'}) {
-  let feedback;
+async function decideCard(browser: Browser, {phone, theme = 'dark'}: {phone: boolean; theme?: string}) {
+  let feedback!: Fake;
   const {page, errors} = await open(browser, {viewport: phone ? {width: 390, height: 844} : {width: 1440, height: 900}, hash: '#/tasks', theme,
     beforeGoto: async page => { feedback = await feedbackFake(page); }});
   const t = (phone ? 'phone' : 'desktop') + (theme === 'dark' ? '' : '-' + theme);
@@ -311,7 +326,7 @@ async function decideCard(browser, {phone, theme = 'dark'}) {
   await page.waitForFunction(() => document.querySelector('#need-card [data-fb-rate="up"]')?.getAttribute('aria-pressed') === 'true');
   assert.deepEqual(posts(writes), [{subject_type: 'approval', subject_id: 'ap-1', rating: 'up'}]);
   // Never an answer: no outbox entry, the same card, still open.
-  assert.deepEqual(await page.evaluate(() => ({outbox: DEC_OUTBOX.size, shown: DEC.shown, open: document.querySelector('#need-card').open})),
+  assert.deepEqual(await page.evaluate(() => ({outbox: DEC_OUTBOX.size, shown: DEC.shown, open: document.querySelector<HTMLDialogElement>('#need-card')!.open})),
     {outbox: 0, shown: 'approval:ap-1', open: true});
   await card.getByRole('button', {name: 'Not good', exact: true}).click();
   const sheet = page.locator('dialog.fb-down[open]');
@@ -321,26 +336,26 @@ async function decideCard(browser, {phone, theme = 'dark'}) {
   await shot(page, `decide-${t}-down`);
   await page.keyboard.press('Escape');
   await page.waitForFunction(() => !document.querySelector('dialog.fb-sheet[open]'));
-  assert.deepEqual(await page.evaluate(() => ({outbox: DEC_OUTBOX.size, shown: DEC.shown, open: document.querySelector('#need-card').open})),
+  assert.deepEqual(await page.evaluate(() => ({outbox: DEC_OUTBOX.size, shown: DEC.shown, open: document.querySelector<HTMLDialogElement>('#need-card')!.open})),
     {outbox: 0, shown: 'approval:ap-1', open: true}, 'Escape closes the sheet, not the card');
-  await page.evaluate(() => document.activeElement?.blur());      // the resting look, not the keyboard's ring
+  await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());      // the resting look, not the keyboard's ring
   await shot(page, `decide-${t}`);
   assert.deepEqual(errors, []);
   await page.close();
   console.log(`feedback decide ${t}: ok`);
 }
 
-async function taskRows(browser) {
+async function taskRows(browser: Browser) {
   const bot = {id: 't-bot', title: 'Draft the renewal emails', body: 'Details.', owner_id: 'human:ana', requester_id: 'bot:writer', status: 'open',
     version: 1, created_at: iso(), updated_at: iso(), lane: 'company', rank: null, labels: [], tags: [], links: [], parts: {total: 0, done: 0}};
   const person = {...bot, id: 't-person', title: 'Book the venue', requester_id: 'human:sam'};
-  let feedback;
+  let feedback!: Fake;
   const {page, errors} = await open(browser, {hash: '#/tasks', baseTasks: [bot, person],
     beforeGoto: async page => { feedback = await feedbackFake(page); }});
   const {writes, reads} = feedback;
   await page.waitForFunction(() => document.body.classList.contains('fb-on'));
   // The first render may already have asked before the reset above; each read still names only the bot's task.
-  const asked = reads.filter(r => r.type);
+  const asked = reads.filter(r => (r as {type?: string}).type);
   assert.ok(asked.length >= 1, 'a read for the task a bot asked for');
   assert.deepEqual([...new Set(asked.map(r => JSON.stringify(r)))], [JSON.stringify({type: 'task', ids: ['t-bot']})],
     'reads only for the task a bot asked for');
@@ -368,22 +383,22 @@ async function taskRows(browser) {
   console.log('feedback task rows: ok');
 }
 
-async function threadMessage(browser) {
+async function threadMessage(browser: Browser) {
   const page = await browser.newPage({viewport: {width: 1200, height: 800}, serviceWorkers: 'block'});
-  const errors = [], reacts = [];
+  const errors: string[] = [], reacts: string[] = [];
   page.on('pageerror', e => errors.push(e.message));
   const bot = {name: 'finance', display_name: 'Finance', host: 'keeper', status: 'active', can_chat: true, schedules: []};
   const threads = threadsFake({bot: 'finance', messages: [
     {id: 'h1', sender_id: 'human:ana', body: 'Is the October close done?'},
-    {id: 'b1', sender_id: 'bot:finance', body: 'Closed. Two invoices are still unpaid.', reactions: [{emoji: '🎉', count: 1, actors: ['human:sam']}]}]});
+    {id: 'b1', sender_id: 'bot:finance', body: 'Closed. Two invoices are still unpaid.', reactions: [{emoji: '🎉', count: 1, actors: ['human:sam']}]}] as unknown as ThreadsMessage[]});
   await page.context().route('**/*', route => {
     const url = new URL(route.request().url()), p = url.pathname;
-    const json = body => route.fulfill({contentType: 'application/json', body: JSON.stringify(body)});
+    const json = (body: unknown) => route.fulfill({contentType: 'application/json', body: JSON.stringify(body)});
     if (/\/marked\.min\.js$/.test(p)) return route.fulfill({contentType: 'application/javascript', body: fs.readFileSync(uiFile('vendor/marked.min.js'), 'utf8')});
     if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
     if (p.startsWith('/vendor/fonts/') && fs.existsSync(uiFile(p.slice(1)))) return route.fulfill({contentType: 'font/woff2', body: fs.readFileSync(uiFile(p.slice(1)))});
     const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/);
-    if (ui && fs.existsSync(uiFile(ui[1]))) return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]), 'utf8')});
+    if (ui && fs.existsSync(uiFile(ui[1]!))) return route.fulfill({contentType: ui[1]!.endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]!), 'utf8')});
     if (p === '/api/me') return json({id: 'ana', name: 'Ana', role: 'owner', cloud: true});
     if (p === '/api/employees') return json([bot]);
     if (p === '/api/issues') return json([]);
@@ -394,7 +409,7 @@ async function threadMessage(browser) {
     return json(unrouted(p));
   });
   const {writes} = await feedbackFake(page);
-  await page.addInitScript(() => { Object.defineProperty(navigator, 'clipboard', {configurable: true, value: {writeText: async t => { window.copied = t; }}}); });
+  await page.addInitScript(() => { Object.defineProperty(navigator, 'clipboard', {configurable: true, value: {writeText: async (t: string) => { (window as unknown as PageWin).copied = t; }}}); });
   await page.goto('https://tico-ui.test/#/bot/finance/dm');
   const msg = page.locator('.th-msg[data-mid="b1"]');
   await msg.waitFor();
@@ -403,7 +418,7 @@ async function threadMessage(browser) {
   await msg.hover();
   assert.deepEqual(await msg.locator('.th-acts button').evaluateAll(bs => bs.map(b => b.getAttribute('aria-label'))), ['React', 'Reply', 'Copy'], 'the hover bar');
   assert.deepEqual(await msg.locator('.fb-row button').evaluateAll(bs => bs.map(b => b.getAttribute('aria-label'))), ['Copy message', 'Good', 'Not good']);
-  const under = await msg.evaluate(m => m.querySelector('.fb-row').getBoundingClientRect().top >= m.querySelector('.th-react').getBoundingClientRect().bottom - 1);
+  const under = await msg.evaluate(m => (m as HTMLElement).querySelector('.fb-row')!.getBoundingClientRect().top >= (m as HTMLElement).querySelector('.th-react')!.getBoundingClientRect().bottom - 1);
   assert.equal(under, true, 'the row sits under the words and reactions');
   await shot(page, 'thread-hover');
   await msg.getByRole('button', {name: 'Good', exact: true}).click();
@@ -412,7 +427,7 @@ async function threadMessage(browser) {
   assert.match(await msg.locator('.th-react').innerText(), /^🎉\s+1$/, 'reactions stay as they were');
   assert.deepEqual(posts(writes), [{subject_type: 'message', subject_id: 'b1', rating: 'up'}]);
   await msg.getByRole('button', {name: 'Copy message'}).click();
-  await page.waitForFunction(() => window.copied === 'Closed. Two invoices are still unpaid.');
+  await page.waitForFunction(() => (window as unknown as PageWin).copied === 'Closed. Two invoices are still unpaid.');
   assert.deepEqual(errors, []);
   await page.close();
   console.log('feedback thread message: ok');
@@ -420,7 +435,7 @@ async function threadMessage(browser) {
 
 // Ask, the floating Assistant panel on any page, reads its replies' feedback itself: a page with nothing to rate never
 // turned feedback on, and a reply rated earlier shows its chosen thumb.
-async function askPanel(browser) {
+async function askPanel(browser: Browser) {
   const seed = [{id: 'fb-0', person_id: 'human:ana', subject_type: 'message', subject_id: 'm3', rating: 'up', reason: '', bot_id: 'bot:coo',
     outcome: 'none', note_id: null, note_status: null, org_rule_id: null, rule_status: null, created_at: iso(), updated_at: iso()}];
   const {page, errors, reads, writes} = await chatPage(browser, {hash: '#/automations', seed});
@@ -431,7 +446,7 @@ async function askPanel(browser) {
   const reply = page.locator('#ask-panel .bubble.bot').nth(1);
   await reply.waitFor();
   await page.waitForFunction(() => document.body.classList.contains('fb-on'));
-  assert.deepEqual(reads.filter(r => r.type), [{type: 'message', ids: ['m2', 'm3']}]);
+  assert.deepEqual(reads.filter(r => (r as {type?: string}).type), [{type: 'message', ids: ['m2', 'm3']}]);
   await page.waitForFunction(() => document.querySelector('#ask-panel [data-fb="message:m3"] [data-fb-rate="up"]')?.getAttribute('aria-pressed') === 'true');
   const first = page.locator('#ask-panel .bubble.bot').first();
   await first.hover();
@@ -445,10 +460,10 @@ async function askPanel(browser) {
 }
 
 // On a phone a task row's pair is hidden; a long press on its title (a button over the row) opens 👍, 👎 and never the task.
-async function taskRowPress(browser) {
+async function taskRowPress(browser: Browser) {
   const bot = {id: 't-bot', title: 'Draft the renewal emails', body: 'Details.', owner_id: 'human:ana', requester_id: 'bot:writer', status: 'open',
     version: 1, created_at: iso(), updated_at: iso(), lane: 'company', rank: null, labels: [], tags: [], links: [], parts: {total: 0, done: 0}};
-  let feedback, release;
+  let feedback!: Fake, release!: (value: void) => void;
   const initialRead = new Promise(resolve => { release = resolve; });
   const {page, errors} = await open(browser, {viewport: {width: 390, height: 844}, hash: '#/tasks', baseTasks: [bot],
     beforeGoto: async page => {

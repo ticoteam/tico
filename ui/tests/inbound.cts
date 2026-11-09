@@ -5,47 +5,58 @@
 // a changed code drops the shown company, a lost confirmation retries the same submission), asking for a number and
 // accepting or cancelling a quote through Tico's own confirm (never a page dialog), who reads an inbox, a member's
 // read-only view, and desktop and phone fit.
-const {chromium} = require('playwright');
-const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const {html, uiFile} = require('./support/page.cjs');
-const {unrouted} = require('./support/routes.cjs');
-const {googleFake} = require('./support/google-fake.cjs');
-const {mailboxesFake, shot} = require('./support/mailboxes-fake.cjs');
-const settled = page => page.waitForFunction(() => document.getAnimations().every(a => a.playState !== 'running' || a.effect?.getTiming().iterations === Infinity));
-const fits = page => page.evaluate(() => document.documentElement.scrollWidth <= innerWidth);
-const go = (page, hash) => page.evaluate(h => { location.hash = h; }, hash);
+import type * as PageSupport from './support/page.cjs';
+import type * as Routes from './support/routes.cjs';
+import type * as GoogleFake from './support/google-fake.cjs';
+import type * as MailboxesFake from './support/mailboxes-fake.cjs';
+const {chromium}: typeof import('playwright') = require('playwright');
+const assert: typeof import('node:assert/strict') = require('node:assert/strict');
+const fs: typeof import('node:fs') = require('node:fs');
+const {html, uiFile} = require('./support/page.cjs') as typeof PageSupport;
+const {unrouted} = require('./support/routes.cjs') as typeof Routes;
+const {googleFake} = require('./support/google-fake.cjs') as typeof GoogleFake;
+const {mailboxesFake, shot} = require('./support/mailboxes-fake.cjs') as typeof MailboxesFake;
+interface Body {[k: string]: unknown; action?: string; audience?: string; group_id?: string | null; name?: string}
+interface Call {p: string; query: string; method: string; body: Body; operation: string | undefined}
+interface PhoneRequest {request_id: string; name: string | undefined; state: string; price_micros: number | null; quoted_until: number | null}
+interface PageWin {INBOUND_PWNED?: number}
+declare const GET_INFLIGHT: {size: number};
+declare const S: {orgGroups?: unknown[]; me: {role: string; bot_admin: boolean}};
+declare function inboxesRender(): void;
+const settled = (page: import('playwright').Page) => page.waitForFunction(() => document.getAnimations().every(a => a.playState !== 'running' || a.effect?.getTiming().iterations === Infinity));
+const fits = (page: import('playwright').Page) => page.evaluate(() => document.documentElement.scrollWidth <= innerWidth);
+const go = (page: import('playwright').Page, hash: string) => page.evaluate(h => { location.hash = h; }, hash);
 (async () => {
-  const browser = await chromium.launch({headless: true, channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined});
+  const browser = await chromium.launch({headless: true, channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined} as import('playwright').LaunchOptions);
   try {
     const page = await browser.newPage({viewport: {width: 1440, height: 1000}, serviceWorkers: 'block'});
-    const errors = [], dialogs = [];
+    const errors: string[] = [], dialogs: string[] = [];
     page.on('pageerror', e => errors.push(e.message));
     page.on('dialog', dialog => { dialogs.push(dialog.message()); void dialog.dismiss(); });
     await page.addInitScript(() => { try { localStorage.setItem('tico.inboxes.skip', '1'); } catch { /* storage off */ } });
-    const calls = [], mailboxes = mailboxesFake(), google = googleFake();
+    const calls: Call[] = [], mailboxes = mailboxesFake(), google = googleFake();
     const inbox = {inbox_id: 'ibx_a', kind: 'email', name: 'Account logins', address: 'agent-acme-login@tico.team', state: 'active', created_by: 'human:ana',
       used_for: '', period_end: null, cancel_pending: 0, audience: 'company', group_id: null};
     const released = {...inbox, inbox_id: 'ibx_old', name: 'Old logins', address: 'agent-acme-old@tico.team', state: 'released'};
     const evil = '<img src=x onerror="window.INBOUND_PWNED=1">';
-    let preview = evil, connectionFailures = 1, releaseConnection, connectionStarted;
+    let preview = evil, connectionFailures = 1, releaseConnection!: (value?: unknown) => void, connectionStarted!: (value?: unknown) => void;
     const connectionGate = new Promise(resolve => { releaseConnection = resolve; });
     const connectionInFlight = new Promise(resolve => { connectionStarted = resolve; });
     const connectionCode = 'synthetic_' + 'x'.repeat(33), companyId = '7d05caa5-e578-4c2a-8887-3d5b557f6a0a';
-    const phoneRequests = [{request_id: 'prq_quoted', name: 'Monthly logins', state: 'quoted', price_micros: 14000000, quoted_until: Date.now() / 1000 + 3600}];
+    const phoneRequests: PhoneRequest[] = [{request_id: 'prq_quoted', name: 'Monthly logins', state: 'quoted', price_micros: 14000000, quoted_until: Date.now() / 1000 + 3600}];
     await page.route('**/*', route => {
       const request = route.request(), url = new URL(request.url()), p = url.pathname, method = request.method();
-      const json = body => route.fulfill({contentType: 'application/json', body: JSON.stringify(body)});
+      const json = (body: unknown) => route.fulfill({contentType: 'application/json', body: JSON.stringify(body)});
       const file = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/);
-      if (file && fs.existsSync(uiFile(file[1]))) return route.fulfill({contentType: file[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(file[1]), 'utf8')});
+      if (file && fs.existsSync(uiFile(file[1] as string))) return route.fulfill({contentType: (file[1] as string).endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(file[1] as string), 'utf8')});
       if (p.startsWith('/vendor/') && fs.existsSync(uiFile(p.slice(1)))) return route.fulfill({body: fs.readFileSync(uiFile(p.slice(1)))});
       if (/\.(?:js|ts)$/.test(p)) return route.fulfill({contentType: 'application/javascript', body: ''});
       if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
-      const body = request.postData() ? request.postDataJSON() : null;
+      const body = (request.postData() ? request.postDataJSON() : null) as Body;
       if (p.startsWith('/api/v2/inbound/')) {
         calls.push({p, query: url.search, method, body, operation: request.headers()['idempotency-key']});
         if (p.endsWith('/company-connection')) {
-          const result = {connected: body.action === 'connect', scope: 'inbox', company: {company_id: companyId, name: evil}};
+          const result: {connected: boolean; scope: string; company: {company_id: string; name: string}; expires_at?: number} = {connected: body.action === 'connect', scope: 'inbox', company: {company_id: companyId, name: evil}};
           if (body.action === 'preview') result.expires_at = Date.now() / 1000 + 300;
           if (body.action === 'connect' && connectionFailures-- > 0) {
             connectionStarted();
@@ -74,6 +85,7 @@ const go = (page, hash) => page.evaluate(h => { location.hash = h; }, hash);
         }
         if (p.includes('/phone-requests/')) {
           const selected = phoneRequests.find(r => p.includes('/' + r.request_id + '/'));
+          if (!selected) throw new Error('no phone request in ' + p);
           selected.state = p.endsWith('/accept') ? 'accepted' : 'canceled';
           return json({phone_request: selected});
         }
@@ -113,7 +125,7 @@ const go = (page, hash) => page.evaluate(h => { location.hash = h; }, hash);
     await page.locator('[data-inbound-read]').click();
     await page.locator('.inbound-dialog pre').filter({hasText: '123456'}).waitFor();
     assert.equal(await page.locator('.inbound-dialog img').count(), 0);
-    assert.equal(await page.evaluate(() => window.INBOUND_PWNED), undefined);
+    assert.equal(await page.evaluate(() => (window as unknown as PageWin).INBOUND_PWNED), undefined);
     await page.locator('.inbound-dialog [data-close]').click();
     await page.locator('[data-inbound-code]').click();
     await page.locator('.inbound-dialog pre').filter({hasText: '123456'}).waitFor();
@@ -128,14 +140,14 @@ const go = (page, hash) => page.evaluate(h => { location.hash = h; }, hash);
 
     // Messages: every inbox, or the ones picked, by channel, sender, words, code and spam, a page at a time.
     const mark = calls.length;
-    const latest = () => calls.slice(mark).filter(c => c.p.endsWith('/messages') && c.method === 'GET').map(c => new URLSearchParams(c.query)).at(-1);
+    const latest = () => calls.slice(mark).filter(c => c.p.endsWith('/messages') && c.method === 'GET').map(c => new URLSearchParams(c.query)).at(-1)!;
     await go(page, '#/tools/messages');
     const messages = page.locator('#inbox-messages'), all = page.locator('#inbound-filter[data-in-all]');
     await messages.locator('[data-in-message="ses:test:ibx_old"]').waitFor();
     assert.equal(await page.evaluate(() => location.hash), '#/tools/messages');
     assert.equal(latest().get('inbox_ids'), null, 'no inbox picked reads every inbox');
     assert.match(await messages.locator('[data-in-message="ses:test:ibx_a"]').innerText(), /EMAIL\s+agent-acme-login@tico\.team\s+Account logins/);
-    assert.deepEqual(await all.locator('select[name=inboxes] option').evaluateAll(os => os.map(o => o.value)), ['ibx_a', 'ibx_old'], 'released inboxes can be picked');
+    assert.deepEqual(await all.locator('select[name=inboxes] option').evaluateAll(os => os.map(o => (o as HTMLOptionElement).value)), ['ibx_a', 'ibx_old'], 'released inboxes can be picked');
     await all.locator('select[name=inboxes]').selectOption(['ibx_a', 'ibx_old']);
     await all.locator('select[name=kind]').selectOption('sms');
     await all.locator('input[name=sender]').fill('Login service');
@@ -147,7 +159,7 @@ const go = (page, hash) => page.evaluate(h => { location.hash = h; }, hash);
     assert.deepEqual(Object.fromEntries(latest()), {limit: '50', inbox_ids: 'ibx_a,ibx_old', kind: 'sms', q: 'Sign', from: 'Login service', has_code: 'true', spam: 'true'});
     await page.evaluate(() => inboxesRender());
     await page.waitForFunction(() => !GET_INFLIGHT.size);
-    assert.deepEqual(await all.locator('select[name=inboxes]').evaluate(s => [...s.selectedOptions].map(o => o.value)), ['ibx_a', 'ibx_old'], 'a redraw keeps the inboxes picked');
+    assert.deepEqual(await all.locator('select[name=inboxes]').evaluate(s => [...(s as HTMLSelectElement).selectedOptions].map(o => (o as HTMLOptionElement).value)), ['ibx_a', 'ibx_old'], 'a redraw keeps the inboxes picked');
     assert.equal(latest().get('inbox_ids'), 'ibx_a,ibx_old');
     await all.locator('select[name=inboxes]').selectOption([]);
     await all.locator('select[name=kind]').selectOption('');
@@ -213,7 +225,7 @@ const go = (page, hash) => page.evaluate(h => { location.hash = h; }, hash);
     assert.ok(connections.every(c => JSON.stringify(Object.keys(c.body).sort()) === '["action","code"]'));
     const completed = connections.filter(c => c.body.action === 'connect');
     assert.equal(completed.length, 2, 'lost confirmation retries the same submission');
-    assert.equal(completed[0].operation, completed[1].operation);
+    assert.equal(completed[0]!.operation, completed[1]!.operation);
     assert.ok(!page.url().includes(connectionCode));
     assert.ok(!await page.evaluate(code => JSON.stringify([Object.entries(localStorage), Object.entries(sessionStorage)]).includes(code), connectionCode));
 
@@ -260,7 +272,7 @@ const go = (page, hash) => page.evaluate(h => { location.hash = h; }, hash);
     await page.evaluate(() => inboxesRender());
     await page.locator('[data-inbound-audience=ibx_a] option[value=sales]').waitFor({state: 'attached'});
     await page.locator('[data-inbound-audience=ibx_a]').selectOption('sales');
-    await page.waitForFunction(() => document.querySelector('[data-inbound-audience=ibx_a]')?.value === 'sales' && !document.querySelector('[data-inbound-audience=ibx_a]').disabled);
+    await page.waitForFunction(() => document.querySelector<HTMLSelectElement>('[data-inbound-audience=ibx_a]')?.value === 'sales' && !document.querySelector<HTMLSelectElement>('[data-inbound-audience=ibx_a]')!.disabled);
     assert.deepEqual(calls.filter(c => c.p.endsWith('/audience')).map(c => [c.method, c.p, c.body]),
       [['PUT', '/api/v2/inbound/inboxes/ibx_a/audience', {audience: 'team', group_id: 'sales'}]]);
     await page.evaluate(() => { S.me.role = 'human'; S.me.bot_admin = false; return inboxesRender(); });

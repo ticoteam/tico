@@ -1,38 +1,60 @@
 // A sign-in return must not refill confirmed Assistant chat text from its saved restoration snapshot.
 // All requests and sign-in pages are synthetic; the real UI, navigation and browser storage run unchanged.
-const {chromium, webkit} = require('playwright');
-const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const http = require('node:http');
-const {html, uiFile} = require('./support/page.cjs');
-const {unrouted} = require('./support/routes.cjs');
-const {assistantView} = require('./support/assistant-chat.cjs');
-const {t} = require('./support/load.cjs');
+import type * as PageSupport from './support/page.cjs';
+import type * as Routes from './support/routes.cjs';
+import type * as AssistantChat from './support/assistant-chat.cjs';
+import type {AddressInfo} from 'node:net';
+import type {Request as PwRequest} from 'playwright';
+const {chromium, webkit}: typeof import('playwright') = require('playwright');
+const assert: typeof import('node:assert/strict') = require('node:assert/strict');
+const fs: typeof import('node:fs') = require('node:fs');
+const http: typeof import('node:http') = require('node:http');
+const {html, uiFile} = require('./support/page.cjs') as typeof PageSupport;
+const {unrouted} = require('./support/routes.cjs') as typeof Routes;
+const {assistantView} = require('./support/assistant-chat.cjs') as typeof AssistantChat;
+const {t}: {t: (ms: number) => number} = require('./support/load.cjs');
 const engines = (process.env.TICO_UI_ENGINES || 'chromium,webkit').split(',');
+type Field = {scope: string; key: string; value: string};
+type Msg = {id: string; sender_id: string; body: string; created_at: string};
+type Step = <T>(label: string, run: () => T | PromiseLike<T>, ms?: number) => Promise<T>;
+declare function chatDrafts(): Record<string, string>;
+declare const SESSION_RETURN: string;
+declare const CHAT_DRAFTS: string;
+declare const LIVE_SOON: Set<unknown>;
+declare const SESSION: {seen: boolean};
+declare const V2C: {loaded: boolean} | undefined;
+declare const LIVE: {es: EventSource | null | undefined};
+declare const ASSISTANT_PILL: {sending: boolean};
+declare function liveConnected(): boolean;
+declare function liveUrl(): string;
+declare function get(path: string): Promise<unknown>;
+declare function sessionScope(el: Element | null): string;
+declare function sessionKey(el: Element | null): string;
+declare function sessionSave(snapshot: {fields: Field[]}): void;
 
 // Playwright's defaults do not bound evaluate promises or browser/server cleanup. Keep the deadline in Node (scaled by
 // the runner's TICO_UI_SLOWDOWN like other waits) and report the step before a stalled cleanup can hide the failure.
-function steps(context) {
-  return async (label, run, ms = t(30000)) => {
-    let timer;
+function steps(context: string): Step {
+  return async <T,>(label: string, run: () => T | PromiseLike<T>, ms = t(30000)): Promise<T> => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
     try {
-      return await Promise.race([Promise.resolve().then(run), new Promise((_, reject) => {
+      return await Promise.race([Promise.resolve().then(run), new Promise<never>((_, reject) => {
         timer = setTimeout(() => reject(new assert.AssertionError({message: `${context}: ${label} exceeded ${ms}ms`})), ms);
       })]);
     } catch (error) {
-      console.error(`${context}: ${label}: ${error.message}`);
+      console.error(`${context}: ${label}: ${(error as Error).message}`);
       throw error;
     } finally { clearTimeout(timer); }
   };
 }
 
-async function scenario(browser, engine, mode, edit, editedBefore = false) {
+async function scenario(browser: import('playwright').Browser, engine: string, mode: string, edit: boolean, editedBefore = false) {
   const step = steps(`${engine}, ${mode}, ${editedBefore ? 'edited restored draft' : edit ? 'later edits' : 'sign-in return'}`);
   const page = await step('create page', () => browser.newPage({viewport: {width: 1200, height: 800}, serviceWorkers: 'block'}));
-  const errors = [], posts = [], delivered = [];
-  const reads = new Set(), readWaiters = new Set();
+  const errors: string[] = [], posts: {text: string; method: string}[] = [], delivered: Msg[] = [];
+  const reads = new Set<PwRequest>(), readWaiters = new Set<(() => void) | undefined>();
   let navigating = false;
-  const readsDrained = () => { if (!reads.size) for (const done of [...readWaiters]) done(); };
+  const readsDrained = () => { if (!reads.size) for (const done of [...readWaiters]) done!(); };
   page.on('request', request => {
     const path = new URL(request.url()).pathname;
     if (request.isNavigationRequest() && request.frame() === page.mainFrame()) navigating = true;
@@ -47,29 +69,29 @@ async function scenario(browser, engine, mode, edit, editedBefore = false) {
     reads.clear();
     readsDrained();
   });
-  const readFinished = request => {
+  const readFinished = (request: PwRequest) => {
     reads.delete(request);
     readsDrained();
   };
   page.on('requestfinished', readFinished);
   page.on('requestfailed', readFinished);
   page.on('pageerror', e => errors.push(e.message));
-  let expired = false, hold = null, release;
+  let expired = false, hold: Promise<void> | null = null, release: (() => void) | undefined;
   // A real same-origin fixture keeps event streams open across sign-in. Fulfilling an intercepted
   // stream ends it immediately and creates reconnect/probe requests that WebKit can reject during navigation.
-  const serverErrors = [];
+  const serverErrors: string[] = [];
   const server = http.createServer((request, response) => {
     void (async () => {
-      const url = new URL(request.url, 'http://127.0.0.1'), p = url.pathname;
-      const chunks = [];
+      const url = new URL(request.url!, 'http://127.0.0.1'), p = url.pathname;
+      const chunks: Buffer[] = [];
       for await (const chunk of request) chunks.push(chunk);
       const body = Buffer.concat(chunks).toString();
-      const reply = (body, contentType, status = 200) => { response.writeHead(status, {'Content-Type': contentType}); response.end(body); };
-      const json = (body, status = 200) => reply(JSON.stringify(body), 'application/json', status);
+      const reply = (body: string, contentType: string, status = 200) => { response.writeHead(status, {'Content-Type': contentType}); response.end(body); };
+      const json = (body: unknown, status = 200) => reply(JSON.stringify(body), 'application/json', status);
       const identity = () => json({error: {code: 'identity', detail: 'Sign in again', sign_in: '/auth/login'}}, 401);
       if (p === '/auth/login') return reply('<title>Fixture sign-in</title><a id="return" style="display:inline-block;padding:8px" href="' + url.searchParams.get('next') + '">Return after sign-in</a>', 'text/html');
       const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/);
-      if (ui && fs.existsSync(uiFile(ui[1]))) return reply(fs.readFileSync(uiFile(ui[1]), 'utf8'), ui[1].endsWith('.css') ? 'text/css' : 'application/javascript');
+      if (ui && fs.existsSync(uiFile(ui[1]!))) return reply(fs.readFileSync(uiFile(ui[1]!), 'utf8'), ui[1]!.endsWith('.css') ? 'text/css' : 'application/javascript');
       if (/\.(?:js|ts)$/.test(p)) return reply('', 'application/javascript');
       if (p === '/') return reply(html, 'text/html');
       if (p === '/api/v2/me' && expired) return identity();
@@ -84,8 +106,8 @@ async function scenario(browser, engine, mode, edit, editedBefore = false) {
         return;
       }
       if (p === '/api/v2/assistant/messages') {
-        const text = JSON.parse(body).text;
-        posts.push({text, method: request.method});
+        const text = (JSON.parse(body) as {text: string}).text;
+        posts.push({text, method: request.method!});
         if (posts.length === 1) {
           expired = true;
           return identity();
@@ -100,15 +122,15 @@ async function scenario(browser, engine, mode, edit, editedBefore = false) {
   });
   const box = page.locator('#chat-composer textarea'), send = page.locator('#chat-composer .p-send');
   const stored = () => step('read saved drafts and return snapshot', () => page.evaluate(() => ({draft: chatDrafts().coo, otherDraft: chatDrafts().other,
-    fields: JSON.parse(sessionStorage.getItem(SESSION_RETURN) || 'null')?.fields || []})));
-  const frames = label => step(label, () => page.evaluate(() => new Promise(done => requestAnimationFrame(() => requestAnimationFrame(done)))));
-  const readsSettled = label => step(label, async () => {
-    let done;
+    fields: (JSON.parse(sessionStorage.getItem(SESSION_RETURN) || 'null') as {fields?: Field[]} | null)?.fields || []})));
+  const frames = (label: string) => step(label, () => page.evaluate(() => new Promise(done => requestAnimationFrame(() => requestAnimationFrame(done)))));
+  const readsSettled = (label: string) => step(label, async () => {
+    let done: (() => void) | undefined;
     try {
       do {
         // A send schedules a snapshot read after a short burst; it can start after current reads finish.
         await page.waitForFunction(() => !LIVE_SOON.size);
-        if (reads.size) await new Promise(resolve => { done = resolve; readWaiters.add(done); });
+        if (reads.size) await new Promise<void>(resolve => { done = resolve; readWaiters.add(done); });
         readWaiters.delete(done);
         await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
       } while (reads.size || await page.evaluate(() => LIVE_SOON.size > 0));
@@ -116,7 +138,7 @@ async function scenario(browser, engine, mode, edit, editedBefore = false) {
   });
   // A loaded conversation can precede its stream subscription. Navigating again while WebKit is
   // still opening that connection reports a canceled request as an access-control page error.
-  const ready = label => step(label, () => page.waitForFunction(() => {
+  const ready = (label: string) => step(label, () => page.waitForFunction(() => {
     if (!SESSION.seen || !(typeof V2C !== 'undefined' && V2C?.loaded)
       || !liveConnected() || LIVE.es?.readyState !== EventSource.OPEN) return false;
     const subscribed = new URL(LIVE.es.url), expected = new URL(liveUrl(), location.href);
@@ -124,11 +146,11 @@ async function scenario(browser, engine, mode, edit, editedBefore = false) {
     subscribed.searchParams.delete('after'); expected.searchParams.delete('after');
     return subscribed.href === expected.href;
   }));
-  const idle = label => step(label, () => page.waitForFunction(() => !ASSISTANT_PILL.sending && !document.querySelector('#chat-composer .p-send').disabled));
+  const idle = (label: string) => step(label, () => page.waitForFunction(() => !ASSISTANT_PILL.sending && !(document.querySelector('#chat-composer .p-send') as HTMLButtonElement).disabled));
   const text = '  Keep this draft through sign-in  ';
   try {
-    await step('start fixture server', () => new Promise((resolve, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', resolve); }));
-    const origin = 'http://127.0.0.1:' + server.address().port;
+    await step('start fixture server', () => new Promise<void>((resolve, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', resolve); }));
+    const origin = 'http://127.0.0.1:' + (server.address() as AddressInfo).port;
     await step('open Assistant', () => page.goto(origin + '/#/assistant'));
     await ready('initial conversation and event subscription ready');
     await step('type initial draft', () => box.fill(text));
@@ -143,7 +165,7 @@ async function scenario(browser, engine, mode, edit, editedBefore = false) {
     await step('signed-out banner appears', () => page.locator('#signed-out:not([hidden])').waitFor());
     assert.equal(await step('read signed-out draft', () => box.inputValue()), text, 'sign-out keeps the unsent text');
     await step('seed older return snapshot', () => page.evaluate(text => {
-      const kept = JSON.parse(sessionStorage.getItem(SESSION_RETURN));
+      const kept = JSON.parse(sessionStorage.getItem(SESSION_RETURN)!) as {fields: Field[]};
       // A snapshot saved by an older page can still contain the chat draft. New pages keep only the
       // per-bot copy, but a confirmed send must consume the older saved copy and its live watcher too.
       const input = document.querySelector('#chat-composer textarea');
@@ -167,11 +189,11 @@ async function scenario(browser, engine, mode, edit, editedBefore = false) {
       if (editedBefore) await step('edit restored draft', () => box.fill(sentText));
       if (edit) hold = new Promise(done => release = done);
       await step('resend restored draft', () => send.click());
-      await step('resend starts or clears composer', () => page.waitForFunction(() => ASSISTANT_PILL.sending || document.querySelector('#chat-composer .p-send').disabled || !document.querySelector('#chat-composer textarea').value));
+      await step('resend starts or clears composer', () => page.waitForFunction(() => ASSISTANT_PILL.sending || (document.querySelector('#chat-composer .p-send') as HTMLButtonElement).disabled || !(document.querySelector('#chat-composer textarea') as HTMLTextAreaElement).value));
       const next = 'Next draft typed while the resend is out\nA second line\nA third line';
       if (edit) {
         await step('type later draft while resend is held', () => box.fill(next));
-        release(); hold = null;
+        release!(); hold = null;
       }
       await idle('confirmed resend finishes');
       await frames('return watcher paints after resend');
@@ -181,12 +203,12 @@ async function scenario(browser, engine, mode, edit, editedBefore = false) {
       assert.equal(saved.draft, edit ? next : undefined, 'the persistent draft agrees with the composer');
       assert.ok(!saved.fields.some(f => f.value === text), 'the saved sign-in snapshot consumed the composer draft, including its pre-edit copy');
       assert.equal(delivered.length, 1, 'one successful delivery');
-      assert.equal(delivered[0].body, sentText, 'the edited text is the text sent');
+      assert.equal(delivered[0]!.body, sentText, 'the edited text is the text sent');
       if (!edit) {
-        await step('empty Send finishes fading', () => page.waitForFunction(() => getComputedStyle(document.querySelector('#chat-composer .p-send')).opacity === '0.45'));
+        await step('empty Send finishes fading', () => page.waitForFunction(() => getComputedStyle(document.querySelector('#chat-composer .p-send')!).opacity === '0.45'));
         assert.equal(await step('read empty Send opacity', () => send.evaluate(button => getComputedStyle(button).opacity)), '0.45', 'the empty composer dims Send');
         await step('press Enter on empty composer', () => box.press('Enter'));
-        await step('click empty Send', () => send.evaluate(button => button.click()));
+        await step('click empty Send', () => send.evaluate(button => (button as HTMLElement).click()));
         await frames('empty composer actions paint');
       }
       assert.equal(posts.length, 2, 'the interrupted attempt and explicit resend are the only POSTs');
@@ -213,8 +235,8 @@ async function scenario(browser, engine, mode, edit, editedBefore = false) {
   } finally {
     release?.();
     try { await step('close page', () => page.close(), t(10000)); } finally {
-      await step('close fixture server', () => new Promise((resolve, reject) => {
-        server.close(error => error && error.code !== 'ERR_SERVER_NOT_RUNNING' ? reject(error) : resolve());
+      await step('close fixture server', () => new Promise<void>((resolve, reject) => {
+        server.close(error => error && (error as NodeJS.ErrnoException).code !== 'ERR_SERVER_NOT_RUNNING' ? reject(error) : resolve());
         server.closeAllConnections();
       }), t(10000));
     }
@@ -224,8 +246,8 @@ async function scenario(browser, engine, mode, edit, editedBefore = false) {
 (async () => {
   for (const engine of engines) {
     const step = steps(engine);
-    const browser = await step('launch browser', () => ({chromium, webkit}[engine]).launch({headless: true,
-      ...(engine === 'chromium' ? {channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined} : {})}));
+    const browser = await step('launch browser', () => (({chromium, webkit} as Record<string, import('playwright').BrowserType>)[engine]!).launch({headless: true,
+      ...(engine === 'chromium' ? {channel: (process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined) as string} : {})}));
     try {
       await scenario(browser, engine, '401', false, true);
       await scenario(browser, engine, '401', false);

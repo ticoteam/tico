@@ -11,18 +11,31 @@
 // and a read from before a save can't put the old choice back. A member reads only: no grants, Legal mail as text.
 // Without Tico Gateway the addresses card says so, offers no order, and the list shows no error. No sideways scroll on a
 // phone. TICO_SHOTS=<dir> saves screenshots (desktop and phone, dark and light).
-const {chromium} = require('playwright');
-const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const path = require('node:path');
-const {html, uiFile} = require('./support/page.cjs');
-const {unrouted} = require('./support/routes.cjs');
-const {googleFake} = require('./support/google-fake.cjs');
-const {mailboxesFake} = require('./support/mailboxes-fake.cjs');
+import type * as PageSupport from './support/page.cjs';
+import type * as Routes from './support/routes.cjs';
+import type * as GoogleFake from './support/google-fake.cjs';
+import type * as MailboxesFake from './support/mailboxes-fake.cjs';
+const {chromium}: typeof import('playwright') = require('playwright');
+const assert: typeof import('node:assert/strict') = require('node:assert/strict');
+const fs: typeof import('node:fs') = require('node:fs');
+const path: typeof import('node:path') = require('node:path');
+const {html, uiFile} = require('./support/page.cjs') as typeof PageSupport;
+const {unrouted} = require('./support/routes.cjs') as typeof Routes;
+const {googleFake} = require('./support/google-fake.cjs') as typeof GoogleFake;
+const {mailboxesFake} = require('./support/mailboxes-fake.cjs') as typeof MailboxesFake;
 const shots = process.env.TICO_SHOTS || '';
-const AGO = m => new Date(Date.now() - m * 60000).toISOString();
+const AGO = (m: number) => new Date(Date.now() - m * 60000).toISOString();
+type Json = {[key: string]: unknown};
+interface Sent { method: string; path: string; body: Json; key: string }
+interface PostalState {
+  role: string; gateway: boolean; addresses: Json[]; orders: Json[]; prices: Json; intakeFail: boolean; intake: Json | null;
+  legal_bot_id: string | null; routingFail: boolean; holdRouting: Promise<void> | null; grants: Json[];
+  got: Record<string, number>; inboxes: Json[]; items: Json[]; sent: Sent[];
+}
+interface PageWin { pmRedraw: unknown }
+declare function inboxesRender(): unknown;
 
-function server() {
+function server(): PostalState {
   return {
     role: 'owner',
     gateway: true,
@@ -54,17 +67,17 @@ function server() {
   };
 }
 
-async function open(browser, {viewport = {width: 1280, height: 860}, state = server(), hash = '#/settings/mail'} = {}) {
+async function open(browser: import('playwright').Browser, {viewport = {width: 1280, height: 860}, state = server(), hash = '#/settings/mail'}: {viewport?: {width: number; height: number}; state?: PostalState; hash?: string} = {}) {
   const page = await browser.newPage({viewport, serviceWorkers: 'block'});
-  const errors = [], mailboxes = mailboxesFake({admin: state.role === 'owner'}), google = googleFake();
+  const errors: string[] = [], mailboxes = mailboxesFake({admin: state.role === 'owner'}), google = googleFake();
   page.on('pageerror', e => errors.push(e.message));
   await page.addInitScript(() => {
     try { localStorage.setItem('tico.inboxes.skip', '1'); } catch { /* storage off */ }
   });
   await page.route('**/*', async route => {
     const req = route.request(), url = new URL(req.url()), p = url.pathname, method = req.method();
-    const json = (body, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
-    const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/);
+    const json = (body: unknown, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
+    const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/) as [string, string] | null;
     if (ui && fs.existsSync(uiFile(ui[1])))
       return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]), 'utf8')});
     if (p.startsWith('/vendor/') && fs.existsSync(uiFile(p.slice(1)))) return route.fulfill({body: fs.readFileSync(uiFile(p.slice(1))),
@@ -72,7 +85,7 @@ async function open(browser, {viewport = {width: 1280, height: 860}, state = ser
     if (/\.(?:js|ts)$/.test(p)) return route.fulfill({contentType: 'application/javascript', body: ''});
     if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
     const config = {version: '0.5.14', app_name: 'Tico', company_name: 'Acme Inc'};
-    const body = req.postData() ? req.postDataJSON() : null;
+    const body = (req.postData() ? req.postDataJSON() : null) as Json;
     if (method !== 'GET' && p.startsWith('/api/v2/postal/'))
       state.sent.push({method, path: p, body, key: req.headers()['idempotency-key'] || ''});
     if (method === 'GET') state.got[p] = (state.got[p] || 0) + 1;
@@ -101,7 +114,7 @@ async function open(browser, {viewport = {width: 1280, height: 860}, state = ser
       if (method === 'PUT') {
         if (state.holdRouting) await state.holdRouting;
         if (state.routingFail) return json({error: {code: 'validation', detail: 'Not saved'}}, 422);
-        state.legal_bot_id = body.legal_bot_id;
+        state.legal_bot_id = body.legal_bot_id as string | null;
       }
       return json({settings: {legal_bot_id: state.legal_bot_id}});
     }
@@ -109,7 +122,7 @@ async function open(browser, {viewport = {width: 1280, height: 860}, state = ser
     if (grant) {
       if (!admin) return refuse();
       const [address_id, grantee_type, grantee_id] = grant.slice(1).map(x => x && decodeURIComponent(x));
-      const same = g => g.address_id === address_id && g.grantee_type === grantee_type && g.grantee_id === grantee_id;
+      const same = (g: Json) => g.address_id === address_id && g.grantee_type === grantee_type && g.grantee_id === grantee_id;
       if (method === 'PUT') {
         const made = state.grants.find(same) || {id: `pmg_${state.grants.length + 1}`, address_id, grantee_type, grantee_id, level: 'read'};
         if (!state.grants.includes(made)) state.grants.push(made);
@@ -127,7 +140,7 @@ async function open(browser, {viewport = {width: 1280, height: 860}, state = ser
       if (method === 'PUT') {
         if (state.intakeFail) return json({error: {code: 'bad_request', detail: 'Not saved'}}, 422);
         const {inbox_id: id, senders} = body, box = state.inboxes.find(i => i.inbox_id === id);
-        state.intake = id ? {inbox_id: id, address: box.address, senders, set_by: 'human:ana', set_at: AGO(0)} : null;
+        state.intake = id ? {inbox_id: id, address: box!.address, senders, set_by: 'human:ana', set_at: AGO(0)} : null;
       }
       return json({intake: state.intake});
     }
@@ -135,7 +148,7 @@ async function open(browser, {viewport = {width: 1280, height: 860}, state = ser
     if (p === '/api/v2/postal/items') return json({items: state.items, next: null});
     const retry = p.match(/^\/api\/v2\/postal\/items\/([^/]+)\/retry$/);
     if (retry) {
-      Object.assign(state.items.find(m => m.id === retry[1]), {status: 'filed', kind: 'other', sender: 'Unknown', summary: 'Filed unread for the owner', task_id: 't-43'});
+      Object.assign(state.items.find(m => m.id === retry[1])!, {status: 'filed', kind: 'other', sender: 'Unknown', summary: 'Filed unread for the owner', task_id: 't-43'});
       return json({ok: true});
     }
     if (p.endsWith('/watch')) return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});
@@ -144,20 +157,20 @@ async function open(browser, {viewport = {width: 1280, height: 860}, state = ser
   await page.goto(`https://tico-ui.test/${hash}`);
   return {page, errors, state};
 }
-const noSideways = page => page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1);
-const rowText = async row => (await row.innerText()).replace(/\s+/g, ' ').trim();
-const go = (page, hash) => page.evaluate(h => { location.hash = h; }, hash);
-const until = async (ok, what) => {
+const noSideways = (page: import('playwright').Page) => page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1);
+const rowText = async (row: import('playwright').Locator) => (await row.innerText()).replace(/\s+/g, ' ').trim();
+const go = (page: import('playwright').Page, hash: string) => page.evaluate(h => { location.hash = h; }, hash);
+const until = async (ok: () => boolean, what: string) => {
   for (const end = Date.now() + 5000; !ok();) {
     if (Date.now() > end) throw new Error('timed out: ' + what);
     await new Promise(r => setTimeout(r, 20));
   }
 };
-const disabled = option => option.evaluate(o => o.disabled);   // the option itself: a label's disabled state follows its select
+const disabled = (option: import('playwright').Locator) => option.evaluate(o => (o as HTMLOptionElement).disabled);   // the option itself: a label's disabled state follows its select
 
 (async () => {
-  const browser = await chromium.launch({headless: true, channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined});
-  const shot = async (page, name) => {
+  const browser = await chromium.launch({headless: true, channel: (process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined) as string});
+  const shot = async (page: import('playwright').Page, name: string) => {
     if (!shots) return;
     for (const mode of ['dark', 'light']) {
       await page.evaluate(m => document.documentElement.setAttribute('data-theme', m), mode);
@@ -212,7 +225,7 @@ const disabled = option => option.evaluate(o => o.disabled);   // the option its
       const legal = pane.locator('[data-pm-legal]');
       await legal.waitFor();
       assert.equal(await disabled(legal.locator('option[value="synced"]')), true, 'a chat-only bot cannot take legal mail');
-      const legalSaved = () => page.waitForFunction(() => document.querySelector('[data-pm-legal]')?.disabled === false);
+      const legalSaved = () => page.waitForFunction(() => document.querySelector<HTMLSelectElement>('[data-pm-legal]')?.disabled === false);
       await legal.selectOption('tico-counsel');
       await legalSaved();
       assert.equal(state.legal_bot_id, 'tico-counsel', 'legal mail goes to Counsel by its stable id');
@@ -222,12 +235,12 @@ const disabled = option => option.evaluate(o => o.disabled);   // the option its
       assert.equal(await legal.inputValue(), 'tico-counsel', 'a refused change restores the saved bot');
       state.routingFail = false;
       // A read from before a save (the server still says Counsel) can't put Counsel back while the save is in flight.
-      let release; state.holdRouting = new Promise(r => { release = r; });
-      const reads = state.got['/api/v2/postal/settings'];
+      let release!: () => void; state.holdRouting = new Promise<void>(r => { release = r; });
+      const reads = state.got['/api/v2/postal/settings']!;
       await legal.selectOption('');
-      await page.evaluate(() => { window.pmRedraw = inboxesRender(); });
-      await until(() => state.got['/api/v2/postal/settings'] > reads, 'the redraw reads Legal mail');
-      await page.evaluate(() => window.pmRedraw);
+      await page.evaluate(() => { (window as unknown as PageWin).pmRedraw = inboxesRender(); });
+      await until(() => state.got['/api/v2/postal/settings']! > reads, 'the redraw reads Legal mail');
+      await page.evaluate(() => (window as unknown as PageWin).pmRedraw);
       assert.equal(await legal.inputValue(), '', 'the choice being saved stays');
       release(); state.holdRouting = null;
       await legalSaved();
@@ -242,7 +255,7 @@ const disabled = option => option.evaluate(o => o.disabled);   // the option its
       assert.equal(await all.locator('[data-pm-grantee]').inputValue(), 'person:ana', 'a redraw keeps the pick');
       await all.locator('[data-pm-grant-form] button').click();
       await all.locator('[data-pm-grant="person:ana"]', {hasText: 'Ana · Read'}).waitFor();
-      const given = state.sent.find(s => s.path === '/api/v2/postal/addresses/all/grants/person/ana');
+      const given = state.sent.find(s => s.path === '/api/v2/postal/addresses/all/grants/person/ana')!;
       assert.equal(given.method, 'PUT');
       assert.deepEqual(given.body, {level: 'read'});
       assert.ok(given.key, 'a grant carries an Idempotency-Key');
@@ -253,7 +266,7 @@ const disabled = option => option.evaluate(o => o.disabled);   // the option its
       await pane.locator('[data-pm-order]').click();
       const dialog = page.locator('.pm-dialog');
       await dialog.waitFor();
-      const kind = k => dialog.locator(`[data-pm-kind="${k}"]`);
+      const kind = (k: string) => dialog.locator(`[data-pm-kind="${k}"]`);
       assert.equal(await rowText(kind('shared')), 'Shared $12/mo Mailing address and registered agent', "Tico Gateway's price wins");
       assert.equal(await kind('private').locator('[data-pm-price]').innerText(), '$25/mo', 'a price sent as text reads the same');
       assert.equal(await dialog.locator('[data-pm-kind]').count(), 2, 'shared and private only');
@@ -266,8 +279,8 @@ const disabled = option => option.evaluate(o => o.disabled);   // the option its
       await page.locator('#inboxes-letters-in [data-pm-pending="mo_3"]').waitFor();
       const orders = state.sent.filter(s => s.path === '/api/v2/postal/orders');
       assert.equal(orders.length, 1, 'one order');
-      assert.deepEqual(orders[0].body, {kind: 'private', state: 'CA', company_name: 'Acme Inc'});
-      assert.ok(orders[0].key, 'the order carries an Idempotency-Key');
+      assert.deepEqual(orders[0]!.body, {kind: 'private', state: 'CA', company_name: 'Acme Inc'});
+      assert.ok(orders[0]!.key, 'the order carries an Idempotency-Key');
       assert.equal(await rowText(page.locator('#inboxes-letters-in [data-pm-pending="mo_3"]')), 'California Private — Pending');
       await page.locator('.pm-dialog').waitFor({state: 'detached'});   // the dialog closes
       // An address's page: its letters, newest first; the failed one has Retry, a filed one links its task and PDF.

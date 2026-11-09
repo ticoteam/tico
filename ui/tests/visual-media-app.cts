@@ -2,14 +2,18 @@
 // from the sign-in-free visual address only and paused; a person's clip too; video and audio count toward the cap of
 // 4; a clip playing in the chat keeps playing, in place, when a live update redraws the thread with freshly signed
 // addresses, and takes the new address for later. Every request is intercepted; the clips are WAV files made here.
-const {chromium} = require('playwright');
-const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const {html, uiFile} = require('./support/page.cjs');
-const {unrouted} = require('./support/routes.cjs');
-const {threadsFake} = require('./support/threads-fake.cjs');
+import type * as PageSupport from './support/page.cjs';
+import type * as Routes from './support/routes.cjs';
+import type * as ThreadsFake from './support/threads-fake.cjs';
+const {chromium}: typeof import('playwright') = require('playwright');
+const assert: typeof import('node:assert/strict') = require('node:assert/strict');
+const fs: typeof import('node:fs') = require('node:fs');
+const {html, uiFile} = require('./support/page.cjs') as typeof PageSupport;
+const {unrouted} = require('./support/routes.cjs') as typeof Routes;
+const {threadsFake} = require('./support/threads-fake.cjs') as typeof ThreadsFake;
+interface PageWin { __mb: Element['moveBefore'] }
 
-function wav(seconds) {
+function wav(seconds: number): Buffer {
   const rate = 8000, n = rate * seconds, data = Buffer.alloc(n * 2);
   for (let i = 0; i < n; i++) data.writeInt16LE(Math.round(800 * Math.sin(i / 8)), i * 2);
   const h = Buffer.alloc(44);
@@ -21,21 +25,24 @@ function wav(seconds) {
 const CLIP = wav(60);
 const PNG = Buffer.from('89504e470d0a1a0a0000000d4948445200000001000000010806000000' + '1f15c4890000000d49444154789c6360000002000154a24f5d0000000049454e44ae426082', 'hex');
 const VIS = 'https://visuals.test/visuals/';
-const TYPE = {image: 'image/png', video: 'video/mp4', audio: 'audio/wav'};
-const A = (id, kind, over = {}) => ({id, file_id: id, version: 1, ref: id + '@1', title: 'Title ' + id, kind, name: id + {image: '.png', video: '.mp4', audio: '.wav'}[kind],
+type Kind = 'image' | 'video' | 'audio';
+const TYPE: Record<Kind, string> = {image: 'image/png', video: 'video/mp4', audio: 'audio/wav'};
+type Att = {id: string; kind: Kind; src: string; [key: string]: unknown};
+type Msg = {id: string; sender_id: string; body: string; created_at: string; refs: {attachments: Att[]}};
+const A = (id: string, kind: Kind, over: Record<string, unknown> = {}): Att => ({id, file_id: id, version: 1, ref: id + '@1', title: 'Title ' + id, kind, name: id + {image: '.png', video: '.mp4', audio: '.wav'}[kind],
   size: CLIP.length, content_type: TYPE[kind], url: `/api/v2/files/${id}?v=1`, removed: false, current_version: 1, src: VIS + 'tok-' + id, ...over});
 
 (async () => {
-  const browser = await chromium.launch({channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined,
+  const browser = await chromium.launch({channel: (process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined) as string,
     headless: true, args: ['--autoplay-policy=no-user-gesture-required']});
   const now = new Date().toISOString();
   try {
     const context = await browser.newContext({viewport: {width: 390, height: 844}, hasTouch: true, isMobile: true, serviceWorkers: 'block'});
     await context.addCookies([{name: 'tico_session', value: 'secret', domain: 'tico-ui.test', path: '/', secure: true, httpOnly: true}]);
     const page = await context.newPage();
-    const errors = [], visualReqs = [], fileReqs = [], held = [];
+    const errors: string[] = [], visualReqs: {path: string; cookie: string; range: string}[] = [], fileReqs: string[] = [], held: import('playwright').Route[] = [];
     page.on('pageerror', e => errors.push(e.message));
-    const messages = [
+    const messages: Msg[] = [
       {id: 'm1', sender_id: 'bot:editor', body: 'The cut and the voice note.', created_at: now, refs: {attachments: [
         A('f-cut', 'video', {width: 1280, height: 720, poster_url: VIS + 'tok-f-cut-poster'}), A('f-voice', 'audio')]}},
       {id: 'm2', sender_id: 'human:ana', body: 'My recording', created_at: now, refs: {attachments: [A('f-mine', 'audio', {title: 'Ana recording'})]}},
@@ -47,7 +54,7 @@ const A = (id, kind, over = {}) => ({id, file_id: id, version: 1, ref: id + '@1'
     const threads = threadsFake({bot: 'editor', messages: () => signed()});
     await context.route('**/*', async route => {
       const req = route.request(), url = new URL(req.url()), p = url.pathname;
-      const json = body => route.fulfill({contentType: 'application/json', body: JSON.stringify(body)});
+      const json = (body: unknown) => route.fulfill({contentType: 'application/json', body: JSON.stringify(body)});
       if (url.hostname === 'visuals.test') {
         visualReqs.push({path: p, cookie: req.headers().cookie || '', range: req.headers().range || ''});
         const headers = {'Cross-Origin-Resource-Policy': 'cross-origin', 'Accept-Ranges': 'bytes'};
@@ -59,7 +66,7 @@ const A = (id, kind, over = {}) => ({id, file_id: id, version: 1, ref: id + '@1'
       }
       if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
       const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/);
-      if (ui && fs.existsSync(uiFile(ui[1]))) return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]), 'utf8')});
+      if (ui && fs.existsSync(uiFile(ui[1]!))) return route.fulfill({contentType: ui[1]!.endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]!), 'utf8')});
       if (p.startsWith('/api/v2/files/')) fileReqs.push(p + url.search);
       if (p === '/api/me') return json({id: 'ana', name: 'Ana', role: 'owner', cloud: true});
       if (p === '/api/employees') return json([{name: 'editor', display_name: 'Editor', host: 'keeper', status: 'active', can_chat: true, schedules: []}]);
@@ -89,45 +96,46 @@ const A = (id, kind, over = {}) => ({id, file_id: id, version: 1, ref: id + '@1'
     assert.deepEqual(await m1.locator('.vcard-title').allTextContents(), ['Title f-cut', 'Title f-voice']);
     assert.equal(await page.locator('[data-message="m2"] figure.vcard[data-kind="audio"] .vcard-title').textContent(), 'Ana recording', 'a person\'s clip is a card too');
     await page.waitForTimeout(300);
-    assert.ok(await page.evaluate(() => [...document.querySelectorAll('figure.vcard video, figure.vcard audio')].every(m => m.paused && !m.autoplay)), 'nothing plays by itself');
+    assert.ok(await page.evaluate(() => [...document.querySelectorAll<HTMLMediaElement>('figure.vcard video, figure.vcard audio')].every(m => m.paused && !m.autoplay)), 'nothing plays by itself');
     // the cap of 4 counts video and audio with pictures: the fifth is a chip
     const m3 = page.locator('[data-message="m3"]');
-    assert.deepEqual(await m3.locator('figure.vcard').evaluateAll(els => els.map(e => e.dataset.kind)), ['image', 'audio', 'image', 'video']);
+    assert.deepEqual(await m3.locator('figure.vcard').evaluateAll(els => els.map(e => (e as HTMLElement).dataset.kind)), ['image', 'audio', 'image', 'video']);
     assert.equal(await m3.locator('.chat-files > *').count(), 1, 'the fifth visual is a file chip');
-    const r = await page.evaluate(() => [document.documentElement.scrollWidth, innerWidth]);
+    const r = await page.evaluate((): [number, number] => [document.documentElement.scrollWidth, innerWidth]);
     assert.ok(r[0] <= r[1], `no sideways scroll at phone width ${r}`);
 
     // ---- a live update redraws the thread with newly signed addresses: the playing clip keeps playing, in place, where
     // it was. Both ways the frame redraws: moving the card in place (moveBefore), and where a browser has no
     // moveBefore (Safari, the desktop app's webviews), taking it out and putting it back.
-    await voice.evaluate(m => m.play());
-    await voice.evaluate(m => { m.dataset.mark = 'kept'; });
+    await voice.evaluate(m => (m as HTMLMediaElement).play());
+    await voice.evaluate(m => { (m as HTMLElement).dataset.mark = 'kept'; });
     assert.equal(await page.evaluate(() => typeof Element.prototype.moveBefore), 'function', 'this browser moves nodes in place');
     let answered = 0;
-    for (const [way, at, id] of [['moveBefore', 20, 'm4'], ['no moveBefore', 35, 'm5']]) {
-      await voice.evaluate((m, at) => new Promise(r => { m.addEventListener('seeked', r, {once: true}); m.currentTime = at; }), at);
+    const rounds: [string, number, string][] = [['moveBefore', 20, 'm4'], ['no moveBefore', 35, 'm5']];
+    for (const [way, at, id] of rounds) {
+      await voice.evaluate((m, at) => new Promise(r => { (m as HTMLMediaElement).addEventListener('seeked', r, {once: true}); (m as HTMLMediaElement).currentTime = at; }), at);
       for (let i = 0; held.length <= answered && i < 100; i++) await page.waitForTimeout(50);
       assert.ok(held.length > answered, 'the page follows the live event stream (and reconnects after each event)');
-      const stream = held.at(-1);
+      const stream = held.at(-1)!;
       answered = held.length;
-      if (way === 'no moveBefore') await page.evaluate(() => { window.__mb = Element.prototype.moveBefore; delete Element.prototype.moveBefore; });
+      if (way === 'no moveBefore') await page.evaluate(() => { (window as unknown as PageWin).__mb = Element.prototype.moveBefore; delete Element.prototype.moveBefore; });
       gen += 1;
       messages.push({id, sender_id: 'bot:editor', body: 'One more.', created_at: now, refs: {attachments: [A('f-more-' + id, 'audio')]}});
       const seq = 8 + gen;
       await stream.fulfill({contentType: 'text/event-stream', body: `id: ${seq}\nevent: messages\ndata: ${JSON.stringify({seq, thread_id: 't-dm-editor'})}\n\n`});
       await page.locator(`[data-message="${id}"] figure.vcard audio`).waitFor();
-      const kept = await page.evaluate(() => { const m = document.querySelector('[data-message="m1"] figure.vcard[data-kind="audio"] audio');
-        return [m.dataset.mark, m.currentTime, m.paused]; });
-      if (way === 'no moveBefore') await page.evaluate(() => { Element.prototype.moveBefore = window.__mb; });
+      const kept = await page.evaluate((): [string | undefined, number, boolean] => { const m = document.querySelector<HTMLMediaElement>('[data-message="m1"] figure.vcard[data-kind="audio"] audio');
+        return [m!.dataset.mark, m!.currentTime, m!.paused]; });
+      if (way === 'no moveBefore') await page.evaluate(() => { Element.prototype.moveBefore = (window as unknown as PageWin).__mb!; });
       assert.equal(kept[0], 'kept', `${way}: the playing audio element survived the redraw`);
       assert.ok(kept[1] >= at && !kept[2], `${way}: right after the live redraw it is at ${kept[1]}s (not before ${at}s) and playing`);
       assert.equal(await m1.locator('figure.vcard[data-kind="audio"]').getAttribute('data-fresh-src'), `${VIS}tok-f-voice.${gen}`, 'it holds the new address for later');
-      await page.waitForFunction(t => { const m = document.querySelector('audio[data-mark="kept"]'); return m && !m.paused && m.currentTime > t; }, kept[1]);
+      await page.waitForFunction(t => { const m = document.querySelector<HTMLMediaElement>('audio[data-mark="kept"]'); return m && !m.paused && m.currentTime > t; }, kept[1]);
     }
     // starting the new clip pauses it
-    await page.locator('[data-message="m5"] figure.vcard audio').evaluate(m => m.play());
-    await page.waitForFunction(() => document.querySelector('audio[data-mark="kept"]').paused);
-    await page.locator('[data-message="m5"] figure.vcard audio').evaluate(m => m.pause());
+    await page.locator('[data-message="m5"] figure.vcard audio').evaluate(m => (m as HTMLMediaElement).play());
+    await page.waitForFunction(() => document.querySelector<HTMLMediaElement>('audio[data-mark="kept"]')!.paused);
+    await page.locator('[data-message="m5"] figure.vcard audio').evaluate(m => (m as HTMLMediaElement).pause());
 
     // ---- task comments: the same player
     await page.goto('https://tico-ui.test/#/tasks?view=board');

@@ -1,64 +1,70 @@
 // Files kept for the visit (fileKeep, ui/app/viewer.ts) stay within a 64 MB budget per cache, but the file just
 // loaded is never the one let go: a picture over the budget on its own opened blank, in the viewer and as a chat
 // picture. Older files nothing shows still go. Fixtures only.
-const {chromium, webkit} = require('playwright');
-const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const zlib = require('node:zlib');
-const {html, uiFile} = require('./support/page.cjs');
-const {unrouted} = require('./support/routes.cjs');
-const {threadsFake} = require('./support/threads-fake.cjs');
+import type * as PageSupport from './support/page.cjs';
+import type * as Routes from './support/routes.cjs';
+import type * as ThreadsFake from './support/threads-fake.cjs';
+const {chromium, webkit}: typeof import('playwright') = require('playwright');
+const assert: typeof import('node:assert/strict') = require('node:assert/strict');
+const fs: typeof import('node:fs') = require('node:fs');
+const zlib: typeof import('node:zlib') = require('node:zlib');
+const {html, uiFile} = require('./support/page.cjs') as typeof PageSupport;
+const {unrouted} = require('./support/routes.cjs') as typeof Routes;
+const {threadsFake} = require('./support/threads-fake.cjs') as typeof ThreadsFake;
+declare const VIEW_FILES: Map<string, unknown>;
+declare function viewFile(id: string, name: string): Promise<{url: string}>;
+declare function chatImageURL(file: {id: string; name: string; content_type: string}): string;
 // A 1x1 PNG carrying a private ancillary chunk (decoders skip it) that takes it past the 64 MB budget.
-const chunk = (type, data) => {
+const chunk = (type: string, data: Buffer): Buffer => {
   const head = Buffer.alloc(8); head.writeUInt32BE(data.length); head.write(type, 4, 'latin1');
   const crc = Buffer.alloc(4); crc.writeUInt32BE(zlib.crc32(Buffer.concat([head.subarray(4), data])));
   return Buffer.concat([head, data, crc]);
 };
 const tiny = Buffer.from('89504e470d0a1a0a0000000d4948445200000001000000010806000000'+'1f15c4890000000d49444154789c6360000002000154a24f5d0000000049454e44ae426082','hex');
 const BIG = Buffer.concat([tiny.subarray(0, tiny.length - 12), chunk('tiCo', Buffer.alloc(65e6)), tiny.subarray(tiny.length - 12)]);
-const files = {
+const files: Record<string, [string, Buffer]> = {
   'file-big-0001': ['poster.png', BIG],
   'file-pdf-0001': ['lease.pdf', Buffer.from('%PDF-1.4 fixture')],
   'file-png-0002': ['chart.png', tiny],
 };
 (async () => {
-  const browser = process.env.TICO_BROWSER === 'webkit' ? await webkit.launch({headless:true}) : await chromium.launch({channel:process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined,headless:true});
+  const browser = process.env.TICO_BROWSER === 'webkit' ? await webkit.launch({headless:true}) : await chromium.launch({channel:(process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined) as string,headless:true});
   try {
     const page = await browser.newPage({viewport:{width:1200,height:800},serviceWorkers:'block'});
-    const errors = [];
+    const errors: string[] = [];
     page.on('pageerror', e => errors.push(e.message));
     const threads = threadsFake({bot: 'legal', messages: [{id: 'm-legal', sender_id: 'bot:legal',
       body: 'The [poster](https://tico-ui.test/api/v2/files/file-big-0001) and the [lease](https://tico-ui.test/api/v2/files/file-pdf-0001).'}]});
     await page.context().route('**/*', route => {
       const url = new URL(route.request().url()), p = url.pathname;
-      const json = body => route.fulfill({contentType:'application/json',body:JSON.stringify(body)});
+      const json = (body: unknown) => route.fulfill({contentType:'application/json',body:JSON.stringify(body)});
       if (p === '/') return route.fulfill({contentType:'text/html',body:html});
       if (/\/marked\.min\.js$/.test(p)) return route.fulfill({contentType:'application/javascript',body:fs.readFileSync(uiFile('vendor/marked.min.js'),'utf8')});
       const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/);
       if (ui) {
-        const file = uiFile(ui[1]);
-        if (fs.existsSync(file)) return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript',body:fs.readFileSync(file,'utf8')});
+        const file = uiFile(ui[1]!);
+        if (fs.existsSync(file)) return route.fulfill({contentType: ui[1]!.endsWith('.css') ? 'text/css' : 'application/javascript',body:fs.readFileSync(file,'utf8')});
       }
       if (p === '/api/me') return json({id:'ana',name:'Ana',role:'owner',cloud:true});
       if (p === '/api/employees') return json([{name:'legal',display_name:'Legal',host:'keeper',status:'active',can_chat:true,schedules:[]}]);
       if (p.endsWith('/watch')) return route.fulfill({contentType:'text/event-stream',body:': fixture\n\n'});
-      const file = p.match(/^\/api\/v2\/files\/([^/]+)(\/meta)?$/), known = file && files[file[1]];
-      if (known && file[2]) return json({id:file[1],name:known[0],size:known[1].length,content_type:'application/octet-stream'});
+      const file = p.match(/^\/api\/v2\/files\/([^/]+)(\/meta)?$/), known = file && files[file[1]!];
+      if (known && file![2]) return json({id:file![1],name:known[0],size:known[1].length,content_type:'application/octet-stream'});
       if (known) return route.fulfill({contentType:'application/octet-stream',headers:{'content-disposition':`attachment; filename*=UTF-8''${known[0]}`},body:known[1]});
       const answer = threads(p, url, route.request().method());
       if (answer !== undefined) return json(answer);
       return json(unrouted(p));
     });
     // In the page: whether a blob: URL still reads, and the width a picture at that URL decodes to (0 when it can't).
-    const reads = url => page.evaluate(u => fetch(u).then(r => r.ok, () => false), url);
-    const width = url => page.evaluate(u => { const i = new Image(); i.src = u; return i.decode().then(() => i.naturalWidth, () => 0); }, url);
+    const reads = (url: string | null) => page.evaluate((u: string | null) => fetch(u!).then(r => r.ok, () => false), url);
+    const width = (url: string | null) => page.evaluate((u: string | null) => { const i = new Image(); i.src = u!; return i.decode().then(() => i.naturalWidth, () => 0); }, url);
     const viewerImg = page.locator('#doc-viewer[open] .viewer-img');
     await page.goto('https://tico-ui.test/#/bot/legal/dm');
     // The poster on its own is over the budget (too big for a thumbnail), and opens in the viewer.
     await page.getByRole('link',{name:'poster'}).click();
     await viewerImg.waitFor();
     assert.equal(await page.locator('#doc-viewer h2').innerText(), 'poster.png');
-    assert.equal(await viewerImg.evaluate(i => i.decode().then(() => i.naturalWidth, () => 0)), 1, 'the viewer shows a picture over the budget');
+    assert.equal(await viewerImg.evaluate(i => (i as HTMLImageElement).decode().then(() => (i as HTMLImageElement).naturalWidth, () => 0)), 1, 'the viewer shows a picture over the budget');
     const poster = await viewerImg.getAttribute('src');
     assert.equal(await reads(poster), true, 'its URL reads');
     // The next file, the lease, lets the poster go once nothing shows it: the budget still holds for older files.
@@ -73,7 +79,7 @@ const files = {
     // still shows; the lease, shown nowhere now, goes instead.
     await page.keyboard.press('ArrowLeft');
     await viewerImg.waitFor();
-    assert.equal(await viewerImg.evaluate(i => i.decode().then(() => i.naturalWidth, () => 0)), 1, 'the poster again');
+    assert.equal(await viewerImg.evaluate(i => (i as HTMLImageElement).decode().then(() => (i as HTMLImageElement).naturalWidth, () => 0)), 1, 'the poster again');
     const shown = await viewerImg.getAttribute('src');
     const chart = await page.evaluate(() => viewFile('file-png-0002', 'chart.png').then(f => f.url));
     assert.equal(await width(chart), 1, 'the file just loaded shows');

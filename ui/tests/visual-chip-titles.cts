@@ -1,27 +1,32 @@
+import type {ThreadsMessage} from './support/threads-fake.cjs';
 // Visuals with inline serving off (hosted, no visual origin: every attachment's `src` is null) fall back to the usual
 // file chips and thumbnails in chat and task comments. Those show the title the sender gave the file, not its file
 // name (Dev 245 QA); the name stays in data-name for the viewer and the download. Fixtures only.
-const {chromium, webkit} = require('playwright');
-const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const {html, uiFile} = require('./support/page.cjs');
-const {unrouted} = require('./support/routes.cjs');
-const {threadsFake} = require('./support/threads-fake.cjs');
+const {chromium, webkit}: typeof import('playwright') = require('playwright');
+const assert: typeof import('node:assert/strict') = require('node:assert/strict');
+const fs: typeof import('node:fs') = require('node:fs');
+const {html, uiFile} = require('./support/page.cjs') as typeof import('./support/page.cjs');
+const {unrouted} = require('./support/routes.cjs') as typeof import('./support/routes.cjs');
+const {threadsFake} = require('./support/threads-fake.cjs') as typeof import('./support/threads-fake.cjs');
+
+declare const TASKS_ST: {tasks: {id: string}[]; loading?: boolean};
+declare function taskModalShow(task: {id: string} | undefined): void;
+declare function $(selector: string): {tfOpen?: {id: string; n: number}};
 
 const PNG = Buffer.from('89504e470d0a1a0a0000000d4948445200000001000000010806000000' + '1f15c4890000000d49444154789c6360000002000154a24f5d0000000049454e44ae426082', 'hex');
-const A = (id, name, content_type, kind, title) => ({id, file_id: id, version: 1, ref: id + '@1', title, kind, name, size: 1000, content_type,
+const A = (id: string, name: string, content_type: string, kind: string, title: string) => ({id, file_id: id, version: 1, ref: id + '@1', title, kind, name, size: 1000, content_type,
   url: `/api/v2/files/${id}?v=1`, removed: false, current_version: 1, src: null});
 
 (async () => {
   const browser = process.env.TICO_BROWSER === 'webkit' ? await webkit.launch({headless: true})
-    : await chromium.launch({channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined, headless: true});
+    : await chromium.launch({channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined, headless: true} as import('playwright').LaunchOptions);
   const now = new Date().toISOString();
   const messages = [{id: 'm1', sender_id: 'bot:designer', body: 'This week.', created_at: now, refs: {attachments: [
     A('f-chart', 'chart.png', 'image/png', 'image', 'Weekly signups'), A('f-page', 'local.html', 'text/html', 'page', 'Embedded pair'),
     A('f-csv', 'data.csv', 'text/csv', 'file', 'data.csv')]}}];
   const task = {id: 't1', title: 'Metrics', owner_id: 'bot:designer', requester_id: 'human:ana', status: 'review', lane: 'company', rank: 1, labels: [], links: [],
     parts: {total: 0, done: 0}, version: 1, created_at: now, updated_at: now, body: 'Metrics.', attachments: []};
-  const tver = (id, mime) => ({n: 1, size: 1000, mime, sha256: 'x', created_at: now, by: 'bot:designer', comment_id: 'c1', note: null, ask: null, answers: [],
+  const tver = (id: string, mime: string) => ({n: 1, size: 1000, mime, sha256: 'x', created_at: now, by: 'bot:designer', comment_id: 'c1', note: null, ask: null, answers: [],
     width: null, height: null, duration_ms: null, media_state: 'none', url: `/api/v2/files/${id}?v=1`, poster_url: null, thumb_url: null});
   const taskFiles = [{id: 'f-metrics', name: 'metrics.png', mime: 'image/png', current_version: 1, archived: false, versions: [tver('f-metrics', 'image/png')]},
     {id: 'f-remote', name: 'remote.html', mime: 'text/html', current_version: 1, archived: false, versions: [tver('f-remote', 'text/html')]},
@@ -36,15 +41,15 @@ const A = (id, name, content_type, kind, title) => ({id, file_id: id, version: 1
   const context = await browser.newContext({viewport: {width: 1200, height: 900}, serviceWorkers: 'block'});
   await context.addCookies([{name: 'tico_session', value: 'secret', domain: 'tico-ui.test', path: '/', secure: true, httpOnly: true}]);
   const page = await context.newPage();
-  const errors = [];
-  page.on('pageerror', e => errors.push(e.message));
-  const threads = threadsFake({bot: 'designer', messages: () => messages});
+  const errors: string[] = [];
+  page.on('pageerror', (e: Error) => errors.push(e.message));
+  const threads = threadsFake({bot: 'designer', messages: () => messages as unknown as ThreadsMessage[]});
   await context.route('**/*', async route => {
     const req = route.request(), url = new URL(req.url()), p = url.pathname;
-    const json = body => route.fulfill({contentType: 'application/json', body: JSON.stringify(body)});
+    const json = (body: unknown) => route.fulfill({contentType: 'application/json', body: JSON.stringify(body)});
     if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
     const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/);
-    if (ui && fs.existsSync(uiFile(ui[1]))) return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]), 'utf8')});
+    if (ui && fs.existsSync(uiFile(ui[1]!))) return route.fulfill({contentType: ui[1]!.endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]!), 'utf8')});
     if (p.startsWith('/api/v2/files/')) return route.fulfill({contentType: 'image/png', body: PNG});
     if (p === '/api/me') return json({id: 'ana', name: 'Ana', role: 'owner', cloud: true});
     if (p === '/api/employees') return json([{name: 'designer', display_name: 'Designer', host: 'keeper', status: 'active', can_chat: true, schedules: []}]);
@@ -65,12 +70,12 @@ const A = (id, name, content_type, kind, title) => ({id, file_id: id, version: 1
   await m1.locator('.chat-files .chat-thumb.ready').waitFor();
   assert.equal(await m1.locator('figure.vcard').count(), 0, 'no visual address: no cards');
   const thumb = m1.locator('.chat-thumb');
-  assert.deepEqual(await thumb.evaluate(b => [b.getAttribute('aria-label'), b.title, b.querySelector('img').alt, b.dataset.name]),
+  assert.deepEqual(await thumb.evaluate(b => [b.getAttribute('aria-label'), (b as HTMLElement).title, (b as HTMLElement).querySelector('img')!.alt, b.dataset.name]),
     ['View Weekly signups', 'Weekly signups', 'Weekly signups', 'chart.png'], 'the thumbnail is named by its title; the file keeps its name');
   assert.equal(await m1.locator('.chat-file-title').innerText(), 'Weekly signups', 'the title shows under the thumbnail');
   const pills = m1.locator('.chat-files a.pill');
   assert.deepEqual(await pills.allInnerTexts(), ['Embedded pair', 'data.csv'], 'a chip shows the title, or the name when there is none');
-  assert.deepEqual(await pills.evaluateAll(as => as.map(a => [a.dataset.name, a.title])), [['local.html', 'local.html'], ['data.csv', '']]);
+  assert.deepEqual(await pills.evaluateAll(as => as.map(a => [a.dataset.name, (a as HTMLElement).title])), [['local.html', 'local.html'], ['data.csv', '']]);
   assert.equal(await m1.locator('.chat-files > *').count(), 3, 'one chip or thumbnail per file');
 
   // ---- task comments: the same, at that version
@@ -80,7 +85,7 @@ const A = (id, name, content_type, kind, title) => ({id, file_id: id, version: 1
   const c1 = page.locator('#task-modal .tcomment', {hasText: 'Metrics attached.'});
   await c1.locator('.tc-thumb[data-tf-jump="f-metrics"]').waitFor();
   assert.equal(await c1.locator('figure.vcard').count(), 0, 'no visual address: no cards');
-  assert.deepEqual(await c1.locator('.tc-thumb').evaluateAll(bs => bs.map(b => [b.getAttribute('aria-label'), b.title])),
+  assert.deepEqual(await c1.locator('.tc-thumb').evaluateAll(bs => bs.map(b => [b.getAttribute('aria-label'), (b as HTMLElement).title])),
     [['Open Private metrics (metrics.png v1)', 'Private metrics (metrics.png v1)'], ['Open untitled.png v1', 'untitled.png v1']],
     'a titled thumb is named by its title; an untitled one (title = its name) as before');
   assert.deepEqual(await c1.locator('.tc-file-title').allInnerTexts(), ['Private metrics'], 'only the titled thumb has a caption');

@@ -2,36 +2,46 @@
 //  - each stream connect names the Needs you version; a reconnect that carried `threads` over naming the version the
 //    threads list was read at reads nothing again; a version that moved reads it, also when another read already took
 //    the new version; a connect that did not carry `threads` (the first, or the one adding it) reads it.
-const {chromium} = require('playwright');
-const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const {html, uiFile} = require('./support/page.cjs');
-const {unrouted} = require('./support/routes.cjs');
-const {threadsFake} = require('./support/threads-fake.cjs');
-const {t} = (() => { try { return require('./support/load.cjs'); } catch { return {t: ms => ms}; } })();
+const {chromium}: typeof import('playwright') = require('playwright');
+const assert: typeof import('node:assert/strict') = require('node:assert/strict');
+const fs: typeof import('node:fs') = require('node:fs');
+const {html, uiFile} = require('./support/page.cjs') as typeof import('./support/page.cjs');
+const {unrouted} = require('./support/routes.cjs') as typeof import('./support/routes.cjs');
+const {threadsFake} = require('./support/threads-fake.cjs') as typeof import('./support/threads-fake.cjs');
+const {t}: {t: (ms: number) => number} = (() => { try { return require('./support/load.cjs') as {t: (ms: number) => number}; } catch { return {t: (ms: number) => ms}; } })();
+
+declare const S: {v2: {needsVersion: string | null}};
+declare const THREADS: {needsSeen: string | null; on: unknown; loading: boolean; gen: number; readAt: number};
+declare const LIVE: {readyTopics?: string[]};
+declare function liveConnected(): boolean;
+declare function liveEmit(type: string, data: unknown): void;
+declare function threadsLoad(): void;
 
 (async () => {
   const browser = await chromium.launch();
   const page = await browser.newPage({viewport: {width: 1300, height: 820}, serviceWorkers: 'block'});
-  const errors = [];
+  const errors: string[] = [];
   page.on('pageerror', e => errors.push(e.message));
   await page.addInitScript(() => {
-    window.EventSource = class {
-      constructor(url) { this.url = url; this.on = {}; setTimeout(() => this.emit('ready', {seq: 10, needs_version: 'v1'}), 0); }
-      addEventListener(type, fn) { (this.on[type] ||= []).push(fn); }
+    (window as unknown as {EventSource: unknown}).EventSource = class {
+      declare url: string;
+      declare on: Record<string, ((ev: MessageEvent) => void)[]>;
+      declare closed: boolean;
+      constructor(url: string) { this.url = url; this.on = {}; setTimeout(() => this.emit('ready', {seq: 10, needs_version: 'v1'}), 0); }
+      addEventListener(type: string, fn: (ev: MessageEvent) => void) { (this.on[type] ||= []).push(fn); }
       close() { this.closed = true; }
-      emit(type, data) { for (const fn of this.on[type] || []) fn(new MessageEvent(type, {data: JSON.stringify(data)})); }
+      emit(type: string, data: unknown) { for (const fn of this.on[type] || []) fn(new MessageEvent(type, {data: JSON.stringify(data)})); }
     };
   });
-  const reads = {needs: 0, threads: 0};
+  const reads: {needs: number; threads: number; version?: string; failThreads?: boolean; hold?: Promise<void> | null} = {needs: 0, threads: 0};
   const threads = threadsFake({bot: 'ops'});
-  await page.route('**/*', async route => {
+  await page.route('**/*', async (route: import('playwright').Route) => {
     const url = new URL(route.request().url()), p = url.pathname, method = route.request().method();
-    const json = body => route.fulfill({contentType: 'application/json', body: JSON.stringify(body)});
+    const json = (body: unknown) => route.fulfill({contentType: 'application/json', body: JSON.stringify(body)});
     if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
     const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/);
-    if (ui && fs.existsSync(uiFile(ui[1])))
-      return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]), 'utf8')});
+    if (ui && fs.existsSync(uiFile(ui[1]!)))
+      return route.fulfill({contentType: ui[1]!.endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]!), 'utf8')});
     if (/\.(?:js|ts)$/.test(p)) return route.fulfill({contentType: 'application/javascript', body: ''});
     if (p === '/api/me') return json({id: 'ana', name: 'Ana', role: 'owner', cloud: true, registered: true});
     if (p === '/api/employees') return json([{name: 'ops', display_name: 'Ops', host: 'keeper', status: 'active', state: 'active', can_chat: true, schedules: []}]);
@@ -115,8 +125,8 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
   assert.ok(await page.evaluate(() => { const g = THREADS.gen; liveEmit('threads', {kind: 'ranked'}); return THREADS.gen > g; }), 'a thread event counts as a change');
   await page.waitForTimeout(t(3500));
   await page.waitForFunction(() => !THREADS.loading, null, {timeout: t(5000)});
-  let release;
-  reads.hold = new Promise(r => { release = r; });
+  let release!: (value?: void) => void;
+  reads.hold = new Promise<void>(r => { release = r; });
   before = {...reads};
   await page.evaluate(() => { void threadsLoad(); });
   for (const end = Date.now() + t(5000); reads.threads === before.threads && Date.now() < end;) await page.waitForTimeout(20);

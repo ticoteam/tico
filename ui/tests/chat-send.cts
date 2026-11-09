@@ -2,27 +2,32 @@
 // refuses, or answers without a message (a sign-in page), says so and keeps the draft; Return during a send that is
 // still out sends after it; text that arrived without an input event (autofill, a tool filling the box) still sends on
 // a click and shows in the thread. A bot's DM composer is in threads.cjs.
-const {chromium} = require('playwright');
-const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const {html, uiFile} = require('./support/page.cjs');
-const {unrouted} = require('./support/routes.cjs');
-const {assistantView} = require('./support/assistant-chat.cjs');
-const launch = () => chromium.launch({headless: true, channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined});
+import type * as PageSupport from './support/page.cjs';
+import type * as Routes from './support/routes.cjs';
+import type * as AssistantChat from './support/assistant-chat.cjs';
+const {chromium}: typeof import('playwright') = require('playwright');
+const assert: typeof import('node:assert/strict') = require('node:assert/strict');
+const fs: typeof import('node:fs') = require('node:fs');
+const {html, uiFile} = require('./support/page.cjs') as typeof PageSupport;
+const {unrouted} = require('./support/routes.cjs') as typeof Routes;
+const {assistantView} = require('./support/assistant-chat.cjs') as typeof AssistantChat;
+interface ThreadMessage {id: string; sender_id: string; body: string; created_at: string}
+declare const V2C: {loaded?: boolean} | null;
+const launch = () => chromium.launch({headless: true, channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined} as import('playwright').LaunchOptions);
 
 (async () => {
   const browser = await launch();
   try {
     const page = await browser.newPage({viewport: {width: 1200, height: 800}, serviceWorkers: 'block'});
-    const errors = [], sends = [], thread = [];
+    const errors: string[] = [], sends: string[] = [], thread: ThreadMessage[] = [];
     page.on('pageerror', e => errors.push(e.message));
     let answer = 'ok';
     await page.route('**/*', async route => {
       const url = new URL(route.request().url()), p = url.pathname;
-      const json = (body, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
+      const json = (body: unknown, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
       const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/);
-      if (ui && fs.existsSync(uiFile(ui[1])))
-        return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]), 'utf8')});
+      if (ui && fs.existsSync(uiFile(ui[1] as string)))
+        return route.fulfill({contentType: (ui[1] as string).endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1] as string), 'utf8')});
       if (/\.(?:js|ts)$/.test(p)) return route.fulfill({contentType: 'application/javascript', body: ''});
       if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
       if (p === '/api/me') return json({id: 'ana', name: 'Ana', role: 'owner', cloud: true});
@@ -37,7 +42,7 @@ const launch = () => chromium.launch({headless: true, channel: process.env.TICO_
         if (answer === 'html') return route.fulfill({contentType: 'text/html', body: '<!doctype html><title>Sign in</title>'});
         if (answer === 'slow') await new Promise(r => setTimeout(r, 700));
         sends.push(text);
-        const message = {id: 'm' + sends.length, sender_id: 'human:ana', body: text, created_at: new Date().toISOString()};
+        const message: ThreadMessage = {id: 'm' + sends.length, sender_id: 'human:ana', body: text, created_at: new Date().toISOString()};
         thread.push(message);
         return json({message});
       }
@@ -67,9 +72,9 @@ const launch = () => chromium.launch({headless: true, channel: process.env.TICO_
 
     // Text put in the box without an input event still sends on a click.
     answer = 'ok';
-    await page.evaluate(() => { document.querySelector('#chat-composer textarea').value = 'Filled by a tool'; });
+    await page.evaluate(() => { (document.querySelector('#chat-composer textarea') as HTMLTextAreaElement).value = 'Filled by a tool'; });
     await page.click('#chat-composer .p-send');
-    await page.waitForFunction(() => !document.querySelector('#chat-composer textarea').value);
+    await page.waitForFunction(() => !(document.querySelector('#chat-composer textarea') as HTMLTextAreaElement).value);
     assert.deepEqual(sends, ['Filled by a tool']);
     await page.locator('#conv-thread', {hasText: 'Filled by a tool'}).waitFor();
 

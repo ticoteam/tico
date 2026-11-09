@@ -1,27 +1,32 @@
 // The Assistant's chat on a computer that is not cloud follows the page's one live stream (GET /api/v2/events), as a cloud chat does:
 // no page holds a stream of its own (the retired /api/v2/stream), a change to the conversation reads its snapshot once,
 // and the 15-second poll stops while the stream carries it.
-const {chromium} = require('playwright');
-const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const {html, uiFile} = require('./support/page.cjs');
-const {unrouted} = require('./support/routes.cjs');
-const {assistantView} = require('./support/assistant-chat.cjs');
-const {t} = (() => { try { return require('./support/load.cjs'); } catch { return {t: ms => ms}; } })();   // load.cjs arrives with #254
+import type * as PageSupport from './support/page.cjs';
+import type * as Routes from './support/routes.cjs';
+import type * as AssistantChat from './support/assistant-chat.cjs';
+const {chromium}: typeof import('playwright') = require('playwright');
+const assert: typeof import('node:assert/strict') = require('node:assert/strict');
+const fs: typeof import('node:fs') = require('node:fs');
+const {html, uiFile} = require('./support/page.cjs') as typeof PageSupport;
+const {unrouted} = require('./support/routes.cjs') as typeof Routes;
+const {assistantView} = require('./support/assistant-chat.cjs') as typeof AssistantChat;
+const {t}: {t: (ms: number) => number} = (() => { try { return require('./support/load.cjs') as {t: (ms: number) => number}; } catch { return {t: (ms: number) => ms}; } })();   // load.cjs arrives with #254
+declare const V2C: {rendered: boolean; liveOff: boolean; reading: boolean; readAgain: boolean};
+declare const LIVE_SOON: Set<string>;
 
 const now = new Date().toISOString();
 
 (async () => {
   const browser = await chromium.launch();
   const page = await browser.newPage({viewport: {width: 1300, height: 820}, serviceWorkers: 'block'});
-  const errors = [], streams = [], legacy = [], reads = {snapshot: 0};
+  const errors: string[] = [], streams: {url: URL; route: import('playwright').Route}[] = [], legacy: string[] = [], reads = {snapshot: 0};
   page.on('pageerror', e => errors.push(e.message));
   let snapshot = {messages: [{id: 'm1', sender_id: 'human:ana', body: 'Draft the release notes', created_at: now}], execution: null};
   await page.route('**/*', route => {
     const url = new URL(route.request().url()), p = url.pathname;
-    const json = body => route.fulfill({contentType: 'application/json', body: JSON.stringify(body)});
+    const json = (body: unknown) => route.fulfill({contentType: 'application/json', body: JSON.stringify(body)});
     if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
-    const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/);
+    const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/) as [string, string] | null;
     if (ui && fs.existsSync(uiFile(ui[1])))
       return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]), 'utf8')});
     if (/\.(?:js|ts)$/.test(p)) return route.fulfill({contentType: 'application/javascript', body: ''});
@@ -37,7 +42,7 @@ const now = new Date().toISOString();
     return json(unrouted(p));
   });
   // The newest stream the page holds that `match` accepts, answered with `blocks` (it then ends, and the page reconnects).
-  const send = async (match, ...blocks) => {
+  const send = async (match: (url: URL) => boolean, ...blocks: string[]) => {
     const deadline = Date.now() + t(8000);
     let stream;
     while (!(stream = streams.filter(s => match(s.url)).at(-1))) {
@@ -49,8 +54,8 @@ const now = new Date().toISOString();
     await stream.route.fulfill({contentType: 'text/event-stream', body: blocks.join('')});
     return stream.url;
   };
-  const following = url => url.searchParams.get('conversation') === 'c-ops';
-  const block = (seq, event, data) => `id: ${seq}\nevent: ${event}\ndata: ${JSON.stringify({seq, ...data})}\n\n`;
+  const following = (url: URL) => url.searchParams.get('conversation') === 'c-ops';
+  const block = (seq: number, event: string, data: Record<string, unknown>) => `id: ${seq}\nevent: ${event}\ndata: ${JSON.stringify({seq, ...data})}\n\n`;
 
   await page.goto('https://tico-ui.test/#/assistant');
   await page.waitForFunction(() => V2C?.rendered && V2C.liveOff);

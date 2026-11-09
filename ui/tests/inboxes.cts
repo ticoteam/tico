@@ -4,22 +4,25 @@
 // where another change fills it; What Tico may do never loses a pending save to an older read. Add tool > Email (Google)
 // connects a mailbox. Phone width has no sideways scroll, light and dark. TICO_SHOTS=<dir> saves Settings and a page.
 // (The one list of every tool is Tools itself: ui/tests/tools.cjs.)
-const {chromium} = require('playwright');
-const assert = require('node:assert/strict');
-const {googleFake} = require('./support/google-fake.cjs');
-const {mailboxesFake, open, shot} = require('./support/mailboxes-fake.cjs');
-const launch = () => chromium.launch({headless: true, channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined});
+const {chromium}: typeof import('playwright') = require('playwright');
+const assert: typeof import('node:assert/strict') = require('node:assert/strict');
+const {googleFake} = require('./support/google-fake.cjs') as typeof import('./support/google-fake.cjs');
+const {mailboxesFake, open, shot} = require('./support/mailboxes-fake.cjs') as typeof import('./support/mailboxes-fake.cjs');
+type Page = import('playwright').Page;
+type Route = import('playwright').Route;
+declare function inboxesRender(): unknown;
+const launch = () => chromium.launch({headless: true, channel: (process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined) as string});
 const SHOTS = process.env.TICO_SHOTS || '';
 const NOW = Date.now() / 1000;
-const AGO = minutes => new Date(Date.now() - minutes * 60000).toISOString();
+const AGO = (minutes: number) => new Date(Date.now() - minutes * 60000).toISOString();
 
-const writesTo = (fake, path, method = 'POST') => fake.writes.filter(w => w.path === path && w.method === method);
-const fits = page => page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth);
-const settle = page => page.waitForFunction(() => !document.querySelector('#tools-inbox .skel'));
+const writesTo = <W extends {method: string; path: string}>(fake: {writes: W[]}, path: string, method = 'POST') => fake.writes.filter(w => w.path === path && w.method === method);
+const fits = (page: Page) => page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth);
+const settle = (page: Page) => page.waitForFunction(() => !document.querySelector('#tools-inbox .skel'));
 
 // Every other kind: a Tico address, a number, a quoted phone request, two addresses, an open order and mail by email.
 function others({gateway = true} = {}) {
-  const writes = [];
+  const writes: {method: string; path: string; body: unknown}[] = [];
   const inbound = {configured: true, error: '', last_synced_at: NOW - 60, gaps: [], next: null, inboxes: [
     {inbox_id: 'ibx_a', kind: 'email', name: 'Account logins', address: 'logins@tico.example', state: 'active', audience: 'company',
       group_id: null, used_for: 'Vendor portal sign-ins', period_end: null, cancel_pending: 0},
@@ -31,7 +34,7 @@ function others({gateway = true} = {}) {
     {assignment_id: 'as_2', state: 'TX', kind: 'private', address: '', status: 'pending_1583', agent: false}],
   orders: [{order_id: 'mo_1', kind: 'shared', state: 'NV', status: 'open'}], prices: {}};
   const intake = {inbox_id: 'ibx_a', address: 'logins@tico.example', senders: ['scans@vpm.example']};
-  const extra = (p, method, body) => {
+  const extra = (p: string, method: string, body: unknown) => {
     if (method !== 'GET') writes.push({method, path: p, body});
     if (p === '/api/v2/inbound/inboxes' && method === 'GET') return structuredClone(inbound);
     if (p === '/api/v2/inbound/phone-requests' && method === 'GET') return {phone_requests: structuredClone(requests), next: null};
@@ -48,7 +51,7 @@ function others({gateway = true} = {}) {
 }
 
 const scenarios = {
-  'the old Settings > Inboxes, Mailboxes, Email & Phone, Mail and Google addresses open their Tools pages': async browser => {
+  'the old Settings > Inboxes, Mailboxes, Email & Phone, Mail and Google addresses open their Tools pages': async (browser: import('playwright').Browser) => {
     const fake = mailboxesFake();
     const {page, seen} = await open(browser, fake, googleFake(), {hash: '#/settings/mailboxes', ready: '#tools-root', extra: others().extra});
     assert.equal(await page.evaluate(() => location.hash), '#/tools?show=mail');
@@ -67,9 +70,9 @@ const scenarios = {
       ['#/settings/google', '#/tools/settings/email'],
       ['#/settings/inboxes/settings/email', '#/tools/settings/email'],
       ['#/settings/inboxes/texts', '#/tools/settings/texts'],
-    ]) {
-      await page.evaluate(hash => { location.hash = hash; }, from);
-      await page.waitForFunction(want => location.hash === want, to).catch(() => assert.fail(`${from} leads to ${to}`));
+    ] as [string, string][]) {
+      await page.evaluate((hash: string) => { location.hash = hash; }, from);
+      await page.waitForFunction((want: string) => location.hash === want, to).catch(() => assert.fail(`${from} leads to ${to}`));
     }
     await page.locator('#tools-inbox [data-ib-section=texts]').waitFor();
     assert.equal(await page.locator('#side a[data-nav="tools"].cur').count(), 1, 'Tools is current');
@@ -83,7 +86,7 @@ const scenarios = {
     await page.close();
   },
 
-  'Tools › Settings: a section a channel, every setting in its section, Coming soon for what is still to come': async browser => {
+  'Tools › Settings: a section a channel, every setting in its section, Coming soon for what is still to come': async (browser: import('playwright').Browser) => {
     const fake = mailboxesFake(), more = others();
     const {page, seen} = await open(browser, fake, googleFake(), {hash: '#/tools/settings', ready: '[data-ib-settings-page]', extra: more.extra});
     await page.locator('#settings-mail-addresses [data-pm-address="as_1"]').waitFor();
@@ -92,9 +95,9 @@ const scenarios = {
     assert.deepEqual(await page.locator('.ib-section > h2').allTextContents(), ['Email', 'Texts', 'Letters in', 'Letters out']);
     // The existing settings, each in its section and order. Sending, alerts and letters out are other changes' cards:
     // each section has a card with a header, and one still on its placeholder says Coming soon.
-    const cards = section => page.locator(`[data-ib-section="${section}"] .card`).evaluateAll(els => els.map(el => el.id));
+    const cards = (section: string) => page.locator(`[data-ib-section="${section}"] .card`).evaluateAll(els => els.map(el => el.id));
     const own = {email: ['mailboxes-top', 'mailboxes-may', 'set-inbound'], texts: ['inbound-phone-card'],
-      'letters-in': ['settings-mail-addresses', 'settings-mail-intake'], 'letters-out': []};
+      'letters-in': ['settings-mail-addresses', 'settings-mail-intake'], 'letters-out': [] as string[]};
     for (const [section, ids] of Object.entries(own)) {
       assert.deepEqual((await cards(section)).filter(id => ids.includes(id)), ids, section);
       assert.ok(await page.locator(`[data-ib-section="${section}"] .card > header h2`).count(), `${section} has a card`);
@@ -113,30 +116,30 @@ const scenarios = {
       if (!el) return false;
       let box = el.parentElement;
       while (box && !(box.scrollHeight > box.clientHeight + 1 && /auto|scroll/.test(getComputedStyle(box).overflowY))) box = box.parentElement;
-      const s = box || document.scrollingElement, top = el.getBoundingClientRect().top;
+      const s = (box || document.scrollingElement) as Element, top = el.getBoundingClientRect().top;
       return top >= -2 && (top < 120 || (s.scrollTop > 0 && s.scrollTop + s.clientHeight >= s.scrollHeight - 2 && top < innerHeight - 200));
     });
     assert.ok(await fits(page));
     if (SHOTS) {
-      await page.evaluate(() => document.querySelector('#tools-inbox').scrollIntoView({block: 'start'}));
+      await page.evaluate(() => document.querySelector<HTMLElement>('#tools-inbox')!.scrollIntoView({block: 'start'}));
       await shot(page, `inboxes-settings-desktop-light.png`, 'light');
     }
     assert.deepEqual(seen.errors, []);
     await page.close();
   },
 
-  'a read from before a What Tico may do save cannot replace its controls during or after it': async browser => {
+  'a read from before a What Tico may do save cannot replace its controls during or after it': async (browser: import('playwright').Browser) => {
     for (const finishRead of ['during', 'after']) {
       const fake = mailboxesFake(), google = googleFake();
       const {page, seen} = await open(browser, fake, google, {hash: '#/tools/settings', ready: '#mailboxes-may [data-google-may]'});
       const card = page.locator('#mailboxes-may');
-      const calendar = await card.locator('[data-google-may=change_calendar]').elementHandle();
-      let readStarted, saveStarted;
-      const reading = new Promise(resolve => { readStarted = resolve; });
-      const saving = new Promise(resolve => { saveStarted = resolve; });
-      await page.route('**/api/v2/mailboxes', route => readStarted(route));
-      await page.route('**/api/v2/google/permissions', route => saveStarted(route));
-      await page.evaluate(() => { window.inboxesRead = inboxesRender(); });
+      const calendar = (await card.locator('[data-google-may=change_calendar]').elementHandle())!;
+      let readStarted!: (r: Route) => void, saveStarted!: (r: Route) => void;
+      const reading = new Promise<Route>(resolve => { readStarted = resolve; });
+      const saving = new Promise<Route>(resolve => { saveStarted = resolve; });
+      await page.route('**/api/v2/mailboxes', (route: Route) => readStarted(route));
+      await page.route('**/api/v2/google/permissions', (route: Route) => saveStarted(route));
+      await page.evaluate(() => { (window as unknown as {inboxesRead: unknown}).inboxesRead = inboxesRender(); });
       const read = await reading;
       const stale = fake.answer('/api/v2/mailboxes');
       await card.locator('[data-google-may=change_calendar]').check();
@@ -144,12 +147,12 @@ const scenarios = {
       const body = save.request().postDataJSON();
       assert.deepEqual(body, {organize_mail: true, send_mail: false, change_calendar: true});
       const controls = () => card.locator('[data-google-may]').evaluateAll(els =>
-        els.map(el => [el.dataset.googleMay, el.checked, el.disabled]));
+        els.map(el => [(el as HTMLInputElement).dataset.googleMay, (el as HTMLInputElement).checked, (el as HTMLInputElement).disabled]));
       const pending = [['organize_mail', true, true], ['send_mail', false, true], ['change_calendar', true, true]];
       assert.deepEqual(await controls(), pending);
       const finish = async () => {
         await read.fulfill({contentType: 'application/json', body: JSON.stringify(stale)});
-        await page.evaluate(() => window.inboxesRead);
+        await page.evaluate(() => (window as unknown as {inboxesRead: unknown}).inboxesRead);
         assert.equal(await calendar.evaluate(el => el.isConnected), true, `${finishRead}: the clicked control stays mounted`);
       };
       if (finishRead === 'during') {
@@ -165,7 +168,7 @@ const scenarios = {
       // A draw asked for during the save runs once it settles.
       const reread = finishRead === 'during' && page.waitForRequest(r => new URL(r.url()).pathname === '/api/v2/mailboxes');
       await save.fulfill({contentType: 'application/json', body: JSON.stringify(answer)});
-      await page.waitForFunction(() => [...document.querySelectorAll('#mailboxes-may [data-google-may]')].every(el => !el.disabled));
+      await page.waitForFunction(() => [...document.querySelectorAll<HTMLInputElement>('#mailboxes-may [data-google-may]')].every(el => !el.disabled));
       if (reread) await reread;
       if (finishRead === 'after') await finish();
       const saved = pending.map(([field, checked]) => [field, checked, false]);
@@ -177,31 +180,31 @@ const scenarios = {
     }
   },
 
-  'What Tico may do: Read always, each box saves all three together, a refusal puts the box back': async browser => {
+  'What Tico may do: Read always, each box saves all three together, a refusal puts the box back': async (browser: import('playwright').Browser) => {
     const fake = mailboxesFake(), google = googleFake();
     const {page, seen} = await open(browser, fake, google, {hash: '#/tools/settings/email', ready: '#mailboxes-may'});
     const card = page.locator('#mailboxes-may');
     assert.equal(await card.locator('[data-google-may-read] input').count(), 0, 'Read has no box');
-    const boxes = () => card.locator('[data-google-may]').evaluateAll(els => els.map(el => [el.dataset.googleMay, el.checked]));
+    const boxes = () => card.locator('[data-google-may]').evaluateAll(els => els.map(el => [(el as HTMLInputElement).dataset.googleMay, (el as HTMLInputElement).checked]));
     assert.deepEqual(await boxes(), [['organize_mail', true], ['send_mail', false], ['change_calendar', false]]);
     await card.locator('[data-google-may=change_calendar]').check();
     const end = Date.now() + 5000;
     while (!writesTo(google, '/api/v2/google/permissions', 'PUT').length && Date.now() < end) await page.waitForTimeout(50);
     assert.deepEqual(writesTo(google, '/api/v2/google/permissions', 'PUT').map(w => w.body),
       [{organize_mail: true, send_mail: false, change_calendar: true}]);
-    await page.waitForFunction(() => [...document.querySelectorAll('[data-google-may]')].every(el => !el.disabled));
-    await page.route('**/api/v2/google/permissions', route => route.fulfill({status: 403, contentType: 'application/json',
+    await page.waitForFunction(() => [...document.querySelectorAll<HTMLInputElement>('[data-google-may]')].every(el => !el.disabled));
+    await page.route('**/api/v2/google/permissions', (route: Route) => route.fulfill({status: 403, contentType: 'application/json',
       body: JSON.stringify({error: {code: 'forbidden', detail: 'Only an admin changes this', retryable: false}})}));
     await card.locator('[data-google-may=send_mail]').click();
     await page.waitForFunction(() => {
-      const el = document.querySelector('[data-google-may=send_mail]');
+      const el = document.querySelector<HTMLInputElement>('[data-google-may=send_mail]');
       return el && !el.disabled && !el.checked;
     });
     assert.deepEqual(seen.errors, []);
     await page.close();
   },
 
-  'Add tool > Email (Google) connects a mailbox and opens its page; an address already in Tico says so in the dialog': async browser => {
+  'Add tool > Email (Google) connects a mailbox and opens its page; an address already in Tico says so in the dialog': async (browser: import('playwright').Browser) => {
     const fake = mailboxesFake();
     const {page, seen} = await open(browser, fake, googleFake(), {ready: '#tools-root [data-tl-add]'});
     await page.locator('[data-tl-add] > summary').click();
@@ -228,16 +231,16 @@ const scenarios = {
     await page.close();
   },
 
-  'leaving Tools › Settings mid-save and coming back keeps What Tico may do locked on what the save sends, then what the server kept': async browser => {
+  'leaving Tools › Settings mid-save and coming back keeps What Tico may do locked on what the save sends, then what the server kept': async (browser: import('playwright').Browser) => {
     const fake = mailboxesFake(), google = googleFake();
     fake.may.send = true;
     const {page, seen} = await open(browser, fake, google, {hash: '#/tools/settings', ready: '#mailboxes-may [data-google-may]'});
     const card = page.locator('#mailboxes-may');
-    const controls = () => card.locator('[data-google-may]').evaluateAll(els => els.map(el => [el.dataset.googleMay, el.checked, el.disabled]));
+    const controls = () => card.locator('[data-google-may]').evaluateAll(els => els.map(el => [(el as HTMLInputElement).dataset.googleMay, (el as HTMLInputElement).checked, (el as HTMLInputElement).disabled]));
     assert.deepEqual(await controls(), [['organize_mail', true, false], ['send_mail', true, false], ['change_calendar', false, false]]);
-    let saveStarted;
-    const saving = new Promise(resolve => { saveStarted = resolve; });
-    await page.route('**/api/v2/google/permissions', route => route.request().method() === 'PUT' ? saveStarted(route) : route.fallback());
+    let saveStarted!: (r: Route) => void;
+    const saving = new Promise<Route>(resolve => { saveStarted = resolve; });
+    await page.route('**/api/v2/google/permissions', (route: Route) => route.request().method() === 'PUT' ? saveStarted(route) : route.fallback());
     await card.locator('[data-google-may=send_mail]').uncheck();
     const save = await saving;
     const body = save.request().postDataJSON();
@@ -253,7 +256,7 @@ const scenarios = {
     Object.assign(fake.may, {send: false});
     const answer = google.answer('/api/v2/google/permissions', save.request().url(), 'PUT', body);
     await save.fulfill({contentType: 'application/json', body: JSON.stringify(answer)});
-    await page.waitForFunction(() => [...document.querySelectorAll('#mailboxes-may [data-google-may]')].every(el => !el.disabled));
+    await page.waitForFunction(() => [...document.querySelectorAll<HTMLInputElement>('#mailboxes-may [data-google-may]')].every(el => !el.disabled));
     assert.deepEqual(await controls(), [['organize_mail', true, false], ['send_mail', false, false], ['change_calendar', false, false]]);
     // The next save carries Send off, never the old Send on.
     await page.unroute('**/api/v2/google/permissions');
@@ -264,13 +267,13 @@ const scenarios = {
     await page.close();
   },
 
-  'phone width: Add tool, Settings and a page fit with no sideways scroll, light and dark': async browser => {
+  'phone width: Add tool, Settings and a page fit with no sideways scroll, light and dark': async (browser: import('playwright').Browser) => {
     for (const theme of ['light', 'dark']) {
       const fake = mailboxesFake(), more = others();
       const {page, seen} = await open(browser, fake, googleFake(), {ready: '#tools-root [data-tl-add]', extra: more.extra, width: 390, height: 844, theme});
       // Add tool opens inside the screen, every item whole.
       await page.locator('[data-tl-add] > summary').click();
-      const menu = await page.locator('.tt-add-menu').boundingBox();
+      const menu = (await page.locator('.tt-add-menu').boundingBox())!;
       assert.ok(menu.x >= 0 && menu.x + menu.width <= 390, `the Add tool menu stays on screen (${menu.x}..${menu.x + menu.width})`);
       assert.ok(await page.evaluate(() => { const m = document.querySelector('#main'); return !m || m.scrollWidth <= m.clientWidth; }),
         'opening it scrolls nothing sideways');

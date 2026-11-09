@@ -10,14 +10,34 @@
 // Stop takes Send's place while the bot runs (read from the thread's conversation snapshot) and posts the stop; "/"
 // opens the commands menu, and a command does what it did in the old chat (ui/app/slash-commands.ts). Fixtures only.
 // TICO_SCREENSHOT_DIR=<dir> also saves the screenshots.
-const {chromium} = require('playwright');
-const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const path = require('node:path');
-const {html, uiFile} = require('./support/page.cjs');
-const {unrouted} = require('./support/routes.cjs');
-const {threadsFake} = require('./support/threads-fake.cjs');
-const launch = () => chromium.launch({headless: true, channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined});
+import type * as PageSupport from './support/page.cjs';
+import type * as Routes from './support/routes.cjs';
+import type * as ThreadsFake from './support/threads-fake.cjs';
+import type {Browser, Locator, Page, Route} from 'playwright';
+const {chromium}: typeof import('playwright') = require('playwright');
+const assert: typeof import('node:assert/strict') = require('node:assert/strict');
+const fs: typeof import('node:fs') = require('node:fs');
+const path: typeof import('node:path') = require('node:path');
+const {html, uiFile} = require('./support/page.cjs') as typeof PageSupport;
+const {unrouted} = require('./support/routes.cjs') as typeof Routes;
+const {threadsFake} = require('./support/threads-fake.cjs') as typeof ThreadsFake;
+const launch = () => chromium.launch({headless: true, channel: (process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined) as string});
+type Json = {[key: string]: unknown};
+type PageBot = {thread?: {view?: {state?: string; id?: string; goals?: {goalSupported?: boolean; conv?: unknown}; execution?: unknown}}};
+declare function sendWaySync(): Promise<unknown>;
+declare function sendWayPick(way: string): void;
+declare function threadMount(host: Element, opts: Json): void;
+declare function liveEmit(stream: string, payload: unknown): void;
+interface Api {
+  errors: string[]; sent: Json[]; goalPosts: Json[]; goalReads: string[]; dmMade: Json[]; goals: Record<string, Json | null>;
+  page: Page; dm: boolean; execution: Json | null; stops: Json[]; commands: Json[]; tasks: Json[]; patches: Json[]; snapshots: string[];
+  prefs: Record<string, unknown>; slowRead: boolean; uploads: string[]; reachReads: Json[]; reachOut: number; reachMax: number;
+  reachSlow: number; follows: Json[]; chanFollows: boolean;
+}
+interface OpenOpts {
+  width?: number; theme?: string; tab?: string; supported?: boolean; goalMode?: boolean; dmMade?: boolean; home?: Json[]; refuse?: boolean;
+  execution?: Json | null; commands?: Json[]; role?: string; recent?: string[]; write?: boolean; prefs?: Record<string, unknown>;
+}
 const shots = process.env.TICO_SCREENSHOT_DIR;
 const BOT = 'engineering-manager', HOME = `t-home-${BOT}`, DM = `t-dm-${BOT}`, CHAN = 't-launch';
 
@@ -27,37 +47,37 @@ const COMMANDS = [
   {name: 'branch', args: '', help: 'Make my branch', kind: 'tico'}, {name: 'help', args: '', help: 'Show commands', kind: 'tico'},
   {name: 'compact', args: '', help: 'Compact this conversation', kind: 'harness'}];
 
-async function open(browser, {width = 390, theme = 'dark', tab = 'home', supported = true, goalMode = false, dmMade = true, home = [], refuse = false,
-                              execution = null, commands = [], role = 'owner', recent = [], write = true, prefs = {}} = {}) {
+async function open(browser: Browser, {width = 390, theme = 'dark', tab = 'home', supported = true, goalMode = false, dmMade = true, home = [], refuse = false,
+                              execution = null, commands = [], role = 'owner', recent = [], write = true, prefs = {}}: OpenOpts = {}): Promise<Api> {
   const phone = width < 761;
   const page = await browser.newPage({viewport: {width, height: 844}, ...(phone ? {isMobile: true, hasTouch: true} : {}), serviceWorkers: 'block', reducedMotion: 'reduce'});
-  await page.addInitScript(([t, slug, on, recent]) => {
+  await page.addInitScript(([t, slug, on, recent]: [string, string, boolean, string[]]) => {
     try {
       localStorage.setItem('tico.theme', t); if (on) localStorage.setItem('hub.chat.goal-mode', JSON.stringify({[slug]: true}));
       localStorage.setItem('tico.org.recent', JSON.stringify(recent));
     } catch {}
-  }, [theme, BOT, goalMode, recent]);
-  const api = {errors: [], sent: [], goalPosts: [], goalReads: [], dmMade: [], goals: {}, page, dm: dmMade, execution,
+  }, [theme, BOT, goalMode, recent] as [string, string, boolean, string[]]);
+  const api: Api = {errors: [], sent: [], goalPosts: [], goalReads: [], dmMade: [], goals: {}, page, dm: dmMade, execution,
                stops: [], commands: [], tasks: [], patches: [], snapshots: [], prefs: {...prefs}, slowRead: false, uploads: [],
                reachReads: [], reachOut: 0, reachMax: 0, reachSlow: 0, follows: [], chanFollows: false};
-  page.on('pageerror', e => api.errors.push(e.message));
-  const fake = threadsFake({bot: BOT, home, sent: api.sent});
+  page.on('pageerror', (e: Error) => api.errors.push(e.message));
+  const fake = threadsFake({bot: BOT, home: home as unknown as ThreadsFake.ThreadsMessage[], sent: api.sent});
   const now = () => new Date().toISOString();
-  await page.route('**/*', async route => {
+  await page.route('**/*', async (route: Route) => {
     const req = route.request(), url = new URL(req.url()), p = url.pathname, method = req.method();
-    const json = (body, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
+    const json = (body: unknown, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
     if (url.origin !== 'https://tico-ui.test') return route.abort();
-    const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/);
+    const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/) as [string, string] | null;
     if (ui && fs.existsSync(uiFile(ui[1]))) return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]), 'utf8')});
     if (p.startsWith('/vendor/fonts/') && fs.existsSync(uiFile(p.slice(1)))) return route.fulfill({contentType: 'font/woff2', body: fs.readFileSync(uiFile(p.slice(1)))});
     if (/\.(?:js|ts)$/.test(p)) return route.fulfill({contentType: 'application/javascript', body: ''});
     if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
     if (p === '/api/me') return json({id: 'ana', name: 'Ana', role, cloud: true});
-    const bot = (name, display_name) => ({name, display_name, host: 'keeper', status: 'active', can_chat: true, schedules: [],
+    const bot = (name: string, display_name: string) => ({name, display_name, host: 'keeper', status: 'active', can_chat: true, schedules: [],
       resolved_runtime: 'codex', machine: {runner_id: 'r1'}, readiness: {ready: true, goals: supported}, my_access: {see: true, read: true, write}});
     if (p === '/api/employees') return json([bot(BOT, 'Engineering Manager'), bot('designer', 'Designer'), bot('sales-lead', 'Sales Lead')]);
     // The thread's newest run (Stop), the stop itself, a harness command, a task and an archived DM (/new).
-    const snap = p.match(/^\/api\/v2\/conversations\/([^/]+)\/snapshot$/);
+    const snap = p.match(/^\/api\/v2\/conversations\/([^/]+)\/snapshot$/) as [string, string] | null;
     if (snap) { api.snapshots.push(snap[1]); return json({messages: [], next_before: null, execution: api.execution, goal: null}); }
     if (p === `/api/v2/bots/${BOT}/stop`) { api.stops.push(req.postDataJSON()); return json({attempt_id: 'a1', stopping: true}); }
     if (p === '/api/v2/messages' && method === 'POST') { api.commands.push(req.postDataJSON()); return json({id: 'cmd-1', conversation_id: req.postDataJSON().conversation_id}); }
@@ -65,13 +85,13 @@ async function open(browser, {width = 390, theme = 'dark', tab = 'home', support
     if (method === 'PATCH' && p.startsWith('/api/v2/threads/')) { api.patches.push({p, ...req.postDataJSON()}); api.dm = false; return json({id: p.split('/')[4], archived_at: now()}); }
     if (p === '/api/issues') return json([]);
     // A message with files: the form's fields, as text.
-    const upload = p.match(/^\/api\/v2\/uploads\/threads\/([^/]+)\/messages$/);
+    const upload = p.match(/^\/api\/v2\/uploads\/threads\/([^/]+)\/messages$/) as [string, string] | null;
     if (upload && method === 'POST') {
       api.uploads.push(req.postData() || '');
       return json({message: {id: 'up-' + api.uploads.length, seq: 2000 + api.uploads.length, depth: 0, thread_id: upload[1], sender_id: 'human:ana', body: '', created_at: now()}});
     }
     // The kept way to send (compose.send_way); a slow read answers with what the server held when it came in.
-    const pref = p.match(/^\/api\/v2\/preferences\/([^/]+)$/);
+    const pref = p.match(/^\/api\/v2\/preferences\/([^/]+)$/) as [string, string] | null;
     if (pref && method === 'POST') { api.prefs[pref[1]] = req.postDataJSON().value; return json({key: pref[1], value: api.prefs[pref[1]]}); }
     if (pref) {
       const value = api.prefs[pref[1]] ?? null;
@@ -81,13 +101,13 @@ async function open(browser, {width = 390, theme = 'dark', tab = 'home', support
     if (p === '/api/v2/events' || p.endsWith('/watch')) return route.abort();
     // "Who it reaches" (GET /v2/threads/{id}/reach, backend/threads.py reaches): the Home's bot, or #launch's followers
     // (Designer at All, Ben), plus whom the words @mention; @zed can't see #launch. Reads in flight are counted.
-    const reach = p.match(/^\/api\/v2\/threads\/([^/]+)\/reach$/);
+    const reach = p.match(/^\/api\/v2\/threads\/([^/]+)\/reach$/) as [string, string] | null;
     if (reach) {
       const q = Object.fromEntries(url.searchParams), way = q.delivery || 'steer';
       api.reachReads.push({thread: reach[1], ...q}); api.reachMax = Math.max(api.reachMax, ++api.reachOut);
       if (api.reachSlow) await new Promise(done => setTimeout(done, api.reachSlow));
       api.reachOut--;
-      const bot = actor => ({actor, reason: 'follower', mode: way === 'defer' && q.defer_for === 'never' ? 'defer' : way, defer_for: way === 'defer' ? q.defer_for || null : null});
+      const bot = (actor: string) => ({actor, reason: 'follower', mode: way === 'defer' && q.defer_for === 'never' ? 'defer' : way, defer_for: way === 'defer' ? q.defer_for || null : null});
       const rows = reach[1] === CHAN ? [bot('bot:designer'), ...(way === 'defer' && q.defer_for === 'never' ? [] : [{actor: 'human:ben', reason: 'follower', mode: 'queue', defer_for: null}])]
         : [{...bot('bot:' + BOT), reason: 'home'}];
       if ((q.text || '').includes('@sales-lead')) rows.unshift({actor: 'bot:sales-lead', reason: 'mention', mode: way, defer_for: null});
@@ -103,15 +123,16 @@ async function open(browser, {width = 390, theme = 'dark', tab = 'home', support
     // An empty DM: none until the first message or goal makes it (POST /v2/threads/dm with no body).
     if (p === '/api/v2/threads/dm' && method === 'GET' && !api.dm) return json({error: {code: 'no_dm', detail: 'No DM yet'}}, 404);
     if (p === '/api/v2/threads/dm' && method === 'POST' && !req.postDataJSON()?.body) { api.dmMade.push(req.postDataJSON()); api.dm = true; }
-    const goal = p.match(/^\/api\/v2\/conversations\/([^/]+)\/goal$/);
+    const goal = p.match(/^\/api\/v2\/conversations\/([^/]+)\/goal$/) as [string, string] | null;
     if (goal) {
       const tid = goal[1];
       if (method === 'GET') { api.goalReads.push(tid); return json({goal: api.goals[tid] || null, supported: supported && !refuse, commands}); }
-      const body = req.postDataJSON();
+      const body = req.postDataJSON() as {action: string; objective?: string};
       api.goalPosts.push({tid, ...body});
       if (!supported || refuse) return json({error: {code: 'goal_unsupported', detail: "This bot's harness doesn't support goals"}}, 409);
       const was = api.goals[tid];
-      const status = {set: 'active', edit: was?.status || 'active', pause: 'paused', resume: 'active', clear: 'cleared'}[body.action];
+      const statuses: Record<string, unknown> = {set: 'active', edit: was?.status || 'active', pause: 'paused', resume: 'active', clear: 'cleared'};
+      const status = statuses[body.action];
       const g = {id: 'g1', conversation_id: tid, bot: BOT, objective: body.objective || was?.objective, status, note: '', set_by: 'human:ana',
                  set_at: was?.set_at || now(), updated_at: now(), ended_at: status === 'cleared' ? now() : null};
       api.goals[tid] = status === 'cleared' ? null : g;
@@ -123,35 +144,35 @@ async function open(browser, {width = 390, theme = 'dark', tab = 'home', support
   });
   await page.goto(`https://tico-ui.test/#/bot/${BOT}/${tab}`);
   await page.locator('#bot-thread .thv-composer .p-text').waitFor();
-  await page.waitForFunction(() => BOT?.thread?.view?.state !== 'loading');
+  await page.waitForFunction(() => (BOT as unknown as PageBot)?.thread?.view?.state !== 'loading');
   return api;
 }
-async function shot(page, name) {
+async function shot(page: Page, name: string) {
   if (!shots) return;
   fs.mkdirSync(shots, {recursive: true});
   await page.screenshot({path: path.join(shots, `thread-composer-${name}.png`)});
 }
 // The composer's row: every control's middle on the text's line, the box one line tall, one frame.
-const layout = page => page.locator('#bot-thread .thv-composer').evaluate(host => {
-  const rect = el => el && !el.hidden && el.getClientRects().length ? el.getBoundingClientRect() : null;
-  const mid = el => { const r = rect(el); return r ? Math.round(r.top + r.height / 2) : null; };
-  const ask = host.querySelector('.ask'), pill = host.querySelector('.p-pill'), cs = getComputedStyle(ask), ps = getComputedStyle(pill);
-  const order = ['.p-attach', '.p-text', '.p-way', '.p-send'].map(s => host.querySelector(s)).filter(el => rect(el)).sort((a, b) => rect(a).left - rect(b).left)
-    .map(el => el.className.match(/p-(attach|text|way|send)\b/)[1]);
-  return {pill: rect(pill).height, askBorder: [cs.borderTopWidth, cs.borderTopStyle], askPadding: cs.paddingTop, pillBorder: ps.borderTopWidth,
+const layout = (page: Page) => page.locator('#bot-thread .thv-composer').evaluate(host => {
+  const rect = (el: Element | null): DOMRect | null => el && !(el as HTMLElement).hidden && el.getClientRects().length ? el.getBoundingClientRect() : null;
+  const mid = (el: Element | null) => { const r = rect(el); return r ? Math.round(r.top + r.height / 2) : null; };
+  const ask = host.querySelector<HTMLElement>('.ask')!, pill = host.querySelector<HTMLElement>('.p-pill')!, cs = getComputedStyle(ask), ps = getComputedStyle(pill);
+  const order = ['.p-attach', '.p-text', '.p-way', '.p-send'].map(s => host.querySelector(s)).filter((el): el is Element => rect(el) !== null).sort((a, b) => rect(a)!.left - rect(b)!.left)
+    .map(el => el.className.match(/p-(attach|text|way|send)\b/)![1]!);
+  return {pill: rect(pill)!.height, askBorder: [cs.borderTopWidth, cs.borderTopStyle], askPadding: cs.paddingTop, pillBorder: ps.borderTopWidth,
     pillColor: ps.borderTopColor, ink: getComputedStyle(document.body).getPropertyValue('--line').trim(),
     text: mid(host.querySelector('.p-text')), attach: mid(host.querySelector('.p-attach')), way: mid(host.querySelector('.p-way')), send: mid(host.querySelector('.p-send')),
-    order, right: rect(pill).right, left: rect(pill).left, width: innerWidth};
+    order, right: rect(pill)!.right, left: rect(pill)!.left, width: innerWidth};
 });
 
-async function looks(browser) {
+async function looks(browser: Browser) {
   // One run per width: nothing here reads a colour, so dark and light drew the same boxes (the theme only changes the screenshots).
-  for (const [width, theme] of [[390, 'dark'], [1280, 'light']]) {
+  for (const [width, theme] of [[390, 'dark'], [1280, 'light']] as [number, string][]) {
     const api = await open(browser, {width, theme}), {page} = api;
     await page.locator('#bot-thread .p-way:not([hidden])').waitFor();
     const l = await layout(page), name = `${width}-${theme}`;
     assert.ok(l.pill < 60, `${name}: one line tall when empty (${l.pill}px)`);
-    for (const k of ['attach', 'way', 'send']) assert.ok(Math.abs(l[k] - l.text) <= 3, `${name}: ${k} on the text's line (${JSON.stringify(l)})`);
+    for (const k of ['attach', 'way', 'send'] as const) assert.ok(Math.abs(l[k]! - l.text!) <= 3, `${name}: ${k} on the text's line (${JSON.stringify(l)})`);
     assert.deepEqual(l.askBorder, ['0px', 'none'], `${name}: no outline around the pill (the task question card's amber frame)`);
     assert.equal(l.askPadding, '0px', `${name}: no second box around the pill`);
     assert.equal(l.pillBorder, '1px', `${name}: one frame`);
@@ -172,24 +193,24 @@ async function looks(browser) {
 }
 
 // The ways menu of a bot's composer: open it, pick a way (a row, or one of Defer's durations), and see it close.
-const caretOf = page => page.locator('#bot-thread .p-way'), menuOf = page => page.locator('#bot-thread .p-ways');
-async function pick(page, way) {
+const caretOf = (page: Page) => page.locator('#bot-thread .p-way'), menuOf = (page: Page) => page.locator('#bot-thread .p-ways');
+async function pick(page: Page, way: string) {
   await caretOf(page).click();
   await menuOf(page).locator(`[data-deliver="${way}"]`).last().click();
   assert.equal(await menuOf(page).isHidden(), true, 'a pick closes the menu');
 }
-const shows = page => page.locator('#bot-thread .p-send').getAttribute('data-shows');
+const shows = (page: Page) => page.locator('#bot-thread .p-send').getAttribute('data-shows');
 // The kept way is saved by a request the page sends after its timer clears: wait for the saved value itself. A value
 // that never lands is still a failure, at the assertion that follows.
-async function keptWay(api, way) {
+async function keptWay(api: Api, way: string) {
   for (let i = 0; i < 400 && api.prefs['compose.send_way'] !== way; i++) await new Promise(done => setTimeout(done, 25));
 }
 
-async function goalMode(browser) {
+async function goalMode(browser: Browser) {
   const api = await open(browser, {width: 1280}), {page} = api;
   const chip = page.locator('#bot-thread .thv-goal-chip'), send = page.locator('#bot-thread .p-send'), box = page.locator('#bot-thread .p-text');
   await caretOf(page).waitFor();
-  await page.waitForFunction(() => BOT?.thread?.view?.goals?.goalSupported);
+  await page.waitForFunction(() => (BOT as unknown as PageBot)?.thread?.view?.goals?.goalSupported);
   assert.equal(await send.getAttribute('aria-label'), 'Send');
   assert.equal(await chip.isHidden(), true);
   assert.ok(api.goalReads.includes(HOME), 'the Home asks the goal route about its own thread');
@@ -221,7 +242,7 @@ async function goalMode(browser) {
   await page.locator('#bot-thread .thv-goal .cg-bar').click();
   assert.deepEqual(await page.locator('#bot-thread .thv-goal .cg-actions button').allInnerTexts(), ['Edit', 'Pause', 'Clear']);
   await page.locator('#bot-thread .thv-goal [data-goal="pause"]').click();
-  await page.waitForFunction(() => document.querySelector('#bot-thread .thv-goal .cg-chip')?.textContent === 'Paused');
+  await page.waitForFunction(() => document.querySelector<HTMLElement>('#bot-thread .thv-goal .cg-chip')?.textContent === 'Paused');
   await page.locator('#bot-thread .thv-goal [data-goal="clear"]').click();
   await page.locator('#bot-thread .thv-goal').waitFor({state: 'hidden'});
   assert.deepEqual(api.goalPosts.map(g => g.action), ['set', 'pause', 'clear']);
@@ -235,7 +256,7 @@ async function goalMode(browser) {
   await pick(page, 'queue');
   assert.equal(await chip.isHidden(), true);
   await send.click();
-  await page.waitForFunction(() => !document.querySelector('#bot-thread .th-pending'));
+  await page.waitForFunction(() => !document.querySelector<HTMLElement>('#bot-thread .th-pending'));
   assert.deepEqual(api.sent, [{text: 'Plain words', delivery: 'queue'}]);
   assert.equal(api.goalPosts.length, 3);
   await keptWay(api, 'queue');
@@ -246,9 +267,9 @@ async function goalMode(browser) {
   await box.fill('The brief');
   assert.equal(await shows(page), 'queue:', 'with a file attached Send is a message again');
   await send.click();
-  await page.waitForFunction(() => !document.querySelector('#bot-thread .th-pending'));
+  await page.waitForFunction(() => !document.querySelector<HTMLElement>('#bot-thread .th-pending'));
   assert.equal(api.uploads.length, 1);
-  const field = name => (api.uploads[0].match(new RegExp(`name="${name}"\\r\\n\\r\\n([^\\r]*)`)) || [])[1];
+  const field = (name: string) => ((api.uploads[0]!.match(new RegExp(`name="${name}"\\r\\n\\r\\n([^\\r]*)`)) as [string, string] | null) ?? [])[1];
   assert.equal(field('delivery'), 'queue');
   assert.equal(field('text'), 'The brief');
   assert.equal(api.goalPosts.length, 3);
@@ -259,18 +280,18 @@ async function goalMode(browser) {
 // Send shows the kept way and every message names it: read back on load and after a reload, changed by a pick (a menu
 // row or one of Defer's durations), opened from the caret, a right-click or a long press on Send. Someone who may not
 // message the bot only defers, with no deadline. A person-to-person thread has a plain Send and no ways.
-async function ways(browser) {
+async function ways(browser: Browser) {
   let api = await open(browser, {width: 1280, theme: 'light', prefs: {'compose.send_way': 'defer:4h'}}), {page} = api;
   const send = page.locator('#bot-thread .p-send'), box = page.locator('#bot-thread .p-text');
-  const say = async text => {
+  const say = async (text: string) => {
     const n = api.sent.length;
     await box.fill(text);
     await send.click();
-    await page.waitForFunction(k => !document.querySelector('#bot-thread .th-pending') && document.querySelector('#bot-thread .p-text').value === '', n);
+    await page.waitForFunction((k: number) => !document.querySelector<HTMLElement>('#bot-thread .th-pending') && document.querySelector<HTMLInputElement>('#bot-thread .p-text')!.value === '', n);
     assert.equal(api.sent.length, n + 1);
-    return api.sent.at(-1);
+    return api.sent.at(-1)!;
   };
-  await page.waitForFunction(() => document.querySelector('#bot-thread .p-send')?.dataset.shows === 'defer:4h');
+  await page.waitForFunction(() => document.querySelector<HTMLElement>('#bot-thread .p-send')?.dataset.shows === 'defer:4h');
   assert.equal(await send.locator('.p-way-badge').innerText(), '4h', "Defer's deadline rides on Send");
   assert.equal(await send.getAttribute('aria-label'), 'Send, defer 4h');
   assert.deepEqual(await say('Later today'), {text: 'Later today', delivery: 'defer', defer_for: '4h'});
@@ -312,7 +333,7 @@ async function ways(browser) {
   assert.equal(api.prefs['compose.send_way'], 'defer:2d');
   // A reload reads the kept way back.
   await page.reload();
-  await page.waitForFunction(() => document.querySelector('#bot-thread .p-send')?.dataset.shows === 'defer:2d');
+  await page.waitForFunction(() => document.querySelector<HTMLElement>('#bot-thread .p-send')?.dataset.shows === 'defer:2d');
   assert.equal(await page.locator('#bot-thread .thv-goal-chip').isHidden(), true);
   assert.deepEqual(api.errors, []);
 
@@ -331,9 +352,9 @@ async function ways(browser) {
   assert.equal(await person.locator('.p-send').getAttribute('data-shows'), null, 'the plain arrow');
   await person.locator('.p-text').fill('Lunch at noon?');
   await person.locator('.p-send').click();
-  await page.waitForFunction(() => !document.querySelector('#person-thread .th-pending') && !document.querySelector('#person-thread .p-text').value);
-  assert.equal('delivery' in (api.sent.at(-1) || {}), false, 'no way named');
-  assert.equal(api.sent.at(-1).text ?? api.sent.at(-1).body, 'Lunch at noon?');
+  await page.waitForFunction(() => !document.querySelector<HTMLElement>('#person-thread .th-pending') && !document.querySelector<HTMLInputElement>('#person-thread .p-text')!.value);
+  assert.equal('delivery' in (api.sent.at(-1)! || {}), false, 'no way named');
+  assert.equal(api.sent.at(-1)!.text ?? api.sent.at(-1)!.body, 'Lunch at noon?');
   assert.deepEqual(api.errors, []);
   await page.close();
 
@@ -355,28 +376,28 @@ async function ways(browser) {
   // Someone who may not message the bot: Defer only, with no deadline, and Send defers.
   ({page} = api = await open(browser, {width: 1280, write: false}));
   await caretOf(page).waitFor();
-  await page.waitForFunction(() => document.querySelector('#bot-thread .p-send')?.dataset.shows === 'defer:never');
+  await page.waitForFunction(() => document.querySelector<HTMLElement>('#bot-thread .p-send')?.dataset.shows === 'defer:never');
   await caretOf(page).click();
   assert.deepEqual(await menuOf(page).locator(':scope > button:not([data-deliver="goal"]) > span:nth-child(2)').allInnerTexts(), ['Defer']);
   assert.equal(await menuOf(page).locator('.p-for').count(), 0, 'no deadlines');
   await caretOf(page).click();
   await page.locator('#bot-thread .p-text').fill('When you get to it');
   await page.locator('#bot-thread .p-send').click();
-  await page.waitForFunction(() => !document.querySelector('#bot-thread .th-pending'));
+  await page.waitForFunction(() => !document.querySelector<HTMLElement>('#bot-thread .th-pending'));
   assert.deepEqual(api.sent, [{text: 'When you get to it', delivery: 'defer', defer_for: 'never'}]);
   assert.deepEqual(api.errors, []);
   await page.close();
 }
 
 // An empty DM has no thread: its first goal makes the DM (as its first message would), then sets it there.
-async function emptyDm(browser) {
+async function emptyDm(browser: Browser) {
   const api = await open(browser, {width: 390, tab: 'dm', dmMade: false}), {page} = api;
   const box = page.locator('#bot-thread .p-text');
   await caretOf(page).waitFor();
   await pick(page, 'goal');
   assert.equal(await page.locator('#bot-thread .thv-goal-chip').isVisible(), true);
   const l = await layout(page);
-  assert.ok(l.pill < 60 && Math.abs(l.send - l.text) <= 3, `the Goal chip keeps one line on a phone (${JSON.stringify(l)})`);
+  assert.ok(l.pill < 60 && Math.abs(l.send! - l.text!) <= 3, `the Goal chip keeps one line on a phone (${JSON.stringify(l)})`);
   await shot(page, 'goal-mode-phone-dark');
   await box.fill('First thing I want done');
   await page.locator('#bot-thread .p-send').click();
@@ -391,9 +412,9 @@ async function emptyDm(browser) {
 
 // Where goals don't work: no Set as goal. Goal mode left on by the old target does not come back: Send is a message.
 // A server that refuses the goal says why and keeps the words.
-async function refusals(browser) {
+async function refusals(browser: Browser) {
   let api = await open(browser, {width: 1280, supported: false, goalMode: true}), {page} = api;
-  await page.waitForFunction(() => BOT?.thread?.view?.goals?.conv);
+  await page.waitForFunction(() => (BOT as unknown as PageBot)?.thread?.view?.goals?.conv);
   await page.waitForTimeout(100);
   await caretOf(page).click();
   assert.equal(await menuOf(page).locator('[data-deliver="goal"]').count(), 0, 'no Set as goal where the bot takes no goals');
@@ -401,7 +422,7 @@ async function refusals(browser) {
   assert.equal(await page.locator('#bot-thread .thv-goal-chip').isHidden(), true, 'a saved goal mode is not restored');
   await page.locator('#bot-thread .p-text').fill('Ship it');
   await page.locator('#bot-thread .p-text').press('Enter');
-  await page.waitForFunction(() => !document.querySelector('#bot-thread .th-pending'));
+  await page.waitForFunction(() => !document.querySelector<HTMLElement>('#bot-thread .th-pending'));
   assert.deepEqual([api.goalPosts, api.sent], [[], [{text: 'Ship it', delivery: 'steer'}]]);
   await page.close();
 
@@ -418,8 +439,8 @@ async function refusals(browser) {
 }
 
 // The /goal messages the controls sent are not bubbles; the server's notice for a met goal is the goal's one line.
-async function lines(browser) {
-  const t = m => `2026-10-01T09:0${m}:00Z`;
+async function lines(browser: Browser) {
+  const t = (m: number) => `2026-10-01T09:0${m}:00Z`;
   const home = [
     {id: 'm1', sender_id: 'human:ana', body: '/goal Produce the Acme summary', created_at: t(1),
      refs: {command: true, goal_action: 'set', goal_id: 'g9', goal_objective: 'Produce the Acme summary'}},
@@ -439,12 +460,12 @@ async function lines(browser) {
 
 // The bot's avatar: on a phone, at the bar's left edge before Attach, opening the switcher over the bar (recent bots,
 // the menu, Search) with aria-expanded in step; on a computer there is none.
-async function botSwitch(browser) {
+async function botSwitch(browser: Browser) {
   let api = await open(browser, {width: 390, recent: ['designer', 'sales-lead']}), {page} = api;
   const avatar = page.locator('#bot-thread .p-bot'), fan = page.locator('#org-fan');
   await avatar.waitFor();
   const at = await page.locator('#bot-thread .thv-composer').evaluate(host => {
-    const x = s => host.querySelector(s).getBoundingClientRect();
+    const x = (s: string) => host.querySelector(s)!.getBoundingClientRect();
     return {bot: x('.p-bot'), attach: x('.p-attach'), text: x('.p-text'), pill: x('.p-pill')};
   });
   assert.ok(at.bot.right <= at.attach.left && at.attach.right <= at.text.left, `avatar, then Attach, then the words (${JSON.stringify(at)})`);
@@ -453,11 +474,11 @@ async function botSwitch(browser) {
   await avatar.tap();
   await fan.locator('[data-org-bot="designer"]').waitFor();
   assert.equal(await avatar.getAttribute('aria-expanded'), 'true');
-  assert.deepEqual(await fan.locator('[data-org-bot]').evaluateAll(els => els.map(e => e.dataset.orgBot)), ['designer', 'sales-lead'], 'the recent bots, not this one');
+  assert.deepEqual(await fan.locator('[data-org-bot]').evaluateAll(els => els.map(e => (e as HTMLElement).dataset.orgBot)), ['designer', 'sales-lead'], 'the recent bots, not this one');
   assert.equal(await fan.locator('[data-org-search]').count(), 1);
   // It rises from the bar: the lowest bot sits above the avatar.
   const [low, bar] = [await fan.locator('[data-org-bot="designer"]').boundingBox(), await avatar.boundingBox()];
-  assert.ok(low.y + low.height <= bar.y, 'above the bar');
+  assert.ok(low!.y + low!.height <= bar!.y, 'above the bar');
   await shot(page, 'fan-phone-dark');
   await page.keyboard.press('Escape');
   await fan.waitFor({state: 'hidden'});
@@ -478,15 +499,15 @@ async function botSwitch(browser) {
 
 // Stop: while the thread's run goes, Stop takes Send's place until something is typed, and posts the stop for that run;
 // it stays pressed until the run ends, then Send is back. Someone who does not manage the bot has no Stop.
-async function stop(browser) {
+async function stop(browser: Browser) {
   let api = await open(browser, {width: 390, execution: {state: 'running', run_id: 'a1', label: 'Working'}}), {page} = api;
   const stopBtn = page.locator('#bot-thread .p-stop'), send = page.locator('#bot-thread .p-send'), box = page.locator('#bot-thread .p-text');
   await stopBtn.waitFor();
   assert.ok(api.snapshots.includes(HOME), 'the Home reads its own run');
   assert.equal(await send.isHidden(), true, 'Stop in place of Send');
   const l = await layout(page);
-  const mid = await stopBtn.evaluate(b => { const r = b.getBoundingClientRect(); return Math.round(r.top + r.height / 2); });
-  assert.ok(Math.abs(mid - l.text) <= 3 && l.pill < 60, 'on the one line');
+  const mid = await stopBtn.evaluate((b: Element) => { const r = b.getBoundingClientRect(); return Math.round(r.top + r.height / 2); });
+  assert.ok(Math.abs(mid - l.text!) <= 3 && l.pill < 60, 'on the one line');
   await shot(page, 'running-phone-dark');
   await box.fill('One more thing');
   assert.equal(await stopBtn.isHidden(), true, 'typing brings Send back');
@@ -494,34 +515,34 @@ async function stop(browser) {
   await box.fill('');
   await stopBtn.waitFor();
   await stopBtn.tap();
-  await page.waitForFunction(() => document.querySelector('#bot-thread .p-stop')?.disabled);
+  await page.waitForFunction(() => document.querySelector<HTMLButtonElement>('#bot-thread .p-stop')?.disabled);
   assert.deepEqual(api.stops, [{run_id: 'a1'}]);
   assert.equal(await stopBtn.getAttribute('title'), 'Stopping…');
   // The run ends: the thread's run event reads the snapshot again, and Send is back.
   api.execution = {state: 'canceled', run_id: 'a1', label: 'Stopped'};
-  await page.evaluate(tid => liveEmit('runs', {conversation_id: tid, run_id: 'a1', state: 'canceled'}), HOME);
+  await page.evaluate((tid: string) => liveEmit('runs', {conversation_id: tid, run_id: 'a1', state: 'canceled'}), HOME);
   await stopBtn.waitFor({state: 'hidden'});
   assert.equal(await send.isHidden(), false);
   // A run starting later (a message just sent) shows Stop again; its output steps do not read anything.
   const reads = api.snapshots.length;
-  await page.evaluate(tid => liveEmit('runs', {conversation_id: tid, run_id: 'a2', output: {kind: 'delta'}}), HOME);
+  await page.evaluate((tid: string) => liveEmit('runs', {conversation_id: tid, run_id: 'a2', output: {kind: 'delta'}}), HOME);
   await page.waitForTimeout(250);
   assert.equal(api.snapshots.length, reads, 'output steps read nothing');
   api.execution = {state: 'running', run_id: 'a2', label: 'Working'};
-  await page.evaluate(tid => liveEmit('runs', {conversation_id: tid, run_id: 'a2', state: 'running'}), HOME);
+  await page.evaluate((tid: string) => liveEmit('runs', {conversation_id: tid, run_id: 'a2', state: 'running'}), HOME);
   await stopBtn.waitFor();
   assert.deepEqual(api.errors, []);
   await page.close();
 
   ({page} = api = await open(browser, {width: 1280, role: 'member', execution: {state: 'running', run_id: 'a1'}}));
-  await page.waitForFunction(() => BOT?.thread?.view?.execution);
+  await page.waitForFunction(() => (BOT as unknown as PageBot)?.thread?.view?.execution);
   assert.equal(await page.locator('#bot-thread .p-stop').isHidden(), true, 'no Stop for someone who does not manage the bot');
   assert.equal(await page.locator('#bot-thread .p-send').isHidden(), false);
   await page.close();
 }
 
 // "/" opens the old chat's command menu; a command does what it did there.
-async function slash(browser) {
+async function slash(browser: Browser) {
   let api = await open(browser, {width: 390, commands: COMMANDS}), {page} = api;
   const box = page.locator('#bot-thread .p-text'), menu = page.locator('#bot-thread .slash-menu'), out = page.locator('#bot-thread .p-cmd');
   await page.locator('#bot-thread .p-way:not([hidden])').waitFor();
@@ -542,7 +563,7 @@ async function slash(browser) {
   // A harness's command goes to the bot, marked as a command, in this thread; never as a thread message.
   await box.fill('/compact');
   await page.locator('#bot-thread .p-send').click();
-  await page.waitForFunction(() => !document.querySelector('#bot-thread .p-text').value);
+  await page.waitForFunction(() => !document.querySelector<HTMLInputElement>('#bot-thread .p-text')!.value);
   assert.deepEqual(api.commands, [{to: `bot:${BOT}`, text: '/compact', conversation_id: HOME, command: true}]);
   // /task makes a task for this bot; /goal sets the thread's goal; /clear asks first; anything else is a message.
   await box.fill('/task Write the pricing brief');
@@ -558,7 +579,7 @@ async function slash(browser) {
   await out.getByRole('button', {name: 'Clear session'}).waitFor();
   await box.fill('/unknown words');
   await page.locator('#bot-thread .p-send').click();
-  await page.waitForFunction(() => !document.querySelector('#bot-thread .th-pending'));
+  await page.waitForFunction(() => !document.querySelector<HTMLElement>('#bot-thread .th-pending'));
   assert.deepEqual(api.sent.map(b => b.text), ['/unknown words'], 'a word the bot does not list goes as a message');
   assert.deepEqual(api.errors, []);
   await page.close();
@@ -570,7 +591,7 @@ async function slash(browser) {
   assert.deepEqual(await page.locator('#bot-thread .slash-menu .slash-name').allInnerTexts(), ['/new']);
   await page.locator('#bot-thread .p-text').fill('/new');
   await page.locator('#bot-thread .p-send').click();
-  await page.waitForFunction(() => BOT?.thread?.view?.state === 'empty' && !BOT.thread.view.id);
+  await page.waitForFunction(() => (BOT as unknown as PageBot)?.thread?.view?.state === 'empty' && !(BOT as unknown as PageBot).thread!.view!.id);
   assert.deepEqual(api.patches, [{p: `/api/v2/threads/${DM}`, archived: true}]);
   assert.deepEqual(api.errors, []);
   await page.close();
@@ -579,18 +600,18 @@ async function slash(browser) {
 // Under the box: Follow (posting never follows; ticked, the send follows the thread, and the choice is kept per kind of
 // thread) and the reach line ("To Designer and Ben"), whose list says who the message reaches and how. It follows the way Send shows and the
 // @mentions typed, reading one at a time after a pause; a DM shows neither.
-async function followReach(browser) {
+async function followReach(browser: Browser) {
   for (const theme of ['light', 'dark']) {
     let api = await open(browser, {width: 1280, theme}), {page} = api;
     const home = page.locator('#bot-thread'), reachBtn = home.locator('.p-reach'), pop = home.locator('.p-reach-pop');
     for (let i = 0; i < 200 && !api.reachReads.length; i++) await new Promise(done => setTimeout(done, 25));
-    assert.equal(api.reachReads[0].delivery, 'steer', 'the Home asks for the way Send shows');
+    assert.equal(api.reachReads[0]!.delivery, 'steer', 'the Home asks for the way Send shows');
     assert.equal(await home.locator('.p-follow, [data-compose-follow]').count(), 0, 'no Follow under the box: following lives on the thread');
     assert.equal(await reachBtn.isHidden(), true, 'reaching only the bot you are messaging: no line');
-    const said = loc => loc.locator('.p-reach-row').evaluateAll(xs => xs.map(x => [x.querySelector('.p-reach-name').textContent, x.querySelector('.p-reach-mode').textContent]));
+    const said = (loc: Locator) => loc.locator('.p-reach-row').evaluateAll(xs => xs.map(x => [x.querySelector('.p-reach-name')!.textContent!, x.querySelector('.p-reach-mode')!.textContent!]));
     await pick(page, 'queue');
-    for (let i = 0; i < 200 && api.reachReads.at(-1).delivery !== 'queue'; i++) await new Promise(done => setTimeout(done, 25));
-    assert.equal(api.reachReads.at(-1).delivery, 'queue', 'a new way asks again');
+    for (let i = 0; i < 200 && api.reachReads.at(-1)!.delivery !== 'queue'; i++) await new Promise(done => setTimeout(done, 25));
+    assert.equal(api.reachReads.at(-1)!.delivery, 'queue', 'a new way asks again');
     // Typing asks after a pause, one read at a time, and only the @mentions go; then the line names who it reaches.
     const asked = api.reachReads.length;
     api.reachSlow = 400;
@@ -600,7 +621,7 @@ async function followReach(browser) {
     api.reachSlow = 0;
     assert.equal(api.reachMax, 1, 'one read at a time');
     assert.ok(api.reachReads.length - asked <= 3, `a pause between reads (${api.reachReads.length - asked})`);
-    assert.equal(api.reachReads.at(-1).text, '@sales-lead please', 'only what follows an @');
+    assert.equal(api.reachReads.at(-1)!.text, '@sales-lead please', 'only what follows an @');
     assert.ok(api.reachReads.slice(asked).every(r => r.text !== undefined), 'words with no @ ask nothing new');
     await reachBtn.click();
     assert.deepEqual(await said(pop), [['Sales Lead', 'After its turn'], ['Engineering Manager', 'After its turn']]);
@@ -625,7 +646,7 @@ async function followReach(browser) {
     const chan = page.locator('#chan-thread'), cReach = chan.locator('.p-reach'), cPop = chan.locator('.p-reach-pop');
     await cReach.filter({hasText: /^To Designer and /}).waitFor();
     assert.equal(await chan.locator('.p-follow').count(), 0, 'no Follow under the box');
-    assert.equal('delivery' in api.reachReads.at(-1), false, 'a chat with no ways asks for the server\'s Steer');
+    assert.equal('delivery' in api.reachReads.at(-1)!, false, 'a chat with no ways asks for the server\'s Steer');
     // @mentions: one reached, one who can't see #launch.
     await chan.locator('.p-text').fill('@sales-lead and @zed, the deck is ready');
     await cReach.filter({hasText: /^To Sales Lead, Designer \+1$/}).waitFor();
@@ -633,7 +654,7 @@ async function followReach(browser) {
     const rows = await said(cPop);
     assert.deepEqual(rows.map(r => r[1]), ['Now', 'Now', 'Notified', 'Not reached']);
     assert.deepEqual(rows.slice(0, 2).map(r => r[0]), ['Sales Lead', 'Designer']);
-    assert.match(rows[2][0], /ben/i); assert.match(rows[3][0], /zed/i);
+    assert.match(rows[2]![0]!, /ben/i); assert.match(rows[3]![0]!, /zed/i);
     const fits = await cPop.evaluate(m => { const r = m.getBoundingClientRect(); return r.left >= 0 && r.right <= innerWidth && r.top >= 0; });
     assert.ok(fits, 'the list fits');
     await cPop.evaluate(m => Promise.all(m.getAnimations().map(a => a.finished)));
@@ -642,9 +663,9 @@ async function followReach(browser) {
     assert.equal(await cPop.isHidden(), true, 'Escape closes the list');
     // Send: posting never follows.
     await chan.locator('.p-send').click();
-    await page.waitForFunction(() => !document.querySelector('#chan-thread .th-pending') && !document.querySelector('#chan-thread .p-text').value);
-    assert.equal(api.sent.at(-1).text, '@sales-lead and @zed, the deck is ready');
-    assert.equal('follow' in api.sent.at(-1), false, 'posting itself never follows');
+    await page.waitForFunction(() => !document.querySelector<HTMLElement>('#chan-thread .th-pending') && !document.querySelector<HTMLInputElement>('#chan-thread .p-text')!.value);
+    assert.equal(api.sent.at(-1)!.text, '@sales-lead and @zed, the deck is ready');
+    assert.equal('follow' in api.sent.at(-1)!, false, 'posting itself never follows');
     assert.deepEqual(api.follows, [], 'a send follows nothing');
     assert.deepEqual(api.errors, []);
     await page.close();
@@ -667,7 +688,7 @@ async function followReach(browser) {
     await page.keyboard.press('Escape');
     await page.locator('#chan-thread .p-text').fill('Thanks');
     await page.locator('#chan-thread .p-send').click();
-    await page.waitForFunction(() => !document.querySelector('#chan-thread .th-pending') && !document.querySelector('#chan-thread .p-text').value);
+    await page.waitForFunction(() => !document.querySelector<HTMLElement>('#chan-thread .th-pending') && !document.querySelector<HTMLInputElement>('#chan-thread .p-text')!.value);
     assert.deepEqual(api.follows, []);
     await page.evaluate(() => {
       const host = document.createElement('div');

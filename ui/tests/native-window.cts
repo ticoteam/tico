@@ -1,20 +1,56 @@
 // The desktop app is one ordinary window: no right-rail button or mode, and the page stays usable as the person
 // drags it narrow (the compact layout up to 760px, as the rail used to give) or wide.
-const {webkit} = require('playwright');
-const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const {html, uiFile} = require('./support/page.cjs');
-const {unrouted} = require('./support/routes.cjs');
-const {threadsFake} = require('./support/threads-fake.cjs');
+const {webkit}: typeof import('playwright') = require('playwright');
+const assert: typeof import('node:assert/strict') = require('node:assert/strict');
+const fs: typeof import('node:fs') = require('node:fs');
+const {html, uiFile} = require('./support/page.cjs') as typeof import('./support/page.cjs');
+const {unrouted} = require('./support/routes.cjs') as typeof import('./support/routes.cjs');
+const {threadsFake} = require('./support/threads-fake.cjs') as typeof import('./support/threads-fake.cjs');
 const VISUAL = 'https://visuals.acme-files.example', NEXT_VISUAL = 'https://next.acme-files.example';
 const TOKEN = 'YQ.' + 'a'.repeat(43);
-const bridge = fs.readFileSync(require('node:path').join(__dirname, '../../app/src/bridge.rs'), 'utf8')
-  .match(/const BRIDGE_SCRIPT: &str = r#"([\s\S]*?)"#;/)[1];
+const bridge: string = fs.readFileSync(require('node:path').join(__dirname, '../../app/src/bridge.rs'), 'utf8')
+  .match(/const BRIDGE_SCRIPT: &str = r#"([\s\S]*?)"#;/)![1]!;
+
+type Browser = import('playwright').Browser;
+type Route = import('playwright').Route;
+type Pending = {resolve: (v: boolean) => void; reject: (e: Error) => void; origin: string};
+interface VisualWin {
+  __calls: {origin: string}[]; __pending: Pending[]; __nativeOrigin: string;
+  __boot: {route: string; server: {path: string; ms: number}[]; marks: {[k: string]: number; boot: number; roster: number; route: number}}[];
+  __refresh: Promise<unknown>; __queuedAt: number; __queued: Promise<unknown>;
+  __raf: (cb: (t: number) => void) => number; __heldRAF: ((t: number) => void)[];
+  pageCard: (file: Record<string, unknown>, opts: {size: string}) => Element;
+  EventSource: unknown; requestAnimationFrame: (cb: (t: number) => void) => number;
+}
+interface HostedWin { __calls: {origin: string; files?: string}[]; __pending: ((accepted: boolean) => void)[]; ticoNativeFeatures: string[] }
+interface MainWin { __posted: [string, unknown][]; ticoNative: (name: string) => {postMessage: (body: unknown) => void}; ticoNativeFeatures: string[];
+  ticoWindowModeChanged?: unknown; ticoBootTiming?: {route: string; settled?: boolean; marks: {'paint-fresh': number; route: number}}; EventSource: unknown }
+
+declare const S: {config: {company_name?: string; visual_origin?: string; visual_files?: string; visuals?: string}; me: {id: string} | null; status: {keeper_alive?: boolean} | null};
+declare function visualSrc(x: {src: string}): string | null;
+declare function visualPageSrc(src: string): string | null;
+declare function pageViewSrc(src: string, size: string): string | null;
+declare function refreshConfig(): Promise<void>;
+declare function applyConfig(c: unknown): void;
+declare function signedOut(): void;
+declare function nativeVisualVersion(): number;
+declare function thvRefresh(v: unknown): Promise<unknown>;
+declare function taskChatRead(c: unknown): Promise<unknown>;
+declare function taskModalShow(t: unknown): void;
+declare function visualPictureWire(el: Element): void;
+declare function vmWire(el: Element): void;
+declare function visualExpand(el: Element | null): void;
+declare const THV_VIEWS: Iterable<unknown>;
+declare let TASK_CHAT: unknown;
+declare const GET_INFLIGHT: Set<string>;
+declare let NATIVE_VISUAL_WAIT_MS: number;
+declare let NATIVE_VISUAL_PENDING: unknown;
+declare let NATIVE_VISUAL_FILES: unknown;
 
 // Browser fixture of the actual bridge wrapper and app, not proof of native WebView navigation/IPC.
-async function visualHandshake(browser) {
+async function visualHandshake(browser: Browser) {
   const page = await browser.newPage({serviceWorkers:'block', userAgent:'Mozilla/5.0 AppleWebKit/605.1.15 TicoHub'});
-  const errors = [], reads = [];
+  const errors: string[] = [], reads: string[] = [];
   page.on('pageerror', e => {
     // WebKit reports its expected denial while Playwright blocks service workers in sandboxed frames.
     if (e.message !== "Service Worker is disabled because the context is sandboxed and lacks the 'allow-same-origin' flag") errors.push(e.message);
@@ -33,8 +69,8 @@ async function visualHandshake(browser) {
     ${bridge}
     })();
   `});
-  let config = {company_name:'Acme', visual_origin:VISUAL}, visual = VISUAL, revision = 1;
-  let authenticated = true, holdEmployees = null;
+  let config: {company_name?: string; visual_origin?: string} = {company_name:'Acme', visual_origin:VISUAL}, visual = VISUAL, revision = 1;
+  let authenticated = true, holdEmployees: ((route: Route) => void) | null = null;
   const message = () => ({id:'m1', sender_id:'bot:ops', body:'Visual revision '+revision,
     created_at:'2026-01-01T00:00:00Z', refs:{attachments:[{id:'f1', file_id:'f1', version:revision,
       current_version:revision, ref:'f1@'+revision, title:'Plan', kind:'page', name:'plan.html',
@@ -43,9 +79,9 @@ async function visualHandshake(browser) {
     rank:1, version:1, created_at:'2026-01-01T00:00:00Z', updated_at:'2026-01-01T00:00:00Z', body:'Plan',
     parts:{total:0, done:0}, labels:[], links:[], attachments:[]};
   const threads = threadsFake({bot:'ops', messages:() => [message()]});
-  await page.route('**/*', async route => {
+  await page.route('**/*', async (route: Route) => {
     const url = new URL(route.request().url()), p = url.pathname;
-    const json = body => route.fulfill({contentType:'application/json', body:JSON.stringify(body)});
+    const json = (body: unknown) => route.fulfill({contentType:'application/json', body:JSON.stringify(body)});
     if ([new URL(VISUAL).hostname, new URL(NEXT_VISUAL).hostname].includes(url.hostname)) {
       reads.push(url.origin);
       return route.fulfill({contentType:'text/html', body:'<p>Plan</p>', headers:{'Cross-Origin-Resource-Policy':'cross-origin'}});
@@ -73,14 +109,14 @@ async function visualHandshake(browser) {
     if (p === '/api/v2/tasks/t1/files') return json({files:[]});
     return json(unrouted(p));
   });
-  const waitCall = async (index, origin) => {
-    await page.waitForFunction(index => window.__calls.length > index, index);
-    assert.equal(await page.evaluate(index => window.__calls[index].origin, index), origin);
+  const waitCall = async (index: number, origin: string) => {
+    await page.waitForFunction((index: number) => (window as unknown as VisualWin).__calls.length > index, index);
+    assert.equal(await page.evaluate((index: number) => (window as unknown as VisualWin).__calls[index]!.origin, index), origin);
   };
-  const ack = (index, accepted) => page.evaluate(({index, accepted}) => {
-    const call = window.__pending[index]; window.__nativeOrigin = accepted ? call.origin : ''; call.resolve(accepted);
+  const ack = (index: number, accepted: boolean) => page.evaluate(({index, accepted}: {index: number; accepted: boolean}) => {
+    const call = (window as unknown as VisualWin).__pending[index]!; (window as unknown as VisualWin).__nativeOrigin = accepted ? call.origin : ''; call.resolve(accepted);
   }, {index, accepted});
-  const refresh = () => page.evaluate(() => { window.__refresh = refreshConfig(); });
+  const refresh = () => page.evaluate(() => { (window as unknown as VisualWin).__refresh = refreshConfig(); });
   await page.goto('https://tico-ui.test/#/bot/ops/dm', {waitUntil:'domcontentloaded'});
   await waitCall(0, '');
   await page.waitForFunction(() => typeof visualSrc === 'function');
@@ -89,12 +125,12 @@ async function visualHandshake(browser) {
   await ack(0, false);
   await waitCall(1, VISUAL);
   assert.equal(await page.locator('iframe.vcard-frame').count(), 0);
-  assert.deepEqual(reads, [], 'boot has not rendered a visual before the bridge ACK');
+  assert.deepEqual(reads, [] as string[], 'boot has not rendered a visual before the bridge ACK');
   const firstRead = page.waitForResponse(response => new URL(response.url()).origin === VISUAL);
   // A pinned page drawn before the ACK is an Open card, and becomes its frame once the shell trusts the address.
   assert.equal(await page.evaluate(src => {
     const slot = document.createElement('div'); slot.id = 'pin-test';
-    slot.append(window.pageCard({file_id:'p1', title:'Plan', version:1, updated_at:'2026-01-01T00:00:00Z', src}, {size:'small'}));
+    slot.append((window as unknown as VisualWin).pageCard({file_id:'p1', title:'Plan', version:1, updated_at:'2026-01-01T00:00:00Z', src}, {size:'small'}));
     document.body.append(slot);
     return slot.querySelectorAll('.pg-card:not(.pg-framed) .pg-open').length;
   }, VISUAL+'/visuals/'+TOKEN), 1, 'an untrusted page is an Open card');
@@ -102,12 +138,12 @@ async function visualHandshake(browser) {
   await page.locator('iframe.vcard-frame[src]').waitFor();
   await page.locator('#pin-test .pg-card.pg-framed iframe.page-frame').waitFor();
   assert.equal(await page.locator('#pin-test .pg-card').count(), 1, 'the pinned page is drawn again in place');
-  await page.evaluate(() => document.getElementById('pin-test').remove());
+  await page.evaluate(() => document.getElementById('pin-test')!.remove());
   await firstRead;
   assert.ok(reads.includes(VISUAL));
   // The open's timing goes to the shell once, as the page and kinds of read, never the bot, task or person.
-  await page.waitForFunction(() => window.__boot.length > 0, null, {timeout:25000});
-  const [boot, ...again] = await page.evaluate(() => window.__boot);
+  await page.waitForFunction(() => (window as unknown as VisualWin).__boot.length > 0, null, {timeout:25000});
+  const [boot, ...again] = await page.evaluate(() => (window as unknown as VisualWin).__boot) as [VisualWin['__boot'][number], ...VisualWin['__boot'][number][]];
   assert.deepEqual(again, [], 'one report per load');
   assert.equal(boot.route, '#/bot');
   for (const name of ['boot', 'roster', 'route']) assert.ok(Number.isInteger(boot.marks[name]), name);
@@ -130,16 +166,16 @@ async function visualHandshake(browser) {
   assert.equal(await page.locator('iframe.vcard-frame').count(), 0, 'live snapshot stays file chips during config ACK');
   assert.equal(reads.includes(NEXT_VISUAL), false);
   const nextRead = page.waitForResponse(response => new URL(response.url()).origin === NEXT_VISUAL);
-  await ack(2, true); await page.evaluate(() => window.__refresh);
+  await ack(2, true); await page.evaluate(() => (window as unknown as VisualWin).__refresh);
   await page.waitForFunction(() => document.querySelectorAll('iframe.vcard-frame[src]').length === 2);
   await nextRead;
   assert.ok(reads.includes(NEXT_VISUAL));
   assert.equal(await page.locator('#task-modal textarea[aria-label="Message"]').inputValue(), 'Keep this draft');
   const projected = await page.evaluate(({origin, token}) => {
-    const before = window.__calls.length;
+    const before = (window as unknown as VisualWin).__calls.length;
     applyConfig({...S.config, visual_origin:'https://untrusted.example'});
-    const src = value => visualSrc({src:value});
-    return {calls:window.__calls.length-before, good:src(origin+'/visuals/'+token),
+    const src = (value: string) => visualSrc({src:value});
+    return {calls:(window as unknown as VisualWin).__calls.length-before, good:src(origin+'/visuals/'+token),
       denied:[origin+'/visuals/'+token+'#x', origin+'/visuals/'+token+'?', origin+'/a/../visuals/'+token,
         origin+'/visuals/%59Q.'+'a'.repeat(43), origin+'/api/v2/me', 'https://untrusted.example/visuals/'+token,
         'https://person@'+new URL(origin).host+'/visuals/'+token].map(src), local:src('/visuals/local')};
@@ -150,46 +186,46 @@ async function visualHandshake(browser) {
   assert.equal(projected.local, 'https://tico-ui.test/visuals/local');
 
   config = {company_name:'Missing visual setting'};
-  await refresh(); await waitCall(3, ''); await ack(3, false); await page.evaluate(() => window.__refresh);
+  await refresh(); await waitCall(3, ''); await ack(3, false); await page.evaluate(() => (window as unknown as VisualWin).__refresh);
   assert.equal(await page.evaluate(() => S.config.visual_origin), '');
   config = {company_name:'Grant refused', visual_origin:VISUAL};
   await refresh(); await waitCall(4, VISUAL);
   await ack(4, false);
-  await waitCall(5, ''); await ack(5, false); await page.evaluate(() => window.__refresh);
+  await waitCall(5, ''); await ack(5, false); await page.evaluate(() => (window as unknown as VisualWin).__refresh);
   assert.equal(await page.evaluate(() => S.config.company_name), 'Grant refused');
   assert.equal(await page.evaluate(src => visualSrc({src}), VISUAL+'/visuals/'+TOKEN), null);
   config = {company_name:'Bridge unavailable', visual_origin:VISUAL};
   await refresh(); await waitCall(6, VISUAL);
-  await page.evaluate(() => window.__pending[6].reject(new Error('bridge unavailable')));
-  await waitCall(7, ''); await ack(7, false); await page.evaluate(() => window.__refresh);
+  await page.evaluate(() => (window as unknown as VisualWin).__pending[6]!.reject(new Error('bridge unavailable')));
+  await waitCall(7, ''); await ack(7, false); await page.evaluate(() => (window as unknown as VisualWin).__refresh);
   assert.equal(await page.evaluate(() => S.config.company_name), 'Bridge unavailable', 'bridge failure keeps the app usable');
   assert.equal(await page.evaluate(src => visualSrc({src}), VISUAL+'/visuals/'+TOKEN), null);
 
   config = {company_name:'Late grant', visual_origin:NEXT_VISUAL};
   await refresh(); await waitCall(8, NEXT_VISUAL);
   config = {company_name:'Queued grant', visual_origin:VISUAL};
-  await page.evaluate(() => { window.__queuedAt = nativeVisualVersion(); window.__queued = refreshConfig(); });
-  await page.waitForFunction(() => nativeVisualVersion() > window.__queuedAt);
+  await page.evaluate(() => { (window as unknown as VisualWin).__queuedAt = nativeVisualVersion(); (window as unknown as VisualWin).__queued = refreshConfig(); });
+  await page.waitForFunction(() => nativeVisualVersion() > (window as unknown as VisualWin).__queuedAt);
   await page.evaluate(() => signedOut());
   await ack(8, true); await waitCall(9, '');
   assert.equal(await page.evaluate(src => visualSrc({src}), NEXT_VISUAL+'/visuals/'+TOKEN), null);
-  await ack(9, false); await page.evaluate(() => Promise.all([window.__refresh, window.__queued]));
-  assert.equal(await page.evaluate(() => window.__nativeOrigin), '');
+  await ack(9, false); await page.evaluate(() => Promise.all([(window as unknown as VisualWin).__refresh, (window as unknown as VisualWin).__queued]));
+  assert.equal(await page.evaluate(() => (window as unknown as VisualWin).__nativeOrigin), '');
   assert.equal(await page.evaluate(() => S.config.visual_origin), '');
   assert.equal(await page.evaluate(() => S.config.company_name), 'Bridge unavailable', 'stale ACKs cannot apply old config after sign-out');
-  assert.equal(await page.evaluate(() => window.__calls.length), 10, 'the queued grant was skipped before native invocation');
+  assert.equal(await page.evaluate(() => (window as unknown as VisualWin).__calls.length), 10, 'the queued grant was skipped before native invocation');
 
   // A stale bridge rejection after sign-out also stays silent and cannot restore config.
   await page.reload({waitUntil:'domcontentloaded'});
   await waitCall(0, ''); await ack(0, false); await waitCall(1, VISUAL);
   await page.evaluate(() => signedOut());
-  await page.evaluate(() => window.__pending[1].reject(new Error('old command failed')));
+  await page.evaluate(() => (window as unknown as VisualWin).__pending[1]!.reject(new Error('old command failed')));
   await waitCall(2, ''); await ack(2, false);
   await waitCall(3, ''); await ack(3, false);
   assert.equal(await page.evaluate(() => S.config.visual_origin), '');
   assert.equal(await page.getByRole('heading', {name:'Tico server not running'}).count(), 0);
 
-  const rosterRequest = new Promise(resolve => { holdEmployees = resolve; });
+  const rosterRequest = new Promise<Route>(resolve => { holdEmployees = resolve; });
   await page.reload({waitUntil:'domcontentloaded'});
   const staleRoster = await rosterRequest;
   await waitCall(0, ''); await ack(0, false);
@@ -208,16 +244,16 @@ async function visualHandshake(browser) {
   await page.reload({waitUntil:'domcontentloaded'});
   await waitCall(0, ''); await ack(0, false); await waitCall(1, VISUAL);
   await page.evaluate(() => {
-    window.__raf = requestAnimationFrame; window.__heldRAF = [];
-    window.requestAnimationFrame = callback => window.__heldRAF.push(callback);
+    (window as unknown as VisualWin).__raf = requestAnimationFrame; (window as unknown as VisualWin).__heldRAF = [];
+    (window as unknown as VisualWin).requestAnimationFrame = callback => (window as unknown as VisualWin).__heldRAF.push(callback);
   });
   await ack(1, true);
   await page.waitForFunction(() => document.querySelector('iframe.vcard-frame[data-src]'), null, {polling:50});
   await page.evaluate(({origin, token}) => {
-    const cached = (id, kind, body) => {
+    const cached = (id: string, kind: string, body: string) => {
       const card = document.createElement('figure');
       card.id = id; card.className = 'vcard'; card.dataset.kind = kind; card.dataset.wired = '1';
-      card.dataset.freshSrc = visualSrc({src:origin+'/visuals/'+token});
+      card.dataset.freshSrc = visualSrc({src:origin+'/visuals/'+token}) as string;
       card.innerHTML = '<div class="vcard-body">'+body+'</div><div class="vcard-menu-list"><a href="/api/v2/files/f1" download>Download</a></div>';
       document.body.append(card); return card;
     };
@@ -231,11 +267,11 @@ async function visualHandshake(browser) {
   await waitCall(2, ''); await ack(2, false);
   await page.evaluate(() => {
     for (let batch = 0; batch < 2; batch++) {
-      const callbacks = window.__heldRAF.splice(0); callbacks.forEach(callback => callback(performance.now()));
+      const callbacks = (window as unknown as VisualWin).__heldRAF.splice(0); callbacks.forEach(callback => callback(performance.now()));
     }
-    window.requestAnimationFrame = window.__raf;
-    document.querySelector('#cached-image img').dispatchEvent(new Event('error'));
-    document.querySelector('#cached-media audio').dispatchEvent(new Event('error'));
+    (window as unknown as VisualWin).requestAnimationFrame = (window as unknown as VisualWin).__raf;
+    document.querySelector('#cached-image img')!.dispatchEvent(new Event('error'));
+    document.querySelector('#cached-media audio')!.dispatchEvent(new Event('error'));
     visualExpand(document.getElementById('cached-expand'));
   });
   assert.equal(await page.locator('iframe[src], #cached-image img[src], #cached-media audio[src]').count(), 0);
@@ -256,12 +292,12 @@ async function visualHandshake(browser) {
   await page.waitForFunction(() => S.me?.id === 'ana');
   assert.equal(await page.evaluate(() => S.config.company_name), 'Timed out bridge');
   assert.equal(await page.locator('iframe.vcard-frame').count(), 0);
-  assert.equal(await page.evaluate(() => window.__calls.length), 2, 'timeout does not advance the unresolved native FIFO');
+  assert.equal(await page.evaluate(() => (window as unknown as VisualWin).__calls.length), 2, 'timeout does not advance the unresolved native FIFO');
   await ack(1, true); await waitCall(2, '');
-  assert.equal(await page.evaluate(() => window.__nativeOrigin), VISUAL, 'queued native clear has not ACKed yet');
+  assert.equal(await page.evaluate(() => (window as unknown as VisualWin).__nativeOrigin), VISUAL, 'queued native clear has not ACKed yet');
   assert.equal(await page.evaluate(src => visualSrc({src}), VISUAL+'/visuals/'+TOKEN), null);
   await ack(2, false); await page.evaluate(() => NATIVE_VISUAL_PENDING);
-  assert.equal(await page.evaluate(() => window.__nativeOrigin), '');
+  assert.equal(await page.evaluate(() => (window as unknown as VisualWin).__nativeOrigin), '');
   assert.equal(await page.locator('iframe.vcard-frame').count(), 0);
 
   authenticated = false; config = {visual_origin:VISUAL};
@@ -272,7 +308,7 @@ async function visualHandshake(browser) {
   await ack(1, false); await waitCall(2, ''); await ack(2, false);
   await page.evaluate(() => NATIVE_VISUAL_PENDING);
   assert.equal(await page.evaluate(() => S.me), null, 'a clear ACK after sign-out cannot restore malformed identity/config');
-  assert.ok((await page.evaluate(() => window.__calls)).every(call => call.origin === ''), 'unauthenticated 200 never grants an origin');
+  assert.ok((await page.evaluate(() => (window as unknown as VisualWin).__calls)).every(call => call.origin === ''), 'unauthenticated 200 never grants an origin');
   assert.deepEqual(errors, []);
   await page.close();
 }
@@ -280,10 +316,10 @@ async function visualHandshake(browser) {
 // Tico file hosting with no visual address: a page's `src` is on the app's own route, which sends its frame on to the
 // company's files address. The shell is told that address with the visual origin, and the page frames only once it
 // acknowledged it; a shell too old to know it never hears the address, and the page stays an Open card.
-async function hostedHandshake(browser, current) {
+async function hostedHandshake(browser: Browser, current: boolean) {
   const FILES = 'https://acme-files.ticofiles.com';
   const page = await browser.newPage({serviceWorkers:'block', userAgent:'Mozilla/5.0 AppleWebKit/605.1.15 TicoHub'});
-  const errors = [], reads = [];
+  const errors: string[] = [], reads: string[] = [];
   page.on('pageerror', e => {
     if (e.message !== "Service Worker is disabled because the context is sandboxed and lacks the 'allow-same-origin' flag") errors.push(e.message);
   });
@@ -308,7 +344,7 @@ async function hostedHandshake(browser, current) {
   const threads = threadsFake({bot:'ops', messages:[message]});
   await page.route('**/*', async route => {
     const url = new URL(route.request().url()), p = url.pathname;
-    const json = body => route.fulfill({contentType:'application/json', body:JSON.stringify(body)});
+    const json = (body: unknown) => route.fulfill({contentType:'application/json', body:JSON.stringify(body)});
     if (p.startsWith('/visuals/')) { reads.push(p); return route.fulfill({contentType:'text/html', body:'<p>Weekly</p>'}); }
     if (p === '/') return route.fulfill({contentType:'text/html', body:html});
     if (p.startsWith('/tico/ui/')) {
@@ -327,17 +363,17 @@ async function hostedHandshake(browser, current) {
     return json(unrouted(p));
   });
   await page.goto('https://tico-ui.test/#/bot/ops/dm', {waitUntil:'domcontentloaded'});
-  await page.waitForFunction(() => window.__calls.length > 0);
-  await page.evaluate(() => window.__pending[0](false));
-  await page.waitForFunction(() => window.__calls.length > 1);
-  assert.deepEqual(await page.evaluate(() => window.__calls[1]), current ? {origin:'', files:FILES} : {origin:''},
+  await page.waitForFunction(() => (window as unknown as HostedWin).__calls.length > 0);
+  await page.evaluate(() => (window as unknown as HostedWin).__pending[0]!(false));
+  await page.waitForFunction(() => (window as unknown as HostedWin).__calls.length > 1);
+  assert.deepEqual(await page.evaluate(() => (window as unknown as HostedWin).__calls[1]), current ? {origin:'', files:FILES} : {origin:''},
     current ? 'the shell hears the files address' : 'an older shell never hears a field it would refuse');
   // ACK inside the UI's bridge wait (NATIVE_VISUAL_WAIT_MS): the thread renders cards only after it, and a timed-out
   // wait queues a clear this fake shell would never answer. Before the ACK a same-origin page src is refused.
   assert.equal(await page.evaluate(() => visualPageSrc('/visuals/' + 'YQ.' + 'a'.repeat(43))), null,
     'no frame before the shell follows it');
   const loaded = current ? page.waitForResponse(r => new URL(r.url()).pathname === '/visuals/' + TOKEN && r.status() === 200) : null;
-  await page.evaluate(accepted => window.__pending[1](accepted), current);
+  await page.evaluate(accepted => (window as unknown as HostedWin).__pending[1]!(accepted), current);
   if (current) {
     await page.locator('figure.vcard[data-state="ready"] iframe.vcard-frame[src]').waitFor();
     // The frame element exists before its request necessarily starts.
@@ -349,14 +385,14 @@ async function hostedHandshake(browser, current) {
     assert.equal(await page.evaluate(() => pageViewSrc('/visuals/x', 'small')), '/visuals/x#tico-view=card&tico-size=small');
     assert.equal(await page.evaluate(() => pageViewSrc('/visuals/x', 'full')), '/visuals/x#tico-view=full&tico-size=full');
     assert.equal(await page.evaluate(() => {
-      const all = window.ticoNativeFeatures;
-      window.ticoNativeFeatures = all.filter(f => f !== 'visualView');
-      try { return pageViewSrc('/visuals/x', 'small'); } finally { window.ticoNativeFeatures = all; }
+      const all = (window as unknown as HostedWin).ticoNativeFeatures;
+      (window as unknown as HostedWin).ticoNativeFeatures = all.filter(f => f !== 'visualView');
+      try { return pageViewSrc('/visuals/x', 'small'); } finally { (window as unknown as HostedWin).ticoNativeFeatures = all; }
     }), '/visuals/x', 'an older shell gets no marker');
   } else {
     await page.locator('figure.vcard[data-state="open"]').waitFor();
     assert.equal(await page.locator('iframe.vcard-frame').count(), 0);
-    assert.equal(await page.evaluate(() => window.__calls.length), 2, 'an older shell gets no clear after a refused grant');
+    assert.equal(await page.evaluate(() => (window as unknown as HostedWin).__calls.length), 2, 'an older shell gets no clear after a refused grant');
     assert.deepEqual(reads, [], 'an older shell would open the redirect in the browser');
   }
   assert.deepEqual(errors, []);
@@ -365,23 +401,23 @@ async function hostedHandshake(browser, current) {
 
 // A promise the page never settles would otherwise hold the job until the runner's own timeout.
 const watchdog = setTimeout(() => { console.error('native window: timed out'); process.exit(1); }, 480000);
-let browser;
+let browser: Browser | undefined;
 (async () => {
   browser = await webkit.launch({headless:true});
   const page = await browser.newPage({serviceWorkers:'block', viewport:{width:1240,height:820},
     userAgent:'Mozilla/5.0 AppleWebKit/605.1.15 TicoHub'});
-  const errors = [], posted = [];
+  const errors: string[] = [], posted: [string, unknown][] = [];
   page.on('pageerror', e => errors.push(e.message));
   await page.addInitScript(() => {
-    window.EventSource = undefined;
+    (window as unknown as MainWin).EventSource = undefined;
     // What the shell's bridge script provides; every message the page sends it is recorded.
-    window.__posted = [];
-    window.ticoNative = name => ({postMessage: body => window.__posted.push([name, body])});
-    window.ticoNativeFeatures = ['openWindow'];
+    (window as unknown as MainWin).__posted = [];
+    (window as unknown as MainWin).ticoNative = (name: string) => ({postMessage: (body: unknown) => (window as unknown as MainWin).__posted.push([name, body])});
+    (window as unknown as MainWin).ticoNativeFeatures = ['openWindow'];
   });
   await page.route('**/*', async route => {
     const p = new URL(route.request().url()).pathname;
-    const json = body => route.fulfill({contentType:'application/json',body:JSON.stringify(body)});
+    const json = (body: unknown) => route.fulfill({contentType:'application/json',body:JSON.stringify(body)});
     if (p === '/') return route.fulfill({contentType:'text/html',body:html});
     if (p.startsWith('/tico/ui/')) {
       const file = uiFile(p.slice('/tico/ui/'.length));
@@ -402,20 +438,20 @@ let browser;
   await page.waitForFunction(() => S.status?.keeper_alive);
   assert.equal(await page.evaluate(() => document.body.classList.contains('native')), true);
   assert.equal(await page.locator('#rail').count(), 0, 'no right-rail button');
-  assert.equal(await page.evaluate(() => typeof window.ticoWindowModeChanged), 'undefined');
+  assert.equal(await page.evaluate(() => typeof (window as unknown as MainWin).ticoWindowModeChanged), 'undefined');
 
   // 360 is the window's minimum width, 420 what the rail was; 760 is the widest compact layout.
-  for (const [width, compact] of [[360, true], [420, true], [760, true], [761, false], [1240, false]]) {
+  for (const [width, compact] of [[360, true], [420, true], [760, true], [761, false], [1240, false]] as [number, boolean][]) {
     await page.setViewportSize({width, height:820});
     await page.waitForFunction(w => window.innerWidth === w, width);
     const seen = await page.evaluate(() => {
-      const shown = el => !!el && getComputedStyle(el).display !== 'none' && el.getBoundingClientRect().width > 0;
-      const main = document.querySelector('#main').getBoundingClientRect();
-      return {overflow: document.scrollingElement.scrollWidth - window.innerWidth,
+      const shown = (el: Element | null | undefined) => !!el && getComputedStyle(el).display !== 'none' && el.getBoundingClientRect().width > 0;
+      const main = document.querySelector('#main')!.getBoundingClientRect();
+      return {overflow: document.scrollingElement!.scrollWidth - window.innerWidth,
               mobileNav: shown(document.querySelector('#mobile-nav')),
-              sidebar: shown(document.querySelector('#side')) && document.querySelector('#side').getBoundingClientRect().left >= 0,
+              sidebar: shown(document.querySelector('#side')) && document.querySelector('#side')!.getBoundingClientRect().left >= 0,
               mainLeft: main.left, mainRight: main.right,
-              heading: shown([...document.querySelectorAll('h1,h2')].find(h => h.textContent.trim() === 'Tasks'))};
+              heading: shown([...document.querySelectorAll('h1,h2')].find(h => h.textContent!.trim() === 'Tasks'))};
     });
     assert.ok(seen.overflow <= 0, `${width}px: page scrolls sideways by ${seen.overflow}px`);
     assert.ok(seen.heading, `${width}px: the page heading is visible`);
@@ -423,13 +459,13 @@ let browser;
     assert.equal(seen.mobileNav, compact, `${width}px: compact navigation ${compact ? 'shown' : 'hidden'}`);
     if (!compact) assert.ok(seen.sidebar, `${width}px: the sidebar is shown`);
   }
-  posted.push(...await page.evaluate(() => window.__posted));
+  posted.push(...await page.evaluate(() => (window as unknown as MainWin).__posted));
   assert.deepEqual(posted.filter(([name]) => name === 'windowMode'), [], 'the page no longer asks the shell for a window mode');
   assert.deepEqual(posted.filter(([name]) => name === 'visualOrigin'), [], 'older shells never receive the new command');
   assert.deepEqual(posted.filter(([name]) => name === 'bootTiming'), [], "nor the open's timing");
   // The report is made once the page settles, which can come after the checks above.
-  await page.waitForFunction(() => window.ticoBootTiming, null, {timeout: 25000});
-  const timing = await page.evaluate(() => window.ticoBootTiming);
+  await page.waitForFunction(() => (window as unknown as MainWin).ticoBootTiming, null, {timeout: 25000});
+  const timing = (await page.evaluate(() => (window as unknown as MainWin).ticoBootTiming))!;
   assert.equal(timing.route, '#/tasks', 'it stays in the page');
   assert.ok(timing.settled && timing.marks['paint-fresh'] >= timing.marks.route, 'the tasks page settles');
   assert.deepEqual(errors, []);

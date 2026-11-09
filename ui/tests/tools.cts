@@ -6,16 +6,61 @@
 // to Everyone) and Finance's read-only row; a Google Ads tool's Finance card (bot pick, switching the import on); the
 // mailbox Limits card; the old addresses' redirects; 390px with no sideways scroll; light and dark.
 // TICO_UI_SHOTS=<dir> saves a screenshot of each page in each theme and width.
-const {chromium} = require('playwright');
-const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const path = require('node:path');
-const {mailboxesFake, open} = require('./support/mailboxes-fake.cjs');
-const {googleFake} = require('./support/google-fake.cjs');
+import type * as MailboxesFake from './support/mailboxes-fake.cjs';
+import type * as GoogleFake from './support/google-fake.cjs';
+const {chromium}: typeof import('playwright') = require('playwright');
+const assert: typeof import('node:assert/strict') = require('node:assert/strict');
+const fs: typeof import('node:fs') = require('node:fs');
+const path: typeof import('node:path') = require('node:path');
+const {mailboxesFake, open} = require('./support/mailboxes-fake.cjs') as typeof MailboxesFake;
+const {googleFake} = require('./support/google-fake.cjs') as typeof GoogleFake;
 
-const at = mins => new Date(Date.UTC(2026, 10, 5, 12, 0) - mins * 60000).toISOString();
+interface Audience {everyone: boolean; people: string[]; teams: string[]; bots: string[]}
+interface ApiAccess {subject: string; kind: string; id: string; name: string; initials: string; level: string; last_used_at: string | null; fixed?: boolean}
+interface ApiTool {
+  tool: {id: string; private?: boolean; [k: string]: unknown};
+  keys: {id: string; [k: string]: unknown}[];
+  access: ApiAccess[];
+  checks: {ok: boolean; status_code: number; detail: string; checked_at: string; credential_id: string | null}[];
+  recent: unknown[];
+  status: {tone: string; text: string};
+  needs_you: boolean;
+  can_manage: boolean;
+  private: boolean;
+  can_set_audience: boolean;
+  audience?: Audience | null;
+  seen_by?: unknown[];
+}
+// A write body as the page sends it; the fields the fake reads are optional.
+interface FakeBody {
+  [k: string]: unknown;
+  enabled?: boolean;
+  bot_slug: string | null;
+  level: string;
+  delivery: string;
+  audience: Audience | null;
+  credentials: Record<string, unknown>;
+}
+interface ApiWrite {method: string; path: string; body: FakeBody}
+interface ApiFin {
+  tool_id: string; tool_name: string; platform: string; platform_label: string;
+  import: {saved: boolean; enabled: boolean; history_from: string; account_id: string; account_name: string; status: string; last_import_at: string; last_error: string; run_requested: boolean; every_hours: number};
+  slots: {slot: string; label: string; required: boolean; credential_id: string; options: {id: string; name: string}[]}[];
+  books_lines: {id: string; code: string; name: string}[];
+  elsewhere: null; month: string; month_label: string;
+  accounts: {id: string; external_id: string; name: string; currency: string; bot_slug: string | null; active: boolean; month_to_date: number}[];
+}
+interface ApiFake {
+  tools: Record<string, ApiTool>;
+  fin: ApiFin;
+  writes: ApiWrite[];
+  reads: string[];
+  answer(p: string, method: string, body: FakeBody, url: URL): unknown;
+}
+
+const at = (mins: number) => new Date(Date.UTC(2026, 10, 5, 12, 0) - mins * 60000).toISOString();
 // Rows as backend/api_tools.py index_page sends them: `who` is {kind: 'bot'|'person', id, name, initials}.
-const who = (kind, id, name) => ({kind, id, name, initials: name.split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase()});
+const who = (kind: string, id: string, name: string) => ({kind, id, name, initials: name.split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase()});
 const ROWS = [
   {id: 'api:t-crm', kind: 'api', name: 'Acme CRM', detail: 'api.crm.acme.example', way: 'Proxy', status: {tone: 'ok', text: 'Working'},
     who: [who('person', 'ana', 'Ana'), who('bot', 'support-bot', 'Support bot'), who('bot', 'sales', 'Sales'), who('bot', 'ops', 'Ops'), who('bot', 'books', 'Books')],
@@ -37,15 +82,15 @@ const COUNTS = {all: 6, needs_you: 2, api: 2, mail: 2, websites: 0};
 // One API tool's document as GET /api/v2/api-tools/<id> sends it (backend/api_tools.py detail), and the writes that
 // change it, answered as the hub answers them. A logged path keeps the query's keys only.
 function apiFake() {
-  const checks = (n, key) => Array.from({length: n}, (_, i) => ({ok: i !== 3, status_code: i === 3 ? 401 : 200,
+  const checks = (n: number, key: string) => Array.from({length: n}, (_, i: number) => ({ok: i !== 3, status_code: i === 3 ? 401 : 200,
     detail: i === 3 ? 'Key rejected' : 'Working', checked_at: at(i * 30), credential_id: key}));
-  const call = (i, result, extra = {}) => ({id: 'c' + i, kind: 'call', actor: 'bot:support-bot', bot: 'support-bot', access_level: 'read',
+  const call = (i: number, result: string, extra: Record<string, unknown> = {}) => ({id: 'c' + i, kind: 'call', actor: 'bot:support-bot', bot: 'support-bot', access_level: 'read',
     method: 'GET', path: '/v1/leads?q=', status_code: result === 'sent' ? 200 : null, result, detail: '', duration_ms: 120, at: at(i * 7), ...extra});
-  const refused = i => call(i, 'refused', {actor: 'bot:ops', bot: 'ops', access_level: '', method: 'POST', path: '/v1/leads', status_code: 403,
+  const refused = (i: number) => call(i, 'refused', {actor: 'bot:ops', bot: 'ops', access_level: '', method: 'POST', path: '/v1/leads', status_code: 403,
     detail: 'Ops has no access to Acme CRM. Set a level in Tools > Acme CRM > Who can use it'});
-  const key = (id, name, preview, level, extra) => ({id, name, preview, access_level: level, expires_on: null, env: 'ACME_CRM_API_KEY', username: '',
+  const key = (id: string, name: string, preview: string, level: string, extra?: Record<string, unknown>) => ({id, name, preview, access_level: level, expires_on: null, env: 'ACME_CRM_API_KEY', username: '',
     stored: true, created_by: 'human:ana', created_at: at(60 * 24 * 30), last_used_at: null, last_used_by: '', ...extra});
-  const tools = {
+  const tools: Record<string, ApiTool> = {
     't-crm': {tool: {id: 't-crm', name: 'Acme CRM', service: 'acme-crm', base_url: 'https://api.crm.acme.example', auth_scheme: 'bearer', check_path: '/v1/me', delivery: 'proxy'},
       keys: [key('k-read', 'Read key', 'sk_…4f2a', 'read', {expires_on: '2027-01-31', last_used_at: at(4), last_used_by: 'support-bot'}),
         key('k-write', 'Write key', 'sk_…9c1d', 'read_write', {created_at: at(60 * 24 * 20), last_used_at: at(90), last_used_by: 'sales'})],
@@ -66,16 +111,16 @@ function apiFake() {
     keys: [key('k-gads', 'Google Ads · GOOGLE_ADS_DEVELOPER_TOKEN', 'dt_…01ab', 'read_write', {env: 'GOOGLE_ADS_DEVELOPER_TOKEN'})],
     access: [], checks: [], recent: [], status: {tone: 'idle', text: 'Key on computers'}, needs_you: false, can_manage: true, private: false, can_set_audience: false};
   // Who can see it as backend/api_tools.py seen_by lists it: the owner, the list, then whoever can use it.
-  const NAMES = {ana: 'Ana', cara: 'Cara', 'g-books': 'Bookkeeping'};
-  const seenBy = t => !t.audience ? [] : [{subject: 'human:ana', kind: 'person', id: 'ana', name: 'Ana', why: 'Owner'},
+  const NAMES: Record<string, string> = {ana: 'Ana', cara: 'Cara', 'g-books': 'Bookkeeping'};
+  const seenBy = (t: ApiTool) => !t.audience ? [] : [{subject: 'human:ana', kind: 'person', id: 'ana', name: 'Ana', why: 'Owner'},
     ...t.audience.people.filter(id => id !== 'ana').map(id => ({subject: 'human:' + id, kind: 'person', id, name: NAMES[id] || id, why: 'Listed'})),
     ...t.audience.teams.map(id => ({subject: 'group:' + id, kind: 'group', id, name: NAMES[id] || id, why: 'Listed'})),
     ...t.audience.bots.map(id => ({subject: 'bot:' + id, kind: 'bot', id, name: id, why: 'Listed'})),
     ...t.access.map(a => ({subject: a.subject, kind: a.kind, id: a.id, name: a.name, why: 'Can use it'}))];
   for (const t of Object.values(tools)) t.seen_by = seenBy(t);
   // Finance's ad spend for the Google Ads tool, as backend/finance/ads.py view answers it (a finance admin).
-  const slot = (s, label, required, id, name) => ({slot: s, label, required, credential_id: id, options: id ? [{id, name}] : []});
-  const fin = {tool_id: 't-gads', tool_name: 'Google Ads', platform: 'google_ads', platform_label: 'Google Ads',
+  const slot = (s: string, label: string, required: boolean, id: string, name: string) => ({slot: s, label, required, credential_id: id, options: id ? [{id, name}] : []});
+  const fin: ApiFin = {tool_id: 't-gads', tool_name: 'Google Ads', platform: 'google_ads', platform_label: 'Google Ads',
     import: {saved: true, enabled: false, history_from: '2026-01-01', account_id: 'acct-ads', account_name: 'Advertising', status: 'ok',
       last_import_at: at(95), last_error: '', run_requested: false, every_hours: 4},
     slots: [slot('client_id', 'Client ID', true, 'g1', 'Google Ads · GOOGLE_ADS_CLIENT_ID'), slot('client_secret', 'Client secret', true, 'g2', 'Google Ads · GOOGLE_ADS_CLIENT_SECRET'),
@@ -86,7 +131,7 @@ function apiFake() {
     accounts: [{id: 'ad-1', external_id: '5550001111', name: 'Consumer search', currency: 'USD', bot_slug: 'sales', active: true, month_to_date: 76000},
       {id: 'ad-2', external_id: '5550002222', name: 'Paid rental', currency: 'USD', bot_slug: null, active: true, month_to_date: 120050}]};
   const calls = [call(1, 'sent'), refused(2), call(3, 'sent'), call(4, 'failed', {status_code: null, detail: 'ConnectTimeout: timed out'})];
-  const fake = {tools, fin, writes: [], reads: []};
+  const fake = {tools, fin, writes: [] as ApiWrite[], reads: [] as string[]} as ApiFake;
   fake.answer = (p, method, body, url) => {
     if (p === '/api/v2/finance/ad-accounts' && method === 'GET') return url.searchParams.get('tool_id') === 't-gads' ? structuredClone(fin)
       : {status: 403, body: {error: {code: 'denied', detail: 'Ad spend is for finance admins', retryable: false}}};
@@ -103,11 +148,11 @@ function apiFake() {
     if (p === '/api/v2/tool-index') return {rows: structuredClone(ROWS), counts: COUNTS, next: null};
     if (p === '/api/v2/tools') return {integrations: []};
     if (p === '/api/v2/groups') return {groups: [{id: 'g-books', name: 'Bookkeeping'}]};
-    if (p.startsWith('/api/v2/tools/')) return {service: decodeURIComponent(p.split('/').pop()), title: 'GitHub', access: '', writes: 'read', owner: 'tico', declared_as: '', body: '', queries: [], learnings: [], read_only: true};
+    if (p.startsWith('/api/v2/tools/')) return {service: decodeURIComponent(p.split('/').pop() as string), title: 'GitHub', access: '', writes: 'read', owner: 'tico', declared_as: '', body: '', queries: [], learnings: [], read_only: true};
     const m = p.match(/^\/api\/v2\/api-tools\/([^/]+)(\/.*)?$/);
     if (!m) return undefined;
     if (method !== 'GET') fake.writes.push({method, path: p, body});
-    const t = tools[decodeURIComponent(m[1])], rest = m[2] || '';
+    const t = tools[decodeURIComponent(m[1] as string)], rest = m[2] || '';
     if (!t) return {status: 404, body: {error: {code: 'not_found', detail: 'No such tool', retryable: false}}};
     if (!rest && method === 'GET') return structuredClone(t);
     if (!rest && method === 'PATCH') {
@@ -118,7 +163,7 @@ function apiFake() {
     }
     const acc = rest.match(/^\/access\/(.+)$/);
     if (acc && method === 'PUT') {
-      const subject = decodeURIComponent(acc[1]), row = t.access.find(a => a.subject === subject);
+      const subject = decodeURIComponent(acc[1] as string), row = t.access.find(a => a.subject === subject);
       if (body.level === 'none') t.access = t.access.filter(a => a !== row); else if (row) row.level = body.level;
       return {subject, level: body.level === 'none' ? null : body.level};
     }
@@ -137,21 +182,21 @@ function apiFake() {
   return fake;
 }
 
-const sideways = page => page.evaluate(() => [document.documentElement, document.querySelector('#main')].some(el => el && el.scrollWidth > el.clientWidth + 1));
-async function shot(page, name) {
+const sideways = (page: import('playwright').Page) => page.evaluate(() => [document.documentElement, document.querySelector('#main')].some(el => el && el.scrollWidth > el.clientWidth + 1));
+async function shot(page: import('playwright').Page, name: string) {
   const dir = process.env.TICO_UI_SHOTS;
   if (!dir) return;
   fs.mkdirSync(dir, {recursive: true});
   for (const theme of ['light', 'dark']) {
-    await page.evaluate(t => document.documentElement.setAttribute('data-theme', t), theme);
+    await page.evaluate((t: string) => document.documentElement.setAttribute('data-theme', t), theme);
     await page.evaluate(() => Promise.all(document.getAnimations()
       .filter(a => a.effect?.getComputedTiming().endTime !== Infinity).map(a => a.finished.catch(() => {}))));
     await page.screenshot({animations: 'disabled', path: path.join(dir, `tools-${name}-${theme}.png`), fullPage: true});
   }
 }
-async function start(browser, hash, {width = 1440, ready} = {}) {
+async function start(browser: import('playwright').Browser, hash: string, {width = 1440, ready}: {width?: number; ready?: string} = {}) {
   const api = apiFake(), mail = mailboxesFake();
-  const got = await open(browser, mail, googleFake(), {hash, width, height: width < 500 ? 844 : 900, ready, extra: (p, method, body, url) => api.answer(p, method, body, url)});
+  const got = await open(browser, mail, googleFake(), {hash, width, height: width < 500 ? 844 : 900, ready, extra: (p, method, body, url) => api.answer(p, method, body as FakeBody, url)});
   return {...got, api, mail};
 }
 
@@ -172,7 +217,7 @@ async function start(browser, hash, {width = 1440, ready} = {}) {
         assert.equal(await crm.locator('.tt-face').first().getAttribute('title'), 'Ana', `${tag}: named on hover`);
         await page.locator('[data-tl-show="needs"]').click();
         assert.deepEqual(await rows.evaluateAll(r => r.map(x => x.dataset.tlRow)), ['api:t-billing', 'slack'], `${tag}: Needs you`);
-        assert.deepEqual(await page.locator('tr[data-tl-row] [data-private]').evaluateAll(p => p.map(x => [x.closest('tr').dataset.tlRow, x.textContent])),
+        assert.deepEqual(await page.locator('tr[data-tl-row] [data-private]').evaluateAll(p => p.map(x => [x.closest('tr')!.dataset.tlRow, x.textContent])),
           [['api:t-billing', 'Private']], `${tag}: the Private pill on the private tool only`);
         assert.equal(await page.evaluate(() => location.hash), '#/tools?show=needs', `${tag}: the filter is in the address`);
         await page.locator('[data-tl-show="mail"]').click();
@@ -210,8 +255,8 @@ async function start(browser, hash, {width = 1440, ready} = {}) {
         // Check now posts and redraws the squares with the new ones last.
         const before = await page.locator('#tool-check .tt-squares > :last-child').getAttribute('title');
         await page.locator('[data-ta-check]').click();
-        await page.waitForFunction(t => document.querySelector('#tool-check .tt-squares')?.lastElementChild?.title !== t, before);
-        assert.equal(api.writes.at(-1).path, '/api/v2/api-tools/t-crm/check', `${tag}: check write`);
+        await page.waitForFunction(t => (document.querySelector('#tool-check .tt-squares')?.lastElementChild as HTMLElement | null | undefined)?.title !== t, before);
+        assert.equal(api.writes.at(-1)!.path, '/api/v2/api-tools/t-crm/check', `${tag}: check write`);
         assert.equal(await page.locator('#tool-check .tt-sq.fail').count(), 1, `${tag}: still 24 squares, one failed`);
         assert.equal(await sideways(page), false, `${tag}: the API page has no sideways scroll`);
         await shot(page, `api-${tag}`);
@@ -244,9 +289,9 @@ async function start(browser, hash, {width = 1440, ready} = {}) {
         assert.deepEqual(api.writes.at(-1), {method: 'PATCH', path: '/api/v2/finance/ad-accounts/ad-2', body: {bot_slug: pick}}, `${tag}: bot write`);
         await card.locator('[data-taf-on="true"]').click();
         await page.locator('#tool-finance [data-taf-run]').waitFor();
-        const on = api.writes.at(-1);
+        const on = api.writes.at(-1)!;
         assert.equal(on.path, '/api/v2/finance/ad-imports', `${tag}: import write`);
-        assert.deepEqual({...on.body, credentials: Object.keys(on.body.credentials).sort()}, {tool_id: 't-gads', enabled: true, history_from: '2026-01-01', account_id: 'acct-ads',
+        assert.deepEqual({...on.body, credentials: Object.keys(on.body.credentials!).sort()}, {tool_id: 't-gads', enabled: true, history_from: '2026-01-01', account_id: 'acct-ads',
           credentials: ['client_id', 'client_secret', 'developer_token', 'login_customer_id', 'refresh_token']}, `${tag}: switched on`);
         assert.equal(await sideways(page), false, `${tag}: the ad tool page has no sideways scroll`);
         await shot(page, `ads-${tag}`);
@@ -278,7 +323,7 @@ async function start(browser, hash, {width = 1440, ready} = {}) {
         const {page, seen, api} = await start(browser, '#/tools/api/t-billing', {width, ready: '#tool-see tbody tr'});
         const card = page.locator('#tool-see');
         assert.equal(await page.locator('#tool-api .tt-title h1 [data-private]').innerText(), 'Private', `${tag}: Private in the header`);
-        assert.equal(await page.evaluate(() => document.querySelector('#tool-see').nextElementSibling?.id), 'tool-keys', `${tag}: above Keys`);
+        assert.equal(await page.evaluate(() => document.querySelector('#tool-see')!.nextElementSibling?.id), 'tool-keys', `${tag}: above Keys`);
         assert.deepEqual(await card.locator('thead th').allTextContents(), ['Who', 'Why', ''], `${tag}: Who | Why`);
         assert.deepEqual(await card.locator('tbody tr').evaluateAll(r => r.map(x => [x.dataset.taSeen, x.dataset.why])),
           [['human:ana', 'Owner'], ['human:cara', 'Listed'], ['bot:books', 'Can use it'], ['finance', 'Can use it']], `${tag}: who sees it and why`);
@@ -301,12 +346,12 @@ async function start(browser, hash, {width = 1440, ready} = {}) {
         await picker.locator('[data-access-pick="teams"][value="g-books"]').check();
         await picker.locator('[type=submit]').click();
         await page.locator('#tool-see tr[data-ta-seen="group:g-books"][data-why="Listed"]').waitFor();
-        assert.deepEqual(api.writes.at(-1).body, {audience: {everyone: false, people: [], teams: ['g-books'], bots: []}}, `${tag}: add write`);
+        assert.deepEqual(api.writes.at(-1)!.body, {audience: {everyone: false, people: [], teams: ['g-books'], bots: []}}, `${tag}: add write`);
         // Everyone asks first, then clears the list and the pill.
         await card.locator('[data-ta-see="everyone"]').click();
         await page.locator('dialog [data-confirm-ok]').click();
         await page.locator('#tool-see [data-ta-see="everyone"].primary').waitFor();
-        assert.deepEqual(api.writes.at(-1).body, {audience: null}, `${tag}: Everyone write`);
+        assert.deepEqual(api.writes.at(-1)!.body, {audience: null}, `${tag}: Everyone write`);
         assert.equal(await card.locator('table').count(), 0, `${tag}: no list for Everyone`);
         assert.equal(await card.locator('[data-ta-see-add]').count(), 0, `${tag}: no Add for Everyone`);
         assert.equal(await page.locator('#tool-api .tt-title [data-private]').count(), 0, `${tag}: no Private pill`);
@@ -314,7 +359,7 @@ async function start(browser, hash, {width = 1440, ready} = {}) {
         // Only listed again: one click hides it (the hub keeps the owner and a non-owner setter).
         await card.locator('[data-ta-see="only"]').click();
         await page.locator('#tool-see tr[data-why="Owner"]').waitFor();
-        assert.deepEqual(api.writes.at(-1).body, {audience: {everyone: false, people: [], teams: [], bots: []}}, `${tag}: Only listed write`);
+        assert.deepEqual(api.writes.at(-1)!.body, {audience: {everyone: false, people: [], teams: [], bots: []}}, `${tag}: Only listed write`);
         assert.equal(await page.locator('#tool-api .tt-title [data-private]').count(), 1, `${tag}: Private again`);
         assert.equal(await sideways(page), false, `${tag}: Who can see it has no sideways scroll`);
         assert.deepEqual(seen.errors, [], `${tag}: Who can see it errors`);
@@ -352,7 +397,7 @@ async function start(browser, hash, {width = 1440, ready} = {}) {
         ['#/credentials', '#/tools/keys?show=credentials'], ['#/settings/inboxes', '#/tools?show=mail'],
         ['#/settings/inboxes/settings/email', '#/tools/settings/email'], ['#/settings/inboxes/mailbox/mb-support', '#/tools/mailbox/mb-support'],
         ['#/settings/mailboxes', '#/tools?show=mail'], ['#/settings/mail', '#/tools/settings/letters-in'], ['#/settings/google', '#/tools/settings/email'],
-      ]) {
+      ] as [string, string][]) {
         await page.evaluate(h => { location.hash = h; }, from);
         await page.waitForFunction(h => location.hash === h, to, {timeout: 3000}).catch(async () => {
           assert.fail(`${from} went to ${await page.evaluate(() => location.hash)}, not ${to}`);

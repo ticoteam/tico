@@ -2,14 +2,28 @@
 // task comment, from the sign-in-free visual address only; pages run in the agreed sandbox with the server's real
 // content policy and height reporter (backend/visuals.py); cap of 4, removed, newer version, failure, Expand, phone.
 // Fixtures only.
-const {chromium, webkit} = require('playwright');
-const assert = require('node:assert/strict');
-const path = require('node:path');
-const {execFileSync} = require('node:child_process');
-const {html, uiFile} = require('./support/page.cjs');
-const {unrouted} = require('./support/routes.cjs');
-const {threadsFake} = require('./support/threads-fake.cjs');
-const fs = require('node:fs');
+const {chromium, webkit}: typeof import('playwright') = require('playwright');
+const assert: typeof import('node:assert/strict') = require('node:assert/strict');
+const path: typeof import('node:path') = require('node:path');
+const {execFileSync}: typeof import('node:child_process') = require('node:child_process');
+const {html, uiFile} = require('./support/page.cjs') as typeof import('./support/page.cjs');
+const {unrouted} = require('./support/routes.cjs') as typeof import('./support/routes.cjs');
+const {threadsFake} = require('./support/threads-fake.cjs') as typeof import('./support/threads-fake.cjs');
+const fs: typeof import('node:fs') = require('node:fs');
+
+// Page globals and window or element expandos the evaluated code uses (ui/app). Declared here so the spec
+// type-checks; none of it is emitted.
+interface VisualWin { vhReports: number; vcardPinning: boolean; __mb: ((node: Node, child: Node | null) => void) | undefined }
+interface VisualFrame extends HTMLIFrameElement { visualHeight?: number; visualFill?: boolean; pageHeight?: number; seen: string[]; mo: MutationObserver }
+declare function visualSrc(x: {src: string}): string | null;
+declare function visualCardsHTML(files: unknown[], opts: {chips: (rest: unknown[]) => string}): string;
+declare function visualKeep(from: Element, to: Element): void;
+declare function visualSwap(root: Element, html: string): void;
+declare const THV_VIEWS: Iterable<{el: Element}>;
+declare const PATCH_SRC: Set<Element>;
+declare function thvDraw(v: {el: Element}): void;
+declare function pageCard(file: Record<string, unknown>, opts: {size: string}): Element;
+declare function $(sel: string): {tfOpen?: {id: string; n: number}; close(): void};
 
 const ROOT = path.resolve(__dirname, '..', '..');
 // The server's own page treatment: cleaned, the height reporter added, and its content policy.
@@ -56,13 +70,13 @@ const CLIP = (() => {
   b.writeUInt32LE(8000, 24); b.writeUInt32LE(8000, 28); b.writeUInt16LE(1, 32); b.writeUInt16LE(8, 34); b.write('data', 36); b.writeUInt32LE(n, 40);
   return b;
 })();
-const A = (id, kind, over = {}) => ({id, file_id: id, version: 1, ref: id + '@1', title: 'Title ' + id, kind, name: id + ({image: '.png', svg: '.svg', page: '.html'}[kind] || ''),
+const A = (id: string, kind: 'image' | 'svg' | 'page', over: Record<string, unknown> = {}) => ({id, file_id: id, version: 1, ref: id + '@1', title: 'Title ' + id, kind, name: id + ({image: '.png', svg: '.svg', page: '.html'}[kind] || ''),
   size: 1000, content_type: {image: 'image/png', svg: 'image/svg+xml', page: 'text/html'}[kind], url: `/api/v2/files/${id}?v=1`, removed: false,
   current_version: 1, src: VIS + 'tok-' + id, ...over});
 
 (async () => {
   const browser = process.env.TICO_BROWSER === 'webkit' ? await webkit.launch({headless: true})
-    : await chromium.launch({channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined, headless: true});
+    : await chromium.launch({channel: (process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined) as string, headless: true});
   const now = new Date().toISOString();
   const MESSAGES = [
     {id: 'm1', sender_id: 'bot:designer', body: 'Here is the chart, the logo and two pages.', created_at: now, refs: {attachments: [
@@ -76,16 +90,16 @@ const A = (id, kind, over = {}) => ({id, file_id: id, version: 1, ref: id + '@1'
     {id: 'm5', sender_id: 'bot:designer', body: 'Two full-screen pages.', created_at: now, refs: {attachments: [A('f-vh', 'page'), A('f-dvh', 'page'), A('f-tiny', 'page'), A('f-mid', 'page')]}},
     {id: 'm7', sender_id: 'bot:designer', body: 'A plain page.', created_at: now, refs: {attachments: [A('f-clamp', 'page')]}},
   ];
-  const run = async ({viewport, hasTouch = false, label}) => {
+  const run = async ({viewport, hasTouch = false, label}: {viewport: {width: number; height: number}; hasTouch?: boolean; label: string}) => {
     const context = await browser.newContext({viewport, hasTouch, isMobile: hasTouch, serviceWorkers: 'block'});
     await context.addCookies([{name: 'tico_session', value: 'secret', domain: 'tico-ui.test', path: '/', secure: true, httpOnly: true}]);
     const page = await context.newPage();
-    const errors = [], outside = [], visualReqs = [], fileReqs = [], held = [];
+    const errors: string[] = [], outside: string[] = [], visualReqs: {path: string; cookie: string}[] = [], fileReqs: string[] = [], held: import('playwright').Route[] = [];
     // The snapshot as the server sends it: each read signs every visual's address afresh (gen), as on a live update.
     const messages = [...MESSAGES];
-    let hold = null, gen = 1;
+    let hold: Promise<void> | null = null, gen = 1;
     const refreshId = 'file-' + 'a'.repeat(24), expires = Math.floor(Date.now() / 1000) + 3600;
-    const token = fields => Buffer.from(JSON.stringify(fields)).toString('base64url') + '.fixture';
+    const token = (fields: unknown[]) => Buffer.from(JSON.stringify(fields)).toString('base64url') + '.fixture';
     const legacySrc = VIS + token(['human:ana', refreshId, 1, '', expires]);
     const freshSrc = VIS + token(['human:ana', refreshId, 1, '', expires, '']);
     let pageReads = 0;
@@ -94,7 +108,7 @@ const A = (id, kind, over = {}) => ({id, file_id: id, version: 1, ref: id + '@1'
     const threads = threadsFake({bot: 'designer', messages: () => signed()});
     await context.route('**/*', async route => {
       const req = route.request(), url = new URL(req.url()), p = url.pathname;
-      const json = body => route.fulfill({contentType: 'application/json', body: JSON.stringify(body)});
+      const json = (body: unknown) => route.fulfill({contentType: 'application/json', body: JSON.stringify(body)});
       if (url.hostname === 'evil.test') { outside.push(url.href); return route.fulfill({contentType: 'text/plain', body: 'no'}); }
       if (url.hostname === 'outside.test') return route.fulfill({contentType: 'text/html', body: '<p>Outside</p>'});
       if (url.hostname === 'visuals.test') {
@@ -108,7 +122,7 @@ const A = (id, kind, over = {}) => ({id, file_id: id, version: 1, ref: id + '@1'
         const page = {'f-short': 'short', 'f-tall': 'tall', 'f-hostile': 'hostile', 'f-vh': 'vh', 'f-dvh': 'dvh', 'f-tiny': 'tiny', 'f-mid': 'mid', 'f-clamp': 'clamp', 'f-live-page': 'short'}[id];
         if (page) return route.fulfill({contentType: 'text/html', headers: {...headers, 'Content-Security-Policy': server.policy}, body: server.pages[page]});
         if (id === 'f-clip') {
-          const m = /bytes=(\d+)-(\d*)/.exec(req.headers().range || ''), from = m ? +m[1] : 0, to = m && m[2] ? +m[2] : CLIP.length - 1;
+          const m = /bytes=(\d+)-(\d*)/.exec(req.headers().range || ''), from = m ? +m[1]! : 0, to = m && m[2] ? +m[2]! : CLIP.length - 1;
           return route.fulfill({status: m ? 206 : 200, contentType: 'audio/wav', body: CLIP.subarray(from, to + 1),
             headers: {...headers, 'Accept-Ranges': 'bytes', ...(m ? {'Content-Range': `bytes ${from}-${to}/${CLIP.length}`} : {})}});
         }
@@ -117,7 +131,7 @@ const A = (id, kind, over = {}) => ({id, file_id: id, version: 1, ref: id + '@1'
       }
       if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
       const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/);
-      if (ui && fs.existsSync(uiFile(ui[1]))) return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]), 'utf8')});
+      if (ui && fs.existsSync(uiFile(ui[1]!))) return route.fulfill({contentType: ui[1]!.endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]!), 'utf8')});
       if (p.startsWith('/api/v2/files/')) fileReqs.push(p + url.search);
       if (p === '/api/me') return json({id: 'ana', name: 'Ana', role: 'owner', cloud: true});
       if (p === '/api/employees') return json([{name: 'designer', display_name: 'Designer', host: 'keeper', status: 'active', can_chat: true, schedules: []}]);
@@ -136,24 +150,24 @@ const A = (id, kind, over = {}) => ({id, file_id: id, version: 1, ref: id + '@1'
     });
     const task = {id: 't1', title: 'Launch page', owner_id: 'bot:designer', requester_id: 'human:ana', status: 'review', lane: 'company', rank: 1, labels: [], links: [],
       parts: {total: 0, done: 0}, version: 1, created_at: now, updated_at: now, body: 'Make the page.', attachments: []};
-    const tver = (id, mime) => ({n: 1, size: 1000, mime, sha256: 'x', created_at: now, by: 'bot:designer', comment_id: 'c1', note: null, ask: null, answers: [],
+    const tver = (id: string, mime: string) => ({n: 1, size: 1000, mime, sha256: 'x', created_at: now, by: 'bot:designer', comment_id: 'c1', note: null, ask: null, answers: [],
       width: null, height: null, duration_ms: null, media_state: 'none', url: `/api/v2/files/${id}?v=1`, poster_url: null, thumb_url: null});
     const taskFiles = [{id: 'f-chart', name: 'f-chart.png', mime: 'image/png', current_version: 1, archived: false, versions: [tver('f-chart', 'image/png')]},
       {id: 'f-short', name: 'f-short.html', mime: 'text/html', current_version: 1, archived: false, versions: [tver('f-short', 'text/html')]}];
     const taskComments = [{id: 'c1', kind: 'say', sender_id: 'bot:designer', body: 'Chart and page attached.', created_at: now, answers: [],
       refs: {task: 't1', comment: true, attachments: [A('f-chart', 'image', {width: 800, height: 400}), A('f-short', 'page')]}}];
 
-    const noSideways = async where => {
-      const r = await page.evaluate(() => [document.documentElement.scrollWidth, innerWidth]);
+    const noSideways = async (where: string) => {
+      const r = await page.evaluate((): [number, number] => [document.documentElement.scrollWidth, innerWidth]);
       assert(r[0] <= r[1], `${label} ${where}: the page scrolls sideways ${r}`);
     };
     // ---- chat: hold the chart so its held space can be measured before it loads
-    let release; hold = new Promise(r => { release = r; });
+    let release!: () => void; hold = new Promise<void>(r => { release = r as () => void; });
     await page.goto('https://tico-ui.test/#/bot/designer/dm');
     const m1 = page.locator('[data-message="m1"]');
     await m1.locator('figure.vcard').nth(3).waitFor();
     const chart = m1.locator('figure.vcard[data-kind="image"] .vcard-body');
-    const before = await chart.evaluate(el => [el.getBoundingClientRect().width, el.getBoundingClientRect().height]);
+    const before = await chart.evaluate((el): [number, number] => [el.getBoundingClientRect().width, el.getBoundingClientRect().height]);
     // a picture is a quarter-column thumbnail (Dev 338): 76x38 on a phone
     assert(before[1] > 20 && Math.abs(before[1] - before[0] / 2) < 2, `${label}: the chart holds its 2:1 space before it loads ${before}`);
     release(); hold = null;
@@ -165,23 +179,23 @@ const A = (id, kind, over = {}) => ({id, file_id: id, version: 1, ref: id + '@1'
     assert.equal(await m1.locator('img.vcard-img').first().getAttribute('alt'), 'Title f-chart', 'the title is the accessible description');
     assert.equal(await m1.locator('iframe.vcard-frame').first().getAttribute('title'), 'Title f-short');
     for (const src of await page.locator('figure.vcard img.vcard-img, figure.vcard iframe').evaluateAll(els => els.map(e => e.getAttribute('src'))))
-      assert(src.startsWith(VIS), `${label}: a card shows only from the visual address, not ${src}`);
+      assert(src!.startsWith(VIS), `${label}: a card shows only from the visual address, not ${src}`);
     // pages: the agreed sandbox; a short page at its own height with no scrollbar; a tall one cut at the cap
     for (const s of await page.locator('iframe.vcard-frame').evaluateAll(els => els.map(e => e.getAttribute('sandbox'))))
       assert.equal(s, 'allow-scripts allow-popups allow-popups-to-escape-sandbox');
     const short = m1.locator('figure.vcard[data-file="f-short"]'), tall = m1.locator('figure.vcard[data-file="f-tall"]');
     await short.locator('.vcard-body.ready').waitFor();
     await tall.locator('.vcard-body.ready').waitFor();
-    const sh = await short.evaluate(c => [c.querySelector('.vcard-body').getBoundingClientRect().height, c.querySelector('iframe').getBoundingClientRect().height, c.classList.contains('capped')]);
+    const sh = await short.evaluate((c): [number, number, boolean] => [c.querySelector('.vcard-body')!.getBoundingClientRect().height, c.querySelector('iframe')!.getBoundingClientRect().height, c.classList.contains('capped')]);
     assert(sh[0] >= 160 && sh[0] < 260 && Math.abs(sh[0] - sh[1]) < 1 && !sh[2], `${label}: a short page shows at its own height ${sh}`);
     const cap = viewport.width > 760 ? 480 : Math.round(viewport.height * 0.6);
-    const th = await tall.evaluate(c => [c.querySelector('.vcard-body').getBoundingClientRect().height, c.querySelector('iframe').getBoundingClientRect().height, c.classList.contains('capped')]);
+    const th = await tall.evaluate((c): [number, number, boolean] => [c.querySelector('.vcard-body')!.getBoundingClientRect().height, c.querySelector('iframe')!.getBoundingClientRect().height, c.classList.contains('capped')]);
     assert(Math.abs(th[0] - cap) <= 1 && th[1] >= 2000 && th[2], `${label}: a tall page is cut at the cap ${th} (cap ${cap})`);
     assert(await tall.locator('.vcard-expand').isVisible(), 'Expand on a cut page');
     // a height message from anywhere but the card's own frame is ignored
     await page.evaluate(() => { window.postMessage({ticoVisualHeight: 7}, '*'); for (const f of document.querySelectorAll('iframe')) f.dispatchEvent(new MessageEvent('message', {data: {ticoVisualHeight: 7}})); });
     await page.waitForTimeout(100);
-    assert(Math.abs(await short.evaluate(c => c.querySelector('iframe').getBoundingClientRect().height) - sh[1]) < 1, 'only the frame itself sets its height');
+    assert(Math.abs(await short.evaluate(c => c.querySelector('iframe')!.getBoundingClientRect().height) - sh[1]) < 1, 'only the frame itself sets its height');
     // dark mode: SVG and pages sit on a light card
     await page.evaluate(() => document.documentElement.setAttribute('data-theme', 'dark'));
     await m1.locator('figure.vcard[data-kind="svg"] .vcard-body.ready').waitFor();
@@ -200,7 +214,7 @@ const A = (id, kind, over = {}) => ({id, file_id: id, version: 1, ref: id + '@1'
     assert.equal(await m3.locator('.chat-files .chat-thumb, .chat-files .pill').count(), 1);
     const hostile = m3.locator('figure.vcard[data-file="f-hostile"]');
     await hostile.locator('.vcard-body.ready').waitFor();
-    const hh = await hostile.evaluate(c => c.querySelector('iframe').getBoundingClientRect().height);
+    const hh = await hostile.evaluate(c => c.querySelector('iframe')!.getBoundingClientRect().height);
     assert(hh >= 90, `${label}: the page's own height message never runs (got ${hh})`);
     // people's attachments too
     assert.equal(await page.locator('[data-message="m4"] figure.vcard img').getAttribute('alt'), 'Ana photo');
@@ -211,7 +225,7 @@ const A = (id, kind, over = {}) => ({id, file_id: id, version: 1, ref: id + '@1'
       const card = m5.locator(`figure.vcard[data-file="${id}"]`);
       await card.scrollIntoViewIfNeeded();                         // a frame off screen is laid out once it is scrolled to
       await m5.locator(`figure.vcard.capped[data-file="${id}"] .vcard-body.ready`).waitFor({timeout: 5000});
-      const size = () => card.evaluate(c => [c.querySelector('.vcard-body'), c.querySelector('iframe')].map(e => Math.round(e.getBoundingClientRect().height)));
+      const size = () => card.evaluate(c => [c.querySelector('.vcard-body')!, c.querySelector('iframe')!].map(e => Math.round(e.getBoundingClientRect().height)) as [number, number]);
       const first = await size();
       await page.waitForTimeout(600);
       assert.deepEqual(await size(), first, `${label} ${id}: the height settles`);
@@ -219,8 +233,8 @@ const A = (id, kind, over = {}) => ({id, file_id: id, version: 1, ref: id + '@1'
       assert(await card.locator('.vcard-expand').isVisible(), `${label} ${id}: Expand is offered`);
     }
     // a page sized by its content stays its own size, however small: the 24px minimum, not the cap (Review 1, item 1)
-    const pageLook = card => card.evaluate(c => [Math.round(c.querySelector('.vcard-body').getBoundingClientRect().height), c.classList.contains('capped'),
-      getComputedStyle(c.querySelector('.vcard-expand')).display !== 'none', getComputedStyle(c.querySelector('.vcard-fade')).display !== 'none']);
+    const pageLook = (card: import('playwright').Locator) => card.evaluate(c => [Math.round(c.querySelector('.vcard-body')!.getBoundingClientRect().height), c.classList.contains('capped'),
+      getComputedStyle(c.querySelector('.vcard-expand')!).display !== 'none', getComputedStyle(c.querySelector('.vcard-fade')!).display !== 'none']);
     const tiny = m5.locator('figure.vcard[data-file="f-tiny"]'), mid = m5.locator('figure.vcard[data-file="f-mid"]'), vhCard = m5.locator('figure.vcard[data-file="f-vh"]');
     await tiny.scrollIntoViewIfNeeded();
     await tiny.locator('.vcard-body.ready').waitFor();
@@ -242,7 +256,7 @@ const A = (id, kind, over = {}) => ({id, file_id: id, version: 1, ref: id + '@1'
     // guards (item 4): only the visual route is ever a card's address
     assert.deepEqual(await page.evaluate(() => ['https://visuals.test/visuals/tok-a', '/api/v2/files/f-chart?v=1', 'https://visuals.test/api/v2/files/f?v=1',
       'blob:https://tico-ui.test/0f0e', 'data:image/png;base64,AA', 'javascript:alert(1)', 'https://visuals.test/visuals/tok?x=1',
-      'https://visuals.test/visuals/a/b', 'ftp://visuals.test/visuals/tok', 'not a url', 42].map(src => visualSrc({src}))),
+      'https://visuals.test/visuals/a/b', 'ftp://visuals.test/visuals/tok', 'not a url', 42].map(src => visualSrc({src: src as string}))),
       ['https://visuals.test/visuals/tok-a', null, null, null, null, null, null, null, null, null, null], `${label}: visualSrc takes only /visuals/<token>`);
     assert.equal(await page.evaluate(() => visualCardsHTML([{file_id: 'f', version: 1, kind: 'image', src: '/api/v2/files/f?v=1'}], {chips: rest => `chips:${rest.length}`})),
       'chips:1', 'the app file route is a chip, never a card');
@@ -258,13 +272,13 @@ const A = (id, kind, over = {}) => ({id, file_id: id, version: 1, ref: id + '@1'
     // a height from the card's own frame: a number, finite, clamped to 24..20000
     // on a plain page of its own: a page already taken for a screen-sized one (the hostile page was, on the hosted
     // run) follows no reports at all, so it would prove nothing here
-    console.log(`${label}: the hostile page settled ${await hostile.evaluate(c => { const f = c.querySelector('iframe'); return `${f.visualFill ? 'as screen-sized (at the cap)' : 'by its content'}, ${f.visualHeight}px`; })}`);
+    console.log(`${label}: the hostile page settled ${await hostile.evaluate(c => { const f = c.querySelector('iframe') as VisualFrame; return `${f.visualFill ? 'as screen-sized (at the cap)' : 'by its content'}, ${f.visualHeight}px`; })}`);
     const plain = page.locator('[data-message="m7"] figure.vcard[data-file="f-clamp"]');
     await plain.scrollIntoViewIfNeeded();
     await plain.locator('.vcard-body.ready').waitFor();
-    assert.equal(await plain.evaluate(c => c.querySelector('iframe').visualFill || false), false, `${label}: the plain page is sized by its content`);
-    const plainFrame = page.frames().find(f => f.url().includes('tok-f-clamp'));
-    const frameH = () => plain.evaluate(c => [c.querySelector('iframe').visualHeight, Math.round(c.querySelector('iframe').getBoundingClientRect().height)]);
+    assert.equal(await plain.evaluate(c => (c.querySelector('iframe') as VisualFrame).visualFill || false), false, `${label}: the plain page is sized by its content`);
+    const plainFrame = page.frames().find(f => f.url().includes('tok-f-clamp'))!;
+    const frameH = () => plain.evaluate(c => [(c.querySelector('iframe') as VisualFrame).visualHeight, Math.round(c.querySelector('iframe')!.getBoundingClientRect().height)]);
     const settled = await frameH();
     for (const v of ["'5000'", 'NaN', 'Infinity', '-Infinity', 'null', '{}', '[900]']) await plainFrame.evaluate(`parent.postMessage({ticoVisualHeight: ${v}}, '*')`);
     await page.waitForTimeout(200);
@@ -272,23 +286,23 @@ const A = (id, kind, over = {}) => ({id, file_id: id, version: 1, ref: id + '@1'
     // the height a message sets is the one recorded first: the page then answers its new size with its real height
     // (1/4's reporter reports again on resize), which it settles at. Each check waits until the page has stopped
     // answering (no report for 500 ms), so a late answer cannot land in the next one.
-    await page.evaluate(() => { window.vhReports = 0; addEventListener('message', ev => { if (ev.data && 'ticoVisualHeight' in ev.data) window.vhReports++; }); });
-    const quiet = () => page.evaluate(() => new Promise(done => { let n = -1; const t = setInterval(() => { if (window.vhReports === n) { clearInterval(t); done(); } n = window.vhReports; }, 500); }));
-    const clampTo = async v => {
-      await plain.evaluate(c => { const f = c.querySelector('iframe'); f.seen = []; f.mo = new MutationObserver(() => f.seen.push(f.style.height)); f.mo.observe(f, {attributes: true, attributeFilter: ['style']}); });
+    await page.evaluate(() => { (window as unknown as VisualWin).vhReports = 0; addEventListener('message', ev => { if (ev.data && 'ticoVisualHeight' in ev.data) (window as unknown as VisualWin).vhReports++; }); });
+    const quiet = () => page.evaluate(() => new Promise<void>(done => { let n = -1; const t = setInterval(() => { if ((window as unknown as VisualWin).vhReports === n) { clearInterval(t); done(); } n = (window as unknown as VisualWin).vhReports; }, 500); }));
+    const clampTo = async (v: string) => {
+      await plain.evaluate(c => { const f = c.querySelector('iframe') as VisualFrame; f.seen = []; f.mo = new MutationObserver(() => f.seen.push(f.style.height)); f.mo.observe(f, {attributes: true, attributeFilter: ['style']}); });
       await plainFrame.evaluate(`parent.postMessage({ticoVisualHeight: ${v}}, '*')`);
       await quiet();
-      return plain.evaluate(c => { const f = c.querySelector('iframe'); f.mo.disconnect(); return f.seen[0]; });
+      return plain.evaluate(c => { const f = c.querySelector('iframe') as VisualFrame; f.mo.disconnect(); return f.seen[0]; });
     };
     assert.equal(await clampTo('1e9'), '20000px', `${label}: a huge height is clamped to 20000`);
     assert.equal(await clampTo('-50'), '24px', `${label}: a negative height is clamped to 24`);
     // a frame shown at no width measures nothing real: its report is dropped
-    const shown = await plain.evaluate(c => c.querySelector('iframe').visualHeight);
-    await plain.evaluate(c => { c.style.display = 'none'; });
+    const shown = await plain.evaluate(c => (c.querySelector('iframe') as VisualFrame).visualHeight);
+    await plain.evaluate(c => { (c as HTMLElement).style.display = 'none'; });
     await plainFrame.evaluate("parent.postMessage({ticoVisualHeight: 900}, '*')");
     await page.waitForTimeout(200);
-    const hidden = await plain.evaluate(c => c.querySelector('iframe').visualHeight);
-    await plain.evaluate(c => { c.style.display = ''; });
+    const hidden = await plain.evaluate(c => (c.querySelector('iframe') as VisualFrame).visualHeight);
+    await plain.evaluate(c => { (c as HTMLElement).style.display = ''; });
     assert.equal(hidden, shown, `${label}: a height from a frame shown at no width is dropped`);
     await noSideways('chat');
 
@@ -317,16 +331,16 @@ const A = (id, kind, over = {}) => ({id, file_id: id, version: 1, ref: id + '@1'
     await full.locator('img.vcard-full-img').waitFor();
     const top = await thread.evaluate(el => el.scrollTop);        // where the reader was (the click scrolled to the card)
     const fitted = () => full.evaluate(d => {
-      const b = d.querySelector('.vcard-full-body'), i = d.querySelector('img').getBoundingClientRect();
-      return [d.classList.contains('zoomed'), !!d.zoomed, i.width <= b.clientWidth + 1 && i.height <= b.clientHeight + 1];
+      const b = d.querySelector('.vcard-full-body')!, i = d.querySelector('img')!.getBoundingClientRect();
+      return [d.classList.contains('zoomed'), !!(d as HTMLElement & {zoomed?: boolean}).zoomed, i.width <= b.clientWidth + 1 && i.height <= b.clientHeight + 1];
     });
     assert.deepEqual(await fitted(), [false, false, true], `${label}: reopened fitted, not zoomed`);
-    await full.evaluate(d => d.querySelector('.vcard-full-body').dispatchEvent(new WheelEvent('wheel', {ctrlKey: true, deltaY: 50, clientX: 100, clientY: 100, bubbles: true, cancelable: true})));
+    await full.evaluate(d => d.querySelector('.vcard-full-body')!.dispatchEvent(new WheelEvent('wheel', {ctrlKey: true, deltaY: 50, clientX: 100, clientY: 100, bubbles: true, cancelable: true})));
     assert.deepEqual(await fitted(), [false, false, true], `${label}: a pinch out on a fitted picture leaves it fitted (no gestures left from the last one)`);
     if (browser.browserType().name() === 'chromium') {           // the last picture's zoom gestures are gone, not stacked
       const cdp = await context.newCDPSession(page);
       const {result} = await cdp.send('Runtime.evaluate', {expression: "document.querySelector('#vcard-full .vcard-full-body')"});
-      const {listeners} = await cdp.send('DOMDebugger.getEventListeners', {objectId: result.objectId});
+      const {listeners} = await cdp.send('DOMDebugger.getEventListeners', {objectId: result.objectId!});
       assert.deepEqual(['wheel', 'pointerdown', 'pointermove', 'pointerup', 'pointercancel'].map(t => listeners.filter(l => l.type === t).length), [1, 1, 1, 1, 1],
         `${label}: one set of zoom gestures on the reopened view`);
       await cdp.detach();
@@ -335,8 +349,8 @@ const A = (id, kind, over = {}) => ({id, file_id: id, version: 1, ref: id + '@1'
       await page.keyboard.press('Escape');
     } else {
       await full.evaluate(d => {
-        const ev = (type, y) => new PointerEvent(type, {bubbles: true, pointerType: 'touch', pointerId: 7, clientX: 100, clientY: y});
-        const bar = d.querySelector('.vcard-full-bar');
+        const ev = (type: string, y: number) => new PointerEvent(type, {bubbles: true, pointerType: 'touch', pointerId: 7, clientX: 100, clientY: y});
+        const bar = d.querySelector('.vcard-full-bar')!;
         bar.dispatchEvent(ev('pointerdown', 100)); bar.dispatchEvent(ev('pointerup', 260));
       });
     }
@@ -353,35 +367,35 @@ const A = (id, kind, over = {}) => ({id, file_id: id, version: 1, ref: id + '@1'
 
     // ---- a redraw keeps a card's node (and its loaded page); a new version is a new card
     const kept = await page.evaluate(() => {
-      const old = document.querySelector('figure.vcard[data-file="f-tall"]');
-      for (const v of THV_VIEWS) { PATCH_SRC.delete(v.el.querySelector('.thv-list')); thvDraw(v); }
+      const old = document.querySelector('figure.vcard[data-file="f-tall"]')!;
+      for (const v of THV_VIEWS) { PATCH_SRC.delete(v.el.querySelector('.thv-list')!); thvDraw(v); }
       const a = document.createElement('div'), b = document.createElement('div');
       a.innerHTML = '<figure class="vcard" data-visual-key="m:f@1" data-state="ready" data-fresh-src="old"></figure>';
       b.innerHTML = '<figure class="vcard" data-visual-key="m:f@2" data-state="ready" data-fresh-src="new"></figure><figure class="vcard" data-visual-key="m:f@1" data-state="ready" data-fresh-src="fresh"></figure>';
-      const was = a.firstChild; visualKeep(a, b);
+      const was = a.firstChild as HTMLElement; visualKeep(a, b);
       return [old.isConnected, b.children[0] !== was, b.children[1] === was, was.dataset.freshSrc];
     });
     assert.deepEqual(kept, [true, true, true, 'fresh']);
     // the redraw keeps a playing clip where it was: the same element, still playing, not back at 0:00 (frame defect
     // from 3/4: a kept node moved through another document reloads). Both ways: moving the card in place
     // (moveBefore) and, where a browser has no moveBefore, taking it out and putting it back.
-    const noMove = on => page.evaluate(on => { if (on) { window.__mb = Element.prototype.moveBefore; delete Element.prototype.moveBefore; } else Element.prototype.moveBefore = window.__mb; }, on);
+    const noMove = (on: boolean) => page.evaluate((on: boolean) => { if (on) { (window as unknown as VisualWin).__mb = Element.prototype.moveBefore; delete Element.prototype.moveBefore; } else Element.prototype.moveBefore = (window as unknown as VisualWin).__mb as (node: Node, child: Node | null) => void; }, on);
     for (const way of ['moveBefore', 'no moveBefore']) {
-      await page.evaluate(src => {
+      await page.evaluate((src: string) => {
         const card = `<figure class="vcard" data-visual-key="m:clip@1" data-state="ready"><audio src="${src}" muted preload="auto"></audio></figure>`;
         const root = document.createElement('div');
         root.id = 'clip-root'; root.dataset.card = card; document.body.append(root);
         visualSwap(root, card);
       }, VIS + 'tok-f-clip');
       await page.evaluate(async () => {
-        const a = document.querySelector('#clip-root audio');
+        const a = document.querySelector('#clip-root audio') as HTMLAudioElement;
         await a.play();
         a.currentTime = 40;
         await new Promise(r => a.addEventListener('seeked', r, {once: true}));
       });
       if (way === 'no moveBefore') await noMove(true);
       const clip = await page.evaluate(async () => {
-        const root = document.querySelector('#clip-root'), a = root.querySelector('audio');
+        const root = document.querySelector('#clip-root') as HTMLElement, a = root.querySelector('audio') as HTMLAudioElement;
         visualSwap(root, '<p>Another message</p>' + root.dataset.card);
         const now = [root.querySelector('audio') === a, a.currentTime >= 39, !a.paused];
         await new Promise(r => setTimeout(r, 500));
@@ -396,17 +410,17 @@ const A = (id, kind, over = {}) => ({id, file_id: id, version: 1, ref: id + '@1'
     // place it does not, and its card holds its height through the redraw: no collapse, no jump. Given a pin, the redraw
     // runs in the same task as the card takes that height from its page's message: the page answers its new size with its
     // real height within milliseconds, so a separate wait for the pinned height can miss it and wait forever.
-    const redrawPage = pin => page.evaluate(async pin => {
-      const card = document.querySelector('[data-message="m1"] figure.vcard[data-file="f-short"]'), f = card.querySelector('iframe'), body = card.querySelector('.vcard-body');
-      const h = () => Math.round(body.getBoundingClientRect().height), seen = [];
+    const redrawPage = (pin?: number) => page.evaluate(async (pin?: number) => {
+      const card = document.querySelector('[data-message="m1"] figure.vcard[data-file="f-short"]')!, f = card.querySelector('iframe') as VisualFrame, body = card.querySelector('.vcard-body')!;
+      const h = () => Math.round(body.getBoundingClientRect().height), seen: number[] = [];
       let loads = 0;
       f.addEventListener('load', () => loads++);
-      const before = await new Promise((go, fail) => {
-        const redraw = () => { const b = h(); for (const v of THV_VIEWS) { PATCH_SRC.delete(v.el.querySelector('.thv-list')); thvDraw(v); } go(b); };
+      const before = await new Promise<number>((go, fail) => {
+        const redraw = () => { const b = h(); for (const v of THV_VIEWS) { PATCH_SRC.delete(v.el.querySelector('.thv-list')!); thvDraw(v); } go(b); };
         if (!pin) return redraw();
         const t = setTimeout(() => fail(new Error(`the card never took the height ${pin} its page sent`)), 10000);
         addEventListener('message', function took() { if (f.visualHeight !== pin) return; removeEventListener('message', took); clearTimeout(t); redraw(); });
-        window.vcardPinning = true;
+        (window as unknown as VisualWin).vcardPinning = true;
       });
       const same = document.querySelector('[data-message="m1"] figure.vcard[data-file="f-short"] iframe') === f;
       for (let i = 0; i < 40; i++) { seen.push(h()); await new Promise(r => requestAnimationFrame(r)); }
@@ -420,35 +434,35 @@ const A = (id, kind, over = {}) => ({id, file_id: id, version: 1, ref: id + '@1'
     // without moveBefore (WebKit: iPhone Safari, the Mac app) the frame loads again on each redraw, and the card still
     // holds its height through ten of them; the page, scrolled to, settles at its own height again (lead, Oct 19)
     await noMove(true);
-    const rounds = [];
+    const rounds: Awaited<ReturnType<typeof redrawPage>>[] = [];
     for (let i = 0; i < 10; i++) rounds.push(await redrawPage());
     await noMove(false);
     const shortCard = m1.locator('figure.vcard[data-file="f-short"]');
     await shortCard.scrollIntoViewIfNeeded();
-    await page.waitForFunction(() => { const f = document.querySelector('[data-message="m1"] figure.vcard[data-file="f-short"] iframe'); return f.getBoundingClientRect().height > 1; }, null, {timeout: 5000}).catch(() => {});
-    const settledShort = await shortCard.evaluate(c => [c.querySelector('.vcard-body'), c.querySelector('iframe')].map(e => Math.round(e.getBoundingClientRect().height)));
+    await page.waitForFunction(() => { const f = document.querySelector('[data-message="m1"] figure.vcard[data-file="f-short"] iframe')!; return f.getBoundingClientRect().height > 1; }, null, {timeout: 5000}).catch(() => {});
+    const settledShort = await shortCard.evaluate(c => [c.querySelector('.vcard-body')!, c.querySelector('iframe')!].map(e => Math.round(e.getBoundingClientRect().height)));
     console.log(`${label}: without moveBefore, the frame loaded ${rounds.map(r => r.loads)} time(s) over ten redraws; heights ${[...new Set(rounds.flatMap(r => r.heights))]}, then ${settledShort}`);
     assert(rounds.every(r => r.same && r.heights.every(h => Math.abs(h - moved.before) <= 1)) && settledShort.every(h => Math.abs(h - moved.before) <= 1),
       `${label}: without moveBefore, a page card at ${moved.before} holds it through ten redraws and settles there ${JSON.stringify(rounds)} ${settledShort}`);
     // and the page loaded again sets the height down as well as up: a card pinned taller than its page (200, as a page
     // measured at no width would leave it) comes back to the page's own height after a redraw, holding 200 until then
-    const shortFrame = page.frames().find(f => f.url().includes('tok-f-short'));
+    const shortFrame = page.frames().find(f => f.url().includes('tok-f-short'))!;
     await noMove(true);
     const pinned = redrawPage(200);
-    await page.waitForFunction(() => window.vcardPinning);
+    await page.waitForFunction(() => (window as unknown as VisualWin).vcardPinning);
     await shortFrame.evaluate("parent.postMessage({ticoVisualHeight: 200}, '*')");
     const down = await pinned;
     await noMove(false);
     await shortCard.scrollIntoViewIfNeeded();
-    await page.waitForFunction(() => { const f = document.querySelector('[data-message="m1"] figure.vcard[data-file="f-short"] iframe'); return f.getBoundingClientRect().height > 1; }, null, {timeout: 5000}).catch(() => {});
-    const downTo = await shortCard.evaluate(c => [c.querySelector('.vcard-body'), c.querySelector('iframe')].map(e => Math.round(e.getBoundingClientRect().height)));
+    await page.waitForFunction(() => { const f = document.querySelector('[data-message="m1"] figure.vcard[data-file="f-short"] iframe')!; return f.getBoundingClientRect().height > 1; }, null, {timeout: 5000}).catch(() => {});
+    const downTo = await shortCard.evaluate(c => [c.querySelector('.vcard-body')!, c.querySelector('iframe')!].map(e => Math.round(e.getBoundingClientRect().height)));
     assert(down.before === 200 && down.heights.every(h => h === 200 || Math.abs(h - moved.before) <= 1) && downTo.every(h => Math.abs(h - moved.before) <= 1),
       `${label}: without moveBefore, a card pinned at 200 comes back down to ${moved.before} after a redraw ${JSON.stringify(down)} ${downTo}`);
     // a page measured at one width is re-measured at another: narrowed, the short page wraps and grows; widened back,
     // it comes back down (a page measures at least its frame, so it could not say so by itself)
-    const shortH = () => shortCard.evaluate(c => [c.querySelector('iframe').visualHeight, Math.round(c.querySelector('iframe').getBoundingClientRect().width)]);
-    const widthTo = async w => {
-      await shortCard.evaluate((c, w) => { c.style.width = w; c.style.maxWidth = w; }, w);
+    const shortH = () => shortCard.evaluate((c): [number, number] => [(c.querySelector('iframe') as VisualFrame).visualHeight!, Math.round(c.querySelector('iframe')!.getBoundingClientRect().width)]);
+    const widthTo = async (w: string) => {
+      await shortCard.evaluate((c, w) => { (c as HTMLElement).style.width = w; (c as HTMLElement).style.maxWidth = w; }, w);
       await quiet();
       return shortH();
     };
@@ -458,17 +472,17 @@ const A = (id, kind, over = {}) => ({id, file_id: id, version: 1, ref: id + '@1'
 
     // ---- live: a new message comes on the event stream; the snapshot read again signs every address afresh. A card
     // already on screen keeps its node and its height and takes the new address; the new message's cards show.
-    const was = await tall.evaluate(c => { c.dataset.mark = 'kept'; return c.querySelector('.vcard-body').getBoundingClientRect().height; });
+    const was = await tall.evaluate(c => { (c as HTMLElement).dataset.mark = 'kept'; return c.querySelector('.vcard-body')!.getBoundingClientRect().height; });
     for (let i = 0; !held.length && i < 100; i++) await page.waitForTimeout(50);
     assert(held.length, `${label}: the page follows the live event stream`);
     gen = 2;
     messages.push({id: 'm6', sender_id: 'bot:designer', body: 'Live one.', created_at: now, refs: {attachments: [A('f-live', 'image', {width: 400, height: 200}), A('f-live-page', 'page')]}});
-    await held.at(-1).fulfill({contentType: 'text/event-stream', body: `id: 9\nevent: messages\ndata: ${JSON.stringify({seq: 9, thread_id: 't-dm-designer'})}\n\n`});
+    await held.at(-1)!.fulfill({contentType: 'text/event-stream', body: `id: 9\nevent: messages\ndata: ${JSON.stringify({seq: 9, thread_id: 't-dm-designer'})}\n\n`});
     const m6 = page.locator('[data-message="m6"]');
     await m6.locator('figure.vcard[data-kind="page"] .vcard-body.ready').waitFor();
     assert.deepEqual(await m6.locator('img.vcard-img, iframe.vcard-frame').evaluateAll(els => els.map(e => e.getAttribute('src'))),
       [VIS + 'tok-f-live.2', VIS + 'tok-f-live-page.2'], `${label}: a live message's cards show from their visual address`);
-    assert.deepEqual(await tall.evaluate(c => [c.dataset.mark, c.dataset.freshSrc, Math.round(c.querySelector('.vcard-body').getBoundingClientRect().height)]),
+    assert.deepEqual(await tall.evaluate(c => [(c as HTMLElement).dataset.mark, (c as HTMLElement).dataset.freshSrc, Math.round(c.querySelector('.vcard-body')!.getBoundingClientRect().height)]),
       ['kept', VIS + 'tok-f-tall.2', Math.round(was)], `${label}: a card on screen is kept through a live update, with the fresh address`);
 
     // cards never read the signed-in file route (visuals 5 and 6 and the one with no visual address are chips, which still do)
@@ -491,21 +505,21 @@ const A = (id, kind, over = {}) => ({id, file_id: id, version: 1, ref: id + '@1'
     // scrolling inside, its frame told it is in a card at that size (the reporter sets data-tico-view from the
     // fragment), a fade only when the page runs on, and an expand icon that opens the full view
     await page.evaluate(() => $('#task-modal')?.close());
-    const widgets = await page.evaluate(([vis, refreshId]) => {
+    const widgets = await page.evaluate(([vis, refreshId]: [string, string]) => {
       const box = document.createElement('div');
       box.id = 'widgets'; box.style.cssText = 'position:fixed;top:0;left:0;z-index:9999;width:min(320px,100vw);background:var(--bg)';
       const at = new Date().toISOString();
-      for (const [id, size] of [['f-tall', 'small'], ['f-clamp', 'small'], [refreshId, 'large']])
+      for (const [id, size] of [['f-tall', 'small'], ['f-clamp', 'small'], [refreshId, 'large']] as [string, string][])
         box.append(pageCard({file_id: id, title: 'Widget ' + id, version: 1, updated_at: at, bot_id: 'designer', src: vis + 'tok-' + id}, {size}));
       document.body.append(box);
       return [...box.querySelectorAll('iframe.page-frame')].map(f => [f.getAttribute('src'), f.getAttribute('scrolling')]);
-    }, [VIS, refreshId]);
+    }, [VIS, refreshId] as [string, string]);
     assert.deepEqual(widgets, [[VIS + 'tok-f-tall#tico-view=card&tico-size=small', 'no'], [VIS + 'tok-f-clamp#tico-view=card&tico-size=small', 'no'],
       [VIS + 'tok-' + refreshId + '#tico-view=card&tico-size=large', 'no']], `${label}: a card's frame says card and its size`);
-    await page.waitForFunction(() => [...document.querySelectorAll('#widgets .pg-card')].slice(0, 2).every(c => c.querySelector('iframe').pageHeight), null, {timeout: 5000});
+    await page.waitForFunction(() => [...document.querySelectorAll('#widgets .pg-card')].slice(0, 2).every(c => (c.querySelector('iframe') as VisualFrame).pageHeight), null, {timeout: 5000});
     const drawn = await page.evaluate(() => [...document.querySelectorAll('#widgets .pg-card')].slice(0, 2).map(c => {
-      const b = c.querySelector('.pg-box');
-      return [Math.round(b.getBoundingClientRect().height), Math.round(c.querySelector('iframe').getBoundingClientRect().height), b.classList.contains('pg-cut'),
+      const b = c.querySelector('.pg-box')!;
+      return [Math.round(b.getBoundingClientRect().height), Math.round(c.querySelector('iframe')!.getBoundingClientRect().height), b.classList.contains('pg-cut'),
         getComputedStyle(b, '::after').content !== 'none'];
     }));
     assert.deepEqual(drawn, [[180, 180, true, true], [120, 120, false, false]], `${label}: a card is as tall as its page up to its size, faded only when cut`);
@@ -528,7 +542,7 @@ const A = (id, kind, over = {}) => ({id, file_id: id, version: 1, ref: id + '@1'
     assert.equal((await reminted).status(), 200);
     assert.equal(await page.locator('#pg-view iframe.page-frame').getAttribute('src'), freshSrc + '#tico-view=full&tico-size=full');
     assert.equal(pageReads, 2, `${label}: reload requests a fresh page address`);
-    assert.equal(JSON.parse(Buffer.from(freshSrc.slice(VIS.length).split('.')[0], 'base64url')).length, 6);
+    assert.equal(JSON.parse(Buffer.from(freshSrc.slice(VIS.length).split('.')[0]!, 'base64url') as unknown as string).length, 6);
 
     // ---- nothing reached outside; visuals never carried the app's cookie
     await page.waitForTimeout(300);

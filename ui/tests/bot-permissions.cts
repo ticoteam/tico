@@ -6,30 +6,39 @@
 //  - roles: Settings > Bots lists who owns each bot and saves co-owners as a diff with Save bot; Settings > Computers has an
 //    admin-only "Accepts members' bots" toggle; a Confirm card BotOps left in a person's Assistant chat renders, and
 //    only their click confirms it.
-const {chromium} = require('playwright');
-const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const path = require('node:path');
-const {html, uiFile} = require('./support/page.cjs');
-const {unrouted} = require('./support/routes.cjs');
-const {threadsFake} = require('./support/threads-fake.cjs');
-const {assistantView} = require('./support/assistant-chat.cjs');
-const {t} = (() => { try { return require('./support/load.cjs'); } catch { return {t: ms => ms}; } })();   // load.cjs arrives with #254
+import type * as PageSupport from './support/page.cjs';
+import type * as Routes from './support/routes.cjs';
+import type * as ThreadsFake from './support/threads-fake.cjs';
+import type * as AssistantChat from './support/assistant-chat.cjs';
+const {chromium}: typeof import('playwright') = require('playwright');
+const assert: typeof import('node:assert/strict') = require('node:assert/strict');
+const fs: typeof import('node:fs') = require('node:fs');
+const path: typeof import('node:path') = require('node:path');
+export type NodePath = typeof path;
+const {html, uiFile} = require('./support/page.cjs') as typeof PageSupport;
+const {unrouted} = require('./support/routes.cjs') as typeof Routes;
+const {threadsFake} = require('./support/threads-fake.cjs') as typeof ThreadsFake;
+const {assistantView} = require('./support/assistant-chat.cjs') as typeof AssistantChat;
+const {t}: {t: (ms: number) => number} = (() => { try { return require('./support/load.cjs') as {t: (ms: number) => number}; } catch { return {t: (ms: number) => ms}; } })();   // load.cjs arrives with #254
+type Json = {[key: string]: unknown};
+interface PageWin { botTaskSettingsOpen: () => void }
+declare const S: {route: string};
+declare function settingsEditBot(slug: string): void;
 
-async function access(browser) {
+async function access(browser: import('playwright').Browser) {
   const FULL = {see: true, read: true, write: true};
   const EVERYONE = {everyone: true, people: [], teams: [], bots: []};
   const ME = {id: 'ana', role: 'owner', name: 'Ana', email: 'ana@example.test', cloud: true};
-  const bot = (name, display_name, extra = {}) => ({name, display_name, org_parent: '', host: 'keeper', status: 'active',
+  const bot = (name: string, display_name: string, extra: Json = {}) => ({name, display_name, org_parent: '', host: 'keeper', status: 'active',
     state: 'active', can_chat: true, my_access: FULL, users: [{id: 'ana', name: 'Ana'}], owner_id: 'ana', revision: 1, ...extra});
   const page = await browser.newPage({viewport: {width: 1300, height: 900}, serviceWorkers: 'block'});
-  const errors = [], puts = [], saved = [];
-  let serverMine = null;
-  const policies = {
+  const errors: string[] = [], puts: [string, Json][] = [], saved: Json[] = [];
+  let serverMine: Json | null = null;
+  const policies: Record<string, {see: Json; read: Json; write: Json}> = {
     ops: {see: EVERYONE, read: EVERYONE, write: EVERYONE},
     legal: {see: EVERYONE, read: {everyone: false, people: [], teams: ['legal'], bots: []}, write: EVERYONE},
   };
-  const revisions = {ops: 1, legal: 4};
+  const revisions: Record<string, number> = {ops: 1, legal: 4};
   const employees = () => [
     bot('ops', 'Ops', {can_manage: true, access_policy: policies.ops, revision: revisions.ops}),
     bot('legal', 'Legal', {can_manage: true, access_policy: policies.legal, revision: revisions.legal}),
@@ -40,9 +49,9 @@ async function access(browser) {
   const intakeThreads = threadsFake({bot: 'intake'});
   await page.route('**/*', route => {
     const request = route.request(), url = new URL(request.url()), p = url.pathname, method = request.method();
-    const json = body => route.fulfill({contentType: 'application/json', body: JSON.stringify(body)});
+    const json = (body: unknown) => route.fulfill({contentType: 'application/json', body: JSON.stringify(body)});
     if (url.origin !== 'https://tico-ui.test') return route.abort();
-    const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/);
+    const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/) as [string, string] | null;
     if (ui && fs.existsSync(uiFile(ui[1])))
       return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]), 'utf8')});
     if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
@@ -57,10 +66,10 @@ async function access(browser) {
     if (p === '/api/v2/models') return json({models: []});
     if (p === '/api/v2/settings/history') return json({changes: [], transitions: []});
     let m;
-    if ((m = p.match(/^\/api\/v2\/bots\/([^/]+)\/access$/))) {
+    if ((m = p.match(/^\/api\/v2\/bots\/([^/]+)\/access$/) as [string, string] | null)) {
       const slug = m[1];
       if (method === 'PUT') {
-        const body = request.postDataJSON(); puts.push([slug, body]);
+        const body = request.postDataJSON() as {see: Json; read: Json; write: Json; revision: number}; puts.push([slug, body]);
         policies[slug] = {see: body.see, read: body.read, write: body.write}; revisions[slug] = body.revision + 1;
         return json({bot: slug, ...policies[slug], revision: revisions[slug]});
       }
@@ -68,7 +77,7 @@ async function access(browser) {
         teams: [{id: 'legal', name: 'Legal'}, {id: 'sales', name: 'Sales'}]});
     }
     if (p === '/api/v2/preferences/org.mine') {
-      if (method === 'POST') { saved.push(request.postDataJSON().value); return json({}); }
+      if (method === 'POST') { saved.push((request.postDataJSON() as {value: Json}).value); return json({}); }
       return json({key: 'org.mine', value: serverMine});
     }
     if (p === '/api/v2/tasks') return json({tasks: []});
@@ -87,20 +96,20 @@ async function access(browser) {
   assert.equal(await page.locator('[data-settings-tab="bots"]').getAttribute('aria-selected'), 'true');
   assert.match(await page.locator('#set-bots thead').innerText(), /access/i);
   assert.doesNotMatch(await page.locator('#set-bots thead').innerText(), /can use/i);
-  const summary = slug => page.locator(`tr[data-settings-bot=${slug}] [data-access-summary]`).innerText();
+  const summary = (slug: string) => page.locator(`tr[data-settings-bot=${slug}] [data-access-summary]`).innerText();
   assert.equal(await summary('ops'), 'Open');
   assert.equal(await summary('legal'), 'Requests only');
   assert.equal(await summary('intake'), 'You: See · Write', 'someone who may only use a bot sees what they can do');
   assert.equal(await page.locator('tr[data-settings-bot=intake] [data-edit-access]').count(), 0, 'only managers edit access');
   // One Edit button per row opens the bot editor, which holds access, who it works for and who owns it.
   const editor = page.locator('#bot-editor');
-  const openEditor = async slug => { await page.evaluate(slug => settingsEditBot(slug), slug); await editor.locator(`[data-edit-access=${slug}]`).waitFor(); };
+  const openEditor = async (slug: string) => { await page.evaluate(slug => settingsEditBot(slug), slug); await editor.locator(`[data-edit-access=${slug}]`).waitFor(); };
   // Every row in the bot editor is held until Save bot: nothing is written before it, then it all saves.
   const saveBot = async () => {
     assert.equal(puts.length, 0, 'nothing saves before Save bot');
     await editor.locator('button[type=submit]').click();
     for (let i = 0; i < 100 && !puts.length; i++) await page.waitForTimeout(50);
-    await page.waitForFunction(() => document.querySelector('#bot-editor [data-bot-pending]')?.hidden !== false);
+    await page.waitForFunction(() => document.querySelector<HTMLElement>('#bot-editor [data-bot-pending]')?.hidden !== false);
   };
   await openEditor('legal');
   assert.equal(await editor.locator('[data-access-summary]').innerText(), 'See: Everyone · Read: Legal · Write: Everyone');
@@ -198,7 +207,7 @@ async function access(browser) {
 
   // ---- A bot page for someone who may only write to it, and one who may only see it
   // The settings hook is present so only the access check can hide the Tasks header icons.
-  await page.evaluate(() => { window.botTaskSettingsOpen = () => {}; });
+  await page.evaluate(() => { (window as unknown as PageWin).botTaskSettingsOpen = () => {}; });
   await page.goto('https://tico-ui.test/#/bot/intake');
   await page.waitForFunction(() => S.route === '#/bot/intake');   // a page change draws a frame later (its fade)
   await page.locator('#btabs').waitFor({state: 'attached'});
@@ -224,19 +233,19 @@ async function access(browser) {
   console.log('PASS: Access column and editor presets, the org filter beside Recent, and bot pages that show no activity to someone who cannot read.');
 }
 
-async function roles(browser) {
+async function roles(browser: import('playwright').Browser) {
   const FULL = {see: true, read: true, write: true};
   const ME = {id: 'ana', role: 'owner', name: 'Ana', email: 'ana@example.test', cloud: true, company_role: 'owner',
   bot_admin: true, can_create_bots: true, can_add_people: true};
   const page = await browser.newPage({viewport: {width: 1300, height: 900}, serviceWorkers: 'block'});
-  const errors = [], posts = [];
+  const errors: string[] = [], posts: [string, unknown][] = [];
   let action = {id: 'act1', owner_id: 'human:ana', status: 'pending', proposer: 'botops', proposed_via: 'botops',
     description: 'Add Sean (sean@example.test) to the roster, and let them sign in', summary: 'Add Sean (sean@example.test) to the roster',
     method: 'POST', path: '/api/v2/access/humans', body: {name: 'Sean', email: 'sean@example.test'}, diff: []};
   let accepts = false;
   // The runner keeps a limit of 2, as one that cannot take a raised Turns at once setting does.
-  let turnsAtOnce = null, holdTurns = false, heldTurns = null;
-  const bot = (name, display_name, extra = {}) => ({name, display_name, org_parent: '', host: 'keeper', status: 'active',
+  let turnsAtOnce: number | null = null, holdTurns = false, heldTurns: import('playwright').Route | null = null;
+  const bot = (name: string, display_name: string, extra: Json = {}) => ({name, display_name, org_parent: '', host: 'keeper', status: 'active',
     state: 'active', can_chat: true, my_access: FULL, users: [{id: 'ana', name: 'Ana'}], owner_id: 'ana', revision: 1,
     can_manage: true, ...extra});
   const chatSnapshot = {messages: [
@@ -246,9 +255,9 @@ async function roles(browser) {
      created_at: new Date().toISOString(), refs: {assistant: true, action: 'act1'}}], execution: null, has_more: false, next_before: null};
   await page.route('**/*', route => {
     const request = route.request(), url = new URL(request.url()), p = url.pathname, method = request.method();
-    const json = body => route.fulfill({contentType: 'application/json', body: JSON.stringify(body)});
+    const json = (body: unknown) => route.fulfill({contentType: 'application/json', body: JSON.stringify(body)});
     if (url.origin !== 'https://tico-ui.test') return route.abort();
-    const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/);
+    const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/) as [string, string] | null;
     if (ui && fs.existsSync(uiFile(ui[1])))
       return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]), 'utf8')});
     if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
@@ -312,11 +321,11 @@ async function roles(browser) {
   await dialog.locator('input[value=ben]').check();
   await dialog.locator('[type=submit]').click();
   await page.waitForFunction(() => !document.querySelector('#bot-owners-editor form'));
-  const saveBot = async what => {
+  const saveBot = async (what: string) => {
     assert.deepEqual(posts, [], 'nothing saves before Save bot');
     await page.locator('#bot-editor button[type=submit]').click();
     for (let i = 0; i < 100 && !posts.some(post => post[0] === what); i++) await page.waitForTimeout(50);
-    assert.equal(posts.shift()[0], 'definition', 'Save bot saves the definition first');
+    assert.equal(posts.shift()![0], 'definition', 'Save bot saves the definition first');
   };
   await saveBot('co-owners');
   assert.deepEqual(posts.shift(), ['co-owners', {add: ['ben'], remove: []}]);
@@ -328,7 +337,7 @@ async function roles(browser) {
   await page.locator('tr[data-settings-bot=groky] [data-edit-bot]').click();
   const delivery = page.locator('#bot-editor [data-bot-app-delivery=groky]');
   await delivery.waitFor();
-  assert.deepEqual(await delivery.locator('option').evaluateAll(os => os.map(o => [o.value, o.disabled])), [['', false], ['r1', true], ['r2', false]]);
+  assert.deepEqual(await delivery.locator('option').evaluateAll(os => os.map(o => [(o as HTMLOptionElement).value, (o as HTMLOptionElement).disabled])), [['', false], ['r1', true], ['r2', false]]);
   await delivery.selectOption('r2');
   await saveBot('definition');
   for (let i = 0; i < 100 && !posts.length; i++) await page.waitForTimeout(50);
@@ -338,7 +347,7 @@ async function roles(browser) {
   await page.locator('tr[data-settings-bot=cara-grok] [data-edit-bot]').click();
   const theirs = page.locator('#bot-editor [data-bot-app-delivery=cara-grok]');
   await theirs.waitFor();
-  assert.deepEqual(await theirs.locator('option').evaluateAll(os => os.map(o => [o.value, o.selected])), [['', false], ['r9', true]]);
+  assert.deepEqual(await theirs.locator('option').evaluateAll(os => os.map(o => [(o as HTMLOptionElement).value, (o as HTMLOptionElement).selected])), [['', false], ['r9', true]]);
   await theirs.selectOption('');
   await saveBot('definition');
   for (let i = 0; i < 100 && !posts.length; i++) await page.waitForTimeout(50);
@@ -352,7 +361,7 @@ async function roles(browser) {
   const box = page.locator('[data-member-bots=r1]');
   assert.equal(await box.isChecked(), false);
   await box.check();
-  await page.waitForFunction(() => document.querySelector('[data-member-bots=r1]')?.checked === true);
+  await page.waitForFunction(() => document.querySelector<HTMLInputElement>('[data-member-bots=r1]')?.checked === true);
   // The box is checked before its POST reaches the route handler: wait for the POST, as the saves above do.
   for (let i = 0; i < 100 && !posts.length; i++) await page.waitForTimeout(50);
   assert.deepEqual(posts.shift(), ['member-bots', {accepts: true}]);
@@ -393,14 +402,14 @@ async function roles(browser) {
   holdTurns = true;
   await turns.fill('3');
   await turns.dispatchEvent('change');
-  await page.waitForFunction(() => document.querySelector('[data-turns-at-once=r1]')?.disabled === true);
-  await turns.evaluate(el => { el.value = '5'; el.dispatchEvent(new Event('change', {bubbles: true})); });
+  await page.waitForFunction(() => document.querySelector<HTMLInputElement>('[data-turns-at-once=r1]')?.disabled === true);
+  await turns.evaluate(el => { (el as HTMLInputElement).value = '5'; el.dispatchEvent(new Event('change', {bubbles: true})); });
   holdTurns = false;
-  heldTurns.fulfill({contentType: 'application/json', body: JSON.stringify({turns_at_once: 3, turn_limit: 2})});
+  heldTurns!.fulfill({contentType: 'application/json', body: JSON.stringify({turns_at_once: 3, turn_limit: 2})});
   for (let i = 0; i < 100 && posts.length < 2; i++) await page.waitForTimeout(50);
   assert.deepEqual(posts.splice(0), [['turns-at-once', {turns_at_once: 3}], ['turns-at-once', {turns_at_once: 5}]],
     'the change made during the save is sent after it, and not with it');
-  await page.waitForFunction(() => document.querySelector('[data-turns-at-once=r1]')?.value === '5');
+  await page.waitForFunction(() => document.querySelector<HTMLInputElement>('[data-turns-at-once=r1]')?.value === '5');
 
   // ---- BotOps' Confirm card, in the Assistant's chat, and nothing happens until the person clicks it
   await page.goto('https://tico-ui.test/#/assistant');

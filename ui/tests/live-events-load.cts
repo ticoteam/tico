@@ -7,35 +7,45 @@
 //  - a hidden tab reads nothing.
 // The stream is a stand-in EventSource the test drives, so the events land spread out as they do on a real team,
 // not in one batch.
-const {chromium} = require('playwright');
-const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const {html, uiFile} = require('./support/page.cjs');
-const {unrouted} = require('./support/routes.cjs');
-const {threadsFake} = require('./support/threads-fake.cjs');
-const {t} = (() => { try { return require('./support/load.cjs'); } catch { return {t: ms => ms}; } })();
+import type * as PageSupport from './support/page.cjs';
+import type * as Routes from './support/routes.cjs';
+import type * as ThreadsFake from './support/threads-fake.cjs';
+const {chromium}: typeof import('playwright') = require('playwright');
+const assert: typeof import('node:assert/strict') = require('node:assert/strict');
+const fs: typeof import('node:fs') = require('node:fs');
+const {html, uiFile} = require('./support/page.cjs') as typeof PageSupport;
+const {unrouted} = require('./support/routes.cjs') as typeof Routes;
+const {threadsFake} = require('./support/threads-fake.cjs') as typeof ThreadsFake;
+const {t}: {t: (ms: number) => number} = (() => { try { return require('./support/load.cjs') as {t: (ms: number) => number}; } catch { return {t: (ms: number) => ms}; } })();
+interface LiveStream {emit(type: string, data: Record<string, unknown>): void}
+interface PageWin {EventSource: unknown; __liveStream?: LiveStream}
+interface TaskFields {id?: string; title?: string; status?: string; version?: number}
+declare const TASKS_ST: {loading?: boolean} | null;
 
 const EVENTS = 50;
 const CEILING = 5;   // requests a page may make for the whole burst; reading lists per change makes 15 or more
 const now = new Date().toISOString();
-const task = over => ({id: 't1', title: 'Draft the release notes', body: 'Details.', owner_id: 'bot:ops', requester_id: 'human:ana',
+const task = (over?: TaskFields) => ({id: 't1', title: 'Draft the release notes', body: 'Details.', owner_id: 'bot:ops', requester_id: 'human:ana',
   status: 'doing', lane: 'company', labels: [], tags: [], links: [], parts: {total: 0, done: 0}, version: 3, created_at: now, updated_at: now, ...over});
 
 (async () => {
   const browser = await chromium.launch();
   const page = await browser.newPage({viewport: {width: 1300, height: 820}, serviceWorkers: 'block'});
-  const errors = [], requests = [];
+  const errors: string[] = [], requests: string[] = [];
   const threads = threadsFake({bot: 'ops', messages: [{id: 'm1', sender_id: 'human:ana', body: 'Draft the release notes'}]});
   page.on('pageerror', e => errors.push(e.message));
   await page.addInitScript(() => {
-    window.EventSource = class {
-      constructor(url) {
-        this.url = url; this.on = {}; window.__liveStream = this;
+    (window as unknown as PageWin).EventSource = class {
+      declare url: string;
+      declare on: Record<string, ((ev: MessageEvent) => void)[]>;
+      declare closed?: boolean;
+      constructor(url: string) {
+        this.url = url; this.on = {}; (window as unknown as PageWin).__liveStream = this;
         setTimeout(() => this.emit('ready', {seq: 10}), 0);
       }
-      addEventListener(type, fn) { (this.on[type] ||= []).push(fn); }
+      addEventListener(type: string, fn: (ev: MessageEvent) => void) { (this.on[type] ||= []).push(fn); }
       close() { this.closed = true; }
-      emit(type, data) {
+      emit(type: string, data: {seq?: number}) {
         const ev = new MessageEvent(type, {data: JSON.stringify(data), lastEventId: String(data.seq || '')});
         for (const fn of this.on[type] || []) fn(ev);
       }
@@ -43,11 +53,11 @@ const task = over => ({id: 't1', title: 'Draft the release notes', body: 'Detail
   });
   await page.route('**/*', route => {
     const url = new URL(route.request().url()), p = url.pathname;
-    const json = body => route.fulfill({contentType: 'application/json', body: JSON.stringify(body)});
+    const json = (body: unknown) => route.fulfill({contentType: 'application/json', body: JSON.stringify(body)});
     if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
     const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/);
-    if (ui && fs.existsSync(uiFile(ui[1])))
-      return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]), 'utf8')});
+    if (ui && fs.existsSync(uiFile(ui[1] as string)))
+      return route.fulfill({contentType: (ui[1] as string).endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1] as string), 'utf8')});
     if (/\.(?:js|ts)$/.test(p)) return route.fulfill({contentType: 'application/javascript', body: ''});
     // Not counted: boot.js re-reads the observability config on a timer, events or not, and on a slow
     // box that read can land inside a burst.
@@ -77,7 +87,7 @@ const task = over => ({id: 't1', title: 'Draft the release notes', body: 'Detail
       const fresh = i % 3 === 0;
       const d = fresh ? task({id: `n${i}`, title: `Check release link ${i}`, status: 'open'}) : task({title: `Draft the release notes, pass ${i}`, version: 4 + i});
       seq++;
-      await page.evaluate(([s, d]) => window.__liveStream.emit('tasks', {seq: s, id: d.id, actor: 'bot:ops', task: d}), [seq, d]);
+      await page.evaluate(([s, d]: [number, {id: string}]) => (window as unknown as PageWin).__liveStream!.emit('tasks', {seq: s, id: d.id, actor: 'bot:ops', task: d}), [seq, d] as [number, {id: string}]);
       await page.waitForTimeout(60);
     }
     await page.waitForTimeout(t(1000));
@@ -86,7 +96,7 @@ const task = over => ({id: 't1', title: 'Draft the release notes', body: 'Detail
 
   // The task board: new tasks arrive whole and changes in place; no list is read again.
   await page.goto('https://tico-ui.test/#/board');
-  await page.waitForFunction(() => window.__liveStream && TASKS_ST && !TASKS_ST.loading
+  await page.waitForFunction(() => (window as unknown as PageWin).__liveStream && TASKS_ST && !TASKS_ST.loading
     && document.querySelector('#task-body .tl-row, #task-body .bcard'), null, {timeout: t(8000)});
   await settle();
   const board = await burst();
@@ -97,7 +107,7 @@ const task = over => ({id: 't1', title: 'Draft the release notes', body: 'Detail
   await page.evaluate(() => { location.hash = '#/bot/ops'; });
   await page.locator('#bot-thread').waitFor({timeout: t(8000)});
   await settle();
-  const visible = shown => page.evaluate(shown => {
+  const visible = (shown: boolean) => page.evaluate((shown: boolean) => {
     Object.defineProperty(document, 'hidden', {configurable: true, get: () => !shown});
     document.dispatchEvent(new Event('visibilitychange'));
   }, shown);

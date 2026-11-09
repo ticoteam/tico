@@ -1,36 +1,39 @@
 // The credential card (ui/credential-card.ts): a bot asks for a secret inside the Assistant's chat (BotOps has no DM of its own), the person types it
 // there, and it goes to one route only (the credential request's save), never anywhere else, never back into
 // the page, a toast or the console. Fixtures only, no network.
-const {chromium, webkit} = require('playwright');
-const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const {html, uiFile} = require('./support/page.cjs');
-const {unrouted} = require('./support/routes.cjs');
-const {assistantView} = require('./support/assistant-chat.cjs');
+const {chromium, webkit}: typeof import('playwright') = require('playwright');
+const assert: typeof import('node:assert/strict') = require('node:assert/strict');
+const fs: typeof import('node:fs') = require('node:fs');
+const {html, uiFile} = require('./support/page.cjs') as typeof import('./support/page.cjs');
+const {unrouted} = require('./support/routes.cjs') as typeof import('./support/routes.cjs');
+const {assistantView} = require('./support/assistant-chat.cjs') as typeof import('./support/assistant-chat.cjs');
+
+type Card = {id: string; status: string; env: string; bot: string; bot_name: string; label: string; title: string; format: string;
+  help_url: string; kind: string; can_save: boolean; note: string | null; credential_id: string | null};
 
 const SECRET = 'ana@acme.example:ATATT-super-secret-7788';
 const now = new Date().toISOString();
 
-const card = (over = {}) => ({id: 'cr1', status: 'pending', env: 'JIRA_BASIC_AUTH', bot: 'jira-manager', bot_name: 'Jira Manager',
+const card = (over: Partial<Card> = {}): Card => ({id: 'cr1', status: 'pending', env: 'JIRA_BASIC_AUTH', bot: 'jira-manager', bot_name: 'Jira Manager',
   label: 'your Jira login', title: 'Jira Manager needs your Jira login', format: 'you@company.com:API token',
   help_url: 'https://id.atlassian.com/manage-profile/security/api-tokens', kind: 'api_key', can_save: true, note: null,
   credential_id: null, ...over});
 
-async function open(browser, viewport, view) {
+async function open(browser: import('playwright').Browser, viewport: {width: number; height: number}, view: Card) {
   const page = await browser.newPage({viewport, serviceWorkers: 'block', hasTouch: viewport.width < 760});
-  const seen = {errors: [], console: [], requests: [], toasts: [], view: {...view}, saves: 0, cancels: 0, rejectFormat: false};
+  const seen: {errors: string[]; console: string[]; requests: {method: string; url: string; body: string}[]; toasts: unknown[]; view: Card; saves: number; cancels: number; rejectFormat: boolean} = {errors: [], console: [], requests: [], toasts: [], view: {...view}, saves: 0, cancels: 0, rejectFormat: false};
   page.on('pageerror', e => seen.errors.push(e.message));
   page.on('console', m => seen.console.push(m.text()));
   const messages = [
     {id: 'm1', sender_id: 'human:ana', recipient_id: 'bot:botops', kind: 'say', body: 'Make me a Jira bot', created_at: now, refs: {}},
     {id: 'm2', sender_id: 'bot:botops', recipient_id: 'human:ana', kind: 'say', body: 'Jira Manager needs your Jira login', created_at: now, refs: {credential_request: 'cr1'}}];
   const snapshot = {messages, execution: null};
-  await page.context().route('**/*', route => {
+  await page.context().route('**/*', (route: import('playwright').Route) => {
     const req = route.request(), url = new URL(req.url()), p = url.pathname;
-    const json = (body, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
+    const json = (body: unknown, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
     if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
     const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/);
-    if (ui && fs.existsSync(uiFile(ui[1]))) return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]), 'utf8')});
+    if (ui && fs.existsSync(uiFile(ui[1]!))) return route.fulfill({contentType: ui[1]!.endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]!), 'utf8')});
     if (/\/marked\.min\.js$/.test(p)) return route.fulfill({contentType: 'application/javascript', body: 'window.marked={parse:s=>String(s)}'});
     if (url.origin !== 'https://tico-ui.test') return route.abort();
     seen.requests.push({method: req.method(), url: req.url(), body: req.postData() || ''});
@@ -57,9 +60,9 @@ async function open(browser, viewport, view) {
 
 (async () => {
   const browser = process.env.TICO_BROWSER === 'webkit' ? await webkit.launch({headless: true})
-    : await chromium.launch({channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined, headless: true});
+    : await chromium.launch({channel: (process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined) as string, headless: true});
   try {
-    for (const [tag, viewport] of [['desktop', {width: 1200, height: 800}], ['phone', {width: 390, height: 800}]]) {
+    for (const [tag, viewport] of [['desktop', {width: 1200, height: 800}], ['phone', {width: 390, height: 800}]] as [string, {width: number; height: number}][]) {
       const {page, seen} = await open(browser, viewport, card());
       const input = page.locator('[data-credential-host] input[type=password]');
       await input.waitFor();
@@ -69,12 +72,12 @@ async function open(browser, viewport, view) {
       const help = page.locator('[data-credential-host] a.cc-help');
       assert.equal(await help.innerText(), 'Get one');
       assert.equal(await help.getAttribute('target'), '_blank');
-      assert.match(await help.getAttribute('rel'), /noopener/);
+      assert.match((await help.getAttribute('rel'))!, /noopener/);
       assert.match(await page.locator('[data-credential-host]').innerText(), /Goes straight to Credentials/);
       if (tag === 'phone') {
-        const box = await page.locator('[data-credential-host] .cc-card').boundingBox();
+        const box = (await page.locator('[data-credential-host] .cc-card').boundingBox())!;
         assert.ok(box.x >= 0 && box.x + box.width <= viewport.width, 'phone: the card fits the screen');
-        for (const b of await page.locator('[data-credential-host] button').all()) assert.ok((await b.boundingBox()).height >= 44, 'phone: 44px tap targets');
+        for (const b of await page.locator('[data-credential-host] button').all()) assert.ok((await b.boundingBox())!.height >= 44, 'phone: 44px tap targets');
         assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, 'phone: no sideways scroll');
       }
 
@@ -105,10 +108,10 @@ async function open(browser, viewport, view) {
       const carrying = seen.requests.filter(r => r.url.includes(SECRET) || r.body.includes(SECRET) || r.body.includes(encodeURIComponent(SECRET)));
       assert.ok(carrying.length >= 1 && carrying.every(r => r.method === 'POST' && r.url.endsWith('/api/v2/credential-requests/cr1/save')),
         tag + ': the value is sent only to the save route');
-      assert.deepEqual(JSON.parse(carrying.at(-1).body), {value: SECRET});
+      assert.deepEqual(JSON.parse(carrying.at(-1)!.body), {value: SECRET});
       assert.ok(!(await page.content()).includes(SECRET), 'the value is not in the page');
       assert.ok(!seen.console.join('\n').includes(SECRET), 'the value is not in the console');
-      assert.equal(await page.evaluate(s => JSON.stringify([localStorage, sessionStorage, location.href]).includes(s), SECRET), false, 'nor in storage or the URL');
+      assert.equal(await page.evaluate((s: string) => JSON.stringify([localStorage, sessionStorage, location.href]).includes(s), SECRET), false, 'nor in storage or the URL');
       assert.deepEqual(seen.errors, []);
       await page.close();
     }

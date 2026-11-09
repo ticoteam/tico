@@ -3,31 +3,40 @@
 // Strategy Bot stays readable, read-only, under "Earlier chats". An admin keeps the Assistant, with no Earlier chats,
 // and a helper's own page (#/bot/botops, #/bot/goal-manager) opens for them with no composer.
 // Fixtures only.
-const {chromium} = require('playwright');
-const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const {html, uiFile} = require('./support/page.cjs');
-const {unrouted} = require('./support/routes.cjs');
-const {threadsFake} = require('./support/threads-fake.cjs');
+import type {Browser, Page} from 'playwright';
+import type {ThreadsMessage} from './support/threads-fake.cjs';
+const {chromium}: typeof import('playwright') = require('playwright');
+const assert: typeof import('node:assert/strict') = require('node:assert/strict');
+const fs: typeof import('node:fs') = require('node:fs');
+const {html, uiFile} = require('./support/page.cjs') as typeof import('./support/page.cjs');
+const {unrouted} = require('./support/routes.cjs') as typeof import('./support/routes.cjs');
+const {threadsFake} = require('./support/threads-fake.cjs') as typeof import('./support/threads-fake.cjs');
+
+interface Person {id: string; role: string; name: string; email: string; cloud: boolean; bot_admin?: boolean}
+interface View {
+  available: boolean; state: string; can_turn_on: boolean; room_id: string; has_more: boolean; next_before: string | null;
+  execution: null; actions: Record<string, unknown>; pending: unknown[]; earlier: {room_id: string; bot: string; name: string} | null;
+  messages: unknown[]; bot?: string; name?: string;
+}
 
 const now = new Date().toISOString();
-const msg = (id, from, body) => ({id, sender_id: from, body, refs: {}, created_at: now, kind: 'say'});
-const bot = (name, display_name) => ({name, display_name, host: 'keeper', status: 'active', can_chat: false});
+const msg = (id: string, from: string, body: string) => ({id, sender_id: from, body, refs: {}, created_at: now, kind: 'say'});
+const bot = (name: string, display_name: string) => ({name, display_name, host: 'keeper', status: 'active', can_chat: false});
 
-async function open(browser, me, view, strategyName) {
+async function open(browser: Browser, me: Person, view: View, strategyName: string) {
   const context = await browser.newContext({viewport: {width: 1280, height: 900}, serviceWorkers: 'block'});
   await context.grantPermissions(['clipboard-read', 'clipboard-write'], {origin: 'https://tico-ui.test'});
   const page = await context.newPage();
-  const errors = [], read = [], sent = [];
-  const helpers = ['botops', 'goal-manager'].map(bot => threadsFake({bot, home: [{id: 'h-' + bot, sender_id: 'bot:' + bot, body: 'Nothing to report.'}]}));
+  const errors: string[] = [], read: (string | null)[] = [], sent: {path: string; body: unknown}[] = [];
+  const helpers = ['botops', 'goal-manager'].map(bot => threadsFake({bot, home: [{id: 'h-' + bot, sender_id: 'bot:' + bot, body: 'Nothing to report.'}] as unknown as ThreadsMessage[]}));
   page.on('pageerror', error => errors.push(error.message));
   await page.route('**/*', route => {
     const url = new URL(route.request().url()), p = url.pathname;
-    const json = body => route.fulfill({contentType: 'application/json', body: JSON.stringify(body)});
+    const json = (body: unknown) => route.fulfill({contentType: 'application/json', body: JSON.stringify(body)});
     if (/\/marked\.min\.js$/.test(p)) return route.fulfill({contentType: 'application/javascript', body: fs.readFileSync(uiFile('vendor/marked.min.js'), 'utf8')});
     if (url.origin !== 'https://tico-ui.test') return route.abort();
     const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/);
-    if (ui && fs.existsSync(uiFile(ui[1]))) return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]), 'utf8')});
+    if (ui && fs.existsSync(uiFile(ui[1]!))) return route.fulfill({contentType: ui[1]!.endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]!), 'utf8')});
     if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
     if (p === '/api/me') return json(me);
     if (p === '/api/humans') return json({people: [{id: 'ana', name: 'Ana'}, {id: 'ben', name: 'Ben'}]});
@@ -41,7 +50,7 @@ async function open(browser, me, view, strategyName) {
     // A send: words as JSON, files as a form, like any bot chat (ui/app/api.ts cloudCompose).
     if (/^\/api\/v2\/(?:uploads\/)?assistant\/messages$/.test(p)) {
       const request = route.request(), form = !p.includes('/uploads/');
-      sent.push({path: p, body: form ? request.postDataJSON() : request.postDataBuffer().toString('latin1')});
+      sent.push({path: p, body: form ? request.postDataJSON() : request.postDataBuffer()!.toString('latin1')});
       return json({message: msg('s' + sent.length, 'human:' + me.id, 'sent'), });
     }
     if (p === `/api/v2/conversations/${view.room_id}/snapshot`) return json({messages: view.messages, execution: null, has_more: false, next_before: null});
@@ -59,24 +68,24 @@ async function open(browser, me, view, strategyName) {
 
 // The person's own copy and paste: words, or a screenshot, put on the clipboard and pasted with the keyboard.
 const PNG = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
-async function paste(page, what) {
+async function paste(page: Page, what: string) {
   await page.evaluate(async ([what, png]) => {
     if (what === 'text') return navigator.clipboard.writeText('Why did revenue dip in March?');
     const bytes = Uint8Array.from(atob(png), c => c.charCodeAt(0));
     await navigator.clipboard.write([new ClipboardItem({'image/png': new Blob([bytes], {type: 'image/png'})})]);
-  }, [what, PNG]);
+  }, [what, PNG] as const);
   await page.locator('#chat-composer .p-text').focus();
   await page.keyboard.press('ControlOrMeta+V');
 }
 
-const view = (over) => ({available: true, state: 'active', can_turn_on: false, room_id: 'room1', has_more: false, next_before: null,
+const view = (over: Partial<View>): View => ({available: true, state: 'active', can_turn_on: false, room_id: 'room1', has_more: false, next_before: null,
   execution: null, actions: {}, pending: [], earlier: null, messages: [], ...over});
 
 (async () => {
-  const browser = await chromium.launch({headless: true, channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined});
+  const browser = await chromium.launch({headless: true, channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined} as import('playwright').LaunchOptions);
   try {
     // The owner: the Assistant, by name, and the earlier Strategy Bot chat under Earlier chats.
-    const owner = {id: 'ana', role: 'owner', name: 'Ana', email: 'ana@example.test', cloud: true};
+    const owner: Person = {id: 'ana', role: 'owner', name: 'Ana', email: 'ana@example.test', cloud: true};
     const mine = view({bot: 'coo', name: 'Assistant', room_id: 'assistant1', messages: [msg('c1', 'bot:coo', 'Revenue is on track.')],
       earlier: {room_id: 'old1', bot: 'goal-manager', name: 'Chief'}});
     {
@@ -90,7 +99,7 @@ const view = (over) => ({available: true, state: 'active', can_turn_on: false, r
       await paste(page, 'text');
       assert.equal(await box.inputValue(), 'Why did revenue dip in March?', 'owner: pasted words land in the box');
       await box.press('Enter');
-      await page.waitForFunction(() => !document.querySelector('#chat-composer .p-text').value);
+      await page.waitForFunction(() => !document.querySelector<HTMLTextAreaElement>('#chat-composer .p-text')!.value);
       assert.deepEqual(sent.map(s => [s.path, s.body]), [['/api/v2/assistant/messages', {text: 'Why did revenue dip in March?'}]], 'owner: words send as words');
       await paste(page, 'image');
       await page.locator('#chat-composer .p-chips > *').first().waitFor();
@@ -99,8 +108,8 @@ const view = (over) => ({available: true, state: 'active', can_turn_on: false, r
       // The box empties as the message leaves; the upload itself follows.
       for (let i = 0; i < 100 && sent.length < 2; i++) await page.waitForTimeout(50);
       assert.equal(sent[1]?.path, '/api/v2/uploads/assistant/messages', 'owner: a picture goes up as an upload');
-      assert.match(sent[1].body, /name="text"\r\n\r\nAttached files\./);
-      assert.match(sent[1].body, /filename="[^"]*\.png"/);
+      assert.match(sent[1]!.body as string, /name="text"\r\n\r\nAttached files\./);
+      assert.match(sent[1]!.body as string, /filename="[^"]*\.png"/);
       // Earlier chats: closed, loaded when opened, read-only, older pages on request.
       const earlier = page.locator('#asst-earlier');
       assert.equal(await earlier.isVisible(), true, 'owner: Earlier chats is there');
@@ -119,7 +128,7 @@ const view = (over) => ({available: true, state: 'active', can_turn_on: false, r
     }
     // An admin is not the owner: the Assistant, as before, and no Earlier chats.
     {
-      const admin = {id: 'ben', role: 'human', bot_admin: true, name: 'Ben', email: 'ben@example.test', cloud: true};
+      const admin: Person = {id: 'ben', role: 'human', bot_admin: true, name: 'Ben', email: 'ben@example.test', cloud: true};
       const {page, errors, sent} = await open(browser, admin, view({bot: 'coo', name: 'Assistant'}), 'Strategy Bot');
       await page.goto('https://tico-ui.test/#/assistant');
       await page.locator('#chat-composer .p-text').waitFor();
@@ -132,7 +141,7 @@ const view = (over) => ({available: true, state: 'active', can_turn_on: false, r
       assert.equal(await page.locator('#chat-composer .p-text').inputValue(), 'Why did revenue dip in March?', 'admin: pasted words land');
       assert.equal(await page.locator('#chat-composer .p-chips > *').count(), 1, 'admin: the picture attached');
       await page.locator('#chat-composer .p-text').press('Enter');
-      await page.waitForFunction(() => !document.querySelector('#chat-composer .p-text').value);
+      await page.waitForFunction(() => !document.querySelector<HTMLTextAreaElement>('#chat-composer .p-text')!.value);
       await page.waitForFunction(() => !document.querySelector('#chat-composer .p-chips')?.children.length);
       for (let i = 0; i < 100 && !sent.length; i++) await page.waitForTimeout(50);
       assert.deepEqual(sent.map(s => s.path), ['/api/v2/uploads/assistant/messages'], 'admin: words and the picture together');

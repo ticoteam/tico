@@ -10,41 +10,81 @@
 // starter's Set up says "Let's set you up.", an admin can be invited, bot owners named and where to keep keys found;
 // the bot page and the org chart carry the same mark.
 // Settings -> Bots reuses the catalog cards. Fixtures only - no server, no network.
-const {chromium} = require('playwright');
-const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const path = require('node:path');
-const {html, uiFile, harnesses} = require('./support/page.cjs');
-const {unrouted} = require('./support/routes.cjs');
-const {threadsFake} = require('./support/threads-fake.cjs');
-const {t} = (() => { try { return require('./support/load.cjs'); } catch { return {t: ms => ms}; } })();   // load.cjs arrives with #254
+import type {Locator, Page} from 'playwright';
+import type * as PageSupport from './support/page.cjs';
+import type * as Routes from './support/routes.cjs';
+import type * as ThreadsFake from './support/threads-fake.cjs';
+const {chromium}: typeof import('playwright') = require('playwright');
+const assert: typeof import('node:assert/strict') = require('node:assert/strict');
+const fs: typeof import('node:fs') = require('node:fs');
+const path: typeof import('node:path') = require('node:path');
+const {html, uiFile, harnesses} = require('./support/page.cjs') as typeof PageSupport;
+const {unrouted} = require('./support/routes.cjs') as typeof Routes;
+const {threadsFake} = require('./support/threads-fake.cjs') as typeof ThreadsFake;
+const {t}: {t: (ms: number) => number} = (() => { try { return require('./support/load.cjs'); } catch { return {t: (ms: number) => ms}; } })();   // load.cjs arrives with #254
+// Shapes of the fixtures and of the page's own globals (declared, not defined: the page supplies them).
+type Config = {environment_id: string; company_name: string; app_name: string; assistant_name: string; assistant_bot: string;
+  public_url: string; runner_url: string; github_owner: string; local: boolean; release: string; onboarding_needed: boolean;
+  version: string; runner_compat: {version: string; min_runner: string}; providers_configured?: boolean; company_name_default?: boolean;
+  in_docker?: boolean; compose_project?: string; server_network?: string};
+type Me = {id: string; name?: string; role?: string; company_domains?: string[]; sign_in_name?: string; [key: string]: unknown};
+type Machine = {runners: {id: string; label: string; online: boolean}[]; enrolled: boolean};
+type Card = {template: string; slug: string; name: string; required: boolean; bootstrap: boolean; department?: string; icon?: string;
+  suggest?: string; summary: string; tags?: string[]; owns: string[]; never: string[]; runtime: string; model: string;
+  reasoning_effort: string; recommend_when: string[]; instructions: string; lead?: boolean; default?: boolean; when?: string;
+  starter?: boolean; pack?: string; kind?: string; pains?: string[]; prerequisites?: {tool: string; why: string; required: boolean}[];
+  first_routine?: {title: string; cadence: string}};
+type Dept = [string, string, string, string, string, string, string];
+type Selected = {display_name?: string; reports_to?: string; instructions?: string; [key: string]: unknown};
+type Put = {names: Record<string, string>; answers: Record<string, unknown>; selected: Record<string, Selected>};
+type BotRow = {id: string; slug: string; display_name: string; status: string; template: string; onboarding_state: string;
+  setup_task_id: string | null; repository_present: boolean};
+type Setup = {names: Record<string, string>; answers: Record<string, unknown>; selected: Record<string, unknown>;
+  completed: string | null; bots: unknown[]; machine: Machine; needed: boolean};
+type Created = {slug: string; template: string; display_name: string; instructions: string; model: string; effort: string; owners: string[]};
+type Opened = {conversation?: unknown; messages?: ThreadsFake.ThreadsMessage[]; home?: ThreadsFake.ThreadsMessage[]};
+// Page globals the in-page code reads, and the helpers the page defines.
+declare const S: {me: Me; config: Config};
+declare const ONB: Record<string, unknown>;
+declare function refresh(force: boolean): void;
+declare function onbRenderDone(state: Record<string, unknown>): void;
+declare function onbOwnerGuess(): string;
+declare function onbAsksDomain(): boolean;
+declare function onbDefaultKind(): string;
+declare function onbStepHTML(state: Record<string, unknown>, step: string): string;
+declare function onbSummaryHTML(state: Record<string, unknown>): string;
+declare function onbCommands(state: Record<string, unknown>): [string, string, boolean?][];
+declare function onbMachineLabel(machine: {kind: string}): string;
+declare function dockerRunnerCommands(code: string, label: string, runtime: string): [string[], string[], string[]];
+declare function frProvidersName(state: {providers: Record<string, unknown>}): string;
+interface PageWin { copied: string[]; ticoTheme: {set(theme: string): void} }
 // TICO_SCREENSHOT_DIR=<dir> saves screenshots of the first-run screens.
 // TICO_SHOT_SCHEME=dark takes them in the dark theme.
 const shots = process.env.TICO_SCREENSHOT_DIR, scheme = process.env.TICO_SHOT_SCHEME === 'dark' ? 'dark' : 'light';
 // Every finite animation ended first, so a screen that animates in is photographed at rest.
 // The progress row is one line (every step on the same row, nothing cut off) and the step's title is well above body text.
-const oneLine = page => page.evaluate(() => {
+const oneLine = (page: Page) => page.evaluate(() => {
   // A wrapped row starts a step below the bottom of another one.
-  const row = document.querySelector('.onb-progress'), boxes = [...row.children].map(li => li.getBoundingClientRect());
+  const row = document.querySelector<HTMLElement>('.onb-progress')!, boxes = [...row.children].map(li => li.getBoundingClientRect());
   const bottom = Math.min(...boxes.map(box => box.bottom));
   return boxes.every(box => box.top < bottom) && row.scrollWidth <= row.clientWidth;
 });
-const bigTitle = page => page.evaluate(() => parseFloat(getComputedStyle(document.querySelector('.onb-head h1')).fontSize)
-  >= 1.5 * parseFloat(getComputedStyle(document.querySelector('#onb-step')).fontSize));
-const shot = async (page, name) => { if (!shots) return; await page.waitForFunction(() => document.getAnimations().every(a => a.playState !== 'running' || a.effect?.getTiming().iterations === Infinity), null, {timeout: t(5000)}); await page.screenshot({path: path.join(shots, `${name}-${scheme}.png`)}); };
+const bigTitle = (page: Page) => page.evaluate(() => parseFloat(getComputedStyle(document.querySelector('.onb-head h1')!).fontSize)
+  >= 1.5 * parseFloat(getComputedStyle(document.querySelector('#onb-step')!).fontSize));
+const shot = async (page: Page, name: string) => { if (!shots) return; await page.waitForFunction(() => document.getAnimations().every(a => a.playState !== 'running' || a.effect?.getTiming().iterations === Infinity), null, {timeout: t(5000)}); await page.screenshot({path: path.join(shots, `${name}-${scheme}.png`)}); };
 
-const CONFIG = {environment_id: 'initech', company_name: 'Initech', app_name: 'Initech Hub',
+const CONFIG: Config = {environment_id: 'initech', company_name: 'Initech', app_name: 'Initech Hub',
   assistant_name: 'Ace', assistant_bot: 'coo', public_url: 'https://initech.test',
   runner_url: 'https://initech.test', github_owner: 'initech-inc', local: false, release: '',
   onboarding_needed: true, version: '0.2.0', runner_compat: {version: '0.2.0', min_runner: '0.1.0'}};
 
 // One card of the org builder's catalog, in the shape the server renders it.
-function bot(template, name, department, icon, suggest, summary, extra = {}) {
+function bot(template: string, name: string, department: string, icon: string, suggest: string, summary: string, extra: Partial<Card> = {}): Card {
   return {template, slug: template, name, required: false, bootstrap: false, department, icon, suggest, summary, tags: [],
           owns: ['its own work'], never: ['sends anything on its own'], runtime: 'codex', model: 'gpt-6-sol',
           reasoning_effort: 'medium', recommend_when: [], instructions: `# ${name}\n\nDraft, never send.\n`, ...extra};
 }
-const CATALOG = [
+const CATALOG: Card[] = [
   // The server renders every card with the company's names, so the assistant's reads as Ace.
   {template: 'assistant', slug: 'coo', name: 'Ace', required: true, default: true, bootstrap: true,
    when: 'Recommended if you use Slack or send meetings to bots: it routes work nobody was named for.',
@@ -122,11 +162,11 @@ const READY_STRATEGY = {draft: {id: 'v-d', status: 'draft', summary: '', vision:
   bets: [{id: 'b-1', statement: 'Studios pay for the software, listeners use the app free.', rules_out: 'Ads to listeners.',
           wrong_if: {kind: 'text', text: 'Fewer than 10 studios paying by March', check_by: '2027-03-01'}, status: 'active', rank: 0}]};
 // What are you building (left empty, so no research) and Your bets (already ready): Next, Next, to Names.
-async function pastStrategy(page) {
+async function pastStrategy(page: Page) {
   await page.locator('#onb-website').waitFor();
   await page.locator('#onb-next').click();
   await page.locator('#ss li[data-ss-bet]').waitFor();
-  await page.waitForFunction(() => !document.querySelector('#onb-next').disabled);
+  await page.waitForFunction(() => !document.querySelector<HTMLButtonElement>('#onb-next')!.disabled);
   await page.locator('#onb-next').click();
   await page.locator('#onb-company').waitFor();
 }
@@ -134,7 +174,7 @@ async function pastStrategy(page) {
 // What Create leaves: the two starters are parked, one with its repository, one still being set up; the Content
 // Marketer is not a starter, so BotOps builds it. A new bot's id is not its slug (the Content Marketer's here).
 const CONTENT_ID = '01990000-0000-7000-8000-00000000c0de';
-const BOTS_AFTER = [
+const BOTS_AFTER: BotRow[] = [
   {slug: 'coo', display_name: 'Ace', status: 'active', template: 'assistant', onboarding_state: '',
    setup_task_id: null, repository_present: false},
   {slug: 'botops', display_name: 'BotOps', status: 'active', template: 'botops', onboarding_state: '',
@@ -145,12 +185,12 @@ const BOTS_AFTER = [
    setup_task_id: null, repository_present: false},
   {slug: 'content', display_name: 'Content Marketer', status: 'planned', template: 'content', onboarding_state: '',
    setup_task_id: 'task-content', repository_present: false},
-].map(bot => ({id: bot.slug === 'content' ? CONTENT_ID : bot.slug, ...bot}));
+].map((bot): BotRow => ({id: bot.slug === 'content' ? CONTENT_ID : bot.slug, ...bot}));
 // The chart Create leaves: Operations before Customer Support, not the order the bots were created in.
 const CHART_GROUPS = [{id: 'support', name: 'Customer Support', parent: '', order: 2}, {id: 'operations', name: 'Operations', parent: '', order: 1}];
-const CHART_TEAMS = {support: 'support', 'meeting-notes': 'operations'};
+const CHART_TEAMS: Record<string, string> = {support: 'support', 'meeting-notes': 'operations'};
 // The org builder's departments (templates/departments.yaml) and cards (GET /api/v2/setup/groups).
-const DEPARTMENTS = [
+const DEPT_ROWS: Dept[] = [
   ["sales", "Sales", "handshake", "Finds buyers, works every deal to a signature and keeps existing accounts renewing and growing.", "Turn interest into revenue", "What kind of sales do you do today?", "Outbound to studio owners, a two-call demo, annual contracts; two sellers and a spreadsheet pipeline"],
   ["marketing", "Marketing", "campaign", "Makes the right people aware of the company and gives sales a steady flow of interested buyers.", "Be known by the customers you want", "How do customers find you today?", "Mostly word of mouth and search; a monthly newsletter, some paid social, two trade shows a year"],
   ["support", "Customer Support", "support_agent", "Answers customers quickly and correctly, and keeps them successful after they buy.", "Every customer helped and kept", "How do customers reach you for help today, and what do they ask most?", "A shared support inbox and chat on the site; mostly billing questions, setup help and a few bug reports"],
@@ -160,14 +200,15 @@ const DEPARTMENTS = [
   ["hr", "HR", "groups", "Hires the right people, brings them in well and looks after them while they are here.", "Hire well, keep good people", "How do you hire and look after your people today?", "Hiring three engineers this quarter; job posts on our site, a shared handbook, reviews twice a year"],
   ["product", "Product", "category", "Decides what to build next from what customers say and do, and writes it down clearly enough to build.", "Build what customers need", "How do you decide what to build next?", "Feature requests from support and sales, a roadmap in a doc, the founders decide each quarter"],
   ["engineering", "Engineering", "code", "Builds, reviews, ships and runs the product's software, with every change reviewed and every incident learned from.", "Ship reliable software, steadily", "How does your team build and ship software today?", "Six engineers on GitHub, pull requests reviewed by one other person, weekly releases, alerts in Slack"],
-].map(([id, name, icon, description, goal, question, placeholder]) => ({id, name, icon, description, goal, question, placeholder,
+];
+const DEPARTMENTS = DEPT_ROWS.map(([id, name, icon, description, goal, question, placeholder]) => ({id, name, icon, description, goal, question, placeholder,
   head: CATALOG.find(card => card.department === id && card.lead)?.template || '', software_only: ['product', 'engineering'].includes(id)}));
-const deptCards = id => CATALOG.filter(card => card.department === id);
+const deptCards = (id: string) => CATALOG.filter(card => card.department === id);
 // POST /api/v2/setup/recruit, as the server's local recommender would answer (backend/recruit_rank.py, tested there):
 // the head, then the defaults and commons, and a niche card only when the answer names one of its tags. Only a tag of
 // two or more words is a why; a niche card brought in by one word has none.
-function recruitFor({department, briefing, share}) {
-  const dept = DEPARTMENTS.find(row => row.id === department), words = String(briefing || '').toLowerCase();
+function recruitFor({department, briefing, share}: {department: string; briefing?: string; share?: boolean}) {
+  const dept = DEPARTMENTS.find(row => row.id === department)!, words = String(briefing || '').toLowerCase();
   const rows = [];
   for (const card of deptCards(department).sort((a, b) => (b.lead ? 1 : 0) - (a.lead ? 1 : 0))) {
     const tag = (card.tags || []).find(word => words.includes(word));
@@ -180,26 +221,26 @@ function recruitFor({department, briefing, share}) {
 }
 
 (async () => {
-  const browser = await chromium.launch({headless: true, channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined});
+  const browser = await chromium.launch({headless: true, channel: (process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined) as string});
   try {
     const context = await browser.newContext({viewport: {width: 1100, height: 800}, serviceWorkers: 'block', acceptDownloads: true, colorScheme: scheme});
     // The app is dark unless the browser saved another theme (ui/theme.ts): screenshots take the one asked for.
     if (shots) await context.addInitScript(theme => localStorage.setItem('tico.theme', theme), scheme);
     let setupGets = 0;
-    const puts = [], tourPosts = [], completes = [], definitions = [], created = [], enrollments = [], chats = [], invites = [], owners = [];
+    const puts: Put[] = [], tourPosts: unknown[] = [], completes: unknown[] = [], definitions: {path: string; body: unknown}[] = [], created: Created[] = [], enrollments: unknown[] = [], chats: [string, unknown][] = [], invites: [string, unknown][] = [], owners: [string, unknown][] = [];
     let refuseSetup = false;   // the next PUT /api/v2/setup is refused once (set on the team chart)
-    const recruits = [], opened = {};
+    const recruits: Record<string, unknown>[] = [], opened: Record<string, Opened | undefined> = {};
     // Each bot's DM reads what Set up wrote to it (the chat the first message opened).
     const dms = ['support', 'meeting-notes'].map(bot => threadsFake({bot, messages: () => opened[bot]?.messages || [], home: () => opened[bot]?.home || []}));
-    let hq = {available: true, off_by: ''}, recruitHeld = null, releaseRecruit = () => {};   // a recruit answer the test holds
-    let record = {
+    let hq = {available: true, off_by: ''}, recruitHeld: Promise<unknown> | null = null, releaseRecruit: (value?: unknown) => void = () => {};   // a recruit answer the test holds
+    let record: Setup = {
       names: {company_name: 'Initech', app_name: 'Initech Hub', assistant_name: 'Ace'},
       answers: {what_we_do: '', customers: '', team_size: '', work_arrives: [], software_product: '',
                 repetitive_work: '', never_without_person: ['send', 'spend', 'publish', 'hire'], pains: [], pains_text: '', tools: []},
       selected: {}, completed: null, bots: [],
       machine: {runners: [], enrolled: false}, needed: true,
     };
-    let machine = {runners: [], enrolled: false};
+    let machine: Machine = {runners: [], enrolled: false};
     let enrollCode = 'enroll-code';
     const me = {id: 'ana', name: 'Ana Rivera', role: 'owner', cloud: true,
                 email: 'ana@acme.example', credential_access: false, config: CONFIG};
@@ -208,15 +249,15 @@ function recruitFor({department, briefing, share}) {
 
     await context.route('**/*', async route => {
       const request = route.request(), url = new URL(request.url()), p = url.pathname;
-      const json = (body, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
+      const json = (body: unknown, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
       if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
       // The page's own modules come from disk: the page shares state with them (docs-page.ts
       // declares DOC_POLL, which route() clears on every navigation), so an empty stub would
       // break every route. Everything else that ends in .js still stubs out.
       const module = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/);
       if (module) {
-        const file = uiFile(module[1]);
-        if (fs.existsSync(file)) return route.fulfill({contentType: module[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(file, 'utf8')});
+        const file = uiFile(module[1]!);
+        if (fs.existsSync(file)) return route.fulfill({contentType: module[1]!.endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(file, 'utf8')});
       }
       // The icon font, so the screenshots show icons and not their names.
       if (p.startsWith('/vendor/')) {
@@ -276,7 +317,7 @@ function recruitFor({department, briefing, share}) {
       if (p === '/api/v2/bots') return json(v2bots());
       // Start onboarding writes in the bot's Home (the team sees it), and the bot page's chat shows it from then on.
       if (/^\/api\/v2\/threads\/t-home-[^/]+\/messages$/.test(p) && request.method() === 'POST') {
-        const bot = p.split('/')[4].slice('t-home-'.length), text = request.postDataJSON().text;
+        const bot = p.split('/')[4]!.slice('t-home-'.length), text = request.postDataJSON().text;
         chats.push([bot, request.postDataJSON()]);
         const message = {id: 'msg-' + bot, seq: 1, depth: 0, thread_id: 't-home-' + bot, sender_id: 'human:ana', body: text,
                          created_at: '2026-09-16T10:05:00Z'};
@@ -285,7 +326,7 @@ function recruitFor({department, briefing, share}) {
       }
       // A person's chat with a bot: the first message opens it, and the bot page's DM tab shows it from then on.
       if (/^\/api\/v2\/chat\/[^/]+$/.test(p)) {
-        const bot = p.split('/')[4], text = request.postDataJSON().text;
+        const bot = p.split('/')[4]!, text = request.postDataJSON().text;
         chats.push([bot, request.postDataJSON()]);
         const conversation = {id: 'chat-' + bot, kind: 'chat', scope: 'personal', task_id: null, closed_at: null,
                               participants: ['human:ana', 'bot:' + bot]};
@@ -297,10 +338,10 @@ function recruitFor({department, briefing, share}) {
       for (const dm of dms) { const answer = dm(p, url, request.method()); if (answer !== undefined) return json(answer); }
       if (p === '/api/v2/access/humans') { invites.push(['add', request.postDataJSON()]); return json({person: 'sam', email: 'sam@initech.test', name: 'Sam Ortiz'}); }
       if (p === '/api/v2/access/humans/sam') { invites.push(['role', request.postDataJSON()]); return json({person: 'sam'}); }
-      if (/^\/api\/v2\/bots\/[^/]+\/co-owners$/.test(p)) { owners.push([p.split('/')[4], request.postDataJSON()]); return json({bot_owners: [{id: 'ana', name: 'Ana Rivera'}, {id: 'ben', name: 'Ben Cole'}], revision: 4}); }
+      if (/^\/api\/v2\/bots\/[^/]+\/co-owners$/.test(p)) { owners.push([p.split('/')[4]!, request.postDataJSON()]); return json({bot_owners: [{id: 'ana', name: 'Ana Rivera'}, {id: 'ben', name: 'Ben Cole'}], revision: 4}); }
       if (/^\/api\/v2\/bots\/[^/]+\/definition$/.test(p)) {
         definitions.push({path: p, body: request.postDataJSON()});
-        return json({slug: p.split('/')[4], status: 'active', revision: 9});
+        return json({slug: p.split('/')[4]!, status: 'active', revision: 9});
       }
       if (p === '/api/v2/status') return json({bots: []});
       if (p === '/api/v2/needs-you') return json({items: []});
@@ -323,19 +364,19 @@ function recruitFor({department, briefing, share}) {
     });
 
     const page = await context.newPage();
-    const errors = [];
-    page.on('pageerror', e => errors.push(e.message));
+    const errors: string[] = [];
+    page.on('pageerror', (e: Error) => errors.push(e.message));
     page.on('download', download => download.cancel().catch(() => {}));
 
     // ---- boot: a company that has never been set up opens on its first run, not on Tasks.
     await page.goto('https://tico-ui.test/');
     await page.waitForFunction(() => location.hash === '#/welcome');
     await page.locator('#onb-website').waitFor();
-    assert.equal(await page.locator('#nav-welcome').evaluate(el => el.hidden), false);
-    assert.match(await page.locator('#nav-welcome').textContent(), /Finish setup/);
-    assert.equal(await page.locator('#onb-count').textContent(), 'Step 1 of 8');
+    assert.equal(await page.locator('#nav-welcome').evaluate((el: HTMLElement) => el.hidden), false);
+    assert.match((await page.locator('#nav-welcome').textContent())!, /Finish setup/);
+    assert.equal((await page.locator('#onb-count').textContent())!, 'Step 1 of 8');
     // Short names in the row, the long one as the title; "Step 1 of 8" is for screen readers only.
-    assert.equal(await page.locator('.onb-progress').innerText().then(text => text.replace(/\s+/g, ' ').trim()), 'Building Bets Names About Team Computer Agent Review');
+    assert.equal(await page.locator('.onb-progress').innerText().then(text => text!.replace(/\s+/g, ' ').trim()), 'Building Bets Names About Team Computer Agent Review');
     assert.ok(await page.locator('#onb-count').evaluate(el => el.getBoundingClientRect().width <= 1), 'the count is screen-reader text');
     assert.equal(await oneLine(page), true);
     assert.equal(await bigTitle(page), true);
@@ -347,7 +388,7 @@ function recruitFor({department, briefing, share}) {
     await page.setViewportSize({width: 1100, height: 800});
     await pastStrategy(page);
     puts.splice(0);                       // the two strategy steps' drafts: the counts below start at Names
-    assert.equal(await page.locator('#onb-count').textContent(), 'Step 3 of 8');
+    assert.equal((await page.locator('#onb-count').textContent())!, 'Step 3 of 8');
 
     // ---- a: names, prefilled from config, with no explanation under them. The assistant
     // works in the background and is not named here; its configured name rides along unchanged.
@@ -356,7 +397,7 @@ function recruitFor({department, briefing, share}) {
     assert.equal(await page.locator('#onb-assistant').count(), 0);
     // Their own name is optional: the roster's when it is a name, and the org chart and sidebar use what is saved.
     assert.equal(await page.locator('#onb-owner').inputValue(), 'Ana Rivera');
-    assert.equal(await page.locator('#onb-owner').getAttribute('placeholder'), 'Optional');
+    assert.equal((await page.locator('#onb-owner').getAttribute('placeholder'))!, 'Optional');
     await shot(page, 'desktop-0-names');
     assert.equal(await page.locator('#onb-step small').count(), 0);
     // With only an address on the roster, the sign-in's display name is offered, and an address never is.
@@ -364,21 +405,21 @@ function recruitFor({department, briefing, share}) {
       const proxied = onbOwnerGuess(); S.me = {...was, name: 'ana@acme.example'}; const bare = onbOwnerGuess(); S.me = was; return [proxied, bare].join('|'); }), 'Ana R.|');
     await page.locator('#onb-owner').fill('Ana M. Rivera');
     // No company address on the roster (a Gmail owner): the team's email domain is asked once, optionally; with one, it is not.
-    assert.equal(await page.locator('#onb-domain').getAttribute('placeholder'), 'Optional, such as acme.com');
-    assert.equal(await page.evaluate(() => { const was = S.me.company_domains; S.me.company_domains = ['acme.example'];
+    assert.equal((await page.locator('#onb-domain').getAttribute('placeholder'))!, 'Optional, such as acme.com');
+    assert.equal(await page.evaluate(() => { const was = S.me.company_domains!; S.me.company_domains = ['acme.example'];
       const asked = onbAsksDomain(); S.me.company_domains = was; return asked; }), false);
     await page.locator('#onb-domain').fill('initech.test');
     await page.locator('#onb-next').click();
     await page.locator('#onb-what').waitFor();
     assert.equal(puts.length, 1);
-    assert.deepEqual(puts[0].names, {company_name: 'Initech', app_name: 'Initech Hub', assistant_name: 'Ace', owner_name: 'Ana M. Rivera', team_domain: 'initech.test', website: ''});
+    assert.deepEqual(puts[0]!.names, {company_name: 'Initech', app_name: 'Initech Hub', assistant_name: 'Ace', owner_name: 'Ana M. Rivera', team_domain: 'initech.test', website: ''});
     assert.equal(await page.evaluate(() => S.me.name), 'Ana M. Rivera');           // the page follows the save
     // Nobody has chosen a team yet, so the first draft carries none; BotOps and the assistant are built whatever is chosen.
-    assert.deepEqual(puts[0].selected, {});
-    assert.equal('never_without_person' in puts[0].answers, false);
+    assert.deepEqual(puts[0]!.selected, {});
+    assert.equal('never_without_person' in puts[0]!.answers, false);
 
     // ---- b: about the team. Legacy approval choices are absent from the form and saved draft.
-    assert.equal(await page.locator('#onb-count').textContent(), 'Step 4 of 8');
+    assert.equal((await page.locator('#onb-count').textContent())!, 'Step 4 of 8');
     assert.equal(await page.locator('[data-onb-never]').count(), 0);
     await shot(page, 'desktop-1-about');
     await page.locator('#onb-what').fill('We sell a live audio app and the studio software behind it.');
@@ -388,71 +429,71 @@ function recruitFor({department, briefing, share}) {
     await page.locator('#onb-next').click();
     await page.locator('[data-ob-tile]').first().waitFor();
     assert.equal(puts.length, 2);
-    assert.deepEqual(puts[1].answers, {
+    assert.deepEqual(puts[1]!.answers, {
       building: '', what_we_do: 'We sell a live audio app and the studio software behind it.',
       customers: 'businesses', software_product: 'yes', team_size: '2-10', work_arrives: [], repetitive_work: '',
       pains: [], pains_text: '', tools: [], departments: [], briefings: {}});
 
     // ---- c: the org chart, straight after About: there is no step asking what hurts or which tools are used.
     // First, which departments: Engineering and Product are suggested because software is the product; Legal and HR wait.
-    assert.equal(await page.locator('#onb-count').textContent(), 'Step 5 of 8');
+    assert.equal((await page.locator('#onb-count').textContent())!, 'Step 5 of 8');
     if (shots) await page.setViewportSize({width: 1440, height: 900});      // the org chart photographed on a laptop screen
-    assert.equal(await page.locator('#onb h1').textContent(), 'Your team chart');
-    assert.doesNotMatch(await page.locator('.onb-progress').textContent(), /What hurts|Your team(?! chart)/);
+    assert.equal((await page.locator('#onb h1').textContent())!, 'Your team chart');
+    assert.doesNotMatch((await page.locator('.onb-progress').textContent())!, /What hurts|Your team(?! chart)/);
     assert.equal(await page.locator('[data-onb-hint]').count(), 0);
-    assert.equal(await page.locator('.ob-title').textContent(), 'What groups do you want?');
+    assert.equal((await page.locator('.ob-title').textContent())!, 'What groups do you want?');
     const tilesOn = () => page.locator('[data-ob-tile][aria-pressed=true]').evaluateAll(els => els.map(el => el.dataset.obTile));
     assert.deepEqual(await tilesOn(), ['sales', 'marketing', 'support', 'finance', 'operations', 'product', 'engineering']);
     assert.equal(await page.locator('[data-ob-tile]').count(), 9);
     // The chart is there from the start: the owner on top, each chosen department waiting, and the built-ins as one folded
     // Built-in group. Message bots are not on it.
-    assert.match(await page.locator('#ob-chart [data-oc-owner]').textContent(), /Ana M\. Rivera\s*CEO/);
-    assert.doesNotMatch(await page.locator('#ob-chart').textContent(), /Ace|BotOps|Inbox Manager/);
+    assert.match((await page.locator('#ob-chart [data-oc-owner]').textContent())!, /Ana M\. Rivera\s*CEO/);
+    assert.doesNotMatch((await page.locator('#ob-chart').textContent())!, /Ace|BotOps|Inbox Manager/);
     assert.equal(await page.locator('#ob-chart .oc-dept.oc-pending').count(), 7);
     const builtIn = () => page.locator('#ob-chart [data-oc-builtin-toggle]');
-    assert.match(await builtIn().textContent(), /Built-in\s*2/);
-    assert.equal(await builtIn().getAttribute('aria-expanded'), 'false');
+    assert.match((await builtIn().textContent())!, /Built-in\s*2/);
+    assert.equal((await builtIn().getAttribute('aria-expanded'))!, 'false');
     await builtIn().click();
-    assert.equal(await builtIn().getAttribute('aria-expanded'), 'true');
-    assert.match(await page.locator('#ob-chart').textContent(), /Ace[\s\S]*BotOps/);
+    assert.equal((await builtIn().getAttribute('aria-expanded'))!, 'true');
+    assert.match((await page.locator('#ob-chart').textContent())!, /Ace[\s\S]*BotOps/);
     assert.equal(await builtIn().evaluate(el => document.activeElement === el), true, 'the toggle keeps focus after the redraw');
     await builtIn().click();
-    assert.equal(await builtIn().getAttribute('aria-expanded'), 'false');
+    assert.equal((await builtIn().getAttribute('aria-expanded'))!, 'false');
     await shot(page, 'desktop-3-departments');
     await page.locator('[data-ob-tile=hr]').click();
     await page.locator('[data-ob-tile=product]').click();
     await page.locator('[data-ob-tile=hr]').click();
     assert.deepEqual(await tilesOn(), ['sales', 'marketing', 'support', 'finance', 'operations', 'engineering']);
     assert.equal(await page.locator('#ob-chart .oc-dept').count(), 6);
-    assert.match(await page.locator('#ob-start').textContent(), /Start with Sales/);
+    assert.match((await page.locator('#ob-start').textContent())!, /Start with Sales/);
     await page.locator('#ob-start').click();
 
     // One department at a time: its name, icon, what it is for, one question, and a place to answer.
     await page.locator('#ob-brief').waitFor();
-    const plain = locator => locator.evaluate(el => { const copy = el.cloneNode(true); copy.querySelectorAll('.ob-ms').forEach(icon => icon.remove()); return copy.textContent.trim(); });
-    assert.equal(await page.locator('.ob-dept-head h2').textContent(), 'Sales');
-    assert.equal(await page.locator('.ob-kicker').textContent(), '1 of 6');
-    const sales = DEPARTMENTS[0];
-    assert.equal(await page.locator('.ob-dept-head .ob-dept-icon').textContent(), 'handshake');
-    assert.equal(await page.locator('.ob-desc').textContent(), sales.description);
+    const plain = (locator: Locator) => locator.evaluate(el => { const copy = el.cloneNode(true) as HTMLElement; copy.querySelectorAll('.ob-ms').forEach(icon => icon.remove()); return copy.textContent!.trim(); });
+    assert.equal((await page.locator('.ob-dept-head h2').textContent())!, 'Sales');
+    assert.equal((await page.locator('.ob-kicker').textContent())!, '1 of 6');
+    const sales = DEPARTMENTS[0]!;
+    assert.equal((await page.locator('.ob-dept-head .ob-dept-icon').textContent())!, 'handshake');
+    assert.equal((await page.locator('.ob-desc').textContent())!, sales.description);
     assert.equal(await plain(page.locator('.ob-goal')), 'Turn interest into revenue');
-    assert.equal(await page.locator('.ob-question').textContent(), 'What kind of sales do you do today?');
-    assert.equal(await page.locator('#ob-brief').getAttribute('placeholder'), sales.placeholder);
+    assert.equal((await page.locator('.ob-question').textContent())!, 'What kind of sales do you do today?');
+    assert.equal((await page.locator('#ob-brief').getAttribute('placeholder'))!, sales.placeholder);
     // The toggle says what it sends; it follows the install's setting, which is on here.
-    assert.equal((await page.locator('.ob-hq').textContent()).trim(), 'Suggestions from Tico HQ');
+    assert.equal(((await page.locator('.ob-hq').textContent())!).trim(), 'Suggestions from Tico HQ');
     assert.equal(await page.locator('#ob-hq').isChecked(), true);
-    assert.match(await page.locator('.ob-hq-row').textContent(), /group, answer, team description, customer type, software choice, catalog version and install ID/);
-    assert.match(await page.locator('.ob-hq-row a').getAttribute('href'), /PRIVACY.md#suggestions/);
+    assert.match((await page.locator('.ob-hq-row').textContent())!, /group, answer, team description, customer type, software choice, catalog version and install ID/);
+    assert.match((await page.locator('.ob-hq-row a').getAttribute('href'))!, /PRIVACY.md#suggestions/);
     assert.equal(await page.locator('#ob-skip').isVisible(), true);
-    assert.match(await page.locator('#ob-chart [data-oc-dept=sales]').getAttribute('class'), /oc-cur/);
+    assert.match((await page.locator('#ob-chart [data-oc-dept=sales]').getAttribute('class'))!, /oc-cur/);
     await shot(page, 'desktop-4-department');
     recruitHeld = new Promise(resolve => { releaseRecruit = resolve; });
     await page.locator('#ob-brief').fill('Inbound demos, and a few resellers');
     await page.locator('#ob-brief').press('Enter');
     await page.locator('#ob-recruiting').waitFor();
-    assert.equal((await page.locator('#ob-recruiting').textContent()).trim(), 'Recruiting bots…');
-    assert.equal(await page.locator('[data-ob-said]').textContent(), 'Inbound demos, and a few resellers');
-    assert.match(await page.locator('#ob-chart [data-oc-dept=sales]').textContent(), /Recruiting…/);
+    assert.equal(((await page.locator('#ob-recruiting').textContent())!).trim(), 'Recruiting bots…');
+    assert.equal((await page.locator('[data-ob-said]').textContent())!, 'Inbound demos, and a few resellers');
+    assert.match((await page.locator('#ob-chart [data-oc-dept=sales]').textContent())!, /Recruiting…/);
     // The group being recruited holds three places on the chart, so its lines never hang there empty.
     assert.equal(await page.locator('#ob-chart [data-oc-dept=sales] .oc-ph').count(), 3);
     await shot(page, 'desktop-5-recruiting');
@@ -463,26 +504,26 @@ function recruitFor({department, briefing, share}) {
     // The suggestions: the head and the defaults start checked, a common bot waits, and the answer brought in a niche one.
     const picked = () => page.locator('[data-ob-pick]:checked').evaluateAll(els => els.map(el => el.dataset.obPick));
     const suggested = () => page.locator('#ob-suggested [data-ob-bot]').evaluateAll(els => els.map(el => el.dataset.obBot));
-    const chartBots = id => page.locator(`#ob-chart [data-oc-dept=${id}] [data-oc-bot]`).evaluateAll(els => els.map(el => el.dataset.ocBot));
+    const chartBots = (id: string) => page.locator(`#ob-chart [data-oc-dept=${id}] [data-oc-bot]`).evaluateAll(els => els.map(el => el.dataset.ocBot));
     assert.deepEqual(await suggested(), ['sales-lead', 'sdr-research', 'account-manager', 'partnerships']);
     assert.deepEqual(await picked(), ['sales-lead', 'sdr-research']);
-    assert.match(await page.locator('[data-ob-bot=sales-lead] .ob-bot-name').textContent(), /Sales Manager\s*Head/);
+    assert.match((await page.locator('[data-ob-bot=sales-lead] .ob-bot-name').textContent())!, /Sales Manager\s*Head/);
     assert.equal(await plain(page.locator('[data-ob-why=sales-lead]')), 'Heads Sales and reports to you');
     // One word of the answer ("resellers") brings the niche bot in but is no reason to show: no why line on it.
     assert.equal(await page.locator('[data-ob-why=partnerships]').count(), 0);
     assert.equal(await plain(page.locator('[data-ob-why=sdr-research]')), 'A starting point for Sales');
     assert.equal(await page.locator('#ob-chart .oc-ph').count(), 0);
-    assert.equal(await page.locator('[data-ob-bot=sdr-research] .ob-bot-sum').textContent(), 'Researches accounts and writes first-touch emails.');
+    assert.equal((await page.locator('[data-ob-bot=sdr-research] .ob-bot-sum').textContent())!, 'Researches accounts and writes first-touch emails.');
     // Every bot wears the avatar it will have: its blob with its template's icon, the same on its card and on the chart.
-    assert.equal(await page.locator('[data-ob-bot=sdr-research] .av.blob .av-glyph').textContent(), 'person_search');
-    assert.equal(await page.locator('#ob-chart [data-oc-bot=sdr-research] .av.blob .av-glyph').textContent(), 'person_search');
+    assert.equal((await page.locator('[data-ob-bot=sdr-research] .av.blob .av-glyph').textContent())!, 'person_search');
+    assert.equal((await page.locator('#ob-chart [data-oc-bot=sdr-research] .av.blob .av-glyph').textContent())!, 'person_search');
     assert.deepEqual(await chartBots('sales'), ['sales-lead', 'sdr-research']);
     // A long name is never cut off on the chart, and the full name is its tooltip. It wraps to two whole lines when it
     // cannot fit on one (ui/styles/first-run.css); the type decides which, so the line count is checked only then.
-    const sdrName = await page.locator('#ob-chart [data-oc-label=sdr-research]').evaluate(el => {
-      const probe = el.cloneNode(true);
+    const sdrName = await page.locator('#ob-chart [data-oc-label=sdr-research]').evaluate((el: HTMLElement) => {
+      const probe = el.cloneNode(true) as HTMLElement;
       probe.setAttribute('style', 'position:absolute;visibility:hidden;display:block;white-space:nowrap');
-      el.parentNode.append(probe);
+      el.parentNode!.append(probe);
       const oneLine = probe.getBoundingClientRect().width <= el.getBoundingClientRect().width;
       probe.remove();
       return {
@@ -490,15 +531,15 @@ function recruitFor({department, briefing, share}) {
         lines: Math.round(el.clientHeight / parseFloat(getComputedStyle(el).lineHeight)), oneLine};
     });
     assert.ok(!sdrName.cut && (sdrName.oneLine || sdrName.lines >= 2), JSON.stringify(sdrName));
-    assert.equal(await page.locator('#ob-chart [data-oc-bot=sdr-research] .oc-bnode').getAttribute('title'), 'Sales Development Representative');
+    assert.equal((await page.locator('#ob-chart [data-oc-bot=sdr-research] .oc-bnode').getAttribute('title'))!, 'Sales Development Representative');
     await page.locator('[data-ob-bot=partnerships]').click();
     assert.deepEqual(await chartBots('sales'), ['sales-lead', 'sdr-research', 'partnerships']);
-    assert.match(await page.locator('#ob-chart [data-oc-bot=partnerships]').getAttribute('class'), /ob-new/);
-    assert.doesNotMatch(await page.locator('#ob-chart [data-oc-bot=sdr-research]').getAttribute('class'), /ob-new/);
+    assert.match((await page.locator('#ob-chart [data-oc-bot=partnerships]').getAttribute('class'))!, /ob-new/);
+    assert.doesNotMatch((await page.locator('#ob-chart [data-oc-bot=sdr-research]').getAttribute('class'))!, /ob-new/);
     // Frame by frame through its entrance, the new bot's line is never drawn ahead of its card (that read as an empty gap).
     const entrance = await page.evaluate(() => {
-      const li = document.querySelector('#ob-chart [data-oc-bot=partnerships]'), node = li.querySelector('.oc-bnode');
-      const animations = document.getAnimations().filter(a => li.contains(a.effect?.target));
+      const li = document.querySelector<HTMLElement>('#ob-chart [data-oc-bot=partnerships]')!, node = li.querySelector<HTMLElement>('.oc-bnode')!;
+      const animations = document.getAnimations().filter(a => li.contains((a.effect as KeyframeEffect | null)?.target ?? null));
       const out = [];
       for (const ms of [0, 100, 200, 300, 400, 600]) {
         for (const a of animations) { a.pause(); a.currentTime = ms; }
@@ -509,31 +550,31 @@ function recruitFor({department, briefing, share}) {
       return out;
     });
     assert.ok(entrance.every(f => f.card >= f.line), 'line ahead of the card: ' + JSON.stringify(entrance));
-    assert.equal(await page.locator('#ob-chart-stats').textContent(), '6 groups · 3 bots');
+    assert.equal((await page.locator('#ob-chart-stats').textContent())!, '6 groups · 3 bots');
     assert.equal(await page.locator('#ob-more').count(), 0);                       // nothing left in Sales to show under More
     // The page scrolls (the org builder lets the document scroll); the sidebar and its bottom bar stay put, full height.
-    const screenshotViewport = page.viewportSize();
+    const screenshotViewport = page.viewportSize()!;
     await page.setViewportSize({width: 1100, height: 800}); // keep the scroll contract the same when taking larger screenshots
     await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
     const scrolling = await page.evaluate(() => ({y: window.scrollY, height: document.documentElement.scrollHeight,
-      viewport: innerHeight, body: document.body.scrollHeight, main: document.querySelector('#main').scrollHeight}));
+      viewport: innerHeight, body: document.body.scrollHeight, main: document.querySelector<HTMLElement>('#main')!.scrollHeight}));
     assert.ok(scrolling.y > 0, 'this page scrolls: ' + JSON.stringify(scrolling));
-    const side = await page.locator('#side').boundingBox(), footer = await page.locator('#side .side-footer').boundingBox();
+    const side = (await page.locator('#side').boundingBox())!, footer = (await page.locator('#side .side-footer').boundingBox())!;
     assert.deepEqual([Math.round(side.y), Math.round(side.y + side.height)], [0, 800]);
     assert.ok(footer.y + footer.height <= 800 && footer.y + footer.height > 780, 'the bottom bar sits at the bottom of the window');
     await page.evaluate(() => window.scrollTo(0, 0));
     await page.setViewportSize(screenshotViewport);
     await shot(page, 'desktop-6-suggestions');
-    assert.match(await page.locator('#ob-next').textContent(), /Next: Marketing/);
+    assert.match((await page.locator('#ob-next').textContent())!, /Next: Marketing/);
     await page.locator('#ob-next').click();
 
     // Marketing: the answer so far is saved as a draft, and the person turns the toggle off, so nothing leaves.
     await page.locator('#ob-brief').waitFor();
-    assert.equal(await page.locator('.ob-dept-head h2').textContent(), 'Marketing');
+    assert.equal((await page.locator('.ob-dept-head h2').textContent())!, 'Marketing');
     assert.equal(puts.length, 3);
-    assert.deepEqual(puts[2].answers.departments, ['sales', 'marketing', 'support', 'finance', 'operations', 'engineering']);
-    assert.deepEqual(puts[2].answers.briefings, {sales: 'Inbound demos, and a few resellers'});
-    assert.deepEqual(Object.keys(puts[2].selected), ['coo', 'botops', 'sales-lead', 'sdr-research', 'partnerships']);
+    assert.deepEqual(puts[2]!.answers.departments, ['sales', 'marketing', 'support', 'finance', 'operations', 'engineering']);
+    assert.deepEqual(puts[2]!.answers.briefings, {sales: 'Inbound demos, and a few resellers'});
+    assert.deepEqual(Object.keys(puts[2]!.selected), ['coo', 'botops', 'sales-lead', 'sdr-research', 'partnerships']);
     await page.locator('.ob-hq').click();
     assert.equal(await page.locator('#ob-hq').isChecked(), false);
     await page.locator('#ob-brief').fill('LinkedIn posts and word of mouth');
@@ -551,7 +592,7 @@ function recruitFor({department, briefing, share}) {
 
     // Customer Support: no answer is an answer, and the toggle comes back on for it.
     await page.locator('#ob-brief').waitFor();
-    assert.equal(await page.locator('.ob-dept-head h2').textContent(), 'Customer Support');
+    assert.equal((await page.locator('.ob-dept-head h2').textContent())!, 'Customer Support');
     await page.locator('.ob-hq').click();
     await page.locator('#ob-brief').press('Enter');
     await page.locator('#ob-suggested').waitFor();
@@ -560,11 +601,11 @@ function recruitFor({department, briefing, share}) {
     // More in Customer Support: the whole row is the button, wherever it is pressed, and by keyboard; the list survives a redraw.
     const more = page.locator('#ob-more-toggle');
     assert.equal(await page.locator('#ob-more-list').isVisible(), false);
-    assert.equal(await more.getAttribute('aria-expanded'), 'false');
-    const box = await more.boundingBox();
+    assert.equal((await more.getAttribute('aria-expanded'))!, 'false');
+    const box = (await more.boundingBox())!;
     await more.click({position: {x: box.width - 6, y: box.height / 2}});          // far from the icon and the words
     assert.equal(await page.locator('#ob-more-list').isVisible(), true);
-    assert.equal(await more.getAttribute('aria-expanded'), 'true');
+    assert.equal((await more.getAttribute('aria-expanded'))!, 'true');
     await page.locator('#ob-more-list [data-ob-bot]').first().waitFor();
     await page.locator('#ob-more-list [data-ob-bot]').first().click();             // checking a bot redraws the card
     assert.equal(await page.locator('#ob-more-list').isVisible(), true);
@@ -572,15 +613,15 @@ function recruitFor({department, briefing, share}) {
     await more.focus();
     await page.keyboard.press('Enter');
     assert.equal(await page.locator('#ob-more-list').isVisible(), false);
-    assert.equal(await more.getAttribute('aria-expanded'), 'false');
+    assert.equal((await more.getAttribute('aria-expanded'))!, 'false');
     await page.locator('#ob-next').click();
 
     // Finance is skipped: no question asked, no bots, and the chart says so.
     await page.locator('#ob-brief').waitFor();
-    assert.equal(await page.locator('.ob-dept-head h2').textContent(), 'Finance');
+    assert.equal((await page.locator('.ob-dept-head h2').textContent())!, 'Finance');
     await page.locator('#ob-skip').click();
     await page.locator('.ob-dept-head h2', {hasText: 'Operations'}).waitFor();
-    assert.match(await page.locator('#ob-chart [data-oc-dept=finance]').textContent(), /Skipped/);
+    assert.match((await page.locator('#ob-chart [data-oc-dept=finance]').textContent())!, /Skipped/);
     assert.equal(recruits.filter(row => row.department === 'finance').length, 0);
     await page.locator('#ob-brief').fill('Vendor emails, and too much email');
     await page.locator('#ob-brief').press('Enter');
@@ -595,30 +636,30 @@ function recruitFor({department, briefing, share}) {
     await page.locator('#ob-brief').press('Enter');
     await page.locator('#ob-suggested').waitFor();
     assert.deepEqual(await picked(), ['engineering-lead', 'issue-triage']);
-    assert.match(await page.locator('#ob-next').textContent(), /See team chart/);
+    assert.match((await page.locator('#ob-next').textContent())!, /See team chart/);
     await page.locator('#ob-next').click();
 
     // The finished chart: every department with bots, its head under it and the team under the head.
     await page.locator('#ob-summary').waitFor();
-    assert.equal(await page.locator('#ob-summary').textContent(), '5 groups · 11 bots');
+    assert.equal((await page.locator('#ob-summary').textContent())!, '5 groups · 11 bots');
     assert.deepEqual(await page.locator('#ob-chart-big [data-oc-dept]').evaluateAll(els => els.map(el => el.dataset.ocDept)),
       ['sales', 'marketing', 'support', 'operations', 'engineering']);
     assert.equal(await page.locator('#ob-side').isVisible(), false);
     // At desktop widths, including the container breakpoint, the chart fills its card.
-    assert.ok(await page.locator('#ob-main').evaluate(el => el.clientWidth / el.parentElement.clientWidth > .98));
-    assert.equal(await page.locator('[data-ob-helper-row=inbox] small').textContent(), 'Reads one person’s mailbox and prepares an email brief.');
-    assert.equal(await page.locator('[data-ob-helper=inbox]').getAttribute('aria-describedby'), 'ob-helper-desc-inbox');
+    assert.ok(await page.locator('#ob-main').evaluate((el: HTMLElement) => el.clientWidth / el.parentElement!.clientWidth > .98));
+    assert.equal((await page.locator('[data-ob-helper-row=inbox] small').textContent())!, 'Reads one person’s mailbox and prepares an email brief.');
+    assert.equal((await page.locator('[data-ob-helper=inbox]').getAttribute('aria-describedby'))!, 'ob-helper-desc-inbox');
     // Message bots sit apart from the chart: the Inbox Manager is one switch, off until someone turns it on.
-    assert.equal(await page.locator('#ob-helpers h3').textContent(), 'Message bots');
+    assert.equal((await page.locator('#ob-helpers h3').textContent())!, 'Message bots');
     assert.equal(await page.locator('[data-ob-helper=inbox]').isChecked(), false);
-    assert.doesNotMatch(await page.locator('#ob-chart-big').textContent(), /Inbox Manager/);
+    assert.doesNotMatch((await page.locator('#ob-chart-big').textContent())!, /Inbox Manager/);
     await page.locator('[data-ob-helper=inbox]').check();
     await page.locator('[data-ob-helper-row=inbox] [data-cat-mailbox=inbox]').waitFor();
     await shot(page, 'desktop-7-chart');
     // The Inbox Manager has no mailbox yet, so the chart cannot be taken further.
     await page.locator('#onb-next').click();
     await page.locator('#team-problem:not([hidden])').waitFor();
-    assert.match(await page.locator('#team-problem').textContent(), /Choose whose mailbox Inbox Manager reads/);
+    assert.match((await page.locator('#team-problem').textContent())!, /Choose whose mailbox Inbox Manager reads/);
     assert.equal(puts.length, 8);                                           // one draft per department answered or skipped
     await page.locator('[data-ob-helper-row=inbox] [data-cat-mailbox=inbox]').selectOption('ana');
     // Click a bot on the chart: rename it or point it at someone else. A message bot is never offered as a manager.
@@ -628,7 +669,7 @@ function recruitFor({department, briefing, share}) {
     await page.locator('[data-oc-name=support]').fill('Support desk');
     await page.locator('[data-oc-reports=support]').selectOption('meeting-notes');
     await page.locator('[data-oc-done]').click();
-    assert.match(await page.locator('#ob-chart-big [data-oc-bot=support]').textContent(), /Support desk\s*→ Project Coordinator/);
+    assert.match((await page.locator('#ob-chart-big [data-oc-bot=support]').textContent())!, /Support desk\s*→ Project Coordinator/);
     // Two bots can never report to each other: a bot's options leave out everything under it.
     await page.locator('#ob-chart-big [data-oc-edit=meeting-notes]').click();
     assert.equal(await page.locator('[data-oc-reports=meeting-notes]').inputValue(), 'ops-manager');
@@ -641,7 +682,7 @@ function recruitFor({department, briefing, share}) {
     refuseSetup = true;
     await page.locator('#onb-next').click();
     await page.locator('#onb-status .err').waitFor();
-    const refused = await page.locator('#onb-status').textContent();
+    const refused = (await page.locator('#onb-status').textContent())!;
     assert.match(refused, /Tico could not save this step, so it has not moved on\. Your choices are still here/);
     assert.doesNotMatch(refused, /body\.|instructions|String should|20000/);
     assert.equal(await page.locator('#onb-enroll').count(), 0);
@@ -649,15 +690,15 @@ function recruitFor({department, briefing, share}) {
     await page.locator('#onb-next').click();
     await page.locator('#onb-enroll').waitFor();
     // The team goes to the server in the order to set it up: the built-ins, each department's head and its team, then message bots.
-    const team = puts.at(-1);
+    const team = puts.at(-1)!;
     assert.deepEqual(Object.keys(team.selected), ['coo', 'botops', 'sales-lead', 'sdr-research', 'partnerships', 'marketing-lead', 'content',
       'support-lead', 'support', 'ops-manager', 'meeting-notes', 'engineering-lead', 'issue-triage', 'inbox']);
     const reports = Object.fromEntries(Object.entries(team.selected).map(([slug, row]) => [slug, row.reports_to]));
     assert.deepEqual(reports, {coo: undefined, botops: undefined, 'sales-lead': 'human:ana', 'sdr-research': 'sales-lead', partnerships: 'sales-lead',
       'marketing-lead': 'human:ana', content: 'human:ben', 'support-lead': 'human:ana', support: 'meeting-notes', 'ops-manager': 'human:ana',
       'meeting-notes': 'ops-manager', 'engineering-lead': 'human:ana', 'issue-triage': 'engineering-lead', inbox: 'human:ana'});
-    assert.equal(team.selected.support.display_name, 'Support desk');
-    assert.match(team.selected.inbox.instructions, /Mailbox: ana@acme.example/);
+    assert.equal(team.selected.support!.display_name, 'Support desk');
+    assert.match(team.selected.inbox!.instructions!, /Mailbox: ana@acme.example/);
     assert.deepEqual(team.answers.departments, ['sales', 'marketing', 'support', 'operations', 'engineering']);
     assert.deepEqual(team.answers.briefings, {sales: 'Inbound demos, and a few resellers', marketing: 'LinkedIn posts and word of mouth',
       operations: 'Vendor emails, and too much email', engineering: 'GitHub, and issues pile up'});
@@ -665,8 +706,8 @@ function recruitFor({department, briefing, share}) {
     if (shots) await page.setViewportSize({width: 1100, height: 800});
 
     // ---- d: this Mac. The enrollment file is the Settings flow; the commands keep <slug> literal.
-    assert.equal(await page.locator('#onb-count').textContent(), 'Step 6 of 8');
-    assert.equal(await page.locator('#onb-machine-status').textContent(), 'No computer enrolled yet');
+    assert.equal((await page.locator('#onb-count').textContent())!, 'Step 6 of 8');
+    assert.equal((await page.locator('#onb-machine-status').textContent())!, 'No computer enrolled yet');
     await shot(page, 'desktop-5b-machine');
     // Not in a container, the Mac is offered first; a server in Docker (the usual install) offers the Linux computer first.
     assert.equal(await page.locator('[data-onb-kind][value=mac]').isChecked(), true);
@@ -674,13 +715,13 @@ function recruitFor({department, briefing, share}) {
       const kind = onbDefaultKind(), html = onbStepHTML({...ONB, kind}, 'machine'); S.config = was;
       return kind + '|' + /value="linux" checked/.test(html) + '|' + (onbDefaultKind() === 'mac'); }), 'linux|true|true');
     // Not a Mac-only story: computers can be Macs or Linux/cloud boxes, on a subscription or an API key.
-    const blurb = await page.locator('#onb-step').evaluate(el => el.parentElement.textContent);
+    const blurb = await page.locator('#onb-step').evaluate(el => el.parentElement!.textContent);
     assert.match(blurb, /A Mac/);
     assert.match(blurb, /A Linux or cloud server/);
     assert.doesNotMatch(blurb, /Mac you own/);
     // The saved subscriptions preset offers both sign-ins; a team without providers still omits them.
-    assert.match(await page.locator('#onb-step').textContent(), /profile login default claude/);
-    assert.match(await page.locator('#onb-step').textContent(), /profile login default codex/);
+    assert.match((await page.locator('#onb-step').textContent())!, /profile login default claude/);
+    assert.match((await page.locator('#onb-step').textContent())!, /profile login default codex/);
     assert.doesNotMatch(await page.evaluate(() => onbCommands({...ONB, providers: null}).map(row => row[1]).join('\n')),
       /profile add default|profile login|codex login/);
     // One numbered path: make the setup file, then the lines that use it. A Mac has no other way, so no Other ways.
@@ -694,11 +735,11 @@ function recruitFor({department, briefing, share}) {
     // plain-Docker line is the other way, after the path.
     assert.deepEqual(await page.evaluate(() => {
       const state = {...ONB, providers: {default: {runtime: 'codex'}}};
-      const shape = list => list.map(([label, , other]) => (other ? 'other:' : '') + label.split(/[ ,(]/)[0]).join(' ');
+      const shape = (list: [string, string, boolean?][]) => list.map(([label, , other]) => (other ? 'other:' : '') + label.split(/[ ,(]/)[0]!).join(' ');
       return [shape(onbCommands(state)), shape(onbCommands({...state, kind: 'linux'}))];
     }), ['Register Add Start', 'Set Sign other:With']);
-    assert.match(await page.evaluate(() => onbCommands({...ONB, providers: {default: {runtime: 'codex'}}})[1][1]), /profile login default codex/);
-    assert.match(await page.evaluate(() => onbCommands({...ONB, kind: 'linux', providers: {default: {runtime: 'claude'}}})[1][1]), /docker exec -it -u bot tico-runner-tico-[a-z0-9]+ claude auth login/);
+    assert.match(await page.evaluate(() => onbCommands({...ONB, providers: {default: {runtime: 'codex'}}})[1]![1]), /profile login default codex/);
+    assert.match(await page.evaluate(() => onbCommands({...ONB, kind: 'linux', providers: {default: {runtime: 'claude'}}})[1]![1]), /docker exec -it -u bot tico-runner-tico-[a-z0-9]+ claude auth login/);
     // Sign-ins follow the company's choice, not an unrelated saved default model.
     const signIns = await page.evaluate(() => {
       const providers = [{id: 'anthropic', runtime: 'claude', label: 'Claude'},
@@ -721,15 +762,15 @@ function recruitFor({department, briefing, share}) {
         assert.doesNotMatch(commands, /codex login|profile login default codex|profile login default pi/);
       }
     }
-    assert.match(await page.locator('#onb-step').textContent(), /scripts\/tico-computer -e <slug> install bot/);
+    assert.match((await page.locator('#onb-step').textContent())!, /scripts\/tico-computer -e <slug> install bot/);
     await page.locator('#onb-enroll').click();
-    await page.waitForFunction(() => !/<setup-file>/.test(document.querySelector('#onb-step').textContent));
+    await page.waitForFunction(() => !/<setup-file>/.test(document.querySelector<HTMLElement>('#onb-step')!.textContent));
     assert.deepEqual(enrollments, [{operator: 'ana'}]);
-    assert.match(await page.locator('#onb-step').textContent(), /scripts\/tico-computer -e <slug> enroll --code-file "\$HOME\/Downloads\/tico-enrollment-ana-[a-z0-9]+\.json" --label "Ana's Mac"/);
+    assert.match((await page.locator('#onb-step').textContent())!, /scripts\/tico-computer -e <slug> enroll --code-file "\$HOME\/Downloads\/tico-enrollment-ana-[a-z0-9]+\.json" --label "Ana's Mac"/);
     // A Linux or cloud server gets the installer line (compose, with the updater) with the real URL and code, and no setup file.
     await page.locator('[data-onb-kind][value=linux]').check();
     const installLine = /curl -fsSL https:\/\/github\.com\/ticoteam\/tico\/releases\/download\/v0\.2\.0\/install\.sh -o install\.sh && sh install\.sh --runner --name tico-code --url https:\/\/initech\.test --code '<code>' --label "Ana's server"/;
-    assert.match(await page.locator('#onb-step').textContent(), installLine);
+    assert.match((await page.locator('#onb-step').textContent())!, installLine);
     // A server that answers on this computer only is not 127.0.0.1 to a container: the runner joins its Docker network.
     assert.equal(await page.evaluate(() => { const was = S.config; S.config = {...was, local: true, runner_url: 'http://127.0.0.1:8877', compose_project: 'acme', server_network: 'acme_default'};
       const [run, , plain] = dockerRunnerCommands('c0de', onbMachineLabel({kind: 'linux'}), 'codex'); S.config = was;
@@ -740,55 +781,55 @@ function recruitFor({department, briefing, share}) {
     assert.deepEqual(await page.locator('.onb-steps > li > .k').allTextContents(),
       ['Create a one-time code for this computer', 'Set up the runner on the server',
         'Sign in to Claude', 'Sign in to ChatGPT through Codex']);
-    assert.match(await page.locator('.onb-steps .onb-hint').first().textContent(), /^installs Docker if it is missing; keeps itself on this server's release$/);
+    assert.match((await page.locator('.onb-steps .onb-hint').first().textContent())!, /^installs Docker if it is missing; keeps itself on this server's release$/);
     // The bare docker run stays as an alternative under Other ways, closed, pinned to the server's release and said not to update itself.
-    assert.equal(await page.locator('#onb-other').evaluate(el => el.open), false);
+    assert.equal(await page.locator('#onb-other').evaluate((el: HTMLDetailsElement) => el.open), false);
     assert.equal(await page.locator('#onb-other .onb-cmd').isVisible(), false);
-    assert.match(await page.locator('#onb-other').textContent(), /no updater, so it will not follow the server's releases/);
-    assert.match(await page.locator('#onb-other').textContent(), /docker run -d --name tico-runner-tico-code --restart unless-stopped -v tico-runner-tico-code_runner-home:\/home\/runner ghcr\.io\/ticoteam\/tico-runner:v0\.2\.0 join --url https:\/\/initech\.test --code '<code>'/);
+    assert.match((await page.locator('#onb-other').textContent())!, /no updater, so it will not follow the server's releases/);
+    assert.match((await page.locator('#onb-other').textContent())!, /docker run -d --name tico-runner-tico-code --restart unless-stopped -v tico-runner-tico-code_runner-home:\/home\/runner ghcr\.io\/ticoteam\/tico-runner:v0\.2\.0 join --url https:\/\/initech\.test --code '<code>'/);
     await page.locator('#onb-other > summary').click();
     assert.equal(await page.locator('#onb-other .onb-cmd').isVisible(), true);
     // Before Add computer there is no code to show.
     assert.equal(await page.locator('#onb-code').count(), 0);
     await page.locator('#onb-enroll').click();
-    await page.waitForFunction(() => /--code 'enroll-code' --label "Ana's server"/.test(document.querySelector('#onb-step').textContent));
+    await page.waitForFunction(() => /--code 'enroll-code' --label "Ana's server"/.test(document.querySelector<HTMLElement>('#onb-step')!.textContent));
     // The one-time code is on the screen in large type, not only in a toast; Other ways stays as it was left.
-    assert.equal(await page.locator('#onb-code-value').textContent(), 'enroll-code');
+    assert.equal((await page.locator('#onb-code-value').textContent())!, 'enroll-code');
     assert.ok(await page.locator('#onb-code-value').evaluate(el => parseFloat(getComputedStyle(el).fontSize)) >= 20);
-    assert.equal(await page.locator('#onb-enroll').textContent(), 'New code');
-    assert.equal(await page.locator('#onb-other').evaluate(el => el.open), true);
+    assert.equal((await page.locator('#onb-enroll').textContent())!, 'New code');
+    assert.equal(await page.locator('#onb-other').evaluate((el: HTMLDetailsElement) => el.open), true);
     // No command, and not the code, runs past the card: each wraps inside its box, on a laptop and on a phone.
     const overflow = () => page.evaluate(() => {
-      const card = document.querySelector('#onb-step').getBoundingClientRect();
+      const card = document.querySelector<HTMLElement>('#onb-step')!.getBoundingClientRect();
       return [...document.querySelectorAll('#onb-step .onb-cmd, #onb-step .onb-cmd code, #onb-code-value')]
         .filter(el => el.scrollWidth > el.clientWidth + 1 || el.getBoundingClientRect().right > card.right + 1).length;
     });
     assert.equal(await overflow(), 0);
     await shot(page, 'desktop-5b-machine-code');
-    const desk = page.viewportSize();
+    const desk = page.viewportSize()!;
     await page.setViewportSize({width: 390, height: 844});
     assert.equal(await overflow(), 0);
     await shot(page, 'phone-5b-machine-code');
     await page.setViewportSize(desk);
     // Each Copy takes exactly what its box shows: the installer line, the line under Other ways and the code, and
     // after New code the new code everywhere.
-    await page.evaluate(() => { window.copied = [];
-      Object.defineProperty(navigator, 'clipboard', {configurable: true, value: {writeText: async value => { window.copied.push(value); }}}); });
+    await page.evaluate(() => { (window as unknown as PageWin).copied = [];
+      Object.defineProperty(navigator, 'clipboard', {configurable: true, value: {writeText: async (value: string) => { (window as unknown as PageWin).copied.push(value); }}}); });
     const copies = async () => {
-      await page.evaluate(() => { window.copied = []; });
+      await page.evaluate(() => { (window as unknown as PageWin).copied = []; });
       const buttons = [...await page.locator('.onb-steps [data-onb-copy]:visible').all(),
         ...await page.locator('#onb-other [data-onb-copy]:visible').all(), page.locator('#onb-code-copy')];
       for (const button of buttons) await button.click();
-      await page.waitForFunction(count => window.copied.length === count, buttons.length);
-      const values = await page.evaluate(() => window.copied);
-      assert.deepEqual(values, [...await page.locator('.onb-cmd code:visible').allTextContents(), await page.locator('#onb-code-value').textContent()]);
+      await page.waitForFunction((count: number) => (window as unknown as PageWin).copied.length === count, buttons.length);
+      const values = await page.evaluate(() => (window as unknown as PageWin).copied);
+      assert.deepEqual(values, [...await page.locator('.onb-cmd code:visible').allTextContents(), (await page.locator('#onb-code-value').textContent())!]);
       return [values[0], values.at(-2), values.at(-1)];
     };
     const shown = async () => {
       const commands = await page.locator('.onb-cmd code:visible').allTextContents();
-      return [commands[0], commands.at(-1), await page.locator('#onb-code-value').textContent()];
+      return [commands[0], commands.at(-1), (await page.locator('#onb-code-value').textContent())!];
     };
-    let [installer, other, code] = await copies();
+    let [installer, other, code] = (await copies()) as [string, string, string];
     assert.deepEqual([installer, other, code], await shown());
     assert.match(installer, /^curl -fsSL .* --code 'enroll-code' /);
     assert.match(other, /^docker run -d .* --code 'enroll-code' /);
@@ -796,7 +837,7 @@ function recruitFor({department, briefing, share}) {
     enrollCode = 'enroll-code-2';
     await page.locator('#onb-enroll').click();
     await page.locator('#onb-code-value', {hasText: 'enroll-code-2'}).waitFor();
-    [installer, other, code] = await copies();
+    [installer, other, code] = (await copies()) as [string, string, string];
     assert.deepEqual([installer, other, code], await shown());
     assert.match(installer, /--code 'enroll-code-2' /);
     assert.match(other, /--code 'enroll-code-2' /);
@@ -804,7 +845,7 @@ function recruitFor({department, briefing, share}) {
     enrollCode = 'enroll-code';
     await page.locator('#onb-enroll').click();
     await page.locator('#onb-code-value', {hasText: /^enroll-code$/}).waitFor();
-    assert.doesNotMatch(await page.locator('#onb-step').textContent(), /docker exec -it tico-runner/);
+    assert.doesNotMatch((await page.locator('#onb-step').textContent())!, /docker exec -it tico-runner/);
     await page.locator('[data-onb-kind][value=mac]').check();
     // The Mac comes online; the next save carries the live machine through to the review.
     machine = {runners: [{id: 'runner-1', label: "Ana's Mac", online: true}, {id: 'runner-2', label: 'Cloud box', online: true}, {id: 'runner-3', label: 'Old laptop', online: false}], enrolled: true};
@@ -815,17 +856,17 @@ function recruitFor({department, briefing, share}) {
     // A runner that is already online folds the step to one line: "<label> online", with no instructions.
     await page.locator('#onb-back').click();
     await page.locator('#onb-machine-status', {hasText: 'online'}).waitFor();
-    assert.equal(await page.locator('#onb-machine-status').textContent(), "Ana's Mac, Cloud box online");
+    assert.equal((await page.locator('#onb-machine-status').textContent())!, "Ana's Mac, Cloud box online");
     assert.equal(await page.locator('#onb-enroll').count() + await page.locator('#onb-kind').count() + await page.locator('.onb-cmd').count(), 0);
     await page.locator('#onb-next').click();
     await page.locator('#onb-connect').waitFor();
     assert.equal(puts.length, mark + 2);
 
     // ---- e: connect your agent. Optional: the button opens the same modal as the sidebar's plug.
-    assert.equal(await page.locator('#onb-count').textContent(), 'Step 7 of 8');
+    assert.equal((await page.locator('#onb-count').textContent())!, 'Step 7 of 8');
     // One sentence on why, Connect as the secondary button: Next is the step's only primary.
     assert.deepEqual(await page.locator('#onb-step button.primary').evaluateAll(els => els.map(el => el.id)), ['onb-next']);
-    assert.match(await page.locator('#onb-step .onb-lead').textContent(), /later from the top bar/);
+    assert.match((await page.locator('#onb-step .onb-lead').textContent())!, /later from the top bar/);
     assert.equal(await oneLine(page), true);
     assert.equal(await bigTitle(page), true);
     await shot(page, 'desktop-5c-agent');
@@ -839,51 +880,51 @@ function recruitFor({department, briefing, share}) {
     assert.equal(puts.length, mark + 3);
 
     // ---- g: review, then create exactly once.
-    assert.equal(await page.locator('#onb-count').textContent(), 'Step 8 of 8');
+    assert.equal((await page.locator('#onb-count').textContent())!, 'Step 8 of 8');
     assert.equal(await bigTitle(page), true);
     await shot(page, 'desktop-5d-review');
     if (shots) { await page.setViewportSize({width: 390, height: 844}); await shot(page, 'phone-5d-review'); await page.setViewportSize({width: 1100, height: 800}); }
-    assert.match(await page.locator('.onb-summary').textContent(), /AI providers\s*Your Claude and ChatGPT subscriptions, plus Tico Gateway/);
+    assert.match((await page.locator('.onb-summary').textContent())!, /AI providers\s*Your Claude and ChatGPT subscriptions, plus Tico Gateway/);
     assert.match(await page.evaluate(() => onbSummaryHTML({...ONB, providers: null})), /Choose later in Settings &gt; Computers/);
     for (const width of [1100, 390]) {
       await page.setViewportSize({width, height: 844});
       const aligned = await page.locator('.onb-summary > div').evaluateAll(rows => rows.every(row => {
-        const [key, value] = row.children, k = key.getBoundingClientRect(), v = value.getBoundingClientRect();
+        const [key, value] = row.children as unknown as [HTMLElement, HTMLElement], k = key.getBoundingClientRect(), v = value.getBoundingClientRect();
         return v.left > k.right && Math.abs(v.top - k.top) < 8;
       }));
       assert.ok(aligned, `Review values remain in the value column at ${width}px`);
     }
     await page.setViewportSize({width: 1100, height: 800});
-    const review = await page.locator('#onb-step').textContent();
+    const review = (await page.locator('#onb-step').textContent())!;
     assert.match(review, /Initech Hub/);
     assert.match(review, /Businesses/);
     assert.match(review, /Software is the product\s*Yes/);
     assert.doesNotMatch(review, /What hurts|Tools/);
     assert.doesNotMatch(review, /Never without a human|Send anything|Spend money|Publish anything/);
     assert.match(review, /Computers\s*Ana's Mac, Cloud box online/);
-    assert.equal(await page.locator('[data-review-departments]').textContent(), 'Sales, Marketing, Customer Support, Operations, Engineering');
-    assert.equal(await page.locator('[data-review-helpers]').textContent(), '2 bots Ace, BotOps');
-    assert.equal(await page.locator('[data-review-builtin]').getAttribute('open'), null, 'the built-ins start folded');
-    assert.equal(await page.locator('[data-review-message-bots]').textContent(), 'Inbox Manager');
+    assert.equal((await page.locator('[data-review-departments]').textContent())!, 'Sales, Marketing, Customer Support, Operations, Engineering');
+    assert.equal((await page.locator('[data-review-helpers]').textContent())!, '2 bots Ace, BotOps');
+    assert.equal((await page.locator('[data-review-builtin]').getAttribute('open'))!, null, 'the built-ins start folded');
+    assert.equal((await page.locator('[data-review-message-bots]').textContent())!, 'Inbox Manager');
     assert.match(review, /Built-in\s*2 bots\s*Ace, BotOps/);
     assert.match(review, /Message bots\s*Inbox Manager/);
     assert.doesNotMatch(review, /Helpers/);
-    assert.match(await page.locator('[data-review-team]').textContent(), /Sales Manager\s*→ Ana Rivera/);
-    assert.match(await page.locator('[data-review-team]').textContent(), /Sales Development Representative\s*→ Sales Manager/);
-    assert.match(await page.locator('[data-review-team]').textContent(), /Project Coordinator\s*→ Operations Manager/);
-    assert.match(await page.locator('[data-review-team]').textContent(), /Support desk\s*→ Project Coordinator/);
-    assert.match(await page.locator('[data-review-team]').textContent(), /Content Marketer\s*→ Ben Cole/);
-    assert.doesNotMatch(await page.locator('[data-review-team]').textContent(), /Inbox Manager/);
+    assert.match((await page.locator('[data-review-team]').textContent())!, /Sales Manager\s*→ Ana Rivera/);
+    assert.match((await page.locator('[data-review-team]').textContent())!, /Sales Development Representative\s*→ Sales Manager/);
+    assert.match((await page.locator('[data-review-team]').textContent())!, /Project Coordinator\s*→ Operations Manager/);
+    assert.match((await page.locator('[data-review-team]').textContent())!, /Support desk\s*→ Project Coordinator/);
+    assert.match((await page.locator('[data-review-team]').textContent())!, /Content Marketer\s*→ Ben Cole/);
+    assert.doesNotMatch((await page.locator('[data-review-team]').textContent())!, /Inbox Manager/);
     assert.doesNotMatch(review, /This Mac/);
-    assert.equal(await page.locator('#onb-finish').textContent(), 'Create my team');
+    assert.equal((await page.locator('#onb-finish').textContent())!, 'Create my team');
     await page.locator('#onb-finish').click();
     await page.locator('#onb-tasks').waitFor();
-    await page.evaluate(() => document.querySelector('#onb-finish')?.click());   // no second create
+    await page.evaluate(() => document.querySelector<HTMLElement>('#onb-finish')?.click());   // no second create
     assert.equal(completes.length, 1);
     assert.deepEqual(completes[0], {});
 
     // ---- after Create, one screen: the team is created, and nothing covers it. The tour waits for Show me around.
-    assert.equal(await page.locator('#onb h1').textContent(), 'Your team is created');
+    assert.equal((await page.locator('#onb h1').textContent())!, 'Your team is created');
     await page.setViewportSize({width: 390, height: 844});
     assert.equal(await page.locator('#mobile-nav').isVisible(), true, 'phone navigation returns after Create');
     assert.equal(await page.locator('#mobile-nav [data-nav="tasks"]').isVisible(), true);
@@ -897,47 +938,47 @@ function recruitFor({department, briefing, share}) {
     assert.equal(await page.locator('.gs-tour').count(), 0);
     assert.deepEqual(tourPosts, []);
     // A computer is online and a provider chosen, so nothing is waited on: Open Tasks is the next step and the only primary.
-    assert.equal(await page.locator('#onb-next-status').textContent(), "Ana's Mac, Cloud box online");
+    assert.equal((await page.locator('#onb-next-status').textContent())!, "Ana's Mac, Cloud box online");
     assert.deepEqual(await page.locator('#onb button.primary').evaluateAll(els => els.map(el => el.id)), ['onb-tasks']);
     // The bots in the chart's groups, in the chart's order: Operations before Customer Support as on the team list, the
     // bot the chart does not list yet first, the built-ins last.
     const groups = () => page.locator('#onb-bots .onb-group').evaluateAll(els => els.map(el =>
-      [el.dataset.onbGroup || '', el.querySelector('h2')?.textContent || (el.dataset.onbGroup === 'built-in' ? 'Built-in' : ''), [...el.querySelectorAll('[data-onb-bot]')].map(row => row.dataset.onbBot)]));
+      [el.dataset.onbGroup || '', el.querySelector('h2')?.textContent || (el.dataset.onbGroup === 'built-in' ? 'Built-in' : ''), [...el.querySelectorAll<HTMLElement>('[data-onb-bot]')].map(row => row.dataset.onbBot)]));
     assert.deepEqual(await groups(), [['', '', [CONTENT_ID]], ['operations', 'Operations', ['meeting-notes']],
       ['support', 'Customer Support', ['support']], ['built-in', 'Built-in', ['coo', 'botops']]]);
     assert.deepEqual(await page.locator('#tree .org-group > .noderow').evaluateAll(els => els.map(el => el.dataset.org)), ['g:operations', 'g:support']);
     // One status per row: a word, or the one thing to do there.
-    const status = id => page.locator(`[data-onb-bot="${id}"] .onb-bot-actions`).evaluate(el => [el.children.length, el.textContent.trim()]);
+    const status = (id: string) => page.locator(`[data-onb-bot="${id}"] .onb-bot-actions`).evaluate(el => [el.children.length, el.textContent!.trim()]);
     assert.deepEqual(await status('coo'), [1, 'Active']);                                                  // the built-ins work at once
     assert.deepEqual(await status('botops'), [1, 'Active']);
     assert.deepEqual(await status('support'), [1, 'Set up']);                                              // its repository exists
     assert.deepEqual(await status('meeting-notes'), [1, 'Setting up']);                                    // not yet: no Set up
     assert.equal(await page.locator('[data-fr-start=meeting-notes]').count(), 0);
     assert.deepEqual(await status(CONTENT_ID), [1, 'Setting it up']);                                         // not a starter: BotOps builds it
-    assert.equal(await page.locator(`[data-onb-bot="${CONTENT_ID}"] a`).getAttribute('href'), '#/task/task-content');
+    assert.equal((await page.locator(`[data-onb-bot="${CONTENT_ID}"] a`).getAttribute('href'))!, '#/task/task-content');
     assert.equal(await page.locator('#onb-bots .pill.needs, #onb-bots p').count(), 0);
     // Show me around: the tour, once asked for; Skip is remembered.
     await page.locator('#onb-tour').click();
     await page.locator('.gs-tour[role=dialog]').waitFor();
-    assert.equal(await page.locator('.gs-tour-count').textContent(), '1 of 6');
+    assert.equal((await page.locator('.gs-tour-count').textContent())!, '1 of 6');
     // The tour closes before its choice is saved, so wait for the save rather than the dialog.
     const tourSaved = page.waitForResponse(r => r.url().endsWith('/api/v2/setup/getting-started/state'));
     await page.locator('[data-tour-skip]').click();
     await page.locator('.gs-tour').waitFor({state: 'detached'});
     await tourSaved;
     assert.deepEqual(tourPosts, [{tour: true}]);
-    assert.equal(await page.locator('#fr-owners summary').textContent().then(text => text.replace(/\s+/g, ' ').trim()), 'You own all 5 bots. Change');
-    assert.match(await page.locator('#fr-providers').textContent(), /AI providers: subscriptions plus Tico Gateway\./);
+    assert.equal(await page.locator('#fr-owners summary').textContent().then(text => text!.replace(/\s+/g, ' ').trim()), 'You own all 5 bots. Change');
+    assert.match((await page.locator('#fr-providers').textContent())!, /AI providers: subscriptions plus Tico Gateway\./);
     // Setup saved a strategy draft; publishing it is the owner's click on the Strategy page.
-    assert.equal(await page.locator('#fr-strategy a').getAttribute('href'), '#/strategy');
+    assert.equal((await page.locator('#fr-strategy a').getAttribute('href'))!, '#/strategy');
     assert.equal(await page.evaluate(() => frProvidersName({providers: {preset: 'subscriptions', providers: []}})), 'subscriptions only');
     assert.equal(await page.evaluate(() => frProvidersName({providers: {preset: 'gateway', providers: []}})), 'Tico Gateway only');
     assert.equal(await page.evaluate(() => frProvidersName({providers: {enabled: ['openai'], providers: [{id: 'openai', label: 'OpenAI'}]}})), 'OpenAI');
     assert.equal(await page.locator('[data-fr-owner=support]').isVisible(), false);
     await page.locator('#fr-owners summary').click();
     assert.equal(await page.locator('[data-fr-owner=support]').isVisible(), true);
-    assert.equal(await page.locator('#fr-admin-form [name=name]').getAttribute('placeholder'), 'e.g. Alex Chen');
-    assert.equal(await page.locator('#fr-admin-form [name=email]').getAttribute('placeholder'), 'alex@company.example');
+    assert.equal((await page.locator('#fr-admin-form [name=name]').getAttribute('placeholder'))!, 'e.g. Alex Chen');
+    assert.equal((await page.locator('#fr-admin-form [name=email]').getAttribute('placeholder'))!, 'alex@company.example');
     assert.equal(await page.locator('#fr-tools').count(), 0);
     assert.equal(await page.locator('#onb [data-setup-help], #onb .talk-line').count(), 0);
     assert.equal(await page.locator('#onb [data-gs-tour]').count(), 1);
@@ -949,15 +990,15 @@ function recruitFor({department, briefing, share}) {
     await page.locator('#fr-admin-status', {hasText: 'on the roster as an admin'}).waitFor();
     assert.deepEqual(invites, [['add', {name: 'Sam Ortiz', email: 'sam@initech.test'}], ['role', {role: 'admin'}]]);
     // A human owner for each bot, added as a co-owner.
-    assert.match(await page.locator('[data-fr-owned=support]').textContent(), /Ana Rivera owns it/);
+    assert.match((await page.locator('[data-fr-owned=support]').textContent())!, /Ana Rivera owns it/);
     await page.locator('[data-fr-owner=support]').selectOption('ben');
     await page.locator('[data-fr-owned=support]', {hasText: 'Ben Cole own it'}).waitFor();
     assert.deepEqual(owners, [['support', {add: ['ben'], remove: []}]]);
     // Keys are entered once, in the hub's own fields, and never in a chat.
     assert.deepEqual(await page.locator('.fr-connections [data-fr-link]').evaluateAll(els => els.map(el => el.dataset.frLink)),
       ['credentials', 'integrations']);
-    assert.equal(await page.locator('[data-fr-link=credentials]').getAttribute('href'), '#/tools/keys');
-    assert.match(await page.locator('[data-fr-secrets]').textContent(), /Enter credentials in Tools › Keys, never in a chat with a bot/);
+    assert.equal((await page.locator('[data-fr-link=credentials]').getAttribute('href'))!, '#/tools/keys');
+    assert.match((await page.locator('[data-fr-secrets]').textContent())!, /Enter credentials in Tools › Keys, never in a chat with a bot/);
     // What was typed survives the progress poll (only the rows are redrawn).
     await page.locator('#fr-admin-form [name=name]').fill('Half typed');
     await page.evaluate(() => onbRenderDone(ONB));
@@ -966,7 +1007,7 @@ function recruitFor({department, briefing, share}) {
     // Finishing takes the setup entry out of the sidebar, brings the app's pages back and puts the names on the app;
     // the chart marks the parked bots.
     await page.evaluate(() => refresh(true));
-    assert.equal(await page.locator('#nav-welcome').evaluate(el => el.hidden), true);
+    assert.equal(await page.locator('#nav-welcome').evaluate((el: HTMLElement) => el.hidden), true);
     await page.locator('#side .side-scroll > [data-nav="tasks"]').waitFor();
     assert.equal(await page.title(), 'Initech Hub');
     await page.locator('#tree .node[href="#/bot/support"] .tree-setup').waitFor();
@@ -978,11 +1019,11 @@ function recruitFor({department, briefing, share}) {
     assert.deepEqual(definitions, []);                                    // it was already active: nothing to activate first
     await page.locator('#bot-onboard').waitFor();
     await shot(page, 'desktop-7-bot-page');
-    assert.match(await page.locator('#bot-onboard').textContent(), /Onboarding/);
+    assert.match((await page.locator('#bot-onboard').textContent())!, /Onboarding/);
     assert.equal(await page.locator('#bot-onboard p.bot-onboard-tip').count(), 1);                     // the tip is the only paragraph
     assert.equal(await page.locator('#bot-onboard p:not(.bot-onboard-tip)').count(), 0);              // the pill and the button, no other paragraph
-    assert.equal(await page.locator('#bot-start-setup').textContent(), 'Start onboarding');
-    assert.equal(await page.locator('#bot-onboard [data-setup-help="bot"]').textContent(), 'Want help onboarding it?');
+    assert.equal((await page.locator('#bot-start-setup').textContent())!, 'Start onboarding');
+    assert.equal((await page.locator('#bot-onboard [data-setup-help="bot"]').textContent())!, 'Want help onboarding it?');
     // Home shows the setup conversation: the person's line, in the chat Set up wrote to (not the private DM).
     await page.goto('https://tico-ui.test/#/bot/support/home');
     await page.locator('#bot-thread .th-msg.th-mine', {hasText: "Let's set you up."}).waitFor();
@@ -996,7 +1037,7 @@ function recruitFor({department, briefing, share}) {
     assert.deepEqual(definitions, [{path: '/api/v2/bots/meeting-notes/definition', body: {status: 'active', expected_revision: 4}}]);
     assert.deepEqual(chats.at(-1), ['meeting-notes', {text: "Let's set you up."}]);
     // The mark clears when the bot says it is set up: the page follows the bot's state.
-    BOTS_AFTER.find(bot => bot.slug === 'meeting-notes').onboarding_state = 'onboarded';
+    BOTS_AFTER.find(bot => bot.slug === 'meeting-notes')!.onboarding_state = 'onboarded';
     await page.evaluate(() => refresh(true));
     await page.locator('#bot-onboard').waitFor({state: 'detached'});
     await page.locator('#tree .node[href="#/bot/meeting-notes"] .tree-setup').waitFor({state: 'detached'});
@@ -1007,7 +1048,7 @@ function recruitFor({department, briefing, share}) {
     await page.locator(`[data-onb-bot="${CONTENT_ID}"] a`).click();
     await page.waitForFunction(() => location.hash === '#/task/task-content');
     await page.locator('#task-modal[open] .tmodal-title').waitFor();
-    assert.equal(await page.locator('#task-modal .tmodal-title').textContent(), 'Set up Content Marketer');
+    assert.equal((await page.locator('#task-modal .tmodal-title').textContent())!, 'Set up Content Marketer');
     await page.keyboard.press('Escape');
     await page.goBack();
     await page.waitForFunction(() => location.hash === '#/welcome');
@@ -1024,8 +1065,8 @@ function recruitFor({department, briefing, share}) {
     // The first-run enrollment step already checks the Linux server command; keep this distinct Windows installer path.
     await page.locator('#machine-kind').selectOption('windows');
     await page.locator('#register-machine').click();
-    await page.waitForFunction(() => /install-wsl\.ps1/.test(document.querySelector('#machine-enroll-status').textContent));
-    assert.match(await page.locator('#machine-enroll-status').textContent(), /irm https:\/\/github\.com\/ticoteam\/tico\/releases\/download\/v0\.2\.0\/install-wsl\.ps1\)\)\) -Url https:\/\/initech\.test -Code 'enroll-code' -Label 'Ana Rivera''s PC' -Name tico-enrollco/);
+    await page.waitForFunction(() => /install-wsl\.ps1/.test(document.querySelector<HTMLElement>('#machine-enroll-status')!.textContent));
+    assert.match((await page.locator('#machine-enroll-status').textContent())!, /irm https:\/\/github\.com\/ticoteam\/tico\/releases\/download\/v0\.2\.0\/install-wsl\.ps1\)\)\) -Url https:\/\/initech\.test -Code 'enroll-code' -Label 'Ana Rivera''s PC' -Name tico-enrollco/);
     await page.locator('#machine-kind').selectOption('mac');
     await page.keyboard.press('Escape');
     await page.locator('[data-settings-tab=bots]').click();
@@ -1043,15 +1084,15 @@ function recruitFor({department, briefing, share}) {
     await page.locator('#catalog-picker-grid [data-cat-card=bookkeeping] .cat-instructions summary').click();
     await page.locator('#catalog-picker-grid [data-cat-instructions=bookkeeping]').fill('# Ledger\n\nChase, never pay. Ask Ana.\n');
     await page.getByRole('button', {name: 'Add selected', exact: true}).click();
-    await page.waitForFunction(() => !document.querySelector('#catalog-picker').open);
+    await page.waitForFunction(() => !document.querySelector<HTMLDialogElement>('#catalog-picker')!.open);
     assert.equal(created.length, 1);
-    assert.equal(created[0].slug, 'bookkeeping');
-    assert.equal(created[0].template, 'bookkeeping');
-    assert.equal(created[0].display_name, 'Ledger');
-    assert.equal(created[0].instructions, '# Ledger\n\nChase, never pay. Ask Ana.\n');
-    assert.equal(created[0].model, 'gpt-6-sol');
-    assert.equal(created[0].effort, 'high');
-    assert.deepEqual(created[0].owners, ['ana']);
+    assert.equal(created[0]!.slug, 'bookkeeping');
+    assert.equal(created[0]!.template, 'bookkeeping');
+    assert.equal(created[0]!.display_name, 'Ledger');
+    assert.equal(created[0]!.instructions, '# Ledger\n\nChase, never pay. Ask Ana.\n');
+    assert.equal(created[0]!.model, 'gpt-6-sol');
+    assert.equal(created[0]!.effort, 'high');
+    assert.deepEqual(created[0]!.owners, ['ana']);
 
     // Inbox bots ask whose mailbox, then append Mailbox: so BotOps can fill {{mailbox}}.
     await page.locator('[data-settings-tab=devices]').click();
@@ -1061,15 +1102,15 @@ function recruitFor({department, briefing, share}) {
     assert.equal(await page.locator('#catalog-picker-grid [data-cat-mailbox=inbox]').count(), 1);
     await page.locator('#catalog-picker-grid [data-cat-toggle=inbox]').check();
     await page.getByRole('button', {name: 'Add selected', exact: true}).click();
-    assert.match(await page.locator('#catalog-picker-status').textContent(), /whose mailbox/);
+    assert.match((await page.locator('#catalog-picker-status').textContent())!, /whose mailbox/);
     await page.locator('#catalog-picker-grid [data-cat-mailbox=inbox]').selectOption('ana');
     await page.getByRole('button', {name: 'Add selected', exact: true}).click();
-    await page.waitForFunction(() => !document.querySelector('#catalog-picker').open);
+    await page.waitForFunction(() => !document.querySelector<HTMLDialogElement>('#catalog-picker')!.open);
     assert.equal(created.length, 2);
-    assert.equal(created[1].slug, 'ana-inbox');
-    assert.equal(created[1].template, 'inbox');
-    assert.equal(created[1].display_name, 'Ana Rivera message bot');
-    assert.match(created[1].instructions, /Mailbox: ana@acme.example/);
+    assert.equal(created[1]!.slug, 'ana-inbox');
+    assert.equal(created[1]!.template, 'inbox');
+    assert.equal(created[1]!.display_name, 'Ana Rivera message bot');
+    assert.match(created[1]!.instructions, /Mailbox: ana@acme.example/);
 
     // ---- phone width: the wizard is one column and never scrolls sideways; the chart is a strip above the card.
     record = {...record, completed: null, needed: true};
@@ -1079,7 +1120,7 @@ function recruitFor({department, briefing, share}) {
     await phone.goto('https://tico-ui.test/#/welcome');
     await phone.locator('#onb-website').waitFor();
     const fits = () => phone.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth
-      && document.querySelector('#main').scrollWidth <= document.querySelector('#main').clientWidth);
+      && document.querySelector<HTMLElement>('#main')!.scrollWidth <= document.querySelector<HTMLElement>('#main')!.clientWidth);
     assert.equal(await fits(), true);
     // A phone shows the dots and the current step's name, on one line.
     assert.deepEqual(await phone.locator('.onb-progress li span').evaluateAll(els =>
@@ -1105,15 +1146,15 @@ function recruitFor({department, briefing, share}) {
     assert.equal(await details.isVisible(), false);
     assert.equal(await seven.locator('[data-provider]:visible, [data-provider-model]:visible, .prov-routed:visible').count(), 0);
     const recommended = seven.locator('.prov-preset').first();
-    const firstScreen = await recommended.boundingBox();
+    const firstScreen = (await recommended.boundingBox())!;
     assert.ok(firstScreen.y + firstScreen.height < 844, 'Recommended fits on the first screen');
     assert.ok(await seven.locator('.prov-preset').evaluateAll(rows => rows.every(row => {
-      const radio = row.querySelector('input').getBoundingClientRect();
-      const title = row.querySelector('strong').getClientRects()[0];
+      const radio = row.querySelector('input')!.getBoundingClientRect();
+      const title = row.querySelector('strong')!.getClientRects()[0]!;
       return radio.top < title.bottom && radio.bottom > title.top && radio.right < title.left;
     })), 'each radio is beside the first title line');
     assert.ok(await seven.locator('#onb-step').evaluate(step =>
-      ['onb-sample-box', 'onb-company-file-box'].every(id => step.compareDocumentPosition(document.getElementById(id)) & Node.DOCUMENT_POSITION_FOLLOWING)));
+      ['onb-sample-box', 'onb-company-file-box'].every(id => step.compareDocumentPosition(document.getElementById(id)!) & Node.DOCUMENT_POSITION_FOLLOWING)));
     await seven.locator('[data-provider-preset][value=own-keys]').check();
     assert.equal(await details.isVisible(), true);
     assert.equal(await seven.locator('[data-provider]:visible').count(), 3);
@@ -1133,14 +1174,14 @@ function recruitFor({department, briefing, share}) {
     await phone.locator('#onb-next').click();
     // The saved draft opens on its chart; the strip above is closed and says what is on it.
     await phone.locator('#ob-summary').waitFor();
-    assert.equal(await phone.locator('#ob-summary').textContent(), '5 groups · 11 bots');
+    assert.equal((await phone.locator('#ob-summary').textContent())!, '5 groups · 11 bots');
     assert.equal(await fits(), true);
     await shot(phone, 'phone-7-chart');
     await phone.locator('#ob-departments').click();
     await phone.locator('[data-ob-tile]').first().waitFor();
     assert.equal(await phone.locator('#ob-strip').isVisible(), true);
     assert.equal(await phone.locator('#ob-chart').isVisible(), false);
-    assert.match(await phone.locator('#ob-strip').textContent(), /5 groups · 11 bots/);   // the skipped Finance is not counted
+    assert.match((await phone.locator('#ob-strip').textContent())!, /5 groups · 11 bots/);   // the skipped Finance is not counted
     assert.equal(await fits(), true);
     await shot(phone, 'phone-3-departments');
     await phone.locator('#ob-strip').click();
@@ -1177,14 +1218,14 @@ function recruitFor({department, briefing, share}) {
     await phone.locator('#ob-brief').waitFor();
     assert.equal(await phone.locator('#ob-hq').isChecked(), false);
     assert.equal(await phone.locator('#ob-hq').isDisabled(), true);
-    assert.equal(await phone.locator('[data-ob-hq-off]').textContent(), 'Off: DO_NOT_TRACK is set');
+    assert.equal((await phone.locator('[data-ob-hq-off]').textContent())!, 'Off: DO_NOT_TRACK is set');
     await phone.locator('#ob-go').click();
     await phone.locator('#ob-suggested').waitFor();
-    assert.equal(recruits.at(-1).share, false);
+    assert.equal(recruits.at(-1)!.share, false);
     hq = {available: true, off_by: ''};
 
     // After Create, on a phone: the same one screen, one column.
-    BOTS_AFTER.find(bot => bot.slug === 'meeting-notes').onboarding_state = 'needs_setup';
+    BOTS_AFTER.find(bot => bot.slug === 'meeting-notes')!.onboarding_state = 'needs_setup';
     record = {...record, completed: '2026-09-16T10:00:00Z', needed: false, bots: BOTS_AFTER.map(bot => ({...bot})), machine};
     const created2 = await context.newPage();
     created2.on('pageerror', e => errors.push(e.message));
@@ -1192,7 +1233,7 @@ function recruitFor({department, briefing, share}) {
     await created2.goto('https://tico-ui.test/#/welcome');
     await created2.locator('#fr-admin').waitFor();
     assert.equal(await created2.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), true);
-    assert.equal(await created2.locator('#onb h1').textContent(), 'Your team is created');
+    assert.equal((await created2.locator('#onb h1').textContent())!, 'Your team is created');
     await shot(created2, 'phone-5-created');
     await created2.locator('.fr-connections summary').click();
     await created2.locator('.fr-connections').scrollIntoViewIfNeeded();
@@ -1210,22 +1251,22 @@ function recruitFor({department, briefing, share}) {
     await waiting.goto('https://tico-ui.test/#/welcome');
     await waiting.locator('[data-onb-bot=coo]').waitFor({state: 'attached'});
     // Said once, at the top, with Add a computer as the only primary button; each row just says Waiting.
-    assert.equal(await waiting.locator('#onb-next-status').textContent(), 'Waiting for a computer. Your bots start once one is online.');
+    assert.equal((await waiting.locator('#onb-next-status').textContent())!, 'Waiting for a computer. Your bots start once one is online.');
     assert.equal(await waiting.locator('#onb', {hasText: 'Waiting for a computer'}).count(), 1);
-    assert.equal(await waiting.locator('#onb-bots').textContent().then(text => /computer/i.test(text)), false);
+    assert.equal(await waiting.locator('#onb-bots').textContent().then(text => /computer/i.test(text!)), false);
     assert.deepEqual(await waiting.locator('#onb button.primary').evaluateAll(els => els.map(el => el.textContent)), ['Add a computer']);
     for (const id of ['coo', 'support', 'meeting-notes', CONTENT_ID])
-      assert.equal(await waiting.locator(`[data-onb-bot="${id}"] .onb-bot-actions`).textContent().then(text => text.trim()), 'Waiting');
+      assert.equal(await waiting.locator(`[data-onb-bot="${id}"] .onb-bot-actions`).textContent().then(text => text!.trim()), 'Waiting');
     // Read the actual wizard pills' computed colours, including System following a light OS.
     const contrast = [];
     for (const theme of ['light', 'system', 'dark']) {
       await waiting.emulateMedia({colorScheme: 'light'});
-      await waiting.evaluate(theme => window.ticoTheme.set(theme), theme);
+      await waiting.evaluate(theme => (window as unknown as PageWin).ticoTheme.set(theme), theme);
       const colours = await waiting.locator('#onb-bots .pill.waiting').evaluateAll(els => els.map(el => {
         const style = getComputedStyle(el);
-        const luminance = rgb => rgb.match(/[\d.]+/g).slice(0, 3).map(Number).map(v => v / 255)
+        const luminance = (rgb: string) => rgb.match(/[\d.]+/g)!.slice(0, 3).map(Number).map(v => v / 255)
           .map(v => v <= .04045 ? v / 12.92 : ((v + .055) / 1.055) ** 2.4)
-          .reduce((sum, v, i) => sum + v * [.2126, .7152, .0722][i], 0);
+          .reduce((sum, v, i) => sum + v * [.2126, .7152, .0722][i]!, 0);
         const fg = luminance(style.color), bg = luminance(style.backgroundColor);
         return {text: el.textContent, color: style.color, background: style.backgroundColor,
           ratio: (Math.max(fg, bg) + .05) / (Math.min(fg, bg) + .05)};
@@ -1236,7 +1277,7 @@ function recruitFor({department, briefing, share}) {
     }
     console.log('Waiting contrast:', JSON.stringify(contrast));
     await waiting.emulateMedia({colorScheme: scheme});
-    await waiting.evaluate(theme => window.ticoTheme.set(theme), scheme);
+    await waiting.evaluate(theme => (window as unknown as PageWin).ticoTheme.set(theme), scheme);
     await shot(waiting, 'desktop-6b-created-no-computer');
     await waiting.setViewportSize({width: 390, height: 844});
     assert.equal(await waiting.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), true);
@@ -1253,16 +1294,16 @@ function recruitFor({department, briefing, share}) {
     for (let i = 0; setupGets === gets && i < 90; i++) await waiting.waitForTimeout(100);
     assert.notEqual(setupGets, gets);
     await waiting.waitForTimeout(200);
-    assert.equal(await waiting.evaluate(() => document.activeElement?.dataset.onbGo), 'devices');
+    assert.equal(await waiting.evaluate(() => (document.activeElement as HTMLElement | null)?.dataset.onbGo), 'devices');
     await waiting.keyboard.press('Enter');
     await waiting.locator('#settings-tabs [data-settings-tab=devices][aria-selected=true]').waitFor();
     await waiting.goto('https://tico-ui.test/#/welcome');
     await waiting.locator('[data-onb-bot=coo]').waitFor({state: 'attached'});
     machine = enrolled;
-    await waiting.waitForFunction(() => !/^Waiting for a computer/.test(document.querySelector('#onb-next-status').textContent), null, {timeout: 9000});
-    assert.equal(await waiting.locator('#onb-next-status').textContent(), "Ana's Mac, Cloud box online");
+    await waiting.waitForFunction(() => !/^Waiting for a computer/.test(document.querySelector<HTMLElement>('#onb-next-status')!.textContent), null, {timeout: 9000});
+    assert.equal((await waiting.locator('#onb-next-status').textContent())!, "Ana's Mac, Cloud box online");
     assert.deepEqual(await waiting.locator('#onb button.primary').evaluateAll(els => els.map(el => el.id)), ['onb-tasks']);
-    assert.notEqual(await waiting.locator('[data-onb-bot=coo] .onb-bot-actions').textContent().then(text => text.trim()), 'Waiting');
+    assert.notEqual(await waiting.locator('[data-onb-bot=coo] .onb-bot-actions').textContent().then(text => text!.trim()), 'Waiting');
     await waiting.locator('#onb-tour').click();
     await waiting.locator('.gs-tour[role=dialog]').waitFor();
     await waiting.keyboard.press('Escape');
@@ -1270,18 +1311,18 @@ function recruitFor({department, briefing, share}) {
     CONFIG.providers_configured = false;
     await waiting.reload();
     await waiting.locator('[data-onb-bot=coo]').waitFor({state: 'attached'});
-    assert.equal(await waiting.locator('#onb-next-status').textContent(), "Ana's Mac, Cloud box online. Waiting for an AI provider.");
+    assert.equal((await waiting.locator('#onb-next-status').textContent())!, "Ana's Mac, Cloud box online. Waiting for an AI provider.");
     assert.deepEqual(await waiting.locator('#onb button.primary').evaluateAll(els => els.map(el => el.dataset.onbGo)), ['models']);
-    assert.equal(await waiting.locator('[data-onb-bot=coo] .onb-bot-actions').textContent().then(text => text.trim()), 'Waiting');
-    assert.equal(await waiting.locator('#onb-after > :first-child').first().getAttribute('id'), 'fr-providers');
+    assert.equal(await waiting.locator('[data-onb-bot=coo] .onb-bot-actions').textContent().then(text => text!.trim()), 'Waiting');
+    assert.equal((await waiting.locator('#onb-after > :first-child').first().getAttribute('id'))!, 'fr-providers');
     await waiting.locator('#fr-providers [data-gs-tab=models]').click();
     await waiting.locator('#settings-tabs [data-settings-tab=models][aria-selected=true]').waitFor();   // lands on Settings > Models
     CONFIG.local = true;
     await waiting.reload();
     await waiting.goto('https://tico-ui.test/#/welcome');
     await waiting.locator('#fr-admin').waitFor();
-    assert.match(await waiting.locator('#fr-admin').textContent(), /Only you can sign in until you add a domain and sign-in/);
-    assert.equal(await waiting.locator('#fr-admin summary').textContent(), 'Add an admin (optional)');
+    assert.match((await waiting.locator('#fr-admin').textContent())!, /Only you can sign in until you add a domain and sign-in/);
+    assert.equal((await waiting.locator('#fr-admin summary').textContent())!, 'Add an admin (optional)');
     CONFIG.local = false;
     delete CONFIG.providers_configured;
 
@@ -1296,18 +1337,18 @@ function recruitFor({department, briefing, share}) {
     await pastStrategy(fresh);
     const mark2 = puts.length;
     assert.equal(await fresh.locator('#onb-company').inputValue(), '');
-    assert.equal(await fresh.locator('#onb-company').getAttribute('placeholder'), 'Acme Inc.');
-    assert.equal(await fresh.locator('label.onb-field:has(#onb-company) .k').textContent(), 'Company name');
+    assert.equal((await fresh.locator('#onb-company').getAttribute('placeholder'))!, 'Acme Inc.');
+    assert.equal((await fresh.locator('label.onb-field:has(#onb-company) .k').textContent())!, 'Company name');
     await shot(fresh, 'desktop-1-names-fresh');
     if (shots) { await fresh.setViewportSize({width: 390, height: 844}); await shot(fresh, 'phone-1-names-fresh'); await fresh.setViewportSize({width: 1100, height: 800}); }
     await fresh.locator('#onb-next').click();
     await fresh.locator('#onb-status .err', {hasText: "Add your company's name."}).waitFor();
-    assert.equal(await fresh.evaluate(() => document.activeElement.id), 'onb-company');
+    assert.equal(await fresh.evaluate(() => (document.activeElement as HTMLElement).id), 'onb-company');
     assert.equal(puts.length, mark2);
     await fresh.locator('#onb-company').fill('Globex');
     await fresh.locator('#onb-next').click();
     await fresh.locator('#onb-what').waitFor();
-    assert.equal(puts.at(-1).names.company_name, 'Globex');
+    assert.equal(puts.at(-1)!.names.company_name, 'Globex');
     await fresh.close();
     Object.assign(CONFIG, {company_name: 'Initech'}); delete CONFIG.company_name_default;
     record = {...record, ...before};

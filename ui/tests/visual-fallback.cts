@@ -3,25 +3,33 @@
 // card with its title, its still preview when it has one, and Open, which shows it in the file viewer (test 2); a
 // page or SVG never loads in a frame or picture from the app's own address. Settings shows one read-only line, no
 // switch, for either setup (test 7). Fixtures only.
-const {chromium, webkit} = require('playwright');
-const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const {html, uiFile} = require('./support/page.cjs');
-const {unrouted} = require('./support/routes.cjs');
-const {threadsFake} = require('./support/threads-fake.cjs');
+import type {ThreadsMessage} from './support/threads-fake.cjs';
+const {chromium, webkit}: typeof import('playwright') = require('playwright');
+const assert: typeof import('node:assert/strict') = require('node:assert/strict');
+const fs: typeof import('node:fs') = require('node:fs');
+const {html, uiFile} = require('./support/page.cjs') as typeof import('./support/page.cjs');
+const {unrouted} = require('./support/routes.cjs') as typeof import('./support/routes.cjs');
+const {threadsFake} = require('./support/threads-fake.cjs') as typeof import('./support/threads-fake.cjs');
 
 const PNG = Buffer.from('89504e470d0a1a0a0000000d4948445200000001000000010806000000' + '1f15c4890000000d49444154789c6360000002000154a24f5d0000000049454e44ae426082', 'hex');
 const ORIGIN = 'https://tico-ui.test';
-const TYPES = {image: ['.png', 'image/png'], video: ['.mp4', 'video/mp4'], audio: ['.wav', 'audio/wav'], svg: ['.svg', 'image/svg+xml'], page: ['.html', 'text/html']};
+type Kind = 'image' | 'video' | 'audio' | 'svg' | 'page';
+const TYPES: {[k in Kind]: [string, string]} = {image: ['.png', 'image/png'], video: ['.mp4', 'video/mp4'], audio: ['.wav', 'audio/wav'], svg: ['.svg', 'image/svg+xml'], page: ['.html', 'text/html']};
+declare const VIEW: {items: {fileId: string; version: number}[]};
+declare const TASKS_ST: {tasks: {id: string}[]; loading?: boolean};
+declare function taskModalShow(task: {id: string} | undefined): void;
+declare function $(selector: string): {close(): void; tfOpen?: {id: string; n: number}};
+declare function visualCardsHTML(files: Record<string, unknown>[], options: {key: string}): string;
+declare function visualSwap(root: Element, html: string): void;
 // As backend/visuals.py decorate sends them without a visual address: media on the app's own route, pages and SVG
 // with `open` and no `src`.
-const A = (id, kind, over = {}) => ({id, file_id: id, version: 1, ref: id + '@1', title: 'Title ' + id, kind, name: id + TYPES[kind][0], size: 1000,
+const A = (id: string, kind: Kind, over: Record<string, unknown> = {}) => ({id, file_id: id, version: 1, ref: id + '@1', title: 'Title ' + id, kind, name: id + TYPES[kind][0], size: 1000,
   content_type: TYPES[kind][1], url: `/api/v2/files/${id}?v=1`, removed: false, current_version: 1,
   ...(kind === 'page' || kind === 'svg' ? {src: null, open: true} : {src: '/visuals/tok-' + id}), ...over});
 
 (async () => {
   const browser = process.env.TICO_BROWSER === 'webkit' ? await webkit.launch({headless: true})
-    : await chromium.launch({channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined, headless: true});
+    : await chromium.launch({channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined, headless: true} as import('playwright').LaunchOptions);
   const now = new Date().toISOString();
   const MESSAGES = [
     {id: 'm1', sender_id: 'bot:designer', body: 'A chart, a clip and a voice note.', created_at: now, refs: {attachments: [
@@ -29,16 +37,16 @@ const A = (id, kind, over = {}) => ({id, file_id: id, version: 1, ref: id + '@1'
     {id: 'm2', sender_id: 'bot:designer', body: 'The funnel page and the logo.', created_at: now, refs: {attachments: [
       A('f-funnel', 'page', {preview_url: '/visuals/tok-f-funnel-preview'}), A('f-logo', 'svg')]}},
   ];
-  const run = async ({viewport, hasTouch = false, label}) => {
+  const run = async ({viewport, hasTouch = false, label}: {viewport: {width: number; height: number}; hasTouch?: boolean; label: string}) => {
     const context = await browser.newContext({viewport, hasTouch, isMobile: hasTouch, serviceWorkers: 'block'});
     const page = await context.newPage();
-    const errors = [], visualReqs = [];
-    let config = {company_name: 'Acme', visuals: 'media', visual_origin: ''};
+    const errors: string[] = [], visualReqs: string[] = [];
+    let config: {company_name: string; visuals: string; visual_origin: string} = {company_name: 'Acme', visuals: 'media', visual_origin: ''};
     page.on('pageerror', e => errors.push(e.message));
-    const threads = threadsFake({bot: 'designer', messages: () => MESSAGES});
+    const threads = threadsFake({bot: 'designer', messages: () => MESSAGES as unknown as ThreadsMessage[]});
     await context.route('**/*', async route => {
       const req = route.request(), url = new URL(req.url()), p = url.pathname;
-      const json = body => route.fulfill({contentType: 'application/json', body: JSON.stringify(body)});
+      const json = (body: unknown) => route.fulfill({contentType: 'application/json', body: JSON.stringify(body)});
       if (p.startsWith('/visuals/')) {
         visualReqs.push(p);
         if (p.endsWith('-broken')) return route.fulfill({status: 404, body: ''});
@@ -46,7 +54,7 @@ const A = (id, kind, over = {}) => ({id, file_id: id, version: 1, ref: id + '@1'
       }
       if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
       const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/);
-      if (ui && fs.existsSync(uiFile(ui[1]))) return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]), 'utf8')});
+      if (ui && fs.existsSync(uiFile(ui[1]!))) return route.fulfill({contentType: ui[1]!.endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]!), 'utf8')});
       if (p === '/api/v2/config') return json(config);
       if (p === '/api/v2/system/storage') return route.fulfill({status: 503, contentType: 'application/json', body: '{"error":{"detail":"Not in this fixture"}}'});
       if (p === '/api/me') return json({id: 'ana', name: 'Ana', role: 'owner', cloud: true, config});
@@ -68,9 +76,9 @@ const A = (id, kind, over = {}) => ({id, file_id: id, version: 1, ref: id + '@1'
     });
     const task = {id: 't1', title: 'Launch page', owner_id: 'bot:designer', requester_id: 'human:ana', status: 'review', lane: 'company', rank: 1, labels: [], links: [],
       parts: {total: 0, done: 0}, version: 1, created_at: now, updated_at: now, body: 'Make the page.', attachments: []};
-    const tver = (id, mime) => ({n: 1, size: 1000, mime, sha256: 'x', created_at: now, by: 'bot:designer', comment_id: 'c1', note: null, ask: null, answers: [],
+    const tver = (id: string, mime: string) => ({n: 1, size: 1000, mime, sha256: 'x', created_at: now, by: 'bot:designer', comment_id: 'c1', note: null, ask: null, answers: [],
       width: null, height: null, duration_ms: null, media_state: 'none', url: `/api/v2/files/${id}?v=1`, poster_url: null, thumb_url: null});
-    const taskFiles = [['f-tchart', 'image'], ['f-tclip', 'video'], ['f-tnote', 'audio'], ['f-tpage', 'page'], ['f-tlogo', 'svg']].map(([id, kind]) =>
+    const taskFiles = ([['f-tchart', 'image'], ['f-tclip', 'video'], ['f-tnote', 'audio'], ['f-tpage', 'page'], ['f-tlogo', 'svg']] satisfies [string, Kind][]).map(([id, kind]) =>
       ({id, name: id + TYPES[kind][0], mime: TYPES[kind][1], current_version: 1, archived: false, versions: [tver(id, TYPES[kind][1])]}));
     const taskComments = [
       {id: 'c1', kind: 'say', sender_id: 'bot:designer', body: 'Media attached.', created_at: now, answers: [],
@@ -100,13 +108,13 @@ const A = (id, kind, over = {}) => ({id, file_id: id, version: 1, ref: id + '@1'
         preview_url: '/visuals/tok-x-broken', current_version: 1};
       document.body.append(root);
       root.innerHTML = visualCardsHTML([f], {key: 'k'});
-      const img = root.querySelector('img.vcard-preview');
+      const img = root.querySelector<HTMLImageElement>('img.vcard-preview')!;
       for (let i = 0; !img.hidden && i < 100; i++) await new Promise(r => setTimeout(r, 20));
       const hiddenAfterError = img.hidden;
-      root.querySelector('figure.vcard').dataset.mark = 'kept';
+      root.querySelector<HTMLElement>('figure.vcard')!.dataset.mark = 'kept';
       visualSwap(root, visualCardsHTML([{...f, preview_url: '/visuals/tok-x.2'}], {key: 'k'}));
-      const now = root.querySelector('figure.vcard'), out = [hiddenAfterError, now.dataset.mark, now.querySelector('img.vcard-preview').getAttribute('src'),
-        now.querySelector('img.vcard-preview').hidden];
+      const now = root.querySelector<HTMLElement>('figure.vcard')!, out = [hiddenAfterError, now.dataset.mark, now.querySelector('img.vcard-preview')!.getAttribute('src'),
+        now.querySelector<HTMLImageElement>('img.vcard-preview')!.hidden];
       root.remove();
       return out;
     }), [true, 'kept', ORIGIN + '/visuals/tok-x.2', false], `${label}: a kept Open card takes the renewed preview`);
@@ -115,7 +123,7 @@ const A = (id, kind, over = {}) => ({id, file_id: id, version: 1, ref: id + '@1'
     assert.equal(await m2.locator('.chat-files').count(), 0, `${label}: an Open card is not also a file chip`);
     await m2.locator('figure.vcard[data-kind="svg"] .vcard-open-btn').click();
     await page.waitForSelector('dialog#doc-viewer[open]');
-    assert.deepEqual(await page.evaluate(() => [VIEW.items[0].fileId, VIEW.items[0].version]), ['f-logo', 1], `${label}: Open shows the SVG in the file viewer`);
+    assert.deepEqual(await page.evaluate(() => [VIEW.items[0]!.fileId, VIEW.items[0]!.version]), ['f-logo', 1], `${label}: Open shows the SVG in the file viewer`);
     await page.evaluate(() => $('#doc-viewer').close());
 
     // ---- task conversation: the same; Open shows the page in the task's own file panel
@@ -137,14 +145,14 @@ const A = (id, kind, over = {}) => ({id, file_id: id, version: 1, ref: id + '@1'
 
     // ---- Settings: one read-only line, no switch, for each setup
     for (const [mode, words] of [['media', "Visuals: pages and SVG can't show inline. Add a visual address or Tico file hosting."],
-      ['hosted', 'Visuals: full, from Tico file hosting'], ['full', 'Visuals: full']]) {
+      ['hosted', 'Visuals: full, from Tico file hosting'], ['full', 'Visuals: full']] satisfies [string, string][]) {
       config = {company_name: 'Acme', visuals: mode, visual_origin: mode === 'full' ? 'https://files.acme.example' : ''};
       await page.goto(ORIGIN + '/?setup=' + mode + '#/settings');
       await page.locator('[data-settings-tab="general"]').click();
       const line = page.locator('#settings-visuals');
       await line.waitFor();
       assert.equal((await line.innerText()).replace(/\s+/g, ' ').trim(), words + ' How visuals show', `${label}: settings line for ${mode}`);
-      assert.match(await line.locator('a').getAttribute('href'), /docs\/visuals\.md/);
+      assert.match((await line.locator('a').getAttribute('href'))!, /docs\/visuals\.md/);
       assert.equal(await line.locator('input, button, select, [role="switch"]').count(), 0, `${label}: the line has no control`);
       assert.equal(await page.locator('#settings-general').getByText(/visual/i).count(), 1, `${label}: nothing else about visuals in settings, no switch`);
     }

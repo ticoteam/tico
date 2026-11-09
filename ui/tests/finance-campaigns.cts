@@ -5,19 +5,21 @@
 // owner; a change posts campaign_owner_set with team or teammate (blank posts none) and the card reads its campaigns
 // again; desktop and 390px with no sideways scroll (the table scrolls in its container).
 // TICO_UI_SHOTS=<dir> saves screenshots.
-const {chromium} = require('playwright');
-const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const path = require('node:path');
-const {mailboxesFake, open} = require('./support/mailboxes-fake.cjs');
-const {googleFake} = require('./support/google-fake.cjs');
+const {chromium}: typeof import('playwright') = require('playwright');
+const assert: typeof import('node:assert/strict') = require('node:assert/strict');
+const fs: typeof import('node:fs') = require('node:fs');
+const path: typeof import('node:path') = require('node:path');
+const {mailboxesFake, open} = require('./support/mailboxes-fake.cjs') as typeof import('./support/mailboxes-fake.cjs');
+const {googleFake} = require('./support/google-fake.cjs') as typeof import('./support/google-fake.cjs');
+
+type ActionBody = {kind: string; payload: {campaign_id: string; teammate?: string | undefined; team?: string | undefined}};
 
 const iso = '2026-11-05T12:00:00Z';
-const key = (id, name) => ({id, name, preview: 'dt_…01ab', access_level: 'read_write', expires_on: null, env: 'GOOGLE_ADS_DEVELOPER_TOKEN',
+const key = (id: string, name: string) => ({id, name, preview: 'dt_…01ab', access_level: 'read_write', expires_on: null, env: 'GOOGLE_ADS_DEVELOPER_TOKEN',
   username: '', stored: true, created_by: 'human:ana', created_at: iso, last_used_at: null, last_used_by: ''});
 
 function fake() {
-  const state = {writes: [], campaigns: [
+  const state: {writes: {method: string; path: string; body: ActionBody}[]; campaigns: {id: string; name: string; platform: string; ad_account: {id: string; name: string}; owner: {inherited: boolean; teammate?: string | undefined; team?: string | undefined}; month: {spend: number; clicks: number; conversions: number; per_conversion: number | null}; as_of: string}[]} = {writes: [], campaigns: [
     {id: 'camp-1', name: 'Brand search', platform: 'google_ads', ad_account: {id: 'ad-1', name: 'Consumer search'},
       owner: {inherited: true}, month: {spend: 50000, clicks: 420, conversions: 12.5, per_conversion: 4000}, as_of: iso},
     {id: 'camp-2', name: 'Rental remarketing', platform: 'google_ads', ad_account: {id: 'ad-1', name: 'Consumer search'},
@@ -38,7 +40,7 @@ function fake() {
     defaults: {manager: 'team_expenses', member: 'own_expenses', manager_payroll: 'totals'}, view_version: 'v1', private_lines: [],
     can_view_as: false, can_edit_defaults: false};
   const totals = () => ({spend: 76000, clicks: 510, conversions: 12.5, per_conversion: 6080});
-  const answer = (p, method, body) => {
+  const answer = (p: string, method: string, body: ActionBody) => {
     if (p === '/api/v2/finance/ad-accounts' && method === 'GET') return structuredClone(fin);
     if (p === '/api/v2/finance/campaigns' && method === 'GET') return {month: '2026-11', campaigns: structuredClone(state.campaigns), totals: totals(), as_of: iso};
     if (p === '/api/v2/finance/access' && method === 'GET') return structuredClone(access);
@@ -59,17 +61,17 @@ function fake() {
   return {state, answer};
 }
 
-const sideways = page => page.evaluate(() => [document.documentElement, document.querySelector('#main')].some(el => el && el.scrollWidth > el.clientWidth + 1));
-async function shot(page, name) {
+const sideways = (page: import('playwright').Page) => page.evaluate(() => [document.documentElement, document.querySelector('#main')].some(el => el && el.scrollWidth > el.clientWidth + 1));
+async function shot(page: import('playwright').Page, name: string) {
   const dir = process.env.TICO_UI_SHOTS;
   if (!dir) return;
   fs.mkdirSync(dir, {recursive: true});
   await page.screenshot({animations: 'disabled', path: path.join(dir, `finance-campaigns-${name}.png`), fullPage: true});
 }
-async function start(browser, width) {
+async function start(browser: import('playwright').Browser, width: number) {
   const f = fake();
   const got = await open(browser, mailboxesFake(), googleFake(), {hash: '#/tools/api/t-gads', width, height: width < 500 ? 844 : 900,
-    ready: '#tool-finance tr.fc-campaigns', extra: (p, method, body, url) => f.answer(p, method, body, url)});
+    ready: '#tool-finance tr.fc-campaigns', extra: (p, method, body, url) => (f.answer as (p: string, method: string, body: ActionBody, url: URL) => unknown)(p, method, body as ActionBody, url)});
   return {...got, f};
 }
 
@@ -94,16 +96,16 @@ async function start(browser, width) {
       await shot(page, `${tag}-before`);
       // Blank posts campaign_owner_set with no owner, and the campaigns read again.
       await card.locator('select[data-fc-owner="camp-2"]').selectOption('');
-      await page.waitForFunction(() => document.querySelector('#tool-finance select[data-fc-owner="camp-2"]')?.value === '');
-      assert.deepEqual(f.state.writes.at(-1).body, {kind: 'campaign_owner_set', payload: {campaign_id: 'camp-2'}}, `${tag}: blank write`);
+      await page.waitForFunction(() => (document.querySelector('#tool-finance select[data-fc-owner="camp-2"]') as HTMLSelectElement | null)?.value === '');
+      assert.deepEqual(f.state.writes.at(-1)!.body, {kind: 'campaign_owner_set', payload: {campaign_id: 'camp-2'}}, `${tag}: blank write`);
       // A team picked posts team; the card shows it after the reload.
       await card.locator('select[data-fc-owner="camp-1"]').selectOption('team:rental');
-      await page.waitForFunction(() => document.querySelector('#tool-finance select[data-fc-owner="camp-1"]')?.value === 'team:rental');
-      assert.deepEqual(f.state.writes.at(-1).body, {kind: 'campaign_owner_set', payload: {campaign_id: 'camp-1', team: 'rental'}}, `${tag}: team write`);
+      await page.waitForFunction(() => (document.querySelector('#tool-finance select[data-fc-owner="camp-1"]') as HTMLSelectElement | null)?.value === 'team:rental');
+      assert.deepEqual(f.state.writes.at(-1)!.body, {kind: 'campaign_owner_set', payload: {campaign_id: 'camp-1', team: 'rental'}}, `${tag}: team write`);
       // A teammate picked posts teammate.
       await card.locator('select[data-fc-owner="camp-2"]').selectOption('teammate:human:ana');
-      await page.waitForFunction(() => document.querySelector('#tool-finance select[data-fc-owner="camp-2"]')?.value === 'teammate:human:ana');
-      assert.deepEqual(f.state.writes.at(-1).body, {kind: 'campaign_owner_set', payload: {campaign_id: 'camp-2', teammate: 'human:ana'}}, `${tag}: teammate write`);
+      await page.waitForFunction(() => (document.querySelector('#tool-finance select[data-fc-owner="camp-2"]') as HTMLSelectElement | null)?.value === 'teammate:human:ana');
+      assert.deepEqual(f.state.writes.at(-1)!.body, {kind: 'campaign_owner_set', payload: {campaign_id: 'camp-2', teammate: 'human:ana'}}, `${tag}: teammate write`);
       await shot(page, `${tag}-after`);
       assert.equal(await sideways(page), false, `${tag}: no sideways scroll`);
       assert.deepEqual(seen.errors, [], `${tag}: page errors`);

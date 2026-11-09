@@ -1,37 +1,42 @@
 // Markdown files open inline: a link to a Tico file that is Markdown opens
 // formatted in a pop-up with Download; any other file still downloads. Fixtures only.
-const {chromium, webkit} = require('playwright');
-const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const path = require('node:path');
-const {html, uiFile} = require('./support/page.cjs');
-const {unrouted} = require('./support/routes.cjs');
-const {threadsFake} = require('./support/threads-fake.cjs');
+import type * as PageSupport from './support/page.cjs';
+import type * as Routes from './support/routes.cjs';
+import type * as ThreadsFake from './support/threads-fake.cjs';
+import type {ThreadsMessage} from './support/threads-fake.cjs';
+const {chromium, webkit}: typeof import('playwright') = require('playwright');
+const assert: typeof import('node:assert/strict') = require('node:assert/strict');
+const fs: typeof import('node:fs') = require('node:fs');
+const path: typeof import('node:path') = require('node:path');
+const {html, uiFile} = require('./support/page.cjs') as typeof PageSupport;
+const {unrouted} = require('./support/routes.cjs') as typeof Routes;
+const {threadsFake} = require('./support/threads-fake.cjs') as typeof ThreadsFake;
+interface MarkedWin { marked: {parse: (src: unknown) => string} }
 // Offline stand-in for marked (a CDN script): headings, lists, bold and [text](url) links.
-const markedStub = () => { window.marked = {parse: src => String(src).split(/\n\n+/).map(block => {
-  const inline = t => t.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+const markedStub = () => { (window as unknown as MarkedWin).marked = {parse: (src: unknown) => String(src).split(/\n\n+/).map(block => {
+  const inline = (t: string) => t.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
     .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2">$1</a>');
-  const h = block.match(/^(#{1,3}) (.*)$/); if (h) return `<h${h[1].length}>${inline(h[2])}</h${h[1].length}>`;
+  const h = block.match(/^(#{1,3}) (.*)$/) as [string, string, string] | null; if (h) return `<h${h[1].length}>${inline(h[2])}</h${h[1].length}>`;
   if (/^- /m.test(block)) return '<ul>' + block.split('\n').filter(l => l.startsWith('- ')).map(l => `<li>${inline(l.slice(2))}</li>`).join('') + '</ul>';
   return `<p>${inline(block)}</p>`; }).join('')}; };
 (async () => {
-  const browser = process.env.TICO_BROWSER === 'webkit' ? await webkit.launch({headless:true}) : await chromium.launch({channel:process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined,headless:true});
+  const browser = process.env.TICO_BROWSER === 'webkit' ? await webkit.launch({headless:true}) : await chromium.launch({channel:(process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined) as string,headless:true});
   try {
     const page = await browser.newPage({viewport:{width:390,height:844},serviceWorkers:'block',acceptDownloads:true});
-    const errors=[],uploads=[],sends=[],outside=[];let offline=true;let slow=0;
+    const errors: string[]=[],uploads: {path: string; body: string}[]=[],sends: (string | undefined)[]=[],outside: string[]=[];let offline=true;let slow=0;
     // serviceWorkers:'block' is Playwright's own script in every frame; a sandboxed frame refuses it.
     page.on('pageerror',e=>{if(!/Service worker is disabled because the context is sandboxed/i.test(e.message))errors.push(e.message);});
-    const bot=(name,display_name)=>({name,display_name,host:'keeper',status:'active',can_chat:true,schedules:[]});
+    const bot=(name: string,display_name: string)=>({name,display_name,host:'keeper',status:'active',can_chat:true,schedules:[]});
     const bots=[bot('legal','Legal'),bot('seo','AI SEO'),bot('cmo','AI CMO'),bot('finance','Finance'),bot('sales-ops','Sales Ops'),bot('designer','Designer')];
-    const said=bot=>bot==='legal'?'I need your **review** of these:\n\n- [review packet](https://tico-ui.test/api/v2/files/file-md-0001)\n- [storyboard](https://tico-ui.test/api/v2/files/file-png-0001)\n- [cover photo](https://tico-ui.test/assets/cover.png)\n- [walkthrough](https://youtu.be/dQw4w9WgXcQ)\n- [lease](https://tico-ui.test/api/v2/files/file-pdf-0001)':bot==='designer'?'Here is the [launch page](https://tico-ui.test/api/v2/files/file-html-0001); the [style guide](https://evil.test/guide.html) is on the web.':bot==='finance'?'I gave Inbox [quote instructions](https://tico-ui.test/tasks/979a861b-a309-43db-a443-732a3674de81). See [goals](https://tico-ui.test/#/goals) and [the lender](https://lender.example/).':'Hello from '+bot;
-    const fakes=Object.fromEntries(bots.map(b=>[b.name,threadsFake({bot:b.name,messages:[{id:'m-'+b.name,sender_id:'bot:'+b.name,body:said(b.name)}]})]));
+    const said=(bot: string)=>bot==='legal'?'I need your **review** of these:\n\n- [review packet](https://tico-ui.test/api/v2/files/file-md-0001)\n- [storyboard](https://tico-ui.test/api/v2/files/file-png-0001)\n- [cover photo](https://tico-ui.test/assets/cover.png)\n- [walkthrough](https://youtu.be/dQw4w9WgXcQ)\n- [lease](https://tico-ui.test/api/v2/files/file-pdf-0001)':bot==='designer'?'Here is the [launch page](https://tico-ui.test/api/v2/files/file-html-0001); the [style guide](https://evil.test/guide.html) is on the web.':bot==='finance'?'I gave Inbox [quote instructions](https://tico-ui.test/tasks/979a861b-a309-43db-a443-732a3674de81). See [goals](https://tico-ui.test/#/goals) and [the lender](https://lender.example/).':'Hello from '+bot;
+    const fakes=Object.fromEntries(bots.map(b=>[b.name,threadsFake({bot:b.name,messages:[{id:'m-'+b.name,sender_id:'bot:'+b.name,body:said(b.name)}] as unknown as ThreadsMessage[]})] as const));
     await page.context().route('**/*',route=>{
       const url=new URL(route.request().url()),p=url.pathname;
       if(url.hostname==='evil.test'){outside.push(url.href);return route.fulfill({contentType:'text/html',body:'<p>outside</p>'});}
       if(/\/marked\.min\.js$/.test(p))return route.fulfill({contentType:'application/javascript',body:`(${markedStub})()`});
-      const json=body=>route.fulfill({contentType:'application/json',body:JSON.stringify(body)});
+      const json=(body: unknown)=>route.fulfill({contentType:'application/json',body:JSON.stringify(body)});
       if(p==='/')return route.fulfill({contentType:'text/html',body:html});
-      const ui=p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/);
+      const ui=p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/) as [string, string] | null;
       if(ui){
         const file=uiFile(ui[1]);
         if(fs.existsSync(file))return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript',body:fs.readFileSync(file,'utf8')});
@@ -51,13 +56,13 @@ const markedStub = () => { window.marked = {parse: src => String(src).split(/\n\
           +'<div><template shadowrootmode="open"><a href="https://evil.test/shadow">Shadow link</a></template></div>'
           +'<iframe srcdoc="&lt;a href=&quot;https://evil.test/nested&quot;&gt;Nested link&lt;/a&gt;"></iframe>'
           +'<a href="https://evil.test/more">Read more</a><form action="https://evil.test/form"><button>Go</button></form></body></html>'});
-      const meta=p.match(/^\/api\/v2\/files\/([^/]+)\/meta$/);
+      const meta=p.match(/^\/api\/v2\/files\/([^/]+)\/meta$/) as [string, string] | null;
       if(meta)return json({id:meta[1],name:{'file-md-0001':'review-packet.md','file-png-0001':'storyboard.png','file-pdf-0001':'lease.pdf','file-html-0001':'launch.html'}[meta[1]]||'x',size:1200,content_type:'application/octet-stream'});
       if(p==='/assets/cover.png')return route.fulfill({contentType:'image/png',body:Buffer.from('89504e470d0a1a0a0000000d4948445200000001000000010806000000'+'1f15c4890000000d49444154789c6360000002000154a24f5d0000000049454e44ae426082','hex')});
       if(p==='/api/v2/files/file-pdf-0001')return route.fulfill({contentType:'application/octet-stream',headers:{'content-disposition':"attachment; filename*=UTF-8''lease.pdf"},body:'%PDF-1.4 fixture'});
       if(/youtube-nocookie\.com$/.test(url.hostname))return route.fulfill({contentType:'text/html',body:'<p>player</p>'});
       const who=decodeURIComponent(url.pathname+url.search).match(/t-(?:dm|home)-([\w-]+)|bot:([\w-]+)/);
-      const answer=(fakes[who?.[1]||who?.[2]]||fakes.legal)(p,url,route.request().method());
+      const answer=(fakes[(who?.[1]||who?.[2]) as string]||fakes.legal!)(p,url,route.request().method());
       if(answer!==undefined)return json(answer);
       if(p==='/api/v2/tasks/979a861b-a309-43db-a443-732a3674de81')return json({task:{id:'979a861b-a309-43db-a443-732a3674de81',title:'Seek written financing quotes',owner_id:'bot:inbox',requester_id:'bot:finance',status:'todo',lane:'company',labels:[],links:[],parts:{total:0,done:0},version:1,updated_at:new Date().toISOString()},children:[]});
       if(p==='/api/v2/tasks'){const owner=url.searchParams.get('owner');
@@ -69,7 +74,7 @@ const markedStub = () => { window.marked = {parse: src => String(src).split(/\n\
         return json({conversation:{id:'legal-chat'},message:{id:'m1',sender_id:'human:ana',body:'Hello offline',created_at:new Date().toISOString()}});
       }
       if(p==='/api/v2/uploads/chat/legal'){
-        uploads.push({path:p,body:route.request().postDataBuffer().toString()});
+        uploads.push({path:p,body:route.request().postDataBuffer()!.toString()});
         if(false)return route.fulfill({status:503,contentType:'application/json',body:JSON.stringify({error:{detail:'Fixture upload unavailable'}})});
         return json({conversation:{id:'legal-upload'},message:{id:'m1',sender_id:'human:ana',body:'Review this fixture',created_at:new Date().toISOString()}});
       }
@@ -85,7 +90,7 @@ const markedStub = () => { window.marked = {parse: src => String(src).split(/\n\
     const [saved]=await Promise.all([page.waitForEvent('download'),page.locator('#doc-viewer [data-doc-download]').click()]);
     assert.equal(saved.suggestedFilename(),'review-packet.md');
     await page.locator('#doc-viewer [data-doc-close]').click();
-    assert.equal(await page.evaluate(()=>document.querySelector('#doc-viewer').open),false);
+    assert.equal(await page.evaluate(()=>document.querySelector<HTMLDialogElement>('#doc-viewer')!.open),false);
     assert.equal(await page.locator('#doc-viewer').isVisible(),false,'a closed viewer is gone');
     // Images, video and other content open in the app too, in the same viewer,
     // with arrows through everything in the message; an image link gets a thumbnail in place.
@@ -101,7 +106,7 @@ const markedStub = () => { window.marked = {parse: src => String(src).split(/\n\
     assert.equal(await page.locator('#doc-viewer h2').innerText(),'storyboard.png');
     assert.equal(await page.locator('#doc-viewer .viewer-count').innerText(),'2 / 5');
     if (process.env.TICO_SCREENSHOT_DIR) await page.screenshot({path: path.join(process.env.TICO_SCREENSHOT_DIR, 'viewer-image-desktop.png')});
-    assert.equal(await page.evaluate(()=>document.querySelector('#doc-viewer').classList.contains('viewer-media')),true);
+    assert.equal(await page.evaluate(()=>document.querySelector('#doc-viewer')!.classList.contains('viewer-media')),true);
     const [png]=await Promise.all([page.waitForEvent('download'),page.locator('#doc-viewer [data-doc-download]').click()]);
     assert.equal(png.suggestedFilename(),'storyboard.png');
     await page.keyboard.press('ArrowRight');
@@ -120,7 +125,7 @@ const markedStub = () => { window.marked = {parse: src => String(src).split(/\n\
     assert.equal(await page.locator('#doc-viewer a[href^="blob:"]').count(),0,'no Open in the desktop app');
     await page.evaluate(()=>document.body.classList.remove('native'));
     await page.keyboard.press('Escape');
-    assert.equal(await page.evaluate(()=>document.querySelector('#doc-viewer').open),false);
+    assert.equal(await page.evaluate(()=>document.querySelector<HTMLDialogElement>('#doc-viewer')!.open),false);
     // Clicking the cover photo's thumbnail opens it at its place.
     await page.locator('.inline-thumb').nth(1).click();
     await page.waitForFunction(()=>document.querySelector('#doc-viewer .viewer-count')?.textContent==='3 / 5');
@@ -129,7 +134,7 @@ const markedStub = () => { window.marked = {parse: src => String(src).split(/\n\
     await page.setViewportSize({width:390,height:844});
     await page.locator('.inline-thumb').nth(1).click();
     await page.locator('#doc-viewer[open] .viewer-img').waitFor();
-    const box=await page.locator('#doc-viewer').boundingBox();
+    const box=(await page.locator('#doc-viewer').boundingBox())!;
     assert(box.width>=388 && box.height>=840,'full screen on a phone: '+JSON.stringify(box));
     if (process.env.TICO_SCREENSHOT_DIR) await page.screenshot({path: path.join(process.env.TICO_SCREENSHOT_DIR, 'viewer-image-phone.png')});
     await page.locator('#doc-viewer [data-doc-close]').click();
@@ -139,24 +144,24 @@ const markedStub = () => { window.marked = {parse: src => String(src).split(/\n\
     await page.setViewportSize({width:1200,height:800});
     await page.goto('https://tico-ui.test/#/bot/designer/dm');
     assert.equal(await page.getByRole('link',{name:'style guide'}).getAttribute('data-media'),null,'a web page stays a link');
-    await page.waitForFunction(()=>document.querySelector('a[href$="file-html-0001"]')?.dataset.media==='HTML');
+    await page.waitForFunction(()=>document.querySelector<HTMLElement>('a[href$="file-html-0001"]')?.dataset.media==='HTML');
     await page.getByRole('link',{name:'launch page'}).click();
     const frameEl=page.locator('#doc-viewer[open] .viewer-html iframe.html-view');
     await frameEl.waitFor();
     assert.equal(await page.locator('#doc-viewer h2').innerText(),'launch.html');
     assert.equal(await frameEl.getAttribute('sandbox'),'allow-popups allow-popups-to-escape-sandbox');
     assert.equal(await frameEl.getAttribute('src'),null,'never loaded from a Tico address');
-    const srcdoc=await frameEl.getAttribute('srcdoc');
+    const srcdoc=(await frameEl.getAttribute('srcdoc'))!;
     assert.match(srcdoc,/^<!DOCTYPE html><html><head><meta http-equiv="Content-Security-Policy" content="default-src 'none';/);
     assert.doesNotMatch(srcdoc,/refresh/);
     const inner=page.frameLocator('#doc-viewer .viewer-html iframe');
     await inner.locator('h1').waitFor();
     assert.equal(await inner.locator('h1').innerText(),'Launch page');
     assert.equal(await inner.locator('h1').evaluate(h=>getComputedStyle(h).color),'rgb(200, 0, 0)','its own styles apply');
-    assert.equal(await inner.locator('img[alt="dot"]').evaluate(i=>i.decode().then(()=>i.naturalWidth)),1,'an embedded picture shows');
+    assert.equal(await inner.locator('img[alt="dot"]').evaluate(i=>(i as HTMLImageElement).decode().then(()=>(i as HTMLImageElement).naturalWidth)),1,'an embedded picture shows');
     assert.equal(await inner.locator('a[href$="/more"]').getAttribute('target'),'_blank');
     // Links the plain rewrite would miss open a new tab too, and the frame stays on the file.
-    const popups=[];page.context().on('page',p=>popups.push(p));
+    const popups: import('playwright').Page[]=[];page.context().on('page',p=>popups.push(p));
     await inner.getByText('SVG link').click();
     await inner.getByText('Shadow link').click();
     await inner.frameLocator('iframe').getByText('Nested link').click();
