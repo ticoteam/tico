@@ -634,14 +634,14 @@ def guarded(c, auth, who, inner, function, columns=None, unseen=None):
         # run only discusses what is published.
         "lens_runs": "id IS NOT NULL" if owner else "on_draft=0",
         # The market graph is the company's, the same way goals are.
-        "market_entities": "1",
-        "market_edges": "1",
+        "entities": "1",
+        "entity_links": "1",
         "market_evidence": "1",
         "market_citations": "1",
         "market_insights": "1",
         # Page monitors and the weekly briefings (backend/market_watch.py, backend/market_briefing.py): public pages the
         # team watches and what the Librarian wrote about them, the market's to read.
-        "market_watches": "1",
+        "entity_watches": "1",
         "market_briefings": "1",
         # One history table (backend/migrations/0064_history_events.py), each row read as its subject is: a task's
         # with the task (and its words through the content gate), a goal's with the goal, the company's and the
@@ -1109,6 +1109,11 @@ def connect(path, c, auth, who, trace=None, seconds=None):
 
         source = index.c
         audience_cache = {}
+        from .api_tools import hidden_ids
+
+        # A tool `who` may not see leaves no event: not its own, not its keys', live or deleted (api_tools `visible`).
+        # Its rules need no credential administrators: an Only listed tool ignores them.
+        unseen_targets = hidden_ids(c, who, (), auth)
 
         def visible_file(fid):
             row = restricted_pages(source).get(fid)
@@ -1134,7 +1139,9 @@ def connect(path, c, auth, who, trace=None, seconds=None):
             "event": (
                 4,
                 lambda target, actor, ts, detail: (
-                    page_event_readable(source, auth, who, target, detail) and index.event(target, actor, ts, detail)
+                    target not in unseen_targets
+                    and page_event_readable(source, auth, who, target, detail)
+                    and index.event(target, actor, ts, detail)
                 ),
             ),
             "tag": (2, index.tag),
@@ -1257,12 +1264,12 @@ def connect(path, c, auth, who, trace=None, seconds=None):
             # These are visible in full (predicate 1). SQLite answers count(*) by reading
             # the base table with no view context; that read is the same rows as the view.
             if table in {
-                "market_entities",
-                "market_edges",
+                "entities",
+                "entity_links",
                 "market_evidence",
                 "market_citations",
                 "market_insights",
-                "market_watches",
+                "entity_watches",
                 "market_briefings",
                 "market_sizes",
                 "market_figures",

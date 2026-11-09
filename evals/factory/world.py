@@ -27,6 +27,8 @@ for name, value in {
 import time_machine
 
 START = dt.datetime(2026, 10, 20, 9, tzinfo=dt.timezone.utc)
+# A world's environment while it runs: no support tickets, no usage count, and an HQ address nothing answers on.
+OFFLINE = {"TICO_SUPPORT": "off", "TICO_TELEMETRY": "off", "TICO_HQ_URL": "http://127.0.0.1:9"}
 SECRET = "factory-sim"
 REPO = "acme/app"
 PRIMARY = (
@@ -75,6 +77,11 @@ class World:
 
     # ------------------------------------------------------------------ lifecycle
     def __enter__(self):
+        # Nothing leaves for Tico HQ: every run of a seed is the same install (its ids come from the seed), and its
+        # Health Monitor once filed a ticket to production HQ on every run. Put back on __exit__, so a test process that
+        # builds a world keeps its own settings afterwards.
+        self._environ = {name: os.environ.get(name) for name in OFFLINE}
+        os.environ.update(OFFLINE)
         self.travel = time_machine.travel(START, tick=False)
         self.clock = self.travel.start()
         # Ids break ties in the server's ordering (`ORDER BY created_at, id`): drawn from the run's own generator, the
@@ -198,6 +205,11 @@ class World:
             self.client.__exit__(*exc)
         self.travel.stop()
         uuid.uuid4 = self._uuid4
+        for name, value in self._environ.items():
+            if value is None:
+                os.environ.pop(name, None)
+            else:
+                os.environ[name] = value
 
     def go_down(self):
         """The server stops: its API answers nothing until restart(). The database stays on disk, as a deploy or a crash

@@ -1,0 +1,5 @@
+{
+  "backend/tests/test_org_turns.py": {
+    "F841": 2
+  }
+}

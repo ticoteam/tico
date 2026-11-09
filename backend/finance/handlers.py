@@ -198,7 +198,7 @@ def named_reason(ctx: Ctx, who: str, fallback: str, result: Mapping[str, Any], d
     return str(recorded["template"]).format(*names, *[_card_label(card) for card in cards])
 
 
-def _budget_impact(ctx: Ctx, who: str, charges: list[tuple[L.Line, int]]) -> list[Result]:
+def budget_impact(ctx: Ctx, who: str, charges: list[tuple[L.Line, int]]) -> list[Result]:
     """For each budget the charges count against that `who` sees: remaining now and after. Budgets outside their view
     (a parent above a manager's teams) are left out; ones over private lines show no numbers."""
     at = dates.day(ctx.today)
@@ -281,7 +281,7 @@ def journal(ctx: Ctx, who: str, p: V.Payload) -> Plan:
             K.default_gate(ctx.org, who, "journal"),
             f"Reverse entry {entry_id}",
             undo,
-            {"budgets": _budget_impact(ctx, who, [(x, -x.amount) for x in L.reversal(lines)])},
+            {"budgets": budget_impact(ctx, who, [(x, -x.amount) for x in L.reversal(lines)])},
             {"date": when},
             {"amount": total},
         )
@@ -307,7 +307,7 @@ def journal(ctx: Ctx, who: str, p: V.Payload) -> Plan:
         K.default_gate(ctx.org, who, "journal"),
         f"Post a {total / 100:.2f} {ctx.book.base_currency} entry on {e.entry_date}: {e.memo}"[:200],
         apply,
-        {"budgets": _budget_impact(ctx, who, [(x, x.amount) for x in e.lines])},
+        {"budgets": budget_impact(ctx, who, [(x, x.amount) for x in e.lines])},
         facts={"amount": total, "accounts": sorted({ctx.accounts[x.account_id].code for x in e.lines})},
     )
 
@@ -349,7 +349,7 @@ def categorize(ctx: Ctx, who: str, p: V.Payload) -> Plan:
         from .documents import retagged
 
         for row, old, new in changes:
-            SL.set_line_tags(ctx.c, row, old, new, who, ctx.at)
+            SL.set_line_tags(ctx.c, row, old, new, who, ctx.at, team_of=ctx.org.team_of)
             retagged(ctx, row, old, new)  # the cash view's attribution follows the tags
         posting.touched(ctx, [c for c, _ in charges], who)
         return {"lines": len(changes)}
@@ -358,7 +358,7 @@ def categorize(ctx: Ctx, who: str, p: V.Payload) -> Plan:
         K.default_gate(ctx.org, who, "categorize"),
         f"Tag {len(changes)} line(s)",
         apply,
-        {"budgets": _budget_impact(ctx, who, charges)},
+        {"budgets": budget_impact(ctx, who, charges)},
         facts={"amount": total},
     )
 

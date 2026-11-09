@@ -3,14 +3,15 @@
 # non-zero exit if one fails. The checks run in parallel; each runs only when its inputs changed.
 #   scripts/check.sh          what changed since the merge-base with origin/main: committed, uncommitted and new files
 #   scripts/check.sh --all    every tracked file, every check (what CI's static job runs on every pull request)
-# The baselines (ruff, tsc, Biome, the API routes, the pytest ignores) are compared with origin/main, as CI compares a
-# pull request with its base, so `git fetch origin main` first; the pre-push hook does. `git config core.hooksPath
-# .githooks` runs this, and the branch conflict check, on every push. CONTRIBUTING.md lists where this differs from CI.
+# The baselines (ruff, tsc, Biome, the API routes, UI strict, the pytest ignores) are compared with origin/main, as CI
+# compares a pull request with its base, so `git fetch origin main` first; the pre-push hook does. `git config
+# core.hooksPath .githooks` runs this, and the branch conflict check, on every push. CONTRIBUTING.md lists where this
+# differs from CI.
 # Checks: lint.sh (ruff baseline and ruff format), shell_lint.sh (shellcheck), actionlint (workflows), migration order,
-# check_ui_types.sh (generated API types, tsc), the OpenAPI document (backend.openapi_v2 --check), check_ui_lint.sh
-# (Biome), check_ui_routes.sh (API paths),
-# check_wire_contract.py (runner wire contract), check_types.sh (pyright on the boundary modules), and cargo fmt for the
-# Rust crates scripts/rust_checks.sh formats (the merge queue runs that one; the static job does not).
+# check_ui_types.sh (generated API types, tsc), check_ui_strict.py (every UI script TypeScript, strict ratchet), the
+# OpenAPI document (backend.openapi_v2 --check), check_ui_lint.sh (Biome), check_ui_routes.sh (API paths),
+# check_wire_contract.py (runner wire contract), check_types.sh (basedpyright on the backend against its baseline), and
+# cargo fmt for the Rust crates scripts/rust_checks.sh formats (the merge queue runs that one; the static job does not).
 set -uo pipefail
 cd "$(dirname "$0")/.." || exit 2
 
@@ -64,6 +65,7 @@ touched() { [ "$ALL" = 1 ] || grep -qE "$1" <<< "$TOUCHED"; }
 JOB_DIR=$(mktemp -d "${TMPDIR:-/tmp}/tico-check.XXXXXX")
 trap 'rm -rf "$JOB_DIR"' EXIT
 ENTRIES=()  # "S|name|reason" for a skipped check, "J|n" for job n
+UI_TYPES_JOB=""  # the ui types check's job number, once it is started
 NAMES=()
 PIDS=()
 
@@ -83,6 +85,14 @@ job() {  # NAME COMMAND...: starts it in the background; its result is printed o
   ) &
   PIDS+=("$!")
   ENTRIES+=("J|$n")
+}
+
+# shellcheck disable=SC2329  # job calls it by name
+after() {  # JOB COMMAND...: waits for job number JOB to finish, then runs the command (it reads what that job writes)
+  local n=$1
+  shift
+  while [ ! -f "$JOB_DIR/$n.status" ]; do sleep 0.2; done
+  "$@"
 }
 
 # The Rust crates rust_checks.sh formats, and its toolchain. A crate listed as pending reports but does not fail.
@@ -113,7 +123,8 @@ rust_fmt() {  # CRATE: cargo fmt --check as rust_checks.sh runs it
 
 # 1. Python lint, as lint.sh runs it in CI: the ruff baseline (counts only go down, against origin/main), the pytest
 # ignore count, and ruff format over the whole repository. The ruff settings and the pytest config are inputs too.
-if touched '\.pyi?$|^ruff(-baseline)?\.toml$|^ruff-baseline-counts\.json$|^pytest\.ini$|^scripts/(lint|lint_baseline|pytest_warning_ignores)\.(sh|py)$'; then
+# lint.sh also runs pr_checks.py smoke-check, which reads the smoke set and the browser runner's core scripts.
+if touched '\.pyi?$|^ruff\.toml$|^baselines/ruff/|^pytest\.ini$|^scripts/(lint|lint_baseline|pytest_warning_ignores|baseline_files)\.(sh|py)$|^scripts/queue-smoke\.json$|^scripts/ui-tests\.cjs$|^ui/tests/.*\.cjs$'; then
   job "lint (ruff baseline, format)" env LINT_BASE_REF="$ratchet" bash scripts/lint.sh
 else
   skip "lint (ruff baseline, format)" "no Python, ruff or pytest config changed"
@@ -171,6 +182,7 @@ if [ "$rust_any" = 0 ]; then skip "rust fmt" "no Rust crate changed"; fi
 
 # 6. The UI's generated API types (the check imports the backend) and tsc over the UI, as CI runs check_ui_types.sh.
 if touched '\.pyi?$|^ui/|^scripts/(gen_ui_types\.py|check_ui_types\.sh|ui_baseline\.py)$'; then
+  UI_TYPES_JOB=${#NAMES[@]}
   job "ui types (tsc, API types)" bash scripts/check_ui_types.sh ${RATCHET_ARGS[@]+"${RATCHET_ARGS[@]}"}
 else
   skip "ui types (tsc, API types)" "no UI, Python or API schema change"
@@ -181,6 +193,24 @@ if touched '\.pyi?$|^docs/openapi/|^scripts/json_merge\.py$'; then
   job "openapi document (v2.json)" python3 -m backend.openapi_v2 --check
 else
   skip "openapi document (v2.json)" "no Python or OpenAPI file changed"
+fi
+
+# 6c. Every UI script is TypeScript, and every .ts file type-checks strictly (scripts/check_ui_strict.py).
+# Its tsc reads ui/types/api.d.ts, which the ui types check writes from the backend's routes (so a Python change can
+# break a .ts file), and it starts once that check has finished.
+if touched '\.pyi?$|^ui/|^scripts/(check_ui_strict|ui_baseline|gen_ui_types)\.py$'; then
+  strict=(python3 scripts/check_ui_strict.py ${RATCHET_ARGS[@]+"${RATCHET_ARGS[@]}"})
+  if [ -n "$UI_TYPES_JOB" ]; then strict=(after "$UI_TYPES_JOB" "${strict[@]}"); fi
+  job "ui strict (TypeScript, strict ratchet)" "${strict[@]}"
+else
+  skip "ui strict (TypeScript, strict ratchet)" "no UI file changed"
+fi
+
+# 6d. A check that picks UI source by a .js suffix alone stops covering each converted .ts file. Text only, a second.
+if touched '\.(py|sh|cjs|js|ts)$'; then
+  job "ui source suffixes" python3 scripts/check_ui_source_suffixes.py
+else
+  skip "ui source suffixes" "no script or source changed"
 fi
 
 # 7. Biome lint of the UI files, counted against ui/lint-baseline.json, as CI runs it.
@@ -201,12 +231,12 @@ fi
 # on every change rather than tracking its inputs.
 job "runner wire contract" python3 scripts/check_wire_contract.py
 
-# 10. Python types on the boundary modules in pyrightconfig.json. Pyright follows imports, so a change to any Python
-# file, or to the packages the venv installs, can change its result.
-if touched '\.pyi?$|^pyrightconfig\.json$|^scripts/check_types\.sh$|^backend/requirements[^/]*\.(txt|in)$'; then
-  job "boundary types (pyright)" bash scripts/check_types.sh
+# 10. Python types: basedpyright on pyrightconfig.json's include list, against its baseline and the strict-module
+# ratchet. Pyright follows imports, so a change to any Python file, or to the packages the venv installs, can change it.
+if touched '\.pyi?$|^pyrightconfig\.json$|^scripts/(check_types\.sh|check_pyright_ratchet\.py|pyright_baseline\.py|baseline_files\.py|pyright-legacy-modules\.txt)$|^baselines/pyright/|^backend/requirements[^/]*\.(txt|in)$'; then
+  job "types (basedpyright baseline)" env PYRIGHT_BASE_REF="$ratchet" bash scripts/check_types.sh
 else
-  skip "boundary types (pyright)" "no Python or type config changed"
+  skip "types (basedpyright baseline)" "no Python or type config changed"
 fi
 
 # Wait for each check in order and print its line; a failure shows its output.

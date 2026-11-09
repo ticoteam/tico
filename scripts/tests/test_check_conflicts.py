@@ -103,6 +103,18 @@ def test_a_conflicting_branch_fails_and_names_the_file(remotes):
     assert "git rebase origin/main" in done.stderr
 
 
+def test_the_local_json_merge_driver_does_not_hide_a_text_conflict(remotes):
+    # GitHub ignores local merge drivers, so a file .gitattributes gives the tico-json driver still conflicts here.
+    origin, seed, dev = remotes
+    (dev / ".gitattributes").write_text("a.txt merge=tico-json\n")
+    git(dev, "config", "merge.tico-json.driver", "cp %B %A")  # a driver that would always merge cleanly
+    diverge(seed, origin, dev)
+    git(dev, "fetch", "-q", "origin", "main")
+    done = check(dev, "--base", "origin/main", "--head", "feature")
+    assert done.returncode == 1, done.stdout + done.stderr
+    assert "  a.txt" in done.stderr
+
+
 def test_a_branch_that_merges_cleanly_passes(remotes):
     origin, seed, dev = remotes
     git(dev, "checkout", "-q", "-b", "feature")
@@ -144,6 +156,16 @@ def test_the_hook_refuses_a_push_that_conflicts_and_fetches_main_first(remotes):
     assert "conflicts with origin/main" in done.stderr
     assert "push stopped" in done.stderr
     assert git(origin, "ls-remote", ".", "refs/heads/feature").stdout == ""
+
+
+def test_a_tag_pushed_to_a_branch_is_checked_like_a_branch(remotes):
+    origin, seed, dev = remotes
+    install_hook(dev)
+    diverge(seed, origin, dev)
+    git(dev, "tag", "lightweight")
+    done = push(dev, "origin", "lightweight:refs/heads/feature")
+    assert done.returncode != 0, done.stdout + done.stderr
+    assert "conflicts with origin/main" in done.stderr
 
 
 def test_the_hook_pushes_a_clean_branch(remotes):

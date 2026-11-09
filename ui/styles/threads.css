@@ -1,5 +1,5 @@
 /* ui/styles/threads.css — Threads: the sidebar rows, the Threads page, one thread's flat timeline and its bots' status, the
-   composer under it, and the New thread / Members dialogs. Markup: ui/app/threads.js, thread-view.js, threads-page.js. */
+   composer under it, and the New thread / Members dialogs. Markup: ui/app/threads.ts, thread-view.js, threads-page.js. */
 
 /* a thread's mark where it has no avatar (a Home or a DM shows a face) */
 .th-mark{width:18px;height:18px;font-size:17px}
@@ -43,19 +43,20 @@
 .th-msg:hover .th-cont-time,.th-msg:focus-within .th-cont-time{opacity:1}
 .th-main{flex:1;min-width:0}
 .th-head{display:flex;align-items:baseline;gap:var(--s2);min-width:0;font-size:var(--t-sm)}
-.th-who{font-weight:600;color:var(--ink)}
+.th-who{display:inline-block;min-height:24px;line-height:24px;font-weight:600;color:var(--ink)}
 a.th-who:hover{text-decoration:underline}
-.th-bot{align-self:center;padding:1px 5px;border-radius:4px;background:var(--surface2);color:var(--muted);font-size:10px;font-weight:700;letter-spacing:.04em;line-height:1.3}
+.th-bot{align-self:center;padding:1px 5px;border-radius:4px;background:var(--surface2);color:var(--muted);font-size:var(--t-xs);font-weight:600;letter-spacing:.02em;line-height:1.3}
 .th-head time,.th-edited{color:var(--muted);font-size:var(--t-xs)}
 .th-body{overflow-wrap:anywhere}
+@media (max-width:760px){.th-who{padding-block:10px;margin-block:-10px}.pill-thread .p-text{box-sizing:border-box;min-height:44px;padding-block:11px;line-height:22px}.th-body,.th-body.md{font-size:16px}.pill-thread .p-icon{min-width:44px;height:44px;padding:0 12px}}   /* messages are reading text on a phone */
 .th-body.md>:first-child{margin-top:0}.th-body.md>:last-child{margin-bottom:0}
 .th-main>.run-did{margin:2px 0 4px}
 .th-deleted .th-body{font-style:italic}
 /* a quoted message, scrolled to */
 .th-flash,.th-flash:hover{background:var(--accent-quiet);transition:background .3s}
 /* .th-new / .th-new-quiet mark unread messages for read tracking; one "New" line goes above the first, never a bar per row. */
-.th-newline{display:flex;align-items:center;gap:10px;padding:10px 6px 4px;color:var(--fail);font-size:var(--t-xs);font-weight:600}
-.th-newline::before{content:"";flex:1;height:1px;background:var(--fail);opacity:.55}
+.th-newline{display:flex;align-items:center;gap:10px;padding:10px 6px 4px;color:var(--accent);font-size:var(--t-xs);font-weight:600}
+.th-newline::before{content:"";flex:1;height:1px;background:var(--accent);opacity:.55}
 .th-fold{display:flex;align-items:center;gap:var(--s2);padding:6px;color:var(--muted);font-size:var(--t-sm)}
 .th-fold::before{content:"";width:18px;height:1px;background:var(--line)}
 a.th-more:hover{color:var(--ink);text-decoration:none}
@@ -149,9 +150,7 @@ a.src-name:hover{color:var(--ink);text-decoration:underline}
 .th-held-rule{margin-top:4px;padding-left:8px;border-left:2px solid var(--wait);color:var(--muted);font-size:var(--t-sm)}
 .th-held-acts{display:flex;flex-wrap:wrap;gap:var(--s1);margin-top:6px}
 
-/* above the composer, each its own row: the Ask's question, then the message being answered */
-.thv-peek-slot{margin-bottom:6px}
-.thv-peek-slot:not(:has(.ask-on)){display:none}
+/* above the composer: the message being answered */
 .thv-replying{display:flex;align-items:center;gap:6px;margin-bottom:6px;padding:4px 4px 4px 10px;border-left:2px solid var(--accent);border-radius:0 8px 8px 0;background:var(--surface2);color:var(--muted);font-size:var(--t-sm)}
 .thv-replying[hidden]{display:none}
 .thv-replying-q{display:flex;flex:1;align-items:center;gap:6px;min-width:0}
@@ -179,7 +178,7 @@ a.src-name:hover{color:var(--ink);text-decoration:underline}
 /* a phone's bot page has the composer on the bottom edge (ui/styles/chat.css): a little room under it. The bot being
    talked to sits at the bar's left edge, before Attach; a tap opens the switcher (org-fan.js). A computer has none. */
 @media (max-width:760px){.thv-attach-menu{right:auto;left:0}#bot-thread .thv-composer{padding-bottom:max(6px,env(safe-area-inset-bottom))}
-  .pill-thread .p-pill>.p-bot{display:inline-flex;order:-2;flex:none;width:36px;height:36px;padding:0;border:0;background:none;border-radius:50%;align-items:center;justify-content:center;cursor:pointer;-webkit-tap-highlight-color:transparent}}
+  .pill-thread .p-pill>.p-bot{display:inline-flex;order:-2;flex:none;width:44px;height:44px;margin:-4px 0;padding:0;border:0;background:none;border-radius:50%;align-items:center;justify-content:center;cursor:pointer;-webkit-tap-highlight-color:transparent}}
 .thv-composer .p-cmd[hidden]{display:none}
 .thv-mentions{position:absolute;top:auto;left:0;bottom:calc(100% + 6px);z-index:5;min-width:220px;max-height:240px;overflow-y:auto}
 .thv-mentions [aria-selected="true"]{background:var(--surface2)}
@@ -197,20 +196,21 @@ a.src-name:hover{color:var(--ink);text-decoration:underline}
 
 /* the bot page: Home and DM fill the pane; the link to every thread with the bot sits quietly above */
 #main.bot-chat-layout #pane-chat>.bot-thread{display:flex;flex:1;flex-direction:column;min-height:0;width:100%;max-width:var(--read-width);margin:0 auto}
-/* Incognito (a private DM, not the team's Home) above the thread on a desktop; narrower, the top line's tabs do it */
-.bot-talk-bar{display:none;align-items:center;justify-content:flex-end;gap:8px;margin:0 0 4px}
 /* the thread's call, Members and menu, in the page's top line */
 .bot-top-acts{order:3;flex:none;align-self:center;display:inline-flex}
 .bot-top-acts[hidden]{display:none}
 .bot-top-acts .thv-titleline{gap:4px;padding:0}
 @media (max-width:1099px){.bot-top-acts{order:2}}
-#main.bot-chat-layout #pane-chat>.bot-talk-bar{width:100%;max-width:var(--read-width);margin-left:auto;margin-right:auto}
-.bot-incognito{display:inline-flex;align-items:center;gap:5px;padding:3px 8px;border:0;border-radius:7px;background:none;color:var(--muted);font:inherit;font-size:var(--t-sm);cursor:pointer}
-.bot-incognito .nav-icon{font-size:16px}
+/* Incognito (a private DM, not the team's Home): a lock in the top line beside More; it says Incognito only while on */
+.bot-incognito{order:3;flex:none;align-self:center;display:inline-flex;align-items:center;justify-content:center;gap:5px;min-width:32px;height:32px;padding:0 6px;border:0;border-radius:6px;background:none;color:var(--muted);font:inherit;font-size:var(--t-sm);cursor:pointer}
+.bot-incognito[hidden],.bot-incognito:not([aria-pressed=true]) .bi-label{display:none}
+.bot-incognito .nav-icon{font-size:18px}
+@media (max-width:1099px){.bot-incognito{order:2}}
+.pill-thread .p-pill{border-color:#656766}   /* the composer's edge reads against the page (3:1) */
+@media (max-width:760px){.bot-incognito{min-width:44px;height:44px}}
 .bot-incognito:hover{color:var(--ink);background:var(--hover)}
 .bot-incognito[aria-pressed=true]{color:var(--ink);background:var(--raised);box-shadow:0 1px 3px rgba(0,0,0,.12)}
 .bot-incognito:focus-visible{outline:var(--focus-ring);outline-offset:var(--focus-offset)}
-@media (min-width:1100px){.bot-talk-bar{display:flex}}
 
 /* a person's or a team's Home */
 .home-card .thv-head{display:none}

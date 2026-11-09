@@ -50,6 +50,8 @@ SUBCOMMANDS = [
     "assistant",
     "tag",
     "task",
+    "requirements",
+    "requirement",
     "replay",
     "goal",
     "kpi",
@@ -101,12 +103,14 @@ SUBCOMMANDS = [
     "agent",
     "human",
     "group",
+    "setup",
     "api",
     "computer",
     "credential",
     "slack",
     "support",
     "finance",
+    "directory",
     "task-manager",
     "maintenance",
     "roadmap",
@@ -1891,11 +1895,11 @@ def test_growth_cli_flags_become_the_api_bodies_the_playbooks_rely_on(monkeypatc
     )
 
 
-def test_finance_card_fill_takes_the_arguments_its_tool_takes():
-    p = hubcli.parser()
-    args = hubcli.parse(p, ["finance", "card-fill", "crd_1", "--merchant", "example.com", "--amount", "1000"])
-    assert (args.fn, args.card_id, args.merchant, args.amount) == ("finance card-fill", "crd_1", "example.com", 1000)
-    assert hubcli.parse(p, ["finance", "card-fill"]).card_id is None
+def test_finance_has_no_card_fill_command():
+    """Card fill is not offered to bots (hubtools.UNLISTED), so the CLI has no command for it either."""
+    assert "card-fill" not in hubcli.__doc__
+    with pytest.raises(SystemExit):
+        hubcli.parse(hubcli.parser(), ["finance", "card-fill"])
 
 
 def test_the_retired_gtm_and_growth_idea_lines_run_their_new_commands_with_a_notice(monkeypatch, capsys):

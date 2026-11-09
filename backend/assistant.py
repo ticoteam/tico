@@ -281,6 +281,9 @@ NEVER = [
         # credential or a grant is here, by its canonical path (`admits_on_turn` renames the old spellings first), and
         # tests/test_assistant_acts_as_you.py walks app.routes so a new one cannot slip past.
         ("POST", r"/api/v2/me/tokens(/[^/]+/revoke)?"),
+        # The setup handoff makes the owner's personal token from a one-time secret, and its switch revokes that token
+        # (backend/setup_handoff.py): a token's issue and its end, so the person's, never a chat's.
+        ("POST", r"/api/v2/setup/handoff(/off)?"),
         ("POST", r"/api/v2/service-keys(/[^/]+/revoke)?"),
         # A person's skills helper token (backend/skill_devices.py): connecting, revoking and its reporting are the person's.
         (None, r"/api/v2/skills/devices(/.*)?"),
@@ -1465,6 +1468,32 @@ PERSON_ONLY_FIELDS = ("replace_lost_key",)
 # step that fails does not stop the rest.
 BATCH_PATH = "/api/v2/assistant/batch"
 MAX_BATCH = 100
+
+
+def pending_on_task(c, task_id):
+    """Whether a Confirm card still waits for a person's click on this task: a change, comment, link or answer on
+    `/api/v2/tasks/<id>`, alone or as a step of a bulk card, proposed within the day it may still run. Two seeks of the
+    pending cards' path index (migration 20261108191356); a database without the table has none."""
+    if not H._has_table(c, "assistant_actions"):
+        return False
+    base = "/api/v2/tasks/" + str(task_id)
+    since = H.shift(H.now(), hours=-CONFIRM_TTL_H)
+    # `/` sorts just below `0`: the range holds the task's own path and every path under it, and a little more,
+    # which the exact test below leaves out.
+    for row in c.execute(
+        "SELECT path, body FROM assistant_actions WHERE status='pending' AND path>=? AND path<? AND created_at>=? "
+        "UNION ALL SELECT path, body FROM assistant_actions WHERE status='pending' AND path=? AND created_at>=?",
+        (base, base + "0", since, BATCH_PATH, since),
+    ):
+        paths = [row["path"]]
+        if row["path"] == BATCH_PATH:
+            try:
+                paths = [str(s.get("path") or "") for s in json.loads(row["body"] or "{}").get("actions") or ()]
+            except (TypeError, ValueError, AttributeError):
+                paths = []
+        if any(p == base or p.startswith(base + "/") for p in paths):
+            return True
+    return False
 
 
 def batch_steps(body):

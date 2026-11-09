@@ -2,7 +2,8 @@
 // Threads link and its Catch up count, the thread rail (Pinned, Threads, Find, Browse) beside one thread, the pin,
 // Catch up, New thread, a thread's flat timeline (an older server's sub-threads drawn flat, each reply quoting what it
 // answers), a message shown as "Checking…" until the server answers, a held message, the bot page's Home and DM, a person's Home,
-// New DM, a server without the rail, and a teammate who may see a bot but not read it getting no Home.
+// New DM, a server without the rail (its empty pane: the picture and New thread), and a teammate who may see a bot
+// but not read it getting no Home.
 // TICO_SCREENSHOT_DIR=<dir> also saves the screenshots.
 const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
@@ -146,10 +147,10 @@ async function open(browser, who, {phone = false, sse = null} = {}) {
     const req = route.request(), url = new URL(req.url()), p = url.pathname, method = req.method();
     const json = (body, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
     if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
-    const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|css))$/);
+    const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/);
     if (ui && fs.existsSync(uiFile(ui[1])))
       return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]), 'utf8')});
-    if (p.endsWith('.js')) return route.fulfill({contentType: 'application/javascript', body: ''});
+    if (/\.(?:js|ts)$/.test(p)) return route.fulfill({contentType: 'application/javascript', body: ''});
     if (p === '/api/me') return json(bob ? {id: 'bob', name: 'Bob', role: 'member', registered: true} : {id: 'ana', name: 'Ana', role: 'owner', registered: true});
     if (p === '/api/employees') return json([{name: 'ops', display_name: 'Ops', host: 'keeper', status: 'active', state: 'active', can_chat: true, schedules: [],
       my_access: bob ? {see: true, read: false, write: false} : {see: true, read: true, write: true}}]);
@@ -680,7 +681,7 @@ let browser = null;
     await page.goto('https://tico-ui.test/#/bot/ops');
     await page.getByText('Weekly numbers are in the doc.').waitFor();
     const tabs = await page.locator('#btabs [data-bt]').evaluateAll(els => els.map(b => b.dataset.bt));
-    assert.ok(tabs.includes('home') && tabs.includes('dm'), 'Home and DM: ' + tabs);
+    assert.ok(tabs.includes('home') && !tabs.includes('dm'), 'one chat tab, Home; DM sits behind Incognito: ' + tabs);
     assert.ok(!tabs.includes('chat'));
     assert.equal(await page.locator('.bot-threads-link').count(), 0, 'no Threads with link on a Home');
     await shot(page, 'bot-home-desktop');
@@ -1049,7 +1050,7 @@ let browser = null;
     await page.goto('https://tico-ui.test/#/bot/ops');
     const tabs = page.locator('#btabs [data-bt]');
     await tabs.first().waitFor();
-    assert.deepEqual((await tabs.allInnerTexts()).slice(0, 2), ['Home', 'DM']);
+    assert.deepEqual((await tabs.allInnerTexts()).slice(0, 2), ['Chat', 'Tasks']);
     for (const width of [390, 320]) {
       await page.setViewportSize({width, height: 700});
       for (const box of await tabs.evaluateAll(els => els.map(el => el.getBoundingClientRect().toJSON()))) assert.ok(box.right <= width && box.height >= 36, `a tab at ${width}: ` + JSON.stringify(box));
@@ -1057,10 +1058,10 @@ let browser = null;
     }
     await page.setViewportSize({width: 390, height: 844});
     await shot(page, 'bot-tabs-phone');
-    await page.locator('#btabs [data-bt="dm"]').tap();
-    await page.waitForFunction(() => location.hash.endsWith('/dm') && document.querySelector('#btabs [data-bt="dm"]').getAttribute('aria-selected') === 'true');
-    await page.locator('#btabs [data-bt="home"]').tap();
-    await page.waitForFunction(() => document.querySelector('#btabs [data-bt="home"]').getAttribute('aria-selected') === 'true');
+    await page.locator('#bot-incognito').tap();
+    await page.waitForFunction(() => location.hash.endsWith('/dm') && document.querySelector('#bot-incognito').getAttribute('aria-pressed') === 'true');
+    await page.locator('#bot-incognito').tap();
+    await page.waitForFunction(() => document.querySelector('#bot-incognito').getAttribute('aria-pressed') === 'false');
     await page.getByText('Weekly numbers are in the doc.').waitFor();
 
     // A person's page starts a DM with them; your own does not offer one.
@@ -1196,6 +1197,44 @@ let browser = null;
     assert.equal(await page.locator('#tree [data-org="b:ops"] .tree-dm').textContent(), '2');
     assert.equal(await page.locator('#tree [data-org="p:bea"] .tree-dm').textContent(), '1');
     await page.locator('.tr-empty [data-tr-new]').waitFor();    // nothing pinned, nothing opened before: New thread
+    // The picture of a thread, its heading and its one sentence, then New thread, which still opens the dialog.
+    const empty = page.locator('.tr-empty');
+    assert.equal(await empty.locator('h2').innerText(), 'Talk with your team here');
+    assert.equal(await empty.locator('p').innerText(), 'Share conversations with your bots and anything else the team should see.');
+    const picture = await empty.locator('.tr-diagram').boundingBox();
+    assert.ok(picture && picture.width > 300 && picture.width <= 360, 'the picture is drawn, at most 360px wide: ' + JSON.stringify(picture));
+    await themed(page, 'empty');
+    // A narrower desktop window (the picture scales with its pane) and a very short one (844x260): the block starts on
+    // screen, its pane scrolls, and New thread can be scrolled into reach.
+    await page.setViewportSize({width: 844, height: 260});
+    // Wait until the pane has taken this window's height and overflows it, before measuring or scrolling it.
+    await page.waitForFunction(() => { const e = document.querySelector('.tr-empty'); return !!e && e.scrollHeight > e.clientHeight; });
+    const fit = await empty.locator('.empty-state').evaluate(e => ({top: Math.round(e.getBoundingClientRect().top),
+      picture: Math.round(e.querySelector('.tr-diagram').getBoundingClientRect().width),
+      pane: Math.round(e.parentElement.getBoundingClientRect().width)}));
+    assert.ok(fit.top >= 0 && fit.picture <= fit.pane, 'the block starts on screen, the picture fits its pane: ' + JSON.stringify(fit));
+    await empty.evaluate(e => { e.scrollTop = e.scrollHeight; });
+    assert.ok(await empty.locator('[data-tr-new]').evaluate(b => b.getBoundingClientRect().bottom <= innerHeight),
+      'New thread is in reach once the pane scrolls');
+    await empty.locator('[data-tr-new]').click();
+    await page.locator('#thread-new[open]').waitFor();
+    assert.ok(await sideways(page) <= 844, 'no sideways scroll');
+    await page.locator('#thread-new .nt-x').click();
+    await page.waitForFunction(() => !document.querySelector('#thread-new')?.open);
+    assert.deepEqual(seen.errors, []);
+    await page.close();
+    railOff = false;
+  }
+  // On a phone the pane is not drawn with no thread open: the rail is the screen, so there is no picture there. railOff
+  // is the case above (nothing pinned, nothing opened), where a desktop window would draw the picture.
+  {
+    railOff = true;
+    const {page, seen} = await open(browser, 'ana', {phone: true});
+    await page.goto('https://tico-ui.test/#/threads');
+    await page.locator('#thread-rail [data-list="threads"] .tr-row[data-thread="t11"]').waitFor();
+    assert.equal(await page.locator('#thread-pane').isVisible(), false);
+    assert.equal(await page.locator('.tr-empty').count(), 0);
+    assert.ok(await sideways(page) <= 390, 'no sideways scroll on the rail');
     assert.deepEqual(seen.errors, []);
     await page.close();
     railOff = false;

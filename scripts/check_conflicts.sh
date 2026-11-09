@@ -30,7 +30,10 @@ if ! git rev-parse --verify --quiet "$head^{commit}" >/dev/null; then
 fi
 
 status=0
-out=$(git merge-tree --write-tree --name-only --no-messages "$base" "$head" 2>&1) || status=$?
+# GitHub merges as plain text and ignores local merge drivers (.gitattributes names tico-json for docs/openapi/v2.json),
+# so the custom driver is swapped for git's own text merge here: a clean local merge must mean a clean GitHub merge.
+out=$(git -c 'merge.tico-json.driver=git merge-file --quiet %A %O %B' \
+  merge-tree --write-tree --name-only --no-messages "$base" "$head" 2>&1) || status=$?
 case $status in
   0) exit 0 ;;
   1)

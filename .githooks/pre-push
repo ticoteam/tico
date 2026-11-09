@@ -12,9 +12,10 @@ heads=()
 refs=0
 if [ ! -t 0 ]; then
   # git gives one line per ref: <local ref> <local sha> <remote ref> <remote sha>. Deletions and tags carry no new commits.
-  while read -r local_ref local_sha _remote_ref _remote_sha; do
+  # A tag is told by where it lands (tag:refs/heads/x pushes a branch).
+  while read -r _local_ref local_sha remote_ref _remote_sha; do
     refs=$((refs + 1))
-    case $local_ref in refs/tags/*) continue ;; esac
+    case $remote_ref in refs/tags/*) continue ;; esac
     if [ "$local_sha" = "$zero" ]; then continue; fi
     heads+=("$local_sha")
   done

@@ -20,7 +20,7 @@ const BOT_DETAIL_TABS = ['info', 'rules', 'instructions', 'history', 'settings']
 // A bot's conversation is two threads: its Home (public, ui/app/thread-view.js) and the viewer's DM with it.
 const BOT_TABS = ['home', 'dm', 'tasks', ...BOT_DETAIL_TABS];
 const BOT_WORK_TABS = ['home', 'dm', 'tasks'];
-const BOT_TAB_LABELS = {home: 'Home', dm: 'DM', tasks: 'Tasks', info: 'Info'};
+const BOT_TAB_LABELS = {home: 'Home', dm: 'DM', tasks: 'Tasks', info: 'More'};
 // The assistant is talked to only on each person's own Assistant page (#/assistant), and its helpers take their work
 // from it: neither has a DM, and the assistant has no Home.
 const botTabs = slug => {
@@ -33,6 +33,7 @@ const botTabs = slug => {
 };
 const botLimited = e => !!e?.my_access && !e.my_access.read;
 const botPersonName = id => (S.people || []).find(p => p.id === id)?.name || settingsPersonName(id);
+/** @type {any} bridged: .ts files read it through botPageView() (ui/app/bot-page-view.ts); typed when this file converts */
 let BOT = null;
 function botStopped() {
   BOT?.settingsCleanup?.();
@@ -161,12 +162,13 @@ async function botGoalLoad(slug) {
   }
   const mine = (r?.goals || []).filter(goalLive).sort(goalRank);
   if (load !== BOT_GOAL_LOAD || BOT?.slug !== slug || !$('#bot-goal')) return;
-  botGoalRender(slug, r ? mine[0] || null : undefined, mine.length);
+  botGoalRender(slug, r ? mine : undefined);
 }
 // The Goals card under More is the bot's goals as plain lines, each edited in
 // place with the link icon for the goal it supports; the same goals the top line shows and the
 // bot reads.
 async function botGoalsCardLoad(slug) {
+  /** @type {[any, any]} */
   const [r, goals] = await Promise.all([v2Get(`/v2/goals?owner=${encodeURIComponent('bot:' + slug)}`), goalOptions()]);
   const host = $('#bot-goals-list');
   if (!host || BOT?.slug !== slug) return;
@@ -193,24 +195,40 @@ async function botGoalAdd(slug) {
   if (BOT?.slug !== slug) return;
   goalSheetOpen({goals}, {owner: 'bot:' + slug});
 }
-function botGoalRender(slug, g, count) {
+// The top line's goal: a target, the first goal cut to fit, and "+N" for the rest. A tap lists them all with
+// Add goal under them; no goal is the target and "Set goal", which opens the goal sheet.
+function botGoalRender(slug, goals) {
   const el = $('#bot-goal');
-  if (g === undefined) {
+  if (goals === undefined) {
     el.removeAttribute('data-status'); el.innerHTML = '';
     setTimeout(() => { if (BOT?.slug === slug && $('#bot-goal') && !$('#bot-goal').innerHTML) botGoalLoad(slug); }, 30000);
     return;
   }
-  if (!g) {
+  const icon = '<span class="nav-icon bot-goal-i" aria-hidden="true">target</span>';
+  if (!goals.length) {
     el.dataset.status = 'none';
-    el.innerHTML = '<a href="#" class="bot-goal-set" id="bot-goal-set">Set goal</a>';
-    $('#bot-goal-set').onclick = e => { e.preventDefault(); void botGoalAdd(slug); };
+    el.innerHTML = `<button type="button" class="bot-goal-main bot-goal-set" id="bot-goal-set">${icon}<span class="bot-goal-title">Set goal</span></button>`;
+    $('#bot-goal-set').onclick = () => void botGoalAdd(slug);
     return;
   }
+  const [g, ...rest] = goals;
   el.dataset.status = 'set';
-  el.innerHTML = `<a class="bot-goal-main" href="${GOALS}/${encodeURIComponent(g.id)}" data-goal-open="${esc(g.id)}" title="${esc(g.title)}${count > 1 ? ` (${count - 1} more under More)` : ''}">
-      <span class="bot-goal-title">${esc(g.title)}</span></a>`;
-  const a = el.querySelector('[data-goal-open]');
-  a.onclick = ev => { if (ev.metaKey || ev.ctrlKey || ev.shiftKey) return; ev.preventDefault(); openGoal(a.dataset.goalOpen); };
+  el.innerHTML = `<button type="button" class="bot-goal-main" id="bot-goal-btn" aria-haspopup="menu" aria-expanded="false"
+      aria-label="Goal: ${esc(g.title)}${rest.length ? `, ${rest.length} more` : ''}" title="${esc(goals.map(x => x.title).join('\n'))}">
+      ${icon}<span class="bot-goal-title">${esc(g.title)}</span>${rest.length ? `<span class="bot-goal-n">+${rest.length}</span>` : ''}</button>
+    <div class="tl-pop bot-goal-pop" id="bot-goal-pop" popover><div class="tl-menu" role="menu" aria-label="Goals">
+      ${goals.map(x => `<a class="tl-mi" role="menuitem" href="${GOALS}/${encodeURIComponent(x.id)}" data-goal-open="${esc(x.id)}" title="${esc(x.title)}"><span class="bot-goal-mi">${esc(x.title)}</span></a>`).join('')}
+      <button type="button" class="tl-mi" role="menuitem" data-goal-add><span class="nav-icon" aria-hidden="true">add</span>Add goal</button></div></div>`;
+  const btn = $('#bot-goal-btn'), pop = $('#bot-goal-pop');
+  btn.onclick = () => {
+    if (pop.matches(':popover-open')) { pop.hidePopover(); return; }
+    pop.showPopover(); tasksMenuPlace(pop, btn); pop.querySelector('.tl-mi')?.focus();
+  };
+  pop.ontoggle = ev => btn.setAttribute('aria-expanded', String(ev.newState === 'open'));
+  pop.onkeydown = tasksMenuKeys;
+  for (const a of pop.querySelectorAll('[data-goal-open]'))
+    a.onclick = ev => { if (ev.metaKey || ev.ctrlKey || ev.shiftKey) return; ev.preventDefault(); pop.hidePopover(); openGoal(a.dataset.goalOpen); };
+  pop.querySelector('[data-goal-add]').onclick = () => { pop.hidePopover(); void botGoalAdd(slug); };
 }
 // Why the bot's last run ended without finishing (backend/execution.py last_stop), never a bare "Crashed": one plain
 // line, grey when nothing is needed and red when a person must act, and only an action that exists (`review`: the
@@ -360,13 +378,15 @@ async function pageBot(slug, tab) {
   const limited = botLimited(e);       // seen, not read: no activity anywhere on the page
   const work = botTabs(slug).filter(t => BOT_WORK_TABS.includes(t));
   const base = `#/bot/${encodeURIComponent(slug)}`;
-  const tabsShown = [...work, 'info'];
   const talkTabs = work.filter(t => t === 'home' || t === 'dm');
+  // One chat tab at every width: with both Home and DM, the lock in the top line (Incognito) flips to the DM.
+  const tabsShown = [...work.filter(t => !(t === 'dm' && talkTabs.length > 1)), 'info'];
   // The goal leads the page; chat and tasks sit side by side under it on a
   // desktop. Narrower, the top line holds the bot and Chat · Tasks · Info; configuration has its own tabs.
   // On a phone the goal and the extra controls move into Info (placeBotHead). A status shows
   // only when it is an alert. Configuration opens on Info.
   BOT?.settingsCleanup?.();
+  pageTitle(botDisplayName(slug));
   $('#main').innerHTML = `
   <div class="bot-top" id="bot-top">
     <button class="bot-back-arrow" id="bot-back-arrow" type="button" aria-label="Back" title="Back">‹</button>
@@ -376,19 +396,20 @@ async function pageBot(slug, tab) {
         <div class="meta" id="bot-alert">${limited ? '' : botAlertHTML(slug)}</div></div></div>
     <div class="bot-switch" id="btabs" role="tablist" aria-label="${esc(e.display_name || e.slug)}">
       ${tabsShown.map(t => { const label = BOT_TAB_LABELS[t];
-        return `<button type="button" data-bt="${t}" role="tab">${label}</button>`; }).join('')}
+        return `<button type="button" data-bt="${t}" role="tab">${t === 'home' && talkTabs.length > 1 ? 'Chat' : label}</button>`; }).join('')}
     </div>
     ${limited ? '' : '<span class="bot-top-acts" id="bot-top-acts"></span>'}
     ${limited ? '' : '<section class="bot-goal" id="bot-goal" aria-label="Goal"><span class="muted">Loading the goal…</span></section>'}
-    <a class="ghost bot-more-btn" id="bot-more-btn" href="${base}/info" aria-label="Info" title="Info"><svg class="bot-more-i" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 11v6"/><circle cx="12" cy="7.6" r=".4" fill="currentColor"/></svg></a>
+    ${limited || talkTabs.length < 2 ? '' : `<button type="button" class="bot-incognito" id="bot-incognito" aria-pressed="false" aria-label="Incognito" title="Incognito: a private chat with this bot, not the team's Home"><span class="nav-icon" aria-hidden="true">lock</span><span class="bi-label">Incognito</span></button>`}
+    <a class="ghost bot-more-btn" id="bot-more-btn" href="${base}/info" aria-label="More" title="More"><svg class="bot-more-i" width="20" height="20" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="5" cy="12" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="19" cy="12" r="1.8"/></svg></a>
   </div>
   <div id="bot-banners"><div id="bot-limit-host">${limited ? '' : botLimitHTML(slug)}</div>
-  <div id="bot-onboard-host">${frBotBannerHTML(e)}</div><div id="bot-dream-host"></div></div>
+  <div id="bot-onboard-host">${frBotBannerHTML(e)}</div><div id="bot-dream-host"></div>
+  ${limited || isBuiltInBot(slug) ? '' : `<div id="bot-github-host" data-bot="${esc(slug)}"></div>`}</div>
   <a class="bot-back" id="bot-back" href="${base}" hidden>‹ ${BOT_TAB_LABELS[work[0]] || 'Tasks'}</a>
 
   <div class="bot-work" id="bot-work">
   <div id="pane-chat" hidden>
-    ${limited || talkTabs.length < 2 ? '' : `<div class="bot-talk-bar"><button type="button" class="bot-incognito" id="bot-incognito" aria-pressed="false" aria-label="Incognito" title="Incognito: a private chat with this bot, not the team's Home"><span class="nav-icon" aria-hidden="true">lock</span><span>Incognito</span></button></div>`}
     <div id="conv-paused" class="conv-paused" role="status" hidden></div>
     <div class="bot-thread" id="bot-thread"></div>
   </div>
@@ -500,14 +521,15 @@ async function pageBot(slug, tab) {
     void botBranchesLoad(slug);
     void botLearningsLoad(slug);
     void botDreamLoad(slug);
+    if (!isBuiltInBot(slug)) void githubNudgeBot(slug);
   }
   if (!limited) void botGoalLoad(slug);
   $('#btabs').onclick = ev => {
     const b = ev.target.closest('[data-bt]'); if (!b) return;
     location.hash = b.dataset.bt === work[0] ? base : `${base}/${b.dataset.bt}`;
   };
-  // Wide, the top tabs give way to Home and DM beside Tasks; the incognito toggle on the left flips between them.
-  const incognito = $('#pane-chat #bot-incognito');
+  // The lock in the top line flips the chat between Home and the private DM; it says Incognito only while on.
+  const incognito = $('#bot-incognito');
   if (incognito) incognito.onclick = () => {
     const next = incognito.getAttribute('aria-pressed') === 'true' ? 'home' : 'dm';
     location.hash = next === work[0] ? base : `${base}/${next}`;
@@ -651,7 +673,9 @@ function showBotTab(tab) {
   $('#main').classList.toggle('chat-layout', chat);
   $('#main').classList.toggle('bot-chat-layout', chat);
   $('#main').classList.toggle('bot-split-layout', split);
-  $('#btabs').querySelectorAll('[data-bt]').forEach(b => { const on = b.dataset.bt === (work ? view : 'info'); b.classList.toggle('cur', on); b.setAttribute('aria-selected', String(on)); });
+  // The DM has no tab of its own when Home has one: Chat stays current under Incognito.
+  const curTab = !work ? 'info' : view === 'dm' && !$('#btabs [data-bt="dm"]') ? 'home' : view;
+  $('#btabs').querySelectorAll('[data-bt]').forEach(b => { const on = b.dataset.bt === curTab; b.classList.toggle('cur', on); b.setAttribute('aria-selected', String(on)); });
   const more = $('#bot-more-btn');
   more.classList.toggle('cur', !work);
   if (!work) more.setAttribute('aria-current', 'page'); else more.removeAttribute('aria-current');
@@ -676,8 +700,8 @@ function showBotTab(tab) {
   // Home or DM on the left: the one asked for, else (Tasks beside it) the last one shown, else the first.
   if (chat) botThreadShow(view === 'home' || view === 'dm' ? view : talk.includes(BOT.thread?.kind) ? BOT.thread.kind : talk[0]);
   else botThreadStop();
-  const incognitoOn = $('#pane-chat #bot-incognito');
-  if (incognitoOn) incognitoOn.setAttribute('aria-pressed', String(BOT.thread?.kind === 'dm'));
+  const incognitoOn = $('#bot-incognito');
+  if (incognitoOn) { incognitoOn.setAttribute('aria-pressed', String(BOT.thread?.kind === 'dm')); incognitoOn.hidden = !chat; }
   const once = (key, fn) => { if (!BOT.loaded.has(key)) { BOT.loaded.add(key); fn(BOT.slug); } };
   if (split || view === 'tasks') {
     once('tasks', loadBotTasksV2);
