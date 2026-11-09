@@ -1,6 +1,67 @@
-/* ui/app/welcome.js — First run: the #/welcome wizard
+/* ui/app/welcome.ts — First run: the #/welcome wizard
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
 'use strict';
+
+// The setup record (GET/PUT /api/v2/setup, backend/onboarding.py) as this wizard keeps it.
+interface OnbNames { company_name: string; app_name: string; assistant_name: string; owner_name: string; team_domain: string; website: string }
+interface OnbAnswers {
+  building: string; what_we_do: string; customers: string; team_size: string; work_arrives: string[]; repetitive_work: string;
+  software_product: string; departments: string[]; briefings: Record<string, string>;
+  /** An earlier release's answer: dropped when the record loads. */
+  never_without_person?: unknown;
+}
+/** A picked bot as the record saves it (`selected`, keyed by its card's slug). */
+interface OnbPick { display_name?: string; reports_to?: string; instructions?: unknown }
+/** A computer on the record (backend/onboarding.py `_machine`). */
+interface OnbRunner { id?: string; label?: string | null; online?: boolean }
+/** The company file the team was set up from. */
+interface OnbImported { seats?: number; deferred?: string[]; people?: {invited_at?: string | null}[] }
+interface OnbRecord {
+  names: OnbNames;
+  answers: OnbAnswers;
+  selected: Record<string, OnbPick | null>;
+  /** When setup was completed; null until then. */
+  completed: string | null;
+  home: string;
+  bots: FrBot[];
+  machine: {runners: OnbRunner[]; enrolled: boolean};
+  needed: boolean;
+  company_import_failed?: {reason?: string} | null;
+  company_import?: OnbImported | null;
+  sample?: {tasks?: string[]} | null;
+}
+/** A company file's preview (POST /api/v2/setup/company/preview). */
+interface OnbPreview { company_name: string; fingerprint: string; employees: {title: string}[]; seats?: {title: string}[]; deferred: string[] }
+/** The open wizard (ONB): the step, the record it saves, the catalog cards, the org chart and the strategy step's state. */
+interface OnbState {
+  step: number;
+  steps: string[];
+  providers: SettingsProvidersView | null;
+  models: SettingsProviderModel[];
+  record: OnbRecord;
+  catalog: CatalogState;
+  /** Each created bot's revision, by id, for Activate. */
+  revisions: Record<string, number | undefined>;
+  busy: boolean;
+  completing: boolean;
+  poll: number | null;
+  org: ReturnType<typeof obBlank>;
+  enrollment: string;
+  error: string;
+  kind: string;
+  strat: SsStrat;
+  code?: string;
+  otherOpen?: boolean;
+  companyImport?: {text: string; preview: OnbPreview} | null;
+  companyImportError?: string;
+  companyImportGeneration?: number;
+}
+/** [label, command, other]: `other` marks a line that is instead of one above. */
+type OnbCommand = [label: string, command: string, other?: boolean];
+/** GET /api/v2/models: the models on offer and the harnesses that run them. */
+interface OnbModels { models?: SettingsProviderModel[]; harnesses?: HarnessRow[] }
+/** A model sign-in the computer step lists. */
+interface OnbSignIn { runtime: string | undefined; label: string }
 
 // ----------------------------------------------------------------- first run (#/welcome)
 // A team's first hour is its own flow, not a settings page. Say what the team is building and confirm the bets the
@@ -11,32 +72,33 @@
 const ONB_STEPS = ['building', 'bets', 'names', 'about', 'org', 'machine', 'agent', 'review'];
 // A team that has not chosen its AI providers starts there (the research needs a model); state.steps is fixed at load, so the
 // step does not vanish from the list the moment it is saved.
-const onbStepList = needsProviders => needsProviders ? ['providers', ...ONB_STEPS] : ONB_STEPS;
-const ONB_TITLES = {providers: 'AI providers', building: 'What are you building', bets: 'Your bets', names: 'Names', about: 'About the team',
+const onbStepList = (needsProviders: boolean): string[] => needsProviders ? ['providers', ...ONB_STEPS] : ONB_STEPS;
+const ONB_TITLES: Record<string, string> = {providers: 'AI providers', building: 'What are you building', bets: 'Your bets', names: 'Names', about: 'About the team',
                     org: 'Your team chart', machine: 'Add the computer that runs your bots', agent: 'Connect an external agent', review: 'Review and create'};
 // The progress row's words: one each, so the row stays on one line (a phone shows the current one only).
-const ONB_SHORT = {providers: 'Providers', building: 'Building', bets: 'Bets', names: 'Names', about: 'About', org: 'Team', machine: 'Computer', agent: 'Agent', review: 'Review'};
+const ONB_SHORT: Record<string, string> = {providers: 'Providers', building: 'Building', bets: 'Bets', names: 'Names', about: 'About', org: 'Team', machine: 'Computer', agent: 'Agent', review: 'Review'};
 // At most one short hint line under a step's title; most steps have none.
-const ONB_BLURB = {providers: 'Choose the subscriptions or API keys your bots use, with Tico Gateway if you want it.',
+const ONB_BLURB: Record<string, string> = {providers: 'Choose the subscriptions or API keys your bots use, with Tico Gateway if you want it.',
                    bets: 'A draft: nothing is published.', agent: 'Optional.'};
-const ONB_CUSTOMERS = [['businesses', 'Businesses'], ['consumers', 'Consumers'], ['both', 'Both']];
+const ONB_CUSTOMERS: [string, string][] = [['businesses', 'Businesses'], ['consumers', 'Consumers'], ['both', 'Both']];
 // The four the server accepts (models.WorkArrival). Adding one here needs the same word there.
 const ONB_ARRIVES = [['email', 'Email'], ['slack', 'Slack'], ['crm', 'CRM'], ['tickets', 'Tickets']];
 // Kept with a number in them: a human reads the answer, and an older record's chooser read the largest number.
 const ONB_SIZES = ['1 (just me)', '2-10', '11-50', '51-200', '201+'];
-const ONB_BLANK = {
+const ONB_BLANK: OnbRecord = {
   names: {company_name: '', app_name: '', assistant_name: '', owner_name: '', team_domain: '', website: ''},
   answers: {building: '', what_we_do: '', customers: '', team_size: '', work_arrives: [], repetitive_work: '',
             software_product: '', departments: [], briefings: {}},
   selected: {}, completed: null, home: '', bots: [], machine: {runners: [], enrolled: false}, needed: true};
-/** @type {any} wizard state; ui/setup-strategy.ts reads it, and the type is any until this file is typed */ let ONB = null;
+// The open wizard; null until the page opens. ui/setup-strategy.ts, ui/first-run.ts and ui/org-builder.ts read it.
+let ONB: OnbState | null = null;
 // A server that is a container is the usual install, and the computer that runs bots is a Linux one beside it.
-const onbDefaultKind = () => (S.config?.in_docker ? 'linux' : 'mac');
+const onbDefaultKind = (): string => (S.config?.in_docker ? 'linux' : 'mac');
 // Their own name: the roster's when it is not just an address, else the sign-in's display name when the proxy sends one.
-const onbOwnerGuess = () => (S.me?.name && !/@/.test(S.me.name) ? S.me.name : S.me?.sign_in_name || '');
+const onbOwnerGuess = (): string => (S.me?.name && !/@/.test(S.me.name) ? S.me.name : S.me?.sign_in_name || '');
 // A team whose owner signs in with public mail (Gmail) and has no company address on the roster is asked its email domain, once.
-const onbAsksDomain = () => S.me?.role === 'owner' && !(S.me.company_domains || []).length;
-function onbStop() { if (ONB) { clearInterval(ONB.poll); clearTimeout(ONB.strat.timer); } ONB = null; }
+const onbAsksDomain = (): boolean => S.me?.role === 'owner' && !(S.me.company_domains || []).length;
+function onbStop() { if (ONB) { clearInterval(ONB.poll ?? undefined); clearTimeout(ONB.strat.timer); } ONB = null; }
 function pageWelcome() {
   // Only the owner may set a team up; everyone else has no reason to see the address either.
   if (S.me && S.me.role !== 'owner') { location.hash = TASKS; return; }
@@ -46,11 +108,12 @@ function pageWelcome() {
   $('#main').innerHTML = '<div class="onb" id="onb"><div class="empty">Loading…</div></div>';
   void onbLoad(state);
 }
-async function onbLoad(state) {
+async function onbLoad(state: OnbState) {
   try {
     const [record, catalog, roster, providers, models] = await Promise.all([
-      get('/v2/setup'), get('/v2/templates'), get('/humans').catch(() => ({people: []})),
-      get('/v2/providers').catch(() => null), get('/v2/models').catch(() => ({models: []}))]);
+      get<Partial<OnbRecord> | null>('/v2/setup'), get('/v2/templates'), get('/humans').catch(() => ({people: []})),
+      get<SettingsProvidersView | null>('/v2/providers').catch(() => null),
+      get<OnbModels>('/v2/models').catch((): OnbModels => ({models: []}))]);
     if (ONB !== state) return;
     state.providers = providers && Array.isArray(providers.providers) ? providers : null;
     state.models = models.models || [];
@@ -66,11 +129,11 @@ async function onbLoad(state) {
   } catch (error) {
     if (ONB !== state) return;
     const host = $('#onb');
-    if (host) host.innerHTML = `<section class="card"><h2>Setup could not be loaded</h2><p class="err">${esc(error.message)}</p></section>`;
+    if (host) host.innerHTML = `<section class="card"><h2>Setup could not be loaded</h2><p class="err">${esc(errorMessage(error, ''))}</p></section>`;
   }
 }
-function onbAdopt(state, record) {
-  const blank = JSON.parse(JSON.stringify(ONB_BLANK)), row = record && typeof record === 'object' ? record : {};
+function onbAdopt(state: OnbState, record: Partial<OnbRecord> | null | undefined) {
+  const blank: OnbRecord = JSON.parse(JSON.stringify(ONB_BLANK)), row: Partial<OnbRecord> = record && typeof record === 'object' ? record : {};
   state.record = {...blank, ...row,
     names: {...blank.names, ...(row.names || {})},
     answers: {...blank.answers, ...(row.answers || {})},
@@ -87,7 +150,7 @@ function onbAdopt(state, record) {
   if (!names.assistant_name || names.assistant_name.trim().toLowerCase() === (names.company_name || '').trim().toLowerCase()) names.assistant_name = assistantName();
   onbSeedPicks(state);
 }
-function onbSeedPicks(state) {
+function onbSeedPicks(state: OnbState) {
   const {picked, edits} = state.catalog, saved = Object.entries(state.record.selected || {});
   for (const [slug, entry] of saved) {
     if (!catalogCard(state.catalog, slug)) continue;
@@ -98,22 +161,22 @@ function onbSeedPicks(state) {
     if (typeof entry?.instructions === 'string') {
       edits[slug].instructions = entry.instructions;
       const match = entry.instructions.match(/^Mailbox:\s*(\S+@\S+)\s*$/m);
-      const person = match && catalogPeople().find(row => (row.email || '').toLowerCase() === match[1].toLowerCase());
+      const person = match && catalogPeople().find(row => (row.email || '').toLowerCase() === match[1]!.toLowerCase());
       if (person) edits[slug].person = person.id;
     }
   }
   onbApplyRecommended(state);
 }
 // The required cards are not a choice. Everything else on the team is checked on the org chart (ui/org-builder.js).
-function onbApplyRecommended(state) {
+function onbApplyRecommended(state: OnbState) {
   for (const card of state.catalog.cards) if (card.required) state.catalog.picked.add(card.slug);
 }
-function onbRender(state) {
+function onbRender(state: OnbState) {
   if (ONB !== state) return;
   const host = $('#onb'); if (!host) return;
   state.busy = false;                       // a fresh screen is never mid-save
 
-  const done = state.step >= state.steps.length, key = done ? 'done' : state.steps[state.step];
+  const done = state.step >= state.steps.length, key = done ? 'done' : String(state.steps[state.step]);
   host.classList.toggle('onb-org', key === 'org');
   host.classList.toggle('onb-wide', key === 'bets');
   const heading = done ? 'Your team is created' : ONB_TITLES[key];
@@ -126,12 +189,12 @@ function onbRender(state) {
     ${key === 'providers' ? onbSampleHTML(state, done) + onbCompanyFileHTML(state, done) : ''}`;
   onbWire(state, key);
 }
-function onbStepHTML(state, key) {
+function onbStepHTML(state: OnbState, key: string): string {
   const r = state.record, names = r.names, a = r.answers;
   const back = state.step > 0 ? '<button class="ghost" type="button" id="onb-back">Back</button>' : '';
-  const actions = label => `<div class="onb-actions">${back}<button class="primary" type="button" id="onb-next">${label}</button>
+  const actions = (label: string): string => `<div class="onb-actions">${back}<button class="primary" type="button" id="onb-next">${label}</button>
     <span class="spacer"></span><span class="muted" id="onb-status"></span><button class="ghost" type="button" data-setup-help="wizard">Want help setting up?</button></div>`;
-  if (key === 'providers') return `${providersFormHTML(state.providers, state.models, 'onb-prov')}
+  if (key === 'providers' && state.providers) return `${providersFormHTML(state.providers, state.models, 'onb-prov')}
     ${actions(state.providers.enabled?.length ? 'Next' : 'Skip for now')}`;
   if (key === 'building') return ssBuildingHTML(state, actions);
   if (key === 'bets') return ssBetsHTML(state);
@@ -197,18 +260,18 @@ function onbStepHTML(state, key) {
 }
 // Before the first answer is saved, the owner may skip the wizard and start as Tico's sample company instead
 // (POST /v2/setup/sample, backend/sample_company.py): five bots with short first tasks, on the first screen only.
-function onbSampleHTML(state, done) {
+function onbSampleHTML(state: OnbState, done: boolean): string {
   if (done || state.step !== 0 || state.record.completed) return '';
   return `<div class="onb-sample" id="onb-sample-box"><p><strong>Just trying Tico?</strong>
     <span class="muted">Start with a made-up company: five bots plus the built-in helpers. Each of the five has a short first task that ends by asking you to approve it. Nothing is sent outside.</span></p>
     <button class="ghost" type="button" id="onb-sample">Start with a sample company</button></div>`;
 }
-const onbImportPending = fields => (fields || []).map(field => ({goals: 'goals', tool_connections: 'tool connections',
+const onbImportPending = (fields: string[] | null | undefined): string => (fields || []).map(field => ({goals: 'goals', tool_connections: 'tool connections',
   first_jobs: 'first jobs', model_choices: 'model choices', routines: 'automations',
-  open_seats: 'open seats', coworkers: 'coworkers'}[field] || field)).join(', ');
+  open_seats: 'open seats', coworkers: 'coworkers'} as Record<string, string>)[field] || field).join(', ');
 // The company file chosen at install that could not be imported (backend/company_import.py `start`): said in words,
 // on every step, until an import works. No sample team took its place.
-function onbImportFailedHTML(state) {
+function onbImportFailedHTML(state: OnbState): string {
   const failed = state.record.company_import_failed;
   return failed ? `<section class="card onb-import-failed" id="onb-import-failed" role="alert"><h2>Your chosen org chart wasn't imported</h2>
     <p>${esc(failed.reason || '')}</p><p class="muted">No sample team was set up in its place.${state.record.completed
@@ -217,7 +280,7 @@ function onbImportFailedHTML(state) {
     <button class="ghost" type="button" id="onb-import-failed-dismiss">Dismiss</button></section>` : '';
 }
 // Dismiss is the way out when the owner won't fix the file by importing it (Health links here for it).
-async function onbDismissImportFailure(state, button) {
+async function onbDismissImportFailure(state: OnbState, button: HTMLButtonElement) {
   button.disabled = true;
   try {
     const record = await post('/v2/setup/company/import-failure/dismiss', {});
@@ -226,10 +289,10 @@ async function onbDismissImportFailure(state, button) {
     onbRender(state);
   } catch (error) {
     button.disabled = false;
-    toast(error.message, true);
+    toast(errorMessage(error, ''), true);
   }
 }
-function onbCompanyFileHTML(state, done) {
+function onbCompanyFileHTML(state: OnbState, done: boolean): string {
   if (done) {
     const imported = state.record.company_import, seats = imported?.seats || 0;
     return onbImportFailedHTML(state) + (imported ? `<section class="card"><p>Your chosen org chart is laid out${seats
@@ -250,7 +313,7 @@ function onbCompanyFileHTML(state, done) {
       ${preview.deferred.length ? `<p>These choices are saved for later setup: ${esc(onbImportPending(preview.deferred))}.</p>` : ''}
       <button class="primary" type="button" id="onb-company-file-use">Use this team</button>` : ''}</section>`;
 }
-async function onbReadCompanyFile(state, file) {
+async function onbReadCompanyFile(state: OnbState, file: File | null | undefined) {
   if (!file || state.busy || state.completing) return;
   const generation = state.companyImportGeneration = (state.companyImportGeneration || 0) + 1;
   state.companyImport = null;
@@ -263,11 +326,11 @@ async function onbReadCompanyFile(state, file) {
     state.companyImport = {text, preview};
   } catch (error) {
     if (ONB !== state || generation !== state.companyImportGeneration) return;
-    state.companyImportError = error.message;
+    state.companyImportError = errorMessage(error, '');
   }
   onbRender(state);
 }
-async function onbUseCompanyFile(state) {
+async function onbUseCompanyFile(state: OnbState) {
   if (state.busy || state.completing || !state.companyImport) return;
   state.completing = true;
   onbBusy(state, true, 'Creating your selected team…');
@@ -286,13 +349,13 @@ async function onbUseCompanyFile(state) {
 }
 // The UI never learns the environment slug the Mac was created with, so it stays literal here.
 // The label is the one the setup file was written with, so the command and the file agree.
-const onbMachineLabel = state => state?.kind === 'linux' && S.config?.local ? 'This computer'
+const onbMachineLabel = (state: {kind?: string} | null | undefined): string => state?.kind === 'linux' && S.config?.local ? 'This computer'
   : `${firstName(S.me?.name) || 'This'}'s ${state?.kind === 'linux' ? 'server' : 'Mac'}`;
 // [label, command, other]: `other` marks a line that is instead of one above, shown under Other ways.
-function onbSignIns(state) {
-  const view = state.providers || {}, preset = view.preset;
+function onbSignIns(state: OnbState): OnbSignIn[] {
+  const view: SettingsProvidersView = state.providers || {}, preset = view.preset;
   if (preset === 'gateway') return [];
-  if (PRESET_PROVIDERS[preset]) return [{runtime: 'claude', label: 'Claude'}, {runtime: 'codex', label: 'ChatGPT through Codex'}];
+  if (PRESET_PROVIDERS[preset ?? '']) return [{runtime: 'claude', label: 'Claude'}, {runtime: 'codex', label: 'ChatGPT through Codex'}];
   if (preset === 'own-keys') {
     return (view.providers || []).filter(row => !row.gateway && (view.enabled || []).includes(row.id))
       .filter((row, i, rows) => rows.findIndex(other => other.runtime === row.runtime) === i)
@@ -301,59 +364,59 @@ function onbSignIns(state) {
   const runtime = view.default?.runtime || S.config?.default_runtime || '';
   return runtime ? [{runtime, label: harnessWords(runtime)}] : [];
 }
-function onbCommands(state) {
+function onbCommands(state: OnbState): OnbCommand[] {
   // The preset can use several subscriptions, independently of the default model. Key-only harnesses have no login.
   const signIns = onbSignIns(state).filter(row => state.kind === 'linux'
     ? harnessCaps(row.runtime).container_login : harnessCaps(row.runtime).terminal_login || harnessCaps(row.runtime).browser_sign_in);
   if (state.kind === 'linux') {
     const [run, , plain] = dockerRunnerCommands(state.code || '<code>', onbMachineLabel(state), '');
-    const logins = signIns.map(row => [`Sign in to ${row.label} (use Sign in in Settings > Computers, or run this after the runner installs the model CLI)`,
-      dockerRunnerCommands(state.code || '<code>', onbMachineLabel(state), row.runtime)[1][1]]);
+    const logins = signIns.map((row): OnbCommand => [`Sign in to ${row.label} (use Sign in in Settings > Computers, or run this after the runner installs the model CLI)`,
+      dockerRunnerCommands(state.code || '<code>', onbMachineLabel(state), row.runtime)[1]![1]]);
     return [run, ...logins, ['With plain Docker instead of the installer line. It has no updater, so it will not follow the server\'s releases', plain[1], true]];
   }
   const file = state.enrollment || '<setup-file>.json';
-  return [
+  return ([
     ['Register this Mac for the team',
      `scripts/tico-computer -e <slug> enroll --code-file "$HOME/Downloads/${file}" --label "${onbMachineLabel(state)}"`],
-    ...signIns.map((row, i) => [`Add your ${row.label} subscription`,
+    ...signIns.map((row, i): OnbCommand => [`Add your ${row.label} subscription`,
      `${i === 0 ? 'scripts/tico-computer -e <slug> profile add default\n' : ''}scripts/tico-computer -e <slug> profile login default ${row.runtime}`]),
     ['Start the bot service', 'scripts/tico-computer -e <slug> install bot'],
-  ].filter(Boolean);
+  ] satisfies OnbCommand[]).filter(Boolean);
 }
 // A label's parenthetical is a hint in small type under it, so each step reads as one short line. The command wraps
 // inside its box (never past the card), with Copy in the box; Copy takes the exact command, line breaks and all.
-function onbCommandHTML([label, command], i, tag = 'li') {
+function onbCommandHTML([label, command]: OnbCommand, i: number, tag = 'li'): string {
   const [, title, hint] = /^(.*?) \((.*)\)$/.exec(label) || [label, label, ''];
   return `<${tag} class="onb-cmd-step"><span class="k">${esc(title)}</span>${hint ? `<small class="onb-hint">${esc(hint)}</small>` : ''}
     <div class="onb-cmd"><code>${esc(command)}</code><button class="ghost" type="button" data-onb-copy="${i}" aria-label="Copy: ${esc(title)}">Copy</button></div></${tag}>`;
 }
-function onbCommandsHTML(state) {
+function onbCommandsHTML(state: OnbState): string {
   return onbCommands(state).map((row, i) => row[2] ? '' : onbCommandHTML(row, i)).join('');
 }
-function onbOtherWaysHTML(state) {
+function onbOtherWaysHTML(state: OnbState): string {
   const other = onbCommands(state).map((row, i) => row[2] ? onbCommandHTML(row, i, 'div') : '').join('');
   const slug = state.kind === 'linux' ? '' : '<p class="muted" style="font-size:12.5px">Replace <code class="mono">&lt;slug&gt;</code> with your environment slug.</p>';
   return slug + (other ? `<details class="onb-other" id="onb-other"${state.otherOpen ? ' open' : ''}><summary>Other ways</summary>${other}</details>` : '');
 }
 // After Add computer the code is on screen in large type (a toast alone goes before it can be read); a Mac's
 // setup file is named where it was saved.
-function onbIssuedHTML(state) {
+function onbIssuedHTML(state: OnbState): string {
   if (state.kind === 'linux' && state.code) return `<div class="onb-code" id="onb-code" role="status"><span class="k">Your one-time code</span>
     <div class="onb-code-row"><strong class="onb-code-value" id="onb-code-value">${esc(state.code)}</strong><button class="ghost" type="button" id="onb-code-copy">Copy</button></div>
     <small>Works once, for 15 minutes. It is already in the command below.</small></div>`;
   if (state.kind !== 'linux' && state.enrollment) return `<p class="onb-file" id="onb-code" role="status">Saved to Downloads: <code class="mono">${esc(state.enrollment)}</code></p>`;
   return '';
 }
-function onbMachineStatus(record) {
+function onbMachineStatus(record: {machine?: {runners?: OnbRunner[]} | null}): string {
   const runners = (record.machine?.runners || []).filter(Boolean);
   const online = runners.filter(runner => runner.online);
   if (online.length) return `${online.map(runner => runner.label || 'This computer').join(', ')} online`;
-  if (runners.length) return `${runners[0].label || 'This computer'} enrolled · waiting for it to answer`;
+  if (runners.length) return `${runners[0]!.label || 'This computer'} enrolled · waiting for it to answer`;
   return 'No computer enrolled yet';
 }
-function onbSummaryHTML(state) {
+function onbSummaryHTML(state: OnbState): string {
   const r = state.record, a = r.answers;
-  const label = (key, value) => `<div><span class="k">${esc(key)}</span><span>${esc(value || '—')}</span></div>`;
+  const label = (key: string, value: string): string => `<div><span class="k">${esc(key)}</span><span>${esc(value || '—')}</span></div>`;
   return `<div class="onb-summary">
     ${label('Building', a.building)}${r.names.website ? label('Website', r.names.website) : ''}
     ${label('Team', r.names.company_name)}${label('App', r.names.app_name)}
@@ -362,7 +425,7 @@ function onbSummaryHTML(state) {
     ${label('Software is the product', a.software_product ? (a.software_product === 'yes' ? 'Yes' : 'No') : '')}
     ${label('Team size', a.team_size)}
     ${label('AI providers', PROVIDER_PRESETS.find(row => row.id === state.providers?.preset)?.label
-      || (state.providers?.providers || []).filter(row => (state.providers.enabled || []).includes(row.id)).map(row => row.label).join(', ')
+      || (state.providers?.providers || []).filter(row => (state.providers!.enabled || []).includes(row.id)).map(row => row.label).join(', ')
       || 'Choose later in Settings > Computers')}
     ${label('Computers', onbMachineStatus(r))}
     ${S.config?.visuals === 'media' ? label('Pages', 'Open cards. Tico file hosting or a visual address shows them inline.') : ''}
@@ -370,15 +433,15 @@ function onbSummaryHTML(state) {
   </div>`;
 }
 // The tour waits for this screen to be seen: Show me around starts it, and otherwise the next visit does (ui/getting-started.js).
-function onbDoneHTML(state) {
+function onbDoneHTML(state: OnbState): string {
   return `<div class="onb-next" id="onb-next-step">${frNextStepHTML(state)}</div>
     <div id="onb-bots">${onbBotRowsHTML(state)}</div>
     <div id="onb-after">${frNextHTML(state)}</div>
     <div class="onb-actions"><button class="${frWaiting(state) ? 'ghost' : 'primary'}" type="button" id="onb-tasks">Open Tasks</button>
       <span class="spacer"></span><span class="muted" id="onb-status"></span><button class="ghost" type="button" id="onb-tour" data-gs-tour>Show me around</button></div>`;
 }
-function onbBotRowsHTML(state) {
-  const chosen = new Set(Object.keys(state.record.selected || {}));
+function onbBotRowsHTML(state: OnbState): string {
+  const chosen = new Set<string | undefined>(Object.keys(state.record.selected || {}));
   const groups = frBotGroups((state.record.bots || []).filter(bot => !chosen.size || chosen.has(bot.slug)));
   const sample = state.record.sample;
   const tasks = sample?.tasks || [];
@@ -393,29 +456,29 @@ function onbBotRowsHTML(state) {
   return starter + (rows || '<div class="empty">No bots were created.</div>');
 }
 // The poll redraws only the progress rows: the forms below them keep what was typed.
-function onbRenderDone(state) {
+function onbRenderDone(state: OnbState) {
   const host = $('#onb-step');
   if (!host || host.dataset.onbStep !== 'done') return;
   const rows = $('#onb-bots');
   if (!rows) { host.innerHTML = onbDoneHTML(state); onbWire(state, 'done'); return; }
   const open = [...rows.querySelectorAll('details')].map(el => el.open);
   rows.innerHTML = onbBotRowsHTML(state);
-  rows.querySelectorAll('details').forEach((el, i) => { el.open = open[i] || false; });
+  rows.querySelectorAll('details').forEach((el: HTMLDetailsElement, i: number) => { el.open = open[i] || false; });
   // The next step is redrawn only when it changes, so keyboard focus on its button survives a poll.
   const next = $('#onb-next-step'), step = document.createElement('div');
   step.innerHTML = frNextStepHTML(state);
   if (next && next.innerHTML !== step.innerHTML) next.innerHTML = step.innerHTML;
   const tasks = $('#onb-tasks'); if (tasks) tasks.className = frWaiting(state) ? 'ghost' : 'primary';
-  document.querySelectorAll('[data-onb-activate]').forEach(button => button.onclick = () =>
-    void onbActivate(state, button.dataset.onbActivate, button));
+  document.querySelectorAll<HTMLButtonElement>('[data-onb-activate]').forEach(button => button.onclick = () =>
+    void onbActivate(state, String(button.dataset.onbActivate), button));
   frWireDone(state);
 }
-function onbWire(state, key) {
+function onbWire(state: OnbState, key: string) {
   const back = $('#onb-back');
   if (back) back.onclick = () => { onbCollect(state, key); state.step = Math.max(0, state.step - 1); onbRender(state); };
   const next = $('#onb-next');
   if (next) next.onclick = () => void onbAdvance(state, key);
-  if (key === 'providers') {
+  if (key === 'providers' && state.providers) {
     const root = $('#onb-prov');
     providersWire(root, state.providers, state.models);
     root.addEventListener('change', () => { $('#onb-next').textContent = providersCollect(root).enabled.length ? 'Next' : 'Skip for now'; });
@@ -424,13 +487,13 @@ function onbWire(state, key) {
   if (key === 'bets') void ssEnter(state);
   if (key === 'machine') {
     const commands = onbCommands(state);
-    document.querySelectorAll('[data-onb-copy]').forEach(button => button.onclick = () =>
+    document.querySelectorAll<HTMLButtonElement>('[data-onb-copy]').forEach(button => button.onclick = () =>
       void copyText(commands[Number(button.dataset.onbCopy)]?.[1] || '').then(() => toast('Command copied')));
     const codeCopy = $('#onb-code-copy');
     if (codeCopy) codeCopy.onclick = () => void copyText(state.code || '').then(() => toast('Code copied'));
     const other = $('#onb-other');
     if (other) other.ontoggle = () => { state.otherOpen = other.open; };
-    document.querySelectorAll('[data-onb-kind]').forEach(input => input.onchange = () => {
+    document.querySelectorAll<HTMLInputElement>('[data-onb-kind]').forEach(input => input.onchange = () => {
       state.kind = input.value; state.enrollment = ''; state.code = ''; onbRender(state);
     });
     const enroll = $('#onb-enroll');
@@ -442,7 +505,7 @@ function onbWire(state, key) {
         if (ONB !== state) return;
         onbRender(state);
         toast(state.kind === 'linux' ? 'One-time code created' : 'Setup file downloaded');
-      } catch (error) { toast(error.message, true); }
+      } catch (error) { toast(errorMessage(error, ''), true); }
       finally { if ($('#onb-enroll')) $('#onb-enroll').disabled = false; }
     };
   }
@@ -460,11 +523,11 @@ function onbWire(state, key) {
   if (tasks) tasks.onclick = () => { location.hash = TASKS; };
   const connect = $('#onb-connect');
   if (connect) connect.onclick = () => window.connectAgent?.();
-  document.querySelectorAll('[data-onb-activate]').forEach(button => button.onclick = () =>
-    void onbActivate(state, button.dataset.onbActivate, button));
+  document.querySelectorAll<HTMLButtonElement>('[data-onb-activate]').forEach(button => button.onclick = () =>
+    void onbActivate(state, String(button.dataset.onbActivate), button));
   if (key === 'done') { frWireDone(state); frWireNext(state); }
 }
-function onbCollect(state, key) {
+function onbCollect(state: OnbState, key: string) {
   const r = state.record;
   if (key === 'building' && $('#onb-website')) ssCollectBuilding(state);
   // Back from the bets saves What we won't do as Next would, unless the research is still running.
@@ -481,7 +544,7 @@ function onbCollect(state, key) {
     team_size: $('#onb-size').value};
   frCollect(state, key);
 }
-function onbBusy(state, busy, message) {
+function onbBusy(state: OnbState, busy: boolean, message?: string) {
   state.busy = busy;
   for (const id of ['#onb-next', '#onb-back', '#onb-finish', '#onb-sample', '#onb-company-file', '#onb-company-file-use']) { const el = $(id); if (el) el.disabled = busy; }
   const status = $('#onb-status');
@@ -490,8 +553,8 @@ function onbBusy(state, busy, message) {
 // A save the server refuses for its shape (a field over its limit, a value it does not know) is never the owner's
 // to fix, so they read what happened and what to do, not the field path the API names for developers.
 const ONB_REFUSED = 'Tico could not save this step, so it has not moved on. Your choices are still here: press the button again to retry. If it keeps happening, reload the page and tell Tico support what you picked.';
-const onbSaveError = error => `<span class="err">${esc(error?.body?.error?.code === 'validation' ? ONB_REFUSED : error.message)}</span>`;
-async function onbSave(state) {
+const onbSaveError = (error: unknown): string => `<span class="err">${esc(errorCode(error) === 'validation' ? ONB_REFUSED : errorMessage(error, ''))}</span>`;
+async function onbSave(state: OnbState) {
   const saved = await put('/v2/setup', {names: state.record.names, answers: state.record.answers,
                                              selected: state.record.selected});
   if (ONB !== state || !saved || typeof saved !== 'object') return saved;
@@ -502,7 +565,7 @@ async function onbSave(state) {
   return saved;
 }
 // The names typed on the first screen are the app's names from the moment they are saved.
-function onbApplyNames(state) {
+function onbApplyNames(state: OnbState) {
   const names = state.record.names;
   applyConfig({...S.config, company_name: names.company_name || S.config.company_name,
                app_name: names.app_name || S.config.app_name,
@@ -511,16 +574,17 @@ function onbApplyNames(state) {
   renderTree();
 }
 // The owner's name is on the roster from the save: the org chart, the sidebar and the computer's label use it.
-async function onbRefreshOwner(state) {
+async function onbRefreshOwner(state: OnbState) {
   const name = state.record.names.owner_name;
   if (!name) return;
-  S.me = {...S.me, name};
+  // S.me is null only when /api/me failed; then the owner is just this name, as before.
+  S.me = {...S.me, name} as SelfPerson;
   const roster = await get('/humans').catch(() => null);
   if (ONB !== state || !roster?.people) return;
   setPeople(roster);
   renderTree();
 }
-async function onbAdvance(state, key) {
+async function onbAdvance(state: OnbState, key: string) {
   if (state.busy) return;
   onbCollect(state, key);
   // The field starts empty now, and an empty one would quietly name the team "Company".
@@ -530,6 +594,7 @@ async function onbAdvance(state, key) {
     return;
   }
   if (key === 'providers') {
+    if (!state.providers) return;
     const chosen = providersCollect($('#onb-prov'));
     // Nothing ticked is fine: the team is created first and its bots run once a provider is added (Settings > Computers).
     if (!chosen.enabled.length && !state.providers.enabled?.length) {
@@ -574,7 +639,7 @@ async function onbAdvance(state, key) {
     onbBusy(state, false, onbSaveError(error));
   }
 }
-async function onbFinish(state) {
+async function onbFinish(state: OnbState) {
   if (state.busy || state.completing) return;
   state.completing = true;
   onbCollect(state, 'review');
@@ -592,7 +657,7 @@ async function onbFinish(state) {
   }
 }
 // The sample company is the whole first run done at once: its names, providers and bots come back from the server.
-async function onbSample(state) {
+async function onbSample(state: OnbState) {
   if (state.busy || state.completing) return;
   state.completing = true;
   onbBusy(state, true, 'Starting the sample company…');
@@ -609,11 +674,11 @@ async function onbSample(state) {
     onbBusy(state, false, onbSaveError(error));
   }
 }
-async function onbCompleted(state, record) {
+async function onbCompleted(state: OnbState, record: Partial<OnbRecord> | null | undefined) {
   onbAdopt(state, record);
   // Completing setup marks What's new read for the owner: take the server's count before the full nav comes back. A
   // slow or failed read never holds the nav back; a late answer still lands.
-  const done = config => ({...config, onboarding_needed: !!state.record.needed});
+  const done = (config: AppConfig) => ({...config, onboarding_needed: !!state.record.needed});
   const fresh = get('/v2/config').catch(() => null);
   const config = await Promise.race([fresh, new Promise(resolve => setTimeout(resolve, 2500, null))]);
   if (ONB !== state) return;
@@ -624,17 +689,17 @@ async function onbCompleted(state, record) {
   state.step = state.steps.length;
   await onbRevisions(state);
   if (ONB !== state) return;
-  clearInterval(state.poll); state.poll = setInterval(() => { if (!document.hidden) void onbPoll(state); }, 4000);   // repositories appear within seconds
+  clearInterval(state.poll ?? undefined); state.poll = setInterval(() => { if (!document.hidden) void onbPoll(state); }, 4000);   // repositories appear within seconds
   await refresh(true);                      // the new bots on the chart first: the screen lists them in its groups
   if (ONB !== state) return;
   onbRender(state);
 }
-async function onbRevisions(state) {
+async function onbRevisions(state: OnbState) {
   const bots = await v2Get('/v2/bots?include_archived=1');
   if (ONB !== state || !Array.isArray(bots)) return;
   state.revisions = Object.fromEntries(bots.map(bot => [bot.id, bot.revision]));
 }
-async function onbPoll(state) {
+async function onbPoll(state: OnbState) {
   if (ONB !== state || state.busy) return;
   const record = await v2Get('/v2/setup');
   if (ONB !== state || !record) return;
@@ -644,7 +709,7 @@ async function onbPoll(state) {
   if (status) status.textContent = onbMachineStatus(state.record);
   if (state.step >= state.steps.length) { await onbRevisions(state); onbRenderDone(state); }
 }
-async function onbActivate(state, slug, button) {
+async function onbActivate(state: OnbState, slug: string, button: HTMLButtonElement) {
   button.disabled = true;
   const bot = (state.record.bots || []).find(row => row.id === slug);
   try {
@@ -655,5 +720,5 @@ async function onbActivate(state, slug, button) {
     if (ONB !== state) return;
     onbRenderDone(state);
     await refresh(true);
-  } catch (error) { toast(error.message, true); button.disabled = false; }
+  } catch (error) { toast(errorMessage(error, ''), true); button.disabled = false; }
 }

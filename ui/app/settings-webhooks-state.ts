@@ -2,5 +2,5 @@
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
 'use strict';
 
-// settings-webhooks.js reassigns WH_TRIGGERS (null until a part opens, then the list), so a reader calls this each time.
+// settings-webhooks.ts reassigns WH_TRIGGERS (null until a part opens, then the list), so a reader calls this each time.
 function webhookTriggers(): WebhookTrigger[] | null { return WH_TRIGGERS; }

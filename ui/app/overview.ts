@@ -78,7 +78,7 @@ function overviewModel(): OverviewModel {
   for (const group of groups) group.members.sort((a, b) => Number(a.type === 'bot') - Number(b.type === 'bot') || a.id.localeCompare(b.id));
   return {company: companyName(), groups, fresh: !!fresh};
 }
-// A robot's screen face is the same symbol as its avatar (avatars.js botAvatar), glowing in its colour.
+// A robot's screen face is the same symbol as its avatar (avatars.ts botAvatar), glowing in its colour.
 function overviewFace(e: Employee): OverviewFace {
   const meta = BOT_AVATARS[e.id], glyph = !meta?.tico && TEMPLATE_ICON.test(e.icon || '') ? e.icon : '';
   return {glyph, initials: avInitials(e.slug || e.id), color: meta?.tico ? '#3fd6a8' : meta?.color || `hsl(${avHue(e.id)} 60% 55%)`,

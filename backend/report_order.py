@@ -6,7 +6,7 @@ still reports to that manager. A report that joins a manager someone ordered goe
 it, whatever its name: every write of `reports_to` calls `arrive` (`access.save_roster` for humans, the bot
 definition writes in `settings_admin` and `shared_bots`). Reports with no place, under a manager nobody ordered,
 follow the chart's own order (`fallback`): humans first, then bots, temporary ones last and a bot's `order` lowest
-first, then by name. ui/app/avatars.js `chartFallback` is the same rule in the app.
+first, then by name. ui/app/avatars.ts `chartFallback` is the same rule in the app.
 
 Whoever may put a report under a manager may order that manager's reports: the owner, a person the manager is or
 reports up to, and the person who runs a bot manager (the `reports_to` rules in `app.person_update` and
@@ -77,13 +77,13 @@ TEMP = re.compile(r"^Temp\s+")
 
 
 def _name_key(name):
-    """A name as the chart compares it: accents and case aside (ui/app/avatars.js chartNameKey)."""
+    """A name as the chart compares it: accents and case aside (ui/app/avatars.ts chartNameKey)."""
     text = unicodedata.normalize("NFKD", str(name or ""))
     return "".join(ch for ch in text if not unicodedata.combining(ch)).lower()
 
 
 def _bot_order(config):
-    """A bot's `order` (its definition), lowest first; none sorts after every number (ui/app/avatars.js botOrder)."""
+    """A bot's `order` (its definition), lowest first; none sorts after every number (ui/app/avatars.ts botOrder)."""
     value = config.get("order")
     if value is None or value == "" or isinstance(value, bool):
         return math.inf

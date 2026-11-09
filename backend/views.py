@@ -2637,7 +2637,7 @@ NEEDS_PAGE_MAX = 200
 
 
 def needs_cursor(version, offset):
-    """The `next` of a Needs-you page: where the next page starts in the list at `version`. The app's hub-v2.js
+    """The `next` of a Needs-you page: where the next page starts in the list at `version`. The app's hub-v2.ts
     needsCursor writes the same, to page on from a held list it mended."""
     return f"{version}.{offset}"
 

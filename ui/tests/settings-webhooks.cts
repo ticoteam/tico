@@ -1,4 +1,4 @@
-// Webhooks (ui/app/settings-webhooks.js) in their three homes against a fake server: incoming on Automations (a built-in
+// Webhooks (ui/app/settings-webhooks.ts) in their three homes against a fake server: incoming on Automations (a built-in
 // row, #/automations/webhooks), outgoing on Tools (#/tools/webhooks), through the Gateway as a fold of Models › Tico
 // Gateway. Guards: #/triggers, the old Settings > Webhooks addresses and a saved Triggers or Webhooks tab land on each
 // part's home, and Settings has no Webhooks tab; an open item is named in the address; a new incoming webhook (name, preset, keep days) is made in its three calls and its address and

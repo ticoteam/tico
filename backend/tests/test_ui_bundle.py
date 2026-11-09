@@ -15,6 +15,14 @@ AUTH = {"Authorization": "Bearer ana-test"}
 served = pytest.mark.skipif(not ui_bundle.enabled(), reason="TICO_UI_BUNDLE=off")
 
 
+# The routes are registered when the app is built, so the mode is set first: a test that takes bundle_mode before api
+# gets an app built in that mode. The service worker routes are served in both modes.
+@pytest.fixture(params=["on", "off"])
+def bundle_mode(request, monkeypatch):
+    monkeypatch.setenv("TICO_UI_BUNDLE", request.param)
+    return request.param
+
+
 @served
 def test_the_page_names_one_versioned_script_and_one_stylesheet(api):
     r = api.get("/", headers=AUTH)
@@ -412,3 +420,58 @@ def test_a_server_finds_node_off_path_or_says_what_is_missing(tmp_path, monkeypa
     tried.clear()
     ui_build.prepare(root / "ui", build, no_path, dirs=("~/.volta/bin",), home=home)
     assert tried == [str(volta / "node")] and ui_build.stale(root / "ui") == []
+
+
+def test_the_service_worker_is_served_at_the_root_as_its_compiled_classic_script(bundle_mode, api):
+    # ui/app/boot.ts registers /sw.js?v=… (scope /): the URL stays, the body is ui/sw.ts compiled, in both bundle modes.
+    compiled = ui_build.compiled(ui_build.ROOT / "ui", "sw.ts").read_bytes()
+    r = api.get("/sw.js?v=41", headers=AUTH)
+    assert r.status_code == 200 and r.headers["content-type"] == "text/javascript; charset=utf-8"
+    assert r.content == compiled and b"ServiceWorkerGlobalScope" not in r.content  # JavaScript, not the .ts source
+    assert not re.search(rb"^\s*(?:import|export)\b", r.content, re.M)  # a classic script, not a module
+    assert r.text.rstrip().endswith("//# sourceMappingURL=sw.js.map")
+    # Revalidated on every update check, whatever its ?v=: never kept as immutable.
+    assert r.headers["cache-control"] == "private, no-cache" and r.headers["cdn-cache-control"] == "no-store"
+    assert r.headers["etag"].startswith('W/"') and r.headers["vary"] == "Accept-Encoding"
+    assert api.get("/sw.js", headers=AUTH).content == compiled
+    again = api.get("/sw.js?v=41", headers={**AUTH, "If-None-Match": r.headers["etag"]})
+    assert again.status_code == 304 and again.headers["cache-control"] == "private, no-cache"
+    head = api.head("/sw.js?v=41", headers=AUTH)
+    assert head.status_code == 200 and head.content == b"" and head.headers["content-length"] == str(len(compiled))
+    assert head.headers["etag"] == r.headers["etag"]
+    # Its source map, at the root name the last line gives, names sw.ts with its text.
+    m = api.get("/sw.js.map", headers=AUTH)
+    assert m.status_code == 200 and m.headers["content-type"].startswith("application/json")
+    assert m.json()["sources"] == ["sw.ts"]
+    assert m.json()["sourcesContent"] == [(ui_build.ROOT / "ui/sw.ts").read_text()]
+    assert api.head("/sw.js.map", headers=AUTH).status_code == 200
+    # Conditional like sw.js: the map's own ETag answers 304, and its JSON type is kept.
+    map_again = api.get("/sw.js.map", headers={**AUTH, "If-None-Match": m.headers["etag"]})
+    assert map_again.status_code == 304 and map_again.content == b""
+    assert map_again.headers["etag"] == m.headers["etag"]
+
+
+def test_the_service_worker_gets_a_new_etag_when_its_output_changes(bundle_mode, api, tmp_path, monkeypatch):
+    out = tmp_path / "sw.js"
+    out.write_text("self.addEventListener('install', () => {});\n")
+    monkeypatch.setattr(ui_build, "compiled", lambda ui_dir, name: out)
+    first = api.get("/sw.js?v=41", headers=AUTH)
+    assert first.status_code == 200 and first.content == out.read_bytes()
+    before = out.stat()
+    out.write_text("self.addEventListener('install', () => { self.skipWaiting(); });\n")
+    os.utime(out, ns=(before.st_atime_ns, before.st_mtime_ns + 1_000_000_000))
+    second = api.get("/sw.js?v=41", headers={**AUTH, "If-None-Match": first.headers["etag"]})
+    assert second.status_code == 200 and second.content == out.read_bytes()
+    assert second.headers["etag"] != first.headers["etag"]
+
+
+def test_a_stale_service_worker_build_is_a_503_never_the_source(bundle_mode, api, monkeypatch):
+    def stale(ui_dir, name, manifest=None):
+        raise ui_build.StaleBuild(f"ui/{name} has no up-to-date compiled JavaScript in build/ui")
+
+    monkeypatch.setattr(ui_build, "compiled", stale)
+    monkeypatch.setattr(ui_build, "source_map", stale)
+    for path in ("/sw.js?v=41", "/sw.js", "/sw.js.map"):
+        r = api.get(path, headers=AUTH)
+        assert r.status_code == 503 and r.json()["error"]["code"] == "ui_not_built", path
+        assert "addEventListener" not in r.text, path

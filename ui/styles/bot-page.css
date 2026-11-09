@@ -237,7 +237,7 @@ button.rail-ico{border:0;padding:0;background:none;font:inherit;cursor:pointer}
 #pane-tasks .trow.status-in-heading :is(summary,.trow-head){grid-template-columns:minmax(0,1fr) auto auto;grid-template-areas:"ttl pr who"}
 
 /* Long lists in More show their three newest rows and a small "Show more" on every width (moreClamp in
-   ui/app/bot-page.js). On a phone: the Goals card, then what moved off the top line (alert, Learnings, branches),
+   ui/app/bot-page.ts). On a phone: the Goals card, then what moved off the top line (alert, Learnings, branches),
    then the cards grouped (setup and tools, what it does, what it did, its docs), each a compact block; tables
    become one line a row. */
 #pane-more>.bot-more-top{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin:0 0 12px}   /* Learnings and branches, on every width */
