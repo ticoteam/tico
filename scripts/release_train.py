@@ -50,6 +50,7 @@ backend/service_keys.py), never /healthz, which a proxy may not route. The HTTP 
 import argparse
 from datetime import datetime, timedelta, timezone
 import hashlib
+import http.client
 import importlib.util
 import json
 import os
@@ -271,7 +272,8 @@ class GitHub:
                         return exc.code, json.loads(raw or b"{}"), ""
                     except ValueError:
                         return exc.code, {"message": raw[:300].decode("utf-8", "replace")}, ""
-            except (urllib.error.URLError, OSError) as exc:
+            # A reply cut short (IncompleteRead) is as passing as a 502, so it is retried too.
+            except (urllib.error.URLError, OSError, http.client.HTTPException) as exc:
                 if attempt < 2:
                     time.sleep(5 * (attempt + 1))
                     continue
