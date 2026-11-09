@@ -3,10 +3,11 @@
 import pytest
 
 from backend import auto_tasks, hubdb as H, rules as R, task_privacy
-from backend.tests.test_api import api, claim, get, post, runner  # noqa: F401
-from backend.tests.test_parked_urgent_news import machine, parked, still_blocked
-from backend.tests.test_urgent_news import sent_job
-from backend.tests.test_task_lanes import task_bot
+from backend.tests.helpers.api import claim, get, post, runner  # noqa: F401
+from backend.tests.test_api import api  # noqa: F401
+from backend.tests.helpers.parked_urgent_news import machine, parked, still_blocked
+from backend.tests.helpers.urgent_news import sent_job
+from backend.tests.helpers.task_lanes import task_bot
 
 
 def scope(api, task):
@@ -85,7 +86,7 @@ def test_notice_turn_never_clears_an_independent_wait(api, wait):
 
 
 def test_private_notice_retains_output_fences_without_a_task_attachment(api):
-    from backend.tests.test_api import unrelated_task_managers
+    from backend.tests.helpers.api import unrelated_task_managers
 
     r = machine(api)
     with api.app.state.store.transaction() as c:

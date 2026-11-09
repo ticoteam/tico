@@ -199,14 +199,16 @@ def counted(c, sender, receiver):
     ]
 
 
-def record(c, task_id, sender, receiver):
+def record(c, task_id, sender, receiver, at=None):
     """A send: `sender` created the task for `receiver`, or handed it to them. Every send is kept: a later hand-over of
-    the same task adds a row and never takes an earlier send out of its sender's count."""
+    the same task adds a row and never takes an earlier send out of its sender's count. `at`: when it was sent, now
+    unless given. A new task's send is stamped with the task's own `created_at`: one write, one moment, however long
+    the rest of the write takes, so the log reads it as made with the task (scripts/reach_dry_run.py)."""
     if not str(sender).startswith(("bot:", "human:")) or not receiver or sender == receiver:
         return
     c.execute(
         "INSERT OR IGNORE INTO task_cap_log(task_id, sender, receiver, sent_at) VALUES(?,?,?,?)",
-        (task_id, sender, receiver, H.now()),
+        (task_id, sender, receiver, at or H.now()),
     )
 
 

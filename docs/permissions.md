@@ -167,8 +167,22 @@ Threads ([Threads](threads.md)) have their own audience, separate from a bot's t
 
 - **company**: every person on the team. **team**: the people in one group, and the company owner. **members**: the people,
   bots and groups added to the thread. It is private by default.
-- **home**: a bot's or a person's Home, readable by its Read audience. **personal**: a DM, read by the people in it, with
-  no owner bypass. **task**: whoever may read the task. **meeting**: the people who may see the meeting.
+- **home**: a bot's or a person's Home, readable by its Read audience. A person's personal chat with a bot moves into
+  that bot's Home with its messages, unless its owner may not read that Home. The Assistant's and the Strategy Bot's
+  chats, the Librarian's per-person docs chats, and chats with a bot synced from another app, stay where they are.
+  Everyone who can read the Home can read those messages, except one whose own references name a task, a file under
+  `target`, `answer`, `review` or `body_sources`, or a meeting under `live_meeting` or `live_meetings`, that its reader
+  may not read, or one that replies to, answers, or takes its inputs from a message naming a task, or a meeting under
+  `live_meeting` or `live_meetings`, that its reader may not read, directly or through a chain of such links. The check
+  does not read the words typed into a message or the files attached to it. An attached file is checked when opened,
+  with each message it is attached to. A Tico Mail Read grant on a letter's scan lets its holder open that scan whatever
+  it is attached to, and the grant does not open the task. When the Assistant or BotOps reads for the holder, the bot
+  must qualify on its own: a person's grant never grants its bot access. Otherwise it is refused if it is linked to a
+  task its reader may not read; if any message it is attached to is one its reader may not read; if it is a letter's
+  file or proof that its reader may not read; if it is the poster or thumbnail of a media file that is refused to its
+  reader; if it comes from a meeting run its reader may not read; or if its only link is to a deleted task.
+- **personal**: a DM, read by the people in it, with no owner bypass. **task**: whoever may read the task.
+  **meeting**: the people who may see the meeting.
 - The starter of a thread, or an admin, can make it public to a group or to the company. Adding a person, bot or group
   needs **Write** on them. Removing someone needs the thread's owner or an admin.
 - Following a thread never gives access, and neither does a mention. A thread someone may not read answers 404.
@@ -235,7 +249,7 @@ on `/api/v2/groups` through `hub api`, or `hub group update`), with that person'
 refused. The Strategy Bot only suggests org changes; when the person in its chat asks for one, it makes it citing their message, with the
 same rights. Built-in bots stay outside groups.
 
-**The built-in bots** (the Assistant, BotOps, the Librarian, the Strategy Bot, the Task Manager, the Bookkeeper, Counsel and the Brand Owner) act for the whole team, so only the owner changes their settings,
+**The built-in bots** (the Assistant, BotOps, the Librarian, the Strategy Owner, the Task Manager, the Finance Owner, the Rules Owner and the Brand Owner) act for the whole team, so only the owner changes their settings,
 routines, access or place, and only the owner may add them. A member cannot register a bot with the name `assistant`, `botops`,
 `librarian`, `goal-manager` or `coo`; an Admin can, and manages every other bot.
 The Strategy Bot's level, regular checks and name, and publishing a strategy version, are the owner's alone: an Admin cannot change them ([Your Strategy Bot](strategy-bot.md)).
@@ -377,7 +391,7 @@ is the same humans who always have full access to it. A bot owner can:
 
 - edit its configuration: instructions, model, routines, name and description, repository;
 - set its See, Read and Write access;
-- pause it, rename it, archive it (never the built-in Assistant, BotOps, Librarian, Strategy Bot, Task Manager, Bookkeeper or Brand Owner);
+- pause it, rename it, archive it (never the built-in Assistant, BotOps, Librarian, Strategy Owner, Task Manager, Finance Owner or Brand Owner);
 - add or remove owners (`POST /api/v2/bots/{bot}/co-owners`, Settings > Bots, **Owned by**);
 - give it a stored credential they hold themselves or stored themselves, and no one else's.
 

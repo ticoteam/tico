@@ -10,11 +10,10 @@ import pytest
 
 from backend.tests.slug_ids import bot_ids_are_their_slugs  # noqa: F401  (each bot's id is its slug)
 from backend import execution, org_rule_check, threads
-from backend.auth import Identity
 from backend.store import H
-from backend.tests.test_api import api, assign, claim, post, ready, runner  # noqa: F401  (the api fixture)
-
-ANA = Identity("human:ana", "owner", "ana@acme.example")
+from backend.tests.helpers.api import assign, claim, post, ready, runner  # noqa: F401  (the api fixture)
+from backend.tests.test_api import api  # noqa: F401  (the api fixture)
+from backend.tests.helpers.threads_runner import make_thread, say, write
 
 
 def bot_runner(api, bot="cpo"):
@@ -22,20 +21,6 @@ def bot_runner(api, bot="cpo"):
     assign(api, r, bot)
     ready(api, r, [bot])
     return r
-
-
-def write(api, fn):
-    store = api.app.state.store
-    with store.transaction() as c:
-        return fn(c, threads.viewer(api.app.state.auth, ANA))
-
-
-def make_thread(api, **kw):
-    return write(api, lambda c, v: threads.create(c, v, **kw))["id"]
-
-
-def say(api, thread_id, text, parent=None):
-    return write(api, lambda c, v: threads.post(c, v, thread_id, text, parent_message_id=parent))
 
 
 def finish(api, r, attempt, text, **extra):

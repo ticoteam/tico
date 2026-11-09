@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from backend import question_tasks as QT, still_needed, task_roundup
 from backend.scheduler import Scheduler
 from backend.store import H
-from backend.tests.test_tasks_board import api, get  # noqa: F401
+from backend.tests.helpers.tasks_board import api, get  # noqa: F401
 
 ANA, OPS, CPO = "human:ana", "bot:ops", "bot:cpo"
 NOON_WED = "2026-10-21T19:00:00.000000Z"  # Wed 12:00 Pacific: a task roundup run

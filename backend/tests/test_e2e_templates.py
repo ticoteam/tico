@@ -7,7 +7,8 @@ import pytest
 
 from clients import catalog
 from backend.tests.live import block_outside_network
-from backend.tests.test_api import api, get, post  # noqa: F401
+from backend.tests.helpers.api import get, post  # noqa: F401
+from backend.tests.test_api import api  # noqa: F401
 
 CORE = sorted({row["template"] for row in catalog.cards() if row.get("suggest") == "default"} | {"botops"})
 NAMES = {"company_name": "Acme", "app_name": "Tico", "assistant_name": "Tico"}

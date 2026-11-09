@@ -802,8 +802,8 @@ def task_problems(actor, owner, title, body, type=None):
     title, body = str(title or "").strip(), str(body or "")
     general = str(type or "").strip().lower() in ("", H.GENERAL_TYPE)
     target = owner_from_registry(owner)
-    if not target:
-        problems.append(f"{owner} is not in registry/employees.yaml or registry/people.yaml")
+    # Not in the registry is no refusal here: a template name (`--owner marketing-lead`) still reaches the one live bot
+    # built from that template on the server, which this client cannot see. cmd_task_dry_run says so.
     if not title:
         problems.append("give it a title that says what you are asking for")
     elif H.is_human(target) and general and H.STYLE_LINT != "off":
@@ -844,6 +844,12 @@ def cmd_task_dry_run(args, who):
         return 1
     for w in warnings:
         print(f"- {w} (warning: the create is accepted)")
+    if not owner:
+        print(
+            f"ok: {args.owner} is not in registry/employees.yaml or registry/people.yaml; the server decides at the create "
+            "(a template name reaches the one live bot built from that template)"
+        )
+        return 0
     print(
         f'ok: would create "{args.title.strip()}" for {owner} '
         f'({words_outside_quotes(body)} words outside quoted drafts)'

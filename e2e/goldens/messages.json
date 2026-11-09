@@ -10,6 +10,7 @@
       "audience_group_id": null,
       "closed_at": null,
       "created_at": "<time>",
+      "deleted_at": null,
       "id": "<conversation>",
       "kind": "chat",
       "last_message_at": "<time>",

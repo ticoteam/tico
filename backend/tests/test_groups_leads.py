@@ -4,10 +4,11 @@ follow the same lead rule (backend/task_caps.py)."""
 
 from backend import groups as Groups
 from backend import people as P
-from backend.auth import Identity
 from backend.store import H
-from backend.tests.test_api import api, get, headers, post  # noqa: F401  (the api fixture)
-from backend.tests.test_groups import add_bots, group, send
+from backend.tests.helpers.api import get, headers, post  # noqa: F401  (the api fixture)
+from backend.tests.test_api import api  # noqa: F401  (the api fixture)
+from backend.tests.helpers.groups import add_bots, group, send
+from backend.tests.helpers.groups_leads import as_bot
 
 
 def make_engineering(api, lead="bot:engineering-lead"):
@@ -19,16 +20,6 @@ def make_engineering(api, lead="bot:engineering-lead"):
         body["lead"] = lead
     gid = send(api, "POST", "groups", body)["id"]
     return gid
-
-
-def as_bot(api, slug, token):
-    """The bot signs in with its own agent credential, as the hub's agents do: one agents row per bot."""
-    with api.app.state.store.transaction() as c:
-        c.execute(
-            "INSERT OR REPLACE INTO agents(bot,harness,token_hash,created_at,created_by) VALUES(?,?,?,?,?)",
-            (slug, "test", "x-" + slug, H.now(), "human:ana"),
-        )
-    api.app.state.store.settings.test_identities[token] = Identity(f"bot:{slug}", "bot", agent="test")
 
 
 def put(api, path, body, token="ana-test", expected=200):

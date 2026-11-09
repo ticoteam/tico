@@ -184,7 +184,7 @@ function ruleChatWire(state: ChatState, thread: HTMLElement) {
   });
 }
 function ruleRestoreDraft(slug: string | undefined, text: string) {
-  if (BOT_PILL?.slug !== slug) return;
+  if (!BOT_PILL || BOT_PILL.slug !== slug) return;
   const box = pq(BOT_PILL, '.p-text');
   if (!box) return;
   box.value = text;

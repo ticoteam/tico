@@ -13,29 +13,11 @@ from backend.finance import actions as FA
 from backend.finance import reads as FR
 from backend.onboarding import helper_templates
 from backend.store import H
-from backend.tests.test_goal_manager import BASE
-from backend.tests.test_onboarding import draft, environment, machine, signed_in  # noqa: F401
+from backend.tests.helpers.onboarding import environment, signed_in
+from backend.tests.helpers.bookkeeper import DEFAULT_RIGHTS, TEMPLATE, built, check, checks, ensure
 
-TEMPLATE = Path(__file__).resolve().parents[2] / "templates" / "catalog" / "bookkeeper"
 DIGEST = "a" * 64
-DEFAULT_RIGHTS = {"finance.book", "finance.ap", "finance.ar", "finance.pay", "finance.cards", "finance.rules"}
 PDF = b"%PDF-1.4 Acme invoice 1042"
-
-
-def built(environment):
-    api = environment(seed={}, cards=BASE)
-    shutil.copytree(TEMPLATE, Path(api.app.state.store.settings.catalog_dir) / "bookkeeper")
-    machine(api)
-    draft(api)
-    api.post("/api/v2/onboarding/complete", json={}, headers=signed_in())
-    return api
-
-
-def ensure(api):
-    store = api.app.state.store
-    with store.transaction() as c:
-        FA.ensure_setup(c, store.settings.owner_email)
-        return BK.ensure(c, api.app.state.onboarding, api.app.state.auth)
 
 
 def sees_everything(api):
@@ -48,18 +30,6 @@ def sees_everything(api):
             FA.act(c, owner, "view_grant", {"subject": BK.ACTOR, "what": "everything"}, "grant-view").status
             == "committed"
         )
-
-
-def check(api):
-    with api.app.state.store.transaction() as c:
-        return BK.check(c, api.app.state.auth, H.now())
-
-
-def checks(api):
-    with api.app.state.store.read() as c:
-        return [
-            dict(r) for r in c.execute("SELECT id,title,body,status,private FROM tasks WHERE owner_id=?", (BK.ACTOR,))
-        ]
 
 
 def rights(c):

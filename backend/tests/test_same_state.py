@@ -5,8 +5,9 @@ import json
 
 from backend import hubdb as H
 from backend import wake_rules as W
-from backend.tests.test_api import api, assign, get, post, ready, runner  # noqa: F401
-from backend.tests.test_wake_rules import skips
+from backend.tests.helpers.api import assign, get, post, ready, runner  # noqa: F401
+from backend.tests.test_api import api  # noqa: F401
+from backend.tests.helpers.wake_rules import skips
 
 
 def jobs(c, bot):

@@ -1,12 +1,13 @@
 """The status page reads each table once for every bot, and says exactly what each bot's own status line says."""
 
-from backend import question_tasks as QT, task_privacy as privacy, usage_limits
+from backend import task_privacy as privacy, usage_limits
 from backend.events import prime_status_lines, status_line
 from backend.store import H
-from backend.tests.test_api import api, assign, claim, post, ready  # noqa: F401
-from backend.tests.test_run_backoff import hold_bot, setup
+from backend.tests.helpers.api import assign, claim, post, ready  # noqa: F401
+from backend.tests.test_api import api  # noqa: F401
+from backend.tests.helpers.run_backoff import hold_bot, setup
 from backend import usage_limits
-from backend import bot_settings as BS
+from backend.tests.helpers.status_reads import busy, page
 
 
 def lines(api, slugs, primed):
@@ -103,84 +104,6 @@ def test_primed_status_lines_offer_the_same_held_run_for_review(api, monkeypatch
     assert ops["reason"].startswith("Its computer refused the run before it started.")
     assert (cpo["attempt_id"], cpo["kind"], cpo["action"]) == ("marked", "stopped", "review")
     assert "lease ran out" in cpo["reason"]
-
-
-def busy(api, machine, first, count, live=1):
-    """`count` more active bots on the test computer, each with open tasks, two questions to a person, a task for a
-    person, private tasks and a stopped run on record; the first `live` of them running, every third one crashed."""
-    from backend.store import encode
-    from backend.tests.test_api import assign
-
-    store = api.app.state.store
-    slugs = [f"busy-{n}" for n in range(first, first + count)]
-    with store.transaction() as c:
-        bots = {
-            row["slug"]: {"name": row["slug"], "runtime": "fake", "status": row["state"]}
-            for row in c.execute("SELECT slug,state FROM bots")
-        }
-        H.sync_registry(
-            c,
-            {**bots, **{s: {"name": s, "runtime": "fake", "status": "active"} for s in slugs}},
-            {"people": [{"id": p, "email": p + "@acme.example"} for p in ("ana", "ben", "cara")]},
-        )
-        for slug in slugs:
-            c.execute('INSERT INTO bot_config(bot,owner_id) VALUES(?,?)', (slug, 'ana'))
-            BS.write(c, slug, {'name': slug, 'runtime': 'fake'})
-    for slug in slugs:
-        assign(api, machine, slug)
-    with store.transaction() as c:
-        for n, slug in enumerate(slugs):
-            first_task = None
-            for k in range(4):
-                task = H.task_create(c, "human:ana", f"Work {slug} {k}", "Do it.", "bot:" + slug, private=k == 3)
-                first_task = first_task or task["id"]
-                if k in (1, 2):
-                    QT.ask_plain(c, "bot:" + slug, "human:ana", "Which one?", parent=task)
-            H.task_create(c, "bot:" + slug, f"Need {slug}", "Please look.", "human:ben", private=bool(n % 2))
-            H.status_set(
-                c, "bot:" + slug, slug, state="crashed" if n % 3 == 2 else "idle", focus="Working", task_id=first_task
-            )
-    ready(api, machine, ["ops", "doc-updater", *slugs])
-    with store.transaction() as c:
-        c.execute("UPDATE runner_states SET capacity=100")
-    for slug in slugs[:live]:
-        attempt = claim(api, machine, slug)
-        post(api, f"attempts/{attempt['id']}/started", {"thread_id": "t-" + slug}, machine["token"])
-    with store.transaction() as c:
-        runs = [row[0] for row in c.execute("SELECT id FROM attempts ORDER BY created_at")]
-        for n, slug in enumerate(slugs[live:]):
-            c.execute(
-                "INSERT OR REPLACE INTO registry_metadata VALUES(?,?)",
-                ("last-stop:" + slug, encode({"attempt_id": runs[n % len(runs)], "at": H.now()})),
-            )
-
-
-def page(api, monkeypatch, path, token="ana-test"):
-    """One status page as `token` sees it, without its clock fields, and the statements it took."""
-    import contextlib
-    from backend.tests.test_api import headers
-
-    store, seen = api.app.state.store, []
-    with monkeypatch.context() as patched:
-        for name in ("read", "read_transaction"):
-
-            def traced(opened=getattr(store, name)):
-                @contextlib.contextmanager
-                def borrowed():
-                    with opened() as c:
-                        c.set_trace_callback(seen.append)
-                        try:
-                            yield c
-                        finally:
-                            c.set_trace_callback(None)
-
-                return borrowed()
-
-            patched.setattr(store, name, traced)
-        response = api.get(path, headers=headers(token))
-    assert response.status_code == 200, response.text
-    body = {k: v for k, v in response.json().items() if k not in ("server_time", "tick_age_s", "last_tick")}
-    return body, len(seen)
 
 
 def unprimed(monkeypatch):
@@ -396,8 +319,8 @@ def test_status_page_reads_a_fixed_number_of_statements_for_bots_whose_plan_sign
     # Post-release p95 (task 3d54dc12): a bot the computer reads as ready only because a plan signed its runtime in,
     # with the plan now lapsed, read its declaration and its computer's row again for every such bot on each poll
     # (views._lapsed_plan). Forty of them cost two statements each more than four did.
-    from backend.tests.test_api import runner
-    from backend.tests.test_threads_list_queries import add_bots
+    from backend.tests.helpers.api import runner
+    from backend.tests.helpers.threads_list_queries import add_bots
 
     r = runner(api)
     assigned = set()

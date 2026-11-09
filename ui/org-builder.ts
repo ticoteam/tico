@@ -2,85 +2,175 @@
    bots into it, and watch the chart grow beside the conversation. The server has the departments and cards
    (GET /api/v2/setup/groups) and the suggestions (POST /api/v2/setup/recruit, from Tico HQ or its local
    recommender); this page shows them and keeps what is checked in the wizard's catalog state (`state.catalog.picked`),
-   from which ui/first-run.ts builds `selected`. Nothing exists until "Create my team". Built-ins and explicit catalog helpers
-   are not on the chart: the built-ins are always created, and a `kind: helper` card is
-   one switch under Message bots on the finished chart, off until someone turns it on. */
+   from which ui/first-run.ts builds `selected`. Nothing exists until "Create my team". The built-ins are always created and
+   sit in a Built-in group on the chart, folded until opened, with nothing to drag or add. A `kind: helper` card is not on
+   the chart: it is one switch under Message bots on the finished chart, off until someone turns it on. */
 'use strict';
+
+// The shapes this page reads. GET /api/v2/setup/groups and POST /api/v2/setup/recruit have no entry in ui/types/api.d.ts,
+// so they are declared here, next to the code that reads them.
+interface OBDept {
+  id: string;
+  name: string;
+  icon: string;
+  description: string;
+  goal: string;
+  question: string;
+  placeholder: string;
+  head?: string | null;
+  software_only?: boolean;
+}
+interface OBCard {
+  template: string;
+  department: string;
+  name: string;
+  summary: string;
+  icon: string;
+  lead?: boolean;
+  suggest?: string;
+}
+interface OBGroups {
+  version?: string;
+  departments?: OBDept[];
+  cards?: OBCard[];
+  hq?: {available?: boolean; off_by?: string};
+}
+interface OBBot {
+  template_id: string;
+  why: string;
+}
+interface OBResult {
+  bots: OBBot[];
+  suggested_default?: string[];
+  source?: string;
+}
+// A card of the wizard's catalog state (ui/app/catalog.ts): what a bot is created from.
+interface OBCatalogCard extends CatalogCard {
+  slug: string;
+  template: string;
+  kind?: string;
+  required?: boolean;
+  name?: string;
+  summary?: string;
+  icon?: string;
+}
+// The wizard's catalog (catalog.ts CatalogState), its cards read as this page reads them.
+type OBCatalog = CatalogState<OBCatalogCard>;
+interface OBOrg {
+  loaded: boolean;
+  loading: Promise<void> | null;
+  error: string;
+  departments: OBDept[];
+  cards: OBCard[];
+  version: string;
+  hq: {available: boolean; off_by: string};
+  phase: 'pick' | 'dept' | 'finish';
+  chosen: string[];
+  at: number;
+  step: 'ask' | 'recruiting' | 'suggest';
+  briefings: Record<string, string>;
+  results: Record<string, OBResult>;
+  asked: Record<string, string>;
+  skipped: Set<string>;
+  decided: Set<string>;
+  share: boolean | null;
+  editing: string;
+  seen: Set<string>;
+  open: boolean;
+  more: Set<string>;
+  touched: boolean;
+  builtinOpen: boolean;
+}
+interface OBRecord {
+  answers: {software_product?: string; departments?: string[]; briefings?: Record<string, string>};
+  home?: string;
+  selected?: unknown;
+}
+// The wizard's state (`ONB`, ui/app/welcome.js), as this page reads it.
+interface OBState {
+  org: OBOrg;
+  catalog: OBCatalog;
+  record: OBRecord & FrRecord;
+  steps: string[];
+  step: number;
+  providers: FrProviders | null;
+}
+
 const OB_ICONS = {goal: 'flag', go: 'arrow_forward', why: 'auto_awesome', edit: 'edit', chart: 'account_tree',
                   bot: 'smart_toy', expand: 'expand_more'};
 // One hue per department; a department this page does not know gets one from its id.
-const OB_COLORS = {sales: '#2f855a', marketing: '#c2417a', support: '#d97706', finance: '#0f766e', operations: '#4f46e5',
+const OB_COLORS: Record<string, string> = {sales: '#2f855a', marketing: '#c2417a', support: '#d97706', finance: '#0f766e', operations: '#4f46e5',
                    legal: '#64748b', hr: '#9333ea', product: '#0284c7', engineering: '#2563eb'};
 // Suggested before anyone picks; a department marked software_only is added only when software is the product.
 const OB_CORE = ['sales', 'marketing', 'support', 'finance', 'operations'];
 // Long enough to see the chart take the bots in, short enough that nobody waits.
 const OB_MIN_RECRUIT_MS = 900;
 
-const obBlank = () => ({loaded: false, loading: null, error: '', departments: [], cards: [], version: '',
+const obBlank = (): OBOrg => ({loaded: false, loading: null, error: '', departments: [], cards: [], version: '',
   hq: {available: false, off_by: ''}, phase: 'pick', chosen: [], at: 0, step: 'ask', briefings: {}, results: {},
   asked: {}, skipped: new Set(), decided: new Set(), share: null, editing: '', seen: new Set(), open: false,
-  more: new Set(), touched: false});
-const obColor = id => OB_COLORS[id] || `hsl(${avHue(id)} 45% 45%)`;
-const obIcon = (name, cls = '') => `<span class="ob-ms ${cls}" aria-hidden="true">${esc(name || OB_ICONS.bot)}</span>`;
-const obDept = (org, id) => org.departments.find(row => row.id === id);
-const obDeptCards = (org, id) => org.cards.filter(card => card.department === id);
-const obCatalogCard = (state, template) => state.catalog.cards.find(card => card.template === template);
-const obCardOf = (state, slug) => state.org.cards.find(card => obCatalogCard(state, card.template)?.slug === slug);
-const obPlural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
+  more: new Set(), touched: false, builtinOpen: false});
+const obColor = (id: string): string => OB_COLORS[id] || `hsl(${avHue(id)} 45% 45%)`;
+const obIcon = (name: string | undefined, cls = ''): string => `<span class="ob-ms ${cls}" aria-hidden="true">${esc(name || OB_ICONS.bot)}</span>`;
+const obDept = (org: OBOrg, id: string | undefined): OBDept | undefined => org.departments.find(row => row.id === id);
+const obDeptCards = (org: OBOrg, id: string | undefined): OBCard[] => org.cards.filter(card => card.department === id);
+const obCatalogCard = (state: OBState, template: string): OBCatalogCard | undefined => state.catalog.cards.find(card => card.template === template);
+const obCardOf = (state: OBState, slug: string | undefined): OBCard | undefined => state.org.cards.find(card => obCatalogCard(state, card.template)?.slug === slug);
+const obPlural = (n: number, word: string): string => `${n} ${word}${n === 1 ? '' : 's'}`;
 // A bot on the chart wears the avatar it will have once created: its blob, with its template's icon.
-const obAvatar = (slug, card, size) => botAvatar({slug, icon: card.icon}, size);
-const obHelpers = state => state.catalog.cards.filter(card => card.kind === 'helper');
-const obCurrent = org => org.chosen[org.at];
-function obHead(org, id) {
+const obAvatar = (slug: string, card: {icon?: string | undefined}, size: number) => botAvatar({slug, icon: card.icon}, size);
+const obHelpers = (state: OBState): OBCatalogCard[] => state.catalog.cards.filter(card => card.kind === 'helper');
+const obCurrent = (org: OBOrg): string => org.chosen[org.at] ?? '';
+function obHead(org: OBOrg, id: string | undefined): string | null | undefined {
   const dept = obDept(org, id), cards = obDeptCards(org, id);
-  return cards.some(card => card.template === dept?.head) ? dept.head : (cards.find(card => card.lead)?.template || '');
+  return cards.some(card => card.template === dept?.head) ? dept?.head : (cards.find(card => card.lead)?.template || '');
 }
 // The bots checked in one department: its head first, then in the order they were suggested, then by name.
-function obPicked(state, id) {
+function obPicked(state: OBState, id: string): OBCard[] {
   const org = state.org, head = obHead(org, id), order = (org.results[id]?.bots || []).map(row => row.template_id);
-  const rank = card => (card.template === head ? -1 : (order.indexOf(card.template) + 1 || 999));
+  const rank = (card: OBCard): number => (card.template === head ? -1 : (order.indexOf(card.template) + 1 || 999));
   return obDeptCards(org, id).filter(card => state.catalog.picked.has(obCatalogCard(state, card.template)?.slug))
     .sort((a, b) => rank(a) - rank(b) || a.name.localeCompare(b.name));
 }
 // A department head reports to the owner; everyone else to their head while the head is on the team.
-function obDefaultReports(state, slug) {
+function obDefaultReports(state: OBState, slug: string) {
   const card = obCardOf(state, slug), home = frHome(state);
   if (!card) return home;
-  const head = obHead(state.org, card.department), headSlug = head && obCatalogCard(state, head)?.slug;
+  const head = obHead(state.org, card.department), headSlug = head ? obCatalogCard(state, head)?.slug : undefined;
   return !head || card.template === head || !state.catalog.picked.has(headSlug) ? home : headSlug;
 }
 // While building, every department still in play counts; the finished chart counts the ones with bots, as it shows.
-function obCounts(state, finished) {
+function obCounts(state: OBState, finished?: boolean): {depts: number; bots: number} {
   const org = state.org, sizes = org.chosen.filter(id => !org.skipped.has(id)).map(id => obPicked(state, id).length);
   return {depts: finished ? sizes.filter(Boolean).length : sizes.length, bots: sizes.reduce((a, b) => a + b, 0)};
 }
-const obStats = (state, finished) => { const {depts, bots} = obCounts(state, finished); return `${obPlural(depts, 'group')} · ${obPlural(bots, 'bot')}`; };
+const obStats = (state: OBState, finished?: boolean): string => { const {depts, bots} = obCounts(state, finished); return `${obPlural(depts, 'group')} · ${obPlural(bots, 'bot')}`; };
 // A node animates in the first time it is drawn, never again.
-function obFresh(state, key) {
+function obFresh(state: OBState, key: string): string {
   if (state.org.seen.has(key)) return '';
   state.org.seen.add(key);
   return ' ob-new';
 }
 
 // ----------------------------------------------------------------- loading and the saved draft
-function obEnsure(state) {
+function obEnsure(state: OBState): void {
   const org = state.org;
   if (org.loaded || org.loading) return;
-  org.loading = get('/v2/setup/groups').then(data => {
+  org.loading = get<OBGroups>('/v2/setup/groups').then(data => {
     org.departments = data.departments || []; org.cards = data.cards || []; org.version = data.version || '';
     org.hq = {available: false, off_by: '', ...(data.hq || {})};
     if (org.share === null) org.share = !!org.hq.available;
     org.loaded = true;
     obRestore(state);
-  }).catch(error => { org.error = error.message; })
+  }).catch((error: unknown) => { org.error = errorMessage(error, ''); })
     .finally(() => { org.loading = null; if (ONB === state && state.steps[state.step] === 'org') onbRender(state); });
 }
-function obSuggested(state) {
+function obSuggested(state: OBState): string[] {
   const software = state.record.answers.software_product === 'yes';
   return state.org.departments.filter(d => (d.software_only ? software : OB_CORE.includes(d.id))).map(d => d.id);
 }
 // A returning draft keeps its departments, answers and bots, and opens on its chart; a first visit starts with the pick.
-function obRestore(state) {
+function obRestore(state: OBState): void {
   const org = state.org, answers = state.record.answers, known = new Set(org.departments.map(d => d.id));
   const saved = (answers.departments || []).filter(id => known.has(id));
   const wanted = new Set(saved.length ? saved : obSuggested(state));
@@ -91,22 +181,22 @@ function obRestore(state) {
   org.chosen = org.departments.map(d => d.id).filter(id => wanted.has(id));
   org.phase = picked.length ? 'finish' : 'pick';
 }
-function obCollect(state) {
+function obCollect(state: OBState): void {
   const org = state.org, r = state.record;
   if (!org.loaded) return;
   const chosen = org.chosen.filter(id => !org.skipped.has(id));
   r.answers = {...r.answers, departments: chosen,
-    briefings: Object.fromEntries(chosen.filter(id => (org.briefings[id] || '').trim()).map(id => [id, org.briefings[id].trim().slice(0, 500)]))};
+    briefings: Object.fromEntries(chosen.filter(id => (org.briefings[id] || '').trim()).map(id => [id, (org.briefings[id] || '').trim().slice(0, 500)]))};
   r.selected = frSelection(state);
 }
 // Every department answered saves the draft, so a closed tab keeps the chart.
-function obSaveDraft(state) {
+function obSaveDraft(state: OBState): void {
   obCollect(state);
   void onbSave(state).catch(() => {});
 }
 
 // ----------------------------------------------------------------- the chart
-function obBotNodeHTML(state, card, head, big) {
+function obBotNodeHTML(state: OBState, card: OBCard, head: boolean, big: boolean): string {
   const cat = state.catalog, row = obCatalogCard(state, card.template);
   if (!row) return '';
   const slug = row.slug, editing = big && state.org.editing === slug, reports = frReports(state, slug);
@@ -118,7 +208,7 @@ function obBotNodeHTML(state, card, head, big) {
         ${obAvatar(slug, card, 24)}<span class="oc-text"><strong data-oc-label="${esc(slug)}">${esc(name)}</strong>${sub ? `<small>${sub}</small>` : ''}</span></button>
       ${editing ? obEditHTML(state, slug) : ''}</li>`;
 }
-function obDeptNodeHTML(state, id, big) {
+function obDeptNodeHTML(state: OBState, id: string, big: boolean): string {
   const org = state.org, dept = obDept(org, id);
   if (!dept) return '';
   const bots = obPicked(state, id), cur = org.phase === 'dept' && obCurrent(org) === id;
@@ -135,28 +225,45 @@ function obDeptNodeHTML(state, id, big) {
       ${bots.length ? `<ul class="oc-bots">${bots.map(card => obBotNodeHTML(state, card, card.template === head, big)).join('')}</ul>` : waiting}
     </section>`;
 }
-function obCols(state, count) {
+function obCols(state: OBState, count: number): number {
   // Measured on whatever is on the page now: the chart itself on a redraw, else the wizard around it. The rows are
   // balanced, so five departments are three and two, not four and one.
   const width = ($('#ob-chart-big') || $('#ob-main') || $('#onb'))?.clientWidth || 900;
   const most = Math.max(1, Math.min(count || 1, 4, Math.floor((width - 40) / 220)));
   return Math.ceil((count || 1) / Math.ceil((count || 1) / most));
 }
-// The human at the top and each group hanging off one line with its bots below; built-ins and catalog helpers are off it.
-// Beside the conversation it is one column; the finished chart spreads the departments into rows.
-function obChartHTML(state, big) {
-  const org = state.org, me = S.me || {};
+// The human at the top and each group hanging off one line with its bots below, the Built-in group last; catalog helpers
+// are off it. Beside the conversation it is one column; the finished chart spreads the departments into rows.
+function obChartHTML(state: OBState, big: boolean): string {
+  const org = state.org, me: {name?: string} = S.me || {};
   const depts = big ? org.chosen.filter(id => obPicked(state, id).length) : org.chosen;
-  const cols = big ? obCols(state, depts.length) : 1, rows = [];
+  const cols = big ? obCols(state, depts.length) : 1, rows: string[][] = [];
   for (let i = 0; i < depts.length; i += cols) rows.push(depts.slice(i, i + cols));
+  const seats: ObBuiltIn[] = state.catalog.cards.filter((card: ObCatalogSeat) => card.required)
+    .map((card: ObCatalogSeat) => ({slug: card.slug, name: catalogName(state.catalog, card), icon: card.icon}));
   return `<div class="oc${big ? ' oc-big' : ''}" style="--cols:${cols}">
       <div class="oc-top"><div class="oc-node oc-owner" data-oc-owner>${personAvatar(me, 28)}<span class="oc-text"><strong>${esc(me.name || 'You')}</strong><small>CEO</small></span></div></div>
       ${rows.length ? `<div class="oc-rows">${rows.map(row => `<div class="oc-row" style="--k:${row.length}">${row.map(id => obDeptNodeHTML(state, id, big)).join('')}</div>`).join('')}</div>`
         : '<p class="oc-empty">Groups appear here.</p>'}
+      ${obBuiltInHTML(seats, org.builtinOpen)}
     </div>`;
 }
-function obEditHTML(state, slug) {
+// The built-in seats as one group: its count, folded until opened, then each built-in by name. Nothing here is a drag
+// source or an editor (no data-oc-bot or data-oc-edit): the server keeps built-ins in their group.
+interface ObCatalogSeat extends CatalogCard { slug: string; required?: boolean; icon?: string | undefined }
+interface ObBuiltIn { slug: string; name: string; icon: string | undefined }
+function obBuiltInHTML(seats: ObBuiltIn[], open: boolean): string {
+  if (!seats.length) return '';
+  return `<section class="oc-builtin" style="--dc:var(--muted)" data-oc-builtin>
+      <button type="button" class="oc-node oc-dnode" data-oc-builtin-toggle aria-expanded="${open}">
+        ${obIcon(OB_ICONS.bot, 'oc-icon')}<span class="oc-text"><strong>Built-in</strong></span>
+        <span class="oc-count">${seats.length}</span>${obIcon(open ? 'expand_less' : 'expand_more', 'oc-caret')}</button>
+      ${open ? `<ul class="oc-bots">${seats.map(seat => `<li class="oc-bot"><span class="oc-node oc-bnode">${obAvatar(seat.slug, seat, 24)}<span class="oc-text"><strong>${esc(seat.name)}</strong></span></span></li>`).join('')}</ul>` : ''}
+    </section>`;
+}
+function obEditHTML(state: OBState, slug: string): string {
   const cat = state.catalog, card = catalogCard(cat, slug), current = frReports(state, slug);
+  if (!card) throw new Error('Catalog card missing');
   const groups = ['Humans', 'Bots on your team'].map(group => {
     const rows = frParentOptions(state, slug).filter(option => option.group === group);
     return rows.length ? `<optgroup label="${esc(group)}">${rows.map(option =>
@@ -168,13 +275,13 @@ function obEditHTML(state, slug) {
       <div class="oc-edit-actions"><button class="ghost" type="button" data-oc-remove="${esc(slug)}">Remove</button>
         <span class="spacer"></span><button class="primary" type="button" data-oc-done>Done</button></div></div>`;
 }
-function obMailboxHTML(state, slug) {
+function obMailboxHTML(state: OBState, slug: string): string {
   const people = catalogPeople(), chosen = state.catalog.edits[slug]?.person || '';
   return people.length ? `<label class="ob-mailbox">Whose mailbox<select data-cat-mailbox="${esc(slug)}" aria-label="Human whose mailbox this bot reads">
       <option value="">Choose a human…</option>${people.map(person => `<option value="${esc(person.id)}" ${person.id === chosen ? 'selected' : ''}>${esc(person.name || person.id)}</option>`).join('')}
     </select></label>` : '';
 }
-function obStripHTML(state) {
+function obStripHTML(state: OBState): string {
   const org = state.org;
   return `${obIcon(OB_ICONS.chart, 'ob-strip-icon')}<span class="ob-strip-text">${esc(obStats(state))}</span>
     <span class="ob-strip-mini">${org.chosen.filter(id => !org.skipped.has(id)).map(id =>
@@ -183,7 +290,7 @@ function obStripHTML(state) {
 }
 
 // ----------------------------------------------------------------- the conversation
-function obPickHTML(state) {
+function obPickHTML(state: OBState): string {
   const org = state.org, chosen = new Set(org.chosen), first = org.departments.find(d => chosen.has(d.id));
   return `<div class="ob-card ob-pick">
       <h2 class="ob-title">What groups do you want?</h2>
@@ -194,14 +301,14 @@ function obPickHTML(state) {
         <button class="primary ob-cta" type="button" id="ob-start" ${first ? '' : 'disabled'}>${first ? `Start with ${esc(first.name)}` : 'Pick a group'}${obIcon(OB_ICONS.go)}</button></div>
     </div>`;
 }
-const obOffText = reason => ({demo: 'Off in the demo', DO_NOT_TRACK: 'Off: DO_NOT_TRACK is set', TICO_TELEMETRY: 'Off: TICO_TELEMETRY=off',
-                              TICO_REHEARSAL: 'Off: TICO_REHEARSAL=1 (rehearsal)', setting: 'Off: the usage count is off in Settings'})[reason] || 'Off';
-function obHqHTML(state) {
+const obOffText = (reason: string): string => ({demo: 'Off in the demo', DO_NOT_TRACK: 'Off: DO_NOT_TRACK is set', TICO_TELEMETRY: 'Off: TICO_TELEMETRY=off',
+                              TICO_REHEARSAL: 'Off: TICO_REHEARSAL=1 (rehearsal)', setting: 'Off: the usage count is off in Settings'} as Record<string, string>)[reason] || 'Off';
+function obHqHTML(state: OBState): string {
   const org = state.org, off = !org.hq.available;
   return `<label class="ob-hq${off ? ' off' : ''}"><input type="checkbox" role="switch" id="ob-hq" aria-describedby="ob-hq-payload" ${org.share && !off ? 'checked' : ''} ${off ? 'disabled' : ''}>
       <span>Suggestions from Tico HQ</span></label><small id="ob-hq-payload">When on, sends your group, answer, team description, customer type, software choice, catalog version and install ID (when counting is on and its notice has been shown). <a href="https://github.com/ticoteam/tico/blob/main/PRIVACY.md#suggestions-while-you-build-your-team-chart" target="_blank" rel="noopener">Privacy</a></small>${off ? `<span class="ob-hq-off" data-ob-hq-off>${esc(obOffText(org.hq.off_by))}</span>` : ''}`;
 }
-function obBotCardHTML(state, card, why, head) {
+function obBotCardHTML(state: OBState, card: OBCard, why: string, head: boolean): string {
   const row = obCatalogCard(state, card.template);
   if (!row) return '';
   const on = state.catalog.picked.has(row.slug);
@@ -213,10 +320,12 @@ function obBotCardHTML(state, card, why, head) {
         ${why ? `<span class="ob-bot-why" data-ob-why="${esc(row.slug)}">${obIcon(OB_ICONS.why)}${esc(why)}</span>` : ''}</span>
       <span class="ob-ms ob-bot-check" aria-hidden="true">check</span></label></div>`;
 }
-function obDeptHTML(state) {
+function obDeptHTML(state: OBState): string {
   const org = state.org, id = obCurrent(org), dept = obDept(org, id), step = org.step;
   const briefing = org.briefings[id] || '', last = org.at === org.chosen.length - 1;
   const next = last ? null : obDept(org, org.chosen[org.at + 1]);
+  // The department is on the chart the wizard drew; a missing one has no card to show (the header always reads it).
+  if (!dept) return '';
   const said = briefing ? `<div class="ob-said"><button type="button" class="ob-said-edit" id="ob-edit-answer" aria-label="Change the answer">${obIcon(OB_ICONS.edit)}</button>
       <span class="ob-bubble" data-ob-said>${esc(briefing)}</span></div>` : '';
   let body = '';
@@ -229,8 +338,9 @@ function obDeptHTML(state) {
       <div class="ob-recruiting" role="status" aria-live="polite" id="ob-recruiting"><span class="ob-radar" aria-hidden="true"></span>Recruiting bots…</div>
       <div class="ob-bots ob-skeleton" aria-hidden="true">${'<div class="ob-bot sk"><span class="sk-i"></span><span class="sk-l"><i></i><i></i><i></i></span></div>'.repeat(3)}</div>`;
   else {
-    const result = org.results[id] || {bots: []}, head = obHead(org, id);
-    const shown = result.bots.map(row => [org.cards.find(card => card.template === row.template_id && card.department === id), row.why]).filter(([card]) => card);
+    const result: OBResult = org.results[id] || {bots: []}, head = obHead(org, id);
+    const shown = result.bots.map((row): [OBCard | undefined, string] => [org.cards.find(card => card.template === row.template_id && card.department === id), row.why])
+      .filter((pair): pair is [OBCard, string] => !!pair[0]);
     const listed = new Set(shown.map(([card]) => card.template));
     const more = obDeptCards(org, id).filter(card => !listed.has(card.template)).sort((a, b) => a.name.localeCompare(b.name));
     // The list under More stays as the person left it through a redraw; it starts open when a bot in it is already checked.
@@ -254,7 +364,7 @@ function obDeptHTML(state) {
     </article>`;
 }
 // Explicit catalog helpers have one switch each, off by default; the Inbox Manager asks whose mailbox here.
-function obHelpersHTML(state) {
+function obHelpersHTML(state: OBState): string {
   const cat = state.catalog, cards = obHelpers(state);
   if (!cards.length) return '';
   return `<section class="ob-helpers" id="ob-helpers" aria-labelledby="ob-helpers-h"><h3 id="ob-helpers-h">Message bots</h3>${cards.map(card => {
@@ -266,7 +376,7 @@ function obHelpersHTML(state) {
       ${on && card.template === 'inbox' ? obMailboxHTML(state, card.slug) : ''}</div>`;
   }).join('')}</section>`;
 }
-function obFinishHTML(state) {
+function obFinishHTML(state: OBState): string {
   return `<div class="ob-card ob-finish">
       <h2 class="ob-title" id="ob-summary">${esc(obStats(state, true))}</h2>
       <div class="ob-canvas" id="ob-chart-big">${obChartHTML(state, true)}</div>
@@ -277,14 +387,14 @@ function obFinishHTML(state) {
         <span class="muted" id="onb-status"></span><button class="primary" type="button" id="onb-next">Next</button></div>
     </div>`;
 }
-function obMainHTML(state) {
+function obMainHTML(state: OBState): string {
   const org = state.org;
   if (org.error) return `<div class="ob-card"><p class="err">${esc(org.error)}</p><div class="onb-actions"><button class="ghost" type="button" id="onb-back">Back</button></div></div>`;
   if (!org.loaded) return '<div class="ob-card"><div class="empty">Loading…</div></div>';
   return org.phase === 'finish' ? obFinishHTML(state) : org.phase === 'dept' ? obDeptHTML(state) : obPickHTML(state);
 }
 // The wizard's org step: the conversation, and the chart beside it (a strip above it on a phone).
-function obStepHTML(state) {
+function obStepHTML(state: OBState): string {
   const org = state.org;
   obEnsure(state);
   return `<div class="ob ob-phase-${org.phase}" id="ob">
@@ -296,7 +406,7 @@ function obStepHTML(state) {
       <div class="ob-main" id="ob-main">${obMainHTML(state)}</div>
     </div>`;
 }
-function obRenderChart(state, side) {
+function obRenderChart(state: OBState, side?: boolean): void {
   const org = state.org;
   if (org.phase === 'finish' && !side) {
     const big = $('#ob-chart-big');
@@ -310,7 +420,7 @@ function obRenderChart(state, side) {
   const stats = $('#ob-chart-stats'); if (stats) stats.textContent = obStats(state);
   const strip = $('#ob-strip'); if (strip) strip.innerHTML = obStripHTML(state);
 }
-function obRender(state) {
+function obRender(state: OBState): void {
   const root = $('#ob');
   if (!root) { onbRender(state); return; }
   root.className = `ob ob-phase-${state.org.phase}`;
@@ -325,19 +435,19 @@ function obRender(state) {
 }
 
 // ----------------------------------------------------------------- moving through it
-function obGo(state, at) {
+function obGo(state: OBState, at: number): void {
   const org = state.org;
   org.editing = '';
   if (at < 0) org.phase = 'pick';
   else if (at >= org.chosen.length) org.phase = 'finish';
-  else { org.phase = 'dept'; org.at = at; org.step = org.results[org.chosen[at]] ? 'suggest' : 'ask'; }
+  else { org.phase = 'dept'; org.at = at; org.step = org.results[org.chosen[at] ?? ''] ? 'suggest' : 'ask'; }
   obRender(state);
   // The new card starts in view, below the chart's strip on a phone.
   const main = $('#ob-main'), strip = $('#ob-strip');
   if (main && main.getBoundingClientRect().top < (strip?.offsetHeight || 0)) main.scrollIntoView({block: 'start'});
 }
 // The head, the department's `default` cards and whatever the answer's source said to add start checked; the rest wait.
-function obApplyDefaults(state, id, result) {
+function obApplyDefaults(state: OBState, id: string, result: OBResult): void {
   const org = state.org, cat = state.catalog, head = obHead(org, id);
   const shown = new Set(result.bots.map(row => row.template_id)), wanted = new Set(result.suggested_default || []);
   for (const card of obDeptCards(org, id)) {
@@ -347,7 +457,7 @@ function obApplyDefaults(state, id, result) {
     if (on) cat.picked.add(slug); else cat.picked.delete(slug);
   }
 }
-async function obRecruit(state) {
+async function obRecruit(state: OBState): Promise<void> {
   const org = state.org, id = obCurrent(org), briefing = ($('#ob-brief')?.value || '').trim().slice(0, 500);
   const share = !!(org.share && org.hq.available), key = JSON.stringify([briefing, share]);
   org.briefings[id] = briefing;
@@ -356,7 +466,7 @@ async function obRecruit(state) {
   org.step = 'recruiting';
   obRender(state);
   const started = Date.now();
-  let result;
+  let result: OBResult | null;
   try { result = await post('/v2/setup/recruit', {department: id, briefing, share}); }
   catch { result = null; }
   await new Promise(resolve => setTimeout(resolve, Math.max(0, OB_MIN_RECRUIT_MS - (Date.now() - started))));
@@ -364,7 +474,7 @@ async function obRecruit(state) {
   if (!result?.bots?.length) {
     // Nothing came back at all: the head and the department's usual cards, so the person still has a choice.
     const head = obHead(org, id), usual = obDeptCards(org, id).filter(card => card.template === head || card.suggest !== 'niche');
-    result = {bots: usual.sort((a, b) => (b.template === head) - (a.template === head)).map(card => ({template_id: card.template, why: ''})),
+    result = {bots: usual.sort((a, b) => Number(b.template === head) - Number(a.template === head)).map(card => ({template_id: card.template, why: ''})),
               suggested_default: head ? [head] : [], source: 'local'};
   }
   org.results[id] = result; org.asked[id] = key;
@@ -373,34 +483,35 @@ async function obRecruit(state) {
   org.step = 'suggest';
   obRender(state);
 }
-function obBack(state) {
+function obBack(state: OBState): void {
   const org = state.org;
   if (org.phase === 'finish') { obGo(state, org.chosen.length - 1); return; }
   if (org.step === 'suggest' || org.step === 'recruiting') { org.step = 'ask'; obRender(state); return; }
   obGo(state, org.at - 1);
 }
-function obSkip(state) {
+function obSkip(state: OBState): void {
   const org = state.org, id = obCurrent(org);
   for (const card of obDeptCards(org, id)) { const slug = obCatalogCard(state, card.template)?.slug; if (slug) state.catalog.picked.delete(slug); }
   org.skipped.add(id); org.decided.delete(id); org.touched = true;
   obSaveDraft(state);
   obGo(state, org.at + 1);
 }
-function obNext(state) {
+function obNext(state: OBState): void {
   const org = state.org;
   org.decided.add(obCurrent(org)); org.skipped.delete(obCurrent(org));
   obSaveDraft(state);
   obGo(state, org.at + 1);
 }
-function obWire(state) {
+function obWire(state: OBState): void {
   const root = $('#ob');
   if (!root) return;
   const org = state.org;
-  root.onclick = event => {
+  root.onclick = (event: MouseEvent) => {
     const target = event.target;
-    const tile = target.closest('[data-ob-tile]');
+    if (!(target instanceof Element)) return;
+    const tile = target.closest<HTMLElement>('[data-ob-tile]');
     if (tile) {
-      const id = tile.dataset.obTile, on = !org.chosen.includes(id);
+      const id = tile.dataset.obTile ?? '', on = !org.chosen.includes(id);
       const wanted = new Set(org.chosen); if (on) wanted.add(id); else wanted.delete(id);
       org.chosen = org.departments.map(d => d.id).filter(d => wanted.has(d));
       if (on) org.skipped.delete(id);
@@ -419,7 +530,7 @@ function obWire(state) {
     if (target.closest('#ob-edit-answer')) { org.step = 'ask'; obRender(state); return; }
     if (target.closest('#ob-departments')) { obGo(state, -1); return; }
     if (target.closest('#ob-more-toggle')) {
-      const id = org.chosen[org.at], open = !$('#ob-more').classList.contains('open');
+      const id = org.chosen[org.at] ?? '', open = !$('#ob-more').classList.contains('open');
       if (open) org.more.add(id); else org.more.delete(id);
       $('#ob-more').classList.toggle('open', open);
       $('#ob-more-toggle').setAttribute('aria-expanded', String(open));
@@ -427,34 +538,44 @@ function obWire(state) {
       return;
     }
     if (target.closest('#ob-strip')) { org.open = !org.open; $('#ob-side')?.classList.toggle('open', org.open); $('#ob-strip')?.setAttribute('aria-expanded', String(org.open)); return; }
-    const open = target.closest('[data-oc-open]');
-    if (open) {
-      const at = org.chosen.indexOf(open.dataset.ocOpen);
-      if (at >= 0 && (org.phase === 'finish' || org.decided.has(open.dataset.ocOpen) || org.skipped.has(open.dataset.ocOpen))) obGo(state, at);
+    const builtin = target.closest<HTMLElement>('[data-oc-builtin-toggle]');
+    if (builtin) {                                         // the redraw replaces the button, so focus goes back to its copy
+      const host = builtin.closest('#ob-chart-big, #ob-chart-body');
+      org.builtinOpen = !org.builtinOpen;
+      obRenderChart(state);
+      host?.querySelector<HTMLElement>('[data-oc-builtin-toggle]')?.focus();
       return;
     }
-    const remove = target.closest('[data-oc-remove]');
+    const open = target.closest<HTMLElement>('[data-oc-open]');
+    if (open) {
+      const key = open.dataset.ocOpen ?? '', at = org.chosen.indexOf(key);
+      if (at >= 0 && (org.phase === 'finish' || org.decided.has(key) || org.skipped.has(key))) obGo(state, at);
+      return;
+    }
+    const remove = target.closest<HTMLElement>('[data-oc-remove]');
     if (remove) { state.catalog.picked.delete(remove.dataset.ocRemove); org.editing = ''; org.touched = true; obRenderChart(state); return; }
     if (target.closest('[data-oc-done]')) { org.editing = ''; obRenderChart(state); return; }
-    const edit = target.closest('[data-oc-edit]');
-    if (edit && org.phase === 'finish') { org.editing = org.editing === edit.dataset.ocEdit ? '' : edit.dataset.ocEdit; obRenderChart(state); $(`[data-oc-name="${cssSelectorValue(org.editing)}"]`)?.focus(); }
+    const edit = target.closest<HTMLElement>('[data-oc-edit]');
+    if (edit && org.phase === 'finish') { org.editing = org.editing === (edit.dataset.ocEdit ?? '') ? '' : (edit.dataset.ocEdit ?? ''); obRenderChart(state); $(`[data-oc-name="${cssSelectorValue(org.editing)}"]`)?.focus(); }
   };
-  root.onsubmit = event => {
-    if (event.target.id !== 'ob-ask') return;
+  root.onsubmit = (event: Event) => {
+    const target = event.target;
+    if (!(target instanceof Element) || target.id !== 'ob-ask') return;
     event.preventDefault();
     void obRecruit(state);
   };
-  root.onchange = event => {
+  root.onchange = (event: Event) => {
     const target = event.target;
-    if (target.id === 'ob-hq') { org.share = target.checked; return; }
-    const helper = target.closest('[data-ob-helper]');
+    if (!(target instanceof Element)) return;
+    if (target instanceof HTMLInputElement && target.id === 'ob-hq') { org.share = target.checked; return; }
+    const helper = target.closest<HTMLInputElement>('[data-ob-helper]');
     if (helper) {
       if (helper.checked) state.catalog.picked.add(helper.dataset.obHelper); else state.catalog.picked.delete(helper.dataset.obHelper);
       org.touched = true;
       obRender(state);                                     // the Inbox Manager asks whose mailbox
       return;
     }
-    const pick = target.closest('[data-ob-pick]');
+    const pick = target.closest<HTMLInputElement>('[data-ob-pick]');
     if (pick) {
       const slug = pick.dataset.obPick;
       if (pick.checked) state.catalog.picked.add(slug); else state.catalog.picked.delete(slug);
@@ -463,15 +584,16 @@ function obWire(state) {
       obRenderChart(state);
       return;
     }
-    const mailbox = target.closest('[data-cat-mailbox]');
-    if (mailbox) { (state.catalog.edits[mailbox.dataset.catMailbox] ||= {}).person = mailbox.value; return; }
-    const reports = target.closest('[data-oc-reports]');
-    if (reports) { (state.catalog.edits[reports.dataset.ocReports] ||= {}).reports_to = reports.value; org.touched = true; obRenderChart(state); }
+    const mailbox = target.closest<HTMLSelectElement>('[data-cat-mailbox]');
+    if (mailbox) { (state.catalog.edits[mailbox.dataset.catMailbox ?? ''] ||= {}).person = mailbox.value; return; }
+    const reports = target.closest<HTMLSelectElement>('[data-oc-reports]');
+    if (reports) { (state.catalog.edits[reports.dataset.ocReports ?? ''] ||= {}).reports_to = reports.value; org.touched = true; obRenderChart(state); }
   };
-  root.oninput = event => {
-    const name = event.target.closest('[data-oc-name]');
+  root.oninput = (event: Event) => {
+    const target = event.target;
+    const name = target instanceof Element ? target.closest<HTMLInputElement>('[data-oc-name]') : null;
     if (!name) return;
-    const slug = name.dataset.ocName;
+    const slug = name.dataset.ocName ?? '';
     (state.catalog.edits[slug] ||= {}).display_name = name.value;
     state.catalog.touched.add(slug);
     const label = document.querySelector(`[data-oc-label="${cssSelectorValue(slug)}"]`);
@@ -479,15 +601,15 @@ function obWire(state) {
   };
   if (!window.obResizeWired) {
     window.obResizeWired = true;
-    let timer = null;
+    let timer: ReturnType<typeof setTimeout> | null = null;
     window.addEventListener('resize', () => {
-      clearTimeout(timer);
+      clearTimeout(timer ?? undefined);
       timer = setTimeout(() => { if (ONB?.org?.phase === 'finish' && $('#ob-chart-big')) obRenderChart(ONB); }, 150);
     });
   }
 }
 // The advance from the chart: a cycle or a missing mailbox is said here, not after Create.
-function obCanAdvance(state) {
+function obCanAdvance(state: OBState): boolean {
   const problem = frProblem(state), box = $('#team-problem');
   if (box) { box.textContent = problem; box.hidden = !problem; }
   return !problem;

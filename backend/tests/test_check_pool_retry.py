@@ -10,10 +10,10 @@ from threading import Event, local
 import pytest
 
 from backend import check_pools as P, hubdb as H, review_gate
-from backend.tests.test_check_pools import busy, checks, set_pool, team
-from backend.tests.test_github import api  # noqa: F401
-from backend.tests.test_review_gate import HEAD, OLD, move, ticket
-from backend.tests.test_review_gate_fresh import github
+from backend.tests.helpers.check_pools import busy, checks, set_pool, team
+from backend.tests.helpers.github import api  # noqa: F401
+from backend.tests.helpers.review_gate import HEAD, OLD, move, ticket
+from backend.tests.helpers.review_gate_fresh import github
 
 
 def waiting_ticket(api, number, reviewer, kind='review'):

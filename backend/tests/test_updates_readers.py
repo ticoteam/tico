@@ -9,7 +9,8 @@ import sqlite3
 from backend import updates
 from backend.auth import Identity
 from backend.store import H
-from backend.tests.test_api import api, get, post, restrict, setup_attempt  # noqa: F401
+from backend.tests.helpers.api import get, post, restrict, setup_attempt  # noqa: F401
+from backend.tests.test_api import api  # noqa: F401
 
 DAY = "2026-09-29"
 NOTE = "Synthetic meeting note alpha"

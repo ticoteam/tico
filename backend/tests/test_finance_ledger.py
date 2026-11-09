@@ -7,10 +7,10 @@ from contextlib import closing
 
 import pytest
 
-from backend.tests.test_migrations import restore_config  # the column back for a rerun from before 0070
+from backend.tests.helpers.migrations import restore_config  # the column back for a rerun from before 0070
 from backend.finance import actions as FA
 from backend.finance.store import schema
-from backend.tests.test_finance_fixtures import (  # noqa: F401
+from backend.tests.helpers.finance_fixtures import (
     AT,
     OWNER,
     FakeMercury,
@@ -94,6 +94,7 @@ def test_setup_is_idempotent_and_leaves_ai_services_without_an_amount(store):
         assert first.created and not again.created and first.accounts == again.accounts
         assert first.budgets == again.budgets and set(first.budgets) == {
             "AI services",
+            "CI",
             "Video production",
             "Other expenses",
         }
@@ -292,7 +293,7 @@ def test_usage_postings_are_posted_once_per_source(books):
 
 def test_a_fresh_database_gets_the_finance_tables(tmp_path):
     from backend.store import Store
-    from backend.tests.test_api import api_settings
+    from backend.tests.helpers.api import api_settings
 
     s = Store(api_settings(tmp_path))
     s.initialize(seed_market=False)

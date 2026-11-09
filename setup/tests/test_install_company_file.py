@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pytest
 
-from setup.tests.test_install_runner import box, install  # noqa: F401  (box is a fixture)
+from setup.tests.helpers.install_runner import box, install  # noqa: F401  (box is a fixture)
 
 COMPANY = b"version: '0.2'\ncompany:\n  name: Acme Heating & Air\n"  # the packer is a stub: any bytes will do
 PACKED = "H4sIAAAAAAAC+stub/packed/text=="  # standard base64, as backend.company_file.starter.pack prints it

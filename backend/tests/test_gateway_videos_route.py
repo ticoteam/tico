@@ -2,7 +2,8 @@
 the job's state and GET its MP4 read it through the server. The Gateway is faked (no call leaves the test), and a video
 at its Finance budget's cutoff is refused before anything is sent."""
 
-from backend.tests.test_api import api, headers  # noqa: F401
+from backend.tests.helpers.api import headers  # noqa: F401
+from backend.tests.test_api import api  # noqa: F401
 from clients import gateway as G
 
 JOB = "gv_" + "c" * 24
@@ -105,7 +106,7 @@ def test_a_video_needs_a_connected_gateway_and_stops_at_the_video_budget(api, mo
     from datetime import datetime, timezone
 
     from backend.finance import actions as FA
-    from backend.tests.test_finance_fixtures import act, budget, spend
+    from backend.tests.helpers.finance_fixtures import act, budget, spend
 
     refused = api.post("/api/v2/gateway/videos", json={"prompt": "x"}, headers=headers("ana-test"))
     assert refused.status_code == 409 and refused.json()["error"]["code"] == "gateway_not_connected"

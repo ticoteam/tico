@@ -3,13 +3,12 @@ question task with no options under the task, the task's `waiting_on` is that qu
 open, and answering it opens the task again with one wake. The migration's old rows become question tasks or the
 bot's blocker; a private parent names its person only where the question task's words may flow up."""
 
-import importlib.util
-from pathlib import Path
-
 from backend import hubdb as H, question_tasks as QT, task_holds, task_relations as TR
 from backend.tests.old_asks import old_ask
-from backend.tests.test_api import api, get, post  # noqa: F401  (fixture)
-from backend.tests.test_question_tasks import _answer, _bot_only_private_parent, _mark, _to, _to_ops, _work
+from backend.tests.helpers.api import get, post  # noqa: F401  (fixture)
+from backend.tests.test_api import api  # noqa: F401  (fixture)
+from backend.tests.helpers.question_tasks import _answer, _bot_only_private_parent, _mark, _to, _to_ops, _work
+from backend.tests.helpers.derived_waiting import _migration
 
 ASK = "Pick the launch date? I'll book the venue after."
 
@@ -87,14 +86,6 @@ def test_a_private_parents_waiting_names_its_person_only_where_the_answer_flows_
     assert "Ben" not in str(view["holds"]) and "human:ben" not in str(view["holds"])
 
 
-def _migration(name):
-    path = Path(__file__).resolve().parents[1] / "migrations" / f"{name}.py"
-    spec = importlib.util.spec_from_file_location(name, path)
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
-
-
 def test_a_file_with_no_waits_to_move_gets_no_staging_table(api):
     up = _migration("20261106112609_derived_waiting").up
     with api.app.state.store.transaction() as c:
@@ -159,7 +150,7 @@ def test_the_migration_turns_old_waits_into_question_tasks_and_blockers(api):
 
 
 def test_the_strategy_bots_merged_question_task_passes_its_answer_on_when_closed(api):
-    from backend.tests.test_strategy_bot_suggests import OWNER, STRATEGY_BOT, ask_ana, level, with_strategy_bot
+    from backend.tests.helpers.strategy_bot_suggests import OWNER, STRATEGY_BOT, ask_ana, level, with_strategy_bot
 
     token = with_strategy_bot(api)
     level(api, 2)

@@ -50,6 +50,10 @@ SEED_QA = {
 }
 POOLS = {**SEED, **SEED_QA}
 SEEDED = "check_pools.seeded"
+# A Dev board found by its role (company_default's Engineering) has none of those bots: its review steps take the
+# company's bots made from this template instead, each once (`join_reviewers`).
+REVIEWER = "pr-reviewer"
+JOINED = "check_pools.joined"
 # A Security check is asked for by title; it is no step of a board.
 SECURITY = re.compile(r"^Security(?:\b|:)", re.I)
 
@@ -190,11 +194,12 @@ def clean(c, actor, raw, existing):
 def seed(c):
     """Give each Dev tickets type the proposed pools once, with the bots the company has; a step that already has one
     keeps it. A type is marked only once at least one of those bots exists, so a new team gets its pools when it has
-    its reviewers."""
+    its reviewers. A Dev board found by its role takes the company's reviewers by template (`join_reviewers`)."""
     from .roadmap_flow import _dev
 
     if not _ready(c):
         return
+    join_reviewers(c)
     for ident, name in c.execute("SELECT id,name FROM task_types").fetchall():
         if (
             not _dev((ident, name))
@@ -221,6 +226,54 @@ def seed(c):
                 given[step] = have
         if any(c.execute("SELECT 1 FROM bots WHERE slug=?", (s,)).fetchone() for v in POOLS.values() for s in v):
             H.event(c, H.KEEPER, SEEDED, ident, {"pools": given})
+
+
+def join_reviewers(c):
+    """Each Dev board found by its role, not by a Dev name (roadmap_flow.dev_board: company_default's Engineering), takes
+    every bot made from the pr-reviewer template into its review steps' pools, once per bot: a bot hired later joins
+    when its seat is filled (pipeline_setup.seat_filled) or at the next start, and a bot a person takes out of a pool is
+    not put back. With no such bot the steps keep no pool, as a Dev tickets type with none of the proposed bots does. A
+    Dev tickets type keeps its proposed pools (`seed`) and takes no one this way."""
+    from . import step_flow
+    from .roadmap_flow import _dev, dev_board
+
+    if not _ready(c):
+        return
+    reviewers = [
+        r[0]
+        for r in c.execute(
+            f"SELECT b.id FROM bots b JOIN bot_config bc ON bc.bot=b.id {BS.JOIN} "
+            "WHERE s.template=? AND coalesce(b.state,'')<>'archived' ORDER BY b.created_at,b.slug",
+            (REVIEWER,),
+        )
+    ]
+    if not reviewers:
+        return
+    for ident, name in c.execute("SELECT id,name FROM task_types ORDER BY created_at,id").fetchall():
+        if _dev((ident, name)) or not dev_board(c, ident, name):
+            continue
+        steps = [
+            s["id"]
+            for s in map(
+                dict, c.execute("SELECT * FROM task_steps WHERE type_id=? ORDER BY position,id", (ident,)).fetchall()
+            )
+            if s["name"] in SEED or step_flow.check_kind(s) == "review"
+        ]
+        for bot in reviewers:
+            target = f"{ident}:{bot}"
+            if c.execute("SELECT 1 FROM events WHERE action=? AND target=? LIMIT 1", (JOINED, target)).fetchone():
+                continue
+            given = []
+            for step in steps:
+                have = members(c.execute("SELECT check_pool FROM task_steps WHERE id=?", (step,)).fetchone()[0]) or []
+                if bot in have:
+                    continue
+                c.execute(
+                    "UPDATE task_steps SET check_pool=?,check_limit=coalesce(check_limit,?) WHERE id=?",
+                    (json.dumps([*have, bot]), DEFAULT_LIMIT, step),
+                )
+                given.append(step)
+            H.event(c, H.KEEPER, JOINED, target, {"type": ident, "bot": bot, "steps": given})
 
 
 def pool(c, step_id):

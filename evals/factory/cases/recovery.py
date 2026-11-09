@@ -55,6 +55,12 @@ def runner_restarts(when):
         if getattr(run, "restarted", False) or w.now() < START + when:
             return
         run.restarted = True
+        # A turn whose run time ended before this tick is finished, not running: the sim ends turns on ticks, so one
+        # due since the last tick would otherwise be cut off by the restart, which a real runner never does (it reports
+        # the end as it happens).
+        for bot in team.all:
+            if bot.due(w.now()):
+                bot.end()
         run.running_at_restart = [b.slug for b in team.all if b.running]
         if run.running_at_restart:
             # The runner's list still names the first bot it was running as busy for its first rounds, though that

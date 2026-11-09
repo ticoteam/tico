@@ -8,8 +8,8 @@ from backend import system_routines as SR
 from backend.finance import reads as FR
 from backend.scheduler import Scheduler
 from backend.store import H
-from backend.tests.test_bookkeeper import built, checks, ensure
-from backend.tests.test_onboarding import environment  # noqa: F401
+from backend.tests.helpers.bookkeeper import built, checks, ensure
+from backend.tests.helpers.onboarding import environment  # noqa: F401
 
 FINDING = {
     "kind": "duplicate_charge",

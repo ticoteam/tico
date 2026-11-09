@@ -8,45 +8,14 @@ import pytest
 
 from backend import usage_limits
 from backend.store import H
-from backend.tests.test_api import api, assign, claim, get, post, runner  # noqa: F401  (api is a fixture)
-from backend.tests.test_check_models import company, finish, heartbeat
+from backend.tests.helpers.api import assign, claim, get, post, runner  # noqa: F401  (api is a fixture)
+from backend.tests.test_api import api  # noqa: F401  (api is a fixture)
+from backend.tests.helpers.check_models import company, finish, heartbeat
 from backend import bot_settings as BS
+from backend.tests.helpers.task_models import ops_on_sonnet, revision, set_task_model, task_turn
 
 HAIKU = {"harness": "claude", "model": "claude-haiku-5-5", "effort": "low"}
 HAIKU_RAN = {"model": "claude-haiku-5-5", "runtime": "claude", "harness": "claude", "effort": "low", "billing": "api"}
-
-
-def revision(api, bot="ops"):
-    return get(api, f"bots/{bot}/access")["revision"]
-
-
-def set_task_model(api, choice, bot="ops", expected=200):
-    return post(
-        api,
-        f"bots/{bot}/task-model",
-        {"task_model": choice, "expected_revision": revision(api, bot)},
-        expected=expected,
-    )
-
-
-def ops_on_sonnet(api):
-    """ops on Claude Sonnet at high effort, on a computer signed in to Claude and Grok."""
-    company(api, "anthropic", "xai")
-    with api.app.state.store.transaction() as c:
-        config = BS.read(c, 'ops')
-        config.update(runtime="claude", harness="claude", model="claude-sonnet-5-5", reasoning_effort="high")
-        BS.write(c, 'ops', config)
-    machine = runner(api)
-    assign(api, machine, "ops")
-    heartbeat(api, machine)
-    return machine
-
-
-def task_turn(api, machine, title="Tidy the changelog"):
-    task = post(api, "tasks", {"owner": "ops", "title": title, "body": "Sort the entries."})
-    turn = claim(api, machine)
-    assert turn["task"]["id"] == task["id"]
-    return task, turn
 
 
 def test_a_cross_runtime_task_model_is_required_until_cleared_and_runs_after_sync(api):
@@ -561,7 +530,7 @@ def test_a_task_model_its_computer_has_not_installed_falls_back_rather_than_wait
 
 def test_under_the_gateway_preset_a_task_model_not_signed_in_runs_on_the_bots_model_not_the_gateway(api, monkeypatch):
     from backend import models_preset
-    from backend.tests.test_models_preset import choose, connected
+    from backend.tests.helpers.models_preset import choose, connected
 
     connected(api, monkeypatch)
     choose(api, models_preset.RECOMMENDED)

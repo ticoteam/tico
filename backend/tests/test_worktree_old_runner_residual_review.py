@@ -6,28 +6,8 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from backend.tests.test_worktrees import api, gh, prepared, post, auth  # noqa: F401
-
-
-def heartbeat(api, link, state=None):
-    report = (
-        []
-        if state is None
-        else [{"link_id": link["link_id"], "state": state, "branch": link["branch"], "repo": "Acme/product"}]
-    )
-    response = post(
-        api,
-        "runners/heartbeat",
-        {
-            "version": "0.2.35",
-            "platform": "darwin",
-            "readiness": {"schema_version": 1, "worktrees": True},
-            "worktrees": report,
-        },
-        "runner-test",
-    )
-    assert response.status_code == 200, response.text
-    return response.json()["worktree_actions"]
+from backend.tests.helpers.worktrees import api, gh, prepared, post, auth  # noqa: F401
+from backend.tests.helpers.worktree_old_runner_residual_review import heartbeat
 
 
 @pytest.mark.parametrize(("saved_state", "report_state"), [("present", "missing"), ("unknown", "present")])

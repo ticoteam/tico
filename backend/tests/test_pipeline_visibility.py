@@ -6,7 +6,7 @@ edits a members-only pipeline's rules without seeing it: seeing is for the owner
 from backend import access
 from backend import hubdb as H
 from backend import pipeline_rights as P
-from backend.tests.test_pipeline_foundation import ANA, T, boot, hub, insert
+from backend.tests.helpers.pipeline_foundation import ANA, T, boot, hub, insert
 
 STEPS = [{"name": "Doing", "status": "doing"}, {"name": "Done", "status": "done"}]
 OUTSIDER = "human:dana"  # on no roster and no owner or Admin list: sees only what is company-wide

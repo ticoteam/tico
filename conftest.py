@@ -228,7 +228,7 @@ def api_database(tmp_path_factory, request):
     import sqlite3
     from contextlib import closing
     from backend.store import Store
-    from backend.tests.test_api import api_settings
+    from backend.tests.helpers.api import api_settings
 
     if request.config.getoption("--fresh-api-databases") or not request.config.getoption("--api-database-snapshots"):
         return None

@@ -6,8 +6,9 @@ import struct
 import zlib
 
 
-from backend.tests.test_api import api, assign, claim, headers, post, ready, runner  # noqa: F401
-from backend.tests.test_task_review import get, task
+from backend.tests.helpers.api import assign, claim, headers, post, ready, runner  # noqa: F401
+from backend.tests.test_api import api  # noqa: F401
+from backend.tests.helpers.task_review import get, task
 
 
 def png(color):

@@ -16,7 +16,6 @@ from backend import demo_content as D
 from backend import usage_limits as U
 from backend.demo_sections import budgets as B
 from backend.app import create_app
-from clients import judge as J
 
 NOW = datetime(2026, 11, 6, 18, 30, tzinfo=timezone.utc)  # a Friday evening: the week is complete
 ROSTER = {slug for slug, _template, _parent in D.BOTS}
@@ -70,30 +69,27 @@ def real_clock_at(patch, moment):
     patch.setattr(U, "datetime", clock)
 
 
-def no_answering_judge(patch):
-    """Both builds see the same decision model: one that never answers. The seed app is not a demo, so the server's
-    model would be asked for real while the company is seeded, and what the provider gives back (a refused made-up key,
-    or no answer in time) depends on the run. The rule check reads the model through the module, so that is what is
-    replaced; its `judge.call` row and `rules.unchecked` event are still written, the same in both builds."""
-
-    def engine(state, questions, label=None, level=None):
-        raise J.JudgeError("unavailable", "the test's decision model does not answer")
-
-    patch.setattr(judge, "server_engine", lambda *args, **kwargs: engine)
+@pytest.fixture(scope="module")
+def dialed():
+    """The outbound connections the builds below tried (and were refused), in order."""
+    return []
 
 
 @pytest.fixture(scope="module")
-def built(tmp_path_factory):
+def built(tmp_path_factory, dialed):
     """Two builds of the same date, back to back, read before any app has opened either database. The machine's clock
     crosses 07:00 UTC (a usage-limit window edge) between them: the first build runs just after it, the second just
-    before. Both see the same decision model (`no_answering_judge`)."""
-    with pytest.MonkeyPatch.context() as patch:
-        no_answering_judge(patch)
+    before. Like `tico demo` (demo.main), they build with the network blocked. The build asks no model: without this, a
+    person's message check dials the Gateway the demo saved a key for, and the answer depends on timing."""
+    with pytest.MonkeyPatch.context() as patch, demo.network_blocked() as attempts:
+        tried = len(attempts)
+        patch.setattr(judge, "server_engine", lambda *args, **kwargs: None)
         real_clock_at(patch, datetime(2026, 11, 6, 7, 0, 1, tzinfo=timezone.utc))
         first = demo.build(tmp_path_factory.mktemp("company"), now=NOW)
         rows = stored(first.db_path)
         real_clock_at(patch, datetime(2026, 11, 6, 6, 59, 59, tzinfo=timezone.utc))
         second = demo.build(tmp_path_factory.mktemp("company-again"), now=NOW)
+        dialed.extend(attempts[tried:])
         return first, rows, stored(second.db_path)
 
 
@@ -354,6 +350,21 @@ def test_the_same_date_builds_the_same_company(built):
     assert any(hours), "the windows hold spend, so the hour is really compared"
 
 
+def test_the_build_asks_no_model_and_dials_nothing(built, dialed):
+    """The seed saves made-up provider keys, so a decision call during the build is a refused key or a timeout, whichever
+    the network gives: run to run, the same date stored a different company (`"error": "auth"` in one build's rule
+    check, `"unavailable"` in its twin's). The build asks no model, so it reaches no one and no call can fail."""
+    first, rows, _again = built
+    assert dialed == []
+    with closing(sqlite3.connect(first.db_path)) as db:
+        columns = [column[1] for column in db.execute("PRAGMA table_info(events)")]
+    action, detail = columns.index("action"), columns.index("detail")
+    failed = [
+        row for row in rows["events"] if row[action] == "judge.call" and "error" in json.loads(row[detail] or "{}")
+    ]
+    assert failed == []
+
+
 def test_the_build_asks_no_model_for_a_person(built):
     """A person's rule check is held to the people's daily cap, which the build zeroes: no judge call is recorded for a
     person's check, so no model is dialled with the demo's made-up keys (the answer would depend on timing)."""
@@ -378,6 +389,8 @@ def test_every_department_has_its_lead_and_answers_to_a_person(ana):
         assert (kind + ":" + names.get(key, key)) == lead, f"{gid} is led by {lead}"
         assert set(members) <= set(groups[gid]["bot_slugs"]), f"{gid} holds {members}"
     for group in groups.values():
+        if group["id"] == "built-in":  # Tico's own upkeep, not a department: it has no lead and is not checked here
+            continue
         for slug in group["bot_slugs"]:
             seen, at = set(), slug  # a bot's reports_to is a bot's slug or "human:<id>"
             while at in by_slug and at not in seen:
@@ -399,3 +412,16 @@ def test_each_department_lead_has_a_goal_that_rolls_up_to_the_company_goal(ana):
             while at["parent_id"] and steps < 10:
                 at, steps = goals[at["parent_id"]], steps + 1
             assert at["id"] == company["id"], f"{goal['title']} rolls up to the company goal"
+
+
+def test_the_demo_seed_polls_no_inbound_deliveries(monkeypatch):
+    """With an inbound key set, the demo build's app (`demo_build`) must not poll for real deliveries (they would be
+    fetched and acknowledged). The control case, the same settings without the build, polls: so the gate turns it off."""
+    from types import SimpleNamespace
+
+    from backend.inbound import Inbound
+
+    monkeypatch.setenv("TICO_INBOUND_KEY", "demo-key")
+    base = dict(demo=False, rehearsal=False, demo_build=False)
+    assert Inbound(None, SimpleNamespace(**base), None).off is False
+    assert Inbound(None, SimpleNamespace(**{**base, "demo_build": True}), None).off is True

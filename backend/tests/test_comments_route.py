@@ -6,12 +6,13 @@ import pytest
 
 from backend import threads
 from backend.store import H
-from backend.tests.test_api import api, get, headers, post  # noqa: F401  (the fixture and its helpers)
+from backend.tests.helpers.api import get, headers, post  # noqa: F401  (the fixture and its helpers)
+from backend.tests.test_api import api  # noqa: F401  (the fixture and its helpers)
 
 
 @pytest.fixture(autouse=True)
 def private_tasks_have_an_unrelated_manager(api):
-    from backend.tests.test_api import unrelated_task_managers
+    from backend.tests.helpers.api import unrelated_task_managers
 
     with api.app.state.store.transaction() as c:
         unrelated_task_managers(c)

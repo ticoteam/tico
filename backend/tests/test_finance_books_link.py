@@ -15,42 +15,15 @@ from backend.finance import books_link
 from backend.finance.store import banking as SK
 from backend.finance.store import mirror as SX
 from backend.finance.store import tico as T
-from backend.tests.test_api import api, get, headers  # noqa: F401
-from backend.tests.test_hook_relay import hq, service  # noqa: F401
-from backend.tests.test_finance_fixtures import AT, OWNER, act, books, finance_template, store  # noqa: F401
+from backend.tests.helpers.api import get, headers  # noqa: F401
+from backend.tests.test_api import api  # noqa: F401
+from backend.tests.helpers.hook_relay import hq, service  # noqa: F401
+from backend.tests.helpers.finance_fixtures import AT, OWNER, act, books, finance_template, store  # noqa: F401
+from backend.tests.helpers.finance_books_link import COMPANY, HQ, LINK, tokens
 
-COMPANY = "2f7c1d3e-5b8a-4c6d-9e0f-1a2b3c4d5e6f"  # a fictional company id
 CONSENT = "https://consent.acme.example/start/1"
 LATER = "2026-10-15T12:40:00Z"
-LINK = hook_relay.Link("gk_test", "https://updates.tico.team/v1/gateway", "fp")
 BOOKS_RETURN = "/api/v2/finance/books/return/"
-
-
-class HQ:
-    """HQ's books broker in place of the network: each endpoint answers from its list in order (an exception is
-    raised), and every call is recorded as (path, body)."""
-
-    def __init__(self, **answers: list[Any]) -> None:
-        self.answers = answers
-        self.calls: list[tuple[str, dict[str, Any]]] = []
-
-    def __call__(self, link: object, path: str, body: dict[str, Any]) -> dict[str, Any]:
-        self.calls.append((path, dict(body)))
-        answer = self.answers[path.rsplit("/", 1)[1]].pop(0)
-        if isinstance(answer, Exception):
-            raise answer
-        return dict(answer)
-
-
-def tokens(access: str, refresh: str, expires: str = "2026-10-15T12:30:00Z") -> dict[str, Any]:
-    return {
-        "access_token": access,
-        "refresh_token": refresh,
-        "expires_at": expires,
-        "refresh_expires_at": None,
-        "realm_id": "123",
-        "tenant_id": None,
-    }
 
 
 def claims(hq: HQ) -> int:

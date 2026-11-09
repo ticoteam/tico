@@ -4,23 +4,23 @@ and the bots that report to no one under it. There is no switch a person sees. O
 `reports_to` stays as it was, and so does who may do what. Only the owner renames it."""
 
 import json
-import uuid
 
 from backend import strategy_bot, strategy_suggest
 from backend.auth import Identity
 from backend.store import H
-from backend.tests.test_goal_manager import BASE, with_goal_manager
-from backend.tests.test_onboarding import (
+from backend.tests.helpers.goal_manager import BASE, with_goal_manager
+from backend.tests.helpers.onboarding import (
     SUPPORT_AGENT,
     SUPPORT_CARD,
     as_person,
     build_team,
-    draft,  # noqa: F401
+    draft,
     environment,
     machine,
     signed_in,
 )
 from backend import bot_settings as BS
+from backend.tests.helpers.strategy_bot import as_bot
 
 LEAD_CARD = {
     "template": "sales-lead",
@@ -75,12 +75,13 @@ def company(environment):
         },
     )
     build_team(api)
-    # The team builder put the Heads and their reports in the Heads' department (Sales); the owner has a group too.
+    # The team builder put the Heads and their reports in the Heads' department (Sales). The outside helper bots (no
+    # team of their own) sit in the Built-in group, which Tico keeps; the owner has no group yet.
     names = labels(api)
     assert {
         g["id"]: sorted(names.get(bot, bot) for bot in g["bots"])
         for g in api.get("/api/v2/groups", headers=signed_in()).json()
-    } == {"sales": ["eng-lead", "sales-lead", "support"]}
+    } == {"sales": ["eng-lead", "sales-lead", "support"], "built-in": ["botops", "coo", "goal-manager", "inbox"]}
     home = api.post(
         "/api/v2/groups", json={"name": "Home", "add": {"people": ["morgan"], "bots": ["scribe"]}}, headers=signed_in()
     )
@@ -137,21 +138,6 @@ def stored(api):
         }
         display = {r["slug"]: r["display_name"] for r in c.execute("SELECT slug,display_name FROM bots")}
     return reports, display
-
-
-def as_bot(api, slug):
-    """The bot itself, as an agent credential (the way backend/tests/test_health.py signs one in)."""
-    token = slug + "-test"
-    with api.app.state.store.transaction() as c:
-        bot_id = (H.resolve_bot(c, slug) or {}).get("id", slug)
-        c.execute("UPDATE bots SET state='active' WHERE id=?", (bot_id,))
-        c.execute(
-            "INSERT OR IGNORE INTO agents(bot,harness,token_hash,created_at,created_by) "
-            "VALUES(?,'hermes',?,?,'human:morgan')",
-            (bot_id, "x-" + bot_id, H.now()),
-        )
-    api.app.state.store.settings.test_identities[token] = Identity(H.bot_actor(bot_id), "bot", agent="hermes")
-    return {"Authorization": "Bearer " + token, "Idempotency-Key": str(uuid.uuid4())}
 
 
 def definition(api, body, headers=None):
@@ -253,7 +239,9 @@ def test_the_strategy_bot_heads_the_chart_gains_no_access_and_answers_to_its_old
     assert under_strategy == {"sales-lead", "eng-lead", "scribe"}
     assert bots["support"][0] == "b:sales-lead"
     # The Head's department hangs under the Strategy Bot with it; the owner's own group stays, or the chart would loop.
-    assert groups(api) == groups(api, "/api/humans") == {"sales": "b:goal-manager", "home": ""}
+    # The Built-in group is top level, not under the Strategy Bot even though goal-manager sits in it.
+    expected = {"sales": "b:goal-manager", "home": "", "built-in": ""}
+    assert groups(api) == groups(api, "/api/humans") == expected
     assert bots["personal"][0] == "p:morgan" and bots["rileys"][0] == "p:riley"
     assert bots["coo"][0] == "p:morgan" and bots["inbox"][0] != "b:goal-manager"  # the Assistant is not under it
     # The chart moved; who each bot reports to did not, in the API or in the database.
@@ -381,7 +369,7 @@ def test_a_person_hides_the_strategy_bot_from_their_own_chart_and_only_with_a_ye
     assert {slug: row[1] for slug, row in mine["org"].items()} == {
         slug: row[1] for slug, row in before["morgan"]["org"].items() if slug != "goal-manager"
     }
-    assert mine["org_groups"] == mine["humans_groups"] == {"sales": "", "home": ""}
+    assert mine["org_groups"] == mine["humans_groups"] == {"sales": "", "home": "", "built-in": ""}
     assert mine["org_seats"][sid] == "p:morgan"
     # The employee rows: every bot still listed, the Strategy Bot marked for the chart to leave off, nothing moved under
     # it.

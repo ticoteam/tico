@@ -4,7 +4,7 @@ good, or read by a bot that looked at a file with no text. Covers the parser (a 
 rules (one good candidate is a suggestion, two equal ones are not, a row that syncs later is matched, nothing attaches
 while auto-attach is off, and a match at the setting attaches), the actions (accept on the row or another one, undo,
 reject), the Watch findings they move, the rights (a bot accepts on its own card and another bot sees nothing), the reads,
-and the briefing line. The browser side is ui/tests/finance-receipts.cjs."""
+and the briefing line. The browser side is ui/tests/finance-receipts.cts."""
 
 import json
 
@@ -18,7 +18,7 @@ from backend.finance.core.errors import FinanceError
 from backend.finance.store import ap as SAP
 from backend.finance.store import ledger as SL
 from backend.finance.store import receipts as RS
-from backend.tests.test_finance_fixtures import AT, OWNER, account, act, books, finance_template, store  # noqa: F401
+from backend.tests.helpers.finance_fixtures import AT, OWNER, account, act, books, finance_template, store  # noqa: F401
 
 NOV = "2026-11-08T12:00:00.000000Z"  # the briefing is read on this day: Canva Nov 1 and Later Nov 3 are a week back
 BOT = "bot:coder"  # holds the card in these tests; its Library files are the coder bot's

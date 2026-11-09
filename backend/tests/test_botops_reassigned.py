@@ -1,8 +1,9 @@
 """A person's task reaches BotOps with their rights only when they gave it to BotOps themselves. A bot that reassigns a
 person's task to BotOps lends only its own rights: what they refuse goes to the person as a Confirm card."""
 
-from backend.tests.test_api import api, assign, claim, get, headers, post, ready  # noqa: F401  (fixture)
-from backend.tests.test_member_bots import botops, finish  # noqa: F401  (fixture)
+from backend.tests.helpers.api import assign, claim, get, headers, post, ready  # noqa: F401  (fixture)
+from backend.tests.test_api import api  # noqa: F401  (fixture)
+from backend.tests.helpers.member_bots import botops, finish  # noqa: F401  (fixture)
 from backend.store import H
 
 

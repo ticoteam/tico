@@ -6,10 +6,11 @@ import pytest
 
 from backend import task_privacy as privacy
 from backend.store import H
-from backend.tests.test_api import api, get, headers, post  # noqa: F401
-from backend.tests.test_task_readers import dry_run, refused, run_on, task
-from backend.tests.test_task_sealed_child import ROUTE, carry, run_for, sees
-from backend.tests.test_tasks_board import bot_token
+from backend.tests.helpers.api import get, headers, post  # noqa: F401
+from backend.tests.test_api import api  # noqa: F401
+from backend.tests.helpers.task_readers import dry_run, refused, run_on, task
+from backend.tests.helpers.task_sealed_child import ROUTE, carry, run_for, sees
+from backend.tests.helpers.tasks_board import bot_token
 
 REPAIR = {
     "title": "Check the chat setting before an upload is stored",
@@ -26,7 +27,7 @@ FILE = "file-" + "0a1b2c3d4e5f6a7b8c9d0e1f"
 
 @pytest.fixture(autouse=True)
 def private_tasks_have_an_unrelated_manager(api):
-    from backend.tests.test_api import unrelated_task_managers
+    from backend.tests.helpers.api import unrelated_task_managers
 
     with api.app.state.store.transaction() as c:
         unrelated_task_managers(c)

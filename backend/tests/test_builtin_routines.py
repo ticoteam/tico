@@ -11,10 +11,9 @@ from fastapi.testclient import TestClient
 
 from backend import routines
 from backend.app import create_app
-from backend.tests.test_onboarding import ASSISTANT_AGENT, ASSISTANT_CARD, BOTOPS_CARD, environment  # noqa: F401  (the fixture)
+from backend.tests.helpers.onboarding import ASSISTANT_AGENT, ASSISTANT_CARD, BOTOPS_CARD, environment  # noqa: F401  (the fixture)
+from backend.tests.helpers.builtin_routines import COO, SWEEP, _ensure, _row, _write_assistant_routines
 
-COO = {"coo": {"name": "Coo", "status": "active", "template": "assistant"}}
-SWEEP = "coo:daily-sweep"
 BOOKKEEPER = {"bk": {"name": "Bk", "status": "active", "template": "bookkeeper"}}
 BOOKKEEPER_CARD = {
     "template": "bookkeeper",
@@ -38,27 +37,6 @@ MONTHLY = {
 }
 
 
-def _write_assistant_routines(api):
-    folder = Path(api.app.state.store.settings.catalog_dir) / "assistant"
-    (folder / "playbooks").mkdir(exist_ok=True)
-    (folder / "bot.yaml").write_text(
-        yaml.safe_dump(
-            {
-                "name": "assistant",
-                "routines": [
-                    {
-                        "id": "daily-sweep",
-                        "title": "Daily sweep of each person's queue",
-                        "cron": "0 8 * * *",
-                        "template": "playbooks/daily-sweep.md",
-                    }
-                ],
-            }
-        )
-    )
-    (folder / "playbooks" / "daily-sweep.md").write_text("Sweep {{company_name}}'s queue.\n")
-
-
 def _rows(api):
     """Every schedule row the key has (a deleted or moved one stays, with deleted_at set)."""
     with api.app.state.store.read() as c:
@@ -70,23 +48,11 @@ def _rows(api):
         ]
 
 
-def _row(api):
-    """The routine as the person sees it: a routine written the new way moves to an automation at once
-    (redesign_migration.adopt), and its schedule row is then soft-deleted; `routines.row` reads the automation."""
-    with api.app.state.store.read() as c:
-        return routines.row(c, SWEEP)
-
-
 def _created(api):
     with api.app.state.store.read() as c:
         return c.execute(
             "SELECT COUNT(*) FROM events WHERE action='routine.created' AND target=?", (SWEEP,)
         ).fetchone()[0]
-
-
-def _ensure(api):
-    with api.app.state.store.transaction() as c:
-        return api.app.state.onboarding.ensure_builtin_routines(c)
 
 
 def _restart(api):

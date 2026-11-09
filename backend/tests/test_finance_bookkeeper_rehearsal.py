@@ -12,9 +12,9 @@ from backend.finance import actions as FA
 from backend.finance import reads as FR
 from backend.finance.core import kinds as K
 from backend.store import H
-from backend.tests.test_bookkeeper import DEFAULT_RIGHTS, built, check, checks, ensure
-from backend.tests.test_mcp import call, rpc
-from backend.tests.test_onboarding import draft, environment, machine, signed_in  # noqa: F401
+from backend.tests.helpers.bookkeeper import DEFAULT_RIGHTS, built, check, checks, ensure
+from backend.tests.helpers.mcp import call, rpc
+from backend.tests.helpers.onboarding import draft, environment, machine, signed_in  # noqa: F401
 
 TEMPLATE = Path(__file__).resolve().parents[2] / "templates" / "catalog" / "bookkeeper"
 SPEC_TOOLS = (

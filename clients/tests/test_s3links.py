@@ -10,7 +10,7 @@ from clients import hubcli, hubtools, remotecli, s3links
 
 VIEW = "https://d1234example.cloudfront.net"
 MAPPING = {"acme-files": VIEW}
-# The cases the UI's own linking is held to as well (ui/tests/inline-links.cjs).
+# The cases the UI's own linking is held to as well (ui/tests/inline-links.cts).
 VECTORS = json.loads((Path(__file__).resolve().parents[2] / "ui/tests/support/s3-link-vectors.json").read_text())
 
 

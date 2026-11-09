@@ -14,9 +14,10 @@ from pathlib import Path
 import pytest
 
 from backend.tests.live import block_outside_network
-from backend.tests.test_api import api, get, post  # noqa: F401
-from backend.tests.test_automation_api import NOTE_STEP
-from backend.tests.test_mcp import call
+from backend.tests.helpers.api import get, post  # noqa: F401
+from backend.tests.test_api import api  # noqa: F401
+from backend.tests.helpers.automation_api import NOTE_STEP
+from backend.tests.helpers.mcp import call
 from clients import hubtools
 
 ROOT = Path(__file__).resolve().parents[2]

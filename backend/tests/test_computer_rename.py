@@ -5,10 +5,11 @@ Ana owns the company, Ben is an admin, Cara is a member (the base fixture).
 """
 
 from backend import cloud_machines as CM
-from backend.tests.test_api import api, get, post, put, runner  # noqa: F401  (api is a fixture)
-from backend.tests.test_settings_assistant import mcp
-from backend.tests.test_assistant import assistant_turn
-from backend.tests.test_cloud_machines import cloud, enrolled, work  # noqa: F401  (cloud is a fixture)
+from backend.tests.helpers.api import get, post, put, runner  # noqa: F401  (api is a fixture)
+from backend.tests.test_api import api  # noqa: F401  (api is a fixture)
+from backend.tests.helpers.settings_assistant import mcp
+from backend.tests.helpers.assistant import assistant_turn
+from backend.tests.helpers.cloud_machines import cloud, enrolled, work  # noqa: F401  (cloud is a fixture)
 
 
 def label_of(api, rid):  # noqa: F811

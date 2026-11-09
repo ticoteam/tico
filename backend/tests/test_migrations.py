@@ -17,34 +17,14 @@ from backend import bot_settings as BS
 from backend import hubdb as H
 from backend import invites
 from backend import migrations
-from backend.config import Settings
-from backend.store import Store
+from backend.tests.helpers.migrations import FIXTURES, boot, fresh, restore_config, snapshot
 
-FIXTURES = Path(__file__).parent / "fixtures"
 STORE_SOURCE = Path(__file__).resolve().parents[1] / "store.py"
 GOOD = {"sql": "CREATE TABLE half(x);\n", "py": "def up(conn):\n    conn.execute('CREATE TABLE half(x)')\n"}
 BROKEN = {
     "sql": "CREATE TABLE half(x);\nSELECT * FROM missing;\n",
     "py": "def up(conn):\n    conn.execute('CREATE TABLE half(x)')\n    raise RuntimeError('injected')\n",
 }
-
-
-def boot(path, **kw):
-    Store(Settings(db_path=path, registry_dir=FIXTURES / "registry")).initialize(seed_market=False, **kw)
-
-
-def fresh(tmp_path):
-    path = tmp_path / "hub.sqlite"
-    boot(path)
-    return path
-
-
-def snapshot(path):
-    with sqlite3.connect(path) as c:
-        return (
-            c.execute("SELECT type,name,tbl_name,sql FROM sqlite_master ORDER BY type,name").fetchall(),
-            c.execute("SELECT version,checksum,applied_at FROM schema_migrations ORDER BY version").fetchall(),
-        )
 
 
 def _tables(conn):
@@ -655,18 +635,6 @@ def test_a_database_below_the_bridge_is_refused_before_anything_is_written(tmp_p
 def test_cloud_version_is_the_newest_cloud_step_store_writes():
     newest = max(int(n) for n in re.findall(r"INSERT INTO cloud_migrations VALUES\((\d+),", STORE_SOURCE.read_text()))
     assert migrations.CLOUD_VERSION == newest
-
-
-def restore_config(c):
-    """Before migration 0070, the migrations 0043 and 0061 read bot_config.config, which 0070 drops: a rerun of them from
-    before 0070 needs the column back, each declaration copied into it from bot_settings. A no-op while it is there."""
-    if "config" in {row[1] for row in c.execute("PRAGMA table_info(bot_config)")}:
-        return
-    c.execute("ALTER TABLE bot_config ADD COLUMN config TEXT NOT NULL DEFAULT '{}'")
-    c.execute(
-        f"UPDATE bot_config SET config=coalesce((SELECT {BS.CONFIG} FROM bot_settings s "
-        "WHERE s.bot_id=bot_config.bot), '{}')"
-    )
 
 
 def _config_restored(path):

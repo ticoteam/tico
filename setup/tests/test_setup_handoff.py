@@ -9,8 +9,8 @@ import pytest
 
 from setup import contract, envfile, state, verify
 from setup.tests.fakes import FakeShell
-from setup.tests.test_hosted import DOMAIN, HOSTED, env_sent, go, over_ssh
-from setup.tests.test_hosted_oidc import ISSUER, OIDC
+from setup.tests.helpers.hosted import DOMAIN, HOSTED, env_sent, go, over_ssh
+from setup.tests.helpers.hosted_oidc import ISSUER, OIDC
 
 SECRET = "handoff-SECRET_0123456789abcdefghijklmnopqrstuv"
 ARGV = ["--target", "ssh", "--ssh", "root@203.0.113.7", "--yes", "--hosted", "invited", "--company", "Acme", *HOSTED]

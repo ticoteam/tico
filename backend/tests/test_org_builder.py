@@ -18,58 +18,17 @@ import yaml
 
 from backend import recruit
 from backend import recruit_rank as R
-from backend.tests.test_onboarding import (
+from backend.tests.helpers.onboarding import (
     ASSISTANT_AGENT,
     ASSISTANT_CARD,
     BOTOPS_CARD,
-    as_person,  # noqa: F401
+    as_person,
     environment,
     signed_in,
 )
+from backend.tests.helpers.org_builder import CARDS, DEPARTMENTS, card
 
 ROOT = Path(__file__).resolve().parents[2]
-DEPARTMENTS = {
-    "departments": [
-        {
-            "id": "sales",
-            "name": "Sales",
-            "head": "sales-manager",
-            "icon": "trending_up",
-            "question": "What kind of sales?",
-        },
-        {"id": "finance", "name": "Finance", "head": "controller", "icon": "account_balance"},
-        {"id": "engineering", "name": "Engineering", "head": "eng-lead", "icon": "code", "software_only": True},
-    ]
-}
-
-
-def card(template, department="", **fields):
-    return {
-        "template": template,
-        "name": fields.pop("name", template.replace("-", " ").title()),
-        "summary": fields.pop("summary", "Does " + template + " work."),
-        "department": department,
-        **fields,
-    }
-
-
-CARDS = [
-    card("sales-manager", "sales", lead=True, suggest="default", icon="groups", summary="Runs the pipeline review."),
-    card("sdr", "sales", suggest="default", tags=["cold email", "outbound"], summary="Writes first-touch emails."),
-    card("account-manager", "sales", suggest="common", tags=["renewals", "upsell"], summary="Keeps accounts growing."),
-    card("partner-scout", "sales", suggest="niche", tags=["partners", "resellers"], summary="Finds resellers."),
-    card(
-        "deal-desk",
-        "sales",
-        suggest="niche",
-        tags=["contracts", "pricing"],
-        summary="Prices big deals.",
-        recommend_when=["sells_to_businesses"],
-    ),
-    card("controller", "finance", lead=True, summary="Closes the books."),
-    card("collections", pack="operations", summary="Chases late invoices."),  # no department: its pack decides
-    card("assistant", required=True),  # built in: never offered
-]
 
 
 def catalog():
@@ -177,6 +136,17 @@ def test_a_why_is_never_a_single_word_a_word_of_a_name_or_a_phrase_most_of_the_g
             row["why"] for row in R.rank(built, "engineering", answer)["bots"] if row["template_id"] == "devops"
         )
         assert devops == said or not said and not devops.startswith("Matches"), (answer, devops)
+
+
+def test_a_department_keeps_the_head_groups_yaml_names_when_a_team_manager_is_a_lead_too():
+    """A Team Manager is a lead as well, so the head that groups.yaml names keeps its department's seat, and the lead that
+    comes first by name does not take it."""
+    departments = [{"id": "marketing", "name": "Marketing", "head": "marketing-lead", "icon": "campaign"}]
+    cards = [
+        card("growth-team-manager", "marketing", lead=True, suggest="default", icon="campaign"),
+        card("marketing-lead", "marketing", lead=True, suggest="default", icon="campaign"),
+    ]
+    assert R.head_of(R.build({"departments": departments}, cards), "marketing") == "marketing-lead"
 
 
 def test_the_shipped_catalog_has_a_head_for_every_department_and_the_setup_page_role_list_is_current():

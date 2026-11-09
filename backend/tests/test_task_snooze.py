@@ -6,7 +6,8 @@ from datetime import timedelta
 from backend import task_check_backs, task_roundup
 from backend.scheduler import Scheduler
 from backend.store import H
-from backend.tests.test_api import api, get, hold, post  # noqa: F401
+from backend.tests.helpers.api import get, hold, post  # noqa: F401
+from backend.tests.test_api import api  # noqa: F401
 
 
 def ahead(days):

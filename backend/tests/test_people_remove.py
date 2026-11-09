@@ -5,8 +5,8 @@ import uuid
 
 from backend import invites
 from backend.store import H, digest
-from backend.tests.test_onboarding import environment, signed_in  # noqa: F401
-from backend.tests.test_people_access import call, person_headers, view
+from backend.tests.helpers.onboarding import environment, signed_in  # noqa: F401
+from backend.tests.helpers.people_access import call, person_headers, view
 
 
 def added_and_left(api, email="e2e-tester@acme.example"):

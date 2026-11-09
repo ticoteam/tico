@@ -1,7 +1,7 @@
 """Which model actually worked a task (GET /api/v2/tasks/{id} `runs[].ran_on`, Runs `ran_on`): a fallback turn names
 the model that ran it, never the bot's configured one, and a maker Tico cannot know stays unknown."""
 
-from backend.tests.test_api import assign, claim, get, post, ready, runner  # noqa: F401
+from backend.tests.helpers.api import assign, claim, get, post, ready, runner  # noqa: F401
 from backend.tests.test_api import api  # noqa: F401
 
 CLAUDE = {"model": "claude-sonnet-5-5", "runtime": "claude", "harness": "claude", "billing": "subscription"}

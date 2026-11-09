@@ -18,7 +18,7 @@ from backend.app import create_app
 from backend.observability import Observability
 from backend.onboarding import Onboarding
 from backend.store import Store
-from backend.tests.test_api import api_settings
+from backend.tests.helpers.api import api_settings
 
 
 def test_a_server_answers_while_its_start_jobs_run_and_waits_for_them_to_stop(tmp_path, monkeypatch):

@@ -8,19 +8,13 @@ import os
 
 from backend import mailbox_access, routines
 from backend.store import encode
-from backend.tests.test_api import api, get, post, runner  # noqa: F401
-from backend.tests.test_mail_api import seed_org
+from backend.tests.helpers.api import get, post, runner  # noqa: F401
+from backend.tests.test_api import api  # noqa: F401
+from backend.tests.helpers.mail_api import seed_org
 from runner_support.connectors import ConnectorPublisher
-from backend import bot_settings as BS
+from backend.tests.helpers.mail_targets import declare
 
 DECLARED = "ana@acme.team"
-
-
-def declare(api, identity, **extra):
-    """Give the `inbox` bot (Ana's message bot) a gmail tool with this identity, in bot.yaml's shape."""
-    tools = [{"service": "gmail", "identity": identity, "can": ["read", "draft"], **extra}]
-    with api.app.state.store.transaction() as c:
-        BS.write(c, 'inbox', {'name': 'inbox', 'runtime': 'fake', 'status': 'active', 'tools': tools})
 
 
 def assigned(api):

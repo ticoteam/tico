@@ -1,7 +1,8 @@
 """The threads sidebar reads its page in a few statements however many threads, DMs and members the page holds."""
 
-from backend.tests.test_api import api, headers  # noqa: F401
-from backend.tests.test_health_reads import counted
+from backend.tests.helpers.api import headers  # noqa: F401
+from backend.tests.test_api import api  # noqa: F401
+from backend.tests.helpers.health_reads import counted
 
 
 def seed_threads(api, start, count):
