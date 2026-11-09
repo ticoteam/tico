@@ -102,7 +102,8 @@ def repaired_passes(run):
 
 
 def retried_after_receipt(run):
-    """A move refused for its receipt is made by Tico within a tick of the builder's clean receipt."""
+    """A move refused for its receipt is made by Tico within a tick of the builder's clean receipt. The retry pass runs
+    before the bots in a tick, so a receipt posted on the run's last tick has no pass after it and is not counted."""
     receipts, slack = posted(run), run.scenario.tick_minutes * 60 + 1
     rows = {}
     done, late = 0, []
@@ -123,7 +124,7 @@ def retried_after_receipt(run):
                 ),
                 None,
             )
-            if not clean:
+            if not clean or clean[0] >= run.end:
                 continue
             if tid not in rows:
                 rows[tid] = [

@@ -66,9 +66,12 @@ def main(argv=None):
         port = sock.getsockname()[1]
         settings.public_url = f"http://127.0.0.1:{port}"
         skipped = [name for name in names if SEEDS[name](world) is False]
-        # The lifespan already ran under the test client, so uvicorn must not run it again.
+        # The lifespan already ran under the test client, so uvicorn must not run it again. A page a test left open
+        # keeps its live stream: on SIGTERM wait a second for it, not the 10 s join below.
         server = uvicorn.Server(
-            uvicorn.Config(world.app, host="127.0.0.1", port=port, log_level="warning", lifespan="off")
+            uvicorn.Config(
+                world.app, host="127.0.0.1", port=port, log_level="warning", lifespan="off", timeout_graceful_shutdown=1
+            )
         )
         thread = threading.Thread(target=server.run, kwargs={"sockets": [sock]}, daemon=True)
         thread.start()

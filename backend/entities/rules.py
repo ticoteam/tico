@@ -18,6 +18,10 @@ What a structured rule does to one action, by its effect:
 `check` turns the rules into the verdict an outbound action gets. An error while checking holds the action, with the
 error's class name as the reason: the check never lets an action through because it failed.
 
+A `channel:<key>` term narrows a rule to the channels it names (`CHANNELS`): `["entity:person/jane", "channel:sms"]` is a
+do-not-contact on Jane by text. A rule with channel terms only is toward everyone on those channels. An action's channel
+comes from its operation (`channel_of`).
+
 A path names only what the reader may see. A step through an entity the reader cannot see is written as a restricted
 entity, so the path shows the links without the name.
 """
@@ -33,7 +37,11 @@ WALK_DEPTH = S.WALK_DEPTH
 HOLDING = ("block", "escalate")
 EFFECT_OF = {"block": "block", "escalate": "escalate", "warn": "warn"}
 HIDDEN = "a restricted entity"
-SCOPE_HEADS = ("entity", "type", "kind", "self", "link")
+SCOPE_HEADS = ("entity", "type", "kind", "self", "link", "channel")
+# The channels a rule may name, and the channel each outbound operation goes out on. Every other write (a chat message,
+# a comment, a task) is chat. `email` is the Directory's own action name for a mail.
+CHANNELS = ("chat", "email", "sms", "call", "letter")
+CHANNEL_OF = {"mail": "email", "email": "email", "sms": "sms", "call": "call", "letter": "letter"}
 
 
 class ScopeError(ValueError):
@@ -43,12 +51,15 @@ class ScopeError(ValueError):
 def parse_scope(terms: Sequence[object]) -> list[tuple[str, ...]]:
     """toward_scope terms: `entity:<id>`, `type:<entity type>`, `kind:<organization kind>`, `self:<link key>` (an
     entity with that link to self, e.g. self:customer_of), `link:<link key>:<entity id>` (an entity with that link to
-    the entity, e.g. link:located_in:place/california). Anything else is a ScopeError."""
+    the entity, e.g. link:located_in:place/california), `channel:<channel>` (only actions on that channel, one of
+    CHANNELS). Anything else is a ScopeError."""
     out: list[tuple[str, ...]] = []
     for raw in terms:
         text = str(raw).strip()
         head, _, rest = text.partition(":")
-        if head in ("entity", "type", "kind", "self") and rest and ":" not in rest:
+        if head == "channel" and rest not in CHANNELS:
+            raise ScopeError(f"{text!r} is not a channel ({', '.join(CHANNELS)})")
+        if head in ("entity", "type", "kind", "self", "channel") and rest and ":" not in rest:
             out.append((head, rest))
         elif head == "link" and rest.count(":") == 1 and all(rest.split(":")):
             key, target = rest.split(":")
@@ -57,6 +68,11 @@ def parse_scope(terms: Sequence[object]) -> list[tuple[str, ...]]:
             heads = ", ".join(f"{h}:" for h in SCOPE_HEADS)
             raise ScopeError(f"{text!r} is not a scope term ({heads} with an id or key)")
     return out
+
+
+def channel_of(action: str) -> str:
+    """The channel an action goes out on: its operation's (CHANNEL_OF), else chat."""
+    return CHANNEL_OF.get(action, "chat")
 
 
 def parse_condition(text: object) -> tuple[str, str]:
@@ -130,12 +146,18 @@ def _nearest(ids: set[str], reached: dict[str, Any]) -> str | None:
 
 
 def _judge(
-    c: sqlite3.Connection, who: str, row: dict[str, Any], reached: dict[str, Any], me: str | None
+    c: sqlite3.Connection, who: str, row: dict[str, Any], reached: dict[str, Any], me: str | None, channel: str
 ) -> tuple[str, str | None, str]:
-    """(effect, the reached entity the rule applies through or None, the reason when the effect is block)."""
+    """(effect, the reached entity the rule applies through or None, the reason when the effect is block). A rule whose
+    channel terms do not name the action's channel skips; one with channel terms only applies through no entity."""
     try:
-        hit = _nearest(_matches(c, parse_scope(row["toward_scope"]), reached, me), reached)
-        if hit is None:
+        scope = parse_scope(row["toward_scope"])
+        channels = {term[1] for term in scope if term[0] == "channel"}
+        if channels and channel not in channels:
+            return "skip", None, ""
+        toward = [term for term in scope if term[0] != "channel"]
+        hit = _nearest(_matches(c, toward, reached, me), reached) if toward else None
+        if toward and hit is None:
             return "skip", None, ""
         if row["applies_when"]:
             if me is None:
@@ -178,7 +200,8 @@ def rules_for(
     if me is not None and me not in starts:
         starts.append(me)
     reached, truncated = S.walk(c, starts, WALK_DEPTH)
-    judged = [(row, *_judge(c, who, row, reached, me)) for row in _structured(c)]
+    channel = channel_of(action)
+    judged = [(row, *_judge(c, who, row, reached, me, channel)) for row in _structured(c)]
     ids = {str(step[k]) for _, _, hit, _ in judged if hit for step in reached[hit] for k in ("from", "to")}
     ids |= {hit for _, _, hit, _ in judged if hit}
     names = S.entity_names(c, ids)

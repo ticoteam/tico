@@ -708,15 +708,17 @@ pub async fn finish(path: &Path, aid: &str, turn: &Env, skip: &[String], memory:
                 reset.extend(held.iter().map(String::as_str));
                 g(path, &env, &reset, 15).await?;
             }
-            if !g(path, &env, &["diff", "--cached", "--quiet"], 15)
-                .await?
-                .ok()
-            {
+            // The memory commit takes only the memory folders, never what else the bot had staged (a deletion of
+            // AGENT.md, say): a pathspec limits both the check and the commit, and a held path stays out of it.
+            let mut scope: Vec<String> = folders.iter().map(|f| f.to_string()).collect();
+            scope.extend(held.iter().map(|h| format!(":(exclude,literal){h}")));
+            let mut staged: Vec<&str> = vec!["diff", "--cached", "--quiet", "--"];
+            staged.extend(scope.iter().map(String::as_str));
+            if !g(path, &env, &staged, 15).await?.ok() {
                 let message = format!("Memory from run {aid}\n\nTico-Run: {aid}");
-                if !g(path, &env, &["commit", "-q", "-m", &message], 15)
-                    .await?
-                    .ok()
-                {
+                let mut commit: Vec<&str> = vec!["commit", "-q", "-m", &message, "--"];
+                commit.extend(scope.iter().map(String::as_str));
+                if !g(path, &env, &commit, 15).await?.ok() {
                     return Ok("the memory commit failed".into());
                 }
             }
@@ -767,7 +769,10 @@ pub async fn finish(path: &Path, aid: &str, turn: &Env, skip: &[String], memory:
             .map(|a| crate::gitcred::shell_quote(a))
             .collect::<Vec<_>>()
             .join(" ");
-        let stashed = !g(
+        // A rebase autostashes a dirty tree, and git restores that stash without its index: a staged version would
+        // come back as the working tree's. So with any change left in the tree, the commits wait for the next turn
+        // (or the push's catch-up merge), as they do for a merge.
+        if !g(
             path,
             &env,
             &["status", "--porcelain", "--untracked-files=no"],
@@ -776,12 +781,11 @@ pub async fn finish(path: &Path, aid: &str, turn: &Env, skip: &[String], memory:
         .await?
         .stdout
         .trim()
-        .is_empty();
-        let mut rebase = vec!["rebase", "--quiet"];
-        if stashed {
-            rebase.push("--autostash");
+        .is_empty()
+        {
+            return Ok(String::new());
         }
-        rebase.extend(["--exec", &stamp, "@{u}"]);
+        let rebase = ["rebase", "--quiet", "--exec", &stamp, "@{u}"];
         if g(path, &env, &rebase, timeout).await?.ok() {
             return Ok(String::new());
         }
@@ -1062,13 +1066,25 @@ pub async fn catch_up(path: &Path, turn: &Env) -> String {
         let up = Some(g(path, &env, &["rev-parse", "--abbrev-ref", "@{u}"], 15).await?.stdout.trim().to_string()).filter(|u| !u.is_empty()).unwrap_or_else(|| "its upstream".into());
         let behind = Some(g(path, &env, &["rev-list", "--count", "HEAD..@{u}"], 15).await?.stdout.trim().to_string()).filter(|b| !b.is_empty()).unwrap_or_else(|| "some".into());
         let missing = format!("{up} has {behind} commits this checkout doesn't");
-        if !dirty.stdout.trim().is_empty() {
-            return Ok(format!("{missing}, and uncommitted changes kept the runner from rebasing; in {}, commit them, then `git pull --rebase` and push", path.display()));
+        // Staged leftovers outside the memory folders hold the push, on purpose: a staged change is how the bot's wipe
+        // got committed, so the runner never merges over one. The refusal names the paths, so the bot and its manager
+        // can see why the push waits.
+        let staged = g(path, &env, &["diff", "--cached", "--name-only", "--", ".", ":(exclude)memory", ":(exclude)knowledge"], 15).await?;
+        let staged: Vec<&str> = staged.stdout.lines().filter(|l| !l.is_empty()).collect();
+        if !staged.is_empty() {
+            let mut shown = staged.iter().take(3).copied().collect::<Vec<_>>().join(", ");
+            if staged.len() > 3 {
+                shown.push_str(&format!(" and {} more", staged.len() - 3));
+            }
+            return Ok(format!("{missing}, and staged changes ({shown}) hold the push; in {}, commit or unstage them, then push", path.display()));
         }
-        if !g(path, &env, &["rev-list", "--merges", "@{u}..HEAD"], 15).await?.stdout.trim().is_empty() {
+        // A dirty tree gets a plain merge, never a rebase or an autostash (which git restores without its index).
+        // git refuses that merge only when it would overwrite a local change, and then nothing is touched; an ignored
+        // local file that the upstream now tracks is refused too, never replaced.
+        if !dirty.stdout.trim().is_empty() || !g(path, &env, &["rev-list", "--merges", "@{u}..HEAD"], 15).await?.stdout.trim().is_empty() {
             step = "merge";
         }
-        let args: &[&str] = if step == "merge" { &["merge", "--no-edit", "--quiet", "@{u}"] } else { &["rebase", "--quiet", "@{u}"] };
+        let args: &[&str] = if step == "merge" { &["merge", "--no-edit", "--quiet", "--no-overwrite-ignore", "@{u}"] } else { &["rebase", "--quiet", "@{u}"] };
         let done = g(path, &env, args, 45).await?;
         if done.ok() {
             return Ok(String::new());
@@ -1385,7 +1401,7 @@ impl Lanes {
     }
 
     /// The checkout if it is free and no person waits for it (a task turn's refresh).
-    fn try_checkout(&self, bot: &str) -> Option<OwnedMutexGuard<()>> {
+    pub fn try_checkout(&self, bot: &str) -> Option<OwnedMutexGuard<()>> {
         if self.person_waiting(bot) {
             return None;
         }

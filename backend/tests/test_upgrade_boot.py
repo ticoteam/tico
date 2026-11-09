@@ -71,10 +71,12 @@ def environment_identity(tmp_path, db, **extra):
     return result.stdout.strip()
 
 
-@pytest.mark.parametrize("extra", [{}, {"TICO_TEAM_NAME": "Acme"}], ids=["no team", "named team, no environment id"])
-def test_entrypoint_environment_identity_on_a_pre_rename_database(tmp_path, old_db, extra):
+def test_entrypoint_environment_identity_on_a_pre_rename_database(tmp_path, old_db):
+    """A named install with no environment id yet: the case that cannot construct Settings before this step. Without a
+    team name the step takes the same path (backend.boot.environment_identity, migrations.preflight and hubdb.connect
+    never read TICO_TEAM_NAME or TICO_COMPANY_NAME), so one boot covers both."""
     db = copy_db(old_db, tmp_path / "hub.sqlite")
-    environment_identity(tmp_path, db, **extra)
+    environment_identity(tmp_path, db, TICO_TEAM_NAME="Acme")
     assert "value" in columns(db, "registry_metadata")
 
 

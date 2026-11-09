@@ -2,13 +2,24 @@
 question on its fields and no ask message; answering closes it and the bot hears it once."""
 
 import json
+from types import SimpleNamespace
 
 import pytest
 
-from backend import ask_deadlines, still_needed, hubdb as H, task_relations as TR
+from backend import ask_deadlines, still_needed, hubdb as H, question_tasks as QT, task_relations as TR
 
 from backend.tests.test_api import api, assign, claim, get, headers, post, ready, runner, setup_attempt  # noqa: F401
 from backend.tests.test_mcp import call
+
+
+def test_chat_refusal_only_for_the_person_in_the_chat():
+    # A question for the person whose Assistant chat this is is asked in the reply, never filed; anyone else still files.
+    chat = SimpleNamespace(actor="human:dana", via="assistant")
+    background = SimpleNamespace(actor="bot:coo", via="")
+    assert QT.chat_refusal(chat, "human:dana")
+    assert QT.chat_refusal(chat, "human:sam") is None
+    assert QT.chat_refusal(background, "human:dana") is None
+    assert QT.chat_refusal(chat, None) is None
 
 
 def _ask(api, token, question, **extra):

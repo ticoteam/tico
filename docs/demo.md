@@ -36,7 +36,7 @@ published port. Ordinary local installs still check their configured port.
 - Nothing leaves the computer. The update check is off, there is no telemetry, and the process
   refuses every connection to a non-local address.
 - Bots do not run. There is no scheduler; **Run now** says so; a message to a bot is answered with one
-  line saying it is a demo. Settings > Health shows the two sample computers as online and mostly green.
+  line saying it is a demo. Settings > General > Health > Details shows the two sample computers as online and mostly green.
 - It listens on loopback only. Started with `--host 0.0.0.0` it exits with an explanation. In the container it binds
   inside, and answers only requests addressed to `localhost`, so publish the port on `127.0.0.1` as above.
 - `--public-demo --url https://demo.example.com` serves other humans on purpose. Everyone is Ana, so a public
@@ -90,7 +90,7 @@ node scripts/screenshots --only updates,settings-health   # some pages
 ```
 
 `scripts/screenshots` starts a demo, visits Updates, Tasks, Needs you, the team chart, a bot chat, Meetings, a
-meeting, Settings > Health, Settings > Computers, Finish setup, a tour step, Docs, Market, Strategy, Growth, Finance,
+meeting, Settings > General > Health > Details, Settings > Computers, Finish setup, a tour step, Docs, Market, Strategy, Growth, Finance,
 Rules, Automations, Learnings, Threads, a Recruiting seat and Tools at a desktop and a phone
 width, light and dark, and writes `<page>-<desktop|phone>-<light|dark>.png`. It waits for the icon font and
 fails, instead of saving a bad picture, on any console error, failed request, error banner, unloaded icon or

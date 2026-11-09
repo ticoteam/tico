@@ -56,7 +56,12 @@ SHARED_PLACES_ACTOR = "places-pack"  # who wrote a place from the shared places 
 WORKS_AT = ("works_at", "member_of")  # the links a person's organization is read from, for a list's Organization column
 # The tables a merge moves an entity's rows from. entity_sources skips a source the kept entity already has.
 MOVES = {
-    "entity_identifiers": "SELECT id FROM entity_identifiers WHERE entity_id = :drop",
+    # What a Finance book row put on the entity stays where its book row points: the book's vendor names (scope_type
+    # finance_book) and the billing emails it keeps current (source_type finance_book, finance/store/contacts.py).
+    "entity_identifiers": (
+        "SELECT id FROM entity_identifiers WHERE entity_id = :drop AND scope_type IS NOT 'finance_book' "
+        "AND source_type IS NOT 'finance_book'"
+    ),
     "entity_notes": "SELECT id FROM entity_notes WHERE entity_id = :drop",
     "entity_mentions": "SELECT id FROM entity_mentions WHERE entity_id = :drop",
     "entity_activities": "SELECT id FROM entity_activities WHERE entity_id = :drop",
@@ -243,8 +248,16 @@ def self_id(c: sqlite3.Connection) -> str | None:
         return row[0]
     if c.execute("SELECT 1 FROM entities WHERE id = ?", (SELF_ID,)).fetchone():
         c.execute("UPDATE entities SET self = 1 WHERE id = ?", (SELF_ID,))
+        _self_flagged(c)
         return SELF_ID
     return None
+
+
+def _self_flagged(c: sqlite3.Connection) -> None:
+    """Self was just made or flagged: Finance's contacts that came before it link to it now (vendor_to / customer_of)."""
+    from backend.finance import directory as finance_directory
+
+    finance_directory.link_self(c)
 
 
 def _set_kind(c: sqlite3.Connection, entity_id: str, kind: str, source_type: str) -> None:
@@ -277,6 +290,7 @@ def ensure_self(c: sqlite3.Connection, *, company_name: str | None, domain: str 
                 (SELF_ID, name, name.lower(), domain or None, now, now),
             )
         current = SELF_ID
+        _self_flagged(c)
     if domain:
         c.execute(
             "UPDATE entities SET primary_domain = ? WHERE id = ? AND COALESCE(primary_domain, '') = ''",
@@ -933,12 +947,41 @@ def walk(c: sqlite3.Connection, starts: Sequence[str], depth: int = WALK_DEPTH) 
     return reached, False
 
 
+NAME_CONTACT = "name:"  # a contact that is only a name (a letter's addressee), as `contact_entities` reads it
+PHONE_CONTACT = re.compile(r"\+[0-9]{7,15}")  # an E.164 number once its formatting is stripped
+PHONE_SQL = "replace(replace(replace(replace(replace(normalized_value, ' ', ''), '-', ''), '(', ''), ')', ''), '.', '')"
+
+
 def contact_entities(c: sqlite3.Connection, addresses: Sequence[str]) -> list[str]:
-    """The entities an address points at: a person or organization that has it as an email identifier, and the
-    organization whose primary domain is its domain. Names are never matched: two people can share one."""
+    """The entities a contact points at. An email address: a person or organization that has it as an email identifier,
+    and the organization whose primary domain is its domain. A phone number (+ and digits, formatting ignored): one
+    that has it as a phone identifier. `name:<name>` (a letter's addressee, which has no other identity): every entity
+    with that name, so a name two entities share reaches both and a rule on either holds the send. Otherwise names are
+    never matched."""
     ids: list[str] = []
     for address in addresses:
         text = address.strip().lower()
+        if text.startswith(NAME_CONTACT):
+            name = text[len(NAME_CONTACT) :].strip()
+            if name:
+                ids += [
+                    str(r["entity_id"])
+                    for r in _rows(
+                        c,
+                        "SELECT entity_id FROM entity_identifiers WHERE kind = 'name' AND normalized_value = ?",
+                        (name,),
+                    )
+                ]
+            continue
+        phone = _normal_identifier("phone", text)
+        if "@" not in text and PHONE_CONTACT.fullmatch(phone):
+            ids += [
+                str(r["entity_id"])
+                for r in _rows(
+                    c, f"SELECT entity_id FROM entity_identifiers WHERE kind = 'phone' AND {PHONE_SQL} = ?", (phone,)
+                )
+            ]
+            continue
         if not text:
             continue
         ids += [
@@ -1360,6 +1403,20 @@ def erase_rows(c: sqlite3.Connection, actor: str, entity_id: str, reason: str) -
     if root["self"]:
         _refuse(c, actor, "kind", "self cannot be erased")
     ids = _erased_ids(c, entity_id)
+    from backend.finance import directory as finance_directory
+
+    kept = finance_directory.kept_for_books(c, ids, (table for table, _ in ERASE_STATEMENTS))
+    if kept:
+        # A ledger's counterparty (a contact, a bill's vendor, a project's customer) is kept for the accounting:
+        # erasing it would break the books.
+        from backend.store import Problem
+
+        name = str(root["name"] or "").strip() or "This entity"
+        raise Problem(
+            "kept_for_books",
+            f"Kept for the books: {name} has Finance records ({', '.join(kept)}). Erase them in Finance first.",
+            409,
+        )
     ids_json = json.dumps(ids)
     link_ids = [
         row[0]

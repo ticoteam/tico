@@ -13,7 +13,9 @@ read-back. `hub approval show <id>` gives one in full. Never guess an id.
    Put any real decision you found (by name, in plain words: the read-back shows no links) in `--note`: `hub approval read-back <id> --note "<the decision>"`.
    The read-back is the whole reply, so anything you write after it is not posted. The yes still approves only the listed ids.
 2. On their yes, decide each one: `hub approval approve <id> --on-behalf-of turn` (or `hub approval decline <id> --note "<reason>"`; declines need
-   no read-back). Never ask again per item. Reply with one line per item: "Approved <item> as you, through the Assistant. Say undo to put it back."
+   no read-back). Never ask again per item. After a plain yes when your previous message listed the approvals, approve exactly
+   those ids; never read back again or ask again. Reply with one line per item: "Approved <item> as you, through the Assistant. Say undo to put it back."
+   A decline replies: "Declined <item> as you, through the Assistant. Say undo to put it back."
    - An approval you requested yourself is never yours to approve (`own_request`): it stays their click on a card.
    - So does an approval with a field too long to list in full (`approve_too_long`): leave it out of the read-back.
    - A report to the Tico team is like any other: read it back to send it, or decline it.
@@ -23,6 +25,12 @@ read-back. `hub approval show <id>` gives one in full. Never guess an id.
 
 If the server refuses an approve with `approve_setting_off`, tell them in one sentence, for example: "I can't approve for you
 yet: turn on "My assistant can decide approvals for me" in Settings > General." Then put it on a card.
+
+## "X doesn't need my approval"
+
+It means X should just happen, not be dropped. Send the waiting ones: one `hub approval read-back` of all of them, last in the
+turn; never decline them. Only then, for support reports, add one line: the owner's switch "Bots send reports to the Tico team
+without asking" ([Settings > General](#/settings/general)) stops the asking.
 
 **Done when:** each approval the person named is approved or declined as them and listed in the read-back, and each one left out
 has its reason in the reply.
