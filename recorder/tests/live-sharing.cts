@@ -1,15 +1,16 @@
 // Synthetic replay of the real Recorder window. No server, model or bot is contacted.
-// Run from the repository root: node recorder/tests/live-sharing.cjs
-const {chromium} = require('playwright');
-const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const path = require('node:path');
-async function replay(browser) {
+import type {Route} from 'playwright';
+// Run from the repository root: node recorder/tests/live-sharing.cts
+const {chromium}: typeof import('playwright') = require('playwright');
+const assert: typeof import('node:assert/strict') = require('node:assert/strict');
+const fs: typeof import('node:fs') = require('node:fs');
+const path: typeof import('node:path') = require('node:path');
+async function replay(browser: import('playwright').Browser): Promise<void> {
   const context = await browser.newContext();
   try {
     const page = await context.newPage();
     const root = path.resolve(__dirname, '../../recorder/ui');
-    await page.route('**/*', async route => {
+    await page.route('**/*', async (route: import('playwright').Route) => {
       const url = new URL(route.request().url());
       assert.equal(url.origin, 'http://recorder.example');
       const file = path.resolve(root, '.' + url.pathname);
@@ -17,6 +18,7 @@ async function replay(browser) {
       await route.fulfill({path: file});
     });
     // Disable preview polling: a choice must redraw through the action's own refresh.
+    // @ts-expect-error the preview replaces the timer with a constant
     await page.addInitScript(() => { window.setInterval = () => 0; });
     await page.goto('http://recorder.example/preview/index.html?scene=live');
     await page.evaluate(() => {
@@ -26,7 +28,7 @@ async function replay(browser) {
       m.people.team = false;
       const invoke = window.__TAURI__.core.invoke;
       window.opened = [];
-      window.__TAURI__.core.invoke = (cmd, args) => {
+      window.__TAURI__.core.invoke = (cmd: string, args: {url?: string}) => {
         if (cmd === 'open_url') { window.opened.push(args.url); return Promise.resolve({}); }
         return invoke(cmd, args);
       };
@@ -37,7 +39,7 @@ async function replay(browser) {
     // Who can join lives in the Share sheet; a live change applies at once and redraws without polling.
     await page.locator('[data-act="share-open"]').click();
     const sheet = page.locator('#sheet.share');
-    const radio = team => sheet.locator(`[data-act="share-team"][data-team="${team}"]`);
+    const radio = (team: boolean) => sheet.locator(`[data-act="share-team"][data-team="${team}"]`);
     await radio(false).and(page.locator('[aria-checked="true"]')).waitFor();
     await radio(true).click();
     await radio(true).and(page.locator('[aria-checked="true"]')).waitFor();
@@ -50,9 +52,9 @@ async function replay(browser) {
 }
 module.exports = {replay};
 if (require.main === module) {
-  (async () => {
+  (async (): Promise<void> => {
     const browser = await chromium.launch({headless: true});
     try { await replay(browser); }
     finally { await browser.close(); }
-  })().catch(error => { console.error(error); process.exitCode = 1; });
+  })().catch((error: unknown) => { console.error(error); process.exitCode = 1; });
 }

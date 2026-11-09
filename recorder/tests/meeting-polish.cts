@@ -1,31 +1,32 @@
 // Recorder meeting polish: task search that follows the typing, a type filter, obvious picks, @me in Add a task,
 // Enter to add, the transcript's copy button, Stop as the one end action, and suggested tasks without a Details
 // sheet: a created task's row opens it in Tico.
+import type {Route} from 'playwright';
 require('../../ui/tests/support/browser.cjs');
-const {chromium} = require('playwright');
-const assert = require('node:assert/strict');
-const path = require('node:path');
+const {chromium}: typeof import('playwright') = require('playwright');
+const assert: typeof import('node:assert/strict') = require('node:assert/strict');
+const path: typeof import('node:path') = require('node:path');
 
-async function open(browser, scene, errors) {
+async function open(browser: import('playwright').Browser, scene: string, errors: string[]): Promise<import('playwright').Page> {
   const page = await browser.newPage();
-  page.on('pageerror', e => errors.push(e.message));
+  page.on('pageerror', (e: Error) => errors.push(e.message));
   const root = path.resolve(__dirname, '../ui');
-  await page.route('http://recorder.example/**', route => {
+  await page.route('http://recorder.example/**', (route: import('playwright').Route) => {
     const file = path.resolve(root, '.' + new URL(route.request().url()).pathname);
     assert.ok(file.startsWith(root + path.sep));
     return route.fulfill({path:file});
   });
   await page.goto(`http://recorder.example/preview/index.html?scene=${scene}`);
   await page.evaluate(() => {
-    Object.defineProperty(navigator, 'clipboard', {value:{writeText:async text => { window.copiedText = text; }}, configurable:true});
+    Object.defineProperty(navigator, 'clipboard', {value:{writeText:async (text: string) => { window.copiedText = text; }}, configurable:true});
   });
   return page;
 }
-const rows = page => page.locator('#sheet [data-act="task-pick"] .grow').allInnerTexts();
+const rows = (page: import('playwright').Page): Promise<string[]> => page.locator('#sheet [data-act="task-pick"] .grow').allInnerTexts();
 
-(async () => {
+(async (): Promise<void> => {
   const browser = await chromium.launch({headless:true});
-  const errors = [];
+  const errors: string[] = [];
   try {
     // ---- Link tasks ----
     let page = await open(browser, 'library', errors);
@@ -36,7 +37,7 @@ const rows = page => page.locator('#sheet [data-act="task-pick"] .grow').allInne
     // A slow reply for an older query never lands over a newer one, and rows dim the moment typing starts.
     await page.evaluate(() => {
       const original = window.__TAURI__.core.invoke;
-      window.__TAURI__.core.invoke = async (cmd, args) => {
+      window.__TAURI__.core.invoke = async (cmd: string, args: Record<string, string>) => {
         if (cmd === 'task_picker' && args.query === 'pric') await new Promise(r => setTimeout(r, 900));
         return original(cmd, args);
       };
@@ -95,8 +96,8 @@ const rows = page => page.locator('#sheet [data-act="task-pick"] .grow').allInne
     const copy = page.locator('.side-head [data-act="copy-transcript"]');
     assert.equal(await copy.getAttribute('aria-label'), 'Copy transcript');
     await copy.click();
-    await page.waitForFunction(() => window.copiedText);
-    const copied = await page.evaluate(() => window.copiedText);
+    await page.waitForFunction(() => window.copiedText!);
+    const copied = await page.evaluate(() => window.copiedText!);
     assert.match(copied, /^\[\d+:\d\d\] \S/);
     await page.locator('.side-head [data-act="copy-transcript"][aria-label="Copied"]').waitFor();
     await page.close();
@@ -106,7 +107,7 @@ const rows = page => page.locator('#sheet [data-act="task-pick"] .grow').allInne
     await page.evaluate(() => {
       const original = window.__TAURI__.core.invoke;
       window.opened = [];
-      window.__TAURI__.core.invoke = async (cmd, args) => {
+      window.__TAURI__.core.invoke = async (cmd: string, args: Record<string, string>) => {
         if (cmd === 'open_url') window.opened.push(args.url);
         return original(cmd, args);
       };
@@ -121,7 +122,7 @@ const rows = page => page.locator('#sheet [data-act="task-pick"] .grow').allInne
     await draft.getByRole('button', {name:'Create', exact:true}).click();
     const created = page.locator('.item.task', {hasText:'Confirm the transcript link'});
     await created.waitFor();
-    const url = await page.evaluate(() => window.__PREVIEW__.state.meetings.m1.actions.items.find(i => i.id === 'i1').task_url);
+    const url = await page.evaluate(() => window.__PREVIEW__.state.meetings.m1.actions.items.find(i => i.id === 'i1')!.task_url!);
     assert.match(url, /^https:\/\/hub\.tico\.team\/#\/tasks\/\d+$/);
     assert.equal(await created.getAttribute('data-url'), url);
     assert.equal(await created.getByRole('button', {name:'Open', exact:true}).count(), 0);
@@ -153,7 +154,7 @@ const rows = page => page.locator('#sheet [data-act="task-pick"] .grow').allInne
       s.status.recording = {id:'m2', elapsed_ms:1000, phase:'recording', error:'', sources:[], stream:[]};
       Object.assign(s.meetings.m2, {state:'recording', recording_here:true});
       const original = window.__TAURI__.core.invoke;
-      window.__TAURI__.core.invoke = async (cmd, args) => {
+      window.__TAURI__.core.invoke = async (cmd: string, args: Record<string, string>) => {
         if (cmd === 'save_meeting') window.saved = args;
         return original(cmd, args);
       };
@@ -163,7 +164,7 @@ const rows = page => page.locator('#sheet [data-act="task-pick"] .grow').allInne
     assert.equal(await page.locator('.topbar [data-act="finish-open"]').count(), 0);
     await page.click('[data-act="stop"]');
     await page.waitForSelector('.topbar .badge:has-text("In Tico")', {timeout:8000});
-    const saved = await page.evaluate(() => window.saved);
+    const saved = await page.evaluate(() => window.saved!);
     assert.equal(saved.destination, 'team');
     assert.equal(saved.audience, 'team');
     assert.equal(await page.locator('#sheet.finish').count(), 0);
@@ -172,4 +173,4 @@ const rows = page => page.locator('#sheet [data-act="task-pick"] .grow').allInne
     assert.deepEqual(errors, []);
     console.log('Recorder: task search, picks, @me, Enter, copy transcript, Stop, no Details sheet and tap-to-open tasks passed');
   } finally { await browser.close(); }
-})().catch(error => { console.error(error); process.exitCode = 1; });
+})().catch((error: unknown) => { console.error(error); process.exitCode = 1; });
