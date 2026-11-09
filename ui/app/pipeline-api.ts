@@ -309,8 +309,15 @@ function requirementFromDot(dot: BoardDotRow): PipelineRequirement {
 /** Who sent the item to the viewer, for the server's code; a reviewer's own item names nobody. */
 const REVIEW_SENT_BY: Record<string, string> = { sent_back: 'Sent back to you', backup: 'Asked as backup' };
 
-/** "Why you": who sent it (if anyone), the requirement, and the pipeline, as "Spec approved · Product". */
+/** The noun a reviewer's approval of a requirement is for, for the "You approve specs in Product" line. Requirements not
+    listed here keep the "requirement · pipeline" wording. */
+const REVIEW_NOUN: Record<string, string> = { 'Spec approved': 'specs' };
+
+/** "Why you": who sent it (if anyone), and the requirement and the pipeline. A spec approval reads "You approve specs in
+    Product"; any other requirement reads as "Spec approved · Product". */
 function reviewWhy(row: ServerQueueItem): string {
+  const noun = REVIEW_NOUN[row.requirement];
+  if (noun && row.why === 'reviewer' && row.pipeline) return `You approve ${noun} in ${row.pipeline}`;
   return [REVIEW_SENT_BY[row.why], row.requirement, row.pipeline].filter(Boolean).join(' · ');
 }
 

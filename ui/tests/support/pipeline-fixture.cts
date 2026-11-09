@@ -222,15 +222,18 @@ function queue(state: PipelineState): {items: Json[]} {
   const row = (task_id: string, title: string, stage: string, requirement_id: string, requirement: string, why: string, attachment: Json | null): Json => {
     const card = CARDS[task_id] || {body: '', acceptance: [], checkpoint: ''};
     const shown = state.bare && task_id === 'D52' ? null : state.unopenable && task_id === 'D52' ? UNOPENABLE : attachment;
+    // `product`: the live Product Review step, its requirement named as the live one is ("Spec approved").
     const pipeline = state.product ? 'Product' : 'Dev tickets';
     const stageName = state.product ? 'Review' : stage;
-    return {form: 'review', task_id, title, pipeline_id: 'dev-tickets', pipeline, stage_id: stageName.toLowerCase(), stage: stageName, requirement_id, requirement,
+    const requirementName = state.product ? 'Spec approved' : requirement;
+    return {form: 'review', task_id, title, pipeline_id: 'dev-tickets', pipeline, stage_id: stageName.toLowerCase(), stage: stageName, requirement_id, requirement: requirementName,
       requirement_version: 1, kind: shown ? shown.format : 'approval', work_version: 3, attachment: shown,
       attachment_digest: shown && shown.source !== 'ticket' && !shown.removed ? 'sha256:aa' : null, why, since: stamp, late: false, claimed_by: null, claimed_by_me: false,
       assignee: {id: 'bot:product-owner', name: 'Product Manager'}, manager: {id: 'bot:product-manager', name: 'Product Pipeline Manager'},
       body: card.body, acceptance_criteria: card.acceptance, checkpoint: card.checkpoint,
       spec: state.spec && task_id === 'D52' ? SPEC_PAGE_52 : null,
-      bot_note: task_id === 'D52' ? 'Shot 2 is cropped' : '', moves_to: task_id === 'D61' ? {stage_id: 'build', name: 'Build'} : null,
+      bot_note: task_id === 'D52' ? 'Shot 2 is cropped' : '', moves_to: task_id === 'D61' ? {stage_id: 'build', name: 'Build'}
+        : state.product && task_id === 'D52' ? {stage_id: 'in-development', name: 'In development'} : null,
       reviewer_id: ME, can_mark_met: true, can_not_validate: stage === 'Validate', stage_visit_id: stage === 'Validate' ? 'v-validate' : null};
   };
   const all: Json[] = [
