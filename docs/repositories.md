@@ -37,7 +37,7 @@ hub bot repos sales --own
 
 ## API
 
-- `GET /api/v2/repositories`: repositories, `new_bot_default`, `github_connected`.
+- `GET /api/v2/repositories`: repositories, `new_bot_default`, `github_connected` and `github_installed` (any teammate may read them).
 - `POST /api/v2/repositories/refresh`: refresh GitHub and return the same answer.
 - `PUT /api/v2/repositories/{owner}/{repo}`: `enabled` and/or `setup_command`.
 - `PUT /api/v2/repositories/settings`: `new_bot_default` (`own` or `all`).

@@ -936,7 +936,7 @@ the owner does not need to take a turn.
 
 Closing is a separate decision; it records `closed_at` and
 `closed_by`, preserving the completion time if the work was already Done. Earlier history
-is preserved, including tasks that older versions closed automatically. Use **Close task** in the
+is preserved, including tasks that older versions closed automatically. Use **Close** in the
 Done task’s menu, or bulk **Close**, to accept completion. A waking comment delegates further
 work, not permission for the assignee bot to accept its own result.
 Completed work does not block a new task with the same requester, owner and title; unfinished

@@ -1346,3 +1346,74 @@ def test_periodic_pool_retry_bounds_each_pass(api):
     assert len(check_pools.retry(api.app.state.store, limit=1)) == 1
     assert sum(len(checks(api, task)) for task in tasks) == 2
     assert check_pools.retry(api.app.state.store) == []
+
+
+def test_a_check_pool_run_needs_a_passing_check_on_every_open_pr_at_its_own_review_stage(tmp_path):
+    """O-b (A7): a run from a check pool is met only when every open pull request has a passing check filed at the
+    requirement's own stage. One passing PR of two leaves it waiting, and a Review 1 check never meets Review 2."""
+    from backend import pipeline_engine as E
+    from backend import pipeline_requirements as R
+    from backend.tests.test_pipeline_foundation import ANA, boot, hub, insert, step_id
+
+    boot(tmp_path / "hub.sqlite")
+    c = hub(tmp_path / "hub.sqlite")
+    bots = {slug: {"name": slug, "runtime": "fake", "status": "active"} for slug in ("cpo", "rev-a")}
+    H.sync_registry(c, bots, {"people": [{"id": "ana", "email": "ana@acme.example", "team": "leadership"}]})
+    dev = H.type_create(
+        c,
+        ANA,
+        "Dev review",
+        [
+            {"name": "Review 1", "status": "review"},
+            {"name": "Review 2", "status": "review"},
+            {"name": "Done", "status": "done"},
+        ],
+        mover=True,
+    )
+    c.execute("UPDATE task_types SET pipeline_owner_id=? WHERE id=?", (ANA, dev["id"]))
+    review_1, review_2 = step_id(c, dev["id"], "Review 1"), step_id(c, dev["id"], "Review 2")
+    stage_name = {review_1: "Review 1", review_2: "Review 2"}
+    for stage in stage_name:  # a check step: a pool, and a flow that says what its verdict moves the card to
+        flow = {"check": "review", "on_pass": "Done", "on_fail": "Review 1"}
+        c.execute(
+            "UPDATE task_steps SET check_pool=?, check_limit=2, flow=? WHERE id=?",
+            (json.dumps(["rev-a"]), json.dumps(flow), stage),
+        )
+    body = {"kind": "run", "needs": {"source": "check_pool"}, "reviewed_by": "nobody"}
+    R.add(c, ANA, review_1, {**body, "name": "Review 1 checks"})
+    R.add(c, ANA, review_2, {**body, "name": "Review 2 checks"})
+    card = H.task_create(c, ANA, "Feature", "", ANA, type=dev["id"], step="Review 1", lint=False)
+    heads = {"https://github.com/acme/app/pull/1": "a" * 40, "https://github.com/acme/app/pull/2": "b" * 40}
+    for url, head in heads.items():
+        insert(
+            c,
+            "task_links",
+            id=H.new_id(),
+            task_id=card["id"],
+            kind="pr",
+            url=url,
+            state="open",
+            checks="pending",
+            detail=json.dumps({"head_sha": head}),
+            created_at=H.now(),
+        )
+
+    def check_at(stage, head, verdict):
+        title = f"{stage_name[stage]}: PR #{head[0]}"
+        check = H.task_create(c, ANA, title, "Check it.", "bot:rev-a", parent_id=card["id"])
+        c.execute(
+            "UPDATE tasks SET status='done', verdict=?, verdict_head=?, step_id=? WHERE id=?",
+            (verdict, head, stage, check["id"]),
+        )
+        return check
+
+    def standing(stage, name):
+        row = dict(c.execute("SELECT id, type_id, step_id, status FROM tasks WHERE id=?", (card["id"],)).fetchone())
+        row["step_id"] = stage
+        return {d["name"]: d["state"] for d in E.dots_many(c, [row]).get(card["id"], [])}[name]
+
+    check_at(review_1, heads[next(iter(heads))], "approve")
+    assert standing(review_1, "Review 1 checks") == "waiting", "one open PR of two has a passing check"
+    check_at(review_1, heads[next(reversed(heads))], "approve")
+    assert standing(review_1, "Review 1 checks") == "met"
+    assert standing(review_2, "Review 2 checks") == "none", "a Review 1 check never meets Review 2"
