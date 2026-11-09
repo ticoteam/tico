@@ -27,5 +27,5 @@
   .inline-thumb:not(.ready),.md img:not(.ready),.vcard[data-state="ready"] .vcard-body:not(.ready),
   .ob-bot.sk .sk-i,.ob-bot.sk .sk-l i,.oc-ph .sk-i,.oc-ph .sk-l{animation:none!important}
 }
-/* A button whose write is still in flight (pressPending in app/api.js). */
+/* A button whose write is still in flight (pressPending in app/api.ts). */
 .is-pending{cursor:progress;opacity:.6;transition:opacity var(--dur-fast) var(--ease)}

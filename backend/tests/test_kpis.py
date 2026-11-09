@@ -201,9 +201,14 @@ def test_archive_restore_preserves_kpi_history_and_marks_it_on_goals(api):
     with api.app.state.store.transaction() as c:
         strategy_bot.set_level(c, "human:ana", 2)  # above Passive, a stale KPI waits in Needs you
     stale = post(api, "kpis", {"name": "Unreported measure", "owner": "me"})["kpi"]
-    assert any(item.get("kpi_id") == stale["id"] for item in get(api, "goals/needs-you")["items"])
+
+    def listed():
+        items = get(api, "goals/needs-you")["items"]
+        return [k["kpi_id"] for item in items if item["kind"] == "kpi_stale" for k in item["kpis"]]
+
+    assert stale["id"] in listed()
     post(api, f"kpis/{stale['id']}/archive", {})
-    assert all(item.get("kpi_id") != stale["id"] for item in get(api, "goals/needs-you")["items"])
+    assert stale["id"] not in listed()
     post(api, f"kpis/{stale['id']}/restore", {}, token="cara-test", expected=403)
     post(api, f"kpis/{stale['id']}/restore", {})
     original = get(api, f"kpis/{kpi['id']}")

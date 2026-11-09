@@ -449,7 +449,7 @@ def thread_rows(ctx, limit):
             rows.append(
                 {
                     "id": t["id"],
-                    "title": t.get("title") or "",
+                    "title": t.get("name") or t.get("title") or "",
                     "unread": int(me.get("unread") or 0),
                     "activity": bool(me.get("activity")),
                     "updated_at": t.get("last_message_at"),
@@ -703,7 +703,7 @@ def months_between(first, last):
 
 
 def figure(values, cal, month, carry):
-    """One figure over the calendar, as the Growth page draws it (ui/app/growth-page.js grFigure): its value in `month`
+    """One figure over the calendar, as the Growth page draws it (ui/app/growth-page.ts grFigure): its value in `month`
     or, with `carry`, the newest earlier one, which `from` names (empty when it is the month's own), and the value of
     the month before it."""
     at = cal.index(month)

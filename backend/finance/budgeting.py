@@ -681,21 +681,22 @@ def _months(start: str, end: str) -> list[tuple[str, str]]:
 
 def ad_covers(ctx: Ctx, b: B.Budget, s: SAD.LiveSpend, accounts: frozenset[str], teammate: str = "") -> bool:
     """Whether an ad account's spend counts in a budget (scope `accounts`): its platform the budget's, its books line in
-    scope, its bot the budget's teammate and on its team (when the budget names them). An account with no bot counts
+    scope, its owner the budget's teammate and on its team (when the budget names them). `s` is what its campaigns'
+    owners count for (store/ads.live_spend): an account's bot, or a campaign's own owner. Spend with no owner counts
     only in a budget that names neither."""
     if s.platform != budget_platform(ctx, b) or s.books_account_id not in accounts:
         return False
-    bot = "bot:" + s.bot_slug if s.bot_slug else ""
     mate = teammate or b.teammate
-    if mate and mate != bot:
+    if mate and mate != s.mate:
         return False
-    return not b.team or (bool(bot) and ctx.org.team_of.get(bot, "") in ctx.org.below(b.team))
+    owner_team = s.team or (ctx.org.team_of.get(s.mate, "") if s.mate else "")
+    return not b.team or (bool(owner_team) and owner_team in ctx.org.below(b.team))
 
 
 def _replaced(ctx: Ctx, rows: Sequence[SAD.LiveSpend]) -> bool:
     """Whether the platform's spend stands in for the books: an assigned account in scope, and none in another
     currency than the book's (its spend could not be added, so its charges must stay)."""
-    return any(r.bot_slug for r in rows) and all(r.currency == ctx.book.base_currency for r in rows)
+    return any(r.mate or r.team for r in rows) and all(r.currency == ctx.book.base_currency for r in rows)
 
 
 def _month_spend(ctx: Ctx, lo: str, hi: str) -> list[SAD.LiveSpend]:

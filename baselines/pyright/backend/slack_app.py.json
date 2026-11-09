@@ -1,0 +1,14 @@
+{
+    "files": {
+        "./backend/slack_app.py": [
+            {
+                "code": "reportArgumentType",
+                "range": {
+                    "startColumn": 24,
+                    "endColumn": 48,
+                    "lineCount": 1
+                }
+            }
+        ]
+    }
+}

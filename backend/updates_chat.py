@@ -14,7 +14,7 @@ bot beside the Updates page: their Assistant, the owner's included.
   waits on a task of yours, or it names you), then newest. The bot follows what the person taught it, and for the
   owner the company layer, over that order (backend/learned.py).
 - Each update's `link` (`#/updates?kind=&day=&update=`) scrolls the page to that card and highlights it, switching Daily
-  or Weekly and the day as needed (ui/app/updates.js updGoTo)."""
+  or Weekly and the day as needed (ui/app/updates.ts updGoTo)."""
 
 import re
 

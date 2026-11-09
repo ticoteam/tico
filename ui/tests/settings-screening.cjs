@@ -1,4 +1,4 @@
-// Settings > Security > Screening (#/settings/security, ui/app/settings-release.js, backend/screening.py): an owner or admin sees a switch per
+// Settings > Security > Screening (#/settings/security, ui/app/settings-release.ts, backend/screening.py): an owner or admin sees a switch per
 // detector (Patterns, Model) and one row per door (Webhooks, Mail, Ideas, Watchers) with a mode, mail offering Off and
 // Warn only; a change is one PUT; Run test
 // shows passed/total and each sample; Recent lists holds and warnings with a Task link. A member has no Security tab and
@@ -29,10 +29,10 @@ async function open(browser, role, viewport) {
   await page.route('**/*', route => {
     const req = route.request(), p = new URL(req.url()).pathname;
     const json = (body, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
-    const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|css))$/);
+    const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/);
     if (ui && fs.existsSync(uiFile(ui[1])))
       return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]), 'utf8')});
-    if (p.endsWith('.js')) return route.fulfill({contentType: 'application/javascript', body: ''});
+    if (/\.(?:js|ts)$/.test(p)) return route.fulfill({contentType: 'application/javascript', body: ''});
     if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
     const config = {version: '0.1.0', app_name: 'Tico'};
     if (p === '/api/me') return json({id: role === 'owner' ? 'ana' : 'cara', role: role === 'owner' ? 'owner' : 'human', bot_admin: role === 'admin',

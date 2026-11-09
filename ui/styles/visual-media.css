@@ -1,4 +1,4 @@
-/* Video and audio cards (ui/app/visual-media.js): the video's own box, no taller than the card's cap, replaces the
+/* Video and audio cards (ui/app/visual-media.ts): the video's own box, no taller than the card's cap, replaces the
    frame's held space, so a portrait clip is narrower instead of cropped. */
 .vcard[data-kind="video"] .vcard-body{aspect-ratio:auto!important;width:100%;background:#000}
 .vcard[data-kind="video"] .tf-media.video{margin:0 auto;border-radius:0}

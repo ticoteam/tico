@@ -10,8 +10,9 @@ changed. Pairs are compared in plain Node, which decodes the PNGs itself (script
 A pair under 0.1% changed pixels is unchanged and is listed on one line; a page the head adds has no before.
 
 DIR gets <page>-<width>-before.png and <page>-<width>-after.png (dark: <page>-<width>-dark-before.png), manifest.json,
-and release-shots.md, the "What it looks like" section, whose images are release-evidence URLs. --upload pushes the
-changed pictures to the release-evidence branch under <version>/ (upload_evidence); nothing else is pushed.
+and release-shots.md, the "What it looks like" section, whose images are release-evidence URLs and which is written only
+once they are pushed. --upload pushes the changed pictures to the release-evidence branch under <version>/
+(upload_evidence); nothing else is pushed.
 
 Exit codes: 0 clean, 1 the after capture had problems (the files are still written, and the markdown says what
 failed), 2 the run could not finish.
@@ -558,10 +559,12 @@ def run(
                 problems=problems,
             )
             (out / 'manifest.json').write_text(json.dumps(asdict(manifest), indent=2) + '\n')
-            (out / 'release-shots.md').write_text(render_markdown(manifest, repo))
+            markdown = render_markdown(manifest, repo)
 
     if upload and evidence_names(shots):
         upload_evidence([out / name for name in evidence_names(shots)], version)
+    # Written after the pictures are pushed: its links must work, so a failed push leaves no markdown for the release train.
+    (out / 'release-shots.md').write_text(markdown)
     changed = sum(1 for shot in shots if not shot.unchanged and not shot.new_page)
     print(
         f'release shots: {len(selection.pages)} pages, {len(shots)} pictures, {changed} changed pairs, '

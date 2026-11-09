@@ -1,0 +1,14 @@
+{
+    "files": {
+        "./backend/setup_stuck.py": [
+            {
+                "code": "reportOperatorIssue",
+                "range": {
+                    "startColumn": 23,
+                    "endColumn": 48,
+                    "lineCount": 1
+                }
+            }
+        ]
+    }
+}

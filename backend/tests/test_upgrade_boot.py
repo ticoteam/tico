@@ -1,7 +1,7 @@
 """An upgraded database boots: code that runs before the server's lifespan (create_app's installs, backend.boot's
 environment_identity) must not read a renamed column before the cleanup migrations have run.
 
-The old database is a fresh one with every rename reversed and the rename migrations marked not applied."""
+The old database is the last release's own schema (schema_pre_cleanup.sql, user_version 71)."""
 
 import os
 import re
@@ -9,40 +9,22 @@ import sqlite3
 import subprocess
 import sys
 from contextlib import closing
+from pathlib import Path
 
 import pytest
 
 from backend.app import create_app
 from backend.config import ROOT, Settings
 from backend.migrations import renames as schema_renames
-from backend.migrations.renames_data import COLUMNS, TABLES
-from backend.store import Store
-from backend.tests.test_migrations import restore_config
+
+FIXTURE = Path(__file__).parent / "fixtures" / "schema_pre_cleanup.sql"
 
 
 def pre_rename_db(path):
-    Store(Settings(db_path=path)).initialize()
-    with closing(sqlite3.connect(path, isolation_level=None)) as conn:
-        assert not schema_renames.pending(conn)
-        conn.execute("PRAGMA legacy_alter_table=OFF")
-        have = {
-            t: {r[1] for r in conn.execute(f'PRAGMA table_info("{t}")')}
-            for (t,) in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()
-        }
-        for table, old, new, _wave in reversed(COLUMNS):
-            if new in have.get(table, ()):
-                conn.execute(f'ALTER TABLE "{table}" RENAME COLUMN "{new}" TO "{old}"')
-        for old, new in reversed(TABLES):
-            if new in have:
-                conn.execute(f'ALTER TABLE "{new}" RENAME TO "{old}"')
-        # The rename waves (0013, 0014, 0031, 0034) are pending again, and so is every file after the first of them:
-        # a migration never runs before one this database has already applied. The reruns read bot_config.config
-        # (0061, and the rename steps), which 0070 dropped: the column goes back, each declaration copied into it.
-        restore_config(conn)
-        conn.execute("DELETE FROM schema_migrations WHERE version >= '0013' AND version NOT LIKE 'legacy_%'")
+    """The last release before the renames, as its own schema dump: the boot under test is the real upgrade."""
+    with closing(sqlite3.connect(path)) as conn:
+        conn.executescript(FIXTURE.read_text())
         assert schema_renames.pending(conn)
-        assert "refs_json" in {r[1] for r in conn.execute("PRAGMA table_info(messages)")}
-        assert "value_json" in {r[1] for r in conn.execute("PRAGMA table_info(registry_metadata)")}
 
 
 def columns(path, table):
@@ -56,7 +38,7 @@ def copy_db(source, target):
     return target
 
 
-# Reversing every rename is ~1000 ALTERs (SQLite rewrites the whole schema for each), so it is done once per run.
+# Booting the old schema runs every rename and migration, so the database is built once per run.
 @pytest.fixture(scope="module")
 def old_db(tmp_path_factory):
     path = tmp_path_factory.mktemp("old") / "hub.sqlite"

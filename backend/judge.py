@@ -160,6 +160,22 @@ def tokens(usage):
     )
 
 
+def cache_writes(usage):
+    """Anthropic's cache-write tokens (`cache_creation_input_tokens`) from a provider's usage; 0 when it sends none."""
+    value = usage.get("cache_creation_input_tokens") if isinstance(usage, dict) else None
+    return int(value) if isinstance(value, int | float) and _count(value) else 0
+
+
+def _list_cost(model, fresh, cached, out, usage):
+    """The list-price USD of one call to a priced `model`, or None when it has no price. A model in
+    `providers.PER_REQUEST_LONG_TIER` is one request: its prompt is the uncached input, the cache writes and the cache
+    reads, and it pays the long tier when over the limit."""
+    if providers.per_request_long_tier(model):
+        prompt = fresh + cache_writes(usage)
+        return providers.estimate_cost(model, prompt, cached, out, [(prompt, cached, out)])
+    return providers.estimate_cost(model, fresh, cached, out)
+
+
 # The dearest list price in `providers.PRICES` (USD per 1M input, output tokens): what a call to a model with no known
 # price is counted at, so no paid call counts $0 toward the cap.
 CEILING = (max(p[0] for p in providers.PRICES.values()), max(p[2] for p in providers.PRICES.values()))
@@ -188,19 +204,20 @@ def cost_usd(settings, model, usage):
             return round(float(value), 6)
     fresh, cached, out = tokens(usage)
     if model in J.GATEWAY_MODELS:
-        # Every Decide level has a catalog price (Low is Jev's); the flat rate covers an id the catalog lacks.
-        listed = providers.price_of(model)
-        rate_in, rate_out = (listed[0], listed[2]) if listed else GATEWAY_USD_PER_MTOK
+        # Every Decide level has a catalog price (Low is Jev's); the flat rate covers an id the catalog lacks. Cached
+        # input is billed at the catalog's cached rate, as `providers.estimate` bills every other model's.
+        if (listed := providers.price_of(model)) is None:
+            listed = (GATEWAY_USD_PER_MTOK[0], GATEWAY_USD_PER_MTOK[0], GATEWAY_USD_PER_MTOK[1])
+        rate_in, rate_cached, rate_out = listed
     elif priced(settings, model) and str(model or "").lower().startswith("jev"):
         rate_in, rate_out = settings.decisions_jev_usd_per_mtok_input, settings.decisions_jev_usd_per_mtok_output
-    elif priced(settings, model):
-        if providers.per_request_long_tier(model):
-            # One request: its prompt (fresh and cached input together) pays the long-prompt tier when over it.
-            return round(providers.estimate_cost(model, fresh, cached, out, [(fresh, cached, out)]), 6)
-        return round(providers.estimate_cost(model, fresh, cached, out), 6)
+        rate_cached = rate_in
+    elif priced(settings, model) and (listed := _list_cost(model, fresh, cached, out, usage)) is not None:
+        return round(listed, 6)
     else:
         rate_in, rate_out = CEILING
-    return round(((fresh + cached) * rate_in + out * rate_out) / 1_000_000, 6)
+        rate_cached = rate_in
+    return round((fresh * rate_in + cached * rate_cached + out * rate_out) / 1_000_000, 6)
 
 
 # The month's total per (database file, month): (total, rowid of the newest judge.spend row counted, that row's id). A call
@@ -218,27 +235,26 @@ NEW_SPEND_SQL = (
 )
 # A budget is the settings field holding its monthly cap and the event action its spend rows are written as. Decide's
 # own is the default; org rule checks keep a separate one (backend/org_rule_check.py), so neither can spend the other's.
-DECIDE_BUDGET = ("decisions_monthly_usd", "judge.spend")
+DECIDE_BUDGET = ("decisions_monthly_usd", "judge.spend", "monthly_cap_usd")
 
 
-def saved_cap(c):
-    """The monthly cap saved in Settings > Maintenance (registry_metadata `maintenance`, monthly_cap_usd), or None when
-    none is saved: the environment's TICO_DECISIONS_MONTHLY_USD then holds."""
+def saved_cap(c, key="monthly_cap_usd"):
+    """The monthly cap saved in Automations > Maintenance (registry_metadata `maintenance`, `key`: Decide's monthly_cap_usd,
+    the rules' rules_monthly_cap_usd), or None when none is saved: the environment's setting then holds."""
     row = c.execute("SELECT value FROM registry_metadata WHERE key='maintenance'").fetchone()
     try:
         stored = json.loads(row[0]) if row else {}
     except (TypeError, ValueError):
         return None
-    cap = stored.get("monthly_cap_usd") if isinstance(stored, dict) else None
+    cap = stored.get(key) if isinstance(stored, dict) else None
     return float(cap) if isinstance(cap, (int, float)) and not isinstance(cap, bool) and cap >= 0 else None
 
 
 def budget_cap(c, settings, budget=DECIDE_BUDGET):
-    """The cap a budget enforces: Decide's saved cap when one is saved, else the settings field (the environment's)."""
-    if budget == DECIDE_BUDGET:
-        saved = saved_cap(c)
-        if saved is not None:
-            return saved
+    """The cap a budget enforces: its saved cap when one is saved (`budget[2]`), else the settings field (the environment's)."""
+    saved = saved_cap(c, budget[2])
+    if saved is not None:
+        return saved
     return float(getattr(settings, budget[0], 0) or 0)
 
 
@@ -584,17 +600,19 @@ def primary_engine(settings, store=None, vault=None):
     return ordered([gateway(settings, store, vault), jev(settings)])
 
 
-def server_engine(store, c, primary=None, budget=DECIDE_BUDGET):
+def server_engine(store, c, primary=None, budget=DECIDE_BUDGET, backup=True):
     """The decision model every server-side caller uses, or None for "carry on as if Decide were off": rehearsal, no
-    model at all, or the month's spend at the cap. `primary` is the Gateway and the own TypeSafe key
+    model at all, a demo, or the month's spend at the cap. `primary` is the Gateway and the own TypeSafe key
     (`primary_engine(settings)`, or the test's fake); when they are slow, down or refused, the company's own model answers
     and the result says `fallback`. Each call goes through `metered`, so a batch that reuses one engine (listening,
     learnings) stops at the cap call by call; each result carries `cost_usd`. Another `budget` meters against its own
     cap instead of Decide's."""
     settings = store.settings
-    if settings.rehearsal or over_spend_cap(c, settings, None, budget):
+    # A demo's provider keys are made up (demo_sections/services.py): asking with them is a refused key or a timeout,
+    # never an answer, and a seed that waits on either builds a different company from run to run.
+    if settings.rehearsal or settings.demo or over_spend_cap(c, settings, None, budget):
         return None
-    backup = fallback_engine(providers.load(c, settings))
+    backup = fallback_engine(providers.load(c, settings)) if backup else None
     steps = live(primary, c, settings)
     chain = ordered(steps + [backup])
     if chain is None:

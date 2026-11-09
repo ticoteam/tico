@@ -29,6 +29,7 @@ import jwt
 from fastapi import Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
+from . import brand_icons
 from .config import PRODUCT_NAME
 from .store import H, Problem, digest
 
@@ -326,10 +327,11 @@ class Oidc:
         )
         return url, cookie
 
-    def finish(self, query, cookie):
+    def finish(self, query, cookie, joined=()):
         """The verified email of a finished login, the path (or frontend URL) to return to, the frontend's PKCE
         challenge ("" for the built-in page), and the account it is: (issuer, subject). Raises SignInError.
-        No database is held open: this waits on the provider."""
+        `joined` is the allow list's domains (a domain join: Settings > People). No database is held open: this waits
+        on the provider."""
         pending = self._unsign(cookie)
         if query.get("error"):
             raise SignInError("provider refused: " + re.sub(r"[^a-z_]", "", str(query["error"]))[:40])
@@ -339,7 +341,7 @@ class Oidc:
         doc = self._discover()
         claims = self._verify(self._exchange(doc, code, pending["v"]), pending["n"], doc)
         return (
-            self._email(claims),
+            self._email(claims, joined),
             pending["x"],
             str(pending.get("c") or ""),
             (str(claims["iss"]), str(claims["sub"])),
@@ -481,14 +483,19 @@ class Oidc:
                 raise SignInError("token is from another tenant")
         return claims
 
-    def _email(self, claims):
+    def _email(self, claims, joined=()):
         email = self._verified_email(claims)
+        domain = email.rsplit("@", 1)[1]
         domains = self.settings.oidc_allowed_domains
         if domains:
-            if email.rsplit("@", 1)[1] not in domains:
+            if domain not in domains:
                 raise SignInError("email domain is not allowed")
             if _google(self.issuer) and str(claims.get("hd") or "").lower() not in domains:
                 raise SignInError("hosted domain is not allowed")
+        # A domain join ("Anyone with a <domain> Google login"): a Google sign-in for that domain must be the company's
+        # own Workspace account, so its hd claim is that domain. The Tico account issuer keeps the verified-email rule.
+        if _google(self.issuer) and domain in joined and str(claims.get("hd") or "").lower() != domain:
+            raise SignInError("hosted domain is not the company's")
         return email
 
     def _verified_email(self, claims):
@@ -777,7 +784,12 @@ def _page(settings, status, title, message, action=None):
     body = (
         "<!doctype html><html lang=en><head><meta charset=utf-8>"
         '<meta name=viewport content="width=device-width,initial-scale=1">'
-        "<title>" + html.escape(title) + " - " + html.escape(settings.app_name) + "</title>"
+        + brand_icons.HEAD
+        + "<title>"
+        + html.escape(title)
+        + " - "
+        + html.escape(settings.app_name)
+        + "</title>"
         "<style>body{font:16px/1.5 system-ui,sans-serif;background:#f6f6f4;color:#1c1c1a;margin:0;"
         "display:grid;place-items:center;min-height:100vh}main{max-width:26rem;padding:2rem;background:#fff;"
         "border-radius:12px;box-shadow:0 1px 8px #0002;margin:1rem}h1{font-size:1.25rem;margin:0 0 .5rem}"
@@ -918,7 +930,13 @@ def register(app, auth):
         oidc = active()
         jar = cookies(request.headers)
         try:
-            email, target, challenge, account = oidc.finish(dict(request.query_params), jar.get(oidc.login_cookie, ""))
+            from . import access
+
+            with store.read() as c:
+                joined = access.load_access(c, settings)["allowed_domains"]
+            email, target, challenge, account = oidc.finish(
+                dict(request.query_params), jar.get(oidc.login_cookie, ""), joined
+            )
             with store.transaction() as c:
                 human = oidc.person(c, email, account)
                 if challenge:

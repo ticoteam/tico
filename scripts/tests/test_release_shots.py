@@ -1,5 +1,7 @@
 """Release shots: which pages a diff picks, the markdown section, unchanged pairs, the evidence branch and the workflow."""
 
+from collections.abc import Iterator
+from contextlib import contextmanager
 import json
 from pathlib import Path
 import re
@@ -57,8 +59,8 @@ def repo(tmp_path: Path) -> Path:
     commit(
         root,
         {
-            'ui/app/updates.js': 'updates\n',
-            'ui/app/tasks.js': 'tasks\n',
+            'ui/app/updates.ts': 'updates\n',
+            'ui/app/tasks.ts': 'tasks\n',
             'ui/styles/base.css': 'base\n',
             'backend/x.py': 'x = 1\n',
         },
@@ -79,7 +81,7 @@ def all_page_names(repo: Path) -> set[str]:
 
 
 def test_a_mapped_file_picks_only_the_pages_that_draw_it(repo: Path) -> None:
-    selection = picked(repo, {'ui/app/updates.js': 'updates changed\n'})
+    selection = picked(repo, {'ui/app/updates.ts': 'updates changed\n'})
     # The support popover draws the updates file too, so both pages are shot, and no others.
     assert selection.pages == ['updates', 'support']
     assert not selection.every
@@ -112,14 +114,14 @@ def test_a_new_ui_file_that_no_table_names_picks_every_page(repo: Path) -> None:
 
 
 def test_an_unshown_file_picks_no_page_and_is_named(repo: Path) -> None:
-    selection = picked(repo, {'ui/app/vault.js': 'vault\n'})
+    selection = picked(repo, {'ui/app/vault.ts': 'vault\n'})
     assert selection.pages == []
-    assert selection.unshown == ['ui/app/vault.js']
-    assert 'not shown: ui/app/vault.js' in selection.reason
+    assert selection.unshown == ['ui/app/vault.ts']
+    assert 'not shown: ui/app/vault.ts' in selection.reason
 
 
 def test_a_dark_line_turns_the_dark_pictures_on(repo: Path) -> None:
-    assert picked(repo, {'ui/app/updates.js': 'updates in dark mode\n'}).dark
+    assert picked(repo, {'ui/app/updates.ts': 'updates in dark mode\n'}).dark
 
 
 def test_a_dark_theme_file_turns_the_dark_pictures_on(repo: Path) -> None:
@@ -353,7 +355,9 @@ def test_the_workflow_takes_base_head_and_version_and_asks_for_contents_write_on
     triggers = workflow.get('on', workflow.get(True))
     call = triggers['workflow_call']
     assert set(call['inputs']) == {'base', 'head', 'version'}
-    assert 'markdown' in call['outputs']
+    # The caller downloads the pictures and the markdown by the artifact's name, not by a path on the runner.
+    assert set(call['outputs']) == {'artifact'}
+    assert call['outputs']['artifact']['value'] == '${{ jobs.shots.outputs.artifact }}'
     assert workflow['permissions'] == {}
     job = workflow['jobs']['shots']
     assert '4cpu-linux-x64' in job['runs-on']
@@ -367,3 +371,60 @@ def test_the_workflow_takes_base_head_and_version_and_asks_for_contents_write_on
     assert 'scripts/release_shots.py' in runs and '--upload' in runs
     assert 'playwright install' in runs and 'chromium' in runs
     assert any(step.get('with', {}).get('python-version') == '3.15' for step in steps if 'with' in step)
+
+
+def test_the_markdown_is_written_only_once_its_pictures_are_pushed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Everything but the markdown and the push is stubbed: no browser runs and no branch is touched.
+    @contextmanager
+    def fake_worktree(sha: str, where: Path) -> Iterator[Path]:
+        where.mkdir()
+        yield where
+
+    picture = shots.Shot(
+        page='tasks',
+        width='phone',
+        theme='light',
+        before='tasks-phone-before.png',
+        after='tasks-phone-after.png',
+        changed_pixels_pct=12.0,
+    )
+
+    def fake_shoot(
+        base_sha: str,
+        base_tree: Path,
+        head_tree: Path,
+        selection: shots.Selection,
+        widths: list[str],
+        python: str,
+        work: Path,
+        out: Path,
+    ) -> tuple[list[shots.Shot], shots.Problems]:
+        (out / 'tasks-phone-before.png').write_bytes(b'before')
+        (out / 'tasks-phone-after.png').write_bytes(b'after')
+        return [picture], shots.Problems(before=[], after=[])
+
+    selection = shots.Selection(pages=['tasks'], every=False, dark=False, reason='pages tasks', unshown=[])
+    monkeypatch.setattr(shots, 'resolve', lambda ref: ref)
+    monkeypatch.setattr(shots, 'worktree', fake_worktree)
+    monkeypatch.setattr(shots, 'select_pages', lambda base_sha, head_sha: selection)
+    monkeypatch.setattr(shots, 'shoot', fake_shoot)
+    monkeypatch.setattr(shots, 'render_markdown', lambda manifest, repo: '## What it looks like\n\nthe pictures\n')
+    out = tmp_path / 'out'
+    pushed: list[tuple[list[str], str]] = []
+
+    def refused(files: list[Path], version: str) -> str:
+        pushed.append((sorted(file.name for file in files), version))
+        raise RuntimeError('push refused')
+
+    monkeypatch.setattr(shots, 'upload_evidence', refused)
+    with pytest.raises(RuntimeError, match='push refused'):
+        shots.run('v0.5.204', 'main', 'v9.9.9', out, ['phone'], 'python3', True, 'ticoteam/tico')
+    assert pushed == [(['tasks-phone-after.png', 'tasks-phone-before.png'], 'v9.9.9')]
+    # A failed push leaves the manifest and the pictures, but no markdown whose links would be dead.
+    assert (out / 'manifest.json').exists() and not (out / 'release-shots.md').exists()
+
+    monkeypatch.setattr(shots, 'upload_evidence', lambda files, version: 'pushed')
+    assert shots.run('v0.5.204', 'main', 'v9.9.9', out, ['phone'], 'python3', True, 'ticoteam/tico') == 0
+    assert (out / 'release-shots.md').read_text() == '## What it looks like\n\nthe pictures\n'

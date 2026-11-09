@@ -47,3 +47,18 @@ def test_icon_strips_metadata_makes_square_and_weak_etag_matches(api):
         api.get("/api/v2/team/icon", headers={"If-None-Match": '"other", W/' + response.headers["etag"]}).status_code
         == 304
     )
+
+
+def test_apple_touch_icon_is_opaque_180_square_with_the_logo_fitted_and_padded():
+    from backend import team_icon
+
+    logo = Image.new("RGBA", (40, 40), (0, 0, 0, 0))
+    logo.paste((255, 0, 0, 255), (10, 10, 30, 30))
+    source = io.BytesIO()
+    logo.save(source, "PNG")
+    with Image.open(io.BytesIO(team_icon.touch_png(source.getvalue()))) as icon:
+        assert icon.format == "PNG" and icon.size == (180, 180) and icon.mode == "RGB"
+        assert icon.getpixel((0, 0)) == (255, 255, 255)  # the padding is white, not the transparent black of the logo
+        assert icon.getpixel((20, 20)) == (255, 255, 255)  # inside the fitted box, where the logo is transparent
+        red = icon.getpixel((90, 90))  # the logo's own colour, in the middle
+        assert red[0] > 240 and red[1] < 15 and red[2] < 15

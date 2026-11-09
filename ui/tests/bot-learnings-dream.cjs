@@ -42,7 +42,7 @@ const QUESTIONS = 'Two things only you can settle.\n1. Should weekly reports go 
         return {};
       };
     }, QUESTIONS);
-    await page.addScriptTag({path: path.join(__dirname, '../app/bot-learnings.js')});
+    await page.addScriptTag({path: path.join(__dirname, '../../build/ui/app/bot-learnings.js')});
 
     // The split: an intro, numbered questions, suggestions as chips.
     const cards = await page.evaluate(q => dreamSplit(q), QUESTIONS);

@@ -19,8 +19,8 @@ def pt(*when):
 
 
 A, B, C, D = ("a" * 40, "b" * 40, "c" * 40, "d" * 40)
-NOW = datetime(2026, 11, 5, 18, 0, tzinfo=timezone.utc)  # Thursday 10:00 PST: 07:30 is the latest start
-OPENED = pt(2026, 11, 5, 7, 30)
+NOW = datetime(2026, 11, 5, 15, 30, tzinfo=timezone.utc)  # Thursday 07:30 PST: the 07:00 window is open
+OPENED = pt(2026, 11, 5, 7, 0)
 
 
 def run(sha, version="v0.5.201", previous="v0.5.200", *, status="completed", conclusion="success", at=NOW, id=1):
@@ -52,12 +52,14 @@ class FakeGitHub:
         self.comments, self.closed = [], []  # (number, body) of the comments this run posted; the numbers it closed
         self.issue_list, self.created = [], []  # every issue, and the ones this run filed
         self.events, self.user_comments = {}, {}  # per issue number: its timeline events, and people's comments
+        self.ceiling_ids = set()  # the run ids ci.yml's ceiling job stopped
         self.blockers = []
         self.writers = {"chris"}  # the logins with write access
         self.latest = []
         self.latest_ = "v0.5.200"  # GitHub's latest release before this run
         self.on_dispatch = None
         self.numbers = iter(range(100, 100000))
+        self.failed = {}  # per run id: the tests its failed jobs name (None: a failure nobody can name)
 
     def _sha(self, ref):
         return self.tags_.get(ref) or (self.head_ if ref == "main" else ref)
@@ -81,6 +83,12 @@ class FakeGitHub:
 
     def validation_runs(self):
         return list(self.runs)
+
+    def failed_tokens(self, run_id):
+        return self.failed.get(run_id)
+
+    def ceiling_stopped(self, run):
+        return run.get("id") in self.ceiling_ids
 
     def recent_runs(self, workflow):
         return (list(self.runs) if workflow == "ci.yml" else []) + self.others[workflow]
@@ -293,60 +301,15 @@ UTC = timezone.utc
 @pytest.mark.parametrize(
     "now, start, following",
     [
+        pytest.param(pt(2026, 11, 5, 7, 5), pt(2026, 11, 5, 7, 0), pt(2026, 11, 5, 8, 0), id="thu-0705-opens-0700"),
         pytest.param(
-            datetime(2026, 7, 10, 4, 0, tzinfo=UTC),
-            pt(2026, 7, 9, 20, 30),
-            pt(2026, 7, 10, 7, 30),
-            id="thu-2030-pdt-seen-0400-utc-next-day",
+            pt(2026, 11, 5, 6, 59), pt(2026, 11, 4, 21, 0), pt(2026, 11, 5, 7, 0), id="thu-0659-yesterday-2100"
         ),
-        pytest.param(
-            datetime(2026, 11, 6, 4, 40, tzinfo=UTC),
-            pt(2026, 11, 5, 20, 30),
-            pt(2026, 11, 6, 7, 30),
-            id="thu-2030-pst-seen-0440-utc-next-day",
-        ),
-        pytest.param(
-            pt(2026, 11, 6, 20, 31),
-            pt(2026, 11, 6, 20, 30),
-            pt(2026, 11, 7, 7, 30),
-            id="fri-2031-the-2030-window-is-the-latest",
-        ),
-        pytest.param(
-            pt(2026, 11, 6, 21, 0), pt(2026, 11, 6, 20, 30), pt(2026, 11, 7, 7, 30), id="fri-2100-next-is-sat-0730"
-        ),
-        pytest.param(
-            pt(2026, 11, 7, 0, 30),
-            pt(2026, 11, 6, 20, 30),
-            pt(2026, 11, 7, 7, 30),
-            id="sat-0030-across-midnight-keeps-fri-2030",
-        ),
-        pytest.param(
-            pt(2026, 7, 11, 7, 31), pt(2026, 7, 11, 7, 30), pt(2026, 7, 11, 15, 0), id="sat-0731-pdt-opened-0730"
-        ),
-        pytest.param(
-            pt(2026, 11, 7, 7, 31), pt(2026, 11, 7, 7, 30), pt(2026, 11, 7, 15, 0), id="sat-0731-pst-opened-0730"
-        ),
-        pytest.param(
-            pt(2026, 11, 5, 11, 5), pt(2026, 11, 5, 11, 0), pt(2026, 11, 5, 14, 0), id="thu-1105-pst-opened-1100"
-        ),
-        pytest.param(
-            pt(2026, 7, 11, 14, 5),
-            pt(2026, 7, 11, 7, 30),
-            pt(2026, 7, 11, 15, 0),
-            id="sat-1405-no-1400-window-at-weekends",
-        ),
-        pytest.param(
-            pt(2026, 7, 11, 15, 5), pt(2026, 7, 11, 15, 0), pt(2026, 7, 12, 7, 30), id="sat-1505-opens-the-1500-window"
-        ),
-        pytest.param(
-            pt(2026, 7, 11, 20, 31),
-            pt(2026, 7, 11, 15, 0),
-            pt(2026, 7, 12, 7, 30),
-            id="sat-2031-no-2030-window-at-weekends",
-        ),
-        pytest.param(
-            pt(2026, 11, 9, 7, 0), pt(2026, 11, 8, 15, 0), pt(2026, 11, 9, 7, 30), id="mon-0700-after-sunday-1500"
-        ),
+        pytest.param(pt(2026, 11, 5, 21, 30), pt(2026, 11, 5, 21, 0), pt(2026, 11, 6, 7, 0), id="thu-2130-last-window"),
+        pytest.param(pt(2026, 11, 5, 22, 30), pt(2026, 11, 5, 21, 0), pt(2026, 11, 6, 7, 0), id="thu-2230-no-2200"),
+        pytest.param(pt(2026, 7, 11, 7, 0), pt(2026, 7, 11, 7, 0), pt(2026, 7, 11, 8, 0), id="sat-0700-pdt-boundary"),
+        pytest.param(pt(2026, 7, 11, 15, 1), pt(2026, 7, 11, 15, 0), pt(2026, 7, 11, 16, 0), id="sat-1501-pdt"),
+        pytest.param(pt(2026, 7, 11, 21, 0), pt(2026, 7, 11, 21, 0), pt(2026, 7, 12, 7, 0), id="sun-weekend-2100"),
     ],
 )
 def test_window_start_and_next_window_follow_los_angeles_time(now, start, following):
@@ -356,143 +319,38 @@ def test_window_start_and_next_window_follow_los_angeles_time(now, start, follow
 
 
 def test_a_dst_change_day_uses_the_offset_of_each_window():
-    # Sunday 8 March 2026 springs forward at 02:00 PST (10:00 UTC): 07:30 and 15:00 are daylight time after that.
-    assert rt.window_start(datetime(2026, 3, 8, 14, 31, tzinfo=UTC)) == datetime(2026, 3, 8, 14, 30, tzinfo=UTC), (
-        "spring forward: 07:30 PDT is 14:30 UTC"
+    # Sunday 8 March 2026 springs forward at 02:00 PST (10:00 UTC): 07:00 is daylight time after that (14:00 UTC).
+    assert rt.window_start(datetime(2026, 3, 8, 14, 1, tzinfo=UTC)) == datetime(2026, 3, 8, 14, 0, tzinfo=UTC), (
+        "spring forward: 07:00 PDT is 14:00 UTC"
     )
-    assert rt.window_start(datetime(2026, 3, 8, 14, 29, tzinfo=UTC)) == datetime(2026, 3, 7, 23, 0, tzinfo=UTC), (
-        "spring forward: before 07:30 PDT, Saturday's 15:00 PST window is the latest start"
+    assert rt.window_start(datetime(2026, 3, 8, 13, 59, tzinfo=UTC)) == datetime(2026, 3, 8, 5, 0, tzinfo=UTC), (
+        "spring forward: before 07:00 PDT, Saturday's 21:00 PST window is the latest start"
     )
-    assert rt.next_window(datetime(2026, 3, 8, 14, 29, tzinfo=UTC)) == datetime(2026, 3, 8, 14, 30, tzinfo=UTC), (
-        "spring forward: the next window is 07:30 PDT"
+    assert rt.next_window(datetime(2026, 3, 8, 13, 59, tzinfo=UTC)) == datetime(2026, 3, 8, 14, 0, tzinfo=UTC), (
+        "spring forward: the next window is 07:00 PDT"
     )
-    assert rt.window_start(datetime(2026, 3, 8, 22, 1, tzinfo=UTC)) == datetime(2026, 3, 8, 22, 0, tzinfo=UTC), (
-        "spring forward: 15:00 PDT is 22:00 UTC"
+    # Sunday 1 November 2026 falls back at 02:00 PDT (09:00 UTC): 07:00 is standard time after that (15:00 UTC).
+    assert rt.window_start(datetime(2026, 11, 1, 15, 1, tzinfo=UTC)) == datetime(2026, 11, 1, 15, 0, tzinfo=UTC), (
+        "fall back: 07:00 PST is 15:00 UTC"
     )
-    # Sunday 1 November 2026 falls back at 02:00 PDT (09:00 UTC): 07:30 and 15:00 are standard time after that.
-    assert rt.window_start(datetime(2026, 11, 1, 15, 31, tzinfo=UTC)) == datetime(2026, 11, 1, 15, 30, tzinfo=UTC), (
-        "fall back: 07:30 PST is 15:30 UTC"
-    )
-    assert rt.window_start(datetime(2026, 11, 1, 15, 29, tzinfo=UTC)) == datetime(2026, 10, 31, 22, 0, tzinfo=UTC), (
-        "fall back: before 07:30 PST, Saturday's 15:00 PDT window is the latest start"
-    )
-    assert rt.window_start(datetime(2026, 11, 1, 23, 1, tzinfo=UTC)) == datetime(2026, 11, 1, 23, 0, tzinfo=UTC), (
-        "fall back: 15:00 PST is 23:00 UTC"
+    assert rt.window_start(datetime(2026, 11, 1, 14, 59, tzinfo=UTC)) == datetime(2026, 11, 1, 4, 0, tzinfo=UTC), (
+        "fall back: before 07:00 PST, Saturday's 21:00 PDT window is the latest start"
     )
 
 
 @pytest.mark.parametrize(
     "cron, now, opens, why",
     [
-        pytest.param(
-            "30 14 * * *",
-            pt(2026, 7, 7, 7, 45),
-            True,
-            "07:30 PDT on a Tuesday, fifteen minutes late",
-            id="in-season-pdt",
-        ),
-        pytest.param(
-            "30 15 * * *",
-            pt(2026, 7, 7, 8, 45),
-            False,
-            "its off-season twin: 08:30 PDT is no window",
-            id="off-season-twin-pdt",
-        ),
-        pytest.param(
-            "30 15 * * *", pt(2026, 11, 5, 7, 45), True, "07:30 PST on a Thursday, in season", id="in-season-pst"
-        ),
-        pytest.param(
-            "30 14 * * *",
-            pt(2026, 11, 5, 6, 45),
-            False,
-            "its off-season twin: 06:30 PST is no window",
-            id="off-season-twin-pst",
-        ),
-        pytest.param(
-            "0 21 * * *",
-            pt(2026, 7, 9, 14, 5),
-            True,
-            "14:00 PDT on a Thursday is a weekday window",
-            id="thu-1400-opens",
-        ),
-        pytest.param(
-            "0 21 * * *",
-            pt(2026, 7, 11, 14, 5),
-            False,
-            "14:00 PDT on a Saturday is no window",
-            id="sat-1400-does-not-open",
-        ),
-        pytest.param(
-            "0 18 * * *",
-            pt(2026, 10, 14, 11, 5),
-            True,
-            "11:00 PDT on a Wednesday is a weekday window",
-            id="wed-1100-pdt-opens",
-        ),
-        pytest.param(
-            "0 19 * * *",
-            pt(2026, 11, 11, 11, 5),
-            True,
-            "11:00 PST on a Wednesday is a weekday window",
-            id="wed-1100-pst-opens",
-        ),
-        pytest.param(
-            "0 18 * * *",
-            pt(2026, 10, 17, 11, 5),
-            False,
-            "11:00 PDT on a Saturday is no window",
-            id="sat-1100-does-not-open",
-        ),
-        pytest.param(
-            "0 19 * * *",
-            pt(2026, 10, 14, 12, 5),
-            False,
-            "its off-season twin: 12:05 PDT is no window",
-            id="off-season-twin-1100-pdt",
-        ),
-        pytest.param(
-            "0 18 * * *",
-            pt(2026, 11, 11, 10, 5),
-            False,
-            "its off-season twin: 10:05 PST is no window",
-            id="off-season-twin-1100-pst",
-        ),
-        pytest.param("0 22 * * *", pt(2026, 7, 11, 15, 5), True, "15:00 PDT on a Saturday opens", id="sat-1500-opens"),
-        pytest.param("30 3 * * *", pt(2026, 7, 10, 20, 35), True, "Friday 20:30 PDT is a window", id="fri-2030-opens"),
-        pytest.param(
-            "30 3 * * *", pt(2026, 7, 11, 20, 35), False, "Saturday 20:30 PDT is no window", id="sat-2030-does-not-open"
-        ),
-        pytest.param(
-            "30 14 * * *",
-            pt(2026, 7, 9, 8, 50),
-            True,
-            "80 minutes late: still the current window",
-            id="late-80-minutes",
-        ),
-        pytest.param(
-            "30 14 * * *", pt(2026, 7, 9, 9, 5), True, "95 minutes late: still the current window", id="late-95-minutes"
-        ),
-        pytest.param(
-            "30 14 * * *",
-            pt(2026, 7, 9, 10, 30),
-            True,
-            "3 hours late: still the current window",
-            id="late-3-hours-opens",
-        ),
-        pytest.param(
-            "30 14 * * *",
-            pt(2026, 7, 9, 14, 5),
-            False,
-            "superseded: the 14:00 PDT window has started since",
-            id="superseded-does-not-open",
-        ),
-        pytest.param(
-            "30 15 * * *",
-            pt(2026, 7, 7, 11, 30),
-            False,
-            "11:30 PDT: the current window is 11:00, and this cron's 08:30 PDT is no window",
-            id="late-3-hours-twin-does-not-open",
-        ),
+        pytest.param("0 15 * * *", pt(2026, 11, 5, 7, 0), True, "07:00 PST, in season", id="in-season-pst"),
+        pytest.param("0 15 * * *", pt(2026, 11, 5, 7, 45), True, "07:00 PST, 45 minutes late", id="late-opens"),
+        pytest.param("0 15 * * *", pt(2026, 11, 5, 8, 5), False, "08:00 has started since", id="superseded"),
+        pytest.param("0 14 * * *", pt(2026, 7, 7, 7, 5), True, "07:00 PDT is 14:00 UTC", id="in-season-pdt"),
+        pytest.param("0 14 * * *", pt(2026, 11, 5, 6, 5), False, "06:00 PST is no window", id="pdt-cron-in-pst-twin"),
+        pytest.param("0 15 * * *", pt(2026, 7, 11, 8, 5), True, "08:00 PDT, a Saturday", id="weekend-pdt"),
+        pytest.param("0 22 * * *", pt(2026, 7, 11, 15, 5), True, "15:00 PDT is 22:00 UTC", id="pdt-afternoon"),
+        pytest.param("0 4 * * *", pt(2026, 7, 11, 21, 5), True, "21:00 PDT is 04:00 UTC", id="pdt-last-window"),
+        pytest.param("0 4 * * *", pt(2026, 11, 5, 21, 5), False, "04:00 UTC is 20:00 PST: no window", id="pst-twin"),
+        pytest.param("0 5 * * *", pt(2026, 11, 5, 21, 5), True, "21:00 PST is 05:00 UTC", id="pst-last-window"),
     ],
 )
 def test_a_window_cron_opens_only_at_its_own_real_window_start(cron, now, opens, why):
@@ -503,8 +361,8 @@ def test_a_window_cron_opens_only_at_its_own_real_window_start(cron, now, opens,
     "env, opens",
     [
         pytest.param({"GITHUB_EVENT_NAME": "workflow_dispatch"}, True, id="manual-run"),
-        pytest.param({"GITHUB_EVENT_NAME": "schedule", "SCHEDULE": "30 15 * * *"}, True, id="window-cron"),
-        pytest.param({"GITHUB_EVENT_NAME": "schedule", "SCHEDULE": "30 14 * * *"}, False, id="off-season-twin"),
+        pytest.param({"GITHUB_EVENT_NAME": "schedule", "SCHEDULE": "0 15 * * *"}, True, id="window-cron"),
+        pytest.param({"GITHUB_EVENT_NAME": "schedule", "SCHEDULE": "0 14 * * *"}, False, id="off-season-twin"),
         pytest.param({"GITHUB_EVENT_NAME": "schedule", "SCHEDULE": rt.BACKSTOP_CRON}, False, id="backstop"),
         pytest.param({"GITHUB_EVENT_NAME": "push"}, False, id="push"),
     ],
@@ -514,7 +372,7 @@ def test_only_a_window_start_or_a_manual_run_opens_a_window(env, opens):
 
 
 def test_crons_are_each_utc_window_start_once_and_backstop_minutes_are_clear():
-    assert rt.WEEKDAY_WINDOWS == ((7, 30), (11, 0), (14, 0), (20, 30)) and rt.WEEKEND_WINDOWS == ((7, 30), (15, 0))
+    assert rt.WINDOWS == tuple((hour, 0) for hour in range(7, 22)), "every hour on the hour, 07:00 to 21:00"
     starts, day = set(), date(2026, 1, 1)
     while day < date(2028, 1, 1):  # two years: both offsets, weekdays and weekends
         starts |= {(start.hour, start.minute) for start in rt.window_starts_on(day)}
@@ -522,7 +380,7 @@ def test_crons_are_each_utc_window_start_once_and_backstop_minutes_are_clear():
     crons = [rt.cron_time(cron) for cron in rt.CRONS]
     assert len(crons) == len(set(crons)), "a window cron is listed twice"
     assert set(crons) == starts, "CRONS are not exactly the UTC times a window starts at"
-    assert {minute for _, minute in crons} <= {0, 30}, "a window cron is not on a window's minute (00 or 30)"
+    assert {minute for _, minute in crons} == {0}, "a window cron is not on a window's minute (on the hour)"
     assert rt.BACKSTOP_CRON == "5-59/20 * * * *" and not {5, 25, 45} & {minute for _, minute in crons}, (
         "the backstop shares a minute with a window cron"
     )
@@ -557,7 +415,7 @@ def test_an_unpublished_tag_waits_for_its_release_run_then_runs_it_once_more_the
     gh.release_runs = [release_run(status="in_progress", conclusion=None)]
     assert plan(gh)["action"] == "none" and "running" in plan(gh)["why"]
     gh.release_runs = [release_run(at=NOW - timedelta(minutes=10))]
-    assert plan(gh)["action"] == "none" and "runs again at 10:20 PST" in plan(gh)["why"]
+    assert plan(gh)["action"] == "none" and "runs again at 07:50 PST" in plan(gh)["why"]
     gh.release_runs = [release_run()]
     again = plan(gh)
     assert (again["action"], again["sha"], again["version"], again["republish"]) == ("ship", B, "v0.5.201", True)
@@ -578,18 +436,22 @@ def test_the_first_green_candidate_of_the_window_ships():
     assert plan(FakeGitHub([run(B, at=OPENED - timedelta(hours=2))]))["action"] == "dispatch"
 
 
+HELD = "a full validation already ran in the last 24h (%s, %s): a person runs Release train by hand to validate again"
+
+
 @pytest.mark.parametrize(
-    "runs",
+    "runs, action, mode",
     [
-        [run(D)],  # not on main
-        [run(C, "v0.5.201", "v0.5.199")],  # validated as an upgrade from another release
-        [run(C, "v0.5.202", "v0.5.201")],  # another version
-        [run(B, conclusion="cancelled")],  # an older commit cancelled: main's head is validated
+        ([run(D)], "wait", None),  # not on main: no anchor, but its full run is the day's one
+        ([run(C, "v0.5.201", "v0.5.199")], "dispatch", "incremental"),  # an upgrade from another release: an anchor
+        ([run(C, "v0.5.202", "v0.5.201")], "dispatch", "incremental"),  # another version: an anchor
+        ([run(B, conclusion="cancelled")], "wait", None),  # cancelled: no anchor, and the day's full run holds
     ],
     ids=["off-main", "other-previous", "other-version", "older-cancelled"],
 )
-def test_only_a_green_run_of_this_version_on_main_counts(runs):
-    assert plan(FakeGitHub(runs))["action"] == "dispatch"
+def test_only_a_green_run_of_main_anchors_a_candidate_and_any_full_run_holds_the_day(runs, action, mode):
+    picked = plan(FakeGitHub(runs))
+    assert (picked["action"], picked.get("mode")) == (action, mode)
 
 
 def test_one_validation_at_a_time():
@@ -610,9 +472,13 @@ def test_a_red_or_cancelled_head_waits_for_a_push_is_reported_and_a_manual_run_v
     assert forced["action"] == "dispatch" and rt.problems(forced) == []
 
 
-def test_a_red_head_waits_for_a_push_and_a_red_older_commit_validates_the_head():
+def test_a_red_head_waits_for_a_push_and_a_red_older_commit_holds_the_day_until_a_person_runs_it():
     assert plan(FakeGitHub([run(C, conclusion="failure")]))["action"] == "wait"
-    assert plan(FakeGitHub([run(B, conclusion="failure")]))["action"] == "dispatch"
+    # An older commit's red run naming no failure is no anchor, so its full run holds the day; a manual run validates.
+    older = plan(FakeGitHub([run(B, conclusion="failure")]))
+    assert (older["action"], older["held"]) == ("wait", HELD % ("https://github.example/run/1", "failure"))
+    forced = plan(FakeGitHub([run(B, conclusion="failure")]), manual=True)
+    assert (forced["action"], forced["mode"]) == ("dispatch", "full")
     # A window still red at the next open carries on, without validating the same head again.
     later = pt(2026, 11, 5, 14, 5)
     assert plan(FakeGitHub([run(C, conclusion="failure", at=OPENED)]), now=later)["action"] == "wait"
@@ -625,6 +491,290 @@ def test_a_finished_red_candidate_of_this_window_is_reported():
     assert plan(FakeGitHub(), finished=stale)["red"] is None
     assert plan(FakeGitHub(), finished=dict(finished, conclusion="cancelled"))["red"]["conclusion"] == "cancelled"
     assert plan(FakeGitHub(), finished=dict(finished, conclusion="success"))["red"] is None
+
+
+CEILING_HOLD = "Full runs: ceiling reached (10/day) · next after 00:00 UTC"
+
+
+def test_a_run_the_ceiling_stopped_holds_the_window_and_is_never_a_failure():
+    stopped = run(C, conclusion="failure", id=9, at=NOW - timedelta(minutes=5))
+    gh = FakeGitHub([stopped])
+    gh.ceiling_ids = {9}
+    for manual in (False, True):
+        held = plan(gh, manual=manual)
+        assert held["action"] == "wait" and held["why"].endswith(CEILING_HOLD)
+        assert (held["red"], held["held"], rt.problems(held)) == (None, None, [])
+    # Its failed finish, handed to the window job by the workflow_run event, is no red candidate either.
+    finished = {"conclusion": "failure", "title": rt.title(C, "v0.5.201", "v0.5.200"), "url": stopped["html_url"]}
+    assert plan(gh, finished=finished)["red"] is None
+
+
+def test_a_real_red_on_main_is_still_reported_beside_the_ceiling_hold():
+    gh = FakeGitHub(
+        [run(C, conclusion="failure", id=4, at=NOW - timedelta(minutes=20)), run(C, conclusion="failure", id=9)]
+    )
+    gh.ceiling_ids = {9}
+    red = plan(gh)
+    assert red["action"] == "wait" and red["why"].endswith(CEILING_HOLD)
+    assert rt.problems(red) == ["Candidate v0.5.201 at %s ended failure: https://github.example/run/4" % C[:12]]
+
+
+def test_only_a_run_the_ceiling_stopped_on_this_utc_day_is_a_stop():
+    today, earlier = run(C, conclusion="failure", id=9), run(C, conclusion="failure", id=8, at=NOW - timedelta(days=1))
+    gh = FakeGitHub([today, earlier])
+    gh.ceiling_ids = {8, 9}
+    assert [item["id"] for item in rt.ceiling_stops(gh, [today, earlier], NOW)] == [9]
+
+
+def test_the_ceiling_job_counts_as_a_stop_only_on_its_own_message(monkeypatch):
+    gh = rt.GitHub("ticoteam/tico", "token")
+    jobs = [{"id": 5, "name": "ceiling", "conclusion": "failure"}]
+    monkeypatch.setattr(gh, "pages", lambda path, key=None, limit=10: jobs)
+    monkeypatch.setattr(gh, "job_log", lambda job_id: "##[error]10 full runs today; ceiling reached")
+    assert gh.ceiling_stopped({"id": 9})
+    monkeypatch.setattr(gh, "job_log", lambda job_id: "##[error]gh api: HTTP 502")
+    assert not gh.ceiling_stopped({"id": 9})
+    jobs[0]["conclusion"] = "skipped"
+    assert not gh.ceiling_stopped({"id": 9})
+
+
+class FakeCheckout:
+    """The checkout's answers: the tokens a range selects (None when its diff cannot be read) and the plan it makes."""
+
+    def __init__(self, since=None, plan=None):
+        self.since_, self.plan_text = since, plan
+        self.calls = []
+        self.previous_changed = None  # the flag the last plan was asked for
+
+    def tokens_since(self, base, head):
+        self.calls.append(("tokens_since", base, head))
+        return self.since_
+
+    def plan(self, base, head, carried, previous_changed=False):
+        self.calls.append(("plan", base, head, set(carried)))
+        if self.plan_text is None:
+            raise RuntimeError("the anchor is not in the checkout")
+        self.previous_changed = previous_changed
+        return self.plan_text
+
+
+PLAN_TEXT = '{"jobs":[{"name":"python-1","part":"python","files":["backend/tests/test_b.py"]}]}'
+
+
+def red_then_anchor(anchor_at=OPENED - timedelta(hours=1), red_at=NOW - timedelta(hours=1)):
+    """main is A <- B <- C <- D and D is the head. B was green before the window opened (the anchor); C went red after
+    it. Newest first, as GitHub lists them."""
+    gh = FakeGitHub([run(C, id=3, conclusion="failure", at=red_at), run(B, id=2, at=anchor_at)], head=D)
+    gh.order = [A, B, C, D]
+    return gh
+
+
+def test_a_red_validation_reruns_incrementally_once_a_commit_selects_what_failed():
+    # C went red naming its failure, so C is the anchor: the window reruns from it, carrying what failed. No full run.
+    gh = red_then_anchor()
+    gh.failed = {3: {"backend/tests/test_b.py"}}
+    checkout = FakeCheckout(since={"backend/tests/test_b.py"}, plan=PLAN_TEXT)
+    picked = rt.plan_step(gh, NOW, checkout=checkout)
+    assert (picked["action"], picked["mode"], picked["anchor"]) == ("dispatch", "incremental", C)
+    assert picked["carried"] == ["backend/tests/test_b.py"] and picked["anchor_previous"] == "v0.5.200"
+    assert "carries backend/tests/test_b.py" in picked["why"] and "incrementally on %s" % C[:12] in picked["why"]
+    assert ("tokens_since", C, D) in checkout.calls and ("plan", C, D, {"backend/tests/test_b.py"}) in checkout.calls
+
+
+def test_a_red_validation_waits_and_says_so_while_no_commit_selects_what_failed():
+    gh = red_then_anchor()
+    gh.failed = {3: {"backend/tests/test_b.py"}}
+    picked = rt.plan_step(gh, NOW, checkout=FakeCheckout(since={"ui/tests/threads.cjs"}, plan=PLAN_TEXT))
+    assert picked["action"] == "wait" and "the window waits" in picked["why"]
+    assert "backend/tests/test_b.py" in picked["why"] and gh.dispatched == []
+
+
+def test_a_red_naming_no_failure_reruns_from_the_green_anchor_without_a_second_full():
+    # C's log names nothing, so C is no anchor; B (green, within the day) is. Its next candidate is incremental on B:
+    # a full run is never planned while an anchor is under a day old.
+    gh = red_then_anchor()
+    checkout = FakeCheckout(since={"backend/tests/test_b.py"}, plan=PLAN_TEXT)
+    picked = rt.plan_step(gh, NOW, checkout=checkout)
+    assert (picked["action"], picked["mode"], picked["anchor"]) == ("dispatch", "incremental", B)
+    assert ("plan", B, D, set()) in checkout.calls
+
+
+def test_a_stale_anchor_runs_the_full_validation_once_a_day():
+    # The green anchor and the red validation after it are both over a day old: no anchor is left, so one full run.
+    gh = red_then_anchor(anchor_at=NOW - timedelta(hours=26), red_at=NOW - timedelta(hours=25))
+    gh.failed = {3: {"backend/tests/test_b.py"}}
+    picked = rt.plan_step(gh, NOW, checkout=FakeCheckout(since={"backend/tests/test_b.py"}, plan=PLAN_TEXT))
+    assert (picked["action"], picked["mode"]) == ("dispatch", "full")
+    assert "no full validation in the last 24 hours" in picked["why"]
+
+
+def test_an_incremental_plan_that_cannot_be_made_waits_rather_than_running_a_second_full_validation():
+    gh = red_then_anchor()
+    gh.failed = {3: {"backend/tests/test_b.py"}}
+    picked = rt.plan_step(gh, NOW, checkout=FakeCheckout(since={"backend/tests/test_b.py"}, plan=None))
+    assert picked["action"] == "wait" and gh.dispatched == []
+    assert "cannot be made" in picked["why"] and "the anchor is not in the checkout" in picked["why"]
+
+
+def test_without_a_checkout_the_validation_is_incremental_on_the_anchor_so_the_guard_dispatches_it():
+    gh = red_then_anchor()
+    gh.failed = {3: {"backend/tests/test_b.py"}}
+    picked = rt.plan_step(gh, NOW)
+    assert (picked["action"], picked["mode"], picked["anchor"]) == ("dispatch", "incremental", C)
+    assert picked["carried"] == ["backend/tests/test_b.py"]
+
+
+def test_a_red_full_naming_its_failures_is_the_anchor_and_the_next_candidate_is_incremental_from_it():
+    gh = FakeGitHub([run(C, id=3, conclusion="failure", at=NOW - timedelta(hours=1))], head=D)
+    gh.order = [A, B, C, D]
+    gh.failed = {3: {"backend/tests/test_b.py"}}
+    checkout = FakeCheckout(since={"backend/tests/test_b.py"}, plan=PLAN_TEXT)
+    picked = rt.plan_step(gh, NOW, checkout=checkout)
+    assert (picked["action"], picked["mode"], picked["anchor"]) == ("dispatch", "incremental", C)
+    assert ("plan", C, D, {"backend/tests/test_b.py"}) in checkout.calls
+
+
+def test_a_cancelled_full_is_no_anchor_and_holds_the_day_so_the_window_waits_for_a_person():
+    gh = FakeGitHub([run(C, id=3, conclusion="cancelled", at=NOW - timedelta(hours=1))], head=D)
+    gh.order = [A, B, C, D]
+    picked = rt.plan_step(gh, NOW, checkout=FakeCheckout(since=None, plan=PLAN_TEXT))
+    assert (picked["action"], picked["held"]) == ("wait", HELD % ("https://github.example/run/3", "cancelled"))
+    assert gh.dispatched == [] and rt.problems(picked) == [picked["held"]]
+
+
+def test_a_red_full_naming_no_failure_holds_the_day_and_a_manual_run_validates_again():
+    # (c): an unnamed red full is no anchor either, so it waits for a person; a manual run still dispatches in full.
+    gh = FakeGitHub([run(C, id=3, conclusion="failure", at=NOW - timedelta(hours=1))], head=D)
+    gh.order = [A, B, C, D]
+    checkout = FakeCheckout(since={"backend/tests/test_b.py"}, plan=PLAN_TEXT)
+    picked = rt.plan_step(gh, NOW, checkout=checkout)
+    assert (picked["action"], picked["held"]) == ("wait", HELD % ("https://github.example/run/3", "failure"))
+    assert gh.dispatched == []
+    forced = rt.plan_step(gh, NOW, manual=True, checkout=checkout)
+    assert (forced["action"], forced["mode"], forced["anchor"]) == ("dispatch", "full", None)
+
+
+@pytest.mark.parametrize(
+    "runs, anchor, failed",
+    [
+        ([run(B, id=2, at=OPENED - timedelta(hours=1))], B, {}),
+        (
+            [
+                run(C, id=3, conclusion="failure", at=NOW - timedelta(hours=1)),
+                run(B, id=2, at=OPENED - timedelta(hours=1)),
+            ],
+            B,
+            {},
+        ),
+        (
+            [
+                run(C, id=3, conclusion="cancelled", at=NOW - timedelta(hours=1)),
+                run(B, id=2, at=OPENED - timedelta(hours=1)),
+            ],
+            B,
+            {},
+        ),
+        (
+            [
+                run(C, id=3, conclusion="failure", at=NOW - timedelta(hours=1)),
+                run(B, id=2, at=OPENED - timedelta(hours=1)),
+            ],
+            C,
+            {3: {"backend/tests/test_b.py"}},
+        ),
+    ],
+    ids=["green", "red-unnamed", "cancelled", "red-named"],
+)
+def test_a_second_full_is_never_planned_while_an_anchor_under_a_day_old_exists(runs, anchor, failed):
+    gh = FakeGitHub(runs, head=D)
+    gh.order = [A, B, C, D]
+    gh.failed = failed
+    picked = rt.plan_step(gh, NOW, checkout=FakeCheckout(since={"backend/tests/test_b.py"}, plan=PLAN_TEXT))
+    assert (picked["action"], picked["mode"], picked["anchor"]) == ("dispatch", "incremental", anchor)
+
+
+def test_an_incremental_validation_names_its_anchor_and_plan_and_a_full_one_names_neither():
+    gh = FakeGitHub()
+    rt.dispatch_candidate(gh, C, "v0.5.201", "v0.5.200", timeout=0)
+    rt.dispatch_candidate(
+        gh,
+        C,
+        "v0.5.201",
+        "v0.5.200",
+        timeout=0,
+        anchor=B,
+        carried={"backend/tests/test_b.py"},
+        anchor_previous="v0.5.199",
+    )
+    assert gh.dispatched[0][2] == {"candidate_sha": C, "previous_release": "v0.5.200", "version": "v0.5.201"}
+    assert gh.dispatched[1][2] == {
+        "candidate_sha": C,
+        "previous_release": "v0.5.200",
+        "version": "v0.5.201",
+        "anchor": B,
+        "carried": '["backend/tests/test_b.py"]',
+        "anchor_previous": "v0.5.199",
+    }
+    assert any("(incremental on %s)" % B in line for line in rt.LOG)
+
+
+def test_an_incremental_title_keeps_the_prefix_release_yml_finds_and_names_its_anchor():
+    text = rt.title(C, "v0.5.201", "v0.5.200", anchor=B)
+    assert text == "Validate %s as v0.5.201 from v0.5.200 (incremental on %s)" % (C, B)
+    assert text.startswith("Validate %s as v0.5.201 from " % C)
+    assert rt.parse_title(text) == (C, "v0.5.201", "v0.5.200")
+    assert rt.parse_anchor(text) == B
+    assert rt.parse_anchor(rt.title(C, "v0.5.201", "v0.5.200")) is None
+
+
+def test_validation_records_say_which_runs_are_incremental_and_only_full_green_ones_anchor():
+    full = rt.validation_record(run(B, id=2))
+    incremental = rt.validation_record(dict(run(C, id=3), display_title=rt.title(C, "v0.5.201", "v0.5.200", anchor=B)))
+    assert (full["incremental"], full["sha"], full["id"]) == (False, B, 2)
+    assert (incremental["incremental"], incremental["sha"], incremental["id"]) == (True, C, 3)
+    assert full["previous"] == incremental["previous"] == "v0.5.200"
+
+
+def test_a_red_superseded_by_a_later_green_validation_is_neither_carried_nor_waited_for():
+    # main is A <- B <- C <- D (the head). B is this release's red validation naming its failure, the newest full one
+    # within the day, so it is the anchor. C is an earlier release's green incremental run after B: it supersedes B's
+    # red, so nothing is carried and nothing waits.
+    earlier = dict(
+        run(C, version="v0.5.200", previous="v0.5.199", id=3, at=OPENED - timedelta(minutes=30)),
+        display_title=rt.title(C, "v0.5.200", "v0.5.199", anchor=A),
+    )
+    gh = FakeGitHub(
+        [
+            earlier,
+            run(B, id=2, conclusion="failure", at=OPENED - timedelta(hours=2)),
+            run(A, id=1, at=OPENED - timedelta(hours=3)),
+        ],
+        head=D,
+    )
+    gh.order = [A, B, C, D]
+    gh.failed = {2: {"backend/tests/test_b.py"}}
+    checkout = FakeCheckout(since={"backend/tests/test_b.py"}, plan=PLAN_TEXT)
+    picked = rt.plan_step(gh, NOW, checkout=checkout)
+    assert (picked["action"], picked["mode"], picked["anchor"]) == ("dispatch", "incremental", C)
+    assert checkout.calls == [("plan", C, D, set())]  # the green incremental C anchors: nothing carried, no red read
+    assert "carries" not in picked["why"] and "the window waits" not in picked["why"]
+
+
+def test_an_anchor_of_an_earlier_release_runs_the_product_part_when_the_previous_release_moved():
+    # The newest tag is v0.5.200; the anchor validated v0.5.200 from v0.5.199, a green full run two hours ago.
+    gh = FakeGitHub([run(B, version="v0.5.200", previous="v0.5.199", id=2, at=NOW - timedelta(hours=2))])
+    checkout = FakeCheckout(plan=PLAN_TEXT)
+    picked = rt.plan_step(gh, NOW, checkout=checkout)
+    assert (picked["action"], picked["mode"], picked["anchor"]) == ("dispatch", "incremental", B)
+    assert checkout.previous_changed is True
+    assert "the product part runs: the previous release is v0.5.200, the anchor's was v0.5.199" in picked["why"]
+    # The same previous release (this window's own full run before it opened): the product part is not forced.
+    same = FakeCheckout(plan=PLAN_TEXT)
+    assert (
+        rt.plan_step(FakeGitHub([run(B, id=2, at=OPENED - timedelta(hours=1))]), NOW, checkout=same)["mode"]
+        == "incremental"
+    )
+    assert same.previous_changed is False
 
 
 # ---- the guard ----
@@ -1136,7 +1286,7 @@ def test_window_validates_main_and_waits_until_the_run_is_listed(installs):
     assert rt.plan_step(gh, NOW)["action"] == "wait"
 
 
-def test_a_red_candidate_goes_on_the_issue_and_main_is_validated(installs):
+def test_a_red_candidate_goes_on_the_issue_and_holds_main_until_a_person_validates_it(installs):
     gh = publishes(FakeGitHub([run(B, conclusion="failure")]))
     env = dict(
         ENV,
@@ -1148,6 +1298,11 @@ def test_a_red_candidate_goes_on_the_issue_and_main_is_validated(installs):
     )
     assert rt.cmd_window(gh, env, False, NOW) == 1
     assert len(gh.created) == 1 and "run/red" in gh.created[0]["body"]
+    # Its full validation named no failure, so it holds the day: main's head is not validated automatically.
+    assert HELD % ("https://github.example/run/1", "failure") in gh.created[0]["body"]
+    assert gh.dispatched == [] and gh.tagged == []
+    # A person runs Release train by hand: main's head is validated.
+    assert rt.cmd_window(gh, dict(ENV, GITHUB_EVENT_NAME="workflow_dispatch"), False, NOW) == 0
     assert [d[0] for d in gh.dispatched] == ["ci.yml"] and gh.tagged == []
 
 
@@ -1327,3 +1482,225 @@ def test_failed_hotfix_validation_stops_before_tagging(installs, tmp_path, monke
     assert rt.cmd_hotfix(gh, ENV, "", "Tasks vanish from the board after an update", True) == 1
     assert gh.tagged == [] and installs["updated"] == []
     assert open_issues(gh) and "Release validation ended failure" in filed(gh)[0]["body"]
+
+
+# ---- the release shots: a shipped candidate's pictures on its approval issue, and the window's outputs for them ----
+
+
+def window_outputs(path):
+    lines = path.read_text().splitlines()
+    keys = [line.split("=", 1)[0] for line in lines]
+    assert len(keys) == len(set(keys)), "a key written twice, GitHub keeps only the last: %s" % lines
+    return dict(line.split("=", 1) for line in lines)
+
+
+def test_a_shipped_candidate_hands_its_version_sha_and_base_to_the_shots(installs, tmp_path, monkeypatch):
+    monkeypatch.setenv("GITHUB_OUTPUT", str(tmp_path / "out"))
+    gh = publishes(FakeGitHub([run(C)]))
+    assert rt.cmd_window(gh, ENV, False, NOW) == 0
+    # The base is the release stable runs: what the approver reads the changes since, and the pictures compare with.
+    assert window_outputs(tmp_path / "out") == {
+        "reported": "true",
+        "shipped": "true",
+        "version": "v0.5.201",
+        "sha": C,
+        "base": "v0.5.199",
+    }
+
+
+def test_the_shipped_candidate_is_in_the_outputs_even_if_the_window_dies_after_it(installs, tmp_path, monkeypatch):
+    monkeypatch.setenv("GITHUB_OUTPUT", str(tmp_path / "out"))
+    gh = publishes(FakeGitHub([run(C)]))
+
+    def dies(*args, **kwargs):
+        raise RuntimeError("the runner went away")
+
+    monkeypatch.setattr(rt, "report", dies)
+    with pytest.raises(RuntimeError, match="runner went away"):
+        rt.cmd_window(gh, ENV, False, NOW)
+    # The canary runs the candidate, so its shots still run; reported is missing, so the job's fallback reports the death.
+    assert installs["updated"] == [("canary", "0.5.201")]
+    assert window_outputs(tmp_path / "out") == {
+        "shipped": "true",
+        "version": "v0.5.201",
+        "sha": C,
+        "base": "v0.5.199",
+    }
+
+
+def test_a_later_step_that_fails_keeps_the_shipped_candidate_in_the_outputs(installs, tmp_path, monkeypatch):
+    monkeypatch.setenv("GITHUB_OUTPUT", str(tmp_path / "out"))
+    gh = publishes(FakeGitHub([run(C)]))
+
+    def refused(gh, version):
+        raise rt.Fail("the latest marking was refused")
+
+    monkeypatch.setattr(rt, "mark_latest", refused)
+    assert rt.cmd_window(gh, ENV, False, NOW) == 1
+    assert window_outputs(tmp_path / "out") == {
+        "reported": "true",
+        "shipped": "true",
+        "version": "v0.5.201",
+        "sha": C,
+        "base": "v0.5.199",
+    }
+
+
+def test_a_window_whose_canary_rolls_back_hands_no_candidate_to_the_shots(installs, tmp_path, monkeypatch):
+    installs["outcome"] = "rolled_back"
+    monkeypatch.setenv("GITHUB_OUTPUT", str(tmp_path / "out"))
+    gh = publishes(FakeGitHub([run(C)]))
+    assert rt.cmd_window(gh, ENV, False, NOW) == 1
+    assert window_outputs(tmp_path / "out") == {"reported": "true", "shipped": "false"}
+
+
+def test_without_stable_the_pictures_compare_with_the_previous_release(installs, tmp_path, monkeypatch):
+    monkeypatch.setenv("GITHUB_OUTPUT", str(tmp_path / "out"))
+    gh = publishes(FakeGitHub([run(C)]))
+    no_stable = {key: value for key, value in ENV.items() if not key.startswith("STABLE")}
+    assert rt.cmd_window(gh, no_stable, False, NOW) == 0
+    assert installs["updated"] == [("canary", "0.5.201")]
+    assert window_outputs(tmp_path / "out")["base"] == "v0.5.200"
+
+
+def test_the_base_is_stables_release_and_an_unreachable_stable_falls_back_to_the_previous_tag(installs):
+    assert rt.release_base(ENV, "v0.5.200") == "v0.5.199"
+    installs["down"] = {"stable"}
+    assert rt.release_base(ENV, "v0.5.200") == "v0.5.200"
+
+
+def test_a_stable_that_cannot_be_read_is_noted_and_the_previous_tag_stands(installs, monkeypatch):
+    def unreadable(target):
+        raise rt.Fail("stable is down")
+
+    monkeypatch.setattr(rt, "running", unreadable)
+    assert rt.release_base(ENV, "v0.5.200") == "v0.5.200"
+    assert any("stable's release cannot be read (stable is down)" in line for line in rt.LOG)
+
+
+def test_an_approval_says_the_pictures_are_on_their_way_until_they_arrive():
+    gh = FakeGitHub()
+    issue = rt.open_approval(gh, "v0.5.201", C, "NOTES v0.5.199..%s" % C)
+    assert rt.SHOTS_HEADING in issue["body"] and rt.SHOTS_PENDING in issue["body"]
+    assert issue["body"].index(rt.SHOTS_START) < issue["body"].index("NOTES v0.5.199")
+
+
+def test_the_pictures_replace_the_pending_line_and_the_same_pictures_again_change_nothing(tmp_path, monkeypatch):
+    gh = FakeGitHub()
+    issue = rt.open_approval(gh, "v0.5.201", C, "NOTES v0.5.199..%s" % C)
+    shots = tmp_path / "release-shots.md"
+    shots.write_text("## What it looks like\n\n| before | after |\n| --- | --- |\n| ![a](a.png) | ![b](b.png) |\n")
+    assert rt.cmd_shots_into_approval(gh, "v0.5.201", str(shots)) == 0
+    body = issue["body"]
+    assert rt.SHOTS_PENDING not in body and "| before | after |" in body
+    assert body.count(rt.SHOTS_START) == 1 and "NOTES v0.5.199..%s" % C in body and rt.APPROVE_FOOTER in body
+    edits = []
+    monkeypatch.setattr(gh, "edit", lambda number, text, state: edits.append(number))
+    assert rt.cmd_shots_into_approval(gh, "v0.5.201", str(shots)) == 0
+    assert edits == []
+
+
+def test_reopening_an_approval_keeps_the_pictures_already_on_it(tmp_path):
+    gh = FakeGitHub()
+    issue = rt.open_approval(gh, "v0.5.201", C, "NOTES v0.5.199..%s" % C)
+    shots = tmp_path / "release-shots.md"
+    shots.write_text("## What it looks like\n\n| before | after |\n| --- | --- |\n| ![a](a.png) | ![b](b.png) |\n")
+    assert rt.cmd_shots_into_approval(gh, "v0.5.201", str(shots)) == 0
+    # A republish or a retry of the same version reopens the same record: its pictures stay, and nothing goes pending.
+    again = rt.open_approval(gh, "v0.5.201", C, "NOTES v0.5.199..%s" % C)
+    assert again is issue and issue["state"] == "open"
+    assert "| before | after |" in issue["body"] and rt.SHOTS_PENDING not in issue["body"]
+    assert issue["body"].count(rt.SHOTS_START) == 1 and "NOTES v0.5.199..%s" % C in issue["body"]
+
+
+def test_missing_pictures_put_the_failure_and_the_run_that_tried_on_the_issue(tmp_path, monkeypatch):
+    monkeypatch.setenv("GITHUB_SERVER_URL", "https://github.example")
+    monkeypatch.setenv("GITHUB_REPOSITORY", "ticoteam/tico")
+    monkeypatch.setenv("GITHUB_RUN_ID", "4242")
+    gh = FakeGitHub()
+    issue = rt.open_approval(gh, "v0.5.201", C, "NOTES")
+    assert rt.cmd_shots_into_approval(gh, "v0.5.201", str(tmp_path / "missing.md")) == 0
+    assert "could not be made" in issue["body"] and rt.SHOTS_PENDING not in issue["body"]
+    assert "https://github.example/ticoteam/tico/actions/runs/4242" in issue["body"]
+    assert any("not made: see the run" in line for line in rt.LOG)
+    # An empty file is no pictures either, and the failure is not put on the issue twice.
+    (tmp_path / "empty.md").write_text("  \n")
+    assert rt.cmd_shots_into_approval(gh, "v0.5.201", str(tmp_path / "empty.md")) == 0
+    assert issue["body"].count("could not be made") == 1
+
+
+def test_a_closed_approval_keeps_its_state_when_its_pictures_go_in(tmp_path):
+    gh = FakeGitHub()
+    issue = approval_for(gh, "v0.5.201")
+    gh.close(issue["number"])
+    shots = tmp_path / "release-shots.md"
+    shots.write_text("## What it looks like\n\npictures of the change\n")
+    assert rt.cmd_shots_into_approval(gh, "v0.5.201", str(shots)) == 0
+    assert issue["state"] == "closed" and "pictures of the change" in issue["body"]
+
+
+def test_pictures_without_an_approval_record_fail_loudly(tmp_path):
+    gh = FakeGitHub()
+    shots = tmp_path / "release-shots.md"
+    shots.write_text("## What it looks like\n\npictures\n")
+    with pytest.raises(rt.Fail, match="no approval record for v0.5.201"):
+        rt.cmd_shots_into_approval(gh, "v0.5.201", str(shots))
+    assert gh.comments == [] and gh.created == []
+
+
+def test_two_incrementals_in_a_row_select_only_their_own_diff_and_the_carried_failures():
+    # Full A (green, 5 h ago), incremental B (green, 3 h ago, anchored on A), incremental C (red, names a failed test,
+    # 1 h ago), head D. C anchors D: the plan runs C..D and what C failed, never A..D again.
+    gh = FakeGitHub(
+        [
+            dict(
+                run(C, id=3, conclusion="failure", at=NOW - timedelta(hours=1)),
+                display_title=rt.title(C, "v0.5.201", "v0.5.200", anchor=B),
+            ),
+            dict(
+                run(B, id=2, at=NOW - timedelta(hours=3)), display_title=rt.title(B, "v0.5.201", "v0.5.200", anchor=A)
+            ),
+            run(A, id=1, at=NOW - timedelta(hours=5)),
+        ],
+        head=D,
+    )
+    gh.order = [A, B, C, D]
+    gh.failed = {3: {"backend/tests/test_b.py"}}
+    checkout = FakeCheckout(since={"backend/tests/test_b.py"}, plan=PLAN_TEXT)
+    picked = rt.plan_step(gh, NOW, checkout=checkout)
+    assert (picked["action"], picked["mode"], picked["anchor"]) == ("dispatch", "incremental", C)
+    assert [call for call in checkout.calls if call[0] == "plan"] == [("plan", C, D, {"backend/tests/test_b.py"})]
+    # Green B and then green C: the next head selects only C..D, carrying nothing.
+    gh = FakeGitHub(
+        [
+            dict(
+                run(C, id=3, at=NOW - timedelta(hours=1)), display_title=rt.title(C, "v0.5.201", "v0.5.200", anchor=B)
+            ),
+            dict(
+                run(B, id=2, at=NOW - timedelta(hours=3)), display_title=rt.title(B, "v0.5.201", "v0.5.200", anchor=A)
+            ),
+            run(A, id=1, at=NOW - timedelta(hours=5)),
+        ],
+        head=D,
+    )
+    gh.order = [A, B, C, D]
+    checkout = FakeCheckout(since=None, plan=PLAN_TEXT)
+    picked = rt.plan_step(gh, NOW, checkout=checkout)
+    assert (picked["action"], picked["mode"], picked["anchor"], picked["carried"]) == ("dispatch", "incremental", C, [])
+    assert [call for call in checkout.calls if call[0] == "plan"] == [("plan", C, D, set())]
+
+
+def test_a_full_validation_older_than_a_day_runs_even_when_a_fresh_incremental_anchors_the_chain():
+    gh = FakeGitHub(
+        [
+            dict(
+                run(C, id=3, at=NOW - timedelta(hours=1)), display_title=rt.title(C, "v0.5.201", "v0.5.200", anchor=B)
+            ),
+            run(B, id=2, at=NOW - timedelta(hours=26)),
+        ],
+        head=D,
+    )
+    gh.order = [A, B, C, D]
+    picked = rt.plan_step(gh, NOW, checkout=FakeCheckout(plan=PLAN_TEXT))
+    assert (picked["action"], picked["mode"]) == ("dispatch", "full")
+    assert "no full validation in the last 24 hours" in picked["why"]

@@ -7,6 +7,7 @@ import sqlite3
 from collections.abc import Mapping, Sequence
 from typing import Any, cast
 
+from . import contacts as SC
 from .ledger import new_id
 
 
@@ -288,20 +289,15 @@ def contact_insert(
     at: str,
     by: str,
 ) -> None:
-    c.execute(
-        "INSERT INTO fin_contacts(id, book_id, name, kind, emails, active, created_at, created_by, updated_at) "
-        "VALUES(?,?,?,?,?,?,?,?,?)",
-        (contact_id, book_id, name, kind, json.dumps(list(emails)), int(active), at, by, at),
-    )
+    fields = {"name": name, "kind": kind, "emails": json.dumps(list(emails)), "active": int(active)}
+    SC.create(c, book_id, fields, at, by, contact_id)
 
 
 def contact_update(
     c: sqlite3.Connection, contact_id: str, *, name: str, kind: str, emails: Sequence[str], active: bool, at: str
 ) -> None:
-    c.execute(
-        "UPDATE fin_contacts SET name=?, kind=?, emails=?, active=?, updated_at=? WHERE id=?",
-        (name, kind, json.dumps(list(emails)), int(active), at, contact_id),
-    )
+    fields = {"name": name, "kind": kind, "emails": json.dumps(list(emails)), "active": int(active), "updated_at": at}
+    SC.update(c, contact_id, fields)
 
 
 def trial_balances(c: sqlite3.Connection, book_id: str) -> dict[str, int]:
@@ -344,7 +340,7 @@ def contacts(c: sqlite3.Connection, book_id: str) -> list[Any]:
 
 
 def contact_deactivate(c: sqlite3.Connection, contact_id: str, at: str) -> None:
-    c.execute("UPDATE fin_contacts SET active=0, updated_at=? WHERE id=?", (at, contact_id))
+    SC.update(c, contact_id, {"active": 0, "updated_at": at})
 
 
 def synced(c: sqlite3.Connection, cid: str, at: str, error: str) -> None:
