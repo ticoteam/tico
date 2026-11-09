@@ -69,11 +69,21 @@ interface SelfPerson extends Omit<Partial<import('./api').Person>, 'id'> {
 
 // ---------------------------------------------------------------- the server's config (S.config, state.ts)
 
+/** One known issue the update check lists (`update.known_issues`). */
+interface ConfigKnownIssue {
+  title: string;
+  url?: string | null;
+  fixed_in?: string | null;
+}
+
 /** An available new version, as the config carries it (`update`), or null when none is known. */
 interface ConfigUpdate {
   available?: boolean;
   latest?: string;
   current?: string;
+  /** Known issues in the running version, from the update check (backend/releases.py); `known_issues_checked` is false when GitHub was not asked. */
+  known_issues?: ConfigKnownIssue[];
+  known_issues_checked?: boolean;
   [key: string]: unknown;
 }
 
@@ -105,13 +115,13 @@ interface AppConfig {
   hosted?: boolean;
   visuals?: 'full' | 'hosted' | 'media';
   ui_build?: string;
-  beta?: { id: string; templates?: string[]; harnesses?: string[] }[];
+  beta?: { id: string; name?: string; docs?: string[]; templates?: string[]; harnesses?: string[] }[];
   providers_configured?: boolean;
   default_runtime?: string;
   in_docker?: boolean;
   feedback_question?: string;
   usage_count_notice?: unknown;
-  changelog?: unknown;
+  changelog?: { unread_count?: number; [key: string]: unknown } | null;
   [key: string]: unknown;
 }
 
