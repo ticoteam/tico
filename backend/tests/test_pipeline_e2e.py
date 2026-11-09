@@ -1143,7 +1143,9 @@ def test_engineering_config_looks_up_the_role_holder_before_the_filer(co, monkey
     """Spec A5, Engineering as the Hub sets it up: its first stage has no assign rule and its manager is another bot. The
     Engineering role holder is looked up through task_types.role before the filer. It resolves to no one (no stored record
     links a bot to the role), so the filer owns the ticket, never the manager. The spy shows the lookup ran for the
-    Engineering stage's type."""
+    Engineering stage's type, and that type carries the engineering role."""
+    from backend import roadmap_flow
+
     H.sync_registry(co.c, {"eng": {"status": "active"}, "pipeline-manager": {"status": "active"}}, None)
     co.c.execute("UPDATE task_steps SET flow = ? WHERE id = ?", (json.dumps({}), co.stage("Engineering", "Todo")))
     co.c.execute("UPDATE task_types SET manager = ? WHERE id = ?", ("pipeline-manager", co.type["Engineering"]))
@@ -1160,24 +1162,35 @@ def test_engineering_config_looks_up_the_role_holder_before_the_filer(co, monkey
     approve_spec(co, card)
     (d41,) = subtasks(co, card)
     assert seen == [co.type["Engineering"]]
+    role = co.c.execute("SELECT role FROM task_types WHERE id = ?", (co.type["Engineering"],)).fetchone()[0]
+    assert role == roadmap_flow.ENGINEERING
     owner = H.task(co.c, d41)["owner_id"]
     assert owner == H.task(co.c, card)["owner_id"]
     assert owner != "bot:pipeline-manager"
 
 
 def test_a_role_holder_that_resolves_owns_the_spawned_ticket_before_the_filer(co, monkeypatch):
-    """Ordering only: with the same Engineering config, a resolved role holder owns the ticket, not its filer. The lookup
-    is stubbed to show the order; the Hub links no bot to the role (see the test above), so this does not happen today."""
+    """Ordering only: with the same Engineering config, a resolved role holder owns the ticket, not its filer. The stored
+    lookup is stubbed to resolve, and the real Engineering-role guard still runs; the Hub links no bot to the role (see
+    the test above), so this does not happen today."""
     H.sync_registry(co.c, {"eng": {"status": "active"}, "pipeline-manager": {"status": "active"}}, None)
     co.c.execute("UPDATE task_steps SET flow = ? WHERE id = ?", (json.dumps({}), co.stage("Engineering", "Todo")))
     co.c.execute("UPDATE task_types SET manager = ? WHERE id = ?", ("pipeline-manager", co.type["Engineering"]))
     co.c.commit()
-    monkeypatch.setattr(pipeline_links, "_role_holder", lambda conn, type_id: "eng")
+    monkeypatch.setattr(pipeline_links, "_stored_role_holder", lambda conn: "eng")
     card = review_card(co)
     approve_spec(co, card)
     (d41,) = subtasks(co, card)
     assert H.task(co.c, d41)["owner_id"] == "bot:eng"
     assert H.task(co.c, d41)["owner_id"] != H.task(co.c, card)["owner_id"]
+
+
+def test_the_role_holder_lookup_applies_only_to_a_type_with_the_engineering_role(co, monkeypatch):
+    """With a stored holder stubbed to resolve, the lookup returns it for the Engineering type and nothing for another
+    pipeline's type. Without the guard, a spawn into Product with no pool bot would reach Engineering's holder."""
+    monkeypatch.setattr(pipeline_links, "_stored_role_holder", lambda conn: "eng")
+    assert pipeline_links._role_holder(co.c, co.type["Engineering"]) == "eng"
+    assert pipeline_links._role_holder(co.c, co.type["Product"]) is None
 
 
 def test_undoing_an_approval_closes_its_untouched_follow_up_and_a_picked_up_one_refuses(co):

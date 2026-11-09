@@ -183,8 +183,9 @@ def _owner_for(conn: sqlite3.Connection, pipeline_id: str, filer: str) -> str:
     that stage's assign pool with a free slot (the allocator's rule, Fix V-11); else the least busy available pool bot
     over its slots. The pool is the stage's assign pool (spec A5). When the stage has no pool bot available, or no
     assign rule at all, the Engineering role holder is looked up (_role_holder) before the filer. The filer owns the ticket
-    only when that lookup resolves to no one. The pipeline's manager is never chosen (spec A5: a manager change does not
-    move a Dev ticket), on a stage with a pool or without one."""
+    only when that lookup resolves to no one. The lookup applies only to a stage of a type that carries the engineering
+    role (see _role_holder). The pipeline's manager is never chosen (spec A5: a manager change does not move a Dev
+    ticket), on a stage with a pool or without one."""
     from . import pipeline_engine, step_flow
 
     first = pipeline_engine.first_stage(conn, pipeline_id)
@@ -203,18 +204,23 @@ def _owner_for(conn: sqlite3.Connection, pipeline_id: str, filer: str) -> str:
 
 def _role_holder(conn: sqlite3.Connection, type_id: str) -> str | None:
     """The bot that holds the Engineering role (spec A5) for a stage of type `type_id`, or None when no bot does. Only a
-    type that carries the engineering role in task_types.role is looked up, so a spawn into any other pipeline never
-    reaches Engineering's holder. No stored record then names a bot for that type or role, so the lookup resolves to no
-    one today: task_types.role holds the role key only; task_roles is per task; TYPE_BOTS is a permission (read or
-    work); seats.team names a team; automation_templates ROLES names manager bots, which are never a role holder. The
-    pipeline's manager is never returned."""
+    type whose task_types.role is the engineering role is looked up, so a spawn into any other pipeline never reaches
+    Engineering's holder."""
     from . import roadmap_flow
 
     flows: Any = roadmap_flow  # roadmap_flow is untyped; the Any alias keeps strict mode quiet, as H and allocator do
     row = _one(conn, "SELECT role FROM task_types WHERE id = ?", (type_id,))
     if row is None or row["role"] != flows.ENGINEERING:
         return None
-    # The bot holding that type's role. No stored record links one (see above), so none resolves.
+    return _stored_role_holder(conn)
+
+
+def _stored_role_holder(conn: sqlite3.Connection) -> str | None:
+    """The bot a stored record names as holding the Engineering role, or None. No stored record links a bot to that type
+    or role, so this resolves to no one today: task_types.role holds the role key only; task_roles is per task;
+    TYPE_BOTS is a permission (read or work); seats.team names a team; automation_templates ROLES names manager bots,
+    which are never a role holder. The pipeline's manager is never returned."""
+    del conn  # no stored record to read until a role link exists
     return None
 
 
