@@ -139,15 +139,60 @@ def test_the_asker_cannot_answer_and_a_label_must_be_one_of_its_options(api):
     assert r.status_code == 403, r.text
 
 
-def test_a_decline_closes_it_declined(api):
-    _, _, attempt = setup_attempt(api)
-    card = _ask(api, attempt["token"], "Archive the September drafts?")["task"]
+def test_a_decline_closes_it_declined(api, monkeypatch):
+    work, attempt = _work(api)
+    card = _ask(api, attempt["token"], "Archive the September drafts?", parent=work["id"])["task"]
     since = _mark(api)
-    _answer(api, card["id"], {"dismiss": True})
+    events = []
+    hook = H.hook
+
+    def record_hook(conn, event, *args, **kwargs):
+        events.append(event)
+        return hook(conn, event, *args, **kwargs)
+
+    monkeypatch.setattr(H, "hook", record_hook)
+    result = _answer(api, card["id"], {"dismiss": True, "other": "Wait for the site owner."})
     done = get(api, f"tasks/{card['id']}")["task"]
     assert done["status"] == "declined" and done["answer"]["dismiss"]
-    # Standalone: the bot hears it once, as the task's requester.
-    assert len(_to_ops(api, since)) == 1
+    assert done["answer"]["other"] == "Wait for the site owner."
+    assert "closed the question (declined)" in result["answer"]["text"].lower()
+    assert "answered" not in result["answer"]["text"].lower()
+    # The bot hears one closed (declined) result with the note, not an answer.
+    wake = _to_ops(api, since)
+    assert len(wake) == 1
+    assert "Question closed (declined)" in wake[0]
+    assert "Wait for the site owner." in wake[0]
+    assert "answered" not in wake[0].lower()
+    assert "needs_you.answered" not in events
+    late = _answer(api, card["id"], {"dismiss": True, "other": "A second note."}, expected=409)
+    assert "already answered" in late["error"]["detail"].lower() or "closed" in late["error"]["detail"].lower()
+
+
+def test_a_dismissal_with_answers_is_refused_without_changing_the_question(api):
+    _, _, attempt = setup_attempt(api)
+    card = _ask(api, attempt["token"], "Archive the September drafts?")["task"]
+    refused = _answer(api, card["id"], {"dismiss": True, "answers": {"decision": ["Yes"]}}, expected=422)
+    assert "Dismiss does not include answers" in refused["error"]["detail"]
+    still_open = get(api, f"tasks/{card['id']}")["task"]
+    assert still_open["status"] == "open" and still_open["answer"] is None
+
+
+def test_a_dismissal_without_a_note_closes_the_question(api):
+    _, _, attempt = setup_attempt(api)
+    card = _ask(api, attempt["token"], "Archive the September drafts?")["task"]
+    result = _answer(api, card["id"], {"dismiss": True})
+    done = get(api, f"tasks/{card['id']}")["task"]
+    assert done["status"] == "declined" and done["answer"]["other"] is None
+    assert "closed the question (declined)" in result["answer"]["text"].lower()
+
+
+def test_only_the_question_recipient_can_close_it(api):
+    _, _, attempt = setup_attempt(api)
+    card = _ask(api, attempt["token"], "Archive the September drafts?")["task"]
+    refused = _answer(api, card["id"], {"dismiss": True}, token="ben-test", expected=403)
+    assert "Only the person it asks" in refused["error"]["detail"]
+    still_open = get(api, f"tasks/{card['id']}")["task"]
+    assert still_open["status"] == "open" and still_open["answer"] is None
 
 
 def test_done_from_the_task_itself_is_the_answer(api):

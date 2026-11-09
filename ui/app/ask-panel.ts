@@ -181,6 +181,8 @@ function askClick(ev: MouseEvent) {
   if (t.closest('[data-ask-close]')) { askToggle(false); return; }
   const pick = t.closest<HTMLElement>('[data-ask-pick]');
   if (pick) { void askAnswer(pick.closest<HTMLElement>('[data-ask-q]'), {pick: Number(pick.dataset.askPick)}); return; }
+  const closeQuestion = t.closest('[data-ask-qclose]');
+  if (closeQuestion) { void askClose(closeQuestion.closest<HTMLElement>('[data-ask-q]')); return; }
   const more = t.closest<HTMLElement>('[data-ask-more]');
   if (more) { more.setAttribute('aria-expanded', String(more.getAttribute('aria-expanded') !== 'true')); return; }
   const hint = t.closest<HTMLElement>('[data-ask-hint]');
@@ -219,7 +221,9 @@ function askQuestionHTML(it: NeedsItem) {
     }).join('')}</select><button type="submit" class="ghost">Send</button></form>`
     : q ? `<div class="ask-picks">${q.options.map((o, i) => `<button type="button" class="ghost" data-ask-pick="${i}">${esc(o.label)}</button>`).join('')}</div>`
     : `<form class="ask-reply" data-ask-reply><input name="text" maxlength="4000" autocomplete="off" placeholder="Answer ${esc(who)}" aria-label="Answer ${esc(who)}"><button type="submit" class="ghost">Send</button></form>`;
-  return `<div class="ask-card" data-ask-q="${esc(it.id)}" data-ask-row="q:${esc(it.id)}">${body}${answer}</div>`;
+  const actions = qcardCanClose(it)
+    ? `<div class="ask-card-actions">${answer}<textarea class="ask-close-note" rows="1" maxlength="4000" aria-label="Optional note for ${esc(who)}" placeholder="Optional note"></textarea><button type="button" class="ghost" data-ask-qclose>Close</button></div>` : answer;
+  return `<div class="ask-card" data-ask-q="${esc(it.id)}" data-ask-row="q:${esc(it.id)}">${body}${actions}</div>`;
 }
 // The answer goes where Decide sends it (decide.js): a pick to the task's answers, words to a loose question's answer
 // or as a comment on the task, which wakes its bot.
@@ -242,6 +246,29 @@ async function askAnswer(card: HTMLElement | null, {pick, text}: {pick?: number;
     delete card.dataset.busy;
     card.querySelectorAll<HTMLButtonElement | HTMLInputElement | HTMLSelectElement>('button, input, select').forEach(el => { el.disabled = false; });
   }
+}
+async function askClose(card: HTMLElement | null): Promise<void> {
+  const it = (S.v2?.needs || []).find(x => String(x.id) === card?.dataset.askQ);
+  if (!it || !card || card.dataset.busy || !qcardCanClose(it)) return;
+  card.dataset.busy = '1';
+  card.querySelectorAll<HTMLButtonElement | HTMLInputElement | HTMLSelectElement>('button, input, select').forEach(el => { el.disabled = true; });
+  const note = card.querySelector<HTMLTextAreaElement>('.ask-close-note')?.value || '';
+  const write = qcardCloseWrite(it, note);
+  try {
+    await post(write.path, write.body, newRequestId());
+  } catch (e) {
+    toast(qcardCloseFailure(e), true);
+    if (errorStatus(e) === 409) {
+      void v2Refresh().then(() => ASK?.draw?.());
+      return;
+    }
+    delete card.dataset.busy;
+    card.querySelectorAll<HTMLButtonElement | HTMLInputElement | HTMLSelectElement>('button, input, select').forEach(el => { el.disabled = false; });
+    return;
+  }
+  toast(`Closed (declined) · sent to ${askAsker(it.ask?.sender_id)}`);
+  await v2Refresh();
+  ASK?.draw?.();
 }
 async function askLoad(chat: AskChat) {
   const el = $('#ask-panel'), thread = el.querySelector('[data-ask-thread]'), error = el.querySelector('[data-ask-error]');

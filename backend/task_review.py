@@ -251,8 +251,8 @@ def checked_answers(questions, refs, body):
     answered with its own labels, or the Other text where a question takes it. Returns (the answer with each question
     keyed, the unticked labels of several picks: the "not this one"s). A comment ask and a question task check alike."""
     if body.dismiss:
-        if body.answers or body.other:
-            raise Problem("validation", "Dismiss does not include answers or other text", 422)
+        if body.answers:
+            raise Problem("validation", "Dismiss does not include answers", 422)
     else:
         if refs.get("asked_again_at") and set(questions) - set(body.answers):
             # A question the bot reworded in place (question_tasks.fold) is answered only by naming its current
@@ -299,7 +299,11 @@ def answer_words(name, questions, body, passed, subject=None):
     """What an answer says, for the bot that asked: "Ana answered "<question>": A." (`subject` names a file version
     under review), before any Other text."""
     if body.dismiss:
-        return f"{name} dismissed the question on {subject}." if subject else f"{name} dismissed the question."
+        return (
+            f"{name} closed the question (declined) on {subject}."
+            if subject
+            else f"{name} closed the question (declined)."
+        )
     if subject and len(questions) == 1 and list(body.answers.values()) == [["Approve"]]:
         return f"{name} approved {subject}."
     text = " ".join(

@@ -33,6 +33,11 @@ const question = (id: string, over: Partial<QItem> = {}): QItem => ({id, kind: '
     refs: {task: id, questions: [{id: 'decision', header: '', question: 'Website sales chat: go with these picks?', multi: true, other: true,
       why: "Engineering can't start until these are set.", options: PICKS}], if_no_answer: {do: 'It stays a draft', kind: 'reversible'}}},
   ...over});
+const questionTask = (id: string, over: Partial<QItem> = {}): QItem => {
+  const x = question(id, {owner_id: 'human:ana', requester_id: 'bot:writer', status: 'open', waiting_on: null, ...over});
+  x.ask = {...x.ask, id, question_task: true, refs: {...x.ask.refs, target: {task: id}, task_question: true}};
+  return x;
+};
 const stuck: QItem = {id: 't-stuck', kind: 'question', title: 'Is this still moving?', body: '', owner_id: 'bot:writer', requester_id: 'bot:writer',
   status: 'waiting', version: 1, created_at: at(2), updated_at: at(2), open_asks: 1, from_person: 'human:ana', tier: 2,
   ask: {id: 'q-stuck', sender_id: 'keeper', recipient_id: 'human:ana', body: 'No progress for 60 min after a status check.', created_at: at(2),
@@ -67,15 +72,34 @@ const card = () => ({
   const browser = await chromium.launch({channel: process.env.TICO_BROWSER_CHANNEL ?? 'chrome', headless: true});
   try {
     let items = [question('t-four'), stuck];
-    const {page, errors} = await open(browser, {viewport: {width: 390, height: 900}, hash: '#/tasks', extraTasks: [...items, question('t-page'), question('t-draft'), question('t-swap'), pair('t-pair'), several('t-several'), yesNo('t-yn')].map(x => ({...x}))});
+    const {page, errors} = await open(browser, {viewport: {width: 390, height: 900}, hash: '#/tasks', extraTasks: [...items, question('t-page'), question('t-draft'), question('t-swap'),
+      questionTask('t-close-page'), questionTask('t-close-fail'), questionTask('t-close-stale'), questionTask('t-feedback'), pair('t-pair'), several('t-several'), yesNo('t-yn')].map(x => ({...x})),
+      beforeGoto: async page => {
+        await page.route('**/api/v2/feedback*', route => {
+          if (new URL(route.request().url()).pathname.endsWith('/recent-reasons'))
+            return route.fulfill({contentType: 'application/json', body: '{"reasons":[]}'});
+          if (route.request().method() === 'GET') return route.fulfill({contentType: 'application/json', body: '{"items":[]}'});
+          const body = route.request().postDataJSON() as Record<string, string>;
+          return route.fulfill({contentType: 'application/json', body: JSON.stringify({id: 'feedback-1', person_id: 'human:ana', ...body})});
+        });
+      }});
     const answers: unknown[] = [];
     await page.route('**/api/v2/needs-you*', route => route.fulfill({contentType: 'application/json', body: JSON.stringify({items})}));
     await page.route('**/api/v2/tasks/*/comments', route => route.fulfill({contentType: 'application/json', body: '{"comments":[]}'}));
     await page.route('**/api/v2/tasks/*/files', route => route.fulfill({contentType: 'application/json', body: '{"files":[]}'}));
     await page.route('**/api/v2/tasks/*/answers', route => {
-      answers.push({task: decodeURIComponent(new URL(route.request().url()).pathname.split('/').at(-2)!), ...route.request().postDataJSON()});
+      const body = route.request().postDataJSON() as {dismiss?: boolean};
+      const task = decodeURIComponent(new URL(route.request().url()).pathname.split('/').at(-2)!);
+      answers.push({task, ...body});
+      if (task === 't-close-stale') {
+        items = items.filter(x => x.id !== task);
+        return route.fulfill({status: 409, contentType: 'application/json', body: JSON.stringify({error: {code: 'answered', detail: 'This question was already answered'}})});
+      }
+      if (body.dismiss) items = items.filter(x => x.id !== task);
       return route.fulfill({contentType: 'application/json', body: '{}'});
     });
+    await page.route('**/api/v2/tasks/t-close-fail/answers', route => route.fulfill({status: 500, contentType: 'application/json',
+      body: JSON.stringify({error: {code: 'internal', message: 'Internal server error'}})}));
     await page.evaluate(async () => { await v2Refresh(); decideOpen('task:t-four'); });
     await page.locator('.decide .dc-card[data-key="task:t-four"]').waitFor();
 
@@ -143,17 +167,57 @@ const card = () => ({
       answers: {decision: ['Calls', 'Visitor notes', 'Pages', 'Spend cap']}});
 
     // A question task (backend/question_tasks.py): the same card, its ask the task itself, answered with {task}.
-    const qtask = question('t-qt', {owner_id: 'human:ana', requester_id: 'bot:writer', status: 'open', waiting_on: null});
-    qtask.ask = {...qtask.ask, id: 't-qt', question_task: true, refs: {...qtask.ask.refs, target: {task: 't-qt'}, task_question: true}};
+    const qtask = questionTask('t-qt');
     items = [qtask];
     await page.evaluate(async () => { decideStop(); await v2Refresh(); decideOpen('task:t-qt'); });
     await page.locator('.decide .dc-card[data-key="task:t-qt"]').waitFor();
     assert.equal((await page.evaluate(card)).picks.length, 4);
+    await page.locator('.decide .dc-actions [data-dc="close-question"]').waitFor(); // web and phone card actions
+    await page.setViewportSize({width: 1280, height: 900});
+    assert.equal(await page.locator('.decide .dc-actions [data-dc="close-question"]').isVisible(), true);
+    const feedbackAnswers = answers.length;
+    await page.locator('.decide .dc-who [data-fb-rate="up"]').click();
+    await page.locator('.decide .dc-who [data-fb-rate="down"]').click();
+    await page.locator('dialog.fb-sheet [data-fb-close]').click();
+    assert.equal(answers.length, feedbackAnswers, 'thumbs are feedback, not a question response');
+    assert.ok(items.some(x => x.id === 't-qt'), 'feedback leaves the question open');
+    assert.equal(await page.locator('.decide .dc-actions [data-dc="close-question"]').isVisible(), true, 'feedback keeps the actions available');
+    await page.setViewportSize({width: 390, height: 900});
     await page.waitForFunction(() => DEC && !DEC.busy && performance.now() >= (DEC.lockUntil || 0));
     await page.locator('.decide .dc-actions [data-dc="all"]').click();
     await page.waitForFunction(() => !DEC!.pending && !DEC_OUTBOX.size, null, {timeout: 8000});
     assert.deepEqual(answers.shift(), {task: 't-qt', target: {task: 't-qt'},
       answers: {decision: ['Calls', 'Visitor notes', 'Pages', 'Spend cap']}});
+
+    // A single pick with several options still offers Close, which sends immediately without an Undo step.
+    const closeSingle = questionTask('t-close-single');
+    closeSingle.ask.refs.questions[0] = {...closeSingle.ask.refs.questions[0]!, multi: false, options: PICKS.slice(0, 3)};
+    items = [closeSingle];
+    await page.evaluate(async () => { decideStop(); await v2Refresh(); decideOpen('task:t-close-single'); });
+    await page.locator('.decide .dc-card[data-key="task:t-close-single"]').waitFor();
+    const immediateClose = page.waitForResponse(response => response.url().includes('/tasks/t-close-single/answers'));
+    await page.locator('.decide .dc-actions [data-dc="close-question"]').click();
+    await immediateClose;
+    assert.deepEqual(answers.shift(), {task: 't-close-single', target: {task: 't-close-single'}, answers: {}, dismiss: true});
+    await page.locator('.decide .dc-toast span').filter({hasText: 'Closed (declined)'}).waitFor();
+    assert.equal(await page.locator('.decide .dc-toast button').isVisible(), false, 'Close has no Undo confirmation');
+
+    // A question task with a free-text answer keeps its existing Done action beside Close.
+    const closePlain = questionTask('t-close-plain');
+    closePlain.ask.refs.questions[0] = {...closePlain.ask.refs.questions[0]!, question: 'What should change?', multi: false, options: []};
+    items = [closePlain];
+    await page.evaluate(async () => { decideStop(); await v2Refresh(); decideOpen('task:t-close-plain'); });
+    await page.locator('.decide .dc-card[data-key="task:t-close-plain"]').waitFor();
+    await page.locator('.decide .dc-actions [data-dc="done"]').waitFor();
+    await page.locator('.decide .dc-actions [data-dc="close-question"]').waitFor();
+
+    // A failed Needs you close keeps the question card and shows the specified retry copy.
+    items = [questionTask('t-close-fail')];
+    await page.evaluate(async () => { decideStop(); await v2Refresh(); decideOpen('task:t-close-fail'); });
+    await page.locator('.decide .dc-card[data-key="task:t-close-fail"]').waitFor();
+    await page.locator('.decide .dc-actions [data-dc="close-question"]').click();
+    await page.locator('.decide .dc-toast span').filter({hasText: "Couldn't close this question. Try again."}).waitFor();
+    assert.equal(await page.locator('.decide .dc-card[data-key="task:t-close-fail"]').count(), 1);
 
     // 11: the task page's Needs you box is the same card: same header, question, why line, picks and buttons.
     items = [question('t-page')];
@@ -181,6 +245,39 @@ const card = () => ({
     await box.locator('[data-qc="ticked"]').click();
     for (let i = 0; i < 100 && !answers.length; i++) await page.waitForTimeout(20);
     assert.deepEqual(answers.shift(), {task: 't-page', target: {comment: 'q-t-page'}, answers: {decision: ['Visitor notes', 'Spend cap']}});
+
+    // A3/A5: the task page offers Close and sends its note with the one dismissal write.
+    items = [questionTask('t-close-page')];
+    await page.evaluate(async () => { location.hash = '#/tasks'; await v2Refresh(); location.hash = '#/task/t-close-page'; });
+    const closePage = page.locator('.qcard[data-qcard="t-close-page"]');
+    await closePage.waitFor();
+    await closePage.locator('.qc-note').fill('Wait for the site owner.');
+    await closePage.locator('[data-qc="close-question"]').click();
+    for (let i = 0; i < 100 && !answers.length; i++) await page.waitForTimeout(20);
+    assert.deepEqual(answers.shift(), {task: 't-close-page', target: {task: 't-close-page'}, answers: {}, dismiss: true,
+      other: 'Wait for the site owner.'});
+    await closePage.waitFor({state: 'detached'});
+
+    // A12: a failed close keeps the card and shows the exact retry copy.
+    items = [questionTask('t-close-fail')];
+    await page.evaluate(async () => { location.hash = '#/tasks'; await v2Refresh(); location.hash = '#/task/t-close-fail'; });
+    const closeFail = page.locator('.qcard[data-qcard="t-close-fail"]');
+    await closeFail.waitFor();
+    await closeFail.locator('[data-qc="close-question"]').click();
+    await page.locator('.toast.err').filter({hasText: "Couldn't close this question. Try again."}).waitFor();
+    assert.equal(await closeFail.count(), 1);
+
+    // A9: a stale close shows the server's plain reason and removes the closed card.
+    items = [questionTask('t-close-stale')];
+    await page.evaluate(async () => { location.hash = '#/tasks'; await v2Refresh(); location.hash = '#/task/t-close-stale'; });
+    const closeStale = page.locator('.qcard[data-qcard="t-close-stale"]');
+    await closeStale.waitFor();
+    const staleResponse = page.waitForResponse(response => response.url().includes('/tasks/t-close-stale/answers'));
+    await closeStale.locator('[data-qc="close-question"]').click();
+    assert.equal((await staleResponse).status(), 409);
+    await page.waitForFunction(() => [...document.querySelectorAll('.toast.err')].some(el => el.textContent?.includes('This question was already answered')));
+    await closeStale.waitFor({state: 'detached'});
+    assert.deepEqual(answers.shift(), {task: 't-close-stale', target: {task: 't-close-stale'}, answers: {}, dismiss: true});
 
     // A redraw while the person is mid-answer keeps their ticks and note: the task's details land after they started.
     items = [question('t-draft')];

@@ -65,6 +65,7 @@ interface QcAsk {
   recipient_id?: string | null;
   created_at?: string;
   goes_ahead_at?: string | null;
+  question_task?: boolean;
   refs?: QcRefs | null;
 }
 /** One row of Needs you (`S.v2.needs`), as the card reads it. */
@@ -102,6 +103,14 @@ function qcardQuestion(it: QcItem): QcQuestion | null {
   const q = qs[0], n = (q?.options || []).length;
   if (!q || n < 2 || n > QC_MAX_OPTIONS || ask.recipient_id !== myActor() || ask.sender_id === myActor()) return null;
   return q;
+}
+// Closing is only for a question task assigned to this person. A message ask, file review and chat-message Dismiss
+// keep their existing actions and routes.
+function qcardCanClose(it: QcItem | null | undefined): boolean {
+  const ask = it?.ask, target = ask?.refs?.target;
+  return it?.kind === 'question' && ask?.question_task === true
+    && String(target?.task || '') === String(it.id)
+    && ask.recipient_id === myActor() && ask.sender_id !== myActor();
 }
 // A question with no picks (no options, one, or more than six): this person's one question, answered in words.
 function qcardPlain(it: QcItem | null | undefined): QcQuestion | null {
@@ -219,17 +228,22 @@ function qcardActionsHTML(it: QcItem, q: QcQuestion, {attr = 'qc', ticked = qcar
   const bot = qcardAsker(it.ask?.sender_id), n = q.options.length, t = ticked.size;
   const btn = (cls: string, data: string, label: string, then: string, extra = '') =>
     `<button type="button" class="qc-btn${cls ? ' ' + cls : ''}" data-${attr}="${data}"${extra}><span class="qc-bl">${label}</span>${qcardThen(then)}</button>`;
+  const close = qcardCloseActionHTML(it, attr);
   if (q.multi) return btn('', 'all', `Yes to all${k('A')}`, `All ${n} go to ${bot} as yes`)
     + btn('primary', 'ticked', `Send ticked (<span class="tnum qc-count">${t}</span>)${k('T')}`,
       t === n ? `All ${n} go to ${bot} as yes` : `${t ? `These ${t} as yes; ` : ''}${bot} hears "not this one" for the rest`,
-      t ? '' : ' disabled');
-  if (n !== 2) return '';
+      t ? '' : ' disabled') + close;
+  if (n !== 2) return close;
   return (qcardYesNo(q) ? [1, 0] : [0, 1]).map((i, pos) => {
     const o = q.options[i];
     if (!o) return '';
     const key = qcardYesNo(q) ? (String(o.label)[0] ?? '').toUpperCase() : i + 1;
     return btn(pos && String(o.label).toLowerCase() === 'yes' ? 'primary' : '', 'pick', `${esc(o.label)}${k(key)}`, qcardOutcome(o, bot), ` data-i="${i}"`);
-  }).join('');
+  }).join('') + close;
+}
+function qcardCloseActionHTML(it: QcItem, attr = 'qc'): string {
+  return qcardCanClose(it)
+    ? `<button type="button" class="qc-btn" data-${attr}="close-question"><span class="qc-bl">Close</span></button>` : '';
 }
 
 // What happens if nobody answers (backend/ask_deadlines.py), small and at the bottom: never styled as a pick.
@@ -264,6 +278,17 @@ function qcardWrites(it: QcItem, q: QcQuestion, labels: (string | undefined)[], 
   const writes: {path: string; body: unknown}[] = [{path: `/v2/tasks/${id}/answers`, body: {target, answers: {[String(q.id)]: labels}, ...(other ? {other: note} : {})}}];
   if (note && !other) writes.push({path: `/v2/tasks/${id}/comments`, body: {text: note}});
   return writes;
+}
+// A close is one answer write: its optional note travels with the dismissal and wakes the asker once.
+function qcardCloseWrite(it: QcItem, note = ''): {path: string; body: unknown} {
+  const id = String(it.id), clean = note.trim();
+  return {path: `/v2/tasks/${encodeURIComponent(id)}/answers`,
+    body: {target: {task: id}, answers: {}, dismiss: true, ...(clean ? {other: clean} : {})}};
+}
+const QC_CLOSE_FAILURE = "Couldn't close this question. Try again.";
+function qcardCloseFailure(error: unknown): string {
+  const status = errorStatus(error);
+  return status !== undefined && status >= 400 && status < 500 ? errorMessage(error, QC_CLOSE_FAILURE) : QC_CLOSE_FAILURE;
 }
 // What an answer's toast says.
 function qcardSaid(it: QcItem, q: QcQuestion, labels: string[]): string {
@@ -342,6 +367,12 @@ async function qcardAnswerPlain(it: QcItem, text: string) {
   document.dispatchEvent(new CustomEvent('qcard:answered', {detail: {id: String(it.id)}}));
   void v2Refresh();
 }
+function qcardClosed(it: QcItem, q: QcQuestion): void {
+  QC_DRAFTS.delete(qcardDraftKey(it, q));
+  QC_HELD.delete(String(it.id));
+  document.dispatchEvent(new CustomEvent('qcard:closed', {detail: {id: String(it.id)}}));
+  void v2Refresh();
+}
 function qcardBoxHTML(t: QcTaskRef): string {
   const found = qcardItem(t);
   if (!found) return '';
@@ -388,11 +419,12 @@ document.addEventListener('click', async ev => {
     return;
   }
   const {it, q} = found;
+  const closing = b.dataset.qc === 'close-question';
   const ticked = new Set([...box.querySelectorAll<HTMLInputElement>('[data-qc-tick]:checked')].map(x => Number(x.dataset.qcTick)));
-  const labels = qcardLabels(q, b.dataset.qc, Number(b.dataset.i), ticked);
-  if (!labels.length) return;
+  const labels = closing ? [] : qcardLabels(q, b.dataset.qc, Number(b.dataset.i), ticked);
+  if (!closing && !labels.length) return;
   const note = box.querySelector<HTMLTextAreaElement>('.qc-note')?.value.trim() || '';
-  if (!note && qcardNeedsNote(it, q, labels)) {
+  if (!closing && !note && qcardNeedsNote(it, q, labels)) {
     const n = box.querySelector<HTMLTextAreaElement>('.qc-note');
     if (n) { n.placeholder = 'What should change?'; n.focus(); }
     return;
@@ -401,6 +433,14 @@ document.addEventListener('click', async ev => {
   box.querySelectorAll<HTMLButtonElement | HTMLInputElement | HTMLTextAreaElement>('button, input, textarea').forEach(x => { x.disabled = true; });
   box.setAttribute('aria-busy', 'true');
   try {
+    if (closing) {
+      const w = qcardCloseWrite(it, note);
+      await post(w.path, w.body, newRequestId());
+      qcardClosed(it, q);
+      box.remove();
+      toast(`Closed (declined) · sent to ${qcardAsker(it.ask?.sender_id)}`);
+      return;
+    }
     for (const w of qcardWrites(it, q, labels, note)) await post(w.path, w.body, newRequestId());
     QC_DRAFTS.delete(qcardDraftKey(it, q));
     toast(qcardSaid(it, q, labels));
@@ -410,6 +450,7 @@ document.addEventListener('click', async ev => {
   } catch (e) {
     box.querySelectorAll<HTMLButtonElement | HTMLInputElement | HTMLTextAreaElement>('button, input, textarea').forEach(x => { x.disabled = false; });
     box.removeAttribute('aria-busy');
-    toast(errorMessage(e, ''), true);
+    toast(closing ? qcardCloseFailure(e) : errorMessage(e, ''), true);
+    if (closing && errorCode(e) === 'answered') { qcardClosed(it, q); box.remove(); }
   }
 });

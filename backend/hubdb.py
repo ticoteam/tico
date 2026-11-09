@@ -6332,15 +6332,20 @@ def _subtask_wake(conn, actor, row, previous, note=None, quiet=False, heard=()):
         if by_checker
         else ""
     )
-    said = (
-        {"declined": "Subtask declined", "closed": "Subtask closed"}.get(row["status"])
-        or (f"{verdict}: {row['title']}" if by_checker else None)
-        or _marked_done(conn, actor, row["title"], "this subtask")
-    )
+    if row["status"] == "declined":
+        said = "Question closed (declined)" if row.get("questions") else "Subtask declined"
+    else:
+        said = {"closed": "Subtask closed"}.get(row["status"])
+        said = said or (f"{verdict}: {row['title']}" if by_checker else None)
+        said = said or _marked_done(conn, actor, row["title"], "this subtask")
     # The parent's "All subtasks done" (_parent_finished) rides on this one notice, not a second wake.
     last = "" if children_summary(conn, parent["id"])["open"] else "All subtasks done\n"
     if by_worker and not by_checker:
-        said = f"Subtask {row['status']}: {row['title']}"
+        said = (
+            f"Question closed (declined): {row['title']}"
+            if row.get("questions") and row["status"] == "declined"
+            else f"Subtask {row['status']}: {row['title']}"
+        )
     text = f"{last}{said}" + (f": {row['title']}" if row["status"] != "done" and not by_worker else "")
     text += f"\n{note}" if note and not quiet else ""
     key = _subtask_result_key(conn, row, note) if (note or row.get("verdict")) and not quiet else None

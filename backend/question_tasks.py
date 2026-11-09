@@ -664,14 +664,15 @@ def answer(
         H.task_update(c, who.actor, task_id, status="declined" if body.dismiss else "done", note=text)
     if value.get("reviewed"):
         file_reviews.record(c, who, task_id, task_id, task_id, value["reviewed"])
-    parent = TR.parent_of(c, task_id)
-    H.hook(
-        c,
-        "needs_you.answered",
-        task_id,
-        lambda: {"id": task_id, "to": who.actor, "from": row["requester_id"], "task_id": parent},
-        who.actor,
-    )
+    if not body.dismiss:
+        parent = TR.parent_of(c, task_id)
+        H.hook(
+            c,
+            "needs_you.answered",
+            task_id,
+            lambda: {"id": task_id, "to": who.actor, "from": row["requester_id"], "task_id": parent},
+            who.actor,
+        )
     return {"answer": value, "comments": H.task_comments(c, task_id, actor=privacy.actor(who)), "woke": True}
 
 

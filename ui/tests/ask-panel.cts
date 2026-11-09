@@ -54,7 +54,15 @@ async function open(browser: import('playwright').Browser, viewport: {width: num
     if (p === '/api/v2/assistant/actions/act9' && method === 'GET') return json({action: state.card});
     if (p === '/api/v2/assistant/actions/act9/confirm') { state.decided.push('act9'); state.card!.status = 'done'; return json({action: state.card}); }
     if (p === '/api/v2/needs-you') return json({actor: 'human:ben', count: state.needs.length, version: 'v' + state.needs.length, items: state.needs});
-    if (p === '/api/v2/tasks/t7/answers') { state.picked!.push(JSON.parse(route.request().postData()!).answers['tone-2']); state.needs = []; return json({ok: true}); }
+    if (p.endsWith('/answers') && method === 'POST') {
+      const body = route.request().postDataJSON() as {dismiss?: boolean; answers?: Record<string, string[]>};
+      const task = decodeURIComponent(p.split('/').at(-2)!);
+      state.answers.push({task, ...body});
+      if (task === 't9') return route.fulfill({status: 500, contentType: 'application/json', body: JSON.stringify({error: {code: 'internal', message: 'Internal server error'}})});
+      if (task === 't7') { state.picked!.push(body.answers?.['tone-2'] || []); state.needs = []; }
+      if (body.dismiss) state.needs = state.needs.filter(item => item.id !== task);
+      return json({ok: true});
+    }
     if (p === '/api/v2/assistant/messages') {
       const body = JSON.parse(route.request().postData()!);
       state.sent.push(body);
@@ -223,6 +231,39 @@ async function flight(page: import('playwright').Page, dot: string, act: () => P
     await tone.getByRole('button', {name: 'Send'}).click();
     await tone.waitFor({state: 'detached'});
     assert.deepEqual(state.picked, [['Formal']]);
+    assert.deepEqual(state.answers.shift(), {task: 't7', target: {comment: 'qt7'}, answers: {'tone-2': ['Formal']}});
+
+    // A4: a question task's Assistant card offers Close beside its answer buttons, then sends one dismiss write.
+    const closeNeed = need('t8', {body: 'Should reminders be daily?', question_task: true,
+      refs: {target: {task: 't8'}, task_question: true,
+        questions: [{id: 'daily', question: 'Should reminders be daily?', options: [{label: 'Yes'}, {label: 'No'}]}]}});
+    state.needs = [closeNeed];
+    await page.evaluate(async () => { await v2Refresh(); ASK.draw(); });
+    const closeCard = thread.locator('.ask-card[data-ask-q="t8"]');
+    await closeCard.waitFor();
+    await closeCard.locator('.ask-card-actions [data-ask-pick="0"]').waitFor();
+    await closeCard.locator('[data-ask-qclose]').waitFor();
+    await page.setViewportSize({width: 390, height: 844});
+    assert.equal(await closeCard.locator('[data-ask-qclose]').isVisible(), true, 'Close remains available on a phone');
+    await closeCard.locator('.ask-close-note').fill('Wait for the site owner.');
+    await page.setViewportSize({width: 1280, height: 900});
+    await closeCard.locator('[data-ask-qclose]').click();
+    await closeCard.waitFor({state: 'detached'});
+    assert.deepEqual(state.answers.shift(), {task: 't8', target: {task: 't8'}, answers: {}, dismiss: true, other: 'Wait for the site owner.'});
+
+    // A12: a failed Assistant Close keeps its question and offers the exact retry copy.
+    state.needs = [need('t9', {body: 'Should reminders be daily?', question_task: true,
+      refs: {target: {task: 't9'}, task_question: true,
+        questions: [{id: 'daily', question: 'Should reminders be daily?', options: [{label: 'Yes'}, {label: 'No'}]}]}})];
+    await page.evaluate(async () => { await v2Refresh(); ASK.draw(); });
+    const failedCloseCard = thread.locator('.ask-card[data-ask-q="t9"]');
+    await failedCloseCard.waitFor();
+    await failedCloseCard.locator('[data-ask-qclose]').click();
+    await page.locator('.toast.err').filter({hasText: "Couldn't close this question. Try again."}).waitFor();
+    assert.equal(await failedCloseCard.count(), 1);
+    assert.deepEqual(state.answers.shift(), {task: 't9', target: {task: 't9'}, answers: {}, dismiss: true});
+    state.needs = [];
+    await page.evaluate(async () => { await v2Refresh(); ASK.draw(); });
     assert.equal(await box.getAttribute('placeholder'), 'Message Tico Assistant');
     assert.equal(await box.getAttribute('aria-label'), 'Message Tico Assistant');
     // A message goes with the page it was asked from; a #/support link in the reply opens the Tico team chat over the page.

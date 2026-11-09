@@ -502,6 +502,10 @@ document.addEventListener('qcard:answered', (event: Event) => {
   const id = (event as CustomEvent<{ id?: string }>).detail?.id;
   if (id) pipelineReviewAnswered(id);
 });
+document.addEventListener('qcard:closed', (event: Event) => {
+  const id = (event as CustomEvent<{ id?: string }>).detail?.id;
+  if (id) pipelineReviewAnswered(id);
+});
 document.addEventListener('input', (event: Event) => {
   if (!pipelineReviewState || !(event.target instanceof HTMLTextAreaElement)) return;
   if (event.target.name === 'note') pipelineReviewState.note = event.target.value;

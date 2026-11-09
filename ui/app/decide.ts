@@ -196,7 +196,8 @@ function decideCards(items: (NeedsItem | DecItem)[] | undefined): DecCard[] {
   return [...all, ...unexplained.sort(old)];
 }
 // Declines open whole, as do tasks that ask for no yes or no and recommend nothing.
-const decideOnCard = (c: DecCard) => c.it.kind !== 'declined' && (c.type !== 'task' || !!c.yn || !!c.it.recommend?.ask);
+const decideOnCard = (c: DecCard) => c.it.kind !== 'declined' && (qcardCanClose(c.it)
+  || c.type !== 'task' || !!c.yn || !!c.it.recommend?.ask);
 function needsCards(items: NeedsItem[] | undefined): DecCard[] {
   const folded = new Set((items as DecItem[] | undefined || []).flatMap(it => [...(it.folded || []).map(f => String(f.id)), ...(it.merged || []).map(String)]));
   const cards = new Map<string, DecCard>();
@@ -572,13 +573,13 @@ function decideActionsPlain(c: DecCard, k: (key: string) => string): string {
   const skip = `<button type="button" data-dc="skip">Skip${k('S')}</button>`;
   if (c.type === 'pick' && (c.q.multi || decideTwo(c))) return qcardActionsHTML(c.it, c.q, {attr: 'dc', ticked: decideTicked(DEC, c), keys: true});
   // A pick between files has a button under each file: no Pick one row.
-  if (c.type === 'pick' && qcardReview(c.it)?.pick) return skip;
-  if (c.type === 'pick') return `${skip}<button type="button" disabled>Pick one</button>`;
+  if (c.type === 'pick' && qcardReview(c.it)?.pick) return skip + qcardCloseActionHTML(c.it, 'dc');
+  if (c.type === 'pick') return `${skip}<button type="button" disabled>Pick one</button>${qcardCloseActionHTML(c.it, 'dc')}`;
   if (c.type === 'approve') return `<button type="button" data-dc="no">Decline${k('N')}</button><button type="button" class="primary" data-dc="yes"${c.it.what === 'send' && c.it.payload?.email_send_id && !DEC?.data.get(c.it.id)?.email?.preview_complete ? ' disabled title="Load the frozen email before approving"' : ''}>Approve${k('Y')}</button>`;
-  if (c.yn) return `<button type="button" data-dc="no">No${k('N')}</button><button type="button" class="primary" data-dc="yes">Yes${k('Y')}</button>`;
+  if (c.yn) return `<button type="button" data-dc="no">No${k('N')}</button><button type="button" class="primary" data-dc="yes">Yes${k('Y')}</button>${qcardCloseActionHTML(c.it, 'dc')}`;
   if (c.type === 'stale') return skip + ((c.it.rows || []).some(r => r.action) ? `<button type="button" class="primary" data-stale-all="${esc(c.it.id)}">Accept all</button>` : '');
-  if (decideStepsOnly(c)) return `${skip}<a class="button primary" href="#/task/${encodeURIComponent(c.it.id)}" title="Move it to its next step in the task">Open to move it</a>`;
-  return `${skip}<button type="button" class="primary" data-dc="done">Done${k('D')}</button>`;
+  if (decideStepsOnly(c)) return `${skip}<a class="button primary" href="#/task/${encodeURIComponent(c.it.id)}" title="Move it to its next step in the task">Open to move it</a>${qcardCloseActionHTML(c.it, 'dc')}`;
+  return `${skip}<button type="button" class="primary" data-dc="done">Done${k('D')}</button>${qcardCloseActionHTML(c.it, 'dc')}`;
 }
 // An option's picture, large: the image itself when small enough, else its thumb.
 const decidePicture = (st: DecState, c: DecPick, o: unknown) => qcardPicture(st.data.get(c.it.id)?.files, o);
@@ -713,6 +714,8 @@ function decideWrite(c: DecCard, what: string, i: number | undefined, note: stri
 function decideWriteBody(c: DecCard, what: string, i: number | undefined, note: string): DecWriteSet {
   const shown = DEC?.data.get(c.it.id)?.version;
   const id = encodeURIComponent(c.it.id), to = decideBot(c);
+  if (what === 'close-question' && qcardCanClose(c.it))
+    return {writes: [qcardCloseWrite(c.it, note)], label: `Closed (declined) · sent to ${to}`};
   if (['pick', 'all', 'ticked'].includes(what)) {
     // One pick, Yes to all, or the ticked picks (the rest go to the bot as "not this one"): question-card.js.
     const q = c.q!, labels = qcardLabels(q, what, i, decideTicked(DEC, c));
@@ -769,10 +772,11 @@ function decideAct(st: DecState, what: string, i?: number, shown: string | null 
   DEC_HANDLED.add(key);
   st.at = decideAfter(st, key);
   const pending: DecPending = st.pending = {key, write, note};
-  pending.timer = setTimeout(() => { if (st.pending === pending) void decideCommit(st); }, DEC_UNDO_MS);
+  if (what !== 'close-question') pending.timer = setTimeout(() => { if (st.pending === pending) void decideCommit(st); }, DEC_UNDO_MS);
   if (what === 'pick') $(`.dc-opt[data-i="${i}"]`, card!)?.classList.add('sel');
   decideLeaveCard(st, card, what === 'no' ? 'left' : 'right');
   needsListsRedraw();
+  if (what === 'close-question') { void decideCommit(st); return; }
   decideToast(st, write.label, () => {
     if (st.pending !== pending) return;
     clearTimeout(pending.timer); st.pending = null;
@@ -841,6 +845,7 @@ function needsSay(text: string, err = false) {
 }
 // The requests not yet confirmed, in order, each under the key it got when the action was taken.
 async function decideSend(st: DecState | null, p: DecPending) {
+  const closing = p.write.writes.some(w => !!(w.body as {dismiss?: boolean} | undefined)?.dismiss);
   try {
     for (const w of p.write.writes.slice(p.sent)) {
       await post(w.path, w.body, w.key);
@@ -849,6 +854,10 @@ async function decideSend(st: DecState | null, p: DecPending) {
     }
     DEC_OUTBOX.delete(p);
     decideSave();
+    if (closing) {
+      document.dispatchEvent(new CustomEvent('qcard:closed', {detail: {id: String(p.key).replace(/^task:/, '')}}));
+      if (st) needsSay(p.write.label);
+    }
     if (st && !liveConnected()) liveSoon('decide-needs', () => v2Refresh().then(() => {
       if (DEC === st) decideRefresh(st, S.v2.needs || []);
       needsListsRedraw();
@@ -869,8 +878,8 @@ async function decideSend(st: DecState | null, p: DecPending) {
     if (!st) return;                            // sent again from an earlier page: nothing on screen to put back
     const cerr = err.body?.error;
     const changed = err.status === 409 || !!cerr && typeof cerr === 'object' && cerr.code === 'version_conflict';
-    needsSay(changed ? 'That task changed. Look again.' : err.message, true);
-    st.data.delete(String(p.key).replace(/^task:/, ''));
+    needsSay(closing ? qcardCloseFailure(e) : changed ? 'That task changed. Look again.' : err.message, true);
+    if (changed) st.data.delete(String(p.key).replace(/^task:/, ''));
     if (DEC === st) {
       st.at = p.key;
       decideRender(st, true);
