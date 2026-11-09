@@ -350,7 +350,7 @@ async function messageAct(page, text, label, phone) {
         await snap(page, 'bot-dm', phone);
       });
       await step(page, 'bot Access editor', phone, name, async () => {
-        // Access is on the bot's Settings tab (bot-page.js: #pane-settings holds #bot-access-card).
+        // Access is on the bot's Settings tab (bot-page.ts: #pane-settings holds #bot-access-card).
         await shell(page, `#/bot/${BOT}/settings`, '#bot-access-card')();
         await page.locator('#bot-access-card').scrollIntoViewIfNeeded();
         await snap(page, 'bot-access-card', phone);

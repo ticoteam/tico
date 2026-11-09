@@ -209,7 +209,7 @@ function betaMark(root: ParentNode = document): void {
   root.querySelectorAll<HTMLElement>('[data-beta]').forEach(el => { el.innerHTML = betaPill(el.dataset.beta); });
 }
 // ----------------------------------------------------------------- derived state
-// Returns one of planned, paused, running, needs, idle. Typed as string because bot-page.js compares it with 'failed', which
+// Returns one of planned, paused, running, needs, idle. Typed as string because bot-page.ts compares it with 'failed', which
 // this never returns: the comparison is a dead branch in that file, and a literal union would make it a new tsc finding.
 function stateOf(slug: string | undefined): string {
   const e = botRow(slug);

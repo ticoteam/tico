@@ -248,6 +248,8 @@ interface Employee {
   /** The computer a bot is placed on (`assignments` row), when the server sends it. */
   assignment?: { runner_id?: string } | null;
   agent?: BotAgent | null;
+  /** The model it falls back to (the bot page's Info card). */
+  fallback?: SettingsBotChoice | null;
   /** Whether the bot's computer or agent is up, and whether its setup is done (the status tooltip, ui/app/tooltip.ts, reads them). */
   online?: boolean;
   ready?: boolean;
@@ -323,7 +325,8 @@ interface Quarantine {
   resumes_at?: string | null;
   since?: string | null;
   why?: string;
-  review?: { found?: string; what?: string; [key: string]: unknown } | null;
+  /** What it refused to write and the task it was on (the bot page's Quarantined card, ui/app/bot-page.ts). */
+  review?: { found?: string; what?: string; preview?: string; task?: { id: string; title?: string } | null; [key: string]: unknown } | null;
   builder_notice?: unknown;
   [key: string]: unknown;
 }
@@ -337,7 +340,10 @@ interface V2BotState {
   stopped?: string;
   backoff?: string;
   quarantine?: Quarantine | null;
-  last_stop?: { text?: string; [key: string]: unknown } | null;
+  /** Why its last run ended without finishing (backend/execution.py last_stop): one line, its tone and the action it offers. */
+  last_stop?: { text?: string; tone?: string; action?: string; reason?: string; at?: string; needs_person?: boolean; [key: string]: unknown } | null;
+  /** The spend limit it is over, when it is over one (the bot page's limit banner). */
+  limit?: { limit?: number | null; spent?: number; scope?: string; name?: string; period?: string; [key: string]: unknown } | null;
   open_tasks?: number;
   /** The status tooltip's Needs humans row and Next run row (ui/app/tooltip.ts). */
   needs_human?: number;
