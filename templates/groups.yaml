@@ -91,6 +91,24 @@ departments:
     head: engineering-lead
     software_only: true
 
+  - id: success
+    name: Success
+    description: "Keeps existing customers renewing and growing: onboarding, account health, renewals and the support queue, reviewed together each week."
+    goal: "Customers who renew and grow"
+    question: "How do customers get set up and kept after they buy, and who owns renewals and account health today?"
+    placeholder: "An onboarding call for each new account, a renewal reminder list in a spreadsheet, support by email; the founder handles the big accounts"
+    icon: sentiment_satisfied
+    head: success-team-manager
+
+  - id: corporate
+    name: Corporate
+    description: "Keeps the company's legal, financial and partnership obligations on time and visible, with a person signing and approving each one."
+    goal: "Every deadline kept, every deal read first"
+    question: "Which legal, finance and partnership obligations do you carry, and who handles each today?"
+    placeholder: "An outside lawyer for contracts, a bookkeeper who files taxes, two reseller agreements and a yearly partner registration"
+    icon: contract
+    head: corporate-team-manager
+
 # Not a group the picker offers. The built-in Assistant already covers a human's own brief and messages, so these
 # templates are never suggested by default; a team can still add them from a template.
 extras:

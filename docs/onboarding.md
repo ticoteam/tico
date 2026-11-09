@@ -64,7 +64,7 @@ external agents and custom rules are refused with an explanation. The file's goa
 [Goals](goals-and-kpis.md): the owner's goals, goals the file gives a built-in bot such as the Assistant (Goals keeps the
 built-ins out of its tree) and goals of roles that are seats (a seat holds no work) become company goals, each with the
 goal's measure as a KPI carrying the file's baseline and target (the file holds no readings, so a new KPI starts with
-no history). A file holds up to 325 goals: the company's 3, 2 for each department and 1 for each of up to 300 roles,
+no history). A file holds up to 329 goals: the company's 3, 2 for each department and 1 for each of up to 300 roles,
 which covers every goal the setup page suggests; a file with more is refused before anything is created. First jobs,
 routines, model choices and tool connections are saved for later setup and listed in the preview; the team uses its
 currently configured AI providers.
@@ -538,7 +538,7 @@ the same template is one of the two command line routes; Tico gives it a slug of
 
 ## Adding a template
 
-Tico ships 104 role templates, by group, each with a card. `templates/catalog/` holds 114 folders in all: those 104, four built-in bots (`assistant`, `botops`, `goal-manager`, `librarian`), five helper bots (`bookkeeper`, `brand`, `inbox`, `task-manager`, `tico-counsel`), and one retired template kept for existing installs (`bookkeeping`). [Starter bots](starter-bots.md) lists the 104.
+Tico ships 116 role templates, by group, each with a card. `templates/catalog/` holds 130 folders in all: those 116, four built-in bots (`assistant`, `botops`, `goal-manager`, `librarian`), seven helper bots (`bookkeeper`, `brand`, `inbox`, `task-manager`, `tico-counsel`, `updates-owner`, `automations-owner`), and three retired templates kept for existing installs (`bookkeeping`, `cro`, `lead-generation`). [Starter bots](starter-bots.md) lists the 116.
 
 `templates/catalog/<template>/` is one template. The folder name is what `--template` takes.
 

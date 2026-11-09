@@ -1,0 +1,39 @@
+name: partnerships-owner                # the slug: it matches the repository bot-partnerships-owner and the label owner:partnerships-owner
+display_name: "Partnerships Owner"
+labels: [owner:partnerships-owner]
+reads: []                        # other bot repositories this one may clone read-only
+
+# These must agree with the bot's settings on the server, or be left out of this file entirely.
+reasoning_effort: medium
+max_run_minutes: 60
+
+# The first routine is declared off (`enabled: false`) and switched on when a human starts the bot's setup
+# (Start setup, go-live). `hub bot create` seeds it once; from then on Tico's row is the routine (docs/routines.md).
+routines:
+  - id: weekly-partner-review
+    title: Weekly partner pipeline review
+    cron: "0 9 * * 4"
+    timezone: America/Los_Angeles     # set this to the team's own timezone
+    template: playbooks/weekly-partner-review.md
+    labels: [priority:p2]
+    enabled: false
+
+# What this bot may touch. Not listed is not allowed. `env:` names the variable a credential
+# arrives in, never the value; declaring access here does not create it. Changing access is an
+# owner decision, so the bot files a task for the owner rather than editing this file.
+tools:
+  - service: public-web
+    identity: "Unauthenticated public sources"
+    can: [read]
+    note: "candidate partners' public sites and directories; no forms, no messages, no accounts"
+# Optional, uncomment when connected. Neither entry may ever carry write or send.
+#   - service: close-crm
+#     identity: "the team's CRM account"
+#     can: [read]
+#     env: CLOSE_API_KEY
+#     note: "pipeline and lead sources for conflict checks; read only"
+#   - service: gmail
+#     identity: "partners@example.com"
+#     can: [read, draft]          # never send: drafts only
+#     env: GOOGLE_SA_KEY
+#     note: "reads registrations and partner threads and leaves drafts; never sends"

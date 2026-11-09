@@ -1,7 +1,7 @@
 # Starter bots
 
-There are 107 role templates: 105 in nine groups (Sales, Marketing, Customer Support, Finance, Operations, Legal, HR,
-Product and Engineering) and a two-template Leadership extra, enough to staff a team of ten to two hundred humans. **Every
+There are 116 role templates: 113 in eleven groups (Sales, Marketing, Customer Support, Finance, Operations, Legal, HR,
+Product, Engineering, Success and Corporate) and a three-template Leadership extra, enough to staff a team of ten to two hundred humans. **Every
 template is a real role that does the work within its granted Tools.** Each is a job title a team would
 hire and put on its team chart (Sales Development Representative, Bookkeeper, Recruiter, Site Reliability Engineer), never a
 feature or a document: it does the research, keeps its records, prepares the finished work and carries it to the point of
@@ -16,7 +16,7 @@ Existing bots keep their settings; developers can branch or make an independent 
 
 ## Groups
 
-`templates/groups.yaml` lists the nine groups in the order Finish setup offers them. For each: `id`, `name`, a
+`templates/groups.yaml` lists the eleven groups in the order Finish setup offers them. For each: `id`, `name`, a
 one-sentence `description`, a short `goal`, the one briefing `question` and an example answer (`placeholder`), a Material
 Symbols `icon`, the template id of the group's `head`, and `software_only: true` for Product and Engineering, which are
 offered only when software is the product. The team builder takes one group at a time: it shows the description and goal,
@@ -28,15 +28,17 @@ Chief of Staff is no longer a default.
 | Group | Icon | Head | Templates | Goal |
 |---|---|---|---|---|
 | Sales | `handshake` | Sales Manager (`sales-lead`) | 11 | Turn interest into revenue |
-| Marketing | `campaign` | Head of Marketing (`marketing-lead`) | 17 | Be known by the customers you want |
+| Marketing | `campaign` | Head of Marketing (`marketing-lead`) | 19 | Be known by the customers you want |
 | Customer Support | `support_agent` | Head of Customer Support (`support-lead`) | 10 | Every customer helped and kept |
-| Finance | `account_balance` | Head of Finance (`finance-lead`) | 14 | Know where the money is |
+| Finance | `account_balance` | Head of Finance (`finance-lead`) | 13 | Know where the money is |
 | Operations | `settings_suggest` | Operations Manager (`ops-manager`) | 13 | Run smoothly, nothing dropped |
 | Legal | `gavel` | General Counsel (`general-counsel`) | 8 | Sign with eyes open |
 | HR | `groups` | Head of People (`people-lead`) | 11 | Hire well, keep good people |
 | Product | `category` | Head of Product (`product-lead`) | 9 | Build what customers need |
-| Engineering | `code` | Head of Engineering (`engineering-lead`) | 12 | Ship reliable software, steadily |
-| Leadership | `star` | Chief of Staff (`chief-of-staff`) | 2 | Keep the leaders focused |
+| Engineering | `code` | Head of Engineering (`engineering-lead`) | 13 | Ship reliable software, steadily |
+| Success | `sentiment_satisfied` | Success Team Manager (`success-team-manager`) | 3 | Customers who renew and grow |
+| Corporate | `contract` | Corporate Team Manager (`corporate-team-manager`) | 3 | Every deadline kept, every deal read first |
+| Leadership | `star` | Chief of Staff (`chief-of-staff`) | 3 | Keep the leaders focused |
 
 Every group has a head (`lead: true`): it writes the group's weekly summary from what its bots and humans
 produced, proposes who should take a stuck or misrouted request, and **hires**: when repeated work in the group is not
@@ -44,15 +46,18 @@ covered, it proposes a specific worker template from its `team_templates` with t
 and only after the owner confirms asks BotOps to set it up (`hub task create --owner botops`). Heads never create bots
 themselves and never do their team's work.
 
-Roles are real job titles on the team chart; built-in bots (Assistant, BotOps, Librarian, Strategy Bot) and message bots (Inbox Manager) have plain
+Roles are real job titles on the team chart; built-in bots (Assistant, BotOps, Librarian, Strategy Owner, Task Manager, Finance Owner, Rules Owner, Brand Owner, Updates Owner and Automations Owner) and message bots (Inbox Manager) have plain
 function names and live outside it.
 
 The built-ins are not in any group and no template duplicates them: the Librarian owns the docs, the FAQ and the answers
 built from them (Support Agent asks it with `hub doc ask` and reports a missing or wrong doc to it as a task; HR Generalist and
 Benefits Administrator do the same for policy and plan questions; Technical Writer covers only READMEs and API docs in the
 product repositories); the Brand Owner keeps the brand book and the Brand card, which marketing bots check their drafts
-against; BotOps creates and maintains bots; the Assistant is each human's own; the Strategy Bot (`goal-manager`) keeps
-the KPIs and computes their readings; and the Owners on the core chart each own one result and log readings for the KPI
+against; BotOps creates and maintains bots; the Assistant is each human's own; the Strategy Owner (`goal-manager`) keeps
+the KPIs and computes their readings; the Finance Owner (`bookkeeper`) keeps the books, the Usage page and the weekly cash
+summary; the Rules Owner (`tico-counsel`) reads the documents added to Rules and answers can-I questions; the Updates Owner
+(`updates-owner`) drafts each period's company update; the Automations Owner (`automations-owner`) reviews the team's
+automations each week; and the Owners on the core chart each own one result and log readings for the KPI
 that measures it with `hub kpi log`. Owning a result does not make a bot the only one who logs it. No other template
 owns a KPI (Product Analyst and FP&A Analyst answer questions and explain numbers, they do not keep them).
 
@@ -99,6 +104,8 @@ fill); `scripts/build-icon-font.py` adds every card's and group's icon to the su
 | `query_stats` | `cro-owner` | Conversion Rate Optimization Owner | A weekly funnel map with a count on every rate, the ranked leaks, and experiment briefs with sample size and stop rules worked out before launch | common | Tico and web access to the pages; a funnel export optional |
 | `dynamic_feed` | `social-ads-owner` | Social Ad Owner | A weekly review of each paid social campaign's cost per result against target, creative fatigue with a replacement for each tired ad, and each budget, creative or audience change prepared for review | common | Tico only; ad-platform reporting, landing pages and a CRM optional |
 | `manage_search` | `search-ads-owner` | Search Ad Owner | A weekly review of each paid search campaign's cost per result against target, the search terms that spend without converting with their negatives, and bidding only where conversions support it | common | Tico only; ad-platform reporting, landing pages and a CRM optional |
+| `link` | `affiliates` | Affiliates Owner | The self-serve affiliate and referral program: applications checked, each affiliate's referrals and commissions followed, every payout recomputed from the published terms, and likely fraud flagged; a person pays and decides | niche | Affiliate, referral and commission exports on a task |
+| `download` | `app-store` | App Store Owner | The app's listings on the iOS App Store and Google Play: listing conversion, copy and screenshot drafts, keyword checks, the rating trend and a draft reply to each store review; changes stay drafts until a person publishes them in the console | niche | Store console exports for the last 28 days on a task |
 
 ### Customer Support
 
@@ -117,7 +124,7 @@ fill); `scripts/build-icon-font.py` adds every card's and group's icon to the su
 
 ### Finance
 
-The books themselves are kept by the built-in [Bookkeeper](bookkeeper.md), which every install has once Finance is set
+The books themselves are kept by the built-in [Finance Owner](bookkeeper.md) (`bookkeeper`), which every install has once Finance is set
 up. The `bookkeeping` template is retired: it is no longer offered, and bots already built from it keep running.
 
 | Icon | Template | Role | What it does | Suggest | Needs |
@@ -213,9 +220,26 @@ up. The `bookkeeping` template is retired: it is no longer offered, and bots alr
 | `podium` | `developer-advocate` | Developer Advocate | A weekly developer pulse: a ready answer for each public question (drafted until sending is on), the friction log with counts, and runnable samples and tutorials | niche | Public web; GitHub and a community channel optional |
 | `architecture` | `software-architect` | Software Architect | Design doc and RFC review notes, proposed ADRs for decisions made without one, the system map and a ranked technical debt register | niche | GitHub connected; docs and meetings optional |
 | `developer_board` | `engineering-manager` | Engineering Manager | A plan for each requested change with one child task per repository, each engineer's pull requests followed to merge, and progress reported with links | common | Tico and GitHub connected (read) |
+| `account_tree` | `pipeline` | Pipeline Owner | The path from a merged change to users: each week how long a merged change waits to reach users, which checks gate merging, and failed deploys and rollbacks; for each release the readiness check, the changelog and release notes drafted, and the version the owner approves rolled out; it never reruns, cancels, deploys, rolls back or merges on its own | niche | Repository and release workflow access on a task |
 
 To run these bots as one team that builds, reviews, tests and releases software, see
 [The software factory](software-factory.md): the roles in order, which model each runs on and the Dev tickets steps.
+
+### Success
+
+| Icon | Template | Role | What it does | Suggest | Needs |
+|---|---|---|---|---|---|
+| `headset_mic` | `success-team-manager` | Success Team Manager (head) | A weekly success summary: support and customer health against target, the oldest waiting customers, repeats and the decisions needed; it proposes routing and hires and never answers a customer or assigns a person | common | Tico only |
+| `support_agent` | `support-owner` | Support Owner | The support queue from sorting to a reply ready to send: each answer found in your docs, a draft reply, what needs a person routed to them, and open tickets chased; customers hear from it only once a person turns on mail sending | default | A support mailbox or ticket tool on a task; the written policy and docs optional |
+| `sentiment_satisfied` | `success-owner` | Success Owner | A weekly brief of renewals due in 120 days, the accounts at risk and why, and a drafted next touch for each; customer messages stay drafts until a person turns sending on, and price and contract stay with the Account Manager | common | Customer list and health signals on a task |
+
+### Corporate
+
+| Icon | Template | Role | What it does | Suggest | Needs |
+|---|---|---|---|---|---|
+| `account_tree` | `corporate-team-manager` | Corporate Team Manager (head) | A weekly corporate summary: legal, the books and partnerships against their own targets, the deadlines in the next 30 days and the decisions needed; it proposes routing and hires and never signs, pays, files or sends anything itself | common | Tico only |
+| `balance` | `legal-owner` | Legal Owner | The one queue for every legal request in the private Legal pipeline, reviews of the contracts that matter, a watch on every legal deadline and policy drafts for a human to adopt; summaries for a human, not legal advice, and it sends or signs only what a task asks and a granted Tool allows | default | Tico only; the written policies and licence list on a task |
+| `partner_exchange` | `partnerships-owner` | Partnerships Owner | The partner register, every deal registration checked against the rules of engagement, partner-sourced deals followed to close and referral fees owed each month; payouts use Tools, and outside messages stay drafts until a person turns mail sending on | niche | The partner list and rules of engagement on a task |
 
 ### Message bots
 
