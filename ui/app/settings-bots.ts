@@ -179,9 +179,9 @@ function settingsBotProblem(e) {
 // Remove the retired filters so an older browser preference can never hide search results.
 try { localStorage.removeItem('hub.settings.bots.filters'); } catch {}
 const SETTINGS_BOTS_VIEW = {q: '', selected: new Set(), picking: false, taskOpen: new Set()};
-const settingsBotHarness = e => e.harness || e.runtime || '';
-const settingsBotEffort = e => e.reasoning_effort || e.effort || '';
-const settingsBotSelectable = e => !e.agent && settingsCanManageBot(e);
+const settingsBotHarness = (e: SettingsBotChoice) => e.harness || e.runtime || '';
+const settingsBotEffort = (e: SettingsBotChoice) => e.reasoning_effort || e.effort || '';
+const settingsBotSelectable = (e: SettingsBot) => !e.agent && settingsCanManageBot(e);
 const settingsBotSearchModels = e => {
   const bot = e.agent ? {model: e.agent.model} : e.model ? e : {model: e.resolved_model, harness: e.resolved_runtime};
   return {bot, task: e.agent ? null : e.task_model?.model ? e.task_model : bot};
@@ -228,135 +228,6 @@ function settingsBotsSyncSelection(el, visible) {
   if (all) { all.checked = !!selectable.length && picked === selectable.length; all.indeterminate = picked > 0 && picked < selectable.length; all.disabled = !selectable.length; }
   const bar = el.querySelector('[data-bots-bulk]');
   if (bar) { bar.hidden = !SETTINGS_BOTS_VIEW.selected.size; bar.querySelector('[data-bulk-count]').textContent = `${SETTINGS_BOTS_VIEW.selected.size} selected`; }
-}
-function settingsBulkModelDialog() {
-  const bots = [...SETTINGS_BOTS_VIEW.selected].map(slug => S.emps.find(e => e.id === slug)).filter(Boolean);
-  if (!bots.length) return;
-  const dialog = document.createElement('dialog'); dialog.className = 'tmodal settings-bulk-dialog';
-  dialog.setAttribute('aria-labelledby', 'bulk-model-title');
-  let choice = null, target = 'bot', running = false, ran = false;
-  const paint = () => {
-    const label = choice ? settingsChoiceLabel(choice.harness, choice.model, choice.effort) : '';
-    dialog.innerHTML = `<div class="tmodal-head"><h2 id="bulk-model-title">Change model · ${bots.length} bot${bots.length === 1 ? '' : 's'}</h2><span class="spacer"></span><button class="ghost" type="button" data-bulk-close aria-label="Close">✕</button></div>
-      <div class="transition-body">
-        <label>Apply to<select data-bulk-target aria-label="Apply to"><option value="bot">Bot model</option><option value="task">Task model</option><option value="both">Both models</option></select></label>
-        <div class="settings-choice" data-bot-choice="" data-kind="model" data-current="${esc(choice ? settingsChoiceValue(choice.harness, choice.model, choice.effort) : '')}">
-          ${settingsChoiceFields(choice ? settingsChoiceValue(choice.harness, choice.model, choice.effort) : '')}</div>
-        <p data-bulk-destination>${choice ? `Destination: ${esc(label)}` : ''}</p>
-        <div class="transition-progress" data-bulk-explanation></div>
-        <ul class="settings-bulk-list" data-bulk-list>${bots.map(e => `<li data-bulk-bot="${esc(e.id)}" data-state="pending"><span>${esc(e.display_name || e.slug)}</span><span class="settings-cell-note">${esc(settingsChoiceLabel(settingsBotHarness(e), e.model, settingsBotEffort(e)))}</span></li>`).join('')}</ul>
-        <p role="status" data-bulk-summary></p>
-        <div class="transition-actions"><button class="primary" type="button" data-bulk-apply ${choice ? '' : 'disabled'}>Change ${bots.length} bot${bots.length === 1 ? '' : 's'}</button><button class="ghost" type="button" data-bulk-close>Cancel</button></div></div>`;
-    dialog.querySelectorAll('[data-bulk-close]').forEach(button => button.onclick = () => dialog.close());
-    const preview = () => {
-      dialog.querySelector('[data-bulk-explanation]').innerHTML = target === 'task'
-        ? '<strong>Only task models change.</strong><p>New task sessions use this choice. If unavailable, tasks use the bot model and say so.</p>'
-        : `<strong>${target === 'both' ? 'Bot and task models change independently.' : 'Only bot models change; explicit task models stay as set.'}</strong><p>Each changed bot starts a fresh provider session. History is kept. A bot mid-turn is skipped; retry it after.${target === 'both' ? ' Task settings still save if the bot model is blocked or fails.' : ''}</p>`;
-      bots.forEach(e => { const why = target !== 'task' && choice && settingsRuntimeBlock(e, choice.harness);
-        mark(e.id, why ? 'blocked' : 'pending', why ? `Can't run bot model: ${why.reason}${target === 'both' ? ' · Task model will still be saved' : ''}` : 'Ready to apply'); });
-    };
-    dialog.querySelector('[data-bulk-target]').onchange = event => { target = event.target.value; preview(); };
-    settingsWireChoiceFields(dialog.querySelector('[data-choice-fields]'), (value, valid) => {
-      choice = valid ? settingsChoiceFromValue(value) : null;
-      dialog.querySelector('[data-bulk-apply]').disabled = !choice;
-      dialog.querySelector('[data-bulk-destination]').textContent = choice
-        ? `Destination: ${settingsChoiceLabel(choice.harness, choice.model, choice.effort)}` : '';
-      preview();
-    });
-    preview();
-    dialog.querySelector('[data-bulk-apply]').onclick = () => void run(bots);
-  };
-  const mark = (slug, state, note) => {
-    const row = dialog.querySelector(`[data-bulk-bot="${CSS.escape(slug)}"]`); if (!row) return;
-    row.dataset.state = state; row.querySelector('.settings-cell-note').textContent = note;
-  };
-  const run = async targets => {
-    if (running || !choice) return;
-    running = ran = true;
-    const apply = dialog.querySelector('[data-bulk-apply]');
-    if (apply) apply.disabled = true;
-    const retry = dialog.querySelector('[data-bulk-retry]');
-    if (retry) retry.disabled = true;
-    dialog.querySelectorAll('[data-bot-choice] select,[data-choice-apply],[data-bulk-target]').forEach(control => control.disabled = true);
-    const results = {changed: 0, partial: 0, skipped: 0, blocked: 0, failed: []};
-    for (const e of targets) {
-      mark(e.id, 'working', 'Changing…');
-      const result = await settingsBulkApplyOne(e.id, choice, target);
-      mark(e.id, result.state, result.note);
-      if (result.partial) results.partial++;
-      if (result.state === 'failed') results.failed.push(e); else results[result.state]++;
-    }
-    running = false;
-    const summary = [results.changed || !results.partial ? `${results.changed} changed` : '',
-      results.partial ? `${results.partial} partly changed` : '', results.skipped ? `${results.skipped} already on it` : '',
-      results.blocked ? `${results.blocked} can't run it` : '',
-      results.failed.length ? `${results.failed.length} failed` : ''].filter(Boolean).join(' · ');
-    dialog.querySelector('[data-bulk-summary]').textContent = summary;
-    const actions = dialog.querySelector('.transition-actions');
-    actions.innerHTML = `${results.failed.length ? '<button class="ghost" type="button" data-bulk-retry>Retry failed</button>' : ''}<button class="primary" type="button" data-bulk-close>Done</button>`;
-    actions.querySelector('[data-bulk-close]').onclick = () => dialog.close();
-    const retryFailed = actions.querySelector('[data-bulk-retry]');
-    if (retryFailed) retryFailed.onclick = () => void run(results.failed);
-    await loadSettings();
-  };
-  // Cancel keeps the selection; once a change has run, the next bulk action starts fresh.
-  dialog.onclose = () => { dialog.remove(); if (ran) { SETTINGS_BOTS_VIEW.selected.clear(); void loadSettings(); } };
-  document.body.appendChild(dialog); paint(); dialog.showModal();
-}
-// Each destination uses its existing single-bot route. In Both mode, reload after the bot transition
-// so the task-model request uses its new revision. Retry failed preserves already-applied destinations.
-async function settingsBulkApplyOne(slug, choice, target = 'bot') {
-  const notes = [], kinds = target === 'both' ? ['bot', 'task'] : [target];
-  let changed = false, failed = false, blocked = false;
-  for (const kind of kinds) {
-    const result = await settingsBulkApplyKind(slug, choice, kind);
-    notes.push(`${kind === 'task' ? 'Task model' : 'Bot model'}: ${result.note}`);
-    failed ||= result.state === 'failed';
-    blocked ||= result.state === 'blocked';
-    changed ||= result.state === 'changed';
-    if (kind === 'bot' && target === 'both' && result.state === 'changed') {
-      try { S.emps = namedRoster(await get('/employees')); }
-      // The task route can refresh a stale revision itself if this read fails.
-      catch {}
-    }
-  }
-  return {state: failed ? 'failed' : blocked ? 'blocked' : changed ? 'changed' : 'skipped',
-    partial: changed && (failed || blocked), note: notes.join(' · ')};
-}
-async function settingsBulkApplyKind(slug, choice, kind) {
-  for (let attempt = 0; attempt < 2; attempt++) {
-    const e = S.emps.find(row => row.id === slug);
-    if (!e || !settingsBotSelectable(e)) return {state: 'failed', note: 'This bot can no longer be changed here'};
-    // Task settings save even when unavailable; the server returns its fallback note.
-    const why = kind === 'bot' && settingsRuntimeBlock(e, choice.harness);
-    if (why) return {state: 'blocked', note: `Can't run: ${why.reason}${why.move ? ` · move to ${why.move.label}` : ''}`};
-    const selected = kind === 'task' ? e.task_model : e;
-    if (selected && settingsBotHarness(selected) === choice.harness && selected.model === choice.model && settingsBotEffort(selected) === choice.effort)
-      return {state: 'skipped', note: 'Already on this model'};
-    try {
-      if (kind === 'task') {
-        // The task model and its effort change; the bot's own task context length stays.
-        const saved = await post(`/v2/bots/${encodeURIComponent(slug)}/task-model`, {
-          task_model: settingsTaskBody(e, {choice, effort: choice.effort}), expected_revision: e.revision});
-        return {state: 'changed', note: [`Now ${settingsChoiceLabel(choice.harness, choice.model, choice.effort)}`,
-          saved.readiness?.can_run === false ? `For now tasks use the bot model: ${saved.readiness.problem}` : '', saved.warning || ''].filter(Boolean).join('. ')};
-      }
-      const t = await post(`/v2/bots/${encodeURIComponent(slug)}/transitions`, {kind: 'model', model: choice.model,
-        effort: choice.effort, harness: choice.harness, expected_generation: e.machine?.generation || 0,
-        expected_revision: e.revision});
-      return t.state === 'applied' ? {state: 'changed', note: `Now ${settingsChoiceLabel(choice.harness, choice.model, choice.effort)}`}
-        : {state: 'failed', note: `Change ${t.state}; open the bot's Model control to finish it`};
-    } catch (error) {
-      const code = error.body?.error?.code;
-      if (code === 'unchanged') return {state: 'skipped', note: 'Already on this model'};
-      if (code === 'version_conflict' && attempt === 0) {
-        try { S.emps = namedRoster(await get('/employees')); } catch {}
-        continue;
-      }
-      return {state: 'failed', note: error.message || 'The change failed'};
-    }
-  }
-  return {state: 'failed', note: 'Bot settings kept changing; refresh and try again'};
 }
 // Archived bots the person may bring back (Restore), listed under the bots table. One read is kept for a while.
 let SETTINGS_ARCHIVED = null;
