@@ -1,11 +1,93 @@
 """A bulk change by filter (POST /api/v2/task-bulk): it selects with the task list's own filters, changes each task as
 its single update would (permissions, refusals and events alike), is capped, and a dry run writes nothing."""
 
-import pytest
+import sqlite3
+from contextlib import closing
+from pathlib import Path
 
+import pytest
+from fastapi.testclient import TestClient
+
+from backend import bot_settings as BS
 from backend import hubdb as H
 from backend import pipeline_review
-from backend.tests.test_tasks_board import api, bot_token, get, pipeline, post  # noqa: F401
+from backend.app import create_app
+from backend.auth import Identity
+from backend.config import Settings
+from backend.store import encode
+from backend.tests.test_tasks_board import bot_token, get, pipeline, post  # noqa: F401
+
+
+def _seed(app):
+    """The tasks board's fixture data (test_tasks_board.api), written once into the module's booted hub."""
+    with app.state.store.transaction() as c:
+        bots = {slug: {"name": slug, "runtime": "fake", "status": "active"} for slug in ("ops", "cpo", "cmo")}
+        H.sync_registry(
+            c,
+            bots,
+            {
+                "people": [
+                    {"id": "ana", "email": "ana@acme.example", "team": "leadership"},
+                    {"id": "ben", "email": "ben@acme.example", "team": "product"},
+                    {"id": "priya", "email": "priya@acme.example", "team": "sales"},
+                ]
+            },
+        )
+        c.execute(
+            "INSERT INTO registry_metadata VALUES('people',?)",
+            (
+                encode(
+                    {
+                        "people": [
+                            {"id": "ana", "email": "ana@acme.example", "team": "leadership", "primary_for": ["*"]},
+                            {"id": "ben", "email": "ben@acme.example", "team": "product"},
+                            {"id": "priya", "email": "priya@acme.example", "team": "sales"},
+                        ]
+                    }
+                ),
+            ),
+        )
+        for slug, config in bots.items():
+            c.execute(
+                "INSERT INTO bot_config(bot,team,owner_id) VALUES(?,?,?)",
+                (slug, "product" if slug == "cpo" else "marketing" if slug == "cmo" else None, "ana"),
+            )
+            BS.write(c, slug, config)
+        c.execute(
+            "INSERT INTO registry_metadata VALUES('onboarding',?)", (encode({"completed": "2026-01-01T00:00:00Z"}),)
+        )
+
+
+@pytest.fixture(scope="module")
+def booted(tmp_path_factory) -> Path:
+    """One initialized and seeded hub for the module: each test copies this file (the boot is the slow part)."""
+    path = tmp_path_factory.mktemp("bulk") / "booted.sqlite"
+    app = create_app(Settings(db_path=path))
+    with TestClient(app) as client:
+        _seed(client.app)
+    return path
+
+
+@pytest.fixture
+def api(tmp_path, monkeypatch, booted):
+    monkeypatch.setattr(H, "TITLE_LINT", "warn")
+    path = tmp_path / "hub.db"
+    with closing(sqlite3.connect(booted)) as source, closing(sqlite3.connect(path)) as target:
+        source.backup(target)
+    app = create_app(
+        Settings(
+            db_path=path,
+            test_identities={
+                "ana-test": Identity("human:ana", "owner", "ana@acme.example"),
+                "ben-test": Identity("human:ben", "human", "ben@acme.example"),
+                "priya-test": Identity("human:priya", "human", "priya@acme.example"),
+                # BotOps acting for Ben (backend/botops_act.py): his rights, not Ben signed in.
+                "ben-via-botops": Identity("human:ben", "human", "ben@acme.example", via="botops", confirmed=True),
+            },
+        )
+    )
+    with TestClient(app) as client:
+        yield client
 
 
 def bulk(api, filter, action, token="ana-test", expected=200, **change):

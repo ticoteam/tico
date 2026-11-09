@@ -800,6 +800,7 @@ def on_step_change(
             _mark_stage(conn, actor, task_id, FINISHED_INTO, step_id, ts)  # a move finished it into a done stage
     current = open_visit(conn, task_id)
     _leave_spawn_stage(conn, row, type_id, step_id, actor)
+    _enter_spawn_stage(conn, row, type_id, step_id, closing, actor)
     _move_visit(conn, actor, row, type_id, step_id, ts, current)
     target = stage(conn, step_id)
     if target is not None and target["status"] == "declined" and row.get("status") != "declined":
@@ -849,6 +850,40 @@ def _move_visit(
         H._task_event(conn, task_id, actor, "stage_move_back", old_step, step_id, "")  # pyright: ignore[reportPrivateUsage]
 
 
+def handed_on_open(conn: sqlite3.Connection, card_id: str) -> set[str]:
+    """The subtasks an `enter` spawn filed from this card that are still live (not returned). Finishing the card does not
+    close them (hubdb._handed_on): the Opportunity a Qualified Lead files is its own work from then on."""
+    try:
+        found = conn.execute(
+            "SELECT h.target_task_id FROM pipeline_handoffs h JOIN pipeline_links l ON l.id = h.pipeline_link_id "
+            "WHERE h.source_task_id = ? AND l.fires = 'enter' AND h.returned_at IS NULL",
+            (card_id,),
+        ).fetchall()
+    except sqlite3.OperationalError:  # a hub without the pipeline tables has no handoffs
+        return set()
+    return {str(row[0]) for row in found if row[0]}
+
+
+def _enter_spawn_stage(
+    conn: sqlite3.Connection, row: Row, type_id: str | None, step_id: str | None, closing: bool, actor: str
+) -> None:
+    """A card that enters a stage holding an `enter` spawn link files its spawned ticket (pipeline_links.spawn). Once per
+    card while that handoff is live: a card reopened and moved back in files nothing new. A closing move files nothing,
+    and neither does a stage that is closed or declined."""
+    old_step = row.get("step_id")
+    if closing or not step_id or step_id == old_step:
+        return
+    from . import pipeline_links
+
+    target = stage(conn, step_id)
+    if target is None or target["status"] in CLOSED:
+        return
+    link = pipeline_links.link_for_stage(conn, str(step_id))
+    if link is None or link["mode"] != "spawn" or link["fires"] != "enter":
+        return
+    pipeline_links.spawn(conn, link, str(row.get("id")), actor=actor)
+
+
 def _leave_spawn_stage(
     conn: sqlite3.Connection, row: Row, type_id: str | None, step_id: str | None, actor: str
 ) -> None:
@@ -861,7 +896,7 @@ def _leave_spawn_stage(
     from . import pipeline_links
 
     link = pipeline_links.link_for_stage(conn, str(old_step))
-    if link is None or link["mode"] != "spawn":
+    if link is None or link["mode"] != "spawn" or link["fires"] != "leave":
         return
     before, after = stage(conn, str(old_step)), stage(conn, step_id)
     if before is None or after is None or after["type_id"] != before["type_id"]:

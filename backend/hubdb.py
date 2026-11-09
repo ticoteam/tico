@@ -2672,6 +2672,9 @@ def _message_writer(conn, actor, msg, conv):
 def resolve_actor(conn: object, value: object) -> "str | None":
     """`cmo`, `bot:cmo`, `ana`, `human:ana`, `keeper` -> the actor string, or None.
 
+    A bare name no bot or person answers to is the one live bot built from that template (`marketing-lead`), if there is
+    exactly one and no open seat is set up from that template (`_template_owner`).
+
     None is what rule 2 refuses on: an address that is not a bot, a human or the keeper.
     """
     raw = str(value or "").strip()
@@ -2688,7 +2691,28 @@ def resolve_actor(conn: object, value: object) -> "str | None":
         return bot_actor(found["id"])
     if human(conn, raw):
         return human_actor(raw)
-    return None
+    return _template_owner(conn, raw)
+
+
+def _template_owner(conn, name):
+    """The one live bot built from the template `name` (a template's own `--owner marketing-lead`), as its actor.
+    None when no live bot is, or two are: an ambiguous name is still refused. An archived bot is not live. An open seat
+    set up from the template (lifecycle.py: its `template`, closed once a bot fills it) is one more claim on the name."""
+    if not _has_table(conn, "bot_settings"):
+        return None
+    found = _rows(
+        conn.execute(
+            "SELECT s.bot_id FROM bot_settings s JOIN bots b ON b.id=s.bot_id "
+            "WHERE s.template=? AND b.state!='archived' LIMIT 2",
+            (name,),
+        )
+    )
+    if (
+        _has_table(conn, "seats")
+        and conn.execute("SELECT 1 FROM seats WHERE template=? AND closed_at IS NULL LIMIT 1", (name,)).fetchone()
+    ):
+        return None
+    return bot_actor(found[0]["bot_id"]) if len(found) == 1 else None
 
 
 HELD_STATES = ("quarantined", "paused")
@@ -4012,6 +4036,8 @@ PRODUCT_BOT_SLUGS = frozenset(
         "market-analyst",
         "listening",
         "cpo",
+        "updates-owner",
+        "automations-owner",
     }
 )
 
@@ -4784,7 +4810,9 @@ def _set_status(
     # Direct internal writers (roadmap sync, hold restoration) have the automatic finish contract.
     # task_update/task_close preflight explicit finishes before any write and handle their own cascade.
     finishing = cascade and effective in ("done", "closed") and row.get("status") != effective
-    left_open = _check_finish_children(conn, actor, row, None, strict=False) if finishing else set()
+    left_open = (
+        _check_finish_children(conn, actor, row, None, strict=False, done=effective == "done") if finishing else set()
+    )
     ts = now()
     from .task_blocked import transition
 
@@ -7650,7 +7678,7 @@ def task_update(
             and step is not None
             and row["status"] != "closed"
         ):
-            left_open = _check_finish_children(conn, actor, row, mover, strict=strict)
+            left_open = _check_finish_children(conn, actor, row, mover, strict=strict, done=status == "done")
         if effective == "done":
             from . import profiles
             from .wake_rules import verdict_fields
@@ -8763,11 +8791,28 @@ def _closed_with_note(parent):
     return f"Closed with #{parent['number']}" if parent.get("number") is not None else "Closed with its parent task"
 
 
-def _check_finish_children(conn, actor, parent, mover, *, strict=True):
-    """Check the whole tree before closing anything, including children below finished subtasks."""
+def _handed_on(conn, parent_id, done):
+    """The live subtasks an `enter` pipeline spawn filed from this card, and their own subtasks. A finish as done leaves
+    them alone (pipeline_engine.handed_on_open): a Qualified Lead's Opportunity is not closed with the Lead. A close
+    (a cancel) still takes them with it."""
+    from . import pipeline_engine
+
+    kept = set()
+    if not done:
+        return kept
+    for tid in pipeline_engine.handed_on_open(conn, parent_id):
+        kept.add(tid)
+        kept.update(kid["id"] for kid in descendants(conn, tid))
+    return kept
+
+
+def _check_finish_children(conn, actor, parent, mover, *, strict=True, done=False):
+    """Check the whole tree before closing anything, including children below finished subtasks. `done` is true when
+    the parent finishes as done (not closed), so its handed-on spawns stay open (_handed_on)."""
     left_open = set()
+    kept = _handed_on(conn, parent["id"], done)
     for kid in descendants(conn, parent["id"]):
-        if kid["status"] not in ACTIVE_STATUSES:
+        if kid["status"] not in ACTIVE_STATUSES or kid["id"] in kept:
             continue
         try:
             _check_task_close(conn, actor, kid, _closed_with_note(parent), mover, check_only=not strict)
@@ -8804,12 +8849,13 @@ def _finish_children(conn, actor, parent, mover=None, quiet=False, *, left_open=
     # The summary keeps ids only: each reader's text names what that reader may open (_children_said, task_reads).
     changed = {"closed": [], "open": []}
     kids = descendants(conn, parent["id"])
+    kept = _handed_on(conn, parent["id"], parent.get("status") == "done")
     # A dependent inside this cascade needs no new run just before it closes. Keep removing its blocker links.
     closing_tasks = {parent["id"]} | {
-        kid["id"] for kid in kids if kid["status"] in ACTIVE_STATUSES and kid["id"] not in left_open
+        kid["id"] for kid in kids if kid["status"] in ACTIVE_STATUSES and kid["id"] not in left_open | kept
     }
     for kid in kids:
-        if (task(conn, kid["id"]) or {}).get("status") not in ACTIVE_STATUSES:
+        if kid["id"] in kept or (task(conn, kid["id"]) or {}).get("status") not in ACTIVE_STATUSES:
             continue
         closed = False
         if kid["id"] not in left_open:

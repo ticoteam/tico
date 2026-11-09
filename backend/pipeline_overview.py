@@ -127,6 +127,7 @@ def _pipelines(c: "sqlite3.Connection", actor: str) -> list[Row]:
         "factory_id" if "factory_id" in have else "NULL AS factory_id",
         "pipeline_owner_id" if "pipeline_owner_id" in have else "NULL AS pipeline_owner_id",
         "manager" if "manager" in have else "NULL AS manager",
+        "manager_seat" if "manager_seat" in have else "NULL AS manager_seat",
         "pipeline_visibility" if "pipeline_visibility" in have else "'company' AS pipeline_visibility",
     ]
     rows = _rows(c, f"SELECT {', '.join(pick)} FROM task_types WHERE id<>'general' ORDER BY created_at, id")
@@ -577,6 +578,7 @@ def read(
             "name": names[pid],
             "goal": by_id[pid]["goal"],
             "manager_id": by_id[pid]["manager"],
+            "manager_seat": by_id[pid]["manager_seat"],
             "factory_id": by_id[pid]["factory_id"],
             "cards": counts[pid]["cards"],
             "overdue": counts[pid]["overdue"],

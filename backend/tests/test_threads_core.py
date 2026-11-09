@@ -3,7 +3,7 @@ held post writes nothing, a write that fails mid-way leaves nothing behind, sub-
 revisions apply highest-first, the loop guard defers and resumes, inbox readers read deliveries, reactions keep to
 readers, a run's reply lands in its sub-thread, and session keys keep private and public apart.
 
-The migration's reader sets are pinned by test_threads_migration_e2e.py (goldens of the pre-threads predicates).
+The migration's reader sets are checked by test_threads_migration_e2e.py (today's pre-threads predicates, read live).
 """
 
 import contextlib

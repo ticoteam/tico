@@ -80,7 +80,7 @@
       },
       "task_model": null,
       "task_model_warning": "",
-      "team": null,
+      "team": "built-in",
       "temp": false,
       "template": "",
       "template_version": "",
