@@ -37,7 +37,7 @@ interface ModalDialog extends TfDialog {
   saveQueue?: Promise<unknown>;
   taskRail?: {id: string; open: Set<string>; full?: ModalTask};
   tpOff?: (() => void) | null;
-  tpEl?: (HTMLElement & {tpCards?: Map<string, unknown>}) | null;
+  tpEl?: TaskPagesSlot | null;
   taskLive?: unknown;
 }
 // GET /v2/tasks/{id} as the dialog and its conversation read it.
