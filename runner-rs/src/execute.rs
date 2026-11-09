@@ -7261,15 +7261,13 @@ for line in sys.stdin:
 
     impl CodexRig {
         async fn new() -> CodexRig {
-            use std::os::unix::fs::PermissionsExt;
             let controls = RunControls;
             RUN_SESSION.with(|on| on.set(Some(true)));
             let (url, seen, server) = recording_server().await;
             let (runner, dir) = runner_at(&url, "codex-session");
             std::fs::create_dir_all(dir.join("projects/bot-ops")).unwrap();
             let program = dir.join("codex");
-            std::fs::write(&program, FAKE_CODEX).unwrap();
-            std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).unwrap();
+            crate::util::write_script(&program, FAKE_CODEX);
             let env: Env = [(
                 "PATH".to_string(),
                 format!(

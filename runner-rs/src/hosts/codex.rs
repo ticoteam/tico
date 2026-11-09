@@ -1517,13 +1517,11 @@ for line in sys.stdin:
 
     #[tokio::test]
     async fn the_app_server_gets_the_turns_skill_root_once_and_a_refusal_still_runs_the_turn() {
-        use std::os::unix::fs::PermissionsExt;
         let dir =
             std::env::temp_dir().join(format!("codex-roots-{}", uuid::Uuid::new_v4().simple()));
         std::fs::create_dir_all(&dir).unwrap();
         let program = dir.join("codex");
-        std::fs::write(&program, FAKE_APP_SERVER).unwrap();
-        std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).unwrap();
+        crate::util::write_script(&program, FAKE_APP_SERVER);
         let path = format!(
             "{}:{}",
             dir.display(),

@@ -717,12 +717,11 @@ mod tests {
     /// runs until it is stopped. With FAKE_MODE=deaf it ignores TERM (only the KILL five seconds later ends it); with
     /// FAKE_MODE=silent it closes its output once started and runs on; otherwise a TERM ends it half a second later.
     async fn codex_host(mode: &str) -> (crate::hosts::Host, i32, std::path::PathBuf) {
-        use std::os::unix::fs::PermissionsExt;
         let dir =
             std::env::temp_dir().join(format!("tico-login-host-{}", uuid::Uuid::new_v4().simple()));
         std::fs::create_dir_all(&dir).unwrap();
         let program = dir.join("codex");
-        std::fs::write(
+        crate::util::write_script(
             &program,
             r#"#!/usr/bin/env python3
 import json, os, signal, sys, time
@@ -742,9 +741,7 @@ for line in sys.stdin:
         os.close(1)
 time.sleep(60)
 "#,
-        )
-        .unwrap();
-        std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).unwrap();
+        );
         let pid_file = dir.join("pid");
         let path = format!(
             "{}:{}",
