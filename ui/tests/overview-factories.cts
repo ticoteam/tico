@@ -74,6 +74,10 @@ async function desktop(browser: import('playwright').Browser) {
   assert.equal(await page.locator('.of-dot').innerText(), '14');
   assert.equal(await page.locator('.of-in-l').innerText(), 'Ads');
   assert.equal(await page.evaluate(() => getComputedStyle(document.querySelector('.of-edge')!).animationName), 'of-flow');
+  // The input drops straight down into its factory box, and the lines sit above the boxes, so a line inside a box shows.
+  const drop = (await page.locator('.of-edge-in').getAttribute('d'))!.match(/^M([\d.]+),[\d.-]+ L([\d.]+),[\d.-]+$/);
+  assert.ok(drop && drop[1] === drop[2], `input line ${drop}`);
+  assert.equal(await page.evaluate(() => getComputedStyle(document.getElementById('of-lines')!).zIndex), '1');
   // The period: the week at first, and the one picked is remembered.
   assert.equal(await page.locator('[data-of-period="7d"]').getAttribute('aria-pressed'), 'true');
   await page.locator('[data-of-period="30d"]').click();
@@ -135,7 +139,8 @@ async function mapExtras(browser: import('playwright').Browser) {
 
 async function noLinks(browser: import('playwright').Browser) {
   // A factory whose pipelines have no links between them (no Marketing to Sales): it renders with no lines or loops.
-  const data = {...map, edges: [], loops: [], inputs: []};
+  // A loop with no laps yet draws nothing.
+  const data = {...map, edges: [], loops: [{pipelines: ['camp', 'sales'], laps: 0, median_lap_minutes: null}], inputs: []};
   const {page, errors} = await open(browser, {data});
   await page.locator('.of-node').first().waitFor();
   assert.equal(await page.locator('.of-edge').count(), 0);
@@ -179,6 +184,8 @@ async function phone(browser: import('playwright').Browser) {
   assert.equal(await page.locator('#of-lines').isVisible(), false);
   assert.match(await page.locator('[data-of-pl=camp] .of-onward').innerText(), /38 · 2d to Sales/);
   assert.match(await page.locator('[data-of-pl=camp] .of-in-chip').innerText(), /Ads 14/);
+  const short = await page.locator('[data-of-period], #of-new-b').evaluateAll((bs: HTMLElement[]) => bs.filter(b => b.getBoundingClientRect().height < 44).map(b => b.textContent));
+  assert.deepEqual(short, [], 'the period picker and + Factory are 44px tall on a phone');
   await page.locator('[data-of-pl=camp] .of-chat').click();
   await page.locator('#of-rail-chat .thv').waitFor();
   const sheet = (await page.locator('#of-rail').boundingBox())!;

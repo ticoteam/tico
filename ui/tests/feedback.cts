@@ -10,7 +10,6 @@
 //  - a thread message keeps its emoji reactions apart from the thumbs, and copies its own words.
 // FEEDBACK_SHOTS=<dir> saves phone and desktop screenshots of each state.
 import type {Browser, Locator, Page} from 'playwright';
-import type {ThreadsMessage} from './support/threads-fake.cts';
 const {chromium}: typeof import('playwright') = require('playwright');
 const assert: typeof import('node:assert/strict') = require('node:assert/strict');
 const fs: typeof import('node:fs') = require('node:fs');
@@ -390,7 +389,7 @@ async function threadMessage(browser: Browser) {
   const bot = {name: 'finance', display_name: 'Finance', host: 'keeper', status: 'active', can_chat: true, schedules: []};
   const threads = threadsFake({bot: 'finance', messages: [
     {id: 'h1', sender_id: 'human:ana', body: 'Is the October close done?'},
-    {id: 'b1', sender_id: 'bot:finance', body: 'Closed. Two invoices are still unpaid.', reactions: [{emoji: '🎉', count: 1, actors: ['human:sam']}]}] as unknown as ThreadsMessage[]});
+    {id: 'b1', sender_id: 'bot:finance', body: 'Closed. Two invoices are still unpaid.', reactions: [{emoji: '🎉', count: 1, actors: ['human:sam']}]}]});
   await page.context().route('**/*', route => {
     const url = new URL(route.request().url()), p = url.pathname;
     const json = (body: unknown) => route.fulfill({contentType: 'application/json', body: JSON.stringify(body)});

@@ -114,7 +114,8 @@ def share(name,dir_fd=None):
  # Open relative to the pinned directory without following a link, then decide on the opened inode.
  try: fd=os.open(name,os.O_RDONLY|os.O_NONBLOCK|os.O_NOFOLLOW,dir_fd=dir_fd)
  except OSError as e:
-  if e.errno in (errno.ENOENT,errno.ELOOP): return
+  # Gone, a link, or an inode this user may not read (the supervisor's own 0600 git-lock sidecar): not ours to widen.
+  if e.errno in (errno.ENOENT,errno.ELOOP,errno.EACCES,errno.EPERM): return
   raise
  try:
   s=os.fstat(fd)
@@ -126,7 +127,7 @@ for root in sys.argv[1:]:
  for base,dirs,files,fd in os.fwalk(root,follow_symlinks=False):
   for name in dirs+files:
    s=os.stat(name,dir_fd=fd,follow_symlinks=False)
-   if stat.S_ISDIR(s.st_mode) or stat.S_ISREG(s.st_mode): share(name,fd)
+   if s.st_uid==os.geteuid() and (stat.S_ISDIR(s.st_mode) or stat.S_ISREG(s.st_mode)): share(name,fd)
 "#]).args(paths).env_clear().status().map_err(|e| e.to_string())?;
     if status.success() {
         Ok(())
@@ -539,6 +540,30 @@ fn walk(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The supervisor keeps an owner-only sidecar in a bot's `.git` (gitlocks.rs `tico-lock-recovery`); the share,
+    /// run as the bot, cannot open it. On Nov 9 every turn on a new hosted company's Bot computer stopped with
+    /// "cannot share the bot workspace with its turn user" for that one file. An inode it may not read is not its to
+    /// widen, so the share skips it and widens the rest.
+    #[test]
+    fn an_unreadable_inode_in_the_workspace_does_not_stop_the_share() {
+        use std::os::unix::fs::PermissionsExt;
+        let root =
+            std::env::temp_dir().join(format!("tico-share-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir_all(root.join(".git")).unwrap();
+        let sidecar = root.join(".git/tico-lock-recovery");
+        std::fs::write(&sidecar, "").unwrap();
+        std::fs::set_permissions(&sidecar, std::fs::Permissions::from_mode(0o000)).unwrap();
+        let note = root.join("notes.md");
+        std::fs::write(&note, "x").unwrap();
+        std::fs::set_permissions(&note, std::fs::Permissions::from_mode(0o600)).unwrap();
+        let shared = share_workspace_blocking(std::slice::from_ref(&root));
+        let mode = std::fs::metadata(&note).unwrap().permissions().mode() & 0o777;
+        std::fs::set_permissions(&sidecar, std::fs::Permissions::from_mode(0o600)).unwrap();
+        std::fs::remove_dir_all(&root).unwrap();
+        shared.unwrap();
+        assert_eq!(mode, 0o660);
+    }
     #[test]
     fn only_reserved_non_supervisor_ids_can_be_leased() {
         assert_eq!(parse("10100-10163").unwrap().len(), 64);

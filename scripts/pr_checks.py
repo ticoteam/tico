@@ -1897,6 +1897,21 @@ def junit_ran(path):
     return path.is_file() and any(case.find("skipped") is None for case in ET.parse(path).iter("testcase"))
 
 
+def junit_failed(paths, limit=3):
+    """The first failing tests in pytest JUnit reports, as "file.py::test", for the error a fail-fast cancel prints."""
+    names = []
+    for path in paths:
+        try:
+            cases = ET.parse(path).iter("testcase")
+        except (ET.ParseError, OSError):
+            continue
+        for case in cases:
+            if case.find("failure") is not None or case.find("error") is not None:
+                module = case.get("classname", "").rsplit(".", 1)[-1]
+                names.append(f"{module}.py::{case.get('name', '')}" if module else case.get("name", ""))
+    return names[:limit] + ([f"and {len(names) - limit} more"] if len(names) > limit else [])
+
+
 def pytest_leg(interpreter, jobs, suite, args):
     """pytest, then, where it passed, a check of its JUnit report in the same command (on the VM too): as in CI's
     run(), a leg whose every test skipped is no pass. pytest's 5 (no test collected) passes through: every selected
@@ -2062,6 +2077,8 @@ def main():
     mine.add_argument("--ready", action="store_true", help="after a pass, mark this branch's draft pull request ready")
     ran = sub.add_parser("junit-ran", help="exit 1 unless a pytest JUnit report holds a test that was not skipped")
     ran.add_argument("report")
+    failed = sub.add_parser("failed", help="print the first failing tests in the JUnit reports in a folder")
+    failed.add_argument("folder")
     sub.add_parser("durations")
     sub.add_parser("receipt")
     sub.add_parser("smoke-check")
@@ -2089,6 +2106,8 @@ def main():
         if not junit_ran(args.report):
             print(f"{args.report}: every test skipped or none ran", file=sys.stderr)
             return 1
+    elif args.action == "failed":
+        print(", ".join(junit_failed(sorted(Path(args.folder).glob("*.xml")))))
     elif args.action == "local":
         return local(base=args.base, jobs=args.jobs, ready=args.ready)
     elif args.action == "durations":

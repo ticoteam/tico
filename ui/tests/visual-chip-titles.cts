@@ -1,4 +1,3 @@
-import type {ThreadsMessage} from './support/threads-fake.cts';
 // Visuals with inline serving off (hosted, no visual origin: every attachment's `src` is null) fall back to the usual
 // file chips and thumbnails in chat and task comments. Those show the title the sender gave the file, not its file
 // name (Dev 245 QA); the name stays in data-name for the viewer and the download. Fixtures only.
@@ -43,7 +42,7 @@ const A = (id: string, name: string, content_type: string, kind: string, title: 
   const page = await context.newPage();
   const errors: string[] = [];
   page.on('pageerror', (e: Error) => errors.push(e.message));
-  const threads = threadsFake({bot: 'designer', messages: () => messages as unknown as ThreadsMessage[]});
+  const threads = threadsFake({bot: 'designer', messages: () => messages});
   await context.route('**/*', async route => {
     const req = route.request(), url = new URL(req.url()), p = url.pathname;
     const json = (body: unknown) => route.fulfill({contentType: 'application/json', body: JSON.stringify(body)});

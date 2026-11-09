@@ -306,6 +306,8 @@ const screenshotDir = process.env.TICO_SCREENSHOT_DIR;
     // A card with related tasks shows how many, like an attachment count; one without shows nothing.
     const relCounts = await page.locator('#task-body .bcard').evaluateAll(cs => cs.map(c => c.querySelector('.bcard-rel')?.getAttribute('aria-label') || ''));
     assert.deepEqual(relCounts.filter(Boolean), ['2 related tasks']);
+    // A tag on a card shortens with an ellipsis rather than running under the chips beside it.
+    assert.equal(await page.locator('#task-body .bcard-chips .tlabel').first().evaluate(el => getComputedStyle(el).textOverflow), 'ellipsis');
     await page.locator('#task-body .bcard').first().click();
     await page.locator('#task-peek[open]').waitFor();
     assert.equal(await page.locator('#task-modal[open]').count(), 0, 'a card opens beside the board, not over it');

@@ -298,14 +298,19 @@ def late_told(run):
 
 def lead_only_scheduled(run):
     """Head of Engineering runs on its schedule (and when a person asks), never on routine notices. Its task roundup is the
-    schedule's one grouped run (each profile's roundup row, rules.PROFILE_RULES), so a roundup wake is a scheduled one."""
-    from backend import rules
+    schedule's one grouped run (each profile's roundup row, rules.PROFILE_RULES), so a roundup wake is a scheduled one.
+    The stuck rule (backend/stuck_cards.py) waking the pipeline's manager about a card with no progress is a pipeline
+    rule doing its job, not a routine notice; it reads as a blocker, so it is told apart by its wake."""
+    from backend import rules, stuck_cards
 
     roundups = {r["id"] for found in rules.PROFILE_RULES.values() for r in found if r["event"] == "task_roundup"}
     other = [
         r
         for r in run.t.bot("engineering-lead").turns
-        if r["action"] is None and r["news"] != "update" and r["news"] not in roundups
+        if r["action"] is None
+        and r["news"] != "update"
+        and r["news"] not in roundups
+        and r.get("wake") != stuck_cards.STEP
     ]
     kinds = Counter(r["news"] for r in other)
     return not other, f"{len(other)} turns on routine notices: " + ", ".join(
