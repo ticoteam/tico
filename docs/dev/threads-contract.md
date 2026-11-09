@@ -360,6 +360,11 @@ threads.apply_revision(c, origin, *, body=None, deleted=False) -> message view|N
 - Every copy of the words follows: carriers, notes, Slack posts not sent, stored retry answers, and (on a delete) a
   sub-thread's title and reactions.
 - Highest revision wins; an older or repeated `(origin_id, revision)` is ignored. A delete is final.
+- A thread delete (`threads.delete`, `DELETE /api/v2/threads/{id}`, managers only, every message in the thread already
+  deleted, no one else a member or follower, not a Home) keeps no words: in the same transaction every message in
+  its tree (the root and its sub-threads) loses its older revision bodies (its own and its origin's copies), its
+  attachment references (only its origin stays) and its files (`file_library.release_message_files`). The
+  tombstones, sequence numbers and the `thread.deleted` event stay. A single message's delete does not do this.
 - A Tico-held edit is never mirrored out: outside deliveries carry only revisions that were delivered locally.
 
 ## 4. C3: delivery

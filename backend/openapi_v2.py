@@ -9394,6 +9394,7 @@ SCHEMAS.update(
         "ThreadReadAll": obj({"threads": "i"}, required=["threads"]),
         "ThreadFollow": obj({"thread_id": "s", "following": "b", "notify": "s"}, required=["thread_id", "following"]),
         "ThreadMessageDeleted": obj({"id": "s", "deleted": "b", "revision": "i"}, required=["id", "deleted"]),
+        "ThreadDeleted": obj({"deleted": "s"}, required=["deleted"]),
     }
 )
 SCHEMAS["ThreadMessage"]["properties"]["source"] = ref("MessageSource")
@@ -9437,6 +9438,15 @@ STABLE.extend(
             "browseThreads",
             "Company and team threads the viewer may read and is not in, newest activity first; `q` matches the title. "
             "Following one puts it in the rail",
+            "ThreadBrowse",
+        ),
+        (
+            "/api/v2/threads/archived",
+            "get",
+            "Threads",
+            "listArchivedThreads",
+            "The threads the viewer archived and may still manage, newest first: Browse threads' Archived view. Unarchive is "
+            "PATCH with `archived` false. A deleted thread is not listed",
             "ThreadBrowse",
         ),
         (
@@ -9508,6 +9518,15 @@ STABLE.extend(
             "getThread",
             "A thread as the viewer sees it: its unread count, read mark, what they may do and its first page of members",
             "ThreadView",
+        ),
+        (
+            "/api/v2/threads/{thread_id}",
+            "delete",
+            "Threads",
+            "deleteThread",
+            "Delete a thread the viewer manages, when every message in it is deleted and no one else is in it; it leaves every "
+            "list and reads as not found. Otherwise 409 `not_deletable` with the reason, and nothing is removed",
+            "ThreadDeleted",
         ),
         (
             "/api/v2/threads/{thread_id}",
