@@ -7,15 +7,15 @@
 // link, Report this, Want help setting up?, old #/help links and Let the Tico team in all work through it; with
 // support off the ? is gone and the chat says so. Nothing a message says is rendered as HTML.
 import type {Page} from 'playwright';
-import type * as PageSupport from './support/page.cjs';
-import type * as Routes from './support/routes.cjs';
+import type * as PageSupport from './support/page.cts';
+import type * as Routes from './support/routes.cts';
 const {chromium} = require('playwright') as typeof import('playwright');
 const assert: typeof import('node:assert/strict') = require('node:assert/strict');
-const {html, uiFile, beta} = require('./support/page.cjs') as typeof PageSupport;
-const {unrouted} = require('./support/routes.cjs') as typeof Routes;
+const {html, uiFile, beta} = require('./support/page.cts') as PageSupport.Api;
+const {unrouted} = require('./support/routes.cts') as Routes.Api;
 const fs = require('node:fs') as typeof import('node:fs');
 // @ts-expect-error t is not called in this spec; the require stays for load.cjs's side effects
-const {t} = (() => { try { return require('./support/load.cjs') as typeof import('./support/load.cjs'); } catch { return {t: (ms: number) => ms}; } })();   // load.cjs arrives with #254
+const {t} = (() => { try { return require('./support/load.cts') as import('./support/load.cts').Api; } catch { return {t: (ms: number) => ms}; } })();   // load.cjs arrives with #254
 const INSTALL = '6f1c2a9e-3b7d-4c58-9a10-2d4e8b7f5a63';
 const DIAGNOSTICS_TEXT = '{\n  "format": 1,\n  "versions": {\n    "tico": "0.2.17"\n  }\n}';
 const HOSTILE = '<img src=x onerror="window.__pwned=1"> <b>bold</b>';

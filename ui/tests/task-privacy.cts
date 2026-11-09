@@ -1,17 +1,17 @@
-// Run with Playwright available: NODE_PATH=/path/to/node_modules node ui/tests/task-board.cjs
+// Run with Playwright available: NODE_PATH=/path/to/node_modules node ui/tests/task-board.cts
 // Every request is intercepted; this test never contacts the hub, Slack, or a bot.
 // Labels and PR links, a comment thread
 // with the author on every line (not a chat), and mover-only controls. The list itself (rows, groups, chips, the peek,
-// bulk changes, the keys) is ui/tests/tasks-page.cjs.
+// bulk changes, the keys) is ui/tests/tasks-page.cts.
 // The Product lane is retired: no lane switch, no product board, and the page
 // only asks the hub for company tasks (the product rows below must never show).
 const {chromium} = require('playwright') as typeof import('playwright');
 const assert: typeof import('node:assert/strict') = require('node:assert/strict');
 const fs = require('node:fs') as typeof import('node:fs');
 const path = require('node:path') as typeof import('node:path');
-const {html, uiFile} = require('./support/page.cjs');
-const {unrouted} = require('./support/routes.cjs');
-const {t} = (() => { try { return require('./support/load.cjs') as typeof import('./support/load.cjs'); } catch { return {t: (ms: number) => ms}; } })();   // load.cjs arrives with #254
+const {html, uiFile} = require('./support/page.cts');
+const {unrouted} = require('./support/routes.cts');
+const {t} = (() => { try { return require('./support/load.cts') as import('./support/load.cts').Api; } catch { return {t: (ms: number) => ms}; } })();   // load.cjs arrives with #254
 interface Attachment {id: string; name: string}
 interface Follower {actor: string; notify: string; reason: string}
 interface Tag {id: string; key: string; label: string; metadata: Record<string, unknown>; markdown: string; is_template: boolean; template_id: string | null; owner_id: string; version: number}

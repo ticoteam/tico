@@ -7,7 +7,7 @@ const {spawn} = require('node:child_process') as typeof import('node:child_proce
 const net = require('node:net') as typeof import('node:net');
 const path = require('node:path') as typeof import('node:path');
 const readline = require('node:readline') as typeof import('node:readline');
-const {t} = (() => { try { return require('./support/load.cjs') as typeof import('./support/load.cjs'); } catch { return {t: (ms: number) => ms}; } })();   // load.cjs arrives with #254
+const {t} = (() => { try { return require('./support/load.cts') as import('./support/load.cts').Api; } catch { return {t: (ms: number) => ms}; } })();   // load.cjs arrives with #254
 
 const ROOT = path.join(__dirname, '../..');
 const PYTHON = process.env.TICO_PYTHON || 'python3';

@@ -9,7 +9,7 @@ interface PageWin {copiedText?: string}
 declare const MEET: PageMeet;
 declare function meetPendingDraft(meet: PageMeet, id: string): PendingDraft;
 declare function meetItemsLoad(meet: PageMeet, id: string): void;
-require('./support/browser.cjs');
+require('./support/browser.cts');
 const {chromium} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
 const http = require('node:http');

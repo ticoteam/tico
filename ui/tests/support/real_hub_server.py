@@ -1,4 +1,4 @@
-"""A real Tico hub for the browser tests (ui/tests/support/real-hub.cjs): the app in-process on a fresh temporary database,
+"""A real Tico hub for the browser tests (ui/tests/support/real-hub.cts): the app in-process on a fresh temporary database,
 started from the scenario harness's world (evals/redesign/harness.py Org) and seeded by the named seeds
 (evals/redesign/seeds.py).
 

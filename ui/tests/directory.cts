@@ -2,12 +2,12 @@
 // "directory", the same rows as the demo): the list → a person → their organization → a place, on a desktop and a
 // phone. Set TICO_DIRECTORY_SHOTS to a folder to keep a screenshot of each page.
 import type {Page} from 'playwright';
-import type * as RealHubSupport from './support/real-hub.cjs';
+import type * as RealHubSupport from './support/real-hub.cts';
 const {chromium} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
 const path = require('node:path');
-const {startHub, pageAs} = require('./support/real-hub.cjs') as typeof RealHubSupport;
-const {t} = require('./support/load.cjs') as {t: (ms: number) => number};
+const {startHub, pageAs} = require('./support/real-hub.cts') as RealHubSupport.Api;
+const {t} = require('./support/load.cts') as {t: (ms: number) => number};
 
 const SHOTS = process.env.TICO_DIRECTORY_SHOTS || '';
 const shot = async (page: Page, name: string) => { if (!SHOTS) return; await page.waitForTimeout(600); await page.screenshot({path: path.join(SHOTS, `directory-${name}.png`), fullPage: true}); };

@@ -1,21 +1,18 @@
 // The Heartbeat on the Automations page (ui/app/automations-heartbeat.ts) against the fake hub's heartbeat routes
-// (support/automations-fake.cjs, `heartbeat: true`). The Heartbeat is a built-in system row right after Maintenance,
+// (support/automations-fake.cts, `heartbeat: true`). The Heartbeat is a built-in system row right after Maintenance,
 // with its runs and counts; its screen shows the interval, the last beat and the day's count, and each step grouped by
 // kind (Due times, Recovery, Outside polls) with its cadence, last result, day counts, time and last error, and Ask
 // go-ahead's switch. The interval saves one PUT; the switch saves its job. Log lists the beats that did something, newest
 // first, a page and More, a folded failure with its count, and a tap opens each step's line. The minute poll skips a
 // hidden page and reads once on coming back; a poll leaves a focused interval select alone. A member reads it with every
 // control off; a phone fits.
-import type * as AutomationsFakeSupport from './support/automations-fake.cjs';
+import type * as AutomationsFakeSupport from './support/automations-fake.cts';
 import type {Page} from 'playwright';
 const {chromium} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
 const path = require('node:path');
-const {openAutomations, PHONE, DESKTOP, sideways} = require('./support/automations-fake.cjs') as typeof AutomationsFakeSupport;
+const {openAutomations, PHONE, DESKTOP, sideways} = require('./support/automations-fake.cts') as AutomationsFakeSupport.Api;
 
-type HeartBeat = {id: string; started_at: string; total_ms: number; did: number; failed: number;
-  steps: {key: string; name: string; text: string; ms: number; error: string | null}[]};
-type HeartDb = {interval_s: number; beats: HeartBeat[]; beats_24h: number};
 type HeartPageWin = {ticoTheme: {set: (v: string) => void}};
 // Page globals from ui/app/automations-heartbeat.ts, which the page loads.
 declare const AU: {hbBusy: boolean; hbPoll: unknown};
@@ -98,7 +95,7 @@ async function themed(page: Page, name: string) {
       await until(() => writes.length === 1, 'the interval save');
       assert.deepEqual(writes.at(-1), {method: 'PUT', path: '/api/v2/heartbeat', body: {interval_s: 20}});
       await idle(page);
-      assert.equal(db.heart.interval_s, 20);
+      assert.equal(db.heart!.interval_s, 20);
       assert.equal(await page.locator('[data-hb-interval]').inputValue(), '20');
 
       // The switch saves its job; the answer is the step's row.
@@ -134,7 +131,7 @@ async function themed(page: Page, name: string) {
       assert.ok(writes.every(w => w.method === 'PUT'), 'paging writes nothing');
 
       // The safety poll: a new beat lands on top, the open one stays open and the older page stays.
-      (db.heart as HeartDb).beats.unshift({id: 'hbt_101', started_at: new Date().toISOString(), total_ms: 5, did: 1, failed: 0,
+      db.heart!.beats.unshift({id: 'hbt_101', started_at: new Date().toISOString(), total_ms: 5, did: 1, failed: 0,
         steps: [{key: 'due_reminders', name: 'Due reminders', text: '2 reminders sent', ms: 4, error: null}]});
       await page.evaluate(() => auHeartLoad(AU));
       assert.equal(await page.locator('tr.au-rr').first().getAttribute('data-hb-beat'), 'hbt_101');
@@ -143,7 +140,7 @@ async function themed(page: Page, name: string) {
       assert.equal(await page.evaluate(() => !!AU.hbPoll), true, 'polls while open');
 
       // A hidden page skips the minute's read; coming back reads once.
-      const addBeat = (id: string) => (db.heart as HeartDb).beats.unshift({id, started_at: new Date().toISOString(), total_ms: 5, did: 1, failed: 0,
+      const addBeat = (id: string) => db.heart!.beats.unshift({id, started_at: new Date().toISOString(), total_ms: 5, did: 1, failed: 0,
         steps: [{key: 'due_reminders', name: 'Due reminders', text: '3 reminders sent', ms: 4, error: null}]});
       addBeat('hbt_102');
       await page.evaluate(async () => {
@@ -165,7 +162,7 @@ async function themed(page: Page, name: string) {
       // A poll while the interval select is focused leaves it alone and moves only the meta line.
       await page.getByRole('tab', {name: 'Steps'}).click();
       await page.waitForSelector('.mt-step[data-hb-step]');
-      (db.heart as HeartDb).beats_24h = 9000;
+      db.heart!.beats_24h = 9000;
       const kept = await page.evaluate(async () => {
         const sel = document.querySelector<HTMLElement>('[data-hb-interval]')!;
         sel.dataset.mark = '1';

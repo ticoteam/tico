@@ -1,4 +1,4 @@
-import type * as Tasks from './tasks-page.cjs';
+import type * as Tasks from './tasks-page.cts';
 import type {Browser, Locator} from 'playwright';
 // A send approval in Needs you: one line in the list, and its card (a tap on the line) shows recipients, subject,
 // draft and each attached file readable (name, size, short hash),
@@ -13,7 +13,16 @@ import type {Browser, Locator} from 'playwright';
 // payload has been ready and whose decision it is ("Ready 2 h 10 min, waiting on you", or the person's name).
 const {chromium} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
-const {open} = require('./tasks-page.cjs') as typeof Tasks;
+const {open} = require('./tasks-page.cts') as Tasks.Api;
+// Page globals read inside page.evaluate (types: tasks-page.cts).
+declare var DEC: Tasks.Globals['DEC'];
+declare var S: Tasks.Globals['S'];
+declare var TASKS_ST: Tasks.Globals['TASKS_ST'];
+declare var approvalPayloadNode: Tasks.Globals['approvalPayloadNode'];
+declare var decideAct: Tasks.Globals['decideAct'];
+declare var tasksRender: Tasks.Globals['tasksRender'];
+declare var v2Refresh: Tasks.Globals['v2Refresh'];
+declare const window: Window & typeof globalThis & Pick<Tasks.WindowMarks, 'pwned'>;
 const HASH = 'a'.repeat(12) + 'b'.repeat(52), HASH2 = 'c'.repeat(64);
 const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==', 'base64');
 const approval = {id: 'ap-1', kind: 'approval', what: 'send', title: 'Approve this send', requester_id: 'bot:support',

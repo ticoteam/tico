@@ -10,8 +10,8 @@ import type {Route} from 'playwright';
 //    opens chat as a full-screen sheet, with no sideways scroll.
 const {chromium} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
-const {html, isUiPath, serveUi} = require('./support/page.cjs') as typeof import('./support/page.cjs');
-const {unrouted} = require('./support/routes.cjs') as typeof import('./support/routes.cjs');
+const {html, isUiPath, serveUi} = require('./support/page.cts') as import('./support/page.cts').Api;
+const {unrouted} = require('./support/routes.cts') as import('./support/routes.cts').Api;
 
 const map = {
   factories: [{id: 'f1', name: 'Lead factory', goal: null, manager_id: 'bot:lead', done: 12, overdue: 2, live: 1}],

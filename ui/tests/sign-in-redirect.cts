@@ -1,9 +1,9 @@
 // A 401 that names the built-in login page sends the browser there and back to the same place.
-import type * as PageSupport from './support/page.cjs';
+import type * as PageSupport from './support/page.cts';
 const {chromium} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
-const {html, uiFile} = require('./support/page.cjs') as typeof PageSupport;
+const {html, uiFile} = require('./support/page.cts') as PageSupport.Api;
 (async () => {
   const channel = process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined;
   const browser = await chromium.launch({headless: true, ...(channel ? {channel} : {})});

@@ -5,9 +5,9 @@
 // reduced motion: nothing runs after a page change or after Ask opens (base.css shortens what is left to 1ms, so a
 // 1ms animation is the rule's, not one that moves).
 import type {Page} from 'playwright';
-import type * as R from './support/redesign-e2e.cjs';
+import type * as R from './support/redesign-e2e.cts';
 const assert: typeof import('node:assert/strict') = require('node:assert/strict');
-const {run, open, go, shot, t} = require('./support/redesign-e2e.cjs') as typeof R;
+const {run, open, go, shot, t} = require('./support/redesign-e2e.cts') as R.Api;
 
 // Page-side globals the app defines (window.S, the count helper), declared for the callbacks that read them.
 declare const S: {route: string};

@@ -1,5 +1,5 @@
-import type * as PageSupport from './support/page.cjs';
-import type * as Routes from './support/routes.cjs';
+import type * as PageSupport from './support/page.cts';
+import type * as Routes from './support/routes.cts';
 // Ask (ui/app/ask-panel.ts): the person's chat bot on every page. On a computer the "Tico Assistant" row at the bottom of
 // the sidebar, with Search's icon at its end (or ⌘J), opens "Tico Assistant", a panel straight above the row that names the
 // page it sees and sends it with the message, and a close mark takes the row's dot place; on a phone the dot in the middle of the tab bar opens a sheet and closes it again. Its dot flies up to
@@ -11,8 +11,8 @@ import type * as Routes from './support/routes.cjs';
 const {chromium}: typeof import('playwright') = require('playwright');
 const assert: typeof import('node:assert/strict') = require('node:assert/strict');
 const fs: typeof import('node:fs') = require('node:fs');
-const {html, uiFile} = require('./support/page.cjs') as typeof PageSupport;
-const {unrouted} = require('./support/routes.cjs') as typeof Routes;
+const {html, uiFile} = require('./support/page.cts') as PageSupport.Api;
+const {unrouted} = require('./support/routes.cts') as Routes.Api;
 type AskMsg = {id: string; sender_id: string; body: string; refs: Record<string, unknown>; created_at: string; kind: string};
 type AskTicket = {id: string; status: string; unread: boolean; title: string; message: string; created_at: string; messages: {body: string; from: string; created_at: string}[]};
 type AskNeed = {kind: string; id: string; created_at: string; ask: Record<string, unknown>};

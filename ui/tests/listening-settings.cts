@@ -4,13 +4,13 @@
 // server's refusal shows in the form; Settings sits on What are buyers saying? for admins even before anything is heard,
 // and a member with nothing heard has neither; a phone has no sideways scroll. Fixtures only.
 import type {Browser, LaunchOptions, Locator, Page, Route} from 'playwright';
-import type * as PageSupport from './support/page.cjs';
-import type * as RouteSupport from './support/routes.cjs';
+import type * as PageSupport from './support/page.cts';
+import type * as RouteSupport from './support/routes.cts';
 const {chromium} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
-const {html, uiFile} = require('./support/page.cjs') as typeof PageSupport;
-const {unrouted} = require('./support/routes.cjs') as typeof RouteSupport;
+const {html, uiFile} = require('./support/page.cts') as PageSupport.Api;
+const {unrouted} = require('./support/routes.cts') as RouteSupport.Api;
 
 const CATEGORIES = ['market', 'content', 'lead', 'vendor_pitch'].map(id => ({id, label: id.replace('_', ' ')}));
 const RECEIVERS = [{actor: 'bot:librarian', name: 'Librarian'}, {actor: 'bot:content', name: 'Content'}, {actor: 'bot:sales-ops', name: 'Sales Ops'}];

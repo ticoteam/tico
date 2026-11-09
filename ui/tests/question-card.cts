@@ -1,4 +1,4 @@
-import type * as Tasks from './tasks-page.cjs';
+import type * as Tasks from './tasks-page.cts';
 interface QOption {label: string; then: string; recommended?: boolean; file?: string; description?: string}
 interface QQuestion {id: string; header: string; question?: string; multi?: boolean; other?: boolean; why?: string; options?: QOption[]}
 interface QItem {
@@ -15,7 +15,23 @@ interface QItem {
 // pick 3 as "not this one" (the server's answer text); Yes to all sends all four. A check from Tico says "Tico".
 const {chromium} = require('playwright') as typeof import('playwright');
 const assert: typeof import('node:assert/strict') = require('node:assert/strict');
-const {open} = require('./tasks-page.cjs') as typeof Tasks;
+const {open} = require('./tasks-page.cts') as Tasks.Api;
+// Page globals read inside page.evaluate (types: tasks-page.cts).
+declare var DEC: Tasks.Globals['DEC'];
+declare var DEC_OUTBOX: Tasks.Globals['DEC_OUTBOX'];
+declare var S: Tasks.Globals['S'];
+declare var decideOpen: Tasks.Globals['decideOpen'];
+declare var decideStop: Tasks.Globals['decideStop'];
+declare var qcardActionsHTML: Tasks.Globals['qcardActionsHTML'];
+declare var qcardBodyHTML: Tasks.Globals['qcardBodyHTML'];
+declare var qcardBoxHTML: Tasks.Globals['qcardBoxHTML'];
+declare var qcardQuestion: Tasks.Globals['qcardQuestion'];
+declare var qcardSub: Tasks.Globals['qcardSub'];
+declare var sessionKeep: Tasks.Globals['sessionKeep'];
+declare var sessionReturn: Tasks.Globals['sessionReturn'];
+declare var taskModal: Tasks.Globals['taskModal'];
+declare var taskModalShow: Tasks.Globals['taskModalShow'];
+declare var v2Refresh: Tasks.Globals['v2Refresh'];
 const NOW = Date.now(), at = (hours: number) => new Date(NOW - hours * 3600e3).toISOString();
 const BODY = 'Website sales chat: go with these picks?\n\nRun 8719e1a6 failed: ValueError: bad date in reports/chat-plan.md';
 const PICKS = [

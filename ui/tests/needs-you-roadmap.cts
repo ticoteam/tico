@@ -1,10 +1,18 @@
-import type * as Tasks from './tasks-page.cjs';
+import type * as Tasks from './tasks-page.cts';
 // The Needs you card on a Product roadmap item: it finishes or comes back only by a step move, so the card offers no
 // Done, as the task window does not; it opens the task instead, and its D key sends nothing. A yes or no on the
 // person's own roadmap item goes as a comment; on a plain task it still finishes or declines it.
 const {chromium} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
-const {open} = require('./tasks-page.cjs') as typeof Tasks;
+const {open} = require('./tasks-page.cts') as Tasks.Api;
+// Page globals read inside page.evaluate (types: tasks-page.cts).
+declare var DEC: Tasks.Globals['DEC'];
+declare var TASK_TYPES: Tasks.Globals['TASK_TYPES'];
+declare var decideOpen: Tasks.Globals['decideOpen'];
+declare var decideStepsOnly: Tasks.Globals['decideStepsOnly'];
+declare var decideWriteBody: Tasks.Globals['decideWriteBody'];
+declare var myActor: Tasks.Globals['myActor'];
+declare var v2Refresh: Tasks.Globals['v2Refresh'];
 const at = (minutes: number) => new Date(Date.now() - minutes * 60000).toISOString();
 const card = (id: string, title: string, extra: Record<string, unknown> = {}) => ({id, kind: 'task', title, body: '', owner_id: 'human:ana', requester_id: 'bot:writer', status: 'open',
   version: 1, labels: [], tags: [], links: [], lane: 'company', rank: null, parts: {total: 0, done: 0}, created_at: at(60), updated_at: at(60),

@@ -3,8 +3,8 @@
 const {chromium} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
-const {html, uiFile} = require('./support/page.cjs') as typeof import('./support/page.cjs');
-const {unrouted} = require('./support/routes.cjs') as typeof import('./support/routes.cjs');
+const {html, uiFile} = require('./support/page.cts') as import('./support/page.cts').Api;
+const {unrouted} = require('./support/routes.cts') as import('./support/routes.cts').Api;
 (async () => {
   const browser = await chromium.launch({headless: true, channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined} as import('playwright').LaunchOptions);
   try {

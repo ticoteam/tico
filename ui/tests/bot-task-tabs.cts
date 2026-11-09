@@ -1,5 +1,5 @@
-import type * as PageSupport from './support/page.cjs';
-import type * as Routes from './support/routes.cjs';
+import type * as PageSupport from './support/page.cts';
+import type * as Routes from './support/routes.cts';
 import type {Browser, BrowserContext, Page, ViewportSize} from 'playwright';
 // A bot's editable sidebar (backend/bot_task_tabs.py, ui/app/bot-sidebar.ts): until the layout arrives the rail says
 // Loading; one pencil (for someone who may edit) opens edit mode in place, with Done and Cancel. There each widget
@@ -11,8 +11,8 @@ import type {Browser, BrowserContext, Page, ViewportSize} from 'playwright';
 const {chromium}: typeof import('playwright') = require('playwright');
 const assert: typeof import('node:assert/strict') = require('node:assert/strict');
 const fs: typeof import('node:fs') = require('node:fs');
-const {html, uiFile} = require('./support/page.cjs') as typeof PageSupport;
-const {unrouted} = require('./support/routes.cjs') as typeof Routes;
+const {html, uiFile} = require('./support/page.cts') as PageSupport.Api;
+const {unrouted} = require('./support/routes.cts') as Routes.Api;
 
 declare const window: Window & typeof globalThis & {
   refreshing?: unknown;

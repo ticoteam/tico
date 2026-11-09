@@ -2,13 +2,13 @@
 // has a red dot and names the folder on hover; the pop-up names the folder on screen, offers no Sign in or Add key for
 // it, and the bot's line says the folder problem, not "Signed out". Every request is intercepted.
 import type {LaunchOptions, Route} from 'playwright';
-import type * as PageSupport from './support/page.cjs';
-import type * as RouteSupport from './support/routes.cjs';
+import type * as PageSupport from './support/page.cts';
+import type * as RouteSupport from './support/routes.cts';
 const {chromium} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
-const {html, uiFile} = require('./support/page.cjs') as typeof PageSupport;
-const {unrouted} = require('./support/routes.cjs') as typeof RouteSupport;
+const {html, uiFile} = require('./support/page.cts') as PageSupport.Api;
+const {unrouted} = require('./support/routes.cts') as RouteSupport.Api;
 // The Computers page's readiness and connection lines (backend/subscriptions.py) as the fixture writes them.
 interface RuntimeState {installed: boolean; authenticated: string; detail?: string; data_problem?: string; profiles?: Record<string, unknown>}
 interface Box {

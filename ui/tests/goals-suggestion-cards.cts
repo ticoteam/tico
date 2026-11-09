@@ -7,14 +7,14 @@
 // one-line box and Send: Send saves the reason (POST .../note), a refusal shows beside the box, leaving it does nothing.
 // Fixtures only.
 import type {Route} from 'playwright';
-import type * as PageSupport from './support/page.cjs';
-import type * as RouteSupport from './support/routes.cjs';
+import type * as PageSupport from './support/page.cts';
+import type * as RouteSupport from './support/routes.cts';
 const {chromium} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const {html, uiFile} = require('./support/page.cjs') as typeof PageSupport;
-const {unrouted} = require('./support/routes.cjs') as typeof RouteSupport;
+const {html, uiFile} = require('./support/page.cts') as PageSupport.Api;
+const {unrouted} = require('./support/routes.cts') as RouteSupport.Api;
 const screenshotDir = process.env.TICO_SCREENSHOT_DIR;
 
 const bot = (name: string, display_name: string, org_parent: string, over?: Record<string, unknown>) => ({name, display_name, org_parent, host: 'keeper', status: 'active', can_chat: true, ...over});
