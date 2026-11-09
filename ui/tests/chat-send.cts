@@ -1,0 +1,91 @@
+// Offline browser regression: the Assistant's Send never does nothing (ui/app/assistant-page.ts). A send the server
+// refuses, or answers without a message (a sign-in page), says so and keeps the draft; Return during a send that is
+// still out sends after it; text that arrived without an input event (autofill, a tool filling the box) still sends on
+// a click and shows in the thread. A bot's DM composer is in threads.cjs.
+import type * as PageSupport from './support/page.cjs';
+import type * as Routes from './support/routes.cjs';
+import type * as AssistantChat from './support/assistant-chat.cjs';
+const {chromium}: typeof import('playwright') = require('playwright');
+const assert: typeof import('node:assert/strict') = require('node:assert/strict');
+const fs: typeof import('node:fs') = require('node:fs');
+const {html, uiFile} = require('./support/page.cjs') as typeof PageSupport;
+const {unrouted} = require('./support/routes.cjs') as typeof Routes;
+const {assistantView} = require('./support/assistant-chat.cjs') as typeof AssistantChat;
+interface ThreadMessage {id: string; sender_id: string; body: string; created_at: string}
+declare const V2C: {loaded?: boolean} | null;
+const launch = () => chromium.launch({headless: true, channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined} as import('playwright').LaunchOptions);
+
+(async () => {
+  const browser = await launch();
+  try {
+    const page = await browser.newPage({viewport: {width: 1200, height: 800}, serviceWorkers: 'block'});
+    const errors: string[] = [], sends: string[] = [], thread: ThreadMessage[] = [];
+    page.on('pageerror', e => errors.push(e.message));
+    let answer = 'ok';
+    await page.route('**/*', async route => {
+      const url = new URL(route.request().url()), p = url.pathname;
+      const json = (body: unknown, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
+      const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/);
+      if (ui && fs.existsSync(uiFile(ui[1] as string)))
+        return route.fulfill({contentType: (ui[1] as string).endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1] as string), 'utf8')});
+      if (/\.(?:js|ts)$/.test(p)) return route.fulfill({contentType: 'application/javascript', body: ''});
+      if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
+      if (p === '/api/me') return json({id: 'ana', name: 'Ana', role: 'owner', cloud: true});
+      if (p === '/api/employees') return json([{id: 'coo', slug: 'coo', name: 'coo', display_name: 'Assistant', host: 'keeper', status: 'active', can_chat: true, schedules: []}]);
+      if (p === '/api/issues') return json([]);
+      if (p === '/api/v2/assistant') return json(assistantView('c1', {messages: thread}));
+      if (p === '/api/v2/conversations/c1/snapshot') return json({messages: thread, execution: null});
+      if (p.endsWith('/watch')) return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});
+      if (p === '/api/v2/assistant/messages') {
+        const text = route.request().postDataJSON().text;
+        if (answer === 'error') return json({error: {code: 'internal', detail: 'Server error'}}, 500);
+        if (answer === 'html') return route.fulfill({contentType: 'text/html', body: '<!doctype html><title>Sign in</title>'});
+        if (answer === 'slow') await new Promise(r => setTimeout(r, 700));
+        sends.push(text);
+        const message: ThreadMessage = {id: 'm' + sends.length, sender_id: 'human:ana', body: text, created_at: new Date().toISOString()};
+        thread.push(message);
+        return json({message});
+      }
+      return json(unrouted(p));
+    });
+    await page.goto('https://tico-ui.test/#/assistant');
+    const box = page.locator('#chat-composer textarea');
+    const value = () => box.inputValue();
+    await box.waitFor();
+    await page.waitForFunction(() => V2C?.loaded);
+    const clearToasts = () => page.evaluate(() => document.querySelectorAll('.toast').forEach(t => t.remove()));
+
+    // The server refuses: an error shows and the draft stays.
+    answer = 'error';
+    await box.fill('Refused by the server'); await page.keyboard.press('Enter');
+    await page.waitForFunction(() => document.querySelector('.toast.err'));
+    assert.equal(await value(), 'Refused by the server', 'a refused send keeps the draft');
+    await clearToasts();
+
+    // A 200 that created nothing (a sign-in page in front of the API) is not a send either.
+    answer = 'html';
+    await box.fill('Answered by a sign-in page'); await page.click('#chat-composer .p-send');
+    await page.waitForFunction(() => document.querySelector('.toast.err'));
+    assert.equal(await value(), 'Answered by a sign-in page', 'the draft stays');
+    assert.deepEqual(sends, []);
+    await clearToasts();
+
+    // Text put in the box without an input event still sends on a click.
+    answer = 'ok';
+    await page.evaluate(() => { (document.querySelector('#chat-composer textarea') as HTMLTextAreaElement).value = 'Filled by a tool'; });
+    await page.click('#chat-composer .p-send');
+    await page.waitForFunction(() => !(document.querySelector('#chat-composer textarea') as HTMLTextAreaElement).value);
+    assert.deepEqual(sends, ['Filled by a tool']);
+    await page.locator('#conv-thread', {hasText: 'Filled by a tool'}).waitFor();
+
+    // Return while the previous send is still out: the second message follows it instead of vanishing.
+    answer = 'slow';
+    await box.fill('First of two'); await page.keyboard.press('Enter');
+    await box.fill('Second of two'); await page.keyboard.press('Enter');
+    await page.waitForFunction(() => document.querySelector('#conv-thread')?.textContent.includes('Second of two'));
+    assert.deepEqual(sends.slice(-2), ['First of two', 'Second of two']);
+    assert.equal(await value(), '', 'both went; the box is empty');
+    assert.deepEqual(errors, []);
+    console.log('ok');
+  } finally { await browser.close(); }
+})().catch(e => { console.error(e); process.exit(1); });
