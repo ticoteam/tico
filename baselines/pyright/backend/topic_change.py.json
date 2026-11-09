@@ -1,0 +1,14 @@
+{
+    "files": {
+        "./backend/topic_change.py": [
+            {
+                "code": "reportOptionalSubscript",
+                "range": {
+                    "startColumn": 52,
+                    "endColumn": 56,
+                    "lineCount": 1
+                }
+            }
+        ]
+    }
+}

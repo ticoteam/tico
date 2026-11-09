@@ -1,0 +1,6 @@
+{
+  "backend/observability.py": {
+    "BLE001": 3,
+    "S110": 2
+  }
+}

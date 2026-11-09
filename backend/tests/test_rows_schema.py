@@ -115,6 +115,7 @@ TABLES = {
     rows.EntityValueRow: "entity_values",
     rows.EntityViewRow: "entity_views",
     rows.LinkTypeRow: "link_types",
+    rows.SetupHandoffRow: "setup_handoffs",
 }
 
 

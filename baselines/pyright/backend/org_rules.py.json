@@ -1,0 +1,14 @@
+{
+    "files": {
+        "./backend/org_rules.py": [
+            {
+                "code": "reportOptionalSubscript",
+                "range": {
+                    "startColumn": 43,
+                    "endColumn": 49,
+                    "lineCount": 1
+                }
+            }
+        ]
+    }
+}
