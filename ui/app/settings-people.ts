@@ -410,7 +410,7 @@ function peopleOwnerDialog(p: SettingsAccessPerson, view: SettingsAccessView) {
   const form = d.querySelector('form'), go = form.querySelector('[type=submit]');
   go.disabled = true;
   d.querySelector('[data-people-cancel]').onclick = () => d.close();
-  form.typed.oninput = (event: Event) => { go.disabled = form.typed.value.trim().toLowerCase() !== p.email.toLowerCase(); };
+  form.typed.oninput = () => { go.disabled = form.typed.value.trim().toLowerCase() !== p.email.toLowerCase(); };
   form.onsubmit = async (event: Event) => {
     event.preventDefault();
     form.querySelectorAll('button').forEach((b: HTMLButtonElement) => b.disabled = true);
