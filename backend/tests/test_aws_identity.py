@@ -1,5 +1,6 @@
 """TICO_EXPECTED_AWS_ACCOUNT / TICO_EXPECTED_AWS_ROLE: the server and the Slack gateway refuse to start as another AWS
 identity. STS is always stubbed here."""
+
 import textwrap
 
 import pytest
@@ -43,18 +44,28 @@ def test_another_account_is_refused_naming_both():
     assert not ok and "999999999999" in message and ACCOUNT in message and "\n" not in message
 
 
-@pytest.mark.parametrize("role", ["tico-server", f"arn:aws:iam::{ACCOUNT}:role/tico-server",
-                                  f"arn:aws:iam::{ACCOUNT}:role/service/tico/tico-server"])
+@pytest.mark.parametrize(
+    "role",
+    [
+        "tico-server",
+        f"arn:aws:iam::{ACCOUNT}:role/tico-server",
+        f"arn:aws:iam::{ACCOUNT}:role/service/tico/tico-server",
+    ],
+)
 def test_role_by_name_or_arn_with_a_path(role):
     ok, message = run(FakeSTS(), TICO_EXPECTED_AWS_ACCOUNT=ACCOUNT, TICO_EXPECTED_AWS_ROLE=role)
     assert ok and "tico-server" in message
-    ok, _ = run(FakeSTS(arn=f"arn:aws:iam::{ACCOUNT}:role/tico-server"), TICO_EXPECTED_AWS_ACCOUNT=ACCOUNT,
-                TICO_EXPECTED_AWS_ROLE=role)
+    ok, _ = run(
+        FakeSTS(arn=f"arn:aws:iam::{ACCOUNT}:role/tico-server"),
+        TICO_EXPECTED_AWS_ACCOUNT=ACCOUNT,
+        TICO_EXPECTED_AWS_ROLE=role,
+    )
     assert ok
 
 
-@pytest.mark.parametrize("arn", [f"arn:aws:sts::{ACCOUNT}:assumed-role/tico-admin/i-0abc",
-                                 f"arn:aws:iam::{ACCOUNT}:user/tico-server"])
+@pytest.mark.parametrize(
+    "arn", [f"arn:aws:sts::{ACCOUNT}:assumed-role/tico-admin/i-0abc", f"arn:aws:iam::{ACCOUNT}:user/tico-server"]
+)
 def test_another_role_or_a_user_is_refused(arn):
     ok, message = run(FakeSTS(arn=arn), TICO_EXPECTED_AWS_ACCOUNT=ACCOUNT, TICO_EXPECTED_AWS_ROLE="tico-server")
     assert not ok and arn in message and "tico-server" in message
@@ -63,21 +74,29 @@ def test_another_role_or_a_user_is_refused(arn):
 def test_no_credentials_or_no_answer_is_refused():
     ok, message = run(FakeSTS(error=NoCredentialsError()), TICO_EXPECTED_AWS_ACCOUNT=ACCOUNT)
     assert not ok and "no AWS credentials" in message and ACCOUNT in message
-    ok, message = run(FakeSTS(error=EndpointConnectionError(endpoint_url="https://sts.amazonaws.com")),
-                      TICO_EXPECTED_AWS_ACCOUNT=ACCOUNT)
+    ok, message = run(
+        FakeSTS(error=EndpointConnectionError(endpoint_url="https://sts.amazonaws.com")),
+        TICO_EXPECTED_AWS_ACCOUNT=ACCOUNT,
+    )
     assert not ok and "could not confirm" in message
     denied = ClientError({"Error": {"Code": "InvalidClientTokenId", "Message": "bad"}}, "GetCallerIdentity")
     ok, message = run(FakeSTS(error=denied), TICO_EXPECTED_AWS_ACCOUNT=ACCOUNT)
     assert not ok and "could not confirm" in message and "InvalidClientTokenId" in message
 
 
-@pytest.mark.parametrize("env, needle", [
-    ({"TICO_EXPECTED_AWS_ACCOUNT": "12345"}, "12-digit"),
-    ({"TICO_EXPECTED_AWS_ACCOUNT": "1234-5678-9012"}, "12-digit"),
-    ({"TICO_EXPECTED_AWS_ROLE": "tico-server"}, "TICO_EXPECTED_AWS_ACCOUNT"),
-    ({"TICO_EXPECTED_AWS_ACCOUNT": ACCOUNT, "TICO_EXPECTED_AWS_ROLE": "bad role"}, "role name"),
-    ({"TICO_EXPECTED_AWS_ACCOUNT": ACCOUNT, "TICO_EXPECTED_AWS_ROLE": "arn:aws:iam::999999999999:role/x"}, "999999999999"),
-])
+@pytest.mark.parametrize(
+    "env, needle",
+    [
+        ({"TICO_EXPECTED_AWS_ACCOUNT": "12345"}, "12-digit"),
+        ({"TICO_EXPECTED_AWS_ACCOUNT": "1234-5678-9012"}, "12-digit"),
+        ({"TICO_EXPECTED_AWS_ROLE": "tico-server"}, "TICO_EXPECTED_AWS_ACCOUNT"),
+        ({"TICO_EXPECTED_AWS_ACCOUNT": ACCOUNT, "TICO_EXPECTED_AWS_ROLE": "bad role"}, "role name"),
+        (
+            {"TICO_EXPECTED_AWS_ACCOUNT": ACCOUNT, "TICO_EXPECTED_AWS_ROLE": "arn:aws:iam::999999999999:role/x"},
+            "999999999999",
+        ),
+    ],
+)
 def test_bad_settings_are_refused_before_any_call(env, needle):
     sts = FakeSTS()
     ok, message = run(sts, **env)
@@ -86,6 +105,7 @@ def test_bad_settings_are_refused_before_any_call(env, needle):
 
 def test_the_client_has_short_timeouts(monkeypatch):
     import boto3
+
     seen = {}
     monkeypatch.setattr(boto3, "client", lambda service, **options: seen.update(service=service, **options))
     aws_identity.sts_client({})
@@ -98,16 +118,22 @@ def other_account(tmp_path):
     """Environment whose python sees a boto3 stub reporting another account, so no real STS is reached."""
     fake = tmp_path / "fake" / "boto3"
     fake.mkdir(parents=True)
-    (fake / "__init__.py").write_text(textwrap.dedent("""\
+    (fake / "__init__.py").write_text(
+        textwrap.dedent("""\
         class _STS:
             def get_caller_identity(self):
                 return {"Account": "999999999999", "Arn": "arn:aws:sts::999999999999:assumed-role/other/s"}
         def client(service, **options):
             assert service == "sts"
             return _STS()
-    """))
-    return {"TICO_EXPECTED_AWS_ACCOUNT": ACCOUNT, "PYTHONPATH": f"{fake.parent}:{ROOT}",
-            "AWS_CONFIG_FILE": "/dev/null", "AWS_SHARED_CREDENTIALS_FILE": "/dev/null"}
+    """)
+    )
+    return {
+        "TICO_EXPECTED_AWS_ACCOUNT": ACCOUNT,
+        "PYTHONPATH": f"{fake.parent}:{ROOT}",
+        "AWS_CONFIG_FILE": "/dev/null",
+        "AWS_SHARED_CREDENTIALS_FILE": "/dev/null",
+    }
 
 
 REFUSED = f"refusing to start: AWS account is 999999999999, expected {ACCOUNT}"
@@ -128,4 +154,4 @@ def test_a_mismatch_stops_restore_before_the_backup_is_read_or_the_database_move
     assert result.returncode != 0 and REFUSED in result.stderr
     assert sorted(item.name for item in data.iterdir()) == ["credential.key", "hub.sqlite"]
     assert (data / "hub.sqlite").read_bytes() == b"current" and (data / "credential.key").read_bytes() == b"\x01" * 32
-    assert not (tmp_path / "stub.log").exists()          # litestream was never run
+    assert not (tmp_path / "stub.log").exists()  # litestream was never run

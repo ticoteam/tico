@@ -1,4 +1,5 @@
 """TICO_S3_VIEW_URLS: read from the environment, validated, and handed to signed-in clients in /api/v2/config."""
+
 import logging
 
 from backend.config import Settings
@@ -21,8 +22,11 @@ def test_the_server_reads_the_setting_and_drops_bad_entries(monkeypatch, tmp_pat
 
 def test_tico_s_own_file_bucket_is_refused(tmp_path, caplog):
     with caplog.at_level(logging.WARNING, logger="tico.config"):
-        settings = Settings(db_path=tmp_path / "hub.db", blob_bucket="s3://tico-blobs/files",
-                            s3_view_urls="tico-blobs=https://d9.example, acme-files=https://d1.example")
+        settings = Settings(
+            db_path=tmp_path / "hub.db",
+            blob_bucket="s3://tico-blobs/files",
+            s3_view_urls="tico-blobs=https://d9.example, acme-files=https://d1.example",
+        )
     assert settings.s3_view_urls == {"acme-files": "https://d1.example"}
     assert any("tico-blobs" in r.getMessage() and "TICO_BLOB_BUCKET" in r.getMessage() for r in caplog.records)
 

@@ -39,11 +39,18 @@ async fn git(root: &Path, args: &[&str]) -> Option<(bool, String)> {
     cmd.args(crate::safegit::args(root))
         .args(args)
         .env_clear()
-        .envs(crate::safegit::clean_environment(&crate::env::process_environment()))
+        .envs(crate::safegit::clean_environment(
+            &crate::env::process_environment(),
+        ))
         .stdin(std::process::Stdio::null())
         .kill_on_drop(true);
-    let out = tokio::time::timeout(Duration::from_secs(30), cmd.output()).await.ok()?.ok()?;
-    let text = String::from_utf8_lossy(&out.stdout).replace("\r\n", "\n").replace('\r', "\n");
+    let out = tokio::time::timeout(Duration::from_secs(30), cmd.output())
+        .await
+        .ok()?
+        .ok()?;
+    let text = String::from_utf8_lossy(&out.stdout)
+        .replace("\r\n", "\n")
+        .replace('\r', "\n");
     Some((out.status.success(), text))
 }
 
@@ -70,7 +77,8 @@ async fn commits(root: &Path) -> Vec<Commit> {
         "log".to_string(),
         format!("-n{MAX_COMMITS}"),
         "--no-merges".into(),
-        "--format=%H%x1f%an%x1f%aI%x1f%s%x1f%(trailers:key=Tico-Run,valueonly,separator=%x2c)%x1e".into(),
+        "--format=%H%x1f%an%x1f%aI%x1f%s%x1f%(trailers:key=Tico-Run,valueonly,separator=%x2c)%x1e"
+            .into(),
         "HEAD".into(),
         "--".into(),
     ];
@@ -94,7 +102,13 @@ async fn commits(root: &Path) -> Vec<Commit> {
 async fn details(root: &Path, sha: &str, with_diff: bool) -> (Vec<String>, String, bool) {
     let mut names = vec!["show", "--format=", "--name-only", sha, "--"];
     names.extend_from_slice(FOLDERS);
-    let files: Vec<String> = git_out(root, &names).await.unwrap_or_default().lines().filter(|l| !l.is_empty()).map(String::from).collect();
+    let files: Vec<String> = git_out(root, &names)
+        .await
+        .unwrap_or_default()
+        .lines()
+        .filter(|l| !l.is_empty())
+        .map(String::from)
+        .collect();
     let diff = if with_diff {
         let mut show = vec!["show", "--format=", "--no-color", "--unified=2", sha, "--"];
         show.extend_from_slice(FOLDERS);
@@ -169,7 +183,15 @@ pub fn dumps_sorted(v: &Value) -> String {
 
 /// Send what Tico has not heard about this bot's memory. Never fails; returns how many commits went.
 /// `before` is the checkout's HEAD when the turn began; `own_turn` says commits since then are that turn's.
-pub async fn report(state: &State, client: &Client, bot: &str, root: &Path, attempt: &str, before: &str, own_turn: bool) -> usize {
+pub async fn report(
+    state: &State,
+    client: &Client,
+    bot: &str,
+    root: &Path,
+    attempt: &str,
+    before: &str,
+    own_turn: bool,
+) -> usize {
     if !root.join(".git").exists() {
         return 0;
     }
@@ -177,18 +199,38 @@ pub async fn report(state: &State, client: &Client, bot: &str, root: &Path, atte
     let known: Result<Known, String> = state.with(|c| {
         c.execute_batch(TABLES)?;
         let mut q = c.prepare("SELECT sha, shared, attempt FROM memory_reported WHERE bot=?1")?;
-        let known = q.query_map([bot], |r| Ok((r.get::<_, String>(0)?, (r.get::<_, i64>(1)? != 0, r.get::<_, String>(2)?))))?.collect::<rusqlite::Result<HashMap<_, _>>>()?;
+        let known = q
+            .query_map([bot], |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    (r.get::<_, i64>(1)? != 0, r.get::<_, String>(2)?),
+                ))
+            })?
+            .collect::<rusqlite::Result<HashMap<_, _>>>()?;
         let mut q = c.prepare("SELECT path, digest FROM memory_documents WHERE bot=?1")?;
-        let docs = q.query_map([bot], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?.collect::<rusqlite::Result<HashMap<_, _>>>()?;
+        let docs = q
+            .query_map([bot], |r| {
+                Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+            })?
+            .collect::<rusqlite::Result<HashMap<_, _>>>()?;
         Ok((known, docs))
     });
     let Ok((known, sent_docs)) = known else {
-        log(&format!("Tico runner: {bot}: memory history not reported (OperationalError)"));
+        log(&format!(
+            "Tico runner: {bot}: memory history not reported (OperationalError)"
+        ));
         return 0;
     };
-    let upstream = git_out(root, &["rev-parse", "--verify", "-q", "@{u}"]).await.is_some();
+    let upstream = git_out(root, &["rev-parse", "--verify", "-q", "@{u}"])
+        .await
+        .is_some();
     let ours: HashSet<String> = if own_turn && !before.is_empty() {
-        git_out(root, &["rev-list", &format!("{before}..HEAD")]).await.unwrap_or_default().split_whitespace().map(String::from).collect()
+        git_out(root, &["rev-list", &format!("{before}..HEAD")])
+            .await
+            .unwrap_or_default()
+            .split_whitespace()
+            .map(String::from)
+            .collect()
     } else {
         HashSet::new()
     };
@@ -206,7 +248,10 @@ pub async fn report(state: &State, client: &Client, bot: &str, root: &Path, atte
         if old.is_some_and(|(shared, a)| *shared && (!a.is_empty() || run.is_empty())) {
             continue;
         }
-        let shared = upstream && git(root, &["merge-base", "--is-ancestor", &commit.sha, "@{u}"]).await.is_some_and(|(ok, _)| ok);
+        let shared = upstream
+            && git(root, &["merge-base", "--is-ancestor", &commit.sha, "@{u}"])
+                .await
+                .is_some_and(|(ok, _)| ok);
         if old.is_some_and(|(was, a)| (*was || !shared) && (!a.is_empty() || run.is_empty())) {
             continue;
         }
@@ -225,7 +270,9 @@ pub async fn report(state: &State, client: &Client, bot: &str, root: &Path, atte
     if upstream {
         for rel in DOCUMENTS {
             // The upstream's copy: what is only on this computer stays here.
-            let Some(text) = git_out(root, &["show", &format!("@{{u}}:{rel}")]).await else { continue };
+            let Some(text) = git_out(root, &["show", &format!("@{{u}}:{rel}")]).await else {
+                continue;
+            };
             if text.len() > MAX_DOCUMENT_BYTES {
                 if sent_docs.get(*rel).map(String::as_str) != Some("oversized") {
                     oversized.push(rel.to_string());
@@ -247,8 +294,15 @@ pub async fn report(state: &State, client: &Client, bot: &str, root: &Path, atte
     }
     // A file may return to earlier content after being oversized. Do not replay an old HTTP receipt.
     // Client retries keep this key; a later report is a fresh operation (record() remains idempotent).
-    let key = format!("memory:{bot}:{}:{}", &crate::files_publish::sha256_hex(dumps_sorted(&body).as_bytes())[..32], uuid::Uuid::new_v4());
-    if let Err(e) = client.post(&format!("bots/{bot}/memory/report"), &body, Some(&key)).await {
+    let key = format!(
+        "memory:{bot}:{}:{}",
+        &crate::files_publish::sha256_hex(dumps_sorted(&body).as_bytes())[..32],
+        uuid::Uuid::new_v4()
+    );
+    if let Err(e) = client
+        .post(&format!("bots/{bot}/memory/report"), &body, Some(&key))
+        .await
+    {
         // An older server has no such route: nothing to report to, and nothing lost (git still has it).
         if e.status != 404 {
             log(&format!("Tico runner: {bot}: memory history not reported ({}); it goes with the next report", crate::runner::describe(&e)));
@@ -279,8 +333,18 @@ mod tests {
     use super::*;
 
     fn sh(dir: &Path, script: &str) {
-        let out = std::process::Command::new("/bin/sh").arg("-c").arg(script).current_dir(dir).env("GIT_CONFIG_GLOBAL", "/dev/null").output().unwrap();
-        assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+        let out = std::process::Command::new("/bin/sh")
+            .arg("-c")
+            .arg(script)
+            .current_dir(dir)
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
     }
 
     async fn hub() -> (String, std::sync::Arc<std::sync::Mutex<Vec<String>>>) {
@@ -291,7 +355,9 @@ mod tests {
         let log_ = seen.clone();
         tokio::spawn(async move {
             loop {
-                let Ok((mut sock, _)) = listener.accept().await else { return };
+                let Ok((mut sock, _)) = listener.accept().await else {
+                    return;
+                };
                 let mut got = vec![];
                 let mut buf = vec![0u8; 65536];
                 loop {
@@ -299,14 +365,23 @@ mod tests {
                     got.extend_from_slice(&buf[..n]);
                     let text = String::from_utf8_lossy(&got).to_string();
                     let done = text.find("\r\n\r\n").is_some_and(|h| {
-                        let length = text[..h].lines().find_map(|l| l.to_ascii_lowercase().strip_prefix("content-length:").map(|v| v.trim().parse::<usize>().unwrap_or(0))).unwrap_or(0);
+                        let length = text[..h]
+                            .lines()
+                            .find_map(|l| {
+                                l.to_ascii_lowercase()
+                                    .strip_prefix("content-length:")
+                                    .map(|v| v.trim().parse::<usize>().unwrap_or(0))
+                            })
+                            .unwrap_or(0);
                         got.len() >= h + 4 + length
                     });
                     if n == 0 || done {
                         break;
                     }
                 }
-                log_.lock().unwrap().push(String::from_utf8_lossy(&got).to_string());
+                log_.lock()
+                    .unwrap()
+                    .push(String::from_utf8_lossy(&got).to_string());
                 let _ = sock.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}").await;
             }
         });
@@ -315,7 +390,8 @@ mod tests {
 
     #[tokio::test]
     async fn memory_commits_go_once_with_their_run_and_a_diff_only_once_pushed() {
-        let dir = std::env::temp_dir().join(format!("tico-memory-{}", uuid::Uuid::new_v4().simple()));
+        let dir =
+            std::env::temp_dir().join(format!("tico-memory-{}", uuid::Uuid::new_v4().simple()));
         std::fs::create_dir_all(dir.join("origin")).unwrap();
         sh(&dir, "git init -q --bare origin.git && git init -q -b main bot && cd bot && git config user.email b@x && git config user.name Bot && mkdir memory && echo one > memory/learnings.md && git add . && git commit -qm 'First learning' && git remote add origin ../origin.git && git push -q -u origin main");
         let root = dir.join("bot");
@@ -324,7 +400,10 @@ mod tests {
         let state = State::open(&dir.join("state")).unwrap();
         let (url, seen) = hub().await;
         let client = Client::new(&url, "t", 5, 0).unwrap();
-        assert_eq!(report(&state, &client, "ops", &root, "att-9", &before, true).await, 2);
+        assert_eq!(
+            report(&state, &client, "ops", &root, "att-9", &before, true).await,
+            2
+        );
         let body = |i: usize| -> Value {
             let r = seen.lock().unwrap()[i].clone();
             serde_json::from_str(&r[r.find("\r\n\r\n").unwrap() + 4..]).unwrap()
@@ -332,24 +411,55 @@ mod tests {
         let first = body(0);
         let commits = first["commits"].as_array().unwrap();
         assert_eq!(commits[0]["subject"], "Second learning");
-        assert_eq!((commits[0]["attempt"].as_str(), commits[0]["shared"].as_bool(), commits[0]["diff"].as_str()), (Some("att-9"), Some(false), Some("")));
-        assert_eq!((commits[1]["attempt"].as_str(), commits[1]["shared"].as_bool()), (Some(""), Some(true)));
+        assert_eq!(
+            (
+                commits[0]["attempt"].as_str(),
+                commits[0]["shared"].as_bool(),
+                commits[0]["diff"].as_str()
+            ),
+            (Some("att-9"), Some(false), Some(""))
+        );
+        assert_eq!(
+            (
+                commits[1]["attempt"].as_str(),
+                commits[1]["shared"].as_bool()
+            ),
+            (Some(""), Some(true))
+        );
         assert!(commits[1]["diff"].as_str().unwrap().contains("+one"));
         assert_eq!(first["documents"], json!({"memory/learnings.md": "one\n"}));
         let request = seen.lock().unwrap()[0].clone();
-        assert!(request.to_lowercase().contains(&format!("idempotency-key: memory:ops:{}", &crate::files_publish::sha256_hex(dumps_sorted(&first).as_bytes())[..32])));
-        assert_eq!(report(&state, &client, "ops", &root, "", "", false).await, 0, "nothing new");
+        assert!(request.to_lowercase().contains(&format!(
+            "idempotency-key: memory:ops:{}",
+            &crate::files_publish::sha256_hex(dumps_sorted(&first).as_bytes())[..32]
+        )));
+        assert_eq!(
+            report(&state, &client, "ops", &root, "", "", false).await,
+            0,
+            "nothing new"
+        );
         sh(&root, "git push -q");
-        assert_eq!(report(&state, &client, "ops", &root, "", "", false).await, 1, "pushed: the commit goes again with its diff");
+        assert_eq!(
+            report(&state, &client, "ops", &root, "", "", false).await,
+            1,
+            "pushed: the commit goes again with its diff"
+        );
         let again = body(1);
-        assert!(again["commits"][0]["diff"].as_str().unwrap().contains("+two"));
-        assert_eq!(again["documents"], json!({"memory/learnings.md": "one\ntwo\n"}));
+        assert!(again["commits"][0]["diff"]
+            .as_str()
+            .unwrap()
+            .contains("+two"));
+        assert_eq!(
+            again["documents"],
+            json!({"memory/learnings.md": "one\ntwo\n"})
+        );
         std::fs::remove_dir_all(dir).ok();
     }
 
     #[tokio::test]
     async fn oversized_documents_count_bytes_and_resend_when_the_old_content_fits_again() {
-        let dir = std::env::temp_dir().join(format!("tico-memory-{}", uuid::Uuid::new_v4().simple()));
+        let dir =
+            std::env::temp_dir().join(format!("tico-memory-{}", uuid::Uuid::new_v4().simple()));
         std::fs::create_dir_all(&dir).unwrap();
         sh(&dir, "git init -q --bare origin.git && git init -q -b main bot && cd bot && git config user.email b@x && git config user.name Bot && mkdir memory && echo original > memory/learnings.md && git add . && git commit -qm initial && git remote add origin ../origin.git && git push -q -u origin main");
         let root = dir.join("bot");
@@ -364,27 +474,52 @@ mod tests {
         sh(&root, "git commit -qam large && git push -q");
         report(&state, &client, "ops", &root, "", "", false).await;
         let request = seen.lock().unwrap()[1].clone();
-        let body: Value = serde_json::from_str(&request[request.find("\r\n\r\n").unwrap() + 4..]).unwrap();
+        let body: Value =
+            serde_json::from_str(&request[request.find("\r\n\r\n").unwrap() + 4..]).unwrap();
         assert_eq!(body["oversized"], json!([DOCUMENTS[0]]));
         assert_eq!(body["documents"], json!({}));
         report(&state, &client, "ops", &root, "", "", false).await;
-        assert_eq!(seen.lock().unwrap().len(), 2, "unchanged oversize need not report again");
+        assert_eq!(
+            seen.lock().unwrap().len(),
+            2,
+            "unchanged oversize need not report again"
+        );
         // Return to the very same upstream commit: the document must resend without any new commit rows.
-        sh(&root, "git reset -q --hard HEAD~1 && git update-ref refs/remotes/origin/main HEAD");
+        sh(
+            &root,
+            "git reset -q --hard HEAD~1 && git update-ref refs/remotes/origin/main HEAD",
+        );
         report(&state, &client, "ops", &root, "", "", false).await;
         let requests = seen.lock().unwrap();
         assert_eq!(requests.len(), 3);
         let last = &requests[2];
-        let body: Value = serde_json::from_str(&last[last.find("\r\n\r\n").unwrap() + 4..]).unwrap();
-        assert_eq!(body["documents"], json!({"memory/learnings.md": "original\n"}));
+        let body: Value =
+            serde_json::from_str(&last[last.find("\r\n\r\n").unwrap() + 4..]).unwrap();
+        assert_eq!(
+            body["documents"],
+            json!({"memory/learnings.md": "original\n"})
+        );
         assert!(body.get("oversized").is_none());
-        let key = |request: &str| request.lines().find(|l| l.to_ascii_lowercase().starts_with("idempotency-key:")).unwrap().to_string();
-        assert_ne!(key(&requests[0]), key(last), "returning content needs a fresh server operation");
+        let key = |request: &str| {
+            request
+                .lines()
+                .find(|l| l.to_ascii_lowercase().starts_with("idempotency-key:"))
+                .unwrap()
+                .to_string()
+        };
+        assert_ne!(
+            key(&requests[0]),
+            key(last),
+            "returning content needs a fresh server operation"
+        );
         std::fs::remove_dir_all(dir).ok();
     }
 
     #[test]
     fn the_key_text_is_pythons_sorted_ascii_json() {
-        assert_eq!(dumps_sorted(&json!({"b": [1, true], "a": "\u{e9}\n\u{1F600}"})), "{\"a\": \"\\u00e9\\n\\ud83d\\ude00\", \"b\": [1, true]}");
+        assert_eq!(
+            dumps_sorted(&json!({"b": [1, true], "a": "\u{e9}\n\u{1F600}"})),
+            "{\"a\": \"\\u00e9\\n\\ud83d\\ude00\", \"b\": [1, true]}"
+        );
     }
 }

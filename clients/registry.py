@@ -10,6 +10,7 @@ repo's `bot.yaml` (older: `employee.yaml`), and the small rules that hang off an
 The cloud keeps its own copy of every entry (`backend/settings_admin.py`); this module is for
 the tools that run on a Mac beside the repos, such as `clients/preflight.py`.
 """
+
 import os
 import re
 from pathlib import Path
@@ -25,7 +26,7 @@ REGISTRY_DIR = Path(os.environ.get("TICO_REGISTRY_DIR") or HUB_DIR / "registry")
 # checkout is somewhere else (a worktree), the way the runner's --projects does.
 ROOT = Path(os.environ.get("TICO_PROJECTS") or HUB_DIR.parent).expanduser()
 CREDENTIAL_PROFILE_RE = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
-GROK_MODEL = "grok-4.6"         # what `runtime: grok` means: Grok 4.6 through Grok Build (`grok`)
+GROK_MODEL = "grok-4.6"  # what `runtime: grok` means: Grok 4.6 through Grok Build (`grok`)
 # Grok 4.6 supports low | medium | high | xhigh. Unknown values retain the safe
 # provider default instead of being passed through as an invalid command-line option.
 GROK_EFFORTS = {"low": "low", "medium": "medium", "high": "high", "xhigh": "xhigh"}
@@ -86,8 +87,7 @@ def grok_model(emp, default_model=None):
 
 def grok_effort(emp):
     """Validated `--reasoning-effort` for this Grok 4.6 employee."""
-    return GROK_EFFORTS.get(str(emp.get("reasoning_effort") or "").strip().lower(),
-                            GROK_DEFAULT_EFFORT)
+    return GROK_EFFORTS.get(str(emp.get("reasoning_effort") or "").strip().lower(), GROK_DEFAULT_EFFORT)
 
 
 # The runtimes whose registry model and effort mean something else to their CLI: (model, effort) for an employee. An

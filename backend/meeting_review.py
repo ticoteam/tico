@@ -1,4 +1,5 @@
 """A person's quiet queue of imported meetings, before sharing with the Team."""
+
 from typing import Literal
 
 from fastapi import Request
@@ -14,6 +15,64 @@ class Review(M.Contract):
     private: StrictBool | None = None
     # A bot to hand the meeting to once it is shared, as Send does ("auto" routes it).
     send_to: str | None = Field(default=None, min_length=1, max_length=200)
+    # Who may read it once shared: the Team, or only its participants. Older Ticos refuse
+    # the field, so a recorder asking for participants only never shares it wider by mistake.
+    audience: Literal['team', 'participants', 'private'] | None = None
+
+
+def participants_of(c, rid, record):
+    """The person it is filed for, and whoever was added to or joined the live meeting it came from."""
+    emails = {record['owner'].lower()}
+    for (live,) in c.execute('SELECT id FROM live_meetings WHERE imported_meeting_id=?', (rid,)):
+        for (actor,) in c.execute(
+            'SELECT actor FROM live_meeting_humans WHERE meeting_id=? UNION '
+            'SELECT actor FROM live_meeting_access WHERE meeting_id=?',
+            (live, live),
+        ):
+            if H.is_human(actor):
+                emails.add(((H.human(c, H.actor_id(actor)) or {}).get('email') or '').lower())
+    return sorted(emails - {''})
+
+
+def restrict_source(c, who, rid):
+    """Participants only covers the live room it came from too: whoever joined keeps access, the rest of the Team
+    loses it."""
+    for (live,) in c.execute(
+        'SELECT id FROM live_meetings WHERE imported_meeting_id=? AND visibility<>?', (rid, 'private')
+    ).fetchall():
+        c.execute(
+            'INSERT OR IGNORE INTO live_meeting_access(meeting_id,actor,added_by,added_at) '
+            'SELECT meeting_id,actor,?,? FROM live_meeting_humans WHERE meeting_id=?',
+            (who.actor, H.now(), live),
+        )
+        c.execute('UPDATE live_meetings SET visibility=?,updated_at=? WHERE id=?', ('private', H.now(), live))
+
+
+# Widest first: a meeting may move right along this once something was sent for it, never left.
+WIDTH = {'team': 2, 'participants': 1, 'private': 0}
+
+
+def sent_task(c, rid, meta):
+    """The task its transcript was already copied into, if any."""
+    row = c.execute(
+        'SELECT task_id FROM meeting_deliveries WHERE meeting_id=? AND task_id IS NOT NULL', (rid,)
+    ).fetchone()
+    return (row and row[0]) or (meta.get('sent') or {}).get('task')
+
+
+def set_audience(c, who, rid, record, meta, audience):
+    if audience == 'private':
+        meta.update(private=True)
+        meta.pop('audience', None)
+        meta.pop('audience_emails', None)
+        restrict_source(c, who, rid)
+    elif audience == 'team':
+        meta.update(private=False)
+        meta.pop('audience', None)
+        meta.pop('audience_emails', None)
+    elif audience == 'participants':
+        meta.update(private=True, audience='participants', audience_emails=participants_of(c, rid, record))
+        restrict_source(c, who, rid)
 
 
 class ReviewMany(M.Contract):
@@ -44,19 +103,44 @@ def install_meeting_review(app, store, auth, mutate):
             raise Problem('review', 'Only a pending meeting can be dismissed', 409)
         return record
 
-    def apply(c, who, rid, action, private=None, send_to=None):
+    def apply(c, who, rid, action, private=None, send_to=None, audience=None):
         record = validate(c, who, rid, action)
         meta = record['metadata']
         if action == 'approve' and send_to and meta['review_state'] == 'pending':
             meta['review_send_to'] = send_to
         target = {'approve': 'live', 'dismiss': 'dismissed', 'restore': 'pending'}[action]
         if meta['review_state'] == target:
-            return media.view(c, who, rid)
+            # Approving again with another audience (the Recorder retrying a Save) re-files it for that audience.
+            current = media.effective_audience(meta)
+            # Without an audience (an older Recorder), private:false means the Team; private:true only narrows a
+            # Team meeting, so it never undoes Participants only.
+            wanted = audience or ('team' if private is False else 'private' if private and current == 'team' else None)
+            if action == 'approve' and wanted and wanted != current:
+                # The transcript already went into a task for the wider audience; narrowing here can't recall it.
+                task = sent_task(c, rid, meta)
+                if task and WIDTH[wanted] < WIDTH[current]:
+                    raise Problem(
+                        'already_sent',
+                        f'Already sent to #{task} for the {"team" if current == "team" else "participants"}. '
+                        'Change who can see it there.',
+                        409,
+                    )
+                audience = wanted
+                set_audience(c, who, rid, record, meta, audience)
+                media.save(c, meta, readable=record['transcript_readable'])
+                c.execute('UPDATE media_control SET version=version+1 WHERE meeting_id=?', (rid,))
+                H.event(c, who.actor, 'meeting.reviewed', rid, {'action': action, 'audience': audience})
+            return media.view(c, who, rid, auth=auth)
+
         meta['review_state'] = target
         if action == 'approve':
             meta['reviewed_at'] = H.now()
         if action == 'approve' and private is not None:
             meta['private'] = private
+            if private is False and audience is None:
+                audience = 'team'
+        if action == 'approve':
+            set_audience(c, who, rid, record, meta, audience)
         media.save(c, meta, readable=record['transcript_readable'])
         c.execute('UPDATE media_control SET version=version+1 WHERE meeting_id=?', (rid,))
         if action == 'approve':
@@ -66,7 +150,7 @@ def install_meeting_review(app, store, auth, mutate):
                 media.save(c, meta, readable=record['transcript_readable'])
                 media.deliver(c, auth, who, rid, media.Send(bot_id=destination), [])
         H.event(c, who.actor, 'meeting.reviewed', rid, {'action': action})
-        return media.view(c, who, rid)
+        return media.view(c, who, rid, auth=auth)
 
     @app.get('/api/v2/meetings/settings')
     def settings(request: Request):
@@ -81,19 +165,25 @@ def install_meeting_review(app, store, auth, mutate):
         human_only(who)
         if 'review_default' in body.model_fields_set and who.role != 'owner':
             raise Problem('forbidden', 'Only the Team owner may set the meeting review default', 403)
+
         def work(c):
             if 'auto_share' in body.model_fields_set:
                 if body.auto_share is None:
                     c.execute("DELETE FROM preferences WHERE actor=? AND key='meetings.auto_share'", (who.actor,))
                 else:
-                    c.execute('INSERT INTO preferences(actor,key,value,updated_at) VALUES(?,?,?,?) '
-                              'ON CONFLICT(actor,key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at',
-                              (who.actor, 'meetings.auto_share', encode(body.auto_share), H.now()))
+                    c.execute(
+                        'INSERT INTO preferences(actor,key,value,updated_at) VALUES(?,?,?,?) '
+                        'ON CONFLICT(actor,key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at',
+                        (who.actor, 'meetings.auto_share', encode(body.auto_share), H.now()),
+                    )
             if body.review_default is not None:
-                c.execute('INSERT INTO registry_metadata(key,value) VALUES(?,?) '
-                          'ON CONFLICT(key) DO UPDATE SET value=excluded.value',
-                          ('meetings.review_default', encode(body.review_default)))
+                c.execute(
+                    'INSERT INTO registry_metadata(key,value) VALUES(?,?) '
+                    'ON CONFLICT(key) DO UPDATE SET value=excluded.value',
+                    ('meetings.review_default', encode(body.review_default)),
+                )
             return meetings.review_settings(c, who)
+
         return mutate(request, body, work)
 
     @app.get('/api/v2/meetings')
@@ -102,11 +192,13 @@ def install_meeting_review(app, store, auth, mutate):
         human_only(who)
         with store.read() as c:
             rows = []
-            for row in c.execute('SELECT id FROM meetings WHERE review_state=? '
-                                 'AND (?=\'live\' OR owner=? COLLATE NOCASE) ORDER BY created_at DESC',
-                                 (review, review, who.email)):
+            for row in c.execute(
+                'SELECT id FROM meetings WHERE review_state=? '
+                'AND (?=\'live\' OR owner=? COLLATE NOCASE) ORDER BY created_at DESC',
+                (review, review, who.email),
+            ):
                 try:
-                    item = media.view(c, who, row[0])
+                    item = media.view(c, who, row[0], auth=auth)
                 except Problem as exc:
                     if exc.status not in (403, 404):
                         raise
@@ -119,24 +211,38 @@ def install_meeting_review(app, store, auth, mutate):
     def review_many(request: Request, body: ReviewMany):
         who = request.state.identity
         human_only(who)
+
         def work(c):
-            ids = list(dict.fromkeys(body.ids)) if body.ids is not None else [row[0] for row in c.execute(
-                "SELECT m.id FROM meetings m LEFT JOIN media_control mc ON mc.meeting_id=m.id "
-                "WHERE m.review_state='pending' AND lower(m.owner)=? AND mc.deleted_at IS NULL ORDER BY m.created_at,m.id",
-                (who.email.lower(),))]
+            ids = (
+                list(dict.fromkeys(body.ids))
+                if body.ids is not None
+                else [
+                    row[0]
+                    for row in c.execute(
+                        "SELECT m.id FROM meetings m LEFT JOIN media_control mc ON mc.meeting_id=m.id "
+                        "WHERE m.review_state='pending' AND lower(m.owner)=? AND mc.deleted_at IS NULL ORDER BY m.created_at,m.id",
+                        (who.email.lower(),),
+                    )
+                ]
+            )
             # Validate the whole selection before publishing any of it.
             action = 'approve' if body.action == 'approve_all' else 'dismiss'
             for rid in ids:
                 validate(c, who, rid, action)
             rows = [apply(c, who, rid, action) for rid in ids]
             return {'meetings': rows, 'count': len(rows), 'pending_count': meetings.pending_count(c, who)}
+
         return mutate(request, body, work)
 
     @app.post('/api/v2/meetings/{id}/review')
     def review_one(request: Request, id: str, body: Review):
-        return mutate(request, body, lambda c: apply(c, request.state.identity, id, body.action, body.private, body.send_to))
+        return mutate(
+            request,
+            body,
+            lambda c: apply(c, request.state.identity, id, body.action, body.private, body.send_to, body.audience),
+        )
 
     @app.get('/api/v2/meetings/{id}')
     def detail(request: Request, id: str):
         with store.read() as c:
-            return media.view(c, request.state.identity, id, include_transcripts=True)
+            return media.view(c, request.state.identity, id, include_transcripts=True, auth=auth)

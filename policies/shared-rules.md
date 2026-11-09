@@ -31,9 +31,9 @@ These sit alongside `handoffs.md` and `approvals.md`.
   for `designer` (Design) or `video-producer` (Video Producer): `hub task create --owner bot:designer --title ... --body ...`.
   Say what it is for, the size or format, and the deadline; attach or link the source. The result
   comes back under `<slug>/deliverables/<task>/`. Do not buy them.
-- **Keep live copy accurate.** Edit, test and publish requested copy with your Tools. Public copy stays a draft until `outbound_send` is on. See `documentation.md`.
+- **Keep live copy accurate.** Edit, test and publish requested copy with your Tools. Public copy stays a draft until your sending policy in Tico lets you send (Outbound sends, below). See `documentation.md`.
 - **Name the model that actually did the work.** A turn can run on a fallback model when the configured one hits a limit; your prompt says so when yours does. Reviews prefer a model family different from the work's; when you choose a reviewer by family, read each implementing run's `ran_on` in `hub task show <task>` (`runs`), never a bot's configured model or harness label. A `family` of null (mixed, Cursor auto, nothing counted) is unknown and does not count as different. A different family is a preference, never a requirement: when no reviewer from another family is free or healthy, a same-family review goes ahead rather than the work waiting or anyone being asked to rule on it.
-- **Speak as the owner only in the owner's own accounts.** Keep messages to outsiders as drafts until `outbound_send` is on; then follow the requested work and standing instructions.
+- **Speak as the owner only in the owner's own accounts.** Keep messages to outsiders as drafts until your sending policy in Tico lets you send; then follow the requested work and standing instructions.
 - **Ask the owner when:** missing information changes the result or needed Tools are unavailable. Act on work already requested and say what was done. Stay quiet when the run finished and nothing is new.
 - **Scheduling on the owner's behalf** follows the team's scheduling rules: meeting length,
   minimum notice, allowed hours and time zone, and buffers are set in the calendar policy of the
@@ -43,11 +43,17 @@ These sit alongside `handoffs.md` and `approvals.md`.
   database. No parallel wiki. Secrets never go in chat, Tico tasks, or git.
 
 ## Outbound sends
-Every bot has `outbound_send` in its `bot.yaml`. While it is `false` (the default),
-nothing leaves the team: no email, DM, social post, or comment to anyone
-outside the team, even where an older instruction says to send as the owner. Produce the send-ready draft,
-attach it to the task, and stop. When the owner sets `outbound_send: true` for a bot, the
-standing send instructions in its AGENT.md and playbooks apply, within the requested work and its Tools. No separate approval is required. Internal Slack posts to team channels and calendar invites are not outbound.
+Sending outside the team is set in Tico, never in `bot.yaml`: Settings > Bots > <bot> > Email sending, or the company
+or inbox sending policy. The modes are **On their own**, **Ask first** and **Never**.
+
+- Every email goes through Tico's send queue (`mail.sh send` or `reply`), which decides it and holds it for an undo
+  window before it goes. Under Ask first a person approves it in Tico. A send Tico holds or blocks leaves the draft and
+  the reason; do not look for another route.
+- Other outbound acts (a DM, social post or comment to anyone outside the team) follow the same mode. With On their
+  own, the standing send instructions in your AGENT.md and playbooks apply, within the requested work and your Tools.
+  Otherwise produce the send-ready draft, attach it to the task, and stop; under Ask first, ask a person to approve that
+  exact one. This holds even where an older instruction says to send as the owner.
+- Internal Slack posts to team channels and calendar invites are not outbound.
 
 ## Files and deliverables
 Team files live in one private S3 bucket, `<company>-tico-hub`, one prefix per bot. Every
@@ -66,14 +72,13 @@ it with the task (private; readable in Tico by whoever may read the task) and pr
 for your note. Never give a person a path on your Mac or an `s3://` URI; neither opens.
 Small text deliverables can also live in your repo's `reports/`; large or binary ones go to
 the bucket. A deliverable in the bucket or on a task is still internal; anything
-customer-facing stays a draft until `outbound_send` is on.
+customer-facing stays a draft until your sending policy in Tico lets you send.
 
 ## Asking people
-Deliver files with `hub task attach <id> <file> --note "..." --ask ask.json`, or use
-`--choices "Approve,Request changes"` for one question. The same task and name adds a version.
-For a comment, use `hub task comment <id> "..." --attach <file> --ask ask.json` (MCP tools accept
-`ask` too). Ask once per version. Read the `answer: {...}` block in the wake, or
-`hub task answers <id>`, and act on that answer. Never re-ask about an answered version;
+Deliver files with `hub task attach <id> <file> --note "..."`. The same task and name adds a version.
+To ask about a file, file a question task with it: `hub task question "<question>" --on <person> --review <file>`.
+For a comment, use `hub task comment <id> "..." --attach <file>`. Ask once per version. Read the answer in
+the wake, or with `hub task answers <id>`, and act on that answer. Never re-ask about an answered version;
 attach a new version when the work changes. Answers record who replied; the bot decides its next step.
 When a decision fits a pick or a yes/no, ask it as a structured question, one decision per task, written so it
 makes sense on its own: `hub task question "<question>" --on <person> [--option A=<file> --option B=<file>]`
@@ -84,10 +89,13 @@ your calendar"`). Several picks they may take together: `--multi` with the ones 
 they tick and send, and you hear "Not this one" for each pick they leave unticked. Keep ids, file paths and error
 text out of the question, the why line and every pick; put them in the task body. Tico refuses a question that
 breaks these, and says why.
-Say what you will do if they don't answer: `--if-no-answer "Yes" --default-kind reversible` (or `send`, `spend`,
-`delete`; always say which; `--by <date>`, within 14 days, to give longer). A reversible, internal step goes ahead on
-its own after the team's days (3 unless the owner changed it) or your later `--by`, and you are woken with that answer; a send, spending or a delete
-does not go ahead, but its question still closes on its `--by` date and you decide without it. Aim for questions a person
+If you have a default that is reversible and internal (a rename, an archive, a draft, a setting you can set back),
+do not ask: do it, and record what you did in one line on your task (`hub task comment`); the person can undo it. Tico
+refuses such a question (`ask_default_go_ahead`). Ask only for a send, spending or a delete, and say what you will do if
+they don't answer: `--if-no-answer "Yes" --default-kind send` (or `spend`, `delete`; always say which; `--by <date>`,
+within 14 days, to give longer). Those never go ahead on their own: the question closes on its `--by` date and you
+decide without it. If the person already has an open question on the same thing, from you or any bot, Tico refuses
+yours (`ask_duplicate`) and names it: wait on that one (`hub task relate <your task> blocked_by <id>`), never ask twice. Aim for questions a person
 can answer within 24 hours. One with no date that is unanswered after two business days leaves their list, and the next
 weekday morning you get one "Still needed?" listing all such questions: ask again as a fresh question, or drop it.
 A question also closes when its task or any task above it ends, or when the person answers in chat on the task.
@@ -95,8 +103,8 @@ When a person asks you for something only BotOps can do (repository access, a To
 their own message: `hub task create --owner botops ... --request-id turn` (or that message's id). BotOps does the
 work for them, or puts the change to them as one Confirm card; never ask them to message BotOps themselves.
 When a Tico limit blocks you (a permission your token lacks, a policy switch, a refusal Tico gives your run), no
-person on the team can lift it by answering you: file it with `hub support report` (a person only approves sending the
-report; you are not waiting on them to lift the limit) or as a task for BotOps, set your task waiting on that (`hub task relate <id> <other> --kind blocked_by`), and say which
+person on the team can lift it by answering you: file it with `hub support report` (it is sent at once, or a person only approves
+sending it; you are not waiting on them to lift the limit) or as a task for BotOps, set your task waiting on that (`hub task relate <id> <other> --kind blocked_by`), and say which
 limit in the note. Never set a person as the one you're waiting on for it.
 Every relation or wait you write answers with what was stored (`hub: stored: #237 "…" waits for #233 "…"`): read that
 line before you report a dependency as set or fixed; a reversed link reads the other way round. When what you need is
@@ -150,4 +158,4 @@ becomes the problem. Simplicity wins: if two scaffolds would work, keep the smal
 After a verified deployment that materially helps customers or the team, propose one concise,
 anonymous Changelog entry. Combine related changes and attach
 deployment evidence. Reading, research, plans, routine work and task completion alone do not
-qualify. Use the Changelog draft command. Publish when requested and your Tools allow it, with `outbound_send` on for public content.
+qualify. Use the Changelog draft command. Publish when requested and your Tools allow it, with your sending policy in Tico letting you send for public content.

@@ -25,8 +25,10 @@ log = logging.getLogger("tico.storage")
 EARLIER_RETRY = 300
 # The digests a bucket does not have yet, for `copy_local`: each digest probes blob_locations' (digest, bucket) key, so
 # the copies already made are never listed or read. The index blobs_by_digest serves the scan of blobs.
-UNCOPIED_SQL = ("SELECT b.digest, MAX(b.content_type) AS content_type FROM blobs b "
-                "WHERE NOT EXISTS (SELECT 1 FROM blob_locations l WHERE l.digest=b.digest AND l.bucket=?) GROUP BY b.digest")
+UNCOPIED_SQL = (
+    "SELECT b.digest, MAX(b.content_type) AS content_type FROM blobs b "
+    "WHERE NOT EXISTS (SELECT 1 FROM blob_locations l WHERE l.digest=b.digest AND l.bucket=?) GROUP BY b.digest"
+)
 # A refused upload starts a fresh write check when the last one began longer ago than this (Blobs._heal).
 HEAL_AFTER = 60
 # The place new files go to, fixed at one moment (`Blobs.target`): a copy that must land there whatever happens next.
@@ -113,7 +115,9 @@ class Blobs:
             self._copy_disk, self._paused = copy_disk, paused
             self._generation += 1
         if store is not None and self._loop is not None and target.blob_bucket and copy_disk:
-            threading.Thread(target=self.storage_loop, args=(store, self._loop), name="tico-storage-copy", daemon=True).start()
+            threading.Thread(
+                target=self.storage_loop, args=(store, self._loop), name="tico-storage-copy", daemon=True
+            ).start()
 
     def rekey(self, location, keys):
         """New keys for the place at `location` (Tico file hosting's last an hour), swapped in where it is used: no
@@ -207,6 +211,7 @@ class Blobs:
                 if not paused or exc.code != "blob_storage":
                     raise
                 raise Problem("storage_paused", paused.format(reason=exc.detail.split(";")[0]), 503, True) from exc
+
         return plain()
 
     def _put_staged(self, stream, digest, size, content_type):
@@ -219,7 +224,9 @@ class Blobs:
             try:
                 self._local(stream, digest)
             except OSError as exc:
-                raise Problem("blob_storage", "File storage is unavailable; free disk space and check permissions", 503, True) from exc
+                raise Problem(
+                    "blob_storage", "File storage is unavailable; free disk space and check permissions", 503, True
+                ) from exc
         return digest
 
     def put(self, data, content_type="application/octet-stream"):
@@ -259,10 +266,16 @@ class Blobs:
                     self._local(stream, digest)
                 return digest
         except OSError as exc:
-            detail = "File storage disk is full; free space or configure an S3 bucket and retry" if exc.errno == errno.ENOSPC else "File staging storage is unavailable; check disk space and permissions"
+            detail = (
+                "File storage disk is full; free space or configure an S3 bucket and retry"
+                if exc.errno == errno.ENOSPC
+                else "File staging storage is unavailable; check disk space and permissions"
+            )
             raise Problem("blob_storage", detail, 503, True) from exc
 
-    def _upload(self, stream, digest, size, content_type, small_body=None, rate_limit=0, stop=None, at=None, whole=False):
+    def _upload(
+        self, stream, digest, size, content_type, small_body=None, rate_limit=0, stop=None, at=None, whole=False
+    ):
         # `whole`: one PutObject with the file's SHA-256 whatever its size (up to S3's 5 GB), so S3 checks every byte
         # on receipt and keeps that checksum (`holds_whole`).
         # Reads may use an unselected source; writes must wait for the probe.
@@ -284,30 +297,39 @@ class Blobs:
             s3, kind, sources = self._s3, self._sources.kind, self._sources
             settings, bucket = self.settings, self.bucket
         key = self.s3_key(digest, settings)
-        options = dict(Bucket=bucket, Key=key, ContentType=content_type,
-                       CacheControl="private, max-age=31536000, immutable",
-                       ContentDisposition=disposition(content_type),
-                       ServerSideEncryption="AES256", Metadata={"sha256": digest})
+        options = dict(
+            Bucket=bucket,
+            Key=key,
+            ContentType=content_type,
+            CacheControl="private, max-age=31536000, immutable",
+            ContentDisposition=disposition(content_type),
+            ServerSideEncryption="AES256",
+            Metadata={"sha256": digest},
+        )
         upload_id = None
         try:
             s3 = s3 if s3 is not None else sources.client_for(kind)
             if self._matches_s3(digest, size, settings, bucket, sources):
                 self._landing(digest, settings, at)
                 return
-            if size <= 8 * 1024 ** 2 or whole:
-                s3.put_object(**options, Body=small_body if small_body is not None else PacedReader(stream, rate_limit, stop), IfNoneMatch="*",
-                                   ChecksumSHA256=base64.b64encode(bytes.fromhex(digest)).decode())
+            if size <= 8 * 1024**2 or whole:
+                s3.put_object(
+                    **options,
+                    Body=small_body if small_body is not None else PacedReader(stream, rate_limit, stop),
+                    IfNoneMatch="*",
+                    ChecksumSHA256=base64.b64encode(bytes.fromhex(digest)).decode(),
+                )
             else:
                 upload_id = s3.create_multipart_upload(**options)["UploadId"]
                 parts = []
                 paced = PacedReader(stream, rate_limit, stop)
-                while chunk := paced.read(8 * 1024 ** 2):
+                while chunk := paced.read(8 * 1024**2):
                     number = len(parts) + 1
-                    result = s3.upload_part(Bucket=bucket, Key=key, UploadId=upload_id,
-                                                PartNumber=number, Body=chunk)
+                    result = s3.upload_part(Bucket=bucket, Key=key, UploadId=upload_id, PartNumber=number, Body=chunk)
                     parts.append({"PartNumber": number, "ETag": result["ETag"]})
-                s3.complete_multipart_upload(Bucket=bucket, Key=key, UploadId=upload_id,
-                                                 MultipartUpload={"Parts": parts}, IfNoneMatch="*")
+                s3.complete_multipart_upload(
+                    Bucket=bucket, Key=key, UploadId=upload_id, MultipartUpload={"Parts": parts}, IfNoneMatch="*"
+                )
             self._landing(digest, settings, at)
             if at is None:
                 self._visual_copy(digest, size, content_type, settings, small_body, stream)
@@ -321,7 +343,9 @@ class Blobs:
                 if not self._matches_s3(digest, size, settings, bucket, sources):
                     raise Problem("blob_integrity", "Stored file failed its integrity check", 503) from exc
             else:
-                raise Problem("blob_storage", blob_s3.write_error(exc, bucket) + "; retry without discarding your file", 503, True) from exc
+                raise Problem(
+                    "blob_storage", blob_s3.write_error(exc, bucket) + "; retry without discarding your file", 503, True
+                ) from exc
 
     def _matches_s3(self, digest, size, settings=None, bucket=None, sources=None):
         options = dict(Bucket=bucket or self.bucket, Key=self.s3_key(digest, settings), ChecksumMode="ENABLED")
@@ -336,7 +360,8 @@ class Blobs:
             raise
         checksum = base64.b64encode(bytes.fromhex(digest)).decode()
         return head.get("ContentLength") == size and (
-            head.get("ChecksumSHA256") == checksum or head.get("Metadata", {}).get("sha256") == digest)
+            head.get("ChecksumSHA256") == checksum or head.get("Metadata", {}).get("sha256") == digest
+        )
 
     def _landing(self, digest, settings, at):
         # A new file, not a move's copy (that one counts once it is checked: tico_storage._move).
@@ -350,6 +375,7 @@ class Blobs:
         # A page or SVG uploaded to Tico file hosting's bucket gets its cleaned copy beside it from the bytes in hand
         # (backend/tico_storage.py `landed`); one that fails is made on its first view. Never fails the upload.
         from . import tico_storage
+
         found, mime = self.edge, (content_type or "").split(";", 1)[0].strip().lower()
         if not found or location_of(settings) != found["location"] or not tico_storage.visual_kind(mime, size):
             return
@@ -364,11 +390,22 @@ class Blobs:
     def holds_whole(self, digest, size, at):
         """Whether the place `at` holds the file whole, by S3's own SHA-256 of what it received (a `whole` upload):
         no byte is read back."""
-        head = at.sources.read_s3("head_object", Bucket=at.settings.blob_bucket, Key=self.s3_key(digest, at.settings),
-                                  ChecksumMode="ENABLED")[0] if at.s3 is None else at.s3.head_object(
-            Bucket=at.settings.blob_bucket, Key=self.s3_key(digest, at.settings), ChecksumMode="ENABLED")
-        return (head.get("ContentLength") == size
-                and head.get("ChecksumSHA256") == base64.b64encode(bytes.fromhex(digest)).decode())
+        head = (
+            at.sources.read_s3(
+                "head_object",
+                Bucket=at.settings.blob_bucket,
+                Key=self.s3_key(digest, at.settings),
+                ChecksumMode="ENABLED",
+            )[0]
+            if at.s3 is None
+            else at.s3.head_object(
+                Bucket=at.settings.blob_bucket, Key=self.s3_key(digest, at.settings), ChecksumMode="ENABLED"
+            )
+        )
+        return (
+            head.get("ContentLength") == size
+            and head.get("ChecksumSHA256") == base64.b64encode(bytes.fromhex(digest)).decode()
+        )
 
     def _local(self, source, digest):
         self.touch(digest)
@@ -427,6 +464,7 @@ class Blobs:
                 stream = self._open_elsewhere(key, digest, start, span)
         else:
             stream = self._open_elsewhere(key, digest, start, span)
+
         def chunks():
             remaining = None if end is None else end - start + 1
             try:
@@ -439,6 +477,7 @@ class Blobs:
                     yield chunk
             finally:
                 stream.close()
+
         return chunks()
 
     def _open_elsewhere(self, key, digest, start, span):
@@ -471,6 +510,7 @@ class Blobs:
         found = self.edge
         if found and location_of(place) == found["location"]:
             from .tico_storage import edge_read
+
             return edge_read(found, "/" + self.key(digest), span)
         options = dict(Bucket=place.blob_bucket, Key=self.s3_key(digest, place), **span)
         if s3 is not None:
@@ -483,7 +523,9 @@ class Blobs:
             stream.seek(start)
             return stream
         except OSError as exc:
-            raise Problem("blob_storage", "Stored file is unavailable; check S3 access and retained local copies", 503, True) from exc
+            raise Problem(
+                "blob_storage", "Stored file is unavailable; check S3 access and retained local copies", 503, True
+            ) from exc
 
     def storage_loop(self, store, stop, retry_interval=30 * 60, first_retry=30):
         # `configure` starts a fresh loop for a new target; this one ends when the target changes. While writes fail,
@@ -512,6 +554,7 @@ class Blobs:
             if self._healing or (self._checked is not None and time.monotonic() - self._checked < HEAL_AFTER):
                 return
             self._healing, self._checked = True, time.monotonic()
+
         def heal():
             try:
                 self.check_write(store, stop)
@@ -519,6 +562,7 @@ class Blobs:
                 log.exception("File storage write check failed")
             finally:
                 self._healing = False
+
         threading.Thread(target=heal, name="tico-storage-heal", daemon=True).start()
 
     def copy_local(self, store, stop, interval=0.25):
@@ -537,16 +581,22 @@ class Blobs:
                 break
             try:
                 path = self.directory / self.key(row["digest"])
-                if not path.is_file():            # a deleted file's bytes, removed since the list was read
+                if not path.is_file():  # a deleted file's bytes, removed since the list was read
                     continue
                 with path.open("rb") as source:
                     if hashlib.file_digest(source, "sha256").hexdigest() != row["digest"]:
                         raise Problem("blob_integrity", "Local file failed its integrity check", 503)
                     source.seek(0)
                     digest = row["digest"]
-                    self._upload(source, digest, path.stat().st_size, row["content_type"],
-                                 rate_limit=8 * 1024 ** 2 if interval else 0, stop=stop)
-                self.verify_s3(digest, rate_limit=8 * 1024 ** 2 if interval else 0, stop=stop)
+                    self._upload(
+                        source,
+                        digest,
+                        path.stat().st_size,
+                        row["content_type"],
+                        rate_limit=8 * 1024**2 if interval else 0,
+                        stop=stop,
+                    )
+                self.verify_s3(digest, rate_limit=8 * 1024**2 if interval else 0, stop=stop)
                 if generation != self._generation:
                     break
                 with store.transaction() as c:
@@ -558,7 +608,11 @@ class Blobs:
                     break
                 self.copy_status["failed"] += 1
                 self._s3_failed.add(row["digest"])
-                self.copy_status["error"] = exc.detail if isinstance(exc, Problem) else "S3 copy failed; check bucket access and retry by restarting the server"
+                self.copy_status["error"] = (
+                    exc.detail
+                    if isinstance(exc, Problem)
+                    else "S3 copy failed; check bucket access and retry by restarting the server"
+                )
             self._copy_health(store)
             if stop.wait(interval):
                 break
@@ -577,9 +631,11 @@ class Blobs:
                 done, errors, cancel = threading.Event(), [], threading.Event()
                 self._probe_task = done, errors, cancel, self._generation
                 self._checked = time.monotonic()
+
                 class ProbeStop:
                     def is_set(self):
                         return cancel.is_set() or (stop is not None and stop.is_set())
+
                 def probe():
                     try:
                         self._check_write(store, ProbeStop())
@@ -587,6 +643,7 @@ class Blobs:
                         errors.append(exc)
                     finally:
                         done.set()
+
                 threading.Thread(target=probe, name="tico-storage-probe", daemon=True).start()
             done, errors, cancel, _ = self._probe_task
         deadline = time.monotonic() + timeout
@@ -608,7 +665,9 @@ class Blobs:
                 return False
         if errors:
             raise errors[0]
-        return self._sources.selected is not None and not self._write_failed and not (stop is not None and stop.is_set())
+        return (
+            self._sources.selected is not None and not self._write_failed and not (stop is not None and stop.is_set())
+        )
 
     def _check_write(self, store, stop=None):
         """Check PutObject permission without publishing a file or requiring DeleteObject."""
@@ -633,13 +692,16 @@ class Blobs:
                 return
             client = None
             try:
-                client = self._probe_s3 or blob_s3.client(settings, kind=kind, config=Config(
-                    connect_timeout=5, read_timeout=10, retries={"max_attempts": 2}))
+                client = self._probe_s3 or blob_s3.client(
+                    settings, kind=kind, config=Config(connect_timeout=5, read_timeout=10, retries={"max_attempts": 2})
+                )
                 if stop is not None and stop.is_set():
                     return
                 if pending:
                     try:
-                        client.abort_multipart_upload(Bucket=pending["bucket"], Key=pending["key"], UploadId=pending["upload_id"])
+                        client.abort_multipart_upload(
+                            Bucket=pending["bucket"], Key=pending["key"], UploadId=pending["upload_id"]
+                        )
                     except Exception as exc:
                         if getattr(exc, "response", {}).get("Error", {}).get("Code") != "NoSuchUpload":
                             raise
@@ -651,7 +713,9 @@ class Blobs:
                 result = client.create_multipart_upload(Bucket=bucket, Key=key, ServerSideEncryption="AES256")
                 pending = {"bucket": bucket, "key": key, "upload_id": result["UploadId"]}
                 # Recorded so a later check can abort it if this one stops here; unrecorded, it is aborted now.
-                recorded = self._write_health(store, pending, self._write_error or "S3 storage write check is still pending", location, sources)
+                recorded = self._write_health(
+                    store, pending, self._write_error or "S3 storage write check is still pending", location, sources
+                )
                 if recorded and stop is not None and stop.is_set():
                     return
                 client.abort_multipart_upload(Bucket=bucket, Key=key, UploadId=pending["upload_id"])
@@ -681,12 +745,19 @@ class Blobs:
     def _write_health(self, store, pending, error, location=None, sources=None):
         """Record the write check's state; whether it was recorded. Best effort: a busy database must neither count as
         an S3 failure nor stop the check, whose result lives in memory (`_write_failed`) either way."""
-        detail = {**pending, "location": location or self.location, "error": error, "credentials": (sources or self._sources).kind}
+        detail = {
+            **pending,
+            "location": location or self.location,
+            "error": error,
+            "credentials": (sources or self._sources).kind,
+        }
         try:
             with self._health_lock, store.transaction() as c:
-                c.execute("INSERT INTO service_health(service,last_succeeded_at,last_error,detail) VALUES(?,?,?,?) "
-                          "ON CONFLICT(service) DO UPDATE SET last_succeeded_at=excluded.last_succeeded_at,last_error=excluded.last_error,detail=excluded.detail",
-                          ("blob-s3", H.now() if not error else None, H.now() if error else None, json.dumps(detail)))
+                c.execute(
+                    "INSERT INTO service_health(service,last_succeeded_at,last_error,detail) VALUES(?,?,?,?) "
+                    "ON CONFLICT(service) DO UPDATE SET last_succeeded_at=excluded.last_succeeded_at,last_error=excluded.last_error,detail=excluded.detail",
+                    ("blob-s3", H.now() if not error else None, H.now() if error else None, json.dumps(detail)),
+                )
         except Exception as exc:
             log.warning("File storage check result not recorded: %s", type(exc).__name__)
             return False
@@ -694,9 +765,16 @@ class Blobs:
 
     def _copy_health(self, store):
         with store.transaction() as c:
-            c.execute("INSERT INTO service_health(service,last_succeeded_at,last_error,detail) VALUES(?,?,?,?) "
-                      "ON CONFLICT(service) DO UPDATE SET last_succeeded_at=excluded.last_succeeded_at,last_error=excluded.last_error,detail=excluded.detail",
-                      ("blob-copy", H.now() if not self.copy_status["error"] else None, H.now() if self.copy_status["error"] else None, json.dumps(self.copy_status)))
+            c.execute(
+                "INSERT INTO service_health(service,last_succeeded_at,last_error,detail) VALUES(?,?,?,?) "
+                "ON CONFLICT(service) DO UPDATE SET last_succeeded_at=excluded.last_succeeded_at,last_error=excluded.last_error,detail=excluded.detail",
+                (
+                    "blob-copy",
+                    H.now() if not self.copy_status["error"] else None,
+                    H.now() if self.copy_status["error"] else None,
+                    json.dumps(self.copy_status),
+                ),
+            )
 
     def get(self, digest):
         data = b"".join(self.open_range(digest))
@@ -707,7 +785,6 @@ class Blobs:
             if hashlib.sha256(data).hexdigest() != digest:
                 raise Problem("blob_integrity", "Stored file failed its integrity check", 503)
         return data
-
 
     def purge(self, digest, kind=None):
         """Remove `digest`'s bytes from every place this server reads them from: this computer's disk, the place new
@@ -724,9 +801,14 @@ class Blobs:
                 continue
             keys = [self.s3_key(digest, place)]
             found = self.edge
-            if kind and found and location_of(place) == found["location"] \
-                    and getattr(self, "visual_ancestors", None) is not None:
+            if (
+                kind
+                and found
+                and location_of(place) == found["location"]
+                and getattr(self, "visual_ancestors", None) is not None
+            ):
                 from .tico_storage import _visual, _visual_key
+
                 path = _visual(digest, kind, self.visual_ancestors)[0]
                 keys.append(_visual_key(place, path))
                 self._edge_seen.pop((found["location"], path), None)
@@ -744,26 +826,47 @@ def register(c, who, digest, size, name, content_type="application/octet-stream"
     # A display name is never used to construct a storage path.
     name = Path(str(name).replace("\\", "/")).name
     name = re.sub(r"[\x00-\x1f\x7f]", "", name)[:200] or "attachment"
-    row = {"id": H.new_id(), "owner": who.actor, "digest": digest, "size": size,
-           "name": name, "content_type": content_type, "created_at": H.now()}
-    c.execute("INSERT INTO blobs(id,owner,digest,size,name,content_type,created_at) VALUES(:id,:owner,:digest,:size,:name,:content_type,:created_at)", row)
+    row = {
+        "id": H.new_id(),
+        "owner": who.actor,
+        "digest": digest,
+        "size": size,
+        "name": name,
+        "content_type": content_type,
+        "created_at": H.now(),
+    }
+    c.execute(
+        "INSERT INTO blobs(id,owner,digest,size,name,content_type,created_at) VALUES(:id,:owner,:digest,:size,:name,:content_type,:created_at)",
+        row,
+    )
     return brief(row)
 
 
 def brief(row):
-    return {k: row[k] for k in ("id", "name", "size", "content_type")} | {
-        "url": "/api/v2/files/" + row["id"]}
+    return {k: row[k] for k in ("id", "name", "size", "content_type")} | {"url": "/api/v2/files/" + row["id"]}
 
 
 def disposition(mime):
     mime = mime.lower().split(";", 1)[0].strip()
-    inline = mime in {"image/png", "image/jpeg", "image/gif", "image/webp", "video/mp4", "video/webm",
-                      "video/quicktime", "application/pdf", "text/plain", "text/markdown", "text/csv"} or mime.startswith("audio/")
+    inline = mime in {
+        "image/png",
+        "image/jpeg",
+        "image/gif",
+        "image/webp",
+        "video/mp4",
+        "video/webm",
+        "video/quicktime",
+        "application/pdf",
+        "text/plain",
+        "text/markdown",
+        "text/csv",
+    } or mime.startswith("audio/")
     return "inline" if inline else "attachment"
 
 
 class PacedReader:
     """Copy traffic has a byte budget, including SDK reads of small objects."""
+
     def __init__(self, source, rate, stop):
         self.source, self.rate, self.stop = source, rate, stop
 
@@ -791,6 +894,7 @@ def location_of(settings):
 class Location:
     """The server's settings with a company's own bucket, region and keys (backend/company_storage.py) in place of
     its storage settings; everything else reads through to the server's."""
+
     def __init__(self, base, bucket, prefix="", region="", keys=None):
         self._base = base
         self.blob_bucket, self.blob_prefix, self.blob_region = bucket, prefix, region
@@ -806,6 +910,7 @@ class Location:
 class ServerStorage:
     """A Blobs' read access with the server's own credentials (backend/downloads.py), shared with its write probe
     while no company bucket is set."""
+
     def __init__(self, blobs):
         self.blobs = blobs
 

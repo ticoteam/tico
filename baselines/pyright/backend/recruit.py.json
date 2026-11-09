@@ -1,0 +1,30 @@
+{
+    "files": {
+        "./backend/recruit.py": [
+            {
+                "code": "reportOptionalSubscript",
+                "range": {
+                    "startColumn": 40,
+                    "endColumn": 41,
+                    "lineCount": 1
+                }
+            },
+            {
+                "code": "reportOptionalIterable",
+                "range": {
+                    "startColumn": 64,
+                    "endColumn": 72,
+                    "lineCount": 1
+                }
+            },
+            {
+                "code": "reportArgumentType",
+                "range": {
+                    "startColumn": 8,
+                    "endColumn": 20,
+                    "lineCount": 1
+                }
+            }
+        ]
+    }
+}

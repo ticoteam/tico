@@ -1,4 +1,5 @@
 """Calendar math for books: days are ISO `YYYY-MM-DD` strings, months `YYYY-MM`, periods inclusive at both ends."""
+
 from datetime import date, timedelta
 
 from .errors import invalid

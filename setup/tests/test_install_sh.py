@@ -2,6 +2,7 @@
 
 The scenarios are in install_scenarios.sh. They install curl and python3 from the distro's own packages, so the
 containers need network access; the tests skip when Docker is not available."""
+
 import hashlib
 import os
 import shutil
@@ -21,6 +22,7 @@ sys_path = str(SCRIPTS)
 
 def _builder():
     import importlib.util
+
     spec = importlib.util.spec_from_file_location("build_install_bundle", SCRIPTS / "build_install_bundle.py")
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
@@ -94,31 +96,67 @@ def docker_ready():
 def test_installer_scenarios(image, rel, docker_ready):
     name = "tico-install-test-" + uuid.uuid4().hex[:8]
     # Docker Desktop may not share an external checkout or pytest's configured temp volume.
-    with tempfile.TemporaryDirectory(prefix="tico-install-test-", dir="/private/tmp" if sys.platform == "darwin" else None) as stage:
+    with tempfile.TemporaryDirectory(
+        prefix="tico-install-test-", dir="/private/tmp" if sys.platform == "darwin" else None
+    ) as stage:
         staged = Path(stage)
         shutil.copytree(rel, staged / "rel")
         shutil.copy(Path(__file__).parent / "install_scenarios.sh", staged / "scen.sh")
         try:
             r = subprocess.run(
-                ["docker", "run", "--name", name, "--rm", "--mount", f"type=bind,src={staged / 'rel'},dst=/rel,readonly",
-                 "--mount", f"type=bind,src={staged / 'scen.sh'},dst=/scen.sh,readonly",
-                 image, "sh", "-c", "apt-get update -qq >/dev/null 2>&1; sh /scen.sh"],
-                capture_output=True, text=True, timeout=900)
+                [
+                    "docker",
+                    "run",
+                    "--name",
+                    name,
+                    "--rm",
+                    "--mount",
+                    f"type=bind,src={staged / 'rel'},dst=/rel,readonly",
+                    "--mount",
+                    f"type=bind,src={staged / 'scen.sh'},dst=/scen.sh,readonly",
+                    image,
+                    "sh",
+                    "-c",
+                    "apt-get update -qq >/dev/null 2>&1; sh /scen.sh",
+                ],
+                capture_output=True,
+                text=True,
+                timeout=900,
+            )
         finally:
             subprocess.run(["docker", "rm", "-f", name], capture_output=True)
-    if r.returncode != 0 and any(message in r.stderr for message in (
-            "Mounts denied", "is not shared from the host", "error while creating mount source path")):
-        pytest.skip("Docker cannot bind-mount the staged installer fixtures; share the system temp directory in Docker Desktop")
+    if r.returncode != 0 and any(
+        message in r.stderr
+        for message in ("Mounts denied", "is not shared from the host", "error while creating mount source path")
+    ):
+        pytest.skip(
+            "Docker cannot bind-mount the staged installer fixtures; share the system temp directory in Docker Desktop"
+        )
     lines = r.stdout.splitlines()
     failed = [l for l in lines if l.startswith("not ok")]
     assert not failed, "\n".join(failed) + "\n" + r.stderr[-2000:]
     assert lines and lines[-1] == "done", r.stdout[-2000:] + r.stderr[-2000:]
     passed = {l[3:] for l in lines if l.startswith("ok ")}
-    for must in ("preflight-memory", "preflight-disk", "preflight-port-80", "fresh-secret-not-echoed", "rerun-env-untouched",
-                 "rerun-skips-wizard", "upgrade-keeps-settings", "checksum-mismatch-refused", "checksum-installs-nothing",
-                 "unpinned-uses-latest-release", "version-flag-overrides-baked", "older-installer-holds",
-                 "mac-team-install-refused", "mac-local-exit", "mac-runner-exit", "mac-docker-not-running",
-                 "wizard-fail-exit", "wizard-fail-no-offer-without-tty"):
+    for must in (
+        "preflight-memory",
+        "preflight-disk",
+        "preflight-port-80",
+        "fresh-secret-not-echoed",
+        "rerun-env-untouched",
+        "rerun-skips-wizard",
+        "upgrade-keeps-settings",
+        "checksum-mismatch-refused",
+        "checksum-installs-nothing",
+        "unpinned-uses-latest-release",
+        "version-flag-overrides-baked",
+        "older-installer-holds",
+        "mac-team-install-refused",
+        "mac-local-exit",
+        "mac-runner-exit",
+        "mac-docker-not-running",
+        "wizard-fail-exit",
+        "wizard-fail-no-offer-without-tty",
+    ):
         assert must in passed, f"scenario {must} did not run"
 
 
@@ -164,11 +202,23 @@ printf '%s\\n' "${TICO_INBOUND_URL:-}" > "$CAPTURE/url"
         (stubs / name).chmod(0o755)
     source = (SCRIPTS / "install.sh").read_text()
     function = "run_wizard() {" + source.split("run_wizard() {", 1)[1].split("\n}\n", 1)[0] + "\n}\n"
-    script = ('set -eu\nstep() { :; }; ensure_python() { :; }; warn() { :; }; as_root() { "$@"; }\n'
-              'TUNNEL= YES=1 VERSION=v1.2.3 DIR="$CAPTURE"\n' + function + "run_wizard --non-interactive\n")
+    script = (
+        'set -eu\nstep() { :; }; ensure_python() { :; }; warn() { :; }; as_root() { "$@"; }\n'
+        'TUNNEL= YES=1 VERSION=v1.2.3 DIR="$CAPTURE"\n' + function + "run_wizard --non-interactive\n"
+    )
     key, url = "tin_private-0123456789abcdefghijklmnopqrstuv", "https://inbox.private.example"
-    result = subprocess.run(["sh", "-c", script], env={"PATH": f"{stubs}:/usr/bin:/bin", "CAPTURE": str(tmp_path),
-                            "TICO_INBOUND_KEY": key, "TICO_INBOUND_URL": url}, capture_output=True, text=True, timeout=10)
+    result = subprocess.run(
+        ["sh", "-c", script],
+        env={
+            "PATH": f"{stubs}:/usr/bin:/bin",
+            "CAPTURE": str(tmp_path),
+            "TICO_INBOUND_KEY": key,
+            "TICO_INBOUND_URL": url,
+        },
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
     assert result.returncode == 0, result.stdout + result.stderr
     assert (tmp_path / "key").read_text().strip() == key and (tmp_path / "url").read_text().strip() == url
     shown = result.stdout + result.stderr + (tmp_path / "argv").read_text()
@@ -197,8 +247,18 @@ def test_bundle_from_the_real_repo_has_what_a_server_needs_and_is_reproducible(t
         names = set(t.getnames())
         assert t.extractfile("VERSION").read() == b"1.2.3\n"
         assert b"TICO_TAG=v1.2.3\n" in t.extractfile(".env.example").read()
-    assert {"compose.yaml", ".env.example", "setup/__main__.py", "setup/cli.py", "scripts/tico-setup", "docker/runner.compose.yaml",
-            "setup/support.py", "backend/redaction.py", "backend/company_file/starter.py", "backend/company_file/roles.json"} <= names
+    assert {
+        "compose.yaml",
+        ".env.example",
+        "setup/__main__.py",
+        "setup/cli.py",
+        "scripts/tico-setup",
+        "docker/runner.compose.yaml",
+        "setup/support.py",
+        "backend/redaction.py",
+        "backend/company_file/starter.py",
+        "backend/company_file/roles.json",
+    } <= names
     assert not [n for n in names if "/tests/" in n or n.endswith((".pyc", ".env")) or n.startswith("/") or ".." in n]
     sums = dict(reversed(l.split("  ")) for l in (a / "SHA256SUMS").read_text().splitlines())
     for f, digest in sums.items():
@@ -221,10 +281,17 @@ def shellcheck_skip_reason(environ=os.environ, which=shutil.which):
     return None if which("shellcheck") or environ.get("CI") else "shellcheck not installed"
 
 
-@pytest.mark.parametrize("environ, installed, reason", [
-    ({}, True, None), ({"CI": "true"}, True, None), ({"CI": "true"}, False, None),
-    ({}, False, "shellcheck not installed"), ({"CI": ""}, False, "shellcheck not installed"),
-], ids=["local", "CI", "CI-missing-runs-and-fails", "local-missing-skips", "empty-CI-skips"])
+@pytest.mark.parametrize(
+    "environ, installed, reason",
+    [
+        ({}, True, None),
+        ({"CI": "true"}, True, None),
+        ({"CI": "true"}, False, None),
+        ({}, False, "shellcheck not installed"),
+        ({"CI": ""}, False, "shellcheck not installed"),
+    ],
+    ids=["local", "CI", "CI-missing-runs-and-fails", "local-missing-skips", "empty-CI-skips"],
+)
 def test_shellcheck_is_skipped_only_off_ci(environ, installed, reason):
     assert shellcheck_skip_reason(environ, lambda name: "/usr/bin/shellcheck" if installed else None) == reason
 
@@ -233,6 +300,5 @@ def test_shellcheck_is_skipped_only_off_ci(environ, installed, reason):
 def test_install_sh_is_shellcheck_clean_posix_sh():
     if not shutil.which("shellcheck"):
         pytest.fail("shellcheck is required on CI (CI is set) and is not installed")
-    r = subprocess.run(["shellcheck", "-s", "sh", str(SCRIPTS / "install.sh")],
-                       capture_output=True, text=True)
+    r = subprocess.run(["shellcheck", "-s", "sh", str(SCRIPTS / "install.sh")], capture_output=True, text=True)
     assert r.returncode == 0, r.stdout

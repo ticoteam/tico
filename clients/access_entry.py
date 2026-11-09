@@ -21,11 +21,43 @@ from urllib.parse import urlsplit
 import yaml
 
 # The fields, beyond service, identity, can, env and note, that describe what a tool is scoped to.
-SCOPE_KEYS = ("database", "channels", "channel", "project", "projects", "mailbox", "mailboxes", "sites", "site",
-              "repo", "repos", "repositories", "org", "organization", "workspace", "account", "region", "domain",
-              "domains", "calendars", "folders", "drive", "drives", "bucket", "buckets", "table", "tables",
-              "dataset", "datasets", "collections", "read_only", "org_read", "max_rows", "timeout_seconds",
-              "read_preference")
+SCOPE_KEYS = (
+    "database",
+    "channels",
+    "channel",
+    "project",
+    "projects",
+    "mailbox",
+    "mailboxes",
+    "sites",
+    "site",
+    "repo",
+    "repos",
+    "repositories",
+    "org",
+    "organization",
+    "workspace",
+    "account",
+    "region",
+    "domain",
+    "domains",
+    "calendars",
+    "folders",
+    "drive",
+    "drives",
+    "bucket",
+    "buckets",
+    "table",
+    "tables",
+    "dataset",
+    "datasets",
+    "collections",
+    "read_only",
+    "org_read",
+    "max_rows",
+    "timeout_seconds",
+    "read_preference",
+)
 MAX_CAN = 20
 MAX_SCOPE = 20
 SERVICE_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,59}$")
@@ -34,10 +66,33 @@ ENV_RE = re.compile(r"^[A-Z_][A-Z0-9_]{0,99}$")
 # The names a bot's turn owns; a credential may not arrive under one (runner-rs/src/env.rs).
 # The HUB_ names the runner and the `hub` command set themselves. Other HUB_ names (a team's own HUB_BUCKET) are ordinary
 # variables a bot may be granted.
-RUNNER_HUB_ENV = {"HUB_TOKEN", "HUB_API_URL", "HUB_WORKSPACE", "HUB_EMPLOYEE", "HUB_OPERATION_ID", "HUB_BOT", "HUB_DIR",
-                  "HUB_DB", "HUB_HUMAN_OVERRIDE", "HUB_INGEST_TOKEN", "HUB_RUNNER_CONFIG", "HUB_TASK_ID", "HUB_BOT_FOLDER"}
-RESERVED_ENV = {"HOME", "PATH", "SHELL", "PYTHONPATH", "PYTHONHOME", "NODE_OPTIONS", "LD_PRELOAD",
-                "DYLD_INSERT_LIBRARIES", "CODEX_HOME", "CLAUDE_CONFIG_DIR"} | RUNNER_HUB_ENV
+RUNNER_HUB_ENV = {
+    "HUB_TOKEN",
+    "HUB_API_URL",
+    "HUB_WORKSPACE",
+    "HUB_EMPLOYEE",
+    "HUB_OPERATION_ID",
+    "HUB_BOT",
+    "HUB_DIR",
+    "HUB_DB",
+    "HUB_HUMAN_OVERRIDE",
+    "HUB_INGEST_TOKEN",
+    "HUB_RUNNER_CONFIG",
+    "HUB_TASK_ID",
+    "HUB_BOT_FOLDER",
+}
+RESERVED_ENV = {
+    "HOME",
+    "PATH",
+    "SHELL",
+    "PYTHONPATH",
+    "PYTHONHOME",
+    "NODE_OPTIONS",
+    "LD_PRELOAD",
+    "DYLD_INSERT_LIBRARIES",
+    "CODEX_HOME",
+    "CLAUDE_CONFIG_DIR",
+} | RUNNER_HUB_ENV
 RESERVED_PREFIXES = ("TICO_", "DYLD_", "LD_")
 
 # Key shapes seen in the wild, and a URL with a password in it.
@@ -45,8 +100,9 @@ SECRET_SHAPES = re.compile(
     r"sk-[A-Za-z0-9_-]{8,}|[sr]k_(?:live|test)_\w+|gh[pousr]_[A-Za-z0-9]{16,}|github_pat_\w+|glpat-[\w-]{10,}|"
     r"xox[abposr]-[\w-]+|xapp-[\w-]+|ph[xcs]_[A-Za-z0-9]{10,}|AKIA[0-9A-Z]{12,}|ASIA[0-9A-Z]{12,}|AIza[\w-]{20,}|"
     r"ya29\.[\w.-]+|eyJ[\w-]{8,}\.[\w-]{8,}\.[\w-]*|-----BEGIN [A-Z ]*KEY|npm_[A-Za-z0-9]{20,}|SG\.[\w-]{16,}|"
-    r"\bBearer\s+\S{12,}|\b[a-z][a-z0-9+.-]*://[^/\s:@]+:[^/\s@]+@|\bop:/{2}\S+")
-MCP_TRANSPORTS = ("http", "sse")            # streamable HTTP, and the older server-sent-events transport
+    r"\bBearer\s+\S{12,}|\b[a-z][a-z0-9+.-]*://[^/\s:@]+:[^/\s@]+@|\bop:/{2}\S+"
+)
+MCP_TRANSPORTS = ("http", "sse")  # streamable HTTP, and the older server-sent-events transport
 MCP_KEYS = ("url", "transport", "headers")
 MAX_HEADERS = 10
 PLACEHOLDER = re.compile(r"\$\{([A-Z_][A-Z0-9_]*)\}")
@@ -77,8 +133,14 @@ def secret_in(text):
     if found:
         return "it contains what looks like a key, token or password"
     for token in TOKEN_PARTS.split(text):
-        if (len(token) >= 24 and TOKEN_CHARS.match(token) and re.search(r"[a-z]", token) and re.search(r"[A-Z]", token)
-                and re.search(r"\d", token) and entropy(token) >= 3.9):
+        if (
+            len(token) >= 24
+            and TOKEN_CHARS.match(token)
+            and re.search(r"[a-z]", token)
+            and re.search(r"[A-Z]", token)
+            and re.search(r"\d", token)
+            and entropy(token) >= 3.9
+        ):
             return "it contains a long random-looking string"
     return ""
 
@@ -169,14 +231,22 @@ def clean_mcp(mcp, env=""):
             raise EntryError(f"mcp.headers.{name} is one line of text, such as \"Bearer ${{JIRA_API_TOKEN}}\"")
         bare = PLACEHOLDER.sub("", value)
         if "${" in bare or "$" in bare:
-            raise EntryError(f"mcp.headers.{name} may only use ${{VARIABLE}} placeholders (capitals, digits, underscores)")
+            raise EntryError(
+                f"mcp.headers.{name} may only use ${{VARIABLE}} placeholders (capitals, digits, underscores)"
+            )
         if secret_in(bare):
-            raise EntryError(f"mcp.headers.{name} holds what looks like a credential. Keep the value out of the entry: "
-                             "store it as the env variable and write ${VARIABLE} here", "secret")
+            raise EntryError(
+                f"mcp.headers.{name} holds what looks like a credential. Keep the value out of the entry: "
+                "store it as the env variable and write ${VARIABLE} here",
+                "secret",
+            )
         for used in placeholders(value):
             if used != env:
-                raise EntryError(f"mcp.headers.{name} uses ${{{used}}}, but only the entry's own env variable "
-                                 + (f"(${{{env}}}) " if env else "(set `env`) ") + "may be a placeholder")
+                raise EntryError(
+                    f"mcp.headers.{name} uses ${{{used}}}, but only the entry's own env variable "
+                    + (f"(${{{env}}}) " if env else "(set `env`) ")
+                    + "may be a placeholder"
+                )
         kept[name] = value.strip()
     result = {"url": url, "transport": transport}
     if kept:
@@ -196,7 +266,7 @@ def clean(entry):
     if not isinstance(can, list) or not can:
         raise EntryError("can lists what the bot may do, at least one verb: read, draft, post, act, use, send, write")
     verbs = []
-    for verb in can[:MAX_CAN + 1]:
+    for verb in can[: MAX_CAN + 1]:
         verb = str(verb).strip().lower()
         if not VERB_RE.match(verb):
             raise EntryError(f"{verb!r} is not a verb; use words such as read, draft, post, act, use, write")
@@ -216,16 +286,25 @@ def clean(entry):
         raise EntryError("scope values are text, numbers, yes/no, or lists of them")
     env = str(entry.get("env") or "").strip()
     if env and (not ENV_RE.match(env) or env in RESERVED_ENV or env.startswith(RESERVED_PREFIXES)):
-        raise EntryError("env is the name of the environment variable that holds the credential, such as "
-                         "POSTHOG_KEY (capitals, digits, underscores), never the credential itself", "secret"
-                         if len(env) > 30 or secret_in(env) else "entry")
+        raise EntryError(
+            "env is the name of the environment variable that holds the credential, such as "
+            "POSTHOG_KEY (capitals, digits, underscores), never the credential itself",
+            "secret" if len(env) > 30 or secret_in(env) else "entry",
+        )
     identity, note = one_line(entry.get("identity") or "", 300), one_line(entry.get("note") or "", 500)
-    for field, text in (("service", service), ("identity", identity), ("note", note), *(
-            ("scope." + key, " ".join(value) if isinstance(value, list) else value) for key, value in kept.items())):
+    for field, text in (
+        ("service", service),
+        ("identity", identity),
+        ("note", note),
+        *(("scope." + key, " ".join(value) if isinstance(value, list) else value) for key, value in kept.items()),
+    ):
         why = secret_in(text)
         if why:
-            raise EntryError(f"{field} is not accepted: {why}. Tico never takes a credential value; the operator "
-                             "puts it on the bot's computer and this entry names only its variable", "secret")
+            raise EntryError(
+                f"{field} is not accepted: {why}. Tico never takes a credential value; the operator "
+                "puts it on the bot's computer and this entry names only its variable",
+                "secret",
+            )
     result = {"service": service}
     if identity:
         result["identity"] = identity

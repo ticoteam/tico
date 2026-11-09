@@ -1,4 +1,4 @@
-"""Build a team (the web page "Build a team", ui/app/team-build.js): a briefing suggests the roles a team needs, and the
+"""Build a team (the web page "Build a team", ui/app/team-build.ts): a briefing suggests the roles a team needs, and the
 picks are hired into that team in one step.
 
 `suggest` answers from the local recommender (backend/recruit_rank.py) only, so the briefing never leaves this server and
@@ -14,6 +14,7 @@ The last role is a cloud agent (backend/cloud_agents.py), unchecked and never hi
 connects (added as a bot from the Cloud agents dialog), and its alternatives are the other agents, the connected ones first
 and the rest to request.
 """
+
 from typing import Annotated
 
 from fastapi import Request
@@ -29,12 +30,12 @@ from . import recruiting
 from .onboarding import load as load_onboarding, read_cards
 from .store import Problem
 
-ROLES = 8               # the roles a team's suggestion shows at most, and the picks one request may hire
-ALTERNATIVES = 6        # the other candidates a role offers under Change
-LINE = 90               # a candidate's one line, in characters
-STRONG, GOOD = 6, 3     # how well a candidate fits the briefing, on recruit_rank's own score
+ROLES = 8  # the roles a team's suggestion shows at most, and the picks one request may hire
+ALTERNATIVES = 6  # the other candidates a role offers under Change
+LINE = 90  # a candidate's one line, in characters
+STRONG, GOOD = 6, 3  # how well a candidate fits the briefing, on recruit_rank's own score
 CLOUD_ROLE = "Second pair of hands"
-OWNS = 3                # a candidate's owns, shown in the seat's job description and on the card
+OWNS = 3  # a candidate's owns, shown in the seat's job description and on the card
 
 
 class TeamSuggest(M.Contract):
@@ -49,7 +50,9 @@ class TeamPick(M.Contract):
 
 class TeamHire(M.Contract):
     team: Annotated[str, Field(min_length=1, max_length=100)]
-    reports_to: Annotated[str, Field(max_length=200)] = ""     # `human:<id>`, a bot's slug or `seat:<id>`; the caller by default
+    reports_to: Annotated[str, Field(max_length=200)] = (
+        ""  # `human:<id>`, a bot's slug or `seat:<id>`; the caller by default
+    )
     picks: Annotated[list[TeamPick], Field(min_length=1, max_length=ROLES)]
 
 
@@ -72,9 +75,12 @@ def _group(c, auth, who, team):
     access = auth.bot_accesses(c, who)
 
     def seen(slug):
-        return bool(access.get(slug, {}).get("see"))      # a bot the permissions do not name is hidden, not open
-    row = next((g for g in Groups.rows(Groups._roster(c), Groups._configs(c), Groups._archived(c), seen)
-                if g["id"] == team), None)
+        return bool(access.get(slug, {}).get("see"))  # a bot the permissions do not name is hidden, not open
+
+    row = next(
+        (g for g in Groups.rows(Groups._roster(c), Groups._configs(c), Groups._archived(c), seen) if g["id"] == team),
+        None,
+    )
     if not row:
         raise Problem("not_found", "Team not found", 404)
     return row
@@ -109,7 +115,7 @@ def _about(c, who):
 
 # ------------------------------------------------------------------ candidates
 def _briefing(value):
-    return " ".join(str(value or "").split())[:R.BRIEFING_LIMIT]
+    return " ".join(str(value or "").split())[: R.BRIEFING_LIMIT]
 
 
 def _match(card, words, common):
@@ -120,19 +126,41 @@ def _match(card, words, common):
 def _item(card, raw, match):
     """A candidate as the web app shows it (the contract in the build spec): a Tico template, one line about it, its
     tags, what it owns and what it needs."""
-    return {"template": card["template"], "name": card["name"], "icon": card["icon"], "department": card["department"],
-            "line": R._first_sentence(card["summary"], LINE), "tags": card["tags"][:8],
-            "owns": [item[:160] for item in raw.get("owns", [])[:OWNS]],
-            "prerequisites": [{"tool": row["tool"], "required": row["required"]} for row in raw.get("prerequisites", [])[:4]],
-            "match": match, "source": "template"}
+    return {
+        "template": card["template"],
+        "name": card["name"],
+        "icon": card["icon"],
+        "department": card["department"],
+        "line": R._first_sentence(card["summary"], LINE),
+        "tags": card["tags"][:8],
+        "owns": [item[:160] for item in raw.get("owns", [])[:OWNS]],
+        "prerequisites": [
+            {"tool": row["tool"], "required": row["required"]} for row in raw.get("prerequisites", [])[:4]
+        ],
+        "match": match,
+        "source": "template",
+    }
 
 
 def _cloud(agent):
     """A cloud agent as the web app shows it: the shape of a template candidate, with no template, so a hire skips it."""
-    return {"id": agent["id"], "name": agent["name"], "maker": agent.get("maker", ""), "site": agent.get("site", ""),
-            "line": str(agent.get("line") or "")[:LINE], "supported": bool(agent.get("supported")),
-            "connect_id": agent.get("connect_id"), "source": "cloud", "template": "", "icon": "", "department": "",
-            "tags": [], "owns": [], "prerequisites": [], "match": ""}
+    return {
+        "id": agent["id"],
+        "name": agent["name"],
+        "maker": agent.get("maker", ""),
+        "site": agent.get("site", ""),
+        "line": str(agent.get("line") or "")[:LINE],
+        "supported": bool(agent.get("supported")),
+        "connect_id": agent.get("connect_id"),
+        "source": "cloud",
+        "template": "",
+        "icon": "",
+        "department": "",
+        "tags": [],
+        "owns": [],
+        "prerequisites": [],
+        "match": "",
+    }
 
 
 def _cloud_agents():
@@ -144,7 +172,7 @@ def _cloud_agents():
         return []
     listing = getattr(cloud_agents, "listing", None)
     agents = [row for row in listing() if row.get("id") and row.get("name")] if callable(listing) else []
-    return [_cloud(row) for row in sorted(agents, key=lambda row: not row.get("supported"))]     # a stable sort
+    return [_cloud(row) for row in sorted(agents, key=lambda row: not row.get("supported"))]  # a stable sort
 
 
 def suggest(auth, onboarding, c, who, team, briefing=""):
@@ -159,32 +187,53 @@ def suggest(auth, onboarding, c, who, team, briefing=""):
         return {"team": team, "department": "", "roles": []}
     text = _briefing(briefing)
     ranked = R.rank(value, dept, text, _about(c, who), limit=len(value["cards"]))
-    picked = [row["template_id"] for row in ranked["bots"]]
     members = {card["template"]: card for card in value["cards"] if card["department"] == dept}
     filled = _filled(c, group)
+    picked = [row["template_id"] for row in ranked["bots"]]
+    # A filled role the recommender left out (a niche card the briefing does not name) still counts, after the ranked ones.
+    picked += [t for t in members if t in filled and t not in picked]
     words, common = R._words(text), R._common(list(members.values()))
     raw = {row["template"]: row for row in read_cards(onboarding.settings)}
     suggested = set(ranked["suggested_default"])
-    shown = picked[:ROLES]
+    # The head and every role the team already fills are always shown, whatever their rank (so more than ROLES when a
+    # team has that many); the other slots go in rank order.
+    head = R.head_of(value, dept)
+    kept = {t for t in picked if t in filled or t == head}
+    shown, open_slots = [], ROLES - len(kept)
+    for template in picked:
+        if template in kept:
+            shown.append(template)
+        elif open_slots > 0:
+            shown.append(template)
+            open_slots -= 1
     # The rest of the department, the recommender's leftovers first, as the alternatives a role can take instead.
-    rest = picked[ROLES:] + sorted((t for t in members if t not in picked),
-                                                key=lambda t: ({"default": 0, "common": 1}.get(members[t]["suggest"], 2),
-                                                               members[t]["name"].lower()))
+    rest = [t for t in picked if t not in shown] + sorted(
+        (t for t in members if t not in picked),
+        key=lambda t: ({"default": 0, "common": 1}.get(members[t]["suggest"], 2), members[t]["name"].lower()),
+    )
     pool = [t for t in rest if t not in filled and t not in shown][:ALTERNATIVES]
     roles = []
     for template in shown:
         card = members[template]
         match = _match(card, words, common)
         on_team = template in filled
-        roles.append({"role": card["name"], "pick": _item(card, raw.get(template, {}), match),
-                      "alternatives": [] if on_team else [_item(members[t], raw.get(t, {}), _match(members[t], words, common))
-                                                          for t in pool],
-                      "on_team": on_team,
-                      "bot": _bot(c, filled[template], card["icon"]) if on_team else None,
-                      "checked": not on_team and (template in suggested or match in ("strong", "good"))})
+        roles.append(
+            {
+                "role": card["name"],
+                "pick": _item(card, raw.get(template, {}), match),
+                "alternatives": []
+                if on_team
+                else [_item(members[t], raw.get(t, {}), _match(members[t], words, common)) for t in pool],
+                "on_team": on_team,
+                "bot": _bot(c, filled[template], card["icon"]) if on_team else None,
+                "checked": not on_team and (template in suggested or match in ("strong", "good")),
+            }
+        )
     agents = _cloud_agents()
     if agents:
-        roles.append({"role": CLOUD_ROLE, "pick": agents[0], "alternatives": agents[1:], "on_team": False, "checked": False})
+        roles.append(
+            {"role": CLOUD_ROLE, "pick": agents[0], "alternatives": agents[1:], "on_team": False, "checked": False}
+        )
     return {"team": team, "department": dept, "roles": roles}
 
 
@@ -202,7 +251,7 @@ def hire(auth, onboarding, c, who, team, reports_to, picks):
     backend/recruiting.py `hire` fills one. Returns the bots made, in the order they were hired."""
     _may_build(who)
     group = _group(c, auth, who, team)
-    Groups.may_add(c, auth, who, team)      # a seat in the team is an add to it, the rule a move into it obeys
+    Groups.may_add(c, auth, who, team)  # a seat in the team is an add to it, the rule a move into it obeys
     value = recruit.catalog(onboarding.settings)
     dept = _department(value, group)
     offered = {card["template"]: card for card in recruiting._recruitable(onboarding)[1] if card["department"] == dept}
@@ -217,7 +266,7 @@ def hire(auth, onboarding, c, who, team, reports_to, picks):
         chosen.append((pick.role, card))
     if not chosen:
         raise Problem("picks", "Pick at least one role", 422)
-    chosen.sort(key=lambda item: not item[1]["lead"])        # the head first: the seats under it hang from its bot
+    chosen.sort(key=lambda item: not item[1]["lead"])  # the head first: the seats under it hang from its bot
     filled = _filled(c, group)
     head_bot = filled.get(R.head_of(value, dept)) if dept else None
     owner = str(reports_to or "").strip() or who.actor
@@ -230,8 +279,9 @@ def hire(auth, onboarding, c, who, team, reports_to, picks):
             parent = lifecycle.SEAT_PREFIX + head_seat
         else:
             parent = head_bot or owner
-        seat = lifecycle.create_seat(auth, c, who, card["name"], _job(card["raw"]), parent, team,
-                                     description_by=recruiting.CHART)
+        seat = lifecycle.create_seat(
+            auth, c, who, card["name"], _job(card["raw"]), parent, team, description_by=recruiting.CHART
+        )
         if card["lead"]:
             head_seat = seat["id"]
         seats.append((role, card, seat["id"]))
@@ -240,9 +290,17 @@ def hire(auth, onboarding, c, who, team, reports_to, picks):
         hired = recruiting.hire(auth, onboarding, c, who, seat_id, M.SeatHire(template=card["template"]))
         bot_id = (H.resolve_bot(c, hired["slug"]) or {}).get("id", hired["slug"])
         if (Groups._configs(c).get(bot_id) or {}).get("team") != team:
-            Groups._set_bot(c, bot_id, team)     # the team's group is the bot's own (backend/groups.py)
-        bots.append({"id": bot_id, "slug": hired["slug"], "name": card["name"], "template": card["template"], "role": role,
-                     "stage": hired["stage"]})
+            Groups._set_bot(c, bot_id, team)  # the team's group is the bot's own (backend/groups.py)
+        bots.append(
+            {
+                "id": bot_id,
+                "slug": hired["slug"],
+                "name": card["name"],
+                "template": card["template"],
+                "role": role,
+                "stage": hired["stage"],
+            }
+        )
     H.event(c, who.actor, "team.built", team, {"bots": [bot["id"] for bot in bots]})
     return {"team": team, "bots": bots}
 
@@ -266,4 +324,5 @@ def install(app, store, auth, mutate, onboarding):
         def work(c):
             auth.domain(who)
             return hire(auth, onboarding, c, who, body.team, body.reports_to, body.picks)
+
         return mutate(request, body, work)

@@ -7,6 +7,7 @@ of that format for the runner to finish it, and its final answer is `probe <json
 where the runner started it (its user and capabilities, whether it reaches the runner's registration, state and
 legacy secrets, and a commit and pull in its working tree as itself).
 """
+
 import json
 import os
 import subprocess
@@ -46,8 +47,12 @@ def siblings(cwd):
     workspace = HOME / "workspace"
     others = [p for p in workspace.glob("bot-*") if p.name != mine]
     others += [p for lane in (workspace / "sessions").glob("bot-*") if lane.name != mine for p in lane.iterdir()]
-    return {"sibling_enter": any(readable(p) for p in others), "sibling_write": any(writable(p) for p in others),
-            "sibling_rename": any(renamable(p) for p in others), "siblings_seen": len(others)}
+    return {
+        "sibling_enter": any(readable(p) for p in others),
+        "sibling_write": any(writable(p) for p in others),
+        "sibling_rename": any(renamable(p) for p in others),
+        "siblings_seen": len(others),
+    }
 
 
 def renamable(path):
@@ -68,14 +73,23 @@ def git(cwd, *args):
 
 def probe(cwd):
     cwd = cwd or os.getcwd()
-    caps = next(line.split(":", 1)[1].strip() for line in Path("/proc/self/status").read_text().splitlines()
-                if line.startswith("CapEff:"))
+    caps = next(
+        line.split(":", 1)[1].strip()
+        for line in Path("/proc/self/status").read_text().splitlines()
+        if line.startswith("CapEff:")
+    )
     # Where it ran, relative to the workspace and without slashes: the runner takes local file links out of a reply.
     where = os.path.relpath(cwd, HOME / "workspace").replace(os.sep, " > ")
-    result = {"harness": NAME, "uid": os.geteuid(), "caps": caps, "where": where,
-              "registration": readable(HOME / "runner.json"),
-              "state": any(readable(p) for p in HOME.glob("state-*")),
-              "secrets": readable(HOME / "workspace/secrets/_shared.env"), **siblings(cwd)}
+    result = {
+        "harness": NAME,
+        "uid": os.geteuid(),
+        "caps": caps,
+        "where": where,
+        "registration": readable(HOME / "runner.json"),
+        "state": any(readable(p) for p in HOME.glob("state-*")),
+        "secrets": readable(HOME / "workspace/secrets/_shared.env"),
+        **siblings(cwd),
+    }
     # Bot code's own git in its checkout: a commit, then a pull, as whatever user the runner started it as.
     note = Path(cwd) / f"turn-{NAME}-{uuid.uuid4().hex[:8]}.txt"
     try:
@@ -119,9 +133,22 @@ def codex():
             text = probe(params.get("cwd") or cwds.get(thread))
             say({"id": rid, "result": {"turn": {"id": turn}}})
             say({"method": "turn/started", "params": {"threadId": thread, "turn": {"id": turn}}})
-            say({"method": "item/completed", "params": {"threadId": thread, "turnId": turn, "item": {
-                "type": "agentMessage", "id": "m-" + turn, "text": text, "phase": "final_answer"}}})
-            say({"method": "turn/completed", "params": {"threadId": thread, "turn": {"id": turn, "status": "completed"}}})
+            say(
+                {
+                    "method": "item/completed",
+                    "params": {
+                        "threadId": thread,
+                        "turnId": turn,
+                        "item": {"type": "agentMessage", "id": "m-" + turn, "text": text, "phase": "final_answer"},
+                    },
+                }
+            )
+            say(
+                {
+                    "method": "turn/completed",
+                    "params": {"threadId": thread, "turn": {"id": turn, "status": "completed"}},
+                }
+            )
         else:
             say({"id": rid, "result": {}})
 
@@ -136,10 +163,25 @@ def claude():
             continue
         text = probe(None)
         say({"type": "system", "subtype": "init", "session_id": session, "model": "fake", "tools": []})
-        say({"type": "assistant", "message": {"id": "msg_1", "role": "assistant", "content": [{"type": "text", "text": text}]},
-             "parent_tool_use_id": None})
-        say({"type": "result", "subtype": "success", "is_error": False, "result": text, "stop_reason": "end_turn",
-             "session_id": session, "num_turns": 1, "usage": {"input_tokens": 1, "output_tokens": 1}})
+        say(
+            {
+                "type": "assistant",
+                "message": {"id": "msg_1", "role": "assistant", "content": [{"type": "text", "text": text}]},
+                "parent_tool_use_id": None,
+            }
+        )
+        say(
+            {
+                "type": "result",
+                "subtype": "success",
+                "is_error": False,
+                "result": text,
+                "stop_reason": "end_turn",
+                "session_id": session,
+                "num_turns": 1,
+                "usage": {"input_tokens": 1, "output_tokens": 1},
+            }
+        )
         break
     for _ in lines():
         pass
@@ -163,17 +205,39 @@ def antigravity():
         text = probe(None)
         say({"event": "init", "conversation_id": conversation})
         say({"event": "step_update", "step_update": {"step_type": "agent_response", "text_delta": text}})
-        say({"event": "result", "result": {"status": "SUCCESS", "response": text, "conversation_id": conversation,
-                                           "usage": {"input_tokens": 1, "output_tokens": 1}}})
+        say(
+            {
+                "event": "result",
+                "result": {
+                    "status": "SUCCESS",
+                    "response": text,
+                    "conversation_id": conversation,
+                    "usage": {"input_tokens": 1, "output_tokens": 1},
+                },
+            }
+        )
 
 
 def musecode():
     session = str(uuid.uuid4())
     text = probe(None)
     base = {"schema_version": 1, "stream": {"kind": "session", "id": session}, "payload_schema_version": 1}
-    say({**base, "sequence": 1, "payload_type": "run.output.delta", "payload": {"kind": "run_output_delta", "text": text}})
-    say({**base, "sequence": 2, "payload_type": "run.terminal.completed",
-         "payload": {"kind": "run_terminal", "terminal": "completed", "text": text, "reason": None}})
+    say(
+        {
+            **base,
+            "sequence": 1,
+            "payload_type": "run.output.delta",
+            "payload": {"kind": "run_output_delta", "text": text},
+        }
+    )
+    say(
+        {
+            **base,
+            "sequence": 2,
+            "payload_type": "run.terminal.completed",
+            "payload": {"kind": "run_terminal", "terminal": "completed", "text": text, "reason": None},
+        }
+    )
 
 
 def cursor():
@@ -184,7 +248,13 @@ def cursor():
     text = probe(None)
     session = str(uuid.uuid4())
     say({"type": "system", "subtype": "init", "session_id": session, "model": "Auto"})
-    say({"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": text}]}, "session_id": session})
+    say(
+        {
+            "type": "assistant",
+            "message": {"role": "assistant", "content": [{"type": "text", "text": text}]},
+            "session_id": session,
+        }
+    )
     say({"type": "result", "subtype": "success", "is_error": False, "result": text, "session_id": session})
 
 
@@ -197,8 +267,12 @@ def pi():
             continue
         say({**reply, "data": {"disposition": "started"}})
         text = probe(None)
-        message = {"role": "assistant", "content": [{"type": "text", "text": text}], "stopReason": "stop",
-                   "usage": {"input": 1, "output": 1, "totalTokens": 2}}
+        message = {
+            "role": "assistant",
+            "content": [{"type": "text", "text": text}],
+            "stopReason": "stop",
+            "usage": {"input": 1, "output": 1, "totalTokens": 2},
+        }
         say({"type": "agent_start"})
         say({"type": "message_end", "message": message})
         say({"type": "turn_end", "message": message, "toolResults": []})
@@ -213,20 +287,36 @@ def grok():
         if rid is None or method is None:
             continue
         if method in ("session/new", "session/load"):
-            cwd = params.get("cwd") or cwd   # ACP names the working folder per session, not per process
-            session = params.get("sessionId") or session   # a loaded session keeps its id
+            cwd = params.get("cwd") or cwd  # ACP names the working folder per session, not per process
+            session = params.get("sessionId") or session  # a loaded session keeps its id
             say({"jsonrpc": "2.0", "id": rid, "result": {"sessionId": session} if method == "session/new" else None})
         elif method == "session/prompt":
             text = probe(cwd)
-            say({"jsonrpc": "2.0", "method": "session/update", "params": {"sessionId": params.get("sessionId") or session, "update": {
-                "sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": text}}}})
+            say(
+                {
+                    "jsonrpc": "2.0",
+                    "method": "session/update",
+                    "params": {
+                        "sessionId": params.get("sessionId") or session,
+                        "update": {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": text}},
+                    },
+                }
+            )
             say({"jsonrpc": "2.0", "id": rid, "result": {"stopReason": "end_turn"}})
         else:
             say({"jsonrpc": "2.0", "id": rid, "result": {}})
 
 
-TURNS = {"codex": codex, "claude": claude, "gemini": gemini, "antigravity": antigravity, "musecode": musecode,
-         "cursor": cursor, "pi": pi, "grok": grok}
+TURNS = {
+    "codex": codex,
+    "claude": claude,
+    "gemini": gemini,
+    "antigravity": antigravity,
+    "musecode": musecode,
+    "cursor": cursor,
+    "pi": pi,
+    "grok": grok,
+}
 
 
 def main():

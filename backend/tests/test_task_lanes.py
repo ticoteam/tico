@@ -1,24 +1,35 @@
 """A bot's task-keyed turns run side by side in their own lanes, only on a runner that runs lanes."""
+
 import json
 
 import pytest
 
 from backend.store import H
 from backend.tests.test_api import api, assign, claim, get, post, runner  # noqa: F401  (api is a fixture)
+from backend import bot_settings as BS
 
 
 def task_bot(api, lanes, capability="task_lanes_v2", capacity=8, others=()):
     """`ops` keyed on tasks, assigned to a runner that does or does not advertise lanes."""
     with api.app.state.store.transaction() as c:
         for bot in ("ops", *others):
-            config = json.loads(c.execute("SELECT config FROM bot_config WHERE bot=?", (bot,)).fetchone()[0])
-            c.execute("UPDATE bot_config SET config=? WHERE bot=?", (json.dumps({**config, "session": "task"}), bot))
+            config = BS.read(c, bot)
+            BS.write(c, bot, {**config, 'session': 'task'})
     machine = runner(api)
     for bot in ("ops", *others):
         assign(api, machine, bot)
-    post(api, "runners/heartbeat", {"version": "test", "platform": "test", "capacity": capacity,
-                                    "readiness": {bot: True for bot in ("ops", *others)},
-                                    "capabilities": [capability] if lanes else []}, token=machine["token"])
+    post(
+        api,
+        "runners/heartbeat",
+        {
+            "version": "test",
+            "platform": "test",
+            "capacity": capacity,
+            "readiness": {bot: True for bot in ("ops", *others)},
+            "capabilities": [capability] if lanes else [],
+        },
+        token=machine["token"],
+    )
     return machine
 
 
@@ -39,21 +50,33 @@ def test_task_lanes_run_side_by_side_and_each_lane_stays_serial(api):
     assert claim(api, machine) is None
     # The runner's own busy list holds a lane the server does not know is taken yet.
     third = new_task(api, "third")
-    assert post(api, "jobs/claim", {"busy_lanes": ["ops|task:" + third["id"]]}, token=machine["token"])["attempt"] is None
+    assert (
+        post(api, "jobs/claim", {"busy_lanes": ["ops|task:" + third["id"]]}, token=machine["token"])["attempt"] is None
+    )
     assert claim(api, machine)["lane"] == "task:" + third["id"]
 
 
 def test_a_bot_uses_all_places_and_next_place_goes_to_the_bot_with_fewest(api):
-    machine = task_bot(api, lanes=True, capacity=4, others=("finance",))
+    machine = task_bot(api, lanes=True, capacity=2, others=("finance",))
     tasks = [new_task(api, title) for title in ("first", "second", "third", "fourth", "fifth")]
-    # No per-bot cap or permanently empty place: every short start may be used.
+    # No per-bot cap or permanently empty place: every short start may be used. Twice the two places is the claim
+    # bound, so four turns lease and the fifth task waits for a free place.
     assert [claim(api, machine)["bot"] for _ in range(4)] == ["ops"] * 4
     assert claim(api, machine) is None
     assert get(api, "tasks/" + tasks[4]["id"])["waiting_for"] == "Waiting for a free turn on Test Mac"
     review = new_task(api, "review", owner="finance")
-    post(api, "runners/heartbeat", {"version": "test", "platform": "test", "capacity": 8,
-                                    "readiness": {"ops": True, "finance": True}, "capabilities": ["task_lanes_v2"]},
-         token=machine["token"])
+    post(
+        api,
+        "runners/heartbeat",
+        {
+            "version": "test",
+            "platform": "test",
+            "capacity": 8,
+            "readiness": {"ops": True, "finance": True},
+            "capabilities": ["task_lanes_v2"],
+        },
+        token=machine["token"],
+    )
     assert claim(api, machine)["bot"] == "finance"
     assert get(api, "tasks/" + review["id"])["waiting_for"] == ""
     post(api, "chat/ops", {"text": "Quick question."})
@@ -95,8 +118,12 @@ def test_a_finished_lane_leaves_the_bot_running_and_stop_names_the_turn(api):
     refused = post(api, "bots/ops/stop", {}, expected=409)
     assert refused["error"]["code"] == "ambiguous"
     post(api, "bots/ops/stop", {"run_id": two["id"]})
-    post(api, f"attempts/{one['id']}/complete", {"outcome": "completed", "last_seq": 0, "text": "Done."},
-         machine["token"])
+    post(
+        api,
+        f"attempts/{one['id']}/complete",
+        {"outcome": "completed", "last_seq": 0, "text": "Done."},
+        machine["token"],
+    )
     with api.app.state.store.read() as c:
         status = H.status(c, "ops")
     # No count and no task: the other turn may be on a task this status's readers cannot see.
@@ -120,13 +147,32 @@ def test_a_quota_reset_in_one_lane_holds_when_a_pre_limit_lane_finishes(api, mon
     reset = H.shift(now, days=4)[:19] + "Z"
 
     def finish_other():
-        post(api, f"attempts/{two['id']}/complete", {"outcome": "completed", "last_seq": 0, "text": "Done."},
-             machine["token"])
+        post(
+            api,
+            f"attempts/{two['id']}/complete",
+            {"outcome": "completed", "last_seq": 0, "text": "Done."},
+            machine["token"],
+        )
 
     if success_first:
         finish_other()
-    post(api, f"attempts/{one['id']}/events", {"events": [{"seq": 1, "kind": "error", "payload": {
-        "error": f"Subscription quota exhausted. Your usage window resets at {reset}.", "limit": True}}]}, machine["token"])
+    post(
+        api,
+        f"attempts/{one['id']}/events",
+        {
+            "events": [
+                {
+                    "seq": 1,
+                    "kind": "error",
+                    "payload": {
+                        "error": f"Subscription quota exhausted. Your usage window resets at {reset}.",
+                        "limit": True,
+                    },
+                }
+            ]
+        },
+        machine["token"],
+    )
     post(api, f"attempts/{one['id']}/complete", {"outcome": "failed", "last_seq": 1, "limited": True}, machine["token"])
     if not success_first:
         finish_other()
@@ -153,8 +199,12 @@ def test_a_pre_limit_lane_start_or_restore_cannot_release_the_cooldown(api, monk
             c.execute("UPDATE jobs SET state='uncertain' WHERE id=?", (two["job_id"],))
     monkeypatch.setattr(H, "now", lambda: H.shift(before, seconds=1))
     post(api, f"attempts/{one['id']}/started", {"thread_id": one["lane"]}, machine["token"])
-    post(api, f"attempts/{one['id']}/complete", {"outcome": "failed", "last_seq": 0,
-         "limited": True, "fallback": "codex"}, machine["token"])
+    post(
+        api,
+        f"attempts/{one['id']}/complete",
+        {"outcome": "failed", "last_seq": 0, "limited": True, "fallback": "codex"},
+        machine["token"],
+    )
     monkeypatch.setattr(H, "now", lambda: H.shift(before, seconds=2))
     if restore:
         post(api, f"attempts/{two['id']}/renew", {}, machine["token"])
@@ -163,8 +213,12 @@ def test_a_pre_limit_lane_start_or_restore_cannot_release_the_cooldown(api, monk
     with api.app.state.store.read() as c:
         assert cooling_off(c, "ops"), "starting an already-leased lane must not lift another lane's limit"
     assert claim(api, machine) is None
-    post(api, f"attempts/{two['id']}/complete", {"outcome": "completed", "last_seq": 0, "text": "Done."},
-         machine["token"])
+    post(
+        api,
+        f"attempts/{two['id']}/complete",
+        {"outcome": "completed", "last_seq": 0, "text": "Done."},
+        machine["token"],
+    )
     with api.app.state.store.read() as c:
         assert cooling_off(c, "ops"), "the lane was leased before the limit even if it started afterwards"
         assert c.execute("SELECT state FROM jobs WHERE id=?", (one["job_id"],)).fetchone()[0] == "queued"
@@ -178,8 +232,16 @@ def test_an_older_runner_advertising_retired_assignment_capabilities_still_heart
     """Temporary assignments are gone (#420); a runner from before still names them in its heartbeat."""
     machine = runner(api)
     assign(api, machine, "ops")
-    post(api, "runners/heartbeat", {"version": "old", "platform": "test", "readiness": {"ops": True},
-                                    "capabilities": ["assignment_instances_v1", "assignment_cleanup_v1", "task_lanes_v1"]},
-         token=machine["token"])
+    post(
+        api,
+        "runners/heartbeat",
+        {
+            "version": "old",
+            "platform": "test",
+            "readiness": {"ops": True},
+            "capabilities": ["assignment_instances_v1", "assignment_cleanup_v1", "task_lanes_v1"],
+        },
+        token=machine["token"],
+    )
     post(api, "chat/ops", {"text": "Still there?"})
     assert claim(api, machine)["bot"] == "ops"

@@ -11,7 +11,7 @@ otherwise, with cargo on PATH, it is built now, behind a lock. When neither work
 launchd or systemd starts it again. `"engine": "python"` in runner.json and TICO_RUNNER_ENGINE=python are ignored with
 a warning: there is no Python runner any more.
 
-`python -m runner_support.engine prepare` gets the binary ready (scripts/tico install, a release update) and exits non-zero
+`python -m runner_support.engine prepare` gets the binary ready (scripts/tico-computer install, a release update) and exits non-zero
 with the reason when it cannot; `python -m runner_support.engine path` prints the ready binary's path.
 """
 
@@ -37,7 +37,7 @@ RELEASES = "https://github.com/ticoteam/tico/releases"
 SUMS = "tico-runner-SHA256SUMS"
 FETCH_TIMEOUT_S = 30
 MAX_BINARY_BYTES = 64 << 20
-RETRY_EXIT = 75               # EX_TEMPFAIL: the supervisor starts the shim again
+RETRY_EXIT = 75  # EX_TEMPFAIL: the supervisor starts the shim again
 
 
 def log(line):
@@ -99,8 +99,6 @@ def current(binary, root):
     return ""
 
 
-
-
 def build(root, env):
     """Build the checkout's release binary, waiting for it; two shims wait on one build. "" when it is built, else why."""
     cargo = shutil.which("cargo", path=env.get("PATH"))
@@ -111,11 +109,18 @@ def build(root, env):
     with open(crate / "target" / "tico-runner-build.lock", "w") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
         if not current(crate / "target" / "release" / "tico-runner", root):
-            return ""                        # another shim built it while this one waited
+            return ""  # another shim built it while this one waited
         log("Tico runner: building the Rust runner (cargo build --release); this takes a few minutes once")
         try:
-            done = subprocess.run([cargo, "build", "--release", "--locked", "-q"], cwd=crate, env=env,
-                                  stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=BUILD_TIMEOUT_S)
+            done = subprocess.run(
+                [cargo, "build", "--release", "--locked", "-q"],
+                cwd=crate,
+                env=env,
+                stdin=subprocess.DEVNULL,
+                capture_output=True,
+                text=True,
+                timeout=BUILD_TIMEOUT_S,
+            )
         except (OSError, subprocess.SubprocessError) as exc:
             return f"cargo build failed ({exc})"
         if done.returncode:
@@ -128,7 +133,8 @@ def asset(system=sys.platform, machine=None):
     """This computer's release asset name ("tico-runner-macos-arm64.gz"), or "" when no release builds one."""
     name = {"darwin": "macos", "linux": "linux"}.get(system)
     arch = {"arm64": "arm64", "aarch64": "arm64", "x86_64": "x86_64", "amd64": "x86_64"}.get(
-        (machine or platform.machine()).lower())
+        (machine or platform.machine()).lower()
+    )
     return f"tico-runner-{name}-{arch}.gz" if name and arch else ""
 
 
@@ -139,7 +145,11 @@ def dist(root):
 
 def candidates(env, root):
     given = str(env.get("TICO_RUNNER_BIN") or "").strip()
-    return [*([Path(given)] if given else []), Path(root) / "runner-rs" / "target" / "release" / "tico-runner", dist(root)]
+    return [
+        *([Path(given)] if given else []),
+        Path(root) / "runner-rs" / "target" / "release" / "tico-runner",
+        dist(root),
+    ]
 
 
 def ready(env, root):
@@ -182,6 +192,7 @@ def fetch(root, env, release=None):
     a release tag has one to download. "" when it is there and current, else why."""
     if release is None:
         from .release_update import checkout_release
+
         release = checkout_release(root)
     name = asset()
     if not release:
@@ -227,7 +238,7 @@ def prepare(root, env):
     (crate / "target").mkdir(parents=True, exist_ok=True)
     with open(crate / "target" / "tico-runner-prepare.lock", "w") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
-        binary = ready(env, root)          # another shim got it while this one waited
+        binary = ready(env, root)  # another shim got it while this one waited
         if binary:
             return binary, ""
         fetched = fetch(root, env)
@@ -260,7 +271,7 @@ def exec_binary(argv, config_path=None, env=None, execv=os.execve, root=ROOT):
     env.setdefault("TICO_ROOT", str(root))
     env.setdefault("TICO_RUNNER_PYTHON", sys.executable)
     execv(str(binary), [str(binary), *argv], env)
-    raise SystemExit(RETRY_EXIT)            # only a stand-in execv returns
+    raise SystemExit(RETRY_EXIT)  # only a stand-in execv returns
 
 
 def main(argv=None):

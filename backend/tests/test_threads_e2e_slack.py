@@ -20,9 +20,22 @@ from backend.tests.threads_e2e import call, create_thread, ok, require_threads_a
 
 def chan_event(stamp, text, user="U1", thread_ts=None):
     """A message in the linked channel, as the Slack events API delivers it."""
-    return {"op": "store", "event_id": f"Ev{stamp}", "team_id": TEAM, "api_app_id": APP, "channel": MARKETING,
-            "channel_kind": "channel", "ts": stamp, "thread_ts": thread_ts or stamp, "reply_ts": thread_ts or stamp,
-            "user_id": user, "author": "human", "author_name": None, "event_type": "message.channels", "text": text}
+    return {
+        "op": "store",
+        "event_id": f"Ev{stamp}",
+        "team_id": TEAM,
+        "api_app_id": APP,
+        "channel": MARKETING,
+        "channel_kind": "channel",
+        "ts": stamp,
+        "thread_ts": thread_ts or stamp,
+        "reply_ts": thread_ts or stamp,
+        "user_id": user,
+        "author": "human",
+        "author_name": None,
+        "event_type": "message.channels",
+        "text": text,
+    }
 
 
 def ts(n):
@@ -37,8 +50,13 @@ def slack_world(api, monkeypatch):
     # Sign-in and admission are the owner's to set: allow the company domain, as an install does, so the channel's
     # members (acme.example addresses) are admitted people.
     view = ok(call(api, "GET", "access", "ana-test"))
-    saved = call(api, "PUT", "access/allow", "ana-test", {"allowed": view["allowed"], "allowed_domains": ["acme.example"],
-                                                           "expected_revision": view["revision"]})
+    saved = call(
+        api,
+        "PUT",
+        "access/allow",
+        "ana-test",
+        {"allowed": view["allowed"], "allowed_domains": ["acme.example"], "expected_revision": view["revision"]},
+    )
     assert saved.status_code == 200, saved.text
 
     def fake_screen(store, source, text, bot=None, **kw):
@@ -48,7 +66,11 @@ def slack_world(api, monkeypatch):
     slack, clock = FakeSlack(), Clock()
     gw = G.Gateway(api.app.state.store, slack, judge_engine=FakeJudge(), clock=clock)
     gw.verify_app()
-    slack.members[MARKETING] = ["U1", "U2", BOT_USER]   # Ana and Ben, and the app: everyone in the channel can read a company thread
+    slack.members[MARKETING] = [
+        "U1",
+        "U2",
+        BOT_USER,
+    ]  # Ana and Ben, and the app: everyone in the channel can read a company thread
     return SimpleNamespace(api=api, slack=slack, gw=gw, bridge=gw.bridge, clock=clock)
 
 
@@ -94,8 +116,9 @@ def test_a_channel_message_is_read_in_the_thread_and_a_reply_goes_back_to_the_ch
     assert link_state(slack_world, asked["id"]) == "active"
 
     slack_world.bridge.receive(chan_event(ts(1), "Pricing draft is ready"))
-    assert any(m.get("body") == "Pricing draft is ready" for m in timeline(slack_world.api, "ana-test", t["id"])), \
+    assert any(m.get("body") == "Pricing draft is ready" for m in timeline(slack_world.api, "ana-test", t["id"])), (
         "the Slack message is carried into the thread as its sender"
+    )
 
     say(slack_world.api, "ana-test", t["id"], "Reply from Tico for the channel")
     tick(slack_world)
@@ -134,7 +157,7 @@ def test_a_blocked_channel_message_is_held_and_never_reaches_the_thread(slack_wo
 
 def test_a_private_thread_cannot_be_linked_to_a_channel_its_members_are_not_in(slack_world):
     require_threads_api(slack_world.api)
-    private = create_thread(slack_world.api, title="Pricing war room")       # members only: Ana alone
+    private = create_thread(slack_world.api, title="Pricing war room")  # members only: Ana alone
     asked = link(slack_world, private["id"])
     tick(slack_world)
     row = next(r for r in links(slack_world)["links"] if r["id"] == asked["id"])

@@ -1,11 +1,10 @@
-// Ask (ui/app/ask-panel.js): the person's chat bot on every page. On a computer the "Ask Tico" row at the bottom of
+// Ask (ui/app/ask-panel.ts): the person's chat bot on every page. On a computer the "Tico Assistant" row at the bottom of
 // the sidebar, with Search's icon at its end (or ⌘J), opens "Tico Assistant", a panel straight above the row that names the
 // page it sees and sends it with the message, and a close mark takes the row's dot place; on a phone the dot in the middle of the tab bar opens a sheet and closes it again. Its dot flies up to
 // its place beside the panel's name and lands there exactly, and flies back down on close; Tico's turns carry no dot.
-// The header has no +, no Show chat and nothing of Tico support (the Tico team has its own chat, ui/support.js); a
+// The header has no +, no Show chat and nothing of Tico support (the Tico team has its own chat, ui/support.ts); a
 // #/support link in a reply opens that chat over the page. A Confirm card BotOps
-// left in its own chat and bots' questions sit in the thread by when they were asked, answered here. A peek beside
-// the row says in six words at most that something waits (never who asked) and opens the chat on it. No BotOps or
+// left in its own chat and bots' questions sit in the thread by when they were asked, answered here. No BotOps or
 // Assistant rows in the rail. Fixtures only.
 const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
@@ -25,7 +24,7 @@ async function open(browser, viewport, state) {
     const json = body => route.fulfill({contentType: 'application/json', body: JSON.stringify(body)});
     if (/\/marked\.min\.js$/.test(p)) return route.fulfill({contentType: 'application/javascript', body: fs.readFileSync(uiFile('vendor/marked.min.js'), 'utf8')});
     if (url.origin !== 'https://tico-ui.test') return route.abort();
-    const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|css))$/);
+    const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/);
     if (ui && fs.existsSync(uiFile(ui[1]))) return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]), 'utf8')});
     if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
     if (p === '/api/me') return json({id: 'ben', role: 'human', name: 'Ben', email: 'ben@example.test', cloud: true});
@@ -40,7 +39,6 @@ async function open(browser, viewport, state) {
     if (p === '/api/v2/assistant/actions/act9' && method === 'GET') return json({action: state.card});
     if (p === '/api/v2/assistant/actions/act9/confirm') { state.decided.push('act9'); state.card.status = 'done'; return json({action: state.card}); }
     if (p === '/api/v2/needs-you') return json({actor: 'human:ben', count: state.needs.length, version: 'v' + state.needs.length, items: state.needs});
-    if (p === '/api/v2/messages/m9/answer') { state.answers.push(JSON.parse(route.request().postData()).text); state.needs = []; return json({ok: true}); }
     if (p === '/api/v2/tasks/t7/answers') { state.picked.push(JSON.parse(route.request().postData()).answers['tone-2']); state.needs = []; return json({ok: true}); }
     if (p === '/api/v2/assistant/messages') {
       const body = JSON.parse(route.request().postData());
@@ -98,7 +96,6 @@ async function flight(page, dot, act) {
   assert.ok(off < 2, `the dot landed ${off.toFixed(1)}px off ${dot}: ${JSON.stringify({ghost, r})}`);
   return ghost;
 }
-const words = text => text.trim().split(/\s+/).length;
 
 (async () => {
   const browser = await chromium.launch({headless: true, channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined});
@@ -110,7 +107,8 @@ const words = text => text.trim().split(/\s+/).length;
                  messages: [{body: 'Try a hard reload.', from: 'staff', created_at: ago(20)}]}],
       card: {id: 'act9', summary: 'Add Cara as an admin', method: 'POST', path: '/api/v2/people', status: 'pending', result: null,
              description: 'Add Cara as an admin', diff: [], body: {}, proposed_via: 'botops', created_at: ago(13)},
-      needs: [{kind: 'ask', id: 'm9', created_at: ago(12), ask: {id: 'm9', sender_id: 'bot:botops', recipient_id: 'human:ben', body: 'Which inbox should the bot answer?', created_at: ago(12), refs: {}}},
+      needs: [{kind: 'question', id: 'm9', created_at: ago(12), ask: {id: 'm9', sender_id: 'bot:botops', recipient_id: 'human:ben', body: 'Which inbox should the bot answer?', created_at: ago(12),
+               refs: {questions: [{id: 'inbox', question: 'Which inbox should the bot answer?', options: []}]}}},
               {kind: 'question', id: 't4', created_at: now, ask: {id: 'q4', sender_id: 'bot:coo', recipient_id: 'human:ben', body: 'Two launch questions', created_at: now,
                refs: {questions: [{question: 'Launch day?', options: [{label: 'Mon'}, {label: 'Tue'}]}, {question: 'Price?', options: [{label: '$9'}, {label: '$19'}]}]}}}]};
     let {page, errors} = await open(browser, {width: 1280, height: 900}, state);
@@ -134,26 +132,17 @@ const words = text => text.trim().split(/\s+/).length;
     await page.locator('#search-modal[open]').waitFor();
     await page.keyboard.press('Escape');
     await page.waitForFunction(() => !document.querySelector('#search-modal').open);
-    // A peek: Tico, in a few words, that two questions wait; never who asked or the question. × puts both away.
-    const peek = page.locator('#ask-peek');
-    await peek.waitFor({timeout: 8000});
-    const said = await peek.locator('[data-peek-text]').innerText();
-    assert.equal(said, '2 questions are waiting on you');
-    // It comes out of the rail, level with the row.
-    const level = await page.evaluate(() => { const b = s => document.querySelector(s).getBoundingClientRect(), p = b('#ask-peek'), r = b('#ask-row');
-      return {dy: Math.abs((p.top + p.bottom) / 2 - (r.top + r.bottom) / 2), gap: p.left - b('#side').right}; });
-    assert.ok(level.dy < 2 && level.gap > 0 && level.gap < 16, `the peek sits beside the row: ${JSON.stringify(level)}`);
-    assert.ok(words(said) <= 6 && !/asks/i.test(said), said);
-    assert.equal(await peek.locator('[data-peek-go]').innerText(), said, 'the line is the action');
-    await peek.getByRole('button', {name: 'Dismiss'}).click();
-    assert.equal(await peek.isHidden(), true);
-    assert.deepEqual(await page.evaluate(() => JSON.parse(localStorage.getItem('tico.ask.peek.ben')).dismissed), ['m9', 't4']);
+    // Nothing speaks up beside the row: the questions wait in the panel. A team reply still opens its chat by itself.
+    assert.equal(await page.locator('#ask-peek').count(), 0, 'no Ask peek');
+    await page.locator('#support-pop[open]').waitFor({timeout: 8000});
+    await page.keyboard.press('Escape');
+    await page.locator('#support-pop').waitFor({state: 'hidden'});
     // Open: the row's dot flies up to its place beside the panel's name and lands exactly there. The row stays, a close
     // mark in its dot's place; the panel stands straight above the row, over the sidebar, and leaves the row in view.
     // The flight is quick: under 350 ms however far it goes.
     const {took} = await flight(page, '#ask-panel .ask-head [data-ask-dot]', async () => { await fab.click(); await panel.waitFor(); });
     assert.ok(took <= 350, `a quick flight: ${took}ms`);
-    assert.deepEqual([await fab.getAttribute('aria-expanded'), await fab.getAttribute('aria-label')], ['true', 'Close Ask Tico']);
+    assert.deepEqual([await fab.getAttribute('aria-expanded'), await fab.getAttribute('aria-label')], ['true', 'Close Tico Assistant']);
     assert.equal(await fab.isVisible(), true, 'the row stays');
     assert.equal(await fab.evaluate(el => getComputedStyle(el.querySelector('.ask-x')).opacity), '1', 'a close mark holds its place');
     const above = await page.evaluate(() => { const b = s => document.querySelector(s).getBoundingClientRect(), p = b('#ask-panel'), r = b('#ask-row');
@@ -195,11 +184,10 @@ const words = text => text.trim().split(/\s+/).length;
     const several = thread.locator('.ask-card[data-ask-q="t4"]');
     assert.equal(await several.locator('a[href="#/task/t4"]').count(), 1);
     assert.equal(await several.locator('form').count(), 0);
+    // A question with no options is answered on its task: the card links there, with no words to send here.
     const question = thread.locator('.ask-card', {hasText: 'Which inbox should the bot answer?'});
-    await question.getByRole('textbox', {name: 'Answer BotOps'}).fill('support@acme.test');
-    await question.getByRole('button', {name: 'Send'}).click();
-    await question.waitFor({state: 'detached'});
-    assert.deepEqual(state.answers, ['support@acme.test']);
+    assert.equal(await question.locator('a[href="#/task/m9"]').count(), 1);
+    assert.equal(await question.getByRole('textbox').count(), 0);
     // Three picks or more are a list and Send, and the one chosen survives the thread being drawn again.
     const need = (id, extra) => ({kind: 'question', id, created_at: now, ask: {id: 'q' + id, sender_id: 'bot:botops', recipient_id: 'human:ben', created_at: now, ...extra}});
     state.picked = [];
@@ -207,7 +195,7 @@ const words = text => text.trim().split(/\s+/).length;
     await page.evaluate(async () => { await v2Refresh(); ASK.draw(); });
     const tone = thread.locator('.ask-card[data-ask-q="t7"]');
     await tone.locator('select').selectOption('2');
-    state.needs = [...state.needs, {...need('m10', {body: 'Anything else?', refs: {}}), kind: 'ask'}];
+    state.needs = [...state.needs, need('m10', {body: 'Anything else?', refs: {questions: [{id: 'more', question: 'Anything else?', options: [{label: 'Yes'}, {label: 'No'}]}]}})];
     await page.evaluate(async () => { await v2Refresh(); ASK.draw(); });
     await thread.locator('.ask-card[data-ask-q="m10"]').waitFor();
     assert.equal(await tone.locator('select').inputValue(), '2', 'the pick stays across a redraw');
@@ -268,7 +256,8 @@ const words = text => text.trim().split(/\s+/).length;
     await page.close();
 
     // A phone: the dot in the middle of the tab bar opens a full page above the tab bar, and closes it.
-    const ask = (id, who, body) => ({kind: 'ask', id, created_at: now, ask: {id, sender_id: who, recipient_id: 'human:ben', body, created_at: now, refs: {}}});
+    const ask = (id, who, body) => ({kind: 'question', id, created_at: now, ask: {id, sender_id: who, recipient_id: 'human:ben', body, created_at: now,
+      refs: {questions: [{id: 'q' + id, question: body, options: []}]}}});
     state = {messages: [msg('p1', 'human:ben', 'Our key is sk-live1234567890abcdef, board blank', ago(5)), msg('p2', 'bot:coo', 'Try a reload.', ago(4))],
       sent: [], read: [], decided: [], answers: [], tickets: [], card: null,
       needs: [ask('m8', 'bot:botops', 'Which inbox should the bot answer?'), ask('m7', 'bot:coo', 'Ship the launch post today?')]};
@@ -288,21 +277,15 @@ const words = text => text.trim().split(/\s+/).length;
     assert.ok(Math.abs(centre - 195) < 24, `the dot is in the middle of the tab bar (${centre})`);
     assert.equal(await page.locator('#ask-row').isVisible(), false, 'no Ask row on a phone');
     assert.equal(await tab.locator('[data-ask-dot]').getAttribute('data-state'), 'idle');
-    // A peek above the bar after a few seconds; tapping it opens the chat on the first question, the dot flying up to
-    // the sheet's header.
-    const peek2 = page.locator('#ask-peek');
-    await peek2.waitFor({timeout: 8000});
-    const said2 = await peek2.locator('[data-peek-text]').innerText();
-    assert.equal(said2, '2 questions are waiting on you');
-    assert.ok(words(said2) <= 6 && !/asks/i.test(said2), said2);
-    await flight(page, '#ask-panel .ask-head [data-ask-dot]', async () => { await peek2.locator('[data-peek-go]').click(); await page.locator('#ask-panel').waitFor(); });
+    // No peek above the bar. Tapping the tab opens the chat, the dot flying up to the sheet's header.
+    assert.equal(await page.locator('#ask-peek').count(), 0, 'no Ask peek');
+    await flight(page, '#ask-panel .ask-head [data-ask-dot]', async () => { await tab.click(); await page.locator('#ask-panel').waitFor(); });
     await page.locator('#ask-panel .ask-card[data-ask-q="m8"]').waitFor();
     assert.equal(await page.locator('#ask-panel .ask-card[data-ask-q="m8"]').isVisible(), true);
-    assert.equal(await peek2.isHidden(), true, 'no peek while the chat is open');
     const sheet = await page.locator('#ask-panel').boundingBox(), bar = await page.locator('#mobile-nav').boundingBox();
     assert.ok(sheet.x === 0 && sheet.y === 0 && sheet.width === 390 && Math.abs(sheet.y + sheet.height - bar.y) < 2, `a full page above the tab bar (${JSON.stringify([sheet, bar])})`);
     assert.equal(await page.locator('#ask-panel').evaluate(el => getComputedStyle(el).borderTopLeftRadius), '0px', 'square, like a page');
-    assert.deepEqual([await tab.getAttribute('aria-label'), await glyph()], ['Close Ask Tico', 'close']);
+    assert.deepEqual([await tab.getAttribute('aria-label'), await glyph()], ['Close Tico Assistant', 'close']);
     assert.equal(await page.locator('#ask-panel').evaluate(el => [...el.querySelectorAll('*')].every(x => x.getBoundingClientRect().right <= innerWidth + 1)), true, 'no horizontal scroll');
     assert.equal(await page.locator('#ask-panel [data-ask-loop], #ask-panel [data-ask-requests]').count(), 0, 'no support links on a phone either');
     // Its box is one line, as the bot chat's was: Attach, the words, Send in one row, not the words over the buttons.
@@ -314,8 +297,6 @@ const words = text => text.trim().split(/\s+/).length;
     // Closing flies the dot back down into the tab bar.
     await flight(page, '#mobile-ask [data-ask-dot]', async () => { await tab.click(); await page.locator('#ask-panel').waitFor({state: 'hidden'}); });
     assert.deepEqual([await tab.getAttribute('aria-label'), await glyph()], [null, 'dot']);
-    await page.waitForTimeout(300);
-    assert.equal(await peek2.isHidden(), true, 'the line spoke for both questions: no second peek');
     // A page of its own: tapping another tab, even the one already under it, leaves Ask.
     await tab.click();
     await page.locator('#ask-panel').waitFor();
@@ -323,13 +304,8 @@ const words = text => text.trim().split(/\s+/).length;
     await page.locator('#ask-panel').waitFor({state: 'hidden'});
     await page.locator('#mobile-nav [data-nav="tasks"]').click();
     assert.equal(await page.locator('#ask-panel').isHidden(), true, 'a tab never opens Ask');
-    // A "things need you" sheet already open: the chat opens over it, not under it.
-    await page.evaluate(() => { const s = document.createElement('section'); s.className = 'needs-you'; s.style.height = '600px'; document.body.appendChild(s); });
     await tab.click();
     await page.locator('#ask-panel').waitFor();
-    await page.locator('#ask-panel').evaluate(el => Promise.all(el.getAnimations().map(a => a.finished)));
-    assert.equal(await page.evaluate(() => { const r = document.querySelector('#ask-panel').getBoundingClientRect();
-      return !!document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2)?.closest('#ask-panel'); }), true, 'the chat is above the needs-you sheet');
     await tab.click();
     await page.locator('#ask-panel').waitFor({state: 'hidden'});
     assert.deepEqual(errors, []);
@@ -357,6 +333,12 @@ const words = text => text.trim().split(/\s+/).length;
     await page.evaluate(() => ASK.refresh());
     assert.equal(await page.locator('#ask-panel [data-ask-thread] [data-kept]').count(), 1, 'a new step leaves the thread be');
     assert.match(await working.innerText(), /^Working · \d+s · Reading tasks$/);
+    // Two minutes on, a message's "5m ago" reads "7m ago": its time moves in place, the thread stays.
+    const stamp = page.locator('#ask-panel [data-ask-thread] [data-ago]').first();
+    assert.equal(await stamp.innerText(), '5m ago');
+    await page.evaluate(() => { const real = Date.now; Date.now = () => real() + 120000; ASK.draw(); Date.now = real; });
+    assert.equal(await page.locator('#ask-panel [data-ask-thread] [data-kept]').count(), 1, 'a message\'s time ticking leaves the thread be');
+    assert.equal(await stamp.innerText(), '7m ago');
     state.execution = {...state.execution, state: 'completed', label: 'Complete', parts: []};
     state.messages.push(msg('w2', 'bot:coo', 'Closed 12 tasks.'));
     await page.evaluate(() => ASK.refresh());

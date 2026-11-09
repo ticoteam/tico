@@ -1,5 +1,6 @@
 """`tico setup --hosted own|invited [--preset recommended]`: a server Tico hosts, from our operator's flags only. The
 owner's single-use sign-in link is made here and written to a 0600 file; the server gets its hash. Never printed."""
+
 import hashlib
 import json
 import stat
@@ -51,17 +52,48 @@ def link_token():
 def test_hosted_own_with_the_preset_writes_the_mark_the_choices_and_only_the_links_hash(monkeypatch):
     monkeypatch.setenv("TICO_GATEWAY_INVITE", INVITE)
     shell = FakeShell()
-    code, out = go(["--target", "ssh", "--ssh", "root@203.0.113.7", "--yes", "--hosted", "own", "--preset", "recommended",
-                    *HOSTED], deps=over_ssh(shell))
+    code, out = go(
+        [
+            "--target",
+            "ssh",
+            "--ssh",
+            "root@203.0.113.7",
+            "--yes",
+            "--hosted",
+            "own",
+            "--preset",
+            "recommended",
+            *HOSTED,
+        ],
+        deps=over_ssh(shell),
+    )
     assert code == 0, out
     env = env_sent(shell)
     token = link_token()
-    assert {k: env.get(k) for k in ("TICO_HOSTED", "TICO_AUTH_PROXY", "TICO_OWNER_LINK_HASH", "TICO_INSTALL_PRESET",
-                                    "TICO_SAMPLE_COMPANY", "TICO_MODELS_PRESET", "TICO_SUPPORT", "TICO_GATEWAY_INVITE",
-                                    "TICO_TEAM_NAME")} == {
-        "TICO_HOSTED": "own", "TICO_AUTH_PROXY": "owner-link", "TICO_OWNER_LINK_HASH": hashlib.sha256(token.encode()).hexdigest(),
-        "TICO_INSTALL_PRESET": "recommended", "TICO_SAMPLE_COMPANY": "on", "TICO_MODELS_PRESET": "subscriptions-gateway",
-        "TICO_SUPPORT": "on", "TICO_GATEWAY_INVITE": INVITE, "TICO_TEAM_NAME": "Sample Co"}
+    assert {
+        k: env.get(k)
+        for k in (
+            "TICO_HOSTED",
+            "TICO_AUTH_PROXY",
+            "TICO_OWNER_LINK_HASH",
+            "TICO_INSTALL_PRESET",
+            "TICO_SAMPLE_COMPANY",
+            "TICO_MODELS_PRESET",
+            "TICO_SUPPORT",
+            "TICO_GATEWAY_INVITE",
+            "TICO_TEAM_NAME",
+        )
+    } == {
+        "TICO_HOSTED": "own",
+        "TICO_AUTH_PROXY": "owner-link",
+        "TICO_OWNER_LINK_HASH": hashlib.sha256(token.encode()).hexdigest(),
+        "TICO_INSTALL_PRESET": "recommended",
+        "TICO_SAMPLE_COMPANY": "on",
+        "TICO_MODELS_PRESET": "subscriptions-gateway",
+        "TICO_SUPPORT": "on",
+        "TICO_GATEWAY_INVITE": INVITE,
+        "TICO_TEAM_NAME": "Sample Co",
+    }
     assert not {"TICO_OIDC_ISSUER", "TICO_OIDC_CLIENT_ID", "TICO_OIDC_CLIENT_SECRET", "TICO_ACCESS_ISSUER"} & set(env)
     # The link and the invite reach no output and no command; the invite only the server's .env, on stdin.
     cmds = "\n".join(shell.cmds())
@@ -82,8 +114,10 @@ def test_hosted_own_with_the_preset_writes_the_mark_the_choices_and_only_the_lin
 
 def test_hosted_invited_without_the_preset_is_the_mark_and_the_link_alone():
     shell = FakeShell()
-    code, out = go(["--target", "ssh", "--ssh", "root@203.0.113.7", "--yes", "--hosted", "invited", "--company", "Acme",
-                    *HOSTED], deps=over_ssh(shell))
+    code, out = go(
+        ["--target", "ssh", "--ssh", "root@203.0.113.7", "--yes", "--hosted", "invited", "--company", "Acme", *HOSTED],
+        deps=over_ssh(shell),
+    )
     assert code == 0, out
     env = env_sent(shell)
     assert env["TICO_HOSTED"] == "invited" and env["TICO_AUTH_PROXY"] == "owner-link"
@@ -94,8 +128,21 @@ def test_hosted_invited_without_the_preset_is_the_mark_and_the_link_alone():
 
 def test_a_server_computer_that_cannot_start_leaves_the_server_running_and_says_how_to_add_it():
     shell = FakeShell({"backend.manage enrollment": Result(1, "", "no such service: server")})
-    code, out = go(["--target", "ssh", "--ssh", "root@203.0.113.7", "--yes", "--hosted", "own", "--preset", "recommended",
-                    *HOSTED], deps=over_ssh(shell))
+    code, out = go(
+        [
+            "--target",
+            "ssh",
+            "--ssh",
+            "root@203.0.113.7",
+            "--yes",
+            "--hosted",
+            "own",
+            "--preset",
+            "recommended",
+            *HOSTED,
+        ],
+        deps=over_ssh(shell),
+    )
     assert code == 0, out
     assert "The server computer did not start" in out and "Add it later: Settings > Computers > Add computer" in out
     assert "The owner's sign-in link is in" in out
@@ -121,41 +168,83 @@ def test_the_dry_run_masks_the_invite_and_makes_no_link(monkeypatch):
 
 
 def test_no_support_turns_the_presets_support_off():
-    code, out = go(["--dry-run", "--target", "aws", "--hosted", "own", "--preset", "recommended", "--no-support", *HOSTED])
+    code, out = go(
+        ["--dry-run", "--target", "aws", "--hosted", "own", "--preset", "recommended", "--no-support", *HOSTED]
+    )
     assert code == 0 and "TICO_SUPPORT=off" in out and "Tico Support off" in out
 
 
 def test_self_hosted_installs_leave_the_mark_and_the_preset_unset(monkeypatch):
     monkeypatch.setenv("TICO_OIDC_CLIENT_SECRET", "GOCSPX-supersecret")
     monkeypatch.setenv("TICO_GATEWAY_INVITE", INVITE)
-    code, out = go(["--dry-run", "--target", "aws", "--non-interactive", "--domain", "tico.example.com", "--auth", "google",
-                    "--client-id", "cid.apps.googleusercontent.com", "--company", "Acme", "--owner-email", "me@example.com"])
+    code, out = go(
+        [
+            "--dry-run",
+            "--target",
+            "aws",
+            "--non-interactive",
+            "--domain",
+            "tico.example.com",
+            "--auth",
+            "google",
+            "--client-id",
+            "cid.apps.googleusercontent.com",
+            "--company",
+            "Acme",
+            "--owner-email",
+            "me@example.com",
+        ]
+    )
     assert code == 0, out
     for key in ("TICO_HOSTED", "TICO_OWNER_LINK_HASH", "TICO_INSTALL_PRESET", "TICO_GATEWAY_INVITE", "TICO_SUPPORT"):
         assert key not in out
     assert "TICO_AUTH_PROXY=oidc" in out
 
 
-@pytest.mark.parametrize("argv, wanted", [
-    (["--hosted", "team"], "--hosted is own or invited"),
-    (["--hosted", "own", "--preset", "everything"], "--preset is recommended"),
-    (["--auth", "owner-link"], "--auth owner-link is for a server Tico hosts"),
-    (["--hosted", "own", "--auth", "google"], "--hosted signs people in with the owner sign-in link, or with --auth oidc"),
-    (["--auth", "google", "--issuer", "https://id.example"], "--issuer is for --auth oidc"),
-    (["--preset", "recommended"], "--preset recommended is for a server Tico hosts"),
-])
+@pytest.mark.parametrize(
+    "argv, wanted",
+    [
+        (["--hosted", "team"], "--hosted is own or invited"),
+        (["--hosted", "own", "--preset", "everything"], "--preset is recommended"),
+        (["--auth", "owner-link"], "--auth owner-link is for a server Tico hosts"),
+        (
+            ["--hosted", "own", "--auth", "google"],
+            "--hosted signs people in with the owner sign-in link, or with --auth oidc",
+        ),
+        (["--auth", "google", "--issuer", "https://id.example"], "--issuer is for --auth oidc"),
+        (["--preset", "recommended"], "--preset recommended is for a server Tico hosts"),
+    ],
+)
 def test_hosted_flags_that_do_not_go_together_stop_with_one_line(argv, wanted):
     code, out = go(["--dry-run", "--target", "aws", *argv, *HOSTED])
     assert code == 2 and out.strip().splitlines()[-1].startswith(wanted), out
 
 
-@pytest.mark.parametrize("argv, wanted", [
-    (["--non-interactive", "--domain", DOMAIN, "--owner-email", "ana@acme.example"], "--hosted needs --hosted-zone"),
-    (["--non-interactive", "--domain", "tico.example.com", "--hosted-zone", ZONE, "--owner-email", "ana@acme.example"],
-     f"--domain must be a name under {ZONE}"),
-    (["--non-interactive", "--domain", ZONE, "--hosted-zone", ZONE, "--owner-email", "ana@acme.example"],
-     f"--domain must be a name under {ZONE}"),
-])
+@pytest.mark.parametrize(
+    "argv, wanted",
+    [
+        (
+            ["--non-interactive", "--domain", DOMAIN, "--owner-email", "ana@acme.example"],
+            "--hosted needs --hosted-zone",
+        ),
+        (
+            [
+                "--non-interactive",
+                "--domain",
+                "tico.example.com",
+                "--hosted-zone",
+                ZONE,
+                "--owner-email",
+                "ana@acme.example",
+            ],
+            f"--domain must be a name under {ZONE}",
+        ),
+        (
+            ["--non-interactive", "--domain", ZONE, "--hosted-zone", ZONE, "--owner-email", "ana@acme.example"],
+            f"--domain must be a name under {ZONE}",
+        ),
+    ],
+)
 def test_the_owner_link_is_only_for_a_domain_under_our_zone(argv, wanted):
     code, out = go(["--target", "aws", "--yes", "--hosted", "own", *argv])
     assert code == 2 and wanted in out
@@ -204,7 +293,18 @@ def test_the_owner_link_command_is_refused_on_an_install_without_it():
 
 def test_the_invite_is_not_kept_on_this_computer_after_a_new_link_either(monkeypatch):
     monkeypatch.setenv("TICO_GATEWAY_INVITE", INVITE)
-    argv = ["--target", "ssh", "--ssh", "root@203.0.113.7", "--yes", "--hosted", "own", "--preset", "recommended", *HOSTED]
+    argv = [
+        "--target",
+        "ssh",
+        "--ssh",
+        "root@203.0.113.7",
+        "--yes",
+        "--hosted",
+        "own",
+        "--preset",
+        "recommended",
+        *HOSTED,
+    ]
     first = FakeShell()
     assert go(argv, deps=over_ssh(first))[0] == 0
     assert env_sent(first)["TICO_GATEWAY_INVITE"] == INVITE
