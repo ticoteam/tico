@@ -33,7 +33,7 @@ def register(app, auth, mover, mutate, settings_admin, task_view):
 
             task_id = auth.resolve_task(c, who, tid)
             auth.task(c, who, task_id)
-            H.TS._check(c, who.actor, task_id, mover(c, who))
+            H.TS._check(c, who.actor, task_id, mover(c, who), "set a check-back on")
             return {
                 "task": task_view(
                     task_check_backs.set_time(c, H.task(c, task_id), body.at, body.note, actor=who.actor),
