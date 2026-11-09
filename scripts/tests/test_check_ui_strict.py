@@ -231,7 +231,12 @@ def test_a_declare_global_in_a_test_script_fails_without_running_tsc(tmp_path, m
 
 
 def test_the_test_config_must_keep_module_detection_force(tmp_path, monkeypatch):
-    loose = {**GOOD_TESTS_CONFIG, "compilerOptions": {**GOOD_TESTS_CONFIG["compilerOptions"], "moduleDetection": "auto"}}
+    loose = {
+        **GOOD_TESTS_CONFIG,
+        "compilerOptions": {**GOOD_TESTS_CONFIG["compilerOptions"], "moduleDetection": "auto"},
+    }
     monkeypatch.setattr(strict, "ROOT", _tests_root(tmp_path, loose))
     monkeypatch.setattr(strict, "run_tests_tsc", lambda: pytest.fail("tsc must not run on a weakened config"))
-    assert strict.check_tests_gate() == ['ui/tests/tsconfig.json: moduleDetection must be "force" (each script is its own scope)']
+    assert strict.check_tests_gate() == [
+        'ui/tests/tsconfig.json: moduleDetection must be "force" (each script is its own scope)'
+    ]
