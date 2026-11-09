@@ -4715,12 +4715,6 @@ def _set_status(
 
     row = task_holds.with_holds(conn, row)
     type_id, step_id, effective = _task_state(conn, actor, row, status, type, step)
-    from . import spec_approval
-
-    spec_move = spec_approval.approval(conn, row, step_id)
-    if spec_move:
-        spec_approval.check(conn, actor, row, step_id)  # only a person approves a spec, and only with one on the card
-
     from . import pipeline_engine
 
     # Every forward stage move is held to the stage's requirements, not only task_update's (pipeline_engine). Cancelling
@@ -4808,8 +4802,6 @@ def _set_status(
 
     # A step chosen by hand holds: the keeper re-syncs the item from its tickets when one of them moves next.
     roadmap_changed(conn, row["id"], itself=actor == KEEPER or step is None)
-    if spec_move:
-        spec_approval.handoff(conn, actor, row)  # the builder ticket, with the frozen spec
     if row.get("status") != effective:
         from .task_check_backs import ensure as check_back_ensure
 
@@ -6922,9 +6914,9 @@ def task_create(
         if again:
             return _reuse_occurrence(conn, actor, target, again["id"], title, wake_refs, trigger, trigger_source)
     parent = _task_parent(conn, actor, None, parent_id) if parent_id else None
-    from . import review_gate, spec_approval
+    from . import review_gate, visual_specs
 
-    body = spec_approval.child_body(conn, parent_id, body)  # a Dev ticket's review and QA children get the spec
+    body = visual_specs.child_body(conn, parent_id, body)  # tickets under a spec'd roadmap card get its spec
     # Whoever files a subtask asked for it: it shows them as asking and their notices reach them.
     requester = actor
     if private is False and (not is_human(actor) or VIA.get()):
@@ -7419,7 +7411,6 @@ def task_update(
     *,
     strict=True,
     heard=(),
-    before_wake=None,
     override_requirements=False,
 ):
     """Rule 5. The owner may set open|doing|waiting|review|done|declined and a note; it may not close.
@@ -8176,10 +8167,6 @@ def task_update(
 
         if step_flow.check_step(conn, after):
             check_pools.safely(conn, verdict_moves.after_verdict, after)
-    # A caller's writes that belong before the wakes below (question_tasks.answer: an Approve moves the card the question
-    # blocked). The close is written and the wakes go out after them, so no wake is older than what it reports.
-    if before_wake is not None:
-        before_wake()
     subtask_told = None if closing_step else _subtask_wake(conn, actor, after, row["status"], note, quiet, heard=heard)
     if subtask_told == after["requester_id"]:
         notify_requester = False

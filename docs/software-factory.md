@@ -178,13 +178,13 @@ post-release QA. Publishing a roadmap is covered in [Public roadmaps](roadmaps.m
 ## Visual specs
 
 A spec can be a visual page. The product manager publishes it on the card with `hub page publish <file.html> --spec
---task <card>` (refused on any other task type). The page's styles are inlined at publish, so its mockups read as Tico
-does. Approval is a person's: the bot asks it as a question task under the card on the `spec-approval` topic, and the
-person's Approve moves the card to Approved, as that person. The person's own Assistant may do the same when they tell
-it to in chat; a bot, an automation or BotOps may not. Approval files a frozen, pinned copy of the page on a new Dev
-ticket under the card, and the ticket links it by its page route. Review and QA children of that ticket get the same
-link and the spec's text. With no Dev tickets type the move is allowed and the card notes that no builder ticket was
-made. Build instructions are in `templates/catalog/product-manager/skills/build-the-spec-page/SKILL.md`.
+--task <card>`. The publish is refused on any task that isn't a Product roadmap card. The page's styles are inlined
+at publish, so its mockups read as Tico does. Approval is the pipeline's: the page is attached to the Review stage's
+Spec approved requirement, and a person approves it. When the card leaves Review, the spawn link files the
+Engineering ticket under it with the spec attached. Every ticket filed under the card, and their own children
+(review, QA), gets the spec's page link and text in its body. A spec that is narrowed to some readers, on a private
+card or on a members-only pipeline gives the link only, and a ticket filed with neutral text gets nothing. Build
+instructions are in `templates/catalog/product-manager/skills/build-the-spec-page/SKILL.md`.
 
 ## When Security holds a release
 

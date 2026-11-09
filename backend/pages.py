@@ -22,7 +22,7 @@ from . import names
 from . import read_cache
 from . import visuals
 from .store import H, Problem
-from . import spec_approval
+from . import visual_specs
 from clients import bot_files as BF
 
 SCHEMA = """
@@ -351,8 +351,8 @@ class Pages:
         if spec:
             # A spec is a page on a Product roadmap card; its styles are inlined so the stored page reads the same anywhere.
             with self.store.read() as c:
-                spec_approval.check_publish(c, task)
-            data = spec_approval.inline_styles(data)
+                visual_specs.check_publish(c, task)
+            data = visual_specs.inline_styles(data)
         cleaned, unembedded = visuals.clean(data, "page", base=False)
         if len(cleaned) > visuals.LIMITS["page"]:
             raise Problem("file_refused", "A page is at most 10 MB", 422)
@@ -376,11 +376,11 @@ class Pages:
                     as_of,
                     now,
                     now,
-                    spec_approval.CARD if spec else None,
+                    visual_specs.CARD if spec else None,
                     cadence,
                     as_of,
                     now,
-                    spec_approval.CARD if spec else None,
+                    visual_specs.CARD if spec else None,
                     int(bool(changed)),
                 ),
             )
@@ -538,7 +538,7 @@ class Pages:
 def install_pages(app, store, auth, files):
     pages = Pages(app, store, auth, files)
     app.state.pages = pages
-    spec_approval.bind(files, auth.settings.public_url)
+    visual_specs.bind(files, auth.settings.public_url)
     publish_doc = {
         "requestBody": {
             "required": True,

@@ -1735,7 +1735,7 @@ def parser():
     s.add_argument(
         "--spec",
         action="store_true",
-        help="a visual spec for the Product roadmap card named by --task; styles are inlined, a person approves it",
+        help="a visual spec for the Product roadmap card named by --task; styles are inlined, tickets under it get its text",
     )
     s.set_defaults(fn="page publish")
     s = page.add_parser("list", help="pages you may read, newest first")

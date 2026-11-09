@@ -650,27 +650,8 @@ def answer(
         **({"body_sources": refs["body_sources"]} if refs.get("body_sources") else {}),
     }
     record(c, task_id, value)
-    # An Approve on a spec question moves the card it blocks (spec_approval). That runs once the question is closed and
-    # before the close's wakes go out, so the card's owner hears the answer after the card has moved, never before.
-    from . import spec_approval
-
-    moved: list[bool] = []
-
-    def approve_moves_card() -> None:
-        moved.append(True)
-        spec_approval.after_answer(c, who, row, task_id, body.answers, body.dismiss)
-
     with sourced(c, value.get("body_sources")):
-        H.task_update(
-            c,
-            who.actor,
-            task_id,
-            status="declined" if body.dismiss else "done",
-            note=text,
-            before_wake=approve_moves_card,
-        )
-    if not moved:  # the close ended before its wakes: the approve still moves the card
-        approve_moves_card()
+        H.task_update(c, who.actor, task_id, status="declined" if body.dismiss else "done", note=text)
     if value.get("reviewed"):
         file_reviews.record(c, who, task_id, task_id, task_id, value["reviewed"])
     parent = TR.parent_of(c, task_id)

@@ -47,16 +47,8 @@ Read it as the engineer: can each criterion be tested? Is anything ambiguous ("q
 there a dependency on another team? Is every rabbit hole in the spec either fixed, cut or time-boxed? Fix those
 before handing over.
 
-## 6. Make it visual
+## 6. Hand over
 
-Build the page with `skills/build-the-spec-page/SKILL.md`: the spec's sections as one HTML file, with a mockup of each
-screen the change touches, in Tico's styles. Publish it on the Product roadmap card for this problem:
-`hub page publish specs/<slug>.html --spec --task <card>`.
-
-## 7. Hand over
-
-Publish the written spec with `hub file publish specs/<slug>.md --task <id>`. Ask the owner or the Head of Product to
-approve it with the question in that skill (its step 5). Their Approve moves the card to Approved; do not move it
-yourself. List the issues you would file (title and
+Publish with `hub file publish specs/<slug>.md --task <id>`. List the issues you would file (title and
 body) on the task for a human, and the questions for the owners. `hub task update <id> --status done
 --note`: the problem in one line, the appetite, the path, open questions and who owes them.

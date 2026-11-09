@@ -1,12 +1,13 @@
 ---
 name: build-the-spec-page
-description: Build a spec as one visual Tico page, with mockups drawn in Tico's own styles, publish it on the Product roadmap card with --spec, and ask the owner to approve it. Read after the spec's words are written, before handing over.
+description: Build a spec as one visual Tico page, with mockups drawn in Tico's own styles, publish it on the Product roadmap card with --spec, and attach it to the card's Spec approved requirement. Read after the spec's words are written, before handing over.
 ---
 
 # Build the spec page
 
 A visual spec is one HTML page on the Product roadmap card. It carries the written spec and a mockup of every screen
-the change touches. A person's Approve hands it to the builders. Nothing else does.
+the change touches. Tickets filed under the card, such as the builder ticket, get its link and text. A person approves
+it through the pipeline's Spec approved requirement; nothing else does.
 
 ## Page order
 
@@ -50,18 +51,16 @@ content in `.scroll`.
    script and no outside address.
 4. Publish it on the card: `hub page publish specs/<slug>.html --spec --task <card>`. The publish is refused unless
    the card is on the Product roadmap.
-5. Ask for approval, as a question task under the card on the spec topic. Ask the owner, or the Head of Product,
-   whichever the task names:
+5. Hand it in for approval. Move the card to Review, find the Review stage's Spec approved requirement
+   (`hub requirements <stage>`), and attach the page to it:
 
-       hub task question "Approve this spec?" --on <person> --parent <card> --topic spec-approval \
-         --option "Approve -> the card moves to Approved and a builder ticket is filed" \
-         --option "Not yet -> the card stays in Spec" \
-         --why "Builders start on it once it is approved."
+       hub requirement attach <card> <requirement> --source file --file-id <page file id>
 
-   Then end the turn. Only the person asked can approve, and their Approve moves the card. Do not move the card
-   yourself. If they answer Not yet, read their note, revise the page and publish it again.
+   Then end the turn. A person approves it from their review queue. When the card leaves Review, the pipeline files
+   the builder ticket under it with the spec attached. Do not approve it or move the card past Review yourself. If
+   the review sends it back, read the note, revise the page and publish it again.
 
 ## Done
 
-The card holds the spec page, the approval question is open with the person asked, and the task note says the
-page's name, the open questions and who owes each.
+The card holds the spec page, the page is attached to Spec approved, and the task note says the page's name, the open
+questions and who owes each.
