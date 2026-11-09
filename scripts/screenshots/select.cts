@@ -1,5 +1,5 @@
 'use strict';
-// Which screenshot pages a change to the UI touches. Pure: index.js reads the changed paths and the dark-theme lines
+// Which screenshot pages a change to the UI touches. Pure: index.cts reads the changed paths and the dark-theme lines
 // from git, and the page table (PAGES, each entry's `ui` globs) from its own list. Every ui/ file is one of:
 //   ignored   tests, baselines and the UI's README: they draw nothing
 //   shared    the app shell, base styles, the router and the theme: any page can draw them, so every page is shot
@@ -8,12 +8,34 @@
 //   unmapped  none of the above, a file this table does not know yet: every page is shot, so nothing is missed
 // Paths outside ui/ draw no page. A glob's `*` stays within one path segment; `**` crosses segments.
 
-const NON_RENDERING = [
+// One PAGES entry of index.cts: its name and the ui/ globs that draw it.
+export interface Page {
+  name: string;
+  ui: string[];
+}
+
+export type FileKind = 'ignored' | 'shared' | 'page' | 'unshown' | 'unmapped';
+
+export interface Classification {
+  kind: FileKind;
+  pages: string[];
+}
+
+export interface Selection {
+  pages: string[];
+  all: boolean;
+  dark: boolean;
+  reason: string;
+  unshown: string[];
+  byPage: Record<string, string[]>;
+}
+
+const NON_RENDERING: string[] = [
   'ui/tests/**', 'ui/README.md', 'ui/**/*.md', 'ui/*-baseline.json', 'ui/baselines/**', 'ui/types/**', 'ui/tsconfig.json', 'ui/tsconfig.*.json',
   'ui/package.json', 'ui/package-lock.json', 'ui/**/LICENSE*', 'ui/**/AUTHORS',
 ];
 
-const SHARED = [
+const SHARED: string[] = [
   'ui/index.html', 'ui/theme.ts', 'ui/sw.js', 'ui/manifest.webmanifest', 'ui/observability*.ts',
   'ui/styles/tokens.css', 'ui/styles/base.css', 'ui/styles/layout.css', 'ui/styles/components.css',
   'ui/styles/sidebar.css', 'ui/styles/forms.css', 'ui/styles/motion.css', 'ui/styles/skeleton.css',
@@ -31,7 +53,7 @@ const SHARED = [
 
 // Files of features no PAGES entry shows. A change to one says so in the reason instead of shooting every page. A
 // page's own `ui` globs win over this list: a file both name belongs to the page.
-const UNSHOWN = [
+const UNSHOWN: string[] = [
   'ui/vendor/**', 'ui/app/settings-*.js', 'ui/app/settings-*.ts', 'ui/app/vault.ts', 'ui/app/catalog.ts', 'ui/app/cloud-*.ts', 'ui/app/team-add.ts',
   'ui/app/integrations.ts', 'ui/app/mail.ts', 'ui/app/email-preview.ts', 'ui/app/messaging.ts', 'ui/app/sql.ts',
   'ui/app/assistant-page.ts', 'ui/app/skills*.ts', 'ui/app/tags.ts', 'ui/app/roadmaps.ts', 'ui/app/company-page.ts',
@@ -50,10 +72,10 @@ const UNSHOWN = [
 ];
 
 // A change to one of these can change the dark theme on every page, whatever its lines say.
-const DARK_FILES = ['ui/styles/tokens.css', 'ui/theme.ts'];
+const DARK_FILES: string[] = ['ui/styles/tokens.css', 'ui/theme.ts'];
 
 // A glob as a regular expression over a slash-separated path.
-function globToRegExp(glob) {
+function globToRegExp(glob: string): RegExp {
   let out = '';
   for (let i = 0; i < glob.length; i++) {
     const c = glob[i];
@@ -71,10 +93,10 @@ function globToRegExp(glob) {
   return new RegExp('^' + out + '$');
 }
 
-const matchesAny = (globs, file) => globs.some(glob => globToRegExp(glob).test(file));
+const matchesAny = (globs: string[], file: string): boolean => globs.some(glob => globToRegExp(glob).test(file));
 
 // The kind of one ui/ file, and for a page file the names of the pages that claim it.
-function classify(file, pages) {
+function classify(file: string, pages: Page[]): Classification {
   if (matchesAny(NON_RENDERING, file)) return {kind: 'ignored', pages: []};
   if (matchesAny(SHARED, file)) return {kind: 'shared', pages: []};
   const claimed = pages.filter(page => matchesAny(page.ui, file)).map(page => page.name);
@@ -84,11 +106,11 @@ function classify(file, pages) {
 }
 
 // paths: the changed paths of a diff. darkPaths: the changed paths with a changed line that mentions dark.
-function selectPages(paths, pages, darkPaths = []) {
+function selectPages(paths: string[], pages: Page[], darkPaths: string[] = []): Selection {
   const names = pages.map(page => page.name);
   const ui = paths.filter(path => path.startsWith('ui/'));
-  const byKind = {shared: [], unmapped: [], page: [], unshown: [], ignored: []};
-  const claimed = new Set();
+  const byKind: Record<FileKind, string[]> = {shared: [], unmapped: [], page: [], unshown: [], ignored: []};
+  const claimed = new Set<string>();
   for (const file of ui) {
     const {kind, pages: named} = classify(file, pages);
     byKind[kind].push(file);
@@ -97,7 +119,7 @@ function selectPages(paths, pages, darkPaths = []) {
   const all = byKind.shared.length > 0 || byKind.unmapped.length > 0;
   const chosen = all ? names : names.filter(name => claimed.has(name));
 
-  const parts = [];
+  const parts: string[] = [];
   if (byKind.shared.length) parts.push(`shared ${byKind.shared.join(', ')}: every page`);
   if (byKind.unmapped.length) parts.push(`unmapped ${byKind.unmapped.join(', ')}: every page`);
   if (!all && claimed.size) parts.push(`pages ${chosen.join(', ')}`);
@@ -109,7 +131,7 @@ function selectPages(paths, pages, darkPaths = []) {
   const dark = ui.some(file => DARK_FILES.includes(file))
     || darkPaths.some(file => file.startsWith('ui/') && classify(file, pages).kind !== 'ignored');
 
-  const byPage = {};
+  const byPage: Record<string, string[]> = {};
   for (const name of names) {
     byPage[name] = ui.filter(file => {
       const c = classify(file, pages);

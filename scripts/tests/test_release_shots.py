@@ -16,7 +16,7 @@ import yaml
 from scripts import release_shots as shots
 
 ROOT = shots.ROOT
-HARNESS_FILES = ('index.js', 'select.js', 'compare.js')
+HARNESS_FILES = ('index.cts', 'select.cts', 'compare.cts')
 EVIDENCE = 'https://github.com/ticoteam/tico/blob/release-evidence'
 
 
@@ -76,7 +76,7 @@ def picked(repo: Path, head_files: dict[str, str]) -> shots.Selection:
 
 
 def all_page_names(repo: Path) -> set[str]:
-    text = (repo / 'scripts' / 'screenshots' / 'index.js').read_text()
+    text = (repo / 'scripts' / 'screenshots' / 'index.cts').read_text()
     return {match.group(1) for match in shots.PAGE_NAME.finditer(text)}
 
 
@@ -137,7 +137,7 @@ def test_every_page_can_be_limited_to_named_pages() -> None:
 def test_every_page_names_real_files_and_every_ui_file_is_named() -> None:
     listing = json.loads(
         subprocess.run(
-            ['node', 'scripts/screenshots/index.js', '--list-pages'],
+            ['node', 'scripts/screenshots/index.cts', '--list-pages'],
             cwd=ROOT,
             capture_output=True,
             text=True,
@@ -149,8 +149,8 @@ def test_every_page_names_real_files_and_every_ui_file_is_named() -> None:
     ]
     assert not stale, 'globs that match no tracked file: ' + ', '.join(stale)
     assert listing['unmapped'] == [], (
-        'ui/ files no table names. Add each to a PAGES entry ui list in scripts/screenshots/index.js, or to SHARED, '
-        'UNSHOWN or NON_RENDERING in scripts/screenshots/select.js: ' + ', '.join(listing['unmapped'])
+        'ui/ files no table names. Add each to a PAGES entry ui list in scripts/screenshots/index.cts, or to SHARED, '
+        'UNSHOWN or NON_RENDERING in scripts/screenshots/select.cts: ' + ', '.join(listing['unmapped'])
     )
 
 

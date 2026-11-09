@@ -14,20 +14,82 @@
 // --report FILE also writes {written, problems} as JSON; scripts/release_shots.py reads it.
 // Needs `npm ci` and a browser: TICO_BROWSER_CHANNEL=chrome (the default, your own Chrome) or empty for
 // Playwright's Chromium (`npx playwright install chromium`, what CI does). TICO_PYTHON picks the interpreter.
+import type {AddressInfo} from 'node:net';
+import type {Page as BrowserPage, ViewportSize} from 'playwright';
+import type {Selection} from './select.cts';
+
+// The page globals the capture reads and the demo's pages provide.
+declare global {
+  interface Window {
+    supportOpen: () => void;
+    __marketDraws?: number;
+  }
+}
+
 const {spawn, execFileSync} = require('node:child_process');
-const fs = require('node:fs');
-const net = require('node:net');
-const os = require('node:os');
-const path = require('node:path');
-const select = require('./select.js');
+const fs: typeof import('node:fs') = require('node:fs');
+const net: typeof import('node:net') = require('node:net');
+const os: typeof import('node:os') = require('node:os');
+const path: typeof import('node:path') = require('node:path');
+const select: typeof import('./select.cts') = require('./select.cts');
+
+// One width the pages are shot at: the browser viewport and pixel density, and touch for the phone.
+interface WidthSpec {
+  viewport: {width: number; height: number};
+  deviceScaleFactor: number;
+  isMobile?: boolean;
+  hasTouch?: boolean;
+}
+
+// One entry of PAGES. route is the hash to open (or a function that finds it in the demo data). steps run before the
+// picture and may click or wait.
+interface PageSpec {
+  name: string;
+  route: string | ((page: BrowserPage) => Promise<string>);
+  ready: string;
+  tab?: string;
+  steps?: (page: BrowserPage) => Promise<void>;
+  ui: string[];
+}
+
+// The demo's meetings and docs, as the APIs return them: only the fields the pages look up.
+interface Meeting {
+  id: string;
+  title: string;
+}
+
+interface Doc {
+  id: string;
+  title: string;
+}
+
+interface Seat {
+  id: string;
+}
+
+// The page table as --list-pages prints it.
+interface PageListing {
+  pages: {name: string; ui: string[]; matched: Record<string, string[]>}[];
+  shared: Record<string, string[]>;
+  unshown: Record<string, string[]>;
+  nonRendering: Record<string, string[]>;
+  darkFiles: string[];
+  unmapped: string[];
+}
+
+// A running demo server and how to stop it.
+interface Demo {
+  url: string;
+  stop: () => void;
+}
 
 const ROOT = path.resolve(__dirname, '../..');
-const WIDTHS = {
+const WIDTHS: Record<string, WidthSpec> = {
   desktop: {viewport: {width: 1280, height: 800}, deviceScaleFactor: 1},
   'desktop-1440': {viewport: {width: 1440, height: 900}, deviceScaleFactor: 1},
   phone: {viewport: {width: 390, height: 844}, deviceScaleFactor: 2, isMobile: true, hasTouch: true},
 };
-const THEMES = {light: 'light', dark: 'dark'};
+const THEMES: Record<string, 'light' | 'dark'> = {light: 'light', dark: 'dark'};
 const DEFAULT_WIDTHS = 'desktop,phone';
 const DEFAULT_THEMES = 'light,dark';
 // The demo's clock and the browser's: one fixed instant, so the seeded data and every "1d ago" come out the same on
@@ -54,9 +116,9 @@ const SETTINGS_UI = ['ui/app/settings.ts', 'ui/styles/settings.css'];
 // name: the file is <name>-<width>-<theme>.png. route: the hash to open. ready: text that means the page has
 // its data. tab: a Settings tab to select first (Settings remembers the last tab in sessionStorage, so a
 // capture never assumes the one it wants is the one showing). steps: what to do before the picture (click,
-// open a dialog). ui: the files under ui/ that draw the page, as globs (scripts/screenshots/select.js): a change
+// open a dialog). ui: the files under ui/ that draw the page, as globs (scripts/screenshots/select.cts): a change
 // to one of them shoots this page, and a change to a file no page claims is listed, never silently dropped.
-const PAGES = [
+const PAGES: PageSpec[] = [
   {name: 'updates', route: '#/updates', ready: 'The rivals sit $20 to $40 above Home Pro, so we still win on price.', ui: ['ui/app/updates.ts', 'ui/styles/updates.css']},
   {name: 'tasks', route: '#/tasks', ready: 'Raise Home Pro from $449 to $479 for December?', ui: TASKS_UI, steps: async page => {
     await page.click('#task-scope');
@@ -73,8 +135,8 @@ const PAGES = [
   {name: 'bot-chat', route: '#/bot/support', ready: 'No messages yet', ui: BOT_CHAT_UI},
   {name: 'meetings', route: '#/meetings', ready: 'Larkford town bid call', ui: MEETINGS_UI},
   {name: 'meeting', route: async page => '#/meetings?meeting=' + encodeURIComponent(await page.evaluate(async () => {
-    const list = await (await fetch('/api/meetings')).json();
-    return list.find(m => m.title === 'Weekly ops sync').id;
+    const list = (await (await fetch('/api/meetings')).json()) as Meeting[];
+    return (list.find(m => m.title === 'Weekly ops sync')!).id;
   })), ready: 'Calibration works first time for 84 percent of owners', ui: MEETINGS_UI, steps: async page => {
     await page.getByText('Let\'s start with the port').first().waitFor();
   }},
@@ -106,10 +168,10 @@ const PAGES = [
       await page.waitForTimeout(400);
     }},
   {name: 'docs', route: async page => '#/docs/' + encodeURIComponent(await page.evaluate(async () => {
-    const {docs} = await (await fetch('/api/v2/docs?limit=500')).json();
-    return docs.find(doc => doc.title === 'Returns and replacements').id;
+    const {docs} = (await (await fetch('/api/v2/docs?limit=500')).json()) as {docs: Doc[]};
+    return (docs.find(doc => doc.title === 'Returns and replacements') as Doc).id;
   })), ready: 'Support may send a replacement lens set without asking.', ui: ['ui/docs-*.ts', 'ui/styles/hub-v2.css'], steps: async page => {
-    if (page.viewportSize().width < 600) {
+    if ((page.viewportSize() as ViewportSize).width < 600) {
       await page.locator('#docs-reader .docs-back').click();
       await page.locator('#docs-h-linked').waitFor();
       const folders = page.locator('details[data-docs-folder][open] > summary');
@@ -148,17 +210,22 @@ const PAGES = [
       'ui/app/slash-commands.ts', 'ui/styles/threads.css', 'ui/styles/thread-*.css', 'ui/styles/chat*.css', 'ui/styles/feedback.css',
       'ui/styles/visual-*.css']},
   {name: 'recruit', route: async page => '#/seat/' + encodeURIComponent(await page.evaluate(async () =>
-    (await (await fetch('/api/v2/seats')).json()).seats[0].id)), ready: 'Job post',
+    ((await (await fetch('/api/v2/seats')).json()) as {seats: Seat[]}).seats[0].id)), ready: 'Job post',
     ui: ['ui/app/recruit.ts', 'ui/app/team-build.ts', 'ui/styles/recruit.css', 'ui/styles/team-build.css']},
 ];
 
-function argument(name, fallback = '') {
+function argument(name: string, fallback = ''): string {
   const at = process.argv.indexOf('--' + name);
   return at > 0 ? process.argv[at + 1] : fallback;
 }
 
+// The message of a thrown value, for a problem line.
+function messageOf(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
 // A comma list of names from a fixed set: a typo fails here, not as an empty run.
-function choices(flag, fallback, known) {
+function choices(flag: string, fallback: string, known: string[]): string[] {
   const values = argument(flag, fallback).split(',').map(value => value.trim()).filter(Boolean);
   const unknown = values.filter(value => !known.includes(value));
   if (!values.length || unknown.length) {
@@ -167,11 +234,11 @@ function choices(flag, fallback, known) {
   return values;
 }
 
-const git = args => execFileSync('git', args, {cwd: process.cwd(), encoding: 'utf8', maxBuffer: 256 << 20});
+const git = (args: string[]): string => execFileSync('git', args, {cwd: process.cwd(), encoding: 'utf8', maxBuffer: 256 << 20});
 
 // Which ui/ files have a changed line that mentions dark (a dark-theme rule or its test), from the diff's own lines.
-function darkPaths(base, head) {
-  const found = new Set();
+function darkPaths(base: string, head: string): string[] {
+  const found = new Set<string>();
   let file = '';
   for (const line of git(['diff', '-U0', '--no-renames', base, head, '--', 'ui']).split('\n')) {
     const header = /^diff --git a\/(\S+) b\/(\S+)/.exec(line);
@@ -182,7 +249,7 @@ function darkPaths(base, head) {
   return [...found];
 }
 
-function pagesForDiff(range) {
+function pagesForDiff(range: string): {base: string; head: string} & Selection {
   const [base, head, ...extra] = range.split('..');
   if (!base || !head || extra.length) throw new Error('--pages-for-diff takes <base>..<head>');
   const paths = git(['diff', '--name-only', '--no-renames', base, head, '--']).split('\n').filter(Boolean);
@@ -190,9 +257,9 @@ function pagesForDiff(range) {
 }
 
 // The page table and, for every glob in it, the tracked files it matches: a glob that matches nothing is a stale entry.
-function listPages() {
+function listPages(): PageListing {
   const tracked = git(['ls-files']).split('\n').filter(Boolean);
-  const matching = globs => Object.fromEntries(globs.map(glob => [glob, tracked.filter(file => select.globToRegExp(glob).test(file))]));
+  const matching = (globs: string[]): Record<string, string[]> => Object.fromEntries(globs.map(glob => [glob, tracked.filter(file => select.globToRegExp(glob).test(file))]));
   return {
     pages: PAGES.map(page => ({name: page.name, ui: page.ui, matched: matching(page.ui)})),
     shared: matching(select.SHARED),
@@ -204,14 +271,14 @@ function listPages() {
   };
 }
 
-const freePort = () => new Promise((resolve, reject) => {
+const freePort = (): Promise<number> => new Promise((resolve, reject) => {
   const server = net.createServer().once('error', reject).listen(0, '127.0.0.1', () => {
-    const {port} = server.address();
+    const {port} = server.address() as AddressInfo;
     server.close(() => resolve(port));
   });
 });
 
-async function bootDemo() {
+async function bootDemo(): Promise<Demo> {
   const port = await freePort();
   const data = fs.mkdtempSync(path.join(os.tmpdir(), 'tico-shots-'));
   const child = spawn(process.env.TICO_PYTHON || 'python3', ['-W', 'ignore', '-m', 'backend.demo', '--port', String(port), '--data-dir', data],
@@ -227,17 +294,17 @@ async function bootDemo() {
 }
 
 // Everything that must be true of a page before it is worth a screenshot.
-async function verify(page, problems, label) {
+async function verify(page: BrowserPage, problems: string[], label: string): Promise<void> {
   await page.evaluate(() => document.fonts.ready);
   const found = await page.evaluate(() => {
-    const seen = el => !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length) && getComputedStyle(el).visibility !== 'hidden';
-    const banners = [...document.querySelectorAll('.err, [role="alert"], .toast, .banner-error')]
-      .filter(seen).map(el => el.textContent.trim()).filter(Boolean);
+    const seen = (el: HTMLElement): boolean => !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length) && getComputedStyle(el).visibility !== 'hidden';
+    const banners = [...document.querySelectorAll<HTMLElement>('.err, [role="alert"], .toast, .banner-error')]
+      .filter(seen).map(el => (el.textContent as string).trim()).filter(Boolean);
     // An icon whose font has not loaded is its ligature name ("dynamic_feed") in body type: far wider than an icon.
-    const icons = [...document.querySelectorAll('.nav-icon, .mobile-nav-icon')].filter(seen)
-      .filter(el => el.getBoundingClientRect().width > 48).map(el => el.textContent.trim());
+    const icons = [...document.querySelectorAll<HTMLElement>('.nav-icon, .mobile-nav-icon')].filter(seen)
+      .filter(el => el.getBoundingClientRect().width > 48).map(el => (el.textContent as string).trim());
     return {banners, icons, font: document.fonts.check('24px "Material Symbols Outlined"'), text: document.fonts.check('13px Inter'),
-            loading: [...document.querySelectorAll('.loading, .skeleton, .market-loading')].filter(seen).length};
+            loading: [...document.querySelectorAll<HTMLElement>('.loading, .skeleton, .market-loading')].filter(seen).length};
   });
   if (!found.font) problems.push(`${label}: the icon font is not loaded`);
   if (!found.text) problems.push(`${label}: the text font is not loaded`);
@@ -246,19 +313,19 @@ async function verify(page, problems, label) {
   if (found.loading) problems.push(`${label}: still loading`);
 }
 
-async function capture() {
-  const {chromium} = require('playwright');
+async function capture(): Promise<void> {
+  const {chromium}: typeof import('playwright') = require('playwright');
   const out = path.resolve(ROOT, argument('out', 'docs/images'));
   const widths = choices('widths', DEFAULT_WIDTHS, Object.keys(WIDTHS));
   const themes = choices('themes', DEFAULT_THEMES, Object.keys(THEMES));
   const only = argument('only') ? choices('only', '', PAGES.map(page => page.name)) : null;
   const pages = PAGES.filter(page => !only || only.includes(page.name));
   fs.mkdirSync(out, {recursive: true});
-  const demo = argument('url') ? {url: argument('url').replace(/\/$/, ''), stop() {}} : await bootDemo();
+  const demo: Demo = argument('url') ? {url: argument('url').replace(/\/$/, ''), stop() {}} : await bootDemo();
   const channel = process.env.TICO_BROWSER_CHANNEL ?? 'chrome';
   const browser = await chromium.launch({channel: channel || undefined, headless: true});
-  const problems = [];
-  const written = [];
+  const problems: string[] = [];
+  const written: string[] = [];
   try {
     for (const theme of themes) {
       for (const width of widths) {
@@ -329,10 +396,10 @@ async function capture() {
             const tab = page.locator(`[data-settings-tab="${spec.tab}"]`);
             await page.locator('#settings-more').waitFor({state: 'attached'}).catch(() => {});
             if (!await tab.isVisible()) await page.locator('#settings-more > summary').click().catch(() => {});
-            await tab.click().catch(error => problems.push(`${label}: no ${spec.tab} tab: ${error.message.split('\n')[0]}`));
+            await tab.click().catch((error: unknown) => problems.push(`${label}: no ${spec.tab} tab: ${messageOf(error).split('\n')[0]}`));
           }
           await page.getByText(spec.ready).first().waitFor({timeout: 20000}).catch(() => problems.push(`${label}: never showed "${spec.ready}"`));
-          if (spec.steps) await spec.steps(page).catch(error => problems.push(`${label}: ${error.message.split('\n')[0]}`));
+          if (spec.steps) await spec.steps(page).catch((error: unknown) => problems.push(`${label}: ${messageOf(error).split('\n')[0]}`));
           // Items mark themselves read 700 to 900 ms after they show (ui/app/updates.ts), and side panels fill in as their
           // lists arrive, so a shot waits 3 s after the page is ready.
           await page.waitForTimeout(3000);
@@ -368,7 +435,7 @@ async function capture() {
   }
 }
 
-function main() {
+function main(): void | Promise<void> {
   if (process.argv.includes('--list-pages')) {
     console.log(JSON.stringify(listPages(), null, 2));
     return;
