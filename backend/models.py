@@ -328,6 +328,9 @@ class TaskUpdate(Contract):
     step: str | None = Field(default=None, max_length=200)  # "" clears the step
     step_rank: float | None = Field(default=None, allow_inf_nan=False)  # its place within its step
     number: TaskNumber | None = None  # a mover's, for a task that has none
+    # A rule editor's override of a stage's unmet requirements, logged (backend/pipeline_engine.py check_move). The
+    # reason it is logged with is this update's note.
+    override_requirements: bool = False
     # A review or QA subtask's verdict and the pull request head it judged; its parent's owner is woken with both.
     verdict: Literal["approve", "changes", "pass", "fail"] | None = None
     verdict_head: str | None = Field(default=None, pattern=r"^[0-9a-fA-F]{7,40}$")
@@ -939,7 +942,7 @@ class MarketEvidenceCreate(Contract):
 
 class MarketEntityCreate(Contract):
     id: str | None = Field(default=None, max_length=200)
-    type: Literal["company", "product", "person", "segment", "channel", "geography", "regulation", "event"]
+    type: Literal["organization", "product", "person", "segment", "channel", "place", "document", "event"]
     name: str = Field(min_length=1, max_length=300)
     aliases: list[str] = Field(default_factory=list, max_length=50)
     external_ids: dict = Field(default_factory=dict)
@@ -2991,6 +2994,7 @@ class MaintenanceUpdate(Contract):
     schedule: Literal["hourly", "2h", "3h", "6h", "12h", "daily"] | None = None
     paused: bool | None = None
     monthly_cap_usd: float | None = Field(default=None, ge=0, le=100000)
+    rules_monthly_cap_usd: float | None = Field(default=None, ge=0, le=100000)
     steps: list[MaintenanceStepChange] | None = Field(default=None, max_length=8)
 
 
@@ -3044,6 +3048,10 @@ class ReleaseNow(Contract):
 
 class LimitRetry(Contract):
     pass
+
+
+class CompanyPause(Contract):
+    """Pause or resume every bot on the team. No fields: the one company pause on record is the whole state."""
 
 
 class StopTurn(Contract):
@@ -3349,6 +3357,13 @@ class PersonalTokenCreate(Contract):
     expires_in_days: int = Field(default=90, ge=1, le=365)
 
 
+class SetupHandoff(Contract):
+    """The one-time secret of the setup handoff (backend/setup_handoff.py). It is checked against the pattern a secret
+    has in the handler, so a wrong one is refused like a spent one, and no validation message repeats it."""
+
+    secret: str = Field(default="", max_length=512, repr=False)
+
+
 class ServiceKeyCreate(Contract):
     """A service key (backend/service_keys.py): the label names the system that holds it, on every
     task it files. `tasks` files tasks; `update` checks for, starts and follows an update of this install."""
@@ -3602,3 +3617,7 @@ class MailboxAccessCreate(Contract):
 
 class MailboxAccessUpdate(Contract):
     level: MailboxLevel
+
+
+class MailboxDirectoryUpdate(Contract):
+    on: StrictBool

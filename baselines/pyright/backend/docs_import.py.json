@@ -1,0 +1,30 @@
+{
+    "files": {
+        "./backend/docs_import.py": [
+            {
+                "code": "reportOptionalMemberAccess",
+                "range": {
+                    "startColumn": 77,
+                    "endColumn": 83,
+                    "lineCount": 1
+                }
+            },
+            {
+                "code": "reportOptionalMemberAccess",
+                "range": {
+                    "startColumn": 54,
+                    "endColumn": 57,
+                    "lineCount": 1
+                }
+            },
+            {
+                "code": "reportOptionalMemberAccess",
+                "range": {
+                    "startColumn": 77,
+                    "endColumn": 80,
+                    "lineCount": 1
+                }
+            }
+        ]
+    }
+}

@@ -7,6 +7,7 @@
 
 const OVERVIEW_CAMPUS = OVERVIEW + '/campus';
 const OVERVIEW_GRAPH = OVERVIEW + '/graph';           // ui/app/overview-graph.ts
+const OVERVIEW_FACTORIES = OVERVIEW + '/factories';   // ui/app/overview-factories.ts
 const OVERVIEW_COMPANY = OVERVIEW + '/company-page';   // ui/app/company-page.ts
 const TEAM_PAGE = '#/team/';
 const DASH_SIZES = [['small', 'Small'], ['medium', 'Medium'], ['large', 'Large']];
@@ -26,7 +27,7 @@ const dashApi = place => '/v2/places/' + encodeURIComponent(place);
 const dashReadUrl = state => dashApi(state.place) + (state.month ? '?month=' + encodeURIComponent(state.month) : '');
 const dashKey = state => state.place + (state.month ? '?month=' + state.month : '');
 const dashTabsHTML = on => `<nav class="tabs slim strat-tabs dash-tabs" aria-label="Company">${
-  [['mine', HOME, 'Mine'], ['dashboard', OVERVIEW, 'Dashboard'], ['campus', OVERVIEW_CAMPUS, 'Campus'], ['graph', OVERVIEW_GRAPH, 'Graph'], ...(cpAllowed() ? [['company', OVERVIEW_COMPANY, 'Share']] : [])].map(([id, href, label]) =>
+  [['mine', HOME, 'Mine'], ['dashboard', OVERVIEW, 'Dashboard'], ['campus', OVERVIEW_CAMPUS, 'Campus'], ['graph', OVERVIEW_GRAPH, 'Graph'], ['factories', OVERVIEW_FACTORIES, 'Factories'], ...(cpAllowed() ? [['company', OVERVIEW_COMPANY, 'Share']] : [])].map(([id, href, label]) =>
     `<a href="${href}"${on === id ? ' class="cur" aria-current="page"' : ''}>${label}</a>`).join('')}</nav>`;
 const dashNum = n => n == null ? '–' : Number(n).toLocaleString(undefined, {maximumFractionDigits: 2});
 const dashMoney = n => n == null ? '–' : '$' + Number(n).toLocaleString(undefined, {minimumFractionDigits: 0, maximumFractionDigits: 0});
@@ -73,7 +74,7 @@ const DASH_BODY = {
   },
   needs_you: dashNeeds,
   needs_attention: dashNeeds,
-  unread_threads: d => d.threads.length ? `<ul class="dash-list">${d.threads.map(t => `<li><a href="${esc(window.threadRowHref ? window.threadRowHref(t) : dashThreadHref(t.id))}">${esc(window.threadTitle ? window.threadTitle(t) : t.title || 'Untitled')}</a>
+  unread_threads: d => d.threads.length ? `<ul class="dash-list">${d.threads.map(t => `<li><a href="${esc(window.threadRowHref ? window.threadRowHref(t) : dashThreadHref(t.id))}">${esc(threadTitle(t))}</a>
       <span class="muted">${t.unread ? dashNum(t.unread) + ' new · ' : ''}${agoSpan(t.updated_at)}</span></li>`).join('')}</ul>` : '<p class="muted dash-none">Nothing unread</p>',
   my_tasks: d => d.tasks.length ? `<a class="dash-big" href="${TASKS}?view=list"><strong>${dashNum(d.count)}</strong><span class="muted">open</span></a>
     <ul class="dash-list">${d.tasks.map(t => `<li><a href="#/task/${encodeURIComponent(t.id)}">${esc(t.title || 'Untitled')}</a> ${dashDue(t.due_at)}</li>`).join('')}</ul>`

@@ -80,6 +80,7 @@ function route(hash: string = location.hash): void {
   else if (S.route === OVERVIEW) pageDashboard('dashboard');
   else if (S.route === OVERVIEW_CAMPUS) pageOverview();
   else if (S.route === OVERVIEW_GRAPH || S.route.startsWith(OVERVIEW_GRAPH + '?')) pageOverviewGraph();
+  else if (S.route === OVERVIEW_FACTORIES) pageOverviewFactories();
   else if (S.route === OVERVIEW_COMPANY) pageOverviewCompany();
   else if (S.route.startsWith(TEAM_PAGE)) pageDashboard('team:' + decodeURIComponent(S.route.slice(TEAM_PAGE.length).split('?')[0] ?? ''));
   else if (S.route === WELCOME) pageWelcome();

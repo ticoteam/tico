@@ -75,7 +75,7 @@ interface LiveTaskEvent {
   task_id?: unknown;
   gone?: unknown;
   bulk?: unknown;
-  task?: {lane?: unknown; links?: unknown; owner_id?: unknown; requester_id?: unknown} | null;
+  task?: {lane?: unknown; links?: unknown; owner_id?: unknown; requester_id?: unknown; type_id?: unknown} | null;
 }
 /** A task row in a list: its id, and the rest of the row as the server sends it. */
 interface LiveTaskRow { id?: unknown; [key: string]: unknown; }
@@ -138,6 +138,7 @@ function liveTasksApply(events: LiveTaskEvent[]): void {
     if (events.some(d => d.bulk || d.gone || d.task?.owner_id === me)) liveThrottle('person-tasks', personTasksReload);
   }
   if (TASK_CHAT && events.some(d => d.bulk || String(d.id) === String(TASK_CHAT.id) && !unchanged.has(String(d.id)))) taskChatLive(TASK_CHAT);
+  pipelineLateLive(events);   // the pipeline on the board: its cards' late times (pipeline-rail.ts)
 }
 /** A bot's live status line: the bot, and its status (absent when the bot has none). */
 interface LiveBotEvent { bot: string; status?: V2BotState; }

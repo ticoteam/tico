@@ -87,6 +87,14 @@ WORKFLOW_EDITS_REFUSED = (
     "GitHub refused a token with Workflows: write although the installation reports it, so these "
     "repositories get the ordinary write token; it is asked again after a minute."
 )
+# The pipeline engine's check run on a pull request's commit (backend/pipeline_github_checks.py) needs Checks: write.
+# It is not in the manifest and no run token carries it: the server mints its own token for it, and only after the
+# installation reports Checks as read and write. Until an Owner accepts that, the check is withheld and nothing is posted.
+CHECKS_PERMISSIONS = {"checks": "write", "metadata": "read"}
+CHECKS_WITHHELD = (
+    "Posting Tico's approval check on pull requests needs the GitHub App's Checks permission set to Read and write, "
+    "accepted on the installation; until then no check is posted."
+)
 # Each opt-in that raises a write grant's token: the grant flag, the permission raised to write, the `live` key that
 # remembers GitHub refusing it, the reasons a token answer gives, and the answer field that carries them. A grant
 # with both gets one token with both, as the git credential helper picks one token per remote.
@@ -127,7 +135,7 @@ MAX_EXTRA_REPOS = 20
 # A refusal about one bot's repository (not on GitHub yet, or not shared with the app), or a rehearsal that never calls GitHub. The bot's own readiness
 # and Health already name it; it says nothing about whether the App works, so it never marks the token unhealthy.
 BOT_SCOPED = ("github_repo_missing", "github_repo_not_accessible", "rehearsal")
-RECONNECT = "Reconnect GitHub in Settings."
+RECONNECT = "Reconnect GitHub in Tools."
 
 # Replaced in tests with an httpx.MockTransport so nothing reaches the network.
 TRANSPORT = None
@@ -567,6 +575,17 @@ class GitHubApp:
         with self.lock:
             self.live["permissions"] = (time.time() + LIVE_TTL, permissions)
         return permissions
+
+    def checks_write_accepted(self):
+        """Whether the installation reports Checks as read and write now (CHECKS_WITHHELD says what to do when not)."""
+        permissions = self.live_permissions()
+        return bool(permissions) and permissions.get("checks") == "write"
+
+    def mint_checks(self, repo):
+        """A token that can create check runs on `repo` (`owner/name`), or None while Checks: write is withheld."""
+        if not self.checks_write_accepted():
+            return None
+        return self.mint([repo], CHECKS_PERMISSIONS, diagnose=False)[0]
 
     def raise_refused(self, raised):
         """Whether GitHub refused a token raising `raised` (a RAISES entry) the installation reports within LIVE_TTL:
@@ -1462,6 +1481,7 @@ def install_github_app(app, settings, store):
         page = links(row)
         return {
             "connected": True,
+            "checks_withheld": None if service.checks_write_accepted() else CHECKS_WITHHELD,
             "slug": row["slug"],
             "org": row["org"],
             "account_type": account_kind(row),
@@ -1594,7 +1614,7 @@ def install_github_app(app, settings, store):
                 log.warning("Repository sync failed: %s", exc.code)
         with store.transaction() as c:
             H.event(c, who.actor, "github.app_installed", "", {"installed": bool(found)})
-        return RedirectResponse("/#/settings?github=" + ("connected" if found else "pending"), status_code=302)
+        return RedirectResponse("/#/tools/github?github=" + ("connected" if found else "pending"), status_code=302)
 
     @app.post("/api/v2/github/app/disconnect")
     def disconnect(request: Request):
@@ -1854,7 +1874,7 @@ def install_github_app(app, settings, store):
             value, expires = tokens[0]['token'], tokens[0]['expires_at']
         except Problem as problem:
             if issuer is service and problem.code not in BOT_SCOPED:
-                note_github_token(store, problem.detail, "Open Settings > Tools and check the GitHub connection.")
+                note_github_token(store, problem.detail, "Open Tools and check the GitHub connection.")
             raise
         newly_minted = [item for item in tokens if not item["cached"]]
         if issuer is service and (newly_minted or any(item["reachability_changed"] for item in tokens)):

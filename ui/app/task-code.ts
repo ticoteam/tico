@@ -13,7 +13,7 @@ function prStateBadge(state) {
 }
 // A review or QA subtask's verdict (`verdict`, `verdict_head`, docs/tasks.md): green for approve and pass, red for
 // changes and fail, and the head it judged as a short sha. Nothing until a verdict is recorded.
-const VERDICT_WORDS = {approve: ['Approved', 'ok'], pass: ['Passed', 'ok'], changes: ['Changes', 'fail'], fail: ['Failed', 'fail']};
+const VERDICT_WORDS: Record<string, [string, string]> = {approve: ['Approved', 'ok'], pass: ['Passed', 'ok'], changes: ['Changes', 'fail'], fail: ['Failed', 'fail']};
 function taskVerdictHTML(t) {
   const v = VERDICT_WORDS[t?.verdict]; if (!v) return '';
   const head = String(t.verdict_head || '').slice(0, 7);
@@ -170,7 +170,8 @@ function taskSubRowHTML(k, open) {
   const key = String(k.id);
   return `<li class="sub-row${['done', 'closed', 'declined'].includes(String(k.status)) ? ' finished' : ''}" data-sub="${esc(key)}">
     <div class="sub-line">${kids.length ? `<button type="button" class="sub-chev${open.has(key) ? ' open' : ''}" data-sub-toggle="${esc(key)}" aria-expanded="${open.has(key)}" aria-label="${open.has(key) ? 'Hide' : 'Show'} subtasks of ${esc(k.title || '')}">›</button>` : '<span class="sub-chev-pad"></span>'}
-      ${taskStatusText(k)}<button type="button" class="sub-open" data-sub-open="${esc(key)}" title="${esc(`${k.title || ''} · ${taskStatusLabel(k)} · ${actorLabel(k.owner_id)}`)}"><span class="sub-title">${esc(k.title || 'Untitled')}</span></button>
+      ${taskStatusText(k)}<button type="button" class="sub-open" data-sub-open="${esc(key)}" title="${esc(`${k.title || ''} · ${taskStatusLabel(k)} · ${actorLabel(k.owner_id)}`)}"><span class="sub-title">${esc(k.title || 'Untitled')}</span>${
+        k.label ? `<span class="pill sub-chip">${esc(k.label)}${k.step ? ` · ${esc(k.step)}` : ''}</span>` : ''}</button>
       ${prStateBadge(k.pr_state)}${taskVerdictHTML(k)}<span class="sub-who" title="${esc(actorLabel(k.owner_id))}">${who}</span></div>
     ${kids.length && open.has(key) ? `<ul class="sub-list">${kids.map(c => taskSubRowHTML(c, open)).join('')}</ul>` : ''}</li>`;
 }
@@ -201,7 +202,9 @@ function taskRailPaint(d, t) {
   const typed = old?.elements.title.value || '', focused = !!old && old.contains(document.activeElement) ? document.activeElement.name : '';
   // Code is drawn from the full task only: list rows carry no worktree details (ahead, behind, files, errors).
   const code = st.full && String(st.full.id) === String(t.id) ? taskCodeHTML(st.full) : '';
-  const html = code + taskSubtasksHTML(t, kids, st.open, st.adding, st.owner, st.refused);
+  // An Engineering ticket under a Product card: a link to the card first, opened like a subtask row (taskRailBind).
+  const parent = t.parent ? `<section class="rail-sec task-parent"><button type="button" class="linkish" data-sub-open="${esc(String(t.parent.id))}" title="${esc(t.parent.title || '')}">from ${esc(t.parent.label || t.parent.title || '')}</button></section>` : '';
+  const html = parent + code + taskSubtasksHTML(t, kids, st.open, st.adding, st.owner, st.refused);
   rail.innerHTML = html;
   rail.hidden = !html;
   d.classList.toggle('has-rail', !!html);
@@ -262,6 +265,8 @@ function taskRailBind(d, t) {
     if (opener) {
       const k = taskRailFind(d.taskRail?.kids, opener.dataset.subOpen);
       if (k) void taskModalShow({...k, links: k.links || [], labels: k.labels || []}, d);
+      // The parent is not one of the children, so its full task is read when it opens (taskModalOpen).
+      else if (t.parent && String(t.parent.id) === opener.dataset.subOpen) void taskModalOpen(`t${t.parent.id}`, d);
       return;
     }
     const drop = ev.target.closest('[data-code-drop]');

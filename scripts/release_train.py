@@ -65,21 +65,11 @@ ROOT = Path(__file__).resolve().parents[1]
 ROLLOUT_PATH = ROOT / "templates/catalog/release-notes/software/rollout.py"
 NOTES_PATH = ROOT / "scripts/release_notes.py"
 LOS_ANGELES = ZoneInfo("America/Los_Angeles")
-# Window starts in Los Angeles wall-clock time, on weekdays (Monday to Friday) and at weekends.
-WEEKDAY_WINDOWS = ((7, 30), (11, 0), (14, 0), (20, 30))
-WEEKEND_WINDOWS = ((7, 30), (15, 0))
-# GitHub's crons are UTC only: every UTC time a window can start at, under PDT or PST (train.yml lists the same ones).
-CRONS = [
-    "30 3 * * *",
-    "30 4 * * *",
-    "30 14 * * *",
-    "30 15 * * *",
-    "0 18 * * *",
-    "0 19 * * *",
-    "0 21 * * *",
-    "0 22 * * *",
-    "0 23 * * *",
-]
+# Window starts in Los Angeles wall-clock time: every hour on the hour, 07:00 to 21:00, every day (15 a day).
+WINDOWS = tuple((hour, 0) for hour in range(7, 22))
+# GitHub's crons are UTC only: every UTC hour a window can start at, under PDT (UTC-7) or PST (UTC-8): 14:00 to 04:00
+# UTC under PDT and 15:00 to 05:00 under PST, so 14 to 23 and 0 to 5 (train.yml lists the same ones).
+CRONS = ["0 %d * * *" % hour for hour in (*range(14, 24), *range(0, 6))]
 # A backstop for a missed event (a workflow_run that does not fire, say): it takes a step in an open window like a push
 # does, never opens one, and promotes an approved canary release. Minutes 5, 25 and 45: never a window's minute (00 or 30).
 BACKSTOP_CRON = "5-59/20 * * * *"
@@ -207,10 +197,9 @@ def cron_time(cron):
 
 def window_starts_on(day):
     """The window starts on a Los Angeles calendar date, as UTC datetimes: the day type comes from that date."""
-    windows = WEEKDAY_WINDOWS if day.weekday() < 5 else WEEKEND_WINDOWS
     return [
         datetime(day.year, day.month, day.day, hour, minute, tzinfo=LOS_ANGELES).astimezone(timezone.utc)
-        for hour, minute in windows
+        for hour, minute in WINDOWS
     ]
 
 
@@ -870,14 +859,15 @@ def plan_step(gh, now, finished=None, manual=False, checkout=None):
             if not go:
                 plan.update(action="wait", why="window open since %s; %s" % (hhmm(start), why))
                 return plan
-    if anchor is None:
-        # At most one full validation is dispatched automatically in 24 hours, whatever its outcome: a cancelled or
-        # unnamed-red one waits for a person (a manual run still dispatches).
-        held = increment.full_within_day(records, now)
-        if held is not None and not manual:
+    # At most one full validation is dispatched automatically in 24 hours, whatever its outcome: a cancelled or
+    # unnamed-red one waits for a person (a manual run still dispatches). The chain of incrementals still runs a full
+    # validation once the newest full one is a day old.
+    full_recent = increment.full_within_day(records, now)
+    if anchor is None or (full_recent is None and not manual):
+        if full_recent is not None and not manual:
             text = (
                 "a full validation already ran in the last 24h (%s, %s): a person runs Release train by hand to "
-                "validate again" % (held["url"], held["conclusion"])
+                "validate again" % (full_recent["url"], full_recent["conclusion"])
             )
             plan.update(action="wait", held=text, why="window open since %s; %s" % (hhmm(start), text))
             return plan
@@ -885,49 +875,36 @@ def plan_step(gh, now, finished=None, manual=False, checkout=None):
             action="dispatch",
             mode="full",
             anchor=None,
-            increment=None,
+            carried=None,
             why="validate %s as %s from %s: a full validation (no full validation in the last 24 hours ran the suite to "
             "an answer, of any release)" % (head[:12], version, newest),
         )
         return plan
-    if checkout is None:
-        # Without a checkout the window job (which has one) makes the plan: the mode is the anchor's incremental run.
-        plan.update(
-            action="dispatch",
-            mode="incremental",
-            anchor=anchor["sha"],
-            increment=None,
-            why="validate %s as %s from %s incrementally on %s (the plan is made with the checkout)"
-            % (head[:12], version, newest, anchor["sha"][:12]),
-        )
-        return plan
-    carried = set().union(*(red["failed"] or set() for red in reds))
-    try:
-        text = checkout.plan(anchor["sha"], head, carried, previous_changed=previous_changed)
-    except Exception as exc:  # noqa: BLE001 - a plan that cannot be made waits: a second full validation is not an option
-        text = None
-        note("Incremental plan failed: %s: %s" % (type(exc).__name__, exc))
-    if text is None:
-        plan.update(
-            action="wait",
-            why="window open since %s; the incremental plan on %s is too big or could not be made, and no second full "
-            "validation runs before the anchor is a day old (%s)"
-            % (hhmm(start), anchor["sha"][:12], hhmm(anchor["finished"] + increment.ANCHOR_AGE)),
-        )
-        return plan
-    jobs = len(json.loads(text)["jobs"])
+    carried = sorted(set().union(*(red["failed"] or set() for red in reds)))
+    if checkout is not None:
+        # The plan is made in Release validation from its own checkout; here it is only checked to be makeable.
+        try:
+            checkout.plan(anchor["sha"], head, set(carried), previous_changed=previous_changed)
+        except Exception as exc:  # noqa: BLE001 - a plan that cannot be made waits: a second full validation is not an option
+            note("Incremental plan failed: %s: %s" % (type(exc).__name__, exc))
+            plan.update(
+                action="wait",
+                why="window open since %s; the incremental plan on %s cannot be made (%s: %s)"
+                % (hhmm(start), anchor["sha"][:12], type(exc).__name__, exc),
+            )
+            return plan
     plan.update(
         action="dispatch",
         mode="incremental",
         anchor=anchor["sha"],
-        increment=text,
-        why="validate %s as %s from %s incrementally on %s: %d VMs%s%s"
+        anchor_previous=anchor["previous"],
+        carried=carried,
+        why="validate %s as %s from %s incrementally on %s%s%s"
         % (
             head[:12],
             version,
             newest,
             anchor["sha"][:12],
-            jobs,
             "; carries %s" % increment.names(carried) if carried else "",
             ("; the product part runs: the previous release is %s, the anchor's was %s" % (newest, anchor["previous"]))
             if previous_changed
@@ -1034,15 +1011,22 @@ def wait_release(gh, version, since, timeout=RELEASE_WAIT):
         sleep(POLL)
 
 
-def dispatch_candidate(gh, sha, version, previous, timeout=DISPATCH_WAIT, anchor=None, increment=None):
+def dispatch_candidate(
+    gh, sha, version, previous, timeout=DISPATCH_WAIT, anchor=None, carried=None, anchor_previous=""
+):
     """Dispatch Release validation and wait until GitHub lists the run, so the next release job (which runs after
-    this one, in the same concurrency group) sees it running and does not dispatch it again. An incremental one
-    (`increment`, its plan's JSON) names the anchor it builds on; a full one carries no extra inputs."""
+    this one, in the same concurrency group) sees it running and does not dispatch it again. An incremental one names
+    the anchor it builds on, the failed tests it carries (`carried`) and the release the anchor validated against; it
+    makes its own plan from its checkout, so the dispatch stays small. A full one carries no extra inputs."""
     inputs = {"candidate_sha": sha, "previous_release": previous, "version": version}
-    if increment is not None:
-        inputs.update(anchor=anchor, plan=increment)
+    if anchor is not None:
+        inputs.update(
+            anchor=anchor,
+            carried=json.dumps(sorted(carried or [])),
+            anchor_previous=anchor_previous or "",
+        )
     want, since = (
-        title(sha, version, previous, anchor if increment is not None else None),
+        title(sha, version, previous, anchor),
         datetime.now(timezone.utc) - SKEW,
     )
     gh.dispatch("ci.yml", "main", inputs)
@@ -1440,7 +1424,8 @@ def cmd_window(gh, env, opening, now=None):
                     plan["version"],
                     plan["newest"],
                     anchor=plan.get("anchor"),
-                    increment=plan.get("increment"),
+                    carried=plan.get("carried"),
+                    anchor_previous=plan.get("anchor_previous"),
                 ),
             )
     if failures:

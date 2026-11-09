@@ -38,10 +38,11 @@ const DEMO_NOW = process.env.TICO_DEMO_NOW || '2026-11-06T18:00:00Z';
 const TASKS_UI = [
   'ui/app/tasks.ts', 'ui/app/tasks-page.ts', 'ui/app/task-*.ts', 'ui/app/pull-refresh.ts', 'ui/app/hub-v2.js',
   'ui/app/issues.ts', 'ui/styles/tasks.css', 'ui/styles/task-*.css', 'ui/styles/board.css', 'ui/styles/hub-v2.css',
+  'ui/app/pipeline-*.ts', 'ui/styles/pipeline.css',
 ];
 const BOT_CHAT_UI = [
   'ui/app/bot-*.js', 'ui/app/bot-*.ts', 'ui/bot-files.ts', 'ui/bot-tools.ts', 'ui/app/chat*.ts', 'ui/app/feedback.ts',
-  'ui/app/slash-commands.ts', 'ui/app/visual-*.ts', 'ui/app/question-card.ts', 'ui/styles/bot-*.css',
+  'ui/app/slash-commands.ts', 'ui/app/visual-*.ts', 'ui/app/question-card.ts', 'ui/app/github-nudge.ts', 'ui/styles/bot-*.css',
   'ui/styles/chat*.css', 'ui/styles/feedback.css', 'ui/styles/visual-*.css',
 ];
 const MEETINGS_UI = [
@@ -66,7 +67,8 @@ const PAGES = [
     ui: [...TASKS_UI, 'ui/app/needs-you.ts', 'ui/app/decide.ts', 'ui/app/question-card.ts', 'ui/styles/needs-you.css', 'ui/styles/decide.css']},
   {name: 'org-chart', route: '#/goals', ready: 'Ship 6,000 units and 40 business installs this season',
     ui: ['ui/app/goals.ts', 'ui/app/goals-kpi-views.ts', 'ui/goals-kpis.ts', 'ui/app/redesign.ts', 'ui/app/redesign-org.ts',
-      'ui/app/org-fan.ts', 'ui/styles/goals.css', 'ui/styles/redesign.css', 'ui/styles/redesign-strategy.css']},
+      'ui/app/org-fan.ts', 'ui/app/org-factories.ts', 'ui/styles/goals.css', 'ui/styles/redesign.css', 'ui/styles/redesign-strategy.css',
+      'ui/styles/org-factories.css']},
   // The "Have a draft ready" line shows on desktop only; the empty thread shows at both widths.
   {name: 'bot-chat', route: '#/bot/support', ready: 'No messages yet', ui: BOT_CHAT_UI},
   {name: 'meetings', route: '#/meetings', ready: 'Larkford town bid call', ui: MEETINGS_UI},

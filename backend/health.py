@@ -33,7 +33,7 @@ from . import (
     watchers,
 )
 from .batch_work import report, storage_error
-from .getting_started import _online_runners, _wanted_runtimes, _person
+from .getting_started import _online_runners, _person, _wanted_runtimes, own_bots
 
 
 def _harness_name(runtime):
@@ -1269,6 +1269,7 @@ HELD = {
     "task_cap": ("Its active task limit is full; waiting work frees a place", BOT_SETTINGS),
     "auto_start_off": ("Automatic assigned-task starts are off for this bot", BOT_SETTINGS),
     "paused": ("Paused: its owner or BotOps must resume it", BOT_SETTINGS),
+    "company_paused": ("All bots on Tico Team are paused: its work starts when someone resumes", BOT_SETTINGS),
     "no_slot": ("No slot on {computer}: queued behind running turns", RUNS),
     "busy": ("Queued behind this bot's running turn", RUNS),
     "draining": ("Paused, or held while Tico updates: its work starts when it is resumed", BOT_SETTINGS),
@@ -1663,15 +1664,22 @@ def token_failure(c):
     )
 
 
-def _github(c, github):
+def _github(c, github, settings):
+    """Not connected is "info" while the team has no bot of its own (getting_started.own_bots), and "warn" once it has
+    one: the built-in bots come with every install, so the warning waits for a bot someone made."""
     from .github_app import account_word
 
     row = github.row(c) if github else None
     failure = token_failure(c) if row else None
-    fix = _fix("Open GitHub settings", "#/settings", "cloud")
+    fix = _fix("Open GitHub", "#/tools/github")
     if not row:
+        bots = own_bots(c, settings)
         return _check(
-            "github", "GitHub", "info", "Not connected. Optional: connect it to keep bot work in your GitHub.", [fix]
+            "github",
+            "GitHub",
+            "warn" if bots else "info",
+            "Not connected. Bots' files and memory are only on their computers, with no backup.",
+            [_fix("Connect GitHub", "#/tools/github")],
         )
     if not row["installation_id"]:
         return _check(
@@ -3552,7 +3560,7 @@ def view(c, who, settings, auth, github, config):
                         f"{computer['label']}: GitHub sign-in failed ({computer['github_auth'].get('error') or 'HTTP 401'}). "
                         "Bots there cannot open pull requests. Check the GitHub connection.",
                         [
-                            _fix("Open GitHub settings", "#/settings", "cloud"),
+                            _fix("Open GitHub settings", "#/tools/github"),
                             _fix("Open Computers", "#/settings", "devices"),
                         ],
                     )
@@ -3975,7 +3983,7 @@ def view(c, who, settings, auth, github, config):
     if full and (suggestions := _roadmap_suggestions(c)):
         checks.append(suggestions)
     if full:
-        checks.append(_github(c, github))
+        checks.append(_github(c, github, settings))
         if repo_create := _github_repo_create(c, github):
             checks.append(repo_create)
         if workflows := _github_workflows(c, github):

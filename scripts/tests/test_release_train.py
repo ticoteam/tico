@@ -19,8 +19,8 @@ def pt(*when):
 
 
 A, B, C, D = ("a" * 40, "b" * 40, "c" * 40, "d" * 40)
-NOW = datetime(2026, 11, 5, 18, 0, tzinfo=timezone.utc)  # Thursday 10:00 PST: 07:30 is the latest start
-OPENED = pt(2026, 11, 5, 7, 30)
+NOW = datetime(2026, 11, 5, 15, 30, tzinfo=timezone.utc)  # Thursday 07:30 PST: the 07:00 window is open
+OPENED = pt(2026, 11, 5, 7, 0)
 
 
 def run(sha, version="v0.5.201", previous="v0.5.200", *, status="completed", conclusion="success", at=NOW, id=1):
@@ -301,60 +301,15 @@ UTC = timezone.utc
 @pytest.mark.parametrize(
     "now, start, following",
     [
+        pytest.param(pt(2026, 11, 5, 7, 5), pt(2026, 11, 5, 7, 0), pt(2026, 11, 5, 8, 0), id="thu-0705-opens-0700"),
         pytest.param(
-            datetime(2026, 7, 10, 4, 0, tzinfo=UTC),
-            pt(2026, 7, 9, 20, 30),
-            pt(2026, 7, 10, 7, 30),
-            id="thu-2030-pdt-seen-0400-utc-next-day",
+            pt(2026, 11, 5, 6, 59), pt(2026, 11, 4, 21, 0), pt(2026, 11, 5, 7, 0), id="thu-0659-yesterday-2100"
         ),
-        pytest.param(
-            datetime(2026, 11, 6, 4, 40, tzinfo=UTC),
-            pt(2026, 11, 5, 20, 30),
-            pt(2026, 11, 6, 7, 30),
-            id="thu-2030-pst-seen-0440-utc-next-day",
-        ),
-        pytest.param(
-            pt(2026, 11, 6, 20, 31),
-            pt(2026, 11, 6, 20, 30),
-            pt(2026, 11, 7, 7, 30),
-            id="fri-2031-the-2030-window-is-the-latest",
-        ),
-        pytest.param(
-            pt(2026, 11, 6, 21, 0), pt(2026, 11, 6, 20, 30), pt(2026, 11, 7, 7, 30), id="fri-2100-next-is-sat-0730"
-        ),
-        pytest.param(
-            pt(2026, 11, 7, 0, 30),
-            pt(2026, 11, 6, 20, 30),
-            pt(2026, 11, 7, 7, 30),
-            id="sat-0030-across-midnight-keeps-fri-2030",
-        ),
-        pytest.param(
-            pt(2026, 7, 11, 7, 31), pt(2026, 7, 11, 7, 30), pt(2026, 7, 11, 15, 0), id="sat-0731-pdt-opened-0730"
-        ),
-        pytest.param(
-            pt(2026, 11, 7, 7, 31), pt(2026, 11, 7, 7, 30), pt(2026, 11, 7, 15, 0), id="sat-0731-pst-opened-0730"
-        ),
-        pytest.param(
-            pt(2026, 11, 5, 11, 5), pt(2026, 11, 5, 11, 0), pt(2026, 11, 5, 14, 0), id="thu-1105-pst-opened-1100"
-        ),
-        pytest.param(
-            pt(2026, 7, 11, 14, 5),
-            pt(2026, 7, 11, 7, 30),
-            pt(2026, 7, 11, 15, 0),
-            id="sat-1405-no-1400-window-at-weekends",
-        ),
-        pytest.param(
-            pt(2026, 7, 11, 15, 5), pt(2026, 7, 11, 15, 0), pt(2026, 7, 12, 7, 30), id="sat-1505-opens-the-1500-window"
-        ),
-        pytest.param(
-            pt(2026, 7, 11, 20, 31),
-            pt(2026, 7, 11, 15, 0),
-            pt(2026, 7, 12, 7, 30),
-            id="sat-2031-no-2030-window-at-weekends",
-        ),
-        pytest.param(
-            pt(2026, 11, 9, 7, 0), pt(2026, 11, 8, 15, 0), pt(2026, 11, 9, 7, 30), id="mon-0700-after-sunday-1500"
-        ),
+        pytest.param(pt(2026, 11, 5, 21, 30), pt(2026, 11, 5, 21, 0), pt(2026, 11, 6, 7, 0), id="thu-2130-last-window"),
+        pytest.param(pt(2026, 11, 5, 22, 30), pt(2026, 11, 5, 21, 0), pt(2026, 11, 6, 7, 0), id="thu-2230-no-2200"),
+        pytest.param(pt(2026, 7, 11, 7, 0), pt(2026, 7, 11, 7, 0), pt(2026, 7, 11, 8, 0), id="sat-0700-pdt-boundary"),
+        pytest.param(pt(2026, 7, 11, 15, 1), pt(2026, 7, 11, 15, 0), pt(2026, 7, 11, 16, 0), id="sat-1501-pdt"),
+        pytest.param(pt(2026, 7, 11, 21, 0), pt(2026, 7, 11, 21, 0), pt(2026, 7, 12, 7, 0), id="sun-weekend-2100"),
     ],
 )
 def test_window_start_and_next_window_follow_los_angeles_time(now, start, following):
@@ -364,143 +319,38 @@ def test_window_start_and_next_window_follow_los_angeles_time(now, start, follow
 
 
 def test_a_dst_change_day_uses_the_offset_of_each_window():
-    # Sunday 8 March 2026 springs forward at 02:00 PST (10:00 UTC): 07:30 and 15:00 are daylight time after that.
-    assert rt.window_start(datetime(2026, 3, 8, 14, 31, tzinfo=UTC)) == datetime(2026, 3, 8, 14, 30, tzinfo=UTC), (
-        "spring forward: 07:30 PDT is 14:30 UTC"
+    # Sunday 8 March 2026 springs forward at 02:00 PST (10:00 UTC): 07:00 is daylight time after that (14:00 UTC).
+    assert rt.window_start(datetime(2026, 3, 8, 14, 1, tzinfo=UTC)) == datetime(2026, 3, 8, 14, 0, tzinfo=UTC), (
+        "spring forward: 07:00 PDT is 14:00 UTC"
     )
-    assert rt.window_start(datetime(2026, 3, 8, 14, 29, tzinfo=UTC)) == datetime(2026, 3, 7, 23, 0, tzinfo=UTC), (
-        "spring forward: before 07:30 PDT, Saturday's 15:00 PST window is the latest start"
+    assert rt.window_start(datetime(2026, 3, 8, 13, 59, tzinfo=UTC)) == datetime(2026, 3, 8, 5, 0, tzinfo=UTC), (
+        "spring forward: before 07:00 PDT, Saturday's 21:00 PST window is the latest start"
     )
-    assert rt.next_window(datetime(2026, 3, 8, 14, 29, tzinfo=UTC)) == datetime(2026, 3, 8, 14, 30, tzinfo=UTC), (
-        "spring forward: the next window is 07:30 PDT"
+    assert rt.next_window(datetime(2026, 3, 8, 13, 59, tzinfo=UTC)) == datetime(2026, 3, 8, 14, 0, tzinfo=UTC), (
+        "spring forward: the next window is 07:00 PDT"
     )
-    assert rt.window_start(datetime(2026, 3, 8, 22, 1, tzinfo=UTC)) == datetime(2026, 3, 8, 22, 0, tzinfo=UTC), (
-        "spring forward: 15:00 PDT is 22:00 UTC"
+    # Sunday 1 November 2026 falls back at 02:00 PDT (09:00 UTC): 07:00 is standard time after that (15:00 UTC).
+    assert rt.window_start(datetime(2026, 11, 1, 15, 1, tzinfo=UTC)) == datetime(2026, 11, 1, 15, 0, tzinfo=UTC), (
+        "fall back: 07:00 PST is 15:00 UTC"
     )
-    # Sunday 1 November 2026 falls back at 02:00 PDT (09:00 UTC): 07:30 and 15:00 are standard time after that.
-    assert rt.window_start(datetime(2026, 11, 1, 15, 31, tzinfo=UTC)) == datetime(2026, 11, 1, 15, 30, tzinfo=UTC), (
-        "fall back: 07:30 PST is 15:30 UTC"
-    )
-    assert rt.window_start(datetime(2026, 11, 1, 15, 29, tzinfo=UTC)) == datetime(2026, 10, 31, 22, 0, tzinfo=UTC), (
-        "fall back: before 07:30 PST, Saturday's 15:00 PDT window is the latest start"
-    )
-    assert rt.window_start(datetime(2026, 11, 1, 23, 1, tzinfo=UTC)) == datetime(2026, 11, 1, 23, 0, tzinfo=UTC), (
-        "fall back: 15:00 PST is 23:00 UTC"
+    assert rt.window_start(datetime(2026, 11, 1, 14, 59, tzinfo=UTC)) == datetime(2026, 11, 1, 4, 0, tzinfo=UTC), (
+        "fall back: before 07:00 PST, Saturday's 21:00 PDT window is the latest start"
     )
 
 
 @pytest.mark.parametrize(
     "cron, now, opens, why",
     [
-        pytest.param(
-            "30 14 * * *",
-            pt(2026, 7, 7, 7, 45),
-            True,
-            "07:30 PDT on a Tuesday, fifteen minutes late",
-            id="in-season-pdt",
-        ),
-        pytest.param(
-            "30 15 * * *",
-            pt(2026, 7, 7, 8, 45),
-            False,
-            "its off-season twin: 08:30 PDT is no window",
-            id="off-season-twin-pdt",
-        ),
-        pytest.param(
-            "30 15 * * *", pt(2026, 11, 5, 7, 45), True, "07:30 PST on a Thursday, in season", id="in-season-pst"
-        ),
-        pytest.param(
-            "30 14 * * *",
-            pt(2026, 11, 5, 6, 45),
-            False,
-            "its off-season twin: 06:30 PST is no window",
-            id="off-season-twin-pst",
-        ),
-        pytest.param(
-            "0 21 * * *",
-            pt(2026, 7, 9, 14, 5),
-            True,
-            "14:00 PDT on a Thursday is a weekday window",
-            id="thu-1400-opens",
-        ),
-        pytest.param(
-            "0 21 * * *",
-            pt(2026, 7, 11, 14, 5),
-            False,
-            "14:00 PDT on a Saturday is no window",
-            id="sat-1400-does-not-open",
-        ),
-        pytest.param(
-            "0 18 * * *",
-            pt(2026, 10, 14, 11, 5),
-            True,
-            "11:00 PDT on a Wednesday is a weekday window",
-            id="wed-1100-pdt-opens",
-        ),
-        pytest.param(
-            "0 19 * * *",
-            pt(2026, 11, 11, 11, 5),
-            True,
-            "11:00 PST on a Wednesday is a weekday window",
-            id="wed-1100-pst-opens",
-        ),
-        pytest.param(
-            "0 18 * * *",
-            pt(2026, 10, 17, 11, 5),
-            False,
-            "11:00 PDT on a Saturday is no window",
-            id="sat-1100-does-not-open",
-        ),
-        pytest.param(
-            "0 19 * * *",
-            pt(2026, 10, 14, 12, 5),
-            False,
-            "its off-season twin: 12:05 PDT is no window",
-            id="off-season-twin-1100-pdt",
-        ),
-        pytest.param(
-            "0 18 * * *",
-            pt(2026, 11, 11, 10, 5),
-            False,
-            "its off-season twin: 10:05 PST is no window",
-            id="off-season-twin-1100-pst",
-        ),
-        pytest.param("0 22 * * *", pt(2026, 7, 11, 15, 5), True, "15:00 PDT on a Saturday opens", id="sat-1500-opens"),
-        pytest.param("30 3 * * *", pt(2026, 7, 10, 20, 35), True, "Friday 20:30 PDT is a window", id="fri-2030-opens"),
-        pytest.param(
-            "30 3 * * *", pt(2026, 7, 11, 20, 35), False, "Saturday 20:30 PDT is no window", id="sat-2030-does-not-open"
-        ),
-        pytest.param(
-            "30 14 * * *",
-            pt(2026, 7, 9, 8, 50),
-            True,
-            "80 minutes late: still the current window",
-            id="late-80-minutes",
-        ),
-        pytest.param(
-            "30 14 * * *", pt(2026, 7, 9, 9, 5), True, "95 minutes late: still the current window", id="late-95-minutes"
-        ),
-        pytest.param(
-            "30 14 * * *",
-            pt(2026, 7, 9, 10, 30),
-            True,
-            "3 hours late: still the current window",
-            id="late-3-hours-opens",
-        ),
-        pytest.param(
-            "30 14 * * *",
-            pt(2026, 7, 9, 14, 5),
-            False,
-            "superseded: the 14:00 PDT window has started since",
-            id="superseded-does-not-open",
-        ),
-        pytest.param(
-            "30 15 * * *",
-            pt(2026, 7, 7, 11, 30),
-            False,
-            "11:30 PDT: the current window is 11:00, and this cron's 08:30 PDT is no window",
-            id="late-3-hours-twin-does-not-open",
-        ),
+        pytest.param("0 15 * * *", pt(2026, 11, 5, 7, 0), True, "07:00 PST, in season", id="in-season-pst"),
+        pytest.param("0 15 * * *", pt(2026, 11, 5, 7, 45), True, "07:00 PST, 45 minutes late", id="late-opens"),
+        pytest.param("0 15 * * *", pt(2026, 11, 5, 8, 5), False, "08:00 has started since", id="superseded"),
+        pytest.param("0 14 * * *", pt(2026, 7, 7, 7, 5), True, "07:00 PDT is 14:00 UTC", id="in-season-pdt"),
+        pytest.param("0 14 * * *", pt(2026, 11, 5, 6, 5), False, "06:00 PST is no window", id="pdt-cron-in-pst-twin"),
+        pytest.param("0 15 * * *", pt(2026, 7, 11, 8, 5), True, "08:00 PDT, a Saturday", id="weekend-pdt"),
+        pytest.param("0 22 * * *", pt(2026, 7, 11, 15, 5), True, "15:00 PDT is 22:00 UTC", id="pdt-afternoon"),
+        pytest.param("0 4 * * *", pt(2026, 7, 11, 21, 5), True, "21:00 PDT is 04:00 UTC", id="pdt-last-window"),
+        pytest.param("0 4 * * *", pt(2026, 11, 5, 21, 5), False, "04:00 UTC is 20:00 PST: no window", id="pst-twin"),
+        pytest.param("0 5 * * *", pt(2026, 11, 5, 21, 5), True, "21:00 PST is 05:00 UTC", id="pst-last-window"),
     ],
 )
 def test_a_window_cron_opens_only_at_its_own_real_window_start(cron, now, opens, why):
@@ -511,8 +361,8 @@ def test_a_window_cron_opens_only_at_its_own_real_window_start(cron, now, opens,
     "env, opens",
     [
         pytest.param({"GITHUB_EVENT_NAME": "workflow_dispatch"}, True, id="manual-run"),
-        pytest.param({"GITHUB_EVENT_NAME": "schedule", "SCHEDULE": "30 15 * * *"}, True, id="window-cron"),
-        pytest.param({"GITHUB_EVENT_NAME": "schedule", "SCHEDULE": "30 14 * * *"}, False, id="off-season-twin"),
+        pytest.param({"GITHUB_EVENT_NAME": "schedule", "SCHEDULE": "0 15 * * *"}, True, id="window-cron"),
+        pytest.param({"GITHUB_EVENT_NAME": "schedule", "SCHEDULE": "0 14 * * *"}, False, id="off-season-twin"),
         pytest.param({"GITHUB_EVENT_NAME": "schedule", "SCHEDULE": rt.BACKSTOP_CRON}, False, id="backstop"),
         pytest.param({"GITHUB_EVENT_NAME": "push"}, False, id="push"),
     ],
@@ -522,7 +372,7 @@ def test_only_a_window_start_or_a_manual_run_opens_a_window(env, opens):
 
 
 def test_crons_are_each_utc_window_start_once_and_backstop_minutes_are_clear():
-    assert rt.WEEKDAY_WINDOWS == ((7, 30), (11, 0), (14, 0), (20, 30)) and rt.WEEKEND_WINDOWS == ((7, 30), (15, 0))
+    assert rt.WINDOWS == tuple((hour, 0) for hour in range(7, 22)), "every hour on the hour, 07:00 to 21:00"
     starts, day = set(), date(2026, 1, 1)
     while day < date(2028, 1, 1):  # two years: both offsets, weekdays and weekends
         starts |= {(start.hour, start.minute) for start in rt.window_starts_on(day)}
@@ -530,7 +380,7 @@ def test_crons_are_each_utc_window_start_once_and_backstop_minutes_are_clear():
     crons = [rt.cron_time(cron) for cron in rt.CRONS]
     assert len(crons) == len(set(crons)), "a window cron is listed twice"
     assert set(crons) == starts, "CRONS are not exactly the UTC times a window starts at"
-    assert {minute for _, minute in crons} <= {0, 30}, "a window cron is not on a window's minute (00 or 30)"
+    assert {minute for _, minute in crons} == {0}, "a window cron is not on a window's minute (on the hour)"
     assert rt.BACKSTOP_CRON == "5-59/20 * * * *" and not {5, 25, 45} & {minute for _, minute in crons}, (
         "the backstop shares a minute with a window cron"
     )
@@ -565,7 +415,7 @@ def test_an_unpublished_tag_waits_for_its_release_run_then_runs_it_once_more_the
     gh.release_runs = [release_run(status="in_progress", conclusion=None)]
     assert plan(gh)["action"] == "none" and "running" in plan(gh)["why"]
     gh.release_runs = [release_run(at=NOW - timedelta(minutes=10))]
-    assert plan(gh)["action"] == "none" and "runs again at 10:20 PST" in plan(gh)["why"]
+    assert plan(gh)["action"] == "none" and "runs again at 07:50 PST" in plan(gh)["why"]
     gh.release_runs = [release_run()]
     again = plan(gh)
     assert (again["action"], again["sha"], again["version"], again["republish"]) == ("ship", B, "v0.5.201", True)
@@ -702,6 +552,8 @@ class FakeCheckout:
 
     def plan(self, base, head, carried, previous_changed=False):
         self.calls.append(("plan", base, head, set(carried)))
+        if self.plan_text is None:
+            raise RuntimeError("the anchor is not in the checkout")
         self.previous_changed = previous_changed
         return self.plan_text
 
@@ -724,7 +576,7 @@ def test_a_red_validation_reruns_incrementally_once_a_commit_selects_what_failed
     checkout = FakeCheckout(since={"backend/tests/test_b.py"}, plan=PLAN_TEXT)
     picked = rt.plan_step(gh, NOW, checkout=checkout)
     assert (picked["action"], picked["mode"], picked["anchor"]) == ("dispatch", "incremental", C)
-    assert picked["increment"] == PLAN_TEXT
+    assert picked["carried"] == ["backend/tests/test_b.py"] and picked["anchor_previous"] == "v0.5.200"
     assert "carries backend/tests/test_b.py" in picked["why"] and "incrementally on %s" % C[:12] in picked["why"]
     assert ("tokens_since", C, D) in checkout.calls and ("plan", C, D, {"backend/tests/test_b.py"}) in checkout.calls
 
@@ -756,12 +608,12 @@ def test_a_stale_anchor_runs_the_full_validation_once_a_day():
     assert "no full validation in the last 24 hours" in picked["why"]
 
 
-def test_an_incremental_plan_too_big_to_dispatch_waits_rather_than_running_a_second_full_validation():
+def test_an_incremental_plan_that_cannot_be_made_waits_rather_than_running_a_second_full_validation():
     gh = red_then_anchor()
     gh.failed = {3: {"backend/tests/test_b.py"}}
     picked = rt.plan_step(gh, NOW, checkout=FakeCheckout(since={"backend/tests/test_b.py"}, plan=None))
     assert picked["action"] == "wait" and gh.dispatched == []
-    assert "too big" in picked["why"] and "no second full validation" in picked["why"]
+    assert "cannot be made" in picked["why"] and "the anchor is not in the checkout" in picked["why"]
 
 
 def test_without_a_checkout_the_validation_is_incremental_on_the_anchor_so_the_guard_dispatches_it():
@@ -769,7 +621,7 @@ def test_without_a_checkout_the_validation_is_incremental_on_the_anchor_so_the_g
     gh.failed = {3: {"backend/tests/test_b.py"}}
     picked = rt.plan_step(gh, NOW)
     assert (picked["action"], picked["mode"], picked["anchor"]) == ("dispatch", "incremental", C)
-    assert picked["increment"] is None
+    assert picked["carried"] == ["backend/tests/test_b.py"]
 
 
 def test_a_red_full_naming_its_failures_is_the_anchor_and_the_next_candidate_is_incremental_from_it():
@@ -844,14 +696,24 @@ def test_a_second_full_is_never_planned_while_an_anchor_under_a_day_old_exists(r
 def test_an_incremental_validation_names_its_anchor_and_plan_and_a_full_one_names_neither():
     gh = FakeGitHub()
     rt.dispatch_candidate(gh, C, "v0.5.201", "v0.5.200", timeout=0)
-    rt.dispatch_candidate(gh, C, "v0.5.201", "v0.5.200", timeout=0, anchor=B, increment=PLAN_TEXT)
+    rt.dispatch_candidate(
+        gh,
+        C,
+        "v0.5.201",
+        "v0.5.200",
+        timeout=0,
+        anchor=B,
+        carried={"backend/tests/test_b.py"},
+        anchor_previous="v0.5.199",
+    )
     assert gh.dispatched[0][2] == {"candidate_sha": C, "previous_release": "v0.5.200", "version": "v0.5.201"}
     assert gh.dispatched[1][2] == {
         "candidate_sha": C,
         "previous_release": "v0.5.200",
         "version": "v0.5.201",
         "anchor": B,
-        "plan": PLAN_TEXT,
+        "carried": '["backend/tests/test_b.py"]',
+        "anchor_previous": "v0.5.199",
     }
     assert any("(incremental on %s)" % B in line for line in rt.LOG)
 
@@ -893,8 +755,8 @@ def test_a_red_superseded_by_a_later_green_validation_is_neither_carried_nor_wai
     gh.failed = {2: {"backend/tests/test_b.py"}}
     checkout = FakeCheckout(since={"backend/tests/test_b.py"}, plan=PLAN_TEXT)
     picked = rt.plan_step(gh, NOW, checkout=checkout)
-    assert (picked["action"], picked["mode"], picked["anchor"]) == ("dispatch", "incremental", B)
-    assert checkout.calls == [("plan", B, D, set())]  # nothing carried, and no commit was read against the red run
+    assert (picked["action"], picked["mode"], picked["anchor"]) == ("dispatch", "incremental", C)
+    assert checkout.calls == [("plan", C, D, set())]  # the green incremental C anchors: nothing carried, no red read
     assert "carries" not in picked["why"] and "the window waits" not in picked["why"]
 
 
@@ -1784,3 +1646,61 @@ def test_pictures_without_an_approval_record_fail_loudly(tmp_path):
     with pytest.raises(rt.Fail, match="no approval record for v0.5.201"):
         rt.cmd_shots_into_approval(gh, "v0.5.201", str(shots))
     assert gh.comments == [] and gh.created == []
+
+
+def test_two_incrementals_in_a_row_select_only_their_own_diff_and_the_carried_failures():
+    # Full A (green, 5 h ago), incremental B (green, 3 h ago, anchored on A), incremental C (red, names a failed test,
+    # 1 h ago), head D. C anchors D: the plan runs C..D and what C failed, never A..D again.
+    gh = FakeGitHub(
+        [
+            dict(
+                run(C, id=3, conclusion="failure", at=NOW - timedelta(hours=1)),
+                display_title=rt.title(C, "v0.5.201", "v0.5.200", anchor=B),
+            ),
+            dict(
+                run(B, id=2, at=NOW - timedelta(hours=3)), display_title=rt.title(B, "v0.5.201", "v0.5.200", anchor=A)
+            ),
+            run(A, id=1, at=NOW - timedelta(hours=5)),
+        ],
+        head=D,
+    )
+    gh.order = [A, B, C, D]
+    gh.failed = {3: {"backend/tests/test_b.py"}}
+    checkout = FakeCheckout(since={"backend/tests/test_b.py"}, plan=PLAN_TEXT)
+    picked = rt.plan_step(gh, NOW, checkout=checkout)
+    assert (picked["action"], picked["mode"], picked["anchor"]) == ("dispatch", "incremental", C)
+    assert [call for call in checkout.calls if call[0] == "plan"] == [("plan", C, D, {"backend/tests/test_b.py"})]
+    # Green B and then green C: the next head selects only C..D, carrying nothing.
+    gh = FakeGitHub(
+        [
+            dict(
+                run(C, id=3, at=NOW - timedelta(hours=1)), display_title=rt.title(C, "v0.5.201", "v0.5.200", anchor=B)
+            ),
+            dict(
+                run(B, id=2, at=NOW - timedelta(hours=3)), display_title=rt.title(B, "v0.5.201", "v0.5.200", anchor=A)
+            ),
+            run(A, id=1, at=NOW - timedelta(hours=5)),
+        ],
+        head=D,
+    )
+    gh.order = [A, B, C, D]
+    checkout = FakeCheckout(since=None, plan=PLAN_TEXT)
+    picked = rt.plan_step(gh, NOW, checkout=checkout)
+    assert (picked["action"], picked["mode"], picked["anchor"], picked["carried"]) == ("dispatch", "incremental", C, [])
+    assert [call for call in checkout.calls if call[0] == "plan"] == [("plan", C, D, set())]
+
+
+def test_a_full_validation_older_than_a_day_runs_even_when_a_fresh_incremental_anchors_the_chain():
+    gh = FakeGitHub(
+        [
+            dict(
+                run(C, id=3, at=NOW - timedelta(hours=1)), display_title=rt.title(C, "v0.5.201", "v0.5.200", anchor=B)
+            ),
+            run(B, id=2, at=NOW - timedelta(hours=26)),
+        ],
+        head=D,
+    )
+    gh.order = [A, B, C, D]
+    picked = rt.plan_step(gh, NOW, checkout=FakeCheckout(plan=PLAN_TEXT))
+    assert (picked["action"], picked["mode"]) == ("dispatch", "full")
+    assert "no full validation in the last 24 hours" in picked["why"]

@@ -4,6 +4,7 @@ from fastapi import Request
 
 from . import hubdb as H
 from . import models as M
+from . import pipeline_engine, pipeline_rights
 from .store import Problem
 
 
@@ -14,16 +15,29 @@ def install_task_types(app, store, auth, mutate, mover):
 
     @app.get("/api/v2/task-types")
     def types(request: Request):
-        auth.domain(request.state.identity)
+        who = request.state.identity
+        auth.domain(who)
         with store.read() as c:
-            return {"types": H.type_list(c)}
+            # A members-only pipeline is listed only to the people it is for (pipeline_rights.may_see).
+            listed = H.type_list(c)
+            shown = pipeline_rights.visible_pipeline_ids(c, who.actor, [typ["id"] for typ in listed])
+            listed = [typ for typ in listed if typ["id"] in shown]
+            # Each pipeline says whether this caller may change its rules: the check a move's override uses.
+            editable = pipeline_rights.editable_pipeline_ids(c, who.actor, [typ["id"] for typ in listed])
+            for typ in listed:
+                typ["can_edit_rules"] = typ["id"] in editable
+                # Whether it has any requirement, so the pipeline keeps its plain layout without one.
+                typ["has_requirements"] = pipeline_engine.has_requirements(c, typ["id"])
+            return {"types": listed}
 
     @app.get("/api/v2/task-types/{type_id}")
     def task_type(request: Request, type_id: str):
-        auth.domain(request.state.identity)
+        who = request.state.identity
+        auth.domain(who)
         with store.read() as c:
             row = H.type_get(c, type_id)
-            if not row:
+            # Named by id or by name; a pipeline the caller may not see is not found, whichever way it was named.
+            if not row or not pipeline_rights.may_see(c, who.actor, row["id"]):
                 raise Problem("not_found", "Task type not found", 404)
             return {"type": row}
 

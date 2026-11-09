@@ -16,6 +16,7 @@ changes; bots keep using whatever git access their computer already has.
 | Actions | read (read and write to run workflows) | a bot reads workflow runs, such as whether a deploy succeeded, in any repository it can read. With read alone it cannot start, rerun or cancel them; see [Letting a bot run workflows](#letting-a-bot-run-workflows) |
 | Workflows | none (read and write to edit workflow files) | not in the manifest. Add it only for a bot that must create or change `.github/workflows` files; see [Letting a bot edit workflow files](#letting-a-bot-edit-workflow-files) |
 | Checks, Commit statuses | read | a bot reads a pull request's checks (`gh pr checks`) in any repository it can read. It cannot create, rerun or change them |
+| Checks | read and write for pipeline approvals | not in the manifest. Tico posts a check run named `Tico: <requirement>` on a pull request's commit when a pipeline requirement is met, failed or waiting, with its own token. Until an Owner sets **Checks** to **Read and write** on the App's GitHub settings page and accepts the updated permissions on the installation, the check is withheld and nothing is posted. Requiring the check on a branch is a repository setting |
 | Deployments | read | a bot reads deployments, such as a pull request's preview link, in any repository it can read. It cannot create or change them |
 | Administration | write, on by default | lets the app create and delete repositories and change their settings. Only the server uses it: Tico mints a token with it just to create a bot's repository or delete one the Owner requests, and bots' run tokens never carry it. Untick **Let BotOps create bot repositories** to leave it out; a person then creates every new bot's repository |
 
@@ -83,6 +84,12 @@ it on:
   branch protection (or a ruleset) that requires code owner review on the default branch.
 
 ## Set up
+
+Until the app is connected and installed, Tico says so where a bot's work would go: the Health check is an
+informational note while the team has only the built-in bots, and a warning once a bot someone made exists,
+since that bot's files and memory live on its computer with no backup. A bot's page and a **Build a bot** task
+show a card with **Connect GitHub** for the owner; anyone else who sees it is asked to ask the owner. The card
+goes away once the app is connected and installed.
 
 1. As the owner, open Tools, GitHub. Enter the GitHub account or organization (a personal account
    works too; Tico tells which one it is) and optionally rename the app. **Let BotOps create bot repositories** is ticked; leave it ticked unless a person should

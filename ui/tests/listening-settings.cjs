@@ -38,7 +38,7 @@ async function open(browser, role, width = 1440) {
     if (p === '/api/v2/models') return json({models: [], harnesses: []});
     if (p === '/api/v2/access') return json({rules: {}});
     if (p === '/api/v2/listening/stats') return json({daily: [], recent: []});
-    if (p === '/api/v2/market/entities') return json({entities: [{id: 'company/self', type: 'company', name: 'Acme'}], total: 1});
+    if (p === '/api/v2/market/entities') return json({entities: [{id: 'company/self', type: 'organization', name: 'Acme'}], total: 1});
     if (p === '/api/v2/listening/destinations' && req.method() === 'GET')
       return json({destinations: dests, categories: CATEGORIES, receivers: RECEIVERS});
     const one = p.match(/^\/api\/v2\/listening\/destinations\/([^/]+)(\/remove)?$/);
