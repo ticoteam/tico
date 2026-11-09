@@ -6,19 +6,35 @@
 // placeholder, the Ask's question as its own row above the composer, the bot page's thread actions in its top line,
 // and a phone at 390px (no sideways scroll, finger-sized targets, the quote cut short, the long press's sheet).
 // TICO_SCREENSHOT_DIR=<dir> also saves the screenshots: threads-halfway-<name>-<desktop|phone>-<dark|light>.png.
-const {chromium} = require('playwright');
+const {chromium} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const {html, uiFile} = require('./support/page.cjs');
-const {unrouted} = require('./support/routes.cjs');
+const {html, uiFile} = require('./support/page.cjs') as typeof import('./support/page.cjs');
+const {unrouted} = require('./support/routes.cjs') as typeof import('./support/routes.cjs');
+// Page globals this spec reads (file-local; see ui/tests/tsconfig.json moduleDetection).
+declare const window: Window & typeof globalThis & {
+  copied: string | undefined;
+};
+
+type Page = import('playwright').Page;
+type Rect = {x: number; y: number; width: number; height: number};
+type ThvView = {id: string; messages: {id: string}[]; opts: {dm?: boolean}; gone?: boolean};
+// Browser-side globals the page defines (ui/app), and `copied`, which the clipboard stub in this file sets.
+declare var THV_VIEWS: ThvView[];
+declare var THV_TICK: number;
+declare var thvReplyStart: (view: ThvView, message: {id: string}) => unknown;
+declare var thvNewDm: (view: ThvView | undefined) => unknown;
+declare var threadViewsLive: (kind: string, event: unknown) => unknown;
+declare var catchUpOpen: () => unknown;
+declare var copied: string | undefined;
 
 const shots = process.env.TICO_SCREENSHOT_DIR;
-const now = Date.now(), at = min => new Date(now - min * 60000).toISOString();
-const me = (extra = {}) => ({member: true, following: true, notify: 'live', last_read_seq: 99, unread: 0, activity: false, can_post: true, can_manage: false, ...extra});
+const now = Date.now(), at = (min: number) => new Date(now - min * 60000).toISOString();
+const me = (extra: Record<string, unknown> = {}) => ({member: true, following: true, notify: 'live', last_read_seq: 99, unread: 0, activity: false, can_post: true, can_manage: false, ...extra});
 const team = {id: 't-ship', title: 'Ship day', audience: 'team', audience_group_id: 'ops', last_seq: 9, last_message_at: at(1), me: me(), members: []};
-const msg = (id, seq, from, body, min, extra = {}) => ({id, seq, thread_id: 't-ship', sender_id: from, body, created_at: at(min), reply_to: null, routed: null, ...extra});
-const quote = (id, author, author_name, excerpt) => ({id, author, author_name, excerpt});
+const msg = (id: string, seq: number, from: string, body: string, min: number, extra: Record<string, unknown> = {}) => ({id, seq, thread_id: 't-ship', sender_id: from, body, created_at: at(min), reply_to: null, routed: null, ...extra});
+const quote = (id: string, author: string, author_name: string, excerpt: string) => ({id, author, author_name, excerpt});
 const LONG = 'The Acme invoice run needs the new tax table before it can go out, and the reviewers want the totals checked twice against last month';
 const messages = () => [
   msg('m1', 1, 'human:bea', LONG, 20),
@@ -42,7 +58,7 @@ const marksMessages = () => [
 // A notice DM the server names nothing: no title, no people. Its messages name it.
 const noteThread = {id: 't-note', title: '', audience: 'participants', last_seq: 3, dm_with: [], dm_with_count: 0, members: [], me: me({last_read_seq: 0})};
 const noteMessages = () => [msg('w1', 3, 'bot:ops', 'Your Acme report is ready.', 2, {thread_id: 't-note'})];
-const working = (min = 1.1) => ({actor: 'bot:ops', name: 'Ops', state: 'working', detail: 'Reading the tax table', since: at(min), run_id: 'run1', fix: null});
+const working = (min: number = 1.1) => ({actor: 'bot:ops', name: 'Ops', state: 'working', detail: 'Reading the tax table', since: at(min), run_id: 'run1', fix: null});
 const statuses = () => [working(), {actor: 'bot:fin', name: 'Fin', state: 'up_next', detail: 'After Ops', since: at(1), run_id: null, fix: null},
   {actor: 'bot:qa', name: 'QA', state: 'cant_reply', detail: 'Out of credits', since: at(2), run_id: null, fix: {label: 'Fix', href: '#/settings/billing'}}];
 const dmThread = {id: 't-dm-ops', title: 'Chat with Ops', audience: 'personal', last_seq: 2, me: me(), members: [{actor: 'human:ana'}, {actor: 'bot:ops'}],
@@ -51,27 +67,27 @@ const dmMessages = () => [{id: 'd1', seq: 1, thread_id: 't-dm-ops', sender_id: '
   routed: {to: [{actor: 'bot:ops', name: 'Ops'}]}}];
 
 // `twin`: a second bot named Ops, so the names that tell bots apart add the slug.
-async function open(browser, {phone = false, twin = false} = {}) {
+async function open(browser: import('playwright').Browser, {phone = false, twin = false}: {phone?: boolean; twin?: boolean} = {}) {
   const page = await browser.newPage({viewport: phone ? {width: 390, height: 844} : {width: 1280, height: 800}, serviceWorkers: 'block', reducedMotion: 'reduce',
     ...(phone ? {isMobile: true, hasTouch: true} : {})});
-  const seen = {errors: [], posts: [], stops: [], timelines: [], reacts: []};
-  const sse = {queue: [], seq: 0, latest: null, done: false}, state = {archived: false, needs: []};
+  const seen: {errors: string[]; posts: Record<string, unknown>[]; stops: unknown[]; timelines: (string | null)[]; reacts: string[]} = {errors: [], posts: [], stops: [], timelines: [], reacts: []};
+  const sse: {queue: unknown[]; seq: number; latest: import('playwright').Request | null; done: boolean} = {queue: [], seq: 0, latest: null, done: false}, state = {archived: false, needs: [] as unknown[]};
   page.on('pageerror', e => seen.errors.push(e.message));
   // A closed page's waiting stream ends, so node can exit.
   page.on('close', () => { sse.done = true; });
-  await page.addInitScript(() => { Object.defineProperty(navigator, 'clipboard', {configurable: true, value: {writeText: async t => { window.copied = t; }}}); });
+  await page.addInitScript(() => { Object.defineProperty(navigator, 'clipboard', {configurable: true, value: {writeText: async (t: string) => { window.copied = t; }}}); });
   await page.route('**/*', async route => {
     const req = route.request(), url = new URL(req.url()), p = url.pathname, method = req.method();
-    const json = (body, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
+    const json = (body: unknown, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
     if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
     const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/);
-    if (ui && fs.existsSync(uiFile(ui[1])))
-      return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]), 'utf8')});
+    if (ui && fs.existsSync(uiFile(ui[1]!)))
+      return route.fulfill({contentType: ui[1]!.endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]!), 'utf8')});
     if (/\/marked\.min\.js$/.test(p)) return route.fulfill({contentType: 'application/javascript', body: fs.readFileSync(uiFile('vendor/marked.min.js'), 'utf8')});
     if (/\.(?:js|ts)$/.test(p)) return route.fulfill({contentType: 'application/javascript', body: ''});
     if (p === '/api/me') return json({id: 'ana', name: 'Ana', role: 'owner', registered: true});
     if (p === '/api/employees') return json(['ops', 'fin', 'qa', ...(twin ? ['ops2'] : [])].map(name => ({name,
-      display_name: name === 'qa' ? 'QA' : name === 'ops2' ? 'Ops' : name[0].toUpperCase() + name.slice(1),
+      display_name: name === 'qa' ? 'QA' : name === 'ops2' ? 'Ops' : name[0]!.toUpperCase() + name.slice(1),
       host: 'keeper', status: 'active', state: 'active', can_chat: true, schedules: [], my_access: {see: true, read: true, write: true}})));
     if (p === '/api/humans') return json({people: [{id: 'ana', name: 'Ana', email: 'ana@acme.example'}, {id: 'bea', name: 'Bea', email: 'bea@acme.example'},
       {id: 'cy', name: 'Cy', email: 'cy@acme.example'}, {id: 'zed', name: ZED, email: 'zed@acme.example'}], org_groups: [{id: 'ops', name: 'Ops team', my_access: {see: true, read: true, write: true}}]});
@@ -114,18 +130,18 @@ async function open(browser, {phone = false, twin = false} = {}) {
     const stop = p.match(/^\/api\/v2\/bots\/([^/]+)\/stop$/);
     if (stop) { seen.stops.push({bot: stop[1], ...JSON.parse(req.postData() || '{}')}); return json({ok: true}); }
     const react = p.match(/^\/api\/v2\/messages\/([^/]+)\/reactions\/(.+)$/);
-    if (react) { seen.reacts.push(decodeURIComponent(react[2])); return json(method === 'PUT' ? [{emoji: decodeURIComponent(react[2]), count: 1, actors: ['human:ana']}] : []); }
+    if (react) { seen.reacts.push(decodeURIComponent(react[2]!)); return json(method === 'PUT' ? [{emoji: decodeURIComponent(react[2]!), count: 1, actors: ['human:ana']}] : []); }
     if (p === '/api/v2/rule-holds') return json({holds: [], next_cursor: null});
     return json(unrouted(p));
   });
   return {page, seen, sse, state};
 }
-async function shot(page, name) {
+async function shot(page: Page, name: string) {
   if (!shots) return;
   fs.mkdirSync(shots, {recursive: true});
   await page.screenshot({path: path.join(shots, `threads-halfway-${name}.png`)});
 }
-async function themed(page, name, phone = false) {
+async function themed(page: Page, name: string, phone = false) {
   if (!shots) return;
   for (const theme of ['dark', 'light']) {
     await page.evaluate(t => { document.documentElement.dataset.theme = t; }, theme);
@@ -135,12 +151,12 @@ async function themed(page, name, phone = false) {
   await page.evaluate(() => { document.documentElement.dataset.theme = 'dark'; });
 }
 // A long unbroken name gives way in a quote and in the reply row above the composer: Cancel stays on screen.
-async function longNames(page) {
+async function longNames(page: Page) {
   await page.goto('https://tico-ui.test/#/thread/t-marks');
   await row(page, 'k6').waitFor();
   const who = await box(row(page, 'k6').locator('.th-quote-who')), chip = await box(row(page, 'k6').locator('.th-quote'));
   assert.ok(chip.x + chip.width <= 390 && who.width <= chip.width * 0.45, 'the name is cut short: ' + JSON.stringify([who, chip]));
-  await page.evaluate(() => { const v = [...THV_VIEWS].find(x => x.id === 't-marks'); thvReplyStart(v, v.messages.find(m => m.id === 'k5')); });
+  await page.evaluate(() => { const v = [...THV_VIEWS].find(x => x.id === 't-marks')!; thvReplyStart(v, v.messages.find(m => m.id === 'k5')!); });
   const x = await box(page.locator('.thv-replying-x'));
   assert.ok(x.x + x.width <= 390, 'Cancel is on screen: ' + JSON.stringify(x));
   assert.ok(await page.evaluate(() => document.documentElement.scrollWidth) <= 390);
@@ -148,16 +164,16 @@ async function longNames(page) {
   await page.goto('https://tico-ui.test/#/thread/t-ship');
   await row(page, 'm6').waitFor();
 }
-const row = (page, id) => page.locator(`.th-msg[data-mid="${id}"]`);
-const box = loc => loc.boundingBox();
+const row = (page: Page, id: string) => page.locator(`.th-msg[data-mid="${id}"]`);
+const box = (loc: import('playwright').Locator) => loc.boundingBox() as Promise<Rect>;
 
-let browser = null;
+let browser: import('playwright').Browser | null = null;
 (async () => {
   browser = await chromium.launch();
 
   // ---- a shared thread, desktop
   {
-    const {page, seen, sse, state} = await open(browser);
+    const {page, seen, sse} = await open(browser);
     await page.goto('https://tico-ui.test/#/thread/t-ship');
     await row(page, 'm6').waitFor();
     assert.ok(seen.timelines.includes('1'), 'the timeline is read flat');
@@ -178,7 +194,7 @@ let browser = null;
     assert.equal(await row(page, 'm6').locator('.th-quote-hidden').count(), 1);
     assert.equal(await row(page, 'm6').locator('[data-th-quote]').count(), 0, 'a hidden quote leads nowhere');
     // A bot's reply: its steps line first, then its words, then Copy · 👍 · 👎.
-    const parts = await row(page, 'm3').evaluate(e => [...e.querySelector('.th-main').children].map(c => c.matches('.th-quote') ? 'quote'
+    const parts = await row(page, 'm3').evaluate(e => [...(e.querySelector('.th-main')!.children as HTMLCollection & Iterable<Element>)].map(c => c.matches('.th-quote') ? 'quote'
       : c.matches('.run-steps') || c.querySelector('.run-steps') ? 'steps' : c.matches('.th-body') ? 'body' : c.matches('.fb-row') ? 'fb' : 'other'));
     assert.deepEqual(parts.filter(x => x !== 'other'), ['quote', 'steps', 'body', 'fb'], 'quote, steps, words, then feedback: ' + parts);
 
@@ -234,14 +250,14 @@ let browser = null;
     await text.fill('On it.');
     await page.locator('.thv-composer .p-send').click();
     await row(page, 'n1').waitFor();
-    assert.equal(seen.posts.at(-1).in_reply_to, 'm1');
+    assert.equal(seen.posts.at(-1)!.in_reply_to, 'm1');
     assert.equal(await replying.isHidden(), true, 'the quote leaves the composer once sent');
     assert.equal(await row(page, 'n1').locator('.th-quote').getAttribute('data-th-quote'), 'm1');
     // A click on the quote scrolls to the message and lights it for a moment.
-    await page.evaluate(() => { const b = document.querySelector('.thv-scroll'); b.scrollTop = b.scrollHeight; });
+    await page.evaluate(() => { const b = document.querySelector<HTMLElement>('.thv-scroll')!; b.scrollTop = b.scrollHeight; });
     await row(page, 'n1').locator('.th-quote').click();
     await page.locator('.th-msg.th-flash[data-mid="m1"]').waitFor();
-    await page.waitForFunction(() => { const b = document.querySelector('.thv-scroll').getBoundingClientRect(), r = document.querySelector('[data-mid="m1"]').getBoundingClientRect(); return r.top >= b.top - 1 && r.top < b.bottom; });
+    await page.waitForFunction(() => { const b = document.querySelector('.thv-scroll')!.getBoundingClientRect(), r = document.querySelector('[data-mid="m1"]')!.getBoundingClientRect(); return r.top >= b.top - 1 && r.top < b.bottom; });
     await page.waitForFunction(() => !document.querySelector('.th-flash'), null, {timeout: 4000});
 
     // Live: a `bot_status` event patches the rows; the bot's reply landing takes its row away.
@@ -305,7 +321,7 @@ let browser = null;
     await page.locator('.tr-pane').waitFor({state: 'attached'});
     assert.equal(await page.locator('.tr-pane').evaluate(e => e.children.length), 0);
     await page.setViewportSize({width: 1280, height: 800});
-    await page.waitForFunction(() => document.querySelector('.tr-pane')?.children.length > 0 || location.hash.startsWith('#/thread/'));
+    await page.waitForFunction(() => document.querySelector('.tr-pane')?.children.length! > 0 || location.hash.startsWith('#/thread/'));
     assert.deepEqual(seen.errors, []);
     await page.close();
   }
@@ -316,13 +332,13 @@ let browser = null;
     await page.goto('https://tico-ui.test/#/thread/t-marks');
     await row(page, 'k6').waitFor();
     // The root is read to 5 and the side thread to 2: the side's seq 5 is new, the root's 3 is not.
-    const fresh = await page.locator('.th-msg').evaluateAll(els => els.filter(e => e.classList.contains('th-new')).map(e => e.dataset.mid));
+    const fresh = await page.locator('.th-msg').evaluateAll(els => els.filter(e => e.classList.contains('th-new')).map(e => (e as HTMLElement).dataset.mid));
     assert.deepEqual(fresh, ['k4', 'k5'], 'new by their own thread\'s mark');
     assert.equal(await page.locator('.th-newline + .th-msg').getAttribute('data-mid'), 'k4', 'the New line sits before the first new one');
     // An edit to a quoted message changes the chip; a delete says so.
     await page.evaluate(() => threadViewsLive('messages', {id: 'k1', thread_id: 't-marks', root_id: 't-marks',
       message: {id: 'k1', seq: 1, revision: 2, thread_id: 't-marks', sender_id: 'human:bea', body: 'Start of the new plan.', created_at: new Date().toISOString()}}));
-    await page.waitForFunction(() => document.querySelector('[data-mid="k3"] .th-quote-text')?.textContent.includes('new plan'));
+    await page.waitForFunction(() => document.querySelector('[data-mid="k3"] .th-quote-text')?.textContent!.includes('new plan'));
     await page.evaluate(() => threadViewsLive('messages', {id: 'k1', thread_id: 't-marks', root_id: 't-marks', deleted: true, revision: 3}));
     await row(page, 'k3').locator('.th-quote-hidden').waitFor();
     // A quote the server cannot find, however far back, becomes "not shown".
@@ -365,7 +381,7 @@ let browser = null;
     assert.ok((await box(page.locator('.thv-replying-x'))).height >= 44);
     await page.locator('.thv-replying-x').click();
     await longNames(page);
-    await page.evaluate(() => { const b = document.querySelector('.thv-scroll'); b.scrollTop = b.scrollHeight; });
+    await page.evaluate(() => { const b = document.querySelector<HTMLElement>('.thv-scroll')!; b.scrollTop = b.scrollHeight; });
     await themed(page, 'shared-thread', true);
     await page.goto('https://tico-ui.test/#/bot/ops/dm');
     await page.locator('#bot-thread .th-status-working').waitFor();
@@ -373,15 +389,15 @@ let browser = null;
     await themed(page, 'bot-dm-working', true);
     // The desktop-app banner takes its own room above the bot's header, at 390px and at 720px.
     await page.evaluate(() => {
-      const n = document.getElementById('app-nudge');
-      n.querySelector('.app-nudge-text').textContent = 'Tico for Acme opens your company directly, with no server setup.';
+      const n = document.getElementById('app-nudge')!;
+      n.querySelector('.app-nudge-text')!.textContent = 'Tico for Acme opens your company directly, with no server setup.';
       n.hidden = false;
     });
     for (const width of [390, 720]) {
       await page.setViewportSize({width, height: 844});
-      await page.waitForFunction(() => document.querySelector('#bot-top').getBoundingClientRect().top >= document.getElementById('app-nudge').getBoundingClientRect().bottom,
+      await page.waitForFunction(() => document.querySelector('#bot-top')!.getBoundingClientRect().top >= document.getElementById('app-nudge')!.getBoundingClientRect().bottom,
         null, {timeout: 3000}).catch(() => {});
-      const [nudge, top] = await page.evaluate(() => ['#app-nudge', '#bot-top'].map(q => { const r = document.querySelector(q).getBoundingClientRect(); return {top: r.top, bottom: r.bottom}; }));
+      const [nudge, top] = await page.evaluate(() => ['#app-nudge', '#bot-top'].map(q => { const r = document.querySelector(q)!.getBoundingClientRect(); return {top: r.top, bottom: r.bottom}; })) as [{top: number; bottom: number}, {top: number; bottom: number}];
       assert.ok(top.top >= nudge.bottom, `${width}px: the banner (to ${nudge.bottom}) sits above the header (from ${top.top})`);
     }
     await page.setViewportSize({width: 390, height: 844});

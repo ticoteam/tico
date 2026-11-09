@@ -1,28 +1,28 @@
 // Offline browser regression: Tico HQ's message for this version appears once per person (a reload does not bring it
 // back), several notices stack with their kind's tone (backend/tico_notices.py via update.messages), and What's new
 // lists the known issues in the running version, or says it could not check.
-const {chromium} = require('playwright');
+const {chromium} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
-const {html, uiFile} = require('./support/page.cjs');
-const {unrouted} = require('./support/routes.cjs');
+const {html, uiFile} = require('./support/page.cjs') as typeof import('./support/page.cjs');
+const {unrouted} = require('./support/routes.cjs') as typeof import('./support/routes.cjs');
 const MESSAGE = {id: 2, versions: '0.3', body: 'You are on 0.3.52: update for faster boards.', url: 'https://github.com/ticoteam/tico/blob/main/docs/updates.md'};
 const ISSUES = [{id: 5, title: 'Board stays empty after a restart', since: '0.3.50', fixed_in: '0.3.53', url: 'https://github.com/ticoteam/tico/issues/700'},
-  {id: 6, title: '<img src=x onerror=alert(1)>', since: '0.3.51', fixed_in: '', url: 'javascript:alert(1)'}];
+  {id: 6, title: '<img src=x onerror=alert(1)>', since: '0.3.51', fixed_in: '', url: 'javascript:alert(1)'}] as const;
 (async () => {
-  const browser = await chromium.launch({headless: true, channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined});
+  const browser = await chromium.launch({headless: true, channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined} as import('playwright').LaunchOptions);
   try {
-    const visit = async ({ctx, update, hash = '#/changelog', me = 'ana'} = {}) => {
+    const visit = async ({ctx, update, hash = '#/changelog', me = 'ana'}: {ctx?: import('playwright').BrowserContext; update?: unknown; hash?: string; me?: string} = {}) => {
       ctx = ctx || await browser.newContext({viewport: {width: 1440, height: 900}, serviceWorkers: 'block'});
       const page = await ctx.newPage();
-      const errors = [];
+      const errors: string[] = [];
       page.on('pageerror', e => errors.push(e.message));
       await page.route('**/*', route => {
         const req = route.request(), p = new URL(req.url()).pathname;
-        const json = (body, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
+        const json = (body: unknown, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
         const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/);
-        if (ui && fs.existsSync(uiFile(ui[1])))
-          return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]), 'utf8')});
+        if (ui && fs.existsSync(uiFile(ui[1]!)))
+          return route.fulfill({contentType: ui[1]!.endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]!), 'utf8')});
         if (/\.(?:js|ts)$/.test(p)) return route.fulfill({contentType: 'application/javascript', body: ''});
         if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
         const config = {version: '0.3.52', update, app_name: 'Tico', usage_count_notice: false};
@@ -37,7 +37,7 @@ const ISSUES = [{id: 5, title: 'Board stays empty after a restart', since: '0.3.
         return json(unrouted(p));
       });
       await page.goto('https://tico-ui.test/' + hash);
-      await page.waitForFunction(() => !document.querySelector('#account .account-email')?.textContent.includes('Signing in'));
+      await page.waitForFunction(() => !document.querySelector('#account .account-email')?.textContent!.includes('Signing in'));
       return {page, ctx, errors};
     };
     const base = {current: '0.3.52', latest: '0.3.52', available: false, url: '', published_at: '', name: ''};
@@ -53,7 +53,7 @@ const ISSUES = [{id: 5, title: 'Board stays empty after a restart', since: '0.3.
     assert.equal(await ki.locator('h2').textContent(), 'Known issues in your version');
     assert.equal(await ki.locator('li').count(), 2);
     assert.equal(await ki.locator('li').first().locator('a').getAttribute('href'), ISSUES[0].url);
-    assert.match(await ki.locator('li').first().textContent(), /Fixed in v0\.3\.53/);
+    assert.match((await ki.locator('li').first().textContent())!, /Fixed in v0\.3\.53/);
     assert.equal(await ki.locator('li').nth(1).locator('a').count(), 0);
     assert.equal(await ki.locator('li').nth(1).textContent(), ISSUES[1].title);
     await v.page.locator('#version-message [data-vm-x]').click();
@@ -77,7 +77,7 @@ const ISSUES = [{id: 5, title: 'Board stays empty after a restart', since: '0.3.
     const items = v.page.locator('#version-message .vm-item');
     await items.first().waitFor({state: 'visible'});
     assert.equal(await items.count(), 3, 'at most three at once');
-    assert.deepEqual(await items.evaluateAll(els => els.map(e => e.dataset.kind)), ['security', 'billing', 'info']);
+    assert.deepEqual(await items.evaluateAll(els => els.map(e => (e as HTMLElement).dataset.kind)), ['security', 'billing', 'info']);
     assert.equal(await items.nth(1).locator('a').count(), 0, 'only an https link is kept');
     const tone = await items.first().evaluate(e => getComputedStyle(e).backgroundColor);
     assert.notEqual(tone, await items.nth(1).evaluate(e => getComputedStyle(e).backgroundColor), 'security stands out');
@@ -94,7 +94,7 @@ const ISSUES = [{id: 5, title: 'Board stays empty after a restart', since: '0.3.
     // HQ not reached: no message, and What's new says it could not check rather than "none".
     v = await visit({update: {...base, message: null, known_issues: [], known_issues_checked: false}});
     await v.page.locator('#changelog-known-issues').waitFor({state: 'visible'});
-    assert.match(await v.page.locator('#changelog-known-issues').textContent(), /Could not check/);
+    assert.match((await v.page.locator('#changelog-known-issues').textContent())!, /Could not check/);
     assert.equal(await v.page.locator('#version-message').isVisible(), false);
     assert.deepEqual(v.errors, []);
     await v.ctx.close();

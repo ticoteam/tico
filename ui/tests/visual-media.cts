@@ -37,11 +37,8 @@ interface VisualFile {
 interface Served {
   token: string; range: string; bytes?: number;
 }
-declare global {
-  interface Element {
-    moveBefore?(node: Node, child: Node | null): void;
-  }
-}
+// Element.prototype.moveBefore is newer than the DOM lib: a file-local view of the Element constructor.
+declare const Element: typeof globalThis.Element & {prototype: {moveBefore?(node: Node, child: Node | null): void}};
 // Browser-side state and functions from visual-cards.ts, visual-media.ts and the thread script below.
 declare const VISUAL_BODY: {video: unknown; audio: unknown};
 declare const VISUAL_WIRE: {audio: unknown};

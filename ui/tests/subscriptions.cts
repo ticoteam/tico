@@ -12,24 +12,52 @@
 //  - a computer's pop-up still lists one connection per AI tool, its own login, and the queue line;
 //  - the bot editor has Model and Computer and no subscription line; a phone has no sideways page scroll.
 // SUBS_SHOTS=<dir> saves desktop and phone screenshots, dark and light.
-const {chromium} = require('playwright');
+const {chromium} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const {html, uiFile, harnesses} = require('./support/page.cjs');
-const {unrouted} = require('./support/routes.cjs');
+const {html, uiFile, harnesses} = require('./support/page.cjs') as typeof import('./support/page.cjs');
+const {unrouted} = require('./support/routes.cjs') as typeof import('./support/routes.cjs');
 const SHOTS = process.env.SUBS_SHOTS || '';
+type Page = import('playwright').Page;
+type Browser = import('playwright').Browser;
+type Route = import('playwright').Route;
+type Kind = {kind: string; label: string; runtime: string; secret_label: string; help: string; connect?: boolean; owned?: boolean};
+type Machine = {id: string; label: string; owner_id: string; last_seen_at: string; version: string; platform: string; bots: string[];
+  accepts_member_bots: boolean; readiness: {runtimes: Record<string, {installed: boolean; authenticated: string}>};
+  turn_counts: {running: number; starting: number; waiting: number; queued: number; waits: unknown[]}; turn_summary: string;
+  release?: string; cloud_machine?: {state: string};
+  update?: {state: string; label: string; release: string; commit: string; outdated: boolean; server_release: string; error: string}};
+type Sub = {id: string; name: string; kind: string; runtime: string; label: string; status: string; status_detail: string; computers: string[];
+  usage: {window?: string | null; used_pct?: number | null; cost_usd_month?: number | null; resets_at?: string; reason?: string} | null;
+  added_by: string; owner_id?: string; owner_name?: string};
+// A sign-in as the fake computer reports it; the test reads its id and state.
+type Login = {[key: string]: unknown; id: string; state: string; url: string};
+// The request bodies the fake server reads (what the page sent); other fields stay unknown.
+type Body = {[key: string]: unknown; kind?: string; name?: string; secret?: string; owner_id?: string; confirm?: boolean;
+  subscription?: string; code?: string; runner_id?: string; runtime?: string; preset?: string; decide_level?: string; enabled?: string[];
+  model?: string; expected_revision?: number};
+type Write = {p: string; method: string; body?: Body; confirm?: string | null};
+type Data = {machines: Machine[]; subs: Sub[]; assignments: {runner_id: string; runtime: string; subscription_id: string}[]; capable: string[];
+  providers: {[key: string]: unknown; enabled: string[]; default: {runtime: string; model: string}; revision: number; preset: string;
+    providers: {id: string; label: string; gateway?: boolean}[]};
+  gateway: Record<string, unknown>; models: Record<string, unknown>[]; levels: Record<string, unknown>;
+  connect?: string[]; connectRefused?: string; connectHeld?: Promise<unknown> | null; connectNotYours?: boolean;
+  keys?: (string | undefined)[]; login?: Login};
+declare var SETTINGS_TAB: string;
+declare function settingsShow(tab: string): void;
+declare function settingsEditBot(slug?: string, inline?: boolean): void;
 
-const KINDS = [
+const KINDS: Kind[] = [
   {kind: 'claude_token', label: 'Claude plan', runtime: 'claude', secret_label: 'Token from claude setup-token', help: 'Run claude setup-token on a computer signed in to the plan, then paste the token.', connect: true, owned: true},
   {kind: 'codex_login', label: 'ChatGPT plan', runtime: 'codex', secret_label: "Codex's auth.json", help: 'Paste ~/.codex/auth.json from a computer where codex login is signed in.', connect: true, owned: true},
   {kind: 'anthropic_key', label: 'Anthropic API key', runtime: 'claude', secret_label: 'API key', help: ''},
   {kind: 'openai_key', label: 'OpenAI API key', runtime: 'codex', secret_label: 'API key', help: ''}];
 
-function fixtures() {
+function fixtures(): Data {
   const now = new Date().toISOString();
   const ready = {installed: true, authenticated: 'ready'}, missing = {installed: true, authenticated: 'missing'};
-  const machine = (id, label, operator, bots = [], runtimes = {codex: ready, claude: ready}, extra = {}) => ({id, label, owner_id: operator, last_seen_at: now,
+  const machine = (id: string, label: string, operator: string, bots: string[] = [], runtimes: Machine['readiness']['runtimes'] = {codex: ready, claude: ready}, extra: Partial<Machine> = {}): Machine => ({id, label, owner_id: operator, last_seen_at: now,
     version: '0.5.14', platform: 'linux', bots, accepts_member_bots: true, readiness: {runtimes},
     turn_counts: {running: 0, starting: 0, waiting: 0, queued: 0, waits: []}, turn_summary: '0 running · 0 starting · 0 waiting', ...extra});
   return {
@@ -74,13 +102,13 @@ function fixtures() {
   };
 }
 
-async function open(browser, {viewport = {width: 1440, height: 900}, theme = 'dark', as = 'owner', tab = 'models', old = false, mutate} = {}) {
+async function open(browser: Browser, {viewport = {width: 1440, height: 900}, theme = 'dark', as = 'owner', tab = 'models', old = false, mutate}: {viewport?: {width: number; height: number}; theme?: string; as?: 'owner' | 'member'; tab?: string; old?: boolean; mutate?: (d: Data) => void} = {}) {
   const data = fixtures();
   mutate?.(data);
   const page = await browser.newPage({viewport, serviceWorkers: 'block'});
-  const errors = [], writes = [];
+  const errors: string[] = [], writes: Write[] = [];
   page.on('pageerror', e => errors.push(e.message));
-  await page.addInitScript(([t, saved]) => { try { localStorage.setItem('tico.theme', t); sessionStorage.setItem('tico.settings.tab', saved); } catch {} }, [theme, tab]);
+  await page.addInitScript(([t, saved]) => { try { localStorage.setItem('tico.theme', t); sessionStorage.setItem('tico.settings.tab', saved); } catch {} }, [theme, tab] as [string, string]);
   const me = {owner: {id: 'ana', role: 'owner', name: 'Ana'}, member: {id: 'sam', role: 'member', name: 'Sam'}}[as];
   Object.assign(me, {email: me.id + '@example.com', cloud: true, registered: true});
   const policy = {see: {everyone: true}, read: {everyone: true}, write: {everyone: true}};
@@ -91,14 +119,14 @@ async function open(browser, {viewport = {width: 1440, height: 900}, theme = 'da
       my_access: {see: true, read: true, write: true}, access_policy: policy},
   ];
   // A refusal as the server sends it (backend/app.py Problem handler: the extra facts beside code and detail).
-  const problem = (code, detail, extra) => ({error: {code, detail, retryable: false, ...extra}});
-  await page.route('**/*', async route => {
+  const problem = (code: string, detail: string, extra?: Record<string, unknown>) => ({error: {code, detail, retryable: false, ...extra}});
+  await page.route('**/*', async (route: Route) => {
     const req = route.request(), url = new URL(req.url()), p = url.pathname, method = req.method();
-    const json = (body, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
+    const json = (body: unknown, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
     if (url.origin !== 'https://tico-ui.test') return route.abort();
     const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/);
-    if (ui && fs.existsSync(uiFile(ui[1])))
-      return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]), 'utf8')});
+    if (ui && fs.existsSync(uiFile(ui[1]!)))
+      return route.fulfill({contentType: ui[1]!.endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]!), 'utf8')});
     if (p.startsWith('/vendor/fonts/') && fs.existsSync(uiFile(p.slice(1)))) return route.fulfill({contentType: 'font/woff2', body: fs.readFileSync(uiFile(p.slice(1)))});
     if (/\.(?:js|ts)$/.test(p)) return route.fulfill({contentType: 'application/javascript', body: ''});
     if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
@@ -112,7 +140,7 @@ async function open(browser, {viewport = {width: 1440, height: 900}, theme = 'da
     if (p === '/api/v2/settings/history') return json({changes: [], transitions: []});
     if (p === '/api/v2/providers' && method === 'GET') return json(data.providers);
     if (p === '/api/v2/providers' && method === 'PUT') {
-      const body = req.postDataJSON(); writes.push({p, method, body});
+      const body = req.postDataJSON() as Body; writes.push({p, method, body});
       Object.assign(data.providers, body.preset ? {preset: body.preset} : {}, body.decide_level ? {decide_level: body.decide_level} : {}, {revision: data.providers.revision + 1});
       return json(data.providers);
     }
@@ -121,13 +149,13 @@ async function open(browser, {viewport = {width: 1440, height: 900}, theme = 'da
     if (old && /^\/api\/v2\/(model|computer)-subscriptions/.test(p)) return json({detail: 'Not Found'}, 404);
     if (p === '/api/v2/model-subscriptions' && method === 'GET') return json({subscriptions: data.subs, kinds: KINDS, connect: data.connect || ['claude_token', 'codex_login']});
     if (p === '/api/v2/model-subscriptions/connect' && method === 'POST') {
-      const body = req.postDataJSON(); writes.push({p, method, body});
+      const body = req.postDataJSON() as Body; writes.push({p, method, body});
       const sub = data.subs.find(s => s.id === body.subscription);
       if (sub?.computers.includes('r1') && !body.confirm)
         return json(problem('confirm_restart', 'Reconnecting restarts running tasks', {running: 1, sessions: 2, computers: sub.computers.length}), 409);
       if (data.connectRefused) return json(problem('offline', data.connectRefused), 409);
       if (data.connectHeld) await data.connectHeld;
-      const kind = KINDS.find(k => k.kind === (body.kind || sub.kind));
+      const kind = KINDS.find(k => k.kind === (body.kind || sub!.kind))!;
       data.login = {id: `l${writes.length}`, runner_id: 'r1', runtime: kind.runtime, kind: 'connect', state: 'waiting', url: 'https://sign-in.example/authorize?x=1',
         code: kind.runtime === 'codex' ? 'ABCD-1234' : '', lines: [], message: '', accepts_code: kind.runtime === 'claude', code_sent: false,
         created_at: new Date().toISOString(), updated_at: new Date().toISOString(), computer: 'Tico Team box', not_yours: Boolean(data.connectNotYours), target: body.name};
@@ -136,23 +164,23 @@ async function open(browser, {viewport = {width: 1440, height: 900}, theme = 'da
     const signIn = p.match(/^\/api\/v2\/computers\/r1\/logins\/([^/]+)(?:\/(code|cancel))?$/);
     if (signIn && data.login?.id === signIn[1]) {
       if (method === 'GET') return json(data.login);
-      const body = req.postDataJSON(); writes.push({p, method, body});
-      if (signIn[2] === 'code') Object.assign(data.login, {code_sent: true});
-      if (signIn[2] === 'cancel') Object.assign(data.login, {state: 'canceled', url: ''});
+      const body = req.postDataJSON() as Body; writes.push({p, method, body});
+      if (signIn[2] === 'code') Object.assign(data.login!, {code_sent: true});
+      if (signIn[2] === 'cancel') Object.assign(data.login!, {state: 'canceled', url: ''});
       return json(data.login);
     }
     if (p === '/api/v2/model-subscriptions' && method === 'POST') {
-      const body = req.postDataJSON(); writes.push({p, method, body});
-      const kind = KINDS.find(k => k.kind === body.kind);
-      const row = {id: 's9', name: body.name, kind: body.kind, runtime: kind.runtime, label: kind.label, status: 'new', status_detail: '', computers: [], usage: null, added_by: me.id};
+      const body = req.postDataJSON() as Body; writes.push({p, method, body});
+      const kind = KINDS.find(k => k.kind === body.kind)!;
+      const row = {id: 's9', name: body.name!, kind: body.kind!, runtime: kind.runtime, label: kind.label, status: 'new', status_detail: '', computers: [], usage: null, added_by: me.id};
       data.subs.push(row);
       return json(row);
     }
     const one = p.match(/^\/api\/v2\/model-subscriptions\/([^/]+)$/);
     if (one) {
-      const sub = data.subs.find(s => s.id === one[1]);
+      const sub = data.subs.find(s => s.id === one[1])!;
       if (method === 'POST') {
-        const body = req.postDataJSON(); writes.push({p, method, body});
+        const body = req.postDataJSON() as Body; writes.push({p, method, body});
         (data.keys ||= []).push(req.headers()['idempotency-key']);
         // Tico Team box is running a task: a new value there stops it, so the server asks first.
         if (body.secret && sub.computers.includes('r1') && !body.confirm)
@@ -171,11 +199,11 @@ async function open(browser, {viewport = {width: 1440, height: 900}, theme = 'da
     }
     if (p === '/api/v2/computer-subscriptions' && method === 'GET') return json({assignments: data.assignments, capable: data.capable});
     if (p === '/api/v2/computer-subscriptions' && method === 'PUT') {
-      const body = req.postDataJSON(); writes.push({p, method, body});
+      const body = req.postDataJSON() as Body; writes.push({p, method, body});
       // Tico Team box is running a task: a switch there stops it, so the server asks first.
       if (body.runner_id === 'r1' && !body.confirm) return json(problem('confirm_restart', 'Switching restarts running tasks', {running: 2, sessions: 5}), 409);
       data.assignments = data.assignments.filter(a => !(a.runner_id === body.runner_id && a.runtime === body.runtime));
-      if (body.subscription) data.assignments.push({runner_id: body.runner_id, runtime: body.runtime, subscription_id: body.subscription});
+      if (body.subscription) data.assignments.push({runner_id: body.runner_id!, runtime: body.runtime!, subscription_id: body.subscription});
       for (const s of data.subs) s.computers = data.assignments.filter(a => a.subscription_id === s.id).map(a => a.runner_id);
       return json({runner_id: body.runner_id, runtime: body.runtime, subscription_id: body.subscription, stopped: body.confirm ? 2 : 0, sessions_reset: body.confirm ? 5 : 0});
     }
@@ -186,20 +214,20 @@ async function open(browser, {viewport = {width: 1440, height: 900}, theme = 'da
   await page.locator(`#settings-${tab}`).waitFor();
   return {page, errors, writes, data};
 }
-async function shot(page, name, target = page) {
+async function shot(page: Page, name: string, target: Page | import('playwright').Locator = page) {
   if (!SHOTS) return;
   fs.mkdirSync(SHOTS, {recursive: true});
   await page.waitForTimeout(150);
   await target.screenshot({path: path.join(SHOTS, name + '.png'), ...(target === page ? {fullPage: true} : {})});
 }
-const modelsReady = async page => { await page.locator('#set-subs [data-subs-row]').first().waitFor(); await page.locator('#set-prov').waitFor(); };
+const modelsReady = async (page: Page) => { await page.locator('#set-subs [data-subs-row]').first().waitFor(); await page.locator('#set-prov').waitFor(); };
 // Waits for the fake server to have seen a write.
-async function until(page, check, what) {
+async function until(page: Page, check: () => boolean, what: string) {
   for (let i = 0; i < 100; i++) { if (check()) return; await page.waitForTimeout(30); }
   throw new Error(`timed out waiting for ${what}`);
 }
 
-async function navigation(browser) {
+async function navigation(browser: Browser) {
   const {page, errors} = await open(browser, {tab: 'general'});
   const tabs = await page.locator('#settings-tabs > [data-settings-tab]').evaluateAll(list => list.map(b => b.dataset.settingsTab));
   assert.deepEqual(tabs.slice(tabs.indexOf('devices'), tabs.indexOf('devices') + 2), ['devices', 'models'], 'Models sits after Computers');
@@ -229,7 +257,7 @@ async function navigation(browser) {
   console.log('Models tab and old links: ok');
 }
 
-async function modelsTab(browser) {
+async function modelsTab(browser: Browser) {
   const {page, errors, writes} = await open(browser);
   await modelsReady(page);
   const pane = page.locator('#settings-models');
@@ -238,9 +266,9 @@ async function modelsTab(browser) {
   assert.equal(await pane.locator('section.card > header .sub').count(), 0);
   // Rows: name, kind, a computer count, usage (share used, or the month's cost), Reconnect when the login stopped working.
   const rows = await pane.locator('[data-subs-row]').evaluateAll(list => list.map(r => [
-    r.querySelector('.subs-name').textContent, r.querySelector('.subs-kind').textContent, r.querySelector('.subs-owner').textContent,
-    r.querySelector('.subs-count .tnum').textContent,
-    [...r.querySelector('.subs-use').querySelectorAll('.subs-usage-w, .tnum, .subs-usage:not(:has(.tnum)), .pill')].map(e => e.textContent).join(' ')]));
+    r.querySelector('.subs-name')!.textContent, r.querySelector('.subs-kind')!.textContent, r.querySelector('.subs-owner')!.textContent,
+    r.querySelector('.subs-count .tnum')!.textContent,
+    [...(r.querySelector('.subs-use')!.querySelectorAll('.subs-usage-w, .tnum, .subs-usage:not(:has(.tnum)), .pill') as unknown as Element[])].map(e => e.textContent).join(' ')]));
   assert.deepEqual(rows, [
     ['Claude Max (Ana)', 'Claude plan', 'Ana', '3', '5h 62%'],
     ['ChatGPT Pro (Ana)', 'ChatGPT plan', '', '1', 'week 13% resets in 4d 15h'],
@@ -249,7 +277,7 @@ async function modelsTab(browser) {
     ['ChatGPT Team (Cy)', 'ChatGPT plan', '', '1', 'week 0%'],
     ['Claude Max (Dee)', 'Claude plan', '', '1', 'Waiting for a computer to report']]);
   // The time until the window resets sits after the share; the tooltip adds the share left and the reset time.
-  assert.match(await pane.locator('[data-subs-row=s2] .subs-usage').getAttribute('title'), /^13% used in the week · 87% left · resets \S/);
+  assert.match((await pane.locator('[data-subs-row=s2] .subs-usage').getAttribute('title'))!, /^13% used in the week · 87% left · resets \S/);
   assert.equal(await pane.locator('[data-subs-row=s1] .subs-reset').count(), 0);
   // A reading of 0% still draws its bar, and a plan with no reading says why in muted text.
   assert.equal(await pane.locator('[data-subs-row=s5] .subs-bar b').getAttribute('style'), 'width:0%');
@@ -268,8 +296,8 @@ async function modelsTab(browser) {
   // Turning the Gateway off saves the subscriptions-only preset with the providers as they are.
   await pane.locator('[data-gateway-toggle]').click();
   await until(page, () => writes.some(w => w.p === '/api/v2/providers'), 'the Gateway save');
-  assert.deepEqual(writes.find(w => w.p === '/api/v2/providers').body, {enabled: ['anthropic', 'openai', 'tico'], model: 'gpt-6-luna', expected_revision: 4, preset: 'subscriptions'});
-  await page.waitForFunction(() => { const t = document.querySelector('[data-gateway-toggle]'); return t && !t.disabled && !t.checked; });
+  assert.deepEqual(writes.find(w => w.p === '/api/v2/providers')!.body, {enabled: ['anthropic', 'openai', 'tico'], model: 'gpt-6-luna', expected_revision: 4, preset: 'subscriptions'});
+  await page.waitForFunction(() => { const t = document.querySelector<HTMLInputElement>('[data-gateway-toggle]'); return t && !t.disabled && !t.checked; });
   // Defaults: the old controls, compact; a save leaves the preset and providers alone.
   assert.deepEqual(await pane.locator('#set-prov .models-row label').allInnerTexts(), ['Default model', 'Decisions', 'Meeting model', 'Fall back when a plan runs out', 'Check model']);
   assert.equal(await pane.locator('#set-prov-model').inputValue(), 'gpt-6-luna');
@@ -277,7 +305,7 @@ async function modelsTab(browser) {
   const before = writes.length;
   await pane.locator('#set-prov-save').click();
   await until(page, () => writes.length > before, 'the Defaults save');
-  const saved = writes.at(-1).body;
+  const saved = writes.at(-1)!.body!;
   assert.equal(saved.decide_level, 'medium');
   assert.deepEqual(saved.enabled, ['anthropic', 'openai', 'tico']);
   assert.equal('preset' in saved, false);
@@ -289,7 +317,7 @@ async function modelsTab(browser) {
   console.log('Models tab cards: ok');
 }
 
-async function addSubscription(browser) {
+async function addSubscription(browser: Browser) {
   const {page, errors, writes} = await open(browser);
   await modelsReady(page);
   await page.locator('#subs-add').click();
@@ -300,7 +328,7 @@ async function addSubscription(browser) {
   assert.match(await dialog.locator('[data-subs-secret] .k label').innerText(), /Token from claude setup-token/);
   // No computers to choose here (the server picks one for Connect): only the owner, you unless changed.
   assert.equal(await dialog.locator('input[type=checkbox]').count(), 0);
-  assert.deepEqual(await dialog.locator('select').evaluateAll(list => list.map(s => s.name)), ['owner']);
+  assert.deepEqual(await dialog.locator('select').evaluateAll(list => list.map(s => (s as HTMLSelectElement).name)), ['owner']);
   assert.equal(await dialog.locator('select[name=owner]').inputValue(), 'ana');
   assert.deepEqual(await dialog.locator('select[name=owner] option').allInnerTexts(), ['Ana', 'Sam']);
   assert.equal(await dialog.locator('.subs-note').innerText(), 'Only use your subscription on your own bots, not shared ones.');
@@ -336,7 +364,7 @@ async function addSubscription(browser) {
   console.log('add subscription: ok');
 }
 
-async function connectPlan(browser) {
+async function connectPlan(browser: Browser) {
   const {page, errors, writes, data} = await open(browser);
   await modelsReady(page);
   await page.locator('#subs-add').click();
@@ -382,12 +410,12 @@ async function connectPlan(browser) {
   await shot(page, 'connect-waiting-desktop-dark', dialog);
   await dialog.locator('[name=code]').fill('pasted-code');
   await dialog.locator('[data-paste] button').click();
-  await until(page, () => writes.at(-1).p.endsWith('/code'), 'the pasted code');
-  assert.deepEqual(writes.at(-1).body, {code: 'pasted-code'});
+  await until(page, () => writes.at(-1)!.p.endsWith('/code'), 'the pasted code');
+  assert.deepEqual(writes.at(-1)!.body, {code: 'pasted-code'});
   // A code rejected by the CLI ends the attempt even while that command would otherwise wait for Enter.
   // Try again starts a fresh login and offers its code field, rather than leaving the old code marked sent.
-  const rejectedId = data.login.id;
-  Object.assign(data.login, {state: 'failed', url: '', accepts_code: false,
+  const rejectedId = data.login!.id;
+  Object.assign(data.login!, {state: 'failed', url: '', accepts_code: false,
     message: 'The sign-in could not finish. Choose Try again and use the code from the new sign-in page.',
     lines: ['sk-ant-oat01-not-for-the-page']});
   await dialog.locator('[data-retry]').waitFor();
@@ -395,16 +423,16 @@ async function connectPlan(browser) {
   assert.doesNotMatch(await dialog.innerText(), /sk-ant-oat|Code sent/);
   await dialog.locator('[data-retry]').click();
   await dialog.locator('[name=code]').waitFor();
-  assert.notEqual(data.login.id, rejectedId);
+  assert.notEqual(data.login!.id, rejectedId);
   assert.deepEqual(writes.at(-1), {p: '/api/v2/model-subscriptions/connect', method: 'POST', body: {kind: 'claude_token', name: 'Company Max', owner_id: 'human:sam'}});
   await dialog.locator('[name=code]').fill('fresh-code');
   await dialog.locator('[data-paste] button').click();
-  await until(page, () => writes.at(-1).p.endsWith('/code'), 'the fresh code');
-  assert.equal(writes.at(-1).p, `/api/v2/computers/r1/logins/${data.login.id}/code`);
-  assert.deepEqual(writes.at(-1).body, {code: 'fresh-code'});
+  await until(page, () => writes.at(-1)!.p.endsWith('/code'), 'the fresh code');
+  assert.equal(writes.at(-1)!.p, `/api/v2/computers/r1/logins/${data.login!.id}/code`);
+  assert.deepEqual(writes.at(-1)!.body, {code: 'fresh-code'});
   // Done when the server says so: the row appears, and the dialog goes by itself.
   data.subs.push({id: 's8', name: 'Company Max', kind: 'claude_token', runtime: 'claude', label: 'Claude plan', status: 'new', status_detail: '', computers: [], usage: null, added_by: 'ana'});
-  Object.assign(data.login, {state: 'done', url: ''});
+  Object.assign(data.login!, {state: 'done', url: ''});
   await dialog.waitFor({state: 'detached'});
   await page.locator('[data-subs-row=s8]').waitFor();
   // Reconnect with a task running: the page asks before the sign-in starts.
@@ -415,12 +443,12 @@ async function connectPlan(browser) {
   await confirm.waitFor();
   await confirm.locator('[data-confirm-ok]').click();
   await page.locator('dialog.model-login[open] [data-link]').waitFor();
-  assert.deepEqual(writes.at(-1).body, {subscription: 's1', confirm: true});
+  assert.deepEqual(writes.at(-1)!.body, {subscription: 's1', confirm: true});
   assert.equal(await page.locator('dialog.model-login[open] h2').innerText(), 'Reconnect Claude Max (Ana)');
   // Closing cancels the sign-in on the computer.
   await page.locator('dialog.model-login[open] [data-close]').first().click();
   await page.locator('dialog.model-login[open]').waitFor({state: 'detached'});
-  assert.ok(writes.at(-1).p.endsWith('/cancel'));
+  assert.ok(writes.at(-1)!.p.endsWith('/cancel'));
   // Someone else's computer: the dialog says so before the person signs in.
   data.connectNotYours = true;
   await page.locator('[data-subs-more=s1]').click();
@@ -435,17 +463,17 @@ async function connectPlan(browser) {
   await page.locator('dialog.model-login[open]').waitFor({state: 'detached'});
   data.connectNotYours = false;
   // Closed while the start is on its way: the sign-in it started is cancelled, not left running out of sight.
-  let release; data.connectHeld = new Promise(done => { release = done; });
+  let release!: (value?: unknown) => void; data.connectHeld = new Promise(done => { release = done; });
   await page.locator('#subs-add').click();
   const closing = page.locator('dialog.subs-dialog[open]');
   await closing.locator('input[name=name]').fill('Closed early');
   await closing.locator('[data-subs-connect]').click();
-  await until(page, () => writes.at(-1).body?.name === 'Closed early', 'the start');
+  await until(page, () => writes.at(-1)!.body?.name === 'Closed early', 'the start');
   await closing.locator('[data-close], .tmodal-foot button[type=button]').first().click();
   await closing.waitFor({state: 'detached'});
   release(); data.connectHeld = null;
-  await until(page, () => writes.at(-1).p.endsWith('/cancel'), 'the cancel');
-  assert.equal(data.login.state, 'canceled');
+  await until(page, () => writes.at(-1)!.p.endsWith('/cancel'), 'the cancel');
+  assert.equal(data.login!.state, 'canceled');
   // The same for Try again after a failure.
   await page.locator('#subs-add').click();
   const asking = page.locator('dialog.subs-dialog[open]');
@@ -453,17 +481,17 @@ async function connectPlan(browser) {
   await asking.locator('[data-subs-connect]').click();
   const retrying = page.locator('dialog.model-login[open]');
   await retrying.locator('[data-link]').waitFor();
-  Object.assign(data.login, {state: 'failed', url: '', message: 'The sign-in command stopped without signing in'});
+  Object.assign(data.login!, {state: 'failed', url: '', message: 'The sign-in command stopped without signing in'});
   await retrying.locator('[data-retry]').waitFor();
-  const failedLogin = data.login.id;
+  const failedLogin = data.login!.id;
   data.connectHeld = new Promise(done => { release = done; });
   await retrying.locator('[data-retry]').click();
   await until(page, () => writes.filter(w => w.body?.name === 'Retried').length === 2, 'the second start');
   await retrying.locator('[data-close]').first().click();
   await retrying.waitFor({state: 'detached'});
   release(); data.connectHeld = null;
-  await until(page, () => writes.at(-1).p.endsWith('/cancel') && data.login.id !== failedLogin, 'the cancel of the retry');
-  assert.equal(data.login.state, 'canceled');
+  await until(page, () => writes.at(-1)!.p.endsWith('/cancel') && data.login!.id !== failedLogin, 'the cancel of the retry');
+  assert.equal(data.login!.state, 'canceled');
   assert.deepEqual(errors, []);
   await page.close();
   // No computer can run it right now: the button says so and paste still works.
@@ -479,7 +507,7 @@ async function connectPlan(browser) {
   console.log('connect a plan: ok');
 }
 
-async function rowMenu(browser) {
+async function rowMenu(browser: Browser) {
   const {page, errors, writes, data} = await open(browser);
   await modelsReady(page);
   // Edit: an API key's name only (no owner); a plan's name and owner (only a change is sent). No own-bots line here.
@@ -531,7 +559,7 @@ async function rowMenu(browser) {
   await live.waitFor({state: 'detached'});
   const s2 = writes.filter(w => w.p === '/api/v2/model-subscriptions/s2').map(w => w.body);
   assert.deepEqual(s2, [{secret: '{"auth_mode": "chatgpt"}'}, {secret: '{"auth_mode": "chatgpt"}'}, {secret: '{"auth_mode": "chatgpt"}', confirm: true}]);
-  assert.notEqual(data.keys.at(-1), data.keys.at(-2));
+  assert.notEqual(data.keys!.at(-1), data.keys!.at(-2));
   // Remove: asks; with runs going, the server says how many restart and the page asks once more.
   await page.locator('[data-subs-more=s1]').click();
   await page.locator('#subs-menu [data-subs-act=remove]').click();
@@ -549,12 +577,12 @@ async function rowMenu(browser) {
   console.log('rename, reconnect, remove: ok');
 }
 
-async function computersTable(browser) {
+async function computersTable(browser: Browser) {
   const {page, errors, writes} = await open(browser, {tab: 'devices'});
   await page.locator('#set-machines [data-subs-pick]').first().waitFor();
   const table = page.locator('#set-machines table.settings-machines');
   assert.deepEqual((await table.locator('thead th').allInnerTexts()).map(t => t.toLowerCase()), ['computer', 'bots', 'claude code', 'codex', 'muse code', 'now']);
-  const row = id => table.locator(`[data-computer-row="${id}"]`);
+  const row = (id: string) => table.locator(`[data-computer-row="${id}"]`);
   assert.equal(await row('r1').locator('.machine-bot-count').innerText(), '3');
   assert.equal(await row('r1').locator('[data-machine-now]').innerText(), '1 running · 55 queued');
   assert.equal(await row('r2').locator('[data-machine-now]').innerText(), 'idle');
@@ -572,8 +600,8 @@ async function computersTable(browser) {
   assert.equal((await row('r1').locator('.machine-chip').innerText()).trim(), 'Signed in');
   // No running tasks: the switch saves at once.
   await row('r2').locator('[data-subs-pick=codex]').selectOption('s3');
-  await page.waitForFunction(() => document.querySelector('[data-computer-row=r2] [data-subs-pick=codex]')?.dataset.current === 's3');
-  assert.deepEqual(writes.at(-1).body, {runner_id: 'r2', runtime: 'codex', subscription: 's3', confirm: false});
+  await page.waitForFunction(() => document.querySelector<HTMLElement>('[data-computer-row=r2] [data-subs-pick=codex]')?.dataset.current === 's3');
+  assert.deepEqual(writes.at(-1)!.body, {runner_id: 'r2', runtime: 'codex', subscription: 's3', confirm: false});
   // Tico Team box is running a task: an in-page confirm with the counts; Cancel puts the picker back.
   await row('r1').locator('[data-subs-pick=claude]').selectOption('s4');
   const confirm = page.locator('dialog.settings-confirm[open]');
@@ -582,13 +610,13 @@ async function computersTable(browser) {
   assert.deepEqual(await confirm.locator('button').allInnerTexts(), ['Cancel', 'Switch']);
   await shot(page, 'confirm-dialog-only-dark', confirm);
   await confirm.locator('[data-confirm-cancel]').click();
-  await page.waitForFunction(() => document.querySelector('[data-computer-row=r1] [data-subs-pick=claude]')?.value === 's1');
+  await page.waitForFunction(() => document.querySelector<HTMLSelectElement>('[data-computer-row=r1] [data-subs-pick=claude]')?.value === 's1');
   assert.equal(writes.filter(w => w.body?.confirm === true).length, 0);
   // Switch sends confirm and says what restarted.
   await row('r1').locator('[data-subs-pick=claude]').selectOption('s4');
   await page.locator('dialog.settings-confirm[open] [data-confirm-ok]').click();
-  await page.waitForFunction(() => document.querySelector('[data-computer-row=r1] [data-subs-pick=claude]')?.dataset.current === 's4');
-  assert.deepEqual(writes.at(-1).body, {runner_id: 'r1', runtime: 'claude', subscription: 's4', confirm: true});
+  await page.waitForFunction(() => document.querySelector<HTMLElement>('[data-computer-row=r1] [data-subs-pick=claude]')?.dataset.current === 's4');
+  assert.deepEqual(writes.at(-1)!.body, {runner_id: 'r1', runtime: 'claude', subscription: 's4', confirm: true});
   const switchMessage = /Tico Team box's Claude Code: Claude Max \(Sam\) · 2 tasks restarted/;
   const switchedToast = page.locator('#toast, .toast', {hasText: switchMessage}).last();
   await switchedToast.waitFor();
@@ -615,7 +643,7 @@ async function computersTable(browser) {
   console.log('computers table and pickers: ok');
 }
 
-async function gatewayOffAndMember(browser) {
+async function gatewayOffAndMember(browser: Browser) {
   const {page, errors} = await open(browser, {tab: 'devices', as: 'member', mutate: data => { data.providers.preset = 'subscriptions'; }});
   await page.locator('#set-machines [data-subs-pick]').first().waitFor();
   const codex = page.locator('[data-computer-row=r2] [data-subs-pick=codex]');
@@ -633,7 +661,7 @@ async function gatewayOffAndMember(browser) {
   console.log('Gateway off, member view: ok');
 }
 
-async function oldServer(browser) {
+async function oldServer(browser: Browser) {
   const {page, errors} = await open(browser, {tab: 'devices', old: true});
   await page.locator('#set-machines [data-computer-row=r1]').waitFor();
   // Without the routes, each AI tool shows the computer's login as before; Models says subscriptions are not kept.
@@ -647,7 +675,7 @@ async function oldServer(browser) {
   console.log('older server: ok');
 }
 
-async function botEditor(browser) {
+async function botEditor(browser: Browser) {
   const {page, errors, writes} = await open(browser, {tab: 'bots'});
   await page.evaluate(() => settingsEditBot('builder'));
   const rows = page.locator('#bot-editor [data-bot-people]');
@@ -662,9 +690,9 @@ async function botEditor(browser) {
   console.log('bot editor: ok');
 }
 
-async function screens(browser) {
+async function screens(browser: Browser) {
   for (const theme of ['dark', 'light']) {
-    for (const [kind, viewport] of [['desktop', {width: 1280, height: 860}], ['phone', {width: 390, height: 844}]]) {
+    for (const [kind, viewport] of [['desktop', {width: 1280, height: 860}], ['phone', {width: 390, height: 844}]] as [string, {width: number; height: number}][]) {
       const {page, errors} = await open(browser, {viewport, theme});
       await modelsReady(page);
       await page.locator('#turn-levels-form').waitFor();
@@ -689,7 +717,7 @@ async function screens(browser) {
 }
 
 (async () => {
-  const browser = await chromium.launch({headless: true, channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined});
+  const browser = await chromium.launch({headless: true, channel: (process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined) as string});
   try {
     await navigation(browser); await modelsTab(browser); await addSubscription(browser); await connectPlan(browser); await rowMenu(browser);
     await computersTable(browser); await gatewayOffAndMember(browser); await oldServer(browser); await botEditor(browser); await screens(browser);

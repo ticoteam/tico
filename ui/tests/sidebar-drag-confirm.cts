@@ -6,32 +6,38 @@
 //    place holds through a reload; a failed save says why and puts the chart back;
 //  - the strip spans the rail, comes in by transform and opacity in at most 150ms, and not at all with reduced motion;
 //  - on touch, a long press picks the row up and the same drop asks the same question; a quick swipe only scrolls.
-const {chromium} = require('playwright');
+const {chromium} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const {html, uiFile, beta} = require('./support/page.cjs');
-const {unrouted} = require('./support/routes.cjs');
+const {html, uiFile, beta} = require('./support/page.cjs') as typeof import('./support/page.cjs');
+const {unrouted} = require('./support/routes.cjs') as typeof import('./support/routes.cjs');
+
+type Page = import('playwright').Page;
+type Person = {id: string; name: string; email: string; org_parent: string; team: string; report_position?: number};
+type Bot = {name: string; display_name: string; team: string; org_parent: string; reports_to: string; host: string; status: string; state: string;
+  can_chat: boolean; my_access: {see: boolean; read: boolean; write: boolean}; users: {id: string; name: string}[]; owner_id: string; revision: number;
+  report_position?: number; [k: string]: unknown};
 
 const FULL = {see: true, read: true, write: true};
 const ME = {id: 'ana', role: 'owner', name: 'Ana', email: 'ana@example.test', cloud: true, owner_id: 'ana'};
 
-async function open(browser, options = {}) {
+async function open(browser: import('playwright').Browser, options: import('playwright').BrowserContextOptions = {}) {
   const context = await browser.newContext({viewport: {width: 1280, height: 800}, serviceWorkers: 'block', ...options});
   const page = await context.newPage();
-  const errors = [], calls = [], fail = new Set();
-  const people = [{id: 'ana', name: 'Ana Rivera', email: 'ana@example.test', org_parent: '', team: ''}];
-  const bot = (name, display_name, extra = {}) => ({name, display_name, team: '', org_parent: 'p:ana', reports_to: 'human:ana',
+  const errors: string[] = [], calls: unknown[][] = [], fail = new Set<string>();
+  const people: Person[] = [{id: 'ana', name: 'Ana Rivera', email: 'ana@example.test', org_parent: '', team: ''}];
+  const bot = (name: string, display_name: string, extra: Record<string, unknown> = {}): Bot => ({name, display_name, team: '', org_parent: 'p:ana', reports_to: 'human:ana',
     host: 'keeper', status: 'active', state: 'active', can_chat: true, my_access: FULL, users: [{id: 'ana', name: 'Ana'}],
     owner_id: 'ana', revision: 1, ...extra});
   const bots = [bot('design', 'Design'), bot('doc-updater', 'Doc Updater'), bot('reviewer', 'Reviewer')];
   await page.route('**/*', async route => {
     const request = route.request(), url = new URL(request.url()), p = url.pathname, method = request.method();
-    const json = body => route.fulfill({contentType: 'application/json', body: JSON.stringify(body)});
+    const json = (body: unknown) => route.fulfill({contentType: 'application/json', body: JSON.stringify(body)});
     if (url.origin !== 'https://tico-ui.test') return route.abort();
     const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/);
-    if (ui && fs.existsSync(uiFile(ui[1])))
-      return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]), 'utf8')});
+    if (ui && fs.existsSync(uiFile(ui[1]!)))
+      return route.fulfill({contentType: ui[1]!.endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]!), 'utf8')});
     if (p.startsWith('/vendor/')) {
       const file = path.join(__dirname, '..', p);
       if (fs.existsSync(file)) return route.fulfill({contentType: p.endsWith('.woff2') ? 'font/woff2' : 'application/javascript', body: fs.readFileSync(file)});
@@ -54,16 +60,16 @@ async function open(browser, options = {}) {
       return route.fulfill({status: 409, contentType: 'application/json', body: JSON.stringify({error: {detail: 'The chart changed'}})});
     }
     if ((m = p.match(/^\/api\/v2\/bots\/([^/]+)\/definition$/)) && method === 'POST') {
-      const body = request.postDataJSON(), one = bots.find(b => b.name === m[1]);
-      calls.push(['POST', 'definition', m[1], body]);
+      const body = request.postDataJSON(), one = bots.find(b => b.name === m![1])!;
+      calls.push(['POST', 'definition', m![1], body]);
       one.reports_to = body.reports_to; one.revision++;
       one.org_parent = body.reports_to.startsWith('human:') ? 'p:' + body.reports_to.slice(6) : 'b:' + body.reports_to;
       delete one.report_position;
       return json({});
     }
     if ((m = p.match(/^\/api\/v2\/org\/order\/([^/]+)$/)) && method === 'PUT') {
-      const body = request.postDataJSON(); calls.push(['PUT', decodeURIComponent(m[1]), body]);
-      body.reports.forEach((id, i) => { const [kind, key] = id.split(':'); (kind === 'human' ? people.find(r => r.id === key) : bots.find(r => r.name === key)).report_position = i; });
+      const body = request.postDataJSON(); calls.push(['PUT', decodeURIComponent(m![1]!), body]);
+      (body.reports as string[]).forEach((id, i) => { const [kind, key] = id.split(':'); (kind === 'human' ? people.find(r => r.id === key) : bots.find(r => r.name === key))!.report_position = i; });
       return json({});
     }
     if (method !== 'GET') calls.push([method, p]);
@@ -76,38 +82,38 @@ async function open(browser, options = {}) {
 }
 
 // The chart as nested text, a row's name or {name: [its reports]}; the strip is no row.
-const shape = page => page.evaluate(() => {
-  const walk = ul => [...ul.children].filter(li => li.tagName === 'LI' && !li.classList.contains('org-no-group')).map(li => {
-    const kids = li.querySelector(':scope > ul:not(.node-sources)'), name = li.querySelector(':scope > .noderow .nm')?.textContent.trim();
+const shape = (page: Page) => page.evaluate(() => {
+  const walk = (ul: Element): (string | {[name: string]: unknown})[] => [...(ul.children as HTMLCollection & Iterable<Element>)].filter(li => li.tagName === 'LI' && !li.classList.contains('org-no-group')).map(li => {
+    const kids = li.querySelector(':scope > ul:not(.node-sources)'), name = li.querySelector(':scope > .noderow .nm')?.textContent!.trim() as string;
     return kids ? {[name]: walk(kids)} : name;
   });
-  return walk(document.querySelector('#tree'));
+  return walk(document.querySelector('#tree')!);
 });
-const node = (page, key) => page.locator(`#tree [data-org="${key}"]`);
-const strip = page => page.locator('#tree .org-confirm');
-const focused = page => page.evaluate(() => document.activeElement?.dataset.orgConfirm || document.activeElement?.dataset.org || document.activeElement?.tagName);
+const node = (page: Page, key: string) => page.locator(`#tree [data-org="${key}"]`);
+const strip = (page: Page) => page.locator('#tree .org-confirm');
+const focused = (page: Page) => page.evaluate(() => (document.activeElement as HTMLElement | null)?.dataset.orgConfirm || (document.activeElement as HTMLElement | null)?.dataset.org || document.activeElement?.tagName);
 // A mouse drag; `edge` drops on the top or bottom of a fellow report (above or below it), else on its middle.
-async function drag(page, from, to, edge) {
+async function drag(page: Page, from: string, to: string, edge?: string) {
   await node(page, from).hover();
   await page.mouse.down();
   await page.mouse.move(40, 40);
   await page.mouse.move(45, 45);
   const box = await node(page, to).boundingBox();
-  await node(page, to).hover({position: {x: 20, y: edge === 'top' ? 2 : edge === 'bottom' ? box.height - 2 : box.height / 2}});
+  await node(page, to).hover({position: {x: 20, y: edge === 'top' ? 2 : edge === 'bottom' ? box!.height - 2 : box!.height / 2}});
   await page.mouse.up();
 }
-async function asks(page, text) {
+async function asks(page: Page, text: string) {
   await strip(page).waitFor();
   assert.equal(await strip(page).locator('.org-confirm-q').textContent(), text);
   assert.deepEqual(await strip(page).getByRole('button').allTextContents(), ['Move', 'Cancel']);
 }
-async function shot(page, name) {
+async function shot(page: Page, name: string) {
   if (!process.env.TICO_SCREENSHOT_DIR) return;
   await page.waitForTimeout(250);
   await page.screenshot({path: path.join(process.env.TICO_SCREENSHOT_DIR, name + '.png')});
 }
 
-async function mouse(browser) {
+async function mouse(browser: import('playwright').Browser) {
   const {page, context, errors, calls, fail} = await open(browser);
   const flat = ['Ana', 'Design', 'Doc Updater', 'Reviewer'];
   assert.deepEqual(await shape(page), flat);
@@ -119,13 +125,13 @@ async function mouse(browser) {
   await drag(page, 'b:doc-updater', 'b:design');
   await asks(page, 'Move Doc Updater under Design?');
   assert.deepEqual(await shape(page), ['Ana', {Design: ['Doc Updater']}, 'Reviewer'], 'the proposed place while it waits');
-  const under = () => strip(page).evaluate(el => el.closest('li').querySelector(':scope > .noderow > a.node').dataset.org);
+  const under = () => strip(page).evaluate(el => (el.closest('li')!.querySelector(':scope > .noderow > a.node') as HTMLElement).dataset.org);
   assert.equal(await under(), 'b:design', 'under the row it goes under');
   assert.equal(await node(page, 'b:doc-updater').isVisible(), false, 'gone from its old place');
   assert.equal(await focused(page), 'go', 'focus on Move');
-  const [tree, box] = await Promise.all([page.locator('#tree').boundingBox(), strip(page).boundingBox()]);
+  const [tree, box] = await Promise.all([page.locator('#tree').boundingBox(), strip(page).boundingBox()]) as [{x: number; width: number}, {x: number; width: number}];
   assert.ok(Math.abs(box.x - tree.x) <= 1 && Math.abs(box.x + box.width - tree.x - tree.width) <= 1, 'the strip spans the rail');
-  const motion = await strip(page).evaluate(el => { const s = getComputedStyle(el); return [s.animationName, parseFloat(s.animationDuration)]; });
+  const motion = await strip(page).evaluate(el => { const s = getComputedStyle(el); return [s.animationName, parseFloat(s.animationDuration)] as const; });
   assert.equal(motion[0], 'org-confirm-in'); assert.ok(motion[1] > 0 && motion[1] <= 0.15, 'in at most 150ms');
   await shot(page, 'sidebar-drag-confirm');
   await strip(page).getByRole('button', {name: 'Cancel'}).click();
@@ -182,7 +188,7 @@ async function mouse(browser) {
   await page.locator('.toast.err', {hasText: 'The chart changed'}).waitFor();
   await strip(page).waitFor({state: 'detached'});
   assert.deepEqual(await shape(page), moved);
-  assert.equal(calls.shift()[2], 'failed');
+  assert.equal(calls.shift()![2], 'failed');
   fail.clear();
 
   // Enter on Move saves the order (PUT /v2/org/order), which holds through a reload.
@@ -207,11 +213,11 @@ async function mouse(browser) {
 }
 
 // Touch through the DevTools protocol: Chromium starts no HTML drag from it, as a phone does not.
-async function touch(browser) {
+async function touch(browser: import('playwright').Browser) {
   const {page, context, errors, calls} = await open(browser, {hasTouch: true});
   const cdp = await context.newCDPSession(page);
-  const centre = async key => { const b = await node(page, key).boundingBox(); return {x: b.x + 30, y: b.y + b.height / 2}; };
-  const send = (type, points) => cdp.send('Input.dispatchTouchEvent', {type, touchPoints: points});
+  const centre = async (key: string) => { const b = await node(page, key).boundingBox(); return {x: b!.x + 30, y: b!.y + b!.height / 2}; };
+  const send = (type: 'touchStart' | 'touchMove' | 'touchEnd', points: {x: number; y: number}[]) => cdp.send('Input.dispatchTouchEvent', {type, touchPoints: points});
   const route = () => page.evaluate(() => location.hash);
   const at = await route();
   // A quick swipe scrolls: nothing is picked up.

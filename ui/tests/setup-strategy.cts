@@ -7,24 +7,33 @@
 // draft's revision. Without a model, or when the research fails, the step is a plain form; when it gave up, what it
 // found can be added by hand; an internal address keeps the owner on the first step.
 // TICO_SCREENSHOT_DIR=<dir> saves review screenshots at desktop and phone width.
-const {chromium} = require('playwright');
+const {chromium} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const {html, uiFile, harnesses} = require('./support/page.cjs');
-const {unrouted} = require('./support/routes.cjs');
+const {html, uiFile, harnesses} = require('./support/page.cjs') as typeof import('./support/page.cjs');
+const {unrouted} = require('./support/routes.cjs') as typeof import('./support/routes.cjs');
 const uiDir = path.join(__dirname, '..');
+
+type Page = import('playwright').Page;
+// A request body the test sends (the fields it reads; the rest is whatever the page posted).
+type Body = {names?: {website?: string; [k: string]: unknown}; answers?: {building?: string}; url?: string; text?: string;
+  wrong_if?: {check_by?: string; [k: string]: unknown}; [k: string]: unknown};
+type Sent = [method: string, path: string, body: Body];
+type Bet = {id: string; statement: string; why: string; rules_out: string; wrong_if: unknown; cites: unknown[]; status: string; rank: number; [k: string]: unknown};
+// The research job as the poll returns it: state and step are read, the rest is what the page shows.
+type Job = {state: string; step: string | null; [field: string]: unknown};
 
 const shots = process.env.TICO_SCREENSHOT_DIR;
 const PHONE = {width: 390, height: 844}, DESKTOP = {width: 1280, height: 1000};
-const shot = async (page, name) => {
+const shot = async (page: Page, name: string) => {
   if (!shots) return;
   const was = page.viewportSize();
-  for (const [size, viewport] of [['desktop', DESKTOP], ['phone', PHONE]]) {
+  for (const [size, viewport] of [['desktop', DESKTOP], ['phone', PHONE]] as const) {
     await page.setViewportSize(viewport);
     await page.screenshot({animations: 'disabled', path: path.join(shots, `setup-${name}-${size}.png`)});
   }
-  await page.setViewportSize(was);
+  await page.setViewportSize(was!);
 };
 
 const CONFIG = {environment_id: 'acme', company_name: 'Acme', app_name: 'Acme Hub', assistant_name: 'Assistant', assistant_bot: 'coo',
@@ -45,37 +54,38 @@ const FOUND = {
 // The rest of what the shared prompt drafts (backend/strategy_prompt.py), offered by hand when a run gave up.
 const FOUND_MORE = {summary: 'Half-price weekly cleans for Austin homes and offices.', vision: 'Every home in Austin clean every week.',
   know: 'Bots do the scheduling and invoicing, so a visit costs less.', not: 'No one-off deep cleans.'};
-const marked = text => `_Unconfirmed: drafted from acme.example._\n\n${text}`;
+const marked = (text: string) => `_Unconfirmed: drafted from acme.example._\n\n${text}`;
 
 // mode: model (runs, then writes the draft), no_model, failed, gave_up, refuse (an internal address).
-async function open(browser, {mode = 'model', viewport = DESKTOP} = {}) {
+async function open(browser: import('playwright').Browser, {mode = 'model', viewport = DESKTOP}: {mode?: string; viewport?: {width: number; height: number}} = {}) {
   const page = await browser.newPage({viewport, serviceWorkers: 'block'});
-  const errors = [], sent = [];
+  const errors: string[] = [], sent: Sent[] = [];
   page.on('pageerror', e => errors.push(e.message));
-  let record = {names: {company_name: 'Acme', app_name: 'Acme Hub', assistant_name: 'Assistant', website: ''},
+  let record: {names: {website: string; [k: string]: unknown}; needed: boolean; [k: string]: unknown} = {names: {company_name: 'Acme', app_name: 'Acme Hub', assistant_name: 'Assistant', website: ''},
     answers: {building: '', what_we_do: '', customers: '', team_size: '', work_arrives: [], software_product: '', departments: [], briefings: {}},
     selected: {}, completed: null, bots: [], machine: {runners: [], enrolled: false}, needed: true};
-  const st = {draft: {id: 'v-d', n: null, status: 'draft', guide: 'default', summary: '', vision: '', sections: {extra: {}}, bets: [], revision: 1},
+  const st: {draft: {id: string; n: null; status: string; guide: string; summary: string; vision: string; sections: Record<string, unknown>; bets: unknown[]; revision: number};
+    current: unknown; bets: Bet[]} = {draft: {id: 'v-d', n: null, status: 'draft', guide: 'default', summary: '', vision: '', sections: {extra: {}}, bets: [], revision: 1},
     current: null, bets: []};
-  let job = null, polls = 0;
+  let job: Job | null = null, polls = 0;
   const strategy = () => ({draft: st.draft, current: st.current, bets: st.bets, label: 'Bets', label_one: 'Bet', may_edit: true,
     website: record.names.website, goals_by_bet: {}, health_by_bet: {}});
   const check_by = '2027-01-23';
   const research = () => {
     // The first poll is still drafting; the second has the answer.
-    if (job.state !== 'running' || mode === 'hang' || ++polls < 2) { if (job.state === 'running') job.step = 'thinking'; return; }
-    if (mode === 'failed') Object.assign(job, {state: 'failed', step: null, error: {code: 'timeout', message: 'The site did not answer in time.'}});
-    else if (mode === 'gave_up') Object.assign(job, {state: 'gave_up', step: null, found: {...FOUND, ...FOUND_MORE, bets: FOUND.bets.slice(0, 1)}, error: {code: 'edited', message: 'The draft changed'}});
+    if (job!.state !== 'running' || mode === 'hang' || ++polls < 2) { if (job!.state === 'running') job!.step = 'thinking'; return; }
+    if (mode === 'failed') Object.assign(job!, {state: 'failed', step: null, error: {code: 'timeout', message: 'The site did not answer in time.'}});
+    else if (mode === 'gave_up') Object.assign(job!, {state: 'gave_up', step: null, found: {...FOUND, ...FOUND_MORE, bets: FOUND.bets.slice(0, 1)}, error: {code: 'edited', message: 'The draft changed'}});
     else {
       st.draft = {...st.draft, sections: {...st.draft.sections, serve: marked(FOUND.serve), sell: marked(FOUND.sell)}, revision: st.draft.revision + 4};
       st.bets = FOUND.bets.map((b, i) => ({id: 'b-' + (i + 1), statement: b.statement, why: b.why, rules_out: b.rules_out,
         wrong_if: {kind: 'text', text: b.wrong_if, check_by}, cites: [], status: 'proposed', rank: i}));
-      Object.assign(job, {state: 'done', step: null, found: FOUND, written: {sections: ['sell', 'serve'], bets: st.bets.map(b => b.id), revision: st.draft.revision}});
+      Object.assign(job!, {state: 'done', step: null, found: FOUND, written: {sections: ['sell', 'serve'], bets: st.bets.map(b => b.id), revision: st.draft.revision}});
     }
   };
   await page.route('**/*', async route => {
     const req = route.request(), url = new URL(req.url()), p = url.pathname, method = req.method();
-    const json = (body, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
+    const json = (body: unknown, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
     if (url.origin !== 'http://tico-ui.test') return route.abort();
     if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
     const file = p.startsWith('/tico/ui/') ? uiFile(p.slice(9)) : p.startsWith('/vendor/') ? path.join(uiDir, p) : '';
@@ -129,7 +139,7 @@ async function open(browser, {mode = 'model', viewport = DESKTOP} = {}) {
       // The server's rule (strategy._wrong_if): a sentence wrong-if has a Check by.
       if (body.wrong_if?.kind === 'text' && !body.wrong_if.check_by) return json({error: {code: 'lint', detail: 'a wrong-if in words needs a check_by date: the day to look again'}}, 422);
       const one = p.match(/^\/api\/v2\/strategy\/bets\/([^/]+)$/);
-      if (one) { const b = st.bets.find(x => x.id === one[1]); Object.assign(b, body); st.draft.revision++; return json({bet: b, revision: st.draft.revision}); }
+      if (one) { const b = st.bets.find(x => x.id === one[1]!)!; Object.assign(b, body); st.draft.revision++; return json({bet: b, revision: st.draft.revision}); }
       if (p === '/api/v2/strategy/bets') {
         const b = {id: 'b-new' + st.bets.length, why: '', rules_out: '', wrong_if: null, cites: [], status: 'proposed', rank: st.bets.length, ...body};
         st.bets.push(b); st.draft.revision++;
@@ -143,9 +153,9 @@ async function open(browser, {mode = 'model', viewport = DESKTOP} = {}) {
   await page.locator('#onb-website').waitFor();
   return {page, errors, sent, st};
 }
-const status = page => page.locator('#onb-status').innerText();
-const posts = (sent, what) => sent.filter(([, p]) => p === what);
-async function building(page, website, text) {
+const status = (page: Page) => page.locator('#onb-status').innerText();
+const posts = (sent: Sent[], what: string) => sent.filter(([, p]) => p === what);
+async function building(page: Page, website: string, text: string) {
   await page.fill('#onb-website', website);
   await page.fill('#onb-building', text);
   await page.click('#onb-next');
@@ -163,9 +173,9 @@ async function building(page, website, text) {
       await building(page, 'acme.example', SITE);
       await page.locator('#ss').waitFor();
       assert.equal(await page.locator('.onb-head h1').innerText(), 'Your bets');
-      const put = posts(sent, '/setup').at(-1)[2];
-      assert.equal(put.names.website, 'acme.example');
-      assert.equal(put.answers.building, SITE);
+      const put = posts(sent, '/setup').at(-1)![2];
+      assert.equal(put.names!.website, 'acme.example');
+      assert.equal(put.answers!.building, SITE);
       // The research reads the address as the server stored it.
       assert.deepEqual(posts(sent, '/draft-from').map(x => x[2]), [{url: 'https://acme.example', text: SITE}]);
       assert.match(await page.locator('#ss-job').innerText(), /^(Reading|Drafting from) acme\.example…$/);
@@ -206,7 +216,7 @@ async function building(page, website, text) {
       const revision = st.draft.revision;
       await page.click('#onb-next');
       await page.locator('#onb-company').waitFor();
-      assert.deepEqual(posts(sent, '/draft').at(-1)[2], {sections: {not: 'No custom quotes, no phone line.'}, revision});
+      assert.deepEqual(posts(sent, '/draft').at(-1)![2], {sections: {not: 'No custom quotes, no phone line.'}, revision});
       assert.equal(st.draft.sections.not, 'No custom quotes, no phone line.');
 
       // Back to the start and Next again: the same website and words start no second run.
@@ -238,7 +248,7 @@ async function building(page, website, text) {
       await form.locator('[name="wrong_text"]').fill('Fewer than 20 paying cleaners by March');
       await form.locator('button[type="submit"]').click();
       await page.locator('li[data-ss-bet] .pill.ok').waitFor();
-      assert.deepEqual(posts(sent, '/bets')[0][2], {statement: 'Cleaners pay for bookings, not seats.', why: '', rules_out: 'Per-seat pricing.',
+      assert.deepEqual(posts(sent, '/bets')[0]![2], {statement: 'Cleaners pay for bookings, not seats.', why: '', rules_out: 'Per-seat pricing.',
         wrong_if: {kind: 'text', text: 'Fewer than 20 paying cleaners by March', check_by: new Date(Date.now() + 90 * 864e5).toISOString().slice(0, 10)},
         status: 'active'});
       await page.fill('#ss-not', 'No enterprise sales.');
@@ -268,20 +278,20 @@ async function building(page, website, text) {
       await shot(page, '6-bets-found');
       await found.locator('[data-ss-take="0"]').click();
       await page.locator('li[data-ss-bet]').first().waitFor();
-      const added = posts(sent, '/bets')[0][2];
-      assert.deepEqual({...added, wrong_if: {...added.wrong_if, check_by: 'set'}}, {statement: FOUND.bets[0].statement, why: FOUND.bets[0].why,
-        rules_out: FOUND.bets[0].rules_out, status: 'proposed', wrong_if: {kind: 'text', text: FOUND.bets[0].wrong_if, check_by: 'set'}});
-      assert.match(added.wrong_if.check_by, /^\d{4}-\d{2}-\d{2}$/);
+      const added = posts(sent, '/bets')[0]![2];
+      assert.deepEqual({...added, wrong_if: {...added.wrong_if, check_by: 'set'}}, {statement: FOUND.bets[0]!.statement, why: FOUND.bets[0]!.why,
+        rules_out: FOUND.bets[0]!.rules_out, status: 'proposed', wrong_if: {kind: 'text', text: FOUND.bets[0]!.wrong_if, check_by: 'set'}});
+      assert.match(added.wrong_if!.check_by!, /^\d{4}-\d{2}-\d{2}$/);
       const revision = st.draft.revision;
       await found.locator('[data-ss-use="serve"]').click();
       await page.locator('#ss-side').getByText(FOUND.serve).waitFor();
-      assert.deepEqual(posts(sent, '/draft')[0][2], {sections: {serve: FOUND.serve}, revision});
+      assert.deepEqual(posts(sent, '/draft')[0]![2], {sections: {serve: FOUND.serve}, revision});
       await found.locator('[data-ss-use="summary"]').click();
       await page.waitForFunction(() => !document.querySelector('[data-ss-use="summary"]'));
-      assert.deepEqual(posts(sent, '/draft')[1][2], {summary: FOUND_MORE.summary, revision: revision + 1});
+      assert.deepEqual(posts(sent, '/draft')[1]![2], {summary: FOUND_MORE.summary, revision: revision + 1});
       await found.locator('[data-ss-use="know"]').click();
       await page.waitForFunction(() => !document.querySelector('[data-ss-use="know"]'));
-      assert.deepEqual(posts(sent, '/draft')[2][2], {sections: {know: FOUND_MORE.know}, revision: revision + 2});
+      assert.deepEqual(posts(sent, '/draft')[2]![2], {sections: {know: FOUND_MORE.know}, revision: revision + 2});
       assert.equal(st.draft.summary, FOUND_MORE.summary);
       assert.equal(await found.locator('.ss-found-row').count(), 3);                 // the vision, sell and not are left
       assert.deepEqual(errors, []);
