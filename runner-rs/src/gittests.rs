@@ -1366,6 +1366,33 @@ async fn a_private_meetings_checkout_needs_no_upstream_but_a_tasks_does() {
 }
 
 #[tokio::test]
+async fn a_task_without_an_upstream_reports_that_before_a_leftover_path() {
+    let tmp = Tmp::new();
+    let projects = tmp.0.join("projects");
+    let main = projects.join("bot-ops");
+    std::fs::create_dir_all(&main).unwrap();
+    sh(&main, &["init", "-q", "-b", "main"]);
+    std::fs::write(main.join("AGENT.md"), "# Ops\n").unwrap();
+    sh(&main, &["add", "-A"]);
+    sh(&main, &["commit", "-qm", "start"]);
+    let env = turn_env(&tmp.0, &[]);
+    let task = sessions::path_for(&projects, "ops", "leftover");
+    std::fs::create_dir_all(&task).unwrap();
+    std::fs::write(task.join("keep"), "untouched").unwrap();
+
+    assert_eq!(
+        sessions::ensure(&main, &task, "leftover", &env)
+            .await
+            .unwrap(),
+        (String::new(), sessions::NO_UPSTREAM.into())
+    );
+    assert_eq!(
+        std::fs::read_to_string(task.join("keep")).unwrap(),
+        "untouched"
+    );
+}
+
+#[tokio::test]
 async fn a_private_meetings_checkout_tracks_nothing_keeps_its_changes_and_goes_whole_when_the_meeting_ends(
 ) {
     let tmp = Tmp::new();

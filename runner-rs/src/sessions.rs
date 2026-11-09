@@ -576,6 +576,17 @@ pub async fn ensure(
             return Ok((tracked, String::new()));
         }
 
+        let tracked = upstream(main, &env).await?;
+        // A private meeting's copy is never pushed, so it needs no upstream: without one it starts from the checkout's
+        // own HEAD (a repository made on this computer with no remote yet).
+        let base = if tracked.is_empty() && private {
+            "HEAD".to_string()
+        } else {
+            tracked.clone()
+        };
+        if base.is_empty() {
+            return Ok((String::new(), NO_UPSTREAM.into()));
+        }
         if path.exists()
             && std::fs::read_dir(path)
                 .map(|mut d| d.next().is_some())
@@ -588,18 +599,6 @@ pub async fn ensure(
                     path.display()
                 ),
             ));
-        }
-
-        let tracked = upstream(main, &env).await?;
-        // A private meeting's copy is never pushed, so it needs no upstream: without one it starts from the checkout's
-        // own HEAD (a repository made on this computer with no remote yet).
-        let base = if tracked.is_empty() && private {
-            "HEAD".to_string()
-        } else {
-            tracked.clone()
-        };
-        if base.is_empty() {
-            return Ok((String::new(), NO_UPSTREAM.into()));
         }
         g(main, &env, &["worktree", "prune"], 15).await?;
         if let Some(parent) = path.parent() {
