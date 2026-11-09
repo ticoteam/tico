@@ -7,7 +7,6 @@ import pytest
 
 from backend import runner_states
 from backend.tests.helpers.api import post, runner  # noqa: F401
-from backend.tests.test_api import api  # noqa: F401
 from backend.tests.helpers.migrations import boot, fresh, snapshot
 
 OLD_STATE = (

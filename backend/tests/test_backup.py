@@ -9,7 +9,6 @@ from backend import backup
 from backend.backup import checkpoint, compact, inspect, snapshot, upload_snapshot
 from backend.config import Settings
 from backend.tests.helpers.api import assign, claim, post, ready, runner  # noqa: F401
-from backend.tests.test_api import api  # noqa: F401
 from backend.store import IDEMPOTENCY_RETENTION_HOURS, H, Store, sweep_idempotency
 
 

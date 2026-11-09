@@ -2,7 +2,6 @@
 only when the person in its chat asks, citing their message, with exactly their rights. On its own it changes nothing."""
 
 from backend.tests.helpers.api import get, headers  # noqa: F401  (the api fixture)
-from backend.tests.test_api import api  # noqa: F401  (the api fixture)
 from backend.tests.helpers.assistant import assistant_turn
 from backend.tests.helpers.strategy_bot_chat import strategy_bot, turn
 from backend.tests.helpers.groups import group

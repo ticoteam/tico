@@ -14,7 +14,6 @@ import pytest
 from backend import judge
 from backend.store import Problem
 from backend.tests.helpers.api import headers, post as api_post, runner, setup_attempt
-from backend.tests.test_api import api
 from backend.tests.helpers.email_sending import (
     BOX,
     CONTACT,

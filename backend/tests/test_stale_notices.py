@@ -7,7 +7,6 @@ import json
 
 from backend.store import H
 from backend.tests.helpers.api import assign, claim, ready, runner  # noqa: F401
-from backend.tests.test_api import api  # noqa: F401
 
 
 def fleet(api):

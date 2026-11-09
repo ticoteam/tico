@@ -2,7 +2,6 @@
 
 from backend import market, meetings
 from backend.tests.helpers.api import headers, setup_attempt, runner  # noqa: F401
-from backend.tests.test_api import api  # noqa: F401
 from backend.tests.helpers.mcp import call
 
 

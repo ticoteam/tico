@@ -9,7 +9,6 @@ import json
 from backend import hubdb as H
 from backend import reconnects as R
 from backend.tests.helpers.api import assign, claim, get, headers, post, runner  # noqa: F401
-from backend.tests.test_api import api  # noqa: F401
 from backend import bot_settings as BS
 
 

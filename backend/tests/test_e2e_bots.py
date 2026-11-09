@@ -9,7 +9,6 @@ Slow: the runner binary is built once per run (cargo), and the runner starts as 
 import pytest
 
 from backend.tests.helpers.api import assign, get, post, ready, setup_attempt  # noqa: F401
-from backend.tests.test_api import api  # noqa: F401
 from backend.tests.live import block_outside_network, live  # noqa: F401
 from runner_support.tests.helpers.conformance import Computer, reply_to, rust_binary, until  # noqa: F401
 

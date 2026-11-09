@@ -9,7 +9,6 @@ from types import SimpleNamespace
 from backend import hook_relay, triggers
 from backend import hubdb as H
 from backend.tests.helpers.api import get, post, put  # noqa: F401
-from backend.tests.test_api import api  # noqa: F401
 from backend.tests.helpers.hook_relay import BASE, HQ, KEY, hq, relay_for, service
 
 

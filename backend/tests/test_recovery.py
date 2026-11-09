@@ -6,7 +6,6 @@ from backend.backup import restore_snapshot, snapshot
 from backend.config import Settings
 from backend.store import H, Problem, Store, encode
 from backend.tests.helpers.api import post, setup_attempt
-from backend.tests.test_api import api
 
 import pytest
 

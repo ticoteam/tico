@@ -7,7 +7,6 @@ person, by its manager, and by anyone it asked something of.
 
 from backend.store import H
 from backend.tests.helpers.api import get, headers, post  # noqa: F401
-from backend.tests.test_api import api  # noqa: F401
 from backend.tests.helpers.bot_contact import bot, token
 
 

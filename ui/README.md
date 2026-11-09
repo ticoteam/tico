@@ -12,7 +12,7 @@ globals (`S`, `$`, `esc`, `get`, `post`, `route`, ...). A script is JavaScript o
                       (docs-page.ts, goals-kpis.ts, first-run.ts, support.ts, ...)
     assets/, vendor/  images, the text font (Inter) and the icon font, marked
     tests/*.cjs       browser tests (`npm run test:ui`)
-    sw.js             the service worker, served as /sw.js; it caches nothing (it lets the hashed bundle through to the browser cache)
+    sw.ts             the service worker, compiled to build/ui/sw.js and served as /sw.js; it caches nothing (below)
 
 The opening recovery card and its small stylesheet live in `index.html`, outside the bundles, so a failed asset
 download still leaves a styled Reload and Contact support screen. `theme.ts` dismisses it only after the app's
@@ -54,6 +54,16 @@ sha256, and the bundle and the server's `/tico/ui/<name>.ts` route serve the out
 to start on one (it compiles first when the checkout has Node and `npm ci`; so do pytest and `npm run test:ui`). The
 image compiles the UI in its own stage (Dockerfile `ui-build`) and ships only the output: the server image has no
 Node. `bash scripts/check_ui_types.sh` type-checks the `.ts` files with the rest.
+
+The service worker, `sw.ts`, is compiled the same way (to `build/ui/sw.js`, a classic script: no `import` or
+`export`) and served at the root as `/sw.js` with its map at `/sw.js.map` (backend/ui_bundle_routes.py), under either
+bundle setting. That URL never changes: `app/boot.ts` registers `/sw.js?v=…` with scope `/`, and an installed worker
+checks the same URL for updates (`updateViaCache: 'none'`, `Cache-Control: private, no-cache`). A missing or stale
+build is the same 503, never the `.ts` source. Its global is a `ServiceWorkerGlobalScope`, which the page's DOM lib
+contradicts, so it is its own program: `ui/tsconfig.worker.json` (lib `WebWorker`, every strict flag) checks it alone,
+and the page configs exclude it. Any finding there fails, with no baseline (`python3 scripts/check_ui_strict.py`, and
+`--worker-only` in `scripts/check_ui_types.sh`). The worker caches nothing: it lets the hashed bundle through to the
+browser cache and fetches the page itself past every cache.
 
 An open tab does not pick up a new release by itself. The config carries the release (`version`) and the served build
 (`ui_build`, the `?v=` of the two bundle tags joined by a dot); `app/notices.ts` compares both with what the page loaded with, on the

@@ -37,7 +37,6 @@ from backend.tests.helpers.finance_fixtures import (
     sync_once,
 )
 from backend.tests.helpers.api import get, headers, post  # noqa: F401
-from backend.tests.test_api import api  # noqa: F401
 from backend.tests.helpers.finance_payments import HOURS, _checking, _debit, _lost_send, _payee, _reconcile
 
 

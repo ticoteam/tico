@@ -5,7 +5,6 @@ import pytest
 
 from backend.operations import api_healthy, backup, health, replication_healthy, restore_check, tunnel_healthy
 from backend.store import H
-from backend.tests.test_api import api
 
 
 def test_operational_health_never_advances_backup_time_after_failed_upload(api):

@@ -13,7 +13,6 @@ from backend.tests.slug_ids import bot_ids_are_their_slugs  # noqa: F401  (each 
 from backend import file_library, thread_bot_digest, thread_retention, thread_webhooks, threads
 from backend.store import H
 from backend.tests.helpers.api import headers, post  # noqa: F401  (the fixture and its helpers)
-from backend.tests.test_api import api  # noqa: F401  (the fixture and its helpers)
 from backend.tests.helpers.threads_delivery import bot_post, delivery, new_thread, queued_job, rows, say
 
 

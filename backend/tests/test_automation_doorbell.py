@@ -8,7 +8,6 @@ from fastapi.testclient import TestClient
 from backend import demo_seed
 from backend.app import create_app
 from backend.tests.helpers.api import api_settings, get  # noqa: F401
-from backend.tests.test_api import api  # noqa: F401
 from backend.tests.helpers.automation_runs import make, queued, run_row
 
 

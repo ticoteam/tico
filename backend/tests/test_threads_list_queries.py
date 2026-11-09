@@ -6,7 +6,6 @@ import re
 
 from backend.tests.slug_ids import bot_ids_are_their_slugs  # noqa: F401  (each bot's id is its slug)
 from backend.tests.helpers.api import headers  # noqa: F401  (the fixture and its helper)
-from backend.tests.test_api import api  # noqa: F401  (the fixture and its helper)
 from backend.tests.helpers.health_reads import counted
 from backend.tests.helpers.threads_list_queries import add_bots
 

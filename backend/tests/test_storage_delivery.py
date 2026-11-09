@@ -17,7 +17,6 @@ from backend.blobs import Blobs, disposition
 from backend.config import Settings
 from backend.store import Problem
 from backend.tests.helpers.api import headers, post  # noqa: F401
-from backend.tests.test_api import api  # noqa: F401
 from backend.tests.helpers.files import turn
 from backend.tests.live import live  # noqa: F401
 from clients.tico import MultipartBody

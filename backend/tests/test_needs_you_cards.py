@@ -7,7 +7,6 @@ from backend import batch, views
 from backend import question_tasks as QT
 from backend import hubdb as H
 from backend.tests.helpers.api import get, post, setup_attempt  # noqa: F401
-from backend.tests.test_api import api  # noqa: F401
 from backend.tests.helpers.batch import approval_for_ana
 from backend.tests.helpers.task_privacy_reads import traced
 from backend.tests.helpers.question_tasks import keep_asking

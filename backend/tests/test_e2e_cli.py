@@ -31,7 +31,6 @@ import pytest
 
 from backend.tests.live import block_outside_network, live  # noqa: F401
 from backend.tests.helpers.api import post  # noqa: F401
-from backend.tests.test_api import api  # noqa: F401
 from backend.tests.helpers.automation_api import NOTE_STEP
 from clients import hubcli
 

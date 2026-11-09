@@ -5,7 +5,6 @@ import os
 import pytest
 
 from backend.tests.helpers.api import post, runner  # noqa: F401
-from backend.tests.test_api import api  # noqa: F401
 from clients.tico import APIError
 from runner_support.connectors import KNOWN_SENDER_RECHECK, ConnectorPublisher
 from runner_support.outage import Outage

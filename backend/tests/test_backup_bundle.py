@@ -12,7 +12,6 @@ from backend.blobs import Blobs
 from backend.operations import backup
 from backend.store import Problem
 from backend.tests.helpers.api import headers, post, setup_attempt  # noqa: F401
-from backend.tests.test_api import api  # noqa: F401
 from backend.tests.helpers.backup_bundle import ObjectStore, bundle, target
 
 

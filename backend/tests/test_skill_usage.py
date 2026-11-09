@@ -13,7 +13,6 @@ from backend import bot_settings as BS
 from backend import skill_usage as U
 from backend.store import H
 from backend.tests.helpers.api import get, headers, restrict  # noqa: F401  (fixture)
-from backend.tests.test_api import api  # noqa: F401  (fixture)
 from backend.tests.helpers.botops_parity import bot_id
 from backend.tests.helpers.skills import publish
 from backend.tests.helpers.skill_usage import NOW, skill_id, ts, use

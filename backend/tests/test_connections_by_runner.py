@@ -1,7 +1,6 @@
 """Operations listing builds every computer's bot_connections in one pass."""
 
 from backend.tests.helpers.api import assign, runner  # noqa: F401
-from backend.tests.test_api import api  # noqa: F401
 from backend import subscriptions
 from backend import bot_settings as BS
 

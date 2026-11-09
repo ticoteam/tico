@@ -12,7 +12,6 @@ from backend import pipeline_manager as PM
 from backend import pipeline_overview as OV
 from backend import task_holds
 from backend.tests.helpers.api import get  # noqa: F401
-from backend.tests.test_api import api  # noqa: F401
 from backend.tests.helpers.dev_ticket_rules import stage_dev_type
 from backend.tests.helpers.pipeline_manager import ANA, STAGES, botops_roster, now, pipeline, stamp, step, ticket, visit
 

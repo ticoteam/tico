@@ -13,7 +13,6 @@ import pytest
 from backend.skills import validate_bundle
 from backend.store import H, Problem
 from backend.tests.helpers.api import get, headers, restrict, setup_attempt  # noqa: F401  (fixture)
-from backend.tests.test_api import api  # noqa: F401  (fixture)
 from backend.tests.helpers.botops_parity import bot_id
 from clients import skills as bundles
 from backend.tests.helpers.skills import NEWER, SKILL, approve, bundle, decide, proposal, publish, screen

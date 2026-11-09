@@ -8,7 +8,6 @@ from backend import model_subscriptions as MS
 from backend.auth import Identity
 from backend.store import H
 from backend.tests.helpers.api import assign, claim, get, headers, post, runner
-from backend.tests.test_api import api  # noqa: F401
 from backend.tests.helpers.credentials import setup
 from backend.tests.helpers.model_subscriptions import OTHER, TOKEN, codex_file, company, give, on
 

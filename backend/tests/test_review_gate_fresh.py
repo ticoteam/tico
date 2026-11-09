@@ -10,7 +10,7 @@ import pytest
 from backend import hubdb as H, task_blocked
 from backend.tests.helpers.github import api, headers, hook, post, pr_event, PR  # noqa: F401
 from backend.tests.helpers.review_gate import HEAD, OLD, BASE, ticket, nth_ticket, get, move  # noqa: F401
-from backend.tests.helpers.api import hold
+from backend.tests.helpers.api import hold  # noqa: F401
 
 STALE = f'Tests: head {OLD}: 9 passed, 0 failed'
 GREEN = {f'check {i}': 'success' for i in range(16)}

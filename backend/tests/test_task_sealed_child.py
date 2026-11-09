@@ -6,7 +6,6 @@ import pytest
 
 from backend.store import H
 from backend.tests.helpers.api import get, headers, post
-from backend.tests.test_api import api
 from backend.tests.helpers.task_readers import dry_run, refused, run_on, subtask, task
 from backend.tests.helpers.tasks_board import bot_token
 from backend.tests.helpers.task_sealed_child import ROUTE, carry, run_for, sees

@@ -5,7 +5,6 @@ from datetime import datetime, timezone
 from backend import maintenance_health, login_holds, run_backoff, turn_budgets
 from backend.store import H
 from backend.tests.helpers.api import claim, get, post, ready
-from backend.tests.test_api import api
 from backend.tests.helpers.run_backoff import TOO_BIG, at, complete, fail, hold_bot, setup
 
 WRAPPED = "Prompt is too long · automatic compaction failed: You've hit your weekly limit · resets Oct 26, 8pm (UTC)"

@@ -9,7 +9,6 @@ from backend import github as G
 from backend import wake_presets as W
 from backend.store import H
 from backend.tests.helpers.api import claim, get, headers, post, ready, setup_attempt  # noqa: F401  (api is a fixture)
-from backend.tests.test_api import api  # noqa: F401  (api is a fixture)
 from backend.tests.helpers.botops_parity import act
 from backend.tests.helpers.member_bots import botops, turn  # noqa: F401  (botops is a fixture)
 from backend.tests.helpers.task_lanes import new_task, task_bot

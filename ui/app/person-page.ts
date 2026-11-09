@@ -66,7 +66,7 @@ function pagePerson(id: string | undefined, tab: string | undefined) {
   orgHistoryVisit('p:' + p.id);
   tab = tabs.includes(tab ?? '') ? tab : 'profile';
   // In the chart's order: the ones someone placed first (byReportOrder), then the chart's own order (chartFallback).
-  const placed = byReportOrder('p:' + p.id), inOrder = (a: unknown, b: unknown) => placed(a, b) || chartFallback(a, b);
+  const placed = byReportOrder('p:' + p.id), inOrder = (a: ChartNode, b: ChartNode) => placed(a, b) || chartFallback(a, b);
   const reports = (S.people || []).filter(row => row.reports_to === p.id && !row.hidden)
     .sort((a, b) => inOrder({kind: 'person', person: a}, {kind: 'person', person: b}));
   const bots = (p.bots || []).map(slug => botRow(slug)).filter((e): e is Employee => !!e && !isHiddenBot(e.id));    // not the Assistant or its helpers (ui/app/sidebar.ts)

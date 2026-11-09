@@ -6,7 +6,6 @@ from datetime import datetime, timedelta, timezone
 
 from backend import hubdb as H
 from backend.tests.helpers.api import get, post, setup_attempt  # noqa: F401
-from backend.tests.test_api import api  # noqa: F401
 from backend.tests.helpers.judge import QUESTIONS, FakeJudge, fake
 from backend.tests.helpers.mcp import call
 from backend.tests.helpers.judge_spend import DOWN

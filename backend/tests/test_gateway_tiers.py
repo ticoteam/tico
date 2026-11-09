@@ -9,7 +9,6 @@ import pytest
 from backend import gateway_tiers as T
 from backend import providers
 from backend.tests.helpers.api import get, headers  # noqa: F401
-from backend.tests.test_api import api  # noqa: F401
 from clients import gateway as G
 from clients import judge as J
 

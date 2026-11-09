@@ -9,7 +9,6 @@ import pytest
 from backend import wake_presets as W
 from backend.store import H
 from backend.tests.helpers.api import claim, get, post  # noqa: F401  (api is a fixture)
-from backend.tests.test_api import api  # noqa: F401  (api is a fixture)
 from backend.tests.helpers.run_triggers import finish, machine, start
 from backend.tests.helpers.task_lanes import new_task, task_bot
 

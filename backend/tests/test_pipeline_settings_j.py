@@ -8,7 +8,6 @@ import uuid
 
 from backend import hubdb as H
 from backend.tests.helpers.api import get, headers  # noqa: F401  (api is a fixture)
-from backend.tests.test_api import api  # noqa: F401  (api is a fixture)
 
 
 def make_pipeline(api, name, owner="human:ana"):

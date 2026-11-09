@@ -2,7 +2,6 @@
 
 from backend import task_loops
 from backend.tests.helpers.api import headers, post  # noqa: F401
-from backend.tests.test_api import api  # noqa: F401
 from backend.store import H
 
 

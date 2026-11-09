@@ -2,7 +2,7 @@
 
 `populate` writes through the v2 API as a person and as a bot (a runner claims the bot's turn), so the rows are the
 ones a real install makes. `capture` reads the main v2 resources back as the owner. Both run against the `api`
-fixture from backend/tests/test_api.py: a fresh temporary database and a fictional company (Acme).
+fixture (conftest.py, backend/tests/helpers/api_app.py): a fresh temporary database and a fictional company (Acme).
 """
 
 import sqlite3

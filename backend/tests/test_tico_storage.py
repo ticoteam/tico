@@ -17,7 +17,6 @@ import zlib
 
 from backend import tico_storage
 from backend.tests.helpers.api import headers, post  # noqa: F401
-from backend.tests.test_api import api  # noqa: F401
 from backend.tests.helpers.storage_delivery import S3, attach, task
 from backend.tests.helpers.tico_storage import (
     ADDRESS,

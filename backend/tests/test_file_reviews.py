@@ -5,7 +5,6 @@ import pytest
 
 from backend.store import H
 from backend.tests.helpers.api import headers, post, setup_attempt  # noqa: F401  (fixtures)
-from backend.tests.test_api import api  # noqa: F401  (fixtures)
 from backend.tests.helpers.file_reviews import answer, approved, ask, publish
 
 

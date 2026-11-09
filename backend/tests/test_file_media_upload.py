@@ -7,7 +7,6 @@ import hashlib
 
 from backend.tests.helpers.files import turn
 from backend.tests.helpers.api import headers  # noqa: F401  (fixtures)
-from backend.tests.test_api import api  # noqa: F401  (fixtures)
 
 MB = 1024 * 1024
 MP4_HEAD = b"\x00\x00\x00\x18ftypmp42\x00\x00\x00\x00mp42isom"

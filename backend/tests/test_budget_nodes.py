@@ -10,7 +10,6 @@ from pathlib import Path
 import pytest
 
 from backend import usage_limits
-from backend.tests.test_api import api  # noqa: F401  (the api fixture)
 
 MIGRATION = Path(__file__).resolve().parents[1] / "migrations" / "0054_budget_nodes.py"
 

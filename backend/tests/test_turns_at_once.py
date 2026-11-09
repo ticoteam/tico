@@ -2,7 +2,6 @@
 
 from backend.store import H
 from backend.tests.helpers.api import as_member, claim, get, post, put, runner  # noqa: F401  (api is a fixture)
-from backend.tests.test_api import api  # noqa: F401  (api is a fixture)
 from backend.tests.helpers.assistant import assistant_turn
 from backend.tests.helpers.settings_assistant import mcp
 from backend.tests.helpers.task_lanes import new_task, task_bot

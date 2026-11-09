@@ -4,7 +4,6 @@ import pytest
 
 from backend import auto_tasks, hubdb as H, rules as R, task_privacy
 from backend.tests.helpers.api import claim, get, post, runner  # noqa: F401
-from backend.tests.test_api import api  # noqa: F401
 from backend.tests.helpers.parked_urgent_news import machine, parked, still_blocked
 from backend.tests.helpers.urgent_news import sent_job
 from backend.tests.helpers.task_lanes import task_bot

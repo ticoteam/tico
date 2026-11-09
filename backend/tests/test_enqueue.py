@@ -15,7 +15,6 @@ import pytest
 from backend import bot_settings as BS
 from backend.store import H
 from backend.tests.helpers.api import post, setup_attempt  # noqa: F401
-from backend.tests.test_api import api  # noqa: F401
 
 # The table's DDL: migration 0070 owns it (bot_settings.py has none).
 _BOT_SETTINGS_TABLE = importlib.import_module("backend.migrations.0070_bot_settings").TABLE

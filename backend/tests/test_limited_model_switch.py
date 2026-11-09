@@ -9,7 +9,6 @@ old model's and never lands on the new one."""
 from backend import login_holds
 from backend.store import H
 from backend.tests.helpers.api import assign, claim, get, post, runner  # noqa: F401 (fixture)
-from backend.tests.test_api import api  # noqa: F401 (fixture)
 from backend.tests.helpers.login_holds import CLAUDE, at, limit, providers_on, signed_in
 from backend import bot_settings as BS
 

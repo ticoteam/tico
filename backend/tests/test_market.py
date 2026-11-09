@@ -8,7 +8,6 @@ from pathlib import Path
 from backend import market as M
 from backend.store import H
 from backend.tests.helpers.api import get, headers, post, runner, setup_attempt  # noqa: F401
-from backend.tests.test_api import api  # noqa: F401
 from backend import bot_settings as BS
 from backend.tests.helpers.market import _librarian, _seed
 

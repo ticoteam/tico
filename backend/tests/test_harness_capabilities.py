@@ -32,7 +32,7 @@ CHECKS = [
 # names, logos and demo data that are about the vendor, not about what the CLI can do.
 ALLOWED = {
     "runner-rs/src/hosts",  # one adapter per CLI, and the factory that picks it
-    "ui/app/avatars.js",  # vendor logos
+    "ui/app/avatars.ts",  # vendor logos
     "backend/demo_seed.py",  # sample bots
     "backend/openapi_v2.py",  # API schema; its `cursor` is a page cursor
 }

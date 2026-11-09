@@ -6,7 +6,6 @@ import json
 from backend import hubdb as H
 from backend import question_tasks as QT
 from backend.tests.helpers.api import get, post, setup_attempt
-from backend.tests.test_api import api
 from backend.tests.helpers.batch import approval_for_ana
 
 

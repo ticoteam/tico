@@ -4,7 +4,6 @@ sends BotOps one notice. An org change is no proposal (test_org_by_request.py)."
 
 from backend.store import H
 from backend.tests.helpers.api import get, headers, post  # noqa: F401  (the api fixture)
-from backend.tests.test_api import api  # noqa: F401  (the api fixture)
 from backend.tests.helpers.groups import add_bots, send
 from backend.tests.helpers.groups_leads import as_bot
 

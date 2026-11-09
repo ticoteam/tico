@@ -8,7 +8,6 @@ from backend import slack_gateway as G
 from backend.store import Store
 from backend.tests.helpers import slack_gateway as S
 from backend.tests.helpers.api import api_settings, assign, claim, post, ready, runner, setup_attempt  # noqa: F401  (fixtures)
-from backend.tests.test_api import api  # noqa: F401  (fixtures)
 from backend.tests.helpers.member_bots import finish
 from backend.store import H
 

@@ -8,7 +8,6 @@ import pytest
 from backend import hubdb as H
 from backend import wake_rules as W
 from backend.tests.helpers.api import post
-from backend.tests.test_api import api  # noqa: F401
 from backend.tests.helpers.wake_rules import as_cause, claim, finish, jobs, news, parked_task, setup, skips
 
 

@@ -5,7 +5,6 @@ cannot set it, and bot.yaml asks for nothing.
 
 from backend import email_sending as S
 from backend.tests.helpers.api import get, headers, setup_attempt  # noqa: F401
-from backend.tests.test_api import api  # noqa: F401
 from backend.tests.helpers.botops_parity import _wake, act
 from backend.tests.helpers.member_bots import botops, finish, turn  # noqa: F401  (fixture)
 

@@ -8,7 +8,6 @@ from concurrent.futures import ThreadPoolExecutor
 from backend import health, queue_refusals as Q
 from backend.store import H, encode
 from backend.tests.helpers.api import post, runner
-from backend.tests.test_api import api
 from backend.tests.helpers.run_backoff import at, setup
 from backend.tests.helpers.status_reads import busy
 from backend.tests.helpers.health_queries import counted

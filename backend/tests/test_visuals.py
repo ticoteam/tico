@@ -11,7 +11,6 @@ import pytest
 
 from backend import visuals as V
 from backend.tests.helpers.api import assign, claim, headers, post, ready, runner  # noqa: F401  (fixtures)
-from backend.tests.test_api import api  # noqa: F401  (fixtures)
 from backend.tests.helpers.files import publish, turn
 from backend.tests.helpers.events import live  # noqa: F401  (fixture)
 from backend.tests.helpers.visuals import PNG, VISUALS, bot_reply, media_settled, task_with_file, visual_on_task, wav

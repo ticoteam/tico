@@ -2,7 +2,6 @@
 that listens for it, once per delivery, and nothing else gets in."""
 
 from backend.tests.helpers.api import get, post  # noqa: F401
-from backend.tests.test_api import api  # noqa: F401
 from backend.tests.helpers.triggers import hook, listener, sig, turns
 
 

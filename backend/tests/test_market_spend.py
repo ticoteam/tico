@@ -6,7 +6,6 @@ import pytest
 from backend import market_spend as MS
 from backend.store import H
 from backend.tests.helpers.api import get, post, put, setup_attempt  # noqa: F401
-from backend.tests.test_api import api  # noqa: F401
 from backend.tests.helpers.company import with_strategy_bot
 from backend.tests.helpers.market import _librarian, _seed
 from backend.tests.helpers.sql import query

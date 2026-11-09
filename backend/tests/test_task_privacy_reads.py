@@ -9,7 +9,6 @@ from backend import question_tasks as QT, read_cache, sql as SQL, task_privacy, 
 from backend.auth import Identity
 from backend.store import H, Problem, encode
 from backend.tests.helpers.api import assign, claim, get, headers, post, ready, runner, setup_attempt  # noqa: F401
-from backend.tests.test_api import api  # noqa: F401
 from backend.enqueue import enqueue_stored
 from backend import bot_settings as BS
 from backend.tests.helpers.task_privacy_reads import sql, traced, traced_get

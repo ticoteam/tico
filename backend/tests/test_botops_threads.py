@@ -7,7 +7,6 @@ from fastapi import Request
 from backend import threads
 from backend.botops_act import default_delegable
 from backend.tests.helpers.api import headers  # noqa: F401  (fixture)
-from backend.tests.test_api import api  # noqa: F401  (fixture)
 from backend.tests.helpers.member_bots import botops, turn  # noqa: F401  (fixture)
 
 

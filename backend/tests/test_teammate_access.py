@@ -9,7 +9,6 @@ from backend.tests.slug_ids import bot_ids_are_their_slugs  # noqa: F401  (each 
 from backend import teammate_access as TA
 from backend.store import H, encode
 from backend.tests.helpers.api import get, headers, post  # noqa: F401  (fixture)
-from backend.tests.test_api import api  # noqa: F401  (fixture)
 from backend.tests.helpers.bot_access import bot
 from backend import bot_settings as BS
 from backend.tests.helpers.teammate_access import EVERYONE, NOBODY, acme, set_access, sql_column, who

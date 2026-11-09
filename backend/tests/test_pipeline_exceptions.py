@@ -8,7 +8,6 @@ from backend import task_relations
 from backend.auth import Identity
 from backend.store import H
 from backend.tests.helpers.api import get  # noqa: F401
-from backend.tests.test_api import api  # noqa: F401
 from backend.tests.helpers.dev_ticket_rules import stage_dev_type
 from backend import bot_settings as BS
 from backend.tests.hold_rows import set_holds
@@ -488,7 +487,7 @@ def test_held_notes_alone_never_wake_a_manager(api):
 
 
 # ------------------------------------------------------------------------------------------- what the reader may read
-# A private ticket of bots outside the manager's org chart (backend/tests/test_api.py unrelated_task_managers) is
+# A private ticket of bots outside the manager's org chart (backend/tests/helpers/api.py unrelated_task_managers) is
 # neither named nor counted: not in a builder's slots, a step's backlog or the GitHub outage, in Pipeline or the hourly
 # wake. `finance` is a pool bot the manager does not manage; `ops` asks for its hidden tickets.
 

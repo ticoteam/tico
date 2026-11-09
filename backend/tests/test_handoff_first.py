@@ -2,7 +2,6 @@
 
 from backend.store import H
 from backend.tests.helpers.api import assign, claim, post, ready, runner  # noqa: F401
-from backend.tests.test_api import api  # noqa: F401
 from backend import verdict_moves as V
 from backend import bot_settings as BS
 

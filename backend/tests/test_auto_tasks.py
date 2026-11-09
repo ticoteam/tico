@@ -4,7 +4,6 @@ import pytest
 
 from backend.store import H
 from backend.tests.helpers.api import get, post  # noqa: F401
-from backend.tests.test_api import api  # noqa: F401
 from backend.tests.helpers.task_lanes import task_bot
 from backend.tests.hold_rows import set_holds
 from backend.tests.helpers.auto_tasks import deck, finish, set_cap, take

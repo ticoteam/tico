@@ -5,7 +5,6 @@ import pytest
 
 from backend import visuals as V
 from backend.tests.helpers.api import as_member, headers, post, restrict  # noqa: F401  (fixtures)
-from backend.tests.test_api import api  # noqa: F401  (fixtures)
 from backend.tests.helpers.files import turn
 
 VISUALS = "http://visuals.localhost:9001"

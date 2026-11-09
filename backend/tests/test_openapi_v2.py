@@ -7,7 +7,6 @@ import uuid
 from backend import openapi_v2
 from backend.finance import actions as FA
 from backend.tests.helpers.api import headers  # noqa: F401  (the api fixture)
-from backend.tests.test_api import api  # noqa: F401  (the api fixture)
 from backend.tests.helpers.credentials import setup as setup_vault
 from backend.tests.helpers.finance_fixtures import account
 from backend.tests.helpers.openapi_v2 import conforms

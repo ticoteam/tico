@@ -19,7 +19,6 @@ import pytest
 from backend import docs
 from backend.store import H
 from backend.tests.helpers.api import headers, post  # noqa: F401
-from backend.tests.test_api import api  # noqa: F401
 from backend.tests.helpers.files import turn
 from backend import bot_settings as BS
 

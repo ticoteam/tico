@@ -10,7 +10,6 @@ from datetime import datetime, timezone
 from backend import trigger_presets as P
 from backend import triggers
 from backend.tests.helpers.api import get, post  # noqa: F401
-from backend.tests.test_api import api  # noqa: F401
 from backend.tests.helpers.triggers import hook, listener, rule_row, sig, turns
 from backend.tests.helpers.triggers_incoming import as_bot, stored_rows
 

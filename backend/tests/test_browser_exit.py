@@ -7,7 +7,6 @@ import pytest
 from backend import browser_exit as BE
 from backend.store import Problem
 from backend.tests.helpers.api import as_member, assign, get, post, restrict, runner  # noqa: F401  (the api fixture)
-from backend.tests.test_api import api  # noqa: F401  (the api fixture)
 
 
 class Relay:

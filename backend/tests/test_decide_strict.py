@@ -8,7 +8,6 @@ import pytest
 
 from backend import judge as B
 from backend.store import H
-from backend.tests.test_api import api  # noqa: F401
 from backend.tests.helpers.decide_gateway import GATEWAY_URL
 from backend.tests.helpers.judge import QUESTIONS
 from clients import judge as J

@@ -7,7 +7,6 @@ import pytest
 from backend import providers as P
 from backend.store import H
 from backend.tests.helpers.api import get  # noqa: F401  (the fixture)
-from backend.tests.test_api import api  # noqa: F401  (the fixture)
 
 COMPANY = {"enabled": ["anthropic", "xai", "openai"], "runtime": "claude", "model": "claude-opus-5-5"}
 

@@ -6,7 +6,6 @@ import uuid
 from backend import task_privacy
 from backend.store import H
 from backend.tests.helpers.api import headers, post, setup_attempt  # noqa: F401
-from backend.tests.test_api import api  # noqa: F401
 from backend.tests.helpers.payload_budgets import clone
 
 

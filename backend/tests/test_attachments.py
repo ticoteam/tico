@@ -9,7 +9,6 @@ import threading
 from PIL import Image
 
 from backend.tests.helpers.api import assign, claim, get, headers, post, ready, runner  # noqa: F401
-from backend.tests.test_api import api  # noqa: F401
 
 
 def upload(api, path, fields, token="ana-test", key=None, data=b"Original material", expected=200):

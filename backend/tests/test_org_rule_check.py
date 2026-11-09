@@ -22,8 +22,8 @@ from backend import updates
 from backend.auth import Identity
 from backend.names import SUPPORT_ACTOR, SUPPORT_NAME
 from backend.store import H, Problem
-from backend.tests.test_api import claim, get, headers, post, setup_attempt  # noqa: F401
-from backend.tests.helpers.org_rules import api, as_bot, edit, org, rule  # noqa: F401
+from backend.tests.helpers.api import claim, get, headers, post, setup_attempt  # noqa: F401
+from backend.tests.helpers.org_rules import as_bot, edit, org, rule  # noqa: F401
 from backend import bot_settings as BS
 
 
@@ -1199,7 +1199,7 @@ def test_automation_assign_judges_the_task_handed_over_and_replies_reach_their_p
 
 def review_turn(api):
     """A review subtask for ops in its own room, claimed and started: its reply waits until the task is done."""
-    from backend.tests.test_api import assign, ready, runner
+    from backend.tests.helpers.api import assign, ready, runner  # noqa: F401
 
     r = runner(api, "ana")
     assign(api, r, "ops")

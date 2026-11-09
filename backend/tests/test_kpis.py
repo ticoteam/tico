@@ -8,7 +8,6 @@ from datetime import datetime, timedelta, timezone
 from backend import botkpis, strategy_bot, hubdb, kpis as K
 from backend.store import H
 from backend.tests.helpers.api import assign, claim, get, headers, post, ready, runner  # noqa: F401
-from backend.tests.test_api import api  # noqa: F401
 from backend import bot_settings as BS
 from backend.tests.helpers.kpis import goal_with_kpi, log
 

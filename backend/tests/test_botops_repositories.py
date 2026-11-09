@@ -7,7 +7,6 @@ import re
 import pytest
 
 from backend.tests.helpers.api import get, headers, post, put  # noqa: F401  (fixture)
-from backend.tests.test_api import api  # noqa: F401  (fixture)
 from backend.tests.helpers.member_bots import botops, finish, turn  # noqa: F401  (fixture)
 from backend.tests.helpers.botops_parity import act
 from backend.tests.helpers.botops_repositories import FLAG, effective, repos

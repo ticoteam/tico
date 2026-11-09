@@ -5,7 +5,6 @@ work or a named outside action holds it for review, never run again by itself wh
 from backend import run_diagnostics
 from backend.store import H
 from backend.tests.helpers.api import claim, expire, get, post, ready, setup_attempt  # noqa: F401 (api: the fixture)
-from backend.tests.test_api import api  # noqa: F401 (api: the fixture)
 from backend.tests.helpers.execution_review import aged, job_state, sweep
 from backend.tests.helpers.held_runs import botops
 

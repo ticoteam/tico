@@ -9,7 +9,6 @@ import pytest
 
 from backend import assistant, support
 from backend.tests.helpers.api import as_member, assign, claim, get, headers, post, put, ready, runner  # noqa: F401
-from backend.tests.test_api import api  # noqa: F401
 from backend.tests.helpers.support import FakeHQ
 from backend.store import H
 from backend import bot_settings as BS

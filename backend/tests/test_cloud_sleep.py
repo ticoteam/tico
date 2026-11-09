@@ -20,7 +20,6 @@ from backend import (
 )
 from backend.store import H, encode
 from backend.tests.helpers.api import assign, claim, get, ready, runner  # noqa: F401
-from backend.tests.test_api import api  # noqa: F401
 from backend.tests.helpers.cloud_machines import cloud, enrolled, stopped_when_idle, work  # noqa: F401
 from backend.tests.helpers.start_places import memory
 from backend.tests.helpers.thread_halfway import bot_status, new_thread, say

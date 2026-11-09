@@ -283,10 +283,10 @@ async function settingsTokenRevoke(id: string | undefined, label: string | undef
 function agentConfigYaml(setup: AgentSetup) {
   return `mcp_servers:\n  tico:\n    url: "${setup.mcp_servers.tico.url}"\n    headers:\n      Authorization: "Bearer \${TICO_AGENT_TOKEN}"\n# .env in the profile directory:\nTICO_AGENT_TOKEN=${setup.token}`;
 }
-async function settingsAgentRevoke(slug: string) {
+async function settingsAgentRevoke(slug: string | undefined) {
   const e = S.emps.find(row => row.id === slug); if (!e) return;
   if (!confirm(`Revoke the agent credential for ${e.display_name}? Its computer loses access at once; the bot record stays.`)) return;
-  try { await post(`/v2/bots/${encodeURIComponent(slug)}/agent-credential/revoke`, {}); toast(`${e.display_name} credential revoked`); await loadSettings(); }
+  try { await post(`/v2/bots/${encodeURIComponent(String(slug))}/agent-credential/revoke`, {}); toast(`${e.display_name} credential revoked`); await loadSettings(); }
   catch (error) { toast(errorMessage(error, ''), true); }
 }
 // The Add computer flow, shared by Settings and the first-run wizard: one private short-lived
@@ -304,7 +304,7 @@ const serverReleaseTag = () => {
 // The container name follows from the code, so the commands of one Add computer agree with each other.
 // It starts with a letter or digit: install.sh and install-wsl.ps1 accept no other first character for --name.
 const runnerName = (code: string) => `${String(S.config?.compose_project || 'tico').toLowerCase().replace(/[^a-z0-9-]/g, '-').replace(/^-+/, '').slice(0, 20) || 'tico'}-${String(code).toLowerCase().replace(/[^a-z0-9]/g, '').slice(0, 8) || 'computer'}`;
-function dockerRunnerCommands(code: string, label: string, runtime: string | undefined, kind = 'linux'): ([string, string] | null)[] {
+function dockerRunnerCommands(code: string, label: string, runtime: string | undefined, kind = 'linux'): [[string, string], [string, string] | null, [string, string]] {
   const tag = serverReleaseTag(), quoted = `"${shellSafe(label)}"`;
   const installer = tag ? `https://github.com/ticoteam/tico/releases/download/${tag}/install.sh`
                         : 'https://github.com/ticoteam/tico/releases/latest/download/install.sh';

@@ -30,7 +30,7 @@ const SPECIAL = ['models', 'providers', 'tags', 'types', 'runs', 'roadmap', 'sub
 // the old Strategy Bot address only redirects to its tab (ui/app/router.ts), so no link is drawn to it, and Inboxes'
 // old addresses redirect to Tools (ui/app/tools.ts toolsRoute; checked below), System's (Rules and Routines before it)
 // leave for Automations (ui/app/settings.ts settingsMovedOut; checked below), and Webhooks (once Triggers) went to
-// Automations, Tools and Models (ui/app/settings-webhooks.js whOldAddress; settings-webhooks.cjs checks them).
+// Automations, Tools and Models (ui/app/settings-webhooks.ts whOldAddress; settings-webhooks.cjs checks them).
 const MOVED = ['listening', 'ceo', 'inboxes', 'rules', 'routines', 'webhooks', 'triggers'];
 
 // Every #/settings/<name> address written in the UI's sources, .js or .ts (a script converted to TypeScript keeps its links).

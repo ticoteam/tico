@@ -301,7 +301,7 @@ async function renderScreeningCard(): Promise<void> {
   if (SCREENING_VIEW?.modes) screeningPaint();
 }
 
-// A built-in bot's own card on its page's Settings tab (ui/app/bot-page.js), drawn only on that bot's page: the Task
+// A built-in bot's own card on its page's Settings tab (ui/app/bot-page.ts), drawn only on that bot's page: the Task
 // Manager's checks, the Strategy Bot's levels (the owner's alone), and Releases on whichever bot the release schedule
 // names or finds as its Release Manager. Each keeps the permissions it had in Settings: the server's answers decide.
 function botBuiltinCardsHTML(slug: string): string {

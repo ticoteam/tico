@@ -13,7 +13,6 @@ from backend import api_tools
 from backend.auth import Identity
 from backend.store import Problem
 from backend.tests.helpers.api import get, headers, post, put  # noqa: F401  (fixture)
-from backend.tests.test_api import api  # noqa: F401  (fixture)
 from backend.tests.helpers.api_tools import key, level, tool
 from backend.tests.helpers.credentials import setup
 from backend.tests.helpers.tool_visibility import ONLY, SECRET, SECRET_R, bank, eve, patch

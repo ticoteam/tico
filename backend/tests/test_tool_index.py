@@ -7,7 +7,6 @@ Ana owns the company, Ben is an admin (a member after `as_member`), Cara is a me
 from backend import api_tools
 from backend.store import H
 from backend.tests.helpers.api import as_member, get, put, setup_attempt  # noqa: F401  (fixture)
-from backend.tests.test_api import api  # noqa: F401  (fixture)
 from backend.tests.helpers.inbound_audience import narrow
 
 

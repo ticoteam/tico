@@ -6,7 +6,6 @@ from datetime import datetime, timedelta, timezone
 from backend import task_rules as R
 from backend.store import H
 from backend.tests.helpers.api import get, post, put, setup_attempt  # noqa: F401
-from backend.tests.test_api import api  # noqa: F401
 from backend import bot_settings as BS
 from backend.tests.hold_rows import set_holds
 from backend.tests.helpers.task_rules import department

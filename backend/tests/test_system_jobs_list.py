@@ -18,7 +18,6 @@ from backend.scheduler import Scheduler
 from backend.store import H
 from backend.tests.mirror_rows import db, dead_mirror, live, mirrors, sync
 from backend.tests.helpers.api import get  # noqa: F401
-from backend.tests.test_api import api  # noqa: F401
 
 BACKEND = pathlib.Path(__file__).resolve().parents[1]
 

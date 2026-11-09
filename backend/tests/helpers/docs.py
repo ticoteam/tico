@@ -1,7 +1,6 @@
 """Helpers that other tests share, moved out of test_docs.py so they import no test file."""
 
 from backend.tests.helpers.api import headers
-from backend.tests.test_api import api
 
 
 ANA, BEN, CARA = "ana-test", "ben-test", "cara-test"  # owner, bot administrator, everyone else

@@ -10,7 +10,6 @@ from backend.entities import store as ES
 from backend.entities.places import pack
 from backend.entities.places.adapter import directory_adapter
 from backend.tests.helpers.api import headers  # noqa: F401
-from backend.tests.test_api import api  # noqa: F401
 
 ANA, BEN, CARA = "human:ana", "human:ben", "human:cara"
 

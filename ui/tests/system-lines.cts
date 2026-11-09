@@ -1,4 +1,4 @@
-// Who wrote each line (ui/app/hub-v2.js rowSource): rows the server wrote as the keeper are small gray lines, never the
+// Who wrote each line (ui/app/hub-v2.ts rowSource): rows the server wrote as the keeper are small gray lines, never the
 // Assistant. In a bot's Home: two or more task updates in a row are one shut "N task updates" row that opens to a line
 // each, and a redraw keeps the choice; a lone one is one gray line; the Assistant passing on a person's words reads as
 // "Ana's Assistant" with the Assistant's face; a system line has no sender; a built-in leads with its bold name and an

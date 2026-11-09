@@ -11,7 +11,6 @@ from datetime import datetime, timedelta, timezone
 from backend import blobs as B, file_library, market, pages as P
 from backend.store import H, encode
 from backend.tests.helpers.api import get, headers, post  # noqa: F401  (fixtures)
-from backend.tests.test_api import api  # noqa: F401  (fixtures)
 from backend.tests.helpers.groups import send
 from backend.tests.helpers.files import publish, turn
 from backend.tests.helpers.pages import HTML, page, read

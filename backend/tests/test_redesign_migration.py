@@ -13,7 +13,6 @@ from backend import redesign_migration as M
 from backend import rules as R
 from backend import team_rules
 from backend.tests.helpers.api import get, post  # noqa: F401
-from backend.tests.test_api import api  # noqa: F401
 from backend import usage_limits
 from backend.tests.helpers.redesign_migration import db, first_start
 

@@ -8,7 +8,6 @@ import httpx
 
 from backend.auth import Identity
 from backend.tests.helpers.api import headers, setup_attempt  # noqa: F401
-from backend.tests.test_api import api  # noqa: F401
 from backend.tests.helpers.media import import_meeting
 from backend.tests.helpers.member_bots import botops  # noqa: F401
 from backend.tests.helpers.granola_mcp import BASE, Provider

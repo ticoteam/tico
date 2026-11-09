@@ -3,7 +3,6 @@
 from backend.auth import Identity
 from backend.store import H, encode
 from backend.tests.helpers.api import headers
-from backend.tests.test_api import api
 from backend import bot_settings as BS
 
 

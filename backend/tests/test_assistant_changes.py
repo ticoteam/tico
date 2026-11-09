@@ -7,7 +7,6 @@ import pytest
 
 from backend import hubdb as H
 from backend.tests.helpers.api import get, headers, post  # noqa: F401
-from backend.tests.test_api import api  # noqa: F401
 from backend.tests.helpers.api import setup_attempt  # noqa: F401
 from backend.tests.helpers.assistant import asked, assistant_turn, turn_message
 from backend.tests.helpers.automation_api import make

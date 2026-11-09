@@ -66,7 +66,7 @@ async function open(browser: import('playwright').Browser, {phone = false}: {pho
   return {page, errors};
 }
 
-// A message row, or the gray line a row the server wrote is (the request: ui/app/hub-v2.js rowSource).
+// A message row, or the gray line a row the server wrote is (the request: ui/app/hub-v2.ts rowSource).
 const row = (page: import('playwright').Page, id: string) => page.locator(`:is(.th-msg, .th-line)[data-mid="${id}"]`);
 const line = (page: import('playwright').Page) => page.locator('.th-upd-btn');
 // The messages inside the panel a line controls, in order.

@@ -749,8 +749,8 @@ def test_session_keys_never_share_a_thread_across_audience_classes():
 
 
 # ----------------------------------------------------------------------------- migration: crafted per-message cases
-from backend.tests.test_api import post as api_post  # noqa: E402
-from backend.tests.helpers.live_meetings import api, live  # noqa: F401
+from backend.tests.helpers.api import post as api_post  # noqa: F401
+from backend.tests.helpers.live_meetings import live  # noqa: F401
 
 UNSTAMPED = (
     "UPDATE messages SET seq=NULL, origin_id=NULL, revision=0, restricted=1, legacy_audience=NULL",

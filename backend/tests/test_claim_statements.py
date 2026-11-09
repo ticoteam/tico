@@ -1,7 +1,6 @@
 """The claim's work path reads a runner's bots as sets: its statements do not grow with the number of bots it has queued
 work for (execution.candidate, claim_loads.read). Measured on the store's connections, as the claim makes them."""
 
-from backend.tests.test_api import api  # noqa: F401  (the fixture)
 from backend.tests.helpers.api import headers, post, runner
 from backend.tests.helpers.claim_statements import seed, traced
 

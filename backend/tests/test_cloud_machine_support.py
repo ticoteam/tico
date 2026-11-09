@@ -14,7 +14,6 @@ from backend import assistant, cloud_access, cloud_machines as CM, team_rules
 from backend.auth import Identity
 from backend.store import H
 from backend.tests.helpers.api import headers, setup_attempt
-from backend.tests.test_api import api
 from backend.tests.helpers.openapi_v2 import conforms
 from backend.tests.helpers.assistant import assistant_turn
 from backend.tests.helpers.mcp import call as mcp

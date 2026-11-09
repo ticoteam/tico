@@ -10,7 +10,6 @@ from backend.auth import Identity
 from backend import hubdb as H
 from backend import pipeline_rights, task_reads
 from backend.tests.helpers.api import get, headers, post, restrict  # noqa: F401
-from backend.tests.test_api import api  # noqa: F401
 from backend.tests.helpers.pipeline_members_only import make_pipeline, ticket
 
 ACTIVE = "status=open,doing,waiting,review,ready,declined"

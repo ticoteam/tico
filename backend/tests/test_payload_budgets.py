@@ -11,7 +11,6 @@ from backend import reconnects
 from backend import threads as CORE
 from backend.store import encode
 from backend.tests.helpers.api import get, headers, post, setup_attempt  # noqa: F401
-from backend.tests.test_api import api  # noqa: F401
 from backend.tests.helpers.batch import approval_for_ana
 from backend.tests.hold_rows import set_holds
 from backend.tests.helpers.payload_budgets import clone

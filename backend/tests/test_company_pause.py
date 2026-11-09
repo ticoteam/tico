@@ -1,6 +1,6 @@
 """The company-wide pause: one Hub record, who may pause and resume, and a refusal that changes nothing.
 
-Synthetic fixture team only (backend/tests/test_api.py): ana is the owner, ben an admin, cara a member.
+Synthetic fixture team only (backend/tests/helpers/api_app.py): ana is the owner, ben an admin, cara a member.
 """
 
 import pytest
@@ -10,7 +10,6 @@ from backend.auth import Identity
 from backend.store import Problem
 from backend.store import H
 from backend.tests.helpers.api import get, post  # noqa: F401
-from backend.tests.test_api import api  # noqa: F401
 
 
 def _record_rows(api):

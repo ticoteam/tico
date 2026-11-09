@@ -87,7 +87,7 @@ function auContainer(steps: AuStep[], key: string): {arr: AuStep[]; depth: numbe
 function auTriggerCard(a: AuAutomation) {
   const icons: Record<string, string> = AU_TRIGGER_ICONS, words: Record<string, string> = AU_TRIGGER_WORDS;
   const t = a.trigger, system = a.kind === 'system', src = system ? a.schedule || a.controls?.schedule || '' : auSource(t);
-  return `<div class="au-card au-trig${AU.ed?.kind === 'trigger' ? ' sel' : ''}" role="button" tabindex="0" data-open="trigger">
+  return `<div class="au-card au-trig${auPage().ed?.kind === 'trigger' ? ' sel' : ''}" role="button" tabindex="0" data-open="trigger">
     <div class="au-cr"><span class="nav-icon" aria-hidden="true">${system ? 'settings' : icons[String(t.type)] || 'schedule'}</span><span class="au-ct">${esc(system ? 'System job' : words[String(t.type)] || auCap(t.type))}</span></div>
     ${src || (t.filters || []).length ? `<div class="au-chips">${src ? `<span class="au-c1"${!system && t.type === 'event' && t.name ? ` title="${esc(t.name)}"` : ''}>${esc(src)}</span>` : ''}${(t.filters || []).map(c => `<span class="au-c1">${esc(auCondText(c))}</span>`).join('')}</div>` : ''}
   </div>`;
@@ -121,15 +121,15 @@ function auStepCard(s: AuStep) {
     const who = auActionArgs(s);
     body = who ? `<div class="au-chips"><span class="muted">${esc(who)}</span></div>` : '';
   }
-  return `<div class="au-card${s.enabled === false ? ' off' : ''}${AU.ed?.id === s.id ? ' sel' : ''}" role="button" tabindex="0" data-open="${esc(s.id)}">
+  return `<div class="au-card${s.enabled === false ? ' off' : ''}${auPage().ed?.id === s.id ? ' sel' : ''}" role="button" tabindex="0" data-open="${esc(s.id)}">
     <div class="au-cr">${auTag(s.type)}<span class="au-ct">${esc(title)}</span>${auStepSwitch(s)}</div>${body}</div>`;
 }
-const auStepSwitch = (s: AuStep) => AU.cur?.can_edit ? auSwitch(s.enabled !== false, (AU_STEP_WORDS[s.type] || 'Step') + ' on', `data-step="${esc(s.id)}"`) : '';
+const auStepSwitch = (s: AuStep) => auPage().cur?.can_edit ? auSwitch(s.enabled !== false, (AU_STEP_WORDS[s.type] || 'Step') + ' on', `data-step="${esc(s.id)}"`) : '';
 // Where a step goes in: a small "+" between two steps (a wider hit area than it looks), and an Add step button at the end
 // of a list. A viewer without edit rights sees the line between steps only, and nothing after the last.
 function auIns(key: string, i: number, end: boolean) {
   const at = `data-add="${esc(key)}|${i}" aria-haspopup="menu"`;
-  if (!AU.cur?.can_edit) return end ? '' : '<div class="au-ln"></div>';
+  if (!auPage().cur?.can_edit) return end ? '' : '<div class="au-ln"></div>';
   return end ? `<div class="au-ln au-ln-end"><button class="au-add au-add-end" type="button" ${at}><span aria-hidden="true">+</span>Add step</button></div>`
     : `<div class="au-ln"><button class="au-add" type="button" ${at} aria-label="Add step">+</button></div>`;
 }
@@ -140,7 +140,7 @@ function auStepsHTML(steps: AuStep[] | undefined, key: string): string {
 function auPathsHTML(s: AuStep): string {
   const cols: {p: AuPath; i: number | string; key: string; fb?: boolean}[] = [...(s.paths || []).map((p, i) => ({p, i, key: `${s.id}:${i}`})), {p: {name: 'Otherwise', steps: s.otherwise?.steps || []}, i: 'other', key: `${s.id}:other`, fb: true}];
   return `<div class="au-pb">
-    <div class="au-card au-pcard${s.enabled === false ? ' off' : ''}${AU.ed?.id === s.id ? ' sel' : ''}" role="button" tabindex="0" data-open="${esc(s.id)}">
+    <div class="au-card au-pcard${s.enabled === false ? ' off' : ''}${auPage().ed?.id === s.id ? ' sel' : ''}" role="button" tabindex="0" data-open="${esc(s.id)}">
       <div class="au-cr">${auTag('paths')}<span class="au-ct muted">${(s.paths || []).length + 1} paths</span>${auStepSwitch(s)}</div></div>
     <div class="au-paths" data-paths="${esc(s.id)}">${cols.map(({p, i, key, fb}) => `<div class="au-pth${fb ? ' fb' : ''}" data-col="${i}">
       <button class="au-pname" type="button" data-open="${esc(s.id)}" data-path="${i}">${esc(p.name || 'Path')}</button>
@@ -186,7 +186,7 @@ function auPathsGo(dot: Element) {
 // The "+" menu: every step type; Paths only at the end of a list that has none and under the nesting limit.
 function auAddMenuHTML(at: string) {
   const [key, i] = at.split('|') as [string, string];
-  const c = auContainer(AU.cur.steps, key);
+  const c = auContainer(auCur().steps, key);
   const paths = c && +i === c.arr.length && !c.arr.some(s => s.type === 'paths') && c.depth < AU_MAX_DEPTH;
   return Object.keys(AU_STEP_WORDS).filter(t => t !== 'paths' || paths).map(t =>
     `<button type="button" role="menuitem" data-ty="${t}"><span class="nav-icon" aria-hidden="true">${AU_STEP_ICONS[t]}</span>${AU_STEP_WORDS[t]}</button>`).join('');
@@ -195,7 +195,7 @@ const auNewId = () => 's_' + Math.random().toString(36).slice(2, 10);
 // The next free output name for a step kind: d1, d2… for Decide, l1… for LLM.
 function auNextOut(prefix: string) {
   const used = new Set(), walk: (steps: AuStep[] | undefined) => void = steps => (steps || []).forEach(s => { if (s.out) used.add(s.out); if (s.type === 'paths') [...(s.paths || []), s.otherwise || {}].forEach((p: AuPath) => walk(p.steps)); });
-  walk(AU.cur.steps);
+  walk(auCur().steps);
   let n = 1; while (used.has(prefix + n)) n++;
   return prefix + n;
 }
@@ -212,21 +212,22 @@ function auNewStep(type: string) {
 }
 // A new step opens in its editor; it joins the flow (a new version) when saved.
 function auInsert(type: string) {
-  const [key, i] = AU.menu.at.split('|');
+  const [key = '', i] = auNeed(auPage().menu, 'the + menu').at.split('|');   // C: split gives at least one part
   auMenuClose();
   const step = auNewStep(type);
-  auEdOpen({kind: 'step', id: step.id, step, insert: {key, index: +i}});
+  auEdOpen({kind: 'step', id: step.id, step, insert: {key, index: Number(i)}});
 }
 
 // A step's own switch saves at once: the flow changes, so it is a new version.
 async function auStepToggle(id: string, on: boolean) {
-  const steps = auClone(AU.cur.steps), hit = auFind(steps, id);
+  const steps = auClone(auCur().steps), hit = auFind(steps, id);
   if (!hit) return;
   hit.step.enabled = on;
-  await auWrite(auFlowBody(steps), (out: AuAutomation) => `${AU_STEP_WORDS[hit.step.type]} ${on ? 'on' : 'off'} · v${out.version}`);
+  await auWrite(auFlowBody(steps), (out: AuRow) => `${AU_STEP_WORDS[hit.step.type]} ${on ? 'on' : 'off'} · v${out.version}`);
 }
 // A steps write: the flow's destinations go back as they are, so a step saved from the list never drops them.
 function auFlowBody(steps: AuStep[]) {
+  auHave(AU);
   const dests = AU.cur?.destinations;
   return {steps: auCleanSteps(steps), ...(Array.isArray(dests) ? {destinations: auClone(dests)} : {})};
 }
@@ -278,7 +279,7 @@ interface AuBoardRule extends AuRule { next: string }
 interface AuBoardQuestion { id: string; text: string; min?: number | string; then: AuThen[]; to: string }
 /** The board's LLM: Sort, or a draft or reply turn; the destinations it picks from, its unsure default, who it runs as,
     and Sort's one minimum as stored. */
-interface AuBoardLlm { mode: string; prompt: string; to: string[]; default: string; as: string; min?: number | string | undefined }
+interface AuBoardLlm { mode: string; prompt: string; to: string[]; default: string; as: string; min?: number | string | null | undefined }
 /** The steps a board was read from, so a save keeps their ids and fields (sq: the Sort question's key). */
 interface AuBoardSrc { rules?: AuStep; qd?: AuStep; qf?: AuStep; sd?: AuStep; sf?: AuStep; sq?: string; ls?: AuStep }
 /** A flow read as a board (auBoardShape): its rules, its questions, its LLM, its destinations and the steps behind them. */
@@ -469,11 +470,12 @@ function auChainHTML(then: AuThen[] | undefined, to: string | undefined, next: s
   return {c: mv ? 'var(--g4)' : c, mv, html: chips.join('<span class="nav-icon au-bsep" aria-hidden="true">arrow_forward</span>')};
 }
 function auBoardRow(key: string, cond: string, chain: AuBoardChain, cls = '') {
+  auHave(AU);
   const sel = AU.ed?.kind === 'board' && `${AU.ed.part}:${AU.ed.i}` === key;
   return `<div class="au-br${cls}${sel ? ' sel' : ''}" role="button" tabindex="0" data-board="${key}" style="--c:${chain.c}">
     <div class="au-bc">${cond}</div><span class="au-bw${chain.mv ? ' mv' : ''}" aria-hidden="true"></span><div class="au-bch">${chain.html}</div></div>`;
 }
-const auBoardAdd = (key: string, words: string) => AU.cur?.can_edit ? `<button class="linkish au-badd" type="button" data-board="${key}:new">+ ${esc(words)}</button>` : '';
+const auBoardAdd = (key: string, words: string) => auPage().cur?.can_edit ? `<button class="linkish au-badd" type="button" data-board="${key}:new">+ ${esc(words)}</button>` : '';
 // The LLM's modes: Sort, then Sort + draft and Sort + reply on a message flow (a draft or a reply answers the message).
 // Off mail, and on a group's flow (no one to run a turn as), it sorts only.
 function auBoardModes(a: AuAutomation) {
@@ -497,7 +499,8 @@ function auBoardHTML(a: AuAutomation, b: AuBoard) {
   const L = b.llm, modes = auBoardModes(a);
   const seg = modes.length < 2 ? '' : `<span class="au-bseg" role="group" aria-label="Mode">${modes.map(([k, w]) =>
     `<button type="button" data-bmode="${k}" aria-pressed="${L.mode === k}"${edit ? '' : ' disabled'}>${esc(w)}</button>`).join('')}</span>`;
-  const dsel = (i: number) => AU.ed?.kind === 'board' && AU.ed.part === 'dest' && AU.ed.i === i ? ' sel' : '';
+  const dsel = (i: number) => auIs(AU, 'the Automations page') && AU.ed?.kind === 'board' && AU.ed.part === 'dest' && AU.ed.i === i ? ' sel' : '';
+  auHave(AU);   // the first read is in the markup below, after only pure string building
   return `<div class="au-board">${auAboutHTML(a)}
     <div class="au-btrig${AU.ed?.kind === 'trigger' ? ' sel' : ''}" role="button" tabindex="0" data-open="trigger"><span class="nav-icon" aria-hidden="true">${icons[String(t.type)] || 'schedule'}</span><b>${esc(src)}</b></div>
     <div class="au-bsp"></div>
@@ -519,6 +522,7 @@ function auBoardHTML(a: AuAutomation, b: AuBoard) {
 // The branch from the LLM into the destinations it may pick: drawn from where the boxes are, so it holds at any width
 // (a wrapped row branches into its first line only), and again whenever the board's width changes.
 function auBoardWire(pane: ParentNode) {
+  auHave(AU);
   AU.branchRO?.disconnect();
   const board = pane.querySelector('.au-board');
   if (!board) return;

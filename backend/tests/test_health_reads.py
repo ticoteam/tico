@@ -4,7 +4,6 @@ import re
 from collections import Counter
 
 from backend.tests.helpers.api import headers  # noqa: F401
-from backend.tests.test_api import api  # noqa: F401
 from backend.tests.helpers.assigned_start import advance, cancel, clock, sweep  # noqa: F401
 from backend.tests.helpers.status_reads import busy, setup
 from backend.tests.helpers.task_lanes import new_task, task_bot

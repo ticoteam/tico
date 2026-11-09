@@ -14,7 +14,6 @@ from backend import mailbox_access as MA
 from backend.entities import store as ES
 from backend.entities import visible as V
 from backend.tests.helpers.api import get, headers  # noqa: F401
-from backend.tests.test_api import api  # noqa: F401
 
 ANA, BEN, CARA = "human:ana", "human:ben", "human:cara"
 

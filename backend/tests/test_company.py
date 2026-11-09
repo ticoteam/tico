@@ -6,7 +6,6 @@ the company (spec: Head of Product, Strategy Bot, tests 1, 2 and 4; v3 10.11).""
 from backend import goal_asks as GA
 from backend.auth import Identity
 from backend.tests.helpers.api import get, headers, post  # noqa: F401
-from backend.tests.test_api import api  # noqa: F401
 from backend.tests.helpers.goal_asks import raise_level
 from backend.tests.helpers.company import bot, propose_why, with_strategy_bot
 

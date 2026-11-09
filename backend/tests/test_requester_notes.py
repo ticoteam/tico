@@ -2,7 +2,6 @@
 
 from backend import task_relations as TR
 from backend.store import H
-from backend.tests.test_api import api  # noqa: F401
 
 
 def dev_ticket(api, owner="bot:cpo", requester="bot:coo"):
