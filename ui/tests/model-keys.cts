@@ -7,6 +7,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const {html, uiFile, harnesses} = require('./support/page.cjs') as typeof import('./support/page.cjs');
 const {unrouted} = require('./support/routes.cjs') as typeof import('./support/routes.cjs');
+declare function loadSettings(): Promise<void>;
 
 // ---- model-sign-out
 // Sign out and Switch account from the app (ui/model-login.ts, backend/model_login.py). In a computer's pop-up on
@@ -22,10 +23,8 @@ const {unrouted} = require('./support/routes.cjs') as typeof import('./support/r
 // from runner-rs/harnesses/*.toml.
 type Row = {id?: string; kind?: string; state?: string; runtime?: string; profile?: string; polls?: number; [k: string]: unknown};
 
-declare global {
-  interface Window {
-    TicoModelLogin: {actionsHTML: (options: Record<string, unknown>) => string};
-  }
+interface PageWin {
+  TicoModelLogin: {actionsHTML: (options: Record<string, unknown>) => string};
 }
 
 async function signOut(browser: import('playwright').Browser) {
@@ -168,7 +167,7 @@ async function signOut(browser: import('playwright').Browser) {
     await page.setViewportSize({width: 1440, height: 900});
     // The same Muse capability enables key recovery and subscription switching for the computer's own login.
     const museActions = await page.evaluate(() => {
-      const actions = (options: Record<string, unknown>) => window.TicoModelLogin.actionsHTML({runnerId: 'box', runtime: 'musecode', ...options});
+      const actions = (options: Record<string, unknown>) => (window as unknown as PageWin).TicoModelLogin.actionsHTML({runnerId: 'box', runtime: 'musecode', ...options});
       const labels = (html: string) => {
         const row = document.createElement('div');
         row.innerHTML = html;

@@ -11,12 +11,13 @@ const fs = require('node:fs');
 const path = require('node:path');
 const {html, uiFile} = require('./support/page.cjs') as typeof import('./support/page.cjs');
 const {unrouted} = require('./support/routes.cjs') as typeof import('./support/routes.cjs');
+declare function loadSettings(): Promise<void>;
+declare function hlRefresh(): Promise<void>;
+declare var SETTINGS_TAB: string;
 
-declare global {
-  // u5: browser globals the page's own scripts define (see ui/app); declared once per name, same type everywhere.
-  var S: {config: {update: {current: string; latest: string; available: boolean; managed?: boolean}; company_name: string; onboarding_needed: boolean; providers_configured: boolean}; emps: {id: string; name: string}[]; me: {role: string; bot_admin?: boolean}; route: string};
-  function hlSummaryDraw(): void;
-}
+// u5: browser globals the page's own scripts define (see ui/app); declared once per name, same type everywhere.
+declare var S: {config: {update: {current: string; latest: string; available: boolean; managed?: boolean}; company_name: string; onboarding_needed: boolean; providers_configured: boolean}; emps: {id: string; name: string}[]; me: {role: string; bot_admin?: boolean}; route: string};
+declare function hlSummaryDraw(): void;
 const shotsDir = process.env.TICO_SHOTS || '';
 
 const check = (id: string, status: string) => ({id, label: id, status, summary: `${id} is ${status}`, fixes: []});

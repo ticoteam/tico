@@ -8,11 +8,9 @@ const fs = require('node:fs');
 const {html, uiFile} = require('./support/page.cjs') as typeof import('./support/page.cjs');
 const {unrouted} = require('./support/routes.cjs') as typeof import('./support/routes.cjs');
 
-declare global {
-  interface Window {
-    // u5: the recording stand-in (SCENE below) sets this on the overview frame's window.
-    __scene: {created: number; data: {groups: {members: {id: string; state: string}[]}[]}; updates: unknown[]; links: [string, string, string][]};
-  }
+interface PageWin {
+  // u5: the recording stand-in (SCENE below) sets this on the overview frame's window.
+  __scene: {created: number; data: {groups: {members: {id: string; state: string}[]}[]}; updates: unknown[]; links: [string, string, string][]};
 }
 
 const SCENE = `export function createBuilding(data) {
@@ -73,10 +71,10 @@ const SCENE = `export function createBuilding(data) {
     const frame = page.frameLocator('#overview-frame');
     await frame.locator('body[data-scene-ready]').waitFor();
     const scene = page.frames().find(f => f.url().includes('/overview/index.html'))!;
-    const rec = () => scene.evaluate(() => window.__scene);
+    const rec = () => scene.evaluate(() => (window as unknown as PageWin).__scene);
     const deskOf = (data: {groups: {members: {id: string; state: string}[]}[]}, id: string) => data.groups.flatMap(g => g.members).find(m => m.id === id)!;
     // The first status answer may land after the campus opens; the desks follow it then, not at the next poll.
-    await scene.waitForFunction(() => window.__scene.data.groups.flatMap(g => g.members).find(m => m.id === 'bot:editor')?.state === 'running',
+    await scene.waitForFunction(() => (window as unknown as PageWin).__scene.data.groups.flatMap(g => g.members).find(m => m.id === 'bot:editor')?.state === 'running',
       null, {polling: 100, timeout: 10000});
     assert.equal(deskOf((await rec()).data, 'bot:editor').state, 'running', 'live status before the replay');
 
@@ -91,9 +89,9 @@ const SCENE = `export function createBuilding(data) {
 
     // Playing forward, the message draws a link between the two desks and becomes a caption.
     await frame.locator('#replay-speeds [data-speed="3600"]').click();
-    await scene.waitForFunction(() => window.__scene.links.some(([a, b, k]) => a === 'bot:writer' && b === 'bot:editor' && k === 'message'), null, {polling: 100});
+    await scene.waitForFunction(() => (window as unknown as PageWin).__scene.links.some(([a, b, k]) => a === 'bot:writer' && b === 'bot:editor' && k === 'message'), null, {polling: 100});
     await frame.locator('#replay-captions li', {hasText: 'WRITER → EDITOR: Can you review the launch post?'}).waitFor();
-    await scene.waitForFunction(() => window.__scene.links.some(([, , k]) => k === 'handoff'), null, {polling: 100});
+    await scene.waitForFunction(() => (window as unknown as PageWin).__scene.links.some(([, , k]) => k === 'handoff'), null, {polling: 100});
 
     // Played to its end, the replay goes back to live.
     await frame.locator('#replay').waitFor({state: 'hidden'});

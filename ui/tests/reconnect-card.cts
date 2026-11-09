@@ -14,11 +14,9 @@ const GOOGLE = 'https://accounts.google.com/o/oauth2/v2/auth?client_id=acme';
 
 const now = Date.now(), at = (m: number) => new Date(now - m * 60000).toISOString();
 
-declare global {
-  // u5: browser globals the page's own scripts define (see ui/app); declared once per name, same type everywhere.
-  var S: {config: {update: {current: string; latest: string; available: boolean; managed?: boolean}; company_name: string; onboarding_needed: boolean; providers_configured: boolean}; emps: {id: string; name: string}[]; me: {role: string; bot_admin?: boolean}; route: string};
-  function taskModalShow(task: unknown): Promise<void>;
-}
+// u5: browser globals the page's own scripts define (see ui/app); declared once per name, same type everywhere.
+declare var S: {config: {update: {current: string; latest: string; available: boolean; managed?: boolean}; company_name: string; onboarding_needed: boolean; providers_configured: boolean}; emps: {id: string; name: string}[]; me: {role: string; bot_admin?: boolean}; route: string};
+declare function taskModalShow(task: unknown): Promise<void>;
 
 const quote = {id: 't-quote', title: 'Send the Acme renewal quote', owner_id: 'bot:botops', requester_id: 'human:ana', status: 'waiting',
   lane: 'company', version: 4, created_at: at(90), updated_at: at(3)};

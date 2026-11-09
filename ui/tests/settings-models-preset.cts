@@ -9,15 +9,13 @@ const fs = require('node:fs');
 const {html, uiFile} = require('./support/page.cjs') as typeof import('./support/page.cjs');
 const {unrouted} = require('./support/routes.cjs') as typeof import('./support/routes.cjs');
 
-declare global {
-  // u5: browser globals the page's own scripts define (see ui/app); declared once per name, same type everywhere.
-  var get: <T = unknown>(p: string, opts?: {fresh?: boolean}) => Promise<T>;
-  var SETTINGS_DATA: {machines: {harness_choices: Record<string, boolean>}[]; models: unknown[]};
-  var loadSettings: () => Promise<void>;
-  function providersFormHTML(view: unknown, models: unknown[] | null | undefined, id: string, editable?: boolean): string;
-  function providersWire(root: HTMLElement | null, view: unknown, models: unknown[] | null | undefined): void;
-  function providersCollect(root: HTMLElement): {preset: string; enabled: string[]};
-}
+// u5: browser globals the page's own scripts define (see ui/app); declared once per name, same type everywhere.
+declare var get: <T = unknown>(p: string, opts?: {fresh?: boolean}) => Promise<T>;
+declare var SETTINGS_DATA: {machines: {harness_choices: Record<string, boolean>}[]; models: unknown[]};
+declare var loadSettings: () => Promise<void>;
+declare function providersFormHTML(view: unknown, models: unknown[] | null | undefined, id: string, editable?: boolean): string;
+declare function providersWire(root: HTMLElement | null, view: unknown, models: unknown[] | null | undefined): void;
+declare function providersCollect(root: HTMLElement): {preset: string; enabled: string[]};
 (async () => {
   const browser = await chromium.launch({headless: true});
   try {

@@ -21,13 +21,11 @@ const SHOTS = process.env.GRAPH_SHOTS || '';
 
 const policy = {see: {everyone: true}, read: {everyone: true}, write: {everyone: true}};
 
-declare global {
-  // u5: browser globals the page's own scripts define (see ui/app); declared once per name, same type everywhere.
-  var OG: {tf: {x: number; y: number; s: number}; view: string; rules: unknown; goals: unknown};
-  function ogSelect(key: string): void;
-  function ogApply(): void;
-  function $(sel: string): HTMLElement;
-}
+// u5: browser globals the page's own scripts define (see ui/app); declared once per name, same type everywhere.
+declare var OG: {tf: {x: number; y: number; s: number}; view: string; rules: unknown; goals: unknown};
+declare function ogSelect(key: string): void;
+declare function ogApply(): void;
+declare function $(sel: string): HTMLElement;
 
 const bot = (name: string, display: string, extra: Record<string, unknown> = {}) => ({name, display_name: display, status: 'active', state: 'active', owner_id: 'ana', can_manage: true,
   users: [{id: 'ana', name: 'Ana'}], bot_owners: [], my_access: {see: true, read: true, write: true}, access_policy: policy, ...extra});

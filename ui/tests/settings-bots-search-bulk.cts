@@ -7,11 +7,13 @@ const fs = require('node:fs');
 const path = require('node:path');
 const {html, uiFile} = require('./support/page.cjs') as typeof import('./support/page.cjs');
 const {unrouted} = require('./support/routes.cjs') as typeof import('./support/routes.cjs');
+declare function loadSettings(): Promise<void>;
+declare function settingsShow(tab: string): void;
+declare var SETTINGS_DATA: {models: unknown[]; machines: {revoked_at?: string; harness_choices: Record<string, boolean>}[]};
+declare var S: {route: string; emps: {name: string; [key: string]: unknown}[]; me: {role: string; bot_admin?: boolean}; config: {update: {[key: string]: unknown}; [key: string]: unknown}};
 
-declare global {
-  // u5: browser globals the page's own scripts define (see ui/app); declared once per name, same type everywhere.
-  var SETTINGS_BOTS_VIEW: {selected: Set<string>};
-}
+// u5: browser globals the page's own scripts define (see ui/app); declared once per name, same type everywhere.
+declare var SETTINGS_BOTS_VIEW: {selected: Set<string>};
 
 type Choice = {model: string; harness: string; reasoning_effort: string};
 type Bot = {name: string; model: string; harness: string; reasoning_effort: string; revision: number;

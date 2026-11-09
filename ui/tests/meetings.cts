@@ -31,13 +31,11 @@ type World = {role?: string; sources: unknown[]; meetings: {id: string; [k: stri
   items?: {sections: Record<string, Item[]>}; importers: {source: string; [k: string]: unknown}[]; saved: unknown[];
   imported: {source?: string; title?: string; transcript?: string; notes?: string; [k: string]: unknown}[]; pushes: unknown[]; itemEdits: unknown[]};
 
-declare global {
-  interface Window {
-    // u5: page-side helpers this test drives (ui/meeting-importers.ts) and the popup stub it installs.
-    mountMeetingImporters: (host: HTMLElement) => Promise<void>;
-    openMeetingImporter: (source: string, name: string) => void;
-    opened: string[];
-  }
+interface PageWin {
+  // u5: page-side helpers this test drives (ui/meeting-importers.ts) and the popup stub it installs.
+  mountMeetingImporters: (host: HTMLElement) => Promise<void>;
+  openMeetingImporter: (source: string, name: string) => void;
+  opened: string[];
 }
 
 const NONE = [{id: 'import', name: 'Import', status: 'available'}, {id: 'close', name: 'Close', status: 'needs_setup'}];
@@ -154,13 +152,13 @@ async function shot(page: import('playwright').Page, name: string) {
       await page.evaluate(async () => {
         const host = document.createElement('section'); host.id = 'importers-fixture';
         document.querySelector('#main')!.appendChild(host);
-        await window.mountMeetingImporters(host);
+        await (window as unknown as PageWin).mountMeetingImporters(host);
       });
       assert.deepEqual(await page.locator('#importers-fixture form').evaluateAll((forms: HTMLElement[]) => forms.map(f => f.dataset.importer)),
         ['granola', 'zoom', 'google-meet']);
       await page.evaluate(() => {
         document.querySelector('#importers-fixture')!.remove();
-        window.openMeetingImporter('fireflies', 'Fireflies');
+        (window as unknown as PageWin).openMeetingImporter('fireflies', 'Fireflies');
       });
       const retired = page.locator('dialog[aria-label="Connect Fireflies"]');
       await retired.getByText('Fireflies is no longer available as an importer.', {exact: false}).waitFor();
@@ -222,12 +220,12 @@ async function shot(page: import('playwright').Page, name: string) {
       await page.locator('#notes-source').selectOption('granola');
       assert.deepEqual(await page.locator('.meet-row .note-title').allInnerTexts(), ['Renewal call with Dana']);
       await page.locator('#notes-source').selectOption('');
-      await page.evaluate(() => { window.opened = []; window.open = (url: string | URL | undefined) => (window.opened.push(url as string), {} as Window); });
+      await page.evaluate(() => { (window as unknown as PageWin).opened = []; window.open = (url: string | URL | undefined) => ((window as unknown as PageWin).opened.push(url as string), {} as Window); });
       await page.locator('.meet-row .note-title').first().click();   // a click opens the meeting here, never only in a window
       await page.locator('#notes-modal[open] #notes-detail').waitFor();
-      assert.deepEqual(await page.evaluate(() => window.opened), []);
+      assert.deepEqual(await page.evaluate(() => (window as unknown as PageWin).opened), []);
       await page.locator('#notes-modal-window').click();              // its own window is a choice
-      assert.match(await page.evaluate(() => window.opened[0]), /meeting=m1&window=1/);
+      assert.match(await page.evaluate(() => (window as unknown as PageWin).opened[0]), /meeting=m1&window=1/);
       assert.equal(await page.locator('#notes-modal').evaluate(d => (d as HTMLDialogElement).open), false);
       assert.deepEqual(errors, []);
       await context.close();

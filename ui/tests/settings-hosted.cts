@@ -13,11 +13,10 @@ const fs = require('node:fs');
 const {html, uiFile} = require('./support/page.cjs') as typeof import('./support/page.cjs');
 const path = require('node:path');
 const {unrouted} = require('./support/routes.cjs') as typeof import('./support/routes.cjs');
+declare function loadSettings(): Promise<void>;
 
-declare global {
-  // u5: browser globals the page's own scripts define (see ui/app); declared once per name, same type everywhere.
-  function renderSettingsSleep(): Promise<void>;
-}
+// u5: browser globals the page's own scripts define (see ui/app); declared once per name, same type everywhere.
+declare function renderSettingsSleep(): Promise<void>;
 const shots = process.env.TICO_SHOTS || '';
 
 (async () => {

@@ -7,16 +7,20 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const {html, uiFile, harnesses} = require('./support/page.cjs') as typeof import('./support/page.cjs');
 const {unrouted} = require('./support/routes.cjs') as typeof import('./support/routes.cjs');
+declare var loadSettings: () => Promise<void>;
+declare function route(): void;
+declare function get(path: string): Promise<unknown>;
+declare var SETTINGS_BOTS_VIEW: {q: string; selected: Set<string>; picking: boolean; taskOpen: Set<string>};
+declare var SETTINGS_DATA: {models: unknown[]; machines: {revoked_at?: string; harness_choices: Record<string, boolean>}[]};
+declare var S: {route: string; emps: {name: string; [key: string]: unknown}[]; me: {role: string; bot_admin?: boolean}; config: {update: {[key: string]: unknown}; [key: string]: unknown}};
 
-declare global {
-  // u5: browser globals the page's own scripts define (see ui/app); declared once per name, same type everywhere.
-  function refresh(force?: boolean): Promise<void>;
-  function applyConfig(config: unknown): void;
-  function apiError(j: unknown, r: unknown): string;
-  function taskBody(t: unknown): string;
-  function openTaskCreate(owner?: string, opts?: object): void;
-  function settingsEditInstructions(slug: string): void;
-}
+// u5: browser globals the page's own scripts define (see ui/app); declared once per name, same type everywhere.
+declare function refresh(force?: boolean): Promise<void>;
+declare function applyConfig(config: unknown): void;
+declare function apiError(j: unknown, r: unknown): string;
+declare function taskBody(t: unknown): string;
+declare function openTaskCreate(owner?: string, opts?: object): void;
+declare function settingsEditInstructions(slug: string): void;
 
 (async () => {
   const browser = await chromium.launch({headless: true, channel: (process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined) as string});

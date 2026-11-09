@@ -11,14 +11,18 @@ const path = require('node:path');
 const {execFileSync} = require('node:child_process');
 const {html, uiFile, harnesses} = require('./support/page.cjs') as typeof import('./support/page.cjs');
 const {unrouted} = require('./support/routes.cjs') as typeof import('./support/routes.cjs');
+declare function settingsShow(tab: string): void;
+declare function modelWords(id: string | null | undefined): string;
+declare function renderSettingsProviders(gatewaySaved?: boolean): Promise<void>;
+declare var SETTINGS: string;
+declare var SETTINGS_DATA: {models: unknown[]; machines: {revoked_at?: string; harness_choices: Record<string, boolean>}[]};
+declare var S: {route: string; emps: {name: string; [key: string]: unknown}[]; me: {role: string; bot_admin?: boolean}; config: {update: {[key: string]: unknown}; [key: string]: unknown}};
 const shotsDir = process.env.TICO_SHOTS || '';
 
-declare global {
-  // u5: browser globals the page's own scripts define (see ui/app); declared once per name, same type everywhere.
-  function settingsEditBot(slug?: string, inline?: boolean): void;
-  function settingsChoiceLabel(harness: string, model: string | null | undefined, effort: string): string;
-  function renderSettingsBots(): void;
-}
+// u5: browser globals the page's own scripts define (see ui/app); declared once per name, same type everywhere.
+declare function settingsEditBot(slug?: string, inline?: boolean): void;
+declare function settingsChoiceLabel(harness: string, model: string | null | undefined, effort: string): string;
+declare function renderSettingsBots(): void;
 
 (async () => {
   const served = JSON.parse(execFileSync(process.env.TICO_PYTHON || 'python3', ['-c',

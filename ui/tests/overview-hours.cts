@@ -9,11 +9,9 @@ const fs = require('node:fs');
 const {html, uiFile} = require('./support/page.cjs') as typeof import('./support/page.cjs');
 const {unrouted} = require('./support/routes.cjs') as typeof import('./support/routes.cjs');
 
-declare global {
-  // u5: browser globals the page's own scripts define (see ui/app); declared once per name, same type everywhere.
-  function overviewHoursLoad(): Promise<void>;
-  var SETTINGS_TAB: string;
-}
+// u5: browser globals the page's own scripts define (see ui/app); declared once per name, same type everywhere.
+declare function overviewHoursLoad(): Promise<void>;
+declare var SETTINGS_TAB: string;
 
 const SCENE = `export function createBuilding() {
   document.body.dataset.sceneReady = 'true'; document.querySelector('#loading').hidden = true;

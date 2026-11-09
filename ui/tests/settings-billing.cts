@@ -10,14 +10,13 @@ const fs = require('node:fs');
 const path = require('node:path');
 const {html, uiFile} = require('./support/page.cjs') as typeof import('./support/page.cjs');
 const {unrouted} = require('./support/routes.cjs') as typeof import('./support/routes.cjs');
+declare var SETTINGS_TAB: string;
 const shots = process.env.TICO_SHOTS || '';
 
-declare global {
-  // u5: browser globals the page's own scripts define (see ui/app); declared once per name, same type everywhere.
-  function renderSettingsBilling(): Promise<void>;
-  var BILLING_MONTH: string;
-  function settingsShow(tab: string): void;
-}
+// u5: browser globals the page's own scripts define (see ui/app); declared once per name, same type everywhere.
+declare function renderSettingsBilling(): Promise<void>;
+declare var BILLING_MONTH: string;
+declare function settingsShow(tab: string): void;
 
 
 (async () => {

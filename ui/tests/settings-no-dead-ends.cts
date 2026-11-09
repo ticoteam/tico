@@ -20,6 +20,8 @@ const fs = require('node:fs');
 const path = require('node:path');
 const {html, uiFile} = require('./support/page.cjs') as typeof import('./support/page.cjs');
 const {unrouted} = require('./support/routes.cjs') as typeof import('./support/routes.cjs');
+declare function settingsShow(tab: string): void;
+declare var SETTINGS_TAB: string;
 
 // Names the router or settingsShow takes besides the tabs and their aliases (ui/app/router.ts, settingsShow).
 const SPECIAL = ['models', 'providers', 'tags', 'types', 'runs', 'roadmap', 'subscriptions',
@@ -44,16 +46,14 @@ function settingsLinks() {
 
 const MAY = {read: true, organize: true, send: false, change_calendar: false};
 
-declare global {
-  // u5: browser globals the page's own scripts define (see ui/app); declared once per name, same type everywhere.
-  var SETTINGS_ADDRESS: string;
-  function route(): void;
-  var SETTINGS: string;
-  var SETTINGS_TABS: string[];
-  var SETTINGS_ALIAS: Record<string, string>;
-  var SETTINGS_REVEAL: boolean;
-  var S: {config: {update: {current: string; latest: string; available: boolean; managed?: boolean}; company_name: string; onboarding_needed: boolean; providers_configured: boolean}; emps: {id: string; name: string}[]; me: {role: string; bot_admin?: boolean}; route: string};
-}
+// u5: browser globals the page's own scripts define (see ui/app); declared once per name, same type everywhere.
+declare var SETTINGS_ADDRESS: string;
+declare function route(): void;
+declare var SETTINGS: string;
+declare var SETTINGS_TABS: string[];
+declare var SETTINGS_ALIAS: Record<string, string>;
+declare var SETTINGS_REVEAL: boolean;
+declare var S: {config: {update: {current: string; latest: string; available: boolean; managed?: boolean}; company_name: string; onboarding_needed: boolean; providers_configured: boolean}; emps: {id: string; name: string}[]; me: {role: string; bot_admin?: boolean}; route: string};
 
 const MAILBOX = {id: 'mb1', address: 'support@acme.example', provider: 'google_workspace', kind: 'shared', person_id: null,
   person_name: '', connection: 'workspace', status: 'active', state: 'connected', level: 'read_write', routines: []};

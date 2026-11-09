@@ -7,6 +7,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const {html, uiFile, harnesses} = require('./support/page.cjs') as typeof import('./support/page.cjs');
 const {unrouted} = require('./support/routes.cjs') as typeof import('./support/routes.cjs');
+declare function loadSettings(): Promise<void>;
 
 // ---- model-login-hosted
 // Sign in on a hosted Tico (config `hosted`, TICO_HOSTED; ui/model-login.ts). The person has no terminal on the

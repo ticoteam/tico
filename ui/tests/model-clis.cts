@@ -9,11 +9,9 @@ const fs = require('node:fs');
 const {html, uiFile} = require('./support/page.cjs') as typeof import('./support/page.cjs');
 const {unrouted} = require('./support/routes.cjs') as typeof import('./support/routes.cjs');
 
-declare global {
-  // u5: browser globals the page's own scripts define (see ui/app); declared once per name, same type everywhere.
-  var SETTINGS_DATA: {machines: {harness_choices: Record<string, boolean>}[]; models: unknown[]};
-  var loadSettings: () => Promise<void>;
-}
+// u5: browser globals the page's own scripts define (see ui/app); declared once per name, same type everywhere.
+declare var SETTINGS_DATA: {machines: {harness_choices: Record<string, boolean>}[]; models: unknown[]};
+declare var loadSettings: () => Promise<void>;
 (async () => {
   const browser = await chromium.launch({headless: true, channel: (process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined) as string});
   try {

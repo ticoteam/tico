@@ -8,13 +8,11 @@ const fs = require('node:fs');
 const {html, uiFile} = require('./support/page.cjs') as typeof import('./support/page.cjs');
 const {unrouted} = require('./support/routes.cjs') as typeof import('./support/routes.cjs');
 
-declare global {
-  interface Window {
-    // What the native shell's bridge records: each postMessage as [name, body]; the features and the multi-org answer.
-    __posted: [string, unknown][];
-    ticoNative: (name: string) => {postMessage: (body: unknown) => Promise<unknown>};
-    ticoNativeFeatures: string[];
-  }
+interface PageWin {
+  // What the native shell's bridge records: each postMessage as [name, body]; the features and the multi-org answer.
+  __posted: [string, unknown][];
+  ticoNative: (name: string) => {postMessage: (body: unknown) => Promise<unknown>};
+  ticoNativeFeatures: string[];
 }
 
 async function open(browser: import('playwright').Browser, {features, many}: {features: string[] | null; many: boolean}) {
@@ -25,13 +23,13 @@ async function open(browser: import('playwright').Browser, {features, many}: {fe
   await page.addInitScript(({features, many}: {features: string[] | null; many: boolean}) => {
     (window as unknown as {EventSource: unknown}).EventSource = undefined;
     Object.defineProperty(navigator, 'platform', {get: () => 'MacIntel'});
-    window.__posted = [];
+    (window as unknown as PageWin).__posted = [];
     if (!features) return;
-    window.ticoNative = (name: string) => ({postMessage: (body: unknown) => {
-      window.__posted.push([name, body]);
+    (window as unknown as PageWin).ticoNative = (name: string) => ({postMessage: (body: unknown) => {
+      (window as unknown as PageWin).__posted.push([name, body]);
       return Promise.resolve(name === 'multiOrg' ? many : null);
     }});
-    window.ticoNativeFeatures = ['openWindow', 'checkForUpdates', 'showLog', ...features];
+    (window as unknown as PageWin).ticoNativeFeatures = ['openWindow', 'checkForUpdates', 'showLog', ...features];
   }, {features, many});
   await page.route('**/*', async (route: Route) => {
     const p = new URL(route.request().url()).pathname;
@@ -50,7 +48,7 @@ async function open(browser: import('playwright').Browser, {features, many}: {fe
   await page.locator('#account .account-email', {hasText:'ana@acme.example'}).waitFor();
   return {page, errors};
 }
-const posted = (page: import('playwright').Page, name: string) => page.evaluate((n: string) => window.__posted.filter(([k]) => k === n).map(([, body]) => body), name);
+const posted = (page: import('playwright').Page, name: string) => page.evaluate((n: string) => (window as unknown as PageWin).__posted.filter(([k]) => k === n).map(([, body]) => body), name);
 
 (async () => {
   const browser = await webkit.launch({headless:true});
@@ -59,7 +57,7 @@ const posted = (page: import('playwright').Page, name: string) => page.evaluate(
   // Two orgs in the app: its own name and email go to the app once; both items show and post to the app.
   {
     const {page, errors} = await open(browser, {features:ALL, many:true});
-    await page.waitForFunction(() => window.__posted.some(([n]) => n === 'orgInfo'));
+    await page.waitForFunction(() => (window as unknown as PageWin).__posted.some(([n]) => n === 'orgInfo'));
     assert.deepEqual(await posted(page, 'orgInfo'), [{name:'Acme Lights', email:'ana@acme.example'}]);
     await page.locator('#account').click();
     await page.locator('#org-switch').waitFor({state:'visible'});
@@ -79,7 +77,7 @@ const posted = (page: import('playwright').Page, name: string) => page.evaluate(
     const {page, errors} = await open(browser, {features:ALL, many:false});
     await page.locator('#account').click();
     await page.locator('#org-add').waitFor({state:'visible'});
-    await page.waitForFunction(() => window.__posted.some(([n]) => n === 'multiOrg'));
+    await page.waitForFunction(() => (window as unknown as PageWin).__posted.some(([n]) => n === 'multiOrg'));
     assert.equal(await page.locator('#org-switch').isHidden(), true);
     assert.deepEqual(errors, []);
     await page.close();
@@ -92,7 +90,7 @@ const posted = (page: import('playwright').Page, name: string) => page.evaluate(
     await page.locator('#account-menu').waitFor({state:'visible'});
     assert.equal(await page.locator('#org-switch').isHidden(), true);
     assert.equal(await page.locator('#org-add').isHidden(), true);
-    assert.deepEqual(await page.evaluate(() => window.__posted.map(([n]) => n).filter(n => /org/i.test(n))), []);
+    assert.deepEqual(await page.evaluate(() => (window as unknown as PageWin).__posted.map(([n]) => n).filter(n => /org/i.test(n))), []);
     assert.deepEqual(errors, []);
     await page.close();
   }

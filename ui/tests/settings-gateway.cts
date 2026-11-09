@@ -9,14 +9,14 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const {html, uiFile} = require('./support/page.cjs') as typeof import('./support/page.cjs');
 const {unrouted} = require('./support/routes.cjs') as typeof import('./support/routes.cjs');
+declare function loadSettings(): Promise<void>;
+declare var S: {route: string; emps: {name: string; [key: string]: unknown}[]; me: {role: string; bot_admin?: boolean}; config: {update: {[key: string]: unknown}; [key: string]: unknown}};
 
-declare global {
-  // u5: browser globals the page's own scripts define (see ui/app); declared once per name, same type everywhere.
-  function renderSettingsProviders(gatewaySaved?: boolean): Promise<void>;
-  function providersModels(view: {providers: unknown[]; default: {model: string}}, models: unknown[], enabled: string[]): {label: string}[];
-  function settingsModelPickName(id: string): string;
-  function modelWords(id: string | null | undefined): string;
-}
+// u5: browser globals the page's own scripts define (see ui/app); declared once per name, same type everywhere.
+declare function renderSettingsProviders(gatewaySaved?: boolean): Promise<void>;
+declare function providersModels(view: {providers: unknown[]; default: {model: string}}, models: unknown[], enabled: string[]): {label: string}[];
+declare function settingsModelPickName(id: string): string;
+declare function modelWords(id: string | null | undefined): string;
 
 (async () => {
   const browser = await chromium.launch({headless: true});

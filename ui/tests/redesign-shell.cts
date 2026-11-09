@@ -10,6 +10,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const {html, uiFile} = require('./support/page.cjs') as typeof import('./support/page.cjs');
 const {unrouted} = require('./support/routes.cjs') as typeof import('./support/routes.cjs');
+declare var S: {route: string; emps: {name: string; [key: string]: unknown}[]; me: {role: string; bot_admin?: boolean}; config: {update: {[key: string]: unknown}; [key: string]: unknown}};
 const uiDir = path.join(__dirname, '..');
 const fixture = (name: string): unknown => JSON.parse(fs.readFileSync(path.join(__dirname, 'fixtures', name), 'utf8'));
 const roster = fixture('redesign-roster.json') as {employees: Record<string, unknown>[]; humans: {people: Record<string, unknown>[]}};
@@ -19,17 +20,15 @@ const shots = process.env.TICO_SCREENSHOT_DIR;
 const shot = async (page: import('playwright').Page, name: string) => { if (shots) await page.screenshot({animations: 'disabled', path: path.join(shots, `redesign-${name}.png`)}); };
 const PHONE = {width: 390, height: 844}, DESKTOP = {width: 1440, height: 900};
 
-declare global {
-  // u5: browser globals the page's own scripts define (see ui/app); declared once per name, same type everywhere.
-  function recruitPlaces(): [string, unknown][];
-  function cpSourceChoices(): [string, unknown][];
-  function finHelper(id: string): unknown;
-  function budgetTree(data: {bots: Record<string, unknown>}): {nodes: Map<string, {parent: {key: string}}>};
-  function botRow(slug: string): {reports_to: string; org_parent: string; team: string};
-  function renderTree(): void;
-  function post(path: string, body: unknown): Promise<unknown>;
-  function v2MessageHTML(m: {id: string; sender_id: string; body: string; created_at: string; [k: string]: unknown}): string;
-}
+// u5: browser globals the page's own scripts define (see ui/app); declared once per name, same type everywhere.
+declare function recruitPlaces(): [string, unknown][];
+declare function cpSourceChoices(): [string, unknown][];
+declare function finHelper(id: string): unknown;
+declare function budgetTree(data: {bots: Record<string, unknown>}): {nodes: Map<string, {parent: {key: string}}>};
+declare function botRow(slug: string): {reports_to: string; org_parent: string; team: string};
+declare function renderTree(): void;
+declare function post(path: string, body: unknown): Promise<unknown>;
+declare function v2MessageHTML(m: {id: string; sender_id: string; body: string; created_at: string; [k: string]: unknown}): string;
 
 
 const PHONE_BAR = ['Team', 'Search', 'Assistant', 'Tasks', 'Updates', 'More'];   // Assistant: the Liquid Dot in the centre slot
