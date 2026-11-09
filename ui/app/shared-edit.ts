@@ -1,22 +1,59 @@
 /* Shared drafts and authorized place subscriptions for meeting items and task pages. */
 'use strict';
 
+type SharedValues = Record<string, unknown>;
+// An item as the server returns it: its version, and its fields (a `detail` group holds the editable details).
+interface SharedItem { version: number | null }
+interface SharedDraft {
+  patch: SharedValues; dirty: SharedValues; flight: Promise<unknown> | null; error: string; timer: number;
+  version: number | null; current: SharedItem | null; base?: SharedItem | undefined;
+  sending?: boolean; closed?: unknown; closedAcknowledged?: boolean; inflightPatch?: SharedValues | null;
+}
+interface SharedDraftOptions {
+  write: (patch: SharedValues, version: number | null) => Promise<SharedItem>;
+  current?: (error: unknown) => unknown;
+  settled?: () => unknown;
+}
+interface SharedPlaceHandle {
+  id: string; place: string; session: string;
+  source?: EventSource; timer?: number; safety?: number;
+  visibility?: () => void; leave?: () => void;
+}
+interface SharedPlaceState { shared?: SharedPlaceHandle | null | undefined }
+interface SharedPlaceOptions {
+  id: string; place: string; topic: string; filter: string;
+  changed: (data?: unknown) => void; gone: () => void; present: (words: string) => void;
+}
+interface SharedPresence { actors?: {actor: string; name: string}[] }
+
+function sharedRecord(value: unknown): value is SharedValues { return typeof value === 'object' && value !== null; }
+function sharedItem(value: unknown): value is SharedItem { return typeof value === 'object' && value !== null; }
+
 function sharedDraft() {
   return {patch: {}, dirty: {}, flight: null, error: '', timer: 0, version: null, current: null};
 }
-const sharedDraftValue = (item, key, group = '') => (group ? item?.[group]?.[key] : item?.[key]) ?? '';
-function sharedDraftPatch(draft, key, value, group = '') {
+const sharedDraftValue = (item: unknown, key: string, group = ''): unknown => {
+  const holder = group ? (sharedRecord(item) ? item[group] : undefined) : item;
+  return (sharedRecord(holder) ? holder[key] : undefined) ?? '';
+};
+function sharedDraftPatch(draft: SharedDraft, key: string, value: unknown, group = ''): void {
   if (!(key in draft.dirty)) draft.dirty[key] = sharedDraftValue(draft.base, key, group);
-  if (group) (draft.patch[group] ||= {})[key] = value;
+  if (group) {
+    const nested = draft.patch[group];
+    (sharedRecord(nested) ? nested : (draft.patch[group] = {}))[key] = value;
+  }
   else draft.patch[key] = value;
 }
-function sharedDraftMerge(a, b) {
-  return {...a, ...b, ...((a.detail || b.detail) ? {detail: {...a.detail, ...b.detail}} : {})};
+function sharedDraftMerge<A, B>(a: A, b: B): A & B {
+  const detailA = sharedRecord(a) ? a.detail : undefined, detailB = sharedRecord(b) ? b.detail : undefined;
+  return {...a, ...b, ...((detailA || detailB) ? {detail: {...(sharedRecord(detailA) ? detailA : {}), ...(sharedRecord(detailB) ? detailB : {})}} : {})};
 }
-function sharedDraftAccepted(draft, patch, item) {
-  for (const [group, fields] of [['', Object.keys(patch).filter(k => k !== 'detail')], ['detail', Object.keys(patch.detail || {})]]) {
+function sharedDraftAccepted(draft: SharedDraft, patch: SharedValues, item: SharedItem): void {
+  const groups: [string, string[]][] = [['', Object.keys(patch).filter(k => k !== 'detail')], ['detail', Object.keys(sharedRecord(patch.detail) ? patch.detail : {})]];
+  for (const [group, fields] of groups) {
+    const pending = group ? draft.patch[group] : draft.patch;
     for (const key of fields) {
-      if (key in (group ? draft.patch[group] || {} : draft.patch)) draft.dirty[key] = sharedDraftValue(item, key, group);
+      if (sharedRecord(pending) && key in pending) draft.dirty[key] = sharedDraftValue(item, key, group);
       else delete draft.dirty[key];
     }
   }
@@ -24,49 +61,53 @@ function sharedDraftAccepted(draft, patch, item) {
   draft.base = Number(draft.base?.version) > Number(item.version) ? draft.base : item;
   draft.version = item.version; draft.current = null;
 }
-async function sharedDraftSave(draft, options) {
+async function sharedDraftSave(draft: SharedDraft, options: SharedDraftOptions): Promise<unknown> {
   clearTimeout(draft.timer);
   if (draft.closed || draft.closedAcknowledged || draft.flight || draft.sending || !Object.keys(draft.patch).length) return draft.flight?.catch(() => {});
   const patch = draft.patch;
   draft.patch = {}; draft.error = ''; draft.inflightPatch = patch;
-  draft.flight = Promise.resolve().then(() => options.write(patch, draft.version));
-  try { sharedDraftAccepted(draft, patch, await draft.flight); }
+  const flight = Promise.resolve().then(() => options.write(patch, draft.version));
+  draft.flight = flight;
+  try { sharedDraftAccepted(draft, patch, await flight); }
   catch (error) {
-    draft.patch = sharedDraftMerge(patch, draft.patch); draft.error = error.message;
+    draft.patch = sharedDraftMerge(patch, draft.patch); draft.error = errorMessage(error, '');
     const current = await options.current?.(error);
-    if (current) { draft.current = current; draft.version = current.version; draft.base = current; }
+    if (sharedItem(current)) { draft.current = current; draft.version = current.version; draft.base = current; }
   }
   finally { draft.flight = null; draft.inflightPatch = null; }
   if (!draft.error && Object.keys(draft.patch).length && !draft.sending) return sharedDraftSave(draft, options);
   await options.settled?.();
 }
-const sharedEdited = (actor, name = actorLabel) => actor ? `${name(actor)} edited · just now` : '';
+const sharedEdited = (actor: string | undefined, name: (actor: string) => string = actorLabel): string => actor ? `${name(actor)} edited · just now` : '';
 
-function sharedPlaceStop(state) {
+function sharedPlaceStop(state: SharedPlaceState): void {
   const shared = state.shared;
   if (!shared) return;
   state.shared = null;
   shared.source?.close(); clearInterval(shared.timer); clearInterval(shared.safety);
-  document.removeEventListener('visibilitychange', shared.visibility);
-  window.removeEventListener('pagehide', shared.leave);
-  shared.leave();
+  if (shared.visibility) document.removeEventListener('visibilitychange', shared.visibility);
+  if (shared.leave) window.removeEventListener('pagehide', shared.leave);
+  shared.leave?.();
 }
-function sharedPlaceStart(state, options) {
+function sharedPlaceStart(state: SharedPlaceState, options: SharedPlaceOptions): void {
   const {id, place, topic, filter, changed, gone, present} = options;
   if (state.shared?.place === place) return;
   sharedPlaceStop(state);
-  const shared = state.shared = {id, place, session: newRequestId()};
+  const shared: SharedPlaceHandle = state.shared = {id, place, session: newRequestId()};
   const current = () => state.shared === shared;
-  const lost = error => { if (current() && [403, 404].includes(error.status)) gone(); };
+  const lost = (error: unknown) => {
+    const status = typeof error === 'object' && error !== null && 'status' in error ? error.status : undefined;
+    if (current() && typeof status === 'number' && [403, 404].includes(status)) gone();
+  };
   const presence = async () => {
     try {
-      const reply = await get('/v2/presence?place=' + encodeURIComponent(place), {fresh: true});
+      const reply = await get<SharedPresence>('/v2/presence?place=' + encodeURIComponent(place), {fresh: true});
       if (!current()) return;
       const others = (reply.actors || []).filter(a => a.actor !== 'human:' + S.me?.id);
       present(others.length ? `${others.map(a => a.name).join(', ')} ${others.length === 1 ? 'is' : 'are'} here` : '');
     } catch (error) { lost(error); }
   };
-  const heartbeat = async leave => {
+  const heartbeat = async (leave: boolean) => {
     try {
       await post('/v2/presence', {place, session_id: shared.session, gone: leave}, undefined, {keepalive: leave});
       if (!leave && current()) await presence();
@@ -83,7 +124,7 @@ function sharedPlaceStart(state, options) {
   if (typeof EventSource !== 'undefined') {
     const query = new URLSearchParams({topics: topic + ',presence', [filter]: id, place});
     const source = shared.source = new EventSource(API + '/v2/events?' + query);
-    source.addEventListener(topic, event => {
+    source.addEventListener(topic, (event: MessageEvent) => {
       if (!current()) return;
       const data = JSON.parse(event.data);
       if (data.gone) { gone(); return; }

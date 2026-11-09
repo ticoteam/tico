@@ -37,7 +37,7 @@ from . import posting
 from . import raw_totals, runs
 from . import setup as setup_mod
 from . import books_link, books_sync, delivery, rights, sync, tax, usage
-from . import vendors
+from . import statement_upload, vendors
 from .context import APPROVER_KEY, Ctx, is_set_up, load
 from .core import kinds as K
 from .core import org as O
@@ -127,6 +127,7 @@ PLANNERS: dict[str, handlers.Planner] = {
     "connection_sync": banking.connection_sync,
     "connection_disconnect": banking.connection_disconnect,
     "connection_map": banking.connection_map,
+    "money_account_add": banking.money_account_add,
     "connection_settings": banking.connection_settings,
     "bills_address_set": bills_address_set,
     "books_disconnect": books_disconnect,
@@ -147,6 +148,7 @@ PLANNERS: dict[str, handlers.Planner] = {
     **receipts.PLANNERS,
     **subscriptions.PLANNERS,
     **vendors.PLANNERS,
+    **statement_upload.PLANNERS,
 }
 assert set(PLANNERS) == set(K.LIVE)
 
@@ -1120,6 +1122,7 @@ DEV_COPY_KEPT = (
     "fin_view_grants",
     "fin_view_versions",
     "fin_raw_imports",
+    "fin_statement_uploads",
     "fin_close_snapshots",
     "fin_tax_jurisdictions",
     "fin_tax_seeds",
@@ -1144,6 +1147,7 @@ DEV_COPY_KEPT = (
 DEV_COPY_EMPTIED = (
     "fin_card_auths",
     "fin_card_saves",
+    "fin_statement_previews",
     "fin_payments",
     "fin_transfers",
     "fin_recipients",

@@ -9,7 +9,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const {html, uiFile} = require('./support/page.cjs');
 const {unrouted} = require('./support/routes.cjs');
-const {replay: recorderLiveSharing} = require('../../recorder/tests/live-sharing.cjs');
+const {replay: recorderLiveSharing} = require('../../recorder/tests/live-sharing.cts');
 
 const ago = hours => new Date(Date.now() - hours * 36e5).toISOString();
 const meeting = (id, title, source, hours, extra = {}) => ({id, title, source, kind: 'meeting', status: 'done', started: ago(hours),

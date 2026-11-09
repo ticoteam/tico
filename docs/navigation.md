@@ -42,7 +42,7 @@ For example, Repositories says **Ask Ana Rivera to connect GitHub** when Ana own
 | See rules or goals on the team chart, by bot | Company → Graph (`#/overview/graph`, `?view=goals` for goals) ([Company](overview.md#graph)) |
 | Open a page full size | Tap its card, or `#/page/<id>` ([Pages](pages.md)) |
 | Read or write the team's strategy, publish a version | Company → Strategy (`#/strategy`); the owner writes and publishes, the Strategy Bot proposes ([Strategy](strategy.md)); Lenses on that page run a framework against it ([Lenses](lenses.md)) |
-| See the market, its map, or ask the Librarian about it | Strategy → Market (`#/strategy/market`; `#/market` redirects there); **Open map** for the graph |
+| See the market, its map, or ask the Librarian about it | Company → Strategy → Market (`#/strategy/market`; `#/market` redirects there); **Open map** for the graph |
 | See growth numbers and their sources, or marketing tasks | Company → Growth (`#/growth`; Sources is a link on the page, or in Settings for the owner and admins) ([Growth](growth.md)). Marketing tasks are on the Tasks page, type Marketing |
 | Review goals and KPIs | Goals; a goal's **Bet** picker links it to a strategy bet |
 | See the Company page, or share it | Company → Share (`#/overview/company-page`); the share icon has transparency, the address and readers. Owners and admins only ([Company page](company-page.md)) |
