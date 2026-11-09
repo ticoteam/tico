@@ -4,7 +4,7 @@ description: Decide each review or QA comment on a Dev ticket, act on it or answ
 ---
 # Answer each review comment
 
-When to use: at every fix step (Review 1 Fixes, Review 2 Fixes, QA Fixes), before you push.
+When to use: at every fix step (Review 1 Fixes, Review 2 Fixes, and QA Fixes on a board with QA), before you push.
 
 Steps:
 1. List every comment on the current head, with its label if it has one. A comment labelled `issue (blocking):` must be acted
