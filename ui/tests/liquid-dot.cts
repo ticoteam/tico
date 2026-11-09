@@ -2,17 +2,17 @@
 // under 20px only idles (or holds still); an unknown state idles; and setting a drawn dot follows the same rules. The
 // idle scheduler swaps variants every 6-14 s and leaves no timer in a hidden tab; every keyframe in liquid-dot.css
 // moves transform or opacity only, and the blob's shape never animates.
-const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const vm = require('node:vm');
-const path = require('node:path');
+const assert: typeof import('node:assert/strict') = require('node:assert/strict');
+const fs: typeof import('node:fs') = require('node:fs');
+const vm: typeof import('node:vm') = require('node:vm');
+const path: typeof import('node:path') = require('node:path');
 
 // A page, as much of one as the scheduler needs: a tab that can be hidden, and timers we can see.
-const timers = new Map();
-let nextTimer = 1, onVisibility = null;
-const page = {hidden: false, addEventListener: (type, fn) => { if (type === 'visibilitychange') onVisibility = fn; }, querySelectorAll: () => []};
-const context = vm.createContext({document: page, setTimeout: (fn, ms) => { timers.set(nextTimer, ms); return nextTimer++; },
-  clearTimeout: id => timers.delete(id), matchMedia: () => ({matches: false}), HTMLElement: class HTMLElement {}});
+const timers = new Map<number, number>();
+let nextTimer = 1, onVisibility: (() => void) | null = null;
+const page = {hidden: false, addEventListener: (type: string, fn: () => void) => { if (type === 'visibilitychange') onVisibility = fn; }, querySelectorAll: () => []};
+const context = vm.createContext({document: page, setTimeout: (fn: () => void, ms: number) => { timers.set(nextTimer, ms); return nextTimer++; },
+  clearTimeout: (id: number) => timers.delete(id), matchMedia: () => ({matches: false}), HTMLElement: class HTMLElement {}});
 vm.runInContext(fs.readFileSync(path.join(__dirname, '../../build/ui/app/liquid-dot.js'), 'utf8')
   + '\n;globalThis.api = {ldotState, ldotWord, ldotChatState, ldotHTML, ldotSet, ldotNextIdle, ldotSchedule, ldotScheduled, LDOT_IDLES, LDOT_IDLE_MS};', context);
 const {ldotState, ldotWord, ldotChatState, ldotHTML, ldotSet, ldotNextIdle, ldotSchedule, ldotScheduled, LDOT_IDLES, LDOT_IDLE_MS} = context.api;
@@ -53,19 +53,19 @@ for (const now of LDOT_IDLES) for (const roll of [0, .2, .39, .4, .6, .99]) {
   const next = ldotNextIdle(now, roll);
   assert.ok(LDOT_IDLES.includes(next) && next !== now, `${now} @${roll} -> ${next}`);
 }
-assert.deepEqual(new Set(LDOT_IDLES.flatMap(now => [0, .25, .5, .75, .99].map(roll => ldotNextIdle(now, roll)))), new Set(LDOT_IDLES));
+assert.deepEqual(new Set(LDOT_IDLES.flatMap((now: string) => [0, .25, .5, .75, .99].map((roll: number) => ldotNextIdle(now, roll)))), new Set(LDOT_IDLES));
 assert.deepEqual([...LDOT_IDLE_MS], [6000, 14000]);
 // The scheduler: one timer, 6-14 s out; none while the tab is hidden, and one again when it shows.
 ldotSchedule();
 assert.equal(timers.size, 1);
 const [ms] = timers.values();
-assert.ok(ms >= 6000 && ms <= 14000, `${ms}ms`);
-page.hidden = true; onVisibility();
+assert.ok(ms! >= 6000 && ms! <= 14000, `${ms}ms`);
+page.hidden = true; onVisibility!();
 assert.equal(timers.size, 0, 'no timer in a hidden tab');
 assert.equal(ldotScheduled(), false);
 ldotSchedule();
 assert.equal(timers.size, 0, 'nor after a reschedule while hidden');
-page.hidden = false; onVisibility();
+page.hidden = false; onVisibility!();
 assert.equal(timers.size, 1);
 assert.equal(ldotScheduled(), true);
 
@@ -73,8 +73,8 @@ assert.equal(ldotScheduled(), true);
 const css = fs.readFileSync(path.join(__dirname, '../styles/liquid-dot.css'), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '');
 const frames = [...css.matchAll(/@keyframes\s+([\w-]+)\s*\{((?:[^{}]*\{[^{}]*\})*)\s*\}/g)];
 assert.ok(frames.length >= 9, `found ${frames.length} keyframes`);
-for (const [, name, body] of frames) for (const [, decls] of body.matchAll(/\{([^{}]*)\}/g))
-  for (const decl of decls.split(';').map(d => d.trim()).filter(Boolean))
+for (const [, name, body] of frames) for (const [, decls] of body!.matchAll(/\{([^{}]*)\}/g))
+  for (const decl of decls!.split(';').map(d => d.trim()).filter(Boolean))
     assert.ok(/^(transform|opacity)\s*:/.test(decl), `${name} animates ${decl}`);
 assert.doesNotMatch(css, /transition\s*:[^;}]*(border-radius|width|height|left|top|filter|box-shadow)/);
 assert.doesNotMatch(css, /filter\s*:|glow/i, 'flat: no filters or glow');

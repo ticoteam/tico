@@ -4,26 +4,33 @@
 // shows the pages pinned to it at the top, the search box finds a file by its words, and the owner deletes a page for good. This hub
 // has no visual address, so pages are Open cards; one framed page (its address faked) takes the height it reports in
 // the full view, and a card holds its size's fixed height and fades the cut. Phone, then desktop.
-const assert = require('node:assert/strict');
-const {run, open, go, ok, api, sideways, shot, t} = require('./support/redesign-e2e.cjs');
+import type {Page} from 'playwright';
+import type * as R from './support/redesign-e2e.cjs';
+const assert: typeof import('node:assert/strict') = require('node:assert/strict');
+const {run, open, go, ok, api, sideways, shot, t} = require('./support/redesign-e2e.cjs') as typeof R;
+
+// A page as the pages API lists it, and the page-side helpers the probe calls.
+interface PageRecord {file_id: string; title: string; src: string | null; task_id: string}
+declare function pageCard(p: PageRecord & {src: string}, opts: {size: string}): HTMLElement;
+declare function searchOpen(): void;
 
 const FRAME = 'https://visuals.acme.example/visuals/acme-page.sig';
 const TALL = '<!doctype html><html><body style="margin:0"><div style="height:600px;background:#dfe">Tall page</div>'
   + '<script>parent.postMessage({ticoVisualHeight: 600}, "*")</script></body></html>';
 
 // The filter popover (Library › Files): open it if it is shut, pick the item whose set and label match, or close it.
-async function openFilters(page) {
-  if (!(await page.evaluate(() => document.getElementById('lf-filter-pop').matches(':popover-open')))) await page.locator('.lf-fbtn').click();
+async function openFilters(page: Page) {
+  if (!(await page.evaluate(() => document.getElementById('lf-filter-pop')!.matches(':popover-open')))) await page.locator('.lf-fbtn').click();
   await page.locator('#lf-filter-pop').waitFor({state: 'visible', timeout: t(5000)});
 }
-async function pick(page, set, label) {
+async function pick(page: Page, set: string, label: string) {
   await openFilters(page);
   await page.locator(`#lf-filter-pop [data-lf-set="${set}"]`, {hasText: label}).click();
 }
-async function closeFilters(page) {
-  if (!(await page.evaluate(() => document.getElementById('lf-filter-pop').matches(':popover-open')))) return;
+async function closeFilters(page: Page) {
+  if (!(await page.evaluate(() => document.getElementById('lf-filter-pop')!.matches(':popover-open')))) return;
   await page.keyboard.press('Escape');
-  await page.waitForFunction(() => !document.getElementById('lf-filter-pop').matches(':popover-open'), null, {timeout: t(5000)});
+  await page.waitForFunction(() => !document.getElementById('lf-filter-pop')!.matches(':popover-open'), null, {timeout: t(5000)});
 }
 
 run('redesign-e2e-pages', ['org', 'toured', 'groups', 'pages'], async ({hub, browser, phone, tag}) => {
@@ -47,7 +54,7 @@ run('redesign-e2e-pages', ['org', 'toured', 'groups', 'pages'], async ({hub, bro
   assert.ok(bots.every(x => x.includes('Engineering Lead')), `${tag}: the bot's name`);
   assert.deepEqual(await page.locator('.lf-pins').allInnerTexts(), ['Pinned', 'Pinned'], `${tag}: one pin each, no count`);
   // The search and the filter button share the top row.
-  const q = await page.locator('.lf-q').boundingBox(), f = await page.locator('.lf-fbtn').boundingBox();
+  const q = (await page.locator('.lf-q').boundingBox())!, f = (await page.locator('.lf-fbtn').boundingBox())!;
   assert.ok(Math.abs(q.y + q.height / 2 - (f.y + f.height / 2)) < 4, `${tag}: search and filter on one row`);
   await shot(page, `${tag}-01-files`);
 
@@ -82,17 +89,17 @@ run('redesign-e2e-pages', ['org', 'toured', 'groups', 'pages'], async ({hub, bro
   await page.locator('.lf-q').fill('');
 
   // A page opens full size: Tico's status line above it, the page in the sandboxed preview (no visual address here).
-  const pages = (await ok(page, 'GET', 'pages?limit=10')).pages;
-  const weekly = pages.find(p => p.title === 'Engineering weekly'), old = pages.find(p => p.title === 'Engineering weekly (old)');
-  const launch = pages.find(p => p.title === 'Launch plan');
+  const pages = (await ok<{pages: PageRecord[]}>(page, 'GET', 'pages?limit=10')).pages;
+  const weekly = pages.find(p => p.title === 'Engineering weekly')!, old = pages.find(p => p.title === 'Engineering weekly (old)')!;
+  const launch = pages.find(p => p.title === 'Launch plan')!;
   assert.equal(weekly.src, null, 'no visual address on this hub');
   await rows.filter({has: page.locator('.lf-title', {hasText: /^Engineering weekly$/})}).click();
-  await page.waitForFunction(id => location.hash === '#/page/' + id, weekly.file_id, {timeout: t(5000)});
+  await page.waitForFunction((id: string) => location.hash === '#/page/' + id, weekly.file_id, {timeout: t(5000)});
   const status = page.locator('#pg-view .pg-status');
   await status.waitFor({timeout: t(5000)});
   assert.match(await status.innerText(), /^Updated .+ by Engineering Lead · v1 · weekly · data from Oct 27$/, `${tag}: the status line`);
   await page.locator('#pg-view .pg-preview iframe.html-view').waitFor({timeout: t(10000)});
-  const shown = await page.locator('#pg-view iframe.html-view').evaluate(f => f.srcdoc);
+  const shown = await page.locator('#pg-view iframe.html-view').evaluate((f: HTMLIFrameElement) => f.srcdoc);
   assert.ok(shown.includes('Shipped 14 changes') && !shown.includes('steal()'), `${tag}: the cleaned page, no script`);
   await page.locator('#pg-view .pg-menu summary').click();
   assert.deepEqual(await page.locator('#pg-view .pg-menu-list [role=menuitem]').allInnerTexts(),
@@ -107,7 +114,7 @@ run('redesign-e2e-pages', ['org', 'toured', 'groups', 'pages'], async ({hub, bro
   await replaced.waitFor({timeout: t(5000)});
   assert.equal(await replaced.innerText(), 'Engineering weekly');
   await replaced.click();
-  await page.waitForFunction(id => location.hash === '#/page/' + id, weekly.file_id, {timeout: t(5000)});
+  await page.waitForFunction((id: string) => location.hash === '#/page/' + id, weekly.file_id, {timeout: t(5000)});
 
   // A page filed on the task is pinned to its top; the old weekly, filed there too, is left out as replaced. A card
   // opens its page, which says where it is pinned.
@@ -121,7 +128,7 @@ run('redesign-e2e-pages', ['org', 'toured', 'groups', 'pages'], async ({hub, bro
   assert.equal(await cards.locator(':scope > .pg-status').count(), 0, `${tag}: no loose status line`);
   await shot(page, `${tag}-04-task`);
   await cards.locator('a.pg-open', {hasText: 'Launch plan'}).click();
-  await page.waitForFunction(id => location.hash === '#/page/' + id, launch.file_id, {timeout: t(5000)});
+  await page.waitForFunction((id: string) => location.hash === '#/page/' + id, launch.file_id, {timeout: t(5000)});
   const pinned = page.locator('#pg-view .pg-pinned a');
   await pinned.waitFor({timeout: t(5000)});
   assert.equal(await pinned.innerText(), 'Q3 launch');
@@ -139,7 +146,7 @@ run('redesign-e2e-pages', ['org', 'toured', 'groups', 'pages'], async ({hub, bro
   // A file that is not a page opens Library › Files searched for the same words.
   await hit.click();
   await page.waitForFunction(() => location.hash.startsWith('#/library/files') && location.hash.includes('q=funnel')
-    && !document.querySelector('#search-modal').open, null, {timeout: t(5000)});
+    && !document.querySelector<HTMLDialogElement>('#search-modal')!.open, null, {timeout: t(5000)});
   await page.locator('.lf-row', {hasText: 'Signup funnel'}).waitFor({timeout: t(5000)});
 
   if (!phone) {
@@ -154,21 +161,21 @@ run('redesign-e2e-pages', ['org', 'toured', 'groups', 'pages'], async ({hub, bro
     const frame = page.locator('#pg-view iframe.page-frame');
     await frame.waitFor({timeout: t(5000)});
     assert.equal(await frame.getAttribute('sandbox'), 'allow-scripts allow-popups allow-popups-to-escape-sandbox');
-    await page.waitForFunction(() => document.querySelector('#pg-view iframe.page-frame')?.style.height === '600px', null, {timeout: t(5000)});
+    await page.waitForFunction(() => document.querySelector<HTMLElement>('#pg-view iframe.page-frame')?.style.height === '600px', null, {timeout: t(5000)});
     assert.equal(await frame.getAttribute('src'), FRAME + '#tico-view=full&tico-size=full', 'the full view says full');
-    const small = await page.evaluate(([p, src]) => {
+    const small = await page.evaluate(([p, src]: [PageRecord, string]) => {
       const card = pageCard({...p, src}, {size: 'small'});
-      card.id = 'probe'; document.querySelector('#pg-view').append(card);
+      card.id = 'probe'; document.querySelector('#pg-view')!.append(card);
       return {tap: !!card.querySelector('a.pg-tap'), expand: card.querySelector('a.pg-expand')?.getAttribute('href'),
-        bar: card.classList.contains('pg-framed') && card.firstElementChild.classList.contains('pg-status'),
-        src: card.querySelector('iframe').getAttribute('src')};
-    }, [weekly, FRAME]);
+        bar: card.classList.contains('pg-framed') && card.firstElementChild!.classList.contains('pg-status'),
+        src: card.querySelector('iframe')!.getAttribute('src')};
+    }, [weekly, FRAME] as [PageRecord, string]);
     assert.ok(small.tap, 'a card opens its page on a tap');
     assert.equal(small.expand, '#/page/' + weekly.file_id, 'its expand icon opens the full view');
     assert.ok(small.bar, 'a framed card carries its status line as its top bar');
     assert.equal(small.src, FRAME + '#tico-view=card&tico-size=small', 'the frame says it is in a small card');
     // The 600px page is cut at the card's fixed 180, with the fade.
-    await page.waitForFunction(() => document.querySelector('#probe iframe.page-frame')?.style.height === '180px'
+    await page.waitForFunction(() => document.querySelector<HTMLElement>('#probe iframe.page-frame')?.style.height === '180px'
       && document.querySelector('#probe .pg-box')?.classList.contains('pg-cut'), null, {timeout: t(5000)});
     await shot(page, `${tag}-06-framed`);
     await page.unrouteAll({behavior: 'wait'});

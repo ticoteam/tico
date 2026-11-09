@@ -8,11 +8,26 @@
 // 36 Clear key from one asks "this computer only" or "all listed computers", naming both; this computer only leaves
 //    the other working.
 // 21 (the "Every computer" key in Credentials on every computer) is backend/tests/test_shared_connections.py.
-const {chromium} = require('playwright');
-const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const path = require('node:path');
-const {spawn} = require('node:child_process');
+import type {ChildProcess} from 'node:child_process';
+const {chromium} = require('playwright') as typeof import('playwright');
+const assert: typeof import('node:assert/strict') = require('node:assert/strict');
+const fs: typeof import('node:fs') = require('node:fs');
+const path: typeof import('node:path') = require('node:path');
+const {spawn} = require('node:child_process') as typeof import('node:child_process');
+
+// What computers_server.py prints as its one JSON line, with the child process it runs in.
+interface Server {
+  child: ChildProcess;
+  url: string;
+  token: string;
+  received: string;
+  computers: Record<string, string>;
+}
+
+// Page-side globals the app defines, declared for the callbacks that read them.
+declare const SETTINGS_PRESENCE: {interval: number};
+declare function settingsMachinesWatch(): void;
+declare function settingsMachinesRefresh(): void;
 
 const ROOT = path.join(__dirname, '../..');
 const PYTHON = process.env.TICO_PYTHON || 'python3';
@@ -20,11 +35,11 @@ const OWN = 'sk-ant-api03-own-test-key-0123456789';
 const SHARED = 'sk-ant-api03-shared-test-key-0123456789';
 const ROTATED = 'sk-ant-api03-rotated-test-key-987654321';
 
-function start() {
+function start(): Promise<Server> {
   const child = spawn(PYTHON, ['ui/tests/support/computers_server.py', '--hold-shared-fetch'], {cwd: ROOT, stdio: ['ignore', 'pipe', 'pipe']});
   let err = '';
   child.stderr.on('data', d => { err += d; });
-  return new Promise((resolve, reject) => {
+  return new Promise<Server>((resolve, reject) => {
     let out = '';
     const timer = setTimeout(() => reject(new Error('computers_server.py did not start: ' + err.slice(-2000))), 60000);
     child.stdout.on('data', d => {
@@ -44,31 +59,31 @@ function start() {
     return;
   }
   const server = await start();
-  const browser = await chromium.launch({headless: true, channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined});
+  const browser = await chromium.launch({headless: true, channel: (process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined) as string});
   try {
-    const team = server.computers['Team box'], lab = server.computers['Lab box'], spare = server.computers['Spare box'];
+    const team = server.computers['Team box']!, lab = server.computers['Lab box']!, spare = server.computers['Spare box']!;
     const page = await browser.newPage({viewport: {width: 1440, height: 900}, serviceWorkers: 'block',
       extraHTTPHeaders: {Authorization: 'Bearer ' + server.token}});
-    const errors = [], bodies = [];
+    const errors: string[] = [], bodies: string[] = [];
     page.on('pageerror', e => errors.push(e.message));
     // Every reply the page gets, to show no key value ever comes back to it.
     page.on('response', async response => { try { bodies.push(await response.text()); } catch { /* redirects */ } });
     const received = () => fs.readFileSync(server.received, 'utf8').split('\n').filter(Boolean);
     const shown = async () => (await page.content()) + (await page.evaluate(() => [...document.querySelectorAll('input')].map(i => i.value).join('\n')));
-    const neverShown = async secret => {
+    const neverShown = async (secret: string) => {
       assert.ok(!(await shown()).includes(secret), 'the page never shows the key again');
       assert.ok(!bodies.some(b => b.includes(secret)), 'no reply sends the key back');
     };
 
     await page.goto(server.url + '/#/settings');
     // Stress runs exercise the same watcher more often without changing the production cadence.
-    if (process.env.TICO_TEST_PRESENCE_INTERVAL_MS) await page.evaluate(interval => {
+    if (process.env.TICO_TEST_PRESENCE_INTERVAL_MS) await page.evaluate((interval: number) => {
       SETTINGS_PRESENCE.interval = interval; settingsMachinesWatch();
     }, Number(process.env.TICO_TEST_PRESENCE_INTERVAL_MS));
     await page.locator('[data-settings-tab=devices]').click();
-    const row = id => page.locator(`#set-machines tr[data-computer-row="${id}"]`);
+    const row = (id: string) => page.locator(`#set-machines tr[data-computer-row="${id}"]`);
     const detail = page.locator('#set-machines dialog.computer-detail[open]');
-    const openDetail = async id => {
+    const openDetail = async (id: string) => {
       if (await detail.count()) { await detail.locator('[data-computer-close], .tmodal-x').first().click(); }
       await row(id).locator('.machine-name').click();
       await detail.waitFor();
@@ -76,7 +91,7 @@ function start() {
     const line = detail.locator('[data-connection="own:claude"]');
     // The pop-up paints what the page last read; Settings reads the computers again every few seconds, so a line
     // another computer's change touches is checked by reopening until it shows (or 20 s pass).
-    const lineShows = async (id, selector, text, exact = false) => {
+    const lineShows = async (id: string, selector: string, text: string, exact = false) => {
       const until = Date.now() + 20000;
       for (;;) {
         await openDetail(id);
@@ -88,7 +103,7 @@ function start() {
       }
     };
     const keyDialog = page.locator('dialog.model-key[open]');
-    const addKey = async id => {
+    const addKey = async (id: string) => {
       await openDetail(id);
       await detail.locator(`[data-add-connection="${id}"]`).click();
       const add = page.locator('dialog.computer-add-dialog[open]');
@@ -147,7 +162,7 @@ function start() {
       assert.equal(await line.locator('[data-shared]').innerText(), 'Shared');
       assert.match(await line.locator('.computer-conn-head').innerText(), /API key · ANTHROPIC_API_KEY shared from Lab box/);
       assert.equal(await row(id).locator('[data-chip="own:claude"]').count(), 1);
-      assert.match(await row(id).locator('[data-chip="own:claude"]').getAttribute('title'), /Shared with Lab box, Spare box, Team box/);
+      assert.match((await row(id).locator('[data-chip="own:claude"]').getAttribute('title'))!, /Shared with Lab box, Spare box, Team box/);
     }
     assert.ok(received().includes(SHARED), 'the shared key reached the computers');
     // Spare box has not fetched it and reports no Claude Code at all: Shared and listed, but no reading, no red dot,
@@ -156,7 +171,7 @@ function start() {
     assert.match(await line.locator('[data-shared-waiting]').innerText(), /Not checked on Spare box yet/);
     const spareChip = row(spare).locator('[data-chip="own:claude"]');
     assert.equal(await spareChip.locator('meter').count(), 0, 'no usage bar it has not read');
-    assert.equal(await spareChip.evaluate(el => el.classList.contains('attention')), false);
+    assert.equal(await spareChip.evaluate((el: Element) => el.classList.contains('attention')), false);
     await neverShown(SHARED);
 
     // Hold the runner after its cleared heartbeat, before it fetches the shared key. The dialog must use vault
@@ -167,7 +182,7 @@ function start() {
     await openDetail(team);
     const keyInfoRead = page.waitForResponse(response => response.url().includes(`/api/v2/computers/${team}/keys?`) && response.request().method() === 'GET');
     await line.locator('[data-model-key-replace]').click();
-    const keyInfo = await (await keyInfoRead).json();
+    const keyInfo: {source: string; name: string; shared: {env: string}} = await (await keyInfoRead).json();
     assert.equal(keyInfo.source, 'shared');
     assert.equal(keyInfo.name, '', 'the runner has not reported its shared key yet');
     assert.equal(keyInfo.shared.env, 'ANTHROPIC_API_KEY');
@@ -185,9 +200,9 @@ function start() {
     assert.equal(await keyDialog.locator('[name=secret]').evaluate(node => node === document.activeElement), true,
       'presence leaves focus in the key dialog');
     // Hold the rotation reply after the server commits it, forcing a presence paint before the dialog gets its receipt.
-    let rotationCommitted, releaseRotation, rotationTimer;
-    const committed = new Promise(resolve => { rotationCommitted = resolve; });
-    const released = new Promise(resolve => { releaseRotation = resolve; });
+    let rotationCommitted!: (status: number) => void, releaseRotation!: () => void, rotationTimer: ReturnType<typeof setTimeout> | undefined;
+    const committed = new Promise<number>(resolve => { rotationCommitted = resolve; });
+    const released = new Promise<void>(resolve => { releaseRotation = resolve; });
     const rotationURL = server.url + `/api/v2/computers/${team}/keys`;
     await page.route(rotationURL, async route => {
       if (route.request().method() !== 'POST') { await route.continue(); return; }

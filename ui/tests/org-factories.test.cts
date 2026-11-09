@@ -4,11 +4,17 @@
 // tree, so the combined page is checked from the chart's own functions.
 // Run: node ui/tests/org-factories.test.cjs
 'use strict';
-const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const path = require('node:path');
-const vm = require('node:vm');
-const {transformSync} = require('esbuild');
+const assert: typeof import('node:assert/strict') = require('node:assert/strict');
+const fs: typeof import('node:fs') = require('node:fs');
+const path: typeof import('node:path') = require('node:path');
+const vm: typeof import('node:vm') = require('node:vm');
+const {transformSync} = require('esbuild') as typeof import('esbuild');
+
+// The overview the Factories section reads: the factories, their pipelines (with the server's counts), and the edges and inputs.
+interface OrgPipe {id: string; name: string; goal: string | null; manager_id: string | null; owner: string; visibility: string;
+  factory_id: string | null; cards: number; overdue: number; for_you: number; live: number}
+interface OrgFactory {id: string; name: string; goal: string | null; manager_id: string | null; done: number; overdue: number; live: number}
+interface OrgOverview {factories: OrgFactory[]; pipelines: OrgPipe[]; edges: unknown[]; inputs: unknown[]}
 
 const APP = path.join(__dirname, '..', 'app');
 const CSS = path.join(__dirname, '..', 'styles', 'org-factories.css');
@@ -30,7 +36,7 @@ const EMPS = [
 ];
 const GROUPS = [{id: 'g-growth', name: 'Growth', order: 1}, {id: 'g-product', name: 'Product', order: 2},
   {id: 'g-success', name: 'Success', order: 3}];
-const bot = id => ({kind: 'bot', id});
+const bot = (id: string) => ({kind: 'bot', id});
 
 // The people chart's map as the sidebar builds it: the owner, three groups under them, and Marketing Manager's report.
 const tree = () => ({
@@ -42,22 +48,22 @@ const tree = () => ({
   'g:g-success': [bot('success-fm'), bot('success-mgr'), bot('gc')],
 });
 
-const botRow = id => { const key = String(id || '').replace(/^bot:/, ''); return key ? EMPS.find(e => e.id === key) : undefined; };
+const botRow = (id: string) => { const key = String(id || '').replace(/^bot:/, ''); return key ? EMPS.find(e => e.id === key) : undefined; };
 // As issues.js: a ref is a roster id, with or without `bot:`, or a slug.
-const botByRef = ref => { const key = String(ref || '').replace(/^bot:/, ''); return key ? botRow(key) || EMPS.find(e => e.slug === key) : undefined; };
+const botByRef = (ref: string) => { const key = String(ref || '').replace(/^bot:/, ''); return key ? botRow(key) || EMPS.find(e => e.slug === key) : undefined; };
 // As issues.js: named by the roster row's display name, which a slug or id alone does not reach.
-const botDisplayName = id => { const row = botRow(id); return row?.display_name || row?.slug || id; };
+const botDisplayName = (id: string) => { const row = botRow(id); return row?.display_name || row?.slug || id; };
 
-function context(get = async () => { throw new Error('the test sets get'); }) {
+function context(get: () => Promise<unknown> = async () => { throw new Error('the test sets get'); }) {
   const ctx = vm.createContext({
-    esc: s => String(s ?? '').replace(/[&<>"']/g, c => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'})[c]),
+    esc: (s: unknown) => String(s ?? '').replace(/[&<>"']/g, c => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'} as Record<string, string>)[c]!),
     TASKS: '#/tasks',
     S: {emps: EMPS, people: [], me: {id: 'ana', owner_id: 'ana'}, orgGroups: GROUPS},
     botRow, botByRef, botDisplayName,
-    avatar: (id, size) => `<span class="av" data-av="${id}" style="width:${size}px"></span>`,
-    personAvatar: (p, size) => `<span class="av" data-person="${p.id || p.name}" style="width:${size}px"></span>`,
+    avatar: (id: string, size: number) => `<span class="av" data-av="${id}" style="width:${size}px"></span>`,
+    personAvatar: (p: {id?: string; name?: string}, size: number) => `<span class="av" data-person="${p.id || p.name}" style="width:${size}px"></span>`,
     orgTreeByParent: () => tree(),
-    orgTreeWithHelpers: by => by,
+    orgTreeWithHelpers: (by: unknown) => by,
     orgChartShape: () => {},
     orgChartTop: () => ({id: 'ana'}),
     document: {addEventListener() {}},
@@ -72,12 +78,12 @@ function context(get = async () => { throw new Error('the test sets get'); }) {
   return ctx;
 }
 
-const pipe = (id, name, manager, factory, extra = {}) => ({id, name, goal: null, manager_id: manager, owner: 'human:ana',
+const pipe = (id: string, name: string, manager: string | null, factory: string | null, extra: Partial<OrgPipe> = {}): OrgPipe => ({id, name, goal: null, manager_id: manager, owner: 'human:ana',
   visibility: 'company', factory_id: factory, cards: 1, overdue: 0, for_you: 0, live: 0, ...extra});
-const factory = (id, name, manager) => ({id, name, goal: null, manager_id: manager, done: 0, overdue: 0, live: 0});
+const factory = (id: string, name: string, manager: string | null): OrgFactory => ({id, name, goal: null, manager_id: manager, done: 0, overdue: 0, live: 0});
 // Two factories with two pipelines and one with one. Managers are stored three ways: a bot: prefixed slug, a bare id and a
 // bare slug (setup can return either). The private Legal pipeline is left out, as the server leaves it for others.
-const overview = (extra = []) => ({
+const overview = (extra: OrgPipe[] = []): OrgOverview => ({
   factories: [factory('f-growth', 'Growth', 'growth-fm'), factory('f-product', 'Product development', 'bot:product-fm'),
     factory('f-success', 'Success', 'success-fm')],
   pipelines: [pipe('marketing', 'Marketing', 'bot:marketing-manager', 'f-growth', {goal: 'Find leads'}),
@@ -88,23 +94,23 @@ const overview = (extra = []) => ({
 const legal = pipe('legal', 'Legal', 'gc', null, {visibility: 'members'});
 
 // The markup of one box, from its opening tag to its close (boxes hold no nested section).
-const box = (html, id) => {
+const box = (html: string, id: string) => {
   const hit = html.match(new RegExp(`<section class="rdo-g org-fac-box" data-org-fac="${id}"[\\s\\S]*?</section>`));
   assert.ok(hit, `a box for ${id}`);
   return hit[0];
 };
 // One group of the people chart, from its opening tag to the next group's.
-const chartGroup = (chart, id, nextId) => {
+const chartGroup = (chart: string, id: string, nextId?: string) => {
   const from = chart.indexOf(`data-rdo-group="${id}"`);
   assert.ok(from >= 0, `the people chart has group ${id}`);
   return chart.slice(from, nextId ? chart.indexOf(`data-rdo-group="${nextId}"`) : undefined);
 };
-const count = (html, re) => (html.match(re) || []).length;
-const decode = s => s.replace(/&amp;/g, '&');
-const ref = id => `data-rdo-ref="bot:${id}"`;
+const count = (html: string, re: RegExp) => (html.match(re) || []).length;
+const decode = (s: string) => s.replace(/&amp;/g, '&');
+const ref = (id: string) => `data-rdo-ref="bot:${id}"`;
 
 // The combined page: the Factories section mounted, then the people chart drawn, as redesign-org.ts does.
-async function page(map = overview(), {mounted = true} = {}) {
+async function page(map: OrgOverview = overview(), {mounted = true}: {mounted?: boolean} = {}) {
   const ctx = context(async () => map);
   const host = {isConnected: true, innerHTML: ''};
   let changed = false;
@@ -112,8 +118,8 @@ async function page(map = overview(), {mounted = true} = {}) {
   return {ctx, section: host.innerHTML, chart: ctx.rdoChartHtml(), changed};
 }
 
-const tests = [];
-const test = (name, fn) => tests.push([name, fn]);
+const tests: [string, () => unknown][] = [];
+const test = (name: string, fn: () => unknown) => tests.push([name, fn]);
 
 test('one box per factory that has pipelines', async () => {
   const {ctx} = await page();
@@ -137,8 +143,8 @@ test('a chip opens its pipeline by the route the map uses', async () => {
   const html = ctx.orgFactoriesHtml(overview());
   const chip = box(html, 'f-growth').match(/<a class="org-fac-chip" href="([^"]*)"[^>]*>Marketing/);
   assert.ok(chip, 'the Marketing card has its chip');
-  assert.equal(decode(chip[1]), vm.runInContext('ofPipelineHref("marketing")', ctx));
-  assert.equal(decode(chip[1]), '#/tasks?type=marketing&view=board');
+  assert.equal(decode(chip[1]!), vm.runInContext('ofPipelineHref("marketing")', ctx));
+  assert.equal(decode(chip[1]!), '#/tasks?type=marketing&view=board');
 });
 
 test('a manager stored as a slug is shown by its roster id, name and avatar', async () => {
@@ -151,7 +157,7 @@ test('a manager stored as a slug is shown by its roster id, name and avatar', as
   assert.match(card, /data-av="b-42"/, 'the avatar is the bot\'s');
   assert.doesNotMatch(html, /marketing-manager/, 'the slug appears nowhere on the card');
   // A bare slug resolves the same way.
-  map.pipelines[0].manager_id = 'marketing-manager';
+  map.pipelines[0]!.manager_id = 'marketing-manager';
   assert.match(ctx.orgFactoriesHtml(map), /href="#\/bot\/b-42"/);
 });
 
@@ -274,7 +280,7 @@ test('no factories: the people chart keeps every bot', async () => {
   let failed = 0;
   for (const [name, fn] of tests) {
     try { await fn(); console.log(`  PASS  ${name}`); }
-    catch (error) { failed++; console.log(`  FAIL  ${name}\n        ${String(error.message).split('\n').join('\n        ')}`); }
+    catch (error) { failed++; console.log(`  FAIL  ${name}\n        ${String((error as Error).message).split('\n').join('\n        ')}`); }
   }
   console.log(`org-factories: ${tests.length - failed} of ${tests.length} passed`);
   process.exitCode = failed ? 1 : 0;

@@ -6,30 +6,45 @@
 // Desktop only: the Next column at 1440 (fix 822d4ba1f) is this script's; the phone's collapsed filter sections are
 // automations-list-runs.cjs's. The page's clock starts at the hub's frozen one. TICO_UI_SHOTS=<dir> saves the list and the
 // open editor, dark and light.
-const assert = require('node:assert/strict');
-const {run, open, go, ok, automationNamed, sideways, t} = require('./support/redesign-e2e.cjs');
+import type {Page} from 'playwright';
+import type * as R from './support/redesign-e2e.cjs';
+const assert: typeof import('node:assert/strict') = require('node:assert/strict');
+const {run, open, go, ok, automationNamed, sideways, t} = require('./support/redesign-e2e.cjs') as typeof R;
+
+// The hub's records as this journey reads them, and the page-side helper the chips call.
+interface Routine {
+  id: string;
+  enabled: boolean;
+  trigger: {type: string; first_due?: string; repeats?: string; open_days?: number; tz?: string};
+  next_due_at?: string;
+  next_run?: string;
+  steps: {do: string; args: {title?: string; owner?: string}}[];
+}
+interface RunRecord {id: string; status: string}
+interface Task {id: string; occurrence?: string; owner_id?: string; due_at?: string}
+declare function taskDueInfo(task: unknown): {words: string} | undefined;
 
 const HUB_NOW = new Date('2026-10-20T09:00:00Z');   // evals/factory/world.py START, where the hub's clock stays
 const BOT = 'builder-claude';
 
 // Screenshots in both themes, with animations stopped (a loading dot never finishes).
-async function themed(page, name) {
+async function themed(page: Page, name: string) {
   const dir = process.env.TICO_UI_SHOTS;
   if (!dir) return;
   for (const theme of ['dark', 'light']) {
-    await page.evaluate(v => window.ticoTheme.set(v), theme);
+    await page.evaluate((v: string) => window.ticoTheme.set(v), theme);
     await page.screenshot({path: require('node:path').join(dir, `${name}-${theme}.png`), animations: 'disabled'});
   }
   await page.evaluate(() => window.ticoTheme.set('dark'));
 }
 
 // A run the route answered while another drain still held it: wait until it ends and read it back.
-async function settled(page, aid, run) {
+async function settled(page: Page, aid: string, run: RunRecord) {
   const end = Date.now() + t(10000);
   let r = run;
   while (['queued', 'running'].includes(r.status) && Date.now() < end) {
     await page.waitForTimeout(200);
-    r = (await ok(page, 'GET', `automations/${aid}/runs?limit=25`)).runs.find(x => x.id === run.id) || r;
+    r = (await ok<{runs: RunRecord[]}>(page, 'GET', `automations/${aid}/runs?limit=25`)).runs.find(x => x.id === run.id) || r;
   }
   return r;
 }
@@ -40,15 +55,15 @@ run('automations-due', ['org', 'toured', 'automations'], async ({hub, browser, p
 
   // + New offers New inbox and the triggers; Before a due date makes the routine and opens it.
   await page.locator('.au-new').click();
-  assert.deepEqual(await page.locator('.au-newm [data-new]').evaluateAll(els => els.map(x => x.lastChild.textContent)),
+  assert.deepEqual(await page.locator('.au-newm [data-new]').evaluateAll(els => els.map(x => x.lastChild!.textContent)),
     ['New inbox', 'On a schedule', 'When something happens', 'Before a due date']);
   await page.locator('.au-newm [data-new="due"]').click();
   await page.locator('.au-hd .au-name:text("New automation")').waitFor({timeout: t(10000)});
-  const made = await automationNamed(page, 'New automation');
+  const made = (await automationNamed<Routine>(page, 'New automation'))!;
   assert.equal(made.trigger.type, 'due', `${tag}: a due trigger`);
   assert.equal(made.trigger.repeats, 'yearly');
   assert.equal(made.trigger.open_days, 14);
-  assert.match(made.trigger.first_due, /^\d{4}-\d{2}-\d{2}$/);
+  assert.match(made.trigger.first_due!, /^\d{4}-\d{2}-\d{2}$/);
   assert.equal(made.enabled, false);
   assert.match(await page.locator('.au-trig .au-c1').innerText(), /^Due .+ · yearly · 14d before$/);
 
@@ -63,12 +78,12 @@ run('automations-due', ['org', 'toured', 'automations'], async ({hub, browser, p
   await page.fill('.au-ed [data-b="trigger.tz"]', 'America/New_York');
   assert.equal(await sideways(page), false);
   await page.locator('.au-ed .au-save').click();
-  await page.waitForFunction(() => document.querySelector('.au-ed').hidden && document.querySelector('.au-ver')?.textContent === 'v2',
+  await page.waitForFunction(() => document.querySelector<HTMLElement>('.au-ed')!.hidden && document.querySelector('.au-ver')?.textContent === 'v2',
     null, {timeout: t(10000)});
-  const saved = await automationNamed(page, 'New automation');
+  const saved = (await automationNamed<Routine>(page, 'New automation'))!;
   assert.deepEqual(saved.trigger, {type: 'due', first_due: '2027-03-01', repeats: 'yearly', open_days: 21, tz: 'America/New_York'});
   assert.equal(saved.next_due_at, '2027-03-01', `${tag}: the hub's next due day`);
-  assert.equal(Date.parse(saved.next_run), Date.parse('2027-02-08T05:00:00Z'), `${tag}: its task opens 21 days before, at midnight in New York`);
+  assert.equal(Date.parse(saved.next_run!), Date.parse('2027-02-08T05:00:00Z'), `${tag}: its task opens 21 days before, at midnight in New York`);
   assert.equal(await page.locator('.au-trig .au-c1').innerText(), 'Due Mar 1 · yearly · 21d before');
 
   // Switching to a schedule and back restores the saved due date unchanged.
@@ -88,36 +103,36 @@ run('automations-due', ['org', 'toured', 'automations'], async ({hub, browser, p
   await page.fill('.au-ed [data-b="step.args.title"]', 'File the yearly report');
   await page.locator('.au-ed [data-b="step.args.owner"]').selectOption('bot:' + BOT);
   await page.locator('.au-ed .au-save').click();
-  await page.waitForFunction(() => document.querySelector('.au-ed').hidden && document.querySelector('.au-ver')?.textContent === 'v3',
+  await page.waitForFunction(() => document.querySelector<HTMLElement>('.au-ed')!.hidden && document.querySelector('.au-ver')?.textContent === 'v3',
     null, {timeout: t(10000)});
-  const step = (await automationNamed(page, 'New automation')).steps[0];
+  const step = (await automationNamed<Routine>(page, 'New automation'))!.steps[0]!;
   assert.equal(step.do, 'create_task');
   assert.equal(step.args.title, 'File the yearly report');
   assert.equal(step.args.owner, 'bot:' + BOT);
 
   // On: the list files it under Due date, with its words and the next due day over when the task opens.
   await page.locator('.au-hd .au-sw').check();
-  await page.waitForFunction(() => document.querySelector('.au-hd .au-sw')?.checked);
+  await page.waitForFunction(() => document.querySelector<HTMLInputElement>('.au-hd .au-sw')?.checked);
   await go(page, '#/automations');
   const row = page.locator(`tr.au-row[data-row="${made.id}"]`);
   await row.waitFor();
   assert.equal(await row.locator('td.au-tt').innerText(), 'Due Mar 1 · yearly · 21d before');
   assert.deepEqual((await row.locator('.au-nx').innerText()).split('\n'), ['Due Mar 1', 'opens in 111d']);
-  const next = await row.locator('td.au-cx').boundingBox();
+  const next = (await row.locator('td.au-cx').boundingBox())!;
   assert.ok(next.width >= 90, `${tag}: Next is shown, not folded (${next.width}px)`);
-  const groups = await page.locator('tr.au-grp').evaluateAll(r => r.map(x => x.dataset.agrp));
+  const groups = await page.locator('tr.au-grp').evaluateAll(r => r.map(x => (x as HTMLElement).dataset.agrp));
   assert.ok(groups.includes('due') && groups.indexOf('due') === groups.length - 1 - (groups.includes('system') ? 1 : 0),
     `${tag}: Due date after the other kinds, before system jobs (${groups})`);
   // The Due date chip narrows the list to it.
   if (phone) { await page.locator('[data-filters]').click(); await page.locator('[data-fsec="trig"]').click(); }
   await page.locator('[data-ftrig="due"]').click();
-  assert.deepEqual(await page.locator('tr.au-row').evaluateAll(r => r.map(x => x.dataset.row)), [made.id]);
+  assert.deepEqual(await page.locator('tr.au-row').evaluateAll(r => r.map(x => (x as HTMLElement).dataset.row)), [made.id]);
   await page.locator('[data-ftrig="due"]').click();
   if (phone) await page.locator('[data-filters]').click();
   assert.equal(await sideways(page), false);
   await themed(page, `${tag}-due-list`);
   if (phone) {   // a phone's table scrolls sideways to Trigger and Next
-    await page.locator('.au-tbl').evaluate(box => { box.scrollLeft = box.scrollWidth; });
+    await page.locator('.au-tbl').evaluate((box: HTMLElement) => { box.scrollLeft = box.scrollWidth; });
     await themed(page, `${tag}-due-list-scrolled`);
   }
   // The editor open over the flow, for the screenshots.
@@ -129,48 +144,48 @@ run('automations-due', ['org', 'toured', 'automations'], async ({hub, browser, p
   await page.locator('.au-ed [data-op="close"]').click();
 
   // Runs for two due days (the scheduler's payload, sent by hand): each opens the bot's task due that day.
-  const opened = [];
+  const opened: Task[] = [];
   for (const day of ['2026-10-15', '2026-11-30']) {
-    const r = await settled(page, made.id, (await ok(page, 'POST', `automations/${made.id}/run`, {input: {due: {due_on: day, tz: 'UTC'}}})).run);
+    const r = await settled(page, made.id, (await ok<{run: RunRecord}>(page, 'POST', `automations/${made.id}/run`, {input: {due: {due_on: day, tz: 'UTC'}}})).run);
     assert.equal(r.status, 'ok', `${tag}: the run for ${day} (${JSON.stringify(r).slice(0, 300)})`);
   }
-  const tasks = (await ok(page, 'GET', 'tasks?limit=200')).tasks || [];
+  const tasks = (await ok<{tasks?: Task[]}>(page, 'GET', 'tasks?limit=200')).tasks || [];
   for (const day of ['2026-10-15', '2026-11-30']) {
     const task = tasks.find(x => x.occurrence === `${made.id}:${day}`);
     assert.ok(task, `${tag}: the task for ${day}`);
     assert.equal(task.owner_id, 'bot:' + BOT);
     opened.push(task);
   }
-  const plain = await ok(page, 'POST', 'tasks', {title: 'Look again at the backlog', body: 'Later', owner: 'bot:' + BOT,
+  const plain = await ok<{id?: string; task?: {id: string}}>(page, 'POST', 'tasks', {title: 'Look again at the backlog', body: 'Later', owner: 'bot:' + BOT,
     due: '2026-10-25T12:00:00Z'});
-  const plainId = plain.id || plain.task?.id;
+  const plainId = (plain.id || plain.task?.id)!;
 
   // The occurrence tasks read as deadlines on their pages (red once past); the bot's other task still wakes.
-  const due = async (id, words) => {
+  const due = async (id: string, words: RegExp) => {
     await go(page, '#/task/' + encodeURIComponent(id));
     const cell = page.locator('[data-prop-row="due"] .prop-txt:visible', {hasText: words}).first();
     await cell.waitFor({timeout: t(10000)});
-    return {text: await cell.innerText(), cls: await cell.getAttribute('class')};
+    return {text: await cell.innerText(), cls: (await cell.getAttribute('class'))!};
   };
-  const late = await due(opened[0].id, /Oct 15/);
+  const late = await due(opened[0]!.id, /Oct 15/);
   assert.ok(/\blate\b/.test(late.cls) && !/\bwake\b/.test(late.cls), `${tag}: past due is red (${late.cls})`);
-  const ahead = await due(opened[1].id, /Nov 30/);
+  const ahead = await due(opened[1]!.id, /Nov 30/);
   assert.ok(!/\b(late|wake)\b/.test(ahead.cls), `${tag}: a coming due is a plain deadline (${ahead.cls})`);
   const wakes = await due(plainId, /Oct 25/);
   assert.match(wakes.text, /^Wakes /);
   // The list's chip says the same.
-  const chips = await page.evaluate(ids => Promise.all(ids.map(async id => {
+  const chips = await page.evaluate((ids: string[]) => Promise.all(ids.map(async (id: string) => {
     const r = await fetch('/api/v2/tasks/' + encodeURIComponent(id), {cache: 'no-store'});
     const body = await r.json();
     return taskDueInfo(body.task || body)?.words;
-  })), [opened[0].id, opened[1].id, plainId]);
-  assert.deepEqual(chips.map(w => w.split(' ')[0]), ['Overdue', 'Due', 'Wakes'], `${tag}: ${chips}`);
+  })), [opened[0]!.id, opened[1]!.id, plainId]);
+  assert.deepEqual(chips.map(w => w!.split(' ')[0]), ['Overdue', 'Due', 'Wakes'], `${tag}: ${chips}`);
 
   // A no-input run starts the next due day, as the scheduler would: its task is due at the end of Mar 1 in New York,
   // which is Mar 2 in UTC. A viewer whose zone is UTC still reads the task's due day as Mar 1.
-  const manual = await settled(page, made.id, (await ok(page, 'POST', `automations/${made.id}/run`, {})).run);
+  const manual = await settled(page, made.id, (await ok<{run: RunRecord}>(page, 'POST', `automations/${made.id}/run`, {})).run);
   assert.equal(manual.status, 'ok', `${tag}: the no-input run (${JSON.stringify(manual).slice(0, 300)})`);
-  const ny = ((await ok(page, 'GET', 'tasks?limit=200')).tasks || []).find(x => x.occurrence === `${made.id}:2027-03-01`);
+  const ny = ((await ok<{tasks?: Task[]}>(page, 'GET', 'tasks?limit=200')).tasks || []).find(x => x.occurrence === `${made.id}:2027-03-01`);
   assert.ok(ny, `${tag}: the no-input run made the Mar 1 task`);
   assert.equal(ny.due_at, '2027-03-01T23:59:59-05:00', `${tag}: due at the end of its day in the trigger's zone`);
   const utc = await open(browser, hub, 'dana', {phone, hash: '#/task/' + encodeURIComponent(ny.id), time: HUB_NOW,

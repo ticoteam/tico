@@ -3,55 +3,68 @@
 // also checks the DM's message bubble, sender, time and sideways scroll), Settings (settings), Finance (finance) and
 // Strategy with goals (strategy). Each step opens its own page, keeps its own assertions and names itself in a
 // failure ("[needsYou] ..."). Runs on a phone and a desktop.
-const assert = require('node:assert/strict');
-const {journey, open, go, must, call, assertClean, drawn, expectFailure, shot, until, t} = require('./support/e2e.cjs');
+import type {Page} from 'playwright';
+import type * as E2E from './support/e2e.cjs';
+import type {PassContext} from './support/e2e.cjs';
+const assert: typeof import('node:assert/strict') = require('node:assert/strict');
+const {journey, open, go, must, call, assertClean, drawn, expectFailure, shot, until, t} = require('./support/e2e.cjs') as typeof E2E;
+
+interface TaskType {
+  id: string;
+  steps: {id: string; name: string; status: string}[];
+}
+interface TaskRecord {
+  id: string;
+  version: number;
+  status: string;
+}
 
 // ---- e2e-tasks
 const tasks = (() => {
   const TITLE = 'Draft the launch note';
   const CREATED = /[A-Z][a-z]{2}, [A-Z][a-z]{2} \d{1,2}, \d{1,2}:\d{2} [AP]M/;
 
-  async function detail(page) {
+  async function detail(page: Page) {
     return page.evaluate(() => {
-      const m = document.querySelector('#task-modal');
-      const row = label => [...(m?.querySelectorAll('.prop') || [])]
-        .find(r => r.querySelector('.prop-k')?.textContent.trim() === label)?.innerText.replace(/\s+/g, ' ').trim() || '';
+      const m = document.querySelector('#task-modal') as HTMLDialogElement | null;
+      const row = (label: string) => [...(m?.querySelectorAll<HTMLElement>('.prop') || [])]
+        .find(r => r.querySelector<HTMLElement>('.prop-k')?.textContent!.trim() === label)?.innerText.replace(/\s+/g, ' ').trim() || '';
       return {
         open: !!m?.open,
-        title: m?.querySelector('.tmodal-title')?.textContent.trim() || '',
+        title: m?.querySelector<HTMLElement>('.tmodal-title')?.textContent!.trim() || '',
         step: row('Step'),
-        created_at: m?.querySelector('.tmodal-age')?.getAttribute('title') || '',
+        created_at: m?.querySelector<HTMLElement>('.tmodal-age')?.getAttribute('title') || '',
         owner_id: row('Owner'),
         asked: row('Asked by'),
-        history: m?.querySelector('.task-comments')?.innerText.replace(/\s+/g, ' ').trim() || '',
-        canDone: !!m?.querySelector('[data-task-finish="done"]'),
-        canClose: !!m?.querySelector('[data-task-finish="close"]'),
+        history: m?.querySelector<HTMLElement>('.task-comments')?.innerText.replace(/\s+/g, ' ').trim() || '',
+        canDone: !!m?.querySelector<HTMLElement>('[data-task-finish="done"]'),
+        canClose: !!m?.querySelector<HTMLElement>('[data-task-finish="close"]'),
       };
     });
   }
 
-  async function sheet(page, title) {
+  async function sheet(page: Page, title: string) {
     await page.waitForFunction(text => {
-      const m = document.querySelector('#task-modal');
-      return m?.open && m.querySelector('.tmodal-title')?.textContent.trim() === text;
+      const m = document.querySelector('#task-modal') as HTMLDialogElement | null;
+      return m?.open && m.querySelector<HTMLElement>('.tmodal-title')?.textContent!.trim() === text;
     }, title, {timeout: t(20000)});
     return detail(page);
   }
 
   // A typed task's step is its Step property (the header carries no state).
-  async function waitStep(page, re) {
-    await page.waitForFunction(src => new RegExp(src, 'i').test([...document.querySelectorAll('#task-modal .prop')]
-      .find(r => r.querySelector('.prop-k')?.textContent.trim() === 'Step')?.innerText || ''), re.source, {timeout: t(15000)});
+  async function waitStep(page: Page, re: RegExp) {
+    await page.waitForFunction(src => new RegExp(src, 'i').test([...document.querySelectorAll<HTMLElement>('#task-modal .prop')]
+      .find(r => r.querySelector<HTMLElement>('.prop-k')?.textContent!.trim() === 'Step')?.innerText || ''), re.source, {timeout: t(15000)});
   }
 
-  async function pick(page, text) {
+  async function pick(page: Page, text: string) {
     await page.locator('.prop-pop:popover-open .tl-mi', {hasText: text}).first().click();
   }
-  return async ({hub, browser, phone}) => {
+  return async ({hub, browser, phone}: PassContext) => {
     const where = phone ? 'phone' : 'desktop';
-    const launch = (await must(hub, 'dana', 'POST', 'task-types', {name: 'Launch', steps: [
+    const launch = (await must<{type: TaskType}>(hub, 'dana', 'POST', 'task-types', {name: 'Launch', steps: [
       {name: 'Plan', status: 'open'}, {name: 'Build', status: 'doing'}, {name: 'Ship', status: 'done'}]}, 'make the Launch type')).type;
-    const ship = launch.steps.find(s => s.name === 'Ship');
+    const ship = launch.steps.find(s => s.name === 'Ship') as TaskType['steps'][number];
 
     // Dana makes the task in the page, for the engineering-lead bot.
     const page = await open(browser, hub, 'dana', {phone, hash: `#/tasks?view=list&type=${launch.id}`});
@@ -59,14 +72,14 @@ const tasks = (() => {
     const form = page.locator('#task-create-form');
     await form.locator('input[name=title]').fill(TITLE);
     const owner = await form.locator('select[name=owner] option', {hasText: 'engineering-lead'}).getAttribute('value');
-    await form.locator('select[name=owner]').selectOption(owner);
+    await form.locator('select[name=owner]').selectOption(owner!);
     await form.locator('select[name=type]').waitFor({timeout: t(20000)});   // the Type field appears once a second type exists
     await form.locator('select[name=type]').selectOption(launch.id);
     await form.locator('textarea[name=body]').fill('Write the note and send it to the list.');
     await form.locator('button[type=submit]').click();
     const row = page.locator('.tl-row', {hasText: TITLE}).first();
     await row.waitFor({timeout: t(20000)});
-    const id = (await row.getAttribute('data-task-key')).slice(1);
+    const id = (await row.getAttribute('data-task-key'))!.slice(1);
     assertClean(page, `${where}: after create`);
 
     // The sheet draws what the task says. Dana asked for it, so she can close it; she is not its owner, so no Done.
@@ -84,31 +97,31 @@ const tasks = (() => {
     await page.locator('#task-modal [data-prop="step"]').click();
     await pick(page, 'Build');
     await waitStep(page, /Build/);
-    await page.waitForFunction(() => document.querySelector('#task-modal .task-comments')?.innerText.includes('Build'),
+    await page.waitForFunction(() => document.querySelector<HTMLElement>('#task-modal .task-comments')?.innerText.includes('Build'),
       null, {timeout: t(15000)});
     d = await detail(page);
     assert.match(d.history, /Build/, `${where}: history shows the step move`);
     assertClean(page, `${where}: after the step move`);
 
     // The bot (the owner) finishes the work: the step moves to Ship, which is done.
-    const current = await must(hub, 'engineering-lead', 'GET', `tasks/${id}`, undefined, 'the bot reads the task');
+    const current = await must<{task?: TaskRecord} & Partial<TaskRecord>>(hub, 'engineering-lead', 'GET', `tasks/${id}`, undefined, 'the bot reads the task');
     const version = (current.task || current).version;
     await must(hub, 'engineering-lead', 'POST', `tasks/${id}`, {version, step: ship.id, status: 'done'}, 'the bot marks it done');
     await page.reload();
     d = await sheet(page, TITLE);
     assert.match(d.step, /Ship/, `${where}: the sheet shows the step the bot moved it to`);
-    await page.waitForFunction(() => document.querySelector('#task-modal .task-comments')?.innerText.includes('Ship'),
+    await page.waitForFunction(() => document.querySelector<HTMLElement>('#task-modal .task-comments')?.innerText.includes('Ship'),
       null, {timeout: t(15000)});
     d = await detail(page);
     assert.match(d.history, /Ship/, `${where}: history shows the bot's move`);
-    assert.equal((await must(hub, 'dana', 'GET', `tasks/${id}`)).task.status, 'done', 'the task is done in the hub');
+    assert.equal((await must<{task: TaskRecord}>(hub, 'dana', 'GET', `tasks/${id}`)).task.status, 'done', 'the task is done in the hub');
     assertClean(page, `${where}: after done`);
 
     // Dana accepts it by closing it: the sheet closes with the task. She opens it again: a closed task offers no close, and
     // its task menu reopens it.
     await page.locator('#task-modal [data-task-finish="close"]').click();
-    await page.waitForFunction(() => !document.querySelector('#task-modal')?.open, null, {timeout: t(15000)});
-    assert.equal((await must(hub, 'dana', 'GET', `tasks/${id}`)).task.status, 'closed', `${where}: the hub has it closed`);
+    await page.waitForFunction(() => !(document.querySelector('#task-modal') as HTMLDialogElement | null)?.open, null, {timeout: t(15000)});
+    assert.equal((await must<{task: TaskRecord}>(hub, 'dana', 'GET', `tasks/${id}`)).task.status, 'closed', `${where}: the hub has it closed`);
     assertClean(page, `${where}: after close`);
     go(page, `#/tasks?view=list&type=${launch.id}`);
     go(page, '#/task/' + id);
@@ -116,8 +129,8 @@ const tasks = (() => {
     assert.ok(!d.canClose, `${where}: a closed task offers no close`);
     await page.locator('#task-modal [data-task-more]').click();
     await pick(page, 'Reopen');
-    await page.waitForFunction(() => !!document.querySelector('#task-modal [data-task-finish="close"]'), null, {timeout: t(15000)});
-    assert.equal((await must(hub, 'dana', 'GET', `tasks/${id}`)).task.status, 'open', `${where}: the hub has it reopened`);
+    await page.waitForFunction(() => !!document.querySelector<HTMLElement>('#task-modal [data-task-finish="close"]'), null, {timeout: t(15000)});
+    assert.equal((await must<{task: TaskRecord}>(hub, 'dana', 'GET', `tasks/${id}`)).task.status, 'open', `${where}: the hub has it reopened`);
     assertClean(page, `${where}: after reopen`);
 
     // The board for the type draws the card, and the page does not scroll sideways.
@@ -134,13 +147,13 @@ const tasks = (() => {
 const needsYou = (() => {
   // A question with no options is filed with Yes and No (question_tasks), so its card is a pick card with those two.
   const QUESTION = 'Should we ship the beta on Nov 3?';
-  return async ({hub, browser, phone}) => {
+  return async ({hub, browser, phone}: PassContext) => {
     const where = phone ? 'phone' : 'desktop';
-    const asked = await must(hub, 'engineering-lead', 'POST', 'task-questions', {
+    const asked = await must<{task: {id: string}}>(hub, 'engineering-lead', 'POST', 'task-questions', {
       on: 'dana', question: QUESTION,
     }, 'the bot asks a question');
     const questionId = asked.task.id;
-    const approval = await must(hub, 'builder-claude', 'POST', 'approvals', {
+    const approval = await must<{id?: string; approval?: {id: string}}>(hub, 'builder-claude', 'POST', 'approvals', {
       kind: 'spend_limit', payload: {bot: 'builder-claude', daily_usd: 40},
     }, 'the bot asks for an approval');
     const approvalId = approval.id || approval.approval?.id;
@@ -157,7 +170,7 @@ const needsYou = (() => {
     await page.locator('#need-card [data-dc="pick"]', {hasText: 'Yes'}).first().click();
     // The card sends the answer when its undo toast runs out, so the hub is read until the answer is there.
     const reply = await until(async () => {
-      const got = await must(hub, 'dana', 'GET', `tasks/${questionId}/answers`, undefined, 'read the answers');
+      const got = await must<{answers?: unknown[]}>(hub, 'dana', 'GET', `tasks/${questionId}/answers`, undefined, 'read the answers');
       return (got.answers || [])[0];
     }, `${where}: the answer on the hub`);
     assert.ok(reply, `${where}: the hub has the answer to the question`);
@@ -168,7 +181,7 @@ const needsYou = (() => {
     await page.locator(`[data-need-card="approval:${approvalId}"]`).first().click();
     await page.locator('#need-card [data-dc="yes"]').first().click();
     await until(async () => {
-      const decided = await must(hub, 'dana', 'GET', `approvals/${approvalId}`, undefined, 'read the approval');
+      const decided = await must<{decision: string}>(hub, 'dana', 'GET', `approvals/${approvalId}`, undefined, 'read the approval');
       return decided.decision === 'approved';
     }, `${where}: the approval approved on the hub`);
     assertClean(page, `${where}: approved`);
@@ -180,11 +193,11 @@ const needsYou = (() => {
 const newBot = (() => {
   const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[0-9a-f]{4}-[0-9a-f]{12}$/;
   const TITLE = 'Send the pricing sheet to Acme';
-  return async ({hub, browser, phone}) => {
+  return async ({hub, browser, phone}: PassContext) => {
     const where = phone ? 'phone' : 'desktop';
     await must(hub, 'dana', 'POST', 'bots', {slug: 'sales-helper', display_name: 'Sales Helper', status: 'active',
       description: 'Answers sales questions for the Acme team.'}, 'add Sales Helper');
-    const bot = (await must(hub, 'dana', 'GET', 'bots/sales-helper')).id;
+    const bot = (await must<{id: string}>(hub, 'dana', 'GET', 'bots/sales-helper')).id;
     assert.match(bot, UUID, `${where}: a new bot's id is a UUIDv7`);
 
     // A link by its slug moves to its id; the page names it.
@@ -207,8 +220,8 @@ const newBot = (() => {
     // What e2e-chat checked on a DM: the bubble names its sender and carries its time, the thread loaded, no sideways scroll.
     const who = (await bubble.locator('.th-who').first().innerText()).trim();
     assert.ok(who.length > 0, `${where}: the message names its sender`);
-    const when = await bubble.evaluate(el => el.querySelector('time')?.getAttribute('datetime')
-      || el.querySelector('time')?.getAttribute('title') || el.querySelector('[title]')?.getAttribute('title') || '');
+    const when = await bubble.evaluate(el => el.querySelector<HTMLElement>('time')?.getAttribute('datetime')
+      || el.querySelector<HTMLElement>('time')?.getAttribute('title') || el.querySelector<HTMLElement>('[title]')?.getAttribute('title') || '');
     assert.ok(when.length > 0, `${where}: the message carries its time`);
     assert.ok(!(await page.locator('#bot-thread .thv-gone, #bot-thread .thv-error').count()), `${where}: thread loaded`);
     const chatOverflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
@@ -227,8 +240,8 @@ const newBot = (() => {
     await form.locator('button[type=submit]').click();
     const row = page.locator('.tl-row', {hasText: TITLE}).first();
     await row.waitFor({timeout: t(20000)});
-    const task = (await row.getAttribute('data-task-key')).slice(1);
-    assert.equal((await must(hub, 'dana', 'GET', 'tasks/' + task)).task.owner_id, 'bot:' + bot, `${where}: the task's owner is bot:<id>`);
+    const task = (await row.getAttribute('data-task-key'))!.slice(1);
+    assert.equal((await must<{task: {owner_id: string}}>(hub, 'dana', 'GET', 'tasks/' + task)).task.owner_id, 'bot:' + bot, `${where}: the task's owner is bot:<id>`);
     assertClean(page, `${where}: task made`);
 
     // Rename its slug in its settings.
@@ -243,14 +256,14 @@ const newBot = (() => {
       && new URL(r.url()).pathname === `/api/v2/bots/${bot}/definition`);
     await editor.locator('button[type=submit]').click();
     assert.equal((await saved).status(), 200, `${where}: the rename saves`);
-    await until(async () => (await call(hub, 'dana', 'GET', 'bots/revenue-helper')).body?.id === bot, `${where}: the new slug names it`);
+    await until(async () => (await call<{id: string}>(hub, 'dana', 'GET', 'bots/revenue-helper')).body?.id === bot, `${where}: the new slug names it`);
     assert.equal((await call(hub, 'dana', 'GET', 'bots/sales-helper')).status, 404, `${where}: the old slug names nothing`);
     assertClean(page, `${where}: renamed`);
 
     // After the rename: Settings > Bots names it and links to its id; its settings show the new slug.
     go(page, '#/settings/bots');
     await drawn(page, '#set-bots', text => text.includes('Sales Helper'), `${where}: the bots list names it`);
-    const links = await page.locator('#set-bots a[href^="#/bot/"]').evaluateAll(as => as.map(a => a.getAttribute('href')));
+    const links = await page.locator('#set-bots a[href^="#/bot/"]').evaluateAll(as => as.map(a => a.getAttribute('href')!));
     assert.ok(links.includes('#/bot/' + encodeURIComponent(bot)), `${where}: the bots list links to its id`);
     assert.ok(!links.some(href => /sales-helper|revenue-helper/.test(href)), `${where}: no link names it by slug`);
     go(page, `#/bot/${encodeURIComponent(bot)}/settings`);
@@ -261,13 +274,13 @@ const newBot = (() => {
     go(page, '#/bot/revenue-helper');
     await page.waitForFunction(id => location.hash === '#/bot/' + id, bot, {timeout: t(20000)});
     await drawn(page, '.bot-nameline h1', text => text.includes('Sales Helper'), `${where}: the renamed bot's page`);
-    const mine = await must(hub, 'dana', 'GET', `tasks?owner=${encodeURIComponent('bot:' + bot)}`);
-    assert.ok((Array.isArray(mine) ? mine : mine.tasks || mine.items).some(item => item.id === task), `${where}: the task stays the bot's`);
+    const mine = await must<{id: string}[] | {tasks?: {id: string}[]; items?: {id: string}[]}>(hub, 'dana', 'GET', `tasks?owner=${encodeURIComponent('bot:' + bot)}`);
+    assert.ok((Array.isArray(mine) ? mine : mine.tasks || mine.items)!.some(item => item.id === task), `${where}: the task stays the bot's`);
     go(page, '#/task/' + task);
-    await page.waitForFunction(text => document.querySelector('#task-modal')?.open
-      && document.querySelector('#task-modal .tmodal-title')?.textContent.trim() === text, TITLE, {timeout: t(20000)});
-    const owner = await page.evaluate(() => [...document.querySelectorAll('#task-modal .prop')]
-      .find(r => r.querySelector('.prop-k')?.textContent.trim() === 'Owner')?.innerText || '');
+    await page.waitForFunction(text => (document.querySelector('#task-modal') as HTMLDialogElement | null)?.open
+      && document.querySelector<HTMLElement>('#task-modal .tmodal-title')?.textContent!.trim() === text, TITLE, {timeout: t(20000)});
+    const owner = await page.evaluate(() => [...document.querySelectorAll<HTMLElement>('#task-modal .prop')]
+      .find(r => r.querySelector<HTMLElement>('.prop-k')?.textContent!.trim() === 'Owner')?.innerText || '');
     assert.match(owner, /Sales Helper|revenue-helper/, `${where}: the task's owner row names the bot`);
     assert.doesNotMatch(owner, new RegExp(bot), `${where}: the owner row shows no id`);
     assertClean(page, `${where}: after the rename`);
@@ -276,7 +289,7 @@ const newBot = (() => {
 
 // ---- e2e-settings
 const settings = (() => {
-  return async ({hub, browser, phone}) => {
+  return async ({hub, browser, phone}: PassContext) => {
     const where = phone ? 'phone' : 'desktop';
     const page = await open(browser, hub, 'dana', {phone, hash: '#/settings/people'});
     // No team icon is set on the scenario install, so the icon request Settings makes (when its icon control is drawn, on
@@ -300,7 +313,7 @@ const settings = (() => {
 
 // ---- e2e-finance
 const finance = (() => {
-  return async ({hub, browser, phone}) => {
+  return async ({hub, browser, phone}: PassContext) => {
     const where = phone ? 'phone' : 'desktop';
     const page = await open(browser, hub, 'dana', {phone, hash: '#/finance'});
     await page.locator('#main', {hasText: 'Revenue'}).first().waitFor({timeout: t(20000)});
@@ -322,7 +335,7 @@ const finance = (() => {
 const strategy = (() => {
   const BET = 'Win the small-team segment this quarter';
   const GOAL = 'Reach 100 paying teams';
-  return async ({hub, browser, phone}) => {
+  return async ({hub, browser, phone}: PassContext) => {
     const where = phone ? 'phone' : 'desktop';
     await must(hub, 'dana', 'POST', 'strategy/bets', {statement: BET, why: 'Small teams close fastest.', status: 'active'}, 'make a bet');
     await must(hub, 'dana', 'POST', 'goals', {title: GOAL, owner: 'dana', top: true}, 'make a goal');
@@ -345,7 +358,7 @@ const STEPS = {tasks, needsYou, newBot, settings, finance, strategy};
 journey('e2e-core', async ctx => {
   for (const [name, step] of Object.entries(STEPS)) {
     try { await step(ctx); }
-    catch (error) { error.message = `[${name}, ${ctx.phone ? 'phone' : 'desktop'}] ${error.message}`; throw error; }
+    catch (error) { (error as Error).message = `[${name}, ${ctx.phone ? 'phone' : 'desktop'}] ${(error as Error).message}`; throw error; }
     finally { for (const context of ctx.browser.contexts()) await context.close().catch(() => {}); }   // each step's pages end with it
   }
 });

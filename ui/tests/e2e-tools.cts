@@ -7,16 +7,50 @@
 // key value in any answer. The page: the old Library › Connections address lands on Tools; the list, its Needs you
 // and Mail filters; Close CRM's levels, keys, check squares and recent calls; its Activity tab and Refused filter;
 // Ledger export's Move to proxy; the mailbox's page. Phone only; TICO_UI_SHOTS=<dir> saves each in dark and light.
-const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const path = require('node:path');
-const {journey, open, go, must, call, assertClean, sideways, t, SEEDS} = require('./support/e2e.cjs');
+import type {Page} from 'playwright';
+import type * as E2E from './support/e2e.cjs';
+const assert: typeof import('node:assert/strict') = require('node:assert/strict');
+const fs: typeof import('node:fs') = require('node:fs');
+const path: typeof import('node:path') = require('node:path');
+const {journey, open, go, must, call, assertClean, sideways, t, SEEDS} = require('./support/e2e.cjs') as typeof E2E;
+
+// The hub's answers this journey reads (only the fields it checks).
+interface ToolRow {
+  id: string;
+  kind: string;
+  way: string;
+  status: {text: string};
+  needs_you: boolean;
+  href: string;
+  who: {kind: string; id: string}[];
+  mailbox_id?: string;
+}
+interface ToolIndex {
+  rows: ToolRow[];
+  counts: {needs_you: number; api: number; mail: number};
+}
+interface ApiTool {
+  keys: {access_level: string}[];
+  access: {subject: string; level: string}[];
+  checks: {ok: boolean; status_code: number}[];
+  recent: {method: string; result: string; status_code: number; path: string; detail: string}[];
+}
+interface Activity {
+  rows: {kind: string; method: string; result?: string}[];
+}
+
+// Page-side global the app defines (the screenshots set the theme through it).
+declare global {
+  interface Window {
+    ticoTheme: {set(theme: string): void};
+  }
+}
 
 // The seed's made-up key values (evals/redesign/seeds.py TOOL_KEYS): no answer may carry one.
 const KEYS = ['close-read-test-0001', 'close-full-test-0002', 'ledger-test-0003'];
 const MAILBOX = 'sales@acme.example';
 
-async function shots(page, name) {
+async function shots(page: Page, name: string) {
   const dir = process.env.TICO_UI_SHOTS;
   if (!dir) return;
   fs.mkdirSync(dir, {recursive: true});
@@ -28,17 +62,17 @@ async function shots(page, name) {
   }
   await page.evaluate(() => window.ticoTheme.set('dark'));
 }
-const rowIds = page => page.locator('tr[data-tl-row]').evaluateAll(rows => rows.map(r => r.dataset.tlRow));
+const rowIds = (page: Page) => page.locator('tr[data-tl-row]').evaluateAll(rows => rows.map(r => (r as HTMLElement).dataset.tlRow!));
 
 journey('e2e-tools', async ({hub, browser, phone}) => {
   const where = phone ? 'phone' : 'desktop';
 
   // ---- the hub's answers
-  const box = (await must(hub, 'dana', 'POST', 'mailboxes', {address: MAILBOX, shared: true}, 'a shared mailbox')).mailbox;
+  const box = (await must<{mailbox: {id: string}}>(hub, 'dana', 'POST', 'mailboxes', {address: MAILBOX, shared: true}, 'a shared mailbox')).mailbox;
   await must(hub, 'dana', 'POST', `mailboxes/${box.id}/accesses`, {grantee_type: 'bot', grantee_id: 'engineering-lead',
     level: 'read'}, 'the Lead reads it');
-  const index = await must(hub, 'dana', 'GET', 'tool-index');
-  const crm = index.rows.find(r => r.id === 'api:close-crm'), ledger = index.rows.find(r => r.id === 'api:ledger-export');
+  const index = await must<ToolIndex>(hub, 'dana', 'GET', 'tool-index');
+  const crm = index.rows.find(r => r.id === 'api:close-crm')!, ledger = index.rows.find(r => r.id === 'api:ledger-export')!;
   assert.ok(crm && ledger, `${where}: both API tools listed: ${index.rows.map(r => r.id)}`);
   assert.deepEqual([crm.way, crm.status.text, crm.needs_you, crm.href], ['Proxy', 'Working', false, '#/tools/api/close-crm']);
   assert.deepEqual(crm.who.map(w => [w.kind, w.id]).sort(), [['bot', 'engineering-lead'], ['person', 'omar']]);
@@ -47,7 +81,7 @@ journey('e2e-tools', async ({hub, browser, phone}) => {
   assert.ok(mailRow && mailRow.href === '#/tools/mailbox/' + MAILBOX && mailRow.mailbox_id === box.id, `${where}: the mailbox row`);
   assert.ok(index.counts.needs_you >= 1 && index.counts.api >= 2 && index.counts.mail >= 1, JSON.stringify(index.counts));
 
-  const tool = await must(hub, 'dana', 'GET', 'api-tools/close-crm');
+  const tool = await must<ApiTool>(hub, 'dana', 'GET', 'api-tools/close-crm');
   assert.deepEqual(tool.keys.map(k => k.access_level).sort(), ['read', 'read_write'], `${where}: a key a level`);
   assert.deepEqual(Object.fromEntries(tool.access.map(a => [a.subject, a.level])),
     {'bot:engineering-lead': 'read', 'human:omar': 'read_write'}, `${where}: levels`);
@@ -56,22 +90,22 @@ journey('e2e-tools', async ({hub, browser, phone}) => {
   assert.deepEqual([calls.GET?.result, calls.GET?.status_code, calls.GET?.path], ['sent', 200, '/api/v1/lead/?query=&_limit='],
     `${where}: the GET went through, its query values dropped`);
   assert.equal(calls.POST?.result, 'refused', `${where}: the Read bot's POST was refused`);
-  assert.match(calls.POST.detail, /Read: only GET calls/, `${where}: the refusal names the setting`);
-  const activity = await must(hub, 'dana', 'GET', 'api-tools/close-crm/activity?limit=50');
+  assert.match(calls.POST!.detail, /Read: only GET calls/, `${where}: the refusal names the setting`);
+  const activity = await must<Activity>(hub, 'dana', 'GET', 'api-tools/close-crm/activity?limit=50');
   assert.equal(activity.rows.filter(r => r.kind === 'call').length, 2, `${where}: two calls logged`);
   assert.equal(activity.rows.filter(r => r.kind === 'use').length, 0, `${where}: a proxied tool's calls are its uses`);
-  const refused = await must(hub, 'dana', 'GET', 'api-tools/close-crm/activity?result=refused');
+  const refused = await must<Activity>(hub, 'dana', 'GET', 'api-tools/close-crm/activity?result=refused');
   assert.deepEqual(refused.rows.map(r => r.method), ['POST'], `${where}: the Refused filter`);
   const said = JSON.stringify([index, tool, activity, await must(hub, 'dana', 'GET', 'api-tools/ledger-export')]);
   for (const key of KEYS) assert.ok(!said.includes(key), `${where}: no answer carries a key value`);
 
   // Omar holds Close CRM only: he sees it, with his own row alone, and not Ledger export; Priya holds neither.
-  const omar = await must(hub, 'omar', 'GET', 'tool-index');
+  const omar = await must<ToolIndex>(hub, 'omar', 'GET', 'tool-index');
   const omarApi = omar.rows.filter(r => r.kind === 'api');
   assert.deepEqual(omarApi.map(r => r.id), ['api:close-crm'], `${where}: Omar's API tools`);
-  assert.deepEqual(omarApi[0].who.map(w => w.id), ['omar'], `${where}: Omar sees his own row only`);
+  assert.deepEqual(omarApi[0]!.who.map(w => w.id), ['omar'], `${where}: Omar sees his own row only`);
   assert.equal((await call(hub, 'omar', 'GET', 'api-tools/ledger-export')).status, 404, `${where}: not Omar's tool`);
-  const priya = await must(hub, 'priya', 'GET', 'tool-index');
+  const priya = await must<ToolIndex>(hub, 'priya', 'GET', 'tool-index');
   assert.deepEqual(priya.rows.filter(r => r.kind === 'api'), [], `${where}: Priya holds no API tool`);
 
   // ---- the page
@@ -100,10 +134,10 @@ journey('e2e-tools', async ({hub, browser, phone}) => {
   await crmRow.locator('.tt-st').click();
   await page.waitForFunction(() => location.hash === '#/tools/api/close-crm');
   await page.locator('#tool-access tr[data-ta-subject-row]').first().waitFor({timeout: t(10000)});
-  const checked = sel => page.locator(`${sel}[aria-checked="true"]`).count();
+  const checked = (sel: string) => page.locator(`${sel}[aria-checked="true"]`).count();
   assert.equal(await checked('[data-ta-subject="bot:engineering-lead"][data-ta-level="read"]'), 1, `${where}: the Lead at Read`);
   assert.equal(await checked('[data-ta-subject="human:omar"][data-ta-level="read_write"]'), 1, `${where}: Omar at Read and write`);
-  assert.deepEqual(await page.locator('#tool-keys [data-key-level]').evaluateAll(els => els.map(e => e.dataset.keyLevel).sort()),
+  assert.deepEqual(await page.locator('#tool-keys [data-key-level]').evaluateAll(els => els.map(e => (e as HTMLElement).dataset.keyLevel!).sort()),
     ['read', 'read_write'], `${where}: two keys`);
   assert.match(await page.locator('#tool-keys').innerText(), /Through Tico · logged/, `${where}: proxied`);
   assert.ok(await page.locator('#tool-check .tt-sq.ok').count() >= 2, `${where}: green squares`);

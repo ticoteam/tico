@@ -4,18 +4,24 @@
 // Ask's panel fades in as it opens, and a count that changes ticks without its badge's box moving by a pixel. With
 // reduced motion: nothing runs after a page change or after Ask opens (base.css shortens what is left to 1ms, so a
 // 1ms animation is the rule's, not one that moves).
-const assert = require('node:assert/strict');
-const {run, open, go, shot, t} = require('./support/redesign-e2e.cjs');
+import type {Page} from 'playwright';
+import type * as R from './support/redesign-e2e.cjs';
+const assert: typeof import('node:assert/strict') = require('node:assert/strict');
+const {run, open, go, shot, t} = require('./support/redesign-e2e.cjs') as typeof R;
+
+// Page-side globals the app defines (window.S, the count helper), declared for the callbacks that read them.
+declare const S: {route: string};
+declare function countSet(el: Element, text: string): void;
 
 // What still moves: running animations and transitions longer than base.css's 1ms, with what they move.
-const moving = page => page.evaluate(() => document.getAnimations().filter(a => {
+const moving = (page: Page) => page.evaluate(() => document.getAnimations().filter(a => {
   const d = a.effect?.getComputedTiming?.().duration;
   return a.playState === 'running' && typeof d === 'number' && d > 1;
 }).map(a => {
-  const el = a.effect?.target;
-  return `${a.animationName || a.transitionProperty || a.constructor.name} on ${el ? el.tagName.toLowerCase() + (el.id ? '#' + el.id : '') + [...el.classList].slice(0, 2).map(c => '.' + c).join('') : '?'}`;
+  const el = (a.effect as KeyframeEffect | null)?.target;
+  return `${(a as Partial<CSSAnimation & CSSTransition>).animationName || (a as Partial<CSSAnimation & CSSTransition>).transitionProperty || a.constructor.name} on ${el ? el.tagName.toLowerCase() + (el.id ? '#' + el.id : '') + [...el.classList].slice(0, 2).map(c => '.' + c).join('') : '?'}`;
 }));
-const askButton = phone => phone ? '#mobile-ask' : '#ask-row';
+const askButton = (phone: boolean) => phone ? '#mobile-ask' : '#ask-row';
 
 run('motion', ['org', 'toured'], async ({hub, browser, phone, tag}) => {
   const page = await open(browser, hub, 'dana', {phone, hash: '#/overview'});
@@ -25,20 +31,20 @@ run('motion', ['org', 'toured'], async ({hub, browser, phone, tag}) => {
   // ---- the sidebar's bar slides from Overview's row to Tasks'.
   if (!phone) {
     const bar = page.locator('#side .nav-ind');
-    await page.waitForFunction(() => !document.querySelector('#side .nav-ind')?.hidden, null, {timeout: t(5000)});
-    const before = await bar.evaluate(el => el.style.transform);
+    await page.waitForFunction(() => !document.querySelector<HTMLElement>('#side .nav-ind')?.hidden, null, {timeout: t(5000)});
+    const before = await bar.evaluate((el: HTMLElement) => el.style.transform);
     await go(page, '#/tasks');
-    await page.waitForFunction(was => {
-      const el = document.querySelector('#side .nav-ind');
+    await page.waitForFunction((was: string) => {
+      const el = document.querySelector<HTMLElement>('#side .nav-ind')!;
       return el.style.transform !== was && el.classList.contains('slide');
     }, before, {timeout: t(5000), polling: 'raf'});
-    const after = await bar.evaluate(el => {
-      const row = document.querySelector('#side .nav-link.cur'), r = row.getBoundingClientRect();
+    const after = await bar.evaluate((el: HTMLElement) => {
+      const row = document.querySelector<HTMLElement>('#side .nav-link.cur')!, r = row.getBoundingClientRect();
       return {transform: el.style.transform, row: row.getAttribute('href'), rowTop: r.top, rowBottom: r.bottom};
     });
     assert.equal(after.row, '#/tasks', `${tag}: Tasks is the current row`);
     await page.waitForTimeout(250);
-    const box = await bar.boundingBox();
+    const box = (await bar.boundingBox())!;
     assert.ok(box.y > after.rowTop && box.y + box.height < after.rowBottom, `${tag}: the bar sits inside Tasks' row: ${JSON.stringify({box, after})}`);
     await go(page, '#/overview');
     await page.waitForFunction(() => S.route === '#/overview');
@@ -46,13 +52,13 @@ run('motion', ['org', 'toured'], async ({hub, browser, phone, tag}) => {
   }
 
   // ---- every fold chevron turns with motion.css's one transition: the sidebar's, and a summary fold's triangle.
-  const turns = await page.evaluate(() => {
+  const turns = await page.evaluate((): {[k: string]: string} => {
     const d = document.createElement('details');
     d.className = 'run-fold'; d.innerHTML = '<summary>x</summary>';
-    document.querySelector('#main').append(d);
-    const css = (el, pseudo) => { const c = getComputedStyle(el, pseudo); return c.transitionProperty + ' ' + c.transitionDuration; };
+    document.querySelector('#main')!.append(d);
+    const css = (el: Element, pseudo?: string) => { const c = getComputedStyle(el, pseudo); return c.transitionProperty + ' ' + c.transitionDuration; };
     const chev = document.querySelector('#side .section-chev, #side .chev');
-    const out = {chev: chev ? css(chev) : 'transform 0.12s', fold: css(d.querySelector('summary'), '::before')};
+    const out = {chev: chev ? css(chev) : 'transform 0.12s', fold: css(d.querySelector('summary')!, '::before')};
     d.remove();
     return out;
   });
@@ -60,8 +66,8 @@ run('motion', ['org', 'toured'], async ({hub, browser, phone, tag}) => {
 
   // ---- a count ticks in place: every frame of the tick has the new number's box (the old number, drawn over it,
   // never resizes it). Before vs after can differ by a digit's width in fonts without equal-width digits.
-  const tick = await page.evaluate(async () => {
-    const el = [...document.querySelectorAll('#side .cnt, #side [data-upd-badge], .mobile-nav .cnt, [data-upd-badge]')]
+  const tick = await page.evaluate(async (): Promise<{ticked: boolean; boxes: string[]; text: string; still: string}> => {
+    const el: Element = [...document.querySelectorAll('#side .cnt, #side [data-upd-badge], .mobile-nav .cnt, [data-upd-badge]')]
       .find(b => b.checkVisibility() && /^\d+\+?$/.test(b.textContent.trim()))
       || (() => {   // no count on screen: a stand-in badge where the team list's counts sit
         const b = document.createElement('span');
@@ -69,8 +75,8 @@ run('motion', ['org', 'toured'], async ({hub, browser, phone, tag}) => {
         (document.querySelector('#side .nav-link') || document.body).append(b);
         return b;
       })();
-    countSet(el, el.textContent.trim());
-    const was = el.textContent.trim(), next = String((parseInt(was, 10) || 0) + 1);
+    countSet(el, el.textContent!.trim());
+    const was = el.textContent!.trim(), next = String((parseInt(was, 10) || 0) + 1);
     const at = () => { const r = el.getBoundingClientRect(); return [r.x, r.y, r.width, r.height].map(n => Math.round(n * 2) / 2).join(','); };
     countSet(el, next);
     const boxes = [at()];
@@ -78,7 +84,7 @@ run('motion', ['org', 'toured'], async ({hub, browser, phone, tag}) => {
     for (let i = 0; i < 16; i++) { await new Promise(r => requestAnimationFrame(r)); boxes.push(at()); }
     await new Promise(r => setTimeout(r, 120));
     boxes.push(at());
-    const text = el.textContent;
+    const text = el.textContent!;
     countSet(el, was);
     return {ticked, boxes: [...new Set(boxes)], text, still: el.classList.contains('m-ticking') ? 'ticking' : 'done'};
   });
@@ -89,7 +95,7 @@ run('motion', ['org', 'toured'], async ({hub, browser, phone, tag}) => {
   // ---- Ask fades in as it opens, and is gone from the screen once closed.
   await page.locator(askButton(phone)).click();
   await page.locator('#ask-panel').waitFor({state: 'visible', timeout: t(5000)});
-  const askMoves = await moving(page);
+  const askMoves: string[] = await moving(page);
   assert.ok(askMoves.some(m => /^opacity on .*ask-panel/.test(m)), `${tag}: Ask's panel fades in: ${JSON.stringify(askMoves)}`);
   await shot(page, `motion-${tag}-ask`);
   await page.locator('#ask-panel [data-ask-close]').click();

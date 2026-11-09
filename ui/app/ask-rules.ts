@@ -1,6 +1,6 @@
 /* ui/app/ask-rules.ts — Ask's rules with no page in them: what a turn at work says
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them.
-   ui/tests/ask-rules.cjs runs them without a browser. */
+   ui/tests/ask-rules.cts runs them without a browser. */
 'use strict';
 
 // While a turn works with no words yet: its label, how long it has run and its newest tool step, e.g.

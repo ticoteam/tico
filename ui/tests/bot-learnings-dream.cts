@@ -1,9 +1,51 @@
 // Dream mode in the Learnings panel and the bot page's question card: numbered questions become cards whose answers
 // go back as one numbered reply to the question itself, the done view lists only this dream's commits, Wake up
 // returns to the history, and polling stops when the panel closes. Desktop and phone widths.
-const assert = require('node:assert/strict');
-const path = require('node:path');
-const {chromium} = require('playwright');
+const assert: typeof import('node:assert/strict') = require('node:assert/strict');
+const path: typeof import('node:path') = require('node:path');
+const {chromium} = require('playwright') as typeof import('playwright');
+
+// Page-side globals: the test keeps its fake hub in window.state, and bot-learnings.js defines the rest in the page.
+interface DreamRecord {
+  task: string;
+  status: string;
+  state: string;
+  questions: {task_id: string; text: string; mine: boolean} | null;
+  summary: string | null;
+  closed_at: string | null;
+  started_at: string;
+}
+interface DreamState {
+  dream: Partial<DreamRecord> | null;
+  posts: {url: string; body?: unknown}[];
+  dreamReads: number;
+  gate?: Promise<unknown>;
+  release?: (value?: unknown) => void;
+}
+interface DreamCard {
+  n: string;
+  suggested: string;
+  intro: string;
+  text: string;
+}
+declare const esc: (value: unknown) => string;
+declare const state: DreamState;
+declare function learnOpen(bot: string, data: {updates?: unknown[]; documents?: Record<string, string>}, dream?: Partial<DreamRecord> | null): void;
+declare function botDreamLoad(bot: string): Promise<void>;
+declare function dreamSplit(text: string): DreamCard[];
+declare global {
+  interface Window {
+    $: (selector: string, root?: ParentNode) => Element | null;
+    esc: (value: unknown) => string;
+    md: (text: string) => string;
+    ago: () => string;
+    toast: (message: string) => void;
+    BOT: {slug: string};
+    state: DreamState;
+    get: (url: string) => Promise<unknown>;
+    post: (url: string, body?: unknown) => Promise<unknown>;
+  }
+}
 
 const QUESTIONS = 'Two things only you can settle.\n1. Should weekly reports go to Ana or the whole team? Suggested: the whole team\n'
   + '2. Drop the old "deploy on Fridays" rule? Suggested: yes';
@@ -17,12 +59,12 @@ const QUESTIONS = 'Two things only you can settle.\n1. Should weekly reports go 
     await page.addStyleTag({path: path.join(__dirname, '../styles/bot-learnings.css')});
     await page.evaluate(questions => {
       window.$ = (selector, root = document) => root.querySelector(selector);
-      window.esc = value => String(value).replace(/[&<>"']/g, ch => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[ch]));
+      window.esc = value => String(value).replace(/[&<>"']/g, ch => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'} as Record<string, string>)[ch]!);
       window.md = text => `<p>${esc(text)}</p>`;
       window.ago = () => 'today';
       window.toast = message => { throw new Error('toast: ' + message); };
       window.BOT = {slug: 'ops'};
-      const row = (subject, task) => ({subject, author: 'ops', when: '2026-11-02T10:00:00Z', files: ['memory/learnings.md'],
+      const row = (subject: string, task?: string) => ({subject, author: 'ops', when: '2026-11-02T10:00:00Z', files: ['memory/learnings.md'],
         source: task ? {task, title: 'Dream'} : null});
       window.state = {
         dream: {task: 't1', status: 'waiting', state: 'asking', questions: {task_id: 'q1', text: questions, mine: true},
@@ -47,7 +89,7 @@ const QUESTIONS = 'Two things only you can settle.\n1. Should weekly reports go 
     // The split: an intro, numbered questions, suggestions as chips.
     const cards = await page.evaluate(q => dreamSplit(q), QUESTIONS);
     assert.deepEqual(cards.map(c => [c.n, c.suggested]), [['1', 'the whole team'], ['2', 'yes']]);
-    assert.ok(cards[0].intro.startsWith('Two things') && !cards[0].text.includes('Suggested'));
+    assert.ok(cards[0]!.intro.startsWith('Two things') && !cards[0]!.text.includes('Suggested'));
     assert.equal((await page.evaluate(() => dreamSplit('Just one question?'))).length, 1);
 
     for (const width of [1280, 390]) {
@@ -71,7 +113,7 @@ const QUESTIONS = 'Two things only you can settle.\n1. Should weekly reports go 
       if (width === 390) {
         for (const sel of ['.learn-panel [data-dream-fill="0"]', '.learn-panel .dream-actions .primary', '.learn-panel [data-learn-close]']) {
           const box = await page.locator(sel).boundingBox();
-          assert.ok(box.height >= 44, `${sel} is a 44px tap target at 390px (${box.height})`);
+          assert.ok(box!.height >= 44, `${sel} is a 44px tap target at 390px (${box!.height})`);
         }
         const overflow = await page.locator('.learn-panel').evaluate(el => el.scrollWidth - el.clientWidth);
         assert.ok(overflow <= 0, 'nothing runs off the sheet sideways');
@@ -83,8 +125,8 @@ const QUESTIONS = 'Two things only you can settle.\n1. Should weekly reports go 
       // One numbered reply to the question itself; then the done view with this dream's commit only.
       await page.locator('[data-dream-wake]').waitFor();
       const answer = await page.evaluate(() => state.posts.find(p => p.url.includes('/answer')));
-      assert.equal(answer.url, '/v2/tasks/q1/answers');
-      assert.equal(answer.body.other, '1. the whole team\n2. No, keep it');
+      assert.equal(answer!.url, '/v2/tasks/q1/answers');
+      assert.equal((answer!.body as {other: string}).other, '1. the whole team\n2. No, keep it');
       assert.equal(await page.locator('.learn-panel .dream-line').innerText(), 'Awake');
       assert.ok((await page.locator('.dream-summary').innerText()).includes('Merged two report rules'));
       assert.deepEqual(await page.locator('.dream-commits .lr-subject').allInnerTexts(), ['Dream: merged report rules']);
@@ -120,7 +162,7 @@ const QUESTIONS = 'Two things only you can settle.\n1. Should weekly reports go 
     await page.locator('[data-dream-start]').click();
     await page.locator('[data-learn-close]').click();
     await page.locator('.learn-panel').waitFor({state: 'detached'});     // the close, and its cleanup, have run
-    const before = await page.evaluate(() => { state.release(); return state.dreamReads; });
+    const before = await page.evaluate(() => { state.release!(); return state.dreamReads; });
     await page.waitForTimeout(4500);
     assert.equal(await page.evaluate(() => state.dreamReads), before, 'a start that lands after close polls nothing');
     assert.ok(await page.locator('#bot-learn').evaluate(el => el.classList.contains('dreaming')), 'the brain shows it');

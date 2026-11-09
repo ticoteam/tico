@@ -7,35 +7,37 @@
 // address keeps it; Settings, + Channel, Edit, Retire and a month's correction save; a Number is added for one channel;
 // old addresses land where they moved. Then Sources flags a clash, Strategy has How we sell, Brand's Edit publishes,
 // and Goals switches its KPIs between Tree, Loops and Journey. Phone only.
-const assert = require('node:assert/strict');
-const {run, open, go, ok, shot, t} = require('./support/redesign-e2e.cjs');
+import type {Page} from 'playwright';
+import type * as R from './support/redesign-e2e.cjs';
+const assert: typeof import('node:assert/strict') = require('node:assert/strict');
+const {run, open, go, ok, shot, t} = require('./support/redesign-e2e.cjs') as typeof R;
 
 const REMOVED = /\/api\/v2\/(gtm|growth\/(ideas|segments|evidence|working|week|numbers))/;
 // The test hub's clock stands still here (evals/factory/world.py).
 const HUB_NOW = Date.UTC(2026, 9, 20, 9);
-const monthsAgo = n => { const d = new Date(HUB_NOW); d.setUTCDate(1); d.setUTCMonth(d.getUTCMonth() - n); return d.toISOString().slice(0, 7); };
+const monthsAgo = (n: number) => { const d = new Date(HUB_NOW); d.setUTCDate(1); d.setUTCMonth(d.getUTCMonth() - n); return d.toISOString().slice(0, 7); };
 const MONTH = monthsAgo(0);
 // The month with no row at all, and the one where spend went unrecorded: gaps stay gaps.
 const NO_ROW = 6, NO_SPEND = 3;
 const CARDS = ['Funnel', 'New customers', 'CAC', 'Spend', 'LTV:CAC', 'Payback', 'Kept 30 days', 'Channels', 'Retention', 'Growth board'];
-const CHANNELS = [['google-ads', 'Google Ads', 'scaling', 'bot:engineering-lead', 1.4], ['referrals', 'Referrals', 'scaling', 'human:dana', .9], ['seo', 'SEO', 'testing', null, .6],
+const CHANNELS: [string, string, string, string | null, number][] = [['google-ads', 'Google Ads', 'scaling', 'bot:engineering-lead', 1.4], ['referrals', 'Referrals', 'scaling', 'human:dana', .9], ['seo', 'SEO', 'testing', null, .6],
   ['local-pages', 'Local pages', 'testing', 'bot:engineering-lead', .5], ['door-hangers', 'Door hangers in Mueller', 'testing', null, .3], ['partners', 'Property manager partners', 'idea', 'human:dana', .25],
   ['newsletter', 'Newsletter', 'paused', null, .2], ['meta-ads', 'Meta Ads', 'paused', 'bot:engineering-lead', .15]];
-const short = m => new Date(`${m}-15`).toLocaleString('en-US', {month: 'short', timeZone: 'UTC'});
-const long = m => `${short(m)} ${m.slice(0, 4)}`;
+const short = (m: string) => new Date(`${m}-15`).toLocaleString('en-US', {month: 'short', timeZone: 'UTC'});
+const long = (m: string) => `${short(m)} ${m.slice(0, 4)}`;
 
-const flat = async (page, what) => {
+const flat = async (page: Page, what: string) => {
   const info = await page.evaluate(() => ({sw: document.documentElement.scrollWidth, cw: document.documentElement.clientWidth, hash: location.hash,
-    all: [...document.querySelectorAll('*')].map(el => [el, el.getBoundingClientRect()]).filter(([, r]) => r.right > document.documentElement.clientWidth + 1)
+    all: [...document.querySelectorAll('*')].map(el => [el, el.getBoundingClientRect()] as const).filter(([, r]) => r.right > document.documentElement.clientWidth + 1)
       .slice(0, 8).map(([el, r]) => `${el.tagName}.${el.className}:${Math.round(r.left)}-${Math.round(r.right)}`)}));
   assert.ok(info.sw <= info.cw + 1, `${what} no sideways scroll (${JSON.stringify(info)})`);
 };
 // With TICO_UI_SHOTS set: the whole page, light and dark.
-async function themed(page, name) {
+async function themed(page: Page, name: string) {
   if (!process.env.TICO_UI_SHOTS) return;
-  const size = page.viewportSize();
+  const size = page.viewportSize()!;
   for (const theme of ['light', 'dark']) {
-    await page.evaluate(v => { document.documentElement.dataset.theme = v; }, theme);
+    await page.evaluate((v: string) => { document.documentElement.dataset.theme = v; }, theme);
     const tall = await page.evaluate(() => Math.max(document.documentElement.scrollHeight, document.querySelector('#main')?.scrollHeight || 0));
     await page.setViewportSize({width: size.width, height: Math.max(size.height, tall + 40)});
     await page.waitForTimeout(150);
@@ -45,13 +47,13 @@ async function themed(page, name) {
   await page.setViewportSize(size);
   await page.evaluate(() => { document.documentElement.dataset.theme = 'dark'; });
 }
-async function seedChannels(page, stripe) {
+async function seedChannels(page: Page, stripe: string) {
   for (const [slug, name, stage, owner_ref] of CHANNELS) {
     await ok(page, 'POST', 'growth/channels', {slug, name, track: slug === 'referrals' ? 'brand' : 'performance', stage, owner_ref,
       source_id: slug === 'google-ads' ? stripe : null});
   }
 }
-async function seedMonths(page) {
+async function seedMonths(page: Page) {
   await ok(page, 'PUT', 'growth/settings', {revenue_month: 92, margin_pct: 58});
   for (let n = 11; n >= 0; n--) {
     if (n === NO_ROW) continue;
@@ -66,12 +68,12 @@ async function seedMonths(page) {
     await ok(page, 'PUT', 'growth/cohorts', {channel: 'unknown', month: monthsAgo(n), new_customers: 3 + n % 4, quality: 'estimate'});
   }
 }
-async function seedKpis(page) {
-  const goal = await ok(page, 'POST', 'goals', {title: 'More active homes', owner: 'human:dana'});
-  const goalId = goal.goal?.id || goal.id;
-  const kpi = async (name, unit, target, role, parent, stage, values, goal_id = null) => {
-    const made = await ok(page, 'POST', 'kpis', {name, unit, kind: 'improve', target, deadline: '2027-12-31', ...(goal_id ? {goal_id} : {})});
-    const id = made.kpi?.id || made.id;
+async function seedKpis(page: Page) {
+  const goal = await ok<{goal?: {id: string}; id?: string}>(page, 'POST', 'goals', {title: 'More active homes', owner: 'human:dana'});
+  const goalId = (goal.goal?.id || goal.id)!;
+  const kpi = async (name: string, unit: string, target: number, role: string | null, parent: string | null, stage: string | null, values: number[], goal_id: string | null = null) => {
+    const made = await ok<{kpi?: {id: string}; id?: string}>(page, 'POST', 'kpis', {name, unit, kind: 'improve', target, deadline: '2027-12-31', ...(goal_id ? {goal_id} : {})});
+    const id = (made.kpi?.id || made.id)!;
     await ok(page, 'POST', `kpis/${id}`, {growth_role: role, parent_kpi_id: parent, stage});
     for (let i = 0; i < values.length; i++) {
       await ok(page, 'POST', `kpis/${id}/readings`, {value: values[i], period_end: `${monthsAgo(values.length - 1 - i)}-10`, quality: 'measured'});
@@ -86,12 +88,12 @@ async function seedKpis(page) {
   return {nsId, inpId, goalId};
 }
 // Marketing tasks moved through their steps; one left open, in Testing, on Google Ads.
-async function seedTasks(page, goalId) {
-  const task = async (title, channel, steps, goal = null) => {
-    const made = await ok(page, 'POST', 'tasks', {title, body: title, owner: 'bot:engineering-lead', type: 'idea', labels: channel ? [`channel:${channel}`] : [], ...(goal ? {goal_id: goal} : {})});
-    const id = made.task?.id || made.id;
+async function seedTasks(page: Page, goalId: string) {
+  const task = async (title: string, channel: string | null, steps: string[], goal: string | null = null) => {
+    const made = await ok<{task?: {id: string}; id?: string}>(page, 'POST', 'tasks', {title, body: title, owner: 'bot:engineering-lead', type: 'idea', labels: channel ? [`channel:${channel}`] : [], ...(goal ? {goal_id: goal} : {})});
+    const id = (made.task?.id || made.id)!;
     for (const step of steps) {
-      const read = await ok(page, 'GET', `tasks/${id}`);
+      const read = await ok<{task?: {version: number}; version?: number}>(page, 'GET', `tasks/${id}`);
       await ok(page, 'POST', `tasks/${id}`, {version: (read.task || read).version, step});
     }
     return id;
@@ -108,15 +110,15 @@ async function seedTasks(page, goalId) {
 run('growth', ['org', 'toured'], async ({hub, browser, phone, tag}) => {
   const page = await open(browser, hub, 'dana', {phone});
   const width = phone ? 390 : 1440;
-  const noErrors = where => assert.deepEqual(page.errors, [], `${tag}: ${where} without page errors`);
-  const removed = [];
-  page.on('request', r => { if (REMOVED.test(r.url())) removed.push(r.url()); });
+  const noErrors = (where: string) => assert.deepEqual(page.errors, [], `${tag}: ${where} without page errors`);
+  const removed: string[] = [];
+  page.on('request', (r: {url(): string}) => { if (REMOVED.test(r.url())) removed.push(r.url()); });
   const headings = () => page.locator('#dash-grid .dash-pin-head h2').allInnerTexts();
-  const card = name => page.locator('#dash-grid .dash-pin').filter({has: page.locator('.dash-pin-head h2', {hasText: new RegExp(`^${name}$`)})});
-  const row = slug => page.locator(`#dash-grid .grc-ch tr[data-channel="${slug}"]`);
-  const num = name => card(name).locator('.grc-num-v');
+  const card = (name: string) => page.locator('#dash-grid .dash-pin').filter({has: page.locator('.dash-pin-head h2', {hasText: new RegExp(`^${name}$`)})});
+  const row = (slug: string) => page.locator(`#dash-grid .grc-ch tr[data-channel="${slug}"]`);
+  const num = (name: string) => card(name).locator('.grc-num-v');
   const toasts = () => page.locator('.toast').allInnerTexts();
-  const arrive = (to, why) => page.waitForFunction(w => location.hash === w, to, {timeout: t(5000)}).catch(async () =>
+  const arrive = (to: string, why: string) => page.waitForFunction((w: string) => location.hash === w, to, {timeout: t(5000)}).catch(async () =>
     assert.fail(`${tag}: ${why} lands on ${to} (${await page.evaluate(() => location.hash)})`));
   const dialog = () => page.locator('dialog.gr-dlg[open]');
   const settings = async () => {
@@ -166,9 +168,9 @@ run('growth', ['org', 'toured'], async ({hub, browser, phone, tag}) => {
   await row('flyers').waitFor({state: 'detached', timeout: t(10000)}).catch(async () => assert.fail(`${tag}: the channel retires (${await toasts()})`));
 
   const refs = await seedKpis(page);
-  const stripe = await ok(page, 'POST', 'growth/sources', {truth_for: 'Revenue', system: 'Stripe', reach_kind: 'credential', reach_ref: 'stripe', may: 'read'});
+  const stripe = await ok<{source?: {id: string}; id?: string}>(page, 'POST', 'growth/sources', {truth_for: 'Revenue', system: 'Stripe', reach_kind: 'credential', reach_ref: 'stripe', may: 'read'});
   await ok(page, 'POST', 'growth/sources', {truth_for: 'Revenue', system: 'QuickBooks', reach_kind: 'mcp', reach_ref: 'quickbooks', may: 'read'});
-  await seedChannels(page, stripe.source?.id || stripe.id);
+  await seedChannels(page, (stripe.source?.id || stripe.id)!);
   await seedMonths(page);
   const tasks = await seedTasks(page, refs.goalId);
 
@@ -181,7 +183,7 @@ run('growth', ['org', 'toured'], async ({hub, browser, phone, tag}) => {
   assert.equal(await ns.getAttribute('href'), `#/strategy/goals?kpi=${encodeURIComponent(refs.nsId)}`, `${tag}: the line opens its KPI`);
   // The Funnel: five stages, each its first KPI; a stage with none says so; Refer loops back.
   const stages = page.locator('#dash-grid .grc-funnel > li');
-  assert.deepEqual(await stages.evaluateAll(els => els.map(el => el.dataset.stage)), ['reach', 'acquire', 'activate', 'retain', 'refer'], `${tag}: five stages`);
+  assert.deepEqual(await stages.evaluateAll(els => els.map(el => (el as HTMLElement).dataset.stage)), ['reach', 'acquire', 'activate', 'retain', 'refer'], `${tag}: five stages`);
   assert.match(await stages.nth(0).innerText(), /Site visits[\s\S]*31,000/, `${tag}: Reach's KPI`);
   assert.match(await stages.nth(1).innerText(), /New bookings[\s\S]*97/, `${tag}: Acquire's KPI`);
   assert.match(await stages.nth(2).innerText(), /No KPI/, `${tag}: Activate has none`);
@@ -189,11 +191,11 @@ run('growth', ['org', 'toured'], async ({hub, browser, phone, tag}) => {
   // Numbers: a value, a change with an arrow, a trend; 30 days has no reading for this month's cohort yet, so last
   // month's shows, saying which.
   assert.match(await num('New customers').innerText(), /^\d[\d,]*$/, `${tag}: New customers`);
-  assert.match(await card('New customers').locator('.gr-d').getAttribute('aria-label'), /^(Up|Down|Flat) /, `${tag}: a change with an arrow`);
+  assert.match((await card('New customers').locator('.gr-d').getAttribute('aria-label'))!, /^(Up|Down|Flat) /, `${tag}: a change with an arrow`);
   assert.ok(await card('New customers').locator('svg.gr-spark').count(), `${tag}: a trend`);
   assert.match(await card('Kept 30 days').innerText(), new RegExp(`\\d+%[\\s\\S]*${short(monthsAgo(1))}`), `${tag}: last month's retention`);
   // Channels: eight and Unknown, names as stored, Unknown last; the open task a chip on its channel's row.
-  const slugs = await page.locator('#dash-grid .grc-ch tbody tr').evaluateAll(els => els.map(el => el.dataset.channel));
+  const slugs = await page.locator('#dash-grid .grc-ch tbody tr').evaluateAll(els => els.map(el => (el as HTMLElement).dataset.channel));
   assert.deepEqual(slugs.slice().sort(), [...CHANNELS.map(c => c[0]), 'unknown'].sort(), `${tag}: eight channels and Unknown`);
   assert.equal(slugs.at(-1), 'unknown', `${tag}: Unknown last`);
   assert.equal(await row('door-hangers').locator('th').innerText(), 'Door hangers in Mueller', `${tag}: a name as stored`);
@@ -211,7 +213,7 @@ run('growth', ['org', 'toured'], async ({hub, browser, phone, tag}) => {
   // and the address keeps the month.
   const picker = page.locator('[data-gr-month]');
   assert.equal(await picker.inputValue(), MONTH, `${tag}: the newest month`);
-  assert.deepEqual((await picker.locator('option').evaluateAll(o => o.map(x => x.value))).includes(monthsAgo(NO_ROW)), false, `${tag}: no empty month`);
+  assert.deepEqual((await picker.locator('option').evaluateAll(o => o.map(x => (x as HTMLOptionElement).value))).includes(monthsAgo(NO_ROW)), false, `${tag}: no empty month`);
   const before = await num('New customers').innerText();
   await picker.selectOption(monthsAgo(NO_SPEND));
   await card('CAC').locator('.dash-none').waitFor({timeout: t(10000)});
@@ -226,7 +228,7 @@ run('growth', ['org', 'toured'], async ({hub, browser, phone, tag}) => {
 
   // A stage opens its KPI on Goals.
   await stages.nth(1).locator('a').click();
-  await page.waitForFunction(id => location.hash.startsWith('#/strategy/goals') && location.hash.includes(id), refs.inpId, {timeout: t(5000)});
+  await page.waitForFunction((id: string) => location.hash.startsWith('#/strategy/goals') && location.hash.includes(id), refs.inpId, {timeout: t(5000)});
   await page.locator(`#goal-kpis .gkv-hit[data-kpi="${refs.inpId}"]`).waitFor({timeout: t(15000)});
   await go(page, '#/growth');
   await page.locator('#dash-grid .grc-funnel').waitFor({timeout: t(15000)});
@@ -249,8 +251,8 @@ run('growth', ['org', 'toured'], async ({hub, browser, phone, tag}) => {
   await dialog().locator('[name="stage"]').selectOption('paused');
   await dialog().locator('[type=submit]').click();
   await dialog().waitFor({state: 'detached', timeout: t(10000)});
-  const google = (await ok(page, 'GET', 'growth/channels')).channels.find(c => c.slug === 'google-ads');
-  assert.equal(google.stage, 'paused', `${tag}: the stage saved`);
+  const google = (await ok<{channels: {slug: string; stage: string}[]}>(page, 'GET', 'growth/channels')).channels.find(c => c.slug === 'google-ads');
+  assert.equal(google!.stage, 'paused', `${tag}: the stage saved`);
   await (await settings()).locator('[data-ch-add]').click();
   await dialog().locator('[name="name"]').fill('Yard signs');
   assert.equal(await dialog().locator('[name="slug"]').inputValue(), 'yard-signs', `${tag}: the slug follows the name`);
@@ -262,7 +264,7 @@ run('growth', ['org', 'toured'], async ({hub, browser, phone, tag}) => {
   await sd.locator('[name="revenue_month"]').fill('95');
   await sd.locator('[type=submit]').click();
   await sd.waitFor({state: 'detached', timeout: t(10000)});
-  assert.equal((await ok(page, 'GET', 'growth/settings')).revenue_month, 95, `${tag}: the setting saved`);
+  assert.equal((await ok<{revenue_month: number}>(page, 'GET', 'growth/settings')).revenue_month, 95, `${tag}: the setting saved`);
 
   // A Number for one channel, added from the grid's form, in edit mode.
   await page.locator('[data-dash-mode="edit"]').click();
@@ -292,14 +294,14 @@ run('growth', ['org', 'toured'], async ({hub, browser, phone, tag}) => {
   for (const [from, to] of [['#/growth/channels', '#/growth'], ['#/growth/learning', '#/growth'], ['#/growth/week', '#/growth'], ['#/growth/ideas', '#/growth'],
     ['#/growth/buyers', '#/strategy'], ['#/growth/segments', '#/strategy'], ['#/growth/gtm', '#/strategy'], ['#/growth/gtm/model', '#/strategy'], ['#/strategy/gtm', '#/strategy'],
     ['#/strategy/gtm/channels', '#/strategy'], ['#/growth/gtm/sources', '#/growth/sources'], ['#/strategy/gtm/sources', '#/growth/sources'],
-    ['#/strategy/growth', '#/growth'], ['#/strategy/growth/channels?x=1', '#/growth']]) {
+    ['#/strategy/growth', '#/growth'], ['#/strategy/growth/channels?x=1', '#/growth']] as [string, string][]) {
     await go(page, from);
     await arrive(to, from);
   }
 
   // A late answer never draws over Sources, which sits under #/growth.
-  let release;
-  const held = new Promise(r => { release = r; });
+  let release!: () => void;
+  const held = new Promise<void>(r => { release = r; });
   await page.route('**/api/v2/places/growth*', async route => { await held; await route.fallback(); });
   await go(page, '#/growth');
   await go(page, '#/growth/sources');
@@ -313,7 +315,7 @@ run('growth', ['org', 'toured'], async ({hub, browser, phone, tag}) => {
   const how = page.locator('[data-section="how"]');
   await how.waitFor({timeout: t(15000)});
   assert.match(await how.locator('.strat-k').innerText(), /How we sell/i, `${tag}: its title`);
-  const {draft} = await ok(page, 'GET', 'strategy');
+  const {draft} = await ok<{draft?: {revision: number}}>(page, 'GET', 'strategy');
   await ok(page, 'PUT', 'strategy/draft', {revision: draft?.revision ?? 0, sections: {how: 'Local search first, then referrals'}});
   await go(page, '#/tasks');
   await go(page, '#/strategy');
@@ -350,7 +352,7 @@ run('growth', ['org', 'toured'], async ({hub, browser, phone, tag}) => {
   await page.locator('[data-doc-publish-form] input[name="note"]').fill('Sharper positioning');
   await page.locator('[data-doc-publish-form] [type=submit]').click();
   await page.waitForFunction(() => !document.querySelector('[data-doc-publish-form]') && document.querySelector('.br-edit'), null, {timeout: t(10000)});
-  const brand = await ok(page, 'GET', 'brand');
+  const brand = await ok<{published: {body: {positioning: string}}}>(page, 'GET', 'brand');
   assert.equal(brand.published.body.positioning, 'Home cleaning you never have to think about', `${tag}: the published section`);
 
   // Goals: the KPIs by Tree, Loops and Journey; a KPI's dialog places it in a loop, and leaving shuts it.

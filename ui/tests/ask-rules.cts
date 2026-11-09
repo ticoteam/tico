@@ -1,9 +1,9 @@
 // No browser: Ask's rules (ui/app/ask-rules.ts). A turn at work with no words yet says how long it has run and its
 // newest step.
-const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const vm = require('node:vm');
-const path = require('node:path');
+const assert: typeof import('node:assert/strict') = require('node:assert/strict');
+const fs: typeof import('node:fs') = require('node:fs');
+const vm: typeof import('node:vm') = require('node:vm');
+const path: typeof import('node:path') = require('node:path');
 
 const context = vm.createContext({});
 vm.runInContext(fs.readFileSync(path.join(__dirname, '../../build/ui/app/ask-rules.js'), 'utf8')
@@ -24,7 +24,14 @@ assert.equal(askToolStep('Ran a tool'), '');
 assert.equal(askToolStep('Ran curl'), 'Running curl', 'a shell program the server named');
 assert.equal(askToolStep('Filing a task'), 'Filing a task', 'a label the server already says in words');
 const started = new Date(now - 4 * 60000 - 20000).toISOString();
-const run = over => ({state: 'running', label: 'Working', text: '', started_at: started, parts: [
+interface Run {
+  state: string;
+  label: string;
+  text: string;
+  started_at?: string | undefined;
+  parts: {kind: string; text: string}[];
+}
+const run = (over?: Partial<Run>) => ({state: 'running', label: 'Working', text: '', started_at: started, parts: [
   {kind: 'tool', text: 'Ran hub task list'}, {kind: 'progress', text: 'Clearing them out.'}, {kind: 'tool', text: 'Ran hub task bulk close'}], ...over});
 assert.equal(askWorkingLine(run(), now), 'Working · 4m · Closing tasks', 'its label, its time and its newest step');
 assert.equal(askWorkingLine(run({parts: []}), now), 'Working · 4m');
