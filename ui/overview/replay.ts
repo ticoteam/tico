@@ -186,7 +186,7 @@ export function createReplay(root: ParentNode, data: ReplayData, {names = {}, wo
   function play() { if (st.playing) return; if (line.t >= to) seek(from); st.playing = true; st.last = 0; st.raf = requestAnimationFrame(frame); bar(); }
   function pause() { st.playing = false; cancelAnimationFrame(st.raf); bar(); }
   els.play.onclick = () => st.playing ? pause() : play();
-  els.speeds.onclick = ev => { const b = eventElement(ev)?.closest<HTMLElement>('[data-speed]'); if (b) { st.speed = Number(b.dataset.speed); bar(); } };
+  els.speeds.onclick = ev => { const b = (ev.target as Element).closest<HTMLElement>('[data-speed]'); if (b) { st.speed = Number(b.dataset.speed); bar(); } };
   els.range.oninput = () => { const at = from + (+els.range.value / 1000) * (to - from), was = st.playing; pause(); seek(at); if (was && line.t < to) play(); };
 
   seek(from);
