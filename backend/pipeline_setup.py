@@ -293,7 +293,7 @@ PRESETS: dict[str, dict[str, Any]] = {
                     ("Targets", "open"),
                     ("Outreach", "doing"),
                     ("Replies", "review"),
-                    ("Qualified", "review"),
+                    ("Qualified", "done"),
                     ("Closed", "closed"),
                 ),
                 "manager": [],
@@ -687,15 +687,28 @@ def _open_seat(conn: sqlite3.Connection, seat_id: object) -> bool:
     )
 
 
+def _seat_filler(conn: sqlite3.Connection, seat_id: object) -> str | None:
+    """The bot that filled a closed seat, as a bare id, when that bot is active or planned. A seat filled before setup
+    still names its bot here, so the pipeline it is bound to keeps that bot (seat_filled only runs at the hire)."""
+    row = _one(conn, "SELECT filled_by FROM seats WHERE id = ? AND closed_at IS NOT NULL", (str(seat_id),))
+    if not row or not row.get("filled_by"):
+        return None
+    bot = H.resolve_bot(conn, str(row["filled_by"]))
+    if bot is not None and str(bot.get("state") or "active") in ("active", "planned"):
+        return str(bot["id"])
+    return None
+
+
 def _has_cards(conn: sqlite3.Connection, type_id: str) -> bool:
     return _one(conn, "SELECT 1 FROM tasks WHERE type_id = ? LIMIT 1", (type_id,)) is not None
 
 
 def _manager_updates(conn: sqlite3.Connection, spec: Row, current: Row, binding: Row, unresolved: list[str]) -> Row:
     """Who runs a pipeline. An active manager is never replaced, by a binding or by a name. Otherwise, in order: the bot
-    the binding names (an active bot, or a planned one setup is making, by id or slug, written as its bare id), the open seat the binding names (its hire
-    sets the manager; see seat_filled), a seat already set that is still open, the name match. A pipeline with none of
-    those is named under unresolved."""
+    the binding names (an active bot, or a planned one setup is making, by id or slug, written as its bare id), the open
+    seat the binding names (its hire sets the manager; see seat_filled), the bot that already filled the binding's seat
+    (_seat_filler), a seat already set that is still open, the name match. A pipeline with none of those is named under
+    unresolved."""
     if _active_manager(conn, current.get("manager")):
         return {}
     if binding.get("bot"):
@@ -705,6 +718,9 @@ def _manager_updates(conn: sqlite3.Connection, spec: Row, current: Row, binding:
             return {"manager": str(bot["id"])}
     if binding.get("seat") and _open_seat(conn, binding["seat"]):
         return {"manager": None, "manager_seat": str(binding["seat"])}
+    filler = _seat_filler(conn, binding["seat"]) if binding.get("seat") else None
+    if filler:
+        return {"manager": filler, "manager_seat": str(binding["seat"])}
     if _open_seat(conn, current.get("manager_seat")):
         return {}
     manager = _manager(conn, spec.get("manager") or [])

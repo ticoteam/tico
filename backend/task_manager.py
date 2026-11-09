@@ -162,10 +162,26 @@ def _decide_words(c, row):
     }.get(cls, "")
 
 
+def _managed_pipelines(c):
+    """The pipelines (type ids) whose manager is an active bot. Their quiet tasks are the manager's to tidy, so the
+    Task Manager leaves them out. A pipeline with no manager, or one whose manager is missing, paused or archived, stays
+    covered, and so does one whose manager seat is still open (its hire sets the manager)."""
+    from . import pipeline_manager
+
+    return {
+        row["id"]
+        for row in H._rows(c.execute("SELECT id, manager FROM task_types WHERE manager IS NOT NULL AND manager <> ''"))
+        if pipeline_manager.manager_bot(c, row) is not None
+    }
+
+
 def _quiet(c, at):
     out = []
+    managed = _managed_pipelines(c)
     for row in H.stalled_tasks(c, at):
         if row["quiet_minutes"] < QUIET_MINUTES or not _readable(c, row):
+            continue
+        if row.get("type_id") in managed:
             continue
         if row.get("own_blockers"):
             blockers = ", ".join(row["own_blockers"])
