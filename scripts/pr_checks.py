@@ -1442,8 +1442,9 @@ def factory_plan(event, changed, own_inputs=False):
 
 # Light runs (`plan --light`). GitHub gives the organisation about 60 concurrent hosted jobs, and pull request runs spent
 # about 70% of the CI job-minutes (Nov 8: 418 pull request and 168 queue job-minutes per merged pull request; superseded
-# pull request runs were 57% of theirs). A light pull request run is an early signal, and its merge queue group is the
-# gate. For an event in NARROW, the plan keeps the Python tests of the selection above (unchanged, so release validation's
+# pull request runs were 57% of theirs); throughput (20+ merged pull requests an hour) needs both tiers smaller. A pull
+# request run is an early signal (depth 1, four VMs); a merge queue group goes one level further (depth 2, eight VMs).
+# For an event in NARROW, the plan keeps the Python tests of the selection above (unchanged, so release validation's
 # incremental runs, scripts/release_increment.py, still select with it) that a change reaches within `depth` levels:
 #   level 0: a changed test file;
 #   level 1: a test that runs (imports, names) or reads a changed file directly, uses a conftest fixture that runs it, or
@@ -1454,10 +1455,12 @@ def factory_plan(event, changed, own_inputs=False):
 # of about NARROW_SHARD_SECONDS, by measured seconds (the run's timings over scripts/test-timings.json), keeping changed
 # test files first, then the smoke set, then the nearer level, then the shorter file. What it leaves out is listed in the
 # job summary and in the plan (narrow.left_transitive, narrow.left_over_budget). A light pull request also runs the browser
-# scripts, the Caddy job and the factory sim only when the change touches their own inputs directly.
-# Every main commit still meets the whole suite: release validation's incremental runs select with the full rules above
-# from the last full validation, and one full validation runs every 24 hours (scripts/release_increment.py).
-NARROW = {"pull_request": {"depth": 1, "shards": 4}}
+# scripts, the Caddy job and the factory sim only when the change touches their own inputs directly; a queue group keeps
+# them, the contracts, the static checks on its merge commit and the Rust, desktop and recorder jobs as they were.
+# What a queue group leaves out still runs before a release: release validation's incremental runs select with the full
+# rules above (the whole transitive closure) over every change since the last full validation, which runs once every 24
+# hours (scripts/release_increment.py), and a red one holds the release until a fix selects its failure.
+NARROW = {"pull_request": {"depth": 1, "shards": 4}, "merge_group": {"depth": 2, "shards": 8}}
 NARROW_SHARD_SECONDS = 480
 HUB_TEST_USERS = 40
 TIMINGS_FILE = "scripts/test-timings.json"

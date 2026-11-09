@@ -4,14 +4,16 @@
 # also runs a light plan's tests (scripts/pr_checks.py NARROW, `plan --light`): the Python tests its change reaches
 # directly, the smoke set when that drops any, capped at four VMs; the browser scripts, the factory simulation and the
 # Caddy job only when it touches their own inputs. Its `checks` passes only when they pass. The merge queue group is the
-# gate: it plans from the full selection. A fork's pull request keeps the cheap checks only, and a draft runs nothing.
+# gate: its plan goes one level further (two, at most eight Python VMs) and keeps every other job's condition. A fork's
+# pull request keeps the cheap checks only, and a draft runs nothing.
 # A ready pull request from this repository also runs every other job a queue group runs, under the same conditions, so
 # a failure shows before the change is enqueued: the Rust lint, desktop, macOS recorder and Linux Caddy jobs when the
 # change touches what they check. The plan decides (scripts/pr_checks.py queue_jobs, caddy), so an untouched job starts
 # no VM, on a pull request and in a group alike. Only the cosmetic timing receipt is queue-only.
 # A merge queue group (the merge_group event, once per queue group) runs them all again on its merge commit: the tests
-# the group's merged change selects, the factory simulation when the change reaches what it runs (scripts/pr_checks.py
-# factory_reason), and the same Rust lint, desktop, recorder and Caddy jobs. The group's base is the head of the group
+# the group's merged change reaches within two levels (release validation runs the rest), the factory simulation when
+# the change reaches what it runs (scripts/pr_checks.py factory_reason), and the same Rust lint, desktop, recorder and
+# Caddy jobs. The group's base is the head of the group
 # queued ahead of it (main for the first), so it selects from its own pull request's change, tested on top of everything
 # ahead of it. The static checks job runs on the pull request only; the group's plan job runs every static check again
 # on the merge commit that lands on main (scripts/ci/merge_commit_checks.sh), since a change queued ahead can break one
@@ -131,13 +133,13 @@ jobs:
             echo "$?" > "$RUNNER_TEMP/merge-checks.status" ) > "$RUNNER_TEMP/merge-checks.log" 2>&1 &
       - name: Select affected tests and size measured Python and browser groups
         id: plan
-        # A pull request's plan is light (scripts/pr_checks.py NARROW): the tests its change reaches directly, the smoke
-        # set, at most four VMs; its queue group runs the full selection.
+        # Both tiers plan light (scripts/pr_checks.py NARROW): a pull request the tests its change reaches directly, at
+        # most four VMs; a queue group two levels, at most eight; each with the smoke set when it drops any. Release
+        # validation's incremental and daily full runs cover what a group leaves out.
         env:
           EVENT: ${{ github.event_name }}
           CHECK_HEAD: ${{ github.event.merge_group.head_sha || 'HEAD' }}
-          LIGHT: ${{ github.event_name == 'pull_request' && 'light' || '' }}
-        run: '"$RUNNER_TEMP/venv/bin/python" scripts/pr_checks.py plan --event "$EVENT" --base "$BASE_SHA" --head "$CHECK_HEAD" --timings previous-timings/durations.json ${LIGHT:+--light}'
+        run: '"$RUNNER_TEMP/venv/bin/python" scripts/pr_checks.py plan --event "$EVENT" --base "$BASE_SHA" --head "$CHECK_HEAD" --timings previous-timings/durations.json --light'
       - name: Merge commit checks
         if: github.event_name == 'merge_group'
         timeout-minutes: 8

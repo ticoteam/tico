@@ -2004,6 +2004,9 @@ def test_a_light_pull_request_plan_runs_at_most_four_python_vms_and_lists_what_i
     for event, light in (("pull_request", False), ("push", True)):
         assert checks.prepare(event, "base", tmp_path / "plan.json", light=light).get("narrow") is None, event
     assert narrowed == []
+    # A queue group plans light too, from its own base and head, with one map.
+    checks.prepare("merge_group", "queue-base", tmp_path / "plan.json", head="queue-head", light=True)
+    assert narrowed == [("merge_group", "graph")]
 
 
 def test_a_light_pull_request_runs_the_sim_only_for_its_own_inputs(monkeypatch):
@@ -2021,12 +2024,42 @@ def test_a_light_pull_request_runs_the_sim_only_for_its_own_inputs(monkeypatch):
     assert checks.factory_plan("pull_request", [], own_inputs=True)["run"]  # an unreadable diff runs it
 
 
-def test_only_a_pull_request_plans_light_and_its_required_check_keeps_its_contract():
+def test_both_tiers_plan_light_and_the_required_check_keeps_its_contract():
     jobs = workflow_jobs()["jobs"]
     step = next(s for s in jobs["plan"]["steps"] if s.get("id") == "plan")
-    assert step["env"]["LIGHT"] == "${{ github.event_name == 'pull_request' && 'light' || '' }}"
-    assert step["run"].endswith("${LIGHT:+--light}")
-    assert "pull_request" in checks.NARROW
+    assert step["run"].endswith("--light")
+    # NARROW decides per event: a pull request one level and four VMs, a queue group two levels and eight VMs.
+    assert checks.NARROW == {"pull_request": {"depth": 1, "shards": 4}, "merge_group": {"depth": 2, "shards": 8}}
     # `checks` still needs every job and runs after any of them (a draft skips it with everything else).
     assert jobs["checks"]["if"] == "${{ always() && !github.event.pull_request.draft }}"
     assert set(jobs["checks"]["needs"]) == set(jobs) - {"checks", "timings"}
+
+
+def test_a_queue_group_runs_the_tests_two_levels_from_a_change_and_keeps_its_other_jobs(tmp_path, monkeypatch):
+    light_tree(tmp_path)
+    smoke_tests, _ = checks.smoke(tmp_path)
+    full = checks.selection(["backend/leaf.py"], "merge_group", root=tmp_path, core=["page"])
+    group = checks.narrow(full, ["backend/leaf.py"], "merge_group", root=tmp_path)
+    # leaf's test (level 1) and helper's (level 2: it runs helper, which runs leaf); outer's is three levels away.
+    assert set(group["python"]) == {"backend/tests/test_leaf.py", "backend/tests/test_helper.py"} | set(smoke_tests)
+    record = group["narrow"]
+    assert record["left_transitive"] == ["backend/tests/test_outer.py"] and record["shards"] == 8
+    assert record["tier"]["backend/tests/test_leaf.py"] == 2 and record["tier"]["backend/tests/test_helper.py"] == 3
+    # A queue group keeps its browser scripts, Caddy job and contracts as the selection decided.
+    assert (group["browser"], group["caddy"], group["contracts"]) == (full["browser"], full["caddy"], full["contracts"])
+    assert "browser_left" not in record
+    # A hub (more than HUB_TEST_USERS tests run it directly) is not followed to the second level.
+    monkeypatch.setattr(checks, "HUB_TEST_USERS", 0)
+    hub = checks.narrow(full, ["backend/leaf.py"], "merge_group", root=tmp_path)
+    assert "backend/tests/test_helper.py" not in hub["python"]
+    # A light queue group's summary says where the rest runs.
+    assert "release validation" in checks.narrow_summary({**record, "left_over_budget": []})
+
+
+def test_release_validation_selects_the_full_closure_so_it_runs_what_a_queue_group_leaves_out():
+    """A queue group drops tests more than two levels away; release validation's incremental runs (every change since the
+    last full validation, which runs once in 24 hours) select with pr_checks.selection, which narrowing never changes."""
+    source = (ROOT / "scripts/release_increment.py").read_text()
+    assert "pr_checks.selection(" in source and "narrow" not in source and "--light" not in source
+    for name in ("ci.yml", "train.yml", "release.yml", "hotfix.yml"):
+        assert "--light" not in (ROOT / ".github/workflows" / name).read_text(), name
