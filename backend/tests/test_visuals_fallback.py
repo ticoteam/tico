@@ -1,7 +1,7 @@
 """Visuals always on 1/3 (Dev 313): without a separate visual address, pictures, video and audio still show inline,
 served from the app's own address as media only; pages and SVG are cards that open the file viewer, and are never
 served from the app's own address. No visual response ever sets a cookie. Spec tests 1-4 and 7 (Product roadmap
-"Visuals always on"); the UI half is ui/tests/visual-fallback.cjs."""
+"Visuals always on"); the UI half is ui/tests/visual-fallback.cts."""
 
 import base64
 from dataclasses import replace
