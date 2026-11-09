@@ -15,6 +15,8 @@
   },
   "error": "ErrorEnvelope",
   "gated": {
+    "heartbeat.request.capabilities": "Older servers can negotiate it away; requests stay queued until a runner advertises make_page",
+    "heartbeat.request.readiness.worktree_recovery": "runner-rs/src/readiness_extra.rs OPTIONAL: an older server's 422 drops this field for ten minutes; retired worktrees are not allocated to computers without this capability",
     "start_place.request.harness_allocated": "runner-rs/src/execute.rs post_allocated: a 422 naming harness_allocated retries without the field",
     "started.request.harness_allocated": "runner-rs/src/execute.rs post_allocated: a 422 naming harness_allocated retries without the field",
     "start_place.request.waiting": "runner-rs/src/execute.rs wait_before_start: an older server's 422 on a computer busy: memory N% reason retries with pre-start requirements",
@@ -29,6 +31,7 @@
     "heartbeat.request.capabilities[]=\"threads_v1\"": "runner-rs/src/lanes.rs refused_field: an older server's 422 on capabilities drops the newest one for ten minutes",
     "heartbeat.request.capabilities[]=\"harness_allocation_v1\"": "runner-rs/src/lanes.rs refused_field drops it on an older server's 422; without allocation reporting the hub preserves existing grants under memory pressure",
     "heartbeat.request.readiness.trust": "runner-rs/src/readiness.rs trust_field: sent only once GET config says readiness_trust (fallback.rs server_takes_trust)",
+    "heartbeat.request.readiness.disk_cleanup": "runner-rs/src/readiness_extra.rs OPTIONAL: an older server's 422 drops this field for ten minutes; it reports only what the computer already cleaned",
     "heartbeat.request.readiness.runtimes.*.weekly": "runner-rs/src/profiles.rs for_server: a window's origin and subscription_id are sent only once the heartbeat answer says subscription_usage_sources (runner.rs)",
     "heartbeat.request.readiness.runtimes.*.five_hour": "runner-rs/src/profiles.rs for_server: a window's origin and subscription_id are sent only once the heartbeat answer says subscription_usage_sources (runner.rs)",
     "complete.request.parent_message_id": "echoed only from the claim's message.parent_message_id, which only a server with native threads sends; an older server's claim has none, so the runner never sends it there"
@@ -113,6 +116,7 @@
         "next_run": {"type": "array", "items": {"type": "object", "additionalProperties": true}},
         "notes": {"type": "array", "items": {"type": "object", "additionalProperties": true}},
         "deferred": {"type": "string", "x-note": "The prompt's block on what was deferred to this turn: its count line (\"Deferred since your last turn: 2 comments, 1 task\"), then the deferred comments and messages themselves, one a line, a bounded page; empty when nothing; an older server omits it."},
+        "finance": {"oneOf": [{"type": "object", "additionalProperties": false, "required": ["lines", "as_of", "changed_since"], "properties": {"lines": {"type": "array", "items": {"type": "string"}}, "as_of": {"type": ["string", "null"]}, "changed_since": {"type": ["string", "null"]}}}, {"type": "null"}], "x-note": "The bot's Finance brief (backend/finance/brief.py for_turn): its lines, as_of and changed_since, sent only when they changed since the brief it last got; null otherwise. The runner puts the lines in the prompt's standing part. An older server omits it."},
         "credential_vault": {"type": "boolean"},
         "gateway": {"type": "boolean"},
         "continue_thread": {"type": "string"},
@@ -121,9 +125,31 @@
         "source_continuation": {"type": "object", "additionalProperties": true},
         "worktrees": {"type": "array", "items": {"type": "object", "additionalProperties": true}},
         "learned": {"oneOf": [{"type": "object", "additionalProperties": true}, {"type": "null"}]},
+        "make_page": {"type": "object", "additionalProperties": false, "required": ["task"], "properties": {"task": {"type": "object", "additionalProperties": true}}},
+        "task_context": {"$ref": "#/$defs/TaskContext"},
         "updates": {"oneOf": [{"type": "object", "additionalProperties": true}, {"type": "null"}]},
         "session_epoch": {"type": "integer"},
         "bot_session_epoch": {"type": "integer"}
+      }
+    },
+    "TaskContext": {
+      "type": "object", "additionalProperties": false, "required": ["pages", "meetings"],
+      "properties": {
+        "pages": {"type": "array", "maxItems": 10, "items": {"$ref": "#/$defs/TaskContextPage"}},
+        "meetings": {"type": "array", "maxItems": 10, "items": {"$ref": "#/$defs/TaskContextMeeting"}}
+      }
+    },
+    "TaskContextPage": {
+      "type": "object", "additionalProperties": false, "required": ["id", "title", "version", "updated_at"],
+      "properties": {
+        "id": {"type": "string"}, "title": {"type": "string", "maxLength": 200},
+        "version": {"type": "integer"}, "updated_at": {"type": "string"}
+      }
+    },
+    "TaskContextMeeting": {
+      "type": "object", "additionalProperties": false, "required": ["id", "title", "date"],
+      "properties": {
+        "id": {"type": "string"}, "title": {"type": "string", "maxLength": 200}, "date": {"type": "string"}
       }
     },
     "StartPlaceAnswer": {

@@ -1,20 +1,20 @@
-/* ui/app/finance.js — The Finance tab (spec §12): its place in the sidebar, the page head with its tabs (P&L, Balance
-   sheet, Payables, Receivables, Cards, Transactions, Sources, Access), the owner's
+/* ui/app/finance.js — The Finance tab (spec §12): its place in the sidebar, the page head with its tabs (P&L, Budgets,
+   Balance sheet, Payables, Receivables, Cards, Transactions, Tax, Sources, Access), the owner's
    "View as", and what every tab shares: money in cents shown as dollars, a right rail that stacks under the table on
    a phone, CSV export of what is on screen, and actions (POST /api/v2/finance/actions, a fresh Idempotency-Key each).
    Every number is the route's, cut to the viewer (§7.5); nothing hidden is worked out here.
    Reads: GET /api/v2/finance/access (who sees what: the sidebar link and the tabs follow it).
-   The tabs are their own files: finance-pnl.js (P&L and a line's page), finance-books.js (Balance sheet, Cards,
-   Transactions), finance-docs.js (Payables, Receivables, and entering a bill, invoice or journal entry),
-   finance-admin.js (Sources, Access).
+   The tabs are their own files: finance-pnl.js (P&L and a line's page), finance-budgets.js (Budgets), finance-books.js
+   (Balance sheet, Cards, Transactions), finance-docs.js (Payables, Receivables, and entering a bill, invoice or journal
+   entry), finance-admin.js (Sources, Access), finance-attribution.ts (Attribution: split chips, the line's shares, the rules).
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
 'use strict';
 
 const FIN_ROUTE = '#/finance';
-const FIN_TABS = [['pnl', 'P&L'], ['balance', 'Balance sheet'], ['payables', 'Payables'], ['receivables', 'Receivables'],
+const FIN_TABS = [['mine', 'My budget'], ['pnl', 'P&L'], ['budgets', 'Budgets'], ['attribution', 'Attribution'], ['balance', 'Balance sheet'], ['payables', 'Payables'], ['receivables', 'Receivables'],
   ['cards', 'Cards'], ['transactions', 'Transactions'], ['tax', 'Tax'], ['sources', 'Sources'], ['access', 'Access']];
-let FIN = null;           // the open page: {load, tab, arg, q, acc, caps}
-let FIN_ACCESS = null;    // the last GET /v2/finance/access, or null (not set up, or nothing to see)
+/** @type {any} */ let FIN = null;           // the open page: {load, tab, arg, q, acc, caps}
+/** @type {any} */ let FIN_ACCESS = null;    // the last GET /v2/finance/access, or null (not set up, or nothing to see)
 let FIN_PROBE = null;     // the sidebar's one read per visit
 let FIN_VIEW_AS = '';     // the owner viewing Finance as a teammate (read only): ?view_as=… in the address
 
@@ -30,13 +30,22 @@ function finCapsOf(acc, who) {
   const all = owner || what.has('everything');
   const rights = new Set(row.rights || []);
   const may = right => owner || rights.has(right) || rights.has('finance.admin');
-  return {row, owner, all, rights, may,
-    any: all || row.default !== 'none' || live.length > 0 || rights.has('finance.admin'),
+  // Finance beyond one's own budgets: a default view, a grant, or finance.admin. Without it a teammate with budgets of
+  // their own sees only My budget (backend/finance/handlers.py reads_budget), and one with none sees no Finance at all.
+  const sees = all || row.default !== 'none' || live.length > 0 || rights.has('finance.admin');
+  const mine = !owner && (row.budgets || 0) > 0;
+  // Attribution: the backend's flag when present (finance.attribution; admin and owner imply it), else the same rule here.
+  const attribute = typeof row.attribute === 'boolean' ? row.attribute
+    : owner || rights.has('finance.attribution') || rights.has('finance.admin');
+  return {row, owner, all, rights, may, sees, mine, attribute,
+    any: sees || mine || attribute,
     company: all || what.has('pnl') || what.has('pnl_lines'),
     // Company-wide expenses (backend/finance/core/view.py company_expenses), which the Unattributed filter needs.
     companyExpenses: all || live.some(g => g.whose === 'company' && (g.what === 'pnl' || g.what === 'expenses')),
     balance: all || what.has('balance_sheet') || what.has('bs_lines'),
     sources: all || what.has('sources'),
+    // Budgets: the owner and whoever holds finance.budgets (or finance.admin, which implies it).
+    budgets: owner || rights.has('finance.budgets') || rights.has('finance.admin'),
     // Bills and invoices show to a payables or receivables view, or to the right whose work they are
     // (backend/finance/tab_ap.py sees_side).
     payables: all || what.has('payables') || may('finance.ap'),
@@ -52,7 +61,7 @@ function finCaps() {
   return {...caps, who, viewing, may: right => !viewing && caps.may(right)};
 }
 // Tax workpapers are filed whole, so only a viewer who sees everything reads them (backend/finance/tax.py).
-const finTabShown = (tab, caps, acc) => !!caps?.any && FIN_TABS.some(([id]) => id === tab) && (tab === 'balance' ? caps.balance : tab === 'sources' ? caps.sources : tab === 'tax' ? caps.all
+const finTabShown = (tab, caps, acc) => !!caps?.any && FIN_TABS.some(([id]) => id === tab) && (tab === 'mine' ? caps.mine : tab === 'attribution' ? caps.attribute : !caps.sees ? false : tab === 'balance' ? caps.balance : tab === 'budgets' ? caps.budgets : tab === 'sources' ? caps.sources : tab === 'tax' ? caps.all
   : tab === 'payables' ? caps.payables : tab === 'receivables' ? caps.receivables : tab === 'access' ? !caps.viewing && (!!acc?.can_view_as || caps.rights.has('finance.admin') || (acc?.teammates || []).length > 1) : true);
 // ?view_as=… on every read while the owner views as someone.
 const finAs = (sep = '&') => FIN_VIEW_AS && finCaps()?.viewing ? `${sep}view_as=${encodeURIComponent(FIN_VIEW_AS)}` : '';
@@ -257,7 +266,7 @@ function pageFinance() {
   FIN_VIEW_AS = FIN.q.get('view_as') || '';
   const main = $('#main');
   main.classList.add('strategy-layout', 'finance-layout');
-  main.innerHTML = finHeadHtml() + `<div id="fin-body" class="fin-body">${skelRows(6, {dot: false})}</div>`;
+  main.innerHTML = finHeadHtml() + '<div id="fin-brief"></div>' + `<div id="fin-body" class="fin-body">${skelRows(6, {dot: false})}</div>`;
   const state = FIN;
   void (async () => {
     let acc = null, error = null;
@@ -274,12 +283,16 @@ function finShow(state) {
   if (!caps?.any) { finHeadDraw(); $('#fin-body').innerHTML = finNote('Nothing in Finance is in your view.'); return; }
   const tab = state.tab === 'line' ? 'pnl' : state.tab;
   if (!tab || !finTabShown(tab, caps, acc)) {
-    location.replace(finHref('/pnl', {view: caps.company ? '' : 'expenses'}));
+    location.replace(caps.sees ? finHref('/pnl', {view: caps.company ? '' : 'expenses'}) : caps.mine ? finHref('/mine') : finHref('/attribution'));
     return;
   }
   finHeadDraw();
+  void finBriefLoad(state);
   if (state.tab === 'line') finLinePage(state.arg);
   else if (tab === 'pnl') finPnlPage();
+  else if (tab === 'budgets') finBudgetsPage();
+  else if (tab === 'attribution') finAttrPage();
+  else if (tab === 'mine') finBudgetsPage(true);
   else if (tab === 'balance') finBalancePage();
   else if (tab === 'payables') finDocPage('bill');
   else if (tab === 'receivables') finDocPage('invoice');

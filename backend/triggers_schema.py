@@ -1,4 +1,5 @@
 """The tables behind webhook triggers (backend/triggers.py); hubdb.MIGRATIONS applies them."""
+
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS triggers (
   id TEXT PRIMARY KEY, name TEXT NOT NULL, kind TEXT NOT NULL DEFAULT 'webhook',

@@ -1,12 +1,27 @@
 # Privacy
 
-What a Tico install sends outside your own server, and what the receiving side keeps: the anonymous usage count, the
-suggestions while you build your team chart, and, only when you press Send, a support ticket. Each has its own switch.
+What a Tico install sends outside your own server, and what the receiving side keeps: the anonymous usage count,
+Maintenance suggestions, suggestions while you build your team chart, and, only when you press Send, a support ticket.
+Each has its own switch.
+Tico Cloud machines also come with support access, on by default, which the owner can turn off
+([below](#tico-support-on-cloud-machines)).
 The setup page on tico.team, which you use before installing, has its own section ([below](#the-setup-page-on-ticoteam)).
 Ask Tico, the chat on tico.team's pages, has its own section too ([below](#ask-tico-the-chat-on-ticoteam)).
-Separately, the server calls AI model providers with your own keys for a few features ([below](#the-servers-own-model-calls)). Bots you set to use Tico Cheap, Mid or Power send their model calls through Tico HQ to OpenRouter ([below](#tico-cheap-mid-and-power-through-tico-hq)). Tico's source is available, so you can read the code that
-sends them (`backend/census.py`, `backend/releases.py`, `backend/recruit.py`, `backend/support.py`). The service that receives them,
+Separately, the server calls AI model providers with your own keys for a few features ([below](#the-servers-own-model-calls)). Bots you set to use a Tico model send their model calls through Tico HQ to OpenRouter ([below](#tico-models-through-tico-hq)). Tico's source is available, so you can read the code that
+sends them (`backend/census.py`, `backend/releases.py`, `backend/suggestions.py`, `backend/recruit.py`, `backend/support.py`). The service that receives them,
 Tico HQ, is run by the Tico team from a separate, private repository; its code is not published. What it is sent and what it keeps is described in [docs/tico-hq.md](docs/tico-hq.md).
+
+## Maintenance suggestions
+
+**Share stats for suggestions**, in Settings > General > Privacy, starts off. Enabling it requires the owner's consent
+and a hosted install or Tico Gateway connection. Suggest sends counts at most once every 24 hours through the install's
+authenticated Gateway connection: snapshot version, active bots in total and by role, open tasks and automations.
+It sends no names or message text. Demo, rehearsal and plain open-source installs never send these requests.
+
+**Report suggestion outcomes** starts on, only while sharing is on. Its JSON contains only the HQ suggestion id and
+`delivered`, `acted`, `dismissed`, `expired` or `condition_false`, at most 100 per run. It sends no bot ids, timestamps,
+suggestion text or local facts. Turn either switch off to stop its requests. This is separate from usage counting.
+See [Suggest](docs/learnings.md#suggest) and `backend/suggestions.py` for the full install-side contract.
 
 ## The anonymous usage count
 
@@ -92,6 +107,12 @@ stops the update check altogether, and with it the count. `TICO_HQ_URL` points t
 At each start of a release image, the server also asks GitHub which commit that release's tag names
 (`GET api.github.com/repos/ticoteam/tico/commits/v<version>`, nothing else in the request) to check its image was built from it
 ([flight recorder](docs/observability.md#the-flight-recorder)). `TICO_UPDATE_CHECK=off` stops this too.
+
+The server also reads the Tico Recorder's public updater feed on GitHub
+(`github.com/ticoteam/tico/releases/latest/download/recorder-latest.json`, at most hourly, nothing else in the request) to
+know the newest Recorder version. The Recorder tells your own Tico, never anyone else, its version and a random id for
+that copy (kept in its library folder) on each call; Tico keeps the last version and time per person and copy, so
+owners and admins see it in Settings > People. `TICO_UPDATE_CHECK=off` stops the feed check too.
 
 ### Check it yourself
 
@@ -267,20 +288,20 @@ you set on the server, and never in rehearsal mode. Each provider keeps what it 
 | **Slack routing** (`backend/slack_gateway.py`, when the Slack gateway is on) | The message's text; the sender's name, roster id, team and the bots they are primary for; the channel's name and registry purpose; the last twelve exchanges in the thread and their previous routing; and the active roster (each bot's name, team, description and manager) | The same decision model as above |
 | **Topic changed** (`backend/topic_change.py`, when Settings > General > **Start fresh when the topic changes** is on) | Before a message in a person's direct chat with a bot is sent, and only when the chat is long or idle: the chat's last 3 turns since its last clear (what the person said and what the bot answered, each cut to about 1,500 characters) and the new message. Task lines, task chats, group chats and shared bots' rooms are never sent. The audit keeps the answer, never the text | The same decision model as above |
 | **Market ask** (`POST /api/v2/market/ask`) | The question, and up to about seventeen excerpts from the market graph that match it: entity names, aliases and summaries, evidence quotes and our reads, and the start of matching market pages | Google's Gemini API (generativelanguage.googleapis.com, `gemini-3.7-flash`) with the server's `GEMINI_API_KEY`, whatever Settings > Computers > Models says. Without a key nothing is sent and the pulled excerpts are the answer |
-| **Strategy research** (`POST /api/v2/strategy/draft-from`, the owner during setup) | The website address and the description the owner typed, and the text of up to four of that website's public pages (home, about, pricing, customers; 8,000 characters each). Fetching those pages is a plain request from the server to that website, with no credentials | Tico Mid 1.0 on the Tico AI Gateway (Tico HQ, then OpenRouter, [below](#tico-cheap-mid-and-power-through-tico-hq)) while the gateway is connected and chosen for the gateway models, else the team's own provider from Settings > Computers > Models whose key the server holds. With neither nothing is sent and setup is a plain form. The server keeps the job (address, description, page addresses and titles, and the model's answer) in its database, the last five jobs |
+| **Strategy research** (`POST /api/v2/strategy/draft-from`, the owner during setup) | The website address and the description the owner typed, and the text of up to four of that website's public pages (home, about, pricing, customers; 8,000 characters each). Fetching those pages is a plain request from the server to that website, with no credentials | Tico Medium on the Tico AI Gateway (Tico HQ, then OpenRouter, [below](#tico-models-through-tico-hq)) while the gateway is connected and chosen for the gateway models, else the team's own provider from Settings > Computers > Models whose key the server holds. With neither nothing is sent and setup is a plain form. The server keeps the job (address, description, page addresses and titles, and the model's answer) in its database, the last five jobs |
 
 What the server keeps of each call is an audit event, never the text that was sent: `judge.call` (the label, the number of
 questions, the value and confidence per answer, the model, token usage and latency; Slack routing adds the Slack event id)
 and `market.ask` (the model, the latency, how many excerpts and how long the question was). Each actor has a daily cap on
 these calls (`TICO_DECISIONS_DAILY_CALLS_OWNER`, `_HUMAN`, `_BOT`; README.md).
 
-## Tico Cheap, Mid and Power through Tico HQ
+## Tico models through Tico HQ
 
 Only when your team has a Tico AI Gateway key (Settings > Computers > Models, or `TICO_GATEWAY_KEY`) and a bot is set to
-a Tico model (Tico Cheap, Mid or Power). That bot's computer then sends each of its model calls, with the gateway key, to Tico HQ
+a Tico model (a level from X-Low to X-High). That bot's computer then sends each of its model calls, with the gateway key, to Tico HQ
 (`https://updates.tico.team/v1/gateway/chat/completions`), and HQ sends it on to **OpenRouter** (openrouter.ai) with
-HQ's own OpenRouter key. OpenRouter passes it to a provider that serves the Claude model behind that Tico model (Haiku,
-Sonnet or Opus). Without a gateway key, or with the bot on another model, nothing goes this way.
+HQ's own OpenRouter key. OpenRouter passes it to a provider that serves the model behind that Tico model (Claude Haiku,
+Sonnet, Opus or Fable, DeepSeek, or Inception Mercury). Without a gateway key, or with the bot on another model, nothing goes this way.
 
 **What OpenRouter is sent:** the call's messages (the system, user, assistant and tool text the bot sends, which can be
 anything it has read: a task, a chat, a mail, a file's text) and its tools, with the tool calls, tool choice, output
@@ -407,8 +428,8 @@ How the team works tickets: [docs/support.md](docs/support.md).
 
 ### Letting Tico support in
 
-Only if an owner or admin starts it, from one of their own requests, for the time they choose (24 hours unless they pick
-another; 30 days at most). A banner on every screen says it is on, and Stop ends it at once
+Only if an owner or admin starts it, from one of their own requests, for the time they choose (3 days unless they pick
+another; 365 days at most). A banner on every screen says it is on, and Stop ends it at once
 ([docs/support.md](docs/support.md#letting-tico-support-in)).
 
 - **App only:** the Tico team sees what an admin sees in your Tico: settings, Health, computers, bots, tasks and their
@@ -423,6 +444,24 @@ tier, start, end) and the same one-line record of each request, with the ticket,
 Agent treats everything it reads from your Tico as untrusted data, never as instructions. The whole feature is off unless the
 server runs with `TICO_SUPPORT_ACCESS=on`, and also with `TICO_SUPPORT=off`, in demo mode and when the owner's team rule is
 off. With `TICO_SUPPORT=off` or in a rehearsal, a session that was live ends without the install sending HQ anything.
+
+### Tico support on cloud machines
+
+Tico Cloud machines include a support helper, on by default. Tico staff and the Support Agent can read and change
+files and run commands on the machine to diagnose and fix problems. The machine's user has `sudo`, so this can
+reach bot workspaces, installed tools and credentials stored on the disk. Files and command output read by support
+pass through Tico HQ. Each machine keeps an owner log of support actions and who acted.
+
+The owner can turn **Tico support can reach our cloud machines** off or back on in **Settings > People**. HQ holds
+this company-wide switch and stops that company's helper work when it is off. Tico records a successful change
+under the owner's name in its audit log and reads the switch and per-machine helper states from HQ. A failed call
+saves no local choice. HQ associates a helper with the company's install ID, owner email and cloud-machine ID, and
+keeps a digest of its credential rather than the credential itself.
+
+The helper is never installed on shared hosts serving several companies. A company's own shared cloud machine
+serves only its bots and can have the helper. This access is separate from app support sessions: stopping a session,
+turning off the app support-access rule, or `TICO_SUPPORT=off` does not turn off the cloud-machine helper. Use the
+cloud-machine switch to stop it. See [docs/support.md](docs/support.md#tico-support-on-cloud-machines).
 
 ### Support diagnostics
 

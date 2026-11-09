@@ -14,10 +14,20 @@ from backend.tests.test_strategy import add_bet, publish, write
 WEEK = "2026-W44"
 
 
-def brief(api, items=None, week=WEEK, title="Week 44", body="Northwind changed its pricing.", token="ana-test",
-          expected=200):
-    return post(api, "market/briefings", {"week": week, "title": title, "body": body, "items": items or []},
-                token=token, expected=expected)
+def brief(
+    api,
+    items=None,
+    week=WEEK,
+    title="Week 44",
+    body="Northwind changed its pricing.",
+    token="ana-test",
+    expected=200,
+    answers=None,
+):
+    payload = {"week": week, "title": title, "body": body, "items": items or []}
+    if answers is not None:
+        payload["answers"] = answers
+    return post(api, "market/briefings", payload, token=token, expected=expected)
 
 
 def item(*entities, text="Northwind raised its price.", kind="change"):
@@ -39,6 +49,7 @@ def events(monkeypatch):
         if type_ == "market.briefing":
             seen.append((type_, subject, data() if callable(data) else data))
         return heard(c, type_, subject, data, actor)
+
     monkeypatch.setattr(automations, "on_event", listen)
     return seen
 
@@ -46,8 +57,10 @@ def events(monkeypatch):
 def publish_bets(api):
     write(api, summary="Acme runs rentals with bots.", sections={"not": "No enterprise deals."})
     cited = add_bet(api, "Small landlords pay for bots", cites=["company/northwind"])["bet"]
-    thesis = add_bet(api, "Mid-size managers want one tool", wrong_if={"kind": "thesis", "market_id": "company/brightline"})["bet"]
-    add_bet(api, "Enterprise first", cites=["company/pricewise"], status="proposed")      # not active: never touched
+    thesis = add_bet(
+        api, "Mid-size managers want one tool", wrong_if={"kind": "thesis", "market_id": "company/brightline"}
+    )["bet"]
+    add_bet(api, "Enterprise first", cites=["company/pricewise"], status="proposed")  # not active: never touched
     publish(api)
     return cited, thesis
 
@@ -72,7 +85,9 @@ def test_a_week_that_is_not_an_iso_week_is_refused_and_nothing_is_written(seeded
 def test_a_week_has_one_row_a_replacement_keeps_created_and_rewrites_the_page(seeded, events):
     first = brief(seeded, body="First draft.")["briefing"]
     again = brief(seeded, title="Week 44, final", body="Final text.")["briefing"]
-    assert again["id"] == first["id"] and again["created_at"] == first["created_at"] and again["title"] == "Week 44, final"
+    assert (
+        again["id"] == first["id"] and again["created_at"] == first["created_at"] and again["title"] == "Week 44, final"
+    )
     assert len(get(seeded, "market/briefings")["briefings"]) == 1
     with seeded.app.state.store.read() as c:
         rows = c.execute("SELECT body FROM market_pages WHERE id=?", ("market/briefings/" + WEEK,)).fetchall()
@@ -82,8 +97,9 @@ def test_a_week_has_one_row_a_replacement_keeps_created_and_rewrites_the_page(se
 
 def test_the_bets_touched_are_the_active_published_ones_that_cite_or_watch_an_item_entity(seeded, events):
     cited, thesis = publish_bets(seeded)
-    got = brief(seeded, items=[item("company/northwind"), item("company/brightline", kind="signal"),
-                               item("company/pricewise")])["briefing"]
+    got = brief(
+        seeded, items=[item("company/northwind"), item("company/brightline", kind="signal"), item("company/pricewise")]
+    )["briefing"]
     assert got["bets"] == [cited["id"], thesis["id"]]
     assert [(t["n"], t["id"]) for t in got["touched"]] == [(1, cited["id"]), (2, thesis["id"])]
     none = brief(seeded, week="2026-W45", items=[item("company/harborly")])["briefing"]
@@ -100,7 +116,7 @@ def test_the_event_goes_out_once_a_week_with_the_touched_bets(seeded, events):
     cited, _ = publish_bets(seeded)
     brief(seeded, items=[item("company/northwind")])
     assert events == [("market.briefing", WEEK, {"week": WEEK, "bets": [cited["id"]]})]
-    brief(seeded, items=[item("company/northwind")], body="Edited.")      # same bets: no second event
+    brief(seeded, items=[item("company/northwind")], body="Edited.")  # same bets: no second event
     assert len(events) == 1
     brief(seeded, items=[item("company/northwind", "company/brightline")], body="Edited again.")
     assert len(events) == 2 and events[1][1].startswith(WEEK + ".") and events[1][1] != WEEK
@@ -121,12 +137,20 @@ def test_an_automation_post_without_items_keeps_the_weeks_items_and_bets(seeded,
     from types import SimpleNamespace
 
     from backend import market_briefing as MB
+
     cited, _ = publish_bets(seeded)
     hand = brief(seeded, items=[item("company/northwind")])["briefing"]
     assert hand["bets"] == [cited["id"]] and len(events) == 1
     with seeded.app.state.store.transaction() as c:
-        MB.post(c, SimpleNamespace(actor="human:ana"), WEEK, "Daily", "Run text.", None,
-                source={"automation": "auto_t", "run": "r"})
+        MB.post(
+            c,
+            SimpleNamespace(actor="human:ana"),
+            WEEK,
+            "Daily",
+            "Run text.",
+            None,
+            source={"automation": "auto_t", "run": "r"},
+        )
     kept = get(seeded, "market/briefings/" + WEEK)["briefing"]
     assert (kept["title"], kept["body"]) == ("Daily", "Run text.")
     assert (kept["items"], kept["bets"]) == (hand["items"], [cited["id"]])
@@ -137,6 +161,33 @@ def test_an_automation_post_without_items_keeps_the_weeks_items_and_bets(seeded,
     assert (empty["items"], empty["bets"]) == ([], [])
 
 
+def test_answers_are_clipped_kept_by_a_post_without_them_and_a_missing_key_has_no_line(seeded, events):
+    """The Market page shows one line per question: each is folded and cut at a word to 140 characters, an empty or
+    missing one is absent, a post without answers keeps the week's, and an unknown key is refused."""
+    long = "Northwind cut its entry price " + "and bundled the screening add-on " * 6
+    got = brief(seeded, answers={"changed": "  Northwind   cut\nits price.  ", "players": long, "money": "   "})[
+        "briefing"
+    ]
+    answers = got["answers"]
+    assert set(answers) == {"changed", "players"}
+    assert answers["changed"] == "Northwind cut its price."
+    assert len(answers["players"]) <= 140 and answers["players"].endswith("…")
+    assert long.startswith(answers["players"][:-1]) and not answers["players"][:-1].endswith(" ")
+    assert get(seeded, "market/briefings/latest")["briefing"]["answers"] == answers
+    assert brief(seeded, body="Edited.")["briefing"]["answers"] == answers  # no answers: the week's stay
+    assert brief(seeded, answers={"reach": "Through agents."})["briefing"]["answers"] == {"reach": "Through agents."}
+    brief(seeded, answers={"why": "No such question."}, expected=422)
+    assert brief(seeded, week="2026-W45")["briefing"]["answers"] == {}
+
+
+def test_each_item_carries_the_touched_bets_that_watch_its_entities(seeded, events):
+    cited, thesis = publish_bets(seeded)
+    items = brief(seeded, items=[item("company/northwind"), item("company/brightline"), item("company/harborly")])[
+        "briefing"
+    ]["items"]
+    assert [i["bets"] for i in items] == [[cited["id"]], [thesis["id"]], []]
+
+
 def test_market_labels_a_briefing_by_how_often_it_is_posted(seeded):
     """A briefing by hand is the week's; one an automation posts each day (the built-in, every morning) is the day's;
     one posted by a once-a-week schedule is the week's again."""
@@ -144,15 +195,34 @@ def test_market_labels_a_briefing_by_how_often_it_is_posted(seeded):
 
     from backend import market_briefing as MB
     from backend.tests.test_automation_api import NOTE_STEP
+
     assert brief(seeded)["briefing"]["cadence"] == "weekly"
-    made = {cron: post(seeded, "automations", {"name": "Briefing " + cron, "owner": "person:ana", "steps": [NOTE_STEP],
-                                               "trigger": {"type": "schedule", "cron": cron, "tz": "UTC"}})["id"]
-            for cron in ("0 7 * * *", "0 7 * * 1-5", "0 7 * * 1", "0 7 * * MON")}
+    made = {
+        cron: post(
+            seeded,
+            "automations",
+            {
+                "name": "Briefing " + cron,
+                "owner": "person:ana",
+                "steps": [NOTE_STEP],
+                "trigger": {"type": "schedule", "cron": cron, "tz": "UTC"},
+            },
+        )["id"]
+        for cron in ("0 7 * * *", "0 7 * * 1-5", "0 7 * * 1", "0 7 * * MON")
+    }
     want = {"0 7 * * *": "daily", "0 7 * * 1-5": "daily", "0 7 * * 1": "weekly", "0 7 * * MON": "weekly"}
     for cron, aid in made.items():
         with seeded.app.state.store.transaction() as c:
-            MB.post(c, SimpleNamespace(actor="human:ana"), WEEK, "Today", "Body.", [], source={"automation": aid, "run": "r"})
+            MB.post(
+                c,
+                SimpleNamespace(actor="human:ana"),
+                WEEK,
+                "Today",
+                "Body.",
+                [],
+                source={"automation": aid, "run": "r"},
+            )
         latest = get(seeded, "market/briefings/latest")["briefing"]
         assert latest["cadence"] == want[cron], cron
         assert get(seeded, "market/briefings")["briefings"][0]["cadence"] == want[cron]
-    assert brief(seeded)["briefing"]["cadence"] == "weekly"          # a post by hand clears the source
+    assert brief(seeded)["briefing"]["cadence"] == "weekly"  # a post by hand clears the source

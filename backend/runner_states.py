@@ -4,8 +4,21 @@ Heartbeats, readiness changes and load samples write here, so a beat never rewri
 both read the `runners_with_state` view.
 """
 
-COLUMNS = frozenset({"last_seen_at", "awake_since", "version", "capacity", "readiness", "readiness_at", "capabilities",
-                     "checkout", "restart_since", "memory_hold", "last_sampled_at"})
+COLUMNS = frozenset(
+    {
+        "last_seen_at",
+        "awake_since",
+        "version",
+        "capacity",
+        "readiness",
+        "readiness_at",
+        "capabilities",
+        "checkout",
+        "restart_since",
+        "memory_hold",
+        "last_sampled_at",
+    }
+)
 
 
 def save(c, runner_id, **fields):
@@ -15,6 +28,8 @@ def save(c, runner_id, **fields):
     if unknown or not fields:
         raise ValueError(f"not runner state columns: {sorted(unknown) or 'none given'}")
     names = list(fields)
-    c.execute(f"INSERT INTO runner_states(runner_id,{','.join(names)}) VALUES(?{',?' * len(names)}) "
-              f"ON CONFLICT(runner_id) DO UPDATE SET {','.join(f'{n}=excluded.{n}' for n in names)}",
-              (runner_id, *fields.values()))
+    c.execute(
+        f"INSERT INTO runner_states(runner_id,{','.join(names)}) VALUES(?{',?' * len(names)}) "
+        f"ON CONFLICT(runner_id) DO UPDATE SET {','.join(f'{n}=excluded.{n}' for n in names)}",
+        (runner_id, *fields.values()),
+    )

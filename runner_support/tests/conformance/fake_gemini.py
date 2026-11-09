@@ -5,13 +5,22 @@ runner-rs/src/hosts/gemini.rs reads it: `init`, assistant text deltas, then a `r
 for. Sessions live in $GEMINI_CLI_HOME, so `--resume` of one this home never saw fails before any event, as the CLI
 does. Every call is appended to $FAKE_LOG as one JSON line (argv, the prompt, the granted variables). A prompt
 containing HANG streams one delta and then waits, once per $FAKE_LOG, until its parent goes away."""
+
 import json
 import os
 import sys
 import time
 
-GRANTED = ("ACME_API_KEY", "HUB_TOKEN", "HUB_API_URL", "HUB_BOT", "TICO_CRED_SOCKET", "GEMINI_API_KEY",
-           "GEMINI_CLI_HOME", "GEMINI_CLI_SYSTEM_SETTINGS_PATH")
+GRANTED = (
+    "ACME_API_KEY",
+    "HUB_TOKEN",
+    "HUB_API_URL",
+    "HUB_BOT",
+    "TICO_CRED_SOCKET",
+    "GEMINI_API_KEY",
+    "GEMINI_CLI_HOME",
+    "GEMINI_CLI_SYSTEM_SETTINGS_PATH",
+)
 
 
 def send(message):
@@ -54,7 +63,7 @@ def main():
         while os.getppid() == parent:
             time.sleep(0.1)
         return
-    if "PUBLISH" in text:                    # a deliverable the runner publishes as a Tico file
+    if "PUBLISH" in text:  # a deliverable the runner publishes as a Tico file
         os.makedirs("reports", exist_ok=True)
         with open(os.path.join("reports", "acme.md"), "w") as report:
             report.write("# Acme report\n")
@@ -63,8 +72,19 @@ def main():
         reply += " The key is " + os.environ["ACME_API_KEY"]
     for chunk in (reply[:5], reply[5:]):
         send({"type": "message", "role": "assistant", "content": chunk, "delta": True})
-    send({"type": "result", "status": "success", "stats": {"input_tokens": 10, "output_tokens": 2, "total_tokens": 12,
-          "cached": 3, "models": {model: {"total_tokens": 12}}}})
+    send(
+        {
+            "type": "result",
+            "status": "success",
+            "stats": {
+                "input_tokens": 10,
+                "output_tokens": 2,
+                "total_tokens": 12,
+                "cached": 3,
+                "models": {model: {"total_tokens": 12}},
+            },
+        }
+    )
 
 
 if __name__ == "__main__":

@@ -68,7 +68,7 @@ Always:
 
 ## Talking to {{app_name}}
 The philosophy and level guide come from the Librarian (`hub doc ask`). Public ranges are read with `hub doc fetch <url>`.
-Pay data arrives only as task attachments. A question for an owner is `hub task ask <id>`, one open question per task.
+Pay data arrives only as task attachments. A question for an owner is `hub task question "<question>" --on <person> --parent <id>`, one open question per task.
 
 ## Quality standards
 - **Answer first.** The check opens with how many offers and changes are out of band.

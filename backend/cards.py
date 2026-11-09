@@ -58,11 +58,11 @@ CREATE TABLE IF NOT EXISTS pin_places (
 """
 
 SIZES = ("small", "medium", "large")
-PLACE_MAX = 60           # pins at one place: a page of cards, not an archive
+PLACE_MAX = 60  # pins at one place: a page of cards, not an archive
 CARDS_MAX = 2000
 LIST_MAX = 100
 IDS_MAX = 50
-PAGE_SCAN = 200          # newest pages read to find the ones a reader may see
+PAGE_SCAN = 200  # newest pages read to find the ones a reader may see
 
 # template -> its name and settings: "team" ("" is the company), "kpi", or (low, high, default) for a number.
 TEMPLATES = {
@@ -99,19 +99,36 @@ METRICS = {
     "kept_d90": ("Kept 90 days", "pct", "up", True),
     "kept_d180": ("Kept 180 days", "pct", "up", True),
 }
-GROWTH_GENERAL = ("kpi", "latest_pages")   # the general templates the Growth page's card form offers
-GROWTH_MONTHS = 12      # the months a growth card reads back from the month picked
+GROWTH_GENERAL = ("kpi", "latest_pages")  # the general templates the Growth page's card form offers
+GROWTH_MONTHS = 12  # the months a growth card reads back from the month picked
 MONTH = re.compile(r"\d{4}-(0[1-9]|1[0-2])")
-DEFAULTS = {"dashboard": [("tasks_by_status", "medium"), ("done_per_week", "medium"), ("needs_you", "medium"),
-                          ("latest_pages", "medium")],
-            "team": [("tasks_by_status", "medium"), ("done_per_week", "medium"), ("needs_you", "medium")],
-            "person": [("needs_attention", "medium"), ("unread_threads", "medium"), ("my_tasks", "medium"),
-                       ("updates", "medium"), ("latest_pages", "medium")],
-            # A default pin's third item is its card's settings beyond the template's own defaults.
-            "growth": [("growth_funnel", "large"),
-                       *(("growth_number", "small", {"metric": m})
-                         for m in ("new_customers", "cac", "spend", "ltv_cac", "payback_months", "kept_d30")),
-                       ("growth_channels", "large"), ("growth_retention", "medium"), ("growth_board", "medium")]}
+DEFAULTS = {
+    "dashboard": [
+        ("tasks_by_status", "medium"),
+        ("done_per_week", "medium"),
+        ("needs_you", "medium"),
+        ("latest_pages", "medium"),
+    ],
+    "team": [("tasks_by_status", "medium"), ("done_per_week", "medium"), ("needs_you", "medium")],
+    "person": [
+        ("needs_attention", "medium"),
+        ("unread_threads", "medium"),
+        ("my_tasks", "medium"),
+        ("updates", "medium"),
+        ("latest_pages", "medium"),
+    ],
+    # A default pin's third item is its card's settings beyond the template's own defaults.
+    "growth": [
+        ("growth_funnel", "large"),
+        *(
+            ("growth_number", "small", {"metric": m})
+            for m in ("new_customers", "cac", "spend", "ltv_cac", "payback_months", "kept_d30")
+        ),
+        ("growth_channels", "large"),
+        ("growth_retention", "medium"),
+        ("growth_board", "medium"),
+    ],
+}
 WIDENING = ("dashboard", "team", "growth")
 
 
@@ -182,7 +199,7 @@ class Ctx:
 
     def __init__(self, c, auth, who, settings=None, task_view=None, pages=None, asked_month=None):
         self.c, self.auth, self.who, self.settings, self.task_view = c, auth, who, settings, task_view
-        self.pages = pages          # backend/pages.py Pages: a pinned page's full read (status line, src)
+        self.pages = pages  # backend/pages.py Pages: a pinned page's full read (status line, src)
         self.asked_month = asked_month  # YYYY-MM from the Growth page's month picker, or None
         self._memo = {}
 
@@ -218,20 +235,24 @@ class Ctx:
         def make():
             below = P.group_and_below(gid, self.roster)
             return {s for s in self.configs if P.team_of(s, self.configs, self.roster) in below}
+
         return self.memo(("bots", gid), make)
 
     def team_actors(self, gid):
         """The bots and people in the group and the groups under it, as actors; None is the whole company."""
         if not gid:
             return None
+
         def make():
             below = P.group_and_below(gid, self.roster)
             people = {"human:" + p["id"] for p in P.visible_people(self.roster) if p.get("team") in below}
             return {"bot:" + s for s in self.team_bots(gid)} | people
+
         return self.memo(("actors", gid), make)
 
     def chain(self):
         """The groups the reader is in, their own and the ones it is nested in."""
+
         def make():
             if self.person:
                 own = (P.person(H.actor_id(self.who.actor), self.roster) or {}).get("team") or ""
@@ -240,6 +261,7 @@ class Ctx:
             else:
                 own = ""
             return P.group_chain(own, self.roster) or ([own] if own else [])
+
         return self.memo("chain", make)
 
     def led(self):
@@ -248,24 +270,31 @@ class Ctx:
     @property
     def month(self):
         """The month the Growth cards read: the one asked for, else the newest with cohort rows, else this month."""
+
         def make():
             if self.asked_month:
                 return self.asked_month
             from . import growth_numbers as GN
+
             newest = GN._window(self.c, 1)
             return newest[0] if newest else datetime.now(timezone.utc).strftime("%Y-%m")
+
         return self.memo("month", make)
 
     def growth(self, months=GROWTH_MONTHS):
         """growth_numbers' numbers for the newest `months` months up to the picked month, read once per size."""
+
         def make():
             from . import goal_routes, growth_numbers as GN
+
             hidden = goal_routes._hidden_owners(self.c, self.auth, self.who)
             return GN.numbers(self.c, self.auth, self.who, months, hidden, until=self.month)
+
         return self.memo(("growth", months), make)
 
 
 # ---- settings
+
 
 def clean_settings(ctx, template, given):
     if template not in TEMPLATES:
@@ -293,6 +322,7 @@ def clean_settings(ctx, template, given):
                 raise bad("Pick a metric: " + ", ".join(METRICS))
         elif kind == "channel":
             from . import growth as G
+
             value = str(value or "").strip()
             if value and value not in {ch["slug"] for ch in G.channels(ctx.c)}:
                 raise bad("Unknown channel: " + value)
@@ -314,6 +344,7 @@ def homed_elsewhere(template, kind):
 
 def kpi_record(ctx, kid):
     from . import goal_routes, kpis as K
+
     record = K.kpi(ctx.c, kid)
     if not record or record.get("owner_id") in goal_routes._hidden_owners(ctx.c, ctx.auth, ctx.who):
         return None
@@ -321,6 +352,7 @@ def kpi_record(ctx, kid):
 
 
 # ---- what a card shows its reader
+
 
 def owner_sql(actors):
     if actors is None:
@@ -333,12 +365,15 @@ def tasks_by_status(ctx, s):
     visible = ctx.visible()
     counts = {"open": 0, "doing": 0, "waiting": 0, "done": 0}
     for status, n in ctx.c.execute(
-            f"SELECT status, count(*) FROM tasks WHERE ({visible}) AND {where} AND status IN "
-            "('open','ready','doing','review','waiting') GROUP BY status", args):
+        f"SELECT status, count(*) FROM tasks WHERE ({visible}) AND {where} AND status IN "
+        "('open','ready','doing','review','waiting') GROUP BY status",
+        args,
+    ):
         counts["doing" if status in ("ready", "review") else status] += n
     counts["done"] = ctx.c.execute(
         f"SELECT count(*) FROM tasks WHERE ({visible}) AND {where} AND status='done' AND coalesce(done_at,'')>=?",
-        (*args, monday())).fetchone()[0]
+        (*args, monday()),
+    ).fetchone()[0]
     return {"counts": counts}
 
 
@@ -348,8 +383,10 @@ def done_per_week(ctx, s):
     starts = [monday(w) for w in weeks]
     out = {start: 0 for start in starts}
     for day, n in ctx.c.execute(
-            f"SELECT substr(done_at,1,10), count(*) FROM tasks WHERE ({ctx.visible()}) AND {where} AND status='done' "
-            "AND coalesce(done_at,'')>=? GROUP BY substr(done_at,1,10)", (*args, starts[0])):
+        f"SELECT substr(done_at,1,10), count(*) FROM tasks WHERE ({ctx.visible()}) AND {where} AND status='done' "
+        "AND coalesce(done_at,'')>=? GROUP BY substr(done_at,1,10)",
+        (*args, starts[0]),
+    ):
         week = monday(datetime.strptime(day, "%Y-%m-%d"))
         if week in out:
             out[week] += n
@@ -358,13 +395,21 @@ def done_per_week(ctx, s):
 
 def needs_list(ctx):
     from . import views
+
     return ctx.memo("needs", lambda: views.needs_items(ctx.c, ctx.auth, ctx.who, ctx.task_view))
 
 
 def needs_brief(items, n):
-    return [{"id": it.get("id"), "kind": it.get("kind"), "title": it.get("title") or "",
-             "task_id": it.get("task_id") or (it.get("id") if it.get("kind") in ("task", "question", "waiting") else None)}
-            for it in items[:n]]
+    return [
+        {
+            "id": it.get("id"),
+            "kind": it.get("kind"),
+            "title": it.get("title") or "",
+            "task_id": it.get("task_id")
+            or (it.get("id") if it.get("kind") in ("task", "question", "waiting") else None),
+        }
+        for it in items[:n]
+    ]
 
 
 def needs_you(ctx, s):
@@ -372,6 +417,7 @@ def needs_you(ctx, s):
     if not ctx.person or not ctx.task_view:
         return None
     from . import views
+
     items = needs_list(ctx)
     if s["team"]:
         bots = {"bot:" + b for b in ctx.team_bots(s["team"])}
@@ -393,16 +439,25 @@ def thread_rows(ctx, limit):
     (activity alone) are not unread. The sidebar lists only threads the reader may read. A DM's row says who it is with
     and a row with something new in a sub-thread says where, as the sidebar's own rows do."""
     from . import threads
+
     viewer = threads.viewer(ctx.auth, ctx.who)
     data = threads.sidebar(ctx.c, viewer, limit=50)
     rows = []
     for t in (data.get("attention") or []) + (data.get("threads") or []) + (data.get("dms") or []):
         me = t.get("me") or {}
         if t.get("id") and me.get("unread") and t["id"] not in {r["id"] for r in rows}:
-            rows.append({"id": t["id"], "title": t.get("title") or "", "unread": int(me.get("unread") or 0),
-                         "activity": bool(me.get("activity")), "updated_at": t.get("last_message_at"),
-                         "seq": t.get("activity_seq") or t.get("last_seq") or 0, "audience": t.get("audience"),
-                         **{k: t[k] for k in ("dm_with", "dm_with_count", "new_at") if t.get(k) is not None}})
+            rows.append(
+                {
+                    "id": t["id"],
+                    "title": t.get("name") or t.get("title") or "",
+                    "unread": int(me.get("unread") or 0),
+                    "activity": bool(me.get("activity")),
+                    "updated_at": t.get("last_message_at"),
+                    "seq": t.get("activity_seq") or t.get("last_seq") or 0,
+                    "audience": t.get("audience"),
+                    **{k: t[k] for k in ("dm_with", "dm_with_count", "new_at") if t.get(k) is not None},
+                }
+            )
     rows.sort(key=lambda r: r["seq"], reverse=True)
     return [{k: v for k, v in r.items() if k != "seq"} for r in rows[:limit]]
 
@@ -412,7 +467,7 @@ def unread_threads(ctx, s):
     if ctx.who.role not in ("owner", "human", "bot"):
         return None
     rows = thread_rows(ctx, 50)
-    return {"count": sum(1 for r in rows if r["unread"]), "threads": rows[:s["count"]]}
+    return {"count": sum(1 for r in rows if r["unread"]), "threads": rows[: s["count"]]}
 
 
 OPEN_STATUSES = H.ACTIVE_STATUSES
@@ -426,24 +481,57 @@ def my_tasks(ctx, s):
     where = f"({ctx.visible()}) AND owner_id=? AND status IN ({marks})"
     args = (ctx.who.actor, *OPEN_STATUSES)
     count = ctx.c.execute(f"SELECT count(*) FROM tasks WHERE {where}", args).fetchone()[0]
-    rows = ctx.c.execute(f"SELECT id, title, status, due_at, updated_at FROM tasks WHERE {where} "
-                         "ORDER BY due_at IS NULL, due_at, updated_at DESC, id LIMIT ?", (*args, s["count"])).fetchall()
-    return {"count": count, "tasks": [{"id": r["id"], "title": r["title"] or "", "status": r["status"], "due_at": r["due_at"],
-                                       "updated_at": r["updated_at"]} for r in rows]}
+    rows = ctx.c.execute(
+        f"SELECT id, title, status, due_at, updated_at FROM tasks WHERE {where} "
+        "ORDER BY due_at IS NULL, due_at, updated_at DESC, id LIMIT ?",
+        (*args, s["count"]),
+    ).fetchall()
+    return {
+        "count": count,
+        "tasks": [
+            {
+                "id": r["id"],
+                "title": r["title"] or "",
+                "status": r["status"],
+                "due_at": r["due_at"],
+                "updated_at": r["updated_at"],
+            }
+            for r in rows
+        ],
+    }
 
 
 def updates_card(ctx, s):
     """The newest updates the reader may read (backend/updates.py visible_authors) and how many they have not read."""
     from . import updates as U
+
     if ctx.who.role not in ("owner", "human", "bot"):
         return None
     readable = U.visible_authors(ctx.c, ctx.auth, ctx.who)
-    found = U.listing(ctx.c, ctx.who.actor, readable, limit=s["count"], may_read=readable,
-                      meetings=U.meeting_reader(ctx.who), brief=True)
-    return {"unread": found["unread"],
-            "updates": [{"id": u["id"], "author": u["bot"], "kind": u["kind"], "day": u["day"],
-                         "headline": u["headline"], "created_at": u["created_at"], "read": u["read"]}
-                        for u in found["updates"][:s["count"]]]}
+    found = U.listing(
+        ctx.c,
+        ctx.who.actor,
+        readable,
+        limit=s["count"],
+        may_read=readable,
+        meetings=U.meeting_reader(ctx.who),
+        brief=True,
+    )
+    return {
+        "unread": found["unread"],
+        "updates": [
+            {
+                "id": u["id"],
+                "author": u["bot"],
+                "kind": u["kind"],
+                "day": u["day"],
+                "headline": u["headline"],
+                "created_at": u["created_at"],
+                "read": u["read"],
+            }
+            for u in found["updates"][: s["count"]]
+        ],
+    }
 
 
 def spend(ctx, s):
@@ -451,6 +539,7 @@ def spend(ctx, s):
     if not ctx.person or not (ctx.admin or (s["team"] and s["team"] in ctx.led())):
         return None
     from . import usage_limits as U
+
     default = ctx.memo("spend_default", lambda: U.company(ctx.c))
     scope = "group:" + s["team"] if s["team"] else U.COMPANY
     _, start, end = U.bounds()["monthly"]
@@ -461,18 +550,27 @@ def spend(ctx, s):
 
 def kpi(ctx, s):
     from . import kpis as K
+
     record = kpi_record(ctx, s["kpi"])
     if not record:
         return None
     view = K.view(record, K.readings(ctx.c, record["id"], effective=True))
     latest = view.get("latest") or {}
-    return {"kpi": record["id"], "name": view["name"], "unit": view.get("unit") or "", "value": latest.get("value"),
-            "at": latest.get("period_end"), "spark": view.get("spark") or [], "status": view.get("status"),
-            "freshness": view.get("freshness")}
+    return {
+        "kpi": record["id"],
+        "name": view["name"],
+        "unit": view.get("unit") or "",
+        "value": latest.get("value"),
+        "at": latest.get("period_end"),
+        "spark": view.get("spark") or [],
+        "status": view.get("status"),
+        "freshness": view.get("freshness"),
+    }
 
 
 def automation_runs(ctx, s):
     from . import automations as AU
+
     chart = ctx.memo("chart", lambda: AU.Chart(ctx.c))
     actors = ctx.team_actors(s["team"])
     groups = {"group:" + g for g in P.group_and_below(s["team"], ctx.roster)} if s["team"] else None
@@ -485,25 +583,36 @@ def automation_runs(ctx, s):
             names[row["id"]] = row["name"]
     if not names:
         return {"total": 0, "failed": 0, "running": 0, "runs": []}
-    runs = [dict(r) for r in ctx.c.execute(
-        "SELECT id, automation_id, status, started_at, finished_at FROM automation_runs WHERE started_at>=? "
-        "AND automation_id IN (SELECT value FROM json_each(?)) ORDER BY started_at DESC LIMIT 500",
-        (ago(hours=24), json.dumps(sorted(names))))]
+    runs = [
+        dict(r)
+        for r in ctx.c.execute(
+            "SELECT id, automation_id, status, started_at, finished_at FROM automation_runs WHERE started_at>=? "
+            "AND automation_id IN (SELECT value FROM json_each(?)) ORDER BY started_at DESC LIMIT 500",
+            (ago(hours=24), json.dumps(sorted(names))),
+        )
+    ]
     failed = [r for r in runs if r["status"] == "failed"]
     shown = (failed + [r for r in runs if r["status"] != "failed"])[:5]
-    return {"total": len(runs), "failed": len(failed),
-            "running": sum(r["status"] in ("queued", "running") for r in runs),
-            "runs": [{**r, "name": names[r["automation_id"]]} for r in shown]}
+    return {
+        "total": len(runs),
+        "failed": len(failed),
+        "running": sum(r["status"] in ("queued", "running") for r in runs),
+        "runs": [{**r, "name": names[r["automation_id"]]} for r in shown],
+    }
 
 
 def pages_for(ctx, team="", limit=5):
     """The newest current pages (backend/pages.py) the reader may read, a team's bots' only when `team` is set: not
     archived, not deleted, not replaced by a newer page."""
     from . import files as F
+
     bots = ctx.team_bots(team) if team else None
-    rows = ctx.c.execute("SELECT f.* FROM pages p JOIN bot_files f ON f.id=p.file_id WHERE p.archived=0 "
-                         "AND p.replaced_by_id IS NULL AND f.archived=0 AND f.state<>'deleted' "
-                         "ORDER BY f.last_activity_at DESC, f.id DESC LIMIT ?", (PAGE_SCAN,)).fetchall()
+    rows = ctx.c.execute(
+        "SELECT f.* FROM pages p JOIN bot_files f ON f.id=p.file_id WHERE p.archived=0 "
+        "AND p.replaced_by_id IS NULL AND f.archived=0 AND f.state<>'deleted' "
+        "ORDER BY f.last_activity_at DESC, f.id DESC LIMIT ?",
+        (PAGE_SCAN,),
+    ).fetchall()
     rows = [r for r in rows if bots is None or r["bot_id"] in bots]
     F.prime_visible(ctx.c, rows)
     cache = ctx.memo("file_cache", dict)
@@ -517,8 +626,13 @@ def pages_for(ctx, team="", limit=5):
 
 
 def page_brief(row):
-    return {"file_id": row["id"], "title": row["title"], "bot": row["bot_id"], "updated_at": row["last_activity_at"],
-            "archived": bool(row["archived"])}
+    return {
+        "file_id": row["id"],
+        "title": row["title"],
+        "bot": row["bot_id"],
+        "updated_at": row["last_activity_at"],
+        "archived": bool(row["archived"]),
+    }
 
 
 def page_read(ctx, row, files_cache):
@@ -526,7 +640,7 @@ def page_read(ctx, row, files_cache):
     pages = ctx.pages
     found = None
     if pages is not None:
-        known = ctx.memo("pages_found", dict)       # prime_pins reads the place's pages together
+        known = ctx.memo("pages_found", dict)  # prime_pins reads the place's pages together
         if row["id"] not in known:
             known[row["id"]] = pages.rows(ctx.c, [row["id"]]).get(row["id"])
         found = known[row["id"]]
@@ -535,8 +649,7 @@ def page_read(ctx, row, files_cache):
     return {**page_brief(row), **pages.view(ctx.c, ctx.who, found, pages.page_of(found), files_cache)}
 
 
-PAGE_ROW_SQL = ("SELECT f.* FROM pages p JOIN bot_files f ON f.id=p.file_id WHERE p.file_id=? "
-                "AND f.state<>'deleted'")
+PAGE_ROW_SQL = "SELECT f.* FROM pages p JOIN bot_files f ON f.id=p.file_id WHERE p.file_id=? AND f.state<>'deleted'"
 
 
 def page_row(c, fid):
@@ -550,6 +663,7 @@ PLACE_WORDS = {"dashboard": "Dashboard"}
 def pinned_places(ctx, fid):
     """Where a page is pinned, as the places the reader may open: [{place, label}], the Dashboard first."""
     from . import names
+
     out = []
     for (place,) in ctx.c.execute("SELECT DISTINCT place FROM pins WHERE item=? ORDER BY place", ("page:" + fid,)):
         try:
@@ -580,6 +694,7 @@ def latest_pages(ctx, s):
 
 # ---- the Growth page's cards: growth_numbers' reads for the picked month (ctx.month), as the page draws them
 
+
 def months_between(first, last):
     """Every month from `first` to `last` (YYYY-MM), a month with no cohorts included."""
     at = int(first[:4]) * 12 + int(first[5:7]) - 1
@@ -588,16 +703,19 @@ def months_between(first, last):
 
 
 def figure(values, cal, month, carry):
-    """One figure over the calendar, as the Growth page draws it (ui/app/growth-page.js grFigure): its value in `month`
+    """One figure over the calendar, as the Growth page draws it (ui/app/growth-page.ts grFigure): its value in `month`
     or, with `carry`, the newest earlier one, which `from` names (empty when it is the month's own), and the value of
     the month before it."""
     at = cal.index(month)
     if carry:
-        while at > 0 and values[at] is None:      # a cohort that joined this month has not reached 30 days yet
+        while at > 0 and values[at] is None:  # a cohort that joined this month has not reached 30 days yet
             at -= 1
     value = values[at]
-    return {"value": value, "prev": values[at - 1] if at > 0 else None,
-            "from": cal[at] if value is not None and cal[at] != month else ""}
+    return {
+        "value": value,
+        "prev": values[at - 1] if at > 0 else None,
+        "from": cal[at] if value is not None and cal[at] != month else "",
+    }
 
 
 def kpi_upto(view, month):
@@ -629,10 +747,19 @@ def growth_number(ctx, s):
     values = [by.get(m) for m in cal]
     fig = figure(values, cal, ctx.month, carry)
     channel_name = next((ch["name"] for ch in nums["channels"] if ch["slug"] == s.get("channel")), "")
-    return {"metric": metric, "label": label, "format": fmt, "good": good, "month": ctx.month,
-            "channel": s.get("channel") or "", "channel_name": channel_name,
-            "value": fig["value"], "prev": fig["prev"], "from": fig["from"],
-            "series": [{"month": m, "value": v} for m, v in zip(cal, values, strict=True)]}
+    return {
+        "metric": metric,
+        "label": label,
+        "format": fmt,
+        "good": good,
+        "month": ctx.month,
+        "channel": s.get("channel") or "",
+        "channel_name": channel_name,
+        "value": fig["value"],
+        "prev": fig["prev"],
+        "from": fig["from"],
+        "series": [{"month": m, "value": v} for m, v in zip(cal, values, strict=True)],
+    }
 
 
 def growth_funnel(ctx, s):
@@ -644,22 +771,41 @@ def growth_funnel(ctx, s):
     north = upto(kpis["north_star"]) if kpis["north_star"] else None
     views = ([north] if north else []) + [upto(v) for v in kpis["inputs"] + kpis["guardrails"] + kpis["other"]]
     stages, last = [], None
-    for key, label in (("reach", "Reach"), ("acquire", "Acquire"), ("activate", "Activate"), ("retain", "Retain"),
-                       ("refer", "Refer")):
+    for key, label in (
+        ("reach", "Reach"),
+        ("acquire", "Acquire"),
+        ("activate", "Activate"),
+        ("retain", "Retain"),
+        ("refer", "Refer"),
+    ):
         view = next((v for v in views if v["stage"] == key), None)
         value, prev = kpi_reading(view) if view else (None, None)
-        stages.append({"stage": key, "label": label, "kpi": view["id"] if view else None,
-                       "name": view["name"] if view else "", "unit": view["unit"] if view else "",
-                       "value": value, "prev": prev,
-                       "conv": round(value / last * 100, 1) if value is not None and last else None,
-                       "north_star": bool(view and north and view["id"] == north["id"]),
-                       "series": [p["value"] for p in view["series"]] if view else []})
+        stages.append(
+            {
+                "stage": key,
+                "label": label,
+                "kpi": view["id"] if view else None,
+                "name": view["name"] if view else "",
+                "unit": view["unit"] if view else "",
+                "value": value,
+                "prev": prev,
+                "conv": round(value / last * 100, 1) if value is not None and last else None,
+                "north_star": bool(view and north and view["id"] == north["id"]),
+                "series": [p["value"] for p in view["series"]] if view else [],
+            }
+        )
         last = value
     star = None
     if north:
         value, prev = kpi_reading(north)
-        star = {"id": north["id"], "name": north["name"], "unit": north["unit"], "value": value, "prev": prev,
-                "target": north.get("target")}
+        star = {
+            "id": north["id"],
+            "name": north["name"],
+            "unit": north["unit"],
+            "value": value,
+            "prev": prev,
+            "target": north.get("target"),
+        }
     if all(st["value"] is None for st in stages) and (star is None or star["value"] is None):
         return None
     return {"stages": stages, "north_star": star}
@@ -667,38 +813,50 @@ def growth_funnel(ctx, s):
 
 def channel_names(ctx):
     from . import growth as G
+
     return {ch["slug"]: ch["name"] for ch in G.channels(ctx.c, include_retired=True)}
 
 
 def marketing_tasks(ctx):
-    """The open marketing tasks the reader may read, each with its stage (idea, testing or scaling), owner and channel
-    slugs, most recently updated first (backend/marketing_tasks.py: the Idea, Testing and Scaling steps)."""
+    """The open marketing tasks the reader may read, each with its stage (idea, building, testing or scaling), owner
+    and channel slugs, most recently updated first (backend/marketing_tasks.py: the On deck, In development, Live and
+    Working steps)."""
     from . import marketing_tasks as MT
+
     def make():
-        steps = {MT.step_id(key): key for key in ("idea", "testing", "scaling")}
+        steps = {MT.step_id(key): key for key in ("idea", "building", "testing", "scaling")}
         marks = ",".join("?" * len(steps))
         found = {}
         for r in ctx.c.execute(
-                "SELECT t.id, t.title, t.owner_id, t.step_id, t.updated_at, tg.key FROM tasks t "
-                "LEFT JOIN task_tags tt ON tt.task_id=t.id LEFT JOIN tags tg ON tg.id=tt.tag_id AND tg.key LIKE 'channel:%' "
-                f"WHERE t.type_id=? AND t.step_id IN ({marks}) AND t.id IN (SELECT id FROM tasks WHERE {ctx.visible()}) "
-                "ORDER BY t.id, tg.key", (MT.TYPE_ID, *steps)):
+            "SELECT t.id, t.title, t.owner_id, t.step_id, t.updated_at, tg.key FROM tasks t "
+            "LEFT JOIN task_tags tt ON tt.task_id=t.id LEFT JOIN tags tg ON tg.id=tt.tag_id AND tg.key LIKE 'channel:%' "
+            f"WHERE t.type_id=? AND t.step_id IN ({marks}) AND t.id IN (SELECT id FROM tasks WHERE {ctx.visible()}) "
+            "ORDER BY t.id, tg.key",
+            (MT.TYPE_ID, *steps),
+        ):
             task = found.get(r["id"])
             if task is None:
-                task = found[r["id"]] = {"id": r["id"], "title": r["title"] or "", "owner_id": r["owner_id"],
-                                         "stage": steps[r["step_id"]], "updated_at": r["updated_at"] or "",
-                                         "channels": []}
+                task = found[r["id"]] = {
+                    "id": r["id"],
+                    "title": r["title"] or "",
+                    "owner_id": r["owner_id"],
+                    "stage": steps[r["step_id"]],
+                    "updated_at": r["updated_at"] or "",
+                    "channels": [],
+                }
             if r["key"]:
-                task["channels"].append(r["key"][len("channel:"):])
+                task["channels"].append(r["key"][len("channel:") :])
         return sorted(found.values(), key=lambda t: (t["updated_at"], t["id"]), reverse=True)
+
     return ctx.memo("marketing", make)
 
 
 def growth_channels(ctx, s):
     """Each live channel's new customers and CAC for the picked month, its LTV:CAC carried back, its last six months of
-    new customers, and up to three of its open marketing tasks (Scaling, then Testing, then Idea). Unknown comes last,
-    when it has a row that month."""
+    new customers, and up to three of its open marketing tasks (Working, then Live, In development and On deck). Unknown
+    comes last, when it has a row that month."""
     from . import growth as G
+
     nums = ctx.growth(GROWTH_MONTHS)
     live = [ch for ch in nums["channels"] if ch["slug"] != G.UNKNOWN]
     if not live:
@@ -706,11 +864,11 @@ def growth_channels(ctx, s):
     month = ctx.month
     cal = months_between(nums["months"][0], month) if nums["months"] else [month]
     tasks = {}
-    rank = {"scaling": 0, "testing": 1, "idea": 2}
+    rank = {"scaling": 0, "testing": 1, "building": 2, "idea": 3}
     for task in sorted(marketing_tasks(ctx), key=lambda t: rank[t["stage"]]):
         for slug in task["channels"]:
             tasks.setdefault(slug, []).append({"id": task["id"], "title": task["title"], "stage": task["stage"]})
-    shown = live[:s["count"]]
+    shown = live[: s["count"]]
     unknown = next((ch for ch in nums["channels"] if ch["slug"] == G.UNKNOWN), None)
     if unknown and any(r["month"] == month for r in unknown["series"]):
         shown.append(unknown)
@@ -720,10 +878,19 @@ def growth_channels(ctx, s):
         here = by.get(month, {})
         ltv = figure([by.get(m, {}).get("ltv_cac") for m in cal], cal, month, True)
         mine = tasks.get(ch["slug"], [])
-        rows.append({"slug": ch["slug"], "name": ch["name"], "new_customers": here.get("new_customers"),
-                     "cac": here.get("cac"), "ltv_cac": ltv["value"], "ltv_from": ltv["from"],
-                     "series": [by.get(m, {}).get("new_customers") for m in cal[-6:]],
-                     "tasks": mine[:3], "more": max(0, len(mine) - 3)})
+        rows.append(
+            {
+                "slug": ch["slug"],
+                "name": ch["name"],
+                "new_customers": here.get("new_customers"),
+                "cac": here.get("cac"),
+                "ltv_cac": ltv["value"],
+                "ltv_from": ltv["from"],
+                "series": [by.get(m, {}).get("new_customers") for m in cal[-6:]],
+                "tasks": mine[:3],
+                "more": max(0, len(mine) - 3),
+            }
+        )
     return {"month": month, "rows": rows}
 
 
@@ -731,43 +898,76 @@ def growth_retention(ctx, s):
     """Each of the newest cohort months' share kept at 30, 90 and 180 days, the newest last."""
     nums = ctx.growth(s["months"])
     kept = ("kept_d30", "kept_d90", "kept_d180")
-    rows = [{"month": r["month"], "new_customers": r["new_customers"], "kept": [r[k] for k in kept]}
-            for r in nums["series"]]
+    rows = [
+        {"month": r["month"], "new_customers": r["new_customers"], "kept": [r[k] for k in kept]} for r in nums["series"]
+    ]
     if not any(v is not None for row in rows for v in row["kept"]):
         return None
     return {"columns": ["30 days", "90 days", "180 days"], "rows": rows}
 
 
 def growth_board(ctx, s):
-    """Open marketing tasks by stage: Testing, Scaling, then Idea, each lane's count and its newest few."""
+    """Open marketing tasks by stage: Live, Working, In development, then On deck; each lane's count and newest few."""
     tasks, names = marketing_tasks(ctx), channel_names(ctx)
     lanes = []
-    for stage, label in (("testing", "Testing"), ("scaling", "Scaling"), ("idea", "Idea")):
+    for stage, label in (
+        ("testing", "Live"),
+        ("scaling", "Working"),
+        ("building", "In development"),
+        ("idea", "On deck"),
+    ):
         mine = [t for t in tasks if t["stage"] == stage]
-        lanes.append({"stage": stage, "label": label, "count": len(mine),
-                      "cards": [{"id": t["id"], "title": t["title"], "owner_id": t["owner_id"],
-                                 "channel": names.get(t["channels"][0], t["channels"][0]) if t["channels"] else ""}
-                                for t in mine[:s["count"]]]})
+        lanes.append(
+            {
+                "stage": stage,
+                "label": label,
+                "count": len(mine),
+                "cards": [
+                    {
+                        "id": t["id"],
+                        "title": t["title"],
+                        "owner_id": t["owner_id"],
+                        "channel": names.get(t["channels"][0], t["channels"][0]) if t["channels"] else "",
+                    }
+                    for t in mine[: s["count"]]
+                ],
+            }
+        )
     if not any(lane["count"] for lane in lanes):
         return None
     return {"lanes": lanes}
 
 
-DATA = {"tasks_by_status": tasks_by_status, "done_per_week": done_per_week, "needs_you": needs_you, "spend": spend,
-        "kpi": kpi, "automation_runs": automation_runs, "latest_pages": latest_pages,
-        "needs_attention": needs_attention, "unread_threads": unread_threads, "my_tasks": my_tasks,
-        "updates": updates_card, "growth_number": growth_number, "growth_funnel": growth_funnel,
-        "growth_channels": growth_channels, "growth_retention": growth_retention, "growth_board": growth_board}
+DATA = {
+    "tasks_by_status": tasks_by_status,
+    "done_per_week": done_per_week,
+    "needs_you": needs_you,
+    "spend": spend,
+    "kpi": kpi,
+    "automation_runs": automation_runs,
+    "latest_pages": latest_pages,
+    "needs_attention": needs_attention,
+    "unread_threads": unread_threads,
+    "my_tasks": my_tasks,
+    "updates": updates_card,
+    "growth_number": growth_number,
+    "growth_funnel": growth_funnel,
+    "growth_channels": growth_channels,
+    "growth_retention": growth_retention,
+    "growth_board": growth_board,
+}
 
 
 def card_data(ctx, template, settings):
     """What a card of this template and these settings shows its reader, or None when it shows nothing. Cards that
     agree on both read the same rows, so one request works each out once (ctx.memo)."""
+
     def make():
         try:
             return DATA[template](ctx, settings)
         except Problem:
             return None
+
     return ctx.memo(("data", template, json.dumps(settings, sort_keys=True)), make)
 
 
@@ -778,16 +978,28 @@ def card_view(ctx, row):
     team = settings.get("team") or ""
     data = None
     if template in DATA and (not team or team in ctx.groups):
-        data = card_data(ctx, template, {**{k: v[2] for k, v in TEMPLATES[template]["fields"].items()
-                                            if isinstance(v, tuple)}, **settings})
+        data = card_data(
+            ctx,
+            template,
+            {**{k: v[2] for k, v in TEMPLATES[template]["fields"].items() if isinstance(v, tuple)}, **settings},
+        )
     name = TEMPLATES.get(template, {}).get("name", template)
-    return {"id": row.get("id"), "template": template, "title": row.get("title") or "", "settings": settings,
-            "name": name, "heading": row.get("title") or name,
-            "team_name": (ctx.groups.get(team) or {}).get("name") or team if team else "",
-            "hidden": data is None, "data": data, "made_by_id": row.get("made_by_id")}
+    return {
+        "id": row.get("id"),
+        "template": template,
+        "title": row.get("title") or "",
+        "settings": settings,
+        "name": name,
+        "heading": row.get("title") or name,
+        "team_name": (ctx.groups.get(team) or {}).get("name") or team if team else "",
+        "hidden": data is None,
+        "data": data,
+        "made_by_id": row.get("made_by_id"),
+    }
 
 
 # ---- places
+
 
 def parse(ctx, place):
     """(kind, ident) of a place that exists, else 404."""
@@ -808,8 +1020,9 @@ def parse(ctx, place):
             ident = H.actor_id(ctx.who.actor)
         if ident != "me" and H.human(ctx.c, ident):
             return kind, ident
-    raise Problem("not_found", "No such place: places are dashboard, team:<group>, bot:<slug>, task:<id> and "
-                  "person:me", 404)
+    raise Problem(
+        "not_found", "No such place: places are dashboard, team:<group>, bot:<slug>, task:<id> and person:me", 404
+    )
 
 
 def place_row(c, place):
@@ -819,6 +1032,7 @@ def place_row(c, place):
 def audience_of(c, place):
     """Who sees a team page: its group's Read (teammate_access.migrate_team_pages moved the old page audiences there)."""
     from . import teammate_access
+
     if place.startswith("team:"):
         return teammate_access.document(c, "group:" + place[5:])["read"]
     row = place_row(c, place)
@@ -852,6 +1066,7 @@ def may_view(ctx, kind, ident):
         if may_manage(ctx, kind, ident):
             return True
         from . import teammate_access
+
         # A team page is read by whoever may read its group (backend/teammate_access.py): "Seen by" is the group's Read.
         return teammate_access.can(ctx.c, who, "read", "group:" + ident, ctx.auth)
     if kind == "bot":
@@ -876,6 +1091,7 @@ def may_manage(ctx, kind, ident):
         return ctx.admin or (ctx.person and ident in ctx.led())
     if kind == "bot":
         from . import bot_task_tabs as T
+
         return not T.personal(ctx.settings, ident) and T.may_edit(ctx.c, ctx.auth, ctx.settings, who, ident)
     try:
         row = ctx.auth.task(ctx.c, who, ident)
@@ -883,14 +1099,14 @@ def may_manage(ctx, kind, ident):
         return False
     if who.role == "bot":
         return not who.via and who.actor in (row["owner_id"], row["requester_id"])
-    return ctx.person and (who.role == "owner" or who.actor in (row["owner_id"], row["requester_id"])
-                           or H.can_move(ctx.c, who.actor))
+    return ctx.person and (
+        who.role == "owner" or who.actor in (row["owner_id"], row["requester_id"]) or H.can_move(ctx.c, who.actor)
+    )
 
 
 def may_link(ctx, kind, ident):
     """Only adding a page link to a task uses the reader's rights instead of the place manager's."""
-    return (kind == "task" and (ctx.person or (ctx.who.role == "bot" and not ctx.who.via))
-            and may_view(ctx, kind, ident))
+    return kind == "task" and (ctx.person or (ctx.who.role == "bot" and not ctx.who.via)) and may_view(ctx, kind, ident)
 
 
 def may_unpin(ctx, pin, kind, ident):
@@ -916,13 +1132,20 @@ def require_view(ctx, place):
 def require_manage(ctx, place):
     kind, ident = require_view(ctx, place)
     if not may_manage(ctx, kind, ident):
-        raise Problem("forbidden", {
-            "dashboard": "The owner and admins arrange the Dashboard",
-            "growth": "The owner, admins and bots arrange the Growth page",
-            "team": "The owner, admins and the team's leads arrange a team page",
-            "bot": "The bot and the people who manage it arrange its sidebar",
-            "task": "A task's people arrange what is pinned to it",
-            "person": "Only its person arranges My dashboard"}[kind], 403)
+        raise Problem(
+            "forbidden",
+            {
+                "dashboard": "The owner and admins arrange the Dashboard",
+                "growth": "The owner, admins and bots arrange the Growth page",
+                "team": "The owner, admins and the team's leads arrange a team page",
+                "bot": "The bot and the people who manage it arrange its sidebar",
+                "task": "A task's people arrange what is pinned to it",
+                "person": "Only its person arranges My dashboard",
+            }[kind],
+            403,
+        )
+    if kind == "task":
+        H._writer(ctx.c, ctx.who.actor, task_id=ident)
     return kind, ident
 
 
@@ -946,6 +1169,7 @@ def prime_pins(ctx, pins):
     """Read the cards and pages `pins` point at, one query a chunk each, and seed read_cache with them, so the per-pin
     reads in pin_view take no statement of their own. Each row is the one its own lookup would read."""
     from . import files as F
+
     c = ctx.c
     ids = {"card:": set(), "page:": set()}
     for pin in pins:
@@ -953,9 +1177,14 @@ def prime_pins(ctx, pins):
         if pin.get("card") is None and item[:5] in ids:
             ids[item[:5]].add(item[5:])
     cards, pages = {}, {}
-    for kind, found, sql in (("card:", cards, "SELECT * FROM cards WHERE id IN (%s)"),
-                             ("page:", pages, "SELECT f.* FROM pages p JOIN bot_files f ON f.id=p.file_id "
-                                              "WHERE p.file_id IN (%s) AND f.state<>'deleted'")):
+    for kind, found, sql in (
+        ("card:", cards, "SELECT * FROM cards WHERE id IN (%s)"),
+        (
+            "page:",
+            pages,
+            "SELECT f.* FROM pages p JOIN bot_files f ON f.id=p.file_id WHERE p.file_id IN (%s) AND f.state<>'deleted'",
+        ),
+    ):
         wanted = sorted(ids[kind])
         for part in H.chunks(wanted):
             for row in c.execute(sql % ",".join("?" * len(part)), part):
@@ -964,6 +1193,7 @@ def prime_pins(ctx, pins):
     read_cache.prime(c, PAGE_ROW_SQL, {(fid,): pages.get(fid) for fid in ids["page:"]})
     if pages:
         from . import pages as PG
+
         F.prime_visible(c, list(pages.values()))
         PG.prime_views(c, list(pages.values()))
         if ctx.pages is not None:
@@ -981,15 +1211,30 @@ def default_pins(kind, ident):
     for i, entry in enumerate(DEFAULTS.get(kind, [])):
         template, size = entry[0], entry[1]
         settings = {**default_settings(kind, ident, template), **(entry[2] if len(entry) > 2 else {})}
-        out.append({"id": None, "place": canonical(kind, ident), "item": None, "position": i, "size": size,
-                    "made_by": None, "card": {"id": None, "template": template, "settings": json.dumps(settings),
-                                              "title": "", "made_by_id": None}})
+        out.append(
+            {
+                "id": None,
+                "place": canonical(kind, ident),
+                "item": None,
+                "position": i,
+                "size": size,
+                "made_by": None,
+                "card": {
+                    "id": None,
+                    "template": template,
+                    "settings": json.dumps(settings),
+                    "title": "",
+                    "made_by_id": None,
+                },
+            }
+        )
     return out
 
 
 def pin_view(ctx, pin, files_cache):
     """A pin as its reader gets it, or None when it shows them nothing: a page they may not read leaves no trace."""
     from . import files as F
+
     out = {k: pin.get(k) for k in ("id", "item", "position", "size", "made_by")}
     if pin.get("card") is not None:
         return {**out, "card": card_view(ctx, pin["card"])}
@@ -1023,26 +1268,26 @@ def place_view(ctx, place, timings=None):
     prime_pins(ctx, pins)
     cache = ctx.memo("file_cache", dict)
     prep = (time.perf_counter() - started) * 1000
-    shown, costs = [], {}
+    shown, costs, total = [], {}, 0
     for pin in pins:
         began = time.perf_counter()
         view = pin_view(ctx, pin, cache)
         ms = (time.perf_counter() - began) * 1000
+        total += ms
         if not view:
-            # A pin the caller can't read still costs its access check.
-            name = "hidden"
-        elif "card" in view:
+            continue
+        if "card" in view:
             template = view["card"]["template"]
             # Only built-in kinds enter the header, never a card's title or id.
             template = template if template in TEMPLATES else "unknown"
             name = re.sub(r"[^a-z0-9-]+", "-", template.lower()).strip("-") or "unknown"
         else:
             name = "page"
-        if view:
-            shown.append(view)
+        view["position"] = len(shown)
+        shown.append(view)
         costs[name] = costs.get(name, 0) + ms
     if timings is not None:
-        timings.update(prep=prep, cards=sum(costs.values()), kinds=costs)
+        timings.update(prep=prep, cards=total, kinds=costs)
     if kind == "task":
         by_id = {p["id"]: p for p in pins}
         for pin in shown:
@@ -1053,14 +1298,15 @@ def place_view(ctx, place, timings=None):
     if kind == "growth":
         # The month picker: the month the cards read, and the newest months with cohort rows, oldest first.
         from . import growth_numbers as GN
+
         out.update(month=ctx.month, months=GN._window(ctx.c, GN.MONTHS_MAX))
     if kind == "team":
-        out.update(group=ident, name=ctx.groups[ident].get("name") or ident,
-                   audience=audience_of(ctx.c, place))
+        out.update(group=ident, name=ctx.groups[ident].get("name") or ident, audience=audience_of(ctx.c, place))
     return out
 
 
 # ---- writes
+
 
 def log(ctx, action, target, detail, private=False):
     """The event a write leaves. A write to someone's My dashboard names nothing: no card, page or place, since the
@@ -1081,11 +1327,11 @@ def ensure(ctx, kind, ident):
     if kind not in DEFAULTS or place_row(ctx.c, place):
         return
     now = H.now()
-    ctx.c.execute("INSERT INTO pin_places(place, audience, saved_at, saved_by) VALUES(?,?,?,?)",
-                  (place, None, now, ctx.who.actor))
+    ctx.c.execute(
+        "INSERT INTO pin_places(place, audience, saved_at, saved_by) VALUES(?,?,?,?)", (place, None, now, ctx.who.actor)
+    )
     for pin in default_pins(kind, ident):
-        cid = make_card(ctx, pin["card"]["template"], "", json.loads(pin["card"]["settings"]),
-                        private=kind == "person")
+        cid = make_card(ctx, pin["card"]["template"], "", json.loads(pin["card"]["settings"]), private=kind == "person")
         insert_pin(ctx, place, "card:" + cid, pin["size"], pin["position"])
 
 
@@ -1094,9 +1340,11 @@ def make_card(ctx, template, title, settings, private=False):
         raise Problem("too_many", f"This team keeps {CARDS_MAX} cards: remove some first", 409)
     settings = clean_settings(ctx, template, settings)
     cid, now = H.new_id(), H.now()
-    ctx.c.execute("INSERT INTO cards(id,template,settings,title,made_by_id,created_at,updated_at,updated_by_id) "
-                  "VALUES(?,?,?,?,?,?,?,?)", (cid, template, json.dumps(settings), (title or "").strip(), ctx.who.actor,
-                                              now, now, ctx.who.actor))
+    ctx.c.execute(
+        "INSERT INTO cards(id,template,settings,title,made_by_id,created_at,updated_at,updated_by_id) "
+        "VALUES(?,?,?,?,?,?,?,?)",
+        (cid, template, json.dumps(settings), (title or "").strip(), ctx.who.actor, now, now, ctx.who.actor),
+    )
     log(ctx, "card.added", cid, {"template": template}, private)
     return cid
 
@@ -1108,13 +1356,18 @@ def size_of(value):
 
 
 def file_activity(c, fid, actor, action, place):
-    c.execute("INSERT INTO bot_file_activity(file_id,actor,action,created_at,detail) VALUES(?,?,?,?,?)",
-              (fid, actor, action, H.now(), encode({"place": place})))
+    row = c.execute("SELECT task_id FROM bot_files WHERE id=?", (fid,)).fetchone()
+    H._writer(c, actor, task_id=row["task_id"] if row else None)
+    c.execute(
+        "INSERT INTO bot_file_activity(file_id,actor,action,created_at,detail) VALUES(?,?,?,?,?)",
+        (fid, actor, action, H.now(), encode({"place": place})),
+    )
 
 
 def check_item(ctx, kind, item):
     """The pinning rule (module docstring) for one item at a place of `kind`."""
     from . import files as F
+
     what, _, ident = str(item or "").partition(":")
     who = ctx.who
     if what == "card":
@@ -1151,9 +1404,11 @@ def insert_pin(ctx, place, item, size, position=None):
     position = count if position is None else min(position, count)
     ctx.c.execute("UPDATE pins SET position=position+1 WHERE place=? AND position>=?", (place, position))
     pid = H.new_id()
-    ctx.c.execute("INSERT INTO pins(id,place,item,position,size,made_by,created_at) VALUES(?,?,?,?,?,?,?)",
-                  (pid, place, item, position, size_of(size), ctx.who.actor, H.now()))
-    if item.startswith("page:") and not place.startswith("person:"):     # My dashboard is its person's alone
+    ctx.c.execute(
+        "INSERT INTO pins(id,place,item,position,size,made_by,created_at) VALUES(?,?,?,?,?,?,?)",
+        (pid, place, item, position, size_of(size), ctx.who.actor, H.now()),
+    )
+    if item.startswith("page:") and not place.startswith("person:"):  # My dashboard is its person's alone
         file_activity(ctx.c, item[5:], ctx.who.actor, "pinned", place)
     return pid
 
@@ -1171,12 +1426,14 @@ def drop_pin(ctx, pin):
     elif pin["item"].startswith("card:"):
         cid = pin["item"][5:]
         if not ctx.c.execute("SELECT 1 FROM pins WHERE item=?", (pin["item"],)).fetchone():
-            ctx.c.execute("DELETE FROM cards WHERE id=?", (cid,))        # pinned nowhere: it was only that pin
+            ctx.c.execute("DELETE FROM cards WHERE id=?", (cid,))  # pinned nowhere: it was only that pin
     renumber(ctx.c, pin["place"])
 
 
 def add_pin(ctx, place, item, size="medium", position=None):
     kind, ident = require_view(ctx, place)
+    if kind == "task":
+        H._writer(ctx.c, ctx.who.actor, task_id=ident)
     if kind == "task" and item.startswith("page:"):
         if not may_link(ctx, kind, ident):
             raise Problem("forbidden", "You cannot link pages here", 403)
@@ -1186,6 +1443,7 @@ def add_pin(ctx, place, item, size="medium", position=None):
     place = canonical(kind, ident)
     if kind == "bot":
         from . import bot_task_tabs as T
+
         T.add_widget(ctx, ident, item, position)
         pin = ctx.c.execute("SELECT * FROM pins WHERE place=? AND item=?", (place, item)).fetchone()
         if size != "medium":
@@ -1222,10 +1480,18 @@ def edit_pin(ctx, pid, size=None, position=None):
 def remove_pin(ctx, pid):
     pin, kind, ident = pin_or_404(ctx, pid)
     if not may_unpin(ctx, pin, kind, ident):
-        raise Problem("forbidden", "Only whoever pinned it, the task's owner or requester, or the org owner unpins it"
-                      if kind == "task" else "You cannot unpin here", 403)
+        raise Problem(
+            "forbidden",
+            "Only whoever pinned it, the task's owner or requester, or the org owner unpins it"
+            if kind == "task"
+            else "You cannot unpin here",
+            403,
+        )
+    if kind == "task":
+        H._writer(ctx.c, ctx.who.actor, task_id=ident)
     if kind == "bot":
         from . import bot_task_tabs as T
+
         T.remove_widget(ctx, ident, pin["item"])
     else:
         drop_pin(ctx, pin)
@@ -1241,6 +1507,7 @@ def reorder(ctx, place, ids):
         raise bad("Send every pin at the place once, in the new order")
     if kind == "bot":
         from . import bot_task_tabs as T
+
         items = {p["id"]: p["item"] for p in pins_at(ctx.c, place)}
         T.order_widgets(ctx, ident, [items[i] for i in ids])
     for at, pid in enumerate(ids):
@@ -1260,8 +1527,10 @@ def sync_bot(ctx, slug, widgets):
             ctx.c.execute("UPDATE pins SET position=? WHERE id=?", (at, have[item]["id"]))
         else:
             check_item(ctx, "bot", item)
-            ctx.c.execute("INSERT INTO pins(id,place,item,position,size,made_by,created_at) VALUES(?,?,?,?,?,?,?)",
-                          (H.new_id(), place, item, at, "medium", ctx.who.actor, H.now()))
+            ctx.c.execute(
+                "INSERT INTO pins(id,place,item,position,size,made_by,created_at) VALUES(?,?,?,?,?,?,?)",
+                (H.new_id(), place, item, at, "medium", ctx.who.actor, H.now()),
+            )
             if item.startswith("page:"):
                 file_activity(ctx.c, item[5:], ctx.who.actor, "pinned", place)
 
@@ -1269,6 +1538,7 @@ def sync_bot(ctx, slug, widgets):
 def readable_item(ctx, item):
     """Whether the reader may know a sidebar widget's item is there: a page they may read, or any card."""
     from . import files as F
+
     if not item.startswith("page:"):
         return True
     row = page_row(ctx.c, item[5:])
@@ -1323,6 +1593,10 @@ def edit_card(ctx, cid, title=None, settings=None):
     row = card_or_404(ctx, cid)
     if not may_edit_card(ctx, row):
         raise Problem("forbidden", "Whoever arranges the places it is pinned to changes a card", 403)
+    for place in card_places(ctx, row):
+        kind, _, ident = place.partition(":")
+        if kind == "task":
+            H._writer(ctx.c, ctx.who.actor, task_id=ident)
     fields = {}
     if title is not None:
         fields["title"] = title.strip()
@@ -1332,8 +1606,13 @@ def edit_card(ctx, cid, title=None, settings=None):
     if fields:
         fields.update(updated_at=H.now(), updated_by_id=ctx.who.actor)
         ctx.c.execute("UPDATE cards SET " + ",".join(k + "=?" for k in fields) + " WHERE id=?", (*fields.values(), cid))
-        log(ctx, "card.changed", cid, {"fields": sorted(k for k in fields if k != "updated_at")},
-            on_person_place(card_places(ctx, row)))
+        log(
+            ctx,
+            "card.changed",
+            cid,
+            {"fields": sorted(k for k in fields if k != "updated_at")},
+            on_person_place(card_places(ctx, row)),
+        )
     return card_view(ctx, card_row(ctx.c, cid))
 
 
@@ -1341,11 +1620,16 @@ def remove_card(ctx, cid):
     row = card_or_404(ctx, cid)
     if not may_edit_card(ctx, row):
         raise Problem("forbidden", "Whoever arranges the places it is pinned to removes a card", 403)
+    for place in card_places(ctx, row):
+        kind, _, ident = place.partition(":")
+        if kind == "task":
+            H._writer(ctx.c, ctx.who.actor, task_id=ident)
     private = on_person_place(card_places(ctx, row))
     for pin in [dict(r) for r in ctx.c.execute("SELECT * FROM pins WHERE item=?", ("card:" + cid,))]:
         kind, ident = parse(ctx, pin["place"])
         if kind == "bot":
             from . import bot_task_tabs as T
+
             T.remove_widget(ctx, ident, pin["item"])
         else:
             drop_pin(ctx, pin)
@@ -1368,12 +1652,18 @@ def save_place(ctx, place, audience=None):
         # The page's audience is its group's Read (See, being on the chart, is left as it is): set there, with the
         # group's Manage check and audit row.
         from . import teammate_access
+
         target = "group:" + ident
         level = A.audience(audience.model_dump())
         current = teammate_access.document(ctx.c, target)
         if current["read"] != level:
-            teammate_access.save(ctx.c, ctx.who, target, {**current, "read": level,
-                                                         "revision": teammate_access.revision(ctx.c, target)}, ctx.auth)
+            teammate_access.save(
+                ctx.c,
+                ctx.who,
+                target,
+                {**current, "read": level, "revision": teammate_access.revision(ctx.c, target)},
+                ctx.auth,
+            )
         ctx.c.execute("UPDATE pin_places SET saved_at=?, saved_by=? WHERE place=?", (H.now(), ctx.who.actor, place))
         H.event(ctx.c, ctx.who.actor, "place.audience", place, {"everyone": level["everyone"]})
     return place
@@ -1385,8 +1675,10 @@ def widened(c, auth, who, fid, cache):
         return False
     if "pins" not in cache:
         found = {}
-        for item, place in c.execute("SELECT item, place FROM pins WHERE item LIKE 'page:%' AND made_by LIKE 'human:%' "
-                                     "AND (place IN ('dashboard', 'growth') OR place LIKE 'team:%')"):
+        for item, place in c.execute(
+            "SELECT item, place FROM pins WHERE item LIKE 'page:%' AND made_by LIKE 'human:%' "
+            "AND (place IN ('dashboard', 'growth') OR place LIKE 'team:%')"
+        ):
             found.setdefault(item[5:], []).append(place)
         cache["pins"] = found
     places = cache["pins"].get(fid)
@@ -1404,18 +1696,30 @@ def choices(ctx, team="", place=""):
     from . import growth as G
     from . import kpis as K  # noqa: F401
     from . import goal_routes, teammate_access
+
     hidden = goal_routes._hidden_owners(ctx.c, ctx.auth, ctx.who)
-    kpis = [{"id": r["id"], "name": r["name"]} for r in ctx.c.execute(
-        "SELECT id, name, owner_id FROM kpis WHERE archived_at IS NULL ORDER BY name LIMIT 500") if r["owner_id"] not in hidden]
+    kpis = [
+        {"id": r["id"], "name": r["name"]}
+        for r in ctx.c.execute("SELECT id, name, owner_id FROM kpis WHERE archived_at IS NULL ORDER BY name LIMIT 500")
+        if r["owner_id"] not in hidden
+    ]
     # The Growth page offers its own templates plus custom numbers (kpi) and pages; other places leave growth's out.
-    offered = (lambda k, v: v.get("place") == "growth" or k in GROWTH_GENERAL) if place == "growth" else \
-        (lambda k, v: v.get("place") is None)
-    templates = [{"id": k, "name": v["name"], "fields": [f for f in v["fields"]]} for k, v in TEMPLATES.items()
-                 if offered(k, v)]
-    return {"templates": templates, "teams": teammate_access.group_rows(ctx.c, ctx.who, ctx.groups, ctx.auth),
-            "kpis": kpis, "pages": pages_for(ctx, team if team in ctx.groups else "", LIST_MAX),
-            "metrics": [{"id": k, "label": v[0]} for k, v in METRICS.items()],
-            "channels": [{"slug": ch["slug"], "name": ch["name"]} for ch in G.channels(ctx.c)]}
+    offered = (
+        (lambda k, v: v.get("place") == "growth" or k in GROWTH_GENERAL)
+        if place == "growth"
+        else (lambda k, v: v.get("place") is None)
+    )
+    templates = [
+        {"id": k, "name": v["name"], "fields": [f for f in v["fields"]]} for k, v in TEMPLATES.items() if offered(k, v)
+    ]
+    return {
+        "templates": templates,
+        "teams": teammate_access.group_rows(ctx.c, ctx.who, ctx.groups, ctx.auth),
+        "kpis": kpis,
+        "pages": pages_for(ctx, team if team in ctx.groups else "", LIST_MAX),
+        "metrics": [{"id": k, "label": v[0]} for k, v in METRICS.items()],
+        "channels": [{"slug": ch["slug"], "name": ch["name"]} for ch in G.channels(ctx.c)],
+    }
 
 
 def install(app, store, auth, mutate, settings, task_view):
@@ -1439,29 +1743,35 @@ def install(app, store, auth, mutate, settings, task_view):
     def place_save(request: Request, place: str, body: PlaceSave):
         """Save a Dashboard, team page or My dashboard (its default cards become real pins) and, for a team page, who
         sees it."""
+
         def work(c):
             ctx = context(c, request)
             return place_view(ctx, save_place(ctx, place, body.audience))
+
         return mutate(request, body, work)
 
     @app.post("/api/v2/places/{place}/order")
     def place_order(request: Request, place: str, body: PlaceOrder):
         """Put every pin at the place in this order."""
+
         def work(c):
             ctx = context(c, request)
             kind, ident = require_manage(ctx, place)
             ensure(ctx, kind, ident)
             reorder(ctx, place, body.ids)
             return place_view(ctx, place)
+
         return mutate(request, body, work)
 
     @app.post("/api/v2/pins")
     def pin_add(request: Request, body: PinAdd):
         """Pin a page or a card at a place (the pinning rule: module docstring)."""
+
         def work(c):
             ctx = context(c, request)
             pid = add_pin(ctx, body.place, body.item, body.size, body.position)
             return {"id": pid, **place_view(ctx, body.place)}
+
         return mutate(request, body, work)
 
     @app.patch("/api/v2/pins/{pid}")
@@ -1470,13 +1780,16 @@ def install(app, store, auth, mutate, settings, task_view):
             ctx = context(c, request)
             edit_pin(ctx, pid, body.size, body.position)
             return place_view(ctx, c.execute("SELECT place FROM pins WHERE id=?", (pid,)).fetchone()[0])
+
         return mutate(request, body, work)
 
     @app.delete("/api/v2/pins/{pid}")
     def pin_remove(request: Request, pid: str):
         """Unpin. A card pinned nowhere else goes with its pin."""
+
         def work(c):
             return remove_pin(context(c, request), pid)
+
         return mutate(request, M.Empty(), work)
 
     @app.get("/api/v2/cards")
@@ -1514,6 +1827,7 @@ def install(app, store, auth, mutate, settings, task_view):
     @app.post("/api/v2/cards")
     def card_add(request: Request, body: CardAdd):
         """A new card; with `place` it is pinned there in the same write (who may arrange the place)."""
+
         def work(c):
             ctx = context(c, request)
             if body.place:
@@ -1528,17 +1842,21 @@ def install(app, store, auth, mutate, settings, task_view):
             if body.place:
                 out["pin"] = add_pin(ctx, body.place, "card:" + cid, body.size)
             return out
+
         return mutate(request, body, work)
 
     @app.patch("/api/v2/cards/{cid}")
     def card_edit(request: Request, cid: str, body: CardEdit):
         def work(c):
             return {"card": edit_card(context(c, request), cid, body.title, body.settings)}
+
         return mutate(request, body, work)
 
     @app.delete("/api/v2/cards/{cid}")
     def card_remove(request: Request, cid: str):
         """Remove a card and every pin of it."""
+
         def work(c):
             return remove_card(context(c, request), cid)
+
         return mutate(request, M.Empty(), work)

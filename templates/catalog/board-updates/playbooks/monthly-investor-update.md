@@ -16,7 +16,7 @@ covered (the calendar month just ended).
 
 1. For each metric in `knowledge/metrics.md`, read the current value from its source and the value a month ago: `hub kpi show <kpi id>`, or the source the line names.
 2. Compare each with plan or target where one exists (`hub goal list --all`).
-3. Cash, burn and runway: use `knowledge/finance-inputs.md` for this month. If missing, ask once with `hub task ask <id>` ("Cash, burn and runway for <month>, please")
+3. Cash, burn and runway: use `knowledge/finance-inputs.md` for this month. If missing, ask once with `hub task question "<question>" --on <person> --parent <id>` ("Cash, burn and runway for <month>, please")
    and write "not supplied" meanwhile.
 4. Check each figure with `skills/check-a-figure-before-it-goes-out/SKILL.md`. A move over 20% needs a one-line reason from a dated source, or "reason not found".
 

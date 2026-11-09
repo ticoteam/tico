@@ -5,27 +5,43 @@ Every change writes one row with who made it, the object it changed (`<kind>:<id
 the change, so a change without its row cannot exist. Rows are never edited or pruned: the table is migration 0001 and
 its append-only triggers are migration 0010 (backend/migrations).
 """
+
 import json
 
 from .store import H, encode
 
 LIMIT = 50
-LIST_BYTES = 262_144                     # as the automations list: a page stays under 256 KB
+LIST_BYTES = 262_144  # as the automations list: a page stays under 256 KB
 
 
 def write(c, actor, obj, before, after, via=None):
     """Record one change. `via` names who acted for the actor (BotOps for a person, an approval id)."""
     row_id = H.new_id()
-    c.execute("INSERT INTO audit_log VALUES(?,?,?,?,?,?,?)",
-              (row_id, H.now(), actor, obj,
-               None if before is None else encode(before), None if after is None else encode(after), via))
+    c.execute(
+        "INSERT INTO audit_log VALUES(?,?,?,?,?,?,?)",
+        (
+            row_id,
+            H.now(),
+            actor,
+            obj,
+            None if before is None else encode(before),
+            None if after is None else encode(after),
+            via,
+        ),
+    )
     return row_id
 
 
 def _row(r):
-    return {"id": r["id"], "created_at": r["created_at"], "actor": r["actor"], "object": r["object"], "via": r["via"],
-            "before": None if r["before"] is None else json.loads(r["before"]),
-            "after": None if r["after"] is None else json.loads(r["after"])}
+    return {
+        "id": r["id"],
+        "created_at": r["created_at"],
+        "actor": r["actor"],
+        "object": r["object"],
+        "via": r["via"],
+        "before": None if r["before"] is None else json.loads(r["before"]),
+        "after": None if r["after"] is None else json.loads(r["after"]),
+    }
 
 
 def rows(c, obj=None, actor=None, limit=LIMIT, before=None):
@@ -46,7 +62,7 @@ def rows(c, obj=None, actor=None, limit=LIMIT, before=None):
     for row in found[:limit]:
         size = len(json.dumps(row, default=str).encode()) + 1
         if shown and used + size > LIST_BYTES:
-            break                                    # the first row of a page always fits
+            break  # the first row of a page always fits
         used += size
         shown.append(row)
     last = shown[-1] if len(shown) < len(found) else None
@@ -62,6 +78,7 @@ def install(app, store, auth):
         who = request.state.identity
         auth.domain(who)
         from .org_rules import redact_audit
+
         with store.read() as c:
             mine = None if who.role == "owner" else who.actor
             page = rows(c, obj=object, actor=mine, limit=limit, before=before)

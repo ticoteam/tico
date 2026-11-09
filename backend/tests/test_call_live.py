@@ -2,6 +2,7 @@
 publishes a generated tone on a microphone track through LiveKit's own SDK, the server's recorder hears it, and the
 transcript is posted into the thread. Only the Gateway's speech-to-text relay is faked. The test runs only where
 TICO_LIVE_LIVEKIT names a running server with its development keys; CI starts one with docker (docs/meet.md)."""
+
 import asyncio
 import base64
 import io
@@ -23,10 +24,9 @@ from clients import gateway
 LIVE = os.environ.get("TICO_LIVE_LIVEKIT", "").rstrip("/")
 GATEWAY = "https://gateway.acme.example/v1"
 # LiveKit's development keys, the public defaults of a local --dev server; they are not this install's secrets.
-CONFIG = call_media.MeetConfig(url=call_media._ws_url(LIVE), internal_url=LIVE,
-                               api_key="devkey", api_secret="secret")
+CONFIG = call_media.MeetConfig(url=call_media._ws_url(LIVE), internal_url=LIVE, api_key="devkey", api_secret="secret")
 SPEECH_SECONDS = 4
-HEARD_BYTES = 3 * call_media.SAMPLE_RATE * 2     # three of the four seconds spoken, 16-bit mono
+HEARD_BYTES = 3 * call_media.SAMPLE_RATE * 2  # three of the four seconds spoken, 16-bit mono
 
 
 @pytest.fixture
@@ -50,12 +50,18 @@ def speak(url, token, seconds):
         source = rtc.AudioSource(call_media.SAMPLE_RATE, 1)
         track = rtc.LocalAudioTrack.create_audio_track("microphone", source)
         await room.local_participant.publish_track(
-            track, rtc.TrackPublishOptions(source=rtc.TrackSource.SOURCE_MICROPHONE))
-        tone = array("h", (round(8000 * math.sin(2 * math.pi * 440 * n / call_media.SAMPLE_RATE))
-                           for n in range(call_media.SAMPLE_RATE * seconds)))
+            track, rtc.TrackPublishOptions(source=rtc.TrackSource.SOURCE_MICROPHONE)
+        )
+        tone = array(
+            "h",
+            (
+                round(8000 * math.sin(2 * math.pi * 440 * n / call_media.SAMPLE_RATE))
+                for n in range(call_media.SAMPLE_RATE * seconds)
+            ),
+        )
         frame = call_media.SAMPLE_RATE // 50
         for start in range(0, len(tone), frame):
-            chunk = tone[start:start + frame]
+            chunk = tone[start : start + frame]
             await source.capture_frame(rtc.AudioFrame(chunk.tobytes(), call_media.SAMPLE_RATE, 1, frame))
         await source.wait_for_playout()
         await room.disconnect()
@@ -85,7 +91,7 @@ def test_a_speaker_on_a_real_livekit_server_becomes_a_transcript_in_the_thread(l
     ingest = calls.Calls.ingest
 
     def counting(self, call_id, identity, pcm, start_ms):
-        heard.append(len(pcm))          # what the recorder got from the server, before any batching
+        heard.append(len(pcm))  # what the recorder got from the server, before any batching
         ingest(self, call_id, identity, pcm, start_ms)
 
     monkeypatch.setattr(calls.Calls, "ingest", counting)

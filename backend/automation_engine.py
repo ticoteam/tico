@@ -34,6 +34,7 @@ services:
   next_batch() -> the next batch time (ISO), and now() -> now (ISO)
   checkpoint(state) -> None
 """
+
 import json
 import re
 
@@ -44,13 +45,28 @@ READY, WAITING, DONE, FAILED = "ready", "waiting", "done", "failed"
 
 def start(payload, *, manual=False):
     """A new run's state: one thread at the first step."""
-    return {"status": "running", "cost": 0.0, "steps": [], "payload": payload or {}, "manual": bool(manual),
-            "empty": False, "threads": [_thread(None, None, {}, [], 0)]}
+    return {
+        "status": "running",
+        "cost": 0.0,
+        "steps": [],
+        "payload": payload or {},
+        "manual": bool(manual),
+        "empty": False,
+        "threads": [_thread(None, None, {}, [], 0)],
+    }
 
 
 def _thread(item, value, outputs, trail, at, batched=False):
-    return {"item": item, "value": value, "outputs": dict(outputs), "trail": list(trail), "next": at,
-            "state": READY, "wait": None, "batched": batched}
+    return {
+        "item": item,
+        "value": value,
+        "outputs": dict(outputs),
+        "trail": list(trail),
+        "next": at,
+        "state": READY,
+        "wait": None,
+        "batched": batched,
+    }
 
 
 def execute(flow, payload, services, *, manual=False):
@@ -62,8 +78,9 @@ def steps_at(flow, trail):
     steps = flow.get("steps") or []
     for index, branch in trail:
         fork = steps[index]
-        steps = ((fork.get("otherwise") or {}).get("steps") if branch == "otherwise"
-                 else fork["paths"][branch].get("steps")) or []
+        steps = (
+            (fork.get("otherwise") or {}).get("steps") if branch == "otherwise" else fork["paths"][branch].get("steps")
+        ) or []
     return steps
 
 
@@ -90,8 +107,11 @@ def answer(state, ref, text, cost=0.0, ok=True, flow=None):
                 _answered(state, thread, wait, text, cost, ok, moved)
                 return True
             record = state["steps"][wait["record"]]
-            outputs = ({**record["outputs"], "text": text} if ok
-                       else {**record["outputs"], "error": str(text or "the turn did not finish")[:300]})
+            outputs = (
+                {**record["outputs"], "text": text}
+                if ok
+                else {**record["outputs"], "error": str(text or "the turn did not finish")[:300]}
+            )
             record.update(status="ok" if ok else "failed", outputs=outputs, cost=round(record["cost"] + cost, 6))
             state["cost"] = round(state["cost"] + cost, 6)
             if ok:
@@ -122,7 +142,7 @@ def advance(flow, state, services):
         if thread["state"] == WAITING and wait.get("kind") == "batch" and wait["until"] <= now:
             thread.update(state=READY, wait=None)
     threads, n = state["threads"], 0
-    while n < len(threads):   # a find puts its items' threads in the place of its own
+    while n < len(threads):  # a find puts its items' threads in the place of its own
         if threads[n]["state"] == READY:
             if services.on_hold():
                 break
@@ -136,7 +156,7 @@ def advance(flow, state, services):
 
 def _status(state):
     states = {t["state"] for t in state["threads"]}
-    if READY in states:   # stopped by a hold with steps still to run
+    if READY in states:  # stopped by a hold with steps still to run
         return "running"
     if WAITING in states:
         return "waiting"
@@ -150,8 +170,13 @@ def _status(state):
 
 
 def _record(state, thread, step, status, outputs=None, cost=0.0):
-    record = {"id": step["id"], "type": step["type"], "status": status, "outputs": outputs or {},
-              "cost": round(cost, 6)}
+    record = {
+        "id": step["id"],
+        "type": step["type"],
+        "status": status,
+        "outputs": outputs or {},
+        "cost": round(cost, 6),
+    }
     if thread["item"] is not None:
         record["item"] = thread["item"]
     state["steps"].append(record)
@@ -170,8 +195,13 @@ def _step(flow, state, thread, services):
             thread["state"] = DONE
             return
         step = steps[thread["next"]]
-        if (flow.get("batch") and not state["manual"] and not thread["batched"] and not thread["trail"]
-                and step["type"] != "filter"):
+        if (
+            flow.get("batch")
+            and not state["manual"]
+            and not thread["batched"]
+            and not thread["trail"]
+            and step["type"] != "filter"
+        ):
             # Filter on receipt, the rest at the next batch time.
             thread.update(state=WAITING, wait={"kind": "batch", "until": services.next_batch()}, batched=True)
             return
@@ -205,7 +235,8 @@ def _legacy(flow, step):
     step with `to` or a `next` other than the default. Its effects keep their keys (`<key>.<m>`, m counting across the
     step), so a run in flight resumes on the same keys."""
     return not flow.get("destinations") and all(
-        rule.get("to") is None and rule.get("next") in (None, "step") for rule in step.get("rules") or [])
+        rule.get("to") is None and rule.get("next") in (None, "step") for rule in step.get("rules") or []
+    )
 
 
 def _filter(flow, state, thread, step, services):
@@ -223,19 +254,20 @@ def _filter(flow, state, thread, step, services):
     destinations = {d["id"]: d for d in flow.get("destinations") or []}
     legacy = _legacy(flow, step)
     key, actions, fired, failed, ended = len(state["steps"]), [], [], False, False
-    tasked = False   # legacy: a create_task of this run has taken the step's own id
+    tasked = False  # legacy: a create_task of this run has taken the step's own id
     for n, rule in enumerate(step.get("rules") or []):
         if not F.all_hold(rule.get("when") or [], values, rule.get("match", "all")):
             continue
         fired.append(n)
-        chain = [(action, {"from": "rule", "rule": n}, f"r{n}.{i}")
-                 for i, action in enumerate(rule.get("then") or [])]
+        chain = [(action, {"from": "rule", "rule": n}, f"r{n}.{i}") for i, action in enumerate(rule.get("then") or [])]
         if rule.get("to") is not None:
-            if rule["to"] not in destinations:   # check() refuses a flow that names none; a run never reaches this
+            if rule["to"] not in destinations:  # check() refuses a flow that names none; a run never reaches this
                 raise ValueError(f"no destination named {rule['to']}")
             dest = destinations[rule["to"]]
-            chain += [(action, {"from": "destination", "destination": dest["id"]}, f"r{n}.d{i}")
-                      for i, action in enumerate(dest.get("then") or [])]
+            chain += [
+                (action, {"from": "destination", "destination": dest["id"]}, f"r{n}.d{i}")
+                for i, action in enumerate(dest.get("then") or [])
+            ]
         marked = []
         for action, source, slot in chain:
             if legacy:
@@ -253,8 +285,13 @@ def _filter(flow, state, thread, step, services):
         if after != "rule":
             ended = after == "end"
             break
-    _record(state, thread, step, "failed" if failed else "ok",
-            {"rule": fired[0] if fired else None, "rules": fired, "actions": actions})
+    _record(
+        state,
+        thread,
+        step,
+        "failed" if failed else "ok",
+        {"rule": fired[0] if fired else None, "rules": fired, "actions": actions},
+    )
     if failed:
         thread["state"] = FAILED
     elif ended:
@@ -272,8 +309,9 @@ def _act(services, do, args, values, step, key, producer=None):
     quoted = NOTICE_TEXT[do] if to_bot else ()
     rendered = F.render_args({k: v for k, v in args.items() if k not in quoted}, values)
     rendered.update({k: F.render_prompt(args[k], values) for k in quoted if isinstance(args.get(k), str)})
-    result = services.act(do, rendered, {"values": values, "step": step["id"], "key": key,
-                                         "producer": producer or step["id"]})
+    result = services.act(
+        do, rendered, {"values": values, "step": step["id"], "key": key, "producer": producer or step["id"]}
+    )
     return {"do": do, **result}
 
 
@@ -312,11 +350,23 @@ def _start(flow, state, thread, step, services, who, prompt, wait, tail=""):
     values = values_of(state, thread)
     cap = (flow.get("spend_cap") or {}).get("per_30m")
     # A bot_turn step's model, effort and harness are the model its task runs on (backend/task_run_models.py).
-    run_model = ({k: step[k] for k in ("model", "effort", "harness") if step.get(k)}
-                 if step.get("type") == "bot_turn" else {})
-    return services.start_turn(who, F.render_prompt(prompt, values, cap=F.MAX_PROMPT) + tail, {
-        "values": values, "step": step["id"], "key": str(len(state["steps"])), "cost": state["cost"],
-        "cap": None if cap is None else float(cap), "label": _turn_label(thread), "run_model": run_model or None}, wait)
+    run_model = (
+        {k: step[k] for k in ("model", "effort", "harness") if step.get(k)} if step.get("type") == "bot_turn" else {}
+    )
+    return services.start_turn(
+        who,
+        F.render_prompt(prompt, values, cap=F.MAX_PROMPT) + tail,
+        {
+            "values": values,
+            "step": step["id"],
+            "key": str(len(state["steps"])),
+            "cost": state["cost"],
+            "cap": None if cap is None else float(cap),
+            "label": _turn_label(thread),
+            "run_model": run_model or None,
+        },
+        wait,
+    )
 
 
 def _turn_outputs(started):
@@ -339,8 +389,9 @@ def _turn(flow, state, thread, step, services, who, prompt, wait):
         _record(state, thread, step, "ok", outputs)
         return
     record = _record(state, thread, step, "waiting", outputs)
-    thread.update(state=WAITING, wait={"kind": "turn", "ref": ref, "out": step.get("out") or step["id"],
-                                       "record": record})
+    thread.update(
+        state=WAITING, wait={"kind": "turn", "ref": ref, "out": step.get("out") or step["id"], "record": record}
+    )
 
 
 def _llm(flow, state, thread, step, services):
@@ -351,11 +402,13 @@ def _llm(flow, state, thread, step, services):
     _turn(flow, state, thread, step, services, step["as"], step["prompt"], rest)
 
 
-REPLY = {"draft": "draft_reply", "reply": "send_reply"}   # what a choose step's body does (`_resume`)
+REPLY = {"draft": "draft_reply", "reply": "send_reply"}  # what a choose step's body does (`_resume`)
 
 
-OWNER_MOVED = ("the owner changed since this step was saved: no turn or reply runs for it, and only the default "
-               "destination's chain does")
+OWNER_MOVED = (
+    "the owner changed since this step was saved: no turn or reply runs for it, and only the default "
+    "destination's chain does"
+)
 
 
 def _owner_moved(flow, step):
@@ -381,26 +434,47 @@ def _choose_turn(flow, state, thread, step, services):
     started = _start(flow, state, thread, step, services, step["as"], step["prompt"], True, _choice_tail(flow, choose))
     if started is None or started.get("held"):
         # No turn ran: the record says why, and the default destination runs with no reply.
-        _record(state, thread, step, "ok", {"skipped": "spend_cap" if started is None else "held",
-                                            **({} if started is None else {"ref": started["ref"]})})
+        _record(
+            state,
+            thread,
+            step,
+            "ok",
+            {
+                "skipped": "spend_cap" if started is None else "held",
+                **({} if started is None else {"ref": started["ref"]}),
+            },
+        )
         thread["choice"] = {"record": rec, "to": choose["default"], "body": None}
         _resume(flow, state, thread, step, services)
         return
     record = _record(state, thread, step, "waiting", _turn_outputs(started))
-    thread.update(state=WAITING, wait={"kind": "turn", "ref": started["ref"], "out": step.get("out") or step["id"],
-                                       "record": record, "choose": choose})
+    thread.update(
+        state=WAITING,
+        wait={
+            "kind": "turn",
+            "ref": started["ref"],
+            "out": step.get("out") or step["id"],
+            "record": record,
+            "choose": choose,
+        },
+    )
 
 
 def _choice_tail(flow, choose):
     """What a choose step's turn is asked after its prompt: one JSON answer, the destinations it may pick by id, and what
     its body does in the step's mode."""
     names = {d["id"]: " ".join(str(d.get("name") or d["id"]).split()) for d in flow.get("destinations") or []}
-    what = ("saved as a draft for a person to review" if choose["mode"] == "draft"
-            else "sent as the reply (a draft while the inbox's send is off)")
+    what = (
+        "saved as a draft for a person to review"
+        if choose["mode"] == "draft"
+        else "sent as the reply (a draft while the inbox's send is off)"
+    )
     listed = "\n".join(f"- {dest}: {names.get(dest, dest)}" for dest in choose["to"])
-    return (f'\n\nAnswer with one JSON object and nothing else: {{"to": "<id>", "body": "<text>"}}.\n'
-            f'"to" is one of these destination ids:\n{listed}\n'
-            f'"body" is the reply to the message, {what}. Use "" for no reply.')
+    return (
+        f'\n\nAnswer with one JSON object and nothing else: {{"to": "<id>", "body": "<text>"}}.\n'
+        f'"to" is one of these destination ids:\n{listed}\n'
+        f'"body" is the reply to the message, {what}. Use "" for no reply.'
+    )
 
 
 def read_choice(text, choose):
@@ -460,8 +534,15 @@ def _resume(flow, state, thread, step, services):
     if all(action.get("ok") for action in actions):
         index = next(n for n, d in enumerate(flow.get("destinations") or []) if d["id"] == choice["to"])
         dest, base = flow["destinations"][index], 1 + index * F.MAX_DESTINATION_ACTIONS
-        chain = [(action, {"from": "destination", "destination": dest["id"]}, str(base + i),
-                  f"{step['id']}@{rec}.{base + i}") for i, action in enumerate(dest.get("then") or [])]
+        chain = [
+            (
+                action,
+                {"from": "destination", "destination": dest["id"]},
+                str(base + i),
+                f"{step['id']}@{rec}.{base + i}",
+            )
+            for i, action in enumerate(dest.get("then") or [])
+        ]
         actions += _chain(services, chain, values, step, str(rec))
     failed = not all(action.get("ok") for action in actions)
     record["outputs"] = {**record["outputs"], "to": choice["to"], "actions": actions}
@@ -473,10 +554,18 @@ def _resume(flow, state, thread, step, services):
 def _bot_turn(flow, state, thread, step, services):
     # A bot's turn is its own work and the run goes on, unless a later step reads what it wrote (a briefing to post).
     bot = step["bot"]
-    later = steps_at(flow, thread["trail"])[thread["next"]:]
+    later = steps_at(flow, thread["trail"])[thread["next"] :]
     destinations = {d["id"]: d for d in flow.get("destinations") or []}
-    _turn(flow, state, thread, step, services, bot if bot.startswith("bot:") else "bot:" + bot, step["prompt"],
-          _reads(later, step["id"], destinations))
+    _turn(
+        flow,
+        state,
+        thread,
+        step,
+        services,
+        bot if bot.startswith("bot:") else "bot:" + bot,
+        step["prompt"],
+        _reads(later, step["id"], destinations),
+    )
 
 
 def _reads(steps, name, destinations=None):
@@ -489,11 +578,11 @@ def _reads(steps, name, destinations=None):
     for step in steps:
         if step.get("type") == "paths":
             nested = [p.get("steps") or [] for p in step.get("paths") or []]
-            if any(_reads(s, name, destinations)
-                   for s in nested + [(step.get("otherwise") or {}).get("steps") or []]):
+            if any(_reads(s, name, destinations) for s in nested + [(step.get("otherwise") or {}).get("steps") or []]):
                 return True
             step = {k: v for k, v in step.items() if k not in ("paths", "otherwise")} | {
-                "when": [p.get("when") for p in step.get("paths") or []]}
+                "when": [p.get("when") for p in step.get("paths") or []]
+            }
         rules = step.get("rules") or []
         # A filter's rule `to` and a choose step's `choose.to` run their destinations' actions: they are the step's own.
         picked = [rule.get("to") for rule in rules] + list((step.get("choose") or {}).get("to") or [])
@@ -510,17 +599,19 @@ def _reads(steps, name, destinations=None):
 def _find(flow, state, thread, step, services):
     values = values_of(state, thread)
     idle = {"idle_hours": step["idle_hours"]} if step.get("idle_hours") else {}
-    items = list(services.find(step["source"], F.render(step.get("query") or "", values), step.get("limit", 20),
-                               **idle))
+    items = list(
+        services.find(step["source"], F.render(step.get("query") or "", values), step.get("limit", 20), **idle)
+    )
     _record(state, thread, step, "ok", {"count": len(items), "items": [_brief(item) for item in items]})
     state["empty"] = not items
     place = next(n for n, t in enumerate(state["threads"]) if t is thread)
-    state["threads"][place:place + 1] = [
+    state["threads"][place : place + 1] = [
         _thread(n, item, thread["outputs"], thread["trail"], thread["next"], thread["batched"])
-        for n, item in enumerate(items)]
+        for n, item in enumerate(items)
+    ]
 
 
-ITEM_TEXT = 500   # what the run log keeps of each found item's text; the item's own steps read all of it
+ITEM_TEXT = 500  # what the run log keeps of each found item's text; the item's own steps read all of it
 
 
 def _brief(item):
@@ -557,8 +648,15 @@ def _action(flow, state, thread, step, services):
         thread["state"] = FAILED
 
 
-RUN = {"filter": _filter, "decide": _decide, "llm": _llm, "bot_turn": _bot_turn, "find": _find, "paths": _paths,
-       "action": _action}
+RUN = {
+    "filter": _filter,
+    "decide": _decide,
+    "llm": _llm,
+    "bot_turn": _bot_turn,
+    "find": _find,
+    "paths": _paths,
+    "action": _action,
+}
 
 
 def view(state):
