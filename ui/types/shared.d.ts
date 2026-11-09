@@ -74,7 +74,31 @@ interface ConfigUpdate {
   available?: boolean;
   latest?: string;
   current?: string;
+  /** The release Tico support set for this hosted server (backend/hosted_updates.py), until it is on it. */
+  scheduled?: string;
+  /** Tico runs this server's updates (a cloud company, backend/releases.py). */
+  managed?: boolean;
+  /** The release's changelog link. */
+  url?: string;
+  /** Notices from Tico for this install (backend/hosted_updates.py). */
+  messages?: UpdateMessage[];
+  /** The message Tico HQ has for this version (backend/releases.py). */
+  message?: UpdateMessage | null;
   [key: string]: unknown;
+}
+
+/** One notice Tico sent: its tone (`kind`), its text (`body`) and an optional https link (`url`). */
+interface UpdateMessage {
+  id?: string | number | null;
+  body?: string;
+  kind?: string;
+  url?: string;
+}
+
+/** The "How is Tico working for you?" question the server asks at a set moment (backend/support_asks.py). */
+interface FeedbackAsk {
+  moment: string;
+  question: string;
 }
 
 /** The environment's names and switches: state.ts's CONFIG_DEFAULTS, with whatever the server sends over them. */
@@ -109,7 +133,7 @@ interface AppConfig {
   providers_configured?: boolean;
   default_runtime?: string;
   in_docker?: boolean;
-  feedback_question?: string;
+  feedback_question?: FeedbackAsk | null;
   usage_count_notice?: unknown;
   changelog?: unknown;
   [key: string]: unknown;
