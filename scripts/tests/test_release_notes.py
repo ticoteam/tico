@@ -355,6 +355,19 @@ def test_a_range_that_is_cut_short_says_so(monkeypatch):
     assert "The range has more commits than these notes read" in text
 
 
+def test_high_risk_and_cut_short_are_read_from_the_notes_built_here(monkeypatch):
+    built = notes.build(scenario(), "v0.5.200", "v0.5.201")
+    assert notes.high_risk(built) and not notes.cut_short(built)
+    # Inside an approval issue's body, under its candidate line, the notes still read the same.
+    assert notes.high_risk("Candidate v0.5.201 at abc (validated: u)\n\n" + built)
+    empty = notes.build(FakeApi({"compare/v0.5.200...v0.5.201": {"commits": []}}), "v0.5.200", "v0.5.201")
+    assert not notes.high_risk(empty), "the count line's '0 high risk' is no High risk item"
+    assert not notes.high_risk("### #3 High risk of rain in the demo copy\n- Risk: low")
+    monkeypatch.setattr(notes, "PAGE", 2)
+    monkeypatch.setattr(notes, "COMMIT_PAGES", 1)
+    assert notes.cut_short(notes.build(scenario(), "v0.5.200", "v0.5.201"))
+
+
 def test_notes_are_read_only():
     api = scenario()
     notes.build(api, "v0.5.200", "v0.5.201")

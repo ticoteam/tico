@@ -190,11 +190,11 @@ company already owns, so their commits need no sign-off, and their pull requests
 
 Release notes are on each release's approval issue (label release-approval).
 
-A release is a version tag, and contributors do not tag. Tico releases from release windows (weekdays 07:30, 11:00,
-14:00 and 20:30 Los Angeles time, weekends 07:30 and 15:00):
-GitHub Actions validates main's head and ships the first green candidate to Tico Team's install (the canary). Stable
-(TIDY) takes a canary release only after a person with write access approves its release notes, on that release's
-`release-approval` issue (the `approved` label, or a `/approve` comment). A hotfix is for major production issues only.
-The Release Manager bot no longer tags or rolls out Tico releases; it only monitors them. The details are in
-[docs/releasing.md](docs/releasing.md#release-windows), and the approval steps are in
+A release is a version tag, and contributors do not tag. Tico releases on its own, at any hour: whenever main has
+merged work past the newest release and no candidate is in flight, GitHub Actions validates main's head and ships the
+first green candidate to Tico Team's install (the canary). Stable (TIDY) takes it once it is approved: automatically
+when its notes list no High risk item and `RELEASE_NEEDS_PERSON` is off (the default), otherwise by a person with write
+access on that release's `release-approval` issue (the `approved` label, or a `/approve` comment). A hotfix is for major
+production issues only. The Release Manager bot no longer tags or rolls out Tico releases; it only monitors them. The
+details are in [docs/releasing.md](docs/releasing.md#the-release-train), and the approval steps are in
 [docs/releasing.md](docs/releasing.md#approval).
