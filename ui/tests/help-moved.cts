@@ -1,7 +1,7 @@
 // Offline browser regression: what moved off the Help page has its own home. Settings shows the version lines and,
 // inside the desktop app, Show the app's log; Settings > Health runs the Setup check with each fix, keeps the result
 // through Health's redraw and sends it to the Tico team attached; What's new opens with the Beta features and the known
-// issues in this version. (Take the tour in the account menu is in getting-started.cjs.)
+// issues in this version. (Take the tour in the account menu is in getting-started.cts.)
 import type {LaunchOptions, Page, Route} from 'playwright';
 import type * as PageSupport from './support/page.cts';
 import type * as RouteSupport from './support/routes.cts';

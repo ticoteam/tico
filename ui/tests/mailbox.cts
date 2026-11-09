@@ -10,7 +10,7 @@ import type {Browser, Page} from 'playwright';
 import type {MailboxesFake} from './support/mailboxes-fake.cts';
 const {chromium}: typeof import('playwright') = require('playwright');
 const assert: typeof import('node:assert/strict') = require('node:assert/strict');
-const {googleFake} = require('./support/google-fake.cjs') as typeof import('./support/google-fake.cjs');
+const {googleFake} = require('./support/google-fake.cts') as import('./support/google-fake.cts').Api;
 const {mailboxesFake, open, shot} = require('./support/mailboxes-fake.cts') as import('./support/mailboxes-fake.cts').Api;
 const launch = () => chromium.launch({headless: true, channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined} as import('playwright').LaunchOptions);
 declare function inboxesPanel(id: string, options: {kinds: string[]; order: number; render: (host: HTMLElement, inbox: {kind: string; address: string; can_manage: boolean}) => void}): void;

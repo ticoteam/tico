@@ -1,4 +1,4 @@
-// Run with Playwright available: NODE_PATH=/path/to/node_modules node ui/tests/updates-tree.cjs
+// Run with Playwright available: NODE_PATH=/path/to/node_modules node ui/tests/updates-tree.cts
 // Every request is intercepted; this test never contacts the hub or a bot.
 // "Update cards nested by org chart. Manager card on top, an icon expands subordinate cards. By default you
 // see only cards below you in the org chart, with a toggle for the whole org chart. Unread alerts only for

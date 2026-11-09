@@ -1,7 +1,7 @@
 // Offline browser regression: the Assistant's Send never does nothing (ui/app/assistant-page.ts). A send the server
 // refuses, or answers without a message (a sign-in page), says so and keeps the draft; Return during a send that is
 // still out sends after it; text that arrived without an input event (autofill, a tool filling the box) still sends on
-// a click and shows in the thread. A bot's DM composer is in threads.cjs.
+// a click and shows in the thread. A bot's DM composer is in threads.cts.
 import type * as PageSupport from './support/page.cts';
 import type * as Routes from './support/routes.cts';
 import type * as AssistantChat from './support/assistant-chat.cts';

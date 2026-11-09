@@ -6,7 +6,7 @@
 // 10 minutes (Playwright's fake clock), disconnect and replace confirming in the page. A member sees Connect Google for
 // their own mailbox only (nothing when the company's key covers it), and a phone width has no sideways scroll.
 // Leaving Tools › Settings and coming back keeps the card's state (ui/app/inboxes-email.ts keeps one host, MB_GOOGLE_HOST,
-// off the page while away). What Tico may do is ui/tests/inboxes.cjs.
+// off the page while away). What Tico may do is ui/tests/inboxes.cts.
 import type {Browser, Page} from 'playwright';
 import type {GoogleFake} from './support/google-fake.cts';
 const {chromium}: typeof import('playwright') = require('playwright');

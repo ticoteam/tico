@@ -1,7 +1,7 @@
 // Offline browser regression for the first-run wizard: a company whose config
 // says onboarding_needed lands on #/welcome instead of Tasks and keeps a "Finish setup" entry; the
 // eight steps save a draft with PUT /api/v2/setup on every Next (the first two, What are you building and Your bets, are
-// ui/tests/setup-strategy.cjs's; here the strategy draft is already ready, so they are passed straight through) (there is no assistant to name, and an
+// ui/tests/setup-strategy.cts's; here the strategy draft is already ready, so they are passed straight through) (there is no assistant to name, and an
 // optional "Connect your agent" step opens connectAgent()). The company says what it does, then builds its org chart:
 // it picks departments, answers one question per department, sees "Recruiting bots…", checks the suggested bots and
 // watches the chart grow; the finished chart can rename or re-point a bot. Nothing is created until "Create my team",

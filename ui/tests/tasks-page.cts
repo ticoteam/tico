@@ -10,16 +10,16 @@
 //  - bulk changes touch only visible selected rows, retry once on a stale version, ask each bot request for its own
 //    note, and Close can be undone; the peek follows; no bulk for someone who cannot move tasks;
 //  - a phone: full-screen modal peek that Back closes, Select mode, stacked properties.
-// Board columns, selection and card behavior live in task-board.cjs.
+// Board columns, selection and card behavior live in task-board.cts.
 // TASKS_SHOTS=<dir> also saves the screenshots for the owner (dark and light).
 import type {Browser, Page, Route} from 'playwright';
 const {chromium} = require('playwright') as typeof import('playwright');
 const assert: typeof import('node:assert/strict') = require('node:assert/strict');
 const fs = require('node:fs') as typeof import('node:fs');
 const path = require('node:path') as typeof import('node:path');
-const {html, uiFile} = require('./support/page.cjs') as typeof import('./support/page.cjs');
-const {unrouted} = require('./support/routes.cjs') as typeof import('./support/routes.cjs');
-const {t} = require('./support/load.cjs') as typeof import('./support/load.cjs');
+const {html, uiFile} = require('./support/page.cts') as import('./support/page.cts').Api;
+const {unrouted} = require('./support/routes.cts') as import('./support/routes.cts').Api;
+const {t} = require('./support/load.cts') as import('./support/load.cts').Api;
 const SHOTS = process.env.TASKS_SHOTS || '';
 
 // The fixtures are the fake server's rows: the fields the scripts read are typed, the rest stay unknown.

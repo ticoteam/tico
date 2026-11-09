@@ -22,7 +22,7 @@ const RISKS = 'Sub question about the risks';
 const HOME_NOTE = 'Standup moves to ten';
 const BOT = 'builder-claude';
 
-// One API call as a teammate, by token: the same shape the counsel journey uses (ui/tests/org-rules-counsel.cjs).
+// One API call as a teammate, by token: the same shape the counsel journey uses (ui/tests/org-rules-counsel.cts).
 async function api(hub: RealHubSupport.Hub, teammate: string, method: string, p: string, body?: unknown) {
   const r = await fetch(hub.url + '/api' + p, {method, headers: {Authorization: 'Bearer ' + hub.tokens[teammate],
     'content-type': 'application/json', ...(method === 'GET' ? {} : {'Idempotency-Key': crypto.randomUUID()})},

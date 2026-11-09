@@ -1,5 +1,5 @@
 // The Assistant's chat, offline: the one old chat left (ui/app/chat.ts), at #/assistant. A bot's page is Home and DM now
-// (ui/tests/threads.cjs). Fixtures only, no network.
+// (ui/tests/threads.cts). Fixtures only, no network.
 //  - touch copy and the bot switcher: on touch a tap on a message shows its copy button, off the words; the round menu
 //    button beside the switcher opens the side menu.
 //  - live reply: a bot's separate messages stay apart (the server joins them with a blank line,
@@ -633,7 +633,7 @@ async function stickToBottom(browser: Browser) {
 }
 
 // A message waiting on setup links to the Settings tab that fixes it, and the link lands on that tab, not on the last
-// one open (one listener for every data-gs-tab link, ui/getting-started.ts; the Goal Manager's is in goals.cjs).
+// one open (one listener for every data-gs-tab link, ui/getting-started.ts; the Goal Manager's is in goals.cts).
 async function settingsLinks(browser: Browser) {
   const page = await browser.newPage({viewport:{width:1200,height:800},serviceWorkers:'block'});
   const errors: string[]=[];

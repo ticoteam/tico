@@ -16,9 +16,9 @@ import type {Browser, CDPSession, Page} from 'playwright';
 const {chromium} = require('playwright') as typeof import('playwright');
 const assert: typeof import('node:assert/strict') = require('node:assert/strict');
 const fs = require('node:fs') as typeof import('node:fs');
-const {html, uiFile} = require('./support/page.cjs') as typeof import('./support/page.cjs');
-const {unrouted} = require('./support/routes.cjs') as typeof import('./support/routes.cjs');
-const {SLOWDOWN} = require('./support/load.cjs') as typeof import('./support/load.cjs');
+const {html, uiFile} = require('./support/page.cts') as import('./support/page.cts').Api;
+const {unrouted} = require('./support/routes.cts') as import('./support/routes.cts').Api;
+const {SLOWDOWN} = require('./support/load.cts') as import('./support/load.cts').Api;
 
 // Page globals (ui/app/liquid-dot.ts) and the marks this spec leaves on window.
 declare var LDOT_IDLES: string[];

@@ -1,4 +1,4 @@
-// Run with Playwright available: NODE_PATH=/path/to/node_modules node ui/tests/pipeline-review-fixes.cjs
+// Run with Playwright available: NODE_PATH=/path/to/node_modules node ui/tests/pipeline-review-fixes.cts
 // The ▶ review queue's held forms, checked one scenario at a time at a phone's 390 by 844, dark and light:
 //   - a plain question (no picks) is answered in words, as the task page answers one (the same answers call);
 //   - the question card's held copy is scoped to the open ▶: closing ▶ drops it, and fresh Needs you data wins over it;
@@ -15,7 +15,7 @@ declare var QC_HELD: Map<string, {kind: string; ask: {refs: {questions: {questio
 declare function qcardItem(row: {id: string}): {it?: {ask?: {refs?: {questions?: {question?: string}[]}}}} | null;
 const assert = require('node:assert/strict');
 const {install} = require('./support/pipeline-fixture.cts');
-const {t} = (() => { try { return require('./support/load.cjs'); } catch { return {t: (ms: number) => ms}; } })();
+const {t} = (() => { try { return require('./support/load.cts'); } catch { return {t: (ms: number) => ms}; } })();
 
 const PHONE = {width: 390, height: 844};
 const QUESTION_TEXT = "Does 'close all' include bot-owned tasks?";

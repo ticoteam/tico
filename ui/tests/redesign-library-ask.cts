@@ -1,7 +1,7 @@
 // Library on a real hub: Docs, Meetings and Tools › Keys each have an Ask button that opens the Ask panel
 // (ui/app/ask-panel.ts), which sees the page; no Librarian rail, sidebar row or settings link. The Library and Company sidebar
 // groups fold behind a chevron (kept per browser, open again on their own pages).
-// Desktop only: the folds are the desktop sidebar's, and the phone's Ask is the same panel (ask-panel.cjs).
+// Desktop only: the folds are the desktop sidebar's, and the phone's Ask is the same panel (ask-panel.cts).
 import type {Page} from 'playwright';
 import type * as RE from './support/redesign-e2e.cts';
 const assert = require('node:assert/strict');

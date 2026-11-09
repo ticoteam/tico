@@ -1,4 +1,4 @@
-// Run with Playwright available: NODE_PATH=/path/to/node_modules node ui/tests/pipeline-review-card.cjs
+// Run with Playwright available: NODE_PATH=/path/to/node_modules node ui/tests/pipeline-review-card.cts
 // The review screen shows what is being reviewed, at a phone's 390 by 844, dark and light. The card's title is always there.
 // With an attachment the attachment is shown; with none, the card's body, acceptance criteria and checkpoint, under "No spec
 // attached". "Why you" names the requirement and the pipeline. The footer names the card by its title, never its id. The two
@@ -10,7 +10,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const {install} = require('./support/pipeline-fixture.cts');
-const {t} = (() => { try { return require('./support/load.cjs'); } catch { return {t: (ms: number) => ms}; } })();
+const {t} = (() => { try { return require('./support/load.cts'); } catch { return {t: (ms: number) => ms}; } })();
 
 const SHOTS = process.env.GC_SHOTS || '';
 const PHONE = {width: 390, height: 844};

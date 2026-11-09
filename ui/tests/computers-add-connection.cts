@@ -95,7 +95,7 @@ const shot = async (locator: Locator, name: string) => { if (SHOTS) await locato
     await add.locator('[data-add-tool=codex]').click();
     await shot(add, 'add-2-kind');
     assert.match(await add.locator('h2').innerText(), /Add Codex/);
-    // API key, for a tool whose key is not the computer's own: the way there, and Back (ui/tests/model-keys.cjs: Add key).
+    // API key, for a tool whose key is not the computer's own: the way there, and Back (ui/tests/model-keys.cts: Add key).
     await add.locator('[data-add-kind=api_key]').click();
     assert.match(await add.innerText(), /Codex takes its key from Credentials/);
     assert.equal(await add.locator('a[href="#/tools/keys?show=credentials"]').count(), 1);

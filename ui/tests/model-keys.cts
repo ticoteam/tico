@@ -223,7 +223,7 @@ async function signOut(browser: import('playwright').Browser) {
     assert.deepEqual(writes, [{p: '/api/v2/computers/box/logouts', body: {runtime: 'codex'}}]);
     await confirm.locator('[data-actions] [data-close]').click();
     await own('codex').getByRole('button', {name: 'Use the shared key'}).waitFor({timeout: 15000});
-    // Add key: a key of its own (Dev 97, ui/tests/model-keys.cjs).
+    // Add key: a key of its own (Dev 97, ui/tests/model-keys.cts).
     assert.deepEqual(await buttons(own('codex')), ['Sign in', 'Use the shared key', 'Add key']);
     // "Signed out · Sign in", and the chip on the computer's row has the red dot.
     assert.match((await own('codex').locator('.computer-conn-signin').textContent())!.replace(/\s+/g, ' ').trim(), /^Signed out · Sign in/);

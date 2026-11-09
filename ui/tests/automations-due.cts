@@ -4,7 +4,7 @@
 // and shows the next due day over when its task opens. A Create task step made in the editor opens a task for a bot,
 // and that occurrence task's due is a deadline (Overdue, Due), not a wake date, while a bot's other task still Wakes.
 // Desktop only: the Next column at 1440 (fix 822d4ba1f) is this script's; the phone's collapsed filter sections are
-// automations-list-runs.cjs's. The page's clock starts at the hub's frozen one. TICO_UI_SHOTS=<dir> saves the list and the
+// automations-list-runs.cts's. The page's clock starts at the hub's frozen one. TICO_UI_SHOTS=<dir> saves the list and the
 // open editor, dark and light.
 import type {Page} from 'playwright';
 import type * as R from './support/redesign-e2e.cts';

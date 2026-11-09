@@ -1,4 +1,4 @@
-// Run with Playwright available: NODE_PATH=/path/to/node_modules node ui/tests/updates.cjs
+// Run with Playwright available: NODE_PATH=/path/to/node_modules node ui/tests/updates.cts
 // Every request is intercepted; this test never contacts the hub or a bot.
 // Updates is a feed with Daily and Weekly toggles; each bot reports in once a day
 // (Friday: the week in review); read state is per person and marked as cards are seen; a reply shows
@@ -67,7 +67,7 @@ const bots = [['seo', 'AI SEO'], ['finance', 'Finance'], ['cmo', 'AI CMO'], ['ga
     page.on('pageerror', e => errors.push(e.message));
     // Every value the rail badge shows, in order: seen-is-read can lower it within a second of the first paint.
     await page.addInitScript(() => {
-      localStorage.setItem('tico.updates.layout', 'list');   // the flat feed; the org-chart tree is updates-tree.cjs
+      localStorage.setItem('tico.updates.layout', 'list');   // the flat feed; the org-chart tree is updates-tree.cts
       (window as unknown as PageWin).__badges = [];
       new MutationObserver(() => {
         const b = document.querySelector('.side-scroll [data-upd-badge]') as HTMLElement | null;

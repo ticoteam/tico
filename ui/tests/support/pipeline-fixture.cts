@@ -2,8 +2,8 @@
 // review queue, approve, undo, send-back, message-manager and mark-met routes the UI calls (ui/app/pipeline-api.ts).
 import type {Page} from 'playwright';
 const fs: typeof import('node:fs') = require('node:fs');
-const {html, uiFile} = require('./page.cjs') as typeof import('./page.cjs');
-const {unrouted} = require('./routes.cjs') as typeof import('./routes.cjs');
+const {html, uiFile} = require('./page.cts') as import('./page.cts').Api;
+const {unrouted} = require('./routes.cts') as import('./routes.cts').Api;
 
 type Json = Record<string, unknown>;
 

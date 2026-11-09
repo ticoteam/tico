@@ -18,9 +18,9 @@ const {chromium} = require('playwright') as typeof import('playwright');
 const assert: typeof import('node:assert/strict') = require('node:assert/strict');
 const fs = require('node:fs') as typeof import('node:fs');
 const path = require('node:path') as typeof import('node:path');
-const {html, uiFile, harnesses} = require('./support/page.cjs') as typeof import('./support/page.cjs');
-const {unrouted} = require('./support/routes.cjs') as typeof import('./support/routes.cjs');
-const {t} = require('./support/load.cjs') as typeof import('./support/load.cjs');
+const {html, uiFile, harnesses} = require('./support/page.cts') as import('./support/page.cts').Api;
+const {unrouted} = require('./support/routes.cts') as import('./support/routes.cts').Api;
+const {t} = require('./support/load.cts') as import('./support/load.cts').Api;
 const SHOTS = process.env.TASK_CODE_SHOTS || '';
 
 // Fixture rows are typed by the fields the scripts read; the rest stay unknown.

@@ -1,4 +1,4 @@
-// Run with Playwright available: NODE_PATH=/path/to/node_modules node ui/tests/task-phone-board.cjs
+// Run with Playwright available: NODE_PATH=/path/to/node_modules node ui/tests/task-phone-board.cts
 // The Tasks board on a phone, 390 px wide, light and dark, for a pipeline and for General: the header's one row (the
 // picker, ⋯, ✎, the run button and +) with ✎ a 44 px target, the stage chips and their edge fades, one stage's cards with
 // the swipe hint under the last card (none on an empty stage), the activity bar's manager name read from Hub and its
@@ -8,7 +8,7 @@ import type * as PipelineFixtureSupport from './support/pipeline-fixture.cts';
 const {chromium} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
 const {install, type: devType} = require('./support/pipeline-fixture.cts') as PipelineFixtureSupport.Api;
-const {t} = (() => { try { return require('./support/load.cjs') as {t: (ms: number) => number}; } catch { return {t: (ms: number) => ms}; } })();
+const {t} = (() => { try { return require('./support/load.cts') as {t: (ms: number) => number}; } catch { return {t: (ms: number) => ms}; } })();
 
 // Page globals from the Tasks app (the page defines them; this spec reads and pokes them).
 declare const S: {emps: Record<string, unknown>[]};

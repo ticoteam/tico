@@ -1,5 +1,5 @@
 /// <reference lib="dom.iterable" />
-// Run with Playwright available: NODE_PATH=/path/to/node_modules node ui/tests/task-board.cjs
+// Run with Playwright available: NODE_PATH=/path/to/node_modules node ui/tests/task-board.cts
 // Every request is intercepted; this test never contacts the hub, Slack, or a bot.
 // Labels and PR links, a comment thread
 // with the author on every line (not a chat), and mover-only controls. The list itself (rows, groups, chips, the peek,

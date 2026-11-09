@@ -5,8 +5,8 @@
 import type {Browser, Page} from 'playwright';
 const fs: typeof import('node:fs') = require('node:fs');
 const path: typeof import('node:path') = require('node:path');
-const {html, uiFile} = require('./page.cjs') as typeof import('./page.cjs');
-const {unrouted} = require('./routes.cjs') as typeof import('./routes.cjs');
+const {html, uiFile} = require('./page.cts') as import('./page.cts').Api;
+const {unrouted} = require('./routes.cts') as import('./routes.cts').Api;
 const uiDir = path.join(__dirname, '../..');
 const FIXTURE = path.join(__dirname, '../fixtures/redesign-automations.json');
 

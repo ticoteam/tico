@@ -1,5 +1,5 @@
 // A chat's goal on the Assistant page, offline (the one old chat left; a bot's page is Home and DM now, and its goal
-// target and pinned-goal bar are in thread-composer.cjs). Only what the thread itself draws is here: the server's
+// target and pinned-goal bar are in thread-composer.cts). Only what the thread itself draws is here: the server's
 // notice for a met goal (refs.chat_goal, refs.goal_status) is the compact goal line, not a "Task" line, and the /goal
 // messages the goal controls sent are not bubbles.
 const {chromium}: typeof import('playwright') = require('playwright');

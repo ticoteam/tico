@@ -1,4 +1,4 @@
-// A fake of the Google tab's routes (the contract in _brief-google-contract.md) for ui/tests/google-tab.cjs.
+// A fake of the Google tab's routes (the contract in _brief-google-contract.md) for ui/tests/google-tab.cts.
 // answer(path, url, method, body) gives the JSON a route answers, or undefined for any other path, as threadsFake does.
 // `fake.state` is what GET /v2/google sends and a test sets it directly; `fake.personal` is the person's own state, and
 // `fake.people` the team list GET /v2/google/people sends (an admin's only; `fake.peopleReads` counts its reads),

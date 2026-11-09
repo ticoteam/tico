@@ -131,5 +131,5 @@ await hub.stop();                                                 // stops the h
 - To start a screen from some state, add a seed. It makes the state through the API as a teammate would, never by
   writing the database. A seed whose route is not built yet is skipped and listed in `hub.skipped`.
 - The clock is the scenario's fake clock, frozen at its start, so a seeded runner's heartbeat does not age out during a test.
-- Write the phone journey first; `real-hub-smoke.cjs` is the reference. The hub needs the backend requirements, in the
+- Write the phone journey first; `real-hub-smoke.cts` is the reference. The hub needs the backend requirements, in the
   Python named by `TICO_PYTHON` as for the other support servers.

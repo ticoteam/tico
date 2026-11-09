@@ -6,7 +6,7 @@
 //   - sideways scrolling at phone width;
 //   - the words "channel" and "room", raw ids and JSON showing in the visible text.
 // Screenshots go to TICO_SHOTS, or $RUNNER_TEMP/remote/threads-walkthrough on a RunsOn VM (its folder is uploaded as
-// the run's artifact), or .remote-runs/threads-walkthrough here. Run: node ui/tests/threads-walkthrough.cjs
+// the run's artifact), or .remote-runs/threads-walkthrough here. Run: node ui/tests/threads-walkthrough.cts
 import type {Browser, Page} from 'playwright';
 import type * as RealHubSupport from './support/real-hub.cts';
 const {chromium} = require('playwright') as typeof import('playwright');

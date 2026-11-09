@@ -1,13 +1,13 @@
-// A fake of the Google mailboxes routes (backend/mailboxes.py) for the inbox pages under Tools (ui/tests/inboxes.cjs,
-// ui/tests/mailbox.cjs).
+// A fake of the Google mailboxes routes (backend/mailboxes.py) for the inbox pages under Tools (ui/tests/inboxes.cts,
+// ui/tests/mailbox.cts).
 // answer(path, method, body) gives the JSON a route answers ({status, body} for a refusal), or undefined for any other
 // path. `fake.state` holds the mailboxes, their accesses and routines; every write is kept in `fake.writes` as
 // {method, path, body}. `fake.admin` is whether the caller is an admin; `fake.me` the caller's person id.
 import type {Browser, Page} from 'playwright';
-import type {GoogleFake} from './google-fake.cjs';
+import type {GoogleFake} from './google-fake.cts';
 const fs: typeof import('node:fs') = require('node:fs');
-const {html, uiFile} = require('./page.cjs') as typeof import('./page.cjs');
-const {unrouted} = require('./routes.cjs') as typeof import('./routes.cjs');
+const {html, uiFile} = require('./page.cts') as import('./page.cts').Api;
+const {unrouted} = require('./routes.cts') as import('./routes.cts').Api;
 
 type Json = Record<string, unknown>;
 

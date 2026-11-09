@@ -39,7 +39,7 @@ const UPDATE: NewVersionUpdate = {current: '0.1.0', latest: '0.2.0', available: 
         const config = {version: update ? update.current : '0.1.0', update, app_name: 'Tico', ...(changelog ? {changelog} : {})};
         if (p === '/api/me') return json({id: 'ana', role, name: 'Ana', email: 'ana@acme.example', cloud: true, registered: true, config});
         if (p === '/api/v2/config') return json({...config, version: served || (polls > 1 ? '0.2.0' : '0.1.0')});
-        // What's new opens on a click from the row; its list is not under test here (changelog.cjs has it).
+        // What's new opens on a click from the row; its list is not under test here (changelog.cts has it).
         if (p === '/api/v2/changelog') return json({entries: [], unread_count: changelog?.unread_count || 0, next_offset: null, can_add: false, can_review: false, drafts: [], current_version: config.version});
         if (p === '/api/v2/system/update' && req.method() === 'POST') {
           posts.push(req.postDataJSON());

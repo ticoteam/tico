@@ -53,7 +53,7 @@ async function open(browser: import('playwright').Browser, viewport: {width: num
     if (p === '/api/me') return json({id: 'ana', role: 'owner', name: 'Ana', email: 'ana@example.test', cloud: true});
     if (p === '/api/humans') return json({people: [{id: 'ana', name: 'Ana'}]});
     // A list, as the server sends it: the catch-all {} broke the sidebar tree whenever it landed ahead of
-    // /api/v2/status, and the bot page never opened (the bot-needs.cjs hang from the v0.3.54 release check).
+    // /api/v2/status, and the bot page never opened (the bot-needs.cts hang from the v0.3.54 release check).
     if (p === '/api/issues') return json([]);
     if (p === '/api/employees') return json(bots);
     if (p === '/api/status') return json({cloud: true, active: [], queued: [], recent_runs: [], keeper_alive: true, health_issues: [], schedules: []});

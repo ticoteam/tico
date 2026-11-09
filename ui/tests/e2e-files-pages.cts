@@ -2,7 +2,7 @@
 // Library > Files with their titles; a page opens and draws its title, its version and its status line; a reader links a page to a
 // task (filesPages). Then Make page's task box and progress card, which were make-page.cjs (makePage; the request and pin use a real hub,
 // the authenticated publish and durable status contracts are in backend/tests/test_make_page.py). Runs on a phone: the
-// desktop row (kind, bot) is redesign-e2e-pages.cjs's, and Make page's fit is checked where it is tightest.
+// desktop row (kind, bot) is redesign-e2e-pages.cts's, and Make page's fit is checked where it is tightest.
 import type * as E2E from './support/e2e.cts';
 import type {PassContext} from './support/e2e.cts';
 const assert: typeof import('node:assert/strict') = require('node:assert/strict');

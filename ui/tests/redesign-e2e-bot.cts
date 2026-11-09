@@ -49,4 +49,4 @@ run('redesign-e2e-bot', ['org', 'toured', 'automations', 'bot_proposal'], async 
   await shot(page, `${tag}-03-flow`);
   assert.deepEqual(page.errors, [], `${tag}: no page errors`);
   await page.context().close();
-}, {only: 'phone'});   // the Versions sheet is the phone's; the computer's proposals are checked by automations-proposals.cjs
+}, {only: 'phone'});   // the Versions sheet is the phone's; the computer's proposals are checked by automations-proposals.cts

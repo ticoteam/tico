@@ -6,13 +6,13 @@
 // member never reads; a member sees no Approve; the Skills nav row; 390px with no sideways scroll.
 // TICO_UI_SHOTS=<dir> saves a dark screenshot of each page at 1440 and 390.
 import type * as MailboxesFake from './support/mailboxes-fake.cts';
-import type * as GoogleFake from './support/google-fake.cjs';
+import type * as GoogleFake from './support/google-fake.cts';
 const {chromium}: typeof import('playwright') = require('playwright');
 const assert: typeof import('node:assert/strict') = require('node:assert/strict');
 const fs: typeof import('node:fs') = require('node:fs');
 const path: typeof import('node:path') = require('node:path');
 const {mailboxesFake, open} = require('./support/mailboxes-fake.cts') as MailboxesFake.Api;
-const {googleFake} = require('./support/google-fake.cjs') as typeof GoogleFake;
+const {googleFake} = require('./support/google-fake.cts') as GoogleFake.Api;
 
 const at = (hours: number) => new Date(Date.now() - hours * 3600000).toISOString();
 const SHA = (n: number) => String(n).repeat(64).slice(0, 64);
