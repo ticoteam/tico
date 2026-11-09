@@ -34,7 +34,7 @@ needs their click), or a background run. Never a NEVER item. One card, several s
 One Confirm runs them all as them; any that fail are listed and the rest still run.
 
 For a big set of tasks you identified by id, `hub task bulk close --where-id <id> --where-id <id> --dry-run` counts first (up to
-200 ids per run). Never close by a status filter: it would close live work.
+100 ids per call). A close by filter is job 12a in `jobs.md`: count, then close on their yes.
 
 ## Cards, for what only their click may run
 Propose these with a card and stop; only their click runs them:
@@ -71,7 +71,7 @@ a fresh card. Their words, even "yes" or "turn it on", never substitute for that
 earlier flow; never undo a pause by enabling it yourself.
 
 ## Never, even when asked
-No card and no proposal. Give one sentence with the Settings link, as `AGENT.md` says. The list is in `AGENT.md`:
+No card and no proposal. Give one sentence with the link `assistant-chat.md` step 4 names. The list is in `AGENT.md`:
 - sending or replying to anyone outside the team: draft it instead; an inbox routine's Reply mode is the explicit,
   permission-checked card flow above
 - spending money, a price, a discount, a credit, a refund or agreeing to a term

@@ -245,36 +245,27 @@ class DependencyMap:
         self.names = {}  # Python file -> its identifiers and strings (fixture names it uses)
         self.imports = {}  # Python file -> the dotted names it imports (for a gone file's importers, named_by)
         self._tokens = None  # built on first use by tokens()
-        trees = {}
+        # Every scan needs `bare` (from all files' imports) first, so the Python files are parsed twice, one tree alive
+        # at a time; the build takes no longer. Holding every tree at once peaked near 2.3 GB per map, and the
+        # allocator kept it: a full merge queue VM whose four test workers each built one lost its runner (Nov 8).
+        parsed, self.bare = [], set()
         for path in self.files:
-            if path.endswith(".py"):
-                try:
-                    trees[path] = ast.parse((root / path).read_bytes())
-                except (OSError, SyntaxError, ValueError):
-                    self.unparsed.add(path)
-                    self.everything.add(path)
-        # One breadth-first pass per tree (ast.walk's order) feeds every scan: walking each tree once per scan was
-        # most of the map's build time, which every PR's plan pays and the selector's tests pay once per worker.
-        walked = {path: self.walk(tree) for path, tree in trees.items()}
-        # Top-level names imported through sys.path (`import hubcli` with clients/ on the path).
-        self.bare = {
-            a.name.split(".")[0]
-            for nodes, _ in walked.values()
-            for node in nodes
-            if isinstance(node, ast.Import)
-            for a in node.names
-        }
-        self.bare |= {
-            node.module.split(".")[0]
-            for nodes, _ in walked.values()
-            for node in nodes
-            if isinstance(node, ast.ImportFrom) and not node.level and node.module
-        }
+            if path.endswith(".py") and (tree := self.parse(path)) is not None:
+                parsed.append(path)
+                for node in ast.walk(tree):
+                    # Top-level names imported through sys.path (`import hubcli` with clients/ on the path).
+                    if isinstance(node, ast.Import):
+                        self.bare.update(a.name.split(".")[0] for a in node.names)
+                    elif isinstance(node, ast.ImportFrom) and not node.level and node.module:
+                        self.bare.add(node.module.split(".")[0])
         self.bare = {
             name for name in self.bare - set(self.modules) if any(m.endswith("." + name) for m in self.modules)
         }
-        for path, tree in trees.items():
-            self.python(path, tree, walked.pop(path))
+        for path in parsed:
+            # One breadth-first pass per tree (ast.walk's order) feeds every scan: walking each tree once per scan was
+            # most of the map's build time, which every PR's plan pays and the selector's tests pay once per worker.
+            if (tree := self.parse(path)) is not None:
+                self.python(path, tree, self.walk(tree))
         for path in self.files:
             if Path(path).suffix in CODE - {".py"} or (not Path(path).suffix and self.shebang(path)):
                 self.text(path)
@@ -283,6 +274,15 @@ class DependencyMap:
             for path, targets in edges.items():
                 for target in targets - {path}:
                     reverse[target].add(path)
+
+    def parse(self, path):
+        """The file's syntax tree, or None for one that cannot be read or parsed (it then reaches everything)."""
+        try:
+            return ast.parse((self.root / path).read_bytes())
+        except (OSError, SyntaxError, ValueError):
+            self.unparsed.add(path)
+            self.everything.add(path)
+            return None
 
     @staticmethod
     def walk(tree):
@@ -1376,24 +1376,209 @@ def queue_jobs(changed):
     return {job: not changed or any(paths.match(name) for name in changed) for job, paths in QUEUE_JOB_PATHS.items()}
 
 
-def factory_plan(event, changed):
+def factory_plan(event, changed, own_inputs=False):
     """The factory simulation's part of a plan: whether it runs, why, and its VM groups. A merge queue group and a pull
-    request both run it on RunsOn, one VM per group, so both pack it; the workflow decides which pull requests get it."""
-    reason = factory_reason(changed)
+    request both run it on RunsOn, one VM per group, so both pack it; the workflow decides which pull requests get it.
+    `own_inputs` (a light pull request run, NARROW) ignores the recorded call path: only a change to the sim's own code,
+    its catalog templates, its job or its pins runs it."""
+    reason = factory_reason(changed, call_path=dict.fromkeys(("code", "data", "folders"), ()) if own_inputs else None)
     shards = factory_shards() if reason and event in ("merge_group", "pull_request") else ["1/1"]
     return {"run": reason is not None, "reason": reason or "no change reaches the sim", "shards": shards}
 
 
-def prepare(event, base, output, timings_path=None, head="HEAD"):
+# Light runs (`plan --light`). GitHub gives the organisation about 60 concurrent hosted jobs, and pull request runs spent
+# about 70% of the CI job-minutes (Nov 8: 418 pull request and 168 queue job-minutes per merged pull request; superseded
+# pull request runs were 57% of theirs); throughput (20+ merged pull requests an hour) needs both tiers smaller. A pull
+# request run is an early signal (depth 1, four VMs); a merge queue group goes one level further (depth 2, eight VMs).
+# For an event in NARROW, the plan keeps the Python tests of the selection above (unchanged, so release validation's
+# incremental runs, scripts/release_increment.py, still select with it) that a change reaches within `depth` levels:
+#   level 0: a changed test file;
+#   level 1: a file that runs (imports, names) or reads a changed file directly, uses a conftest fixture that runs it,
+#            reads the whole repository (DependencyMap.everything), or a rule above picks for it directly (owned data, a
+#            changed conftest, docs readers, a gone file's namers);
+#   level 2: a file that runs a level-1 file (a test helper or a shared test module included), unless that file is a
+#            hub (more than HUB_TEST_USERS tests run it directly: backend/app.py, backend/store.py), whose closure is
+#            what made every change select hundreds of tests.
+# When it drops anything, by depth or by the cap below, it adds the smoke set (scripts/queue-smoke.json). Then it caps the Python tests to `shards` VMs
+# of about NARROW_SHARD_SECONDS, by measured seconds (the run's timings over scripts/test-timings.json), keeping changed
+# test files first, then the smoke set, then the nearer level, then the shorter file. What it leaves out is listed in the
+# job summary and in the plan (narrow.left_transitive, narrow.left_over_budget). A light pull request also runs the browser
+# scripts, the Caddy job and the factory sim only when the change touches their own inputs directly; a queue group keeps
+# them, the contracts, the static checks on its merge commit and the Rust, desktop and recorder jobs as they were.
+# What a queue group leaves out still runs before a release: release validation's incremental runs select with the full
+# rules above (the whole transitive closure) over every change since the last full validation, which runs once every 24
+# hours (scripts/release_increment.py), and a red one holds the release until a fix selects its failure.
+NARROW = {"pull_request": {"depth": 1, "shards": 4}, "merge_group": {"depth": 2, "shards": 8}}
+NARROW_SHARD_SECONDS = 480
+HUB_TEST_USERS = 40
+TIMINGS_FILE = "scripts/test-timings.json"
+
+
+def narrow_budget(shards):
+    """One-worker test seconds that fit `shards` VMs of NARROW_SHARD_SECONDS, setup excluded."""
+    return shards * WORKERS * (NARROW_SHARD_SECONDS - SETUP_SECONDS["python"])
+
+
+def reach_levels(names, depth, added=None, root=ROOT, graph=None):
+    """{file: level} for the files a change reaches within `depth` levels (see NARROW): 0 for the changed files, 1 for
+    what uses one directly, 2 for what runs a level-1 file that is not a hub."""
+    graph = graph or DependencyMap(root)
+    added = set(names) if added is None else set(added)
+    level = dict.fromkeys(names, 0)
+    first = set()
+    for name in names:
+        first |= set(graph.run_by.get(name, ())) | graph.readers(name, added) | graph.fixture_users(name, True)
+        if owned := owned_data(name):
+            first |= set(owned[1])
+        if Path(name).name == "conftest.py":  # rule 2: the tests below it while they are few, and its fixtures' users
+            below = graph.below(name)
+            fixtures = set(graph.fixtures.get(name, {}))
+            first |= {p for p in below if len(below) <= CONFTEST_BELOW_LIMIT or fixtures & graph.names.get(p, set())}
+        if read_only(name) and not graph.code(name):
+            first |= graph.read_by_tests([name], added)
+        if name.startswith("ui/") or name == UI_RUNNER:
+            first |= {t for lister in graph.listed_by(name, added) for t in graph.run_by.get(lister, ())}
+        if not (root / name).is_file():
+            first |= graph.named_by(name)
+        elif name in graph.unparsed or name not in graph.files:
+            first |= {t for t in graph.named_by(name) if is_check(t)}
+    # A file that lists the repository or imports a computed name (DependencyMap.everything) reads every file directly.
+    first |= graph.everything
+    frontier = first - set(level)
+    for f in frontier:
+        level[f] = 1
+    for step in range(2, depth + 1):
+        found = set()
+        for name in frontier:
+            users = set(graph.run_by.get(name, ()))
+            if is_browser(name) or sum(1 for user in users if is_test(user)) > HUB_TEST_USERS:
+                continue
+            found |= users
+        frontier = found - set(level)
+        for f in frontier:
+            level[f] = step
+    return level
+
+
+def narrow(picked, changed, event, added=None, root=ROOT, graph=None):
+    """A copy of `picked` (selection's plan for `changed`) narrowed for `event` as NARROW says, with a `narrow` record of
+    what it left for later. `tier` ranks the kept Python tests for cap_tests. Main and scheduled plans pass unchanged."""
+    if event not in NARROW or picked["python"] is None or not changed:
+        return picked
+    mode = NARROW[event]
+    names = [n for n in changed if not unread(n)]
+    level = reach_levels(names, mode["depth"], added, root, graph) if names else {}
+    smoke_tests, smoke_scripts = smoke(root)
+    full = set(picked["python"])
+    python = {p for p in full if p in level}
+    left = sorted(full - python)
+    # The smoke set runs when the plan drops anything: here by depth, or later by the time budget (prepare removes
+    # `smoke_unless_capped` when the cap drops nothing).
+    extra = sorted(set(smoke_tests) - python - full) if full and not left else []
+    if full:
+        python |= set(smoke_tests)
+    # Changed tests 0, the smoke set 1, level 1 is 2, level 2 is 3.
+    tier = {p: 0 if level.get(p) == 0 else 1 if p in smoke_tests else 1 + level[p] for p in python}
+    out = {**picked, "python": sorted(python)}
+    record = {
+        "event": event,
+        "depth": mode["depth"],
+        "shards": mode["shards"],
+        "budget_seconds": narrow_budget(mode["shards"]),
+        "smoke": bool(left),
+        "smoke_unless_capped": extra,
+        "left_transitive": left,
+        "tier": tier,
+    }
+    if event == "pull_request":
+        direct = {Path(p).stem for p in level if is_browser(p)}
+        direct |= {s for n in names if ui_map_key(n) in UI_MAP for s in UI_MAP[ui_map_key(n)]}
+        if any(n.startswith("ui/") or n == UI_RUNNER or pinned(n) for n in names):
+            direct |= set(smoke_scripts)
+        browser = set(picked["browser"]) & direct
+        if any(n in CI_INPUTS for n in names) and not browser:
+            browser.add(SMOKE_SCRIPT)
+        out["browser"] = sorted(browser)
+        record["browser_left"] = sorted(set(picked["browser"]) - browser)
+        out["caddy"] = picked["caddy"] and (
+            any(n.startswith(CADDY_INPUTS) for n in names)
+            or PR_WORKFLOW in names
+            or bool(set(level) & set(CADDY_ROOTS))
+        )
+    out["narrow"] = record
+    return out
+
+
+def cap_tests(files, tier, seconds, budget):
+    """(kept, left): `files` in priority order (tier, then measured seconds, then name) while they fit `budget` one-worker
+    seconds. A file that does not fit is left and a shorter one after it may still fit. A changed test file (tier 0) and
+    the smoke set (tier 1, about two minutes) are always kept: a change's own tests run, and the smoke set runs whenever
+    anything is left."""
+    kept, left, used = [], [], 0.0
+    for name in sorted(files, key=lambda f: (tier.get(f, 1), seconds.get(f, 0.0), f)):
+        if tier.get(name, 1) <= 1 or used + seconds.get(name, 0.0) <= budget:
+            kept.append(name)
+            used += seconds.get(name, 0.0)
+        else:
+            left.append(name)
+    return sorted(kept), left
+
+
+def committed_timings(root=ROOT):
+    """The default suite's committed per-file seconds (TIMINGS_FILE), or {} when it cannot be read."""
+    try:
+        table = json.loads((root / TIMINGS_FILE).read_text()).get("default", {})
+    except (OSError, ValueError, AttributeError):
+        return {}
+    return table if isinstance(table, dict) else {}
+
+
+def narrow_summary(record):
+    """Markdown for the job summary: what a narrowed plan left for later and why."""
+    event = "pull request" if record["event"] == "pull_request" else "merge queue group"
+    later = (
+        "its merge queue group"
+        if record["event"] == "pull_request"
+        else "release validation (incremental and daily full)"
+    )
+    lines = [
+        f"### Light {event} run",
+        "",
+        f"Python tests within {record['depth']} level(s) of the change"
+        + (", and the smoke set" if record["smoke"] else "")
+        + f", capped at {record['shards']} VMs ({record['budget_seconds']:.0f} one-worker seconds; "
+        f"{record.get('selected_seconds', 0):.0f} selected). Left for {later}:",
+        "",
+    ]
+    over = record.get("left_over_budget", [])
+    lines.append(f"- {len(record['left_transitive'])} test files reached only through more levels")
+    lines.append(f"- {len(over)} test files over the time budget" + (":" if over else ""))
+    lines += [f"  - `{name}`" for name in over]
+    if record.get("browser_left"):
+        lines.append(f"- browser scripts not touched directly: {', '.join(record['browser_left'])}")
+    if record["left_transitive"]:
+        lines += ["", "<details><summary>Reached only through more levels</summary>", ""]
+        lines += [f"- `{name}`" for name in record["left_transitive"]]
+        lines += ["", "</details>"]
+    return "\n".join(lines) + "\n"
+
+
+def prepare(event, base, output, timings_path=None, head="HEAD", light=False):
     """`head` is the commit under test: the checkout for a pull request, the queue group's merge commit for a
-    merge_group. A group's base is its own base sha, so it needs no merge_parent."""
+    merge_group. A group's base is its own base sha, so it needs no merge_parent. `light` narrows the
+    plan for an event in NARROW; any other event ignores it."""
     if event == "pull_request":
         base = merge_parent(base)
     changed = changed_files(base, head) if base else []
     added = changed_files(base, head, only="A") if base else None
     if base:
         changed = sorted(set(changed) | set(script_changes(base, head, changed)))
-    picked = selection(changed, event, base=base, added=added)
+    light = light and event in NARROW
+    # One map for the selection and the narrowing; selection builds none for a change it answers without one.
+    graph = DependencyMap(ROOT) if light and any(not unread(n) for n in changed) else None
+    picked = selection(changed, event, base=base, added=added, graph=graph)
+    if light:
+        picked = narrow(picked, changed, event, added=added, graph=graph)
     if picked["python"] is not None and not picked["caddy"]:
         image_checks(changed)
     counts = collect() if picked["python"] != [] else Counter()
@@ -1408,7 +1593,23 @@ def prepare(event, base, output, timings_path=None, head="HEAD"):
         paths = sorted(source.rglob("durations.json")) if source.is_dir() else ([source] if source.is_file() else [])
         for path in paths:
             timings.update(json.loads(path.read_text()))
-    factory = factory_plan(event, changed)
+    record = picked.pop("narrow", None)
+    if record is not None:
+        # A light plan caps and packs with the same seconds: the run's measured timings over the committed table.
+        timings = {**committed_timings(), **timings}
+        seconds = weights(counts, timings)
+        kept, record["left_over_budget"] = cap_tests(counts, record.pop("tier"), seconds, record["budget_seconds"])
+        if record["left_over_budget"]:
+            record["smoke"] = True
+        else:
+            kept = [f for f in kept if f not in record["smoke_unless_capped"]]
+        del record["smoke_unless_capped"]
+        counts = Counter({f: counts[f] for f in kept})
+        picked["python"] = sorted(counts)
+        timings |= {f: seconds[f] for f in kept}  # packing reuses the cap's estimates, untimed files included
+        record["selected_seconds"] = round(sum(seconds[f] for f in kept), 1)
+        record["left_transitive"] = sorted(set(record["left_transitive"]) - set(kept))
+    factory = factory_plan(event, changed, own_inputs=light and event == "pull_request")
     browser = None
     if picked["browser"] != []:
         scripts = browser_scripts(picked["browser"] or [])
@@ -1426,6 +1627,8 @@ def prepare(event, base, output, timings_path=None, head="HEAD"):
         cap=QUEUE_MAX_JOB_SECONDS if event == "merge_group" else MAX_JOB_SECONDS,
     )
     split, loads, target = sized["split"], sized["loads"], sized["target"]
+    if record is not None and sum(1 for group in split if group) > record["shards"]:
+        split, loads = groups(counts, timings, total=record["shards"])  # a light plan's VM cap (NARROW)
     if loads and max(loads) / WORKERS + SETUP_SECONDS["python"] > 1.5 * target:
         # Visible in the plan job's annotations: the cap (TICO_CI_MAX_JOBS) or one huge file holds a VM past the target.
         print(
@@ -1458,6 +1661,8 @@ def prepare(event, base, output, timings_path=None, head="HEAD"):
         "ceiling": ceiling,
         "job_target_seconds": target,
     }
+    if record is not None:
+        plan["narrow"] = record
     Path(output).write_text(json.dumps(plan, indent=2) + "\n")
     print(json.dumps(plan, indent=2))
     if os.environ.get("GITHUB_OUTPUT"):
@@ -1468,6 +1673,9 @@ def prepare(event, base, output, timings_path=None, head="HEAD"):
             stream.write("factory_shards=" + json.dumps(plan["factory"]["shards"]) + "\n")
             for job, on in plan["queue_jobs"].items():
                 stream.write(f"{job}={str(on).lower()}\n")
+    if record is not None and os.environ.get("GITHUB_STEP_SUMMARY"):
+        with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as stream:
+            stream.write(narrow_summary(record))
     return plan
 
 
@@ -1658,6 +1866,9 @@ def main():
     plan.add_argument("--head", default="HEAD")
     plan.add_argument("--output", default="ci-plan.json")
     plan.add_argument("--timings")
+    plan.add_argument(
+        "--light", action="store_true", help="narrow the plan for an event in NARROW (a pull request); others ignore it"
+    )
     execute = sub.add_parser("run")
     execute.add_argument("suite")
     execute.add_argument("--plan", default="ci-plan.json")
@@ -1687,7 +1898,7 @@ def main():
         )
         return 2
     if args.action == "plan":
-        prepare(args.event, args.base, args.output, args.timings, args.head)
+        prepare(args.event, args.base, args.output, args.timings, args.head, light=args.light)
     elif args.action == "run":
         return run(args.plan, args.suite, Path(args.root), quarantine=args.quarantine)
     elif args.action == "durations":

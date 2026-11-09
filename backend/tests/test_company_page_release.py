@@ -5,10 +5,12 @@ import json
 import os
 import re
 import shutil
+import sqlite3
 import stat as stat_module
 import threading
 import base64
 import xml.etree.ElementTree as ET
+from contextlib import closing
 from datetime import datetime, timezone
 from html.parser import HTMLParser
 from types import SimpleNamespace
@@ -350,11 +352,28 @@ def test_feed_is_valid_atom_with_anchored_links_and_no_markup_from_outside():
 
 
 # ------------------------------------------------------------------------------------------------- releases
+@pytest.fixture(scope="module")
+def initialized(tmp_path_factory, request):
+    """One initialized database per worker for this module, which each test copies: the copy's initialize only checks
+    the schema (~0.05 s) where an empty path builds it (~3 s). Off unless --api-database-snapshots, and off with
+    --fresh-api-databases, like conftest's api_database."""
+    if request.config.getoption("--fresh-api-databases") or not request.config.getoption("--api-database-snapshots"):
+        return None
+    path = tmp_path_factory.mktemp("company-page-schema") / "hub.db"
+    template = Store(Settings(db_path=path, company_name="Acme"))
+    template.initialize()
+    template.close()
+    return path
+
+
 @pytest.fixture
-def world(tmp_path, monkeypatch):
+def world(tmp_path, monkeypatch, initialized):
     """A real database and a real release folder. Tracks A and B own the projection and the stream: these stand in for
     them and read the same tables, so a change is seen the way the real ones see it."""
     settings = Settings(db_path=tmp_path / "hub.db", company_name="Acme")
+    if initialized is not None:
+        with closing(sqlite3.connect(initialized)) as source, closing(sqlite3.connect(settings.db_path)) as target:
+            source.backup(target)
     store = Store(settings)
     store.initialize()
     state = SimpleNamespace(

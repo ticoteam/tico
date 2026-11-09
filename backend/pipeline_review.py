@@ -2,8 +2,9 @@
 """Review mode: the ▶ queue a reviewer works through, claims, Approve with its 10-second undo, send-back to the
 assignee, Message manager and Mark met. Track C owns this module.
 
-A person reviews one requirement of one ticket at a time. The queue lists what waits on them (a requirement whose
-reviewer is them, a send-back routed to them, or a backup after the manager asked), Late first and then oldest. A claim
+A person reviews one requirement of one ticket at a time. The queue lists what waits on them: a requirement whose
+reviewer is them, a send-back routed to them, or a backup after the manager asked; a question of theirs that holds an
+open card; and their subtasks of open cards. It is one queue, each pipeline's stages left to right, then oldest. A claim
 tells a second reviewer "Chris is reviewing" for ten minutes.
 
 Every write here is one atomic step: `_atomic` opens a write transaction (or a savepoint inside the caller's, which is
@@ -25,12 +26,19 @@ import itertools
 import json
 import uuid
 from contextlib import contextmanager
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, Callable, cast
 
 from pydantic import Field
 
 from . import models as M
-from . import pipeline_engine, pipeline_github_checks, pipeline_links, pipeline_rights, requirement_attachments
+from . import (
+    pipeline_engine,
+    pipeline_github_checks,
+    pipeline_links,
+    pipeline_rights,
+    question_tasks,
+    requirement_attachments,
+)
 from .store import H, Problem
 
 if TYPE_CHECKING:
@@ -39,7 +47,7 @@ if TYPE_CHECKING:
 
     from fastapi import FastAPI
 
-    from .auth import Auth
+    from .auth import Auth, Identity
     from .store import Store
 
 CLAIM_MINUTES = 10
@@ -60,6 +68,8 @@ def _review_of(requirement: dict[str, Any]) -> str:
 
 Row = dict[str, Any]
 CURRENT: Any = object()  # approve(): no version named, so the current one is taken (a caller inside the engine)
+TICKET_SOURCE = "ticket"  # a queue item's attachment that is a file on the ticket, not the requirement's own evidence
+TEXT_NAMES = (".md", ".markdown", ".txt")  # a ticket file read as text when its content type says nothing
 
 
 class Declined(Problem, cast(Any, H).Refused):
@@ -130,6 +140,17 @@ def _clip(text: str | None) -> str | None:
     if not value:
         return None
     return value.encode("utf-8")[:NOTE_BYTES].decode("utf-8", "ignore")
+
+
+def _criteria(raw: Any) -> list[str]:
+    """A ticket's acceptance criteria, stored as JSON text, as the list the review card shows (blank ones dropped)."""
+    try:
+        value: Any = json.loads(raw) if isinstance(raw, str) and raw else (raw or [])
+    except ValueError:
+        return []
+    if not isinstance(value, list):
+        return []
+    return [text for text in (str(item).strip() for item in cast(list[Any], value)) if text]
 
 
 def _person(actor: str) -> str:
@@ -269,6 +290,9 @@ class _Facts:
         self.standing: dict[str, dict[str, str]] = {}  # ticket id -> {requirement id: the engine's state}
         self.decisions: dict[Key, list[Row]] = {}
         self.attachments: dict[Key, Row] = {}
+        self.task_files: dict[
+            str, Row
+        ] = {}  # ticket id -> its newest file (task_assets), shown when nothing is attached
         self.visits: dict[str, Row] = {}
         self.labels: dict[str, set[str]] = {}  # ticket id -> its label keys (a requirement may apply to one label)
         self.asked: set[Key] = set()  # (visit id, requirement id) the manager asked the backup about
@@ -295,6 +319,14 @@ class _Facts:
             reqs,
         ):
             facts.attachments.setdefault((attachment["task_id"], attachment["stage_requirement_id"]), attachment)
+        for asset in _read(
+            c,
+            "SELECT a.task_id AS task_id, b.id AS id, b.name AS name, b.content_type AS content_type "
+            "FROM task_assets a JOIN blobs b ON b.id = a.blob_id WHERE a.task_id IN (SELECT value FROM json_each(?)) "
+            "ORDER BY b.created_at DESC, b.id DESC",
+            tasks,
+        ):
+            facts.task_files.setdefault(asset["task_id"], asset)
         for visit in _read(
             c, "SELECT * FROM stage_visits WHERE left_at IS NULL AND task_id IN (SELECT value FROM json_each(?))", tasks
         ):
@@ -398,6 +430,47 @@ def _bot_note(decisions: list[Row], work_version: int) -> str:
     return ""
 
 
+def _manager_of(c: "sqlite3.Connection", pipeline_id: str) -> dict[str, Any] | None:
+    """The pipeline's manager bot, as the item's Message manager button names it: its actor id and display name."""
+    bot_id = _hub().type_manager(c, {"type_id": pipeline_id})
+    if not bot_id:
+        return None
+    return {"id": f"bot:{bot_id}", "name": str(_hub().actor_name(c, f"bot:{bot_id}"))}
+
+
+def _attachment_of(attachment: Row | None, ticket_file: Row | None) -> Row | None:
+    """The attachment a queue item shows: the requirement's own evidence, else the ticket's newest file. A ticket file is
+    shown only. It is not the requirement's evidence, so the item carries no digest for it and its id never reaches
+    approve or Not validated."""
+    if attachment is not None:
+        return {
+            "id": attachment["id"],
+            "source": attachment["source"],
+            "url": attachment["url"],
+            "blob_id": attachment["blob_id"],
+            "file_id": attachment["file_id"],
+            "file_version": attachment["file_version"],
+            "commit_sha": attachment["commit_sha"],
+        }
+    if ticket_file is not None:
+        return {
+            "id": ticket_file["id"],
+            "source": TICKET_SOURCE,
+            "url": None,
+            "blob_id": ticket_file["id"],
+            "file_id": None,
+            "file_version": None,
+            "commit_sha": None,
+        }
+    return None
+
+
+def _is_text(asset: Row) -> bool:
+    """Whether a ticket file reads as text: a text content type, or a markdown or plain-text name."""
+    name = str(asset.get("name") or "").lower()
+    return str(asset.get("content_type") or "").lower().startswith("text/") or name.endswith(TEXT_NAMES)
+
+
 class _Queue:
     """What the queue reads for all its rows at once, one read per kind and chunk: the unexpired claims, the stage and
     pipeline names, the stages' Warn-after limits, and when each ticket not in a visit last stepped. Each row is built
@@ -470,12 +543,17 @@ class _Queue:
     def item(self, actor: str, task: Row, requirement: Row, why: str) -> Row:
         key = (task["id"], requirement["id"])
         attachment = self.facts.attachments.get(key)
+        ticket_file = None if attachment else self.facts.task_files.get(task["id"])
         claim_row = self.claims.get(key)
         since = self.since(task)
         stage = self.stages.get(requirement["pipeline_stage_id"]) or {}
         return {
+            "form": "review",
             "task_id": task["id"],
             "title": task.get("title") or "",
+            "body": str(task.get("body") or ""),
+            "acceptance_criteria": _criteria(task.get("acceptance")),
+            "checkpoint": str(task.get("checkpoint") or ""),
             "number": task.get("number"),
             "pipeline_id": requirement["pipeline_id"],
             "pipeline": self.types.get(requirement["pipeline_id"]) or "",
@@ -486,19 +564,7 @@ class _Queue:
             "requirement_version": requirement["version"],
             "kind": requirement["kind"],
             "work_version": _revision(task),
-            "attachment": (
-                {
-                    "id": attachment["id"],
-                    "source": attachment["source"],
-                    "url": attachment["url"],
-                    "blob_id": attachment["blob_id"],
-                    "file_id": attachment["file_id"],
-                    "file_version": attachment["file_version"],
-                    "commit_sha": attachment["commit_sha"],
-                }
-                if attachment
-                else None
-            ),
+            "attachment": _attachment_of(attachment, ticket_file),
             "attachment_digest": attachment["digest"] if attachment else None,
             "why": why,
             "since": since,
@@ -512,7 +578,7 @@ class _Queue:
 def _queue_fields(
     c: "sqlite3.Connection", actor: str, items: list[Row], live: list[Row], tasks: dict[str, Row], queue: _Queue
 ) -> None:
-    """Adds assignee, bot_note, reviewer_id, can_mark_met, can_not_validate and moves_to to each queue item. The people
+    """Adds assignee, manager, bot_note, reviewer_id, can_mark_met, can_not_validate and moves_to to each queue item. The people
     and bots, the move links and the pipelines' steps are each read once over all the items; `may_edit_rules` runs once
     per pipeline; Not validated's route is read per ticket at its stage (it follows the ticket's own handoff)."""
     if not items:
@@ -550,6 +616,7 @@ def _queue_fields(
     names = {s["id"]: s["name"] for s in steps}
     requirements = {r["id"]: r for r in live}
     rights = {p: pipeline_rights.may_edit_rules(c, actor, p) for p in pipeline_ids}
+    managers = {p: _manager_of(c, p) for p in pipeline_ids}
     candidates: dict[
         tuple[str, str], tuple[Row, list[Row], str | None] | None
     ] = {}  # Not validated's candidates per stage, read once
@@ -578,15 +645,103 @@ def _queue_fields(
         # Another reviewer's claim holds the item: Not validated is theirs to send, so it is not offered to anyone else.
         # Another reviewer's claim holds the item: Not validated is theirs to send, so it is not offered to anyone else.
         item["can_not_validate"] = at_stage and item["claimed_by"] is None and _route_ok(item)
+        item["manager"] = managers.get(item["pipeline_id"])
         item["moves_to"] = _moves_to(item, live, queue.facts, links, steps, names, blocked) if at_stage else None
 
 
 def _attachment_views(c: "sqlite3.Connection", items: list[Row], facts: "_Facts") -> None:
-    """Adds each shown attachment's format, name and href (its immutable content address), one media lookup for all."""
+    """Adds each shown attachment's format, name and href (its immutable content address), one media lookup for all. A
+    ticket file that reads as text is format text, so the review shows it as text rather than a bare file."""
     shown = [item for item in items if item["attachment"]]
-    rows = [facts.attachments[(item["task_id"], item["requirement_id"])] for item in shown]
+    rows = [
+        (
+            {
+                "source": "blob",
+                "blob_id": item["attachment"]["blob_id"],
+                "file_id": None,
+                "file_version": None,
+                "url": None,
+            }
+            if item["attachment"]["source"] == TICKET_SOURCE
+            else facts.attachments[(item["task_id"], item["requirement_id"])]
+        )
+        for item in shown
+    ]
     for item, view in zip(shown, requirement_attachments.views(c, rows), strict=True):
-        item["attachment"].update(format=view["format"], name=view["name"], href=view["href"])
+        fmt = view["format"]
+        if item["attachment"]["source"] == TICKET_SOURCE and _is_text(facts.task_files[item["task_id"]]):
+            fmt = "text"
+        item["attachment"].update(format=fmt, name=view["name"], href=view["href"])
+
+
+@contextmanager
+def _read_snapshot(c: "sqlite3.Connection") -> "Generator[None]":
+    """The page reads open a snapshot of their own (task_privacy.snapshot) and never end it. On an autocommit
+    connection this one ends it, so the caller's connection is left as it was: a snapshot left open keeps reads stale
+    on that connection and holds its later commit back."""
+    if c.in_transaction:
+        yield
+        return
+    c.execute("BEGIN")
+    try:
+        yield
+    finally:
+        c.execute("ROLLBACK")
+
+
+def _redact_attachments(c: "sqlite3.Connection", items: list[Row], who: "Identity", auth: "Auth | None") -> None:
+    """Each review item's attachment is redacted for this reader the way the task view redacts a page
+    (files.readable_page_refs, the function the question view uses): a page the reader cannot open shows the task view's
+    notice in place of its name. The denied attachment is built fresh, so nothing of the page's row survives: no id, blob
+    id, digest, version, title or address, and the item's own attachment digest goes too. The item stays in the queue, so
+    the counts do not move."""
+    shown = [item for item in items if item["attachment"]]
+    if not shown:
+        return
+    from . import files as file_module
+
+    readable_refs = cast(Callable[..., list[Row]], file_module.readable_page_refs)
+    with _read_snapshot(c):
+        views = readable_refs(c, auth, who, [item["attachment"] for item in shown])
+    for item, view in zip(shown, views, strict=True):
+        if view.get("removed") is True:
+            item["attachment"] = {
+                "id": None,
+                "source": item["attachment"]["source"],
+                "format": "file",
+                "name": view["label"],
+                "url": None,
+                "href": None,
+                "file_id": None,
+                "file_version": None,
+                "blob_id": None,
+                "commit_sha": None,
+                "removed": True,
+            }
+            item["attachment_digest"] = None
+
+
+UNOPENABLE_APPROVE = "You can't open this page, so you can't approve it. Send it back or ask its owner to share it."
+
+
+def _refuse_unopenable(
+    c: "sqlite3.Connection", who: "Identity", auth: "Auth", task_id: str, requirement_id: str
+) -> None:
+    """Refuses an approval whose attachment is a page the reader cannot open, as the queue shows the item: the
+    requirement's own attachment, else the ticket's newest file. Runs before the work and digest checks: the reader never
+    saw that page, so it is not a change to report."""
+    facts = _Facts.load(c, [task_id], [{"id": requirement_id}])
+    attachment = facts.attachments.get((task_id, requirement_id))
+    shown = _attachment_of(attachment, None if attachment else facts.task_files.get(task_id))
+    if shown is None:
+        return
+    from . import files as file_module
+
+    readable_refs = cast(Callable[..., list[Row]], file_module.readable_page_refs)
+    with _read_snapshot(c):
+        (view,) = readable_refs(c, auth, who, [shown])
+    if view.get("removed") is True:
+        raise Problem("forbidden", UNOPENABLE_APPROVE, 403)
 
 
 def _moves_to(
@@ -662,12 +817,20 @@ def queue_for(
     pipeline_id: str | None = None,
     stage_id: str | None = None,
     visible_sql: str | None = None,
+    *,
+    who: "Identity | None" = None,
+    auth: "Auth | None" = None,
 ) -> list[Row]:
-    """The items waiting for this reviewer, Late first, then oldest. `pipeline_id` and `stage_id` narrow it to one
+    """The items waiting for this reviewer, in one queue: each pipeline's stages left to right, then oldest. Each item
+    has a `form`: a review, or a question or subtask (`_held_items`). `pipeline_id` and `stage_id` narrow it to one
     pipeline or one stage. Only a reviewer, a send-back's route or an asked backup sees an item; a bot sees none. An item
     is a requirement of the ticket's current stage, or a stale one of a stage it has left (D33), reviewed in place. The
     tickets the reader may not open, and the items on pipelines they may not see, are left out (`visible_sql` is the
-    route's task list clause, which also applies the bot activity controls)."""
+    route's task list clause, which also applies the bot activity controls). `who` and `auth` are the route's reader: a
+    question or subtask shows only what that reader may see of its pages (files.readable_page_refs); without them the
+    reader is the actor alone, which the counts use."""
+    from .auth import Identity
+
     if not str(actor or "").startswith("human:"):
         return []
     people = ",".join("?" * len(PERSON_REVIEWED))
@@ -736,8 +899,160 @@ def queue_for(
     items = [queue.item(actor, task, requirement, why) for task, requirement, why in waiting]
     _queue_fields(c, actor, items, live, tasks, queue)
     _attachment_views(c, items, facts)
-    items.sort(key=lambda item: (not item["late"], item["since"], item["task_id"], item["requirement_id"]))
+    reader = who or Identity(actor, "human")
+    _redact_attachments(c, items, reader, auth)
+    items.extend(_held_items(c, actor, pipeline_id, stage_id, visible_sql, reader, auth))
+    _in_queue_order(c, items)
     return items
+
+
+# ----------------------------------------------------------------------------- questions and subtasks
+QUESTION_FORM = "question"  # a question of the reader's that holds an open card: answered as the question card answers
+SUBTASK_FORM = "subtask"  # a subtask the reader owns of an open card: Done, or Send back with a note
+
+
+def _held_rows(
+    c: "sqlite3.Connection", actor: str, form: str, pipeline_id: str | None, stage_id: str | None
+) -> list[Row]:
+    """The reader's open subjects of one form, each with the open card it holds: a question (unanswered, a subtask or a
+    blocker of the card) or a subtask (a subtask of the card with no question on it). The card's pipeline and stage
+    narrow it as the queue's filters do."""
+    active = tuple(H.ACTIVE_STATUSES)
+    marks = ",".join("?" * len(active))
+    if form == QUESTION_FORM:
+        link, asked = "('parent','blocks')", "s.questions IS NOT NULL AND s.answer IS NULL"
+    else:
+        link, asked = "('parent')", "s.questions IS NULL"
+    args: list[Any] = [actor, *active, *active]
+    narrow = ""
+    if pipeline_id:
+        narrow += " AND card.type_id=?"
+        args.append(pipeline_id)
+    if stage_id:
+        narrow += " AND card.step_id=?"
+        args.append(stage_id)
+    return _rows(
+        c,
+        "SELECT s.*, card.id AS card_id, card.title AS card_title, card.number AS card_number, "
+        "card.type_id AS card_pipeline, card.step_id AS card_stage "
+        "FROM task_relations wr JOIN tasks s ON s.id=wr.from_task JOIN tasks card ON card.id=wr.to_task "
+        f"WHERE wr.kind IN {link} AND s.owner_id=? AND {asked} AND s.status IN ({marks}) "
+        f"AND card.type_id IS NOT NULL AND card.status IN ({marks}){narrow} ORDER BY s.created_at, s.id, card.id",
+        tuple(args),
+    )
+
+
+def _held_items(
+    c: "sqlite3.Connection",
+    actor: str,
+    pipeline_id: str | None,
+    stage_id: str | None,
+    visible_sql: str | None,
+    who: "Identity",
+    auth: "Auth | None",
+) -> list[Row]:
+    """The queue's other two forms, for the reader only: their questions that hold an open card of a pipeline, and their
+    subtasks of such cards. A card the reader may not open, or a pipeline they may not see, leaves its items out, as the
+    review rows are (`_authorized`). Each item is on its card (`task_id`), with the subject it asks about or works on.
+    Its pages are redacted for this reader by the task view's own function (files.readable_page_refs): an option whose
+    page the reader may not open shows as removed, with no title and no file id."""
+    found: dict[tuple[str, str], tuple[Row, str]] = {}
+    for form in (QUESTION_FORM, SUBTASK_FORM):
+        for row in _held_rows(c, actor, form, pipeline_id, stage_id):
+            found.setdefault((str(row["id"]), str(row["card_id"])), (row, form))
+    if not found:
+        return []
+    cards = {card for _, card in found}
+    pipelines = {str(row["card_pipeline"]) for row, _ in found.values()}
+    allowed, visible = _authorized(c, actor, cards, pipelines, visible_sql)
+    names = {
+        str(r["id"]): str(r["name"])
+        for r in _read(c, "SELECT id, name FROM task_types WHERE id IN (SELECT value FROM json_each(?))", pipelines)
+    }
+    stages = {
+        str(r["id"]): str(r["name"])
+        for r in _read(
+            c,
+            "SELECT id, name FROM task_steps WHERE id IN (SELECT value FROM json_each(?))",
+            [row["card_stage"] for row, _ in found.values()],
+        )
+    }
+    # The blob and page helpers are unannotated in their modules, so they are typed here where this block calls them.
+    from . import blobs as blob_module
+    from . import files as file_module
+
+    brief_of = cast(Callable[[Row], Row], blob_module.brief)
+    readable_refs = cast(Callable[..., list[Row]], file_module.readable_page_refs)
+    subtasks = [subject_id for (subject_id, _), (_, form) in found.items() if form == SUBTASK_FORM]
+    # A subtask's files are its attachments, as the task view lists them (the blobs attached to the task).
+    files: dict[str, list[Row]] = {}
+    if subtasks:
+        for r in _read(
+            c,
+            "SELECT a.task_id AS held_task, b.* FROM blobs b JOIN task_assets a ON a.blob_id=b.id "
+            "WHERE a.task_id IN (SELECT value FROM json_each(?)) ORDER BY b.created_at, b.id",
+            subtasks,
+        ):
+            files.setdefault(str(r["held_task"]), []).append(brief_of(r))
+    items: list[Row] = []
+    for (subject_id, card_id), (row, form) in found.items():
+        pipeline = str(row["card_pipeline"])
+        if card_id not in allowed or pipeline not in visible:
+            continue
+        question = form == QUESTION_FORM
+        card_title = str(row["card_title"] or "")
+        items.append(
+            {
+                "form": form,
+                "task_id": card_id,
+                "title": card_title,
+                "number": row["card_number"],
+                "pipeline_id": pipeline,
+                "pipeline": names.get(pipeline, ""),
+                "stage_id": row["card_stage"],
+                "stage": stages.get(str(row["card_stage"]), ""),
+                "subject_id": subject_id,
+                "subject_title": str(row["title"] or ""),
+                "subject_version": int(row["version"] or 1),
+                "ask": question_tasks.as_ask(row) if question else None,
+                "holds_up": {"id": card_id, "title": card_title} if question else None,
+                # The subtask's card as the review card shows it: its body, acceptance criteria and files.
+                "body": "" if question else str(row["body"] or ""),
+                "acceptance_criteria": [] if question else _criteria(row["acceptance"]),
+                "task_files": [] if question else files.get(str(subject_id), []),
+                "why": f"{'Question for you' if question else 'Your subtask'} · {names.get(pipeline, '')}",
+                "since": (question_tasks.asked_at(row) if question else row.get("created_at")) or "",
+                "late": False,
+                "reviewer_id": actor,
+            }
+        )
+    # The task view's redaction (app.task_view), over the whole item: its ask and any subtask's files alike. An item whose
+    # own text names a page the reader may not open is left out, as a removed marker is no item the queue can show.
+    shown = readable_refs(c, auth, who, items)
+    return [item for item in shown if item.get("removed") is not True]
+
+
+def _in_queue_order(c: "sqlite3.Connection", items: list[Row]) -> None:
+    """Sorts the one queue in place: by pipeline, then each stage left to right, then age (the oldest first)."""
+    positions = {
+        str(r["id"]): int(r["position"])
+        for r in _read(
+            c,
+            "SELECT id, position FROM task_steps WHERE id IN (SELECT value FROM json_each(?))",
+            [item["stage_id"] for item in items if item.get("stage_id")],
+        )
+    }
+    items.sort(
+        key=lambda item: (
+            str(item["pipeline"]).lower(),
+            str(item["pipeline_id"]),
+            positions.get(str(item.get("stage_id")), 1 << 30),
+            str(item["since"]),
+            str(item["task_id"]),
+            str(item.get("requirement_id") or ""),
+            str(item.get("subject_id") or ""),
+        )
+    )
 
 
 # ----------------------------------------------------------------------------- claims
@@ -1441,7 +1756,7 @@ def install(app: "FastAPI", store: "Store", mutate: "Callable[..., Any]", auth: 
                 raise Problem("not_found", "No such pipeline", 404)
             hidden = pipeline_rights.hidden_pipeline_ids(c, reader_actor)
             scope = pipeline_rights.list_sql(c, who.actor, cast(Any, auth).task_sql(c, who))
-            items = queue_for(c, who.actor, pipeline_id, stage_id, visible_sql=scope)
+            items = queue_for(c, who.actor, pipeline_id, stage_id, visible_sql=scope, who=who, auth=auth)
             return {"items": [item for item in items if item["pipeline_id"] not in hidden]}
 
     @app.get("/api/v2/pipelines/review/queue")
@@ -1484,11 +1799,11 @@ def install(app: "FastAPI", store: "Store", mutate: "Callable[..., Any]", auth: 
     @app.post(base + "/approve")
     def review_approve(request: Request, tid: str, rid: str, body: ReviewTarget) -> Row:  # pyright: ignore[reportUnusedFunction]
         """Approve what you saw. Refused when the work, attachment or requirement changed since. Undo it within 10 s."""
-        return write(
-            request,
-            tid,
-            body,
-            lambda c, actor: approve(
+        who = request.state.identity
+
+        def run(c: "sqlite3.Connection", actor: str) -> Row:
+            _refuse_unopenable(c, who, auth, tid, rid)
+            return approve(
                 c,
                 actor,
                 tid,
@@ -1497,8 +1812,9 @@ def install(app: "FastAPI", store: "Store", mutate: "Callable[..., Any]", auth: 
                 attachment_digest=body.attachment_digest,
                 requirement_version=body.requirement_version,
                 note=body.note,
-            ),
-        )
+            )
+
+        return write(request, tid, body, run)
 
     @app.post(base + "/send-back")
     def review_send_back(request: Request, tid: str, rid: str, body: ReviewNote) -> Row:  # pyright: ignore[reportUnusedFunction]

@@ -17664,6 +17664,117 @@
         ]
       }
     },
+    "/api/v2/finance/receipts": {
+      "get": {
+        "summary": "The receipts the caller sees, newest first: each Library file with what it reads as (amount, date, vendor) and its suggested or filed bank or card row; ?status= narrows them, and a cursor pages them",
+        "operationId": "listFinanceReceipts",
+        "parameters": [
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "unread",
+                    "suggested",
+                    "unmatched",
+                    "attached",
+                    "rejected"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Status"
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 600
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cursor"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 200,
+              "minimum": 1,
+              "default": 50,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "view_as",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "View As"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FinanceReceipts"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Finance"
+        ]
+      }
+    },
     "/api/v2/finance/recipients": {
       "get": {
         "summary": "Current payment recipients, last 4 only, for teammates who may pay",
@@ -18571,6 +18682,68 @@
         },
         "tags": [
           "Finance"
+        ]
+      }
+    },
+    "/api/v2/finance/statements/preview": {
+      "post": {
+        "summary": "Review a bank or card statement file before it posts: each row New or Already in Tico, its vendor and attribution, and the tie-out. Writes only a short-lived preview token",
+        "operationId": "previewFinanceStatement",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FinanceStatementPreviewRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FinanceStatementReview"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Finance"
+        ],
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "1-200 characters. Reusing a key with the same body replays the first answer."
+          }
         ]
       }
     },
@@ -33954,7 +34127,7 @@
     },
     "/api/v2/rules/stats": {
       "get": {
-        "summary": "Rule checks today: checks, unchecked, blocked, dollars left in the rules budget, and whether checks are on",
+        "summary": "Rule checks today: checks, unchecked, blocked, dollars left under the decisions monthly cap, and whether checks are on",
         "operationId": "getRuleCheckStats",
         "responses": {
           "200": {
@@ -38913,7 +39086,7 @@
     },
     "/api/v2/task-bulk": {
       "post": {
-        "summary": "One change to every task a filter selects (filter takes the listTasks filters, and ids); action is step, status, owner, tags (add, remove) or close. Each task changes as updateTask would change it: a task the caller may not change is skipped with its reason, the rest still change. At most 200 tasks: a filter matching more is refused (422 too_many). dry_run makes every change and undoes it, so its counts are the real ones",
+        "summary": "One change to every task a filter selects (filter takes the listTasks filters, ids, and exclude_owner: everything not that owner's); action is step, status, owner, tags (add, remove) or close. Each task changes as updateTask would change it: a task the caller may not change is skipped with its reason, the rest still change. At most 200 tasks: a filter matching more is refused (422 too_many). dry_run makes every change and undoes it, so its counts are the real ones",
         "operationId": "bulkChangeTasks",
         "requestBody": {
           "content": {
@@ -59634,6 +59807,153 @@
         ],
         "additionalProperties": true
       },
+      "FinanceReceipts": {
+        "type": "object",
+        "properties": {
+          "rows": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "file": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "name": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "name"
+                  ],
+                  "additionalProperties": true
+                },
+                "read": {
+                  "type": "object",
+                  "properties": {
+                    "amount": {
+                      "type": [
+                        "integer",
+                        "null"
+                      ]
+                    },
+                    "date": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "vendor": {
+                      "type": [
+                        "object",
+                        "null"
+                      ],
+                      "properties": {
+                        "id": {
+                          "type": "string"
+                        },
+                        "name": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "id",
+                        "name"
+                      ],
+                      "additionalProperties": true
+                    }
+                  },
+                  "required": [
+                    "amount",
+                    "date",
+                    "vendor"
+                  ],
+                  "additionalProperties": true
+                },
+                "match": {
+                  "type": [
+                    "object",
+                    "null"
+                  ],
+                  "properties": {
+                    "feed": {
+                      "type": "object",
+                      "properties": {
+                        "id": {
+                          "type": "string"
+                        },
+                        "date": {
+                          "type": "string"
+                        },
+                        "amount": {
+                          "type": "integer"
+                        },
+                        "description": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "amount",
+                        "date",
+                        "description",
+                        "id"
+                      ],
+                      "additionalProperties": true
+                    },
+                    "confidence": {
+                      "type": [
+                        "number",
+                        "null"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "confidence",
+                    "feed"
+                  ],
+                  "additionalProperties": true
+                },
+                "status": {
+                  "type": "string"
+                },
+                "as_of": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "as_of",
+                "file",
+                "id",
+                "match",
+                "read",
+                "status"
+              ],
+              "additionalProperties": true
+            }
+          },
+          "next": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "as_of": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "as_of",
+          "next",
+          "rows"
+        ],
+        "additionalProperties": true
+      },
       "FinanceRecipients": {
         "type": "object",
         "properties": {
@@ -60088,6 +60408,206 @@
         "required": [
           "groups",
           "view_version"
+        ],
+        "additionalProperties": true
+      },
+      "FinanceStatementPreviewRequest": {
+        "properties": {
+          "money_account_id": {
+            "type": "string",
+            "maxLength": 80,
+            "minLength": 1,
+            "title": "Money Account Id"
+          },
+          "file": {
+            "type": "string",
+            "maxLength": 1398104,
+            "minLength": 1,
+            "title": "File"
+          },
+          "file_name": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 200
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "File Name"
+          },
+          "signs": {
+            "type": "string",
+            "enum": [
+              "auto",
+              "as_shown",
+              "flipped"
+            ],
+            "title": "Signs",
+            "default": "auto"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "money_account_id",
+          "file"
+        ],
+        "title": "FinanceStatementPreviewRequest",
+        "description": "A bank or card statement file to review before it posts: CSV, OFX or QFX, base64 encoded (1 MB at most), for a\nmoney account Tico cannot connect. `signs` says how its amounts read (auto, as_shown or flipped; a post passes the\nsame). Nothing is written but a short-lived preview token."
+      },
+      "FinanceStatementReview": {
+        "type": "object",
+        "properties": {
+          "token": {
+            "type": "string"
+          },
+          "expires_at": {
+            "type": "string"
+          },
+          "money_account_id": {
+            "type": "string"
+          },
+          "file_name": {
+            "type": "string"
+          },
+          "file_format": {
+            "type": "string"
+          },
+          "start": {
+            "type": "string"
+          },
+          "end": {
+            "type": "string"
+          },
+          "card": {
+            "type": "boolean"
+          },
+          "last4": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "signs": {
+            "type": "object",
+            "properties": {
+              "flipped": {
+                "type": "boolean"
+              },
+              "by": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "by",
+              "flipped"
+            ],
+            "additionalProperties": true
+          },
+          "new": {
+            "type": "integer"
+          },
+          "duplicate": {
+            "type": "integer"
+          },
+          "tie": {
+            "type": "object",
+            "properties": {
+              "opening": {
+                "type": "integer"
+              },
+              "added": {
+                "type": "integer"
+              },
+              "removed": {
+                "type": "integer"
+              },
+              "ends": {
+                "type": "integer"
+              },
+              "statement_says": {
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "off_by": {
+                "type": "integer"
+              }
+            },
+            "required": [
+              "added",
+              "ends",
+              "off_by",
+              "opening",
+              "removed",
+              "statement_says"
+            ],
+            "additionalProperties": true
+          },
+          "rows": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "date": {
+                  "type": "string"
+                },
+                "description": {
+                  "type": "string"
+                },
+                "amount": {
+                  "type": "integer"
+                },
+                "vendor": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "name": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "name"
+                  ],
+                  "additionalProperties": true
+                },
+                "attribution": {
+                  "type": [
+                    "object",
+                    "null"
+                  ]
+                },
+                "status": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "amount",
+                "attribution",
+                "date",
+                "description",
+                "id",
+                "status",
+                "vendor"
+              ],
+              "additionalProperties": true
+            }
+          }
+        },
+        "required": [
+          "expires_at",
+          "rows",
+          "tie",
+          "token"
         ],
         "additionalProperties": true
       },
@@ -67563,19 +68083,6 @@
               }
             ],
             "title": "Monthly Cap Usd"
-          },
-          "rules_monthly_cap_usd": {
-            "anyOf": [
-              {
-                "type": "number",
-                "maximum": 100000.0,
-                "minimum": 0.0
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Rules Monthly Cap Usd"
           },
           "steps": {
             "anyOf": [
@@ -78448,6 +78955,19 @@
               }
             ],
             "title": "Owner"
+          },
+          "exclude_owner": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 200,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Exclude Owner"
           },
           "requester": {
             "anyOf": [

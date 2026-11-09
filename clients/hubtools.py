@@ -1697,9 +1697,10 @@ def task_done(api, args):
     return task_update(api, {**args, "status": "done"})
 
 
-# hub_task_bulk's filter: what hub_task_list filters by, plus ids.
+# hub_task_bulk's filter: what hub_task_list filters by, plus ids. `not_owner` is the CLI's --where-not-owner.
 TASK_BULK_FILTER = (
     "owner",
+    "not_owner",
     "requester",
     "status",
     "lane",
@@ -1717,54 +1718,38 @@ TASK_BULK_FILTER = (
 
 @tool(
     "hub_task_bulk",
-    "One change to every task a filter selects, in one call: move them to a step, set a status or "
-    "an owner, add or remove tags, or close them. The filter is hub_task_list's (owner, requester, status, label, "
-    "type, step, ...) plus `ids`, and must name at least one. Each task changes as hub_task_update or hub_task_close "
-    "would change it, with your rights: a task you may not change is skipped with the reason and the rest still "
-    "change. At most 200 tasks match a call; more is refused, so narrow the filter. `dry_run` answers the same counts "
-    "and changes nothing: run it first.",
+    "Change every task a filter selects: step, status, owner, tags or close, as hub_task_update or hub_task_close "
+    "would, with your rights (refused ones are skipped, with why). Filter: hub_task_list's plus `ids` and "
+    "`exclude_owner`; at least one. Over 200 is refused. Run `dry_run` (counts only) first.",
     {
         "filter": {
             "type": "object",
             "additionalProperties": False,
-            "description": "Which tasks: at least one of these",
             "properties": {
-                "owner": _s("Owner: a bot slug, a human id, or `me`"),
-                "requester": _s("Requester: a bot slug, a human id, or `me`"),
-                "status": {
-                    "type": "array",
-                    "items": {"type": "string", "enum": list(TASK_STATUSES)},
-                    "description": "Only these statuses",
-                },
+                "owner": _s("Bot slug, human id or `me`"),
+                "exclude_owner": _s("All but this owner's (slug, human id or `me`)"),
+                "requester": _s("Bot slug, human id or `me`"),
+                "status": {"type": "array", "items": {"type": "string", "enum": list(TASK_STATUSES)}},
                 "lane": {"type": "string", "enum": ["company", "product"]},
-                "label": _s("Only tasks carrying this tag"),
-                "type": _s("Only tasks of this type (id or name)"),
-                "step": _s("Only tasks in this step (id or name; with `type`, that type's step)"),
+                "label": _s("Tag"),
+                "type": _s("Type id or name"),
+                "step": _s("Step id or name (of `type`, if given)"),
                 "number": {"type": "integer", "minimum": 1, "maximum": 999999999},
-                "updated_since": _s("Only tasks changed after this ISO-8601 time with a timezone"),
-                "member": _s("Only tasks this person or bot is on in some role"),
-                "role": _s("With member: only tasks they are on in this role"),
+                "updated_since": _s("Changed after this ISO-8601 time, with zone"),
+                "member": _s("On the task in any role"),
+                "role": _s("With member: in this role"),
                 "snoozed": {"type": "string", "enum": ["hide", "only", "all"]},
-                "ids": {
-                    "type": "array",
-                    "items": {"type": "string"},
-                    "maxItems": 100,
-                    "description": "Only these tasks (ids or numbers)",
-                },
+                "ids": {"type": "array", "items": {"type": "string"}, "maxItems": 100, "description": "Ids or numbers"},
             },
         },
         "action": {"type": "string", "enum": ["step", "status", "owner", "tags", "close"]},
-        "step": _s("With action step: the step to move them to (id or name within each task's type)"),
-        "status": {
-            "type": "string",
-            "enum": [s for s in TASK_STATUSES if s != "closed"],
-            "description": "With action status",
-        },
-        "owner": _s("With action owner: hand them to this bot or person"),
-        "add": {"type": "array", "items": {"type": "string"}, "description": "With action tags: tags to add"},
-        "remove": {"type": "array", "items": {"type": "string"}, "description": "With action tags: tags to take off"},
-        "note": _s("What changed, or why; goes with each task's change"),
-        "dry_run": {"type": "boolean", "default": False, "description": "Count what would change; change nothing"},
+        "step": _s("Action step: the step id or name"),
+        "status": {"type": "string", "enum": [s for s in TASK_STATUSES if s != "closed"]},
+        "owner": _s("Action owner: the new bot or person"),
+        "add": {"type": "array", "items": {"type": "string"}, "description": "Action tags: add"},
+        "remove": {"type": "array", "items": {"type": "string"}, "description": "Action tags: remove"},
+        "note": _s("Why; noted on each change"),
+        "dry_run": {"type": "boolean", "default": False, "description": "Count only"},
     },
     required=("filter", "action"),
     writes=True,
@@ -1774,7 +1759,9 @@ def task_bulk(api, args):
     for name in TASK_BULK_FILTER:  # the CLI's --where-owner, --where-step, ...
         if args.get("where_" + name) not in (None, []):
             where[name] = args["where_" + name]
-    for name in ("owner", "requester", "member"):
+    if "not_owner" in where:
+        where["exclude_owner"] = where.pop("not_owner")
+    for name in ("owner", "exclude_owner", "requester", "member"):
         if where.get(name):
             where[name] = _target(api, where[name])
     if isinstance(where.get("status"), list):
@@ -12310,6 +12297,7 @@ FINANCE_SEARCH = [
     "project",
     "vendor",
     "campaign",
+    "receipt",
     "subscription",
 ]
 FINANCE_INBOX = [
@@ -12535,8 +12523,9 @@ def _fin_paged(api, path, query, key, budget):
     "Search what you may see: entries, bank and card rows, bills, invoices, contacts, rules, cards (each with the "
     "vendors it is saved on). account: chart lines by code or name, with ids, for categorize, bill_create and "
     "rule_create. campaign: an ad campaign by name, with owner, spend, clicks and conversions. subscription: a "
-    "recurring charge by vendor name, with status, monthly cost and next charge. Name a kind to page with cursor; "
-    "otherwise the first few of each kind, except accounts, vendors, campaigns and subscriptions (name one of those).",
+    "recurring charge by vendor name, with status, monthly cost and next charge. receipt: by file name or vendor "
+    "(status: unread, suggested, unmatched, attached, rejected). Name a kind to page with cursor; otherwise the first "
+    "few of each kind, except accounts, vendors, campaigns, subscriptions and receipts (name one).",
     {
         "kind": _s("What to search", enum=FINANCE_SEARCH),
         "q": _s("Words to match"),

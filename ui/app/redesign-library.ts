@@ -97,7 +97,7 @@ function lcModel(rows: LcTool[]): LcItem[] {
       used.add(cred.id);
       if (!cred.stored) issues.push({text: `${cred.name}: no value stored`});
       for (const g of cred.grants || []) {
-        const [kind, id] = g.subject.split(':');
+        const [kind, id = ''] = g.subject.split(':');
         if (kind === 'bot' && !bots.has(id)) bots.set(id, {level: row.writes, problem: '', via: 'credential'});
         if (kind === 'human' && !people.has(id)) people.set(id, {level: row.writes});
       }
@@ -113,7 +113,7 @@ function lcModel(rows: LcTool[]): LcItem[] {
     if (used.has(cred.id)) continue;
     const bots = new Map<string, LcBotAccess>(), people = new Map<string, LcPersonAccess>();
     for (const g of cred.grants || []) {
-      const [kind, id] = g.subject.split(':');
+      const [kind, id = ''] = g.subject.split(':');
       if (kind === 'bot') bots.set(id, {level: '', problem: ''});
       if (kind === 'human') people.set(id, {level: ''});
     }
@@ -389,9 +389,9 @@ function lcWireFacts(): void {
 type LcCard = [string, string, ((host: HTMLElement | null) => Promise<void>)?];
 function lcMountConnect(service: string): void {
   const cards: LcCard[] = {
-    github: S.me?.role === 'owner' ? [['GitHub App', 'set-github', window.mountGithubConnect]] : [],
-    slack: [...(S.me?.role === 'owner' ? [['Slack workspace', 'set-slack', window.mountSlackConnect]] : []),
-            ...(S.me?.bot_admin ? [['Slack channels', 'set-slack-channels', window.mountSlackChannels]] : [])],
+    github: S.me?.role === 'owner' ? [['GitHub App', 'set-github', window.mountGithubConnect] satisfies LcCard] : [],
+    slack: [...(S.me?.role === 'owner' ? [['Slack workspace', 'set-slack', window.mountSlackConnect] satisfies LcCard] : []),
+            ...(S.me?.bot_admin ? [['Slack channels', 'set-slack-channels', window.mountSlackChannels] satisfies LcCard] : [])],
   }[service] || [];
   const facts = lcFacts();
   if (!facts || !cards.length) return;
@@ -406,7 +406,7 @@ function lcDrawCredential(id: string, back: string): void {
   if (!item || !cred) { detail.innerHTML = `<div class="meeting-head">${back}<div><h1>Credential</h1></div></div><div class="empty">No credential here, or you cannot open it.</div>`; return; }
   const row = (dt: string, dd: string | undefined): string => dd ? `<dt>${dt}</dt><dd>${dd}</dd>` : '';
   const grants = (cred.grants || []).map(g => {
-    const [kind, gid] = g.subject.split(':');
+    const [kind, gid = ''] = g.subject.split(':');
     const label = g.subject === 'computers' ? 'Every computer' : kind === 'computer' ? vaultSubject(g.subject) : null;
     if (label) return `<div class="lc-who-row"><span class="nav-icon" aria-hidden="true">computer</span><span class="lc-wn">${esc(label)}</span></div>`;
     const who = kind === 'human' ? `${personAvatar(lcPerson(gid), 20)}<span class="lc-wn">${esc(lcPerson(gid).name || gid)}</span>` : `${avatar(gid, 20)}<span class="lc-wn">${esc(lcBotName(gid))}</span>`;

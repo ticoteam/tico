@@ -66,7 +66,7 @@ health check and automatic rollback described below.
   the contract between runner and server raises that number.
 - Every heartbeat carries the computer's release, the commit it runs (an image's `release-manifest.json`, else the
   checkout's HEAD), its kind (`mac`, `linux` or `docker`) and how its update stands.
-  **Settings > Health** and **Settings > Computers** show one state per computer:
+  **Settings > General > Health > Details** and **Settings > Computers** show one state per computer:
 
   | State | Meaning |
   |---|---|
@@ -77,7 +77,7 @@ health check and automatic rollback described below.
   | Release not reported | a computer that predates this, or a development build. It is never paused |
 
 - A server that is a development build (no release) has nothing to compare, so computers keep following `main` as
-  before and Settings > Health shows no version line. A computer talking to a server from before this existed does the same.
+  before and Settings > General > Health > Details shows no version line. A computer talking to a server from before this existed does the same.
 
 A computer behind the server's release, or on no release at all, is **outdated**: its row in Settings > Computers carries
 an Outdated badge, and the page opens with a banner naming the online ones and whose they are. When a computer has stayed
@@ -86,7 +86,7 @@ only with the next server release.
 
 Health names computers that did not report a version and shows a newer computer's actual release separately.
 Computers lists team service status once, alongside the computer reports. Archived bots are left out of readiness.
-The MCP `hub_health_check` includes the same checks and fixes as Settings > Health, including watchers and queued work.
+The MCP `hub_health_check` includes the same checks and fixes as Settings > General > Health > Details, including watchers and queued work.
 Computers report whether a rejected model key came from Credentials or the computer only after the server
 advertises support. After a server rollback, they omit that field and keep reporting readiness; a later server
 upgrade enables it again.
@@ -226,7 +226,7 @@ Linger is checked at install time; if it is off the command prints `loginctl ena
 logs out and do not start at boot. `scripts/tico-computer status`, `restart`, `logs` and `uninstall` work the same as on a Mac.
 
 A checkout with uncommitted changes, or on a person's development branch, is refused: nothing is
-stashed, reset or discarded. Settings > Health and Computers name the changed files until someone
+stashed, reset or discarded. Settings > General > Health > Details and Computers name the changed files until someone
 commits or stashes them.
 
 If a bot left the install on `tico/<8-character hex id>-<slug>` or `tico-session/<task>`, a release
@@ -451,7 +451,7 @@ accepts only `vX.Y.Z` tags of one image. A bot on the runner can therefore ask i
 release, and nothing else: the token is readable by the runner supervisor only (bots run as another user), and the sidecar refuses a release older than the one running. The Add computer command sets this up: `install.sh --runner` writes the compose file and a
 `.env` with the image and updater tags pinned to the server's release ([install](install.md#linux-or-cloud-server-docker)).
 
-A runner started with a plain `docker run` has no sidecar: it says so in Settings > Health, and you update it as before
+A runner started with a plain `docker run` has no sidecar: it says so in Settings > General > Health > Details, and you update it as before
 (`docker pull`, then start it again). To move one onto the compose setup, run the `install.sh --runner` line from Add
 computer on the same computer: it reuses the `tico-runner` volume (`TICO_RUNNER_HOME_VOLUME` in `.env`), so the sign-in,
 the repositories and the enrollment stay, and the runner then follows the server.
@@ -539,7 +539,7 @@ Tico HQ can also show a short message for a version once in the app ([tico-hq.md
   run the release's install command once more on each computer (server, then each runner computer). From then on, Update
   in the app does everything.
 - **v0.2.6 to v0.2.8:** Update in the app to v0.2.9 or later. An updater that replaced itself in these versions stopped
-  pulling images, so a Linux runner computer may then show "No such image" under Settings > Health and stay on its old
+  pulling images, so a Linux runner computer may then show "No such image" under Settings > General > Health > Details and stay on its old
   version. Run this once in its directory (`/opt/tico-runner`):
 
   ```

@@ -353,6 +353,9 @@ class TaskFilter(Contract):
     """The tasks a bulk change applies to: the filters `GET /api/v2/tasks` takes, with the same meanings."""
 
     owner: ID | None = None
+    # Everything not this one's: the tasks whose owner is anyone else (a bot or a person), the caller's own included
+    # only when named here. Refused when it names nobody (task_bulk_routes.bulk_select).
+    exclude_owner: ID | None = None
     requester: ID | None = None
     status: str | None = Field(default=None, max_length=200)  # comma-separated, as the list takes it
     lane: Lane | None = None
@@ -2994,7 +2997,6 @@ class MaintenanceUpdate(Contract):
     schedule: Literal["hourly", "2h", "3h", "6h", "12h", "daily"] | None = None
     paused: bool | None = None
     monthly_cap_usd: float | None = Field(default=None, ge=0, le=100000)
-    rules_monthly_cap_usd: float | None = Field(default=None, ge=0, le=100000)
     steps: list[MaintenanceStepChange] | None = Field(default=None, max_length=8)
 
 

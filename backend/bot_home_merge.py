@@ -39,7 +39,8 @@ for one bot at a time):
 Left as they are: the Assistant's rooms (it has no Home), the Strategy Bot, the Librarian's "docs" rooms (its per-person
 Q&A list reads them), Strategy rooms, task rooms, meetings, DMs (scope 'direct'), closed or archived rows, rows that are
 not exactly one person and one bot, rooms of bots synced from an outside app (the sync reads the person's room),
-federated rooms, and a room whose owner may not read the bot's Home (moving it would take their own history from them).
+federated rooms, and a room whose owner's viewer may not read the bot's Home (moving it would take their own history from
+them). An owner with no viewer (a human with no record in the registry) is not an exception: their room moves.
 
 Not moved: tasks.conversation_id (see 1), chat goals and session epochs (a room's own state; a run in the Home starts
 its own), history (events, changes, digests), and message-keyed rows (search, links, jobs), which follow the message.
@@ -155,7 +156,8 @@ def home_for_chat(c, person, bot_ref, *, create=True):
     work rooms, a bot's message with no room named). Only a covered bot is one whose rooms the move took (it has home_merges
     rows): a bot the move never reached, and a fresh install's, keep their chats as they are, for one lookup. None where the
     move leaves the chat as it is: the Assistant and the Strategy Bot, a bot synced from an outside app, a Home linked to
-    another install, a person who may not read the Home, and a bot with no Home when `create` is False."""
+    another install, a person whose viewer is refused the Home, and a bot with no Home when `create` is False. A person
+    with no viewer (no record in the registry) gets the Home, as the move took their chat there."""
     from . import threads
 
     bot = _covered_bot(c, str(bot_ref or "").strip().removeprefix("bot:"))
@@ -176,8 +178,13 @@ def home_for_chat(c, person, bot_ref, *, create=True):
         if home is None:
             return None
         home_id = home["id"]
+    # An owner with no viewer (a human with no record in the registry) gets the Home too: the move took their old chat there,
+    # so a new chat goes there as well and is never split. Only a viewer that is refused the Home keeps the chat where it
+    # was. Any other actor with no viewer keeps the old answer, None.
     v = threads.actor_viewer(c, person)
-    if v is None or _federated(c, home_id) or not threads.readable(c, v, home_id):
+    if v is None and not str(person).startswith("human:"):
+        return None
+    if _federated(c, home_id) or (v is not None and not threads.readable(c, v, home_id)):
         return None
     return home_id
 

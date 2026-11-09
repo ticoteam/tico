@@ -18,11 +18,10 @@ first: runner images ship neither. Without Google Chrome, set `TICO_BROWSER_CHAN
 Playwright's Chromium. On a small computer (two CPUs, software WebGL) run the scripts you changed one at a time;
 the parallel suite is the release check's job on a full-size machine. The PR checks
 workflow runs the cheap checks (lint, generated types, the OpenAPI document, the wire contract, workflows, shell scripts) on each push to a
-pull request, on free GitHub-hosted runners. A ready pull request from this repository also runs its selected tests and factory sim, and every other job the queue runs (the Caddy image, the Rust and desktop checks, the macOS recorder tests) when its change reaches it, on GitHub-hosted runners, so `checks` (the one required check) passes only when they pass; a draft runs nothing, and a fork's pull request runs the cheap
+pull request, on free GitHub-hosted runners. A ready pull request from this repository also runs a light set of tests (`plan --light`: the tests its change reaches directly, the smoke set, at most four VMs; the browser scripts, factory sim and Caddy image only when it touches their own inputs; `scripts/pr_checks.py` NARROW), and every other job the queue runs (the Caddy image, the Rust and desktop checks, the macOS recorder tests) when its change reaches it, on GitHub-hosted runners, so `checks` (the one required check) passes only when they pass; a draft runs nothing, and a fork's pull request runs the cheap
 checks only. PR checks and the queue run a test listed in `ci/quarantine/` (it failed and passed on one commit) without failing on it; release validation still fails on it (`scripts/flake_quarantine.py`, `.github/workflows/flaky-tests.yml`). The fix for a quarantined test deletes its entry file. The merge queue runs the tests again, once per queue group on the merged result, on 4-vCPU GitHub-hosted runners: the tests a measured static
-dependency map (imports, plus files run or read by path) says use the change, the Caddy image job when the change reaches
-it, the Rust and desktop checks when they changed, and the macOS recorder tests when `recorder/` changed. A docs page or GitHub file runs the tests that read it.
-Dependency pins, conftest, pytest.ini, deleted or unparsable files
+dependency map (imports, plus files run or read by path) says use the change within two levels (not through a hub such as `backend/app.py`), capped at eight VMs, with the smoke set when that drops any; release validation's incremental runs and its daily full run cover the rest, the Caddy image job when the change reaches
+it, the Rust and desktop checks when they changed, and the macOS recorder tests when `recorder/` changed. A docs page or GitHub file runs the tests that read it. Dependency pins, conftest, pytest.ini, deleted or unparsable files
 and UI files outside the UI map run the tests that name or read them and the smoke set (`scripts/queue-smoke.json`, checked by
 the static job), never the full default suite or every browser script; release validation runs both. Draft pull requests run no checks until marked ready for
 review; a skipped run is not a pass. Main has no check run of its own: the queue tests each change before it lands, and
@@ -57,10 +56,13 @@ Tests stay at zero failures. An intermittent test is fixed quickly or deleted; n
 never ship around a known failure. If a test may fail, it shouldn't exist.
 
 ## Before you push
-Run scripts/check.sh before pushing; `git config core.hooksPath .githooks` runs it on every push.
+Turn on the pre-push hook once per clone: `git config core.hooksPath .githooks`. It is expected in every clone, bots' included.
+Each push runs `scripts/check.sh` (the checks for what you changed) and `scripts/check_conflicts.sh`, which stops the push
+when the branch would not merge into origin/main and names the files. Skip once with `git push --no-verify`; the PR checks
+run the same static checks, so a skipped failure still shows there. CONTRIBUTING.md lists where the local gate differs from CI.
 
 ## How we work
-Trunk-based: branches are `<who>/<topic>`, one ticket per PR. Draft PRs run no CI. The flow: work in draft and run the tests you touched locally, run
+Trunk-based: branches are `<who>/<topic>`, one ticket per PR. Drafts run no CI; mark the PR ready to run checks. The flow: work in draft and run the tests you touched locally, run
 `gh pr ready` when done, wait for green `checks` on that run (not skipped), and once it is reviewed, enqueue it with
 `gh pr merge <N> --merge`: the merge queue tests the PR merged onto current main before it lands. Enqueue once.
 After a queue failure, fix it and get green PR checks before enqueuing again.

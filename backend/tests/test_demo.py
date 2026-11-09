@@ -9,6 +9,7 @@ import sqlite3
 import tempfile
 from dataclasses import replace
 from datetime import datetime, timezone
+from pathlib import Path
 
 import pytest
 import time_machine
@@ -58,29 +59,30 @@ def signed_in(settings):
     return client
 
 
-def test_saved_demo_reopens_with_edits_and_the_same_owner_session(built, monkeypatch):
-    directory, settings = built
-    with signed_in(settings) as api:
-        response = api.post(
-            "/api/v2/tasks",
-            json={"title": "Keep this demo edit", "body": "Sample work", "owner": "bot:support"},
-            headers={"Idempotency-Key": "restart-edit"},
-        )
-        assert response.status_code == 200
-        task_id = response.json()["task"]["id"]
-    before = rows(settings.db_path)
-    token = settings.local_owner_token_file.read_bytes()
-    from backend import demo_seed
+def _saved_demo_reopens_with_edits_and_the_same_owner_session(built):
+    with pytest.MonkeyPatch.context() as monkeypatch:
+        directory, settings = built
+        with signed_in(settings) as api:
+            response = api.post(
+                "/api/v2/tasks",
+                json={"title": "Keep this demo edit", "body": "Sample work", "owner": "bot:support"},
+                headers={"Idempotency-Key": "restart-edit"},
+            )
+            assert response.status_code == 200
+            task_id = response.json()["task"]["id"]
+        before = rows(settings.db_path)
+        token = settings.local_owner_token_file.read_bytes()
+        from backend import demo_seed
 
-    monkeypatch.setattr(demo_seed, "populate", lambda *args: pytest.fail("saved demo was reseeded"))
-    reopened = demo.build(directory, now=NOW)
-    assert reopened.local_owner_token_file.read_bytes() == token
-    assert rows(reopened.db_path) == before
-    with signed_in(reopened) as api:
-        assert api.get("/api/v2/tasks/" + task_id).json()["task"]["title"] == "Keep this demo edit"
+        monkeypatch.setattr(demo_seed, "populate", lambda *args: pytest.fail("saved demo was reseeded"))
+        reopened = demo.build(directory, now=NOW)
+        assert reopened.local_owner_token_file.read_bytes() == token
+        assert rows(reopened.db_path) == before
+        with signed_in(reopened) as api:
+            assert api.get("/api/v2/tasks/" + task_id).json()["task"]["title"] == "Keep this demo edit"
 
 
-def test_every_bot_has_a_profile_and_no_one_is_told_of_a_change(built):
+def _every_bot_has_a_profile_and_no_one_is_told_of_a_change(built):
     """The demo is made with its bots, so a start finds no bot to give a profile to, and no owner gets the notice that
     explains a change (it would read as just now, at the top of Threads)."""
     _, settings = built
@@ -106,7 +108,7 @@ def test_demo_refuses_existing_unrecognized_data_without_writing(tmp_path):
     assert list(tmp_path.iterdir()) == [database]
 
 
-def test_only_localhost_may_ask(built):
+def _only_localhost_may_ask(built):
     with signed_in(built[1]) as api:
         assert api.get("/api/v2/config", headers={"Host": "192.168.1.20:8765"}).status_code == 421
         assert api.get("/api/v2/config", headers={"Host": "localhost:8765"}).status_code == 200
@@ -139,7 +141,7 @@ def test_a_public_demo_is_read_only(tmp_path):
     )
 
 
-def test_nothing_leaves_the_machine(built):
+def _nothing_leaves_the_machine(built):
     server = socket.socket()
     server.bind(("127.0.0.1", 0))
     server.listen()
@@ -171,10 +173,31 @@ def test_nothing_leaves_the_machine(built):
         socket.create_connection(("192.0.2.1", 9), timeout=0.2)
 
 
+def test_the_built_demo_keeps_its_edits_profiles_hosts_and_network(built, subtests):
+    """One demo build for these checks, in file order, each as its own subtest. The public demo is a different, read-only
+    build, so it is checked on its own above."""
+    for check in (
+        _saved_demo_reopens_with_edits_and_the_same_owner_session,
+        _every_bot_has_a_profile_and_no_one_is_told_of_a_change,
+        _only_localhost_may_ask,
+        _nothing_leaves_the_machine,
+    ):
+        with subtests.test(check.__name__):
+            check(built)
+
+
 # ----------------------------------------------------------------------------- the folder a demo runs in
 # Ctrl-C leaves demo.main through the same `finally` as SIGTERM (there is no KeyboardInterrupt branch); SIGTERM is the
 # ending with its own handler, so it stands for both.
 ENDINGS = [("returns", None), ("sigterm", SystemExit)]
+
+
+def stub_build(directory, now=None, url="", public=False):
+    """The seed is not what these tests check: the folder gets the database file that the run looks for, and no more."""
+    directory = Path(directory)
+    directory.mkdir(parents=True, exist_ok=True)
+    (directory / "hub.sqlite").touch()
+    return demo.prepare(directory, url, public)
 
 
 def stub_server(monkeypatch, tmp_path, ending):
@@ -182,6 +205,7 @@ def stub_server(monkeypatch, tmp_path, ending):
     the demo ran in; temporary folders are made under tmp_path."""
     monkeypatch.setattr(tempfile, "tempdir", str(tmp_path))
     monkeypatch.setattr(screen_binary, "prepare", lambda: None)
+    monkeypatch.setattr(demo, "build", stub_build)
     running = []
 
     def run(*, settings, **kw):

@@ -36,7 +36,16 @@ const SNAP_SHOW_MAX_MS = 12000;
 // `banned` (this tab signed out, or SNAP_CHANNEL said another did) only stops saves early; it is never needed for
 // correctness.
 const SNAP_EPOCH = 'epoch', SNAP_CHANNEL = 'tico-boot';
-const SNAP = {db: null, who: '', shown: '', done: false, copy: null, timer: 0, watch: 0, banned: false, epoch: null};
+// What a kept screen holds (the entry in the store, keyed by origin): whose it is, the bundle that drew it, the route,
+// the page's class and markup.
+interface BootSnapEntry { who: string; version: string; route: string; cls?: string; html: string; at: number }
+// The screen as snapScreen reads it now; html null when it is too big to keep.
+interface BootSnapScreen { html: string | null; cls?: string }
+interface BootSnapState {
+  db: Promise<IDBDatabase> | null; who: string; shown: string; done: boolean; copy: HTMLElement | null;
+  timer: number; watch: number; banned: boolean; epoch: number | null;
+}
+const SNAP: BootSnapState = {db: null, who: '', shown: '', done: false, copy: null, timer: 0, watch: 0, banned: false, epoch: null};
 const snapChannel = (() => { try { return new BroadcastChannel(SNAP_CHANNEL); } catch { return null; } })();
 // Signed out here, or told so: it drops whose screen it was.
 function snapSignedOut() {
@@ -45,23 +54,23 @@ function snapSignedOut() {
 }
 const snapOn = () => { try { return typeof indexedDB !== 'undefined' && (!navigator.webdriver || window.ticoBootSnap === true); } catch { return false; } };
 // The pages kept: Home, Overview, Tasks (its list, any view), Threads (the list) and a team's page.
-function snapRouteOk(hash) {
-  const [page] = String(hash || '').split('?');
+function snapRouteOk(hash?: string): boolean {
+  const [page = ''] = String(hash || '').split('?');
   if ([HOME, OVERVIEW, TASKS, THREADS_ROUTE].includes(page)) return true;
   const team = page.startsWith(TEAM_PAGE) ? page.slice(TEAM_PAGE.length) : '';
   return !!team && !team.includes('/');
 }
 // The bundle that draws the page (its ?v=); the separate files of a development checkout have none.
 const SNAP_VERSION = (() => {
-  const js = document.querySelector('script[src*="/tico/ui/app.bundle.js"]');
+  const js = document.querySelector<HTMLScriptElement>('script[src*="/tico/ui/app.bundle.js"]');
   try { return SNAP_SCHEMA + ':' + (js ? new URL(js.src, location.href).searchParams.get('v') || '' : 'files'); }
   catch { return SNAP_SCHEMA + ':'; }
 })();
-const snapWho = me => JSON.stringify([location.origin, String(me?.owner_id || ''), String(me?.id || ''), String(me?.email || '')]);
+const snapWho = (me: SelfPerson | null | undefined): string => JSON.stringify([location.origin, String(me?.owner_id || ''), String(me?.id || ''), String(me?.email || '')]);
 
-function snapDb() {
+function snapDb(): Promise<IDBDatabase> {
   if (SNAP.db) return SNAP.db;
-  const open = new Promise((resolve, reject) => {
+  const open = new Promise<IDBDatabase>((resolve, reject) => {
     const req = indexedDB.open(SNAP_DB, SNAP_SCHEMA);
     // A new schema starts empty: whatever an older one kept is dropped with its store.
     req.onupgradeneeded = () => {
@@ -86,17 +95,17 @@ function snapDb() {
   return open;
 }
 // One request in its own transaction; resolves when the transaction is done.
-function snapTx(mode, work) {
-  return snapDb().then(db => new Promise((resolve, reject) => {
+function snapTx<T>(mode: IDBTransactionMode, work: (store: IDBObjectStore) => IDBRequest<T>): Promise<T> {
+  return snapDb().then(db => new Promise<T>((resolve, reject) => {
     const tx = db.transaction(SNAP_STORE, mode), req = work(tx.objectStore(SNAP_STORE));
     tx.oncomplete = () => resolve(req.result);
     tx.onerror = tx.onabort = () => reject(tx.error);
   }));
 }
 // The kept screen and the epoch, read together once, as this page loads (before boot asks /me).
-function snapLoad() {
+function snapLoad(): Promise<BootSnapEntry | null> {
   if (!snapOn()) return Promise.resolve(null);
-  return snapDb().then(db => new Promise((resolve, reject) => {
+  return snapDb().then(db => new Promise<BootSnapEntry | null>((resolve, reject) => {
     const tx = db.transaction(SNAP_STORE, 'readonly'), store = tx.objectStore(SNAP_STORE);
     const kept = store.get(location.origin), epoch = store.get(SNAP_EPOCH);
     tx.oncomplete = () => { SNAP.epoch = Number(epoch.result) || 0; resolve(kept.result || null); };
@@ -107,13 +116,14 @@ const SNAP_LOADED = snapLoad();
 const snapForget = () => snapOn() ? snapTx('readwrite', s => s.delete(location.origin)).catch(() => {}) : Promise.resolve();
 // One readwrite transaction that reads the epoch first and runs `work` only while it is the one boot read; a newer
 // one (a sign-out in any tab) bans this tab instead.
-function snapGuarded(work) {
+function snapGuarded(work: (store: IDBObjectStore) => void): Promise<boolean> {
   if (SNAP.epoch === null) return Promise.resolve(false);
   const at = SNAP.epoch;
-  return snapDb().then(db => new Promise((resolve, reject) => {
+  return snapDb().then(db => new Promise<boolean>((resolve, reject) => {
     const tx = db.transaction(SNAP_STORE, 'readwrite'), store = tx.objectStore(SNAP_STORE);
     let wrote = false;
-    store.get(SNAP_EPOCH).onsuccess = e => {
+    store.get(SNAP_EPOCH).onsuccess = (e: Event) => {
+      if (!(e.target instanceof IDBRequest)) return;
       if ((Number(e.target.result) || 0) !== at) { SNAP.banned = true; SNAP.who = ''; return; }
       work(store); wrote = true;
     };
@@ -126,9 +136,10 @@ function snapGuarded(work) {
 // bans itself). Should that be blocked or fail too, only this tab is banned. Nothing here throws into sign-out.
 function snapSignOut() {
   if (!snapOn()) return Promise.resolve();
-  const bump = () => snapDb().then(db => new Promise((resolve, reject) => {
+  const bump = () => snapDb().then(db => new Promise<void>((resolve, reject) => {
     const tx = db.transaction(SNAP_STORE, 'readwrite'), store = tx.objectStore(SNAP_STORE);
-    store.get(SNAP_EPOCH).onsuccess = e => {
+    store.get(SNAP_EPOCH).onsuccess = (e: Event) => {
+      if (!(e.target instanceof IDBRequest)) return;
       store.put((Number(e.target.result) || 0) + 1, SNAP_EPOCH);
       store.delete(location.origin);
     };
@@ -140,7 +151,7 @@ function snapSignOut() {
 function snapDelete() {
   const open = SNAP.db;
   SNAP.db = null;
-  return Promise.resolve(open).then(db => db?.close(), () => {}).then(() => new Promise(done => {
+  return Promise.resolve(open).then(db => db?.close(), () => {}).then(() => new Promise<void>(done => {
     const req = indexedDB.deleteDatabase(SNAP_DB);
     req.onsuccess = req.onerror = req.onblocked = () => done();
   }));
@@ -156,7 +167,7 @@ function bootSnapDrop() {
 }
 
 // At boot, with the /me read already on its way: the kept screen, once /me says it is this person's.
-function bootSnapShow(meRead) {
+function bootSnapShow(meRead: Promise<SelfPerson | null | undefined>): void {
   if (!snapOn()) return;
   void Promise.all([SNAP_LOADED, meRead.catch(() => null)]).then(([kept, me]) => {
     // No answer (offline): shown later, or not at all. Signed out since this page loaded: never.
@@ -169,7 +180,7 @@ function bootSnapShow(meRead) {
 }
 // The copy: a host over #main's box holding, in its own shadow root, the page's stylesheets and a <main id="main"> with
 // the kept screen, so the page's #main rules draw it as it was. It shows once those stylesheets are in (from the cache).
-function snapPaint(main, kept) {
+function snapPaint(main: HTMLElement, kept: BootSnapEntry): void {
   const box = main.getBoundingClientRect(), host = document.createElement('div');
   host.dataset.bootSnap = '';
   host.setAttribute('aria-hidden', 'true');
@@ -178,7 +189,7 @@ function snapPaint(main, kept) {
     height: (box.height || Math.max(0, innerHeight - box.top)) + 'px', margin: '0', zIndex: '5', pointerEvents: 'none',
     overflow: 'hidden', visibility: 'hidden'});
   const root = host.attachShadow({mode: 'open'});
-  const sheets = [...document.querySelectorAll('link[rel="stylesheet"], style')].map(el => el.cloneNode(true));
+  const sheets = [...document.querySelectorAll('link[rel="stylesheet"], style')].map(el => el.cloneNode(true) as Element);
   const screen = document.createElement('main');
   screen.id = 'main';
   screen.className = typeof kept.cls === 'string' ? kept.cls : '';
@@ -190,7 +201,7 @@ function snapPaint(main, kept) {
   SNAP.copy = host; SNAP.shown = kept.route;
   clearTimeout(SNAP.watch);
   SNAP.watch = setTimeout(snapWaited, SNAP_SHOW_MAX_MS);
-  const loads = sheets.filter(el => el.tagName === 'LINK').map(el => new Promise(done => { el.onload = el.onerror = done; }));
+  const loads = sheets.filter((el): el is HTMLLinkElement => el.tagName === 'LINK').map(el => new Promise(done => { el.onload = el.onerror = done; }));
   void Promise.race([Promise.all(loads), new Promise(done => setTimeout(done, 400))]).then(() => {
     if (SNAP.copy !== host) return;
     host.style.visibility = '';
@@ -225,7 +236,7 @@ function bootSnapRelease() {
 }
 
 // After boot knows who is signed in: from now on the screen is kept as it settles. Anyone else's goes at once.
-function bootSnapWho(me) {
+function bootSnapWho(me: SelfPerson | null | undefined): void {
   const who = authenticatedConfigPerson(me) ? snapWho(me) : '';
   if (!who) { void bootSnapDrop(); return; }
   if (!snapSignedOut()) SNAP.who = who;
@@ -235,10 +246,10 @@ const SNAP_DROP = 'iframe,frame,object,embed,video,audio,canvas,script,noscript,
   + 'input[type="password"],[data-secret],'
   + ':is([class*="setting"],[class*="secret"],[class*="credential"],[class*="token"],[class*="api-key"]) :is(pre,code)';
 // The screen as it is now, if it settled and is one kept; null when it cannot be kept yet.
-function snapScreen() {
+function snapScreen(): BootSnapScreen | null {
   const main = document.getElementById('main');
   if (!main || SNAP.copy || !snapRouteOk(location.hash) || !main.childElementCount || main.querySelector(BOOT_SKELETONS)) return null;
-  const copy = main.cloneNode(true);
+  const copy = main.cloneNode(true) as HTMLElement;
   copy.querySelectorAll(SNAP_DROP).forEach(el => el.remove());
   copy.querySelectorAll('[autofocus]').forEach(el => el.removeAttribute('autofocus'));
   copy.querySelectorAll('input[value]').forEach(el => el.removeAttribute('value'));
@@ -280,6 +291,6 @@ document.addEventListener('visibilitychange', () => { if (document.hidden) bootS
 window.addEventListener('pagehide', () => bootSnapSave());
 // Signing out leaves no screen behind, as decide.js leaves no unsent action (the same links).
 document.addEventListener('click', e => {
-  const link = e.target.closest?.('a[href]');
-  if (link && /\/(?:logout|cdn-cgi\/access\/logout)(?:[?#]|$)/.test(link.getAttribute('href'))) void bootSnapDrop();
+  const link = e.target instanceof Element ? e.target.closest('a[href]') : null;
+  if (link && /\/(?:logout|cdn-cgi\/access\/logout)(?:[?#]|$)/.test(String(link.getAttribute('href')))) void bootSnapDrop();
 }, true);
