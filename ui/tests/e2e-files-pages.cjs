@@ -17,7 +17,11 @@ async function filesPages({hub, browser, phone}) {
     // The bot's data file: its row draws its title, its kind and the bot that made it, and the hub serves its content
     // (a data file has no page view; its row links to the file itself).
     const csv = page.locator('.lf-row', {hasText: 'Signup funnel'}).first();
-    assert.match((await csv.innerText()).replace(/\s+/g, ' '), /Data · Engineering Lead/, `${where}: the data file names its kind and bot`);
+    if (phone) assert.match((await csv.locator('.lf-meta').innerText()).replace(/\s+/g, ' '), /^Data · Engineering Lead · /, `${where}: the data file names its kind and bot`);
+    else {
+      assert.equal((await csv.locator('.lf-kind').innerText()).trim(), 'Data', `${where}: the data file's kind`);
+      assert.equal((await csv.locator('.lf-by-n').innerText()).trim(), 'Engineering Lead', `${where}: the bot that made the data file`);
+    }
     const file = await call(hub, 'dana', 'GET', `files/${await csv.getAttribute('data-id')}`);
     assert.equal(file.status, 200, `${where}: the hub serves the data file`);
     assert.match(String(file.body), /landing,1200/, `${where}: the data file's rows are served`);

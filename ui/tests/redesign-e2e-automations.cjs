@@ -224,7 +224,7 @@ const build = (() => {
   }
   return async ({hub, browser, phone, tag}) => {
     const page = await open(browser, hub, 'dana', {phone, hash: '#/automations'});
-    // No Ask in Automations' header on either viewport: + is the one add button, and a phone has the tab bar's Assistant.
+    // Automations has no Ask of its own (the Assistant is one tap away everywhere).
     await page.locator('.au-new').waitFor();
     assert.equal(await page.locator('.au-ph [data-ask-open]').count(), 0, `${tag}: no Ask on Automations`);
     await page.locator('.au-new').click();
