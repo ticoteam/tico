@@ -2,6 +2,9 @@
 # The pinned shell and workflow linters, from their GitHub releases: shellcheck and actionlint. Each archive is checked
 # against the SHA-256 below before it runs, and the binary is cached under ${TICO_TOOLS_DIR:-$HOME/.cache/tico/tools},
 # so the versions never drift with whatever Homebrew or apt holds. Bump a version only after its release is two weeks old.
+# When GitHub's release download fails (a run of 504s from Actions runners, Nov 9), the same version comes from a second
+# source: shellcheck from its PyPI wheel (SHA-256 pinned below), actionlint built by `go install` from the Go module proxy
+# (checked against sum.golang.org). Bump the wheel pins with the version.
 #   scripts/pinned_tool.sh shellcheck [args...]          shellcheck with the arguments given
 #   scripts/pinned_tool.sh actionlint [args...]          actionlint; with no arguments it checks .github/workflows
 #   scripts/pinned_tool.sh path shellcheck|actionlint    print the verified binary's path (downloads it once)
@@ -23,6 +26,46 @@ sha_for() {
     actionlint-darwin-x86_64) echo 5b44c3bc2255115c9b69e30efc0fecdf498fdb63c5d58e17084fd5f16324c644 ;;
     actionlint-darwin-aarch64) echo aba9ced2dee8d27fecca3dc7feb1a7f9a52caefa1eb46f3271ea66b6e0e6953f ;;
     *) echo "pinned_tool: no pinned $1 for $2" >&2; return 1 ;;
+  esac
+}
+
+# The shellcheck-py wheel for SHELLCHECK_VERSION, by <os>-<arch>: "<file name> <SHA-256>". No linux-aarch64 wheel exists.
+shellcheck_wheel() {
+  case "$1" in
+    linux-x86_64) echo "shellcheck_py-$SHELLCHECK_VERSION.1-py2.py3-none-manylinux1_x86_64.manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_5_x86_64.whl 1b274df81de5b000ff78db433e7328b87e52e3c38481c60f8e488c3095beef05" ;;
+    darwin-x86_64) echo "shellcheck_py-$SHELLCHECK_VERSION.1-py2.py3-none-macosx_10_9_x86_64.whl b6a3fee28efda2e16e38d6e6d59faf7224300256456639727370d404730849e8" ;;
+    darwin-aarch64) echo "shellcheck_py-$SHELLCHECK_VERSION.1-py2.py3-none-macosx_11_0_arm64.whl 6b88d0a244c82ed07e06a53e444da841f69330ca59ae15d4a66c391655dae7a0" ;;
+    *) return 1 ;;
+  esac
+}
+
+fallback() {  # <tool> <plat> <bin>: the same version from the second source, into <bin>; fails when there is none
+  local tool=$1 plat=$2 bin=$3 wheel want got
+  case $tool in
+    shellcheck)
+      wheel="$(shellcheck_wheel "$plat")" || return 1
+      want=${wheel#* }
+      wheel=${wheel%% *}
+      echo "pinned_tool: trying the PyPI wheel for shellcheck $SHELLCHECK_VERSION" >&2
+      curl -fsSL --retry 3 --retry-delay 5 -o "$TMP/$wheel" "https://files.pythonhosted.org/packages/py2.py3/s/shellcheck-py/$wheel" || return 1
+      got="$(sha256_of "$TMP/$wheel")"
+      if [ "$got" != "$want" ]; then
+        echo "pinned_tool: $wheel has SHA-256 $got, not the pinned $want" >&2
+        return 1
+      fi
+      mkdir -p "$TMP/wheel-shellcheck"
+      python3 -m zipfile -e "$TMP/$wheel" "$TMP/wheel-shellcheck" >/dev/null
+      chmod 755 "$TMP/wheel-shellcheck/shellcheck_py-$SHELLCHECK_VERSION.1.data/scripts/shellcheck"
+      mv -f "$TMP/wheel-shellcheck/shellcheck_py-$SHELLCHECK_VERSION.1.data/scripts/shellcheck" "$bin" ;;
+    actionlint)
+      # GitHub's hosted images keep Go in the tool cache even when it is not on PATH.
+      local go
+      go="$(command -v go || find /opt/hostedtoolcache/go -path '*/x64/bin/go' 2>/dev/null | sort -V | tail -1 || true)"
+      [ -n "$go" ] && [ -x "$go" ] || return 1
+      echo "pinned_tool: building actionlint $ACTIONLINT_VERSION with $go install" >&2
+      GOBIN="$TMP/gobin" GOFLAGS='' GOPATH="$TMP/gopath" GOCACHE="$TMP/gocache" "$go" install \
+        "github.com/rhysd/actionlint/cmd/actionlint@v$ACTIONLINT_VERSION" || return 1
+      mv -f "$TMP/gobin/actionlint" "$bin" ;;
   esac
 }
 
@@ -76,6 +119,9 @@ binary() {  # <tool>: the verified binary's path, downloaded and checked on firs
   # the old 3 quick retries). A failed download stops here with a message, rather than hashing a missing file.
   if ! curl -fsSL --retry 5 --retry-delay 10 --retry-max-time 240 -o "$TMP/$archive" "$url"; then
     echo "pinned_tool: download of $archive failed after retries: $url" >&2
+    mkdir -p "$dir"
+    if fallback "$tool" "$plat" "$bin"; then echo "$bin"; return 0; fi
+    echo "pinned_tool: no second source for $tool $version on $plat worked" >&2
     return 1
   fi
   got="$(sha256_of "$TMP/$archive")"
