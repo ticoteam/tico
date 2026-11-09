@@ -175,7 +175,8 @@ function overviewStop() {
   const state = OVERVIEW_PAGE; if (!state) return;
   state.abort.abort(); OVERVIEW_PAGE = null;
   const frame = state.frame;
-  if (state.ready && frame.isConnected && Element.prototype.moveBefore) {
+  // shared.d.ts declares moveBefore as lib.dom does; older engines lack it, so read the prototype as maybe missing.
+  if (state.ready && frame.isConnected && (Element.prototype as Partial<ParentNode>).moveBefore) {
     let hold = $('#overview-hold');
     if (!hold) {
       hold = document.createElement('div'); hold.id = 'overview-hold'; hold.setAttribute('aria-hidden', 'true'); hold.inert = true;
