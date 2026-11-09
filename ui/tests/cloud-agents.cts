@@ -15,14 +15,12 @@ const path: typeof import('node:path') = require('node:path');
 const {html, uiFile} = require('./support/page.cjs') as typeof PageSupport;
 const {unrouted} = require('./support/routes.cjs') as typeof Routes;
 
-declare global {
-  interface Window {
-    // Defined by ui/app/cloud-agents.ts.
-    cloudAgentRequest(agent: Agent, options: {team?: string; reports_to?: string}): void;
-    cloudAgentsOpen(team: string): void;
-    cloudAgentsTab(host: HTMLElement, seatId: string): void;
-  }
-}
+declare const window: Window & typeof globalThis & {
+  // Defined by ui/app/cloud-agents.ts.
+  cloudAgentRequest(agent: Agent, options: {team?: string; reports_to?: string}): void;
+  cloudAgentsOpen(team: string): void;
+  cloudAgentsTab(host: HTMLElement, seatId: string): void;
+};
 // Defined by ui/app/team-build.ts, which the page loads below.
 declare function teamBuildOpen(team: string): void;
 

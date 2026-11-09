@@ -1,26 +1,34 @@
 // Offline owner Settings upload: type/size checks, stable retries, refresh preservation and roles; the Stale ticket
 // review and Topic changed switches' moved line on the same tab, which a local hub's owner gets too.
-const {chromium} = require('playwright');
+const {chromium} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const {html, uiFile} = require('./support/page.cjs');
-const {unrouted} = require('./support/routes.cjs');
+const {html, uiFile} = require('./support/page.cjs') as typeof import('./support/page.cjs');
+const {unrouted} = require('./support/routes.cjs') as typeof import('./support/routes.cjs');
+// Page globals this spec reads (file-local; see ui/tests/tsconfig.json moduleDetection).
+declare const window: Window & typeof globalThis & {
+  ticoTheme: {set(theme: string): void};
+};
+declare var ticoTheme: {set(theme: string): unknown};
+declare var loadSettings: () => void;
+declare var route: () => void;
+declare var setDrawer: (open: boolean) => void;
 const logo = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a6XcAAAAASUVORK5CYII=', 'base64');
 (async () => {
-  const browser = await chromium.launch({headless:true, channel:process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined});
+  const browser = await chromium.launch({headless:true, channel:process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined} as import('playwright').LaunchOptions);
   try {
     const page = await browser.newPage({viewport:{width:1280,height:800}, serviceWorkers:'block'});
-    const errors = [], writes = [];
+    const errors: string[] = [], writes: {key: string | undefined; body: Buffer | null}[] = [];
     let role = 'owner', cloud = true, failures = 0, refusal = false;
-    const rules = {stale_review:false, topic_fresh:false};
-    const ruleWrites = [];
+    const rules: Record<string, boolean> = {stale_review:false, topic_fresh:false};
+    const ruleWrites: Record<string, boolean>[] = [];
     page.on('pageerror', e => errors.push(e.message));
     await page.route('**/*', route => {
       const request = route.request(), p = new URL(request.url()).pathname;
-      const json = (body, status=200) => route.fulfill({status,contentType:'application/json',body:JSON.stringify(body)});
+      const json = (body: unknown, status=200) => route.fulfill({status,contentType:'application/json',body:JSON.stringify(body)});
       const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/);
-      if (ui && fs.existsSync(uiFile(ui[1]))) return route.fulfill({contentType:ui[1].endsWith('.css') ? 'text/css' : 'application/javascript',body:fs.readFileSync(uiFile(ui[1]),'utf8')});
+      if (ui && fs.existsSync(uiFile(ui[1]!))) return route.fulfill({contentType:ui[1]!.endsWith('.css') ? 'text/css' : 'application/javascript',body:fs.readFileSync(uiFile(ui[1]!),'utf8')});
       if (p === '/vendor/fonts/material-symbols-outlined.woff2') return route.fulfill({contentType:'font/woff2',body:fs.readFileSync(uiFile('vendor/fonts/material-symbols-outlined.woff2'))});
       if (/\.(?:js|ts)$/.test(p)) return route.fulfill({contentType:'application/javascript',body:''});
       if (p === '/') return route.fulfill({contentType:'text/html',body:html});
@@ -34,7 +42,7 @@ const logo = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQV
       if (p === '/api/v2/access') return json({rules});
       if (p === '/api/v2/system/storage') return json({active: null, earlier: [], server: {mode: 'local', location: ''}, copy: {done: 0, total: 0, failed: 0, running: false}, doc: 'https://example.test/docs/files.md'});   // Storage shares General with the team rules
       if (p === '/api/v2/access/rules' && request.method() === 'PUT') {
-        const body = request.postDataJSON(); ruleWrites.push(body); Object.assign(rules, body); return json(rules);
+        const body: Record<string, boolean> = request.postDataJSON(); ruleWrites.push(body); Object.assign(rules, body); return json(rules);
       }
       if (p === '/api/me') return json({id:'ana',role,name:'Ana',email:'ana@example.com',cloud,registered:true,config:{version:'dev',company_name:'Acme'}});
       if (p === '/api/v2/config') return json({version:'dev',company_name:'Acme'});
@@ -51,8 +59,8 @@ const logo = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQV
     const input = page.locator('#settings-team-icon-file'), status = page.locator('#settings-team-icon-status');
     // A toast lasts a few seconds, so an earlier save's Saved is still up during the next one: each wait counts only
     // toasts that appeared after this mark.
-    const forgetToasts = () => page.evaluate(() => document.querySelectorAll('.toast').forEach(t => { t.dataset.seen = '1'; }));
-    await page.waitForFunction(() => !document.querySelector('#settings-team-icon').hidden);
+    const forgetToasts = () => page.evaluate(() => document.querySelectorAll<HTMLElement>('.toast').forEach(t => { t.dataset.seen = '1'; }));
+    await page.waitForFunction(() => !document.querySelector<HTMLElement>('#settings-team-icon')!.hidden);
     await input.setInputFiles({name:'logo.gif',mimeType:'image/gif',buffer:logo});
     assert.match(await status.innerText(), /PNG, JPEG or WebP/);
     await input.setInputFiles({name:'large.png',mimeType:'image/png',buffer:Buffer.alloc(1048577)});
@@ -61,14 +69,14 @@ const logo = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQV
     failures = 1;
     await forgetToasts();
     await input.setInputFiles({name:'logo.png',mimeType:'image/png',buffer:logo});
-    await page.waitForFunction(() => document.querySelector('#settings-team-icon-change').disabled);
+    await page.waitForFunction(() => document.querySelector<HTMLButtonElement>('#settings-team-icon-change')!.disabled);
     await page.evaluate(async () => { await loadSettings(); route(); });
     assert.equal(await page.locator('#settings-team').isVisible(),true);
-    await page.waitForFunction(() => [...document.querySelectorAll('.toast:not([data-seen])')].some(t => t.textContent === 'Saved'));
+    await page.waitForFunction(() => [...(document.querySelectorAll('.toast:not([data-seen])') as unknown as Element[])].some(t => t.textContent === 'Saved'));
     assert.equal(await status.innerText(), '', 'no error left under the icon');
     assert.equal(writes.length,2);
-    assert.equal(writes[0].key,writes[1].key);
-    assert.deepEqual(writes[0].body,logo);
+    assert.equal(writes[0]!.key,writes[1]!.key);
+    assert.deepEqual(writes[0]!.body,logo);
     assert.equal(await page.locator('#settings-team-icon-change').isEnabled(),true);
     if (process.env.TICO_ICON_SCREENSHOTS) {
       fs.mkdirSync(process.env.TICO_ICON_SCREENSHOTS,{recursive:true});
@@ -76,22 +84,22 @@ const logo = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQV
       await page.screenshot({path:path.join(process.env.TICO_ICON_SCREENSHOTS,'settings-team-desktop-dark.png')});
       await page.setViewportSize({width:390,height:844});
       await page.evaluate(() => { window.ticoTheme.set('light'); setDrawer(false); });
-      await page.waitForFunction(() => document.querySelector('#side').getBoundingClientRect().right <= 0);
+      await page.waitForFunction(() => document.querySelector<HTMLElement>('#side')!.getBoundingClientRect().right <= 0);
       await page.screenshot({path:path.join(process.env.TICO_ICON_SCREENSHOTS,'settings-team-phone-light.png')});
     }
     refusal = true;
     await input.setInputFiles({name:'bad.png',mimeType:'image/png',buffer:Buffer.from('invalid')});
-    await page.waitForFunction(() => document.querySelector('#settings-team-icon-status').textContent.includes('Use a valid'));
+    await page.waitForFunction(() => document.querySelector('#settings-team-icon-status')!.textContent!.includes('Use a valid'));
     assert.equal(await page.locator('#settings-team-icon').isVisible(),true);
     refusal = false; failures = 3;
     await input.setInputFiles({name:'retry.png',mimeType:'image/png',buffer:logo});
-    await page.waitForFunction(() => document.querySelector('#settings-team-icon-status').textContent.includes('Could not confirm'));
-    const pending = writes.at(-1).key;
+    await page.waitForFunction(() => document.querySelector('#settings-team-icon-status')!.textContent!.includes('Could not confirm'));
+    const pending = writes.at(-1)!.key;
     await forgetToasts();
     await input.setInputFiles({name:'retry.png',mimeType:'image/png',buffer:logo});
-    await page.waitForFunction(() => [...document.querySelectorAll('.toast:not([data-seen])')].some(t => t.textContent === 'Saved'));
+    await page.waitForFunction(() => [...(document.querySelectorAll('.toast:not([data-seen])') as unknown as Element[])].some(t => t.textContent === 'Saved'));
     assert.equal(await status.innerText(), '', 'no error left under the icon');
-    assert.equal(writes.at(-1).key,pending);
+    assert.equal(writes.at(-1)!.key,pending);
     role = 'human';
     await page.reload();
     await page.locator('#settings-tabs').waitFor();

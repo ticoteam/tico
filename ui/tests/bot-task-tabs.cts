@@ -14,11 +14,9 @@ const fs: typeof import('node:fs') = require('node:fs');
 const {html, uiFile} = require('./support/page.cjs') as typeof PageSupport;
 const {unrouted} = require('./support/routes.cjs') as typeof Routes;
 
-declare global {
-  interface Window {
-    refreshing?: unknown;
-  }
-}
+declare const window: Window & typeof globalThis & {
+  refreshing?: unknown;
+};
 // Defined by ui/app/bot-sidebar.ts, which the page loads below.
 declare function botTaskFilterRead(bot: string): Promise<unknown>;
 

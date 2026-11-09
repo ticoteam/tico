@@ -4,16 +4,26 @@
 // level), on Goals under the owner. Nobody chats with it (the Assistant hands it work), so Strategy has no rail for it;
 // where it is named (Settings > System) it goes by its name, the Strategy Bot unless the owner renamed it; a bot still named "CEO Bot" or "Goal Manager" shows as the Strategy Bot and the old names are never shown.
 // There is no Hide from my chart any more: a person who once chose it sees the same chart. Fixtures only, no network.
-const {chromium} = require('playwright');
+const {chromium} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
-const {html, uiFile} = require('./support/page.cjs');
-const {unrouted} = require('./support/routes.cjs');
+const {html, uiFile} = require('./support/page.cjs') as typeof import('./support/page.cjs');
+const {unrouted} = require('./support/routes.cjs') as typeof import('./support/routes.cjs');
 
-const bot = (name, display_name, org_parent, over) => ({name, display_name, org_parent, host: 'keeper', status: 'active', can_chat: true, ...over});
+type Server = {name?: string; home?: boolean; hidden?: boolean; analyst?: boolean; saves?: string[]};
+// Browser-side globals the test reads inside page.evaluate / waitForFunction.
+declare const S: {emps: {name: string; revision: number}[]; route: string; me?: unknown};
+
+declare var SETTINGS_DATA: {models: unknown[]};
+declare var $: (selector: string) => HTMLElement;
+declare function strategyBotName(): string;
+declare function settingsShow(tab: string): void;
+declare function settingsEditBot(slug?: string, inline?: boolean): void;
+
+const bot = (name: string, display_name: string, org_parent: string, over?: Record<string, unknown>) => ({name, display_name, org_parent, host: 'keeper', status: 'active', can_chat: true, ...over});
 // What the server sends: the Heads, and the Head's department (Marketing), hang under the Strategy Bot. For a person who
 // once chose Hide from my chart (`hidden`), nothing is moved under it and its row says `chart_hidden` (backend/strategy_bot.py).
-const bots = (name, home, hidden, analyst) => [
+const bots = (name: string, home: boolean, hidden?: boolean, analyst?: boolean) => [
   bot('coo', 'Assistant', 'p:ana'), bot('botops', 'BotOps', 'b:coo'), bot('librarian', 'Librarian', 'p:ana'),
   bot('goal-manager', name, 'p:ana', {reports_to: '', can_manage: true, ...(hidden ? {chart_hidden: true} : {})}),
   bot('cmo', 'Head of Marketing', hidden ? 'g:marketing' : 'b:goal-manager', {reports_to: '', team: 'marketing'}),
@@ -23,20 +33,20 @@ const bots = (name, home, hidden, analyst) => [
   ...(analyst ? [bot('analyst', 'Analyst', 'b:goal-manager', {reports_to: 'goal-manager', owner_id: 'bo'})] : []),
 ];
 // With `home`, the owner and Scribe are in a group of their own, which the server never hangs under the Strategy Bot.
-const groups = (home, hidden) => [{id: 'marketing', name: 'Marketing', reports_to: '', parent: '', org_parent: hidden ? '' : 'b:goal-manager', order: 0},
+const groups = (home: boolean, hidden?: boolean) => [{id: 'marketing', name: 'Marketing', reports_to: '', parent: '', org_parent: hidden ? '' : 'b:goal-manager', order: 0},
   ...(home ? [{id: 'home', name: 'Home', reports_to: '', parent: '', org_parent: '', order: 1}] : [])];
 
-async function open(browser, server, width = 1440) {
+async function open(browser: import('playwright').Browser, server: Server, width = 1440) {
   const page = await browser.newPage({viewport: {width, height: 900}, serviceWorkers: 'block'});
-  const errors = [];
+  const errors: string[] = [];
   page.on('pageerror', e => errors.push(e.message));
   await page.route('**/*', async route => {
     const req = route.request(), url = new URL(req.url()), p = url.pathname, home = !!server.home;
-    const json = body => route.fulfill({status: 200, contentType: 'application/json', body: JSON.stringify(body)});
+    const json = (body: unknown) => route.fulfill({status: 200, contentType: 'application/json', body: JSON.stringify(body)});
     if (url.origin !== 'http://tico-ui.test') return route.abort();
     if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
     const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/);
-    if (ui) { const file = uiFile(ui[1]); if (fs.existsSync(file)) return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(file, 'utf8')}); }
+    if (ui) { const file = uiFile(ui[1]!); if (fs.existsSync(file)) return route.fulfill({contentType: ui[1]!.endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(file, 'utf8')}); }
     if (p === '/api/v2/events') return;
     if (p === '/api/v2/config') return json({});
     if (p === '/api/employees') return json(bots(server.name ?? 'Strategy Bot', home, server.hidden, server.analyst));
@@ -57,22 +67,22 @@ async function open(browser, server, width = 1440) {
   await page.locator('#goal-tree .gt-row').first().waitFor();
   return {page, errors};
 }
-const goalLines = page => page.locator('#goal-tree > li').evaluateAll(els => els
+const goalLines = (page: import('playwright').Page) => page.locator('#goal-tree > li').evaluateAll((els: HTMLElement[]) => els
   .map(el => `${el.dataset.owner || (el.classList.contains('gt-group') ? 'group:' + (el.querySelector('.gt-name')?.textContent || '').trim() : '')}@${el.style.getPropertyValue('--d')}`)
   .filter(l => l.startsWith('bot:') || l.startsWith('group:')));
 // Every chart node above this one, nearest first.
-const above = (page, key) => page.locator(`#tree [data-org="${key}"]`).first().evaluate(el => {
+const above = (page: import('playwright').Page, key: string) => page.locator(`#tree [data-org="${key}"]`).first().evaluate((el: HTMLElement) => {
   const out = [];
   for (let li = el.closest('li')?.parentElement?.closest('li'); li; li = li.parentElement?.closest('li'))
-    out.push(li.querySelector(':scope > .noderow [data-org], :scope > .noderow[data-org]')?.dataset.org
-      || li.querySelector(':scope > .noderow')?.dataset.org || '');
+    out.push(li.querySelector<HTMLElement>(':scope > .noderow [data-org], :scope > .noderow[data-org]')?.dataset.org
+      || li.querySelector<HTMLElement>(':scope > .noderow')?.dataset.org || '');
   return out;
 });
 // The rows at the top level of the Team tree, in order.
-const topRows = page => page.locator('#tree > li > .noderow').evaluateAll(rows => rows.map(row =>
-  (row.querySelector('[data-org]') || row).dataset.org));
+const topRows = (page: import('playwright').Page) => page.locator('#tree > li > .noderow').evaluateAll((rows: HTMLElement[]) => rows.map(row =>
+  (row.querySelector<HTMLElement>('[data-org]') || row).dataset.org));
 
-async function check(page, name = 'Strategy Bot') {
+async function check(page: import('playwright').Page, name = 'Strategy Bot') {
   // Off the Team chart, as the other built-ins are; the Head's department, the Head, its report and the bot with no
   // manager the server hung under it report to the owner, who is the top of the chart: they sit beside the owner's row,
   // the department first.
@@ -94,7 +104,7 @@ async function check(page, name = 'Strategy Bot') {
   const browser = await chromium.launch({channel: process.env.TICO_BROWSER_CHANNEL ?? 'chrome', headless: true});
   try {
     // Its name, the name of a bot the upgrade has not reached yet (never shown), and a name the owner gave it.
-    for (const [sent, shown] of [['CEO Bot', 'Strategy Bot'], ['Goal Manager', 'Strategy Bot'], ['Atlas', 'Atlas']]) {
+    for (const [sent, shown] of [['CEO Bot', 'Strategy Bot'], ['Goal Manager', 'Strategy Bot'], ['Atlas', 'Atlas']] as [string, string][]) {
       const {page, errors} = await open(browser, {name: sent});
       await check(page, shown);
       assert.deepEqual(errors, []);
@@ -118,7 +128,7 @@ async function check(page, name = 'Strategy Bot') {
     // with the bot that reports to the Strategy Bot itself under the owner. No Hide or Show on my chart anywhere: not on
     // the Team tree, not on its row in Settings > Bots, not in its editor; its row there still opens its page.
     {
-      const server = {name: 'Atlas', analyst: true, hidden: true};
+      const server: Server = {name: 'Atlas', analyst: true, hidden: true};
       const {page, errors} = await open(browser, server);
       await page.locator('#tree [data-org="b:cmo"]').waitFor();
       assert.equal(await page.locator('#tree [data-org="b:goal-manager"]').count(), 0);
@@ -135,7 +145,7 @@ async function check(page, name = 'Strategy Bot') {
       await row.waitFor();
       assert.equal(await row.locator('a.sb-name').getAttribute('href'), '#/bot/goal-manager');
       assert.doesNotMatch(await row.innerText(), /chart/i);
-      await page.evaluate(() => { settingsEditBot('goal-manager', true); $('#bot-editor').showModal(); });   // as its settings tab draws it
+      await page.evaluate(() => { settingsEditBot('goal-manager', true); ($('#bot-editor') as HTMLDialogElement).showModal(); });   // as its settings tab draws it
       await page.locator('#bot-editor input[name="display_name"]').waitFor();
       assert.doesNotMatch(await page.locator('#bot-editor').innerText(), /on your chart|from your chart|my chart/i);
       assert.equal(await page.locator('body').getByText(/Hide from my chart|Show on my chart/).count(), 0);

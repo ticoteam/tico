@@ -17,13 +17,11 @@ const path: typeof import('node:path') = require('node:path');
 const {html, uiFile} = require('./support/page.cjs') as typeof PageSupport;
 const {unrouted} = require('./support/routes.cjs') as typeof Routes;
 
-declare global {
-  interface Window {
-    // Set by this test's own wrapper and read by the page (bot-details.js botSettingsMount draws the editor).
-    editorDrawn?: number;
-    settingsEditBot: (slug?: string, inline?: boolean) => void;
-  }
-}
+declare const window: Window & typeof globalThis & {
+  // Set by this test's own wrapper and read by the page (bot-details.js botSettingsMount draws the editor).
+  editorDrawn?: number;
+  settingsEditBot: (slug?: string, inline?: boolean) => void;
+};
 // Defined by ui/app/settings-bot-editor.ts, ui/app/cloud-machines.ts, ui/app/settings.ts and ui/app/bot-page.js.
 declare function settingsEditBot(slug?: string, inline?: boolean): void;
 declare function loadSettings(): Promise<void>;

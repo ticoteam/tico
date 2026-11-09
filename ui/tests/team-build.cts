@@ -1,18 +1,28 @@
 // Build a team (ui/app/team-build.ts): the dialog asks the server for the roles a briefing needs, shows them as cards,
 // keeps what the person picked when the briefing changes, and hires the picks in one request. Run at a desktop (dark) and a
 // phone size (light). Fixtures only, no network. TB_SHOTS=<folder> also saves the screenshots.
-const {chromium} = require('playwright');
+const {chromium} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const {html, uiFile} = require('./support/page.cjs');
-const {unrouted} = require('./support/routes.cjs');
+const {html, uiFile} = require('./support/page.cjs') as typeof import('./support/page.cjs');
+const {unrouted} = require('./support/routes.cjs') as typeof import('./support/routes.cjs');
+// Page globals this spec reads (file-local; see ui/tests/tsconfig.json moduleDetection).
+declare const window: Window & typeof globalThis & {
+  __cloudRequest: {name: string; supported: boolean; team: string} | undefined;
+};
 
 const SHOTS = process.env.TB_SHOTS || '';
+type Browser = import('playwright').Browser;
+type Route = import('playwright').Route;
+// The request bodies the fake server reads (what the page sent).
+type Body = {[key: string]: unknown; briefing?: string; team?: string; reports_to?: string; picks?: unknown[]};
+declare function teamBuildOpen(group: string | null): void;
+declare var __cloudRequest: {name: string; supported: boolean; team: string} | undefined;
 const group = {id: 'engineering', name: 'Engineering', parent: '', org_parent: '', order: 0};
-const item = (template, name, match = '') => ({template, name, icon: '', department: 'engineering', line: 'Works on the team.',
+const item = (template: string, name: string, match = '') => ({template, name, icon: '', department: 'engineering', line: 'Works on the team.',
   tags: [], owns: [], prerequisites: [], match, source: 'template'});
-const agent = (id, name, supported) => ({id, name, maker: '', site: '', line: 'A cloud agent.', supported,
+const agent = (id: string, name: string, supported: boolean) => ({id, name, maker: '', site: '', line: 'A cloud agent.', supported,
   connect_id: supported ? id : null, source: 'cloud', template: '', icon: '', department: '', tags: [], owns: [], prerequisites: [], match: ''});
 const suggestion = () => ({team: 'engineering', department: 'engineering', roles: [
   {role: 'Head of Engineering', pick: item('engineering-lead', 'Engineering Lead'), alternatives: [], on_team: true, checked: false,
@@ -29,29 +39,29 @@ const suggestion = () => ({team: 'engineering', department: 'engineering', roles
 // The briefing changes and the recommender now suggests Software Architect for DevOps, which the Security role already holds.
 const reranked = () => ({...suggestion(), roles: suggestion().roles.map((role, i) => i !== 2 ? role
   : {...role, pick: item('software-architect', 'Software Architect', 'strong'), alternatives: [item('pr-reviewer', 'PR Reviewer')]})});
-const until = async (test, ms = 4000) => {
+const until = async (test: () => boolean, ms = 4000) => {
   const end = Date.now() + ms;
   while (!test()) { if (Date.now() > end) throw new Error('timed out waiting'); await new Promise(r => setTimeout(r, 25)); }
 };
 
-async function scenario(browser, {name, viewport, theme}) {
+async function scenario(browser: Browser, {name, viewport, theme}: {name: string; viewport: {width: number; height: number}; theme: string}) {
   const tag = `${name}-${theme}`, phone = name === 'phone';
   const page = await browser.newPage({viewport, serviceWorkers: 'block'});
-  const errors = [];
+  const errors: string[] = [];
   page.on('pageerror', error => errors.push(error.message));
   await page.addInitScript(saved => localStorage.setItem('tico.theme', saved), theme);
   await page.addInitScript(() => localStorage.setItem('hub.collapsed.v3.ana', '[]'));
-  const calls = [];
-  let release = () => {}, suggests = 0;
+  const calls: [string, Body][] = [];
+  let release: (value?: unknown) => void = () => {}, suggests = 0;
   const gate = new Promise(resolve => { release = resolve; });     // holds the first answer so the loading state can be seen
-  const shot = async suffix => { if (SHOTS) await page.screenshot({path: path.join(SHOTS, `team-build-${tag}${suffix}.png`)}); };
-  await page.route('**/*', async route => {
+  const shot = async (suffix: string) => { if (SHOTS) await page.screenshot({path: path.join(SHOTS, `team-build-${tag}${suffix}.png`)}); };
+  await page.route('**/*', async (route: Route) => {
     const url = new URL(route.request().url()), p = url.pathname;
-    const json = body => route.fulfill({contentType: 'application/json', body: JSON.stringify(body)});
+    const json = (body: unknown) => route.fulfill({contentType: 'application/json', body: JSON.stringify(body)});
     if (/\/marked\.min\.js$/.test(p)) return route.fulfill({contentType: 'application/javascript', body: 'window.marked={parse:s=>String(s)}'});
     if (url.origin !== 'https://tico-ui.test') return route.abort();
     const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/);
-    if (ui && fs.existsSync(uiFile(ui[1]))) return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]), 'utf8')});
+    if (ui && fs.existsSync(uiFile(ui[1]!))) return route.fulfill({contentType: ui[1]!.endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]!), 'utf8')});
     if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
     if (p === '/api/me') return json({id: 'ana', role: 'owner', name: 'Ana', email: 'ana@example.test', cloud: true});
     if (p === '/api/humans' || p === '/api/people') return json({people: [{id: 'ana', name: 'Ana', org_parent: ''}], seats: [], org_groups: [group]});
@@ -65,12 +75,12 @@ async function scenario(browser, {name, viewport, theme}) {
     if (p === '/api/v2/tasks') return json({tasks: []});
     if (p === '/api/v2/conversations') return json({conversations: []});
     if (p === '/api/v2/team-build/suggest') {
-      calls.push(['suggest', route.request().postDataJSON()]);
+      calls.push(['suggest', route.request().postDataJSON() as Body]);
       if (++suggests === 1) await gate;
       return json(suggests === 2 ? reranked() : suggestion());
     }
     if (p === '/api/v2/team-build/hire') {
-      calls.push(['hire', route.request().postDataJSON()]);
+      calls.push(['hire', route.request().postDataJSON() as Body]);
       return json({team: 'engineering', bots: [{slug: 'security-engineer', name: 'Security Engineer', template: 'security-engineer', role: 'Security engineer', stage: 'onboarding'}]});
     }
     if (p.endsWith('/watch')) return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});
@@ -80,24 +90,24 @@ async function scenario(browser, {name, viewport, theme}) {
   await page.waitForFunction(() => typeof teamBuildOpen === 'function');
   await page.evaluate(() => teamBuildOpen('engineering'));
   const dialog = page.locator('#team-build-dialog'), cards = page.locator('#team-build-dialog .tb-card');
-  const alts = i => page.locator(`#team-build-dialog [data-card="${i}"] .tb-alt-name`).allTextContents();
+  const alts = (i: number) => page.locator(`#team-build-dialog [data-card="${i}"] .tb-alt-name`).allTextContents();
   // No role offers a template another role picks, and no template is two roles' picks.
   const sharedTemplates = () => page.evaluate(() => {
-    const cardsNow = [...document.querySelectorAll('#team-build-dialog .tb-card')];
-    const picks = cardsNow.map(card => card.querySelector('.tb-pick-name').textContent);
-    const offered = cardsNow.flatMap((card, i) => [...card.querySelectorAll('.tb-alt-name')].map(name => name.textContent)
+    const cardsNow = [...(document.querySelectorAll('#team-build-dialog .tb-card') as unknown as HTMLElement[])];
+    const picks = cardsNow.map(card => card.querySelector('.tb-pick-name')!.textContent);
+    const offered = cardsNow.flatMap((card, i) => [...(card.querySelectorAll('.tb-alt-name') as unknown as HTMLElement[])].map(name => name.textContent)
       .filter(name => picks.some((pick, k) => k !== i && pick === name)));
     return {offered, twice: picks.filter((pick, i) => picks.indexOf(pick) !== i)};
   });
   await dialog.waitFor();
   // Focus starts on the brief on the desktop, and on the dialog on the phone so the keyboard stays down until a tap.
-  const focused = await page.evaluate(() => document.activeElement.id === 'team-build-dialog' ? 'dialog'
-    : document.activeElement.matches('.tb-brief input') ? 'brief' : 'other');
+  const focused = await page.evaluate(() => document.activeElement!.id === 'team-build-dialog' ? 'dialog'
+    : document.activeElement!.matches('.tb-brief input') ? 'brief' : 'other');
   assert.equal(focused, phone ? 'dialog' : 'brief');
   // While the answer is out, the header dot is working; the cards arrive after it.
   await until(() => calls.length === 1);
   assert.equal(await page.locator('#team-build-dialog .tb-dot').getAttribute('data-state'), 'thinking');
-  assert.deepEqual(calls[0][1], {team: 'engineering', briefing: ''});
+  assert.deepEqual(calls[0]![1], {team: 'engineering', briefing: ''});
   release();
   await cards.nth(4).waitFor();
   assert.equal(await cards.count(), 5);
@@ -134,7 +144,12 @@ async function scenario(browser, {name, viewport, theme}) {
   // The cloud agent Tico connects is the default and says Add; either link hands it to the Cloud agents page with this
   // team, which adds it as a bot or files the request, so it lands here.
   const cloudLink = page.locator('#team-build-dialog [data-card="4"] [data-tb-request]');
-  await page.evaluate(() => { window.cloudAgentRequest = (pick, options) => { window.__cloudRequest = {name: pick.name, supported: pick.supported, team: options.team}; }; });
+  await page.evaluate(() => {
+    // The page's cloudAgentRequest takes a pick and the team; the global is not declared here, since cloud-agents.cts types Window.cloudAgentRequest differently.
+    (window as unknown as {cloudAgentRequest: (pick: {name: string; supported: boolean}, options: {team: string}) => void}).cloudAgentRequest = (pick, options) => {
+      window.__cloudRequest = {name: pick.name, supported: pick.supported, team: options.team};
+    };
+  });
   assert.equal(await cloudLink.innerText(), 'Add');
   await cloudLink.click();
   assert.deepEqual(await page.evaluate(() => window.__cloudRequest), {name: 'Claude Code', supported: true, team: 'engineering'});
@@ -169,8 +184,8 @@ async function scenario(browser, {name, viewport, theme}) {
   // A new briefing goes to the server once, after a pause, and keeps what the person picked.
   await page.locator('#team-build-dialog .tb-brief input').fill('A Rust API and a React app on AWS');
   await until(() => calls.filter(c => c[0] === 'suggest').length === 2);
-  assert.equal(calls.filter(c => c[0] === 'suggest').at(-1)[1].briefing, 'A Rust API and a React app on AWS');
-  await page.waitForFunction(() => document.querySelector('#team-build-dialog .tb-dot')?.dataset.state === 'done');
+  assert.equal(calls.filter(c => c[0] === 'suggest').at(-1)![1].briefing, 'A Rust API and a React app on AWS');
+  await page.waitForFunction(() => document.querySelector<HTMLElement>('#team-build-dialog .tb-dot')?.dataset.state === 'done');
   assert.equal(await page.locator('#team-build-dialog [data-card="1"] .tb-pick-name').innerText(), 'Software Architect');
   assert.equal(await page.locator('#team-build-dialog [data-card="4"] .tb-pick-name').innerText(), 'Devin');
   assert.equal(await count(), 3);
@@ -178,8 +193,8 @@ async function scenario(browser, {name, viewport, theme}) {
   assert.deepEqual(await sharedTemplates(), {offered: [], twice: []});
   // Hire sends each checked role with its chosen template, in order; the dialog closes and a toast says it.
   await hireButton.click();
-  await until(() => calls.at(-1)[0] === 'hire');
-  assert.deepEqual(calls.at(-1)[1], {team: 'engineering', reports_to: '', picks: [
+  await until(() => calls.at(-1)![0] === 'hire');
+  assert.deepEqual(calls.at(-1)![1], {team: 'engineering', reports_to: '', picks: [
     {role: 'Security engineer', template: 'software-architect'},
     {role: 'DevOps engineer', template: 'pr-reviewer'},
     {role: 'Developer advocate', template: 'developer-advocate'},
@@ -206,7 +221,7 @@ async function scenario(browser, {name, viewport, theme}) {
 
 (async () => {
   if (SHOTS) fs.mkdirSync(SHOTS, {recursive: true});
-  const browser = await chromium.launch({headless: true, channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined});
+  const browser = await chromium.launch({headless: true, channel: (process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined) as string});
   try {
     for (const run of [
       // One run per width: no assertion reads a colour, so each theme drew the same boxes.

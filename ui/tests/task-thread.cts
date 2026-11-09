@@ -1,16 +1,19 @@
+/// <reference lib="dom.iterable" />
 // Offline browser regression: a bot-owned task talks in its own room. In the Assistant's chat (ui/app/chat.ts, the one
 // chat that still folds them) a task's start and its milestone reports are one quiet row each, and a tap opens the
 // task's thread; what is typed there goes to the task (POST /v2/tasks/{id}/comments), never to the main chat.
-const {chromium} = require('playwright');
+const {chromium} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const {html, uiFile} = require('./support/page.cjs');
-const {unrouted} = require('./support/routes.cjs');
-const launch = () => chromium.launch({headless: true, channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined});
+const {html, uiFile} = require('./support/page.cjs') as typeof import('./support/page.cjs');
+const {unrouted} = require('./support/routes.cjs') as typeof import('./support/routes.cjs');
+// Browser-side function the test calls inside page.evaluate.
+declare function v2MessagesHTML(messages: unknown[], goalLine?: unknown, slug?: string): string;
+const launch = () => chromium.launch({headless: true, channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined} as import('playwright').LaunchOptions);
 const SHOTS = process.env.TICO_UI_SHOTS || '';
 
-const now = Date.now(), at = m => new Date(now - m * 60000).toISOString();
+const now = Date.now(), at = (m: number) => new Date(now - m * 60000).toISOString();
 const asked = {id: 't-key', title: 'Pick the API key for staging', owner_id: 'bot:botops', requester_id: 'human:ana', status: 'waiting',
   lane: 'company', version: 3, created_at: at(90), updated_at: at(5), ask: {recipient_id: 'human:ana', body: 'Which key should staging use?'}};
 const docs = {id: 't-docs', title: 'Ship the docs refresh', owner_id: 'bot:botops', requester_id: 'human:ana', status: 'doing',
@@ -24,7 +27,7 @@ const messages = [
   {id: 'm4', conversation_id: 'c1', sender_id: 'bot:botops', recipient_id: 'human:ana', kind: 'say', body: 'Blocked: the docs build needs a staging key.',
     refs: {task: 't-docs', task_report: 'blocked'}, ref_tasks: {'t-docs': {title: 'Ship the docs refresh'}}, created_at: at(10)},
 ];
-const comments = {
+const comments: Record<string, unknown[]> = {
   't-key': [{id: 'k1', conversation_id: 'r-key', sender_id: 'bot:botops', recipient_id: 'human:ana', kind: 'ask', body: 'Which key should staging use?', created_at: at(5)}],
   // A long thread: it opens at its newest line, like the chat.
   't-docs': [...Array.from({length: 30}, (_, i) => ({id: 'e' + i, conversation_id: 'r-docs', sender_id: 'bot:botops', kind: 'say',
@@ -32,18 +35,18 @@ const comments = {
     {id: 'd1', conversation_id: 'r-docs', sender_id: 'bot:botops', kind: 'say', body: 'Docs build fails without a staging key.', created_at: at(10)}],
 };
 
-async function run(viewport, shot) {
+async function run(viewport: {width: number; height: number}, shot: string) {
   const browser = await launch();
   try {
     const page = await browser.newPage({viewport, serviceWorkers: 'block'});
-    const errors = [], chatSends = [], taskSends = [];
+    const errors: string[] = [], chatSends: unknown[] = [], taskSends: {id: string; text: unknown}[] = [];
     page.on('pageerror', e => errors.push(e.message));
     await page.route('**/*', async route => {
       const req = route.request(), url = new URL(req.url()), p = url.pathname;
-      const json = (body, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
+      const json = (body: unknown, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
       const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/);
-      if (ui && fs.existsSync(uiFile(ui[1])))
-        return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]), 'utf8')});
+      if (ui && fs.existsSync(uiFile(ui[1]!)))
+        return route.fulfill({contentType: ui[1]!.endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]!), 'utf8')});
       if (/\.(?:js|ts)$/.test(p)) return route.fulfill({contentType: 'application/javascript', body: ''});
       if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
       if (p === '/api/me') return json({id: 'ana', name: 'Ana', role: 'owner', cloud: true});
@@ -59,13 +62,13 @@ async function run(viewport, shot) {
         return json({tasks: owned ? Object.values(tasks) : []});
       }
       const one = p.match(/^\/api\/v2\/tasks\/([^/]+)(\/comments)?$/);
-      if (one && tasks[one[1]]) {
-        const id = one[1];
+      if (one && tasks[one[1]!]) {
+        const id = one[1]!;
         if (one[2] && req.method() === 'POST') {
           const text = req.postDataJSON().text;
           taskSends.push({id, text});
           const msg = {id: 'c' + taskSends.length, conversation_id: 'r-' + id, sender_id: 'human:ana', kind: 'say', body: text, created_at: new Date().toISOString()};
-          comments[id].push(msg);
+          comments[id]!.push(msg);
           return json({comment: msg, comments: comments[id], woke: true});
         }
         return json({task: {...tasks[id], conversation_id: 'r-' + id}, comments: comments[id], events: [], can_comment: true, children: []});
@@ -87,11 +90,11 @@ async function run(viewport, shot) {
 
     // Four or more task rows in a row fold to the oldest, "...N more..." and the newest; a real message starts a new run.
     const folded = await page.evaluate(() => {
-      const row = (n, state = 'done') => ({id: 'r' + n, sender_id: 'keeper', recipient_id: 'human:ana', kind: 'notice', body: `Review ${n}: ${state}.`,
+      const row = (n: number, state = 'done') => ({id: 'r' + n, sender_id: 'keeper', recipient_id: 'human:ana', kind: 'notice', body: `Review ${n}: ${state}.`,
         refs: {task: 't' + n, task_report: state}, ref_tasks: {['t' + n]: {title: `Review ${n}`}}, created_at: new Date(Date.now() - (60 - n) * 60000).toISOString()});
       const say = {id: 'say', sender_id: 'bot:botops', recipient_id: 'human:ana', kind: 'say', body: 'Halfway there.', created_at: new Date().toISOString()};
-      const lines = list => { const el = document.createElement('div'); el.innerHTML = v2MessagesHTML(list, null, 'botops');
-        return [...el.querySelectorAll('.chat-task-row, .conv-run')].map(r => r.matches('.chat-task-more') ? r.textContent.trim()
+      const lines = (list: unknown[]) => { const el = document.createElement('div'); el.innerHTML = v2MessagesHTML(list, null, 'botops');
+        return [...el.querySelectorAll('.chat-task-row, .conv-run')].map(r => r.matches('.chat-task-more') ? r.textContent!.trim()
           : r.querySelector('.ct-title')?.textContent || 'message'); };
       return {five: lines([1, 2, 3, 4, 5].map(n => row(n))), three: lines([1, 2, 3].map(n => row(n))),
         split: lines([row(1), row(2), say, row(3), row(4), row(5)])};
@@ -108,14 +111,14 @@ async function run(viewport, shot) {
     assert.equal(await modal.locator('.tthread-title').innerText(), 'Ship the docs refresh');
     assert.ok(await modal.locator('[data-thread-back]').isVisible(), 'Back shows');
     assert.ok(!(await modal.locator('.task-side').isVisible()), 'the properties wait behind Details');
-    await page.waitForFunction(() => { const t = document.querySelector('#task-modal .task-comments'); return t.scrollHeight > t.clientHeight && t.scrollHeight - t.scrollTop - t.clientHeight < 4; });
+    await page.waitForFunction(() => { const t = document.querySelector<HTMLElement>('#task-modal .task-comments')!; return t.scrollHeight > t.clientHeight && t.scrollHeight - t.scrollTop - t.clientHeight < 4; });
     // The box is the main chat's composer: a one-line pill with the send arrow.
     const box = modal.locator('.task-pill .p-text');
     assert.equal(await box.getAttribute('placeholder'), 'Message…');
     assert.equal(await box.getAttribute('rows'), '1');
     assert.ok(await modal.locator('.task-pill .p-send-icon').isVisible(), 'the send arrow');
     await modal.locator('[data-thread-back]').click();
-    await page.waitForFunction(() => !document.querySelector('#task-modal')?.open);
+    await page.waitForFunction(() => !document.querySelector<HTMLDialogElement>('#task-modal')?.open);
 
     // Reopen it and send: Return sends on a computer; the arrow sends anywhere.
     const split = viewport.width > 760;
@@ -131,7 +134,7 @@ async function run(viewport, shot) {
 
     // Details shows the full task in place.
     await modal.locator('[data-thread-details]').click();
-    await page.waitForFunction(() => !document.querySelector('#task-modal').classList.contains('thread'));
+    await page.waitForFunction(() => !document.querySelector('#task-modal')!.classList.contains('thread'));
     assert.ok(await page.locator('#task-modal .task-side').isVisible() || viewport.width < 761, 'the full task shows');
     assert.deepEqual(errors, []);
     return split;
@@ -139,7 +142,7 @@ async function run(viewport, shot) {
 }
 
 (async () => {
-  const shot = name => SHOTS ? path.join(SHOTS, name) : '';
+  const shot = (name: string) => SHOTS ? path.join(SHOTS, name) : '';
   await run({width: 1200, height: 800}, shot('task-thread-desktop.png'));
   await run({width: 390, height: 844}, shot('task-thread-mobile.png'));
   console.log('ok');

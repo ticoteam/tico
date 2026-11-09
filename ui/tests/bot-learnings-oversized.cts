@@ -15,19 +15,17 @@ interface LearnData {
 declare const esc: (value: unknown) => string;
 declare function learnOpen(bot: string, data: LearnData): void;
 declare function botLearningsLoad(bot: string): Promise<void>;
-declare global {
-  interface Window {
-    $: (selector: string, root?: ParentNode) => Element | null;
-    esc: (value: unknown) => string;
-    md: (text: string) => string;
-    BOT: {slug: string};
-    post: (url: string, body?: unknown) => Promise<unknown>;
-    toast: (message: string) => void;
-    reads: string[];
-    ago: () => string;
-    get: (url: string) => Promise<unknown>;
-  }
-}
+declare const window: Window & typeof globalThis & {
+  $: (selector: string, root?: ParentNode) => Element | null;
+  esc: (value: unknown) => string;
+  md: (text: string) => string;
+  BOT: {slug: string};
+  post: (url: string, body?: unknown) => Promise<unknown>;
+  toast: (message: string) => void;
+  reads: string[];
+  ago: () => string;
+  get: (url: string) => Promise<unknown>;
+};
 
 (async () => {
   const browser = await chromium.launch({headless: true});
@@ -37,7 +35,7 @@ declare global {
     await page.setContent('<button id="bot-learn" hidden><span class="bl-n"></span></button>');
     await page.addStyleTag({path: path.join(__dirname, '../styles/bot-learnings.css')});
     await page.evaluate(() => {
-      window.$ = (selector, root = document) => root.querySelector(selector);
+      Object.assign(window, {$: (selector: string, root: ParentNode = document) => root.querySelector(selector)});
       window.esc = value => String(value).replace(/[&<>"']/g, ch => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'} as Record<string, string>)[ch]!);
       window.md = text => `<p>${esc(text)}</p>`;
       window.BOT = {slug: 'ops'};

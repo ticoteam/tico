@@ -8,26 +8,28 @@
 // - in a thread's sheet the owner links it to Slack, and Enter in the channel field never saves the sheet;
 // - with Slack off, nothing is on offer that cannot work.
 // TICO_UI_SHOTS=<dir> saves the screenshots.
-const {chromium} = require('playwright');
+const {chromium} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const {html, uiFile} = require('./support/page.cjs');
-const {unrouted} = require('./support/routes.cjs');
+const {html, uiFile} = require('./support/page.cjs') as typeof import('./support/page.cjs');
+const {unrouted} = require('./support/routes.cjs') as typeof import('./support/routes.cjs');
 
+type Viewport = {width: number; height: number};
+type Person = {id: string; name: string; email: string; role: string; bot_admin?: boolean; registered: boolean};
 const PHONE = {width: 390, height: 844}, DESKTOP = {width: 1300, height: 900};
-const PEOPLE = {
+const PEOPLE: Record<'ana' | 'cara' | 'bob', Person> = {
   ana: {id: 'ana', name: 'Ana', email: 'ana@acme.example', role: 'owner', bot_admin: true, registered: true},
   cara: {id: 'cara', name: 'Cara', email: 'cara@acme.example', role: 'human', bot_admin: true, registered: true},
   bob: {id: 'bob', name: 'Bob', email: 'bob@acme.example', role: 'human', registered: true},
 };
-const now = Date.now(), at = min => new Date(now - min * 60000).toISOString();
-const me = (extra = {}) => ({member: true, following: true, notify: 'live', last_read_seq: 3, unread: 0, activity: false, can_post: true, can_manage: true, ...extra});
-const thread = (id, title, audience, extra = {}) => ({id, title, audience, audience_group_id: audience === 'team' ? 'ops' : null, parent_id: null,
+const now = Date.now(), at = (min: number) => new Date(now - min * 60000).toISOString();
+const me = (extra: Record<string, unknown> = {}) => ({member: true, following: true, notify: 'live', last_read_seq: 3, unread: 0, activity: false, can_post: true, can_manage: true, ...extra});
+const thread = (id: string, title: string, audience: string, extra: Record<string, unknown> = {}) => ({id, title, audience, audience_group_id: audience === 'team' ? 'ops' : null, parent_id: null,
   root_id: id, last_seq: 3, last_unread_seq: 0, last_message_at: at(5), me: me(), members: [], ...extra});
 
 function fakes() {
-  const link = (id, threadId, name, state, reason = '') => ({id, thread_id: threadId, channel: {id: '', name, private: false}, audience: 'company',
+  const link = (id: string, threadId: string, name: string, state: string, reason = '') => ({id, thread_id: threadId, channel: {id: '', name, private: false}, audience: 'company',
     state, reason, history: {state: 'off', count: 0}, linked_by: 'human:ana', created_at: at(10), updated_at: at(10)});
   return {
     threads: [thread('t-mkt', 'Marketing', 'company'), thread('t-sup', 'Support', 'members'), thread('t-plan', 'Launch plan', 'members'),
@@ -37,20 +39,20 @@ function fakes() {
   };
 }
 
-async function open(browser, who, {viewport = DESKTOP} = {}) {
+async function open(browser: import('playwright').Browser, who: keyof typeof PEOPLE, {viewport = DESKTOP}: {viewport?: Viewport} = {}) {
   const page = await browser.newPage({viewport, serviceWorkers: 'block', reducedMotion: 'reduce', ...(viewport === PHONE ? {isMobile: true, hasTouch: true} : {})});
-  const seen = {errors: [], calls: []}, state = fakes();
+  const seen = {errors: [], calls: []} as {errors: string[]; calls: string[]; linked?: unknown}, state = fakes() as ReturnType<typeof fakes> & {slackOff?: boolean};
   page.on('pageerror', e => seen.errors.push(e.message));
   page.on('dialog', d => d.accept());
   await page.route('**/*', async route => {
     const req = route.request(), url = new URL(req.url()), p = url.pathname, method = req.method();
-    const json = (body, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
-    const refuse = (status, detail) => json({error: {code: 'refused', detail, retryable: false}}, status);
+    const json = (body: unknown, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
+    const refuse = (status: number, detail: string) => json({error: {code: 'refused', detail, retryable: false}}, status);
     const body = () => JSON.parse(req.postData() || '{}');
     if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
     const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/);
-    if (ui && fs.existsSync(uiFile(ui[1])))
-      return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]), 'utf8')});
+    if (ui && fs.existsSync(uiFile(ui[1]!)))
+      return route.fulfill({contentType: ui[1]!.endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]!), 'utf8')});
     if (/\.(?:js|ts)$/.test(p)) return route.fulfill({contentType: 'application/javascript', body: ''});
     if (p.startsWith('/api/v2/slack')) seen.calls.push(`${method} ${p}${url.search}`);
     if (p === '/api/me') return json(PEOPLE[who]);
@@ -59,7 +61,7 @@ async function open(browser, who, {viewport = DESKTOP} = {}) {
     if (p === '/api/humans') return json({people: Object.values(PEOPLE).map(({id, name, email}) => ({id, name, email}))});
     if (p === '/api/v2/events') return route.abort();
     if (p === '/api/v2/tools') return json({integrations: []});
-    if (p.startsWith('/api/v2/tools/')) return json({service: decodeURIComponent(p.split('/').pop()), title: 'Slack', access: '', writes: 'read', owner: 'tico', declared_as: '', body: '', queries: [], learnings: [], read_only: true});
+    if (p.startsWith('/api/v2/tools/')) return json({service: decodeURIComponent(p.split('/').pop()!), title: 'Slack', access: '', writes: 'read', owner: 'tico', declared_as: '', body: '', queries: [], learnings: [], read_only: true});
     // Threads: the sidebar list, one thread, its timeline.
     if (p === '/api/v2/threads' && method === 'GET') return json({attention: [], threads: state.threads, dms: [], next_cursor: null});
     const single = p.match(/^\/api\/v2\/threads\/([^/]+)$/);
@@ -96,6 +98,7 @@ async function open(browser, who, {viewport = DESKTOP} = {}) {
     if (one) {
       const row = state.links.find(l => l.id === one[1]);
       if (method === 'DELETE') { state.links = state.links.filter(l => l !== row); return json({...row, state: 'unlinked'}); }
+      if (!row) throw new Error(`no Slack link ${one[1]}`);
       row.state = 'requested'; row.reason = '';
       return json(row);
     }
@@ -103,14 +106,14 @@ async function open(browser, who, {viewport = DESKTOP} = {}) {
   });
   return {page, seen, state};
 }
-const sideways = page => page.evaluate(() => [document.documentElement, document.querySelector('#main')].some(el => el && el.scrollWidth > el.clientWidth + 1));
-async function shot(page, name) {
+const sideways = (page: import('playwright').Page) => page.evaluate(() => [document.documentElement, document.querySelector('#main')].some(el => el && el.scrollWidth > el.clientWidth + 1));
+async function shot(page: import('playwright').Page, name: string) {
   const dir = process.env.TICO_UI_SHOTS;
   if (!dir) return;
   fs.mkdirSync(dir, {recursive: true});
   await page.screenshot({animations: 'disabled', path: path.join(dir, name + '.png'), fullPage: true});
 }
-async function sheet(page) {
+async function sheet(page: import('playwright').Page) {
   await page.goto('https://tico-ui.test/#/thread/t-plan');
   await page.getByText('We are ready on our side.').waitFor();
   await page.locator('[data-thv-menu]').click();
@@ -130,14 +133,14 @@ async function sheet(page) {
         await page.goto('https://tico-ui.test/#/tools/slack');
         const slack = page.locator('#tool-slack-links');
         await slack.locator('[data-link="sl2"]').waitFor();
-        assert.match(await slack.locator('[data-link="sl1"] .cn-name').textContent(), /Marketing → #marketing/, `${tag}: thread → #channel`);
-        assert.match(await slack.locator('[data-link="sl1"] .cn-status').textContent(), /Live/);
-        assert.match(await slack.locator('[data-link="sl2"] .cn-status').textContent(), /Suspended/);
+        assert.match((await slack.locator('[data-link="sl1"] .cn-name').textContent())!, /Marketing → #marketing/, `${tag}: thread → #channel`);
+        assert.match((await slack.locator('[data-link="sl1"] .cn-status').textContent())!, /Live/);
+        assert.match((await slack.locator('[data-link="sl2"] .cn-status').textContent())!, /Suspended/);
         assert.equal(await slack.locator('[data-link="sl1"] [data-slack-resume]').count(), 0, `${tag}: a live link has nothing to resume`);
         // Paged: the third link comes with More, and its thread's title is read from the thread.
         await slack.locator('.cn-xmore button').click();
         await slack.locator('[data-link="sl3"]').waitFor();
-        assert.match(await slack.locator('[data-link="sl3"] .cn-name').textContent(), /Ops desk → #ops-desk/);
+        assert.match((await slack.locator('[data-link="sl3"] .cn-name').textContent())!, /Ops desk → #ops-desk/);
         assert.equal(await slack.locator('.cn-xmore').isHidden(), true, `${tag}: nothing more`);
         // Resume a suspended link, then unlink a live one.
         await slack.locator('[data-link="sl2"] [data-slack-resume]').click();
@@ -219,8 +222,8 @@ async function sheet(page) {
         await slack.locator('[name=tcn-channel]').fill('#launch');
         await slack.locator('[name=tcn-channel]').press('Enter');
         await slack.locator('[data-link]').waitFor();
-        assert.match(await slack.locator('[data-link]').textContent(), /#launch[\s\S]*Waiting/);
-        assert.equal(await dlg.evaluate(d => d.open), true, `${tag}: the sheet stays open`);
+        assert.match((await slack.locator('[data-link]').textContent())!, /#launch[\s\S]*Waiting/);
+        assert.equal(await dlg.evaluate((d: HTMLDialogElement) => d.open), true, `${tag}: the sheet stays open`);
         assert.deepEqual(seen.linked, {thread_id: 't-plan', channel: '#launch', history: false});
         await shot(page, `${tag}-thread-sheet-owner`);
         assert.deepEqual(seen.errors, []);

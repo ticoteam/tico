@@ -1,25 +1,24 @@
 // Offline browser regression: the one-time usage-count notice reaches the owner alone and is dismissible, and
 // Settings > General has the one toggle and "Reset install ID" (PRIVACY.md).
-const {chromium} = require('playwright');
+const {chromium} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
-const path = require('node:path');
-const {html, uiFile} = require('./support/page.cjs');
-const {unrouted} = require('./support/routes.cjs');
+const {html, uiFile} = require('./support/page.cjs') as typeof import('./support/page.cjs');
+const {unrouted} = require('./support/routes.cjs') as typeof import('./support/routes.cjs');
 (async () => {
-  const browser = await chromium.launch({headless: true, channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined});
+  const browser = await chromium.launch({headless: true, channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined} as import('playwright').LaunchOptions);
   try {
-    const visit = async ({role = 'owner', notice = true, hash = '#/tasks'} = {}) => {
+    const visit = async ({role = 'owner', notice = true, hash = '#/tasks'}: {role?: string; notice?: boolean; hash?: string} = {}) => {
       const ctx = await browser.newContext({viewport: {width: 1440, height: 900}, serviceWorkers: 'block'});
       const page = await ctx.newPage();
-      const errors = [], calls = [];
+      const errors: string[] = [], calls: string[] = [];
       page.on('pageerror', e => errors.push(e.message));
       await page.route('**/*', route => {
         const req = route.request(), p = new URL(req.url()).pathname;
-        const json = (body, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
+        const json = (body: unknown, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
         const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/);
-        if (ui && fs.existsSync(uiFile(ui[1])))
-          return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]), 'utf8')});
+        if (ui && fs.existsSync(uiFile(ui[1]!)))
+          return route.fulfill({contentType: ui[1]!.endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]!), 'utf8')});
         if (/\.(?:js|ts)$/.test(p)) return route.fulfill({contentType: 'application/javascript', body: ''});
         if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
         const config = {version: '0.2.15', update: null, app_name: 'Tico', usage_count_notice: role === 'owner' && notice};
@@ -39,7 +38,7 @@ const {unrouted} = require('./support/routes.cjs');
         return json(unrouted(p));
       });
       await page.goto('https://tico-ui.test/' + hash);
-      await page.waitForFunction(() => !document.querySelector('#account .account-email')?.textContent.includes('Signing in'));
+      await page.waitForFunction(() => !document.querySelector('#account .account-email')?.textContent!.includes('Signing in'));
       return {page, ctx, errors, calls};
     };
 
