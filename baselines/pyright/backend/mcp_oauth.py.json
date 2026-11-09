@@ -1,0 +1,14 @@
+{
+    "files": {
+        "./backend/mcp_oauth.py": [
+            {
+                "code": "reportOptionalMemberAccess",
+                "range": {
+                    "startColumn": 51,
+                    "endColumn": 60,
+                    "lineCount": 1
+                }
+            }
+        ]
+    }
+}

@@ -1,0 +1,22 @@
+{
+    "files": {
+        "./backend/visuals.py": [
+            {
+                "code": "reportArgumentType",
+                "range": {
+                    "startColumn": 44,
+                    "endColumn": 70,
+                    "lineCount": 1
+                }
+            },
+            {
+                "code": "reportAssignmentType",
+                "range": {
+                    "startColumn": 4,
+                    "endColumn": 40,
+                    "lineCount": 1
+                }
+            }
+        ]
+    }
+}

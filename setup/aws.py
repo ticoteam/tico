@@ -2,8 +2,10 @@
 
 Everything gets two tags, MANAGED_TAG and NAME_TAG, and destroy only touches what carries both.
 """
+
 from __future__ import annotations
 
+import gzip
 import json
 import re
 import time
@@ -22,10 +24,14 @@ AMI_PARAMS = {
     "al2023": "/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-arm64",
 }
 # us-east-1 on-demand list prices in USD/hour, approximate; the wizard says so.
-HOURLY = {"t4g.small": 0.0168, "t4g.medium": 0.0336, "t4g.large": 0.0672,
-          "m8i-flex.xlarge": 0.2011, "m8i-flex.2xlarge": 0.4022}
-MEMORY_GIB = {"t4g.small": 2, "t4g.medium": 4, "t4g.large": 8,
-              "m8i-flex.xlarge": 16, "m8i-flex.2xlarge": 32}
+HOURLY = {
+    "t4g.small": 0.0168,
+    "t4g.medium": 0.0336,
+    "t4g.large": 0.0672,
+    "m8i-flex.xlarge": 0.2011,
+    "m8i-flex.2xlarge": 0.4022,
+}
+MEMORY_GIB = {"t4g.small": 2, "t4g.medium": 4, "t4g.large": 8, "m8i-flex.xlarge": 16, "m8i-flex.2xlarge": 32}
 EBS_GB_MONTH, PUBLIC_IPV4_HOUR, HOURS = 0.08, 0.005, 730
 
 
@@ -53,8 +59,8 @@ class AwsPlan:
     elastic_ip: bool = False
     role: str = "server"
     warnings: list[str] = field(default_factory=list)
-    boundary: str = ""      # the permissions boundary the IAM role is created under, when the account requires one
-    plan_bucket: str = ""   # --plan-bucket: the role may read its own starter plan there, plans/<name>/*
+    boundary: str = ""  # the permissions boundary the IAM role is created under, when the account requires one
+    plan_bucket: str = ""  # --plan-bucket: the role may read its own starter plan there, plans/<name>/*
 
     @property
     def volume_gib(self) -> int:
@@ -70,37 +76,74 @@ class AwsPlan:
         return round(HOURLY[self.instance_type] * HOURS + self.volume_gib * EBS_GB_MONTH + ipv4, 2)
 
     def lines(self) -> list[str]:
-        sg = ("inbound TCP " + ", ".join(map(str, self.ports)) + " (and UDP 443) from anywhere") if self.ports \
+        sg = (
+            ("inbound TCP " + ", ".join(map(str, self.ports)) + " (and UDP 443) from anywhere")
+            if self.ports
             else "no inbound rules at all"
+        )
         return [
             f"EC2 {self.instance_type} ({MEMORY_GIB[self.instance_type]} GiB), {'Ubuntu 24.04' if self.os_family == 'ubuntu' else 'Amazon Linux 2023'} {'x86_64' if self.instance_type.startswith('m8i-') else 'arm64'}, "
             f"{self.volume_gib} GiB encrypted gp3, region {self.region}",
             f"Security group tico-{self.name}: {sg}",
             "Instance metadata: IMDSv2 required, hop limit 1 (containers and bots cannot reach the instance role)",
-            "Shell access through SSM (IAM role tico-%s with AmazonSSMManagedInstanceCore); no SSH key, no port 22" % self.name,
+            "Shell access through SSM (IAM role tico-%s with AmazonSSMManagedInstanceCore); no SSH key, no port 22"
+            % self.name,
             *([f"The IAM role is created under the permissions boundary {self.boundary}"] if self.boundary else []),
-            *([f"The starter plan goes to the server by S3 bucket {self.plan_bucket} (plans/{self.name}/, read by the "
-               "server's role once at first boot, deleted once it is up)"] if self.plan_bucket else []),
-            f"SSM SecureString /tico/{self.name}/env holds the " + ("one-time join code" if self.role == "runner" else ".env") + " for the instance to fetch at boot",
-            ("Elastic IP so the DNS record survives a stop/start" if self.elastic_ip else "No Elastic IP: nothing connects in"),
+            *(
+                [
+                    f"The starter plan goes to the server by S3 bucket {self.plan_bucket} (plans/{self.name}/, read by the "
+                    "server's role once at first boot, deleted once it is up)"
+                ]
+                if self.plan_bucket
+                else []
+            ),
+            f"SSM SecureString /tico/{self.name}/env holds the "
+            + ("one-time join code" if self.role == "runner" else ".env")
+            + " for the instance to fetch at boot",
+            (
+                "Elastic IP so the DNS record survives a stop/start"
+                if self.elastic_ip
+                else "No Elastic IP: nothing connects in"
+            ),
             f"Tags on everything: {MANAGED_TAG[0]}={MANAGED_TAG[1]}, {NAME_TAG}={self.name}",
             f"Estimated cost: about ${self.monthly_usd:.0f}/month running 24/7 (list prices, us-east-1; other regions differ)",
         ]
 
 
-def plan_aws(*, domain: str, front_door: str, region: str, instance_type: str = "t4g.small",
-             os_family: str = "ubuntu", name: str = "", role: str = "server", boundary: str = "",
-             plan_bucket: str = "") -> AwsPlan:
+def plan_aws(
+    *,
+    domain: str,
+    front_door: str,
+    region: str,
+    instance_type: str = "t4g.small",
+    os_family: str = "ubuntu",
+    name: str = "",
+    role: str = "server",
+    boundary: str = "",
+    plan_bucket: str = "",
+) -> AwsPlan:
     if instance_type not in HOURLY:
         raise ValueError(f"instance type must be one of {', '.join(HOURLY)}")
     if os_family not in AMI_PARAMS:
         raise ValueError("os must be ubuntu or al2023")
-    p = AwsPlan(name or slug(domain), region, instance_type, os_family, front_door, domain,
-                ports=[80, 443] if front_door == "caddy" else [], elastic_ip=front_door == "caddy", role=role, boundary=boundary,
-                plan_bucket=plan_bucket)
+    p = AwsPlan(
+        name or slug(domain),
+        region,
+        instance_type,
+        os_family,
+        front_door,
+        domain,
+        ports=[80, 443] if front_door == "caddy" else [],
+        elastic_ip=front_door == "caddy",
+        role=role,
+        boundary=boundary,
+        plan_bucket=plan_bucket,
+    )
     if role == "runner":
-        p.warnings.append(f"Plan on about 0.5-1 GiB of RAM per bot working at the same time: {instance_type} "
-                          f"({MEMORY_GIB[instance_type]} GiB) suits roughly {max(1, MEMORY_GIB[instance_type] - 1)} at once.")
+        p.warnings.append(
+            f"Plan on about 0.5-1 GiB of RAM per bot working at the same time: {instance_type} "
+            f"({MEMORY_GIB[instance_type]} GiB) suits roughly {max(1, MEMORY_GIB[instance_type] - 1)} at once."
+        )
     return p
 
 
@@ -126,16 +169,43 @@ def make_clients(region: str, profile: str = ""):
 
 def make_s3(region: str, profile: str = ""):
     import boto3
+
     return boto3.Session(region_name=region, profile_name=profile or None).client("s3")
 
 
 def _filters(name: str) -> list[dict]:
-    return [{"Name": f"tag:{MANAGED_TAG[0]}", "Values": [MANAGED_TAG[1]]}, {"Name": f"tag:{NAME_TAG}", "Values": [name]}]
+    return [
+        {"Name": f"tag:{MANAGED_TAG[0]}", "Values": [MANAGED_TAG[1]]},
+        {"Name": f"tag:{NAME_TAG}", "Values": [name]},
+    ]
+
+
+USER_DATA_LIMIT = 16384  # EC2's cap on user data, before base64
+
+
+def fit_user_data(script: str) -> str | bytes:
+    """The boot script as EC2 user data. Over EC2's 16 KB cap (the inline compose file and visual bundle alone pass it)
+    it goes gzipped: cloud-init unpacks gzip user data before running it, and boto3 base64-encodes bytes as-is."""
+    raw = script.encode()
+    if len(raw) <= USER_DATA_LIMIT:
+        return script
+    packed = gzip.compress(raw, mtime=0)
+    if len(packed) > USER_DATA_LIMIT:
+        raise SystemExit(f"The server's boot script is {len(packed)} bytes even gzipped; EC2 allows {USER_DATA_LIMIT}.")
+    return packed
 
 
 class Deployer:
-    def __init__(self, plan: AwsPlan, ec2, iam, ssm, account_id: str, say: Callable[[str], None] = print,
-                 sleep: Callable[[float], None] = time.sleep):
+    def __init__(
+        self,
+        plan: AwsPlan,
+        ec2,
+        iam,
+        ssm,
+        account_id: str,
+        say: Callable[[str], None] = print,
+        sleep: Callable[[float], None] = time.sleep,
+    ):
         self.p, self.ec2, self.iam, self.ssm, self.say, self.sleep = plan, ec2, iam, ssm, say, sleep
         self.account_id = account_id
 
@@ -144,8 +214,10 @@ class Deployer:
         return f"/tico/{self.p.name}/env"
 
     def find_instance(self) -> dict | None:
-        r = self.ec2.describe_instances(Filters=_filters(self.p.name) + [
-            {"Name": "instance-state-name", "Values": ["pending", "running", "stopping", "stopped"]}])
+        r = self.ec2.describe_instances(
+            Filters=_filters(self.p.name)
+            + [{"Name": "instance-state-name", "Values": ["pending", "running", "stopping", "stopped"]}]
+        )
         found = [i for res in r["Reservations"] for i in res["Instances"] if is_ours(i.get("Tags"), self.p.name)]
         return found[0] if found else None
 
@@ -155,8 +227,11 @@ class Deployer:
         tier = {"Tier": "Advanced"} if company_file else {}
         if company_file and len(env_text.encode()) > 8192:
             from backend.company_file import starter
-            raise SystemExit("The starter plan and install settings exceed AWS Parameter Store's 8 KB limit. "
-                             + starter.IMPORT_IN_APP)
+
+            raise SystemExit(
+                "The starter plan and install settings exceed AWS Parameter Store's 8 KB limit. "
+                + starter.IMPORT_IN_APP
+            )
         self.ssm.put_parameter(Name=self.param_name, Value=env_text, Type="SecureString", Overwrite=True, **tier)
         self.ssm.add_tags_to_resource(ResourceType="Parameter", ResourceId=self.param_name, Tags=tags(self.p.name))
 
@@ -179,14 +254,38 @@ class Deployer:
         else:
             if not is_ours(s3.get_bucket_tagging(**owned).get("TagSet"), self.p.name):
                 raise SystemExit("The starter plan bucket was not created by this setup; refusing to reuse it.")
-        s3.put_public_access_block(**owned, PublicAccessBlockConfiguration={
-            "BlockPublicAcls": True, "IgnorePublicAcls": True, "BlockPublicPolicy": True, "RestrictPublicBuckets": True})
-        s3.put_bucket_ownership_controls(**owned, OwnershipControls={"Rules": [{"ObjectOwnership": "BucketOwnerEnforced"}]})
-        s3.put_bucket_encryption(**owned, ServerSideEncryptionConfiguration={
-            "Rules": [{"ApplyServerSideEncryptionByDefault": {"SSEAlgorithm": "AES256"}}]})
-        s3.put_bucket_lifecycle_configuration(**owned, LifecycleConfiguration={"Rules": [{
-            "ID": "expire-starter-plans", "Status": "Enabled", "Filter": {"Prefix": f"plans/{self.p.name}/"},
-            "Expiration": {"Days": 1}, "AbortIncompleteMultipartUpload": {"DaysAfterInitiation": 1}}]})
+        s3.put_public_access_block(
+            **owned,
+            PublicAccessBlockConfiguration={
+                "BlockPublicAcls": True,
+                "IgnorePublicAcls": True,
+                "BlockPublicPolicy": True,
+                "RestrictPublicBuckets": True,
+            },
+        )
+        s3.put_bucket_ownership_controls(
+            **owned, OwnershipControls={"Rules": [{"ObjectOwnership": "BucketOwnerEnforced"}]}
+        )
+        s3.put_bucket_encryption(
+            **owned,
+            ServerSideEncryptionConfiguration={
+                "Rules": [{"ApplyServerSideEncryptionByDefault": {"SSEAlgorithm": "AES256"}}]
+            },
+        )
+        s3.put_bucket_lifecycle_configuration(
+            **owned,
+            LifecycleConfiguration={
+                "Rules": [
+                    {
+                        "ID": "expire-starter-plans",
+                        "Status": "Enabled",
+                        "Filter": {"Prefix": f"plans/{self.p.name}/"},
+                        "Expiration": {"Days": 1},
+                        "AbortIncompleteMultipartUpload": {"DaysAfterInitiation": 1},
+                    }
+                ]
+            },
+        )
 
     def put_plan(self, s3, key: str, data: str) -> None:
         """The packed starter plan, for the server to copy once at first boot (remote.bootstrap_script). Plan only:
@@ -207,23 +306,39 @@ class Deployer:
 
     def ensure_role(self) -> str:
         n = f"tico-{self.p.name}"
-        trust = {"Version": "2012-10-17", "Statement": [{"Effect": "Allow", "Principal": {"Service": "ec2.amazonaws.com"},
-                                                         "Action": "sts:AssumeRole"}]}
+        trust = {
+            "Version": "2012-10-17",
+            "Statement": [
+                {"Effect": "Allow", "Principal": {"Service": "ec2.amazonaws.com"}, "Action": "sts:AssumeRole"}
+            ],
+        }
         # The tags and the boundary go in the CreateRole call itself: an account that only lets setup create roles under a
         # boundary, tagged ManagedBy=tico-setup, refuses a role that would get them afterwards.
         boundary = {"PermissionsBoundary": self.p.boundary} if self.p.boundary else {}
         try:
-            self.iam.create_role(RoleName=n, AssumeRolePolicyDocument=json.dumps(trust), Tags=tags(self.p.name), **boundary)
+            self.iam.create_role(
+                RoleName=n, AssumeRolePolicyDocument=json.dumps(trust), Tags=tags(self.p.name), **boundary
+            )
         except self.iam.exceptions.EntityAlreadyExistsException:
             if not is_ours(self.iam.list_role_tags(RoleName=n)["Tags"], self.p.name):
-                raise SystemExit(f"IAM role {n} exists but was not created by tico setup; refusing to reuse it.") from None
+                raise SystemExit(
+                    f"IAM role {n} exists but was not created by tico setup; refusing to reuse it."
+                ) from None
         self.iam.attach_role_policy(RoleName=n, PolicyArn=SSM_CORE)
         arn = self.ssm_param_arn()
-        pol = {"Version": "2012-10-17", "Statement": [{"Effect": "Allow", "Action": "ssm:GetParameter", "Resource": arn}]}
+        pol = {
+            "Version": "2012-10-17",
+            "Statement": [{"Effect": "Allow", "Action": "ssm:GetParameter", "Resource": arn}],
+        }
         if self.p.plan_bucket:
             # Its own plan only; a boundary, when there is one, only limits this and grants nothing.
-            pol["Statement"].append({"Effect": "Allow", "Action": "s3:GetObject",
-                                     "Resource": f"arn:aws:s3:::{self.p.plan_bucket}/plans/{self.p.name}/*"})
+            pol["Statement"].append(
+                {
+                    "Effect": "Allow",
+                    "Action": "s3:GetObject",
+                    "Resource": f"arn:aws:s3:::{self.p.plan_bucket}/plans/{self.p.name}/*",
+                }
+            )
         self.iam.put_role_policy(RoleName=n, PolicyName="tico-env", PolicyDocument=json.dumps(pol))
         try:
             self.iam.create_instance_profile(InstanceProfileName=n, Tags=tags(self.p.name))
@@ -242,12 +357,26 @@ class Deployer:
             return r[0]["GroupId"]
         vpcs = self.ec2.describe_vpcs(Filters=[{"Name": "isDefault", "Values": ["true"]}])["Vpcs"]
         if not vpcs:
-            raise SystemExit("This region has no default VPC. Pick another region (--aws-region) or create a default VPC.")
-        gid = self.ec2.create_security_group(GroupName=n, Description="Tico server", VpcId=vpcs[0]["VpcId"],
-                                             TagSpecifications=[{"ResourceType": "security-group", "Tags": tags(self.p.name, n)}])["GroupId"]
+            raise SystemExit(
+                "This region has no default VPC. Pick another region (--aws-region) or create a default VPC."
+            )
+        gid = self.ec2.create_security_group(
+            GroupName=n,
+            Description="Tico server",
+            VpcId=vpcs[0]["VpcId"],
+            TagSpecifications=[{"ResourceType": "security-group", "Tags": tags(self.p.name, n)}],
+        )["GroupId"]
         if self.p.ports:
-            perms = [{"IpProtocol": "tcp", "FromPort": p, "ToPort": p, "IpRanges": [{"CidrIp": "0.0.0.0/0"}],
-                      "Ipv6Ranges": [{"CidrIpv6": "::/0"}]} for p in self.p.ports]
+            perms = [
+                {
+                    "IpProtocol": "tcp",
+                    "FromPort": p,
+                    "ToPort": p,
+                    "IpRanges": [{"CidrIp": "0.0.0.0/0"}],
+                    "Ipv6Ranges": [{"CidrIpv6": "::/0"}],
+                }
+                for p in self.p.ports
+            ]
             perms.append({"IpProtocol": "udp", "FromPort": 443, "ToPort": 443, "IpRanges": [{"CidrIp": "0.0.0.0/0"}]})
             self.ec2.authorize_security_group_ingress(GroupId=gid, IpPermissions=perms)
         return gid
@@ -256,7 +385,10 @@ class Deployer:
         r = self.ec2.describe_addresses(Filters=_filters(self.p.name))["Addresses"]
         if r:
             return r[0]["AllocationId"], r[0]["PublicIp"]
-        a = self.ec2.allocate_address(Domain="vpc", TagSpecifications=[{"ResourceType": "elastic-ip", "Tags": tags(self.p.name, f"tico-{self.p.name}")}])
+        a = self.ec2.allocate_address(
+            Domain="vpc",
+            TagSpecifications=[{"ResourceType": "elastic-ip", "Tags": tags(self.p.name, f"tico-{self.p.name}")}],
+        )
         return a["AllocationId"], a["PublicIp"]
 
     def public_subnet(self) -> str:
@@ -267,14 +399,18 @@ class Deployer:
         """
         vpcs = self.ec2.describe_vpcs(Filters=[{"Name": "isDefault", "Values": ["true"]}])["Vpcs"]
         if not vpcs:
-            raise SystemExit("This region has no default VPC. Pick another region (--aws-region) or create a default VPC.")
+            raise SystemExit(
+                "This region has no default VPC. Pick another region (--aws-region) or create a default VPC."
+            )
         vpc = vpcs[0]["VpcId"]
         flt = [{"Name": "vpc-id", "Values": [vpc]}]
         tables = self.ec2.describe_route_tables(Filters=flt)["RouteTables"]
 
         def to_igw(t: dict) -> bool:
-            return any(r.get("DestinationCidrBlock") == "0.0.0.0/0" and str(r.get("GatewayId", "")).startswith("igw-")
-                       for r in t.get("Routes", []))
+            return any(
+                r.get("DestinationCidrBlock") == "0.0.0.0/0" and str(r.get("GatewayId", "")).startswith("igw-")
+                for r in t.get("Routes", [])
+            )
 
         main = [t for t in tables if any(a.get("Main") for a in t.get("Associations", []))]
         explicit = {a["SubnetId"]: t for t in tables for a in t.get("Associations", []) if a.get("SubnetId")}
@@ -282,9 +418,11 @@ class Deployer:
         # A subnet with no explicit association uses the VPC's main route table.
         ok = [s for s in subnets if to_igw(explicit.get(s["SubnetId"]) or (main[0] if main else {}))]
         if not ok:
-            raise SystemExit(f"No subnet in VPC {vpc} routes 0.0.0.0/0 to an internet gateway (igw-...), so the server would be "
-                             "unreachable from the internet and Let's Encrypt could not issue a certificate. Add such a route to a "
-                             "subnet's route table (or create a public subnet), or use --front-door cloudflared, which needs no inbound access.")
+            raise SystemExit(
+                f"No subnet in VPC {vpc} routes 0.0.0.0/0 to an internet gateway (igw-...), so the server would be "
+                "unreachable from the internet and Let's Encrypt could not issue a certificate. Add such a route to a "
+                "subnet's route table (or create a public subnet), or use --front-door cloudflared, which needs no inbound access."
+            )
         ok.sort(key=lambda s: not s.get("DefaultForAz"))
         return ok[0]["SubnetId"]
 
@@ -295,12 +433,29 @@ class Deployer:
         ami = self.ssm.get_parameter(Name=parameter)["Parameter"]["Value"]
         n = f"tico-{self.p.name}"
         args = dict(
-            ImageId=ami, InstanceType=self.p.instance_type, MinCount=1, MaxCount=1, UserData=user_data,
-            IamInstanceProfile={"Name": profile}, SecurityGroupIds=[sg],
+            ImageId=ami,
+            InstanceType=self.p.instance_type,
+            MinCount=1,
+            MaxCount=1,
+            UserData=fit_user_data(user_data),
+            IamInstanceProfile={"Name": profile},
+            SecurityGroupIds=[sg],
             MetadataOptions={"HttpTokens": "required", "HttpPutResponseHopLimit": 1, "HttpEndpoint": "enabled"},
-            BlockDeviceMappings=[{"DeviceName": "/dev/sda1" if self.p.os_family == "ubuntu" else "/dev/xvda",
-                                  "Ebs": {"VolumeSize": self.p.volume_gib, "VolumeType": "gp3", "Encrypted": True, "DeleteOnTermination": True}}],
-            TagSpecifications=[{"ResourceType": rt, "Tags": tags(self.p.name, n)} for rt in ("instance", "volume", "network-interface")])
+            BlockDeviceMappings=[
+                {
+                    "DeviceName": "/dev/sda1" if self.p.os_family == "ubuntu" else "/dev/xvda",
+                    "Ebs": {
+                        "VolumeSize": self.p.volume_gib,
+                        "VolumeType": "gp3",
+                        "Encrypted": True,
+                        "DeleteOnTermination": True,
+                    },
+                }
+            ],
+            TagSpecifications=[
+                {"ResourceType": rt, "Tags": tags(self.p.name, n)} for rt in ("instance", "volume", "network-interface")
+            ],
+        )
         if subnet:
             args["SubnetId"] = subnet
         for attempt in range(8):  # a new instance profile takes a few seconds to be usable
@@ -316,7 +471,9 @@ class Deployer:
         """Security group and Elastic IP, so DNS can be set before the server exists."""
         sg = self.ensure_sg()
         alloc, ip = self.ensure_eip() if self.p.elastic_ip else ("", "")
-        subnet = self.public_subnet() if self.p.ports else ""  # only a server that takes inbound traffic needs a public subnet
+        subnet = (
+            self.public_subnet() if self.p.ports else ""
+        )  # only a server that takes inbound traffic needs a public subnet
         return {"sg": sg, "alloc": alloc, "public_ip": ip, "subnet": subnet}
 
     def launch_or_reuse(self, prep: dict, user_data: str) -> tuple[str, bool]:
@@ -359,13 +516,27 @@ class Deployer:
 
 # --- destroy -----------------------------------------------------------------------------------------------
 
+
 def discover(ec2, iam, ssm, name: str) -> dict[str, list[str]]:
     """Everything tagged for `name`, by kind. Anything without both tags is invisible here."""
     out: dict[str, list[str]] = {}
-    r = ec2.describe_instances(Filters=_filters(name) + [{"Name": "instance-state-name", "Values": ["pending", "running", "stopping", "stopped"]}])
-    out["instance"] = [i["InstanceId"] for res in r["Reservations"] for i in res["Instances"] if is_ours(i.get("Tags"), name)]
-    out["elastic-ip"] = [a["AllocationId"] for a in ec2.describe_addresses(Filters=_filters(name))["Addresses"] if is_ours(a.get("Tags"), name)]
-    out["security-group"] = [g["GroupId"] for g in ec2.describe_security_groups(Filters=_filters(name))["SecurityGroups"] if is_ours(g.get("Tags"), name)]
+    r = ec2.describe_instances(
+        Filters=_filters(name)
+        + [{"Name": "instance-state-name", "Values": ["pending", "running", "stopping", "stopped"]}]
+    )
+    out["instance"] = [
+        i["InstanceId"] for res in r["Reservations"] for i in res["Instances"] if is_ours(i.get("Tags"), name)
+    ]
+    out["elastic-ip"] = [
+        a["AllocationId"]
+        for a in ec2.describe_addresses(Filters=_filters(name))["Addresses"]
+        if is_ours(a.get("Tags"), name)
+    ]
+    out["security-group"] = [
+        g["GroupId"]
+        for g in ec2.describe_security_groups(Filters=_filters(name))["SecurityGroups"]
+        if is_ours(g.get("Tags"), name)
+    ]
     n = f"tico-{name}"
     try:
         if is_ours(iam.list_role_tags(RoleName=n)["Tags"], name):
@@ -384,17 +555,30 @@ def discover(ec2, iam, ssm, name: str) -> dict[str, list[str]]:
 def addresses(ec2, name: str) -> set[str]:
     """The public addresses of what is tagged for `name`: its Elastic IPs and its instance's IPv4 and IPv6 addresses. A DNS
     record pointing anywhere else is not this server's."""
-    out = {a["PublicIp"] for a in ec2.describe_addresses(Filters=_filters(name))["Addresses"]
-           if is_ours(a.get("Tags"), name) and a.get("PublicIp")}
-    r = ec2.describe_instances(Filters=_filters(name) + [{"Name": "instance-state-name", "Values": ["pending", "running", "stopping", "stopped"]}])
+    out = {
+        a["PublicIp"]
+        for a in ec2.describe_addresses(Filters=_filters(name))["Addresses"]
+        if is_ours(a.get("Tags"), name) and a.get("PublicIp")
+    }
+    r = ec2.describe_instances(
+        Filters=_filters(name)
+        + [{"Name": "instance-state-name", "Values": ["pending", "running", "stopping", "stopped"]}]
+    )
     for i in (i for res in r["Reservations"] for i in res["Instances"] if is_ours(i.get("Tags"), name)):
         out |= {i[k] for k in ("PublicIpAddress", "Ipv6Address") if i.get(k)}
         out |= {v["Ipv6Address"] for n in i.get("NetworkInterfaces", []) for v in n.get("Ipv6Addresses", [])}
     return out
 
 
-def destroy(ec2, iam, ssm, found: dict[str, list[str]], say: Callable[[str], None] = print,
-            sleep: Callable[[float], None] = time.sleep, dns_done: bool = False) -> None:
+def destroy(
+    ec2,
+    iam,
+    ssm,
+    found: dict[str, list[str]],
+    say: Callable[[str], None] = print,
+    sleep: Callable[[float], None] = time.sleep,
+    dns_done: bool = False,
+) -> None:
     if found.get("instance"):
         ec2.terminate_instances(InstanceIds=found["instance"])
         say("  waiting for the instance to terminate ...")

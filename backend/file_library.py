@@ -52,32 +52,51 @@ SCHEMA = [
     "BEGIN SELECT RAISE(ABORT, 'file versions are immutable'); END",
 ]
 # Created apart so a SQLite built without FTS5 still starts: search then matches titles only.
-FTS = ("CREATE VIRTUAL TABLE IF NOT EXISTS file_text USING fts5(title, text, "
-       "tokenize='porter unicode61')")
+FTS = "CREATE VIRTUAL TABLE IF NOT EXISTS file_text USING fts5(title, text, tokenize='porter unicode61')"
 
 LIST_MAX = 100
 SEARCH_MAX = 50
-LIST_BYTES = 256 * 1024                  # a page of the list stops here, whatever its limit
+LIST_BYTES = 256 * 1024  # a page of the list stops here, whatever its limit
 SCAN_CHUNK = 200
-SCAN_MAX = 5000                          # rows one list or search looks at before it answers with a cursor
-READ_MAX = 5 * 1024 * 1024               # bytes read to index one version
-TEXT_MAX = 200_000                       # characters kept per version
+SCAN_MAX = 5000  # rows one list or search looks at before it answers with a cursor
+READ_MAX = 5 * 1024 * 1024  # bytes read to index one version
+TEXT_MAX = 200_000  # characters kept per version
 CSV_ROWS = 50
 BACKFILL_BATCH = 100
 PURGE_ATTEMPTS = 10
 # What holds a blob apart from a message or a file (`release_message_files`): a task's attachment, one in the trash, a
-# meeting's media, a scanned letter, a piece of market evidence.
-BLOB_HOLDERS = (("message_assets", "blob_id"), ("task_assets", "blob_id"), ("task_trash_assets", "blob_id"),
-                ("media_assets", "blob_id"), ("mail_items", "blob_id"), ("market_evidence", "blob_id"),
-                ("letters", "source_blob_id"), ("letters", "original_blob_id"), ("letter_proofs", "blob_id"))
+# meeting's media, a scanned letter, a piece of market evidence, a requirement's attached evidence.
+BLOB_HOLDERS = (
+    ("message_assets", "blob_id"),
+    ("task_assets", "blob_id"),
+    ("task_trash_assets", "blob_id"),
+    ("media_assets", "blob_id"),
+    ("mail_items", "blob_id"),
+    ("market_evidence", "blob_id"),
+    ("letters", "source_blob_id"),
+    ("letters", "original_blob_id"),
+    ("letter_proofs", "blob_id"),
+    # Evidence attached to a stage requirement (backend/requirement_attachments.py): it keeps its bytes while it counts.
+    ("requirement_attachments", "blob_id"),
+)
 TEXT_TYPES = ("text/markdown", "text/plain", "application/json", "text/yaml")
 TABLE_TYPES = {"text/csv": ",", "text/tab-separated-values": "\t"}
 
 # Library kinds: the filter's words, from a file's stored kind (clients/bot_files.py KINDS); a page is its own kind.
-KINDS = {"page": "Pages", "document": "Documents", "image": "Images", "data": "Data", "media": "Video and audio",
-         "other": "Other"}
-STORED = {"document": ("document", "slides", "design"), "image": ("image",), "data": ("spreadsheet", "data"),
-          "media": ("video", "audio")}
+KINDS = {
+    "page": "Pages",
+    "document": "Documents",
+    "image": "Images",
+    "data": "Data",
+    "media": "Video and audio",
+    "other": "Other",
+}
+STORED = {
+    "document": ("document", "slides", "design"),
+    "image": ("image",),
+    "data": ("spreadsheet", "data"),
+    "media": ("video", "audio"),
+}
 
 
 def kind_filter(kind):
@@ -88,8 +107,11 @@ def kind_filter(kind):
     if kind == "page":
         return "p.file_id IS NOT NULL", []
     stored = [k for group in STORED.values() for k in group] if kind == "other" else list(STORED[kind])
-    return ("p.file_id IS NULL AND f.kind " + ("NOT IN" if kind == "other" else "IN")
-            + " (%s)" % ",".join("?" * len(stored))), stored
+    return (
+        "p.file_id IS NULL AND f.kind "
+        + ("NOT IN" if kind == "other" else "IN")
+        + " (%s)" % ",".join("?" * len(stored))
+    ), stored
 
 
 def ensure(c):
@@ -120,6 +142,7 @@ def has_pins(c):
 # ---------------------------------------------------------------------------------------------- cursors and scans
 def cursor_cipher(key):
     from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+
     return AESGCM(hashlib.sha256(b"tico.file-cursor.v1\0" + key).digest())
 
 
@@ -132,6 +155,7 @@ def encode_cursor(stamp, ident, key):
 
 def decode_cursor(cursor, key):
     from cryptography.exceptions import InvalidTag
+
     try:
         sealed = base64.urlsafe_b64decode(cursor.encode())
         stamp, ident = json.loads(cursor_cipher(key).decrypt(sealed[:12], sealed[12:], b"file-cursor-v1"))
@@ -148,6 +172,7 @@ def scan(c, select, where, params, limit, cursor, keep, budget=None, *, cursor_k
     list of files the viewer mostly may not see stays bounded and still pages on. `budget(row)` may stop a page early
     (bytes), returning False for the row that would not fit."""
     from .files import prime_visible
+
     out, last, scanned = [], None, 0
     position = decode_cursor(cursor, cursor_key) if cursor else None
     while True:
@@ -156,15 +181,19 @@ def scan(c, select, where, params, limit, cursor, keep, budget=None, *, cursor_k
         if position:
             clauses.append("(f.last_activity_at<? OR (f.last_activity_at=? AND f.id<?))")
             args += [position[0], position[0], position[1]]
-        sql = select + (" WHERE " + " AND ".join(clauses) if clauses else "") + \
-            " ORDER BY f.last_activity_at DESC, f.id DESC LIMIT ?"
+        sql = (
+            select
+            + (" WHERE " + " AND ".join(clauses) if clauses else "")
+            + " ORDER BY f.last_activity_at DESC, f.id DESC LIMIT ?"
+        )
         batch = c.execute(sql, (*args, SCAN_CHUNK)).fetchall()
         prime_visible(c, batch)
         for r in batch:
             if keep(r):
                 if len(out) == limit or (budget and not budget(r)):
-                    return out, encode_cursor(out[-1]["last_activity_at"], out[-1]["id"], cursor_key) if out else \
-                        encode_cursor(last["last_activity_at"], last["id"], cursor_key) if last else None
+                    return out, encode_cursor(
+                        out[-1]["last_activity_at"], out[-1]["id"], cursor_key
+                    ) if out else encode_cursor(last["last_activity_at"], last["id"], cursor_key) if last else None
                 out.append(r)
             last = r
         scanned += len(batch)
@@ -178,6 +207,7 @@ def scan(c, select, where, params, limit, cursor, keep, budget=None, *, cursor_k
 # ---------------------------------------------------------------------------------------------- text
 class _Text(HTMLParser):
     """The text a person sees on a page: no script, style or markup."""
+
     SKIP = {"script", "style", "noscript", "template", "svg", "head"}
 
     def __init__(self):
@@ -215,7 +245,7 @@ def extract(mime, data, full=False):
         try:
             parser.feed(data.decode("utf-8", errors="replace"))
             parser.close()
-        except Exception:                    # malformed markup: what was read so far
+        except Exception:  # malformed markup: what was read so far
             pass
         text = " ".join(" ".join(parser.title + parser.out).split())
     elif mime in TABLE_TYPES:
@@ -242,7 +272,9 @@ def index(c, fid, version, title, text):
         c.execute("UPDATE file_text_state SET version=?,indexed_at=? WHERE file_id=?", (version, now, fid))
         doc = row["doc"]
     else:
-        doc = c.execute("INSERT INTO file_text_state(file_id,version,indexed_at) VALUES(?,?,?)", (fid, version, now)).lastrowid
+        doc = c.execute(
+            "INSERT INTO file_text_state(file_id,version,indexed_at) VALUES(?,?,?)", (fid, version, now)
+        ).lastrowid
     if has_fts(c):
         c.execute("DELETE FROM file_text WHERE rowid=?", (doc,))
         c.execute("INSERT INTO file_text(rowid,title,text) VALUES(?,?,?)", (doc, title or "", text or ""))
@@ -269,23 +301,56 @@ def adopt_attachments(c, settings, limit=BACKFILL_BATCH):
     from .files import Files
     from .views import default_bot
     from clients import bot_files as BF
-    rows = c.execute("SELECT a.task_id,b.* FROM task_assets a JOIN blobs b ON b.id=a.blob_id "
-                     "WHERE NOT EXISTS (SELECT 1 FROM bot_file_versions v WHERE v.blob_id=b.id) "
-                     "AND NOT EXISTS (SELECT 1 FROM bot_files f WHERE f.id=b.id) LIMIT ?", (limit,)).fetchall()
+
+    rows = c.execute(
+        "SELECT a.task_id,b.* FROM task_assets a JOIN blobs b ON b.id=a.blob_id "
+        "WHERE NOT EXISTS (SELECT 1 FROM bot_file_versions v WHERE v.blob_id=b.id) "
+        "AND NOT EXISTS (SELECT 1 FROM bot_files f WHERE f.id=b.id) LIMIT ?",
+        (limit,),
+    ).fetchall()
     for b in rows:
         task = H.task(c, b["task_id"])
         if not task:
             continue
-        bot = next((H.actor_id(a) for a in (b["owner"], task["owner_id"], task["requester_id"]) if H.is_bot(a)
-                    and H.bot(c, H.actor_id(a))), None) or default_bot(c, settings)
+        bot = next(
+            (
+                H.actor_id(a)
+                for a in (b["owner"], task["owner_id"], task["requester_id"])
+                if H.is_bot(a) and H.bot(c, H.actor_id(a))
+            ),
+            None,
+        ) or default_bot(c, settings)
         if not H.bot(c, bot):
             continue
-        c.execute("INSERT INTO bot_files(id,bot_id,scope,identity,title,kind,mime,locator,task_id,current_version,"
-                  "first_activity_at,last_activity_at) VALUES(?,?,?,?,?,?,?,'tico_blob',?,1,?,?)",
-                  (b["id"], bot, "task:" + b["task_id"], "task-file:" + b["id"], b["name"], BF.kind_of(b["name"]),
-                   b["content_type"], b["task_id"], b["created_at"], b["created_at"]))
-        Files.insert_task_version(c, b["id"], 1, b["id"], b["digest"], b["size"], b["name"], b["content_type"],
-                                  b["owner"], b["created_at"], pending=False)
+        c.execute(
+            "INSERT INTO bot_files(id,bot_id,scope,identity,title,kind,mime,locator,task_id,current_version,"
+            "first_activity_at,last_activity_at) VALUES(?,?,?,?,?,?,?,'tico_blob',?,1,?,?)",
+            (
+                b["id"],
+                bot,
+                "task:" + b["task_id"],
+                "task-file:" + b["id"],
+                b["name"],
+                BF.kind_of(b["name"]),
+                b["content_type"],
+                b["task_id"],
+                b["created_at"],
+                b["created_at"],
+            ),
+        )
+        Files.insert_task_version(
+            c,
+            b["id"],
+            1,
+            b["id"],
+            b["digest"],
+            b["size"],
+            b["name"],
+            b["content_type"],
+            b["owner"],
+            b["created_at"],
+            pending=False,
+        )
     return len(rows)
 
 
@@ -300,7 +365,9 @@ def backfill(store, blobs, limit=BACKFILL_BATCH):
             "LEFT JOIN file_text_state s ON s.file_id=f.id "
             "LEFT JOIN bot_file_versions v ON v.file_id=f.id AND v.version=f.current_version "
             "WHERE f.state<>'deleted' AND (s.file_id IS NULL OR s.version<>f.current_version) "
-            "ORDER BY f.last_activity_at DESC LIMIT ?", (limit,)).fetchall()
+            "ORDER BY f.last_activity_at DESC LIMIT ?",
+            (limit,),
+        ).fetchall()
     found = []
     for r in todo:
         text = ""
@@ -332,14 +399,16 @@ class Library:
         """A team's files: its bots' (the group and the groups under it, as team pages count them) and any file on a
         task one of its bots or people owns."""
         from . import cards
+
         ctx = cards.Ctx(c, self.auth, who, self.store.settings)
         if gid not in ctx.groups:
             raise Problem("not_found", "Team not found", 404)
         actors = sorted(ctx.team_actors(gid))
         bots = [a[4:] for a in actors if a.startswith("bot:")]
-        return ("(f.bot_id IN (SELECT value FROM json_each(?)) OR f.task_id IN "
-                "(SELECT id FROM tasks WHERE owner_id IN (SELECT value FROM json_each(?))))"), [json.dumps(bots),
-                                                                                         json.dumps(actors)]
+        return (
+            "(f.bot_id IN (SELECT value FROM json_each(?)) OR f.task_id IN "
+            "(SELECT id FROM tasks WHERE owner_id IN (SELECT value FROM json_each(?))))"
+        ), [json.dumps(bots), json.dumps(actors)]
 
     def _pins(self, c, who, fid, cache):
         """Where a file is pinned, as places the reader may know of; a task place only when they may read the task."""
@@ -348,7 +417,7 @@ class Library:
         out = []
         for r in c.execute("SELECT DISTINCT place FROM pins WHERE item=?", ("page:" + fid,)):
             place = str(r["place"])
-            if place.startswith("person:") and place != own_place(who):     # someone's My dashboard is theirs alone
+            if place.startswith("person:") and place != own_place(who):  # someone's My dashboard is theirs alone
                 continue
             if place.startswith("task:") and not self.files.task_info(c, who, place[5:], cache):
                 continue
@@ -358,17 +427,34 @@ class Library:
     def row_view(self, c, who, r, caches, known):
         value = self.files.view(c, who, r, caches)
         page = r["page_cadence"] is not None
-        value.update(kind_label=KINDS[library_kind(r["kind"], page)], library_kind=library_kind(r["kind"], page),
-                     bot_name=known.get("bot:" + r["bot_id"], r["bot_id"]), actor_name=known.get(value.get("actor") or "", ""),
-                     page={"cadence": r["page_cadence"], "archived": bool(r["page_archived"])} if page else None,
-                     archived=bool(r["archived"] or (page and r["page_archived"])),
-                     pins=self._pins(c, who, r["id"], caches["task"]))
+        value.update(
+            kind_label=KINDS[library_kind(r["kind"], page)],
+            library_kind=library_kind(r["kind"], page),
+            bot_name=known.get("bot:" + r["bot_id"], r["bot_id"]),
+            actor_name=known.get(value.get("actor") or "", ""),
+            page={"cadence": r["page_cadence"], "archived": bool(r["page_archived"])} if page else None,
+            archived=bool(r["archived"] or (page and r["page_archived"])),
+            pins=self._pins(c, who, r["id"], caches["task"]),
+        )
         for key in ("poster_blob_id", "thumb_blob_id"):
             value.pop(key, None)
         return value
 
-    def listing(self, who, *, kind="", bot="", team="", task="", since="", until="", pinned=False, archived=False,
-                limit=50, cursor=""):
+    def listing(
+        self,
+        who,
+        *,
+        kind="",
+        bot="",
+        team="",
+        task="",
+        since="",
+        until="",
+        pinned=False,
+        archived=False,
+        limit=50,
+        cursor="",
+    ):
         if who.role not in ("owner", "human", "bot"):
             raise Problem("forbidden", "People and bots list files", 403)
         where = ["f.state<>'deleted'", "(f.locator<>'tico_blob' OR f.current_version>0)"]
@@ -398,8 +484,11 @@ class Library:
                 where.append(sql)
                 params += args
             if pinned:
-                where.append("EXISTS (SELECT 1 FROM pins WHERE item='page:' || f.id AND "
-                             "(place NOT LIKE 'person:%' OR place=?))" if has_pins(c) else "0")
+                where.append(
+                    "EXISTS (SELECT 1 FROM pins WHERE item='page:' || f.id AND (place NOT LIKE 'person:%' OR place=?))"
+                    if has_pins(c)
+                    else "0"
+                )
                 if has_pins(c):
                     params.append(own_place(who))
             cache, caches = {}, {"task": {}, "repo": {}}
@@ -409,10 +498,19 @@ class Library:
                 # About what the row costs on the wire; the page ends before the one that would pass the cap.
                 spent[0] += 900 + len(r["title"] or "") * 2
                 return spent[0] <= LIST_BYTES
-            rows, nxt = scan(c, "SELECT f.*,p.cadence AS page_cadence,p.archived AS page_archived FROM bot_files f "
-                                "LEFT JOIN pages p ON p.file_id=f.id", where, params, limit, cursor,
-                             lambda r: self.files.visible(c, who, r, cache), budget,
-                             cursor_key=visuals.key_for(self.app, self.store.settings))
+
+            rows, nxt = scan(
+                c,
+                "SELECT f.*,p.cadence AS page_cadence,p.archived AS page_archived FROM bot_files f "
+                "LEFT JOIN pages p ON p.file_id=f.id",
+                where,
+                params,
+                limit,
+                cursor,
+                lambda r: self.files.visible(c, who, r, cache),
+                budget,
+                cursor_key=visuals.key_for(self.app, self.store.settings),
+            )
             known = names.lookup(c, {"bot:" + r["bot_id"] for r in rows})
             files = [self.row_view(c, who, r, caches, known) for r in rows]
             known.update(names.lookup(c, {f["actor"] for f in files if f.get("actor")}))
@@ -432,10 +530,11 @@ class Library:
         with self.store.read() as c:
             candidates = self._candidates(c, tokens, kind_sql, kind_args)
             from .files import prime_visible
+
             cache, out = {}, []
             weights = {t: 1.0 for t in tokens}
             for start in range(0, len(candidates), SCAN_CHUNK):
-                chunk = candidates[start:start + SCAN_CHUNK]
+                chunk = candidates[start : start + SCAN_CHUNK]
                 prime_visible(c, chunk)
                 for r in chunk:
                     if not self.files.visible(c, who, r, cache):
@@ -445,8 +544,10 @@ class Library:
                     have = [t for t in tokens if manual._hits(title_words, t) or manual._stem(t) in body]
                     if not have:
                         continue
-                    score = sum(weights[t] * (10 + 15 * manual._hits(title_words, t)
-                                              + min(body.count(manual._stem(t)), 5)) for t in have)
+                    score = sum(
+                        weights[t] * (10 + 15 * manual._hits(title_words, t) + min(body.count(manual._stem(t)), 5))
+                        for t in have
+                    )
                     if len(have) == len(tokens):
                         score *= 2
                     out.append((score, r))
@@ -455,26 +556,42 @@ class Library:
             out.sort(key=lambda pair: (-pair[0], pair[1]["title"].casefold()))
             out = out[:limit]
             known = names.lookup(c, {"bot:" + r["bot_id"] for _, r in out})
-            return {"results": [{"id": r["id"], "title": r["title"], "kind": r["kind"],
-                                 "library_kind": library_kind(r["kind"], r["page_cadence"] is not None),
-                                 "bot": r["bot_id"], "bot_name": known.get("bot:" + r["bot_id"], r["bot_id"]),
-                                 "version": r["current_version"], "updated_at": r["last_activity_at"],
-                                 "url": r["url"] if r["locator"] == "remote_link" else None,
-                                 "page": r["page_cadence"] is not None,
-                                 "excerpt": excerpt(r["text"] or "", tokens), "score": round(score, 3)}
-                                for score, r in out]}
+            return {
+                "results": [
+                    {
+                        "id": r["id"],
+                        "title": r["title"],
+                        "kind": r["kind"],
+                        "library_kind": library_kind(r["kind"], r["page_cadence"] is not None),
+                        "bot": r["bot_id"],
+                        "bot_name": known.get("bot:" + r["bot_id"], r["bot_id"]),
+                        "version": r["current_version"],
+                        "updated_at": r["last_activity_at"],
+                        "url": r["url"] if r["locator"] == "remote_link" else None,
+                        "page": r["page_cadence"] is not None,
+                        "excerpt": excerpt(r["text"] or "", tokens),
+                        "score": round(score, 3),
+                    }
+                    for score, r in out
+                ]
+            }
 
     def _candidates(self, c, tokens, kind_sql="1", kind_args=()):
         """Rows whose title or text match, best match first, at most SCAN_MAX: FTS5 when the build has it, else
         titles alone."""
-        select = ("SELECT f.*,p.cadence AS page_cadence,{text} AS text FROM bot_files f "
-                  "LEFT JOIN pages p ON p.file_id=f.id {join} WHERE f.state<>'deleted' AND f.archived=0 "
-                  "AND COALESCE(p.archived,0)=0 AND (" + kind_sql + ") {match} LIMIT ?")
+        select = (
+            "SELECT f.*,p.cadence AS page_cadence,{text} AS text FROM bot_files f "
+            "LEFT JOIN pages p ON p.file_id=f.id {join} WHERE f.state<>'deleted' AND f.archived=0 "
+            "AND COALESCE(p.archived,0)=0 AND (" + kind_sql + ") {match} LIMIT ?"
+        )
         if has_fts(c):
             from .docs import Docs
-            query = select.format(text="file_text.text", join="JOIN file_text_state s ON s.file_id=f.id "
-                                  "JOIN file_text ON file_text.rowid=s.doc",
-                                  match="AND file_text MATCH ? ORDER BY bm25(file_text, 10.0, 1.0)")
+
+            query = select.format(
+                text="file_text.text",
+                join="JOIN file_text_state s ON s.file_id=f.id JOIN file_text ON file_text.rowid=s.doc",
+                match="AND file_text MATCH ? ORDER BY bm25(file_text, 10.0, 1.0)",
+            )
             seen, rows = set(), []
             stemmed = [manual._stem(t) for t in tokens]
             for expression in Docs.expressions(stemmed):
@@ -488,8 +605,10 @@ class Library:
                     break
             return rows
         like = " AND ".join("f.title LIKE ?" for _ in tokens)
-        return c.execute(select.format(text="''", join="", match="AND " + like + " ORDER BY f.last_activity_at DESC"),
-                         (*kind_args, *["%" + t + "%" for t in tokens], SCAN_MAX)).fetchall()
+        return c.execute(
+            select.format(text="''", join="", match="AND " + like + " ORDER BY f.last_activity_at DESC"),
+            (*kind_args, *["%" + t + "%" for t in tokens], SCAN_MAX),
+        ).fetchall()
 
     # ------------------------------------------------------------------ hard delete
     def delete(self, request, fid):
@@ -504,6 +623,7 @@ class Library:
             if not row or row["state"] == "deleted" or not self.files.visible(c, who, row, {}):
                 raise Problem("not_found", "File not found", 404)
             return purge_rows(c, who.actor, row)
+
         result = self.files.write(request, who, {"id": fid, "delete": True}, work)
         drain(self.store, self.files.blobs)
         return result
@@ -528,7 +648,7 @@ def excerpt(text, tokens, width=240):
     begin = max(0, at - width // 3)
     if begin:
         begin = text.find(" ", begin) + 1 or begin
-    piece = text[begin:begin + width]
+    piece = text[begin : begin + width]
     cut = piece.rfind(" ")
     return ("… " if begin else "") + (piece[:cut] if cut > width // 2 else piece) + " …"
 
@@ -554,11 +674,14 @@ def purge_rows(c, actor, row):
     file's search text; file and page rows retain authorization tombstones. Bytes no row needs any more are queued."""
     fid, now = row["id"], H.now()
     versions = c.execute("SELECT * FROM bot_file_versions WHERE file_id=?", (fid,)).fetchall()
-    c.execute("INSERT INTO file_deletions(file_id,actor,versions,created_at) VALUES(?,?,?,?)",
-              (fid, actor, len(versions), now))
+    c.execute(
+        "INSERT INTO file_deletions(file_id,actor,versions,created_at) VALUES(?,?,?,?)",
+        (fid, actor, len(versions), now),
+    )
     blob_ids = {b for v in versions for b in (v["blob_id"], v["poster_blob_id"], v["thumb_blob_id"]) if b}
     if c.execute("SELECT 1 FROM pages WHERE file_id=?", (fid,)).fetchone():
         from .files import retain_page_label_sources
+
         retain_page_label_sources(c, row)
         for v in versions:
             for key in ("blob_id", "poster_blob_id", "thumb_blob_id", "digest", "source_digest"):
@@ -566,17 +689,23 @@ def purge_rows(c, actor, row):
                     c.execute("INSERT OR IGNORE INTO page_identities(identity,file_id) VALUES(?,?)", (v[key], fid))
         c.execute("UPDATE pages SET deleted_at=?,archived=1,as_of=NULL,replaced_by_id=NULL WHERE file_id=?", (now, fid))
     c.execute("DELETE FROM bot_file_versions WHERE file_id=?", (fid,))
-    c.execute("UPDATE bot_files SET title='Deleted file',state='deleted',archived=1,url=NULL,current_version=0,"
-              "identity=?,last_activity_at=? WHERE id=?", ("deleted:" + fid, now, fid))
+    c.execute(
+        "UPDATE bot_files SET title='Deleted file',state='deleted',archived=1,url=NULL,current_version=0,"
+        "identity=?,last_activity_at=? WHERE id=?",
+        ("deleted:" + fid, now, fid),
+    )
     release_blobs(c, blob_ids, now)
     unindex(c, fid)
     c.execute("UPDATE pages SET replaced_by_id=NULL WHERE replaced_by_id=?", (fid,))
     from . import counsel
+
     counsel.revoke_page_copies(c, None, fid)
     if has_pins(c):
         c.execute("DELETE FROM pins WHERE item=?", ("page:" + fid,))
-    c.execute("INSERT INTO bot_file_activity(file_id,actor,action,task_id,created_at,detail) VALUES(?,?,?,?,?,?)",
-              (fid, actor, "deleted", row["task_id"], now, json.dumps({"versions": len(versions)})))
+    c.execute(
+        "INSERT INTO bot_file_activity(file_id,actor,action,task_id,created_at,detail) VALUES(?,?,?,?,?,?)",
+        (fid, actor, "deleted", row["task_id"], now, json.dumps({"versions": len(versions)})),
+    )
     H.event(c, actor, "file.delete", fid, {"versions": len(versions)})
     return {"deleted": fid, "versions": len(versions)}
 
@@ -585,6 +714,7 @@ def release_blobs(c, blob_ids, now):
     """The blob rows here, with their previews, that no file, meeting or other blob uses, and their links. Bytes no row
     needs any more are queued, and `drain` removes them from storage after the write commits."""
     from . import visuals
+
     blob_ids = set(blob_ids)
     for bid in list(blob_ids):
         media = c.execute("SELECT poster_blob_id,thumb_blob_id FROM blob_media WHERE blob_id=?", (bid,)).fetchone()
@@ -596,7 +726,8 @@ def release_blobs(c, blob_ids, now):
             "SELECT 1 FROM bot_file_versions WHERE blob_id=? OR poster_blob_id=? OR thumb_blob_id=? "
             "UNION ALL SELECT 1 FROM media_assets WHERE blob_id=? "
             "UNION ALL SELECT 1 FROM blob_media WHERE blob_id<>? AND (poster_blob_id=? OR thumb_blob_id=?) LIMIT 1",
-            (bid, bid, bid, bid, bid, bid, bid)).fetchone()
+            (bid, bid, bid, bid, bid, bid, bid),
+        ).fetchone()
         blob = c.execute("SELECT digest,size,content_type FROM blobs WHERE id=?", (bid,)).fetchone()
         if shared or not blob:
             continue
@@ -607,8 +738,11 @@ def release_blobs(c, blob_ids, now):
         digests[blob["digest"]] = visuals.kind_of(mime, blob["size"]) if mime else ""
     for digest, kind in digests.items():
         if not still_used(c, digest):
-            c.execute("INSERT INTO blob_purges(digest,kind,queued_at) VALUES(?,?,?) ON CONFLICT(digest) DO UPDATE SET "
-                      "attempts=0,error=''", (digest, kind if kind in ("page", "svg") else "", now))
+            c.execute(
+                "INSERT INTO blob_purges(digest,kind,queued_at) VALUES(?,?,?) ON CONFLICT(digest) DO UPDATE SET "
+                "attempts=0,error=''",
+                (digest, kind if kind in ("page", "svg") else "", now),
+            )
 
 
 def _kept_elsewhere(c, bid):
@@ -617,10 +751,15 @@ def _kept_elsewhere(c, bid):
     for table, column in BLOB_HOLDERS:
         if H._has_table(c, table) and c.execute(f"SELECT 1 FROM {table} WHERE {column}=? LIMIT 1", (bid,)).fetchone():
             return True
-    return c.execute(
-        "SELECT 1 FROM bot_file_versions v JOIN bot_files f ON f.id=v.file_id WHERE (v.blob_id=? OR v.poster_blob_id=? "
-        "OR v.thumb_blob_id=?) AND (f.identity<>? OR (SELECT COUNT(*) FROM bot_file_versions o WHERE o.file_id=f.id)>1) "
-        "LIMIT 1", (bid, bid, bid, "chat-file:" + bid)).fetchone() is not None
+    return (
+        c.execute(
+            "SELECT 1 FROM bot_file_versions v JOIN bot_files f ON f.id=v.file_id WHERE (v.blob_id=? OR v.poster_blob_id=? "
+            "OR v.thumb_blob_id=?) AND (f.identity<>? OR (SELECT COUNT(*) FROM bot_file_versions o WHERE o.file_id=f.id)>1) "
+            "LIMIT 1",
+            (bid, bid, bid, "chat-file:" + bid),
+        ).fetchone()
+        is not None
+    )
 
 
 def release_message_files(c, actor, message_id):
@@ -632,8 +771,9 @@ def release_message_files(c, actor, message_id):
     for bid in blob_ids:
         if _kept_elsewhere(c, bid):
             continue
-        for row in c.execute("SELECT f.* FROM bot_file_versions v JOIN bot_files f ON f.id=v.file_id WHERE v.blob_id=?",
-                             (bid,)).fetchall():
+        for row in c.execute(
+            "SELECT f.* FROM bot_file_versions v JOIN bot_files f ON f.id=v.file_id WHERE v.blob_id=?", (bid,)
+        ).fetchall():
             purge_rows(c, actor, row)
         release_blobs(c, {bid}, H.now())
         gone += 1
@@ -646,8 +786,9 @@ def drain(store, blobs, limit=50):
     for a later pass. A place that fails is tried again on the next pass, up to PURGE_ATTEMPTS times. How many were
     removed."""
     with store.read() as c:
-        queued = c.execute("SELECT * FROM blob_purges WHERE attempts<? ORDER BY queued_at LIMIT ?",
-                           (PURGE_ATTEMPTS, limit)).fetchall()
+        queued = c.execute(
+            "SELECT * FROM blob_purges WHERE attempts<? ORDER BY queued_at LIMIT ?", (PURGE_ATTEMPTS, limit)
+        ).fetchall()
     removed = 0
     for q in queued:
         error, fresh = "", False
@@ -661,7 +802,7 @@ def drain(store, blobs, limit=50):
             if not needed:
                 try:
                     blobs.purge(q["digest"], q["kind"] or None)
-                except Exception as exc:              # an unreachable place: the next pass tries again
+                except Exception as exc:  # an unreachable place: the next pass tries again
                     error = str(exc)[:500]
                     LOG.warning("A deleted file's bytes could not be removed everywhere yet: %s", error)
         with store.transaction() as c:
@@ -681,7 +822,7 @@ def loop(store, blobs, stop, interval=60):
         return
     while True:
         try:
-            for _ in range(20):                  # at most 2,000 files a minute
+            for _ in range(20):  # at most 2,000 files a minute
                 if stop.is_set() or not backfill(store, blobs):
                     break
             drain(store, blobs)
@@ -697,12 +838,33 @@ def install_library(app, store, auth, files):
     app.state.library = library
 
     @app.get("/api/v2/files")
-    def listing(request: Request, kind: str = "", bot: str = "", team: str = "", task: str = "", since: str = "",
-                until: str = "", pinned: bool = False, archived: bool = False, limit: int = 50, cursor: str = ""):
+    def listing(
+        request: Request,
+        kind: str = "",
+        bot: str = "",
+        team: str = "",
+        task: str = "",
+        since: str = "",
+        until: str = "",
+        pinned: bool = False,
+        archived: bool = False,
+        limit: int = 50,
+        cursor: str = "",
+    ):
         """Library › Files: every file the caller may see, newest activity first. Paged and byte-capped; no totals."""
-        return library.listing(request.state.identity, kind=kind, bot=bot, team=team, task=task, since=since,
-                               until=until, pinned=pinned, archived=archived, limit=max(1, min(limit, LIST_MAX)),
-                               cursor=cursor)
+        return library.listing(
+            request.state.identity,
+            kind=kind,
+            bot=bot,
+            team=team,
+            task=task,
+            since=since,
+            until=until,
+            pinned=pinned,
+            archived=archived,
+            limit=max(1, min(limit, LIST_MAX)),
+            cursor=cursor,
+        )
 
     @app.get("/api/v2/files/search")
     def search(request: Request, q: str = "", limit: int = 20, kind: str = ""):
@@ -714,5 +876,5 @@ def install_library(app, store, auth, files):
         """The owner deletes a file for good: every version's bytes leave storage. Its activity keeps that it was
         deleted, by whom and when."""
         return await asyncio.to_thread(library.delete, request, fid)
-    return library
 
+    return library

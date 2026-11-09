@@ -2,6 +2,7 @@
 
 The large files are sparse (an MP4 or WAV header, then a truncate), so nothing big is written or committed.
 """
+
 import os
 from unittest.mock import Mock
 
@@ -47,9 +48,14 @@ def test_a_100_mb_video_is_sent_from_the_file_not_read_whole(checkout, monkeypat
     def request(method, path, raw=None, key=None):
         seen.update(method=method, path=path, size=os.fstat(raw.fileno()).st_size, head=raw.read(16))
         return {"file": {"id": "f1"}}
+
     made.request.side_effect = request
     assert hubtools.files_publish_path(made, {"path": "reports/cut.mp4"}) == {"file": {"id": "f1"}}
-    assert seen["method"] == "POST" and seen["path"].startswith("/api/v2/files/uploads?") and "name=cut.mp4" in seen["path"]
+    assert (
+        seen["method"] == "POST"
+        and seen["path"].startswith("/api/v2/files/uploads?")
+        and "name=cut.mp4" in seen["path"]
+    )
     assert seen["size"] == 100 * MB and seen["head"] == MP4[:16]
 
 
@@ -85,21 +91,32 @@ def test_other_kinds_keep_the_25_mb_cap(checkout):
     made.request.assert_not_called()
 
 
-@pytest.mark.parametrize("name, head, ok", [
-    ("cut.mp4", MP4, True), ("voice.m4a", MP4, True), ("cut.mp4", WAV, False),
-    ("clip.webm", b"\x1a\x45\xdf\xa3" + b"\x00" * 12, True), ("clip.webm", MP4, False),
-    ("song.mp3", b"ID3\x04\x00", True), ("song.mp3", b"\xff\xfb\x90\x00", True),
-    ("clip.wav", WAV, True), ("clip.ogg", b"OggS\x00", True), ("clip.aac", b"\xff\xf1\x50\x80", True),
-    ("clip.aac", b"\xff\xd8\xff", False), ("notes.md", b"# not media", True),
-    ("cut.mov", b"\x00\x00\x00\x08skip" + b"\x00" * 8, True),
-    ("cut.mov", b"\x00\x00\x00\x08pnot" + b"\x00" * 8, True),
-])
+@pytest.mark.parametrize(
+    "name, head, ok",
+    [
+        ("cut.mp4", MP4, True),
+        ("voice.m4a", MP4, True),
+        ("cut.mp4", WAV, False),
+        ("clip.webm", b"\x1a\x45\xdf\xa3" + b"\x00" * 12, True),
+        ("clip.webm", MP4, False),
+        ("song.mp3", b"ID3\x04\x00", True),
+        ("song.mp3", b"\xff\xfb\x90\x00", True),
+        ("clip.wav", WAV, True),
+        ("clip.ogg", b"OggS\x00", True),
+        ("clip.aac", b"\xff\xf1\x50\x80", True),
+        ("clip.aac", b"\xff\xd8\xff", False),
+        ("notes.md", b"# not media", True),
+        ("cut.mov", b"\x00\x00\x00\x08skip" + b"\x00" * 8, True),
+        ("cut.mov", b"\x00\x00\x00\x08pnot" + b"\x00" * 8, True),
+    ],
+)
 def test_media_must_start_with_its_container(name, head, ok):
     assert BF.media_matches(name, head) is ok
 
 
 class FakeS3:
     """A boto3-shaped client whose object is 30 MB of zeros, served in chunks."""
+
     class Body:
         def __init__(self, size):
             self.left = size

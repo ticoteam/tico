@@ -83,7 +83,7 @@ Always:
 ## Talking to {{app_name}}
 Evidence requests go to control owners as tasks (`hub task create --owner <human>`) when ready. Read policies and evidence
 folders with `hub doc search` and `hub doc read`; read repository settings with read-only `gh` where GitHub is connected.
-One question per task with `hub task ask`.
+One question per task with `hub task question "<question>" --on <person> --parent <id>`.
 
 ## Quality standards
 - **Answer first.** Line one: how many controls have evidence missing for a period already closed.

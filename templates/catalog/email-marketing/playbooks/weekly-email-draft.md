@@ -20,7 +20,7 @@ why. If nothing is worth an email, say so in one line and finish. Never draft to
 ## 2. Confirm the brief
 
 One audience, one job, one call to action, the date it should reach people. If any is missing, ask
-the requester once with `hub task ask <id>` and stop.
+the requester once with `hub task question "<question>" --on <person> --parent <id>` and stop.
 
 ## 3. Draft
 

@@ -9,6 +9,7 @@ exists: a renamed key reads as zero or empty and fails here.
 Granola's recorded shapes are covered by test_granola_recorded_shapes.py. QuickBooks and Xero, which read
 Finance's core layer, are in test_finance_vendor_contracts.py. No network: block_outside_network is on.
 """
+
 import contextlib
 import hashlib
 import hmac
@@ -43,6 +44,7 @@ def recorded(name):
 
 # -- Tico HQ: file hosting credentials (backend/tico_storage.py parse) -------------------------------------------------
 
+
 def test_hq_hands_the_hosting_credentials_under_its_own_expiry_name():
     hq = recorded("hq_storage_answer.json")["answer"]
     out = tico_storage.parse(hq)
@@ -65,6 +67,7 @@ def test_a_renamed_credentials_expiry_is_refused_rather_than_read_as_missing():
 
 # -- Tico HQ: company billing (backend/company_billing.py parse) ------------------------------------------------------
 
+
 def test_hq_billing_answer_reads_every_field_the_page_shows():
     body = json.dumps(recorded("hq_billing_answer.json")["answer"]).encode()
     out = company_billing.parse(body)
@@ -72,18 +75,26 @@ def test_hq_billing_answer_reads_every_field_the_page_shows():
     assert out["balance_micros"] == 4_200_000
     assert out["min_balance_micros"] == 5_000_000
     assert out["last_day_micros"] == 150_000
-    assert out["record_only"] is False          # the reader's default is True: a renamed key would read as record-only
+    assert out["record_only"] is False  # the reader's default is True: a renamed key would read as record-only
     assert out["months"] == ["2026-10", "2026-09"]
     [credit] = out["credits"]
     assert (credit["label"], credit["amount_micros"], credit["left_micros"], credit["expires"], credit["current"]) == (
-        "Purchased credit", 10_000_000, 4_200_000, "2027-10-01", True)
+        "Purchased credit",
+        10_000_000,
+        4_200_000,
+        "2027-10-01",
+        True,
+    )
     [period] = out["usage"]
     assert (period["period"], period["lines"][0]["product"], period["lines"][0]["amount_micros"]) == (
-        "2026-10-03", "Gateway", 5_800_000)
+        "2026-10-03",
+        "Gateway",
+        5_800_000,
+    )
     assert out["statement"]["credits_by_source"] == {"purchase": 10_000_000}
     assert out["statement"]["closing_micros"] == 4_200_000
     assert out["booking_url"] == "https://book.acme.example/credit"
-    assert out["cloud"] is None                 # HQ main sends no cloud key, which reads as not a cloud company
+    assert out["cloud"] is None  # HQ main sends no cloud key, which reads as not a cloud company
 
 
 def test_an_unknown_billing_state_is_refused():
@@ -94,6 +105,7 @@ def test_an_unknown_billing_state_is_refused():
 
 
 # -- Stripe: the probe that connects an account (backend/finance/stripe_sync.py probe) --------------------------------
+
 
 class StripeAnswers:
     """The two calls probe() makes, answered with the recorded objects."""
@@ -111,10 +123,16 @@ class StripeAnswers:
 def test_stripe_probe_reads_the_account_id_and_balances_by_currency():
     parts = recorded("stripe_answers.json")
     got = stripe_sync.probe(StripeAnswers(Answer(200, parts["account"]), Answer(200, parts["balance"])))
-    assert got == ({"account": "acct_1ContractTest0001", "balances": [
-        {"currency": "EUR", "available": 0, "pending": 900},
-        {"currency": "USD", "available": 12_345, "pending": 678},
-    ]}, "")
+    assert got == (
+        {
+            "account": "acct_1ContractTest0001",
+            "balances": [
+                {"currency": "EUR", "available": 0, "pending": 900},
+                {"currency": "USD", "available": 12_345, "pending": 678},
+            ],
+        },
+        "",
+    )
 
 
 def test_a_stripe_refusal_is_said_without_echoing_the_body():
@@ -126,6 +144,7 @@ def test_a_stripe_refusal_is_said_without_echoing_the_body():
 
 
 # -- Slack: the Web API call and its error (connectors/slack.py call, slack_error) ------------------------------------
+
 
 class FakeHTTP:
     """slack._request: answers with the recorded payload and keeps each URL asked for."""
@@ -141,8 +160,9 @@ class FakeHTTP:
 def test_slack_history_is_read_by_its_message_fields(monkeypatch):
     http = FakeHTTP(recorded("slack_answers.json")["history"])
     monkeypatch.setattr(slack, "_request", http)
-    data = slack.call("conversations.history", {"channel": "C012ABCDEFG", "limit": 200},
-                      token="xoxb-contract", sleep=lambda s: None)
+    data = slack.call(
+        "conversations.history", {"channel": "C012ABCDEFG", "limit": 200}, token="xoxb-contract", sleep=lambda s: None
+    )
     assert http.urls == [slack.API + "conversations.history?channel=C012ABCDEFG&limit=200"]
     [message] = data["messages"]
     assert data["response_metadata"]["next_cursor"] == ""
@@ -161,6 +181,7 @@ def test_a_slack_missing_scope_names_the_scope_to_add(monkeypatch):
 
 
 # -- GitHub: the App's installations (backend/github_app.py installation) and the webhook signature --------------------
+
 
 class InstallationStub:
     """The GitHubApp members installation() uses, answered with GitHub's recorded installation list."""
@@ -197,4 +218,7 @@ def test_a_github_webhook_signature_is_the_sha256_of_the_body():
     body = b'{"action": "opened"}'
     signed = "sha256=" + hmac.new(b"contract-webhook-secret", body, hashlib.sha256).hexdigest()
     assert github.verify("contract-webhook-secret", {"x-hub-signature-256": signed}, body) is True
-    assert github.verify("contract-webhook-secret", {"x-hub-signature-256": signed.replace("sha256=", "sha1=")}, body) is False
+    assert (
+        github.verify("contract-webhook-secret", {"x-hub-signature-256": signed.replace("sha256=", "sha1=")}, body)
+        is False
+    )

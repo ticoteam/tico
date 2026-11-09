@@ -1,14 +1,51 @@
 """Permissions and audit (PLAN §7, scenarios 32-35 and 46): who may edit automations, caps and spend, what a bot may
 propose, what every change records, and who may read an automation and its runs (PLAN decision 36). The same rules apply
 in the UI, the CLI and MCP; these checks use the API only."""
+
 import json
 
-from ..harness import (CLAUDE, CLAUDE_REF, DANA, DANA_REF, LEAD, LEAD_ID, LEAD_REF, OMAR, OMAR_REF, OPENAI_ID,
-                       OPENAI_REF, PRIYA, PRIYA_REF, RELEASE_ID, RELEASE_REF, W2, W3, Check, Scenario, Unmet,
-                       approval_id_of, audit_of, hub_notices, auto_id, automation, body, decide, edit_auto, find, get_caps, got,
-                       make_group, put_cap, put_limit, replied, rows, run_now, setup)
+from ..harness import (
+    CLAUDE,
+    CLAUDE_REF,
+    DANA,
+    DANA_REF,
+    LEAD,
+    LEAD_ID,
+    LEAD_REF,
+    OMAR,
+    OMAR_REF,
+    OPENAI_ID,
+    OPENAI_REF,
+    PRIYA,
+    PRIYA_REF,
+    RELEASE_ID,
+    RELEASE_REF,
+    W2,
+    W3,
+    Check,
+    Scenario,
+    Unmet,
+    approval_id_of,
+    audit_of,
+    hub_notices,
+    auto_id,
+    automation,
+    body,
+    decide,
+    edit_auto,
+    find,
+    get_caps,
+    got,
+    make_group,
+    put_cap,
+    put_limit,
+    replied,
+    rows,
+    run_now,
+    setup,
+)
 
-BOTOPS = {"botops": ("botops", "claude")}   # the helper that hears of every applied proposal
+BOTOPS = {"botops": ("botops", "claude")}  # the helper that hears of every applied proposal
 
 
 def noted(f, key, approval_key):
@@ -107,13 +144,16 @@ def listed(f, key):
 def s32_steps(org, f):
     org.step(f, "eng", make_group, org, "Engineering", bots=[LEAD_ID, OPENAI_ID], lead=LEAD_REF)
     org.step(f, "release", make_group, org, "Release", bots=[RELEASE_ID], lead=RELEASE_REF)
-    org.step(f, "own_auto", lambda: automation(org, "Inbox · builder-openai", OPENAI_REF,
-                                               group=f"group:{got(f, 'eng')}"))
-    org.step(f, "other_auto", lambda: automation(org, "Release notes", RELEASE_REF,
-                                                 group=f"group:{got(f, 'release')}"))
+    org.step(
+        f, "own_auto", lambda: automation(org, "Inbox · builder-openai", OPENAI_REF, group=f"group:{got(f, 'eng')}")
+    )
+    org.step(f, "other_auto", lambda: automation(org, "Release notes", RELEASE_REF, group=f"group:{got(f, 'release')}"))
     org.step(f, "new_ok", lambda: automation(org, "Lead's inbox", OPENAI_REF, group=f"group:{got(f, 'eng')}", who=LEAD))
-    org.step(f, "new_out", lambda: automation(org, "Lead's release", RELEASE_REF,
-                                              group=f"group:{got(f, 'release')}", who=LEAD))
+    org.step(
+        f,
+        "new_out",
+        lambda: automation(org, "Lead's release", RELEASE_REF, group=f"group:{got(f, 'release')}", who=LEAD),
+    )
     org.step(f, "edit_ok", lambda: edit_auto(org, f, "own_auto", LEAD, enabled=False))
     org.step(f, "edit_out", lambda: edit_auto(org, f, "other_auto", LEAD, enabled=False))
     org.step(f, "cap_ok", put_cap, org, OPENAI_REF, LEAD_REF, 3, who=LEAD)
@@ -174,8 +214,11 @@ def change_shown(f):
     """The 5 to 7 cap change reads back with its before (per_day 5) and after (per_day 7)."""
     setup(f, "audit", "cap_1", "cap_2")
     cap = f"task_cap:{CLAUDE_REF}>{LEAD_REF}"
-    hit = [r for r in rows(body(f, "audit")) if r.get("object") == cap
-           and per_day_of(r.get("before")) == 5 and per_day_of(r.get("after")) == 7]
+    hit = [
+        r
+        for r in rows(body(f, "audit"))
+        if r.get("object") == cap and per_day_of(r.get("before")) == 5 and per_day_of(r.get("after")) == 7
+    ]
     return bool(hit), f"{len(hit)} row(s) with before 5 and after 7"
 
 
@@ -184,8 +227,9 @@ def owner_reads_all(f):
     setup(f, "audit", "own")
     objects = [str(r.get("object")) for r in rows(body(f, "audit"))]
     own = auto_id(f, "own")
-    return any(own in o for o in objects) and any(f"task_cap:{CLAUDE_REF}" in o for o in objects), \
-        f"{len(objects)} row(s) read"
+    return any(own in o for o in objects) and any(
+        f"task_cap:{CLAUDE_REF}" in o for o in objects
+    ), f"{len(objects)} row(s) read"
 
 
 def self_reads_own(f):
@@ -194,9 +238,13 @@ def self_reads_own(f):
     mine = rows(body(f, "audit_omar"))
     objects = [str(r.get("object")) for r in mine]
     own, auto = auto_id(f, "own"), auto_id(f, "auto")
-    ok = bool(mine) and all("omar" in str(r.get("actor")) for r in mine) \
-        and any(own in o for o in objects) \
-        and not any(f"task_cap:{CLAUDE_REF}" in o for o in objects) and not any(auto in o for o in objects)
+    ok = (
+        bool(mine)
+        and all("omar" in str(r.get("actor")) for r in mine)
+        and any(own in o for o in objects)
+        and not any(f"task_cap:{CLAUDE_REF}" in o for o in objects)
+        and not any(auto in o for o in objects)
+    )
     return ok, f"{len(mine)} row(s) for Omar; actors {sorted({str(r.get('actor')) for r in mine})}"
 
 
@@ -225,66 +273,138 @@ def s46_steps(org, f):
 
 # ---------------------------------------------------------------------------------------------- scenarios
 SCENARIOS = [
-    Scenario(32, "perm-group-lead", "Group lead edits automations, caps and spend in the group; outside it, refused", s32_steps, [
-        Check("lead creates an automation in her group", W3, lambda f: replied(f, "new_ok", 200, 201)),
-        Check("lead edits an automation in her group", W3, lambda f: replied(f, "edit_ok", 200)),
-        Check("lead refused on an automation outside her group", W3,
-              lambda f: replied(f, "edit_out", 403, needs=("edit_ok",))),
-        Check("lead refused to create an automation outside her group", W3,
-              lambda f: replied(f, "new_out", 403, needs=("new_ok",))),
-        Check("lead sets a cap for a teammate in her group", W2, lambda f: replied(f, "cap_ok", 200, 201)),
-        Check("lead refused a cap outside her group", W2,
-              lambda f: replied(f, "cap_out", 403, needs=("cap_ok",))),
-        Check("lead sets a spend limit for a teammate in her group", W2, lambda f: replied(f, "limit_ok", 200)),
-        Check("lead refused a spend limit outside her group", W2,
-              lambda f: replied(f, "limit_out", 403, needs=("limit_ok",))),
-    ]),
-    Scenario(33, "perm-bot-reports", "Bot edits its own and its reports' automations; a peer's is refused", s33_steps, [
-        Check("a bot makes an automation for itself", W3, lambda f: replied(f, "own", 200, 201)),
-        Check("a bot edits its own automation", W3, lambda f: replied(f, "own_edit", 200, needs=("own",))),
-        Check("a manager edits a report's automation", W3, lambda f: replied(f, "lead_edit", 200, needs=("report",))),
-        Check("a bot edits a peer's automation: refused", W3,
-              lambda f: replied(f, "peer_edit", 403, needs=("own_edit", "peer"))),
-        Check("a bot makes an automation for a peer: refused", W3,
-              lambda f: replied(f, "peer_make", 403, needs=("own",))),
-    ]),
-    Scenario(34, "perm-bot-proposes-cap", "Bot proposes a cap change: pending; Dana approves; the cap applies",
-             s34_steps, [
-        Check("a bot's cap change answers 200 with an approval id, status pending", W2,
-              lambda f: proposal_filed(f, "propose")),
-        Check("until a person approves, the cap stays at 5", W2,
-              lambda f: cap_at(f, "caps", CLAUDE_REF, LEAD_REF, 5, needs=("cap",))),
-        Check("Dana's approval is accepted", W2, lambda f: replied(f, "decide", 200, needs=("propose",))),
-        Check("after approval the cap reads back at 2", W2,
-              lambda f: cap_at(f, "caps_after", CLAUDE_REF, LEAD_REF, 2, needs=("decide",))),
-        Check("the cap change is audited with via approval:<id>", W2,
-              lambda f: audit_via(f, "audit", approval_of(f, "propose"))),
-        Check("BotOps gets a notice about the change", W2, lambda f: noted(f, "botops", "propose")),
-    ], bots=BOTOPS),
-    Scenario(35, "perm-audit", "Every change writes actor, object, before and after", s35_steps, [
-        Check("cap saves and automation writes each leave a row with actor, object, via, before, after", W2, audited),
-        Check("the 5 to 7 cap change shows its before and after", W2, change_shown),
-        Check("the owner reads every row, Omar's change included", W2, owner_reads_all),
-        Check("Omar reads only his own changes", W2, self_reads_own),
-    ]),
-    Scenario(46, "perm-visibility", "An automation and its runs: owner and everyone above see them; peers don't",
-             s46_steps, [
-                 Check("Priya saves an automation she owns", W3, lambda f: replied(f, "auto", 200, 201)),
-                 Check("Priya runs it and the run is logged", W3,
-                       lambda f: replied(f, "run", 200, 201, 202, needs=("auto",))),
-                 Check("Dana, above Priya, reads the automation", W3, lambda f: sees_it(f, "dana_read")),
-                 Check("Dana, above Priya, reads its runs", W3, lambda f: sees_runs(f, "dana_runs")),
-                 Check("Dana's list shows it", W3, lambda f: listed(f, "dana_list")),
-                 Check("Priya, its owner, reads it", W3, lambda f: sees_it(f, "priya_read")),
-                 Check("Priya, its owner, reads its runs", W3, lambda f: sees_runs(f, "priya_runs")),
-                 Check("Omar, a peer, cannot read it (404 or 403)", W3,
-                       lambda f: replied(f, "omar_read", 403, 404, needs=("auto",))),
-                 Check("Omar, a peer, cannot read its runs (404 or 403)", W3,
-                       lambda f: replied(f, "omar_runs", 403, 404, needs=("auto",))),
-                 Check("Omar's list leaves it out and still shows his own", W3,
-                       lambda f: unlisted(f, "omar_list", own=auto_id(f, "own"))),
-                 Check("the Engineering Lead, a peer, cannot read it (404 or 403)", W3,
-                       lambda f: replied(f, "lead_read", 403, 404, needs=("auto",))),
-                 Check("the Engineering Lead's list leaves it out", W3, lambda f: unlisted(f, "lead_list")),
-             ]),
+    Scenario(
+        32,
+        "perm-group-lead",
+        "Group lead edits automations, caps and spend in the group; outside it, refused",
+        s32_steps,
+        [
+            Check("lead creates an automation in her group", W3, lambda f: replied(f, "new_ok", 200, 201)),
+            Check("lead edits an automation in her group", W3, lambda f: replied(f, "edit_ok", 200)),
+            Check(
+                "lead refused on an automation outside her group",
+                W3,
+                lambda f: replied(f, "edit_out", 403, needs=("edit_ok",)),
+            ),
+            Check(
+                "lead refused to create an automation outside her group",
+                W3,
+                lambda f: replied(f, "new_out", 403, needs=("new_ok",)),
+            ),
+            Check("lead sets a cap for a teammate in her group", W2, lambda f: replied(f, "cap_ok", 200, 201)),
+            Check("lead refused a cap outside her group", W2, lambda f: replied(f, "cap_out", 403, needs=("cap_ok",))),
+            Check("lead sets a spend limit for a teammate in her group", W2, lambda f: replied(f, "limit_ok", 200)),
+            Check(
+                "lead refused a spend limit outside her group",
+                W2,
+                lambda f: replied(f, "limit_out", 403, needs=("limit_ok",)),
+            ),
+        ],
+    ),
+    Scenario(
+        33,
+        "perm-bot-reports",
+        "Bot edits its own and its reports' automations; a peer's is refused",
+        s33_steps,
+        [
+            Check("a bot makes an automation for itself", W3, lambda f: replied(f, "own", 200, 201)),
+            Check("a bot edits its own automation", W3, lambda f: replied(f, "own_edit", 200, needs=("own",))),
+            Check(
+                "a manager edits a report's automation", W3, lambda f: replied(f, "lead_edit", 200, needs=("report",))
+            ),
+            Check(
+                "a bot edits a peer's automation: refused",
+                W3,
+                lambda f: replied(f, "peer_edit", 403, needs=("own_edit", "peer")),
+            ),
+            Check(
+                "a bot makes an automation for a peer: refused",
+                W3,
+                lambda f: replied(f, "peer_make", 403, needs=("own",)),
+            ),
+        ],
+    ),
+    Scenario(
+        34,
+        "perm-bot-proposes-cap",
+        "Bot proposes a cap change: pending; Dana approves; the cap applies",
+        s34_steps,
+        [
+            Check(
+                "a bot's cap change answers 200 with an approval id, status pending",
+                W2,
+                lambda f: proposal_filed(f, "propose"),
+            ),
+            Check(
+                "until a person approves, the cap stays at 5",
+                W2,
+                lambda f: cap_at(f, "caps", CLAUDE_REF, LEAD_REF, 5, needs=("cap",)),
+            ),
+            Check("Dana's approval is accepted", W2, lambda f: replied(f, "decide", 200, needs=("propose",))),
+            Check(
+                "after approval the cap reads back at 2",
+                W2,
+                lambda f: cap_at(f, "caps_after", CLAUDE_REF, LEAD_REF, 2, needs=("decide",)),
+            ),
+            Check(
+                "the cap change is audited with via approval:<id>",
+                W2,
+                lambda f: audit_via(f, "audit", approval_of(f, "propose")),
+            ),
+            Check("BotOps gets a notice about the change", W2, lambda f: noted(f, "botops", "propose")),
+        ],
+        bots=BOTOPS,
+    ),
+    Scenario(
+        35,
+        "perm-audit",
+        "Every change writes actor, object, before and after",
+        s35_steps,
+        [
+            Check(
+                "cap saves and automation writes each leave a row with actor, object, via, before, after", W2, audited
+            ),
+            Check("the 5 to 7 cap change shows its before and after", W2, change_shown),
+            Check("the owner reads every row, Omar's change included", W2, owner_reads_all),
+            Check("Omar reads only his own changes", W2, self_reads_own),
+        ],
+    ),
+    Scenario(
+        46,
+        "perm-visibility",
+        "An automation and its runs: owner and everyone above see them; peers don't",
+        s46_steps,
+        [
+            Check("Priya saves an automation she owns", W3, lambda f: replied(f, "auto", 200, 201)),
+            Check(
+                "Priya runs it and the run is logged", W3, lambda f: replied(f, "run", 200, 201, 202, needs=("auto",))
+            ),
+            Check("Dana, above Priya, reads the automation", W3, lambda f: sees_it(f, "dana_read")),
+            Check("Dana, above Priya, reads its runs", W3, lambda f: sees_runs(f, "dana_runs")),
+            Check("Dana's list shows it", W3, lambda f: listed(f, "dana_list")),
+            Check("Priya, its owner, reads it", W3, lambda f: sees_it(f, "priya_read")),
+            Check("Priya, its owner, reads its runs", W3, lambda f: sees_runs(f, "priya_runs")),
+            Check(
+                "Omar, a peer, cannot read it (404 or 403)",
+                W3,
+                lambda f: replied(f, "omar_read", 403, 404, needs=("auto",)),
+            ),
+            Check(
+                "Omar, a peer, cannot read its runs (404 or 403)",
+                W3,
+                lambda f: replied(f, "omar_runs", 403, 404, needs=("auto",)),
+            ),
+            Check(
+                "Omar's list leaves it out and still shows his own",
+                W3,
+                lambda f: unlisted(f, "omar_list", own=auto_id(f, "own")),
+            ),
+            Check(
+                "the Engineering Lead, a peer, cannot read it (404 or 403)",
+                W3,
+                lambda f: replied(f, "lead_read", 403, 404, needs=("auto",)),
+            ),
+            Check("the Engineering Lead's list leaves it out", W3, lambda f: unlisted(f, "lead_list")),
+        ],
+    ),
 ]

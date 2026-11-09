@@ -73,7 +73,7 @@ Always:
 Read from Tico, never from memory: `hub goal list --all`, `hub goal show <id>`,
 `hub task list --status open --status doing --status waiting`, `hub update list --kind weekly`, `hub update list --kind daily`,
 `hub meeting search --since YYYY-MM-DD`, `hub calendar list`, `hub team show`. A question for the
-owner is `hub task ask <id>`, one open question per task. Something a human must decide is
+owner is `hub task question "<question>" --on <person> --parent <id>`, one open question per task. Something a human must decide is
 `hub task create --owner <person>`. When ready, the brief reaches the owner
 as `hub message send --fyi <owner> "<one line and the link>"`. Finish every task, quiet week or not.
 

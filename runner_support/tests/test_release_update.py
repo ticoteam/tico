@@ -1,4 +1,5 @@
 """A checkout follows its server's release: the update process (python -m runner_support.release_update) against a temp repository."""
+
 import fcntl
 import json
 import os
@@ -22,9 +23,15 @@ def old_follower(tmp_path):
     scope = {"__file__": ru.__file__, "__name__": "released_update"}
     exec(compile(source, "<v0.3.45 follower>", "exec"), scope)
     now = [1_800_000_000.0]
-    follower = scope["Follower"]({}, tmp_path, None, env={"TICO_RUNNER_KIND": "linux"},
-                                 run=lambda cmd, **kw: subprocess.CompletedProcess(cmd, 0, "", ""),
-                                 clock=lambda: now[0], wall=lambda: now[0])
+    follower = scope["Follower"](
+        {},
+        tmp_path,
+        None,
+        env={"TICO_RUNNER_KIND": "linux"},
+        run=lambda cmd, **kw: subprocess.CompletedProcess(cmd, 0, "", ""),
+        clock=lambda: now[0],
+        wall=lambda: now[0],
+    )
     follower.release, follower.desired = "0.3.44", "0.3.45"
     return follower, now
 
@@ -34,9 +41,14 @@ def test_deferral_statuses_against_the_released_followers_due_and_claim_rules(ol
     follower, now = old_follower
     cases = json.loads((Path(__file__).parent / "fixtures/update-status-cases.json").read_text())
     for case in cases:
-        ru.write_status(follower.directory, state=case["state"], target="0.3.45", error="test cause",
-                        at=now[0] - case["age"],
-                        **({"not_before": now[0] + case["retry_in"]} if "retry_in" in case else {}))
+        ru.write_status(
+            follower.directory,
+            state=case["state"],
+            target="0.3.45",
+            error="test cause",
+            at=now[0] - case["age"],
+            **({"not_before": now[0] + case["retry_in"]} if "retry_in" in case else {}),
+        )
         follower.pending_since = now[0] - 21 * 60
         follower.decide()
         assert (follower.pending is not None) == case["python_due"], case
@@ -50,8 +62,12 @@ def test_deferral_statuses_against_the_released_followers_due_and_claim_rules(ol
 def test_old_runners_release_claims_for_the_legacy_fallback(old_follower, monkeypatch):
     monkeypatch.delenv("TICO_UPDATE_RETRY", raising=False)
     follower, now = old_follower
-    for reason in ("the update lock cannot be checked", "another update holds the checkout lock",
-                   "this computer still has work running", "this computer still has work running"):
+    for reason in (
+        "the update lock cannot be checked",
+        "another update holds the checkout lock",
+        "this computer still has work running",
+        "this computer still has work running",
+    ):
         result = ru.defer_update(follower.directory, "v0.3.45", reason, clock=lambda: now[0], transient=True)
         assert result["state"] == "failed" and reason in result["error"]
         assert "not_before" not in ru.read_status(follower.directory)
@@ -126,7 +142,11 @@ def test_a_drain_that_never_finishes_defers_before_doing_any_checkout_work(tmp_p
 
 def test_recovery_file_reads_refuse_fifos_symlinks_devices_and_oversized_files(tmp_path):
     # A child deadline catches a blocking open/read without hanging pytest's worker shutdown.
-    subprocess.run([sys.executable, "-c", r'''
+    subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            r'''
 import os
 import sys
 from pathlib import Path
@@ -167,11 +187,20 @@ else:
     raise AssertionError("accepted a file growing past the read limit")
 os.close(holder)
 assert target.read_bytes() == b"keep"
-''', str(tmp_path)], check=True, timeout=10)
+''',
+            str(tmp_path),
+        ],
+        check=True,
+        timeout=10,
+    )
 
 
 def test_instruction_and_registration_reads_refuse_replaced_fifos(tmp_path):
-    subprocess.run([sys.executable, "-c", r'''
+    subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            r'''
 import os
 import sys
 from pathlib import Path
@@ -225,7 +254,12 @@ for path, content in pointers:
     path.write_text(content)
 git_locks.OWNED_ROOTS = (root,)
 assert not git_locks.report(root, f"fatal: Unable to create '{metadata}/index.lock': File exists", metadata)
-''', str(tmp_path)], check=True, timeout=10)
+''',
+            str(tmp_path),
+        ],
+        check=True,
+        timeout=10,
+    )
 
 
 def test_a_second_updater_exits_before_drain_or_checkout_work_and_leaves_status_alone(tmp_path, monkeypatch):
@@ -235,7 +269,7 @@ def test_a_second_updater_exits_before_drain_or_checkout_work_and_leaves_status_
 
     def run(args):
         with ru.updater_lock(tmp_path) as acquired:
-            assert not acquired                         # held through the whole update, before any drain wait
+            assert not acquired  # held through the whole update, before any drain wait
         calls.append(args.version)
         return 0
 
@@ -261,12 +295,35 @@ def test_an_updater_releases_its_process_lock_when_it_fails(tmp_path, monkeypatc
 
 @pytest.mark.slow
 @pytest.mark.parametrize("policy", ["short", "legacy"])
-@pytest.mark.parametrize("step", [
-    "process_open", "process_size", "process_symlink", "process_flock", "config_json", "config_shape",
-    "registration", "drain_read", "drain_db", "drain_sleep", "kind", "systemd_unit", "git_lookup", "git_gate",
-    "checkout_open", "checkout_size", "checkout_symlink", "checkout_flock", "status_read", "status_write",
-    "early_exit", "exit_zero", "cli_exit", "interrupt",
-])
+@pytest.mark.parametrize(
+    "step",
+    [
+        "process_open",
+        "process_size",
+        "process_symlink",
+        "process_flock",
+        "config_json",
+        "config_shape",
+        "registration",
+        "drain_read",
+        "drain_db",
+        "drain_sleep",
+        "kind",
+        "systemd_unit",
+        "git_lookup",
+        "git_gate",
+        "checkout_open",
+        "checkout_size",
+        "checkout_symlink",
+        "checkout_flock",
+        "status_read",
+        "status_write",
+        "early_exit",
+        "exit_zero",
+        "cli_exit",
+        "interrupt",
+    ],
+)
 def test_every_pre_apply_failure_defers_and_releases_claims(old_follower, monkeypatch, policy, step):
     from runner_support import git_locks
 
@@ -329,38 +386,52 @@ def test_every_pre_apply_failure_defers_and_releases_claims(old_follower, monkey
                 patch.setattr(ru, "git", original_git)
                 patch.setattr(git_locks, "command_lock", fail)
             elif step in ("early_exit", "exit_zero", "interrupt"):
+
                 def exit_early(*a, **kw):
                     if step == "exit_zero":
                         raise SystemExit(0)
                     raise SystemExit(cause) if step == "early_exit" else KeyboardInterrupt(cause)
+
                 patch.setattr(ru, "in_flight", exit_early)
             if step.endswith("_flock") or step.startswith("status_"):
+
                 def flock(handle, operation):
                     selected = process if step == "process_flock" else checkout
-                    if operation != fcntl.LOCK_UN and selected.exists() and os.fstat(handle.fileno()).st_ino == selected.stat().st_ino:
+                    if (
+                        operation != fcntl.LOCK_UN
+                        and selected.exists()
+                        and os.fstat(handle.fileno()).st_ino == selected.stat().st_ino
+                    ):
                         if step.startswith("status_"):
                             raise BlockingIOError("checkout lock held")
                         fail()
                     return original_flock(handle, operation)
+
                 patch.setattr(fcntl, "flock", flock)
             if step == "status_read":
                 reads = []
+
                 def read(directory, **kw):
                     reads.append(True)
                     if len(reads) == 1:
                         fail()
                     return original_read(directory, **kw)
+
                 patch.setattr(ru, "read_status", read)
             elif step == "status_write":
+
                 def write(directory, **fields):
                     if fields.get("state") == "updating":
                         fail()
                     return original_write(directory, **fields)
+
                 patch.setattr(ru, "write_status", write)
             argv = ["--root", str(root), "--version", "v0.3.45", "--state-dir", str(state), "--pid", "42"]
             assert ru.main(argv + (["--unknown"] if step == "cli_exit" else [])) == 1
         status = original_read(state)
-        assert status["state"] == ("blocked" if attempt == ru.MAX_DEFERRALS else "idle" if policy == "short" else "failed")
+        assert status["state"] == (
+            "blocked" if attempt == ru.MAX_DEFERRALS else "idle" if policy == "short" else "failed"
+        )
         assert status["cause_count"] == attempt and status["deferrals"] == attempt
         assert status["deferral_cause"] in status["error"] and len(status["error"]) <= 300
         if step == "drain_db":
@@ -401,6 +472,7 @@ def commit(repo, name, text="x", message=None):
 def repos(tmp_path, monkeypatch):
     """A public repo with releases 0.1.0 and 0.2.0 (0.2.0 changes the dependencies) plus a checkout on main at 0.1.0."""
     from runner_support import git_locks
+
     monkeypatch.setattr(git_locks, "OWNED_ROOTS", (tmp_path,))
     public = tmp_path / "public"
     public.mkdir()
@@ -415,7 +487,7 @@ def repos(tmp_path, monkeypatch):
     checkout = tmp_path / "checkout"
     sh(tmp_path, "git", "clone", "-q", str(public), "checkout")
     sh(checkout, "git", "reset", "-q", "--hard", "v0.1.0")
-    sh(checkout, "git", "tag", "-d", "v0.2.0")       # the checkout has not seen that release yet
+    sh(checkout, "git", "tag", "-d", "v0.2.0")  # the checkout has not seen that release yet
     state = tmp_path / "state"
     state.mkdir()
     return public, checkout, state
@@ -444,8 +516,16 @@ class Calls:
 
 def run_apply(checkout, state, version="0.2.0", calls=None, **kw):
     calls = calls or Calls()
-    result = ru.apply(checkout, version, state, install=calls.install, prepare=calls.prepare, restart=calls.restart,
-                      healthy=calls.healthy, **kw)
+    result = ru.apply(
+        checkout,
+        version,
+        state,
+        install=calls.install,
+        prepare=calls.prepare,
+        restart=calls.restart,
+        healthy=calls.healthy,
+        **kw,
+    )
     return result, calls
 
 
@@ -457,10 +537,148 @@ def test_update_switches_to_the_servers_tag_not_main(repos):
     public, checkout, state = repos
     result, calls = run_apply(checkout, state)
     assert result["state"] == "healthy" and ru.checkout_release(checkout) == "0.2.0"
-    assert head(checkout) == sh(public, "git", "rev-parse", "v0.2.0") != head(public)   # main moved on; the runner did not
+    assert (
+        head(checkout) == sh(public, "git", "rev-parse", "v0.2.0") != head(public)
+    )  # main moved on; the runner did not
     assert calls.restarts == 1 and calls.installs == [(sh(checkout, "git", "rev-parse", "v0.1.0"), head(checkout))]
-    assert calls.checks == [head(checkout)] and calls.prepared == [head(checkout)]   # the new tree's binary, before the restart
+    assert calls.checks == [head(checkout)] and calls.prepared == [
+        head(checkout)
+    ]  # the new tree's binary, before the restart
     assert ru.read_status(state)["state"] == "healthy" and ru.read_status(state)["target"] == "0.2.0"
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize("branch,version", [("tico/b427e9ee-fix-runner", "0.2.0"), ("tico-session/task-123", "0.1.0")])
+def test_bot_branch_recovery_keeps_both_refs_and_detaches_even_on_the_same_commit(repos, capsys, branch, version):
+    from runner_support import release_branch
+
+    _, checkout, state = repos
+    sh(checkout, "git", "checkout", "-qb", branch)
+    before = head(checkout)
+    inspected = release_branch.inspect(checkout, lambda *a: ru.git(checkout, *a))
+    assert inspected["recover"] and branch in inspected["error"] and "automatically" in inspected["error"]
+    assert not sh(checkout, "git", "for-each-ref", "refs/tico/recovered/")
+    result, calls = run_apply(checkout, state, version)
+    assert result["state"] == "healthy" and calls.restarts == 1
+    assert head(checkout) == sh(checkout, "git", "rev-parse", "v" + version)
+    assert not sh(checkout, "git", "branch", "--show-current")
+    assert sh(checkout, "git", "rev-parse", branch) == before
+    saved = sh(checkout, "git", "for-each-ref", "--format=%(refname)", "refs/tico/recovered/")
+    assert saved.endswith("-" + branch) and sh(checkout, "git", "rev-parse", saved) == before
+    assert (
+        result["note"]
+        == ru.read_status(state)["note"]
+        == f"moved the install off bot branch {branch} (kept at {saved})"
+    )
+    assert result["note"] in capsys.readouterr().out
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize("case", ["person", "dirty", "staged", "merge", "rebase", "cherry-pick", "bisect", "untracked"])
+def test_unsafe_branch_recovery_leaves_the_install_and_its_work_alone(repos, case):
+    _, checkout, state = repos
+    branch = "chris/my-work" if case == "person" else "tico/b427e9ee-fix-runner"
+    sh(checkout, "git", "checkout", "-qb", branch)
+    operations = {
+        "merge": "MERGE_HEAD",
+        "rebase": "rebase-merge",
+        "cherry-pick": "CHERRY_PICK_HEAD",
+        "bisect": "BISECT_START",
+    }
+    if case in ("dirty", "staged"):
+        (checkout / "app.py").write_text("keep this work")
+        if case == "staged":
+            sh(checkout, "git", "add", "app.py")
+    elif case in operations:
+        marker = checkout / ".git" / operations[case]
+        if case == "rebase":
+            marker.mkdir()
+        else:
+            marker.write_text(head(checkout) + "\n")
+    elif case == "untracked":
+        # The release adds this file; a non-colliding untracked file does not block an update.
+        public = repos[0]
+        commit(public, "new.txt", "release content")
+        sh(public, "git", "tag", "v0.3.0")
+        (checkout / "new.txt").write_text("keep this untracked work")
+    before = head(checkout)
+    index = (checkout / ".git/index").read_bytes()
+    result, calls = run_apply(checkout, state, "0.3.0" if case == "untracked" else "0.2.0")
+    assert result["state"] == "blocked" and calls.restarts == 0
+    assert branch in result["error"]
+    assert head(checkout) == before and sh(checkout, "git", "branch", "--show-current") == branch
+    assert sh(checkout, "git", "rev-parse", branch) == before
+    assert not sh(checkout, "git", "for-each-ref", "refs/tico/recovered/")
+    assert (checkout / ".git/index").read_bytes() == index
+    if case == "untracked":
+        assert (checkout / "new.txt").read_text() == "keep this untracked work"
+        from runner_support import release_branch
+
+        inspected = release_branch.inspect(checkout, lambda *a: ru.git(checkout, *a), "0.3.0")
+        assert not inspected["recover"] and "local files are in the way" in inspected["error"]
+    elif case in operations:
+        assert case in result["error"]
+    elif case in ("dirty", "staged"):
+        assert "changed file" in result["error"] and (checkout / "app.py").read_text() == "keep this work"
+
+
+@pytest.mark.slow
+def test_recovered_branch_rolls_back_without_losing_the_saved_commit(repos):
+    _, checkout, state = repos
+    branch = "tico/b427e9ee-fix-runner"
+    sh(checkout, "git", "checkout", "-qb", branch)
+    before = commit(checkout, "unpublished.txt", "keep my commit")
+    result, calls = run_apply(checkout, state, calls=Calls(healthy=(False, True)))
+    assert result["state"] == "rolled_back" and calls.restarts == 2 and head(checkout) == before
+    assert sh(checkout, "git", "branch", "--show-current") == branch
+    assert sh(checkout, "git", "rev-parse", branch) == before
+    assert before in sh(checkout, "git", "for-each-ref", "--format=%(objectname)", "refs/tico/recovered/")
+    assert "kept at refs/tico/recovered/" in ru.read_status(state)["note"]
+
+
+@pytest.mark.slow
+def test_recovery_waits_for_writers_and_holds_the_update_lock(repos, monkeypatch):
+    _, checkout, state = repos
+    sh(checkout, "git", "checkout", "-qb", "tico/b427e9ee-fix-runner")
+    result, _ = run_apply(checkout, state, busy=lambda: True)
+    assert result["state"] in ("idle", "failed") and "work running" in result["error"]
+    assert not sh(checkout, "git", "for-each-ref", "refs/tico/recovered/")
+    original = ru.git
+    checked = []
+
+    def git(root, *args, **kw):
+        if args[0] in ("update-ref", "checkout"):
+            with ru.lock_path(root).open("a") as handle:
+                with pytest.raises(BlockingIOError):
+                    fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            checked.append(args[0])
+        return original(root, *args, **kw)
+
+    monkeypatch.setattr(ru, "git", git)
+    (checkout / "safe-untracked.txt").write_text("keep this too")
+    result, _ = run_apply(checkout, state, busy=lambda: False)
+    assert result["state"] == "healthy" and checked == ["update-ref", "checkout"]
+    assert (checkout / "safe-untracked.txt").read_text() == "keep this too"
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize("change", ["branch", "dirty", "operation"])
+def test_recovery_rechecks_the_checkout_after_fetching(repos, change):
+    _, checkout, state = repos
+    sh(checkout, "git", "checkout", "-qb", "tico/b427e9ee-fix-runner")
+
+    def busy():
+        if change == "branch":
+            sh(checkout, "git", "checkout", "-q", "main")
+        elif change == "dirty":
+            (checkout / "app.py").write_text("keep this late edit")
+        else:
+            (checkout / ".git/MERGE_HEAD").write_text(head(checkout) + "\n")
+        return False
+
+    result, calls = run_apply(checkout, state, busy=busy)
+    assert result["state"] == "blocked" and result["error"] and calls.restarts == 0
+    assert not sh(checkout, "git", "for-each-ref", "refs/tico/recovered/")
 
 
 def test_a_checkout_with_changes_is_refused_and_left_alone(repos):
@@ -468,7 +686,11 @@ def test_a_checkout_with_changes_is_refused_and_left_alone(repos):
     (checkout / "app.py").write_text("my local edit")
     before = head(checkout)
     result, calls = run_apply(checkout, state)
-    assert result["state"] == "blocked" and "1 changed file" in result["error"] and result["error"].endswith("updates itself: app.py")
+    assert (
+        result["state"] == "blocked"
+        and "1 changed file" in result["error"]
+        and result["error"].endswith("updates itself: app.py")
+    )
     assert (checkout / "app.py").read_text() == "my local edit" and head(checkout) == before
     assert calls.restarts == 0 and ru.read_status(state)["state"] == "blocked"
     assert sh(checkout, "git", "branch", "--show-current") == "main"
@@ -477,8 +699,11 @@ def test_a_checkout_with_changes_is_refused_and_left_alone(repos):
 def instruction_links(checkout):
     commit(checkout, "CLAUDE.md", "Repository rules\n")
     commit(checkout, "templates/employee-repo/AGENT.md", "Bot rules\n")
-    for name, target in [("AGENTS.md", "CLAUDE.md"), ("templates/employee-repo/AGENTS.md", "AGENT.md"),
-                         ("templates/employee-repo/CLAUDE.md", "AGENT.md")]:
+    for name, target in [
+        ("AGENTS.md", "CLAUDE.md"),
+        ("templates/employee-repo/AGENTS.md", "AGENT.md"),
+        ("templates/employee-repo/CLAUDE.md", "AGENT.md"),
+    ]:
         (checkout / name).symlink_to(target)
     commit(checkout, "notes.txt", "keep the local branch\n")
 
@@ -490,8 +715,11 @@ def test_flattened_instruction_links_do_not_block_a_release_update(repos):
     # A repair interrupted by shutdown leaves only ignored Git metadata, never another dirty file.
     (checkout / ".git/tico-instruction-link-0123456789abcdef0123456789abcdef").symlink_to("CLAUDE.md")
     before = head(checkout)
-    for name, text in [("AGENTS.md", "Repository rules\n"), ("templates/employee-repo/AGENTS.md", "Bot rules\n"),
-                       ("templates/employee-repo/CLAUDE.md", "Bot rules\n")]:
+    for name, text in [
+        ("AGENTS.md", "Repository rules\n"),
+        ("templates/employee-repo/AGENTS.md", "Bot rules\n"),
+        ("templates/employee-repo/CLAUDE.md", "Bot rules\n"),
+    ]:
         (checkout / name).unlink()
         (checkout / name).write_text(text)
     ru.repair_instruction_links(checkout, lambda *args: ru.git(checkout, *args))
@@ -549,9 +777,13 @@ def test_instruction_link_repair_preserves_edits_to_its_target_and_external_targ
 @pytest.mark.slow
 def test_updater_reports_old_index_config_and_ref_locks_without_retry_or_removal(repos):
     from runner_support import git_locks
+
     _, checkout, _ = repos
-    for name, command in [("index.lock", ("add", "app.py")), ("config.lock", ("config", "--local", "repair.test", "yes")),
-                          ("refs/heads/blocked.lock", ("update-ref", "refs/heads/blocked", "HEAD"))]:
+    for name, command in [
+        ("index.lock", ("add", "app.py")),
+        ("config.lock", ("config", "--local", "repair.test", "yes")),
+        ("refs/heads/blocked.lock", ("update-ref", "refs/heads/blocked", "HEAD")),
+    ]:
         lock = checkout / ".git" / name
         lock.write_text("still owned")
         assert ru.git(checkout, *command).returncode != 0 and lock.exists()
@@ -570,10 +802,10 @@ def test_updater_reports_old_index_config_and_ref_locks_without_retry_or_removal
     assert not (checkout / ".git/tico-lock-backups").exists()
 
 
-
 @pytest.mark.slow
 def test_old_locks_reach_the_update_status_with_the_manual_command(repos):
     from runner_support import git_locks
+
     _, checkout, state = repos
     head = sh(checkout, "git", "rev-parse", "HEAD")
     for name in ("refs/tags/v0.2.0.lock", "index.lock"):
@@ -594,7 +826,7 @@ def test_a_blocked_update_names_the_first_three_changed_files(repos):
     public, checkout, state = repos
     names = [f"notes/{letter}.txt" for letter in "abcde"]
     for name in names:
-        commit(checkout, name, "one")                   # tracked, so a change to it shows in status
+        commit(checkout, name, "one")  # tracked, so a change to it shows in status
     for name in names:
         (checkout / name).write_text("two")
     result, calls = run_apply(checkout, state)
@@ -646,7 +878,9 @@ def flatten(checkout, name="AGENTS.md"):
 
 @pytest.mark.slow
 @pytest.mark.parametrize("symlinks", ["true", "false"])
-def test_only_exact_copies_of_link_targets_are_restored_under_the_update_lock(link_repos, symlinks, capsys, monkeypatch):
+def test_only_exact_copies_of_link_targets_are_restored_under_the_update_lock(
+    link_repos, symlinks, capsys, monkeypatch
+):
     _, checkout, state = link_repos
     sh(checkout, "git", "config", "core.symlinks", symlinks)
     names = ["AGENTS.md", "templates/employee-repo/AGENTS.md", "templates/employee-repo/CLAUDE.md"]
@@ -709,12 +943,22 @@ def test_link_repair_keeps_the_existing_busy_work_deferrals(link_repos, monkeypa
 
 
 @pytest.mark.slow
-@pytest.mark.parametrize("point,action", [
-    ("inspected", "edit"), ("inspected", "stage"), ("inspected", "edit and stage"),
-    ("renamed", "edit"), ("renamed", "stage"), ("renamed", "replace"),
-    ("linked", "edit"), ("linked", "stage"), ("linked", "replace"),
-    ("index", "edit"), ("index", "stage"),
-])
+@pytest.mark.parametrize(
+    "point,action",
+    [
+        ("inspected", "edit"),
+        ("inspected", "stage"),
+        ("inspected", "edit and stage"),
+        ("renamed", "edit"),
+        ("renamed", "stage"),
+        ("renamed", "replace"),
+        ("linked", "edit"),
+        ("linked", "stage"),
+        ("linked", "replace"),
+        ("index", "edit"),
+        ("index", "stage"),
+    ],
+)
 def test_link_repair_keeps_edits_and_staging_at_each_swap_step(link_repos, monkeypatch, point, action):
     _, checkout, state = link_repos
     names = ["AGENTS.md", "templates/employee-repo/CLAUDE.md"]
@@ -725,17 +969,24 @@ def test_link_repair_keeps_edits_and_staging_at_each_swap_step(link_repos, monke
     inode = path.stat().st_ino
     before = head(checkout)
     edited, staged = b"new local rules\n", b"staged local rules\n"
-    oid = subprocess.run(["git", "-C", str(checkout), "hash-object", "-w", "--stdin"],
-                         input=staged, capture_output=True, check=True).stdout.decode().strip()
+    oid = (
+        subprocess.run(
+            ["git", "-C", str(checkout), "hash-object", "-w", "--stdin"], input=staged, capture_output=True, check=True
+        )
+        .stdout.decode()
+        .strip()
+    )
     fired = False
     index = b""
     inspect, set_aside, symlink = checkout_links._inspect, checkout_links._set_aside, checkout_links.os.symlink
 
     def cached():
-        return subprocess.run(["git", "-C", str(checkout), "diff", "--cached", "--binary"],
-                              capture_output=True, check=True).stdout
+        return subprocess.run(
+            ["git", "-C", str(checkout), "diff", "--cached", "--binary"], capture_output=True, check=True
+        ).stdout
 
     with path.open("r+b", buffering=0) as editor:
+
         def inject(step):
             nonlocal fired, index
             if step != point or fired:
@@ -787,7 +1038,7 @@ def test_link_repair_keeps_edits_and_staging_at_each_swap_step(link_repos, monke
     assert path.read_bytes() == (edited if "edit" in action else original)
     assert not (checkout / names[0]).is_symlink()
     assert (checkout / names[0]).read_bytes() == (checkout / "CLAUDE.md").read_bytes()
-    folder, = (checkout / ".git/tico-flattened-links").iterdir()
+    (folder,) = (checkout / ".git/tico-flattened-links").iterdir()
     backup = folder / names[-1]
     assert backup.stat().st_ino == inode and backup.read_bytes() == path.read_bytes()
     replacements = list(folder.rglob(".tico-link-replacement-*"))
@@ -811,6 +1062,7 @@ def test_link_repair_keeps_writes_after_an_original_passes_validation(link_repos
     fired = False
 
     with path.open("r+b", buffering=0) as editor:
+
         def read(saved):
             nonlocal fired
             content = read_bytes(saved)
@@ -853,8 +1105,7 @@ def test_link_backups_use_the_worktrees_git_directory_and_keep_the_newest_five(l
         folders.append(folder)
     assert set(folders[-5:]) == set((git_dir / "tico-flattened-links").iterdir())
     assert not folders[0].exists()
-    assert all((folder / "AGENTS.md").read_bytes() == (worktree / "CLAUDE.md").read_bytes()
-               for folder in folders[-5:])
+    assert all((folder / "AGENTS.md").read_bytes() == (worktree / "CLAUDE.md").read_bytes() for folder in folders[-5:])
     assert not sh(worktree, "git", "status", "--porcelain")
 
 
@@ -902,9 +1153,9 @@ def test_a_target_hidden_from_git_status_still_blocks_repair(link_repos):
 @pytest.mark.slow
 def test_a_tag_that_moved_upstream_is_not_trusted(repos):
     public, checkout, state = repos
-    run_apply(checkout, state)                                  # the checkout now has v0.2.0
+    run_apply(checkout, state)  # the checkout now has v0.2.0
     sh(checkout, "git", "checkout", "-q", "main")
-    sh(public, "git", "tag", "-f", "v0.2.0", "main")            # someone re-points the release
+    sh(public, "git", "tag", "-f", "v0.2.0", "main")  # someone re-points the release
     result, _ = run_apply(checkout, state)
     assert result["state"] == "failed" and "differs" in result["error"]
 
@@ -915,16 +1166,18 @@ def test_rollback_when_the_new_release_does_not_come_back(repos):
     result, calls = run_apply(checkout, state, calls=Calls(healthy=(False, True)))
     assert result["state"] == "rolled_back" and "did not report in" in result["error"]
     assert head(checkout) == before and sh(checkout, "git", "branch", "--show-current") == "main"
-    assert calls.restarts == 2 and len(calls.installs) == 2       # forward, then the old dependencies back
+    assert calls.restarts == 2 and len(calls.installs) == 2  # forward, then the old dependencies back
     assert ru.read_status(state)["state"] == "rolled_back"
 
 
 def test_a_release_whose_rust_runner_cannot_be_had_goes_back_before_any_restart(repos):
     public, checkout, state = repos
     before = head(checkout)
-    result, calls = run_apply(checkout, state, calls=Calls(prepare_error="could not download the Rust runner for 0.2.0"))
+    result, calls = run_apply(
+        checkout, state, calls=Calls(prepare_error="could not download the Rust runner for 0.2.0")
+    )
     assert result["state"] == "rolled_back" and result["error"].startswith("could not download the Rust runner")
-    assert head(checkout) == before and calls.restarts == 1 and calls.checks == [before]   # the restart is the way back
+    assert head(checkout) == before and calls.restarts == 1 and calls.checks == [before]  # the restart is the way back
 
 
 def runner_release(public, checkout):
@@ -937,8 +1190,9 @@ def test_a_release_whose_new_runner_binary_is_not_published_yet_waits_without_mo
     public, checkout, state = repos
     runner_release(public, checkout)
     before, asked = head(checkout), []
-    result, calls = run_apply(checkout, state, version="0.3.0", which=lambda name: None,
-                              listed=lambda version: asked.append(version) or False)
+    result, calls = run_apply(
+        checkout, state, version="0.3.0", which=lambda name: None, listed=lambda version: asked.append(version) or False
+    )
     assert result["state"] == "failed" and "does not have this computer's runner binary yet" in result["error"]
     assert asked == ["0.3.0"] and head(checkout) == before and calls.restarts == 0 and calls.prepared == []
     assert ru.read_status(state)["state"] == "failed"
@@ -967,11 +1221,11 @@ def test_only_a_changed_runner_without_cargo_asks_whether_its_binary_is_publishe
     public, checkout, state = repos
     asked = []
     listed = lambda version: asked.append(version) or False
-    result, _ = run_apply(checkout, state, which=lambda name: None, listed=listed)      # 0.2.0: same runner sources
+    result, _ = run_apply(checkout, state, which=lambda name: None, listed=listed)  # 0.2.0: same runner sources
     assert result["state"] == "healthy" and asked == []
     runner_release(public, checkout)
     result, _ = run_apply(checkout, state, version="0.3.0", which=lambda name: "/usr/bin/cargo", listed=listed)
-    assert result["state"] == "healthy" and asked == []                                  # cargo builds one
+    assert result["state"] == "healthy" and asked == []  # cargo builds one
 
 
 def test_a_release_whose_checksums_cannot_be_read_updates_as_before(repos):
@@ -986,8 +1240,11 @@ def test_the_prepare_step_is_a_new_process_of_the_new_tree(tmp_path, monkeypatch
 
     def run(cmd, **kw):
         seen.append((cmd, kw["cwd"]))
-        return subprocess.CompletedProcess(cmd, 1, "", "Tico runner: no Rust runner for this checkout: cargo is not on PATH\n")
-    assert ru.prepare_binary(tmp_path, run=run) == "" and not seen      # a tree from before the shim gets its own
+        return subprocess.CompletedProcess(
+            cmd, 1, "", "Tico runner: no Rust runner for this checkout: cargo is not on PATH\n"
+        )
+
+    assert ru.prepare_binary(tmp_path, run=run) == "" and not seen  # a tree from before the shim gets its own
     monkeypatch.setattr(ru.sys, "executable", "/opt/env-python/bin/python3")
     # Going back to a release from before runner_support/: its engine is still runner/engine.py.
     (tmp_path / "runner").mkdir()
@@ -1002,6 +1259,7 @@ def test_the_prepare_step_is_a_new_process_of_the_new_tree(tmp_path, monkeypatch
 
 # -- runners that share one checkout -------------------------------------------------------------
 
+
 def test_a_checkout_already_on_the_release_restarts_a_runner_that_started_on_other_code(repos):
     public, checkout, state = repos
     started = head(checkout)
@@ -1011,18 +1269,20 @@ def test_a_checkout_already_on_the_release_restarts_a_runner_that_started_on_oth
     result, calls = run_apply(checkout, state, started=started, helpers=lambda: restarted.append("all"))
     assert result["state"] == "healthy" and ru.read_status(state)["state"] == "healthy"
     assert calls.restarts == 1 and calls.checks == [on_release] and restarted == ["all"]
-    assert calls.installs == [(started, on_release)]          # this runner's interpreter may not have the new dependencies
+    assert calls.installs == [(started, on_release)]  # this runner's interpreter may not have the new dependencies
     assert head(checkout) == on_release
     result, calls = run_apply(checkout, state, calls=Calls(healthy=(False,)), started=started)
     assert result["state"] == "failed" and "did not report in" in result["error"] and calls.restarts == 1
-    assert head(checkout) == on_release                                             # no going back from a restart
+    assert head(checkout) == on_release  # no going back from a restart
 
 
 def test_a_failed_install_on_a_checkout_already_moved_leaves_the_runner_running(repos):
     public, checkout, state = repos
     started = head(checkout)
     run_apply(checkout, state)
-    result, calls = run_apply(checkout, state, calls=Calls(install_error="pip install failed: no network"), started=started)
+    result, calls = run_apply(
+        checkout, state, calls=Calls(install_error="pip install failed: no network"), started=started
+    )
     assert result["state"] == "failed" and result["error"] == "pip install failed: no network"
     assert calls.restarts == 0 and ru.read_status(state)["state"] == "failed"
 
@@ -1038,6 +1298,7 @@ def test_the_install_step_uses_the_update_process_interpreter(repos, monkeypatch
             return subprocess.run(cmd, **kw)
         pips.append(cmd)
         return subprocess.CompletedProcess(cmd, 0, "", "")
+
     monkeypatch.setattr(ru.sys, "executable", "/opt/env-python/bin/python3")
     assert ru.pip_install(checkout, started, head(checkout), run=run) == ""
     assert pips[0][:4] == ["/opt/env-python/bin/python3", "-m", "pip", "install"]
@@ -1047,7 +1308,7 @@ def test_the_install_step_uses_the_update_process_interpreter(repos, monkeypatch
 def test_a_runner_already_on_the_release_is_not_restarted(repos):
     public, checkout, state = repos
     run_apply(checkout, state)
-    for started in (head(checkout), ""):                                            # "": a runner from before --started
+    for started in (head(checkout), ""):  # "": a runner from before --started
         result, calls = run_apply(checkout, state, started=started)
         assert result["state"] == "healthy" and calls.restarts == 0 and calls.checks == []
 
@@ -1076,9 +1337,16 @@ def test_alternating_deferrals_release_old_runners_without_changing_the_checkout
                 patch.setattr(ru.time, "time", lambda: now[0])
                 patch.setattr(ru.time, "sleep", lambda seconds: now.__setitem__(0, now[0] + seconds))
             try:
-                result, calls = run_apply(checkout, state, version="0.3.0", clock=lambda: now[0], lock_wait=1,
-                                          busy=lambda: cause == "active_work", which=lambda name: None,
-                                          listed=lambda version: False)
+                result, calls = run_apply(
+                    checkout,
+                    state,
+                    version="0.3.0",
+                    clock=lambda: now[0],
+                    lock_wait=1,
+                    busy=lambda: cause == "active_work",
+                    which=lambda name: None,
+                    listed=lambda version: False,
+                )
             finally:
                 if held:
                     held.close()
@@ -1128,18 +1396,19 @@ def test_a_git_gate_timeout_defers_even_when_the_gate_clears_before_checkout(rep
         result, calls = run_apply(checkout, state, run=run, lock_wait=0)
         assert result["state"] == paused and len(waited) == 1 and waited[0] >= 10
         assert ru.read_status(state)["state"] == paused
-        assert commands == []                                      # B never fetched or checked out without A's lock
+        assert commands == []  # B never fetched or checked out without A's lock
         assert calls.installs == [] and calls.prepared == [] and calls.checks == [] and calls.restarts == 0
         assert head(checkout) == before and (checkout / ".git/index").read_bytes() == index
 
     monkeypatch.setattr(ru, "git", git)
     result, calls = run_apply(checkout, state)
-    assert result["state"] == "healthy" and calls.restarts == 1     # the deferred update can retry normally
+    assert result["state"] == "healthy" and calls.restarts == 1  # the deferred update can retry normally
 
 
 @pytest.mark.parametrize("policy,paused", [("short", "idle"), ("legacy", "failed")])
 def test_an_unresolved_update_lock_exits_with_retryable_status(tmp_path, monkeypatch, policy, paused):
     monkeypatch.setenv("TICO_UPDATE_RETRY", policy)
+
     def git(root, *args, **kwargs):
         assert args == ("rev-parse", "--git-common-dir")
         return subprocess.CompletedProcess([], 1, "", "cannot read Git metadata")
@@ -1147,8 +1416,7 @@ def test_an_unresolved_update_lock_exits_with_retryable_status(tmp_path, monkeyp
     monkeypatch.setattr(ru, "git", git)
     monkeypatch.setattr(ru, "in_flight", lambda directory: False)
     ru.write_status(tmp_path, state="updating", target="0.2.0", error="", at=1)
-    assert ru.main(["--root", str(tmp_path), "--version", "v0.2.0", "--state-dir", str(tmp_path),
-                    "--pid", "42"]) == 1
+    assert ru.main(["--root", str(tmp_path), "--version", "v0.2.0", "--state-dir", str(tmp_path), "--pid", "42"]) == 1
     status = ru.read_status(tmp_path)
     assert status["state"] == paused and status["target"] == "0.2.0" and status["at"] > 1
     assert "cannot read Git metadata" in status["error"] and status["cause_count"] == 1
@@ -1157,7 +1425,7 @@ def test_an_unresolved_update_lock_exits_with_retryable_status(tmp_path, monkeyp
 def test_an_update_of_a_shared_checkout_waits_for_another_under_way(repos):
     public, checkout, state = repos
     before = head(checkout)
-    held = hold(checkout)                                         # another environment's update holds the checkout
+    held = hold(checkout)  # another environment's update holds the checkout
     result, calls = run_apply(checkout, state, lock_wait=0)
     assert result["state"] == "failed" and ru.read_status(state)["state"] == "failed"
     assert head(checkout) == before and calls.restarts == 0 and calls.installs == []
@@ -1167,13 +1435,15 @@ def test_an_update_of_a_shared_checkout_waits_for_another_under_way(repos):
         time.sleep(1.5)
         seen.append(ru.read_status(state)["state"])
         held.close()
+
     threading.Thread(target=release).start()
     result, calls = run_apply(checkout, state, lock_wait=30)
-    assert seen == ["updating"]                                    # its runner starts no second update meanwhile
+    assert seen == ["updating"]  # its runner starts no second update meanwhile
     assert result["state"] == "healthy" and ru.checkout_release(checkout) == "0.2.0" and calls.restarts == 1
 
 
 # -- helper jobs follow the release --------------------------------------------------------------
+
 
 @pytest.mark.slow
 def test_a_healthy_update_restarts_the_helpers_and_a_rollback_does_not(repos):
@@ -1208,9 +1478,11 @@ def test_only_installed_helpers_are_restarted(tmp_path):
     install_plists(agents, "team.tico.tico-bot", "team.tico.tico-connectors", "team.tico.tico-importers")
     launchctl, said = Launchctl(), []
     done = ru.restart_helpers({}, launchctl, agents, uid=501, say=said.append)
-    assert done == ["connectors", "importers"]                  # close-calls has no plist; the bot job is not touched here
-    assert launchctl.calls == [["launchctl", "kickstart", "-k", "gui/501/team.tico.tico-connectors"],
-                               ["launchctl", "kickstart", "-k", "gui/501/team.tico.tico-importers"]]
+    assert done == ["connectors", "importers"]  # close-calls has no plist; the bot job is not touched here
+    assert launchctl.calls == [
+        ["launchctl", "kickstart", "-k", "gui/501/team.tico.tico-connectors"],
+        ["launchctl", "kickstart", "-k", "gui/501/team.tico.tico-importers"],
+    ]
     assert len(said) == 2 and "team.tico.tico-connectors" in said[0]
 
 
@@ -1219,7 +1491,12 @@ def test_an_installed_helper_that_is_not_loaded_is_bootstrapped(tmp_path):
     install_plists(agents, "team.tico.tico-connectors")
     launchctl = Launchctl(fail_kickstart={"team.tico.tico-connectors"})
     done = ru.restart_helpers({}, launchctl, agents, uid=501, say=lambda line: None)
-    assert done == ["connectors"] and launchctl.calls[-1] == ["launchctl", "bootstrap", "gui/501", str(agents / "team.tico.tico-connectors.plist")]
+    assert done == ["connectors"] and launchctl.calls[-1] == [
+        "launchctl",
+        "bootstrap",
+        "gui/501",
+        str(agents / "team.tico.tico-connectors.plist"),
+    ]
 
 
 # -- a Linux checkout supervised by systemd user units -----------------------------------------------
@@ -1251,9 +1528,10 @@ def test_a_failed_systemctl_falls_back_to_stopping_the_process(monkeypatch):
         killed.append(sig)
         if sig == 0:
             raise ProcessLookupError
+
     monkeypatch.setattr(ru.os, "kill", kill)
     ru.restart_runner(4242, env=SYSTEMD, run=Systemctl(fail={"tico-bot.service"}))
-    assert killed[0] == ru.signal.SIGTERM                 # Restart=always starts it again
+    assert killed[0] == ru.signal.SIGTERM  # Restart=always starts it again
 
 
 def test_only_installed_helper_units_are_restarted_through_systemctl(tmp_path):
@@ -1263,12 +1541,15 @@ def test_only_installed_helper_units_are_restarted_through_systemctl(tmp_path):
         (units / name).write_text("[Service]\n")
     systemctl, said = Systemctl(), []
     done = ru.restart_helpers_systemd(SYSTEMD, systemctl, unit_dir=units, say=said.append)
-    assert done == ["connectors", "importers"]              # close-calls has no unit; the runner's own is not touched here
-    assert systemctl.calls == [["systemctl", "--user", "restart", "tico-connectors.service"],
-                               ["systemctl", "--user", "restart", "tico-importers.service"]]
+    assert done == ["connectors", "importers"]  # close-calls has no unit; the runner's own is not touched here
+    assert systemctl.calls == [
+        ["systemctl", "--user", "restart", "tico-connectors.service"],
+        ["systemctl", "--user", "restart", "tico-importers.service"],
+    ]
     (units / "tico-acme-close-calls.service").write_text("[Service]\n")
-    assert ru.restart_helpers_systemd({"TICO_SYSTEMD_UNIT": "tico-acme-bot.service"}, Systemctl(), unit_dir=units,
-                                      say=lambda line: None) == ["close-calls"]
+    assert ru.restart_helpers_systemd(
+        {"TICO_SYSTEMD_UNIT": "tico-acme-bot.service"}, Systemctl(), unit_dir=units, say=lambda line: None
+    ) == ["close-calls"]
 
 
 @pytest.mark.slow
@@ -1296,7 +1577,7 @@ def test_retained_instruction_baseline_survives_release_target_changes_and_remov
     path.write_text("Repository rules\n")
     g = lambda *args: ru.git(checkout, *args)
     assert not ru.repair_instruction_links(checkout, g)
-    backup, = (checkout / ".git/tico-instruction-backups").glob("AGENTS.md.tico-backup-*")
+    (backup,) = (checkout / ".git/tico-instruction-backups").glob("AGENTS.md.tico-backup-*")
     assert "-sha256-" in backup.name
     commit(checkout, "CLAUDE.md", "Updated release rules\n")
     assert not ru.repair_instruction_links(checkout, g)
@@ -1317,7 +1598,7 @@ def test_legacy_instruction_backup_gets_a_baseline_only_while_unchanged(tmp_path
     backup = saved / "AGENTS.md.tico-backup-1"
     backup.write_text("accepted rules\n")
     assert not ru.instruction_backup_note(tmp_path, metadata)
-    retained, = saved.iterdir()
+    (retained,) = saved.iterdir()
     assert "-sha256-" in retained.name and not backup.exists()
     (tmp_path / "AGENTS.md").unlink()
     assert not ru.instruction_backup_note(tmp_path, metadata)
@@ -1350,6 +1631,7 @@ def test_open_instruction_writer_lands_in_backup_and_is_reported_on_next_update(
 
 def test_lock_outside_runner_root_is_never_touched(tmp_path, monkeypatch):
     from runner_support import git_locks
+
     checkout = tmp_path / "outside"
     metadata = checkout / ".git"
     metadata.mkdir(parents=True)
@@ -1367,6 +1649,7 @@ def test_lock_outside_runner_root_is_never_touched(tmp_path, monkeypatch):
 @pytest.mark.parametrize("linked", [False, True])
 def test_native_updater_registers_its_checkout_and_reports_an_old_index_lock(repos, monkeypatch, linked):
     from runner_support import git_locks
+
     _, checkout, state = repos
     base = checkout
     base_index = (base / ".git/index").read_bytes()
@@ -1395,8 +1678,7 @@ def test_native_updater_registers_its_checkout_and_reports_an_old_index_lock(rep
 
     monkeypatch.setattr(ru, "run_update", update)
     monkeypatch.setenv("TICO_GIT_OWNED_ROOTS", json.dumps([str(projects)]))
-    assert ru.main(["--root", str(checkout), "--version", "0.2.0", "--state-dir", str(state),
-                    "--pid", "42"]) == 1
+    assert ru.main(["--root", str(checkout), "--version", "0.2.0", "--state-dir", str(state), "--pid", "42"]) == 1
     assert git_locks.owned(checkout) and git_locks.owned(state) and git_locks.owned(projects)
     assert git_locks.owned(metadata) and git_locks.owned(common)
     with git_locks.command_lock(checkout) as gate:
@@ -1412,6 +1694,7 @@ def test_native_updater_registers_its_checkout_and_reports_an_old_index_lock(rep
 
 def test_native_checkout_registration_refuses_a_mismatched_backlink(tmp_path, monkeypatch):
     from runner_support import git_locks
+
     checkout = tmp_path / "native"
     common = tmp_path / "outside/.git"
     admin = common / "worktrees/native"
@@ -1430,6 +1713,7 @@ def test_native_checkout_registration_refuses_a_mismatched_backlink(tmp_path, mo
 
 def test_updater_git_holds_the_repository_gate_and_never_retries_a_locked_command(tmp_path, monkeypatch):
     from runner_support import git_locks
+
     metadata = tmp_path / ".git"
     metadata.mkdir()
     lock = metadata / "index.lock"
@@ -1467,6 +1751,7 @@ def test_instruction_backup_cleanup_never_follows_a_metadata_symlink(tmp_path):
 
 def test_lock_reporting_is_read_only_and_rechecks_replacement_locks(tmp_path, monkeypatch):
     from runner_support import git_locks
+
     metadata = tmp_path / ".git"
     metadata.mkdir()
     lock = metadata / "index.lock"
@@ -1488,6 +1773,7 @@ def test_lock_reporting_is_read_only_and_rechecks_replacement_locks(tmp_path, mo
 def test_old_lock_command_quotes_shell_paths(tmp_path):
     import shlex
     from runner_support import git_locks
+
     root = tmp_path / "repo with spaces"
     metadata = root / ".git"
     metadata.mkdir(parents=True)

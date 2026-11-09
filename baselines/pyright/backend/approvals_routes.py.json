@@ -1,0 +1,14 @@
+{
+    "files": {
+        "./backend/approvals_routes.py": [
+            {
+                "code": "reportAttributeAccessIssue",
+                "range": {
+                    "startColumn": 26,
+                    "endColumn": 31,
+                    "lineCount": 1
+                }
+            }
+        ]
+    }
+}

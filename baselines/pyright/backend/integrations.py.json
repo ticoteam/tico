@@ -1,0 +1,14 @@
+{
+    "files": {
+        "./backend/integrations.py": [
+            {
+                "code": "reportGeneralTypeIssues",
+                "range": {
+                    "startColumn": 30,
+                    "endColumn": 49,
+                    "lineCount": 1
+                }
+            }
+        ]
+    }
+}

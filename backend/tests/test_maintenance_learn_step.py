@@ -22,9 +22,16 @@ from backend.tests.test_mail_api import put_mail
 
 def context(api, **changes):
     now = H.now()
-    ctx = {"run_id": H.new_id(), "window_start": H.shift(now, days=-1), "window_end": now, "now": now,
-           "settings": {"key": "learn", "enabled": 1, "frequency": "day"}, "cap": 0.0,
-           "store": api.app.state.store, "auth": api.app.state.auth}
+    ctx = {
+        "run_id": H.new_id(),
+        "window_start": H.shift(now, days=-1),
+        "window_end": now,
+        "now": now,
+        "settings": {"key": "learn", "enabled": 1, "frequency": "day"},
+        "cap": 0.0,
+        "store": api.app.state.store,
+        "auth": api.app.state.auth,
+    }
     ctx.update(changes)
     return {"step_id": ctx["run_id"] + ":learn", **ctx}
 
@@ -33,10 +40,16 @@ def run_step(api, ctx=None):
     store = api.app.state.store
     ctx = ctx or context(api)
     with store.transaction() as c:
-        c.execute("INSERT OR IGNORE INTO maintenance_runs(id,occurrence_key,trigger,started_at,heartbeat_at) "
-                  "VALUES(?,?,'run_now',?,?)", (ctx["run_id"], ctx["run_id"], ctx["now"], ctx["now"]))
-        c.execute("INSERT OR IGNORE INTO maintenance_run_steps(id,maintenance_run_id,step,status,started_at) "
-                  "VALUES(?,?,'learn','pending',?)", (ctx["step_id"], ctx["run_id"], ctx["now"]))
+        c.execute(
+            "INSERT OR IGNORE INTO maintenance_runs(id,occurrence_key,trigger,started_at,heartbeat_at) "
+            "VALUES(?,?,'run_now',?,?)",
+            (ctx["run_id"], ctx["run_id"], ctx["now"], ctx["now"]),
+        )
+        c.execute(
+            "INSERT OR IGNORE INTO maintenance_run_steps(id,maintenance_run_id,step,status,started_at) "
+            "VALUES(?,?,'learn','pending',?)",
+            (ctx["step_id"], ctx["run_id"], ctx["now"]),
+        )
     with store.read() as c:
         c.execute("PRAGMA query_only=ON")
         try:
@@ -48,10 +61,22 @@ def run_step(api, ctx=None):
 def scoring(api, monkeypatch, count=20, recipients=("ops",)):
     store = api.app.state.store
     with store.transaction() as c:
-        task = H.task_create(c, "human:ana", "Invoice rules", "Friday is the cutoff.", "bot:ops", lint=False, private=False)
-    items = [{"key": f"task:{n}", "source": "task", "author": "human:ana", "ref": {"task": task["id"]},
-              "created_at": H.now(), "label": f"Rule {n}", "text": f"Keep rule {n}.\nIts source is explicit.",
-              "audience": None} for n in range(count)]
+        task = H.task_create(
+            c, "human:ana", "Invoice rules", "Friday is the cutoff.", "bot:ops", lint=False, private=False
+        )
+    items = [
+        {
+            "key": f"task:{n}",
+            "source": "task",
+            "author": "human:ana",
+            "ref": {"task": task["id"]},
+            "created_at": H.now(),
+            "label": f"Rule {n}",
+            "text": f"Keep rule {n}.\nIts source is explicit.",
+            "audience": None,
+        }
+        for n in range(count)
+    ]
     team = {recipient: {"name": recipient, "profile": recipient} for recipient in recipients}
     calls = []
 
@@ -63,9 +88,15 @@ def scoring(api, monkeypatch, count=20, recipients=("ops",)):
     monkeypatch.setattr(learnings, "engine_for", lambda *args: engine)
     monkeypatch.setattr(learnings, "roster", lambda *args: team)
     monkeypatch.setattr(learnings, "collect", lambda *args: ([dict(i) for i in items], 0))
-    monkeypatch.setattr(learnings, "question_set", lambda *args: {
-        "label": "learnings-route", "questions": {"learnable": {"type": "noul", "instructions": "Durable?"}},
-        "thresholds": {"noise": 0.2, "relevant": 0.6, "per_recipient": 99}})
+    monkeypatch.setattr(
+        learnings,
+        "question_set",
+        lambda *args: {
+            "label": "learnings-route",
+            "questions": {"learnable": {"type": "noul", "instructions": "Durable?"}},
+            "thresholds": {"noise": 0.2, "relevant": 0.6, "per_recipient": 99},
+        },
+    )
     return task, calls
 
 
@@ -85,8 +116,10 @@ def start(api, row, machine=None):
     ready(api, machine, [row["bot"]])
     with api.app.state.store.transaction() as c:
         # Creation wakes are over; claim the Update request itself.
-        c.execute("UPDATE jobs SET state='completed' WHERE bot_id=? AND message_id<>? AND state='queued'",
-                  (row["bot"], row["message_id"]))
+        c.execute(
+            "UPDATE jobs SET state='completed' WHERE bot_id=? AND message_id<>? AND state='queued'",
+            (row["bot"], row["message_id"]),
+        )
     attempt = claim(api, machine, row["bot"])
     assert attempt is not None
     with api.app.state.store.read() as c:
@@ -98,14 +131,29 @@ def start(api, row, machine=None):
 
 def complete(api, turn, text):
     machine, attempt = turn
-    post(api, f"attempts/{attempt['id']}/complete", {"outcome": "completed", "text": text, "last_seq": 0}, machine["token"])
+    post(
+        api,
+        f"attempts/{attempt['id']}/complete",
+        {"outcome": "completed", "text": text, "last_seq": 0},
+        machine["token"],
+    )
 
 
 def keep_items(c, items, created_at=None):
     now, run_id = created_at or H.now(), H.new_id()
     c.execute("INSERT INTO learning_runs(id,night,status,started_at) VALUES(?,?,'done',?)", (run_id, now[:10], now))
-    items = [{"author": "human:ana", "created_at": now, "label": item["key"], "text": "Keep this rule.",
-              "learnable": 0.9, "scores": {"ops": 0.9}, **item} for item in items]
+    items = [
+        {
+            "author": "human:ana",
+            "created_at": now,
+            "label": item["key"],
+            "text": "Keep this rule.",
+            "learnable": 0.9,
+            "scores": {"ops": 0.9},
+            **item,
+        }
+        for item in items
+    ]
     learnings.dispatch(c, run_id, now[:10], items, {"ops": items}, {}, {})
     c.execute("UPDATE learning_deliveries SET created_at=? WHERE run_id=?", (now, run_id))
     return run_id
@@ -198,8 +246,9 @@ def test_recovered_learn_worker_cannot_deliver_or_advance_after_scoring(api, mon
                 old = c.execute("SELECT * FROM maintenance_runs WHERE finished_at IS NULL").fetchone()
                 assert old["heartbeat_at"] > old["started_at"]
                 # Simulate a stopped heartbeat while the model still has its request.
-                c.execute("UPDATE maintenance_runs SET heartbeat_at=? WHERE id=?",
-                          (H.shift(H.now(), minutes=-31), old["id"]))
+                c.execute(
+                    "UPDATE maintenance_runs SET heartbeat_at=? WHERE id=?", (H.shift(H.now(), minutes=-31), old["id"])
+                )
                 maintenance.recover(c, H.now())
             replacement, started = maintenance.run_now(store, auth, "human:ana", step="learn", wait=True)
             assert started and replacement["ok"]
@@ -220,10 +269,15 @@ def test_finished_learn_step_writes_no_deliveries_or_cursors(api, monkeypatch):
     scoring(api, monkeypatch, count=1)
     ctx = context(api)
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO maintenance_runs(id,occurrence_key,trigger,started_at,heartbeat_at) "
-                  "VALUES(?,?,'run_now',?,?)", (ctx["run_id"], ctx["run_id"], ctx["now"], ctx["now"]))
-        c.execute("INSERT INTO maintenance_run_steps(id,maintenance_run_id,step,status,started_at,finished_at) "
-                  "VALUES(?,?,'learn','pending',?,?)", (ctx["step_id"], ctx["run_id"], ctx["now"], H.now()))
+        c.execute(
+            "INSERT INTO maintenance_runs(id,occurrence_key,trigger,started_at,heartbeat_at) VALUES(?,?,'run_now',?,?)",
+            (ctx["run_id"], ctx["run_id"], ctx["now"], ctx["now"]),
+        )
+        c.execute(
+            "INSERT INTO maintenance_run_steps(id,maintenance_run_id,step,status,started_at,finished_at) "
+            "VALUES(?,?,'learn','pending',?,?)",
+            (ctx["step_id"], ctx["run_id"], ctx["now"], H.now()),
+        )
     assert run_step(api, ctx)["reason"] == "claim lost"
     with api.app.state.store.read() as c:
         for table in ("learning_runs", "learning_items", "learning_deliveries", "learning_cursors"):
@@ -239,8 +293,10 @@ def test_maintenance_listing_shows_seven_day_delivery_stats_on_learn(api, monkey
         updates.send_request(c, row, delivery=True)
         learnings.record_saved(c, "ops", row["id"], 2)
         old = H.shift(H.now(), days=-8)
-        c.execute("INSERT INTO learning_runs(id,night,status,started_at,read_count,detail) "
-                  "VALUES('old',?,'quiet',?,99,?)", (old[:10], old, json.dumps({"cost_usd": 99.0})))
+        c.execute(
+            "INSERT INTO learning_runs(id,night,status,started_at,read_count,detail) VALUES('old',?,'quiet',?,99,?)",
+            (old[:10], old, json.dumps({"cost_usd": 99.0})),
+        )
     reply = api.get("/api/v2/maintenance", headers=headers())
     assert reply.status_code == 200, reply.text
     steps = {row["key"]: row for row in reply.json()["steps"]}
@@ -277,9 +333,13 @@ def test_each_call_reserves_against_the_context_cap_in_the_judge_budget(api, mon
         def engine(state, questions, label=None):
             def call():
                 paid.append(state)
-                return {"answers": {key: {"type": "noul", "noul": 0.9} for key in questions},
-                        "usage": {"cost_usd": 0.6}}
+                return {
+                    "answers": {key: {"type": "noul", "noul": 0.9} for key in questions},
+                    "usage": {"cost_usd": 0.6},
+                }
+
             return judge.metered(store, [], state, questions, label, call)
+
         return engine
 
     monkeypatch.setattr(learnings, "engine_for", engine_for)
@@ -295,7 +355,7 @@ def test_update_sends_fifteen_across_runs_and_binds_the_exact_batch_once(api, mo
     scoring(api, monkeypatch)
     store = api.app.state.store
     run_step(api)
-    run_step(api)                 # A custom frequency can leave several pending runs on one day.
+    run_step(api)  # A custom frequency can leave several pending runs on one day.
     with store.transaction() as c:
         assert update_step.plan_request(c, "ops", updates.today()) == "deliver"
         row = queue(c)
@@ -361,13 +421,94 @@ def test_private_or_deleted_sources_stay_out_of_company_update(api, monkeypatch)
         assert updates.request_slots(c, "ops")["learnings"] == []
 
 
-def test_direct_chat_referencing_a_public_task_stays_out_of_company_update(api):
+def test_only_what_the_company_may_read_reaches_the_company_update(api):
+    """One install, each source in turn (public and private Slack channels, personal sent mail, task comments, a direct
+    chat that references a public task, the bot's home with restricted history), the learning rows cleared between."""
     store = api.app.state.store
+
+    def fresh():
+        with store.transaction() as c:
+            for table in [
+                r[0] for r in c.execute("SELECT name FROM sqlite_master WHERE type='table' AND name LIKE 'learning_%'")
+            ]:
+                c.execute(f"DELETE FROM {table}")
+
+    # Only known public Slack messages.
+    with api.app.state.store.transaction() as c:
+        items = []
+        for channel, channel_type in (("C_PUBLIC", "channel"), ("C_PRIVATE", "group"), ("C_UNKNOWN", None)):
+            event, why = slack_gateway.event_from(
+                {
+                    "event_id": channel,
+                    "team_id": "T_ACME",
+                    "event": {
+                        "type": "message" if channel_type else "app_mention",
+                        "channel_type": channel_type,
+                        "channel": channel,
+                        "ts": "1.0",
+                        "user": "U_ANA",
+                        "text": "Keep this rule.",
+                    },
+                },
+                "U_TICO",
+            )
+            assert why is None and event["channel_kind"] == "channel"
+            c.execute(
+                "INSERT INTO slack_events(event_id,team_id,channel,channel_kind,thread_ts,ts,user_id,event_type,"
+                "text,received_at) VALUES(?,?,?,'channel','1.0','1.0','U_ANA',?,'Keep this rule.',?)",
+                (channel, "T_ACME", channel, event["event_type"], H.now()),
+            )
+            items.append({"key": channel, "source": "slack", "ref": {"channel": channel, "ts": "1.0"}})
+        keep_items(c, items)
+        assert [i["item_key"] for i in learnings.pending(c, "ops")] == ["C_PUBLIC"]
+
+    fresh()  # Personal sent mail.
+    mail = put_mail(
+        api, "ana@acme.example", from_addr="ana@acme.example", labels=["SENT"], body="Personal salary plans."
+    )
+    with api.app.state.store.transaction() as c:
+        keep_items(
+            c,
+            [
+                {
+                    "key": "personal-mail",
+                    "source": "mail",
+                    "ref": {"mailbox": "ana@acme.example", "msg_id": mail["msg_id"]},
+                }
+            ],
+        )
+        assert updates.request_slots(c, "ops")["learnings"] == []
+
+    fresh()  # A real public task comment passes provenance, a private one does not.
+    with api.app.state.store.transaction() as c:
+        items = []
+        for private in (False, True):
+            title = "Private invoice rules" if private else "Public invoice rules"
+            task = H.task_create(c, "human:ana", title, "Friday is the cutoff.", "bot:ops", lint=False, private=private)
+            comment = H.task_comment(c, "human:ana", task["id"], "Keep the Friday cutoff.", wake=False)
+            assert H.message(c, comment["id"])["restricted"] == 1
+            items.append(
+                {"key": "private" if private else "public", "source": "task", "ref": {"message": comment["id"]}}
+            )
+        keep_items(c, items)
+        assert [i["item_key"] for i in learnings.pending(c, "ops")] == ["public"]
+        c.execute("UPDATE messages SET deleted_at=? WHERE id=?", (H.now(), items[0]["ref"]["message"]))
+        assert learnings.pending(c, "ops") == []
+
+    fresh()  # A direct chat referencing a public task.
     with store.transaction() as c:
-        task = H.task_create(c, "human:ana", "Invoice rules", "Friday is the cutoff.", "bot:ops", lint=False, private=False)
+        task = H.task_create(
+            c, "human:ana", "Chat invoice rules", "Friday is the cutoff.", "bot:ops", lint=False, private=False
+        )
         room = H.open_conversation(c, "human:ana", ["human:ana", "bot:ops"], scope="direct")
-        message = H.say(c, "human:ana", "bot:ops", "Keep this correction between us.",
-                        conversation_id=room["id"], refs={"task": task["id"]})
+        message = H.say(
+            c,
+            "human:ana",
+            "bot:ops",
+            "Keep this correction between us.",
+            conversation_id=room["id"],
+            refs={"task": task["id"]},
+        )
         c.execute("UPDATE conversations SET audience=NULL WHERE id=?", (room["id"],))
         assert H.conversation(c, room["id"])["audience"] is None
         items, _ = learnings.collect(c, store.settings, H.now(), {"ops": {"name": "Ops"}})
@@ -377,70 +518,38 @@ def test_direct_chat_referencing_a_public_task_stays_out_of_company_update(api):
         assert learnings.pending(c, "ops") == []
         assert "between us" not in updates.request_text(c, "ops", "daily", updates.today())
 
-
-def test_bot_home_corrections_follow_home_access_and_message_privacy(api):
-    store = api.app.state.store
+    fresh()  # The bot's home corrections follow home access and message privacy.
     with store.transaction() as c:
         home = threads.home(c, "bot:ops")
         public = H.say(c, "human:ana", "bot:ops", "Use the Friday cutoff.", conversation_id=home["id"])
         legacy = H.say(c, "human:ana", "bot:ops", "Old restricted history.", conversation_id=home["id"])
         c.execute("UPDATE messages SET legacy_audience='shared:ops' WHERE id=?", (legacy["id"],))
-        task = H.task_create(c, "human:ana", "Private invoice rules", "Personal billing.", "bot:ops", lint=False, private=True)
-        private = H.say(c, "human:ana", "bot:ops", "Keep the private billing rule.",
-                        conversation_id=home["id"], refs={"task": task["id"]})
+        task = H.task_create(
+            c, "human:ana", "Private billing rules", "Personal billing.", "bot:ops", lint=False, private=True
+        )
+        private = H.say(
+            c,
+            "human:ana",
+            "bot:ops",
+            "Keep the private billing rule.",
+            conversation_id=home["id"],
+            refs={"task": task["id"]},
+        )
         ids = {m["id"] for m in (public, legacy, private)}
         items, _ = learnings.collect(c, store.settings, H.now(), {"ops": {"name": "Ops"}})
         corrections = [i for i in items if i["ref"].get("message") in ids]
         assert len(corrections) == 3
         keep_items(c, corrections)
         assert [i["ref"]["message"] for i in learnings.pending(c, "ops")] == [public["id"]]
-        c.execute("UPDATE bot_config SET access=? WHERE bot='ops'",
-                  (json.dumps({"read": {"everyone": False, "people": ["ana"]}}),))
+        c.execute(
+            "UPDATE bot_config SET access=? WHERE bot='ops'",
+            (json.dumps({"read": {"everyone": False, "people": ["ana"]}}),),
+        )
         assert learnings.pending(c, "ops") == []
         c.execute("UPDATE bot_config SET access=NULL WHERE bot='ops'")
         request = updates.send_request(c, queue(c), delivery=True)
         assert "Use the Friday cutoff." in request["body"]
         assert "Old restricted history" not in request["body"] and "private billing rule" not in request["body"]
-
-
-def test_only_known_public_slack_messages_reach_company_update(api):
-    with api.app.state.store.transaction() as c:
-        items = []
-        for channel, channel_type in (("C_PUBLIC", "channel"), ("C_PRIVATE", "group"), ("C_UNKNOWN", None)):
-            event, why = slack_gateway.event_from({"event_id": channel, "team_id": "T_ACME", "event": {
-                "type": "message" if channel_type else "app_mention", "channel_type": channel_type,
-                "channel": channel, "ts": "1.0", "user": "U_ANA", "text": "Keep this rule."}}, "U_TICO")
-            assert why is None and event["channel_kind"] == "channel"
-            c.execute("INSERT INTO slack_events(event_id,team_id,channel,channel_kind,thread_ts,ts,user_id,event_type,"
-                      "text,received_at) VALUES(?,?,?,'channel','1.0','1.0','U_ANA',?,'Keep this rule.',?)",
-                      (channel, "T_ACME", channel, event["event_type"], H.now()))
-            items.append({"key": channel, "source": "slack", "ref": {"channel": channel, "ts": "1.0"}})
-        keep_items(c, items)
-        assert [i["item_key"] for i in learnings.pending(c, "ops")] == ["C_PUBLIC"]
-
-
-def test_personal_sent_mail_stays_out_of_company_update(api):
-    mail = put_mail(api, "ana@acme.example", from_addr="ana@acme.example", labels=["SENT"], body="Personal salary plans.")
-    with api.app.state.store.transaction() as c:
-        keep_items(c, [{"key": "personal-mail", "source": "mail",
-                        "ref": {"mailbox": "ana@acme.example", "msg_id": mail["msg_id"]}}])
-        assert updates.request_slots(c, "ops")["learnings"] == []
-
-
-def test_real_public_task_comment_passes_provenance_but_private_comment_does_not(api):
-    with api.app.state.store.transaction() as c:
-        items = []
-        for private in (False, True):
-            title = "Private invoice rules" if private else "Public invoice rules"
-            task = H.task_create(c, "human:ana", title, "Friday is the cutoff.", "bot:ops", lint=False, private=private)
-            comment = H.task_comment(c, "human:ana", task["id"], "Keep the Friday cutoff.", wake=False)
-            assert H.message(c, comment["id"])["restricted"] == 1
-            items.append({"key": "private" if private else "public", "source": "task",
-                          "ref": {"message": comment["id"]}})
-        keep_items(c, items)
-        assert [i["item_key"] for i in learnings.pending(c, "ops")] == ["public"]
-        c.execute("UPDATE messages SET deleted_at=? WHERE id=?", (H.now(), items[0]["ref"]["message"]))
-        assert learnings.pending(c, "ops") == []
 
 
 def test_completed_delivery_parses_saved_count_and_logs_stats_once(api, monkeypatch):
@@ -458,7 +567,10 @@ def test_completed_delivery_parses_saved_count_and_logs_stats_once(api, monkeypa
         assert attempt["state"] == "completed"
         assert all(attempt[key] is not None for key in ("runner_id", "generation", "token_hash", "lease_until"))
         assert updates.settle_sent(c, sent) is False
-        assert c.execute("SELECT state FROM update_queue WHERE id=?", (row["id"],)).fetchone()[0] == "delivered_without_update"
+        assert (
+            c.execute("SELECT state FROM update_queue WHERE id=?", (row["id"],)).fetchone()[0]
+            == "delivered_without_update"
+        )
         delivery = c.execute("SELECT * FROM learning_deliveries").fetchone()
         assert delivery["learnings_saved"] == 2 and delivery["settled_at"]
         learnings.record_saved(c, "ops", row["id"], 0)
@@ -476,7 +588,9 @@ def test_structured_post_feedback_is_scoped_to_its_bot_and_batch(api, monkeypatc
     with api.app.state.store.transaction() as c:
         row = queue(c, day="2026-11-04")
         updates.send_request(c, row)
-        updates.post(c, "ops", "- Finished invoices", day=row["day"], learnings_saved=3, delivery_batch_id="other-batch")
+        updates.post(
+            c, "ops", "- Finished invoices", day=row["day"], learnings_saved=3, delivery_batch_id="other-batch"
+        )
         assert c.execute("SELECT learnings_saved FROM learning_deliveries").fetchone()[0] is None
         updates.post(c, "ops", "- Finished invoices", day=row["day"], learnings_saved=1, delivery_batch_id=row["id"])
         sent = c.execute("SELECT * FROM update_queue WHERE id=?", (row["id"],)).fetchone()
@@ -532,7 +646,10 @@ def test_delivery_retry_reports_its_final_saved_count(api, monkeypatch, first_st
     with store.transaction() as c:
         updates.settle_sent(c, retry)
         updates.settle_learnings(c)
-        assert c.execute("SELECT state FROM update_queue WHERE id=?", (row["id"],)).fetchone()[0] == "delivered_without_update"
+        assert (
+            c.execute("SELECT state FROM update_queue WHERE id=?", (row["id"],)).fetchone()[0]
+            == "delivered_without_update"
+        )
         delivery = c.execute("SELECT learnings_saved,settled_at FROM learning_deliveries").fetchone()
         assert delivery["learnings_saved"] == 1 and delivery["settled_at"]
         stats = learnings.beta_stats(c)
@@ -543,8 +660,11 @@ def test_delivery_retry_reports_its_final_saved_count(api, monkeypatch, first_st
 def test_redo_keeps_the_original_delivery_turn_for_feedback_and_history(api, monkeypatch, resend):
     with api.app.state.store.transaction() as c:
         # The built-in Librarian on a computer, as in test_librarian: its Docs and Market writes are what Learn reads.
-        c.execute("INSERT INTO bots(id,slug,display_name,effort,state,created_at) "
-                  "VALUES('librarian','librarian','Librarian','','active',?)", (H.now(),))
+        c.execute(
+            "INSERT INTO bots(id,slug,display_name,effort,state,created_at) "
+            "VALUES('librarian','librarian','Librarian','','active',?)",
+            (H.now(),),
+        )
         c.execute("INSERT INTO bot_config(bot,team,owner_id) VALUES('librarian',NULL,'ana')")
         BS.write(c, "librarian", {"runtime": "fake", "host": "keeper"})
     scoring(api, monkeypatch, count=2, recipients=("librarian",))
@@ -556,14 +676,30 @@ def test_redo_keeps_the_original_delivery_turn_for_feedback_and_history(api, mon
         updates.send_request(c, row, delivery=True)
         sent = c.execute("SELECT * FROM update_queue WHERE id=?", (row["id"],)).fetchone()
     turn = start(api, sent)
-    post(api, "bots/librarian/memory/report", {"commits": [{
-        "sha": "a" * 40, "subject": "Keep the invoice cutoff", "author": "librarian", "committed": H.now(),
-        "files": ["memory/learnings.md"], "diff": "+ Keep the Friday cutoff", "attempt": turn[1]["id"]}]}, turn[0]["token"])
+    post(
+        api,
+        "bots/librarian/memory/report",
+        {
+            "commits": [
+                {
+                    "sha": "a" * 40,
+                    "subject": "Keep the invoice cutoff",
+                    "author": "librarian",
+                    "committed": H.now(),
+                    "files": ["memory/learnings.md"],
+                    "diff": "+ Keep the Friday cutoff",
+                    "attempt": turn[1]["id"],
+                }
+            ]
+        },
+        turn[0]["token"],
+    )
     with store.transaction() as c:
         doc = docs.insert(c, "bot:librarian", "Invoice policy", "Friday is the cutoff.")
         evidence, _ = market.create_evidence(c, "bot:librarian", quote="Invoices close on Friday.")
-        entity, _ = market.create_entity(c, "bot:librarian", type="company", name="Acme Billing",
-                                        evidence_ids=[evidence["id"]])
+        entity, _ = market.create_entity(
+            c, "bot:librarian", type="organization", name="Acme Billing", evidence_ids=[evidence["id"]]
+        )
         updates.redo(c, row["kind"], row["day"], bots=["librarian"])
         redo = c.execute("SELECT * FROM update_queue WHERE id=?", (row["id"],)).fetchone()
         assert redo["message_id"] is None
@@ -577,7 +713,9 @@ def test_redo_keeps_the_original_delivery_turn_for_feedback_and_history(api, mon
     complete(api, turn, "learnings_saved: 1")
     with store.transaction() as c:
         docs.insert(c, "bot:librarian", "Unrelated policy", "Outside the delivery turn.")
-        market.create_entity(c, "bot:librarian", type="company", name="Acme Shipping", evidence_ids=[evidence["id"]])
+        market.create_entity(
+            c, "bot:librarian", type="organization", name="Acme Shipping", evidence_ids=[evidence["id"]]
+        )
         updates.settle_learnings(c)
         assert c.execute("SELECT learnings_saved FROM learning_deliveries").fetchone()[0] == 1
         run_id = c.execute("SELECT run_id FROM learning_deliveries").fetchone()[0]
@@ -617,7 +755,9 @@ def test_missing_or_out_of_range_feedback_is_unreported(api, monkeypatch):
 def test_pending_expires_after_seven_days_without_writing_on_a_read_connection(api):
     store = api.app.state.store
     with store.transaction() as c:
-        task = H.task_create(c, "human:ana", "Invoice rules", "Friday is the cutoff.", "bot:ops", lint=False, private=False)
+        task = H.task_create(
+            c, "human:ana", "Invoice rules", "Friday is the cutoff.", "bot:ops", lint=False, private=False
+        )
         item = {"key": "rule", "source": "task", "ref": {"task": task["id"]}}
         old = keep_items(c, [item], H.shift(H.now(), days=-8))
         fresh = keep_items(c, [item], H.shift(H.now(), days=-6))
@@ -654,7 +794,9 @@ def test_pending_checks_at_most_one_hundred_candidates(api, monkeypatch):
     with api.app.state.store.transaction() as c:
         for run in range(7):
             keep_items(c, [{"key": f"gone:{run}:{n}", "source": "task", "ref": {"task": "gone"}} for n in range(15)])
-        task = H.task_create(c, "human:ana", "Invoice rules", "Friday is the cutoff.", "bot:ops", lint=False, private=False)
+        task = H.task_create(
+            c, "human:ana", "Invoice rules", "Friday is the cutoff.", "bot:ops", lint=False, private=False
+        )
         keep_items(c, [{"key": "valid", "source": "task", "ref": {"task": task["id"]}, "scores": {"ops": 0.8}}])
         assert learnings.pending(c, "ops") == []
         assert len(checked) == 100
@@ -666,9 +808,14 @@ def test_learnings_page_reads_pending_update_and_old_packet_receipts(api, monkey
     run_step(api, ctx)
     store = api.app.state.store
     with store.transaction() as c:
-        c.execute("INSERT INTO learning_runs(id,night,status,started_at) VALUES('old','2026-09-01','done',?)", (H.now(),))
-        c.execute("INSERT INTO learning_deliveries(run_id,recipient,task_id,item_keys,created_at) "
-                  "VALUES('old','ops',?,'[]',?)", (task["id"], H.now()))
+        c.execute(
+            "INSERT INTO learning_runs(id,night,status,started_at) VALUES('old','2026-09-01','done',?)", (H.now(),)
+        )
+        c.execute(
+            "INSERT INTO learning_deliveries(run_id,recipient,task_id,item_keys,created_at) "
+            "VALUES('old','ops',?,'[]',?)",
+            (task["id"], H.now()),
+        )
     page = api.get(f"/api/v2/learnings/{ctx['run_id']}", headers=headers())
     assert page.status_code == 200 and page.json()["sections"]["bots"][0]["delivery_status"]
     assert api.get("/api/v2/learnings/old/packets/ops", headers=headers()).status_code == 200
@@ -687,8 +834,10 @@ def test_same_day_runs_are_not_lost_between_pages_and_stats_cover_seven_days(api
     store = api.app.state.store
     with store.transaction() as c:
         old = H.shift(H.now(), days=-8)
-        c.execute("INSERT INTO learning_runs(id,night,status,started_at,read_count,detail) "
-                  "VALUES('old',?,'quiet',?,99,?)", (old[:10], old, json.dumps({"cost_usd": 99.0})))
+        c.execute(
+            "INSERT INTO learning_runs(id,night,status,started_at,read_count,detail) VALUES('old',?,'quiet',?,99,?)",
+            (old[:10], old, json.dumps({"cost_usd": 99.0})),
+        )
         stats = learnings.beta_stats(c)
         assert stats["days"] == 7 and stats["runs"] == 2 and stats["items_read"] == 4
         assert stats["cost_usd"] == pytest.approx(0.008)
@@ -713,26 +862,33 @@ def learn_migration():
 def test_learn_migration_is_idempotent_and_keeps_old_rows_and_indexes():
     migration = learn_migration()
     with sqlite3.connect(":memory:") as c:
-        c.execute("CREATE TABLE learning_deliveries(run_id TEXT NOT NULL,recipient TEXT NOT NULL,task_id TEXT NOT NULL, "
-                  "item_keys TEXT NOT NULL,created_at TEXT NOT NULL,PRIMARY KEY(run_id,recipient))")
-        c.execute("CREATE TABLE learning_runs(id TEXT PRIMARY KEY,night TEXT NOT NULL UNIQUE,status TEXT NOT NULL, "
-                  "started_at TEXT NOT NULL,finished_at TEXT,read_count INTEGER NOT NULL DEFAULT 0, "
-                  "routed_count INTEGER NOT NULL DEFAULT 0,detail TEXT NOT NULL DEFAULT '{}')")
+        c.execute(
+            "CREATE TABLE learning_deliveries(run_id TEXT NOT NULL,recipient TEXT NOT NULL,task_id TEXT NOT NULL, "
+            "item_keys TEXT NOT NULL,created_at TEXT NOT NULL,PRIMARY KEY(run_id,recipient))"
+        )
+        c.execute(
+            "CREATE TABLE learning_runs(id TEXT PRIMARY KEY,night TEXT NOT NULL UNIQUE,status TEXT NOT NULL, "
+            "started_at TEXT NOT NULL,finished_at TEXT,read_count INTEGER NOT NULL DEFAULT 0, "
+            "routed_count INTEGER NOT NULL DEFAULT 0,detail TEXT NOT NULL DEFAULT '{}')"
+        )
         c.execute("INSERT INTO learning_runs(id,night,status,started_at) VALUES('old','same-day','done','then')")
         c.execute("CREATE INDEX old_learning_tasks ON learning_deliveries(task_id)")
         c.execute("CREATE VIEW old_packets AS SELECT task_id FROM learning_deliveries")
         c.execute("INSERT INTO learning_deliveries VALUES('old','ops','packet-task','[\"item\"]','then')")
         migration.up(c)
         migration.up(c)
-        row = c.execute("SELECT task_id,item_keys,update_batch_id,message_id,expired_at "
-                        "FROM learning_deliveries WHERE run_id='old'").fetchone()
+        row = c.execute(
+            "SELECT task_id,item_keys,update_batch_id,message_id,expired_at FROM learning_deliveries WHERE run_id='old'"
+        ).fetchone()
         assert row == ("packet-task", '["item"]', None, None, None)
         assert c.execute("SELECT night FROM learning_runs WHERE id='old'").fetchone()[0] == "same-day"
         c.execute("INSERT INTO learning_runs(id,night,status,started_at) VALUES('again','same-day','quiet','now')")
         assert c.execute("SELECT 1 FROM sqlite_master WHERE name='old_learning_tasks'").fetchone()
         assert c.execute("SELECT 1 FROM sqlite_master WHERE name='learning_deliveries_expiry'").fetchone()
         assert c.execute("SELECT task_id FROM old_packets WHERE task_id IS NOT NULL").fetchone()[0] == "packet-task"
-        c.execute("INSERT INTO learning_deliveries(run_id,recipient,item_keys,created_at) VALUES('new','ops','[]','now')")
+        c.execute(
+            "INSERT INTO learning_deliveries(run_id,recipient,item_keys,created_at) VALUES('new','ops','[]','now')"
+        )
         assert c.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
     with sqlite3.connect(":memory:") as c:
         migration.up(c)
@@ -741,44 +897,65 @@ def test_learn_migration_is_idempotent_and_keeps_old_rows_and_indexes():
         c.execute("INSERT INTO learning_runs(id,night,status,started_at) VALUES('two','same-day','done','now')")
 
 
-@pytest.mark.parametrize("saved,seed,expected", [
-    ({}, 0, 0),
-    ({"learnings": {"at": "04:00"}}, 0, 0),
-    ({"learnings": {"on": False}}, 1, 0),
-    ({"learnings": {"on": True}}, 0, 1),
-])
+@pytest.mark.parametrize(
+    "saved,seed,expected",
+    [
+        ({}, 0, 0),
+        ({"learnings": {"at": "04:00"}}, 0, 0),
+        ({"learnings": {"on": False}}, 1, 0),
+        ({"learnings": {"on": True}}, 0, 1),
+    ],
+)
 def test_learn_cutover_takes_the_latest_saved_switch_once(saved, seed, expected):
     migration = learn_migration()
     with sqlite3.connect(":memory:") as c:
         c.execute("CREATE TABLE registry_metadata(key TEXT PRIMARY KEY,value TEXT)")
-        c.execute("CREATE TABLE maintenance_steps(key TEXT PRIMARY KEY,enabled INTEGER,updated_at TEXT,updated_by_id TEXT)")
+        c.execute(
+            "CREATE TABLE maintenance_steps(key TEXT PRIMARY KEY,enabled INTEGER,updated_at TEXT,updated_by_id TEXT)"
+        )
         c.execute("INSERT INTO maintenance_steps VALUES('learn',?,'seed','migration')", (seed,))
-        c.execute("INSERT INTO registry_metadata VALUES('system_routines',?)",
-                  (json.dumps({"kpi_asks": {"on": False}, **saved}),))
+        c.execute(
+            "INSERT INTO registry_metadata VALUES('system_routines',?)",
+            (json.dumps({"kpi_asks": {"on": False}, **saved}),),
+        )
         migration.up(c)
         assert c.execute("SELECT enabled FROM maintenance_steps WHERE key='learn'").fetchone()[0] == expected
         assert json.loads(c.execute("SELECT value FROM registry_metadata").fetchone()[0]) == {"kpi_asks": {"on": False}}
         changes = c.total_changes
         migration.up(c)
         assert c.total_changes == changes
-        c.execute("UPDATE maintenance_steps SET enabled=?,updated_at='later',updated_by_id='human:ana' WHERE key='learn'",
-                  (1 - expected,))
+        c.execute(
+            "UPDATE maintenance_steps SET enabled=?,updated_at='later',updated_by_id='human:ana' WHERE key='learn'",
+            (1 - expected,),
+        )
         migration.up(c)
         assert c.execute("SELECT enabled,updated_at,updated_by_id FROM maintenance_steps").fetchone() == (
-            1 - expected, "later", "human:ana")
+            1 - expected,
+            "later",
+            "human:ana",
+        )
 
 
 def test_learn_cutover_preserves_a_maintenance_choice_made_before_its_first_execution():
     migration = learn_migration()
     with sqlite3.connect(":memory:") as c:
         c.execute("CREATE TABLE registry_metadata(key TEXT PRIMARY KEY,value TEXT)")
-        c.execute("CREATE TABLE maintenance_steps(key TEXT PRIMARY KEY,enabled INTEGER,updated_at TEXT,updated_by_id TEXT)")
-        c.execute("INSERT INTO registry_metadata VALUES('system_routines',?)", (json.dumps({"learnings": {"on": True}}),))
+        c.execute(
+            "CREATE TABLE maintenance_steps(key TEXT PRIMARY KEY,enabled INTEGER,updated_at TEXT,updated_by_id TEXT)"
+        )
+        c.execute(
+            "INSERT INTO registry_metadata VALUES('system_routines',?)", (json.dumps({"learnings": {"on": True}}),)
+        )
         c.execute("INSERT INTO maintenance_steps VALUES('learn',1,'foundation','migration')")
-        c.execute("UPDATE maintenance_steps SET enabled=0,updated_at='human-choice',updated_by_id='human:ana' WHERE key='learn'")
+        c.execute(
+            "UPDATE maintenance_steps SET enabled=0,updated_at='human-choice',updated_by_id='human:ana' WHERE key='learn'"
+        )
         migration.up(c)
         assert c.execute("SELECT enabled,updated_at,updated_by_id FROM maintenance_steps").fetchone() == (
-            0, "human-choice", "human:ana")
+            0,
+            "human-choice",
+            "human:ana",
+        )
         assert json.loads(c.execute("SELECT value FROM registry_metadata").fetchone()[0]) == {}
 
 
@@ -786,21 +963,29 @@ def test_learn_cutover_preserves_a_maintenance_choice_made_before_its_first_exec
 def test_learn_cutover_retires_only_readonly_builtin_mirrors_and_skips_unfinished_runs(with_runs):
     migration = learn_migration()
     with sqlite3.connect(":memory:") as c:
-        c.execute("CREATE TABLE automations(id TEXT PRIMARY KEY,builtin INTEGER,enabled INTEGER,flow TEXT,"
-                  "deleted_at TEXT,updated_at TEXT)")
+        c.execute(
+            "CREATE TABLE automations(id TEXT PRIMARY KEY,builtin INTEGER,enabled INTEGER,flow TEXT,"
+            "deleted_at TEXT,updated_at TEXT)"
+        )
         for key, builtin, readonly, trigger, deleted in (
-            ("mirror", 1, True, "learnings", None), ("deleted", 1, True, "learnings", "before"),
-            ("editable", 1, False, "learnings", None), ("custom", 0, True, "learnings", None),
+            ("mirror", 1, True, "learnings", None),
+            ("deleted", 1, True, "learnings", "before"),
+            ("editable", 1, False, "learnings", None),
+            ("custom", 0, True, "learnings", None),
             ("other", 1, True, "kpi_asks", None),
         ):
             flow = {"readonly": readonly, "trigger": {"name": "tico.builtin.job." + trigger}}
             c.execute("INSERT INTO automations VALUES(?,?,1,?,?, 'before')", (key, builtin, json.dumps(flow), deleted))
         untouched = c.execute("SELECT * FROM automations WHERE id<>'mirror' ORDER BY id").fetchall()
         if with_runs:
-            c.execute("CREATE TABLE automation_runs(id TEXT PRIMARY KEY,automation_id TEXT,status TEXT,finished_at TEXT)")
+            c.execute(
+                "CREATE TABLE automation_runs(id TEXT PRIMARY KEY,automation_id TEXT,status TEXT,finished_at TEXT)"
+            )
             for status in ("queued", "waiting", "running", "done", "failed", "skipped"):
-                c.execute("INSERT INTO automation_runs VALUES(?,'mirror',?,?)",
-                          (status, status, None if status in ("queued", "waiting", "running") else "before"))
+                c.execute(
+                    "INSERT INTO automation_runs VALUES(?,'mirror',?,?)",
+                    (status, status, None if status in ("queued", "waiting", "running") else "before"),
+                )
             for key in ("deleted", "editable", "custom", "other"):
                 c.execute("INSERT INTO automation_runs VALUES(?,?,'queued',NULL)", (key, key))
         migration.up(c)

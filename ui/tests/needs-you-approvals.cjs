@@ -35,7 +35,7 @@ async function phonePublish(browser) {
   publish.decision_owner = 'human:' + await page.evaluate(() => S.me.id);
   await page.route('**/api/v2/needs-you*', route => route.fulfill({contentType: 'application/json', body: JSON.stringify({items: [publish]})}));
   await page.evaluate(async () => { await v2Refresh(); tasksRender(TASKS_ST); });
-  await page.locator('#task-view [data-view="foryou"]').click();
+  await page.locator('#task-scope').click(); await page.locator('#task-filter-pop [data-scope="you"]').click();
   const row = page.locator('[data-need-card="approval:ap-pub"]');
   assert.equal(await row.locator('.tl-age').textContent(), '2h');
   await row.click();
@@ -141,7 +141,7 @@ async function phoneSupport(browser) {
   const {page, errors} = await open(browser, {viewport: {width: 390, height: 844}, hash: '#/tasks'});
   await page.route('**/api/v2/needs-you*', route => route.fulfill({contentType: 'application/json', body: JSON.stringify({items: [report]})}));
   await page.evaluate(async () => { await v2Refresh(); tasksRender(TASKS_ST); });
-  await page.locator('#task-view [data-view="foryou"]').click();
+  await page.locator('#task-scope').click(); await page.locator('#task-filter-pop [data-scope="you"]').click();
   const row = page.locator('[data-need-card="approval:ap-sup"]');
   assert.match(await row.locator('.tl-title').textContent(), /^Support: Send this to Tico support\?$/);
   await row.click();
@@ -176,7 +176,7 @@ async function phoneRedesignKinds(browser) {
     ap('ap-lim', 'spend_limit', {bot: 'bot:engineer', daily_usd: 25, monthly_usd: 400})];
   await page.route('**/api/v2/needs-you*', route => route.fulfill({contentType: 'application/json', body: JSON.stringify({items})}));
   await page.evaluate(async () => { await v2Refresh(); tasksRender(TASKS_ST); });
-  await page.locator('#task-view [data-view="foryou"]').click();
+  await page.locator('#task-scope').click(); await page.locator('#task-filter-pop [data-scope="you"]').click();
   const want = {'ap-cap': ['Task cap: Engineer → Support', ['From', 'To', 'Per day']], 'ap-lim': ['Spend limit: Engineer', ['For', 'Day', 'Month']]};
   assert.deepEqual(await page.locator('[data-need-card] .tl-title').allTextContents(), Object.values(want).map(([t]) => 'Analyst: ' + t),
     'a title that names it');
@@ -196,6 +196,56 @@ async function phoneRedesignKinds(browser) {
   assert.deepEqual(errors, []);
   await page.close();
 }
+async function frozenEmailPreview(browser) {
+  for (const fail of [false, true]) {
+    const {page, errors} = await open(browser, {viewport: {width:390,height:844}, hash:'#/tasks'});
+    const item = {...approval, id:'frozen-approval', payload:{...approval.payload, email_send_id:'frozen-send', content_sha256:HASH}};
+    const writes = [];
+    let release;
+    const held = new Promise(resolve => { release = resolve; });
+    await page.route('**/api/v2/needs-you*', route => route.fulfill({contentType:'application/json', body:JSON.stringify({items:[item]})}));
+    await page.route('**/api/v2/email/sends/frozen-send', async route => {
+      await held;
+      await route.fulfill({status:fail ? 403 : 200, contentType:'application/json', body:JSON.stringify(fail ? {error:{detail:'This email is private'}} : {
+        send:{id:'frozen-send',subject:'Frozen subject',recipients:['ava@creator.example'],content_sha256:HASH,
+          attachments:[{name:'proof.pdf',part:1,size:5,sha256:HASH2}]},preview_complete:true,
+        bodies:[{type:'text/plain',text:'Frozen <img src=x onerror="window.pwned=1"> body'},
+          {type:'text/html',text:'We agree to pay $100000.'}]})});
+    });
+    await page.route('**/api/v2/approvals/frozen-approval', route => {
+      writes.push(route.request().postDataJSON());
+      return route.fulfill({contentType:'application/json',body:'{}'});
+    });
+    await page.evaluate(async () => { await v2Refresh(); tasksRender(TASKS_ST); });
+    await page.locator('#task-scope').click(); await page.locator('#task-filter-pop [data-scope="you"]').click();
+    await page.locator('[data-need-card="approval:frozen-approval"]').click();
+    const approve = page.locator('#need-card [data-dc="yes"]');
+    assert.equal(await approve.isDisabled(), true);
+    await page.evaluate(() => { DEC.lockUntil = 0; decideAct(DEC, 'yes'); });
+    assert.equal(writes.length, 0, 'keyboard and direct actions cannot approve an unloaded snapshot');
+    release();
+    if (fail) {
+      await page.locator('#need-card .dc-body .err').waitFor();
+      assert.equal(await approve.isDisabled(), true);
+    } else {
+      await page.locator('#need-card .email-send-preview pre').first().waitFor();
+      assert.equal(await approve.isEnabled(), true);
+      assert.match(await page.locator('.email-send-preview').textContent(), /\$100000/);
+      assert.equal(await page.locator('.email-send-preview img').count(), 0);
+      assert.equal(await page.evaluate(() => window.pwned), undefined);
+      assert.equal(await page.locator('.email-send-preview a').getAttribute('href'), '/api/v2/email/sends/frozen-send/attachments/1');
+      await page.evaluate(() => { DEC.lockUntil = 0; });
+      await approve.click();
+      await page.locator('#need-card [data-dc="close"]').click();
+      await page.waitForFunction(() => !DEC);
+      for (let i=0;i<100 && !writes.length;i++) await page.waitForTimeout(20);
+      assert.equal(writes[0].decision, 'approved');
+    }
+    assert.deepEqual(errors, []);
+    await page.close();
+  }
+}
+
 (async () => {
   const browser = await chromium.launch({channel: process.env.TICO_BROWSER_CHANNEL ?? 'chrome', headless: true});
   try {
@@ -209,7 +259,7 @@ async function phoneRedesignKinds(browser) {
     });
     await page.route('**/api/v2/approvals/ap-1', route => { decided.push(route.request().postDataJSON()); return route.fulfill({contentType: 'application/json', body: '{}'}); });
     await page.evaluate(async () => { await v2Refresh(); tasksRender(TASKS_ST); });
-    await page.locator('#task-view [data-view="foryou"]').click();
+    await page.locator('#task-scope').click(); await page.locator('#task-filter-pop [data-scope="you"]').click();
     // One line in the list; nothing unfolds there. A tap opens its card, a modal on a wide screen.
     const row = page.locator('[data-group="asks"] [data-need-card="approval:ap-1"]');
     assert.equal(await page.locator('#task-body details.req').count(), 0, 'no dropdown rows');
@@ -251,6 +301,7 @@ async function phoneRedesignKinds(browser) {
     assert.deepEqual(decided, [{decision: 'approved'}]);
     assert.deepEqual(errors, []);
     await page.close();
+    await frozenEmailPreview(browser);
     await phonePublish(browser);
     await phoneSupport(browser);
     await phoneRedesignKinds(browser);
