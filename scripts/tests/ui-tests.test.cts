@@ -1,17 +1,17 @@
-const {test} = require('node:test');
-const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const path = require('node:path');
-const vm = require('node:vm');
-const {spawnSync} = require('node:child_process');
-const os = require('node:os');
-const {EventEmitter} = require('node:events');
-const {resources, runScript, runScripts, sampleCpu, stopTree, stoppedReport} = require('../ui-tests.cjs');
+const {test}: typeof import('node:test') = require('node:test');
+const assert: typeof import('node:assert/strict') = require('node:assert/strict');
+const fs: typeof import('node:fs') = require('node:fs');
+const path: typeof import('node:path') = require('node:path');
+const vm: typeof import('node:vm') = require('node:vm');
+const {spawnSync}: typeof import('node:child_process') = require('node:child_process');
+const os: typeof import('node:os') = require('node:os');
+const {EventEmitter}: typeof import('node:events') = require('node:events');
+const {resources, runScript, runScripts, sampleCpu, stopTree, stoppedReport}: typeof import('../ui-tests.cjs') = require('../ui-tests.cjs');
 
 test('frame timing scripts run alone after the parallel pool, within the selected files', async () => {
-  const active = new Set(), started = [], finished = [];
+  const active = new Set<string>(), started: string[] = [], finished: string[] = [];
   let peak = 0;
-  const run = async file => {
+  const run = async (file: string): Promise<void> => {
     if (file === 'dot-perf.cjs') assert.equal(active.size, 0, 'frame timing has no competing script');
     else assert.equal(active.has('dot-perf.cjs'), false, 'ordinary scripts never overlap frame timing');
     active.add(file); started.push(file); peak = Math.max(peak, active.size);
@@ -30,9 +30,9 @@ test('frame timing scripts run alone after the parallel pool, within the selecte
 });
 
 test('one CPU-idle policy, explicit overrides and shared context/page timeouts', async () => {
-  const counters = (user, idle) => Array.from({length: 12}, () => ({times: {user, nice: 0, sys: 0, idle, irq: 0}}));
+  const counters = (user: number, idle: number) => Array.from({length: 12}, () => ({times: {user, nice: 0, sys: 0, idle, irq: 0}}));
   const snapshots = [counters(10000, 50000), counters(10070, 50030)];
-  const sampled = await sampleCpu(() => snapshots.shift(), async ms => assert.equal(ms, 1000));
+  const sampled = await sampleCpu(() => snapshots.shift(), async (ms: number) => assert.equal(ms, 1000));
   assert.deepEqual(sampled, {cores: 12, idleFraction: 0.3});
   assert.equal(snapshots.length, 0);
   const spare = resources({}, sampled.cores, sampled.idleFraction);
@@ -47,7 +47,7 @@ test('one CPU-idle policy, explicit overrides and shared context/page timeouts',
   assert.throws(() => resources({TICO_UI_SCRIPT_TIMEOUT: '0'}, 12, 1), /TICO_UI_SCRIPT_TIMEOUT/);
 
   const support = path.resolve(__dirname, '../../ui/tests/support');
-  for (const [value, expected] of [[undefined, 1], ['2.5', 2.5]]) {
+  for (const [value, expected] of [[undefined, 1], ['2.5', 2.5]] as [string | undefined, number][]) {
     const env = {...process.env};
     delete env.TICO_UI_SLOWDOWN;
     if (value !== undefined) env.TICO_UI_SLOWDOWN = value;
@@ -60,23 +60,23 @@ test('one CPU-idle policy, explicit overrides and shared context/page timeouts',
                                                calls: [30000 * expected, 30000 * expected]});
   }
 
-  const calls = [];
-  const page = () => ({setDefaultTimeout: n => calls.push(['page', n]),
-                      setDefaultNavigationTimeout: n => calls.push(['navigation', n])});
+  const calls: [string, number][] = [];
+  const page = () => ({setDefaultTimeout: (n: number) => calls.push(['page', n]),
+                      setDefaultNavigationTimeout: (n: number) => calls.push(['navigation', n])});
   const context = () => {
-    let onPage;
-    return {setDefaultTimeout: n => calls.push(['context', n]),
-            setDefaultNavigationTimeout: n => calls.push(['context-navigation', n]),
-            on: (event, callback) => { assert.equal(event, 'page'); onPage = callback; },
+    let onPage: (p: unknown) => void;
+    return {setDefaultTimeout: (n: number) => calls.push(['context', n]),
+            setDefaultNavigationTimeout: (n: number) => calls.push(['context-navigation', n]),
+            on: (event: string, callback: (p: unknown) => void) => { assert.equal(event, 'page'); onPage = callback; },
             newPage: async () => { const p = page(); onPage(p); return p; }};
   };
   const engine = () => ({launch: async () => ({newContext: async () => context(),
-                                            newPage: async function () { return (await this.newContext()).newPage(); }}),
+                                            newPage: async function (this: {newContext: () => Promise<{newPage: () => Promise<unknown>}>}) { return (await this.newContext()).newPage(); }}),
                         launchPersistentContext: async () => context()});
   const playwright = {chromium: engine(), firefox: engine(), webkit: engine()};
   vm.runInNewContext(fs.readFileSync(path.join(support, 'browser.cjs'), 'utf8'), {
-    require: name => name === 'playwright' ? playwright : {
-      applyTimeouts: p => { p.setDefaultTimeout(60000); p.setDefaultNavigationTimeout(60000); }, t: ms => ms},
+    require: (name: string) => name === 'playwright' ? playwright : {
+      applyTimeouts: (p: {setDefaultTimeout: (n: number) => void; setDefaultNavigationTimeout: (n: number) => void}) => { p.setDefaultTimeout(60000); p.setDefaultNavigationTimeout(60000); }, t: (ms: number) => ms},
     setTimeout, clearTimeout, console
   });
   const browser = await playwright.chromium.launch();
@@ -95,13 +95,13 @@ test('one CPU-idle policy, explicit overrides and shared context/page timeouts',
 test('a hung browser script is named with its pending call; it and everything it started stop, one that ends does not',
      {timeout: 30000}, async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ui-tests-'));
-  const alive = pid => { try { process.kill(pid, 0); return true; } catch { return false; } };
+  const alive = (pid: number): boolean => { try { process.kill(pid, 0); return true; } catch { return false; } };
   // A helper's identity (pid and start time) is taken while the hung script is still its parent, so cleanup below can
   // tell it from a later process that reuses the pid.
-  const ps = pid => (spawnSync('ps', ['-o', 'ppid=,lstart=', '-p', String(pid)], {encoding: 'utf8'}).stdout || '').trim();
-  const started = pid => ps(pid).replace(/^\d+\s+/, '');
-  const owned = new Map();
-  let helper;
+  const ps = (pid: number): string => (spawnSync('ps', ['-o', 'ppid=,lstart=', '-p', String(pid)], {encoding: 'utf8'}).stdout || '').trim();
+  const started = (pid: number): string => ps(pid).replace(/^\d+\s+/, '');
+  const owned = new Map<number, string>();
+  let helper: number[];
   try {
     const preload = path.join(dir, 'preload.cjs');
     fs.writeFileSync(preload, '');
@@ -149,16 +149,16 @@ test('a hung browser script is named with its pending call; it and everything it
 });
 
 test('newPage and page.close fail with their name instead of waiting forever', {timeout: 30000}, async () => {
-  const never = () => new Promise(() => {});
+  const never = (): Promise<never> => new Promise(() => {});
   const page = {setDefaultTimeout() {}, setDefaultNavigationTimeout() {}, close: never};
-  const context = {setDefaultTimeout() {}, setDefaultNavigationTimeout() {}, on: (event, callback) => { context.onPage = callback; },
+  const context = {setDefaultTimeout() {}, setDefaultNavigationTimeout() {}, on: (event: string, callback: unknown) => { context.onPage = callback; },
                    newPage: never};
   const engine = () => ({launch: async () => ({newContext: async () => context}), launchPersistentContext: async () => context});
   const playwright = {chromium: engine(), firefox: engine(), webkit: engine()};
-  const errors = [];
+  const errors: string[] = [];
   vm.runInNewContext(fs.readFileSync(path.resolve(__dirname, '../../ui/tests/support/browser.cjs'), 'utf8'), {
-    require: name => name === 'playwright' ? playwright : {applyTimeouts() {}, t: () => 50},
-    setTimeout, clearTimeout, console: {error: message => errors.push(message)}
+    require: (name: string) => name === 'playwright' ? playwright : {applyTimeouts() {}, t: () => 50},
+    setTimeout, clearTimeout, console: {error: (message: string) => errors.push(message)}
   });
   const ctx = await (await playwright.chromium.launch()).newContext();
   await assert.rejects(ctx.newPage(), /browserContext\.newPage did not finish in 0\.05s/);
@@ -170,30 +170,37 @@ test('newPage and page.close fail with their name instead of waiting forever', {
   assert.equal(await quick.close(), 'closed');
 });
 
+interface ProcRow {
+  pid: number;
+  ppid: number;
+  start: string;
+  command: string;
+}
+
 // The runner loaded with a fake child_process and platform: no real process is started, frozen or killed.
-function fakeRunner({platform = 'darwin', execFileSync = () => { throw new Error('ps must not run'); }} = {}) {
+function fakeRunner({platform = 'darwin', execFileSync = () => { throw new Error('ps must not run'); }}: {platform?: string; execFileSync?: (cmd: string, args: string[]) => unknown} = {}) {
   const child = new EventEmitter();
   child.pid = 123;
   for (const pipe of ['stdout', 'stderr']) { child[pipe] = new EventEmitter(); child[pipe].destroy = () => {}; }
-  const sandbox = {exports: {}};
+  const sandbox: {exports: {runScript?: unknown; stopTree?: unknown; stoppedReport?: unknown}} = {exports: {}};
   vm.runInNewContext(fs.readFileSync(path.resolve(__dirname, '../ui-tests.cjs'), 'utf8'), {
     module: sandbox, __dirname: path.resolve(__dirname, '..'), setTimeout, clearTimeout, console, Buffer,
-    require: name => name === 'node:child_process' ? {spawn: () => child, execFileSync} : require(name),
+    require: (name: string) => name === 'node:child_process' ? {spawn: () => child, execFileSync} : require(name),
     process: {platform, env: {}, execPath: 'node', kill: () => { throw new Error('no real signals'); }}
   });
   return {child, runner: sandbox.exports};
 }
-const row = (pid, ppid, start, command = 'fixture') => ({pid, ppid, start, command});
-const settles = (promise, ms) => Promise.race([promise, new Promise(r => setTimeout(() => r('unsettled'), ms))]);
+const row = (pid: number, ppid: number, start: string, command = 'fixture'): ProcRow => ({pid, ppid, start, command});
+const settles = (promise: Promise<unknown>, ms: number): Promise<unknown> => Promise.race([promise, new Promise(r => setTimeout(() => r('unsettled'), ms))]);
 
 test('a pid that left the tree and was reused by another process is never stopped', () => {
   // Freezing 101 fails (it exited); the next list shows 101 reused by an unrelated process with a child of its own.
   let scans = 0;
-  const sent = [];
+  const sent: [number, string][] = [];
   const reaped = stopTree(100, {
     list: () => ++scans === 1 ? [row(100, 1, 'T0'), row(101, 100, 'T1', 'owned worker')]
                               : [row(100, 1, 'T0'), row(101, 1, 'T9', 'unrelated'), row(102, 101, 'T9', 'unrelated child')],
-    signal: (pid, name) => {
+    signal: (pid: number, name: string) => {
       sent.push([pid, name]);
       if (pid === 101 && name === 'SIGSTOP') throw Object.assign(new Error('gone'), {code: 'ESRCH'});
     }});
@@ -205,13 +212,13 @@ test('a pid that left the tree and was reused by another process is never stoppe
   const reused = stopTree(200, {
     list: () => ++scans <= 2 ? [row(200, 1, 'T0'), row(201, 200, 'T1', 'owned worker')]
                              : [row(200, 1, 'T0'), row(201, 1, 'T9', 'unrelated'), row(202, 201, 'T9', 'unrelated child')],
-    signal: (pid, name) => sent.push([pid, name])});
+    signal: (pid: number, name: string) => sent.push([pid, name])});
   assert.deepEqual(sent, [[200, 'SIGSTOP'], [201, 'SIGSTOP'], [200, 'SIGKILL']]);
   assert.deepEqual(reused.map(p => p.pid), [200]);
   // A stable tree is all stopped, and a sibling is untouched.
   sent.length = 0;
   const stable = stopTree(300, {list: () => [row(300, 1, 'T0'), row(301, 300, 'T1'), row(302, 301, 'T2'), row(900, 1, 'T3')],
-                                signal: (pid, name) => sent.push([pid, name])});
+                                signal: (pid: number, name: string) => sent.push([pid, name])});
   assert.deepEqual(stable.map(p => p.pid).sort(), [300, 301, 302]);
   assert.deepEqual(stable.errors, []);
   assert.equal(sent.some(([pid]) => pid === 900), false);
@@ -221,10 +228,10 @@ test('a frozen pid is never killed when its identity cannot be read again', () =
   // 101 is frozen, then killed by someone else and its pid reused; every later process list fails.
   for (const failAfter of [1, 2]) {
     let scans = 0;
-    const sent = [];
+    const sent: [number, string][] = [];
     const cleanup = stopTree(100, {
       list: () => { if (++scans > failAfter) throw new Error('synthetic ps timeout'); return [row(100, 1, 'T0'), row(101, 100, 'T1', 'owned worker')]; },
-      signal: (pid, name) => sent.push([pid, name])});
+      signal: (pid: number, name: string) => sent.push([pid, name])});
     assert.deepEqual(sent.filter(([pid, name]) => pid === 101 && name === 'SIGKILL'), [], `list fails after scan ${failAfter}`);
     assert.ok(cleanup.errors.some(e => /could not list processes/.test(e)));
     assert.ok(cleanup.errors.some(e => /left stopped/.test(e)), cleanup.errors.join('; '));
@@ -232,15 +239,15 @@ test('a frozen pid is never killed when its identity cannot be read again', () =
 });
 
 test('a process list that fails is reported as incomplete cleanup, with the error', () => {
-  const sent = [];
-  const cleanup = stopTree(100, {list: () => { throw new Error('synthetic ps timeout'); }, signal: (pid, name) => sent.push([pid, name])});
+  const sent: [number, string][] = [];
+  const cleanup = stopTree(100, {list: () => { throw new Error('synthetic ps timeout'); }, signal: (pid: number, name: string) => sent.push([pid, name])});
   const report = stoppedReport({pending: [], calls: [], stopped: cleanup});
   assert.match(report, /cleanup incomplete: could not list processes: synthetic ps timeout/);
   assert.deepEqual([...new Set(sent.map(([pid]) => pid))], [100], 'only the script itself, which the runner owns');
 });
 
 test('a stop that cannot kill the script (taskkill denied) still ends the run in bounded time', {timeout: 10000}, async () => {
-  const attempts = [];
+  const attempts: string[][] = [];
   const {runner} = fakeRunner({platform: 'win32', execFileSync: (cmd, args) => {
     attempts.push([cmd, ...args]);
     throw Object.assign(new Error('Access is denied.'), {code: 'EPERM'});
@@ -257,7 +264,7 @@ test('a stop that cannot kill the script (taskkill denied) still ends the run in
   const quiet = fakeRunner();
   const started = Date.now();
   const unexited = await settles(quiet.runner.runScript('synthetic.cjs', {preload: 'synthetic', timeout: 0.01, grace: 0.2,
-                                                                          stop: pid => [{pid, command: ''}]}), 3000);
+                                                                          stop: (pid: number) => [{pid, command: ''}]}), 3000);
   assert.notEqual(unexited, 'unsettled');
   assert.ok(Date.now() - started >= 200);
   assert.match(quiet.runner.stoppedReport(unexited), /cleanup incomplete: the script \(pid 123\) was still running 0\.2s after it was stopped/);

@@ -1,6 +1,7 @@
 {
   "name": "tico-observability",
   "private": true,
+  "engines": {"node": ">=22.18"},
   "scripts": {
     "build:ui": "node scripts/build-ui.cjs",
     "watch:ui": "node scripts/build-ui.cjs --watch",

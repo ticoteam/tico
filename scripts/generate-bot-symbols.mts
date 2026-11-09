@@ -6,8 +6,14 @@ import fs from 'node:fs';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
 
+interface DownloadedIcon {
+  icon: string;
+  svg: string;
+  symbol: string;
+}
+
 const revision = '27e9ef1dbeedc13d682fece4a58e1eda4cb0961a';
-const icons = [
+const icons: readonly string[] = [
   'account_tree', 'analytics', 'balance', 'bug_report', 'calendar_add_on', 'campaign', 'concierge',
   'conversion_path', 'database_search', 'deployed_code_update', 'design_services', 'dns',
   'edit_document', 'event_available', 'finance_mode', 'flag_check', 'frame_inspect', 'group_add',
@@ -19,7 +25,7 @@ const icons = [
 ];
 
 const raw = `https://raw.githubusercontent.com/google/material-design-icons/${revision}`;
-const get = async url => {
+const get = async (url: string): Promise<string> => {
   const response = await fetch(url);
   if (!response.ok) throw new Error(`${response.status} ${url}`);
   return response.text();
@@ -27,7 +33,7 @@ const get = async url => {
 
 const [license, downloaded] = await Promise.all([
   get(`${raw}/LICENSE`),
-  Promise.all(icons.map(async icon => {
+  Promise.all(icons.map(async (icon: string): Promise<DownloadedIcon> => {
     const svg = await get(`${raw}/symbols/web/${icon}/materialsymbolsrounded/${icon}_24px.svg`);
     const viewBox = svg.match(/viewBox="([^"]+)"/)?.[1];
     const inner = svg.slice(svg.indexOf('<path'), svg.lastIndexOf('</svg>'));

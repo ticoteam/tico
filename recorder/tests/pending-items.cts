@@ -1,16 +1,21 @@
 // The saved Recorder panel uses the real window and a delayed Tauri write.
+interface SharedArgs {
+  action: string;
+  body: {version: number; text?: string; detail?: Record<string, unknown>};
+  id?: string;
+}
 require('../../ui/tests/support/browser.cjs');
-const {chromium} = require('playwright');
-const assert = require('node:assert/strict');
-const path = require('node:path');
-(async () => {
+const {chromium}: typeof import('playwright') = require('playwright');
+const assert: typeof import('node:assert/strict') = require('node:assert/strict');
+const path: typeof import('node:path') = require('node:path');
+(async (): Promise<void> => {
   const browser = await chromium.launch({headless:true});
   try {
     const page = await browser.newPage();
-    const errors = [];
-    page.on('pageerror', e => errors.push(e.message));
+    const errors: string[] = [];
+    page.on('pageerror', (e: Error) => errors.push(e.message));
     const root = path.resolve(__dirname, '../ui');
-    await page.route('http://recorder.example/**', route => {
+    await page.route('http://recorder.example/**', (route: import('playwright').Route) => {
       const file = path.resolve(root, '.' + new URL(route.request().url()).pathname);
       assert.ok(file.startsWith(root + path.sep));
       return route.fulfill({path:file});
@@ -22,11 +27,11 @@ const path = require('node:path');
       a.shared = {can_send:true, audience:['human:sam','human:dana'],
         presence:{actors:[{actor:'human:sam',name:'Sam'}]},
         sections:{task:[{version:1,id:'shared-1',section:'task',text:'Draft',status:'proposed',detail:{owner:'human:sam',due:'2026-12-01T17:00:00.000Z',body:'Older details'}}]}};
-      Object.defineProperty(navigator,'clipboard',{value:{writeText:async text=>{window.copiedText=text;}},configurable:true});
+      Object.defineProperty(navigator,'clipboard',{value:{writeText:async (text: string)=>{window.copiedText=text;}},configurable:true});
       window.pendingFixture = {a, calls:0, inflight:0, max:0, fail:false};
       const original = window.__TAURI__.core.invoke;
       window.pendingFixture.original=original;
-      window.__TAURI__.core.invoke = async (cmd, args) => {
+      window.__TAURI__.core.invoke = async (cmd: string, args: SharedArgs) => {
         if (cmd !== 'shared_item') return original(cmd, args);
         const f = window.pendingFixture;
         f.calls++; f.inflight++; f.max = Math.max(f.max, f.inflight);
@@ -50,7 +55,7 @@ const path = require('node:path');
     const owner=card.getByRole('combobox',{name:'Owner',exact:true});
     const send=card.getByRole('button',{name:'Send',exact:true});
     const shownOwner=card.locator('[data-shared-owner]');
-    const text=locator=>locator.evaluate(el=>el.textContent);
+    const text=(locator: import('playwright').Locator): Promise<string | null>=>locator.evaluate((el: Element)=>el.textContent);
     // Like a suggestion row: an inline title, then the owner, Send and ×. No labels, no Due or Details,
     // even when the item holds them.
     assert.equal(await card.locator('label,textarea,input').count(),0);
@@ -127,7 +132,7 @@ const path = require('node:path');
     assert.equal(await page.evaluate(()=>window.pendingFixture.sent.detail.body),'Older details');
     assert.equal(await page.evaluate(()=>window.pendingFixture.sent.version),version+1);
     // Sent or dismissed by someone else while I was editing: my unsaved Title and Owner stay, read-only, to copy.
-    for (const [status, inFlight] of [['pushed',true],['dismissed',false]]) {
+    for (const [status, inFlight] of [['pushed',true],['dismissed',false]] as [string, boolean][]) {
       const id='recovery-'+status;
       await page.evaluate(({id})=>{
         const f=window.pendingFixture;
@@ -169,7 +174,7 @@ const path = require('node:path');
     await page.evaluate(() => {
       const original = window.__TAURI__.core.invoke;
       window.pendingFixture.original=original;
-      window.__TAURI__.core.invoke = async (cmd, args) => {
+      window.__TAURI__.core.invoke = async (cmd: string, args: SharedArgs) => {
         if (cmd !== 'send_item') return original(cmd, args);
         const f = window.pendingFixture, local = f.a.items.find(it => it.id === args.id);
         const server = {id:'server-'+local.id,version:2,section:'task',status:'pushed',
@@ -242,7 +247,7 @@ const path = require('node:path');
       a.shared_scope='saved-links'; a.linked_browser='https://app.acme.example';
       a.linked={tasks:[{task_id:'linked-task',number:45,title:'Linked pricing',status:'open'}]};
       a.shared={can_send:true,sections:{task:[{id:'link-proposal',version:1,section:'task',status:'proposed',text:'Pricing follow up',proposed_task_id:'linked-task',proposed_number:45,detail:{}}]}};
-      window.__TAURI__.core.invoke=async (cmd,args) => {
+      window.__TAURI__.core.invoke=async (cmd: string, args: SharedArgs) => {
         if(cmd==='task_picker') return {tasks:[{id:'unnumbered',number:null,title:'Unnumbered target',status:'open'}],next_offset:null};
         if(cmd==='shared_item') {
           f.linkAction=args.action; f.linkBody=args.body;
@@ -271,4 +276,4 @@ const path = require('node:path');
     assert.deepEqual(errors,[]);
     console.log('Recorder: in-flight draft, retry and final Send passed');
   } finally { await browser.close(); }
-})().catch(error=>{console.error(error);process.exitCode=1;});
+})().catch((error: unknown)=>{console.error(error);process.exitCode=1;});

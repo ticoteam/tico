@@ -1,13 +1,13 @@
 // Synthetic replay of the Recorder's Updates row and Move to Applications prompt. No server is contacted.
-// Run from the repository root: node recorder/tests/updates.cjs
-const {chromium} = require('playwright');
-const assert = require('node:assert/strict');
-const path = require('node:path');
+// Run from the repository root: node recorder/tests/updates.cts
+const {chromium}: typeof import('playwright') = require('playwright');
+const assert: typeof import('node:assert/strict') = require('node:assert/strict');
+const path: typeof import('node:path') = require('node:path');
 
-async function open(context, query) {
+async function open(context: import('playwright').BrowserContext, query: string): Promise<import('playwright').Page> {
   const page = await context.newPage();
   const root = path.resolve(__dirname, '../../recorder/ui');
-  await page.route('**/*', async route => {
+  await page.route('**/*', async (route: import('playwright').Route) => {
     const url = new URL(route.request().url());
     assert.equal(url.origin, 'http://recorder.example');
     const file = path.resolve(root, '.' + url.pathname);
@@ -18,7 +18,7 @@ async function open(context, query) {
   return page;
 }
 
-async function replay(browser) {
+async function replay(browser: import('playwright').Browser): Promise<void> {
   const context = await browser.newContext();
   try {
     // Check for updates: Checking…, Downloading, then Update ready with Restart.
@@ -137,9 +137,9 @@ async function replay(browser) {
 }
 module.exports = {replay};
 if (require.main === module) {
-  (async () => {
+  (async (): Promise<void> => {
     const browser = await chromium.launch({headless: true});
     try { await replay(browser); }
     finally { await browser.close(); }
-  })().catch(error => { console.error(error); process.exitCode = 1; });
+  })().catch((error: unknown) => { console.error(error); process.exitCode = 1; });
 }
