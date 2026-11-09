@@ -56,7 +56,12 @@ SHARED_PLACES_ACTOR = "places-pack"  # who wrote a place from the shared places 
 WORKS_AT = ("works_at", "member_of")  # the links a person's organization is read from, for a list's Organization column
 # The tables a merge moves an entity's rows from. entity_sources skips a source the kept entity already has.
 MOVES = {
-    "entity_identifiers": "SELECT id FROM entity_identifiers WHERE entity_id = :drop",
+    # What a Finance book row put on the entity stays where its book row points: the book's vendor names (scope_type
+    # finance_book) and the billing emails it keeps current (source_type finance_book, finance/store/contacts.py).
+    "entity_identifiers": (
+        "SELECT id FROM entity_identifiers WHERE entity_id = :drop AND scope_type IS NOT 'finance_book' "
+        "AND source_type IS NOT 'finance_book'"
+    ),
     "entity_notes": "SELECT id FROM entity_notes WHERE entity_id = :drop",
     "entity_mentions": "SELECT id FROM entity_mentions WHERE entity_id = :drop",
     "entity_activities": "SELECT id FROM entity_activities WHERE entity_id = :drop",
@@ -243,8 +248,16 @@ def self_id(c: sqlite3.Connection) -> str | None:
         return row[0]
     if c.execute("SELECT 1 FROM entities WHERE id = ?", (SELF_ID,)).fetchone():
         c.execute("UPDATE entities SET self = 1 WHERE id = ?", (SELF_ID,))
+        _self_flagged(c)
         return SELF_ID
     return None
+
+
+def _self_flagged(c: sqlite3.Connection) -> None:
+    """Self was just made or flagged: Finance's contacts that came before it link to it now (vendor_to / customer_of)."""
+    from backend.finance import directory as finance_directory
+
+    finance_directory.link_self(c)
 
 
 def _set_kind(c: sqlite3.Connection, entity_id: str, kind: str, source_type: str) -> None:
@@ -277,6 +290,7 @@ def ensure_self(c: sqlite3.Connection, *, company_name: str | None, domain: str 
                 (SELF_ID, name, name.lower(), domain or None, now, now),
             )
         current = SELF_ID
+        _self_flagged(c)
     if domain:
         c.execute(
             "UPDATE entities SET primary_domain = ? WHERE id = ? AND COALESCE(primary_domain, '') = ''",
@@ -1360,6 +1374,20 @@ def erase_rows(c: sqlite3.Connection, actor: str, entity_id: str, reason: str) -
     if root["self"]:
         _refuse(c, actor, "kind", "self cannot be erased")
     ids = _erased_ids(c, entity_id)
+    from backend.finance import directory as finance_directory
+
+    kept = finance_directory.kept_for_books(c, ids, (table for table, _ in ERASE_STATEMENTS))
+    if kept:
+        # A ledger's counterparty (a contact, a bill's vendor, a project's customer) is kept for the accounting:
+        # erasing it would break the books.
+        from backend.store import Problem
+
+        name = str(root["name"] or "").strip() or "This entity"
+        raise Problem(
+            "kept_for_books",
+            f"Kept for the books: {name} has Finance records ({', '.join(kept)}). Erase them in Finance first.",
+            409,
+        )
     ids_json = json.dumps(ids)
     link_ids = [
         row[0]
