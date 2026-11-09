@@ -1870,7 +1870,10 @@ def create_app(settings=None):
                 value["origin_actor"] = H.task_origin(c, row)
             else:
                 value["origin_actor"] = None
-            value["requester_source"] = requester_sources.get(row["id"])
+            if source := requester_sources.get(row["id"]):
+                value["requester_source"] = source
+            else:
+                value.pop("requester_source", None)
             value["from_person"] = views.person_origin(c, row, visible_sql, who.actor)
             result.append(value)
         from .files import readable_page_refs
