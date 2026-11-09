@@ -488,7 +488,8 @@ def _factory_scoreboard(
     so those cards have no eligible queued-to-merged sample. Queue size counts only
     open PRs that are green, approved on the current head, and queued at that head.
     Durations are cohort-based: merge-to-production ends at a production-stage
-    entry in the window.
+    entry in the window. Medians round to whole minutes with ties-to-even; the
+    merges-per-hour rate rounds half-up to hundredths.
     """
     result: dict[str, Row] = {
         fid: {
@@ -546,12 +547,13 @@ def _factory_scoreboard(
         [*queue_steps, since, now, *ids],
     )
     merge_durations: dict[str, list[float]] = defaultdict(list)
+    merge_counts: dict[str, int] = defaultdict(int)
     for row in merged:
         fid = factory_types[str(row["type_id"])]
         merged_at = H.parse_ts(row["pr_merged_at"])
         if not merged_at:
             continue
-        result[fid]["merges_per_hour"] += 1 / 24
+        merge_counts[fid] += 1
         queued_at = H.parse_ts(row["queued_at"]) if row["queued_at"] else None
         if queued_at and queued_at <= merged_at:
             merge_durations[fid].append(max(0.0, (merged_at - queued_at).total_seconds() / 60))
@@ -582,9 +584,9 @@ def _factory_scoreboard(
         result[fid]["queued_to_merged_median_minutes"] = round(median(durations))
     for fid, durations in production_durations.items():
         result[fid]["merged_to_production_median_minutes"] = round(median(durations))
-    for metrics in result.values():
+    for fid, metrics in result.items():
         metrics["merges_per_hour"] = float(
-            Decimal(str(metrics["merges_per_hour"])).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+            (Decimal(merge_counts[fid]) / Decimal(24)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
         )
     return result
 

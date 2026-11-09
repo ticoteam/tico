@@ -428,6 +428,31 @@ def test_engineering_factory_with_no_window_data_has_zero_and_empty_medians(api)
     }
 
 
+def test_engineering_factory_merges_per_hour_rounds_half_up_without_float_drift(api):
+    factory = make_factory(api, "Engineering rounding")
+    typ, steps = make_type(
+        api, "Scoreboard rounding", [{"name": "Building", "status": "doing"}], factory, role="engineering"
+    )
+    merged_at = str(H.now())
+    for number in range(15):
+        task = card(api, typ, steps["Building"])
+        with api.app.state.store.transaction() as c:
+            c.execute(
+                "INSERT INTO task_links (id,task_id,kind,url,state,created_at,pr_merged_at) "
+                "VALUES (?,?,'pr',?,'merged',?,?)",
+                (
+                    f"rounding-pr-{number}",
+                    task["id"],
+                    f"https://github.com/acme/tico/pull/{number}",
+                    merged_at,
+                    merged_at,
+                ),
+            )
+
+    scoreboard = next(f for f in overview(api, "1d")["factories"] if f["id"] == factory)["scoreboard"]
+    assert scoreboard["merges_per_hour"] == 0.63
+
+
 def move(api, task, token="ana-test", **fields):
     """A real ticket update (POST /api/v2/tasks/{id}) with the version the ticket has now."""
     version = get(api, "tasks/" + task, token)["task"]["version"]
