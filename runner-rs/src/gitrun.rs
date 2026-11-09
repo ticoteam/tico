@@ -64,7 +64,12 @@ fn group_signal(pgid: i32, signal: i32) {
 /// Stop every git command still running and refuse new ones (the runner's shutdown; `Repositories.close`).
 pub fn stop_all() {
     STOPPING.store(true, Ordering::SeqCst);
-    let groups: Vec<i32> = RUNNING.lock().unwrap().as_ref().map(|s| s.iter().copied().collect()).unwrap_or_default();
+    let groups: Vec<i32> = RUNNING
+        .lock()
+        .unwrap()
+        .as_ref()
+        .map(|s| s.iter().copied().collect())
+        .unwrap_or_default();
     for pgid in &groups {
         group_signal(*pgid, libc::SIGTERM);
     }
@@ -93,22 +98,47 @@ pub async fn run_as_bot(argv: &[String], env: &Env, cwd: Option<&Path>, timeout_
 
 async fn run_as(argv: &[String], env: &Env, cwd: Option<&Path>, timeout_s: u64, bot: bool) -> Ran {
     let began = std::time::Instant::now();
-    let ran = run_once(argv, env, cwd, timeout_s, bot).await;
+    let _gate = crate::gitlocks::command_lock(argv, cwd, timeout_s)
+        .await
+        .map_err(Fault::Io)?;
+    let mut ran = run_once(argv, env, cwd, timeout_s, bot).await;
+    if let Ok(out) = &mut ran {
+        if !out.ok() {
+            if let Some(note) = crate::gitlocks::report(argv, cwd, &out.stderr) {
+                out.stderr = note;
+            }
+        }
+    }
     let fault = match &ran {
         Ok(_) => None,
         Err(Fault::Timeout(_)) => Some("timeout"),
         Err(Fault::Stopped) => Some("stopped"),
         Err(Fault::Io(_)) => Some("io"),
     };
-    crate::flight::git(argv, began.elapsed().as_millis() as u64, ran.as_ref().ok().map(|o| o.code), fault);
+    crate::flight::git(
+        argv,
+        began.elapsed().as_millis() as u64,
+        ran.as_ref().ok().map(|o| o.code),
+        fault,
+    );
     ran
 }
 
-async fn run_once(argv: &[String], env: &Env, cwd: Option<&Path>, timeout_s: u64, bot: bool) -> Ran {
+async fn run_once(
+    argv: &[String],
+    env: &Env,
+    cwd: Option<&Path>,
+    timeout_s: u64,
+    bot: bool,
+) -> Ran {
     if stopping() {
         return Err(Fault::Stopped);
     }
-    let mut cmd = if bot { crate::isolation::command(&argv[0]) } else { tokio::process::Command::new(&argv[0]) };
+    let mut cmd = if bot {
+        crate::isolation::command(&argv[0])
+    } else {
+        tokio::process::Command::new(&argv[0])
+    };
     cmd.args(&argv[1..])
         .env_clear()
         .envs(env)
@@ -118,12 +148,19 @@ async fn run_once(argv: &[String], env: &Env, cwd: Option<&Path>, timeout_s: u64
         .stderr(std::process::Stdio::piped())
         .process_group(0)
         .kill_on_drop(true);
-    let child = cmd.spawn().map_err(|e| Fault::Io(format!("{}: {e}", argv[0])))?;
+    let child = cmd
+        .spawn()
+        .map_err(|e| Fault::Io(format!("{}: {e}", argv[0])))?;
     let pgid = child.id().map(|p| p as i32).unwrap_or(0);
     if pgid > 0 {
-        RUNNING.lock().unwrap().get_or_insert_with(HashSet::new).insert(pgid);
+        RUNNING
+            .lock()
+            .unwrap()
+            .get_or_insert_with(HashSet::new)
+            .insert(pgid);
     }
-    let waited = tokio::time::timeout(Duration::from_secs(timeout_s), child.wait_with_output()).await;
+    let waited =
+        tokio::time::timeout(Duration::from_secs(timeout_s), child.wait_with_output()).await;
     if pgid > 0 {
         if let Some(s) = RUNNING.lock().unwrap().as_mut() {
             s.remove(&pgid);
@@ -185,7 +222,10 @@ pub async fn bare_as_bot(env: &Env, args: &[&str], timeout_s: u64) -> Ran {
 }
 
 pub fn sha256_hex(data: &[u8]) -> String {
-    Sha256::digest(data).iter().map(|b| format!("{b:02x}")).collect()
+    Sha256::digest(data)
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
 }
 
 /// JSON as Python's `json.dumps(value, sort_keys=True, separators=(",", ":"))` writes it (ASCII-escaped).
@@ -256,11 +296,15 @@ mod tests {
     async fn a_timed_out_command_takes_its_whole_group_with_it() {
         let mut env = Env::new();
         env.insert("PATH".into(), "/usr/bin:/bin".into());
-        let marker = std::env::temp_dir().join(format!("tico-gitrun-{}", uuid::Uuid::new_v4().simple()));
+        let marker =
+            std::env::temp_dir().join(format!("tico-gitrun-{}", uuid::Uuid::new_v4().simple()));
         // The child of the shell outlives a plain kill of its parent; the group kill reaches it.
         let script = format!("(sleep 2; touch {}) & sleep 30", marker.display());
         let argv: Vec<String> = vec!["/bin/sh".into(), "-c".into(), script];
-        assert!(matches!(run(&argv, &env, None, 1).await, Err(Fault::Timeout(1))));
+        assert!(matches!(
+            run(&argv, &env, None, 1).await,
+            Err(Fault::Timeout(1))
+        ));
         tokio::time::sleep(Duration::from_millis(2500)).await;
         assert!(!marker.exists());
     }

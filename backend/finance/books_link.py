@@ -23,6 +23,7 @@ HQ contract (the paths sit under the Gateway's API root, so `<root>/finance/oaut
 
 A refresh runs outside transactions, one at a time per connection, and the rotated pair is saved before the new access
 token is used (QuickBooks rotates refresh tokens). Tokens are never logged or returned by repr."""
+
 import json
 import logging
 import re
@@ -40,13 +41,13 @@ from .store import tico
 from .core.org import SYSTEM
 
 log = logging.getLogger(__name__)
-AREA = "finance"                      # HQ's finance routes: <root>/finance/oauth/<provider>/<action>
-EARLY = 60                            # seconds before expiry a token is refreshed rather than used
-VAULT_TRIES = 2                       # the claimed pair is written to the vault this many times before reconnecting
-FLOWS = "finance-books-flows"         # the consents this install started, by flow id, until HQ sends the browser back
-FLOW_S = 1800                         # seconds a started consent may wait for its return
+AREA = "finance"  # HQ's finance routes: <root>/finance/oauth/<provider>/<action>
+EARLY = 60  # seconds before expiry a token is refreshed rather than used
+VAULT_TRIES = 2  # the claimed pair is written to the vault this many times before reconnecting
+FLOWS = "finance-books-flows"  # the consents this install started, by flow id, until HQ sends the browser back
+FLOW_S = 1800  # seconds a started consent may wait for its return
 LABEL = {"quickbooks": "QuickBooks", "xero": "Xero"}
-PRESET = {"quickbooks": "intuit", "xero": "xero"}      # a books connection's provider -> the preset of its trigger (§3.4)
+PRESET = {"quickbooks": "intuit", "xero": "xero"}  # a books connection's provider -> the preset of its trigger (§3.4)
 REASON = re.compile(r"[a-z_]{1,40}")  # HQ's reason, kept only when it is a plain code
 # HQ answers these by code, and each is a reason the caller acts on or shows (a 409 is not always a reconnect).
 REASONS = ("access_expired", "connected_elsewhere", "revoke_failed")
@@ -117,7 +118,7 @@ class _State:
     expires_at: str
     company: str
     realm: str
-    generation: int = 0    # saves of the connection's pair when this pair was read; a refresh saves only if unchanged
+    generation: int = 0  # saves of the connection's pair when this pair was read; a refresh saves only if unchanged
 
 
 def root(link: Link) -> Link:
@@ -132,7 +133,7 @@ def _call(link: Link, path: str, body: Mapping[str, object]) -> dict[str, Any]:
     try:
         return root(link).call("POST", path, dict(body), area=AREA)
     except Failed as e:
-        if e.code == "already_connected" and path.endswith("/claim"):    # HQ answers this to a claim only
+        if e.code == "already_connected" and path.endswith("/claim"):  # HQ answers this to a claim only
             held = _map(e.body).get("replacement")
             if held is not None and not isinstance(held, dict):
                 raise BrokerFailed("bad_answer") from None
@@ -156,14 +157,21 @@ def _tokens(answer: Mapping[str, Any]) -> Tokens:
     access, refresh, expires = (str(answer.get(k) or "") for k in ("access_token", "refresh_token", "expires_at"))
     if not (access and refresh and expires):
         raise BrokerFailed("bad_answer")
-    return Tokens(access, refresh, expires, _text(answer.get("refresh_expires_at")), _text(answer.get("realm_id")),
-                  _text(answer.get("tenant_id")))
+    return Tokens(
+        access,
+        refresh,
+        expires,
+        _text(answer.get("refresh_expires_at")),
+        _text(answer.get("realm_id")),
+        _text(answer.get("tenant_id")),
+    )
 
 
 def connect(link: Link, provider: str, company_id: str, user_id: str, return_to: str) -> tuple[str, int]:
     """The provider's consent page (the browser goes there) and how long that link lives, in seconds."""
-    answer = _call(link, f"oauth/{provider}/connect", {"company_id": company_id, "user_id": user_id,
-                                                       "return_to": return_to})
+    answer = _call(
+        link, f"oauth/{provider}/connect", {"company_id": company_id, "user_id": user_id, "return_to": return_to}
+    )
     url = str(answer.get("url") or "")
     expires = answer.get("expires_in")
     if not url.startswith("https://"):
@@ -176,8 +184,7 @@ def claim(link: Link, provider: str, company_id: str, claim_id: str) -> Tokens:
 
 
 def refresh(link: Link, provider: str, company_id: str, refresh_token: str) -> Tokens:
-    return _tokens(_call(link, f"oauth/{provider}/refresh",
-                         {"company_id": company_id, "refresh_token": refresh_token}))
+    return _tokens(_call(link, f"oauth/{provider}/refresh", {"company_id": company_id, "refresh_token": refresh_token}))
 
 
 def revoke(link: Link, provider: str, company_id: str, refresh_token: str, access_token: str = "") -> bool:
@@ -196,11 +203,19 @@ def save(c: Any, cid: str, tokens: Tokens, *, by: str, at: str) -> None:
     provider = str(old.get("provider") or "books")
     access = tico.seal_credential(c, f"{provider} access token", tokens.access_token, "", by, at)
     refreshed = tico.seal_credential(c, f"{provider} refresh token", tokens.refresh_token, "", by, at)
-    SX.set_books_settings(c, cid, {
-        "access": access, "refresh": refreshed, "expires_at": tokens.expires_at,
-        "refresh_expires_at": tokens.refresh_expires_at,
-        "realm_id": tokens.realm_id or old.get("realm_id"), "tenant_id": tokens.tenant_id or old.get("tenant_id"),
-        "generation": _generation(old) + 1})
+    SX.set_books_settings(
+        c,
+        cid,
+        {
+            "access": access,
+            "refresh": refreshed,
+            "expires_at": tokens.expires_at,
+            "refresh_expires_at": tokens.refresh_expires_at,
+            "realm_id": tokens.realm_id or old.get("realm_id"),
+            "tenant_id": tokens.tenant_id or old.get("tenant_id"),
+            "generation": _generation(old) + 1,
+        },
+    )
     for key in ("access", "refresh"):
         if old.get(key) and old.get(key) != SX.books_settings(c, cid).get(key):
             tico.drop_credential(c, str(old[key]))
@@ -218,9 +233,14 @@ def _generation(books: Mapping[str, object]) -> int:
 
 def _state(c: Any, vault: object, cid: str) -> _State:
     books = SX.books_settings(c, cid)
-    return _State(access=_secret(c, vault, books.get("access")), refresh_token=_secret(c, vault, books.get("refresh")),
-                  expires_at=str(books.get("expires_at") or ""), company=str(books.get("company_id") or ""),
-                  realm=str(books.get("realm_id") or ""), generation=_generation(books))
+    return _State(
+        access=_secret(c, vault, books.get("access")),
+        refresh_token=_secret(c, vault, books.get("refresh")),
+        expires_at=str(books.get("expires_at") or ""),
+        company=str(books.get("company_id") or ""),
+        realm=str(books.get("realm_id") or ""),
+        generation=_generation(books),
+    )
 
 
 def _due(expires_at: str, now: str) -> bool:
@@ -242,8 +262,7 @@ def realm_of(store: Any, vault: object, cid: str) -> str:
         return _state(c, vault, cid).realm
 
 
-def _refreshed(store: Any, vault: object, link: Link, cid: str, provider: str,
-               state: _State) -> tuple[Tokens, int]:
+def _refreshed(store: Any, vault: object, link: Link, cid: str, provider: str, state: _State) -> tuple[Tokens, int]:
     """HQ's refresh of the connection's pair, with the generation of the pair it was made from. HQ answers not_connected
     when the pair posted is no longer the company's (a refresh saved another meanwhile), so the vault is read again and
     the refresh is tried once with what it holds."""
@@ -260,8 +279,9 @@ def _refreshed(store: Any, vault: object, link: Link, cid: str, provider: str,
         raise ReconnectRequired("not_connected") from None
 
 
-def _save_rotated(store: Any, cid: str, fresh: Tokens, now: str, *, tries: int = VAULT_TRIES,
-                  expect: int | None = None) -> bool:
+def _save_rotated(
+    store: Any, cid: str, fresh: Tokens, now: str, *, tries: int = VAULT_TRIES, expect: int | None = None
+) -> bool:
     """Writes a rotated pair to the vault, up to `tries` times. True when one write lands. With `expect`, the pair is
     written only while the connection is still at that generation: a newer save since then raises _Superseded."""
     for attempt in range(1, tries + 1):
@@ -274,8 +294,13 @@ def _save_rotated(store: Any, cid: str, fresh: Tokens, now: str, *, tries: int =
         except _Superseded:
             raise
         except Exception:  # noqa: BLE001 - any failure of the vault write is retried; the rotated pair must not be lost
-            log.warning("Books connection %s: vault write try %d of %d failed after a refresh", cid, attempt, tries,
-                        exc_info=True)
+            log.warning(
+                "Books connection %s: vault write try %d of %d failed after a refresh",
+                cid,
+                attempt,
+                tries,
+                exc_info=True,
+            )
     return False
 
 
@@ -288,13 +313,18 @@ def _keep_rotated(store: Any, cid: str, fresh: Tokens, provider: str, now: str, 
         return
     with store.transaction() as c:
         SX.set_connection_status(c, cid, "reconnect", "vault_write_failed", now)
-        tico.needs_you(c, SX.connection_owner(c, cid), f"Connect {provider} again",
-                       "Tico could not keep the grant for this books connection. Connect it again in Finance.")
+        tico.needs_you(
+            c,
+            SX.connection_owner(c, cid),
+            f"Connect {provider} again",
+            "Tico could not keep the grant for this books connection. Connect it again in Finance.",
+        )
     raise ReconnectRequired("vault_write_failed")
 
 
-def access_token(store: Any, vault: object, link: Link, cid: str, provider: str, *, now: str,
-                 force: bool = False) -> str:
+def access_token(
+    store: Any, vault: object, link: Link, cid: str, provider: str, *, now: str, force: bool = False
+) -> str:
     """A usable access token for a books connection: refreshed through HQ when near expiry or when `force` (after a
     401). One refresh at a time per connection; a 409 marks the connection for reconnecting and raises, and so does a
     rotated pair the vault will not keep (see _keep_rotated)."""
@@ -304,7 +334,7 @@ def access_token(store: Any, vault: object, link: Link, cid: str, provider: str,
         return state.access
     with _lock(cid):
         with store.read() as c:
-            state = _state(c, vault, cid)                  # a refresh that finished while this one waited
+            state = _state(c, vault, cid)  # a refresh that finished while this one waited
         if not force and state.access and not _due(state.expires_at, now):
             return state.access
         if not state.refresh_token:
@@ -314,9 +344,13 @@ def access_token(store: Any, vault: object, link: Link, cid: str, provider: str,
         except ReconnectRequired:
             with store.transaction() as c:
                 SX.set_connection_status(c, cid, "reconnect", "reconnect_required", now)
-                tico.needs_you(c, SX.connection_owner(c, cid), f"Connect {provider} again",
-                               "The grant for this books connection no longer works. Connect it again in Finance; "
-                               "the mirror waits until then.")
+                tico.needs_you(
+                    c,
+                    SX.connection_owner(c, cid),
+                    f"Connect {provider} again",
+                    "The grant for this books connection no longer works. Connect it again in Finance; "
+                    "the mirror waits until then.",
+                )
             raise
         try:
             _keep_rotated(store, cid, fresh, provider, now, expect=generation)
@@ -371,8 +405,11 @@ def _dropped(c: Any, provider: str, *, company_id: str, tokens: Tokens) -> str |
     field, key = ("realm_id", tokens.realm_id) if quickbooks else ("tenant_id", tokens.tenant_id)
     if not key:
         return None
-    rows = c.execute("SELECT id FROM fin_connections WHERE purpose='books' AND status='disconnected' AND provider=? "
-                     "ORDER BY created_at, id", (provider,)).fetchall()
+    rows = c.execute(
+        "SELECT id FROM fin_connections WHERE purpose='books' AND status='disconnected' AND provider=? "
+        "ORDER BY created_at, id",
+        (provider,),
+    ).fetchall()
     for row in rows:
         books = SX.books_settings(c, str(row[0]))
         if str(books.get("company_id") or "") == company_id and str(books.get(field) or "") == key:
@@ -389,8 +426,18 @@ def _revoke_refused(link: Link, provider: str, company_id: str, tokens: Tokens) 
         log.warning("Books: HQ did not take off a refused %s grant", provider)
 
 
-def connect_claim(store: Any, vault: object, link: Link, *, provider: str, company_id: str, claim_id: str,
-                  name: str, by: str, now: str) -> str:
+def connect_claim(
+    store: Any,
+    vault: object,
+    link: Link,
+    *,
+    provider: str,
+    company_id: str,
+    claim_id: str,
+    name: str,
+    by: str,
+    now: str,
+) -> str:
     """Claim the pair HQ holds for a finished consent and keep its tokens in the vault for the books connection.
 
     The claim is single use and is spent first. A consent for a company or organisation that already has a books
@@ -414,7 +461,7 @@ def connect_claim(store: Any, vault: object, link: Link, *, provider: str, compa
     with store.transaction() as c:
         cid: str | None = _same_account(c, provider, tokens)
         if cid is not None and str(SX.books_settings(c, cid).get("company_id") or "") != company_id:
-            cid = None      # another company's books: refused below, and never repointed to this company
+            cid = None  # another company's books: refused below, and never repointed to this company
         elif cid is None and not _other_book(c, provider, company_id=company_id, tokens=tokens):
             # The company's own dropped connection for this same QuickBooks company or Xero organisation comes back as it
             # was; anything else is a connection of its own.
@@ -422,15 +469,23 @@ def connect_claim(store: Any, vault: object, link: Link, *, provider: str, compa
             if cid is None:
                 cid = tico.new_id()
                 SX.books_connection_insert(c, cid=cid, provider=provider, name=name, by=by, at=now)
-            SX.set_books_settings(c, cid, {"provider": provider, "company_id": company_id,
-                                          "realm_id": tokens.realm_id, "tenant_id": tokens.tenant_id})
+            SX.set_books_settings(
+                c,
+                cid,
+                {
+                    "provider": provider,
+                    "company_id": company_id,
+                    "realm_id": tokens.realm_id,
+                    "tenant_id": tokens.tenant_id,
+                },
+            )
         if cid is not None:
             _keep_trigger(c, cid, provider=provider, by=by, now=now)
             SX.set_connection_status(c, cid, "reconnect", "vault_pending", now)
             # Each connect of the connection has its own id, so a disconnect after it is a new request (see drop).
             SX.set_books_settings(c, cid, {"connect_id": tico.new_id()})
     if cid is None:
-        _revoke_refused(link, provider, company_id, tokens)      # outside the write: HQ is asked, nothing is stored
+        _revoke_refused(link, provider, company_id, tokens)  # outside the write: HQ is asked, nothing is stored
         raise AlreadyConnected(None)
     with _lock(cid):
         _keep_claimed(store, cid, tokens, provider=provider, by=by, now=now)
@@ -441,11 +496,22 @@ def _keep_trigger(c: Any, cid: str, *, provider: str, by: str, now: str) -> None
     """The books connection's Tico trigger (spec §3.4): a Finance trigger, `consumer` finance, whose Intuit or Xero calls
     HQ relays to this install over the Gateway. It has the connection's id. Made with the connection, and made again for
     a connection that predates it, or whose trigger was removed."""
-    c.execute("INSERT INTO triggers(id,name,kind,secret_hash,created_by,created_at,updated_at,preset,consumer) "
-              "VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET name=excluded.name,preset=excluded.preset,"
-              "consumer=excluded.consumer,signing_secret=NULL,deleted_at=NULL,updated_at=excluded.updated_at",
-              (cid, LABEL.get(provider, provider), "webhook", digest(secrets.token_urlsafe(24)), by, now, now,
-               PRESET[provider], "finance"))
+    c.execute(
+        "INSERT INTO triggers(id,name,kind,secret_hash,created_by,created_at,updated_at,preset,consumer) "
+        "VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET name=excluded.name,preset=excluded.preset,"
+        "consumer=excluded.consumer,signing_secret=NULL,deleted_at=NULL,updated_at=excluded.updated_at",
+        (
+            cid,
+            LABEL.get(provider, provider),
+            "webhook",
+            digest(secrets.token_urlsafe(24)),
+            by,
+            now,
+            now,
+            PRESET[provider],
+            "finance",
+        ),
+    )
 
 
 def ensure_triggers(store: Any, *, now: str) -> None:
@@ -453,8 +519,11 @@ def ensure_triggers(store: Any, *, now: str) -> None:
     trigger was removed. HQ is not asked. A connection's QuickBooks or Xero calls reach it over the install's `_finance`
     system relay (relayed_call), so no relay of its own is made."""
     with store.read() as c:
-        missing = [(cid, provider, SX.connection_owner(c, cid)) for cid, provider, _ in SX.books_connections(c)
-                   if c.execute("SELECT 1 FROM triggers WHERE id=? AND deleted_at IS NULL", (cid,)).fetchone() is None]
+        missing = [
+            (cid, provider, SX.connection_owner(c, cid))
+            for cid, provider, _ in SX.books_connections(c)
+            if c.execute("SELECT 1 FROM triggers WHERE id=? AND deleted_at IS NULL", (cid,)).fetchone() is None
+        ]
     for cid, provider, owner in missing:
         with store.transaction() as c:
             _keep_trigger(c, cid, provider=provider, by=owner, now=now)
@@ -475,10 +544,24 @@ def relayed_call(c: Any, body: bytes, *, delivery_id: str, received_at: str | No
         parsed = None
     envelope = _map(parsed)
     provider, company = str(envelope.get("provider") or ""), str(envelope.get("company_id") or "")
-    held = [cid for cid, _, co in SX.books_connections(c, provider) if co == company] if provider in LABEL and company else []
+    held = (
+        [cid for cid, _, co in SX.books_connections(c, provider) if co == company]
+        if provider in LABEL and company
+        else []
+    )
     if len(held) == 1 and c.execute("SELECT 1 FROM triggers WHERE id=? AND deleted_at IS NULL", (held[0],)).fetchone():
-        triggers.receive(c, held[0], body, {}, secret=None, via="gateway", delivery_id=delivery_id,
-                         received_at=received_at, vault=vault, auth=auth)
+        triggers.receive(
+            c,
+            held[0],
+            body,
+            {},
+            secret=None,
+            via="gateway",
+            delivery_id=delivery_id,
+            received_at=received_at,
+            vault=vault,
+            auth=auth,
+        )
         return FED
     tico.audit(c, SYSTEM, "finance.webhook_unmatched", "", {"provider": provider, "delivery": delivery_id[:200]})
     return UNMATCHED
@@ -495,12 +578,17 @@ def _keep_claimed(store: Any, cid: str, tokens: Tokens, *, provider: str, by: st
                 SX.set_connection_status(c, cid, "active", "", now)
             return
         except Exception:  # noqa: BLE001 - any failure of the vault write is retried; the claimed pair must not be lost
-            log.warning("Books connection %s: vault write try %d of %d failed", cid, attempt, VAULT_TRIES,
-                        exc_info=True)
+            log.warning(
+                "Books connection %s: vault write try %d of %d failed", cid, attempt, VAULT_TRIES, exc_info=True
+            )
     with store.transaction() as c:
         SX.set_connection_status(c, cid, "reconnect", "vault_write_failed", now)
-        tico.needs_you(c, by, f"Connect {provider} again",
-                       "Tico could not keep the grant for this books connection. Connect it again in Finance.")
+        tico.needs_you(
+            c,
+            by,
+            f"Connect {provider} again",
+            "Tico could not keep the grant for this books connection. Connect it again in Finance.",
+        )
     raise ReconnectRequired("vault_write_failed")
 
 
@@ -543,16 +631,18 @@ def _drop_grant(store: Any, vault: object, link: Link, cid: str, provider: str, 
         if not current.refresh_token or current.refresh_token == state.refresh_token:
             return
         try:
-            ok = revoke(link, provider, current.company, current.refresh_token,
-                        current.access if provider == "xero" else "")
+            ok = revoke(
+                link, provider, current.company, current.refresh_token, current.access if provider == "xero" else ""
+            )
         except NotConnected:
             return
     if not ok:
         raise BrokerFailed("disconnect_refused")
 
 
-def _refresh_for_disconnect(store: Any, vault: object, link: Link, cid: str, provider: str, *,
-                            now: str) -> tuple[_State, Tokens | None]:
+def _refresh_for_disconnect(
+    store: Any, vault: object, link: Link, cid: str, provider: str, *, now: str
+) -> tuple[_State, Tokens | None]:
     """A fresh pair for a disconnect HQ is asked with, kept in the vault. When the write does not land, the pair still
     goes to HQ, since it can take the grant off with it: the second value is that pair, for the caller to keep if HQ
     refuses. Unlike a sync's refresh, a grant HQ no longer holds is not marked for a reconnect here."""
@@ -562,8 +652,14 @@ def _refresh_for_disconnect(store: Any, vault: object, link: Link, cid: str, pro
             raise ReconnectRequired("no_refresh_token")
         fresh, generation = _refreshed(store, vault, link, cid, provider, state)
         unkept = None if _save_rotated(store, cid, fresh, now) else fresh
-    held = _State(access=fresh.access_token, refresh_token=fresh.refresh_token, expires_at=fresh.expires_at,
-                  company=state.company, realm=state.realm, generation=generation)
+    held = _State(
+        access=fresh.access_token,
+        refresh_token=fresh.refresh_token,
+        expires_at=fresh.expires_at,
+        company=state.company,
+        realm=state.realm,
+        generation=generation,
+    )
     return held, unkept
 
 
@@ -578,8 +674,12 @@ def _keep_unkept(store: Any, cid: str, fresh: Tokens, provider: str, *, now: str
         return
     with store.transaction() as c:
         SX.set_connection_status(c, cid, "reconnect", "vault_write_failed", now)
-        tico.needs_you(c, SX.connection_owner(c, cid), f"Connect {provider} again",
-                       "Tico could not keep the grant for this books connection. Connect it again in Finance.")
+        tico.needs_you(
+            c,
+            SX.connection_owner(c, cid),
+            f"Connect {provider} again",
+            "Tico could not keep the grant for this books connection. Connect it again in Finance.",
+        )
     raise BrokerFailed("vault_write_failed")
 
 
@@ -613,7 +713,7 @@ def revoke_grant(store: Any, vault: object, link: Link, cid: str, provider: str,
         if _current(store, vault, cid).refresh_token:
             _revoked(store, vault, link, cid, provider, now=now)
     except ReconnectRequired:
-        pass    # HQ holds no grant to take off (reconnect_required, not_connected, no_refresh_token)
+        pass  # HQ holds no grant to take off (reconnect_required, not_connected, no_refresh_token)
 
 
 def clear_local(c: Any, cid: str, *, now: str) -> None:
@@ -659,8 +759,10 @@ def _flows(c: Any) -> dict[str, Any]:
 
 
 def _keep_flows(c: Any, flows: Mapping[str, Any]) -> None:
-    c.execute("INSERT INTO registry_metadata(key, value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET "
-              "value=excluded.value", (FLOWS, json.dumps(flows, sort_keys=True)))
+    c.execute(
+        "INSERT INTO registry_metadata(key, value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+        (FLOWS, json.dumps(flows, sort_keys=True)),
+    )
 
 
 def _fresh(started: object, now: str) -> bool:
@@ -697,8 +799,9 @@ def start(store: Any, link: Link, *, provider: str, company_id: str, user: str, 
     return connect(link, provider, company_id, user, f"{return_base.rstrip('/')}/{flow}")
 
 
-def finish(store: Any, vault: object, link: Link, *, flow: str, user: str, outcome: str, reason: str,
-           claim_id: str) -> str:
+def finish(
+    store: Any, vault: object, link: Link, *, flow: str, user: str, outcome: str, reason: str, claim_id: str
+) -> str:
     """The browser came back from HQ for a consent: the flow is spent, then the pair is claimed once and kept, and the
     books connection made or repaired. Returns its id. Raises NotStarted, ConsentFailed (HQ did not finish the consent)
     or the BrokerFailed of the claim or the vault. AlreadyConnected is HQ refusing the organisation: no connection is
@@ -711,8 +814,17 @@ def finish(store: Any, vault: object, link: Link, *, flow: str, user: str, outco
     if outcome != "connected" or not claim_id:
         raise ConsentFailed(reason if REASON.fullmatch(reason) else "unknown")
     provider = started["provider"]
-    cid = connect_claim(store, vault, link, provider=provider, company_id=started["company"], claim_id=claim_id,
-                        name=LABEL.get(provider, provider), by=user, now=now)
+    cid = connect_claim(
+        store,
+        vault,
+        link,
+        provider=provider,
+        company_id=started["company"],
+        claim_id=claim_id,
+        name=LABEL.get(provider, provider),
+        by=user,
+        now=now,
+    )
     with store.transaction() as c:
         tico.audit(c, user, "finance.books.connected", cid, {"provider": provider})
     return cid
@@ -723,6 +835,7 @@ def drop(store: Any, vault: object, link: Link, cid: str, *, by: str) -> None:
     its vault rows and ids go, and the connection is disconnected; spec §5). Raises UnknownConnection when no books
     connection that is not disconnected has the id."""
     from . import actions as FA
+
     with store.read() as c:
         held = [row for row in SX.books_connections(c) if row[0] == cid]
     if not held:
@@ -737,4 +850,3 @@ def drop(store: Any, vault: object, link: Link, cid: str, *, by: str) -> None:
         if done.status != "committed":
             raise FA.FinanceError(done.code or "denied", done.reason or "the books connection was not disconnected")
         tico.audit(c, by, "finance.books.disconnected", cid, {"provider": provider})
-

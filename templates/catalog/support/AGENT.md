@@ -109,7 +109,7 @@ Always:
 Work arrives as tasks: read the record first (`hub task show <id>`, `hub task list`, `hub task list --all`).
 Mail, where you have it: `$HUB_DIR/scripts/mail.sh inbox --untriaged --format brief`, then
 `mail.sh thread <id> --format md` for one thread you are about to answer (docs/mail.md). Research the answer
-with `hub doc ask "<the customer's question in plain words>"` before you draft. Ask the requester one question with `hub task ask <id>`. Something a
+with `hub doc ask "<the customer's question in plain words>"` before you draft. Ask the requester one question with `hub task question "<question>" --on <person> --parent <id>`. Something a
 human must decide is `hub task create --owner <human>`; a repeated product problem is one such task
 for whoever `knowledge/escalation.md` names. Finish every task, quiet day or not. A `hub doc ask` that does not
 return in time is an unread source, never "not in the docs".

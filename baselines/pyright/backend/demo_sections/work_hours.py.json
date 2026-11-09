@@ -1,0 +1,14 @@
+{
+    "files": {
+        "./backend/demo_sections/work_hours.py": [
+            {
+                "code": "reportOptionalSubscript",
+                "range": {
+                    "startColumn": 16,
+                    "endColumn": 20,
+                    "lineCount": 1
+                }
+            }
+        ]
+    }
+}

@@ -1,5 +1,6 @@
 """The hub_finance_* tools (docs/finance-tools.md): each call runs as its caller, through the Finance routes, with
 results cut to the payload budget."""
+
 import json
 
 from backend.finance import actions as FA
@@ -24,8 +25,16 @@ def _books(api):
 def test_tools_run_as_the_calling_bot_with_its_own_rights_and_view(api):
     _books(api)
     bot = as_bot(api, "finance")
-    err, out = call(api, "hub_finance_act", {"kind": "payment_create", "operation_id": "pay-1", "payload": {
-        "recipient_id": "rcp_none", "amount": 5_000, "money_account_id": "ma_none"}}, token=bot)
+    err, out = call(
+        api,
+        "hub_finance_act",
+        {
+            "kind": "payment_create",
+            "operation_id": "pay-1",
+            "payload": {"recipient_id": "rcp_none", "amount": 5_000, "money_account_id": "ma_none"},
+        },
+        token=bot,
+    )
     assert not err and out["status"] == "denied" and "finance.pay" in out["reason"], out
     err, cash = call(api, "hub_finance_metric", {"name": "cash"})
     assert not err and "as_of" in cash
@@ -65,7 +74,7 @@ class _Api:
     def get(self, path, **query):
         self.calls.append((path, query))
         start, most = int(query.get("cursor") or 0), int(query.get("limit") or 50)
-        page = self.rows[start:start + most]
+        page = self.rows[start : start + most]
         more = start + most < len(self.rows)
         return {self.key: page, "next_cursor": str(start + most) if more else None, "currency": "USD"}
 
@@ -89,12 +98,15 @@ def test_a_big_page_fits_the_budget_with_an_other_row_and_a_cursor_that_carries_
 
 
 def test_a_big_report_folds_its_tail_into_one_other_row_that_adds_up():
-    rows = [{"account_id": f"a{i}", "label": f"Account {i} " + "y" * 100, "amount": i, "columns": [i, 2 * i]}
-            for i in range(1000)]
+    rows = [
+        {"account_id": f"a{i}", "label": f"Account {i} " + "y" * 100, "amount": i, "columns": [i, 2 * i]}
+        for i in range(1000)
+    ]
 
     class Reports:
         def get(self, path, **query):
             return {"kind": "pnl", "rows": [dict(r) for r in rows]}
+
     out = hubtools.finance_report(Reports(), {"kind": "pnl"})
     assert len(json.dumps(out)) <= hubtools.FINANCE_CHARS
     other = out["rows"][-1]
@@ -111,6 +123,7 @@ def test_a_report_folds_entity_rows_and_keeps_every_period_column():
     class Reports:
         def get(self, path, **query):
             return {"kind": "pnl", "columns": [dict(x) for x in columns], "rows": [dict(r) for r in rows]}
+
     out = hubtools.finance_report(Reports(), {"kind": "pnl", "period": "day"})
     assert len(json.dumps(out)) <= hubtools.FINANCE_CHARS
     assert out["columns"] == columns
@@ -120,13 +133,14 @@ def test_a_report_folds_entity_rows_and_keeps_every_period_column():
 
 def test_a_report_folds_onto_the_servers_other_row_and_keeps_vendors_named_other_and_unattributed():
     assert hubtools.FIN_OTHER == FR.OTHER
-    names = ["other", "unattributed", FR.NONE] + [f"v{i}" for i in range(17)]          # 20 shown, 11 folded already
+    names = ["other", "unattributed", FR.NONE] + [f"v{i}" for i in range(17)]  # 20 shown, 11 folded already
     rows = [{"key": k, "label": "Ünïcødé vendor " + "é" * 400, "amount": 1_000 - i} for i, k in enumerate(names)]
     tail = {"key": FR.OTHER, "label": "Other · 11", "amount": 5_500, "count": 11}
 
     class Reports:
         def get(self, path, **query):
             return {"by": "vendor", "rows": [dict(r) for r in rows] + [dict(tail)], "total": 0}
+
     out = hubtools.finance_report(Reports(), {"kind": "spend_by", "by": "vendor"})
     assert len(json.dumps(out)) <= hubtools.FINANCE_CHARS
     keys = [r["key"] for r in out["rows"]]
@@ -137,8 +151,12 @@ def test_a_report_folds_onto_the_servers_other_row_and_keeps_vendors_named_other
 
 
 def test_one_huge_row_is_cut_inside_and_a_result_that_cannot_fit_says_so():
-    huge = {"id": "itm_1", "kind": "bill_to_enter", "label": "z" * 100_000,
-            "lines": [{"id": f"ln_{i}", "memo": "w" * 200, "amount": i} for i in range(500)]}
+    huge = {
+        "id": "itm_1",
+        "kind": "bill_to_enter",
+        "label": "z" * 100_000,
+        "lines": [{"id": f"ln_{i}", "memo": "w" * 200, "amount": i} for i in range(500)],
+    }
     out = hubtools.finance_inbox(_Api([huge, _row(2)], key="items"), {})
     assert len(json.dumps(out)) <= hubtools.FINANCE_CHARS
     first = out["items"][0]
@@ -148,6 +166,7 @@ def test_one_huge_row_is_cut_inside_and_a_result_that_cannot_fit_says_so():
     class Actions:
         def get(self, path, **query):
             return {"action_id": "act_1", "result": {"amounts": list(range(20_000))}}
+
     marker = hubtools.finance_action(Actions(), {"action_id": "act_1"})
     assert marker["error"] == "too_big" and marker["cap"] == hubtools.FINANCE_CHARS
 
@@ -159,6 +178,7 @@ def test_inbox_pages_one_kind_through_the_cli_and_the_tool_passing_its_cursor(mo
         def get(self, path, **query):
             assert query.get("kind") == "uncategorized", query
             return super().get(path, **query)
+
     api = Inbox([{"id": f"fd_{i}", "kind": "uncategorized", "label": f"Row {i}"} for i in range(250)], key="items")
     args = hubcli.parser().parse_args(["finance", "inbox", "--kind", "uncategorized", "--cursor", "200"])
     out = remotecli.via_tool(api, args)

@@ -73,8 +73,8 @@ Always:
 
 ## Talking to {{app_name}}
 Work arrives as tasks. Customer calls: `hub meeting search "<account>"`, then `hub meeting read <id>`. Health: read the
-Customer Success Manager's latest note, or `hub question ask customer-success "<account> health?" --wait 60`. Contract
-facts in the docs: `hub doc ask "<question>"`. One question per task with `hub task ask <id>`. Keep `hub bot status set`
+Customer Success Manager's latest note, or `hub message send customer-success "<account> health?" --needs-action`. Contract
+facts in the docs: `hub doc ask "<question>"`. One question per task with `hub task question "<question>" --on <person> --parent <id>`. Keep `hub bot status set`
 to one factual line.
 
 ## Quality standards

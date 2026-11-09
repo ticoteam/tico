@@ -3,7 +3,7 @@ approval that a person decides. An org change is no proposal: the Strategy Bot s
 person asks (the Assistant makes it as them, backend/assistant.py `admits_on_turn`); the owner and group leads make it
 themselves on the Org tab.
 
-  KINDS                      task_cap, spend_limit (backend/hubdb.py APPROVAL_KINDS)
+  KINDS                      task_cap, spend_limit, mail_alert (backend/hubdb.py APPROVAL_KINDS)
   check(c, kind, payload)    refuses, when it is filed, a proposal the hub could not apply (and every one while off)
   decider(c)                 who decides: the top of the org
   apply(c, auth, settings, who, row)
@@ -11,32 +11,47 @@ themselves on the Org tab.
                              person, audited with via `approval:<id>`; the approval is spent and BotOps gets a notice
 
 Payloads: task_cap `{sender, receiver, per_day}`; spend_limit `{bot}` or `{pool: "company"|"group:<id>"}` with
-`per_30m_usd, daily_usd, weekly_usd, monthly_usd`.
+`per_30m_usd, daily_usd, weekly_usd, monthly_usd`; mail_alert `{bot, outbound_send, forward_to}`, an older ask no
+longer raised (bot.yaml asks for nothing now): approving one still sets that bot's sending policy to On their own as the
+person who approves (backend/mail_settings.py `update`).
 
 The note to BotOps is a hub notice (from `keeper`, kind `notice`, refs `{approval}`), as every hub notice reaches a bot:
 BotOps reads it in its inbox, the owner in BotOps's conversations. Nothing waits in a bot's queue: only work outside
 the hub becomes a BotOps task.
 """
+
 from pydantic import ValidationError
 
 from . import hubdb as H
 from . import models as M
 from .store import Problem
 
-KINDS = ("task_cap", "spend_limit")
+KINDS = ("task_cap", "spend_limit", "mail_alert")
 
 
 class SpendLimit(M.UsageLimit):
     """A spend limit change: one bot's own, or a pool's (`company` or `group:<id>`)."""
+
     bot: M.ID | None = None
     pool: str | None = M.Field(default=None, max_length=200)
+
+
+class MailAlert(M.Contract):
+    """A bot's mail sending, exactly as the bot asks for it (the setting a person approves)."""
+
+    bot: M.ID
+    outbound_send: bool
+    forward_to: list[M.Annotated[str, M.Field(max_length=320)]] = M.Field(default_factory=list, max_length=20)
 
 
 def _parse(kind, payload):
     try:
         if kind == "task_cap":
             from .task_caps import TaskCap
+
             return TaskCap(**payload)
+        if kind == "mail_alert":
+            return MailAlert(**payload)
         found = SpendLimit(**payload)
         if bool(found.bot) == bool(found.pool):
             raise Problem("validation", "A spend_limit names a bot or a pool, not both", 422)
@@ -55,27 +70,32 @@ def check(c, kind, payload):
 def decider(c):
     """The person who decides a proposal: the top of the org (the stored owner's person)."""
     from .automations import top_person
+
     pid = top_person(c)
     return "human:" + pid if pid else None
 
 
 def _teammate(c, value):
     from .task_caps import _teammate as teammate
+
     return teammate(c, value)
 
 
 def _name(c, value):
     from .task_caps import _name as name
+
     return name(c, value)
 
 
 def _group_name(c, gid):
     from . import groups as G
+
     return (G._roster(c)["org_groups"].get(gid) or {}).get("name") or gid or "no group"
 
 
 def _apply_cap(c, auth, settings, who, aid, change):
     from . import task_caps
+
     task_caps.apply_approved(c, who.actor, aid)
     sender, receiver = _teammate(c, change.sender), _teammate(c, change.receiver)
     if change.per_day is None:
@@ -85,6 +105,7 @@ def _apply_cap(c, auth, settings, who, aid, change):
 
 def _apply_spend(c, auth, settings, who, aid, change):
     from . import usage
+
     # Only the fields the proposal names: one it leaves out keeps its stored value (backend/usage.py `amounts`).
     limits = M.UsageLimit(**change.model_dump(include=set(M.UsageLimit.model_fields), exclude_unset=True))
     if change.bot:
@@ -92,11 +113,24 @@ def _apply_spend(c, auth, settings, who, aid, change):
         usage.save_limit(c, auth, who, bot, limits, via=f"approval:{aid}")
         return f"Spend limit changed for {_name(c, 'bot:' + bot)}."
     usage.save_pool(c, auth, who, change.pool, limits, via=f"approval:{aid}")
-    return "Spend limit changed for " + ("the whole team." if change.pool == "company" else
-                                         _group_name(c, change.pool.split(":", 1)[1]) + ".")
+    return "Spend limit changed for " + (
+        "the whole team." if change.pool == "company" else _group_name(c, change.pool.split(":", 1)[1]) + "."
+    )
 
 
-APPLY = {"task_cap": _apply_cap, "spend_limit": _apply_spend}
+def _apply_mail(c, auth, settings, who, aid, change):
+    """An older mail ask, approved: sending on its own stays on once it is on. Forward addresses are retired (a forward
+    is a send like any other), so they are not kept. As the person who approves: mail_settings.update checks that they
+    manage the bot. No new mail asks are raised: bot.yaml asks for nothing."""
+    from . import mail_settings
+    from .email_sending import sends_on_own
+
+    on = sends_on_own(c, change.bot) or change.outbound_send
+    mail_settings.update(c, auth, who, change.bot, M.MailSettingsUpdate(outbound_send=on))
+    return f"Mail sending for {_name(c, H.bot_actor(change.bot))} is {'on' if on else 'off'}."
+
+
+APPLY = {"task_cap": _apply_cap, "spend_limit": _apply_spend, "mail_alert": _apply_mail}
 
 
 def apply(c, auth, settings, who, row):

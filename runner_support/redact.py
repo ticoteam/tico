@@ -13,6 +13,7 @@ for that text, never the text.
 secret (they are left out of what is published) and whether a commit made during the turn already carries one
 (then nothing is pushed).
 """
+
 import base64
 import json
 import os
@@ -29,11 +30,28 @@ MASK = "••••"
 ERROR = "[redacted: error]"
 MIN_LENGTH = 8
 # Words that are a setting, not a secret: replacing them would only damage the text.
-COMMON = {"localhost", "127.0.0.1", "production", "development", "password", "username", "enabled", "disabled",
-          "undefined", "identity", "anonymous", "internal", "external", "default", "standard", "true", "false"}
-_TEXT_LIMIT = 2_000_000                     # a text file bigger than this is treated as binary here
+COMMON = {
+    "localhost",
+    "127.0.0.1",
+    "production",
+    "development",
+    "password",
+    "username",
+    "enabled",
+    "disabled",
+    "undefined",
+    "identity",
+    "anonymous",
+    "internal",
+    "external",
+    "default",
+    "standard",
+    "true",
+    "false",
+}
+_TEXT_LIMIT = 2_000_000  # a text file bigger than this is treated as binary here
 
-_active = {}                                # attempt id -> Redactor, for the runner's log
+_active = {}  # attempt id -> Redactor, for the runner's log
 _lock = threading.Lock()
 
 
@@ -76,7 +94,9 @@ class Redactor:
         for value in self.values:
             forms |= _variants(value)
         forms.discard("")
-        self.pattern = re.compile("|".join(re.escape(f) for f in sorted(forms, key=len, reverse=True))) if forms else None
+        self.pattern = (
+            re.compile("|".join(re.escape(f) for f in sorted(forms, key=len, reverse=True))) if forms else None
+        )
 
     def add(self, secrets):
         with self.update_lock:
@@ -150,11 +170,17 @@ class Redactor:
                         left_out.append(path)
                         continue
                     temporary = '.tico-scrub-' + uuid.uuid4().hex
-                    fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
-                                 stat.S_IMODE(info.st_mode), dir_fd=directory)
+                    fd = os.open(
+                        temporary,
+                        os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                        stat.S_IMODE(info.st_mode),
+                        dir_fd=directory,
+                    )
                     with os.fdopen(fd, 'wb') as stream:
                         os.fchmod(stream.fileno(), stat.S_IMODE(info.st_mode))
-                        stream.write(self.scrub_text(data.decode('utf-8', 'surrogateescape')).encode('utf-8', 'surrogateescape'))
+                        stream.write(
+                            self.scrub_text(data.decode('utf-8', 'surrogateescape')).encode('utf-8', 'surrogateescape')
+                        )
                     current = os.stat(path.name, dir_fd=directory, follow_symlinks=False)
                     if (current.st_dev, current.st_ino) != (info.st_dev, info.st_ino):
                         left_out.append(path)
@@ -220,7 +246,9 @@ def for_turn(env, vault_values=(), names=("TOKEN", "SECRET", "PASSWORD", "API_KE
     secrets.extend(v for k, v in (env or {}).items() if any(s in k.upper() for s in names))
     try:
         groups = json.loads((env or {}).get('TICO_GITHUB_TOKENS', '[]'))
-        secrets.extend(group['token'] for group in groups if isinstance(group, dict) and isinstance(group.get('token'), str))
+        secrets.extend(
+            group['token'] for group in groups if isinstance(group, dict) and isinstance(group.get('token'), str)
+        )
     except (ValueError, TypeError):
         pass
     redactor = Redactor(secrets)
@@ -251,12 +279,18 @@ _CREDENTIAL_SHAPES = [
     (re.compile(r"\b(password|oauth_refresh_token|access_token|token)\s*=\s*\S+", re.I), r"\1=" + MASK),
 ]
 # Git's progress, advice and recovery hints: never the reason something failed.
-_GIT_NOISE = re.compile(r"^(?:hint:|cloning into|remote: (?:enumerating|counting|compressing|total)|receiving objects|"
-                        r"resolving deltas|updating files|filtering content|checking out files|"
-                        r"you can inspect what was checked out|and retry with|warning: clone succeeded|"
-                        r"fatal: credential helper .* told us to quit)", re.I)
-_GIT_REASON = re.compile(r"^(?:fatal:|error:|remote:|tico\b|git-lfs|batch response|smudge|.*\b(?:error|denied|"
-                         r"not found|timed out|too long|failed)\b)", re.I)
+_GIT_NOISE = re.compile(
+    r"^(?:hint:|cloning into|remote: (?:enumerating|counting|compressing|total)|receiving objects|"
+    r"resolving deltas|updating files|filtering content|checking out files|"
+    r"you can inspect what was checked out|and retry with|warning: clone succeeded|"
+    r"fatal: credential helper .* told us to quit)",
+    re.I,
+)
+_GIT_REASON = re.compile(
+    r"^(?:fatal:|error:|remote:|tico\b|git-lfs|batch response|smudge|.*\b(?:error|denied|"
+    r"not found|timed out|too long|failed)\b)",
+    re.I,
+)
 
 
 def scrub_credentials(text, secrets=()):
@@ -291,7 +325,7 @@ def git_failure(stderr, secrets=(), limit=300):
             lines.append(line)
     reasons = [line for line in lines if _GIT_REASON.match(line)] or lines
     text = " / ".join(line[:200] for line in reasons[-3:])
-    return text if len(text) <= limit else text[:limit - 1].rstrip() + "…"
+    return text if len(text) <= limit else text[: limit - 1].rstrip() + "…"
 
 
 def head(root):
@@ -301,8 +335,13 @@ def head(root):
 
 def _git(root, *args, raw=False):
     try:
-        done = isolation.run([*safe_git.prefix(root), "-C", str(root), *args],
-                             env=safe_git.clean_environment(), capture_output=True, stdin=subprocess.DEVNULL, timeout=30)
+        done = isolation.run(
+            [*safe_git.prefix(root), "-C", str(root), *args],
+            env=safe_git.clean_environment(),
+            capture_output=True,
+            stdin=subprocess.DEVNULL,
+            timeout=30,
+        )
     except (OSError, subprocess.SubprocessError):
         return b"" if raw else ""
     if done.returncode != 0:

@@ -10,6 +10,8 @@
 # Structure: `trigger` is matched on the fields given (`*` = present, `at` = a schedule's hour and minute); `steps` are
 # the enabled steps of one level in order; `any_of` takes either of several step expectations; `paths` match in order
 # (the first path that holds runs); a condition matches on field, op and value, and `min` must be at least the given one.
+# A filter rule's `to` names a destination, matched by id, and `next` says what follows the rule; `destinations` lists the
+# expected destinations by id, with the action names their `then` runs in order.
 # Decide sets are named without their version. Times and yes/no values are quoted.
 
 - id: investor-drafts
@@ -241,3 +243,36 @@
         rules:
           - when: [{field: message.subject, op: contains, value: receipt}]
             then: [archive]
+
+- id: legal-subpoena
+  title: "Subpoena mail starred and sent to Legal"
+  prompt: "When a mail's subject mentions a subpoena, star it and send it to Legal."
+  mode: new
+  expect:
+    trigger: {type: message, inbox: dana@acme.example}
+    steps:
+      - type: filter
+        rules:
+          - when: [{field: message.subject, op: matches, value: subpoena}]
+            then: [label]
+            to: legal
+    destinations:
+      - {id: legal, then: [create_task]}
+  note: "The rule's own action runs first, then the destination's chain, and the thread ends there."
+
+- id: stripe-finance
+  title: "Stripe failed payments and refunds go to Finance"
+  prompt: "Send failed payments and refunds from the Stripe webhook to Finance, and ignore the other events."
+  mode: new
+  expect:
+    trigger: {type: webhook, id: "*"}
+    steps:
+      - type: filter
+        rules:
+          - when: [{field: webhook.type, op: is, value: "invoice.payment_failed"}]
+            to: finance
+          - when: [{field: webhook.type, op: is, value: "charge.refunded"}]
+            to: finance
+    destinations:
+      - {id: finance, then: [create_task]}
+  note: "Events that match no rule run no action, which is what ignoring them means."

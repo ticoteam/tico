@@ -1,4 +1,4 @@
-/* ui/styles/overview-graph.css — Overview › Graph (ui/app/overview-graph.js): the team chart in its own pan-and-zoom
+/* ui/styles/overview-graph.css — Overview › Graph (ui/app/overview-graph.ts): the team chart in its own pan-and-zoom
    frame, the Rules | Goals switch above it, and the teammate panel (beside the chart; a bottom sheet on a phone). */
 .og-bar{flex:none;display:flex;align-items:center;gap:var(--s3);flex-wrap:wrap;padding:var(--s2) 28px;border-bottom:1px solid var(--line)}
 .og-seg{display:inline-flex;padding:2px;gap:2px;border:1px solid var(--line);border-radius:var(--r-ctl);background:var(--surface2)}

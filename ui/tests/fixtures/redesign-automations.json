@@ -15,7 +15,7 @@
     {"id": "support-triage@2", "questions": {"urgency": {"type": "score", "max": 3, "instructions": "How urgent?", "criteria": ["Low", "Medium", "High"]}}}
   ],
   "automations": [
-    {"id": "au_inbox", "name": "Inbox · dana@acme.example", "owner": "person:dana", "enabled": true, "builtin": false,
+    {"id": "au_inbox", "name": "Inbox · dana@acme.example", "owner_id": "person:dana", "enabled": true, "builtin": false,
      "spend_cap": {"per_30m": 5.0}, "version": 7,
      "trigger": {"type": "message", "inbox": "dana@acme.example", "filters": []},
      "steps": [
@@ -31,15 +31,15 @@
             {"id": "a2", "type": "action", "enabled": true, "do": "create_task", "args": {"to": "bot:support"}}]}],
         "otherwise": {"steps": [{"id": "a3", "type": "action", "enabled": true, "do": "leave_for_you", "args": {}}]}}
      ]},
-    {"id": "au_deploy", "name": "Deploy watch", "owner": "bot:eng-lead", "group": "group:engineering", "enabled": true, "builtin": false,
+    {"id": "au_deploy", "name": "Deploy watch", "owner_id": "bot:eng-lead", "group": "group:engineering", "enabled": true, "builtin": false,
      "version": 3, "trigger": {"type": "webhook", "id": "wh_1", "name": "deploys"},
      "steps": [
        {"id": "fd1", "type": "find", "enabled": true, "source": "prs", "query": "merged", "since": "last_run", "limit": 20},
        {"id": "bt1", "type": "bot_turn", "enabled": true, "bot": "eng-lead", "prompt": "Check the deploy and post what changed."}]},
-    {"id": "au_tasks", "name": "Task triage", "owner": "bot:support", "enabled": true, "builtin": true, "version": 2,
+    {"id": "au_tasks", "name": "Task triage", "owner_id": "bot:support", "enabled": true, "builtin": true, "version": 2,
      "trigger": {"type": "task_received", "to": "bot:support"},
      "steps": [{"id": "ta1", "type": "action", "enabled": true, "do": "assign", "args": {"to": "bot:support"}}]},
-    {"id": "au_listen", "name": "Pricing mentions", "owner": "person:omar", "enabled": false, "builtin": false, "version": 1,
+    {"id": "au_listen", "name": "Pricing mentions", "owner_id": "person:omar", "enabled": false, "builtin": false, "version": 1,
      "can_edit": false,
      "trigger": {"type": "listening", "destination": "pricing"},
      "steps": [{"id": "n1", "type": "action", "enabled": true, "do": "note", "args": {"text": "Price talk"}}]}

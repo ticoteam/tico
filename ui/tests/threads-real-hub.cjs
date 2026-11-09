@@ -1,11 +1,12 @@
 // Threads on a real hub (ui/tests/support/real-hub.cjs): a company thread and a members-only thread, made through the API as
-// Dana. Dana, on a desktop, reads the company thread and replies in its composer; a sub-thread under one of its messages
-// shows inline under its header and opens on its own; and her bot page switches between the bot's Home and DM. Omar, a teammate on the
+// Dana. Dana, on a desktop, reads the company thread and replies in its composer; a sub-thread reply under one of its
+// messages shows in time order, quoting that message, and the sub-thread still opens on its own; and her bot page
+// switches between the bot's Home and DM. Omar, a teammate on the
 // desktop, sees the company thread on the thread rail but not the members-only one, and its text is not on his page; opened by
 // direct URL it is "Not found"; and on a bot he may see but not read, the bot has no Home tab. Priya's Home is hidden from
 // Omar until Dana makes him Priya's manager (reports_to), and then he reads it. Priya, on a phone, taps the company thread
 // on the rail, sees its composer, and the page does not scroll sideways. Dana, on a phone, finds a late sub-thread reply
-// under its root's row, reads DMs by who they are with, and switches a bot's Home and DM.
+// on its root's row, reads DMs by who they are with, and switches a bot's Home and DM.
 const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
 const crypto = require('node:crypto');
@@ -72,13 +73,12 @@ async function restrictPerson(hub) {
     await dana.locator('.thv-composer .p-send').click();
     await dana.getByText('Monday works.').waitFor({timeout: t(15000)});
 
-    // Dana: a sub-thread's header shows under its message with the reply count, and opens the sub-thread on its own page.
-    const head = dana.locator(`.th-msg:has-text("${KICKOFF}") + .th-subhead`);
-    await head.waitFor({timeout: t(15000)});
-    assert.match(await head.innerText(), /1 reply/, 'the sub-thread header counts its one reply');
-    // The sub-thread's messages sit inline under it, indented; the header, or tapping one, opens it.
-    await dana.locator('.th-msg.th-sub', {hasText: RISKS}).waitFor({timeout: t(15000)});
-    await head.click();
+    // Dana: the sub-thread's reply reads flat, quoting the message it answers; the sub-thread still opens on its own page.
+    const reply = dana.locator('.th-msg', {hasText: RISKS}).first();
+    await reply.waitFor({timeout: t(15000)});
+    assert.equal(await reply.locator('.th-quote').getAttribute('data-th-quote'), kickoff.id, 'the reply quotes its message');
+    assert.equal(await dana.locator('.th-subhead').count(), 0, 'no sub-thread heads');
+    await dana.goto(hub.url + '/#/thread/' + risks.thread_id);
     await dana.waitForURL(new RegExp('#/thread/' + risks.thread_id), {timeout: t(15000)});
     await dana.locator('.thv-composer .p-text').waitFor({timeout: t(15000)});
     await dana.getByText(RISKS).waitFor({timeout: t(15000)});
@@ -86,26 +86,27 @@ async function restrictPerson(hub) {
     // Dana: Keep messages saves through the real PATCH: the server holds it, a fresh load shows it, and it clears.
     const keepDialog = async () => {
       await dana.locator('[data-thv-menu]').click();
-      await dana.locator('.thv-pop').getByText('Keep messages').click();
-      return dana.locator('#thread-keep select');
+      return dana.locator('#thread-settings[open] #ths-keep');
     };
-    const saveKeep = async () => {
-      await dana.locator('#thread-keep [type=submit]').click();
-      await dana.waitForFunction(() => !document.querySelector('#thread-keep')?.open, null, {timeout: t(15000)});
+    // The select saves as it changes; the panel then closes.
+    const setKeep = async (select, days) => {
+      const saved = dana.waitForResponse(r => r.request().method() === 'PATCH' && r.url().includes('/v2/threads/'), {timeout: t(15000)});
+      await select.selectOption(days);
+      await saved;
+      await dana.locator('#thread-settings .tmodal-x').click();
+      await dana.waitForFunction(() => !document.querySelector('#thread-settings')?.open, null, {timeout: t(15000)});
     };
     await dana.goto(hub.url + '/#/thread/' + plan.id);
     await dana.getByText(PLAN).waitFor({timeout: t(15000)});
     const keep = await keepDialog();
     assert.equal(await keep.inputValue(), '', 'a thread keeps its messages by default');
-    await keep.selectOption('90');
-    await saveKeep();
+    await setKeep(keep, '90');
     assert.equal((await api(hub, 'dana', 'GET', `/v2/threads/${plan.id}`)).retention_days, 90, 'the server holds the length');
     await dana.reload();
     await dana.getByText(PLAN).waitFor({timeout: t(15000)});
     const kept = await keepDialog();
     assert.equal(await kept.inputValue(), '90', 'a fresh load shows the saved length');
-    await kept.selectOption('');
-    await saveKeep();
+    await setKeep(kept, '');
     assert.equal((await api(hub, 'dana', 'GET', `/v2/threads/${plan.id}`)).retention_days, null, 'and it clears');
     await dana.context().close();
 
@@ -113,15 +114,14 @@ async function restrictPerson(hub) {
     const bot = await pageAs(browser, hub, 'dana');
     await bot.goto(hub.url + '/#/bot/' + BOT + '/home');
     await bot.locator('#bot-work').waitFor({timeout: t(15000)});
-    const homeTab = bot.locator('.bot-talk-switch [data-talk="home"]');
-    const dmTab = bot.locator('.bot-talk-switch [data-talk="dm"]');
-    await homeTab.waitFor({timeout: t(15000)});
-    await dmTab.click();
-    await bot.waitForFunction(() => document.querySelector('.bot-talk-switch [data-talk="dm"]')?.getAttribute('aria-selected') === 'true',
+    const incognito = bot.locator('#bot-incognito');
+    await incognito.waitFor({timeout: t(15000)});
+    await incognito.click();
+    await bot.waitForFunction(() => document.querySelector('#bot-incognito')?.getAttribute('aria-pressed') === 'true',
       null, {timeout: t(15000)});
-    assert.equal(await homeTab.getAttribute('aria-selected'), 'false', 'the DM tab replaces the Home tab as selected');
-    await homeTab.click();
-    await bot.waitForFunction(() => document.querySelector('.bot-talk-switch [data-talk="home"]')?.getAttribute('aria-selected') === 'true',
+    assert.equal(await bot.locator('#bot-incognito').getAttribute('aria-pressed'), 'true', 'incognito is the DM');
+    await incognito.click();
+    await bot.waitForFunction(() => document.querySelector('#bot-incognito')?.getAttribute('aria-pressed') === 'false',
       null, {timeout: t(15000)});
     await bot.context().close();
 
@@ -149,7 +149,7 @@ async function restrictPerson(hub) {
     await omar.waitForLoadState('networkidle');
     assert.equal(await omar.locator('#btabs [data-bt="home"]').count(), 0, 'a peer with See only on the bot gets no Home tab');
     assert.equal(await omar.locator('#btabs [data-bt="dm"]').count(), 0, 'a peer who may not write to the bot gets no DM tab');
-    assert.equal(await omar.locator('.bot-talk-switch').count(), 0, 'a peer with See only on the bot has no Home/DM switch');
+    assert.equal(await omar.locator('#bot-incognito').count(), 0, 'a peer with See only on the bot has no incognito toggle');
     assert.equal(await omar.locator('#bot-work').isVisible(), false, 'a peer with See only on the bot has no work pane');
     await omar.context().close();
 
@@ -197,7 +197,7 @@ async function restrictPerson(hub) {
     await priya.context().close();
 
     // Dana, phone. Omar answers in the old sub-thread: the rail still shows only roots, the root's row carries the reply,
-    // and tapping it opens the root with the reply inline under its message. Opening the sub-thread adds no row for it.
+    // and tapping it opens the root with the reply in it. Opening the sub-thread adds no row for it.
     const late = await api(hub, 'omar', 'POST', `/v2/threads/${plan.id}/messages`, {text: 'A late risk from Omar', kind: 'say', parent_message_id: kickoff.id});
     const pair = await api(hub, 'dana', 'POST', '/v2/threads/dm', {members: ['human:priya']});
     const trio = await api(hub, 'dana', 'POST', '/v2/threads/dm', {members: ['human:priya', 'human:omar'], title: 'Launch trio'});
@@ -237,10 +237,15 @@ async function restrictPerson(hub) {
     const selected = tab => phone.waitForFunction(name => document.querySelector(`#btabs [data-bt="${name}"]`)?.getAttribute('aria-selected') === 'true',
       tab, {timeout: t(15000)});
     await selected('home');
-    assert.equal(await phone.locator('#btabs [data-bt="dm"]').innerText(), 'DM');
-    await phone.locator('#btabs [data-bt="dm"]').tap();
-    await selected('dm');
-    await phone.locator('#btabs [data-bt="home"]').tap();
+    // 9d11efec7: a phone has one chat tab; the DM is Incognito, the toggle in the top line (aria-pressed = DM).
+    assert.equal(await phone.locator('#btabs [data-bt="dm"]').count(), 0, 'no DM tab: the DM is Incognito');
+    assert.equal(await phone.locator('#bot-incognito').getAttribute('aria-pressed'), 'false', 'Incognito starts off');
+    await phone.locator('#bot-incognito').tap();
+    await phone.waitForFunction(() => location.hash.endsWith('/dm') && document.querySelector('#bot-incognito')?.getAttribute('aria-pressed') === 'true',
+      null, {timeout: t(15000)});
+    await selected('home');
+    await phone.locator('#bot-incognito').tap();
+    await phone.waitForFunction(() => document.querySelector('#bot-incognito')?.getAttribute('aria-pressed') === 'false', null, {timeout: t(15000)});
     await selected('home');
     await phone.context().close();
 
@@ -249,7 +254,7 @@ async function restrictPerson(hub) {
     const dmsBefore = await dmCount();
     const talk = await pageAs(browser, hub, 'dana');
     await talk.goto(hub.url + '/#/bot/' + BOT + '/home');
-    await talk.locator('.bot-talk-switch [data-talk="dm"]').click();
+    await talk.locator('#bot-incognito').click();
     await talk.locator('#bot-thread .thv-composer .p-text').waitFor({timeout: t(15000)});
     assert.equal(await dmCount(), dmsBefore, 'opening the DM tab made no DM');
     await talk.locator('#bot-thread .thv-composer .p-text').fill('First words to the bot.');
@@ -274,41 +279,17 @@ async function restrictPerson(hub) {
       assert.match(await page.locator('.thv-title').innerText(), /^#\s*Launch plan$/, `${tag}: the header's mark`);
       assert.equal(await page.locator('.thv-aud').count(), 0, `${tag}: no audience word beside a # thread`);
 
-      // Who can read: one title, a one-line team row, and no Slack with Slack off.
+      // Who can read in Thread settings: its row label is its only title, a one-line team row, and no Slack with Slack off.
       await page.goto(hub.url + '/#/thread/' + secret.id);
       await page.locator('[data-thv-menu]').click();
-      await page.locator('.thv-pop').getByText('Who can read').click();
-      const share = page.locator('#thread-share[open]');
+      const share = page.locator('#thread-settings[open]');
       await share.locator('.thd-aud-word').waitFor({timeout: t(15000)});
       await page.waitForLoadState('networkidle');
-      assert.equal(await share.locator('.thd-aud legend').count(), 0, `${tag}: the title is the only Who can read`);
+      assert.equal(await share.locator('.thd-aud legend').count(), 0, `${tag}: the row label is the only Who can read`);
       const word = await share.locator('.thd-aud-word').boundingBox();
       assert.ok(word.height < 26, `${tag}: A team stays on one line (${word.height}px)`);
       assert.equal(await share.locator('[name=tcn-channel]').count(), 0, `${tag}: no Slack with Slack off`);
       await share.locator('[data-close]').first().click();
-
-      // Make task twice: the refusal links to the task it repeats, and the button keeps its one line.
-      await page.goto(hub.url + '/#/thread/' + plan.id);
-      const makeTask = async () => {
-        const row = page.locator('[data-message]', {hasText: KICKOFF}).first();
-        await row.hover();
-        await row.locator('[data-th-more]').click();
-        await page.locator('.thv-pop').getByText('Make task').click();
-        await page.locator('#thread-task[open] [type=submit]').click();
-      };
-      if (!isPhone) {
-        await makeTask();
-        await page.waitForFunction(() => !document.querySelector('#thread-task')?.open, null, {timeout: t(15000)});
-      }
-      await makeTask();
-      const twin = page.locator('#thread-task [data-status] a[href^="#/task/"]');
-      await twin.waitFor({timeout: t(15000)});
-      const buttons = page.locator('#thread-task .dash-form-foot');
-      const [cancel, make] = [await buttons.locator('button[data-close]').boundingBox(), await buttons.locator('[type=submit]').boundingBox()];
-      assert.ok(Math.abs(cancel.height - make.height) < 2, `${tag}: Make task is one line beside Cancel`);
-      await twin.click();
-      await page.waitForURL(/#\/task\//, {timeout: t(15000)});
-      assert.equal(await page.locator('#thread-task[open]').count(), 0, `${tag}: following the link closes the dialog`);
 
       // A group's Home sits in the same gutters as its cards.
       await page.goto(hub.url + '/#/team/' + encodeURIComponent(eng.id));

@@ -13,13 +13,32 @@ import pytest
 
 from backend.store import H
 from backend.tests.test_api import api, as_member, assign, claim, headers, post, ready, runner
+from backend import bot_settings as BS
 
-SECRET_TABLES = ("credentials", "credential_keys", "credential_grants", "idempotency", "runners", "runner_states",
-                 "enrollments", "session_epochs", "bot_session_epochs", "settings_changes", "backup_verified_blobs",
-                 "sqlite_temp_master", "sqlite_sequence", "_litestream_seq")
+SECRET_TABLES = (
+    "credentials",
+    "credential_keys",
+    "credential_grants",
+    "idempotency",
+    "runners",
+    "runner_states",
+    "enrollments",
+    "session_epochs",
+    "bot_session_epochs",
+    "settings_changes",
+    "backup_verified_blobs",
+    "sqlite_temp_master",
+    "sqlite_sequence",
+    "_litestream_seq",
+)
 SECRET_COLUMNS = (("attempts", "token_hash"), ("service_jobs", "token_hash"))
-REJECTED = ("PRAGMA table_info(messages)", "DELETE FROM messages", "ATTACH ':memory:' AS other",
-            "CREATE TEMP VIEW v AS SELECT 1", "SELECT 1; DELETE FROM messages")
+REJECTED = (
+    "PRAGMA table_info(messages)",
+    "DELETE FROM messages",
+    "ATTACH ':memory:' AS other",
+    "CREATE TEMP VIEW v AS SELECT 1",
+    "SELECT 1; DELETE FROM messages",
+)
 
 
 def query(api, sql, token="ana-test", expected=200, **body):
@@ -53,7 +72,7 @@ def test_sql_private_task_inventory_reuses_snapshot_rights_and_sees_revocation(a
         return roster(c)
 
     monkeypatch.setattr(views, "_roster", counted)
-    expected, guests, counts = set(), set(), {}
+    expected, readers, counts = set(), set(), {}
 
     def open_read():
         statements, before = [], len(builds)
@@ -67,14 +86,21 @@ def test_sql_private_task_inventory_reuses_snapshot_rights_and_sees_revocation(a
     for start, size in ((0, 3), (3, 30)):
         with store.transaction() as c:
             for n in range(start, size):
-                row = H.task_create(c, "human:ben", f"Private source {n}", "Secret", "bot:finance" if n % 3 == 0
-                                    else "bot:ops", private=True, lint=False)
+                row = H.task_create(
+                    c,
+                    "human:ben",
+                    f"Private source {n}",
+                    "Secret",
+                    "bot:finance" if n % 3 == 0 else "bot:ops",
+                    private=True,
+                    lint=False,
+                )
                 if n % 3 == 0:
                     expected.add(row["id"])
                 elif n % 3 == 2:
-                    c.execute("UPDATE tasks SET guest='human:cara' WHERE id=?", (row["id"],))
+                    c.execute("UPDATE tasks SET readers=json_array('human:cara') WHERE id=?", (row["id"],))
                     expected.add(row["id"])
-                    guests.add(row["id"])
+                    readers.add(row["id"])
         conn, statements, built = open_read()
         try:
             assert ids(conn) == expected
@@ -94,7 +120,7 @@ def test_sql_private_task_inventory_reuses_snapshot_rights_and_sees_revocation(a
         assert ids(held) == expected
         fresh, _, _ = open_read()
         try:
-            assert ids(fresh) == guests
+            assert ids(fresh) == readers
         finally:
             fresh.close()
     finally:
@@ -113,17 +139,24 @@ def world(api):
     assign(api, machine, "ops")
     ready(api, machine, ["ops"])
     attempt = claim(api, machine)
-    with api.app.state.store.transaction() as c:   # a person's Mac: its credential reads as them
+    with api.app.state.store.transaction() as c:  # a person's Mac: its credential reads as them
         c.execute("UPDATE runners SET platform='darwin' WHERE id=?", (machine["runner_id"],))
     private = post(api, "tasks", {"owner": "inbox", "title": "Sort the inbox", "body": "Private to Ana."})
     coo_task = post(api, "tasks", {"owner": "ops", "title": "Summarize the week", "body": "For ops."})
     finance_task = post(api, "tasks", {"owner": "finance", "title": "Close the books", "body": "For finance."})
-    return {"ana_room": ana_room, "steven_room": steven_room, "machine": machine, "attempt": attempt,
-            "private": private, "coo_task": coo_task, "finance_task": finance_task}
+    return {
+        "ana_room": ana_room,
+        "steven_room": steven_room,
+        "machine": machine,
+        "attempt": attempt,
+        "private": private,
+        "coo_task": coo_task,
+        "finance_task": finance_task,
+    }
 
 
 def test_the_sql_page_examples_all_run(api):
-    page = (Path(__file__).resolve().parents[2] / "ui/app/sql.js").read_text()
+    page = (Path(__file__).resolve().parents[2] / "ui/app/sql.ts").read_text()
     examples = re.findall(r"""^  \['[^']+', "(.+)"\],?$""", page, re.M)
     assert len(examples) >= 6
     for sql in examples:
@@ -142,8 +175,13 @@ def test_only_one_read_statement_is_accepted(api, monkeypatch):
     # `ms` is measured: a loaded computer takes a millisecond or two.
     ms = blob.pop("ms")
     assert isinstance(ms, int) and ms >= 0, ms
-    assert blob == {"columns": ["b"], "rows": [["AQI="]], "row_count": 1, "truncated": False,
-                    "note": "BLOB values are base64"}
+    assert blob == {
+        "columns": ["b"],
+        "rows": [["AQI="]],
+        "row_count": 1,
+        "truncated": False,
+        "note": "BLOB values are base64",
+    }
     # A query that takes 5 ms reports it.
     clock = iter(range(1000))
     monkeypatch.setattr("backend.sql.time", SimpleNamespace(monotonic=lambda: next(clock) * 0.005))
@@ -171,8 +209,12 @@ def test_the_message_refs_view_is_denied_to_everyone(api, world):
     """`message_refs` (migration 0051) reads `messages` without the per-caller rows a `messages` query sees, so SQL
     never reads it: the typed refs keys are read as json_extract over the caller's own `messages`."""
     for token in ("ana-test", "cara-test", world["attempt"]["token"]):
-        for sql in ("SELECT * FROM message_refs", "SELECT ref_task_id FROM message_refs",
-                    "SELECT count(*) FROM message_refs", "SELECT * FROM main.message_refs"):
+        for sql in (
+            "SELECT * FROM message_refs",
+            "SELECT ref_task_id FROM message_refs",
+            "SELECT count(*) FROM message_refs",
+            "SELECT * FROM main.message_refs",
+        ):
             detail = error(api, sql, token)
             assert "prohibited" in detail or detail == "not authorized", (sql, token, detail)
         assert "message_refs" in column(api, "SELECT name FROM sqlite_master WHERE type='view'", token)
@@ -182,11 +224,20 @@ def test_the_company_page_s_readers_are_denied_to_everyone_and_its_rules_are_the
     """Who the readers are, their sessions and invites, what they wrote and read: nobody reads these through SQL, the owner
     included. The company's own rules, drafts and stats are the owner's, as its page's API shows them."""
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO audiences (id, name, kind, created_at, updated_at) VALUES ('board','Board','board',?,?)",
-                  (H.now(), H.now()))
+        c.execute(
+            "INSERT INTO audiences (id, name, kind, created_at, updated_at) VALUES ('board','Board','board',?,?)",
+            (H.now(), H.now()),
+        )
     for token in ("ana-test", "ben-test", world["attempt"]["token"]):
-        for table in ("readers", "audience_readers", "reader_sessions", "reader_invites", "reader_messages",
-                      "reader_notices", "edition_views"):
+        for table in (
+            "readers",
+            "audience_readers",
+            "reader_sessions",
+            "reader_invites",
+            "reader_messages",
+            "reader_notices",
+            "edition_views",
+        ):
             assert error(api, f"SELECT count(*) FROM {table}", token) == "not authorized", (table, token)
     assert query(api, "SELECT name FROM audiences", "ana-test")["rows"] == [["Board"]]
     assert query(api, "SELECT name FROM audiences", "ben-test")["rows"] == []
@@ -197,27 +248,37 @@ def test_recruiting_seats_are_readable_by_everyone_like_the_org_chart(api, world
     seat = post(api, "seats", {"title": "Bookkeeper", "description": "Keeps the ledgers.", "reports_to": "finance"})
     for token in ("ana-test", "cara-test", world["attempt"]["token"]):
         assert query(api, "SELECT title,reports_to FROM seats WHERE closed_at IS NULL", token)["rows"] == [
-            ["Bookkeeper", "finance"]], token
+            ["Bookkeeper", "finance"]
+        ], token
         assert column(api, "SELECT count(*) FROM seats", token) == [1]
     assert seat["id"]
 
 
 def test_the_base_tables_cannot_be_reached_around_the_views(api, world):
     for token in ("ana-test", world["attempt"]["token"]):
-        for sql in ("SELECT * FROM main.messages", 'SELECT * FROM "main"."messages"', "SELECT * FROM MAIN.tasks",
-                    "SELECT * FROM messages, main.credentials",
-                    "WITH messages AS (SELECT * FROM main.messages) SELECT * FROM messages",
-                    "WITH conversations AS (SELECT * FROM main.conversations) SELECT * FROM conversations",
-                    "WITH c AS (SELECT id FROM main.conversations) SELECT * FROM messages WHERE conversation_id IN (SELECT id FROM c)",
-                    "SELECT (SELECT count(*) FROM main.messages) FROM messages"):
+        for sql in (
+            "SELECT * FROM main.messages",
+            'SELECT * FROM "main"."messages"',
+            "SELECT * FROM MAIN.tasks",
+            "SELECT * FROM messages, main.credentials",
+            "WITH messages AS (SELECT * FROM main.messages) SELECT * FROM messages",
+            "WITH conversations AS (SELECT * FROM main.conversations) SELECT * FROM conversations",
+            "WITH c AS (SELECT id FROM main.conversations) SELECT * FROM messages WHERE conversation_id IN (SELECT id FROM c)",
+            "SELECT (SELECT count(*) FROM main.messages) FROM messages",
+        ):
             detail = error(api, sql, token)
             assert "prohibited" in detail or detail == "not authorized", (sql, detail)
     # A CTE that shadows a view name cannot widen it either: it still reads through the view.
-    rows = query(api, "WITH conversations AS (SELECT id FROM conversations) SELECT count(*) FROM messages",
-                 world["attempt"]["token"])["rows"]
+    rows = query(
+        api,
+        "WITH conversations AS (SELECT id FROM conversations) SELECT count(*) FROM messages",
+        world["attempt"]["token"],
+    )["rows"]
     assert rows == [[len(column(api, "SELECT id FROM messages", world["attempt"]["token"]))]]
     # Nothing in a response names the connection's inner views.
-    plan = json.dumps(query(api, "EXPLAIN QUERY PLAN SELECT * FROM messages m JOIN tasks t ON t.conversation_id=m.conversation_id"))
+    plan = json.dumps(
+        query(api, "EXPLAIN QUERY PLAN SELECT * FROM messages m JOIN tasks t ON t.conversation_id=m.conversation_id")
+    )
     assert not re.search(r"v[0-9a-f]{24}_", plan), plan
     commented = json.dumps(query(api, "-- comment\n/* comment */ EXPLAIN QUERY PLAN SELECT * FROM tasks"))
     assert not re.search(r"v[0-9a-f]{24}_", commented), commented
@@ -237,21 +298,49 @@ def test_owner_sees_everything_but_other_peoples_rooms(api, world):
     assert all(world[k]["conversation_id"] in rooms for k in ("private", "coo_task", "finance_task"))
     assert "Started task: Summarize the week" in bodies
     assert column(api, "SELECT id FROM attempts") == [world["attempt"]["id"]]
-    assert column(api, "SELECT id FROM turns") == [world["attempt"]["id"]]
+    assert column(api, "SELECT id FROM attempts") == [world["attempt"]["id"]]
     with api.app.state.store.read() as c:
         jobs = c.execute("SELECT count(*) FROM jobs").fetchone()[0]
     # Every queued job but the one Ben's private room raised.
     assert jobs == 5 and len(column(api, "SELECT id FROM jobs")) == 4
     # Clone and subscription profile reports have per-computer keys; the rest are fixed.
-    assert column(api, "SELECT key FROM registry_metadata WHERE key NOT LIKE 'computer-repositories:%' AND key "
-                       "NOT LIKE 'computer-profiles:%'") == [
-        "access", "access_bot_limit", "bot_access", "ceo-bot", "company-turn-incident",
-        "credential-file-migration-v1", "credential-file-migration-v2-hub", "credential-use-backfill", "docs_migrated",
-        "idempotency_messages.ready", "inbox-only-runners", "librarian_wording35", "librarian_wording36",
-        "message_links.ready", "onboarding", "owner", "people", "redesign_cutover", "release-history",
-        "repositories-access-migrated", "roadmap_ready_to_ship_step", "roadmaps_copies_cleared_by_field",
-        "roadmaps_explicit_public_text", "stale_review_repair", "strategy-bot", "task_session_default",
-        "threads-migration", "threads-neutral-titles", "usage-count"]
+    assert column(
+        api,
+        "SELECT key FROM registry_metadata WHERE key NOT LIKE 'computer-repositories:%' AND key "
+        "NOT LIKE 'computer-profiles:%'",
+    ) == [
+        "access",
+        "access_bot_limit",
+        "bot-chats-to-home",
+        "bot_access",
+        "ceo-bot",
+        "company-turn-incident",
+        "credential-file-migration-v1",
+        "credential-file-migration-v2-hub",
+        "credential-use-backfill",
+        "docs_migrated",
+        "idempotency_messages.ready",
+        "inbox-only-runners",
+        "inbox_prompt_repair",
+        "librarian_wording35",
+        "librarian_wording36",
+        "message_links.ready",
+        "onboarding",
+        "owner",
+        "people",
+        "redesign_cutover",
+        "release-history",
+        "repositories-access-migrated",
+        "roadmap_ready_to_ship_step",
+        "roadmaps_copies_cleared_by_field",
+        "roadmaps_explicit_public_text",
+        "stale_review_repair",
+        "strategy-bot",
+        "task_session_default",
+        "threads-migration",
+        "threads-neutral-titles",
+        "usage-count",
+    ]
 
 
 def test_a_person_sees_the_company_but_not_private_bots_or_other_rooms(api, world):
@@ -261,15 +350,31 @@ def test_a_person_sees_the_company_but_not_private_bots_or_other_rooms(api, worl
     assert tasks == sorted(world[k]["id"] for k in ("coo_task", "finance_task"))
     assert "inbox" not in column(api, "SELECT slug FROM bots", ben)
     assert column(api, "SELECT bot FROM bot_status", ben) == sorted(
-        b for b in column(api, "SELECT bot FROM bot_status") if b != "inbox")
+        b for b in column(api, "SELECT bot FROM bot_status") if b != "inbox"
+    )
     # Their own room, and the own rooms of the public tasks; not Ana's room or its "Started task" line.
-    assert column(api, "SELECT body FROM messages", ben) == ["Ben private context.", "New task from human:ana: Close the books",
-                                                             "New task from human:ana: Summarize the week"]
+    assert column(api, "SELECT body FROM messages", ben) == [
+        "Ben private context.",
+        "New task from human:ana: Close the books",
+        "New task from human:ana: Summarize the week",
+    ]
     assert column(api, "SELECT id FROM conversations", ben) == sorted(
-        [world["steven_room"], world["coo_task"]["conversation_id"], world["finance_task"]["conversation_id"]])
+        [world["steven_room"], world["coo_task"]["conversation_id"], world["finance_task"]["conversation_id"]]
+    )
     assert column(api, "SELECT id FROM attempts", ben) == []
-    assert column(api, f"SELECT task_id FROM task_events WHERE task_id='{world['private']['id']}'", ben) == []
-    assert column(api, f"SELECT task_id FROM task_events WHERE task_id='{world['coo_task']['id']}'", ben)
+    assert (
+        column(
+            api,
+            f"SELECT subject_id AS task_id FROM history_events WHERE subject_type='task' AND subject_id='{world['private']['id']}'",
+            ben,
+        )
+        == []
+    )
+    assert column(
+        api,
+        f"SELECT subject_id AS task_id FROM history_events WHERE subject_type='task' AND subject_id='{world['coo_task']['id']}'",
+        ben,
+    )
 
 
 def test_a_bot_reads_ordinary_tasks_but_only_its_granted_rooms_and_no_private_data(api, world):
@@ -277,28 +382,45 @@ def test_a_bot_reads_ordinary_tasks_but_only_its_granted_rooms_and_no_private_da
     assert query(api, "SELECT 1", token)["rows"] == [[1]]
     bodies = column(api, "SELECT body FROM messages", token)
     # Its granted room, and the own rooms of the ordinary tasks it may read.
-    assert bodies == ["Ana private context.", "New task from human:ana: Close the books",
-                      "New task from human:ana: Summarize the week", "Started task: Summarize the week"]
+    assert bodies == [
+        "Ana private context.",
+        "New task from human:ana: Close the books",
+        "New task from human:ana: Summarize the week",
+        "Started task: Summarize the week",
+    ]
     assert column(api, "SELECT id FROM conversations", token) == sorted(
-        [world["ana_room"], world["coo_task"]["conversation_id"], world["finance_task"]["conversation_id"]])
+        [world["ana_room"], world["coo_task"]["conversation_id"], world["finance_task"]["conversation_id"]]
+    )
     assert column(api, "SELECT id FROM tasks", token) == sorted([world["coo_task"]["id"], world["finance_task"]["id"]])
     assert "inbox" not in column(api, "SELECT slug FROM bots", token)
     assert column(api, "SELECT id FROM attempts", token) == [world["attempt"]["id"]]
     # Its running job, the queued one behind its own task, and the one behind a public task it may read.
     jobs = query(api, "SELECT id, bot_id FROM jobs", token)["rows"]
-    assert len(jobs) == 3 and [world["attempt"]["job_id"], "ops"] in jobs and {row[1] for row in jobs} == {"ops", "finance"}
+    assert (
+        len(jobs) == 3
+        and [world["attempt"]["job_id"], "ops"] in jobs
+        and {row[1] for row in jobs} == {"ops", "finance"}
+    )
     assert column(api, "SELECT key FROM registry_metadata", token) == []
     assert column(api, "SELECT DISTINCT actor FROM events", token) in ([], ["bot:ops"])
     # Delegations do not widen the already readable ordinary task set or the hidden bot's activity.
     with api.app.state.store.transaction() as c:
         for task, by in ((world["finance_task"], "bot:finance"), (world["private"], "bot:inbox")):
-            wake = c.execute("SELECT id FROM messages WHERE conversation_id=?", (task["conversation_id"],)).fetchone()[0]
-            c.execute("INSERT INTO task_delegations(task_id,delegate,requested_by,message_id,expires_at) VALUES(?,?,?,?,?)",
-                      (task["id"], "bot:ops", by, wake, H.shift(H.now(), hours=1)))
+            wake = c.execute("SELECT id FROM messages WHERE conversation_id=?", (task["conversation_id"],)).fetchone()[
+                0
+            ]
+            c.execute(
+                "INSERT INTO task_delegations(task_id,delegate,requested_by,message_id,expires_at) VALUES(?,?,?,?,?)",
+                (task["id"], "bot:ops", by, wake, H.shift(H.now(), hours=1)),
+            )
     assert column(api, "SELECT id FROM tasks", token) == sorted([world["coo_task"]["id"], world["finance_task"]["id"]])
     # Another person's private room stays out of reach even when named directly.
-    assert query(api, "SELECT body FROM messages WHERE conversation_id=:room", token,
-                 params={"room": world["steven_room"]})["rows"] == []
+    assert (
+        query(
+            api, "SELECT body FROM messages WHERE conversation_id=:room", token, params={"room": world["steven_room"]}
+        )["rows"]
+        == []
+    )
 
 
 def test_history_lookups_keep_legacy_visibility_without_scanning_messages(api, world, monkeypatch):
@@ -309,11 +431,13 @@ def test_history_lookups_keep_legacy_visibility_without_scanning_messages(api, w
     store, auth = api.app.state.store, api.app.state.auth
     with store.transaction() as c:
         c.execute('UPDATE tasks SET private=1 WHERE id=?', (world['private']['id'],))
+
         def clone(table, original, **patch):
             row = dict(c.execute(f'SELECT * FROM {table} WHERE id=?', (original,)).fetchone())
             row.update(patch)
-            c.execute(f'INSERT INTO {table} ({",".join(row)}) VALUES ({",".join("?" for _ in row)})',
-                      list(row.values()))
+            c.execute(
+                f'INSERT INTO {table} ({",".join(row)}) VALUES ({",".join("?" for _ in row)})', list(row.values())
+            )
 
         original = world['attempt']
         mid = c.execute('SELECT message_id FROM jobs WHERE id=?', (original['job_id'],)).fetchone()[0]
@@ -326,20 +450,24 @@ def test_history_lookups_keep_legacy_visibility_without_scanning_messages(api, w
         }.items():
             clone('messages', mid, id='message-' + name, recipient_id='human:ana', **patch)
             clone('jobs', original['job_id'], id='job-' + name, message_id='message-' + name)
-            clone('attempts', original['id'], id='attempt-' + name, job_id='job-' + name,
-                  token_hash='fixture-' + name, state='completed', lane='fixture-' + name)
-            clone('turns', original['id'], id='attempt-' + name, message_id='message-' + name, task_id=None)
+            clone(
+                'attempts',
+                original['id'],
+                id='attempt-' + name,
+                job_id='job-' + name,
+                token_hash='fixture-' + name,
+                state='completed',
+                lane='fixture-' + name,
+                message_id='message-' + name,
+                task_id=None,
+            )
 
     guarded = S.guarded
     replacements = {
-        'EXISTS (SELECT 1 FROM messages readable WHERE readable.id=source.message_id)':
-            'message_id IN (SELECT id FROM messages)',
-        'EXISTS (SELECT 1 FROM jobs readable WHERE readable.id=source.job_id)':
-            'job_id IN (SELECT id FROM jobs)',
-        'EXISTS (SELECT 1 FROM attempts readable WHERE readable.id=source.attempt_id)':
-            'attempt_id IN (SELECT id FROM attempts)',
-        'EXISTS (SELECT 1 FROM conversations readable WHERE readable.id=source.conversation_id)':
-            'conversation_id IN (SELECT id FROM conversations)',
+        'EXISTS (SELECT 1 FROM messages readable WHERE readable.id=source.message_id)': 'message_id IN (SELECT id FROM messages)',
+        'EXISTS (SELECT 1 FROM jobs readable WHERE readable.id=source.job_id)': 'job_id IN (SELECT id FROM jobs)',
+        'EXISTS (SELECT 1 FROM attempts readable WHERE readable.id=source.attempt_id)': 'attempt_id IN (SELECT id FROM attempts)',
+        'EXISTS (SELECT 1 FROM conversations readable WHERE readable.id=source.conversation_id)': 'conversation_id IN (SELECT id FROM conversations)',
     }
 
     def legacy(*args, **kwargs):
@@ -350,9 +478,12 @@ def test_history_lookups_keep_legacy_visibility_without_scanning_messages(api, w
             rules[table] = predicate, hidden
         return rules
 
-    callers = [Identity('human:ana', 'owner'), Identity('human:ben', 'human'),
-               Identity('bot:ops', 'bot', attempt_id=world['attempt']['id']),
-               replace(Identity('human:ana', 'owner'), task_actor='bot:ops')]
+    callers = [
+        Identity('human:ana', 'owner'),
+        Identity('human:ben', 'human'),
+        Identity('bot:ops', 'bot', attempt_id=world['attempt']['id']),
+        replace(Identity('human:ana', 'owner'), task_actor='bot:ops'),
+    ]
     for who in callers:
         answers = []
         for rules in (legacy, guarded):
@@ -360,20 +491,23 @@ def test_history_lookups_keep_legacy_visibility_without_scanning_messages(api, w
             with store.read() as c:
                 conn = S.connect(store.settings.db_path, c, auth, who)
                 try:
-                    answers.append({table: S.run(conn, f'SELECT id FROM {table} ORDER BY id', [], 5000, 5)['rows']
-                                    for table in ('messages', 'jobs', 'attempts', 'turns')})
+                    answers.append(
+                        {
+                            table: S.run(conn, f'SELECT id FROM {table} ORDER BY id', [], 5000, 5)['rows']
+                            for table in ('messages', 'jobs', 'attempts')
+                        }
+                    )
                 finally:
                     conn.close()
         assert answers[0] == answers[1], who
-        for table in ('attempts', 'turns'):
+        for table in ('attempts',):
             expected = {'attempt-public'}
             if who.actor == 'human:ana' and not who.task_actor:
                 expected.update(('attempt-private-room', 'attempt-private-ref'))
             assert {row[0] for row in answers[1][table] if row[0].startswith('attempt-')} == expected, who
         if who.role == 'bot':
-            assert ['attempt-public'] in answers[1]['turns']
+            assert ['attempt-public'] in answers[1]['attempts']
             for name in ('private-room', 'private-ref', 'deleted', 'unknown-task'):
-                assert ['attempt-' + name] not in answers[1]['turns']
                 assert ['attempt-' + name] not in answers[1]['attempts']
 
     # Unfiltered LIMIT 1 must stop before authorizing the rest of history.
@@ -387,14 +521,151 @@ def test_history_lookups_keep_legacy_visibility_without_scanning_messages(api, w
         return message(index, *args)
 
     monkeypatch.setattr(S.ReadIndex, 'message', counted)
-    for table in ('turns', 'attempts'):
+    for table in ('attempts',):
         checked.clear()
         assert len(query(api, f'SELECT id FROM {table} LIMIT 1', world['attempt']['token'])['rows']) == 1
         assert len(checked) <= 1
         checked.clear()
-        assert query(api, f'SELECT id FROM {table} WHERE id=:id LIMIT 1', world['attempt']['token'],
-                     params={'id': 'attempt-public'})['rows'] == [['attempt-public']]
+        assert query(
+            api,
+            f'SELECT id FROM {table} WHERE id=:id LIMIT 1',
+            world['attempt']['token'],
+            params={'id': 'attempt-public'},
+        )['rows'] == [['attempt-public']]
         assert checked in ([], ['message-public'])
+
+
+def test_fast_sql_gates_skip_python_callbacks_and_keep_the_privacy_fallback(api, world, monkeypatch):
+    from backend import sql as S
+
+    store, room = api.app.state.store, world['coo_task']['conversation_id']
+    with store.transaction() as c:
+        messages = [
+            H.say(c, 'human:ben', 'human:ana', 'Synthetic history', conversation_id=room, refs=refs)['id']
+            for refs in (None, {}, {'task': world['coo_task']['id']})
+        ]
+        fallback = H.say(
+            c,
+            'human:ben',
+            'human:ana',
+            'Synthetic escaped refs',
+            conversation_id=room,
+            refs={'task': world['coo_task']['id'], 'note': 'say "hi"'},
+        )['id']
+        c.execute(
+            'UPDATE messages SET conversation_id=? WHERE id=(SELECT j.message_id FROM jobs j '
+            'JOIN attempts a ON a.job_id=j.id WHERE a.id=?)',
+            (room, world['attempt']['id']),
+        )
+        # Exercise the SQL gates even when the stored provenance index has not caught up yet.
+        c.execute('DELETE FROM read_index')
+
+    callbacks, create_function = [], S.ReadConnection.create_function
+
+    def register(conn, name, arity, fn, **kwargs):
+        kind = name.split('_privacy_')[-1]
+        if kind in ('message', 'attempt', 'settled_message', 'settled_attempt'):
+
+            def counted(*args):
+                callbacks.append(args[0])
+                return fn(*args)
+
+            return create_function(conn, name, arity, counted, **kwargs)
+        return create_function(conn, name, arity, fn, **kwargs)
+
+    monkeypatch.setattr(S.ReadConnection, 'create_function', register)
+    for token in (world['attempt']['token'], 'ben-test'):
+        callbacks.clear()
+        assert query(api, 'SELECT count(*) FROM messages WHERE id IN (?,?,?)', token, params=messages)['rows'] == [[3]]
+        assert query(api, 'SELECT id FROM attempts WHERE id=?', token, params=[world['attempt']['id']])['rows'] == [
+            [world['attempt']['id']]
+        ]
+        assert callbacks == []
+        assert query(api, 'SELECT id FROM messages WHERE id=?', token, params=[fallback])['rows'] == [[fallback]]
+        assert callbacks == [fallback]
+
+
+def test_every_guarded_view_prepares_for_each_caller(api, world):
+    """A deep message predicate must not break unrelated SQL reads while building the request's views."""
+    from dataclasses import replace
+    from backend import sql as S
+    from backend.auth import Identity
+
+    store, auth = api.app.state.store, api.app.state.auth
+    callers = [
+        Identity('human:ana', 'owner'),
+        Identity('human:ben', 'human'),
+        Identity('bot:ops', 'bot', attempt_id=world['attempt']['id']),
+        replace(Identity('human:ana', 'owner'), task_actor='bot:ops'),
+    ]
+    for who in callers:
+        statements = []
+        with store.read() as c:
+            conn = S.connect(store.settings.db_path, c, auth, who, trace=statements.append)
+            try:
+                views = [
+                    match[1]
+                    for statement in statements
+                    if (match := re.match(r'CREATE TEMP VIEW "(\w+)" AS', statement))
+                    and not match[1].startswith(conn.private_prefix)
+                ]
+                assert {'messages', 'attempts', 'jobs'} <= set(views)
+                for view in views:
+                    conn.execute(f'SELECT * FROM "{view}" LIMIT 0').fetchall()
+            finally:
+                conn.close()
+
+
+def test_page_message_gate_skips_plain_refs_and_keeps_review_permissions(api, world, monkeypatch):
+    from backend import sql as S
+    from backend.tests.test_page_audience import edit
+    from backend.tests.test_pages import page
+
+    made = page(api, world['attempt'])
+    assert made.status_code == 200, made.text
+    fid = made.json()['page']['file_id']
+    edit(api, fid, {'people': ['ana']}, token='ana-test')
+    assert api.get('/api/v2/pages/' + fid, headers=headers('cara-test')).status_code == 404
+    store, room = api.app.state.store, world['coo_task']['conversation_id']
+    with store.transaction() as c:
+        plain = [
+            H.say(c, 'human:ben', 'human:ana', 'Synthetic plain', conversation_id=room, refs=refs)['id']
+            for refs in (None, {}, {'task': world['coo_task']['id']})
+        ]
+        reviews = []
+        for refs in [{'target': fid}, {'answer': {'file': fid}}, {'review': [fid]}, {'body_sources': [{'file': fid}]}]:
+            reviews.append(
+                H.say(c, 'human:ben', 'human:ana', 'Synthetic review', conversation_id=room, refs=refs)['id']
+            )
+        # SQLite reads the first duplicate key and Python the last; escaped keys must also reach Python.
+        for raw in ('{"target":null,"target":' + json.dumps(fid) + '}', '{"t\\u0061rget":' + json.dumps(fid) + '}'):
+            mid = H.say(c, 'human:ben', 'human:ana', 'Synthetic encoded review', conversation_id=room)['id']
+            c.execute('UPDATE messages SET refs=? WHERE id=?', (raw, mid))
+            reviews.append(mid)
+
+    called, register = [], S.ReadConnection.create_function
+
+    def counted(conn, name, arity, fn, **kwargs):
+        if name.endswith('_privacy_page_message'):
+
+            def check(refs):
+                called.append(refs)
+                return fn(refs)
+
+            return register(conn, name, arity, check, **kwargs)
+        return register(conn, name, arity, fn, **kwargs)
+
+    monkeypatch.setattr(S.ReadConnection, 'create_function', counted)
+
+    def count(ids, token):
+        marks = ','.join('?' for _ in ids)
+        return query(api, f'SELECT count(*) FROM messages WHERE id IN ({marks})', token, params=ids)['rows']
+
+    assert count(plain, 'cara-test') == [[3]]
+    assert called == []
+    for token, expected in (('cara-test', 0), ('ana-test', len(reviews))):
+        assert count(reviews, token) == [[expected]]
+    assert called
 
 
 def test_direct_messages_reuse_room_checks_and_match_recursive_privacy(api, world, monkeypatch):
@@ -421,6 +692,11 @@ def test_direct_messages_reuse_room_checks_and_match_recursive_privacy(api, worl
         (['unsupported'], False),
         ({'inputs': ['missing-fixture-message'], 'task': public}, True),
         ({'turn_id': world['attempt']['id']}, True),
+        ({'task': [public, public]}, True),
+        ({'task_id': [public, 7]}, False),
+        ({'task': [public, 'unknown-fixture-task']}, False),
+        ({'task': [public, hidden['id']]}, False),
+        ({'task': []}, False),
     ]
     with store.read() as c:
         fast, recursive = ReadIndex(c, who), ReadIndex(c, who)
@@ -433,9 +709,11 @@ def test_direct_messages_reuse_room_checks_and_match_recursive_privacy(api, worl
         # A new request has no previously authorized rooms.
         fast = ReadIndex(c, who)
         readable = fast.meetings.conversation_readable
+
         def counted(actor, cid):
             checks[cid] += 1
             return readable(actor, cid)
+
         monkeypatch.setattr(fast.meetings, 'conversation_readable', counted)
         for i in range(100):
             cid = (room, world['coo_task']['conversation_id'])[i % 2]
@@ -491,13 +769,28 @@ def test_direct_reply_gate_matches_recursive_sources_and_keeps_depth_bound(api, 
     room, public = world['ana_room'], world['coo_task']['id']
     with store.transaction() as c:
         hidden = H.task_create(c, 'human:ben', 'Hidden reply source', '', 'bot:finance', private=True, lint=False)
-        parents = [H.say(c, 'human:ana', 'human:ben', 'Synthetic parent', conversation_id=room, refs=refs)
-                   for refs in ({'task': public}, {'task': hidden['id']}, {'task': 'unknown-fixture-task'},
-                                {'live_meetings': ['unknown-fixture-meeting']}, {'turn_id': world['attempt']['id']})]
+        parents = [
+            H.say(c, 'human:ana', 'human:ben', 'Synthetic parent', conversation_id=room, refs=refs)
+            for refs in (
+                {'task': public},
+                {'task': hidden['id']},
+                {'task': 'unknown-fixture-task'},
+                {'live_meetings': ['unknown-fixture-meeting']},
+                {'turn_id': world['attempt']['id']},
+            )
+        ]
         chain = []
         for i in range(100):
-            chain.append(H.say(c, 'human:ana', 'human:ben', 'Synthetic chain', conversation_id=room,
-                               in_reply_to=chain[-1]['id'] if chain else None))
+            chain.append(
+                H.say(
+                    c,
+                    'human:ana',
+                    'human:ben',
+                    'Synthetic chain',
+                    conversation_id=room,
+                    in_reply_to=chain[-1]['id'] if chain else None,
+                )
+            )
     with store.read() as c:
         who = Identity('bot:ops', 'bot', attempt_id=world['attempt']['id'])
         fast, recursive = ReadIndex(c, who), ReadIndex(c, who)
@@ -519,8 +812,14 @@ def test_direct_run_messages_keep_denied_attempt_provenance(api, world, source):
     with store.transaction() as c:
         hidden = H.task_create(c, 'human:ben', 'Hidden run source', '', 'bot:finance', private=True, lint=False)
         if source == 'input':
-            msg = H.say(c, 'human:ben', 'human:ana', 'Synthetic input', conversation_id=world['ana_room'],
-                        refs={'task': hidden['id']})
+            msg = H.say(
+                c,
+                'human:ben',
+                'human:ana',
+                'Synthetic input',
+                conversation_id=world['ana_room'],
+                refs={'task': hidden['id']},
+            )
             c.execute('INSERT INTO attempt_inputs(attempt_id,message_id) VALUES(?,?)', (aid, msg['id']))
         elif source == 'carried':
             c.execute('UPDATE tasks SET carried_by=? WHERE id=?', (aid, hidden['id']))
@@ -546,9 +845,12 @@ def test_direct_refs_cannot_override_denied_conversation_task(api, world, unknow
 
     store, room = api.app.state.store, world['ana_room']
     with store.transaction() as c:
-        hidden = H.task_create(c, 'human:ben', 'Hidden conversation source', '', 'bot:finance', private=True, lint=False)
-        c.execute('UPDATE conversations SET task_id=? WHERE id=?',
-                  ('unknown-fixture-task' if unknown else hidden['id'], room))
+        hidden = H.task_create(
+            c, 'human:ben', 'Hidden conversation source', '', 'bot:finance', private=True, lint=False
+        )
+        c.execute(
+            'UPDATE conversations SET task_id=? WHERE id=?', ('unknown-fixture-task' if unknown else hidden['id'], room)
+        )
     # The attempt's room grant no longer opens a room of a task the bot may not read: SQL fences it as the API does
     # (threads.readable_sql). ReadIndex below still checks the provenance denial on its own.
     assert query(api, 'SELECT id FROM conversations WHERE id=?', world['attempt']['token'], params=[room])['rows'] == []
@@ -593,8 +895,9 @@ def test_attempt_provenance_uses_keyed_inputs_and_retained_run_events(api, world
     # as an input, then survives solely in the moved-input event after removal.
     with store.transaction() as c:
         hidden = H.task_create(c, 'human:ben', 'Hidden fixture', '', 'bot:finance', private=True, lint=False)
-        msg = H.say(c, 'human:ben', 'human:ana', 'Hidden input',
-                    conversation_id=world['ana_room'], refs={'task': hidden['id']})
+        msg = H.say(
+            c, 'human:ben', 'human:ana', 'Hidden input', conversation_id=world['ana_room'], refs={'task': hidden['id']}
+        )
 
     def readable():
         with store.read() as c:
@@ -620,11 +923,13 @@ def test_bot_replies_whose_run_names_a_denied_task_stay_out_of_full_scans(api, w
     # message it answers. The private task reaches it only through that run, which unkeyed scans must still see.
     store, room, aid = api.app.state.store, world['coo_task']['conversation_id'], 'attempt-reply-fixture'
     with store.transaction() as c:
+
         def clone(table, original, **patch):
             row = dict(c.execute(f'SELECT * FROM {table} WHERE id=?', (original,)).fetchone())
             row.update(patch)
-            c.execute(f'INSERT INTO {table} ({",".join(row)}) VALUES ({",".join("?" for _ in row)})',
-                      list(row.values()))
+            c.execute(
+                f'INSERT INTO {table} ({",".join(row)}) VALUES ({",".join("?" for _ in row)})', list(row.values())
+            )
 
         job = world['attempt']['job_id']
         asked = c.execute('SELECT message_id FROM jobs WHERE id=?', (job,)).fetchone()[0]
@@ -633,20 +938,40 @@ def test_bot_replies_whose_run_names_a_denied_task_stay_out_of_full_scans(api, w
         if not queued:
             clone('jobs', job, id=aid, message_id='message-asked-fixture')
         job = queued[0] if queued else aid
-        clone('attempts', world['attempt']['id'], id=aid, job_id=job, token_hash='fixture-reply', state='completed',
-              lane='fixture-reply')
-        clone('turns', world['attempt']['id'], id=aid, message_id='message-asked-fixture', task_id=None)
-        clone('messages', asked, id='message-reply-fixture', conversation_id=room, sender_id='bot:ops',
-              recipient_id='human:ana', in_reply_to='message-asked-fixture',
-              refs=json.dumps({'turn_id': aid, 'task': world['coo_task']['id'],
-                                    'run': {'job_id': job, 'attempt_id': aid}, 'answers': ['message-asked-fixture']}))
+        clone(
+            'attempts',
+            world['attempt']['id'],
+            id=aid,
+            job_id=job,
+            token_hash='fixture-reply',
+            state='completed',
+            lane='fixture-reply',
+            message_id='message-asked-fixture',
+            task_id=None,
+        )
+        clone(
+            'messages',
+            asked,
+            id='message-reply-fixture',
+            conversation_id=room,
+            sender_id='bot:ops',
+            recipient_id='human:ana',
+            in_reply_to='message-asked-fixture',
+            refs=json.dumps(
+                {
+                    'turn_id': aid,
+                    'task': world['coo_task']['id'],
+                    'run': {'job_id': job, 'attempt_id': aid},
+                    'answers': ['message-asked-fixture'],
+                }
+            ),
+        )
     callers = (world['attempt']['token'], 'ben-test')
 
     def seen(token):
         ids = {row[0] for row in query(api, 'SELECT id FROM messages', token)['rows']}
         assert query(api, 'SELECT count(*) FROM messages', token)['rows'] == [[len(ids)]]
-        runs = {row[0] for table in ('attempts', 'turns')
-                for row in query(api, f'SELECT id FROM {table}', token)['rows']}
+        runs = {row[0] for row in query(api, 'SELECT id FROM attempts', token)['rows']}
         return 'message-reply-fixture' in ids, aid in runs
 
     for token in callers:
@@ -654,8 +979,9 @@ def test_bot_replies_whose_run_names_a_denied_task_stay_out_of_full_scans(api, w
     with store.transaction() as c:
         hidden = H.task_create(c, 'human:ana', 'Hidden run source', '', 'bot:inbox', private=True, lint=False)
         if source == 'input':
-            msg = H.say(c, 'human:ana', 'bot:inbox', 'Synthetic input', conversation_id=room,
-                        refs={'task': hidden['id']})
+            msg = H.say(
+                c, 'human:ana', 'bot:inbox', 'Synthetic input', conversation_id=room, refs={'task': hidden['id']}
+            )
             c.execute('INSERT INTO attempt_inputs(attempt_id,message_id) VALUES(?,?)', (aid, msg['id']))
         elif source == 'carried':
             c.execute('UPDATE tasks SET carried_by=? WHERE id=?', (aid, hidden['id']))
@@ -682,44 +1008,36 @@ def test_carried_private_tasks_and_unknown_plain_rooms_stay_hidden(api, world):
                 conn.close()
 
     with store.transaction() as c:
-        hidden = H.task_create(c, 'human:ben', 'Hidden carried fixture', '', 'bot:finance',
-                               private=True, lint=False)
+        hidden = H.task_create(c, 'human:ben', 'Hidden carried fixture', '', 'bot:finance', private=True, lint=False)
     assert rows('attempts', aid) == [[aid]]
-    assert rows('turns', aid) == [[aid]]
 
     # The job message stays readable; only the carried task hides this run.
     with store.transaction() as c:
         c.execute('UPDATE tasks SET carried_by=? WHERE id=?', (aid, hidden['id']))
     assert rows('attempts', aid) == []
-    assert rows('turns', aid) == []
     with store.transaction() as c:
         c.execute('UPDATE tasks SET carried_by=NULL WHERE id=?', (hidden['id'],))
     assert rows('attempts', aid) == [[aid]]
 
     # Retained next-run provenance survives independently of tasks.carried_by.
     with store.transaction() as c:
-        event = H.event(c, H.KEEPER, 'task.next-run.carried', aid,
-                        {'bot': 'ops', 'tasks': [hidden['id']]})
+        event = H.event(c, H.KEEPER, 'task.next-run.carried', aid, {'bot': 'ops', 'tasks': [hidden['id']]})
     assert rows('attempts', aid) == []
-    assert rows('turns', aid) == []
     with store.transaction() as c:
         c.execute('DELETE FROM events WHERE id=?', (event['id'],))
     assert rows('attempts', aid) == [[aid]]
 
     with store.transaction() as c:
-        msg = H.say(c, 'human:ana', 'bot:ops', 'Plain room fixture',
-                    conversation_id=world['ana_room'])
+        msg = H.say(c, 'human:ana', 'bot:ops', 'Plain room fixture', conversation_id=world['ana_room'])
     assert rows('messages', msg['id']) == [[msg['id']]]
     with store.transaction() as c:
-        c.execute('UPDATE conversations SET task_id=? WHERE id=?',
-                  (hidden['id'], world['ana_room']))
+        c.execute('UPDATE conversations SET task_id=? WHERE id=?', (hidden['id'], world['ana_room']))
     # A valid room grant cannot expose a denied private task's room or its plain messages (threads.readable_sql
     # fences the room as Auth.conversation does).
     assert rows('conversations', world['ana_room']) == []
     assert rows('messages', msg['id']) == []
     with store.transaction() as c:
-        c.execute('UPDATE conversations SET task_id=? WHERE id=?',
-                  ('unknown-fixture-task', world['ana_room']))
+        c.execute('UPDATE conversations SET task_id=? WHERE id=?', ('unknown-fixture-task', world['ana_room']))
     # Nor an unknown task's.
     assert rows('conversations', world['ana_room']) == []
     assert rows('messages', msg['id']) == []
@@ -737,8 +1055,9 @@ def test_nested_udf_interrupt_is_timeout_and_other_udf_errors_remain_sql(monkeyp
 
     def nested():
         clock[0] = 10
-        return conn.execute('WITH RECURSIVE n(x) AS (VALUES(1) UNION ALL SELECT x+1 FROM n WHERE x<10000) '
-                            'SELECT sum(x) FROM n').fetchone()[0]
+        return conn.execute(
+            'WITH RECURSIVE n(x) AS (VALUES(1) UNION ALL SELECT x+1 FROM n WHERE x<10000) SELECT sum(x) FROM n'
+        ).fetchone()[0]
 
     conn.create_function('nested', 0, nested)
     conn.create_function('broken', 0, lambda: 1 / 0)
@@ -756,20 +1075,32 @@ def test_nested_udf_interrupt_is_timeout_and_other_udf_errors_remain_sql(monkeyp
 
 
 def test_current_docs_and_files_follow_api_visibility(api, world):
-    doc = post(api, "docs", {"title": "Release guide", "body": "Read the release notes.", "path": "release-guide.md"})["doc"]
+    doc = post(api, "docs", {"title": "Release guide", "body": "Read the release notes.", "path": "release-guide.md"})[
+        "doc"
+    ]
     linked = post(api, "linked-docs", {"title": "Release reference", "url": "https://example.com/release"})["linked"]
     with api.app.state.store.transaction() as c:
-        for fid, scope in (("public-file", "bot"), ("ana-file", "conversation:" + world["ana_room"]),
-                           ("ben-file", "conversation:" + world["steven_room"]),
-                           ("task-file", "task:" + world["coo_task"]["id"])):
-            c.execute("INSERT INTO bot_files(id,bot_id,scope,identity,title,kind,locator,first_activity_at,last_activity_at) "
-                      "VALUES(?,'ops',?,?,'Release notes','document','remote_link',?,?)", (fid, scope, fid, H.now(), H.now()))
+        for fid, scope in (
+            ("public-file", "bot"),
+            ("ana-file", "conversation:" + world["ana_room"]),
+            ("ben-file", "conversation:" + world["steven_room"]),
+            ("task-file", "task:" + world["coo_task"]["id"]),
+        ):
+            c.execute(
+                "INSERT INTO bot_files(id,bot_id,scope,identity,title,kind,locator,first_activity_at,last_activity_at) "
+                "VALUES(?,'ops',?,?,'Release notes','document','remote_link',?,?)",
+                (fid, scope, fid, H.now(), H.now()),
+            )
     assert column(api, "SELECT id FROM docs") == [doc["id"]]
     assert column(api, "SELECT doc_id FROM doc_versions") == [doc["id"]]
     assert column(api, "SELECT id FROM linked_docs") == [linked["id"]]
     assert column(api, "SELECT id FROM bot_files") == ["ana-file", "public-file", "task-file"]
     assert column(api, "SELECT id FROM bot_files", "ben-test") == ["ben-file", "public-file", "task-file"]
-    assert column(api, "SELECT id FROM bot_files", world["attempt"]["token"]) == ["ana-file", "public-file", "task-file"]
+    assert column(api, "SELECT id FROM bot_files", world["attempt"]["token"]) == [
+        "ana-file",
+        "public-file",
+        "task-file",
+    ]
     assert query(api, "SELECT count(*) FROM docs")["rows"] == [[1]]
     assert query(api, "SELECT count(*) FROM bot_files")["rows"] == [[3]]
     assert "prohibited" in error(api, "SELECT * FROM main.docs")
@@ -781,15 +1112,24 @@ def test_current_docs_and_files_follow_api_visibility(api, world):
 def test_json_table_functions_are_read_only_and_keep_source_visibility(api, world):
     for token in (world["attempt"]["token"],):
         assert query(api, "SELECT value FROM json_each('[1,2]')", token)["rows"] == [[1], [2]]
-        assert query(api, "SELECT key,value,type FROM json_tree('{\"qa\":1}') WHERE key='qa'", token)["rows"] == [["qa", 1, "integer"]]
-        assert query(api, "SELECT j.value FROM messages m, json_each(m.refs) j "
-                          "WHERE m.conversation_id=:room", token,
-                     params={"room": world["steven_room"]})["rows"] == []
+        assert query(api, "SELECT key,value,type FROM json_tree('{\"qa\":1}') WHERE key='qa'", token)["rows"] == [
+            ["qa", 1, "integer"]
+        ]
+        assert (
+            query(
+                api,
+                "SELECT j.value FROM messages m, json_each(m.refs) j WHERE m.conversation_id=:room",
+                token,
+                params={"room": world["steven_room"]},
+            )["rows"]
+            == []
+        )
         assert "prohibited" in error(api, "SELECT j.value FROM main.messages m, json_each(m.refs) j", token)
         assert "prohibited" in error(api, "SELECT j.value FROM credentials c, json_each(c.id) j", token)
         assert "not authorized" in error(api, "SELECT load_extension('missing')", token)
-    assert query(api, "SELECT count(*) FROM messages m, json_tree(m.refs) j",
-                 world["attempt"]["token"])["rows"][0][0] >= 1
+    assert (
+        query(api, "SELECT count(*) FROM messages m, json_tree(m.refs) j", world["attempt"]["token"])["rows"][0][0] >= 1
+    )
 
 
 def test_materialized_visibility_matches_the_predicate_and_never_survives_a_request(api, world):
@@ -797,44 +1137,80 @@ def test_materialized_visibility_matches_the_predicate_and_never_survives_a_requ
     from dataclasses import replace
     from backend import sql as S
     from backend.auth import Identity
+
     auth, store = api.app.state.auth, api.app.state.store
     with store.transaction() as c:
-        for i, (owner, requester, private) in enumerate([
-            ('bot:ops', 'human:ana', 0), ('bot:ops', 'human:ana', 1),
-            ('bot:finance', 'human:cara', 1), ('bot:inbox', 'human:ana', 0),
-            ('human:ben', 'human:ana', 1), ('bot:ops', 'human:cara', 0),
-        ]):
-            c.execute('INSERT INTO tasks(id,title,owner_id,requester_id,private,status,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)',
-                      (f'tree-{i}', 'Synthetic tree', owner, requester, private, 'open', H.now(), H.now()))
+        for i, (owner, requester, private) in enumerate(
+            [
+                ('bot:ops', 'human:ana', 0),
+                ('bot:ops', 'human:ana', 1),
+                ('bot:finance', 'human:cara', 1),
+                ('bot:inbox', 'human:ana', 0),
+                ('human:ben', 'human:ana', 1),
+                ('bot:ops', 'human:cara', 0),
+            ]
+        ):
+            c.execute(
+                'INSERT INTO tasks(id,title,owner_id,requester_id,private,status,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)',
+                (f'tree-{i}', 'Synthetic tree', owner, requester, private, 'open', H.now(), H.now()),
+            )
         for child, parent in [(1, 0), (2, 1), (3, 0), (4, 2), (0, 4)]:
-            c.execute("INSERT INTO task_relations(from_task,to_task,kind,created_at,created_by) VALUES(?,?,'parent',?,?)",
-                      (f'tree-{child}', f'tree-{parent}', H.now(), 'human:ana'))
-        c.execute("INSERT INTO task_delegations(task_id,delegate,requested_by,message_id,expires_at) VALUES(?,?,?,?,?)",
-                  ('tree-1', 'human:cara', 'human:ana', c.execute('SELECT id FROM messages LIMIT 1').fetchone()[0],
-                   H.shift(H.now(), seconds=3600)))
-    callers = [Identity('human:ana', 'owner'), Identity('human:ben', 'human'),
-               Identity('human:cara', 'human'), Identity('bot:ops', 'bot'), Identity('bot:doc-updater', 'bot'),
-               replace(Identity('human:ana', 'owner'), task_actor='bot:ops')]
+            c.execute(
+                "INSERT INTO task_relations(from_task,to_task,kind,created_at,created_by) VALUES(?,?,'parent',?,?)",
+                (f'tree-{child}', f'tree-{parent}', H.now(), 'human:ana'),
+            )
+        c.execute(
+            "INSERT INTO task_delegations(task_id,delegate,requested_by,message_id,expires_at) VALUES(?,?,?,?,?)",
+            (
+                'tree-1',
+                'human:cara',
+                'human:ana',
+                c.execute('SELECT id FROM messages LIMIT 1').fetchone()[0],
+                H.shift(H.now(), seconds=3600),
+            ),
+        )
+    callers = [
+        Identity('human:ana', 'owner'),
+        Identity('human:ben', 'human'),
+        Identity('human:cara', 'human'),
+        Identity('bot:ops', 'bot'),
+        Identity('bot:doc-updater', 'bot'),
+        replace(Identity('human:ana', 'owner'), task_actor='bot:ops'),
+    ]
+
     # Use the pre-materialization predicate as the independent reference, including full rows.
     def compare(who):
         with store.read() as c:
             predicate = auth.task_sql(c, who)
-            expected = json.dumps([dict(r) for r in c.execute('SELECT * FROM tasks WHERE ' + predicate + ' ORDER BY id')], sort_keys=True)
+            expected = json.dumps(
+                [dict(r) for r in c.execute('SELECT * FROM tasks WHERE ' + predicate + ' ORDER BY id')], sort_keys=True
+            )
             conn = S.connect(store.settings.db_path, c, auth, who)
             try:
                 found = S.run(conn, 'SELECT * FROM tasks ORDER BY id', [], 5000, 20)
                 actual = json.dumps([dict(zip(found['columns'], row)) for row in found['rows']], sort_keys=True)
                 assert actual == expected
-                with pytest.raises(__import__("sqlite3").DatabaseError):
-                    conn.execute('SELECT * FROM "' + conn.private_prefix + 'visible_tasks"').fetchall()
+                for name in ('visible_tasks', 'known_tasks', 'plain_refs'):
+                    with pytest.raises(__import__("sqlite3").DatabaseError):
+                        conn.execute('SELECT * FROM "' + conn.private_prefix + name + '"').fetchall()
             finally:
                 conn.close()
+
     for who in callers:
         compare(who)
     with store.transaction() as c:
         c.execute("UPDATE tasks SET owner_id='bot:finance',requester_id='human:ben',private=1 WHERE id='tree-5'")
-        c.execute("UPDATE bot_config SET access=? WHERE bot='ops'", (json.dumps({
-            level: {'everyone': False, 'people': [], 'teams': [], 'bots': []} for level in ('see','read','write')}),))
+        c.execute(
+            "UPDATE bot_config SET access=? WHERE bot='ops'",
+            (
+                json.dumps(
+                    {
+                        level: {'everyone': False, 'people': [], 'teams': [], 'bots': []}
+                        for level in ('see', 'read', 'write')
+                    }
+                ),
+            ),
+        )
     for who in callers:
         compare(who)
     # Cached columns are metadata only: schema changes cannot leave a newly added column hidden/stale.
@@ -851,6 +1227,7 @@ def test_parallel_audits_share_a_commit_without_early_ack_or_lost_context(tmp_pa
     from backend.config import Settings
     from backend.store import Store
     from backend.sql import Audit
+
     store = Store(Settings(db_path=tmp_path / 'synthetic.sqlite'))
     # Keep this fixture independent of a full API boot.
     with store.transaction() as c:
@@ -858,6 +1235,7 @@ def test_parallel_audits_share_a_commit_without_early_ack_or_lost_context(tmp_pa
     started, release = threading.Event(), threading.Event()
     original = store.transaction
     commits = []
+
     @contextmanager
     def held():
         with original() as c:
@@ -866,17 +1244,21 @@ def test_parallel_audits_share_a_commit_without_early_ack_or_lost_context(tmp_pa
                 started.set()
                 assert release.wait(30)
             yield c
+
     store.transaction = held
     audit = Audit(store)
     from unittest.mock import patch
+
     def event(c, actor, action, target, detail):
         c.execute('INSERT INTO receipts VALUES(?,?)', (actor, json.dumps({**detail, 'via': H.VIA.get()})))
+
     def record(i):
         token = H.VIA.set(f'assistant-{i}')
         try:
             audit.record(f'human:fixture-{i}', {'i': i})
         finally:
             H.VIA.reset(token)
+
     with patch('backend.sql.H.event', event), ThreadPoolExecutor(max_workers=8) as pool:
         futures = [pool.submit(record, 0)]
         assert started.wait(30)
@@ -892,11 +1274,13 @@ def test_parallel_audits_share_a_commit_without_early_ack_or_lost_context(tmp_pa
     with store.read() as c:
         receipts = {r[0]: json.loads(r[1]) for r in c.execute('SELECT * FROM receipts')}
     assert receipts == {f'human:fixture-{i}': {'i': i, 'via': f'assistant-{i}'} for i in range(8)}
+
     @contextmanager
     def failed():
         with original() as c:
             yield c
             raise RuntimeError('synthetic commit failure')
+
     store.transaction = failed
     with patch('backend.sql.H.event', event), pytest.raises(RuntimeError, match='synthetic commit failure'):
         record(9)
@@ -908,19 +1292,51 @@ def test_a_granted_bot_reads_outcome_totals_but_no_proposal_row_and_cannot_write
     from backend import assistant
     from backend.tests.test_api import setup_attempt
     from backend.tests.test_mcp import call, rpc
+
     with api.app.state.store.transaction() as c:
         assistant.ensure_schema(c)
-        for n, (status, proposer) in enumerate([("done", "assistant"), ("canceled", "assistant"), ("done", "bot:botops")]):
-            c.execute("INSERT INTO assistant_actions(id,owner,summary,method,path,body,status,created_at,proposer) "
-                      "VALUES(?,?,?,?,?,?,?,?,?)", (f"a{n}", "human:ana", "Pay Dana's invoice", "POST",
-                                                    "/api/v2/tasks/xyz/close", '{"note":"secret"}', status, H.now(), proposer))
+        for n, (status, proposer) in enumerate(
+            [("done", "assistant"), ("canceled", "assistant"), ("done", "bot:botops")]
+        ):
+            c.execute(
+                "INSERT INTO assistant_actions(id,owner,summary,method,path,body,status,created_at,proposer) "
+                "VALUES(?,?,?,?,?,?,?,?,?)",
+                (
+                    f"a{n}",
+                    "human:ana",
+                    "Pay Dana's invoice",
+                    "POST",
+                    "/api/v2/tasks/xyz/close",
+                    '{"note":"secret"}',
+                    status,
+                    H.now(),
+                    proposer,
+                ),
+            )
         # The same status across owners/routes/methods must remain one approved-grain bucket.
-        c.execute("INSERT INTO assistant_actions(id,owner,summary,method,path,body,status,created_at,proposer) "
-                  "VALUES(?,?,?,?,?,?,?,?,?)", ("a3", "human:dana", "Private category", "DELETE",
-                                                "/api/v2/meetings/xyz", '{}', "done", H.now(), "assistant"))
+        c.execute(
+            "INSERT INTO assistant_actions(id,owner,summary,method,path,body,status,created_at,proposer) "
+            "VALUES(?,?,?,?,?,?,?,?,?)",
+            (
+                "a3",
+                "human:dana",
+                "Private category",
+                "DELETE",
+                "/api/v2/meetings/xyz",
+                '{}',
+                "done",
+                H.now(),
+                "assistant",
+            ),
+        )
         H.event(c, "bot:ops", "mcp.call", "hub_task_show", {"tool": "hub_task_show", "ms": 40})
-        H.event(c, "human:ana", "mcp.call", "hub_assistant_send",
-                {"tool": "hub_assistant_send", "ms": 900, "via": "ana-laptop"})
+        H.event(
+            c,
+            "human:ana",
+            "mcp.call",
+            "hub_assistant_send",
+            {"tool": "hub_assistant_send", "ms": 900, "via": "ana-laptop"},
+        )
     token = world["attempt"]["token"]
     totals = "SELECT status, sum(actions) FROM assistant_action_weekly GROUP BY status"
     # Without the grant the bot has neither the totals nor the rows.
@@ -929,12 +1345,18 @@ def test_a_granted_bot_reads_outcome_totals_but_no_proposal_row_and_cannot_write
     assert api.get("/api/v2/live/stats", headers=headers(token)).status_code == 403
     # Only the owner, signed in, grants it; the bot cannot grant itself.
     assert api.put("/api/v2/outcome-stats/readers/ops", json={"read": True}, headers=headers(token)).status_code == 403
-    assert api.put("/api/v2/outcome-stats/readers/ops", json={"read": True}, headers=headers("ana-test")).json() == {"readers": ["ops"]}
+    assert api.put("/api/v2/outcome-stats/readers/ops", json={"read": True}, headers=headers("ana-test")).json() == {
+        "readers": ["ops"]
+    }
     assert query(api, totals, token)["rows"] == [["canceled", 1], ["done", 3]]
-    buckets = query(api, "SELECT proposer, status, actions, share_pct FROM assistant_action_weekly "
-                    "ORDER BY proposer, status", token)["rows"]
-    assert buckets == [["assistant", "canceled", 1, 33.3], ["assistant", "done", 2, 66.7],
-                       ["bot:botops", "done", 1, 100.0]]
+    buckets = query(
+        api, "SELECT proposer, status, actions, share_pct FROM assistant_action_weekly ORDER BY proposer, status", token
+    )["rows"]
+    assert buckets == [
+        ["assistant", "canceled", 1, 33.3],
+        ["assistant", "done", 2, 66.7],
+        ["bot:botops", "done", 1, 100.0],
+    ]
     assert query(api, "SELECT tool, calls FROM mcp_call_weekly", token)["rows"] == [["hub_task_show", 1]]
     stats = api.get("/api/v2/live/stats", headers=headers(token))
     assert stats.status_code == 200
@@ -946,7 +1368,9 @@ def test_a_granted_bot_reads_outcome_totals_but_no_proposal_row_and_cannot_write
     for name in ("Ana wants to pay Dana's private invoice", "hub_ana_private_invoice"):
         assert rpc(api, "tools/call", {"name": name, "arguments": {}}, token=token)["error"]["code"] == -32602
     assert query(api, "SELECT tool, calls FROM mcp_call_weekly ORDER BY tool", token)["rows"] == [
-        ["hub_task_show", 1], ["other", 2]]
+        ["hub_task_show", 1],
+        ["other", 2],
+    ]
     stats = api.get("/api/v2/live/stats", headers=headers(token))
     assert stats.status_code == 200
     assert {r["tool"]: r["calls"] for r in stats.json()["tools"]} == {"hub_task_show": 1, "other": 2}
@@ -954,9 +1378,14 @@ def test_a_granted_bot_reads_outcome_totals_but_no_proposal_row_and_cannot_write
     assert not failed and via_mcp["tools"] == stats.json()["tools"]
     assert api.get("/api/v2/live/stats?via=ana-laptop", headers=headers(token)).status_code == 403
     # Still no row: not the table, not a hidden column, not the base events the totals are built from.
-    for sql in ("SELECT * FROM assistant_actions", "SELECT summary FROM assistant_action_weekly",
-                "SELECT owner FROM assistant_action_weekly", "SELECT area FROM assistant_action_weekly",
-                "SELECT method FROM assistant_action_weekly", "SELECT detail FROM mcp_call_weekly"):
+    for sql in (
+        "SELECT * FROM assistant_actions",
+        "SELECT summary FROM assistant_action_weekly",
+        "SELECT owner FROM assistant_action_weekly",
+        "SELECT area FROM assistant_action_weekly",
+        "SELECT method FROM assistant_action_weekly",
+        "SELECT detail FROM mcp_call_weekly",
+    ):
         assert query(api, sql, token, expected=422)
     assert query(api, "DELETE FROM assistant_actions", token, expected=422)
     # A grant to one bot never opens totals, rows or writes to another bot.
@@ -965,10 +1394,16 @@ def test_a_granted_bot_reads_outcome_totals_but_no_proposal_row_and_cannot_write
     assert "no such table" in error(api, "SELECT * FROM mcp_call_weekly", other["token"])
     assert "prohibited" in error(api, "SELECT * FROM assistant_actions", other["token"])
     assert api.get("/api/v2/live/stats", headers=headers(other["token"])).status_code == 403
-    assert api.put("/api/v2/outcome-stats/readers/finance", json={"read": True},
-                   headers=headers(other["token"])).status_code == 403
+    assert (
+        api.put(
+            "/api/v2/outcome-stats/readers/finance", json={"read": True}, headers=headers(other["token"])
+        ).status_code
+        == 403
+    )
     # Revoking takes it away at once.
-    assert api.put("/api/v2/outcome-stats/readers/ops", json={"read": False}, headers=headers("ana-test")).json() == {"readers": []}
+    assert api.put("/api/v2/outcome-stats/readers/ops", json={"read": False}, headers=headers("ana-test")).json() == {
+        "readers": []
+    }
     assert "no such table" in error(api, totals, token)
     assert "no such table" in error(api, "SELECT * FROM mcp_call_weekly", token)
     assert api.get("/api/v2/live/stats", headers=headers(token)).status_code == 403
@@ -982,24 +1417,28 @@ def test_outcome_grants_require_owner_sign_in_and_delegation_does_not_lend_owner
     # Mint a real personal token, so authentication sets via_token rather than a test identity shortcut.
     personal = post(api, "me/tokens", {"label": "synthetic owner script"})["token"]
     assert api.get("/api/v2/me", headers=headers(personal)).json()["role"] == "owner"
-    assert api.put("/api/v2/outcome-stats/readers/ops", json={"read": True},
-                   headers=headers(personal)).status_code == 403
+    assert (
+        api.put("/api/v2/outcome-stats/readers/ops", json={"read": True}, headers=headers(personal)).status_code == 403
+    )
     assert api.get("/api/v2/outcome-stats/readers", headers=headers(personal)).status_code == 403
     assert api.get("/api/v2/outcome-stats/readers", headers=headers()).json() == {"readers": []}
     with api.app.state.store.transaction() as c:
         assistant.ensure_schema(c)
         assert not c.execute("SELECT 1 FROM registry_metadata WHERE key='outcome-stats-readers'").fetchone()
         assert not c.execute("SELECT 1 FROM events WHERE action='outcome_stats.granted'").fetchone()
-    assert api.put("/api/v2/outcome-stats/readers/ops", json={"read": True},
-                   headers=headers()).json() == {"readers": ["ops"]}
-    assert api.put("/api/v2/outcome-stats/readers/ops", json={"read": False},
-                   headers=headers(personal)).status_code == 403
+    assert api.put("/api/v2/outcome-stats/readers/ops", json={"read": True}, headers=headers()).json() == {
+        "readers": ["ops"]
+    }
+    assert (
+        api.put("/api/v2/outcome-stats/readers/ops", json={"read": False}, headers=headers(personal)).status_code == 403
+    )
     assert api.get("/api/v2/outcome-stats/readers", headers=headers()).json() == {"readers": ["ops"]}
     assert query(api, "SELECT count(*) FROM assistant_action_weekly")["rows"] == [[0]]
     _, attempt = assistant_turn(api, "ana-test", "Summarize proposal outcomes for me")
     delegated = attempt["token"]
-    assert api.put("/api/v2/outcome-stats/readers/coo", json={"read": True},
-                   headers=headers(delegated)).status_code == 403
+    assert (
+        api.put("/api/v2/outcome-stats/readers/coo", json={"read": True}, headers=headers(delegated)).status_code == 403
+    )
     # The HTTP Assistant policy refuses SQL first; also exercise the database boundary itself.
     for view in ("assistant_action_weekly", "mcp_call_weekly"):
         assert query(api, "SELECT * FROM " + view, delegated, expected=403)["error"]["code"] == "confirm_required"
@@ -1023,11 +1462,15 @@ def test_private_task_parties_are_built_once_per_clock_not_once_per_request(api)
     from backend import row_clock
     from backend import sql as S
     from backend.auth import Identity
+
     store, auth = api.app.state.store, api.app.state.auth
     who = Identity("human:ben", "human")
     with store.transaction() as c:
-        c.execute("INSERT INTO tasks(id,title,owner_id,requester_id,private,status,created_at,updated_at) "
-                  "VALUES('priv-share','Private','bot:ops','human:ana',1,'open',?,?)", (H.now(), H.now()))
+        c.execute(
+            "INSERT INTO tasks(id,title,owner_id,requester_id,private,status,created_at,updated_at) "
+            "VALUES('priv-share','Private','bot:ops','human:ana',1,'open',?,?)",
+            (H.now(), H.now()),
+        )
     builds = []
     original = row_clock._rows
     row_clock._rows = lambda c, statement: builds.append(statement) or original(c, statement)
@@ -1049,6 +1492,7 @@ def test_a_person_read_checks_the_org_chart_table_once_not_once_per_private_task
     private tasks grow (they were one per private task, 184 for 184 tasks on a 6k-task hub)."""
     from backend import sql as S
     from backend.auth import Identity
+
     store, auth = api.app.state.store, api.app.state.auth
     who = Identity("human:ben", "human")
 
@@ -1064,10 +1508,14 @@ def test_a_person_read_checks_the_org_chart_table_once_not_once_per_private_task
 
     def add(count, start):
         with store.transaction() as c:
-            c.executemany("INSERT INTO tasks(id,title,owner_id,requester_id,private,status,created_at,updated_at) "
-                          "VALUES(?,?,?,?,?,?,?,?)",
-                          [(f"priv-{i}", "Private", "bot:ops", "human:ana", 1, "open", H.now(), H.now())
-                           for i in range(start, start + count)])
+            c.executemany(
+                "INSERT INTO tasks(id,title,owner_id,requester_id,private,status,created_at,updated_at) "
+                "VALUES(?,?,?,?,?,?,?,?)",
+                [
+                    (f"priv-{i}", "Private", "bot:ops", "human:ana", 1, "open", H.now(), H.now())
+                    for i in range(start, start + count)
+                ],
+            )
 
     add(20, 0)
     before = catalog_reads()
@@ -1086,18 +1534,23 @@ def test_shared_room_membership_for_every_bot_is_one_pass_and_matches_each_bot(a
     from backend.tests.test_api import restrict
 
     store, auth = api.app.state.store, api.app.state.auth
-    people = [{"id": "ana", "email": "ana@acme.example", "primary_for": ["*"]},
-              {"id": "ben", "email": "ben@acme.example", "primary_for": ["cpo", "ops"]},
-              {"id": "cara", "email": "cara@acme.example", "primary_for": [f"b{i}" for i in range(6)]}]
-    people += [{"id": f"p{i}", "email": f"p{i}@acme.example", "primary_for": [f"b{i}"] if i % 2 else []}
-               for i in range(37)]
+    people = [
+        {"id": "ana", "email": "ana@acme.example", "primary_for": ["*"]},
+        {"id": "ben", "email": "ben@acme.example", "primary_for": ["cpo", "ops"]},
+        {"id": "cara", "email": "cara@acme.example", "primary_for": [f"b{i}" for i in range(6)]},
+    ]
+    people += [
+        {"id": f"p{i}", "email": f"p{i}@acme.example", "primary_for": [f"b{i}"] if i % 2 else []} for i in range(37)
+    ]
     fleet = [f"b{i}" for i in range(53)]
     with store.transaction() as c:
-        H.sync_registry(c, {slug: {"name": slug, "runtime": "fake", "status": "active"} for slug in fleet},
-                        {"people": people})
+        H.sync_registry(
+            c, {slug: {"name": slug, "runtime": "fake", "status": "active"} for slug in fleet}, {"people": people}
+        )
         c.execute("UPDATE registry_metadata SET value=? WHERE key='people'", (encode({"people": people}),))
         for slug in fleet:
-            c.execute("INSERT INTO bot_config(bot,config,owner_id) VALUES(?,?,?)", (slug, "{}", "ana"))
+            c.execute('INSERT INTO bot_config(bot,owner_id) VALUES(?,?)', (slug, 'ana'))
+            BS.write(c, slug, {})
         for i, slug in enumerate(fleet):
             if i % 3 == 0:
                 restrict(c, slug, people=[f"p{i % 37}"])
@@ -1109,8 +1562,11 @@ def test_shared_room_membership_for_every_bot_is_one_pass_and_matches_each_bot(a
     answers = {}
     with store.read() as c:
         for actor in actors:
-            expected = (set() if not actor.startswith("human:") else
-                        {slug for slug in slugs if H.actor_id(actor) in rooms.shared_member_ids(c, auth, slug)})
+            expected = (
+                set()
+                if not actor.startswith("human:")
+                else {slug for slug in slugs if H.actor_id(actor) in rooms.shared_member_ids(c, auth, slug)}
+            )
             assert rooms.shared_member_bots(c, auth, actor, slugs) == expected, actor
             answers[actor] = expected
     # The mix is real: the owner joins every room, a plain member some but not all, a stranger none.
@@ -1129,3 +1585,73 @@ def test_shared_room_membership_for_every_bot_is_one_pass_and_matches_each_bot(a
         finally:
             conn.close()
     assert access_reads <= 1, access_reads
+
+
+def test_a_message_whose_task_ref_is_a_list_is_visible_only_when_every_listed_task_is_known_and_undenied(api, world):
+    """The SQL gate and ReadIndex refuse a list that names an unknown, denied or non-text id, or nothing at all, and
+    accept one whose every id is known and undenied, as a scalar is accepted."""
+    store = api.app.state.store
+    with store.transaction() as c:
+        hidden = H.task_create(c, 'human:ben', 'Hidden list source', '', 'bot:finance', private=True, lint=False)
+        public = world['coo_task']['id']
+        listed = {
+            'known': [public],
+            'known-twice': [public, public],
+            'unknown-second': [public, 'unknown-fixture-task'],
+            'denied-second': [public, hidden['id']],
+            'empty': [],
+            'non-text': [public, 7],
+        }
+        ids = {
+            name: H.say(
+                c, 'bot:ops', 'human:ana', 'List ' + name, conversation_id=world['ana_room'], refs={'task': tasks}
+            )['id']
+            for name, tasks in listed.items()
+        }
+    # Read as the bot whose granted room holds them: the private task is denied to it, the public one is not.
+    visible = column(
+        api,
+        "SELECT id FROM messages WHERE id IN (" + ",".join(f"'{i}'" for i in ids.values()) + ")",
+        world["attempt"]["token"],
+    )
+    assert visible == sorted(ids[name] for name in ('known', 'known-twice'))
+
+
+def test_an_event_or_blob_on_a_message_whose_task_list_cannot_be_read_is_hidden_and_the_query_still_runs(api, world):
+    """A message whose task list is empty or names a missing task has no readable provenance. Its event and its
+    attachment are hidden, and the query returns the other rows instead of failing on the unreadable one."""
+    store = api.app.state.store
+    public = world['coo_task']['id']
+    with store.transaction() as c:
+        empty = H.say(c, 'bot:ops', 'human:ana', 'List empty', conversation_id=world['ana_room'], refs={'task': []})[
+            'id'
+        ]
+        missing = H.say(
+            c,
+            'bot:ops',
+            'human:ana',
+            'List missing',
+            conversation_id=world['ana_room'],
+            refs={'task': [public, 'unknown-fixture-task']},
+        )['id']
+        good = H.say(c, 'bot:ops', 'human:ana', 'Scalar', conversation_id=world['ana_room'], refs={'task': public})[
+            'id'
+        ]
+        for mid in (empty, missing, good):
+            H.event(c, 'human:ana', 'fixture.note', mid, {'text': 'Note on ' + mid})
+        for bid, mid in (('blob-list-empty', empty), ('blob-list-missing', missing), ('blob-scalar', good)):
+            c.execute(
+                "INSERT INTO blobs(id,owner,digest,size,name,content_type,created_at) VALUES(?,?,?,?,?,?,?)",
+                (bid, 'human:ben', bid, 1, bid + '.txt', 'text/plain', '2026-11-04T00:00:00Z'),
+            )
+            c.execute("INSERT INTO message_assets(message_id,blob_id) VALUES(?,?)", (mid, bid))
+    # The owner reads the audit trail through the event gate; the three notes are the only fixture rows with that action.
+    assert column(
+        api,
+        "SELECT target FROM events WHERE action='fixture.note' AND target IN ('"
+        + "','".join((empty, missing, good))
+        + "')",
+    ) == [good]
+    assert column(api, "SELECT id FROM blobs WHERE id LIKE 'blob-%'") == ['blob-scalar']
+    # The bot reads the same rows through its own gate and reaches the scalar message's blob too.
+    assert column(api, "SELECT id FROM blobs WHERE id LIKE 'blob-%'", world["attempt"]["token"]) == ['blob-scalar']

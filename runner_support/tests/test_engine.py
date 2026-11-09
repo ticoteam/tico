@@ -12,8 +12,10 @@ from runner_support.version import RUNNER_VERSION
 
 def fake_binary(path, version, build_id):
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text("#!/bin/sh\ncase \"$1\" in\n"
-                    f"  --version) echo 'tico-runner {version}' ;;\n  --build-id) echo '{build_id}' ;;\n  *) exit 2 ;;\nesac\n")
+    path.write_text(
+        "#!/bin/sh\ncase \"$1\" in\n"
+        f"  --version) echo 'tico-runner {version}' ;;\n  --build-id) echo '{build_id}' ;;\n  *) exit 2 ;;\nesac\n"
+    )
     path.chmod(0o755)
     return path
 
@@ -32,7 +34,7 @@ def test_only_a_binary_of_this_version_and_these_sources_runs(tmp_path):
     assert engine.ready(env, root) is None and "is version 0.0.1" in engine.current(stale, root)
     own = fake_binary(root / "runner-rs" / "target" / "release" / "tico-runner", RUNNER_VERSION, engine.source_id(root))
     assert engine.ready(env, root) == own
-    (root / "runner-rs" / "src" / "main.rs").write_text("fn main() { run() }\n")   # the checkout moved on
+    (root / "runner-rs" / "src" / "main.rs").write_text("fn main() { run() }\n")  # the checkout moved on
     assert engine.ready(env, root) is None and "other runner-rs sources" in engine.current(own, root)
 
 
@@ -44,8 +46,13 @@ def test_the_shim_execs_the_binary_and_ignores_a_python_setting(tmp_path, capsys
     calls = []
     argv = ["--config", str(config), "run"]
     with pytest.raises(SystemExit):
-        engine.exec_binary(argv, config_path=config, root=root, execv=lambda *a: calls.append(a),
-                           env={"TICO_RUNNER_BIN": str(given), "TICO_RUNNER_ENGINE": "python", "PATH": ""})
+        engine.exec_binary(
+            argv,
+            config_path=config,
+            root=root,
+            execv=lambda *a: calls.append(a),
+            env={"TICO_RUNNER_BIN": str(given), "TICO_RUNNER_ENGINE": "python", "PATH": ""},
+        )
     program, args, env = calls.pop()
     assert (program, args) == (str(given), [str(given), *argv])
     assert env["TICO_ROOT"] == str(root) and env["TICO_RUNNER_PYTHON"]
@@ -54,7 +61,7 @@ def test_the_shim_execs_the_binary_and_ignores_a_python_setting(tmp_path, capsys
 
 
 def test_no_binary_and_no_way_to_get_one_exits_75_saying_why(tmp_path, capsys):
-    root = checkout(tmp_path)                       # not a git checkout, so on no release tag; no cargo on PATH
+    root = checkout(tmp_path)  # not a git checkout, so on no release tag; no cargo on PATH
     with pytest.raises(SystemExit) as stopped:
         engine.exec_binary(["run"], root=root, execv=lambda *a: pytest.fail("nothing to exec"), env={"PATH": ""})
     assert stopped.value.code == engine.RETRY_EXIT == 75
@@ -78,7 +85,7 @@ def test_a_release_checkout_downloads_its_binary_only_when_the_checksum_matches(
     (release / engine.SUMS).write_text(f"{hashlib.sha256((release / name).read_bytes()).hexdigest()}  {name}\n")
     assert engine.fetch(root, env, release="0.3.47") == ""
     assert engine.ready(env, root) == engine.dist(root)
-    assert engine.fetch(root, env, release="")                         # a checkout on main has nothing to download
+    assert engine.fetch(root, env, release="")  # a checkout on main has nothing to download
 
 
 def test_a_release_has_a_computers_binary_once_its_checksum_file_lists_it(tmp_path):
@@ -86,8 +93,8 @@ def test_a_release_has_a_computers_binary_once_its_checksum_file_lists_it(tmp_pa
     release.mkdir(parents=True)
     env = {"TICO_RUNNER_RELEASES": (tmp_path / "releases").as_uri()}
     mac = "tico-runner-macos-arm64.gz"
-    assert engine.published("0.3.48", env, name=mac) is None             # no checksum file: cannot tell
+    assert engine.published("0.3.48", env, name=mac) is None  # no checksum file: cannot tell
     (release / engine.SUMS).write_text(f"{'1' * 64}  tico-runner-linux-x86_64.gz\n")
-    assert engine.published("v0.3.48", env, name=mac) is False           # published before its Mac binaries
+    assert engine.published("v0.3.48", env, name=mac) is False  # published before its Mac binaries
     (release / engine.SUMS).write_text(f"{'1' * 64}  tico-runner-linux-x86_64.gz\n{'2' * 64}  {mac}\n")
     assert engine.published("0.3.48", env, name=mac) is True

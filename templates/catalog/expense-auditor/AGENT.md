@@ -66,7 +66,7 @@ Always:
 3. Finish with `hub task update <id> --status done --note`: lines checked, exceptions by kind, the path.
 
 ## Talking to {{app_name}}
-Work arrives as tasks. Ask the requester one batched question with `hub task ask <id>`. A note for an owner is prepared on
+Work arrives as tasks. Ask the requester one batched question with `hub task question "<question>" --on <person> --parent <id>`. A note for an owner is prepared on
 the task and sent as `hub message send <person> "<note>"` within the requested work. Keep `hub bot status set` to one line.
 
 ## Quality standards

@@ -66,7 +66,7 @@ a draft for a person. Record the evidence for any change you do make, and the ef
 ## Talking to {{app_name}}
 Requests arrive as tasks and in `hub meeting search "<feature>"`, the CRM (read) and the Customer
 Insights Analyst's reports. Releases: GitHub milestones (read), `hub calendar list`, the Release
-Manager's and Product Marketing Manager's tasks. One question for the requester: `hub task ask <id>`.
+Manager's and Product Marketing Manager's tasks. One question for the requester: `hub task question "<question>" --on <person> --parent <id>`.
 Every ledger search answer cites the row.
 
 ## Quality standards

@@ -73,7 +73,7 @@ Always:
 Read with `hub task show`, `hub task list`, `hub doc ask "<expected behaviour>"`, and GitHub read-only
 (`gh issue list`, `gh issue view`, `gh search issues`) where connected. A bug report for filing is
 `hub task create --owner <human who files bugs>` with the report attached. The answer for the Support
-Agent is a note on its task. One question per task with `hub task ask`.
+Agent is a note on its task. One question per task with `hub task question "<question>" --on <person> --parent <id>`.
 
 ## Method
 - **Verdict first, then evidence.** Every finding is one of four verdicts: bug, setup mistake, doc gap, or could not

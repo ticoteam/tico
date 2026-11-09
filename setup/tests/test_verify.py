@@ -1,10 +1,11 @@
-
 from setup import verify
 from setup.remote import Result
 from setup.tests.fakes import FakeShell
 
-GOOGLE = ("https://accounts.google.com/o/oauth2/v2/auth?client_id=cid&response_type=code"
-          "&redirect_uri=https%3A%2F%2Ftico.example.com%2Fauth%2Fcallback&scope=openid+email")
+GOOGLE = (
+    "https://accounts.google.com/o/oauth2/v2/auth?client_id=cid&response_type=code"
+    "&redirect_uri=https%3A%2F%2Ftico.example.com%2Fauth%2Fcallback&scope=openid+email"
+)
 
 
 def getter(code, location="", **_):
@@ -23,6 +24,7 @@ def test_health():
 
     def boom(u):
         raise OSError("refused")
+
     assert not verify.check_health("t", get=boom).ok
 
 
@@ -46,18 +48,32 @@ def _run(monkeypatch, results, wait, provider="google"):
     monkeypatch.setattr(verify, "check_health", lambda d: verify.Check("/healthz", state["cur"][1], "x"))
     monkeypatch.setattr(verify, "check_signin", lambda *a: verify.Check("Sign-in redirect", state["cur"][1], "x"))
     said = []
-    out = verify.run_all(domain="t.example.com", provider=provider, client_id="c", front_door="caddy", records=[], resolvers=[],
-                         shell=None, wait_https=wait, sleep=slept.append, say=said.append)
+    out = verify.run_all(
+        domain="t.example.com",
+        provider=provider,
+        client_id="c",
+        front_door="caddy",
+        records=[],
+        resolvers=[],
+        shell=None,
+        wait_https=wait,
+        sleep=slept.append,
+        say=said.append,
+    )
     return out, slept, said
 
 
 def test_runner_hostname_must_answer_from_the_server_not_a_login():
     c = verify.check_runner_host("r.example.com", get=getter(200))
     assert c.ok
-    c = verify.check_runner_host("r.example.com", get=getter(302, "https://team.cloudflareaccess.com/cdn-cgi/access/login/r.example.com"))
+    c = verify.check_runner_host(
+        "r.example.com", get=getter(302, "https://team.cloudflareaccess.com/cdn-cgi/access/login/r.example.com")
+    )
     assert not c.ok and "team.cloudflareaccess.com" in c.detail and "Access application" in c.hint
     c = verify.check_runner_host("r.example.com", get=getter(404))
-    assert not c.ok and "path ^/(?:api/v2|download)" in c.hint and "too old to serve /api/v2/agents/setup-script" in c.hint
+    assert (
+        not c.ok and "path ^/(?:api/v2|download)" in c.hint and "too old to serve /api/v2/agents/setup-script" in c.hint
+    )
     assert "too old" not in verify.check_runner_host("r.example.com", get=getter(503)).hint
     seen = []
     verify.check_runner_host("r.example.com", get=lambda url, follow=True: seen.append((url, follow)) or (200, {}, ""))
@@ -68,6 +84,16 @@ def test_run_all_checks_the_runner_hostname_only_when_there_is_one(monkeypatch):
     monkeypatch.setattr(verify, "check_runner_host", lambda h: verify.Check("Runner hostname", True, h))
     monkeypatch.setattr(verify, "check_dns", lambda *a: verify.Check("DNS", True, "ok"))
     monkeypatch.setattr(verify, "_https_checks", lambda *a: [])
-    kw = dict(domain="t.example.com", provider="cloudflare", client_id="", front_door="cloudflared", records=[], resolvers=[], shell=None)
+    kw = dict(
+        domain="t.example.com",
+        provider="cloudflare",
+        client_id="",
+        front_door="cloudflared",
+        records=[],
+        resolvers=[],
+        shell=None,
+    )
     assert [c.name for c in verify.run_all(**kw)] == ["DNS"]
-    assert [c.detail for c in verify.run_all(**kw, runner_host="r.example.com") if c.name == "Runner hostname"] == ["r.example.com"]
+    assert [c.detail for c in verify.run_all(**kw, runner_host="r.example.com") if c.name == "Runner hostname"] == [
+        "r.example.com"
+    ]

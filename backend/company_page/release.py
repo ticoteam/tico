@@ -11,6 +11,7 @@ write transaction, after reading the view once more and finding it unchanged, so
 - a rebuild that read before someone closed the page can't overwrite the closed release: it waits for that writer to
   commit, sees the view changed, and starts again.
 """
+
 import json
 import logging
 import os
@@ -32,8 +33,11 @@ STREAM_PAGE = 50
 MAX_PUBLIC_UPDATES = 200
 MAX_PUBLIC_UPDATE_BYTES = 4 * 1024 * 1024
 MAX_LOGO_BYTES = 2 * 1024 * 1024
-LOGO_TYPES = {"image/png": ("png", b"\x89PNG\r\n\x1a\n"), "image/jpeg": ("jpg", b"\xff\xd8\xff"),
-              "image/webp": ("webp", b"RIFF")}
+LOGO_TYPES = {
+    "image/png": ("png", b"\x89PNG\r\n\x1a\n"),
+    "image/jpeg": ("jpg", b"\xff\xd8\xff"),
+    "image/webp": ("webp", b"RIFF"),
+}
 STEADY_ATTEMPTS = 5
 KEEP_RELEASE_ROWS = 200
 ABANDONED_SECONDS = 3600
@@ -69,6 +73,7 @@ def _settings_of_connection(c):
         return server
     path = next((r[2] for r in c.execute("PRAGMA database_list") if r[1] == "main"), "")
     from ..config import DEFAULT_COMPANY_NAME, Settings
+
     try:
         settings = Settings.from_env()
         if path and Path(settings.db_path).resolve() == Path(path).resolve():
@@ -76,10 +81,12 @@ def _settings_of_connection(c):
     except Exception:  # noqa: BLE001, S110 - a bad or partial environment means the fallback, never a failed take-back
         pass
     environ = os.environ
-    return Settings(db_path=Path(path), company_page_dir=environ.get("TICO_COMPANY_PAGE_DIR", ""),
-                    reader_origin=environ.get("TICO_READER_ORIGIN", ""),
-                    company_name=environ.get("TICO_TEAM_NAME", "") or environ.get("TICO_COMPANY_NAME", "")
-                    or DEFAULT_COMPANY_NAME)
+    return Settings(
+        db_path=Path(path),
+        company_page_dir=environ.get("TICO_COMPANY_PAGE_DIR", ""),
+        reader_origin=environ.get("TICO_READER_ORIGIN", ""),
+        company_name=environ.get("TICO_TEAM_NAME", "") or environ.get("TICO_COMPANY_NAME", "") or DEFAULT_COMPANY_NAME,
+    )
 
 
 # ------------------------------------------------------------------------------------------------- the view model
@@ -92,14 +99,31 @@ def _clean_stat(stat, finance_lines=()):
     series = []
     for point in stat.get("series") or []:
         value = point.get("value")
-        finite = isinstance(value, (int, float)) and not isinstance(value, bool) and value == value and abs(value) != float("inf")
-        series.append({"period": _string(point.get("period")), "value": value if finite else None,
-                       "display": _string(point.get("display"))})
+        finite = (
+            isinstance(value, (int, float))
+            and not isinstance(value, bool)
+            and value == value
+            and abs(value) != float("inf")
+        )
+        series.append(
+            {
+                "period": _string(point.get("period")),
+                "value": value if finite else None,
+                "display": _string(point.get("display")),
+            }
+        )
     chart = stat.get("chart")
-    out = {"id": _string(stat.get("id")), "label": _string(stat.get("label")),
-           "definition": _string(stat.get("definition")), "chart": chart if chart in ("number", "line", "bars") else "number",
-           "period": _string(stat.get("period")), "as_of": _string(stat.get("as_of")),
-           "display": _string(stat.get("display")), "stale": stat.get("stale") is True, "series": series}
+    out = {
+        "id": _string(stat.get("id")),
+        "label": _string(stat.get("label")),
+        "definition": _string(stat.get("definition")),
+        "chart": chart if chart in ("number", "line", "bars") else "number",
+        "period": _string(stat.get("period")),
+        "as_of": _string(stat.get("as_of")),
+        "display": _string(stat.get("display")),
+        "stale": stat.get("stale") is True,
+        "series": series,
+    }
     if out["id"] in finance_lines:
         out["group"] = "pnl"
     return out
@@ -110,16 +134,26 @@ def _clean_update(update):
     kind = author.get("kind")
     sections = []
     for section in update.get("sections") or []:
-        items = [{"body": _string(i.get("body")), "ask_id": i.get("ask_id") if isinstance(i.get("ask_id"), str) else None}
-                 for i in section.get("items") or []]
+        items = [
+            {"body": _string(i.get("body")), "ask_id": i.get("ask_id") if isinstance(i.get("ask_id"), str) else None}
+            for i in section.get("items") or []
+        ]
         sections.append({"key": _string(section.get("key")), "items": items})
     version = update.get("version")
     note = update.get("correction_note")
-    return {"anchor": render.anchor_of(update.get("anchor")), "title": _string(update.get("title")),
-            "author": {"name": _string(author.get("name")), "kind": kind if kind in ("bot", "person", "company") else "person"},
-            "period": _string(update.get("period")), "published_at": _string(update.get("published_at")),
-            "version": version if isinstance(version, int) and not isinstance(version, bool) else 1,
-            "correction_note": note if isinstance(note, str) else None, "sections": sections}
+    return {
+        "anchor": render.anchor_of(update.get("anchor")),
+        "title": _string(update.get("title")),
+        "author": {
+            "name": _string(author.get("name")),
+            "kind": kind if kind in ("bot", "person", "company") else "person",
+        },
+        "period": _string(update.get("period")),
+        "published_at": _string(update.get("published_at")),
+        "version": version if isinstance(version, int) and not isinstance(version, bool) else 1,
+        "correction_note": note if isinstance(note, str) else None,
+        "sections": sections,
+    }
 
 
 def _sources_of_stats(c, stats):
@@ -157,6 +191,7 @@ def view_model(c, audience, stats, updates, next_before=None, badge="private", s
     """The view model in the package docstring, built field by field from what the projection and the stream returned.
     This is where a value becomes something a reader can see, so a signed-in reader's page is built here too."""
     from . import settings as page_settings
+
     settings = settings or _settings_of_connection(c)
     page = page_settings.get(c) or {}
     # The mission is the audience's to read or not, by its disclosure rule. An audience with no id (the signed-out door)
@@ -165,19 +200,30 @@ def view_model(c, audience, stats, updates, next_before=None, badge="private", s
     sources = _sources_of_stats(c, [s for s in stats if isinstance(s, dict) and isinstance(s.get("id"), str)])
     clean_stats = [_clean_stat(s, {i for i, k in sources.items() if k == "finance_line"}) for s in stats]
     clean_updates = [_clean_update(u) for u in updates]
-    company = {"name": _string(getattr(settings, "company_name", "")), "logo_url": _logo_url(c, page.get("logo_file_id")),
-               "mission": mission, "badge": badge, "accent": render.accent_of(page.get("accent")),
-               "updated_at": _updated_at(clean_stats, clean_updates)}
+    company = {
+        "name": _string(getattr(settings, "company_name", "")),
+        "logo_url": _logo_url(c, page.get("logo_file_id")),
+        "mission": mission,
+        "badge": badge,
+        "accent": render.accent_of(page.get("accent")),
+        "updated_at": _updated_at(clean_stats, clean_updates),
+    }
     url = _public_url(settings, page.get("slug"))
     if url:
         company["url"] = url
-    return {"company": company, "audience": {"kind": _string(audience["kind"]), "name": _string(audience["name"])},
-            "stats": clean_stats, "updates": clean_updates, "next_before": next_before}
+    return {
+        "company": company,
+        "audience": {"kind": _string(audience["kind"]), "name": _string(audience["name"])},
+        "stats": clean_stats,
+        "updates": clean_updates,
+        "next_before": next_before,
+    }
 
 
 def _whole_stream(c, audience_id, company_name=""):
     """Every published update for the audience, walking the stream's pages, up to what one static page may hold."""
     from . import editions
+
     found, before, size = [], None, 0
     while len(found) < MAX_PUBLIC_UPDATES:
         batch = list(editions.stream(c, [audience_id], before=before, limit=STREAM_PAGE, company_name=company_name))
@@ -202,6 +248,7 @@ def public_view(c, at, settings=None):
     """
     from . import settings as page_settings
     from . import stats as stats_module
+
     if (page_settings.get(c) or {}).get("transparency") != "open":
         return {}
     row = c.execute("SELECT id, name, kind, enabled FROM audiences WHERE kind='public'").fetchone()
@@ -211,14 +258,17 @@ def public_view(c, at, settings=None):
     if stats_module.board_approved(c, row["id"]) is True:
         stats = list((stats_module.project(c, row["id"], at) or {}).get("stats") or [])
     company = settings or _settings_of_connection(c)
-    updates = _whole_stream(c, row["id"], company.company_name)     # the company's own updates carry its name, as on the board
+    updates = _whole_stream(
+        c, row["id"], company.company_name
+    )  # the company's own updates carry its name, as on the board
     if not stats and not updates:
         return {}
     sources = _sources_of_stats(c, [s for s in stats if isinstance(s.get("id"), str)])
     # Open company: the company is showing its money. Public: it publishes, and keeps the books to itself.
     badge = "open" if any(k in ("finance_line", "finance_metric") for k in sources.values()) else "public"
-    return view_model(c, {"id": row["id"], "kind": "public", "name": row["name"]}, stats, updates, badge=badge,
-                      settings=settings)
+    return view_model(
+        c, {"id": row["id"], "kind": "public", "name": row["name"]}, stats, updates, badge=badge, settings=settings
+    )
 
 
 # ------------------------------------------------------------------------------------------------- files
@@ -265,11 +315,14 @@ def _logo_bytes(c_read, settings, view):
     if not url:
         return None
     from ..blobs import Blobs
+
     try:
         digest_part = url.split("logo-", 1)[1].split(".", 1)[0]
-        row = c_read.execute("SELECT digest, content_type FROM blobs WHERE substr(digest,1,32)=? AND size<=? "
-                             "AND content_type IN (%s)" % ",".join("?" * len(LOGO_TYPES)),
-                             (digest_part, MAX_LOGO_BYTES, *LOGO_TYPES)).fetchone()
+        row = c_read.execute(
+            "SELECT digest, content_type FROM blobs WHERE substr(digest,1,32)=? AND size<=? "
+            "AND content_type IN (%s)" % ",".join("?" * len(LOGO_TYPES)),
+            (digest_part, MAX_LOGO_BYTES, *LOGO_TYPES),
+        ).fetchone()
         reader = getattr(c_read, "blobs", None)
         data = (reader if reader is not None else Blobs(settings)).get(row["digest"])
         return data if data.startswith(LOGO_TYPES[row["content_type"]][1]) and len(data) <= MAX_LOGO_BYTES else None
@@ -318,6 +371,7 @@ def _swap(root, release_id, folder):
 def _sweep(root, keep):
     """Old releases go at the swap; taken-back content must not sit on disk. Runs with the write lock held, so it can't
     race another swap. A leftover is retried at the next swap, and `current` no longer reaches it."""
+
     def remove(path):
         try:
             if path.is_dir() and not path.is_symlink():
@@ -345,12 +399,16 @@ def _discard(folder):
 
 def _commit(c, root, release_id, folder, reason):
     """The row first: it takes the write lock if this connection doesn't hold it yet, and only the holder may swap."""
-    c.execute("INSERT INTO page_releases (id, path, reason, created_at) VALUES (?,?,?,?)",
-              (release_id, f"releases/{release_id}", str(reason or "")[:500], datetime.now(timezone.utc).isoformat()))
+    c.execute(
+        "INSERT INTO page_releases (id, path, reason, created_at) VALUES (?,?,?,?)",
+        (release_id, f"releases/{release_id}", str(reason or "")[:500], datetime.now(timezone.utc).isoformat()),
+    )
     _swap(root, release_id, folder)
     _sweep(root, release_id)
-    c.execute("DELETE FROM page_releases WHERE id NOT IN (SELECT id FROM page_releases ORDER BY created_at DESC, id DESC LIMIT ?)",
-              (KEEP_RELEASE_ROWS,))
+    c.execute(
+        "DELETE FROM page_releases WHERE id NOT IN (SELECT id FROM page_releases ORDER BY created_at DESC, id DESC LIMIT ?)",
+        (KEEP_RELEASE_ROWS,),
+    )
 
 
 def _result(release_id, view, failed=False):
@@ -407,7 +465,7 @@ def _fail_closed(store, root, reason):
             _commit(c, root, release_id, folder, f"{reason} (failed, closed)")
     except Exception:
         LOG.exception("company page could not record its closing release")
-        if not folder.exists():     # the swap itself failed, so old files are still up: the caller has to know
+        if not folder.exists():  # the swap itself failed, so old files are still up: the caller has to know
             raise
         _swap(root, release_id, folder)
     return _result(release_id, {}, True)
@@ -483,6 +541,10 @@ def refresh(store, at):
         LOG.exception("company page daily refresh could not read")
         return None
     served = _served(store.settings)
-    if view == served or (view and served and view == {**served, "company": {**served["company"], "logo_url": view["company"]["logo_url"]}}):
+    if view == served or (
+        view
+        and served
+        and view == {**served, "company": {**served["company"], "logo_url": view["company"]["logo_url"]}}
+    ):
         return None
     return rebuild(store, "daily stats", at=at)
