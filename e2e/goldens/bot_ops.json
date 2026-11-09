@@ -35,7 +35,7 @@
     "folder": "bot-ops",
     "goals": "",
     "harness": "fake",
-    "host": "dispatcher",
+    "host": "keeper",
     "id": "ops",
     "keep_tasks_going": null,
     "last_turn_at": "<time>",

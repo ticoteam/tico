@@ -3,10 +3,11 @@
 Teammates are actor strings (`human:<id>`, `bot:<id>`), teams are org group ids. The store builds an `Org` from the
 roster once per request; nothing here reads it.
 """
+
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 
-SYSTEM = "system:finance"           # sync, posting rules, setup and usage postings
+SYSTEM = "system:finance"  # sync, posting rules, setup and usage postings
 APPROVERS = ("owner", "finance_admin", "manager")
 
 
@@ -15,12 +16,12 @@ class Team:
     id: str
     name: str
     parent: str = ""
-    lead: str = ""                  # an actor, "" when the group has no lead
+    lead: str = ""  # an actor, "" when the group has no lead
 
 
 @dataclass(frozen=True)
 class Org:
-    owner: str                      # the install owner as `human:<id>`
+    owner: str  # the install owner as `human:<id>`
     teams: Mapping[str, Team] = field(default_factory=lambda: dict[str, Team]())
     team_of: Mapping[str, str] = field(default_factory=lambda: dict[str, str]())
     reports_to: Mapping[str, str] = field(default_factory=lambda: dict[str, str]())
@@ -92,6 +93,7 @@ class Principal:
     """Who is acting. `actor` made the call; `for_actor` is whose authority it uses (the Assistant and BotOps act as
     the teammate who asked, BotOps parity), and `rule` the finance rule it runs under. Rights and view are always the
     effective teammate's (`who`), never a manager's."""
+
     actor: str
     for_actor: str = ""
     rule: str = ""

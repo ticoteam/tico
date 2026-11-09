@@ -64,7 +64,7 @@ def statements(root, skip=()):
         for text in _texts(tree):
             for m in CREATE.finditer(text):
                 end = _closing(text, m.end() - 1)
-                sql = text[m.start():end] if end > 0 else ""
+                sql = text[m.start() : end] if end > 0 else ""
                 if sql and "\0" not in sql:
                     creates.setdefault(m.group(1), []).append(sql)
             for m in ALTER.finditer(text):
@@ -72,8 +72,12 @@ def statements(root, skip=()):
                 if "\0" not in m.group(0):
                     columns.append((m.group(1), m.group(2), declaration))
         for node in ast.walk(tree):
-            if isinstance(node, ast.Call) and getattr(node.func, "attr", getattr(node.func, "id", "")) == "add_column" \
-                    and len(node.args) >= 4 and all(isinstance(a, ast.Constant) for a in node.args[1:4]):
+            if (
+                isinstance(node, ast.Call)
+                and getattr(node.func, "attr", getattr(node.func, "id", "")) == "add_column"
+                and len(node.args) >= 4
+                and all(isinstance(a, ast.Constant) for a in node.args[1:4])
+            ):
                 columns.append((node.args[1].value, node.args[2].value, node.args[3].value))
     return creates, columns
 
@@ -83,8 +87,11 @@ def table_columns(conn):
     rows = conn.execute("SELECT name, sql FROM sqlite_master WHERE type='table'").fetchall()
     virtual = {name for name, sql in rows if sql and sql.upper().startswith("CREATE VIRTUAL")}
     shadow = {f"{v}_{s}" for v in virtual for s in ("data", "idx", "content", "docsize", "config")}
-    return {name: {r[1] for r in conn.execute(f'PRAGMA table_info("{name}")')}
-            for name, _sql in rows if not name.startswith("sqlite_") and name not in shadow and name not in virtual}
+    return {
+        name: {r[1] for r in conn.execute(f'PRAGMA table_info("{name}")')}
+        for name, _sql in rows
+        if not name.startswith("sqlite_") and name not in shadow and name not in virtual
+    }
 
 
 def add_lazy_tables(conn, creates, columns, skip=()):
@@ -98,6 +105,6 @@ def add_lazy_tables(conn, creates, columns, skip=()):
         if table in have and column not in have[table] and table not in skip:
             try:
                 conn.execute(f'ALTER TABLE "{table}" ADD COLUMN "{column}" {declaration}')
-            except sqlite3.OperationalError:            # a NOT NULL without a default: only its name matters here
+            except sqlite3.OperationalError:  # a NOT NULL without a default: only its name matters here
                 conn.execute(f'ALTER TABLE "{table}" ADD COLUMN "{column}"')
             have[table].add(column)

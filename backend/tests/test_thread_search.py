@@ -31,13 +31,16 @@ def database():
 
 
 def post(c, mid, thread, body, actor="human:ana", refs=None):
-    c.execute("INSERT INTO messages(id, conversation_id, sender_id, body, refs, created_at) "
-              "VALUES (?,?,?,?,?,?)", (mid, thread, actor, body, refs, f"2026-11-01T10:00:0{len(mid) % 10}Z"))
+    c.execute(
+        "INSERT INTO messages(id, conversation_id, sender_id, body, refs, created_at) VALUES (?,?,?,?,?,?)",
+        (mid, thread, actor, body, refs, f"2026-11-01T10:00:0{len(mid) % 10}Z"),
+    )
 
 
 def find(c, query, **kw):
-    return search.search(c, query, thread_sql=THREADS, message_sql=MESSAGES, readable=kw.pop("readable", lambda m: True),
-                         **kw)
+    return search.search(
+        c, query, thread_sql=THREADS, message_sql=MESSAGES, readable=kw.pop("readable", lambda m: True), **kw
+    )
 
 
 def ids(result):

@@ -38,7 +38,7 @@ Each item has what it is, its owner from `knowledge/systems.md`, and its due dat
 
 ## 3. Propose
 
-Attach the checklist. Ask only for missing offboarding facts, with `hub task ask <id>`. Create one requested task per owner:
+Attach the checklist. Ask only for missing offboarding facts, with `hub task question "<question>" --on <person> --parent <id>`. Create one requested task per owner:
 `hub task create --owner <owner> --title "<leaver ref>: <item>" --due <date> --parent <id>`, but only when the task asks for it
 and a granted Tool allows it. Otherwise list the owners on the checklist for the HR owner to act on.
 

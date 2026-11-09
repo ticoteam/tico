@@ -8,6 +8,7 @@ and are left out. Columns the upgrade adds are the new schema and are not compar
 The change counters (COUNTERS) are not data: a trigger adds one to them on every write, the no-op ones too, and the
 caches read them. They are compared as "never went back", not as equal.
 """
+
 import hashlib
 import sqlite3
 from contextlib import closing
@@ -25,9 +26,13 @@ def _combine(digests):
 
 
 def ordinary_tables(conn):
-    rows = conn.execute("SELECT name, sql FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'").fetchall()
+    rows = conn.execute(
+        "SELECT name, sql FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
+    ).fetchall()
     virtual = {name for name, sql in rows if (sql or "").upper().startswith("CREATE VIRTUAL")}
-    return sorted(name for name, _ in rows if name not in virtual and not any(name.startswith(v + "_") for v in virtual))
+    return sorted(
+        name for name, _ in rows if name not in virtual and not any(name.startswith(v + "_") for v in virtual)
+    )
 
 
 def table_state(path):
@@ -37,15 +42,20 @@ def table_state(path):
     with closing(sqlite3.connect(path)) as conn:
         for table in ordinary_tables(conn):
             if table in COUNTERS:
-                state[table] = {"rows": conn.execute('SELECT count(*) FROM "%s"' % table).fetchone()[0],
-                                "counter": conn.execute('SELECT max(value) FROM "%s"' % table).fetchone()[0]}
+                state[table] = {
+                    "rows": conn.execute('SELECT count(*) FROM "%s"' % table).fetchone()[0],
+                    "counter": conn.execute('SELECT max(value) FROM "%s"' % table).fetchone()[0],
+                }
                 continue
             cursor = conn.execute('SELECT * FROM "%s"' % table.replace('"', '""'))
             names = [d[0] for d in cursor.description]
             rows = cursor.fetchall()
             cells = [{name: _digest(value) for name, value in zip(names, row, strict=True)} for row in rows]
-            state[table] = {"rows": len(rows), "cells": cells,
-                            "columns": {name: _combine([row[name] for row in cells]) for name in names}}
+            state[table] = {
+                "rows": len(rows),
+                "cells": cells,
+                "columns": {name: _combine([row[name] for row in cells]) for name in names},
+            }
     return state
 
 
@@ -80,7 +90,9 @@ def compare(before, after, renames):
             continue
         if "counter" in old:
             if (new.get("counter") or 0) < (old["counter"] or 0):
-                problems.append(f"{old_table}: change counter went back ({old['counter']} before, {new.get('counter')} after)")
+                problems.append(
+                    f"{old_table}: change counter went back ({old['counter']} before, {new.get('counter')} after)"
+                )
             continue
         mapping = {column: columns.get(f"{old_table}.{column}", column) for column in old["columns"]}
         for column, new_column in sorted(mapping.items()):

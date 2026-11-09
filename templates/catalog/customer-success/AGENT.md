@@ -74,7 +74,7 @@ Always:
    after it, then what you could not read. The requester closes it.
 
 ## Talking to {{app_name}}
-Work arrives as tasks. Read with `hub task show <id>`, `hub task list`, `hub team show`, `hub calendar list`. A question for the account owner is `hub task ask <id>`, one open question per task. A human's decision is
+Work arrives as tasks. Read with `hub task show <id>`, `hub task list`, `hub team show`, `hub calendar list`. A question for the account owner is `hub task question "<question>" --on <person> --parent <id>`, one open question per task. A human's decision is
 `hub task create --owner <person>`. Renewal terms and quotes are the Account Manager's: route them as
 a task to `account-manager` (or the seller in `knowledge/renewals.md`) after the owner agrees. Keep `hub bot status set` to one line.
 

@@ -27,14 +27,19 @@ def test_no_leave_it_rejects_at_once_and_its_decider_adds_the_reason_afterwards(
     done = post(api, f"goal-proposals/{p['id']}/decide", {"decision": "reject"})["proposal"]
     assert (done["status"], done["decision_note"], done["may_reason"]) == ("rejected", "", True)
     # One line: spaces and line breaks fold into single spaces.
-    saved = post(api, f"goal-proposals/{p['id']}/note", {"note": "  no billing yet,\n don't track   revenue "})["proposal"]
+    saved = post(api, f"goal-proposals/{p['id']}/note", {"note": "  no billing yet,\n don't track   revenue "})[
+        "proposal"
+    ]
     assert (saved["decision_note"], saved["may_reason"]) == (REASON, False)
-    listed = rejected(api, goal_id=goal["id"])[p["id"]]           # what hub proposal list --status rejected prints
+    listed = rejected(api, goal_id=goal["id"])[p["id"]]  # what hub proposal list --status rejected prints
     assert (listed["decision_note"], listed["may_reason"]) == (REASON, False)
     # Through the new name of the route as well (backend/route_renames.py).
     other = propose(api, "goal_wording", {"title": "Raise activation to 70%"}, goal["id"])
     post(api, f"proposals/{other['id']}/decide", {"decision": "reject"})
-    assert post(api, f"proposals/{other['id']}/note", {"note": "Keep it short"})["proposal"]["decision_note"] == "Keep it short"
+    assert (
+        post(api, f"proposals/{other['id']}/note", {"note": "Keep it short"})["proposal"]["decision_note"]
+        == "Keep it short"
+    )
 
 
 def test_leaving_the_box_changes_nothing_more(api):
@@ -64,8 +69,9 @@ def test_a_second_reason_anyone_else_a_waiting_or_confirmed_one_and_an_empty_one
     assert f"at most {G.REASON_MAX}" in str(long)
     # Ben and Cara read the goal too; only Ana turned it down.
     for token in ("ben-test", "cara-test"):
-        assert "Only the person who turned" in str(post(api, f"goal-proposals/{no['id']}/note", {"note": REASON},
-                                                       token=token, expected=403))
+        assert "Only the person who turned" in str(
+            post(api, f"goal-proposals/{no['id']}/note", {"note": REASON}, token=token, expected=403)
+        )
         assert rejected(api, token)[no["id"]]["may_reason"] is False
     assert tuple(stored(api, no["id"])) == ("rejected", "")
 
@@ -91,18 +97,27 @@ def test_a_reader_who_may_not_read_the_measures_bot_reads_no_reason_and_gets_no_
     definition = propose(api, "kpi_definition", {"definition": "Within 3 days"}, kpi_id=secret["id"])
     post(api, f"goal-proposals/{definition['id']}/decide", {"decision": "reject"})
     post(api, f"goal-proposals/{definition['id']}/note", {"note": "Inbox only, three days is too long"})
-    assert rejected(api)[reuse["id"]]["decision_note"] == "Inbox only, not churn"        # Ana reads both
+    assert rejected(api)[reuse["id"]]["decision_note"] == "Inbox only, not churn"  # Ana reads both
     assert rejected(api)[definition["id"]]["decision_note"] == "Inbox only, three days is too long"
 
-    for path in ("goal-proposals?status=rejected", "goal-proposals?status=all", f"goal-proposals?status=rejected&goal_id={hers['id']}",
-                 f"goals/{hers['id']}", "goals/tree", "goals"):
+    for path in (
+        "goal-proposals?status=rejected",
+        "goal-proposals?status=all",
+        f"goal-proposals?status=rejected&goal_id={hers['id']}",
+        f"goals/{hers['id']}",
+        "goals/tree",
+        "goals",
+    ):
         seen = get(api, path, "cara-test")
         assert "Inbox only" not in str(seen) and leaks(seen) == [], path
     mine = rejected(api, "cara-test")
     assert mine[reuse["id"]]["decision_note"] == "" and definition["id"] not in mine
     # Her goal's history still says a suggestion was turned down, without its words.
-    [line] = [e for e in get(api, f"goals/{hers['id']}", "cara-test")["goal"]["events"]
-              if e["field"] == "proposal" and e["new"] == "rejected"]
+    [line] = [
+        e
+        for e in get(api, f"goals/{hers['id']}", "cara-test")["goal"]["events"]
+        if e["field"] == "proposal" and e["new"] == "rejected"
+    ]
     assert line["note"] == ""
     assert any(e.get("note") == "Inbox only, not churn" for e in get(api, f"goals/{hers['id']}")["goal"]["events"])
 
@@ -121,8 +136,11 @@ def test_a_reader_who_may_not_read_the_measures_bot_reads_no_reason_and_gets_no_
     # inbox bot's measure), so it stands for a yes given before she lost the inbox bot, history line included.
     yes = propose(api, "goal_kpi", {"kpi": {"name": "Replies read"}, "owner": "inbox"}, hers["id"])
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE goal_proposals SET status='confirmed', decision_note='Inbox wants it', decided_by='human:ana' "
-                  "WHERE id=?", (yes["id"],))
+        c.execute(
+            "UPDATE goal_proposals SET status='confirmed', decision_note='Inbox wants it', decided_by='human:ana' "
+            "WHERE id=?",
+            (yes["id"],),
+        )
         G._event(c, hers["id"], "human:ana", "proposal", "goal_kpi", "confirmed", "Inbox wants it")
     for path in ("goal-proposals?status=confirmed", "goal-proposals?status=all", f"goals/{hers['id']}"):
         assert "Inbox wants it" not in str(get(api, path, "cara-test")), path

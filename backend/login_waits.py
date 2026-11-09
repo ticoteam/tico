@@ -26,9 +26,11 @@ PAUSED = "Paused so another turn could use the ChatGPT login; continues right af
 
 
 def _payload(c, aid, kind, field):
-    row = c.execute("SELECT payload FROM attempt_events WHERE attempt_id=? AND kind=? "
-                    f"AND json_extract(payload,'$.{field}') IS NOT NULL ORDER BY seq DESC LIMIT 1",
-                    (aid, kind)).fetchone()
+    row = c.execute(
+        "SELECT payload FROM attempt_events WHERE attempt_id=? AND kind=? "
+        f"AND json_extract(payload,'$.{field}') IS NOT NULL ORDER BY seq DESC LIMIT 1",
+        (aid, kind),
+    ).fetchone()
     try:
         payload = json.loads(row[0]) if row else {}
     except (TypeError, ValueError):
@@ -88,7 +90,7 @@ def wait(c, aid):
 
 
 def waiting(c, aid, bot, who=None, auth=None):
-    """"Waiting for <login> (held by <bot> on <task> since <HH:MMZ>; position N)" while the attempt waits for its
+    """ "Waiting for <login> (held by <bot> on <task> since <HH:MMZ>; position N)" while the attempt waits for its
     login, else None. `who` None is the hub itself (every name shown); with `who` and no `auth`, the holder is never
     named. A runner that sends no place yet says "Waiting for <login> to be free (busy with <bot>)"."""
     payload = wait(c, aid)
@@ -104,12 +106,22 @@ def waiting(c, aid, bot, who=None, auth=None):
     run = payload.get("holder_attempt")
     task = ""
     # Visibility is of the holder bot itself, before "another turn of this bot" words it.
-    if isinstance(run, str) and run and (who is None or auth is not None and auth.visible_bot(c, who, holder)
-                                         and privacy.attempt_readable(c, privacy.actor(who), run)):
+    if (
+        isinstance(run, str)
+        and run
+        and (
+            who is None
+            or auth is not None
+            and auth.visible_bot(c, who, holder)
+            and privacy.attempt_readable(c, privacy.actor(who), run)
+        )
+    ):
         task = _task(c, run)
     since = _clock(payload.get("since"))
-    return (f"Waiting for {login} (held by {named}{' on ' + task if task else ''}"
-            f"{' since ' + since if since else ''}; position {position})")
+    return (
+        f"Waiting for {login} (held by {named}{' on ' + task if task else ''}"
+        f"{' since ' + since if since else ''}; position {position})"
+    )
 
 
 def unknown_holder(c, aid):
@@ -119,7 +131,11 @@ def unknown_holder(c, aid):
     if not payload or not payload.get("position"):
         return False
     run = payload.get("holder_attempt")
-    row = c.execute("SELECT state,finished_at FROM attempts WHERE id=?", (run,)).fetchone() if isinstance(run, str) and run else None
+    row = (
+        c.execute("SELECT state,finished_at FROM attempts WHERE id=?", (run,)).fetchone()
+        if isinstance(run, str) and run
+        else None
+    )
     if row and row["state"] in ("leased", "running"):
         return False
     return not row or not row["finished_at"] or row["finished_at"] < H.shift(H.now(), seconds=-HOLDER_GONE_S)

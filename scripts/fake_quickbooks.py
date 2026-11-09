@@ -20,6 +20,7 @@ Control endpoints under /_fake/ are not QuickBooks':
 
   python3 scripts/fake_quickbooks.py --port 18791
 """
+
 import argparse
 import json
 import re
@@ -31,24 +32,60 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 from urllib.parse import parse_qs, urlsplit
 
-ENTITIES = ("Account", "Vendor", "Customer", "JournalEntry", "Item", "Department", "Class", "PurchaseOrder", "Estimate",
-            "Invoice", "Bill", "BillPayment", "Payment")
-CREATE = {"account": "Account", "vendor": "Vendor", "customer": "Customer", "journalentry": "JournalEntry",
-          "purchaseorder": "PurchaseOrder", "estimate": "Estimate", "invoice": "Invoice", "bill": "Bill",
-          "billpayment": "BillPayment", "payment": "Payment", "item": "Item", "department": "Department",
-          "creditmemo": "CreditMemo"}
-CHANGE_CAP = 1000                       # the most objects one change feed answer holds, for each entity
-CHANGE_WINDOW = timedelta(days=30)      # how far back a change feed reaches
+ENTITIES = (
+    "Account",
+    "Vendor",
+    "Customer",
+    "JournalEntry",
+    "Item",
+    "Department",
+    "Class",
+    "PurchaseOrder",
+    "Estimate",
+    "Invoice",
+    "Bill",
+    "BillPayment",
+    "Payment",
+)
+CREATE = {
+    "account": "Account",
+    "vendor": "Vendor",
+    "customer": "Customer",
+    "journalentry": "JournalEntry",
+    "purchaseorder": "PurchaseOrder",
+    "estimate": "Estimate",
+    "invoice": "Invoice",
+    "bill": "Bill",
+    "billpayment": "BillPayment",
+    "payment": "Payment",
+    "item": "Item",
+    "department": "Department",
+    "creditmemo": "CreditMemo",
+}
+CHANGE_CAP = 1000  # the most objects one change feed answer holds, for each entity
+CHANGE_WINDOW = timedelta(days=30)  # how far back a change feed reaches
 LOCK = threading.Lock()
 STATE: dict[str, object] = {}
 
 
 def reset() -> None:
     STATE.clear()
-    STATE.update({"books": {e: [] for e in ENTITIES}, "changes": [], "by_request": {}, "calls": [], "expire": False,
-                  # Ids are unique per entity, as in QuickBooks: a new record must not take a seeded id (101 to 706).
-                  "next_id": 1000, "lose": [], "lost": 0, "refused": 0, "window_clock": None,
-                  "classes": {"per_txn": False, "per_line": True}})
+    STATE.update(
+        {
+            "books": {e: [] for e in ENTITIES},
+            "changes": [],
+            "by_request": {},
+            "calls": [],
+            "expire": False,
+            # Ids are unique per entity, as in QuickBooks: a new record must not take a seeded id (101 to 706).
+            "next_id": 1000,
+            "lose": [],
+            "lost": 0,
+            "refused": 0,
+            "window_clock": None,
+            "classes": {"per_txn": False, "per_line": True},
+        }
+    )
 
 
 def _rows(entity: str) -> list[dict[str, object]]:
@@ -56,8 +93,7 @@ def _rows(entity: str) -> list[dict[str, object]]:
 
 
 def _fault(message: str, code: str = "2010") -> tuple[int, dict[str, object]]:
-    return 400, {"Fault": {"Error": [{"Message": message, "Detail": message, "code": code}],
-                           "type": "ValidationFault"}}
+    return 400, {"Fault": {"Error": [{"Message": message, "Detail": message, "code": code}], "type": "ValidationFault"}}
 
 
 def _stale() -> tuple[int, dict[str, object]]:
@@ -130,8 +166,8 @@ def query(sql: str) -> tuple[int, dict[str, object]]:
     if parts[1] == "COUNT(*)":
         return 200, {"QueryResponse": {"totalCount": len(rows)}}
     start = int(parts[parts.index("STARTPOSITION") + 1]) if "STARTPOSITION" in parts else 1
-    size = int(parts[parts.index("MAXRESULTS") + 1]) if "MAXRESULTS" in parts else 100      # QuickBooks' default page
-    page = rows[start - 1:start - 1 + size]
+    size = int(parts[parts.index("MAXRESULTS") + 1]) if "MAXRESULTS" in parts else 100  # QuickBooks' default page
+    page = rows[start - 1 : start - 1 + size]
     return 200, {"QueryResponse": {entity: page, "startPosition": start, "maxResults": len(page)}}
 
 
@@ -175,8 +211,10 @@ def cdc(entities: str, since: str) -> tuple[int, dict[str, object]]:
         return _fault("changedSince is more than 30 days in the past")
     block: dict[str, object] = {}
     for entity in [e for e in entities.split(",") if e]:
-        found = sorted((c for c in STATE["changes"] if c[0] == entity and c[1] >= floor),  # type: ignore[union-attr]
-                       key=lambda c: c[1])
+        found = sorted(
+            (c for c in STATE["changes"] if c[0] == entity and c[1] >= floor),  # type: ignore[union-attr]
+            key=lambda c: c[1],
+        )
         block[entity] = [row for _, _, row in found[:CHANGE_CAP]]
     return 200, {"CDCResponse": [{"QueryResponse": [block]}]}
 
@@ -209,8 +247,9 @@ def _has_line_class(body: dict[str, object]) -> bool:
     lines = body.get("Line")
     if not isinstance(lines, list):
         return False
-    return any(isinstance(line, dict) and any(isinstance(d, dict) and "ClassRef" in d for d in line.values())
-               for line in lines)
+    return any(
+        isinstance(line, dict) and any(isinstance(d, dict) and "ClassRef" in d for d in line.values()) for line in lines
+    )
 
 
 def create(path: str, body: dict[str, object], request_id: str, operation: str) -> tuple[int, dict[str, object]]:
@@ -326,8 +365,17 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(*cdc(query_string.get("entities", ""), query_string.get("changedSince", "")))
             if method == "GET" and parts[3] == "preferences":
                 classes: dict[str, bool] = STATE["classes"]  # type: ignore[assignment]
-                return self._send(200, {"Preferences": {"AccountingInfoPrefs": {
-                    "ClassTrackingPerTxn": classes["per_txn"], "ClassTrackingPerTxnLine": classes["per_line"]}}})
+                return self._send(
+                    200,
+                    {
+                        "Preferences": {
+                            "AccountingInfoPrefs": {
+                                "ClassTrackingPerTxn": classes["per_txn"],
+                                "ClassTrackingPerTxnLine": classes["per_line"],
+                            }
+                        }
+                    },
+                )
             if method == "POST":
                 answer = create(parts[3], body, query_string.get("requestid", ""), query_string.get("operation", ""))
                 if _lose(parts[3]):

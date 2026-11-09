@@ -17,6 +17,9 @@ tasks, `SELECT owner FROM meetings` is not. As a key, a word many tables use (`o
 the receiver is named after a table it moved on, in a file that talks to the hub (`task["owner"]`), or when it is a row
 (`row["owner"]`) and the file's own SQL reads such a table. A compound key few tables keep (`from_actor`) counts anywhere.
 
+A table that was renamed (`market_entities`, now `entities`) is a finding wherever SQL names it: in a FROM, JOIN, UPDATE or
+INTO, or before a column (`market_entities.name`).
+
 --fix rewrites the findings marked fixable. A finding is not fixable when its new spelling needs other arguments, when
 the name is a SQL alias (`AS created`), when the key is a word other code uses too (`attempt`), when the field changed
 shape (`snoozed_until` is now part of `holds`), when the name has more than one new spelling or a table keeps it
@@ -24,6 +27,7 @@ shape (`snoozed_until` is now part of `holds`), when the name has more than one 
 SQL is not in a `hub sql` call (it may be the bot's own database), or when the file is under memory/: a bot's notes are
 reported, never rewritten.
 """
+
 import json
 import os
 import re
@@ -33,11 +37,11 @@ from pathlib import Path
 
 MAP = Path(__file__).with_name("renames.json")
 SKIP_DIRS = {".git", "node_modules", ".venv", "venv", "__pycache__", ".pytest_cache", ".mypy_cache", "dist", "build"}
-PROSE_SUFFIXES = {".md", ".markdown", ".rst", ".txt", ".yaml", ".yml"}   # only code spans and fenced blocks are read
+PROSE_SUFFIXES = {".md", ".markdown", ".rst", ".txt", ".yaml", ".yml"}  # only code spans and fenced blocks are read
 MAX_BYTES = 2_000_000
 MEMORY_DIR = "memory"
-AMBIGUOUS_KEYS = {"attempt", "last_sync"}     # common keys in a bot's own code (a retry count; a sync time that stored
-                                              # documents keep): report, never rewrite
+AMBIGUOUS_KEYS = {"attempt", "last_sync"}  # common keys in a bot's own code (a retry count; a sync time that stored
+# documents keep): report, never rewrite
 
 FENCE = re.compile(r"^([ \t]*)(`{3,}|~{3,})[^\n]*\n(.*?)^\1\2[ \t]*$", re.M | re.S)
 SPAN = re.compile(r"(?<!`)`([^`\n]+)`(?!`)")
@@ -48,7 +52,9 @@ SHELL_HUB = re.compile(r"(?:^|[`\"'$(;&|])[ \t]*hub[ \t]+" + _WORDS, re.M)
 SHELL_HUB_INLINE = re.compile(r"[`\"'$(;&|][ \t]*hub[ \t]+" + _WORDS)
 SHELL_SUFFIXES = {".sh", ".bash", ".zsh"}
 # `["hub", "sql", ...]` in Python, JavaScript or JSON: the first two words only (a set of names, `{"hub", "docs"}`, is not one)
-ARGV_HUB = re.compile(r"\[[ \t\n]*[\"']hub[\"'][ \t]*,[ \t]*[\"']([a-z][a-z-]*)[\"'](?:[ \t]*,[ \t]*[\"']([a-z][a-z-]*)[\"'])?")
+ARGV_HUB = re.compile(
+    r"\[[ \t\n]*[\"']hub[\"'][ \t]*,[ \t]*[\"']([a-z][a-z-]*)[\"'](?:[ \t]*,[ \t]*[\"']([a-z][a-z-]*)[\"'])?"
+)
 WORD = re.compile(r"[a-z][a-z-]*")
 SQL_IDENT = re.compile(r"'(?:[^']|'')*'|(?<![\w:@$])([A-Za-z_]\w*)")
 HEREDOC = re.compile(r"[ \t]*-?[ \t]*<<-?[ \t]*['\"]?(\w+)['\"]?[^\n]*\n")
@@ -64,30 +70,58 @@ TABLE_REF = re.compile(r"\b(?:FROM|JOIN|UPDATE|INTO)\s+(?:OR\s+\w+\s+)?" + _NAME
 MORE_TABLES = re.compile(r"\s*,\s*" + _NAME)
 OUTPUT_ALIAS = re.compile(r"\bAS\s+([A-Za-z_]\w*)", re.I)
 QUALIFIER = re.compile(r"([A-Za-z_]\w*)\.$")
-NOT_AN_ALIAS = {"as", "cross", "default", "except", "full", "group", "having", "inner", "intersect", "join", "left",
-                "limit", "natural", "on", "order", "outer", "returning", "right", "select", "set", "union", "using",
-                "values", "where", "window"}
-KEY_READ = re.compile(r"\b(?P<recv>[A-Za-z_]\w*)(?:\[\s*[\"'](?P<a>\w+)[\"']\s*\]|\.get\(\s*[\"'](?P<b>\w+)[\"']"
-                      r"|\.(?P<c>[a-z_]\w*)\b(?!\s*\())")
+NOT_AN_ALIAS = {
+    "as",
+    "cross",
+    "default",
+    "except",
+    "full",
+    "group",
+    "having",
+    "inner",
+    "intersect",
+    "join",
+    "left",
+    "limit",
+    "natural",
+    "on",
+    "order",
+    "outer",
+    "returning",
+    "right",
+    "select",
+    "set",
+    "union",
+    "using",
+    "values",
+    "where",
+    "window",
+}
+KEY_READ = re.compile(
+    r"\b(?P<recv>[A-Za-z_]\w*)(?:\[\s*[\"'](?P<a>\w+)[\"']\s*\]|\.get\(\s*[\"'](?P<b>\w+)[\"']"
+    r"|\.(?P<c>[a-z_]\w*)\b(?!\s*\())"
+)
 ROW_RECEIVERS = {"row", "r", "rec", "record", "item", "result"}
 RECEIVER_TABLES = {"msg": "messages"}
-TALKS_TO_HUB = re.compile(r"/api/v2/|\bHUB_[A-Z_]+\b|[\"'`$(;&|][ \t]*hub[ \t]|^[ \t]*hub[ \t]|\[[ \t\n]*[\"']hub[\"']", re.M)
-MOST_KEPT_FOR_A_KEY = 2     # a name most of the schema keeps proves nothing as a key: `created_by` needs its table in view
+TALKS_TO_HUB = re.compile(
+    r"/api/v2/|\bHUB_[A-Z_]+\b|[\"'`$(;&|][ \t]*hub[ \t]|^[ \t]*hub[ \t]|\[[ \t\n]*[\"']hub[\"']", re.M
+)
+MOST_KEPT_FOR_A_KEY = 2  # a name most of the schema keeps proves nothing as a key: `created_by` needs its table in view
 
 
 @dataclass
 class Finding:
-    path: str = ""       # relative to the bot's folder
+    path: str = ""  # relative to the bot's folder
     line: int = 0
-    old: str = ""        # the name as written (a command's words joined)
-    new: str = ""        # the new spelling, or what replaces it ("holds")
-    kind: str = ""       # sql | key | command | removed
+    old: str = ""  # the name as written (a command's words joined)
+    new: str = ""  # the new spelling, or what replaces it ("holds")
+    kind: str = ""  # sql | key | command | removed
     fixable: bool = False
-    start: int = 0       # offsets in the file's text
+    start: int = 0  # offsets in the file's text
     end: int = 0
     replacement: str = ""
-    tables: tuple = ()   # the hub tables the rename applies to here, when it is not every table with that name
-    expect: str = field(default="", repr=False)   # the text at start:end when it was read; --fix checks it first
+    tables: tuple = ()  # the hub tables the rename applies to here, when it is not every table with that name
+    expect: str = field(default="", repr=False)  # the text at start:end when it was read; --fix checks it first
 
     def text(self):
         where = f", on {', '.join(self.tables)}" if self.tables else ""
@@ -100,6 +134,7 @@ class Names:
 
     def __init__(self, data):
         self.columns = dict(data.get("columns") or {})
+        self.table_renames = dict(data.get("table_renames") or {})
         self.tables = dict(data.get("table_columns") or {})
         self.api_kept = set(data.get("api_kept") or [])
         # `ts`, `at` and `since` are every program's words: as keys they count only with a table in view (below).
@@ -107,9 +142,16 @@ class Names:
         self.keys = {**{k: v for k, v in self.columns.items() if k.endswith("_json")}, **fields}
         self.removed_keys = dict(data.get("api_fields_removed") or {})
         # The table-specific keys that are safe to read anywhere: they are compound names few tables keep.
-        self.scoped_keys = {old for old, entry in self.tables.items()
-                            if old not in self.columns and old not in self.keys and old not in self.removed_keys
-                            and old not in self.api_kept and "_" in old and len(entry["kept_in"]) <= MOST_KEPT_FOR_A_KEY}
+        self.scoped_keys = {
+            old
+            for old, entry in self.tables.items()
+            if old not in self.columns
+            and old not in self.keys
+            and old not in self.removed_keys
+            and old not in self.api_kept
+            and "_" in old
+            and len(entry["kept_in"]) <= MOST_KEPT_FOR_A_KEY
+        }
         self.keys.update({old: " or ".join(self.tables[old]["renames"]) for old in self.scoped_keys})
         rules = [(tuple(r["old"]), tuple(r["new"]), bool(r["fixable"]), False) for r in data.get("commands") or []]
         rules += [(tuple(r["old"]), tuple(r["new"]), False, True) for r in data.get("commands_removed") or []]
@@ -117,9 +159,10 @@ class Names:
         self.exempt = [tuple(e) for e in data.get("commands_exempt") or []]
         alt = "|".join(re.escape(n) for n in sorted(set(self.keys) | set(self.removed_keys), key=len, reverse=True))
         dotted = "|".join(re.escape(k) for k in sorted(self.keys, key=len, reverse=True) if k not in AMBIGUOUS_KEYS)
-        self.quoted_key = re.compile(r"(?P<pre>\[\s*|\.get\(\s*|[{,]\s*)(?P<q>[\"'])(?P<name>" + alt + r")(?P=q)\s*(?=[\]:),}])")
+        self.quoted_key = re.compile(
+            r"(?P<pre>\[\s*|\.get\(\s*|[{,]\s*)(?P<q>[\"'])(?P<name>" + alt + r")(?P=q)\s*(?=[\]:),}])"
+        )
         self.dotted_key = re.compile(r"\.(?P<name>" + dotted + r")\b(?!\s*\()")
-
 
     def one_spelling(self, name):
         """--fix may rewrite this name: it has one new spelling everywhere and no table keeps it."""
@@ -182,7 +225,9 @@ def _hub_sql_bodies(s, line_start):
     """(start, end) of the SQL of each `hub sql` call in s."""
     for words, shell in _commands(s, line_start):
         if words[0][0] == "sql":
-            yield _sql_body(s, words[0][2] + (0 if shell else 1))   # after the word `sql`, and its closing quote in argv form
+            yield _sql_body(
+                s, words[0][2] + (0 if shell else 1)
+            )  # after the word `sql`, and its closing quote in argv form
 
 
 def _sql_strings(s, sql_lines):
@@ -234,7 +279,7 @@ def _statement_tables(stmt):
         return not m.group(2)
 
     for m in TABLE_REF.finditer(stmt):
-        if m.group(1).lower() in NOT_AN_ALIAS:    # ON CONFLICT DO UPDATE SET names no table
+        if m.group(1).lower() in NOT_AN_ALIAS:  # ON CONFLICT DO UPDATE SET names no table
             continue
         more = m if take(m) else None
         while more:
@@ -254,11 +299,11 @@ def _table_scoped_findings(body, base, names, out, in_hub_sql):
         aliases = set(OUTPUT_ALIAS.findall(stmt))
         for m in SQL_IDENT.finditer(stmt):
             name = m.group(1)
-            if name not in names.tables or m.start(1) in spots or stmt[m.end():m.end() + 1] == "(":
+            if name not in names.tables or m.start(1) in spots or stmt[m.end() : m.end() + 1] == "(":
                 continue
             if in_hub_sql and name in names.columns:
                 continue
-            qualifier = QUALIFIER.search(stmt[max(0, m.start() - 64):m.start()])
+            qualifier = QUALIFIER.search(stmt[max(0, m.start() - 64) : m.start()])
             if qualifier and qualifier.group(1).lower() != "excluded":
                 if qualifier.group(1) not in tables:
                     continue
@@ -272,9 +317,42 @@ def _table_scoped_findings(body, base, names, out, in_hub_sql):
                 continue
             new = " or ".join(hits)
             start = base + offset + m.start(1)
-            out.append(Finding(old=name, new=new, kind="sql", fixable=in_hub_sql and names.one_spelling(name),
-                               start=start, end=start + len(name), replacement=new,
-                               tables=tuple(t for moved in hits.values() for t in moved)))
+            out.append(
+                Finding(
+                    old=name,
+                    new=new,
+                    kind="sql",
+                    fixable=in_hub_sql and names.one_spelling(name),
+                    start=start,
+                    end=start + len(name),
+                    replacement=new,
+                    tables=tuple(t for moved in hits.values() for t in moved),
+                )
+            )
+
+
+def _table_findings(body, base, names, out, in_hub_sql):
+    """Each renamed table a statement names: in table position, or before a column (`market_entities.name`). In a
+    `hub sql` body the new name is the only one, so --fix may rewrite it; elsewhere the SQL may be the bot's own."""
+    for offset, stmt in _statements(body):
+        _tables, spots = _statement_tables(stmt)
+        for m in SQL_IDENT.finditer(stmt):
+            name = m.group(1)
+            if name not in names.table_renames or (m.start(1) not in spots and stmt[m.end() : m.end() + 1] != "."):
+                continue
+            new = names.table_renames[name]
+            start = base + offset + m.start(1)
+            out.append(
+                Finding(
+                    old=name,
+                    new=new,
+                    kind="sql",
+                    fixable=in_hub_sql,
+                    start=start,
+                    end=start + len(name),
+                    replacement=new,
+                )
+            )
 
 
 def _sql_findings(s, base, names, out, line_start, sql_lines):
@@ -282,22 +360,33 @@ def _sql_findings(s, base, names, out, line_start, sql_lines):
         body = s[a:b]
         for m in SQL_IDENT.finditer(body):
             name = m.group(1)
-            if name is None or name not in names.columns or body[m.end():m.end() + 1] == "(":
+            if name is None or name not in names.columns or body[m.end() : m.end() + 1] == "(":
                 continue
-            alias = bool(re.search(r"\bAS\s+$", body[:m.start()], re.I))
-            out.append(Finding(old=name, new=names.columns[name], kind="sql", fixable=not alias,
-                               start=base + a + m.start(1), end=base + a + m.end(1), replacement=names.columns[name]))
+            alias = bool(re.search(r"\bAS\s+$", body[: m.start()], re.I))
+            out.append(
+                Finding(
+                    old=name,
+                    new=names.columns[name],
+                    kind="sql",
+                    fixable=not alias,
+                    start=base + a + m.start(1),
+                    end=base + a + m.end(1),
+                    replacement=names.columns[name],
+                )
+            )
         _table_scoped_findings(body, base + a, names, out, True)
+        _table_findings(body, base + a, names, out, True)
     for a, b in _sql_strings(s, sql_lines):
         _table_scoped_findings(s[a:b], base + a, names, out, False)
+        _table_findings(s[a:b], base + a, names, out, False)
 
 
 def _command_findings(s, base, names, out, line_start):
     for words, shell in _commands(s, line_start):
         texts = tuple(w[0] for w in words)
-        if any(texts[:len(e)] == e for e in names.exempt):
+        if any(texts[: len(e)] == e for e in names.exempt):
             continue
-        hit = next((rule for rule in names.commands if texts[:len(rule[0])] == rule[0]), None)
+        hit = next((rule for rule in names.commands if texts[: len(rule[0])] == rule[0]), None)
         if not hit:
             continue
         old, new, fixable, removed = hit
@@ -306,16 +395,24 @@ def _command_findings(s, base, names, out, line_start):
             target = "hub " + " ".join(new) + " (the flags differ: hub automation create --file)"
         else:
             target = "hub " + " ".join(new)
-        out.append(Finding(old="hub " + " ".join(old), new=target, kind="removed" if removed else "command",
-                           fixable=fixable and shell, start=base + start, end=base + end,
-                           replacement=" ".join(new)))
+        out.append(
+            Finding(
+                old="hub " + " ".join(old),
+                new=target,
+                kind="removed" if removed else "command",
+                fixable=fixable and shell,
+                start=base + start,
+                end=base + end,
+                replacement=" ".join(new),
+            )
+        )
 
 
 def _key_findings(s, base, names, out):
     for m in names.quoted_key.finditer(s):
         name = m.group("name")
         if name in AMBIGUOUS_KEYS and m.group("pre")[0] in "{,":
-            continue                               # a dict literal's own key (a retry count), not a read of the API
+            continue  # a dict literal's own key (a retry count), not a read of the API
         start, end = base + m.start("name"), base + m.end("name")
         if name in names.removed_keys:
             out.append(Finding(old=name, new=names.removed_keys[name], kind="removed", start=start, end=end))
@@ -328,14 +425,22 @@ def _key_findings(s, base, names, out):
 def _key_finding(name, names, start, end, fixable):
     scoped = name in names.scoped_keys
     tables = tuple(t for moved in names.tables[name]["renames"].values() for t in moved) if scoped else ()
-    return Finding(old=name, new=names.keys[name], kind="key", fixable=fixable and not scoped,
-                   start=start, end=end, replacement=names.keys[name], tables=tables)
+    return Finding(
+        old=name,
+        new=names.keys[name],
+        kind="key",
+        fixable=fixable and not scoped,
+        start=start,
+        end=end,
+        replacement=names.keys[name],
+        tables=tables,
+    )
 
 
 def _not_a_read(s, m):
     """`task.created` in quotes is an event name, and `{{task.owner}}` a template variable: neither reads a field."""
-    before, after = s[m.start() - 1:m.start()] if m.start() else "", s[m.end():m.end() + 1]
-    return (before and before in "\"'`" and after == before) or s[max(0, m.start() - 2):m.start()] == "{{"
+    before, after = s[m.start() - 1 : m.start()] if m.start() else "", s[m.end() : m.end() + 1]
+    return (before and before in "\"'`" and after == before) or s[max(0, m.start() - 2) : m.start()] == "{{"
 
 
 def _receiver_table(receiver):
@@ -364,16 +469,26 @@ def _context_key_findings(s, base, names, out, talks_to_hub, file_tables):
         if not hits:
             continue
         group = "a" if m.group("a") else "b" if m.group("b") else "c"
-        out.append(Finding(old=name, new=" or ".join(hits), kind="key", start=base + m.start(group), end=base + m.end(group),
-                           tables=tuple(t for moved in hits.values() for t in moved)))
+        out.append(
+            Finding(
+                old=name,
+                new=" or ".join(hits),
+                kind="key",
+                start=base + m.start(group),
+                end=base + m.end(group),
+                tables=tuple(t for moved in hits.values() for t in moved),
+            )
+        )
 
 
 def scan_text(rel, text, names):
     """Every finding in one file, with its line and the text it would replace."""
     suffix = Path(rel).suffix.lower()
     found = []
-    regions = [(a, b, shell_line or suffix in SHELL_SUFFIXES, shell_line or suffix == ".sql")
-               for a, b, shell_line in _regions(text, suffix in PROSE_SUFFIXES)]
+    regions = [
+        (a, b, shell_line or suffix in SHELL_SUFFIXES, shell_line or suffix == ".sql")
+        for a, b, shell_line in _regions(text, suffix in PROSE_SUFFIXES)
+    ]
     file_tables, talks_to_hub = set(), bool(TALKS_TO_HUB.search(text))
     for a, b, line_start, sql_lines in regions:
         s = text[a:b]
@@ -390,9 +505,9 @@ def scan_text(rel, text, names):
     out, last = [], -1
     for f in found:
         if f.start < last:
-            continue                               # one spelling, one finding: the first reading wins
+            continue  # one spelling, one finding: the first reading wins
         last = f.end
-        f.path, f.line, f.expect = rel, text.count("\n", 0, f.start) + 1, text[f.start:f.end]
+        f.path, f.line, f.expect = rel, text.count("\n", 0, f.start) + 1, text[f.start : f.end]
         if rel.split("/", 1)[0] == MEMORY_DIR:
             f.fixable = False
         out.append(f)
@@ -434,8 +549,8 @@ def fix(root, findings):
         path = root / rel
         text = path.read_text(encoding="utf-8")
         for f in sorted(items, key=lambda f: -f.start):
-            if text[f.start:f.end] == f.expect:
-                text = text[:f.start] + f.replacement + text[f.end:]
+            if text[f.start : f.end] == f.expect:
+                text = text[: f.start] + f.replacement + text[f.end :]
                 done += 1
         path.write_text(text, encoding="utf-8")
     return done
@@ -444,11 +559,14 @@ def fix(root, findings):
 def command(target, fix_it, workspace, names=None):
     """`hub bot check-names <target>`: print each finding and return 0 when none is left, else 1."""
     from clients import manifest
+
     folder = Path(target)
     if not folder.is_dir():
         if not workspace:
-            print(f"hub bot check-names: {target} is not a folder, and HUB_WORKSPACE is not set to find a bot by slug",
-                  file=sys.stderr)
+            print(
+                f"hub bot check-names: {target} is not a folder, and HUB_WORKSPACE is not set to find a bot by slug",
+                file=sys.stderr,
+            )
             return 1
         folder = manifest.repo_dir(Path(workspace), target)
     if not folder.is_dir():

@@ -1,4 +1,5 @@
 """Retired importers disappear from setup while old data and authorized clients remain compatible."""
+
 import json
 
 import pytest
@@ -8,18 +9,32 @@ from backend.tests.test_api import api, headers, post, runner  # noqa: F401
 
 
 def historical_meeting(api, machine):
-    return post(api, "meetings/import", {"source": "fireflies", "external_id": "historical-1",
-                "title": "Historical meeting", "transcript": "Sam: Preserve the recording.",
-                "notes": "Original shared notes", "owner_email": "ben@acme.example",
-                "media_url": "https://example.com/recording/historical-1"}, machine["token"])
+    return post(
+        api,
+        "meetings/import",
+        {
+            "source": "fireflies",
+            "external_id": "historical-1",
+            "title": "Historical meeting",
+            "transcript": "Sam: Preserve the recording.",
+            "notes": "Original shared notes",
+            "owner_email": "ben@acme.example",
+            "media_url": "https://example.com/recording/historical-1",
+        },
+        machine["token"],
+    )
 
 
 def persisted_setting(api, machine):
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO meeting_importers VALUES(?,?,?,?,?)",
-                  ("fireflies", 1, machine["runner_id"], "human:ana", H.now()))
-        c.execute("INSERT INTO service_health(service,last_succeeded_at,last_error,detail) VALUES(?,?,NULL,?)",
-                  ("recording:fireflies", H.now(), json.dumps({"imported_total": 7})))
+        c.execute(
+            "INSERT INTO meeting_importers VALUES(?,?,?,?,?)",
+            ("fireflies", 1, machine["runner_id"], "human:ana", H.now()),
+        )
+        c.execute(
+            "INSERT INTO service_health(service,last_succeeded_at,last_error,detail) VALUES(?,?,NULL,?)",
+            ("recording:fireflies", H.now(), json.dumps({"imported_total": 7})),
+        )
 
 
 def test_historical_source_still_deduplicates_and_preserves_versions_and_files(api):
@@ -28,8 +43,11 @@ def test_historical_source_still_deduplicates_and_preserves_versions_and_files(a
     again = historical_meeting(api, machine)
     assert first["id"] == again["id"] and not again["changed"]
     rid = first["id"]
-    attached = api.post("/api/meetings/" + rid + "/attachments", headers=headers("ben-test"),
-                        files={"files": ("history.txt", b"Historical attachment", "text/plain")})
+    attached = api.post(
+        "/api/meetings/" + rid + "/attachments",
+        headers=headers("ben-test"),
+        files={"files": ("history.txt", b"Historical attachment", "text/plain")},
+    )
     assert attached.status_code == 200, attached.text
     before = api.get("/api/meetings/" + rid, headers=headers("ben-test")).json()
     persisted_setting(api, machine)

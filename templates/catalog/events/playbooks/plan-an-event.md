@@ -14,7 +14,7 @@ Done when: the brief is at `reports/<event>/brief.md` with goal, budget and foll
     hub task show <id>
 
 Find the event, the date and who asked. If the goal or the budget is unknown, propose defaults from
-`knowledge/rules.md` and past results, and ask once with `hub task ask <id>`.
+`knowledge/rules.md` and past results, and ask once with `hub task question "<question>" --on <person> --parent <id>`.
 
 ## 2. Decide whether it is worth it
 

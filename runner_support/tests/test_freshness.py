@@ -1,4 +1,5 @@
 """A helper job exits, with status 0 for the supervisor to restart it, when the checkout's revision changes."""
+
 import threading
 
 from runner_support import freshness
@@ -6,8 +7,13 @@ from runner_support.importers import service as importers_service
 
 
 def watch(heads, supervised=True, lines=None):
-    return freshness.CodeWatch("Tico test", every=0, head=lambda: heads[0], supervised=lambda: supervised,
-                               say=(lines if lines is not None else []).append)
+    return freshness.CodeWatch(
+        "Tico test",
+        every=0,
+        head=lambda: heads[0],
+        supervised=lambda: supervised,
+        say=(lines if lines is not None else []).append,
+    )
 
 
 def test_a_new_revision_is_stale_once_and_says_so():
@@ -24,7 +30,7 @@ def test_nothing_exits_without_a_supervisor_or_when_the_revision_is_unknown():
     unknown = watch(heads)
     heads[0] = "b" * 40
     assert not unsupervised.stale()
-    heads[0] = ""                                   # git failed: keep running
+    heads[0] = ""  # git failed: keep running
     assert not unknown.stale()
 
 
@@ -46,5 +52,5 @@ def test_the_importers_loop_returns_when_the_checkout_moves(monkeypatch):
     service = object.__new__(importers_service.ImporterService)
     service.stop, ticks = threading.Event(), []
     service.tick = lambda: ticks.append(1)
-    service.run()                                   # returns instead of looping: exit status 0
+    service.run()  # returns instead of looping: exit status 0
     assert ticks and not service.stop.is_set()

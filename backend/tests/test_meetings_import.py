@@ -1,4 +1,5 @@
 """One import API for every source (`POST /api/v2/meetings/import`, docs/meetings.md)."""
+
 from backend.tests.test_api import api, headers, runner, setup_attempt  # noqa: F401
 from backend.tests.test_media import import_meeting, media_post
 
@@ -15,7 +16,14 @@ def test_the_same_source_and_id_updates_the_meeting_and_never_duplicates_it(api)
     first = import_meeting(api, transcript=TEXT, source="granola", external_id="g-1", title="Pricing")
     again = import_meeting(api, transcript=TEXT, source="granola", external_id="g-1", title="Pricing")
     assert again["id"] == first["id"] and again["existing"] is True and again["changed"] is False
-    changed = import_meeting(api, transcript="Ana: Changed our mind.", source="granola", external_id="g-1", title="Pricing", notes="## Decision\nHold.")
+    changed = import_meeting(
+        api,
+        transcript="Ana: Changed our mind.",
+        source="granola",
+        external_id="g-1",
+        title="Pricing",
+        notes="## Decision\nHold.",
+    )
     assert changed["id"] == first["id"] and changed["changed"] is True and changed["turns"] == 1
     record = meeting(api, first["id"])
     assert record["title"] == "Pricing" and [t["text"] for t in record["turns"]] == ["Changed our mind."]
@@ -33,8 +41,12 @@ def test_the_same_source_and_id_updates_the_meeting_and_never_duplicates_it(api)
 
 
 def test_participants_are_linked_to_the_roster_and_a_private_meeting_stays_theirs(api):
-    made = import_meeting(api, "ben-test", participants=["Cara@Acme.example", "Ana", {"name": "Dana Reyes", "email": "dana@example.com"}],
-                          private=True)
+    made = import_meeting(
+        api,
+        "ben-test",
+        participants=["Cara@Acme.example", "Ana", {"name": "Dana Reyes", "email": "dana@example.com"}],
+        private=True,
+    )
     record = meeting(api, made["id"], "ben-test")
     people = {p["email"] or p["name"]: p for p in record["participants"]}
     assert people["cara@acme.example"]["person_id"] == "cara" and people["cara@acme.example"]["name"]
@@ -50,16 +62,26 @@ def test_a_bot_cannot_import_and_a_machine_files_only_for_a_person_on_the_roster
     _, _, attempt = setup_attempt(api)
     assert api.post("/api/v2/meetings/import", json=body, headers=headers(attempt["token"])).status_code == 403
     machine, elsewhere = runner(api), runner(api, "ben", "Ben test Mac")
-    for token, extra, status in ((machine["token"], {}, 404), (machine["token"], {"owner_email": "nobody@example.com"}, 404),
-                                 (elsewhere["token"], {"owner_email": "ben@acme.example"}, 403)):
+    for token, extra, status in (
+        (machine["token"], {}, 404),
+        (machine["token"], {"owner_email": "nobody@example.com"}, 404),
+        (elsewhere["token"], {"owner_email": "ben@acme.example"}, 403),
+    ):
         assert api.post("/api/v2/meetings/import", json={**body, **extra}, headers=headers(token)).status_code == status
-    made = api.post("/api/v2/meetings/import", json={**body, "owner_email": "Ben@Acme.example"}, headers=headers(machine["token"])).json()
+    made = api.post(
+        "/api/v2/meetings/import", json={**body, "owner_email": "Ben@Acme.example"}, headers=headers(machine["token"])
+    ).json()
     record = meeting(api, made["id"], "ben-test")
-    assert record["owner"] == "ben@acme.example" and record["can_edit"] is True and record["uploaded_by"] == machine["runner_id"]
+    assert (
+        record["owner"] == "ben@acme.example"
+        and record["can_edit"] is True
+        and record["uploaded_by"] == machine["runner_id"]
+    )
     # It is the same meeting whichever door files it: the key is the person's, not the machine's.
-    again = import_meeting(api, "ben-test", title="From a machine", transcript=TEXT, source="granola", external_id="g-7")
+    again = import_meeting(
+        api, "ben-test", title="From a machine", transcript=TEXT, source="granola", external_id="g-7"
+    )
     assert again["id"] == made["id"] and again["existing"] is True
     # A person files only their own, and Close is filed by its own worker.
     assert import_meeting(api, "ben-test", owner_email="ana@acme.example", expected=403)
     assert "own importer" in import_meeting(api, source="close", expected=422)["error"]["detail"]
-

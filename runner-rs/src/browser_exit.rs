@@ -88,25 +88,77 @@ const V4: &[([u8; 4], u8, &str)] = &[
 /// as its global entries are anycast infrastructure), the transition prefixes whose IPv4 address is checked instead,
 /// and everything outside 2000::/3, the only space allocated for global unicast. First match wins.
 const V6: &[([u16; 8], u8, Rule)] = &[
-    ([0, 0, 0, 0, 0, 0, 0, 0], 128, Rule::Refuse("an unspecified address")),
-    ([0, 0, 0, 0, 0, 0, 0, 1], 128, Rule::Refuse("a loopback address")),
+    (
+        [0, 0, 0, 0, 0, 0, 0, 0],
+        128,
+        Rule::Refuse("an unspecified address"),
+    ),
+    (
+        [0, 0, 0, 0, 0, 0, 0, 1],
+        128,
+        Rule::Refuse("a loopback address"),
+    ),
     ([0x64, 0xff9b, 0, 0, 0, 0, 0, 0], 96, Rule::Nat64),
-    ([0x64, 0xff9b, 1, 0, 0, 0, 0, 0], 48, Rule::Refuse("a local NAT64 address")),
-    ([0x100, 0, 0, 0, 0, 0, 0, 0], 64, Rule::Refuse("a discard address")),
-    ([0x2001, 0, 0, 0, 0, 0, 0, 0], 32, Rule::Refuse("a Teredo address")),
-    ([0x2001, 0xdb8, 0, 0, 0, 0, 0, 0], 32, Rule::Refuse("a documentation address")),
-    ([0x2001, 0, 0, 0, 0, 0, 0, 0], 23, Rule::Refuse("a protocol assignment address")),
+    (
+        [0x64, 0xff9b, 1, 0, 0, 0, 0, 0],
+        48,
+        Rule::Refuse("a local NAT64 address"),
+    ),
+    (
+        [0x100, 0, 0, 0, 0, 0, 0, 0],
+        64,
+        Rule::Refuse("a discard address"),
+    ),
+    (
+        [0x2001, 0, 0, 0, 0, 0, 0, 0],
+        32,
+        Rule::Refuse("a Teredo address"),
+    ),
+    (
+        [0x2001, 0xdb8, 0, 0, 0, 0, 0, 0],
+        32,
+        Rule::Refuse("a documentation address"),
+    ),
+    (
+        [0x2001, 0, 0, 0, 0, 0, 0, 0],
+        23,
+        Rule::Refuse("a protocol assignment address"),
+    ),
     ([0x2002, 0, 0, 0, 0, 0, 0, 0], 16, Rule::SixToFour),
-    ([0x3fff, 0, 0, 0, 0, 0, 0, 0], 20, Rule::Refuse("a documentation address")),
-    ([0xfc00, 0, 0, 0, 0, 0, 0, 0], 7, Rule::Refuse("a unique local address")),
-    ([0xfe80, 0, 0, 0, 0, 0, 0, 0], 10, Rule::Refuse("a link-local address")),
-    ([0xfec0, 0, 0, 0, 0, 0, 0, 0], 10, Rule::Refuse("a site-local address")),
-    ([0xff00, 0, 0, 0, 0, 0, 0, 0], 8, Rule::Refuse("a multicast address")),
+    (
+        [0x3fff, 0, 0, 0, 0, 0, 0, 0],
+        20,
+        Rule::Refuse("a documentation address"),
+    ),
+    (
+        [0xfc00, 0, 0, 0, 0, 0, 0, 0],
+        7,
+        Rule::Refuse("a unique local address"),
+    ),
+    (
+        [0xfe80, 0, 0, 0, 0, 0, 0, 0],
+        10,
+        Rule::Refuse("a link-local address"),
+    ),
+    (
+        [0xfec0, 0, 0, 0, 0, 0, 0, 0],
+        10,
+        Rule::Refuse("a site-local address"),
+    ),
+    (
+        [0xff00, 0, 0, 0, 0, 0, 0, 0],
+        8,
+        Rule::Refuse("a multicast address"),
+    ),
     ([0x2000, 0, 0, 0, 0, 0, 0, 0], 3, Rule::Refuse("")), // global unicast: no rule, see refused_v6
 ];
 
 fn in_prefix(value: u128, base: u128, len: u8, bits: u32) -> bool {
-    let mask = if len == 0 { 0 } else { u128::MAX << (bits - len as u32) };
+    let mask = if len == 0 {
+        0
+    } else {
+        u128::MAX << (bits - len as u32)
+    };
     value & mask == base & mask
 }
 
@@ -133,12 +185,15 @@ fn canonical(ip: IpAddr) -> IpAddr {
 
 fn refused_v4(ip: Ipv4Addr) -> Option<&'static str> {
     let value = u32::from(ip) as u128;
-    V4.iter().find(|(base, len, _)| in_prefix(value, u32::from(Ipv4Addr::from(*base)) as u128, *len, 32)).map(|r| r.2)
+    V4.iter()
+        .find(|(base, len, _)| in_prefix(value, u32::from(Ipv4Addr::from(*base)) as u128, *len, 32))
+        .map(|r| r.2)
 }
 
 fn v6_rule(ip: Ipv6Addr) -> Option<&'static ([u16; 8], u8, Rule)> {
     let value = u128::from(ip);
-    V6.iter().find(|(base, len, _)| in_prefix(value, u128::from(Ipv6Addr::from(*base)), *len, 128))
+    V6.iter()
+        .find(|(base, len, _)| in_prefix(value, u128::from(Ipv6Addr::from(*base)), *len, 128))
 }
 
 /// The IPv4 address a connection to `ip` reaches: itself, or the one an IPv4-mapped, NAT64 (64:ff9b::/96) or 6to4
@@ -159,7 +214,9 @@ fn carried_v4(ip: IpAddr) -> Option<Ipv4Addr> {
 fn refused_v6(ip: Ipv6Addr, deny: &[IpAddr]) -> Option<&'static str> {
     match v6_rule(ip).map(|r| (r.1, r.2)) {
         // A transition address is the IPv4 address it reaches: every IPv4 rule and this computer's own apply.
-        Some((_, Rule::Nat64 | Rule::SixToFour)) => refused(IpAddr::V4(carried_v4(IpAddr::V6(ip))?), deny),
+        Some((_, Rule::Nat64 | Rule::SixToFour)) => {
+            refused(IpAddr::V4(carried_v4(IpAddr::V6(ip))?), deny)
+        }
         Some((3, _)) => None,
         Some((_, Rule::Refuse(why))) => Some(why),
         None => Some("an unallocated address"),
@@ -191,7 +248,13 @@ fn remember_seen(addresses: &[IpAddr]) {
 fn hello_seen(text: &str) -> Option<Vec<IpAddr>> {
     let v: Value = serde_json::from_str(text).ok()?;
     (v["op"] == "hello").then(|| {
-        v["seen"].as_array().into_iter().flatten().take(4).filter_map(|ip| ip.as_str()?.parse().ok()).collect()
+        v["seen"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .take(4)
+            .filter_map(|ip| ip.as_str()?.parse().ok())
+            .collect()
     })
 }
 
@@ -221,19 +284,30 @@ async fn probe_seen(client: &Client) {
 
 /// Whether a public IPv4 address was learned.
 async fn probe_families(client: &Client) -> bool {
-    let Ok(url) = reqwest::Url::parse(&client.url) else { return false };
-    let (Some(host), Some(port)) = (url.host_str(), url.port_or_known_default()) else { return false };
-    let host = host.trim_start_matches('[').trim_end_matches(']').to_string();
-    let Ok(token) = bearer(&client.token) else { return false };
-    let addrs: Vec<SocketAddr> = match tokio::time::timeout(DIAL, tokio::net::lookup_host((host.as_str(), port))).await
-    {
-        Ok(Ok(found)) => found.collect(),
-        _ => return false,
+    let Ok(url) = reqwest::Url::parse(&client.url) else {
+        return false;
     };
+    let (Some(host), Some(port)) = (url.host_str(), url.port_or_known_default()) else {
+        return false;
+    };
+    let host = host
+        .trim_start_matches('[')
+        .trim_end_matches(']')
+        .to_string();
+    let Ok(token) = bearer(&client.token) else {
+        return false;
+    };
+    let addrs: Vec<SocketAddr> =
+        match tokio::time::timeout(DIAL, tokio::net::lookup_host((host.as_str(), port))).await {
+            Ok(Ok(found)) => found.collect(),
+            _ => return false,
+        };
     let endpoint = format!("{}{SEEN_PATH}", client.url.trim_end_matches('/'));
     let mut learned = false;
     for ipv4 in [true, false] {
-        let Some(addr) = addrs.iter().find(|a| a.is_ipv4() == ipv4) else { continue };
+        let Some(addr) = addrs.iter().find(|a| a.is_ipv4() == ipv4) else {
+            continue;
+        };
         // Directly, as the link and the sites are dialled: through a proxy the relay would see the proxy's address.
         let Ok(http) = crate::tls::http_builder()
             .no_proxy()
@@ -249,7 +323,10 @@ async fn probe_families(client: &Client) -> bool {
             Ok(r) if r.status().is_success() => r.json::<Value>().await.unwrap_or_default(),
             _ => continue,
         };
-        if let Some(ip) = answer["seen"].as_str().and_then(|ip| ip.parse::<IpAddr>().ok()) {
+        if let Some(ip) = answer["seen"]
+            .as_str()
+            .and_then(|ip| ip.parse::<IpAddr>().ok())
+        {
             remember_seen(&[ip]);
             // Only a public IPv4 address is the one a site could reach this computer at. A private one (a hub
             // reached over the home network) leaves the router's public address unknown.
@@ -284,7 +361,10 @@ struct Iface {
 
 impl Net {
     fn exact(addr: IpAddr) -> Net {
-        Net { addr, len: if addr.is_ipv4() { 32 } else { 128 } }
+        Net {
+            addr,
+            len: if addr.is_ipv4() { 32 } else { 128 },
+        }
     }
 
     /// The on-link scope of an interface address. IPv4: its network when that is /16 or narrower; a wider one is a
@@ -301,8 +381,12 @@ impl Net {
 
     fn contains(&self, ip: IpAddr) -> bool {
         match (self.addr, ip) {
-            (IpAddr::V4(net), IpAddr::V4(ip)) => in_prefix(u32::from(ip) as u128, u32::from(net) as u128, self.len, 32),
-            (IpAddr::V6(net), IpAddr::V6(ip)) => in_prefix(u128::from(ip), u128::from(net), self.len, 128),
+            (IpAddr::V4(net), IpAddr::V4(ip)) => {
+                in_prefix(u32::from(ip) as u128, u32::from(net) as u128, self.len, 32)
+            }
+            (IpAddr::V6(net), IpAddr::V6(ip)) => {
+                in_prefix(u128::from(ip), u128::from(net), self.len, 128)
+            }
             _ => false,
         }
     }
@@ -370,8 +454,15 @@ async fn mac_gateways() -> Vec<IpAddr> {
         }
     }
     let mut gws = Vec::new();
-    for args in [&["-n", "get", "default"][..], &["-n", "get", "-inet6", "default"][..]] {
-        let run = tokio::process::Command::new("/sbin/route").args(args).env_clear().kill_on_drop(true).output();
+    for args in [
+        &["-n", "get", "default"][..],
+        &["-n", "get", "-inet6", "default"][..],
+    ] {
+        let run = tokio::process::Command::new("/sbin/route")
+            .args(args)
+            .env_clear()
+            .kill_on_drop(true)
+            .output();
         if let Ok(Ok(out)) = tokio::time::timeout(Duration::from_secs(2), run).await {
             gws.extend(route_gateway(&String::from_utf8_lossy(&out.stdout)));
         }
@@ -382,7 +473,10 @@ async fn mac_gateways() -> Vec<IpAddr> {
 
 /// The `gateway:` line of `route -n get` output, when it is an address (not `link#N`); an IPv6 zone is dropped.
 fn route_gateway(out: &str) -> Option<IpAddr> {
-    let value = out.lines().find_map(|line| line.trim().strip_prefix("gateway:"))?.trim();
+    let value = out
+        .lines()
+        .find_map(|line| line.trim().strip_prefix("gateway:"))?
+        .trim();
     value.split('%').next()?.parse().ok()
 }
 
@@ -420,10 +514,12 @@ unsafe fn sockaddr_ip(sa: *const libc::sockaddr) -> Option<IpAddr> {
         return None;
     }
     match (*sa).sa_family as i32 {
-        libc::AF_INET => {
-            Some(IpAddr::V4(Ipv4Addr::from(u32::from_be((*(sa as *const libc::sockaddr_in)).sin_addr.s_addr))))
-        }
-        libc::AF_INET6 => Some(IpAddr::V6(Ipv6Addr::from((*(sa as *const libc::sockaddr_in6)).sin6_addr.s6_addr))),
+        libc::AF_INET => Some(IpAddr::V4(Ipv4Addr::from(u32::from_be(
+            (*(sa as *const libc::sockaddr_in)).sin_addr.s_addr,
+        )))),
+        libc::AF_INET6 => Some(IpAddr::V6(Ipv6Addr::from(
+            (*(sa as *const libc::sockaddr_in6)).sin6_addr.s6_addr,
+        ))),
         _ => None,
     }
 }
@@ -467,7 +563,9 @@ pub fn valid_host(host: &str) -> bool {
     !host.is_empty()
         && host.len() <= 253
         && (host.parse::<IpAddr>().is_ok()
-            || host.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'-' | b'_')))
+            || host
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'-' | b'_')))
 }
 
 /// Resolve `host` on this computer and dial it, only on 80 or 443 and only at a public address that is not this
@@ -479,17 +577,21 @@ pub async fn dial(host: &str, port: u16) -> Result<TcpStream, String> {
     if !valid_host(host) {
         return Err("not a hostname".into());
     }
-    let resolved: Vec<SocketAddr> = tokio::time::timeout(DIAL, tokio::net::lookup_host((host, port)))
-        .await
-        .map_err(|_| format!("{host} did not resolve in time"))?
-        .map_err(|_| format!("{host} does not resolve"))?
-        .collect();
+    let resolved: Vec<SocketAddr> =
+        tokio::time::timeout(DIAL, tokio::net::lookup_host((host, port)))
+            .await
+            .map_err(|_| format!("{host} did not resolve in time"))?
+            .map_err(|_| format!("{host} does not resolve"))?
+            .collect();
     let (deny, nets) = (own_and_seen(), own_networks().await);
     let mut why = None;
     let allowed: Vec<SocketAddr> = resolved
         .into_iter()
         .filter(|addr| {
-            match refused(addr.ip(), &deny).or_else(|| on_link(addr.ip(), &nets)).or_else(|| ipv4_unknown(addr.ip())) {
+            match refused(addr.ip(), &deny)
+                .or_else(|| on_link(addr.ip(), &nets))
+                .or_else(|| ipv4_unknown(addr.ip()))
+            {
                 Some(reason) => {
                     why.get_or_insert(reason);
                     false
@@ -528,13 +630,23 @@ fn ws_origin(hub: &str) -> Result<String, String> {
 /// A websocket to the hub at `path`; `authorized` sends the runner's token (the exit's link), a tunnel end carries
 /// its one-use ticket instead.
 async fn connect(client: &Client, path: &str, authorized: bool) -> Result<Socket, String> {
-    let mut request = format!("{}{path}", ws_origin(&client.url)?).into_client_request().map_err(|e| e.to_string())?;
+    let mut request = format!("{}{path}", ws_origin(&client.url)?)
+        .into_client_request()
+        .map_err(|e| e.to_string())?;
     let headers = request.headers_mut();
     if authorized {
         let token = bearer(&client.token).map_err(|e| e.detail)?;
-        headers.insert("Authorization", format!("Bearer {token}").parse().map_err(|_| "bad token".to_string())?);
+        headers.insert(
+            "Authorization",
+            format!("Bearer {token}")
+                .parse()
+                .map_err(|_| "bad token".to_string())?,
+        );
     }
-    headers.insert("User-Agent", format!("Tico-Client/{CLIENT_VERSION}").parse().unwrap());
+    headers.insert(
+        "User-Agent",
+        format!("Tico-Client/{CLIENT_VERSION}").parse().unwrap(),
+    );
     let connector = Some(crate::tls::websocket_connector());
     let (ws, _) = tokio::time::timeout(
         Duration::from_secs(15),
@@ -561,7 +673,11 @@ async fn pump(tcp: TcpStream, ws: Socket) {
             match tcp_in.read(&mut buf).await {
                 Ok(0) | Err(_) => break,
                 Ok(n) => {
-                    if to_hub.send(Message::Binary(buf[..n].to_vec().into())).await.is_err() {
+                    if to_hub
+                        .send(Message::Binary(buf[..n].to_vec().into()))
+                        .await
+                        .is_err()
+                    {
                         break;
                     }
                 }
@@ -595,7 +711,10 @@ struct Shared {
 
 fn shared() -> &'static Shared {
     static SHARED: OnceLock<Shared> = OnceLock::new();
-    SHARED.get_or_init(|| Shared { sharing: AtomicBool::new(false), wake: Notify::new() })
+    SHARED.get_or_init(|| Shared {
+        sharing: AtomicBool::new(false),
+        wake: Notify::new(),
+    })
 }
 
 static CLIENT: OnceLock<Client> = OnceLock::new();
@@ -629,7 +748,9 @@ async fn link_loop(client: Client) {
             Ok(()) => said = None,
             Err(e) => {
                 if said.as_ref() != Some(&e) {
-                    log(&format!("Tico runner: browser exit link failed ({e}); will retry"));
+                    log(&format!(
+                        "Tico runner: browser exit link failed ({e}); will retry"
+                    ));
                     said = Some(e);
                 }
             }
@@ -661,13 +782,18 @@ impl Open {
         let ticket = v["ticket"].as_str()?.to_string();
         let ok_id = !id.is_empty()
             && id.len() <= 128
-            && id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_');
+            && id
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_');
         let ok_ticket = ticket.len() == 64 && ticket.bytes().all(|b| b.is_ascii_hexdigit());
         (v["op"] == "open" && ok_id && ok_ticket).then(|| Open {
             id,
             ticket,
             host: text_of(&v["host"]),
-            port: v["port"].as_u64().and_then(|p| u16::try_from(p).ok()).unwrap_or(0),
+            port: v["port"]
+                .as_u64()
+                .and_then(|p| u16::try_from(p).ok())
+                .unwrap_or(0),
         })
     }
 }
@@ -676,7 +802,8 @@ async fn run_link(client: &Client) -> Result<(), String> {
     let mut ws = connect(client, "/api/v2/runners/me/browser-exit/ws", true).await?;
     let room = Arc::new(Semaphore::new(EXIT_TUNNELS));
     let s = shared();
-    let mut probe = tokio::time::interval_at(tokio::time::Instant::now() + PROBE_EVERY, PROBE_EVERY);
+    let mut probe =
+        tokio::time::interval_at(tokio::time::Instant::now() + PROBE_EVERY, PROBE_EVERY);
     loop {
         tokio::select! {
             _ = probe.tick() => {
@@ -710,7 +837,10 @@ async fn run_link(client: &Client) -> Result<(), String> {
 
 /// Dial the site and join the tunnel at the relay at once; the first message says whether the site was reached.
 async fn serve(client: &Client, open: Open, room: bool) {
-    let path = format!("/api/v2/runners/me/browser-exit/tunnels/{}/exit?ticket={}", open.id, open.ticket);
+    let path = format!(
+        "/api/v2/runners/me/browser-exit/tunnels/{}/exit?ticket={}",
+        open.id, open.ticket
+    );
     let target = async {
         if room {
             dial(&open.host, open.port).await
@@ -722,12 +852,20 @@ async fn serve(client: &Client, open: Open, room: bool) {
     let Ok(mut socket) = socket else { return };
     match target {
         Ok(tcp) => {
-            if socket.send(Message::Text(r#"{"ok":true}"#.into())).await.is_ok() {
+            if socket
+                .send(Message::Text(r#"{"ok":true}"#.into()))
+                .await
+                .is_ok()
+            {
                 pump(tcp, socket).await;
             }
         }
         Err(why) => {
-            let _ = socket.send(Message::Text(json!({"ok": false, "error": why}).to_string().into())).await;
+            let _ = socket
+                .send(Message::Text(
+                    json!({"ok": false, "error": why}).to_string().into(),
+                ))
+                .await;
             let _ = socket.close(None).await;
         }
     }
@@ -770,14 +908,18 @@ impl Proxy {
     fn note(&self, bot: &str, error: Option<String>) {
         let mut last = self.last_error.lock().unwrap();
         if let Some(e) = error.as_ref().filter(|e| last.as_ref() != Some(*e)) {
-            log(&format!("Tico runner: {bot}'s browser exit refused a connection: {e}"));
+            log(&format!(
+                "Tico runner: {bot}'s browser exit refused a connection: {e}"
+            ));
         }
         *last = error;
     }
 
     /// Whether a connection from `peer_uid` may use this proxy.
     fn admits(&self, peer_uid: Option<u32>, isolation: bool) -> bool {
-        !isolation || peer_uid.is_some_and(|uid| self.users.lock().unwrap().get(&uid).is_some_and(|n| *n > 0))
+        !isolation
+            || peer_uid
+                .is_some_and(|uid| self.users.lock().unwrap().get(&uid).is_some_and(|n| *n > 0))
     }
 }
 
@@ -849,7 +991,11 @@ pub fn keep_proxies(bots: &[String], asked: Instant) {
     }
 }
 
-fn stale_proxies(all: &HashMap<String, Arc<Proxy>>, bots: &[String], asked: Instant) -> Vec<(String, Arc<Proxy>)> {
+fn stale_proxies(
+    all: &HashMap<String, Arc<Proxy>>,
+    bots: &[String],
+    asked: Instant,
+) -> Vec<(String, Arc<Proxy>)> {
     all.iter()
         .filter(|(bot, proxy)| *proxy.used.lock().unwrap() < asked && !bots.contains(bot))
         .map(|(bot, proxy)| (bot.clone(), proxy.clone()))
@@ -877,22 +1023,44 @@ pub async fn turn_proxy(bot: &str, attempt: &Value) -> Result<Option<Admission>,
         }
         None => return Ok(None),
     };
-    let name = Some(text_of(&exit["name"])).filter(|n| !n.is_empty()).unwrap_or_else(|| "its exit computer".into());
-    let failed = |why: String| format!("This bot browses through {name}, but its browser proxy could not start: {why}");
-    let client = CLIENT.get().ok_or_else(|| failed("the runner is still starting".into()))?.clone();
+    let name = Some(text_of(&exit["name"]))
+        .filter(|n| !n.is_empty())
+        .unwrap_or_else(|| "its exit computer".into());
+    let failed = |why: String| {
+        format!("This bot browses through {name}, but its browser proxy could not start: {why}")
+    };
+    let client = CLIENT
+        .get()
+        .ok_or_else(|| failed("the runner is still starting".into()))?
+        .clone();
     let existing = proxies().lock().unwrap().get(bot).cloned();
     let proxy = match existing {
         Some(p) => p,
         None => {
             let listener = match TcpListener::bind(("127.0.0.1", preferred_port(bot))).await {
                 Ok(l) => l,
-                Err(_) => TcpListener::bind(("127.0.0.1", 0)).await.map_err(|e| failed(e.to_string()))?,
+                Err(_) => TcpListener::bind(("127.0.0.1", 0))
+                    .await
+                    .map_err(|e| failed(e.to_string()))?,
             };
-            let port = listener.local_addr().map_err(|e| failed(e.to_string()))?.port();
+            let port = listener
+                .local_addr()
+                .map_err(|e| failed(e.to_string()))?
+                .port();
             let proxy = Arc::new(Proxy::new(port, name.clone()));
-            let kept = proxies().lock().unwrap().entry(bot.to_string()).or_insert_with(|| proxy.clone()).clone();
+            let kept = proxies()
+                .lock()
+                .unwrap()
+                .entry(bot.to_string())
+                .or_insert_with(|| proxy.clone())
+                .clone();
             if Arc::ptr_eq(&kept, &proxy) {
-                let task = tokio::spawn(serve_proxy(listener, bot.to_string(), proxy.clone(), client));
+                let task = tokio::spawn(serve_proxy(
+                    listener,
+                    bot.to_string(),
+                    proxy.clone(),
+                    client,
+                ));
                 *proxy.task.lock().unwrap() = Some(task.abort_handle());
             }
             kept
@@ -901,12 +1069,18 @@ pub async fn turn_proxy(bot: &str, attempt: &Value) -> Result<Option<Admission>,
     *proxy.exit.lock().unwrap() = name;
     *proxy.used.lock().unwrap() = Instant::now();
     let url = format!("http://127.0.0.1:{}", proxy.port);
-    Ok(Some(Admission { proxy, leased: Vec::new(), url }))
+    Ok(Some(Admission {
+        proxy,
+        leased: Vec::new(),
+        url,
+    }))
 }
 
 async fn serve_proxy(listener: TcpListener, bot: String, proxy: Arc<Proxy>, client: Client) {
     loop {
-        let Ok(permit) = proxy.room.clone().acquire_owned().await else { return };
+        let Ok(permit) = proxy.room.clone().acquire_owned().await else {
+            return;
+        };
         let Ok((conn, peer)) = listener.accept().await else {
             tokio::time::sleep(Duration::from_millis(100)).await;
             continue;
@@ -915,12 +1089,21 @@ async fn serve_proxy(listener: TcpListener, bot: String, proxy: Arc<Proxy>, clie
         let (bot, proxy, client) = (bot.clone(), proxy.clone(), client.clone());
         tokio::spawn(async move {
             let isolation = crate::isolation::enabled();
-            let uid = if isolation { local.and_then(|local| peer_uid(local, peer)) } else { None };
+            let uid = if isolation {
+                local.and_then(|local| peer_uid(local, peer))
+            } else {
+                None
+            };
             if proxy.admits(uid, isolation) {
                 handle(conn, bot, proxy, client).await;
             } else {
                 let mut conn = conn;
-                reply(&mut conn, 403, &format!("This is {bot}'s browser exit; only its own turns may use it")).await;
+                reply(
+                    &mut conn,
+                    403,
+                    &format!("This is {bot}'s browser exit; only its own turns may use it"),
+                )
+                .await;
             }
             drop(permit);
         });
@@ -940,13 +1123,19 @@ fn peer_uid(local: SocketAddr, peer: SocketAddr) -> Option<u32> {
 
 fn uid_in_table(table: &str, local: SocketAddr, peer: SocketAddr) -> Option<u32> {
     let hex = |addr: SocketAddr| match addr.ip() {
-        IpAddr::V4(v4) => Some(format!("{:08X}:{:04X}", u32::from_ne_bytes(v4.octets()), addr.port())),
+        IpAddr::V4(v4) => Some(format!(
+            "{:08X}:{:04X}",
+            u32::from_ne_bytes(v4.octets()),
+            addr.port()
+        )),
         IpAddr::V6(_) => None,
     };
     let (theirs, ours) = (hex(peer)?, hex(local)?);
     table.lines().skip(1).find_map(|line| {
         let fields: Vec<&str> = line.split_whitespace().collect();
-        (fields.len() > 7 && fields[1] == theirs && fields[2] == ours).then(|| fields[7].parse().ok()).flatten()
+        (fields.len() > 7 && fields[1] == theirs && fields[2] == ours)
+            .then(|| fields[7].parse().ok())
+            .flatten()
     })
 }
 
@@ -994,10 +1183,19 @@ fn parse(head: &[u8]) -> Result<Request, (u16, String)> {
         (Some(m), Some(t), Some(v), None) if v.starts_with("HTTP/1.") => (m, t, v),
         _ => return Err((400, "not an HTTP request".into())),
     };
-    let bad_port = || (403, "only ports 80 and 443 go through a browser exit".to_string());
+    let bad_port = || {
+        (
+            403,
+            "only ports 80 and 443 go through a browser exit".to_string(),
+        )
+    };
     if method == "CONNECT" {
         let (host, port) = host_port(target, None).ok_or((400, "not host:port".to_string()))?;
-        return if PORTS.contains(&port) { Ok(Request::Connect { host, port }) } else { Err(bad_port()) };
+        return if PORTS.contains(&port) {
+            Ok(Request::Connect { host, port })
+        } else {
+            Err(bad_port())
+        };
     }
     if target.starts_with('/') {
         return Ok(Request::Status);
@@ -1016,14 +1214,26 @@ fn parse(head: &[u8]) -> Result<Request, (u16, String)> {
     // One request per tunnel: a browser reuses a proxy connection for any host, so this one closes after it.
     let mut out = format!("{method} {path} {version}\r\n");
     for line in lines.filter(|l| !l.is_empty()) {
-        let name = line.split(':').next().unwrap_or_default().trim().to_ascii_lowercase();
-        if !matches!(name.as_str(), "proxy-connection" | "proxy-authorization" | "connection" | "keep-alive") {
+        let name = line
+            .split(':')
+            .next()
+            .unwrap_or_default()
+            .trim()
+            .to_ascii_lowercase();
+        if !matches!(
+            name.as_str(),
+            "proxy-connection" | "proxy-authorization" | "connection" | "keep-alive"
+        ) {
             out.push_str(line);
             out.push_str("\r\n");
         }
     }
     out.push_str("Connection: close\r\n\r\n");
-    Ok(Request::Plain { host, port, head: out.into_bytes() })
+    Ok(Request::Plain {
+        host,
+        port,
+        head: out.into_bytes(),
+    })
 }
 
 /// The head (through the blank line) and whatever followed it in the same reads.
@@ -1054,7 +1264,11 @@ async fn reply(conn: &mut TcpStream, code: u16, words: &str) {
         403 => "Forbidden",
         _ => "Bad Gateway",
     };
-    let header: String = words.chars().filter(|c| c.is_ascii() && !c.is_ascii_control()).take(200).collect();
+    let header: String = words
+        .chars()
+        .filter(|c| c.is_ascii() && !c.is_ascii_control())
+        .take(200)
+        .collect();
     let body = format!("{words}\n");
     let response = format!(
         "HTTP/1.1 {code} {reason}\r\nContent-Type: text/plain; charset=utf-8\r\nX-Tico-Browser-Exit: {header}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
@@ -1095,7 +1309,10 @@ async fn handle(mut conn: TcpStream, bot: String, proxy: Arc<Proxy>, client: Cli
     };
     proxy.note(&bot, None);
     if parse(&head).is_ok_and(|r| matches!(r, Request::Connect { .. }))
-        && conn.write_all(b"HTTP/1.1 200 Connection Established\r\n\r\n").await.is_err()
+        && conn
+            .write_all(b"HTTP/1.1 200 Connection Established\r\n\r\n")
+            .await
+            .is_err()
     {
         return;
     }
@@ -1131,41 +1348,67 @@ async fn open_tunnel(
     let mut once = client.clone();
     once.retries = 0; // a refusal is the answer, and the browser is waiting
     let grant = once
-        .post("runners/me/browser-exit/tunnels", &json!({"bot": bot, "host": host, "port": port}), None)
+        .post(
+            "runners/me/browser-exit/tunnels",
+            &json!({"bot": bot, "host": host, "port": port}),
+            None,
+        )
         .await
         .map_err(|e| {
-            let gone = e.code == "browser_exit_none" || e.detail == "This bot is not on this computer";
+            let gone =
+                e.code == "browser_exit_none" || e.detail == "This bot is not on this computer";
             // The hub's own refusals already name the exit; anything else (the hub unreachable) gets the name here.
             if e.code.starts_with("browser_exit") {
                 (e.detail, gone)
             } else {
-                (format!("can't reach {} through the hub: {}", proxy.exit.lock().unwrap(), e.detail), gone)
+                (
+                    format!(
+                        "can't reach {} through the hub: {}",
+                        proxy.exit.lock().unwrap(),
+                        e.detail
+                    ),
+                    gone,
+                )
             }
         })?;
-    open_granted(client, host, proxy, &grant).await.map_err(|words| (words, false))
+    open_granted(client, host, proxy, &grant)
+        .await
+        .map_err(|words| (words, false))
 }
 
-async fn open_granted(client: &Client, host: &str, proxy: &Proxy, grant: &Value) -> Result<Socket, String> {
+async fn open_granted(
+    client: &Client,
+    host: &str,
+    proxy: &Proxy,
+    grant: &Value,
+) -> Result<Socket, String> {
     let exit = Some(text_of(&grant["exit"]["name"]))
         .filter(|n| !n.is_empty())
         .unwrap_or_else(|| proxy.exit.lock().unwrap().clone());
     *proxy.exit.lock().unwrap() = exit.clone();
     let (id, ticket) = (text_of(&grant["tunnel_id"]), text_of(&grant["ticket"]));
     if id.is_empty()
-        || !id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+        || !id
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
         || !ticket.bytes().all(|b| b.is_ascii_hexdigit())
     {
         return Err(format!("{exit}: the hub's answer was not a tunnel"));
     }
     let path = format!("/api/v2/runners/me/browser-exit/tunnels/{id}/ws?ticket={ticket}");
-    let mut ws = connect(client, &path, false).await.map_err(|e| format!("{exit} is unreachable: {e}"))?;
+    let mut ws = connect(client, &path, false)
+        .await
+        .map_err(|e| format!("{exit} is unreachable: {e}"))?;
     match tokio::time::timeout(ANSWER, ws.next()).await {
         Ok(Some(Ok(Message::Text(text)))) => {
             let status: Value = serde_json::from_str(&text).unwrap_or_default();
             if status["ok"] == true {
                 Ok(ws)
             } else {
-                Err(format!("{exit} refused {host}: {}", text_of(&status["error"])))
+                Err(format!(
+                    "{exit} refused {host}: {}",
+                    text_of(&status["error"])
+                ))
             }
         }
         Ok(Some(Ok(Message::Close(Some(frame))))) => Err(closed_words(&exit, &frame.reason)),
@@ -1181,8 +1424,10 @@ mod tests {
     #[test]
     fn only_public_addresses_that_are_not_the_computers_own_are_dialled() {
         // 93.184.215.7 an interface's public address, 81.2.69.160 what the relay saw (the router), one IPv6 too.
-        let deny: Vec<IpAddr> =
-            ["93.184.215.7", "81.2.69.160", "2a00:1450:4001::7"].iter().map(|ip| ip.parse().unwrap()).collect();
+        let deny: Vec<IpAddr> = ["93.184.215.7", "81.2.69.160", "2a00:1450:4001::7"]
+            .iter()
+            .map(|ip| ip.parse().unwrap())
+            .collect();
         for (ip, why) in [
             ("0.0.0.0", "an unspecified address"),
             ("0.1.2.3", "an unspecified address"),
@@ -1253,12 +1498,20 @@ mod tests {
     #[test]
     fn the_address_the_relay_saw_is_refused_too_newest_first_and_kept_small() {
         assert_eq!(hello_seen(r#"{"op":"open"}"#), None);
-        let heard = hello_seen(r#"{"op":"hello","seen":["81.2.69.161","::ffff:81.2.69.162","nonsense"]}"#).unwrap();
+        let heard =
+            hello_seen(r#"{"op":"hello","seen":["81.2.69.161","::ffff:81.2.69.162","nonsense"]}"#)
+                .unwrap();
         assert_eq!(heard.len(), 2);
         remember_seen(&heard);
         let deny = own_and_seen();
-        assert_eq!(refused("81.2.69.161".parse().unwrap(), &deny), Some("this computer's own address"));
-        assert_eq!(refused("81.2.69.162".parse().unwrap(), &deny), Some("this computer's own address"));
+        assert_eq!(
+            refused("81.2.69.161".parse().unwrap(), &deny),
+            Some("this computer's own address")
+        );
+        assert_eq!(
+            refused("81.2.69.162".parse().unwrap(), &deny),
+            Some("this computer's own address")
+        );
         for n in 0..20u8 {
             remember_seen(&[IpAddr::V4(Ipv4Addr::new(81, 2, 70, n))]);
         }
@@ -1272,12 +1525,24 @@ mod tests {
         // Something listens on loopback; the exit must not reach it however it is named.
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let port = listener.local_addr().unwrap().port();
-        assert!(dial("127.0.0.1", port).await.unwrap_err().contains("ports 80 and 443"));
-        for host in ["localhost", "127.0.0.1", "::1", "10.0.0.8", "169.254.169.254"] {
+        assert!(dial("127.0.0.1", port)
+            .await
+            .unwrap_err()
+            .contains("ports 80 and 443"));
+        for host in [
+            "localhost",
+            "127.0.0.1",
+            "::1",
+            "10.0.0.8",
+            "169.254.169.254",
+        ] {
             let why = dial(host, 443).await.unwrap_err();
             assert!(why.contains("address"), "{host}: {why}");
         }
-        assert!(dial("acme.example/x", 443).await.unwrap_err().contains("not a hostname"));
+        assert!(dial("acme.example/x", 443)
+            .await
+            .unwrap_err()
+            .contains("not a hostname"));
         let reached = tokio::time::timeout(Duration::from_millis(50), listener.accept()).await;
         assert!(reached.is_err(), "nothing reached the loopback listener");
     }
@@ -1286,17 +1551,44 @@ mod tests {
     fn the_proxy_reads_connect_and_plain_http_and_refuses_other_ports() {
         assert_eq!(
             parse(b"CONNECT www.acme.example:443 HTTP/1.1\r\nHost: www.acme.example:443"),
-            Ok(Request::Connect { host: "www.acme.example".into(), port: 443 })
+            Ok(Request::Connect {
+                host: "www.acme.example".into(),
+                port: 443
+            })
         );
         assert_eq!(
             parse(b"CONNECT [2606:4700::1111]:443 HTTP/1.1"),
-            Ok(Request::Connect { host: "2606:4700::1111".into(), port: 443 })
+            Ok(Request::Connect {
+                host: "2606:4700::1111".into(),
+                port: 443
+            })
         );
-        assert_eq!(parse(b"CONNECT www.acme.example:22 HTTP/1.1").unwrap_err().0, 403);
-        assert_eq!(parse(b"CONNECT www.acme.example HTTP/1.1").unwrap_err().0, 400);
-        assert_eq!(parse(b"GET http://www.acme.example:8080/ HTTP/1.1").unwrap_err().0, 403);
-        assert_eq!(parse(b"GET https://www.acme.example/ HTTP/1.1").unwrap_err().0, 400);
-        assert_eq!(parse(b"GET / HTTP/1.1\r\nHost: 127.0.0.1"), Ok(Request::Status));
+        assert_eq!(
+            parse(b"CONNECT www.acme.example:22 HTTP/1.1")
+                .unwrap_err()
+                .0,
+            403
+        );
+        assert_eq!(
+            parse(b"CONNECT www.acme.example HTTP/1.1").unwrap_err().0,
+            400
+        );
+        assert_eq!(
+            parse(b"GET http://www.acme.example:8080/ HTTP/1.1")
+                .unwrap_err()
+                .0,
+            403
+        );
+        assert_eq!(
+            parse(b"GET https://www.acme.example/ HTTP/1.1")
+                .unwrap_err()
+                .0,
+            400
+        );
+        assert_eq!(
+            parse(b"GET / HTTP/1.1\r\nHost: 127.0.0.1"),
+            Ok(Request::Status)
+        );
         let Ok(Request::Plain { host, port, head }) =
             parse(b"GET http://WWW.acme.example/a?b=1 HTTP/1.1\r\nHost: www.acme.example\r\nProxy-Connection: keep-alive\r\nConnection: keep-alive\r\nAccept: */*")
         else {
@@ -1316,14 +1608,25 @@ mod tests {
             json!({"op": "open", "id": "t1", "host": "www.acme.example", "port": 443, "ticket": ticket}).to_string();
         assert_eq!(
             Open::parse(&text),
-            Some(Open { id: "t1".into(), host: "www.acme.example".into(), port: 443, ticket: ticket.clone() })
+            Some(Open {
+                id: "t1".into(),
+                host: "www.acme.example".into(),
+                port: 443,
+                ticket: ticket.clone()
+            })
         );
         assert_eq!(
-            Open::parse(&json!({"op": "open", "id": "../x", "host": "h", "port": 443, "ticket": ticket}).to_string()),
+            Open::parse(
+                &json!({"op": "open", "id": "../x", "host": "h", "port": 443, "ticket": ticket})
+                    .to_string()
+            ),
             None
         );
         assert_eq!(
-            Open::parse(&json!({"op": "open", "id": "t1", "host": "h", "port": 443, "ticket": "short"}).to_string()),
+            Open::parse(
+                &json!({"op": "open", "id": "t1", "host": "h", "port": 443, "ticket": "short"})
+                    .to_string()
+            ),
             None
         );
     }
@@ -1368,7 +1671,8 @@ mod tests {
         let site = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let site_port = site.local_addr().unwrap().port();
         for request in [
-            "CONNECT www.acme.example:443 HTTP/1.1\r\nHost: www.acme.example:443\r\n\r\n".to_string(),
+            "CONNECT www.acme.example:443 HTTP/1.1\r\nHost: www.acme.example:443\r\n\r\n"
+                .to_string(),
             format!("GET http://localhost:{site_port}/ HTTP/1.1\r\n\r\n"),
             "GET http://www.acme.example/ HTTP/1.1\r\nHost: www.acme.example\r\n\r\n".to_string(),
         ] {
@@ -1376,19 +1680,35 @@ mod tests {
             browser.write_all(request.as_bytes()).await.unwrap();
             let mut answer = String::new();
             browser.read_to_string(&mut answer).await.unwrap();
-            assert!(answer.starts_with("HTTP/1.1 502 ") || answer.starts_with("HTTP/1.1 403 "), "{answer}");
+            assert!(
+                answer.starts_with("HTTP/1.1 502 ") || answer.starts_with("HTTP/1.1 403 "),
+                "{answer}"
+            );
             if request.contains("acme") {
                 assert!(answer.contains("Cara's MacBook is offline"), "{answer}");
             }
         }
-        assert_eq!(proxy.last_error.lock().unwrap().as_deref(), Some("Cara's MacBook is offline"));
-        assert!(tokio::time::timeout(Duration::from_millis(50), site.accept()).await.is_err(), "nothing went direct");
+        assert_eq!(
+            proxy.last_error.lock().unwrap().as_deref(),
+            Some("Cara's MacBook is offline")
+        );
+        assert!(
+            tokio::time::timeout(Duration::from_millis(50), site.accept())
+                .await
+                .is_err(),
+            "nothing went direct"
+        );
         let mut status = TcpStream::connect(addr).await.unwrap();
-        status.write_all(b"GET / HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n").await.unwrap();
+        status
+            .write_all(b"GET / HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n")
+            .await
+            .unwrap();
         let mut answer = String::new();
         status.read_to_string(&mut answer).await.unwrap();
         assert!(
-            answer.contains("Browsing through Cara's MacBook. Last refusal: Cara's MacBook is offline"),
+            answer.contains(
+                "Browsing through Cara's MacBook. Last refusal: Cara's MacBook is offline"
+            ),
             "{answer}"
         );
     }
@@ -1396,18 +1716,38 @@ mod tests {
     #[test]
     fn under_isolation_only_the_turns_own_users_get_in_and_only_while_the_turn_lasts() {
         let proxy = Arc::new(Proxy::new(0, "Cara's MacBook".into()));
-        assert!(proxy.admits(None, false), "without isolation every process is the runner's user");
+        assert!(
+            proxy.admits(None, false),
+            "without isolation every process is the runner's user"
+        );
         assert!(!proxy.admits(Some(10100), true));
-        assert!(!proxy.admits(None, true), "an owner that can't be found is refused");
-        let mut first = Admission { proxy: proxy.clone(), leased: Vec::new(), url: String::new() };
-        let mut second = Admission { proxy: proxy.clone(), leased: Vec::new(), url: String::new() };
+        assert!(
+            !proxy.admits(None, true),
+            "an owner that can't be found is refused"
+        );
+        let mut first = Admission {
+            proxy: proxy.clone(),
+            leased: Vec::new(),
+            url: String::new(),
+        };
+        let mut second = Admission {
+            proxy: proxy.clone(),
+            leased: Vec::new(),
+            url: String::new(),
+        };
         first.allow(10100);
         second.allow(10100);
         second.allow_always(1001);
         assert!(proxy.admits(Some(10100), true) && proxy.admits(Some(1001), true));
-        assert!(!proxy.admits(Some(10101), true), "another turn user is another bot's");
+        assert!(
+            !proxy.admits(Some(10101), true),
+            "another turn user is another bot's"
+        );
         drop(first);
-        assert!(proxy.admits(Some(10100), true), "the second turn still runs as it");
+        assert!(
+            proxy.admits(Some(10100), true),
+            "the second turn still runs as it"
+        );
         drop(second);
         assert!(!proxy.admits(Some(10100), true));
         assert!(proxy.admits(Some(1001), true), "the shared bot user stays");
@@ -1426,19 +1766,41 @@ mod tests {
         if cfg!(target_endian = "little") {
             assert_eq!(uid_in_table(table, proxy, browser), Some(10100));
         }
-        assert_eq!(uid_in_table(table, proxy, "127.0.0.1:51001".parse().unwrap()), None);
-        assert_eq!(uid_in_table(table, "[::1]:47100".parse().unwrap(), "[::1]:51000".parse().unwrap()), None);
+        assert_eq!(
+            uid_in_table(table, proxy, "127.0.0.1:51001".parse().unwrap()),
+            None
+        );
+        assert_eq!(
+            uid_in_table(
+                table,
+                "[::1]:47100".parse().unwrap(),
+                "[::1]:51000".parse().unwrap()
+            ),
+            None
+        );
     }
 
     #[tokio::test]
     async fn a_claimed_turn_without_an_exit_stops_the_proxy_and_a_watchers_run_leaves_it() {
         let proxy = Arc::new(Proxy::new(0, "Cara's MacBook".into()));
-        proxies().lock().unwrap().insert("ops-watch".into(), proxy.clone());
-        assert!(turn_proxy("ops-watch", &json!({"kind": "watch"})).await.unwrap().is_none());
+        proxies()
+            .lock()
+            .unwrap()
+            .insert("ops-watch".into(), proxy.clone());
+        assert!(turn_proxy("ops-watch", &json!({"kind": "watch"}))
+            .await
+            .unwrap()
+            .is_none());
         assert!(proxies().lock().unwrap().contains_key("ops-watch"));
         drop_proxy("ops-watch", Some(&Arc::new(Proxy::new(0, "x".into()))));
-        assert!(proxies().lock().unwrap().contains_key("ops-watch"), "another proxy's refusal doesn't stop this one");
-        assert!(turn_proxy("ops-watch", &json!({"browser_exit": null})).await.unwrap().is_none());
+        assert!(
+            proxies().lock().unwrap().contains_key("ops-watch"),
+            "another proxy's refusal doesn't stop this one"
+        );
+        assert!(turn_proxy("ops-watch", &json!({"browser_exit": null}))
+            .await
+            .unwrap()
+            .is_none());
         assert!(!proxies().lock().unwrap().contains_key("ops-watch"));
     }
 
@@ -1457,34 +1819,51 @@ mod tests {
         // Chosen from a map of its own: other tests' proxies share the runner's.
         let mut all = HashMap::new();
         all.insert("gc-moved".to_string(), moved.clone());
-        all.insert("gc-kept".to_string(), Arc::new(Proxy::new(0, "Cara's MacBook".into())));
+        all.insert(
+            "gc-kept".to_string(),
+            Arc::new(Proxy::new(0, "Cara's MacBook".into())),
+        );
         let reused = Arc::new(Proxy::new(0, "Cara's MacBook".into()));
         all.insert("gc-reused".to_string(), reused.clone());
         for proxy in all.values() {
             *proxy.used.lock().unwrap() -= Duration::from_secs(1); // taken before the heartbeat went
         }
         let asked = Instant::now();
-        all.insert("gc-newer".to_string(), Arc::new(Proxy::new(0, "Cara's MacBook".into())));
+        all.insert(
+            "gc-newer".to_string(),
+            Arc::new(Proxy::new(0, "Cara's MacBook".into())),
+        );
         // A heartbeat that left out gc-reused was slow to answer: its exit was set again and a turn took the proxy
         // (turn_proxy) before the answer came.
         *reused.used.lock().unwrap() = Instant::now();
         let gone = stale_proxies(&all, &["gc-kept".into()], asked);
-        assert_eq!(gone.iter().map(|(bot, _)| bot.as_str()).collect::<Vec<_>>(), ["gc-moved"], "a newer proxy stays");
+        assert_eq!(
+            gone.iter().map(|(bot, _)| bot.as_str()).collect::<Vec<_>>(),
+            ["gc-moved"],
+            "a newer proxy stays"
+        );
         proxies().lock().unwrap().insert("gc-moved".into(), moved);
         for (bot, proxy) in gone {
             drop_proxy(&bot, Some(&proxy));
         }
         assert!(!proxies().lock().unwrap().contains_key("gc-moved"));
-        assert!(task.await.unwrap_err().is_cancelled(), "the accept loop is stopped");
+        assert!(
+            task.await.unwrap_err().is_cancelled(),
+            "the accept loop is stopped"
+        );
         // A parallel test can bind the released port before a connect probe. Check that this proxy
         // destroyed its own listener; a new listener at that address belongs to another resource.
-        assert!(owned_listener.upgrade().is_none(), "its listening socket is destroyed");
+        assert!(
+            owned_listener.upgrade().is_none(),
+            "its listening socket is destroyed"
+        );
     }
 
     /// scripts/browser-exit run against a stand-in browser that prints the arguments it got.
     #[cfg(unix)]
     #[test]
-    fn the_browser_wrapper_gives_the_bot_its_own_profile_and_refuses_a_browser_that_would_skip_the_proxy() {
+    fn the_browser_wrapper_gives_the_bot_its_own_profile_and_refuses_a_browser_that_would_skip_the_proxy(
+    ) {
         use std::os::unix::fs::{symlink, PermissionsExt};
         use std::process::Command;
         let root = std::env::temp_dir().join(format!("tico-exit-wrapper-{}", uuid::Uuid::new_v4()));
@@ -1494,12 +1873,16 @@ mod tests {
         let fake = bin.join("google-chrome");
         std::fs::write(&fake, "#!/bin/sh\nfor a in \"$@\"; do echo \"$a\"; done\n").unwrap();
         std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
-        let shims = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../scripts/browser-exit");
+        let shims =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../scripts/browser-exit");
         let proxy = "http://127.0.0.1:21001";
         let run_with = |args: &[&str], proxy: Option<&str>, chromium_flags: &str| {
             let mut cmd = Command::new(shims.join("google-chrome"));
             cmd.args(args)
-                .env("PATH", format!("{}:{}:/usr/bin:/bin", shims.display(), bin.display()))
+                .env(
+                    "PATH",
+                    format!("{}:{}:/usr/bin:/bin", shims.display(), bin.display()),
+                )
                 .env("HOME", &home)
                 .env("HUB_BOT", "ops")
                 .env("CHROMIUM_FLAGS", chromium_flags)
@@ -1508,7 +1891,13 @@ mod tests {
                 cmd.env("TICO_BROWSER_PROXY", p);
             }
             let out = cmd.output().unwrap();
-            (out.status.success(), String::from_utf8_lossy(&out.stdout).lines().map(String::from).collect::<Vec<_>>())
+            (
+                out.status.success(),
+                String::from_utf8_lossy(&out.stdout)
+                    .lines()
+                    .map(String::from)
+                    .collect::<Vec<_>>(),
+            )
         };
         let run = |args: &[&str], proxy: Option<&str>| run_with(args, proxy, "");
         let profile = home.join(".tico/browser-exit/ops");
@@ -1522,15 +1911,32 @@ mod tests {
         let quiet = "--disable-features=OptimizationGuideModelDownloading,OptimizationHintsFetching,OptimizationGuideOnDeviceModel";
         assert_eq!(
             args,
-            ["--tico-browser-exit=ops", flag.as_str(), webrtc, "--disable-component-update", quiet, own.as_str(), "--new-window"]
+            [
+                "--tico-browser-exit=ops",
+                flag.as_str(),
+                webrtc,
+                "--disable-component-update",
+                quiet,
+                own.as_str(),
+                "--new-window"
+            ]
         );
         // One profile, always the bot's: naming it again is fine, any other is refused.
-        let (ok, args) = run(&[&own, "--proxy-bypass-list=<-loopback>", flag.as_str()], Some(proxy));
+        let (ok, args) = run(
+            &[&own, "--proxy-bypass-list=<-loopback>", flag.as_str()],
+            Some(proxy),
+        );
         assert!(ok && args[5] == own, "{args:?}");
         let theirs = format!("--user-data-dir={}", root.join("kept").display());
         assert!(!run(&[&theirs], Some(proxy)).0);
-        assert!(!run(&["-user-data-dir=/tmp/x", "-new-window"], Some(proxy)).0, "a single-dash profile is read too");
-        assert!(!run_with(&[], Some(proxy), &theirs).0, "and one in CHROMIUM_FLAGS");
+        assert!(
+            !run(&["-user-data-dir=/tmp/x", "-new-window"], Some(proxy)).0,
+            "a single-dash profile is read too"
+        );
+        assert!(
+            !run_with(&[], Some(proxy), &theirs).0,
+            "and one in CHROMIUM_FLAGS"
+        );
         for skip in [
             " --no-proxy-server",
             "--no-proxy-server ",
@@ -1550,15 +1956,25 @@ mod tests {
             "--winhttp-proxy-resolver",
             "--tico-browser-exit=ops",
         ] {
-            assert!(!run(&[skip, "https://www.acme.example"], Some(proxy)).0, "{skip}");
+            assert!(
+                !run(&[skip, "https://www.acme.example"], Some(proxy)).0,
+                "{skip}"
+            );
         }
-        assert!(!run_with(&[], Some(proxy), "--no-proxy-server").0, "CHROMIUM_FLAGS is checked too");
-        assert!(run_with(&[], Some(proxy), &format!("{flag} {webrtc}")).0, "the runner's own CHROMIUM_FLAGS pass");
+        assert!(
+            !run_with(&[], Some(proxy), "--no-proxy-server").0,
+            "CHROMIUM_FLAGS is checked too"
+        );
+        assert!(
+            run_with(&[], Some(proxy), &format!("{flag} {webrtc}")).0,
+            "the runner's own CHROMIUM_FLAGS pass"
+        );
         assert!(!run(&[], None).0, "no proxy, no browser");
 
         // A Chrome already open on the profile takes the launch: only one this wrapper started, through this proxy and
         // with nothing that bypasses it, may.
-        let host = String::from_utf8(Command::new("uname").arg("-n").output().unwrap().stdout).unwrap();
+        let host =
+            String::from_utf8(Command::new("uname").arg("-n").output().unwrap().stdout).unwrap();
         let lock = profile.join("SingletonLock");
         let mut held = Vec::new();
         let mut holds = |args: &[&str]| {
@@ -1570,16 +1986,38 @@ mod tests {
             held.push(child);
         };
         holds(&[]);
-        assert!(!run(&[], Some(proxy)).0, "a browser without the proxy holds the profile");
+        assert!(
+            !run(&[], Some(proxy)).0,
+            "a browser without the proxy holds the profile"
+        );
         holds(&[flag.as_str()]);
-        assert!(!run(&[], Some(proxy)).0, "the proxy but not the wrapper's marker");
+        assert!(
+            !run(&[], Some(proxy)).0,
+            "the proxy but not the wrapper's marker"
+        );
         holds(&["--tico-browser-exit=ops", flag.as_str(), "-no-proxy-server"]);
-        assert!(!run(&[], Some(proxy)).0, "the marker and the proxy, but bypassed");
-        holds(&["--tico-browser-exit=ops", flag.as_str(), "--proxy-bypass-list=*"]);
-        assert!(!run(&[], Some(proxy)).0, "the marker and the proxy, but a bypass list");
+        assert!(
+            !run(&[], Some(proxy)).0,
+            "the marker and the proxy, but bypassed"
+        );
+        holds(&[
+            "--tico-browser-exit=ops",
+            flag.as_str(),
+            "--proxy-bypass-list=*",
+        ]);
+        assert!(
+            !run(&[], Some(proxy)).0,
+            "the marker and the proxy, but a bypass list"
+        );
         holds(&["--tico-browser-exit=ops", flag.as_str(), webrtc]);
-        assert!(run(&[], Some(proxy)).0, "a browser this wrapper started holds it");
-        assert!(!run(&[], Some("http://127.0.0.1:21002")).0, "but not through another bot's proxy");
+        assert!(
+            run(&[], Some(proxy)).0,
+            "a browser this wrapper started holds it"
+        );
+        assert!(
+            !run(&[], Some("http://127.0.0.1:21002")).0,
+            "but not through another bot's proxy"
+        );
         let gone = held.last().unwrap().id();
         for mut child in held {
             let _ = child.kill();
@@ -1587,7 +2025,10 @@ mod tests {
         }
         std::fs::remove_file(&lock).unwrap();
         symlink(format!("{}-{}", host.trim(), gone), &lock).unwrap();
-        assert!(run(&[], Some(proxy)).0, "a lock left by a browser that exited is stale");
+        assert!(
+            run(&[], Some(proxy)).0,
+            "a lock left by a browser that exited is stale"
+        );
         let _ = std::fs::remove_dir_all(&root);
     }
 
@@ -1595,7 +2036,8 @@ mod tests {
     /// `--disable-features` is folded into the one enforced switch: Chrome keeps only the last occurrence of a switch.
     #[cfg(unix)]
     #[test]
-    fn the_browser_wrapper_quiets_chromes_background_downloads_and_keeps_a_callers_disable_features() {
+    fn the_browser_wrapper_quiets_chromes_background_downloads_and_keeps_a_callers_disable_features(
+    ) {
         use std::os::unix::fs::PermissionsExt;
         use std::process::Command;
         let root = std::env::temp_dir().join(format!("tico-exit-quiet-{}", uuid::Uuid::new_v4()));
@@ -1605,10 +2047,14 @@ mod tests {
         let fake = bin.join("google-chrome");
         std::fs::write(&fake, "#!/bin/sh\nfor a in \"$@\"; do echo \"$a\"; done\n").unwrap();
         std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
-        let shims = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../scripts/browser-exit");
+        let shims =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../scripts/browser-exit");
         let out = Command::new(shims.join("google-chrome"))
             .args(["--disable-features=Foo,Bar", "--new-window"])
-            .env("PATH", format!("{}:{}:/usr/bin:/bin", shims.display(), bin.display()))
+            .env(
+                "PATH",
+                format!("{}:{}:/usr/bin:/bin", shims.display(), bin.display()),
+            )
             .env("HOME", &home)
             .env("HUB_BOT", "ops")
             .env("TICO_BROWSER_PROXY", "http://127.0.0.1:21001")
@@ -1616,10 +2062,19 @@ mod tests {
             .output()
             .unwrap();
         assert!(out.status.success());
-        let args: Vec<String> = String::from_utf8_lossy(&out.stdout).lines().map(String::from).collect();
-        assert!(args.iter().any(|a| a == "--disable-component-update"), "{args:?}");
+        let args: Vec<String> = String::from_utf8_lossy(&out.stdout)
+            .lines()
+            .map(String::from)
+            .collect();
+        assert!(
+            args.iter().any(|a| a == "--disable-component-update"),
+            "{args:?}"
+        );
         assert!(args.iter().any(|a| a == "--new-window"), "{args:?}");
-        let features: Vec<&str> = args.iter().filter_map(|a| a.strip_prefix("--disable-features=")).collect();
+        let features: Vec<&str> = args
+            .iter()
+            .filter_map(|a| a.strip_prefix("--disable-features="))
+            .collect();
         assert_eq!(
             features,
             ["OptimizationGuideModelDownloading,OptimizationHintsFetching,OptimizationGuideOnDeviceModel,FromEnv,Foo,Bar"],
@@ -1645,7 +2100,11 @@ mod tests {
                         seen.extend_from_slice(&buf[..n]);
                     }
                     let authorized = String::from_utf8_lossy(&seen).contains("Bearer runner-token");
-                    let (status, body) = if authorized { (status, body) } else { ("403 Forbidden", "{}") };
+                    let (status, body) = if authorized {
+                        (status, body)
+                    } else {
+                        ("403 Forbidden", "{}")
+                    };
                     let response = format!(
                         "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
                         body.len()
@@ -1664,10 +2123,21 @@ mod tests {
         // Whatever this computer's routes: an IPv6-only exit reaches the IPv4 internet through NAT64 too.
         let why = ipv4_unknown("93.184.215.14".parse().unwrap()).unwrap();
         assert!(why.contains("public IPv4 address is unknown"), "{why}");
-        assert_eq!(ipv4_unknown("2606:4700::1111".parse().unwrap()), None, "IPv6 sites go on");
+        assert_eq!(
+            ipv4_unknown("2606:4700::1111".parse().unwrap()),
+            None,
+            "IPv6 sites go on"
+        );
         // The IPv4 Internet reached through IPv6 is the same router: NAT64, 6to4 and IPv4-mapped addresses wait too.
-        for carried in ["64:ff9b::5102:45aa", "2002:5102:45aa::1", "::ffff:81.2.69.170"] {
-            assert!(ipv4_unknown(carried.parse().unwrap()).is_some(), "{carried}");
+        for carried in [
+            "64:ff9b::5102:45aa",
+            "2002:5102:45aa::1",
+            "::ffff:81.2.69.170",
+        ] {
+            assert!(
+                ipv4_unknown(carried.parse().unwrap()).is_some(),
+                "{carried}"
+            );
         }
         // A hub reached over the home network sees a private address: the public one is still unknown.
         let hub = seen_hub("200 OK", r#"{"seen":"192.168.1.20"}"#).await;
@@ -1676,7 +2146,10 @@ mod tests {
         let hub = seen_hub("200 OK", r#"{"seen":"81.2.69.170"}"#).await;
         probe_seen(&Client::new(&hub, "runner-token", 5, 0).unwrap()).await;
         assert_eq!(ipv4_unknown("93.184.215.14".parse().unwrap()), None);
-        assert_eq!(refused("81.2.69.170".parse().unwrap(), &own_and_seen()), Some("this computer's own address"));
+        assert_eq!(
+            refused("81.2.69.170".parse().unwrap(), &own_and_seen()),
+            Some("this computer's own address")
+        );
         assert_eq!(
             refused("64:ff9b::5102:45aa".parse().unwrap(), &own_and_seen()),
             Some("this computer's own address")
@@ -1686,7 +2159,11 @@ mod tests {
     #[test]
     fn neighbours_and_the_router_on_the_exits_own_networks_are_refused() {
         let ip = |s: &str| s.parse::<IpAddr>().unwrap();
-        let iface = |addr: &str, len: u8| Iface { addr: ip(addr), len, peer: None };
+        let iface = |addr: &str, len: u8| Iface {
+            addr: ip(addr),
+            len,
+            peer: None,
+        };
         // A home with a public IPv6 /64 (reported as /128, as a temporary address can be) and a public IPv4 /24, plus
         // tunnels reporting /0 and a /48 that must not widen into whole ranges of the internet.
         let ifaces = [
@@ -1710,7 +2187,11 @@ mod tests {
             "2606:4700:110::5",
             "2a02:1:2::99",
         ] {
-            assert_eq!(on_link(ip(refused), &nets), Some("on this computer's own network"), "{refused}");
+            assert_eq!(
+                on_link(ip(refused), &nets),
+                Some("on this computer's own network"),
+                "{refused}"
+            );
         }
         for allowed in [
             "2a01:4f8:1:3::99",
@@ -1726,8 +2207,16 @@ mod tests {
         }
         // A point-to-point peer and a gateway are refused exactly, in both families.
         let ifaces = [
-            Iface { addr: ip("100.96.0.2"), len: 32, peer: Some(ip("81.2.71.1")) },
-            Iface { addr: ip("fd00::2"), len: 128, peer: Some(ip("2a03:1::1")) },
+            Iface {
+                addr: ip("100.96.0.2"),
+                len: 32,
+                peer: Some(ip("81.2.71.1")),
+            },
+            Iface {
+                addr: ip("fd00::2"),
+                len: 128,
+                peer: Some(ip("2a03:1::1")),
+            },
         ];
         let nets = networks(&ifaces, &[ip("81.2.68.1"), ip("2a04:1::1")]);
         for refused in ["81.2.71.1", "2a03:1::1", "81.2.68.1", "2a04:1::1"] {
@@ -1743,22 +2232,31 @@ mod tests {
         let v4 = "Iface\tDestination\tGateway \tFlags\tRefCnt\tUse\tMetric\tMask\n\
                   eth0\t00000000\t0145A8C0\t0003\t0\t0\t100\t00000000\n\
                   eth0\t0045A8C0\t00000000\t0001\t0\t0\t100\t00FFFFFF\n";
-        let expect = IpAddr::V4(Ipv4Addr::from(u32::from_str_radix("0145A8C0", 16).unwrap().to_ne_bytes()));
+        let expect = IpAddr::V4(Ipv4Addr::from(
+            u32::from_str_radix("0145A8C0", 16).unwrap().to_ne_bytes(),
+        ));
         assert_eq!(gateways_v4(v4), vec![expect]);
         let v6 = "00000000000000000000000000000000 00 00000000000000000000000000000000 00 \
                   2a0104f8000100020000000000000001 00000400 00000001 00000000 00000003 eth0\n\
                   2a0104f8000100020000000000000000 40 00000000000000000000000000000000 00 \
                   00000000000000000000000000000000 00000100 00000001 00000000 00000001 eth0\n";
-        assert_eq!(gateways_v6(v6), vec!["2a01:4f8:1:2::1".parse::<IpAddr>().unwrap()]);
+        assert_eq!(
+            gateways_v6(v6),
+            vec!["2a01:4f8:1:2::1".parse::<IpAddr>().unwrap()]
+        );
         // macOS `route -n get default`, for IPv4, IPv6 (zone dropped) and an interface-only route.
         let mac_v4 = "   route to: default\ndestination: default\n       mask: default\n    gateway: 192.168.1.1\n  \
                       interface: en0\n      flags: <UP,GATEWAY,DONE,STATIC,PRCLONING,GLOBAL>\n";
         assert_eq!(route_gateway(mac_v4), Some("192.168.1.1".parse().unwrap()));
-        let mac_v6 = "   route to: ::\ndestination: default\n    gateway: fe80::1%en0\n  interface: en0\n";
+        let mac_v6 =
+            "   route to: ::\ndestination: default\n    gateway: fe80::1%en0\n  interface: en0\n";
         assert_eq!(route_gateway(mac_v6), Some("fe80::1".parse().unwrap()));
         let mac_link = "   route to: default\ndestination: default\n    gateway: link#14\n  interface: utun3\n";
         assert_eq!(route_gateway(mac_link), None);
-        assert_eq!(route_gateway("route: writing to routing socket: not in table\n"), None);
+        assert_eq!(
+            route_gateway("route: writing to routing socket: not in table\n"),
+            None
+        );
         // Every interface address of this computer is one of its own networks.
         let nets = own_networks().await;
         for iface in interfaces() {
@@ -1774,6 +2272,9 @@ mod tests {
         assert_eq!(v4("64:ff9b::5102:45aa").as_deref(), Some("81.2.69.170"));
         assert_eq!(v4("2002:5102:45aa::1").as_deref(), Some("81.2.69.170"));
         assert_eq!(v4("2606:4700::1111"), None);
-        assert_eq!(refused("2002:c0a8:0101::1".parse().unwrap(), &[]), Some("a private network address"));
+        assert_eq!(
+            refused("2002:c0a8:0101::1".parse().unwrap(), &[]),
+            Some("a private network address")
+        );
     }
 }

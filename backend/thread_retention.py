@@ -14,23 +14,29 @@ never goes. What a bot's run already read lives in that run's transcript, under 
 Plain code: nothing past its time reads a little and writes nothing. Each batch records one event and one audit row: how
 many messages, never which words.
 """
+
 from . import file_library
 from . import hubdb as H
 from . import threads
 
-BATCH = 200               # messages one transaction deletes
-MAX_BATCHES = 10          # batches one run takes; the rest wait for the next run
-MAX_ROOTS = 200           # roots one run looks at; the next run goes on after the last one
+BATCH = 200  # messages one transaction deletes
+MAX_BATCHES = 10  # batches one run takes; the rest wait for the next run
+MAX_ROOTS = 200  # roots one run looks at; the next run goes on after the last one
 
-_after = {"root": ""}     # where the last run stopped (in this process: a restart starts over, which only reads)
+_after = {"root": ""}  # where the last run stopped (in this process: a restart starts over, which only reads)
 
 
 def _due(c, root_id, cutoff):
     """Up to BATCH message ids of this root's tree past `cutoff` (a carrier has no seq and goes with its message). Each
     thread's index (messages_conversation) is read only as far as the cutoff."""
-    return [r[0] for r in c.execute(
-        "SELECT m.id FROM conversations s CROSS JOIN messages m ON m.conversation_id=s.id AND m.created_at<? "
-        "WHERE s.root_id=? AND m.deleted_at IS NULL AND m.seq IS NOT NULL LIMIT ?", (cutoff, root_id, BATCH)).fetchall()]
+    return [
+        r[0]
+        for r in c.execute(
+            "SELECT m.id FROM conversations s CROSS JOIN messages m ON m.conversation_id=s.id AND m.created_at<? "
+            "WHERE s.root_id=? AND m.deleted_at IS NULL AND m.seq IS NOT NULL LIMIT ?",
+            (cutoff, root_id, BATCH),
+        ).fetchall()
+    ]
 
 
 def purge(c, root_id, ids, days):
@@ -56,8 +62,11 @@ def sweep(store, now=None):
     it), one transaction per batch. Returns how many messages went."""
     now = now or H.now()
     with store.read() as c:
-        roots = c.execute("SELECT id, retention_days FROM conversations WHERE retention_days IS NOT NULL AND id>? "
-                          "ORDER BY id LIMIT ?", (_after["root"], MAX_ROOTS)).fetchall()
+        roots = c.execute(
+            "SELECT id, retention_days FROM conversations WHERE retention_days IS NOT NULL AND id>? "
+            "ORDER BY id LIMIT ?",
+            (_after["root"], MAX_ROOTS),
+        ).fetchall()
     _after["root"] = roots[-1]["id"] if len(roots) == MAX_ROOTS else ""
     total = batches = 0
     for root in roots:

@@ -1,4 +1,5 @@
 """Git used by computer maintenance has no turn credentials or repository hooks."""
+
 import atexit
 import hashlib
 import os
@@ -7,11 +8,41 @@ import tempfile
 import shlex
 from pathlib import Path
 
-_SETTINGS = {'HOME', 'PATH', 'SHELL', 'USER', 'LOGNAME', 'TMPDIR', 'TMP', 'TEMP', 'LANG', 'TZ', 'TERM', 'COLORTERM',
-             'CODEX_HOME', 'XDG_CONFIG_HOME', 'XDG_CACHE_HOME', 'HTTPS_PROXY', 'HTTP_PROXY', 'NO_PROXY',
-             'SSL_CERT_FILE', 'SSL_CERT_DIR', 'GIT_SSL_CAINFO', 'REQUESTS_CA_BUNDLE', 'CURL_CA_BUNDLE',
-             'https_proxy', 'http_proxy', 'no_proxy', 'VIRTUAL_ENV', 'CONDA_PREFIX', 'PYENV_ROOT',
-             'CARGO_HOME', 'RUSTUP_HOME', 'GOPATH', 'JAVA_HOME'}
+_SETTINGS = {
+    'HOME',
+    'PATH',
+    'SHELL',
+    'USER',
+    'LOGNAME',
+    'TMPDIR',
+    'TMP',
+    'TEMP',
+    'LANG',
+    'TZ',
+    'TERM',
+    'COLORTERM',
+    'CODEX_HOME',
+    'XDG_CONFIG_HOME',
+    'XDG_CACHE_HOME',
+    'HTTPS_PROXY',
+    'HTTP_PROXY',
+    'NO_PROXY',
+    'SSL_CERT_FILE',
+    'SSL_CERT_DIR',
+    'GIT_SSL_CAINFO',
+    'REQUESTS_CA_BUNDLE',
+    'CURL_CA_BUNDLE',
+    'https_proxy',
+    'http_proxy',
+    'no_proxy',
+    'VIRTUAL_ENV',
+    'CONDA_PREFIX',
+    'PYENV_ROOT',
+    'CARGO_HOME',
+    'RUSTUP_HOME',
+    'GOPATH',
+    'JAVA_HOME',
+}
 _SETTINGS.add('SSH_AUTH_SOCK')
 _hooks = tempfile.mkdtemp(prefix='tico-empty-hooks-')
 os.chmod(_hooks, 0o555)
@@ -60,11 +91,14 @@ def trusting(env, *directories):
     a local repository another user owns: the computer's mirror, which the supervisor owns while the bot user
     reads it. Git does not hand `-c` settings to the upload-pack it starts for a local repository, so there the
     ownership check only sees system and global config, which a clean environment empties."""
-    lines = ''.join('\tdirectory = "' + d.replace('\\', '\\\\').replace('"', '\\"') + '"\n'
-                    for d in dict.fromkeys(str(d) for d in directories) if d and '\n' not in d)
+    lines = ''.join(
+        '\tdirectory = "' + d.replace('\\', '\\\\').replace('"', '\\"') + '"\n'
+        for d in dict.fromkeys(str(d) for d in directories)
+        if d and '\n' not in d
+    )
     path = Path(_trust) / (hashlib.sha256(lines.encode()).hexdigest()[:20] + '.gitconfig')
     if not path.exists():
-        handle, made = tempfile.mkstemp(dir=path.parent, suffix='.tmp')     # one per call: pool threads share a pid
+        handle, made = tempfile.mkstemp(dir=path.parent, suffix='.tmp')  # one per call: pool threads share a pid
         with os.fdopen(handle, 'w') as out:
             out.write('[safe]\n' + lines)
         os.chmod(made, 0o644)
@@ -76,6 +110,7 @@ def machine_environment(source=None):
     """Keep trusted computer settings from system and global Git config, without includes."""
     from . import isolation
     import subprocess
+
     env = clean_environment(source)
     wrapper = str(Path(__file__).parent / 'credential_bin')
     env['PATH'] = os.pathsep.join(p for p in env.get('PATH', os.defpath).split(os.pathsep) if p != wrapper)
@@ -89,9 +124,22 @@ def machine_environment(source=None):
     entries = []
     for scope in ('--system', '--global'):
         try:
-            result = isolation.run([*PREFIX, 'config', scope, '--no-includes', '--null', '--get-regexp',
-                                    r'^(credential\..*|url\..*\.(insteadof|pushinsteadof)|core\.sshcommand|http\.(.*\.)?(proxy|sslcainfo)|user\.(name|email))$'],
-                                   cwd='/', env=trusted, capture_output=True, text=True, timeout=10)
+            result = isolation.run(
+                [
+                    *PREFIX,
+                    'config',
+                    scope,
+                    '--no-includes',
+                    '--null',
+                    '--get-regexp',
+                    r'^(credential\..*|url\..*\.(insteadof|pushinsteadof)|core\.sshcommand|http\.(.*\.)?(proxy|sslcainfo)|user\.(name|email))$',
+                ],
+                cwd='/',
+                env=trusted,
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
             entries.extend(entry.split('\n', 1) for entry in result.stdout.split('\0') if '\n' in entry)
         except (OSError, subprocess.SubprocessError):
             continue
@@ -110,6 +158,7 @@ def machine_environment(source=None):
 
 def environment(source=None):
     from . import git_credentials
+
     source = os.environ if source is None else source
     env = clean_environment(source) if 'GIT_CONFIG_COUNT' in source else machine_environment(source)
     # These are the per-repository helper settings, never vault grants or the runner token.
