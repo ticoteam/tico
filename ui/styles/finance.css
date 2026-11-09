@@ -302,3 +302,13 @@ th .fin-tag{display:block;width:max-content;margin:2px 0 0 auto}
 .fin-brief-at{font-size:12px}
 .fin-brief-lines{margin:6px 0 0;padding-left:18px;font-size:14px;line-height:1.5}
 .fin-brief-lines li{overflow-wrap:anywhere}
+/* Receipts above the Transactions list (finance-receipts.ts): one stacked row per receipt at phone width. */
+.fin-receipts{margin:0 0 12px;padding:8px 12px;border:1px solid var(--line);border-radius:var(--r-ctl)}
+.fin-receipts-h{margin:0 0 4px;font-size:14px}
+.fin-receipt-list{list-style:none;margin:0;padding:0}
+.fin-receipt{padding:8px 0;border-top:1px solid var(--line)}
+.fin-receipt:first-child{border-top:0}
+.fin-receipt-head{display:flex;align-items:baseline;justify-content:space-between;gap:8px;flex-wrap:wrap}
+.fin-receipt-head strong{overflow-wrap:anywhere;min-width:0}
+.fin-receipt-acts{display:flex;flex-wrap:wrap;gap:8px;margin-top:6px}
+.fin-receipt-acts button{min-height:36px}

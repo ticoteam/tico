@@ -355,10 +355,8 @@ class Settings:
     # TypeSafe's published price, output free. Both 0 is unknown: the call's tokens are kept, its cost not counted.
     decisions_jev_usd_per_mtok_input: float = 0.042
     decisions_jev_usd_per_mtok_output: float = 0.0
-    # Org rule checks (backend/org_rule_check.py): their own monthly USD cap, apart from Decide's, so checks and
-    # screening never spend each other's (a cap saved in Automations > Maintenance wins); how many `hub rules check` drafts one bot
-    # may check in a UTC day; and how many checks run at once (past that, an output goes through unchecked, `busy`).
-    rules_monthly_usd: float = 50.0
+    # Org rule checks (backend/org_rule_check.py) spend from Decide's monthly cap above. How many `hub rules check` drafts
+    # one bot may check in a UTC day, and how many checks run at once (past that, an output goes through unchecked, `busy`).
     rules_check_daily_drafts: int = 200
     rule_check_concurrency: int = 8
     # Idea triage on the public roadmap's suggestion form (backend/idea_triage.py, questions/idea-triage.json): off by
@@ -682,7 +680,6 @@ class Settings:
             decisions_jev_usd_per_mtok_output=max(
                 0.0, float(os.environ.get("TICO_DECISIONS_JEV_USD_PER_MTOK_OUTPUT", "") or 0)
             ),
-            rules_monthly_usd=max(0.0, float(os.environ.get("TICO_RULES_MONTHLY_USD", "") or 50.0)),
             rules_check_daily_drafts=max(0, int(os.environ.get("TICO_RULES_CHECK_DAILY", "") or 200)),
             rule_check_concurrency=max(1, int(os.environ.get("TICO_RULE_CHECK_CONCURRENCY", "") or 8)),
             decisions_idea_triage=not rehearsal and os.environ.get("TICO_DECISIONS_IDEA_TRIAGE", "0") == "1",

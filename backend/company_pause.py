@@ -16,8 +16,10 @@
 """
 
 import json
+import logging
 import sqlite3
 from collections.abc import Callable
+from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, TypedDict, cast
 
 from . import hubdb as H
@@ -29,11 +31,15 @@ if TYPE_CHECKING:
 
 KEY = "company_pause"
 CONTROLLERS = ("owner", "admin")
+HELD = "company.held"  # the event that marks a held line written on a task in one pause
+log = logging.getLogger(__name__)
 
 # The hub's helpers and the auth class are not annotated in full; these name their shapes for this module.
 _metadata = cast("Callable[[sqlite3.Connection, str], tuple[Any, ...] | None]", read_cache.metadata)
 _human = cast("Callable[[sqlite3.Connection, str], dict[str, Any] | None]", H.human)
 _actor_id = cast("Callable[[str], str]", H.actor_id)
+_task_comment = cast("Callable[..., object]", H.task_comment)
+_hub_event = cast("Callable[[sqlite3.Connection, str, str, str, dict[str, Any]], object]", H.event)
 _event = cast("Callable[[sqlite3.Connection, str, str, str, dict[str, Any]], object]", H.event)
 
 
@@ -113,6 +119,7 @@ def pause(c: sqlite3.Connection, auth: "Auth", who: "Identity") -> dict[str, Any
         (KEY, json.dumps({"paused_by": who.actor, "paused_at": H.now()})),
     )
     _event(c, who.actor, "company.pause", "company", {"bots_paused_on_own": bots_paused_on_own(c)})
+    hold_queued(c)
     return {"changed": True, "state": read(c)}
 
 
@@ -123,6 +130,95 @@ def resume(c: sqlite3.Connection, auth: "Auth", who: "Identity") -> dict[str, An
         raise Problem("forbidden", "Only the owner or an admin can resume all bots on Tico Team", 403)
     if not record(c):
         return {"changed": False, "state": read(c)}
+    held = queued_jobs(c)
     c.execute("DELETE FROM registry_metadata WHERE key=?", (KEY,))
-    _event(c, who.actor, "company.resume", "company", {"bots_paused_on_own": bots_paused_on_own(c)})
-    return {"changed": True, "state": read(c)}
+    _event(c, who.actor, "company.resume", "company", {"bots_paused_on_own": bots_paused_on_own(c), "held": held})
+    return {"changed": True, "state": read(c), "held": held}
+
+
+def _when(value: str) -> str:
+    """`2026-11-08T12:38:00.000000Z` as "12:38 UTC, Nov 8" for the words a person reads."""
+    try:
+        when = datetime.fromisoformat(value.replace("Z", "+00:00")).astimezone(timezone.utc)
+    except ValueError:
+        return value
+    return f"{when:%H:%M} UTC, {when:%b} {when.day}"
+
+
+def waiting_words(found: Record) -> str:
+    """What a queued task shows while the company is paused (the page reads it beside the task's column)."""
+    return f"all bots are paused by {found['paused_by_name']}. Resume to start."
+
+
+def _held_line(found: Record) -> str:
+    return (
+        f"Held: all bots on Tico Team are paused by {found['paused_by_name']} since {_when(found['paused_at'])}. "
+        "The owner or an admin can resume them; this task starts when they do."
+    )
+
+
+def queued_task_ids(c: sqlite3.Connection, bot: str) -> list[str]:
+    """The tasks with queued work for this bot, in queue order, each once."""
+    rows = c.execute(
+        "SELECT json_extract(m.refs,'$.task') FROM jobs j JOIN messages m ON m.id=j.message_id "
+        "WHERE j.bot_id=? AND j.state='queued' AND json_extract(m.refs,'$.task') IS NOT NULL "
+        "ORDER BY j.created_at, j.rowid",
+        (bot,),
+    ).fetchall()
+    found: list[str] = []
+    for row in rows:
+        task_id = str(row[0])
+        if task_id not in found:
+            found.append(task_id)
+    return found
+
+
+def hold_task(c: sqlite3.Connection, task_id: str, found: Record) -> bool:
+    """Write the held line on a task once per pause (S3): a Hub comment that wakes no bot, and an event that marks it.
+    True when the line was written now."""
+    marked = c.execute(
+        "SELECT 1 FROM events WHERE action=? AND target=? AND json_extract(detail,'$.paused_at')=? LIMIT 1",
+        (HELD, task_id, found["paused_at"]),
+    ).fetchone()
+    if marked:
+        return False
+    try:
+        _task_comment(
+            c, H.KEEPER, task_id, _held_line(found), wake=False, extra_refs={"company_held": found["paused_at"]}
+        )
+    except H.Refused:
+        log.info("The held line for task %s was refused; the pause still holds its work", task_id)
+        return False
+    _hub_event(c, H.KEEPER, HELD, task_id, {"paused_at": found["paused_at"]})
+    return True
+
+
+def hold_queued(c: sqlite3.Connection) -> int:
+    """Write the held lines for every task with queued work for a bot while the company is paused. Returns how many."""
+    found = record(c)
+    if not found:
+        return 0
+    bots = [str(row[0]) for row in c.execute("SELECT DISTINCT bot_id FROM jobs WHERE state='queued'")]
+    return sum(hold_task(c, task_id, found) for bot in bots for task_id in queued_task_ids(c, bot))
+
+
+def hold_new_job(c: sqlite3.Connection, message: dict[str, Any]) -> bool:
+    """A job queued to a bot while the company is paused: the held line on its task, once per pause. A held line's own
+    message carries company_held in its refs, so it is not held again."""
+    found = record(c)
+    refs: Any = message.get("refs")
+    if isinstance(refs, str):
+        refs = json.loads(refs) if refs.startswith("{") else None
+    if not found or not isinstance(refs, dict):
+        return False
+    fields = cast("dict[str, Any]", refs)
+    task_id = fields.get("task")
+    if not isinstance(task_id, str) or not task_id or fields.get("company_held"):
+        return False
+    return hold_task(c, task_id, found)
+
+
+def queued_jobs(c: sqlite3.Connection) -> int:
+    """How many jobs are queued to any bot: the work the pause holds, which starts in queue order once it is lifted."""
+    row = cast("tuple[int]", c.execute("SELECT COUNT(*) FROM jobs WHERE state='queued'").fetchone())
+    return int(row[0])

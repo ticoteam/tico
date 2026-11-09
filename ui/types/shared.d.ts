@@ -155,6 +155,15 @@ interface BotAgent {
   [key: string]: unknown;
 }
 
+/** One row of a bot's access list (`access` on a roster row): a service the bot can reach, as which identity, with what verbs. */
+interface BotAccess {
+  service: string;
+  identity?: string | null;
+  can: string[];
+  connected?: boolean;
+  note?: string | null;
+}
+
 /** One bot on the roster (GET /api/employees). A person is a Person; a bot is one of these. */
 interface Employee {
   id: string;
@@ -170,6 +179,7 @@ interface Employee {
   is_branch?: boolean;
   can_chat?: boolean;
   my_access?: AccessLevel;
+  access?: BotAccess[] | null;
   machine?: BotMachine | null;
   agent?: BotAgent | null;
   /** Whether the bot's computer or agent is up, and whether its setup is done (the status tooltip, ui/app/tooltip.ts, reads them). */
