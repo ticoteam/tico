@@ -1,28 +1,45 @@
+import type * as PageSupport from './support/page.cjs';
+import type * as Routes from './support/routes.cjs';
 // An out-of-date desktop app says so: the bar offers Update, the shell's failure reason is shown with a
 // download link, and Settings shows both versions.
-const {webkit} = require('playwright');
-const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const {html, uiFile} = require('./support/page.cjs');
-const {unrouted} = require('./support/routes.cjs');
+const {webkit}: typeof import('playwright') = require('playwright');
+const assert: typeof import('node:assert/strict') = require('node:assert/strict');
+const fs: typeof import('node:fs') = require('node:fs');
+const {html, uiFile} = require('./support/page.cjs') as typeof PageSupport;
+const {unrouted} = require('./support/routes.cjs') as typeof Routes;
+
+// The desktop shell's bridge, which the app reads from window; the fixture records what the page posts to it.
+interface AppUpdateEvent {
+  state: string;
+  detail: string;
+}
+declare global {
+  interface Window {
+    __posted: [string, unknown][];
+    ticoNative: (name: string) => {postMessage(body: unknown): unknown};
+    ticoNativeFeatures: string[];
+    ticoNativeVersion: string;
+    ticoAppUpdate: (event: AppUpdateEvent) => void;
+  }
+}
 
 (async () => {
   const browser = await webkit.launch({headless:true});
   const page = await browser.newPage({serviceWorkers:'block', viewport:{width:1240,height:820},
     userAgent:'Mozilla/5.0 AppleWebKit/605.1.15 TicoHub'});
-  const errors = [];
-  page.on('pageerror', e => errors.push(e.message));
+  const errors: string[] = [];
+  page.on('pageerror', (e: Error) => errors.push(e.message));
   await page.addInitScript(() => {
-    window.EventSource = undefined;
+    window.EventSource = undefined as unknown as typeof EventSource;
     Object.defineProperty(navigator, 'platform', {get: () => 'MacIntel'});
     window.__posted = [];
-    window.ticoNative = name => ({postMessage: body => window.__posted.push([name, body])});
+    window.ticoNative = (name: string) => ({postMessage: (body: unknown) => window.__posted.push([name, body])});
     window.ticoNativeFeatures = ['openWindow', 'checkForUpdates'];
     window.ticoNativeVersion = '0.3.40';
   });
   await page.route('**/*', async route => {
     const p = new URL(route.request().url()).pathname;
-    const json = body => route.fulfill({contentType:'application/json',body:JSON.stringify(body)});
+    const json = (body: unknown) => route.fulfill({contentType:'application/json',body:JSON.stringify(body)});
     if (p === '/') return route.fulfill({contentType:'text/html',body:html});
     if (p.startsWith('/tico/ui/')) {
       const file = uiFile(p.slice('/tico/ui/'.length));
@@ -37,19 +54,19 @@ const {unrouted} = require('./support/routes.cjs');
   await page.goto('https://tico-ui.test/#/settings', {waitUntil:'domcontentloaded'});
   const bar = page.locator('#app-update');
   await bar.waitFor({state:'visible'});
-  assert.match(await page.locator('#app-update-text').textContent(), /App v0\.3\.46 is ready/);
+  assert.match((await page.locator('#app-update-text').textContent())!, /App v0\.3\.46 is ready/);
 
   await page.locator('#app-update-go').click();
   assert.deepEqual(await page.evaluate(() => window.__posted.filter(([n]) => n === 'checkForUpdates').length), 1);
   await page.evaluate(() => window.ticoAppUpdate({state:'installing', detail:'0.3.46'}));
-  assert.match(await page.locator('#app-update-text').textContent(), /Installing v0\.3\.46/);
+  assert.match((await page.locator('#app-update-text').textContent())!, /Installing v0\.3\.46/);
   await page.evaluate(() => window.ticoAppUpdate({state:'failed', detail:'could not read the update feed: 403'}));
-  assert.match(await page.locator('#app-update-text').textContent(), /did not install \(could not read the update feed: 403\)/);
+  assert.match((await page.locator('#app-update-text').textContent())!, /did not install \(could not read the update feed: 403\)/);
   assert.equal(await page.locator('#app-update-dl').getAttribute('href'), 'https://github.com/ticoteam/tico/releases/download/v0.3.46/Tico.dmg');
   assert.ok(await page.locator('#app-update-dl').isVisible());
   // Links are ink and so is the bar: the Download link is the primary button, never ink on ink.
-  const [fg, bg, barBg] = await page.evaluate(() => [getComputedStyle(document.querySelector('#app-update-dl')).color,
-    getComputedStyle(document.querySelector('#app-update-dl')).backgroundColor, getComputedStyle(document.querySelector('#app-update')).backgroundColor]);
+  const [fg, bg, barBg] = await page.evaluate(() => [getComputedStyle(document.querySelector('#app-update-dl')!).color,
+    getComputedStyle(document.querySelector('#app-update-dl')!).backgroundColor, getComputedStyle(document.querySelector('#app-update')!).backgroundColor]);
   assert.notEqual(fg, bg === 'rgba(0, 0, 0, 0)' ? barBg : bg, 'Download text differs from what is behind it');
   assert.notEqual(bg, barBg, 'Download is a button on the bar, not a link in it');
 

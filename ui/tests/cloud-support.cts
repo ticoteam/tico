@@ -1,3 +1,6 @@
+import type * as PageSupport from './support/page.cjs';
+import type * as Routes from './support/routes.cjs';
+import type {Page} from 'playwright';
 // Tico support on cloud machines (ui/app/cloud-machines.ts, GET/PUT /api/v2/cloud-machines/support), fixtures only:
 //  - Settings > People: on Tico Cloud the owner's team rules carry the switch, as HQ reads it; a change PUTs it, and a
 //    failed or uncertain change re-reads HQ with the reason under the switch;
@@ -5,35 +8,45 @@
 //  - Settings > Computers: each cloud machine's row names its helper's state, matched by HQ's key (`_shared` or the
 //    bot), a helper that is not there shows nothing, and each Settings entry reads current state;
 //  - a failed read shows nothing and is retried on the next entry, in the same browser page.
-const {chromium} = require('playwright');
-const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const {html, uiFile} = require('./support/page.cjs');
-const {unrouted} = require('./support/routes.cjs');
+const {chromium}: typeof import('playwright') = require('playwright');
+const assert: typeof import('node:assert/strict') = require('node:assert/strict');
+const fs: typeof import('node:fs') = require('node:fs');
+const {html, uiFile} = require('./support/page.cjs') as typeof PageSupport;
+const {unrouted} = require('./support/routes.cjs') as typeof Routes;
+
+// Defined by ui/app/router.ts, ui/app/api.ts and ui/app/cloud-machines.ts, which the page loads.
+declare function route(hash?: string): void;
+declare const pendingWrites: Map<string, string>;
+declare const CLOUD_SUPPORT: {view: unknown; read: Promise<unknown> | null};
+declare function loadSettings(): Promise<void>;
 
 const CONFIG = {environment_id: 'acme', company_name: 'Acme', app_name: 'Acme Hub', assistant_name: 'Ace', assistant_bot: 'coo',
   public_url: 'https://acme.test', runner_url: 'https://acme.test', github_owner: '', local: false, release: '',
   onboarding_needed: false, providers_configured: true};
 
+interface Machine { id: string; key: string; helper: string; seen: string | null }
+interface Support { available: boolean; on: boolean | null; machines: Machine[] }
+interface Me { id: string; name: string; role: string; cloud: boolean; email: string; config: typeof CONFIG; bot_admin?: boolean }
+
 (async () => {
-  const browser = await chromium.launch({headless: true, channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined});
+  const browser = await chromium.launch({headless: true, channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined} as Parameters<typeof chromium.launch>[0]);
   try {
     const context = await browser.newContext({viewport: {width: 1200, height: 900}, serviceWorkers: 'block'});
     const people = [{id: 'ana', name: 'Ana Rivera', email: 'ana@acme.example'}, {id: 'ben', name: 'Ben Cole', email: 'ben@acme.example'}];
-    const machines = [{id: 'cm-shared', key: '_shared', helper: 'on', seen: '2026-11-05T10:00:00Z'},
+    const machines: Machine[] = [{id: 'cm-shared', key: '_shared', helper: 'on', seen: '2026-11-05T10:00:00Z'},
       {id: 'cm-helper', key: 'helper', helper: 'offline', seen: null}, {id: 'cm-scout', key: 'scout', helper: 'none', seen: null}];
-    let me = {id: 'ana', name: 'Ana Rivera', role: 'owner', cloud: true, email: 'ana@acme.example', config: CONFIG};
-    let support = {available: true, on: true, machines}, failPut = false, failGet = false;
-    let rules = {};
-    const reads = [], writes = [], writeKeys = [], changes = [];
-    const receipts = new Map();
+    let me: Me = {id: 'ana', name: 'Ana Rivera', role: 'owner', cloud: true, email: 'ana@acme.example', config: CONFIG};
+    let support: Support = {available: true, on: true, machines}, failPut: boolean | 'lost' | 'applied' | 'stale' = false, failGet = false;
+    let rules: Record<string, unknown> = {};
+    const reads: string[] = [], writes: {on: boolean}[] = [], writeKeys: (string | undefined)[] = [], changes: boolean[] = [];
+    const receipts = new Map<string, unknown>();
     await context.route('**/*', async route => {
       const request = route.request(), p = new URL(request.url()).pathname, method = request.method();
-      const json = (body, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
+      const json = (body: unknown, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
       if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
       const module = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/);
-      if (module && fs.existsSync(uiFile(module[1])))
-        return route.fulfill({contentType: module[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(module[1]), 'utf8')});
+      if (module && fs.existsSync(uiFile(module[1]!)))
+        return route.fulfill({contentType: module[1]!.endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(module[1]!), 'utf8')});
       if (p === '/api/v2/cloud-machines/support' && method === 'GET') {
         reads.push(p);
         return failGet ? json({error: {code: 'hq_unreachable', detail: "Didn't reach Tico HQ. Try again."}}, 502) : json(support);
@@ -83,15 +96,15 @@ const CONFIG = {environment_id: 'acme', company_name: 'Acme', app_name: 'Acme Hu
       if (p.endsWith('/watch')) return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});
       return json(unrouted(p));
     });
-    const errors = [];
-    const open = async tab => {
+    const errors: string[] = [];
+    const open = async (tab: string): Promise<Page> => {
       const page = await context.newPage();
       page.on('pageerror', e => errors.push(e.message));
       await page.goto(`https://tico-ui.test/#/settings/${tab}`);
       await page.locator(`[data-settings-tab=${tab}][aria-selected=true]`).waitFor();
       return page;
     };
-    const enter = async (page, tab) => {
+    const enter = async (page: Page, tab: string) => {
       await page.locator('[data-settings-tab=general]').click();
       await page.locator(`[data-settings-tab=${tab}]`).click();
       await page.evaluate(() => CLOUD_SUPPORT.read);
@@ -105,7 +118,7 @@ const CONFIG = {environment_id: 'acme', company_name: 'Acme', app_name: 'Acme Hu
     assert.equal(await toggle.isDisabled(), false);
     assert.equal(await page.locator('.people-rules #people-cloud-support').count(), 1, 'with the other team rules');
     await toggle.click();
-    await page.waitForFunction(() => document.querySelector('#people-cloud-support')?.disabled === false);
+    await page.waitForFunction(() => document.querySelector<HTMLInputElement>('#people-cloud-support')?.disabled === false);
     assert.deepEqual(writes.shift(), {on: false});
     assert.equal(await toggle.isChecked(), false);
     const afterOpen = reads.length;
@@ -144,9 +157,9 @@ const CONFIG = {environment_id: 'acme', company_name: 'Acme', app_name: 'Acme Hu
       'recovery forgets the unconfirmed write');
     failPut = false;
     await toggle.click();
-    await page.waitForFunction(() => document.querySelector('#people-cloud-support')?.disabled === false);
+    await page.waitForFunction(() => document.querySelector<HTMLInputElement>('#people-cloud-support')?.disabled === false);
     await toggle.click();
-    await page.waitForFunction(() => document.querySelector('#people-cloud-support')?.disabled === false);
+    await page.waitForFunction(() => document.querySelector<HTMLInputElement>('#people-cloud-support')?.disabled === false);
     assert.deepEqual(changes.slice(firstChange), [false, true, false], 'every explicit choice reaches HQ');
     assert.equal(new Set(writeKeys.slice(firstKey)).size, 3, 'each explicit toggle gets a fresh key');
     assert.equal(support.on, false);
@@ -159,7 +172,7 @@ const CONFIG = {environment_id: 'acme', company_name: 'Acme', app_name: 'Acme Hu
       await page.locator('#set-people [data-field-err]').waitFor();
       assert.equal(await toggle.isChecked(), false, 'the stale answer keeps HQ\'s off state');
       assert.equal(await toggle.isDisabled(), false, 'HQ\'s stale answer gives a known state even if GET fails');
-      assert.equal(await toggle.evaluate(box => box.indeterminate), false);
+      assert.equal(await toggle.evaluate<boolean, unknown, HTMLInputElement>(box => box.indeterminate), false);
       assert.equal(writeKeys.length, beforeStale + 1, 'stale revisions are final');
       assert.equal(await page.evaluate(() => pendingWrites.size), 0);
       assert.match(await page.locator('#set-people [data-field-err]').innerText(), /A newer change already reached Tico HQ\./);
@@ -167,35 +180,35 @@ const CONFIG = {environment_id: 'acme', company_name: 'Acme', app_name: 'Acme Hu
     failPut = false; failGet = false;
     // Leave the owner enabled for the entry-refresh checks below.
     await toggle.click();
-    await page.waitForFunction(() => document.querySelector('#people-cloud-support')?.disabled === false);
+    await page.waitForFunction(() => document.querySelector<HTMLInputElement>('#people-cloud-support')?.disabled === false);
     writes.length = 0;
     const afterFailures = reads.length;
     // Another rule's save redraws the page from what HQ last answered, without reading it again.
     const redrawn = page.waitForResponse(response => response.url().endsWith('/api/v2/access') && response.request().method() === 'GET');
     await page.locator('[data-rule=admin_sql]').uncheck();
     await redrawn;
-    await page.waitForFunction(() => document.querySelector('[data-rule=admin_sql]')?.checked === false);
+    await page.waitForFunction(() => document.querySelector<HTMLInputElement>('[data-rule=admin_sql]')?.checked === false);
     assert.equal(await page.locator('#people-cloud-support').isChecked(), true);
     assert.equal(reads.length, afterFailures, 'a rule redraw shares the current entry');
 
     // Both a fresh pane entry and a return to Settings read HQ again in this same document.
     support = {...support, on: false};
     await enter(page, 'people');
-    await page.waitForFunction(() => document.querySelector('#people-cloud-support')?.checked === false);
+    await page.waitForFunction(() => document.querySelector<HTMLInputElement>('#people-cloud-support')?.checked === false);
     assert.ok(reads.length > afterFailures);
     support = {...support, on: true};
     await page.evaluate(() => { route('#/updates'); route('#/settings'); });
-    await page.waitForFunction(() => document.querySelector('#people-cloud-support')?.checked === true);
+    await page.waitForFunction(() => document.querySelector<HTMLInputElement>('#people-cloud-support')?.checked === true);
 
     // If neither the write nor the read can be confirmed, the switch stays unknown until re-entry succeeds.
     failPut = true; failGet = true;
     await toggle.click();
     await page.locator('#set-people [data-field-err]').waitFor();
     assert.equal(await toggle.isDisabled(), true);
-    assert.equal(await toggle.evaluate(box => box.indeterminate), true);
+    assert.equal(await toggle.evaluate<boolean, unknown, HTMLInputElement>(box => box.indeterminate), true);
     failPut = false; failGet = false;
     await enter(page, 'people');
-    await page.waitForFunction(() => document.querySelector('#people-cloud-support')?.disabled === false);
+    await page.waitForFunction(() => document.querySelector<HTMLInputElement>('#people-cloud-support')?.disabled === false);
     assert.equal(await toggle.isChecked(), true);
     support = {...support, on: false, machines: machines.map(m => ({...m, helper: m.helper === 'none' ? 'none' : 'off'}))};
     await page.close();
@@ -203,7 +216,7 @@ const CONFIG = {environment_id: 'acme', company_name: 'Acme', app_name: 'Acme Hu
     // Settings > Computers: each cloud machine's helper, by key; a helper that is not there and a computer say nothing.
     reads.length = 0;
     page = await open('devices');
-    const row = id => page.locator(`#set-machines tr[data-computer-row="${id}"] [data-machine-support]`);
+    const row = (id: string) => page.locator(`#set-machines tr[data-computer-row="${id}"] [data-machine-support]`);
     await row('r8').waitFor();
     assert.equal(await row('r8').innerText(), 'Tico support: off');
     assert.equal(await row('r9').innerText(), 'Tico support: off');

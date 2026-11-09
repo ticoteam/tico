@@ -1,19 +1,23 @@
+import type * as PageSupport from './support/page.cjs';
+import type * as Routes from './support/routes.cjs';
 // Opening the changelog acknowledges what it shows (older pages too), keeps those entries listed for the visit,
 // and the read state survives another sign-in.
-const {chromium} = require('playwright');
-const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const path = require('node:path');
-const {html, uiFile} = require('./support/page.cjs');
-const {unrouted} = require('./support/routes.cjs');
+const {chromium}: typeof import('playwright') = require('playwright');
+const assert: typeof import('node:assert/strict') = require('node:assert/strict');
+const fs: typeof import('node:fs') = require('node:fs');
+const path: typeof import('node:path') = require('node:path');
+const {html, uiFile} = require('./support/page.cjs') as typeof PageSupport;
+const {unrouted} = require('./support/routes.cjs') as typeof Routes;
+type Hold = {promise: Promise<void>; release: () => void};
+declare function setDrawer(open: boolean): void;
 const shots = process.env.TICO_SCREENSHOT_DIR;
 (async () => {
-  const browser = await chromium.launch({headless:true, channel:process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined});
+  const browser = await chromium.launch({headless:true, channel:process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined} as Parameters<typeof chromium.launch>[0]);
   try {
     const ctx = await browser.newContext({viewport:{width:1440,height:900}, serviceWorkers:'block'});
     const page = await ctx.newPage();
-    const errors = [], posts = [], read = new Set();
-    let failRead = false, failLoad = false, pageSize = 50, hold = null, dropRead = false;
+    const errors: string[] = [], posts: {ids: string[]}[] = [], read = new Set<string>();
+    let failRead = false, failLoad = false, pageSize = 50, hold: Hold | null = null, dropRead = false;
     const entries = [
       {id:'release-0.3.23', title:'Tico v0.3.23', version:'0.3.23', source:'release', kind:'product', shipped_at:'2026-10-05T00:00:00Z', published_at:'2026-10-05T15:42:00-07:00',
        bullets:['Relate tasks to each other, including follow-ups, duplicates and blockers.', 'Long chats show an outline so you can jump back to any prompt.', 'Task and conversation updates arrive as they happen.', 'See what each bot learned from its recent work.', 'Releases reach your team faster.'],
@@ -27,9 +31,9 @@ const shots = process.env.TICO_SCREENSHOT_DIR;
     page.on('pageerror', e => errors.push(e.message));
     await page.route('**/*', async route => {
       const req = route.request(), p = new URL(req.url()).pathname;
-      const json = (body,status=200) => route.fulfill({status,contentType:'application/json',body:JSON.stringify(body)});
+      const json = (body: unknown,status=200) => route.fulfill({status,contentType:'application/json',body:JSON.stringify(body)});
       const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/);
-      if (ui && fs.existsSync(uiFile(ui[1]))) return route.fulfill({contentType:ui[1].endsWith('.css')?'text/css':'application/javascript',body:fs.readFileSync(uiFile(ui[1]),'utf8')});
+      if (ui && fs.existsSync(uiFile(ui[1]!))) return route.fulfill({contentType:ui[1]!.endsWith('.css')?'text/css':'application/javascript',body:fs.readFileSync(uiFile(ui[1]!),'utf8')});
       const asset = p.startsWith('/assets/') || p.startsWith('/vendor/') ? uiFile(p.slice(1)) : p.startsWith('/tico/ui/') ? uiFile(p.slice(9)) : '';
       if (asset && fs.existsSync(asset) && fs.statSync(asset).isFile()) return route.fulfill({body:fs.readFileSync(asset)});
       if (/\.(?:js|ts)$/.test(p)) return route.fulfill({contentType:'application/javascript',body:''});
@@ -39,7 +43,7 @@ const shots = process.env.TICO_SCREENSHOT_DIR;
       if (p === '/api/v2/changelog') {
         if (failLoad) return json({error:{detail:'Could not load changes'}},503);
         const params = new URL(req.url()).searchParams;
-        const matched = entries.map(r => ({...r, unread:r.kind === 'product' && !read.has(r.id)})).filter(r => (params.get('kind') !== 'product' || r.kind === 'product') && (params.get('unread') !== 'true' || r.unread) && (!params.get('q') || (r.title + ' ' + r.bullets.join(' ')).toLowerCase().includes(params.get('q').toLowerCase())));
+        const matched = entries.map(r => ({...r, unread:r.kind === 'product' && !read.has(r.id)})).filter(r => (params.get('kind') !== 'product' || r.kind === 'product') && (params.get('unread') !== 'true' || r.unread) && (!params.get('q') || (r.title + ' ' + r.bullets.join(' ')).toLowerCase().includes(params.get('q')!.toLowerCase())));
         const offset = Number(params.get('offset') || 0), next = offset + pageSize < matched.length ? offset + pageSize : null;
         return json({entries:matched.slice(offset, offset + pageSize), unread_count:count(), next_offset:next, current_version:'0.3.23', drafts:[], can_review:false, can_add:false});
       }
@@ -47,7 +51,7 @@ const shots = process.env.TICO_SCREENSHOT_DIR;
         posts.push(req.postDataJSON());
         if (failRead) return json({error:{detail:'Could not save read state'}},503);
         // The server commits before its reply, which a test can hold back or lose.
-        req.postDataJSON().ids.forEach(id => read.add(id));
+        req.postDataJSON().ids.forEach((id: string) => read.add(id));
         if (hold) await hold.promise;
         if (dropRead) return route.abort('connectionreset');
         return json({unread_count:count()});
@@ -66,11 +70,11 @@ const shots = process.env.TICO_SCREENSHOT_DIR;
     await page.locator('.release-entry').first().waitFor();
     assert.equal(await page.locator('.release-entry').count(),2);
     const timed = page.locator('.release-entry', {hasText:'Tico v0.3.23'}).locator('.release-date');
-    assert.match(await timed.locator('.release-time').textContent(),/^\d{1,2}:42\s?(AM|PM)\s\S+$/,'a timed release shows its time with a zone');
+    assert.match((await timed.locator('.release-time').textContent())!,/^\d{1,2}:42\s?(AM|PM)\s\S+$/,'a timed release shows its time with a zone');
     assert.equal(await page.locator('.release-entry', {hasText:'Tico v0.3.22'}).locator('.release-time').count(),0,'a date-only release shows just the date');
     assert.equal(await page.locator('[data-add-update]').isVisible(),false);
     assert.equal(await page.locator('[data-read-changes]').count(),0,'there is no mark-as-read button');
-    await page.waitForFunction(() => document.querySelector('#changelog-notice').hidden);
+    await page.waitForFunction(() => document.querySelector<HTMLElement>('#changelog-notice')!.hidden);
     assert.deepEqual(posts.map(b => b.ids).flat().sort(),['release-0.3.22','release-0.3.23'],'opening acknowledges the product entries shown');
     assert.equal(count(),0);
     assert.equal(await page.locator('.release-new').count(),2,'acknowledged entries stay listed as new for this visit');
@@ -83,7 +87,7 @@ const shots = process.env.TICO_SCREENSHOT_DIR;
       await page.screenshot({path:path.join(shots,'changelog-desktop.png'),fullPage:true});
       await page.setViewportSize({width:390,height:844});
       await page.evaluate(() => setDrawer(false));
-      await page.waitForFunction(() => document.querySelector('#side').getBoundingClientRect().right <= 1);
+      await page.waitForFunction(() => document.querySelector<HTMLElement>('#side')!.getBoundingClientRect().right <= 1);
       await page.screenshot({path:path.join(shots,'changelog-phone.png'),fullPage:true});
       await page.setViewportSize({width:1440,height:900});
     }
@@ -111,7 +115,7 @@ const shots = process.env.TICO_SCREENSHOT_DIR;
     assert.equal(count(),2,'a failed write leaves the changes unread');
     assert.equal(await page.locator('#changelog-notice').isHidden(),false);
     failRead = false;
-    const held = () => { let release; const promise = new Promise(r => { release = r; }); return {promise, release}; };
+    const held = (): Hold => { let release!: () => void; const promise = new Promise<void>(r => { release = r as () => void; }); return {promise, release}; };
     // A slow or lost reply after the server committed: the entry stays listed and open while it is being read.
     for (const lost of [false, true]) {
       read.clear(); hold = held();
@@ -128,9 +132,9 @@ const shots = process.env.TICO_SCREENSHOT_DIR;
       await page.locator('.release-more summary').click();
       dropRead = lost; hold.release(); hold = null;
       if (lost) for (let i = 0; posts.length < sent + 3 && i < 100; i++) await page.waitForTimeout(100);
-      else await page.waitForFunction(() => document.querySelector('#changelog-notice').hidden);
+      else await page.waitForFunction(() => document.querySelector<HTMLElement>('#changelog-notice')!.hidden);
       await page.waitForTimeout(200);
-      assert.equal(await page.locator('.release-more').evaluate(d => d.open),true,'the settled save leaves the open release open');
+      assert.equal(await page.locator('.release-more').evaluate(d => (d as HTMLDetailsElement).open),true,'the settled save leaves the open release open');
       assert.equal(await page.locator('.release-entry h2').textContent(),'Tico v0.3.23');
       dropRead = false;
     }
@@ -143,8 +147,8 @@ const shots = process.env.TICO_SCREENSHOT_DIR;
     assert.equal(await page.locator('#changelog-notice').isHidden(),false,'the older change is still unread');
     assert.equal(await page.locator('.release-entry').count(),1);
     await page.locator('[data-more-changes]').click();
-    await page.waitForFunction(() => document.querySelectorAll('.release-entry').length === 2 && document.querySelector('#changelog-notice').hidden);
-    assert.deepEqual(posts.at(-1).ids,['release-0.3.22'],'Load older changes acknowledges the older entries it adds');
+    await page.waitForFunction(() => document.querySelectorAll('.release-entry').length === 2 && document.querySelector<HTMLElement>('#changelog-notice')!.hidden);
+    assert.deepEqual(posts.at(-1)!.ids,['release-0.3.22'],'Load older changes acknowledges the older entries it adds');
     assert.equal(count(),0);
     pageSize = 50;
     await page.getByRole('combobox',{name:'Filter changes'}).selectOption('product');

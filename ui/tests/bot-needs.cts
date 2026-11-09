@@ -1,3 +1,5 @@
+import type * as PageSupport from './support/page.cjs';
+import type * as Routes from './support/routes.cjs';
 // A bot's task rail is one Tasks section with four tabs, each with its count: Needs you (what this bot needs from the
 // person: a question it asked on another bot's task, even a finished one, a task of its own
 // waiting on them, a question outside any task), Doing (Open/Doing tasks it holds, newest first), Blocked (each saying
@@ -5,16 +7,43 @@
 // the person looking. The org tree's number is the Needs you rows, and stays so when the list moves. The Tasks header's
 // pencil edits the sidebar and there is no board icon; a bot with one tab shows its list without a tab bar. Fixtures
 // only, no network.
-const {chromium} = require('playwright');
-const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const {html, uiFile} = require('./support/page.cjs');
-const {unrouted} = require('./support/routes.cjs');
+const {chromium}: typeof import('playwright') = require('playwright');
+const assert: typeof import('node:assert/strict') = require('node:assert/strict');
+const fs: typeof import('node:fs') = require('node:fs');
+const {html, uiFile} = require('./support/page.cjs') as typeof PageSupport;
+const {unrouted} = require('./support/routes.cjs') as typeof Routes;
+type Task = {id: string; title: string; body: string; owner_id: string; requester_id: string; status: string; lane: string; rank: null;
+  labels: string[]; tags: string[]; links: string[]; parts: {total: number; done: number}; version: number; created_at: string; updated_at: string;
+  waiting_on?: string; note?: string; ask?: Record<string, unknown>; done_at?: string; type_id?: string};
+type Layout = {builtin?: string; name: string; show_count?: boolean; conditions?: {field: string; value: string | string[]}[]};
+declare const S: {v2: {needs: unknown[]}};
+declare const BOT: {slug: string};
+declare const BOT_DONE: Map<string, {rows: {id: string}[]}>;
+declare const BOT_TASK_FILTERED: Map<string, {tabs: {needs: {count: number; matched_ids: string[]}}}>;
+declare const needCountsSeen: string[];
+declare const needCountObserver: MutationObserver;
+declare function botTaskTabs(): unknown;
+declare function botNeedsChanged(bot: string): void;
+declare function botNeedsPaint(bot: string): void;
+declare function botDonePaint(bot: string): void;
+declare function botTaskFilterRead(bot: string): Promise<void>;
+declare function needsMeCount(bot: string): number;
+declare function loadBotTasksV2(bot: string): Promise<void>;
+declare function renderTree(): void;
+declare function v2Refresh(): Promise<void>;
+declare global {
+  interface Window {
+    needCountsSeen: string[];
+    needCountObserver: MutationObserver;
+    fourTabs: () => unknown;
+    botTaskTabs: () => unknown;
+  }
+}
 
-const ago = minutes => new Date(Date.now() - minutes * 60000).toISOString();
+const ago = (minutes: number) => new Date(Date.now() - minutes * 60000).toISOString();
 const bots = ['lead', 'qa', 'senior'].map(name => ({name, display_name: {lead: 'Head of Engineering', qa: 'QA Engineer',
   senior: 'Senior Engineer'}[name], org_parent: '', host: 'keeper', status: 'active', can_chat: true, users: [{id: 'ana', name: 'Ana'}], schedules: []}));
-const task = (id, title, over = {}) => ({id, title, body: 'Details.', owner_id: 'bot:lead', requester_id: 'human:ana', status: 'doing',
+const task = (id: string, title: string, over: Partial<Task> = {}): Task => ({id, title, body: 'Details.', owner_id: 'bot:lead', requester_id: 'human:ana', status: 'doing',
   lane: 'company', rank: null, labels: [], tags: [], links: [], parts: {total: 0, done: 0}, version: 1, created_at: ago(600), updated_at: ago(60), ...over});
 const T = {
   own: task('t-own', 'Ship the release notes'),
@@ -39,25 +68,25 @@ const NEEDS = [{...T.asked, kind: 'question'}, {...T.forAna, kind: 'task'}, {...
   {...task('t-qa-ana', 'Approve the test plan', {owner_id: 'human:ana', requester_id: 'bot:qa', status: 'open'}), kind: 'task'}];
 
 // Head of Engineering keeps Done recently beside the new defaults (a layout saved before them).
-const LAYOUT = [{builtin: 'needs', name: 'Needs you'}, {builtin: 'active', name: 'Doing'}, {builtin: 'blocked', name: 'Blocked'},
+const LAYOUT: Layout[] = [{builtin: 'needs', name: 'Needs you'}, {builtin: 'active', name: 'Doing'}, {builtin: 'blocked', name: 'Blocked'},
   {builtin: 'done', name: 'Done recently'}, {name: 'Assigned to others', show_count: true, conditions: [{field: 'asked_by', value: 'this_bot'},
     {field: 'assigned_to', value: 'others'}, {field: 'status', value: ['open', 'doing', 'waiting']}]}];
 
 (async () => {
-  const browser = await chromium.launch({headless: true, channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined});
+  const browser = await chromium.launch({headless: true, channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined} as Parameters<typeof chromium.launch>[0]);
   try {
     const page = await browser.newPage({viewport: {width: 1280, height: 900}, serviceWorkers: 'block'});
-    const errors = [];
+    const errors: string[] = [];
     page.on('pageerror', error => errors.push(error.message));
-    let needs = NEEDS, filterExtras = null, releaseFilterRead = null;
-    const filterURLs = [];
+    let needs = NEEDS, filterExtras: {id: string}[] | null = null, releaseFilterRead: Promise<void> | null = null;
+    const filterURLs: string[] = [];
     await page.route('**/*', async route => {
       const url = new URL(route.request().url()), p = url.pathname, q = url.searchParams;
-      const json = body => route.fulfill({contentType: 'application/json', body: JSON.stringify(body)});
+      const json = (body: unknown) => route.fulfill({contentType: 'application/json', body: JSON.stringify(body)});
       if (/\/marked\.min\.js$/.test(p)) return route.fulfill({contentType: 'application/javascript', body: 'window.marked={parse:s=>String(s)}'});
       if (url.origin !== 'https://tico-ui.test') return route.abort();
       const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/);
-      if (ui && fs.existsSync(uiFile(ui[1]))) return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]), 'utf8')});
+      if (ui && fs.existsSync(uiFile(ui[1]!))) return route.fulfill({contentType: ui[1]!.endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]!), 'utf8')});
       if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
       if (p === '/api/me') return json({id: 'ana', role: 'owner', name: 'Ana', email: 'ana@example.test', cloud: true});
       if (p === '/api/humans') return json({people: [{id: 'ana', name: 'Ana'}]});
@@ -74,7 +103,7 @@ const LAYOUT = [{builtin: 'needs', name: 'Needs you'}, {builtin: 'active', name:
         const all = Object.values(T);
         // The rail reads open and finished tasks apart, finished ones since a day; the server filters both.
         const st = q.get('status'), since = q.get('updated_since');
-        const fits = t => (!st || st === 'all' || st.split(',').includes(t.status)) && (!since || t.updated_at >= since);
+        const fits = (t: Task) => (!st || st === 'all' || st.split(',').includes(t.status)) && (!since || t.updated_at >= since);
         if (q.get('owner') === 'lead') return json({tasks: all.filter(t => t.owner_id === 'bot:lead' && fits(t))});
         if (q.get('requester') === 'lead') return json({tasks: all.filter(t => t.requester_id === 'bot:lead' && t.status !== 'done')});
         return json({tasks: []});
@@ -98,8 +127,8 @@ const LAYOUT = [{builtin: 'needs', name: 'Needs you'}, {builtin: 'active', name:
           && ['open', 'doing', 'waiting'].includes(t.status));
         const owned = Object.values(T).filter(t => t.owner_id === 'bot:lead');
         const groups = [
-          {key: 'needs', name: 'Needs you', rows: (LAYOUT[0].conditions?.[0]?.field === 'status'
-            ? Object.values(T).filter(t => (t.owner_id === 'bot:lead' || t.requester_id === 'bot:lead') && LAYOUT[0].conditions[0].value.includes(t.status))
+          {key: 'needs', name: 'Needs you', rows: (LAYOUT[0]!.conditions?.[0]?.field === 'status'
+            ? Object.values(T).filter(t => (t.owner_id === 'bot:lead' || t.requester_id === 'bot:lead') && LAYOUT[0]!.conditions![0]!.value.includes(t.status))
             : Object.values(T).filter(t => (t.owner_id === 'bot:lead' || t.requester_id === 'bot:lead')
               && ((t.owner_id === 'human:ana' && ['open', 'doing', 'waiting'].includes(t.status)) || (t.status === 'waiting' && t.waiting_on === 'human:ana'))))},
           {key: 'active', name: 'Doing', rows: owned.filter(t => ['open', 'doing'].includes(t.status)).sort((a,b) => b.created_at.localeCompare(a.created_at))},
@@ -114,12 +143,12 @@ const LAYOUT = [{builtin: 'needs', name: 'Needs you'}, {builtin: 'active', name:
     });
     await page.goto('https://tico-ui.test/#/bot/lead/tasks');
     const rail = page.locator('#pane-tasks');
-    const titles = async list => (await rail.locator(`${list} .trow .ttl`).allInnerTexts()).map(s => s.trim());
-    const tab = key => rail.locator(`#bot-tab-t-${key}`);
+    const titles = async (list: string) => (await rail.locator(`${list} .trow .ttl`).allInnerTexts()).map(s => s.trim());
+    const tab = (key: string) => rail.locator(`#bot-tab-t-${key}`);
     await rail.locator('#t-needs .trow').first().waitFor();
 
     // One Tasks section with its tabs and their counts, before Updates and Files; no folded section after it.
-    const order = await rail.evaluate(el => [...el.querySelectorAll(':scope>.bot-w>.rail-sec')].map(c => c.id));
+    const order = await rail.evaluate(el => [...(el.querySelectorAll(':scope>.bot-w>.rail-sec') as unknown as Element[])].map(c => c.id));
     assert.deepEqual(order, ['bot-tasks', 'bot-latest', 'bot-files'], JSON.stringify(order));
     assert.equal(await rail.locator('#bot-assigned').count(), 0);
     assert.equal(await rail.locator('#bot-tasks .rail-h').innerText().then(s => s.trim().toLowerCase()), 'tasks');
@@ -147,7 +176,7 @@ const LAYOUT = [{builtin: 'needs', name: 'Needs you'}, {builtin: 'active', name:
     await page.locator('#need-card .dc-card[data-key="approval:approval-1"]').waitFor();
     assert.equal(await page.evaluate(() => location.hash), '#/bot/lead/tasks', 'the rail stays where it was');
     await page.keyboard.press('Escape');
-    await page.waitForFunction(() => !document.querySelector('#need-card')?.open);
+    await page.waitForFunction(() => !document.querySelector<HTMLDialogElement>('#need-card')?.open);
 
     // Editing Needs you changes its task filter, while the org number stays a fixed attention count.
     await rail.locator('#bot-sidebar-edit').click();
@@ -209,15 +238,15 @@ const LAYOUT = [{builtin: 'needs', name: 'Needs you'}, {builtin: 'active', name:
     // A redraw keeps the picked tab while Needs you has rows, and leaves the rail scrolled where it was.
     await tab('done').click();
     const scrolled = await page.evaluate(() => {
-      const r = document.querySelector('#pane-tasks');
+      const r = document.querySelector<HTMLElement>('#pane-tasks')!;
       r.style.overflowY = 'auto'; r.style.height = '80px'; r.scrollTop = r.scrollHeight; return r.scrollTop;
     });
     assert.ok(scrolled > 0);
     await page.evaluate(() => botNeedsChanged('lead'));
-    assert.equal(await page.evaluate(() => document.querySelector('#pane-tasks').scrollTop), scrolled);
+    assert.equal(await page.evaluate(() => document.querySelector<HTMLElement>('#pane-tasks')!.scrollTop), scrolled);
     assert.equal(await tab('done').getAttribute('aria-selected'), 'true');
     assert.equal(await rail.locator('#bot-needs').isHidden(), true);
-    await page.evaluate(() => { const r = document.querySelector('#pane-tasks'); r.style.height = r.style.overflowY = ''; r.scrollTop = 0; });
+    await page.evaluate(() => { const r = document.querySelector<HTMLElement>('#pane-tasks')!; r.style.height = r.style.overflowY = ''; r.scrollTop = 0; });
 
     // A half-typed answer on the card of the question outside any task survives a redraw of the rail, and the picked
     // tab stays.
@@ -228,11 +257,11 @@ const LAYOUT = [{builtin: 'needs', name: 'Needs you'}, {builtin: 'active', name:
     assert.equal(await page.locator('#need-card .dc-note textarea').inputValue(), 'Friday works');
     assert.equal(await tab('needs').getAttribute('aria-selected'), 'true');
     await page.locator('#need-card [data-dc="close"]').click();
-    await page.waitForFunction(() => !document.querySelector('#need-card')?.open);
+    await page.waitForFunction(() => !document.querySelector<HTMLDialogElement>('#need-card')?.open);
 
     // A supplemental question matching a later task-filter page is counted once, even before that page loads.
     await page.evaluate(() => {
-      const tab = BOT_TASK_FILTERED.get('lead').tabs.needs;
+      const tab = BOT_TASK_FILTERED.get('lead')!.tabs.needs;
       tab.count = 3; tab.matched_ids = ['t-asked'];
       botNeedsPaint('lead');
     });
@@ -260,11 +289,11 @@ const LAYOUT = [{builtin: 'needs', name: 'Needs you'}, {builtin: 'active', name:
       id: 'question-' + String(i).padStart(36, '0')}));
     await page.evaluate(items => {
       S.v2.needs = items; window.needCountsSeen = [];
-      window.needCountObserver = new MutationObserver(() => needCountsSeen.push(document.querySelector('#cnt-needs').textContent.trim()));
-      needCountObserver.observe(document.querySelector('#cnt-needs'), {childList: true, subtree: true});
+      window.needCountObserver = new MutationObserver(() => needCountsSeen.push(document.querySelector<HTMLElement>('#cnt-needs')!.textContent!.trim()));
+      needCountObserver.observe(document.querySelector('#cnt-needs')!, {childList: true, subtree: true});
     }, filterExtras);
-    let release;
-    releaseFilterRead = new Promise(resolve => { release = resolve; });
+    let release!: () => void;
+    releaseFilterRead = new Promise<void>(resolve => { release = resolve as () => void; });
     const requested = page.waitForRequest(r => r.url().includes('/task-tabs/tasks?match_ids='));
     const reading = page.evaluate(() => botTaskFilterRead('lead'));
     await requested;
@@ -284,7 +313,7 @@ const LAYOUT = [{builtin: 'needs', name: 'Needs you'}, {builtin: 'active', name:
 
     // Done recently pages 50 rows at a time.
     await tab('done').click();
-    await page.evaluate(() => { const d = BOT_DONE.get('lead'), row = d.rows[0]; d.rows = Array.from({length: 120}, (_, i) => ({...row, id: 'many-' + i})); botDonePaint('lead'); });
+    await page.evaluate(() => { const d = BOT_DONE.get('lead')!, row = d.rows[0]!; d.rows = Array.from({length: 120}, (_, i) => ({...row, id: 'many-' + i})); botDonePaint('lead'); });
     assert.equal(await rail.locator('#t-done .trow').count(), 50);
     await rail.getByRole('button', {name: 'Show 50 more'}).click();
     assert.equal(await rail.locator('#t-done .trow').count(), 100);

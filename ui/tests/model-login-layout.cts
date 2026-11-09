@@ -1,26 +1,58 @@
+import type * as PageSupport from './support/page.cjs';
 // A sign-in begins empty and receives its provider instructions on a later poll. Intrinsic dialog sizing must
 // give that content space in WebKit, and keep Cancel reachable when the content must scroll.
-const {webkit} = require('playwright');
-const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const {html, uiFile} = require('./support/page.cjs');
-const css = [...html.matchAll(/<link\b[^>]*href="\/tico\/ui\/([^"?]+\.css)(?:\?[^"]*)?"/g)]
-  .map(([, name]) => fs.readFileSync(uiFile(name), 'utf8')).join('\n');
+const {webkit}: typeof import('playwright') = require('playwright');
+const assert: typeof import('node:assert/strict') = require('node:assert/strict');
+const fs: typeof import('node:fs') = require('node:fs');
+const {html, uiFile} = require('./support/page.cjs') as typeof PageSupport;
 
-async function check(engine) {
+// Browser-side state the fixture sets on window; the app's model-login script reads and writes the same row.
+interface LoginRow {
+  id: string;
+  state: string;
+  created_at: string;
+  lines: string[];
+  url?: string;
+  code?: string;
+  code_sent?: boolean;
+  accepts_code?: boolean;
+}
+interface LoginWrite {
+  url: string;
+  body: {code?: string};
+}
+declare global {
+  interface Window {
+    S: {config: {hosted: boolean}};
+    writes: LoginWrite[];
+    row: LoginRow;
+    post: (url: string, body: LoginWrite['body']) => Promise<LoginRow>;
+    get: () => Promise<LoginRow>;
+  }
+}
+declare let row: LoginRow;
+declare const writes: LoginWrite[];
+declare const TicoModelLogin: {
+  open(options: {runnerId: string; runtime: string; machine: string; switchAccount: boolean}): void;
+};
+
+const css = [...html.matchAll(/<link\b[^>]*href="\/tico\/ui\/([^"?]+\.css)(?:\?[^"]*)?"/g)]
+  .map(([, name]) => fs.readFileSync(uiFile(name!), 'utf8')).join('\n');
+
+async function check(engine: import('playwright').BrowserType) {
   const browser = await engine.launch({headless: true});
   try {
     for (const viewport of [{width: 1440, height: 900}, {width: 390, height: 640}]) {
       const page = await browser.newPage({viewport});
-      const errors = [];
-      page.on('pageerror', error => errors.push(error.message));
+      const errors: string[] = [];
+      page.on('pageerror', (error: Error) => errors.push(error.message));
       await page.setContent('<!doctype html><html><head></head><body></body></html>');
       await page.addStyleTag({content: css});
       await page.evaluate(() => {
         window.S = {config: {hosted: false}};
         window.writes = [];
         window.row = {id: 'fixture', state: 'starting', created_at: new Date().toISOString(), lines: []};
-        window.post = async (url, body) => {
+        window.post = async (url: string, body: LoginWrite['body']) => {
           writes.push({url, body});
           if (url.endsWith('/cancel')) row.state = 'canceled';
           if (url.endsWith('/code')) row.code_sent = true;
@@ -32,21 +64,21 @@ async function check(engine) {
       for (const name of ['app/dom.ts', 'app/errors.ts', 'model-login.ts']) await page.addScriptTag({path: uiFile(name)});
       for (const runtime of ['codex', 'claude']) {
         await page.setViewportSize(viewport);
-        await page.evaluate(runtime => {
+        await page.evaluate((runtime: string) => {
           row = {id: 'fixture', state: 'starting', created_at: new Date().toISOString(), lines: []};
           TicoModelLogin.open({runnerId: 'box', runtime, machine: 'Acme computer', switchAccount: true});
         }, runtime);
         const dialog = page.locator('dialog.model-login[open]');
         await dialog.locator('[data-status][data-state=starting]').waitFor();
-        await page.evaluate(runtime => Object.assign(row, {state: 'waiting', url: 'https://provider.example/sign-in',
+        await page.evaluate((runtime: string) => Object.assign(row, {state: 'waiting', url: 'https://provider.example/sign-in',
           ...(runtime === 'codex' ? {code: 'TEST-12345'} : {accepts_code: true})}), runtime);
         await dialog.locator('[data-status][data-state=waiting]').waitFor();
         const instructions = dialog.locator('.model-login-steps');
         const body = dialog.locator('.model-login-body');
-        const bounds = await body.boundingBox(), content = await instructions.boundingBox();
+        const bounds = (await body.boundingBox())!, content = (await instructions.boundingBox())!;
         assert.ok(content.height > 0 && bounds.height >= content.height, `${engine.name()} ${viewport.width} ${runtime}: instructions have space`);
         const link = dialog.locator('[data-link]');
-        assert.equal(await link.evaluate(el => {
+        assert.equal(await link.evaluate((el: Element) => {
           const rect = el.getBoundingClientRect();
           return document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2) === el;
         }), true, 'provider link is painted and clickable, not clipped by the body');
@@ -62,7 +94,7 @@ async function check(engine) {
         await dialog.locator('[data-lines]').waitFor();
         await page.setViewportSize({...viewport, height: 360});
         const geometry = await dialog.evaluate(el => {
-          const body = el.querySelector('.model-login-body'), button = el.querySelector('[data-cancel]');
+          const body = el.querySelector('.model-login-body')!, button = el.querySelector('[data-cancel]')!;
           const rect = el.getBoundingClientRect(), action = button.getBoundingClientRect();
           return {top: rect.top, bottom: rect.bottom, viewport: innerHeight, bodyHeight: body.clientHeight,
             bodyScroll: body.scrollHeight, actionTop: action.top, actionBottom: action.bottom};

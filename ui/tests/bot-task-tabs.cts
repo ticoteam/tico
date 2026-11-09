@@ -1,3 +1,6 @@
+import type * as PageSupport from './support/page.cjs';
+import type * as Routes from './support/routes.cjs';
+import type {Browser, BrowserContext, Page, ViewportSize} from 'playwright';
 // A bot's editable sidebar (backend/bot_task_tabs.py, ui/app/bot-sidebar.ts): until the layout arrives the rail says
 // Loading; one pencil (for someone who may edit) opens edit mode in place, with Done and Cancel. There each widget
 // can be moved by its handle, hidden with its eye and given a height by its bottom edge (with Reset); every task tab is
@@ -5,18 +8,52 @@
 // one PUT; Cancel drops it. A hidden widget is not drawn outside edit mode; Tasks stops at 500px unless set. The layout
 // is kept in this browser and drawn from there at once on the next visit. Someone who may not edit has no pencil.
 // Fixtures only, no network.
-const {chromium} = require('playwright');
-const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const {html, uiFile} = require('./support/page.cjs');
-const {unrouted} = require('./support/routes.cjs');
+const {chromium}: typeof import('playwright') = require('playwright');
+const assert: typeof import('node:assert/strict') = require('node:assert/strict');
+const fs: typeof import('node:fs') = require('node:fs');
+const {html, uiFile} = require('./support/page.cjs') as typeof PageSupport;
+const {unrouted} = require('./support/routes.cjs') as typeof Routes;
 
-const ago = minutes => new Date(Date.now() - minutes * 60000).toISOString();
+declare global {
+  interface Window {
+    refreshing?: unknown;
+  }
+}
+// Defined by ui/app/bot-sidebar.ts, which the page loads below.
+declare function botTaskFilterRead(bot: string): Promise<unknown>;
+
+type Resolver = (value: void | PromiseLike<void>) => void;
+interface Cond { field: string; value: string | string[] }
+interface Tab { builtin?: string; name: string; show_count?: boolean; conditions?: Cond[] }
+interface Widget { id: string; hidden: boolean; height: number | null }
+interface Layout { tabs: Tab[]; widgets: Widget[] }
+interface Blocker { id: string; title: string; owner_id?: string; status: string; direction: string }
+interface Hold { kind: string; reason: string; since: string; until: string | null; by: string; cause: string }
+interface Task {
+  id: string; title: string; body: string; owner_id: string; requester_id: string; status: string; lane: string;
+  rank: number | null; labels: string[]; tags: string[]; links: string[]; parts: {total: number; done: number};
+  version: number; created_at: string; updated_at: string;
+  waiting_on?: string | null; note?: string; relations?: {blocks?: Blocker[]}; holds?: Hold[];
+  type_id?: string; done_at?: string; ask?: {recipient_id?: string};
+}
+interface PageFixture { file_id: string; title: string; bot: string; updated_at: string; archived: boolean }
+interface Server {
+  layouts: Record<string, Layout>;
+  puts: {bot: string; body: Layout}[];
+  page: number;
+  tasks?: Task[];
+  hold?: Promise<void> | null;
+  putHold?: Promise<void> | null;
+  putFail?: number;
+  moreHold?: Promise<void> | null;
+}
+
+const ago = (minutes: number): string => new Date(Date.now() - minutes * 60000).toISOString();
 const bots = ['lead', 'qa'].map(name => ({name, display_name: {lead: 'Head of Engineering', qa: 'QA Engineer'}[name], org_parent: '',
   host: 'keeper', status: 'active', can_chat: true, users: [{id: 'ana', name: 'Ana'}], schedules: []}));
-const task = (id, title, over = {}) => ({id, title, body: 'Details.', owner_id: 'bot:lead', requester_id: 'human:ana', status: 'doing',
+const task = (id: string, title: string, over: Partial<Task> = {}): Task => ({id, title, body: 'Details.', owner_id: 'bot:lead', requester_id: 'human:ana', status: 'doing',
   lane: 'company', rank: null, labels: [], tags: [], links: [], parts: {total: 0, done: 0}, version: 1, created_at: ago(600), updated_at: ago(60), ...over});
-const TASKS = [
+const TASKS: Task[] = [
   task('t-own', 'Ship the release notes'),
   task('t-waits', 'Turn on the screen default', {status: 'waiting', waiting_on: 'human:ana', created_at: ago(480)}),
   task('t-bot-wait', 'Wait for QA', {status: 'waiting', waiting_on: null, note: 'Waiting for the test machine', relations: {blocks: [{id: 't-qa', title: 'Run the release check', owner_id: 'bot:qa', status: 'doing', direction: 'in'}]}, holds: [{kind: 'blocked', reason: 'Waiting for the test machine', since: ago(480), until: null, by: 'keeper', cause: 'dependency'}]}),
@@ -25,28 +62,28 @@ const TASKS = [
   task('t-qa', 'Run the release check', {owner_id: 'bot:qa', requester_id: 'bot:lead'}),
 ];
 const TYPES = [{id: 'general', name: 'General', steps: []}, {id: 'roadmap', name: 'Product roadmap', role: 'product-roadmap', steps: []}];
-const OTHERS = {name: 'Assigned to others', show_count: true, conditions: [{field: 'asked_by', value: 'this_bot'},
+const OTHERS: Tab = {name: 'Assigned to others', show_count: true, conditions: [{field: 'asked_by', value: 'this_bot'},
   {field: 'assigned_to', value: 'others'}, {field: 'status', value: ['open', 'doing', 'waiting']}]};
-const DEFAULT = [{builtin: 'needs', name: 'Needs you', show_count: true}, {builtin: 'active', name: 'Doing', show_count: true},
+const DEFAULT: Tab[] = [{builtin: 'needs', name: 'Needs you', show_count: true}, {builtin: 'active', name: 'Doing', show_count: true},
                  {builtin: 'blocked', name: 'Blocked', show_count: true}, OTHERS];
-const CONDITIONS = {
+const CONDITIONS: Record<'needs' | 'active' | 'blocked', Cond[]> = {
   needs: [{field: 'needs', value: 'you'}],
   active: [{field: 'assigned_to', value: 'this_bot'}, {field: 'status', value: ['open', 'doing']}],
   blocked: [{field: 'assigned_to', value: 'this_bot'}, {field: 'status', value: ['waiting']}, {field: 'waiting_on', value: 'not_me'}],
 };
-const normalized = tab => tab.builtin && tab.builtin !== 'done' && !tab.conditions ? {...tab, conditions: CONDITIONS[tab.builtin]} : tab;
-const WIDGETS = ['tasks', 'updates', 'files'].map(id => ({id, hidden: false, height: null}));
-const PAGES = {'page:f1': {file_id: 'f1', title: 'Weekly numbers', bot: 'lead', updated_at: ago(90), archived: false},
+const normalized = (tab: Tab): Tab => tab.builtin && tab.builtin !== 'done' && !tab.conditions ? {...tab, conditions: CONDITIONS[tab.builtin as keyof typeof CONDITIONS]} : tab;
+const WIDGETS: Widget[] = ['tasks', 'updates', 'files'].map(id => ({id, hidden: false, height: null}));
+const PAGES: Record<string, PageFixture> = {'page:f1': {file_id: 'f1', title: 'Weekly numbers', bot: 'lead', updated_at: ago(90), archived: false},
   'page:f2': {file_id: 'f2', title: 'Release plan', bot: 'lead', updated_at: ago(30), archived: false}};
 // The server's filter, for the fields these fixtures use; Ana is the viewer.
-const matches = (bot, tab, t) => (t.owner_id === 'bot:' + bot || t.requester_id === 'bot:' + bot) && tab.conditions.every(({field, value}) => {
+const matches = (bot: string, tab: Tab, t: Task): boolean => (t.owner_id === 'bot:' + bot || t.requester_id === 'bot:' + bot) && tab.conditions!.every(({field, value}) => {
   const who = value === 'this_bot' ? 'bot:' + bot : value === 'me' ? 'human:ana' : value;
   if (field === 'status') return value.includes(t.status);
   if (field === 'needs') return (t.owner_id === 'human:ana' && ['open', 'doing', 'waiting'].includes(t.status)) || (t.status === 'waiting' && t.waiting_on === 'human:ana');
   if (field === 'waiting_on') {
     const blockers = (t.relations?.blocks || []).filter(r => r.direction === 'in' && !['done', 'closed', 'declined'].includes(r.status));
     const person = String(t.waiting_on || '').startsWith('human:');
-    const botWait = !person && !['gate', 'worktree'].includes((t.holds || []).find(h => h.kind === 'blocked')?.cause) && !t.ask?.recipient_id?.startsWith('human:')
+    const botWait = !person && !['gate', 'worktree'].includes((t.holds || []).find(h => h.kind === 'blocked')?.cause as string) && !t.ask?.recipient_id?.startsWith('human:')
       && !blockers.some(r => r.owner_id?.startsWith('human:')) && blockers[0]?.owner_id?.startsWith('bot:');
     return t.status === 'waiting' && (value === 'me' ? t.waiting_on === 'human:ana' : value === 'not_me' ? t.waiting_on !== 'human:ana'
       : value === 'person' ? person : value === 'bot' ? botWait : true);
@@ -57,20 +94,20 @@ const matches = (bot, tab, t) => (t.owner_id === 'bot:' + bot || t.requester_id 
   throw new Error('fixture has no ' + field);
 });
 
-async function open(browser, viewport, colorScheme, server) {
-  const context = await browser.newContext({viewport, colorScheme, serviceWorkers: 'block'});
+async function open(browser: Browser, viewport: ViewportSize, colorScheme: string, server: Server): Promise<{context: BrowserContext; page: Page; errors: string[]}> {
+  const context = await browser.newContext({viewport, colorScheme: colorScheme as 'light' | 'dark', serviceWorkers: 'block'});
   // The app is dark unless this browser saved another theme (ui/theme.ts).
-  await context.addInitScript(theme => localStorage.setItem('tico.theme', theme), colorScheme);
+  await context.addInitScript((theme: string) => localStorage.setItem('tico.theme', theme), colorScheme);
   const page = await context.newPage();
-  const errors = [];
+  const errors: string[] = [];
   page.on('pageerror', error => errors.push(error.message));
   await page.route('**/*', async route => {
     const request = route.request(), url = new URL(request.url()), p = url.pathname, q = url.searchParams;
-    const json = body => route.fulfill({contentType: 'application/json', body: JSON.stringify(body)});
+    const json = (body: unknown) => route.fulfill({contentType: 'application/json', body: JSON.stringify(body)});
     if (/\/marked\.min\.js$/.test(p)) return route.fulfill({contentType: 'application/javascript', body: 'window.marked={parse:s=>String(s)}'});
     if (url.origin !== 'https://tico-ui.test') return route.abort();
     const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/);
-    if (ui && fs.existsSync(uiFile(ui[1]))) return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]), 'utf8')});
+    if (ui && fs.existsSync(uiFile(ui[1]!))) return route.fulfill({contentType: ui[1]!.endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]!), 'utf8')});
     if (p === '/vendor/fonts/material-symbols-outlined.woff2') return route.fulfill({contentType: 'font/woff2', path: uiFile('vendor/fonts/material-symbols-outlined.woff2')});
     if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
     if (p === '/api/me') return json({id: 'ana', role: 'owner', name: 'Ana', email: 'ana@example.test', cloud: true});
@@ -86,9 +123,9 @@ async function open(browser, viewport, colorScheme, server) {
     if (p === '/api/v2/task-types') return json({types: TYPES});
     const layout = p.match(/^\/api\/v2\/bots\/([^/]+)\/task-tabs$/);
     if (layout) {
-      const bot = layout[1];
+      const bot = layout[1]!;
       if (request.method() === 'PUT') {
-        const body = JSON.parse(request.postData());
+        const body = JSON.parse(request.postData()!) as Layout;
         server.puts.push({bot, body});
         if (server.putHold) await server.putHold;
         if (server.putFail && server.putFail--) return route.fulfill({status: 500, contentType: 'application/json', body: '{"detail":"Could not save."}'});
@@ -99,7 +136,7 @@ async function open(browser, viewport, colorScheme, server) {
     }
     const filtered = p.match(/^\/api\/v2\/bots\/([^/]+)\/task-tabs\/tasks$/);
     if (filtered) {
-      const bot = filtered[1], tabs = (server.layouts[bot] || {tabs: DEFAULT}).tabs.map((tab, at) => ({tab: normalized(tab), key: tab.builtin || 'c' + at})).filter(({tab}) => tab.builtin !== 'done');
+      const bot = filtered[1]!, tabs = (server.layouts[bot] || {tabs: DEFAULT}).tabs.map((tab, at) => ({tab: normalized(tab), key: tab.builtin || 'c' + at})).filter(({tab}) => tab.builtin !== 'done');
       // A page of server.page rows; `before` here is the index the next page starts at.
       if (q.get('tab') && server.moreHold) await server.moreHold;
       const from = Number(q.get('before') || 0), wanted = tabs.filter(({key}) => !q.get('tab') || key === q.get('tab'));
@@ -118,7 +155,7 @@ async function open(browser, viewport, colorScheme, server) {
     // The sidebar's pages (backend/cards.py): what GET /api/v2/places/bot:<slug> answers for the saved widgets.
     const pinned = decodeURIComponent(p).match(/^\/api\/v2\/places\/bot:([^/]+)$/);
     if (pinned) return json({place: 'bot:' + pinned[1], kind: 'bot', saved: true, can_edit: pinned[1] === 'lead',
-      pins: ((server.layouts[pinned[1]] || {}).widgets || []).filter(w => PAGES[w.id]).map((w, i) => ({id: 'p' + i, item: w.id, position: i, size: 'medium', page: PAGES[w.id]}))});
+      pins: ((server.layouts[pinned[1]!] || ({} as Partial<Layout>)).widgets || []).filter(w => PAGES[w.id]).map((w, i) => ({id: 'p' + i, item: w.id, position: i, size: 'medium', page: PAGES[w.id]}))});
     if (p === '/api/v2/cards/choices') return json({templates: [], teams: [], kpis: [], pages: Object.values(PAGES)});
     if (p.endsWith('/watch')) return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});
     return json(unrouted(p));
@@ -127,21 +164,21 @@ async function open(browser, viewport, colorScheme, server) {
 }
 
 (async () => {
-  const browser = await chromium.launch({headless: true, channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined});
+  const browser = await chromium.launch({headless: true, channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined} as Parameters<typeof chromium.launch>[0]);
   try {
-    for (const [scheme, viewport] of [['light', {width: 1280, height: 900}], ['dark', {width: 375, height: 800}]]) {
+    for (const [scheme, viewport] of [['light', {width: 1280, height: 900}], ['dark', {width: 375, height: 800}]] as [string, ViewportSize][]) {
       const phone = viewport.width < 760, at = `${scheme} ${viewport.width}`;
-      let release;
-      const server = {layouts: {}, puts: [], page: 1, hold: new Promise(resolve => { release = resolve; })};
+      let release!: Resolver;
+      const server: Server = {layouts: {}, puts: [], page: 1, hold: new Promise<void>(resolve => { release = resolve; })};
       const {context, page, errors} = await open(browser, viewport, scheme, server);
       const rail = page.locator('#pane-tasks');
       const tabTexts = async () => (await rail.locator('[data-bot-task-tab]').allInnerTexts()).map(s => s.replace(/\s+/g, ' ').trim());
-      const order = () => rail.evaluate(el => [...el.querySelectorAll(':scope>.bot-w')].map(w => w.dataset.widget));
-      const widget = id => rail.locator(`.bot-w[data-widget="${id}"]`);
-      const pill = name => rail.locator('[data-bot-task-tab]', {hasText: name});
+      const order = () => rail.evaluate(el => [...(el.querySelectorAll(':scope>.bot-w') as unknown as HTMLElement[])].map(w => w.dataset.widget));
+      const widget = (id: string) => rail.locator(`.bot-w[data-widget="${id}"]`);
+      const pill = (name: string) => rail.locator('[data-bot-task-tab]', {hasText: name});
       const dialog = page.locator('#bot-filter-dialog');
-      const shows = () => rail.evaluate(el => [...el.querySelectorAll(':scope>.bot-w')].filter(w => w.offsetParent).map(w => w.dataset.widget));
-      const goto = async hash => {
+      const shows = () => rail.evaluate(el => [...(el.querySelectorAll(':scope>.bot-w') as unknown as HTMLElement[])].filter(w => w.offsetParent).map(w => w.dataset.widget));
+      const goto = async (hash: string) => {
         await page.goto('https://tico-ui.test/' + hash);
         if (phone) await page.locator('.bot-switch button', {hasText: 'Tasks'}).click().catch(() => {});
       };
@@ -153,7 +190,7 @@ async function open(browser, viewport, colorScheme, server) {
       await rail.locator('.bot-rail-loading').waitFor();
       assert.deepEqual(await shows(), [], at + ': nothing drawn while the layout loads');
       release();
-      await page.waitForFunction(() => document.querySelector('#cnt-c3')?.textContent.trim() === '1');
+      await page.waitForFunction(() => document.querySelector('#cnt-c3')?.textContent!.trim() === '1');
       assert.equal(await rail.locator('.bot-rail-loading').isHidden(), true);
       assert.deepEqual(await tabTexts(), ['Needs you 1', 'Doing 2', 'Blocked 1', 'Assigned to others 1'], at);
       await pill('Blocked').click();
@@ -172,7 +209,7 @@ async function open(browser, viewport, colorScheme, server) {
       assert.equal(await rail.locator('.bot-rail-editbar').isHidden(), true);
       assert.equal(await widget('tasks').locator('[data-w-grip]').isHidden(), true, 'no handles outside edit mode');
       // Tasks stops at 500px by default and a short list stays short.
-      const tasksMax = await rail.locator('#bot-tasks').evaluate(el => [getComputedStyle(el).maxHeight, el.getBoundingClientRect().height]);
+      const tasksMax = await rail.locator('#bot-tasks').evaluate(el => [getComputedStyle(el).maxHeight, el.getBoundingClientRect().height] as [string, number]);
       assert.equal(tasksMax[0], '500px', at);
       assert.ok(tasksMax[1] < 500, JSON.stringify(tasksMax));
 
@@ -204,7 +241,7 @@ async function open(browser, viewport, colorScheme, server) {
       await widget('updates').locator('[data-w-grip]').focus();
       await page.keyboard.press('ArrowUp');
       assert.deepEqual(await order(), ['updates', 'tasks', 'files']);
-      const grip = await widget('updates').locator('[data-w-grip]').boundingBox(), last = await widget('files').boundingBox();
+      const grip = (await widget('updates').locator('[data-w-grip]').boundingBox())!, last = (await widget('files').boundingBox())!;
       await page.mouse.move(grip.x + grip.width / 2, grip.y + grip.height / 2);
       await page.mouse.down();
       await page.mouse.move(grip.x + grip.width / 2, grip.y + 40, {steps: 4});
@@ -218,7 +255,7 @@ async function open(browser, viewport, colorScheme, server) {
       await widget('tasks').locator('[data-w-reset]').click();
       assert.equal(await widget('tasks').getAttribute('data-h'), null);
       assert.equal(await widget('tasks').locator('[data-w-reset]').isHidden(), true);
-      const edge = await widget('updates').locator('[data-w-size]').boundingBox();
+      const edge = (await widget('updates').locator('[data-w-size]').boundingBox())!;
       const before = await widget('updates').locator('.rail-sec').evaluate(el => el.getBoundingClientRect().height);
       await page.mouse.move(edge.x + edge.width / 2, edge.y + edge.height / 2);
       await page.mouse.down();
@@ -230,14 +267,14 @@ async function open(browser, viewport, colorScheme, server) {
       // A default tab has ordinary editable conditions and Reset. Turn Doing’s count off.
       await pill('Doing').click();
       await dialog.waitFor();
-      assert.deepEqual(await dialog.locator('[data-cond-field]').evaluateAll(els => els.map(el => el.value)), ['assigned_to', 'status']);
+      assert.deepEqual(await dialog.locator('[data-cond-field]').evaluateAll<string[], unknown, HTMLSelectElement>(els => els.map(el => el.value)), ['assigned_to', 'status']);
       assert.equal(await dialog.locator('[data-cond-value="0"]').inputValue(), 'this_bot');
-      assert.deepEqual(await dialog.locator('[data-cond-value="1"]:checked').evaluateAll(els => els.map(el => el.value)), ['open', 'doing']);
+      assert.deepEqual(await dialog.locator('[data-cond-value="1"]:checked').evaluateAll<string[], unknown, HTMLInputElement>(els => els.map(el => el.value)), ['open', 'doing']);
       await dialog.locator('[data-cond-remove="0"]').click();
       await dialog.locator('[data-cond-add]').click();
       assert.equal(await dialog.locator('[data-cond-field]').count(), 2);
       await dialog.getByRole('button', {name: 'Reset to default'}).click();
-      assert.deepEqual(await dialog.locator('[data-cond-field]').evaluateAll(els => els.map(el => el.value)), ['assigned_to', 'status']);
+      assert.deepEqual(await dialog.locator('[data-cond-field]').evaluateAll<string[], unknown, HTMLSelectElement>(els => els.map(el => el.value)), ['assigned_to', 'status']);
       assert.equal(await dialog.locator('[data-filter-count]').isChecked(), true);
       await dialog.locator('[data-filter-count]').uncheck();
       await dialog.getByRole('button', {name: 'Save'}).click();
@@ -263,7 +300,7 @@ async function open(browser, viewport, colorScheme, server) {
       // Drag it to the front; ArrowLeft and ArrowRight move the focused pill too.
       // The bar is wider than the rail: held near its left end, it scrolls to the first tab.
       await pill('product tasks').scrollIntoViewIfNeeded();
-      const from = await pill('product tasks').boundingBox(), bar = await rail.locator('.bot-task-tabs').boundingBox();
+      const from = (await pill('product tasks').boundingBox())!, bar = (await rail.locator('.bot-task-tabs').boundingBox())!;
       await page.mouse.move(from.x + from.width / 2, from.y + from.height / 2);
       await page.mouse.down();
       await page.mouse.move(bar.x + 6, from.y + from.height / 2, {steps: 10});
@@ -292,10 +329,10 @@ async function open(browser, viewport, colorScheme, server) {
       await files.click();
       assert.equal(await filesHidden(), 'true');
       // While the retry is on its way nothing in the draft changes: eye, Escape, a pill.
-      let putDone;
-      server.putHold = new Promise(resolve => { putDone = resolve; });
+      let putDone!: Resolver;
+      server.putHold = new Promise<void>(resolve => { putDone = resolve; });
       await rail.locator('#bot-sidebar-done').click();
-      await page.waitForFunction(() => document.querySelector('#bot-sidebar-status').textContent === 'Saving…');
+      await page.waitForFunction(() => document.querySelector('#bot-sidebar-status')!.textContent === 'Saving…');
       await files.dispatchEvent('click');
       assert.equal(await filesHidden(), 'true', 'no change while saving');
       assert.equal(await files.isDisabled(), true);
@@ -318,14 +355,14 @@ async function open(browser, viewport, colorScheme, server) {
         widgets: [{id: 'tasks', hidden: false, height: null},
                   {id: 'files', hidden: true, height: null}, {id: 'updates', hidden: false, height: updatesHeight}]}});
       assert.equal(await rail.evaluate(el => el.classList.contains('editing')), false);
-      await page.waitForFunction(() => document.querySelector('#cnt-c0')?.textContent.trim() === '2');
+      await page.waitForFunction(() => document.querySelector('#cnt-c0')?.textContent!.trim() === '2');
       assert.deepEqual(await tabTexts(), ['product tasks 2', 'Needs you 1', 'Doing', 'Blocked 1']);
       await pill('product tasks').click();
       // A page at a time: Show more reads the next, and a refresh keeps as many as were read, also a refresh that
       // starts while Show more is on its way.
       assert.deepEqual(await rail.locator('#t-c0 .trow .ttl').allInnerTexts(), ['Plan the import page']);
-      let moreDone;
-      server.moreHold = new Promise(resolve => { moreDone = resolve; });
+      let moreDone!: Resolver;
+      server.moreHold = new Promise<void>(resolve => { moreDone = resolve; });
       await rail.locator('#t-c0 [data-bot-filter-more]').click();
       await page.evaluate(() => { window.refreshing = botTaskFilterRead('lead'); });
       await page.waitForTimeout(300);
@@ -379,7 +416,7 @@ async function open(browser, viewport, colorScheme, server) {
       await page.screenshot({path: `/tmp/bot-sidebar-${scheme}-${viewport.width}.png`});
 
       // Next visit: drawn from this browser's copy at once, while the server's answer is still on its way.
-      server.hold = new Promise(resolve => { release = resolve; });
+      server.hold = new Promise<void>(resolve => { release = resolve; });
       await goto('#/bot/lead');
       await rail.locator('#bot-tab-t-c0').waitFor({state: 'attached'});
       assert.equal(await rail.evaluate(el => el.hasAttribute('data-loading')), false);
@@ -399,7 +436,7 @@ async function open(browser, viewport, colorScheme, server) {
       await context.close();
     }
     // A read-only viewer gets the same default filters: one wait is Blocked 1 and Doing 0.
-    const isolated = {layouts: {}, puts: [], page: 200, tasks: [task('one-wait', 'Wait for the builder', {owner_id: 'bot:qa', status: 'waiting', waiting_on: null, relations: {blocks: [{id: 'builder', owner_id: 'bot:lead', title: 'Build it', status: 'doing', direction: 'in'}]}})]};
+    const isolated: Server = {layouts: {}, puts: [], page: 200, tasks: [task('one-wait', 'Wait for the builder', {owner_id: 'bot:qa', status: 'waiting', waiting_on: null, relations: {blocks: [{id: 'builder', owner_id: 'bot:lead', title: 'Build it', status: 'doing', direction: 'in'}]}})]};
     const readOnly = await open(browser, {width:1280,height:900}, 'light', isolated);
     await readOnly.page.goto('https://tico-ui.test/#/bot/qa/tasks');
     await readOnly.page.waitForFunction(() => document.querySelector('#cnt-blocked')?.textContent === '1');
@@ -426,15 +463,15 @@ async function open(browser, viewport, colorScheme, server) {
     await filtered.context.close();
     // A sidebar of pages: the built-ins hidden, a page shown with its title; Add puts another page in the draft, its
     // cross takes one out, and Done saves them as widgets.
-    const pages = {layouts: {lead: {tabs: DEFAULT, widgets: [{id: 'page:f1', hidden: false, height: null},
+    const pages: Server = {layouts: {lead: {tabs: DEFAULT, widgets: [{id: 'page:f1', hidden: false, height: null},
       ...WIDGETS.map(w => ({...w, hidden: true}))]}}, puts: [], page: 200};
     const paged = await open(browser, {width: 1280, height: 900}, 'light', pages);
     const prail = paged.page.locator('#pane-tasks');
-    const shown = () => prail.evaluate(el => [...el.querySelectorAll(':scope>.bot-w')].filter(w => w.offsetParent).map(w => w.dataset.widget));
+    const shown = () => prail.evaluate(el => [...(el.querySelectorAll(':scope>.bot-w') as unknown as HTMLElement[])].filter(w => w.offsetParent).map(w => w.dataset.widget));
     await paged.page.goto('https://tico-ui.test/#/bot/lead');
     await paged.page.waitForFunction(() => document.querySelector('#pane-tasks .bot-w[data-widget="page:f1"]')?.textContent.includes('Weekly numbers'));
     assert.deepEqual(await shown(), ['page:f1'], 'a sidebar of pages only');
-    const pencil = await prail.locator('#bot-sidebar-edit').boundingBox(), first = await prail.locator('.bot-w[data-widget="page:f1"] .bot-pin > :first-child').boundingBox();
+    const pencil = (await prail.locator('#bot-sidebar-edit').boundingBox())!, first = (await prail.locator('.bot-w[data-widget="page:f1"] .bot-pin > :first-child').boundingBox())!;
     assert.ok(pencil.y + pencil.height <= first.y + 1, 'the edit icon sits above the page, not on it');
     if (process.env.TICO_UI_SHOTS) await paged.page.screenshot({path: require('node:path').join(process.env.TICO_UI_SHOTS, 'bot-sidebar-pages.png')});
     await prail.locator('#bot-sidebar-edit').click();
@@ -446,7 +483,7 @@ async function open(browser, viewport, colorScheme, server) {
     assert.equal(await prail.locator('.bot-w[data-widget="page:f1"]').count(), 0);
     await prail.locator('#bot-sidebar-done').click();
     await paged.page.waitForFunction(() => !document.querySelector('#pane-tasks.editing'));
-    assert.deepEqual(pages.puts.at(-1).body.widgets.map(w => w.id + (w.hidden ? ' hidden' : '')), ['tasks hidden', 'updates hidden', 'files hidden', 'page:f2']);
+    assert.deepEqual(pages.puts.at(-1)!.body.widgets.map(w => w.id + (w.hidden ? ' hidden' : '')), ['tasks hidden', 'updates hidden', 'files hidden', 'page:f2']);
     assert.deepEqual(await shown(), ['page:f2']);
     assert.deepEqual(paged.errors, []);
     await paged.context.close();
