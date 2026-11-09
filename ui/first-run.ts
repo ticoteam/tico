@@ -6,16 +6,10 @@
 'use strict';
 
 // The wizard's state (ui/app/welcome.js: ONB) as this screen reads it. The catalog is ui/app/catalog.ts's catalogState.
-interface FrCard { slug: string; template: string; name?: string; required?: boolean; kind?: string; bootstrap?: boolean; [key: string]: unknown }
-interface FrCatalog {
-  cards: FrCard[];
-  picked: Set<string>;
-  edits: Record<string, {display_name?: string; instructions?: string; person?: string; reports_to?: string} | undefined>;
-}
 interface FrOrg { chosen: string[]; loaded?: boolean }
 interface FrProviders { preset?: string; enabled?: string[]; providers?: {id: string; label?: string}[] }
 interface FrRecord { home?: string; bots?: FrBot[]; machine?: {runners?: unknown[]} | null; completed?: boolean }
-interface FrState { catalog: FrCatalog; org: FrOrg; record: FrRecord; providers: FrProviders | null }
+interface FrState { catalog: CatalogState; org: FrOrg; record: FrRecord; providers: FrProviders | null }
 /** A bot row as the setup screen reads it: the record's bots and the roster rows the chart uses. */
 interface FrBot extends Employee {
   repository_present?: boolean;
@@ -27,7 +21,7 @@ interface FrBot extends Employee {
   state?: string;
 }
 interface FrOption { value: string; label: string; group: string }
-interface FrSelected { template: string; display_name: string; instructions: string; reports_to?: string }
+interface FrSelected { template: string | undefined; display_name: string; instructions: string; reports_to?: string }
 interface FrGroup { id: string; name?: string | undefined; bots: FrBot[] }
 
 const frOwner = (): string => (S.me?.id ? 'human:' + S.me.id : '');
@@ -35,7 +29,7 @@ const frHome = (state: FrState): string => state.record.home || frOwner();
 const frPeople = () => (SETTINGS_DATA.people?.length ? SETTINGS_DATA.people : (S.me?.id ? [{id: S.me.id, name: S.me.name}] : []));
 const frPersonName = (id: string | undefined) => frPeople().find(p => p.id === id)?.name || id;
 // The bot a card is created as: the assistant's card is named `coo` but the team's own bot is `assistantBot()`.
-const frBotSlug = (card: FrCard): string => (card.template === 'assistant' ? assistantBot() : card.slug);
+const frBotSlug = (card: CatalogCard): string => (card.template === 'assistant' ? assistantBot() : card.slug);
 
 function frCollect(state: FrState, key: string) {
   if (state.catalog.cards.length) obCollect(state);
@@ -75,7 +69,7 @@ function frParentName(state: FrState, value: string): string | undefined {
 function frSelection(state: FrState): Record<string, FrSelected> {
   const cat = state.catalog, order: (string | undefined)[] = [];
   for (const id of state.org.chosen) for (const card of obPicked(state, id)) order.push(obCatalogCard(state, card.template)?.slug);
-  const rank = (card: FrCard): number => { const i = order.indexOf(card.slug); return i < 0 ? 999 : i; };
+  const rank = (card: CatalogCard): number => { const i = order.indexOf(card.slug); return i < 0 ? 999 : i; };
   const cards = cat.cards.slice().sort((a, b) => (a.required === b.required ? 0 : a.required ? -1 : 1) || rank(a) - rank(b));
   const out: Record<string, FrSelected> = {};
   for (const card of cards) {
@@ -99,7 +93,8 @@ function frProblem(state: FrState): string {
     }
   }
   const inbox = cat.cards.find(card => card.template === 'inbox');
-  return catalogMissingMailbox(cat) ? `Choose whose mailbox ${catalogName(cat, inbox)} reads.` : '';
+  // catalogMissingMailbox is true only when an inbox card exists, so inbox is set on that side.
+  return catalogMissingMailbox(cat) ? `Choose whose mailbox ${catalogName(cat, inbox!)} reads.` : '';
 }
 
 // ----------------------------------------------------------------- review
