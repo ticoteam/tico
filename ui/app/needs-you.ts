@@ -2,17 +2,66 @@
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
 'use strict';
 
+// A Needs you row (S.v2.needs) as this page reads it. A field the server may leave out is optional.
+interface NeedItem {
+  id: string;
+  kind: string;
+  title?: string;
+  first_line?: string;
+  body?: string;
+  requester_id?: string;
+  conversation_id?: string;
+  created_at?: string;
+  ready_since?: string;
+  decided_at?: string;
+  decision?: string;
+  decision_owner?: string;
+  decision_owner_name?: string;
+  what?: string;
+  payload?: {email_send_id?: string; content_sha256?: string; [key: string]: unknown} | null;
+  support?: {to?: string | null};
+  attachment_files?: {file_id?: unknown; version?: unknown}[];
+  folded?: {id: string | number; title?: string; person_ask?: string; note?: string}[] | null;
+  merged?: (string | number)[] | null;
+  rows?: StaleRow[] | null;
+  need?: string;
+  recommend?: NeedRecommend | null;
+}
+/** A bot's recommendation on its request: what it asks, and what it would do ("Do what you recommend"). */
+type NeedRecommend = {ask?: unknown; do: string};
+/** A row of a Stale tickets card (`it.rows`, backend/stale_review.py). */
+type StaleRow = {
+  id?: string;
+  task?: unknown;
+  title?: unknown;
+  reason?: unknown;
+  suggest?: unknown;
+  action?: unknown;
+  version?: unknown;
+};
+/** The index of the Needs you list, rebuilt when the list or its folded ids change (needsIndex). */
+interface NeedsMemo {
+  list: NeedItem[];
+  byId: Map<string, {it: NeedItem; i: number}>;
+  folded: Set<string>;
+  foldedIds: string[] | null | undefined;
+}
+/** A readable row of an approval's exact payload: label, value, its class, and whether an empty value still shows. */
+type FactRow = [string, unknown, string?, boolean?];
+// A JSON object as a record (an array counts too), so its values are read by name.
+const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null;
+
 // ---- Needs you: hub.db items, rendered as the same request rows the Issues use ----
 // What a card takes, in the order Needs you lists the groups (the server sets each card's `need`, backend/views.py
 // NEED_GROUPS): all the yes/no and pick cards can be cleared in one sitting.
 const NEED_GROUPS = [['decide', 'Answer'], ['pay', 'Pay'], ['connect', 'Connect'], ['review', 'Review'], ['do', 'Do']];
 const NEED_RANK = Object.fromEntries(NEED_GROUPS.map(([k], i) => [k, i]));
-const needLabel = need => (NEED_GROUPS.find(([k]) => k === need) || NEED_GROUPS.at(-1))[1];
-let NEEDS_MEMO = null;
+const needLabel = (need: string | undefined) => (NEED_GROUPS.find(([k]) => k === need) || NEED_GROUPS.at(-1))?.[1];
+let NEEDS_MEMO: NeedsMemo | null = null;
 function needsIndex() {
-  const list = S.v2?.needs || [], foldedIds = S.v2?.needsFoldedIds;
+  const list: NeedItem[] = S.v2?.needs || [], foldedIds = S.v2?.needsFoldedIds;
   if (NEEDS_MEMO?.list !== list || NEEDS_MEMO?.foldedIds !== foldedIds) {
-    const byId = new Map(list.map((it, i) => [String(it.id), {it, i}]));
+    const byId = new Map(list.map((it, i): [string, {it: NeedItem; i: number}] => [String(it.id), {it, i}]));
     // A bot's task folded into the card that asks the person the same thing is not listed again, nor a task the
     // Strategy Bot merged into an item of its own (backend/strategy_merge.py): the server leaves both out of Needs you.
     // The whole-list ids also cover unread cards; their titles and asks stay on their own pages.
@@ -21,8 +70,8 @@ function needsIndex() {
   }
   return NEEDS_MEMO;
 }
-const needsItem = id => needsIndex().byId.get(String(id))?.it || null;
-const needsFolded = id => needsIndex().folded.has(String(id));
+const needsItem = (id: unknown): NeedItem | null => needsIndex().byId.get(String(id))?.it || null;
+const needsFolded = (id: unknown): boolean => needsIndex().folded.has(String(id));
 // The next page of Needs you (hub-v2.js v2NeedsMore), then everything drawn from it. A list that holds only some pages
 // ends in Show more; on the Tasks page it also loads as it scrolls into view.
 const needsMoreButton = () => needsAll() ? '' : '<button class="ghost tl-more" type="button" data-needs-page>Show more</button>';
@@ -37,27 +86,27 @@ async function needsMoreShow() {
 const NEEDS_IO = typeof IntersectionObserver === 'function' ? new IntersectionObserver(entries => {
   if (entries.some(e => e.isIntersecting)) void needsMoreShow();
 }, {rootMargin: '400px'}) : null;
-function needsMoreWatch(root) {
+function needsMoreWatch(root: ParentNode | null | undefined) {
   NEEDS_IO?.disconnect();
   const button = root?.querySelector('[data-needs-page]');
   if (button) NEEDS_IO?.observe(button);
 }
 document.addEventListener('click', ev => {
-  const button = ev.target.closest('[data-needs-page]');
+  const button = eventElement(ev)?.closest<HTMLButtonElement>('[data-needs-page]');
   if (!button) return;
   button.disabled = true;
   void needsMoreShow().finally(() => { button.disabled = false; });
 });
 // "Do what you recommend": one tap answers the bot's ask with what it said it would do, and the card goes. It sends
 // the version of the task the card showed, so a task that changed meanwhile is refused, not answered unseen.
-const recommendButton = (rec, cls = 'primary', version = null) => rec?.ask
+const recommendButton = (rec: NeedRecommend | null | undefined, cls = 'primary', version: number | string | null = null) => rec?.ask
   ? `<button type="button" class="${cls}" data-recommend="${esc(rec.ask)}"${version ? ` data-version="${esc(String(version))}"` : ''} title="${esc(rec.do)}">Do what you recommend</button>` : '';
-const recommendLine = (rec, from) => rec?.do
+const recommendLine = (rec: NeedRecommend | null | undefined, from: string | undefined) => rec?.do
   ? `<div class="req-context need-rec"><span>${esc(actorLabel(from) || 'The bot')} recommends</span> ${esc(plainActors(rec.do))}</div>` : '';
 // The cards folded into this one: each bot's task and what it asks, so nothing it asks is hidden.
-const foldedHTML = it => (it.folded || []).length ? `<div class="req-next need-folded"><span>Also waiting on this</span><ul>${it.folded.map(f =>
+const foldedHTML = (it: NeedItem) => (it.folded || []).length ? `<div class="req-next need-folded"><span>Also waiting on this</span><ul>${(it.folded || []).map(f =>
   `<li><a href="#/task/${encodeURIComponent(f.id)}">${esc(plainActors(f.title || ''))}</a>${f.person_ask || f.note ? ` <span class="muted">${esc(plainActors(f.person_ask || f.note))}</span>` : ''}</li>`).join('')}</ul></div>` : '';
-async function needsRecommend(button, ask, version) {
+async function needsRecommend(button: HTMLButtonElement, ask: string | undefined, version: number | null) {
   const label = button.textContent;
   button.disabled = true; button.textContent = '…';
   try {
@@ -67,15 +116,15 @@ async function needsRecommend(button, ask, version) {
     await v2Refresh();
     if (TASKS_ST && isTasksRoute(S.route)) { await tasksLoad(TASKS_ST); }
     personTasksReload();
-  } catch (e) { toast(e.message, true); button.disabled = false; button.textContent = label; }
+  } catch (e) { toast(errorMessage(e, ''), true); button.disabled = false; button.textContent = label; }
 }
 // One line in Needs you for an item outside any task (an approval, a question, the Stale tickets card): who asks, what,
 // and its kind. A click opens its card (decide.js); nothing unfolds in the list. Its key is the card's. It keeps the
 // You list's task rows' columns (task-list.js taskListRowHTML), with nothing to select and no status.
 // The thread items (backend/thread_attention.py): each names its kind, and opens its thread rather than a decide card.
-const THREAD_NEED_KINDS = {thread_ask: 'Question', thread_mention: 'Mention', thread_dm: 'Direct message',
+const THREAD_NEED_KINDS: Record<string, string> = {thread_ask: 'Question', thread_mention: 'Mention', thread_dm: 'Direct message',
                            thread_held: 'Held', thread_capped: 'Paused'};
-function needRowHTML(it, ctx = {}) {
+function needRowHTML(it: NeedItem, ctx: {select?: boolean; [key: string]: unknown} = {}) {
   const key = decideItemKey(it), stale = it.kind === 'stale', thread = THREAD_NEED_KINDS[it.kind];
   const from = stale ? '' : taskRequester(it) || it.requester_id || '';
   const name = stale ? KEEPER_LABEL : actorLabel(from) || KEEPER_LABEL;
@@ -106,13 +155,13 @@ const needsExtras = () => needsQueueItems().filter(it => NEEDS_EXTRA_KINDS.inclu
 // How long an approval's exact payload has been ready to decide, in seconds (until its decision once decided), and whose
 // decision it is: "Ready 2 h 10 min, waiting on Chris" (backend/hubdb.py approval_wait). Counted here from `ready_since`
 // so a page left open stays right.
-function waitWords(s) {
+function waitWords(s: number) {
   const m = Math.floor(Math.max(0, +s || 0) / 60), d = Math.floor(m / 1440), h = Math.floor(m % 1440 / 60), r = m % 60;
   if (d) return h ? `${d} d ${h} h` : `${d} d`;
   if (h) return r ? `${h} h ${r} min` : `${h} h`;
   return `${r} min`;
 }
-function approvalReadyAge(it) {
+function approvalReadyAge(it: {ready_since?: string | undefined; decided_at?: string | undefined}) {
   const at = Date.parse(it?.ready_since || '');
   if (!Number.isFinite(at)) return null;
   const end = it.decided_at ? Date.parse(it.decided_at) : Date.now();
@@ -120,7 +169,7 @@ function approvalReadyAge(it) {
 }
 // The age as its own element, marked with what it counts from: a card the list keeps across redraws (its patch key)
 // keeps this node too, so approvalAgesTick updates its text where it stands.
-function approvalAgeNode(it) {
+function approvalAgeNode(it: NeedItem) {
   const age = approvalReadyAge(it);
   if (age == null) return null;
   const span = document.createElement('span');
@@ -130,7 +179,7 @@ function approvalAgeNode(it) {
   span.textContent = waitWords(age);
   return span;
 }
-function approvalReadyLine(it) {
+function approvalReadyLine(it: NeedItem) {
   const age = approvalAgeNode(it);
   if (!age) return null;
   const owner = it.decision_owner || '';
@@ -145,7 +194,7 @@ function approvalReadyLine(it) {
 // Every age on screen (Needs you's rows and cards, an idle Decide card) moves on with the clock, without redrawing
 // the card: open details, a draft and focus stay as they are.
 function approvalAgesTick() {
-  for (const node of document.querySelectorAll('.approval-age[data-ready-since]')) {
+  for (const node of document.querySelectorAll<HTMLElement>('.approval-age[data-ready-since]')) {
     const age = approvalReadyAge({ready_since: node.dataset.readySince, decided_at: node.dataset.decidedAt || ''});
     const text = age == null ? '' : waitWords(age);
     if (node.textContent !== text) node.textContent = text;
@@ -167,13 +216,13 @@ function approvalFileIcon() {
 }
 // Where a publish goes: a Support ticket by its number, a Company page edition or stats board by its name, linked to where
 // it is run, a web address as a link, anything else as text.
-function approvalWhere(url, title) {
+function approvalWhere(url: unknown, title?: unknown) {
   const u = String(url ?? '').trim(), ticket = /^hq-ticket:(TK-[A-Za-z0-9]+)$/.exec(u);
   if (ticket) return 'Support ticket ' + ticket[1];
   const edition = /^tico:editions\/([^/]+)\/\d+$/.exec(u);
   if (edition || /^tico:stat-board\/[^/]+\/[^/]+$/.test(u)) {
     const a = document.createElement('a');
-    a.href = '#/company-page' + (edition ? '?edition=' + encodeURIComponent(edition[1]) : '');
+    a.href = '#/company-page' + (edition ? '?edition=' + encodeURIComponent(String(edition[1])) : '');
     a.textContent = title ? String(title) : 'Company page';
     return a;
   }
@@ -195,13 +244,13 @@ function approvalWhere(url, title) {
 // A support report (a bot's Tico bug report) shows where it goes (the host the server names in `it.support.to`), what
 // goes with it, and its whole message. Null for any other kind.
 // The redesign's approvals (CONTRACT §5) name teammates by id; a card names them as people read them.
-const approvalWho = ref => {
+const approvalWho = (ref: unknown): string => {
   const r = String(ref || '');
   return r.startsWith('person:') ? personDisplay(r.slice(7)) : r.includes(':') ? actorLabel(r) : r ? botDisplayName(r) : '';
 };
-const approvalUsd = v => v == null || v === '' ? '' : '$' + Number(v).toFixed(2).replace(/\.00$/, '');
-function approvalTitle(it) {
-  const p = it?.payload && typeof it.payload === 'object' ? it.payload : {};
+const approvalUsd = (v: unknown): string => v == null || v === '' ? '' : '$' + Number(v).toFixed(2).replace(/\.00$/, '');
+function approvalTitle(it: NeedItem | null | undefined) {
+  const p: Record<string, unknown> = isRecord(it?.payload) ? it.payload : {};
   if (it?.kind !== 'approval') return it?.title || '';
   if (it.what === 'task_cap' && p.sender) return `Task cap: ${approvalWho(p.sender)} → ${approvalWho(p.receiver)}`;
   if (it.what === 'spend_limit') return `Spend limit: ${p.pool ? String(p.pool) : approvalWho(p.bot)}`;
@@ -209,17 +258,17 @@ function approvalTitle(it) {
   if (it.what === 'letter') return 'Send letter';
   return it.title || '';
 }
-function approvalFacts(what, p, it = {}) {
+function approvalFacts(what: string | undefined, p: Record<string, unknown> | null | undefined, it: Pick<NeedItem, 'support'> = {}): FactRow[] | null {
   if (!p || typeof p !== 'object' || Array.isArray(p)) return null;
-  const shown = v => v == null ? '' : typeof v === 'string' || typeof v === 'number' ? String(v) : JSON.stringify(v);
-  const plain = v => typeof v === 'string' || typeof v === 'number';
-  let rows, named;
+  const shown = (v: unknown): string => v == null ? '' : typeof v === 'string' || typeof v === 'number' ? String(v) : JSON.stringify(v);
+  const plain = (v: unknown): boolean => typeof v === 'string' || typeof v === 'number';
+  let rows: FactRow[], named: string[];
   if (what === 'letter') {
-    const address = a => a && typeof a === 'object' ? [a.name, a.line1, a.line2, [a.city, a.state, a.postal_code].filter(Boolean).join(' ')].filter(Boolean).join('\n') : '';
+    const address = (a: unknown) => isRecord(a) ? [a.name, a.line1, a.line2, [a.city, a.state, a.postal_code].filter(Boolean).join(' ')].filter(Boolean).join('\n') : '';
     const link = document.createElement('a');
     link.textContent = 'Open PDF proof';
     if (/^\/api\/v2\/files\/[A-Za-z0-9_-]+$/.test(String(p.proof || ''))) {
-      link.href = p.proof; link.target = '_blank'; link.rel = 'noopener';
+      link.href = String(p.proof); link.target = '_blank'; link.rel = 'noopener';
     }
     rows = [['Proof', link], ['Recipient', address(p.recipient)], ['Return address', address(p.return_address)],
       ['Class', shown(p.mail_class).replaceAll('_', ' ')], ['Print', `${p.color ? 'Color' : 'Black and white'} · ${p.duplex ? 'Duplex' : 'Single sided'}`],
@@ -273,8 +322,8 @@ function approvalFacts(what, p, it = {}) {
   for (const key of Object.keys(p)) if (!named.includes(key) && key !== 'content_sha256') rows.push([key, plain(p[key]) ? String(p[key]) : JSON.stringify(p[key]), '', true]);
   return rows;
 }
-function approvalPayloadNode(it) {
-  const p = it.payload && typeof it.payload === 'object' ? it.payload : {}, el = (tag, cls, text) => {
+function approvalPayloadNode(it: NeedItem) {
+  const p: Record<string, unknown> = isRecord(it.payload) ? it.payload : {}, el = <K extends keyof HTMLElementTagNameMap>(tag: K, cls?: string, text?: unknown): HTMLElementTagNameMap[K] => {
     const node = document.createElement(tag);
     if (cls) node.className = cls;
     if (text != null) node.textContent = String(text);
@@ -300,7 +349,7 @@ function approvalPayloadNode(it) {
     main.append(facts, details);
     return box;
   }
-  const list = v => (Array.isArray(v) ? v : v == null || v === '' ? [] : [v]).map(String).join(', ');
+  const list = (v: unknown): string => (Array.isArray(v) ? v : v == null || v === '' ? [] : [v]).map(String).join(', ');
   const facts = el('dl', 'approval-facts');
   for (const [label, value] of [['From', p.mailbox], ['To', list(p.to)], ['Cc', list(p.cc)],
                                 ['Subject', p.subject], ['Draft', p.draft]]) {
@@ -308,7 +357,7 @@ function approvalPayloadNode(it) {
     facts.append(el('dt', '', label), el('dd', label === 'Draft' ? 'mono' : '', value));
   }
   main.append(facts);
-  const files = Array.isArray(p.attachments) ? p.attachments.filter(f => f && typeof f === 'object') : [];
+  const files = Array.isArray(p.attachments) ? p.attachments.filter(isRecord) : [];
   if (files.length) {
     const ul = el('ul', 'approval-files');
     ul.setAttribute('aria-label', 'Attached files');
@@ -348,11 +397,11 @@ function approvalPayloadNode(it) {
 // on screen, so a row added since is not applied.
 const staleCards = () => (S.v2?.needs || []).filter(it => it.kind === 'stale');
 // Each row keeps its key while the card's rows change, so a redraw takes an answered row out and a new one in.
-const staleSig = v => esc(JSON.stringify(v));
-function staleCardRow(r) {
+const staleSig = (v: unknown): string => esc(JSON.stringify(v));
+function staleCardRow(r: StaleRow) {
   const accept = r.action ? `<button type="button" class="ghost" data-stale="${esc(r.id)}" data-stale-decision="accept">Accept</button>` : '';
   return `<li class="stale-row" data-patch-key="stale-row:${esc(r.id)}" data-patch-sig="${staleSig([r.task, r.title, r.reason, r.suggest, r.action, r.version])}" data-stale-row="${esc(r.id)}" data-stale-version="${esc(String(r.version ?? ''))}"${r.action ? ' data-stale-action' : ''}>
-    <div class="stale-what"><a href="#/task/${encodeURIComponent(r.task)}">${esc(plainActors(r.title || ''))}</a>
+    <div class="stale-what"><a href="#/task/${encodeURIComponent(String(r.task))}">${esc(plainActors(r.title || ''))}</a>
       <div class="muted">${esc(r.reason)}. Suggest: ${esc(r.suggest)}.</div></div>
     <div class="row">${accept}<button type="button" class="ghost" data-stale="${esc(r.id)}" data-stale-decision="skip">Skip</button></div>
   </li>`;
@@ -360,10 +409,10 @@ function staleCardRow(r) {
 // After the answer the card is drawn again from the new list (the next card once no row is left). A button still on
 // screen (a refused row) is ready again, and when the answered row took the focus with it, focus moves to the row now
 // in its place.
-async function staleDecide(button, path, body) {
-  const host = button.closest('[data-stale-card]') || document.querySelector(`[data-stale-card="${CSS.escape(button.dataset.staleAll || '')}"]`);
+async function staleDecide(button: HTMLButtonElement, path: string, body: unknown) {
+  const host = button.closest<HTMLElement>('[data-stale-card]') || document.querySelector<HTMLElement>(`[data-stale-card="${CSS.escape(button.dataset.staleAll || '')}"]`);
   const card = host?.dataset.staleCard || '', label = button.textContent;
-  const at = [...(host?.querySelectorAll('[data-stale-row]') || [])].indexOf(button.closest('[data-stale-row]'));
+  const rowNodes: (Element | null)[] = [...(host?.querySelectorAll('[data-stale-row]') || [])], at = rowNodes.indexOf(button.closest('[data-stale-row]'));
   button.disabled = true; button.textContent = '…';
   try {
     const out = await post(path, body);
@@ -372,13 +421,13 @@ async function staleDecide(button, path, body) {
     else needsSay(out.accepted ? `Accepted ${out.accepted.length}` : out.outcome === 'skipped' ? 'Skipped' : 'Accepted');
     await v2Refresh(); await refresh(true);      // the open card follows (hub-v2.js v2Refresh)
     needsListsRedraw();
-  } catch (e) { needsSay(e.message, true); }
+  } catch (e) { needsSay(errorMessage(e, ''), true); }
   finally {
     if (button.isConnected) { button.disabled = false; button.textContent = label; }
     else if (card && (!document.activeElement || document.activeElement === document.body || !document.activeElement.isConnected)) {
-      const again = document.querySelector(`[data-stale-card="${CSS.escape(card)}"]`);
+      const again = document.querySelector<HTMLElement>(`[data-stale-card="${CSS.escape(card)}"]`);
       const rows = again?.querySelectorAll('[data-stale-row]') || [];
-      (rows[Math.min(Math.max(at, 0), rows.length - 1)]?.querySelector('[data-stale]') || $('#need-card [data-dc="skip"]'))?.focus({preventScroll: true});
+      (rows[Math.min(Math.max(at, 0), rows.length - 1)]?.querySelector<HTMLElement>('[data-stale]') || $('#need-card [data-dc="skip"]'))?.focus({preventScroll: true});
     }
   }
 }
@@ -386,37 +435,37 @@ async function staleDecide(button, path, body) {
 // Finishing a bot's request is one tap: no prompt. What the person typed in the box they are looking at (the task
 // window's comment box, or the card's reply box) goes with Done as the outcome; otherwise nothing extra is sent.
 // Closing never takes one.
-function taskOutcomeNote(task, action, typed) {
+function taskOutcomeNote(task: {owner_id?: string | null | undefined; requester_id?: string | null | undefined} | null | undefined, action: {close?: boolean | undefined}, typed: string | null | undefined) {
   if (!task || action.close || !String(task.owner_id || '').startsWith('human:') ||
       !String(task.requester_id || '').startsWith('bot:')) return '';
   return String(typed || '').trim();
 }
 // The task window's typed outcome went with Done: it is not left behind to be sent again as a comment.
-function taskOutcomeTaken(task) {
+function taskOutcomeTaken(task: {id: string | number}) {
   TASK_DRAFTS.delete(String(task.id));
-  const el = document.querySelector(`dialog[data-task="${CSS.escape(String(task.id))}"] .task-comments + form textarea`);
+  const el = document.querySelector<HTMLTextAreaElement>(`dialog[data-task="${CSS.escape(String(task.id))}"] .task-comments + form textarea`);
   if (el) { el.value = ''; el.style.height = ''; }
 }
 // Capturing, so a recommendation button inside a task row answers instead of opening the task.
 document.addEventListener('click', ev => {
-  const rec = ev.target.closest?.('[data-recommend]');
+  const rec = eventElement(ev)?.closest<HTMLButtonElement>('[data-recommend]');
   if (!rec) return;
   ev.preventDefault(); ev.stopPropagation();
   void needsRecommend(rec, rec.dataset.recommend, Number(rec.dataset.version) || null);
 }, true);
 document.addEventListener('click', ev => {
-  const st = ev.target.closest('[data-stale]');
+  const st = eventElement(ev)?.closest<HTMLButtonElement>('[data-stale]');
   if (st) {
     ev.preventDefault();
-    const decision = st.dataset.staleDecision, version = Number(st.closest('[data-stale-row]')?.dataset.staleVersion);
-    void staleDecide(st, `/v2/stale-review/${encodeURIComponent(st.dataset.stale)}`, decision === 'accept' ? {decision, version} : {decision});
+    const decision = st.dataset.staleDecision, version = Number(st.closest<HTMLElement>('[data-stale-row]')?.dataset.staleVersion);
+    void staleDecide(st, `/v2/stale-review/${encodeURIComponent(String(st.dataset.stale))}`, decision === 'accept' ? {decision, version} : {decision});
     return;
   }
-  const sa = ev.target.closest('[data-stale-all]');
+  const sa = eventElement(ev)?.closest<HTMLButtonElement>('[data-stale-all]');
   if (sa) {
     ev.preventDefault();
-    const host = document.querySelector(`[data-stale-card="${CSS.escape(sa.dataset.staleAll)}"]`);
-    const rows = [...(host?.querySelectorAll('[data-stale-row][data-stale-action]') || [])]
+    const host = document.querySelector<HTMLElement>(`[data-stale-card="${CSS.escape(String(sa.dataset.staleAll))}"]`);
+    const rows = [...(host?.querySelectorAll<HTMLElement>('[data-stale-row][data-stale-action]') || [])]
       .map(li => ({id: li.dataset.staleRow, version: Number(li.dataset.staleVersion)}));
     if (rows.length) void staleDecide(sa, '/v2/stale-review/accept-all', {rows});
   }
@@ -428,21 +477,21 @@ document.addEventListener('click', ev => {
 // notifying. Both reads of the list call this (hub-v2.js after a refresh, refresh.js after a live change), and the calls
 // run one after another, so they share one memory and an item is notified once.
 let notifyQueue = Promise.resolve();
-function notifyNewThreadNeeds(items) {
+function notifyNewThreadNeeds(items: NeedItem[]) {
   notifyQueue = notifyQueue.then(() => notifyThreadNeedsOnce(items)).catch(() => {});
   return notifyQueue;
 }
-async function notifyThreadNeedsOnce(items) {
+async function notifyThreadNeedsOnce(items: NeedItem[]) {
   const id = S.me?.id;
   if (!id) return;                  // the identity has not loaded: there is no person to keep a memory for yet
   if (S.notifyBrowser === undefined) {
     // The person's own row in the people list carries the setting (there is no one-person read).
-    try { S.notifyBrowser = ((await v2Get('/humans'))?.people || []).find(p => p.id === id)?.notify_browser === true; }
+    try { S.notifyBrowser = ((await v2Get('/humans'))?.people || []).find((p: {id?: string; notify_browser?: boolean}) => p.id === id)?.notify_browser === true; }
     catch { S.notifyBrowser = false; }
   }
   const key = 'tico.notified.' + id;
   const thread = items.filter(it => THREAD_NEED_KINDS[it.kind]);
-  let seen = null;
+  let seen: string[] | null = null;
   try { seen = JSON.parse(localStorage.getItem(key) || 'null'); } catch { seen = null; }
   const first = !Array.isArray(seen);
   const known = new Set(first ? [] : seen);
@@ -462,11 +511,11 @@ async function notifyThreadNeedsOnce(items) {
 // page shows, with Send anyway and Keep blocked for its reviewer. The card is read from the hold, so its text reaches
 // only the reviewer, who is the one who may read it.
 document.addEventListener('click', async ev => {
-  const review = ev.target.closest('[data-hold-review]');
+  const review = eventElement(ev)?.closest<HTMLElement>('[data-hold-review]');
   if (!review) return;
-  const holdId = review.dataset.holdReview, row = review.closest('[data-need-card]');
+  const holdId = String(review.dataset.holdReview), row = review.closest<HTMLElement>('[data-need-card]');
   if (!row) return;
-  const open = row.parentElement?.querySelector(`[data-hold-slot="${CSS.escape(holdId)}"]`);
+  const open = row.parentElement?.querySelector<HTMLElement>(`[data-hold-slot="${CSS.escape(holdId)}"]`);
   if (open) { open.remove(); return; }
   const slot = document.createElement('div');
   slot.className = 'needs-hold';
@@ -478,6 +527,6 @@ document.addEventListener('click', async ev => {
     slot.innerHTML = ruleHoldHTML(hold);
     ruleHoldsWire(slot, holdId);
   } catch (e) {
-    slot.textContent = e.message;
+    slot.textContent = errorMessage(e, '');
   }
 });

@@ -283,7 +283,7 @@ interface WentAway {
 /** One row of Needs you (`S.v2.needs`). */
 interface NeedsItem {
   kind: string;
-  id?: string;
+  id: string;
   requested_by_id?: string;
   requester_id?: string;
   [key: string]: unknown;

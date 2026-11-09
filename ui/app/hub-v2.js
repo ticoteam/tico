@@ -13,6 +13,7 @@ const V2_WORD = {idle: 'Idle', running: 'Running', waiting_human: 'Waiting on a 
 const statusWord = status => status === 'planned' ? 'Setting up' : String(status || '');
 const V2_PILL = {running: 'in-progress', waiting_human: 'needs', waiting_bot: 'waiting', blocked: 'blocked',
                  limited: 'waiting', crashed: 'fail', quarantined: 'fail', idle: ''};
+/** @type {Record<string, string>} */
 const V2_KIND = {decision: 'Decision', approval: 'Approval', review: 'Review', declined: 'Declined',
                  question: 'Question', task: 'Task', notice: 'Message', setup: 'Set up'};
 const v2StatusOf = slug => S.v2.status[slug] || null;
