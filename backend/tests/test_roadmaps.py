@@ -6,7 +6,6 @@ import pytest
 
 from backend import hubdb as H
 from backend import roadmaps as R
-from backend import models as M
 from backend.tests.helpers.tasks_board import api, get, headers, post, relate
 from backend import bot_settings as BS
 from backend.tests.helpers.roadmaps import ORIGIN, public_setup
