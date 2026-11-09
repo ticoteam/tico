@@ -783,7 +783,8 @@ specific wins (the **What wakes** automations on the Automations page). The mess
 An event no rule names waits as a note (`default_note`): the bot reads it on its next run. Work still wakes the bot: an
 assignment or a task handed back to it, a review or QA request, a blocker, a routine, a schedule, a due date, a snooze
 ending, a requested update, a release published, the Task Manager's report, a pull request's
-checks finishing, a subtask or a blocker finishing, and a task the bot asked for being finished, declined
+checks finishing, a pull request merging on a card waiting or blocked on it (its own, a card it blocks, or its parent: once
+per merge, `_merge_wakes` in backend/github.py), a subtask or a blocker finishing, and a task the bot asked for being finished, declined
 or blocked on someone else (`task_blocked`). A plain
 comment, another bot's status or step move, and the bot's own write (`own_write`, ignored) do not. A rule's outcome is
 `ignore`, `note`, `batch`, `wake`, `ask` or `action`. **Ask** writes the message as a note and puts one item in the

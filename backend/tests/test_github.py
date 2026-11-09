@@ -1760,3 +1760,140 @@ def test_a_removal_for_a_pr_github_reads_as_merged_does_not_wake_the_owner(api, 
     reads = len(seen)
     G.refresh_queue_removals(service)
     assert len(seen) == reads
+
+
+def _task_state(api, task_id, status):
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE tasks SET status=? WHERE id=?", (status, task_id))
+
+
+def _merged(api):
+    return hook(api, 'pull_request', pr_event('closed', merged=True, merge_commit_sha='c' * 40, merged_at=H.now()))
+
+
+def _flush(api):
+    """Send every PR burst now, as the scheduler does once each is due."""
+    from backend import repositories as R
+
+    with api.app.state.store.transaction() as c:
+        for row in c.execute("SELECT key FROM registry_metadata WHERE key LIKE 'github-task-wake:%'").fetchall():
+            R.save_metadata(c, row['key'], {**R.metadata(c, row['key']), 'due': H.shift(H.now(), seconds=-1)})
+        return G.flush_wakes(c)
+
+
+def test_a_merge_wakes_the_bot_card_waiting_on_its_pull_request_once(api):
+    task = post(api, 'tasks', {'owner': 'cpo', 'title': 'Ship checkout', 'body': 'x', 'links': [PR]})
+    _task_state(api, task['id'], 'waiting')
+    _merged(api)
+    assert len(_burst(api, task['id'])) == 1 and 'merged' in _burst(api, task['id'])[0]
+    assert _flush(api) == [task['id']]
+    with api.app.state.store.transaction() as c:
+        body = c.execute(
+            'SELECT body FROM messages WHERE recipient_id=? ORDER BY rowid DESC LIMIT 1', (task['owner_id'],)
+        ).fetchone()[0]
+    assert 'Carry this card on' in body
+    # GitHub redelivers the merge, and a read refresh finds the same merge: neither wakes the card again.
+    _merged(api)
+    with api.app.state.store.transaction() as c:
+        G.pull_request(
+            c, pr_event('refresh', merged=True, merge_commit_sha='c' * 40, merged_at=H.now()), read_refresh=True
+        )
+    assert _burst(api, task['id']) == []
+    assert _flush(api) == []
+
+
+def test_a_merge_does_not_wake_a_card_a_person_owns(api):
+    task = post(api, 'tasks', {'owner': 'cpo', 'title': 'Ship checkout', 'body': 'x', 'links': [PR]})
+    _task_state(api, task['id'], 'waiting')
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE tasks SET owner_id='human:ana' WHERE id=?", (task['id'],))
+    _merged(api)
+    assert _burst(api, task['id']) == []
+
+
+def test_a_merge_does_not_wake_a_done_card(api):
+    task = post(api, 'tasks', {'owner': 'cpo', 'title': 'Ship checkout', 'body': 'x', 'links': [PR]})
+    _task_state(api, task['id'], 'done')
+    _merged(api)
+    assert _burst(api, task['id']) == []
+
+
+def test_a_merge_wakes_the_card_blocked_on_the_pull_request_card_and_not_that_card(api):
+    from backend import task_relations as TR
+
+    pr_card = post(api, 'tasks', {'owner': 'cpo', 'title': 'Checkout', 'body': 'x', 'links': [PR]})
+    qa = post(api, 'tasks', {'owner': 'cmo', 'title': 'QA checkout', 'body': 'x'})
+    with api.app.state.store.transaction() as c:
+        TR._insert(c, 'bot:cpo', pr_card['id'], qa['id'], 'blocks', H.now())
+    _task_state(api, qa['id'], 'waiting')
+    _merged(api)
+    assert _burst(api, pr_card['id']) == [], 'an open card is on its own step, not waiting'
+    assert len(_burst(api, qa['id'])) == 1
+
+
+def test_a_card_the_milestone_wait_woke_gets_no_second_wake_from_the_merge(api):
+    from backend import repositories as R
+    from backend import task_relations as TR
+
+    pr_card = post(api, 'tasks', {'owner': 'cpo', 'title': 'Checkout', 'body': 'x', 'links': [PR]})
+    waiter = post(api, 'tasks', {'owner': 'cmo', 'title': 'QA checkout', 'body': 'x'})
+    with api.app.state.store.transaction() as c:
+        # Blocked on the pull request's card and waiting for the merge: the milestone wakes it, and the card's own
+        # blocker is still open, so it stays waiting and the merge would wake it again without the skip.
+        TR._insert(c, 'bot:cpo', pr_card['id'], waiter['id'], 'blocks', H.now())
+    r = api.post(f"/api/v2/tasks/{waiter['id']}/waits", json={'on': 'pr:' + PR}, headers=headers())
+    assert r.status_code == 200, r.text
+    _task_state(api, waiter['id'], 'waiting')
+    _merged(api)
+    with api.app.state.store.transaction() as c:
+        milestone = c.execute(
+            "SELECT count(*) FROM messages WHERE recipient_id=? AND body LIKE 'Milestone:%'", (waiter['owner_id'],)
+        ).fetchone()[0]
+        assert R.metadata(c, 'github-task-wake:' + waiter['id']) == {}
+    assert milestone == 1
+    assert _burst(api, waiter['id']) == []
+
+
+def test_a_stale_event_that_reopens_a_merged_pr_does_not_rearm_its_merge_wake(api):
+    task = post(api, 'tasks', {'owner': 'cpo', 'title': 'Ship checkout', 'body': 'x', 'links': [PR]})
+    _task_state(api, task['id'], 'waiting')
+    _merged(api)
+    assert _flush(api) == [task['id']]
+    # An older edit, delivered late, still says the PR is open: the link reopens, and the next merge reading is no news.
+    hook(api, 'pull_request', pr_event('edited'))
+    _merged(api)
+    assert _burst(api, task['id']) == []
+    assert _flush(api) == []
+
+
+def test_a_parent_is_woken_once_for_a_merge_when_another_child_links_the_pr_later(api):
+    from backend import task_relations as TR
+
+    child = post(api, 'tasks', {'owner': 'cpo', 'title': 'Checkout', 'body': 'x', 'links': [PR]})
+    parent = post(api, 'tasks', {'owner': 'cmo', 'title': 'Release checkout', 'body': 'x'})
+    with api.app.state.store.transaction() as c:
+        TR._insert(c, 'bot:cpo', child['id'], parent['id'], 'parent', H.now())
+    _task_state(api, parent['id'], 'waiting')
+    _merged(api)
+    assert len(_burst(api, parent['id'])) == 1
+    assert _flush(api) == [parent['id']]
+    late = post(api, 'tasks', {'owner': 'cpo', 'title': 'Checkout again', 'body': 'x', 'links': [PR]})
+    _task_state(api, late['id'], 'waiting')
+    _merged(api)
+    assert _burst(api, parent['id']) == [], 'the parent already heard this merge through the first child'
+    assert len(_burst(api, late['id'])) == 1
+
+
+def test_a_private_card_is_not_named_to_a_parent_outside_its_readers(api):
+    from backend import task_relations as TR
+
+    child = post(api, 'tasks', {'owner': 'cpo', 'title': 'Secret checkout', 'body': 'x', 'links': [PR]})
+    parent = post(api, 'tasks', {'owner': 'cmo', 'title': 'Release', 'body': 'x'})
+    with api.app.state.store.transaction() as c:
+        TR._insert(c, 'bot:cpo', child['id'], parent['id'], 'parent', H.now())
+        c.execute('UPDATE tasks SET private=1 WHERE id=?', (child['id'],))
+    _task_state(api, parent['id'], 'waiting')
+    _merged(api)
+    items = _burst(api, parent['id'])
+    assert len(items) == 1
+    assert PR not in items[0] and 'Secret checkout' not in items[0]
