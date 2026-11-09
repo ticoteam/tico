@@ -45,7 +45,7 @@ interface OBResult {
   source?: string;
 }
 // A card of the wizard's catalog state (ui/app/catalog.ts): what a bot is created from.
-interface OBCatalogCard {
+interface OBCatalogCard extends CatalogCard {
   slug: string;
   template: string;
   kind?: string;
@@ -54,17 +54,8 @@ interface OBCatalogCard {
   summary?: string;
   icon?: string;
 }
-interface OBEdit {
-  display_name?: string;
-  person?: string;
-  reports_to?: string;
-}
-interface OBCatalog {
-  cards: OBCatalogCard[];
-  picked: Set<string | undefined>;
-  edits: Record<string, OBEdit>;
-  touched: Set<string>;
-}
+// The wizard's catalog (catalog.ts CatalogState), its cards read as this page reads them.
+type OBCatalog = CatalogState<OBCatalogCard>;
 interface OBOrg {
   loaded: boolean;
   loading: Promise<void> | null;
@@ -98,9 +89,10 @@ interface OBRecord {
 interface OBState {
   org: OBOrg;
   catalog: OBCatalog;
-  record: OBRecord;
+  record: OBRecord & FrRecord;
   steps: string[];
   step: number;
+  providers: FrProviders | null;
 }
 
 const OB_ICONS = {goal: 'flag', go: 'arrow_forward', why: 'auto_awesome', edit: 'edit', chart: 'account_tree',

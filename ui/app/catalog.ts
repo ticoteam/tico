@@ -29,11 +29,11 @@ interface CatalogCard {
 // A human who can be a template's mailbox (catalogPeople): the fields this file reads of a person.
 interface CatalogPerson { id: string; name?: string | undefined; email?: string | undefined; hidden?: boolean | undefined }
 // What a person has changed on one card: its name, its instructions and its mailbox.
-interface CatalogEdit { display_name?: string; instructions?: string; person?: string; [key: string]: unknown }
-// The cards on offer and what is chosen on them (catalogState).
-interface CatalogState {
-  cards: CatalogCard[];
-  picked: Set<string>;
+interface CatalogEdit { display_name?: string; instructions?: string; person?: string; reports_to?: string; [key: string]: unknown }
+// The cards on offer and what is chosen on them (catalogState); a page may read its cards as a narrower card type.
+interface CatalogState<C extends CatalogCard = CatalogCard> {
+  cards: C[];
+  picked: Set<string | undefined>;
   edits: Record<string, CatalogEdit | undefined>;
   touched: Set<string>;
   decided: Set<string>;
@@ -44,7 +44,7 @@ function catalogState(cards: unknown, options: {lock?: boolean} = {}): CatalogSt
           decided: new Set(), lock: options.lock !== false};
 }
 const catalogCards = (data: CatalogCard[] | {cards?: CatalogCard[]} | null | undefined): CatalogCard[] => Array.isArray(data) ? data : (data?.cards || []);
-const catalogCard = (state: CatalogState, slug: string): CatalogCard | undefined => state.cards.find(card => card.slug === slug);
+const catalogCard = (state: CatalogState, slug: string | undefined): CatalogCard | undefined => state.cards.find(card => card.slug === slug);
 const catalogName = (state: CatalogState, card: CatalogCard): string => state.edits[card.slug]?.display_name ?? card.name ?? card.slug;
 const catalogText = (state: CatalogState, card: CatalogCard): string => state.edits[card.slug]?.instructions ?? card.instructions ?? '';
 const catalogLocked = (state: CatalogState, card: CatalogCard): boolean => state.lock && !!card.required;

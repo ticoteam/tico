@@ -6,10 +6,10 @@
 'use strict';
 
 // The wizard's state (ui/app/welcome.js: ONB) as this screen reads it. The catalog is ui/app/catalog.ts's catalogState.
-interface FrOrg { chosen: string[]; loaded?: boolean }
 interface FrProviders { preset?: string; enabled?: string[]; providers?: {id: string; label?: string}[] }
 interface FrRecord { home?: string; bots?: FrBot[]; machine?: {runners?: unknown[]} | null; completed?: boolean }
-interface FrState { catalog: CatalogState; org: FrOrg; record: FrRecord; providers: FrProviders | null }
+// The wizard's state (ONB, ui/app/welcome.js): the one org-builder.ts reads too.
+type FrState = OBState;
 /** A bot row as the setup screen reads it: the record's bots and the roster rows the chart uses. */
 interface FrBot extends Employee {
   repository_present?: boolean;
@@ -37,15 +37,16 @@ function frCollect(state: FrState, key: string) {
 
 // ----------------------------------------------------------------- who reports to whom
 // What a bot reports to: what the human chose, else its group head, else the owner.
-const frRawReports = (state: FrState, slug: string): string => state.catalog.edits[slug]?.reports_to ?? obDefaultReports(state, slug);
+const frRawReports = (state: FrState, slug: string): string | undefined => state.catalog.edits[slug]?.reports_to ?? obDefaultReports(state, slug);
 function frReports(state: FrState, slug: string): string {
   const wanted = frRawReports(state, slug);
   // A parent that was removed leaves its team to the owner rather than a bot that will not exist.
-  return frParentOptions(state, slug).some(option => option.value === wanted) ? wanted : frHome(state);
+  // An option's value is a string, so a wanted that matches one is a string.
+  return frParentOptions(state, slug).some(option => option.value === wanted) ? wanted! : frHome(state);
 }
 function frDescends(state: FrState, slug: string, of: string): boolean {
   const seen = new Set<string>();
-  for (let at = slug; at && !seen.has(at); at = frRawReports(state, at)) { if (at === of) return true; seen.add(at); }
+  for (let at: string | undefined = slug; at && !seen.has(at); at = frRawReports(state, at)) { if (at === of) return true; seen.add(at); }
   return false;
 }
 function frParentOptions(state: FrState, slug: string): FrOption[] {
