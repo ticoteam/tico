@@ -21,8 +21,9 @@ type Rail = {rows: Row[]; chevrons: string[]; foot: string[]; bar: string[]};
 type Kept = {who: string; finance?: boolean; welcome?: boolean};
 // A boot read's gate: the page's request waits in the list until the test releases it.
 type Gate = (value?: unknown) => void;
+declare const S: {emps: {name: string; revision: number}[]; route: string; me?: unknown};
+
 declare global {
-  var S: {emps: {name: string; revision: number}[]; route: string; me?: unknown};
   var FIN_PROBE: unknown;
   var THREADS: {on: unknown};
   var renderTree: () => void;

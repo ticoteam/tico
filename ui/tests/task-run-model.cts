@@ -8,8 +8,9 @@ const fs = require('node:fs');
 const {html, uiFile} = require('./support/page.cjs') as typeof import('./support/page.cjs');
 const {unrouted} = require('./support/routes.cjs') as typeof import('./support/routes.cjs');
 // Browser-side globals the test reads or calls inside page.evaluate / waitForFunction.
+declare const S: {emps: {name: string; revision: number}[]; route: string; me?: unknown};
+
 declare global {
-  var S: {emps: {name: string; revision: number}[]; route: string; me?: unknown};
   var TASK_RUN_ROWS: unknown[] | null;
   var taskModalShow: (task: {id: string; title: string}) => unknown;
 }

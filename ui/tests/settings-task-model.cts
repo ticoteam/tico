@@ -23,8 +23,9 @@ type Bot = {name: string; display_name: string; description: string; status: str
 // A request body the page posted to the bot's save routes.
 type Body = {expected_revision?: number; task_model?: {harness?: string; model?: string | null; effort?: string | null; compact_at?: number | null} | null;
   display_name?: string; description?: string; keep_tasks_going?: number | null; turns_at_once?: number | null};
+declare const S: {emps: {name: string; revision: number}[]; route: string; me?: unknown};
+
 declare global {
-  var S: {emps: {name: string; revision: number}[]; route: string; me?: unknown};
   var SETTINGS: string;
   var SETTINGS_DATA: {models: unknown[]};
   function settingsShow(tab: string): void;

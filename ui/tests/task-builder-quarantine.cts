@@ -7,8 +7,9 @@ const {html, uiFile} = require('./support/page.cjs') as typeof import('./support
 const {unrouted} = require('./support/routes.cjs') as typeof import('./support/routes.cjs');
 
 // Browser-side globals the test reads or calls inside page.evaluate / waitForFunction.
+declare const S: {emps: {name: string; revision: number}[]; route: string; me?: unknown};
+
 declare global {
-  var S: {emps: {name: string; revision: number}[]; route: string; me?: unknown};
   function liveEmit(topic: string, data: unknown): void;
   function taskBuilderActors(task: unknown): unknown[];
   function refresh(force?: boolean): unknown;

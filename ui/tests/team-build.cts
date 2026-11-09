@@ -15,7 +15,6 @@ type Route = import('playwright').Route;
 type Body = {[key: string]: unknown; briefing?: string; team?: string; reports_to?: string; picks?: unknown[]};
 declare global {
   function teamBuildOpen(group: string | null): void;
-  var cloudAgentRequest: (pick: {name: string; supported: boolean}, options: {team: string}) => void;
   var __cloudRequest: {name: string; supported: boolean; team: string} | undefined;
 }
 const group = {id: 'engineering', name: 'Engineering', parent: '', org_parent: '', order: 0};
@@ -143,7 +142,12 @@ async function scenario(browser: Browser, {name, viewport, theme}: {name: string
   // The cloud agent Tico connects is the default and says Add; either link hands it to the Cloud agents page with this
   // team, which adds it as a bot or files the request, so it lands here.
   const cloudLink = page.locator('#team-build-dialog [data-card="4"] [data-tb-request]');
-  await page.evaluate(() => { window.cloudAgentRequest = (pick, options) => { window.__cloudRequest = {name: pick.name, supported: pick.supported, team: options.team}; }; });
+  await page.evaluate(() => {
+    // The page's cloudAgentRequest takes a pick and the team; the global is not declared here, since cloud-agents.cts types Window.cloudAgentRequest differently.
+    (window as unknown as {cloudAgentRequest: (pick: {name: string; supported: boolean}, options: {team: string}) => void}).cloudAgentRequest = (pick, options) => {
+      window.__cloudRequest = {name: pick.name, supported: pick.supported, team: options.team};
+    };
+  });
   assert.equal(await cloudLink.innerText(), 'Add');
   await cloudLink.click();
   assert.deepEqual(await page.evaluate(() => window.__cloudRequest), {name: 'Claude Code', supported: true, team: 'engineering'});

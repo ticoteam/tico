@@ -30,8 +30,9 @@ type Seat = {id: string; team: string; reports_to: string; created_at: string; d
 type TeamS = {route?: string; me: {role?: string; can_create_bots?: boolean; can_add_people?: boolean}; emps: {name: string; reports_to?: string}[]; notifyBrowser?: unknown};
 type Hold = {started: (value?: unknown) => void; release: Promise<unknown>};
 // Browser-side globals the test reads or calls inside page.evaluate / waitForFunction.
+declare const S: {emps: {name: string; revision: number}[]; route: string; me?: unknown};
+
 declare global {
-  var S: {emps: {name: string; revision: number}[]; route: string; me?: unknown};
   function get(path: string): Promise<unknown>;
   function teamBuildOpen(group?: string | null): unknown;
   function cloudAgentsOpen(group?: string): unknown;

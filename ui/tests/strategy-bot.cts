@@ -12,8 +12,9 @@ const {unrouted} = require('./support/routes.cjs') as typeof import('./support/r
 
 type Server = {name?: string; home?: boolean; hidden?: boolean; analyst?: boolean; saves?: string[]};
 // Browser-side globals the test reads inside page.evaluate / waitForFunction.
+declare const S: {emps: {name: string; revision: number}[]; route: string; me?: unknown};
+
 declare global {
-  var S: {emps: {name: string; revision: number}[]; route: string; me?: unknown};
   var SETTINGS_DATA: {models: unknown[]};
   var $: (selector: string) => HTMLElement;
   function strategyBotName(): string;
