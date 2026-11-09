@@ -202,7 +202,7 @@ function inboxesHead(host: Element, {name, status, statusText, sub = '', actions
     ${actions ? `<div class="ib-actions">${actions}</div>` : ''}</header>${tabs}`;
 }
 // The message automations whose trigger hears `address`, for an inbox whose kind's page has no list of its own.
-async function inboxesAutomations(ctx: InboxCtx, address: string | null | undefined): Promise<string> {
+async function inboxesAutomations(ctx: Pick<InboxCtx, 'once'>, address: string | null | undefined): Promise<string> {
   const all = await ctx.once('automations', () => get<{automations?: InboxAutomation[] | null}>('/v2/automations?limit=500', {fresh: true}).then(d => d.automations || [], () => []));
   const want = String(address || '').toLowerCase();
   const mine = all.filter(a => a.trigger?.type === 'message' && String(a.trigger?.inbox || '').toLowerCase() === want);

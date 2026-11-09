@@ -24,11 +24,9 @@ declare const TicoObservability: {
   reset(): void;
 };
 declare const report: (payload: Record<string, unknown>) => void;
-declare global {
-  interface Window {
-    report: (payload: Record<string, unknown>) => void;
-  }
-}
+declare const window: Window & typeof globalThis & {
+  report: (payload: Record<string, unknown>) => void;
+};
 
 const scrubbed = scrubSentry({message:'PRIVATE', request:{url:'PRIVATE'}, breadcrumbs:[{message:'PRIVATE'}],
   exception:{values:[{value:'PRIVATE',stacktrace:{frames:[

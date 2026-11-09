@@ -8,18 +8,55 @@
    to answer, then its summary and the commits it made. A question also shows as a small card on the bot's page, and the button carries a mark. */
 'use strict';
 
-const learnApi = slug => `/v2/bots/${encodeURIComponent(slug)}/memory`;
-const dreamApi = slug => `/v2/bots/${encodeURIComponent(slug)}/dream`;
-const DREAM_LINES = {starting: 'Falling asleep…', dreaming: 'Dreaming…', asking: 'A few questions', done: 'Awake', stopped: 'Awake'};
-const dreamOpen = dream => !!dream && !['done', 'stopped'].includes(dream.state);
+/** A dream's open questions: the question task, its text, and whether they are this bot's to answer. */
+interface DreamQuestions { task_id: string; mine: boolean; text: string; }
+/** The bot's dream (GET /api/v2/bots/{bot}/dream): what it is doing, and its questions while it asks. */
+interface BotDream {
+  state: 'starting' | 'dreaming' | 'asking' | 'done' | 'stopped';
+  task: string;
+  started_at: string;
+  doing: string | null;
+  summary: string | null;
+  reason: string | null;
+  auto: boolean;
+  questions: DreamQuestions | null;
+}
+interface DreamCard { n: string; text: string; suggested: string; intro?: string; }
+interface LearnSource { task?: string | null; title?: string | null; bot?: string; message?: string; excerpt?: string | null; }
+interface LearnUpdate {
+  subject: string;
+  author: string;
+  when: string;
+  files: string[];
+  new?: boolean;
+  url?: string | null;
+  shared?: boolean;
+  source?: LearnSource | null;
+  diff?: string | null;
+  truncated?: boolean;
+}
+interface DocStatus { oversized?: boolean; updated_at?: string | null; }
+/** GET /api/v2/bots/{bot}/memory: the commits that changed the bot's memory, its documents and their status. */
+interface LearnPage {
+  documents?: Record<string, string> | null;
+  document_status?: Record<string, DocStatus> | null;
+  updates?: LearnUpdate[] | null;
+  next_before?: string | null;
+  unseen?: number | null;
+}
 
-async function botLearningsLoad(slug) {
+const learnApi = (slug: string) => `/v2/bots/${encodeURIComponent(slug)}/memory`;
+const dreamApi = (slug: string) => `/v2/bots/${encodeURIComponent(slug)}/dream`;
+const DREAM_LINES = {starting: 'Falling asleep…', dreaming: 'Dreaming…', asking: 'A few questions', done: 'Awake', stopped: 'Awake'};
+const dreamOpen = (dream: BotDream | null | undefined): boolean => !!dream && !['done', 'stopped'].includes(dream.state);
+
+async function botLearningsLoad(slug: string) {
   const button = $('#bot-learn');
   if (!button) return;
-  let data;
-  try { data = await get(`${learnApi(slug)}?include_documents=false`); } catch { return; }          // an older server has no history: no button
+  let data: LearnPage;
+  try { data = await get<LearnPage>(`${learnApi(slug)}?include_documents=false`); } catch { return; }          // an older server has no history: no button
   if (BOT?.slug !== slug || !button.isConnected) return;
-  const docs = data.documents || {};
+  const docs: Record<string, string> = data.documents || {};
   if (!(data.updates || []).length && !Object.values(docs).some(t => String(t).trim()) &&
       !Object.values(data.document_status || {}).some(s => s.oversized || s.updated_at)) return;
   learnBadge(button, data.unseen);
@@ -27,25 +64,25 @@ async function botLearningsLoad(slug) {
   button.onclick = async () => {
     button.disabled = true;
     try {
-      const [current, dream] = await Promise.all([get(learnApi(slug)), dreamFetch(slug)]);
+      const [current, dream] = await Promise.all([get<LearnPage>(learnApi(slug)), dreamFetch(slug)]);
       if (BOT?.slug === slug && button.isConnected) learnOpen(slug, current, dream);
-    } catch (e) { toast(e.message); }
+    } catch (e) { toast(errorMessage(e, '')); }
     finally { button.disabled = false; }
   };
 }
 
 // The bot's dream, or null: an older server has none, and a failed read shows the panel as it was.
-async function dreamFetch(slug, fresh = false) {
-  try { return (await get(dreamApi(slug), {fresh}))?.dream || null; } catch { return null; }
+async function dreamFetch(slug: string, fresh = false): Promise<BotDream | null> {
+  try { return (await get<{dream?: BotDream | null}>(dreamApi(slug), {fresh}))?.dream || null; } catch { return null; }
 }
 
 // With the bot's page: the mark on the Learnings button, and its open questions as a card near the top.
-async function botDreamLoad(slug) {
+async function botDreamLoad(slug: string) {
   const dream = await dreamFetch(slug);
   if (BOT?.slug === slug) dreamPageShow(slug, dream);
 }
 
-function dreamPageShow(slug, dream) {
+function dreamPageShow(slug: string, dream: BotDream | null) {
   const button = $('#bot-learn');
   if (button) {
     button.classList.toggle('dreaming', dreamOpen(dream));
@@ -66,20 +103,20 @@ function dreamPageShow(slug, dream) {
 
 // A question's text as cards: numbered questions ("1. …", "2) …") each get one, anything else is one card. A
 // "Suggested: …" (or "Suggestion:", "Suggested answer:") at its end becomes a chip that fills the box.
-function dreamSplit(text) {
+function dreamSplit(text: string | null | undefined): DreamCard[] {
   const lines = String(text || '').split('\n');
-  const parts = [];
-  let lead = [];
+  const parts: {n: string; lines: string[]}[] = [];
+  let lead: string[] = [];
   for (const line of lines) {
     const m = line.match(/^\s*(?:\*\*)?(\d{1,2})[.)](?:\*\*)?\s+(.*)$/);
-    if (m) parts.push({n: m[1], lines: [m[2]]});
-    else if (parts.length) parts[parts.length - 1].lines.push(line);
+    if (m) parts.push({n: m[1] ?? '', lines: [m[2] ?? '']});
+    else if (parts.length) parts[parts.length - 1]?.lines.push(line);
     else lead.push(line);
   }
-  const card = (n, body) => {
+  const card = (n: string, body: string[]): DreamCard => {
     const t = body.join('\n').trim();
     const s = t.match(/\(?\b(?:suggested(?: answer)?|suggestion|my suggestion)\s*:\s*([^\n]+?)\)?\s*$/i);
-    return {n, text: s ? t.slice(0, s.index).trim() : t, suggested: s ? s[1].trim() : ''};
+    return {n, text: s ? t.slice(0, s.index).trim() : t, suggested: s ? (s[1] ?? '').trim() : ''};
   };
   if (parts.length < 2) return [card('', lines)];
   const intro = lead.join('\n').trim();
@@ -87,7 +124,7 @@ function dreamSplit(text) {
 }
 
 let dreamForms = 0;                                       // each form's boxes get their own ids
-function dreamQuestionsHTML(q) {
+function dreamQuestionsHTML(q: DreamQuestions) {
   const cards = dreamSplit(q.text), key = `dream-a${++dreamForms}`;
   return `<form class="dream-form" data-dream-ask="${esc(q.task_id)}">
     ${cards.map((c, i) => `<div class="dream-q" style="--i:${i}">
@@ -101,41 +138,44 @@ function dreamQuestionsHTML(q) {
 }
 
 // Send the answers as one answer to the question task, numbered to match, as Needs you answers it: it wakes the bot.
-function dreamWire(root, q, sent) {
-  const form = root.querySelector('.dream-form');
+function dreamWire(root: HTMLElement, q: DreamQuestions, sent: () => void) {
+  const form = root.querySelector<HTMLFormElement>('.dream-form');
   if (!form) return;
   const cards = dreamSplit(q.text);
   form.addEventListener('click', ev => {
-    const chip = ev.target.closest('[data-dream-fill]');
+    const chip = ev.target instanceof Element ? ev.target.closest<HTMLElement>('[data-dream-fill]') : null;
     if (!chip) return;
-    const box = form.querySelectorAll('textarea')[Number(chip.dataset.dreamFill)];
-    box.value = cards[Number(chip.dataset.dreamFill)].suggested;
+    const i = Number(chip.dataset.dreamFill);
+    const box = form.querySelectorAll<HTMLTextAreaElement>('textarea')[i], card = cards[i];
+    if (!box || !card) return;
+    box.value = card.suggested;
     box.focus();
   });
   form.addEventListener('submit', async ev => {
     ev.preventDefault();
-    const boxes = [...form.querySelectorAll('textarea')];
-    if (!boxes.some(b => b.value.trim())) { boxes[0].focus(); return; }
-    const text = boxes.length === 1 ? boxes[0].value.trim()
+    const boxes = [...form.querySelectorAll<HTMLTextAreaElement>('textarea')];
+    if (!boxes.some(b => b.value.trim())) { boxes[0]?.focus(); return; }
+    const text = boxes.length === 1 ? boxes[0]?.value.trim()
       : boxes.map(b => `${b.dataset.dreamN}. ${b.value.trim() || 'No answer'}`).join('\n');
-    const button = form.querySelector('[type="submit"]');
-    button.disabled = true;
+    const button = form.querySelector<HTMLButtonElement>('[type="submit"]');
+    if (button) button.disabled = true;
     try {
       await post(`/v2/tasks/${encodeURIComponent(q.task_id)}/answers`, {target: {task: q.task_id}, answers: {}, other: text});
       sent();
-    } catch (e) { button.disabled = false; toast(e.message); }
+    } catch (e) { if (button) button.disabled = false; toast(errorMessage(e, '')); }
   });
 }
 
-function learnBadge(button, unseen) {
-  const n = button.querySelector('.bl-n');
-  n.textContent = unseen > 9 ? '9+' : String(unseen || '');
+function learnBadge(button: HTMLElement, unseen: number | null | undefined) {
+  const n = button.querySelector<HTMLElement>('.bl-n');
+  if (!n) return;
+  n.textContent = Number(unseen) > 9 ? '9+' : String(unseen || '');
   n.hidden = !unseen;
   button.setAttribute('aria-label', unseen ? `Learnings, ${unseen} new` : 'Learnings');
 }
 
 // A diff as lines: added and removed ones tinted with their marker dropped, each hunk header a small gap.
-function learnDiff(text) {
+function learnDiff(text: string) {
   return text.split('\n').filter(l => !/^(diff --git|index |--- |\+\+\+ |\\ No newline)/.test(l)).map(l => {
     if (l.startsWith('@@')) return '<span class="hunk">⋯</span>';
     const kind = l[0] === '+' ? 'add' : l[0] === '-' ? 'del' : '';
@@ -148,60 +188,61 @@ function learnDiff(text) {
 // their `added:` or leading date (`2026-10-14`, or `Oct 14` in the year of the file's latest dated line). Bots append
 // at the bottom, so file order opens on the oldest entry. An undated
 // section or entry stays with the dated one above it; undated ones above all dated ones stay first; nothing is lost.
-function learnNewestFirst(text) {
+function learnNewestFirst(text: string | null | undefined) {
   const lines = String(text || '').split('\n');
   const MONTHS = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'];
   const year = (String(text || '').match(/\b20\d\d(?=-\d\d-\d\d\b)/g) || [String(new Date().getFullYear())]).sort().pop();
-  const when = t => {                                             // the first date in t, as YYYY-MM-DD
+  const when = (t: string): string => {                                             // the first date in t, as YYYY-MM-DD
     const iso = t.match(/\b(20\d\d-\d\d-\d\d)\b/);
-    if (iso) return iso[1];
+    if (iso) return iso[1] ?? '';
     const md = t.match(/\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.? (\d{1,2})\b/i);
-    return md ? `${year}-${String(MONTHS.indexOf(md[1].toLowerCase()) + 1).padStart(2, '0')}-${md[2].padStart(2, '0')}` : '';
+    return md ? `${year}-${String(MONTHS.indexOf((md[1] ?? '').toLowerCase()) + 1).padStart(2, '0')}-${(md[2] ?? '').padStart(2, '0')}` : '';
   };
-  const blocks = (rows, starts) => {                              // [lead, ...items]: each item begins where starts() is true
-    const out = [[]];
+  const blocks = (rows: string[], starts: (l: string) => boolean): string[][] => {   // [lead, ...items]: each item begins where starts() is true
+    const out: string[][] = [[]];
     let fence = false;
     for (const l of rows) {
       if (/^\s*(```|~~~)/.test(l)) fence = !fence;
       if (!fence && starts(l) && !/^\s*(```|~~~)/.test(l)) out.push([]);
-      out[out.length - 1].push(l);
+      out[out.length - 1]?.push(l);
     }
     return out;
   };
-  const newest = (items, dateOf) => {                             // groups: a dated item and the undated ones after it
-    const groups = [];
+  const newest = <T>(items: T[], dateOf: (item: T) => string): T[] => {   // groups: a dated item and the undated ones after it
+    const groups: {d: string; items: T[]}[] = [];
     for (const item of items) {
       const d = dateOf(item);
       if (d || !groups.length) groups.push({d, items: [item]});
-      else groups[groups.length - 1].items.push(item);
+      else groups[groups.length - 1]?.items.push(item);
     }
-    const lead = groups.length && !groups[0].d ? groups.shift().items : [];
+    const lead = groups.length && !groups[0]?.d ? groups.shift()?.items ?? [] : [];
     groups.sort((a, b) => b.d.localeCompare(a.d));                // stable: same-day groups keep file order
     return lead.concat(...groups.map(g => g.items));
   };
-  const dateOf = item => (item.join('\n').match(/added:\s*(20\d\d-\d\d-\d\d)/) || [])[1] || when(item[0].match(/^[-*]\s+\W{0,3}(.{0,12})/)[1]);
-  const split = rows => {                                         // [prose ahead of the first entry, entries newest first]
-    const [head, ...items] = blocks(rows, l => /^[-*] /.test(l));
-    return [head, [].concat(...newest(items, dateOf))];
+  const dateOf = (item: string[]): string => (item.join('\n').match(/added:\s*(20\d\d-\d\d-\d\d)/) || [])[1] || when((item[0]?.match(/^[-*]\s+\W{0,3}(.{0,12})/) ?? [])[1] ?? '');
+  const noLines: string[] = [];                                    // what entries concat onto (concat leaves it empty)
+  const split = (rows: string[]): [string[], string[]] => {                                         // [prose ahead of the first entry, entries newest first]
+    const [head = [], ...items] = blocks(rows, l => /^[-*] /.test(l));
+    return [head, noLines.concat(...newest(items, dateOf))];
   };
-  const entries = rows => [].concat(...split(rows));
+  const entries = (rows: string[]): string[] => noLines.concat(...split(rows));
   // A flat log (the template's `# Learnings`, a line of intro, then entries) has no `## ` at all: its entries are
   // the intro's, sorted too, and they follow the rules.
-  const [intro, ...sections] = blocks(lines, l => /^## /.test(l));
+  const [intro = [], ...sections] = blocks(lines, l => /^## /.test(l));
   const [title, flat] = split(intro);
-  const rules = sections.filter(s => !when(s[0]) && /\brules?\b/i.test(s[0]));
-  const log = newest(sections.filter(s => !rules.includes(s)), s => when(s[0]));
+  const rules = sections.filter(s => !when(s[0] ?? '') && /\brules?\b/i.test(s[0] ?? ''));
+  const log = newest(sections.filter(s => !rules.includes(s)), s => when(s[0] ?? ''));
   return title.concat(...rules, flat, ...log.map(entries)).join('\n');
 }
 
-function learnSource(u) {
+function learnSource(u: LearnUpdate) {
   const s = u.source;
   if (!s) return '';
   if (s.task) return `<a href="#/task/${encodeURIComponent(s.task)}">${esc(s.title || 'Task')}</a>`;
-  return `<a href="#/bot/${encodeURIComponent(s.bot)}" data-learn-jump="${esc(s.message)}" data-learn-bot="${esc(s.bot)}">${esc(s.excerpt || 'Chat')}</a>`;
+  return `<a href="#/bot/${encodeURIComponent(String(s.bot))}" data-learn-jump="${esc(s.message)}" data-learn-bot="${esc(s.bot)}">${esc(s.excerpt || 'Chat')}</a>`;
 }
 
-function learnRow(u) {
+function learnRow(u: LearnUpdate) {
   const files = u.files.map(f => f.replace(/^(memory|knowledge)\//, '')).join(', ');
   return `<li class="learn-row${u.new ? ' new' : ''}">
     <div class="lr-subject">${esc(u.subject)}</div>
@@ -212,7 +253,7 @@ function learnRow(u) {
   </li>`;
 }
 
-function learnOpen(slug, data, dream = null) {
+function learnOpen(slug: string, data: LearnPage, dream: BotDream | null = null) {
   $('#learn-panel')?.remove();
   const d = document.createElement('dialog');
   d.id = 'learn-panel'; d.className = 'learn-panel';
@@ -220,11 +261,11 @@ function learnOpen(slug, data, dream = null) {
   let poll = 0;
   d.addEventListener('click', ev => { if (ev.target === d) d.close(); });
   d.addEventListener('close', () => { clearInterval(poll); d.remove(); }, {once: true});
-  let docs = data.documents || {};
-  let statuses = data.document_status || {};
-  const viewsOf = () => [['updates', 'Updates'], ['memory/learnings.md', 'Learnings'], ['memory/decisions.md', 'Decisions']]
+  let docs: Record<string, string> = data.documents || {};
+  let statuses: Record<string, DocStatus> = data.document_status || {};
+  const viewsOf = (): [string, string][] => ([['updates', 'Updates'], ['memory/learnings.md', 'Learnings'], ['memory/decisions.md', 'Decisions']] satisfies [string, string][])
     .filter(([k]) => k === 'updates' || String(docs[k] || '').trim() || statuses[k]?.oversized);
-  const switchHTML = views => views.length > 1 ? `<div class="learn-switch" role="tablist">${views.map(([k, label], i) =>
+  const switchHTML = (views: [string, string][]) => views.length > 1 ? `<div class="learn-switch" role="tablist">${views.map(([k, label], i) =>
     `<button type="button" role="tab" data-learn-view="${esc(k)}" aria-selected="${i === 0}">${label}</button>`).join('')}</div>` : '';
   d.innerHTML = `<div class="dream-sky" aria-hidden="true"><i></i><i></i><i></i></div>
     <div class="learn-head"><h2 id="learn-title">Learnings</h2>
@@ -233,11 +274,11 @@ function learnOpen(slug, data, dream = null) {
       <button class="ghost tmodal-x" type="button" data-learn-close aria-label="Close">✕</button></div>
     <div class="learn-body" id="learn-body"></div>`;
   document.body.appendChild(d);
-  let updates = data.updates || [], next = data.next_before;
+  let updates: LearnUpdate[] = data.updates || [], next = data.next_before ?? '';
   const body = $('#learn-body', d);
   // Dream mode: the status line, then the questions, or the summary and this dream's commits once it is over.
-  let shown = null;                                       // the dream as last drawn
-  const dreamDraw = async latest => {
+  let shown: BotDream | null = null;                      // the dream as last drawn
+  const dreamDraw = async (latest: BotDream | null) => {
     const before = shown;
     shown = latest;
     dreamPageShow(slug, latest);
@@ -251,9 +292,9 @@ function learnOpen(slug, data, dream = null) {
     let content = '';
     if (ask) content = ask.mine ? dreamQuestionsHTML(ask) : `<div class="dream-quiet md">${md(ask.text)}</div>`;
     else if (!dreamOpen(latest)) {
-      let mine = [];
+      let mine: LearnUpdate[] = [];
       try {
-        const page = await get(`${learnApi(slug)}?include_documents=false`, {fresh: true});
+        const page = await get<LearnPage>(`${learnApi(slug)}?include_documents=false`, {fresh: true});
         mine = (page.updates || []).filter(u => u.source?.task === latest.task);
       } catch {}
       if (shown !== latest) return;
@@ -273,10 +314,10 @@ function learnOpen(slug, data, dream = null) {
     if (ask?.mine) dreamWire(body, ask, () => { void dreamRefresh(); });
   };
   // While it dreams: the bot's own line on what it is doing now, and how long the dream has run.
-  const dreamDoing = latest => {
+  const dreamDoing = (latest: BotDream) => {
     const el = $('.dream-doing', body);
     if (!el) return;
-    const mins = Math.max(0, Math.round((Date.now() - new Date(latest.started_at)) / 60000));
+    const mins = Math.max(0, Math.round((Date.now() - Number(new Date(latest.started_at))) / 60000));
     const text = latest.state === 'dreaming' ? [latest.doing, `${mins} min`].filter(Boolean).join(' · ') : '';
     if (el.textContent === text) return;
     el.textContent = text;
@@ -286,7 +327,7 @@ function learnOpen(slug, data, dream = null) {
     const latest = await dreamFetch(slug, true);
     if (d.open && d.classList.contains('dreaming') && latest !== null) await dreamDraw(latest);
   };
-  const dreamEnter = latest => {
+  const dreamEnter = (latest: BotDream | null) => {
     d.classList.add('dreaming');
     clearInterval(poll);
     poll = setInterval(() => { void dreamRefresh(); }, 4000);
@@ -298,8 +339,8 @@ function learnOpen(slug, data, dream = null) {
     shown = null;
     show('updates');
   }
-  const show = view => {
-    d.querySelectorAll('[data-learn-view]').forEach(b => b.setAttribute('aria-selected', String(b.dataset.learnView === view)));
+  const show = (view: string) => {
+    d.querySelectorAll<HTMLElement>('[data-learn-view]').forEach(b => b.setAttribute('aria-selected', String(b.dataset.learnView === view)));
     if (view !== 'updates') {
       const status = statuses[view];
       const banner = status?.oversized ? `<div class="learn-warning" role="status">${status.updated_at
@@ -313,7 +354,7 @@ function learnOpen(slug, data, dream = null) {
       : '<div class="empty">No memory updates yet.</div>';
   };
   d.addEventListener('click', async ev => {
-    const t = ev.target.closest('button, a');
+    const t = ev.target instanceof Element ? ev.target.closest<HTMLButtonElement>('button, a') : null;
     if (!t) return;
     if (t.matches('[data-learn-close]')) d.close();
     else if (t.matches('[data-dream-start]')) {
@@ -324,23 +365,24 @@ function learnOpen(slug, data, dream = null) {
         if (d.open && d.isConnected) dreamEnter(started);
         else dreamPageShow(slug, started);
       }
-      catch (e) { toast(e.message); }
+      catch (e) { toast(errorMessage(e, '')); }
       finally { t.disabled = false; }
     } else if (t.matches('[data-dream-stop]')) {
+      if (!shown) return;
       t.disabled = true;
       try {
         const task = (await get(`/v2/tasks/${encodeURIComponent(shown.task)}`, {fresh: true})).task;
         await post(`/v2/tasks/${encodeURIComponent(shown.task)}`, {version: task.version, close: true});
         await dreamRefresh();
-      } catch (e) { t.disabled = false; toast(e.message); }
+      } catch (e) { t.disabled = false; toast(errorMessage(e, '')); }
     } else if (t.matches('[data-dream-wake]')) {
       t.disabled = true;
       try {
-        const fresh = await get(learnApi(slug), {fresh: true});
+        const fresh = await get<LearnPage>(learnApi(slug), {fresh: true});
         docs = fresh.documents || {}; statuses = fresh.document_status || {};
-        updates = (fresh.updates || []).map(u => ({...u, new: false})); next = fresh.next_before;
+        updates = (fresh.updates || []).map(u => ({...u, new: false})); next = fresh.next_before ?? '';
         $('.learn-tabs', d).innerHTML = switchHTML(viewsOf());
-      } catch (e) { toast(e.message); }
+      } catch (e) { toast(errorMessage(e, '')); }
       dreamLeave();
       dreamPageShow(slug, null);
     }
@@ -348,13 +390,13 @@ function learnOpen(slug, data, dream = null) {
     else if (t.matches('[data-learn-more]')) {
       t.disabled = true;
       try {
-        const page = await get(`${learnApi(slug)}?before=${encodeURIComponent(next)}&include_documents=false`);
-        updates = updates.concat(page.updates || []); next = page.next_before;
+        const page = await get<LearnPage>(`${learnApi(slug)}?before=${encodeURIComponent(next)}&include_documents=false`);
+        updates = updates.concat(page.updates || []); next = page.next_before ?? '';
         show('updates');
-      } catch (e) { t.disabled = false; toast(e.message); }
+      } catch (e) { t.disabled = false; toast(errorMessage(e, '')); }
     } else if (t.dataset.learnJump && typeof jumpToMessage === 'function') {
       ev.preventDefault(); d.close();
-      void jumpToMessage(t.dataset.learnBot, t.dataset.learnJump);
+      void jumpToMessage(String(t.dataset.learnBot), t.dataset.learnJump);
     } else if (t.tagName === 'A') d.close();
   });
   show('updates');
@@ -362,7 +404,8 @@ function learnOpen(slug, data, dream = null) {
   if (dreamOpen(dream)) dreamEnter(dream);
   updates.forEach(u => { u.new = false; });                 // marked once; reopening shows them as read
   if (data.unseen) {
-    learnBadge($('#bot-learn'), 0);
+    const learnButton = $('#bot-learn');
+    if (learnButton) learnBadge(learnButton, 0);
     data.unseen = 0;
     void post(`${learnApi(slug)}/seen`, {}).catch(() => {});
   }

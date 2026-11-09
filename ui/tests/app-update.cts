@@ -13,15 +13,13 @@ interface AppUpdateEvent {
   state: string;
   detail: string;
 }
-declare global {
-  interface Window {
-    __posted: [string, unknown][];
-    ticoNative: (name: string) => {postMessage(body: unknown): unknown};
-    ticoNativeFeatures: string[];
-    ticoNativeVersion: string;
-    ticoAppUpdate: (event: AppUpdateEvent) => void;
-  }
-}
+declare const window: Window & typeof globalThis & {
+  __posted: [string, unknown][];
+  ticoNative: (name: string) => {postMessage(body: unknown): unknown};
+  ticoNativeFeatures: string[];
+  ticoNativeVersion: string;
+  ticoAppUpdate: (event: AppUpdateEvent) => void;
+};
 
 (async () => {
   const browser = await webkit.launch({headless:true});

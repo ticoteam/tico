@@ -2,13 +2,40 @@
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
 'use strict';
 
+// The page's state: the shared TaskState (tasks.ts) plus the fields this file sets and reads on it.
+interface TasksPageState extends TaskState {
+  typeChosen?: boolean; migrate?: boolean; migrated?: boolean;
+  filtered?: unknown; kept?: boolean; read?: boolean; typesLoaded?: boolean;
+  searchTimer?: ReturnType<typeof setTimeout>; saveTimer?: ReturnType<typeof setTimeout>; doneDrain?: boolean;
+  back?: string; loadAfter?: Promise<unknown> | null;
+  pendingFinish?: {key: string; at: number; after: number} | null;
+}
+// The kept list of the last visit (S.lastRead.tasks) and the saved view preference (S.lastRead.tasksPref).
+interface KeptTasksRead { key: string; tasks: TaskRow[]; labels: string[]; tags: import('../types/api').Tag[]; filtered?: unknown; since?: string | null; fullAt?: number; }
+type TasksPref = { type?: unknown; view?: unknown; views?: unknown; };
+// The new-task form's named controls. The form's own title is an HTMLElement attribute, so the form type intersects it.
+interface TaskCreateForm {
+  title: HTMLInputElement; owner: HTMLSelectElement; body: HTMLTextAreaElement; labels: HTMLInputElement;
+  top: HTMLInputElement; link: HTMLInputElement; goal?: HTMLSelectElement; elements: TaskCreateControls;
+}
+interface TaskCreateControls extends PipelineCreateElements { private: HTMLInputElement; follow: HTMLInputElement; files?: HTMLInputElement; }
+type TaskCreatePayload = {title: string; body: string; owner: string; private?: boolean; labels?: string[]; top?: boolean;
+  follow?: boolean; links?: string[]; relations?: {task: string; kind: string}[]; goal_id?: string};
+// The ask of a task or of a need item (companyNeedActor reads the sender, which the need item carries too).
+type NeedAsk = {body?: string | null; recipient_id?: string | null; older?: boolean; sender_id?: string | null} | null;
+// The company queue grouped by the actor who holds it (companyNeedGroups).
+interface CompanyNeedGroup { actor: string; items: TaskItem[]; firstNeed: number; firstRank: number; updated_at: string; }
+// Typed reads of a patched node: only element nodes reach the element reads (the callers check nodeType first).
+const patchEl = (n: ChildNode): HTMLElement => n as HTMLElement;
+const patchText = (n: ChildNode): Text => n as Text;
+
 // openId opens one task in full as soon as the list is loaded: the #/task/<id> address a bot or
 // the setup progress screen links to, which is the Tasks page with that item already open.
 const TASK_PREF = 'tasks.view';
-function pageTasks(forced, openId = '') {
+function pageTasks(forced?: string, openId = '') {
   TASKS_ST?.layoutAbort?.abort();
   PROP_TASKS = null;                       // the pickers' copy of the open tasks starts fresh with the page
-  const state = TASKS_ST = {view: 'foryou', tasks: [], labels: [], open: openId, q: '', who: 'me', side: 'plate',
+  const state: TasksPageState = TASKS_ST = {view: 'foryou', tasks: [], labels: [], open: openId, q: '', who: 'me', side: 'plate',
     loading: true, doneLoaded: false, doneLoading: false, doneNext: null, loadSeq: 0,
     filters: tasksEmptyFilters(), group: {...TASK_GROUP_DEFAULT}, collapsed: new Set(), folded: new Set(),
     selected: new Set(), anchor: '', cursor: '', since: null, tabKey: '', peek: '', bulkFail: new Map(), bulkMsg: '', memo: new Map(),
@@ -26,8 +53,9 @@ function pageTasks(forced, openId = '') {
   tasksNormalise(state, forced);
   // A return visit: the remembered view as the server last answered it, and the list as it was left, painted with the
   // shell. The reads below still go out and patch what changed.
-  const keptPref = S.lastRead.tasksPref || null, kept = S.lastRead.tasks?.key === activeTasksPath() ? S.lastRead.tasks : null;
-  const prefApply = value => {
+  const keptPref = (S.lastRead.tasksPref || null) as TasksPref | null, keptRead = S.lastRead.tasks as KeptTasksRead | undefined,
+    kept = keptRead?.key === activeTasksPath() ? keptRead : null;
+  const prefApply = (value: TasksPref) => {
     if (!hadQuery && !state.typeChosen && value.type != null) state.type = String(value.type) || 'general';
     // Before `views: 2`, List and Board both showed Needs you, so an old choice means Needs you.
     if (!forced && value.view) state.view = value.views === 2 ? String(value.view) : 'foryou';
@@ -78,16 +106,18 @@ function pageTasks(forced, openId = '') {
     // A narrower row folds the search to its icon; measured on the next frame, outside the observer's own delivery.
     new ResizeObserver(() => requestAnimationFrame(() => tasksHeadFit(state))).observe($('#tasks-pane .tl-head'));
   }
-  $('#task-scope').onclick = ev => tasksScopeMenu(state, ev.currentTarget);
-  $('#task-layout').onclick = ev => { const b = ev.target.closest('[data-layout]'); if (b && b.dataset.layout !== state.view) tasksSetView(state, b.dataset.layout); };
+  // The button a menu opens from: the handler's own element (each onclick below sits on one).
+  const tasksAnchor = (ev: Event) => ev.currentTarget as HTMLElement;
+  $('#task-scope').onclick = (ev: MouseEvent) => tasksScopeMenu(state, tasksAnchor(ev));
+  $('#task-layout').onclick = (ev: MouseEvent) => { const b = eventElement(ev)?.closest<HTMLElement>('[data-layout]'); if (b && b.dataset.layout !== state.view) tasksSetView(state, b.dataset.layout ?? ''); };
   $('#task-archive').onclick = () => tasksArchiveToggle(state);
-  $('#tasks-pane').addEventListener('click', ev => {
-    const b = ev.target.closest('#task-finished [data-view]');
-    if (b && b.dataset.view !== state.view) { tasksSetView(state, b.dataset.view); $(`#task-finished [data-view="${b.dataset.view}"]`)?.focus(); }
+  $('#tasks-pane').addEventListener('click', (ev: MouseEvent) => {
+    const b = eventElement(ev)?.closest<HTMLElement>('#task-finished [data-view]');
+    if (b && b.dataset.view !== state.view) { tasksSetView(state, b.dataset.view ?? ''); $(`#task-finished [data-view="${b.dataset.view}"]`)?.focus(); }
   });
-  $('#task-more').onclick = ev => tasksMoreMenu(state, ev.currentTarget);
+  $('#task-more').onclick = (ev: MouseEvent) => tasksMoreMenu(state, tasksAnchor(ev));
   // Catch up: the Needs you cards from the first, one at a time (decide.js).
-  for (const b of document.querySelectorAll('#tasks-pane [data-go-through]')) b.onclick = () => decideGoThrough();
+  for (const b of document.querySelectorAll<HTMLElement>('#tasks-pane [data-go-through]')) b.onclick = () => decideGoThrough();
   $('#task-new').onclick = () => { const p = tasksCreatePrefill(state); openTaskCreate(p.owner_id, {labels: p.labels}); };
   const search = $('#task-q');
   search.oninput = () => {
@@ -98,7 +128,7 @@ function pageTasks(forced, openId = '') {
       if (tasksFinishedView(state.view) && state.q && state.doneNext != null) void tasksLoadAllDone(state);
     }, 150);
   };
-  search.onkeydown = ev => {
+  search.onkeydown = (ev: KeyboardEvent) => {
     if (ev.key === 'ArrowDown' && !search.value.includes('\n')) { ev.preventDefault(); search.blur(); tasksMove(state, 1); return; }
     if (ev.key !== 'Escape') return;
     if (search.value) ev.stopPropagation();
@@ -107,51 +137,51 @@ function pageTasks(forced, openId = '') {
     clearTimeout(state.searchTimer);
     tasksRender(state);
   };
-  $('#task-filter').onclick = ev => tasksFieldMenu(state, ev.currentTarget);
-  $('#task-chips').onclick = ev => {
-    const drop = ev.target.closest('[data-chip-drop]');
+  $('#task-filter').onclick = (ev: MouseEvent) => tasksFieldMenu(state, tasksAnchor(ev));
+  $('#task-chips').onclick = (ev: MouseEvent) => {
+    const drop = eventElement(ev)?.closest<HTMLElement>('[data-chip-drop]');
     if (drop) {
-      const field = drop.dataset.chipDrop;
+      const field = drop.dataset.chipDrop ?? '';
       state.filters[field] = [];
       tasksFiltersChanged(state);
       $('#task-filter')?.focus();
       return;
     }
-    const edit = ev.target.closest('[data-chip-edit]');
-    if (edit) tasksFilterMenu(state, edit.dataset.chipEdit, edit);
+    const edit = eventElement(ev)?.closest<HTMLElement>('[data-chip-edit]');
+    if (edit) tasksFilterMenu(state, edit.dataset.chipEdit!, edit);   // the closest [data-chip-edit] has it
   };
   $('#task-filter-clear').onclick = () => {
     state.filters = tasksEmptyFilters();
     tasksFiltersChanged(state);
     $('#task-filter')?.focus();
   };
-  $('#task-who-wrap').onclick = ev => { const b = ev.target.closest('#task-who'); if (b) tasksWhoMenu(state, b); };
-  $('#task-bulk').onclick = ev => {
-    const b = ev.target.closest('[data-bulk]'); if (!b) return;
-    tasksBulkMenu(state, b.dataset.bulk, b);
+  $('#task-who-wrap').onclick = (ev: MouseEvent) => { const b = eventElement(ev)?.closest<HTMLElement>('#task-who'); if (b) tasksWhoMenu(state, b); };
+  $('#task-bulk').onclick = (ev: MouseEvent) => {
+    const b = eventElement(ev)?.closest<HTMLElement>('[data-bulk]'); if (!b) return;
+    tasksBulkMenu(state, b.dataset.bulk!, b);   // the closest [data-bulk] has it
   };
   const pop = $('#task-filter-pop');
   pop.addEventListener('keydown', tasksMenuKeys);
-  pop.addEventListener('toggle', ev => {
+  pop.addEventListener('toggle', (ev: Event & {newState?: string}) => {
     if (ev.newState !== 'closed') return;
     for (const id of ['#task-scope', '#task-more']) $(id)?.setAttribute('aria-expanded', 'false');
     const anchor = state.menuAnchor; state.menuAnchor = null;
     if (anchor?.isConnected && (pop.contains(document.activeElement) || document.activeElement === document.body)) anchor.focus();
   });
   const body = $('#task-body');
-  body.addEventListener('focusin', ev => {
-    const row = ev.target.closest('[data-task-key]');
-    if (row && row.dataset.taskKey !== state.cursor) { state.cursor = row.dataset.taskKey; tasksCursorPaint(state); }
+  body.addEventListener('focusin', (ev: FocusEvent) => {
+    const row = eventElement(ev)?.closest<HTMLElement>('[data-task-key]');
+    if (row && row.dataset.taskKey !== state.cursor) { state.cursor = row.dataset.taskKey ?? ''; tasksCursorPaint(state); }
   });
-  body.addEventListener('click', ev => {
+  body.addEventListener('click', (ev: MouseEvent) => {
     if (TASKS_ST !== state) return;
-    if (ev.target.closest('#board-more')) { void tasksLoadDone(state); return; }
+    if (eventElement(ev)?.closest('#board-more')) { void tasksLoadDone(state); return; }
     tasksBodyClick(state, ev);
   });
-  state.layoutAbort = new AbortController();
+  const pageAbort = state.layoutAbort = new AbortController();
   taskBoardBind(state, body);
-  pullToRefresh($('#tasks-pane'), () => tasksPulled(state), {signal: state.layoutAbort.signal, skip: () => taskBoardHolding(state)});
-  document.addEventListener('keydown', ev => tasksKeys(state, ev), {signal: state.layoutAbort.signal});
+  pullToRefresh($('#tasks-pane'), () => tasksPulled(state), {signal: pageAbort.signal, skip: () => taskBoardHolding(state)});
+  document.addEventListener('keydown', ev => tasksKeys(state, ev), {signal: pageAbort.signal});
   tasksTools(state); tasksRender(state);
   if (!openId && (hadQuery || state.type !== 'general' || state.migrated)) tasksURLWrite(state);
   if (state.migrated) tasksRemember(state);
@@ -181,9 +211,9 @@ function pageTasks(forced, openId = '') {
 }
 // The views are the scope (You, or a type's open tasks), the layout (list or board) and the finished feed (Done,
 // Closed, Snoozed): the layout is kept for the next type picked, and leaving the finished feed goes back to where it was.
-const tasksLayoutView = view => view === 'list' || view === 'board';
-const tasksArchived = view => tasksFinishedView(view) || view === 'snoozed';
-function tasksSetView(state, view) {
+const tasksLayoutView = (view: string | undefined) => view === 'list' || view === 'board';
+const tasksArchived = (view: string) => tasksFinishedView(view) || view === 'snoozed';
+function tasksSetView(state: TasksPageState, view: string) {
   if (tasksArchived(view) && !tasksArchived(state.view)) state.back = state.view;
   if (tasksLayoutView(view)) state.layout = view;
   state.view = view;
@@ -195,27 +225,28 @@ function tasksSetView(state, view) {
   else if (tasksFinishedShown(state)) void tasksDoneMerge(state);
 }
 // Finished tasks are on screen: the Done or Closed tab, or a board with its finished steps unfolded.
-const tasksFinishedShown = state => tasksFinishedView(state.view) || taskBoardFinishedShown(state);
+const tasksFinishedShown = (state: TasksPageState) => tasksFinishedView(state.view) || taskBoardFinishedShown(state);
 // The Done list's newest page is read once finished tasks are on screen, through the one loading guard.
-function tasksDoneEnsure(state) {
+function tasksDoneEnsure(state: TasksPageState) {
   if (tasksFinishedShown(state) && !state.doneLoaded && !state.doneLoading) void tasksLoadDone(state, true);
 }
-function tasksNormalise(state, forced) {
+function tasksNormalise(state: TasksPageState, forced?: string) {
   if (!TASK_VIEWS.some(([k]) => k === state.view)) state.view = forced || 'foryou';
   if (tasksLayoutView(state.view)) state.layout = state.view;
   if (!tasksLayoutView(state.layout)) state.layout = 'list';
 }
 // The archive button: the finished feed of the type in view, and pressed again, back to the list it left.
-function tasksArchiveToggle(state) {
+function tasksArchiveToggle(state: TasksPageState) {
   if (!tasksArchived(state.view)) { tasksSetView(state, 'done'); return; }
-  tasksSetView(state, state.back === 'foryou' || tasksLayoutView(state.back) ? state.back : state.layout);
+  const back = state.back ?? '', layout = state.layout ?? 'list';
+  tasksSetView(state, back === 'foryou' || tasksLayoutView(back) ? back : layout);
 }
 // The scope menu's type: that type's open tasks in the layout last used.
-function tasksScopeType(state, id) {
+function tasksScopeType(state: TasksPageState, id: string) {
   taskPipelineSelect(state, id);
   if (!tasksLayoutView(state.view)) tasksSetView(state, state.layout || 'list');
 }
-function tasksRemember(state) {
+function tasksRemember(state: TasksPageState) {
   taskPipelineRemember(state);
   S.lastRead.tasksPref = {type: state.type, view: state.view, views: 2, ...tasksPrefsValue(state)};   // the next visit opens as left
   try {
@@ -228,7 +259,7 @@ function tasksRemember(state) {
 }
 // Leaving the page keeps its list for the next visit (S.lastRead), unless the list was never read (a read again under
 // way when leaving still keeps the last one).
-function tasksKeep(state) {
+function tasksKeep(state: TasksPageState | null) {
   if (!state?.read && !state?.kept) return;
   S.lastRead.tasks = {key: activeTasksPath(), tasks: state.tasks, labels: state.labels, tags: state.tags, filtered: state.filtered,
     since: state.activeComplete ? state.since : null, fullAt: state.fullAt};
@@ -238,7 +269,7 @@ function taskOwnerOptions(selected = '', blank = 'Who is this for?') {
     .slice().sort((a, b) => String(a.name || a.id).localeCompare(String(b.name || b.id)));
   const bots = (S.emps || []).filter(e => e.status !== 'archived' && (!isHiddenBot(e.id) || [e.id, 'bot:' + e.id].includes(selected)))
     .slice().sort((a, b) => byBotOrder(a, b) || String(a.display_name || a.slug).localeCompare(String(b.display_name || b.slug)));
-  const pick = value => value === selected ? ' selected' : '';
+  const pick = (value: string) => value === selected ? ' selected' : '';
   return `<option value="">${esc(blank)}</option>
     <optgroup label="Humans">${people.map(p =>
       `<option value="human:${esc(p.id)}"${pick('human:' + p.id) || pick(p.id)}>${esc(p.name || p.id)}</option>`).join('')}</optgroup>
@@ -251,29 +282,30 @@ function taskCreateModal() {
   if (d) return d;
   d = document.createElement('dialog');
   d.id = 'task-create'; d.className = 'tmodal';
-  d.addEventListener('click', ev => { if (ev.target === d) d.close(); });
+  d.addEventListener('click', (ev: MouseEvent) => { if (ev.target === d) d.close(); });
   document.body.appendChild(d);
   return d;
 }
 // The new-task form's file input also takes files dropped on the form and images pasted into it, and lists what it
 // holds, so the submit reads one FileList.
-function taskFormFiles(form) {
-  const input = form.querySelector('input[type=file]');
+function taskFormFiles(form: HTMLFormElement) {
+  const input = form.querySelector<HTMLInputElement>('input[type=file]'), label = input?.closest<HTMLLabelElement>('label');
+  if (!input || !label) return;
   const list = document.createElement('div');
   list.className = 'files';
-  input.closest('label').after(list);
-  const show = () => { list.innerHTML = [...input.files].map(f => `<span>${esc(f.name)}</span>`).join(''); };
-  const add = files => {
+  label.after(list);
+  const show = () => { list.innerHTML = [...(input.files ?? [])].map(f => `<span>${esc(f.name)}</span>`).join(''); };
+  const add = (files: File[]) => {
     if (!files.length) return;
     const merged = new DataTransfer();
-    [...input.files, ...files].forEach(f => merged.items.add(f));
+    [...(input.files ?? []), ...files].forEach(f => merged.items.add(f));
     input.files = merged.files; show();
   };
   input.addEventListener('change', show);
   fileDropTarget(form, add);
   pasteImages(form, add);
 }
-function openTaskCreate(owner = '', opts = {}) {
+function openTaskCreate(owner = '', opts: {parent?: (Pick<TaskRow, 'id' | 'title'> & Partial<Pick<TaskRow, 'private'>>) | null | undefined; labels?: unknown[] | undefined; type?: string | null | undefined} = {}) {
   const d = taskCreateModal();
   const parent = opts.parent || null;
   d.innerHTML = `<div class="tmodal-head"><h2 class="tmodal-title" style="margin:0">${parent ? 'New subtask' : 'New task'}</h2>
@@ -316,14 +348,15 @@ function openTaskCreate(owner = '', opts = {}) {
   });
   taskFormFiles(creation);
   void taskPipelineCreate($('#task-create-form'), opts.type || TASKS_ST?.type);
-  $('#task-create-form').onsubmit = async ev => {
+  $('#task-create-form').onsubmit = async (ev: SubmitEvent) => {
     ev.preventDefault();
-    const form = ev.target, btn = form.querySelector('[type=submit]'), msg = $('#task-create-msg');
+    const form = ev.target as HTMLFormElement & TaskCreateForm, btn = form.querySelector<HTMLButtonElement>('[type=submit]'), msg = $('#task-create-msg');
     const title = form.title.value.trim(), owner = form.owner.value, body = form.body.value.trim();
     if (!title || !owner) { msg.textContent = 'Choose who this is for.'; return; }
     if (!body) { msg.textContent = 'Add details.'; form.body.focus(); return; }
+    if (!btn) return;
     btn.disabled = true; msg.textContent = 'Creating…';
-    const payload = {title, body, owner: owner.includes(':') ? owner : 'bot:' + owner};
+    const payload: TaskCreatePayload = {title, body, owner: owner.includes(':') ? owner : 'bot:' + owner};
     payload.private = form.elements.private.checked;
     taskPipelineCreatePayload(form, payload);
     const labels = form.labels.value.split(',').map(s => s.trim().toLowerCase()).filter(Boolean);
@@ -340,25 +373,25 @@ function openTaskCreate(owner = '', opts = {}) {
       toast('Task created');
       if (TASKS_ST) await tasksLoad(TASKS_ST);
       await v2Refresh();
-    } catch (e) { msg.innerHTML = `<span class="err">${esc(e.message)}</span>`; btn.disabled = false; }
+    } catch (e) { msg.innerHTML = `<span class="err">${esc(errorMessage(e, ''))}</span>`; btn.disabled = false; }
   };
   if (!d.open) d.showModal();
   formFocus(d);
 }
-function formFocus(root) {
-  (root.querySelector('input[name=title], textarea, select') || {}).focus?.();
+function formFocus(root: ParentNode) {
+  root.querySelector<HTMLElement>('input[name=title], textarea, select')?.focus();
 }
-const mergeTaskRows = (...groups) => [...new Map(groups.flat().map(task => [task.id, task])).values()];
+const mergeTaskRows = (...groups: TaskRow[][]) => [...new Map(groups.flat().map(task => [task.id, task])).values()];
 // Snoozed tasks too: the Snoozed view shows them and every other view leaves them out (taskItems).
 // The first page is short so the list paints soon; the rest come 500 at a time (the server's most), so a full read of a
 // thousand open tasks is three requests, not eleven.
 const activeTasksPath = (offset = 0) => `/v2/tasks?lane=company&status=${ACTIVE_TASK_STATUSES}&snoozed=all&limit=${offset ? 500 : 100}&offset=${offset}`;
 // Every status: a task that finished comes back as finished (as a live event brings it), not as gone.
-const tasksChangedPath = cursor => `/v2/tasks?lane=company&snoozed=all&changed_after=${encodeURIComponent(cursor)}`;
+const tasksChangedPath = (cursor: string) => `/v2/tasks?lane=company&snoozed=all&changed_after=${encodeURIComponent(cursor)}`;
 // One full read at a time (state.fullRead), the first one on opening the page included. A load asked for while one is
 // on its way never starts the list over: the 2-minute poll shares it, and a load after a save waits for it and then
 // reads what changed since its cursor, which takes in the save. A list with a cursor reads only what changed.
-function tasksLoad(state, opts = {}) {
+function tasksLoad(state: TasksPageState, opts: {poll?: boolean} = {}): Promise<unknown> {
   if (state.fullRead) {
     if (opts.poll) return state.fullRead;
     return state.loadAfter ||= state.fullRead.then(() => {
@@ -368,11 +401,11 @@ function tasksLoad(state, opts = {}) {
   }
   return state.since ? tasksRead(state, opts) : tasksFullStart(state, opts);
 }
-function tasksFullStart(state, opts) {
-  const read = state.fullRead = tasksRead(state, opts).finally(() => { if (state.fullRead === read) state.fullRead = null; });
+function tasksFullStart(state: TasksPageState, opts: {poll?: boolean}): Promise<unknown> {
+  const read: Promise<unknown> = state.fullRead = tasksRead(state, opts).finally(() => { if (state.fullRead === read) state.fullRead = null; });
   return read;
 }
-async function tasksRead(state, opts = {}) {
+async function tasksRead(state: TasksPageState, opts: {poll?: boolean} = {}): Promise<unknown> {
   const seq = ++state.loadSeq;
   // A list read in full keeps the cursor it was read at (`since`; `cursor` is the keyboard's row); from then on a load
   // asks only for what changed since (backend/task_reads.py), unless the server says to read in full again (`reset`).
@@ -386,8 +419,10 @@ async function tasksRead(state, opts = {}) {
     // A load after a save also reads the personal queue: its membership comes from the feed, including other boards.
     // The first load and polls already read it in refresh(), alongside the task request.
     ...(state.read && !opts.poll ? [v2NeedsRead()] : [])];
-  let changed = null, active = null, lab, held = null;
-  const seen = new Set(), isFinished = t => ['done', 'closed'].includes(String(t.status));
+  let changed: {gone?: unknown[]; tasks?: TaskRow[]; cursor: string | null; reset?: boolean} | null = null,
+    active: {tasks?: TaskRow[]; cursor?: string | null; next_offset?: number | null} | null = null,
+    lab: {labels?: string[]; tags?: import('../types/api').Tag[]} | null | undefined, held: Set<string> | null = null;
+  const seen = new Set<string>(), isFinished = (t: TaskRow) => ['done', 'closed'].includes(String(t.status));
   if (cursor) {
     [changed, lab] = await Promise.all([v2Get(tasksChangedPath(cursor)), ...others()]);
     if (TASKS_ST !== state || state.loadSeq !== seq) return;
@@ -433,12 +468,12 @@ async function tasksRead(state, opts = {}) {
     taskModalOpen('t' + id);
   }
 
-  const drain = async next => {
+  const drain = async (next: number | null | undefined): Promise<boolean> => {
     while (next != null && TASKS_ST === state && state.loadSeq === seq) {
       const page = await v2Get(activeTasksPath(next));
       if (!page || TASKS_ST !== state || state.loadSeq !== seq) return false;
       state.tasks = mergeTaskRows(state.tasks, page.tasks || []);
-      (page.tasks || []).forEach(t => seen.add(String(t.id)));
+      (page.tasks || []).forEach((t: TaskRow) => seen.add(String(t.id)));
       next = page.next_offset;
       tasksTools(state); tasksRender(state);
     }
@@ -453,7 +488,7 @@ async function tasksRead(state, opts = {}) {
     state.activeComplete = complete;
     state.since = complete ? active.cursor || null : null;
     if (complete) {
-      state.tasks = state.tasks.filter(t => !held.has(String(t.id)) || seen.has(String(t.id)) || isFinished(t));
+      state.tasks = state.tasks.filter(t => !held?.has(String(t.id)) || seen.has(String(t.id)) || isFinished(t));
       state.fullAt = Date.now(); state.stale = false;
       tasksTools(state); tasksRender(state);
     }
@@ -471,7 +506,7 @@ async function tasksRead(state, opts = {}) {
 // only what the change log names; a fact a row shows that changes without a task change (a run of the task's own
 // starting, a question growing stale) reaches an open list only this way. One full read at a time: a second call
 // while one is on its way shares it.
-function tasksReadFull(state, opts = {}) {
+function tasksReadFull(state: TasksPageState, opts: {poll?: boolean} = {}): Promise<unknown> {
   if (state.fullRead) return state.fullRead;
   state.since = null;
   getForget();
@@ -479,7 +514,7 @@ function tasksReadFull(state, opts = {}) {
   return tasksFullStart(state, opts);
 }
 // Pulled down at the top on a touch screen (pull-refresh.ts): the list, Needs you and the counts read again.
-async function tasksPulled(state) {
+async function tasksPulled(state: TasksPageState) {
   const [ok] = await Promise.all([tasksReadFull(state), v2Refresh().catch(() => {})]);
   if (TASKS_ST !== state) return;
   tasksTools(state); tasksRender(state);
@@ -487,14 +522,14 @@ async function tasksPulled(state) {
 }
 // A save took its task out of the view? Once a load that started after the save has drawn, the list and the peek
 // move on (tasksAfterFinish). Any load may land it: an older one overtaken by the poll returns before it gets here.
-function tasksFinishPending(state, seq) {
+function tasksFinishPending(state: TasksPageState, seq: number) {
   const p = state.pendingFinish;
   if (!p || seq <= p.after) return;
   state.pendingFinish = null;
   if (state.peek === p.key) tasksAfterFinish(state, p.key, p.at);
 }
 // Old combined views and deleted types fall back to General, never a mixture of types.
-function tasksTypeCheck(state) {
+function tasksTypeCheck(state: TasksPageState) {
   if (state.type === 'general' || TASK_TYPES.some(type => type.id === state.type)) return;
   if (!state.type || !S.me?.cloud || state.typesLoaded) {
     state.type = 'general';
@@ -502,7 +537,7 @@ function tasksTypeCheck(state) {
     if (isTasksRoute(location.hash)) tasksURLWrite(state);
   }
 }
-async function tasksLoadDone(state, reset = false) {
+async function tasksLoadDone(state: TasksPageState, reset = false) {
   if (TASKS_ST !== state || state.doneLoading || (!reset && state.doneNext == null)) return false;
   state.doneLoading = true;
   tasksRender(state);
@@ -524,15 +559,15 @@ async function tasksLoadDone(state, reset = false) {
   return !!page;
 }
 // The newest finished tasks folded into what Done already shows: nothing older is dropped, the paging is untouched.
-async function tasksDoneMerge(state) {
+async function tasksDoneMerge(state: TasksPageState) {
   if (TASKS_ST !== state || state.doneLoading) return;
   const page = await v2Get(`/v2/tasks?lane=company&status=done,closed&sort=finished&limit=${DONE_CAP}&offset=0`);
   if (!page || TASKS_ST !== state) return;
-  const fresh = new Map((page.tasks || []).map(t => [String(t.id), t]));
+  const fresh = new Map((page.tasks || []).map((t: TaskRow): [string, TaskRow] => [String(t.id), t]));
   state.tasks = mergeTaskRows((state.tasks || []).filter(t => !fresh.has(String(t.id)) || !['done', 'closed'].includes(String(t.status))), page.tasks || []);
   tasksTools(state); tasksRender(state);
 }
-async function tasksLoadAllDone(state) {
+async function tasksLoadAllDone(state: TasksPageState) {
   if (state.doneDrain) return;
   state.doneDrain = true;
   try {
@@ -541,7 +576,7 @@ async function tasksLoadAllDone(state) {
     }
   } finally { state.doneDrain = false; }
 }
-function companyNeedActor(task, need) {
+function companyNeedActor(task: PartialTaskRow & {ask?: NeedAsk}, need: (Pick<PartialTaskRow, 'status' | 'waiting_on' | 'reconnect'> & {ask?: NeedAsk}) | null | undefined) {
   const me = myActor();
   // A task waiting on me waits with the bot that owns it, whoever asked for it.
   const candidates = taskWaitingOn(task) === me || taskWaitingOn(need) === me ? [task.owner_id]
@@ -550,16 +585,16 @@ function companyNeedActor(task, need) {
     || candidates.find(actor => actor && actor !== me)
     || me;
 }
-function companyNeedGroups(items) {
+function companyNeedGroups(items: TaskItem[]) {
   const needOrder = new Map((S.v2.needs || []).map((item, index) => [String(item.id), index]));
   const needById = new Map((S.v2.needs || []).map(item => [String(item.id), item]));
-  const groups = new Map();
+  const groups = new Map<string, CompanyNeedGroup>();
   for (const it of items) {
     // The server's queue already includes every counted task, including bot-owned escalations to their manager.
     if (!it.task) continue;
     const need = needById.get(String(it.id)), actor = companyNeedActor(it.task, need);
-    if (!groups.has(actor)) groups.set(actor, {actor, items: [], firstNeed: Infinity, firstRank: Infinity, updated_at: ''});
-    const group = groups.get(actor);
+    let group = groups.get(actor);
+    if (!group) { group = {actor, items: [], firstNeed: Infinity, firstRank: Infinity, updated_at: ''}; groups.set(actor, group); }
     group.items.push(it);
     group.firstNeed = Math.min(group.firstNeed, needOrder.get(String(it.id)) ?? Infinity);
     group.firstRank = Math.min(group.firstRank, it.rank == null ? Infinity : Number(it.rank));
@@ -573,32 +608,32 @@ function companyNeedGroups(items) {
 // A `data-patch-key` node keeps what the person did in it (opened, typed) through redraws. With a `data-patch-sig` its
 // content can still change (the Stale tickets card): a new sig patches it in place, and a <details> stays open or
 // shut as the person left it.
-function tasksPatchNode(live, next) {
+function tasksPatchNode(live: ChildNode, next: ChildNode): void {
   if (live.nodeType !== next.nodeType || live.nodeName !== next.nodeName
-      || (live.nodeType === 1 && (live.dataset.taskKey || '') !== (next.dataset.taskKey || ''))) { live.replaceWith(next); return; }
-  if (live.nodeType === 3) { if (live.data !== next.data) live.data = next.data; return; }
+      || (live.nodeType === 1 && (patchEl(live).dataset.taskKey || '') !== (patchEl(next).dataset.taskKey || ''))) { live.replaceWith(next); return; }
+  if (live.nodeType === 3) { const old = patchText(live), data = patchText(next).data; if (old.data !== data) old.data = data; return; }
   if (live.nodeType !== 1) return;
-  const keep = !!live.dataset.patchKey && live.nodeName === 'DETAILS';
-  if (live.dataset.patchKey || next.dataset.patchKey) {
-    if (live.dataset.patchKey !== next.dataset.patchKey) { live.replaceWith(next); return; }
-    if ((live.dataset.patchSig || '') === (next.dataset.patchSig || '')) return;
+  const keep = !!patchEl(live).dataset.patchKey && live.nodeName === 'DETAILS';
+  if (patchEl(live).dataset.patchKey || patchEl(next).dataset.patchKey) {
+    if (patchEl(live).dataset.patchKey !== patchEl(next).dataset.patchKey) { live.replaceWith(next); return; }
+    if ((patchEl(live).dataset.patchSig || '') === (patchEl(next).dataset.patchSig || '')) return;
   }
-  if (live.dataset.taskKey) { if (!next.dataset.sig || live.dataset.sig !== next.dataset.sig) live.replaceWith(next); return; }   // a row: whole, or not at all
-  for (const {name} of [...live.attributes]) if (!next.hasAttribute(name) && !(keep && name === 'open')) live.removeAttribute(name);
-  for (const {name, value} of [...next.attributes]) if (live.getAttribute(name) !== value && !(keep && name === 'open')) live.setAttribute(name, value);
+  if (patchEl(live).dataset.taskKey) { if (!patchEl(next).dataset.sig || patchEl(live).dataset.sig !== patchEl(next).dataset.sig) live.replaceWith(next); return; }   // a row: whole, or not at all
+  for (const {name} of [...patchEl(live).attributes]) if (!patchEl(next).hasAttribute(name) && !(keep && name === 'open')) patchEl(live).removeAttribute(name);
+  for (const {name, value} of [...patchEl(next).attributes]) if (patchEl(live).getAttribute(name) !== value && !(keep && name === 'open')) patchEl(live).setAttribute(name, value);
   const a = [...live.childNodes], b = [...next.childNodes];
   if (tasksPatchKeyed(live, a, b)) return;
-  if (a.length !== b.length) { live.replaceChildren(...b); return; }
-  a.forEach((node, i) => tasksPatchNode(node, b[i]));
+  if (a.length !== b.length) { patchEl(live).replaceChildren(...b); return; }
+  a.forEach((node, i) => { const other = b[i]; if (other) tasksPatchNode(node, other); });
 }
 // Children that all carry a key (a `data-patch-key`, as the Stale tickets card's rows do, or a task's `data-task-key`,
 // as a board column's cards do) are matched by it: a row that went is removed, a new one inserted, and one that stayed
 // is patched where it is, so focus on it is not lost, also when one row goes and another comes in the same redraw.
 // A card moved to another step rebuilds that one card, not both columns.
-function tasksPatchKeyed(live, a, b) {
-  const key = n => n.nodeType === 1 ? n.dataset.patchKey || (n.dataset.taskKey ? 't:' + n.dataset.taskKey : '') : '';
+function tasksPatchKeyed(live: Node, a: ChildNode[], b: ChildNode[]): boolean {
+  const key = (n: ChildNode): string => n.nodeType === 1 ? patchEl(n).dataset.patchKey || (patchEl(n).dataset.taskKey ? 't:' + patchEl(n).dataset.taskKey : '') : '';
   if (!a.length || !b.length || !a.every(key) || !b.every(key)) return false;
-  const old = new Map(a.map(n => [key(n), n]));
+  const old = new Map<string, ChildNode>(a.map((n): [string, ChildNode] => [key(n), n]));
   if (old.size !== a.length || new Set(b.map(key)).size !== b.length) return false;
   const want = new Set(b.map(key));
   for (const n of a) if (!want.has(key(n))) n.remove();
@@ -610,23 +645,23 @@ function tasksPatchKeyed(live, a, b) {
   });
   return true;
 }
-function tasksPatch(el, html) {
+function tasksPatch(el: Element, html: string) {
   const next = document.createElement('div');
   next.innerHTML = html;
   const a = [...el.childNodes], b = [...next.childNodes];
   if (!a.length || a.length !== b.length) { el.replaceChildren(...b); return; }
-  a.forEach((node, i) => tasksPatchNode(node, b[i]));
+  a.forEach((node, i) => { const other = b[i]; if (other) tasksPatchNode(node, other); });
 }
-function tasksRender(state) {
+function tasksRender(state: TasksPageState | null) {
   const el = $('#task-body');
-  if (!el || TASKS_ST !== state) return;
+  if (!el || !state || TASKS_ST !== state) return;
   if (taskBoardHolding(state)) return;      // a card is being dragged: the board redraws once it is let go
   state.memo = new Map();
-  const active = document.activeElement, inBody = el.contains(active);
-  const focusKey = inBody ? active.closest('[data-task-key]')?.dataset.taskKey || '' : '';
+  const active = document.activeElement, inBody = active instanceof HTMLElement && el.contains(active);
+  const focusKey = inBody ? active.closest<HTMLElement>('[data-task-key]')?.dataset.taskKey || '' : '';
   const focusWhat = !inBody ? '' : active.matches('[data-select]') ? '[data-select]' : active.matches('[data-expand]') ? '[data-expand]'
     : active.matches('[data-open-task]') ? '[data-open-task]' : active.dataset.groupToggle ? `[data-group-toggle="${CSS.escape(active.dataset.groupToggle)}"]`
-    : active.dataset.groupAdd ? `[data-group-add="${CSS.escape(active.dataset.groupAdd)}"]` : active.matches('.tl-gchat') ? `.tl-gchat[href="${CSS.escape(active.getAttribute('href'))}"]`
+    : active.dataset.groupAdd ? `[data-group-add="${CSS.escape(active.dataset.groupAdd)}"]` : active.matches('.tl-gchat') ? `.tl-gchat[href="${CSS.escape(String(active.getAttribute('href')))}"]`
     : active.id === 'board-more' ? '#board-more' : active.matches('[data-clear-filters]') ? '[data-clear-filters]' : '';
   decidePaintButton();
   el.dataset.view = state.view;

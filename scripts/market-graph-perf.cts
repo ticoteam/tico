@@ -91,7 +91,9 @@ const data: Fixtures = JSON.parse(fs.readFileSync(path.join(dir, 'fixtures.json'
           }
         });
       });
-      await page.addScriptTag({content: fs.readFileSync(mode === 'before' ? path.join(dir, 'before.js') : path.join(root, 'build/ui/market-page.js'), 'utf8')});
+      // The map's page and its graph (ui/market-page-graph.ts) are two scripts; the baseline's are already one.
+      const scripts = mode === 'before' ? [path.join(dir, 'before.js')] : ['market-page.js', 'market-page-graph.js'].map(name => path.join(root, 'build/ui', name));
+      for (const file of scripts) await page.addScriptTag({content: fs.readFileSync(file, 'utf8')});
       await page.evaluate(() => {
         window.addEventListener('hashchange', () => { S.route = location.hash; void pageMarket(); });
         metrics.start = performance.now(); void pageMarket();
