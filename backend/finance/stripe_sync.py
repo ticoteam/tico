@@ -6,6 +6,7 @@ newest first, a few pages a step, and sets the opening balance when the list end
 the newest row of the last completed walk (the boundary). A walk that did not finish resumes from its cursor, so a page
 that failed is read again and nothing above or below it is skipped. Each balance transaction is taken in once by its id,
 so a repeat read changes nothing. A rehearsal copy calls nothing."""
+
 import logging
 from collections.abc import Callable, Mapping
 from datetime import datetime, timedelta, timezone
@@ -26,12 +27,12 @@ from .stripe import Provider, Stripe, base_url, error_text, has_more, listed
 log = logging.getLogger(__name__)
 
 BALANCE_CODE, BALANCE_NAME = "1050", "Stripe balance"
-BACKFILL_PAGES = 4               # balance-transaction pages per step: the first backfill is paced across steps
-CATCH_UP_PAGES = 10              # newest pages read per step until the boundary
-BRACKET_TRIES = 3                # reads of the first page and balance before a backfill step waits for the next
-POLL_MINUTES = 15                # how often a connection is read without a webhook
+BACKFILL_PAGES = 4  # balance-transaction pages per step: the first backfill is paced across steps
+CATCH_UP_PAGES = 10  # newest pages read per step until the boundary
+BRACKET_TRIES = 3  # reads of the first page and balance before a backfill step waits for the next
+POLL_MINUTES = 15  # how often a connection is read without a webhook
 INBOX_MOST = 200
-Make = Callable[[str], Any]      # a factory from the key to a provider (tests pass a fake)
+Make = Callable[[str], Any]  # a factory from the key to a provider (tests pass a fake)
 
 
 def _now() -> str:
@@ -60,8 +61,9 @@ def _cents(value: object) -> int:
 
 def _sum(body: Mapping[str, Any], key: str, currency: str) -> int:
     """A Stripe balance list (`available` or `pending`) summed for one currency, in cents."""
-    return sum(_cents(r.get("amount")) for r in _rows(body, key)
-               if str(r.get("currency") or "").upper() == currency.upper())
+    return sum(
+        _cents(r.get("amount")) for r in _rows(body, key) if str(r.get("currency") or "").upper() == currency.upper()
+    )
 
 
 # ------------------------------------------------------------------------------------------------ connect probe
@@ -77,14 +79,21 @@ def probe(provider: Provider) -> tuple[dict[str, object], str]:
     got = provider.balance()
     if not got.ok:
         return {}, error_text(got)
-    currencies = sorted({str(r.get("currency") or "").upper() for key in ("available", "pending")
-                         for r in _rows(got.body, key)} - {""})
-    return {"account": acct, "balances": [{"currency": cur, "available": _sum(got.body, "available", cur),
-                                           "pending": _sum(got.body, "pending", cur)} for cur in currencies]}, ""
+    currencies = sorted(
+        {str(r.get("currency") or "").upper() for key in ("available", "pending") for r in _rows(got.body, key)} - {""}
+    )
+    return {
+        "account": acct,
+        "balances": [
+            {"currency": cur, "available": _sum(got.body, "available", cur), "pending": _sum(got.body, "pending", cur)}
+            for cur in currencies
+        ],
+    }, ""
 
 
-def probe_credential(store: Any, vault: Any, credential_id: str, make: Make | None = None
-                     ) -> tuple[dict[str, object], str]:
+def probe_credential(
+    store: Any, vault: Any, credential_id: str, make: Make | None = None
+) -> tuple[dict[str, object], str]:
     """Read the Stripe key from its credential (outside any transaction) and probe Stripe with it."""
     with store.read() as c:
         if not tico.credential_exists(c, credential_id) and make is None:
@@ -110,7 +119,9 @@ def connection_create(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     read with that key. The key must see a balance in the book's currency: other currencies are not posted."""
     V.only(p, ("provider", "credential_id", "name", "probe"))
     cred = V.text(p, "credential_id", 120)
-    if any(str(r["credential_ref"] or "") == cred and str(r["status"]) != "disconnected" for r in SK.connections(ctx.c)):
+    if any(
+        str(r["credential_ref"] or "") == cred and str(r["status"]) != "disconnected" for r in SK.connections(ctx.c)
+    ):
         raise FinanceError(CONFLICT, "that credential is already connected")
     probed = V.obj(p.get("probe"), "probe")
     acct = str(probed.get("account") or "")
@@ -127,37 +138,81 @@ def connection_create(ctx: Ctx, who: str, p: V.Payload) -> Plan:
         raise FinanceError(CONFLICT, "that Stripe account is already connected")
 
     def apply(aid: str) -> Result:
-        cid = SK.insert(ctx.c, "fin_connections", {
-            "provider": "stripe", "purpose": "payments", "credential_ref": cred, "status": "active", "name": name,
-            "settings": SK.dump({"backfilled": False, "account": acct}), "next_sync_at": ctx.at,
-            "created_at": ctx.at, "created_by": who})
+        cid = SK.insert(
+            ctx.c,
+            "fin_connections",
+            {
+                "provider": "stripe",
+                "purpose": "payments",
+                "credential_ref": cred,
+                "status": "active",
+                "name": name,
+                "settings": SK.dump({"backfilled": False, "account": acct}),
+                "next_sync_at": ctx.at,
+                "created_at": ctx.at,
+                "created_by": who,
+            },
+        )
         if live is None:
             gl = banking.new_account(ctx, BALANCE_CODE, BALANCE_NAME, "asset", "bank", who)
-            mid = SK.insert(ctx.c, "fin_money_accounts", {
-                "book_id": ctx.book.id, "kind": "stripe", "subtype": "", "name": name[:120], "provider": "stripe",
-                "connection_id": cid, "account_id": gl.id, "provider_account_id": acct, "holds_cash": 1,
-                "balance_currency": base, "created_at": ctx.at, "created_by": who})
+            mid = SK.insert(
+                ctx.c,
+                "fin_money_accounts",
+                {
+                    "book_id": ctx.book.id,
+                    "kind": "stripe",
+                    "subtype": "",
+                    "name": name[:120],
+                    "provider": "stripe",
+                    "connection_id": cid,
+                    "account_id": gl.id,
+                    "provider_account_id": acct,
+                    "holds_cash": 1,
+                    "balance_currency": base,
+                    "created_at": ctx.at,
+                    "created_by": who,
+                },
+            )
         else:
             mid = str(live["id"])
             gl = ctx.accounts.get(str(live["account_id"] or "")) or banking.new_account(
-                ctx, BALANCE_CODE, BALANCE_NAME, "asset", "bank", who)
-            SK.update(ctx.c, "fin_money_accounts", mid, {"connection_id": cid, "status": "active", "name": name[:120],
-                                                         "account_id": gl.id, "updated_at": ctx.at})
-        return {"connection_id": cid, "money_accounts": [{"money_account_id": mid, "kind": "stripe",
-                                                          "account_id": gl.id, "code": gl.code}],
-                "payments_enabled": False, "approval_note": None}
+                ctx, BALANCE_CODE, BALANCE_NAME, "asset", "bank", who
+            )
+            SK.update(
+                ctx.c,
+                "fin_money_accounts",
+                mid,
+                {
+                    "connection_id": cid,
+                    "status": "active",
+                    "name": name[:120],
+                    "account_id": gl.id,
+                    "updated_at": ctx.at,
+                },
+            )
+        return {
+            "connection_id": cid,
+            "money_accounts": [{"money_account_id": mid, "kind": "stripe", "account_id": gl.id, "code": gl.code}],
+            "payments_enabled": False,
+            "approval_note": None,
+        }
+
     return Plan(K.ALLOW, f"Connect Stripe ({len(balances)} balance(s))", apply)
 
 
 # ------------------------------------------------------------------------------------------------ one step
-def connection(store: Any, vault: Any, cid: str, *, rehearsal: bool = False, make: Make | None = None,
-               at: str | None = None) -> str:
+def connection(
+    store: Any, vault: Any, cid: str, *, rehearsal: bool = False, make: Make | None = None, at: str | None = None
+) -> str:
     """Sync one Stripe connection. `withheld` in rehearsal, `gone`, `idle`, `no_token`, else `ok` or `failed`."""
     now = at or _now()
     with store.read() as c:
         row = SK.get(c, "fin_connections", cid)
-        waiting = [r for r in SK.inbox_waiting(c, INBOX_MOST, cid, now)
-                   if str(r["provider"]) == "stripe" and str(r["connection_id"] or "") == cid]
+        waiting = [
+            r
+            for r in SK.inbox_waiting(c, INBOX_MOST, cid, now)
+            if str(r["provider"]) == "stripe" and str(r["connection_id"] or "") == cid
+        ]
     if row is None or str(row["status"]) == "disconnected":
         return "gone"
     if rehearsal:
@@ -180,7 +235,7 @@ def connection(store: Any, vault: Any, cid: str, *, rehearsal: bool = False, mak
     with store.transaction() as c:
         if due:
             stripe_post.stale(load(c, now))
-            banking.refresh_connection_openings(load(c, now), cid)    # the pass's balance and rows agree now
+            banking.refresh_connection_openings(load(c, now), cid)  # the pass's balance and rows agree now
         fields: dict[str, object] = {"last_sync_at": now, "updated_at": now}
         if due:
             fields["next_sync_at"] = _after(now, POLL_MINUTES * 60)
@@ -195,8 +250,12 @@ def connection(store: Any, vault: Any, cid: str, *, rehearsal: bool = False, mak
 
 def _failed(store: Any, cid: str, why: str, now: str, prior: str) -> None:
     with store.transaction() as c:
-        SK.update(c, "fin_connections", cid, {"status": "error", "last_error": why, "updated_at": now,
-                                              "next_sync_at": _after(now, POLL_MINUTES * 60)})
+        SK.update(
+            c,
+            "fin_connections",
+            cid,
+            {"status": "error", "last_error": why, "updated_at": now, "next_sync_at": _after(now, POLL_MINUTES * 60)},
+        )
         banking.sync_failed(load(c, now), cid, prior, why)
 
 
@@ -227,8 +286,18 @@ def catch_up(store: Any, provider: Provider, cid: str, now: str) -> list[str]:
     if not conf.get("backfilled"):
         return _backfill(store, provider, cid, row, now)
     cursor, head, conf = _resume(row)
-    return _walk(store, provider, cid, conf, cursor, head, CATCH_UP_PAGES, now,
-                 stop=str(conf.get("boundary") or "") or None, backfill=False)
+    return _walk(
+        store,
+        provider,
+        cid,
+        conf,
+        cursor,
+        head,
+        CATCH_UP_PAGES,
+        now,
+        stop=str(conf.get("boundary") or "") or None,
+        backfill=False,
+    )
 
 
 def _resume(row: Any) -> tuple[str | None, str | None, dict[str, Any]]:
@@ -250,8 +319,19 @@ def _backfill(store: Any, provider: Provider, cid: str, row: Any, now: str) -> l
     page, held, why = _bracket(provider, base)
     if page is None:
         return [why]
-    return _walk(store, provider, cid, {**conf, "held": held}, None, None, BACKFILL_PAGES, now, stop=None,
-                 backfill=True, first=page)
+    return _walk(
+        store,
+        provider,
+        cid,
+        {**conf, "held": held},
+        None,
+        None,
+        BACKFILL_PAGES,
+        now,
+        stop=None,
+        backfill=True,
+        first=page,
+    )
 
 
 def _bracket(provider: Provider, base: str) -> tuple[Answer | None, int, str]:
@@ -278,8 +358,20 @@ def _newest(answer: Answer) -> str:
     return str(rows[0].get("id") or "") if rows else ""
 
 
-def _walk(store: Any, provider: Provider, cid: str, conf: dict[str, Any], cursor: str | None, head: str | None,
-          pages: int, now: str, *, stop: str | None, backfill: bool, first: Answer | None = None) -> list[str]:
+def _walk(
+    store: Any,
+    provider: Provider,
+    cid: str,
+    conf: dict[str, Any],
+    cursor: str | None,
+    head: str | None,
+    pages: int,
+    now: str,
+    *,
+    stop: str | None,
+    backfill: bool,
+    first: Answer | None = None,
+) -> list[str]:
     """Up to `pages` pages newest first from `cursor` (None: the top), each taken in and then the walk's place saved.
     The walk ends at `stop` (the boundary: rows from it on are already in), at the list's end, or as complete. A problem
     returns at once and keeps the place the last page saved, so the next step reads the failed page again. A complete

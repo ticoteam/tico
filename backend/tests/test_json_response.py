@@ -1,12 +1,21 @@
 """Wire encoding preserves the authenticated API payload and downloaded bytes."""
+
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 
 from backend.tests.test_api import api, headers, post
 
 
 def test_task_json_compression_preserves_privacy_and_display_names(api):
-    task = post(api, "tasks", {"owner": "ops", "title": "Review private sample work",
-                              "body": "Private sample details. " * 200, "private": True})
+    task = post(
+        api,
+        "tasks",
+        {
+            "owner": "ops",
+            "title": "Review private sample work",
+            "body": "Private sample details. " * 200,
+            "private": True,
+        },
+    )
     path = "/api/v2/tasks?limit=100"
     plain = api.get(path, headers={**headers(), "Accept-Encoding": "identity"})
     zipped = api.get(path, headers={**headers(), "Accept-Encoding": "gzip"})
@@ -28,8 +37,11 @@ def test_compression_leaves_streams_and_downloaded_json_bytes_alone(api):
 
     @api.app.get("/api/test-download")
     def download():
-        return Response(payload, media_type="application/json",
-                        headers={"Content-Disposition": "attachment; filename=sample.json", "X-Content-Sha256": "sample"})
+        return Response(
+            payload,
+            media_type="application/json",
+            headers={"Content-Disposition": "attachment; filename=sample.json", "X-Content-Sha256": "sample"},
+        )
 
     @api.app.get("/api/test-stream")
     def stream():

@@ -6,6 +6,10 @@ Run now are part of Maintenance; the separate Health scan system routine is remo
 
 Settings > Health lists what it found.
 
+For a runner update blocked by changed files, Health and BotOps say when only flattened Tico links remain.
+The runner checks their bytes and targets: these links are repaired on the next update, with no decision about
+local work. Other changes still need a commit or stash. See [Updates](updates.md#a-mac-or-linux-checkout).
+
 Settings > Health also lists checks that belong to one feature, documented on that feature's page: public roadmap
 suggestions with no receiving bot are in [Public roadmaps](roadmaps.md), and the Tico AI Gateway key (near or at its
 monthly cap, not recognised, or not ready) is in [Tico AI Gateway](ai-gateway.md#what-the-card-says).
@@ -22,7 +26,7 @@ Health's **Stuck bots** check and `hub health check` name the bot, its queue spl
 that can start, jobs behind an interrupted run awaiting review, jobs held after repeated refusals until cooldown,
 jobs held on purpose), the oldest age, why it cannot
 start, and a fix or a command to inspect its runs. Work held on purpose never makes a bot stuck. The web Stuck list,
-Overview and the silent-computer line split the queue the same way. **Tasks not progressing** names visible bot tasks
+Company › Campus and the silent-computer line split the queue the same way. **Tasks not progressing** names visible bot tasks
 that nothing is set to move, the tasks Task Manager lists as stalled. Settings > Health shows the same summaries.
 **Questions nobody can read** names held tasks waiting on a system, missing or inactive recipient, or someone who
 can no longer read the task or any source, including bot activity. A synced bot without desktop delivery cannot
@@ -49,6 +53,15 @@ Health keeps private check owners and verdicts hidden. When it cannot see all ch
 review status check instead of recommending a merge or move on. These clocks start when the existing GitHub sync
 first observes the condition, survive repeated refreshes, and clear when it resolves. A new head starts a new
 review wait. Older links acquire a clock on their next sync; Health performs no extra GitHub polling.
+
+**Needs you plate** names each person whose Needs you count is over 10 items (the number the Tasks page's You tab
+shows): a warning over 10, bad over 25. It names the three bots asking most of that plate. An administrator sees
+everyone's plate; anyone else sees only their own. A plate of 10 or fewer shows nothing.
+
+**Dev board moving** names open Dev tickets (numbered tickets on the Dev tickets board) that a bot owns, where nothing
+has changed for over 24 hours and no run is live or queued on them. It is a warning, and bad at five or more. Each names
+the ticket, its step, its bot and the hours it has been idle. A ticket with a run live or queued is left out, and so is
+one that changed within the day.
 
 ## What it checks
 
@@ -103,6 +116,8 @@ The team rule `health_monitor_reports` (on by default; in Settings > Health and 
 tickets without a Needs you card. When it is off, each report is an **Ask before reporting** approval that a person
 reads first, sent with `hub support send --approval <id>` once approved. A declined or withdrawn approval clears the
 report, so the next report of that problem asks again. `TICO_SUPPORT=off` turns reporting off with the rest of support.
+A copy run from source (version `dev`: a checkout, a test, the factory simulation) files nothing unless
+`TICO_HQ_URL` is set; Maintenance's run details say `source_copy`.
 
 ## On the Tico team's side
 

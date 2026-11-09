@@ -1,4 +1,5 @@
 """Meeting links preserve both read boundaries, even on retries and after visibility changes."""
+
 from urllib.parse import urlencode
 
 from backend import hubdb as H, task_references
@@ -28,14 +29,25 @@ def test_links_are_bidirectional_idempotent_and_emit_task_changes(api):
         result = link(api, rid, [t['id'], t['id']])
         assert [x['task_id'] for x in result['tasks']] == [t['id']]
     meetings = get(api, f"tasks/{t['id']}/meetings")
-    assert meetings == {'meetings': [{'meeting_id': rid, 'title': 'Pricing call',
-        'started_at': meetings['meetings'][0]['started_at'], 'url': '#/meetings?meeting=' + rid,
-        'kind': 'linked'}], 'next_cursor': None}
+    assert meetings == {
+        'meetings': [
+            {
+                'meeting_id': rid,
+                'title': 'Pricing call',
+                'started_at': meetings['meetings'][0]['started_at'],
+                'url': '#/meetings?meeting=' + rid,
+                'kind': 'linked',
+            }
+        ],
+        'next_cursor': None,
+    }
     remove(api, rid, t['id'])
     assert get(api, f'meetings/{rid}/tasks') == {'tasks': [], 'next_cursor': None}
     assert get(api, f"tasks/{t['id']}/meetings") == {'meetings': [], 'next_cursor': None}
     with api.app.state.store.read() as c:
-        changes = list(c.execute("SELECT kind FROM changes WHERE topic='tasks' AND subject_id=? AND kind='meetings'", (t['id'],)))
+        changes = list(
+            c.execute("SELECT kind FROM changes WHERE topic='tasks' AND subject_id=? AND kind='meetings'", (t['id'],))
+        )
         assert len(changes) == 2  # one insert and one delete; duplicate links write no change
 
 
@@ -56,6 +68,7 @@ def test_sent_links_require_the_requester_and_batches_are_atomic(api):
 
 def test_an_assistant_links_as_its_person(api):
     from backend.tests.test_assistant import assistant_turn
+
     rid = record(api, token='ben-test')
     mine = task(api, requester='human:cara', private=False)
     _, attempt = assistant_turn(api, 'cara-test')
@@ -90,7 +103,11 @@ def test_each_answer_checks_full_task_access_including_bot_read(api):
     link(api, rid, [public['id']], 'cara-test', key='link-retry')
     with api.app.state.store.transaction() as c:
         c.execute('UPDATE tasks SET private=1 WHERE id=?', (public['id'],))
-    assert link(api, rid, [public['id']], 'cara-test', key='link-retry') == {'tasks': [], 'next_cursor': None, 'results': [{'status': 404}]}
+    assert link(api, rid, [public['id']], 'cara-test', key='link-retry') == {
+        'tasks': [],
+        'next_cursor': None,
+        'results': [{'status': 404}],
+    }
     assert get(api, f'meetings/{rid}/tasks', 'cara-test') == {'tasks': [], 'next_cursor': None}
 
 
@@ -142,7 +159,9 @@ def test_only_the_linker_meeting_owner_task_parties_or_org_owner_remove(api):
 def collect(api, path, key, limit=50):
     rows, cursor = [], None
     while True:
-        response = api.get('/api/v2/' + path, params={'limit': limit, **({'cursor': cursor} if cursor else {})}, headers=headers())
+        response = api.get(
+            '/api/v2/' + path, params={'limit': limit, **({'cursor': cursor} if cursor else {})}, headers=headers()
+        )
         assert response.status_code == 200, response.text
         assert len(response.content) <= 64 * 1024
         result = response.json()
@@ -160,7 +179,7 @@ def test_both_lists_page_past_fifty_with_ties_and_truncated_titles(api):
     rid = record(api)
     ids = [task(api, title=f'Review plan {n} ' + '計' * 280)['id'] for n in range(55)]
     for offset in range(0, len(ids), 20):
-        link(api, rid, ids[offset:offset + 20])
+        link(api, rid, ids[offset : offset + 20])
     first = get(api, f'meetings/{rid}/tasks')
     assert len(first['tasks']) == 20 and first['next_cursor']
     assert {row['task_id'] for row in collect(api, f'meetings/{rid}/tasks', 'tasks')} == set(ids)
@@ -169,8 +188,14 @@ def test_both_lists_page_past_fifty_with_ties_and_truncated_titles(api):
         original = dict(c.execute('SELECT * FROM meetings WHERE id=?', (rid,)).fetchone())
         for n in range(54):
             copied = {**original, 'id': f'linked-meeting-{n}', 'title': 'Meeting ' + '界' * 300}
-            c.execute(f"INSERT INTO meetings({','.join(copied)}) VALUES({','.join('?' * len(copied))})", tuple(copied.values()))
-            c.execute("INSERT INTO meeting_task_links VALUES(?,?,?,'linked','human:ana',?)", (H.new_id(), copied['id'], tid, H.now()))
+            c.execute(
+                f"INSERT INTO meetings({','.join(copied)}) VALUES({','.join('?' * len(copied))})",
+                tuple(copied.values()),
+            )
+            c.execute(
+                "INSERT INTO meeting_task_links VALUES(?,?,?,'linked','human:ana',?)",
+                (H.new_id(), copied['id'], tid, H.now()),
+            )
     meetings = collect(api, f'tasks/{tid}/meetings', 'meetings')
     assert len(meetings) == len({m['meeting_id'] for m in meetings}) == 55
     assert [m['started_at'] for m in meetings] == sorted((m['started_at'] for m in meetings), reverse=True)
@@ -193,9 +218,13 @@ def test_byte_cap_keeps_the_remaining_links_on_the_next_page(api):
 
 def test_task_meeting_cursors_order_offsets_and_fractional_seconds_in_utc(api):
     t = task(api)
-    starts = ['2026-11-04T17:00:00Z', '2026-11-04T10:00:00-08:00',
-              '2026-11-04T18:00:00.000001Z', '2026-11-04T09:30:00-08:00',
-              '2026-11-04T18:00:00Z']
+    starts = [
+        '2026-11-04T17:00:00Z',
+        '2026-11-04T10:00:00-08:00',
+        '2026-11-04T18:00:00.000001Z',
+        '2026-11-04T09:30:00-08:00',
+        '2026-11-04T18:00:00Z',
+    ]
     ids = []
     for i, started in enumerate(starts):
         rid = record(api)
@@ -236,12 +265,33 @@ def test_item_references_are_redacted_in_lists_mutations_replays_and_outbox(api)
     item = add(api, rid, {'section': 'task', 'text': 'Review pricing'})['item']
     with api.app.state.store.transaction() as c:
         c.execute('UPDATE meeting_items SET result_ref=? WHERE id=?', (hidden['id'], item['id']))
-        value = task_references.redact(c, api.app.state.auth, Identity('human:cara', 'human', email='cara@acme.example'),
-                                      {'proposed_task_id': hidden['id']})
+        value = task_references.redact(
+            c,
+            api.app.state.auth,
+            Identity('human:cara', 'human', email='cara@acme.example'),
+            {'proposed_task_id': hidden['id']},
+        )
         assert value['proposed_task_id'] is None
-    changed = change(api, rid, item['id'], {'version': item['version'], 'text': 'Review pricing again'}, 'cara-test', key='edit-retry')
+    changed = change(
+        api,
+        rid,
+        item['id'],
+        {'version': item['version'], 'text': 'Review pricing again'},
+        'cara-test',
+        key='edit-retry',
+    )
     assert changed['item']['result_ref'] is None
-    assert change(api, rid, item['id'], {'version': item['version'], 'text': 'Review pricing again'}, 'cara-test', key='edit-retry')['item']['result_ref'] is None
+    assert (
+        change(
+            api,
+            rid,
+            item['id'],
+            {'version': item['version'], 'text': 'Review pricing again'},
+            'cara-test',
+            key='edit-retry',
+        )['item']['result_ref']
+        is None
+    )
     assert items(api, rid, 'cara-test')['sections']['task'][0]['result_ref'] is None
     response = api.get('/api/meetings/' + rid, headers=headers('cara-test'))
     assert response.status_code == 200, response.text
@@ -290,6 +340,7 @@ def test_task_trash_restores_links_and_skips_a_meeting_deleted_while_trashed(api
 
 def test_recorder_participant_audiences_keep_the_current_media_read_boundary(api):
     from backend.tests.test_recorder_audience import live_meeting
+
     mid = live_meeting(api, visibility='team', joiner='cara')
     post(api, f'live-meetings/{mid}/control', {'action': 'end'}, 'ben-test')
     rid = post(api, f'live-meetings/{mid}/finalize', {}, 'ben-test')['meeting_id']

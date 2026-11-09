@@ -5,8 +5,15 @@ import json
 from backend.tests.test_api import api, get, runner  # noqa: F401
 from backend.tests.test_task_privacy_reads import traced
 
-PER_COMPUTER = ("runner_harness_choices", "runner_harness_actions", "model_login_cleared", "computer_keys",
-                "assignments", "computer-repositories:", "subscription:")
+PER_COMPUTER = (
+    "runner_harness_choices",
+    "runner_harness_actions",
+    "model_login_cleared",
+    "computer_keys",
+    "assignments",
+    "computer-repositories:",
+    "subscription:",
+)
 
 
 def counted(api, token):
@@ -18,10 +25,15 @@ def seed(api, labels):
     made = [runner(api, "ana", label) for label in labels]
     with api.app.state.store.transaction() as c:
         for r in made:
-            c.execute("INSERT INTO registry_metadata VALUES(?,?)", ("computer-repositories:" + r["runner_id"],
-                                                                     json.dumps({"repositories": "ready"})))
-            c.execute("INSERT INTO model_login_cleared(runner_id,runtime,profile,cleared_at,cleared_by,clear_key) "
-                      "VALUES(?,?,?,?,?,1)", (r["runner_id"], "claude", "", "2026-01-01T00:00:00Z", "human:ana"))
+            c.execute(
+                "INSERT INTO registry_metadata VALUES(?,?)",
+                ("computer-repositories:" + r["runner_id"], json.dumps({"repositories": "ready"})),
+            )
+            c.execute(
+                "INSERT INTO model_login_cleared(runner_id,runtime,profile,cleared_at,cleared_by,clear_key) "
+                "VALUES(?,?,?,?,?,1)",
+                (r["runner_id"], "claude", "", "2026-01-01T00:00:00Z", "human:ana"),
+            )
     return made
 
 

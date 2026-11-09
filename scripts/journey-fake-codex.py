@@ -7,6 +7,7 @@ lost) fails as it does there. A prompt holding `journey-ask <nonce> [env=NAME] [
 instead, on one line the journey reads: "journey-reply: <nonce> thread=<id> resumed=<yes|no> NAME=<sha256 prefix|missing>
 worktree=<ok|failed>". The worktree is added the way a bot's turn adds one, with `hub task worktree add` in the turn's
 environment, from a local repository this fake makes once."""
+
 import hashlib
 import json
 import os
@@ -45,19 +46,30 @@ def origin(env):
     """A one-commit repository the turn's user owns, so cloning it needs no credentials and no safe.directory."""
     path = os.path.join(threads_dir(), "origin-%d" % os.getuid())
     if not os.path.isdir(os.path.join(path, ".git")):
-        git = {**env, "GIT_AUTHOR_NAME": "Acme", "GIT_AUTHOR_EMAIL": "bot@acme.example",
-               "GIT_COMMITTER_NAME": "Acme", "GIT_COMMITTER_EMAIL": "bot@acme.example"}
+        git = {
+            **env,
+            "GIT_AUTHOR_NAME": "Acme",
+            "GIT_AUTHOR_EMAIL": "bot@acme.example",
+            "GIT_COMMITTER_NAME": "Acme",
+            "GIT_COMMITTER_EMAIL": "bot@acme.example",
+        }
         subprocess.run(["git", "init", "-q", "-b", "main", path], env=git, check=True, capture_output=True)
-        subprocess.run(["git", "-C", path, "commit", "-q", "--allow-empty", "-m", "init"], env=git, check=True,
-                       capture_output=True)
+        subprocess.run(
+            ["git", "-C", path, "commit", "-q", "--allow-empty", "-m", "init"], env=git, check=True, capture_output=True
+        )
     return "file://" + path
 
 
 def add_worktree(task, env):
     hub = shutil.which("hub", path=env.get("PATH")) or "/opt/tico/scripts/hub"
     try:
-        done = subprocess.run([sys.executable, hub, "task", "worktree", "add", origin(env), "--task", task], env=env,
-                              capture_output=True, text=True, timeout=120)
+        done = subprocess.run(
+            [sys.executable, hub, "task", "worktree", "add", origin(env), "--task", task],
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
     except (OSError, subprocess.SubprocessError) as exc:
         return "failed", str(exc)
     if done.returncode == 0:
@@ -73,7 +85,9 @@ def answer(text, thread, resumed, env):
     facts, notes = [nonce, "thread=" + thread, "resumed=" + ("yes" if resumed else "no")], []
     for key, value in (arg.split("=", 1) for arg in args.split()):
         if key == "env":
-            facts.append(value + "=" + (hashlib.sha256(env[value].encode()).hexdigest()[:12] if value in env else "missing"))
+            facts.append(
+                value + "=" + (hashlib.sha256(env[value].encode()).hexdigest()[:12] if value in env else "missing")
+            )
         elif key == "worktree":
             outcome, why = add_worktree(value, env)
             facts.append("worktree=" + outcome)
@@ -106,7 +120,9 @@ def main():
             send({"id": rid, "result": {"thread": {"id": thread}}})
         elif method == "thread/resume":
             thread = str(params.get("threadId") or "")
-            if not re.fullmatch(r"journey-[0-9a-f]{12}", thread) or not os.path.exists(os.path.join(threads_dir(), thread)):
+            if not re.fullmatch(r"journey-[0-9a-f]{12}", thread) or not os.path.exists(
+                os.path.join(threads_dir(), thread)
+            ):
                 send({"id": rid, "error": {"code": -32600, "message": "no rollout found for thread id " + thread}})
                 continue
             envs[thread] = thread_env(params)
@@ -120,9 +136,22 @@ def main():
             send({"method": "turn/started", "params": {"threadId": thread, "turn": {"id": turn}}})
             reply = answer(text, thread, thread in resumed, {**os.environ, **envs.get(thread, {})})
             send({"method": "item/agentMessage/delta", "params": {"threadId": thread, "turnId": turn, "delta": reply}})
-            send({"method": "item/completed", "params": {"threadId": thread, "turnId": turn,
-                  "item": {"type": "agentMessage", "id": "m%d" % turns, "text": reply, "phase": "final_answer"}}})
-            send({"method": "turn/completed", "params": {"threadId": thread, "turn": {"id": turn, "status": "completed"}}})
+            send(
+                {
+                    "method": "item/completed",
+                    "params": {
+                        "threadId": thread,
+                        "turnId": turn,
+                        "item": {"type": "agentMessage", "id": "m%d" % turns, "text": reply, "phase": "final_answer"},
+                    },
+                }
+            )
+            send(
+                {
+                    "method": "turn/completed",
+                    "params": {"threadId": thread, "turn": {"id": turn, "status": "completed"}},
+                }
+            )
         else:
             send({"id": rid, "result": {}})
 
@@ -133,6 +162,7 @@ if __name__ == "__main__":
     except BaseException:
         # The runner keeps only the tail of a harness's stderr in the run; the journey prints this file on a failure.
         import traceback
+
         with open("/tmp/journey-fake-codex.log", "a") as log:
             log.write("%s %s\n%s" % (os.getuid(), sys.argv[1:], traceback.format_exc()))
         raise

@@ -13,13 +13,18 @@ from . import db as _db
 
 
 def line(employee, action, mailbox="", target="", detail=None, issue="", when=None):
-    return {"ts": stamp(when), "employee": employee, "issue": str(issue or ""),
-            "mailbox": mailbox or "", "action": action, "target": target or "",
-            "detail": detail or {}}
+    return {
+        "ts": stamp(when),
+        "employee": employee,
+        "issue": str(issue or ""),
+        "mailbox": mailbox or "",
+        "action": action,
+        "target": target or "",
+        "detail": detail or {},
+    }
 
 
-def record(employee, action, mailbox="", target="", detail=None, issue="",
-           conn=None, path=None, when=None):
+def record(employee, action, mailbox="", target="", detail=None, issue="", conn=None, path=None, when=None):
     """Append one audit line. Returns it, so callers can print it in --json."""
     row = line(employee, action, mailbox, target, detail, issue, when)
     p = Path(path or AUDIT_PATH)

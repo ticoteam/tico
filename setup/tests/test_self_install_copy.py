@@ -1,4 +1,5 @@
 """Exercise the actual SSH write script under dash, with synthetic paths and a stand-in chown."""
+
 import os
 import stat
 import subprocess
@@ -24,9 +25,15 @@ def test_ssh_plan_copy_is_atomic_private_and_refuses_corrupt_stdin(tmp_path, mon
     steps[0].run()
     steps[2].run()
     (cmd,) = [cmd for cmd, data in shell.calls if data == b"selected-plan"]
+
     def write(data):
-        return subprocess.run(["/bin/dash", "-c", cmd], input=data, capture_output=True,
-                              env={**os.environ, "PATH": str(fake_bin) + ":" + os.environ["PATH"]})
+        return subprocess.run(
+            ["/bin/dash", "-c", cmd],
+            input=data,
+            capture_output=True,
+            env={**os.environ, "PATH": str(fake_bin) + ":" + os.environ["PATH"]},
+        )
+
     assert write(b"selected-plan").returncode == 0
     plan = folder / contract.COMPANY_FILE_NAME
     assert plan.read_bytes() == b"selected-plan" and stat.S_IMODE(plan.stat().st_mode) == 0o600
@@ -48,6 +55,7 @@ def test_a_saved_legacy_plan_moves_out_of_the_aws_environment_on_retry(monkeypat
     from backend import company_file as C
     from backend.company_file import starter
     from setup import state, envfile
+
     monkeypatch.setenv("TICO_OIDC_CLIENT_SECRET", "test-private-client-secret")
     draft = chart(20)
     draft["company"]["name"] = "Acme Books"

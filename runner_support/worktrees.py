@@ -1,4 +1,5 @@
 """Computer-owned task worktrees. Never removes a tree before preserving its history."""
+
 import concurrent.futures
 from contextlib import contextmanager
 import fcntl
@@ -12,7 +13,6 @@ import re
 from pathlib import Path
 import shutil
 import subprocess
-import tempfile
 import threading
 from urllib.parse import quote
 import uuid
@@ -20,6 +20,7 @@ import weakref
 
 from clients.tico import APIError
 from clients import git_repository
+from clients.repo_safety import outside_installation
 from . import git_credentials, isolation, repositories, safe_git
 
 
@@ -29,7 +30,10 @@ def safe_path(workspace, relative):
         raise ValueError('Invalid worktree path')
     raw = Path(relative)
     path = root / raw
-    if raw.is_absolute() or '..' in raw.parts or not raw.parts or path.is_symlink():
+    if raw.is_absolute() or '..' in raw.parts or not raw.parts:
+        raise ValueError('Use a worktree inside the team workspace')
+    outside_installation(path)
+    if path.is_symlink():
         raise ValueError('Use a worktree inside the team workspace')
     resolved = path.resolve()
     if resolved != path:
@@ -44,7 +48,12 @@ def safe_path(workspace, relative):
         repo_path, candidate = repo_path.casefold(), candidate.casefold()
     if candidate == repo_path or candidate.startswith(repo_path + os.sep):
         raise ValueError('Worktree must stay outside repos')
-    if resolved == root or root not in resolved.parents or (root / 'repos') == resolved or (root / 'repos') in resolved.parents:
+    if (
+        resolved == root
+        or root not in resolved.parents
+        or (root / 'repos') == resolved
+        or (root / 'repos') in resolved.parents
+    ):
         raise ValueError('Worktree must stay inside the team workspace, outside repos')
     return resolved
 
@@ -53,16 +62,28 @@ def disk_floor(workspace):
     usage = shutil.disk_usage(workspace)
     floor = 5 * repositories.GB
     if usage.free < floor:
-        raise ValueError(f'Not enough disk to create worktree: {usage.free / repositories.GB:.1f} GB free, needs {floor / repositories.GB:g} GB. Free space on this volume')
+        raise ValueError(
+            f'Not enough disk to create worktree: {usage.free / repositories.GB:.1f} GB free, needs {floor / repositories.GB:g} GB. Free space on this volume'
+        )
 
 
 def git(path, *args, env=None, check=True, errors='strict'):
+    outside_installation(path)
     if args[:2] == ('worktree', 'prune') and (Path(path) / '.git' / 'worktrees').is_symlink():
         raise ValueError('Worktree registrations point outside the base clone; left as they are')
-    done = isolation.run([*safe_git.prefix(path), '-C', str(path), *args], env=safe_git.environment(env), capture_output=True, text=True,
-                         errors=errors, stdin=subprocess.DEVNULL, timeout=120)
+    done = isolation.run(
+        [*safe_git.prefix(path), '-C', str(path), *args],
+        env=safe_git.environment(env),
+        capture_output=True,
+        text=True,
+        errors=errors,
+        stdin=subprocess.DEVNULL,
+        timeout=120,
+    )
     if check and done.returncode:
-        error = ValueError(f'Git {args[0]} failed (exit {done.returncode}); check access, network, disk space and repository state')
+        error = ValueError(
+            f'Git {args[0]} failed (exit {done.returncode}); check access, network, disk space and repository state'
+        )
         if args[0] in ('push', 'fetch', 'ls-remote'):
             error.git_detail = done.stderr or f'exit {done.returncode}'
         raise error
@@ -71,8 +92,10 @@ def git(path, *args, env=None, check=True, errors='strict'):
 
 @contextmanager
 def locked(workspace, task):
-    folder = isolation.mkdir(Path(workspace) / 'tasks' / '.locks', mode=0o755)
+    folder = Path(workspace) / 'tasks' / '.locks'
     path = folder / hashlib.sha256(str(task).encode()).hexdigest()[:2]
+    outside_installation(path)
+    isolation.mkdir(folder, mode=0o755)
     with path.open('a') as handle:
         isolation.chown(path)
         fcntl.flock(handle, fcntl.LOCK_EX)
@@ -83,16 +106,38 @@ def locked(workspace, task):
 
 
 def setup_environment(env):
-    keys = {'PATH', 'HOME', 'SHELL', 'LANG', 'TZ', 'TMPDIR', 'TMP', 'TEMP', 'VIRTUAL_ENV', 'CONDA_PREFIX',
-            'PYENV_ROOT', 'CARGO_HOME', 'RUSTUP_HOME', 'GOPATH', 'JAVA_HOME'}
+    keys = {
+        'PATH',
+        'HOME',
+        'SHELL',
+        'LANG',
+        'TZ',
+        'TMPDIR',
+        'TMP',
+        'TEMP',
+        'VIRTUAL_ENV',
+        'CONDA_PREFIX',
+        'PYENV_ROOT',
+        'CARGO_HOME',
+        'RUSTUP_HOME',
+        'GOPATH',
+        'JAVA_HOME',
+    }
     return {key: value for key, value in env.items() if key in keys or key.startswith('LC_')}
 
 
 def setup(path, command, env):
+    outside_installation(path)
     if command:
-        with isolation.popen(['/bin/sh', '-c', command], cwd=path, env=setup_environment(env),
-                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL,
-                             start_new_session=True) as process:
+        with isolation.popen(
+            ['/bin/sh', '-c', command],
+            cwd=path,
+            env=setup_environment(env),
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            stdin=subprocess.DEVNULL,
+            start_new_session=True,
+        ) as process:
             try:
                 code = process.wait(timeout=600)
             except subprocess.TimeoutExpired:
@@ -100,7 +145,9 @@ def setup(path, command, env):
                 process.wait()
                 raise ValueError('Worktree setup timed out; run setup again') from None
         if code:
-            raise ValueError(f'Worktree created but setup failed (exit {code}); run setup again; setup has no credentials, so network authentication must be configured outside setup')
+            raise ValueError(
+                f'Worktree created but setup failed (exit {code}); run setup again; setup has no credentials, so network authentication must be configured outside setup'
+            )
 
 
 def metadata(client, name):
@@ -120,8 +167,9 @@ def metadata(client, name):
         names = sorted(r['full_name'] for r in repos if r.get('access') == 'write')
         writable = ', '.join(names[:10]) + (f' and {len(names) - 10} more' if len(names) > 10 else '') or 'none'
         listed = f'lists {name} as read-only' if repo else f'does not list {name}'
-        raise ValueError(f'This bot needs write access to this repository: Tico {listed} for this run '
-                         f'(writable here: {writable})')
+        raise ValueError(
+            f'This bot needs write access to this repository: Tico {listed} for this run (writable here: {writable})'
+        )
     return repo
 
 
@@ -135,14 +183,18 @@ def _demoted_legacy_history(link, detail):
     """Recognize a formerly-present link for verification after an old heartbeat demoted it."""
     last_commit = detail.get('last_commit')
     dirty_files = detail.get('dirty_files')
-    return (link.get('state') == 'pending'
-            and detail.get('checkout_state') in (None, 'unverified')
-            and not detail.get('setup_pending')
-            and not any(detail.get(key) for key in ('expected_head', 'checkout_target', 'expected_base'))
-            and bool(link.get('branch'))
-            and detail.get('current_branch') == link.get('branch')
-            and isinstance(last_commit, str) and re.fullmatch(r'(?:[0-9a-f]{40}|[0-9a-f]{64})', last_commit)
-            and type(dirty_files) is int and dirty_files >= 0)
+    return (
+        link.get('state') == 'pending'
+        and detail.get('checkout_state') in (None, 'unverified')
+        and not detail.get('setup_pending')
+        and not any(detail.get(key) for key in ('expected_head', 'checkout_target', 'expected_base'))
+        and bool(link.get('branch'))
+        and detail.get('current_branch') == link.get('branch')
+        and isinstance(last_commit, str)
+        and re.fullmatch(r'(?:[0-9a-f]{40}|[0-9a-f]{64})', last_commit)
+        and type(dirty_files) is int
+        and dirty_files >= 0
+    )
 
 
 def _patch_link(client, task, link_id, **fields):
@@ -164,6 +216,7 @@ def _marker_path(workspace, link_id, *, create=False):
     root = Path(workspace).resolve()
     tasks = root / 'tasks'
     folder = tasks / '.checkout-state'
+    outside_installation(folder)
     if tasks.is_symlink() or folder.is_symlink():
         raise ValueError('Worktree initialization state points through a symlink; left as it is')
     if create:
@@ -213,16 +266,24 @@ def _write_marker(workspace, value):
 
 
 def _marker_identity(link_id, task, relative_path, repo, branch, expected_head, checkout_target, expected_base):
-    return {'schema': 1, 'link_id': link_id, 'task_id': task, 'path': relative_path,
-            'repo': repo.get('full_name') or repo.get('repo'), 'branch': branch,
-            'expected_head': expected_head, 'checkout_target': checkout_target,
-            'expected_base': expected_base}
+    return {
+        'schema': 1,
+        'link_id': link_id,
+        'task_id': task,
+        'path': relative_path,
+        'repo': repo.get('full_name') or repo.get('repo'),
+        'branch': branch,
+        'expected_head': expected_head,
+        'checkout_target': checkout_target,
+        'expected_base': expected_base,
+    }
 
 
 def _canonical_task_id(task, marker=None):
     recorded = marker.get('task_id') if isinstance(marker, dict) else None
-    if isinstance(recorded, str) and (recorded == task or
-                                      isinstance(task, str) and len(task) >= 8 and recorded.startswith(task)):
+    if isinstance(recorded, str) and (
+        recorded == task or isinstance(task, str) and len(task) >= 8 and recorded.startswith(task)
+    ):
         return recorded
     current = os.environ.get('HUB_TASK_ID')
     if isinstance(current, str) and isinstance(task, str) and len(task) >= 8 and current.startswith(task):
@@ -245,11 +306,11 @@ def _verify_ready_registration(workspace, row, repo, task=None):
     expected_base = row.get('expected_base') or detail.get('expected_base')
     marker = _read_marker(workspace, link_id)
     task_id = row.get('task_id') or _canonical_task_id(task, marker)
-    if not all((link_id, task_id, row.get('path'), row.get('branch'), expected_head,
-                checkout_target, expected_base)):
+    if not all((link_id, task_id, row.get('path'), row.get('branch'), expected_head, checkout_target, expected_base)):
         raise ValueError('Ready worktree has no complete registration proof; kept unverified')
-    identity = _marker_identity(link_id, task_id, row['path'], repo, row['branch'],
-                                expected_head, checkout_target, expected_base)
+    identity = _marker_identity(
+        link_id, task_id, row['path'], repo, row['branch'], expected_head, checkout_target, expected_base
+    )
     _check_marker(marker, identity)
     if marker.get('phase') != 'ready':
         raise ValueError('Ready worktree has no completed local setup record; kept unverified')
@@ -261,7 +322,11 @@ def _verify_worktree(path, workspace, repo, branch, env, expected_base=None, det
     if not (path / '.git').is_file():
         raise ValueError('Tracked path is not a Git worktree; left as it is')
     origin = git(path, 'config', '--get', 'remote.origin.url', env=env).stdout.strip()
-    matches = git_repository.matches(origin, repo.get('full_name') or repo['repo']) if repo.get('machine_git') else git_credentials._same_repository(origin, repo.get('full_name') or repo['repo'])
+    matches = (
+        git_repository.matches(origin, repo.get('full_name') or repo['repo'])
+        if repo.get('machine_git')
+        else git_credentials._same_repository(origin, repo.get('full_name') or repo['repo'])
+    )
     if not matches:
         raise ValueError('Worktree repository does not match its task link; left as it is')
     if detached_ok:
@@ -279,17 +344,21 @@ def _verify_worktree(path, workspace, repo, branch, env, expected_base=None, det
 
 
 def _porcelain_records(path, env):
-    done = isolation.run([*safe_git.prefix(path), '-C', str(path), 'status', '--porcelain=v1', '-z', '--untracked-files=all'],
-                         env=safe_git.environment(env), capture_output=True, text=True,
-                         stdin=subprocess.DEVNULL, timeout=120)
+    done = isolation.run(
+        [*safe_git.prefix(path), '-C', str(path), 'status', '--porcelain=v1', '-z', '--untracked-files=all'],
+        env=safe_git.environment(env),
+        capture_output=True,
+        text=True,
+        stdin=subprocess.DEVNULL,
+        timeout=120,
+    )
     if done.returncode:
         raise ValueError('Could not verify checkout contents; left as they are')
     raw = done.stdout
     return [record for record in raw.split('\0') if record]
 
 
-def _resume_interrupted_checkout(path, workspace, repo, branch, expected_head, expected_base,
-                                 marker_identity, env):
+def _resume_interrupted_checkout(path, workspace, repo, branch, expected_head, expected_base, marker_identity, env):
     """Accept only a complete clean materialization; never restore or overwrite its contents."""
     if not re.fullmatch(r'(?:[0-9a-f]{40}|[0-9a-f]{64})', expected_head or ''):
         raise ValueError('Interrupted checkout has no valid expected commit; left as it is')
@@ -325,8 +394,10 @@ def _recover_retired(base, default, link, task, env, client):
         start = _saved_history(base, branch, link, env, remote_required=True)
         if start:
             for published in recovery.get('published_heads') or [recovery.get('published_head')]:
-                if published and (not re.fullmatch(r'(?:[0-9a-f]{40}|[0-9a-f]{64})', published)
-                                  or git(base, 'merge-base', '--is-ancestor', published, start, env=env, check=False).returncode):
+                if published and (
+                    not re.fullmatch(r'(?:[0-9a-f]{40}|[0-9a-f]{64})', published)
+                    or git(base, 'merge-base', '--is-ancestor', published, start, env=env, check=False).returncode
+                ):
                     raise ValueError('Origin no longer contains the last published head; kept local history unchanged')
             if start != 'refs/heads/' + branch:
                 fast_forward(base, branch, start, env)
@@ -342,7 +413,9 @@ def _recover_retired(base, default, link, task, env, client):
         raise ValueError('Origin has no default branch; retry once it is available')
     if git(base, 'show-ref', '--verify', 'refs/heads/' + link['branch'], env=env, check=False).returncode == 0:
         raise ValueError('New recovery branch already exists locally; kept unchanged')
-    link['recovery_note'] = 'The old branch is missing on origin. Old work was not published there; starting a new branch from the default branch.'
+    link['recovery_note'] = (
+        'The old branch is missing on origin. Old work was not published there; starting a new branch from the default branch.'
+    )
 
 
 def _recovery_warning(link):
@@ -353,9 +426,13 @@ def _recovery_warning(link):
     for old in history:
         notes.append(old.get('recovery_note') or '')
         if old.get('ahead'):
-            notes.append(f"{old['ahead']} unpushed commits stayed on the retired computer ({old.get('computer_id')}); last head {old.get('last_commit') or 'unknown'}.")
+            notes.append(
+                f"{old['ahead']} unpushed commits stayed on the retired computer ({old.get('computer_id')}); last head {old.get('last_commit') or 'unknown'}."
+            )
         if old.get('dirty_files'):
-            notes.append(f"{old['dirty_files']} changed files stayed on the retired computer ({old.get('computer_id')}).")
+            notes.append(
+                f"{old['dirty_files']} changed files stayed on the retired computer ({old.get('computer_id')})."
+            )
     return ' '.join(note for note in notes if note)
 
 
@@ -368,6 +445,8 @@ def _worktree_registered(base, path, env):
 
 
 def _create_or_resume_checkout(path, workspace, base, default, link, repo, task, env, client):
+    outside_installation(path)
+    outside_installation(base)
     detail = _detail(link)
     state = link.get('checkout_state') or detail.get('checkout_state') or 'queued'
     fresh_queued = state == 'queued'
@@ -389,19 +468,27 @@ def _create_or_resume_checkout(path, workspace, base, default, link, repo, task,
     elif state == 'queued':
         target, expected = _checkout_target(base, branch, default, env)
         expected_base = actual_base
-        _patch_link(client, task, link['link_id'], state='pending', setup_pending=True,
-                    checkout_state='initializing', expected_head=expected, checkout_target=target,
-                    expected_base=expected_base)
+        _patch_link(
+            client,
+            task,
+            link['link_id'],
+            state='pending',
+            setup_pending=True,
+            checkout_state='initializing',
+            expected_head=expected,
+            checkout_target=target,
+            expected_base=expected_base,
+        )
         state = 'initializing'
     else:
         raise ValueError('Checkout is not in a resumable initialization state; leave it unchanged')
 
     marker = _read_marker(workspace, link['link_id'])
-    identity = _marker_identity(link['link_id'], _canonical_task_id(task, marker), link['path'], repo, branch,
-                                expected, target, expected_base)
+    identity = _marker_identity(
+        link['link_id'], _canonical_task_id(task, marker), link['path'], repo, branch, expected, target, expected_base
+    )
     if path.exists():
-        _resume_interrupted_checkout(path, workspace, repo, branch, expected, expected_base,
-                                     identity, env)
+        _resume_interrupted_checkout(path, workspace, repo, branch, expected, expected_base, identity, env)
     else:
         marker = _read_marker(workspace, link['link_id'])
         if marker:
@@ -409,7 +496,9 @@ def _create_or_resume_checkout(path, workspace, base, default, link, repo, task,
             if fresh_queued and not registered:
                 # An explicit new add can reuse a removed link only when its worktree path is absent
                 # and Git no longer registers it. Keep the same task/repo/branch/base identity.
-                stable = {key: identity[key] for key in ('link_id', 'task_id', 'path', 'repo', 'branch', 'expected_base')}
+                stable = {
+                    key: identity[key] for key in ('link_id', 'task_id', 'path', 'repo', 'branch', 'expected_base')
+                }
                 _check_marker(marker, stable)
                 marker = {**identity, 'phase': 'planned'}
                 _write_marker(workspace, marker)
@@ -417,11 +506,15 @@ def _create_or_resume_checkout(path, workspace, base, default, link, repo, task,
                 _check_marker(marker, identity)
                 if marker.get('phase') == 'materializing':
                     if registered:
-                        raise ValueError('Git still registers the missing interrupted worktree; preserved for bounded recovery')
+                        raise ValueError(
+                            'Git still registers the missing interrupted worktree; preserved for bounded recovery'
+                        )
                     marker = {**marker, 'phase': 'planned'}
                     _write_marker(workspace, marker)
                 elif marker.get('phase') == 'planned' and registered:
-                    raise ValueError('Git registers a worktree without a materialized path; preserved for bounded recovery')
+                    raise ValueError(
+                        'Git registers a worktree without a materialized path; preserved for bounded recovery'
+                    )
                 elif marker.get('phase') != 'planned':
                     raise ValueError('A previously materialized worktree is missing; preserved for bounded recovery')
         else:
@@ -434,11 +527,18 @@ def _create_or_resume_checkout(path, workspace, base, default, link, repo, task,
             git(base, 'worktree', 'add', str(path), branch, env=env)
         else:
             git(base, 'worktree', 'add', '--no-track', '-b', branch, str(path), target, env=env)
-        _resume_interrupted_checkout(path, workspace, repo, branch, expected, expected_base,
-                                     identity, env)
-    _patch_link(client, task, link['link_id'], state='pending', setup_pending=True,
-                checkout_state='checkout_ready', expected_head=expected, checkout_target=target,
-                expected_base=expected_base)
+        _resume_interrupted_checkout(path, workspace, repo, branch, expected, expected_base, identity, env)
+    _patch_link(
+        client,
+        task,
+        link['link_id'],
+        state='pending',
+        setup_pending=True,
+        checkout_state='checkout_ready',
+        expected_head=expected,
+        checkout_target=target,
+        expected_base=expected_base,
+    )
     return expected, target
 
 
@@ -457,8 +557,9 @@ def _run_registered_setup(path, workspace, repo, branch, link, task, env, client
     if not expected or not target or not expected_base:
         raise ValueError('Worktree setup lacks recorded commit and base identity; kept unchanged')
     marker = _read_marker(workspace, link_id)
-    identity = _marker_identity(link_id, _canonical_task_id(task, marker), link['path'], repo, branch,
-                                expected, target, expected_base)
+    identity = _marker_identity(
+        link_id, _canonical_task_id(task, marker), link['path'], repo, branch, expected, target, expected_base
+    )
     _check_marker(marker, identity)
     phase = marker.get('phase')
     if phase not in ('checkout_complete', 'restored', 'setup_failed', 'setup_running', 'ready'):
@@ -469,26 +570,58 @@ def _run_registered_setup(path, workspace, repo, branch, link, task, env, client
     if state == 'checkout_ready' and phase == 'checkout_complete' and _porcelain_records(path, env):
         raise ValueError('Checkout changed before setup; kept worktree without running setup')
     if phase == 'ready' and state == 'setup_running':
-        return _patch_link(client, task, link_id, state='present', setup_pending=False,
-                           checkout_state='ready', expected_head=expected, checkout_target=target,
-                           expected_base=expected_base)
+        return _patch_link(
+            client,
+            task,
+            link_id,
+            state='present',
+            setup_pending=False,
+            checkout_state='ready',
+            expected_head=expected,
+            checkout_target=target,
+            expected_base=expected_base,
+        )
 
     _write_marker(workspace, {**marker, 'phase': 'setup_running'})
-    _patch_link(client, task, link_id, state='pending', setup_pending=True,
-                checkout_state='setup_running', expected_head=expected, checkout_target=target,
-                expected_base=expected_base)
+    _patch_link(
+        client,
+        task,
+        link_id,
+        state='pending',
+        setup_pending=True,
+        checkout_state='setup_running',
+        expected_head=expected,
+        checkout_target=target,
+        expected_base=expected_base,
+    )
     try:
         setup(path, repo.get('setup_command'), env)
     except (ValueError, OSError, subprocess.SubprocessError):
         _write_marker(workspace, {**marker, 'phase': 'setup_failed'})
-        _patch_link(client, task, link_id, state='pending', setup_pending=True,
-                    checkout_state='setup_failed', expected_head=expected, checkout_target=target,
-                    expected_base=expected_base)
+        _patch_link(
+            client,
+            task,
+            link_id,
+            state='pending',
+            setup_pending=True,
+            checkout_state='setup_failed',
+            expected_head=expected,
+            checkout_target=target,
+            expected_base=expected_base,
+        )
         raise
     _write_marker(workspace, {**marker, 'phase': 'ready'})
-    return _patch_link(client, task, link_id, state='present', setup_pending=False,
-                       checkout_state='ready', expected_head=expected, checkout_target=target,
-                       expected_base=expected_base)
+    return _patch_link(
+        client,
+        task,
+        link_id,
+        state='present',
+        setup_pending=False,
+        checkout_state='ready',
+        expected_head=expected,
+        checkout_target=target,
+        expected_base=expected_base,
+    )
 
 
 def _record_restored_checkout(workspace, row, repo, env):
@@ -501,8 +634,7 @@ def _record_restored_checkout(workspace, row, repo, env):
     target = 'refs/heads/' + branch
     if git(base, 'rev-parse', '--verify', target, env=env, check=False).returncode:
         raise ValueError('Restored task branch is missing from its managed base; kept worktree')
-    identity = _marker_identity(row['id'], row['task_id'], row['path'], repo,
-                                branch, expected, target, expected_base)
+    identity = _marker_identity(row['id'], row['task_id'], row['path'], repo, branch, expected, target, expected_base)
     _write_marker(workspace, {**identity, 'phase': 'restored'})
     return expected, target, expected_base
 
@@ -530,23 +662,30 @@ def _record_attached_checkout(workspace, link, repo, env):
     if marker is not None:
         # A prior local proof may outlive a lost cloud heartbeat. Match its registration and
         # base, then replay that proof; a later commit or edit must not rewrite the marker.
-        stable = {'schema': 1, 'link_id': link_id, 'task_id': task_id,
-                  'path': link['path'], 'repo': repo_name, 'branch': branch,
-                  'expected_base': expected_base}
+        stable = {
+            'schema': 1,
+            'link_id': link_id,
+            'task_id': task_id,
+            'path': link['path'],
+            'repo': repo_name,
+            'branch': branch,
+            'expected_base': expected_base,
+        }
         _check_marker(marker, stable)
         expected = marker.get('expected_head')
         recorded_target = marker.get('checkout_target')
         target_valid = recorded_target == target
-        if (not target_valid and isinstance(recorded_target, str)
-                and recorded_target.startswith('refs/remotes/origin/')):
+        if not target_valid and isinstance(recorded_target, str) and recorded_target.startswith('refs/remotes/origin/'):
             remote_branch = recorded_target.removeprefix('refs/remotes/origin/')
             try:
                 target_valid = checked_branch(remote_branch) == remote_branch
             except ValueError:
                 target_valid = False
-        if (marker.get('phase') != 'ready'
-                or not re.fullmatch(r'(?:[0-9a-f]{40}|[0-9a-f]{64})', expected or '')
-                or not target_valid):
+        if (
+            marker.get('phase') != 'ready'
+            or not re.fullmatch(r'(?:[0-9a-f]{40}|[0-9a-f]{64})', expected or '')
+            or not target_valid
+        ):
             raise ValueError('Attached worktree has no matching completed local proof; kept unchanged')
         return expected, recorded_target, expected_base
 
@@ -557,8 +696,7 @@ def _record_attached_checkout(workspace, link, repo, env):
     expected = git(path, 'rev-parse', 'HEAD', env=env).stdout.strip()
     if git(path, 'rev-parse', '--verify', target, env=env).stdout.strip() != expected:
         raise ValueError('Attached worktree branch does not point at its current commit; kept unchanged')
-    identity = _marker_identity(link_id, task_id, link['path'], repo, branch,
-                                expected, target, expected_base)
+    identity = _marker_identity(link_id, task_id, link['path'], repo, branch, expected, target, expected_base)
     _write_marker(workspace, {**identity, 'phase': 'ready'})
     return expected, target, expected_base
 
@@ -584,11 +722,23 @@ def command(client, operation, value, task=None):
             repo = metadata(client, value)
             rows = client.get(f'tasks/{task}/links')
             rows = rows.get('links', []) if isinstance(rows, dict) else rows
-            candidates = [r for r in rows if r['kind'] == 'worktree' and (r.get('repo') or '').lower() == value.lower()
-                          and r.get('state') in ('present', 'pending')
-                          and _detail(r).get('checkout_state') != 'legacy_present']
-            candidates.sort(key=lambda r: not (_detail(r).get('setup_pending') or _detail(r).get('checkout_state') in
-                                                ('checkout_ready', 'setup_failed', 'setup_running', 'initializing')))
+            candidates = [
+                r
+                for r in rows
+                if r['kind'] == 'worktree'
+                and (r.get('repo') or '').lower() == value.lower()
+                and r.get('state') in ('present', 'pending')
+                and _detail(r).get('checkout_state') != 'legacy_present'
+            ]
+            candidates.sort(
+                key=lambda r: (
+                    not (
+                        _detail(r).get('setup_pending')
+                        or _detail(r).get('checkout_state')
+                        in ('checkout_ready', 'setup_failed', 'setup_running', 'initializing')
+                    )
+                )
+            )
             row = candidates[0] if candidates else None
             if not row:
                 raise ValueError('No worktree needing setup for this repository on the task')
@@ -599,16 +749,14 @@ def command(client, operation, value, task=None):
                 if state == 'initializing':
                     base, default = repositories.worktree_base(workspace, repo, env)
                     expected, target = _create_or_resume_checkout(
-                        path, workspace, base, default, {**row, **detail, 'link_id': row['id']},
-                        repo, task, env, client)
-                    detail.update(checkout_state='checkout_ready', expected_head=expected,
-                                  checkout_target=target)
+                        path, workspace, base, default, {**row, **detail, 'link_id': row['id']}, repo, task, env, client
+                    )
+                    detail.update(checkout_state='checkout_ready', expected_head=expected, checkout_target=target)
                     detail['expected_base'] = detail.get('expected_base') or _base_identity(_common_dir(base, env))
                 if not path.exists():
                     raise ValueError('Worktree is missing; restore it before setup')
                 if state == 'ready':
-                    _verify_worktree(path, workspace, repo, row['branch'], env,
-                                     detail.get('expected_base'))
+                    _verify_worktree(path, workspace, repo, row['branch'], env, detail.get('expected_base'))
                     _verify_ready_registration(workspace, row, repo, task)
                     return row
                 link = {**row, **detail, 'link_id': row['id']}
@@ -619,50 +767,69 @@ def command(client, operation, value, task=None):
             if repo.get('machine_git'):
                 env = safe_git.machine_environment()
             link = client.post(f'tasks/{task}/worktrees', {'repo': repo['full_name']})
+            path = safe_path(workspace, link['path'])
             with locked(workspace, link['path']):
                 checked_branch(link['branch'])
-                path = safe_path(workspace, link['path'])
                 detail = _detail(link)
                 state = link.get('checkout_state') or detail.get('checkout_state')
                 setup_pending = bool(link.get('setup_pending', detail.get('setup_pending', False)))
                 if state == 'queued' and (link.get('recovery') or detail.get('recovery')):
                     if path.exists():
-                        raise ValueError('Worktree path already exists without an initialization record; kept unchanged')
+                        raise ValueError(
+                            'Worktree path already exists without an initialization record; kept unchanged'
+                        )
                     base, default = repositories.worktree_base(workspace, repo, env)
                     _recover_retired(base, default, link, task, env, client)
                 recovery_warning = _recovery_warning(link)
                 if state is None and path.exists():
                     _verify_worktree(path, workspace, repo, link['branch'], env)
-                    if (link.get('state') == 'present' and not setup_pending
-                            and not git(path, 'ls-files', '--deleted', '-z', env=env).stdout):
-                        return {**link, 'state': 'present', 'checkout_state': 'legacy_present',
-                                'setup_pending': False, 'workspace_path': str(path)}
-                    return {**link, 'state': 'pending', 'checkout_state': 'unverified',
-                            'setup_pending': True, 'workspace_path': str(path),
-                            'warning': 'Legacy worktree has no completion proof; kept unchanged and not reported ready'}
+                    if (
+                        link.get('state') == 'present'
+                        and not setup_pending
+                        and not git(path, 'ls-files', '--deleted', '-z', env=env).stdout
+                    ):
+                        return {
+                            **link,
+                            'state': 'present',
+                            'checkout_state': 'legacy_present',
+                            'setup_pending': False,
+                            'workspace_path': str(path),
+                        }
+                    return {
+                        **link,
+                        'state': 'pending',
+                        'checkout_state': 'unverified',
+                        'setup_pending': True,
+                        'workspace_path': str(path),
+                        'warning': 'Legacy worktree has no completion proof; kept unchanged and not reported ready',
+                    }
                 if state is None:
                     state = 'queued'
                 if path.exists():
                     if state == 'queued':
-                        raise ValueError('Worktree path already exists without an initialization record; kept unchanged')
+                        raise ValueError(
+                            'Worktree path already exists without an initialization record; kept unchanged'
+                        )
                     base, default = repositories.worktree_base(workspace, repo, env)
                     expected_base = link.get('expected_base') or detail.get('expected_base')
                     if state == 'initializing':
                         _, target = _create_or_resume_checkout(
-                            path, workspace, base, default, {**link, **detail}, repo, task, env, client)
+                            path, workspace, base, default, {**link, **detail}, repo, task, env, client
+                        )
                         state = 'checkout_ready'
                         expected_base = expected_base or _base_identity(_common_dir(base, env))
-                        detail.update(checkout_state=state, checkout_target=target,
-                                      expected_base=expected_base)
+                        detail.update(checkout_state=state, checkout_target=target, expected_base=expected_base)
                     elif state == 'checkout_ready':
                         expected = link.get('expected_head') or detail.get('expected_head')
                         target = link.get('checkout_target') or detail.get('checkout_target')
                         if not expected_base or not expected or not target:
                             raise ValueError('Checkout lacks recorded base and commit identity; kept unchanged')
-                        identity = _marker_identity(link['link_id'], task, link['path'], repo,
-                                                    link['branch'], expected, target, expected_base)
-                        _resume_interrupted_checkout(path, workspace, repo, link['branch'],
-                                                     expected, expected_base, identity, env)
+                        identity = _marker_identity(
+                            link['link_id'], task, link['path'], repo, link['branch'], expected, target, expected_base
+                        )
+                        _resume_interrupted_checkout(
+                            path, workspace, repo, link['branch'], expected, expected_base, identity, env
+                        )
                     elif state in ('setup_running', 'setup_failed'):
                         raise ValueError('Setup did not finish; use hub task worktree setup to retry explicitly')
                     elif state == 'ready':
@@ -670,19 +837,33 @@ def command(client, operation, value, task=None):
                             raise ValueError('Ready worktree has no recorded base identity; kept unchanged')
                         _verify_worktree(path, workspace, repo, link['branch'], env, expected_base)
                         _verify_ready_registration(workspace, link, repo, task)
-                        return {**link, 'state': 'present', 'checkout_state': 'ready',
-                                'workspace_path': str(path), **({'warning': recovery_warning} if recovery_warning else {})}
+                        return {
+                            **link,
+                            'state': 'present',
+                            'checkout_state': 'ready',
+                            'workspace_path': str(path),
+                            **({'warning': recovery_warning} if recovery_warning else {}),
+                        }
                     elif state == 'legacy_present':
                         _verify_worktree(path, workspace, repo, link['branch'], env)
                         if git(path, 'ls-files', '--deleted', '-z', env=env).stdout:
                             raise ValueError('Legacy worktree has missing tracked files; kept unchanged and unverified')
                         if link.get('state') != 'present' or setup_pending:
-                            return {**link, 'state': 'pending', 'checkout_state': 'legacy_present',
-                                    'setup_pending': setup_pending, 'workspace_path': str(path),
-                                    'warning': 'Legacy worktree is not recorded present with setup complete; kept unchanged'}
-                        return {**link, 'state': 'present', 'checkout_state': 'legacy_present',
-                                'setup_pending': False,
-                                'workspace_path': str(path)}
+                            return {
+                                **link,
+                                'state': 'pending',
+                                'checkout_state': 'legacy_present',
+                                'setup_pending': setup_pending,
+                                'workspace_path': str(path),
+                                'warning': 'Legacy worktree is not recorded present with setup complete; kept unchanged',
+                            }
+                        return {
+                            **link,
+                            'state': 'present',
+                            'checkout_state': 'legacy_present',
+                            'setup_pending': False,
+                            'workspace_path': str(path),
+                        }
                     else:
                         raise ValueError('Worktree initialization is not verified; kept it unchanged')
                 else:
@@ -690,24 +871,48 @@ def command(client, operation, value, task=None):
                     if state not in ('queued', 'initializing'):
                         raise ValueError('Missing worktree is not in a resumable initialization state')
                     expected, target = _create_or_resume_checkout(
-                        path, workspace, base, default, {**link, 'checkout_state': state},
-                        repo, task, env, client)
+                        path, workspace, base, default, {**link, 'checkout_state': state}, repo, task, env, client
+                    )
                     state = 'checkout_ready'
                     setup_pending = True
                     expected_base = _base_identity(_common_dir(base, env))
-                    detail.update(checkout_state=state, expected_head=expected,
-                                  checkout_target=target, expected_base=expected_base)
+                    detail.update(
+                        checkout_state=state,
+                        expected_head=expected,
+                        checkout_target=target,
+                        expected_base=expected_base,
+                    )
                 if state == 'checkout_ready' or setup_pending:
-                    _run_registered_setup(path, workspace, repo, link['branch'],
-                                          {**link, **detail, 'link_id': link['link_id'],
-                                           'checkout_state': state, 'expected_base': expected_base},
-                                          task, env, client)
+                    _run_registered_setup(
+                        path,
+                        workspace,
+                        repo,
+                        link['branch'],
+                        {
+                            **link,
+                            **detail,
+                            'link_id': link['link_id'],
+                            'checkout_state': state,
+                            'expected_base': expected_base,
+                        },
+                        task,
+                        env,
+                        client,
+                    )
                 elif state != 'ready':
                     raise ValueError('Worktree is not ready; no initialization or setup completion was recorded')
-                return {**link, 'state': 'present', 'checkout_state': 'ready', 'setup_pending': False,
-                        'workspace_path': str(path),
-                        **({'warning': ' '.join(filter(None, (recovery_warning, repo.get('fetch_warning'))))}
-                           if recovery_warning or repo.get('fetch_warning') else {})}
+                return {
+                    **link,
+                    'state': 'present',
+                    'checkout_state': 'ready',
+                    'setup_pending': False,
+                    'workspace_path': str(path),
+                    **(
+                        {'warning': ' '.join(filter(None, (recovery_warning, repo.get('fetch_warning'))))}
+                        if recovery_warning or repo.get('fetch_warning')
+                        else {}
+                    ),
+                }
         else:
             raw = Path(value)
             relative = str(raw.relative_to(Path(workspace).resolve())) if raw.is_absolute() else value
@@ -716,7 +921,9 @@ def command(client, operation, value, task=None):
             if not (path / '.git').is_file():
                 raise ValueError('Attach needs a Git worktree, not a base clone')
             attach_env = safe_git.machine_environment()
-            common = Path(git(path, 'rev-parse', '--path-format=absolute', '--git-common-dir', env=attach_env).stdout.strip()).resolve()
+            common = Path(
+                git(path, 'rev-parse', '--path-format=absolute', '--git-common-dir', env=attach_env).stdout.strip()
+            ).resolve()
             if Path(workspace).resolve() not in common.parents:
                 raise ValueError('Worktree base must be inside the team workspace')
             origin = git(path, 'config', '--get', 'remote.origin.url', env=attach_env).stdout.strip()
@@ -727,13 +934,29 @@ def command(client, operation, value, task=None):
             else:
                 env = safe_git.environment()
             branch = checked_branch(git(path, 'symbolic-ref', '--short', 'HEAD', env=env).stdout.strip())
-            link = client.post(f'tasks/{task}/worktrees/attach', {'path': relative, 'repo': repo['full_name'], 'branch': branch})
+            link = client.post(
+                f'tasks/{task}/worktrees/attach', {'path': relative, 'repo': repo['full_name'], 'branch': branch}
+            )
             expected_head, checkout_target, expected_base = _record_attached_checkout(
-                workspace, {**link, 'task_id': task}, repo, env)
-        client.patch(f'tasks/{task}/links/{link["link_id"]}', {'state': 'present', 'path': link['path'],
-                     'setup_pending': False, 'checkout_state': 'ready', 'expected_head': expected_head,
-                     'checkout_target': checkout_target, 'expected_base': expected_base})
-        return {**link, 'workspace_path': str(path), **({'warning': repo['fetch_warning']} if repo.get('fetch_warning') else {})}
+                workspace, {**link, 'task_id': task}, repo, env
+            )
+        client.patch(
+            f'tasks/{task}/links/{link["link_id"]}',
+            {
+                'state': 'present',
+                'path': link['path'],
+                'setup_pending': False,
+                'checkout_state': 'ready',
+                'expected_head': expected_head,
+                'checkout_target': checkout_target,
+                'expected_base': expected_base,
+            },
+        )
+        return {
+            **link,
+            'workspace_path': str(path),
+            **({'warning': repo['fetch_warning']} if repo.get('fetch_warning') else {}),
+        }
     except (ValueError, OSError, subprocess.SubprocessError):
         if operation == 'add' and 'link' in locals() and ('path' not in locals() or not (path / '.git').is_file()):
             client.patch(f'tasks/{task}/links/{link["link_id"]}', {'state': 'pending'})
@@ -750,9 +973,9 @@ def prepare(workspace, row, repo, env, client):
     its task once this reports the worktree present."""
     task = row['task_id']
     link = {**row, **_detail(row), 'link_id': row['id']}
+    path = safe_path(workspace, row['path'])
     with locked(workspace, row['path']):
         checked_branch(row['branch'])
-        path = safe_path(workspace, row['path'])
         state = link.get('checkout_state') or 'queued'
         if state in ('queued', 'initializing'):
             if path.exists() and state == 'queued':
@@ -760,10 +983,15 @@ def prepare(workspace, row, repo, env, client):
             disk_floor(workspace)
             base, default = repositories.worktree_base(workspace, repo, env)
             _recover_retired(base, default, link, task, env, client)
-            expected, target = _create_or_resume_checkout(path, workspace, base, default,
-                                                          {**link, 'checkout_state': state}, repo, task, env, client)
-            link.update(checkout_state='checkout_ready', expected_head=expected, checkout_target=target,
-                        expected_base=_base_identity(_common_dir(base, env)))
+            expected, target = _create_or_resume_checkout(
+                path, workspace, base, default, {**link, 'checkout_state': state}, repo, task, env, client
+            )
+            link.update(
+                checkout_state='checkout_ready',
+                expected_head=expected,
+                checkout_target=target,
+                expected_base=_base_identity(_common_dir(base, env)),
+            )
         elif state not in ('checkout_ready', 'setup_running'):
             raise ValueError('Worktree is not waiting to be prepared; kept unchanged')
         _run_registered_setup(path, workspace, repo, link['branch'], link, task, env, client)
@@ -773,15 +1001,23 @@ def prepare(workspace, row, repo, env, client):
 def _server_lacks_checkout_fields(exc):
     """Only a server from before checkout records, refusing their fields as unknown (422)."""
     detail = str(getattr(exc, 'detail', exc)).lower()
-    return (getattr(exc, 'status', None) == 422
-            and any(name in detail for name in ('checkout_state', 'expected_head', 'checkout_target', 'expected_base'))
-            and any(marker in detail for marker in ('extra', 'unknown field', 'unexpected field', 'not permitted')))
+    return (
+        getattr(exc, 'status', None) == 422
+        and any(name in detail for name in ('checkout_state', 'expected_head', 'checkout_target', 'expected_base'))
+        and any(marker in detail for marker in ('extra', 'unknown field', 'unexpected field', 'not permitted'))
+    )
 
 
 def checked_branch(branch):
     if not isinstance(branch, str) or not branch or len(branch) > 200 or branch.startswith('-'):
         raise ValueError('Invalid or oversized worktree branch')
-    if isolation.run([*safe_git.PREFIX, 'check-ref-format', '--branch', branch], cwd='/', env=safe_git.process_environment(), capture_output=True, timeout=15).returncode:
+    if isolation.run(
+        [*safe_git.PREFIX, 'check-ref-format', '--branch', branch],
+        cwd='/',
+        env=safe_git.process_environment(),
+        capture_output=True,
+        timeout=15,
+    ).returncode:
         raise ValueError('Invalid worktree branch')
     return branch
 
@@ -797,8 +1033,9 @@ def _saved_history(base, branch, row, env, *, remote_required=False):
         local = None
     try:
         task_remote = remote_branch(base, branch, env)
-        saved = [ref for name in (wip_branch(row), 'wip/' + row['task_id'][:8])
-                 if (ref := remote_branch(base, name, env))]
+        saved = [
+            ref for name in (wip_branch(row), 'wip/' + row['task_id'][:8]) if (ref := remote_branch(base, name, env))
+        ]
     except ValueError:
         if remote_required or not local:
             raise
@@ -810,10 +1047,15 @@ def _saved_history(base, branch, row, env, *, remote_required=False):
     required = [ref for ref in (local, task_remote) if ref]
     start = None
     for candidate in [*required, *saved]:
-        if any(git(base, 'merge-base', '--is-ancestor', floor, candidate, env=env, check=False).returncode
-               for floor in required):
+        if any(
+            git(base, 'merge-base', '--is-ancestor', floor, candidate, env=env, check=False).returncode
+            for floor in required
+        ):
             continue
-        if start is None or git(base, 'merge-base', '--is-ancestor', start, candidate, env=env, check=False).returncode == 0:
+        if (
+            start is None
+            or git(base, 'merge-base', '--is-ancestor', start, candidate, env=env, check=False).returncode == 0
+        ):
             start = candidate
     if required and start is None:
         raise ValueError('Task branch has separate history; kept worktree')
@@ -864,9 +1106,9 @@ def inspect(workspace, row, env=None, cache=None):
         detail = _detail(row)
         checkout_state = detail.get('checkout_state')
         legacy_recorded = checkout_state == 'legacy_present' and row.get('state') in ('present', 'unknown')
-        legacy_candidate = ((checkout_state is None and row.get('state') == 'present'
-                             or _demoted_legacy_history(row, detail))
-                            and not detail.get('setup_pending'))
+        legacy_candidate = (
+            checkout_state is None and row.get('state') == 'present' or _demoted_legacy_history(row, detail)
+        ) and not detail.get('setup_pending')
         legacy = legacy_recorded or legacy_candidate
         not_ready = (checkout_state != 'ready' and not legacy_recorded) or bool(detail.get('setup_pending'))
         result['checkout_state'] = checkout_state or 'unverified'
@@ -893,7 +1135,11 @@ def inspect(workspace, row, env=None, cache=None):
         if checkout_state == 'attached_pending':
             expected_repo = row.get('repo')
             if expected_repo:
-                matches = git_repository.matches(origin, expected_repo) if row.get('machine_git') else git_credentials._same_repository(origin, expected_repo)
+                matches = (
+                    git_repository.matches(origin, expected_repo)
+                    if row.get('machine_git')
+                    else git_credentials._same_repository(origin, expected_repo)
+                )
                 if not matches:
                     raise ValueError('Attached worktree repository does not match its task link')
         if result['repo'] and (len(result['repo']) > 200 or not repositories.valid_repository(result['repo'])):
@@ -910,12 +1156,20 @@ def inspect(workspace, row, env=None, cache=None):
             step = 'verify the legacy worktree'
             if not row.get('repo') or not row.get('branch'):
                 raise ValueError('Legacy worktree has no registered repository or branch; kept unverified')
-            _verify_worktree(path, workspace, {'full_name': row['repo'],
-                                               'machine_git': not git_credentials._same_repository(origin, row['repo'])},
-                             row['branch'], env, detached_ok=True)
+            _verify_worktree(
+                path,
+                workspace,
+                {'full_name': row['repo'], 'machine_git': not git_credentials._same_repository(origin, row['repo'])},
+                row['branch'],
+                env,
+                detached_ok=True,
+            )
             if git(path, 'ls-files', '--deleted', '-z', env=env).stdout:
-                result.update(state='pending', checkout_state='unverified',
-                              error='Legacy worktree has missing tracked files; kept unchanged and unverified')
+                result.update(
+                    state='pending',
+                    checkout_state='unverified',
+                    error='Legacy worktree has missing tracked files; kept unchanged and unverified',
+                )
                 return result
             result['checkout_state'] = 'legacy_present'
             not_ready = bool(detail.get('setup_pending'))
@@ -924,13 +1178,14 @@ def inspect(workspace, row, env=None, cache=None):
             result['checkout_state'] = 'unverified'
         elif checkout_state == 'ready':
             step = 'verify its checkout'
-            _verify_ready_registration(workspace, {**row, **detail},
-                                       {'full_name': result['repo']})
+            _verify_ready_registration(workspace, {**row, **detail}, {'full_name': result['repo']})
         step = 'read its changes'
-        result.update(state='pending' if not_ready else 'present',
-                      dirty_files=len(git(path, 'status', '--porcelain', env=env).stdout.splitlines()),
-                      last_commit=git(path, 'rev-parse', 'HEAD', env=env).stdout.strip()[:100])
-        if branch:          # detached: no branch, and the report's fields stay ones every server accepts
+        result.update(
+            state='pending' if not_ready else 'present',
+            dirty_files=len(git(path, 'status', '--porcelain', env=env).stdout.splitlines()),
+            last_commit=git(path, 'rev-parse', 'HEAD', env=env).stdout.strip()[:100],
+        )
+        if branch:  # detached: no branch, and the report's fields stay ones every server accepts
             try:
                 result['branch'] = checked_branch(branch)
             except ValueError:
@@ -942,12 +1197,17 @@ def inspect(workspace, row, env=None, cache=None):
             if row.get('branch') and row['branch'] != result['branch']:
                 raise ValueError('Attached worktree branch does not match its task link')
             expected_head, checkout_target, expected_base = _record_attached_checkout(
-                workspace, {**row, 'link_id': row['id'], 'branch': result['branch']},
-                {'full_name': result['repo'], 'machine_git': row.get('machine_git')}, env)
-            result.update(checkout_state='ready',
-                          expected_head=expected_head,
-                          checkout_target=checkout_target,
-                          expected_base=expected_base)
+                workspace,
+                {**row, 'link_id': row['id'], 'branch': result['branch']},
+                {'full_name': result['repo'], 'machine_git': row.get('machine_git')},
+                env,
+            )
+            result.update(
+                checkout_state='ready',
+                expected_head=expected_head,
+                checkout_target=checkout_target,
+                expected_base=expected_base,
+            )
             checkout_state = 'ready'
             not_ready = False
             result['state'] = 'present'
@@ -973,24 +1233,54 @@ def inspect(workspace, row, env=None, cache=None):
                         try:
                             stat = file.stat()
                         except FileNotFoundError:
-                            continue        # removed while we walked (a build or install running in the tree)
+                            continue  # removed while we walked (a build or install running in the tree)
                         size += stat.st_size
                         activity = max(activity, stat.st_mtime)
-            cached = (time.monotonic(), round(size / 1024 ** 2, 1), activity)
+            cached = (time.monotonic(), round(size / 1024**2, 1), activity)
             if cache is not None:
                 cache[row['id']] = cached
         result['size_mb'], result['last_activity'] = cached[1:]
     except (ValueError, OSError, subprocess.SubprocessError) as exc:
         # Name the step and the kind of failure, so Health says what to fix rather than a list of guesses.
-        reason = str(exc) if isinstance(exc, ValueError) else type(exc).__name__ + (f' ({exc.strerror})' if getattr(exc, 'strerror', None) else '')
+        reason = (
+            str(exc)
+            if isinstance(exc, ValueError)
+            else type(exc).__name__ + (f' ({exc.strerror})' if getattr(exc, 'strerror', None) else '')
+        )
         result['error'] = f'Could not {step}: {reason}'[:300]
     return result
 
 
-_BUILD = {'node_modules', '.venv', 'venv', 'dist', 'build', 'target', '.next', '__pycache__', '.cache', 'coverage', '.pytest_cache', '.mypy_cache', '.ruff_cache', '.tox', '.gradle', '.turbo', '.parcel-cache', '.DS_Store', '.idea', '.vscode', 'out'}
+_BUILD = {
+    'node_modules',
+    '.venv',
+    'venv',
+    'dist',
+    'build',
+    'target',
+    '.next',
+    '__pycache__',
+    '.cache',
+    'coverage',
+    '.pytest_cache',
+    '.mypy_cache',
+    '.ruff_cache',
+    '.tox',
+    '.gradle',
+    '.turbo',
+    '.parcel-cache',
+    '.DS_Store',
+    '.idea',
+    '.vscode',
+    'out',
+}
+
+
 def build_file(name):
     parts = Path(name).parts
-    return any(part in _BUILD or part.endswith(('.egg-info', '.pyc')) for part in parts) or any(parts[i:i + 2] in (('.terraform', 'providers'), ('.terraform', 'plugin-cache')) for i in range(len(parts) - 1))
+    return any(part in _BUILD or part.endswith(('.egg-info', '.pyc')) for part in parts) or any(
+        parts[i : i + 2] in (('.terraform', 'providers'), ('.terraform', 'plugin-cache')) for i in range(len(parts) - 1)
+    )
 
 
 _SECRET = ('.env*', '*.pem', '*.key', 'id_rsa*', 'credentials*', '*.p12')
@@ -999,9 +1289,22 @@ _SECRET = ('.env*', '*.pem', '*.key', 'id_rsa*', 'credentials*', '*.p12')
 _MARKER_LABEL = re.compile(rb'^(<{7}|\|{7}|>{7})(?: .*)?$', re.M)
 
 
+@contextmanager
+def _merge_scratch(gitdir):
+    scratch = Path(gitdir) / ('tico-merge-check-' + uuid.uuid4().hex)
+    outside_installation(scratch)
+    scratch.mkdir(mode=0o700)
+    try:
+        yield scratch
+    finally:
+        shutil.rmtree(scratch)
+
+
 def _untouched_conflict(path, gitdir, name, env):
     """True when a conflicted file is still exactly git's own conflicted text for its stages: nothing resolved or edited,
     line endings included. Bytes throughout, so no text decoding or newline translation can make two files look alike."""
+    outside_installation(path)
+    outside_installation(gitdir)
     try:
         data = (path / name).read_bytes()
         data.decode('utf-8')  # a conflicted file that is not text is not git's own text here: keep it
@@ -1009,22 +1312,41 @@ def _untouched_conflict(path, gitdir, name, env):
         return False
     stages = {}
     for stage in ('1', '2', '3'):
-        shown = isolation.run([*safe_git.prefix(path), '-C', str(path), 'show', f':{stage}:{name}'],
-                              env=safe_git.environment(env), capture_output=True, stdin=subprocess.DEVNULL, timeout=120)
+        shown = isolation.run(
+            [*safe_git.prefix(path), '-C', str(path), 'show', f':{stage}:{name}'],
+            env=safe_git.environment(env),
+            capture_output=True,
+            stdin=subprocess.DEVNULL,
+            timeout=120,
+        )
         if shown.returncode == 0:
             stages[stage] = shown.stdout
     if '2' not in stages or '3' not in stages:
         return False
-    with tempfile.TemporaryDirectory(dir=gitdir) as scratch:
+    with _merge_scratch(gitdir) as scratch:
         files = {}
         for stage in ('1', '2', '3'):
             files[stage] = Path(scratch) / ('stage' + stage)
             files[stage].write_bytes(stages.get(stage, b''))
         shaped = _MARKER_LABEL.sub(rb'\1', data)
         for flags in ([], ['--diff3']):
-            merged = isolation.run([*safe_git.prefix(path), '-C', str(path), 'merge-file', '-p', *flags,
-                                    str(files['2']), str(files['1']), str(files['3'])],
-                                   env=safe_git.environment(env), capture_output=True, stdin=subprocess.DEVNULL, timeout=120)
+            merged = isolation.run(
+                [
+                    *safe_git.prefix(path),
+                    '-C',
+                    str(path),
+                    'merge-file',
+                    '-p',
+                    *flags,
+                    str(files['2']),
+                    str(files['1']),
+                    str(files['3']),
+                ],
+                env=safe_git.environment(env),
+                capture_output=True,
+                stdin=subprocess.DEVNULL,
+                timeout=120,
+            )
             if 1 <= merged.returncode <= 127 and _MARKER_LABEL.sub(rb'\1', merged.stdout) == shaped:
                 return True
     return False
@@ -1046,7 +1368,9 @@ def _clear_merge(path, row, env):
         return
     if row.get('release'):
         raise ValueError('kept: merge in progress; finish or abort it to free this worktree')
-    unresolved = 'kept: merge in progress with resolved or unrecognised conflicts; commit or abort it to free this worktree'
+    unresolved = (
+        'kept: merge in progress with resolved or unrecognised conflicts; commit or abort it to free this worktree'
+    )
     if any((gitdir / name).exists() for name in ('CHERRY_PICK_HEAD', 'REVERT_HEAD', 'rebase-merge', 'rebase-apply')):
         raise ValueError(unresolved)
     listed = git(path, 'ls-files', '-u', '-z', env=env).stdout.split('\0')
@@ -1057,12 +1381,21 @@ def _clear_merge(path, row, env):
     if not tree:
         raise ValueError(unresolved)
     # Renames off: a staged deletion paired with an identical addition must still be listed as a deletion.
-    touched = set(filter(None, git(path, 'diff', '--no-renames', '--name-only', '-z', 'HEAD', 'MERGE_HEAD', env=env).stdout.split('\0')))
-    touched |= set(filter(None, git(path, 'diff', '--no-renames', '--cached', '--name-only', '-z', env=env).stdout.split('\0')))
+    touched = set(
+        filter(
+            None,
+            git(path, 'diff', '--no-renames', '--name-only', '-z', 'HEAD', 'MERGE_HEAD', env=env).stdout.split('\0'),
+        )
+    )
+    touched |= set(
+        filter(None, git(path, 'diff', '--no-renames', '--cached', '--name-only', '-z', env=env).stdout.split('\0'))
+    )
     if any('\ufffd' in name for name in touched | unmerged):
         raise ValueError(unresolved)
     # The abort refuses an unstaged edit to a path the merge itself changed, so keep that case with the same error.
-    changed = set(filter(None, git(path, 'diff', '--no-renames', '--name-only', '-z', 'HEAD', tree, env=env).stdout.split('\0')))
+    changed = set(
+        filter(None, git(path, 'diff', '--no-renames', '--name-only', '-z', 'HEAD', tree, env=env).stdout.split('\0'))
+    )
     edited = set(filter(None, git(path, 'diff', '--no-renames', '--name-only', '-z', env=env).stdout.split('\0')))
     if (edited & changed) - unmerged:
         raise ValueError(unresolved)
@@ -1072,7 +1405,9 @@ def _clear_merge(path, row, env):
         # Mode and blob both: a staged mode change on a path the merge touched would otherwise be reset by the abort.
         # Literal name: a pathspec would read `[`, `*` or `?` as patterns and match a sibling file's entry.
         ours = git(path, '--literal-pathspecs', 'ls-files', '-s', '--', name, env=env, check=False).stdout.split()[:2]
-        expected = git(path, '--literal-pathspecs', 'ls-tree', tree, '--', name, env=env, check=False).stdout.split()[:3:2]
+        expected = git(path, '--literal-pathspecs', 'ls-tree', tree, '--', name, env=env, check=False).stdout.split()[
+            :3:2
+        ]
         if ours != expected:
             raise ValueError(unresolved)
     git(path, 'merge', '--abort', env=env)
@@ -1089,8 +1424,12 @@ def _act(workspace, row, action, env, vault_values=(), before_remove=lambda: Tru
             if not row.get('repo'):
                 return 'removed'
             base = Path(workspace) / 'repos' / repositories.base_folder(row['repo'])
-            if (base.parent.is_symlink() or base.is_symlink() or (base / '.git').is_symlink()
-                    or base.resolve().parent != base.parent.resolve()):
+            if (
+                base.parent.is_symlink()
+                or base.is_symlink()
+                or (base / '.git').is_symlink()
+                or base.resolve().parent != base.parent.resolve()
+            ):
                 raise ValueError('Worktree base points outside repos')
             if base.exists():
                 git(base, 'worktree', 'prune', '--expire', 'now', env=env)
@@ -1100,12 +1439,18 @@ def _act(workspace, row, action, env, vault_values=(), before_remove=lambda: Tru
         branch = checked_branch(row['branch'])
         if not (path / '.git').is_file():
             raise ValueError('Tracked path is not a worktree; left as it is')
-        common = Path(git(path, 'rev-parse', '--path-format=absolute', '--git-common-dir', env=env).stdout.strip()).resolve()
+        common = Path(
+            git(path, 'rev-parse', '--path-format=absolute', '--git-common-dir', env=env).stdout.strip()
+        ).resolve()
         if Path(workspace).resolve() not in common.parents:
             raise ValueError('Worktree base is outside the team workspace')
         base = common.parent
         default = row.get('default_branch')
-        origin_head = git(base, 'symbolic-ref', '--short', 'refs/remotes/origin/HEAD', env=env, check=False).stdout.strip().removeprefix('origin/')
+        origin_head = (
+            git(base, 'symbolic-ref', '--short', 'refs/remotes/origin/HEAD', env=env, check=False)
+            .stdout.strip()
+            .removeprefix('origin/')
+        )
         defaults = {name for name in (default, origin_head) if name}
         if not defaults:
             raise ValueError('Repository default branch is unknown; refresh Repositories before cleanup')
@@ -1113,7 +1458,9 @@ def _act(workspace, row, action, env, vault_values=(), before_remove=lambda: Tru
         try:
             _clear_merge(path, row, env)
         except UnicodeDecodeError:
-            raise ValueError('kept: merge in progress with resolved or unrecognised conflicts; commit or abort it to free this worktree') from None
+            raise ValueError(
+                'kept: merge in progress with resolved or unrecognised conflicts; commit or abort it to free this worktree'
+            ) from None
         ignored = git(path, 'ls-files', '--others', '--ignored', '--exclude-standard', '-z', env=env).stdout.split('\0')
         if any(name and not build_file(name) for name in ignored):
             raise ValueError('kept: ignored files')
@@ -1130,10 +1477,20 @@ def _act(workspace, row, action, env, vault_values=(), before_remove=lambda: Tru
             if int(git(path, 'rev-list', '--count', 'HEAD', '--not', '--remotes=origin', env=env).stdout):
                 raise ValueError('kept: unpushed commits; push them to free this worktree')
         elif dirty:
-            names = (git(path, 'diff', 'HEAD', '--name-only', '-z', env=env).stdout
-                     + git(path, 'ls-files', '--others', '--exclude-standard', '-z', env=env).stdout).split('\0')
-            skipped = [name for name in names if name and (any(fnmatch.fnmatch(Path(name).name.lower(), pat) for pat in _SECRET)
-                       or (path / name).is_symlink() or ((path / name).exists() and (path / name).stat().st_size > 20 * 1024 ** 2))]
+            names = (
+                git(path, 'diff', 'HEAD', '--name-only', '-z', env=env).stdout
+                + git(path, 'ls-files', '--others', '--exclude-standard', '-z', env=env).stdout
+            ).split('\0')
+            skipped = [
+                name
+                for name in names
+                if name
+                and (
+                    any(fnmatch.fnmatch(Path(name).name.lower(), pat) for pat in _SECRET)
+                    or (path / name).is_symlink()
+                    or ((path / name).exists() and (path / name).stat().st_size > 20 * 1024**2)
+                )
+            ]
             if skipped:
                 row['skipped_files'] = [name[:1000] for name in skipped[:100]]
                 raise ValueError('kept: skipped unsafe or oversized files: ' + ', '.join(skipped)[:150])
@@ -1142,12 +1499,18 @@ def _act(workspace, row, action, env, vault_values=(), before_remove=lambda: Tru
             if exists and git(path, 'merge-base', '--is-ancestor', branch, 'HEAD', env=env, check=False).returncode:
                 raise ValueError('Task branch has separate history; kept worktree to preserve unpushed commits')
             from . import redact
+
             # The secret scan reads the patch leniently: a byte that is not text must not stop the save, which commits
             # the bytes as they are.
             patch = git(path, 'diff', '--no-ext-diff', '--no-textconv', 'HEAD', env=env, errors='replace').stdout
-            patch += ''.join((path / name).read_text(errors='replace') for name in names if name and (path / name).is_file())
+            patch += ''.join(
+                (path / name).read_text(errors='replace') for name in names if name and (path / name).is_file()
+            )
             known = redact.for_turn(env, vault_values)
-            possible_secret = re.search(r'-----BEGIN (?:[A-Z ]+ )?PRIVATE KEY-----|(?:gh[pousr]_|github_pat_)[A-Za-z0-9_]{20,}|AKIA[0-9A-Z]{16}|sk-(?:proj-|ant-)?[A-Za-z0-9_-]{24,}', patch)
+            possible_secret = re.search(
+                r'-----BEGIN (?:[A-Z ]+ )?PRIVATE KEY-----|(?:gh[pousr]_|github_pat_)[A-Za-z0-9_]{20,}|AKIA[0-9A-Z]{16}|sk-(?:proj-|ant-)?[A-Za-z0-9_-]{24,}',
+                patch,
+            )
             if redact.scrub_log(patch) != patch or known and known.holds(patch.encode()) or possible_secret:
                 raise ValueError('Possible secret in unsaved changes; kept worktree')
             if current != wip:
@@ -1156,7 +1519,17 @@ def _act(workspace, row, action, env, vault_values=(), before_remove=lambda: Tru
                         raise ValueError('Saved work has separate history; kept worktree')
                 git(path, 'switch', '-C', wip, env=env)
             git(path, 'add', '--all', env=env)
-            git(path, '-c', 'user.name=Tico', '-c', 'user.email=bot@example.com', 'commit', '-m', 'Save task work before cleanup', env=env)
+            git(
+                path,
+                '-c',
+                'user.name=Tico',
+                '-c',
+                'user.email=bot@example.com',
+                'commit',
+                '-m',
+                'Save task work before cleanup',
+                env=env,
+            )
             git(path, 'push', 'origin', 'HEAD:refs/heads/' + wip, env=env)
             if branch not in defaults:
                 try:
@@ -1183,7 +1556,10 @@ def _act(workspace, row, action, env, vault_values=(), before_remove=lambda: Tru
                     else:
                         git(path, 'push', 'origin', branch + ':refs/heads/' + branch, env=env)
         if not before_remove():
-            if branch not in defaults and git(path, 'symbolic-ref', '--short', 'HEAD', env=env, check=False).stdout.strip() == wip:
+            if (
+                branch not in defaults
+                and git(path, 'symbolic-ref', '--short', 'HEAD', env=env, check=False).stdout.strip() == wip
+            ):
                 git(path, 'switch', branch, env=env)
             raise Deferred('Task reopened or bot is running; retry cleanup later')
         git(base, 'worktree', 'remove', str(path), env=env)
@@ -1215,6 +1591,7 @@ class Deferred(ValueError):
 
 
 def act(workspace, row, action, env, vault_values=(), before_remove=lambda: True):
+    safe_path(workspace, row['path'])
     with locked(workspace, row['path']):
         try:
             return _act(workspace, row, action, env, vault_values, before_remove)
@@ -1225,7 +1602,16 @@ def act(workspace, row, action, env, vault_values=(), before_remove=lambda: True
 
 
 class Worktrees:
-    def __init__(self, workspace, client, idle=lambda: True, environment=lambda bot: safe_git.process_environment(), vault_values=lambda bot: (), retain_vault=lambda owners: None, refresh=None):
+    def __init__(
+        self,
+        workspace,
+        client,
+        idle=lambda: True,
+        environment=lambda bot: safe_git.process_environment(),
+        vault_values=lambda bot: (),
+        retain_vault=lambda owners: None,
+        refresh=None,
+    ):
         self.workspace, self.client, self.idle = workspace, client, idle
         self.environment = environment
         self.refresh = refresh
@@ -1305,13 +1691,25 @@ class Worktrees:
             if not row or time.monotonic() < self.retry.get(row['id'], (0, 0))[0]:
                 continue
             detail = json.loads(row.get('detail_json') or '{}')
-            closed = row['task_status'] in ('done', 'closed', 'declined') or row['bot_state'] == 'archived' or detail.get('delete_requested')
+            closed = (
+                row['task_status'] in ('done', 'closed', 'declined')
+                or row['bot_state'] == 'archived'
+                or detail.get('delete_requested')
+            )
             released = bool(action.get('release') and detail.get('release_requested'))
-            if action['action'] == 'remove' and not (closed or released) or action['action'] in ('restore', 'prepare') and closed:
+            if (
+                action['action'] == 'remove'
+                and not (closed or released)
+                or action['action'] in ('restore', 'prepare')
+                and closed
+            ):
                 continue
             # A turn in the bot's main checkout or in this task's lane may be using the worktree; turns on the
             # bot's other tasks run in their own session worktrees and do not hold maintenance back.
-            bot_lock, lane_lock = self.bot_lock(row['owner']), self.lane_lock(row['owner'], 'task:' + str(row['task_id']))
+            bot_lock, lane_lock = (
+                self.bot_lock(row['owner']),
+                self.lane_lock(row['owner'], 'task:' + str(row['task_id'])),
+            )
             if not bot_lock.acquire(blocking=False):
                 continue
             if not lane_lock.acquire(blocking=False):
@@ -1335,53 +1733,99 @@ class Worktrees:
                         raise ValueError('No repository credential for this worktree')
                     else:
                         env.update(git_credentials.environment(granted['token']))
-                        repo = next((r for r in self.client.get('runners/me/repositories')['repositories'] if r['full_name'].lower() == row['repo'].lower()), {})
+                        repo = next(
+                            (
+                                r
+                                for r in self.client.get('runners/me/repositories')['repositories']
+                                if r['full_name'].lower() == row['repo'].lower()
+                            ),
+                            {},
+                        )
                 else:
                     repo = {}
                 action_row = {**row, **repo, **action, 'full_name': row['repo']}
-                if action['action'] in ('restore', 'prepare') and row.get('repo') and not repo.get('machine_git') and self.refresh:
+                if (
+                    action['action'] in ('restore', 'prepare')
+                    and row.get('repo')
+                    and not repo.get('machine_git')
+                    and self.refresh
+                ):
                     try:
                         action_row['_mirror_refresh'] = self.refresh(row['repo'], granted['token'])
                     except (ValueError, OSError, subprocess.SubprocessError):
                         pass  # worktree_base reports the cached mirror's age if refresh is unavailable
+
                 def still_closed():
-                    fresh = next((r for r in self.client.get('runners/me/worktrees')['worktrees'] if r['id'] == row['id']), None)
+                    fresh = next(
+                        (r for r in self.client.get('runners/me/worktrees')['worktrees'] if r['id'] == row['id']), None
+                    )
                     fresh_detail = json.loads(fresh.get('detail_json') or '{}') if fresh else {}
-                    return fresh is not None and self.bot_idle(row['owner'], row['task_id']) and (fresh['task_status'] in ('done', 'closed', 'declined') or fresh['bot_state'] == 'archived' or fresh_detail.get('delete_requested')
-                                                                               or released and fresh_detail.get('release_requested'))
+                    return (
+                        fresh is not None
+                        and self.bot_idle(row['owner'], row['task_id'])
+                        and (
+                            fresh['task_status'] in ('done', 'closed', 'declined')
+                            or fresh['bot_state'] == 'archived'
+                            or fresh_detail.get('delete_requested')
+                            or released
+                            and fresh_detail.get('release_requested')
+                        )
+                    )
+
                 if action['action'] == 'prepare':
                     prepare(self.workspace, row, {**repo, 'full_name': row['repo']}, env, self.client)
                     errors.pop(row['id'], None)
                     self.retry.pop(row['id'], None)
                     continue
-                state = act(self.workspace, action_row, action['action'], env, self.vault_values(row['owner']), still_closed)
+                state = act(
+                    self.workspace, action_row, action['action'], env, self.vault_values(row['owner']), still_closed
+                )
                 restore_pending = action['action'] == 'restore'
                 if restore_pending:
                     expected_head, checkout_target, expected_base = _record_restored_checkout(
-                        self.workspace, row, repo, env)
+                        self.workspace, row, repo, env
+                    )
                 kept = {k: action_row[k] for k in ('snapshot_skipped', 'restore_source') if k in action_row}
                 try:
-                    self.client.patch(f'tasks/{row["task_id"]}/links/{row["id"]}',
-                                      {'state': 'pending' if restore_pending else state,
-                                       'cleanup': action['action'] == 'remove', 'setup_pending': restore_pending,
-                                       **({'checkout_state': 'checkout_ready', 'expected_head': expected_head,
-                                           'checkout_target': checkout_target, 'expected_base': expected_base}
-                                          if restore_pending else {}),
-                                       **kept})
+                    self.client.patch(
+                        f'tasks/{row["task_id"]}/links/{row["id"]}',
+                        {
+                            'state': 'pending' if restore_pending else state,
+                            'cleanup': action['action'] == 'remove',
+                            'setup_pending': restore_pending,
+                            **(
+                                {
+                                    'checkout_state': 'checkout_ready',
+                                    'expected_head': expected_head,
+                                    'checkout_target': checkout_target,
+                                    'expected_base': expected_base,
+                                }
+                                if restore_pending
+                                else {}
+                            ),
+                            **kept,
+                        },
+                    )
                 except APIError as exc:
                     if not (restore_pending and _server_lacks_checkout_fields(exc)):
                         raise
                     # A server from before checkout records refuses their fields: report the restore as it
                     # knew it, present with setup pending, rather than retrying a body it will always refuse.
-                    self.client.patch(f'tasks/{row["task_id"]}/links/{row["id"]}',
-                                      {'state': state, 'cleanup': False, 'setup_pending': True, **kept})
+                    self.client.patch(
+                        f'tasks/{row["task_id"]}/links/{row["id"]}',
+                        {'state': state, 'cleanup': False, 'setup_pending': True, **kept},
+                    )
                     restore_pending = False
                 row['state'] = 'pending' if restore_pending else state
                 if restore_pending:
                     detail = _detail(row)
-                    detail.update(checkout_state='checkout_ready', setup_pending=True,
-                                  expected_head=expected_head, checkout_target=checkout_target,
-                                  expected_base=expected_base)
+                    detail.update(
+                        checkout_state='checkout_ready',
+                        setup_pending=True,
+                        expected_head=expected_head,
+                        checkout_target=checkout_target,
+                        expected_base=expected_base,
+                    )
                     row['detail_json'] = json.dumps(detail)
                 errors.pop(row['id'], None)
                 self.retry.pop(row['id'], None)
@@ -1391,13 +1835,17 @@ class Worktrees:
                 failed.add(row['id'])
                 if action_row.get('skipped_files'):
                     try:
-                        self.client.patch(f'tasks/{row["task_id"]}/links/{row["id"]}', {'skipped_files': action_row['skipped_files']})
+                        self.client.patch(
+                            f'tasks/{row["task_id"]}/links/{row["id"]}', {'skipped_files': action_row['skipped_files']}
+                        )
                     except Exception:
                         pass
                 errors[row['id']] = ('Worktree action failed; history kept. ' + str(exc))[:300]
             except Exception:
                 failed.add(row['id'])
-                errors[row['id']] = 'Worktree action failed; history kept. Check repository access, network, disk space and permissions'
+                errors[row['id']] = (
+                    'Worktree action failed; history kept. Check repository access, network, disk space and permissions'
+                )
             finally:
                 with self.lock:
                     self.maintaining.discard(row['owner'].removeprefix('bot:'))

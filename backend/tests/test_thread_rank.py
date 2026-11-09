@@ -20,9 +20,14 @@ class FakeDecide:
         self.calls.append({"state": state, "label": label})
         if self.fail:
             raise self.fail
-        return {"model": J.GATEWAY_MODEL, "provider": J.GATEWAY_PROVIDER, "usage": {"input_tokens": 300}, "ms": 90,
-                "cost_usd": 0.00002,
-                "answers": {"importance": {"type": "score", "score": float(self.level - 1), "confidence": 0.8}}}
+        return {
+            "model": J.GATEWAY_MODEL,
+            "provider": J.GATEWAY_PROVIDER,
+            "usage": {"input_tokens": 300},
+            "ms": 90,
+            "cost_usd": 0.00002,
+            "answers": {"importance": {"type": "score", "score": float(self.level - 1), "confidence": 0.8}},
+        }
 
 
 def rank(api, thread_id, level):
@@ -72,11 +77,19 @@ def test_a_finished_task_thread_is_noise_by_rule(api):
 def test_a_task_no_person_owns_or_asked_for_is_noise_by_rule(api):
     with api.app.state.store.transaction() as c:
         made = H.task_create(c, "bot:ops", "Review PR #1", "Details.", "ops", lint=False)
-        assert c.execute(f"SELECT {TR.noise_sql('r')} FROM conversations r WHERE r.id=?",
-                         (made["conversation_id"],)).fetchone()[0] == 1
+        assert (
+            c.execute(
+                f"SELECT {TR.noise_sql('r')} FROM conversations r WHERE r.id=?", (made["conversation_id"],)
+            ).fetchone()[0]
+            == 1
+        )
         person = H.task_create(c, "human:ana", "Ask Ben", "Details.", "ops", lint=False)
-        assert c.execute(f"SELECT {TR.noise_sql('r')} FROM conversations r WHERE r.id=?",
-                         (person["conversation_id"],)).fetchone()[0] == 0
+        assert (
+            c.execute(
+                f"SELECT {TR.noise_sql('r')} FROM conversations r WHERE r.id=?", (person["conversation_id"],)
+            ).fetchone()[0]
+            == 0
+        )
 
 
 def test_important_pages_read_on_through_every_level(api):
@@ -112,13 +125,14 @@ def test_a_pass_ranks_new_threads_once_audits_each_call_and_waits_an_hour(api):
     assert state["thread"]["messages"][-1] == {"from": "person", "text": "Launch is Tuesday"}
     with store.read() as c:
         assert c.execute("SELECT score FROM thread_rankings WHERE thread_id=?", (thread["id"],)).fetchone()[0] == 8
-        audited = c.execute("SELECT count(*) FROM events WHERE action='judge.call' AND target=?",
-                            (model.calls[0]["label"],)).fetchone()[0]
+        audited = c.execute(
+            "SELECT count(*) FROM events WHERE action='judge.call' AND target=?", (model.calls[0]["label"],)
+        ).fetchone()[0]
     assert audited == len(model.calls)
     calls = len(model.calls)
-    assert TR.run_pass(store, at=at, engine=model)["ranked"] == 0          # nothing new
+    assert TR.run_pass(store, at=at, engine=model)["ranked"] == 0  # nothing new
     say(api, thread["id"], "Moved to Wednesday")
-    assert TR.run_pass(store, at=H.shift(at, minutes=10), engine=model)["ranked"] == 0     # within the hour
+    assert TR.run_pass(store, at=H.shift(at, minutes=10), engine=model)["ranked"] == 0  # within the hour
     assert len(model.calls) == calls
     later = TR.run_pass(store, at=H.shift(at, minutes=61), engine=model)
     assert later["ranked"] == 1
@@ -133,8 +147,12 @@ def test_a_failed_call_keeps_the_rank_and_is_still_audited(api):
     assert done["ranked"] == 0 and done["errors"] >= 1
     with store.read() as c:
         assert c.execute("SELECT score FROM thread_rankings WHERE thread_id=?", (thread["id"],)).fetchone()[0] is None
-        assert c.execute("SELECT count(*) FROM events WHERE action='judge.call' AND detail LIKE '%unavailable%'"
-                         ).fetchone()[0] >= 1
+        assert (
+            c.execute(
+                "SELECT count(*) FROM events WHERE action='judge.call' AND detail LIKE '%unavailable%'"
+            ).fetchone()[0]
+            >= 1
+        )
     row = next(t for t in sidebar(api, token="ben-test", sort="important")["threads"] if t["id"] == thread["id"])
     assert row["importance"] == TR.DEFAULT
     # A failed call waits the hour too, so a failing model is not asked again every pass.
@@ -151,8 +169,10 @@ def test_a_level_that_moves_tells_the_lists(api):
 
     def ranked():
         with store.read() as c:
-            return c.execute("SELECT count(*) FROM changes WHERE topic='threads' AND kind='ranked' AND subject_id=?",
-                             (thread["id"],)).fetchone()[0]
+            return c.execute(
+                "SELECT count(*) FROM changes WHERE topic='threads' AND kind='ranked' AND subject_id=?", (thread["id"],)
+            ).fetchone()[0]
+
     with store.transaction() as c:
         TR.save(c, thread["id"], 10, 1, H.now())
     assert ranked() == 1

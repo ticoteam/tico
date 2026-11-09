@@ -1,4 +1,5 @@
 """Migration 20 / cloud 53: derived media may change; version bytes never do."""
+
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS bot_file_versions(
  file_id TEXT NOT NULL REFERENCES bot_files(id), version INTEGER NOT NULL,

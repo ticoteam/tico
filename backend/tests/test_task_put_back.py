@@ -1,4 +1,5 @@
 """Owners can return work to the queue without an immediate automatic restart."""
+
 import pytest
 
 from backend import auto_tasks
@@ -10,8 +11,13 @@ from backend.tests.test_task_lanes import task_bot
 
 def update(api, task, token, status, note=None, expected=200):
     version = get(api, 'tasks/' + task['id'])['task']['version']
-    return post(api, 'tasks/' + task['id'], {'version': version, 'status': status,
-                **({'note': note} if note is not None else {})}, token, expected=expected)
+    return post(
+        api,
+        'tasks/' + task['id'],
+        {'version': version, 'status': status, **({'note': note} if note is not None else {})},
+        token,
+        expected=expected,
+    )
 
 
 def settle(api, machine, attempt):
@@ -114,8 +120,13 @@ def test_done_task_question_refusal_gives_owner_command_and_nonowner_route(api):
     [task] = deck(api, 1)
     attempt = take(api, machine)
     update(api, task, attempt['token'], 'done', 'Finished the requested change.')
-    result = post(api, 'tasks/' + task['id'] + '/ask', {'text': 'Which date should I use?'},
-                  attempt['token'], expected=422)
+    result = post(
+        api,
+        'task-questions',
+        {'on': 'human:ana', 'question': 'Which date should I use?', 'parent': task['id']},
+        attempt['token'],
+        expected=422,
+    )
     assert f"hub task update {task['id']} --status doing" in result['error']['detail']
     assert 'or file a new task' in result['error']['detail']
     with api.app.state.store.transaction() as c:
@@ -137,12 +148,32 @@ def test_done_task_question_refusal_gives_owner_command_and_nonowner_route(api):
 
 def test_dev_return_prefers_on_deck_over_backlog_and_owner_can_reopen_steps_only_done(api):
     machine = task_bot(api, lanes=True)
-    typ = post(api, 'task-types', {'name': 'Dev tickets', 'steps_only': True, 'steps': [
-        {'name': 'Backlog', 'status': 'open'}, {'name': 'On Deck', 'status': 'open'},
-        {'name': 'In Progress', 'status': 'doing'}, {'name': 'Review 1', 'status': 'review'},
-        {'name': 'Done', 'status': 'done'}]})['type']
-    task = post(api, 'tasks', {'owner': 'ops', 'title': 'Build requested feature',
-                             'body': 'Build the requested feature.', 'type': typ['id'], 'step': 'On Deck'})
+    typ = post(
+        api,
+        'task-types',
+        {
+            'name': 'Dev tickets',
+            'steps_only': True,
+            'steps': [
+                {'name': 'Backlog', 'status': 'open'},
+                {'name': 'On Deck', 'status': 'open'},
+                {'name': 'In Progress', 'status': 'doing'},
+                {'name': 'Review 1', 'status': 'review'},
+                {'name': 'Done', 'status': 'done'},
+            ],
+        },
+    )['type']
+    task = post(
+        api,
+        'tasks',
+        {
+            'owner': 'ops',
+            'title': 'Build requested feature',
+            'body': 'Build the requested feature.',
+            'type': typ['id'],
+            'step': 'On Deck',
+        },
+    )
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE jobs SET state='canceled'")
     attempt = take(api, machine)
@@ -163,12 +194,32 @@ def test_dev_return_prefers_on_deck_over_backlog_and_owner_can_reopen_steps_only
 @pytest.mark.parametrize('release', ['manual', 'remove', 'finish'])
 def test_put_back_from_blocked_keeps_queue_destination_and_hold(api, monkeypatch, release):
     from backend import task_relations as TR
+
     machine = task_bot(api, lanes=True)
-    typ = post(api, 'task-types', {'name': 'Dev tickets', 'steps': [
-        {'name': 'Backlog', 'status': 'open'}, {'name': 'On Deck', 'status': 'open'},
-        {'name': 'In Progress', 'status': 'doing'}, {'name': 'Done', 'status': 'done'}]})['type']
-    task = post(api, 'tasks', {'owner': 'ops', 'title': 'Build the queued feature',
-                             'body': 'Build it.', 'type': typ['id'], 'step': 'In Progress'})
+    typ = post(
+        api,
+        'task-types',
+        {
+            'name': 'Dev tickets',
+            'steps': [
+                {'name': 'Backlog', 'status': 'open'},
+                {'name': 'On Deck', 'status': 'open'},
+                {'name': 'In Progress', 'status': 'doing'},
+                {'name': 'Done', 'status': 'done'},
+            ],
+        },
+    )['type']
+    task = post(
+        api,
+        'tasks',
+        {
+            'owner': 'ops',
+            'title': 'Build the queued feature',
+            'body': 'Build it.',
+            'type': typ['id'],
+            'step': 'In Progress',
+        },
+    )
     blocker = post(api, 'tasks', {'owner': 'ana', 'title': 'Supply a dependency', 'body': 'Supply it.'})
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE jobs SET state='canceled'")
@@ -213,11 +264,29 @@ def test_put_back_from_blocked_keeps_queue_destination_and_hold(api, monkeypatch
 
 def test_auto_start_back_off_on_engineering_board_keeps_queue_resume_without_a_turn(api):
     machine = task_bot(api, lanes=True)
-    typ = post(api, 'task-types', {'name': 'Dev tickets', 'steps': [
-        {'name': 'On Deck', 'status': 'open'}, {'name': 'In Progress', 'status': 'doing'},
-        {'name': 'Done', 'status': 'done'}]})['type']
-    task = post(api, 'tasks', {'owner': 'ops', 'title': 'Build the dependent feature',
-                             'body': 'Build it.', 'type': typ['id'], 'step': 'On Deck'})
+    typ = post(
+        api,
+        'task-types',
+        {
+            'name': 'Dev tickets',
+            'steps': [
+                {'name': 'On Deck', 'status': 'open'},
+                {'name': 'In Progress', 'status': 'doing'},
+                {'name': 'Done', 'status': 'done'},
+            ],
+        },
+    )['type']
+    task = post(
+        api,
+        'tasks',
+        {
+            'owner': 'ops',
+            'title': 'Build the dependent feature',
+            'body': 'Build it.',
+            'type': typ['id'],
+            'step': 'On Deck',
+        },
+    )
     blocker = post(api, 'tasks', {'owner': 'ana', 'title': 'Prepare the dependency', 'body': 'Prepare it.'})
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE jobs SET state='canceled'")

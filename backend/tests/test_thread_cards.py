@@ -16,8 +16,9 @@ CARA = Identity("human:cara", "human", "cara@acme.example")
 
 def home_cards(c, actor):
     home = threads.home(c, actor, create=True)
-    rows = c.execute("SELECT id, body, refs FROM messages WHERE conversation_id=? AND kind='notice' "
-                     "ORDER BY seq", (home["id"],)).fetchall()
+    rows = c.execute(
+        "SELECT id, body, refs FROM messages WHERE conversation_id=? AND kind='notice' ORDER BY seq", (home["id"],)
+    ).fetchall()
     cards = []
     for row in rows:
         refs = H._json(row["refs"], {}) or {}
@@ -65,6 +66,7 @@ def test_a_bots_card_never_wakes_the_bot(api):
         updates.post(c, "boss", "- Planned the launch.", kind="daily", day=DAY)
         cards = home_cards(c, "bot:boss")
         assert len(cards) == 1
-        woke = c.execute("SELECT COUNT(*) FROM message_deliveries WHERE message_id=? AND recipient='bot:boss'",
-                         (cards[0]["id"],)).fetchone()[0]
+        woke = c.execute(
+            "SELECT COUNT(*) FROM message_deliveries WHERE message_id=? AND recipient='bot:boss'", (cards[0]["id"],)
+        ).fetchone()[0]
     assert woke == 0

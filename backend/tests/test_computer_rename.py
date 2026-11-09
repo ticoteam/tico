@@ -3,6 +3,7 @@ nothing at enrollment puts the old name back: neither the same machine retrying 
 
 Ana owns the company, Ben is an admin, Cara is a member (the base fixture).
 """
+
 from backend import cloud_machines as CM
 from backend.tests.test_api import api, get, post, put, runner  # noqa: F401  (api is a fixture)
 from backend.tests.test_settings_assistant import mcp
@@ -26,7 +27,9 @@ def test_an_owner_or_admin_renames_a_computer_and_a_member_cannot(api):  # noqa:
     assert label_of(api, rid) == "Studio Mac"
     assert {m["id"]: m["label"] for m in get(api, "operations")["computers"]}[rid] == "Studio Mac"
     with api.app.state.store.read() as c:
-        event = c.execute("SELECT actor,detail FROM events WHERE action='runner.renamed' AND target=?", (rid,)).fetchone()
+        event = c.execute(
+            "SELECT actor,detail FROM events WHERE action='runner.renamed' AND target=?", (rid,)
+        ).fetchone()
     assert event["actor"] == "human:ana" and '"before": "Test Mac"' in event["detail"]
     # The old spelling still answers; an admin may rename too.
     post(api, f"runners/{rid}/label", {"label": "Build box"}, token="ben-test")
@@ -34,9 +37,12 @@ def test_an_owner_or_admin_renames_a_computer_and_a_member_cannot(api):  # noqa:
     refused = rename(api, rid, "Cara's now", token="cara-test", expected=403)
     assert refused["error"]["code"] == "forbidden" and label_of(api, rid) == "Build box"
     # Its next heartbeat keeps the name.
-    post(api, "runners/heartbeat", {"version": "test", "platform": "test", "capacity": 1, "readiness": {},
-                                         "capabilities": []},
-         token=machine["token"])
+    post(
+        api,
+        "runners/heartbeat",
+        {"version": "test", "platform": "test", "capacity": 1, "readiness": {}, "capabilities": []},
+        token=machine["token"],
+    )
     assert label_of(api, rid) == "Build box"
     rename(api, "no-such-computer", "x", expected=404)
     post(api, f"computers/{rid}/revoke", {})
@@ -58,7 +64,7 @@ def test_the_same_machine_retrying_its_enrollment_after_a_rename_keeps_the_new_n
     rename(api, first["runner_id"], "Studio Mac")
     again = post(api, "runners/enroll", {"code": code, "label": "Test Mac", "platform": "test"})
     assert again == first and label_of(api, first["runner_id"]) == "Studio Mac"
-    rename(api, first["runner_id"], "Studio Mac 2")         # a second rename still knows the name it enrolled with
+    rename(api, first["runner_id"], "Studio Mac 2")  # a second rename still knows the name it enrolled with
     assert post(api, "runners/enroll", {"code": code, "label": "Test Mac", "platform": "test"}) == first
     # Another machine with the same code is still refused, under either name.
     post(api, "runners/enroll", {"code": code, "label": "Other Mac", "platform": "test"}, expected=409)
@@ -95,8 +101,12 @@ def test_with_assistant_acts_without_asking_off_a_rename_is_a_confirm_card_the_p
     rid = runner(api, label="Test Mac")["runner_id"]
     put(api, "access/rules", {"assistant_direct": False})
     r, attempt = assistant_turn(api, "ana-test", "Rename Test Mac to Studio Mac")
-    err, card = mcp(api, "hub_settings_set", {"key": "computer.label", "value": "Studio Mac", "computer": rid,
-                                              "on_behalf_of": "turn"}, attempt["token"])
+    err, card = mcp(
+        api,
+        "hub_settings_set",
+        {"key": "computer.label", "value": "Studio Mac", "computer": rid, "on_behalf_of": "turn"},
+        attempt["token"],
+    )
     assert not err and card["needs_confirm"] is True, card
     assert label_of(api, rid) == "Test Mac"
     done = post(api, f"assistant/actions/{card['action']['id']}/confirm", {}, token="ana-test")["action"]

@@ -94,8 +94,7 @@ credential goes in Credentials, never in `secrets/<bot>.env`.
   Team Owner asked; only `deleted: true` proves it was deleted.
 - **Tasks for humans:** never file a second task for an open condition. Ask only for what only a person can give: a decision, a payment, a sign-in, never a list of inputs. Close a task at once when its condition is met. Their reply on the task counts: never tell a person to message BotOps or repeat a phrase elsewhere. Read `playbooks/human-tasks.md` before you file or close one. A waiting note names no command, path or tool name. Do not leave a worktree open just because its requester is a bot or keeper.
 - **Sending outside the team** is turned on only when the human asks in their own chat message (`playbooks/turn-on-sending.md`).
-  Never edit `outbound_send` or `forward_to` in any bot's `bot.yaml`, your own included: that switch is a person's, in Tico
-  (`hub bot mail`).
+  Never change any bot's sending policy, your own included: it is a person's, in Tico (Tools > the mailbox > Limits).
 - Improve and merge this bot's own repository after its checks pass.
 - Never invent a run, log line or check result.
 
@@ -122,7 +121,7 @@ credential goes in Credentials, never in `secrets/<bot>.env`.
 - **Write for the bot that reads it.** Present tense, current rules, no dates.
 
 ## Replies between bots
-Ask another bot with `hub question ask`. When a bot's ordinary message asks for a reply, send it with
+Ask another bot with `hub message send <bot> "<question>" --needs-action`. When a bot asks for a reply, send it with
 `hub message send <sender> "<reply>"`, so that bot is not left waiting (`playbooks/commands.md`).
 
 ## Skills
