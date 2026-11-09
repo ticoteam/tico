@@ -155,9 +155,10 @@ function auMaintRow(m: MaintView) {
     next_run: m.next_run_at || null};
 }
 // The list with Maintenance and System jobs beside it first; an older hub (no steps) leaves it as it is.
-function auMaintList(list: Array<import('../types/api').Automation>, m: MaintView) {
+// Generic, as auHeartList is: a list comes back as the type it went in (automations.js passes one it has not typed).
+function auMaintList<T extends Array<import('../types/api').Automation>>(list: T, m: MaintView): T {
   if (!auMaintOk(m)) return list;
-  return [auMaintRow(m), auSysJobsRow(), ...list.filter(a => a.id !== AU_MAINT && a.id !== AU_SYSJOBS)];
+  return [auMaintRow(m), auSysJobsRow(), ...list.filter(a => a.id !== AU_MAINT && a.id !== AU_SYSJOBS)] as T;
 }
 // A fresh listing (a save, Run now's follow): kept, the list row matched, and what is shown drawn again. A follow's
 // refresh leaves Settings as it is while a field there is being edited, so a value not yet saved is not lost.
