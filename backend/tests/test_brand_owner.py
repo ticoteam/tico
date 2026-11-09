@@ -136,3 +136,21 @@ def test_a_company_that_hired_a_brand_manager_keeps_it(environment, bot_id):
     with api.app.state.store.transaction() as c:
         assert api.app.state.onboarding.ensure_brand_owner(c) is None
     assert theirs() == before and len(before[0]) == 1
+
+
+
+def test_the_updates_and_automations_owners_are_built_in_like_the_brand_owner(environment):
+    """The two section owners every new company gets are the owner's alone and can't be archived."""
+    api = environment(seed={}, cards=BASE)
+    for slug in ("updates-owner", "automations-owner"):
+        shutil.copytree(TEMPLATE.parent / slug, Path(api.app.state.store.settings.catalog_dir) / slug)
+    machine(api)
+    draft(api)
+    assert api.post("/api/v2/onboarding/complete", json={}, headers=signed_in()).status_code == 200
+    for slug in ("updates-owner", "automations-owner"):
+        assert api.app.state.auth.system_bot(slug), slug
+        with api.app.state.store.read() as c:
+            row = c.execute("SELECT revision FROM bot_config WHERE bot=?", (slug,)).fetchone()
+        assert row, slug  # a required card: setup made it
+        gone = api.post(f"/api/v2/bots/{slug}/archive", json={"expected_revision": row[0]}, headers=signed_in())
+        assert gone.status_code == 409 and gone.json()["error"]["code"] == "system_bot", slug
