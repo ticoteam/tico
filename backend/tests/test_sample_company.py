@@ -15,6 +15,7 @@ from backend.auth import Identity
 from backend.company_file import from_yaml
 from backend.config import Settings
 from backend.store import H, encode
+from backend.tests import api_template
 from backend import bot_settings as BS
 
 OWNER_EMAIL = "owner@sample.example"
@@ -56,11 +57,18 @@ def settings_for(tmp_path, **overrides):
 
 
 @pytest.fixture
-def environment(tmp_path):
+def environment(request, tmp_path_factory, tmp_path):
     """A signed-in loopback environment on the shipped catalog, seeded like a fresh install."""
     clients = []
+    copied = []
 
     def build(seed_roster=True, **overrides):
+        # The first build of a test gets its own copy of the template; later builds in the same test open that same
+        # database, as the restart checks rely on.
+        if not copied:
+            template = api_template.template(request, tmp_path_factory, "sample-company", settings_for)
+            api_template.copy_into(template, tmp_path / "hub.db")
+            copied.append(True)
         client = TestClient(create_app(settings_for(tmp_path, **overrides)))
         client.__enter__()
         clients.append(client)
