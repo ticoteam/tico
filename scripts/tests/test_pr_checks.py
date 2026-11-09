@@ -733,7 +733,7 @@ def test_groups_are_sized_to_the_job_target_and_browser_scripts_split_by_measure
     )
     assert checks.run(tmp_path / "plan.json", "browser-1") == 0
     command, env = calls[-1]
-    assert command == ["node", "scripts/ui-tests.cjs", "-j", str(checks.WORKERS), "chat"]
+    assert command == ["node", "scripts/ui-tests.cts", "-j", str(checks.WORKERS), "chat"]
     assert env["TICO_UI_TIMINGS"] == str(tmp_path / "ci-results" / "browser-1.json")
     # The UI helpers import the backend through TICO_PYTHON: the suite's own interpreter, never a bare python3.
     assert env["TICO_PYTHON"] == sys.executable
@@ -1995,7 +1995,7 @@ def test_a_local_pass_runs_the_ci_selection_and_prints_a_receipt_the_review_gate
     test, check = pytest_leg(python)
     assert test[-1] == "tests/test_app.py" and "pytest" in test and test[test.index("-n") + 1] == "2"
     assert check[1:3] == ["scripts/pr_checks.py", "junit-ran"]  # a leg whose every test skipped is no pass
-    assert "scripts/ui-tests.cjs" in browser and browser[-1] == "chat"
+    assert "scripts/ui-tests.cts" in browser and browser[-1] == "chat"
     # Heavy local runs share the computer's slots (scripts/heavy.sh), as a bot's full suite does.
     assert all(c[1].endswith("scripts/heavy.sh") for c in branch.commands)
     line = receipt_line(capsys.readouterr().out)

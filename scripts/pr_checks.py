@@ -806,7 +806,7 @@ CONFTEST_BELOW_LIMIT = 25
 # that skips the job runs those checks itself (image_checks).
 CADDY_INPUTS = ("Dockerfile", ".dockerignore", "compose.yaml", "compose.screen-relay.yaml", "docker/", "relay-rs/")
 CADDY_ROOTS = ("backend/caddy_assets.py", "backend/tests/test_caddy_container.py")
-UI_RUNNER = "scripts/ui-tests.cjs"
+UI_RUNNER = "scripts/ui-tests.cts"
 # The factory simulation (evals/factory) runs the Dev board end to end, and the merge queue runs it when a change reaches
 # what it runs. That reach is measured, not mapped: evals/factory/call_path.json lists the Python files a run of the sim
 # executed, the non-Python files it read and the folders it listed (python -m evals.factory.run --seeds 1-3
@@ -969,7 +969,7 @@ def selection(changed, event="pull_request", root=ROOT, graph=None, base=None, a
     5. An index.html that changes <script src> names adds the files it now names (prepare, through script_changes).
 
     `added` names the new files (None: any changed file may be new) and `core` the core browser scripts (None: read from
-    scripts/ui-tests.cjs).
+    scripts/ui-tests.cts).
     """
     rust = sorted(crate for crate, inputs in RUST_INPUTS.items() if any(p.startswith(inputs) for p in changed))
     runner = bool(rust) or any(
@@ -1714,9 +1714,9 @@ def prepare(event, base, output, timings_path=None, head="HEAD", light=False):
 
 
 def browser_scripts(args, root=ROOT):
-    """The browser scripts these ui-tests.cjs arguments run (CORE for none), by name."""
+    """The browser scripts these ui-tests.cts arguments run (CORE for none), by name."""
     out = subprocess.run(
-        ["node", "scripts/ui-tests.cjs", "--list", *args], cwd=root, capture_output=True, text=True, check=True
+        ["node", "scripts/ui-tests.cts", "--list", *args], cwd=root, capture_output=True, text=True, check=True
     ).stdout.split()
     if not out:
         raise RuntimeError(f"Browser selection {args} listed no scripts")
@@ -1743,7 +1743,7 @@ def run(plan_path, suite, root=None, quarantine=False):
     if suite.startswith("browser-"):
         if not files:
             raise RuntimeError("A browser check requires an explicit nonempty script list")
-        command = ["node", "scripts/ui-tests.cjs", "-j", str(WORKERS), *files]
+        command = ["node", "scripts/ui-tests.cts", "-j", str(WORKERS), *files]
         # The UI helpers import the backend with TICO_PYTHON (ui/tests/support/page.cts); this interpreter has the
         # locked requirements, while a bare python3 on the runner's PATH may not (no cryptography).
         env = {

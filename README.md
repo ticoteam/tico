@@ -322,7 +322,7 @@ python -m pytest -q          # parallel by default (pytest-xdist); add -n 0 to d
 ```
 
 Browser checks need `npm ci` and a Playwright browser (`npx playwright install chromium`), then
-`npm run test:ui` (the core scripts in `ui/tests/`, three at a time; `--all` runs every script, `node scripts/ui-tests.cjs <name>` runs one). A script still running after its time limit (`TICO_UI_SCRIPT_TIMEOUT`, 120 seconds times the load slowdown) is stopped with every process it started, and its failure names the browser call it was waiting on; if any of them could not be stopped, the failure says "cleanup incomplete" and why. The UI's TypeScript files are compiled by
+`npm run test:ui` (the core scripts in `ui/tests/`, three at a time; `--all` runs every script, `node scripts/ui-tests.cts <name>` runs one). A script still running after its time limit (`TICO_UI_SCRIPT_TIMEOUT`, 120 seconds times the load slowdown) is stopped with every process it started, and its failure names the browser call it was waiting on; if any of them could not be stopped, the failure says "cleanup incomplete" and why. The UI's TypeScript files are compiled by
 `npm run build:ui` (into `build/ui/`; ui/README.md), and the UI has no runtime network dependency: `marked` and the
 icon font are vendored in `ui/vendor/` with their licenses.
 

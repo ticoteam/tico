@@ -24,15 +24,15 @@ python -m pytest -q                            # the default Python suite, in pa
 
 npm ci
 npx playwright install chromium
-npm run test:ui                                # the core browser scripts (CORE in scripts/ui-tests.cjs)
+npm run test:ui                                # the core browser scripts (CORE in scripts/ui-tests.cts)
 ```
 
 Run both locally before you open a pull request. GitHub Actions lints the pull request again and, once it is ready, runs its selected tests (the PR checks workflow);
 the merge queue runs them again on the merged result before a change lands. The default run leaves out
 tests marked `@pytest.mark.slow` (real git, Docker, servers, long timers) and the browser scripts outside the core
-list; `python -m pytest -q -m slow` and `node scripts/ui-tests.cjs --all` run them, and the release check does. Run
+list; `python -m pytest -q -m slow` and `node scripts/ui-tests.cts --all` run them, and the release check does. Run
 them too when you change what they cover. To run less while you work: `python -m pytest -q backend/tests/test_x.py`
-for one file, `node scripts/ui-tests.cjs <name>` for one browser script. If you touch `app/`, also run `cargo check`
+for one file, `node scripts/ui-tests.cts <name>` for one browser script. If you touch `app/`, also run `cargo check`
 there. `python3 scripts/remote.py -- <command>` runs a command on a fresh VM instead: it exits 75 when it never dispatched
 the run and 76 when the run ended without a result; any other code is the command's own (`--help` lists them).
 
@@ -135,7 +135,7 @@ uv pip compile backend/requirements-dev.in --python-version 3.15 -o backend/requ
 Upgrade a small compatible group with `--upgrade-package NAME` on the first command, then regenerate
 the development lock. Keep major migrations separate. After changing the browser SDK pins in
 `package.json`, run `npm run build:observability` and the real SDK privacy and retry tests in
-`node scripts/ui-tests.cjs telemetry`. The desktop GLib backport and its provenance checks are
+`node scripts/ui-tests.cts telemetry`. The desktop GLib backport and its provenance checks are
 documented in `app/vendor/README.md`; retain them when updating Cargo locks.
 
 ## Developer Certificate of Origin
