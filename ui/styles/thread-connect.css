@@ -1,4 +1,4 @@
-/* Slack links (ui/app/thread-connect.js, ui/app/connections.js): Library › Connections' Slack section, and the Slack part
+/* Slack links (ui/app/thread-connect.ts, ui/app/connections.js): Library › Connections' Slack section, and the Slack part
    of a thread's Who can read sheet. Rows reuse .cn-row. */
 .cn-sec{padding:8px 0 16px}
 .cn-sec-head{display:flex;align-items:center;gap:8px;padding:12px 28px 4px}

@@ -224,9 +224,9 @@ const build = (() => {
   }
   return async ({hub, browser, phone, tag}) => {
     const page = await open(browser, hub, 'dana', {phone, hash: '#/automations'});
-    // Ask sits beside + New on a computer; a phone has the tab bar's Assistant instead.
+    // Automations has no Ask of its own (the Assistant is one tap away everywhere).
     await page.locator('.au-new').waitFor();
-    assert.equal(await page.locator('.au-ph [data-ask-open]').isVisible(), !phone, `${tag}: Ask beside + New on a computer only`);
+    assert.equal(await page.locator('.au-ph [data-ask-open]').count(), 0, `${tag}: no Ask on Automations`);
     await page.locator('.au-new').click();
     await page.locator('.au-newm [data-new="schedule"]').click();
     await page.locator('.au-hd .au-name:text("New automation")').waitFor({timeout: t(10000)});

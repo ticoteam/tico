@@ -13,7 +13,8 @@ undo it. A platform share is a row too (source 'platform'), written when its spl
 
 Vendor, account and money-account matches are judged here (match_rule), on the facts of the line: its vendor keys
 (store/ap.vendor_keys), its P&L account, and the entry's money account (the entry's first line on a non-P&L account,
-its bank or card or payables side).
+its bank or card or payables side). Class, location and project matches (a mirrored book's dimensions, the tags a
+provider's lines carry) are judged on the line's tags. A rule's match_id is the Tico record the tag holds.
 """
 
 import json
@@ -29,7 +30,12 @@ from ..core.attribution import Split
 _H: Any = _hubdb
 
 SOURCES = ("rule", "person", "bot", "platform")
-MATCH_KINDS = ("vendor", "account", "money_account")
+MATCH_KINDS = ("vendor", "account", "money_account", "class", "location", "project")
+# The order a line's matching rules are judged in: the first kind with an enabled rule that fits the line wins. A
+# vendor is the most specific fact, a reporting dimension (class, location, project) the least.
+PRECEDENCE = ("vendor", "money_account", "account", "class", "location", "project")
+# The line tag a dimension kind matches on (the tag's kind and the rule's kind are the same word).
+DIMENSION_KINDS = ("class", "location", "project")
 HISTORY_MAX = 20
 
 
@@ -48,11 +54,30 @@ class Claim:
 
 @dataclass(frozen=True)
 class Facts:
-    """The facts a rule matches a line on."""
+    """The facts a rule matches a line on: its P&L account, vendor keys, money account, and the record its class,
+    location and project tags hold ("" when the line has none)."""
 
     account_id: str
     vendor_keys: tuple[str, ...]
     money_account_id: str
+    class_id: str = ""
+    location_id: str = ""
+    project_id: str = ""
+
+    def dimension(self, kind: str) -> str:
+        return {"class": self.class_id, "location": self.location_id, "project": self.project_id}.get(kind, "")
+
+
+def facts_of_tags(account_id: str, keys: tuple[str, ...], money: str, tags: Mapping[str, str]) -> Facts:
+    """The facts of a line from its P&L account, vendor keys, money account and tags (its dimension tags)."""
+    return Facts(
+        account_id,
+        keys,
+        money,
+        class_id=str(tags.get("class") or ""),
+        location_id=str(tags.get("location") or ""),
+        project_id=str(tags.get("project") or ""),
+    )
 
 
 def dump_splits(splits: Sequence[Split]) -> str:
@@ -239,7 +264,7 @@ def match_rule(rule_rows: Iterable[Any], facts: Facts) -> Any:
     """The enabled rule a line takes, by precedence: a vendor rule, then a money-account rule, then an account rule;
     within one kind, the first created."""
     live = [r for r in rule_rows if int(r["enabled"])]
-    for kind in MATCH_KINDS:
+    for kind in PRECEDENCE:
         for r in live:
             if str(r["match_kind"]) != kind:
                 continue
@@ -248,6 +273,8 @@ def match_rule(rule_rows: Iterable[Any], facts: Facts) -> Any:
             if kind == "money_account" and str(r["match_id"]) == facts.money_account_id:
                 return r
             if kind == "account" and str(r["match_id"]) == facts.account_id:
+                return r
+            if kind in DIMENSION_KINDS and facts.dimension(kind) and str(r["match_id"]) == facts.dimension(kind):
                 return r
     return None
 
@@ -265,7 +292,8 @@ def facts_of_line(c: sqlite3.Connection, book_id: str, line_id: str) -> Facts | 
     if row is None:
         return None
     keys = vendor_keys_of(c, book_id, str(row["contact_id"] or ""))
-    return Facts(str(row["account_id"]), keys, money_account_of(c, str(row["entry_id"])))
+    tags = {str(k): str(v) for k, v in c.execute("SELECT kind, value FROM fin_line_tags WHERE line_id=?", (line_id,))}
+    return facts_of_tags(str(row["account_id"]), keys, money_account_of(c, str(row["entry_id"])), tags)
 
 
 def vendor_keys_of(c: sqlite3.Connection, book_id: str, contact_key: str) -> tuple[str, ...]:
@@ -292,6 +320,12 @@ def candidate_lines(c: sqlite3.Connection, book_id: str, rule_row: Any, since: s
     """The P&L lines a rule could match from `since` on (a superset: the match is judged per line by facts_of_line)."""
     kind, match = str(rule_row["match_kind"]), str(rule_row["match_id"])
     pnl = "a.type IN ('income','expense')"
+    if kind in DIMENSION_KINDS:
+        sql = (
+            "SELECT l.id FROM fin_lines l JOIN fin_accounts a ON a.id=l.account_id JOIN fin_line_tags t ON "
+            f"t.line_id=l.id WHERE l.book_id=? AND l.entry_date>=? AND {pnl} AND t.kind=? AND t.value=?"
+        )
+        return [str(r[0]) for r in c.execute(sql, [book_id, since, kind, match]).fetchall()]
     if kind == "account":
         sql = (
             f"SELECT l.id FROM fin_lines l JOIN fin_accounts a ON a.id=l.account_id WHERE l.book_id=? AND "
@@ -323,12 +357,37 @@ def lines_owned_by_people(c: sqlite3.Connection, line_ids: Sequence[str]) -> set
     return {lid for lid, r in rows.items() if str(r["source"]) in ("person", "bot") and parse_splits(str(r["splits"]))}
 
 
+def dimension_first_day(c: sqlite3.Connection, book_id: str, kind: str, dimension_id: str) -> str | None:
+    """The earliest day of a posted P&L line that carries a class, location or project tag, or None when none does."""
+    row = c.execute(
+        "SELECT MIN(l.entry_date) FROM fin_lines l JOIN fin_line_tags t ON t.line_id=l.id "
+        "WHERE l.book_id=? AND t.kind=? AND t.value=?",
+        (book_id, kind, dimension_id),
+    ).fetchone()
+    return str(row[0]) if row is not None and row[0] else None
+
+
+def dimension_name(c: sqlite3.Connection, kind: str, dimension_id: str) -> str | None:
+    """A class, location or project's name, or None when the books hold no such record."""
+    sql = {
+        "class": "SELECT name FROM fin_dimensions WHERE id=? AND kind='class'",
+        "location": "SELECT name FROM locations WHERE id=?",
+        "project": "SELECT name FROM projects WHERE id=?",
+    }.get(kind)
+    if sql is None:
+        return None
+    row = c.execute(sql, (dimension_id,)).fetchone()
+    return str(row[0]) if row is not None else None
+
+
 def rule_label_targets(c: sqlite3.Connection, book_id: str, rule_rows: Sequence[Any]) -> Mapping[str, str]:
-    """{match id: its label}: a vendor's name, an account's code and name."""
+    """{match id: its label}: a vendor's name, an account's code and name, a class, department or project's name."""
     out: dict[str, str] = {}
     for r in rule_rows:
         mid = str(r["match_id"])
-        if str(r["match_kind"]) == "vendor":
+        if str(r["match_kind"]) in DIMENSION_KINDS:
+            out[mid] = dimension_name(c, str(r["match_kind"]), mid) or mid
+        elif str(r["match_kind"]) == "vendor":
             row = c.execute("SELECT name FROM fin_contacts WHERE id=?", (mid,)).fetchone()
             out[mid] = str(row[0]) if row else mid
         else:

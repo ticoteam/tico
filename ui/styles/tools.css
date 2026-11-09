@@ -8,7 +8,7 @@
 .tt-head h1{margin:0;font-size:var(--t-lg);font-weight:600}
 .tt-head .spacer{flex:1}
 .tt-bar{display:flex;align-items:center;flex-wrap:wrap;gap:8px 12px;margin:0 0 12px;min-width:0}
-.tt-bar .theme-seg{flex-wrap:wrap;max-width:100%}
+.tt-bar .theme-seg{flex-wrap:wrap;max-width:100%;min-height:var(--ctl)}
 .tt-q{flex:0 1 240px;min-width:0;margin-left:auto}
 .tt-n{color:var(--muted);font-weight:500;margin-left:2px}
 .tt-list{width:100%;border-collapse:collapse;table-layout:auto}
@@ -144,7 +144,7 @@ section.card.tt-soon>header .pill{margin-left:auto}
   .tt-key .pill{grid-column:2;justify-self:start}
   .tt-squares{max-width:none;gap:2px}
 }
-/* A Google Ads or Meta Ads tool's Finance card (ui/app/tools-api.js taFinanceCard): ad spend import and each account's bot */
+/* A Google Ads or Meta Ads tool's Finance card (ui/app/tools-api.ts taFinanceCard): ad spend import and each account's bot */
 #tool-finance .taf-row{display:flex;flex-wrap:wrap;align-items:center;gap:6px 8px;margin:0 0 8px;font-size:var(--t-sm)}
 #tool-finance .taf-k{min-width:84px;color:var(--muted)}
 #tool-finance .taf-row select,#tool-finance .taf-row input[type=date]{max-width:100%}

@@ -43,6 +43,9 @@ def load(path):
     if unknown:
         raise ValueError(f"{path}: unknown rename sections {sorted(unknown)}; expected {list(SECTIONS)}")
     out = {section: dict(data.get(section) or {}) for section in SECTIONS}
+    # A table rename may carry its wave: {new: entities, wave: directory}.
+    if "tables" in out:
+        out["tables"] = {old: new.get("new") if isinstance(new, dict) else new for old, new in out["tables"].items()}
     for section in SECTIONS:
         for old, new in out[section].items():
             if not isinstance(new, str) or not new or old == new:

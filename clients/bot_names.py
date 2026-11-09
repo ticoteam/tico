@@ -17,6 +17,9 @@ tasks, `SELECT owner FROM meetings` is not. As a key, a word many tables use (`o
 the receiver is named after a table it moved on, in a file that talks to the hub (`task["owner"]`), or when it is a row
 (`row["owner"]`) and the file's own SQL reads such a table. A compound key few tables keep (`from_actor`) counts anywhere.
 
+A table that was renamed (`market_entities`, now `entities`) is a finding wherever SQL names it: in a FROM, JOIN, UPDATE or
+INTO, or before a column (`market_entities.name`).
+
 --fix rewrites the findings marked fixable. A finding is not fixable when its new spelling needs other arguments, when
 the name is a SQL alias (`AS created`), when the key is a word other code uses too (`attempt`), when the field changed
 shape (`snoozed_until` is now part of `holds`), when the name has more than one new spelling or a table keeps it
@@ -131,6 +134,7 @@ class Names:
 
     def __init__(self, data):
         self.columns = dict(data.get("columns") or {})
+        self.table_renames = dict(data.get("table_renames") or {})
         self.tables = dict(data.get("table_columns") or {})
         self.api_kept = set(data.get("api_kept") or [])
         # `ts`, `at` and `since` are every program's words: as keys they count only with a table in view (below).
@@ -327,6 +331,30 @@ def _table_scoped_findings(body, base, names, out, in_hub_sql):
             )
 
 
+def _table_findings(body, base, names, out, in_hub_sql):
+    """Each renamed table a statement names: in table position, or before a column (`market_entities.name`). In a
+    `hub sql` body the new name is the only one, so --fix may rewrite it; elsewhere the SQL may be the bot's own."""
+    for offset, stmt in _statements(body):
+        _tables, spots = _statement_tables(stmt)
+        for m in SQL_IDENT.finditer(stmt):
+            name = m.group(1)
+            if name not in names.table_renames or (m.start(1) not in spots and stmt[m.end() : m.end() + 1] != "."):
+                continue
+            new = names.table_renames[name]
+            start = base + offset + m.start(1)
+            out.append(
+                Finding(
+                    old=name,
+                    new=new,
+                    kind="sql",
+                    fixable=in_hub_sql,
+                    start=start,
+                    end=start + len(name),
+                    replacement=new,
+                )
+            )
+
+
 def _sql_findings(s, base, names, out, line_start, sql_lines):
     for a, b in _hub_sql_bodies(s, line_start):
         body = s[a:b]
@@ -347,8 +375,10 @@ def _sql_findings(s, base, names, out, line_start, sql_lines):
                 )
             )
         _table_scoped_findings(body, base + a, names, out, True)
+        _table_findings(body, base + a, names, out, True)
     for a, b in _sql_strings(s, sql_lines):
         _table_scoped_findings(s[a:b], base + a, names, out, False)
+        _table_findings(s[a:b], base + a, names, out, False)
 
 
 def _command_findings(s, base, names, out, line_start):

@@ -1,9 +1,10 @@
 # Keeps the main-branch caches PR checks (pr-checks.yml) restore from fresh, now that main pushes run no PR checks.
-# A pull request reads its own caches and main's; caches it saves stay with it. GitHub evicts a cache unused for seven
-# days, and the RunsOn cache (extras=s3-cache) follows the same branch rules and expires every entry ten days after it
-# is saved, however often it is read. Each job here first looks its keys up without downloading anything: a hit ends
-# the job in about a minute, and only a missing key (a dependency, toolchain or runner-image change, or an expired entry)
-# builds and saves it. Every key and path below must match its step in pr-checks.yml (scripts/tests/test_pr_checks.py).
+# It runs on GitHub-hosted runners, as PR checks do, so the caches it saves are GitHub's own: a pull request reads its
+# own caches and main's; caches it saves stay with it. GitHub evicts a cache unused for seven days, and a repository's
+# caches share 10 GB, so the least recently used go first. Each job here first looks its keys up without downloading
+# anything: a hit ends the job in about a minute, and only a missing key (a dependency, toolchain or runner-image change,
+# or an evicted entry) builds and saves it. Every key and path below must match its step in pr-checks.yml
+# (scripts/tests/test_pr_checks.py).
 name: PR caches
 
 on:
@@ -32,12 +33,11 @@ concurrency:
 jobs:
   python-browser:
     # pip, npm, the Playwright browsers and the browser system packages: what a browser shard's Install fills.
-    runs-on: ${{ vars.TICO_CI_HOSTED == 'true' && 'ubuntu-24.04' || format('runs-on={0}/volume=30gb:gp3:125mbs:3000iops/runner=4cpu-linux-x64/family=m8+m7+m6+r8+r7/extras=s3-cache', github.run_id) }}
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
-      - name: Free disk on a GitHub-hosted runner (about 14 GB free there; RunsOn's volume is 30 GB)
-        if: vars.TICO_CI_HOSTED == 'true'
-        run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc
+      - name: Free disk (GitHub-hosted runners start with about 14 GB free)
+        run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc && df -h /
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           persist-credentials: false
@@ -81,12 +81,11 @@ jobs:
         run: bash scripts/ci_install.sh browser-cache
 
   rust-lint:
-    runs-on: ${{ vars.TICO_CI_HOSTED == 'true' && 'ubuntu-24.04' || format('runs-on={0}/volume=30gb:gp3:125mbs:3000iops/runner=4cpu-linux-x64/family=m8+m7+m6+r8+r7/extras=s3-cache', github.run_id) }}
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
-      - name: Free disk on a GitHub-hosted runner (about 14 GB free there; RunsOn's volume is 30 GB)
-        if: vars.TICO_CI_HOSTED == 'true'
-        run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc
+      - name: Free disk (GitHub-hosted runners start with about 14 GB free)
+        run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc && df -h /
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           persist-credentials: false
@@ -105,12 +104,11 @@ jobs:
 
   desktop-app:
     # The desktop app's compiled dependencies: what the desktop app PR job's clippy and test steps restore.
-    runs-on: ${{ vars.TICO_CI_HOSTED == 'true' && 'ubuntu-24.04' || format('runs-on={0}/volume=30gb:gp3:125mbs:3000iops/runner=4cpu-linux-x64/family=m8+m7+m6+r8+r7/extras=s3-cache', github.run_id) }}
+    runs-on: ubuntu-24.04
     timeout-minutes: 45
     steps:
-      - name: Free disk on a GitHub-hosted runner (about 14 GB free there; RunsOn's volume is 30 GB)
-        if: vars.TICO_CI_HOSTED == 'true'
-        run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc
+      - name: Free disk (GitHub-hosted runners start with about 14 GB free)
+        run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc && df -h /
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           persist-credentials: false
@@ -137,12 +135,11 @@ jobs:
         run: cargo +1.92.0 clippy --locked --all-targets && cargo +1.92.0 test --locked --no-run
 
   conformance:
-    runs-on: ${{ vars.TICO_CI_HOSTED == 'true' && 'ubuntu-24.04' || format('runs-on={0}/volume=30gb:gp3:125mbs:3000iops/runner=4cpu-linux-x64/family=m8+m7+m6+r8+r7/extras=s3-cache', github.run_id) }}
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
-      - name: Free disk on a GitHub-hosted runner (about 14 GB free there; RunsOn's volume is 30 GB)
-        if: vars.TICO_CI_HOSTED == 'true'
-        run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc
+      - name: Free disk (GitHub-hosted runners start with about 14 GB free)
+        run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc && df -h /
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           persist-credentials: false

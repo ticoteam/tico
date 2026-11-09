@@ -158,7 +158,7 @@ Timestamps are ISO-8601 UTC text (`2026-09-15T21:40:12.931675Z`); compare them w
 | `kpi_definitions` | `kpi_id, version, created_at, actor, name, definition, unit, direction, cadence, source_note` | every version of a KPI's definition |
 | `goal_checkins` | `goal_id, kpi_id, created_at, author, sender_id, body, signal` | the owner's own words on how a goal is going; `author` recorded it, `sender_id` whose words they are; `signal`: on_track, at_risk, off_track |
 | `goal_proposals` | `id, kind, goal_id, kpi_id, payload, reason, proposed_by, proposed_at, status, decided_by, decided_at` | a change waiting for its owner to confirm |
-| `goal_asks` | `kind, ref, owner, task_id, created_at` | the Strategy Bot's task asking a person about a KPI or proposal; `kind`: kpi_red, kpi_stale, proposal; `ref`: the KPI or proposal id |
+| `goal_asks` | `kind, ref, owner, task_id, created_at` | the Strategy Bot's task asking a person about a KPI or proposal; `kind`: kpi_red, kpi_stale, proposal; `ref`: the KPI id (kpi_red), `kpis` (kpi_stale: one per person, listing their out-of-date measures) or the proposal id |
 | `task_delegations` | `task_id, delegate, requested_by, message_id, expires_at` | |
 | `approvals` | `id, kind, task_id, message_id, payload, requested_by_id, decided_by_id, decision, decided_at, consumed_at, created_at` | `kind`: send, spend, publish, merge |
 | `jobs` | `id, message_id, bot_id, state, created_at, attempt_id` | one per message a bot has to act on; `state`: queued, leased, running, input, completed, failed, uncertain, canceled |

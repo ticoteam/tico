@@ -1,0 +1,14 @@
+{
+    "files": {
+        "./backend/agents.py": [
+            {
+                "code": "reportOptionalSubscript",
+                "range": {
+                    "startColumn": 12,
+                    "endColumn": 25,
+                    "lineCount": 1
+                }
+            }
+        ]
+    }
+}

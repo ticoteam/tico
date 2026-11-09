@@ -1,0 +1,14 @@
+{
+    "files": {
+        "./backend/check_models.py": [
+            {
+                "code": "reportOptionalSubscript",
+                "range": {
+                    "startColumn": 49,
+                    "endColumn": 54,
+                    "lineCount": 1
+                }
+            }
+        ]
+    }
+}

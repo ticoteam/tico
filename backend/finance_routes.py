@@ -20,7 +20,10 @@ from pydantic import Field
 from . import company_server, hook_relay
 from .finance import actions as finance
 from .finance import books_link
+from .finance import brief as finance_brief_mod
+from .finance import receipts as finance_receipts_mod
 from .finance import reads as finance_reads
+from .finance import subscriptions as finance_subscriptions
 from .models import ID, Contract
 from .store import Problem
 
@@ -50,7 +53,18 @@ Group = Literal[
 ]
 DAY = r"^\d{4}-\d{2}-\d{2}$"
 Aging = Literal["current", "1_30", "31_60", "61_90", "over_90"]
-Report = Literal["pnl", "pnl_by", "balance_sheet", "cash_flow", "budget_vs_actual", "ap_aging", "ar_aging", "spend_by"]
+Report = Literal[
+    "pnl",
+    "pnl_by",
+    "balance_sheet",
+    "cash_flow",
+    "budget_vs_actual",
+    "ap_aging",
+    "ar_aging",
+    "spend_by",
+    "campaigns",
+    "subscriptions",
+]
 Metric = Literal[
     "cash",
     "burn",
@@ -65,6 +79,10 @@ Metric = Literal[
     "unreconciled_days",
     "duplicate_charges",
     "price_increases",
+    "unattributed",
+    "ad_spend",
+    "per_conversion",
+    "subscriptions_monthly",
 ]
 
 
@@ -94,6 +112,8 @@ class FinanceActionRequest(Contract):
 
 # The payload field of each action kind that names Library files to attach (backend/finance/documents.py).
 FILE_FIELDS = {"attach": "file_ids", "bill_create": "attachments", "bill_update": "attachments"}
+# Actions on a receipt act on the Library file the receipt holds: the asker must be able to read that file.
+RECEIPT_FILE_KINDS = ("receipt_read", "receipt_match")
 
 
 class FinanceBooksRequest(Contract):
@@ -224,6 +244,30 @@ def install(app, store, auth, mutate):
         `at` in the period holding that day: the amount of the version in effect then."""
         actor = as_viewer(request, view_as)
         return read(lambda c: finance_reads.budgets(c, actor, include_inactive=include_inactive, limit=limit, on=at))
+
+    @app.get("/api/v2/finance/subscriptions")
+    def finance_subscriptions_list(
+        request: Request,
+        status: Literal["suggested", "active", "ignored", "cancelled"] | None = None,
+        view_as: str | None = None,
+    ):
+        """The subscriptions the caller sees: recurring charges the daily look suggests and the Bookkeeper confirms, each
+        with its cadence, expected amount, monthly cost, next charge, card, seats and attribution, and the monthly total of
+        the active ones. `status` narrows them."""
+        actor = as_viewer(request, view_as)
+        return read(lambda c: finance_subscriptions.read(c, actor, status))
+
+    @app.get("/api/v2/finance/brief")
+    def finance_brief(request: Request, view_as: str | None = None):
+        """What changed in Finance for the caller: a few short lines about the money they may see (their budgets, their
+        team's, cash and burn where they see the company), with `as_of` when those numbers last moved and `changed_since`
+        the `as_of` before. Empty `lines` when there is nothing to say (backend/finance/brief.py)."""
+        actor = as_viewer(request, view_as)
+        try:
+            with store.transaction() as c:
+                return finance_brief_mod.brief(c, actor)
+        except finance.FinanceError as e:
+            raise problem(e) from None
 
     @app.get("/api/v2/finance/pnl")
     def finance_pnl(
@@ -438,6 +482,13 @@ def install(app, store, auth, mutate):
         right or admin."""
         who = viewer(request)
         return read(lambda c: finance_reads.attribution_rules(c, who.actor))
+
+    @app.get("/api/v2/finance/attribution/dimensions")
+    def finance_attribution_dimensions(request: Request):
+        """The classes, locations and projects on the P&L lines of the last 12 months, with their rules; needs the
+        attribution right or admin."""
+        who = viewer(request)
+        return read(lambda c: finance_reads.attribution_dimensions(c, who.actor))
 
     @app.get("/api/v2/finance/lines/{line_id}/attribution")
     def finance_line_attribution(request: Request, line_id: str, view_as: str | None = None):
@@ -795,6 +846,9 @@ def install(app, store, auth, mutate):
             "po",
             "estimate",
             "account",
+            "vendor",
+            "campaign",
+            "subscription",
         ]
         | None = None,
         q: str = Query("", max_length=100),
@@ -809,6 +863,7 @@ def install(app, store, auth, mutate):
         contact_kind: Literal["vendor", "customer", "both"] | None = None,
         active: bool | None = None,
         rule_kind: Literal["gate", "posting"] | None = None,
+        month: str | None = Query(None, pattern=r"^\d{4}-(0[1-9]|1[0-2])$"),
         cursor: str | None = Query(None, max_length=600),
         limit: int = Query(50, ge=1, le=200),
         view_as: str | None = None,
@@ -825,6 +880,7 @@ def install(app, store, auth, mutate):
             "start": start,
             "end": end,
             "aging": aging,
+            "month": month,
             "kind": contact_kind if kind == "contact" else rule_kind if kind == "rule" else None,
             "active": None if active is None else ("1" if active else "0"),
         }
@@ -864,6 +920,20 @@ def install(app, store, auth, mutate):
                 days=days,
             )
         )
+
+    @app.get("/api/v2/finance/unattributed")
+    def finance_unattributed(
+        request: Request,
+        start: str | None = Query(None, pattern=DAY),
+        end: str | None = Query(None, pattern=DAY),
+        cursor: str | None = Query(None, max_length=600),
+        limit: int = Query(50, ge=1, le=200),
+        view_as: str | None = None,
+    ):
+        """The Unattributed queue (backend/finance/visible.py's rule, cut to the caller): the P&L lines in the period
+        (this month by default) with no team, no teammate and no attribution in force, newest first, paged by cursor."""
+        actor = as_viewer(request, view_as)
+        return read(lambda c: finance_reads.unattributed(c, actor, start=start, end=end, cursor=cursor, limit=limit))
 
     @app.get("/api/v2/finance/close/{month}")
     def finance_close(request: Request, month: str, top_n: int = Query(20, ge=1, le=200)):
@@ -1078,12 +1148,30 @@ def install(app, store, auth, mutate):
             )
         )
 
+    @app.get("/api/v2/finance/receipts")
+    def finance_receipts(
+        request: Request,
+        status: Literal["unread", "suggested", "unmatched", "attached", "rejected"] | None = None,
+        cursor: str | None = Query(None, max_length=600),
+        limit: int = Query(50, ge=1, le=200),
+        view_as: str | None = None,
+    ):
+        """Receipts the caller sees, newest first: the file, what it reads as (amount, date, vendor), and its suggested or
+        filed match. A cursor pages them; a status narrows them."""
+        actor = as_viewer(request, view_as)
+        return read(lambda c: finance_receipts_mod.read(c, actor, status=status, cursor=cursor, limit=limit))
+
     def readable_files(request, who, body):
         """The Library files an action files (attach's `file_ids`, a bill's `attachments`) must exist and be ones the
         asker may read (files.file_visible, the check every file read makes), before anything is attached: Finance's
         own records hold only the ids. A deleted file is gone. The refusal names the first id that fails."""
         field = FILE_FIELDS.get(body.kind)
         ids = body.payload.get(field) if field else None
+        if body.kind in RECEIPT_FILE_KINDS:
+            rid = body.payload.get("receipt_id")
+            with store.read() as c:
+                held = finance_receipts_mod.file_of(c, rid) if isinstance(rid, str) else None
+            ids = [held] if held else []
         if not isinstance(ids, list):
             return  # absent or malformed: the action's own checks answer
         files, cache = request.app.state.files, {}

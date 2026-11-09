@@ -812,7 +812,7 @@ def _bots(c, settings, runner_id, runtime):
 
 
 def _sessions(c, bot):
-    """How many sessions app.reset_bot_sessions starts fresh for `bot`: each of its conversations."""
+    """How many sessions execution.reset_bot_sessions starts fresh for `bot`: each of its conversations."""
     return sum(
         1
         for (p,) in c.execute("SELECT participants FROM conversations WHERE participants LIKE ?", (f'%"bot:{bot}"%',))
@@ -822,9 +822,9 @@ def _sessions(c, bot):
 
 def _reset(c, settings, runner_id, runtime):
     """Every session of `runtime` on this computer starts fresh: each bot there that runs it has its sessions fenced
-    (app.reset_bot_sessions, as a move to another computer does) and its saved thread pointer for that runtime let go.
+    (execution.reset_bot_sessions, as a move to another computer does) and its saved thread pointer for that runtime let go.
     Returns how many sessions were reset."""
-    from .app import reset_bot_sessions
+    from .execution import reset_bot_sessions
 
     n = 0
     for bot in _bots(c, settings, runner_id, runtime):

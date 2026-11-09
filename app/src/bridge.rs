@@ -14,7 +14,7 @@ use crate::{
 };
 
 /// The page's side of the bridge: `window.ticoNative(name).postMessage(body)`, which
-/// `nativeHandler(name)` in ui/app/native.js looks for; `/TicoHub/` in the user agent marks the
+/// `nativeHandler(name)` in ui/app/native.ts looks for; `/TicoHub/` in the user agent marks the
 /// page native. (WKWebView's own `window.webkit.messageHandlers` cannot be replaced, so the
 /// shell has its own name.)
 const BRIDGE_SCRIPT: &str = r#"

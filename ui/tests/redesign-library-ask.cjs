@@ -1,5 +1,5 @@
 // Library on a real hub: Docs, Meetings and Tools › Keys each have an Ask button that opens the Ask panel
-// (ui/app/ask-panel.js), which sees the page; no Librarian rail, sidebar row or settings link. The Library and Company sidebar
+// (ui/app/ask-panel.ts), which sees the page; no Librarian rail, sidebar row or settings link. The Library and Company sidebar
 // groups fold behind a chevron (kept per browser, open again on their own pages). Phone, then desktop.
 const assert = require('node:assert/strict');
 const {run, open, go, sideways, shot, t} = require('./support/redesign-e2e.cjs');

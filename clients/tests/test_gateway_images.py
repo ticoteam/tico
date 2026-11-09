@@ -252,7 +252,7 @@ def test_a_video_is_started_then_checked_until_it_is_done_and_saved_once(video, 
     assert started == {"id": "gv_" + "a" * 24, "status": "queued", "seconds": 5, "resolution": "1080p"}
     method, path, body = video.calls[0][0], video.calls[0][1], video.calls[0][2]
     assert (method, path) == ("POST", "gateway/videos")
-    assert body["model"] == "tico-video" and body["audio"] is False and body["aspect"] == "16:9"
+    assert "model" not in body and body["audio"] is False and body["aspect"] == "16:9"  # the route sets the model
     assert body["first_frame"] == "data:image/png;base64," + base64.b64encode(PNG).decode() and "last_frame" not in body
     out = tmp_path / "clips" / "kettle.mp4"
     job = "gv_" + "a" * 24
