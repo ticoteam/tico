@@ -4909,6 +4909,15 @@ STABLE.extend(
             "FinanceStatements",
         ),
         (
+            "/api/v2/finance/statements/preview",
+            "post",
+            "Finance",
+            "previewFinanceStatement",
+            "Review a bank or card statement file before it posts: each row New or Already in Tico, its vendor and "
+            "attribution, and the tie-out. Writes only a short-lived preview token",
+            "FinanceStatementReview",
+        ),
+        (
             "/api/v2/finance/rules",
             "get",
             "Finance",
@@ -5560,6 +5569,46 @@ SCHEMAS.update(
         ),
         "FinanceAction": obj(
             {"status": "s", "kind": "s", "action_id": "n", "code": "s", "reason": "s"}, required=["status", "kind"]
+        ),
+        "FinanceStatementReview": obj(
+            {
+                "token": "s",
+                "expires_at": "s",
+                "money_account_id": "s",
+                "file_name": "s",
+                "file_format": "s",
+                "start": "s",
+                "end": "s",
+                "card": "b",
+                "last4": "n",
+                "signs": obj({"flipped": "b", "by": "s"}),
+                "new": "i",
+                "duplicate": "i",
+                "tie": obj(
+                    {
+                        "opening": "i",
+                        "added": "i",
+                        "removed": "i",
+                        "ends": "i",
+                        "statement_says": {"type": ["integer", "null"]},
+                        "off_by": "i",
+                    }
+                ),
+                "rows": items(
+                    obj(
+                        {
+                            "id": "s",
+                            "date": "s",
+                            "description": "s",
+                            "amount": "i",
+                            "vendor": obj({"id": "s", "name": "s"}),
+                            "attribution": {"type": ["object", "null"]},
+                            "status": "s",
+                        }
+                    )
+                ),
+            },
+            required=["token", "expires_at", "tie", "rows"],
         ),
         "FinancePayments": obj(
             {
