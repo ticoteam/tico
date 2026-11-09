@@ -160,7 +160,7 @@ const taskBody = (t: HubTask) => {
 // row's `data`, an event's `detail`), so every surface draws alike.
 // Only an `assistant_for` row ever shows the Assistant's name or face; the gray kinds have no avatar or sender row.
 const SOURCE_BUILTINS: Record<string, string> = {'follow-up-timer': 'Follow-up timer', 'earlier-messages': 'Earlier messages', 'task-roundup': 'Task roundup', 'stuck-check': 'Stuck check',
-  'rule-check': 'Rule check', 'check-health': 'Health check', maintenance: 'Maintenance'};
+  'rule-check': 'Rule check', 'check-health': 'Health check', 'postal-mail': 'Postal mail', maintenance: 'Maintenance'};
 const SOURCE_LINES = new Set(['task_update', 'builtin', 'automation', 'system']);
 // "Chris's Assistant": the person's first name and the install's name for the Assistant.
 const assistantForName = (person: unknown) => {
