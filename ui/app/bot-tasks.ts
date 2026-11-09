@@ -26,9 +26,9 @@ interface BotTaskList {
 }
 // The pill's state for a keeper bot (ui/app/pill.ts): what is typed, the files on it and which bot it goes to.
 interface BotPillState {
-  sending?: boolean;
+  sending?: boolean | undefined;
   files: File[];
-  slug: string;
+  slug: string | null;
 }
 
 // The text a need row shows (the rows carry these fields beside what NeedsItem names).
@@ -453,7 +453,7 @@ async function v2PillTask(P: BotPillState, text: string) {
     pillAcknowledge(P, text, files, scope);
     toast(`Task for ${empName(P.slug)} created`);
     await v2Refresh();
-    if (BOT?.slug === P.slug) {
+    if (typeof P.slug === 'string' && BOT?.slug === P.slug) {   // N: the bot's slug is a string here
       void loadBotTasksV2(P.slug);
     }
   } catch (e) { toast(errorMessage(e, ''), true); }

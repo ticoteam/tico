@@ -22,7 +22,6 @@ interface AssistantOut { text: string; typed?: string; files: File[]; scope?: st
 interface EarlierMessage { sender_id?: string; created_at?: string; body?: string; deleted_at?: string | null }
 interface EarlierPage { messages?: EarlierMessage[]; has_more?: boolean; next_before?: string | null }
 // A task of the assistant's, as the rail lists it (GET /v2/tasks).
-interface AssistantTask { status?: string; updated_at?: string; created_at?: string }
 const ASSISTANT_HINTS = ["What's waiting on me?", 'Find the launch plan', 'How do I add a bot?'];
 let ASSISTANT_PILL: AssistantPill | null = null, ASSISTANT_LOAD = 0;
 function assistantPill(): AssistantPill {
@@ -186,10 +185,10 @@ async function assistantRail(slug: string, load: number) {
   const [owned, latest] = await Promise.all([v2Get(`/v2/tasks?owner=${encodeURIComponent(slug)}&status=${V2_ACTIVE.join(',')}&brief=true`),
     v2Get(`/v2/updates?bot=${encodeURIComponent(slug)}&limit=1`)]);
   if (load !== ASSISTANT_LOAD || S.route !== ASSISTANT || !rail.isConnected) return;
-  const active = (owned?.tasks || []).filter((t: AssistantTask) => V2_ACTIVE.includes(String(t.status)))
-    .sort((a: AssistantTask, b: AssistantTask) => String(b.updated_at || b.created_at || '').localeCompare(String(a.updated_at || a.created_at || '')));
+  const active = (owned?.tasks || []).filter((t: TaskRow) => V2_ACTIVE.includes(String(t.status)))
+    .sort((a: TaskRow, b: TaskRow) => String(b.updated_at || b.created_at || '').localeCompare(String(a.updated_at || a.created_at || '')));
   const act = $('#asst-active');
-  act.querySelector('.tpane').innerHTML = `<div class="bot-task-list">${active.map((t: AssistantTask) => v2TaskRow(t, slug)).join('')}</div>`;
+  act.querySelector('.tpane').innerHTML = `<div class="bot-task-list">${active.map((t: TaskRow) => v2TaskRow(t, slug)).join('')}</div>`;
   act.hidden = !active.length;
   const u = latest?.updates?.[0], up = $('#asst-latest');
   if (u) {

@@ -254,7 +254,8 @@ async function viewerShow() {
       // Opens whole, fitted to the viewer; zooms and pans there (picZoom, ui/app/visual-pictures.ts). `zoom` holds the
       // swipe to the next file while zoomed.
       d.zoomAbort = new AbortController();
-      picZoom(img.parentElement, img, {signal: d.zoomAbort.signal, bar: d.querySelector<HTMLElement>('.pic-zoom-bar'), onZoom: (on: boolean) => img.classList.toggle('zoom', on)});
+      const box = img.parentElement;
+      if (box) picZoom(box, img, {signal: d.zoomAbort.signal, bar: d.querySelector<HTMLElement>('.pic-zoom-bar'), onZoom: (on: boolean) => img.classList.toggle('zoom', on)});   // G: a picture always has its box
       // An icon (a 24 px SVG, say) is shown big enough to see; a vector stays sharp.
       const grow = () => {
         const w = img.naturalWidth, h = img.naturalHeight, big = Math.max(w, h);

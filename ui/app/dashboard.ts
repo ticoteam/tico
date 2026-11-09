@@ -32,13 +32,16 @@ interface DashState {
 let DASH: DashState | null = null;
 // A place drawn on this grid under its own head (the Growth page, ui/app/growth-page.ts): {head(state) → its HTML,
 // pages() → whether + Page shows, drawn(state) after each draw, wire(state) once}.
-const DASH_PLACES = {};
+const DASH_PLACES: Record<string, DashPlace> = {};
 // By template: the heading a card shows when it has no title of its own, and what it says when it shows nothing.
 const DASH_HEADING: Record<string, (card: DashCard) => string | undefined> = {};
 const DASH_EMPTY: Record<string, string> = {};
 
 // A place as GET /v2/places/<place> answers it (backend/cards.py), with who sees a team page.
 type DashCard = import('../types/api').Card;
+type ApiCard = DashCard;
+// A place drawn on the grid under its own head (DASH_PLACES, ui/app/growth-page.ts).
+interface DashPlace { first?: string; pages: () => boolean; head: (state: DashState) => string; wire?: (state: DashState) => void; drawn?: (state: DashState) => void }
 // A page as a pin and the Add page form list it.
 interface DashPageItem { file_id: string; title?: string | null; bot: string; updated_at?: string | null }
 // A pin holds a card or a page.
