@@ -40,6 +40,7 @@ PREFIX = re.compile(r"^[A-Za-z]{1,2}$")
 RUBRIC_MAX = 2000
 NAME_MAX = 80
 LIMIT_MAX_MINUTES = 60 * 24 * 365
+CARD_CAP_MAX = 500
 EVERY_MIN, EVERY_MAX = 5, 24 * 60
 GOAL_MAX = 200
 MEMBERS_MAX = 50
@@ -89,10 +90,12 @@ class PipelineSettingsBody(Contract):
     factory_id: str | None = Field(default=None, max_length=128)
 
 
-class StageLimitBody(Contract):
-    """The stage's "Warn after" time in minutes; null turns the warning off."""
+class StageBody(Contract):
+    """A stage's own settings. A field left out is left as it is; null clears it. limit_minutes is the "Warn after" time
+    (null turns the warning off); card_cap is the most cards the stage holds at once (null is no cap, 0 is "On ice")."""
 
     limit_minutes: int | None = Field(default=None, ge=1, le=LIMIT_MAX_MINUTES)
+    card_cap: int | None = Field(default=None, ge=0, le=CARD_CAP_MAX)
 
 
 class Nothing(Contract):
@@ -488,13 +491,18 @@ def update_settings(conn: "sqlite3.Connection", actor: str, pipeline_id: str, bo
     return settings_view(conn, pipeline_id)
 
 
-def set_stage_limit(conn: "sqlite3.Connection", actor: str, stage_id: str, minutes: int | None) -> dict[str, Any]:
-    """The stage's "Warn after" time, in minutes, or None for no warning."""
+def set_stage(conn: "sqlite3.Connection", actor: str, stage_id: str, changes: dict[str, Any]) -> dict[str, Any]:
+    """Set the stage's Warn after and/or card cap: the keys in `changes` only, so a field not sent is left as it is."""
     pipeline_id, name = _stage(conn, stage_id)
     _may_edit(conn, actor, pipeline_id)
-    conn.execute("UPDATE task_steps SET limit_minutes=? WHERE id=?", (minutes, stage_id))
-    H.event(conn, actor, "stage.limit", stage_id, {"limit_minutes": minutes})
-    return {"id": stage_id, "name": name, "limit_minutes": minutes}
+    if "limit_minutes" in changes:
+        conn.execute("UPDATE task_steps SET limit_minutes=? WHERE id=?", (changes["limit_minutes"], stage_id))
+        H.event(conn, actor, "stage.limit", stage_id, {"limit_minutes": changes["limit_minutes"]})
+    if "card_cap" in changes:
+        conn.execute("UPDATE task_steps SET card_cap=? WHERE id=?", (changes["card_cap"], stage_id))
+        H.event(conn, actor, "stage.cap", stage_id, {"card_cap": changes["card_cap"]})
+    limit, cap = conn.execute("SELECT limit_minutes, card_cap FROM task_steps WHERE id=?", (stage_id,)).fetchone()
+    return {"id": stage_id, "name": name, "limit_minutes": limit, "card_cap": cap}
 
 
 FINISHED_STATUSES = ("done", "closed", "declined")
@@ -609,11 +617,13 @@ def install(app: "FastAPI", store: "Store", mutate: "Callable[..., Any]", auth: 
         return mutate(request, body, write)
 
     @app.patch("/api/v2/pipeline-stages/{stage_id}")
-    def stage_limit(request: Request, stage_id: str, body: StageLimitBody) -> dict[str, Any]:
-        """The stage's Warn-after time in minutes (null for none). The pipeline's owner and admins only."""
+    def stage_update(request: Request, stage_id: str, body: StageBody) -> dict[str, Any]:
+        """The stage's Warn-after time in minutes and its card cap (null for none); send only the fields to change.
+        The pipeline's owner and admins only."""
         who = request.state.identity
+        changes = body.model_dump(exclude_unset=True)
 
         def write(c: "sqlite3.Connection") -> dict[str, Any]:
-            return set_stage_limit(c, who.actor, stage_id, body.limit_minutes)
+            return set_stage(c, who.actor, stage_id, changes)
 
         return mutate(request, body, write)

@@ -188,7 +188,7 @@ company already owns, so their commits need no sign-off, and their pull requests
 
 ## Releases
 
-Don't edit CHANGELOG.md in a PR. The Technical Writer writes each release's notes after it is published.
+Release notes are on each release's approval issue (label release-approval).
 
 A release is a version tag, and contributors do not tag. Tico releases from release windows (weekdays 07:30, 11:00,
 14:00 and 20:30 Los Angeles time, weekends 07:30 and 15:00):

@@ -30,3 +30,4 @@ export function runScripts(files: string[], jobs: number, run: (file: string) =>
 export function runScript(file: string, options?: {env?: Record<string, string | undefined>; timeout?: number; grace?: number; preload?: string; stop?: (pid: number) => StoppedProcess[]}): Promise<RunResult>;
 export function stopTree(pid: number, deps?: {list(): ProcRow[]; signal(pid: number, name: string): void}): StoppedList;
 export function stoppedReport(result: {pending: string[]; calls: string[]; stopped: StoppedList}): string;
+export function typeScriptGuard(files: string[], version?: string): string | null;

@@ -32,7 +32,7 @@ def last_check(board):
 
 def slow_qa_board():
     """The Dev board with QA given 8 h before its round is skipped: the team waits for QA, or a person waives it."""
-    board = dev_board()
+    board = dev_board(qa=True)
     last_check(board).check.timeout_hours = 8
     return board
 

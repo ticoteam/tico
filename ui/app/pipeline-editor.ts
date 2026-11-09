@@ -10,7 +10,7 @@
    pipelineEditSync(pipelineId)      shows or hides the pencil for the pipeline in view. */
 'use strict';
 
-interface PeStage { id: string; name: string; status: string; limit_minutes?: number | null; position?: number; }
+interface PeStage { id: string; name: string; status: string; limit_minutes?: number | null; card_cap?: number | null; position?: number; }
 interface PeType { id: string; name: string; prefix?: string | null; pipeline_owner_id?: string | null; manager?: string | null; goal?: string | null; steps: PeStage[]; }
 interface PeNeeds { formats?: string[]; newer_than_change?: boolean; is_work?: boolean; field?: string; source?: string; }
 interface PeReq {
@@ -20,7 +20,7 @@ interface PeReq {
 interface PeLink { id: string; from_pipeline_id: string; from_pipeline_stage_id: string; to_pipeline_id: string; mode: string; }
 interface PeState {
   type: PeType; reqs: Map<string, PeReq[]>; links: PeLink[] | null; requirements: boolean;
-  mover: boolean; warn: string; link: string;
+  mover: boolean; warn: string; cap: string; link: string;
   /** Whether the reader may change the pipeline's rules (its owner and admins): the manager is a choice only then. */
   mayEdit: boolean;
   /** The settings block's server view (goal, judge, factory, privacy, members), or null when the route did not answer. */
@@ -92,7 +92,7 @@ async function pipelineEditSync(pipelineId: string | null | undefined): Promise<
 
 async function peLoad(id: string): Promise<PeState> {
   const type: PeType = (await get(`/v2/task-types/${encodeURIComponent(id)}`, {fresh: true})).type;
-  const state: PeState = {type, reqs: new Map(), links: null, requirements: true, mover: canMove(), mayEdit: false, warn: '', link: '', settings: null, factories: null};
+  const state: PeState = {type, reqs: new Map(), links: null, requirements: true, mover: canMove(), mayEdit: false, warn: '', cap: '', link: '', settings: null, factories: null};
   try { state.mayEdit = !!(await get(`/v2/pipelines/${encodeURIComponent(id)}/rights`, {fresh: true})).may_edit_rules; } catch { state.mayEdit = false; }
   try { state.settings = await pipelineSettings(id); } catch { state.settings = null; }
   try { state.factories = await pipelineFactories(); } catch { state.factories = null; }
@@ -128,6 +128,14 @@ function peWarnHTML(stage: PeStage, on: boolean): string {
       <button type="button" class="ghost" data-pe-warn-off="${esc(stage.id)}">Don't warn</button></span>` : ''}</span>`;
 }
 
+// "At most": how many cards the stage holds at once (D68). Blank is no cap; 0 is On ice (D69), a stage nobody works.
+function peCapHTML(stage: PeStage, on: boolean): string {
+  return `<span class="pe-cap"><button type="button" class="ghost pe-cap-b" data-pe-cap="${esc(stage.id)}" aria-expanded="${on}">At most: ${stage.card_cap == null ? 'No cap' : stage.card_cap}</button>${on ? `
+    <span class="pe-pop" role="group" aria-label="At most"><input type="number" min="0" max="500" step="1" value="${stage.card_cap ?? ''}" data-pe-cap-n aria-label="At most">
+      <button type="button" class="primary" data-pe-cap-save="${esc(stage.id)}">Save</button>
+      <button type="button" class="ghost" data-pe-cap-off="${esc(stage.id)}">No cap</button></span>` : ''}</span>`;
+}
+
 function peLinkHTML(state: PeState, stage: PeStage): string {
   if (state.links === null) return '';
   const link = state.links.find(l => l.from_pipeline_stage_id === stage.id && l.from_pipeline_id === state.type.id);
@@ -150,7 +158,7 @@ function peStageHTML(state: PeState, stage: PeStage, i: number, count: number): 
     : `<span class="pe-stage-name">${esc(stage.name)}</span>`;
   const reqs = state.reqs.get(stage.id) ?? [];
   return `<li class="pe-stage"><div class="pe-stage-head">${name}</div>
-    <div class="pe-stage-tools">${peWarnHTML(stage, state.warn === stage.id)}${peLinkHTML(state, stage)}</div>
+    <div class="pe-stage-tools">${peWarnHTML(stage, state.warn === stage.id)}${peCapHTML(stage, state.cap === stage.id)}${peLinkHTML(state, stage)}</div>
     ${state.requirements ? `<ul class="pe-reqs">${reqs.map(peReqHTML).join('')}</ul><button type="button" class="ghost pe-req-add" data-pe-new="${esc(stage.id)}">+ Require</button>` : ''}
     <div class="pe-form-slot" data-pe-slot="${esc(stage.id)}"></div></li>`;
 }
@@ -369,6 +377,14 @@ async function peWarnSave(target: Element, stage: string, off: boolean): Promise
   await peReload();
 }
 
+async function peCapSave(target: Element, stage: string, off: boolean): Promise<void> {
+  const raw = target.closest('.pe-cap')?.querySelector<HTMLInputElement>('[data-pe-cap-n]')?.value.trim() ?? '';
+  const cap = off ? null : Number(raw);
+  if (!off && !(raw !== '' && Number.isInteger(cap) && (cap as number) >= 0)) { toast('Enter a whole number, 0 or more', true); return; }
+  try { await writeRequest('PATCH', peRoute(`/v2/pipeline-stages/${encodeURIComponent(stage)}`), {card_cap: cap}); if (PE) PE.cap = ''; } catch (e) { peFail(e); }
+  await peReload();
+}
+
 async function peClick(target: Element): Promise<void> {
   if (!PE) return;
   const hit = (attr: string): string | null => target.closest<HTMLElement>(`[${attr}]`)?.getAttribute(attr) ?? null;
@@ -376,6 +392,10 @@ async function peClick(target: Element): Promise<void> {
   if (warn) { PE.warn = PE.warn === warn ? '' : warn; peRender(); return; }
   const save = hit('data-pe-warn-save'), off = hit('data-pe-warn-off');
   if (save || off) { await peWarnSave(target, save ?? off ?? '', !save); return; }
+  const cap = hit('data-pe-cap');
+  if (cap) { PE.cap = PE.cap === cap ? '' : cap; peRender(); return; }
+  const capSave = hit('data-pe-cap-save'), capOff = hit('data-pe-cap-off');
+  if (capSave || capOff) { await peCapSave(target, capSave ?? capOff ?? '', !capSave); return; }
   const req = hit('data-pe-req');
   if (req) {
     const stage = [...PE.reqs.entries()].find(([, rs]) => rs.some(r => r.id === req))?.[0];
