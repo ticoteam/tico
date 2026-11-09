@@ -18,6 +18,9 @@ GOOD_OPTIONS = {
     "verbatimModuleSyntax": True,
     "moduleDetection": "force",
     "strictNullChecks": True,
+    # What the page project (recorder/ui) needs too; the Node projects' lib and types are not checked.
+    "lib": ["es2022", "dom"],
+    "types": [],
 }
 LEAF = {"extends": "../tsconfig.node.json", "include": ["./**/*.cts"]}
 
@@ -28,7 +31,8 @@ def project_root(tmp_path, monkeypatch, files, options=None):
     (tmp_path / node.BASE).write_text("{}")
     for config in node.PROJECTS:
         (tmp_path / config).parent.mkdir(parents=True, exist_ok=True)
-        (tmp_path / config).write_text(json.dumps(LEAF))
+        up = "../" * len(Path(config).parent.parts)  # recorder/ui/tsconfig.json sits two folders down
+        (tmp_path / config).write_text(json.dumps({**LEAF, "extends": f"{up}{node.BASE}"}))
     for rel, text in files.items():
         (tmp_path / rel).parent.mkdir(parents=True, exist_ok=True)
         (tmp_path / rel).write_text(text)
@@ -56,8 +60,22 @@ def test_the_real_projects_extend_the_shared_base_and_ui_tests_does_too():
     assert "include" not in json.loads((node.ROOT / node.BASE).read_text())
 
 
+def test_the_recorder_window_is_a_page_project_the_recorder_scripts_leave_out():
+    assert "recorder/ui/tsconfig.json" in node.PROJECTS and node.PAGE_PROJECTS == ("recorder/ui/tsconfig.json",)
+    page = json.loads((node.ROOT / "recorder/ui/tsconfig.json").read_text())
+    assert page["compilerOptions"]["types"] == [] and "DOM" in page["compilerOptions"]["lib"]
+    assert {"./app/**/*.ts", "./preview/**/*.ts", "./types/**/*.d.ts"} == set(page["include"])
+    # recorder/tsconfig.json includes ./**/*.d.ts: without the exclude it would read the bridge's types under Node too.
+    assert "./ui/types" in json.loads((node.ROOT / "recorder/tsconfig.json").read_text())["exclude"]
+
+
 def test_clean_projects_pass_and_tsc_runs_on_each(tmp_path, monkeypatch):
-    project_root(tmp_path, monkeypatch, {"scripts/a.cts": "export {};\n", "recorder/tests/b.cts": "export {};\n"})
+    files = {
+        "scripts/a.cts": "export {};\n",
+        "recorder/tests/b.cts": "export {};\n",
+        "recorder/ui/app/c.ts": "export {};\n",
+    }
+    project_root(tmp_path, monkeypatch, files)
     ran = []
     monkeypatch.setattr(node, "run_project", lambda config: ran.append(config) or (0, ""))
     assert node.check() == []
@@ -95,6 +113,33 @@ def test_a_weakened_effective_option_fails_without_running_tsc(tmp_path, monkeyp
     monkeypatch.setattr(node, "run_project", no_tsc)
     problems = node.check()
     assert any(problem.endswith(expected) or expected in problem for problem in problems), problems
+
+
+@pytest.mark.parametrize(
+    ("change", "expected"),
+    [
+        (lambda o: o.update(lib=["es2022"]), "recorder/ui/tsconfig.json: lib must include DOM"),
+        (lambda o: o.pop("lib"), "recorder/ui/tsconfig.json: lib must include DOM"),
+        (lambda o: o.update(types=["node"]), "recorder/ui/tsconfig.json: types must be []"),
+        (lambda o: o.pop("types"), "recorder/ui/tsconfig.json: types must be []"),
+    ],
+)
+def test_the_page_project_needs_the_dom_and_no_node_types(tmp_path, monkeypatch, change, expected):
+    page = dict(GOOD_OPTIONS)
+    change(page)
+    project_root(tmp_path, monkeypatch, {"recorder/ui/app/a.ts": "export {};\n"})
+    node_options = {**GOOD_OPTIONS, "lib": ["es2022"], "types": ["node"]}
+
+    def effective(config, root=None):
+        if config == "recorder/ui/tsconfig.json":
+            return {"compilerOptions": page, "files": ["./app/a.ts"]}
+        return {"compilerOptions": node_options, "files": []}
+
+    monkeypatch.setattr(node, "effective_config", effective)
+    monkeypatch.setattr(node, "run_project", no_tsc)
+    # Only the page project is held to it: the Node projects here have Node's types and no DOM, and pass.
+    [problem] = node.check()
+    assert problem.startswith(expected)
 
 
 def test_the_effective_options_are_read_not_the_raw_json(tmp_path, monkeypatch):
@@ -160,8 +205,10 @@ def test_a_declare_global_in_a_script_fails_and_a_declaration_file_may_hold_one(
         "scripts/a.cts": "declare global {\n  interface Window { x: number }\n}\nexport {};\n",
         "recorder/tests/globals.d.ts": "declare global {\n  var helper: number;\n}\nexport {};\n",
         "recorder/ui/b.mts": "declare const window: Window & typeof globalThis & {x: number};\nexport {};\n",
+        "recorder/ui/app/c.ts": "declare global {\n  interface Window { y: number }\n}\nexport {};\n",
     }
     project_root(tmp_path, monkeypatch, files)
     monkeypatch.setattr(node, "run_project", no_tsc)
-    [problem] = node.check()
-    assert problem.startswith("scripts/a.cts: `declare global` is not allowed in a script")
+    problems = node.check()
+    assert [problem.split(":")[0] for problem in problems] == ["recorder/ui/app/c.ts", "scripts/a.cts"]
+    assert all("`declare global` is not allowed in a script" in problem for problem in problems)

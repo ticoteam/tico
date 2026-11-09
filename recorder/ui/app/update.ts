@@ -1,21 +1,26 @@
-// Tico Recorder's updates in the window. app.js hands `status.update` to `ticoUpdate` on every view, and
+// Tico Recorder's updates in the window. app.ts hands `status.update` to `ticoUpdate` on every view, and
 // draws `ticoUpdateRow` in Settings.
 // - Nothing shows while the app is held (`held`: a recording, a live or paused meeting, a send).
 // - A copy that cannot update itself and is not in an Applications folder (`prompt`) asks once per launch,
 //   before the first recording: Move or Not now. After Not now the smaller banner offers the move.
 // - The banner shows when a downloaded build is ready, with one line of the release notes, and Restart.
 // - The Settings row shows the version, Check for updates and its states, or Move to Applications.
-(() => {
-  const invoke = (cmd, args = {}) => window.__TAURI__.core.invoke(cmd, args);
-  const esc = (value) =>
-    String(value ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
-  const DISMISSED = 'tico.recorder.move-dismissed';
-  const stored = (key) => { try { return localStorage.getItem(key); } catch { return null; } };
-  const store = (key, value) => { try { localStorage.setItem(key, value); } catch {} };
+import type { Invoke, RecorderWindow, UpdateStatus } from '../types/bridge.d.ts';
 
-  let banner = null;
+declare const window: RecorderWindow;
+
+(() => {
+  // The reply is the Rust command's, typed by the command map.
+  const invoke: Invoke = (cmd: string, args: object = {}) => window.__TAURI__.core.invoke(cmd, args) as Promise<never>;
+  const esc = (value: unknown) =>
+    String(value ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c as '&']);
+  const DISMISSED = 'tico.recorder.move-dismissed';
+  const stored = (key: string) => { try { return localStorage.getItem(key); } catch { return null; } };
+  const store = (key: string, value: string) => { try { localStorage.setItem(key, value); } catch {} };
+
+  let banner: HTMLDivElement | null = null;
   let shown = '';
-  let last = null;
+  let last: UpdateStatus | null = null;
   // Move to Applications, on this page only: a newer copy found there, an error, or a move under way.
   const move = { ask: '', error: '', busy: false };
   let checkError = '';
@@ -23,14 +28,14 @@
   let promptDone = false;
 
   /** The release notes line, or '' for none or the build's "Built from <sha>" placeholder. */
-  const noteLine = (notes) => {
+  const noteLine = (notes: string) => {
     const line = String(notes || '').split('\n').map((l) => l.trim()).find(Boolean) || '';
     return /^Built from [0-9a-f]+$/.test(line) ? '' : line;
   };
 
   const redraw = () => { shown = ''; render(last); window.ticoRedraw?.(); };
 
-  async function doMove(how) {
+  async function doMove(how: string) {
     move.busy = true; move.error = ''; redraw();
     try {
       const reply = await invoke('move_to_applications', { how });
@@ -61,14 +66,14 @@
   }
 
   /** The Settings row. */
-  function row(update) {
-    const u = update || {};
+  function row(update: UpdateStatus | undefined) {
+    const u: Partial<UpdateStatus> = update || {};
     const name = `<div class="name">${u.current ? `Version ${esc(u.current)}` : 'Version'}</div>`;
     let tail;
     if (u.location) {
       tail = `<span class="value warn">${esc(u.location)}</span>${u.movable ? moveControls() : ''}`;
     } else {
-      const button = (busy) => `<button class="btn small" data-upd="check" ${busy ? 'disabled' : ''}>Check for updates</button>`;
+      const button = (busy: boolean) => `<button class="btn small" data-upd="check" ${busy ? 'disabled' : ''}>Check for updates</button>`;
       const restart = `<button class="btn small primary" data-upd="restart">Restart</button>`;
       switch (u.state) {
         case 'checking': tail = `<span class="value"><span class="spin"></span>Checking…</span>${button(true)}`; break;
@@ -97,7 +102,7 @@
       + `<button class="btn" data-upd="not-now">Not now</button><button class="btn primary" data-upd="move">Move</button>`;
   }
 
-  function render(update) {
+  function render(update: UpdateStatus | null | undefined) {
     last = update ?? null;
     if (last?.held) promptDone = true;
     const key = JSON.stringify([last, move, stored(DISMISSED), promptDone]);
@@ -136,7 +141,8 @@
   }
 
   document.addEventListener('click', (event) => {
-    const el = event.target.closest('[data-upd]');
+    const el = (event.target as Element).closest<HTMLButtonElement>('[data-upd]');
+
     if (!el || el.disabled) return;
     event.preventDefault();
     const what = el.dataset.upd;

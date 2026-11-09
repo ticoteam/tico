@@ -400,7 +400,7 @@ jobs:
         run: bash scripts/check_ui_lint.sh --base "$BASE_SHA"
       - name: UI strict (new UI code is TypeScript; each .ts file type-checks strictly)
         run: python3 scripts/check_ui_strict.py --base "$BASE_SHA"
-      - name: Node types (the .cts/.mts scripts under scripts/ and recorder/ type-check strictly, no baseline)
+      - name: Node types (the scripts under scripts/ and recorder/, and the Recorder window, type-check strictly, no baseline)
         run: python3 scripts/check_node_types.py
       - name: UI routes
         run: PATH="$RUNNER_TEMP/venv/bin:$PATH" bash scripts/check_ui_routes.sh --base "$BASE_SHA"
@@ -517,6 +517,15 @@ jobs:
           shared-key: pr-recorder
       - name: Rust 1.92.0 for the format and lint step (the version scripts/rust_checks.sh pins)
         run: rustup toolchain install 1.92.0 --profile minimal --component clippy,rustfmt
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: package-lock.json
+      - name: The window's scripts (TypeScript, stripped into recorder/dist, which the desktop build embeds)
+        run: |
+          npm ci --ignore-scripts --no-audit --no-fund
+          node recorder/build-ui.cjs
       - name: Format and lint, with the desktop and cli features
         working-directory: recorder
         run: |

@@ -4,7 +4,9 @@
   "version": "0.2.0",
   "identifier": "team.tico.recorder.native",
   "build": {
-    "frontendDist": "ui/app"
+    "frontendDist": "dist/app",
+    "beforeBuildCommand": "node recorder/build-ui.cjs",
+    "beforeDevCommand": { "script": "node recorder/build-ui.cjs", "wait": true }
   },
   "app": {
     "withGlobalTauri": true,

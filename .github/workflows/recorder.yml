@@ -39,6 +39,13 @@ jobs:
           "$PY" -c "import json,os; p='recorder/tauri.conf.json'; d=json.load(open(p)); d['version']=os.environ['GITHUB_REF_NAME'].removeprefix('v'); json.dump(d, open(p,'w'), indent=2)"
       - name: Tauri CLI
         run: cargo install tauri-cli --version "^2" --locked
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: package-lock.json
+      - name: esbuild, for the window's scripts (tauri.conf.json's beforeBuildCommand strips them into recorder/dist)
+        run: npm ci --ignore-scripts --no-audit --no-fund
       - name: Apple signing identity
         env:
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
