@@ -68,7 +68,8 @@ function frProblem(state) {
     for (let at = frReports(state, card.slug); at && !at.startsWith('human:'); at = frReports(state, at)) {
       if (seen.has(at)) return `${catalogName(cat, card)} and ${catalogName(cat, catalogCard(cat, at) || card)} report to each other. Point one of them at a human.`;
       seen.add(at);
-      if (!catalogCard(cat, at) || catalogCard(cat, at).required) break;
+      const next = catalogCard(cat, at);
+      if (!next || next.required) break;
     }
   }
   const inbox = cat.cards.find(card => card.template === 'inbox');
@@ -79,7 +80,7 @@ function frProblem(state) {
 function frSummaryTeamHTML(state) {
   const cat = state.catalog, org = state.org;
   // In the order they are set up: each department's head first, then its team.
-  const rows = Object.keys(frSelection(state)).map(slug => catalogCard(cat, slug)).filter(card => card && !card.required && card.kind !== 'helper');
+  const rows = Object.keys(frSelection(state)).map(slug => catalogCard(cat, slug)).filter((card): card is CatalogCard => !!card && !card.required && card.kind !== 'helper');
   // Built-ins and explicit catalog helpers stay outside the chart, in separate review rows.
   const helpers = cat.cards.filter(card => card.required)
     .map(card => esc(catalogName(cat, card))).join(', ');
