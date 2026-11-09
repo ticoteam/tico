@@ -125,7 +125,7 @@ rust_fmt() {  # CRATE: cargo fmt --check as rust_checks.sh runs it
 # 1. Python lint, as lint.sh runs it in CI: the ruff baseline (counts only go down, against origin/main), the pytest
 # ignore count, and ruff format over the whole repository. The ruff settings and the pytest config are inputs too.
 # lint.sh also runs pr_checks.py smoke-check, which reads the smoke set and the browser runner's core scripts.
-if touched '\.pyi?$|^ruff\.toml$|^baselines/ruff/|^pytest\.ini$|^scripts/(lint|lint_baseline|pytest_warning_ignores|baseline_files)\.(sh|py)$|^scripts/queue-smoke\.json$|^scripts/ui-tests\.cjs$|^ui/tests/.*\.cts$'; then
+if touched '\.pyi?$|^ruff\.toml$|^baselines/ruff/|^pytest\.ini$|^scripts/(lint|lint_baseline|pytest_warning_ignores|baseline_files)\.(sh|py)$|^scripts/queue-smoke\.json$|^scripts/ui-tests\.cts$|^ui/tests/.*\.cts$'; then
   job "lint (ruff baseline, format)" env LINT_BASE_REF="$ratchet" bash scripts/lint.sh
 else
   skip "lint (ruff baseline, format)" "no Python, ruff or pytest config changed"

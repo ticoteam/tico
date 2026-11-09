@@ -2,7 +2,7 @@
 
 The browser suite keeps feature paths and client-side safety checks. Server rules also have Python
 coverage; a passing API test does not replace a keyboard interaction or DOM security assertion.
-`node scripts/ui-tests.cjs --all` runs 48 scripts; the default runner still includes the main pages,
+`node scripts/ui-tests.cts --all` runs 48 scripts; the default runner still includes the main pages,
 permission and privacy boundaries. Scripts use bounded condition waits and the shared load factor.
 
 The suite cut removes six standalone scripts and repeated presentation walkthroughs. No product,

@@ -184,7 +184,7 @@ def entry(command, env, timeout=60):
     'entry_point,code,says',
     [
         (['python', 'scripts/release_checks.py', '--help'], 0, 'usage:'),  # the release checks and release validation
-        (['node', 'scripts/ui-tests.cjs', 'no-such-script'], 1, 'no UI test scripts matched'),  # the browser runner
+        (['node', 'scripts/ui-tests.cts', 'no-such-script'], 1, 'no UI test scripts matched'),  # the browser runner
         (['scripts/full-suite.sh', '--co', '-q', 'scripts/tests/test_heavy.py'], 0, 'test_heavy.py'),
     ],
     ids=['release_checks', 'ui-tests', 'full-suite'],
@@ -207,7 +207,7 @@ def test_the_heavy_entry_points_take_one_slot_wait_for_it_and_stop_whole(tmp_pat
         assert (got, says in out + err, 'waiting for heavy-job slot' in err) == (code, True, False), (how, out, err)
 
     if entry_point[0] == 'python':
-        return  # release_checks.py goes through the same exec wrapper as full-suite.sh; ui-tests.cjs spawns its
+        return  # release_checks.py goes through the same exec wrapper as full-suite.sh; ui-tests.cts spawns its
         # work and forwards signals instead, so it keeps its own hold-and-terminate run
     holders = [job(tmp_path, f'h{n}', 30) for n in range(2)]
     time.sleep(0.5)

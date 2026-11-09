@@ -524,7 +524,7 @@ jobs:
         run: |
           mkdir -p "$RUNNER_TEMP/junit"
           echo "PYTEST_ADDOPTS=$PYTEST_ADDOPTS -o junit_family=xunit1 --junitxml=$RUNNER_TEMP/junit/python-${TICO_RELEASE_SHARD//\//-of-}.xml" >> "$GITHUB_ENV"
-      - name: Write the browser part's per-script seconds (ui-tests.cjs TICO_UI_TIMINGS), for the PR check groups
+      - name: Write the browser part's per-script seconds (ui-tests.cts TICO_UI_TIMINGS), for the PR check groups
         if: matrix.part == 'browser'
         run: |
           mkdir -p "$RUNNER_TEMP/junit"

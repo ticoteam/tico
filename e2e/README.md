@@ -97,7 +97,7 @@ not from these kinds.
 
 | Plan kind | Where it lives | Not covered |
 |---|---|---|
-| Browser journeys | `scripts/ui-tests.cjs --group e2e` (`ui/tests/e2e-*.cjs`; the Automations, Meetings and sign-in journeys run inside `redesign-e2e-automations`, `meeting-linked-tasks` and `model-login`), on RunsOn | No rollback smoke journey |
+| Browser journeys | `scripts/ui-tests.cts --group e2e` (`ui/tests/e2e-*.cts`; the Automations, Meetings and sign-in journeys run inside `redesign-e2e-automations`, `meeting-linked-tasks` and `model-login`), on RunsOn | No rollback smoke journey |
 | Bots end-to-end | `backend/tests/test_e2e_bots.py`, `test_e2e_bot_rename.py` | A real Rust runner on a demo computer |
 | MCP | `backend/tests/test_e2e_mcp.py` (every remote tool) | Claude Code and Codex sessions that run a scripted task (need real harnesses and model access) |
 | CLI | `backend/tests/test_e2e_cli.py` (every hub command in templates and skills) | |
@@ -114,7 +114,7 @@ public API references, not live captures. Each names its source. A renamed field
 
 ## Not in this package
 
-Browser UI journeys (`scripts/ui-tests.cjs`), the Docker install journey (`scripts/journey-test.sh`), bot, MCP and CLI
+Browser UI journeys (`scripts/ui-tests.cts`), the Docker install journey (`scripts/journey-test.sh`), bot, MCP and CLI
 checks, and the factory evals (`evals/factory/`) run from their own scripts and kinds, not from `python -m e2e.run`.
 
 ## On RunsOn

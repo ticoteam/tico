@@ -430,7 +430,7 @@ python scripts/release_checks.py
 ```
 
 That is the default suite: pytest in parallel without the tests marked `@pytest.mark.slow` (about a minute), then the
-core browser scripts (`CORE` in `scripts/ui-tests.cjs`) with the load-aware concurrency described below. The check records wall time and load; it
+core browser scripts (`CORE` in `scripts/ui-tests.cts`) with the load-aware concurrency described below. The check records wall time and load; it
 takes about two minutes, and a run over 300 seconds still passes and says it is slow. There is no budget on the
 number of tests: keep every test that guards a real failure, and none of wording or copy. Release validation builds the three images and the Release workflow publishes them with the
 GitHub release. The merge queue never runs the full default suite: an uncertain selection runs the smoke set, and known mappings run the affected tests above. Release validation runs the full gate for an explicitly dispatched immutable candidate. `--release` runs this suite too, along with the
@@ -632,7 +632,7 @@ python scripts/release_checks.py --release --previous v0.3.21  # upgrade from a 
 This is the full suite, run once per release. It builds the server, runner and updater images once (BuildKit cache;
 a source-only change rebuilds one layer per image), while the journey installs the previous release. After every build
 finishes, it runs every Python test except Docker isolation, the opt-in `@pytest.mark.slow` ones included (real git,
-Docker, servers and long timers), and every browser script (`node scripts/ui-tests.cjs --all`). Python uses half the
+Docker, servers and long timers), and every browser script (`node scripts/ui-tests.cts --all`). Python uses half the
 CPU count in workers (at least one; six on a 12-core Mac); `TICO_PYTHON_WORKERS` overrides that default.
 The browser runner samples CPU counters over one second at startup. The idle fraction is the change
 in idle time divided by the change in total CPU time across all cores. Its job count is

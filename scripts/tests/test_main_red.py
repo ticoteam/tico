@@ -240,7 +240,7 @@ def test_failing_tests_come_from_pytest_lines_and_the_ui_scripts_line():
         "google-tab.cjs",
         "support.cjs",
     ]
-    # The line scripts/ui-tests.cjs prints today names the total run time as "(all M took Ss)".
+    # The line scripts/ui-tests.cts prints today names the total run time as "(all M took Ss)".
     assert mr.failing_tests("2 of 60 UI scripts failed: chat.cjs, docs.cjs (all 60 took 253s)\n") == [
         "chat.cjs",
         "docs.cjs",
