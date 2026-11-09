@@ -94,6 +94,10 @@ async function ownerSetsCaps(browser: import('playwright').Browser) {
   const spent = await page.locator('.pe-cap-spent').allTextContents();
   assert.ok(spent[0]?.includes('Today: $1.25') && spent[1]?.includes('This month: $42.10'), `each field shows its period's spend: ${JSON.stringify(spent)}`);
   assert.equal(await page.locator('[data-pe-caps] .use-meter').count(), 0, 'no bar until a cap is set');
+  // The stuck row keeps the editor's three stuck settings (Engineering Lead's decision on A1): hours before the manager, hours
+  // before a person, and days before a question expires. They are not replaced by a fixed line.
+  assert.deepEqual(await page.locator('[data-pe-number]').evaluateAll(els => els.map(el => el.getAttribute('data-pe-number'))),
+    ['stuck_after_hours', 'ask_person_after_hours', 'question_expiry_days'], 'A1: the stuck row shows the three stuck settings');
 
   await daily.fill('5');
   await daily.press('Enter');
