@@ -39,6 +39,7 @@ def test_a_server_answers_while_its_start_jobs_run_and_waits_for_them_to_stop(tm
     monkeypatch.setattr(Onboarding, "ensure_goal_manager", job("goal_manager"))
     monkeypatch.setattr(Onboarding, "ensure_task_manager", job("task_manager"))
     monkeypatch.setattr(Onboarding, "ensure_counsel", job("counsel"))
+    monkeypatch.setattr(Onboarding, "ensure_brand_owner", job("brand_owner"))
     monkeypatch.setattr(listening, "seed_market", job("market"))
     monkeypatch.setattr(message_bots, "backfill", job("message_bots"))
     monkeypatch.setattr(github, "ship_deployed", job("ship_deployed"))
@@ -66,7 +67,16 @@ def test_a_server_answers_while_its_start_jobs_run_and_waits_for_them_to_stop(tm
             release.set()
             server.result(10)
     # Stopping waited for them, and they ran in their old order, off the event loop's thread.
-    assert ran == ["librarian", "goal_manager", "task_manager", "counsel", "market", "message_bots", "ship_deployed"]
+    assert ran == [
+        "librarian",
+        "goal_manager",
+        "task_manager",
+        "counsel",
+        "brand_owner",
+        "market",
+        "message_bots",
+        "ship_deployed",
+    ]
     assert threading.get_ident() not in threads and len(threads) == 1
     assert captured == []
 
@@ -111,7 +121,13 @@ def startup_jobs(tmp_path, monkeypatch):
     onboarding = SimpleNamespace(
         **{
             name: job(name)
-            for name in ("ensure_librarian", "ensure_goal_manager", "ensure_task_manager", "ensure_counsel")
+            for name in (
+                "ensure_librarian",
+                "ensure_goal_manager",
+                "ensure_task_manager",
+                "ensure_counsel",
+                "ensure_brand_owner",
+            )
         }
     )
     monkeypatch.setattr(listening, "seed_market", job("market"))
@@ -170,6 +186,7 @@ def test_start_jobs_wait_for_write_admission_instead_of_skipping_jobs(startup_jo
         "ensure_goal_manager",
         "ensure_task_manager",
         "ensure_counsel",
+        "ensure_brand_owner",
         "market",
         "message_bots",
         "ship_deployed",

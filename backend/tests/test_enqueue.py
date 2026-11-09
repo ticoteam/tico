@@ -1,7 +1,7 @@
 """Which jobs a message write queues: a characterization through the real writers.
 
-Each scenario writes messages the way the product does (chat, a bot's message to a bot, a task comment, an ask and its
-answer, a command, a quiet hand-off, a thread with members, a group room, a paused bot, a bot to itself, live meeting
+Each scenario writes messages the way the product does (chat, a bot's message to a bot, a task comment, a needs-action question and
+its reply, a command, a quiet hand-off, a thread with members, a group room, a paused bot, a bot to itself, live meeting
 lines, an external agent's inbox, an imported transcript) and records, for every message it wrote, who sent it to whom
 and whether a job was queued for it. The expected rows were recorded while the `queue_bot_message` trigger did the
 queueing; `backend/enqueue.py` must queue exactly the same jobs.
@@ -64,18 +64,18 @@ def test_a_message_to_a_person_queues_nothing(api):
     assert _written(api, at) == [(ops, "human:ben", "say", False)]
 
 
-def test_a_bot_to_bot_message_and_an_ask_with_its_answer(api):
+def test_a_bot_to_bot_message_and_a_needs_action_question_with_its_reply(api):
     ops, coo = _bot(api, "ops"), _bot(api, "coo")
     at = _since(api)
     with api.app.state.store.transaction() as c:
         H.say(c, ops, coo, "FYI the invoices are filed.")
-        asked = H.say(c, ops, coo, "Which bank pays payroll?", kind="ask")
+        asked = H.say(c, ops, coo, "Which bank pays payroll?", refs={"needs_action": True})
     sent = [w for w in _written(api, at) if w[0] == ops]
-    assert sent == [(ops, coo, "say", False), (ops, coo, "ask", True)]
+    assert sent == [(ops, coo, "say", False), (ops, coo, "say", True)]
     at = _since(api)
     with api.app.state.store.transaction() as c:
-        H.answer(c, coo, asked["id"], "Acme Bank.")
-    assert [w for w in _written(api, at) if w[2] == "answer"] == [(coo, ops, "answer", True)]
+        H.say(c, coo, ops, "Acme Bank.", in_reply_to=asked["id"])
+    assert _written(api, at) == [(coo, ops, "say", True)]
 
 
 def test_a_task_for_a_bot_and_a_comment_on_it(api):
@@ -259,6 +259,7 @@ def _bare(trigger):
         "CREATE TABLE messages(id TEXT PRIMARY KEY, sender_id TEXT, recipient_id TEXT, refs TEXT, created_at TEXT);"
         "CREATE TABLE jobs(id TEXT PRIMARY KEY, message_id TEXT, bot_id TEXT, created_at TEXT);"
         "CREATE TABLE runners(id TEXT PRIMARY KEY, revoked_at TEXT);"
+        "CREATE TABLE registry_metadata(key TEXT PRIMARY KEY, value TEXT);"  # enqueue reads the company pause here
         "INSERT INTO runners VALUES('mac', NULL), ('old-mac', '2026-01-01');"
     )
     if trigger:

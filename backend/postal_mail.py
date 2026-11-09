@@ -685,7 +685,7 @@ class PostalMail:
                 secret, now_base, _ = gateway_connection.target(c, vault, self.settings)
             return secret if G.chat_base(now_base) == base else ""
 
-        write = J.gateway_writer(key_of, base, gateway_tiers.default_model("general", "low"), timeout=120)
+        write = J.gateway_writer(key_of, base, gateway_tiers.default_model("low"), timeout=120)
 
         def reader(data, mime, name):
             encoded = base64.b64encode(data).decode()

@@ -21,7 +21,7 @@ import yaml
 
 # Starlette prefers a different HTTP client for its test client; the seed needs only its own app.
 warnings.filterwarnings("ignore", message=".*starlette.testclient.*")
-from fastapi.testclient import TestClient  # noqa: E402
+from fastapi.testclient import TestClient
 
 from . import demo_content as D
 from . import docs, goals as G, hubdb, market, onboarding, providers, routines, slack_app, updates
@@ -180,6 +180,13 @@ class Builder:
             demo=False,
             demo_public=False,
             local_owner_token_file=None,
+            # The seed is not the demo, so the demo's no-model guard (judge.server_engine) does not apply to it. A
+            # person's check would dial the Gateway the demo's made-up key was saved for, and the answer ("auth" or
+            # "unavailable") would depend on timing. So people's daily model cap is zero for the whole build, as the
+            # bots' is zeroed around the schedule runs (demo_sections/schedules.py): each check is unchecked before
+            # any call.
+            decisions_daily_calls_owner=0,
+            decisions_daily_calls_human=0,
             test_identities={
                 OWNER: Identity("human:ana", "owner", D.PEOPLE[0]["email"]),
                 "demo-cara": Identity("human:cara", "human", D.PEOPLE[2]["email"]),
@@ -436,7 +443,7 @@ class Builder:
                 {
                     "id": row["id"],
                     "name": row["name"],
-                    "type": "company",
+                    "type": "organization",
                     "tier": row["tier"],
                     "aliases": row["aliases"],
                     "external_ids": row["external_ids"],
@@ -1168,6 +1175,9 @@ class Builder:
             c.execute("UPDATE jobs SET state='completed' WHERE state IN ('queued','leased','running','input')")
             c.execute("DELETE FROM update_queue")
             when = stamp(self.now)
+            # A manager's assignment is stamped by a trigger on SQLite's clock; the demo assigned it at its build time.
+            # Before the stamps below: this update writes change-feed rows of its own.
+            c.execute("UPDATE task_types SET manager_since=? WHERE manager_since IS NOT NULL", (when,))
             for (table,) in c.execute(
                 "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
             ).fetchall():

@@ -47,7 +47,7 @@ ANSWER = {
         {
             "period": "2026-11-02",
             "total_micros": 1_250_000,
-            "lines": [{"product": "gateway", "sku": "tico-mid-1.0:input", "amount_micros": 1_250_000}],
+            "lines": [{"product": "gateway", "sku": "tico-medium-1.0:input", "amount_micros": 1_250_000}],
         }
     ],
     "statement": {

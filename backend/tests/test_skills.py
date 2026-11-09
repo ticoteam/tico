@@ -144,6 +144,14 @@ def test_the_sha_is_the_same_whatever_order_the_files_come_in_and_is_the_canonic
     assert bundles.bundle_sha(files[:2]) != expected and "é".encode() in bundles.canonical_json(files)
 
 
+def test_a_proposal_keeps_each_file_byte_for_byte_so_its_sha_matches_the_submitters(api):
+    files = bundle(SKILL + "\n\n", {"path": "notes.md", "content": "  indented\n"})
+    p = proposal(api, files=files)
+    assert p["sha256"] == bundles.bundle_sha(files)
+    stored = api.get(f"/api/v2/skills/proposals/{p['id']}", headers=headers("ana-test")).json()["files"]
+    assert stored == bundles.normalize(files)
+
+
 def test_a_folder_is_packed_as_it_is_and_a_symlink_a_binary_file_or_an_oversize_one_is_refused(tmp_path):
     folder = tmp_path / "triage"
     (folder / "scripts").mkdir(parents=True)

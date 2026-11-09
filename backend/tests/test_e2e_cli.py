@@ -221,7 +221,6 @@ EXTRA = {
     "bot create": ["acme-smoke-bot", "--record-only"],
     "decision ask": ["--list"],
     "task child": ["--owner", "human:ana"],
-    "question ask": ["ops", "smoke question?", "--wait", "0"],
 }
 
 

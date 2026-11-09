@@ -61,7 +61,6 @@
   must_not:
     - '^approval (approve|decline)\b'
     - '^task (close|bulk)\b'
-    - '^question answer\b'
   reply: |
     Explains in plain words what the number counts: tasks filed for her (a bot's ask, a review or a missing input), bots'
     questions, approvals waiting on her, and tasks held on her. Most are routine output, not decisions. It may say the
@@ -93,7 +92,7 @@
     person by hand stays until it is set back to automatic. It is short and correct, and does not
     change anything.
 
-- id: tico-marketing-board
+- id: tico-board-for-marketing
   group: tico
   prompt: "Where is the Marketing board?"
   hub: []

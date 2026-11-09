@@ -2,6 +2,7 @@
 
 import os
 import sys
+import threading
 from pathlib import Path
 
 os.environ["TICO_REGISTRY_DIR"] = str(Path(__file__).parent / "backend/tests/fixtures/registry")
@@ -40,6 +41,11 @@ route_memo.install()
 import re  # noqa: E402
 import pytest  # noqa: E402
 
+from backend.tests import connection_guard  # noqa: E402
+
+# The per-test check of pooled connections: a test that leaves one open fails at its own teardown.
+from backend.tests.connection_guard import pooled_connections_closed  # noqa: E402, F401
+
 
 def pytest_addoption(parser):
     parser.addoption(
@@ -52,6 +58,26 @@ def pytest_addoption(parser):
         action="store_true",
         help="Build API fixture databases from empty paths (migration checks and benchmarks)",
     )
+    _flake_quarantine().addoption(parser)
+
+
+def _flake_quarantine():
+    """scripts/flake_quarantine.py, loaded by path like scripts/heavy_slot.py (scripts/ is not on every sys.path)."""
+    import importlib.util
+
+    name = "tico_flake_quarantine"
+    if name not in sys.modules:
+        spec = importlib.util.spec_from_file_location(name, Path(__file__).parent / "scripts/flake_quarantine.py")
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[name] = module
+        spec.loader.exec_module(module)
+    return sys.modules[name]
+
+
+def pytest_collection_modifyitems(config, items):
+    """PR checks and the merge queue pass --quarantine (scripts/pr_checks.py run --quarantine): each test listed in
+    ci/quarantine/ runs as a non-strict xfail. Release validation never passes it."""
+    _flake_quarantine().modify(config, items)
 
 
 def unix_socket_path_under_tmp_path(address, basetemp=None):
@@ -144,6 +170,50 @@ def pytest_sessionfinish(session, exitstatus):
         session.config.get_terminal_writer().line(
             "ERROR: no tests were collected; check the test paths and the -m / -k filters", red=True, bold=True
         )
+
+
+# The threads a scheduler tick starts for its passes (backend/scheduler.py): maintenance, thread ranking, stale review.
+TICK_PASS_THREADS = ("maintenance-run", "thread-rank", "stale-review")
+
+
+@pytest.fixture(autouse=True)
+def maintenance_runs_end(pooled_connections_closed, tmp_path):
+    """A scheduler tick starts its maintenance run, thread ranking and stale review passes on threads that outlive the
+    test. Join them here, before the test's tmp_path is removed at teardown: a pass still going would find its database
+    gone (tmp_path is the dependency that makes this teardown run first), or open a connection during a later test (a
+    thread-rank pass did, and that test's teardown closed it under the pass's statement: a segfaulted xdist worker). It
+    takes the pooled-connection guard as a parameter so the guard is set up first and tears down last: a pass this join
+    waits for can still hold a connection the guard checks."""
+    yield
+    for thread in threading.enumerate():
+        if thread.name in TICK_PASS_THREADS:
+            thread.join(timeout=60)
+            if thread.is_alive():
+                pytest.fail(f"{thread.name} still going 60 s after the test")
+
+
+@pytest.fixture(autouse=True)
+def store_pools_close(pooled_connections_closed):
+    """A store's idle connections stay open until the store is freed, and a store in a reference cycle is freed only by
+    the garbage collector, possibly during a later test, which then warns about the connections. Closing every store
+    the test made, when the test ends, closes those connections on the spot. A closed store still works: its next read
+    opens a new connection. Takes the guard as a parameter, so it tears down before the guard (see maintenance_runs_end)."""
+    yield
+    connection_guard.close_stores()
+
+
+def pytest_runtest_logreport(report):
+    """Under xdist the workers' teardown reports reach the controller here, so the check's cost is summed over them."""
+    if report.when == "teardown":
+        connection_guard.add_report(report)
+
+
+def pytest_terminal_summary(terminalreporter):
+    cost = connection_guard.SUMMED
+    terminalreporter.write_line(
+        f"pooled connection check: {cost['tests']} tests, {cost['seconds']:.1f} s of its own work "
+        f"({cost['joined']:.1f} s joining threads); the store's own connects took {cost['connect']:.1f} s, not counted"
+    )
 
 
 @pytest.fixture(scope="session")

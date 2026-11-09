@@ -21,7 +21,7 @@ NAV_DATASET = re.compile(r"\.dataset\.nav\s*=\s*['\"]([a-z-]+)['\"]")  # rows ad
 
 def nav_pages():
     pages = set(NAV_LINK.findall((UI / "index.html").read_text()))
-    for source in (UI / "app").glob("*.js"):
+    for source in sorted([*(UI / "app").glob("*.js"), *(UI / "app").glob("*.ts")]):
         text = source.read_text()
         pages.update(NAV_ROW.findall(text))
         pages.update(NAV_DATASET.findall(text))
@@ -40,8 +40,10 @@ PAGES = {
     "docs": page("docs", "docs"),
     "library": page("docs", "docs"),
     "files": page("files", "files"),
-    # Library › Skills (ui/app/skills.js): the directory, its usage and proposals (backend/demo_sections/skills.py).
+    # Library › Skills (ui/app/skills.ts): the directory, its usage and proposals (backend/demo_sections/skills.py).
     "skills": page("skills", "skills"),
+    # Library › Directory (ui/app/directory.ts): the people the demo's company works with (backend/demo_sections/directory.py).
+    "directory": page("entities/find/person", "rows"),
     "tools": page("tools", "integrations"),
     # The Tools page's one list (backend/api_tools.py); the old Connections row maps here until the nav drops it.
     "connections": page("tool-index", "rows"),
@@ -54,7 +56,7 @@ PAGES = {
     "growth": page("growth/numbers", "months", months=24),
     "finance": page("finance/transactions", "rows"),
     "rules": page("rules", "rules"),
-    # The Rules section's tabs, one row each under Rules (ui/app/org-rules.js reads).
+    # The Rules section's tabs, one row each under Rules (ui/app/org-rules.ts reads).
     "rules-internal": page("rules", "rules", kind="internal"),
     "rules-external": page("rules", "rules", kind="external"),
     "rules-due": page("rules/due", "due", next="3660d"),
@@ -144,12 +146,13 @@ def test_meeting_follow_up_has_an_answerable_needs_you_card(api):
         for row in api.get(f"/api/v2/meetings/{meeting['id']}/tasks").json()['tasks']
     }
     needs = api.get('/api/v2/needs-you?limit=200').json()['items']
-    assert any(
-        it['id'] in linked
-        and (it.get('ask') or {}).get('recipient_id') == 'human:ana'
-        and 'answer' in it.get('actions', [])
-        for it in needs
-    )
+
+    def filed_under_meeting(item):
+        detail = api.get(f"/api/v2/tasks/{item['id']}").json()['task']
+        return any(parent['id'] in linked for parent in detail['relations'].get('parent', []))
+
+    # The follow-up is a question task Ana owns, filed under the meeting's task; its card is answered by an update.
+    assert any('update' in it.get('actions', []) and filed_under_meeting(it) for it in needs)
 
 
 def test_demo_task_has_an_editor_for_the_live_task_page(api):

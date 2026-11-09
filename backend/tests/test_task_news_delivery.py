@@ -47,13 +47,6 @@ def test_a_task_notice_to_a_person_is_in_the_task_but_reaches_no_one(api):
     assert unread_for(api, "human:ben", thread_id) == 0
 
 
-def test_a_task_question_from_the_keeper_reaches_no_person_either(api):
-    thread_id = budget_thread(api)
-    question = task_notice(api, thread_id, "Still wanted? Budget review", kind="ask")
-    assert delivery(api, question["id"], "human:ben") is None
-    assert rows(api, "SELECT recipient_id FROM messages WHERE id=?", question["id"]) == [{"recipient_id": "human:ben"}]
-
-
 def test_a_task_notice_still_wakes_its_bot_owner_as_before(api):
     with api.app.state.store.transaction() as c:
         direct = threads.dm(c, "human:ana", ["bot:ops"])

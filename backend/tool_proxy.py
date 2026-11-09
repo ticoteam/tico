@@ -412,7 +412,7 @@ def install(app, store):
             return refused(status, code, detail)
         tool, credential, key = ready['tool'], ready['credential'], ready['key']
         secrets = secrets_of(key, credential.get('username') or '')
-        log = lambda status, result, detail: loop().run_in_executor(  # noqa: E731
+        log = lambda status, result, detail: loop().run_in_executor(
             None,
             record,
             tool_id,

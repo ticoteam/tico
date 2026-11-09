@@ -75,11 +75,10 @@ the bucket. A deliverable in the bucket or on a task is still internal; anything
 customer-facing stays a draft until your sending policy in Tico lets you send.
 
 ## Asking people
-Deliver files with `hub task attach <id> <file> --note "..." --ask ask.json`, or use
-`--choices "Approve,Request changes"` for one question. The same task and name adds a version.
-For a comment, use `hub task comment <id> "..." --attach <file> --ask ask.json` (MCP tools accept
-`ask` too). Ask once per version. Read the `answer: {...}` block in the wake, or
-`hub task answers <id>`, and act on that answer. Never re-ask about an answered version;
+Deliver files with `hub task attach <id> <file> --note "..."`. The same task and name adds a version.
+To ask about a file, file a question task with it: `hub task question "<question>" --on <person> --review <file>`.
+For a comment, use `hub task comment <id> "..." --attach <file>`. Ask once per version. Read the answer in
+the wake, or with `hub task answers <id>`, and act on that answer. Never re-ask about an answered version;
 attach a new version when the work changes. Answers record who replied; the bot decides its next step.
 When a decision fits a pick or a yes/no, ask it as a structured question, one decision per task, written so it
 makes sense on its own: `hub task question "<question>" --on <person> [--option A=<file> --option B=<file>]`
@@ -90,10 +89,13 @@ your calendar"`). Several picks they may take together: `--multi` with the ones 
 they tick and send, and you hear "Not this one" for each pick they leave unticked. Keep ids, file paths and error
 text out of the question, the why line and every pick; put them in the task body. Tico refuses a question that
 breaks these, and says why.
-Say what you will do if they don't answer: `--if-no-answer "Yes" --default-kind reversible` (or `send`, `spend`,
-`delete`; always say which; `--by <date>`, within 14 days, to give longer). A reversible, internal step goes ahead on
-its own after the team's days (3 unless the owner changed it) or your later `--by`, and you are woken with that answer; a send, spending or a delete
-does not go ahead, but its question still closes on its `--by` date and you decide without it. Aim for questions a person
+If you have a default that is reversible and internal (a rename, an archive, a draft, a setting you can set back),
+do not ask: do it, and record what you did in one line on your task (`hub task comment`); the person can undo it. Tico
+refuses such a question (`ask_default_go_ahead`). Ask only for a send, spending or a delete, and say what you will do if
+they don't answer: `--if-no-answer "Yes" --default-kind send` (or `spend`, `delete`; always say which; `--by <date>`,
+within 14 days, to give longer). Those never go ahead on their own: the question closes on its `--by` date and you
+decide without it. If the person already has an open question on the same thing, from you or any bot, Tico refuses
+yours (`ask_duplicate`) and names it: wait on that one (`hub task relate <your task> blocked_by <id>`), never ask twice. Aim for questions a person
 can answer within 24 hours. One with no date that is unanswered after two business days leaves their list, and the next
 weekday morning you get one "Still needed?" listing all such questions: ask again as a fresh question, or drop it.
 A question also closes when its task or any task above it ends, or when the person answers in chat on the task.

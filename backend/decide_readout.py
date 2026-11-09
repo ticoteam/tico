@@ -1,9 +1,10 @@
 """The weekly Decide readout: per question set, the window's calls, cost, model (Jev, Decide Medium or High, or the
 fallback) and answer spread, and the month's spend against the team's cap (`GET /api/v2/decisions/readout`, `hub decision readout`).
 
-Plain code over the audit, no model: calls and models from the `judge.call` rows, cost from the `judge.spend` rows
+Plain code over the audit, no model: calls and models from the `judge.call` rows, cost from the spend rows
 (`backend/judge.py` `metered` writes one after every paid call, so a batch or a nightly run counts each call it paid
-for). Rows are grouped by question set, the id before the `@` of their label, so a set's versions read as one.
+for). Org rule checks meter under their own budget and write `rules.spend` rows (`backend/org_rule_check.py` BUDGET), so
+those count toward their set's cost too; the month's cap shown here is Decide's own. Rows are grouped by question set, the id before the `@` of their label, so a set's versions read as one.
 
 It names nothing a caller wrote. A label is free text, so only the shipped question sets (`questions/*.json`, the
 company's registry copy, and the few sets the code asks inline) are named; every other label is one "(other labels)"
@@ -23,6 +24,7 @@ from datetime import datetime, timedelta, timezone
 from clients import judge as J
 from .judge import spent_this_month, budget_cap
 
+SPEND_ACTIONS = ("judge.spend", "rules.spend")  # one row per paid call, under each budget's own spend action
 OTHER_LABELS = "(other labels)"
 OTHER_QUESTIONS = "(other questions)"
 OPEN_ITEM = "(an open item)"
@@ -113,8 +115,12 @@ def _tier(model):
 
 
 def _on_jev(model):
-    """Whether `model` is Jev: TypeSafe's own name, or a Tico model the Tico AI Gateway answers with on Jev (Low and the
-    classifier). Decide Medium and High are not Jev, whatever the Gateway's list of models says."""
+    """Whether `model` is Jev: TypeSafe's own name, or a Tico model the Tico AI Gateway answers with on Jev (Decide Low;
+    a call recorded under an id from before this lineup counts as the id it is now). Decide Medium and High are not
+    Jev, whatever the Gateway's list of models says."""
+    from .gateway_tiers import new_id
+
+    model = new_id(model)
     return str(model or "").lower().startswith("jev") or (model in J.GATEWAY_MODELS and _tier(model) is None)
 
 
@@ -175,12 +181,12 @@ def readout(c, settings, days=7, at=None):
     days = max(1, min(MAX_DAYS, int(days)))
     end = at or datetime.now(timezone.utc)
     start = end - timedelta(days=days)
-    stamp = lambda t: t.strftime("%Y-%m-%dT%H:%M:%S.%f") + "Z"  # noqa: E731 hubdb.now()'s format
+    stamp = lambda t: t.strftime("%Y-%m-%dT%H:%M:%S.%f") + "Z"  # hubdb.now()'s format
     sets, versions = known_sets(getattr(settings, "registry_dir", None))
     by = {}
     rows = c.execute(
         "SELECT action, target, detail FROM events WHERE created_at>=? AND created_at<? "
-        "AND action IN ('judge.call','judge.spend')",
+        "AND action IN ('judge.call','judge.spend','rules.spend')",
         (stamp(start), stamp(end)),
     ).fetchall()
     for action, target, raw in rows:
@@ -192,7 +198,7 @@ def readout(c, settings, days=7, at=None):
         label = detail.get("label") or target
         name = set_of(label, sets)
         row = by.setdefault(name, _empty())
-        if action == "judge.spend":
+        if action in SPEND_ACTIONS:
             cost = detail.get("cost_usd")
             if isinstance(cost, (int, float)) and not isinstance(cost, bool):
                 row["cost_usd"] += float(cost)

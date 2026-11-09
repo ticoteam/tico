@@ -102,14 +102,15 @@ def back_off(c, row):
         return False
     if c.execute('SELECT 1 FROM attempts WHERE task_id=? AND settled_at IS NOT NULL LIMIT 1', (row['id'],)).fetchone():
         return False
-    H._set_status(
+    if not H.try_auto_move(
         c,
         H.KEEPER,
         row,
         status='open',
         note='Automatic start returned to the queue: a blocker was linked',
         skip_step_wake=(row['owner_id'],),
-    )
+    ):
+        return False
     c.execute('UPDATE tasks SET version=version+1 WHERE id=?', (row['id'],))
     H.recount(c, [row['owner_id'], row['requester_id']])
     return True
@@ -235,40 +236,6 @@ def prime_waits(c, rows):
             other.add(row['to_task'])
     prime_rows(c, H.OPEN_CHILDREN_SQL, {(tid,): found for tid, found in kids.items()})
     prime(c, OTHER_CHILD_SQL, {(tid, owner_of[tid]): (1,) if tid in other else None for tid in ids})
-    # The owner's unanswered questions about each task (wait_detail), and what answered them (answers_to).
-    asks = {(r['owner_id'], r['id']): [] for r in rows}
-    for part in H.chunks(sorted({owner for owner, _ in asks})):
-        for row in c.execute(
-            f"SELECT m.id,m.recipient_id,m.sender_id,{H.MESSAGE_TASK_SQL} task FROM messages m "
-            f"JOIN conversations cv ON cv.id=m.conversation_id WHERE m.sender_id IN ({_marks(part)}) "
-            "AND m.kind='ask' AND m.superseded_at IS NULL",
-            part,
-        ):
-            if (row['sender_id'], row['task']) in asks:
-                asks[(row['sender_id'], row['task'])].append(row)
-    prime_rows(c, H.WAIT_ASKS_SQL, {pair: found for pair, found in asks.items() if len(found) <= 1})
-    asked = sorted({found[0]['id'] for found in asks.values() if len(found) == 1})
-    answers = {}
-    for part in H.chunks(asked):
-        for row in c.execute(
-            f"SELECT * FROM messages WHERE in_reply_to IN ({_marks(part)}) AND kind='answer' AND deleted_at IS NULL",
-            part,
-        ):
-            answers.setdefault(row['in_reply_to'], []).append(row)
-    prime(
-        c,
-        H.ANSWER_SQL,
-        {(mid,): answers[mid][0] if mid in answers else None for mid in asked if len(answers.get(mid, ())) <= 1},
-    )
-    for part in H.chunks(asked):
-        prime(
-            c,
-            H.ANSWERED_BY_SQL,
-            {
-                (row['id'],): row
-                for row in c.execute(f"SELECT answered_by_id,id FROM messages WHERE id IN ({_marks(part)})", part)
-            },
-        )
 
 
 def _marks(values):
@@ -333,16 +300,6 @@ def maybe_waiting(c, rows):
         "AND state IN ('open','draft','merged') AND json_extract(detail,'$.wake_once') IS NOT NULL",
         ids,
     )
-    # an unanswered question the owner asked about the task: owner and task are matched in Python
-    pairs = {(r['owner_id'], r['id']) for r in rows if r['id'] not in suspect}
-    for part in H.chunks(sorted({actor for actor, _ in pairs})):
-        for actor, tid in c.execute(
-            f"SELECT m.sender_id,{H.MESSAGE_TASK_SQL} FROM messages m JOIN conversations cv ON cv.id=m.conversation_id "
-            f"WHERE m.sender_id IN ({_marks(part)}) AND m.kind='ask' AND m.superseded_at IS NULL",
-            part,
-        ).fetchall():
-            if (actor, tid) in pairs:
-                suspect.add(tid)
     return suspect
 
 
@@ -491,6 +448,7 @@ def counts_many(c, tasks_by_bot, who=None):
             )
     every = [row for tasks in tasks_by_bot.values() for row in tasks]
     suspect = maybe_waiting(c, every)
+    person_held = person_waits(c, [row['id'] for row in every if row['id'] in suspect])
     steps = step_names(c, every)
     held = set()
     for part in H.chunks(tasks_by_bot):
@@ -510,7 +468,7 @@ def counts_many(c, tasks_by_bot, who=None):
                 continue  # a held task takes no place in the bot's optional task cap
             if who is not None and not privacy.task_readable(c, who, row):
                 continue
-            if row['id'] in suspect and waiting(c, row):
+            if row['id'] in suspect and (row['id'] in person_held or waiting(c, row)):
                 continue
             if row['status'] == 'doing':
                 going += 1
@@ -518,6 +476,24 @@ def counts_many(c, tasks_by_bot, who=None):
                 queued += 1
         out[bot] = {'going': going, 'waiting': queued}
     return out
+
+
+def person_waits(c, ids):
+    """The ids among `ids` with an open subtask a person owns. `waiting` holds such a task on that subtask whatever else
+    is true (wait_detail returns its first open child that is not a bot's review), so counts_many reads these once for
+    all of them rather than each task's other waits one at a time (a question task is such a child)."""
+    held = set()
+    for part in H.chunks(ids):
+        held.update(
+            r[0]
+            for r in c.execute(
+                "SELECT DISTINCT r.to_task FROM task_relations r JOIN tasks t ON t.id=r.from_task "
+                f"WHERE r.kind='parent' AND r.to_task IN ({_marks(part)}) "
+                "AND t.status NOT IN ('done','closed','declined') AND t.owner_id NOT LIKE 'bot:%'",
+                part,
+            )
+        )
+    return held
 
 
 def refusal(c, row, config, woken=False, result=False, *, message=None, suspect=None):
@@ -705,7 +681,10 @@ def started(c, row, *, message=None):
         )
     steps = H.type_get(c, row['type_id'])['steps']
     step = next((s['id'] for s in steps if s['name'] == 'In Progress' and s['status'] == 'doing'), None)
-    H._set_status(c, H.KEEPER, row, status='doing', step=step, note=START_NOTE)
+    # A pipeline's requirements (or a subtask the rules won't file) hold the ticket where it is: the start is logged on
+    # the ticket as auto_start_refused and nothing moves; the rest of the job goes on.
+    if not H.try_auto_move(c, H.KEEPER, row, kind='auto_start_refused', status='doing', step=step, note=START_NOTE):
+        return H.task(c, row['id'])
     c.execute('UPDATE tasks SET version=version+1 WHERE id=?', (row['id'],))
     H.recount(c, [row['owner_id'], row['requester_id']])
     # Each start is one run of Start assigned tasks (Settings > Routines, Automations).

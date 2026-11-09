@@ -282,7 +282,7 @@ def upsert_mcp(directory, url):
     path = directory / "config.yaml"
     entry = {"url": url.rstrip("/") + "/api/v2/mcp", "headers": {"Authorization": "Bearer ${" + ENV_TOKEN + "}"}}
     try:
-        import yaml  # noqa: F401
+        import yaml
     except ImportError:
         yaml = None
     if yaml:
@@ -1313,15 +1313,20 @@ def cmd_reinstall(args):
     )
 
 
-# Tools renamed in Tico 0.2.21 (CHANGELOG, Breaking changes), old -> new. Names ending in `_` are prefixes.
+# Tools renamed in Tico 0.2.21 (CHANGELOG, Breaking changes) or taken away with asks (0.5), old -> new. Names ending
+# in `_` are prefixes.
 RENAMED_TOOLS = {
     "hub_say": "hub_message_send",
     "hub_notice": "hub_message_send (fyi)",
     "hub_inbox": "hub_message_list",
     "hub_ack": "hub_message_mark_read",
     "hub_history": "hub_conversation_show",
-    "hub_ask": "hub_question_ask",
-    "hub_answer": "hub_question_answer",
+    "hub_ask": "hub_task_question (a person) or hub_message_send (a bot)",
+    "hub_answer": "answer the question task in Tico",
+    "hub_question_ask": "hub_task_question (a person) or hub_message_send (a bot)",
+    "hub_question_answer": "answer the question task in Tico",
+    "hub_task_ask": "hub_task_question",
+    "hub_task_ask_resolve": "answer the question task in Tico",
     "hub_board": "hub_task_list (all)",
     "hub_task_stuck": "hub_task_list (stuck)",
     "hub_goals": "hub_goal_list",

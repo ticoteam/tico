@@ -100,7 +100,9 @@ def test_every_cli_command_has_a_tool_of_the_same_name():
         if command in names:
             names.remove(command)
             names.update(tools)
-    assert names - hubtools.SHELL_ONLY == set(hubtools.BY_NAME), names ^ set(hubtools.BY_NAME)
+    # An UNLISTED tool (a placeholder) has no command: it is reached only by name.
+    tools = set(hubtools.BY_NAME) - hubtools.UNLISTED
+    assert names - hubtools.SHELL_ONLY == tools, names ^ tools
     assert hubtools.SHELL_ONLY <= names
 
 
@@ -148,7 +150,7 @@ def test_every_thread_tool_is_listed_with_a_schema_a_caller_can_check(api):
         assert schema["additionalProperties"] is False, name
         assert set(schema.get("required", [])) <= set(schema["properties"]), name
         assert ("operation_id" in schema["properties"]) == (name in THREAD_WRITES), name
-    assert tools["hub_thread_post"]["inputSchema"]["properties"]["kind"]["enum"] == ["say", "ask"]
+    assert "kind" not in tools["hub_thread_post"]["inputSchema"]["properties"]  # asks are gone: a post is a say
     assert tools["hub_thread_update"]["inputSchema"]["properties"]["audience"]["enum"] == ["members", "team", "company"]
     assert "with" in tools["hub_thread_list"]["inputSchema"]["properties"]
 

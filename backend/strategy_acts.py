@@ -670,7 +670,7 @@ def undo(c, actor, action_id):
     try:
         for item in _per_task(row["done"]):
             task = H.task(c, item["task_id"])
-            note = lambda text, task_id=item["task_id"]: kept.append({"task_id": task_id, "text": text})  # noqa: E731
+            note = lambda text, task_id=item["task_id"]: kept.append({"task_id": task_id, "text": text})
             if not task:
                 note(f"{item['text']}: the task is gone")
                 continue

@@ -1,4 +1,4 @@
-/* ui/styles/chat-goal.css — A chat's pinned goal (ui/app/chat-goal.js) and the "/" command menu (ui/app/slash-commands.js). */
+/* ui/styles/chat-goal.css — A chat's pinned goal (ui/app/chat-goal.ts) and the "/" command menu (ui/app/slash-commands.ts). */
 
 /* The bar sits above the thread in the chat column and stays put while the thread scrolls. */
 .chat-goal{flex:none;margin:0 0 8px;border:1px solid var(--line);border-radius:12px;background:var(--surface)}

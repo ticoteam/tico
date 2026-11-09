@@ -158,7 +158,7 @@ Transitions:
 - `leased`, `running` or `input` to `queued` or `uncertain`: the attempt's lease expires or the attempt ends without a result. `queued` when nothing was done yet, `uncertain` otherwise (`execution.py` expiry and end-of-attempt paths).
 - On an attempt's end, each job takes the attempt's outcome state, or `canceled` for jobs a stop canceled (`execution.py`).
 - `running` or `input` to `uncertain`, and `leased` to `queued`: hub restart (`backend/backup.py`).
-- `queued` to `completed`: a person answers before any bot runs (`backend/app.py`, `UPDATE jobs SET state='completed' WHERE ... AND state='queued'`).
+- `queued` to `completed`: a person answers before any bot runs (`backend/bot_status_routes.py`, `UPDATE jobs SET state='completed' WHERE ... AND state='queued'`).
 - Any open state to `canceled`: stop, task closed or declined, duplicate wake, quota or wake presets (`app_delivery.py`, `delivery.py`, `demo.py`, `chat_goals.py`, `execution.py`).
 
 Enforcement: trigger on insert and update of `state`. NOT NULL, default `queued`.
@@ -540,7 +540,7 @@ Spellings still outside the stable set:
 - `principals`: no status column. Its `kind` (human, bot, agent, service, system) is a type, enforced by a CHECK.
 - `pages`, `humans`, `runners`, `cards`, `docs`, `task_types`, `automations`: no status or state column (`automations`
   keeps its state in `automation_versions.status` and `automation_runs.status`).
-- `conversations.kind` (chat, ask, task, notice) and `messages.kind` (say, ask, answer, notice, steer): types, not statuses.
+- `conversations.kind` (chat, ask, task, notice) and `messages.kind` (say, notice, steer; old `ask` and `answer` rows are history only): types, not statuses.
 - `kpis.stage`, `goal_kpis.kind`, `kpi_readings`: the KPI tree's stage and kind; not statuses, not constrained here.
 - `attempts.state` is NULL on a run recorded with no lease (the demo seed, a run from before leases; migration 0072 moved
   the old `turns` rows onto `attempts`); its value triggers allow NULL.

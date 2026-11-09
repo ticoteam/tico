@@ -227,7 +227,7 @@ def test_after_the_gateways_cap_another_tico_model_waits_on_the_same_key(api, mo
     limit(api, machine, claim(api, machine), errors=("Tico AI Gateway: cap_reached for this key",))
     settings = api.app.state.store.settings
     with api.app.state.store.transaction() as c:
-        for model, held in (("tico-mid-1.0", "gateway"), ("claude-haiku-5-5", "")):
+        for model, held in (("tico-medium-1.0", "gateway"), ("claude-haiku-5-5", "")):
             config = BS.read(c, 'ops')
             config.update({"model": model, "runtime": "pi" if held else "claude"})
             BS.write(c, 'ops', config)

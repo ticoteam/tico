@@ -1,8 +1,10 @@
 """Recipients and payments (spec §9). A payment is one immutable instruction (recipient version, amount, money account,
-method, the line it posts to) with one idempotency key for its whole life, sent through Mercury's approval queue so a
-person approves in Mercury too. Lifecycle: queued → awaiting_bank_approval → submitted → settled | returned | failed |
-canceled, plus unknown when a call timed out after it may have landed. One live payment per obligation; a live
-payment keeps its hold until it settles or ends. Direct send is not built: only the owner's switch and its refusal.
+method, the line it posts to) with one idempotency key for its whole life. By default it goes through Mercury's
+approval queue, so a person approves in Mercury too. A direct send (mode "direct") goes straight to Mercury as a
+transaction, only when the owner's switch is on, the recipient has been paid before, and a gate rule allows the mode up
+to an amount (`direct_allowed`). Lifecycle: queued → awaiting_bank_approval (queue only) → submitted → settled |
+returned | failed | canceled, plus unknown when a call timed out after it may have landed. One live payment per
+obligation; a live payment keeps its hold until it settles or ends.
 
 The planners run inside `act`; the worker steps (`recheck`, `sent`, `polled`, `found`) are what finance/sync.py runs
 around its provider calls, each in its own short transaction."""
