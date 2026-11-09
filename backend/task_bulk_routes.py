@@ -121,6 +121,19 @@ def register(
         changed = [key for key in labels if key not in drop] + add
         return None if changed == labels else M.TaskUpdate(**base, labels=changed)
 
+    def bulk_finishes(c, row, body):
+        """Whether `body` (M.TaskBulk) finishes the task `row`: a close, a status of done, or a move into a done or closed
+        step. A finish retires the task's open subtasks with it (H.task_update's cascade)."""
+        if body.action == "close" or body.action == "status" and body.status == "done":
+            return True
+        if body.action != "step":
+            return False
+        steps = (H.type_get(c, row.get("type_id") or H.GENERAL_TYPE) or {}).get("steps") or []
+        target = next((s for s in steps if s["id"] == body.step), None) or next(
+            (s for s in steps if s["name"] == body.step), None
+        )
+        return bool(target) and target["status"] in ("done", "closed")
+
     @app.post("/api/v2/task-bulk")
     def task_bulk(request: Request, body: M.TaskBulk):
         """One change to every task a filter selects (the filters of `GET /api/v2/tasks`), each made as its single
@@ -199,8 +212,9 @@ def register(
             # Chosen again under the write lock, so each task is judged as it is now.
             ids = bulk_select(c, caller, body.filter)
             changed, unchanged, skipped, judged = [], [], [], {}
-            # A close takes a task's open subtasks with it. One the change leaves out (or the caller cannot read) would be
-            # closed anyway, so its parent is skipped; a subtask the change closes through its parent counts as changed.
+            # A close (or any finish: done, a done or closed step) takes a task's open subtasks with it. One the change
+            # leaves out (or the caller cannot read) would be ended anyway, so its parent is skipped; a subtask the change
+            # closes through its parent counts as changed.
             selected = set(ids)
             opened = (
                 {tid for tid in ids if (H.task(c, tid) or {}).get("status") != "closed"}
@@ -221,7 +235,7 @@ def register(
                 if change is None:
                     (changed if tid in opened else unchanged).append(tid)
                     continue
-                if body.action == "close":
+                if bulk_finishes(c, row, body):
                     left = [
                         k["id"]
                         for k in H.descendants(c, tid)
@@ -232,7 +246,7 @@ def register(
                             (
                                 tid,
                                 "subtasks_left_out",
-                                "Its open subtasks are not in this change, so closing it would close them too. "
+                                "Its open subtasks are not in this change, so finishing it would end them too. "
                                 "Close them first, or take this task out of the change",
                             )
                         )

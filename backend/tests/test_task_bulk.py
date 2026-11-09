@@ -1,6 +1,8 @@
 """A bulk change by filter (POST /api/v2/task-bulk): it selects with the task list's own filters, changes each task as
 its single update would (permissions, refusals and events alike), is capped, and a dry run writes nothing."""
 
+import pytest
+
 from backend import hubdb as H
 from backend import pipeline_review
 from backend.tests.test_tasks_board import api, bot_token, get, pipeline, post  # noqa: F401
@@ -490,6 +492,23 @@ def test_a_bulk_close_leaves_the_callers_own_subtask_open(api):
     )
     out = bulk(api, {"label": "solo", "exclude_owner": "human:ana", "status": "open"}, "close")
     assert (out["matched"], out["changed"], out["skipped"]) == (1, 0, 1)
+    assert [(t["id"], t["code"]) for t in out["tasks"]["skipped"]] == [(solo["id"], "subtasks_left_out")]
+    assert get(api, "tasks/" + solo["id"])["task"]["status"] == "open"
+    assert get(api, "tasks/" + mine["id"])["task"]["status"] == "open"
+
+
+@pytest.mark.parametrize(("action", "change"), [("status", {"status": "done"}), ("step", {"step": "general-done"})])
+def test_a_bulk_finish_leaves_the_callers_own_subtask_open(api, action, change):
+    """Done, or a move into a done step, retires open subtasks as a close does: the same guard skips the parent."""
+    solo = task(api, "Plan the spring webinar", owner="cmo", labels=["solo"])
+    mine = task(
+        api,
+        "Ana's webinar slides",
+        owner="human:ana",
+        labels=["solo"],
+        relations=[{"task": solo["id"], "kind": "parent"}],
+    )
+    out = bulk(api, {"label": "solo", "exclude_owner": "human:ana", "status": "open"}, action, **change)
     assert [(t["id"], t["code"]) for t in out["tasks"]["skipped"]] == [(solo["id"], "subtasks_left_out")]
     assert get(api, "tasks/" + solo["id"])["task"]["status"] == "open"
     assert get(api, "tasks/" + mine["id"])["task"]["status"] == "open"
