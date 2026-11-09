@@ -29,7 +29,7 @@ type FinCapsNow = NonNullable<ReturnType<typeof finCaps>>;
 // POST /api/v2/finance/actions: committed, sent for approval (to the approver), or refused (with its reason).
 type FinActResult = import('../types/api').FinanceAction & {approver?: string | null; result?: FinActDone};
 // What a committed action made or did (the ids its callers read).
-interface FinActDone { bill_id?: string; invoice_id?: string; contact_id?: string; account_id?: string; months?: string[] }
+interface FinActDone { bill_id?: string; invoice_id?: string; contact_id?: string; account_id?: string; months?: string[]; new?: number }
 
 const FIN_ROUTE = '#/finance';
 const FIN_TABS: [string, string][] = [['mine', 'My budget'], ['pnl', 'P&L'], ['budgets', 'Budgets'], ['attribution', 'Attribution'], ['balance', 'Balance sheet'], ['payables', 'Payables'], ['receivables', 'Receivables'],

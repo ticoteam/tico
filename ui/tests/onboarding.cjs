@@ -404,10 +404,20 @@ function recruitFor({department, briefing, share}) {
     const tilesOn = () => page.locator('[data-ob-tile][aria-pressed=true]').evaluateAll(els => els.map(el => el.dataset.obTile));
     assert.deepEqual(await tilesOn(), ['sales', 'marketing', 'support', 'finance', 'operations', 'product', 'engineering']);
     assert.equal(await page.locator('[data-ob-tile]').count(), 9);
-    // The chart is there from the start: the owner on top and each chosen department waiting. Built-in and message bots are not on it.
+    // The chart is there from the start: the owner on top, each chosen department waiting, and the built-ins as one folded
+    // Built-in group. Message bots are not on it.
     assert.match(await page.locator('#ob-chart [data-oc-owner]').textContent(), /Ana M\. Rivera\s*CEO/);
     assert.doesNotMatch(await page.locator('#ob-chart').textContent(), /Ace|BotOps|Inbox Manager/);
     assert.equal(await page.locator('#ob-chart .oc-dept.oc-pending').count(), 7);
+    const builtIn = () => page.locator('#ob-chart [data-oc-builtin-toggle]');
+    assert.match(await builtIn().textContent(), /Built-in\s*2/);
+    assert.equal(await builtIn().getAttribute('aria-expanded'), 'false');
+    await builtIn().click();
+    assert.equal(await builtIn().getAttribute('aria-expanded'), 'true');
+    assert.match(await page.locator('#ob-chart').textContent(), /Ace[\s\S]*BotOps/);
+    assert.equal(await builtIn().evaluate(el => document.activeElement === el), true, 'the toggle keeps focus after the redraw');
+    await builtIn().click();
+    assert.equal(await builtIn().getAttribute('aria-expanded'), 'false');
     await shot(page, 'desktop-3-departments');
     await page.locator('[data-ob-tile=hr]').click();
     await page.locator('[data-ob-tile=product]').click();
@@ -852,9 +862,10 @@ function recruitFor({department, briefing, share}) {
     assert.doesNotMatch(review, /Never without a human|Send anything|Spend money|Publish anything/);
     assert.match(review, /Computers\s*Ana's Mac, Cloud box online/);
     assert.equal(await page.locator('[data-review-departments]').textContent(), 'Sales, Marketing, Customer Support, Operations, Engineering');
-    assert.equal(await page.locator('[data-review-helpers]').textContent(), 'Ace, BotOps');
+    assert.equal(await page.locator('[data-review-helpers]').textContent(), '2 bots Ace, BotOps');
+    assert.equal(await page.locator('[data-review-builtin]').getAttribute('open'), null, 'the built-ins start folded');
     assert.equal(await page.locator('[data-review-message-bots]').textContent(), 'Inbox Manager');
-    assert.match(review, /Built-in\s*Ace, BotOps/);
+    assert.match(review, /Built-in\s*2 bots\s*Ace, BotOps/);
     assert.match(review, /Message bots\s*Inbox Manager/);
     assert.doesNotMatch(review, /Helpers/);
     assert.match(await page.locator('[data-review-team]').textContent(), /Sales Manager\s*→ Ana Rivera/);
@@ -968,7 +979,8 @@ function recruitFor({department, briefing, share}) {
     await page.locator('#bot-onboard').waitFor();
     await shot(page, 'desktop-7-bot-page');
     assert.match(await page.locator('#bot-onboard').textContent(), /Onboarding/);
-    assert.equal(await page.locator('#bot-onboard p').count(), 0);                                    // the pill and the button, no paragraph
+    assert.equal(await page.locator('#bot-onboard p.bot-onboard-tip').count(), 1);                     // the tip is the only paragraph
+    assert.equal(await page.locator('#bot-onboard p:not(.bot-onboard-tip)').count(), 0);              // the pill and the button, no other paragraph
     assert.equal(await page.locator('#bot-start-setup').textContent(), 'Start onboarding');
     assert.equal(await page.locator('#bot-onboard [data-setup-help="bot"]').textContent(), 'Want help onboarding it?');
     // Home shows the setup conversation: the person's line, in the chat Set up wrote to (not the private DM).

@@ -53,6 +53,7 @@ and a granted Tool to allow it. Otherwise it stays a draft for a person.
 ## Skills
 - `skills/write-acceptance-criteria/SKILL.md`: read before you write or change any criterion.
 - `skills/shape-a-spec-to-an-appetite/SKILL.md`: read before you write the core page of a new spec.
+- `skills/build-the-spec-page/SKILL.md`: read before you build the visual page for a spec on a roadmap card.
 - `skills/run-a-launch-readiness-check/SKILL.md`: read before you mark a launch line done or write the launch part of a review.
 
 ## Starting a run
@@ -110,7 +111,8 @@ Ready to ship → Shipped (or Declined). Gather related requesters and public co
 problem and draft the spec, public title and public summary separately from internal working notes.
 Never put contact details, internal discussions, attachments or bot work in public text. Propose
 graduation with `hub task question --why "<what it unlocks>"` as a Decide card for the owner or Head of Product; do not decide it
-yourself. After approval, move the roadmap task to Approved and create Engineering (or the existing
+yourself. A visual spec is a Tico page on the card (`hub page publish <file.html> --spec --task <card>`); tickets
+filed under the card get its link and text. After approval, move the roadmap task to Approved and create Engineering (or the existing
 Dev tickets type) tasks as its children or its blockers (blocked by), routed through Head of Engineering. Linking
 alone moves nothing: the server moves it to Building once a ticket is In Progress, Ready to ship once every ticket is
 at Pending Release or later, and Shipped once every one is done, and back again if one reopens. Tickets closed or

@@ -16,7 +16,7 @@ import yaml
 from scripts import release_shots as shots
 
 ROOT = shots.ROOT
-HARNESS_FILES = ('index.js', 'select.js', 'compare.js')
+HARNESS_FILES = ('index.cts', 'select.cts', 'compare.cts')
 EVIDENCE = 'https://github.com/ticoteam/tico/blob/release-evidence'
 
 
@@ -76,7 +76,7 @@ def picked(repo: Path, head_files: dict[str, str]) -> shots.Selection:
 
 
 def all_page_names(repo: Path) -> set[str]:
-    text = (repo / 'scripts' / 'screenshots' / 'index.js').read_text()
+    text = (repo / 'scripts' / 'screenshots' / 'index.cts').read_text()
     return {match.group(1) for match in shots.PAGE_NAME.finditer(text)}
 
 
@@ -137,7 +137,7 @@ def test_every_page_can_be_limited_to_named_pages() -> None:
 def test_every_page_names_real_files_and_every_ui_file_is_named() -> None:
     listing = json.loads(
         subprocess.run(
-            ['node', 'scripts/screenshots/index.js', '--list-pages'],
+            ['node', 'scripts/screenshots/index.cts', '--list-pages'],
             cwd=ROOT,
             capture_output=True,
             text=True,
@@ -149,8 +149,8 @@ def test_every_page_names_real_files_and_every_ui_file_is_named() -> None:
     ]
     assert not stale, 'globs that match no tracked file: ' + ', '.join(stale)
     assert listing['unmapped'] == [], (
-        'ui/ files no table names. Add each to a PAGES entry ui list in scripts/screenshots/index.js, or to SHARED, '
-        'UNSHOWN or NON_RENDERING in scripts/screenshots/select.js: ' + ', '.join(listing['unmapped'])
+        'ui/ files no table names. Add each to a PAGES entry ui list in scripts/screenshots/index.cts, or to SHARED, '
+        'UNSHOWN or NON_RENDERING in scripts/screenshots/select.cts: ' + ', '.join(listing['unmapped'])
     )
 
 
@@ -264,6 +264,19 @@ def test_a_pair_under_a_tenth_of_a_percent_is_unchanged(pct: float | None, uncha
 def test_picture_names_add_the_theme_only_for_dark() -> None:
     assert shots.shot_file('updates', 'phone', 'light', 'before') == 'updates-phone-before.png'
     assert shots.shot_file('updates', 'desktop-1440', 'dark', 'after') == 'updates-desktop-1440-dark-after.png'
+
+
+def test_a_base_from_before_the_rename_reads_the_old_harness(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    legacy = tmp_path / 'legacy'
+    (legacy / 'scripts' / 'screenshots').mkdir(parents=True)
+    (legacy / 'scripts' / 'screenshots' / 'index.js').write_text(
+        "const PAGES = [\n  {name: 'updates', route: '#/updates'},\n];\n"
+    )
+    git(legacy, 'init', '-q')
+    git(legacy, 'add', '.')
+    git(legacy, '-c', 'user.name=Test', '-c', 'user.email=test@example.com', 'commit', '-q', '-m', 'old harness')
+    monkeypatch.setattr(shots, 'ROOT', legacy)
+    assert shots.page_names(git(legacy, 'rev-parse', 'HEAD')) == {'updates'}
 
 
 def test_only_changed_pictures_and_new_pages_are_uploaded() -> None:

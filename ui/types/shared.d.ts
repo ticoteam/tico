@@ -270,6 +270,7 @@ interface OrgGroup {
   parent?: string;
   org_parent?: string;
   root?: string;
+  bots?: string[];   // the group's members (GET /v2/groups `bots`)
 }
 
 /** A person on the chart: the roster row plus the fields the server sends that the generated type leaves out. */

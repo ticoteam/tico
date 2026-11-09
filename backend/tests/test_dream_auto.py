@@ -126,13 +126,13 @@ def step_result(store, auth, max_bots=3):
         return dream_step.run(c, ctx)
 
 
-def test_what_counts_as_memory(api):
+def test_what_counts_as_memory():
     assert DA.counted(LEARNINGS) and DA.counted("AGENT.md") and DA.counted("CLAUDE.md")
     assert not DA.counted("memory/state.md"), "state.md is rewritten every turn: churn, not memory"
     assert not DA.counted("knowledge/notes.md") and not DA.counted("secrets/x")
 
 
-def test_changed_lines_are_the_hunk_lines_not_the_file_headers(api):
+def test_changed_lines_are_the_hunk_lines_not_the_file_headers():
     text = (
         "diff --git a/memory/learnings.md b/memory/learnings.md\n--- a/memory/learnings.md\n+++ b/memory/learnings.md\n"
         "@@ -1,2 +1,2 @@\n-old\n+new\n keep\n+++ not a header\n"
@@ -577,7 +577,7 @@ def test_a_dreams_own_run_is_not_memory_through_the_one_query(api):
         assert DA.change(c, "ops", DA.stamp(now() - timedelta(days=1))) == (7, 1)
 
 
-def test_paths_with_spaces_and_deletions_are_read_whole(api):
+def test_paths_with_spaces_and_deletions_are_read_whole():
     text = (
         "diff --git a/memory/meeting notes.md b/memory/meeting notes.md\nindex 1..2 100644\n"
         "--- a/memory/meeting notes.md\t\n+++ b/memory/meeting notes.md\t\n@@ -1,2 +1,2 @@\n-old\n+new\n keep\n"

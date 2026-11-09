@@ -722,6 +722,7 @@
   "evals/factory/board.py",
   "evals/factory/bots.py",
   "evals/factory/cases/__init__.py",
+  "evals/factory/cases/close_stops_work.py",
   "evals/factory/cases/freezes.py",
   "evals/factory/cases/github_read_outage.py",
   "evals/factory/cases/qa_waiver_head.py",

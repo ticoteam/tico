@@ -613,6 +613,9 @@ ADDED = (
     # the vendor key a bank or card row is found by: core/merchant.merchant_key of its counterparty (the contact or alias
     # it resolves to is read on each read, so a merge takes effect without rewriting rows). Migration 20261106235900.
     ("fin_feed_txns", "vendor_key", "TEXT NOT NULL DEFAULT ''"),
+    # the statement upload a row came in by (backend/finance/statement_upload.py); NULL for every synced row.
+    # Migration 20261108120000 adds it to a table that exists then, and the tables it makes live in that migration.
+    ("fin_feed_txns", "upload_id", "TEXT"),
     # the contact a payee pays (spec §3: fin_recipients stays, keyed to the Directory). Migration 20261108203140_finance_fold_in.
     ("fin_recipients", "entity_id", "TEXT"),
 )

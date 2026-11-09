@@ -530,17 +530,28 @@ def test_the_late_list_costs_the_same_queries_for_many_tickets_and_is_capped(api
     assert sorted(listing) == sorted(picked[:2]) and cursor is None
 
 
+def scaled_late_bounds(monkeypatch):
+    """The Late list's bounds at a tenth of their size (cap 50, page 50, scan 200), so 500 tickets stand for the 5,000
+    the bounds are made for: every count below is checked against the bound, never against a fixed number, so the
+    same pages, cursors and requests happen as at full size."""
+    monkeypatch.setattr(PM, "LATE_CAP", PM.LATE_CAP // 10)
+    monkeypatch.setattr(PM, "LATE_PAGE", PM.LATE_PAGE // 10)
+    monkeypatch.setattr(PM, "LATE_SCAN", PM.LATE_SCAN // 10)
+
+
 def test_one_asked_ticket_among_5000_is_the_only_row_whose_clock_is_computed(api, monkeypatch):
     """R13: the ids and visibility narrow the tickets before any clock is computed. Asking for one of 5,000 live tickets
-    evaluates one row, not the pipeline; the pipeline-wide list reads bounded pages."""
+    evaluates one row, not the pipeline; the pipeline-wide list reads bounded pages. Run at a tenth of the size (500
+    tickets, scaled_late_bounds)."""
     store = api.app.state.store
     base = now()
+    scaled_late_bounds(monkeypatch)
     with store.transaction() as c:
         type_id = pipeline(c)
         c.execute("UPDATE task_steps SET limit_minutes=60 WHERE id=?", (step(c, type_id, "Building"),))
         ids = [
             H.task_create(c, ANA, f"Live {n}", "", ANA, type=type_id, step="Building", lint=False)["id"]
-            for n in range(5000)
+            for n in range(500)
         ]
         for ticket in ids:
             visit(c, ticket, type_id, "Building", base - timedelta(hours=2))
@@ -553,8 +564,8 @@ def test_one_asked_ticket_among_5000_is_the_only_row_whose_clock_is_computed(api
 
     monkeypatch.setattr(PM, "late_tickets", counting)
     with store.read() as c:
-        listing, cursor = PM.late_listing(c, ANA, "1=1", type_id, base, {ids[4321]})
-    assert list(listing) == [ids[4321]] and cursor is None
+        listing, cursor = PM.late_listing(c, ANA, "1=1", type_id, base, {ids[432]})
+    assert list(listing) == [ids[432]] and cursor is None
     assert sum(evaluated) == 1
 
     evaluated.clear()
@@ -676,15 +687,17 @@ def test_the_migration_backfills_existing_managed_pipelines_to_the_migration_tim
 
 def test_the_pipeline_wide_late_list_reads_a_bounded_window_and_a_cursor_visits_every_ticket_once(api, monkeypatch):
     """F10 (Codex): 5,000 live tickets, none late. One request evaluates at most LATE_SCAN of them and returns a `next`
-    cursor; following the cursors evaluates every ticket exactly once."""
+    cursor; following the cursors evaluates every ticket exactly once. Run at a tenth of the size (500 tickets,
+    scaled_late_bounds): still two full scans and a short third."""
     store = api.app.state.store
     base = now()
+    scaled_late_bounds(monkeypatch)
     with store.transaction() as c:
         type_id = pipeline(c)
         c.execute("UPDATE task_steps SET limit_minutes=60 WHERE id=?", (step(c, type_id, "Building"),))
         ids = [
             H.task_create(c, ANA, f"Fresh {n}", "", ANA, type=type_id, step="Building", lint=False)["id"]
-            for n in range(5000)
+            for n in range(500)
         ]
         for ticket in ids:
             visit(c, ticket, type_id, "Building", base - timedelta(minutes=5))
@@ -709,7 +722,7 @@ def test_the_pipeline_wide_late_list_reads_a_bounded_window_and_a_cursor_visits_
             break
     assert per_request[0] == PM.LATE_SCAN and max(per_request) <= PM.LATE_SCAN
     assert len(per_request) == 3
-    assert len(evaluated) == len(set(evaluated)) == 5000 and set(evaluated) == set(ids)
+    assert len(evaluated) == len(set(evaluated)) == 500 and set(evaluated) == set(ids)
 
 
 def test_more_late_tickets_than_the_cap_are_listed_across_cursors_without_a_gap_or_a_repeat(api):

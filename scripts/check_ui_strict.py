@@ -27,6 +27,8 @@ Mirrors scripts/check_pyright_ratchet.py. The rules:
 9. The service worker, ui/sw.ts, is its own program: ui/tsconfig.worker.json (the WebWorker lib, not the DOM's; the two
    page configs exclude exactly ./sw.ts). Its config keeps every strict flag on and names exactly that file, and tsc
    reports nothing in it: any finding fails, with no baseline.
+10. The UI test scripts (ui/tests/*.cts, TypeScript run by Node's type stripping) type-check under ui/tests/tsconfig.json
+   with no baseline: every diagnostic fails. Skipped while no .cts script exists.
 
 Runs in a few seconds: one tsc pass over the UI and one over the worker. The pinned TypeScript is fetched with npx, as ui_baseline.py does.
 """
@@ -75,6 +77,11 @@ ALLOWED_JS = {"ui/assets/observability-vendors.js"}
 KEPT_JS: dict[str, str] = {}
 SKIP_TS = ("ui/vendor/", "ui/assets/", "ui/node_modules/")
 DIRECTIVE = re.compile(r"@ts-(nocheck|ignore)\b")
+# The UI test scripts: their own strict config, read by no baseline (rule 10).
+TESTS_CONFIG = "ui/tests/tsconfig.json"
+TESTS_TSC = ["npx", "--yes", "-p", "typescript@5.9.3", "tsc", "-p", TESTS_CONFIG, "--pretty", "false"]
+TESTS_REQUIRED = ("strict", "erasableSyntaxOnly", "verbatimModuleSyntax")
+TESTS_INCLUDE = "./**/*.cts"
 
 
 class Finding:
@@ -548,6 +555,37 @@ def check_shift_left(pieces):
     return problems
 
 
+def run_tests_tsc():
+    """(exit code, output) of the UI test scripts' tsc run."""
+    done = subprocess.run(TESTS_TSC, cwd=ROOT, capture_output=True, text=True, check=False)
+    return done.returncode, done.stdout + done.stderr
+
+
+def check_tests_gate():
+    """Rule 10: the .cts test scripts type-check under their own strict config. No baseline: any diagnostic fails. Costs
+    nothing while no .cts script exists."""
+    if not any((ROOT / "ui/tests").glob("*.cts")):
+        return []
+    try:
+        config = json.loads((ROOT / TESTS_CONFIG).read_text(encoding="utf-8"))
+    except (OSError, ValueError) as error:
+        return [f"{TESTS_CONFIG}: cannot be read as JSON ({error})"]
+    problems = []
+    options = config.get("compilerOptions", {})
+    for flag in TESTS_REQUIRED:
+        if options.get(flag) is not True:
+            problems.append(f"{TESTS_CONFIG}: {flag} must be true (the test scripts' strict rule)")
+    if TESTS_INCLUDE not in config.get("include", []):
+        problems.append(f'{TESTS_CONFIG}: include must list "{TESTS_INCLUDE}" (every .cts script is checked)')
+    if problems:
+        return problems
+    code, output = run_tests_tsc()
+    if code != 0:
+        problems.append(f"ui/tests: tsc exited {code}; fix every diagnostic (no baseline)")
+        problems += [f"    {line}" for line in output.splitlines() if line.strip()]
+    return problems
+
+
 def write(by_file, pieces, on_disk):
     grown = [rel for rel in by_file if rel not in pieces or len(by_file[rel]) > pieces[rel]]
     if grown:
@@ -602,6 +640,7 @@ def main(argv=None):
         else:
             problems += check_growth(pieces, base, args.base)
     problems += check_shift_left(pieces)
+    problems += check_tests_gate()
     for problem in problems:
         print(problem)
     total = sum(len(v) for v in by_file.values())

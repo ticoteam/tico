@@ -81,7 +81,13 @@ from . import models as M
 from .auth import LOCAL_SIGNIN_PATH, LOGOUT_PATH, Auth, Identity
 from .config import Settings
 from .observability import Observability, route as error_route
-from .execution import Execution, bot_repository, flag_cut, reset_bot_sessions
+from .execution import (
+    AWAKE_GAP,
+    Execution,
+    bot_repository,
+    flag_cut,
+    reset_bot_sessions,
+)
 from .onboarding import BOTOPS, Onboarding
 from .recruit import Recruiter
 from . import rooms
@@ -2119,7 +2125,7 @@ def create_app(settings=None):
         """Online computers counted by state (backend/runner_versions.py): current, updating, needs_update, ..."""
         counts = {}
         with store.read() as c:
-            cutoff = H.shift(H.now(), seconds=-views.AWAKE_GAP)
+            cutoff = H.shift(H.now(), seconds=-AWAKE_GAP)
             known = runner_versions.load(c)
             for row in c.execute(
                 "SELECT id FROM runners_with_state WHERE revoked_at IS NULL AND last_seen_at>?", (cutoff,)
@@ -3996,6 +4002,7 @@ def create_app(settings=None):
             # The warning line goes on the change itself, where the recipient reads it.
             warned = rule_warned_fields(rule_gate, body, row, approved=exact_approval(c, who.actor))
             body, allowance = body.model_copy(update=warned), rule_summary_allowance(rule_gate, warned)
+        over_cap = False
         if body.close:
             if any(
                 v is not None
@@ -4109,6 +4116,7 @@ def create_app(settings=None):
             if fields.get("owner") and body.owner and new_owner != row["owner_id"]:
                 task_caps.record(c, task_id, who.actor, new_owner)
             warnings = after.get("warnings")
+            over_cap = bool(after and after.get("over_cap"))
             for verdict, gate in waits:
                 # A wait on a person asks in a card of its own (hubdb._ask_in_subtask): that card is what reaches
                 # their Needs you, so the gate's row names it.
@@ -4118,6 +4126,7 @@ def create_app(settings=None):
         return {
             **({"task": task_view(H.task(c, task_id), c, visible_sql=auth.task_sql(c, who), who=who)} if view else {}),
             **({"warnings": warnings} if warnings else {}),
+            **({"over_cap": True} if over_cap else {}),
             **(ask_ingest.reply(*gates) if not body.close else {}),
             **org_rule_check.answer(rule_gate),
         }

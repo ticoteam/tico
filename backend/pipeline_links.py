@@ -23,6 +23,8 @@ if TYPE_CHECKING:
 
 Row = dict[str, Any]
 MODES = ("move", "spawn")
+# When a spawn files: as its card leaves the stage (the default, every spawn so far) or as a card enters it (Lead's Qualified).
+FIRES = ("leave", "enter")
 COLUMNS = "id, from_pipeline_id, from_pipeline_stage_id, to_pipeline_id, mode, return_stage_id, created_by, created_at"
 LINK_LIMIT = 200  # links per page; a page also stays under LINK_BYTES, as the audit list does
 LINK_BYTES = 262_144
@@ -35,10 +37,10 @@ def _rows(conn: sqlite3.Connection, sql: str, args: "tuple[Any, ...]" = ()) -> l
 
 
 def link_for_stage(conn: sqlite3.Connection, pipeline_stage_id: str) -> Row | None:
-    """The live link that leaves this stage, or None."""
+    """The live link that leaves this stage, or None. Its `fires` is included for the engine; it is not in COLUMNS."""
     found = _rows(
         conn,
-        f"SELECT {COLUMNS} FROM pipeline_links WHERE from_pipeline_stage_id = ? AND retired_at IS NULL",
+        f"SELECT {COLUMNS}, fires FROM pipeline_links WHERE from_pipeline_stage_id = ? AND retired_at IS NULL",
         (pipeline_stage_id,),
     )
     return found[0] if found else None
@@ -99,12 +101,17 @@ def create_link(
     to_pipeline_id: str,
     mode: str = "move",
     return_stage_id: str | None = None,
+    fires: str = "leave",
 ) -> Row:
     """Link a stage to another pipeline. Refused (rule "link"): a mode that is not move or spawn, a stage or pipeline that
     is not there, a link to its own pipeline, a stage that already has a live link out (that would branch), a target with no
     stage to enter, and anyone who may not edit the from-pipeline's rules."""
     if mode not in MODES:
         H.refuse(conn, actor, "link", "A link moves a ticket or spawns one")
+    if fires not in FIRES:
+        H.refuse(conn, actor, "link", "A link fires when a card leaves its stage or enters it")
+    if fires == "enter" and mode != "spawn":
+        H.refuse(conn, actor, "link", "Only a spawn link can fire when a card enters its stage")
     stage = pipeline_engine.stage(conn, from_stage_id)
     if stage is None:
         H.refuse(conn, actor, "link", "No such stage")
@@ -128,8 +135,8 @@ def create_link(
     link_id = cast(str, H.new_id())
     conn.execute(
         "INSERT INTO pipeline_links (id, from_pipeline_id, from_pipeline_stage_id, to_pipeline_id, mode, "
-        "return_stage_id, created_by, created_at, retired_at) VALUES (?,?,?,?,?,?,?,?,NULL)",
-        (link_id, stage["type_id"], from_stage_id, to_pipeline_id, mode, return_stage_id, actor, H.now()),
+        "return_stage_id, created_by, created_at, retired_at, fires) VALUES (?,?,?,?,?,?,?,?,NULL,?)",
+        (link_id, stage["type_id"], from_stage_id, to_pipeline_id, mode, return_stage_id, actor, H.now(), fires),
     )
     H.event(conn, actor, "pipeline_link.create", link_id, {"from": from_stage_id, "to": to_pipeline_id, "mode": mode})
     return _rows(conn, f"SELECT {COLUMNS} FROM pipeline_links WHERE id = ?", (link_id,))[0]
@@ -544,8 +551,9 @@ def spawn(
     and is recorded as its own handoff; `note` leads its body as "Follow-up: <note>".
 
     A ticket the rules refuse to file raises Problem 409 `spawn_refused` with the reason, so the move that made the spawn
-    rolls back with it: a card never advances past a stage whose linked work was not filed. Returns the new ticket's id,
-    or None when nothing was to be filed (a move back, a link of another mode, a spawn already filed)."""
+    rolls back with it: a card never advances past a stage whose linked work was not filed. A first stage with no room
+    (D68) raises the stage_full refusal instead, so the card waits at its stage. Returns the new ticket's id, or None when
+    nothing was to be filed (a move back, a link of another mode, a spawn already filed)."""
     from .store import Problem
 
     if link["mode"] != "spawn":
@@ -562,8 +570,24 @@ def spawn(
     target = str(link["to_pipeline_id"])
     first = pipeline_engine.first_stage(conn, target)
     source = H.task(conn, source_id)
-    if first is None or source is None:
+    if source is None:
         return None
+    # Every working stage of the target is On ice (D69): it takes no linked ticket, so the card waits at its stage, as for
+    # a full first stage, until a person opens a stage there. Nothing is dropped, nor filed straight into Done.
+    frozen = pipeline_engine.frozen_refusal(conn, target, source_id, "the linked ticket")
+    if frozen is not None:
+        raise frozen
+    if first is None:
+        return None
+    full = pipeline_engine.full_stage(conn, str(first["id"]), source_id)
+    if full is not None:
+        # The linked ticket waits for room (D68): the move that would have filed it is refused, so the card stays where it is.
+        raise pipeline_engine.room_refusal(
+            "stage_full",
+            f"{pipeline_engine.full_detail(full)}, so the linked ticket waits",
+            source_id,
+            str(first["id"]),
+        )
     filer = str(source["owner_id"])
     owner = _owner_for(conn, target, filer)
     lead = f"Follow-up: {note}. " if note else ""

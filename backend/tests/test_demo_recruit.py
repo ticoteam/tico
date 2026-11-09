@@ -36,7 +36,7 @@ def open_seats(api):
     return {seat["title"]: seat for seat in api.get("/api/v2/seats").json()["seats"]}
 
 
-def test_open_seats_sit_under_their_managers(built):
+def _open_seats_sit_under_their_managers(built):
     with owner_api(built) as api:
         seats = open_seats(api)
         assert seats["Install Crew Coordinator"]["reports_to"] == "ops-manager"
@@ -45,7 +45,7 @@ def test_open_seats_sit_under_their_managers(built):
         assert seats["Devin"]["reports_to"] == "product-manager"
 
 
-def test_recruit_offers_templates_for_each_open_seat(built):
+def _recruit_offers_templates_for_each_open_seat(built):
     with owner_api(built) as api:
         seats = open_seats(api)
         warranty = api.post(f"/api/v2/seats/{seats['Warranty Claims']['id']}/recruit", json={}).json()
@@ -55,14 +55,14 @@ def test_recruit_offers_templates_for_each_open_seat(built):
         assert "dispatcher" in [row["template"] for row in install["candidates"]]
 
 
-def test_applicants_are_recruiter_tasks_at_four_stages(built):
+def _applicants_are_recruiter_tasks_at_four_stages(built):
     with owner_api(built) as api:
         tasks = api.get("/api/v2/tasks", params={"owner": "bot:recruiter", "limit": 100}).json()["tasks"]
         applicants = [task for task in tasks if task["title"].startswith("Applicant for Install Crew Coordinator")]
         assert sorted(task["status"] for task in applicants) == ["doing", "open", "review", "waiting"]
 
 
-def test_the_cloud_agent_request_is_in_flight_with_its_first_task(built):
+def _the_cloud_agent_request_is_in_flight_with_its_first_task(built):
     with owner_api(built) as api:
         agents = {agent["id"]: agent for agent in api.get("/api/v2/cloud-agents").json()["agents"]}
         assert len(agents) == 8
@@ -76,10 +76,23 @@ def test_the_cloud_agent_request_is_in_flight_with_its_first_task(built):
         ]
 
 
-def test_the_hire_last_week_closed_its_seat_and_kept_the_bot(built):
+def _the_hire_last_week_closed_its_seat_and_kept_the_bot(built):
     with sqlite3.connect(built.db_path) as db:
         seat = db.execute("SELECT closed_at, filled_by FROM seats WHERE title='Creator Partnerships'").fetchone()
     assert seat[0] and seat[1] == "creators"
     with owner_api(built) as api:
         assert api.get("/api/v2/bots/creators").status_code == 200
         assert "Creator Partnerships" not in open_seats(api)
+
+
+def test_the_demo_recruit_tells_its_story(built, subtests):
+    """Every check reads the one demo build, in file order, each as its own subtest."""
+    for check in (
+        _open_seats_sit_under_their_managers,
+        _recruit_offers_templates_for_each_open_seat,
+        _applicants_are_recruiter_tasks_at_four_stages,
+        _the_cloud_agent_request_is_in_flight_with_its_first_task,
+        _the_hire_last_week_closed_its_seat_and_kept_the_bot,
+    ):
+        with subtests.test(check.__name__):
+            check(built)
