@@ -87,6 +87,10 @@ class PipelineSettingsBody(Contract):
     visibility: Literal["company", "members"] | None = None
     members: list[str] | None = Field(default=None, max_length=MEMBERS_MAX)
     factory_id: str | None = Field(default=None, max_length=128)
+    # The stuck rule (backend/stuck_cards.py). Null clears one back to its default.
+    stuck_after_hours: int | None = Field(default=None, ge=1, le=168)
+    ask_person_after_hours: int | None = Field(default=None, ge=1, le=720)
+    question_expiry_days: int | None = Field(default=None, ge=1, le=60)
 
 
 class StageBody(Contract):
@@ -386,13 +390,17 @@ def settings_view(conn: "sqlite3.Connection", pipeline_id: str) -> dict[str, Any
     """A pipeline's settings: what its owner and admins see and set. A null judge_model is the default judge."""
     row = conn.execute(
         "SELECT id, name, prefix, goal, judge_model, pipeline_visibility AS visibility, factory_id, "
-        "pipeline_owner_id AS owner_id, manager AS manager_id, manager_every_minutes FROM task_types WHERE id=?",
+        "pipeline_owner_id AS owner_id, manager AS manager_id, manager_every_minutes, stuck_after_hours, "
+        "ask_person_after_hours, question_expiry_days FROM task_types WHERE id=?",
         (pipeline_id,),
     ).fetchone()
     members = conn.execute(
         "SELECT actor_id FROM pipeline_members WHERE pipeline_id=? ORDER BY actor_id", (pipeline_id,)
     ).fetchall()
-    return {**dict(row), "members": [str(m[0]) for m in members]}
+    from .stuck_cards import defaults  # read here: stuck_cards imports the pipeline manager
+
+    # A null stuck rule setting is its default, sent beside it so the editor can show it.
+    return {**dict(row), "members": [str(m[0]) for m in members], "stuck_rule_defaults": defaults()}
 
 
 def settings_read(conn: "sqlite3.Connection", actor: str, pipeline_id: str) -> dict[str, Any]:
@@ -425,6 +433,9 @@ def update_settings(conn: "sqlite3.Connection", actor: str, pipeline_id: str, bo
     sets: dict[str, Any] = {}
     if "goal" in body:
         sets["goal"] = (body["goal"] or "").strip() or None
+    for column in ("stuck_after_hours", "ask_person_after_hours", "question_expiry_days"):
+        if column in body:
+            sets[column] = None if body[column] is None else int(body[column])
     if "judge_model" in body:
         sets["judge_model"] = _judge_model(body["judge_model"])
     if body.get("visibility") is not None:

@@ -557,10 +557,17 @@ def change(conn, task_id, kind, **fields):
     if unknown:
         raise ValueError(f"task_holds has no {sorted(unknown)}")
     if fields:
+        # A new reason is progress for the stuck rule (backend/stuck_cards.py): keep when the reason last changed.
+        changed, args = "", []
+        if "reason" in fields:
+            from . import hubdb as H
+
+            changed = ",reason_changed_at=CASE WHEN reason IS ? THEN reason_changed_at ELSE ? END"
+            args = [fields["reason"], H.now()]
         conn.execute(
-            f"UPDATE task_holds SET {','.join(f'{name}=?' for name in fields)} "
+            f"UPDATE task_holds SET {','.join(f'{name}=?' for name in fields)}{changed} "
             "WHERE task_id=? AND kind=? AND released_at IS NULL",
-            (*fields.values(), task_id, kind),
+            (*fields.values(), *args, task_id, kind),
         )
 
 

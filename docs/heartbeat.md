@@ -34,6 +34,7 @@ A beat runs these steps in this order. A step runs only when it is due. If one s
 | Go-live expiry | Due times | Every 10 minutes |
 | Stall checks | Recovery | Every minute |
 | Approval expiry | Due times | Hourly |
+| Stuck cards | Recovery | Every 10 minutes |
 | Repository and setup waits | Outside polls | Every 10 seconds |
 | Calls and live meetings | Recovery | Every 10 seconds |
 

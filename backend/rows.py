@@ -222,6 +222,27 @@ class TaskHoldRow(TypedDict):
     cleared_at: str | None
     created_at: str
     released_at: str | None
+    reason_changed_at: str | None
+
+
+class StuckSpellRow(TypedDict):
+    """One stuck spell of a pipeline card (backend/stuck_cards.py): open while ended_at is NULL, at most one open per card.
+    It records the manager's one wake and the person's one question, so a pass never repeats either."""
+
+    id: str
+    task_id: str
+    pipeline_id: str
+    stuck_since: str
+    started_at: str
+    hold_reason: str | None
+    manager_id: str | None
+    manager_woken_at: str | None
+    person_id: str | None
+    person_asked_at: str | None
+    question_task_id: str | None
+    answer_relayed_at: str | None
+    ended_at: str | None
+    end_reason: str | None
 
 
 class QuarantineHoldRow(TypedDict):
