@@ -334,7 +334,14 @@ def prepare(directory, url="", public=False):
 
 
 def build(directory, now=None, url="", public=False):
-    """A ready demo in `directory`: its registry, database and files. Returns its Settings."""
+    """A ready demo in `directory`: its registry, database and files. Returns its Settings. Nothing leaves the computer
+    while it builds, whoever calls it: a seed step that asks a model (an org rule check) gets the same refusal on every
+    build, rather than whatever the network answered that time (a 401 on one build, a timeout on the next)."""
+    with network_blocked():
+        return _build(directory, now, url, public)
+
+
+def _build(directory, now, url, public):
     from . import demo_seed
 
     os.environ["TICO_UPDATE_CHECK"] = "off"
