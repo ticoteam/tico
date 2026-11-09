@@ -181,3 +181,35 @@ def test_shift_left_reads_only_the_strict_files_without_a_piece(monkeypatch):
     problems = strict.check_shift_left({"ui/app/piece.ts": 2})
     assert problems[0] == "SHIFT-LEFT ui/app/bad.ts: 1 hit(s)"
     assert len(problems) == 2 and problems[1].startswith("    ui/app/bad.ts:1: uses `any`")
+
+
+def _tests_root(tmp_path, config):
+    (tmp_path / "ui/tests").mkdir(parents=True)
+    (tmp_path / "ui/tests/x.cts").write_text("export {};\n")
+    (tmp_path / "ui/tests/tsconfig.json").write_text(json.dumps(config))
+    return tmp_path
+
+
+GOOD_TESTS_CONFIG = {
+    "compilerOptions": {"strict": True, "erasableSyntaxOnly": True, "verbatimModuleSyntax": True},
+    "include": ["./**/*.cts"],
+}
+
+
+def test_a_diagnostic_in_a_test_script_fails_the_tests_gate(tmp_path, monkeypatch):
+    monkeypatch.setattr(strict, "ROOT", _tests_root(tmp_path, GOOD_TESTS_CONFIG))
+    monkeypatch.setattr(
+        strict, "run_tests_tsc", lambda: (2, "ui/tests/x.cts(1,7): error TS2322: Type 'number' is not assignable.\n")
+    )
+    problems = strict.check_tests_gate()
+    assert problems[0] == "ui/tests: tsc exited 2; fix every diagnostic (no baseline)"
+    assert any("TS2322" in problem for problem in problems)
+
+
+def test_a_weakened_test_config_fails_without_running_tsc(tmp_path, monkeypatch):
+    weak = {"compilerOptions": {"strict": False, "verbatimModuleSyntax": True}, "include": ["./**/*.cts"]}
+    monkeypatch.setattr(strict, "ROOT", _tests_root(tmp_path, weak))
+    monkeypatch.setattr(strict, "run_tests_tsc", lambda: pytest.fail("tsc must not run on a weakened config"))
+    problems = strict.check_tests_gate()
+    assert any("strict must be true" in p for p in problems)
+    assert any("erasableSyntaxOnly must be true" in p for p in problems)

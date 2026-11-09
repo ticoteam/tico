@@ -40,6 +40,14 @@ function resources(env, cores, idleFraction) {
   return {jobs, slowdown, timeout};
 }
 
+// Node runs a .cts script (TypeScript, stripped of its types) from 22.18 on. Returns the one message to print when a
+// selected .cts script cannot run on this Node, else null.
+function typeScriptGuard(files, version = process.versions.node) {
+  const [major, minor] = version.split('.').map(Number);
+  const stripsTypes = major > 22 || (major === 22 && minor >= 18);
+  return files.some(file => file.endsWith('.cts')) && !stripsTypes ? 'ui/tests .cts needs node >= 22.18' : null;
+}
+
 // Lists every process as {pid, ppid, start, command}; a stopped script's tree is found from it by parent, never by
 // name. `start` (when the process started) goes with the pid as its identity, so a pid the system has handed to a new
 // process is not mistaken for the one seen before.
@@ -270,6 +278,8 @@ async function main() {
   const files = allFiles.filter(f => chosen ? chosen.includes(stemOf(f)) : !WALKTHROUGHS.includes(stemOf(f)));
   if (!files.length) { console.error('no UI test scripts matched'); process.exit(1); }
   if (list) { console.log(files.map(stemOf).join('\n')); return; }
+  const needs = typeScriptGuard(files);
+  if (needs) { console.error(needs); process.exit(1); }
   // The page runs the UI's TypeScript files as their compiled JavaScript: compile them once, before any script reads it.
   execFileSync(process.execPath, [path.join(__dirname, 'build-ui.cjs')], {stdio: 'inherit'});
   const {cores, idleFraction} = await sampleCpu();
@@ -306,7 +316,7 @@ async function main() {
   process.exit(failed.length ? 1 : 0);
 }
 
-module.exports = {resources, runScript, runScripts, sampleCpu, inSlot, stopTree, stoppedReport, redact};
+module.exports = {resources, runScript, runScripts, sampleCpu, inSlot, stopTree, stoppedReport, redact, typeScriptGuard};
 // A local run first takes one of the box's heavy-job slots, at low priority (scripts/heavy.sh), before it samples
 // the CPU; hosted CI, a run already in a slot, or a computer without bash goes straight on.
 function inSlot(env = process.env) { return Boolean(env.CI || env.TICO_HEAVY_HELD) || process.platform === 'win32'; }
