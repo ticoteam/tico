@@ -5,10 +5,39 @@
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
 'use strict';
 
+// One card: a thread with its newest messages, as GET /v2/threads/catch-up lists them.
+type CUItem = import('../types/api').ThreadCatchUp['items'][number];
+type CUMsg = import('../types/api').ThreadMessage;
+// What POST /v2/threads/{id}/messages answers: the message, or (when a rule holds it) a `held` answer around it.
+type CUPostResult = CUMsg & {held?: boolean; message?: CUMsg};
+// The last Later, Mute or Mark read, held for Undo: what it was done to, where the card was, and the timer that sends it.
+interface CUUndo {
+  kind: 'later' | 'read' | 'mute';
+  it: CUItem;
+  from: 'queue' | 'later';
+  at: number;
+  timer: ReturnType<typeof setTimeout>;
+}
 // `queue`: the cards still to see, in the server's order; `later`: the ones put off, after them. `done`: read or muted.
 // `undo`: the last Later, Mute or Mark read, while it can still be taken back. `drafts`: unsent replies, by thread;
 // `sending`: the threads whose reply is on its way, kept across visits so a reopened card cannot send it twice.
-const CU = {open: false, dlg: null, queue: [], later: [], done: 0, total: 0, next: null, paging: null, state: 'idle', error: '', seen: new Set(), undo: null, drafts: new Map(), sending: new Set()};
+interface CUState {
+  open: boolean;
+  dlg: HTMLDialogElement | null;
+  queue: CUItem[];
+  later: CUItem[];
+  done: number;
+  total: number;
+  next: string | null;
+  paging: Promise<void> | null;
+  state: 'idle' | 'loading' | 'ready' | 'error';
+  error: string;
+  seen: Set<string>;
+  undo: CUUndo | null;
+  drafts: Map<string, string>;
+  sending: Set<string>;
+}
+const CU: CUState = {open: false, dlg: null, queue: [], later: [], done: 0, total: 0, next: null, paging: null, state: 'idle', error: '', seen: new Set(), undo: null, drafts: new Map(), sending: new Set()};
 const CU_UNDO_MS = 5000;
 const cuCurrent = () => CU.queue[0] || CU.later[0] || null;
 const cuLeft = () => CU.queue.length + CU.later.length;
@@ -24,13 +53,14 @@ function cuDialog() {
   // Its reads went out one by one and the rail patched each, so closing reads nothing again.
   dlg.addEventListener('close', () => { CU.open = false; cuSettle(); railRender(); });
   dlg.addEventListener('click', cuClick);
-  dlg.addEventListener('submit', ev => { ev.preventDefault(); void cuReply(ev.target); });
+  dlg.addEventListener('submit', ev => { ev.preventDefault(); const form = eventElement(ev); if (form) void cuReply(form); });
   dlg.addEventListener('input', ev => {
-    const f = ev.target.closest('.cu-reply'), id = ev.target.closest('[data-thread]')?.dataset.thread; if (!f || !id) return;
-    f.classList.toggle('has-text', !!ev.target.value.trim()); CU.drafts.set(id, ev.target.value);
+    const target = eventElement(ev), f = target?.closest<HTMLElement>('.cu-reply'), id = target?.closest<HTMLElement>('[data-thread]')?.dataset.thread;
+    if (!f || !id || !(target instanceof HTMLInputElement)) return;
+    f.classList.toggle('has-text', !!target.value.trim()); CU.drafts.set(id, target.value);
   });
   dlg.addEventListener('keydown', ev => {
-    if (ev.target.closest('input, textarea')) return;
+    if (eventElement(ev)?.closest('input, textarea')) return;
     if ((ev.metaKey || ev.ctrlKey) && ev.key.toLowerCase() === 'z' && CU.undo) { ev.preventDefault(); cuUndo(); return; }
     if (ev.key !== 'ArrowRight' || !cuCurrent()) return;
     ev.preventDefault(); cuMarkRead();
@@ -46,15 +76,15 @@ async function catchUpOpen() {
   dlg.showModal();
   railRender();
   try { await cuPage(''); CU.state = 'ready'; }
-  catch (e) { CU.state = 'error'; CU.error = e.message; }
+  catch (e) { CU.state = 'error'; CU.error = errorMessage(e, ''); }
   if (CU.open) cuDraw({focus: true});
 }
 // One page of cards; a thread already shown this visit is not shown again.
-async function cuPage(cursor) {
+async function cuPage(cursor: string) {
   // A read or mute held for Undo when the page was asked for is done here but was still unread on the server, so
   // `count` has it too.
   const held = CU.undo && CU.undo.kind !== 'later' ? 1 : 0;
-  const r = await get('/v2/threads/catch-up?limit=20' + (cursor ? '&cursor=' + encodeURIComponent(cursor) : ''), {fresh: true});
+  const r = await get<import('../types/api').ThreadCatchUp>('/v2/threads/catch-up?limit=20' + (cursor ? '&cursor=' + encodeURIComponent(cursor) : ''), {fresh: true});
   const items = (r?.items || []).filter(it => it?.thread?.id && !CU.seen.has(it.thread.id));
   for (const it of items) CU.seen.add(it.thread.id);
   CU.queue.push(...items);
@@ -68,14 +98,14 @@ function cuMore() {
   if (CU.paging || !CU.next || cuLeft() > 3) return;
   CU.paging = cuPage(CU.next).catch(() => { CU.next = null; }).finally(() => { CU.paging = null; if (CU.open) cuDraw(); });
 }
-const cuMsgHTML = m => {
+const cuMsgHTML = (m: CUMsg) => {
   if (m.hidden || m.deleted) return '';
   const who = m.sender_id, bot = String(who || '').startsWith('bot:');
   return `<article class="cu-msg" style="--d:${Math.min(Number(m.depth) || 0, 3)}">${actorAvatar(who, 30)}<div class="cu-msg-main">
     <div class="cu-msg-head"><strong>${esc(actorName(who) || 'Someone')}</strong>${bot ? '<span class="cu-bot">BOT</span>' : ''}<time title="${esc(fmt(m.created_at))}">${esc(ago(m.created_at))}</time></div>
     <div class="cu-msg-body md">${safeMd(m.body || '', {shortLinks: true})}${m.clipped ? '<span class="muted">…</span>' : ''}</div></div></article>`;
 };
-function cuCardHTML(it) {
+function cuCardHTML(it: CUItem) {
   const t = it.thread, n = Number(it.new_count) || 0, more = Number(it.more) || 0, hash = threadOnRail(t);
   const title = threadTitle(t, it.messages), name = hash ? '#' + title : title, left = cuLeft(), draft = CU.drafts.get(t.id) || '';
   const busy = CU.sending.has(t.id) ? ' disabled' : '';
@@ -94,12 +124,12 @@ const cuUndoHTML = () => {
   const u = CU.undo; if (!u) return '';
   return `<div class="cu-undo" role="status"><div class="cu-undo-pill"><span>${u.kind === 'later' ? 'Moved to later' : u.kind === 'mute' ? 'Muted' : 'Marked read'}</span><button type="button" data-cu-undo>Undo</button></div></div>`;
 };
-function cuDraw({focus = false} = {}) {
+function cuDraw({focus = false}: {focus?: boolean} = {}) {
   const dlg = CU.dlg; if (!dlg) return;
   const it = cuCurrent(), total = Math.max(CU.total, CU.done + cuLeft()), at = it ? CU.done + 1 : total;
-  const typing = dlg.contains(document.activeElement) && document.activeElement.matches('.cu-reply input');
-  const sel = typing ? [document.activeElement.selectionStart, document.activeElement.selectionEnd, document.activeElement.selectionDirection] : null;
-  let body;
+  const active = document.activeElement, typing = dlg.contains(active) && active instanceof HTMLInputElement && active.matches('.cu-reply input');
+  const sel: [number, number, 'forward' | 'backward' | 'none'] | null = typing ? [active.selectionStart ?? 0, active.selectionEnd ?? 0, active.selectionDirection ?? 'none'] : null;
+  let body: string;
   if (CU.state === 'loading') body = '<div class="cu-card cu-state muted">Loading…</div>';
   else if (CU.state === 'error') body = `<div class="cu-card cu-state err">${esc(CU.error || 'Could not load')}</div>`;
   else if (!it) body = `<div class="cu-card cu-state cu-empty"><p>All caught up</p><button type="button" class="ghost" data-cu-close>Close</button></div>`;
@@ -110,13 +140,13 @@ function cuDraw({focus = false} = {}) {
       <button type="button" class="cu-x" data-cu-close aria-label="Close">${CU_X}</button></div>
     ${body}</div>`;
   // A redraw while typing (the next page coming in) keeps the caret in the reply box.
-  const input = dlg.querySelector('.cu-reply input');
-  if (typing && !focus && input && !input.disabled) { input.focus({preventScroll: true}); input.setSelectionRange(...sel); return; }
-  if (focus || !typing) (dlg.querySelector('[data-cu-read]') || dlg.querySelector('.cu-empty [data-cu-close]') || dlg.querySelector('.cu-x'))?.focus({preventScroll: true});
+  const input = dlg.querySelector<HTMLInputElement>('.cu-reply input');
+  if (sel && !focus && input && !input.disabled) { input.focus({preventScroll: true}); input.setSelectionRange(...sel); return; }
+  if (focus || !typing) (dlg.querySelector<HTMLElement>('[data-cu-read]') || dlg.querySelector<HTMLElement>('.cu-empty [data-cu-close]') || dlg.querySelector<HTMLElement>('.cu-x'))?.focus({preventScroll: true});
 }
 // Read through or muted: the card is done and the next one shows. Read marks only move forward on the server, so the
 // read (POST read-all) and the mute go out once Undo is gone: after CU_UNDO_MS, on the next card action, or on close.
-function cuMarkRead({mute = false} = {}) {
+function cuMarkRead({mute = false}: {mute?: boolean} = {}) {
   const it = cuCurrent(); if (!it) return;
   cuSettle();
   const from = CU.queue[0] === it ? 'queue' : 'later';
@@ -138,13 +168,13 @@ function cuLater() {
 }
 // Undo shows for CU_UNDO_MS in the head, in the progress bar's place; when the time is up it goes without a redraw, so a
 // reply being typed stays.
-function cuHold(kind, it, from) {
+function cuHold(kind: CUUndo['kind'], it: CUItem, from: CUUndo['from']) {
   CU.undo = {kind, it, from, at: performance.now(), timer: setTimeout(cuSettle, CU_UNDO_MS)};
 }
 // The held action can no longer be taken back: a read or mute goes to the server now. The read covers what was there
 // at the click (`ago_ms`, measured as it is sent), so a message that came while Undo showed stays unread. Both go at
 // once with keepalive, so leaving or reloading the page right after does not lose them.
-function cuSettle({leaving = false} = {}) {
+function cuSettle({leaving = false}: {leaving?: boolean} = {}) {
   const u = CU.undo; if (!u) return;
   CU.undo = null; clearTimeout(u.timer);
   CU.dlg?.querySelector('.cu-undo')?.remove();
@@ -155,7 +185,7 @@ function cuSettle({leaving = false} = {}) {
   if (leaving) { for (const w of writes) w.catch(() => {}); return; }
   if (!THREADS.cu) THREADS.catchUp = Math.max(0, THREADS.catchUp - 1);
   threadsAllRead(id);
-  Promise.all(writes).catch(e => toast(e.message, true));
+  Promise.all(writes).catch(e => toast(errorMessage(e, ''), true));
 }
 window.addEventListener('pagehide', () => cuSettle({leaving: true}));
 // The card comes back where it was, and nothing was sent.
@@ -169,7 +199,7 @@ function cuUndo() {
 }
 // A thread read somewhere else (the viewer's own `read` event): its card goes, counted as done. While open, Catch up
 // reads nothing again on events; it pages near the end and reads afresh when opened again.
-function catchUpGone(id) {
+function catchUpGone(id: string | undefined) {
   if (!CU.open) return;
   if (CU.undo?.it.thread.id === id) cuSettle();
   const it = [...CU.queue, ...CU.later].find(x => x.thread?.id === id);
@@ -179,34 +209,35 @@ function catchUpGone(id) {
   cuDraw();
   cuMore();
 }
-async function cuReply(form) {
+async function cuReply(form: Element) {
   const it = cuCurrent(), input = form.querySelector('input'), raw = input?.value || '', text = raw.trim();
-  if (!it || !text) return;
+  if (!it || !input || !text) return;
   const id = it.thread.id;
   if (CU.sending.has(id)) return;
   CU.sending.add(id);
   input.disabled = true; form.querySelector('.cu-send')?.setAttribute('disabled', '');
   let sent = false;
   try {
-    const r = await post(thvPath(id) + '/messages', {text});
+    const r: CUPostResult = await post(thvPath(id) + '/messages', {text});
     if (r?.held) toast('Your message was held by a rule', true);
     const m = r?.message || (r?.id ? r : null);
     if (m && !r?.held) it.messages = [...(it.messages || []), {...m, depth: 0, sender_id: m.sender_id || myActor()}];
     // Only the words that went: a draft changed since (a redraw kept it) stays.
     if ((CU.drafts.get(id) ?? raw) === raw) CU.drafts.delete(id);
     sent = true;
-  } catch (e) { toast(e.message, true); }
+  } catch (e) { toast(errorMessage(e, ''), true); }
   CU.sending.delete(id);
   if (!CU.open) return;
   cuDraw();
   if (cuCurrent()?.thread.id !== id) return;
-  if (sent) { const msgs = CU.dlg.querySelector('.cu-msgs'); if (msgs) msgs.scrollTop = msgs.scrollHeight; }
-  CU.dlg.querySelector('.cu-reply input')?.focus();
+  if (sent) { const msgs = CU.dlg?.querySelector<HTMLElement>('.cu-msgs'); if (msgs) msgs.scrollTop = msgs.scrollHeight; }
+  CU.dlg?.querySelector<HTMLInputElement>('.cu-reply input')?.focus();
 }
-function cuClick(ev) {
-  const t = ev.target;
-  if (t.closest('[data-cu-close]')) { CU.dlg.close(); return; }
-  if (t.closest('[data-cu-open]')) { ev.preventDefault(); const href = t.closest('[data-cu-open]').getAttribute('href'); CU.dlg.close(); location.hash = href; return; }
+function cuClick(ev: Event) {
+  const t = eventElement(ev); if (!t) return;
+  if (t.closest('[data-cu-close]')) { CU.dlg?.close(); return; }
+  const link = t.closest<HTMLAnchorElement>('[data-cu-open]');
+  if (link) { ev.preventDefault(); const href = link.getAttribute('href') ?? ''; CU.dlg?.close(); location.hash = href; return; }
   if (t.closest('[data-cu-undo]')) { cuUndo(); return; }
   if (t.closest('[data-cu-later]')) { cuLater(); return; }
   if (t.closest('[data-cu-mute]')) { cuMarkRead({mute: true}); return; }
