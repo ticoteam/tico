@@ -260,6 +260,23 @@ def _nudge(c: sqlite3.Connection, task: dict[str, Any], who: str, cap: int, at: 
     cast(Callable[..., object], H._wake)(c, _task(c, made["id"]), told, body, refs, trigger="stall_check")
 
 
+def may_ask(c: sqlite3.Connection, who: Any, auth: Any, task: dict[str, Any]) -> None:
+    """Who may ask for a permit on `task`: a person who can read it, or a bot working it (its owner, or a run that carries
+    it, as task_privacy.attempt_tasks reads a run's work). Any other bot is refused, so it can neither spend the ticket's
+    minutes nor become the builder whose manager grants the ticket's one extension."""
+    if who.role != "bot":
+        auth.task(c, who, task["id"])  # not_found when the person cannot read it
+        return
+    owner = str(task.get("owner_id") or "")
+    if owner and who.actor == (owner if ":" in owner else "bot:" + owner):
+        return
+    from . import task_privacy
+
+    if who.attempt_id and task["id"] in task_privacy.attempt_tasks(c, who.attempt_id):
+        return
+    raise Problem("forbidden", "Only a bot working this ticket, or a person who can read it, asks for its CI permit", 403)
+
+
 def permit(
     c: sqlite3.Connection, who: str, body: Permit, rate: float, minutes_per_ticket: int, at: str
 ) -> dict[str, Any]:
@@ -499,14 +516,16 @@ def install(app: "FastAPI", store: "Store", auth: "Auth", mutate: "Callable[...,
     @app.post("/api/v2/ci/permits")
     def ci_permit(request: Request, body: Permit) -> Any:
         """A builder's remote run asks to start (scripts/remote.py). Refused with one line when its ticket has used its
-        minutes or today's CI share has no room; the answer is `allowed` either way."""
+        minutes or today's CI share has no room; the answer is `allowed` either way. Only a bot working the ticket or a
+        person who can read it may ask (may_ask)."""
         who = request.state.identity
         cast(Any, auth).domain(who)
-        if who.role != "bot":
-            raise Problem("forbidden", "Only a builder's own run asks for a permit", 403)
         settings = current_settings()
 
         def work(c: sqlite3.Connection) -> dict[str, Any]:
+            task = _task(c, body.task_id)
+            if task is not None:
+                may_ask(c, who, auth, task)
             return permit(c, who.actor, body, settings.ci_rate_per_job_minute, settings.ci_minutes_per_ticket, _now())
 
         return mutate(request, body, work)

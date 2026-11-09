@@ -36,6 +36,18 @@ def token_of(team):
     return next((b.token for b in team.builders if b.running and b.token), None)
 
 
+def token_for(w, team, task_id):
+    """The token of a running builder working this ticket (its owner, or the builder whose turn is on it): only a bot
+    working a ticket may ask for its permit (ci_runs.may_ask)."""
+    found = w.sql("SELECT owner_id FROM tasks WHERE id=?", (task_id,))
+    owner = str(found[0]["owner_id"] or "").split(":", 1)[-1] if found else ""
+    for b in team.builders:
+        on = ((getattr(b, "attempt", None) or {}).get("task") or {}).get("id")
+        if b.running and b.token and (b.slug == owner or on == task_id):
+            return b.token
+    return None
+
+
 def answer(step, status, reply, ok):
     message = reply.get("message", "") if isinstance(reply, dict) else ""
     return {"step": step, "status": status, "ok": ok, "message": message}
@@ -145,8 +157,11 @@ def during(run, w, team, i):
         return
     kind, *args = script[run.ci["next"]]
     token = token_of(team)
-    if kind in ("ask", "retry") and token is None:
-        return
+    if kind in ("ask", "retry"):
+        ticket = run.ci["tickets"][args[0]] if kind == "ask" else run.ci["runs"][args[0]]["task_id"]
+        token = token_for(w, team, ticket)
+        if token is None:
+            return
     run.ci["next"] += 1
     run.ci["answers"].append(STEPS[kind](run, w, token, *args))
 
