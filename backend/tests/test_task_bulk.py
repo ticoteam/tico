@@ -512,3 +512,31 @@ def test_a_bulk_finish_leaves_the_callers_own_subtask_open(api, action, change):
     assert [(t["id"], t["code"]) for t in out["tasks"]["skipped"]] == [(solo["id"], "subtasks_left_out")]
     assert get(api, "tasks/" + solo["id"])["task"]["status"] == "open"
     assert get(api, "tasks/" + mine["id"])["task"]["status"] == "open"
+
+
+def test_a_bulk_move_between_two_done_steps_is_no_finish(api):
+    """From one done step to another nothing is retired, so a left-out open subtask does not hold the parent back."""
+    typ = post(
+        api,
+        "task-types",
+        {
+            "name": "Release",
+            "steps": [
+                {"name": "Draft", "status": "open"},
+                {"name": "Shipped", "status": "done"},
+                {"name": "Measured", "status": "done"},
+            ],
+        },
+    )["type"]
+    shipped = task(api, "Ship the spring release", type=typ["id"], step="Shipped", labels=["rel"])
+    mine = task(
+        api,
+        "Ana's release notes",
+        owner="human:ana",
+        labels=["rel"],
+        relations=[{"task": shipped["id"], "kind": "parent"}],
+    )
+    out = bulk(api, {"label": "rel", "exclude_owner": "human:ana", "type": typ["id"]}, "step", step="Measured")
+    assert (out["changed"], out["skipped"]) == (1, 0), out
+    assert get(api, "tasks/" + shipped["id"])["task"]["step"]["name"] == "Measured"
+    assert get(api, "tasks/" + mine["id"])["task"]["status"] == "open"

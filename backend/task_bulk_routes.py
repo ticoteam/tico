@@ -132,7 +132,8 @@ def register(
         target = next((s for s in steps if s["id"] == body.step), None) or next(
             (s for s in steps if s["name"] == body.step), None
         )
-        return bool(target) and target["status"] in ("done", "closed")
+        # Between two done (or two closed) steps is no finish: the single update moves it without the cascade.
+        return bool(target) and target["status"] in ("done", "closed") and target["status"] != row["status"]
 
     @app.post("/api/v2/task-bulk")
     def task_bulk(request: Request, body: M.TaskBulk):
