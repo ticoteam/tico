@@ -7,7 +7,6 @@ types are meant to be.
 """
 
 import json
-import sqlite3
 from pathlib import Path
 
 import pytest
@@ -16,7 +15,7 @@ from backend.config import Settings
 from backend.entities import rules as D
 from backend.entities import store as S
 from backend.store import Store
-from backend.tests.test_directory_tables_migration import FIXTURE, SAMPLE
+from backend.tests.test_directory_tables_migration import _boot, copy_of
 
 NOW = "2026-10-01T00:00:00Z"
 ACTOR = "bot:ops"
@@ -39,17 +38,17 @@ def _link(c, link_id, source, key, target):
     )
 
 
+@pytest.fixture(scope="module")
+def booted_hub(tmp_path_factory) -> Path:
+    """The hub boots once for the module (the migrations are the slow part); each test works on its own copy."""
+    path = tmp_path_factory.mktemp("directory-rules") / "booted.db"
+    _boot(path)
+    return path
+
+
 @pytest.fixture
-def directory(tmp_path: Path) -> Store:
-    path = tmp_path / "hub.db"
-    conn = sqlite3.connect(path)
-    conn.executescript(FIXTURE.read_text())
-    conn.close()
-    conn = sqlite3.connect(path)
-    conn.executescript(SAMPLE)
-    conn.close()
-    store = Store(Settings(db_path=path))
-    store.initialize(seed_market=False)
+def directory(booted_hub: Path, tmp_path: Path) -> Store:
+    store = Store(Settings(db_path=copy_of(booted_hub, tmp_path / "hub.db")))
     with store.transaction() as c:
         c.execute("UPDATE entities SET self = 1 WHERE id = 'company/acme'")
         c.execute("UPDATE entities SET primary_domain = 'acme.example' WHERE id = 'company/acme'")

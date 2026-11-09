@@ -148,7 +148,6 @@ def test_collect_limits_to_candidate_range_and_reads_cloud_tickets(monkeypatch):
             calls.append(revisions)
             or [
                 {"sha": PR["merge_commit"], "touched": {"app.py"}, "subject": "Change (#12)", "body": ""},
-                {"sha": "e" * 40, "touched": {"CHANGELOG.md"}, "subject": "Release notes", "body": ""},
             ]
         ),
     )

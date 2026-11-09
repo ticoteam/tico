@@ -6,6 +6,11 @@ const {unrouted} = require('./routes.cjs');
 
 const ME = 'human:ana';
 const stamp = '2026-11-07T12:00:00Z';
+// The bots the queue names, as /api/employees lists them: a person reads a bot's display name, never its slug.
+const EMPLOYEES = [
+  {id: 'product-owner', slug: 'product-owner', display_name: 'Product Manager', status: 'active'},
+  {id: 'product-manager', slug: 'product-manager', display_name: 'Product Pipeline Manager', status: 'active'},
+];
 const steps = [
   {id: 'spec', name: 'Spec', status: 'open', position: 0},
   {id: 'build', name: 'Build', status: 'doing', position: 1},
@@ -40,7 +45,7 @@ function tasks() {
     task('D55', 'Review page: missing', 'review1', [
       {id: 'r-shots55', name: 'Screenshots', state: 'out_of_date', next_actor: 'bot:b1', detail: 'Shots out of date'},
       {id: 'r-tests55', name: 'Tests pass', state: 'met', next_actor: null}]),
-    task('D61', 'Pipeline stages + manager', 'spec', [
+    task('D61', 'Pipeline stages, requirements and the manager rules', 'spec', [
       {id: 'r-spec61', name: 'Spec page', state: 'waiting', next_actor: ME},
       // No dot is drawn for a requirement the stage does not have yet: the server sends "none", drawn hollow.
       {id: 'r-tests61', name: 'Tests pass', state: 'none', next_actor: null}]),
@@ -53,9 +58,14 @@ function tasks() {
 // The tasks with the stage the fake server has moved them to (state.stage), so a list or a ticket read shows the move.
 function placed(list, state) {
   return list.map(t => {
+    // With `held`, D17 waits on Ana's question as the server sends it: a waiting card, its open question as the blocker, and
+    // whom it waits on (backend/question_tasks.py waiting_on), so the board says "Waiting on Ana", not "Blocked:".
+    const base = state.held && t.id === 'D17'
+      ? {...t, status: 'waiting', waiting_on: ME, relations: {blocks: [{id: 'Q1', title: QUESTION_TEXT, status: 'open', direction: 'in', owner_id: ME}]}}
+      : t;
     const stage = state.stage[t.id];
-    if (!stage) return t;
-    return {...t, step_id: stage, step: {...steps.find(s => s.id === stage), type_id: 'dev-tickets'}};
+    if (!stage) return base;
+    return {...base, step_id: stage, step: {...steps.find(s => s.id === stage), type_id: 'dev-tickets'}};
   });
 }
 
@@ -66,33 +76,94 @@ const ATTACHED = {
     file_version: 3, attached_by: ME, created_at: stamp}],
 };
 
-// The review queue for the pipeline, as the server sends it (GET /v2/pipelines/{id}/review/queue): two items for Ana.
-// `state.removed` holds the items an approval or send-back took out, so a reload shows the queue as it now is.
-function queue(state) {
-  const row = (task_id, title, stage, requirement_id, requirement, why, attachment) => ({task_id, title, pipeline_id: 'dev-tickets',
-    pipeline: 'Dev tickets', stage_id: stage.toLowerCase(), stage, requirement_id, requirement, requirement_version: 1, kind: attachment.format,
-    work_version: 3, attachment, attachment_digest: 'sha256:aa', why, since: stamp, late: false, claimed_by: null, claimed_by_me: false,
-    assignee: {id: 'bot:b1', name: 'Builder'}, bot_note: task_id === 'D52' ? 'Shot 2 is cropped' : '', moves_to: task_id === 'D61' ? {stage_id: 'build', name: 'Build'} : null,
-    reviewer_id: ME, can_mark_met: true, can_not_validate: stage === 'Validate', stage_visit_id: stage === 'Validate' ? 'v-validate' : null});
-  const all = [
-    row('D52', 'Assistant can approve a spec', 'Build', 'r-shots', 'Screenshots', 'The bot is unsure about shot 2',
-      {id: 'a1', source: 'link', format: 'image', name: 'shot.png', href: 'https://example.test/shot.png', file_id: null, file_version: null}),
-    row('D61', 'Pipeline stages + manager', 'Spec', 'r-spec61', 'Spec page', 'Spec needs your sign-off',
-      {id: 'b1', source: 'file', format: 'pdf', name: 'spec.pdf', href: '/api/v2/files/f1/versions/2', file_id: 'f1', file_version: 2}),
-  ];
-  // `validate`: a Validate item comes first, so a test can reach it without stepping through the others.
-  if (state.validate) all.unshift(row('D70', 'Validate the spec', 'Validate', 'r-val70', 'Validation', 'Measures did not hold',
-    {id: 'c1', source: 'link', format: 'page', name: 'Measures', href: 'https://example.test/measures', file_id: null, file_version: null}));
-  return {items: all.filter(r => !state.removed.has(`${r.task_id}:${r.requirement_id}`))};
+// The card each ticket shows when nothing is attached: the queue row carries its body, acceptance criteria and checkpoint.
+const CARDS = {
+  D52: {body: 'Assistant can approve a spec when every check passes.', acceptance: ['Approved in one tap', 'Works on a phone'],
+    checkpoint: 'Screenshots taken on the dev branch; shot 2 is cropped.'},
+};
+
+// The markdown file on D61 when `state.text` is set (a ticket file, not the requirement's): the preview shows it as text.
+const SPEC_MARKDOWN = '# Pipeline manager spec\n\nThe manager asks for a spec before a card moves on.\n\n- Every stage names its reviewer\n- Markdown shows as written\n';
+// A stand-in picture for the example.test links (the screenshot's shot.png), drawn as SVG so the card looks like a screen.
+const PLACEHOLDER_SVG = '<svg xmlns="http://www.w3.org/2000/svg" width="640" height="400" viewBox="0 0 640 400"><rect width="640" height="400" fill="#334155"/>'
+  + '<rect x="60" y="60" width="520" height="280" rx="16" fill="#1e293b"/><circle cx="200" cy="170" r="48" fill="#38bdf8"/>'
+  + '<rect x="290" y="140" width="250" height="18" rx="9" fill="#94a3b8"/><rect x="290" y="176" width="200" height="18" rx="9" fill="#64748b"/>'
+  + '<rect x="100" y="260" width="440" height="24" rx="12" fill="#475569"/></svg>';
+
+// The held forms (`held` option): a question Ana is asked on D17's card (the question task is the answer's target, as
+// backend/question_tasks.py as_ask builds it) and two subtasks of Ana's on D52.
+const QUESTION_TEXT = "Does 'close all' include bot-owned tasks?";
+const QUESTION = {id: 'Q1', kind: 'ask', question_task: true, sender_id: 'bot:product-owner', recipient_id: ME, body: QUESTION_TEXT,
+  created_at: RECENT_SINCE, conversation_id: null, read_at: null, delivered_at: null,
+  refs: {questions: [{id: 'decision', question: QUESTION_TEXT, options: [{label: 'Yes'}, {label: 'No'}]}], task: 'Q1', task_question: true,
+    target: {task: 'Q1'}}};
+// A plain question (`plain` option): no picks, so the ▶ answers it in words, as the task page does.
+const PLAIN_QUESTION = {...QUESTION, refs: {...QUESTION.refs, questions: [{id: 'decision', question: QUESTION_TEXT, options: []}]}};
+// A subtask's card carries what the task view shows: its body, acceptance criteria and files (the server's held item).
+function subtask(id, title, card = {}) {
+  return {form: 'subtask', task_id: 'D52', title: 'Assistant can approve a spec', number: 52, pipeline_id: 'dev-tickets', pipeline: 'Dev tickets',
+    stage_id: 'build', stage: 'Build', subject_id: id, subject_title: title, subject_version: 2, ask: null, holds_up: null,
+    body: '', acceptance_criteria: [], task_files: [], ...card,
+    why: 'Your subtask · Dev tickets', since: stamp, late: false, reviewer_id: ME};
 }
 
-// Installs the fake server on a page. `state` collects what the tests check: posts, refusals and queue reads.
+// `state.unopenable`: D52's page is one the reader cannot open. The server sends it redacted, with no id, blob or digest.
+const UNOPENABLE = {id: null, source: 'file', format: 'file', name: "A page you can't open", url: null, href: null, file_id: null,
+  file_version: null, blob_id: null, commit_sha: null, removed: true};
+
+// The review queue for the pipeline, as the server sends it (GET /v2/pipelines/{id}/review/queue): two items for Ana.
+// `state.removed` holds the items an approval or send-back took out, so a reload shows the queue as it now is.
+// `state.bare`: D52 has nothing attached, so its card shows the body, acceptance criteria and checkpoint instead.
+// `state.text`: D61's attachment is the ticket's own markdown file (source ticket, format text), not a requirement's PDF.
+// `why` is the server's code (reviewer, sent_back or backup); the review words it with the requirement and pipeline.
+function queue(state) {
+  const row = (task_id, title, stage, requirement_id, requirement, why, attachment) => {
+    const card = CARDS[task_id] || {body: '', acceptance: [], checkpoint: ''};
+    const shown = state.bare && task_id === 'D52' ? null : state.unopenable && task_id === 'D52' ? UNOPENABLE : attachment;
+    return {form: 'review', task_id, title, pipeline_id: 'dev-tickets', pipeline: 'Dev tickets', stage_id: stage.toLowerCase(), stage, requirement_id, requirement,
+      requirement_version: 1, kind: shown ? shown.format : 'approval', work_version: 3, attachment: shown,
+      attachment_digest: shown && shown.source !== 'ticket' && !shown.removed ? 'sha256:aa' : null, why, since: stamp, late: false, claimed_by: null, claimed_by_me: false,
+      assignee: {id: 'bot:product-owner', name: 'Product Manager'}, manager: {id: 'bot:product-manager', name: 'Product Pipeline Manager'},
+      body: card.body, acceptance_criteria: card.acceptance, checkpoint: card.checkpoint,
+      bot_note: task_id === 'D52' ? 'Shot 2 is cropped' : '', moves_to: task_id === 'D61' ? {stage_id: 'build', name: 'Build'} : null,
+      reviewer_id: ME, can_mark_met: true, can_not_validate: stage === 'Validate', stage_visit_id: stage === 'Validate' ? 'v-validate' : null};
+  };
+  const all = [
+    row('D52', 'Assistant can approve a spec', 'Build', 'r-shots', 'Screenshots', 'reviewer',
+      {id: 'a1', source: 'link', format: 'image', name: 'shot.png', href: 'https://example.test/shot.png', file_id: null, file_version: null}),
+    row('D61', 'Pipeline stages, requirements and the manager rules', 'Spec', 'r-spec61', 'Spec page', 'reviewer', state.text
+      ? {id: 'blob-spec', source: 'ticket', format: 'text', name: 'Pipeline manager spec v1.md', href: '/api/v2/files/blob-spec', url: null, file_id: null, file_version: null}
+      : {id: 'b1', source: 'file', format: 'pdf', name: 'spec.pdf', href: '/api/v2/files/f1/versions/2', file_id: 'f1', file_version: 2}),
+  ];
+  // `validate`: a Validate item comes first, so a test can reach it without stepping through the others.
+  if (state.validate) all.unshift(row('D70', 'Validate the spec', 'Validate', 'r-val70', 'Validation', 'reviewer',
+    {id: 'c1', source: 'link', format: 'page', name: 'Measures', href: 'https://example.test/measures', file_id: null, file_version: null}));
+  // `held`: the question and the two subtasks follow the reviews (the server orders the whole queue by stage, then age; the
+  // fixture lists them here, after the reviews the walk starts on). Answering or finishing one removes it by its subject.
+  if (state.held) {
+    const ask = state.plain ? PLAIN_QUESTION : QUESTION;
+    const questionRow = (task_id, title, number) => ({form: 'question', task_id, title, number, pipeline_id: 'dev-tickets', pipeline: 'Dev tickets',
+      stage_id: 'build', stage: 'Build', subject_id: 'Q1', subject_title: QUESTION_TEXT, subject_version: 1, ask,
+      holds_up: {id: task_id, title}, why: 'Question for you · Dev tickets', since: stamp, late: false, reviewer_id: ME});
+    all.push(questionRow('D17', 'Sim stuck checks', 17));
+    // `twoCards`: the same question holds a second card, so the queue has a row for each (answering takes both out).
+    if (state.twoCards) all.push(questionRow('D52', 'Assistant can approve a spec', 52));
+    all.push(subtask('S1', 'Check the shot crop', {body: 'Crop the second shot to the frame.', acceptance_criteria: ['Shot 2 is cropped to the frame'],
+      task_files: [{id: 'blob-crop', name: 'crop-notes.txt', size: 120, content_type: 'text/plain', url: '/api/v2/files/blob-crop'}]}),
+    subtask('S2', 'Write the release note'));
+  }
+  return {items: all.filter(r => !state.removed.has(r.form === 'review' ? `${r.task_id}:${r.requirement_id}` : r.subject_id))};
+}
+
+// Installs the fake server on a page. `state` collects what the tests check: posts, refusals and queue reads. `held` adds
+// the question and the subtasks to the queue (see queue()).
 // `ownerOnly`: the type carries no can_edit_rules, only its owner, and the viewer is a member (E3: the rules controls follow
 // the server's answer, and the owner check reads pipeline_owner_id). `claimedBy`: another reviewer holds every item.
 async function install(page, {refuseApprove = false, manager = false, refuseMove = false, late = [{task_id: 'D17', title: 'Sim stuck checks', stage: 'Build', hours: 52, limit_hours: 48, since: stamp}],
-  ownerOnly = false, member = false, claimedBy = null, noRequirements = false, validate = false} = {}) {
+  ownerOnly = false, member = false, claimedBy = null, noRequirements = false, validate = false, bare = false, text = false, held = false,
+  plain = false, twoCards = false, unopenable = false} = {}) {
   const state = {posts: [], queueReads: 0, refuseApprove, refuseMove, moves: [], prefs: {}, attachments: [], managerReads: 0, claims: [], claimedBy,
-    removed: new Set(), lastDone: null, affectedReads: [], requirementReads: {}, attachmentReads: 0, validate,
+    removed: new Set(), lastDone: null, affectedReads: [], requirementReads: {}, attachmentReads: 0, validate, bare, text, held, plain, twoCards, unopenable,
     // The stage each ticket was moved to by an approval, and the stage an undo puts it back in (keyed by the decision).
     stage: {}, moved: {}};
   let shown = manager ? {...type, manager: 'product-manager'} : type;
@@ -102,14 +173,17 @@ async function install(page, {refuseApprove = false, manager = false, refuseMove
   await page.route('**/*', async route => {
     const req = route.request(), url = new URL(req.url()), p = url.pathname;
     const json = (body, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
+    if (url.hostname === 'example.test') return route.fulfill({contentType: 'image/svg+xml', body: PLACEHOLDER_SVG});
     if (url.origin !== 'http://tico-ui.test') return route.abort();
     if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
-    const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|css))$/);
+    // theme.ts is a classic script the page loads as TypeScript: uiFile serves its compiled file, so the theme (data-theme) applies.
+    const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|css|ts))$/);
     if (ui) { const file = uiFile(ui[1]); if (fs.existsSync(file)) return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(file, 'utf8')}); }
     if (p === '/api/me') return json(me);
-    if (p === '/api/employees') return json([]);
+    if (p === '/api/employees') return json(EMPLOYEES);
     if (p === '/api/humans') return json({people: [{id: 'ana', name: 'Ana', email: 'ana@acme.example'}]});
     if (p === '/api/v2/status') return json({bots: []});
+    if (p === '/api/v2/files/blob-spec') return route.fulfill({contentType: 'text/markdown; charset=utf-8', body: SPEC_MARKDOWN});
     if (p === '/api/v2/task-types') return json({types: [shown]});
     const affected = p.match(/^\/api\/v2\/pipeline-stages\/([^/]+)\/affected$/);
     if (affected && req.method() === 'GET') {
@@ -155,9 +229,22 @@ async function install(page, {refuseApprove = false, manager = false, refuseMove
         return json({attachment: {id: 'att-' + state.attachments.length, source: body.source, url: body.url || null, file_id: body.file_id || null, by: ME, at: stamp, work_version: 1}}); }
       return json({attachments: state.attachments.map((a, i) => ({id: 'att-' + (i + 1), source: a.source, url: a.url || null, file_id: a.file_id || null, by: ME, at: stamp, work_version: 1}))});
     }
+    // A question's answer (the question card's call) closes it; a subtask's Done or Send back is a status POST on that task
+    // (decide.ts). Either one takes the item out of the queue, as the server does.
+    const answers = p.match(/^\/api\/v2\/tasks\/([^/]+)\/answers$/);
+    if (answers && req.method() === 'POST') {
+      state.posts.push({path: `/v2/tasks/${answers[1]}/answers`, body: req.postDataJSON() || {}});
+      state.removed.add(answers[1]);
+      return json({ok: true});
+    }
     const mv = p.match(/^\/api\/v2\/tasks\/([^/]+)$/);
     if (mv && req.method() === 'POST') {
       const body = req.postDataJSON() || {};
+      if (body.status && !body.step) {
+        state.posts.push({path: `/v2/tasks/${mv[1]}`, body});
+        state.removed.add(mv[1]);
+        return json({task: {id: mv[1], status: body.status, version: (body.version || 1) + 1}});
+      }
       state.moves.push(body);
       if (state.refuseMove && !body.override_requirements) return json({error: {code: 'requirement', detail: 'Screenshots is not met'}}, 422);
       return json({task: {...tasks().find(t => t.id === mv[1]), ...(body.step ? {step_id: body.step, step: {...steps.find(x => x.id === body.step), type_id: 'dev-tickets'}} : {}), version: 2}});

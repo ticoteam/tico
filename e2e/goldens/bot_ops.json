@@ -75,7 +75,7 @@
       "sweeps": true,
       "takes": "all"
     },
-    "queued": 8,
+    "queued": 5,
     "repo": "emp-ops",
     "repo_url": "",
     "reports_to": null,

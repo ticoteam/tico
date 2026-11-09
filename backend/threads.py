@@ -352,7 +352,8 @@ class Viewer:
         self._backfill = None
         self._threads = {}
         self._legacy = {}
-        self._members = None  # {thread id: whether a member}, while a sidebar page reads (`_prefetch_members`)
+        # {thread id: whether a member}, while a sidebar page reads (`_prefetch_members`)
+        self._members: dict | None = None
         self._member_rows = {}  # {thread id: its member actors}, read once a request (`_member_rows`)
 
     @property
@@ -533,7 +534,7 @@ def denial(c, v, row):
     Auth.conversation all ask it."""
     v = viewer(None, v) if not isinstance(v, Viewer) else v
     row = thread_row(c, row)
-    if row is None:
+    if row is None or row.get("deleted_at"):
         return _MISSING
     if v.is_person and not v.in_good_standing(c):
         return _MISSING
@@ -3751,6 +3752,79 @@ def update(c, principal, thread_id, *, title=None, archived=None):
     return view(c, principal, after)
 
 
+def delete_problem(c, actor, row):
+    """Why this thread cannot be deleted, or None. A reply is never deleted on its own; every message in the thread (its
+    whole tree) must already be deleted; and nobody but `actor` may be in it, as a member or a follower."""
+    if row.get("parent_id"):
+        return "Delete the whole thread, not one of its replies"
+    if audience_of(root_of(c, row)) == "home":
+        return "A Home can't be deleted"
+    live = c.execute(
+        "SELECT 1 FROM messages m JOIN conversations s ON s.id=m.conversation_id "
+        "WHERE (s.id=? OR s.root_id=?) AND m.deleted_at IS NULL LIMIT 1",
+        (row["id"], row["id"]),
+    ).fetchone()
+    if live:
+        return "A thread can be deleted only after every message in it is deleted"
+    others = c.execute(
+        "SELECT 1 FROM (SELECT actor FROM thread_members WHERE thread_id=? UNION "
+        "SELECT actor FROM thread_followers WHERE thread_id=? AND following=1) WHERE actor<>? LIMIT 1",
+        (row["id"], row["id"], actor),
+    ).fetchone()
+    if others:
+        return "A thread can be deleted only when no one else is in it"
+    return None
+
+
+def delete(c, principal, thread_id):
+    """Delete a thread the viewer manages, when delete_problem allows it. It leaves every list at once and reads as not
+    found; its title is cleared, and what its messages still hold goes with it (`_clear_tree_words`). Refused with a plain
+    reason (409) otherwise, and nothing is removed."""
+    actor, v, row = _require_thread(c, principal, thread_id)
+    if v is None or not can_manage(c, v, row):
+        raise Problem("forbidden", "Only the thread's owner deletes it", 403)
+    problem = delete_problem(c, actor, row)
+    if problem:
+        raise Problem("not_deletable", problem, 409)
+    now = _now()
+    c.execute(
+        "UPDATE conversations SET deleted_at=?, archived_at=COALESCE(archived_at,?), subject='', updated_at=? "
+        "WHERE id=? OR root_id=?",
+        (now, now, now, row["id"], row["id"]),
+    )
+    _clear_tree_words(c, row, actor)
+    _event(c, actor, "thread.deleted", row["id"], {})
+    _audit(c, actor, "thread:" + row["id"], {"deleted": False}, {"deleted": True})
+    return {"deleted": row["id"]}
+
+
+def _clear_tree_words(c, row, actor):
+    """A deleted thread keeps no words, attachment references or files. For every message in its tree (the root and its
+    sub-threads), every revision body of that message and of its origin's copies (each row that shares the origin, in any
+    thread) is blanked, as the contract's "every copy of the words follows" and "its origin's copies" say. Its attachment
+    references go and only its origin stays, and its files go by the file delete path (file_library.release_message_files).
+    The tombstones and sequence numbers stay, as retention keeps them."""
+    from . import file_library  # lazy: the file library reads thread rows too
+
+    ids = [
+        r[0]
+        for r in c.execute(
+            "SELECT m.id FROM messages m JOIN conversations s ON s.id=m.conversation_id WHERE s.id=? OR s.root_id=?",
+            (row["id"], row["id"]),
+        )
+    ]
+    for message_id in ids:
+        message = H.message(c, message_id, include_deleted=True) or {}
+        origin = (message.get("refs") or {}).get("origin")
+        c.execute(
+            "UPDATE message_revisions SET body=NULL WHERE (message_id=? OR origin_id=?) AND body IS NOT NULL",
+            (message_id, message.get("origin_id") or message_id),
+        )
+        c.execute("UPDATE messages SET refs=? WHERE id=?", (H._dump({"origin": origin} if origin else {}), message_id))
+        file_library.release_message_files(c, actor, message_id)
+    return len(ids)
+
+
 # ----------------------------------------------------------------------------- C4: read state
 def mark_read(c, v, thread_id, seq):
     """Advance the viewer's read mark in this thread (max wins: another device may be ahead)."""
@@ -3869,6 +3943,71 @@ DM_WITH_SHOWN = 4
 # in a list sums up.
 _SUBTREE = "conversations s LEFT JOIN thread_followers f ON f.thread_id=s.id AND f.actor={me} "
 _SUBTREE_OPEN = "s.archived_at IS NULL AND s.closed_at IS NULL"
+
+
+FINISHED_TASKS = "'done','closed','declined'"
+
+
+def _finish_sql(t="t"):
+    """SQL: when the task `t` last finished: its latest status event to done, closed or declined, else its timestamps."""
+    return (
+        f"COALESCE((SELECT MAX(h.created_at) FROM history_events h WHERE h.subject_type='task' "
+        f"AND h.subject_id={t}.id AND h.kind='status' AND h.new IN ({FINISHED_TASKS})),"
+        f"{t}.closed_at,{t}.done_at,{t}.updated_at)"
+    )
+
+
+def revived_roots(c, v, roots=None):
+    """The root ids (of `roots`, else every finished-task thread) that a post the viewer reads brings back. A plain post
+    (not restricted, no legacy audience) is counted in SQL by task_open_sql. A restricted or legacy post is read as any
+    other message is (message_readable: its thread, task privacy, meetings, legacy readers), so a reader who may not
+    read it is not shown that the thread has moved again."""
+    v = viewer(None, v) if not isinstance(v, Viewer) else v
+    scope = f" AND r.id IN {_qlist(sorted(roots))}" if roots is not None else ""
+    rows = c.execute(
+        "SELECT m.id, r.id FROM tasks t JOIN conversations r ON r.task_id=t.id AND r.parent_id IS NULL "
+        "JOIN conversations s ON s.root_id=r.id JOIN messages m ON m.conversation_id=s.id "
+        f"WHERE t.status IN ({FINISHED_TASKS}) AND {readable_sql(c, v, 'r')}{scope} "
+        "AND m.kind<>'notice' AND m.deleted_at IS NULL "
+        "AND (m.restricted IS NULL OR m.restricted<>0 OR m.legacy_audience IS NOT NULL) "
+        f"AND m.created_at>{_finish_sql('t')}"
+    ).fetchall()
+    found = set()
+    for message_id, root_id in rows:
+        if root_id in found:
+            continue
+        message = H.message(c, message_id, include_deleted=False)
+        if message and message_readable(c, v, message):
+            found.add(root_id)
+    return frozenset(found)
+
+
+def task_open_sql(c, v, r="r", revived=frozenset()):
+    """SQL: a thread on a task is open unless its task is done, closed or declined and no post the viewer reads has come
+    since: a plain post in its subtree (readable_sql on the sub-thread), or a root in `revived` (revived_roots). A notice
+    (what the task's own changes write into its thread) is not a post. The finish is the task's latest status event, so
+    a later edit to the task neither hides a thread someone posted in nor brings a finished one back."""
+    v = viewer(None, v) if not isinstance(v, Viewer) else v
+    plain = (
+        f"EXISTS (SELECT 1 FROM conversations s JOIN messages m ON m.conversation_id=s.id WHERE s.root_id={r}.id "
+        f"AND m.kind<>'notice' AND m.deleted_at IS NULL AND m.restricted=0 AND m.legacy_audience IS NULL "
+        f"AND m.created_at>{_finish_sql('t')} AND {readable_sql(c, v, 's')})"
+    )
+    kept = f" OR {r}.id IN {_qlist(sorted(revived))}" if revived else ""
+    return (
+        f"NOT EXISTS (SELECT 1 FROM tasks t WHERE t.id={r}.task_id AND t.status IN ({FINISHED_TASKS}) "
+        f"AND NOT ({plain}{kept}))"
+    )
+
+
+def task_hidden(c, v, root_id):
+    """Whether the rail leaves this root out for its task: finished, and no post the viewer reads since."""
+    v = viewer(None, v) if not isinstance(v, Viewer) else v
+    row = c.execute(
+        f"SELECT {task_open_sql(c, v, 'r', revived_roots(c, v, [root_id]))} FROM conversations r WHERE r.id=?",
+        (root_id,),
+    ).fetchone()
+    return row is not None and not row[0]
 
 
 def _subtree_mark(c, v):
@@ -4418,6 +4557,10 @@ def view(c, principal, row, *, follower=None, summary=None, dm=None, pins=None):
             out["new_at"] = summary["new_at"]
         if out["audience"] in ("personal", "participants") and not row.get("parent_id"):
             out.update(dm or dm_with(c, v, [root]).get(root["id"]) or {})
+        # The rail hides a root its finished task hides; a single view says so, for the live stream to match the list.
+        # A list's rows are the rail's own, already filtered, so they are not asked again (summary is set).
+        if summary is None and root is not None and root.get("task_id") and task_hidden(c, v, root["id"]):
+            out["task_hidden"] = True
     return out
 
 
@@ -4474,7 +4617,8 @@ def breadcrumb(c, v, row):
 def get(c, v, thread_id):
     v = viewer(None, v) if not isinstance(v, Viewer) else v
     row = require(c, v, thread_id)
-    return {**view(c, v, row), "breadcrumb": breadcrumb(c, v, row)}
+    deletable = can_manage(c, v, row) and delete_problem(c, v.actor, row) is None
+    return {**view(c, v, row), "breadcrumb": breadcrumb(c, v, row), "deletable": deletable}
 
 
 def _message_out(m):

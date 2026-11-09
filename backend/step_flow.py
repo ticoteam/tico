@@ -9,7 +9,10 @@ A step's `flow` (all keys optional):
 - `skip_tag`: a ticket carrying this tag passes this step by: it goes straight on to `on_pass`, and the skip is
   recorded on the ticket.
 - `timeout_hours`: a check open this long is closed unanswered and the round is skipped (the ticket goes on as if it
-  had passed with no comments).
+  had passed with no comments), unless `on_timeout` says otherwise.
+- `on_timeout`: `refile` on a review check. A check still open this long after it was filed is closed, the bot that left
+  it unanswered is named, and the check is filed again to another free pool bot, or the ticket waits at the step for one
+  (backend/verdict_moves.py, `_refile`). The ticket never passes on by the timeout.
 - `late_hours`: at a working step, a ticket this long at the step gets its manager one notice (backend/step_age.py). An engineering type's working steps have 4 without a setting. `status_hours` is still accepted and wakes no one.
 - `backlog`: {over, per, notify, every_hours}: when more than `over` tickets wait at the step (or for one owner there),
   who to tell (backend/step_backlog.py).
@@ -39,6 +42,7 @@ KEYS = (
     "on_merge",
     "skip_tag",
     "timeout_hours",
+    "on_timeout",
     "status_hours",
     "late_hours",
     "can_hold",
@@ -49,6 +53,7 @@ KEYS = (
     "other_company",
 )
 HOURS = ("timeout_hours", "status_hours", "late_hours")
+REFILE = "refile"  # the on_timeout value that files an unanswered check again, rather than skipping its round
 STEP_KEYS = ("on_pass", "on_fail", "after_green")
 SEEDED = "step_flow.seeded"
 CHECKS_SEEDED = "step_flow.checks_seeded"
@@ -117,6 +122,10 @@ def clean(c, actor, raw, existing):
         if flow["other_company"] not in OTHER_COMPANY:
             H.refuse(c, actor, "kind", "A step's other_company is " + " or ".join(OTHER_COMPANY))
         out["other_company"] = flow["other_company"]
+    if flow.get("on_timeout") not in (None, ""):
+        if flow["on_timeout"] != REFILE or out.get("check") != "review" or "timeout_hours" not in out:
+            H.refuse(c, actor, "kind", f"A step's on_timeout is {REFILE}, on a review check with timeout_hours")
+        out["on_timeout"] = flow["on_timeout"]
     for key in ("on_merge", "can_hold", "gate"):
         if flow.get(key) is not None:
             if not isinstance(flow[key], bool):
@@ -501,10 +510,37 @@ def skip_target(c, row, s):
 
 
 # ----------------------------------------------------------------------------------------------- the Dev board
+# The recommended Dev board has no QA steps: Review 2 always runs, and its approval hands the ticket to the merge. A
+# change pushed after Review 2 merges once CI is green on its new head. A review that asks for changes is feedback:
+# the ticket goes to its fixes step, and the builder moves it on once the feedback is in. A check left unanswered for an
+# hour is filed again to another reviewer; the ticket never passes on by a timeout here.
 DEV = {  # the settings each Dev tickets type is given once; a person changes them on its steps
     "On Deck": {"backlog": {"over": 10, "per": "step", "notify": ["manager"], "every_hours": 4}},
-    # A review is feedback, not a gate: whatever it says goes back to the builder, who moves the ticket on once its
-    # feedback is in. Only QA passes or fails, and its pass makes the merge next.
+    "Review 1": {
+        "on_pass": "Review 1 Fixes",
+        "on_fail": "Review 1 Fixes",
+        "timeout_hours": 1,
+        "on_timeout": REFILE,
+        "gate": True,
+        "check": "review",
+    },
+    "Review 2": {
+        "on_pass": MERGE,
+        "on_fail": "Review 2 Fixes",
+        "timeout_hours": 1,
+        "on_timeout": REFILE,
+        "gate": True,
+        "check": "review",
+    },
+    "Review 2 Fixes": {"after_green": MERGE},
+    "Pending Release": {"on_merge": True, "can_hold": False},
+    "Done": {"can_hold": False},
+}
+# A board that still has QA steps (In QA, QA Fixes or Post Release QA) keeps the flow it was given with them: a QA pass
+# goes to the merge, and Review 2's changes go to Review 2 Fixes, whose builder moves the ticket on to In QA.
+QA_STEPS = ("In QA", "QA Fixes", "Post Release QA")
+QA_DEV = {
+    "On Deck": {"backlog": {"over": 10, "per": "step", "notify": ["manager"], "every_hours": 4}},
     "Review 1": {
         "on_pass": "Review 1 Fixes",
         "on_fail": "Review 1 Fixes",
@@ -527,21 +563,32 @@ DEV = {  # the settings each Dev tickets type is given once; a person changes th
 }
 
 
+def has_qa(c, type_id):
+    """Whether a type still has a QA step, which keeps its QA settings rather than the recommended ones."""
+    return any(s["name"] in QA_STEPS for s in steps(c, type_id))
+
+
+def dev_flows(c, type_id):
+    """The Dev settings for one type: the QA board's when it has QA steps, else the recommended board's."""
+    return QA_DEV if has_qa(c, type_id) else DEV
+
+
 def seed(c):
-    """Give each Dev tickets type the Dev board's flow once, on the steps it has; a step that already has a flow
-    keeps it."""
+    """Give each Dev board (a Dev tickets type, or an engineering type laid out as one: roadmap_flow.dev_board) the
+    Dev board's flow once, on the steps it has; a step that already has a flow keeps it."""
     if not _ready(c):
         return
     from . import roadmap_flow
 
     for ident, type_name in c.execute("SELECT id,name FROM task_types").fetchall():
         if (
-            not roadmap_flow._dev((ident, type_name))
+            not roadmap_flow.dev_board(c, ident, type_name)
             or c.execute("SELECT 1 FROM events WHERE action=? AND target=? LIMIT 1", (SEEDED, ident)).fetchone()
         ):
             continue
-        apply(c, ident, DEV)
-        H.event(c, H.KEEPER, SEEDED, ident, {"flow": sorted(DEV)})
+        flows = dev_flows(c, ident)
+        apply(c, ident, flows)
+        H.event(c, H.KEEPER, SEEDED, ident, {"flow": sorted(flows)})
     seed_checks(c)
 
 
@@ -571,11 +618,12 @@ def seed_checks(c):
             continue  # a board Tico does not move keeps no flow; its checks are known by their titles
         given = {}
         merged = merge_step(c, ident)
+        flows = dev_flows(c, ident)
         for s in steps(c, ident):
             flow = of(s)
             if "check" in flow:
                 continue
-            kind = (DEV.get(s["name"]) or {}).get("check") or _inferred(s, merged["position"] if merged else None)
+            kind = (flows.get(s["name"]) or {}).get("check") or _inferred(s, merged["position"] if merged else None)
             if not kind:
                 continue
             c.execute(

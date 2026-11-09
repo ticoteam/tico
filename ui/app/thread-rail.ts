@@ -9,10 +9,10 @@ const TR_SVG = {
   catchUp: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><rect x="4" y="9" width="16" height="11" rx="2"/><path d="M6 6h12M8 3h8"/></svg>',
   browse: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h10"/></svg>',
   lock: '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg>',
-  pin: on => `<svg width="15" height="15" viewBox="0 0 24 24" fill="${on ? 'currentColor' : 'none'}" stroke="currentColor" stroke-width="${on ? 0 : 1.6}" stroke-linejoin="round" aria-hidden="true"><path d="M15 3l6 6-3 1-4 4 .5 5-1.5 1.5-4-4-5 5-1-1 5-5-4-4L5 10l5 .5 4-4z"/></svg>`,
+  pin: (on: boolean) => `<svg width="15" height="15" viewBox="0 0 24 24" fill="${on ? 'currentColor' : 'none'}" stroke="currentColor" stroke-width="${on ? 0 : 1.6}" stroke-linejoin="round" aria-hidden="true"><path d="M15 3l6 6-3 1-4 4 .5 5-1.5 1.5-4-4-5 5-1-1 5-5-4-4L5 10l5 .5 4-4z"/></svg>`,
 };
 // `#` before a thread's name, a lock for a private one.
-const threadHashHTML = t => `<span class="tr-mark" aria-hidden="true">${threadPrivate(t) ? TR_SVG.lock : '#'}</span>`;
+const threadHashHTML = (t: ThreadRow | null | undefined) => `<span class="tr-mark" aria-hidden="true">${threadPrivate(t) ? TR_SVG.lock : '#'}</span>`;
 const TR_PHONE = matchMedia('(max-width:760px)'), trPhone = () => TR_PHONE.matches;
 // #/threads first drawn at phone width has an empty pane: grown past the phone's width it opens what the computer does.
 TR_PHONE.addEventListener('change', () => { if (!TR_PHONE.matches && S.route === THREADS_ROUTE) void pageThreads(); });
@@ -20,10 +20,12 @@ TR_PHONE.addEventListener('change', () => { if (!TR_PHONE.matches && S.route ===
 // The thread last opened here, which #/threads opens again.
 const THREADS_LAST_KEY = 'tico.threads.last';
 function threadsLastGet() { try { return localStorage.getItem(THREADS_LAST_KEY) || ''; } catch { return ''; } }
-function threadsLastSet(id) { try { localStorage.setItem(THREADS_LAST_KEY, id); } catch { /* not kept */ } }
+function threadsLastSet(id: string) { try { localStorage.setItem(THREADS_LAST_KEY, id); } catch { /* not kept */ } }
 
 // ----------------------------------------------------------------- the page
-let THREAD_PAGE = null;
+// The thread the pane shows, and the element and view that hold it.
+interface TrThreadPage {id: string; host: HTMLElement; view: ThvView}
+let THREAD_PAGE: TrThreadPage | null = null;
 // The rail and the pane beside it, drawn once and kept while one thread gives way to another.
 function threadsShell() {
   const main = $('#main');
@@ -48,14 +50,15 @@ function threadsShell() {
   shell = $('#threads-shell');
   const rail = shell.querySelector('.tr-rail');
   rail.querySelector('#tr-find').oninput = () => railRender();
-  rail.onclick = ev => {
-    const b = ev.target.closest('button'); if (!b) return;
+  rail.onclick = (ev: MouseEvent) => {
+    const b = eventElement(ev)?.closest<HTMLButtonElement>('button'); if (!b) return;
     if (b.matches('[data-tr-new]')) threadNewOpen();
+    else if (b.matches('[data-tr-arch]')) { b.disabled = true; threadsArchive(b.dataset.trArch ?? '').catch(e => { b.disabled = false; toast(errorMessage(e, ''), true); }); }
     else if (b.matches('[data-tr-catch]')) void catchUpOpen();
     else if (b.matches('[data-tr-browse]')) void threadBrowseOpen();
     else if (b.matches('[data-tr-more]')) { b.disabled = true; threadsMore().catch(e => toast(e.message, true)).finally(() => { b.disabled = false; }); }
   };
-  shell.querySelector('.tr-pane').addEventListener('click', ev => { if (ev.target.closest('[data-tr-new]')) threadNewOpen(); });
+  shell.querySelector('.tr-pane').addEventListener('click', (ev: MouseEvent) => { if (eventElement(ev)?.closest('[data-tr-new]')) threadNewOpen(); });
   return shell;
 }
 // The pane with no thread open: a picture of how a thread works, one heading and one sentence, then New thread (the
@@ -102,7 +105,7 @@ async function pageThreads() {
   pane.innerHTML = TR_EMPTY_HTML;
 }
 // #/thread/<id>: that thread beside the rail. `?m=<message id>` (a search hit, a quote; `?focus=` too) opens it at that message.
-function pageThread(id) {
+function pageThread(id: string) {
   const q = new URLSearchParams(S.route.split('?')[1] || ''), focus = q.get('m') || q.get('focus') || '';
   const shell = threadsShell(), pane = shell.querySelector('.tr-pane');
   shell.dataset.mode = 'thread';
@@ -120,16 +123,17 @@ function pageThread(id) {
 }
 
 // ----------------------------------------------------------------- the rail
-const railCurrent = () => S.route.startsWith(THREAD_ROUTE) ? decodeURIComponent(S.route.slice(THREAD_ROUTE.length).split(/[/?]/)[0]) : '';
-function railRowHTML(t, cur) {
+const railCurrent = () => S.route.startsWith(THREAD_ROUTE) ? decodeURIComponent(S.route.slice(THREAD_ROUTE.length).split(/[/?]/)[0] ?? '') : '';
+function railRowHTML(t: ThreadRow, cur: string) {
   const n = threadUnread(t), bold = n > 0 || !!t.me?.activity, here = t.id === cur;
-  return `<li><a class="tr-row${bold ? ' unread' : ''}${here ? ' cur' : ''}" href="${esc(threadHref(t))}" data-thread="${esc(t.id)}"${here ? ' aria-current="page"' : ''}>
-    ${threadHashHTML(t)}<span class="tr-title">${esc(threadTitle(t))}</span>${n ? `<span class="tr-count" aria-label="${n} unread">${esc(threadsCountText(n))}</span>` : ''}</a></li>`;
+  const arch = t.me?.can_manage ? `<button type="button" class="tr-arch" data-tr-arch="${esc(t.id)}" aria-label="Archive" title="Archive"><span class="nav-icon" aria-hidden="true">archive</span></button>` : '';
+  return `<li class="tr-item"><a class="tr-row${bold ? ' unread' : ''}${here ? ' cur' : ''}" href="${esc(threadHref(t))}" data-thread="${esc(t.id)}"${here ? ' aria-current="page"' : ''}>
+    ${threadHashHTML(t)}<span class="tr-title">${esc(threadTitle(t))}</span>${n ? `<span class="tr-count" aria-label="${n} unread">${esc(threadsCountText(n))}</span>` : ''}</a>${arch}</li>`;
 }
 function railRender() {
   const rail = $('#thread-rail'); if (!rail?.isConnected) return;
   const words = (rail.querySelector('#tr-find')?.value || '').trim().toLowerCase(), cur = railCurrent();
-  const shown = list => words ? list.filter(t => threadTitle(t).toLowerCase().includes(words)) : list;
+  const shown = (list: ThreadRow[]) => words ? list.filter(t => threadTitle(t).toLowerCase().includes(words)) : list;
   const lists = {pinned: shown(THREADS.pinned), threads: shown(THREADS.threads)};
   for (const [key, list] of Object.entries(lists)) {
     rail.querySelector(`[data-sec="${key}"]`).hidden = !list.length;
@@ -148,47 +152,80 @@ function railRender() {
 
 // ----------------------------------------------------------------- browse
 // Company and team threads the viewer reads but is not in (GET /v2/threads/browse); Join follows one.
-function threadBrowseOpen() {
+function threadBrowseOpen(): void {
+  type BrowseRow = ThreadRow & {member_count?: number};
+  type BrowsePage = {threads?: BrowseRow[]; items?: BrowseRow[]; next_cursor?: string | null};
   const dlg = threadDialog('thread-browse', 'Browse threads');
   dlg.className = 'tmodal tmodal-shell dash-dialog thd-dialog tr-browse-dlg';
   dlg.innerHTML = `<form>${threadDialogHead('Browse threads')}<div class="dash-form">
+      <div class="tr-browse-tabs" role="group" aria-label="Which threads"><button type="button" class="ghost small on" data-tab="threads" aria-pressed="true">Threads</button><button type="button" class="ghost small" data-tab="archived" aria-pressed="false">Archived</button></div>
       <input type="search" class="tr-browse-q" placeholder="Find a thread" aria-label="Find a thread" autocomplete="off">
       <ul class="tr-browse-list" aria-live="polite"><li class="muted">Loading…</li></ul>
       <button type="button" class="ghost small tr-browse-more" hidden>More</button></div></form>`;
   threadDialogWire(dlg);
-  const form = dlg.querySelector('form'), q = form.querySelector('.tr-browse-q'), list = form.querySelector('.tr-browse-list'), more = form.querySelector('.tr-browse-more');
+  const form = dlg.querySelector<HTMLFormElement>('form')!;
+  const q = form.querySelector<HTMLInputElement>('.tr-browse-q')!;
+  const list = form.querySelector<HTMLUListElement>('.tr-browse-list')!;
+  const more = form.querySelector<HTMLButtonElement>('.tr-browse-more')!;
   form.onsubmit = ev => ev.preventDefault();
-  let next = null, seq = 0;
-  const rowHTML = t => {
+  let next: string | null = null, seq = 0;
+  let mode: 'threads' | 'archived' = 'threads';
+  const rowHTML = (t: BrowseRow): string => {
+    if (mode === 'archived') return `<li data-thread="${esc(t.id)}"><a class="tr-browse-name" href="${esc(threadHref(t))}" data-close>${threadHashHTML(t)}<span>${esc(threadTitle(t))}</span></a><button type="button" class="ghost small" data-unarchive>Unarchive</button></li>`;
     const n = Number(t.member_count) || 0;
     return `<li data-thread="${esc(t.id)}"><a class="tr-browse-name" href="${esc(threadHref(t))}" data-close>${threadHashHTML(t)}<span>${esc(threadTitle(t))}</span></a>
       ${n ? `<span class="muted tr-browse-n">${n}</span>` : ''}<button type="button" class="ghost small" data-join>Join</button></li>`;
   };
-  const load = async (add = false) => {
+  const load = async (add = false): Promise<void> => {
     const mine = ++seq, words = q.value.trim();
     try {
-      const r = await get('/v2/threads/browse?limit=50&q=' + encodeURIComponent(words) + (add && next ? '&cursor=' + encodeURIComponent(next) : ''), {fresh: true});
+      const cur = add && next ? '&cursor=' + encodeURIComponent(next) : '';
+      const path = mode === 'archived' ? '/v2/threads/archived?limit=50' + cur : '/v2/threads/browse?limit=50&q=' + encodeURIComponent(words) + cur;
+      const r = await get<BrowsePage>(path, {fresh: true});
       if (mine !== seq) return;
-      const rows = (r?.threads || r?.items || []).map(rowHTML).join('');
+      const rows = (r.threads || r.items || []).map(rowHTML).join('');
       if (add) list.insertAdjacentHTML('beforeend', rows);
-      else list.innerHTML = rows || '<li class="muted">No threads</li>';
-      next = r?.next_cursor || null; more.hidden = !next;
-    } catch (e) { if (mine === seq) list.innerHTML = `<li class="err">${esc(e.message)}</li>`; }
+      else list.innerHTML = rows || (mode === 'archived' ? '<li class="muted">No archived threads</li>' : '<li class="muted">No threads</li>');
+      next = r.next_cursor || null; more.hidden = !next;
+    } catch (e) { if (mine === seq) list.innerHTML = `<li class="err">${esc(errorMessage(e, ''))}</li>`; }
   };
-  let timer = 0;
-  q.oninput = () => { clearTimeout(timer); timer = setTimeout(() => load(), 200); };
+  let timer: number | undefined;
+  q.oninput = () => { clearTimeout(timer); timer = window.setTimeout(() => load(), 200); };
   more.onclick = () => load(true);
-  list.onclick = async ev => {
-    if (ev.target.closest('[data-close]')) { dlg.close(); return; }
-    const b = ev.target.closest('[data-join]'); if (!b) return;
-    const id = b.closest('[data-thread]').dataset.thread;
+  form.addEventListener('click', (ev: MouseEvent) => {
+    const tab = eventElement(ev)?.closest<HTMLElement>('[data-tab]');
+    if (!tab) return;
+    mode = tab.dataset.tab === 'archived' ? 'archived' : 'threads';
+    form.querySelectorAll<HTMLElement>('[data-tab]').forEach(b => { const on = b === tab; b.classList.toggle('on', on); b.setAttribute('aria-pressed', String(on)); });
+    q.hidden = mode === 'archived'; more.hidden = true; next = null;
+    void load();
+  });
+  list.onclick = async (ev: MouseEvent): Promise<void> => {
+    const target = eventElement(ev);
+    if (target?.closest('[data-close]')) { dlg.close(); return; }
+    const u = target?.closest<HTMLButtonElement>('[data-unarchive]');
+    if (u) {
+      const row = u.closest<HTMLElement>('[data-thread]');
+      if (!row) return;
+      u.disabled = true;
+      try {
+        threadsUnarchived(await patch(thvPath(row.dataset.thread), {archived: false}));
+        row.remove();
+        if (!list.querySelector('[data-thread]')) list.innerHTML = '<li class="muted">No archived threads</li>';
+      } catch (e) { u.disabled = false; toast(errorMessage(e, ''), true); }
+      return;
+    }
+    const b = target?.closest<HTMLButtonElement>('[data-join]');
+    if (!b) return;
+    const id = b.closest<HTMLElement>('[data-thread]')?.dataset.thread;
+    if (!id) return;
     b.disabled = true;
     try {
       const r = await put(thvPath(id) + '/follow', {notify: 'live'});
       b.textContent = 'Joined';
       const t = await get(thvPath(id), {fresh: true}).catch(() => null);
       if (t?.id) threadsPut({...t, me: {...t.me, following: true, notify: r?.notify || 'live'}});
-    } catch (e) { b.disabled = false; toast(e.message, true); }
+    } catch (e) { b.disabled = false; toast(errorMessage(e, ''), true); }
   };
   dlg.showModal();
   q.focus();

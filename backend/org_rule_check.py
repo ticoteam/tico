@@ -1419,7 +1419,13 @@ def _write_hold(
             "place": verdict.get("place"),
             "origin": verdict.get("origin"),
         },
-        "input": {"context": verdict.get("context") or {}, "obj": verdict.get("obj") or ""},
+        "input": {
+            "context": verdict.get("context") or {},
+            "obj": verdict.get("obj") or "",
+            # The entities and addresses the Directory walk started from: a structured recheck (Send anyway, an
+            # approved mail or letter) walks from the same recipients. Older holds have neither and recheck without.
+            **{k: list(verdict[k]) for k in ("targets", "contacts") if verdict.get(k)},
+        },
     }
     matched = (
         verdict["matched"]
@@ -1560,12 +1566,24 @@ def _hold(c, hold_id):
     return dict(row)
 
 
+def _reviewer_gone(c, hold):
+    """The hold names no reviewer, or one who has left or whose sign-in is off."""
+    return not (hold["reviewer"] and _present(c, hold["reviewer"]))
+
+
+def _admin_reads_hold(c, who, hold, auth):
+    """Whether an Admin (or the owner) reads a hold whose reviewer is missing or gone. App-only Tico support reads as an
+    Admin everywhere else, but not here: a held output is the owner's and Admins' to read (PR 2004 follow-up)."""
+    return who.support != "app" and auth.bot_admin(who) and _reviewer_gone(c, hold)
+
+
 def _person_reviewer(c, who, hold, auth):
     """Whether a person may keep or send a person's held write: the reviewer it names, the author of a rule it broke, or
     anyone who may edit one of those rules (`R.may_manage`: a lead of a group in its Who, a bot's manager, the owner and
-    the Admins)."""
+    the Admins). With the reviewer gone, app-only Tico support is left out of the Admins' part."""
     if hold["reviewer"] == who.actor:
         return True
+    app_locked = who.support == "app" and _reviewer_gone(c, hold)
     ctx = None
     for rid in json.loads(hold["rule_ids"] or "[]"):
         row = c.execute("SELECT * FROM org_rules WHERE id=?", (rid,)).fetchone()
@@ -1574,7 +1592,7 @@ def _person_reviewer(c, who, hold, auth):
         if row["suggested_by"] == who.actor:
             return True
         ctx = ctx or R._ctx(c)
-        if R.may_manage(c, auth, who, R._row(row)["who"], ctx):
+        if not app_locked and R.may_manage(c, auth, who, R._row(row)["who"], ctx):
             return True
     return False
 
@@ -1608,8 +1626,9 @@ def _is_reviewer(who, hold, c=None, auth=None):
     """Whether `who` reviews the hold: may send it or keep it. Not exclusive of authorship: a rule's author or editor,
     or an Admin, reviews their own hold too. A bot's hold is reviewed by its reviewer, by the owner always (whoever can
     change a block's source can waive it, reviewer named or not), and by an Admin when the reviewer is missing or gone
-    (with `c` and `auth`); a person's hold by the reviewer it names and the editors and Admins of its rules
-    (`_person_reviewer`). An Assistant or BotOps acting for a person releases nothing."""
+    (with `c` and `auth`; app-only Tico support is not an Admin here, see `_admin_reads_hold`); a person's hold by the
+    reviewer it names and the editors and Admins of its rules (`_person_reviewer`). An Assistant or BotOps acting for a
+    person releases nothing."""
     actor = who.actor
     if not H.is_human(actor) or who.via in ("botops", "assistant"):
         return False
@@ -1623,7 +1642,7 @@ def _is_reviewer(who, hold, c=None, auth=None):
         return False
     if who.role == "owner":
         return True
-    return auth.bot_admin(who) and not (hold["reviewer"] and _present(c, hold["reviewer"]))
+    return _admin_reads_hold(c, who, hold, auth)
 
 
 def _is_represented(who, hold, c=None):
@@ -2025,7 +2044,8 @@ def current_matched(c, hold, audience=None, auth=None):
 
 
 def hold_input(hold):
-    """What a hold's check was shown besides its text and audience: its context and its object."""
+    """What a hold's check was shown besides its text and audience: its context and its object, and for a structured hold
+    the `targets` and `contacts` its Directory walk started from (absent on older holds)."""
     stored = json.loads(hold["payload"] or "{}")
     return stored.get("input") or {"context": {}, "obj": ""}
 
@@ -2644,7 +2664,17 @@ def install(app, store, auth, mutate):
             named = H.resolve_bot(c, bot) or {}
         if found[1] != "bot:" + named.get("id", bot):
             raise Problem("forbidden", "A bot checks only its own mail", 403)
-        prep = mail_prepare(store, app.state.judge, who, found[0], body.to, body.cc, body.subject, body.body)
+        prep = mail_prepare(
+            store,
+            app.state.judge,
+            who,
+            found[0],
+            body.to,
+            body.cc,
+            body.subject,
+            body.body,
+            contacts=[*body.to, *body.cc],
+        )
         return mutate(request, body, lambda c: mail_decide(c, prep))
 
     @app.get("/api/v2/rules/stats")

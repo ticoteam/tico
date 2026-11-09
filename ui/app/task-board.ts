@@ -55,6 +55,9 @@ function taskBlockedStrip(it) {
   if (!held && !open.length) return '';
   const age = held ? taskHeldFor(held.since) : '', head = `Blocked${age ? ' ' + age : ''}`;
   const line = what => `<span>${esc(what ? `${head}: ${what}` : head)}</span>`;
+  // A card a person's question holds waits on that person: "Waiting on Chris", not "Blocked:" with the question in it.
+  const person = taskWaitingOn(t);
+  if (person && !open.length) return `<div class="bcard-blocked" title="${esc(taskBlockedLine(t))}"><span>${esc(`Waiting on ${personDisplay(actorPerson(person))}`)}</span></div>`;
   if (!open.length) {
     const why = String(held.reason || '').trim();
     return `<div class="bcard-blocked" title="${esc(taskBlockedLine(t))}">${line(TASK_PLAIN_HOLDS.has(why) ? '' : why)}</div>`;
@@ -63,7 +66,8 @@ function taskBlockedStrip(it) {
   const bot = taskBotWait(t);
   const all = open.map(r => r.title || '#' + (r.number ?? r.id)).join(', ');
   const first = open[0], name = first.title || '#' + (first.number ?? first.id);
-  const label = bot ? `<span>${esc(`Waiting on ${bot.name}`)}</span>` : line(name);
+  const label = bot ? `<span>${esc(`Waiting on ${bot.name}`)}</span>`
+    : person ? `<span>${esc(`Waiting on ${personDisplay(actorPerson(person))}`)}</span>` : line(name);
   const tip = `${bot ? taskWaitLine(t) : held ? taskBlockedLine(t) : ''}${bot || held ? '\n' : ''}Blocked by ${all}`;
   return `<button type="button" class="bcard-blocked" data-board-blocked="${esc(it.key)}"${bot ? ' data-board-waits-bot' : ''} title="${esc(tip)}">${label}${open.length > 1 ? `<span class="tnum">+${open.length - 1}</span>` : ''}</button>`;
 }
@@ -339,6 +343,7 @@ function taskBoardSave(state, t, body, fields, refused) {
   void (async () => {
     try {
       const data = await post(`/v2/tasks/${encodeURIComponent(id)}`, body);
+      taskOverCapWarn(t, body, data);
       if (TASKS_ST !== state) return;
       const move = state.boardMoves.get(id); if (move) move.pending = false;
       if (data?.task) state.tasks = mergeTaskRows(state.tasks, [data.task]);

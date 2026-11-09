@@ -11,8 +11,13 @@ interface GithubAppState {
   waiting?: GithubWaitingBot[]; permissions_url?: string | null; install_url?: string | null; uninstall_url?: string | null;
   /** Why no check is posted on pull requests (backend/github_app.py CHECKS_WITHHELD), or null when Checks is accepted. */
   checks_withheld?: string | null;
+  /** Personal accounts: whether the owner has authorized Tico to create repositories in the account. */
+  authorized?: boolean;
+  /** The callback URL the App needs as its Callback URL, or '' when its manifest already names it. */
+  callback_url?: string;
 }
 interface GithubManifestSetup { action: string; manifest: unknown; }
+interface GithubAuthorizeLink { url?: string; }
 interface Window {
   mountGithubConnect: (host: HTMLElement | null) => Promise<void>;
 }
@@ -28,18 +33,23 @@ window.mountGithubConnect = async function (host) {
   catch (error) { host.innerHTML = `<div class="empty">${text(errorMessage(error, ''))}</div>`; return; }
   if (!host.isConnected) return;
   if (state.connected) {
-    // A personal account has no Administration fix here yet: Tico does not create its repositories, so a person does.
     const personal = state.account_type === 'User';
     const waiting = (state.waiting || []).length ? `<p class="muted">Waiting for a repository: ${(state.waiting || []).map((w, i) => `${text(w.bot)} (<a data-gh-create="${i}" target="_blank" rel="noopener">create ${text(w.repository)} yourself</a>)`).join(', ')}.</p>` : '';
-    const repos = state.administration ? '<p class="muted">Tico can create bot repositories.</p>'
-      : personal ? `<p class="muted">New bots wait for you to create their repository on GitHub.</p>${waiting}`
-      : `<div data-gh-repo-fix>
+    // A personal account's empty repositories are made with the owner's authorization (once per account); until it is given,
+    // bots wait. Administration is needed by either kind for the repositories Tico makes.
+    const authorize = personal && !state.authorized ? `<div data-gh-authorize>
+        <p>Let Tico create repositories.</p>
+        <p><button type="button" class="primary" data-gh-authorize-link>Authorize</button></p>
+        ${state.callback_url ? `<p class="muted">First add <code>${text(state.callback_url)}</code> as the Callback URL of the app on GitHub.</p>` : ''}
+      </div>` : '';
+    const ready = state.administration && (!personal || state.authorized) ? `<p class="muted">Tico can create bot repositories${personal ? ` on ${text(state.org)}` : ''}.</p>` : '';
+    const fix = state.administration ? '' : `<div data-gh-repo-fix>
         <p><strong>Tico can't create bot repositories.</strong> The app was set up without Administration, so every new bot waits for a person.</p>
         <p>Fix it once: <a class="primary" role="button" data-gh-permissions target="_blank" rel="noopener">Let Tico create repositories</a>
         On that page set <strong>Administration</strong> to <strong>Read and write</strong> and save, accept the new permission for ${text(state.org)} when GitHub asks, then
         <button type="button" class="ghost" data-gh-recheck>Check again</button></p>
-        ${waiting}
       </div>`;
+    const repos = `${ready}${authorize}${fix}${waiting}`;
     host.innerHTML = `<p>Connected to <strong>${text(state.org)}</strong> through the app <strong>${text(state.slug)}</strong>.
       <span data-gh-install>${state.installed ? `Installed on the ${personal ? 'account' : 'organization'}.` : 'Not installed yet.'}</span></p>
       ${repos}
@@ -51,8 +61,8 @@ window.mountGithubConnect = async function (host) {
       <a data-gh-uninstall-link target="_blank" rel="noopener">Uninstall on GitHub</a></div>
       <p class="muted">Disconnect forgets the app here; delete it on GitHub to revoke access.</p>
       <p role="status" data-gh-status></p>`;
-    // The server's GitHub links are set as properties, and only when they point at GitHub over https.
-    const link = (node: HTMLAnchorElement | null, url: string | null | undefined) => { if (node && url && /^https:\/\/github\.com\//.test(url)) node.href = url; };
+    // The server's links are set as properties, and only when they point at GitHub over https or at Tico's install route.
+    const link = (node: HTMLAnchorElement | null, url: string | null | undefined) => { if (node && url && (url === '/api/v2/github/app/install' || /^https:\/\/github\.com\//.test(url))) node.href = url; };
     link(host.querySelector<HTMLAnchorElement>('[data-gh-permissions]'), state.permissions_url);
     link(host.querySelector<HTMLAnchorElement>('[data-gh-events]'), state.permissions_url);
     link(host.querySelector<HTMLAnchorElement>('[data-gh-install-link]'), state.install_url);
@@ -67,6 +77,18 @@ window.mountGithubConnect = async function (host) {
         if (now.administration) window.mountGithubConnect(host);
         else { status.textContent = 'GitHub still reports no Administration permission. Accept it for the organisation, then check again.'; recheck.disabled = false; }
       } catch (error) { status.textContent = errorMessage(error, ''); recheck.disabled = false; }
+    };
+    const authorizeLink = host.querySelector<HTMLButtonElement>('[data-gh-authorize-link]');
+    if (authorizeLink) authorizeLink.onclick = async () => {
+      authorizeLink.disabled = true;
+      const status = ghEl<HTMLElement>(host, '[data-gh-status]');
+      try {
+        // The server names GitHub's authorize page; the owner goes there and GitHub sends them back to Tico.
+        const started: GithubAuthorizeLink = await get('/v2/github/app/authorize-link');
+        const url = started.url || '';
+        if (!/^https:\/\/github\.com\//.test(url)) throw new Error('GitHub did not give an authorize page');
+        window.location.assign(url);
+      } catch (error) { status.textContent = errorMessage(error, ''); authorizeLink.disabled = false; }
     };
     const disconnect = ghEl<HTMLButtonElement>(host, '[data-gh-disconnect]');
     disconnect.onclick = async () => {

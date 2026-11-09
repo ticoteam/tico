@@ -108,6 +108,8 @@ def to_yaml(draft, created=None):
         ]
         if b.get("team"):
             L.append("    team: %s" % q(b["team"]))
+        if b.get("live"):
+            L.append("    live: true")
         if b["routine"]:
             L.append("    first_routine: %s" % q(b["routine"]))
         if b["tools"]:
@@ -400,8 +402,10 @@ def from_yaml(text):
     ]
     chosen = {}
     for b in _rows(doc, "employees"):
-        role = next((r for r in D.ROLES if r["slug"] == b.get("template")), None) or next(
-            (dict(r, lead=False, core=False) for r in D.SEATS if r["slug"] == b.get("template")), None
+        role = (
+            next((r for r in D.ROLES if r["slug"] == b.get("template")), None)
+            or next((r for r in D.HELPERS if r["slug"] == b.get("template")), None)
+            or next((dict(r, lead=False, core=False) for r in D.SEATS if r["slug"] == b.get("template")), None)
         )
         if not role:
             raise D.DraftError("employees has a template Tico doesn't have: %s" % str(b.get("template"))[:40])
@@ -422,6 +426,8 @@ def from_yaml(text):
         }
         if b.get("first_job"):
             bot["first_job"] = _str(b["first_job"])
+        if b.get("live") is True:
+            bot["live"] = True
         if _team(b):
             bot["team"] = _team(b)
         if b.get("held_by"):

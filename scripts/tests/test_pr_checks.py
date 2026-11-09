@@ -1,7 +1,9 @@
 """CI selection cannot omit uncertain work or turn an empty/red test run green."""
 
 from collections import Counter
+from functools import partial
 import json
+import math
 import os
 from pathlib import Path
 import re
@@ -94,8 +96,6 @@ def test_plan_keeps_full_collection_on_main_and_conftest_and_never_runs_bare_pyt
         "backend/tests/test_scheduler.py": 1,
     }
     monkeypatch.setattr(checks, "collect", lambda: Counter(files))
-    guarded = []
-    monkeypatch.setattr(checks, "guard_changelog", lambda base: guarded.append(base))
     imaged = []
     monkeypatch.setattr(checks, "image_checks", lambda changed: imaged.append(changed))
     monkeypatch.setattr(
@@ -106,7 +106,7 @@ def test_plan_keeps_full_collection_on_main_and_conftest_and_never_runs_bare_pyt
     timing_dir.mkdir(parents=True)
     (timing_dir / "durations.json").write_text(json.dumps({"backend/tests/test_task_loops.py": 100}))
     focused = checks.prepare("pull_request", "base", target, timing_dir.parent)
-    assert guarded == ["base"] and imaged == [["backend/task_loops.py"]]
+    assert imaged == [["backend/task_loops.py"]]
     assert focused["timed_files"] == 1
     assert (
         sorted(sum([j["files"] for j in focused["matrix"]["include"] if j["suite"].startswith("python-")], []))
@@ -114,7 +114,6 @@ def test_plan_keeps_full_collection_on_main_and_conftest_and_never_runs_bare_pyt
         == sorted(files)
     )
     main = checks.prepare("push", "base", target)
-    assert guarded == ["base"]  # A direct release cut on main is checked by the release guards.
     groups = [j for j in main["matrix"]["include"] if j["suite"].startswith("python-")]
     # 48 measured seconds fit one VM; the time target, not a fixed count, sets the number of groups.
     assert len(groups) == 1 and sorted(sum([j["files"] for j in groups], [])) == sorted(files)
@@ -182,7 +181,6 @@ def test_contract_job_survives_default_deselection_and_runs_slow_tests_in_parall
         "contracts": True,
     }
     monkeypatch.setattr(checks, "selection", lambda *a, **kw: dict(picked))
-    monkeypatch.setattr(checks, "guard_changelog", lambda base: None)
     monkeypatch.setattr(checks, "changed_files", lambda *a, **kw: [])
     monkeypatch.setattr(checks, "collect", lambda: Counter({checks.CONTRACT_TESTS[0]: 1}))
     target = tmp_path / "plan.json"
@@ -246,7 +244,6 @@ def test_rust_crates_run_cargo_test_when_their_inputs_change_and_a_red_crate_fai
     for changed in (["backend/harness_actions.py"], ["backend/task_loops.py"], ["ui/app/chat.ts"], []):
         assert checks.selection(changed)["rust"] == [] and checks.selection(changed, "push")["rust"] == []
     monkeypatch.setattr(checks, "collect", lambda: Counter({"backend/tests/test_task_loops.py": 1}))
-    monkeypatch.setattr(checks, "guard_changelog", lambda base: None)
     monkeypatch.setattr(
         checks,
         "changed_files",
@@ -286,74 +283,6 @@ def test_rust_crates_run_cargo_test_when_their_inputs_change_and_a_red_crate_fai
 
 
 @pytest.mark.slow
-def test_pr_changelog_guard_rejects_product_edits_and_accepts_release_cut(tmp_path, monkeypatch):
-    def git(*args):
-        return subprocess.check_output(
-            ["git", "-c", "user.name=t", "-c", "user.email=t@acme.example", *args], cwd=tmp_path, text=True
-        ).strip()
-
-    def commit(message):
-        git("add", "-A")
-        git("commit", "-qm", message)
-
-    git("init", "-q", "-b", "main")
-    notes = tmp_path / "CHANGELOG.md"
-    notes.write_text("# Changelog\n## [Unreleased]\n\n## [1.0.0]\n- Shipped.\n")
-    commit("Start")
-    base = git("rev-parse", "HEAD")
-    monkeypatch.setattr(checks, "ROOT", tmp_path)
-    monkeypatch.setattr(checks, "collect", lambda: Counter({"scripts/tests/test_pr_checks.py": 1}))
-    target = tmp_path / "plan.json"
-    # A normal PR without notes passes through the real planning entrypoint.
-    checks.prepare("pull_request", base, target)
-    target.unlink()
-    notes.write_text(notes.read_text().replace("## [Unreleased]\n", "## [Unreleased]\n- Per-PR note.\n"))
-    commit("Product change")
-    with pytest.raises(RuntimeError, match="No PR edits CHANGELOG.md"):
-        checks.prepare("pull_request", base, target)
-    assert not target.exists()  # The check fails before generating any test matrix.
-
-    git("checkout", "-qb", "release-notes", base)
-    notes.write_text(notes.read_text().replace("## [Unreleased]\n", "## [Unreleased]\n\n## [1.1.0]\n- New release.\n"))
-    commit("Release notes\n\nChangelog-Release: v1.1.0")
-    checks.prepare("pull_request", base, target)
-    target.unlink()
-    # Bringing main's own notes edit in is a clean union; a note the merge itself adds is an ordinary edit.
-    release = git("rev-parse", "HEAD")
-    git("checkout", "-qb", "main-notes", base)
-    notes.write_text(notes.read_text() + "- Corrected on main.\n")
-    commit("Main notes fix")
-    main = git("rev-parse", "HEAD")
-    git("checkout", "-qb", "union", release)
-    git("merge", "-q", "--no-edit", main)
-    checks.guard_changelog(main)
-    git("checkout", "-qb", "slipped", release)
-    git("merge", "-q", "--no-commit", main)
-    notes.write_text(notes.read_text().replace("## [1.1.0]\n", "## [1.1.0]\n- Slipped in by the merge.\n"))
-    commit("Merge main")
-    with pytest.raises(RuntimeError, match="No PR edits CHANGELOG.md"):
-        checks.guard_changelog(main)
-    git("checkout", "-q", "release-notes")
-    # An old release trailer cannot bless another edit or a product file.
-    (tmp_path / "product.py").write_text("changed = True\n")
-    commit("Product change")
-    with pytest.raises(RuntimeError, match="No PR edits CHANGELOG.md"):
-        checks.guard_changelog(base)
-    git("rm", "product.py")
-    notes.write_text(notes.read_text() + "- Another ordinary note.\n")
-    commit("Another edit")
-    with pytest.raises(RuntimeError, match="No PR edits CHANGELOG.md"):
-        checks.guard_changelog(base)
-    # Deleting/renaming notes is also an edit; missing history never silently passes.
-    git("checkout", "-qb", "rename", base)
-    git("mv", "CHANGELOG.md", "OLD.md")
-    commit("Move notes")
-    with pytest.raises(RuntimeError, match="No PR edits CHANGELOG.md"):
-        checks.guard_changelog(base)
-    with pytest.raises(subprocess.CalledProcessError):
-        checks.guard_changelog("missing-base")
-
-
 def test_install_retry_is_bounded_and_warm_browser_or_python_never_downloads_apt(tmp_path):
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
@@ -462,13 +391,20 @@ def test_free_disk_removes_the_unused_sdks_only_under_the_space_a_job_needs(tmp_
     assert subprocess.run(["bash", str(ROOT / "scripts/ci/free_disk.sh")], env=env, capture_output=True).returncode
 
 
+def test_a_route_change_selects_the_contract_tests(repo_map):
+    # The spec is generated from the code, so no committed spec file in a route's diff reaches the contract test any more.
+    # The route's module reaches it through the app's imports, and the generator reaches it directly.
+    for changed in ("backend/computers_routes.py", "backend/openapi_v2.py"):
+        picked = checks.selection([changed], graph=repo_map)
+        assert "backend/tests/test_openapi_v2.py" in picked["python"], changed
+        # A light pull request narrows the plan (depth 1, the hub app.py is not followed): the contract test must stay.
+        light = checks.narrow(picked, [changed], "pull_request", graph=repo_map)
+        assert "backend/tests/test_openapi_v2.py" in light["python"], changed
+
+
 def test_docs_plan_has_an_explicit_no_test_job_and_never_calls_pytest(tmp_path, monkeypatch, mapped):
-    # Exercise selector inputs independently of the separate release-notes guard.
-    monkeypatch.setattr(checks, "guard_changelog", lambda _: None)
-    for read, reader in (
-        ("docs/openapi/v2.json", "backend/tests/test_openapi_v2.py"),
-        ("CHANGELOG.md", "scripts/tests/test_release_checklist.py"),
-    ):
+    # CHANGELOG.md and docs/openapi/v2.json are gone; pytest.ini is a tracked file a test reads.
+    for read, reader in (("pytest.ini", "backend/tests/test_ddl_guard.py"),):
         both = checks.selection(["backend/task_loops.py", read])["python"]
         assert reader in both and "backend/tests/test_scheduler.py" in both, read
     monkeypatch.setattr(
@@ -580,7 +516,7 @@ def test_the_map_holds_one_syntax_tree_at_a_time(tmp_path, monkeypatch):
     assert len(trees) == 6 and graph.unparsed == {"broken.py"}  # each readable file twice: imports, then the scans
 
 
-def test_docs_changelog_and_workflow_edits_run_the_tests_that_read_them_not_the_suite(tmp_path, mapped):
+def test_docs_and_workflow_edits_run_the_tests_that_read_them_not_the_suite(tmp_path, mapped):
     # The manual reads docs/ and the app imports the manual: a page edit runs the tests that read docs/ and the tests of
     # the manual itself, not every test that imports the app. A deleted page still runs everything.
     source(tmp_path, "backend/__init__.py", "")
@@ -601,16 +537,11 @@ def test_docs_changelog_and_workflow_edits_run_the_tests_that_read_them_not_the_
     )
     source(
         tmp_path,
-        "scripts/tests/test_notes.py",
-        "from pathlib import Path\ndef test_x(): Path('CHANGELOG.md').read_text()\n",
-    )
-    source(
-        tmp_path,
         "scripts/tests/test_release_workflow.py",
         "from pathlib import Path\nROOT = Path(__file__).parents[2]\n"
         "def test_x(): (ROOT / '.github' / 'workflows' / 'release.yml').read_text()\n",
     )
-    for name in ("docs/api.md", "docs/other.md", "CHANGELOG.md", ".github/workflows/release.yml", checks.PR_WORKFLOW):
+    for name in ("docs/api.md", "docs/other.md", ".github/workflows/release.yml", checks.PR_WORKFLOW):
         source(tmp_path, name, "text\n")
 
     def picked(*changed):
@@ -618,7 +549,8 @@ def test_docs_changelog_and_workflow_edits_run_the_tests_that_read_them_not_the_
 
     assert picked("docs/other.md") == ["backend/tests/test_manual.py"]
     assert picked("docs/api.md") == ["backend/tests/test_api_guide.py", "backend/tests/test_manual.py"]
-    assert picked("CHANGELOG.md") == ["scripts/tests/test_notes.py"]
+    # A top-level page that no test or script reads selects nothing, deleted or not.
+    assert picked("CHANGELOG.md") == []
     assert picked(".github/workflows/release.yml") == ["scripts/tests/test_release_workflow.py"]
     # Code beside a page still reaches whatever imports it.
     assert "backend/tests/test_api.py" in picked("docs/other.md", "backend/manual.py")
@@ -638,7 +570,7 @@ def test_docs_changelog_and_workflow_edits_run_the_tests_that_read_them_not_the_
     page = checks.selection(["docs/api.md"], added=[])["python"]
     assert {"backend/tests/test_docs.py", "backend/tests/test_manual.py"} <= set(page) and len(page) < 60
     assert "backend/tests/test_api.py" not in page
-    assert "backend/tests/test_changelog.py" in checks.selection(["CHANGELOG.md"], added=[])["python"]
+    assert checks.selection(["CHANGELOG.md"], added=[])["python"] == []
     assert "scripts/tests/test_release_workflow.py" in checks.selection([".github/workflows/release.yml"])["python"]
     for changed in (checks.PR_WORKFLOW, "scripts/pr_checks.py", "scripts/ci_install.sh"):
         plan = checks.selection([changed], added=[])
@@ -740,33 +672,32 @@ def test_a_listing_that_uses_only_names_sees_added_files_and_a_content_listing_s
 
 
 def test_groups_are_sized_to_the_job_target_and_browser_scripts_split_by_measured_time(tmp_path, monkeypatch, mapped):
-    # One VM holds WORKERS x (target - setup) seconds of one-worker test time, and at least WORKERS x MIN_JOB_SECONDS;
+    # One VM holds WORKERS x (target - setup) seconds of one-worker test time, so it is never planned past the target;
     # never 0 VMs, never past the cap.
-    per_python = checks.WORKERS * max(checks.JOB_SECONDS - checks.SETUP_SECONDS["python"], checks.MIN_JOB_SECONDS)
+    per_python = checks.WORKERS * (checks.JOB_SECONDS - checks.SETUP_SECONDS["python"])
     assert checks.job_count(0, "python") == 1
-    # One VM past the target by a file's worth is still one VM: 1 s more is 0.25 s more wall time on each of its workers.
-    assert checks.job_count(per_python, "python") == 1 and checks.job_count(per_python + 1, "python") == 1
+    assert checks.job_count(per_python, "python") == 1 and checks.job_count(per_python + 1, "python") == 2
     assert checks.job_count(2 * per_python, "python") == 2
     assert checks.job_count(10**9, "python") == checks.MAX_JOBS
-    # The cap only stops a runaway plan: Nov 5's default suite (40,000 one-worker seconds in 936 files) held at 16 VMs
-    # ran 11-14 minutes per shard. It now splits into VMs of at most TICO_CI_JOB_SECONDS, setup included.
+    # The recorded suite (Nov 9: about 25,800 one-worker seconds in 1,050 files) splits into VMs of about
+    # TICO_CI_JOB_SECONDS each, setup included: 36 of them, under MAX_JOBS.
     suite = Counter({f"backend/tests/test_{i}.py": 1 for i in range(936)})
-    split, loads = checks.groups(suite, {name: 40000 / 936 for name in suite})
-    # Files are whole, so a VM can run one file past its target (the same 60 s margin the 180 s target had).
-    assert len(split) > 16 and max(loads) / checks.WORKERS + checks.SETUP_SECONDS["python"] <= checks.JOB_SECONDS + 60
+    split, loads = checks.groups(suite, {name: 25800 / 936 for name in suite})
+    # Files are whole, so a VM can run one file past its target (a file's worth of about 30 s on each worker).
+    assert len(split) == checks.job_count(25800, "python") == 36
+    assert max(loads) / checks.WORKERS + checks.SETUP_SECONDS["python"] <= checks.JOB_SECONDS + 30
     # A small selection still takes one VM.
     assert len(checks.groups(Counter({"a.py": 3}), {"a.py": 200})[0]) == 1
     counts = Counter({f"t{i}.py": 1 for i in range(30)})
     split, loads = checks.groups(counts, {name: 100 for name in counts})
-    # A remainder under the minimum folds into the VMs before it, so a VM holds under two minimums.
-    assert len(split) == checks.job_count(3000, "python") and max(loads) < 2 * checks.WORKERS * checks.MIN_JOB_SECONDS
+    assert len(split) == checks.job_count(3000, "python")
+    assert max(loads) / checks.WORKERS + checks.SETUP_SECONDS["python"] <= checks.JOB_SECONDS
     assert sorted(sum(split, [])) == sorted(counts)
 
     names = [f"s{i}" for i in range(40)]
     listed = []
     monkeypatch.setattr(checks, "browser_scripts", lambda args, root=None: listed.append(args) or names)
     monkeypatch.setattr(checks, "collect", lambda: Counter({"backend/tests/test_api.py": 1}))
-    monkeypatch.setattr(checks, "guard_changelog", lambda base: None)
     monkeypatch.setattr(
         checks, "changed_files", lambda base, head="HEAD", only=None: [] if only else ["ui/app/core.ts"]
     )
@@ -824,7 +755,7 @@ def test_a_pr_merge_ref_is_checked_against_current_main_not_the_older_event_base
         ).strip()
 
     git("init", "-q", "-b", "main")
-    (tmp_path / "CHANGELOG.md").write_text("# Changelog\n## [Unreleased]\n")
+    (tmp_path / "start.py").write_text("x = 0\n")
     git("add", "-A")
     git("commit", "-qm", "Start")
     stale = git("rev-parse", "HEAD")
@@ -833,14 +764,24 @@ def test_a_pr_merge_ref_is_checked_against_current_main_not_the_older_event_base
     git("add", "-A")
     git("commit", "-qm", "Product change")
     git("checkout", "-q", "main")
-    (tmp_path / "CHANGELOG.md").write_text("# Changelog\n## [Unreleased]\n\n## [1.1.0]\n- Cut.\n")
+    (tmp_path / "other.py").write_text("y = 2\n")
     git("add", "-A")
-    git("commit", "-qm", "Release notes\n\nChangelog-Release: v1.1.0")
+    git("commit", "-qm", "Other change on main")
+    main_tip = git("rev-parse", "HEAD")
     # GitHub checks out the PR merged into current main; the event's base sha is still the older tip.
     git("merge", "-q", "--no-edit", "feature")
-    monkeypatch.setattr(checks, "ROOT", tmp_path)
+    # changed_files, script_changes and selection bind ROOT at import, so they get this checkout as their root.
+    # merge_parent gets it too; prepare and the diffs it runs are otherwise unchanged.
+    monkeypatch.setattr(checks, "merge_parent", partial(checks.merge_parent, root=tmp_path))
+    monkeypatch.setattr(checks, "changed_files", partial(checks.changed_files, root=tmp_path))
+    monkeypatch.setattr(checks, "script_changes", partial(checks.script_changes, root=tmp_path))
+    monkeypatch.setattr(checks, "selection", partial(checks.selection, root=tmp_path, core=[]))
+    # image_checks needs the Dockerfile of a real checkout; this temporary repo has none.
+    monkeypatch.setattr(checks, "image_checks", lambda changed, root=None: None)
     monkeypatch.setattr(checks, "collect", lambda: Counter({"scripts/tests/test_pr_checks.py": 1}))
-    checks.prepare("pull_request", stale, tmp_path / "plan.json")
+    assert checks.merge_parent(stale) == main_tip
+    plan = checks.prepare("pull_request", stale, tmp_path / "plan.json")
+    assert plan["changed"] == ["app.py"]
 
 
 def receipt_job(name, url, status="completed", conclusion="success"):
@@ -943,6 +884,7 @@ def test_the_main_cache_warm_up_saves_the_keys_pr_checks_restore():
             "pr-desktop",
             "pr-conformance",
             "pr-recorder",
+            "pinned-tools-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/pinned_tool.sh') }}",
             "playwright-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('package-lock.json') }}",
             "playwright-system-ubuntu24-x64-${{ steps.image.outputs.version }}-${{ hashFiles('package-lock.json', "
             "'scripts/ci_install.sh', 'scripts/playwright-system-packages.json') }}",
@@ -1075,7 +1017,6 @@ def test_a_merge_group_plans_its_own_selection_and_never_runs_the_pull_request_g
         raise AssertionError("a merge queue group is checked from its own base, not from a pull request's merge parent")
 
     monkeypatch.setattr(checks, "merge_parent", refuse)
-    monkeypatch.setattr(checks, "guard_changelog", refuse)
     monkeypatch.setattr(checks, "image_checks", lambda changed: None)
     seen = []
 
@@ -1144,6 +1085,14 @@ def test_every_job_runs_on_a_github_hosted_runner_and_only_a_ready_pull_request_
         "caddy-linux",
         "timings",
     }
+
+
+def test_a_draft_runs_no_release_command_test_and_marking_it_ready_runs_them():
+    doc = yaml.safe_load((ROOT / ".github" / "workflows" / "release-command-tests.yml").read_text())
+    assert doc[True]["pull_request"]["types"] == ["opened", "synchronize", "reopened", "ready_for_review"]
+    assert (
+        doc["jobs"]["command"]["if"] == "${{ github.event_name != 'pull_request' || !github.event.pull_request.draft }}"
+    )
 
 
 def test_a_draft_or_a_fork_runs_no_test_or_sim_leg():
@@ -1297,7 +1246,7 @@ def test_the_factory_shards_cover_every_scenario_once_in_about_five_minutes_a_vm
     groups = [factory.pack(pairs, count, timings)[index] for index in range(count)]
     assert sorted(pair for group in groups for pair in group) == sorted(pairs)
     slowest_vm = max(sum(timings[name] for name, _ in group) for group in groups) / factory.REMOTE_CPUS
-    assert slowest_vm <= 300, slowest_vm
+    assert slowest_vm <= checks.FACTORY_LEG_SECONDS + max(timings.values()) / factory.REMOTE_CPUS, slowest_vm
 
 
 def test_the_factory_sim_runs_in_the_queue_and_on_a_ready_pull_request_on_the_plans_shards():
@@ -1695,41 +1644,49 @@ def test_a_ui_file_converted_to_typescript_keeps_the_map_entry_its_js_name_had(t
     assert not any("is not in UI_MAP" in note for note in plan["uncertain"])
 
 
-def test_a_remainder_under_five_minutes_of_work_a_vm_folds_into_one_vm():
-    # A VM carries at least MIN_JOB_SECONDS (5 minutes) of tests per worker, setup excluded: a 1,100 s selection is one
-    # VM of about 5 minutes, not two VMs of 2.3 minutes that each spend their setup on a small share of tests.
-    assert checks.MIN_JOB_SECONDS >= 300
-    assert checks.job_count(1100, "python") == 1
-    # Under twice the minimum stays one VM; a selection only splits once each VM gets 5 minutes.
-    assert checks.job_count(checks.WORKERS * checks.MIN_JOB_SECONDS * 2 - 1, "python") == 1
-    assert checks.job_count(checks.WORKERS * checks.MIN_JOB_SECONDS * 2, "python") == 2
-    counts = Counter({f"t{i}.py": 1 for i in range(11)})
-    split, loads = checks.groups(counts, {name: 100 for name in counts})
-    assert len(split) == 1 and loads == [1100.0]
+@pytest.mark.parametrize("seconds", [1, 396, 959, 960, 961, 1500, 2161, 5000])
+def test_no_planned_python_vm_runs_past_the_target_however_small_the_selection(seconds):
+    # 959 one-worker seconds once folded into one VM planned at 390 s; a VM holds WORKERS x (target - setup) = 720 of
+    # them, so the selection takes two VMs of about 270 s, and a selection under one VM's work takes one.
+    counts = Counter({f"t{i}.py": 1 for i in range(seconds)})  # one-second files: the packing is exact
+    split, loads = checks.groups(counts, {name: 1.0 for name in counts})
+    assert len(split) == checks.job_count(seconds, "python") == max(1, math.ceil(seconds / 720))
+    assert max(loads) / checks.WORKERS + checks.SETUP_SECONDS["python"] <= checks.JOB_SECONDS
+    assert checks.overrun_warnings(loads, checks.SETUP_SECONDS["python"], checks.JOB_SECONDS, "Python") == []
 
 
-def test_the_factory_legs_hold_four_minutes_of_work_each():
-    # The sim's work is fixed by its scenarios, not by the selection: its legs fold to the same four-minute minimum.
+def test_a_vm_planned_past_the_target_gets_a_warning():
+    assert checks.overrun_warnings([720.0], checks.SETUP_SECONDS["python"], checks.JOB_SECONDS, "Python") == []
+    lines = checks.overrun_warnings([960.0], checks.SETUP_SECONDS["python"], checks.JOB_SECONDS, "Python")
+    assert len(lines) == 1 and lines[0].startswith("::warning::A Python VM is planned for 390s")
+    # 480 one-worker seconds are 240 s of tests on the planner's four workers (the incremental browser VMs run -j 4 too).
+    assert not checks.overrun_warnings([480.0], checks.SETUP_SECONDS["browser"], checks.JOB_SECONDS, "browser")
+    assert checks.overrun_warnings([1000.0], checks.SETUP_SECONDS["browser"], checks.JOB_SECONDS, "browser")
+
+
+def test_the_factory_legs_hold_about_two_minutes_of_work_per_vcpu_each():
+    # The sim's work is fixed by its scenarios, not by the selection: enough legs that each takes about
+    # FACTORY_LEG_SECONDS of scenario time per vCPU (five legs for the recorded scenario time).
     from evals.factory import run as factory
 
     timings = factory.timings()
     pairs = [(name, 1) for name in sorted(timings)]
     total = sum(timings[name] for name, _ in pairs)
-    legs = max(
-        1, min(factory.groups_for(pairs, timings), int(total // (factory.REMOTE_CPUS * checks.FACTORY_LEG_SECONDS)))
-    )
-    assert len(checks.factory_shards()) == legs
-    assert legs == 1 or total / legs / factory.REMOTE_CPUS >= checks.FACTORY_LEG_SECONDS
+    legs = max(1, min(len(pairs), math.ceil(total / (factory.REMOTE_CPUS * checks.FACTORY_LEG_SECONDS))))
+    assert len(checks.factory_shards()) == legs == 5
+    assert legs == 1 or total / legs / factory.REMOTE_CPUS <= checks.FACTORY_LEG_SECONDS
 
 
-def test_size_groups_raises_the_target_to_meet_a_ceiling_and_stops_at_the_cap():
+def test_size_groups_plans_at_the_target_and_only_stretches_toward_an_explicit_cap():
     counts = Counter({f"backend/tests/test_{i}.py": 1 for i in range(346)})
     timings = {name: 6720 / 346 for name in counts}
-    # An ordinary pull request's ceiling is 8 test jobs: 2 fixed jobs and 2 factory legs leave 4 for the Python VMs,
-    # which takes VMs of about 8 minutes (the cap) for a 346-file change.
+    # The planner's cap is its target, so a ceiling never stretches a VM: the job count is reported, not forced down.
+    assert checks.MAX_JOB_SECONDS == checks.JOB_SECONDS
     sized = checks.size_groups(counts, timings, fixed=2, shards=2, ceiling=8)
-    assert checks.JOB_SECONDS < sized["target"] <= checks.MAX_JOB_SECONDS
-    assert sized["tests"] == len(sized["split"]) + 4 and sized["tests"] <= 8
+    assert sized["target"] == checks.JOB_SECONDS and sized["tests"] == len(sized["split"]) + 4
+    # A call that names a higher cap still raises the target toward it until the count fits the ceiling.
+    stretched = checks.size_groups(counts, timings, fixed=2, shards=2, ceiling=10, cap=480)
+    assert checks.JOB_SECONDS < stretched["target"] <= 480 and stretched["tests"] <= 10
     # Already under the ceiling, the target stays at the usual one.
     small = checks.size_groups(Counter({"a.py": 1}), {"a.py": 100}, fixed=1, shards=0, ceiling=8)
     assert small["target"] == checks.JOB_SECONDS and small["tests"] == 2
@@ -1739,17 +1696,14 @@ def test_size_groups_raises_the_target_to_meet_a_ceiling_and_stops_at_the_cap():
     assert capped["target"] == checks.MAX_JOB_SECONDS and capped["tests"] > 8
 
 
-def test_a_queue_group_packs_toward_six_test_jobs_of_up_to_twelve_minutes():
-    """Every queue group shares the organisation's ~60 concurrent hosted jobs, so a group packs its tests into fewer,
-    longer VMs than a pull request: each VM spends about two minutes on setup. A selection too big for six VMs at the cap
-    keeps the cap's VMs: only a narrower selection brings it within six."""
-    assert checks.CEILING["merge_group"] == 6 and checks.QUEUE_MAX_JOB_SECONDS > checks.MAX_JOB_SECONDS
-    # Nov 8's typical backend group: about 930 files, 22,300 one-worker seconds, a browser group, the contract tests and
-    # two factory legs. At the pull request's cap it takes 13 Python VMs; the queue's cap takes fewer.
+def test_a_full_queue_group_packs_at_the_target_and_a_narrowed_one_stays_under_the_ceiling():
+    """Every VM is planned at the target (330 s, setup included), queue groups too. The recorded full suite (about 25,800
+    one-worker seconds) takes about 36 Python VMs; a narrowed queue group (NARROW) takes at most its shard cap."""
+    assert checks.CEILING["merge_group"] == 30 and checks.QUEUE_MAX_JOB_SECONDS == checks.JOB_SECONDS
     counts = Counter({f"backend/tests/test_{i}.py": 1 for i in range(930)})
-    timings = {name: 22300 / 930 for name in counts}
-    browser = (Counter(dict.fromkeys([f"s{i}" for i in range(32)], 1)), dict.fromkeys([f"s{i}" for i in range(32)], 50))
-    pr = checks.size_groups(counts, timings, browser=browser, fixed=1, shards=2, ceiling=checks.CEILING["merge_group"])
+    timings = {name: 25800 / 930 for name in counts}
+    names = [f"s{i}" for i in range(32)]
+    browser = (Counter(dict.fromkeys(names, 1)), dict.fromkeys(names, 50))
     queue = checks.size_groups(
         counts,
         timings,
@@ -1759,15 +1713,13 @@ def test_a_queue_group_packs_toward_six_test_jobs_of_up_to_twelve_minutes():
         ceiling=checks.CEILING["merge_group"],
         cap=checks.QUEUE_MAX_JOB_SECONDS,
     )
-    assert queue["target"] == checks.QUEUE_MAX_JOB_SECONDS and len(queue["split"]) < len(pr["split"])
-    # 13 test jobs (9 Python, a browser, the contracts, 2 factory legs) against 17 at the pull request's cap.
-    assert queue["tests"] == 13 and pr["tests"] == 17
-    # No VM is planned past the cap by more than one file's worth.
-    assert max(queue["loads"]) / checks.WORKERS + checks.SETUP_SECONDS["python"] <= checks.QUEUE_MAX_JOB_SECONDS + 30
-    # A small group stays at the usual target in one or two VMs: 30 minutes of one-worker tests is one VM.
+    assert queue["target"] == checks.JOB_SECONDS and len(queue["split"]) == 36
+    assert max(queue["loads"]) / checks.WORKERS + checks.SETUP_SECONDS["python"] <= checks.JOB_SECONDS + 30
+    assert queue["tests"] == 36 + checks.job_count(1600, "browser") + 1 + 2
+    # A small group stays at the usual target in one VM: 20 files of 90 s is one VM.
     small = Counter({f"t{i}.py": 1 for i in range(20)})
     sized = checks.size_groups(
-        small, {n: 90 for n in small}, ceiling=checks.CEILING["merge_group"], cap=checks.QUEUE_MAX_JOB_SECONDS
+        small, {n: 30 for n in small}, ceiling=checks.CEILING["merge_group"], cap=checks.QUEUE_MAX_JOB_SECONDS
     )
     assert sized["target"] == checks.JOB_SECONDS and len(sized["split"]) == 1
 
@@ -1811,7 +1763,6 @@ def test_the_plan_decides_the_queue_jobs_on_both_tiers_and_a_group_checks_its_me
     # A ready pull request runs the same jobs under the same conditions (PR checks == queue checks), so its plan writes
     # the same outputs from its own diff.
     monkeypatch.setattr(checks, "merge_parent", lambda base: base)
-    monkeypatch.setattr(checks, "guard_changelog", lambda base: None)
     output.write_text("")
     plan = checks.prepare("pull_request", "pr-base", tmp_path / "plan.json")
     assert plan["queue_jobs"] == {"rust_lint": False, "desktop": True, "recorder": False}
@@ -1963,3 +1914,390 @@ def test_the_queue_and_pr_suites_pass_the_flag_and_release_validation_never_does
     assert "scripts/pr_checks.py run --quarantine" in step["run"]
     for name in ("ci.yml", "release.yml", "hotfix.yml", "train.yml"):
         assert "quarantine" not in (workflows / name).read_text(), name
+
+
+def light_tree(root):
+    """leaf <- helper <- outer, each with its own test; the Caddy entry point runs the helper and a core browser script
+    names outer, so each check sits a known number of levels from a change to leaf."""
+    source(root, "backend/__init__.py", "")
+    source(root, "backend/leaf.py", "LEAF = 1\n")
+    source(root, "backend/helper.py", "from backend.leaf import LEAF\n")
+    source(root, "backend/outer.py", "from backend.helper import LEAF\n")
+    source(root, "backend/caddy_assets.py", "from backend.helper import LEAF\n")
+    source(root, "backend/tests/test_leaf.py", "from backend.leaf import LEAF\ndef test_x(): pass\n")
+    source(root, "backend/tests/test_helper.py", "from backend.helper import LEAF\ndef test_x(): pass\n")
+    source(root, "backend/tests/test_outer.py", "from backend.outer import LEAF\ndef test_x(): pass\n")
+    source(root, "ui/tests/page.cjs", "require('../../backend/outer.py');\n")
+    smoke_tree(root)
+
+
+def test_a_light_pull_request_runs_the_tests_a_change_reaches_directly_and_the_smoke_set(tmp_path):
+    light_tree(tmp_path)
+    smoke_tests, _ = checks.smoke(tmp_path)
+    full = checks.selection(["backend/leaf.py"], root=tmp_path, core=["page"])
+    reached = {"backend/tests/test_leaf.py", "backend/tests/test_helper.py", "backend/tests/test_outer.py"}
+    assert reached <= set(full["python"]) and full["browser"] == ["page"] and full["caddy"]
+    light = checks.narrow(full, ["backend/leaf.py"], "pull_request", root=tmp_path)
+    # Only the test that imports leaf itself, and the smoke set because the plan dropped two; never more than the full
+    # selection and the smoke set.
+    assert set(light["python"]) == {"backend/tests/test_leaf.py"} | set(smoke_tests)
+    assert set(light["python"]) <= set(full["python"]) | set(smoke_tests)
+    record = light["narrow"]
+    assert record["left_transitive"] == ["backend/tests/test_helper.py", "backend/tests/test_outer.py"]
+    assert record["tier"]["backend/tests/test_leaf.py"] == 2 and {record["tier"][t] for t in smoke_tests} == {1}
+    # The browser script and the Caddy job reach leaf only through other files: left for the queue.
+    assert light["browser"] == [] and record["browser_left"] == ["page"] and not light["caddy"]
+    # One level nearer, they run: outer is named by the script, helper is run by the Caddy entry point.
+    outer = checks.narrow(
+        checks.selection(["backend/outer.py"], root=tmp_path, core=["page"]),
+        ["backend/outer.py"],
+        "pull_request",
+        root=tmp_path,
+    )
+    assert outer["browser"] == ["page"]
+    helper = checks.narrow(
+        checks.selection(["backend/helper.py"], root=tmp_path, core=["page"]),
+        ["backend/helper.py"],
+        "pull_request",
+        root=tmp_path,
+    )
+    assert helper["caddy"] and "backend/tests/test_helper.py" in helper["python"]
+    # A changed test file is tier 0. A change that drops nothing by depth carries the smoke set only for the cap: prepare
+    # removes it when the cap drops nothing too.
+    name = "backend/tests/test_outer.py"
+    own = checks.narrow(checks.selection([name], root=tmp_path, core=[]), [name], "pull_request", root=tmp_path)
+    assert set(own["python"]) == {name} | set(smoke_tests) and own["narrow"]["tier"][name] == 0
+    assert not own["narrow"]["smoke"] and own["narrow"]["smoke_unless_capped"] == sorted(smoke_tests)
+    # The selection is the same for both events (release validation's incremental runs use it too); main passes as is.
+    assert checks.selection(["backend/leaf.py"], "merge_group", root=tmp_path, core=["page"]) == full
+    main = checks.selection(["backend/leaf.py"], "push", root=tmp_path, core=[])
+    assert checks.narrow(main, ["backend/leaf.py"], "push", root=tmp_path) is main
+    # An empty diff is uncertain: its smoke-set plan passes unchanged.
+    empty = checks.selection([], root=tmp_path, core=[])
+    assert checks.narrow(empty, [], "pull_request", root=tmp_path) is empty
+
+
+def test_a_light_plan_caps_its_python_tests_by_priority_and_a_changed_test_always_runs():
+    tier = {"changed.py": 0, "smoke.py": 1, "near_short.py": 2, "near_long.py": 2, "far.py": 3}
+    seconds = {"changed.py": 50, "smoke.py": 20, "near_short.py": 10, "near_long.py": 40, "far.py": 5}
+    # changed 50 + smoke 20 + near_short 10 = 80 of 85; near_long does not fit, and the shorter far file after it does.
+    kept, left = checks.cap_tests(list(tier), tier, seconds, budget=85)
+    assert kept == sorted(["changed.py", "smoke.py", "near_short.py", "far.py"]) and left == ["near_long.py"]
+    # Past the budget a changed test file and the smoke set still run; what is left is listed in priority order.
+    kept, left = checks.cap_tests(list(tier), tier, seconds, budget=10)
+    assert kept == ["changed.py", "smoke.py"] and left == ["near_short.py", "near_long.py", "far.py"]
+    # The budget is four VMs of the job target of four workers, setup excluded.
+    assert checks.narrow_budget(4) == 4 * checks.WORKERS * (
+        checks.NARROW_SHARD_SECONDS - checks.SETUP_SECONDS["python"]
+    )
+
+
+def test_a_light_pull_request_plan_runs_at_most_four_python_vms_and_lists_what_it_left(tmp_path, monkeypatch):
+    files = {f"backend/tests/test_{i:02}.py": 1 for i in range(40)}
+    monkeypatch.setattr(checks, "collect", lambda: Counter(files))
+    monkeypatch.setattr(checks, "merge_parent", lambda base: base)
+    monkeypatch.setattr(checks, "image_checks", lambda changed: None)
+    monkeypatch.setattr(checks, "changed_files", lambda base, head="HEAD", only=None: [] if only else ["backend/x.py"])
+    monkeypatch.setattr(checks, "committed_timings", lambda: dict.fromkeys(files, 600.0))  # ten minutes each
+    monkeypatch.setattr(checks, "DependencyMap", lambda root: "graph")
+    far = "backend/tests/test_far.py"
+
+    def fake_selection(changed, event, base=None, added=None, graph=None):
+        empty = {"browser": [], "caddy": False, "contracts": False, "conformance": False, "rust": []}
+        return {**empty, "python": [*sorted(files), far], "reason": "measured", "uncertain": []}
+
+    narrowed = []
+
+    def fake_narrow(picked, changed, event, added=None, graph=None):
+        narrowed.append((event, graph))
+        tier = {name: 0 if name.endswith("_00.py") else 2 for name in files}
+        record = {"event": event, "depth": 1, "shards": 4, "budget_seconds": checks.narrow_budget(4), "smoke": True}
+        record["smoke_unless_capped"] = []
+        return {**picked, "python": sorted(files), "narrow": {**record, "left_transitive": [far], "tier": tier}}
+
+    monkeypatch.setattr(checks, "selection", fake_selection)
+    monkeypatch.setattr(checks, "narrow", fake_narrow)
+    summary = tmp_path / "summary"
+    monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(summary))
+    monkeypatch.setenv("GITHUB_OUTPUT", str(tmp_path / "output"))
+    plan = checks.prepare("pull_request", "base", tmp_path / "plan.json", light=True)
+    assert narrowed == [("pull_request", "graph")]  # one map for the selection and the narrowing
+    python = [job for job in plan["matrix"]["include"] if job["suite"].startswith("python-")]
+    kept = sorted(sum((job["files"] for job in python), []))
+    assert 1 <= len(python) <= 4
+    assert len(kept) == int(checks.narrow_budget(4) // 600) and "backend/tests/test_00.py" in kept
+    left = plan["narrow"]["left_over_budget"]
+    assert sorted(left + kept) == sorted(files) and "tier" not in plan["narrow"]
+    text = summary.read_text()
+    assert all(f"`{name}`" in text for name in left) and f"`{far}`" in text and "merge queue group" in text
+    # Without --light, or for main, nothing is narrowed: the full selection runs.
+    narrowed.clear()
+    for event, light in (("pull_request", False), ("push", True)):
+        assert checks.prepare(event, "base", tmp_path / "plan.json", light=light).get("narrow") is None, event
+    assert narrowed == []
+    # A queue group plans light too, from its own base and head, with one map.
+    checks.prepare("merge_group", "queue-base", tmp_path / "plan.json", head="queue-head", light=True)
+    assert narrowed == [("merge_group", "graph")]
+
+
+def test_a_light_pull_request_runs_the_sim_only_for_its_own_inputs(monkeypatch):
+    monkeypatch.setattr(checks, "factory_shards", lambda: ["1/2", "2/2"])
+    # backend/app.py is on the sim's recorded call path, so the full plan runs it; the light one leaves it to the queue.
+    assert checks.factory_plan("pull_request", ["backend/app.py"])["run"]
+    assert not checks.factory_plan("pull_request", ["backend/app.py"], own_inputs=True)["run"]
+    for name in (
+        "evals/factory/run.py",
+        checks.PR_WORKFLOW,
+        "templates/catalog/x/role.yaml",
+        "backend/requirements.txt",
+    ):
+        assert checks.factory_plan("pull_request", [name], own_inputs=True)["run"], name
+    assert checks.factory_plan("pull_request", [], own_inputs=True)["run"]  # an unreadable diff runs it
+
+
+def test_both_tiers_plan_light_and_the_required_check_keeps_its_contract():
+    jobs = workflow_jobs()["jobs"]
+    step = next(s for s in jobs["plan"]["steps"] if s.get("id") == "plan")
+    assert step["run"].endswith("--light")
+    # NARROW decides per event: a pull request one level and ten VMs, a queue group two levels and nineteen VMs.
+    assert checks.NARROW == {"pull_request": {"depth": 1, "shards": 10}, "merge_group": {"depth": 2, "shards": 19}}
+    assert checks.NARROW_SHARD_SECONDS == checks.JOB_SECONDS
+    # `checks` still needs every job and runs after any of them (a draft skips it with everything else).
+    assert jobs["checks"]["if"] == "${{ always() && !github.event.pull_request.draft }}"
+    assert set(jobs["checks"]["needs"]) == set(jobs) - {"checks", "timings"}
+
+
+def test_a_queue_group_runs_the_tests_two_levels_from_a_change_and_keeps_its_other_jobs(tmp_path, monkeypatch):
+    light_tree(tmp_path)
+    smoke_tests, _ = checks.smoke(tmp_path)
+    full = checks.selection(["backend/leaf.py"], "merge_group", root=tmp_path, core=["page"])
+    group = checks.narrow(full, ["backend/leaf.py"], "merge_group", root=tmp_path)
+    # leaf's test (level 1) and helper's (level 2: it runs helper, which runs leaf); outer's is three levels away.
+    assert set(group["python"]) == {"backend/tests/test_leaf.py", "backend/tests/test_helper.py"} | set(smoke_tests)
+    record = group["narrow"]
+    assert (
+        record["left_transitive"] == ["backend/tests/test_outer.py"]
+        and record["shards"] == checks.NARROW["merge_group"]["shards"]
+    )
+    assert record["tier"]["backend/tests/test_leaf.py"] == 2 and record["tier"]["backend/tests/test_helper.py"] == 3
+    # A queue group keeps its browser scripts, Caddy job and contracts as the selection decided.
+    assert (group["browser"], group["caddy"], group["contracts"]) == (full["browser"], full["caddy"], full["contracts"])
+    assert "browser_left" not in record
+    # A hub (more than HUB_TEST_USERS tests run it directly) is not followed to the second level.
+    monkeypatch.setattr(checks, "HUB_TEST_USERS", 0)
+    hub = checks.narrow(full, ["backend/leaf.py"], "merge_group", root=tmp_path)
+    assert "backend/tests/test_helper.py" not in hub["python"]
+    # A light queue group's summary says where the rest runs.
+    assert "release validation" in checks.narrow_summary({**record, "left_over_budget": []})
+
+
+def test_release_validation_selects_the_full_closure_so_it_runs_what_a_queue_group_leaves_out():
+    """A queue group drops tests more than two levels away; release validation's incremental runs (every change since the
+    last full validation, which runs once in 24 hours) select with pr_checks.selection, which narrowing never changes."""
+    source = (ROOT / "scripts/release_increment.py").read_text()
+    assert "pr_checks.selection(" in source and "narrow" not in source and "--light" not in source
+    for name in ("ci.yml", "train.yml", "release.yml", "hotfix.yml"):
+        assert "--light" not in (ROOT / ".github/workflows" / name).read_text(), name
+
+
+def test_a_light_plan_adds_the_smoke_set_only_when_it_drops_a_test_and_packs_with_the_seconds_it_capped_by(
+    tmp_path, monkeypatch
+):
+    """Codex review: the cap alone can drop tests, so the smoke set waits for it; and the VMs are packed with the same
+    seconds the cap used (the committed table under the run's timings), so a VM is not planned from a guess."""
+    smoke_tests, _ = checks.smoke(ROOT)
+    direct = [f"backend/tests/test_direct_{i:02}.py" for i in range(14)]
+    collected = Counter(dict.fromkeys([*direct, *smoke_tests], 1))
+    monkeypatch.setattr(checks, "collect", lambda: collected)
+    monkeypatch.setattr(checks, "merge_parent", lambda base: base)
+    monkeypatch.setattr(checks, "image_checks", lambda changed: None)
+    monkeypatch.setattr(checks, "changed_files", lambda base, head="HEAD", only=None: [] if only else ["backend/x.py"])
+    monkeypatch.setattr(checks, "DependencyMap", lambda root: "graph")
+    monkeypatch.delenv("GITHUB_OUTPUT", raising=False)
+    monkeypatch.delenv("GITHUB_STEP_SUMMARY", raising=False)
+    size = {"n": 14}
+
+    def fake_selection(changed, event, base=None, added=None, graph=None):
+        empty = {"browser": [], "caddy": False, "contracts": False, "conformance": False, "rust": []}
+        return {**empty, "python": direct[: size["n"]], "reason": "measured", "uncertain": []}
+
+    def fake_narrow(picked, changed, event, added=None, graph=None):
+        tier = dict.fromkeys(picked["python"], 2) | dict.fromkeys(smoke_tests, 1)
+        record = {"event": event, "depth": 1, "shards": 4, "budget_seconds": checks.narrow_budget(4), "smoke": False}
+        record |= {"left_transitive": [], "tier": tier, "smoke_unless_capped": sorted(smoke_tests)}
+        return {**picked, "python": sorted({*picked["python"], *smoke_tests}), "narrow": record}
+
+    monkeypatch.setattr(checks, "selection", fake_selection)
+    monkeypatch.setattr(checks, "narrow", fake_narrow)
+    # The smoke set is about two minutes in all (its files are small); the direct files are ten minutes each.
+    monkeypatch.setattr(
+        checks, "committed_timings", lambda: dict.fromkeys(direct, 600.0) | dict.fromkeys(smoke_tests, 20.0)
+    )
+    # Fourteen ten-minute files: the cap drops some, so the smoke set runs (it ranks before them).
+    plan = checks.prepare("pull_request", "base", tmp_path / "plan.json", light=True)
+    assert plan["narrow"]["left_over_budget"] and plan["narrow"]["smoke"]
+    assert set(smoke_tests) <= set(plan["python"])
+    # Packed from the same seconds: no VM carries more than its share of the budget plus one file.
+    python = [job for job in plan["matrix"]["include"] if job["suite"].startswith("python-")]
+    loads = plan["estimated_seconds"][: len(python)]
+    assert (
+        len(python) == 4
+        and max(loads) <= sum(loads) / 4 + 600
+        and sum(loads) <= checks.narrow_budget(4) + 600 * len(smoke_tests)
+    )
+    # Two files fit: nothing is dropped, so the smoke set does not run.
+    size["n"] = 2
+    plan = checks.prepare("pull_request", "base", tmp_path / "plan.json", light=True)
+    assert plan["python"] == direct[:2] and not plan["narrow"]["smoke"] and not plan["narrow"]["left_over_budget"]
+
+
+def test_a_queue_group_follows_shared_test_modules_and_reads_by_repository_listers(tmp_path):
+    light_tree(tmp_path)
+    source(tmp_path, "backend/tests/test_shared.py", "from backend.leaf import LEAF\ndef test_x(): pass\n")
+    source(tmp_path, "backend/tests/test_reuses.py", "from backend.tests.test_shared import LEAF\ndef test_y(): pass\n")
+    source(tmp_path, "backend/tests/test_lists.py", "import importlib\nimportlib.import_module(name)\n")
+    full = checks.selection(["backend/leaf.py"], "merge_group", root=tmp_path, core=[])
+    group = checks.narrow(full, ["backend/leaf.py"], "merge_group", root=tmp_path)
+    # A test module that other tests import is followed like any module; a file that may load anything is level 1.
+    assert {"backend/tests/test_reuses.py", "backend/tests/test_lists.py"} <= set(group["python"])
+    light = checks.narrow(full, ["backend/leaf.py"], "pull_request", root=tmp_path)
+    assert "backend/tests/test_lists.py" in light["python"] and "backend/tests/test_reuses.py" not in light["python"]
+    # The queue group runs everything its pull request's light run did.
+    assert set(light["python"]) <= set(group["python"])
+
+
+def test_a_light_plan_packs_untimed_files_with_the_cap_estimate_and_keeps_the_smoke_set_past_the_budget(
+    tmp_path, monkeypatch
+):
+    """Codex review, round 2: untimed files are packed with the seconds the cap estimated for them (not re-estimated
+    from fewer files), and the smoke set runs even when changed tests alone fill the budget."""
+    smoke_tests, _ = checks.smoke(ROOT)
+    changed = [f"backend/tests/test_changed_{i:02}.py" for i in range(12)]
+    collected = Counter(dict.fromkeys([*changed, *smoke_tests], 10))
+    monkeypatch.setattr(checks, "collect", lambda: collected)
+    monkeypatch.setattr(checks, "merge_parent", lambda base: base)
+    monkeypatch.setattr(checks, "image_checks", lambda changed: None)
+    monkeypatch.setattr(checks, "changed_files", lambda base, head="HEAD", only=None: [] if only else changed)
+    monkeypatch.setattr(checks, "DependencyMap", lambda root: "graph")
+    monkeypatch.delenv("GITHUB_OUTPUT", raising=False)
+    monkeypatch.delenv("GITHUB_STEP_SUMMARY", raising=False)
+
+    def fake_selection(changed_files, event, base=None, added=None, graph=None):
+        empty = {"browser": [], "caddy": False, "contracts": False, "conformance": False, "rust": []}
+        return {**empty, "python": [*changed, "backend/tests/test_far.py"], "reason": "measured", "uncertain": []}
+
+    def fake_narrow(picked, changed_files, event, added=None, graph=None):
+        tier = dict.fromkeys(changed, 0) | dict.fromkeys(smoke_tests, 1)
+        record = {"event": event, "depth": 1, "shards": 4, "budget_seconds": checks.narrow_budget(4), "smoke": True}
+        record |= {"left_transitive": ["backend/tests/test_far.py"], "tier": tier, "smoke_unless_capped": []}
+        return {**picked, "python": sorted({*changed, *smoke_tests}), "narrow": record}
+
+    monkeypatch.setattr(checks, "selection", fake_selection)
+    monkeypatch.setattr(checks, "narrow", fake_narrow)
+    # Twelve ten-minute changed tests fill the budget alone; the smoke set still runs.
+    monkeypatch.setattr(checks, "committed_timings", lambda: dict.fromkeys(changed, 600.0))
+    plan = checks.prepare("pull_request", "base", tmp_path / "plan.json", light=True)
+    assert set(smoke_tests) | set(changed) == set(plan["python"])
+    # One timed file and the rest untimed: the VMs' planned load is the seconds the cap selected.
+    monkeypatch.setattr(checks, "committed_timings", lambda: {changed[0]: 600.0})
+    plan = checks.prepare("pull_request", "base", tmp_path / "plan.json", light=True)
+    python = [job for job in plan["matrix"]["include"] if job["suite"].startswith("python-")]
+    assert sum(plan["estimated_seconds"][: len(python)]) == pytest.approx(plan["narrow"]["selected_seconds"], abs=1)
+
+
+@pytest.mark.parametrize("event", ["pull_request", "merge_group"])
+@pytest.mark.parametrize("light", [False, True])
+def test_no_planned_test_job_runs_past_the_target_for_a_full_or_narrowed_selection(tmp_path, monkeypatch, event, light):
+    """Every Python and browser VM of a plan finishes within the target (JOB_SECONDS, setup included, one file's margin),
+    for the recorded full suite and for a narrowed plan (NARROW), in pull request and merge queue runs."""
+    files = [f"backend/tests/test_{i:03}.py" for i in range(930)]
+    names = [f"s{i}" for i in range(40)]
+    monkeypatch.setattr(checks, "collect", lambda: Counter(dict.fromkeys(files, 1)))
+    monkeypatch.setattr(checks, "committed_timings", lambda: {})
+    monkeypatch.setattr(checks, "browser_scripts", lambda args, root=None: names)
+    monkeypatch.setattr(checks, "image_checks", lambda changed, root=None: None)
+    monkeypatch.setattr(checks, "merge_parent", lambda base: base)
+    monkeypatch.setattr(checks, "script_changes", lambda base, head, changed, root=None: [])
+    monkeypatch.setattr(checks, "changed_files", lambda base, head="HEAD", only=None: [] if only else ["backend/x.py"])
+    monkeypatch.setattr(checks, "DependencyMap", lambda root: "graph")
+    monkeypatch.setattr(checks, "factory_plan", lambda event, changed, own_inputs=False: {"run": False, "shards": []})
+    monkeypatch.delenv("GITHUB_OUTPUT", raising=False)
+    monkeypatch.delenv("GITHUB_STEP_SUMMARY", raising=False)
+    timings = tmp_path / "durations.json"
+    timings.write_text(
+        json.dumps({**{name: 25800 / 930 for name in files}, **{f"ui/tests/{n}.cjs": 60 for n in names}})
+    )
+
+    def fake_selection(changed, event, base=None, added=None, graph=None):
+        empty = {"caddy": False, "contracts": False, "conformance": False, "rust": []}
+        return {**empty, "python": list(files), "browser": list(names), "reason": "measured", "uncertain": []}
+
+    def fake_narrow(picked, changed, event, added=None, graph=None):
+        mode = checks.NARROW[event]
+        record = {
+            "event": event,
+            "depth": mode["depth"],
+            "shards": mode["shards"],
+            "budget_seconds": checks.narrow_budget(mode["shards"]),
+            "smoke": False,
+            "smoke_unless_capped": [],
+            "left_transitive": [],
+            "tier": {name: 2 for name in picked["python"]},
+        }
+        return {**picked, "narrow": record}
+
+    monkeypatch.setattr(checks, "selection", fake_selection)
+    monkeypatch.setattr(checks, "narrow", fake_narrow)
+    plan = checks.prepare(event, "base", tmp_path / "plan.json", timings, light=light)
+    python = [job for job in plan["matrix"]["include"] if job["suite"].startswith("python-")]
+    browser = [job for job in plan["matrix"]["include"] if job["suite"].startswith("browser-")]
+    assert python and browser and len(python) <= checks.MAX_JOBS
+    if light:
+        # The narrowed plan caps its VMs at the event's shards, and never runs more than that many.
+        assert len(python) <= checks.NARROW[event]["shards"]
+    else:
+        assert len(python) == checks.job_count(25800, "python")
+    loads = plan["estimated_seconds"]
+    python_loads, browser_loads = loads[: len(python)], loads[len(python) :]
+    margin = 30  # a file's worth of one-worker time on each worker: files are whole
+    assert max(python_loads) / checks.WORKERS + checks.SETUP_SECONDS["python"] <= checks.JOB_SECONDS + margin
+    assert max(browser_loads) / checks.WORKERS + checks.SETUP_SECONDS["browser"] <= checks.JOB_SECONDS + margin
+    assert plan["job_target_seconds"] == checks.JOB_SECONDS
+    assert all(seconds <= checks.JOB_SECONDS + margin for seconds in [s / checks.WORKERS + 150 for s in python_loads])
+
+
+def test_release_factory_legs_plan_under_the_target_with_setup_on_top():
+    # Release validation runs seeds 1-3 in twelve legs (ci.yml: --shard K/12). Each leg's planned tests, its setup on top
+    # (about 40 s of checkout and install), stay under the 330 s target, and a leg is never more than one scenario over.
+    from evals.factory import run as factory
+    from scripts import pr_checks as checks
+
+    seconds = factory.timings()
+    pairs = [(name, seed) for seed in (1, 2, 3) for name in sorted(seconds)]
+    legs = 12
+    groups = [factory.pack(pairs, legs, seconds)[index] for index in range(legs)]
+    assert sorted(pair for group in groups for pair in group) == sorted(pairs)
+    setup = 40
+    for group in groups:
+        planned = sum(seconds[name] for name, _ in group) / factory.REMOTE_CPUS
+        assert planned + setup <= checks.JOB_SECONDS + max(seconds.values()) / factory.REMOTE_CPUS
+
+
+def test_a_contracts_lane_whose_measured_files_overrun_is_split_and_warned(tmp_path, monkeypatch, capsys):
+    # The three release contracts can carry measured seconds (their own slow tests). Files are whole, so each file gets
+    # its own timed VM, named contracts-N and run with -m slow; a single file past one VM's work is warned, not hidden.
+    picked = {"python": [], "browser": [], "caddy": False, "conformance": False, "rust": [], "contracts": True}
+    monkeypatch.setattr(checks, "selection", lambda *a, **kw: dict(picked))
+    monkeypatch.setattr(checks, "changed_files", lambda *a, **kw: [])
+    monkeypatch.setattr(checks, "collect", Counter)
+    timings = tmp_path / "durations.json"
+    timings.write_text(json.dumps({name: 500.0 for name in checks.CONTRACT_TESTS}))
+    plan = checks.prepare("pull_request", "base", tmp_path / "plan.json", timings_path=timings)
+    jobs = [job for job in plan["matrix"]["include"] if job["suite"].startswith("contracts")]
+    assert [job["suite"] for job in jobs] == ["contracts-1", "contracts-2", "contracts-3"]
+    assert sorted(sum((job["files"] for job in jobs), [])) == sorted(checks.CONTRACT_TESTS)
+    assert "::warning::" not in capsys.readouterr().out
+    assert set(plan["estimated_seconds"]) <= {0.0}  # the contracts VMs do not change the python and browser loads
+    timings.write_text(json.dumps({name: 1000.0 for name in checks.CONTRACT_TESTS}))  # 400 s a VM: past the target
+    checks.prepare("pull_request", "base", tmp_path / "plan.json", timings_path=timings)
+    assert "::warning::A contracts VM is planned for 400s" in capsys.readouterr().out

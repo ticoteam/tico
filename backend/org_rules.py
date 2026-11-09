@@ -787,6 +787,10 @@ def settings_for(c, bot, ctx=None):
             {"text": f"{more} more task limits", "source": "task_caps", "edit": {"page": "bot", "anchor": "tasks"}}
         )
 
+    from . import ci_runs
+
+    out.extend(ci_runs.sentences(c))
+
     out.append(
         {
             "text": f"At most {HD.UNSOLICITED_PER_DAY} unasked messages a day to each person",

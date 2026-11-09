@@ -74,10 +74,11 @@ def _noop() -> None:
     return None
 
 
-def fill(call: Call, write: Write, later: Callable[[], None] = _noop) -> None:
+def fill(call: Call, write: Write, later: Callable[[], None] = _noop, reviewer: str = "human:ana") -> None:
     """The Directory's rows through `call(method, path, body)` (the API as a person) and `write(work)` (a transaction, for
     the shared places), so the demo and the browser tests' real hub (evals/redesign/seeds.py) start from the same rows.
-    `later` moves the clock between a person's first title and the current one."""
+    `later` moves the clock between a person's first title and the current one. `reviewer` reviews the rules' escalations:
+    a person of the hub the rows go into."""
     me, place = write(_places)
     call(
         "POST",
@@ -125,7 +126,7 @@ def fill(call: Call, write: Write, later: Callable[[], None] = _noop) -> None:
                 "who": {"everyone": True},
                 "toward_scope": [f"entity:{orgs[domain]}"],
                 "if_broken": broken,
-                "reviewer": "human:ana",
+                "reviewer": reviewer,
             },
         )
     call(

@@ -787,8 +787,8 @@ function goalTreeShape(): {byParent: Record<string, GkTreeNode[]>} {
   // out (orgTreeWithHelpers), so the Heads and groups the server hangs under it show under the owner, as on the sidebar.
   const placed = bots.filter(e => !isHelperBot(e) || e.id === 'goal-manager');
   const keys = new Set([...(S.orgGroups || []).map(g => 'g:' + g.id), ...people.map(p => 'p:' + p.id), ...placed.map(e => 'b:' + e.id)]);
-  const byParent: Record<string, GkTreeNode[]> = {}, groupOf = orgGroupOf(people, placed);
-  const put = (parent: string, node: GkTreeNode) => (byParent[keys.has(parent) ? parent : ''] ||= []).push(node);
+  const byParent: OrgByParent = {}, groupOf = orgGroupOf(people, placed);
+  const put = (parent: string, node: OrgNode) => (byParent[keys.has(parent) ? parent : ''] ||= []).push(node);
   for (const g of (S.orgGroups || [])) put(orgGroupParent(g, keys), {kind: 'group', id: g.id, name: g.name, order: g.order || 0});
   for (const p of people) put(orgHang('p:' + p.id, orgBossKey({kind: 'person', person: p}), groupOf), {kind: 'person', id: p.id, person: p});
   for (const e of placed) {

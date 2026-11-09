@@ -14,7 +14,11 @@ const GR_ROUTE = '#/growth', GR_SOURCES = GR_ROUTE + '/sources', BRAND_ROUTE = '
 const GR_OLD_ROUTE = '#/strategy/growth', GTM_OLD_ROUTE = '#/strategy/gtm';
 // The Tasks page's Marketing board (backend/marketing_tasks.py: the task type `idea`), one channel's tasks with `slug`.
 const grBoardHref = (slug = '') => `${TASKS}?view=board&type=idea&who=all${slug ? '&tag=' + encodeURIComponent('channel:' + slug) : ''}`;
-let GR = null;            // the open Growth page: {load, sub, month}, and Sources' {data}
+// The Sources list as the server answers it (GET /api/v2/growth/sources): one row per source of a truth.
+interface GrSource { id: string; truth_for: string; system: string; reach_kind: string; reach_ref?: string | null; may: string; owner_ref: string | null; retired_at?: string | null }
+interface GrSourcesData { src: GrSource[]; conflicts: string[]; may: boolean }
+interface GrState { load: number; sub: string; month: string; data: GrSourcesData | null }
+let GR: GrState | null = null;            // the open Growth page: {load, sub, month}, and Sources' {data}
 let GR_LOAD = 0;
 const GR_STAGES = [['reach', 'Reach'], ['acquire', 'Acquire'], ['activate', 'Activate'], ['retain', 'Retain'], ['refer', 'Refer']];
 const GR_CH_STAGE = {idea: 'Idea', testing: 'Testing', scaling: 'Scaling', paused: 'Paused'};
@@ -52,7 +56,7 @@ const grKpiVal = k => k?.latest == null ? '—' : kpiNum(k.latest, k.unit);
 const grTaskHref = id => '#/task/' + encodeURIComponent(id);
 const grGoalHref = id => `${GR_GOALS}?kpi=${encodeURIComponent(id)}`;
 const grFail = e => `<p class="muted gr-note">${esc(e?.status === 403 ? 'Not in your view.' : e?.message || 'Did not load.')}</p>`;
-const grOpts = (pairs, value, blank = '') => (blank !== null ? `<option value="">${esc(blank)}</option>` : '')
+const grOpts = (pairs, value, blank: string | null = '') => (blank !== null ? `<option value="">${esc(blank)}</option>` : '')
   + pairs.map(([v, l]) => `<option value="${esc(v)}"${String(v) === String(value ?? '') ? ' selected' : ''}>${esc(l)}</option>`).join('');
 // A segmented switch: [[value, label]], the chosen one aria-checked.
 const grSeg = (name, label, options, value) => `<div class="theme-seg gr-seg" role="radiogroup" aria-label="${esc(label)}" data-gr-seg="${esc(name)}">${options.map(([v, l]) =>
@@ -81,7 +85,7 @@ function grRetireButton(btn, dlg, path, after) {
 
 // A small dialog: a title, a form, Cancel and the primary button (none, and Close, with no `saveLabel`). `onSave(form)`
 // throws to show an error.
-function grDialog(title, body, saveLabel, onSave) {
+function grDialog(title: string, body: string, saveLabel: string | null | undefined, onSave: (form: HTMLFormElement) => unknown) {
   document.querySelectorAll('dialog.gr-dlg').forEach(d => d.close());
   const dlg = document.createElement('dialog');
   dlg.className = 'tmodal gr-dlg';
@@ -105,7 +109,7 @@ function grDialog(title, body, saveLabel, onSave) {
   form.querySelector('input:not([type=hidden]):not([type=checkbox]),select,textarea')?.focus();
   return dlg;
 }
-const grChecks = (name, pairs, on = []) => `<div class="gr-checks" role="group">${pairs.map(([v, l]) =>
+const grChecks = (name: string, pairs, on: string[] = []) => `<div class="gr-checks" role="group">${pairs.map(([v, l]) =>
   `<label class="gr-check"><input type="checkbox" name="${esc(name)}" value="${esc(v)}"${on.includes(v) ? ' checked' : ''}>${esc(l)}</label>`).join('')}</div>`;
 const grChecked = (form, name) => [...form.querySelectorAll(`input[name="${CSS.escape(name)}"]:checked`)].map(i => i.value);
 

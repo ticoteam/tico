@@ -25,6 +25,10 @@ def _load(name):
 SPEC = _load("actions.json")
 ROLES = _load("roles.json")["roles"]
 TEMPLATES = {role["slug"] for role in ROLES}
+# The built-in helpers (required cards, kind: helper): not on the setup page's list, but a chart seat can hold one (the
+# Finance Owner is the Bookkeeper). `roles.json` has them under "helpers" from the build on.
+HELPERS = _load("roles.json").get("helpers", [])
+HELPER_TEMPLATES = {role["slug"] for role in HELPERS}
 # Seats the company models place before Tico has a template for them: "No bot yet", and a person can hold one.
 SEATS = _load("seats.json")["seats"]
 OPEN_SEATS = {seat["slug"] for seat in SEATS}
@@ -79,7 +83,8 @@ BOT_FIELDS = (
 )
 # `team` is the name of the group a bot or seat goes in when the file is imported (backend/company_import.py). Absent or
 # blank, the group is the one its template belongs to, as it always was.
-BOT_OPTIONAL = ("isNew", "reports_to", "first_job", "person", "team")
+# `live` is true for a chart seat that starts with a bot at setup: the bot fills the seat (backend/company_import.py).
+BOT_OPTIONAL = ("isNew", "reports_to", "first_job", "person", "team", "live")
 PERSON_FIELDS = ("id", "name", "role", "dept", "owner")
 # A goal's measure, as the page keeps it (format 0.2): up or down toward a target by a deadline, or a range to stay in.
 # `measure` "" is not set yet.
@@ -314,7 +319,7 @@ def _bot(raw, at):
         raise DraftError(field + ".dept is not a department")
     if bot["existing"] and bot["runtime"] not in HARNESSES:
         raise DraftError(field + ".runtime is not an agent Tico knows")
-    if not bot["existing"] and bot["template"] not in TEMPLATES | OPEN_SEATS:
+    if not bot["existing"] and bot["template"] not in TEMPLATES | OPEN_SEATS | HELPER_TEMPLATES:
         raise DraftError(field + ".template is not one of Tico's role templates")
     if raw.get("reports_to") is not None:
         bot["reports_to"] = _id(raw["reports_to"], field + ".reports_to")
@@ -322,6 +327,8 @@ def _bot(raw, at):
         bot["person"] = _id(raw["person"], field + ".person")
     if raw.get("first_job") and not bot["existing"]:
         bot["first_job"] = _text(raw["first_job"], field + ".first_job", LIMITS["first_job"])
+    if raw.get("live") is not None:
+        bot["live"] = _bool(raw["live"], field + ".live")
     if raw.get("team") is not None:
         team = _text(raw["team"], field + ".team", LIMITS["team"]).strip()
         if team:
