@@ -23,6 +23,8 @@ if TYPE_CHECKING:
 
 Row = dict[str, Any]
 MODES = ("move", "spawn")
+# When a spawn files: as its card leaves the stage (the default, every spawn so far) or as a card enters it (Lead's Qualified).
+FIRES = ("leave", "enter")
 COLUMNS = "id, from_pipeline_id, from_pipeline_stage_id, to_pipeline_id, mode, return_stage_id, created_by, created_at"
 LINK_LIMIT = 200  # links per page; a page also stays under LINK_BYTES, as the audit list does
 LINK_BYTES = 262_144
@@ -35,10 +37,10 @@ def _rows(conn: sqlite3.Connection, sql: str, args: "tuple[Any, ...]" = ()) -> l
 
 
 def link_for_stage(conn: sqlite3.Connection, pipeline_stage_id: str) -> Row | None:
-    """The live link that leaves this stage, or None."""
+    """The live link that leaves this stage, or None. Its `fires` is included for the engine; it is not in COLUMNS."""
     found = _rows(
         conn,
-        f"SELECT {COLUMNS} FROM pipeline_links WHERE from_pipeline_stage_id = ? AND retired_at IS NULL",
+        f"SELECT {COLUMNS}, fires FROM pipeline_links WHERE from_pipeline_stage_id = ? AND retired_at IS NULL",
         (pipeline_stage_id,),
     )
     return found[0] if found else None
@@ -99,12 +101,17 @@ def create_link(
     to_pipeline_id: str,
     mode: str = "move",
     return_stage_id: str | None = None,
+    fires: str = "leave",
 ) -> Row:
     """Link a stage to another pipeline. Refused (rule "link"): a mode that is not move or spawn, a stage or pipeline that
     is not there, a link to its own pipeline, a stage that already has a live link out (that would branch), a target with no
     stage to enter, and anyone who may not edit the from-pipeline's rules."""
     if mode not in MODES:
         H.refuse(conn, actor, "link", "A link moves a ticket or spawns one")
+    if fires not in FIRES:
+        H.refuse(conn, actor, "link", "A link fires when a card leaves its stage or enters it")
+    if fires == "enter" and mode != "spawn":
+        H.refuse(conn, actor, "link", "Only a spawn link can fire when a card enters its stage")
     stage = pipeline_engine.stage(conn, from_stage_id)
     if stage is None:
         H.refuse(conn, actor, "link", "No such stage")
@@ -128,8 +135,8 @@ def create_link(
     link_id = cast(str, H.new_id())
     conn.execute(
         "INSERT INTO pipeline_links (id, from_pipeline_id, from_pipeline_stage_id, to_pipeline_id, mode, "
-        "return_stage_id, created_by, created_at, retired_at) VALUES (?,?,?,?,?,?,?,?,NULL)",
-        (link_id, stage["type_id"], from_stage_id, to_pipeline_id, mode, return_stage_id, actor, H.now()),
+        "return_stage_id, created_by, created_at, retired_at, fires) VALUES (?,?,?,?,?,?,?,?,NULL,?)",
+        (link_id, stage["type_id"], from_stage_id, to_pipeline_id, mode, return_stage_id, actor, H.now(), fires),
     )
     H.event(conn, actor, "pipeline_link.create", link_id, {"from": from_stage_id, "to": to_pipeline_id, "mode": mode})
     return _rows(conn, f"SELECT {COLUMNS} FROM pipeline_links WHERE id = ?", (link_id,))[0]

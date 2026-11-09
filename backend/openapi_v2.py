@@ -7183,6 +7183,10 @@ SCHEMAS['TaskType']['properties'].update(
             "the pipeline's owner or an Admin (backend/pipeline_rights.py)",
         },
         'manager': {'type': ['string', 'null']},
+        'manager_seat': {
+            'type': ['string', 'null'],
+            'description': 'The open seat whose hire makes this pipeline\'s manager (read-only; set by the setup binding)',
+        },
         'role': {
             'type': ['string', 'null'],
             'enum': ['product-roadmap', 'engineering', None],

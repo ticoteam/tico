@@ -1004,6 +1004,9 @@ def onboard(c, who, onboarding, row, card, slug, *, name, description, instructi
         "UPDATE seats SET closed_at=?,closed_by=?,filled_by=?,updated_at=?,updated_by=? WHERE id=?",
         (now, who.actor, slug, now, who.actor, row["id"]),
     )
+    from . import pipeline_setup  # a pipeline bound to this seat takes the new bot as its manager
+
+    pipeline_setup.seat_filled(c, who.actor, row["id"], slug)
     # Seats that reported to this one move under the bot that fills it, rather than under a closed seat.
     c.execute(
         "UPDATE seats SET reports_to=?,updated_at=?,updated_by=? WHERE reports_to=? AND closed_at IS NULL",

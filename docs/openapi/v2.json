@@ -79595,6 +79595,13 @@
               "null"
             ]
           },
+          "manager_seat": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The open seat whose hire makes this pipeline's manager (read-only; set by the setup binding)"
+          },
           "role": {
             "type": [
               "string",
