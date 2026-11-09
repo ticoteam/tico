@@ -304,7 +304,7 @@ const serverReleaseTag = () => {
 // The container name follows from the code, so the commands of one Add computer agree with each other.
 // It starts with a letter or digit: install.sh and install-wsl.ps1 accept no other first character for --name.
 const runnerName = (code: string) => `${String(S.config?.compose_project || 'tico').toLowerCase().replace(/[^a-z0-9-]/g, '-').replace(/^-+/, '').slice(0, 20) || 'tico'}-${String(code).toLowerCase().replace(/[^a-z0-9]/g, '').slice(0, 8) || 'computer'}`;
-function dockerRunnerCommands(code: string, label: string, runtime: string | undefined, kind = 'linux'): ([string, string] | null)[] {
+function dockerRunnerCommands(code: string, label: string, runtime: string | undefined, kind = 'linux'): [[string, string], [string, string] | null, [string, string]] {
   const tag = serverReleaseTag(), quoted = `"${shellSafe(label)}"`;
   const installer = tag ? `https://github.com/ticoteam/tico/releases/download/${tag}/install.sh`
                         : 'https://github.com/ticoteam/tico/releases/latest/download/install.sh';

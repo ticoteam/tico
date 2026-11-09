@@ -47,15 +47,13 @@ interface OBResult {
 // A card of the wizard's catalog state (ui/app/catalog.ts): what a bot is created from.
 interface OBCatalogCard extends CatalogCard {
   slug: string;
-  template: string;
+  template?: string;
   kind?: string;
   required?: boolean;
   name?: string;
   summary?: string;
   icon?: string;
 }
-// The wizard's catalog (catalog.ts CatalogState), its cards read as this page reads them.
-type OBCatalog = CatalogState<OBCatalogCard>;
 interface OBOrg {
   loaded: boolean;
   loading: Promise<void> | null;
@@ -80,20 +78,8 @@ interface OBOrg {
   more: Set<string>;
   touched: boolean;
 }
-interface OBRecord {
-  answers: {software_product?: string; departments?: string[]; briefings?: Record<string, string>};
-  home?: string;
-  selected?: unknown;
-}
-// The wizard's state (`ONB`, ui/app/welcome.js), as this page reads it.
-interface OBState {
-  org: OBOrg;
-  catalog: OBCatalog;
-  record: OBRecord & FrRecord;
-  steps: string[];
-  step: number;
-  providers: FrProviders | null;
-}
+// The wizard's state (`ONB`, ui/app/welcome.ts OnbState).
+type OBState = OnbState;
 
 const OB_ICONS = {goal: 'flag', go: 'arrow_forward', why: 'auto_awesome', edit: 'edit', chart: 'account_tree',
                   bot: 'smart_toy', expand: 'expand_more'};

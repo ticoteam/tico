@@ -6,7 +6,7 @@
 interface OnbNames { company_name: string; app_name: string; assistant_name: string; owner_name: string; team_domain: string; website: string }
 interface OnbAnswers {
   building: string; what_we_do: string; customers: string; team_size: string; work_arrives: string[]; repetitive_work: string;
-  software_product: string; departments: string[]; briefings: Record<string, unknown>;
+  software_product: string; departments: string[]; briefings: Record<string, string>;
   /** An earlier release's answer: dropped when the record loads. */
   never_without_person?: unknown;
 }

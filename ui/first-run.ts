@@ -5,10 +5,7 @@
    ui/app/welcome.ts and ui/app/catalog.ts. */
 'use strict';
 
-// The wizard's state (ui/app/welcome.ts: ONB) as this screen reads it. The catalog is ui/app/catalog.ts's catalogState.
-interface FrProviders { preset?: string; enabled?: string[]; providers?: {id: string; label?: string}[] }
-interface FrRecord { home?: string; bots?: FrBot[]; machine?: {runners?: unknown[]} | null; completed?: boolean }
-// The wizard's state (ONB, ui/app/welcome.ts): the one org-builder.ts reads too.
+// The wizard's state (ONB, ui/app/welcome.ts): the one org-builder.ts reads too. The catalog is ui/app/catalog.ts's catalogState.
 type FrState = OBState;
 /** A bot row as the setup screen reads it: the record's bots and the roster rows the chart uses. */
 interface FrBot extends Employee {
