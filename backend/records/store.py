@@ -25,7 +25,7 @@ CREATE TABLE IF NOT EXISTS items (
   created_at TEXT NOT NULL, created_by_id TEXT NOT NULL, updated_at TEXT, updated_by_id TEXT);
 
 CREATE TABLE IF NOT EXISTS projects (
-  id TEXT PRIMARY KEY, name TEXT NOT NULL, customer_id TEXT REFERENCES fin_contacts(id),
+  id TEXT PRIMARY KEY, name TEXT NOT NULL, customer_id TEXT REFERENCES entities(id),
   status TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open','closed')), archived_at TEXT,
   created_at TEXT NOT NULL, created_by_id TEXT NOT NULL, updated_at TEXT, updated_by_id TEXT);
 

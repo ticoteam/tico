@@ -3,8 +3,8 @@ still has the seed's stage names (Approved, Building, Shipped) or pipeline_setup
 Done). Setup keeps the stage ids, so the sync finds each stage by its id or by either name."""
 
 from backend import hubdb as H
-from backend import pipeline_setup, roadmap_flow
-from backend.tests.helpers.pipeline_foundation import ANA, boot, hub, step_id
+from backend import pipeline_review, pipeline_setup, roadmap_flow
+from backend.tests.helpers.pipeline_foundation import ANA, boot, hub, step_id  # noqa: F401
 
 T = "2026-11-07T09:00:00.000000Z"
 
@@ -34,6 +34,26 @@ def card_in(c, stage_name, stage_id=None):
     product = roadmap_flow.role_type(c, roadmap_flow.PRODUCT)
     step = stage_id or step_id(c, product, stage_name)
     row = H.task_create(c, ANA, "Dark mode", "", ANA, type=product, step=step, lint=False)
+    c.commit()
+    return row["id"]
+
+
+def card_past_spec(c):
+    """A Product card in Review while its requirements are live: made at Ideas, moved to Specifying, its Spec page met by the
+    owner, then moved on, as a real card is."""
+    product = roadmap_flow.role_type(c, roadmap_flow.PRODUCT)
+    specifying = step_id(c, product, "Specifying")
+    row = H.task_create(c, ANA, "Dark mode", "", ANA, type=product, lint=False)
+    c.commit()
+    H.task_update(c, ANA, row["id"], step=specifying, mover=True)
+    c.commit()
+    spec_page = c.execute(
+        "SELECT id FROM stage_requirements WHERE pipeline_stage_id = ? AND name = 'Spec page' AND retired_at IS NULL",
+        (specifying,),
+    ).fetchone()[0]
+    pipeline_review.mark_met(c, ANA, row["id"], spec_page, "Spec page written in the test")
+    c.commit()
+    H.task_update(c, ANA, row["id"], step=step_id(c, product, "Review"), mover=True)
     c.commit()
     return row["id"]
 
@@ -89,7 +109,7 @@ def test_after_setup_a_card_follows_its_shipped_ticket_to_done(tmp_path):
 
 def test_after_setup_with_requirements_live_the_legacy_sync_moves_nothing(tmp_path):
     c = setup_ran(tmp_path)
-    card = card_in(c, "Review")
+    card = card_past_spec(c)
     task = ticket(c, card, "Todo")
     move(c, task, "Doing")
     assert stage_of(c, card) == "Review"

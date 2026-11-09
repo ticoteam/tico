@@ -12,7 +12,7 @@ import pytest
 
 from backend.config import Settings
 from backend.store import Store
-from backend.tests.helpers.directory_tables_migration import FIXTURE, SAMPLE
+from backend.tests.helpers.directory_tables_migration import FIXTURE, SAMPLE, copy_of  # noqa: F401
 
 MIGRATION = Path(__file__).resolve().parents[1] / "migrations" / "20261108044824_directory_rules.py"
 NOW = "2026-10-01T00:00:00Z"
@@ -25,8 +25,9 @@ def _load():
     return module
 
 
-def _hub(tmp_path):
-    path = tmp_path / "hub.db"
+def _hub(directory):
+    directory.mkdir(parents=True, exist_ok=True)
+    path = directory / "hub.db"
     conn = sqlite3.connect(path)
     conn.executescript(FIXTURE.read_text())
     conn.close()
@@ -35,6 +36,23 @@ def _hub(tmp_path):
     conn.close()
     Store(Settings(db_path=path)).initialize(seed_market=False)
     return path
+
+
+def test_one_boot_and_each_case_migrates_its_own_copy(tmp_path, subtests):
+    """The hub boots once (half a minute or more on CI); each case gets its own copy of the booted file and builds its
+    own pre-migration state on it, as a boot of its own would have given it."""
+    booted = _hub(tmp_path / "booted")
+    fresh = lambda name: copy_of(booted, tmp_path / name / "hub.db")  # noqa: E731
+    with subtests.test("rule sources move onto entities"):
+        _rule_sources_move_onto_entities(fresh("moved"))
+    for case in CANNOT_PLACE:
+        name, kind, setup = case.values
+        with subtests.test("a name it cannot place gets its own organization: " + case.id):
+            _a_name_it_cannot_place_gets_its_own_organization_and_startup_goes_on(
+                fresh(setup.__name__), name, kind, setup
+            )
+    with subtests.test("a fresh hub has the rule columns and no rule sources"):
+        _a_fresh_hub_has_the_rule_columns_and_no_rule_sources(fresh("fresh"))
 
 
 def _before(conn):
@@ -71,8 +89,8 @@ def _columns(conn, table):
     return {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
 
 
-def test_rule_sources_move_onto_entities(tmp_path):
-    conn = sqlite3.connect(_hub(tmp_path), isolation_level=None)
+def _rule_sources_move_onto_entities(path):
+    conn = sqlite3.connect(path, isolation_level=None)
     conn.execute("UPDATE entities SET self = 1 WHERE id = 'company/acme'")
     _before(conn)
     conn.executemany(
@@ -161,16 +179,15 @@ def _company_oakridge(conn):
     _organization(conn, "organization/oakridge", "Oakridge", kind="company")
 
 
-@pytest.mark.parametrize(
-    ("name", "kind", "setup"),
-    [
-        pytest.param("Acme Lights", "vendor", _self, id="a name that is the company itself"),
-        pytest.param("Hooli", "vendor", _two_hoolis, id="a name two organizations carry"),
-        pytest.param("Oakridge", "government", _company_oakridge, id="a government whose one match is a company"),
-    ],
+CANNOT_PLACE = (
+    pytest.param("Acme Lights", "vendor", _self, id="a name that is the company itself"),
+    pytest.param("Hooli", "vendor", _two_hoolis, id="a name two organizations carry"),
+    pytest.param("Oakridge", "government", _company_oakridge, id="a government whose one match is a company"),
 )
-def test_a_name_it_cannot_place_gets_its_own_organization_and_startup_goes_on(tmp_path, name, kind, setup):
-    conn = sqlite3.connect(_hub(tmp_path), isolation_level=None)
+
+
+def _a_name_it_cannot_place_gets_its_own_organization_and_startup_goes_on(path, name, kind, setup):
+    conn = sqlite3.connect(path, isolation_level=None)
     _before(conn)
     conn.execute(
         "INSERT INTO rule_sources (id, name, kind, created_by, created_at) VALUES ('src-ambiguous', ?, ?, 'human:jane', ?)",
@@ -191,8 +208,8 @@ def test_a_name_it_cannot_place_gets_its_own_organization_and_startup_goes_on(tm
     assert "rule_sources" not in {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
 
 
-def test_a_fresh_hub_has_the_rule_columns_and_no_rule_sources(tmp_path):
-    conn = sqlite3.connect(_hub(tmp_path))
+def _a_fresh_hub_has_the_rule_columns_and_no_rule_sources(path):
+    conn = sqlite3.connect(path)
     try:
         assert "rule_sources" not in {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
         columns = _columns(conn, "org_rules")

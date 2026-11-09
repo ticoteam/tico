@@ -267,11 +267,16 @@ which does not start its own open work. A sweep every 10 minutes wakes at most 2
 and five per computer. It skips a bot that is paused, held, draining, busy with another run, or whose computer is offline.
 A task is resumed at most six times a day.
 
+A bot's Dev ticket in review at a check step (Review 1, Review 2, In QA) is resumed the same way once its check is
+over: the builder owns the next move (merge once CI is green, fix or re-run CI that failed or was cancelled, ask for the
+check again). It needs no check open or waiting for a free reviewer, no CI going and no merge queued on its pull request, and nothing changed on it or
+on a check under it for an hour.
+
 Progress is a status, step or owner change, a note, comment or message by the bot on the task, or a subtask or question
 filed under it. After three resumes in a row with no progress, Tico stops resuming the task and lists it once on the
 task roundup of the bot's manager (another bot on the org chart), or on the bot's own roundup when it has none. A person
-is never told. Progress makes the task eligible again. People's tasks, and tasks that are open, waiting or in review, are
-never resumed this way. **Automations → System jobs** lists the sweep as **Resume stranded work**.
+is never told. Progress makes the task eligible again. People's tasks, tasks that are open or waiting, and tasks in
+review anywhere but a check step are never resumed this way. **Automations → System jobs** lists the sweep as **Resume stranded work**.
 
 ## Work that is waiting
 
@@ -466,7 +471,9 @@ worktree holds, and people's tasks are never reopened this way.
 
 The task roundup leaves a task off its bot's list while the bot has a run queued or running on it, or while the task
 waits on something recorded: a blocker, an open subtask, a pending approval, an unanswered question, a due date, a
-snooze, a stored resume, a pull request link armed with `--wake-once` or a milestone wait. A bot whose profile has its
+snooze, a stored resume, a pull request link armed with `--wake-once` or a milestone wait. A task waiting only on
+bots is listed to the bot it waits on, except while that bot has a run queued or running on the subtask or blocker
+that holds it. A bot whose profile has its
 sweeps off (a reviewer, lead, responder or monitor) is listed only its unanswered questions and its own follow-up
 times. The Task Manager's stalled-task list does not use these skips, so a task no check lists
 still reaches its report.

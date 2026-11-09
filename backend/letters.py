@@ -776,6 +776,9 @@ class Letters:
                     raise Problem("forbidden", "Only the requester sends this letter", 403)
             if first["status"] == "quoted" and (first["error"] or first["quote_expires_at"] <= H.now()):
                 self.requote(ident)
+            with self.store.read() as c:
+                rules = self.rule_gate(who, get(c, self.auth, who, ident))
+            gate = None
             with self.store.transaction() as c:
                 company, own, mode = authorize(c, self.auth, who)
                 row = get(c, self.auth, who, ident)
@@ -787,14 +790,41 @@ class Letters:
 
                 task_privacy.guard_write(c, who, "/api/v2/letters/" + ident + "/send", self.auth)
                 if row["status"] == "quoted":
-                    self.cap(c, row, company, own)
-                    if self.needs_approval(c, row, mode):
-                        self.ask(c, row)
-                    else:
-                        c.execute("UPDATE letters SET status='ready',next_sync_at=? WHERE id=?", (H.now(), ident))
-            self.process(ident)
+                    gate = rules(c) if rules else None
+                    if not (gate and gate["outcome"] == "held"):  # held: it stays quoted; the hold says whom to ask
+                        self.cap(c, row, company, own)
+                        if self.needs_approval(c, row, mode):
+                            self.ask(c, row)
+                        else:
+                            c.execute("UPDATE letters SET status='ready',next_sync_at=? WHERE id=?", (H.now(), ident))
+            if not (gate and gate["outcome"] == "held"):
+                self.process(ident)
             with self.store.read() as c:
-                return public(get(c, self.auth, who, ident))
+                out = public(get(c, self.auth, who, ident))
+            return {**out, **{k: gate[k] for k in ("held", "rule_warning") if k in gate}} if gate else out
+
+    def rule_gate(self, who, row):
+        """The org rule check of a bot's letter, before its write: the in-write half, or None when the sender is not a
+        bot (a person's own letter is not checked), as a bot's email (email_sending.rule_gate). The Directory's
+        structured rules decide it and fail closed: a letter they hold, or cannot check, is not sent. A Warn sends it
+        and tells the bot. When the check cannot be prepared, the structured rules still decide it inside the write."""
+        from . import org_rule_check as rules
+
+        found = rules.checked_as(who, self.store.settings.assistant_bot)
+        if not found or not H.is_bot(found[1]):
+            return None
+        try:
+            prep = rules.letter_prepare(self.store, self.app.state.judge, found, row)
+        except Exception as exc:  # noqa: BLE001  (the write below still decides it, and fails closed)
+            LOG.warning("The org rule check of a letter failed: %s", type(exc).__name__)
+            prep = None
+
+        def gate(c):
+            if prep is None:
+                return rules.letter_unprepared(c, found, row)
+            return rules.mail_decide(c, prep)
+
+        return gate
 
     def decided(self, aid):
         with self.store.read() as c:

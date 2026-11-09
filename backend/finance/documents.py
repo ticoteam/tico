@@ -24,6 +24,7 @@ from typing import Any, cast
 
 from ..records import reads as RR
 from . import budgeting, delivery, posting, shared
+from . import receipts as RCP
 from .context import Ctx
 from .core import ap as AP
 from .core import attribution as CA
@@ -2463,6 +2464,7 @@ def attach(ctx: Ctx, who: str, p: V.Payload) -> Plan:
         made = SAP.attach(ctx.c, ctx.book.id, kind, subject, files, who, ctx.at)
         if kind != "unmatched":
             SAP.drop_unmatched(ctx.c, ctx.book.id, files)
+        RCP.filed(ctx, who, kind, subject, files)  # receipts: an unmatched upload is read, a filed one is attached
         return {"subject_kind": kind, "subject_id": subject, "attachment_ids": made}
 
     return Plan(

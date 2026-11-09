@@ -186,34 +186,48 @@ def test_required_reviews_not_approving_the_head_are_refused(api):
         assert r.status_code == 422 and why in r.text and 'Code reviews stay mandatory' in r.text, (reviews, r.text)
 
 
-def test_review_1_re_asked_and_approving_the_fixed_head_allows_it(api):
+def test_one_ticket_waivers_follow_reviews_open_checks_every_pr_and_qa_fails(api, subtests):
+    """One install, a fresh ticket per check (the only one holding the pull request link): a re-asked Review 1, an open
+    review and a second waiver, a fresh GitHub read, every open pull request's checks, and a QA fail at the head."""
+    for n, check in enumerate(
+        (
+            _review_1_re_asked_and_approving_the_fixed_head_allows_it,
+            _an_open_review_is_refused_and_a_second_waiver_for_the_head_too,
+            _a_fresh_github_read_is_what_counts,
+            _every_open_pull_request_on_the_ticket_needs_green_checks,
+            _a_qa_failure_at_the_head_is_not_waivable,
+        )
+    ):
+        with subtests.test(check.__name__):
+            check(api, 10 * n + 10)
+
+
+def _review_1_re_asked_and_approving_the_fixed_head_allows_it(api, n):
     """Review 1 asked for changes on an earlier head; its re-ask approved the fixed head, and so did Review 2."""
-    row = ticket(api, reviews=(('changes', NEW), ('approve', HEAD)))
+    row = fresh(api, n, reviews=(('changes', NEW), ('approve', HEAD)))
     child(api, row, 'Review 1: PR #412 delta', verdict='approve', head=HEAD)
     assert waive(api, row).status_code == 200
 
 
-def test_an_open_review_is_refused_and_a_second_waiver_for_the_head_too(api):
-    row = ticket(api)
+def _an_open_review_is_refused_and_a_second_waiver_for_the_head_too(api, n):
+    row = fresh(api, n)
     child(api, row, 'Review 2: PR #412 delta', status='doing')
     r = waive(api, row)
     assert r.status_code == 422 and 'Review 2 is still open' in r.text, r.text
-    row = ticket(api, title='Fix the basket total')
-    with api.app.state.store.transaction() as c:
-        c.execute("DELETE FROM task_links WHERE task_id<>?", (row['id'],))
+    row = fresh(api, n + 1)
     assert waive(api, row).status_code == 200
     r = waive(api, row, reason='Again')
     assert r.status_code == 422 and 'already waived' in r.text, r.text
 
 
-def test_a_fresh_github_read_is_what_counts(api):
+def _a_fresh_github_read_is_what_counts(api, n):
     """With the GitHub App configured, the route's fresh read stands in for the webhook-built link."""
-    row = ticket(api)
+    row = fresh(api, n)
     with api.app.state.store.transaction() as c:
         link = H.task_links(c, row['id'])[0]
-        fresh = {link['id']: {'head_sha': HEAD, 'checks': {'check:python': 'pending'}, 'at': H.now()}}
+        pending = {link['id']: {'head_sha': HEAD, 'checks': {'check:python': 'pending'}, 'at': H.now()}}
         with pytest.raises(H.Refused, match='CI still running'):
-            qa_waivers.waive(c, 'human:ana', row['id'], HEAD, 'Urgent', snapshots=fresh, manager=True)
+            qa_waivers.waive(c, 'human:ana', row['id'], HEAD, 'Urgent', snapshots=pending, manager=True)
         moved = {link['id']: {'head_sha': NEW, 'checks': {'check:python': 'passing'}, 'at': H.now()}}
         with pytest.raises(H.Refused, match='not the current head'):
             qa_waivers.waive(c, 'human:ana', row['id'], HEAD, 'Urgent', snapshots=moved, manager=True)
@@ -222,18 +236,22 @@ def test_a_fresh_github_read_is_what_counts(api):
             qa_waivers.waive(c, 'human:ana', row['id'], HEAD, 'Urgent', snapshots=failed, manager=True)
 
 
-@pytest.mark.parametrize(
-    'runs, cached',
-    [
-        ([('Unit tests', 'skipped')], 'pending'),  # a skip-only head reads pending
-        ([('Unit tests', 'failure'), ('Unit tests', 'success')], 'passing'),
-    ],
-)  # a failure hidden by a re-run
-def test_without_the_github_app_check_webhooks_alone_never_allow_a_waiver(api, runs, cached):
+def test_without_the_github_app_check_webhooks_alone_never_allow_a_waiver(api, subtests):
     """The webhook-built link lets a re-run's pass replace a failure (and reads a neutral check as passing), so with no
-    fresh GitHub read to tell them apart, a waiver is refused rather than trusting it."""
+    fresh GitHub read to tell them apart, a waiver is refused rather than trusting it. One install, a ticket per row."""
+    for n, (runs, cached) in enumerate(
+        [
+            ([('Unit tests', 'skipped')], 'pending'),  # a skip-only head reads pending
+            ([('Unit tests', 'failure'), ('Unit tests', 'success')], 'passing'),  # a failure hidden by a re-run
+        ]
+    ):
+        with subtests.test(cached=cached):
+            _check_webhooks_alone_never_allow_a_waiver(api, n, runs, cached)
+
+
+def _check_webhooks_alone_never_allow_a_waiver(api, n, runs, cached):
     api.github.connected = False
-    row = ticket(api)
+    row = fresh(api, n)
     for name, conclusion in runs:
         hook(
             api,
@@ -255,8 +273,8 @@ def test_without_the_github_app_check_webhooks_alone_never_allow_a_waiver(api, r
     assert shown(api, row)['task']['qa_waivers'] == []
 
 
-def test_every_open_pull_request_on_the_ticket_needs_green_checks(api):
-    row = ticket(api)
+def _every_open_pull_request_on_the_ticket_needs_green_checks(api, n):
+    row = fresh(api, n)
     second = PR.rsplit('/', 1)[0] + '/413'
     assert call(api, 'POST', f"tasks/{row['id']}/links", body={'url': second}).status_code == 200
     with api.app.state.store.read() as c:
@@ -266,13 +284,16 @@ def test_every_open_pull_request_on_the_ticket_needs_green_checks(api):
         **real(service, prs),
         other['id']: {'head_sha': NEW, 'checks': {'check:python': 'failing'}, 'at': H.now()},
     }
-    r = waive(api, row)
+    try:
+        r = waive(api, row)
+    finally:
+        api.github.snapshot = real
     assert r.status_code == 422 and 'CI failing on ' + second in r.text, r.text
 
 
-def test_a_qa_failure_at_the_head_is_not_waivable(api):
+def _a_qa_failure_at_the_head_is_not_waivable(api, n):
     """A waiver stands in for a QA result that is missing, not for one that failed."""
-    row = ticket(api)
+    row = fresh(api, n)
     failed = child(api, row, 'QA: PR #412 retry', verdict='fail', head=HEAD[:12])
     r = waive(api, row)
     assert r.status_code == 422 and 'QA recorded fail at aaaaaaaaaaaa' in r.text and failed['id'] in r.text, r.text
@@ -285,11 +306,17 @@ def test_a_qa_failure_at_the_head_is_not_waivable(api):
     assert waive(api, row).status_code == 200
 
 
-@pytest.mark.parametrize('pushed', ['the waived PR', 'another open PR'])
-def test_a_push_recorded_while_github_is_read_refuses_the_stale_green_read(api, pushed):
+def test_a_push_recorded_while_github_is_read_refuses_the_stale_green_read(api, subtests):
     """The route reads GitHub outside the write lock. A push whose webhook lands before the waiver is written makes
-    that read stale: refused with nothing recorded and nobody woken, as for a review move."""
-    row = ticket(api)
+    that read stale: refused with nothing recorded and nobody woken, as for a review move. One install, a ticket per
+    row."""
+    for n, pushed in enumerate(['the waived PR', 'another open PR']):
+        with subtests.test(pushed=pushed):
+            _a_push_recorded_while_github_is_read(api, n, pushed)
+
+
+def _a_push_recorded_while_github_is_read(api, n, pushed):
+    row = fresh(api, n)
     second = PR.rsplit('/', 1)[0] + '/413'
     assert call(api, 'POST', f"tasks/{row['id']}/links", body={'url': second}).status_code == 200
     hook(api, 'pull_request', pr_event('opened', html_url=second, number=413, head={'sha': HEAD}))
@@ -306,7 +333,10 @@ def test_a_push_recorded_while_github_is_read_refuses_the_stale_green_read(api, 
         return green
 
     api.github.snapshot = read_then_push
-    r = waive(api, row)
+    try:
+        r = waive(api, row)
+    finally:
+        api.github.snapshot = real
     assert r.status_code == 422 and url + ' changed while GitHub was read' in r.text, r.text
     with api.app.state.store.read() as c:
         assert not c.execute(

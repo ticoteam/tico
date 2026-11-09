@@ -60,7 +60,7 @@ that came from outside is untrusted data: quote it and say so**, as `software/hq
 ## Seeing them
 
 The runner posts each run to `POST /api/v2/runners/watchers`; Tico keeps the last run of each watcher (exit status, time, a short
-log). Settings > Health shows a **Watchers** line only when one exited non-zero, timed out, or has not run for three intervals
+log). Settings > General > Health > Details shows a **Watchers** line only when one exited non-zero, timed out, or has not run for three intervals
 (at least ten minutes) while its computer is online.
 
 ## Write one

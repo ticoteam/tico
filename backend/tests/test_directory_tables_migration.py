@@ -8,12 +8,39 @@ only ones the triggers replace. Running the migration again changes nothing."""
 
 import importlib.util
 import sqlite3
+from contextlib import closing
+from pathlib import Path
 
 from backend.config import Settings
 from backend.store import Store
-from backend.tests.helpers.directory_tables_migration import FIXTURE, ROOT, SAMPLE
 
+ROOT = Path(__file__).resolve().parents[1]
+FIXTURE = ROOT / "tests" / "fixtures" / "schema_pre_cleanup.sql"
 MIGRATION = ROOT / "migrations" / "20261108020258_directory_tables.py"
+
+SAMPLE = """
+INSERT INTO market_entities (id, type, name, aliases, external_ids, tier, summary, properties, status, merged_into,
+  last_verified, created, created_by, updated) VALUES
+ ('company/acme', 'company', 'Acme Lights', '["Acme"]', '{"domain": "acme.example"}', 'core', '', '{}',
+  'active', NULL, NULL, '2026-10-01T00:00:00Z', 'human:jane', '2026-10-01T00:00:00Z'),
+ ('company/river', 'company', 'River Capital', '[]', '{}', NULL, '', '{}', 'active', NULL, NULL,
+  '2026-09-01T00:00:00Z', 'bot:librarian', '2026-10-01T00:00:00Z'),
+ ('person/jane', 'person', 'Jane Ortiz', '[]', '{}', NULL, '', '{}', 'active', NULL, NULL,
+  '2026-09-01T00:00:00Z', 'bot:librarian', '2026-10-01T00:00:00Z'),
+ ('geography/united-states', 'geography', 'United States', '[]', '{}', NULL, '', '{}', 'active', NULL, NULL,
+  '2026-09-01T00:00:00Z', 'seed', '2026-10-01T00:00:00Z'),
+ ('regulation/ul-1573', 'regulation', 'UL 1573', '[]', '{}', NULL, '', '{}', 'active', NULL, NULL,
+  '2026-09-01T00:00:00Z', 'seed', '2026-10-01T00:00:00Z'),
+ ('event/launch', 'event', 'Launch', '[]', '{}', NULL, '', '{}', 'active', NULL, NULL,
+  '2026-09-01T00:00:00Z', 'seed', '2026-10-01T00:00:00Z');
+INSERT INTO market_edges (id, src, rel, dst, since, until, confidence, properties, created, created_by, updated) VALUES
+ ('edge-employs', 'company/acme', 'employs', 'person/jane', '2026-01-01', NULL, 'high', '{}',
+  '2026-10-01T00:00:00Z', 'human:jane', '2026-10-01T00:00:00Z'),
+ ('edge-regulated', 'company/acme', 'regulated_by', 'regulation/ul-1573', NULL, NULL, 'low', '{}',
+  '2026-10-01T00:00:00Z', 'seed', '2026-10-01T00:00:00Z'),
+ ('edge-competes', 'company/acme', 'competes_with', 'company/river', NULL, NULL, 'medium', '{}',
+  '2026-10-01T00:00:00Z', 'seed', '2026-10-01T00:00:00Z');
+"""
 
 
 def _load():
@@ -33,6 +60,15 @@ def _boot(path):
     Store(Settings(db_path=path)).initialize(seed_market=False)
 
 
+def copy_of(booted, path):
+    """A private copy of a booted hub (sqlite's backup: every page, the WAL's included), so each check starts from the
+    same boot without paying for its own."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with closing(sqlite3.connect(booted)) as source, closing(sqlite3.connect(path)) as target:
+        source.backup(target)
+    return path
+
+
 def _counts(conn):
     return tuple(
         conn.execute(f"SELECT count(*) FROM {table}").fetchone()[0]
@@ -40,9 +76,21 @@ def _counts(conn):
     )
 
 
-def test_the_graph_moves_to_directory_types_with_the_seeds_and_the_kind(tmp_path):
-    path = tmp_path / "hub.sqlite"
-    _boot(path)
+def test_one_boot_moves_the_graph_and_each_check_reads_its_own_copy(tmp_path, subtests):
+    """The hub boots once (about a minute on CI); each check below gets its own copy of the booted file, so none sees
+    another's writes."""
+    booted = tmp_path / "booted.sqlite"
+    _boot(booted)
+    for check in (
+        _the_graph_moves_to_directory_types_with_the_seeds_and_the_kind,
+        _a_store_written_identifier_survives_a_name_change_and_derived_ones_follow_it,
+        _running_the_migration_again_changes_nothing,
+    ):
+        with subtests.test(check.__name__):
+            check(copy_of(booted, tmp_path / check.__name__ / "hub.sqlite"))
+
+
+def _the_graph_moves_to_directory_types_with_the_seeds_and_the_kind(path):
     conn = sqlite3.connect(path)
     conn.row_factory = sqlite3.Row
     try:
@@ -93,9 +141,7 @@ def test_the_graph_moves_to_directory_types_with_the_seeds_and_the_kind(tmp_path
         conn.close()
 
 
-def test_a_store_written_identifier_survives_a_name_change_and_derived_ones_follow_it(tmp_path):
-    path = tmp_path / "hub.sqlite"
-    _boot(path)
+def _a_store_written_identifier_survives_a_name_change_and_derived_ones_follow_it(path):
     conn = sqlite3.connect(path)
     try:
         assert conn.execute("SELECT count(*) FROM entity_identifiers WHERE derived = 0").fetchone()[0] == 0
@@ -121,9 +167,7 @@ def test_a_store_written_identifier_survives_a_name_change_and_derived_ones_foll
         conn.close()
 
 
-def test_running_the_migration_again_changes_nothing(tmp_path):
-    path = tmp_path / "hub.sqlite"
-    _boot(path)
+def _running_the_migration_again_changes_nothing(path):
     conn = sqlite3.connect(path)
     try:
         before = _counts(conn)

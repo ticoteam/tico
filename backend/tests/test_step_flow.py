@@ -9,9 +9,15 @@ from backend.tests.helpers.github import PR, _suite, api, hook, pr_event  # noqa
 from backend.tests.helpers.verdict_moves import HEAD, NEW, builder_jobs, check, step, verdict
 
 
-@pytest.mark.parametrize(
-    'reviews,source,return_kind',
-    [
+def _only_pr_holder(c):
+    """A fold's rows share one install: the row's ticket is made the only task holding PR #412, so a webhook or a
+    check suite for it reaches no earlier row's ticket."""
+    c.execute("DELETE FROM task_links WHERE kind='pr'")
+
+
+def test_every_return_to_fixes_keeps_the_source_for_a_green_merge(api, subtests):
+    """One install, a board and ticket per row (the only one holding PR #412)."""
+    rows = [
         (2, 'Review 2', kind)
         for kind in (
             'failed_check',
@@ -20,16 +26,20 @@ from backend.tests.helpers.verdict_moves import HEAD, NEW, builder_jobs, check, 
             'manual_before_verdict',
             'manual_after_old_failure',
         )
-    ]
-    + [(2, 'Review 1', 'verdict_move')],
-)
-def test_every_return_to_fixes_keeps_the_source_for_a_green_merge(api, reviews, source, return_kind):
+    ] + [(2, 'Review 1', 'verdict_move')]
+    for n, (reviews, source, return_kind) in enumerate(rows):
+        with subtests.test(source=source, return_kind=return_kind):
+            _every_return_to_fixes_keeps_the_source_for_a_green_merge(api, n, reviews, source, return_kind)
+
+
+def _every_return_to_fixes_keeps_the_source_for_a_green_merge(api, n, reviews, source, return_kind):
     store = api.app.state.store
     with store.transaction() as c:
+        _only_pr_holder(c)
         typ = H.type_create(
             c,
             H.KEEPER,
-            'Merge after fixes',
+            f'Merge after fixes {n}',
             [
                 {'name': 'Build', 'status': 'doing', 'flow': {'after_green': 'merge'}},
                 *[
@@ -45,7 +55,7 @@ def test_every_return_to_fixes_keeps_the_source_for_a_green_merge(api, reviews, 
         task = H.task_create(
             c,
             'human:ana',
-            'Build messages',
+            f'Build messages {n}',  # titled apart: one install holds every row's ticket
             '',
             'bot:cpo',
             type=typ['id'],
@@ -141,9 +151,9 @@ def test_an_approval_return_uses_a_step_whose_failure_goes_elsewhere(api):
     assert [m['refs']['pr_head'] for m in builder_jobs(api) if m['refs'].get(V.HANDOFF) == 'merge'] == [NEW]
 
 
-@pytest.mark.parametrize(
-    'reviews,feedback,return_kind,pushed,source',
-    [
+def test_fixes_source_blocks_the_failed_head_until_a_new_commit(api, subtests):
+    """One install, a board and ticket per row (the only one holding PR #412)."""
+    rows = [
         (2, [('Review 2', HEAD)], 'verdict', False, 'Review 2'),
         (2, [('Review 2', HEAD)], 'manual', False, 'Review 2'),
         (2, [('Review 1', HEAD), ('Review 2', HEAD)], 'manual', False, 'Review 2'),
@@ -153,15 +163,20 @@ def test_an_approval_return_uses_a_step_whose_failure_goes_elsewhere(api):
         (1, [('Review 1', HEAD), ('Review 1', NEW)], 'manual', False, 'Review 1'),
         (2, [('Review 2', HEAD)], 'verdict', True, 'Review 2'),
         (2, [('Review 1', HEAD), ('Review 2', HEAD)], 'manual', True, 'Review 2'),
-    ],
-)
-def test_fixes_source_blocks_the_failed_head_until_a_new_commit(api, reviews, feedback, return_kind, pushed, source):
+    ]
+    for n, row in enumerate(rows):
+        with subtests.test(row=n, return_kind=row[2], source=row[4]):
+            _fixes_source_blocks_the_failed_head_until_a_new_commit(api, n, *row)
+
+
+def _fixes_source_blocks_the_failed_head_until_a_new_commit(api, n, reviews, feedback, return_kind, pushed, source):
     store = api.app.state.store
     with store.transaction() as c:
+        _only_pr_holder(c)
         typ = H.type_create(
             c,
             H.KEEPER,
-            'Feedback flow',
+            f'Feedback flow {n}',
             [
                 {'name': 'Build', 'status': 'doing', 'flow': {'after_green': 'QA'}},
                 *[
@@ -175,7 +190,9 @@ def test_fixes_source_blocks_the_failed_head_until_a_new_commit(api, reviews, fe
                 {'name': 'QA', 'status': 'review', 'flow': {'check': 'qa', 'on_pass': 'merge'}},
             ],
         )
-        task = H.task_create(c, 'human:ana', 'Build messages', '', 'bot:cpo', type=typ['id'], step='Build', lint=False)
+        task = H.task_create(
+            c, 'human:ana', f'Build messages {n}', '', 'bot:cpo', type=typ['id'], step='Build', lint=False
+        )
         link = H.task_link(c, 'human:ana', task['id'], PR)
         c.execute(
             "UPDATE task_links SET state='open',checks='passing',mergeable='clean',detail=? WHERE id=?",

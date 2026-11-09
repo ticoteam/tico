@@ -1,4 +1,4 @@
-"""Helpers that other tests share, moved out of test_demo_company.py so they import no test file."""
+"""The demo company build's clock, shared by its tests (moved out of test_demo_company.py)."""
 
 from datetime import datetime, timezone
 

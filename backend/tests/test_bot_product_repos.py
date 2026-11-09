@@ -189,9 +189,7 @@ def test_a_read_only_all_repos_creator_gets_write_to_the_new_repo_and_keeps_read
     assert notice.endswith(made.json()["note"].removeprefix("Created as a private empty repository. "))
 
 
-def test_a_bot_switched_off_is_refused_and_told_which_right(api, gh):
-    ready(api, gh)
-    botops_turn(api)
+def _a_bot_switched_off_is_refused_and_told_which_right(api, gh):
     # Every bot has it by default, BotOps too; the Owner switches it off for both.
     for bot in ("cmo", "botops"):
         path = f"/api/v2/bots/{bot}/repositories"
@@ -207,6 +205,15 @@ def test_a_bot_switched_off_is_refused_and_told_which_right(api, gh):
         assert refused.status_code == 403, (actor, refused.text)
         assert RIGHT in refused.json()["error"]["detail"]
     assert not creates(gh)
+    # Back on for the checks after this one, by the Owner: the admin check needs both rights on to see a switch-off.
+    for bot in ("cmo", "botops"):
+        path = f"/api/v2/bots/{bot}/repositories"
+        back = api.put(
+            path,
+            json={"mode": api.get(path, headers=auth()).json()["mode"], "create_product_repositories": True},
+            headers=auth(),
+        )
+        assert back.status_code == 200, back.text
 
 
 def test_an_admin_switches_it_off_the_off_sticks_and_only_the_owner_switches_it_back_on(api, gh):
@@ -259,8 +266,7 @@ def nothing_made(api, gh):
         )
 
 
-def test_a_bot_cannot_create_a_public_repo_a_bot_repository_name_or_through_an_external_agent(api, gh):
-    ready(api, gh)
+def _a_bot_cannot_create_a_public_repo_a_bot_repository_name_or_through_an_external_agent(api, gh):
     assert grant(api).status_code == 200
     # Only private, empty, confirmed repositories (the request model refuses the rest).
     for i, body in enumerate(
@@ -292,11 +298,9 @@ def test_a_bot_cannot_create_a_public_repo_a_bot_repository_name_or_through_an_e
     assert not creates(gh)
 
 
-def test_the_owners_identity_carried_by_a_bot_or_botops_turn_cannot_turn_the_right_on_preview_or_create(api, gh):
+def _the_owners_identity_carried_by_a_bot_or_botops_turn_cannot_turn_the_right_on_preview_or_create(api, gh):
     from backend import rooms
 
-    ready(api, gh)
-    botops_turn(api)
     # The right is off: the Owner's request carried by a bot turn cannot turn it on.
     assert grant(api, on=False).status_code == 200  # the Owner switched cmo off
     carried = {
@@ -384,8 +388,7 @@ def test_the_owners_identity_carried_by_a_bot_or_botops_turn_cannot_turn_the_rig
     assert len(creates(gh)) == 2
 
 
-def test_connecting_and_disconnecting_github_stay_the_owners(api, gh):
-    ready(api, gh)
+def _connecting_and_disconnecting_github_stay_the_owners(api, gh):
     assert grant(api).status_code == 200
     for method, path in (
         ("GET", "/api/v2/github/app"),
@@ -396,6 +399,22 @@ def test_connecting_and_disconnecting_github_stay_the_owners(api, gh):
         refused = api.request(method, path, headers=auth("bot-test"))
         assert refused.status_code == 403, (method, path, refused.text)
     assert api.get("/api/v2/github/app", headers=auth()).json()["connected"] is True
+
+
+def test_refusals_for_bots_and_the_owners_identity_tell_the_story(api, gh, subtests):
+    """One app for the refusals: the right off for a bot, a bot's and an owner-carried turn's refusals, GitHub
+    connecting staying the Owner's. Each check keeps its own assertions. (An admin's switch-off stays its own test: in a
+    shared app BotOps's save becomes a Confirm proposal instead of a refusal.)"""
+    ready(api, gh)
+    botops_turn(api)
+    for check in (
+        _a_bot_switched_off_is_refused_and_told_which_right,
+        _a_bot_cannot_create_a_public_repo_a_bot_repository_name_or_through_an_external_agent,
+        _connecting_and_disconnecting_github_stay_the_owners,
+        _the_owners_identity_carried_by_a_bot_or_botops_turn_cannot_turn_the_right_on_preview_or_create,
+    ):
+        with subtests.test(check.__name__):
+            check(api, gh)
 
 
 def test_without_administration_the_refusal_says_so_and_what_the_owner_changes(api, gh):

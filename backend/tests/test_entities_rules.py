@@ -201,3 +201,18 @@ def test_scope_terms_parse_or_refuse():
     assert D.parse_condition("self operates_in geography/united-states") == ("operates_in", "geography/united-states")
     with pytest.raises(D.ScopeError):
         D.parse_condition("self employs >= 50")
+
+
+def test_a_channel_term_narrows_a_rule_and_phones_resolve(directory):
+    with directory.transaction() as c:
+        _rule(c, "r-sms", ["entity:person/jane", "channel:sms"])
+        c.execute(
+            "INSERT INTO entity_identifiers (entity_id, kind, value, normalized_value, primary_identifier, derived) "
+            "VALUES ('person/jane', 'phone', '+1 (555) 010-0100', '+1 (555) 010-0100', 0, 0)"
+        )
+    with directory.read() as c:
+        assert S.contact_entities(c, ["+15550100100"]) == ["person/jane"]
+        assert D.check(c, ACTOR, [], "sms", contacts=["+1 555 010 0100"])["outcome"] == "held"
+        assert D.check(c, ACTOR, [], "mail", contacts=["+15550100100"])["outcome"] == "clear"
+    with pytest.raises(D.ScopeError):
+        D.parse_scope(["channel:fax"])
