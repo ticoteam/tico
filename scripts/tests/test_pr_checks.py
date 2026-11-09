@@ -2068,6 +2068,25 @@ def test_a_python_leg_that_runs_no_test_is_no_pass(tmp_path, monkeypatch):
     assert checks.main() == 0
 
 
+def test_a_fail_fast_cancel_names_the_first_failing_tests(tmp_path, monkeypatch, capsys):
+    # The leg that failed cancels the run, so it shows "cancelled" too; its error names what failed instead.
+    (tmp_path / "python-7.xml").write_text(
+        '<testsuite><testcase classname="backend.tests.test_thread_halfway" name="test_bounded"><failure message="x"/>'
+        '</testcase><testcase classname="backend.tests.test_ok" name="test_fine"/>'
+        '<testcase classname="backend.tests.test_b" name="test_err"><error message="y"/></testcase></testsuite>'
+    )
+    (tmp_path / "broken.xml").write_text("<testsuite")
+    assert checks.junit_failed([tmp_path / "python-7.xml"], limit=1) == [
+        "test_thread_halfway.py::test_bounded",
+        "and 1 more",
+    ]
+    monkeypatch.setattr("sys.argv", ["pr_checks.py", "failed", str(tmp_path)])
+    assert not checks.main()
+    assert capsys.readouterr().out.strip() == "test_thread_halfway.py::test_bounded, test_b.py::test_err"
+    workflow = (ROOT / ".github/workflows/pr-checks.yml").read_text()
+    assert "pr_checks.py failed ci-results" in workflow and "::error title=${SUITE} failed::" in workflow
+
+
 def test_a_leg_passes_only_when_pytest_passed_and_a_test_ran_and_keeps_pytests_own_code(tmp_path):
     # A stand-in interpreter answers pytest with $PYTEST and the report check with $CHECK.
     python = tmp_path / "python"
