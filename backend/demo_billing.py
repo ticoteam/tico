@@ -20,11 +20,11 @@ from .store import Problem
 from . import company_billing, usage
 from .demo_sections.finance import CONTENT as FINANCE
 
-GRANT = 500_000_000          # the launch credit, in micro-dollars ($500)
-TOPUP = FINANCE["gateway_topup"]["amount"] * 10_000       # the books' top-up, cents to micro-dollars
-MIN_BALANCE = 50_000_000     # below this the page says the balance is low ($50)
-PRODUCT = "gateway"          # Tico models, the product HQ bills model runs as
-FIRST = date(2000, 1, 1)     # every run the demo has, whatever its date
+GRANT = 500_000_000  # the launch credit, in micro-dollars ($500)
+TOPUP = FINANCE["gateway_topup"]["amount"] * 10_000  # the books' top-up, cents to micro-dollars
+MIN_BALANCE = 50_000_000  # below this the page says the balance is low ($50)
+PRODUCT = "gateway"  # Tico models, the product HQ bills model runs as
+FIRST = date(2000, 1, 1)  # every run the demo has, whatever its date
 LAST = date(2999, 12, 31)
 HOUR_MODEL = "substr(t.started_at, 1, 13) || '|' || coalesce(t.model, '')"
 
@@ -36,7 +36,7 @@ def _split(total, shares):
         return [0] * len(shares)
     exact = [total * share / weight for share in shares]
     parts = [int(part) for part in exact]
-    for index in sorted(range(len(shares)), key=lambda i: exact[i] - parts[i], reverse=True)[:total - sum(parts)]:
+    for index in sorted(range(len(shares)), key=lambda i: exact[i] - parts[i], reverse=True)[: total - sum(parts)]:
         parts[index] += 1
     return parts
 
@@ -45,7 +45,11 @@ def _lines(total, models):
     """The usage lines of `total`: one per model, shared out by its dollars (`models` is {model: dollars})."""
     names = sorted(models)
     parts = _split(total, [models[name] for name in names])
-    return [{"product": PRODUCT, "sku": name, "amount_micros": part} for name, part in zip(names, parts, strict=True) if part]
+    return [
+        {"product": PRODUCT, "sku": name, "amount_micros": part}
+        for name, part in zip(names, parts, strict=True)
+        if part
+    ]
 
 
 def _ledger(c, slugs):
@@ -68,8 +72,11 @@ def _ledger(c, slugs):
         days[day] = total
         hour_list = sorted(hour for hour in by_hour if hour[:10] == day)
         parts = _split(total, [sum(by_hour[hour].values()) for hour in hour_list])
-        hours[day] = [{"period": hour, "total_micros": part, "lines": _lines(part, by_hour[hour])}
-                      for hour, part in zip(hour_list, parts, strict=True) if part]
+        hours[day] = [
+            {"period": hour, "total_micros": part, "lines": _lines(part, by_hour[hour])}
+            for hour, part in zip(hour_list, parts, strict=True)
+            if part
+        ]
     return {"days": days, "models": models, "hours": hours}
 
 
@@ -89,10 +96,16 @@ def _statement(days, credits, month, debits):
             sources[source] = sources.get(source, 0) + micros
     opening = sum(micros for when, _, micros in credits if when < month) - before
     added = sum(sources.values())
-    return {"month": month, "opening_micros": opening, "credits_micros": added,
-            "credits_by_source": sources, "debits_micros": debits,
-            "debits_by_product": {PRODUCT: debits}, "expired_micros": 0,
-            "closing_micros": opening + added - debits}
+    return {
+        "month": month,
+        "opening_micros": opening,
+        "credits_micros": added,
+        "credits_by_source": sources,
+        "debits_micros": debits,
+        "debits_by_product": {PRODUCT: debits},
+        "expired_micros": 0,
+        "closing_micros": opening + added - debits,
+    }
 
 
 def read(c, slugs, month=""):
@@ -113,20 +126,46 @@ def read(c, slugs, month=""):
     # The launch credit is spent first, then the top-up.
     launch_left, topup_left = max(GRANT - spent, 0), min(TOPUP, max(balance, 0))
     body = {
-        "state": "low" if balance < MIN_BALANCE else "active", "balance_micros": balance,
-        "min_balance_micros": MIN_BALANCE, "last_day_micros": days[max(days)] if days else 0,
-        "record_only": False, "grace_until": None, "month": month,
+        "state": "low" if balance < MIN_BALANCE else "active",
+        "balance_micros": balance,
+        "min_balance_micros": MIN_BALANCE,
+        "last_day_micros": days[max(days)] if days else 0,
+        "record_only": False,
+        "grace_until": None,
+        "month": month,
         "months": sorted({day[:7] for day in days}) or [newest],
-        "credits": [{"label": "Launch credit", "source": "grant", "amount_micros": GRANT,
-                     "left_micros": launch_left, "expired_micros": 0, "expires": f"{int(year) + 1:04d}-{number}-01",
-                     "created": f"{grant}-01", "expired": False, "used_up": launch_left <= 0, "current": launch_left > 0},
-                    {"label": FINANCE["gateway_topup"]["memo"], "source": "payment", "amount_micros": TOPUP,
-                     "left_micros": topup_left, "expired_micros": 0, "expires": None, "created": f"{topup}-02",
-                     "expired": False, "used_up": topup_left <= 0, "current": topup_left > 0}],
-        "usage": [{"period": day, "total_micros": days[day], "lines": _lines(days[day], models[day])}
-                  for day in month_days],
+        "credits": [
+            {
+                "label": "Launch credit",
+                "source": "grant",
+                "amount_micros": GRANT,
+                "left_micros": launch_left,
+                "expired_micros": 0,
+                "expires": f"{int(year) + 1:04d}-{number}-01",
+                "created": f"{grant}-01",
+                "expired": False,
+                "used_up": launch_left <= 0,
+                "current": launch_left > 0,
+            },
+            {
+                "label": FINANCE["gateway_topup"]["memo"],
+                "source": "payment",
+                "amount_micros": TOPUP,
+                "left_micros": topup_left,
+                "expired_micros": 0,
+                "expires": None,
+                "created": f"{topup}-02",
+                "expired": False,
+                "used_up": topup_left <= 0,
+                "current": topup_left > 0,
+            },
+        ],
+        "usage": [
+            {"period": day, "total_micros": days[day], "lines": _lines(days[day], models[day])} for day in month_days
+        ],
         "statement": _statement(days, [(grant, "grant", GRANT), (topup, "payment", TOPUP)], month, debits),
-        "booking_url": None, "cloud": None,
+        "booking_url": None,
+        "cloud": None,
     }
     return company_billing.parse(json.dumps(body))
 

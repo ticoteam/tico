@@ -1,7 +1,8 @@
-// Strategy › Market › Listening's Settings fold (ui/app/settings-listening.js): the owner and admins read every
+// Strategy › Market › Listening's Settings fold (ui/app/settings-listening.ts): the owner and admins read every
 // destination (a file one is read-only, marked "From listening.yaml"); only the owner adds, edits and removes the ones
 // saved in Settings; the form sends the category, receiver, threshold, readers, optional skip rule and what; the
-// server's refusal shows in the form; a member has no Listening view; a phone has no sideways scroll. Fixtures only.
+// server's refusal shows in the form; Settings sits on What are buyers saying? for admins even before anything is heard,
+// and a member with nothing heard has neither; a phone has no sideways scroll. Fixtures only.
 const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -22,10 +23,10 @@ async function open(browser, role, width = 1440) {
   await page.route('**/*', route => {
     const req = route.request(), p = new URL(req.url()).pathname;
     const json = (body, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
-    const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|css))$/);
+    const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/);
     if (ui && fs.existsSync(uiFile(ui[1])))
       return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]), 'utf8')});
-    if (p.endsWith('.js')) return route.fulfill({contentType: 'application/javascript', body: ''});
+    if (/\.(?:js|ts)$/.test(p)) return route.fulfill({contentType: 'application/javascript', body: ''});
     if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
     const config = {version: '0.1.0', app_name: 'Tico'};
     if (p === '/api/me') return json({id: role === 'owner' ? 'ana' : 'cara', role: role === 'owner' ? 'owner' : 'human', bot_admin: role === 'admin',
@@ -37,6 +38,7 @@ async function open(browser, role, width = 1440) {
     if (p === '/api/v2/models') return json({models: [], harnesses: []});
     if (p === '/api/v2/access') return json({rules: {}});
     if (p === '/api/v2/listening/stats') return json({daily: [], recent: []});
+    if (p === '/api/v2/market/entities') return json({entities: [{id: 'company/self', type: 'organization', name: 'Acme'}], total: 1});
     if (p === '/api/v2/listening/destinations' && req.method() === 'GET')
       return json({destinations: dests, categories: CATEGORIES, receivers: RECEIVERS});
     const one = p.match(/^\/api\/v2\/listening\/destinations\/([^/]+)(\/remove)?$/);
@@ -129,10 +131,11 @@ const row = (page, key) => page.locator(`[data-listen-dest="${key}"]`);
       await page.close();
     }
     {
-      // A member has no Listening view.
+      // A member, with nothing heard yet, has no What are buyers saying? and no Settings.
       const {page} = await open(browser, 'member');
-      await page.locator('.mkt-views').waitFor();
-      assert.equal(await page.locator('[data-market-view="listening"]').count(), 0);
+      await page.locator('.mkt-pg').waitFor();
+      assert.equal(await page.locator('#mkt-q-saying').count(), 0);
+      assert.equal(await page.locator('[data-rdm-settings]').count(), 0);
       await page.close();
     }
     console.log('listening-settings: ok');

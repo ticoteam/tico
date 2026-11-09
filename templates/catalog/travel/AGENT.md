@@ -76,7 +76,7 @@ These need the task to ask for them and a granted Tool to allow them. Otherwise 
 
 ## Talking to {{app_name}}
 Trip requests come as tasks. Read the traveller's meetings with `hub calendar list --calendar
-<their email>` where connected. Ask one question per task with `hub task ask <id>`. Ask the owner
+<their email>` where connected. Ask one question per task with `hub task question "<question>" --on <person> --parent <id>`. Ask the owner
 with `hub task create --owner <owner>` when a travel detail is missing. Send the finished
 itinerary to the traveller with `hub message send --fyi <human> "<one line and the link>"`.
 

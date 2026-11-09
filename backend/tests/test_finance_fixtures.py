@@ -1,5 +1,6 @@
 """Shared set-up for the Finance tests: one initialized hub database built once per worker and copied per test, the
 fictional Acme org chart, and helpers to post and act. No tests here."""
+
 import calendar
 import json
 import sqlite3
@@ -13,34 +14,45 @@ import pytest
 from backend import hubdb as H
 from backend.credentials import Vault
 from backend.finance import actions as FA
+from backend.finance.store import access as SA
 from backend.store import Store
 from backend.tests.test_api import api_settings
+from backend import bot_settings as BS
 
 AT = "2026-10-15T12:00:00.000000Z"
 OWNER = "human:ana"
 # Engineering (led by ben) has Web under it (led by cara); Sales is led by dan. Ana owns the install.
-PEOPLE = [{"id": "ana", "email": "ana@acme.example"},
-          {"id": "ben", "email": "ben@acme.example", "team": "eng"},
-          {"id": "cara", "email": "cara@acme.example", "team": "web", "reports_to": "ben"},
-          {"id": "dan", "email": "dan@acme.example", "team": "sales"},
-          {"id": "eve", "email": "eve@acme.example", "team": "web", "reports_to": "cara"},
-          {"id": "fay", "email": "fay@acme.example", "team": "web", "reports_to": "cara"},
-          {"id": "gus", "email": "gus@acme.example", "team": "sales", "reports_to": "dan"}]
-GROUPS = {"eng": {"name": "Engineering", "lead": "person:ben"},
-          "web": {"name": "Web", "parent": "eng", "lead": "person:cara"},
-          "sales": {"name": "Sales", "lead": "person:dan"}}
-BOTS = {"coder": ("web", "human:cara"), "seller": ("sales", "human:dan"),
-        "bookkeeper": ("eng", "human:ben")}
+PEOPLE = [
+    {"id": "ana", "email": "ana@acme.example"},
+    {"id": "ben", "email": "ben@acme.example", "team": "eng"},
+    {"id": "cara", "email": "cara@acme.example", "team": "web", "reports_to": "ben"},
+    {"id": "dan", "email": "dan@acme.example", "team": "sales"},
+    {"id": "eve", "email": "eve@acme.example", "team": "web", "reports_to": "cara"},
+    {"id": "fay", "email": "fay@acme.example", "team": "web", "reports_to": "cara"},
+    {"id": "gus", "email": "gus@acme.example", "team": "sales", "reports_to": "dan"},
+]
+GROUPS = {
+    "eng": {"name": "Engineering", "lead": "person:ben"},
+    "web": {"name": "Web", "parent": "eng", "lead": "person:cara"},
+    "sales": {"name": "Sales", "lead": "person:dan"},
+}
+BOTS = {"coder": ("web", "human:cara"), "seller": ("sales", "human:dan"), "bookkeeper": ("eng", "human:ben")}
 
 
 def _seed(c: sqlite3.Connection) -> None:
-    H.sync_registry(c, {slug: {"name": slug, "runtime": "fake", "status": "active"} for slug in BOTS},
-                    {"people": PEOPLE})
-    c.execute("INSERT OR REPLACE INTO registry_metadata(key, value) VALUES('people', ?)",
-              (json.dumps({"people": PEOPLE, "org_groups": GROUPS, "default_user": "ana"}),))
+    H.sync_registry(
+        c, {slug: {"name": slug, "runtime": "fake", "status": "active"} for slug in BOTS}, {"people": PEOPLE}
+    )
+    c.execute(
+        "INSERT OR REPLACE INTO registry_metadata(key, value) VALUES('people', ?)",
+        (json.dumps({"people": PEOPLE, "org_groups": GROUPS, "default_user": "ana"}),),
+    )
     for slug, (team, boss) in BOTS.items():
-        c.execute("INSERT OR REPLACE INTO bot_config(bot, config, team, owner_id, reports_to) VALUES(?,?,?,?,?)",
-                  (slug, json.dumps({"team": team}), team, "human:ana", boss))
+        c.execute(
+            'INSERT OR REPLACE INTO bot_config(bot,team,owner_id,reports_to) VALUES(?,?,?,?)',
+            (slug, team, 'human:ana', boss),
+        )
+        BS.write(c, slug, {'team': team})
 
 
 @pytest.fixture(scope="session")
@@ -59,15 +71,32 @@ def store(tmp_path: Path, finance_template: Path) -> Store:
     s = Store(api_settings(tmp_path))
     with closing(sqlite3.connect(finance_template)) as source, closing(sqlite3.connect(s.settings.db_path)) as target:
         source.backup(target)
-    FA.use_vault(Vault(s))                 # a local data key beside this test's database
+    FA.use_vault(Vault(s))  # a local data key beside this test's database
     return s
+
+
+def open_views(c: sqlite3.Connection) -> None:
+    """Open the view defaults up the way an owner can (Access, Edit defaults): managers see what they manage and
+    everyone else their own expenses. Finance starts owner only (backend/finance/core/view.py Defaults); most tests
+    here are about the views those defaults give."""
+    SA.set_default(c, "manager", "team_expenses", OWNER, AT)
+    SA.set_default(c, "member", "own_expenses", OWNER, AT)
+
+
+@pytest.fixture
+def owner_only_books(store: Store) -> Store:
+    """The hub with Finance set up for the owner, as it starts: nobody else sees anything."""
+    with store.transaction() as c:
+        FA.setup(c, OWNER, AT)
+    return store
 
 
 @pytest.fixture
 def books(store: Store) -> Store:
-    """The hub with Finance set up for the owner."""
+    """The hub with Finance set up for the owner, the view defaults opened up (open_views)."""
     with store.transaction() as c:
         FA.setup(c, OWNER, AT)
+        open_views(c)
     return store
 
 
@@ -82,8 +111,9 @@ def budget(c: sqlite3.Connection, name: str) -> str:
 _keys = iter(range(10**9))
 
 
-def act(c: sqlite3.Connection, who: str, kind: str, payload: dict[str, object], key: str | None = None,
-        **kw: object) -> FA.ActionResult:
+def act(
+    c: sqlite3.Connection, who: str, kind: str, payload: dict[str, object], key: str | None = None, **kw: object
+) -> FA.ActionResult:
     return FA.act(c, who, kind, payload, key or f"k{next(_keys)}", at=kw.pop("at", AT), **kw)  # type: ignore[arg-type]
 
 
@@ -92,17 +122,29 @@ def close_month(c: sqlite3.Connection, month: str, who: str = OWNER, **kw: objec
     through that end at its books' balance first (the close gate asks for it), then close_period. Returns the close."""
     year, mon = (int(x) for x in month.split("-"))
     end = date(year, mon, calendar.monthrange(year, mon)[1]).isoformat()
-    accounts = c.execute("SELECT m.id, m.kind, m.account_id FROM fin_money_accounts m WHERE m.status='active' AND "
-                         "(SELECT MIN(f.txn_date) FROM fin_feed_txns f WHERE f.money_account_id=m.id AND f.pending=0) "
-                         "<= ?", (end,)).fetchall()
+    accounts = c.execute(
+        "SELECT m.id, m.kind, m.account_id FROM fin_money_accounts m WHERE m.status='active' AND "
+        "(SELECT MIN(f.txn_date) FROM fin_feed_txns f WHERE f.money_account_id=m.id AND f.pending=0) "
+        "<= ?",
+        (end,),
+    ).fetchall()
     for mid, kind, gl in accounts:
-        last = c.execute("SELECT MAX(statement_end) FROM fin_reconciliations WHERE money_account_id=?", (mid,)).fetchone()[0]
+        last = c.execute(
+            "SELECT MAX(statement_end) FROM fin_reconciliations WHERE money_account_id=?", (mid,)
+        ).fetchone()[0]
         if last is not None and str(last) >= end:
             continue
-        balance = int(c.execute("SELECT COALESCE(SUM(l.amount), 0) FROM fin_lines l JOIN fin_entries e ON e.id=l.entry_id "
-                                "WHERE l.account_id=? AND e.entry_date<=?", (gl, end)).fetchone()[0])     # reversed pairs net to 0
-        shown = -balance if kind == "card_program" else balance      # a card statement shows what is owed
-        done = act(c, who, "reconcile", {"money_account_id": mid, "statement_end": end, "statement_balance": shown}, **kw)
+        balance = int(
+            c.execute(
+                "SELECT COALESCE(SUM(l.amount), 0) FROM fin_lines l JOIN fin_entries e ON e.id=l.entry_id "
+                "WHERE l.account_id=? AND e.entry_date<=?",
+                (gl, end),
+            ).fetchone()[0]
+        )  # reversed pairs net to 0
+        shown = -balance if kind == "card_program" else balance  # a card statement shows what is owed
+        done = act(
+            c, who, "reconcile", {"money_account_id": mid, "statement_end": end, "statement_balance": shown}, **kw
+        )
         assert done.status == "committed" and done.result["status"] == "done", (mid, kind, shown, done.result)
     return act(c, who, "close_period", {"month": month}, **kw)
 
@@ -110,22 +152,43 @@ def close_month(c: sqlite3.Connection, month: str, who: str = OWNER, **kw: objec
 def reopen_rows(c: sqlite3.Connection, **kw: object) -> None:
     """Undo each money account's latest done reconciliation, so the rows it cleared (and a closed month's close keeps)
     are editable again: a reconciled row changed by the bank asks a person instead of reposting itself."""
-    for (mid,) in c.execute("SELECT DISTINCT money_account_id FROM fin_reconciliations WHERE status='done' AND "
-                            "undone_at IS NULL").fetchall():
-        last = c.execute("SELECT id FROM fin_reconciliations WHERE money_account_id=? AND status='done' AND "
-                         "undone_at IS NULL ORDER BY statement_end DESC LIMIT 1", (mid,)).fetchone()
+    for (mid,) in c.execute(
+        "SELECT DISTINCT money_account_id FROM fin_reconciliations WHERE status='done' AND undone_at IS NULL"
+    ).fetchall():
+        last = c.execute(
+            "SELECT id FROM fin_reconciliations WHERE money_account_id=? AND status='done' AND "
+            "undone_at IS NULL ORDER BY statement_end DESC LIMIT 1",
+            (mid,),
+        ).fetchone()
         assert act(c, OWNER, "reconcile_undo", {"reconciliation_id": str(last[0])}, **kw).status == "committed"
 
 
-def spend(c: sqlite3.Connection, code: str, amount: int, *, day: str = "2026-10-10", team: str = "",
-          teammate: str = "", vendor: str = "", source_id: str = "") -> dict[str, object]:
+def spend(
+    c: sqlite3.Connection,
+    code: str,
+    amount: int,
+    *,
+    day: str = "2026-10-10",
+    team: str = "",
+    teammate: str = "",
+    vendor: str = "",
+    source_id: str = "",
+) -> dict[str, object]:
     """A system-posted expense paid from the bank."""
     tags = {k: v for k, v in (("team", team), ("teammate", teammate)) if v}
     line: dict[str, object] = {"account_id": account(c, code), "amount": amount, "tags": tags}
     if vendor:
         line["contact_id"] = vendor
-    return FA.post_entry(c, {"date": day, "source": "usage", "source_id": source_id or f"s{next(_keys)}",
-                             "lines": [line, {"account_id": account(c, "1000"), "amount": -amount}]}, at=AT)
+    return FA.post_entry(
+        c,
+        {
+            "date": day,
+            "source": "usage",
+            "source_id": source_id or f"s{next(_keys)}",
+            "lines": [line, {"account_id": account(c, "1000"), "amount": -amount}],
+        },
+        at=AT,
+    )
 
 
 def set_lead(c: sqlite3.Connection, team: str, lead: str) -> None:
@@ -135,15 +198,19 @@ def set_lead(c: sqlite3.Connection, team: str, lead: str) -> None:
         groups[team]["lead"] = lead
     else:
         groups[team].pop("lead", None)
-    c.execute("UPDATE registry_metadata SET value=? WHERE key='people'",
-              (json.dumps({"people": PEOPLE, "org_groups": groups, "default_user": "ana"}),))
+    c.execute(
+        "UPDATE registry_metadata SET value=? WHERE key='people'",
+        (json.dumps({"people": PEOPLE, "org_groups": groups, "default_user": "ana"}),),
+    )
 
 
 def set_manager(c: sqlite3.Connection, person: str, manager: str) -> None:
     """Change who a person reports to on the org chart ("" for nobody)."""
     people = [{**p, "reports_to": manager} if p["id"] == person else p for p in PEOPLE]
-    c.execute("UPDATE registry_metadata SET value=? WHERE key='people'",
-              (json.dumps({"people": people, "org_groups": GROUPS, "default_user": "ana"}),))
+    c.execute(
+        "UPDATE registry_metadata SET value=? WHERE key='people'",
+        (json.dumps({"people": people, "org_groups": GROUPS, "default_user": "ana"}),),
+    )
 
 
 # ------------------------------------------------------------------------------------------------ a fake Mercury
@@ -169,6 +236,7 @@ class FakeMercury:
 
     def __init__(self) -> None:
         from backend.finance.mercury import Answer
+
         self.Answer = Answer
         self.txns: dict[str, dict[str, object]] = {}
         self.events_list: list[dict[str, object]] = []
@@ -176,10 +244,10 @@ class FakeMercury:
         self.queue: dict[str, list[object]] = {}
         self.calls: list[tuple[str, object]] = []
         self.cards_list: list[dict[str, object]] = []
-        self.balances: dict[str, float] = {}       # account id -> currentBalance, in place of the recorded one
-        self.unlisted: set[str] = set()            # request ids Mercury no longer lists (sent): still answered by id
+        self.balances: dict[str, float] = {}  # account id -> currentBalance, in place of the recorded one
+        self.unlisted: set[str] = set()  # request ids Mercury no longer lists (sent): still answered by id
         self.card_page = 500
-        self.txn_page = 500                        # most rows one account-transactions answer gives (its limit caps it)
+        self.txn_page = 500  # most rows one account-transactions answer gives (its limit caps it)
 
     def _answer(self, name: str, arg: object, default: object):
         self.calls.append((name, arg))
@@ -192,8 +260,12 @@ class FakeMercury:
 
     def _balanced(self, recorded: dict[str, object]) -> dict[str, object]:
         listed = cast(list[dict[str, object]], recorded["accounts"])
-        return {"accounts": [{**a, "currentBalance": self.balances[str(a["id"])]} if str(a["id"]) in self.balances
-                             else a for a in listed]}
+        return {
+            "accounts": [
+                {**a, "currentBalance": self.balances[str(a["id"])]} if str(a["id"]) in self.balances else a
+                for a in listed
+            ]
+        }
 
     def accounts(self):
         return self._answer("accounts", None, self._balanced(MERCURY["accounts"]))
@@ -210,7 +282,7 @@ class FakeMercury:
         rows = list(self.txns.values())
         ids = [str(t["id"]) for t in rows]
         start = ids.index(start_after) + 1 if start_after in ids else 0
-        chunk = rows[start:start + limit]
+        chunk = rows[start : start + limit]
         more = start + limit < len(rows)
         page = {"nextPage": str(chunk[-1]["id"])} if more and chunk else {}
         return self._answer("transactions", start_after, {"transactions": chunk, "page": page})
@@ -225,26 +297,30 @@ class FakeMercury:
         key: the docs' "recipient memo" is not mapped to externalMemo); `start` and `end` bound the created day
         (YYYY-MM-DD); `request_id` finds the transaction a request became.
         One answer gives at most `txn_page` rows."""
+
         def hit(txn: dict) -> bool:
             if str(txn.get("accountId")) != account_id:
                 return False
             if request_id and str(txn.get("requestId") or "") != request_id:
                 return False
-            if search and not any(search.lower() in str(txn.get(f) or "").lower()
-                                  for f in ("note", "bankDescription", "counterpartyName")):
+            if search and not any(
+                search.lower() in str(txn.get(f) or "").lower() for f in ("note", "bankDescription", "counterpartyName")
+            ):
                 return False
             day = str(txn.get("createdAt") or "")[:10]
             return (not start or day >= start) and (not end or day <= end)
+
         hits = [t for t in self.txns.values() if hit(t)]
-        chunk = hits[offset:offset + min(limit, self.txn_page)]
-        return self._answer("account_transactions", (account_id, search, start, end),
-                            {"transactions": chunk, "total": len(hits)})
+        chunk = hits[offset : offset + min(limit, self.txn_page)]
+        return self._answer(
+            "account_transactions", (account_id, search, start, end), {"transactions": chunk, "total": len(hits)}
+        )
 
     def events(self, start_after, limit=500, newest=False):
         found = list(reversed(self.events_list))[:limit] if newest else self.events_list
         if start_after and not newest:
             ids = [str(e["id"]) for e in found]
-            found = found[ids.index(start_after) + 1:] if start_after in ids else found
+            found = found[ids.index(start_after) + 1 :] if start_after in ids else found
         return self._answer("events", start_after, {"events": found})
 
     def statements(self, account_id, start, end):
@@ -258,10 +334,13 @@ class FakeMercury:
         mine = [k for k in self.cards_list if k.get("userId") == user_id]
         ids = [str(k["id"]) for k in mine]
         start = ids.index(start_after) + 1 if start_after in ids else 0
-        page = mine[start:start + self.card_page]
+        page = mine[start : start + self.card_page]
         more = start + self.card_page < len(mine)
-        return self._answer("cards", (user_id, start_after),
-                            {"cards": page, "page": {"nextPage": str(page[-1]["id"]) if more and page else None}})
+        return self._answer(
+            "cards",
+            (user_id, start_after),
+            {"cards": page, "page": {"nextPage": str(page[-1]["id"]) if more and page else None}},
+        )
 
     def card(self, card_id):
         found = next((k for k in self.cards_list if k.get("id") == card_id), None)
@@ -299,14 +378,31 @@ class FakeMercury:
         amount = float(body["amount"])
 
         def leg(txn_id: str, account: object, value: float) -> dict[str, object]:
-            return {"id": txn_id, "accountId": str(account), "amount": value, "createdAt": "2026-10-15T12:00:00Z",
-                    "postedAt": None, "status": "pending", "kind": "internalTransfer", "note": body.get("note"),
-                    "externalMemo": None, "bankDescription": "Internal transfer",
-                    "counterpartyName": "Internal transfer", "requestId": None, "cardId": None}
-        return self._answer("create_transfer", dict(body), {
-            "debitTransaction": leg(f"xfer-{number}", body["sourceAccountId"], -amount),
-            "creditTransaction": leg(f"xfer-{number}-credit", body["destinationAccountId"], amount),
-            "status": "pending"})
+            return {
+                "id": txn_id,
+                "accountId": str(account),
+                "amount": value,
+                "createdAt": "2026-10-15T12:00:00Z",
+                "postedAt": None,
+                "status": "pending",
+                "kind": "internalTransfer",
+                "note": body.get("note"),
+                "externalMemo": None,
+                "bankDescription": "Internal transfer",
+                "counterpartyName": "Internal transfer",
+                "requestId": None,
+                "cardId": None,
+            }
+
+        return self._answer(
+            "create_transfer",
+            dict(body),
+            {
+                "debitTransaction": leg(f"xfer-{number}", body["sourceAccountId"], -amount),
+                "creditTransaction": leg(f"xfer-{number}-credit", body["destinationAccountId"], amount),
+                "status": "pending",
+            },
+        )
 
     def create_transaction(self, account_id, body):
         """A direct send: Mercury's transaction at once, numbered in the order sent (txn-direct-1, ...)."""
@@ -317,8 +413,13 @@ class FakeMercury:
         """A request as Mercury keeps it: only the documented list fields. Which request field Mercury shows as
         `memo` is not documented; Finance's key travels in `note` and leads `externalMemo`, so the fake shows the
         external memo (the recipient-facing one, the likelier echo)."""
-        self.requests[request_id] = {"requestId": request_id, "status": status, "amount": body.get("amount"),
-                                     "recipientId": body.get("recipientId"), "memo": body.get("externalMemo")}
+        self.requests[request_id] = {
+            "requestId": request_id,
+            "status": status,
+            "amount": body.get("amount"),
+            "recipientId": body.get("recipientId"),
+            "memo": body.get("externalMemo"),
+        }
 
     def send_request(self, request_id):
         return self._answer("send_request", request_id, self.requests.get(request_id) or self.Answer(404, {}))
@@ -328,25 +429,42 @@ class FakeMercury:
     def send_requests(self, account_id, start_after=None, status=None):
         """The list filtered to one status when given (Mercury's documented filters), and without the requests in
         `unlisted` (sent and approved: no longer listed, though still answered by id)."""
-        rows = [r for r in self.requests.values() if str(r["requestId"]) not in self.unlisted
-                and (status is None or r["status"] == status)]
+        rows = [
+            r
+            for r in self.requests.values()
+            if str(r["requestId"]) not in self.unlisted and (status is None or r["status"] == status)
+        ]
         ids = [str(r["requestId"]) for r in rows]
-        rows = rows[ids.index(start_after) + 1:] if start_after in ids else rows
-        page, more = rows[:self.page_size], len(rows) > self.page_size
-        return self._answer("send_requests", (account_id, start_after, status),
-                            {"requests": page, "page": {"nextPage": str(page[-1]["requestId"]) if more else None}})
+        rows = rows[ids.index(start_after) + 1 :] if start_after in ids else rows
+        page, more = rows[: self.page_size], len(rows) > self.page_size
+        return self._answer(
+            "send_requests",
+            (account_id, start_after, status),
+            {"requests": page, "page": {"nextPage": str(page[-1]["requestId"]) if more else None}},
+        )
 
 
-def connect(store: Store, fake: FakeMercury, *, approver: str = "ben@acme.example",
-            creator: str = "ana@acme.example") -> dict[str, object]:
+def connect(
+    store: Store, fake: FakeMercury, *, approver: str = "ben@acme.example", creator: str = "ana@acme.example"
+) -> dict[str, object]:
     """Connect Acme's Mercury (checking, savings and IO) as the owner; the connection_create result."""
     from backend.finance import sync
+
     found, why = sync.probe(fake)  # type: ignore[arg-type]
     assert not why, why
     with store.transaction() as c:
-        done = act(c, OWNER, "connection_create", {"provider": "mercury", "credential_id": "cred-mercury",
-                                                   "probe": found, "approver_email": approver,
-                                                   "token_creator_email": creator})
+        done = act(
+            c,
+            OWNER,
+            "connection_create",
+            {
+                "provider": "mercury",
+                "credential_id": "cred-mercury",
+                "probe": found,
+                "approver_email": approver,
+                "token_creator_email": creator,
+            },
+        )
     assert done.status == "committed", done
     return dict(done.result)
 
@@ -354,6 +472,7 @@ def connect(store: Store, fake: FakeMercury, *, approver: str = "ben@acme.exampl
 def sync_once(store: Store, fake: FakeMercury, at: str = AT, **kw: object) -> str:
     """One pass of the bank worker over every connection, with `fake` as Mercury."""
     from backend.finance import sync
+
     with store.read() as c:
         ids = [str(r[0]) for r in c.execute("SELECT id FROM fin_connections")]
     out = ""

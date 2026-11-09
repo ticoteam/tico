@@ -62,6 +62,7 @@ On a team that ships Dev tickets, Tico sends you ONE task a day (or when a perso
 "Release: <n> tickets at Pending Release", listing them. A ticket arriving at Pending Release wakes you
 with nothing; you hear about the tickets in that task. Cut one release for them. When it is published, Tico
 wakes each ticket's QA owner and gives the Technical Writer one docs task by itself; you do not hand it on.
+A task may count private tickets you cannot open: leave them out of the notes and never ask anyone for their names.
 
 ## Skills
 - `skills/find-hidden-breaking-changes/SKILL.md`: read before you call a change not breaking.
@@ -96,7 +97,7 @@ still yours to record: update `knowledge/versioning.md` and the tasks waiting on
 ## Talking to {{app_name}}
 Read with `gh release list -R <repo> --limit 5`, `gh release view <tag> -R <repo>`,
 `gh pr list -R <repo> --state merged --search "merged:>YYYY-MM-DD" --json number,title,labels,mergedAt,body,url`
-and `gh pr view <n> -R <repo>`. A question for the requester is `hub task ask <id>`, one open question per task. Anything a
+and `gh pr view <n> -R <repo>`. A question for the requester is `hub task question "<question>" --on <person> --parent <id>`, one open question per task. Anything a
 human must decide, such as a breaking change, is `hub task create --owner <human>`. Finish every task,
 quiet week or not.
 

@@ -50,15 +50,22 @@ def test_a_failed_run_gives_them_back_and_a_finished_one_does_not(api):
     post(api, "chat/ops", {"text": "First"})
     first = claim(api, r)
     post(api, f"attempts/{first['id']}/started", {"thread_id": "t1"}, token=r["token"])
-    post(api, f"attempts/{first['id']}/complete", {"outcome": "failed", "text": "boom", "last_seq": 0}, token=r["token"])
+    post(
+        api, f"attempts/{first['id']}/complete", {"outcome": "failed", "text": "boom", "last_seq": 0}, token=r["token"]
+    )
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE jobs SET state='canceled' WHERE state='uncertain'")
-        c.execute("UPDATE run_backoff SET wait_until=NULL")        # the fast failure's wait is over
+        c.execute("UPDATE run_backoff SET wait_until=NULL")  # the fast failure's wait is over
     post(api, "chat/ops", {"text": "Second"})
     second = claim(api, r)
     assert [x["id"] for x in second["notes"]] == [n["id"]]
     post(api, f"attempts/{second['id']}/started", {"thread_id": "t2"}, token=r["token"])
-    post(api, f"attempts/{second['id']}/complete", {"outcome": "completed", "text": "ok", "last_seq": 0}, token=r["token"])
+    post(
+        api,
+        f"attempts/{second['id']}/complete",
+        {"outcome": "completed", "text": "ok", "last_seq": 0},
+        token=r["token"],
+    )
     post(api, "chat/ops", {"text": "Third"})
     assert claim(api, r)["notes"] == []
 
@@ -78,6 +85,7 @@ def test_a_bot_leaves_another_bot_a_note_and_sees_only_its_own(api):
 def test_a_bot_that_only_runs_tasks_gets_its_notes_once(api):
     # Every turn of a task-keyed bot on a lanes runner is in a task lane, so no main-lane turn ever comes.
     from backend.tests.test_task_lanes import new_task, task_bot
+
     r = task_bot(api, lanes=True)
     n = note(api)
     new_task(api, "first")
@@ -90,12 +98,17 @@ def test_a_bot_that_only_runs_tasks_gets_its_notes_once(api):
 
 def test_the_note_a_lifted_quarantine_leaves_reaches_the_next_run_ahead_of_a_backlog(api):
     from backend import hubdb as H
+
     r = setup(api)
     with api.app.state.store.transaction() as c:
-        H.quarantine(c, "ops", "10 repeated refusals today", refusal={"rule": "identity", "detail": "lane is a person's"})
+        H.quarantine(
+            c, "ops", "10 repeated refusals today", refusal={"rule": "identity", "detail": "lane is a person's"}
+        )
         for i in range(50):
-            c.execute("INSERT INTO notes(id,from_actor,to_actor,body,created_at) VALUES(?,?,?,?,?)",
-                      (H.new_id(), "human:ana", "bot:ops", f"Older note {i}", H.shift(H.now(), seconds=-600 + i)))
+            c.execute(
+                "INSERT INTO notes(id,from_actor,to_actor,body,created_at) VALUES(?,?,?,?,?)",
+                (H.new_id(), "human:ana", "bot:ops", f"Older note {i}", H.shift(H.now(), seconds=-600 + i)),
+            )
         H.status_set(c, "human:ana", "ops", state="active", reason="reviewed")
     post(api, "chat/ops", {"text": "Back to the exports"})
     first = claim(api, r)["notes"]
@@ -114,9 +127,11 @@ def test_a_completed_run_settles_its_notes_and_a_failed_one_does_not(api):
     post(api, "chat/ops", {"text": "First"})
     first = claim(api, r)
     post(api, f"attempts/{first['id']}/started", {"thread_id": "t1"}, token=r["token"])
-    assert settled(api, n["id"]) is None                      # carried by a run still going
-    post(api, f"attempts/{first['id']}/complete", {"outcome": "failed", "text": "boom", "last_seq": 0}, token=r["token"])
-    assert settled(api, n["id"]) is None                      # the failed run gave it back, so it waits again
+    assert settled(api, n["id"]) is None  # carried by a run still going
+    post(
+        api, f"attempts/{first['id']}/complete", {"outcome": "failed", "text": "boom", "last_seq": 0}, token=r["token"]
+    )
+    assert settled(api, n["id"]) is None  # the failed run gave it back, so it waits again
     with api.app.state.store.read() as c:
         assert [x["id"] for x in H.notes_waiting(c, "ops")] == [n["id"]]
     with api.app.state.store.transaction() as c:
@@ -125,7 +140,12 @@ def test_a_completed_run_settles_its_notes_and_a_failed_one_does_not(api):
     post(api, "chat/ops", {"text": "Second"})
     second = claim(api, r)
     post(api, f"attempts/{second['id']}/started", {"thread_id": "t2"}, token=r["token"])
-    post(api, f"attempts/{second['id']}/complete", {"outcome": "completed", "text": "ok", "last_seq": 0}, token=r["token"])
+    post(
+        api,
+        f"attempts/{second['id']}/complete",
+        {"outcome": "completed", "text": "ok", "last_seq": 0},
+        token=r["token"],
+    )
     assert settled(api, n["id"])
     with api.app.state.store.read() as c:
         assert H.notes_waiting(c, "ops") == [] and H.notes_waiting_counts(c, ["ops"]) == {"ops": 0}
@@ -139,16 +159,18 @@ def test_an_unsettled_note_with_a_completed_carrier_is_still_read_and_the_catch_
     post(api, "chat/ops", {"text": "First"})
     first = claim(api, r)
     post(api, f"attempts/{first['id']}/started", {"thread_id": "t1"}, token=r["token"])
-    post(api, f"attempts/{first['id']}/complete", {"outcome": "completed", "text": "ok", "last_seq": 0}, token=r["token"])
+    post(
+        api, f"attempts/{first['id']}/complete", {"outcome": "completed", "text": "ok", "last_seq": 0}, token=r["token"]
+    )
     store = api.app.state.store
-    with store.transaction() as c:                            # a path that missed it, or a database from before the column
+    with store.transaction() as c:  # a path that missed it, or a database from before the column
         c.execute("UPDATE notes SET settled_at=NULL WHERE id=?", (n["id"],))
     with store.read() as c:
         assert H.notes_waiting(c, "ops") == [] and not H.note_waiting(c, H.note(c, n["id"]))
     with store.transaction() as c:
         assert H.notes_settle_catch_up(c, 500) == 1 and H.notes_settle_catch_up(c, 500) == 0
     assert settled(api, n["id"])
-    store.initialize()                                        # a repeated start leaves it settled
+    store.initialize()  # a repeated start leaves it settled
     assert settled(api, n["id"])
 
 
@@ -158,15 +180,19 @@ def test_the_migration_settles_old_notes_of_completed_runs_only(api):
     post(api, "chat/ops", {"text": "First"})
     first = claim(api, r)
     post(api, f"attempts/{first['id']}/started", {"thread_id": "t1"}, token=r["token"])
-    post(api, f"attempts/{first['id']}/complete", {"outcome": "completed", "text": "ok", "last_seq": 0}, token=r["token"])
+    post(
+        api, f"attempts/{first['id']}/complete", {"outcome": "completed", "text": "ok", "last_seq": 0}, token=r["token"]
+    )
     failed = note(api, "two")
     post(api, "chat/ops", {"text": "Second"})
     second = claim(api, r)
     post(api, f"attempts/{second['id']}/started", {"thread_id": "t2"}, token=r["token"])
-    post(api, f"attempts/{second['id']}/complete", {"outcome": "failed", "text": "boom", "last_seq": 0}, token=r["token"])
+    post(
+        api, f"attempts/{second['id']}/complete", {"outcome": "failed", "text": "boom", "last_seq": 0}, token=r["token"]
+    )
     waiting = note(api, "three")
     store = api.app.state.store
-    with store.transaction() as c:                            # a database from before the column
+    with store.transaction() as c:  # a database from before the column
         c.execute("DROP INDEX notes_waiting")
         c.execute("DROP INDEX notes_unsettled_carried")
         c.execute("ALTER TABLE notes DROP COLUMN settled_at")
@@ -179,11 +205,18 @@ def test_the_migration_settles_old_notes_of_completed_runs_only(api):
 def test_the_waiting_scan_reads_only_the_unsettled_index(api):
     store = api.app.state.store
     with store.read() as c:
-        for sql, args in ((f"SELECT n.* FROM notes n WHERE n.to_actor=? AND {H.NOTE_WAITING_SQL} "
-                           "ORDER BY NOT (n.from_actor=? AND n.message_id IS NULL),n.created_at,n.id LIMIT ?",
-                           ("bot:ops", "tico", 50)),
-                          (f"SELECT n.to_actor,count(*) FROM notes n WHERE n.to_actor IN (?) AND {H.NOTE_WAITING_SQL} "
-                           "GROUP BY n.to_actor", ("bot:ops",))):
+        for sql, args in (
+            (
+                f"SELECT n.* FROM notes n WHERE n.to_actor=? AND {H.NOTE_WAITING_SQL} "
+                "ORDER BY NOT (n.from_actor=? AND n.message_id IS NULL),n.created_at,n.id LIMIT ?",
+                ("bot:ops", "tico", 50),
+            ),
+            (
+                f"SELECT n.to_actor,count(*) FROM notes n WHERE n.to_actor IN (?) AND {H.NOTE_WAITING_SQL} "
+                "GROUP BY n.to_actor",
+                ("bot:ops",),
+            ),
+        ):
             plan = " ".join(str(row[3]) for row in c.execute("EXPLAIN QUERY PLAN " + sql, args))
             assert "notes_waiting" in plan, plan
 
@@ -193,6 +226,7 @@ def test_a_deferred_thread_note_the_bot_lost_access_to_is_cancelled_not_carried(
     # cancels what it would carry; the one it still reads goes to a run in its own thread, not the bot's next unrelated one.
     from backend import threads
     from backend.tests.test_threads_delivery import new_thread, say
+
     r = setup(api)
     store = api.app.state.store
     lost = new_thread(api, members=("human:ben", "bot:ops"), title="Lost")
@@ -208,7 +242,7 @@ def test_a_deferred_thread_note_the_bot_lost_access_to_is_cancelled_not_carried(
     run = claim(api, r)
     carried = [n["text"] for n in run["notes"]]
     assert not any("payroll" in text for text in carried), carried
-    assert not any("Ben's note for ops" in text for text in carried), carried   # private: it waits for its own thread
+    assert not any("Ben's note for ops" in text for text in carried), carried  # private: it waits for its own thread
     post(api, f"attempts/{run['id']}/started", {"thread_id": "t-run"}, token=r["token"])
     post(api, f"attempts/{run['id']}/complete", {"outcome": "completed", "text": "ok", "last_seq": 0}, token=r["token"])
     own = claim(api, r)
@@ -222,6 +256,7 @@ def test_a_note_whose_source_the_bot_lost_is_not_read_back_through_the_notes_lis
     # Before the next claim, /notes must not return a copied body the recipient can no longer read.
     from backend import threads
     from backend.tests.test_threads_delivery import new_thread, say
+
     r = setup(api)
     store = api.app.state.store
     lost = new_thread(api, members=("human:ben", "bot:ops"), title="Lost")
@@ -231,6 +266,6 @@ def test_a_note_whose_source_the_bot_lost_is_not_read_back_through_the_notes_lis
         ana = api.app.state.auth.identity_for_actor(c, "human:ana")
         threads.remove_member(c, ana, lost["id"], "bot:ops")
     post(api, "chat/ops", {"text": "Unrelated turn"})
-    turn = claim(api, r, next_run=False)                  # an active turn: its notes are not carried
+    turn = claim(api, r, next_run=False)  # an active turn: its notes are not carried
     visible = get(api, "notes", token=turn["token"])["notes"]
     assert not any("payroll" in (n.get("text") or "") for n in visible), visible

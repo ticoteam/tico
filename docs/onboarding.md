@@ -50,7 +50,7 @@ it drafted, for the owner to confirm; nothing is published. The preview lists it
 **Watching** section; each bet `proposed`, its wrong-if a text test due on the file's check date (90 days out when it
 has none); and each goal on the bet it came from. With a market not defined yet it adds the
 [market by spend](librarian.md#market-spend): the definition and its segments, each sized segment's size `proposed`
-on its own evidence (a segment with none stays unsized), the company in its `ours` segment, and each player as a company
+on its own evidence (a segment with none stays unsized), the company in each of its `ours` segments, and each player as a company
 on the market graph with its site a watched page. The posts the page found are filed as new market insights, so the
 Librarian's next curate sees them. A part the app refuses (a name the market graph already has, say) is left out and
 named on the setup record (`company_import.strategy.skipped`). A format 0.2 file imports exactly as before.
@@ -71,7 +71,7 @@ currently configured AI providers.
 
 The implementation is `backend/onboarding.py` (the record, creating the team), `ui/setup-strategy.js` (What are you
 building and Your bets, over `backend/strategy_setup.py`), `backend/recruit.py` and `backend/recruit_rank.py`
-(the team builder's templates and suggestions), `ui/org-builder.js` (the team chart screen), `ui/first-run.js` (who reports to whom, the review
+(the team builder's templates and suggestions), `ui/org-builder.ts` (the team chart screen), `ui/first-run.ts` (who reports to whom, the review
 and the screen after Create), Tico HQ's `POST /v1/recruit` ([its API](tico-hq.md), for HQ's suggestions), `clients/catalog.py` (turning a template into a repository),
 `runner_support/catalog_job.py` (the bots the computer sets up itself, run by the runner as `python -m runner_support catalog`) and `templates/catalog/` (the templates). The quick start in the
 [README](../README.md) is the same flow with the commands in it.
@@ -340,7 +340,7 @@ The last question's **Start research** calls `POST /api/v2/librarian/setup/marke
 `playbooks/market-setup.md` researches the answers and writes the market pages and graph ([librarian.md](librarian.md)). The page
 then shows "The Librarian is researching your market. This usually takes 5–10 minutes." with a link to the task, until the market
 has content (at least two minutes, at most thirty), kept in the browser, polling the market every 30 seconds. Then the normal
-Market page is drawn. The code is `ui/market-page.js`. When setup was given the team's website (`names.website`), finishing setup files "Set up the
+Market page is drawn. The code is `ui/market-page.ts`. When setup was given the team's website (`names.website`), finishing setup files "Set up the
 market map" from it and the market page opens on the researching notice; the Librarian reads that website from `hub strategy show`
 when the task has none, and the four questions stay for a team that gave no website.
 
@@ -357,7 +357,7 @@ the caller's own choices. Runners and bots get `403`.
 | `POST /api/v2/setup/getting-started/state` | Any human, for themselves |
 | `POST /api/v2/setup/getting-started/market` | Owner |
 
-The code is `backend/getting_started.py` and `ui/getting-started.js`. Tests: `backend/tests/test_getting_started.py`
+The code is `backend/getting_started.py` and `ui/getting-started.ts`. Tests: `backend/tests/test_getting_started.py`
 and `ui/tests/getting-started.cjs`.
 
 ## What finishing creates
@@ -425,6 +425,12 @@ and a computer is enrolled). Its routines start paused: the server arms the dail
 weekly goals review (the Monday note) is started too, since every install starts at **Suggests actions**; choosing
 **Passive** pauses it ([Your Strategy Bot](strategy-bot.md)).
 
+The Brand Owner (`brand`) keeps the brand book and the Brand card. It is built the same way (a required, bootstrap card; a
+team from before it existed gets it on update once a model is chosen and a computer is enrolled) and sits outside the chart
+like the others. A team that already hired a bot under the slug `brand` (a Brand Manager)
+keeps that bot as it is and gets no second one. Its monthly brand audit starts off and goes on, once, when it runs
+`hub bot setup-done` at the end of its setup; one a person turned off stays off.
+
 A team that set the assistant aside before it was built in (v0.2.1 to v0.2.9 let the wizard skip it) keeps it archived
 on update: nothing restores it automatically. Its owner sees "The Assistant is off" on the Assistant page and at the top of
 Settings > General, and one click on **Turn on** brings the same bot back with its history (or adds it from its
@@ -467,7 +473,7 @@ and creates a planned bot that waits for its setup thread. External services lin
 ### Recruiting a seat
 
 Open a seat from its row on the team chart (`#/seat/<id>`) or right after Post a job makes it.
-`backend/recruiting.py` does the work; the pages are `ui/app/recruit.js`.
+`backend/recruiting.py` does the work; the pages are `ui/app/recruit.ts`.
 
 - **The job description.** Leaving the title asks `POST /api/v2/seats/draft` (`{title, team, reports_to}`), which answers
   and stores nothing: the catalog template that is the job the title names (its name shares a word of the work with
@@ -487,6 +493,10 @@ Open a seat from its row on the team chart (`#/seat/<id>`) or right after Post a
   `connected`, `on_hire` or `not_set`) and the model it suggests among the providers the team has turned on, with the list
   of those models to choose another. Built-in bots (BotOps, the Strategy Bot, the message bot) are never applicants. Each
   applicant has its own page (`#/seat/<id>/<template>`) with a **Hire** box: name, reports to, computer and model.
+  A seat under another open seat lists that seat in **Reports to**, marked *not hired yet*, and a line inside the box,
+  under **Reports to**, names who the bot reports to until it is hired: *Reports to Ana until Head of Marketing is hired.*
+  When the viewer cannot see that person or bot, the line says *the person or bot above* in place of the name. Choosing
+  any other entry in **Reports to** hides the line.
 - **Hire** (`POST /api/v2/seats/{id}/hire`, `{template, model, name?, runner_id?}`) creates the bot through the same checks
   as any new bot: named as given (the seat's title by default), in the seat's place on the chart and group, owned by the
   person who hired, with the template's instructions plus the job description, and **Onboarding**. A bot reports to a
@@ -512,7 +522,7 @@ session on that site grants no access to your Tico. Older installs can select th
   every run's environment.
 - **An agent you already run elsewhere**: a [Hermes](hermes-agents.md) or [OpenClaw](openclaw-agents.md) profile
   becomes a bot with a pairing code, no template; see [Connect an external agent](connect-an-agent.md#an-agent-that-is-a-bot-not-you).
-- **By hand on the Mac**: `scripts/tico -e <env> bot create <slug> --template <template>`. This
+- **By hand on the Mac**: `scripts/tico-computer -e <env> bot create <slug> --template <template>`. This
   materializes from the same templates with the environment's names but without the wizard
   answers, so `knowledge/company.md` says nobody has answered them. Register the bot in
   **Settings → Bots** afterwards.
@@ -522,7 +532,7 @@ the same template is one of the two command line routes; Tico gives it a slug of
 
 ## Adding a template
 
-Tico ships 98 role templates, by group, each with a card. `templates/catalog/` also holds the four built-in bots and three helper bots, 105 cards in all. [Starter bots](starter-bots.md) lists the 98.
+Tico ships 104 role templates, by group, each with a card. `templates/catalog/` holds 114 folders in all: those 104, four built-in bots (`assistant`, `botops`, `goal-manager`, `librarian`), five helper bots (`bookkeeper`, `brand`, `inbox`, `task-manager`, `tico-counsel`), and one retired template kept for existing installs (`bookkeeping`). [Starter bots](starter-bots.md) lists the 104.
 
 `templates/catalog/<template>/` is one template. The folder name is what `--template` takes.
 

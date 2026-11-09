@@ -1,0 +1,22 @@
+{
+    "files": {
+        "./backend/maintenance_steps/check_health.py": [
+            {
+                "code": "reportOptionalSubscript",
+                "range": {
+                    "startColumn": 67,
+                    "endColumn": 71,
+                    "lineCount": 1
+                }
+            },
+            {
+                "code": "reportOptionalSubscript",
+                "range": {
+                    "startColumn": 89,
+                    "endColumn": 93,
+                    "lineCount": 1
+                }
+            }
+        ]
+    }
+}

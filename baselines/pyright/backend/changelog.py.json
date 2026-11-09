@@ -1,0 +1,14 @@
+{
+    "files": {
+        "./backend/changelog.py": [
+            {
+                "code": "reportOptionalOperand",
+                "range": {
+                    "startColumn": 60,
+                    "endColumn": 90,
+                    "lineCount": 1
+                }
+            }
+        ]
+    }
+}

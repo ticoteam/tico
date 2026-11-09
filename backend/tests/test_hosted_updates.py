@@ -2,6 +2,7 @@
 nothing happens until support sets a target, the update waits for no bot turn to run (at most IDLE_WAIT_S), runs once
 through the standard updater, and its outcome goes back to HQ without the update being tried again. HQ and the
 updater are fakes."""
+
 import io
 import json
 import time
@@ -27,6 +28,7 @@ class Answer(io.BytesIO):
 class FakeHQ:
     """`POST <Gateway URL>/servers/update`: keeps each body and answers `target`, as a stuck HQ would (it never
     clears it), so the server alone keeps an update from repeating."""
+
     def __init__(self):
         self.bodies, self.target, self.status = [], None, 200
 
@@ -57,7 +59,7 @@ def hosted(api, monkeypatch):  # noqa: F811
     hq, updater = FakeHQ(), FakeUpdater()
     monkeypatch.setattr(store.settings, "hosted", "own")
     monkeypatch.setattr(HU, "OPENER", hq)
-    monkeypatch.setattr(HU, "tick_later", lambda store: None)      # the scheduler's own tick stays out of the way
+    monkeypatch.setattr(HU, "tick_later", lambda store: None)  # the scheduler's own tick stays out of the way
     monkeypatch.setattr(releases, "TRANSPORT", httpx.MockTransport(updater))
     monkeypatch.setenv("TICO_GATEWAY_KEY", KEY)
     monkeypatch.setenv("TICO_GATEWAY_URL", URL)
@@ -67,28 +69,31 @@ def hosted(api, monkeypatch):  # noqa: F811
     monkeypatch.setenv("TICO_VERSION", "0.4.9")
     monkeypatch.setattr(execution, "CLAIMED_BUSY", {})
     vault = Vault(store)
-    return type("Hosted", (), {"store": store, "hq": hq, "updater": updater,
-                               "tick": lambda self, at: HU.tick(store, vault, at)})()
+    return type(
+        "Hosted", (), {"store": store, "hq": hq, "updater": updater, "tick": lambda self, at: HU.tick(store, vault, at)}
+    )()
 
 
 def events(store, action):
     with store.read() as c:
-        return [(r["actor"], json.loads(r["detail"] or "{}"))
-                for r in c.execute("SELECT * FROM events WHERE action=? ORDER BY rowid", (action,))]
+        return [
+            (r["actor"], json.loads(r["detail"] or "{}"))
+            for r in c.execute("SELECT * FROM events WHERE action=? ORDER BY rowid", (action,))
+        ]
 
 
 def test_only_a_hosted_server_asks_and_nothing_happens_until_support_sets_a_target(api, hosted, monkeypatch):  # noqa: F811
     monkeypatch.setattr(hosted.store.settings, "hosted", "")
-    assert hosted.tick(T0) == "" and hosted.hq.bodies == []                       # a self-run server never asks
+    assert hosted.tick(T0) == "" and hosted.hq.bodies == []  # a self-run server never asks
     monkeypatch.setattr(hosted.store.settings, "hosted", "own")
     hosted.tick(T0)
     assert hosted.hq.bodies == [{"version": "0.4.9"}]
     hosted.tick(T0 + 60)
-    assert len(hosted.hq.bodies) == 1                                              # HQ is asked every 15 minutes
+    assert len(hosted.hq.bodies) == 1  # HQ is asked every 15 minutes
     hosted.tick(T0 + HU.CHECK_S)
     assert len(hosted.hq.bodies) == 2 and hosted.updater.started == []
     assert api.get("/api/v2/config", headers=headers()).json()["update"]["scheduled"] == ""
-    hosted.hq.status = 404                                                         # HQ: not a hosted server
+    hosted.hq.status = 404  # HQ: not a hosted server
     hosted.tick(T0 + 2 * HU.CHECK_S)
     assert hosted.updater.started == []
 
@@ -111,7 +116,7 @@ def test_a_cell_company_takes_its_target_through_its_own_updater(hosted, monkeyp
 
 def test_a_target_waits_for_no_bot_turn_at_most_the_idle_wait_then_updates_once(api, hosted, monkeypatch):  # noqa: F811
     hosted.hq.target = TARGET
-    execution.CLAIMED_BUSY["mac"] = (frozenset({"coo"}), frozenset(), time.monotonic())   # a bot turn runs
+    execution.CLAIMED_BUSY["mac"] = (frozenset({"coo"}), frozenset(), time.monotonic())  # a bot turn runs
     assert hosted.tick(T0) == "waiting" and hosted.updater.started == []
     assert api.get("/api/v2/config", headers=headers()).json()["update"]["scheduled"] == "0.4.11"
     health = api.get("/api/v2/health", headers=headers()).json()
@@ -119,7 +124,7 @@ def test_a_target_waits_for_no_bot_turn_at_most_the_idle_wait_then_updates_once(
     assert version["summary"] == "Tico will update this server to v0.4.11 when idle."
     assert hosted.tick(T0 + 60) == "waiting" and hosted.updater.started == []
     execution.CLAIMED_BUSY["mac"] = (frozenset({"coo"}), frozenset(), time.monotonic())
-    assert hosted.tick(T0 + HU.IDLE_WAIT_S) == "updating"                         # busy all along: the wait ends
+    assert hosted.tick(T0 + HU.IDLE_WAIT_S) == "updating"  # busy all along: the wait ends
     assert hosted.updater.started == ["0.4.11"]
     assert events(hosted.store, "system.update.started") == [("system:hosting", {"from": "0.4.9", "to": "0.4.11"})]
 
@@ -128,8 +133,10 @@ def test_a_target_waits_for_no_bot_turn_at_most_the_idle_wait_then_updates_once(
     hosted.updater.state = {"state": "healthy", "from": "0.4.9", "to": "v0.4.11"}
     assert hosted.tick(T0 + HU.IDLE_WAIT_S + 60) == "done"
     hosted.tick(T0 + HU.IDLE_WAIT_S + 120)
-    assert hosted.hq.bodies[-1] == {"version": "0.4.11", "done": {
-        "request_id": TARGET["request_id"], "outcome": "updated", "message": ""}}
+    assert hosted.hq.bodies[-1] == {
+        "version": "0.4.11",
+        "done": {"request_id": TARGET["request_id"], "outcome": "updated", "message": ""},
+    }
     assert [d["outcome"] for _, d in events(hosted.store, "system.update.finished")] == ["updated"]
     # Once on the target, the same target (or a new request for it) never updates again.
     hosted.hq.target = {**TARGET, "request_id": "hu_" + "b" * 16}
@@ -142,14 +149,17 @@ def test_a_target_waits_for_no_bot_turn_at_most_the_idle_wait_then_updates_once(
 
 def test_a_failed_or_rolled_back_update_is_reported_and_never_tried_again(api, hosted):  # noqa: F811
     hosted.hq.target = TARGET
-    assert hosted.tick(T0) == "updating" and hosted.updater.started == ["0.4.11"]   # idle: at once
+    assert hosted.tick(T0) == "updating" and hosted.updater.started == ["0.4.11"]  # idle: at once
     hosted.updater.state = {"state": "rolled_back", "from": "0.4.9", "to": "v0.4.11", "message": "Health check failed"}
     assert hosted.tick(T0 + 60) == "done"
     hosted.tick(T0 + 120)
-    assert hosted.hq.bodies[-1]["done"] == {"request_id": TARGET["request_id"], "outcome": "rolled_back",
-                                            "message": "Health check failed"}
+    assert hosted.hq.bodies[-1]["done"] == {
+        "request_id": TARGET["request_id"],
+        "outcome": "rolled_back",
+        "message": "Health check failed",
+    }
     told = len(hosted.hq.bodies)
-    for at in range(1, 5):                     # HQ still answering the same target: told once, never started again
+    for at in range(1, 5):  # HQ still answering the same target: told once, never started again
         hosted.tick(T0 + 120 + at * HU.CHECK_S)
     assert hosted.updater.started == ["0.4.11"] and len(hosted.hq.bodies) == told + 4
     assert all("done" not in body for body in hosted.hq.bodies[told:])
@@ -167,7 +177,7 @@ def test_a_failed_or_rolled_back_update_is_reported_and_never_tried_again(api, h
 
 
 def test_a_target_taken_back_before_it_starts_is_dropped_and_hq_answers_are_checked(api, hosted):  # noqa: F811
-    hosted.hq.target = {"version": "latest", "request_id": TARGET["request_id"]}   # not a release: ignored
+    hosted.hq.target = {"version": "latest", "request_id": TARGET["request_id"]}  # not a release: ignored
     hosted.tick(T0)
     execution.CLAIMED_BUSY["mac"] = (frozenset({"coo"}), frozenset(), time.monotonic())
     hosted.hq.target = TARGET
@@ -176,3 +186,15 @@ def test_a_target_taken_back_before_it_starts_is_dropped_and_hq_answers_are_chec
     assert hosted.tick(T0 + 2 * HU.CHECK_S) == "done"
     assert hosted.tick(T0 + HU.IDLE_WAIT_S + HU.CHECK_S) == "done" and hosted.updater.started == []
     assert len(events(hosted.store, "system.update.unscheduled")) == 1
+
+
+def test_a_pre_update_copy_does_not_use_up_the_settle_window(api, hosted, monkeypatch):  # noqa: F811
+    hosted.hq.target = TARGET
+    assert hosted.tick(T0) == "updating"
+    hosted.updater.state = {"state": "snapshotting", "from": "0.4.9", "to": "0.4.11"}
+    assert hosted.tick(T0 + 60) == "updating"
+    assert hosted.tick(T0 + HU.SETTLE_S + 60) == "updating"  # 46 minutes in, still copying: not timed out
+    hosted.updater.state = {"state": "pulling", "from": "0.4.9", "to": "0.4.11"}
+    assert hosted.tick(T0 + HU.SETTLE_S + 700) == "updating"  # the copy took about 11 minutes of the hour
+    assert hosted.tick(T0 + 2 * HU.SETTLE_S + 700) == "done"  # the window resumes counting after the copy
+    assert events(hosted.store, "system.update.finished")[-1][1]["outcome"] == "timed_out"

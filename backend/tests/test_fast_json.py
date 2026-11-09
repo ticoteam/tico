@@ -1,4 +1,5 @@
 """JSON answers by orjson (backend/fast_json.py): the same JSON as before, and FastAPI still sees the same handler."""
+
 import asyncio
 import inspect
 import json
@@ -16,9 +17,13 @@ class Item(BaseModel):
 
 
 def test_dumps_matches_the_old_encoder():
-    content = {"tasks": [{"id": "t1", "title": "Naïve café ✓", "n": 3, "ok": True, "none": None, "f": 1.5}],
-               "when": datetime(2026, 10, 6, 17, 0, tzinfo=timezone.utc), "labels": {"b", "a"}, 7: "int key",
-               "model": Item(id="i1", tags=["x"])}
+    content = {
+        "tasks": [{"id": "t1", "title": "Naïve café ✓", "n": 3, "ok": True, "none": None, "f": 1.5}],
+        "when": datetime(2026, 10, 6, 17, 0, tzinfo=timezone.utc),
+        "labels": {"b", "a"},
+        7: "int key",
+        "model": Item(id="i1", tags=["x"]),
+    }
     old = json.loads(json.dumps(jsonable_encoder(content), ensure_ascii=False))
     new = json.loads(fast_json.dumps(content))
     assert sorted(new.pop("labels")) == sorted(old.pop("labels"))
@@ -26,7 +31,7 @@ def test_dumps_matches_the_old_encoder():
 
 
 def test_what_orjson_refuses_falls_back():
-    assert json.loads(fast_json.dumps({"big": 2 ** 70})) == {"big": 2 ** 70}
+    assert json.loads(fast_json.dumps({"big": 2**70})) == {"big": 2**70}
 
 
 def test_handlers_keep_their_signature_and_kind():

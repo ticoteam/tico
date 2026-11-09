@@ -21,7 +21,7 @@ Nothing is sent outside the team.
 3. **Nudge the engineer once, with the item and its link,** as a comment on the child task with `hub task comment`.
    Do not repeat a nudge when nothing has changed since the last check.
 4. **Name what needs a decision.** A dependency across owners, a scope question or a date change goes to the
-   requester with `hub task ask`, with the options.
+   requester with `hub task question "<question>" --on <person> --parent <id>`, with the options.
 5. **Update the parent.** Completed children, merged pull requests (merged, not released), the remaining blockers,
    and the next action for each.
 6. **Finish.** `hub task update <id> --status done --note` for the check: the parents checked, and any source you could not read.
