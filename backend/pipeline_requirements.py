@@ -8,11 +8,13 @@ Retiring a requirement keeps its rows and its log; it only stops counting for ne
 """
 
 import json
+import math
 import re
 from typing import TYPE_CHECKING, Any, Literal, cast
 
 from fastapi import Request
-from pydantic import Field
+from pydantic import Field, field_validator
+from pydantic_core import PydanticCustomError
 
 from . import hubdb
 from . import pipeline_rights
@@ -91,6 +93,19 @@ class PipelineSettingsBody(Contract):
     stuck_after_hours: int | None = Field(default=None, ge=1, le=168)
     ask_person_after_hours: int | None = Field(default=None, ge=1, le=720)
     question_expiry_days: int | None = Field(default=None, ge=1, le=60)
+    daily_cap_usd: float | None = None
+    monthly_cap_usd: float | None = None
+
+    @field_validator("daily_cap_usd", "monthly_cap_usd", mode="before")
+    @classmethod
+    def positive_cap(cls, value: Any) -> Any:
+        if value is None:
+            return None
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise PydanticCustomError("pipeline_cap", "Enter an amount above zero, or leave it blank.")
+        if not math.isfinite(float(value)) or value <= 0 or value > 10_000_000:
+            raise PydanticCustomError("pipeline_cap", "Enter an amount above zero, or leave it blank.")
+        return value
 
 
 class StageBody(Contract):
@@ -406,6 +421,7 @@ def settings_view(conn: "sqlite3.Connection", pipeline_id: str) -> dict[str, Any
     row = conn.execute(
         "SELECT id, name, prefix, goal, pipeline_visibility AS visibility, factory_id, "
         "pipeline_owner_id AS owner_id, manager AS manager_id, manager_every_minutes, stuck_after_hours, "
+        "daily_cap_nano / 1000000000.0 AS daily_cap_usd, monthly_cap_nano / 1000000000.0 AS monthly_cap_usd, "
         "ask_person_after_hours, question_expiry_days FROM task_types WHERE id=?",
         (pipeline_id,),
     ).fetchone()
@@ -431,7 +447,9 @@ def update_settings(conn: "sqlite3.Connection", actor: str, pipeline_id: str, bo
 
     A private pipeline (visibility members) sits outside every factory: setting it clears factory_id, and naming a factory
     for one is refused. Members replaces the whole list. The change is logged as pipeline.settings."""
-    found = conn.execute("SELECT id, pipeline_visibility FROM task_types WHERE id=?", (pipeline_id,)).fetchone()
+    found = conn.execute(
+        "SELECT id,pipeline_visibility,daily_cap_nano,monthly_cap_nano FROM task_types WHERE id=?", (pipeline_id,)
+    ).fetchone()
     if found is None:
         raise Problem("not_found", "No such pipeline", 404)
     _may_edit(conn, actor, pipeline_id)
@@ -441,6 +459,19 @@ def update_settings(conn: "sqlite3.Connection", actor: str, pipeline_id: str, bo
     manager = manager_bot(conn, body["manager_id"]) if manager_sent else None  # checked before anything is written
     visibility = str(body.get("visibility") or found[1] or "company")
     sets: dict[str, Any] = {}
+    cap_fields = {
+        "daily_cap_usd": "daily_cap_nano",
+        "monthly_cap_usd": "monthly_cap_nano",
+    }
+    for field, column in cap_fields.items():
+        if field not in body:
+            continue
+        try:
+            from .pipeline_budgets import amount_nano
+
+            sets[column] = amount_nano(body[field])
+        except Problem:
+            raise
     if "goal" in body:
         sets["goal"] = (body["goal"] or "").strip() or None
     for column in ("stuck_after_hours", "ask_person_after_hours", "question_expiry_days"):
@@ -459,6 +490,7 @@ def update_settings(conn: "sqlite3.Connection", actor: str, pipeline_id: str, bo
         sets["factory_id"] = factory or None
     members = None if body.get("members") is None else list(dict.fromkeys(_member_ref(m) for m in body["members"]))
     if body.get("prefix") is not None:
+        # The cap and every other field has been validated before the first write.
         set_prefix(conn, actor, pipeline_id, body["prefix"])
     now = H.now()
     if body.get("owner_id") is not None:
@@ -481,7 +513,14 @@ def update_settings(conn: "sqlite3.Connection", actor: str, pipeline_id: str, bo
             "INSERT INTO pipeline_members (pipeline_id, actor_id, created_at) VALUES (?,?,?)",
             [(pipeline_id, ref, now) for ref in members],
         )
-    H.event(conn, actor, "pipeline.settings", pipeline_id, {k: v for k, v in body.items() if v is not None})
+    event_body = {k: v for k, v in body.items() if v is not None}
+    # Clearing a cap is a meaningful settings change too; keep its explicit null in the audit event.
+    event_body.update({field: None for field in cap_fields if field in body and body[field] is None})
+    H.event(conn, actor, "pipeline.settings", pipeline_id, event_body)
+    if any(field in body for field in cap_fields):
+        from . import pipeline_budgets
+
+        pipeline_budgets.settings_changed(conn, pipeline_id, dict(found))
     return settings_view(conn, pipeline_id)
 
 
@@ -598,6 +637,16 @@ def install(app: "FastAPI", store: "Store", mutate: "Callable[..., Any]", auth: 
         guard.domain(who)
         with db.read() as c:
             return settings_read(c, who.actor, pipeline_id)
+
+    @app.get("/api/v2/pipelines/{pipeline_id}/spend")
+    def pipeline_spend(request: Request, pipeline_id: str) -> dict[str, Any]:
+        """This pipeline's estimated spend and optional caps for today and this UTC month."""
+        who = request.state.identity
+        guard.domain(who)
+        with db.read() as c:
+            from . import pipeline_budgets
+
+            return pipeline_budgets.read(c, who.actor, pipeline_id)
 
     @app.patch("/api/v2/pipelines/{pipeline_id}/settings")
     def pipeline_settings(request: Request, pipeline_id: str, body: PipelineSettingsBody) -> dict[str, Any]:

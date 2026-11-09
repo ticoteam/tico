@@ -8256,6 +8256,10 @@ def task_update(
                 str(given.get("text") or note or ""),
                 text_sources=given.get("body_sources") or (),
             )
+    if row is not None and status in ("done", "declined") and row["status"] != status:
+        from . import pipeline_budgets
+
+        pipeline_budgets.decision_closed(conn, actor, task_id, status, note)
     # A person finishing a subtask under a bot's task: the bot hears it once, on the parent.
     if after["status"] == "done" and row["status"] != "done" and not after.get("verdict"):
         # A check finished with no verdict moves its ticket like one with changes (backend/verdict_moves.py).

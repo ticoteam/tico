@@ -68,6 +68,8 @@ QUEUE_WAITS = (
     "backoff",
     "bot_limit",
     "on_ice",
+    "pipeline_cap_daily",
+    "pipeline_cap_monthly",
 )
 # Keep the stuck threshold compatible with older runners' twenty-minute claim window and fourteen-minute stop.
 # New runners hand unstarted work back immediately and cap active turns at five minutes by default.
@@ -1293,6 +1295,8 @@ HELD = {
     "task_cap": ("Its active task limit is full; waiting work frees a place", BOT_SETTINGS),
     # A card On ice (D69, a stage capped at 0): its queued work waits on purpose until a person moves the card out.
     "on_ice": ("Its card is On ice: its work starts when a person moves the card out", RUNS),
+    "pipeline_cap_daily": ("Paused: over its daily cap", RUNS),
+    "pipeline_cap_monthly": ("Paused: over its monthly cap", RUNS),
     "auto_start_off": ("Automatic assigned-task starts are off for this bot", BOT_SETTINGS),
     "paused": ("Paused: its owner or BotOps must resume it", BOT_SETTINGS),
     "company_paused": ("All bots on Tico Team are paused: its work starts when someone resumes", BOT_SETTINGS),

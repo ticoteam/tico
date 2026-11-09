@@ -406,6 +406,11 @@ def _record(c: sqlite3.Connection, run: dict[str, Any], jobs: list[dict[str, Any
         "UPDATE ci_runs SET github_run_id=?, minutes=?, cost_cents=?, seen_at=? WHERE id=?",
         (gh_id, minutes, cents, at, row["id"]),
     )
+    if row["task_id"]:
+        from . import pipeline_budgets
+
+        priced_at = datetime.fromisoformat(at.replace("Z", "+00:00"))
+        pipeline_budgets.after_run(c, str(row["task_id"]), priced_at)
     if not cents and row["hold_id"]:
         FC.release_unused(c, str(row["hold_id"]), at)  # a run that cost nothing frees its estimate now
 

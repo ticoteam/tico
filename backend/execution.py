@@ -2783,6 +2783,10 @@ def job_refusal(c, job, followed, ready, busy, lanes, roots, live=frozenset(), *
             return "task_wait"  # a silence control applied after enqueue still wins
     task_id = work_task_id(message, conversation)
     task = H.task(c, task_id) if task_id else None
+    from . import pipeline_budgets
+
+    if reason := pipeline_budgets.hold_reason(c, task_id):
+        return reason
     refs = message.get("refs") or {}
     if "make_page" in refs and (not runner or MAKE_PAGE not in capability_set(runner["capabilities"])):
         return "make_page_upgrade"
@@ -7369,6 +7373,9 @@ class Execution:
                 ),
             )
         usage_limits.after_run(c, row["bot_id"], self.store.settings.owner_email)
+        from . import pipeline_budgets
+
+        pipeline_budgets.after_run(c, row.get("task_id"))
         finance_run_ended(c, row["job_id"], aid)
         config = c.execute(BS.ONE_SQL, (row["bot_id"],)).fetchone()
         runtime, model = providers.bot_choice(c, self.store.settings, json.loads(config[0]) if config else {})
