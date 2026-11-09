@@ -1,29 +1,42 @@
+import type {Route} from 'playwright';
 // Offline browser regression: a Settings or Tools form keeps what a person has typed while the app's
 // polls run. Types into Library › Tools › GitHub (its GitHub App card), and into Settings > Computers (Add computer, API token), fires the
 // refresh paths and asserts the values survive.
-const {chromium} = require('playwright');
+const {chromium} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
-const {html, uiFile, harnesses} = require('./support/page.cjs');
-const {unrouted} = require('./support/routes.cjs');
+const {html, uiFile, harnesses} = require('./support/page.cjs') as typeof import('./support/page.cjs');
+const {unrouted} = require('./support/routes.cjs') as typeof import('./support/routes.cjs');
+
+declare global {
+  // u5: browser globals the page's own scripts define (see ui/app); declared once per name, same type everywhere.
+  function refresh(force?: boolean): Promise<void>;
+  function applyConfig(config: unknown): void;
+  function apiError(j: unknown, r: unknown): string;
+  function taskBody(t: unknown): string;
+  function openTaskCreate(owner?: string, opts?: object): void;
+  function settingsEditInstructions(slug: string): void;
+}
+
 (async () => {
-  const browser = await chromium.launch({headless: true, channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined});
+  const browser = await chromium.launch({headless: true, channel: (process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined) as string});
   try {
     const page = await browser.newPage({viewport: {width: 1440, height: 900}, serviceWorkers: 'block'});
-    const errors = [];
+    const errors: string[] = [];
     page.on('pageerror', e => errors.push(e.message));
-    const writes = [];
-    const computers = [{id: 'computer-1', label: 'Build server', owner_id: 'ana', bots: ['helper'], platform: 'linux',
+    type Write = {p: string; body: Record<string, unknown>};
+    const writes: Write[] = [];
+    const computers: {revoked_at?: string; [k: string]: unknown}[] = [{id: 'computer-1', label: 'Build server', owner_id: 'ana', bots: ['helper'], platform: 'linux',
       last_seen_at: new Date().toISOString(), readiness: {runtimes: {codex: {installed: true, authenticated: 'missing'}}}}];
     let providers = {enabled: ['openai'], default: {runtime: 'codex', model: 'test-model'}, revision: 1,
       providers: [{id: 'openai', label: 'OpenAI', recommended: 'test-model'}]};
     const bots = [{name: 'helper', display_name: 'Helper', status: 'active', owner_id: 'ana', can_manage: true, users: [], bot_owners: []}];
-    await page.route('**/*', route => {
+    await page.route('**/*', (route: Route) => {
       const req = route.request(), p = new URL(req.url()).pathname;
-      const json = (body, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
+      const json = (body: unknown, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
       const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/);
-      if (ui && fs.existsSync(uiFile(ui[1])))
-        return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]), 'utf8')});
+      if (ui && fs.existsSync(uiFile(ui[1]!)))
+        return route.fulfill({contentType: ui[1]!.endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]!), 'utf8')});
       if (/\.(?:js|ts)$/.test(p)) return route.fulfill({contentType: 'application/javascript', body: ''});
       if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
       const config = {version: '0.1.0', app_name: 'Tico', local: true, compose_project: 'acme', server_network: 'acme_default'};
@@ -47,7 +60,7 @@ const {unrouted} = require('./support/routes.cjs');
         if (req.method() === 'PUT') { const body = req.postDataJSON(); writes.push({p, body}); providers = {...providers, enabled: body.enabled, default: {model: body.model, runtime: body.model ? 'codex' : ''}, revision: providers.revision + 1}; }
         return json(providers);
       }
-      if (p === '/api/v2/computers/computer-1/revoke') { writes.push({p, body: req.postDataJSON()}); computers[0].revoked_at = new Date().toISOString(); return json({revoked: true}); }
+      if (p === '/api/v2/computers/computer-1/revoke') { writes.push({p, body: req.postDataJSON()}); computers[0]!.revoked_at = new Date().toISOString(); return json({revoked: true}); }
       if (p === '/api/v2/assistant/messages') { writes.push({p, body: req.postDataJSON()}); return json({}); }
       if (p === '/api/v2/access') return json({people: [{id: 'ana', name: 'Ana', owner: true, role: 'owner', can_sign_in: true}], home_domain: 'example.com', allowed: [], allowed_domains: [], owner_id: {}, rules: {}});
       if (p === '/api/v2/me/tokens') return json({tokens: []});
@@ -82,7 +95,7 @@ const {unrouted} = require('./support/routes.cjs');
     });
     assert.equal(await machine.inputValue(), 'Build server', 'Computer name survives loadSettings');
     assert.equal(await token.inputValue(), 'CI script', 'Token label survives loadSettings');
-    assert.equal(await page.locator('#machine-add-dialog').evaluate(d => d.open), true, 'Add computer stays open through loadSettings');
+    assert.equal(await page.locator('#machine-add-dialog').evaluate(d => (d as HTMLDialogElement).open), true, 'Add computer stays open through loadSettings');
     await page.keyboard.press('Escape');
     await page.locator('[data-settings-tab=bots]').click();
     assert.equal(await page.locator('#settings-bots #settings-add-bot').isVisible(), true);
@@ -107,7 +120,7 @@ const {unrouted} = require('./support/routes.cjs');
     await botSearch.press('Escape');
     assert.equal(await botSearch.inputValue(), '');
     assert.equal(await page.locator('[data-settings-bot]').count(), 1);
-    const focused = () => page.evaluate(() => { const a = document.activeElement; return a?.dataset.botsPicking !== undefined ? a.textContent : a?.dataset.botsSearch !== undefined ? 'search' : a?.tagName; });
+    const focused = () => page.evaluate(() => { const a = document.activeElement as HTMLElement | null; return a?.dataset.botsPicking !== undefined ? a.textContent : a?.dataset.botsSearch !== undefined ? 'search' : a?.tagName; });
     assert.equal(await focused(), 'search', 'Escape keeps the cursor in the search box');
     // On a phone, Select and Done redraw the list and keep the keyboard on the same control.
     await page.setViewportSize({width: 390, height: 844});
@@ -115,7 +128,7 @@ const {unrouted} = require('./support/routes.cjs');
     await page.locator('[data-bots-picking]').press('Enter');
     assert.equal(await focused(), 'Done');
     await page.locator('[data-bots-pick-all]').press('Enter');
-    assert.equal(await page.evaluate(() => document.activeElement?.dataset.botsPickAll !== undefined), true);
+    assert.equal(await page.evaluate(() => (document.activeElement as HTMLElement | null)?.dataset.botsPickAll !== undefined), true);
     await page.locator('[data-bots-picking]').press('Enter');
     assert.equal(await focused(), 'Select');
     assert.equal(await page.evaluate(() => SETTINGS_BOTS_VIEW.selected.size), 0);
@@ -130,27 +143,27 @@ const {unrouted} = require('./support/routes.cjs');
     await page.locator('#set-prov [data-provider-fallback]').uncheck();
     const saves = () => writes.filter(row => row.p === '/api/v2/providers').length;
     // The save redraws the form; the next edit waits for the new one.
-    await page.evaluate(() => { document.querySelector('#set-prov').dataset.before = '1'; });
+    await page.evaluate(() => { (document.querySelector('#set-prov') as HTMLElement).dataset.before = '1'; });
     await page.locator('#set-prov-save').click();
     for (let i = 0; i < 100 && !saves(); i++) await new Promise(done => setTimeout(done, 50));
-    assert.equal(writes.find(row => row.p === '/api/v2/providers').body.auto_fallback, false);
-    assert.equal('preset' in writes.find(row => row.p === '/api/v2/providers').body, false);
+    assert.equal(writes.find(row => row.p === '/api/v2/providers')!.body.auto_fallback, false);
+    assert.equal('preset' in writes.find(row => row.p === '/api/v2/providers')!.body, false);
     // The check-model order was not edited, so the save leaves it alone instead of re-checking it.
-    assert.equal('check_models' in writes.find(row => row.p === '/api/v2/providers').body, false);
+    assert.equal('check_models' in writes.find(row => row.p === '/api/v2/providers')!.body, false);
     // Edited, the order is sent as typed.
     const before = saves();
     await page.locator('#set-prov:not([data-before]) [data-provider-check]').waitFor();
     await page.locator('#set-prov [data-provider-check]').fill('grok, codex');
     await page.locator('#set-prov-save').click();
     for (let i = 0; i < 100 && saves() === before; i++) await new Promise(done => setTimeout(done, 50));
-    assert.deepEqual(writes.filter(row => row.p === '/api/v2/providers').at(-1).body.check_models, ['grok', 'codex']);
+    assert.deepEqual(writes.filter(row => row.p === '/api/v2/providers').at(-1)!.body.check_models, ['grok', 'codex']);
     await page.locator('[data-settings-tab=people]').click();
     await page.locator('#people-add').waitFor();
     await page.locator('[data-settings-tab=devices]').click();
     await page.locator('#set-machines .machine-name[data-computer-open=computer-1]').click();
     await page.locator('[data-computer-remove]').click();
     await page.locator('dialog.settings-confirm[open] [data-confirm-ok]').click();
-    await page.waitForFunction(() => !!SETTINGS_DATA.machines[0].revoked_at);
+    await page.waitForFunction(() => !!(SETTINGS_DATA.machines[0] as unknown as {revoked_at?: string}).revoked_at);
     assert.ok(writes.some(row => row.p === '/api/v2/computers/computer-1/revoke'));
     // The presence read can expose revoked_at before the action's remaining Settings reads finish.
     await page.locator('#machine-note code', {hasText: 'docker compose'}).waitFor();
@@ -167,13 +180,13 @@ const {unrouted} = require('./support/routes.cjs');
     assert.equal(await page.evaluate(() => taskBody({body: 'Read the report.\n\nAttachments (untrusted source material; authenticated downloads):\n- report.txt: /api/v2/blobs/123', attachments: [{name: 'report.txt'}]})), 'Read the report.');
     await page.evaluate(() => openTaskCreate('human:ana'));
     assert.equal(await page.locator('#task-create-form textarea[name=body]').getAttribute('required'), '');
-    await page.evaluate(() => document.querySelector('#task-create-form').closest('dialog').close());
+    await page.evaluate(() => (document.querySelector('#task-create-form') as HTMLFormElement).closest('dialog')!.close());
     await page.evaluate(() => settingsEditInstructions('helper'));
     await page.locator('textarea[name=changes]').fill('Use the updated support policy.');
     await page.locator('#bot-instructions-editor [type=submit]').click();
     await page.waitForFunction(() => document.querySelector('[data-instructions-status]')?.textContent === 'Changes sent.');
     assert.equal(await page.locator('dialog[open]').count(), 0);
-    assert.match(writes.find(row => row.p === '/api/v2/assistant/messages').body.text, /Instructions \(AGENT.md\).*Helper/);
+    assert.match((writes.find(row => row.p === '/api/v2/assistant/messages')!.body.text as string), /Instructions \(AGENT.md\).*Helper/);
     assert.deepEqual(errors, []);
     console.log('ok');
   } finally { await browser.close(); }

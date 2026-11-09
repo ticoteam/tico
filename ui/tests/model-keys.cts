@@ -1,11 +1,12 @@
+import type {Route} from 'playwright';
 // Settings > Computers' model sign-out and key pop-ups, with every request intercepted (ui/model-login.ts). What were
 // model-sign-out (Sign out and Switch account) and model-keys (Replace, Clear and Add key); each keeps its own header below
 // and names itself in a failure ("[keys] ..."). Split from model-login so each stays well inside the script timeout.
-const {chromium} = require('playwright');
+const {chromium} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
-const {html, uiFile, harnesses} = require('./support/page.cjs');
-const {unrouted} = require('./support/routes.cjs');
+const {html, uiFile, harnesses} = require('./support/page.cjs') as typeof import('./support/page.cjs');
+const {unrouted} = require('./support/routes.cjs') as typeof import('./support/routes.cjs');
 
 // ---- model-sign-out
 // Sign out and Switch account from the app (ui/model-login.ts, backend/model_login.py). In a computer's pop-up on
@@ -19,13 +20,21 @@ const {unrouted} = require('./support/routes.cjs');
 // change shows it (a stale one still reads the old state). A switch past its commit point reads as finishing with no cancel, and a Mac offers no
 // Switch account for Claude Code (switch_unavailable_on). Every request is intercepted; the harness capabilities come
 // from runner-rs/harnesses/*.toml.
-async function signOut(browser) {
-    const now = Date.now(), at = ms => new Date(now + ms).toISOString();
-    const chip = (name, runtime) => ({name, runtime, installed: true, version: '1.0.0', managed: true, state: 'idle', wanted: true,
+type Row = {id?: string; kind?: string; state?: string; runtime?: string; profile?: string; polls?: number; [k: string]: unknown};
+
+declare global {
+  interface Window {
+    TicoModelLogin: {actionsHTML: (options: Record<string, unknown>) => string};
+  }
+}
+
+async function signOut(browser: import('playwright').Browser) {
+    const now = Date.now(), at = (ms: number) => new Date(now + ms).toISOString();
+    const chip = (name: string, runtime: string) => ({name, runtime, installed: true, version: '1.0.0', managed: true, state: 'idle', wanted: true,
       pinned: false, update_available: false, detail: ''});
     const fixture = () => ({id: 'box', label: 'Team box', owner_id: 'sam', bots: ['writer'], platform: 'linux', last_seen_at: at(-3000),
       readiness_at: at(-3000),
-      needed_runtimes: ['claude', 'codex'], bot_runtimes: ['codex'], signed_out: {},
+      needed_runtimes: ['claude', 'codex'], bot_runtimes: ['codex'], signed_out: {} as Record<string, string[]>,
       readiness: {
         runtimes: {
           codex: {installed: true, authenticated: 'ready', account: {email: 'old@acme.example', plan: 'pro', kind: 'subscription', checked_at: at(-60000)}},
@@ -37,27 +46,27 @@ async function signOut(browser) {
       profiles: [{name: 'acme', display_name: 'Acme', runtimes: {codex: {signed_in: true, account: {email: 'dev@acme.example', plan: 'pro'}}, musecode: {signed_in: true}}}]});
 
     async function open(as = 'sam') {
-      const box = fixture(), writes = [], rows = {};
-      let seq = 0, gate = null;
-      const heartbeats = [];
+      const box = fixture(), writes: {p: string; body?: unknown}[] = [], rows: Record<string, Row> = {};
+      let seq = 0, gate = null as {held: Promise<unknown>} | null;
+      const heartbeats: {at: number; apply: () => void}[] = [];
       // The computer's next heartbeat, a few seconds after the change finished: until then the page reads the old one.
       // `early` sends one sooner that still reads the old state (it began before the change landed).
-      const beat = (apply, early) => {
+      const beat = (apply: () => void, early?: boolean) => {
         if (early) heartbeats.push({at: Date.now() + 1000, apply: () => {}});
         heartbeats.push({at: Date.now() + 4000, apply});
       };
-      const finish = (id, state, apply, early) => { Object.assign(rows[id], {state, updated_at: new Date().toISOString()}); beat(apply, early); };
+      const finish = (id: string, state: string, apply: () => void, early?: boolean) => { Object.assign(rows[id]!, {state, updated_at: new Date().toISOString()}); beat(apply, early); };
       // Hold the next bots lookup until the test lets it go: `fail` answers it with an error.
-      const hold = () => { let let_go; const held = new Promise(resolve => { let_go = resolve; }); gate = {held}; return fail => let_go(fail); };
+      const hold = () => { let let_go: ((fail?: unknown) => void) | undefined; const held = new Promise(resolve => { let_go = resolve; }); gate = {held}; return (fail: unknown) => let_go!(fail); };
       const page = await browser.newPage({viewport: {width: 1440, height: 900}, serviceWorkers: 'block'});
-      const errors = [];
-      page.on('pageerror', e => errors.push(e.message));
-      await page.route('**/*', async route => {
+      const errors: string[] = [];
+      page.on('pageerror', (e: Error) => errors.push(e.message));
+      await page.route('**/*', async (route: Route) => {
         const req = route.request(), url = new URL(req.url()), p = url.pathname, method = req.method();
-        const json = (body, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
+        const json = (body: unknown, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
         const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/);
-        if (ui && fs.existsSync(uiFile(ui[1])))
-          return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]), 'utf8')});
+        if (ui && fs.existsSync(uiFile(ui[1]!)))
+          return route.fulfill({contentType: ui[1]!.endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]!), 'utf8')});
         if (/\.(?:js|ts)$/.test(p)) return route.fulfill({contentType: 'application/javascript', body: ''});
         if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
         const config = {version: '0.1.0', app_name: 'Tico'};
@@ -71,7 +80,7 @@ async function signOut(browser) {
         if (p === '/api/v2/status') return json({bots: []});
         if (p === '/api/v2/needs-you') return json({items: []});
         if (p === '/api/v2/operations') {
-          while (heartbeats.length && Date.now() >= heartbeats[0].at) { heartbeats.shift().apply(); box.readiness_at = new Date().toISOString(); }
+          while (heartbeats.length && Date.now() >= heartbeats[0]!.at) { heartbeats.shift()!.apply(); box.readiness_at = new Date().toISOString(); }
           return json({machines: [box], services: []});
         }
         if (p === '/api/v2/models') return json({models: [], harnesses});
@@ -84,7 +93,7 @@ async function signOut(browser) {
             if (await held) return json({detail: 'The server is busy'}, 503);
           }
           const runtime = url.searchParams.get('runtime'), profile = url.searchParams.get('profile') || '';
-          const named = names => names.map(name => ({bot: name.toLowerCase().replace(/ /g, '-'), name}));
+          const named = (names: string[]) => names.map(name => ({bot: name.toLowerCase().replace(/ /g, '-'), name}));
           return json({runtime, profile, bots: profile ? [] : runtime === 'codex' ? named(['Writer', 'Scout'])
             : runtime === 'claude' ? named(['Reviewer 1', 'QA', 'Scout', 'Writer']) : []});
         }
@@ -96,19 +105,19 @@ async function signOut(browser) {
         const one = p.match(/^\/api\/v2\/computers\/box\/logins\/(\w+)(\/cancel)?$/);
         if (one && one[2]) {
           writes.push({p});
-          rows[one[1]].state = 'canceled';
-          return json(rows[one[1]]);
+          rows[one[1]!]!.state = 'canceled';
+          return json(rows[one[1]!]!);
         }
         if (one) {
-          const row = rows[one[1]];
+          const row = rows[one[1]!]!;
           // The computer signs out on its second check: the server marks it at once, the readiness follows on the
           // next heartbeat.
-          if (row.kind === 'sign_out' && ++row.polls === 2) {
+          if (row.kind === 'sign_out' && ++row.polls! === 2) {
             // backend/model_login.py records every sign-out from Tico, the computer's own login's ('') and a subscription's.
-            box.signed_out = {...box.signed_out, [row.runtime]: [...(box.signed_out[row.runtime] || []), row.profile]};
-            finish(row.id, 'signed_out', () => {
-              if (row.profile) box.profiles.find(x => x.name === row.profile).runtimes[row.runtime] = {signed_in: false};
-              else box.readiness.runtimes[row.runtime] = {installed: true, authenticated: 'missing'};
+            box.signed_out = {...box.signed_out, [row.runtime!]: [...(box.signed_out[row.runtime!] || []), row.profile!]};
+            finish(row.id!, 'signed_out', () => {
+              if (row.profile) (box.profiles.find(x => x.name === row.profile)! as unknown as {runtimes: Record<string, unknown>}).runtimes[row.runtime!] = {signed_in: false};
+              else (box.readiness.runtimes as Record<string, unknown>)[row.runtime!] = {installed: true, authenticated: 'missing'};
             }, true);
           }
           return json(row);
@@ -117,7 +126,7 @@ async function signOut(browser) {
           const body = req.postDataJSON(); writes.push({p, body});
           // The computer takes the shared key on its next check.
           box.signed_out = {};
-          beat(() => { box.readiness.runtimes[body.runtime] = {installed: true, authenticated: 'ready', account: {kind: 'api_key', checked_at: new Date().toISOString()}}; });
+          beat(() => { (box.readiness.runtimes as Record<string, unknown>)[body.runtime] = {installed: true, authenticated: 'ready', account: {kind: 'api_key', checked_at: new Date().toISOString()}}; });
           return json({id: 'key1', kind: 'use_shared_key', state: 'done', created_at: new Date().toISOString(), lines: []});
         }
         if (p === '/api/v2/computers/box/logins' && method === 'POST') {
@@ -139,9 +148,9 @@ async function signOut(browser) {
     // ---- The operator, on Settings > Computers
     const {page, box, writes, errors, rows, finish, hold, last} = await open();
     const table = page.locator('#set-machines dialog.computer-detail[open]');
-    const own = name => table.locator(`[data-connection="own:${name}"]`);
+    const own = (name: string) => table.locator(`[data-connection="own:${name}"]`);
     // Switch account and Sign out are icons: their name is the aria-label.
-    const buttons = row => row.locator('.computer-conn-signin button').evaluateAll(all => all.map(b => b.getAttribute('aria-label') || b.innerText));
+    const buttons = (row: import('playwright').Locator) => row.locator('.computer-conn-signin button').evaluateAll((all: HTMLElement[]) => all.map(b => b.getAttribute('aria-label') || b.innerText));
     assert.deepEqual(await buttons(own('codex')), ['Switch account', 'Switch to API key', 'Sign out']);
     assert.deepEqual(await buttons(own('claude')), ['Switch account', 'Switch to API key', 'Sign out']);
     assert.equal(await table.locator('[data-connection^="profile:"]').count(), 0, 'a leftover named subscription has no line');
@@ -159,8 +168,8 @@ async function signOut(browser) {
     await page.setViewportSize({width: 1440, height: 900});
     // The same Muse capability enables key recovery and subscription switching for the computer's own login.
     const museActions = await page.evaluate(() => {
-      const actions = options => window.TicoModelLogin.actionsHTML({runnerId: 'box', runtime: 'musecode', ...options});
-      const labels = html => {
+      const actions = (options: Record<string, unknown>) => window.TicoModelLogin.actionsHTML({runnerId: 'box', runtime: 'musecode', ...options});
+      const labels = (html: string) => {
         const row = document.createElement('div');
         row.innerHTML = html;
         return Array.from(row.querySelectorAll('button'), b => b.getAttribute('aria-label') || b.textContent);
@@ -218,7 +227,7 @@ async function signOut(browser) {
     // Add key: a key of its own (Dev 97, ui/tests/model-keys.cjs).
     assert.deepEqual(await buttons(own('codex')), ['Sign in', 'Use the shared key', 'Add key']);
     // "Signed out · Sign in", and the chip on the computer's row has the red dot.
-    assert.match((await own('codex').locator('.computer-conn-signin').textContent()).replace(/\s+/g, ' ').trim(), /^Signed out · Sign in/);
+    assert.match((await own('codex').locator('.computer-conn-signin').textContent())!.replace(/\s+/g, ' ').trim(), /^Signed out · Sign in/);
     assert.equal(await own('codex').locator('.computer-conn-head .machine-chip-dot').count(), 1);
     assert.equal(await page.locator('#set-machines [data-chip="own:codex"].attention .machine-chip-dot').count(), 1);
     assert.match(await own('codex').locator('.computer-conn-signin .pill').getAttribute('title'), /shared key does not sign it back in/);
@@ -264,7 +273,7 @@ async function signOut(browser) {
     // once a heartbeat newer than the switch carries it, not on the first look, which still reads the old one ready.
     await own('claude').getByRole('button', {name: 'Switch account'}).click();
     await login.locator('code', {hasText: 'ABCD-1234'}).waitFor();
-    rows[last()].state = 'finishing';
+    rows[last()]!.state = 'finishing';
     await login.locator('[data-status][data-state=finishing]').waitFor();
     assert.equal(await login.locator('[data-status]').innerText(), 'Putting the new account in place on Team box…');
     assert.equal(await login.locator('[data-actions] button').count(), 0, 'no cancel once it is finishing');
@@ -280,7 +289,7 @@ async function signOut(browser) {
     await own('claude').locator('.computer-conn-signin', {hasText: 'last checked'}).waitFor();
     assert.deepEqual(await buttons(own('claude')), online);
     assert.ok(online.includes('Sign out') && online.includes('Switch account'), online.join());
-    assert.deepEqual(await own('claude').locator('.computer-conn-signin button').evaluateAll(all => all.map(b => b.disabled && b.title)),
+    assert.deepEqual(await own('claude').locator('.computer-conn-signin button').evaluateAll((all: HTMLElement[]) => all.map(b => (b as HTMLButtonElement).disabled && b.title)),
       online.map(() => 'Computer is offline'));
     box.last_seen_at = at(-3000);
     await page.evaluate(() => loadSettings());
@@ -317,13 +326,13 @@ async function signOut(browser) {
 // computer's check to the end. Replacing the shared key for all of them is a credential administrator's alone. A member
 // who does not run the computer sees none of it. Every request is intercepted; the harness capabilities come from
 // runner-rs/harnesses/*.toml.
-async function keys(browser) {
-    const now = Date.now(), at = ms => new Date(now + ms).toISOString();
+async function keys(browser: import('playwright').Browser) {
+    const now = Date.now(), at = (ms: number) => new Date(now + ms).toISOString();
     const SECRET = 'sk-test-not-a-real-key-123456';
-    const chip = (name, runtime) => ({name, runtime, installed: true, version: '1.0.0', managed: true, state: 'idle', wanted: true,
+    const chip = (name: string, runtime: string) => ({name, runtime, installed: true, version: '1.0.0', managed: true, state: 'idle', wanted: true,
       pinned: false, update_available: false, detail: ''});
     const fixture = () => ({id: 'box', label: 'Team box', owner_id: 'sam', bots: ['writer'], platform: 'linux', last_seen_at: at(-3000),
-      readiness_at: at(-3000), needed_runtimes: ['codex', 'claude'], bot_runtimes: ['codex'], signed_out: {},
+      readiness_at: at(-3000), needed_runtimes: ['codex', 'claude'], bot_runtimes: ['codex'], signed_out: {} as Record<string, string[]>,
       keys: {claude: {env: 'ANTHROPIC_API_KEY', preview: 'sk-…abc', since: at(-86400000)}},
       shared_keys: {codex: {env: 'OPENAI_API_KEY', preview: 'sk-…xyz'}},
       readiness: {
@@ -336,7 +345,7 @@ async function keys(browser) {
       profiles: []});
     // GET /v2/computers/{id}/keys (backend/model_login.py key_info)
     let oldBox = false;
-    const info = runtime => runtime === 'codex'
+    const info = (runtime: string) => runtime === 'codex'
       ? {runtime, source: 'shared', name: 'OPENAI_API_KEY', preview: 'sk-…xyz', cleared: false, names: ['OPENAI_API_KEY'], can_replace_all: false,
         computers: [{id: 'box', label: 'Team box', online: true, may: true, updated: true}, {id: 'far', label: 'Far box', online: false, may: true, updated: true},
           ...(oldBox ? [{id: 'old', label: 'Old box', online: false, may: true, updated: false}] : [])]}
@@ -345,18 +354,18 @@ async function keys(browser) {
         : {runtime, source: null, name: '', preview: '', cleared: false, names: ['CURSOR_API_KEY'], computers: [], can_replace_all: false};
 
     async function open(as = 'sam') {
-      const box = fixture(), writes = [], rows = {};
+      const box = fixture(), writes: {p: string; body?: unknown}[] = [], rows: Record<string, Row> = {};
       // What /v2/operations sends someone who may not change the computer (backend/views.py): no key previews.
-      if (as !== 'sam') for (const key of [...Object.values(box.keys), ...Object.values(box.shared_keys)]) delete key.preview;
+      if (as !== 'sam') for (const key of [...Object.values(box.keys as Record<string, {preview?: string}>), ...Object.values(box.shared_keys as Record<string, {preview?: string}>)]) delete key.preview;
       const page = await browser.newPage({viewport: {width: 1440, height: 900}, serviceWorkers: 'block'});
-      const errors = [];
-      page.on('pageerror', e => errors.push(e.message));
-      await page.route('**/*', async route => {
+      const errors: string[] = [];
+      page.on('pageerror', (e: Error) => errors.push(e.message));
+      await page.route('**/*', async (route: Route) => {
         const req = route.request(), url = new URL(req.url()), p = url.pathname, method = req.method();
-        const json = (body, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
+        const json = (body: unknown, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
         const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/);
-        if (ui && fs.existsSync(uiFile(ui[1])))
-          return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]), 'utf8')});
+        if (ui && fs.existsSync(uiFile(ui[1]!)))
+          return route.fulfill({contentType: ui[1]!.endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]!), 'utf8')});
         if (/\.(?:js|ts)$/.test(p)) return route.fulfill({contentType: 'application/javascript', body: ''});
         if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
         const config = {version: '0.1.0', app_name: 'Tico'};
@@ -374,7 +383,7 @@ async function keys(browser) {
         if (p === '/api/v2/settings/history') return json({changes: [], transitions: []});
         if (p === '/api/v2/subscriptions') return json({profiles_by_computer: [], assignments: []});
         const keys = p.match(/^\/api\/v2\/computers\/(\w+)\/keys$/);
-        if (keys && method === 'GET') return json(info(url.searchParams.get('runtime')));
+        if (keys && method === 'GET') return json(info(url.searchParams.get('runtime') as string));
         // backend/model_login.py affected_bots, per computer
         const bots = p.match(/^\/api\/v2\/computers\/(\w+)\/logouts\/bots$/);
         if (bots) return json({bots: url.searchParams.get('runtime') !== 'codex' ? [] : bots[1] === 'box' ? [{bot: 'writer', name: 'Writer'}] : [{bot: 'scout', name: 'Scout'}]});
@@ -391,9 +400,9 @@ async function keys(browser) {
         }
         const one = p.match(/^\/api\/v2\/computers\/box\/logins\/(\w+)$/);
         if (one) {
-          const row = rows[one[1]];
+          const row = rows[one[1]!]!;
           // The computer finishes on its second check.
-          if (++row.polls === 2) Object.assign(row, {state: row.kind === 'clear_key' ? 'signed_out' : 'done', updated_at: new Date().toISOString()});
+          if (++row.polls! === 2) Object.assign(row, {state: row.kind === 'clear_key' ? 'signed_out' : 'done', updated_at: new Date().toISOString()});
           return json(row);
         }
         if (p.endsWith('/watch')) return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});
@@ -409,10 +418,10 @@ async function keys(browser) {
     // ---- The operator, on Settings > Computers
     const {page, box, writes, errors} = await open();
     const detail = page.locator('#set-machines dialog.computer-detail[open]');
-    const own = name => detail.locator(`[data-connection="own:${name}"]`);
-    const buttons = row => row.locator('.computer-conn-signin button').allInnerTexts();
+    const own = (name: string) => detail.locator(`[data-connection="own:${name}"]`);
+    const buttons = (row: import('playwright').Locator) => row.locator('.computer-conn-signin button').allInnerTexts();
     // Add connection > the tool > API key: the pop-up at that step.
-    const apiKey = async name => {
+    const apiKey = async (name: string) => {
       await detail.locator('[data-add-connection]').click();
       const add = page.locator('dialog.computer-add-dialog[open]');
       await add.locator(`[data-add-tool="${name}"]`).click();
@@ -498,15 +507,15 @@ async function keys(browser) {
 
     // A key cleared from here reads "No key · Add key", not Signed out; the shared key and a sign-in are the other ways
     // back. A login signed out from here still reads "Signed out · Sign in".
-    const line = async row => (await row.locator('.computer-conn-signin').innerText()).replace(/\s+/g, ' ').trim();
+    const line = async (row: import('playwright').Locator) => (await row.locator('.computer-conn-signin').innerText()).replace(/\s+/g, ' ').trim();
     const codex = {...box.readiness.runtimes.codex};
     Object.assign(box, {signed_out: {codex: ['']}, key_cleared: ['codex']});
-    box.readiness.runtimes.codex = {installed: true, authenticated: 'missing'};
+    box.readiness.runtimes.codex = {installed: true, authenticated: 'missing'} as typeof box.readiness.runtimes.codex;
     await page.evaluate(() => loadSettings());
     await own('codex').locator('.computer-conn-signin .pill', {hasText: 'No key'}).waitFor();
     assert.equal(await line(own('codex')), 'No key · Add key Sign in Use the shared key');
     assert.match(await own('codex').locator('.computer-conn-signin .pill').getAttribute('title'), /key was cleared from Tico/);
-    box.key_cleared = [];
+    (box as {key_cleared?: unknown[]}).key_cleared = [];
     await page.evaluate(() => loadSettings());
     await own('codex').locator('.computer-conn-signin .pill', {hasText: 'Signed out'}).waitFor();
     assert.equal(await line(own('codex')), 'Signed out · Sign in Use the shared key Add key');
@@ -520,7 +529,7 @@ async function keys(browser) {
     for (const name of ['claude', 'codex']) {
       const off = own(name).locator('.computer-conn-signin button');
       assert.deepEqual(await off.allInnerTexts(), ['Replace key', 'Clear key', 'Switch to subscription']);
-      assert.deepEqual(await off.evaluateAll(all => all.map(b => b.disabled && b.title)), Array(3).fill('Computer is offline'));
+      assert.deepEqual(await off.evaluateAll((all: HTMLElement[]) => all.map(b => (b as HTMLButtonElement).disabled && b.title)), Array(3).fill('Computer is offline'));
     }
     const sent = writes.length;
     await own('claude').locator('[data-model-key-clear]').click({force: true});
@@ -539,11 +548,11 @@ async function keys(browser) {
 }
 
 (async () => {
-  const browser = await chromium.launch({headless: true, channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined});
+  const browser = await chromium.launch({headless: true, channel: (process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined) as string});
   try {
     for (const [name, step] of Object.entries({signOut, keys})) {
       try { await step(browser); }
-      catch (error) { error.message = `[${name}] ${error.message}`; throw error; }
+      catch (error) { (error as Error).message = `[${name}] ${(error as Error).message}`; throw error; }
     }
   } finally { await browser.close(); }
 })().catch(error => { console.error(error); process.exit(1); });

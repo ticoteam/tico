@@ -1,18 +1,19 @@
+import type {Route} from 'playwright';
 // The Meetings page (ui/app/meetings.ts pageNotes, ui/meeting-importers.ts): a header with search and one
 // "Add notes" button, an empty state of source tiles (Granola, Zoom, Google Meet, Close) alone, then a Sources
 // link (ui/app/meetings-sources.ts) whose dialog lists every source with its status and error, Remove and Connect;
 // filters and rows only once there is a meeting, setup in a dialog, and a transcript upload inside Add notes.
 // Fixtures only, no network.
-const {chromium} = require('playwright');
+const {chromium} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const {html, uiFile} = require('./support/page.cjs');
-const {unrouted} = require('./support/routes.cjs');
+const {html, uiFile} = require('./support/page.cjs') as typeof import('./support/page.cjs');
+const {unrouted} = require('./support/routes.cjs') as typeof import('./support/routes.cjs');
 const {replay: recorderLiveSharing} = require('../../recorder/tests/live-sharing.cts');
 
-const ago = hours => new Date(Date.now() - hours * 36e5).toISOString();
-const meeting = (id, title, source, hours, extra = {}) => ({id, title, source, kind: 'meeting', status: 'done', started: ago(hours),
+const ago = (hours: number) => new Date(Date.now() - hours * 36e5).toISOString();
+const meeting = (id: string, title: string, source: string, hours: number, extra: Record<string, unknown> = {}) => ({id, title, source, kind: 'meeting', status: 'done', started: ago(hours),
   created: ago(hours), duration_ms: 1800000, participants: [{name: 'Ana', email: 'ana@acme.example'}, {name: 'Ben'}, {name: 'Cara'}],
   outbox: {doc: [], task: [], feature: []}, ...extra});
 const MEETINGS = [
@@ -25,6 +26,20 @@ const MEETINGS = [
 const IMPORTERS = ['granola', 'fireflies', 'zoom', 'google-meet'].map(source => ({source, name: {granola: 'Granola', fireflies: 'Fireflies',
   zoom: 'Zoom', 'google-meet': 'Google Meet'}[source], enabled: false, runner_id: '', status: 'off', last_succeeded_at: null, last_import: null,
   imported_total: 0, error: '', setup: {file: `secrets/${source}.env`, keys: ['API_KEY'], doc: 'docs/meetings.md'}}));
+type Item = {id: string; status: string; version: number; detail: {owner?: string}; [k: string]: unknown};
+type World = {role?: string; sources: unknown[]; meetings: {id: string; [k: string]: unknown}[]; employees?: {id: string; slug: string}[];
+  items?: {sections: Record<string, Item[]>}; importers: {source: string; [k: string]: unknown}[]; saved: unknown[];
+  imported: {source?: string; title?: string; transcript?: string; notes?: string; [k: string]: unknown}[]; pushes: unknown[]; itemEdits: unknown[]};
+
+declare global {
+  interface Window {
+    // u5: page-side helpers this test drives (ui/meeting-importers.ts) and the popup stub it installs.
+    mountMeetingImporters: (host: HTMLElement) => Promise<void>;
+    openMeetingImporter: (source: string, name: string) => void;
+    opened: string[];
+  }
+}
+
 const NONE = [{id: 'import', name: 'Import', status: 'available'}, {id: 'close', name: 'Close', status: 'needs_setup'}];
 const SOME = [{id: 'import', name: 'Import', status: 'available'},
   {id: 'close', name: 'Close', status: 'syncing', last_succeeded_at: ago(0.1), last_import: ago(3)},
@@ -32,19 +47,19 @@ const SOME = [{id: 'import', name: 'Import', status: 'available'},
   {id: 'fireflies', name: 'Fireflies', status: 'needs_setup'},
   {id: 'zoom', name: 'Zoom', status: 'error', last_succeeded_at: ago(9), error_code: 'auth_failed', error: 'The tool refused the credential.'}];
 
-async function open(browser, viewport, world, options = {}) {
-  const context = await browser.newContext({viewport, serviceWorkers: 'block', hasTouch: viewport.width < 760, isMobile: viewport.width < 760, ...options});
+async function open(browser: import('playwright').Browser, viewport: {width: number; height: number}, world: World, options: {colorScheme?: string} = {}) {
+  const context = await browser.newContext({viewport, serviceWorkers: 'block', hasTouch: viewport.width < 760, isMobile: viewport.width < 760, ...options as {}});
   await context.addInitScript(theme => { localStorage.setItem('tico.theme', theme); }, options.colorScheme || 'dark');
   const page = await context.newPage();
-  const errors = [];
-  page.on('pageerror', error => errors.push(error.message));
-  await page.route('**/*', route => {
+  const errors: string[] = [];
+  page.on('pageerror', (error: Error) => errors.push(error.message));
+  await page.route('**/*', (route: Route) => {
     const url = new URL(route.request().url()), p = url.pathname, method = route.request().method();
-    const json = body => route.fulfill({contentType: 'application/json', body: JSON.stringify(body)});
+    const json = (body: unknown) => route.fulfill({contentType: 'application/json', body: JSON.stringify(body)});
     if (/\/marked\.min\.js$/.test(p)) return route.fulfill({contentType: 'application/javascript', body: 'window.marked={parse:s=>String(s)}'});
     if (url.origin !== 'https://tico-ui.test') return route.abort();
     const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/);
-    if (ui && fs.existsSync(uiFile(ui[1]))) return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]), 'utf8')});
+    if (ui && fs.existsSync(uiFile(ui[1]!))) return route.fulfill({contentType: ui[1]!.endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]!), 'utf8')});
     if (p === '/vendor/fonts/material-symbols-outlined.woff2') return route.fulfill({contentType: 'font/woff2', body: fs.readFileSync(uiFile('vendor/fonts/material-symbols-outlined.woff2'))});
     if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
     if (p === '/api/me') return json({id: 'ana', role: world.role || 'owner', name: 'Ana', email: 'ana@example.test', cloud: true});
@@ -60,19 +75,19 @@ async function open(browser, viewport, world, options = {}) {
     if (p === '/api/v2/meetings') return json({meetings: world.meetings, pending_count: 0});
     if (p === '/api/v2/meeting-importers' && method === 'GET') return json({computers: [{id: 'mac', label: 'Test Mac', platform: 'macos', online: true}], importers: world.importers});
     if (p.startsWith('/api/v2/meeting-importers/') && method === 'POST') {
-      const body = JSON.parse(route.request().postData());
+      const body = JSON.parse(route.request().postData() as string);
       world.saved.push({source: p.split('/').pop(), ...body});
       const i = world.importers.find(x => x.source === p.split('/').pop());
-      Object.assign(i, {enabled: body.enabled, runner_id: body.runner_id, status: 'waiting'});
+      Object.assign(i!, {enabled: body.enabled, runner_id: body.runner_id, status: 'waiting'});
       return json({});
     }
-    if (p === '/api/v2/meetings/import' && method === 'POST') { const body = JSON.parse(route.request().postData()); world.imported.push(body); return json({id: 'm9', existing: false}); }
+    if (p === '/api/v2/meetings/import' && method === 'POST') { const body = JSON.parse(route.request().postData() as string); world.imported.push(body); return json({id: 'm9', existing: false}); }
     if (/^\/api\/meetings\/m\d$/.test(p)) return json({...world.meetings.find(m => p.endsWith(m.id)), turns: [], transcript_readable: '', outbox: {doc: [], task: [], feature: []}});
     if (/^\/api\/meetings\/[^/]+\/items$/.test(p)) return json(world.items || {id: '', can_push: true, sections: {doc: [], task: [], feature: []}, counts: {proposed: 0}});
     if (/^\/api\/meetings\/[^/]+\/items\/[^/]+\/push$/.test(p)) {
       const body = JSON.parse(route.request().postData() || '{}');
       world.pushes.push({path: p, body});
-      const item = Object.values(world.items?.sections || {}).flat().find(row => row.id === p.split('/').at(-2));
+      const item = Object.values(world.items?.sections || {}).flat().find(row => row.id === p.split('/').at(-2))!;
       if (!item.detail.owner) {
         const docBot = (world.employees || []).find(employee => employee.slug === 'doc-updater');
         if (!docBot) return route.fulfill({status: 422, contentType: 'application/json', body: JSON.stringify({error: {code: 'owner', detail: 'Pick who this doc update is for, then push again.'}})});
@@ -83,7 +98,7 @@ async function open(browser, viewport, world, options = {}) {
     }
     if (/^\/api\/meetings\/[^/]+\/items\/[^/]+$/.test(p) && method === 'POST') {
       const body = JSON.parse(route.request().postData() || '{}');
-      const item = Object.values(world.items?.sections || {}).flat().find(row => row.id === p.split('/').at(-1));
+      const item = Object.values(world.items?.sections || {}).flat().find(row => row.id === p.split('/').at(-1))!;
       Object.assign(item, body, {detail: {...item.detail, ...(body.detail || {})}, version: item.version + 1, updated_by: 'human:ana'});
       world.itemEdits.push(body);
       return json({item});
@@ -93,15 +108,15 @@ async function open(browser, viewport, world, options = {}) {
   });
   return {page, errors, context};
 }
-const world = (extra = {}) => ({role: 'owner', sources: NONE, meetings: [], importers: structuredClone(IMPORTERS), saved: [], imported: [], pushes: [], itemEdits: [], ...extra});
-async function shot(page, name) {
+const world = (extra: Partial<World> = {}): World => ({role: 'owner', sources: NONE, meetings: [], importers: structuredClone(IMPORTERS), saved: [], imported: [], pushes: [], itemEdits: [], ...extra});
+async function shot(page: import('playwright').Page, name: string) {
   if (!process.env.TICO_MEETINGS_SCREENSHOTS) return;
   fs.mkdirSync(process.env.TICO_MEETINGS_SCREENSHOTS, {recursive: true});
   await page.screenshot({path: path.join(process.env.TICO_MEETINGS_SCREENSHOTS, name + '.png'), fullPage: true, animations: 'disabled'});
 }
 
 (async () => {
-  const browser = await chromium.launch({headless: true, channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined});
+  const browser = await chromium.launch({headless: true, channel: (process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined) as string});
   try {
     {
       const scheme = 'dark';
@@ -138,13 +153,13 @@ async function shot(page, name) {
       // A mixed-version server cannot restore the retired setup form, even through a cached link.
       await page.evaluate(async () => {
         const host = document.createElement('section'); host.id = 'importers-fixture';
-        document.querySelector('#main').appendChild(host);
+        document.querySelector('#main')!.appendChild(host);
         await window.mountMeetingImporters(host);
       });
-      assert.deepEqual(await page.locator('#importers-fixture form').evaluateAll(forms => forms.map(f => f.dataset.importer)),
+      assert.deepEqual(await page.locator('#importers-fixture form').evaluateAll((forms: HTMLElement[]) => forms.map(f => f.dataset.importer)),
         ['granola', 'zoom', 'google-meet']);
       await page.evaluate(() => {
-        document.querySelector('#importers-fixture').remove();
+        document.querySelector('#importers-fixture')!.remove();
         window.openMeetingImporter('fireflies', 'Fireflies');
       });
       const retired = page.locator('dialog[aria-label="Connect Fireflies"]');
@@ -169,23 +184,23 @@ async function shot(page, name) {
       await notes.locator('#manual-go').click();
       assert.match(await notes.locator('#manual-msg').innerText(), /Add notes or a transcript/);
       await notes.locator('#manual-file').setInputFiles({name: 'pricing_call.vtt', mimeType: 'text/vtt', buffer: Buffer.from('WEBVTT\n\n00:00:05.000 --> 00:00:08.500\n<v Dana>Can you send pricing?</v>\n')});
-      await page.waitForFunction(() => document.querySelector('#manual-text')?.value.startsWith('WEBVTT'));
+      await page.waitForFunction(() => (document.querySelector('#manual-text') as HTMLTextAreaElement | null)?.value.startsWith('WEBVTT'));
       assert.equal(await notes.locator('#manual-title').inputValue(), 'pricing call');
       assert.equal(await notes.locator('#manual-source').inputValue(), 'upload');
       await notes.locator('#manual-go').click();
       await page.waitForFunction(() => !document.querySelector('#manual-modal[open]'));
       assert.equal(w.imported.length, 1);
-      assert.equal(w.imported[0].source, 'upload');
-      assert.equal(w.imported[0].title, 'pricing call');
-      assert(w.imported[0].transcript.startsWith('WEBVTT'));
+      assert.equal(w.imported[0]!.source, 'upload');
+      assert.equal(w.imported[0]!.title, 'pricing call');
+      assert(w.imported[0]!.transcript!.startsWith('WEBVTT'));
       await page.locator('#notes-manual').click();
       await notes.locator('#manual-title').fill('Standup');
       await notes.locator('#manual-notes').fill('Ship on Friday');
       await notes.locator('#manual-go').click();
       await page.waitForFunction(() => !document.querySelector('#manual-modal[open]'));
-      assert.equal(w.imported[1].source, 'manual');
-      assert.equal(w.imported[1].notes, 'Ship on Friday');
-      assert.equal(w.imported[1].transcript, undefined);
+      assert.equal(w.imported[1]!.source, 'manual');
+      assert.equal(w.imported[1]!.notes, 'Ship on Friday');
+      assert.equal(w.imported[1]!.transcript, undefined);
       assert.deepEqual(errors, []);
       await context.close();
 
@@ -198,22 +213,22 @@ async function shot(page, name) {
       assert.equal(await page.locator('#notes-import').count(), 0);
       assert.equal(await page.locator('#meet-sources').isVisible(), true);
       assert.equal(await page.locator('#notes-filters').isVisible(), true);
-      assert.deepEqual(await page.locator('#notes-filters select').evaluateAll(els => els.map(el => el.getAttribute('aria-label'))), ['When', 'Participant', 'Source', 'Status']);
+      assert.deepEqual(await page.locator('#notes-filters select').evaluateAll((els: HTMLElement[]) => els.map(el => el.getAttribute('aria-label'))), ['When', 'Participant', 'Source', 'Status']);
       assert.deepEqual(await page.locator('.meet-row .note-title').allInnerTexts(), ['Weekly ops sync', 'Renewal call with Dana', 'Notes from standup']);
       // A row counts what a meeting turned into (pushed items), and only otherwise what is still proposed.
-      assert.deepEqual(await page.locator('.meet-row').evaluateAll(rows => rows.map(r => [...r.querySelectorAll('.meet-made-chip, .meet-proposed')].map(e => e.textContent).join(' '))), ['1 task', '1 proposed', '']);
+      assert.deepEqual(await page.locator('.meet-row').evaluateAll((rows: HTMLElement[]) => rows.map(r => [...(r.querySelectorAll('.meet-made-chip, .meet-proposed') as unknown as Iterable<Element>)].map(e => e.textContent).join(' '))), ['1 task', '1 proposed', '']);
       assert.match(await page.locator('.meet-row').first().locator('.meet-meta').innerText(), /Ana, Ben \+1/);
       // Search and the Source filter narrow the list.
       await page.locator('#notes-source').selectOption('granola');
       assert.deepEqual(await page.locator('.meet-row .note-title').allInnerTexts(), ['Renewal call with Dana']);
       await page.locator('#notes-source').selectOption('');
-      await page.evaluate(() => { window.opened = []; window.open = url => (window.opened.push(url), {}); });
+      await page.evaluate(() => { window.opened = []; window.open = (url: string | URL | undefined) => (window.opened.push(url as string), {} as Window); });
       await page.locator('.meet-row .note-title').first().click();   // a click opens the meeting here, never only in a window
       await page.locator('#notes-modal[open] #notes-detail').waitFor();
       assert.deepEqual(await page.evaluate(() => window.opened), []);
       await page.locator('#notes-modal-window').click();              // its own window is a choice
       assert.match(await page.evaluate(() => window.opened[0]), /meeting=m1&window=1/);
-      assert.equal(await page.locator('#notes-modal').evaluate(d => d.open), false);
+      assert.equal(await page.locator('#notes-modal').evaluate(d => (d as HTMLDialogElement).open), false);
       assert.deepEqual(errors, []);
       await context.close();
 
@@ -228,8 +243,8 @@ async function shot(page, name) {
       await sourcesBtn.click();
       const panel = page.locator('#meet-src-dialog');
       await panel.locator('[data-src=zoom]').waitFor();
-      assert.deepEqual(await panel.locator('ul[aria-label=Connected] > li').evaluateAll(els => els.map(e => e.dataset.src)), ['granola', 'zoom', 'close']);
-      assert.deepEqual(await panel.locator('ul[aria-label="Not connected"] > li').evaluateAll(els => els.map(e => e.dataset.src)), ['google-meet']);
+      assert.deepEqual(await panel.locator('ul[aria-label=Connected] > li').evaluateAll((els: HTMLElement[]) => els.map(e => e.dataset.src)), ['granola', 'zoom', 'close']);
+      assert.deepEqual(await panel.locator('ul[aria-label="Not connected"] > li').evaluateAll((els: HTMLElement[]) => els.map(e => e.dataset.src)), ['google-meet']);
       const zoom = panel.locator('[data-src=zoom]');
       assert.equal(await zoom.getAttribute('data-state'), 'error');
       assert.match(await zoom.locator('.msrc-line').innerText(), /Zoom[\s\S]*Error[\s\S]*Synced 9h ago/);
@@ -253,7 +268,7 @@ async function shot(page, name) {
       await context.close();
 
       // ---- phone and desktop, both themes: the panel fits without sideways scroll
-      for (const [device, viewport, theme] of [['phone', {width: 390, height: 844}, 'dark'], ['phone', {width: 390, height: 844}, 'light'], ['desktop', {width: 1280, height: 900}, 'light']]) {
+      for (const [device, viewport, theme] of [['phone', {width: 390, height: 844}, 'dark'], ['phone', {width: 390, height: 844}, 'light'], ['desktop', {width: 1280, height: 900}, 'light']] as [string, {width: number; height: number}, string][]) {
         w = world({sources: SOME, meetings: MEETINGS});
         ({page, errors, context} = await open(browser, viewport, w, {colorScheme: theme}));
         await page.goto('https://tico-ui.test/#/meetings');
@@ -261,11 +276,11 @@ async function shot(page, name) {
         await page.locator('#meet-sources .meet-src-btn').click();
         await page.locator('#meet-src-dialog [data-src=zoom] .msrc-err').waitFor();
         assert(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), theme + ': page fits');
-        const box = await page.locator('#meet-src-dialog').boundingBox();
+        const box = (await page.locator('#meet-src-dialog').boundingBox())!;
         assert(box.x >= 16 && box.x + box.width <= viewport.width - 16, theme + ': 16px gutter');
         assert(await page.locator('#meet-src-dialog').evaluate(d => d.scrollWidth <= d.clientWidth), theme + ': panel fits');
         for (const b of await page.locator('#meet-src-dialog .msrc-actions > *').all()) {
-          const r = await b.boundingBox();
+          const r = (await b.boundingBox())!;
           assert(r.x + r.width <= box.x + box.width, theme + ': buttons on screen');
         }
         await shot(page, `sources-${device}-${theme}`);

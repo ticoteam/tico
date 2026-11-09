@@ -1,15 +1,16 @@
+import type {Route} from 'playwright';
 // Settings > Security > Screening (#/settings/security, ui/app/settings-release.ts, backend/screening.py): an owner or admin sees a switch per
 // detector (Patterns, Model) and one row per door (Webhooks, Mail, Ideas, Watchers) with a mode, mail offering Off and
 // Warn only; a change is one PUT; Run test
 // shows passed/total and each sample; Recent lists holds and warnings with a Task link. A member has no Security tab and
 // never sees the card. Fits a phone with no sideways scroll. Fixtures only. TICO_SHOTS (or TICO_UI_SHOTS)=<dir> also
 // saves the tab dark at desktop and phone.
-const {chromium} = require('playwright');
+const {chromium} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const {html, uiFile, harnesses} = require('./support/page.cjs');
-const {unrouted} = require('./support/routes.cjs');
+const {html, uiFile, harnesses} = require('./support/page.cjs') as typeof import('./support/page.cjs');
+const {unrouted} = require('./support/routes.cjs') as typeof import('./support/routes.cjs');
 
 const SOURCES = [{id: 'webhook', name: 'Webhooks'}, {id: 'mail', name: 'Mail'}, {id: 'idea', name: 'Ideas'}, {id: 'watcher', name: 'Watchers'}];
 const before = new Date(Date.now() - 20 * 60000).toISOString();
@@ -22,16 +23,16 @@ const TEST = {passed: 7, total: 8, model: true, results: [
   {name: 'Code review', attack: false, action: 'warn', score: 0.6, ok: false},
   {name: 'Refund request', attack: false, action: 'pass', score: 0.02, ok: true}]};
 
-async function open(browser, role, viewport) {
+async function open(browser: import('playwright').Browser, role: string, viewport: {width: number; height: number}) {
   const page = await browser.newPage({viewport, serviceWorkers: 'block'});
-  const errors = [], writes = [], data = view();
-  page.on('pageerror', e => errors.push(e.message));
-  await page.route('**/*', route => {
+  const errors: string[] = [], writes: unknown[] = [], data = view();
+  page.on('pageerror', (e: Error) => errors.push(e.message));
+  await page.route('**/*', (route: Route) => {
     const req = route.request(), p = new URL(req.url()).pathname;
-    const json = (body, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
+    const json = (body: unknown, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
     const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/);
-    if (ui && fs.existsSync(uiFile(ui[1])))
-      return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]), 'utf8')});
+    if (ui && fs.existsSync(uiFile(ui[1]!)))
+      return route.fulfill({contentType: ui[1]!.endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]!), 'utf8')});
     if (/\.(?:js|ts)$/.test(p)) return route.fulfill({contentType: 'application/javascript', body: ''});
     if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
     const config = {version: '0.1.0', app_name: 'Tico'};
@@ -47,8 +48,8 @@ async function open(browser, role, viewport) {
     if (p === '/api/v2/screening') {
       if (role === 'member') return json({error: {code: 'forbidden', detail: 'Owners and admins only'}}, 403);
       if (req.method() === 'PUT') {
-        const body = req.postDataJSON(); writes.push(body);
-        for (const [k, v] of Object.entries(body)) (typeof v === 'boolean' ? data.layers : data.modes)[k] = v;
+        const body = req.postDataJSON() as Record<string, string | boolean>; writes.push(body);
+        for (const [k, v] of Object.entries(body)) ((typeof v === 'boolean' ? data.layers : data.modes) as Record<string, string | boolean>)[k] = v;
       }
       return json(data);
     }
@@ -64,16 +65,16 @@ async function open(browser, role, viewport) {
 }
 
 (async () => {
-  const browser = await chromium.launch({headless: true, channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined});
+  const browser = await chromium.launch({headless: true, channel: (process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined) as string});
   const shots = process.env.TICO_SHOTS || process.env.TICO_UI_SHOTS;
   try {
-    for (const [role, viewport] of [['owner', {width: 1440, height: 900}], ['admin', {width: 390, height: 844}]]) {
+    for (const [role, viewport] of [['owner', {width: 1440, height: 900}], ['admin', {width: 390, height: 844}]] as const) {
       const {page, errors, writes} = await open(browser, role, viewport);
       const card = page.locator('#set-screening-card');
       await card.locator('[data-screening-mode="webhook"]').waitFor();
       assert.equal(await page.evaluate(() => location.hash), '#/settings/security');
       // Its own tab in the row, after Tasks and before History.
-      const tabs = await page.locator('#settings-tabs > [data-settings-tab]').evaluateAll(els => els.map(el => el.dataset.settingsTab));
+      const tabs = await page.locator('#settings-tabs > [data-settings-tab]').evaluateAll((els: HTMLElement[]) => els.map(el => el.dataset.settingsTab));
       assert.equal(tabs.indexOf('security'), tabs.indexOf('history') - 1, tabs.join());
       assert.equal((await card.locator('h2').innerText()).trim(), 'Screening');
       const names = await card.locator('.sb-row > span:first-child').allInnerTexts();
@@ -81,7 +82,7 @@ async function open(browser, role, viewport) {
       const patterns = card.locator('[data-screening-layer="patterns"]');
       assert.equal(await patterns.isChecked(), true);
       assert.equal(await card.locator('[data-screening-layer="model"]').isChecked(), true);
-      const options = id => card.locator(`[data-screening-mode="${id}"] option`).evaluateAll(els => els.map(el => el.value));
+      const options = (id: string) => card.locator(`[data-screening-mode="${id}"] option`).evaluateAll((els: HTMLOptionElement[]) => els.map(el => el.value));
       assert.deepEqual(await options('mail'), ['off', 'warn'], 'mail is only marked, never held');
       assert.deepEqual(await options('idea'), ['off', 'warn', 'hold']);
       assert.equal(await card.locator('[data-screening-mode="webhook"]').inputValue(), 'hold');
@@ -110,7 +111,7 @@ async function open(browser, role, viewport) {
       assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), role + ': no sideways scroll');
       if (shots) {
         fs.mkdirSync(shots, {recursive: true});
-        await page.evaluate(() => window.ticoTheme.set('dark'));
+        await page.evaluate(() => (window as unknown as {ticoTheme: {set(mode: string): void}}).ticoTheme.set('dark'));
         await page.evaluate(() => scrollTo(0, 0));
         await page.screenshot({path: path.join(shots, `settings-security-${viewport.width}-dark.png`)});
       }

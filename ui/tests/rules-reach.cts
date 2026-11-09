@@ -1,3 +1,4 @@
+import type {Route} from 'playwright';
 // Rules › Internal is Reach (docs/reach.md, ui/app/org-rules.ts): the whole org chart with lines from the selected party
 // (0 red, N amber, a rule alone blue and dashed, each with a chip), and the party's panel beside it: who it can reach and
 // how much, the rules it follows (company and team rules folded), and its exceptions. Tapping a rule opens the rule's
@@ -6,20 +7,25 @@
 // viewer who may change nothing sees it read-only. On a phone the chart gives way to a list, then the panel full width,
 // with no sideways scroll. Every request is intercepted (the Acme fixture, fixtures/redesign-org.json).
 // REACH_SHOTS=<dir> saves screenshots (1440x900 and 390x844).
-const {chromium} = require('playwright');
+const {chromium} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const {html, uiFile} = require('./support/page.cjs');
-const {unrouted} = require('./support/routes.cjs');
+const {html, uiFile} = require('./support/page.cjs') as typeof import('./support/page.cjs');
+const {unrouted} = require('./support/routes.cjs') as typeof import('./support/routes.cjs');
 const uiDir = path.join(__dirname, '..');
-const fx = JSON.parse(fs.readFileSync(path.join(__dirname, 'fixtures/redesign-org.json'), 'utf8'));
+type Fx = {groups: {id: string}[]; people: {id: string; name: string}[]; employees: {name: string}[]; me: {id: string}; org_groups: unknown[]};
+type Scope = {everyone: boolean; all_bots: boolean; groups: {id: string; name: string}[]; bots: {id: string; name: string}[]; people: {id: string; name: string}[]};
+type Setting = {party: string; mode: string | null; chats_per_day: number | null; tasks_per_day: number | null};
+type Line = {id: string; sender: string; receiver: string; per_day: number | null; rule: {id: string; text: string} | null};
+type Write = {method: string; path: string; body: Record<string, unknown>};
+const fx: Fx = JSON.parse(fs.readFileSync(path.join(__dirname, 'fixtures/redesign-org.json'), 'utf8'));
 const SHOTS = process.env.REACH_SHOTS || '';
 const PHONE = {width: 390, height: 844}, DESKTOP = {width: 1440, height: 900};
 const ORIGIN = 'http://tico-ui.test';
 
-const scope = (k = {}) => ({everyone: false, all_bots: false, groups: [], bots: [], people: [], ...k});
-const rule = (id, text, who) => ({id, kind: 'internal', text, description: '', who: scope(who), with: scope(), where: [], source: null,
+const scope = (k: Partial<Scope> = {}): Scope => ({everyone: false, all_bots: false, groups: [], bots: [], people: [], ...k});
+const rule = (id: string, text: string, who: Partial<Scope>) => ({id, kind: 'internal', text, description: '', who: scope(who), with: scope(), where: [], source: null,
   if_broken: 'block', reviewer: null, status: 'active', version: 1, created_at: '2026-10-01T10:00:00Z', updated_at: '2026-10-02T10:00:00Z',
   due: [], due_more: 0, can_edit: true});
 const RULES = [
@@ -30,14 +36,14 @@ const RULES = [
   // A line's rule: listed with its line, not under Rules.
   rule('r-review', 'Only send finished pull requests.', {bots: [{id: 'builder', name: 'Builder'}]}),
 ];
-const PARTIES = ['*', ...fx.groups.map(g => 'group:' + g.id), ...fx.people.map(p => 'human:' + p.id), ...fx.employees.map(e => 'bot:' + e.name)];
+const PARTIES = ['*', ...fx.groups.map(g => 'group:' + g.id), ...fx.people.map(p => 'human:' + p.id), ...fx.employees.map((e: {name: string}) => 'bot:' + e.name)];
 
-async function openReach(browser, {viewport = DESKTOP, hash = '#/rules', viewer = 'ana', mayEdit = PARTIES} = {}) {
+async function openReach(browser: import('playwright').Browser, {viewport = DESKTOP, hash = '#/rules', viewer = 'ana', mayEdit = PARTIES} = {}) {
   const person = fx.people.find(p => p.id === viewer);
-  const me = viewer === fx.me.id ? fx.me : {id: viewer, name: person.name, email: viewer + '@acme.example', role: 'member', company_role: 'member', cloud: true};
+  const me = viewer === fx.me.id ? fx.me : {id: viewer, name: person!.name, email: viewer + '@acme.example', role: 'member', company_role: 'member', cloud: true};
   const config = {company_name: 'Acme'};
   const may = new Set(mayEdit);
-  const reach = {
+  const reach: {settings: Setting[]; lines: Line[]} = {
     settings: [{party: '*', mode: 'open', chats_per_day: null, tasks_per_day: null},
       {party: 'group:sales', mode: 'closed', chats_per_day: 40, tasks_per_day: null}],
     lines: [
@@ -47,13 +53,13 @@ async function openReach(browser, {viewport = DESKTOP, hash = '#/rules', viewer 
     ],
   };
   let next = 4;
-  const writes = [];
+  const writes: Write[] = [];
   const page = await browser.newPage({viewport, serviceWorkers: 'block', hasTouch: viewport === PHONE});
-  const errors = [];
-  page.on('pageerror', e => errors.push(e.message));
-  await page.route('**/*', async route => {
+  const errors: string[] = [];
+  page.on('pageerror', (e: Error) => errors.push(e.message));
+  await page.route('**/*', async (route: Route) => {
     const req = route.request(), url = new URL(req.url()), p = url.pathname, method = req.method();
-    const json = (body, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
+    const json = (body: unknown, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
     if (url.origin !== ORIGIN) return route.abort();
     if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
     const file = p.startsWith('/tico/ui/') ? uiFile(p.slice(9)) : p.startsWith('/vendor/') ? path.join(uiDir, p) : '';
@@ -72,13 +78,13 @@ async function openReach(browser, {viewport = DESKTOP, hash = '#/rules', viewer 
     if (p === '/api/v2/rules' && method === 'GET') return json({rules: url.searchParams.get('kind') === 'internal' ? RULES : [], next_cursor: null});
     if (p === '/api/v2/rules' && method === 'POST') return json({...rule('r-new', body.text, body.who), who: body.who});
     let m = p.match(/^\/api\/v2\/rules\/([^/]+)$/);
-    if (m && RULES.some(r => r.id === m[1])) return json(RULES.find(r => r.id === m[1]));
+    if (m && RULES.some(r => r.id === m![1])) return json(RULES.find(r => r.id === m![1]));
     // Reach (docs/reach.md).
     if (p === '/api/v2/reach') return json({defaults: {mode: 'nearby', chats_per_day: 999, tasks_per_day: 999, person_mode: 'open'}, settings: reach.settings,
       lines: reach.lines.map(l => ({...l, may_edit: may.has(l.sender)})), may_edit: [...may]});
     m = p.match(/^\/api\/v2\/reach\/settings\/(.+)$/);
     if (m && method === 'PUT') {
-      const party = decodeURIComponent(m[1]);
+      const party = decodeURIComponent(m![1]!);
       let s = reach.settings.find(x => x.party === party);
       if (!s) reach.settings.push(s = {party, mode: null, chats_per_day: null, tasks_per_day: null});
       Object.assign(s, body);
@@ -91,11 +97,11 @@ async function openReach(browser, {viewport = DESKTOP, hash = '#/rules', viewer 
     }
     m = p.match(/^\/api\/v2\/reach\/lines\/([^/]+)$/);
     if (m && method === 'POST') {
-      const l = reach.lines.find(x => x.id === m[1]);
+      const l = reach.lines.find(x => x.id === m![1]!)!;
       Object.assign(l, {sender: body.sender, receiver: body.receiver, per_day: body.per_day, rule: body.rule ? {id: l.rule?.id || 'r-l' + next++, text: body.rule} : null});
       return json(l);
     }
-    if (m && method === 'DELETE') { reach.lines = reach.lines.filter(x => x.id !== m[1]); return route.fulfill({status: 204, body: ''}); }
+    if (m && method === 'DELETE') { reach.lines = reach.lines.filter(x => x.id !== m![1]!); return route.fulfill({status: 204, body: ''}); }
     return json(unrouted(p));
   });
   await page.goto(ORIGIN + '/' + hash);
@@ -103,19 +109,19 @@ async function openReach(browser, {viewport = DESKTOP, hash = '#/rules', viewer 
   return {page, errors, writes, reach};
 }
 
-const panel = page => page.locator('.rr-side .rr-panel');
-const noSideways = async (page, what) => {
+const panel = (page: import('playwright').Page) => page.locator('.rr-side .rr-panel');
+const noSideways = async (page: import('playwright').Page, what: string) => {
   const wide = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
   assert.ok(wide <= 1, `${what}: no sideways scroll (${wide}px)`);
 };
-async function shot(page, name) {
+async function shot(page: import('playwright').Page, name: string) {
   if (!SHOTS) return;
   fs.mkdirSync(SHOTS, {recursive: true});
   await page.waitForTimeout(150);
   await page.screenshot({path: path.join(SHOTS, name + '.png')});
 }
-const lastWrite = (writes, method) => writes.filter(w => w.method === method).at(-1);
-async function until(fn, what) {
+const lastWrite = (writes: Write[], method: string): Write => writes.filter(w => w.method === method).at(-1)!;
+async function until(fn: () => unknown, what: string) {
   for (let i = 0; i < 50; i++) { if (await fn()) return; await new Promise(r => setTimeout(r, 50)); }
   assert.fail(what);
 }
@@ -195,7 +201,7 @@ async function until(fn, what) {
       // + Add exception: search a team, set the direction and the count, add.
       await panel(page).locator('[data-rr-add-line]').click();
       await panel(page).locator('.rr-xq').fill('web');
-      const picks = await panel(page).locator('[data-rr-pick]').evaluateAll(b => b.map(x => x.dataset.rrPick));
+      const picks = await panel(page).locator('[data-rr-pick]').evaluateAll((b: HTMLElement[]) => b.map(x => x.dataset.rrPick));
       assert.ok(picks.includes('group:web') && picks.includes('bot:web-dev'), picks.join());
       await panel(page).locator('[data-rr-pick="group:web"]').click();
       const ed = panel(page).locator('.rr-ed');
@@ -279,7 +285,7 @@ async function until(fn, what) {
 
       // The header search marks matches on the map; Enter selects the first. A team's tab and Everyone are parties too.
       await page.locator('.ru-acts .rr-q').fill('sales');
-      assert.deepEqual(await page.locator('.ru-acts .rr-results [data-rr-party]').evaluateAll(b => b.map(x => x.dataset.rrParty)), ['group:sales', 'bot:sales-lead']);
+      assert.deepEqual(await page.locator('.ru-acts .rr-results [data-rr-party]').evaluateAll((b: HTMLElement[]) => b.map(x => x.dataset.rrParty)), ['group:sales', 'bot:sales-lead']);
       assert.equal(await page.locator('.rr-map .hit').count(), 2);
       await shot(page, 'desktop-search');
       await page.locator('.ru-acts .rr-q').press('Enter');
@@ -338,14 +344,14 @@ async function until(fn, what) {
       await until(async () => !(await page.locator('.rr-side').isVisible()), 'map alone again');
       await page.locator('.ru-acts .rr-q').fill('build');
       assert.equal(await page.locator('.rr-map').isVisible(), false);
-      assert.deepEqual(await page.locator('.rr-pick [data-rr-party]').evaluateAll(b => b.map(x => x.dataset.rrParty)), ['bot:builder']);
+      assert.deepEqual(await page.locator('.rr-pick [data-rr-party]').evaluateAll((b: HTMLElement[]) => b.map(x => x.dataset.rrParty)), ['bot:builder']);
       assert.equal(await page.locator('.ru-acts .rr-results').isVisible(), false);
       await page.locator('.rr-pick [data-rr-party="bot:builder"]').tap();
       await until(async () => await page.locator('.rr-side').isVisible(), 'panel shown');
       assert.equal(await page.locator('.rr-pick').isVisible(), false);
       assert.equal(await page.locator('.rr-map').isVisible(), true);
       assert.equal(await panel(page).locator('h2').innerText(), 'Builder');
-      const box = await panel(page).boundingBox();
+      const box = (await panel(page).boundingBox())!;
       assert.ok(box.width >= PHONE.width - 2, `full width (${box.width})`);
       await noSideways(page, 'phone panel');
       await shot(page, 'phone-panel');

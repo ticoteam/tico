@@ -1,11 +1,19 @@
+import type {Route} from 'playwright';
 // Overview replay: the toggle loads the last 24 hours with the viewer's rights, a bot-to-bot message draws a link
 // between their desks, desks follow the replayed states, free text stays out of the frame and live comes back.
 // The 3D renderer is replaced by a recording stand-in: WebGL timing is not what this checks. Fixtures only.
-const {chromium} = require('playwright');
+const {chromium} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
-const {html, uiFile} = require('./support/page.cjs');
-const {unrouted} = require('./support/routes.cjs');
+const {html, uiFile} = require('./support/page.cjs') as typeof import('./support/page.cjs');
+const {unrouted} = require('./support/routes.cjs') as typeof import('./support/routes.cjs');
+
+declare global {
+  interface Window {
+    // u5: the recording stand-in (SCENE below) sets this on the overview frame's window.
+    __scene: {created: number; data: {groups: {members: {id: string; state: string}[]}[]}; updates: unknown[]; links: [string, string, string][]};
+  }
+}
 
 const SCENE = `export function createBuilding(data) {
   const rec = window.__scene = {created: (window.__scene?.created || 0) + 1, data, updates: [], links: []};
@@ -15,18 +23,18 @@ const SCENE = `export function createBuilding(data) {
 }`;
 
 (async () => {
-  const browser = await chromium.launch({channel: process.env.TICO_BROWSER_CHANNEL ?? 'chrome', headless: true});
+  const browser = await chromium.launch({channel: (process.env.TICO_BROWSER_CHANNEL ?? 'chrome') as string, headless: true});
   try {
     const page = await browser.newPage({viewport: {width: 1280, height: 860}, serviceWorkers: 'block'});
-    const errors = [], replays = [], mode = {fail: false, cut: false};
+    const errors: unknown[] = [], replays: {from: number; to: number}[] = [], mode = {fail: false, cut: false};
     page.on('pageerror', e => errors.push(e.message));
-    const bot = (name, over) => ({name, display_name: name.toUpperCase(), host: 'keeper', status: 'active', owner_id: 'ana', can_chat: true,
+    const bot = (name: string, over?: Record<string, unknown>) => ({name, display_name: name.toUpperCase(), host: 'keeper', status: 'active', owner_id: 'ana', can_chat: true,
       machine: {runner_id: 'alpha', label: 'Garden Mac'}, my_access: {see: true, read: true}, ...over});
     const bots = [bot('writer'), bot('editor'), bot('vault', {my_access: {see: true, read: false}})];
-    await page.route('**/*', async route => {
+    await page.route('**/*', async (route: Route) => {
       const url = new URL(route.request().url()), p = url.pathname;
       if (url.origin !== 'http://tico-ui.test') return route.abort();
-      const json = (body, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
+      const json = (body: unknown, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
       if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
       if (p === '/tico/ui/overview/building.ts') return route.fulfill({contentType: 'application/javascript', body: SCENE});
       if (p.startsWith('/tico/ui/')) {
@@ -42,10 +50,10 @@ const SCENE = `export function createBuilding(data) {
       if (p === '/api/v2/computers') return json({computers: [{id: 'alpha', label: 'Garden Mac'}]});
       if (p === '/api/v2/status') return json({bots: bots.map(b => ({bot: b.name, state: 'running', focus: 'live work'}))});
       if (p === '/api/v2/replay') {
-        const from = Date.parse(url.searchParams.get('from')), to = Date.parse(url.searchParams.get('to'));
+        const from = Date.parse(url.searchParams.get('from') as string), to = Date.parse(url.searchParams.get('to') as string);
         replays.push({from, to});
         if (mode.fail) return json({error: 'SECRET SERVER DETAIL'}, 500);
-        const at = hours => new Date(from + hours * 3600e3).toISOString();
+        const at = (hours: number) => new Date(from + hours * 3600e3).toISOString();
         return json({from: url.searchParams.get('from'), to: url.searchParams.get('to'), truncated: mode.cut, next: mode.cut ? at(2.5) : null,
           start: {tasks: [], bots: {writer: {state: 'idle', focus: 'SECRET FOCUS'}, editor: {state: 'idle', focus: ''}}},
           names: {'bot:writer': 'WRITER', 'bot:editor': 'EDITOR'},
@@ -64,9 +72,9 @@ const SCENE = `export function createBuilding(data) {
     await page.goto('http://tico-ui.test/#/overview/campus');
     const frame = page.frameLocator('#overview-frame');
     await frame.locator('body[data-scene-ready]').waitFor();
-    const scene = page.frames().find(f => f.url().includes('/overview/index.html'));
+    const scene = page.frames().find(f => f.url().includes('/overview/index.html'))!;
     const rec = () => scene.evaluate(() => window.__scene);
-    const deskOf = (data, id) => data.groups.flatMap(g => g.members).find(m => m.id === id);
+    const deskOf = (data: {groups: {members: {id: string; state: string}[]}[]}, id: string) => data.groups.flatMap(g => g.members).find(m => m.id === id)!;
     // The first status answer may land after the campus opens; the desks follow it then, not at the next poll.
     await scene.waitForFunction(() => window.__scene.data.groups.flatMap(g => g.members).find(m => m.id === 'bot:editor')?.state === 'running',
       null, {polling: 100, timeout: 10000});
@@ -77,8 +85,8 @@ const SCENE = `export function createBuilding(data) {
     await frame.locator('#replay-toggle').click();
     await frame.locator('#replay-bar').waitFor();
     assert.equal(replays.length, 1);
-    assert.equal(replays[0].to - replays[0].from, 864e5, '24 hours by default');
-    assert(Math.abs(replays[0].to - before) < 60e3, 'the window ends now');
+    assert.equal(replays[0]!.to - replays[0]!.from, 864e5, '24 hours by default');
+    assert(Math.abs(replays[0]!.to - before) < 60e3, 'the window ends now');
     assert.equal(await frame.locator('#replay-toggle').getAttribute('aria-pressed'), 'true');
 
     // Playing forward, the message draws a link between the two desks and becomes a caption.
@@ -97,7 +105,7 @@ const SCENE = `export function createBuilding(data) {
     await scene.evaluate(() => { window.requestAnimationFrame = () => 0; });
     await frame.locator('#replay-toggle').click();
     await frame.locator('#replay-bar').waitFor();
-    await frame.locator('#replay-range').evaluate(el => { el.value = '1000'; el.dispatchEvent(new Event('input')); });
+    await frame.locator('#replay-range').evaluate(el => { (el as HTMLInputElement).value = '1000'; el.dispatchEvent(new Event('input')); });
     const ended = (await rec()).data;
     assert.equal(deskOf(ended, 'bot:editor').state, 'needs');
     assert.equal(deskOf(ended, 'bot:writer').state, 'idle');
@@ -107,7 +115,7 @@ const SCENE = `export function createBuilding(data) {
 
     // Scrubbing back replays the states without drawing links again.
     const linksBefore = (await rec()).links.length;
-    await frame.locator('#replay-range').evaluate(el => { el.value = '100'; el.dispatchEvent(new Event('input')); });
+    await frame.locator('#replay-range').evaluate(el => { (el as HTMLInputElement).value = '100'; el.dispatchEvent(new Event('input')); });
     assert.equal(deskOf((await rec()).data, 'bot:writer').state, 'running', 'an hour and a bit in, the writer is working');
     assert.equal((await rec()).links.length, linksBefore);
 
@@ -121,7 +129,7 @@ const SCENE = `export function createBuilding(data) {
     mode.cut = true;
     await frame.locator('#replay-toggle').click();
     await frame.locator('#replay-note', {hasText: 'This replay stops at'}).waitFor();
-    await frame.locator('#replay-range').evaluate(el => { el.value = '1000'; el.dispatchEvent(new Event('input')); });
+    await frame.locator('#replay-range').evaluate(el => { (el as HTMLInputElement).value = '1000'; el.dispatchEvent(new Event('input')); });
     assert.equal(deskOf((await rec()).data, 'bot:writer').state, 'running', 'the end is the cutoff, mid-run');
     await frame.locator('#replay-live').click();
 

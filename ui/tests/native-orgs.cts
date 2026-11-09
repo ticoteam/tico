@@ -1,31 +1,41 @@
+import type {Route} from 'playwright';
 // Several organizations in the Mac app: the page tells the app only its own company name and email, and offers
 // Switch organization (the app's native menu) and Add organization only when the app says it can. Outside the app,
 // or in an app too old to know them, neither appears and nothing is posted.
-const {webkit} = require('playwright');
+const {webkit} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
-const {html, uiFile} = require('./support/page.cjs');
-const {unrouted} = require('./support/routes.cjs');
+const {html, uiFile} = require('./support/page.cjs') as typeof import('./support/page.cjs');
+const {unrouted} = require('./support/routes.cjs') as typeof import('./support/routes.cjs');
 
-async function open(browser, {features, many}) {
+declare global {
+  interface Window {
+    // What the native shell's bridge records: each postMessage as [name, body]; the features and the multi-org answer.
+    __posted: [string, unknown][];
+    ticoNative: (name: string) => {postMessage: (body: unknown) => Promise<unknown>};
+    ticoNativeFeatures: string[];
+  }
+}
+
+async function open(browser: import('playwright').Browser, {features, many}: {features: string[] | null; many: boolean}) {
   const page = await browser.newPage({serviceWorkers:'block', viewport:{width:1240,height:820},
     userAgent:'Mozilla/5.0 AppleWebKit/605.1.15 TicoHub'});
-  const errors = [];
-  page.on('pageerror', e => errors.push(e.message));
-  await page.addInitScript(({features, many}) => {
-    window.EventSource = undefined;
+  const errors: string[] = [];
+  page.on('pageerror', (e: Error) => errors.push(e.message));
+  await page.addInitScript(({features, many}: {features: string[] | null; many: boolean}) => {
+    (window as unknown as {EventSource: unknown}).EventSource = undefined;
     Object.defineProperty(navigator, 'platform', {get: () => 'MacIntel'});
     window.__posted = [];
     if (!features) return;
-    window.ticoNative = name => ({postMessage: body => {
+    window.ticoNative = (name: string) => ({postMessage: (body: unknown) => {
       window.__posted.push([name, body]);
       return Promise.resolve(name === 'multiOrg' ? many : null);
     }});
     window.ticoNativeFeatures = ['openWindow', 'checkForUpdates', 'showLog', ...features];
   }, {features, many});
-  await page.route('**/*', async route => {
+  await page.route('**/*', async (route: Route) => {
     const p = new URL(route.request().url()).pathname;
-    const json = body => route.fulfill({contentType:'application/json', body:JSON.stringify(body)});
+    const json = (body: unknown) => route.fulfill({contentType:'application/json', body:JSON.stringify(body)});
     if (p === '/') return route.fulfill({contentType:'text/html', body:html});
     if (p.startsWith('/tico/ui/')) {
       const file = uiFile(p.slice('/tico/ui/'.length));
@@ -40,7 +50,7 @@ async function open(browser, {features, many}) {
   await page.locator('#account .account-email', {hasText:'ana@acme.example'}).waitFor();
   return {page, errors};
 }
-const posted = (page, name) => page.evaluate(n => window.__posted.filter(([k]) => k === n).map(([, body]) => body), name);
+const posted = (page: import('playwright').Page, name: string) => page.evaluate((n: string) => window.__posted.filter(([k]) => k === n).map(([, body]) => body), name);
 
 (async () => {
   const browser = await webkit.launch({headless:true});

@@ -4,49 +4,62 @@
 // beside them (it is a helper of the Assistant; Ask is the way in), the Budget tab drawing (its tree and edits are
 // strategy-budget.cjs), a task cap's 409 read as its message, and no "CEO Bot" anywhere. Phone first (390×844), then desktop.
 // TICO_SCREENSHOT_DIR=<dir> saves review screenshots.
-const {chromium} = require('playwright');
+const {chromium} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const {html, uiFile} = require('./support/page.cjs');
-const {unrouted} = require('./support/routes.cjs');
+const {html, uiFile} = require('./support/page.cjs') as typeof import('./support/page.cjs');
+const {unrouted} = require('./support/routes.cjs') as typeof import('./support/routes.cjs');
 const uiDir = path.join(__dirname, '..');
-const fixture = name => JSON.parse(fs.readFileSync(path.join(__dirname, 'fixtures', name), 'utf8'));
-const roster = fixture('redesign-roster.json');
-const CAP_409 = fixture('redesign-task-cap-409.json');
+const fixture = (name: string): unknown => JSON.parse(fs.readFileSync(path.join(__dirname, 'fixtures', name), 'utf8'));
+const roster = fixture('redesign-roster.json') as {employees: Record<string, unknown>[]; humans: {people: Record<string, unknown>[]}};
+const CAP_409 = fixture('redesign-task-cap-409.json') as {message: string};
 
 const shots = process.env.TICO_SCREENSHOT_DIR;
-const shot = async (page, name) => { if (shots) await page.screenshot({animations: 'disabled', path: path.join(shots, `redesign-${name}.png`)}); };
+const shot = async (page: import('playwright').Page, name: string) => { if (shots) await page.screenshot({animations: 'disabled', path: path.join(shots, `redesign-${name}.png`)}); };
 const PHONE = {width: 390, height: 844}, DESKTOP = {width: 1440, height: 900};
+
+declare global {
+  // u5: browser globals the page's own scripts define (see ui/app); declared once per name, same type everywhere.
+  function recruitPlaces(): [string, unknown][];
+  function cpSourceChoices(): [string, unknown][];
+  function finHelper(id: string): unknown;
+  function budgetTree(data: {bots: Record<string, unknown>}): {nodes: Map<string, {parent: {key: string}}>};
+  function botRow(slug: string): {reports_to: string; org_parent: string; team: string};
+  function renderTree(): void;
+  function post(path: string, body: unknown): Promise<unknown>;
+  function v2MessageHTML(m: {id: string; sender_id: string; body: string; created_at: string; [k: string]: unknown}): string;
+}
+
 
 const PHONE_BAR = ['Team', 'Search', 'Assistant', 'Tasks', 'Updates', 'More'];   // Assistant: the Liquid Dot in the centre slot
 // The sliding current-row bar (motion.js .nav-ind) is decoration, not a rail entry.
-const railKeys = page => page.$$eval('#side .side-scroll > :not(.nav-ind)', els => els.map(el =>
-  el.dataset.nav || (el.classList.contains('nav-row') && el.querySelector(':scope > [data-nav]')?.dataset.nav) || el.id || el.className.split(' ')[0]));
-const shownRail = page => page.$$eval('#side .side-scroll a.nav-link, #side .side-scroll .rd-lib a.nav-link', els =>
-  [...new Set(els)].filter(el => el.checkVisibility()).map(el => {
-    const c = el.cloneNode(true); c.querySelectorAll('.nav-icon, .nav-badge, svg').forEach(x => x.remove());
-    return c.textContent.replace(/\s+/g, ' ').trim();
+const railKeys = (page: import('playwright').Page) => page.$$eval('#side .side-scroll > :not(.nav-ind)', els => (els as HTMLElement[]).map(el =>
+  el.dataset.nav || (el.classList.contains('nav-row') && (el.querySelector(':scope > [data-nav]') as HTMLElement | null)?.dataset.nav) || el.id || el.className.split(' ')[0]));
+const shownRail = (page: import('playwright').Page) => page.$$eval('#side .side-scroll a.nav-link, #side .side-scroll .rd-lib a.nav-link', els =>
+  [...new Set(els as HTMLElement[])].filter(el => el.checkVisibility()).map(el => {
+    const c = el.cloneNode(true) as HTMLElement; c.querySelectorAll('.nav-icon, .nav-badge, svg').forEach(x => x.remove());
+    return c.textContent!.replace(/\s+/g, ' ').trim();
   }));
 
-async function open(browser, {route = '#/updates', viewport = PHONE, goalsDelay = 0, messageBot = false} = {}) {
+async function open(browser: import('playwright').Browser, {route = '#/updates', viewport = PHONE, goalsDelay = 0, messageBot = false} = {}) {
   const page = await browser.newPage({viewport, serviceWorkers: 'block'});
-  const errors = [], sent = [], goals = {asked: 0};
-  page.on('pageerror', e => errors.push(e.message));
+  const errors: unknown[] = [], sent: unknown[] = [], goals = {asked: 0};
+  page.on('pageerror', (e: Error) => errors.push(e.message));
   // Each goals tree the app has read: counted one task after its body is read, so the code awaiting it has run.
   await page.addInitScript(() => {
-    window.__treeRead = 0;
+    (window as unknown as {__treeRead: number}).__treeRead = 0;
     const fetch0 = window.fetch;
     window.fetch = (...args) => fetch0(...args).then(r => {
       if (!String(args[0]).includes('/api/v2/goals/tree')) return r;
       const text = r.text.bind(r);
-      r.text = () => text().finally(() => setTimeout(() => { window.__treeRead++; }, 0));
+      r.text = () => text().finally(() => setTimeout(() => { (window as unknown as {__treeRead: number}).__treeRead++; }, 0));
       return r;
     });
   });
   const config = {};
   const employees = [...roster.employees], humans = structuredClone(roster.humans);
-  const messaging = {bots: []};
+  const messaging: {bots: {bot: string; name: string; sources: {kind: string; id: string; name: string}[]}[]} = {bots: []};
   if (messageBot) {
     employees.push(
       {name: 'counsel', display_name: 'Counsel', reports_to: 'eng-lead', org_parent: 'b:eng-lead', team: 'eng', status: 'active', can_chat: true},
@@ -58,7 +71,7 @@ async function open(browser, {route = '#/updates', viewport = PHONE, goalsDelay 
   }
   await page.route('**/*', async r => {
     const req = r.request(), url = new URL(req.url()), p = url.pathname, method = req.method();
-    const json = (body, status = 200) => r.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
+    const json = (body: unknown, status = 200) => r.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
     if (url.origin !== 'http://tico-ui.test') return r.abort();
     if (p === '/') return r.fulfill({contentType: 'text/html', body: html});
     const file = p.startsWith('/tico/ui/') ? uiFile(p.slice(9)) : p.startsWith('/vendor/') ? path.join(uiDir, p) : '';
@@ -92,14 +105,14 @@ async function open(browser, {route = '#/updates', viewport = PHONE, goalsDelay 
   await page.waitForFunction(() => typeof S !== 'undefined' && S.me && (S.emps || []).length);
   return {page, errors, sent, goals};
 }
-const hashSoon = (page, want) => page.waitForFunction(w => location.hash === w, want).then(() => true, () => false);
-const noSideScroll = page => page.evaluate(() => document.documentElement.scrollWidth <= innerWidth);
+const hashSoon = (page: import('playwright').Page, want: string) => page.waitForFunction(w => location.hash === w, want).then(() => true, () => false);
+const noSideScroll = (page: import('playwright').Page) => page.evaluate(() => document.documentElement.scrollWidth <= innerWidth);
 
 (async () => {
-  const browser = await chromium.launch({channel: process.env.TICO_BROWSER_CHANNEL ?? 'chrome', headless: true});
+  const browser = await chromium.launch({channel: (process.env.TICO_BROWSER_CHANNEL ?? 'chrome') as string, headless: true});
   try {
     // A custom mailbox bot is an employee: keep its reporting line and nest its sources beneath it on both widths.
-    for (const [tag, viewport] of [['phone', PHONE], ['desktop', DESKTOP]]) {
+    for (const [tag, viewport] of [['phone', PHONE], ['desktop', DESKTOP]] as const) {
       const {page, errors} = await open(browser, {viewport, messageBot: true});
       if (tag === 'phone') await page.locator('#mobile-more').click();
       await page.locator('#tree [data-toggle="b:eng-lead"]').click();
@@ -155,14 +168,14 @@ const noSideScroll = page => page.evaluate(() => document.documentElement.scroll
       assert.equal(await page.getAttribute('a[data-nav="strategy"]', 'href'), '#/strategy/market', tag + ': Strategy opens on Market');
       assert.deepEqual(await page.locator('#mobile-nav .mobile-nav-item:not([hidden]) .mobile-nav-label').allInnerTexts(), PHONE_BAR, tag + ': the phone bar is the mock\'s');
       for (const [from, to] of [['#/tasks/routines', '#/automations'], ['#/recurring', '#/automations'], ['#/goals', '#/strategy/goals'],
-        ['#/goals/g-1', '#/strategy/goals/g-1'], ['#/settings/listening', '#/strategy/market/listening']]) {
+        ['#/goals/g-1', '#/strategy/goals/g-1'], ['#/settings/listening', '#/strategy/market/listening']] as const) {
         await page.evaluate(h => { location.hash = h; }, from);
         assert.ok(await hashSoon(page, to), `${tag}: ${from} lands on ${to}`);
       }
       await page.locator('[data-rdm-settings]').click();
       await page.locator('[data-listen-dest="leads"]').waitFor();
       // Every slow tree asked for has been read and acted on: the goal left behind must not open over Listening.
-      await page.waitForFunction(n => window.__treeRead >= n, goals.asked);
+      await page.waitForFunction(n => (window as unknown as {__treeRead: number}).__treeRead >= n, goals.asked);
       assert.equal(await page.evaluate(() => location.hash), '#/strategy/market/listening', tag + ': a goal left before it loaded keeps off the address');
       assert.equal(await page.locator('#goal-panel[open]').count(), 0, tag + ': and does not open');
       assert.equal(await page.locator('.mkt-pg #mkt-q-saying').count(), 1, tag + ': Listening is a question on Market');
@@ -206,7 +219,7 @@ const noSideScroll = page => page.evaluate(() => document.documentElement.scroll
       assert.equal(await page.locator('#sbot, #sbot-fab').count(), 0, tag + ': no Strategy Bot rail');
       assert.equal(await page.locator('#main').evaluate(el => el.classList.contains('sbot-open')), false);
       await shot(page, 'desktop-budget');
-      if (shots) { await page.evaluate(() => window.ticoTheme.set('light')); await shot(page, 'desktop-budget-light'); await page.evaluate(() => window.ticoTheme.set('dark')); }
+      if (shots) { await page.evaluate(() => (window as unknown as {ticoTheme: {set(t: string): void}}).ticoTheme.set('light')); await shot(page, 'desktop-budget-light'); await page.evaluate(() => (window as unknown as {ticoTheme: {set(t: string): void}}).ticoTheme.set('dark')); }
 
       // A task cap's 409: the message is what a person reads, in a toast's words and in the bot's chat.
       const said = await page.evaluate(() => post('/v2/tasks', {title: 'Check the Acme release'}).then(() => '', e => e.message));
@@ -219,7 +232,7 @@ const noSideScroll = page => page.evaluate(() => document.documentElement.scroll
       }, CAP_409.message);
       assert.ok(/refused ·\s*Ana takes 10 tasks a day from Engineering Lead and 10 are open\. Nothing was queued\./.test(chat), tag + ': the chat shows the refusal: ' + chat);
 
-      for (const [hash, tab] of [['#/strategy/market/listening', 'Market'], ['#/strategy', 'Strategy'], ['#/strategy/lenses', 'Strategy'], ['#/strategy/goals', 'Goals'], ['#/strategy/org', 'Org']]) {
+      for (const [hash, tab] of [['#/strategy/market/listening', 'Market'], ['#/strategy', 'Strategy'], ['#/strategy/lenses', 'Strategy'], ['#/strategy/goals', 'Goals'], ['#/strategy/org', 'Org']] as const) {
         await page.evaluate(h => { location.hash = h; }, hash);
         await page.waitForFunction(t => document.querySelector('.strat-tabs a.cur')?.textContent === t, tab);
         assert.equal(await page.locator('#sbot').count(), 0, `${tag}: no Strategy Bot beside ${hash}`);

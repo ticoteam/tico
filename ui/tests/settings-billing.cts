@@ -1,22 +1,31 @@
+import type {Route} from 'playwright';
 // Settings > Billing against a fake server: the owner's balance and one status line, credits with past ones (and what
 // expired) behind "Show past credits", a day opening into hours with "<$0.01" under a cent, the month's statement with
 // its CSV link, and "Talk to us to add credit" opening the booking link with no card form; the empty state and the
 // record-only line; a member has no Billing tab and never asks for it; no sideways scroll on a phone. Every request is
 // intercepted. TICO_SHOTS=<dir> saves screenshots (desktop and phone, dark and light).
-const {chromium} = require('playwright');
+const {chromium} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const {html, uiFile} = require('./support/page.cjs');
-const {unrouted} = require('./support/routes.cjs');
+const {html, uiFile} = require('./support/page.cjs') as typeof import('./support/page.cjs');
+const {unrouted} = require('./support/routes.cjs') as typeof import('./support/routes.cjs');
 const shots = process.env.TICO_SHOTS || '';
 
+declare global {
+  // u5: browser globals the page's own scripts define (see ui/app); declared once per name, same type everywhere.
+  function renderSettingsBilling(): Promise<void>;
+  var BILLING_MONTH: string;
+  function settingsShow(tab: string): void;
+}
+
+
 (async () => {
-  const browser = await chromium.launch({headless: true, channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined});
+  const browser = await chromium.launch({headless: true, channel: (process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined) as string});
   try {
     const page = await browser.newPage({viewport: {width: 1280, height: 800}, serviceWorkers: 'block'});
-    const errors = [];
-    page.on('pageerror', e => errors.push(e.message));
+    const errors: string[] = [];
+    page.on('pageerror', (e: Error) => errors.push(e.message));
     const statement = {month: '2026-11', opening_micros: 0, credits_micros: 25_000_000, credits_by_source: {grant: 25_000_000},
       debits_micros: 1_250_003, debits_by_product: {gateway: 1_250_003, hosting: 0, support: 0}, expired_micros: 4_000_000,
       closing_micros: 19_749_997};
@@ -31,15 +40,15 @@ const shots = process.env.TICO_SHOTS || '';
         {product: 'gateway', sku: 'tico-medium-1.0:input', amount_micros: 1_250_000},
         {product: 'gateway', sku: 'tico-low-1.0:output', amount_micros: 3}]}],
       statement};
-    let billing = full, role = 'owner', hoursDown = true;
-    const slow = {};                                       // month -> ms its answer waits
-    const asked = [];
-    await page.route('**/*', route => {
+    let billing: {state: string; month?: string; usage?: {period: string; total_micros: number; lines: unknown[]}[]; statement?: {month?: string; [k: string]: unknown}; [k: string]: unknown} = full, role = 'owner', hoursDown = true;
+    const slow: Record<string, number> = {};                                       // month -> ms its answer waits
+    const asked: string[] = [];
+    await page.route('**/*', (route: Route) => {
       const url = new URL(route.request().url()), p = url.pathname;
-      const json = body => route.fulfill({contentType: 'application/json', body: JSON.stringify(body)});
+      const json = (body: unknown) => route.fulfill({contentType: 'application/json', body: JSON.stringify(body)});
       const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/);
-      if (ui && fs.existsSync(uiFile(ui[1])))
-        return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]), 'utf8')});
+      if (ui && fs.existsSync(uiFile(ui[1]!)))
+        return route.fulfill({contentType: ui[1]!.endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]!), 'utf8')});
       if (p.startsWith('/vendor/') && fs.existsSync(uiFile(p.slice(1)))) return route.fulfill({body: fs.readFileSync(uiFile(p.slice(1))),
         contentType: p.endsWith('.woff2') ? 'font/woff2' : 'application/javascript'});
       if (/\.(?:js|ts)$/.test(p)) return route.fulfill({contentType: 'application/javascript', body: ''});
@@ -52,9 +61,9 @@ const shots = process.env.TICO_SHOTS || '';
         if (p === '/api/v2/billing/usage') {
           if (hoursDown) { hoursDown = false; return json({state: 'unreachable'}); }   // the first read fails
           return json({state: 'ok', day: '2026-11-02', hours: [
-            {period: '2026-11-02T09', total_micros: 1_250_003, lines: billing.usage[0].lines}]});
+            {period: '2026-11-02T09', total_micros: 1_250_003, lines: billing.usage![0]!.lines}]});
         }
-        const month = url.searchParams.get('month') || billing.month;
+        const month = url.searchParams.get('month') || billing.month!;
         const answer = billing.statement ? {...billing, month, statement: {...billing.statement, month}} : billing;
         return new Promise(done => setTimeout(done, slow[month] || 0)).then(() => json(answer));
       }
@@ -67,8 +76,8 @@ const shots = process.env.TICO_SHOTS || '';
       if (p.endsWith('/watch')) return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});
       return json(unrouted(p));
     });
-    const theme = mode => page.evaluate(m => document.documentElement.setAttribute('data-theme', m), mode);
-    const shot = async name => { if (shots) await page.screenshot({path: path.join(shots, name + '.png'), fullPage: true}); };
+    const theme = (mode: string) => page.evaluate(m => document.documentElement.setAttribute('data-theme', m), mode);
+    const shot = async (name: string) => { if (shots) await page.screenshot({path: path.join(shots, name + '.png'), fullPage: true}); };
     const host = page.locator('#set-billing');
 
     await page.goto('https://tico-ui.test/#/settings');
@@ -80,7 +89,7 @@ const shots = process.env.TICO_SHOTS || '';
     // credits: the current one in the table; the expired one behind "Show past credits", with what expired
     const past = host.locator('.billing-past');
     assert.match(await past.locator('summary').innerText(), /^Show past credits \(1\)$/);
-    assert.equal(await past.evaluate(el => el.open), false);
+    assert.equal(await past.evaluate((el: HTMLDetailsElement) => el.open), false);
     await past.locator('summary').click();
     assert.match((await past.innerText()).replace(/\s+/g, ' '), /Grant \$5\.00 \$4\.00 Nov 4, 2026 Expired · \$4\.00 expired/);
     assert.match((await host.locator('.billing-table').first().innerText()).replace(/\s+/g, ' '), /Grant \$20\.00 \$19\.75 Never/);
@@ -117,7 +126,7 @@ const shots = process.env.TICO_SHOTS || '';
     assert.equal(await host.locator('[data-billing-csv]').getAttribute('href'), '/api/v2/billing/statements/2026-11.csv');
     assert.equal(await host.locator('[data-billing-month]').inputValue(), '2026-11');
     // the status lines
-    const status = async (state, extra = {}) => {
+    const status = async (state: string, extra: {[k: string]: unknown} = {}) => {
       billing = {...full, state, ...extra};
       await page.evaluate(() => renderSettingsBilling());
       return host.locator('.billing-status').innerText();

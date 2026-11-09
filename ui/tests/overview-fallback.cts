@@ -1,11 +1,17 @@
+import type {Route} from 'playwright';
 // Overview fallback line: bots whose plan ran out show above the campus as "N bots running on fallback since HH:MM,
 // X limited", from the Health answer the app already polls; with nothing on fallback or limited the strip stays hidden.
 // The 3D renderer is replaced by a stand-in. Fixtures only.
-const {chromium} = require('playwright');
+const {chromium} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
-const {html, uiFile} = require('./support/page.cjs');
-const {unrouted} = require('./support/routes.cjs');
+const {html, uiFile} = require('./support/page.cjs') as typeof import('./support/page.cjs');
+const {unrouted} = require('./support/routes.cjs') as typeof import('./support/routes.cjs');
+
+declare global {
+  // u5: browser globals the page's own scripts define (see ui/app); declared once per name, same type everywhere.
+  function hlRefresh(): Promise<void>;
+}
 
 const SCENE = `export function createBuilding() {
   document.body.dataset.sceneReady = 'true'; document.querySelector('#loading').hidden = true;
@@ -13,18 +19,18 @@ const SCENE = `export function createBuilding() {
 }`;
 
 (async () => {
-  const browser = await chromium.launch({channel: process.env.TICO_BROWSER_CHANNEL ?? 'chrome', headless: true});
+  const browser = await chromium.launch({channel: (process.env.TICO_BROWSER_CHANNEL ?? 'chrome') as string, headless: true});
   try {
     const page = await browser.newPage({viewport: {width: 1280, height: 860}, serviceWorkers: 'block'});
-    const errors = [], since = '2026-10-13T10:04:00Z';
+    const errors: string[] = [], since = '2026-10-13T10:04:00Z';
     const health = {audience: 'owner', checks: [], attention: 0, checked: since, stuck: [],
       on_fallback: [{bot: 'writer', harness: 'codex', changed_at: '2026-10-13T10:09:00Z'}, {bot: 'editor', harness: 'codex', changed_at: since}],
       limited: [{bot: 'vault', changed_at: since}]};
     page.on('pageerror', e => errors.push(e.message));
-    await page.route('**/*', async route => {
+    await page.route('**/*', async (route: Route) => {
       const url = new URL(route.request().url()), p = url.pathname;
       if (url.origin !== 'http://tico-ui.test') return route.abort();
-      const json = body => route.fulfill({contentType: 'application/json', body: JSON.stringify(body)});
+      const json = (body: unknown) => route.fulfill({contentType: 'application/json', body: JSON.stringify(body)});
       if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
       if (p === '/tico/ui/overview/building.ts') return route.fulfill({contentType: 'application/javascript', body: SCENE});
       if (p.startsWith('/tico/ui/')) {

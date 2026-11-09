@@ -1,3 +1,4 @@
+import type {Route} from 'playwright';
 // The pipeline editor (ui/app/pipeline-editor.ts), opened from the pencil by the pipeline's name on the Tasks page.
 //  - the pencil shows only where GET /api/v2/pipelines/{id}/rights says the reader may edit;
 //  - settings: goal, judge, factory, private (with who may see it), prefix, owner and manager save through
@@ -6,14 +7,23 @@
 //    (hours and days converted) or "Don't warn" (null);
 //  - a requirement: + Require saves the kind's own shape, a person reviewer is needed, an edit sends PUT, Retire sends DELETE;
 //  - Then adds and removes a link; a phone opens the editor as a bottom sheet with no sideways scroll.
-const {chromium} = require('playwright');
+const {chromium} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
-const {html, uiFile} = require('./support/page.cjs');
-const {unrouted} = require('./support/routes.cjs');
+const {html, uiFile} = require('./support/page.cjs') as typeof import('./support/page.cjs');
+const {unrouted} = require('./support/routes.cjs') as typeof import('./support/routes.cjs');
+
+type Write = {method: string; p: string; body: unknown};
+type Req = {id: string; name: string; kind: string; needs: unknown; reviewed_by: string; reviewer_id: string | null; backup_reviewer_id?: string | null};
+type State = {type: {id: string; name: string; prefix: string; pipeline_owner_id: string; manager: string | null;
+    steps: {id: string; name: string; status: string; limit_minutes: number | null}[]};
+  reqs: Record<string, Req[]>; links: {id: string; [k: string]: unknown}[]; stageReads: number;
+  settings: {id: string; name: string; prefix: string; goal: string | null; judge_model: string | null; visibility: string; factory_id: string | null;
+    owner_id: string | null; manager_id: string | null; members: string[]; judge_models: string[]; default_judge_model: string};
+  factories: {id: string; name: string; goal: null; owner_id: null; manager_id: null; position: number}[]};
 
 // The server refuses Nobody with a reviewer or a backup (backend/pipeline_requirements.py): the fixture answers the same 422.
-const refused = b => b.reviewed_by === 'nobody' && !!(b.reviewer_id || b.backup_reviewer_id);
+const refused = (b: {reviewed_by?: string; reviewer_id?: string | null; backup_reviewer_id?: string | null}) => b.reviewed_by === 'nobody' && !!(b.reviewer_id || b.backup_reviewer_id);
 const REFUSED = {error: {code: 'validation', detail: 'Nobody reviews this requirement, so it names no reviewer'}};
 
 const steps = () => [
@@ -22,20 +32,20 @@ const steps = () => [
   {id: 's3', name: 'Done', status: 'done', limit_minutes: null},
 ];
 
-async function open(browser, {viewport = {width: 1280, height: 820}, may = true, mover = true} = {}) {
+async function open(browser: import('playwright').Browser, {viewport = {width: 1280, height: 820}, may = true, mover = true} = {}) {
   const page = await browser.newPage({viewport, serviceWorkers: 'block', hasTouch: viewport.width < 600, isMobile: viewport.width < 600});
-  const errors = [], writes = [];
-  const state = {type: {id: 'dev', name: 'Dev tickets', prefix: 'D', pipeline_owner_id: 'human:ana', manager: null, steps: steps()},
+  const errors: unknown[] = [], writes: Write[] = [];
+  const state: State = {type: {id: 'dev', name: 'Dev tickets', prefix: 'D', pipeline_owner_id: 'human:ana', manager: null, steps: steps()},
     reqs: {s2: [{id: 'r1', name: 'Screenshot', kind: 'attachment', needs: {formats: ['image'], newer_than_change: true, is_work: false}, reviewed_by: 'nobody', reviewer_id: null}]},
     links: [], stageReads: 0,
     settings: {id: 'dev', name: 'Dev tickets', prefix: 'D', goal: 'Ship tickets fast', judge_model: null, visibility: 'company', factory_id: 'f1', owner_id: 'human:ana', manager_id: null, members: [], judge_models: ['haiku-5.5', 'jev', 'sonnet'], default_judge_model: 'haiku-5.5'},
     factories: [{id: 'f1', name: 'Product', goal: null, owner_id: null, manager_id: null, position: 0}, {id: 'f2', name: 'Growth', goal: null, owner_id: null, manager_id: null, position: 1}]};
-  page.on('pageerror', e => errors.push(e.message));
+  page.on('pageerror', (e: Error) => errors.push(e.message));
   await page.addInitScript(() => { try { localStorage.setItem('tico.theme', 'dark'); } catch {} });
   const me = {id: 'ana', role: 'owner', name: 'Ana Ruiz', email: 'ana@example.com', cloud: true, registered: true, owner_id: 'ana', mover, config: {company_name: 'Acme Bikes'}};
-  await page.route('**/*', async route => {
+  await page.route('**/*', async (route: Route) => {
     const req = route.request(), url = new URL(req.url()), p = url.pathname, method = req.method();
-    const json = (body, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
+    const json = (body: unknown, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
     if (url.origin !== 'https://tico-ui.test') return route.abort();
     if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
     if (p.startsWith('/tico/ui/')) {
@@ -60,11 +70,11 @@ async function open(browser, {viewport = {width: 1280, height: 820}, may = true,
     if (p === '/api/v2/task-types' && method === 'GET') return json({types: [state.type, {id: 'ops', name: 'Ops', steps: [{id: 'o1', name: 'Todo', status: 'open'}]}]});
     if (p === '/api/v2/task-types/dev' && method === 'GET') return json({type: state.type});
     if (p === '/api/v2/task-types/dev') {
-      state.type.steps = body.steps.map((s, i) => ({limit_minutes: null, ...state.type.steps.find(x => x.id === s.id), ...s, id: s.id || 'n' + i}));
+      state.type.steps = body.steps.map((s: {id: string}, i: number) => ({limit_minutes: null, ...state.type.steps.find(x => x.id === s.id), ...s, id: s.id || 'n' + i}));
       return json({type: state.type});
     }
     if (p === '/api/v2/pipeline-links' && method === 'GET') return json({links: state.links});
-    if (p === '/api/v2/pipeline-links') { state.links = [{id: 'l1', from_pipeline_id: 'dev', from_pipeline_stage_id: body.from_stage_id, to_pipeline_id: body.to_pipeline_id, mode: body.mode}]; return json({link: state.links[0]}); }
+    if (p === '/api/v2/pipeline-links') { state.links = [{id: 'l1', from_pipeline_id: 'dev', from_pipeline_stage_id: body.from_stage_id, to_pipeline_id: body.to_pipeline_id, mode: body.mode} as {id: string}]; return json({link: state.links[0]}); }
     if (p === '/api/v2/pipeline-links/l1/retire') { state.links = []; return json({link: {}}); }
     // The affected count (GET /api/v2/pipeline-stages/{id}/affected): four open cards at Doing, one with the label "urgent".
     const affected = p.match(/^\/api\/v2\/pipeline-stages\/(\w+)\/affected$/);
@@ -73,12 +83,12 @@ async function open(browser, {viewport = {width: 1280, height: 820}, may = true,
       return json({stage: state.type.steps.find(s => s.id === affected[1])?.name ?? '', label: label || null, count: label === 'urgent' ? 1 : 4});
     }
     const stageReqs = p.match(/^\/api\/v2\/pipeline-stages\/(\w+)\/requirements$/);
-    if (stageReqs && method === 'GET') { state.stageReads++; return json({requirements: state.reqs[stageReqs[1]] || []}); }
+    if (stageReqs && method === 'GET') { state.stageReads++; return json({requirements: state.reqs[stageReqs[1]!] || []}); }
     if (stageReqs && refused(body)) return json(REFUSED, 422);
-    if (stageReqs) { (state.reqs[stageReqs[1]] ||= []).push({id: 'r2', ...body}); return json({requirement: {id: 'r2'}}); }
+    if (stageReqs) { (state.reqs[stageReqs[1]!] ||= []).push({id: 'r2', ...body}); return json({requirement: {id: 'r2'}}); }
     if (p === '/api/v2/requirements/r1' && method === 'PUT') {
       if (refused(body)) return json(REFUSED, 422);
-      state.reqs.s2[0] = {id: 'r1', ...body};
+      state.reqs.s2![0] = {id: 'r1', ...body};
       return json({requirement: {}});
     }
     if (p === '/api/v2/requirements/r1' && method === 'DELETE') { state.reqs.s2 = []; return json({requirement: {}}); }
@@ -97,7 +107,7 @@ async function open(browser, {viewport = {width: 1280, height: 820}, may = true,
     }
     if (p === '/api/v2/factories') return json({factories: state.factories});
     const limit = p.match(/^\/api\/v2\/pipeline-stages\/(\w+)$/);
-    if (limit) { state.type.steps.find(s => s.id === limit[1]).limit_minutes = body.limit_minutes; return json({}); }
+    if (limit) { state.type.steps.find(s => s.id === limit[1])!.limit_minutes = body.limit_minutes; return json({}); }
     if (p.startsWith('/api/v2/preferences/')) return json({key: 'tasks.view', value: null});
     if (p === '/api/v2/conversations') return json({conversations: []});
     if (p.endsWith('/watch')) return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});
@@ -108,13 +118,13 @@ async function open(browser, {viewport = {width: 1280, height: 820}, may = true,
   return {page, errors, writes, state};
 }
 // The editor reads again after a save and redraws; wait for that before typing into it.
-const settled = async page => { await page.waitForTimeout(100); await page.waitForLoadState('networkidle'); };
-const last = (writes, p) => writes.filter(w => w.p === p).at(-1)?.body;
+const settled = async (page: import('playwright').Page) => { await page.waitForTimeout(100); await page.waitForLoadState('networkidle'); };
+const last = (writes: Write[], p: string): unknown => writes.filter(w => w.p === p).at(-1)?.body;
 
-async function desktop(browser) {
+async function desktop(browser: import('playwright').Browser) {
   const {page, errors, writes} = await open(browser);
   const pencil = page.locator('#task-pipeline-edit');
-  await page.waitForFunction(() => !document.getElementById('task-pipeline-edit').hidden);
+  await page.waitForFunction(() => !document.getElementById('task-pipeline-edit')!.hidden);
   await pencil.click();
   await page.locator('#pe-dialog .pe-stage').first().waitFor();
   assert.equal(await page.locator('#pe-title').innerText(), 'Dev tickets');
@@ -127,7 +137,7 @@ async function desktop(browser) {
   await page.waitForFunction(() => document.querySelector('[data-pe-setting=prefix]'));
   assert.deepEqual(last(writes, '/api/v2/pipelines/dev/settings'), {prefix: 'dv'});
   await page.locator('[data-pe-setting=manager_id]').selectOption('bot:lead');
-  await page.waitForFunction(() => document.querySelector('[data-pe-setting=manager_id]').value === 'bot:lead');
+  await page.waitForFunction(() => (document.querySelector('[data-pe-setting=manager_id]')! as HTMLInputElement).value === 'bot:lead');
   assert.deepEqual(last(writes, '/api/v2/pipelines/dev/settings'), {manager_id: 'bot:lead'});
   // Goal saves on blur; Judge shows the default when none is set, then saves its choice; Factory picks a live one;
   // Private sends the visibility, then who may see it, and a private pipeline has no factory.
@@ -137,7 +147,7 @@ async function desktop(browser) {
   await page.locator('[data-pe-setting=goal]').fill('Launch the spring line');
   await page.locator('[data-pe-setting=goal]').blur();
   assert.deepEqual((await saving).postDataJSON(), {goal: 'Launch the spring line'});
-  await page.waitForFunction(() => document.querySelector('[data-pe-setting=goal]').value === 'Launch the spring line');
+  await page.waitForFunction(() => (document.querySelector('[data-pe-setting=goal]')! as HTMLInputElement).value === 'Launch the spring line');
   saving = nextSettings();
   await page.locator('[data-pe-setting=judge_model]').selectOption('jev');
   assert.deepEqual((await saving).postDataJSON(), {judge_model: 'jev'});
@@ -147,24 +157,24 @@ async function desktop(browser) {
   saving = nextSettings();
   await page.locator('[data-pe-private]').check();
   assert.deepEqual((await saving).postDataJSON(), {visibility: 'members'});
-  await page.waitForFunction(() => document.querySelector('[data-pe-setting=factory_id]').disabled);
+  await page.waitForFunction(() => (document.querySelector('[data-pe-setting=factory_id]')! as HTMLInputElement).disabled);
   saving = nextSettings();
   await page.locator('[data-pe-member][value="human:sam"]').check();
   assert.deepEqual((await saving).postDataJSON(), {members: ['human:sam']});
   saving = nextSettings();
   await page.locator('[data-pe-private]').uncheck();
   assert.deepEqual((await saving).postDataJSON(), {visibility: 'company'});
-  await page.waitForFunction(() => !document.querySelector('[data-pe-setting=factory_id]').disabled);
+  await page.waitForFunction(() => !(document.querySelector('[data-pe-setting=factory_id]')! as HTMLInputElement).disabled);
   // Warn after: days convert to minutes; Don't warn sends null.
   await page.locator('[data-pe-warn=s1]').click();
   await page.locator('[data-pe-warn-n]').fill('2');
   await page.locator('[data-pe-warn-u]').selectOption({label: 'days'});
   await page.locator('[data-pe-warn-save=s1]').click();
-  await page.waitForFunction(() => /2 days/.test(document.querySelector('.pe-stage').innerText));
+  await page.waitForFunction(() => /2 days/.test((document.querySelector('.pe-stage')! as HTMLElement).innerText));
   assert.deepEqual(last(writes, '/api/v2/pipeline-stages/s1'), {limit_minutes: 2880});
   await page.locator('[data-pe-warn=s1]').click();
   await page.locator('[data-pe-warn-off=s1]').click();
-  await page.waitForFunction(() => /Warn after: Off/.test(document.querySelector('.pe-stage').innerText));
+  await page.waitForFunction(() => /Warn after: Off/.test((document.querySelector('.pe-stage')! as HTMLElement).innerText));
   assert.deepEqual(last(writes, '/api/v2/pipeline-stages/s1'), {limit_minutes: null});
   // A requirement: an approval needs a person; the kind's own shape is sent.
   await page.locator('[data-pe-new=s2]').click();
@@ -174,13 +184,13 @@ async function desktop(browser) {
   await page.locator('.pe-form [name=reviewer_id]').selectOption('human:sam');
   await page.locator('.pe-form button[type=submit]').click();
   await page.waitForFunction(() => document.body.innerText.includes('Lead sign-off'));
-  const added = last(writes, '/api/v2/pipeline-stages/s2/requirements');
+  const added = last(writes, '/api/v2/pipeline-stages/s2/requirements') as Req & {kind: string; needs: unknown};
   assert.equal(added.kind, 'approval'); assert.equal(added.reviewed_by, 'person'); assert.equal(added.reviewer_id, 'human:sam'); assert.deepEqual(added.needs, {});
   await page.locator('[data-pe-req=r1]').click();
   await page.locator('.pe-form [name=name]').fill('Screenshot of the fix');
   await page.locator('.pe-form button[type=submit]').click();
   await page.waitForFunction(() => document.body.innerText.includes('Screenshot of the fix'));
-  assert.equal(writes.filter(w => w.method === 'PUT').at(-1).body.name, 'Screenshot of the fix');
+  assert.equal((writes.filter(w => w.method === 'PUT').at(-1)!.body as {name: string}).name, 'Screenshot of the fix');
   await page.locator('[data-pe-req=r1]').click();
   await page.locator('[data-pe-retire=r1]').click();
   await page.waitForFunction(() => !document.body.innerText.includes('Screenshot of the fix'));
@@ -188,15 +198,15 @@ async function desktop(browser) {
   // Stages: rename, add (before Done), move, remove.
   await page.locator('[data-pe-rename=s1]').fill('Backlog');
   await page.locator('[data-pe-rename=s1]').blur();
-  await page.waitForFunction(() => document.querySelector('[data-pe-rename=s1]').value === 'Backlog');
-  assert.equal(last(writes, '/api/v2/task-types/dev').steps[0].name, 'Backlog');
+  await page.waitForFunction(() => (document.querySelector('[data-pe-rename=s1]')! as HTMLInputElement).value === 'Backlog');
+  assert.equal((last(writes, '/api/v2/task-types/dev') as {steps: {name: string}[]}).steps[0]!.name, 'Backlog');
   await settled(page);
   await page.locator('[data-pe-add-stage] input').fill('Review');
   await page.locator('[data-pe-add-stage] button').click();
   await page.waitForFunction(() => document.querySelectorAll('.pe-stage').length === 4);
-  assert.deepEqual(last(writes, '/api/v2/task-types/dev').steps.map(s => s.name), ['Backlog', 'Doing', 'Review', 'Done']);
+  assert.deepEqual((last(writes, '/api/v2/task-types/dev') as {steps: {name: string}[]}).steps.map(s => s.name), ['Backlog', 'Doing', 'Review', 'Done']);
   await page.locator('[data-pe-up=s3]').click();
-  await page.waitForFunction(() => document.querySelectorAll('.pe-stage-name')[2].value === 'Done');
+  await page.waitForFunction(() => (document.querySelectorAll('.pe-stage-name')[2]! as HTMLInputElement).value === 'Done');
   await page.locator('[data-pe-drop="n2"]').click();
   await page.waitForFunction(() => document.querySelectorAll('.pe-stage').length === 3);
   // Then: add a link, then remove it.
@@ -213,14 +223,14 @@ async function desktop(browser) {
   await page.close();
 }
 
-async function hiddenAndRestricted(browser) {
+async function hiddenAndRestricted(browser: import('playwright').Browser) {
   const a = await open(browser, {may: false});
   await a.page.waitForTimeout(400);
   assert.equal(await a.page.locator('#task-pipeline-edit').isHidden(), true);
   await a.page.close();
   // A reader who is not a mover edits requirements and settings, but not the stages themselves.
   const b = await open(browser, {mover: false});
-  await b.page.waitForFunction(() => !document.getElementById('task-pipeline-edit').hidden);
+  await b.page.waitForFunction(() => !document.getElementById('task-pipeline-edit')!.hidden);
   await b.page.locator('#task-pipeline-edit').click();
   await b.page.locator('.pe-stage').first().waitFor();
   assert.equal(await b.page.locator('[data-pe-add-stage], [data-pe-up], [data-pe-rename]').count(), 0);
@@ -229,45 +239,45 @@ async function hiddenAndRestricted(browser) {
 }
 
 // FHI10: switching a requirement to Nobody saves. The reviewer it named goes with the switch (the server refuses the pair).
-async function nobodySaves(browser) {
+async function nobodySaves(browser: import('playwright').Browser) {
   const {page, errors, writes, state} = await open(browser);
   state.reqs.s2 = [{id: 'r1', name: 'Screenshot', kind: 'attachment', needs: {formats: ['image'], newer_than_change: true, is_work: false},
     reviewed_by: 'person', reviewer_id: 'human:sam', backup_reviewer_id: null}];
-  await page.waitForFunction(() => !document.getElementById('task-pipeline-edit').hidden);
+  await page.waitForFunction(() => !document.getElementById('task-pipeline-edit')!.hidden);
   await page.locator('#task-pipeline-edit').click();
   await page.locator('[data-pe-req=r1]').click();
   await page.locator('.pe-form [name=reviewed_by]').selectOption('nobody');
   await page.locator('.pe-form button[type=submit]').click();
   await settled(page);
-  const put = writes.filter(w => w.p === '/api/v2/requirements/r1' && w.method === 'PUT').at(-1)?.body;
+  const put = writes.filter(w => w.p === '/api/v2/requirements/r1' && w.method === 'PUT').at(-1)?.body as Req;
   assert.equal(put.reviewed_by, 'nobody');
   assert.equal(put.reviewer_id, null, 'Nobody sends no reviewer');
   assert.equal(put.backup_reviewer_id, null, 'Nobody sends no backup');
-  assert.equal(state.reqs.s2[0].reviewed_by, 'nobody', 'the requirement saved as Nobody');
+  assert.equal(state.reqs.s2![0]!.reviewed_by, 'nobody', 'the requirement saved as Nobody');
   assert.equal(await page.locator('.pe-form [data-pe-error]:not([hidden])').count(), 0, 'no refusal is shown');
   assert.deepEqual(errors, [], 'nobody: no page errors');
   await page.close();
 }
 
 // FHI11: an owner cannot be cleared, so there is no empty choice; an unset manager shows a disabled "Not set".
-async function unsetChoices(browser) {
+async function unsetChoices(browser: import('playwright').Browser) {
   const {page, errors} = await open(browser);
-  await page.waitForFunction(() => !document.getElementById('task-pipeline-edit').hidden);
+  await page.waitForFunction(() => !document.getElementById('task-pipeline-edit')!.hidden);
   await page.locator('#task-pipeline-edit').click();
   await page.locator('.pe-stage').first().waitFor();
-  const enabled = sel => page.locator(`${sel} option:not([disabled])`).evaluateAll(os => os.map(o => o.value));
+  const enabled = (sel: string) => page.locator(`${sel} option:not([disabled])`).evaluateAll((os: HTMLElement[]) => os.map(o => (o as HTMLOptionElement).value));
   assert.deepEqual(await enabled('[data-pe-setting=owner_id]'), ['human:ana', 'human:sam'], 'the owner has no empty choice');
   assert.deepEqual(await enabled('[data-pe-setting=manager_id]'), ['bot:lead'], 'an unset manager has no empty choice');
   assert.equal(await page.locator('[data-pe-setting=manager_id] option').first().innerText(), 'Not set', 'an unset manager says so');
-  assert.equal(await page.locator('[data-pe-setting=manager_id] option').first().evaluate(o => o.disabled), true, 'the placeholder cannot be chosen');
+  assert.equal(await page.locator('[data-pe-setting=manager_id] option').first().evaluate(o => (o as HTMLOptionElement).disabled), true, 'the placeholder cannot be chosen');
   assert.deepEqual(errors, [], 'unset choices: no page errors');
   await page.close();
 }
 
 // FHI16: a new requirement says how many open cards it would apply to right now, and reads again when the label changes.
-async function affectedNote(browser) {
+async function affectedNote(browser: import('playwright').Browser) {
   const {page, errors} = await open(browser);
-  await page.waitForFunction(() => !document.getElementById('task-pipeline-edit').hidden);
+  await page.waitForFunction(() => !document.getElementById('task-pipeline-edit')!.hidden);
   await page.locator('#task-pipeline-edit').click();
   await page.locator('.pe-stage').first().waitFor();
   await page.locator('[data-pe-new=s2]').click();
@@ -282,17 +292,17 @@ async function affectedNote(browser) {
 }
 
 // J2: saving members keeps a member the roster does not list (its box is drawn checked), and adds the one ticked.
-async function keepsMembers(browser) {
+async function keepsMembers(browser: import('playwright').Browser) {
   const {page, errors, writes, state} = await open(browser);
   state.settings.visibility = 'members';
   state.settings.members = ['human:ana', 'bot:ghost'];
-  await page.waitForFunction(() => !document.getElementById('task-pipeline-edit').hidden);
+  await page.waitForFunction(() => !document.getElementById('task-pipeline-edit')!.hidden);
   await page.locator('#task-pipeline-edit').click();
   await page.locator('.pe-stage').first().waitFor();
   assert.equal(await page.locator('[data-pe-member][value="bot:ghost"]').isChecked(), true, 'an unlisted member keeps a checked box');
   await page.locator('[data-pe-member][value="human:sam"]').check();
   await settled(page);
-  const members = [...last(writes, '/api/v2/pipelines/dev/settings').members].sort();
+  const members = [...(last(writes, '/api/v2/pipelines/dev/settings') as {members: string[]}).members].sort();
   assert.deepEqual(members, ['bot:ghost', 'human:ana', 'human:sam'], 'adding Sam keeps the unlisted member');
   assert.deepEqual(errors, [], 'members: no page errors');
   await page.close();
@@ -300,56 +310,56 @@ async function keepsMembers(browser) {
 
 // A redraw while a setting is being typed in (another save reloads the editor) keeps the typed words and the focus, and the
 // words still save when the field is left.
-async function typingSurvivesRedraw(browser) {
+async function typingSurvivesRedraw(browser: import('playwright').Browser) {
   const {page, errors, writes, state} = await open(browser);
-  await page.waitForFunction(() => !document.getElementById('task-pipeline-edit').hidden);
+  await page.waitForFunction(() => !document.getElementById('task-pipeline-edit')!.hidden);
   await page.locator('#task-pipeline-edit').click();
   await page.locator('.pe-stage').first().waitFor();
   await page.locator('[data-pe-setting=goal]').fill('Ship faster');
   const reads = state.stageReads;
   // The judge saves on change: its save reloads the editor (every stage's requirements are read again) while the Goal has focus.
-  await page.evaluate(() => document.querySelector('[data-pe-setting=judge_model]').dispatchEvent(new Event('change', {bubbles: true})));
+  await page.evaluate(() => document.querySelector('[data-pe-setting=judge_model]')!.dispatchEvent(new Event('change', {bubbles: true})));
   const end = Date.now() + 5000;
   while (state.stageReads < reads + 3) { if (Date.now() > end) throw new Error('the editor was not redrawn'); await new Promise(r => setTimeout(r, 25)); }
   await settled(page);
   assert.equal(await page.locator('[data-pe-setting=goal]').inputValue(), 'Ship faster', 'the typed Goal survives the redraw');
-  assert.equal(await page.evaluate(() => document.activeElement?.dataset.peSetting), 'goal', 'the Goal keeps the focus');
+  assert.equal(await page.evaluate(() => (document.activeElement as HTMLElement | null)?.dataset.peSetting), 'goal', 'the Goal keeps the focus');
   await page.locator('[data-pe-setting=goal]').blur();
   await settled(page);
-  assert.equal(last(writes, '/api/v2/pipelines/dev/settings').goal, 'Ship faster', 'leaving the Goal saves the typed words');
+  assert.equal((last(writes, '/api/v2/pipelines/dev/settings') as {goal: string}).goal, 'Ship faster', 'leaving the Goal saves the typed words');
   assert.deepEqual(errors, [], 'redraw: no page errors');
   await page.close();
 }
 
 // J5: Enter in the Goal saves it (the PATCH is sent), as a change or blur does.
-async function goalEnter(browser) {
+async function goalEnter(browser: import('playwright').Browser) {
   const {page, errors, writes, state} = await open(browser);
-  await page.waitForFunction(() => !document.getElementById('task-pipeline-edit').hidden);
+  await page.waitForFunction(() => !document.getElementById('task-pipeline-edit')!.hidden);
   await page.locator('#task-pipeline-edit').click();
   await page.locator('.pe-stage').first().waitFor();
   await page.locator('[data-pe-setting=goal]').fill('Ship faster');
   await page.locator('[data-pe-setting=goal]').press('Enter');
   await settled(page);
-  assert.equal(last(writes, '/api/v2/pipelines/dev/settings').goal, 'Ship faster', 'Enter sends the goal');
+  assert.equal((last(writes, '/api/v2/pipelines/dev/settings') as {goal: string}).goal, 'Ship faster', 'Enter sends the goal');
   assert.equal(state.settings.goal, 'Ship faster', 'the goal is saved');
   assert.deepEqual(errors, [], 'goal: no page errors');
   await page.close();
 }
 
-async function phone(browser) {
+async function phone(browser: import('playwright').Browser) {
   const {page, errors} = await open(browser, {viewport: {width: 390, height: 844}});
-  await page.waitForFunction(() => !document.getElementById('task-pipeline-edit').hidden);
+  await page.waitForFunction(() => !document.getElementById('task-pipeline-edit')!.hidden);
   await page.locator('#task-pipeline-edit').click();
   await page.locator('.pe-stage').first().waitFor();
   const box = await page.locator('#pe-dialog').boundingBox();
-  assert.ok(box.width >= 389 && box.y + box.height <= 845, `sheet ${JSON.stringify(box)}`);
+  assert.ok(box!.width >= 389 && box!.y + box!.height <= 845, `sheet ${JSON.stringify(box)}`);
   assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), 'no sideways scroll');
   assert.deepEqual(errors, []);
   await page.close();
 }
 
 (async () => {
-  const browser = await chromium.launch({headless: true, channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined});
+  const browser = await chromium.launch({headless: true, channel: (process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined) as string});
   try {
     await desktop(browser); await hiddenAndRestricted(browser); await phone(browser);
     await nobodySaves(browser); await unsetChoices(browser); await affectedNote(browser); await keepsMembers(browser); await goalEnter(browser);

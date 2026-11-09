@@ -1,17 +1,28 @@
+import type {Route} from 'playwright';
 // The first-run step's models choice (backend/models_preset.py; Settings > Models has only the Gateway toggle now) against
 // a fake server: the four choices in plain words, the recommended one marked; picking a subscription choice with nothing
 // ticked ticks Claude and ChatGPT, and the form sends the choice. Its wording names no logo, partner or approval, and
 // says nothing about what Tico keeps of a sign-in.
-const {chromium} = require('playwright');
+const {chromium} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
-const {html, uiFile} = require('./support/page.cjs');
-const {unrouted} = require('./support/routes.cjs');
+const {html, uiFile} = require('./support/page.cjs') as typeof import('./support/page.cjs');
+const {unrouted} = require('./support/routes.cjs') as typeof import('./support/routes.cjs');
+
+declare global {
+  // u5: browser globals the page's own scripts define (see ui/app); declared once per name, same type everywhere.
+  var get: <T = unknown>(p: string, opts?: {fresh?: boolean}) => Promise<T>;
+  var SETTINGS_DATA: {machines: {harness_choices: Record<string, boolean>}[]; models: unknown[]};
+  var loadSettings: () => Promise<void>;
+  function providersFormHTML(view: unknown, models: unknown[] | null | undefined, id: string, editable?: boolean): string;
+  function providersWire(root: HTMLElement | null, view: unknown, models: unknown[] | null | undefined): void;
+  function providersCollect(root: HTMLElement): {preset: string; enabled: string[]};
+}
 (async () => {
   const browser = await chromium.launch({headless: true});
   try {
     const page = await browser.newPage({viewport: {width: 1440, height: 900}, serviceWorkers: 'block'});
-    const errors = [];
+    const errors: string[] = [];
     page.on('pageerror', e => errors.push(e.message));
     const catalog = {
       models: [
@@ -26,12 +37,12 @@ const {unrouted} = require('./support/routes.cjs');
       presets: ['subscriptions-gateway', 'subscriptions', 'gateway', 'own-keys'],
       providers: [{id: 'anthropic', label: 'Anthropic'}, {id: 'openai', label: 'OpenAI'}, {id: 'tico', label: 'Tico AI Gateway', gateway: true}]});
     const sent = [];
-    await page.route('**/*', async route => {
+    await page.route('**/*', async (route: Route) => {
       const req = route.request(), p = new URL(req.url()).pathname;
-      const json = (body, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
+      const json = (body: unknown, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
       const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/);
-      if (ui && fs.existsSync(uiFile(ui[1])))
-        return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]), 'utf8')});
+      if (ui && fs.existsSync(uiFile(ui[1]!)))
+        return route.fulfill({contentType: ui[1]!.endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]!), 'utf8')});
       if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
       if (p === '/api/me') return json({id: 'ana', role: 'owner', name: 'Ana', email: 'ana@example.com', cloud: true, registered: true});
       if (p === '/api/v2/config') return json({version: '0.1.0', app_name: 'Tico', local: true});
@@ -65,7 +76,7 @@ const {unrouted} = require('./support/routes.cjs');
         await loadSettings();
         const view = await get('/v2/providers', {fresh: true});
         let host = document.querySelector('#preset-host');
-        if (!host) { host = document.createElement('section'); host.id = 'preset-host'; host.className = 'card'; document.querySelector('.settings-pane:not([hidden])').prepend(host); }
+        if (!host) { host = document.createElement('section'); host.id = 'preset-host'; host.className = 'card'; document.querySelector('.settings-pane:not([hidden])')!.prepend(host); }
         host.innerHTML = providersFormHTML(view, SETTINGS_DATA.models, 'onb-prov');
         providersWire(host.querySelector('#onb-prov'), view, SETTINGS_DATA.models);
       });
@@ -89,8 +100,8 @@ const {unrouted} = require('./support/routes.cjs');
     // Nothing ticked: the recommended choice ticks Claude and ChatGPT and offers their models; Save sends the choice.
     assert.equal(await page.locator('#onb-prov [data-provider]:checked').count(), 0);
     await choices.locator('[data-provider-preset][value=subscriptions-gateway]').check();
-    assert.deepEqual(await page.locator('#onb-prov [data-provider]:checked').evaluateAll(boxes => boxes.map(b => b.value)), ['anthropic', 'openai']);
-    const chosen = await page.evaluate(() => providersCollect(document.querySelector('#onb-prov')));
+    assert.deepEqual(await page.locator('#onb-prov [data-provider]:checked').evaluateAll((boxes: HTMLInputElement[]) => boxes.map(b => b.value)), ['anthropic', 'openai']);
+    const chosen = await page.evaluate(() => providersCollect(document.querySelector('#onb-prov') as HTMLElement));
     assert.equal(chosen.preset, 'subscriptions-gateway');
     assert.deepEqual(chosen.enabled, ['anthropic', 'openai']);
     // Another choice keeps what is ticked.

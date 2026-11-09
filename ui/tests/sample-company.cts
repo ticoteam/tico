@@ -1,38 +1,45 @@
+import type {Route} from 'playwright';
 // First run: the welcome's first screen offers "Start with a sample company" (backend/sample_company.py). One click
 // posts /api/v2/setup/sample once and lands on the finished first run, named as the sample, with no wizard step
 // saved; the offer is gone from the second screen on. Fixtures only - no server, no network.
-const {chromium} = require('playwright');
+const {chromium} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
-const {html, uiFile} = require('./support/page.cjs');
-const {unrouted} = require('./support/routes.cjs');
+const {html, uiFile} = require('./support/page.cjs') as typeof import('./support/page.cjs');
+const {unrouted} = require('./support/routes.cjs') as typeof import('./support/routes.cjs');
+
+declare global {
+  // u5: browser globals the page's own scripts define (see ui/app); declared once per name, same type everywhere.
+  var S: {config: {update: {current: string; latest: string; available: boolean; managed?: boolean}; company_name: string; onboarding_needed: boolean; providers_configured: boolean}; emps: {id: string; name: string}[]; me: {role: string; bot_admin?: boolean}; route: string};
+}
+
 
 const CONFIG = {environment_id: 'initech', company_name: 'Initech', app_name: 'Initech Hub', assistant_name: 'Ace',
   assistant_bot: 'coo', public_url: 'https://initech.test', runner_url: 'https://initech.test', local: false, release: '',
   onboarding_needed: true, providers_configured: false, version: '0.2.0', runner_compat: {version: '0.2.0', min_runner: '0.1.0'}};
-const SAMPLE_BOTS = [['coo', 'Assistant'], ['botops', 'BotOps'], ['head-of-product', 'Head of Product'], ['builder', 'Builder'],
+const SAMPLE_BOTS = ([['coo', 'Assistant'], ['botops', 'BotOps'], ['head-of-product', 'Head of Product'], ['builder', 'Builder'],
   ['support-agent', 'Support Agent'], ['content-marketer', 'Content Marketer'], ['goal-manager', 'Strategy Bot'],
-  ['librarian', 'Librarian']].map(([slug, display_name]) => ({id: slug, slug, display_name,
+  ['librarian', 'Librarian']] as [string, string][]).map(([slug, display_name]) => ({id: slug, slug, display_name,
   status: 'active', template: slug, onboarding_state: ['coo', 'botops'].includes(slug) ? '' : 'onboarded', setup_task_id: null,
   repository_present: false}));
 
 (async () => {
-  const browser = await chromium.launch({headless: true, channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined});
+  const browser = await chromium.launch({headless: true, channel: (process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined) as string});
   try {
     const context = await browser.newContext({viewport: {width: 1100, height: 800}, serviceWorkers: 'block'});
-    const puts = [], samples = [], previews = [], imports = [];
-    let record = {names: {company_name: 'Initech', app_name: 'Initech Hub', assistant_name: 'Ace'},
+    const puts: Record<string, unknown>[] = [], samples: Record<string, unknown>[] = [], previews: Record<string, unknown>[] = [], imports: Record<string, unknown>[] = [];
+    let record: {names: {company_name: string; app_name: string; assistant_name: string}; answers: Record<string, string>; selected: Record<string, unknown>; completed: string | null; bots: unknown[]; machine: {runners: unknown[]; enrolled: boolean}; needed: boolean; sample: {loaded: string; by: string; bots: string[]; tasks: string[]} | null; [k: string]: unknown} = {names: {company_name: 'Initech', app_name: 'Initech Hub', assistant_name: 'Ace'},
       answers: {what_we_do: '', customers: '', team_size: '', software_product: ''}, selected: {}, completed: null, bots: [],
       machine: {runners: [], enrolled: false}, needed: true, sample: null};
-    let samplesHeld = null, releaseSample = () => {};
-    await context.route('**/*', async route => {
+    let samplesHeld: Promise<unknown> | null = null, releaseSample: (value?: unknown) => void = () => {};
+    await context.route('**/*', async (route: Route) => {
       const request = route.request(), p = new URL(request.url()).pathname;
-      const json = body => route.fulfill({contentType: 'application/json', body: JSON.stringify(body)});
+      const json = (body: unknown) => route.fulfill({contentType: 'application/json', body: JSON.stringify(body)});
       if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
       const module = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/);
       if (module) {
-        const file = uiFile(module[1]);
-        if (fs.existsSync(file)) return route.fulfill({contentType: module[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(file, 'utf8')});
+        const file = uiFile(module[1]!);
+        if (fs.existsSync(file)) return route.fulfill({contentType: module[1]!.endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(file, 'utf8')});
       }
       const config = {...CONFIG, ...record.names, onboarding_needed: record.needed, providers_configured: !!record.sample};
       if (p === '/api/me') return json({id: 'owner', name: 'Owner Person', role: 'owner', cloud: true, email: 'owner@initech.test', config});
@@ -42,25 +49,25 @@ const SAMPLE_BOTS = [['coo', 'Assistant'], ['botops', 'BotOps'], ['head-of-produ
       if (p === '/api/humans') return json({people: []});
       if (p === '/api/v2/templates') return json({cards: []});
       if (p === '/api/v2/setup') {
-        if (request.method() === 'PUT') { puts.push(request.postDataJSON()); return json({...record, home: 'human:owner'}); }
+        if (request.method() === 'PUT') { puts.push(request.postDataJSON() as Record<string, unknown>); return json({...record, home: 'human:owner'}); }
         return json({...record, home: 'human:owner'});
       }
       if (p === '/api/v2/setup/sample') {
-        samples.push(request.postDataJSON());
+        samples.push(request.postDataJSON() as Record<string, unknown>);
         await samplesHeld;
         record = {...record, names: {...record.names, company_name: 'Sample Co'}, completed: '2026-10-18T10:00:00Z', needed: false,
                   bots: SAMPLE_BOTS, sample: {loaded: '2026-10-18T10:00:00Z', by: 'human:owner', bots: SAMPLE_BOTS.map(b => b.slug), tasks: ['t1', 't2', 't3', 't4', 't5']}};
         return json({...record, home: 'human:owner'});
       }
       if (p === '/api/v2/setup/company/preview') {
-        previews.push(request.postDataJSON());
+        previews.push(request.postDataJSON() as Record<string, unknown>);
         return json({fingerprint: 'a'.repeat(64), company_name: 'Acme Finance', builtins: ['coo', 'botops'],
           employees: [{id: 'coo', title: 'Assistant', start: 'now', reports_to: 'human:owner'}],
           seats: [{id: 'bookkeeping', title: 'Acme <Bookkeeper>', template: 'bookkeeping', reports_to: 'finance-lead'}],
           deferred: ['tool_connections']});
       }
       if (p === '/api/v2/setup/company/import') {
-        imports.push(request.postDataJSON());
+        imports.push(request.postDataJSON() as Record<string, unknown>);
         record = {...record, names: {...record.names, company_name: 'Acme Finance'},
           completed: '2026-10-20T10:00:00Z', needed: false,
           company_import: {fingerprint: 'a'.repeat(64), deferred: ['tool_connections'], seats: 1,
@@ -76,7 +83,7 @@ const SAMPLE_BOTS = [['coo', 'Assistant'], ['botops', 'BotOps'], ['head-of-produ
     });
 
     const page = await context.newPage();
-    const errors = [];
+    const errors: string[] = [];
     page.on('pageerror', e => errors.push(e.message));
     await page.goto('https://tico-ui.test/');
     await page.waitForFunction(() => location.hash === '#/welcome');
@@ -89,7 +96,7 @@ const SAMPLE_BOTS = [['coo', 'Assistant'], ['botops', 'BotOps'], ['head-of-produ
     await page.locator('#onb-sample').click();
     await page.locator('#onb-status', {hasText: 'Starting the sample company'}).waitFor();
     assert.equal(await page.locator('#onb-next').isDisabled(), true);
-    await page.evaluate(() => document.querySelector('#onb-sample')?.click());
+    await page.evaluate(() => (document.querySelector('#onb-sample') as HTMLElement | null)?.click());
     releaseSample();
     await page.locator('#onb-tasks').waitFor();
     assert.deepEqual(samples, [{}]);
@@ -102,7 +109,7 @@ const SAMPLE_BOTS = [['coo', 'Assistant'], ['botops', 'BotOps'], ['head-of-produ
     assert.equal(await page.locator('.fr-starter-tasks summary').textContent(), '5 starter tasks created');
     assert.deepEqual(await page.locator('.fr-starter-tasks a').evaluateAll(links => links.map(link => link.getAttribute('href'))),
       ['#/task/t1', '#/task/t2', '#/task/t3', '#/task/t4', '#/task/t5']);
-    assert.equal(await page.locator('#fr-owners summary').textContent().then(text => text.replace(/\s+/g, ' ').trim()), 'You own all 8 bots. Change');
+    assert.equal(await page.locator('#fr-owners summary').textContent().then(text => text!.replace(/\s+/g, ' ').trim()), 'You own all 8 bots. Change');
 
     // A company that has begun the wizard is past the offer: it shows on the first screen only.
     const later = await context.newPage();

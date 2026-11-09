@@ -1,3 +1,4 @@
+import type {Route} from 'playwright';
 // Settings has no dead ends (settings stage 1). Fixtures only.
 //  - every #/settings/<name> link the app draws opens a real tab: a name Settings doesn't know would land on General
 //    with nothing said, which is how "Picks and services" once opened Updates;
@@ -13,12 +14,12 @@
 //    which a redraw and a reload keep;
 //  - a first visit opens General; a tab this person can't see opens General with "That page is for admins", and an
 //    unknown one opens General without it.
-const {chromium} = require('playwright');
+const {chromium} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const {html, uiFile} = require('./support/page.cjs');
-const {unrouted} = require('./support/routes.cjs');
+const {html, uiFile} = require('./support/page.cjs') as typeof import('./support/page.cjs');
+const {unrouted} = require('./support/routes.cjs') as typeof import('./support/routes.cjs');
 
 // Names the router or settingsShow takes besides the tabs and their aliases (ui/app/router.ts, settingsShow).
 const SPECIAL = ['models', 'providers', 'tags', 'types', 'runs', 'roadmap', 'subscriptions',
@@ -33,31 +34,43 @@ const MOVED = ['listening', 'ceo', 'inboxes', 'rules', 'routines', 'webhooks', '
 // Every #/settings/<name> address written in the UI's sources, .js or .ts (a script converted to TypeScript keeps its links).
 function settingsLinks() {
   const ui = path.join(__dirname, '..');
-  const source = f => f.endsWith('.js') || f.endsWith('.ts');
-  const files = [...fs.readdirSync(ui).filter(source).map(f => path.join(ui, f)),
-    ...fs.readdirSync(path.join(ui, 'app')).filter(source).map(f => path.join(ui, 'app', f))];
-  const names = new Set();
-  for (const file of files) for (const m of fs.readFileSync(file, 'utf8').matchAll(/#\/settings\/([a-z-]+)/g)) names.add(m[1]);
+  const source = (f: string) => f.endsWith('.js') || f.endsWith('.ts');
+  const files = [...fs.readdirSync(ui).filter(source).map((f: string) => path.join(ui, f)),
+    ...fs.readdirSync(path.join(ui, 'app')).filter(source).map((f: string) => path.join(ui, 'app', f))];
+  const names = new Set<string>();
+  for (const file of files) for (const m of fs.readFileSync(file, 'utf8').matchAll(/#\/settings\/([a-z-]+)/g)) names.add(m[1]!);
   return [...names].filter(n => !MOVED.includes(n)).sort();
 }
 
 const MAY = {read: true, organize: true, send: false, change_calendar: false};
+
+declare global {
+  // u5: browser globals the page's own scripts define (see ui/app); declared once per name, same type everywhere.
+  var SETTINGS_ADDRESS: string;
+  function route(): void;
+  var SETTINGS: string;
+  var SETTINGS_TABS: string[];
+  var SETTINGS_ALIAS: Record<string, string>;
+  var SETTINGS_REVEAL: boolean;
+  var S: {config: {update: {current: string; latest: string; available: boolean; managed?: boolean}; company_name: string; onboarding_needed: boolean; providers_configured: boolean}; emps: {id: string; name: string}[]; me: {role: string; bot_admin?: boolean}; route: string};
+}
+
 const MAILBOX = {id: 'mb1', address: 'support@acme.example', provider: 'google_workspace', kind: 'shared', person_id: null,
   person_name: '', connection: 'workspace', status: 'active', state: 'connected', level: 'read_write', routines: []};
-async function open(browser, {role = 'owner', hash = '#/settings'} = {}) {
+async function open(browser: import('playwright').Browser, {role = 'owner', hash = '#/settings'} = {}) {
   const context = await browser.newContext({viewport: {width: 1280, height: 900}, serviceWorkers: 'block'});
   const page = await context.newPage();
-  const errors = [];
-  page.on('pageerror', e => errors.push(e.message));
+  const errors: string[] = [];
+  page.on('pageerror', (e: Error) => errors.push(e.message));
   const admin = role === 'owner';
-  await context.route('**/*', route => {
+  await context.route('**/*', (route: Route) => {
     const req = route.request(), url = new URL(req.url()), p = url.pathname;
-    const json = (body, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
+    const json = (body: unknown, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
     if (/\/marked\.min\.js$/.test(p)) return route.fulfill({contentType: 'application/javascript', body: 'window.marked={parse:s=>String(s)}'});
     if (url.origin !== 'https://tico-ui.test') return route.abort();
     const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/);
-    if (ui && fs.existsSync(uiFile(ui[1])))
-      return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]), 'utf8')});
+    if (ui && fs.existsSync(uiFile(ui[1]!)))
+      return route.fulfill({contentType: ui[1]!.endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]!), 'utf8')});
     if (/\.(?:js|ts)$/.test(p)) return route.fulfill({contentType: 'application/javascript', body: ''});
     if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
     const config = {version: '0.1.0', app_name: 'Tico'};
@@ -80,16 +93,16 @@ async function open(browser, {role = 'owner', hash = '#/settings'} = {}) {
   await page.locator('#settings-tabs').waitFor();
   return {page, context, errors};
 }
-const selected = page => page.locator('#settings-tabs [aria-selected=true]').getAttribute('data-settings-tab');
+const selected = (page: import('playwright').Page) => page.locator('#settings-tabs [aria-selected=true]').getAttribute('data-settings-tab');
 // Opens an address and waits for Settings to write its tab's address back (an address already in the bar reroutes).
-const go = async (page, hash) => {
+const go = async (page: import('playwright').Page, hash: string) => {
   await page.evaluate(h => { SETTINGS_ADDRESS = ''; if (location.hash === h) route(); else location.hash = h; }, hash);
   await page.waitForFunction(() => S.route === SETTINGS && SETTINGS_ADDRESS && location.hash === SETTINGS_ADDRESS);
 };
-const address = page => page.evaluate(() => location.hash);
+const address = (page: import('playwright').Page) => page.evaluate(() => location.hash);
 
 (async () => {
-  const browser = await chromium.launch({headless: true, channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined});
+  const browser = await chromium.launch({headless: true, channel: (process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined) as string});
   try {
     {
       // A first visit opens General.
@@ -164,7 +177,7 @@ const address = page => page.evaluate(() => location.hash);
         ['#/settings/system/set-release-card', '#/settings/bots'], ['#/settings/releases', '#/settings/bots']]) {
         await page.evaluate(h => { location.hash = h; }, '#/settings/general');
         await page.waitForFunction(() => location.hash === '#/settings/general');
-        await page.evaluate(h => { location.hash = h; }, old);
+        await page.evaluate(h => { location.hash = h; }, old!);
         await page.waitForFunction(w => location.hash === w, want).catch(() => assert.fail(`${old} leads to ${want}`));
       }
       await go(page, '#/settings/system/set-screening-card');
@@ -190,7 +203,7 @@ const address = page => page.evaluate(() => location.hash);
       assert.equal(await page.locator('#settings-tabs [data-settings-tab=inboxes]').count(), 0, 'no Inboxes tab');
       for (const [from, want] of [['#/settings/inbox', '#/tools/settings/email'], ['#/settings/google', '#/tools/settings/email'],
                                   ['#/settings/mailboxes', '#/tools?show=mail'], ['#/settings/inboxes/mailbox/mb1', '#/tools/mailbox/mb1']]) {
-        await page.evaluate(h => { location.hash = h; }, from);
+        await page.evaluate(h => { location.hash = h; }, from!);
         await page.waitForFunction(w => location.hash === w, want).catch(() => assert.fail(`${from} leads to ${want}`));
       }
       await page.locator('#inbox-head h1', {hasText: 'support@acme.example'}).waitFor();

@@ -1,30 +1,31 @@
+import type {Route} from 'playwright';
 // Settings > General > Tico company against a fake server (backend/company_server.py): an admin previews a server
 // code, sees the company's name, connects, then sees the company, its credit and "Open on app.tico.dev", and
 // disconnects. A member never sees the section. No sideways scroll on a phone. Every request is intercepted.
 // TICO_SHOTS=<dir> saves screenshots of both states.
-const {chromium} = require('playwright');
+const {chromium} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const {html, uiFile} = require('./support/page.cjs');
-const {unrouted} = require('./support/routes.cjs');
+const {html, uiFile} = require('./support/page.cjs') as typeof import('./support/page.cjs');
+const {unrouted} = require('./support/routes.cjs') as typeof import('./support/routes.cjs');
 const shots = process.env.TICO_SHOTS || '';
 
 (async () => {
-  const browser = await chromium.launch({headless: true, channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined});
+  const browser = await chromium.launch({headless: true, channel: (process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined) as string});
   try {
     const page = await browser.newPage({viewport: {width: 1280, height: 800}, serviceWorkers: 'block'});
-    const errors = [];
+    const errors: string[] = [];
     page.on('pageerror', e => errors.push(e.message));
     const CODE = 'c'.repeat(43), COMPANY = {id: '2615c13e-d164-414f-94a5-782f0ea1b2f8', name: 'Acme', slug: 'acme'};
-    let linked = null, admin = true;   // an admin (owners see the same section)
-    const asked = [];
-    await page.route('**/*', async route => {
+    let linked: {company: unknown; workspace_id: string; portal_url: string; credit: {balance_cents: number}} | null = null, admin = true;   // an admin (owners see the same section)
+    const asked: string[] = [];
+    await page.route('**/*', async (route: Route) => {
       const req = route.request(), url = new URL(req.url()), p = url.pathname;
-      const json = (body, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
+      const json = (body: unknown, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
       const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/);
-      if (ui && fs.existsSync(uiFile(ui[1])))
-        return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]), 'utf8')});
+      if (ui && fs.existsSync(uiFile(ui[1]!)))
+        return route.fulfill({contentType: ui[1]!.endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]!), 'utf8')});
       if (p.startsWith('/vendor/') && fs.existsSync(uiFile(p.slice(1)))) return route.fulfill({body: fs.readFileSync(uiFile(p.slice(1))),
         contentType: p.endsWith('.woff2') ? 'font/woff2' : 'application/javascript'});
       if (/\.(?:js|ts)$/.test(p)) return route.fulfill({contentType: 'application/javascript', body: ''});
@@ -52,7 +53,7 @@ const shots = process.env.TICO_SHOTS || '';
       return json(unrouted(p));
     });
     const card = page.locator('#settings-company');
-    const shot = async name => { if (shots) await card.screenshot({path: path.join(shots, name + '.png')}); };
+    const shot = async (name: string) => { if (shots) await card.screenshot({path: path.join(shots, name + '.png')}); };
 
     await page.goto('https://tico-ui.test/#/settings');
     await page.locator('[data-settings-tab=general]').click();

@@ -1,11 +1,12 @@
+import type {Route} from 'playwright';
 // Settings > Computers' model sign-in pop-ups, with every request intercepted (ui/model-login.ts; the harness capabilities
 // come from runner-rs/harnesses/*.toml). What were model-login-hosted (hosted sign-in shows only the link and code) and
 // model-to-key (Switch to API key); each keeps its own header below and names itself in a failure ("[toKey] ...").
-const {chromium} = require('playwright');
+const {chromium} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
-const {html, uiFile, harnesses} = require('./support/page.cjs');
-const {unrouted} = require('./support/routes.cjs');
+const {html, uiFile, harnesses} = require('./support/page.cjs') as typeof import('./support/page.cjs');
+const {unrouted} = require('./support/routes.cjs') as typeof import('./support/routes.cjs');
 
 // ---- model-login-hosted
 // Sign in on a hosted Tico (config `hosted`, TICO_HOSTED; ui/model-login.ts). The person has no terminal on the
@@ -15,28 +16,28 @@ const {unrouted} = require('./support/routes.cjs');
 // closes by itself once signed in (saying so in a toast) or when canceled, canceling it on the computer. A
 // self-hosted Tico keeps the computer's lines, the terminal hint and the dialog open after a cancel. Every request is
 // intercepted; the harness capabilities come from runner-rs/harnesses/*.toml.
-async function loginHosted(browser) {
-    const now = Date.now(), at = ms => new Date(now + ms).toISOString();
-    const chip = (name, runtime) => ({name, runtime, installed: true, version: '1.0.0', managed: true, state: 'idle', wanted: true,
+async function loginHosted(browser: import('playwright').Browser) {
+    const now = Date.now(), at = (ms: number) => new Date(now + ms).toISOString();
+    const chip = (name: string, runtime: string) => ({name, runtime, installed: true, version: '1.0.0', managed: true, state: 'idle', wanted: true,
       pinned: false, update_available: false, detail: ''});
     const CLAUDE_URL = 'https://claude.com/cai/oauth/authorize?code=true&client_id=fixture';
 
-    async function open(hosted) {
+    async function open(hosted: string) {
       const box = {id: 'box', label: 'Server', owner_id: 'sam', bots: [], platform: 'linux', last_seen_at: at(-3000), readiness_at: at(-3000),
         needed_runtimes: ['claude', 'codex'], bot_runtimes: [], signed_out: {}, profiles: [],
         readiness: {runtimes: {codex: {installed: true, authenticated: 'missing'}, claude: {installed: true, authenticated: 'missing'}},
           harnesses: {codex: chip('Codex', 'codex'), claude: chip('Claude Code', 'claude')}}};
-      const writes = [], rows = {};
-      let seq = 0, refusal = null;
+      const writes: {p: string; body?: unknown}[] = [], rows: Record<string, {state?: string; code_sent?: boolean; [k: string]: unknown}> = {};
+      let seq = 0, refusal = null as {times: number; status: number; detail: string; state?: string} | null;
       const page = await browser.newPage({viewport: {width: 1440, height: 900}, serviceWorkers: 'block'});
-      const errors = [];
-      page.on('pageerror', e => errors.push(e.message));
-      await page.route('**/*', async route => {
+      const errors: string[] = [];
+      page.on('pageerror', (e: Error) => errors.push(e.message));
+      await page.route('**/*', async (route: Route) => {
         const req = route.request(), url = new URL(req.url()), p = url.pathname, method = req.method();
-        const json = (body, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
+        const json = (body: unknown, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
         const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/);
-        if (ui && fs.existsSync(uiFile(ui[1])))
-          return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]), 'utf8')});
+        if (ui && fs.existsSync(uiFile(ui[1]!)))
+          return route.fulfill({contentType: ui[1]!.endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]!), 'utf8')});
         if (/\.(?:js|ts)$/.test(p)) return route.fulfill({contentType: 'application/javascript', body: ''});
         if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
         const config = {version: '0.1.0', app_name: 'Tico', hosted};
@@ -67,14 +68,14 @@ async function loginHosted(browser) {
           if (refusal) {
             const {status, detail, state} = refusal;
             if (!--refusal.times) refusal = null;
-            if (state) rows[one[1]].state = state;
+            if (state) rows[one[1]!]!.state = state;
             return json({error: {detail}}, status);
           }
-          rows[one[1]].state = 'canceled';
-          return json(rows[one[1]]);
+          rows[one[1]!]!.state = 'canceled';
+          return json(rows[one[1]!]!);
         }
-        if (one && one[2] === '/code') { writes.push({p}); rows[one[1]].code_sent = true; return json(rows[one[1]]); }
-        if (one) return json(rows[one[1]]);
+        if (one && one[2] === '/code') { writes.push({p}); rows[one[1]!]!.code_sent = true; return json(rows[one[1]!]!); }
+        if (one) return json(rows[one[1]!]!);
         if (p.endsWith('/watch')) return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});
         return json(unrouted(p));
       });
@@ -86,22 +87,22 @@ async function loginHosted(browser) {
       await add.waitFor();
       // Its own login, through the Add connection pop-up: the tool, then the computer's login (on the name step where
       // the tool also takes a subscription).
-      const signIn = name => ({click: async () => {
+      const signIn = (name: string) => ({click: async () => {
         await add.click();
         const step = page.locator('dialog.computer-add-dialog[open]');
         await step.locator(`[data-add-tool="${name}"]`).click();
         if (!await step.locator('[data-add-own]').count()) await step.locator('[data-add-kind=subscription]').click();
         await step.locator('[data-add-own]').click();
       }});
-      return {page, box, writes, errors, rows, signIn, last: () => rows[`in${seq}`], refuse: r => { refusal = {times: 1, ...r}; }};
+      return {page, box, writes, errors, rows, signIn, last: () => rows[`in${seq}`]!, refuse: (r: {status: number; detail: string; state?: string; times?: number}) => { refusal = {times: 1, ...r}; }};
     }
-    const login = page => page.locator('dialog.model-login:not(.model-logout)');
+    const login = (page: import('playwright').Page) => page.locator('dialog.model-login:not(.model-logout)');
 
     // A duplicate connection is refused by the shared API, and its existing dialog shows how to change accounts.
     {
       const {page, errors, signIn} = await open('own');
       const detail = 'Claude Code is already connected or signing in on Server. Use Switch account on the existing connection to change it';
-      await page.route('**/api/v2/computers/box/logins', route => route.fulfill({status: 409,
+      await page.route('**/api/v2/computers/box/logins', (route: Route) => route.fulfill({status: 409,
         contentType: 'application/json', body: JSON.stringify({error: {code: 'subscription_exists', detail}})}));
       await signIn('claude').click();
       const dialog = login(page);
@@ -229,10 +230,10 @@ async function loginHosted(browser) {
 // subscription stays in use while the computer checks it, offers Cancel switch meanwhile, and ends saying the
 // subscription was signed out, or that it is still in use. Once switched, the same connection (same bots) runs on the
 // key. Every request is intercepted; the harness capabilities come from runner-rs/harnesses/*.toml.
-async function toKey(browser) {
-    const now = Date.now(), at = ms => new Date(now + ms).toISOString();
+async function toKey(browser: import('playwright').Browser) {
+    const now = Date.now(), at = (ms: number) => new Date(now + ms).toISOString();
     const SECRET = 'sk-test-not-a-real-key-123456';
-    const chip = (name, runtime) => ({name, runtime, installed: true, version: '1.0.0', managed: true, state: 'idle', wanted: true,
+    const chip = (name: string, runtime: string) => ({name, runtime, installed: true, version: '1.0.0', managed: true, state: 'idle', wanted: true,
       pinned: false, update_available: false, detail: ''});
     const subscription = () => ({installed: true, authenticated: 'ready', account: {email: 'dev@acme.example', plan: 'pro', checked_at: at(-60000)}});
     const fixture = () => ({id: 'box', label: 'Team box', owner_id: 'sam', bots: ['writer'], platform: 'linux', last_seen_at: at(-3000),
@@ -242,21 +243,21 @@ async function toKey(browser) {
         harnesses: {codex: chip('Codex', 'codex'), claude: chip('Claude Code', 'claude')}},
       profiles: []});
     // How each job ends on the computer: on its second check, or (`hold`) not until it is canceled.
-    const ending = {codex: {state: 'done', message: 'Switched to the API key; the subscription is signed out'}, claude: 'hold'};
+    const ending: Record<string, string | {state: string; message: string}> = {codex: {state: 'done', message: 'Switched to the API key; the subscription is signed out'}, claude: 'hold'};
     // `held`: the next Switch to API key request waits until it is released, as on a slow connection.
-    let held = null;
+    let held: {promise?: Promise<void>; release?: () => void} | null = null;
 
     async function open(as = 'sam') {
-      const box = fixture(), writes = [], rows = {};
+      const box = fixture(), writes: {p: string; body?: unknown}[] = [], rows: Record<string, {polls: number; runtime: string; [k: string]: unknown}> = {};
       const page = await browser.newPage({viewport: {width: 1440, height: 900}, serviceWorkers: 'block'});
-      const errors = [];
-      page.on('pageerror', e => errors.push(e.message));
-      await page.route('**/*', async route => {
+      const errors: string[] = [];
+      page.on('pageerror', (e: Error) => errors.push(e.message));
+      await page.route('**/*', async (route: Route) => {
         const req = route.request(), url = new URL(req.url()), p = url.pathname, method = req.method();
-        const json = (body, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
+        const json = (body: unknown, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
         const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/);
-        if (ui && fs.existsSync(uiFile(ui[1])))
-          return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]), 'utf8')});
+        if (ui && fs.existsSync(uiFile(ui[1]!)))
+          return route.fulfill({contentType: ui[1]!.endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]!), 'utf8')});
         if (/\.(?:js|ts)$/.test(p)) return route.fulfill({contentType: 'application/javascript', body: ''});
         if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
         const config = {version: '0.1.0', app_name: 'Tico'};
@@ -288,11 +289,11 @@ async function toKey(browser) {
         const cancel = p.match(/^\/api\/v2\/computers\/box\/logins\/(\w+)\/cancel$/);
         if (cancel) {
           writes.push({p, body: req.postDataJSON()});
-          return json(Object.assign(rows[cancel[1]], {state: 'canceled', updated_at: new Date().toISOString()}));
+          return json(Object.assign(rows[cancel[1]!]!, {state: 'canceled', updated_at: new Date().toISOString()}));
         }
         const one = p.match(/^\/api\/v2\/computers\/box\/logins\/(\w+)$/);
         if (one) {
-          const row = rows[one[1]], end = ending[row.runtime];
+          const row = rows[one[1]!]!, end = ending[row.runtime];
           if (++row.polls === 2 && end !== 'hold') Object.assign(row, end, {updated_at: new Date().toISOString()});
           return json(row);
         }
@@ -309,9 +310,9 @@ async function toKey(browser) {
     // ---- The operator, on Settings > Computers
     const {page, box, writes, errors} = await open();
     const detail = page.locator('#set-machines dialog.computer-detail[open]');
-    const own = name => detail.locator(`[data-connection="own:${name}"]`);
+    const own = (name: string) => detail.locator(`[data-connection="own:${name}"]`);
     // Switch account and Sign out are icons: their name is the aria-label.
-    const buttons = row => row.locator('.computer-conn-signin button').evaluateAll(all => all.map(b => b.getAttribute('aria-label') || b.innerText));
+    const buttons = (row: import('playwright').Locator) => row.locator('.computer-conn-signin button').evaluateAll((all: HTMLElement[]) => all.map(b => b.getAttribute('aria-label') || b.innerText));
     assert.deepEqual(await buttons(own('codex')), ['Switch account', 'Switch to API key', 'Sign out']);
     assert.deepEqual(await buttons(own('claude')), ['Switch account', 'Switch to API key', 'Sign out']);
     const before = await own('codex').innerText();
@@ -339,7 +340,7 @@ async function toKey(browser) {
     assert.equal(writes.length, 1, 'closing a finished switch cancels nothing');
 
     // Once the computer reports it: the same connection, its bots kept, runs on this computer's key.
-    box.readiness.runtimes.codex = {installed: true, authenticated: 'ready', key: {name: 'OPENAI_API_KEY', source: 'computer'}, account: {kind: 'api_key', checked_at: at(0)}};
+    box.readiness.runtimes.codex = {installed: true, authenticated: 'ready', key: {name: 'OPENAI_API_KEY', source: 'computer'}, account: {kind: 'api_key', checked_at: at(0)}} as unknown as typeof box.readiness.runtimes.codex;
     box.keys = {codex: {env: 'OPENAI_API_KEY', preview: 'sk-…456', since: at(0)}};
     box.readiness_at = new Date().toISOString();
     await page.evaluate(() => loadSettings());
@@ -363,24 +364,24 @@ async function toKey(browser) {
     await dialog.locator('[data-key-go]').click();
     await dialog.getByRole('button', {name: 'Cancel switch'}).waitFor();
     await dialog.locator('[data-close]').first().click();
-    for (let i = 0; i < 50 && writes.at(-1).p !== '/api/v2/computers/box/logins/key2/cancel'; i++) await page.waitForTimeout(100);
-    assert.equal(writes.at(-1).p, '/api/v2/computers/box/logins/key2/cancel');
+    for (let i = 0; i < 50 && writes.at(-1)!.p !== '/api/v2/computers/box/logins/key2/cancel'; i++) await page.waitForTimeout(100);
+    assert.equal(writes.at(-1)!.p, '/api/v2/computers/box/logins/key2/cancel');
 
     // Closed while the request is still on its way: the switch it started is canceled once it is back.
-    held = {}; held.promise = new Promise(resolve => { held.release = resolve; });
+    held = {}; held.promise = new Promise(resolve => { held!.release = resolve; });
     await own('claude').getByRole('button', {name: 'Switch to API key'}).click();
     await dialog.locator('input[name=secret]').fill(SECRET);
     await dialog.locator('[data-key-go]').click();
-    for (let i = 0; i < 50 && writes.at(-1).p !== '/api/v2/computers/box/keys'; i++) await page.waitForTimeout(100);
+    for (let i = 0; i < 50 && writes.at(-1)!.p !== '/api/v2/computers/box/keys'; i++) await page.waitForTimeout(100);
     await dialog.locator('[data-close]').first().click();
     await dialog.waitFor({state: 'detached'});
-    const release = held.release; held = null; release();
-    for (let i = 0; i < 50 && writes.at(-1).p !== '/api/v2/computers/box/logins/key3/cancel'; i++) await page.waitForTimeout(100);
-    assert.equal(writes.at(-1).p, '/api/v2/computers/box/logins/key3/cancel');
+    const release = held.release!; held = null; release();
+    for (let i = 0; i < 50 && writes.at(-1)!.p !== '/api/v2/computers/box/logins/key3/cancel'; i++) await page.waitForTimeout(100);
+    assert.equal(writes.at(-1)!.p, '/api/v2/computers/box/logins/key3/cancel');
 
     // A failure says what the computer reported: the subscription still in use when it put everything back, and what
     // could not be put back when it could not, with no promise that the subscription is in use.
-    const fails = async message => {
+    const fails = async (message: string) => {
       ending.claude = {state: 'failed', message};
       await own('claude').getByRole('button', {name: 'Switch to API key'}).click();
       await dialog.locator('input[name=secret]').fill(SECRET);
@@ -404,7 +405,7 @@ async function toKey(browser) {
     await page.evaluate(() => loadSettings());
     await own('claude').locator('.computer-conn-signin', {hasText: 'last checked'}).waitFor();
     assert.ok(offered > 0);
-    assert.deepEqual(await detail.locator('[data-model-to-key]').evaluateAll(all => all.map(b => b.disabled && b.title)),
+    assert.deepEqual(await detail.locator('[data-model-to-key]').evaluateAll((all: HTMLElement[]) => all.map(b => (b as HTMLButtonElement).disabled && b.title)),
       Array(offered).fill('Computer is offline'));
     assert.deepEqual(errors, []);
     await page.close();
@@ -417,11 +418,11 @@ async function toKey(browser) {
 }
 
 (async () => {
-  const browser = await chromium.launch({headless: true, channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined});
+  const browser = await chromium.launch({headless: true, channel: (process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined) as string});
   try {
     for (const [name, step] of Object.entries({loginHosted, toKey})) {
       try { await step(browser); }
-      catch (error) { error.message = `[${name}] ${error.message}`; throw error; }
+      catch (error) { (error as Error).message = `[${name}] ${(error as Error).message}`; throw error; }
     }
   } finally { await browser.close(); }
 })().catch(error => { console.error(error); process.exit(1); });

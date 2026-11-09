@@ -1,22 +1,32 @@
+import type {Route} from 'playwright';
 // Settings changes a page at a time (ui/app/settings-history.ts), on the owner's Settings > History > Changes and on a
 // bot's History tab. A page with next_before ends in "Show older", which fetches the page after it (before=) and draws
 // its rows below the ones shown; the control goes after the last page. Undo works on a row from a later page, and the
 // list then reads its first page again. The Log (GET /api/v2/history) opens from a shared address with its filters
 // set, asks with them, pages with Show older, offers the CSV of the same filters, and writes a new filter back.
-const {chromium} = require('playwright');
+const {chromium} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
-const {html, uiFile} = require('./support/page.cjs');
-const {unrouted} = require('./support/routes.cjs');
+const {html, uiFile} = require('./support/page.cjs') as typeof import('./support/page.cjs');
+const {unrouted} = require('./support/routes.cjs') as typeof import('./support/routes.cjs');
+
+declare global {
+  // u5: browser globals the page's own scripts define (see ui/app); declared once per name, same type everywhere.
+  var S: {config: {update: {current: string; latest: string; available: boolean; managed?: boolean}; company_name: string; onboarding_needed: boolean; providers_configured: boolean}; emps: {id: string; name: string}[]; me: {role: string; bot_admin?: boolean}; route: string};
+  function settingsValue(field: string, value: number): string;
+  function setDrawer(open: boolean, returnFocus?: boolean, trigger?: HTMLElement | null): void;
+  function settingsHistoryShow(view?: string): void;
+}
+
 
 (async () => {
   const browser = await chromium.launch({headless: true});
   try {
     const page = await browser.newPage({viewport: {width: 1280, height: 800}, serviceWorkers: 'block'});
-    const errors = [], calls = [], undos = [], logCalls = [], csvCalls = [];
+    const errors: unknown[] = [], calls: unknown[] = [], undos: unknown[] = [], logCalls: unknown[] = [], csvCalls: unknown[] = [];
     let csvRows = 0;
-    page.on('pageerror', error => errors.push(error.message));
-    const at = minutes => new Date(Date.parse('2026-10-28T12:00:00Z') - minutes * 60000).toISOString();
+    page.on('pageerror', (error: Error) => errors.push(error.message));
+    const at = (minutes: number) => new Date(Date.parse('2026-10-28T12:00:00Z') - minutes * 60000).toISOString();
     // Newest first, as the server sends them. Ana renamed both bots; the owner's list holds both, the card one only.
     const CHANGES = ['h1', 'o1', 'h2', 'h3', 'o2', 'h4', 'h5'].map((id, i) => ({
       id, bot: id.startsWith('h') ? 'helper' : 'ops', field: 'identity',
@@ -26,24 +36,24 @@ const {unrouted} = require('./support/routes.cjs');
     const PENDING = {id: 'tr1', bot: 'ops', kind: 'model', state: 'prepared', progress: {prepared: 0, total: 1},
       checkpoints: []};
     // Two rows a page, so the stub pages the way the server's byte cap does: a next_before on every page but the last.
-    const pageOf = (rows, before) => {
+    const pageOf = <T extends {id: string}>(rows: T[], before?: string) => {
       const start = before ? rows.findIndex(row => row.id === before) + 1 : 0;
       const slice = rows.slice(start, start + 2);
-      return {changes: slice, next_before: start + 2 < rows.length ? slice.at(-1).id : null};
+      return {changes: slice, next_before: start + 2 < rows.length ? slice.at(-1)!.id : null};
     };
-    const bot = (name, display_name, revision) => ({name, display_name, description: '', status: 'active',
+    const bot = (name: string, display_name: string, revision: number) => ({name, display_name, description: '', status: 'active',
       state: 'active', host: 'keeper', can_chat: true, can_manage: true, owner_id: 'ana',
       my_access: {see: true, read: true, write: true}, schedules: [], revision, thread_mode: 'personal', users: [],
       online: true, machine: null});
     const bots = [bot('helper', 'Helper', 3), bot('ops', 'Ops', 5)];
-    await page.route('**/*', route => {
+    await page.route('**/*', (route: Route) => {
       const request = route.request(), url = new URL(request.url()), p = url.pathname;
-      const json = body => route.fulfill({contentType: 'application/json', body: JSON.stringify(body)});
+      const json = (body: unknown) => route.fulfill({contentType: 'application/json', body: JSON.stringify(body)});
       if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
       const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/);
-      if (ui && fs.existsSync(uiFile(ui[1]))) {
-        return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript',
-          body: fs.readFileSync(uiFile(ui[1]), 'utf8')});
+      if (ui && fs.existsSync(uiFile(ui[1]!))) {
+        return route.fulfill({contentType: ui[1]!.endsWith('.css') ? 'text/css' : 'application/javascript',
+          body: fs.readFileSync(uiFile(ui[1]!), 'utf8')});
       }
       if (p === '/api/me') {
         return json({id: 'ana', name: 'Ana', role: 'owner', email: 'ana@example.test', cloud: true, registered: true,
@@ -65,7 +75,7 @@ const {unrouted} = require('./support/routes.cjs');
       if (p === '/api/v2/history') {
         const q = Object.fromEntries(url.searchParams);
         logCalls.push(q);
-        const row = (id, minutes, result) => ({id: `decision:${id}`, at: at(minutes), kind: 'decision', actor: 'human:ana',
+        const row = (id: string, minutes: number, result: string) => ({id: `decision:${id}`, at: at(minutes), kind: 'decision', actor: 'human:ana',
           about: 'bot:ops', subject: 'Ship the Acme pricing page today?', result, link: '#/task/t1'});
         return json(q.before ? {items: [row('m1', 30, 'Wait a week')], names: {'human:ana': 'Ana', 'bot:ops': 'Ops'}, next: null}
           : {items: [row('m3', 5, 'Send it Monday')], names: {'human:ana': 'Ana', 'bot:ops': 'Ops'}, next: `${at(5)}|decision:m3`});
@@ -86,21 +96,21 @@ const {unrouted} = require('./support/routes.cjs');
       }
       const undo = p.match(/^\/api\/v2\/settings\/history\/([^/]+)\/undo$/);
       if (undo && request.method() === 'POST') {
-        const row = CHANGES.find(change => change.id === undo[1]);
+        const row = CHANGES.find(change => change.id === undo[1])!;
         undos.push({id: undo[1], ...request.postDataJSON()});
         Object.assign(row, {can_undo: false, undone_at: at(0)});
-        const revision = bots.find(b => b.name === row.bot).revision + 1;
+        const revision = bots.find(b => b.name === row.bot)!.revision + 1;
         return json({undone: true, bot: row.bot, field: row.field, revision});
       }
       if (p.endsWith('/watch')) return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});
       return json(unrouted(p));
     });
     const owner = '#set-history', card = '#bot-settings-history';
-    const changeIds = scope => page.locator(`${scope} [data-settings-undo]`)
+    const changeIds = (scope: string) => page.locator(`${scope} [data-settings-undo]`)
       .evaluateAll(els => els.map(el => el.dataset.settingsUndo));
-    const showMore = scope => page.locator(`${scope} [data-settings-older]`);
-    const waitForChanges = (scope, count) => page.waitForFunction(([sel, n]) =>
-      document.querySelectorAll(`${sel} [data-settings-undo]`).length === n, [scope, count]);
+    const showMore = (scope: string) => page.locator(`${scope} [data-settings-older]`);
+    const waitForChanges = (scope: string, count: number) => page.waitForFunction(([sel, n]: [string, number]) =>
+      document.querySelectorAll(`${sel} [data-settings-undo]`).length === n, [scope, count] as [string, number]);
 
     // The Log, opened from a shared address: its filters are set and asked with; the CSV is of the same rows.
     await page.goto('https://tico-ui.test/#/settings/history?bot=ops&kind=decision');
@@ -127,7 +137,7 @@ const {unrouted} = require('./support/routes.cjs');
     assert.ok(cappedText.includes(',Row 1,') && cappedText.includes(',Row 20000,') && !cappedText.includes(',Row 20001,'));
     assert.deepEqual(csvCalls, ['', '5000', '10000', '15000'].map(before =>
       ({kind: 'decision', bot: 'ops', ...(before ? {before} : {})})));
-    await page.waitForFunction(() => [...document.querySelectorAll('.toast')].some(el =>
+    await page.waitForFunction(() => [...(document.querySelectorAll('.toast') as unknown as Iterable<Element>)].some(el =>
       el.textContent === 'Exported the newest 20,000. Narrow the dates for more.'));
     assert.equal(await page.locator('#log-csv').isEnabled(), true);
     // Exactly 20,000 completes without a truncation notice.

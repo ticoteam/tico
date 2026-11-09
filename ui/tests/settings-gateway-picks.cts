@@ -1,16 +1,25 @@
+import type {Route} from 'playwright';
 // A Gateway bot's model is a pick (Settings > Bots): Level · Fast · Version under the Tico AI Gateway, one muted line
 // with what runs and the price, an id the catalog lacks shown as it is until a control changes it; the Tico
 // Gateway card on Settings > Models has the status line with the spend and the switch, our prices by level and mode (no
 // model names), the picks in use, the services folded (live first, each with what it is for), and links the owner of a
 // connected install to API keys on app.tico.dev; Settings > Models > Defaults has the Decisions level. The catalog is the one the server sends (backend/gateway_tiers.py). With TICO_SHOTS set, it saves screenshots there.
-const {chromium} = require('playwright');
+const {chromium} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const {execFileSync} = require('node:child_process');
-const {html, uiFile, harnesses} = require('./support/page.cjs');
-const {unrouted} = require('./support/routes.cjs');
+const {html, uiFile, harnesses} = require('./support/page.cjs') as typeof import('./support/page.cjs');
+const {unrouted} = require('./support/routes.cjs') as typeof import('./support/routes.cjs');
 const shotsDir = process.env.TICO_SHOTS || '';
+
+declare global {
+  // u5: browser globals the page's own scripts define (see ui/app); declared once per name, same type everywhere.
+  function settingsEditBot(slug?: string, inline?: boolean): void;
+  function settingsChoiceLabel(harness: string, model: string | null | undefined, effort: string): string;
+  function renderSettingsBots(): void;
+}
+
 (async () => {
   const served = JSON.parse(execFileSync(process.env.TICO_PYTHON || 'python3', ['-c',
     'import json; from backend import providers, gateway_tiers, gateway_page; print(json.dumps({"models": list(providers.MODEL_CATALOG), "gateway": gateway_tiers.view(), '
@@ -23,25 +32,25 @@ const shotsDir = process.env.TICO_SHOTS || '';
   const browser = await chromium.launch({headless: true});
   try {
     const page = await browser.newPage({viewport: {width: 1280, height: 900}, serviceWorkers: 'block'});
-    const errors = [];
+    const errors: string[] = [];
     page.on('pageerror', e => errors.push(e.message));
     const catalog = {models: served.models, harnesses, gateway: served.gateway, default: {runtime: 'pi', model: 'tico-medium-1.0'}};
-    const bot = (name, display, model, extra = {}) => ({name, display_name: display, description: '', status: 'active', owner_id: 'ana',
+    const bot = (name: string, display: string, model: string, extra: Record<string, unknown> = {}) => ({name, display_name: display, description: '', status: 'active', owner_id: 'ana',
       repo: 'bot-' + name, can_manage: true, users: [], bot_owners: [], revision: 1, model, harness: 'pi', reasoning_effort: 'high',
       keep_tasks_going: null, task_flow: {going: 0, waiting: 0}, task_model: null, thread_mode: 'personal', bot_contact: 'open',
       machine: {runner_id: 'r1', label: 'Box', owner_id: 'ana', generation: 1}, ...extra});
     const bots = [bot('seller', 'Seller', 'tico-medium-1.0'), bot('old', 'Old Hand', 'tico-retired-1.0'),
       bot('writer', 'Writer', 'tico-low-fast'), bot('banker', 'Banker', 'tico-medium-1.1')];
-    let decide = 'low', saved = null, connected = true;
+    let decide = 'low', saved = null as {decide_level?: string} | null, connected = true;
     const PICKS = [{id: 'tico-medium-1.0', name: 'Medium', model: 'Claude Sonnet 5.5', version: '1.0', bots: 3, price: '$2.50 / $12.50 per 1M'},
       {id: 'tico-low-fast', name: 'Low · Fast', model: 'DeepSeek V4.1 Flash', version: 'auto', bots: 1, price: '$0.45 / $1.80 per 1M'}];
     let picks = PICKS;
-    await page.route('**/*', route => {
+    await page.route('**/*', (route: Route) => {
       const req = route.request(), p = new URL(req.url()).pathname;
-      const json = (body, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
+      const json = (body: unknown, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
       const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/);
-      if (ui && fs.existsSync(uiFile(ui[1])))
-        return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]), 'utf8')});
+      if (ui && fs.existsSync(uiFile(ui[1]!)))
+        return route.fulfill({contentType: ui[1]!.endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]!), 'utf8')});
       if (p.startsWith('/vendor/') && fs.existsSync(uiFile(p.slice(1)))) return route.fulfill({body: fs.readFileSync(uiFile(p.slice(1))),
         contentType: p.endsWith('.woff2') ? 'font/woff2' : 'application/javascript'});
       if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
@@ -53,7 +62,7 @@ const shotsDir = process.env.TICO_SHOTS || '';
       if (p === '/api/v2/status') return json({bots: []});
       if (p === '/api/v2/operations') return json({machines: [{id: 'r1', label: 'Box', owner_id: 'ana', bots: bots.map(b => b.name)}], services: []});
       if (p === '/api/v2/models') return json({...catalog, enabled_providers: ['tico']});
-      if (p === '/api/v2/providers' && req.method() === 'PUT') { saved = req.postDataJSON(); decide = saved.decide_level || decide; return json({enabled: ['tico'], default: catalog.default, revision: 2, decide_level: decide, decide_levels: ['low', 'medium', 'high']}); }
+      if (p === '/api/v2/providers' && req.method() === 'PUT') { saved = req.postDataJSON(); decide = saved!.decide_level || decide; return json({enabled: ['tico'], default: catalog.default, revision: 2, decide_level: decide, decide_levels: ['low', 'medium', 'high']}); }
       if (p === '/api/v2/providers') return json({enabled: ['tico'], default: catalog.default, revision: 1, auto_fallback: true,
         decide_level: decide, decide_levels: ['low', 'medium', 'high'],
         providers: [{id: 'tico', label: 'Tico AI Gateway', gateway: true}]});
@@ -68,18 +77,18 @@ const shotsDir = process.env.TICO_SHOTS || '';
       if (p.endsWith('/watch')) return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});
       return json(unrouted(p));
     });
-    const shot = async (name, fullPage = false) => { if (shotsDir) { fs.mkdirSync(shotsDir, {recursive: true}); await page.screenshot({path: path.join(shotsDir, name), fullPage}); } };
+    const shot = async (name: string, fullPage = false) => { if (shotsDir) { fs.mkdirSync(shotsDir, {recursive: true}); await page.screenshot({path: path.join(shotsDir, name), fullPage}); } };
     await page.goto('https://tico-ui.test/#/settings');
     await page.waitForFunction(() => typeof S !== 'undefined' && S.emps?.some(e => e.name === 'seller') && SETTINGS_DATA.models?.length);
     const editor = page.locator('#bot-editor');
     const model = editor.locator('[data-bot-choice][data-kind=model]');
-    const edit = async name => {
+    const edit = async (name: string) => {
       await page.evaluate(n => settingsEditBot(n), name);
       await page.waitForFunction(() => !!document.querySelector('#bot-editor [data-bot-status]'));
       await page.evaluate(n => settingsEditBot(n, true), name);
       await model.locator('[data-choice-harness]').waitFor();
     };
-    const pick = async () => model.evaluate(box => box.picker.value());
+    const pick = async () => model.evaluate(box => (box as unknown as {picker: {value(): string}}).picker.value());
 
     // 1. The pick: the Gateway under the harness, the level, no Fast, the current version; no department anywhere.
     await edit('seller');
@@ -166,7 +175,7 @@ const shotsDir = process.env.TICO_SHOTS || '';
     const task = page.locator('tr[data-task-row=seller] [data-bot-choice][data-kind=task]');
     await task.locator('[data-choice-harness]').selectOption('tico');
     assert.equal(await task.locator('[data-tier-level] option:checked').innerText(), 'Medium');
-    assert.equal(await task.evaluate(box => box.picker.value()), 'pi::tico-medium-1.1::high');
+    assert.equal(await task.evaluate(box => (box as unknown as {picker: {value(): string}}).picker.value()), 'pi::tico-medium-1.1::high');
     assert.equal(await task.locator('[data-tier-line]').innerText(), 'Claude Sonnet 5.5 · 1M · $2.50 / $12.50 per 1M',
       'the task model picker shows the same Gateway line');
 
@@ -179,7 +188,7 @@ const shotsDir = process.env.TICO_SHOTS || '';
     assert.equal(await card.locator('[data-gateway-bar] b').getAttribute('style'), 'width:12%');
     assert.equal(await card.locator('[data-gateway-toggle]').isChecked(), true);
     const [lineBox, toggleBox] = await Promise.all([card.locator('[data-gateway-line]').boundingBox(), card.locator('[data-gateway-toggle]').boundingBox()]);
-    assert.ok(Math.abs(lineBox.y + lineBox.height / 2 - (toggleBox.y + toggleBox.height / 2)) < 8, 'the switch sits on the status line');
+    assert.ok(Math.abs(lineBox!.y + lineBox!.height / 2 - (toggleBox!.y + toggleBox!.height / 2)) < 8, 'the switch sits on the status line');
     assert.deepEqual(await card.locator('[data-gateway-prices] thead th').allTextContents(), ['Price per 1M, in / out', 'Regular', 'Fast']);
     assert.deepEqual(await card.locator('[data-gateway-level]').evaluateAll(rows => rows.map(r => r.dataset.gatewayLevel)), ['xlow', 'low', 'medium', 'high', 'xhigh']);
     assert.deepEqual(await card.locator('[data-gateway-level=low] td').allTextContents(), ['Low', '$0.15 / $0.75', '$0.45 / $1.80']);
@@ -209,7 +218,7 @@ const shotsDir = process.env.TICO_SHOTS || '';
     assert.match(await apiKeys.getAttribute('rel'), /\bnoopener\b/);
     // Both themes (the settings pane scrolls, not the page).
     await services.locator('summary').click();
-    const theme = mode => page.evaluate(m => document.documentElement.setAttribute('data-theme', m), mode);
+    const theme = (mode: string) => page.evaluate(m => document.documentElement.setAttribute('data-theme', m), mode);
     await page.setViewportSize({width: 1440, height: 900});
     for (const mode of ['dark', 'light']) {
       await theme(mode);
@@ -246,7 +255,7 @@ const shotsDir = process.env.TICO_SHOTS || '';
     await level.selectOption('high');
     await page.locator('#set-prov-save').click();
     for (let i = 0; i < 100 && !saved; i++) await page.waitForTimeout(30);
-    assert.equal(saved.decide_level, 'high');
+    assert.equal(saved!.decide_level, 'high');
     const options = await page.locator('[data-provider-model] option').allInnerTexts();
     assert.ok(options.some(o => o.startsWith('Medium')) && !options.some(o => /Fast/.test(o)), `the company default offers each level, no Fast (${options})`);
 
@@ -267,10 +276,10 @@ const shotsDir = process.env.TICO_SHOTS || '';
     await phoneCard.locator('[data-gateway-services-row] > summary').click();
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, 'no sideways scroll on Models');
     assert.equal(await phoneCard.evaluate(c => { const box = c.getBoundingClientRect(), pad = parseFloat(getComputedStyle(c).paddingRight);
-      return [...c.querySelectorAll('.models-gw-table')].every(t => t.getBoundingClientRect().right <= box.right - pad + 1); }), true,
+      return [...(c.querySelectorAll('.models-gw-table') as unknown as Iterable<Element>)].every(t => t.getBoundingClientRect().right <= box.right - pad + 1); }), true,
       'on a phone, the price and picks tables fit inside the card');
     const [keysName, keysOpen] = await Promise.all(['span', 'a'].map(sel => phoneCard.locator(`[data-gateway-api-keys] ${sel}`).boundingBox()));
-    assert.ok(Math.abs(keysName.y - keysOpen.y) < 4 && keysOpen.x > keysName.x, 'on a phone, Open sits beside API keys');
+    assert.ok(Math.abs(keysName!.y - keysOpen!.y) < 4 && keysOpen!.x > keysName!.x, 'on a phone, Open sits beside API keys');
     await phoneCard.locator('[data-gateway-services-row] > summary').click();
     await phoneCard.scrollIntoViewIfNeeded();
     for (const mode of ['dark', 'light']) {

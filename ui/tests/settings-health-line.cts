@@ -1,41 +1,48 @@
+import type {Route} from 'playwright';
 // Health has no tab: General opens with one Health line (ui/health.ts hlSummaryDraw). It counts Health's checks by
 // severity with Settings' own issues (one a person must act on is urgent, the rest FYI), says "All good" when nothing
 // needs work, carries the alert dot, and shows a newer release with the owner's one Update (none for a member or when
 // Tico runs updates). Details opens #/settings/health: no tab highlighted, a way back to General, and the issues a
 // person must act on (with Restart) at its top instead of above the tabs. Fixtures only. With TICO_SHOTS set, it saves
 // General's top and the Health page at desktop and phone width, dark theme.
-const {chromium} = require('playwright');
+const {chromium} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const {html, uiFile} = require('./support/page.cjs');
-const {unrouted} = require('./support/routes.cjs');
+const {html, uiFile} = require('./support/page.cjs') as typeof import('./support/page.cjs');
+const {unrouted} = require('./support/routes.cjs') as typeof import('./support/routes.cjs');
+
+declare global {
+  // u5: browser globals the page's own scripts define (see ui/app); declared once per name, same type everywhere.
+  var S: {config: {update: {current: string; latest: string; available: boolean; managed?: boolean}; company_name: string; onboarding_needed: boolean; providers_configured: boolean}; emps: {id: string; name: string}[]; me: {role: string; bot_admin?: boolean}; route: string};
+  function hlSummaryDraw(): void;
+}
 const shotsDir = process.env.TICO_SHOTS || '';
 
-const check = (id, status) => ({id, label: id, status, summary: `${id} is ${status}`, fixes: []});
+const check = (id: string, status: string) => ({id, label: id, status, summary: `${id} is ${status}`, fixes: []});
 const RESTART = {kind: 'runner_checkout', title: 'Studio Mac has a Tico update', detail: 'Nothing is running.',
   machine: 'r1', severity: 'warning', needs_person: true, restart: true};
 const NOTE = {kind: 'uncertain_work', title: 'Writer saved 1 stopped run for later', bot: 'writer', detail: 'Review it whenever useful.',
   severity: 'warning', needs_person: false, action: 'review'};
 
 (async () => {
-  const browser = await chromium.launch({headless: true, channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined});
+  const browser = await chromium.launch({headless: true, channel: (process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined) as string});
   try {
-    let role = 'owner', update = {current: '0.5.10', latest: '0.5.12', available: true};
+    let role = 'owner', update: {current: string; latest: string; available: boolean; managed?: boolean} = {current: '0.5.10', latest: '0.5.12', available: true};
     let health = {audience: 'owner', attention: 3, computers: [], waiting: [], stuck: [], failures: [],
       checks: [check('models', 'bad'), check('backups', 'warn'), check('slack', 'warn'), check('github', 'info'), check('computers', 'ok')]};
     let issues = [RESTART, NOTE];
     const context = await browser.newContext({viewport: {width: 1440, height: 900}, serviceWorkers: 'block', colorScheme: 'dark'});
     const page = await context.newPage();
-    const errors = [];
+    const errors: string[] = [];
     page.on('pageerror', e => errors.push(e.message));
-    await context.route('**/*', route => {
+    await context.route('**/*', (route: Route) => {
       const url = new URL(route.request().url()), p = url.pathname;
-      const json = (body, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
+      const json = (body: unknown, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
       if (url.origin !== 'https://tico-ui.test') return route.abort();
       const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/);
-      if (ui && fs.existsSync(uiFile(ui[1])))
-        return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]), 'utf8')});
+      if (ui && fs.existsSync(uiFile(ui[1]!)))
+        return route.fulfill({contentType: ui[1]!.endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]!), 'utf8')});
       if (p.startsWith('/vendor/') && fs.existsSync(uiFile(p.slice(1)))) return route.fulfill({body: fs.readFileSync(uiFile(p.slice(1))),
         contentType: p.endsWith('.woff2') ? 'font/woff2' : 'application/javascript'});
       if (/\.(?:js|ts)$/.test(p)) return route.fulfill({contentType: 'application/javascript', body: ''});
@@ -56,7 +63,7 @@ const NOTE = {kind: 'uncertain_work', title: 'Writer saved 1 stopped run for lat
       return json(unrouted(p));
     });
     // A route change cross-fades (router.js): the shot waits for it to end.
-    const shot = async name => {
+    const shot = async (name: string) => {
       if (!shotsDir) return;
       fs.mkdirSync(shotsDir, {recursive: true});
       await page.waitForFunction(() => !document.querySelector(':root:active-view-transition'));

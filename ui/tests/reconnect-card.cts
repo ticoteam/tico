@@ -1,20 +1,28 @@
+import type {Route} from 'playwright';
 // Offline browser regression: a bot's task stopped on an account (backend/reconnects.py) shows one card in its thread.
 // The person who can fix it gets the fix (Reconnect Google goes to Google's own page only); anyone else sees whom it
 // waits on; a fixed or retired card has no button. Desktop in dark, phone in light, no sideways scroll.
-const {chromium} = require('playwright');
+const {chromium} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const {html, uiFile} = require('./support/page.cjs');
-const {unrouted} = require('./support/routes.cjs');
-const launch = () => chromium.launch({headless: true, channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined});
+const {html, uiFile} = require('./support/page.cjs') as typeof import('./support/page.cjs');
+const {unrouted} = require('./support/routes.cjs') as typeof import('./support/routes.cjs');
+const launch = () => chromium.launch({headless: true, channel: (process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined) as string});
 const SHOTS = process.env.TICO_UI_SHOTS || '';
 const GOOGLE = 'https://accounts.google.com/o/oauth2/v2/auth?client_id=acme';
 
-const now = Date.now(), at = m => new Date(now - m * 60000).toISOString();
+const now = Date.now(), at = (m: number) => new Date(now - m * 60000).toISOString();
+
+declare global {
+  // u5: browser globals the page's own scripts define (see ui/app); declared once per name, same type everywhere.
+  var S: {config: {update: {current: string; latest: string; available: boolean; managed?: boolean}; company_name: string; onboarding_needed: boolean; providers_configured: boolean}; emps: {id: string; name: string}[]; me: {role: string; bot_admin?: boolean}; route: string};
+  function taskModalShow(task: unknown): Promise<void>;
+}
+
 const quote = {id: 't-quote', title: 'Send the Acme renewal quote', owner_id: 'bot:botops', requester_id: 'human:ana', status: 'waiting',
   lane: 'company', version: 4, created_at: at(90), updated_at: at(3)};
-const card = (id, over, minutes) => ({id, conversation_id: 'r-quote', sender_id: 'bot:botops', recipient_id: over.person, kind: 'say',
+const card = (id: string, over: {person: string; line: string; [key: string]: unknown}, minutes: number) => ({id, conversation_id: 'r-quote', sender_id: 'bot:botops', recipient_id: over.person, kind: 'say',
   body: over.line, created_at: at(minutes), refs: {task: 't-quote', reconnect: {status: 'open', bot: 'botops', ...over}}});
 const comments = [
   {id: 'q1', conversation_id: 'r-quote', sender_id: 'bot:botops', kind: 'say', body: 'Drafting the quote now.', created_at: at(20)},
@@ -30,22 +38,22 @@ const comments = [
   card('q6', {key: 'secret:botops:ACME_ERP_TOKEN', service: 'secret', label: 'the Acme ERP token', person: 'human:ana', status: 'retired',
     fix: {kind: 'secret', request: 'cr8'}, line: 'BotOps needs the Acme ERP token to go on.'}, 1),
 ];
-comments[comments.length - 1].refs.credential_request = 'cr8';
+(comments[comments.length - 1] as {refs: {credential_request?: string}}).refs.credential_request = 'cr8';
 
-async function run(viewport, scheme, shot) {
+async function run(viewport: {width: number; height: number}, scheme: 'dark' | 'light', shot: string) {
   const browser = await launch();
   try {
     const page = await browser.newPage({viewport, serviceWorkers: 'block', colorScheme: scheme});
     await page.addInitScript(t => { try { localStorage.setItem('tico.theme', t); } catch {} }, scheme);
-    const errors = [], connects = [];
-    page.on('pageerror', e => errors.push(e.message));
-    await page.route('**/*', async route => {
+    const errors: string[] = [], connects: string[] = [];
+    page.on('pageerror', (e: Error) => errors.push(e.message));
+    await page.route('**/*', async (route: Route) => {
       const req = route.request(), url = new URL(req.url()), p = url.pathname;
-      const json = (body, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
+      const json = (body: unknown, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
       if (url.origin === 'https://accounts.google.com') return route.fulfill({contentType: 'text/html', body: '<p>Google</p>'});
       const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/);
-      if (ui && fs.existsSync(uiFile(ui[1])))
-        return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]), 'utf8')});
+      if (ui && fs.existsSync(uiFile(ui[1]!)))
+        return route.fulfill({contentType: ui[1]!.endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]!), 'utf8')});
       if (/\.(?:js|ts)$/.test(p)) return route.fulfill({contentType: 'application/javascript', body: ''});
       if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
       if (p === '/api/me') return json({id: 'ana', name: 'Ana', role: 'owner', cloud: true});
@@ -86,10 +94,10 @@ async function run(viewport, scheme, shot) {
     assert.equal(await unneeded.getAttribute('data-status'), 'retired');
     assert.equal(await thread.locator('[data-credential-host="cr8"]').count(), 0, 'a retired credential card is not mounted');
     // Nothing runs off the side of the thread at phone width.
-    const wide = await page.evaluate(() => [...document.querySelectorAll('#task-modal .rc-card')]
+    const wide = await page.evaluate(() => [...(document.querySelectorAll('#task-modal .rc-card') as unknown as Iterable<Element>)]
       .some(el => el.scrollWidth > el.clientWidth + 1 || el.getBoundingClientRect().right > innerWidth + 1));
     assert.equal(wide, false, 'cards fit the thread');
-    if (shot) { await page.waitForTimeout(400); await google.evaluate(el => el.closest('.tcomment').scrollIntoView({block: 'center'})); await page.screenshot({path: shot}); }
+    if (shot) { await page.waitForTimeout(400); await google.evaluate((el: Element) => el.closest('.tcomment')!.scrollIntoView({block: 'center'})); await page.screenshot({path: shot}); }
 
     // Reconnect Google starts the person's own Connect and goes to Google's page, nowhere else.
     await google.locator('[data-reconnect-google]').click();
@@ -100,7 +108,7 @@ async function run(viewport, scheme, shot) {
 }
 
 (async () => {
-  const shot = name => SHOTS ? path.join(SHOTS, name) : '';
+  const shot = (name: string) => SHOTS ? path.join(SHOTS, name) : '';
   await run({width: 1200, height: 800}, 'dark', shot('reconnect-card-desktop.png'));
   await run({width: 390, height: 844}, 'light', shot('reconnect-card-phone.png'));
   console.log('ok');

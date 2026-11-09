@@ -1,11 +1,12 @@
+import type {Route} from 'playwright';
 // The Hire page of a seat under an open manager seat (ticket e9c84fc5, bot-lifecycle-spec.md section 3): one line says who
 // the bot reports to until the manager seat is hired, and it hides once the Reports-to choice moves off the seat's own
 // line. Fixtures only, no network.
-const {chromium} = require('playwright');
+const {chromium} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
-const {html, uiFile} = require('./support/page.cjs');
-const {unrouted} = require('./support/routes.cjs');
+const {html, uiFile} = require('./support/page.cjs') as typeof import('./support/page.cjs');
+const {unrouted} = require('./support/routes.cjs') as typeof import('./support/routes.cjs');
 
 const writer = {id: 's-writer', kind: 'seat', stage: 'recruiting', title: 'Content Marketer', description: 'Writes the blog.',
   team: '', reports_to: 'seat:s-head', created_at: '2026-10-24T00:00:00Z', org_parent: 's:s-head', can_edit: true,
@@ -22,16 +23,16 @@ const found = {seat: writer, candidates: [candidate], agents: [], models: [], ag
   const browser = await chromium.launch({headless: true});
   try {
     const page = await browser.newPage({viewport: {width: 1280, height: 900}, serviceWorkers: 'block'});
-    const errors = [];
-    page.on('pageerror', error => errors.push(error.message));
+    const errors: string[] = [];
+    page.on('pageerror', (error: Error) => errors.push(error.message));
     await page.addInitScript(() => localStorage.setItem('hub.collapsed.v3.ana', '[]'));
-    await page.route('**/*', route => {
+    await page.route('**/*', (route: Route) => {
       const url = new URL(route.request().url()), p = url.pathname;
-      const json = body => route.fulfill({contentType: 'application/json', body: JSON.stringify(body)});
+      const json = (body: unknown) => route.fulfill({contentType: 'application/json', body: JSON.stringify(body)});
       if (/\/marked\.min\.js$/.test(p)) return route.fulfill({contentType: 'application/javascript', body: 'window.marked={parse:s=>String(s)}'});
       if (url.origin !== 'https://tico-ui.test') return route.abort();
       const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/);
-      if (ui && fs.existsSync(uiFile(ui[1]))) return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]), 'utf8')});
+      if (ui && fs.existsSync(uiFile(ui[1]!))) return route.fulfill({contentType: ui[1]!.endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]!), 'utf8')});
       if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
       if (p === '/api/me') return json({id: 'ana', role: 'owner', name: 'Ana', email: 'ana@example.test', cloud: true});
       if (p === '/api/humans' || p === '/api/people') return json({people: [{id: 'ana', name: 'Ana', org_parent: ''}], seats, org_groups: []});

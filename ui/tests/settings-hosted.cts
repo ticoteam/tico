@@ -1,3 +1,4 @@
+import type {Route} from 'playwright';
 // Settings > Computers' hosted servers against a fake server (paused-start, d8f8efaa): the owner sees the Tico server
 // and the bot computer, Start on the stopped one; a start while the company is paused for credit says "Paused: out of
 // credit. Add credit to start this computer." with "Contact support for more credit" opening the account page, and stays on screen
@@ -6,33 +7,38 @@
 // saves screenshots of the refusal (desktop and phone, dark and light).
 // Sleep when idle: an owner sets the hours and the bot-computer switch and sees the quiet time, next wake or why the
 // server stays awake; hidden where Tico hosts nothing; a member sees it disabled.
-const {chromium} = require('playwright');
+const {chromium} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
-const {html, uiFile} = require('./support/page.cjs');
+const {html, uiFile} = require('./support/page.cjs') as typeof import('./support/page.cjs');
 const path = require('node:path');
-const {unrouted} = require('./support/routes.cjs');
+const {unrouted} = require('./support/routes.cjs') as typeof import('./support/routes.cjs');
+
+declare global {
+  // u5: browser globals the page's own scripts define (see ui/app); declared once per name, same type everywhere.
+  function renderSettingsSleep(): Promise<void>;
+}
 const shots = process.env.TICO_SHOTS || '';
 
 (async () => {
-  const browser = await chromium.launch({headless: true, channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined});
+  const browser = await chromium.launch({headless: true, channel: (process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined) as string});
   try {
     const page = await browser.newPage({viewport: {width: 1280, height: 800}, serviceWorkers: 'block'});
-    const errors = [];
+    const errors: string[] = [];
     page.on('pageerror', e => errors.push(e.message));
     const TICO = 'pv-' + 'a'.repeat(16), BOTS = 'pv-' + 'b'.repeat(16);
     const PAUSED = 'Paused: out of credit. Add credit to start this computer.';
-    let servers = {state: 'ok', servers: [{server_id: TICO, kind: 'tico', power: 'on'}, {server_id: BOTS, kind: 'bot_computer', power: 'stopped'}]};
+    let servers: {state: string; servers?: {server_id: string; kind: string; power: string}[]} = {state: 'ok', servers: [{server_id: TICO, kind: 'tico', power: 'on'}, {server_id: BOTS, kind: 'bot_computer', power: 'stopped'}]};
     let role = 'owner', paused = true;
-    const asked = [];
-    let sleep = {hosted: true, layout: null, hours: 0, runners: true, active: false, idle_since: null, blocker: '', wake_at: null, last_request: null, last_error: ''};
-    const sleepPosts = [];
-    await page.route('**/*', route => {
+    const asked: string[] = [];
+    let sleep: {hosted: boolean; layout: string | null; hours: number; runners: boolean; active: boolean; idle_since: string | null; blocker: string; wake_at: string | null; last_request: string | null; last_error: string; managed?: boolean} = {hosted: true, layout: null, hours: 0, runners: true, active: false, idle_since: null, blocker: '', wake_at: null, last_request: null, last_error: ''};
+    const sleepPosts: unknown[] = [];
+    await page.route('**/*', (route: Route) => {
       const req = route.request(), url = new URL(req.url()), p = url.pathname;
-      const json = body => route.fulfill({contentType: 'application/json', body: JSON.stringify(body)});
+      const json = (body: unknown) => route.fulfill({contentType: 'application/json', body: JSON.stringify(body)});
       const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/);
-      if (ui && fs.existsSync(uiFile(ui[1])))
-        return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]), 'utf8')});
+      if (ui && fs.existsSync(uiFile(ui[1]!)))
+        return route.fulfill({contentType: ui[1]!.endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]!), 'utf8')});
       if (p.startsWith('/vendor/') && fs.existsSync(uiFile(p.slice(1)))) return route.fulfill({body: fs.readFileSync(uiFile(p.slice(1))),
         contentType: p.endsWith('.woff2') ? 'font/woff2' : 'application/javascript'});
       if (/\.(?:js|ts)$/.test(p)) return route.fulfill({contentType: 'application/javascript', body: ''});
@@ -45,12 +51,12 @@ const shots = process.env.TICO_SHOTS || '';
         if (p === '/api/v2/hosted-servers') return json(servers);
         if (req.method() === 'POST' && p === `/api/v2/hosted-servers/${BOTS}/start`) {
           if (paused) return json({state: 'paused', message: PAUSED, credit_url: 'https://app.tico.dev'});
-          servers = {...servers, servers: servers.servers.map(s => ({...s, power: 'on'}))};
+          servers = {...servers, servers: servers.servers!.map(s => ({...s, power: 'on'}))};
           return json({state: 'started'});
         }
       }
       if (p === '/api/v2/sleep' && req.method() === 'POST') {
-        const body = req.postDataJSON();
+        const body = req.postDataJSON() as {hours?: number; runners?: boolean};
         sleepPosts.push(body);
         sleep = {...sleep, ...body, active: !!(body.hours ?? sleep.hours), idle_since: '2026-10-25T08:00:00Z', blocker: '', wake_at: '2026-10-26T09:00:00Z'};
         return json({sleep});
@@ -66,8 +72,8 @@ const shots = process.env.TICO_SHOTS || '';
       return json(unrouted(p));
     });
     const card = page.locator('#settings-hosted');
-    const theme = mode => page.evaluate(m => document.documentElement.setAttribute('data-theme', m), mode);
-    const shot = async name => { if (shots) await card.screenshot({path: path.join(shots, name + '.png')}); };
+    const theme = (mode: string) => page.evaluate(m => document.documentElement.setAttribute('data-theme', m), mode);
+    const shot = async (name: string) => { if (shots) await card.screenshot({path: path.join(shots, name + '.png')}); };
 
     await page.goto('https://tico-ui.test/#/settings/devices');
     await card.locator(`[data-hosted="${BOTS}"]`).waitFor();
@@ -116,7 +122,7 @@ const shots = process.env.TICO_SHOTS || '';
     assert.deepEqual(sleepPosts, [{hours: 3}]);
     assert.match(await nap.locator('[data-sleep-status]').innerText(), /^Quiet since .+ · Next wake .+/);
     await nap.locator('[data-sleep-runners]').click();
-    await page.waitForFunction(() => document.querySelector('[data-sleep-runners]') && !document.querySelector('[data-sleep-runners]').disabled);
+    await page.waitForFunction(() => document.querySelector('[data-sleep-runners]') && !(document.querySelector('[data-sleep-runners]') as HTMLInputElement).disabled);
     assert.deepEqual(sleepPosts[1], {runners: false});
     sleep = {...sleep, blocker: 'run_in_progress', idle_since: null};
     await page.evaluate(() => renderSettingsSleep());

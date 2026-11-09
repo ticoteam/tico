@@ -1,34 +1,41 @@
+import type {Route} from 'playwright';
 // Overview "Bot hours vs human hours": the headline ratio for the last 7 days, the weekly line with a dashed Parity
 // line and the current week dotted, a week's numbers on hover or tap, the weekly table on a click, a phone width
 // without sideways scrolling, and the three empty cases (no people, no runs, under a week of runs). Fixtures only;
 // the 3D renderer is replaced by a stand-in.
-const {chromium} = require('playwright');
+const {chromium} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
-const {html, uiFile} = require('./support/page.cjs');
-const {unrouted} = require('./support/routes.cjs');
+const {html, uiFile} = require('./support/page.cjs') as typeof import('./support/page.cjs');
+const {unrouted} = require('./support/routes.cjs') as typeof import('./support/routes.cjs');
+
+declare global {
+  // u5: browser globals the page's own scripts define (see ui/app); declared once per name, same type everywhere.
+  function overviewHoursLoad(): Promise<void>;
+  var SETTINGS_TAB: string;
+}
 
 const SCENE = `export function createBuilding() {
   document.body.dataset.sceneReady = 'true'; document.querySelector('#loading').hidden = true;
   return {update() {}, link() { return true; }, clearLinks() {}, dispose() {}};
 }`;
-const week = (day, bot, people, so_far = false) => ({week: day, bot_hours: bot, people, human_hours: people * 40,
+const week = (day: string, bot: number, people: number, so_far = false) => ({week: day, bot_hours: bot, people, human_hours: people * 40,
   ratio: people ? Math.round(bot / (people * 40) * 100) / 100 : null, so_far});
 const answer = (over = {}) => ({zone: 'America/Los_Angeles', now: '2026-10-14T19:00:00.000000Z', first_run: '2026-09-29T16:00:00.000000Z',
   people: 1, hours_per_person: 40, gap_minutes: 30, last_7_days: {bot_hours: 243, human_hours: 40, ratio: 6.08, full: true},
   weeks: [week('2026-09-28', 20, 1), week('2026-10-05', 80, 1), week('2026-10-12', 30, 1, true)], ...over});
 
 (async () => {
-  const browser = await chromium.launch({channel: process.env.TICO_BROWSER_CHANNEL ?? 'chrome', headless: true});
+  const browser = await chromium.launch({channel: (process.env.TICO_BROWSER_CHANNEL ?? 'chrome') as string, headless: true});
   try {
     const page = await browser.newPage({viewport: {width: 1280, height: 860}, serviceWorkers: 'block'});
-    const errors = [];
+    const errors: string[] = [];
     let hours = answer();
     page.on('pageerror', e => errors.push(e.message));
-    await page.route('**/*', async route => {
+    await page.route('**/*', async (route: Route) => {
       const url = new URL(route.request().url()), p = url.pathname;
       if (url.origin !== 'http://tico-ui.test') return route.abort();
-      const json = body => route.fulfill({contentType: 'application/json', body: JSON.stringify(body)});
+      const json = (body: unknown) => route.fulfill({contentType: 'application/json', body: JSON.stringify(body)});
       if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
       if (p === '/tico/ui/overview/building.ts') return route.fulfill({contentType: 'application/javascript', body: SCENE});
       if (p.startsWith('/tico/ui/')) {
@@ -63,10 +70,10 @@ const answer = (over = {}) => ({zone: 'America/Los_Angeles', now: '2026-10-14T19
     // A 80-hour week with one person: 2.0×; points sit on their week, above or below Parity.
     const tops = await card.locator('.ovh-dot').evaluateAll(ds => ds.map(d => parseFloat(d.style.top)));
     const parity = parseFloat(await card.locator('.ovh-parity-label').evaluate(l => l.style.top));
-    assert.ok(tops[0] > parity && tops[1] < parity, 'a 0.5× week below the parity line, a 2.0× week above it');
+    assert.ok(tops[0]! > parity && tops[1]! < parity, 'a 0.5× week below the parity line, a 2.0× week above it');
 
     // Hover a week: its numbers. Leaving hides them.
-    const plot = card.locator('.ovh-plot'), box = await plot.boundingBox();
+    const plot = card.locator('.ovh-plot'), box = (await plot.boundingBox())!;
     await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
     assert.equal(await card.locator('.ovh-tip').innerText(), 'Week of Oct 5: 80 bot hours · 40 human hours · 2.0×');
     await page.mouse.move(box.x + box.width - 2, box.y + box.height / 2);
@@ -83,7 +90,7 @@ const answer = (over = {}) => ({zone: 'America/Los_Angeles', now: '2026-10-14T19
     const dialog = page.locator('#overview-hours-dialog[open]');
     await dialog.waitFor();
     assert.deepEqual(await dialog.locator('thead th').allTextContents(), ['Week', 'Bot hours', 'People', 'Human hours', 'Ratio']);
-    const rows = await dialog.locator('tbody tr').evaluateAll(trs => trs.map(tr => [...tr.cells].map(c => c.innerText.trim())));
+    const rows = await dialog.locator('tbody tr').evaluateAll((trs: HTMLTableRowElement[]) => trs.map(tr => [...(tr.cells as unknown as Iterable<HTMLTableCellElement>)].map(c => c.innerText.trim())));
     assert.deepEqual(rows, [['Oct 12 so far', '30', '1', '40', '0.8×'], ['Oct 5', '80', '1', '40', '2.0×'], ['Sep 28', '20', '1', '40', '0.5×']]);
     await dialog.locator('[data-close]').click();
     // The keyboard opens it too.
@@ -103,9 +110,9 @@ const answer = (over = {}) => ({zone: 'America/Los_Angeles', now: '2026-10-14T19
     // On a phone the card is readable and the chart fits without scrolling sideways; a tap shows a week.
     await page.setViewportSize({width: 375, height: 740});
     const fit = await card.evaluate(el => ({card: el.scrollWidth <= el.clientWidth, doc: document.documentElement.scrollWidth <= innerWidth,
-      plot: el.querySelector('.ovh-plot').getBoundingClientRect().right <= innerWidth}));
+      plot: el.querySelector('.ovh-plot')!.getBoundingClientRect().right <= innerWidth}));
     assert.deepEqual(fit, {card: true, doc: true, plot: true});
-    const phone = await plot.boundingBox();
+    const phone = (await plot.boundingBox())!;
     await plot.tap({position: {x: phone.width - 2, y: phone.height / 2}}).catch(() => plot.click({position: {x: phone.width - 2, y: phone.height / 2}}));
     assert.match(await card.locator('.ovh-tip').innerText(), /^Week of Oct 12 \(so far\): 100 bot hours · 120 human hours · 0\.8×$/);
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, 'the shown week fits too');

@@ -1,3 +1,4 @@
+import type {Route} from 'playwright';
 // Overview › Factories (ui/app/overview-factories.ts): the flow map.
 //  - the Factories tab at #/overview/factories; factory boxes, pipelines in flow order, counts, Late, running;
 //  - lines labelled "38 · 2d" (count, median time in the source pipeline), no noun, no loop chips;
@@ -7,11 +8,11 @@
 //    a pipeline with no manager has no chat icon;
 //  - lines hold still under prefers-reduced-motion; a phone stacks the factories, shows counts between the boxes and
 //    opens chat as a full-screen sheet, with no sideways scroll.
-const {chromium} = require('playwright');
+const {chromium} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
-const {html, uiFile} = require('./support/page.cjs');
-const {unrouted} = require('./support/routes.cjs');
+const {html, uiFile} = require('./support/page.cjs') as typeof import('./support/page.cjs');
+const {unrouted} = require('./support/routes.cjs') as typeof import('./support/routes.cjs');
 
 const map = {
   factories: [{id: 'f1', name: 'Lead factory', goal: null, manager_id: 'bot:lead', done: 12, overdue: 2, live: 1}],
@@ -24,15 +25,15 @@ const map = {
   inputs: [{label: 'Ads', count: 14, to: 'camp'}],
 };
 
-async function open(browser, {viewport = {width: 1280, height: 820}, hash = '#/overview/factories', reduce = false, data = map, role = 'owner'} = {}) {
+async function open(browser: import('playwright').Browser, {viewport = {width: 1280, height: 820}, hash = '#/overview/factories', reduce = false, data = map as unknown, role = 'owner'} = {}) {
   const page = await browser.newPage({viewport, serviceWorkers: 'block', hasTouch: viewport.width < 600, isMobile: viewport.width < 600, reducedMotion: reduce ? 'reduce' : 'no-preference'});
-  const errors = [], periods = [], dms = [], factories = [];
-  page.on('pageerror', e => errors.push(e.message));
+  const errors: unknown[] = [], periods: unknown[] = [], dms: unknown[] = [], factories: unknown[] = [];
+  page.on('pageerror', (e: Error) => errors.push(e.message));
   await page.addInitScript(() => { try { localStorage.setItem('tico.theme', 'dark'); } catch {} });
   const me = {id: 'ana', role, name: 'Ana Ruiz', email: 'ana@example.com', cloud: true, registered: true, owner_id: 'ana', config: {company_name: 'Acme Bikes'}};
-  await page.route('**/*', async route => {
+  await page.route('**/*', async (route: Route) => {
     const req = route.request(), url = new URL(req.url()), p = url.pathname;
-    const json = (body, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
+    const json = (body: unknown, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
     if (url.origin !== 'https://tico-ui.test') return route.abort();
     if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
     if (p.startsWith('/tico/ui/')) {
@@ -61,7 +62,7 @@ async function open(browser, {viewport = {width: 1280, height: 820}, hash = '#/o
   return {page, errors, periods, dms, factories};
 }
 
-async function desktop(browser) {
+async function desktop(browser: import('playwright').Browser) {
   const {page, errors, periods, dms} = await open(browser);
   await page.locator('.of-node').first().waitFor();
   assert.equal(await page.locator('.dash-tabs a.cur').innerText(), 'Factories');
@@ -73,22 +74,22 @@ async function desktop(browser) {
   await page.waitForSelector('.of-edge-l');
   assert.equal(await page.locator('.of-edge-l').textContent(), '38 · 2d');
   assert.equal(await page.locator('.of-edge:not(.of-edge-in)').count(), 1);
-  const dot = await page.locator('.of-dot').boundingBox();
+  const dot = (await page.locator('.of-dot').boundingBox())!;
   assert.ok(dot.width >= 27 && dot.width <= 34 && dot.height === 28, `input circle ${dot.width}x${dot.height}`);
   assert.equal(await page.locator('.of-dot').innerText(), '14');
   assert.equal(await page.locator('.of-in-l').innerText(), 'Ads');
-  assert.equal(await page.evaluate(() => getComputedStyle(document.querySelector('.of-edge')).animationName), 'of-flow');
+  assert.equal(await page.evaluate(() => getComputedStyle(document.querySelector('.of-edge')!).animationName), 'of-flow');
   // The period: the week at first, and the one picked is remembered.
   assert.equal(await page.locator('[data-of-period="7d"]').getAttribute('aria-pressed'), 'true');
   await page.locator('[data-of-period="30d"]').click();
-  await page.waitForFunction(() => document.querySelector('[data-of-period="30d"]').getAttribute('aria-pressed') === 'true');
+  await page.waitForFunction(() => document.querySelector('[data-of-period="30d"]')!.getAttribute('aria-pressed') === 'true');
   await page.reload();
   await page.locator('.of-node').first().waitFor();
   assert.equal(await page.locator('[data-of-period="30d"]').getAttribute('aria-pressed'), 'true');
   assert.deepEqual(periods.slice(0, 3), ['7d', '30d', '30d']);
   // Chat: a factory or pipeline with a manager has the icon; one without has none. The rail embeds the manager's thread,
   // its chips (every node with a manager, in map order) switch managers, and Hide unmounts the thread.
-  const until = async (test) => { for (let i = 0; i < 100 && !test(); i++) await new Promise(r => setTimeout(r, 50)); assert.ok(test(), 'timed out'); };
+  const until = async (test: () => boolean) => { for (let i = 0; i < 100 && !test(); i++) await new Promise(r => setTimeout(r, 50)); assert.ok(test(), 'timed out'); };
   assert.equal(await page.locator('.of-chat').count(), 3);
   assert.equal(await page.locator('[data-of-pl=help] .of-chat').count(), 0);
   assert.equal(await page.locator('#of-rail').isHidden(), true);
@@ -121,7 +122,7 @@ async function desktop(browser) {
   await page.close();
 }
 
-async function mapExtras(browser) {
+async function mapExtras(browser: import('playwright').Browser) {
   // A spawn is drawn dashed and a move solid; a loop is one labelled line back, "laps · median lap".
   const data = {...map,
     edges: [...map.edges, {from: 'camp', to: 'help', mode: 'spawn', count: 4, median_age_minutes: null}],
@@ -130,14 +131,14 @@ async function mapExtras(browser) {
   await page.locator('.of-node').first().waitFor();
   await page.waitForSelector('.of-loop-l');
   assert.equal(await page.locator('.of-edge-spawn').count(), 1);
-  assert.notEqual(await page.evaluate(() => getComputedStyle(document.querySelector('.of-edge-spawn')).strokeDasharray), 'none');
-  assert.equal(await page.evaluate(() => getComputedStyle(document.querySelector('.of-edge:not(.of-edge-spawn):not(.of-edge-in)')).strokeDasharray), 'none');
+  assert.notEqual(await page.evaluate(() => getComputedStyle(document.querySelector('.of-edge-spawn')!).strokeDasharray), 'none');
+  assert.equal(await page.evaluate(() => getComputedStyle(document.querySelector('.of-edge:not(.of-edge-spawn):not(.of-edge-in)')!).strokeDasharray), 'none');
   assert.equal(await page.locator('.of-loop-l').textContent(), '3 · 1d');
   assert.deepEqual(errors, []);
   await page.close();
 }
 
-async function noLinks(browser) {
+async function noLinks(browser: import('playwright').Browser) {
   // A factory whose pipelines have no links between them (no Marketing to Sales): it renders with no lines or loops.
   const data = {...map, edges: [], loops: [], inputs: []};
   const {page, errors} = await open(browser, {data});
@@ -149,7 +150,7 @@ async function noLinks(browser) {
   await page.close();
 }
 
-async function makeFactory(browser) {
+async function makeFactory(browser: import('playwright').Browser) {
   // + Factory: the owner and Admins see it; it posts name and an optional goal, then the map reloads.
   const {page, errors, periods, factories} = await open(browser);
   await page.locator('.of-node').first().waitFor();
@@ -157,7 +158,7 @@ async function makeFactory(browser) {
   await page.locator('#of-new').waitFor();
   await page.locator('#of-new input[name=name]').fill('Support');
   await page.locator('#of-new button[type=submit]').click();
-  await page.waitForFunction(() => document.querySelector('#of-new')?.hidden === true);
+  await page.waitForFunction(() => (document.querySelector('#of-new') as HTMLElement | null)?.hidden === true);
   assert.deepEqual(factories, [{name: 'Support', goal: null}]);
   assert.ok(periods.length >= 2, 'the map reloads after the save');
   assert.deepEqual(errors, []);
@@ -168,24 +169,24 @@ async function makeFactory(browser) {
   await member.page.close();
 }
 
-async function reducedMotion(browser) {
+async function reducedMotion(browser: import('playwright').Browser) {
   const {page} = await open(browser, {reduce: true});
   await page.waitForSelector('.of-edge', {state: 'attached'});
-  assert.equal(await page.evaluate(() => getComputedStyle(document.querySelector('.of-edge')).animationName), 'none');
+  assert.equal(await page.evaluate(() => getComputedStyle(document.querySelector('.of-edge')!).animationName), 'none');
   await page.close();
 }
 
-async function phone(browser) {
+async function phone(browser: import('playwright').Browser) {
   const {page, errors} = await open(browser, {viewport: {width: 390, height: 844}});
   await page.locator('.of-node').first().waitFor();
-  const boxes = await page.locator('.of-node').evaluateAll(n => n.map(e => e.getBoundingClientRect().top));
-  assert.ok(boxes[0] < boxes[1] && boxes[1] < boxes[2], 'pipelines stack');
+  const boxes = await page.locator('.of-node').evaluateAll((n: HTMLElement[]) => n.map((e: HTMLElement) => e.getBoundingClientRect().top));
+  assert.ok(boxes[0]! < boxes[1]! && boxes[1]! < boxes[2]!, 'pipelines stack');
   assert.equal(await page.locator('#of-lines').isVisible(), false);
   assert.match(await page.locator('[data-of-pl=camp] .of-onward').innerText(), /38 · 2d to Sales/);
   assert.match(await page.locator('[data-of-pl=camp] .of-in-chip').innerText(), /Ads 14/);
   await page.locator('[data-of-pl=camp] .of-chat').click();
   await page.locator('#of-rail-chat .thv').waitFor();
-  const sheet = await page.locator('#of-rail').boundingBox();
+  const sheet = (await page.locator('#of-rail').boundingBox())!;
   assert.ok(sheet.width >= 389 && sheet.height >= 843, `sheet ${sheet.width}x${sheet.height}`);
   assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), 'no sideways scroll');
   await page.locator('[data-of-rail-hide]').click();
@@ -195,6 +196,6 @@ async function phone(browser) {
 }
 
 (async () => {
-  const browser = await chromium.launch({headless: true, channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined});
+  const browser = await chromium.launch({headless: true, channel: (process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined) as string});
   try { await desktop(browser); await mapExtras(browser); await noLinks(browser); await makeFactory(browser); await reducedMotion(browser); await phone(browser); console.log('overview-factories: ok'); } finally { await browser.close(); }
 })().catch(e => { console.error(e); process.exit(1); });

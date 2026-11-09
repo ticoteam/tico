@@ -1,32 +1,41 @@
+import type {Route} from 'playwright';
 // Settings > Computers, a computer's pop-up > Versions and updates > Installation and updates: the owner's On box per model CLI. What the computer's bots run on, their fallback
 // included (`bot_runtimes`), is checked and locked; any other one turns on and off with a POST and the page reloads; a
 // refused change puts the box back. An older server sends no bot_runtimes: its bots' own runtimes stay locked.
 // Every request is intercepted.
-const {chromium} = require('playwright');
+const {chromium} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
-const {html, uiFile} = require('./support/page.cjs');
-const {unrouted} = require('./support/routes.cjs');
+const {html, uiFile} = require('./support/page.cjs') as typeof import('./support/page.cjs');
+const {unrouted} = require('./support/routes.cjs') as typeof import('./support/routes.cjs');
+
+declare global {
+  // u5: browser globals the page's own scripts define (see ui/app); declared once per name, same type everywhere.
+  var SETTINGS_DATA: {machines: {harness_choices: Record<string, boolean>}[]; models: unknown[]};
+  var loadSettings: () => Promise<void>;
+}
 (async () => {
-  const browser = await chromium.launch({headless: true, channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined});
+  const browser = await chromium.launch({headless: true, channel: (process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined) as string});
   try {
     const page = await browser.newPage({viewport: {width: 1440, height: 900}, serviceWorkers: 'block'});
-    const errors = [];
+    const errors: string[] = [];
     page.on('pageerror', e => errors.push(e.message));
-    const chip = (name, runtime, installed) => ({name, runtime, installed, version: installed ? '1.0.0' : '', managed: true, state: 'idle',
+    type Chip = {name: string; runtime: string; installed: boolean; version: string; managed: boolean; state: string; wanted: boolean; pinned: boolean; update_available: boolean; detail: string};
+    const chip = (name: string, runtime: string, installed: boolean): Chip => ({name, runtime, installed, version: installed ? '1.0.0' : '', managed: true, state: 'idle',
       wanted: installed, pinned: false, update_available: false, detail: ''});
-    const computer = {id: 'computer-1', label: 'Build server', owner_id: 'ana', bots: ['helper'], platform: 'linux',
+    type Computer = {id: string; label: string; owner_id: string; bots: string[]; platform: string; last_seen_at: string; needed_runtimes: string[]; bot_runtimes?: string[]; harness_choices: Record<string, boolean>; readiness: {runtimes: Record<string, {installed: boolean; authenticated: string}>; harnesses: Record<string, Chip>}};
+    const computer: Computer = {id: 'computer-1', label: 'Build server', owner_id: 'ana', bots: ['helper'], platform: 'linux',
       last_seen_at: new Date().toISOString(), needed_runtimes: ['codex'], bot_runtimes: ['codex', 'gemini'], harness_choices: {},
       readiness: {runtimes: {codex: {installed: true, authenticated: 'ready'}},
         harnesses: {codex: chip('Codex', 'codex', true), antigravity: chip('Antigravity', 'gemini', true), grok: chip('Grok Build', 'grok', false)}}};
-    const writes = [];
+    const writes: {harness: string; enabled: boolean}[] = [];
     let refuse = false;
-    await page.route('**/*', route => {
+    await page.route('**/*', (route: Route) => {
       const req = route.request(), p = new URL(req.url()).pathname;
-      const json = (body, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
+      const json = (body: unknown, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
       const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/);
-      if (ui && fs.existsSync(uiFile(ui[1])))
-        return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]), 'utf8')});
+      if (ui && fs.existsSync(uiFile(ui[1]!)))
+        return route.fulfill({contentType: ui[1]!.endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]!), 'utf8')});
       if (/\.(?:js|ts)$/.test(p)) return route.fulfill({contentType: 'application/javascript', body: ''});
       if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
       const config = {version: '0.1.0', app_name: 'Tico'};
@@ -40,7 +49,7 @@ const {unrouted} = require('./support/routes.cjs');
       if (p === '/api/v2/needs-you') return json({items: []});
       if (p === '/api/v2/operations') return json({machines: [computer], services: []});
       if (p === '/api/v2/computers/computer-1/harness-choices') {
-        const body = req.postDataJSON(); writes.push(body);
+        const body = req.postDataJSON() as {harness: string; enabled: boolean}; writes.push(body);
         if (refuse) return json({error: {code: 'needed', detail: 'A bot on this computer runs on this tool, so it stays on'}}, 409);
         computer.harness_choices = {...computer.harness_choices, [body.harness]: body.enabled};
         return json({runner_id: 'computer-1', ...body});
@@ -52,19 +61,19 @@ const {unrouted} = require('./support/routes.cjs');
     await page.locator('[data-settings-tab=devices]').click();
     await page.locator('#set-machines .machine-name[data-computer-open=computer-1]').click();
     await page.locator('#set-machines details[data-machine-details] > summary').click();
-    const box = id => page.locator(`#set-machines [data-harness-choice="${id}"]`);
-    const state = async id => [await box(id).isChecked(), await box(id).isDisabled()];
+    const box = (id: string) => page.locator(`#set-machines [data-harness-choice="${id}"]`);
+    const state = async (id: string) => [await box(id).isChecked(), await box(id).isDisabled()];
     // The bot's harness and its fallback: on and locked. Grok: off, the owner's to turn on.
     assert.deepEqual(await state('codex'), [true, true]);
     assert.deepEqual(await state('antigravity'), [true, true]);
     assert.deepEqual(await state('grok'), [false, false]);
     await box('grok').check();
-    await page.waitForFunction(() => SETTINGS_DATA.machines[0].harness_choices.grok === true);
-    await page.waitForFunction(() => !document.querySelector('#set-machines [data-harness-choice="grok"]').disabled);
+    await page.waitForFunction(() => SETTINGS_DATA.machines[0]!.harness_choices.grok === true);
+    await page.waitForFunction(() => !(document.querySelector('#set-machines [data-harness-choice="grok"]') as HTMLInputElement).disabled);
     assert.deepEqual(await state('grok'), [true, false]);
     await box('grok').uncheck();
-    await page.waitForFunction(() => SETTINGS_DATA.machines[0].harness_choices.grok === false);
-    await page.waitForFunction(() => !document.querySelector('#set-machines [data-harness-choice="grok"]').disabled);
+    await page.waitForFunction(() => SETTINGS_DATA.machines[0]!.harness_choices.grok === false);
+    await page.waitForFunction(() => !(document.querySelector('#set-machines [data-harness-choice="grok"]') as HTMLInputElement).disabled);
     assert.deepEqual(await state('grok'), [false, false]);
     assert.deepEqual(writes, [{harness: 'grok', enabled: true}, {harness: 'grok', enabled: false}]);
     // A refused change puts the box back and leaves it usable.
@@ -73,13 +82,13 @@ const {unrouted} = require('./support/routes.cjs');
     const refused = page.waitForResponse(r => r.url().endsWith('/harness-choices') && r.status() === 409);
     await box('grok').click();
     await refused;
-    await page.waitForFunction(() => { const el = document.querySelector('#set-machines [data-harness-choice="grok"]'); return !el.checked && !el.disabled; });
+    await page.waitForFunction(() => { const el = document.querySelector('#set-machines [data-harness-choice="grok"]') as HTMLInputElement; return !el.checked && !el.disabled; });
     assert.equal(writes.length, 3);
     assert.deepEqual(writes[2], {harness: 'grok', enabled: true});
     // An older server: no bot_runtimes, so only what its bots run on (needed_runtimes) is locked.
     delete computer.bot_runtimes;
     await page.evaluate(() => loadSettings());
-    await page.locator('#set-machines details[data-machine-details]').evaluate(el => { el.open = true; });
+    await page.locator('#set-machines details[data-machine-details]').evaluate((el: HTMLDetailsElement) => { el.open = true; });
     assert.deepEqual(await state('codex'), [true, true]);
     assert.deepEqual(await state('antigravity'), [true, false]);
     assert.deepEqual(errors, []);
