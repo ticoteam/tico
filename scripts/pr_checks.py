@@ -297,36 +297,27 @@ class DependencyMap:
         self.names = {}  # Python file -> its identifiers and strings (fixture names it uses)
         self.imports = {}  # Python file -> the dotted names it imports (for a gone file's importers, named_by)
         self._tokens = None  # built on first use by tokens()
-        trees = {}
+        # Every scan needs `bare` (from all files' imports) first, so the Python files are parsed twice, one tree alive
+        # at a time; the build takes no longer. Holding every tree at once peaked near 2.3 GB per map, and the
+        # allocator kept it: a full merge queue VM whose four test workers each built one lost its runner (Nov 8).
+        parsed, self.bare = [], set()
         for path in self.files:
-            if path.endswith(".py"):
-                try:
-                    trees[path] = ast.parse((root / path).read_bytes())
-                except (OSError, SyntaxError, ValueError):
-                    self.unparsed.add(path)
-                    self.everything.add(path)
-        # One breadth-first pass per tree (ast.walk's order) feeds every scan: walking each tree once per scan was
-        # most of the map's build time, which every PR's plan pays and the selector's tests pay once per worker.
-        walked = {path: self.walk(tree) for path, tree in trees.items()}
-        # Top-level names imported through sys.path (`import hubcli` with clients/ on the path).
-        self.bare = {
-            a.name.split(".")[0]
-            for nodes, _ in walked.values()
-            for node in nodes
-            if isinstance(node, ast.Import)
-            for a in node.names
-        }
-        self.bare |= {
-            node.module.split(".")[0]
-            for nodes, _ in walked.values()
-            for node in nodes
-            if isinstance(node, ast.ImportFrom) and not node.level and node.module
-        }
+            if path.endswith(".py") and (tree := self.parse(path)) is not None:
+                parsed.append(path)
+                for node in ast.walk(tree):
+                    # Top-level names imported through sys.path (`import hubcli` with clients/ on the path).
+                    if isinstance(node, ast.Import):
+                        self.bare.update(a.name.split(".")[0] for a in node.names)
+                    elif isinstance(node, ast.ImportFrom) and not node.level and node.module:
+                        self.bare.add(node.module.split(".")[0])
         self.bare = {
             name for name in self.bare - set(self.modules) if any(m.endswith("." + name) for m in self.modules)
         }
-        for path, tree in trees.items():
-            self.python(path, tree, walked.pop(path))
+        for path in parsed:
+            # One breadth-first pass per tree (ast.walk's order) feeds every scan: walking each tree once per scan was
+            # most of the map's build time, which every PR's plan pays and the selector's tests pay once per worker.
+            if (tree := self.parse(path)) is not None:
+                self.python(path, tree, self.walk(tree))
         for path in self.files:
             if Path(path).suffix in CODE - {".py"} or (not Path(path).suffix and self.shebang(path)):
                 self.text(path)
@@ -335,6 +326,15 @@ class DependencyMap:
             for path, targets in edges.items():
                 for target in targets - {path}:
                     reverse[target].add(path)
+
+    def parse(self, path):
+        """The file's syntax tree, or None for one that cannot be read or parsed (it then reaches everything)."""
+        try:
+            return ast.parse((self.root / path).read_bytes())
+        except (OSError, SyntaxError, ValueError):
+            self.unparsed.add(path)
+            self.everything.add(path)
+            return None
 
     @staticmethod
     def walk(tree):

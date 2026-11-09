@@ -686,11 +686,15 @@ def pull_request(c, payload, review_role="", release_repo="", *, read_refresh=Fa
 
             # The new head is saved: its checks show the out-of-date standing from this same write.
             pipeline_github_checks.publish_affected(c, link["task_id"])
-        if state == "merged" and link["state"] not in ("merged", "shipped") and not read_refresh:
-            # The merge the builder was woken for: a ticket whose last check passed goes to Pending Release.
-            from . import verdict_moves
+        if state == "merged" and link["state"] not in ("merged", "shipped"):
+            from . import review_pages, verdict_moves
 
-            verdict_moves.merged(c, task)
+            if not read_refresh:
+                # The merge the builder was woken for: a ticket whose last check passed goes to Pending Release.
+                verdict_moves.merged(c, task)
+            # A merge read on refresh has no webhook behind it, so its page is queued here too. queue() is idempotent:
+            # a second merge event finds the page already queued and changes nothing.
+            review_pages.queue(c, task, link["id"])
         elif new_head and action == "synchronize" and state == "open":
             # A push at a check step whose check already finished needs a check of the new head.
             from . import check_pools, verdict_moves
