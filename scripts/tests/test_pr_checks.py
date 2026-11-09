@@ -411,6 +411,57 @@ def test_cached_system_packages_match_the_locked_browser_version():
     assert len(set(manifest["packages"])) == len(manifest["packages"]) > 0
 
 
+def test_install_keeps_a_restored_venv_that_starts_and_still_installs_the_lock_into_it(tmp_path):
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    log = tmp_path / "calls"
+    venv = tmp_path / "venv/bin"
+    venv.mkdir(parents=True)
+
+    def stub(path, body):
+        path.write_text(f'#!/bin/bash\necho "{path.name} $*" >> "{log}"\n{body}\n')
+        path.chmod(0o755)
+
+    for name in ("python3", "npm"):
+        stub(bin_dir / name, "")
+    env = {**os.environ, "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}", "RUNNER_TEMP": str(tmp_path)}
+    for starts in (True, False):
+        log.write_text("")
+        # A restored venv whose interpreter cannot start (`-c ''` fails) is rebuilt; pip runs in both cases.
+        stub(venv / "python", "" if starts else 'if [ "$1" = -c ]; then exit 1; fi')
+        result = subprocess.run(
+            ["bash", str(ROOT / "scripts/ci_install.sh"), "--once", "python"], env=env, capture_output=True
+        )
+        assert result.returncode == 0, result.stderr.decode()
+        calls = log.read_text().splitlines()
+        assert any(c.startswith("python -m pip install") and "-r backend/requirements-dev.txt" in c for c in calls)
+        assert (f"python3 -m venv --clear {tmp_path}/venv" in calls) is not starts, calls
+
+
+def test_free_disk_removes_the_unused_sdks_only_under_the_space_a_job_needs(tmp_path):
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    log = tmp_path / "calls"
+    (bin_dir / "df").write_text(
+        '#!/bin/bash\nif [ "$1" = -h ]; then echo "/dev/root 145G"; else printf "Avail\\n  85G\\n"; fi\n'
+    )
+    (bin_dir / "sudo").write_text(f'#!/bin/bash\necho "sudo $*" >> "{log}"\n')
+    for tool in ("df", "sudo"):
+        (bin_dir / tool).chmod(0o755)
+    env = {**os.environ, "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}"}
+    for need, removes in (("30", False), ("85", False), ("86", True)):
+        log.write_text("")
+        result = subprocess.run(
+            ["bash", str(ROOT / "scripts/ci/free_disk.sh"), need], env=env, capture_output=True, text=True
+        )
+        assert result.returncode == 0, result.stderr
+        assert "/dev/root 145G" in result.stdout
+        assert log.read_text().split() == (
+            ["sudo", "rm", "-rf", "/usr/share/dotnet", "/usr/local/lib/android", "/opt/ghc"] if removes else []
+        ), need
+    assert subprocess.run(["bash", str(ROOT / "scripts/ci/free_disk.sh")], env=env, capture_output=True).returncode
+
+
 def test_docs_plan_has_an_explicit_no_test_job_and_never_calls_pytest(tmp_path, monkeypatch, mapped):
     # Exercise selector inputs independently of the separate release-notes guard.
     monkeypatch.setattr(checks, "guard_changelog", lambda _: None)
@@ -869,18 +920,25 @@ def test_the_main_cache_warm_up_saves_the_keys_pr_checks_restore():
         for job in doc["jobs"].values():
             for step in job.get("steps", []):
                 uses, args = step.get("uses", ""), dict(step.get("with") or {})
+                # A restore-only step (actions/cache/restore, same pinned commit) restores what actions/cache saves.
+                uses = uses.replace("actions/cache/restore@", "actions/cache@")
                 if "actions/cache@" in uses or "rust-cache@" in uses or args.get("cache"):
                     lookup = args.pop("lookup-only", None)
                     yield args.get("key") or args.get("shared-key") or args["cache"], uses, args, job["runs-on"], lookup
 
     restored = list(caches(pr))
     warmed = list(caches(warm))
+    venv = (
+        "venv-ubuntu24-${{ runner.arch }}-py${{ steps.python.outputs.python-version }}-"
+        "${{ hashFiles('backend/requirements-dev.txt', 'scripts/ci_install.sh') }}"
+    )
     assert (
         {w[0] for w in warmed}
         == {r[0] for r in restored}
         == {
             "pip",
             "npm",
+            venv,
             "pr-rust-lint",
             "pr-desktop",
             "pr-conformance",
@@ -890,6 +948,20 @@ def test_the_main_cache_warm_up_saves_the_keys_pr_checks_restore():
             "'scripts/ci_install.sh', 'scripts/playwright-system-packages.json') }}",
         }
     )
+    # The venv key names the exact Python its job set up: each job restoring or saving it sets Python up first, as
+    # `python`, and only PR checks' restore-only action reads it there (a pull request or queue group saves nothing).
+    for doc, action in ((pr, "actions/cache/restore@"), (warm, "actions/cache@")):
+        for name, job in doc["jobs"].items():
+            steps = job.get("steps", [])
+            at = [i for i, step in enumerate(steps) if (step.get("with") or {}).get("key") == venv]
+            if not at:
+                continue
+            assert len(at) == 1 and action in steps[at[0]]["uses"], name
+            setup = [i for i, step in enumerate(steps) if "actions/setup-python@" in step.get("uses", "")]
+            assert len(setup) == 1 and steps[setup[0]].get("id") == "python" and setup[0] < at[0], name
+            install = [i for i, step in enumerate(steps) if "scripts/ci_install.sh" in str(step.get("run", ""))]
+            assert install and at[0] < install[0], name
+    assert sum(venv in str(job) for job in pr["jobs"].values()) == 5  # plan, tests, factory-sim, static, caddy-linux
     for ident, uses, args, runner, lookup in warmed:
         assert runner in ("ubuntu-24.04", "macos-latest"), ident
         assert any((uses, args) == (r[1], r[2]) and runner == r[3] for r in restored), ident
