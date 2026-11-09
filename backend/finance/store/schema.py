@@ -613,9 +613,6 @@ ADDED = (
     # the vendor key a bank or card row is found by: core/merchant.merchant_key of its counterparty (the contact or alias
     # it resolves to is read on each read, so a merge takes effect without rewriting rows). Migration 20261106235900.
     ("fin_feed_txns", "vendor_key", "TEXT NOT NULL DEFAULT ''"),
-    # set on an alias a vendor_merge added: '' for a name nobody had, the contact id it moved from otherwise (the
-    # contact's id itself for the alias that routes that contact's lines to the vendor). NULL for every other alias.
-    ("fin_vendor_aliases", "merged_from", "TEXT"),
     # the statement upload a row came in by (backend/finance/statement_upload.py); NULL for every synced row.
     # Migration 20261108120000 adds it to a table that exists then, and the tables it makes live in that migration.
     ("fin_feed_txns", "upload_id", "TEXT"),
