@@ -7375,7 +7375,7 @@ class Execution:
         usage_limits.after_run(c, row["bot_id"], self.store.settings.owner_email)
         from . import pipeline_budgets
 
-        pipeline_budgets.after_run(c, row.get("task_id"))
+        pipeline_budgets.after_run(c, row["task_id"])
         finance_run_ended(c, row["job_id"], aid)
         config = c.execute(BS.ONE_SQL, (row["bot_id"],)).fetchone()
         runtime, model = providers.bot_choice(c, self.store.settings, json.loads(config[0]) if config else {})
