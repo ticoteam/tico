@@ -1,5 +1,6 @@
 """The GitHub App: manifest, state nonce, secret storage, installation tokens, runner scope."""
 
+import importlib.util
 import json
 import sqlite3
 import statistics
@@ -7,6 +8,7 @@ import time
 import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from types import SimpleNamespace
 from urllib.parse import parse_qs, parse_qsl, urlparse
 
 import httpx
@@ -160,15 +162,12 @@ def test_state_is_single_use_and_bound_to_session(api, gh):
     state = manifest(api)["state"]
     bad = api.get("/api/v2/github/app/callback", params={"code": "c", "state": "forged"}, headers=auth())
     assert bad.status_code == 400
+    # Another session's return parks its code and exchanges nothing; the state stays for the owner's own return.
     other = api.get("/api/v2/github/app/callback", params={"code": "c", "state": state}, headers=auth("other-test"))
-    assert other.status_code == 400 and not gh.of("/conversions")
-    # Presenting it from another session burned it.
-    assert (
-        api.get("/api/v2/github/app/callback", params={"code": "c", "state": state}, headers=auth()).status_code == 400
-    )
-    state = manifest(api)["state"]
+    assert other.status_code == 200 and other.json() == {"parked": True, "finish": "/api/v2/github/app/finish"}
+    assert not gh.of("/conversions")
     ok = api.get("/api/v2/github/app/callback", params={"code": "c", "state": state}, headers=auth())
-    assert ok.status_code == 302
+    assert ok.status_code == 302 and len(gh.of("/conversions")) == 1
     replay = api.get("/api/v2/github/app/callback", params={"code": "c", "state": state}, headers=auth())
     assert replay.status_code == 400
 
@@ -1701,3 +1700,123 @@ def test_an_app_connected_before_account_types_is_an_organization():
         migration.up(c)
         assert c.execute("SELECT org,account_type FROM github_app").fetchone() == ("Acme", "Organization")
         assert {row[1] for row in c.execute("PRAGMA table_info(github_app_states)")} == {"nonce", "org", "account_type"}
+
+
+CALLBACK = "/api/v2/github/app/callback"
+FINISH = "/api/v2/github/app/finish"
+
+
+def parked_code(api, state):
+    with sqlite3.connect(api.app_state.store.settings.db_path) as c:
+        return c.execute("SELECT code FROM github_app_states WHERE nonce=?", (state,)).fetchone()
+
+
+def finish(api, state, actor="owner-test"):
+    return api.post(FINISH, json={"state": state}, headers=auth(actor))
+
+
+def test_a_return_with_no_owner_session_parks_its_code_and_exchanges_nothing(api, gh):
+    state = manifest(api)["state"]
+    browser = api.get(CALLBACK, params={"code": "the-code", "state": state}, headers={"Accept": "text/html"})
+    assert browser.status_code == 302 and browser.headers["location"] == "/#/tools/github?github=finish"
+    assert parked_code(api, state) == ("the-code",)
+    assert not gh.of("/conversions")
+
+
+def test_a_return_with_no_owner_session_gets_json_from_a_non_browser(api, gh):
+    state = manifest(api)["state"]
+    r = api.get(CALLBACK, params={"code": "the-code", "state": state})
+    assert r.status_code == 200 and r.json() == {"parked": True, "finish": FINISH}
+    assert not gh.of("/conversions")
+
+
+def test_the_first_parked_code_is_kept_and_a_second_return_does_not_overwrite_it(api, gh):
+    state = manifest(api)["state"]
+    assert api.get(CALLBACK, params={"code": "first", "state": state}).status_code == 200
+    again = api.get(CALLBACK, params={"code": "second", "state": state})
+    assert again.status_code == 200 and again.json()["parked"] is True
+    assert parked_code(api, state) == ("first",)
+    assert not gh.of("/conversions")
+
+
+def test_the_owner_finishes_a_parked_setup_once_and_gets_the_install_page(api, gh):
+    state = manifest(api)["state"]
+    api.get(CALLBACK, params={"code": "the-code", "state": state})
+    done = finish(api, state)
+    assert done.status_code == 200, done.text
+    assert done.json()["install_url"].startswith("https://github.com/apps/acme-tico/installations/new?state=")
+    assert len(gh.of("/conversions")) == 1
+    assert api.get("/api/v2/github/app", headers=auth()).json()["slug"] == "acme-tico"
+    again = finish(api, state)
+    assert again.status_code == 400 and again.json()["error"]["code"] == "github_state"
+    assert len(gh.of("/conversions")) == 1
+
+
+def test_finish_before_github_has_returned_is_a_409_and_keeps_the_state(api, gh):
+    state = manifest(api)["state"]
+    early = finish(api, state)
+    assert early.status_code == 409 and early.json()["error"]["code"] == "github_not_returned"
+    api.get(CALLBACK, params={"code": "the-code", "state": state})
+    assert finish(api, state).status_code == 200
+
+
+def test_finish_by_another_actor_or_after_expiry_is_github_state(api, gh):
+    state = manifest(api)["state"]
+    api.get(CALLBACK, params={"code": "the-code", "state": state})
+    foreign = finish(api, state, actor="other-test")
+    assert foreign.status_code == 400 and foreign.json()["error"]["code"] == "github_state"
+    with api.app_state.store.transaction() as c:
+        c.execute("UPDATE github_app_states SET created_at=0 WHERE nonce=?", (state,))
+    late = finish(api, state)
+    assert late.status_code == 400 and late.json()["error"]["code"] == "github_state"
+    assert not gh.of("/conversions")
+
+
+def test_a_return_with_no_session_and_an_unknown_state_is_refused_and_parks_nothing(api, gh):
+    manifest(api)
+    r = api.get(CALLBACK, params={"code": "the-code", "state": "forged"})
+    assert r.status_code == 400 and r.json()["error"]["code"] == "github_state"
+    with sqlite3.connect(api.app_state.store.settings.db_path) as c:
+        assert c.execute("SELECT count(*) FROM github_app_states WHERE code IS NOT NULL").fetchone() == (0,)
+    assert not gh.of("/conversions")
+
+
+def test_the_no_session_exemption_is_the_callback_alone(api, gh):
+    state = manifest(api)["state"]
+    for method, path in (
+        ("get", "/api/v2/github/app"),
+        ("get", "/api/v2/github/app/installed"),
+        ("get", "/api/v2/github/app/manifest?org=Acme"),
+        ("post", FINISH),
+    ):
+        r = getattr(api, method)(path, json={"state": state}) if method == "post" else api.get(path)
+        assert r.status_code == 401 and r.json()["error"]["code"] == "identity", path
+
+
+def test_the_github_app_state_code_migration_adds_its_columns_once_and_runs_again_safely():
+    migration = Path(G.__file__).parent / "migrations"
+    (path,) = sorted(migration.glob("*_github_app_state_code.py"))
+    spec = importlib.util.spec_from_file_location("github_app_state_code", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    with sqlite3.connect(":memory:") as c:
+        c.execute(
+            "CREATE TABLE github_app_states(nonce TEXT PRIMARY KEY, actor TEXT NOT NULL, org TEXT NOT NULL, "
+            "administration INTEGER NOT NULL, created_at REAL NOT NULL, account_type TEXT NOT NULL DEFAULT 'Organization')"
+        )
+        module.up(c)
+        module.up(c)
+        assert {row[1] for row in c.execute("PRAGMA table_info(github_app_states)")} >= {"code", "returned_at"}
+
+
+def test_a_browser_return_with_no_session_goes_to_the_owner_link_and_back_to_the_return(api, gh, monkeypatch):
+    state = manifest(api)["state"]
+    proxy = SimpleNamespace(name="owner-link")
+    monkeypatch.setattr(api.app_state, "auth", SimpleNamespace(proxy=proxy), raising=False)
+    r = api.get(CALLBACK, params={"code": "the-code", "state": state}, headers={"Accept": "text/html"})
+    assert r.status_code == 302
+    target = urlparse(r.headers["location"])
+    assert target.path == "/auth/owner-link"
+    back = urlparse(parse_qs(target.query)["next"][0])
+    assert back.path == CALLBACK and parse_qs(back.query) == {"code": ["the-code"], "state": [state]}
+    assert parked_code(api, state) == ("the-code",)

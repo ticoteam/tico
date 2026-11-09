@@ -155,12 +155,25 @@ CREATE TABLE IF NOT EXISTS github_app(
  account_type TEXT NOT NULL DEFAULT 'Organization');
 CREATE TABLE IF NOT EXISTS github_app_states(
  nonce TEXT PRIMARY KEY, actor TEXT NOT NULL, org TEXT NOT NULL, administration INTEGER NOT NULL,
- created_at REAL NOT NULL, account_type TEXT NOT NULL DEFAULT 'Organization');
+ created_at REAL NOT NULL, account_type TEXT NOT NULL DEFAULT 'Organization', code TEXT, returned_at REAL);
 """
 # GitHub's account types. `org` holds the account's login for either: for a personal account the App lives under the
 # user's settings, not an organization's.
 ORGANIZATION, PERSONAL = "Organization", "User"
 ACCOUNT_TYPES = (ORGANIZATION, PERSONAL)
+
+
+def _sign_in_path(auth):
+    """The built-in sign-in page for the proxy this server signs people in with, or None when there is none to return from
+    (the same paths the sign-in refusal names, backend/auth.py)."""
+    proxy = getattr(auth, "proxy", None)
+    if proxy is None:
+        return None
+    if proxy.name == "oidc":
+        return proxy.sign_in_path
+    if proxy.name == "owner-link":
+        return "/auth/owner-link"
+    return None
 
 
 def account_kind(row):
@@ -176,6 +189,11 @@ def account_word(row):
 # The install link is Tico's own route: it mints the single-use state the install's return must carry, then sends
 # the owner on to GitHub's install page.
 INSTALL_PATH = "/api/v2/github/app/install"
+# GitHub's redirect after the owner clicks Create on the App's manifest page. The browser of that redirect may hold no
+# owner session (the agent holds the API token), so the route is reachable without one: it parks the code and the owner's
+# agent finishes the setup (`finish`). The middleware lets it through without a session (backend/app.py request_guard).
+CALLBACK_PATH = "/api/v2/github/app/callback"
+FINISH_PATH = "/api/v2/github/app/finish"
 
 
 def links(row):
@@ -1896,38 +1914,91 @@ def install_github_app(app, settings, store):
             )
         return f"https://github.com/apps/{quote(str(slug), safe='')}/installations/new?" + urlencode({"state": nonce})
 
-    @app.get("/api/v2/github/app/callback")
-    def callback(request: Request, code: str = "", state: str = ""):
-        who = owner(request)
-        with store.transaction() as c:
-            row = c.execute("SELECT * FROM github_app_states WHERE nonce=?", (state,)).fetchone()
-            # Single use, and only in the session that started it.
-            if row:
-                c.execute("DELETE FROM github_app_states WHERE nonce=?", (state,))
-        if (
-            not row
-            or row["actor"] != who.actor
-            or time.time() - row["created_at"] > STATE_TTL
-            or not secrets.compare_digest(row["nonce"], state)
-        ):
-            raise Problem(
-                "github_state", "This GitHub setup link is not valid or has expired; start again from Tools", 400
-            )
-        if not code:
-            raise Problem("github_exchange", "GitHub did not send a setup code", 400)
+    def exchange_and_save(actor, row, code):
+        """The App's conversion: GitHub's code becomes the App's secrets, and the connect is recorded. Returns the conversion."""
         conversion = service.exchange(code)
         with store.transaction() as c:
-            service.save(c, who.actor, row["org"], row["administration"], conversion, row["account_type"])
+            service.save(c, actor, row["org"], row["administration"], conversion, row["account_type"])
             saved = service.row(c)
             H.event(
                 c,
-                who.actor,
+                actor,
                 "github.app_connected",
                 conversion["slug"],
                 {"org": saved["org"], "account_type": saved["account_type"], "app_id": conversion["id"]},
             )
+        return conversion
+
+    def live_state(c, state):
+        """The unexpired setup row for this state, or None: a state Tico made, not yet used."""
+        row = c.execute("SELECT * FROM github_app_states WHERE nonce=?", (state,)).fetchone()
+        if not row or time.time() - row["created_at"] > STATE_TTL or not secrets.compare_digest(row["nonce"], state):
+            return None
+        return row
+
+    def invalid_state():
+        return Problem(
+            "github_state", "This GitHub setup link is not valid or has expired; start again from Tools", 400
+        )
+
+    def park(request, code, state):
+        """GitHub's return with no owner session of this state: the code is kept on the state's row, unexchanged, for the
+        owner to finish. The first code parked wins. The state is not used up here: `finish` takes it."""
+        with store.transaction() as c:
+            row = live_state(c, state)
+            if not row:
+                raise invalid_state()
+            if not code:
+                raise Problem("github_exchange", "GitHub did not send a setup code", 400)
+            c.execute(
+                "UPDATE github_app_states SET code=?, returned_at=? WHERE nonce=? AND (code IS NULL OR code='')",
+                (code, time.time(), state),
+            )
+        if "text/html" in request.headers.get("accept", ""):
+            sign_in = _sign_in_path(getattr(app.state, "auth", None))
+            if sign_in:
+                # The sign-in comes back to this same return, which the owner's session then finishes.
+                back = CALLBACK_PATH + "?" + urlencode({"code": code, "state": state})
+                return RedirectResponse(sign_in + "?" + urlencode({"next": back}), status_code=302)
+            return RedirectResponse("/#/tools/github?github=finish", status_code=302)
+        return {"parked": True, "finish": FINISH_PATH}
+
+    @app.get(CALLBACK_PATH)
+    def callback(request: Request, code: str = "", state: str = ""):
+        who = getattr(request.state, "identity", None)
+        with store.transaction() as c:
+            row = c.execute("SELECT * FROM github_app_states WHERE nonce=?", (state,)).fetchone()
+            mine = row is not None and who is not None and who.role == "owner" and row["actor"] == who.actor
+            # Single use, and only in the session that started it.
+            if mine:
+                c.execute("DELETE FROM github_app_states WHERE nonce=?", (state,))
+        if who is None or row is None or not mine:
+            return park(request, code, state)
+        if time.time() - row["created_at"] > STATE_TTL or not secrets.compare_digest(row["nonce"], state):
+            raise invalid_state()
+        if not code:
+            raise Problem("github_exchange", "GitHub did not send a setup code", 400)
+        conversion = exchange_and_save(who.actor, row, code)
         # The install's return to the authorize callback carries this state back; the callback takes only a state Tico made.
         return RedirectResponse(install_page(who.actor, conversion["slug"]), status_code=302)
+
+    class FinishBody(BaseModel):
+        state: str = Field("", max_length=200)
+
+    @app.post(FINISH_PATH)
+    def finish(request: Request, body: FinishBody):
+        """The owner's agent finishes a setup GitHub returned with no owner session: the parked code is exchanged here,
+        once, for the owner. Returns the install page, as the callback's redirect would."""
+        who = owner(request)
+        with store.transaction() as c:
+            row = live_state(c, body.state)
+            if not row or row["actor"] != who.actor:
+                raise invalid_state()
+            if not row["code"]:
+                raise Problem("github_not_returned", "GitHub has not sent this setup back yet", 409)
+            c.execute("DELETE FROM github_app_states WHERE nonce=?", (body.state,))
+        conversion = exchange_and_save(who.actor, row, row["code"])
+        return {"install_url": install_page(who.actor, conversion["slug"])}
 
     @app.get("/api/v2/github/app/authorize-link")
     def authorize_link(request: Request):

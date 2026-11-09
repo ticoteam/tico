@@ -107,6 +107,26 @@ repositories and connect that one. "All repositories" then covers only what bots
 mistake in a token's scope cannot expose the rest. The app itself can reach whatever it is installed on;
 the per-bot limit is enforced by Tico when it asks GitHub for a token.
 
+### Connecting from an agent
+
+An owner's agent can run the same setup through the API with the owner's token. It needs one browser step, the owner's
+click on GitHub's **Create** button, and the code GitHub returns is kept until the agent finishes:
+
+1. `GET /api/v2/github/app/manifest?org=<account>` returns `manifest`, `action` and a single-use `state`. Post the
+   manifest to `action` from a browser (a form with a `manifest` field), and the owner clicks **Create**.
+2. GitHub sends the browser to `/api/v2/github/app/callback`. Without an owner session there, Tico keeps the code on
+   that state and does not exchange it. A browser is sent to the sign-in page (where the proxy has one) and back to the same return, which an owner
+   session then finishes itself, or to Tools; any other caller gets `{"parked": true, "finish": "/api/v2/github/app/finish"}`.
+3. The agent calls `POST /api/v2/github/app/finish` with `{"state": "<state>"}`. Tico exchanges the parked code once for
+   the owner and returns `{"install_url": ...}`. Before GitHub has returned, the answer is `409 github_not_returned`;
+   a used, expired or another person's state is `400 github_state`.
+4. The owner opens `install_url` and chooses the repositories. After the install click, the agent can call
+   `GET /api/v2/github/app/installed` with the owner's token to record the install; the same call answers the install's
+   return in a browser.
+
+The state is still single use and bound to the owner who asked for it, and finishing needs that owner's token as well. The
+callback without a session only parks a code; it never exchanges one.
+
 Bots' repositories must live in the connected account or organization. A bare repository name is completed by
 `TICO_GITHUB_OWNER`, then by the connected account or organization.
 
