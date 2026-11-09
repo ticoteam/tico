@@ -13,7 +13,7 @@ type HeartbeatView = import('../types/api').HeartbeatView;
 type HeartbeatBeat = import('../types/api').HeartbeatBeat;
 type HeartbeatStep = import('../types/api').HeartbeatStep;
 type HeartbeatBeatStep = HeartbeatBeat['steps'][number];
-type AutomationRow = import('../types/api').Automation;
+type AutomationRow = AuRow;
 // A list row the page builds: the list's own flags (builtin, readonly) are not in api.d.ts.
 type ListRow = AutomationRow & {builtin: boolean; readonly: boolean; description: string};
 type SystemRoutineSaved = import('../types/api').SystemRoutineSaved;
@@ -62,7 +62,7 @@ function auHeartAdopt(state: AutomationsState, h: HeartbeatView): void {
 function auHeartDrawHead(): void {
   const sel = document.activeElement?.closest?.('[data-hb-interval]');
   const meta = sel && document.querySelector('[data-hb-meta]');
-  if (meta && AU.heart) meta.textContent = auHeartMeta(AU.heart);
+  if (meta && auIs(AU, 'the Automations page') && AU.heart) meta.textContent = auHeartMeta(AU.heart);
   else auDrawHead();
 }
 async function auHeartLoad(state: AutomationsState): Promise<void> {
@@ -99,13 +99,14 @@ const auHeartMeta = (h: HeartbeatView): string => [h.last_beat_at ? 'Last beat '
 const auHeartMs = (ms: number | null | undefined): string => ms == null ? '' : Number(ms) < 1000 ? `${Number(ms)} ms` : `${(Number(ms) / 1000).toFixed(1)} s`;
 
 function auHeartHead(hd: HTMLElement): void {
+  auHave(AU);
   const h = AU.heart;
   if (!h) { hd.innerHTML = '<h2 class="au-name">Heartbeat</h2>'; return; }
   const off = !h.can_change || AU.hbBusy, cur = Number(h.interval_s);
   const opts = [...new Set([...AU_HEART_INTERVALS, cur])].sort((x, y) => x - y)
     .map(v => `<option value="${v}"${v === cur ? ' selected' : ''}>${v} s</option>`).join('');
   const meta = auHeartMeta(h);
-  const seg = ['flow', 'runs'].map(v => `<a role="tab" href="${auHref(AU_HEART, v)}" aria-selected="${AU.view === v}">${v === 'flow' ? 'Steps' : 'Log'}</a>`).join('');
+  const seg = ['flow', 'runs'].map(v => `<a role="tab" href="${auHref(AU_HEART, v)}" aria-selected="${auPage().view === v}">${v === 'flow' ? 'Steps' : 'Log'}</a>`).join('');
   hd.innerHTML = `<h2 class="au-name">Heartbeat</h2>
     <span class="mt-set hb-every"><label class="mt-lb" for="hb-interval">Every</label>
       <select id="hb-interval" data-hb-interval${off ? ' disabled' : ''}>${opts}</select></span>
@@ -118,6 +119,7 @@ function auHeartHead(hd: HTMLElement): void {
 }
 
 function auHeartPane(pane: HTMLElement): void {
+  auHave(AU);
   const h = AU.heart;
   if (!h) { pane.innerHTML = AU.heartError ? `<p class="err au-pad">${esc(AU.heartError)}</p>` : '<p class="muted au-pad">Loading…</p>'; return; }
   // A redraw keeps the place; Steps and Log each open at the top.
@@ -139,7 +141,7 @@ function auHeartStepsHTML(h: HeartbeatView): string {
 }
 
 function auHeartStepHTML(s: HeartbeatStep): string {
-  const on = s.on !== false, off = !s.can_change || AU.hbBusy;
+  const on = s.on !== false, off = !s.can_change || auNeed(AU, 'the Automations page').hbBusy;
   const last = s.last_run_at ? `<span title="${esc(fmt(s.last_run_at))}">${esc(auRunTime(s.last_run_at))}</span>` : 'Not run yet';
   const result = s.last_result ? ' · ' + esc(s.last_result) : '';
   // The last error is red only while the latest run failed; after a good run it stays, muted, with its time.
@@ -165,6 +167,7 @@ function auHeartStepHTML(s: HeartbeatStep): string {
 }
 
 function auHeartLogHTML(): string {
+  auHave(AU);
   const r: AuRunList<HeartbeatBeat> | null = AU.hbLog;
   if (!r) return '<p class="muted au-pad">Loading…</p>';
   if (r.error && !r.rows.length) return `<p class="err au-pad">${esc(r.error)}</p>`;
@@ -235,6 +238,7 @@ const auHeartSwitch = (key: string, on: boolean) => auHeartWrite(async state => 
 
 // -------------------------------------------------------------------------------------------- events
 function auHeartClick(t: Element): boolean {
+  auHave(AU);
   if (AU.id !== AU_HEART) return false;
   if (t.closest('a[href]')) return false;   // the tabs are links
   const beat = t.closest<HTMLElement>('tr[data-hb-beat]');
