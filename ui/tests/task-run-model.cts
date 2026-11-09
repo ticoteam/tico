@@ -12,7 +12,6 @@ declare const S: {emps: {name: string; revision: number}[]; route: string; me?: 
 
 declare global {
   var TASK_RUN_ROWS: unknown[] | null;
-  var taskModalShow: (task: {id: string; title: string}) => unknown;
 }
 const SHOTS = process.env.TICO_UI_SHOTS || '';
 const launch = () => chromium.launch({headless: true, channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined} as import('playwright').LaunchOptions);

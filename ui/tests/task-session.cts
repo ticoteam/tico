@@ -18,7 +18,6 @@ declare const S: {emps?: unknown[]};
 declare global {
   var TASK_CHAT: {sending: boolean; reading: boolean};
   var taskChatRead: (chat: {sending: boolean; reading: boolean}) => unknown;
-  var taskModalShow: (task: {id: string; title: string}) => unknown;
   var SEND_WAY_TIMER: number | null;
   var liveThrottle: (key: string, fn: () => unknown, ms: number) => unknown;
   var sendWayPick: (way: string) => unknown;

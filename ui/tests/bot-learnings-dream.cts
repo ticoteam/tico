@@ -58,7 +58,7 @@ const QUESTIONS = 'Two things only you can settle.\n1. Should weekly reports go 
     await page.setContent('<button id="bot-learn" class="bot-learn"><span class="bl-n"></span></button><div id="bot-dream-host"></div>');
     await page.addStyleTag({path: path.join(__dirname, '../styles/bot-learnings.css')});
     await page.evaluate(questions => {
-      window.$ = (selector, root = document) => root.querySelector(selector);
+      Object.assign(window, {$: (selector: string, root: ParentNode = document) => root.querySelector(selector)});
       window.esc = value => String(value).replace(/[&<>"']/g, ch => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'} as Record<string, string>)[ch]!);
       window.md = text => `<p>${esc(text)}</p>`;
       window.ago = () => 'today';
