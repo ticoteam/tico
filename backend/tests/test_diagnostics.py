@@ -222,6 +222,15 @@ def test_browser_capture_never_accepts_messages_or_private_filenames(environment
     assert api.post(url, headers=signed_in(), json={"browser": [event] * 21}).status_code == 422
 
 
+def test_browser_capture_names_the_service_worker_script(environment):
+    # ui/sw.ts is served at the root as /sw.js: an error located in the worker carries that name, not a blank.
+    api = environment()
+    event = {"kind": "error", "at": "2026-10-02T12:00:00Z", "file": "sw.js", "line": 7, "count": 1}
+    r = api.post("/api/v2/support/diagnostics/capture", headers=signed_in(), json={"browser": [event]})
+    assert r.status_code == 200, r.text
+    assert json.loads(r.json()["text"])["browser"][0]["file"] == "sw.js"
+
+
 def test_the_desktop_apps_log_is_labelled_and_redacted(environment):
     api = environment()
     url = "/api/v2/support/diagnostics/capture"
