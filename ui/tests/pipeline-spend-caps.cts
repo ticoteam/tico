@@ -103,14 +103,19 @@ async function ownerSetsCaps(browser: import('playwright').Browser) {
   assert.equal(await daily.inputValue(), '5', 'the editor redraws the saved cap');
   assert.equal(await page.locator('[data-pe-caps] .use-meter').count(), 1, 'a set cap shows its bar');
 
+  // Zero, a negative number and text (typed as "1e", which a number field keeps as a bad entry) are each refused: the message
+  // shows, nothing is sent, the stored cap stays, and the field redraws the stored value.
   const before = writes.length;
-  for (const raw of ['0', '-3']) {
-    await daily.fill(raw);
+  for (const raw of ['0', '-3', '1e']) {
+    await daily.fill('');
+    await daily.pressSequentially(raw);
+    if (raw === '1e') assert.equal(await daily.evaluate(el => (el as HTMLInputElement).validity.badInput), true, 'text is a bad entry');
     await daily.press('Enter');
     await settled(page);
     assert.ok(await page.getByText(MESSAGE).count() >= 1, `${raw} is refused with the one message`);
     assert.equal(writes.length, before, `${raw} sends nothing`);
     assert.equal(spend.daily_cap_usd, 5, `${raw} leaves the stored cap as it was`);
+    assert.equal(await daily.inputValue(), '5', `${raw} redraws the stored cap`);
   }
 
   // A2: the saved cap is on the pipeline's page, beside today's spend.
