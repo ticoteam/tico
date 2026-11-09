@@ -61,7 +61,7 @@ async function open(browser, {phone = false} = {}) {
   return {page, errors};
 }
 
-// A message row, or the gray line a row the server wrote is (the request: ui/app/hub-v2.js rowSource).
+// A message row, or the gray line a row the server wrote is (the request: ui/app/hub-v2.ts rowSource).
 const row = (page, id) => page.locator(`:is(.th-msg, .th-line)[data-mid="${id}"]`);
 const line = page => page.locator('.th-upd-btn');
 // The messages inside the panel a line controls, in order.

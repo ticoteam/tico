@@ -527,7 +527,7 @@ function taskChatLive(state) {
   }, 200);
 }
 function taskChatCurrent(state) { return TASK_CHAT === state && state.dialog.open; }
-const commentAuthor = (a, via, src = null) => {
+const commentAuthor = (a, via, src: RowSource | null = null) => {
   if (a === 'external:roadmap') return '<span class="who">Visitor</span>';
   // The Assistant passing on a person's words reads as "Ana's Assistant"; the server itself is named by what made the row.
   if (src?.kind === 'assistant_for') return `${avatar(assistantBot(), 16)}<span class="who">${esc(src.name)}</span>`;
@@ -865,7 +865,7 @@ function taskCommentsRender(state, data, sent = '') {
   // The run answering the thread; otherwise the bot's next run on this task, when it is queued: what it waits for.
   const live = taskLiveHTML(data.execution, state.stopping, sent);
   const wait = live || !data.waiting_for ? live : `<p class="muted task-wait" role="status">${esc(data.waiting_for)}</p>`;
-  // Two or more task updates in a row are one "N task updates" row, shut until opened (ui/app/hub-v2.js sourceRunsHTML).
+  // Two or more task updates in a row are one "N task updates" row, shut until opened (ui/app/hub-v2.ts sourceRunsHTML).
   const said = lines.filter(x => x.kind !== 'event' || commentLineHTML(x, 0, lines, files, state.id, can));
   const isUpdate = x => x.kind !== 'event' && !!x.message && !askOf(x.message) && isSourceLine(x.message) && rowSource(x.message).kind === 'task_update';
   state.openLines ||= new Set();

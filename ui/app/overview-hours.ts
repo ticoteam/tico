@@ -5,6 +5,25 @@
 // Totals from GET /api/v2/overview/bot-hours (backend/bot_hours.py): the last 7 days and one row a week, Monday to
 // Sunday in the company's time zone. The server keeps the answer a minute; the card asks again at most every 5.
 const HOURS_EVERY = 5 * 60e3;
+/** One week's totals (`weeks`), or the last 7 days' (`last_7_days`, `full` once it covers whole days). */
+interface HoursWeek {
+  week?: string;
+  so_far?: boolean;
+  bot_hours?: number;
+  human_hours?: number;
+  people?: number;
+  ratio?: number | null;
+  full?: boolean;
+}
+interface OverviewHours {
+  first_run?: unknown;
+  people?: number;
+  last_7_days?: HoursWeek;
+  weeks?: HoursWeek[];
+  gap_minutes?: number;
+  hours_per_person?: number;
+  zone?: string;
+}
 const hoursTimes = r => `${r < 10 ? r.toFixed(1) : Math.round(r)}×`;
 const hoursNum = h => h < 10 ? String(Math.round(h * 10) / 10) : Math.round(h).toLocaleString();
 const hoursWeek = day => new Date(day + 'T12:00:00').toLocaleDateString(undefined, {month: 'short', day: 'numeric'});
@@ -64,7 +83,7 @@ function overviewHoursDraw() {
     el.innerHTML = '<span class="ovh-title">Bot hours vs human hours</span><p class="ovh-head" aria-hidden="true">&nbsp;</p>';
     return;
   }
-  const last = d.last_7_days || {}, weeks = (d.weeks || []).filter(w => w.ratio != null);
+  const last: HoursWeek = d.last_7_days || {}, weeks = (d.weeks || []).filter(w => w.ratio != null);
   let body, plot = false;
   if (!d.first_run) {
     body = `<p class="ovh-head">No bot work yet</p><p class="ovh-note"><a href="#/settings" data-ovh-bots>Bots</a></p>`;

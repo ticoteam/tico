@@ -1,6 +1,19 @@
 /* The campus receives only visible identities, readable assignments and read-permitted status. */
 'use strict';
-/** @type {any} bridged: ui/app/refresh.ts reads it on every live change; typed when this file converts */ let OVERVIEW_PAGE = null;
+/** The open Overview page (pageOverview): its campus frame, what it last sent there, and the cards it reads. */
+interface OverviewPage {
+  frame: HTMLIFrameElement;
+  abort: AbortController;
+  ready: boolean;
+  computers: { id: string; label: string; revoked_at: string | null }[];
+  loadingComputers: boolean;
+  model?: ReturnType<typeof overviewModel>;
+  sent?: string;
+  hours?: OverviewHours | undefined;
+  hoursAt?: number;
+  hoursLoading?: boolean;
+}
+let OVERVIEW_PAGE: OverviewPage | null = null;     // ui/app/refresh.ts reads it on every live change
 function overviewModel() {
   const groups = [], machines = new Map(), humans = new Map(), placed = new Set();
   const fresh = S.overviewRosterFresh !== false && S.status !== null && S.v2.on;

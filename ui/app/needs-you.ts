@@ -23,7 +23,7 @@ function needsIndex() {
 }
 const needsItem = id => needsIndex().byId.get(String(id))?.it || null;
 const needsFolded = id => needsIndex().folded.has(String(id));
-// The next page of Needs you (hub-v2.js v2NeedsMore), then everything drawn from it. A list that holds only some pages
+// The next page of Needs you (hub-v2.ts v2NeedsMore), then everything drawn from it. A list that holds only some pages
 // ends in Show more; on the Tasks page it also loads as it scrolls into view.
 const needsMoreButton = () => needsAll() ? '' : '<button class="ghost tl-more" type="button" data-needs-page>Show more</button>';
 async function needsMoreShow() {
@@ -370,7 +370,7 @@ async function staleDecide(button, path, body) {
     const refused = out.refused || [];
     if (refused.length) needsSay(`${refused.length} not changed: ${refused[0].reason}`, true);
     else needsSay(out.accepted ? `Accepted ${out.accepted.length}` : out.outcome === 'skipped' ? 'Skipped' : 'Accepted');
-    await v2Refresh(); await refresh(true);      // the open card follows (hub-v2.js v2Refresh)
+    await v2Refresh(); await refresh(true);      // the open card follows (hub-v2.ts v2Refresh)
     needsListsRedraw();
   } catch (e) { needsSay(e.message, true); }
   finally {
@@ -425,7 +425,7 @@ document.addEventListener('click', ev => {
 // Browser notifications for new thread items, while the page is in the background, when the person turned them on
 // (their Notifications card, person-page.js). The ids already notified are kept per person (their id, from /api/me) in
 // localStorage, so a reload does not repeat them; the first read after a fresh start records what is listed without
-// notifying. Both reads of the list call this (hub-v2.js after a refresh, refresh.js after a live change), and the calls
+// notifying. Both reads of the list call this (hub-v2.ts after a refresh, refresh.js after a live change), and the calls
 // run one after another, so they share one memory and an item is notified once.
 let notifyQueue = Promise.resolve();
 function notifyNewThreadNeeds(items) {

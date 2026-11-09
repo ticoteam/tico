@@ -546,7 +546,7 @@ function decidePaintBody(st: DecState) {
   if (body.dataset.html !== html) body.innerHTML = body.dataset.html = html;
   if (c.type === 'task' || c.type === 'pick') decideAskRead(c.it);   // an option card reads its question too
 }
-// Showing a question on its card reads it, through its task (hub-v2.js taskAsksRead).
+// Showing a question on its card reads it, through its task (hub-v2.ts taskAsksRead).
 function decideAskRead(it: DecItem) {
   const ask = it?.ask as NonNullable<DecItem["ask"]>;
   if (!askToMe(ask) || ask.read_at || ask.question_task) return;   // a question task has no message to read

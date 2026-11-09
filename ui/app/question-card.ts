@@ -227,7 +227,7 @@ function qcardBoxHTML(t) {
   stale.forEach(k => QC_DRAFTS.delete(k));
   const ticked = draft ? new Set(draft.ticked) : qcardRecommended(q), files = TF_CACHE.get(String(t.id));
   return `<section class="task-ask qcard" data-qcard="${esc(it.id)}" data-qc-key="${esc(key)}" aria-label="Needs you">
-    <div class="qc-head"><span class="lbl">Needs you</span> <b class="qc-who">${esc(qcardAsker(it.ask.sender_id))}</b><span class="qc-sub"> · ${esc(qcardSub(it))}</span></div>
+    <div class="qc-head"><span class="lbl">Needs you</span> <b class="qc-who">${esc(qcardAsker(it.ask!.sender_id))}</b><span class="qc-sub"> · ${esc(qcardSub(it))}</span></div>
     ${stale.length ? '<p class="qc-changed muted">The question changed, so your earlier ticks and note were cleared.</p>' : ''}
     ${qcardBodyHTML(it, q, {attr: 'qc', ticked, pic: o => qcardPicture(files, o)})}
     <div class="qc-actions">${qcardActionsHTML(it, q, {attr: 'qc', ticked})}</div>

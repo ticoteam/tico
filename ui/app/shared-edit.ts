@@ -40,7 +40,7 @@ async function sharedDraftSave(draft, options) {
   if (!draft.error && Object.keys(draft.patch).length && !draft.sending) return sharedDraftSave(draft, options);
   await options.settled?.();
 }
-const sharedEdited = (actor, name = actorLabel) => actor ? `${name(actor)} edited · just now` : '';
+const sharedEdited = (actor, name: (actor: string) => string = actorLabel) => actor ? `${name(actor)} edited · just now` : '';
 
 function sharedPlaceStop(state) {
   const shared = state.shared;
