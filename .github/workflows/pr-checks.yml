@@ -130,6 +130,14 @@ jobs:
       # (a migration timestamp, a route one removes and the other calls, a lint rule one turns on). The group runs every
       # static check on it here (scripts/ci/merge_commit_checks.sh), beside the test selection (which uses one core),
       # rather than on a static checks VM. The step after the selection reports the result.
+      # shellcheck and actionlint come from GitHub release downloads, which return 504 now and then; a cached copy (keyed on
+      # the pinned versions and hashes in scripts/pinned_tool.sh) skips the download.
+      - name: Cache pinned tools
+        if: github.event_name == 'merge_group'
+        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        with:
+          path: ~/.cache/tico/tools
+          key: pinned-tools-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/pinned_tool.sh') }}
       - name: Start the merge commit checks
         if: github.event_name == 'merge_group'
         env:
@@ -386,6 +394,13 @@ jobs:
         run: '"$RUNNER_TEMP/venv/bin/python" scripts/check_ui_source_suffixes.py'
       - name: Runner wire contract
         run: '"$RUNNER_TEMP/venv/bin/python" scripts/check_wire_contract.py'
+      # shellcheck and actionlint come from GitHub release downloads, which return 504 now and then; a cached copy (keyed on
+      # the pinned versions and hashes in scripts/pinned_tool.sh) skips the download.
+      - name: Cache pinned tools
+        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        with:
+          path: ~/.cache/tico/tools
+          key: pinned-tools-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/pinned_tool.sh') }}
       - name: Shell scripts (shellcheck, pinned)
         run: bash scripts/shell_lint.sh
       - name: Workflows (actionlint, pinned)
