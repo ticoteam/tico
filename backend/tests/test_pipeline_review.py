@@ -54,8 +54,11 @@ class World:
         self.path = path
         if conn is None:
             path.parent.mkdir(parents=True, exist_ok=True)
-            with closing(sqlite3.connect(BOOTED["path"])) as source, closing(sqlite3.connect(path)) as target:
-                source.backup(target)
+            if "path" in BOOTED:  # this module's one boot; another module importing World boots its own
+                with closing(sqlite3.connect(BOOTED["path"])) as source, closing(sqlite3.connect(path)) as target:
+                    source.backup(target)
+            else:
+                Store(Settings(db_path=path, registry_dir=FIXTURES / "registry")).initialize(seed_market=False)
             conn = H.connect(path)
         self.c = conn
         H.sync_registry(
