@@ -1956,3 +1956,34 @@ def test_an_idle_dev_ticket_on_ice_is_kept_not_stuck(environment):
         c.execute("UPDATE jobs SET state='completed' WHERE state='queued'")
     check = health_of(api)[1]["dev_board_idle"]
     assert [item["task"] for item in check["items"]] == [idle["id"]]
+
+
+def test_github_is_a_note_until_a_bot_someone_made_is_backed_up_nowhere_then_clears_once_connected(environment):
+    """The built-in bots come with every install, so a team with only them is told GitHub is optional. A bot someone
+    made keeps its files and memory on a computer, so the missing backup is a warning with the one fix, and it clears
+    once the App is connected and installed."""
+    api = environment()
+    assert health_of(api)[1]["github"]["status"] == "info"
+    add_bot(api, H.COUNSEL)  # built in, added once a computer enrolls: not a bot the company made
+    assert health_of(api)[1]["github"]["status"] == "info"
+    add_bot(api, "helper")
+    check = health_of(api)[1]["github"]
+    assert check["status"] == "warn"
+    assert [fix["href"] for fix in check["fixes"]] == ["#/tools/github"]
+    state = api.app.state
+    with state.store.transaction() as c:
+        state.github_app.save(
+            c,
+            "human:ana",
+            "Acme",
+            True,
+            {
+                "id": 7,
+                "slug": "acme-tico",
+                "client_id": "Iv1.synthetic",
+                "pem": "synthetic-pem",
+                "webhook_secret": "whsec-synthetic",
+            },
+        )
+        c.execute("UPDATE github_app SET installation_id=77")
+    assert health_of(api)[1]["github"]["status"] == "ok"

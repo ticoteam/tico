@@ -1,0 +1,7 @@
+{
+  "backend/diagnostics.py": {
+    "BLE001": 3,
+    "F401": 1,
+    "S110": 1
+  }
+}
