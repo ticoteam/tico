@@ -11,7 +11,7 @@ const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const {html, uiFile} = require('./support/page.cjs');
+const {html, isUiPath, serveUi} = require('./support/page.cjs');
 const {unrouted} = require('./support/routes.cjs');
 
 const stamp = '2026-11-08T09:00:00Z';
@@ -68,11 +68,7 @@ async function open(browser: Browser, opts: {live?: boolean; snoozed?: string[]}
     const json = (body: unknown, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
     if (url.origin !== 'https://tico-ui.test') return route.abort();
     if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
-    if (p.startsWith('/tico/ui/')) {
-      const name = p.slice('/tico/ui/'.length), file = uiFile(name);
-      if (fs.existsSync(file)) return route.fulfill({body: fs.readFileSync(file), contentType: name.endsWith('.css') ? 'text/css' : name.endsWith('.js') ? 'application/javascript' : 'application/octet-stream'});
-    }
-    if (p.startsWith('/vendor/fonts/') && fs.existsSync(uiFile(p.slice(1)))) return route.fulfill({contentType: 'font/woff2', body: fs.readFileSync(uiFile(p.slice(1)))});
+    if (isUiPath(p)) return serveUi(route, p);
     if (p.endsWith('.js')) return route.fulfill({contentType: 'application/javascript', body: ''});
     const body = (method === 'GET' ? null : req.postDataJSON()) as Body;
     if (method !== 'GET') writes.push({method, p, body});

@@ -182,6 +182,7 @@ function peGoalHTML(state: PeState): string {
   return `<label class="pe-f"><span>Goal</span><input name="goal" maxlength="200" value="${esc(s.goal ?? '')}" data-pe-setting="goal" autocomplete="off"></label>
       <label class="pe-f"><span>Judge</span><select data-pe-setting="judge_model">${peOptions(judges, s.judge_model ?? s.default_judge_model)}</select></label>
       ${state.factories ? `<label class="pe-f"><span>Factory</span><select data-pe-setting="factory_id"${isPrivate ? ' disabled' : ''}>${peWho(factories, s.factory_id, 'None')}</select></label>` : ''}
+      ${peStuckHTML(s)}
       <label class="pe-check"><input type="checkbox" role="switch" data-pe-private${isPrivate ? ' checked' : ''}> Private</label>
       ${members}`;
 }
@@ -208,6 +209,18 @@ function peManagerHTML(state: PeState): string {
   const warn = stale ? `<span class="pe-hint pe-warn-line" data-pe-manager-stale>The saved manager is not an active bot. Pick one.</span>` : '';
   if (!bots.length) return `<select data-pe-setting="manager_id" disabled><option value="">No active bots</option></select>${hint}${warn}`;
   return `<select data-pe-setting="manager_id">${peWho(bots, current ? 'bot:' + current : '', 'Not set')}</select>${hint}${warn}`;
+}
+
+/** The stuck rule's three numbers: empty is the default, shown as the placeholder. */
+const PE_STUCK: [keyof PipelineSettings['stuck_rule_defaults'], string][] = [
+  ['stuck_after_hours', 'Stuck after (h)'],
+  ['ask_person_after_hours', 'Ask a person after (h)'],
+  ['question_expiry_days', 'Questions expire (days)'],
+];
+
+function peStuckHTML(s: PipelineSettings): string {
+  if (!s.stuck_rule_defaults) return '';
+  return PE_STUCK.map(([key, label]) => `<label class="pe-f"><span>${label}</span><input type="number" min="1" step="1" inputmode="numeric" value="${esc(String(s[key] ?? ''))}" placeholder="${esc(String(s.stuck_rule_defaults[key]))}" data-pe-number="${key}" autocomplete="off"></label>`).join('');
 }
 
 function peBodyHTML(state: PeState): string {
@@ -460,6 +473,8 @@ function peWire(dialog: HTMLDialogElement): void {
         void peSaveSettings({members: [...dialog.querySelectorAll<HTMLInputElement>('[data-pe-member]:checked')].map(box => box.value)});
         return;
       }
+      const number = t.dataset['peNumber'];
+      if (number) { const raw = t.value.trim(); void peSaveSettings({[number]: raw === '' ? null : Number(raw)}); return; }
       if (key) void peSetting(key, t.value);
       else if (renamed && PE) {
         const name = t.value.trim();

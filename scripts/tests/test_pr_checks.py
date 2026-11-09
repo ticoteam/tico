@@ -7,6 +7,7 @@ import math
 import os
 from pathlib import Path
 import re
+import shlex
 import subprocess
 import sys
 from types import SimpleNamespace
@@ -15,6 +16,7 @@ import weakref
 import pytest
 import yaml
 
+from backend import test_receipts
 from scripts import flake_quarantine as quarantine
 from scripts import pr_checks as checks
 
@@ -1105,6 +1107,36 @@ def test_a_draft_or_a_fork_runs_no_test_or_sim_leg():
         assert "github.event.pull_request.head.repo.full_name == github.repository" in jobs[name]["if"], name
 
 
+def test_a_draft_starts_no_job_and_marking_it_ready_or_pushing_to_a_ready_pull_request_runs_the_checks():
+    """Builders push a draft freely: no job runs on it. Marking it ready runs the pull request jobs, and so does each
+    later push while it stays ready. `checks` is skipped on a draft, and GitHub never enqueues a draft."""
+    import yaml
+
+    doc = workflow_jobs()
+    assert {"ready_for_review", "synchronize", "opened", "reopened"} <= set(doc[True]["pull_request"]["types"])
+    for name, job in doc["jobs"].items():
+        condition = str(job.get("if", ""))
+        queue_only = "github.event_name == 'merge_group'" in condition and "pull_request" not in condition
+        assert queue_only or "!github.event.pull_request.draft" in condition, name
+    # On a ready pull request nothing but the draft flag holds back the plan, the static checks and the gate. The static
+    # checks run on pull requests only: the merge queue runs them in the plan's merge commit checks.
+    assert doc["jobs"]["plan"]["if"] == "${{ !github.event.pull_request.draft }}"
+    assert (
+        doc["jobs"]["static"]["if"] == "${{ github.event_name == 'pull_request' && !github.event.pull_request.draft }}"
+    )
+    assert doc["jobs"]["checks"]["if"] == "${{ always() && !github.event.pull_request.draft }}"
+    # Every other workflow that runs on a pull request holds its jobs back on a draft too (a push to main still runs).
+    for path in sorted((ROOT / ".github" / "workflows").glob("*.yml")):
+        other = yaml.safe_load(path.read_text())
+        triggers = other.get(True) or other.get("on") or {}
+        if path.name == "pr-checks.yml" or "pull_request" not in triggers:
+            continue
+        assert "ready_for_review" in triggers["pull_request"].get("types", []), path.name
+        for name, job in other["jobs"].items():
+            condition = str(job.get("if", ""))
+            assert "!github.event.pull_request.draft" in condition, f"{path.name}:{name}"
+
+
 def test_a_failed_suite_or_sim_leg_cancels_its_run_and_checks_still_reports():
     jobs = workflow_jobs()["jobs"]
     for name in ("tests", "factory-sim"):
@@ -1856,6 +1888,307 @@ def test_a_queue_group_cancels_older_groups_for_its_pull_request_and_no_pull_req
     assert "cancel-superseded" in step["run"] and "--head-ref" in step["run"] and "--run-number" in step["run"]
     # Pull requests keep their own group, keyed on the number, so no queue group can share it.
     assert doc["concurrency"]["group"] == "pr-checks-${{ github.event.pull_request.number || github.ref }}"
+
+
+# `scripts/pr_checks.py local`: a builder runs the tests the PR checks would select, on its own computer, before it marks
+# a draft ready. Its last line is a receipt the review gate takes for that exact head (backend/test_receipts.py). These
+# live here, not in a file of their own: a test file that imports pr_checks runs on every test file change.
+
+
+LOCAL_PLAN = {
+    "python": ["tests/test_app.py"],
+    "browser": ["chat"],
+    "caddy": False,
+    "contracts": False,
+    "conformance": False,
+    "rust": [],
+    "reason": "measured dependency map",
+    "uncertain": [],
+}
+
+
+def local_git(root, *args):
+    return subprocess.check_output(
+        ["git", "-c", "user.name=t", "-c", "user.email=t@acme.example", *args], cwd=root, text=True
+    ).strip()
+
+
+@pytest.fixture
+def branch(tmp_path, monkeypatch):
+    """A branch with one change on top of main, the selection fixed, and every command recorded instead of run."""
+    local_git(tmp_path, "init", "-q", "-b", "main")
+    (tmp_path / "app.py").write_text("x = 1\n")
+    local_git(tmp_path, "add", "-A")
+    local_git(tmp_path, "commit", "-qm", "Start")
+    local_git(tmp_path, "checkout", "-qb", "feature")
+    (tmp_path / "app.py").write_text("x = 2\n")
+    (tmp_path / "tests").mkdir()
+    (tmp_path / "tests" / "test_app.py").write_text("def test_x(): pass\n")
+    local_git(tmp_path, "add", "-A")
+    local_git(tmp_path, "commit", "-qm", "Change")
+    seen = {}
+
+    def select(changed, event="pull_request", **kwargs):
+        seen.update(changed=changed, event=event, base=kwargs.get("base"))
+        return dict(seen.get("plan", LOCAL_PLAN))
+
+    monkeypatch.setattr(checks, "selection", select)
+    monkeypatch.setattr(checks, "browser_scripts", lambda args, root=None: list(args))
+    monkeypatch.setattr(checks, "factory_reason", lambda changed, call_path=None, root=None: None)
+    monkeypatch.delenv("TICO_HEAVY_REMOTE", raising=False)
+    commands = []
+    answers = {}
+    during = {}  # what happens in the checkout while a command runs
+    envs = []
+
+    def execute(command, **kwargs):
+        commands.append(command)
+        envs.append(kwargs.get("env") or {})
+        for key, act in during.items():
+            if key in " ".join(command):
+                act()
+        key = next((k for k in answers if k in " ".join(command)), None)
+        answer = answers.get(key, (0, ""))
+        # A list answers each call in turn, its last item from then on.
+        code, out = (answer.pop(0) if len(answer) > 1 else answer[0]) if isinstance(answer, list) else answer
+        return SimpleNamespace(returncode=code, stdout=out, stderr="")
+
+    return SimpleNamespace(
+        root=tmp_path,
+        head=local_git(tmp_path, "rev-parse", "HEAD"),
+        seen=seen,
+        commands=commands,
+        answers=answers,
+        during=during,
+        envs=envs,
+        run=lambda **kw: checks.local(base="main", root=tmp_path, execute=execute, **kw),
+    )
+
+
+def pytest_leg(command):
+    """The pytest command and the report check of a Python leg, as heavy.sh is given them: bash -c '<pytest>; ...'."""
+    script = command[command.index("-c") + 1]
+    first, rest = script.split("; code=$?;", 1)
+    return shlex.split(first), shlex.split(rest.split("exec ", 1)[1].split(";", 1)[0])
+
+
+def receipt_line(out):
+    return out.strip().splitlines()[-1]
+
+
+def gate(line, head):
+    """What the review gate reads from this line posted on the owner's ticket."""
+    task = {"id": "t1", "owner_id": "bot:builder", "messages": [{"id": "m1", "sender_id": "bot:builder", "body": line}]}
+    return test_receipts.at_head(task, head)[0]
+
+
+def test_a_local_pass_runs_the_ci_selection_and_prints_a_receipt_the_review_gate_takes_at_that_head(branch, capsys):
+    assert branch.run() == 0
+    # The same selection a pull request's plan makes: the branch's own change, as a pull request event.
+    assert branch.seen["changed"] == ["app.py", "tests/test_app.py"] and branch.seen["event"] == "pull_request"
+    python, browser = branch.commands
+    assert python[2:4] == ["bash", "-c"]
+    test, check = pytest_leg(python)
+    assert test[-1] == "tests/test_app.py" and "pytest" in test and test[test.index("-n") + 1] == "2"
+    assert check[1:3] == ["scripts/pr_checks.py", "junit-ran"]  # a leg whose every test skipped is no pass
+    assert "scripts/ui-tests.cjs" in browser and browser[-1] == "chat"
+    # Heavy local runs share the computer's slots (scripts/heavy.sh), as a bot's full suite does.
+    assert all(c[1].endswith("scripts/heavy.sh") for c in branch.commands)
+    line = receipt_line(capsys.readouterr().out)
+    assert len(branch.head) == 40 and branch.head in line
+    assert test_receipts.recognise(line) == {"head": branch.head, "status": "passed", "text": line}
+    assert gate(line, branch.head) == "passed"
+    assert gate(line, "f" * 40) == "stale"  # a later push needs a new receipt
+
+
+def test_a_local_failure_stops_and_prints_a_failed_receipt_that_blocks_the_head(branch, capsys):
+    branch.answers["pytest"] = (1, "")
+    assert branch.run() == 1
+    assert len(branch.commands) == 1  # the browser scripts never start after a red Python run
+    line = receipt_line(capsys.readouterr().out)
+    assert test_receipts.recognise(line)["status"] == "failed" and gate(line, branch.head) == "failed"
+
+
+def test_a_leg_that_collects_nothing_fails_like_ci(branch, capsys):
+    # pytest exits 5 when it runs no test, such as every module skipping at import; CI's run counts that as red.
+    branch.answers["pytest"] = (5, "")
+    assert branch.run() == 1
+    line = receipt_line(capsys.readouterr().out)
+    assert gate(line, branch.head) == "failed"
+
+
+def test_uncommitted_changes_get_no_receipt_and_run_nothing(branch, capsys):
+    (branch.root / "app.py").write_text("x = 3\n")
+    assert branch.run() == 2
+    out = capsys.readouterr()
+    assert branch.commands == [] and branch.head not in out.out + out.err
+    assert not test_receipts.SHA.search(out.out)
+
+
+def test_an_untracked_file_gets_no_receipt_and_runs_nothing(branch, capsys):
+    # An uncommitted module or fixture could make the tests pass where the named commit fails, whatever git status
+    # is set to show.
+    local_git(branch.root, "config", "status.showUntrackedFiles", "no")
+    (branch.root / "tests" / "helper.py").write_text("x = 1\n")
+    assert branch.run() == 2
+    assert branch.commands == [] and not test_receipts.SHA.search(capsys.readouterr().out)
+
+
+def test_a_commit_or_edit_during_the_run_gets_no_receipt_and_leaves_the_draft_alone(branch, capsys):
+    view = {"number": 7, "headRefOid": branch.head, "isDraft": True, "url": "https://github.com/acme/app/pull/7"}
+    branch.answers["gh pr view"] = (0, json.dumps(view))
+    for change in ("edit", "commit"):
+        branch.commands.clear()
+
+        def during(change=change):
+            (branch.root / "app.py").write_text(f"x = {change!r}\n")
+            if change == "commit":
+                local_git(branch.root, "commit", "-qam", "During the run")
+
+        branch.during["pytest"] = during
+        assert branch.run(ready=True) == 2, change
+        assert not any(c[:3] == ["gh", "pr", "ready"] for c in branch.commands), change
+        assert not test_receipts.SHA.search(capsys.readouterr().out), change
+
+
+def test_a_python_leg_that_runs_no_test_is_no_pass(tmp_path, monkeypatch):
+    # As CI's run(): a leg whose every test skipped proves nothing. The check runs inside the leg's own command, so it
+    # holds on a RunsOn VM too, where the report is written.
+    report = tmp_path / "local-python.xml"
+    assert not checks.junit_ran(report)
+    report.write_text(
+        '<testsuite><testcase name="a"><skipped/></testcase><testcase name="b"><skipped/></testcase></testsuite>'
+    )
+    assert not checks.junit_ran(report)
+    monkeypatch.setattr("sys.argv", ["pr_checks.py", "junit-ran", str(report)])
+    assert checks.main() == 1
+    report.write_text('<testsuite><testcase name="a"><skipped/></testcase><testcase name="b"/></testsuite>')
+    assert checks.junit_ran(report)
+    monkeypatch.setattr("sys.argv", ["pr_checks.py", "junit-ran", str(report)])
+    assert checks.main() == 0
+
+
+def test_a_leg_passes_only_when_pytest_passed_and_a_test_ran_and_keeps_pytests_own_code(tmp_path):
+    # A stand-in interpreter answers pytest with $PYTEST and the report check with $CHECK.
+    python = tmp_path / "python"
+    python.write_text(
+        '#!/bin/sh\ncase "$*" in *"-m pytest"*) exit "$PYTEST" ;; *junit-ran*) exit "$CHECK" ;; esac\nexit 9\n'
+    )
+    python.chmod(0o755)
+    leg = checks.pytest_leg(str(python), 2, "python", ["tests/test_app.py"])
+    for pytest_code, check_code, expected in ((0, 0, 0), (0, 1, 1), (1, 0, 1), (5, 0, 5), (5, 1, 5)):
+        env = {**os.environ, "PYTEST": str(pytest_code), "CHECK": str(check_code)}
+        assert subprocess.run(leg, cwd=tmp_path, env=env).returncode == expected, (pytest_code, check_code)
+
+
+def test_an_inherited_pytest_addopts_never_reaches_the_selected_run(branch, monkeypatch):
+    monkeypatch.setenv("PYTEST_ADDOPTS", "-k nothing")
+    assert branch.run() == 0
+    assert branch.envs[0] and "PYTEST_ADDOPTS" not in branch.envs[0]
+
+
+def test_what_ci_alone_runs_is_named_and_the_receipt_still_passes(branch, monkeypatch, capsys):
+    branch.seen["plan"] = {**LOCAL_PLAN, "conformance": True, "rust": ["runner-rs"], "browser": []}
+    monkeypatch.setattr(checks, "factory_reason", lambda changed, call_path=None, root=None: "the sim runs app.py")
+    assert branch.run() == 0
+    assert len(branch.commands) == 1  # no browser scripts were selected
+    line = receipt_line(capsys.readouterr().out)
+    assert "conformance" in line and "factory simulation" in line
+    assert gate(line, branch.head) == "passed"
+
+
+def test_contract_tests_run_as_the_pull_request_runs_them(branch):
+    branch.seen["plan"] = {**LOCAL_PLAN, "python": [], "browser": [], "contracts": True}
+    assert branch.run() == 0
+    (command,) = branch.commands
+    test, _ = pytest_leg(command)
+    assert test[test.index("-m", test.index("pytest") + 1) + 1] == "slow"
+    assert test[-len(checks.CONTRACT_TESTS) :] == list(checks.CONTRACT_TESTS)
+
+
+def test_a_remote_run_names_the_interpreter_the_vm_has_not_this_computers_path(branch, monkeypatch):
+    # scripts/heavy.sh sends the command to a RunsOn VM (TICO_HEAVY_REMOTE=1), whose venv is python3 on its PATH.
+    assert branch.run() == 0
+    test, check = pytest_leg(branch.commands[0])
+    assert test[0] == check[0] == sys.executable
+    branch.commands.clear()
+    monkeypatch.setenv("TICO_HEAVY_REMOTE", "1")
+    assert branch.run() == 0
+    test, check = pytest_leg(branch.commands[0])
+    assert test[:3] == ["python3", "-m", "pytest"] and check[0] == "python3"
+    # The report path is relative and ignored, so the VM can write it and the checkout stays clean.
+    report = next(a.split("=", 1)[1] for a in test if a.startswith("--junitxml="))
+    assert report.startswith("ci-results/") and check[-1] == report
+
+
+def test_a_change_that_selects_no_tests_still_gets_a_passing_receipt(branch, capsys):
+    branch.seen["plan"] = {**LOCAL_PLAN, "python": [], "browser": []}
+    assert branch.run() == 0
+    assert branch.commands == []
+    assert gate(receipt_line(capsys.readouterr().out), branch.head) == "passed"
+
+
+def test_ready_marks_the_draft_ready_only_after_a_pass_at_the_pull_requests_own_head(branch, capsys):
+    view = {"number": 7, "headRefOid": branch.head, "isDraft": True, "url": "https://github.com/acme/app/pull/7"}
+    branch.answers["gh pr view"] = (0, json.dumps(view))
+    assert branch.run(ready=True) == 0
+    assert branch.commands[-1][:4] == ["gh", "pr", "ready", "7"]
+    assert gate(receipt_line(capsys.readouterr().out), branch.head) == "passed"
+
+
+def test_ready_leaves_a_pull_request_that_is_already_ready_alone(branch):
+    view = {"number": 7, "headRefOid": branch.head, "isDraft": False, "url": "https://github.com/acme/app/pull/7"}
+    branch.answers["gh pr view"] = (0, json.dumps(view))
+    assert branch.run(ready=True) == 0
+    assert not any(c[:3] == ["gh", "pr", "ready"] for c in branch.commands)
+
+
+def test_ready_refuses_before_testing_when_the_pull_request_head_is_not_this_commit(branch, capsys):
+    view = {"number": 7, "headRefOid": "a" * 40, "isDraft": True, "url": "https://github.com/acme/app/pull/7"}
+    branch.answers["gh pr view"] = (0, json.dumps(view))
+    assert branch.run(ready=True) == 1
+    assert [c[:3] for c in branch.commands] == [["gh", "pr", "view"]]  # no tests, no ready
+    assert "push" in capsys.readouterr().err
+
+
+def test_ready_leaves_the_draft_alone_when_a_push_moved_its_head_during_the_run(branch, capsys):
+    view = {"number": 7, "headRefOid": branch.head, "isDraft": True, "url": "https://github.com/acme/app/pull/7"}
+    moved = {**view, "headRefOid": "b" * 40}
+    branch.answers["gh pr view"] = [(0, json.dumps(view)), (0, json.dumps(moved))]
+    assert branch.run(ready=True) == 1
+    assert not any(c[:3] == ["gh", "pr", "ready"] for c in branch.commands)
+    out = capsys.readouterr()
+    assert gate(receipt_line(out.out), branch.head) == "passed"  # the receipt still holds for the head it ran
+    assert "b" * 40 in out.err
+
+
+def test_a_remote_run_that_never_reported_a_result_prints_no_receipt(branch, capsys):
+    # scripts/remote.py (TICO_HEAVY_REMOTE=1): 75 never dispatched (an unpushed head), 76 no result. Neither is a test
+    # failure, and a failed receipt would block this head for good.
+    for code in (75, 76):
+        branch.commands.clear()
+        branch.answers["pytest"] = (code, "")
+        assert branch.run() == 2
+        out = capsys.readouterr()
+        assert not test_receipts.SHA.search(out.out) and gate(out.out, branch.head) in ("missing", "unrecognised")
+
+
+def test_ready_after_a_failure_leaves_the_draft_a_draft(branch):
+    view = {"number": 7, "headRefOid": branch.head, "isDraft": True, "url": "https://github.com/acme/app/pull/7"}
+    branch.answers["gh pr view"] = (0, json.dumps(view))
+    branch.answers["pytest"] = (1, "")
+    assert branch.run(ready=True) == 1
+    assert not any(c[:3] == ["gh", "pr", "ready"] for c in branch.commands)
+
+
+def test_the_command_line_runs_local_without_the_ci_only_plan_guard(monkeypatch):
+    calls = []
+    monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
+    monkeypatch.delenv("TICO_PLAN_LOCAL", raising=False)
+    monkeypatch.setattr(checks, "local", lambda **kwargs: calls.append(kwargs) or 0)
+    monkeypatch.setattr("sys.argv", ["pr_checks.py", "local", "--base", "origin/main", "--jobs", "3", "--ready"])
+    assert checks.main() == 0
+    assert calls == [{"base": "origin/main", "jobs": 3, "ready": True}]
 
 
 def junit(*skips):
