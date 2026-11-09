@@ -30,8 +30,8 @@ software: a web frontend your team builds, a script, another service. This page 
 
 ## What the spec covers
 
-The operation groups below are generated from the committed spec's tags. After regenerating the spec, run
-`python scripts/build_api_docs.py`; `--check` verifies the guide matches it.
+The operation groups below are generated from the spec's tags (`TAGS` in `backend/openapi_v2.py`). After changing a
+tag, run `python3 scripts/build_api_docs.py`; `--check` verifies the guide matches it.
 
 <!-- api-tags:start -->
 | Tag | What it covers |
