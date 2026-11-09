@@ -142,7 +142,8 @@ def register(
         update would be: a task the caller may not change is skipped with the reason, the rest still change. A dry
         run makes every change and rolls all of them back, so its counts are the real ones, with one exception: it
         does not run the org rule check (a judge call per task, whose spend a rollback cannot take back). A task a rule
-        would hold therefore counts as changed in a dry run and as held in the real run."""
+        would hold therefore counts as changed in a dry run and as held in the real run. The same holds for a parent
+        whose open subtask a rule would hold: the real run skips the parent, and a dry run counts it as changed."""
         caller = request.state.identity
         auth.domain(caller)
         with store.read() as c:
