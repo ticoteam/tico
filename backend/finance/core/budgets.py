@@ -244,14 +244,15 @@ def catch_all_accounts(budgets: Mapping[str, Budget], accounts: Mapping[str, Acc
 
 
 def find(budgets: Mapping[str, Budget], charge: Charge, accounts: Mapping[str, Account], org: Org) -> Budget | None:
-    """The budget a charge belongs to: the deepest matching one, else the catch-all for an uncovered expense line."""
+    """The budget a charge belongs to: the matching one on the narrowest P&L line (then the deepest in its tree), else
+    the catch-all for an uncovered expense line."""
     best: Budget | None = None
-    best_depth = -1
+    best_key = (-1, -1)
     for b in budgets.values():
         if matches(b, charge, accounts, org):
-            depth = len(chain(budgets, b.id))
-            if depth > best_depth:
-                best, best_depth = b, depth
+            key = (len(ancestors(accounts, b.account_id)), len(chain(budgets, b.id)))
+            if key > best_key:
+                best, best_key = b, key
     if best is not None:
         return best
     account = accounts.get(charge.account_id)
@@ -264,11 +265,25 @@ def _teams_meet(org: Org, a: str, b: str) -> bool:
     return not a or not b or a in org.below(b) or b in org.below(a)
 
 
+def _nested(outer: Budget, inner: Budget, accounts: Mapping[str, Account], org: Org) -> bool:
+    """Whether `inner` sits inside `outer`: its P&L line is strictly under outer's, and it is no wider by team, teammate
+    or vendor. Only such a pair may both hold a charge; find() counts it against the narrower one."""
+    if outer.account_id == inner.account_id or outer.account_id not in ancestors(accounts, inner.account_id):
+        return False
+    if outer.team and inner.team != outer.team and inner.team not in org.below(outer.team):
+        return False
+    if outer.teammate and inner.teammate != outer.teammate:
+        return False
+    return not outer.vendor or inner.vendor == outer.vendor
+
+
 def overlaps(a: Budget, b: Budget, accounts: Mapping[str, Account], org: Org) -> bool:
-    """Whether one charge could count against both `a` and `b`."""
+    """Whether two budgets clash: one charge could count against both, and neither is nested inside the other."""
     if a.catch_all or b.catch_all:
         return a.catch_all and b.catch_all
     if a.account_id not in ancestors(accounts, b.account_id) and b.account_id not in ancestors(accounts, a.account_id):
+        return False
+    if _nested(a, b, accounts, org) or _nested(b, a, accounts, org):
         return False
     if not _teams_meet(org, a.team, b.team):
         return False

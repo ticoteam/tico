@@ -24,6 +24,7 @@ from .store import banking as SK
 from .store import ledger as SL
 from .store import mirror as SX
 from .store import raw_totals as SR
+from .store import statement_uploads as SS
 
 Row = dict[str, object]
 MAX_PAGE = 200
@@ -931,6 +932,7 @@ def sources(
             **base,
             "sync": _sync(conn),
             "feed": feed_by.get(str(r["id"]), {}),
+            "off_by": SS.off_by(c, str(r["id"])),
             "access": _access_to(ctx, gl) if gl else [],
         }
         kind = str(r["kind"])

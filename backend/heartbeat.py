@@ -240,7 +240,12 @@ def call_sweeps(ctx: Context) -> tuple[str, bool]:
 
 
 # ----------------------------------------------------------------------------- the steps, in the order they run
-MINUTE, TEN_MINUTES, HOUR = timedelta(minutes=1), timedelta(minutes=10), timedelta(hours=1)
+MINUTE, FIVE_MINUTES, TEN_MINUTES, HOUR = (
+    timedelta(minutes=1),
+    timedelta(minutes=5),
+    timedelta(minutes=10),
+    timedelta(hours=1),
+)
 STEPS = [
     Step("github_sync", "GitHub sync", "poll", None, github_sync, capture="github_wakes", loop=True),
     Step("personal_alerts", "Personal alerts", "poll", None, personal_alerts, capture="scheduler", loop=True),
@@ -279,6 +284,10 @@ STEPS = [
         S.step_milestone_waits,
         failure="milestone_waits",
         capture="scheduler",
+    ),
+    # CI build time: the repository's recent workflow runs recorded and priced into Finance (backend/ci_runs.py).
+    Step(
+        "ci_sweep", "CI build time", "recovery", FIVE_MINUTES, S.step_ci_sweep, failure="ci_sweep", capture="scheduler"
     ),
     Step(
         "due_reminders",

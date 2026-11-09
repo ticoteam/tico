@@ -12,26 +12,21 @@
 const OG_W = 184, OG_H = 68, OG_GH = 30, OG_GX = 20, OG_GY = 40, OG_SY = 10, OG_PAD = 24;
 const OG_ZMIN = 0.2, OG_ZMAX = 2;
 
-// A row of the team tree as the sidebar builds it (orgTreeByParent): a group, a person, a bot or a seat.
-interface OGRow {
-  kind: 'group' | 'person' | 'bot' | 'seat';
-  id: string;
-  name?: string;
-  helpers?: boolean;
-  person?: import('../types/api').Person;
-}
-// A node the chart draws: its row, its key and its parent's key, and its box in chart pixels (set by ogLayout).
-interface OGNode {
+// A row of the team tree as the sidebar builds it (orgTreeByParent): a group, a person or a bot. The chart leaves seats off
+// (ogTree's keep).
+type OGRow = OrgChartRow;
+// A node the chart draws: its row, its key and its parent's key, and its box in chart pixels (set by ogLayout). Its kind
+// is its row's, so a check on node.kind narrows node.n too.
+interface OGNodeBox {
   key: string;
-  kind: OGRow['kind'];
   id: string;
-  n: OGRow;
   parent: string;
   x: number;
   y: number;
   w: number;
   h: number;
 }
+type OGNode = {[K in OGRow['kind']]: OGNodeBox & {kind: K; n: Extract<OGRow, {kind: K}>}}[OGRow['kind']];
 // The chart's tree: nodes by key, the child keys under each key, and the edges and size ogLayout gives it.
 interface OGTree {
   nodes: Map<string, OGNode>;
@@ -84,9 +79,10 @@ interface OGRuleIndex {
   byRule: Map<string, OGRuleHit>;
   byKey: Map<string, OGRuleRow>;
 }
-type OGGoal = import('../types/api').GoalTree['goals'][number];
-// A key result as the chart reads it: the generated Kpi, plus the target fields the page reads and the type leaves out.
-type OGKpi = import('../types/api').Kpi & {target?: number | null; link?: (import('../types/api').KpiLink & {target?: number | null}) | undefined};
+// A goal and a key result as the Goals page reads them (GET /v2/goals/tree as goals.ts's GoalsTreeData), so the chart
+// hands them to the Goals page's helpers as they are; a key result also has the target fields the chart reads.
+type OGGoal = GkGoal;
+type OGKpi = GkKpi & {target?: number | null; link?: {kind?: string; target?: number | null} | undefined};
 type OGStatus = 'done' | 'green' | 'yellow' | 'red' | 'none' | 'gray';
 // {view, abort, tree, rules: null|'missing'|'error'|{...}, goals: null|'error'|[...], sel, rule, edit: {ruleId: bool}, tf: {x, y, s}, seq}
 interface OGState {
@@ -135,16 +131,16 @@ function ogTwo(pts: Map<number, OGPoint>): [OGPoint, OGPoint] {
 
 // ----------------------------------------------------------------- the tree and its layout
 function ogTree(): OGTree {
-  const raw: Record<string, OGRow[]> = orgTreeWithHelpers(orgTreeByParent()), kids: Record<string, string[]> = {}, nodes = new Map<string, OGNode>();
-  const keep = (n: OGRow): boolean => n.kind !== 'seat' && !(n.kind === 'group' && n.helpers);
+  const raw: OrgByParent = orgTreeWithHelpers(orgTreeByParent()), kids: Record<string, string[]> = {}, nodes = new Map<string, OGNode>();
+  const keep = (n: OrgNode): n is OGRow => n.kind !== 'seat' && !(n.kind === 'group' && n.helpers);
   // As in the sidebar (renderTree): the top person heads the chart, and the groups, then the humans and bots, at the top
   // (theirs first, then the rest) hang under them. With no top person every top row is a root.
-  const top: OGRow | null = orgTopPerson(raw), topKey = top ? 'p:' + top.id : '';
+  const top = orgTopPerson(raw), topKey = top ? 'p:' + top.id : '';
   const listOf = (key: string): OGRow[] => {
     if (top && key === '') return [top];
     const own: OGRow[] = orgSorted(key, (raw[key] || []).filter(keep));
     if (!top || key !== topKey) return own;
-    const rest: OGRow[] = orgSorted('', (raw[''] || []).filter(n => n !== top && keep(n))), group = (n: OGRow): boolean => n.kind === 'group';
+    const rest: OGRow[] = orgSorted('', (raw[''] || []).filter((n): n is OGRow => n !== top && keep(n))), group = (n: OGRow): boolean => n.kind === 'group';
     return [...own.filter(group), ...rest.filter(group), ...own.filter(n => !group(n)), ...rest.filter(n => !group(n))];
   };
   // Walk from the top so a loop or a parent nobody reaches cannot draw a teammate twice.
@@ -246,7 +242,7 @@ function ogRulesOf(key: string): {who: OGRule[]; with: OGRule[]; all: OGRule[]} 
 }
 const ogGoalsAll = (): OGGoal[] => { const goals = ogNow().goals; return Array.isArray(goals) ? goals : []; };
 const ogGoalsOf = (key: string): OGGoal[] => ogGoalsAll().filter(g => goalLive(g) && ogActorKey(g.owner_id) === key).sort(goalRank);
-const ogGoalStatus = (g: OGGoal): OGStatus => g.status === 'done' ? 'done' : (['green', 'yellow', 'red', 'none'] as (string | null)[]).includes(g.status) ? g.status as OGStatus : 'gray';
+const ogGoalStatus = (g: OGGoal): OGStatus => g.status === 'done' ? 'done' : (['green', 'yellow', 'red', 'none'] as (string | null | undefined)[]).includes(g.status) ? g.status as OGStatus : 'gray';
 const ogGoalWord = (g: OGGoal): string => { const s = ogGoalStatus(g); return s === 'done' ? 'Done' : KPI_LABEL[s]!; };
 
 function ogMetaHtml(node: OGNode): string {
@@ -592,7 +588,7 @@ async function ogLoad(): Promise<void> {
   const [rules, goals] = await Promise.all([
     get<import('../types/api').RulesByTeammate>('/v2/rules/by-teammate', {fresh: true}).then(r => ({rules: r.rules || [], bots: r.bots || [], people: r.people || []}),
       (e: Partial<ApiFailure> | undefined): 'missing' | 'error' => e?.status === 404 ? 'missing' : 'error'),
-    get<import('../types/api').GoalTree>('/v2/goals/tree', {fresh: true}).then(r => (r.goals || []).filter(g => !goalBuiltInOwner(g.owner_id)), (): 'error' => 'error'),
+    get<GoalsTreeData>('/v2/goals/tree', {fresh: true}).then(r => (r.goals || []).filter(g => !goalBuiltInOwner(g.owner_id)), (): 'error' => 'error'),
   ]);
   if (OG !== state || seq !== state.seq) return;
   state.rules = rules; state.goals = goals;

@@ -66,6 +66,7 @@ QUEUE_WAITS = (
     "company_limit",
     "backoff",
     "bot_limit",
+    "on_ice",
 )
 # Keep the stuck threshold compatible with older runners' twenty-minute claim window and fourteen-minute stop.
 # New runners hand unstarted work back immediately and cap active turns at five minutes by default.
@@ -1267,6 +1268,8 @@ HELD = {
         RUNS,
     ),
     "task_cap": ("Its active task limit is full; waiting work frees a place", BOT_SETTINGS),
+    # A card On ice (D69, a stage capped at 0): its queued work waits on purpose until a person moves the card out.
+    "on_ice": ("Its card is On ice: its work starts when a person moves the card out", RUNS),
     "auto_start_off": ("Automatic assigned-task starts are off for this bot", BOT_SETTINGS),
     "paused": ("Paused: its owner or BotOps must resume it", BOT_SETTINGS),
     "company_paused": ("All bots on Tico Team are paused: its work starts when someone resumes", BOT_SETTINGS),
@@ -1698,22 +1701,33 @@ def _github(c, github, settings):
 
 
 def _github_repo_create(c, github):
-    """An App without Administration (write) cannot create bot repositories, so every new bot stops for a person.
-    The stored flag follows the installation's live permission whenever Tico asks GitHub, so this reads no network."""
-    from .github_app import ORGANIZATION, account_kind
+    """An App without Administration (write) cannot create bot repositories, so every new bot stops for a person. A personal
+    account also needs the owner's authorization for the empty repositories Tico creates there. The stored flag follows the
+    installation's live permission whenever Tico asks GitHub, so this reads no network."""
+    from .github_app import PERSONAL, account_kind
     from .repo_waits import fixes, waits
 
     row = github.row(c) if github else None
-    # A personal account gets no BotOps creation to offer: a person creates each bot's repository there.
-    if not row or row["administration"] or account_kind(row) != ORGANIZATION:
+    if not row:
+        return None
+    if account_kind(row) == PERSONAL and row["administration"] and not github.user_authorized(c):
+        return _check(
+            "github_repo_create",
+            "GitHub can't create bot repositories",
+            "warn",
+            f"Tico can't create bot repositories on {row['org']} until you authorize it.",
+            [_fix("Authorize Tico", "#/tools/github")],
+        )
+    if row["administration"]:
         return None
 
     waiting = waits(c)
     named = sorted(waiting)
     fix = fixes(c, row, named[0] if len(named) == 1 else "")
+    word = "account" if account_kind(row) == PERSONAL else "organisation"
     summary = (
         "Bots BotOps builds cannot get a GitHub repository: the GitHub App lacks Administration (write). "
-        "Let BotOps create repositories (turn on Administration for the app, then accept it for the organisation), "
+        f"Let BotOps create repositories (turn on Administration for the app, then accept it for the {word}), "
         "or create each bot's repository yourself as an empty private repository."
     )
     if named:
@@ -2798,6 +2812,7 @@ def _dev_board_check(c, who, auth):
         "WHERE tasks.number IS NOT NULL AND y.numbered=1 AND (y.role='engineering' OR y.name='Dev tickets') "
         f"AND tasks.owner_id LIKE 'bot:%' AND tasks.status IN ({','.join('?' * len(H.ACTIVE_STATUSES))}) "
         "AND tasks.updated_at<? "
+        "AND NOT EXISTS (SELECT 1 FROM task_steps oi WHERE oi.id=tasks.step_id AND oi.card_cap=0) "  # On ice (D69) is kept, not stuck
         "AND NOT EXISTS (SELECT 1 FROM jobs j JOIN messages m ON m.id=j.message_id "
         "JOIN conversations cv ON cv.id=m.conversation_id "
         f"WHERE j.bot_id=substr(tasks.owner_id,5) AND j.state IN ({','.join('?' * len(LIVE_JOBS))}) "

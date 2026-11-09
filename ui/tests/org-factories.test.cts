@@ -58,6 +58,7 @@ function context(get: () => Promise<unknown> = async () => { throw new Error('th
   const ctx = vm.createContext({
     esc: (s: unknown) => String(s ?? '').replace(/[&<>"']/g, c => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'} as Record<string, string>)[c]!),
     TASKS: '#/tasks',
+    BUILT_IN_GROUP: 'built-in',
     S: {emps: EMPS, people: [], me: {id: 'ana', owner_id: 'ana'}, orgGroups: GROUPS},
     botRow, botByRef, botDisplayName,
     avatar: (id: string, size: number) => `<span class="av" data-av="${id}" style="width:${size}px"></span>`,

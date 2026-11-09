@@ -167,13 +167,15 @@ def sweep(conn, at=None):
 def handed_to_people(conn, expiry, at=None):
     """Tasks a bot handed a person that the person has not touched since `expiry`: owned by them, requested by a bot,
     still open or waiting (on nobody or that bot), not due later, not on a numbered board, not set aside until a date, and
-    not a due-date routine's occurrence (its day is its deadline, whoever owns it now), and not a question task."""
+    not a due-date routine's occurrence (its day is its deadline, whoever owns it now), not a question task, and not a card
+    On ice (D69): a parked card is never late, and only a person takes it out."""
     marks = ",".join("?" * len(ASKED_STATUSES))
     rows = H._rows(
         conn.execute(
             f"SELECT t.* FROM {H.TASKS} t LEFT JOIN task_types y ON y.id=t.type_id WHERE t.status IN ({marks}) "
             "AND t.owner_id LIKE 'human:%' AND t.requester_id LIKE 'bot:%' AND t.created_at<? AND coalesce(y.numbered,0)=0 "
             "AND t.occurrence IS NULL AND t.questions IS NULL "  # a question task closes on its own dates, above
+            f"AND NOT {H.ON_ICE % 't'} "
             "ORDER BY t.created_at",
             (*ASKED_STATUSES, expiry),
         )

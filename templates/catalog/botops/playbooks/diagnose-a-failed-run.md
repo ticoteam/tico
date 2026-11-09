@@ -18,7 +18,7 @@ names its routine and owner (`bot:<slug>`), and that owner is the bot to diagnos
     hub task show <id>
     hub task list --owner <slug>
     hub bot status list
-    hub automation list --owner bot:<slug>     # the routine, if the task came from one
+    hub automation list     # the routine, if the task came from one
     hub automation runs <id>                   # its runs: fired, failed or held
 
 Read the failed run's own task and its conversation before anything else. Most reports of "it did
