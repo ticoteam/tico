@@ -12,8 +12,8 @@ from backend.finance.core.errors import NOT_FOUND, FinanceError
 from backend.finance.context import load
 from backend.finance.store import access as SA
 from backend.store import Store
-from backend.tests.test_finance_ad_budgets import WARN_AT, platform_spend, rows_by_name, warn, warning_notes, world
-from backend.tests.test_finance_fixtures import (  # noqa: F401  (fixtures)
+from backend.tests.helpers.finance_ad_budgets import WARN_AT, platform_spend, rows_by_name, warn, warning_notes, world
+from backend.tests.helpers.finance_fixtures import (
     AT,
     OWNER,
     act,

@@ -6,9 +6,10 @@ import pytest
 
 from backend import readiness
 from backend.store import H
-from backend.tests.test_api import api, assign, get, post, runner  # noqa: F401
-from backend.tests.test_subscriptions import set_runtime
-from backend.tests.test_openapi_v2 import conforms
+from backend.tests.helpers.api import assign, get, post, runner  # noqa: F401
+from backend.tests.test_api import api  # noqa: F401
+from backend.tests.helpers.subscriptions import set_runtime
+from backend.tests.helpers.openapi_v2 import conforms
 from backend import bot_settings as BS
 
 

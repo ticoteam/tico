@@ -1,7 +1,8 @@
 """The Computers list reads fleet-wide rows once, not once per computer."""
 
-from backend.tests.test_api import api, get, runner  # noqa: F401
-from backend.tests.test_task_privacy_reads import traced
+from backend.tests.helpers.api import get, runner  # noqa: F401
+from backend.tests.test_api import api  # noqa: F401
+from backend.tests.helpers.task_privacy_reads import traced
 
 FLEET_WIDE = ("FROM runner_versions", "computer-repositories:")
 

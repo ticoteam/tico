@@ -13,7 +13,8 @@ from backend import github as G
 from backend import maintenance_health
 from backend import hubdb as H
 from backend import quiet_work as Q
-from backend.tests.test_api import api, assign, get, post, ready, runner  # noqa: F401
+from backend.tests.helpers.api import assign, get, post, ready, runner  # noqa: F401
+from backend.tests.test_api import api  # noqa: F401
 
 
 def setup(api):

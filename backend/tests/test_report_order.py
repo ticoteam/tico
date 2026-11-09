@@ -1,8 +1,9 @@
 """A manager's reports keep the order someone put them in on the team chart (backend/report_order.py): stored on the
 server for every viewer, a new report goes last, and only someone who may put reports under that manager orders them."""
 
-from backend.tests.test_api import api, get, headers, post, put, setup_attempt  # noqa: F401
-from backend.tests.test_org_chart import revision, roster
+from backend.tests.helpers.api import get, headers, post, put, setup_attempt  # noqa: F401
+from backend.tests.test_api import api  # noqa: F401
+from backend.tests.helpers.org_chart import revision, roster
 from backend import bot_settings as BS
 
 
@@ -81,10 +82,10 @@ def test_only_someone_who_may_put_reports_there_orders_them(api):
     # Nor may she move a report onto another manager: nothing moves, and the order stays.
     report_to(api, "ops", "human:cara", token="cara-test", expected=403)
     assert order(api, "coo") == ["ops", "finance", "doc-updater"]
-    from backend.tests.test_api import restrict
+    from backend.tests.helpers.api import restrict
 
     # The person who runs the COO may order its reports, though nothing reports up to him; Cara still may not.
-    from backend.tests.test_api import as_member
+    from backend.tests.helpers.api import as_member
 
     as_member(api, "ben@acme.example")
     with api.app.state.store.transaction() as c:
@@ -111,7 +112,7 @@ def test_only_someone_who_may_put_reports_there_orders_them(api):
 
 
 def test_reports_that_join_go_last_in_the_order_they_came_whatever_their_names(api):
-    from backend.tests.test_bot_contact import bot
+    from backend.tests.helpers.bot_contact import bot
 
     chart(api)
     put(api, "org/order/coo", {"reports": ["ops", "doc-updater", "finance"]})

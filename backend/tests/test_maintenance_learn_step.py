@@ -14,10 +14,12 @@ from backend.docs import Docs
 from backend.maintenance_steps import learn as step
 from backend.maintenance_steps import update as update_step
 from backend.store import H
-from backend.tests.test_api import api, assign, claim, get, headers, post, ready, runner  # noqa: F401
+from backend.tests.helpers.api import claim, headers, post
+from backend.tests.test_api import api
 from backend import bot_settings as BS
-from backend.tests.test_bot_contact import bot
-from backend.tests.test_mail_api import put_mail
+from backend.tests.helpers.bot_contact import bot
+from backend.tests.helpers.mail_api import put_mail
+from backend.tests.helpers.maintenance_learn_step import complete, queue, start
 
 
 def context(api, **changes):
@@ -98,45 +100,6 @@ def scoring(api, monkeypatch, count=20, recipients=("ops",)):
         },
     )
     return task, calls
-
-
-def queue(c, bot_id="ops", day=None):
-    day = day or updates.today()
-    updates.build_queue(c, day, updates.kind_for(day))
-    return c.execute("SELECT * FROM update_queue WHERE bot=? AND day=?", (bot_id, day)).fetchone()
-
-
-def start(api, row, machine=None):
-    if machine is None:
-        machine = runner(api)
-    # Enrollment can already place a templated bot on this computer.
-    placed = get(api, f"bots/{row['bot']}")["assignment"]
-    if not placed or placed["runner_id"] != machine["runner_id"]:
-        assign(api, machine, row["bot"], generation=placed["generation"] if placed else 0)
-    ready(api, machine, [row["bot"]])
-    with api.app.state.store.transaction() as c:
-        # Creation wakes are over; claim the Update request itself.
-        c.execute(
-            "UPDATE jobs SET state='completed' WHERE bot_id=? AND message_id<>? AND state='queued'",
-            (row["bot"], row["message_id"]),
-        )
-    attempt = claim(api, machine, row["bot"])
-    assert attempt is not None
-    with api.app.state.store.read() as c:
-        job = c.execute("SELECT message_id FROM jobs WHERE attempt_id=?", (attempt["id"],)).fetchone()
-        assert job[0] == row["message_id"]
-    post(api, f"attempts/{attempt['id']}/started", {"thread_id": "update-turn"}, machine["token"])
-    return machine, attempt
-
-
-def complete(api, turn, text):
-    machine, attempt = turn
-    post(
-        api,
-        f"attempts/{attempt['id']}/complete",
-        {"outcome": "completed", "text": text, "last_seq": 0},
-        machine["token"],
-    )
 
 
 def keep_items(c, items, created_at=None):

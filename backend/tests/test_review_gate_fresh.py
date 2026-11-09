@@ -8,9 +8,9 @@ from types import SimpleNamespace
 import pytest
 
 from backend import hubdb as H, task_blocked
-from backend.tests.test_github import api, headers, hook, post, pr_event, PR  # noqa: F401
-from backend.tests.test_review_gate import HEAD, OLD, BASE, ticket, nth_ticket, get, move
-from backend.tests.test_api import hold
+from backend.tests.helpers.github import api, headers, hook, post, pr_event, PR  # noqa: F401
+from backend.tests.helpers.review_gate import HEAD, OLD, BASE, ticket, nth_ticket, get, move  # noqa: F401
+from backend.tests.helpers.api import hold
 
 STALE = f'Tests: head {OLD}: 9 passed, 0 failed'
 GREEN = {f'check {i}': 'success' for i in range(16)}
@@ -277,7 +277,7 @@ def test_stale_receipt_review_moves_without_passing_checks_are_still_refused(api
 def test_a_same_head_failure_landing_during_the_read_keeps_the_hold(api, monkeypatch):
     """A check webhook changes the PR link but not the task version: a green read it supersedes must not clear."""
     from backend import review_gate
-    from backend.tests.test_github import _suite
+    from backend.tests.helpers.github import _suite  # noqa: F401
 
     task = ticket(api, STALE)
     held(api, task)
@@ -344,7 +344,7 @@ def test_reads_that_keep_failing_take_turns_with_the_other_holds(api, monkeypatc
 def test_a_held_review_question_sent_anyway_reads_github_afresh_and_is_filed(api, monkeypatch):
     """Send anyway on a held Review 2 question is the same gate as a new one: all-green hosted checks at the current
     head count from a fresh read, with no receipt at that head."""
-    from backend.tests.test_org_rule_check import COLOR, Judge
+    from backend.tests.helpers.org_rule_check import COLOR, Judge  # noqa: F401
 
     task = ticket(api, STALE)
     token = bot_token(api)

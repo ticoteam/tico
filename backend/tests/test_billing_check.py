@@ -9,7 +9,8 @@ import pytest
 
 from backend import billing_check as B
 from backend.scheduler import Scheduler
-from backend.tests.test_api import api, get  # noqa: F401
+from backend.tests.helpers.api import get  # noqa: F401
+from backend.tests.test_api import api  # noqa: F401
 
 KEY = "hq-read-synthetic-fixture-key-0042"
 INSTALL = "5d0c1a52-3f4e-4b6a-9c1d-2e7f8a9b0c1d"

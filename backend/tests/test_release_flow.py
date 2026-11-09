@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from backend import hubdb as H
 from backend import release_flow as RF
 from backend.store import encode
-from backend.tests.test_github import PR, api, get, headers, hook, pr_event, post  # noqa: F401
+from backend.tests.helpers.github import PR, api, get, headers, hook, pr_event, post  # noqa: F401
 from backend import bot_settings as BS
 
 RELEASE_URL = "https://github.com/ticoteam/tico/releases/tag/v1.2.3"

@@ -5,9 +5,10 @@ company; ana-test owns it, ben-test administers it and cara-test is a member (th
 import pytest
 
 from backend.botops_act import classify, default_delegable, person_only
-from backend.tests.test_api import api, headers  # noqa: F401  (fixture)
-from backend.tests.test_botops_confirm_cards import card_in_chat, confirm
-from backend.tests.test_member_bots import botops, turn  # noqa: F401  (fixture)
+from backend.tests.helpers.api import headers  # noqa: F401  (fixture)
+from backend.tests.test_api import api  # noqa: F401  (fixture)
+from backend.tests.helpers.botops_confirm_cards import card_in_chat, confirm
+from backend.tests.helpers.member_bots import botops, turn  # noqa: F401  (fixture)
 
 
 def act(api, attempt, method, path, body=None):

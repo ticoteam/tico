@@ -6,8 +6,8 @@ import logging
 import pytest
 
 from backend import diagnostics as D
-from backend.tests.test_onboarding import as_person, environment, signed_in  # noqa: F401
-from backend.tests.test_support import hq, file  # noqa: F401  (the fake HQ, autouse)
+from backend.tests.helpers.onboarding import as_person, environment, signed_in  # noqa: F401
+from backend.tests.helpers.support import hq, file  # noqa: F401  (the fake HQ, autouse)
 
 
 def redactor():

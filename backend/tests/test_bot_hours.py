@@ -6,7 +6,8 @@ from datetime import datetime, timedelta, timezone
 
 from backend import bot_hours as B
 from backend.store import encode
-from backend.tests.test_api import api, get, headers, setup_attempt  # noqa: F401
+from backend.tests.helpers.api import get, headers, setup_attempt  # noqa: F401
+from backend.tests.test_api import api  # noqa: F401
 
 ZONE = B.ZONE
 MONDAY = datetime(2026, 10, 5, 0, 0, tzinfo=ZONE)  # a past week, Monday 00:00 Pacific

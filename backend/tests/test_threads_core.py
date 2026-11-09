@@ -16,7 +16,7 @@ from backend.tests.slug_ids import bot_ids_are_their_slugs  # noqa: F401  (each 
 from backend import org_rule_check, threads
 from backend.store import H, Problem
 from backend.tests.demo_template import copy_demo
-from backend.tests.test_threads_migration_e2e import NOW, build, close, identities, open_store
+from backend.tests.helpers.threads_migration_e2e import NOW, build, close, identities, open_store  # noqa: F401
 from clients import sessions
 
 
@@ -750,7 +750,7 @@ def test_session_keys_never_share_a_thread_across_audience_classes():
 
 # ----------------------------------------------------------------------------- migration: crafted per-message cases
 from backend.tests.test_api import post as api_post  # noqa: E402
-from backend.tests.test_live_meetings import api, live  # noqa: E402,F401  (fixtures)
+from backend.tests.helpers.live_meetings import api, live  # noqa: F401
 
 UNSTAMPED = (
     "UPDATE messages SET seq=NULL, origin_id=NULL, revision=0, restricted=1, legacy_audience=NULL",

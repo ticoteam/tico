@@ -330,7 +330,7 @@ class Doors:
 
     def __init__(self, org, judge):
         self.org, self.judge, self.seq = org, judge, 0
-        from backend.tests.test_triggers import rule_row
+        from backend.tests.helpers.triggers import rule_row
 
         org.app.state.judge = judge
         made = org.api("post", "/api/v2/triggers", {"name": "Shop", "id": "shop"})

@@ -8,8 +8,8 @@ import pytest
 
 from backend import check_pools, step_flow
 from backend import hubdb as H
-from backend.tests import test_check_pools as pools
-from backend.tests.test_github import api, get, headers  # noqa: F401  (api is a fixture)
+from backend.tests.helpers import check_pools as pools
+from backend.tests.helpers.github import api, get, headers  # noqa: F401  (api is a fixture)
 
 RENAMED = {
     "Review 1": "First look",

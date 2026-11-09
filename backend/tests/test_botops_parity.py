@@ -7,32 +7,19 @@ its turn: a member is refused what only an owner may do, an owner is not.
 
 import json
 import time
-from uuid import uuid4
 
 import pytest
 
-from backend.tests.test_api import api, assign, claim, get, headers, post, put, ready, runner  # noqa: F401  (fixture)
-from backend.tests.test_member_bots import botops, call, close_computer, finish, register, turn  # noqa: F401  (fixtures)
+from backend.tests.helpers.api import assign, claim, get, headers, post, put, ready, runner  # noqa: F401  (fixture)
+from backend.tests.test_api import api  # noqa: F401  (fixture)
+from backend.tests.helpers.member_bots import botops, call, close_computer, finish, register, turn  # noqa: F401  (fixtures)
 from backend.store import H
-
-
-def act(api, attempt, method, path, body=None, ref="turn"):
-    """One `hub api` call: the request BotOps makes, asking to be answered as the person it works for."""
-    kwargs = {"headers": {**headers(attempt["token"]), **({"X-Tico-On-Behalf-Of": ref} if ref else {})}}
-    if body is not None:
-        kwargs["json"] = body
-    return api.request(method.upper(), "/api/v2/" + path, **kwargs)
-
-
-def bot_id(api, slug):
-    """The id a bot is stored under (tables, actors and readiness reports use it; the slug is only its label)."""
-    with api.app.state.store.read() as c:
-        return H.resolve_bot(c, slug)["id"]
+from backend.tests.helpers.botops_parity import _wake, act, bot_id, everything, mcp_tool, vault
 
 
 @pytest.mark.parametrize("requester", ["bot:finance"])
 def test_botops_records_its_own_blocker_without_borrowing_human_authority(api, botops, requester):
-    from backend.tests.test_mcp import call as mcp
+    from backend.tests.helpers.mcp import call as mcp
 
     with api.app.state.store.transaction() as c:
         task = H.task_create(
@@ -125,21 +112,6 @@ def test_secrets_are_refused_and_other_routes_use_the_humans_permissions(api, bo
     finish(api, botops, attempt)
     post(api, "tasks", {"owner": "botops", "title": "Review the bot list", "body": "Please look."}, "cara-test")
     assert act(api, claim(api, botops, "botops"), "GET", "bots").status_code == 200
-
-
-def mcp_tool(env="OPS_ADMIN_MCP_TOKEN", authorization="Bearer ${OPS_ADMIN_MCP_TOKEN}", **extra):
-    """A remote MCP server registration whose header names its credential by placeholder (docs/connect-tools.md)."""
-    return {
-        "service": "ops-admin",
-        "can": ["read"],
-        "env": env,
-        **extra,
-        "mcp": {
-            "url": "https://mcp.example.com/usage",
-            "transport": "http",
-            "headers": {"Authorization": authorization},
-        },
-    }
 
 
 def test_an_mcp_placeholder_header_registers_as_the_requester_and_a_secret_still_does_not(api, botops):
@@ -339,23 +311,6 @@ def test_go_live_places_activates_and_starts_setup_as_the_requester(api, botops)
 KEY = "ana@acme.example:atl-SECRET-token-0123456789"
 
 
-def vault(api):
-    from backend.tests.test_credentials import setup
-
-    setup(api)
-
-
-def everything(api):
-    """Every table's text, to look for a value that must not be anywhere."""
-    with api.app.state.store.read() as c:
-        names = [r[0] for r in c.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE '%fts%'")]
-        return "".join(
-            str([tuple(r) for r in c.execute(f"SELECT * FROM {n}")])
-            for n in names
-            if n not in ("credentials", "credential_keys")
-        )
-
-
 def test_a_credential_card_stores_and_grants_without_the_value_touching_anything_else(api, botops):
     vault(api)
     ana = turn(api, botops, person="ana-test", text="Make Jira work for ops")
@@ -543,7 +498,7 @@ def test_a_secret_is_never_a_command_line_argument():
 
 @pytest.mark.parametrize("person", ["cara-test"])
 def test_generated_template_task_keeps_requester_rights_and_reaches_go_live(api, botops, tmp_path, person):
-    from backend.tests.test_mcp import call as mcp
+    from backend.tests.helpers.mcp import call as mcp
 
     template = tmp_path / "catalog" / "qa-custom"
     template.mkdir(parents=True)
@@ -570,7 +525,7 @@ def test_generated_template_task_keeps_requester_rights_and_reaches_go_live(api,
     assert act(api, attempt, "GET", "bots/qa-custom/access").status_code == 200
     credentials = act(api, attempt, "GET", "credentials")
     assert credentials.status_code == (200 if person == "ana-test" else 403)
-    from backend.tests.test_api import restrict
+    from backend.tests.helpers.api import restrict
 
     qa = bot_id(api, "qa-custom")
     with api.app.state.store.transaction() as c:
@@ -852,21 +807,6 @@ def test_bot_filed_subtask_never_borrows_its_parents_human_rights(api, botops, l
     assert act(api, attempt, 'GET', 'credentials', ref=origin).status_code == 403
 
 
-# ------------------------------------------------------------------ following through on a person's request later
-def _wake(api, machine):
-    """A run the keeper starts with no task (a daily-update request): nobody's request is attached."""
-    with api.app.state.store.transaction() as c:
-        H.say(
-            c,
-            H.KEEPER,
-            "bot:botops",
-            "Time for your daily update.",
-            kind="notice",
-            refs={"wake": "update", "event": str(uuid4())},
-        )
-    return claim(api, machine, "botops")
-
-
 def test_a_later_run_acts_for_the_person_whose_open_task_it_cites_and_a_bot_run_may_not(api, botops):
     ana = turn(api, botops, person="ana-test", text="Put ops on GPT-6.1 Sol")
     task = act(
@@ -1120,7 +1060,7 @@ def test_a_persons_request_lends_rights_while_its_task_is_open_and_their_own_com
 def test_botops_files_support_and_turns_on_the_librarian_only_with_the_owners_rights(api, botops, monkeypatch):
     import httpx
     from backend import support
-    from backend.tests.test_support import FakeHQ
+    from backend.tests.helpers.support import FakeHQ
 
     hq = FakeHQ()
     monkeypatch.setattr(support, "TRANSPORT", httpx.MockTransport(hq))

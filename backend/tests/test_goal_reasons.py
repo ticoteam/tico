@@ -4,9 +4,10 @@ line, once (POST /api/v2/goal-proposals/{pid}/note), and a reader who may not re
 never reads that reason."""
 
 from backend import goals as G
-from backend.tests.test_api import api, get, post  # noqa: F401
-from backend.tests.test_goal_cards import inbox_measure, leaks, propose
-from backend.tests.test_kpis import goal_with_kpi
+from backend.tests.helpers.api import get, post  # noqa: F401
+from backend.tests.test_api import api  # noqa: F401
+from backend.tests.helpers.goal_cards import inbox_measure, leaks, propose
+from backend.tests.helpers.kpis import goal_with_kpi
 
 REASON = "no billing yet, don't track revenue"
 

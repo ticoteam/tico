@@ -6,7 +6,8 @@ under the write lock. Each statement must name the partial index that keeps it t
 
 from backend import turn_fixer
 from backend import wake_presets as W
-from backend.tests.test_api import api, post  # noqa: F401  (api is a fixture)
+from backend.tests.helpers.api import post  # noqa: F401  (api is a fixture)
+from backend.tests.test_api import api  # noqa: F401  (api is a fixture)
 from backend import views
 
 NOW = "2026-10-29T14:00:00.000Z"
@@ -144,7 +145,7 @@ def test_worktree_inventory_bot_state_matches_each_owner(api):
 def test_queue_refusal_scan_reads_every_bots_state_in_one_query(api):
     # The scheduler's claim observations: one read for the targets, one for all their saved states (not one per bot).
     from backend import queue_refusals
-    from backend.tests.test_task_lanes import task_bot
+    from backend.tests.helpers.task_lanes import task_bot
 
     task_bot(api, lanes=True, others=("finance", "inbox"))
     for bot in ("ops", "finance", "inbox"):

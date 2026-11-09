@@ -1,9 +1,10 @@
 """`tools/list` offers each caller the tools it can use, by role and kind; a hidden tool is refused if it is called anyway."""
 
-from backend.tests.test_agents import credential, hermes_bot
-from backend.tests.test_api import api, assign, claim, get, headers, post, ready, runner, setup_attempt  # noqa: F401
-from backend.tests.test_member_bots import botops, turn  # noqa: F401
-from backend.tests.test_mcp import call, rpc
+from backend.tests.helpers.agents import credential, hermes_bot
+from backend.tests.helpers.api import assign, claim, get, headers, post, ready, runner, setup_attempt  # noqa: F401
+from backend.tests.test_api import api  # noqa: F401
+from backend.tests.helpers.member_bots import botops, turn  # noqa: F401
+from backend.tests.helpers.mcp import call, rpc
 from clients import hubtools
 
 BOTOPS_ONLY = {"hub_credential_set", "hub_message_redact", "hub_support_file"}

@@ -5,7 +5,7 @@ period and keeps the charge's date in its memo."""
 
 from backend.finance import reads as FR
 from backend.finance.store import banking as SK
-from backend.tests.test_finance_fixtures import (  # noqa: F401
+from backend.tests.helpers.finance_fixtures import (
     AT,
     MERCURY,
     OWNER,
@@ -19,10 +19,10 @@ from backend.tests.test_finance_fixtures import (  # noqa: F401
     store,
     sync_once,
 )
-from backend.tests.test_finance_ap import _bill, _vendor
-from backend.tests.test_finance_banking import _card_for_eve, _card_use
-from backend.tests.test_finance_banking import _txn as _card_txn
-from backend.tests.test_finance_payments import _checking
+from backend.tests.helpers.finance_ap import _bill, _vendor
+from backend.tests.helpers.finance_banking import _card_for_eve, _card_use
+from backend.tests.helpers.finance_banking import _txn as _card_txn
+from backend.tests.helpers.finance_payments import _checking
 
 LATER = "2026-10-15T12:30:00.000000Z"
 NEXT_DAY = "2026-10-16T12:30:00.000000Z"

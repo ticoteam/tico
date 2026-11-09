@@ -4,8 +4,9 @@ a second turn there, even when the task's lane changed under the turn. The bot's
 whose turn on the task is its own. The same bot's other tasks still run beside it."""
 
 from backend.store import H
-from backend.tests.test_api import api, claim, post  # noqa: F401  (api is a fixture)
-from backend.tests.test_task_lanes import new_task, task_bot
+from backend.tests.helpers.api import claim, post  # noqa: F401  (api is a fixture)
+from backend.tests.test_api import api  # noqa: F401  (api is a fixture)
+from backend.tests.helpers.task_lanes import new_task, task_bot
 
 
 def ops_turns(api, task_id):

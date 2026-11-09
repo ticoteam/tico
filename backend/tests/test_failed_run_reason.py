@@ -3,8 +3,9 @@ model. Before, the reason sat only in the bot's live status line, and the run re
 (the limit source was kept in the attempt's result but never read by the run list)."""
 
 from backend import login_holds
-from backend.tests.test_api import api, claim, get, post  # noqa: F401
-from backend.tests.test_login_holds import CLAUDE, QUOTA, events, two_bots
+from backend.tests.helpers.api import claim, get, post  # noqa: F401
+from backend.tests.test_api import api  # noqa: F401
+from backend.tests.helpers.login_holds import CLAUDE, QUOTA, events, two_bots
 
 
 def failed_run(api, bot="ops"):

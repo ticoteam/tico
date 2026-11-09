@@ -10,8 +10,9 @@ from cryptography.hazmat.primitives.asymmetric import rsa
 from backend import directory as D
 from backend import directory_sources as S
 from backend import people as P
-from backend.tests.test_onboarding import OWNER_EMAIL, environment, signed_in  # noqa: F401
-from backend.tests.test_people_access import person_headers
+from backend.tests.helpers.onboarding import OWNER_EMAIL, environment, signed_in  # noqa: F401
+from backend.tests.helpers.people_access import person_headers
+from backend.tests.helpers.directory import events, roster_of
 
 KEY = (
     rsa.generate_private_key(public_exponent=65537, key_size=2048)
@@ -98,12 +99,6 @@ def test_engine_only_leaves_people_its_feed_created_and_never_the_owner():
     assert [x["email"] for x in found["protected"]] == ["owner@x.io"]
 
 
-# ------------------------------------------------------------------------------------- the routes
-def events(api, action):
-    with api.app.state.store.read() as c:
-        return [dict(r) for r in c.execute("SELECT * FROM events WHERE action=? ORDER BY created_at, id", (action,))]
-
-
 def put_config(api, revision=0, **more):
     body = {
         "source": "google",
@@ -121,13 +116,6 @@ def sync(api, **body):
     r = api.post("/api/v2/directory/sync", json=body, headers=signed_in())
     assert r.status_code == 200, r.text
     return r.json()
-
-
-def roster_of(api):
-    with api.app.state.store.read() as c:
-        from backend.views import roster
-
-        return {p["email"]: p for p in roster(c)["people"]}
 
 
 @pytest.fixture

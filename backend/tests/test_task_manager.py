@@ -15,8 +15,8 @@ from backend import task_relations as TR
 from backend.auth import Identity
 from backend.onboarding import helper_templates
 from backend.store import H
-from backend.tests.test_goal_manager import BASE
-from backend.tests.test_onboarding import draft, environment, machine, signed_in  # noqa: F401
+from backend.tests.helpers.goal_manager import BASE
+from backend.tests.helpers.onboarding import draft, environment, machine, signed_in  # noqa: F401
 from backend import bot_settings as BS
 
 TEMPLATE = Path(__file__).resolve().parents[2] / "templates" / "catalog" / "task-manager"

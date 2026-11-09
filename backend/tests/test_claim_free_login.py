@@ -6,9 +6,10 @@ from backend import login_holds
 from backend import wake_presets as W
 from backend.execution import queued_reasons
 from backend.store import H
-from backend.tests.test_api import api, assign, post, runner
-from backend.tests.test_login_holds import at, providers_on, signed_in
-from backend.tests.test_stop_waiting import task_attempt
+from backend.tests.helpers.api import assign, post, runner
+from backend.tests.test_api import api
+from backend.tests.helpers.login_holds import at, providers_on, signed_in
+from backend.tests.helpers.stop_waiting import task_attempt
 
 
 def test_claim_hands_out_the_queued_job_to_the_free_claude_fallback_that_health_says_is_free(api, monkeypatch):

@@ -7,7 +7,7 @@ import httpx
 import pytest
 
 from backend import releases
-from backend.tests.test_onboarding import as_person, environment, signed_in  # noqa: F401
+from backend.tests.helpers.onboarding import as_person, environment, signed_in  # noqa: F401
 
 RELEASE = {
     "tag_name": "v0.2.0",

@@ -7,7 +7,8 @@ and SSE renderings in core's privacy fixture; these tests check the API a sideba
 """
 
 from backend.tests.slug_ids import bot_ids_are_their_slugs  # noqa: F401  (each bot's id is its slug)
-from backend.tests.test_api import api, restrict  # noqa: F401  (the api fixture)
+from backend.tests.helpers.api import restrict  # noqa: F401  (the api fixture)
+from backend.tests.test_api import api  # noqa: F401  (the api fixture)
 from backend.tests.threads_e2e import (
     add_member,
     home_id,

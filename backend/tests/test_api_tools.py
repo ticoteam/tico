@@ -14,8 +14,10 @@ import pytest
 from backend import api_tools
 from backend.config import Settings
 from backend.store import Problem, Store
-from backend.tests.test_api import api, get, headers, post, put  # noqa: F401  (fixture)
-from backend.tests.test_credentials import setup
+from backend.tests.helpers.api import get, headers, post
+from backend.tests.test_api import api
+from backend.tests.helpers.credentials import setup
+from backend.tests.helpers.api_tools import key, level, tool
 
 FIXTURE = Path(__file__).parent / "fixtures" / "schema_old_main.sql"
 SECRET_RW = "acme-close-synthetic-rw-0011223344"
@@ -87,24 +89,6 @@ def test_the_migration_makes_a_computer_tool_per_service_key_and_keeps_every_gra
     assert set(after) == {"g1", "g2", "g3", "g4"}
     assert after["g2"]["revoked_at"] == "2026-10-02T00:00:00Z" and after["g1"]["revoked_at"] is None
     assert {g["access_level"] for g in after.values()} == {"read_write"}
-
-
-def tool(api, name="Close CRM", **body):
-    return post(api, "api-tools", {"name": name, **body})
-
-
-def key(api, tid, value, level="read_write", token="ana-test", expected=200):
-    return post(
-        api,
-        f"api-tools/{tid}/keys",
-        {"name": f"Close {level}", "value": value, "access_level": level},
-        token,
-        expected=expected,
-    )
-
-
-def level(api, tid, subject, lv, token="ana-test", expected=200):
-    return put(api, f"api-tools/{tid}/access/{subject}", {"level": lv}, token, expected=expected)
 
 
 def choose(api, tid, subject):

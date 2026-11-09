@@ -3,8 +3,9 @@ to a person with its own rights; what needs a person's rights becomes that perso
 
 from fastapi import Request
 
-from backend.tests.test_api import api, assign, claim, get, headers, post, ready  # noqa: F401  (fixture)
-from backend.tests.test_member_bots import botops, finish  # noqa: F401  (fixture)
+from backend.tests.helpers.api import assign, claim, get, headers, post, ready  # noqa: F401  (fixture)
+from backend.tests.test_api import api  # noqa: F401  (fixture)
+from backend.tests.helpers.member_bots import botops, finish  # noqa: F401  (fixture)
 from backend.store import H, Problem
 from backend import task_relations as TR
 
@@ -231,7 +232,7 @@ def test_botops_own_ask_is_a_plain_ask(api, botops):
 
 
 def test_private_subtask_from_bot_requested_run_is_judged_on_by_default(api, botops):
-    from backend.tests.test_ask_ingest import FakeModel, items, calls
+    from backend.tests.helpers.ask_ingest import FakeModel, items, calls
 
     model = FakeModel(kind="own_work")
     api.app.state.judge = model

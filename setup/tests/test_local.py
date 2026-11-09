@@ -3,7 +3,7 @@
 from setup import dns, state
 from setup.tests import fakes
 from setup.tests.fakes import FakeShell
-from setup.tests.test_wizard import BASE, SECRET, go  # noqa: F401  (SECRET fixture env is autouse in that module)
+from setup.tests.helpers.wizard import BASE, SECRET, go  # noqa: F401  (SECRET fixture env is autouse in that module)
 
 import pytest
 

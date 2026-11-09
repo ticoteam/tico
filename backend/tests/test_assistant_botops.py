@@ -3,9 +3,10 @@ own message (`--request-id turn`), and BotOps acts as them, as if they had asked
 
 from fastapi import Request
 
-from backend.tests.test_api import api, assign, claim, headers, ready  # noqa: F401  (fixture)
-from backend.tests.test_assistant import say
-from backend.tests.test_member_bots import botops, finish  # noqa: F401  (fixture)
+from backend.tests.helpers.api import assign, claim, headers, ready  # noqa: F401  (fixture)
+from backend.tests.test_api import api  # noqa: F401  (fixture)
+from backend.tests.helpers.assistant import say
+from backend.tests.helpers.member_bots import botops, finish  # noqa: F401  (fixture)
 from backend.store import H
 
 

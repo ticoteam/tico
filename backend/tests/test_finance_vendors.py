@@ -15,7 +15,7 @@ from backend.finance.core import watch as W
 from backend.finance.core.errors import CONFLICT, DENIED, INVALID, NOT_FOUND
 from backend.finance.core.merchant import merchant_key
 from backend.finance.store import ap as SAP
-from backend.tests.test_finance_fixtures import (  # noqa: F401
+from backend.tests.helpers.finance_fixtures import (
     AT,
     MERCURY,
     OWNER,

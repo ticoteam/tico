@@ -6,36 +6,9 @@ import pytest
 
 from backend import step_backlog as SB
 from backend.store import H
-from backend.tests.test_api import api, restrict  # noqa: F401
-
-
-def board(c, backlog):
-    typ = H.type_create(
-        c,
-        H.KEEPER,
-        "Studio work",
-        [{"name": "Inbox", "status": "open"}, {"name": "Build", "status": "doing"}],
-        bots="work",
-    )
-    c.execute("UPDATE task_types SET manager='coo' WHERE id=?", (typ["id"],))
-    inbox = typ["steps"][0]
-    H._type_steps(
-        c,
-        H.KEEPER,
-        typ["id"],
-        [
-            {"id": inbox["id"], "name": "Inbox", "status": "open", "flow": {"backlog": backlog}},
-            {"id": typ["steps"][1]["id"], "name": "Build", "status": "doing"},
-        ],
-    )
-    return typ
-
-
-def tickets(c, typ, owner, n):
-    return [
-        H.task_create(c, "human:ana", f"Ticket {owner} {i}", "x", owner, type=typ["id"], step="Inbox", lint=False)
-        for i in range(n)
-    ]
+from backend.tests.helpers.api import restrict  # noqa: F401
+from backend.tests.test_api import api  # noqa: F401
+from backend.tests.helpers.step_backlog import board, tickets
 
 
 def test_a_step_is_warned_only_over_its_backlog_limit(api):

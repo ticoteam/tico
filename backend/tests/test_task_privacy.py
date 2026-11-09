@@ -6,7 +6,7 @@ import pytest
 
 from backend import hubdb as H
 from backend import task_relations as TR
-from backend.tests.test_tasks_board import api, bot_token, get, headers, post
+from backend.tests.helpers.tasks_board import api, bot_token, get, headers, post
 from backend import bot_settings as BS
 
 

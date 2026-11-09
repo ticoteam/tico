@@ -7,7 +7,7 @@ from types import SimpleNamespace
 from backend import github as G
 from backend import hubdb as H
 from backend import review_gate
-from backend.tests.test_github import PR, _app, _branch_pr, _burst, _prs, api, get, hook, pr_event, post  # noqa: F401
+from backend.tests.helpers.github import PR, _app, _branch_pr, _burst, _prs, api, get, hook, pr_event, post  # noqa: F401
 
 HEAD = 'a' * 40
 

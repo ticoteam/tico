@@ -1,6 +1,7 @@
 """A bot's question task to a person goes ahead on the bot's default when it is safe to, and closes on its date."""
 
-from backend.tests.test_api import api, headers, post  # noqa: F401  (fixture)
+from backend.tests.helpers.api import headers, post  # noqa: F401  (fixture)
+from backend.tests.test_api import api  # noqa: F401  (fixture)
 from backend import ask_deadlines, question_tasks as QT, team_rules
 from backend.store import H
 
@@ -135,8 +136,8 @@ def test_a_bot_date_never_beats_the_teams_days_and_the_cli_must_say_the_kind(api
 
 def test_a_bot_puts_its_default_on_a_question_and_a_past_or_far_deadline_is_refused(api):
     from datetime import datetime, timedelta, timezone
-    from backend.tests.test_api import setup_attempt
-    from backend.tests.test_mcp import call
+    from backend.tests.helpers.api import setup_attempt
+    from backend.tests.helpers.mcp import call
 
     _, _, attempt = setup_attempt(api)
     with api.app.state.store.transaction() as c:

@@ -363,7 +363,7 @@ def test_a_copy_of_a_database_from_before_the_history_move_keeps_its_change_logs
     """devcopy prunes before the copy is migrated: the five change logs migration 0064 moves are kept whole (their rows,
     and a deleted task's trash snapshot of them), so the move still has every row to copy into history_events."""
     import json
-    from backend.tests.test_history_events import OLD, migration
+    from backend.tests.helpers.history_events import OLD, migration
 
     stamp = "2020-01-01T00:00:00.000000Z"
     source = source_db(tmp_path, booted)

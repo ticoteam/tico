@@ -4,13 +4,13 @@ them refuses other bots; installs from before the setting keep their inbox-only 
 import uuid
 
 from backend.store import encode
-from backend.tests.test_getting_started import add_bot, enrolled, SIGNED_IN, heartbeat  # noqa: F401
-from backend.tests.test_onboarding import (
+from backend.tests.helpers.getting_started import add_bot, enrolled, SIGNED_IN, heartbeat  # noqa: F401
+from backend.tests.helpers.onboarding import (
     PEOPLE,
     ASSISTANT_AGENT,
     ASSISTANT_CARD,
     BOTOPS_CARD,
-    LIBRARIAN_CARD,  # noqa: F401
+    LIBRARIAN_CARD,
     environment,
     machine,
     signed_in,

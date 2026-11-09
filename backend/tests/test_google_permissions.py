@@ -12,9 +12,10 @@ import pytest
 from backend import google_connect
 from backend import google_workspace as W
 from backend.auth import Identity
-from backend.tests.test_api import api, get, headers, runner  # noqa: F401
-from backend.tests.test_google_connect import FakeGoogle, app, exchanged, own_app, refresh, start  # noqa: F401
-from backend.tests.test_google_workspace import (  # noqa: F401  (fixtures)
+from backend.tests.helpers.api import get, headers, runner  # noqa: F401
+from backend.tests.test_api import api  # noqa: F401
+from backend.tests.helpers.google_connect import FakeGoogle, app, exchanged, own_app, refresh, start  # noqa: F401
+from backend.tests.helpers.google_workspace import (
     CALENDAR,
     GMAIL,
     MAILBOX,
@@ -228,7 +229,7 @@ def test_a_key_authorized_before_the_read_only_scopes_keeps_minting_what_google_
 
 
 def test_a_key_stored_by_upload_lists_every_scope_tico_shows(api, private, covered, google):
-    from backend.tests.test_google_workspace import key_json, new_code, upload
+    from backend.tests.helpers.google_workspace import key_json, new_code, upload
 
     covered((MAILBOX, "inbox-cara"))
     upload(api, new_code(api), key_json(private))

@@ -17,10 +17,7 @@ from backend.blobs import register
 from backend.files import series
 from backend.store import H, encode, task_message_page
 from backend.tests.test_api import api, headers, post, restrict  # noqa: F401  (the fixture; post is a helper)
-from backend.tests.test_threads_private_execution import (  # noqa: F401  (the helper and the fixture it needs)
-    private_run,
-    private_tasks_have_an_unrelated_manager,
-)
+from backend.tests.helpers.threads_private_execution import private_run, private_tasks_have_an_unrelated_manager  # noqa: F401
 
 PEOPLE = ("human:ana", "human:ben", "human:cara")
 
