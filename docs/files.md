@@ -134,7 +134,7 @@ the bot publishes a changed version.
 
 ## API
 
-Stable v2 (`docs/openapi/v2.json`): `GET /api/v2/bots/{bot}/files?limit=&cursor=` (ordered by last
+Stable v2 (`GET /api/v2/openapi.json`): `GET /api/v2/bots/{bot}/files?limit=&cursor=` (ordered by last
 activity, with the visible `total`), `POST /api/v2/files/uploads`, `/links`, `/imports`,
 `PATCH /api/v2/files/{id}` (title, task, archive, promote), `GET /api/v2/files/{id}/activity` and
 `/versions`. Display names come as `actor_name` and in `actors`, as everywhere in v2.
