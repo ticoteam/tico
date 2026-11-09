@@ -74,13 +74,14 @@ interface FinAccLines { pnl: FinAccLine[] | null; bs: FinAccLine[] | null; ready
 interface FinGrantPayload {
   subject_kind: string; subject: string; what: string; whose?: string; whose_team?: string; account_ids?: string[]; expires_at?: string;
 }
+interface FinPage { src?: FinSrcState; accLines?: FinAccLines }
 type FinDefaultKey = 'manager' | 'member' | 'manager_payroll';
 
 // ----------------------------------------------------------------- sources
 const FIN_SRC = {open: new Set<string>(), q: '', sel: ''};
 function finSourcesPage() {
   const caps = finNeed(finCaps(), 'the finance caps'), s = FIN_SRC;
-  FIN.src = {groups: [], lines: [], load: 0};
+  finNeed(FIN, 'the Finance page').src = {groups: [], lines: [], load: 0};
   $('#fin-body').innerHTML = `<div class="fin-bar"><label class="fin-search"><span class="nav-icon" aria-hidden="true">search</span><input type="search" data-fin-q value="${esc(s.q)}" placeholder="Search sources, accounts, cards" aria-label="Search sources"></label>
       <button type="button" class="ghost" data-fin-collapse>Expand all</button><span class="spacer"></span>
       ${finSourceMenuHtml(caps)}</div>`
@@ -94,7 +95,7 @@ function finSourcesPage() {
     const pick = at?.closest<HTMLElement>('[data-fin-connect-item]');
     if (pick) { $('#fin-connect').hidden = true; (add as HTMLElement | null | undefined)?.setAttribute('aria-expanded', 'false'); finConnect(pick.dataset.finConnectItem ?? ''); return; }
     if (at?.closest('[data-fin-collapse]')) {
-      if (finSrcAllShut()) for (const g of FIN.src.groups) s.open.add(g.group); else s.open.clear();
+      if (finSrcAllShut()) for (const g of finNeed(FIN?.src, 'the sources').groups) s.open.add(g.group); else s.open.clear();
       finSrcDraw(); return;
     }
     const g = at?.closest<HTMLElement>('[data-fin-group]');
@@ -105,7 +106,7 @@ function finSourcesPage() {
   void finSrcLoad();
 }
 async function finSrcLoad() {
-  const state: FinSrcState = FIN.src, load = ++state.load, admin = finNeed(finCaps(), 'the finance caps').may('finance.admin');
+  const state: FinSrcState = finNeed(FIN?.src, 'the sources'), load = ++state.load, admin = finNeed(finCaps(), 'the finance caps').may('finance.admin');
   const [src, bs] = await Promise.allSettled([get<FinSrcList>('/v2/finance/sources' + finAs('?'), {fresh: true}),
     admin ? get<FinSrcSheet>('/v2/finance/balance-sheet', {fresh: true}) : Promise.resolve(null)]);
   if (FIN?.src !== state || state.load !== load || !$('#fin-src')) return;
@@ -135,7 +136,7 @@ function finSrcCols(r: FinSrcRow) {
   else if (r.kind === 'entries') { has = n((r.manual || 0) + (r.import || 0), 'entry', 'entries'); how = 'By hand'; status = ['idle', '—']; }
   else {
     // A connection has the money accounts it feeds (as its rail lists them), else nothing to count.
-    if (r.kind === 'connection') { const k = (FIN.src?.groups || []).flatMap((g: FinSrcGroup) => g.rows).filter((x: FinSrcRow) => finSrcMoney(x) && x.sync?.connection_id === r.id).length; has = k ? n(k, 'account', 'accounts') : '—'; }
+    if (r.kind === 'connection') { const k = (FIN?.src?.groups || []).flatMap((g: FinSrcGroup) => g.rows).filter((x: FinSrcRow) => finSrcMoney(x) && x.sync?.connection_id === r.id).length; has = k ? n(k, 'account', 'accounts') : '—'; }
     else if (r.cards) has = n(sum(r.cards), 'card', 'cards');
     else has = finUsd(r.balance);
     feeds = r.account ? r.account.name : r.kind === 'connection' ? '' : 'Not mapped';
@@ -150,9 +151,9 @@ function finSrcCols(r: FinSrcRow) {
   return {has, feeds, how, last, status};
 }
 // Every group shut (a search opens them all): the button then expands them, else it collapses them.
-const finSrcAllShut = () => !FIN_SRC.q && !(FIN.src?.groups || []).some((g: FinSrcGroup) => FIN_SRC.open.has(g.group));
+const finSrcAllShut = () => !FIN_SRC.q && !(FIN?.src?.groups || []).some((g: FinSrcGroup) => FIN_SRC.open.has(g.group));
 function finSrcDraw() {
-  const state: FinSrcState = FIN.src, s = FIN_SRC, box = $('#fin-src'); if (!box) return;
+  const state = FIN?.src, s = FIN_SRC, box = $('#fin-src'); if (!box || !state) return;
   // A search shows every match open, so the toggle hides until the search clears.
   const btn = $('#fin-body [data-fin-collapse]'); if (btn) { btn.hidden = !!s.q; btn.textContent = finSrcAllShut() ? 'Expand all' : 'Collapse all'; }
   if (!state.groups.length) { box.innerHTML = finNote('No sources yet.'); return; }
@@ -174,7 +175,7 @@ function finSrcDraw() {
   box.innerHTML = `<table class="fin-t fin-src-t"><thead><tr><th>Source</th><th>Has</th><th>Feeds</th><th>Sync</th><th>Last</th><th>Status</th></tr></thead><tbody>${out.join('')}</tbody></table>`;
 }
 function finSrcRail() {
-  const state: FinSrcState = FIN.src, s = FIN_SRC;
+  const state: FinSrcState = finNeed(FIN?.src, 'the sources'), s = FIN_SRC;
   const r = state.groups.flatMap(g => g.rows).find(x => finSrcKey(x) === s.sel);
   if (!r) { finRail(''); return; }
   const c = finSrcCols(r), sync = r.sync, feed = Object.entries(r.feed || {}), cards = Object.entries(r.cards || {});
@@ -229,16 +230,16 @@ const finSrcMoney = (r: FinSrcRow) => 'account' in r && !['connection', 'usage',
 // Its line, or a select of the lines it may map to (backend/finance/banking.py connection_map: a card program to a
 // liability, anything else to an asset; one money account per line).
 function finMapCell(r: FinSrcRow, admin: boolean) {
-  const lines: FinSrcLine[] = FIN.src.lines;
+  const src = finNeed(FIN?.src, 'the sources'), lines: FinSrcLine[] = src.lines;
   if (!admin || !lines.length) return r.account ? esc(r.account.name) : '<span class="muted">Not mapped</span>';
   const want = r.kind === 'card_program' ? 'liability' : 'asset';
-  const taken = new Set<string | null>(FIN.src.groups.flatMap((g: FinSrcGroup) => g.rows).filter((x: FinSrcRow) => x.id !== r.id && finSrcMoney(x) && x.account).map((x: FinSrcRow) => x.account!.id));
+  const taken = new Set<string | null>(src.groups.flatMap((g: FinSrcGroup) => g.rows).filter((x: FinSrcRow) => x.id !== r.id && finSrcMoney(x) && x.account).map((x: FinSrcRow) => x.account!.id));
   const opts = lines.filter(l => l.type === want && (!taken.has(l.account_id) || l.account_id === r.account?.id));
   return `<select data-fin-map="${esc(r.id)}" aria-label="${esc(r.name || '')} books as">${r.account ? '' : '<option value="" selected>Not mapped</option>'}${opts.map(l =>
     `<option value="${esc(l.account_id)}"${l.account_id === r.account?.id ? ' selected' : ''}>${esc(l.name)}</option>`).join('')}</select>`;
 }
 async function finSrcMap(sel: HTMLSelectElement) {
-  const r = FIN.src.groups.flatMap((g: FinSrcGroup) => g.rows).find((x: FinSrcRow) => x.id === sel.dataset.finMap && finSrcMoney(x));
+  const r = finNeed(FIN?.src, 'the sources').groups.flatMap((g: FinSrcGroup) => g.rows).find((x: FinSrcRow) => x.id === sel.dataset.finMap && finSrcMoney(x));
   if (!r || !sel.value || sel.value === r.account?.id) return;
   sel.disabled = true;
   try {
@@ -484,7 +485,7 @@ function finDefaultLabel(row: FinAccMate) {
 }
 const finDefaultCls = (row: FinAccMate) => finAsker(row) ? 'own' : {everything: 'all', team_expenses: 'mgr', own_expenses: 'own', none: 'none'}[row.default] || 'own';
 function finLineNames(ids: string[]) {
-  const rows = [...(FIN_PNL.last?.rows || []), ...(FIN.accLines?.pnl || []), ...(FIN.accLines?.bs || [])];
+  const rows = [...(FIN_PNL.last?.rows || []), ...(FIN?.accLines?.pnl || []), ...(FIN?.accLines?.bs || [])];
   return (ids || []).map(id => rows.find(r => r.account_id === id)?.name || 'A line').join(', ');
 }
 function finGrantLabel(g: FinGrant) {
@@ -514,7 +515,7 @@ function finAccRows(acc: FinAccData) {
   return out;
 }
 function finAccessPage() {
-  const acc: FinAccData = FIN.acc;
+  const acc: FinAccData = finNeed(FIN?.acc, 'the access list');
   $('#fin-body').innerHTML = `<div class="fin-bar">${finApproverHtml(acc)}<span class="spacer"></span>${acc.can_edit_defaults ? '<button type="button" class="ghost" data-fin-defaults>Edit defaults</button>' : ''}
       ${acc.can_view_as ? '<button type="button" class="ghost" data-fin-viewas>View as…</button>' : ''}</div>`
     + finSplit(`<h2 class="fin-h2">Org chart</h2><div class="fin-scroll" id="fin-acc"></div><div id="fin-private"></div>`, '', 'Selected teammate');
@@ -546,11 +547,11 @@ async function finApproverSet(pick: HTMLSelectElement) {
     if (r.status === 'committed') toast('Saved');
   } catch (e) { toast(errorMessage(e, ''), true); }
   await finAccReload();
-  pick.value = FIN.acc.finance_approver || '';
+  pick.value = finNeed(FIN?.acc, 'the access list').finance_approver || '';
   pick.disabled = false;
 }
 function finAccDraw() {
-  const acc: FinAccData = FIN.acc, box = $('#fin-acc'); if (!box) return;
+  const acc = FIN?.acc, box = $('#fin-acc'); if (!box || !acc) return;
   const role = (t: FinAccMate) => t.default === 'everything' ? 'Owner' : t.default === 'team_expenses' && !finAsker(t) ? 'Manager' : '';
   const grants = (t: FinAccMate) => (t.grants || []).map(g => `<span class="fin-chip fin-grant${g.status !== 'active' ? ' muted' : ''}">${esc(finGrantLabel(g))}${g.status !== 'active' ? ' · suspended' : ''}</span>${g.granted_by
     ? `<span class="muted fin-small">by ${esc(finWho(g.granted_by))}</span>` : ''}`).join(' ');
@@ -568,7 +569,7 @@ function finAccDraw() {
     chip(p.name, p.others_see === 'hidden', Array.isArray(p.full_detail) ? p.full_detail : [])).join('')}</div>` : '';
 }
 function finAccRail() {
-  const acc: FinAccData = FIN.acc, me = finMe(), t = (acc.teammates || []).find(x => x.teammate === FIN_ACC.sel);
+  const acc: FinAccData = finNeed(FIN?.acc, 'the access list'), me = finMe(), t = (acc.teammates || []).find(x => x.teammate === FIN_ACC.sel);
   if (!t) { finRail(''); return; }
   const teams = acc.teams || [];
   const path = []; for (let id = t.team, n = 0; id && n < 12; n++) { const team = teams.find(x => x.id === id); if (!team) break; path.unshift(team.name); id = team.parent; }
@@ -633,9 +634,10 @@ function finAccRail() {
 }
 // Read once per visit to Access: the P&L lines (company view for whoever sees it) and the balance sheet's lines.
 function finAccLines(): FinAccLines {
-  if (FIN.accLines) return FIN.accLines;
+  const fin = finNeed(FIN, 'the Finance page');
+  if (fin.accLines) return fin.accLines;
   const caps = finNeed(finCaps(), 'the finance caps'), [a, z] = finPnlRange('month');
-  const L: FinAccLines = FIN.accLines = {pnl: null, bs: null, ready: false, wait: null};
+  const L: FinAccLines = fin.accLines = {pnl: null, bs: null, ready: false, wait: null};
   L.wait = Promise.allSettled([get<FinPnlApi>(`/v2/finance/pnl?start=${a}&end=${z}&period=month&basis=cash&view=${caps.company ? 'company' : 'expenses'}`, {fresh: true}),
     caps.balance ? get<FinSrcSheet>('/v2/finance/balance-sheet', {fresh: true}) : Promise.resolve(null)]).then(([p, b]) => {
     L.pnl = p.status === 'fulfilled' ? (p.value?.rows || []).filter(r => !r.private).sort((x, y) => String(x.code).localeCompare(String(y.code))) : [];
@@ -646,7 +648,7 @@ function finAccLines(): FinAccLines {
   return L;
 }
 async function finAccReload() {
-  try { FIN.acc = FIN_ACCESS = await get('/v2/finance/access', {fresh: true}); } catch { /* keep what is drawn */ }
+  try { const fin = FIN; FIN_ACCESS = await get<FinAccData>('/v2/finance/access', {fresh: true}); if (fin) fin.acc = FIN_ACCESS; } catch { /* keep what is drawn */ }
   if ($('#fin-acc')) { finAccDraw(); finAccRail(); }
 }
 async function finRevoke(btn: HTMLButtonElement) {
@@ -658,7 +660,7 @@ async function finRevoke(btn: HTMLButtonElement) {
   } catch (e) { toast(errorMessage(e, ''), true); btn.disabled = false; }
 }
 function finViewAsPick() {
-  const acc: FinAccData = FIN.acc, me = finMe();
+  const acc: FinAccData = finNeed(FIN?.acc, 'the access list'), me = finMe();
   finDialog('View as', `<label>Teammate<select name="who">${acc.teammates.filter(t => t.teammate !== me).map(t =>
     `<option value="${esc(t.teammate)}">${esc(finWho(t.teammate))}</option>`).join('')}</select></label>`, 'View', async (form: FinFormOf<{who: HTMLSelectElement}>) => {
     finViewAs(form.elements.who.value);
@@ -667,7 +669,7 @@ function finViewAsPick() {
 // The company's defaults (§7.5): owners see everything; managers and everyone else as set here (nothing until the owner
 // opens it up); revenue, the balance sheet, payables and receivables stay the owners' unless granted.
 function finDefaultsEdit() {
-  const d = FIN.acc.defaults || {}, opt = (v: string, l: string, cur: string) => `<option value="${v}"${v === cur ? ' selected' : ''}>${l}</option>`;
+  const d = finNeed(FIN?.acc, 'the access list').defaults || {}, opt = (v: string, l: string, cur: string) => `<option value="${v}"${v === cur ? ' selected' : ''}>${l}</option>`;
   finDialog('Edit defaults', `<label>Owners<select disabled><option>Everything</option></select></label>
     <label>Managers<select name="manager">${opt('none', 'Same as everyone else', d.manager)}${opt('team_expenses', 'Expenses of what they manage', d.manager)}${opt('own_expenses', 'Own expenses', d.manager)}</select></label>
     <label>Managers' payroll<select name="manager_payroll">${opt('totals', 'Totals', d.manager_payroll)}${opt('hidden', 'Hidden', d.manager_payroll)}</select></label>
