@@ -136,7 +136,7 @@ Admins also read and act on suggestions: `GET skills/suggestions`, then `POST sk
 off, with the rights of uninstalling it), `/asked` (after the page sent the bot its message) or `/dismiss`; these four are internal,
 not in the OpenAPI contract. Route words such as `usage`, `installed`, `install-targets`, `suggestions`, `proposals` and
 `installs` can't be skill names. The contract is in
-`docs/openapi/v2.json` under the Skills tag. How a runner stages installed skills on a Claude Code or Codex turn and reports them:
+`GET /api/v2/openapi.json` under the Skills tag. How a runner stages installed skills on a Claude Code or Codex turn and reports them:
 [Harnesses](harnesses.md#company-skills-on-a-claude-code-or-codex-turn).
 
 ## Privacy

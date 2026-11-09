@@ -1137,7 +1137,8 @@ def with_options(question, options):
 
 def list_sets(root=None):
     out = []
-    for path in sorted(Path(root or QUESTIONS_DIR).glob("*.json")):
+    folder = Path(root) if root else QUESTIONS_DIR
+    for path in sorted(folder.glob("*.json")):
         try:
             data = load_set(path.stem, root)
         except JudgeError as exc:
