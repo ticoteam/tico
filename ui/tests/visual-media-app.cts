@@ -1,3 +1,4 @@
+import type * as Tasks from './tasks-page.cts';
 // Video and audio in the real app (Visual replies 3/4): a chat message and a task comment show players in their cards,
 // from the sign-in-free visual address only and paused; a person's clip too; video and audio count toward the cap of
 // 4; a clip playing in the chat keeps playing, in place, when a live update redraws the thread with freshly signed
@@ -11,6 +12,9 @@ const fs: typeof import('node:fs') = require('node:fs');
 const {html, uiFile} = require('./support/page.cjs') as typeof PageSupport;
 const {unrouted} = require('./support/routes.cjs') as typeof Routes;
 const {threadsFake} = require('./support/threads-fake.cjs') as typeof ThreadsFake;
+// Page globals read inside page.evaluate (types: tasks-page.cts).
+declare var TASKS_ST: Tasks.Globals['TASKS_ST'];
+declare var taskModalShow: Tasks.Globals['taskModalShow'];
 // Element.prototype.moveBefore is newer than the DOM lib: a file-local view of the Element constructor.
 declare const Element: typeof globalThis.Element & {prototype: {moveBefore?(node: Node, child: Node | null): void}};
 interface PageWin { __mb: typeof Element.prototype.moveBefore }

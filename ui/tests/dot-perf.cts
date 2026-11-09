@@ -12,29 +12,54 @@
 //   and reused.
 // - A hidden tab: every dot paused and no idle timer left, and none set while hidden.
 // DOT_PERF_OUT=<file> writes the numbers (the PR body quotes them).
-const {chromium} = require('playwright');
-const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const {html, uiFile} = require('./support/page.cjs');
-const {unrouted} = require('./support/routes.cjs');
-const {SLOWDOWN} = require('./support/load.cjs');
+import type {Browser, CDPSession, Page} from 'playwright';
+const {chromium} = require('playwright') as typeof import('playwright');
+const assert: typeof import('node:assert/strict') = require('node:assert/strict');
+const fs = require('node:fs') as typeof import('node:fs');
+const {html, uiFile} = require('./support/page.cjs') as typeof import('./support/page.cjs');
+const {unrouted} = require('./support/routes.cjs') as typeof import('./support/routes.cjs');
+const {SLOWDOWN} = require('./support/load.cjs') as typeof import('./support/load.cjs');
+
+// Page globals (ui/app/liquid-dot.ts) and the marks this spec leaves on window.
+declare var LDOT_IDLES: string[];
+declare var ldotIdle: () => void;
+declare var ldotScheduled: () => boolean;
+interface FrameLog {gaps: number[]; long: number[]; on?: boolean; obs?: PerformanceObserver}
+declare const window: Window & typeof globalThis & {__frames: FrameLog; __swaps: number; __askMut: string[]};
+// A Chrome trace event, as far as this spec reads one.
+interface TraceEvent {
+  name: string; ph: string; ts: number; dur?: number; tid: number;
+  args?: {beginData?: {stackTrace?: {functionName?: string}[]};
+    data?: {functionName?: string; type?: string; nodeName?: string; clip?: number[]; message?: string}};
+}
+// stopTracing gives {traceEvents}, or (older Chrome) the bare event array.
+type Trace = TraceEvent[] & {traceEvents?: TraceEvent[]};
+type Metrics = Record<'LayoutCount' | 'RecalcStyleCount' | 'TaskDuration', number>;
+interface Phase {frames: number; p95: number; max: number; longTask: number}
+interface Out {
+  idle?: {layouts: number; recalcs: number; taskMs: number; paints: number; props: string[]; liveDots: number; swaps: number};
+  variants?: {layouts: number; paints: number};
+  throttled?: Record<string, Phase>;
+  toggleMutations?: string[];
+  hidden?: {timer: boolean; set: number; paused: boolean; back?: boolean};
+}
 
 const now = new Date().toISOString();
-const msg = (id, from, body) => ({id, sender_id: from, body, refs: {}, created_at: now, kind: 'say'});
+const msg = (id: string, from: string, body: string) => ({id, sender_id: from, body, refs: {}, created_at: now, kind: 'say'});
 const IDLE_MS = 10000;
 const DOT_ANIMATED = new Set(['transform', 'opacity', 'offset', 'easing', 'composite', 'computedOffset']);
 
-async function open(browser) {
+async function open(browser: Browser) {
   const state = {messages: [msg('a1', 'human:ben', 'Where is the launch plan?'), msg('a2', 'bot:coo', 'In Docs.')], sent: 0};
   const page = await browser.newPage({viewport: {width: 1280, height: 860}, serviceWorkers: 'block'});
-  const errors = [];
+  const errors: string[] = [];
   page.on('pageerror', error => errors.push(error.message));
   await page.route('**/*', route => {
     const url = new URL(route.request().url()), p = url.pathname, method = route.request().method();
-    const json = body => route.fulfill({contentType: 'application/json', body: JSON.stringify(body)});
+    const json = (body: unknown) => route.fulfill({contentType: 'application/json', body: JSON.stringify(body)});
     if (/\/marked\.min\.js$/.test(p)) return route.fulfill({contentType: 'application/javascript', body: fs.readFileSync(uiFile('vendor/marked.min.js'), 'utf8')});
     if (url.origin !== 'https://tico-ui.test') return route.abort();
-    const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/);
+    const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/) as [string, string] | null;
     if (ui && fs.existsSync(uiFile(ui[1]))) return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]), 'utf8')});
     if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
     if (p === '/api/me') return json({id: 'ben', role: 'human', name: 'Ben', email: 'ben@example.test', cloud: true});
@@ -46,7 +71,7 @@ async function open(browser) {
     if (p === '/api/v2/assistant' && method === 'GET') return json({available: true, state: 'active', bot: 'coo', name: 'Assistant',
       can_turn_on: false, room_id: 'room1', messages: state.messages, has_more: false, next_before: null, execution: null, actions: {}, pending: []});
     if (p === '/api/v2/assistant/messages') {
-      const n = ++state.sent, user = msg('u' + n, 'human:ben', JSON.parse(route.request().postData()).text), bot = msg('b' + n, 'bot:coo', 'On it.');
+      const n = ++state.sent, user = msg('u' + n, 'human:ben', (JSON.parse(route.request().postData()!) as {text: string}).text), bot = msg('b' + n, 'bot:coo', 'On it.');
       state.messages.push(user, bot);
       return json({message: user});
     }
@@ -59,20 +84,20 @@ async function open(browser) {
   await page.locator('#ask-row').waitFor();
   return {page, errors};
 }
-const metrics = async cdp => Object.fromEntries((await cdp.send('Performance.getMetrics')).metrics.map(m => [m.name, m.value]));
+const metrics = async (cdp: CDPSession) => Object.fromEntries((await cdp.send('Performance.getMetrics')).metrics.map(m => [m.name, m.value])) as Metrics;
 // The dots' running animations: which dots move, and every property any of them animates.
-const dotAnimations = page => page.evaluate(() => {
-  const running = document.getAnimations().filter(a => a.playState === 'running' && a.effect?.target?.closest?.('.ldot, .ask-fly'));
-  const props = new Set(running.flatMap(a => a.effect.getKeyframes().flatMap(k => Object.keys(k))));
-  const dots = new Set(running.map(a => a.effect.target.closest('.ldot')).filter(d => d && !d.closest('[data-paused]') && !d.matches('[data-paused]')));
+const dotAnimations = (page: Page) => page.evaluate(() => {
+  const running = document.getAnimations().filter(a => a.playState === 'running' && (a.effect as KeyframeEffect | null)?.target?.closest?.('.ldot, .ask-fly'));
+  const props = new Set(running.flatMap(a => (a.effect as KeyframeEffect).getKeyframes().flatMap(k => Object.keys(k))));
+  const dots = new Set(running.map(a => (a.effect as KeyframeEffect).target!.closest('.ldot')).filter(d => d && !d.closest('[data-paused]') && !d.matches('[data-paused]')));
   return {props: [...props], dots: dots.size};
 });
 // Frame gaps and long tasks while `act` runs.
-async function frames(page, act) {
+async function frames(page: Page, act: () => Promise<void>) {
   await page.evaluate(() => {
-    const f = window.__frames = {gaps: [], long: []};
+    const f: FrameLog = window.__frames = {gaps: [], long: []};
     let last = performance.now();
-    const tick = t => { f.gaps.push(t - last); last = t; if (f.on) requestAnimationFrame(tick); };
+    const tick = (t: number) => { f.gaps.push(t - last); last = t; if (f.on) requestAnimationFrame(tick); };
     f.on = true; requestAnimationFrame(t => { last = t; requestAnimationFrame(tick); });
     f.obs = new PerformanceObserver(list => list.getEntries().forEach(e => f.long.push(e.duration)));
     f.obs.observe({type: 'longtask'});
@@ -80,16 +105,16 @@ async function frames(page, act) {
   await act();
   await page.waitForTimeout(300);
   return page.evaluate(() => {
-    const f = window.__frames; f.on = false; f.obs.disconnect();
+    const f = window.__frames; f.on = false; f.obs!.disconnect();
     const gaps = f.gaps.slice(1).sort((a, b) => a - b);
     return {frames: gaps.length, p95: gaps[Math.floor(gaps.length * .95)] || 0, max: gaps.at(-1) || 0, long: Math.max(0, ...f.long)};
   });
 }
-const round = v => Math.round(v * 10) / 10;
+const round = (v: number) => Math.round(v * 10) / 10;
 
 (async () => {
-  const browser = await chromium.launch({headless: true, channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined});
-  const out = {};
+  const browser = await chromium.launch({headless: true, channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined} as Parameters<typeof chromium.launch>[0]);
+  const out: Out = {};
   try {
     const {page, errors} = await open(browser);
     const cdp = await page.context().newCDPSession(page);
@@ -106,7 +131,7 @@ const round = v => Math.round(v * 10) / 10;
     await page.waitForTimeout(IDLE_MS);
     const after = await metrics(cdp);
     const swaps = await page.evaluate(() => window.__swaps);
-    const trace = JSON.parse((await browser.stopTracing()).toString());
+    const trace: Trace = JSON.parse((await browser.stopTracing()).toString());
     const sampled = [await dotAnimations(page)];       // after: reading animations recalcs style itself
     const events = (trace.traceEvents || trace).filter(e => e.ph === 'X' || e.ph === 'B');
     // What laid out, if anything: the script frames (or the style change) behind each layout, for the message.
@@ -132,11 +157,11 @@ const round = v => Math.round(v * 10) / 10;
     const swapsBefore = await metrics(cdp);
     await browser.startTracing(page, {categories: ['devtools.timeline']});
     for (const v of await page.evaluate(() => LDOT_IDLES)) {
-      await page.evaluate(v => { document.querySelector('#ask-row .ldot').dataset.idle = v; }, v);
+      await page.evaluate(v => { document.querySelector<HTMLElement>('#ask-row .ldot')!.dataset.idle = v; }, v);
       await page.waitForTimeout(400);
     }
     const swapsAfter = await metrics(cdp);
-    const swapPaints = JSON.parse((await browser.stopTracing()).toString()).traceEvents.filter(e => e.name === 'Paint')
+    const swapPaints = (JSON.parse((await browser.stopTracing()).toString()) as {traceEvents: TraceEvent[]}).traceEvents.filter(e => e.name === 'Paint')
       .map(e => e.args?.data?.nodeName || '?');
     out.variants = {layouts: swapsAfter.LayoutCount - swapsBefore.LayoutCount, paints: swapPaints.length};
     assert.equal(out.variants.layouts, 0, `idle variants: ${out.variants.layouts} layouts`);
@@ -151,7 +176,7 @@ const round = v => Math.round(v * 10) / 10;
     await page.waitForFunction(() => !document.querySelector('.ldot-fly, .ldot-away'));
     await page.waitForTimeout(400);
     await cdp.send('Emulation.setCPUThrottlingRate', {rate: 4});
-    const settle = () => page.waitForFunction(() => !document.querySelector('.ldot-fly, .ldot-away') && !document.querySelector('#ask-row').getAnimations().length);
+    const settle = () => page.waitForFunction(() => !document.querySelector('.ldot-fly, .ldot-away') && !document.querySelector('#ask-row')!.getAnimations().length);
     const budget = {p95: 20 * SLOWDOWN, max: 50 * SLOWDOWN, long: 50 * SLOWDOWN};
     const phases = {
       open: async () => { await page.locator('#ask-row').click(); await page.waitForFunction(() => document.querySelector('.ldot-fly')); await settle(); },
@@ -182,7 +207,7 @@ const round = v => Math.round(v * 10) / 10;
     // ---- Opening and closing (the row, ⌘J, Escape), flights included, change no `hidden` attribute anywhere and add
     // nothing to <body> or take nothing from it: on a real hub either restyles the whole page (ui/app/ask-panel.ts askSync).
     await page.evaluate(() => {
-      const seen = window.__askMut = [], name = n => n.id || String(n.className || n.nodeName);
+      const seen: string[] = window.__askMut = [], name = (n: Node) => (n as Element).id || String((n as Element).className || n.nodeName);
       new MutationObserver(list => list.forEach(r => {
         if (r.type === 'attributes') seen.push('hidden on ' + name(r.target));
         else if (r.target === document.body) seen.push('<body> child ' + [...r.addedNodes].map(n => '+' + name(n)).concat([...r.removedNodes].map(n => '-' + name(n))).join(' '));
@@ -196,7 +221,7 @@ const round = v => Math.round(v * 10) / 10;
       await page.keyboard.press('Control+j'); await shut();
     }
     // The page it sees: a page with no heading, then one with a heading, so its label goes and comes back.
-    const heading = text => page.evaluate(text => { const h = document.querySelector('#main h1, #main h2'); h.dataset.was ??= h.textContent; h.textContent = text ?? h.dataset.was; }, text);
+    const heading = (text: string | null) => page.evaluate(text => { const h = document.querySelector<HTMLElement>('#main h1, #main h2')!; h.dataset.was ??= h.textContent; h.textContent = text ?? h.dataset.was; }, text);
     await heading('');
     await page.locator('#ask-row').click(); await page.waitForFunction(() => document.querySelector('.ldot-fly')); await settle();
     assert.equal(await page.locator('#ask-panel [data-ask-sees]').isVisible(), false, 'no heading, no page named');
@@ -213,13 +238,13 @@ const round = v => Math.round(v * 10) / 10;
     const hidden = await page.evaluate(async () => {
       let set = 0;
       const real = window.setTimeout;
-      window.setTimeout = (fn, ...rest) => { if (fn === ldotIdle) set++; return real(fn, ...rest); };
+      window.setTimeout = ((fn: TimerHandler, ...rest: [number?, ...unknown[]]) => { if (fn === ldotIdle) set++; return real(fn, ...rest); }) as typeof window.setTimeout;
       Object.defineProperty(document, 'hidden', {configurable: true, get: () => true});
       Object.defineProperty(document, 'visibilityState', {configurable: true, get: () => 'hidden'});
       document.dispatchEvent(new Event('visibilitychange'));
-      await new Promise(r => real(r, 1500));
-      const res = {timer: ldotScheduled(), set, paused: [...document.querySelectorAll('.ldot')].every(d => d.hasAttribute('data-paused'))};
-      delete document.hidden; delete document.visibilityState;
+      await new Promise<void>(r => real(r, 1500));
+      const res: NonNullable<Out['hidden']> = {timer: ldotScheduled(), set, paused: [...document.querySelectorAll('.ldot')].every(d => d.hasAttribute('data-paused'))};
+      delete (document as {hidden?: boolean}).hidden; delete (document as {visibilityState?: string}).visibilityState;
       document.dispatchEvent(new Event('visibilitychange'));
       res.back = ldotScheduled();
       window.setTimeout = real;

@@ -1,10 +1,14 @@
-import type * as Tasks from './tasks-page.cjs';
+import type * as Tasks from './tasks-page.cts';
 // The Needs you card: a bot's question that says what it will do if nobody answers shows it on the card, in plain words, with the
 // day it goes ahead (backend/ask_deadlines.py), as a small line at the card's foot, never as the recommendation. A send
 // waits for the answer, and the card says so.
 const {chromium} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
-const {open} = require('./tasks-page.cjs') as typeof Tasks;
+const {open} = require('./tasks-page.cts') as Tasks.Api;
+// Page globals read inside page.evaluate (types: tasks-page.cts).
+declare var decideOpen: Tasks.Globals['decideOpen'];
+declare var qcardFallbackHTML: Tasks.Globals['qcardFallbackHTML'];
+declare var v2Refresh: Tasks.Globals['v2Refresh'];
 const NOW = Date.now(), at = (minutes: number) => new Date(NOW - minutes * 60000).toISOString();
 const question = (id: string, title: string, ifNoAnswer: Record<string, unknown>, goesAheadAt: string | null) => ({id, kind: 'question', title, body: '', owner_id: 'bot:writer',
   requester_id: 'bot:writer', status: 'waiting', waiting_on: 'human:ana', version: 2, created_at: at(400), updated_at: at(360), open_asks: 1,

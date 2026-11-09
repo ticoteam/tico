@@ -1,4 +1,4 @@
-import type * as Tasks from './tasks-page.cjs';
+import type * as Tasks from './tasks-page.cts';
 import type {Browser, Page} from 'playwright';
 // Org rule checks in the app (ui/app/org-rule-holds.ts, backend/org_rule_check.py): a rule review task shows each held
 // output with its rule and Keep blocked / Send anyway / Edit rule (the list is summaries, each card opens its hold for the
@@ -10,7 +10,11 @@ const {chromium} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const {open} = require('./tasks-page.cjs') as typeof Tasks;
+const {open} = require('./tasks-page.cts') as Tasks.Api;
+// Page globals read inside page.evaluate (types: tasks-page.cts).
+declare var TASKS_ST: Tasks.Globals['TASKS_ST'];
+declare var taskModalShow: Tasks.Globals['taskModalShow'];
+declare var v2MessageHTML: Tasks.Globals['v2MessageHTML'];
 const SHOTS = process.env.TICO_SHOTS || '';
 const ago = (minutes: number) => new Date(Date.now() - minutes * 60000).toISOString();
 

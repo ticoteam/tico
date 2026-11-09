@@ -22,7 +22,7 @@ interface LoginWrite {
   body: {code?: string};
 }
 declare const window: Window & typeof globalThis & {
-  S: {config: {hosted: boolean}};
+  S: {config: {hosted: boolean}; me: {id: string}; v2: {needs: unknown[]}; route: string};
   writes: LoginWrite[];
   row: LoginRow;
   // Shared with other specs' Window augmentations, so the signatures must match theirs exactly.
@@ -48,7 +48,7 @@ async function check(engine: import('playwright').BrowserType) {
       await page.setContent('<!doctype html><html><head></head><body></body></html>');
       await page.addStyleTag({content: css});
       await page.evaluate(() => {
-        // The shared S type (tasks-page.d.cts) also requires me, v2 and route. The sign-in dialog reads only config.
+        // A minimal app S; the sign-in dialog reads only config.
         window.S = {config: {hosted: false}, me: {id: 'fixture'}, v2: {needs: []}, route: '/'};
         window.writes = [];
         window.row = {id: 'fixture', state: 'starting', created_at: new Date().toISOString(), lines: []};

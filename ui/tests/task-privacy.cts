@@ -2,7 +2,7 @@
 // Every request is intercepted; this test never contacts the hub, Slack, or a bot.
 // Labels and PR links, a comment thread
 // with the author on every line (not a chat), and mover-only controls. The list itself (rows, groups, chips, the peek,
-// bulk changes, the keys) is ui/tests/tasks-page.cjs.
+// bulk changes, the keys) is ui/tests/tasks-page.cts.
 // The Product lane is retired: no lane switch, no product board, and the page
 // only asks the hub for company tasks (the product rows below must never show).
 const {chromium} = require('playwright') as typeof import('playwright');

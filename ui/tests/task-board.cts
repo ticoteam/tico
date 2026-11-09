@@ -3,7 +3,7 @@
 // Every request is intercepted; this test never contacts the hub, Slack, or a bot.
 // Labels and PR links, a comment thread
 // with the author on every line (not a chat), and mover-only controls. The list itself (rows, groups, chips, the peek,
-// bulk changes, the keys) is ui/tests/tasks-page.cjs.
+// bulk changes, the keys) is ui/tests/tasks-page.cts.
 // The Product lane is retired: no lane switch, no product board, and the page
 // only asks the hub for company tasks (the product rows below must never show).
 const {chromium} = require('playwright') as typeof import('playwright');
@@ -325,7 +325,7 @@ const screenshotDir = process.env.TICO_SCREENSHOT_DIR;
     assert.doesNotMatch(await page.locator('#task-body').innerText(), /Open chat|bots and people|bot or person/);
     if (screenshotDir) { fs.mkdirSync(screenshotDir, {recursive: true}); await page.screenshot({path: path.join(screenshotDir, 'task-board-company.png')}); }
 
-    // List filters, search, Done and recurring controls are exercised in tasks-page.cjs.
+    // List filters, search, Done and recurring controls are exercised in tasks-page.cts.
 
     // The modal: comments with authors, state changes inline, one box; the mover controls are there
     await page.evaluate(() => taskModalShow(TASKS_ST.tasks.find(t => t.id === 'Draft the newsletter')));
