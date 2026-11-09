@@ -20,8 +20,9 @@ step. A person moves the task. The repository's webhook posts here signed with
 - a push to main                    -> the commits are recorded, in order, in `main_pushes`
 
 A merge queue (`enqueued`, `dequeued`) sets the link's `merge_queue` state. A removal from the queue for any reason but a
-merge wakes the owner once, after the maintenance pass has read the pull request and found it still open
-(`_queue_event`, `refresh_queue_removals`); nothing else about a queued pull request is news.
+merge is read by the maintenance pass first (`_queue_event`, `refresh_queue_removals`). One Tico queued itself is armed
+again or handed to the pipeline manager (backend/merge_arm.py); any other wakes the owner once when the pull request is
+still open. Nothing else about a queued pull request is news.
 
 The last hop is a fact of the deploy, not of GitHub: the release manifest names the commit the
 running code was built from (`release.py` writes it from CI), and `ship_deployed` marks a merged
@@ -51,6 +52,7 @@ from . import step_flow
 from .batch_work import isolated
 from .store import Problem
 from . import bot_settings as BS
+from . import merge_arm
 from . import pr_identity as PR
 
 PATH = "/api/v2/github/webhook"  # under /api/v2: the runner hostname routes only that prefix
@@ -435,7 +437,7 @@ def refresh_queue_removals(service):
         marks = ",".join("?" * len(H.ACTIVE_STATUSES))
         rows = H._rows(
             c.execute(
-                "SELECT l.id,l.task_id,l.url,l.repo,l.number FROM task_links l "
+                "SELECT l.id,l.task_id,l.url,l.repo,l.number,l.detail FROM task_links l "
                 "JOIN tasks t ON t.id=l.task_id JOIN repositories r ON lower(r.full_name)=lower(l.repo) "
                 "WHERE l.kind='pr' AND l.state='open' AND json_extract(l.detail,'$.merge_queue.verify')=1 "
                 "AND l.number IS NOT NULL AND r.reachable=1 "
@@ -458,8 +460,14 @@ def refresh_queue_removals(service):
         except Exception:
             logging.getLogger("tico.github").exception("Queue removal read failed for %s #%s", r["repo"], r["number"])
             continue
+        jobs = None
+        queue = (H._json(r["detail"], {}) or {}).get("merge_queue") or {}
+        armed = ((H._json(r["detail"], {}) or {}).get("merge_arm") or {}).get("head")
+        if armed and armed == queue.get("head") and merge_arm.removal_kind(queue.get("reason")) == "check":
+            # A head Tico armed: the queue run's jobs tell a real failure from a cancelled run (merge_arm.removal).
+            jobs = merge_arm.queue_jobs(service, r["repo"], r["number"], H.shift(queue.get("at"), hours=-6))
         with service.store.transaction() as c:
-            _settle_removal(c, r["id"], pr)
+            _settle_removal(c, r["id"], pr, jobs)
 
 
 CONFLICT_READS_PER_PASS = 30
@@ -535,9 +543,11 @@ def refresh_conflicts(service: Any) -> int:
     return read
 
 
-def _settle_removal(c, link_id, pr):
-    """Clear a removal's `verify`; wake its owner once when the pull request is still open at the removed head."""
-    found = H._rows(c.execute("SELECT id,task_id,url,detail FROM task_links WHERE id=?", (link_id,)))
+def _settle_removal(c, link_id, pr, jobs=None):
+    """Clear a removal's `verify`. A pull request still open at the removed head is armed again or handed to its pipeline
+    manager when Tico armed that head (merge_arm.removal, with the queue run's `jobs`); otherwise its owner is woken
+    once and the card goes back a stage."""
+    found = H._rows(c.execute("SELECT id,task_id,url,number,detail FROM task_links WHERE id=?", (link_id,)))
     if not found:
         return
     link = found[0]
@@ -555,6 +565,9 @@ def _settle_removal(c, link_id, pr):
         return
     task = H.task(c, link["task_id"])
     H._task_event(c, task["id"], H.KEEPER, "merge_queue_failed", None, f"{link['url']}@{head}", reason)
+    if (detail.get("merge_arm") or {}).get("head") == queue.get("head") and queue.get("head"):
+        merge_arm.removal(c, task, link, detail, reason, jobs)  # Tico armed it: the builder is not woken
+        return
     from . import pipeline_engine
 
     pipeline_engine.queue_ejected(c, link["task_id"], reason)  # the card goes back a stage with the reason
@@ -673,6 +686,9 @@ def pull_request(c, payload, review_role="", release_repo="", *, read_refresh=Fa
             _queue_event(detail, action, payload, pr, detail.get("head_sha") or "")
         conflict_head = detail.get("head_sha") or "unknown"
         conflict_wake = mergeable == "conflict" and detail.get("conflict_head") != conflict_head
+        if conflict_wake and merge_arm.approved(c, task, link["id"], ignore_conflict=True):
+            # An approved pull request that conflicts is its pipeline manager's to fix (merge_arm.sweep), not the builder's.
+            conflict_wake = False
         if mergeable == "conflict":
             detail["conflict_head"] = conflict_head
         elif mergeable == "clean":
@@ -702,6 +718,7 @@ def pull_request(c, payload, review_role="", release_repo="", *, read_refresh=Fa
             # A merge read on refresh has no webhook behind it, so its page is queued here too. queue() is idempotent:
             # a second merge event finds the page already queued and changes nothing.
             review_pages.queue(c, task, link["id"])
+            merge_arm.close_fix(c, link["url"])
             if merge_wake:
                 merged.append(link)
         elif new_head and action == "synchronize" and state == "open":

@@ -1,7 +1,7 @@
 """Task settings projects existing state without granting writes. (The wake rules listing it once described went with
 the /rules routes; rules made today live in automations.)"""
 
-from backend.tests.test_api import api, get  # noqa: F401
+from backend.tests.helpers.api import get  # noqa: F401
 
 
 def test_task_settings_routines_preserve_actual_state_and_do_not_run_jobs(api):

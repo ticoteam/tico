@@ -5,7 +5,7 @@ rather than posted into the closed task's room."""
 import pytest
 
 from backend.store import H
-from backend.tests.test_api import api, assign, claim, post, ready, runner  # noqa: F401
+from backend.tests.helpers.api import assign, claim, post, ready, runner  # noqa: F401
 
 
 def task_turn(api, title="Count the words"):

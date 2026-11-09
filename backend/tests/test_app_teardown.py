@@ -11,7 +11,7 @@ from fastapi.dependencies import models as fastapi_models
 from fastapi.testclient import TestClient
 
 from backend.app import create_app
-from backend.tests.test_api import api_settings
+from backend.tests.helpers.api import api_settings  # noqa: F401
 
 BUILDS = 3
 SIGNED_IN = {"Authorization": "Bearer ana-test"}  # whatever the answer, sign-in ran

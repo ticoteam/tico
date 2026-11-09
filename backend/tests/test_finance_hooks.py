@@ -9,9 +9,9 @@ import pytest
 
 from backend.finance import actions as FA
 from backend.finance.core import feeds as F
-from backend.tests.test_api import api, headers, post  # noqa: F401
-from backend.tests.test_triggers import hook
-from backend.tests.test_finance_fixtures import AT, MERCURY, OWNER, act
+from backend.tests.helpers.api import headers, post  # noqa: F401
+from backend.tests.helpers.triggers import hook
+from backend.tests.helpers.finance_fixtures import AT, MERCURY, OWNER, act
 
 SECRET = "whsec_acme_0123456789abcdef"
 

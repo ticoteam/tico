@@ -63,7 +63,7 @@ interface CaIcons {
   initials(name: string): string;
 }
 
-// The page opens this dialog through window (welcome.js, team-add.js); it is set at the end of this file.
+// The page opens this dialog through window (welcome.ts, team-add.js); it is set at the end of this file.
 interface Window {
   connectAgent?: (preselect?: string) => void;
 }

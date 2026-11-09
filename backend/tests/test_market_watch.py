@@ -8,10 +8,10 @@ import pytest
 from backend import market_watch as W
 from backend.store import H
 from clients import gateway as GW
-from backend.tests.test_api import api, get, post, setup_attempt  # noqa: F401
-from backend.tests.test_company import with_strategy_bot
-from backend.tests.test_market import _librarian, _seed
-from backend.tests.test_strategy import add_bet, publish, write
+from backend.tests.helpers.api import get, post, setup_attempt  # noqa: F401
+from backend.tests.helpers.company import with_strategy_bot
+from backend.tests.helpers.market import _librarian, _seed
+from backend.tests.helpers.strategy import add_bet, publish, write
 
 PAGE = "https://northwind.example/pricing"
 BASE = "Plans\n" + "\n".join(f"Plan {n} includes feature number {n} for every team" for n in range(8))

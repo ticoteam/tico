@@ -6,9 +6,9 @@ import contextlib
 import json
 
 from backend.store import H, encode
-from backend.tests.test_api import api, get, headers  # noqa: F401  (the api fixture)
-from backend.tests.test_groups import send
-from backend.tests.test_usage_limits import finish, fleet, groups, put, start
+from backend.tests.helpers.api import get, headers  # noqa: F401  (the api fixture)
+from backend.tests.helpers.groups import send
+from backend.tests.helpers.usage_limits import finish, fleet, groups, put, start
 from backend import usage_limits
 from backend import bot_settings as BS
 
@@ -30,7 +30,7 @@ def test_every_bot_and_pool_row_says_what_it_spent_in_each_window_capped_or_not(
 
 
 def test_a_person_who_leads_lists_and_may_edit_the_bots_of_what_it_leads(api):
-    from backend.tests.test_groups import add_bots
+    from backend.tests.helpers.groups import add_bots
 
     with api.app.state.store.transaction() as c:
         add_bots(c, **{"sales-lead": ({}, "ana"), "sdr": ({}, "sales-lead"), "outside": ({}, "ana")})

@@ -4,7 +4,7 @@ import pytest
 
 from backend.personal_tokens import FIELDS
 from backend.store import H
-from backend.tests.test_api import api, get, headers, post  # noqa: F401
+from backend.tests.helpers.api import get, headers, post  # noqa: F401
 
 OWNER, ADMIN, PLAIN = "ana-test", "ben-test", "cara-test"
 
@@ -66,7 +66,7 @@ def test_a_token_cannot_list_mint_or_revoke_tokens(tokens):
     assert r.status_code == 403 and r.json()["error"]["detail"] == refused
     assert len(get(tokens, "me/tokens", token=ADMIN)["tokens"]) == 1
     # Machines and bots have no tokens either.
-    from backend.tests.test_api import runner
+    from backend.tests.helpers.api import runner
 
     r = tokens.get("/api/v2/me/tokens", headers=headers(runner(tokens)["token"]))
     assert r.status_code == 403
@@ -95,8 +95,8 @@ def test_the_owner_and_admins_see_and_revoke_everyones_tokens_and_members_only_t
 
 
 def test_a_token_cannot_make_other_credentials(tokens):
-    from backend.tests.test_agents import hermes_bot
-    from backend.tests.test_hermes_pairing import approve, pair
+    from backend.tests.helpers.agents import hermes_bot
+    from backend.tests.helpers.hermes_pairing import approve, pair
 
     hermes_bot(tokens)
     issued = mint(tokens, OWNER)

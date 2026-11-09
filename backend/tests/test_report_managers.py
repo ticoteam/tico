@@ -11,10 +11,10 @@ from backend import hubdb as H
 from backend import report_managers
 from backend.auth import Identity
 from backend.store import encode
-from backend.tests.test_api import api, claim, get, headers, post, put  # noqa: F401  (api is a fixture)
-from backend.tests.test_botops_parity import act
-from backend.tests.test_mcp import call
-from backend.tests.test_member_bots import botops, finish  # noqa: F401  (botops is a fixture)
+from backend.tests.helpers.api import claim, get, headers, post, put  # noqa: F401  (api is a fixture)
+from backend.tests.helpers.botops_parity import act
+from backend.tests.helpers.mcp import call
+from backend.tests.helpers.member_bots import botops, finish  # noqa: F401  (botops is a fixture)
 
 HAIKU = {"harness": "claude", "model": "claude-haiku-5-5", "effort": "low"}
 

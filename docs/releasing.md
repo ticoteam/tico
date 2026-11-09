@@ -15,7 +15,8 @@ so the tasks waiting on the release learn it shipped. Tico itself never moves a 
 only marks the merged PR links the running release contains as Shipped (backend/github.py).
 
 Tico's own repository is the exception: it releases itself through [the release train](#the-release-train) in
-GitHub Actions. Its Release Manager bot no longer tags or rolls out Tico releases; it only monitors them.
+GitHub Actions. No bot tags or rolls out Tico releases. Getting reviewed work merged is Tico's and the Engineering
+pipeline manager's ([Tico merges](#tico-merges)).
 
 **When releases are cut.** The Release Manager hears about Dev tickets at Pending Release once, as one task:
 "Release: <n> tickets at Pending Release". It arrives once a day at a set hour (10:00 company time by default;
@@ -370,8 +371,14 @@ new commit to borrow an old run. Roll back this tooling change by reverting it; 
 
 ## Tests on a PR
 
-Run tests on your computer while you work, and run the test files your change touches with `scripts/remote.py` before
-you mark the PR ready for review. A push to a pull request runs the cheap checks on free GitHub-hosted runners:
+Open the pull request as a draft and run tests on your computer while you work: a draft runs no checks, so pushes are
+free. When the change is done, `python3 scripts/pr_checks.py local --ready` runs the tests the plan selects for the
+branch (the same selection a pull request's run makes, through `scripts/heavy.sh`), prints a receipt line naming the full
+head sha and the result for the ticket's review gate, and marks the draft ready after a pass; without `--ready` it only
+runs and prints. It names what only CI runs (Rust conformance, the factory simulation). A change that reaches most of
+the suite (a catalog template, a shared module) selects most of it: with `TICO_HEAVY_REMOTE=1` each part runs on a RunsOn
+VM against the pushed head instead. Mark a pull request ready once:
+each later push runs its checks again. A push to a ready pull request runs the cheap checks on free GitHub-hosted runners:
 lint, the generated UI types, the runner wire contract, the migration names, shell scripts and workflows, and whether
 the recorder changed. A ready pull request from this repository also runs the tests and the factory sim its plan selects, on GitHub-hosted runners; the required check `checks` aggregates them all. A fork's pull request runs the cheap checks
 only. The merge queue runs the tests again: once per queue group,
@@ -409,7 +416,7 @@ time from a parameter, a subprocess's own reads) must name that file or folder l
 select it. A file that makes a computed import or lists the repository with `git ls-files` runs on every change.
 The Release validation workflow retains its full candidate gate and never cancels a running validation.
 
-Write unit tests while you build and run them as you go; keep every one that guards a real failure, as many as the change needs, and drop the trivial ones. Before you mark the PR ready, run the test files for what you touched and the checks the change obviously affects with `scripts/remote.py`, not the full suite. For each release, run the full suite once on its frozen candidate.suite once on its frozen candidate.
+Write unit tests while you build and run them as you go; keep every one that guards a real failure, as many as the change needs, and drop the trivial ones. Before you mark the PR ready, run `python3 scripts/pr_checks.py local`, not the full suite. For each release, run the full suite once on its frozen candidate.
 
 Use `pytest -ra` to see prerequisite skip reasons. Systemd lifecycle scenarios run on Linux;
 unit rendering still runs on every host. Installer scenarios need Docker and stage their mounts
@@ -432,7 +439,7 @@ slow tests and every browser script, and release candidate validation covers tha
 ## Merge queue
 
 Main takes changes only through its merge queue. Mark the pull request ready for review, wait for its `checks` to pass,
-then enqueue it with `gh pr merge <N> --merge`. The queue adds the pull request to a group, merges the group onto the current main, runs the selected
+then enqueue it with `gh pr merge <N> --merge` (a bot's Dev ticket is queued by Tico: [Tico merges](#tico-merges)). The queue adds the pull request to a group, merges the group onto the current main, runs the selected
 checks on that merge commit, and moves main only when they pass.
 
 - **Each push to a pull request** (GitHub-hosted, free): plan, static checks and the `checks` gate. A draft runs nothing.
@@ -459,14 +466,14 @@ checks on that merge commit, and moves main only when they pass.
   weekly report fails when an entry is older than 14 days. The fix deletes the entry file.
 - **Required check**: `checks` on main. It fails when a job it needs failed or was cancelled; a skipped job passes.
 
-Agents run the tests they touched with `scripts/remote.py` before they mark a PR ready; the queue runs the selected set
-once per group.
+Agents open pull requests as drafts and run `python3 scripts/pr_checks.py local --ready` once the change is done; the
+queue runs the selected set once per group.
 
 **Enqueue once.** A pull request needs no rebase to be current: the queue merges it onto the current main. Rebase only when
 GitHub reports a conflict. `--admin` and the REST merge endpoint skip the queue; do not use them.
 
-**A red queue run** removes the failing pull request from the queue, and the queue retests the entries behind it. Fix the
-failure on the branch, push, mark the PR ready again if it went back to draft, and enqueue it again. A failing test shows on
+**A red queue run** removes the failing pull request from the queue, and the queue retests the entries behind it. For a
+pull request Tico queued, the pipeline manager gets it ([Tico merges](#tico-merges)). Otherwise, fix the failure on the branch, push, mark the PR ready again if it went back to draft, and enqueue it again. A failing test shows on
 the pull request's own run first when the change reaches it directly: a ready pull request runs a light set (the tests
 that import, name or read a changed file, the smoke set, at most ten VMs), and its queue group goes one level further (at
 most nineteen VMs). Each plan's job summary lists what it left out; release validation's incremental runs select the full
@@ -476,6 +483,33 @@ checks before enqueuing again.
 **Hotfixes do not bypass the queue.** Land the fix through the queue like any change, then dispatch `hotfix.yml` once it
 has landed (see Hotfixes above). The queue itself is a repository ruleset (`merge_queue`, and `checks` as the required
 check), set by a maintainer.
+
+## Tico merges
+
+Nobody merges a bot's Dev ticket by hand. Once the last check before the merge approved the pull request's current head
+and CI is green there, Tico merges it itself, as the company's GitHub App, at that exact head (backend/merge_arm.py).
+It runs in the heartbeat's GitHub sync, at most once a minute, for any repository the App reaches:
+
+- **Arm.** A branch with a merge queue gets the pull request queued (auto-merge, or an enqueue when auto-merge is off).
+  A branch with none gets it merged, as a merge commit, else a squash, else a rebase. A person's card and a repository
+  the App does not reach keep the old way: the owner is woken to merge.
+- **Arm again.** A head that GitHub has not queued 10 minutes after it was armed (auto-merge turned off, a refused
+  request) is armed again, at most three times per head.
+- **A queue removal** of a head Tico armed is read first. One that is not the change's fault (a cancelled or
+  superseded queue run, a cleared queue, a timeout, a group that failed because of another PR) is armed again once per
+  head. Tico tells them apart by the queue run's jobs: a failed leg with nothing cancelled, or two failed jobs, is a real
+  failure; cancelled legs with at most one failed gate job are not.
+- **The pipeline manager fixes the rest.** A real failure, a second removal at one head, a conflict with the base
+  branch, or a head GitHub refused three times becomes one task for the card's pipeline manager (`Fix PR #N for
+  merge`, a subtask of the card): the failing jobs with their log links, the head, and the reason. A second problem
+  with the same pull request wakes that task instead of filing another. The builder is not woken and the card stays
+  at its stage. The task closes when the pull request merges.
+- **Merged.** The card goes to its merged step (Pending Release), also when Tico read the merge instead of getting its
+  webhook.
+- **Removed by hand.** A removal with the reason `MANUAL` stops Tico arming that head. A new push starts over.
+
+The state is on the pull request's link (`detail.merge_arm`: the head, when, how many tries, and whether it was handed
+to the manager or stopped).
 
 ## Hosted release validation
 

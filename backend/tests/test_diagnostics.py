@@ -6,8 +6,8 @@ import logging
 import pytest
 
 from backend import diagnostics as D
-from backend.tests.test_onboarding import as_person, environment, signed_in  # noqa: F401
-from backend.tests.test_support import hq, file  # noqa: F401  (the fake HQ, autouse)
+from backend.tests.helpers.onboarding import as_person, environment, signed_in  # noqa: F401
+from backend.tests.helpers.support import hq, file  # noqa: F401  (the fake HQ, autouse)
 
 
 def redactor():
@@ -220,6 +220,15 @@ def test_browser_capture_never_accepts_messages_or_private_filenames(environment
         == 422
     )
     assert api.post(url, headers=signed_in(), json={"browser": [event] * 21}).status_code == 422
+
+
+def test_browser_capture_names_the_service_worker_script(environment):
+    # ui/sw.ts is served at the root as /sw.js: an error located in the worker carries that name, not a blank.
+    api = environment()
+    event = {"kind": "error", "at": "2026-10-02T12:00:00Z", "file": "sw.js", "line": 7, "count": 1}
+    r = api.post("/api/v2/support/diagnostics/capture", headers=signed_in(), json={"browser": [event]})
+    assert r.status_code == 200, r.text
+    assert json.loads(r.json()["text"])["browser"][0]["file"] == "sw.js"
 
 
 def test_the_desktop_apps_log_is_labelled_and_redacted(environment):

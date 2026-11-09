@@ -682,7 +682,7 @@ fieldset.brepo>.repo-name+p{margin:-4px 0 4px 24px;font-size:var(--t-xs);line-he
 .storage-form{display:grid;gap:8px;max-width:520px;margin:12px 0}.storage-form label{display:grid;gap:4px}
 .storage-earlier{margin:6px 0 0;padding-left:18px}
 .storage-tico{margin:12px 0;padding:12px;border:1px solid var(--line);border-radius:8px;max-width:640px}.storage-tico h4{margin:0 0 6px}.storage-tico .row{align-items:center;gap:12px}
-/* Webhooks: Automations › Incoming webhooks, Tools › Webhooks, the Gateway card's fold (ui/app/settings-webhooks.js) */
+/* Webhooks: Automations › Incoming webhooks, Tools › Webhooks, the Gateway card's fold (ui/app/settings-webhooks.ts) */
 #settings-webhooks>.card>header{flex-wrap:wrap;gap:8px}
 #settings-webhooks .sb-narrow{display:none}
 .trigger-secret{border:1px solid var(--line);border-radius:8px;padding:10px 12px;margin-bottom:12px}
@@ -785,7 +785,7 @@ fieldset.brepo>.repo-name+p{margin:-4px 0 4px 24px;font-size:var(--t-xs);line-he
 .sysr-ai{display:flex;flex-wrap:wrap;gap:6px;align-items:center;font-size:var(--t-sm);margin-top:2px}
 .sysr-fallback{flex-basis:100%;color:var(--wait-ink)}
 @media (max-width:720px){.sysr-row{grid-template-columns:1fr 1fr}.sysr-name,.sysr-ctl{grid-column:1/-1}}
-/* Webhook dialogs' small section heads (ui/app/settings-webhooks.js) */
+/* Webhook dialogs' small section heads (ui/app/settings-webhooks.ts) */
 .wr-sub{margin:8px 0 2px;letter-spacing:var(--track-caps);text-transform:uppercase;color:var(--muted);font-size:var(--t-label);font-weight:600}
 /* A swappable field (input or step list) sits in the grid as its label would. */
 /* Releases and Task Manager cards (ui/app/settings-release.ts) */

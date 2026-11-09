@@ -10,6 +10,7 @@ import math
 import os
 from pathlib import Path
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -1890,6 +1891,148 @@ def superseded_runs(runs, head_ref, run_number):
     return ids
 
 
+def junit_ran(path):
+    """Whether a pytest JUnit report holds a test that ran (passed or failed), not only skipped ones."""
+    path = Path(path)
+    return path.is_file() and any(case.find("skipped") is None for case in ET.parse(path).iter("testcase"))
+
+
+def pytest_leg(interpreter, jobs, suite, args):
+    """pytest, then, where it passed, a check of its JUnit report in the same command (on the VM too): as in CI's
+    run(), a leg whose every test skipped is no pass. pytest's 5 (no test collected) passes through: every selected
+    file holds only slow tests, which the release gate runs and CI drops. The report path is relative and ignored
+    (/ci-results/), so a RunsOn VM can write it."""
+    report = f"ci-results/local-{suite}.xml"
+    test = [interpreter, "-m", "pytest", "-q", "-n", str(jobs), *PYTEST_FLAGS, f"--junitxml={report}", *args]
+    check = [interpreter, "scripts/pr_checks.py", "junit-ran", report]
+    return ["bash", "-c", f'{shlex.join(test)}; code=$?; [ "$code" = 0 ] && exec {shlex.join(check)}; exit "$code"']
+
+
+LOCAL_BASE = "origin/main"
+LOCAL_JOBS = 2  # a builder's computer runs other bots' turns too
+HEAVY = Path(__file__).resolve().parent / "heavy.sh"
+
+
+def local(base=LOCAL_BASE, jobs=LOCAL_JOBS, ready=False, root=ROOT, execute=subprocess.run):
+    """Run, on this computer, the tests a pull request's checks would select for this branch, before marking it ready.
+
+    A draft pull request runs no CI, so a builder pushes freely, runs this once at the head it wants reviewed and marks
+    the pull request ready (`--ready` does that after a pass). The selection is the plan's: the branch's own change
+    against `base`, as a pull_request event. The Python files, the contract tests and the browser scripts run through
+    scripts/heavy.sh (the computer's shared slots, or a RunsOn VM with TICO_HEAVY_REMOTE=1). What only CI runs (the
+    Rust conformance job, the factory simulation) is named, not run. The last line is a receipt naming the full head
+    sha and the result, which the review gate accepts on the ticket (backend/test_receipts.py).
+
+    Exit codes: 0 passed, 1 failed (or the pull request could not be marked ready), 2 nothing to check here.
+    """
+    root = Path(root)
+
+    def git(*args):
+        return subprocess.check_output(["git", *args], cwd=root, text=True).strip()
+
+    def stop(message, code=2):
+        print(f"pr_checks local: {message}", file=sys.stderr)
+        return code
+
+    def unchanged():
+        """The checkout is the commit and nothing else: no edit, and no untracked file a test could pick up."""
+        return not git("status", "--porcelain", "--untracked-files=all")
+
+    if not unchanged():
+        return stop(
+            "commit or set aside your changes and new files first: a receipt names a commit, not a working tree"
+        )
+    head = git("rev-parse", "HEAD").lower()
+    try:
+        git("rev-parse", "--verify", "--quiet", base + "^{commit}")
+    except subprocess.CalledProcessError:
+        return stop(f"no base {base}: fetch it (git fetch origin main) or pass --base")
+
+    def pull_request():
+        """This branch's pull request, or a reason it cannot be marked ready at this head."""
+        view = execute(
+            ["gh", "pr", "view", "--json", "number,headRefOid,isDraft,url"], cwd=root, capture_output=True, text=True
+        )
+        if view.returncode:
+            return None, "no pull request for this branch: open it as a draft (gh pr create --draft) and push"
+        found = json.loads(view.stdout)
+        if str(found["headRefOid"]).lower() != head:
+            return (
+                None,
+                f"the pull request's head is {found['headRefOid']}, not {head}: push first, then run this again",
+            )
+        return found, None
+
+    if ready:
+        _, problem = pull_request()  # fail before minutes of tests, not after
+        if problem:
+            return stop(problem, 1)
+    changed = changed_files(base, "HEAD", root)
+    if not changed:
+        return stop(f"this branch changes nothing against {base}")
+    changed = sorted(set(changed) | set(script_changes(base, "HEAD", changed, root)))
+    picked = selection(changed, "pull_request", root=root, base=base, added=changed_files(base, "HEAD", root, "A"))
+    python = [f for f in picked["python"] or () if (root / f).is_file()]
+    browser = browser_scripts(picked["browser"], root) if picked["browser"] else []
+    # On a RunsOn VM (scripts/heavy.sh with TICO_HEAVY_REMOTE=1) the venv is python3 on its PATH, not this path.
+    remote = os.environ.get("TICO_HEAVY_REMOTE") == "1"
+    interpreter = "python3" if remote else sys.executable
+
+    legs = []
+    if python:
+        legs.append(
+            (f"{len(python)} test file{'s' * (len(python) != 1)}", pytest_leg(interpreter, jobs, "python", python))
+        )
+    if picked["contracts"]:
+        legs.append(("the contract tests", pytest_leg(interpreter, jobs, "contracts", ["-m", "slow", *CONTRACT_TESTS])))
+    if browser:
+        legs.append(
+            (
+                f"{len(browser)} browser script{'s' * (len(browser) != 1)}",
+                ["node", UI_RUNNER, "-j", str(jobs), *browser],
+            )
+        )
+    ci_only = [
+        name
+        for name, on in (
+            ("conformance", picked["conformance"]),
+            ("factory simulation", factory_reason(changed, root=root)),
+        )
+        if on
+    ]
+    print(f"Selected for {head[:12]} against {base}: {picked.get('reason', '')}", flush=True)
+    # CI sets no PYTEST_ADDOPTS; one inherited here (a -k, a -m) could deselect the selection.
+    env = {k: v for k, v in os.environ.items() if k != "PYTEST_ADDOPTS"}
+    failed = None
+    for name, command in legs:
+        print("$ " + shlex.join(command), flush=True)
+        code = execute(["bash", str(HEAVY), *command], cwd=root, env=env).returncode
+        if code in (75, 76):
+            # scripts/remote.py (TICO_HEAVY_REMOTE=1) never ran it or lost its result: no result, so no receipt.
+            return stop(f"{name} gave no result (exit {code}): a remote run needs this head pushed; run this again")
+        if code:  # as in CI's run, 5 (pytest ran no test) is red too
+            failed = name
+            break
+    if not unchanged() or git("rev-parse", "HEAD").lower() != head:
+        return stop(f"the checkout changed during the run, so it did not test {head} alone: run this again")
+    ran = ", ".join(name for name, _ in legs) or "no tests selected for this change"
+    rest = f"; left to CI: {', '.join(ci_only)}" if ci_only else ""
+    if failed:
+        print(f"Local PR checks failed at head {head}: {failed} failed (scripts/pr_checks.py local)")
+        return 1
+    print(f"Local PR checks passed at head {head}: {ran}{rest} (scripts/pr_checks.py local)")
+    if not ready:
+        return 0
+    # Read it again: a push during the run moves the head this receipt does not cover.
+    pr, problem = pull_request()
+    if problem:
+        return stop(problem, 1)
+    if pr["isDraft"]:
+        if execute(["gh", "pr", "ready", str(pr["number"])], cwd=root).returncode:
+            return stop(f"could not mark {pr['url']} ready; run gh pr ready {pr['number']}", 1)
+    return 0
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="action", required=True)
@@ -1911,6 +2054,14 @@ def main():
         action="store_true",
         help="run ci/quarantine/ tests as non-strict xfail (PR checks and the queue)",
     )
+    mine = sub.add_parser(
+        "local", help="run the tests a pull request's checks would select, here, and print a receipt for its head"
+    )
+    mine.add_argument("--base", default=LOCAL_BASE)
+    mine.add_argument("--jobs", type=int, default=LOCAL_JOBS, help="pytest workers and browser scripts at once")
+    mine.add_argument("--ready", action="store_true", help="after a pass, mark this branch's draft pull request ready")
+    ran = sub.add_parser("junit-ran", help="exit 1 unless a pytest JUnit report holds a test that was not skipped")
+    ran.add_argument("report")
     sub.add_parser("durations")
     sub.add_parser("receipt")
     sub.add_parser("smoke-check")
@@ -1934,6 +2085,12 @@ def main():
         prepare(args.event, args.base, args.output, args.timings, args.head, light=args.light)
     elif args.action == "run":
         return run(args.plan, args.suite, Path(args.root), quarantine=args.quarantine)
+    elif args.action == "junit-ran":
+        if not junit_ran(args.report):
+            print(f"{args.report}: every test skipped or none ran", file=sys.stderr)
+            return 1
+    elif args.action == "local":
+        return local(base=args.base, jobs=args.jobs, ready=args.ready)
     elif args.action == "durations":
         measured = durations(Path("ci-results").glob("python-*.xml"), Path("ci-results").glob("browser-*.json"))
         if not measured:

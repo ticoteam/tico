@@ -9,8 +9,8 @@ from backend import events as E
 from backend.auth import Identity
 from backend import hubdb as H
 from backend import pipeline_rights, task_reads
-from backend.tests.test_api import api, get, headers, post, restrict  # noqa: F401
-from backend.tests.test_pipeline_members_only import make_pipeline, ticket
+from backend.tests.helpers.api import get, headers, post, restrict  # noqa: F401
+from backend.tests.helpers.pipeline_members_only import make_pipeline, ticket
 
 ACTIVE = "status=open,doing,waiting,review,ready,declined"
 
@@ -240,7 +240,7 @@ def test_task_list_keeps_one_snapshot_and_next_read_sees_revocation(api, monkeyp
 
 def test_hot_read_helpers_do_not_write_to_their_snapshot(api, monkeypatch):
     from contextlib import contextmanager
-    from backend.tests.test_api import assign, runner
+    from backend.tests.helpers.api import assign, runner
 
     store = api.app.state.store
     with store.transaction() as c:

@@ -5,8 +5,8 @@ import uuid
 
 from backend import task_privacy
 from backend.store import H
-from backend.tests.test_api import api, headers, post, setup_attempt  # noqa: F401
-from backend.tests.test_payload_budgets import clone
+from backend.tests.helpers.api import headers, post, setup_attempt  # noqa: F401
+from backend.tests.helpers.payload_budgets import clone
 
 
 def test_the_unread_page_reads_its_index_without_a_sort_or_a_table_scan(api):

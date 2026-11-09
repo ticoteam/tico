@@ -9,9 +9,9 @@ import pytest
 from backend import org_rules as O
 from backend.auth import Identity
 from backend.store import H, Problem, encode
-from backend.tests.test_api import api, get, headers  # noqa: F401  (the api fixture)
-from backend.tests.test_openapi_v2 import conforms
-from backend.tests.test_org_rules import org, rule
+from backend.tests.helpers.api import get, headers  # noqa: F401  (the api fixture)
+from backend.tests.helpers.openapi_v2 import conforms
+from backend.tests.helpers.org_rules import org, rule
 
 
 def add_people(api, *people):

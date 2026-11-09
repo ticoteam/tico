@@ -6,21 +6,18 @@ import json
 
 import pytest
 
-from backend.tests.test_migrations import restore_config  # the column back for a rerun from before 0070
+from backend.tests.helpers.migrations import restore_config  # the column back for a rerun from before 0070
 from backend import automation_flow as F
 from backend import hubdb as H
 from backend import redesign_migration as M
 from backend import rules as R
 from backend import team_rules
-from backend.tests.test_api import api, get, post  # noqa: F401
+from backend.tests.helpers.api import get, post  # noqa: F401
 from backend import usage_limits
+from backend.tests.helpers.redesign_migration import db, first_start
 
 DUE = "2026-11-02T09:00:00.000000Z"
 LONG = "Sort Acme mail by sender and urgency. " * 300  # about 11,000 characters
-
-
-def db(api):
-    return api.app.state.store
 
 
 def rows(api, sql, args=()):
@@ -76,13 +73,6 @@ def rule(api, rid, event="comment", then="wake", scope=("bot", "coo"), position=
 def hourly(api, bot, usd):
     with db(api).transaction() as c:
         usage_limits.save_own(c, bot, {**usage_limits.own(c, bot), "hourly_usd": usd}, None)
-
-
-def first_start(api):
-    """This release's first start on the data above: the cutover has no record yet."""
-    with db(api).transaction() as c:
-        c.execute("DELETE FROM registry_metadata WHERE key=?", (M.CUTOVER,))
-    return M.cutover(db(api))
 
 
 def marks(api):
@@ -270,7 +260,7 @@ def test_the_hubs_what_wakes_bots_is_adopted_not_doubled(api):
 
 def test_the_librarians_briefing_routine_becomes_the_market_briefing_builtin_never_beside_it(api):
     from backend import automations
-    from backend.tests.test_market import _librarian
+    from backend.tests.helpers.market import _librarian
 
     _librarian(api)
     routine(

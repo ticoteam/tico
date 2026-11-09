@@ -4,10 +4,11 @@ import os
 
 import pytest
 
-from backend.tests.test_api import api, post, runner  # noqa: F401
+from backend.tests.helpers.api import post, runner  # noqa: F401
 from clients.tico import APIError
 from runner_support.connectors import KNOWN_SENDER_RECHECK, ConnectorPublisher
 from runner_support.outage import Outage
+from backend.tests.helpers.connectors import mail_message
 
 
 def event(title="Product sync"):
@@ -87,30 +88,6 @@ def test_connector_worker_publishes_successes_without_cloud_provider_credentials
     assert not any("provider detail" in str(call) for call in client.published)
 
 
-def mail_message(**overrides):
-    row = {
-        "msg_id": "m-plain",
-        "thread_id": "t-plain",
-        "epoch": 1_783_368_400,
-        "date": "2026-09-02T09:30:00-07:00",
-        "from_addr": "person@customer.example",
-        "from_header": "Real Person <person@customer.example>",
-        "to": ["ana@acme.example"],
-        "cc": [],
-        "subject": "Pricing question",
-        "snippet": "How does",
-        "labels": ["INBOX", "UNREAD"],
-        "body": "How does pricing work?",
-        "body_truncated": False,
-        "attachments": [],
-        "list_id": "",
-        "is_internal": False,
-        "has_unsubscribe": False,
-    }
-    row.update(overrides)
-    return row
-
-
 def mail_publish(mailbox="ana@acme.example", messages=None, deleted=None, **extra):
     body = {
         "mailbox": mailbox,
@@ -123,7 +100,7 @@ def mail_publish(mailbox="ana@acme.example", messages=None, deleted=None, **extr
 
 
 def test_mail_tables_are_owner_only_in_sql(api):
-    from backend.tests.test_sql import column, query
+    from backend.tests.helpers.sql import column, query
 
     machine = runner(api)
     post(api, "connectors/mail/messages", mail_publish(), machine["token"])

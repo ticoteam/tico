@@ -7,8 +7,8 @@ import pytest
 from backend import check_models, execution, health
 from backend.scheduler import Scheduler
 from backend.store import H
-from backend.tests.test_api import api, claim, post  # noqa: F401  (api is a fixture)
-from backend.tests.test_task_lanes import new_task, task_bot
+from backend.tests.helpers.api import claim, post  # noqa: F401  (api is a fixture)
+from backend.tests.helpers.task_lanes import new_task, task_bot
 
 
 @pytest.fixture(autouse=True)

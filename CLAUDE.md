@@ -62,9 +62,14 @@ when the branch would not merge into origin/main and names the files. Skip once 
 run the same static checks, so a skipped failure still shows there. CONTRIBUTING.md lists where the local gate differs from CI.
 
 ## How we work
-Trunk-based: branches are `<who>/<topic>`, one ticket per PR. Drafts run no CI; mark the PR ready to run checks. The flow: work in draft and run the tests you touched locally, run
-`gh pr ready` when done, wait for green `checks` on that run (not skipped), and once it is reviewed, enqueue it with
-`gh pr merge <N> --merge`: the merge queue tests the PR merged onto current main before it lands. Enqueue once.
+Trunk-based: branches are `<who>/<topic>`, one ticket per PR. Draft PRs run no CI. The flow: open the PR as a draft
+(`gh pr create --draft`) and push freely; when done, run `python3 scripts/pr_checks.py local --ready`, which runs the
+tests the PR checks select for your diff on this computer, prints a receipt line with the head sha for the ticket, and
+marks the PR ready after a pass. Mark ready once: each push to a ready PR runs CI again, so batch later fixes. Wait for
+green `checks` on that run (not skipped), and once it is reviewed, enqueue it with
+`gh pr merge <N> --merge`: the merge queue tests the PR merged onto current main before it lands. Enqueue once. A bot's
+Dev ticket is not merged by its builder: Tico queues it at the approved head, and a red queue run or a conflict goes to
+the pipeline manager (backend/merge_arm.py, docs/releasing.md#tico-merges).
 After a queue failure, fix it and get green PR checks before enqueuing again.
 Don't rebase or merge main to be current; rebase only when GitHub reports a conflict. If the queue removes the PR,
 read why before you push again. Never use `--admin` or the REST merge endpoint: both skip the queue.
@@ -73,7 +78,8 @@ own, at any hour, whenever main has merged work past the newest release (docs/re
 tag. Stable takes a release automatically when its notes list no High risk item; one with a High risk item, or every
 one while the repository variable `RELEASE_NEEDS_PERSON` is `on`, waits for a person's `approved` label or `/approve`
 (docs/releasing.md#approval). Hotfixes (`hotfix.yml`) are for
-major production issues only. The Release Manager bot no longer tags or rolls out Tico releases; it only monitors.
+major production issues only. No bot tags or rolls out Tico releases; the Engineering pipeline's manager owns getting
+reviewed work merged.
 
 ## Hit every surface
 The commonest defect in Tico is a change that works where it was tested and is missing everywhere else. Before

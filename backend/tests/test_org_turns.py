@@ -1,23 +1,14 @@
 """Busy turns B: only disposable synthetic orgs, fake workers and no provider calls."""
 
-import json
 from concurrent.futures import ThreadPoolExecutor
 
 from backend.store import H
-from backend.tests.test_api import api, assign, claim, get, headers, post, ready, runner  # noqa: F401
-from backend.tests.test_start_places import waiters
+from backend.tests.helpers.api import assign, claim, get, headers, post, ready, runner  # noqa: F401
+from backend.tests.helpers.start_places import waiters
+from backend.tests.helpers.org_turns import one_person, people
 
 
 REASON = "Your company is at its limit; Tico is fixing what's stuck."
-
-
-def people(api, rows):
-    with api.app.state.store.transaction() as c:
-        c.execute("UPDATE registry_metadata SET value=? WHERE key='people'", (json.dumps({'people': rows}),))
-
-
-def one_person(api):
-    people(api, [{'id': 'ana', 'email': 'ana@acme.example'}])
 
 
 def independent(api, machine):
@@ -226,7 +217,7 @@ def test_two_computers_claim_the_last_company_place_atomically(api):
 
 def test_changed_levels_apply_immediately_and_revoked_admin_cannot_replay_a_save(api):
     import uuid
-    from backend.tests.test_api import as_member
+    from backend.tests.helpers.api import as_member
 
     one_person(api)
     machine = waiters(api, n=3, running=1)

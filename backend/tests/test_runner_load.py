@@ -4,18 +4,9 @@ import json
 import time
 
 from backend import models as M, performance as P
-from backend.tests.test_api import api, get, headers, post, setup_attempt  # noqa: F401
-from backend.tests.test_performance import sample
-from backend.tests.test_bot_access import world  # noqa: F401
-
-
-def point(at, cpu=95, mem=0.5, active=3, load=None):
-    return sample(at, cpu=cpu, mem=mem) | {
-        "load": [load if load is not None else 1, 1, 1],
-        "active": active,
-        "swap_used": 20,
-        "swap_total": 100,
-    }
+from backend.tests.helpers.api import get, headers, post, setup_attempt  # noqa: F401
+from backend.tests.helpers.bot_access import world  # noqa: F401
+from backend.tests.helpers.runner_load import point
 
 
 def test_sampler_keeps_one_load_row_per_minute_and_prunes_at_48_hours(api):
@@ -84,7 +75,7 @@ def test_attempt_stores_fresh_start_and_end_snapshots_visible_in_run_list(api):
 
 
 def test_plain_bot_lists_closed_computer_with_latest_numbers_without_change_rights(world):
-    from backend.tests.test_mcp import call
+    from backend.tests.helpers.mcp import call
 
     api, tokens, _ = world
     r, _, _ = setup_attempt(api)
@@ -145,8 +136,8 @@ def test_high_load_average_with_cpu_to_spare_does_not_hold_starts(api):
 def test_new_bot_computer_visibility_keeps_hidden_bots_and_accounts_private(world):
     from backend.repositories import save_metadata
     from backend.store import H
-    from backend.tests.test_bot_access import set_access
-    from backend.tests.test_mcp import call
+    from backend.tests.helpers.bot_access import set_access
+    from backend.tests.helpers.mcp import call
 
     api, tokens, _ = world
     r, _, _ = setup_attempt(api)

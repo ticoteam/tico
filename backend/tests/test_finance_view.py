@@ -11,14 +11,14 @@ from backend.finance import actions as FA
 from backend.finance.store import access as SA
 from backend.finance import reads as FR
 from backend.finance import tab as FT
-from backend.tests.test_finance_fixtures import (
+from backend.tests.helpers.finance_fixtures import (
     AT,
     GROUPS,
     OWNER,
     PEOPLE,
     account,
     act,
-    books,  # noqa: F401
+    books,
     finance_template,
     set_lead,
     spend,

@@ -14,11 +14,11 @@ import pytest
 from backend import automations, screening as S
 from backend.store import H
 from backend.watchers import WatcherEvent
-from backend.tests.test_api import api, get, headers, post, setup_attempt  # noqa: F401
-from backend.tests.test_inbound import no_live_inbound, page, seed  # noqa: F401
-from backend.tests.test_judge_spend import spend
-from backend.tests.test_roadmaps import ORIGIN, public_setup
-from backend.tests.test_watchers import hosted, report, task, tasks, wakes
+from backend.tests.helpers.api import get, headers, post, setup_attempt  # noqa: F401
+from backend.tests.helpers.inbound import no_live_inbound, page, seed  # noqa: F401
+from backend.tests.helpers.judge_spend import spend
+from backend.tests.helpers.roadmaps import ORIGIN, public_setup
+from backend.tests.helpers.watchers import hosted, report, task, tasks, wakes
 from clients import judge as J
 from backend import bot_settings as BS
 
@@ -191,7 +191,7 @@ def test_off_asks_nothing_and_changes_nothing(api):
 
 
 def test_each_detector_switches_off_on_its_own(api, quiet):
-    from backend.tests.test_triggers import hook, rule_row
+    from backend.tests.helpers.triggers import hook, rule_row
 
     engine = model(api, score=0.97)
     with api.app.state.store.transaction() as c:
@@ -306,7 +306,7 @@ def test_a_webhook_under_the_hold_line_reaches_the_bot_with_a_warning_and_plain_
 
 
 def test_a_webhook_rule_task_waits_for_the_model_after_the_write_and_is_held_for_the_webhooks_maker(api, quiet):
-    from backend.tests.test_triggers import hook, rule_row
+    from backend.tests.helpers.triggers import hook, rule_row
 
     made = post(api, "triggers", {"name": "Shop"})["trigger"]
     rule_row(api, {"action": "create_task", "owner": "ops", "title": "Order call"}, when={"trigger": "shop"})
@@ -460,7 +460,7 @@ def broken(*args, **kwargs):
 
 
 def test_a_failing_model_check_still_files_a_webhook_rule_task_with_the_patterns_warning(api, monkeypatch):
-    from backend.tests.test_triggers import hook, rule_row
+    from backend.tests.helpers.triggers import hook, rule_row
 
     made = post(api, "triggers", {"name": "Shop"})["trigger"]
     rule_row(api, {"action": "create_task", "owner": "ops", "title": "Order call"}, when={"trigger": "shop"})

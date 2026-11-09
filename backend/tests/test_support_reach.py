@@ -5,8 +5,8 @@ import json
 from types import SimpleNamespace
 
 from backend import setup_check
-from backend.tests.test_onboarding import as_person, environment, signed_in  # noqa: F401
-from backend.tests.test_support import file, hq  # noqa: F401  (the fake HQ, autouse)
+from backend.tests.helpers.onboarding import as_person, environment, signed_in  # noqa: F401
+from backend.tests.helpers.support import file, hq  # noqa: F401  (the fake HQ, autouse)
 
 CAPTURE = "/api/v2/support/diagnostics/capture"
 

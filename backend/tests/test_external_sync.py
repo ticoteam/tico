@@ -1,7 +1,7 @@
 """A person's external agents synced in (Grok Bot, Dots): placed under them, transcripts copied once, never dispatched to."""
 
 from backend.store import H
-from backend.tests.test_api import api, get, headers, post  # noqa: F401
+from backend.tests.helpers.api import get, headers, post  # noqa: F401
 from backend import bot_settings as BS
 
 GROK_ID = "4a7e880c-eb8e-49df-9789-3abfff190aa7"
@@ -403,7 +403,7 @@ def test_a_task_for_a_synced_bot_is_refused_with_what_to_do_instead(api):
 # ----------------------------------------------------------------------------- delivered through the Grok app
 def mac(api, operator="cara", label="Cara's Mac", grok_ready=True, bots=()):
     """A computer of `operator`'s whose runner reports the Grok app ready (or signed out) and `bots` ready."""
-    from backend.tests.test_api import runner
+    from backend.tests.helpers.api import runner
 
     machine = runner(api, operator, label)
     beat(api, machine, grok_ready, bots)
@@ -492,7 +492,7 @@ def test_only_the_bots_person_delivers_it_through_their_own_ready_computer_and_a
 
 
 def test_a_message_goes_to_the_computer_while_the_app_delivers_and_to_the_sync_otherwise_never_both(api):
-    from backend.tests.test_api import claim
+    from backend.tests.helpers.api import claim
 
     sync(api, designer(), token="cara-test")
     before = post(api, "chat/grok-designer", {"text": "Before, for the sync."}, token="cara-test")
@@ -515,7 +515,7 @@ def test_a_message_goes_to_the_computer_while_the_app_delivers_and_to_the_sync_o
 
 
 def test_what_the_app_shows_is_posted_once_without_echoes_and_a_question_reaches_needs_you(api):
-    from backend.tests.test_api import claim
+    from backend.tests.helpers.api import claim
 
     sync(api, designer(messages=[]), token="cara-test")
     computer = mac(api, bots=["grok-designer"])
@@ -621,7 +621,7 @@ def delivering(api):
 
 def turn(api, computer, text, reply):
     """Cara says `text`; the computer's turn completes with `reply`."""
-    from backend.tests.test_api import claim
+    from backend.tests.helpers.api import claim
 
     post(api, "chat/grok-designer", {"text": text}, token="cara-test")
     attempt = claim(api, computer)
@@ -643,7 +643,7 @@ def asks_in_needs_you(api, body):
 
 
 def test_a_question_the_app_needs_its_person_for_is_one_question_task_whichever_arrives_first(api):
-    from backend.tests.test_api import claim
+    from backend.tests.helpers.api import claim
 
     computer, report = delivering(api)
     needs = lambda text: {"code": "needs_human", "detail": "the bot asked", "text": text}

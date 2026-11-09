@@ -9,9 +9,9 @@ from backend.tests.slug_ids import bot_ids_are_their_slugs  # noqa: F401  (each 
 from backend import events as E
 from backend import read_cache, threads
 from backend.store import H, Problem, encode
-from backend.tests.test_api import api, headers  # noqa: F401  (the fixture and its helper)
-from backend.tests.test_thread_events import cursor, new_thread, say, who
-from backend.tests.test_threads_core import demo_template, made_threads, world  # noqa: F401  (the fixtures)
+from backend.tests.helpers.api import headers  # noqa: F401  (the fixture and its helper)
+from backend.tests.helpers.thread_events import cursor, new_thread, say, who
+from backend.tests.helpers.threads_core import demo_template, made_threads, world  # noqa: F401  (the fixtures)
 
 
 def test_one_thread_at_a_time_the_sse_rendering_agrees_with_c1_for_every_teammate(world):  # noqa: F811

@@ -118,7 +118,7 @@ def register(app, auth, settings):
     # the browser has it. StaticFiles did this for the .js files before the flip; FileResponse does not.
     compiled_tags = {}
 
-    def compiled_reply(request, path):
+    def compiled_reply(request, path, media_type="text/javascript; charset=utf-8"):
         stat = path.stat()
         entry = compiled_tags.get(path)
         if not entry or entry[0] != (stat.st_mtime_ns, stat.st_size):
@@ -133,7 +133,6 @@ def register(app, auth, settings):
         offered = [t.strip().removeprefix("W/") for t in request.headers.get("if-none-match", "").split(",")]
         if etag.removeprefix("W/") in offered:
             return Response(status_code=304, headers=headers)
-        media_type = "text/javascript; charset=utf-8"
         if request.method == "HEAD":
             return Response(None, media_type=media_type, headers={**headers, "Content-Length": str(len(raw))})
         return Response(raw, media_type=media_type, headers=headers)
@@ -157,6 +156,28 @@ def register(app, auth, settings):
         except ui_build.StaleBuild as exc:
             raise Problem("ui_not_built", str(exc), 503) from None
         return FileResponse(path, media_type="application/json")
+
+    # The service worker, ui/sw.ts compiled to a classic script. Its URL stays /sw.js at the root: ui/app/boot.ts
+    # registers /sw.js?v=… with scope /, and an installed worker's update check asks that same URL. Both bundle modes
+    # serve it, and only while its compiled output is current: a stale build is the 503 above, never the .ts source or
+    # the static mounts below. The middleware revalidates it on every check (private, no-cache), whatever its ?v=.
+    @app.api_route("/sw.js", methods=["GET", "HEAD"], include_in_schema=False)
+    async def ui_service_worker(request: Request):
+        try:
+            path = ui_build.compiled(settings.ui_dir, "sw.ts")
+        except ui_build.StaleBuild as exc:
+            raise Problem("ui_not_built", str(exc), 503) from None
+        return compiled_reply(request, path)
+
+    # Its source map, which the compiled file's last line names relative to it (sw.js.map). Answered like sw.js: an
+    # ETag of its content, and a 304 for a matching If-None-Match.
+    @app.api_route("/sw.js.map", methods=["GET", "HEAD"], include_in_schema=False)
+    async def ui_service_worker_map(request: Request):
+        try:
+            path = ui_build.source_map(settings.ui_dir, "sw.ts")
+        except ui_build.StaleBuild as exc:
+            raise Problem("ui_not_built", str(exc), 503) from None
+        return compiled_reply(request, path, "application/json")
 
     # three.js is ~790 KB of text and StaticFiles sends it as is; the Overview waits on it. Gzipped once in
     # memory it is ~200 KB.

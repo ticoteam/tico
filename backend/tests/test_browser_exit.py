@@ -6,7 +6,7 @@ import pytest
 
 from backend import browser_exit as BE
 from backend.store import Problem
-from backend.tests.test_api import api, as_member, assign, get, post, restrict, runner  # noqa: F401  (the api fixture)
+from backend.tests.helpers.api import as_member, assign, get, post, restrict, runner  # noqa: F401  (the api fixture)
 
 
 class Relay:
@@ -153,8 +153,8 @@ def test_removing_the_bots_computer_fences_a_grant_read_before_it(api, relay):
 def test_a_bot_with_an_exit_waits_for_a_runner_that_browses_through_it(api, relay):
     """An older runner would ignore the exit and browse from its own address: none of the bot's work goes to it."""
     from backend import health
-    from backend.tests.test_api import claim
-    from backend.tests.test_claim_refusals import health_admin, held
+    from backend.tests.helpers.api import claim
+    from backend.tests.helpers.claim_refusals import health_admin, held
 
     caras, server = laptop(api)
     share(api, caras["runner_id"])

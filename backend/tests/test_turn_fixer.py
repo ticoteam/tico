@@ -5,9 +5,9 @@ import sqlite3
 import time
 
 from backend.store import H
-from backend.tests.test_api import api, get  # noqa: F401
-from backend.tests.test_org_turns import one_person
-from backend.tests.test_start_places import waiters
+from backend.tests.helpers.api import get  # noqa: F401
+from backend.tests.helpers.org_turns import one_person
+from backend.tests.helpers.start_places import waiters
 
 
 def botops(api):

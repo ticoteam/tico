@@ -2,7 +2,7 @@
 Gateway's image maker with the company's key, answers the Gateway's shape, maps its refusals to plain problems, and never
 reaches the Gateway for a refused request. The Gateway is faked: no call leaves the test."""
 
-from backend.tests.test_api import api, headers  # noqa: F401
+from backend.tests.helpers.api import headers  # noqa: F401
 from clients import gateway as G
 
 
@@ -144,7 +144,7 @@ def test_a_video_production_budget_at_its_cutoff_refuses_new_images(api, monkeyp
     from datetime import datetime, timezone
 
     from backend.finance import actions as FA
-    from backend.tests.test_finance_fixtures import act, budget, spend
+    from backend.tests.helpers.finance_fixtures import act, budget, spend
 
     connect(api)
     calls = []

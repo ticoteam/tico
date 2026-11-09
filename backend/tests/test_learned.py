@@ -4,21 +4,18 @@ personal layer per person that nobody else reads, the owner and admins included.
 chat, and each turn there is handed both layers as they are when it starts, so an entry deleted now is gone from the
 next turn."""
 
-from backend.tests.test_api import api, assign, get, headers, post, ready, runner  # noqa: F401
-from backend.tests.test_assistant import say
-from backend.tests.test_botops_parity import act
-from backend.tests.test_strategy_bot_chat import strategy_bot, personal
-from backend.tests.test_member_bots import botops, turn  # noqa: F401  (fixture)
+from backend.tests.helpers.api import assign, get, headers, post, ready, runner  # noqa: F401
+from backend.tests.helpers.assistant import say
+from backend.tests.helpers.botops_parity import act
+from backend.tests.helpers.strategy_bot_chat import strategy_bot, personal
+from backend.tests.helpers.member_bots import botops, turn  # noqa: F401  (fixture)
+from backend.tests.helpers.learned import learn
 
 
 def call(api, method, path, body=None, token="ana-test", expected=200):
     r = api.request(method, "/api/v2/" + path, json=body, headers=headers(token))
     assert r.status_code == expected, r.text
     return r.json()
-
-
-def learn(api, text, layer="personal", token="ana-test", expected=200):
-    return post(api, "assistant/learned", {"layer": layer, "text": text}, token=token, expected=expected)
 
 
 def claim_turn(api, r, bot, person, text):

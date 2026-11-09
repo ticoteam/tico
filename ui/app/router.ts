@@ -123,7 +123,7 @@ function route(hash: string = location.hash): void {
   else if (S.route === '#/getting-started') { location.replace(TASKS); return; }   // the checklist is gone
   else if (S.route === '#/repositories') { SETTINGS_TAB = 'repos'; location.replace(SETTINGS); return; }   // Settings > General › Repositories
   // Settings > Webhooks (it was Triggers) and its parts: incoming on Automations, outgoing on Tools, through the
-  // Gateway on Models (ui/app/settings-webhooks.js whOldAddress).
+  // Gateway on Models (ui/app/settings-webhooks.ts whOldAddress).
   else if (['#/triggers', '#/webhooks', '#/settings/triggers', '#/settings/webhooks'].includes(S.route) || S.route.startsWith('#/settings/webhooks/')) {
     location.replace(whOldAddress(S.route)); return;
   }

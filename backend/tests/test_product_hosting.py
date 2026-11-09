@@ -1,6 +1,6 @@
 """Hosting follows people.yaml: a team's primary person runs that team's bots, owner the rest."""
 
-from backend.tests.test_api import api, get, post, runner  # noqa: F401
+from backend.tests.helpers.api import get, post, runner  # noqa: F401
 
 
 def test_enrollment_delegates_all_product_bots_but_no_other_teams(api):

@@ -5,34 +5,11 @@ import json
 import pytest
 
 from backend import auto_tasks, hubdb as H, rules as R, wake_rules
-from backend.tests.test_api import api, claim, post  # noqa: F401
-from backend.tests.test_profiles import put
-from backend.tests.test_task_lanes import task_bot
-from backend.tests.test_urgent_news import sent_job
-from backend.tests.test_wake_rules import as_cause
+from backend.tests.helpers.api import claim, post  # noqa: F401
+from backend.tests.helpers.urgent_news import sent_job
+from backend.tests.helpers.wake_rules import as_cause
 from backend import bot_settings as BS
-
-
-def parked(c, profile='lead', party='owned', incident=False):
-    put(c, 'cpo', profile)
-    owner = 'bot:cpo' if party == 'owned' else 'bot:ops'
-    requester = 'bot:cpo' if party == 'requested' else 'bot:ops'
-    blocker = H.task_create(c, 'bot:ops', 'Prepare the machine', 'Synthetic prerequisite', 'bot:ops')
-    task = H.task_create(
-        c, requester, 'Restore the service', 'Synthetic held work', owner, labels=['incident'] if incident else []
-    )
-    H.TR.add_blocker(c, 'human:ana', task['id'], blocker['id'])
-    c.execute('DELETE FROM jobs')
-    return H.task(c, task['id']), blocker
-
-
-def still_blocked(c, task, blocker):
-    assert H.live_blocker(c, task['id']) == blocker['id']
-    assert H.task(c, blocker['id'])['status'] == 'open'
-
-
-def machine(api):
-    return task_bot(api, lanes=True, others=('cpo',))
+from backend.tests.helpers.parked_urgent_news import machine, parked, still_blocked
 
 
 # A custom profile reads like a doer, and an owned task ignores the profile: the three cases that differ.

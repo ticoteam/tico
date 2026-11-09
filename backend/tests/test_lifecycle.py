@@ -3,33 +3,13 @@ acceptance tests 5 and 10 to 14."""
 
 from backend import automations
 from backend.store import H
-from backend.tests.test_api import api, as_member, get, headers, post  # noqa: F401
-from backend.tests.test_strategy_bot import as_bot as bot_headers
+from backend.tests.helpers.api import as_member, get, headers, post  # noqa: F401
+from backend.tests.helpers.strategy_bot import as_bot as bot_headers
+from backend.tests.helpers.lifecycle import debrief
 
 
 def as_bot(api, slug):
     return bot_headers(api, slug)["Authorization"].split()[-1]
-
-
-def debrief(api):
-    """An automation that gives ops a turn on each shared meeting."""
-    return post(
-        api,
-        "automations",
-        {
-            "name": "Meeting debrief",
-            "owner": "person:ana",
-            "trigger": {"type": "event", "name": "meeting.ready"},
-            "steps": [
-                {
-                    "id": "turn",
-                    "type": "bot_turn",
-                    "bot": "bot:ops",
-                    "prompt": "Pull the product asks out of this meeting.",
-                }
-            ],
-        },
-    )["id"]
 
 
 def meeting(api, aid, rid):

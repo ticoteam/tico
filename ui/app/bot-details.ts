@@ -50,7 +50,7 @@ function botInstructionsMount(slug: string): void {
   };
 }
 async function botSettingsHistoryLoad(slug: string): Promise<void> {
-  // The server answers only the owner and the people who manage this bot; the card is drawn for those alone (bot-page.js).
+  // The server answers only the owner and the people who manage this bot; the card is drawn for those alone (bot-page.ts).
   const host = $('#bot-settings-history'); if (!host) return;
   try {
     // The server keeps the page to this bot, so the newest changes on other bots cannot push its own out of it.

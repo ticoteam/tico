@@ -1,4 +1,4 @@
-from backend.tests.test_api import api, assign, claim, get, post, ready, setup_attempt
+from backend.tests.helpers.api import assign, claim, get, post, ready, setup_attempt
 
 
 def turn_on(api, bot, token="ana-test", expected=200):

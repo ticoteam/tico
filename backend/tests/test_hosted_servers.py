@@ -2,8 +2,8 @@
 and started at Tico HQ with the install's gateway key; a start HQ refuses while the company is paused for credit says
 so in plain words with its account page; an install HQ hosts nothing for shows no section. HQ is a fake opener."""
 
-from backend.tests.test_api import api, get, post  # noqa: F401
-from backend.tests.test_company_billing import KEY, URL, hq  # noqa: F401
+from backend.tests.helpers.api import get, post  # noqa: F401
+from backend.tests.helpers.company_billing import KEY, URL, hq  # noqa: F401
 
 TICO, BOTS = "pv-" + "a" * 16, "pv-" + "b" * 16
 LISTED = {

@@ -8,18 +8,11 @@ import httpx
 import pytest
 
 from backend import assistant, support
-from backend.tests.test_api import api, as_member, assign, claim, get, headers, post, put, ready, runner  # noqa: F401
-from backend.tests.test_support import FakeHQ
+from backend.tests.helpers.api import as_member, assign, claim, get, headers, post, put, ready, runner  # noqa: F401
+from backend.tests.helpers.support import FakeHQ
 from backend.store import H
 from backend import bot_settings as BS
-
-
-def room(api, token="ana-test"):
-    return get(api, "assistant", token)
-
-
-def say(api, text, token="ana-test", expected=200):
-    return post(api, "assistant/messages", {"text": text}, token=token, expected=expected)
+from backend.tests.helpers.assistant import asked, assistant_turn, room, say, turn_message
 
 
 def jobs(api):
@@ -27,18 +20,8 @@ def jobs(api):
         return c.execute("SELECT count(*) FROM jobs").fetchone()[0]
 
 
-def assistant_turn(api, person, text="Please plan my week around the launch", busy_bots=None):
-    """The assistant bot's runner turn for a message this person sent in their Assistant room."""
-    r = runner(api)
-    assign(api, r, "coo")
-    ready(api, r, ["coo"])
-    say(api, text, person)
-    body = {} if busy_bots is None else {"busy_bots": busy_bots}
-    return r, post(api, "jobs/claim", body, token=r["token"])["attempt"]
-
-
 def test_assistant_fetches_only_its_own_credentials_before_start(api, person="ben-test", busy_bots=None):
-    from backend.tests.test_credentials import create, setup
+    from backend.tests.helpers.credentials import create, setup
 
     setup(api)
     own = create(api, name="Assistant tool", env="ASSISTANT_TOOL_KEY")
@@ -431,20 +414,6 @@ def test_the_assistant_answers_the_persons_own_question_tasks_and_no_one_elses(a
     assert denied.status_code in (403, 404), denied.text
     with api.app.state.store.read() as c:
         assert H.task(c, hers["id"])["status"] != "done"
-
-
-def asked(api, path, body, token, ref, expected=200):
-    """A write of the assistant's turn that cites the person's message asking for it."""
-    r = api.post("/api/v2/" + path, json=body, headers={**headers(token), "X-Tico-On-Behalf-Of": ref})
-    assert r.status_code == expected, r.text
-    return r.json()
-
-
-def turn_message(api, attempt):
-    with api.app.state.store.read() as c:
-        return c.execute(
-            "SELECT j.message_id FROM attempts a JOIN jobs j ON j.id=a.job_id WHERE a.id=?", (attempt["id"],)
-        ).fetchone()[0]
 
 
 def test_the_assistant_does_the_task_actions_the_person_asked_for_in_their_chat(api):
@@ -849,7 +818,7 @@ def test_an_approval_the_person_names_goes_on_one_card_and_runs_only_on_their_cl
 
 
 def test_the_assistant_decides_approvals_in_bulk_on_the_persons_yes_by_default(api):
-    from backend.tests.test_api import setup_attempt
+    from backend.tests.helpers.api import setup_attempt
 
     q = needs_you_queue(api)
     _, _, ops = setup_attempt(api, "ops")

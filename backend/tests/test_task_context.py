@@ -6,13 +6,13 @@ from backend import blobs, meetings, threads
 from backend.auth import Identity
 from backend.store import H, encode
 from backend.tests.slug_ids import bot_ids_are_their_slugs  # noqa: F401
-from backend.tests.test_api import api, assign, claim, get, headers, post, ready, restrict, runner  # noqa: F401
-from backend.tests.test_cards import page as seed_page
-from backend.tests.test_files import turn
-from backend.tests.test_meeting_items import record
-from backend.tests.test_meeting_task_links import link, task
-from backend.tests.test_mcp import call
-from backend.tests.test_pages import page
+from backend.tests.helpers.api import assign, claim, get, headers, post, ready, restrict, runner  # noqa: F401
+from backend.tests.helpers.cards import page as seed_page
+from backend.tests.helpers.files import turn
+from backend.tests.helpers.meeting_items import record
+from backend.tests.helpers.meeting_task_links import link, task
+from backend.tests.helpers.mcp import call
+from backend.tests.helpers.pages import page
 
 
 def pin(api, tid, fid):

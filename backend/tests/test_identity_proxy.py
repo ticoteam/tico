@@ -9,7 +9,6 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ec
 
 from backend import identity_proxy
-from backend.tests.test_api import api
 
 ARN = "arn:aws:elasticloadbalancing:us-west-2:123456789012:loadbalancer/app/tico/50dc6c495c0c9188"
 KID = "8c7e1c5a-1111-4222-8333-944455556666"

@@ -6,7 +6,7 @@ import json
 import pytest
 
 from backend import market as M, providers
-from backend.tests.test_api import api, post  # noqa: F401
+from backend.tests.helpers.api import post  # noqa: F401
 from clients import judge as J
 
 

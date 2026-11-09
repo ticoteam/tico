@@ -15,7 +15,7 @@ from backend import pipeline_overview as PO
 from backend import pipeline_requirements as R
 from backend import pipeline_setup as S
 from backend import public_roadmaps
-from backend.tests.test_pipeline_foundation import ANA, boot, hub, rows, step_id
+from backend.tests.helpers.pipeline_foundation import ANA, boot, hub, rows, step_id
 
 
 def fresh(tmp_path):

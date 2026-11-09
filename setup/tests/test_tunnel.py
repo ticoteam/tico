@@ -147,7 +147,7 @@ def test_a_visual_origin_with_a_trailing_cr_from_an_edited_env_file_still_gets_i
 
 def test_a_server_start_with_a_bad_visual_origin_still_reaches_the_server(tmp_path, monkeypatch):
     from backend.config import Settings
-    from backend.tests.test_rehearsal import serve
+    from backend.tests.helpers.rehearsal import serve
 
     tunnel = tmp_path / "tunnel"
     tunnel.mkdir()
@@ -301,7 +301,7 @@ def test_the_server_and_setup_write_the_same_runner_hostname_route(tmp_path):
 
 
 def test_local_generated_runtime_and_remote_put_share_complete_alias_and_restricted_ingress(tmp_path, monkeypatch):
-    from setup.tests.test_cloudflare import Api
+    from setup.tests.helpers.cloudflare import Api
 
     for key in list(os.environ):
         if key.startswith('TICO_'):

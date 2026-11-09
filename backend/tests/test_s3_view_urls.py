@@ -4,7 +4,7 @@ import logging
 
 from backend.config import Settings
 from backend.onboarding import config_view
-from backend.tests.test_onboarding import as_person, environment, signed_in  # noqa: F401
+from backend.tests.helpers.onboarding import as_person, environment, signed_in  # noqa: F401
 
 SETTING = "acme-files=https://d1234example.cloudfront.net/, Not_A_Bucket=https://x.example, media.acme=http://cdn.acme.example"
 

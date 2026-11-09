@@ -10,27 +10,11 @@ from urllib.parse import urlencode
 import pytest
 
 from backend.mcp import ApiProblem, InProcessApi
-from backend.tests.test_api import api, assign, claim, get, headers, post, ready, restrict, runner, setup_attempt  # noqa: F401
+from backend.tests.helpers.api import assign, claim, get, headers, post, ready, restrict, runner, setup_attempt  # noqa: F401
 from clients import bot_files as BF, hubcli, hubtools
 from clients.tico import MultipartBody
 from backend import bot_settings as BS
-
-
-def rpc(api, method, params=None, token="ana-test", rid=1):
-    r = api.post(
-        "/api/v2/mcp",
-        json={"jsonrpc": "2.0", "id": rid, "method": method, "params": params or {}},
-        headers=headers(token),
-    )
-    assert r.status_code == 200, r.text
-    return r.json()
-
-
-def call(api, name, arguments=None, token="ana-test"):
-    reply = rpc(api, "tools/call", {"name": name, "arguments": arguments or {}}, token=token)
-    result = reply["result"]
-    payload = result.get("structuredContent")
-    return result["isError"], payload if payload is not None else json.loads(result["content"][0]["text"])
+from backend.tests.helpers.mcp import call, rpc
 
 
 def test_initialize_lists_every_tool_and_ignores_notifications(api):
@@ -484,7 +468,7 @@ def test_a_bot_puts_one_decision_to_a_person_in_one_call(api):
 
 def test_a_private_question_goes_to_any_person_and_only_they_and_the_bot_read_it(api):
     """`private: true` is a private task whose two parties are the bot and the person asked, whoever started the run."""
-    from backend.tests.test_api import unrelated_task_managers
+    from backend.tests.helpers.api import unrelated_task_managers
 
     with api.app.state.store.transaction() as c:
         unrelated_task_managers(c)
@@ -730,7 +714,7 @@ def test_the_computer_list_is_a_short_summary_and_one_computer_reads_in_capped_p
 
 
 def test_a_member_reads_neither_a_computer_nor_a_bot_they_cannot_see_in_the_summary_or_the_detail(api):
-    from backend.tests.test_api import as_member
+    from backend.tests.helpers.api import as_member
 
     as_member(api, "ben@acme.example")
     anas = runner(api, label="Ana Mac")  # Ana's own, closed to members' bots

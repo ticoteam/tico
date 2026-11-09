@@ -9,9 +9,9 @@ from datetime import datetime, timezone
 
 from backend import trigger_presets as P
 from backend import triggers
-from backend.auth import Identity
-from backend.tests.test_api import api, get, post  # noqa: F401
-from backend.tests.test_triggers import hook, listener, rule_row, sig, turns
+from backend.tests.helpers.api import get, post  # noqa: F401
+from backend.tests.helpers.triggers import hook, listener, rule_row, sig, turns
+from backend.tests.helpers.triggers_incoming import as_bot, stored_rows
 
 
 def stripe_sig(secret, body, t):
@@ -122,20 +122,6 @@ def test_type_extraction_and_header_handling():
     assert kept == {"x-event": "e"}
 
 
-def as_bot(api, slug):
-    """The bot itself, as an agent credential (backend/tests/test_company.py bot)."""
-    from backend.store import H
-
-    with api.app.state.store.transaction() as c:
-        c.execute("UPDATE bots SET state='active' WHERE slug=?", (slug,))
-        c.execute(
-            "INSERT OR IGNORE INTO agents(bot,harness,token_hash,created_at,created_by) "
-            "VALUES(?,'hermes',?,?,'human:ana')",
-            (slug, "x-" + slug, H.now()),
-        )
-    api.app.state.store.settings.test_identities[slug + "-test"] = Identity("bot:" + slug, "bot", agent="hermes")
-
-
 def routine(api, trigger="shop", bot="ops"):
     """An automation on the webhook that hands `bot` each call in a Bot turn (what a routine on it was)."""
     return listener(api, trigger, bot, text="Ship it. Type {{webhook.type}}.", name="Order")
@@ -143,11 +129,6 @@ def routine(api, trigger="shop", bot="ops"):
 
 def runs(api, aid):
     return get(api, f"automations/{aid}/runs")["runs"]
-
-
-def stored_rows(api, sql, *args):
-    with api.app.state.store.read() as c:
-        return c.execute(sql, args).fetchall()
 
 
 def test_a_sender_id_stays_a_duplicate_after_the_log_and_the_body_are_gone(api, monkeypatch):
@@ -450,7 +431,7 @@ def test_a_sender_id_that_looks_like_a_replay_still_counts_toward_the_hourly_cap
 
 
 def test_the_hub_tools_cover_the_whole_life_of_a_trigger(api):
-    from backend.tests.test_mcp import call
+    from backend.tests.helpers.mcp import call
 
     bad, made = call(api, "hub_trigger_create", {"name": "Shop"})
     assert not bad and made["id"] == "shop"

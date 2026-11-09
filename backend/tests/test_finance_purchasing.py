@@ -16,7 +16,7 @@ from backend.finance.core.errors import NOT_FOUND, FinanceError
 from backend.finance.store import ap as SAP
 from backend.finance.store import banking as SK
 from backend.records import store as RS
-from backend.tests.test_finance_fixtures import (  # noqa: F401
+from backend.tests.helpers.finance_fixtures import (
     ACME_ADDRESS,
     AT,
     OWNER,

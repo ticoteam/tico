@@ -6,8 +6,8 @@ Ana owns the company, Ben is an admin (a member after `as_member`), Cara is a me
 
 from backend import api_tools
 from backend.store import H
-from backend.tests.test_api import api, as_member, get, put, setup_attempt  # noqa: F401  (fixture)
-from backend.tests.test_inbound_audience import narrow
+from backend.tests.helpers.api import as_member, get, put, setup_attempt  # noqa: F401  (fixture)
+from backend.tests.helpers.inbound_audience import narrow
 
 
 def seed(api):
@@ -136,7 +136,7 @@ def test_a_narrowed_intake_inbox_names_nothing_outside_its_group(api):
 
 
 def test_mcp_and_cli_read_the_same_list_and_set_an_inbox_audience(api):
-    from backend.tests.test_mcp import call
+    from backend.tests.helpers.mcp import call
 
     seed(api)
     err, result = call(api, "hub_tool_index", {"limit": 100}, "cara-test")

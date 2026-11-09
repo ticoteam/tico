@@ -4,9 +4,9 @@ A mixed change, an unreadable one and any person's request go ahead as before.""
 import pytest
 
 from backend import docs_merge
-from backend.tests.test_api import api, headers  # noqa: F401  (the api fixture)
-from backend.tests.test_groups import add_bots
-from backend.tests.test_groups_leads import as_bot
+from backend.tests.helpers.api import headers  # noqa: F401  (the api fixture)
+from backend.tests.helpers.groups import add_bots
+from backend.tests.helpers.groups_leads import as_bot
 
 DOCS_PR = {"repo": "ticoteam/tico", "pr": 2303, "head_sha": "a" * 40, "title": "Docs for v0.5.75"}
 

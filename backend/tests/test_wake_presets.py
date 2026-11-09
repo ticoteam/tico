@@ -8,10 +8,10 @@ import pytest
 from backend import github as G
 from backend import wake_presets as W
 from backend.store import H
-from backend.tests.test_api import api, claim, get, headers, post, ready, setup_attempt  # noqa: F401  (api is a fixture)
-from backend.tests.test_botops_parity import act
-from backend.tests.test_member_bots import botops, turn  # noqa: F401  (botops is a fixture)
-from backend.tests.test_task_lanes import new_task, task_bot
+from backend.tests.helpers.api import claim, get, headers, post, ready, setup_attempt  # noqa: F401  (api is a fixture)
+from backend.tests.helpers.botops_parity import act
+from backend.tests.helpers.member_bots import botops, turn  # noqa: F401  (botops is a fixture)
+from backend.tests.helpers.task_lanes import new_task, task_bot
 from backend import bot_settings as BS
 
 PR = "https://github.com/ticoteam/tico/pull/412"
@@ -590,7 +590,7 @@ def test_a_resumed_task_wakes_while_a_notice_on_it_is_held(api):
 
 def test_an_update_request_and_an_automatic_start_go_out_while_a_notice_is_held(api):
     from backend import updates
-    from backend.tests.test_auto_tasks import deck, take
+    from backend.tests.helpers.auto_tasks import deck, take
 
     machine = task_bot(api, lanes=True)
     preset(api, "ops", "token_saver")

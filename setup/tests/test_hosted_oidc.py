@@ -9,12 +9,11 @@ import json
 import pytest
 
 from setup import hosted, settings as st, signin, state, verify
-from setup.tests.test_hosted import DOMAIN, HOSTED, INVITE, env_sent, go, link_token, over_ssh
+from setup.tests.helpers.hosted import DOMAIN, HOSTED, INVITE, env_sent, go, link_token, over_ssh
 from setup.tests.fakes import FakeShell
+from setup.tests.helpers.hosted_oidc import ISSUER, OIDC
 
-ISSUER = "https://accounts.example"
 SECRET = "client-SECRET-0123456789abcdef"
-OIDC = ["--auth", "oidc", "--issuer", ISSUER, "--client-id", "install-client-1", "--signin-label", "Tico account"]
 
 
 @pytest.fixture(autouse=True)

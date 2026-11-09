@@ -6,7 +6,7 @@ reads them all in one prompt, each with the time it was sent.
 """
 
 from backend import hubdb as H
-from backend.tests.test_api import api, assign, get, post, ready, runner  # noqa: F401
+from backend.tests.helpers.api import assign, get, post, ready, runner  # noqa: F401
 
 
 def claim(api, r, next_run=True):
@@ -84,7 +84,7 @@ def test_a_bot_leaves_another_bot_a_note_and_sees_only_its_own(api):
 
 def test_a_bot_that_only_runs_tasks_gets_its_notes_once(api):
     # Every turn of a task-keyed bot on a lanes runner is in a task lane, so no main-lane turn ever comes.
-    from backend.tests.test_task_lanes import new_task, task_bot
+    from backend.tests.helpers.task_lanes import new_task, task_bot
 
     r = task_bot(api, lanes=True)
     n = note(api)
@@ -225,7 +225,7 @@ def test_a_deferred_thread_note_the_bot_lost_access_to_is_cancelled_not_carried(
     # A thread message deferred into a bot's notes must not outlive the bot's access: removing the bot from the thread
     # cancels what it would carry; the one it still reads goes to a run in its own thread, not the bot's next unrelated one.
     from backend import threads
-    from backend.tests.test_threads_delivery import new_thread, say
+    from backend.tests.helpers.threads_delivery import new_thread, say
 
     r = setup(api)
     store = api.app.state.store
@@ -255,7 +255,7 @@ def test_a_deferred_thread_note_the_bot_lost_access_to_is_cancelled_not_carried(
 def test_a_note_whose_source_the_bot_lost_is_not_read_back_through_the_notes_list(api):
     # Before the next claim, /notes must not return a copied body the recipient can no longer read.
     from backend import threads
-    from backend.tests.test_threads_delivery import new_thread, say
+    from backend.tests.helpers.threads_delivery import new_thread, say
 
     r = setup(api)
     store = api.app.state.store

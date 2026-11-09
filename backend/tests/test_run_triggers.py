@@ -13,8 +13,9 @@ from backend import routines
 from backend import run_triggers as RT
 from backend.scheduler import Scheduler
 from backend.store import H
-from backend.tests.test_api import api, as_member, assign, claim, get, headers, post, ready, runner  # noqa: F401
-from backend.tests.test_sql import query
+from backend.tests.helpers.api import as_member, claim, get, headers, post, ready, runner
+from backend.tests.helpers.sql import query
+from backend.tests.helpers.run_triggers import USAGE, finish, machine, start
 
 
 def newest(c, bot, words):
@@ -35,29 +36,6 @@ def quiet(c, bot="ops"):
 def turn(api, attempt):
     with api.app.state.store.read() as c:
         return H.turn(c, attempt["id"])
-
-
-def machine(api, bot="ops"):
-    r = runner(api)
-    assign(api, r, bot)
-    ready(api, r, [bot])
-    return r
-
-
-def start(api, r, attempt):
-    post(api, f"attempts/{attempt['id']}/started", {"thread_id": "fixture-thread"}, r["token"])
-
-
-USAGE = {"input_tokens": 200, "cached_tokens": 1000, "output_tokens": 30, "model": "fake"}
-
-
-def finish(api, r, attempt, text="", tokens_in=1200, usage=USAGE):
-    return post(
-        api,
-        f"attempts/{attempt['id']}/complete",
-        {"outcome": "completed", "last_seq": 0, "text": text, "tokens_in": tokens_in, "tokens_out": 30, "usage": usage},
-        r["token"],
-    )
 
 
 def test_each_trigger_kind_is_stamped_where_the_wake_is_made(api):

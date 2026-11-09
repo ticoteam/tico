@@ -9,7 +9,7 @@ from urllib.parse import urlencode
 import pytest
 
 from backend import audit_log
-from backend.tests.test_api import api, get  # noqa: F401
+from backend.tests.helpers.api import get  # noqa: F401
 
 
 def _write(api, *changes):
@@ -44,8 +44,8 @@ def test_a_recorded_change_is_append_only_read_newest_first_and_each_member_read
 
 
 def test_the_cli_and_the_tool_read_the_same_rows_and_a_member_reads_only_their_own(api):
-    from backend.tests.test_automation_cli import Client
-    from backend.tests.test_mcp import call as mcp
+    from backend.tests.helpers.automation_cli import Client
+    from backend.tests.helpers.mcp import call as mcp
     from clients import hubcli, remotecli
 
     _write(

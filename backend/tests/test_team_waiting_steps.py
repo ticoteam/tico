@@ -5,8 +5,8 @@ import sqlite3
 import pytest
 
 from backend import hubdb as H, task_blocked, task_relations as TR
-from backend.tests.test_review_gate import api, ticket, move, get
-from backend.tests.test_github import post
+from backend.tests.helpers.review_gate import api, ticket, move, get
+from backend.tests.helpers.github import post
 from backend.tests.hold_rows import set_holds
 
 

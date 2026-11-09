@@ -5,8 +5,8 @@ import json
 
 from backend import automation_actions as A
 from backend.store import H
-from backend.tests.test_api import api, post  # noqa: F401
-from backend.tests.test_market import _librarian
+from backend.tests.helpers.api import post  # noqa: F401
+from backend.tests.helpers.market import _librarian
 
 MAIL = {"message": {"source": "mail", "mailbox": "ana@acme.example", "id": "m1", "subject": "Invoice"}}
 NEWS = {"message": {**MAIL["message"], "from": "news@example.org"}}  # a sender the hub knows nothing about

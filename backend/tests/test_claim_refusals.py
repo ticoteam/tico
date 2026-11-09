@@ -10,31 +10,9 @@ import pytest
 
 from backend import check_models, diagnostics, execution, health, maintenance_health
 from backend.store import H
-from backend.tests.test_api import api, claim, get, headers, post  # noqa: F401  (api is a fixture)
-from backend.tests.test_task_lanes import new_task, task_bot
-
-
-@pytest.fixture(autouse=True)
-def forget_claims():
-    execution.CLAIMED_BUSY.clear()
-    yield
-    execution.CLAIMED_BUSY.clear()
-
-
-def held(api, machine, asks=True, **busy):
-    """The runner's claim with its own busy lists (it takes nothing), then Health's row for ops and the Health
-    Monitor's findings, with ops's queued work made 30 minutes old. `asks`: False for a runner that never claimed it."""
-    if asks:
-        assert post(api, "jobs/claim", busy, token=machine["token"])["attempt"] is None
-    store = api.app.state.store
-    with store.transaction() as c:
-        c.execute(
-            "UPDATE jobs SET created_at=? WHERE bot_id='ops' AND state='queued'", (H.shift(H.now(), minutes=-30),)
-        )
-        online = {r["id"] for r in health._online_runners(c)}
-        rows = [r for r in health._waiting(c, online, store.settings)[2] if r["bot"] == "ops"]
-        found = {f["check_id"] for f in maintenance_health.findings(c, store.settings)}
-    return rows, found
+from backend.tests.helpers.api import claim, get, headers, post  # noqa: F401  (api is a fixture)
+from backend.tests.helpers.task_lanes import new_task, task_bot
+from backend.tests.helpers.claim_refusals import forget_claims, health_admin, held  # noqa: F401
 
 
 def says(api, machine, reason, **busy):
@@ -44,12 +22,6 @@ def says(api, machine, reason, **busy):
     with api.app.state.store.read() as c:
         [row] = health._stuck(c, rows, set(), health_admin(api), True)
     assert row["why"] == health.HELD[reason][0].format(computer="Test Mac")
-
-
-def health_admin(api):
-    from backend.auth import Identity
-
-    return Identity("human:ana", "owner")
 
 
 def test_unexplained_queued_work_is_still_queue_idle(api):

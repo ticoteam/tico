@@ -19,8 +19,9 @@ import pytest
 from backend import company_file as C
 from backend.company_file import starter
 from setup import aws, contract, envfile, remote, settings, wizard
-from setup.tests.test_preview_flags import CREATE, NAME, env, go, world  # noqa: F401 (env: its secrets, autouse)
+from setup.tests.helpers.preview_flags import CREATE, NAME, env, go, world  # noqa: F401 (env: its secrets, autouse)
 from setup.ui import MissingInput
+from setup.tests.helpers.plan_bucket import ClientError, big
 
 BUCKET = "tico-preview-planbucket-abc123"
 
@@ -36,24 +37,6 @@ class FakeS3:
         self.log.append(("delete_object", kw))
         if self.fail:
             raise self.fail
-
-
-class ClientError(Exception):
-    def __init__(self, code):
-        super().__init__(code)
-        self.response = {"Error": {"Code": code}}
-
-
-@pytest.fixture(scope="module")
-def big(tmp_path_factory):
-    """A whole 300-seat chart: far over the env's 8 KB and over what one env string may hold once it grows."""
-    from backend.tests.test_company_file import chart
-
-    draft = chart(300)
-    draft["company"].update(name="Acme Finance", about="We help small firms manage their books.")
-    path = tmp_path_factory.mktemp("plan") / "tico.company.yaml"
-    path.write_text(C.to_yaml(draft))
-    return path
 
 
 def hosted(path, *extra, fail=None):
@@ -320,7 +303,7 @@ def test_a_saved_plan_bucket_does_not_follow_a_re_run_off_aws(big):
     saved = lambda data: settings.Settings(
         target="aws", plan_bucket=BUCKET, plan_bucket_region="us-west-2", company_file_data=data
     )
-    from backend.tests.test_company_file import chart
+    from backend.tests.helpers.company_file import chart
 
     draft = chart(3)
     draft["company"].update(name="Acme Finance", about="We help small firms manage their books.")

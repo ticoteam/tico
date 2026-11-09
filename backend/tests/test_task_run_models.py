@@ -11,9 +11,9 @@ import pytest
 
 from backend import strategy_acts, providers, task_run_models
 from backend.store import H
-from backend.tests.test_api import api, assign, claim, get, headers, post, runner  # noqa: F401  (api is a fixture)
-from backend.tests.test_check_models import finish, heartbeat
-from backend.tests.test_task_models import ops_on_sonnet, set_task_model, task_turn
+from backend.tests.helpers.api import assign, claim, get, headers, post, runner  # noqa: F401  (api is a fixture)
+from backend.tests.helpers.check_models import finish, heartbeat
+from backend.tests.helpers.task_models import ops_on_sonnet, set_task_model, task_turn
 from backend import bot_settings as BS
 
 HAIKU = {"model": "claude-haiku-5-5", "effort": "low", "harness": "claude"}
@@ -477,7 +477,7 @@ def test_a_branch_task_takes_its_own_model_from_whoever_may_change_the_originals
 
 
 def test_a_task_says_whether_its_reader_may_set_its_model_as_the_post_decides(api):
-    from backend.tests.test_api import as_member
+    from backend.tests.helpers.api import as_member
 
     ops_on_sonnet(api)
     share_ops_with_branches(api)

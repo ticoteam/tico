@@ -7,8 +7,7 @@ following), ben (the owner, who follows).
 from backend import question_tasks as QT, threads
 from backend.store import H
 from backend.tests.slug_ids import bot_ids_are_their_slugs  # noqa: F401  (each bot's id is its slug)
-from backend.tests.test_api import api  # noqa: F401  (the fixture)
-from backend.tests.test_task_news_delivery import budget_thread, delivery, rows, unread_for
+from backend.tests.helpers.task_news_delivery import budget_thread, delivery, rows, unread_for
 
 
 def task_thread(api):

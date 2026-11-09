@@ -14,22 +14,10 @@ import uuid
 from pathlib import Path
 
 import pytest
+from setup.tests.helpers.install_sh import SCRIPTS, build
 
-ROOT = Path(__file__).resolve().parents[2]
-SCRIPTS = ROOT / "scripts"
 sys_path = str(SCRIPTS)
 
-
-def _builder():
-    import importlib.util
-
-    spec = importlib.util.spec_from_file_location("build_install_bundle", SCRIPTS / "build_install_bundle.py")
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    return mod
-
-
-build = _builder()
 
 FAKE_WIZARD = '''import os, pathlib, sys
 d = pathlib.Path(os.environ["TICO_INSTALL_DIR"])

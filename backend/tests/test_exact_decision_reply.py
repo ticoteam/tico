@@ -1,7 +1,7 @@
 """Exact text picks settle question tasks; a note that names no option records no pick."""
 
 from backend import hubdb as H, question_tasks as QT
-from backend.tests.test_api import api, get, headers, post, setup_attempt, legacy_send_approval  # noqa: F401
+from backend.tests.helpers.api import get, headers, post, setup_attempt, legacy_send_approval  # noqa: F401
 
 DRAFTS = [{'label': 'Blue', 'then': 'Keep the blue draft'}, {'label': 'Red', 'then': 'Keep the red draft'}]
 

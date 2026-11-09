@@ -9,7 +9,7 @@ from unittest import mock
 import pytest
 from fastapi.testclient import TestClient
 
-from backend.tests.test_migrations import restore_config  # the column back for a rerun from before 0070
+from backend.tests.helpers.migrations import restore_config  # the column back for a rerun from before 0070
 from backend import company_file as C
 from backend import market_spend as MS
 from backend import people_remove, views
@@ -17,7 +17,7 @@ from backend.app import create_app
 from backend.auth import Identity
 from backend.company_file import starter
 from backend.store import H, Problem, encode
-from backend.tests.test_sample_company import (
+from backend.tests.helpers.sample_company import (
     OWNER_EMAIL,
     PEOPLE,
     SEED,
@@ -748,7 +748,7 @@ def test_reserved_alias_cannot_replace_a_custom_named_assistant_now_or_later(env
 
 
 def test_a_300_bot_company_file_imports_and_a_301_bot_file_is_refused_plainly(environment):
-    from backend.tests.test_company_file import chart
+    from backend.tests.helpers.company_file import chart
 
     api = environment()
     draft = chart(300)
@@ -1008,7 +1008,7 @@ def renamed_assistant_goals_on_goals_page(api, owners):
 def test_a_full_plan_too_big_for_the_env_starts_the_server_from_its_file(tmp_path, monkeypatch, count):
     """AWS and SSH setup copy a packed plan to a file and TICO_COMPANY_FILE names it (compose.yaml)."""
     from backend.config import Settings
-    from backend.tests.test_company_file import chart
+    from backend.tests.helpers.company_file import chart
     from clients.environments import seed_registry
 
     draft = C.Turn(C.blank()).finish() if count == 72 else chart(count)
@@ -1053,7 +1053,7 @@ def test_a_full_plan_too_big_for_the_env_starts_the_server_from_its_file(tmp_pat
 # ------------------------------------------------------------------------- every goal setup's /goals writes (Dev 449)
 def starter_chart():
     """The setup page's starter chart: the Assistant and BotOps, six department heads and 16 roles under them."""
-    from backend.tests.test_company_file import started
+    from backend.tests.helpers.company_file import started
 
     draft = started()
     roles = {"engineering": 8, "finance": 2, "marketing": 2, "sales": 2, "support": 2, "product": 0}
@@ -1123,7 +1123,7 @@ def test_a_329_goal_company_file_imports_and_a_330_goal_file_is_refused_plainly(
     """329 = 3 company goals + 2 for each department + 1 for each of the most bots a chart holds, as tico-services
     allows; one past it is still refused, before anything is created."""
     from backend.company_file import draft as D
-    from backend.tests.test_company_file import chart
+    from backend.tests.helpers.company_file import chart
 
     assert C.LIMITS["goals"] == 329 >= 3 + 2 * len(D.DEPARTMENTS) + C.LIMITS["bots"]
     draft = every_goal(chart(300))

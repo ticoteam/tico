@@ -5,19 +5,17 @@ import base64
 import hashlib
 import pathlib
 import re
-import time
 from dataclasses import replace
 
 import pytest
 
 from backend import visuals as V
-from backend.tests.test_api import api, assign, claim, headers, post, ready, runner  # noqa: F401  (fixtures)
-from backend.tests.test_files import publish, turn
-from backend.tests.test_events import live  # noqa: F401  (fixture)
+from backend.tests.helpers.api import assign, claim, headers, post, ready, runner  # noqa: F401  (fixtures)
+from backend.tests.helpers.files import publish, turn
+from backend.tests.helpers.events import live  # noqa: F401  (fixture)
+from backend.tests.helpers.visuals import PNG, VISUALS, bot_reply, media_settled, task_with_file, visual_on_task, wav
 
-PNG = b"\x89PNG\r\n\x1a\n" + b"\x00" * 64
 DOT = "data:image/png;base64," + base64.b64encode(PNG).decode()
-VISUALS = "http://visuals.localhost:9001"
 
 
 @pytest.fixture(autouse=True)
@@ -32,15 +30,6 @@ def png(api, attempt, name="chart.png", data=PNG):
     made = publish(api, attempt, name=name, text=None, content_base64=base64.b64encode(data).decode())
     assert made.status_code == 200, made.text
     return made.json()["file"]["id"], 1
-
-
-def bot_reply(api, attempt, to="human:ben", **body):
-    conversation = attempt["conversation_id"] if "conversation_id" in attempt else attempt["message"]["conversation_id"]
-    return api.post(
-        "/api/v2/messages",
-        json={"to": to, "text": "Here is the chart", "conversation_id": conversation, **body},
-        headers=headers(attempt["token"]),
-    )
 
 
 def test_a_bots_chat_reply_carries_a_titled_versioned_visual_and_reading_returns_it(api):
@@ -76,20 +65,6 @@ def test_a_chat_reply_cannot_attach_a_file_from_another_conversation(api):
     _, other = turn(api, bot="cpo", who="cara-test")
     sent = bot_reply(api, other, to="human:cara", attachments=[f"{fid}@1"])
     assert sent.status_code == 404, sent.text
-
-
-def task_with_file(api, *, private, name="page.html", text="<p>hi</p>"):
-    task_with_file.n = getattr(task_with_file, "n", 0) + 1
-    task = post(
-        api,
-        "tasks",
-        {"owner": "ops", "title": f"Chart {task_with_file.n}", "body": "x", "private": private},
-        "ben-test",
-    )
-    tid = task["id"]
-    made = api.post(f"/api/v2/tasks/{tid}/files", json={"name": name, "text": text}, headers=headers("ben-test"))
-    assert made.status_code == 200, made.text
-    return tid, made.json()["file_id"], made.json()["version"]
 
 
 def test_a_task_comment_page_gets_its_local_images_embedded_and_reports_nothing_unembedded(api):
@@ -176,18 +151,6 @@ def test_six_attachments_come_back_all_in_order(api):
         items = read["refs"]["attachments"]
         assert [(a["ref"], a["title"], a["kind"]) for a in items] == wanted
         assert all(a["src"].startswith(VISUALS + "/visuals/") for a in items)
-
-
-# ---------------------------------------------------------------------------------------------- access (18, 19)
-def visual_on_task(api, private):
-    tid, fid, number = task_with_file(api, private=private, name="chart.html", text="<p>chart</p>")
-    r = api.post(
-        f"/api/v2/tasks/{tid}/comments",
-        json={"text": "chart", "attachments": [f"{fid}@{number}"]},
-        headers=headers("ben-test"),
-    )
-    assert r.status_code == 200, r.text
-    return tid, fid, r.json()["comment"]
 
 
 def test_a_private_tasks_visual_is_refused_to_a_reader_without_access(api):
@@ -543,16 +506,6 @@ def test_a_file_from_one_chat_cannot_be_posted_into_another_by_someone_who_can_r
     assert moved.status_code == 404, moved.text
 
 
-def wav():
-    import io
-    import wave
-
-    out = io.BytesIO()
-    with wave.open(out, "wb") as w:
-        w.setnchannels(1), w.setsampwidth(2), w.setframerate(8000), w.writeframes(b"\x00\x01" * 800)
-    return out.getvalue()
-
-
 def test_a_wav_on_a_task_is_an_audio_player_whatever_python_calls_its_type(api, monkeypatch):
     """QA d1c1857a: Python 3.15 guesses .wav as audio/vnd.wave, which was a file chip. JSON and multipart uploads
     store it as audio/wav, the comment shows an audio card, and the visual route serves it by range."""
@@ -604,19 +557,6 @@ def test_a_wav_already_stored_or_sent_as_audio_vnd_wave_still_plays_inline(api):
     assert r.status_code == 200, r.text
     [item] = r.json()["message"]["refs"]["attachments"]
     assert item["kind"] == "audio" and item["src"].startswith(VISUALS + "/visuals/")
-
-
-def media_settled(api):
-    """Wait until the media worker (backend/file_metadata.py) has nothing pending, deferred retries included: its
-    save rewrites a version's poster and preview, so one landing after a test sets them would clear them."""
-    from backend.file_metadata import PENDING
-
-    for _ in range(200):
-        with api.app.state.store.read() as c:
-            if not c.execute(PENDING, (float("inf"),)).fetchone():
-                return
-        time.sleep(0.05)
-    raise AssertionError("the media worker never settled")
 
 
 def test_a_bot_is_never_handed_a_visual_address_the_visual_route_refuses(api):

@@ -425,6 +425,7 @@ class Support:
                 | {p.name for p in (ui / "app").glob("*.ts")}
                 | {p.name for p in (ui / "app").glob("*.js")}
                 | {p.name for p in (ui / "app").glob("*.ts")}
+                | {"sw.js"}  # ui/sw.ts is served at the root as sw.js, the name a worker's error gives
                 | {"app.bundle.js"}
                 | {f"app.bundle.{n}.js" for n in range(2, 100)}
             )
