@@ -9,7 +9,6 @@ import pytest
 
 from backend import support_triage as T
 from backend.store import H
-from backend.tests.test_api import api  # noqa: F401
 from backend.tests.helpers.judge_spend import spend
 from backend.tests.helpers.watchers import hosted, report, task, tasks, wakes
 from clients import judge as J

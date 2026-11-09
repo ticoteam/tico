@@ -7,7 +7,6 @@ import zipfile
 
 from backend import skill_marketplace
 from backend.tests.helpers.api import headers  # noqa: F401  (the api fixture)
-from backend.tests.test_api import api  # noqa: F401  (the api fixture)
 from backend.tests.helpers.skill_devices import add_skill, bearer, connect, install_for, rows
 from clients.skills import RESERVED
 

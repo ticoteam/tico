@@ -14,7 +14,6 @@ import pytest
 
 from backend.store import H
 from backend.tests.helpers.api import assign, get, headers, post, ready, runner  # noqa: F401
-from backend.tests.test_api import api  # noqa: F401
 from backend.tests.helpers.automation_turns import finish
 from clients.tico import APIError
 from connectors.mail import access, gmail as gm, policy as pl

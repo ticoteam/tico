@@ -7,7 +7,6 @@ import pytest
 from backend import step_backlog as SB
 from backend.store import H
 from backend.tests.helpers.api import restrict  # noqa: F401
-from backend.tests.test_api import api  # noqa: F401
 from backend.tests.helpers.step_backlog import board, tickets
 
 

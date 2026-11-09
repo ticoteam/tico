@@ -1,7 +1,6 @@
 """Helpers that other tests share, moved out of test_meeting_items.py so they import no test file."""
 
 from backend.tests.helpers.api import headers
-from backend.tests.test_api import api
 
 
 def record(api, body=None, token="ana-test"):

@@ -6,7 +6,6 @@ from backend import groups as Groups
 from backend import people as P
 from backend.store import H
 from backend.tests.helpers.api import get, headers, post  # noqa: F401  (the api fixture)
-from backend.tests.test_api import api  # noqa: F401  (the api fixture)
 from backend.tests.helpers.groups import add_bots, group, send
 from backend.tests.helpers.groups_leads import as_bot
 

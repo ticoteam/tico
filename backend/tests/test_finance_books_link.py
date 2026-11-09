@@ -16,7 +16,6 @@ from backend.finance.store import banking as SK
 from backend.finance.store import mirror as SX
 from backend.finance.store import tico as T
 from backend.tests.helpers.api import get, headers  # noqa: F401
-from backend.tests.test_api import api  # noqa: F401
 from backend.tests.helpers.hook_relay import hq, service  # noqa: F401
 from backend.tests.helpers.finance_fixtures import AT, OWNER, act, books, finance_template, store  # noqa: F401
 from backend.tests.helpers.finance_books_link import COMPANY, HQ, LINK, tokens

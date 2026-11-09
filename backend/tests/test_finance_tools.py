@@ -6,7 +6,6 @@ import json
 from backend.finance import actions as FA
 from backend.finance import reads as FR
 from backend.tests.helpers.api import get, setup_attempt  # noqa: F401
-from backend.tests.test_api import api  # noqa: F401
 from backend.tests.helpers.mcp import call
 from clients import hubtools
 

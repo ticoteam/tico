@@ -12,7 +12,6 @@ from backend import cloud_machines as CM, performance
 from backend.store import H
 from backend.tests.helpers import cloud_machines as TCM
 from backend.tests.helpers.api import headers, post, ready  # noqa: F401
-from backend.tests.test_api import api  # noqa: F401
 from backend.tests.helpers.health import health_of
 from backend.tests.helpers.cloud_machines import claim_on, cloud, enrolled, events, facts, machine_row, work  # noqa: F401
 

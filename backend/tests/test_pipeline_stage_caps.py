@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 
 import pytest
 
-from backend.tests.test_api import api, get, headers  # noqa: F401  (api is a fixture)
+from backend.tests.helpers.api import get, headers
 from backend import assigned_start as A
 from backend import delivery as DL
 from backend import hubdb as H
@@ -1244,7 +1244,7 @@ def test_a_card_on_ice_is_never_stuck_stranded_or_a_stuck_blocker(api):
 def test_a_follow_up_queued_for_a_card_parked_mid_turn_is_not_taken_into_the_running_turn(api):
     """A steer queued for a card's running turn waits once a person parks the card On ice: the turn's inputs pass it
     over and its job stays queued, as the claim leaves it (execution.job_refusal "on_ice")."""
-    from backend.tests.test_api import claim, post
+    from backend.tests.helpers.api import claim, post
     from backend.tests.test_comment_delivery import inputs, job_state, world
 
     typ, steps = make_line(api, "IceInputs" + uuid.uuid4().hex[:8], ON_ICE_LINE)

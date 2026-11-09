@@ -5,7 +5,6 @@ never reads that reason."""
 
 from backend import goals as G
 from backend.tests.helpers.api import get, post  # noqa: F401
-from backend.tests.test_api import api  # noqa: F401
 from backend.tests.helpers.goal_cards import inbox_measure, leaks, propose
 from backend.tests.helpers.kpis import goal_with_kpi
 

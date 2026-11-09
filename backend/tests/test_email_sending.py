@@ -10,7 +10,6 @@ import pytest
 from backend import email_sending as S
 from backend.store import H
 from backend.tests.helpers.api import headers, post as api_post, runner, setup_attempt  # noqa: F401
-from backend.tests.test_api import api  # noqa: F401
 from backend.tests.helpers.email_sending import (
     BOX,
     CONTACT,

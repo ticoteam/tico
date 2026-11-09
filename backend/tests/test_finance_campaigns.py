@@ -16,7 +16,6 @@ from backend.finance import reads as RD
 from backend.finance.store import ads as SA
 from backend.finance.store import attribution as ATT
 from backend.store import Store
-from backend.tests.test_api import api  # noqa: F401  (fixture)
 from backend.tests.helpers.finance_ad_spend import http, meta
 from backend.tests.helpers.finance_fixtures import AT, OWNER, account, act, books, finance_template, spend, store  # noqa: F401
 from backend.tests.helpers.finance_platform_share import A, B, by_mate, google

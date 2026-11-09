@@ -7,7 +7,6 @@ import pytest
 from backend import read_cache
 from backend.store import H
 from backend.tests.helpers.api import get  # noqa: F401
-from backend.tests.test_api import api  # noqa: F401
 from backend.tests.helpers.read_batches import privacy_parties  # noqa: F401
 from backend.tests.helpers.task_privacy_reads import traced_get
 

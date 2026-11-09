@@ -7,7 +7,6 @@ import pytest
 
 from backend import hubdb as H, meetings
 from backend.tests.helpers.api import as_member, get, headers, post, restrict, runner, setup_attempt  # noqa: F401
-from backend.tests.test_api import api  # noqa: F401
 from backend.tests.helpers.mcp import call
 from backend.tests.helpers.member_bots import botops, turn  # noqa: F401
 from backend.tests.helpers.lifecycle import debrief

@@ -15,7 +15,6 @@ import uuid
 import pytest
 
 from backend.tests.helpers.api import post, setup_attempt  # noqa: F401
-from backend.tests.test_api import api  # noqa: F401
 from clients import dbquery as D
 from clients.tico import APIError
 from backend.tests.helpers.databases import FakeHub, workspace

@@ -8,7 +8,6 @@ from backend import check_models, execution, health
 from backend.scheduler import Scheduler
 from backend.store import H
 from backend.tests.helpers.api import claim, post  # noqa: F401  (api is a fixture)
-from backend.tests.test_api import api  # noqa: F401  (api is a fixture)
 from backend.tests.helpers.task_lanes import new_task, task_bot
 
 

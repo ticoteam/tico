@@ -6,7 +6,6 @@ from backend import learnings as L
 from backend import maintenance, scheduler
 from backend.store import H
 from backend.tests.helpers.api import headers, post, setup_attempt  # noqa: F401
-from backend.tests.test_api import api  # noqa: F401
 from backend import bot_settings as BS
 
 

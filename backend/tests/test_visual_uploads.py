@@ -5,7 +5,6 @@ limit) and a task comment (multipart; JSON there stops at 10 MB)."""
 import pytest
 
 from backend.tests.helpers.api import headers, post  # noqa: F401  (fixture)
-from backend.tests.test_api import api  # noqa: F401  (fixture)
 from backend.tests.helpers.files import turn
 from clients import bot_files as BF, hubtools
 from clients.tico import APIError, MultipartBody

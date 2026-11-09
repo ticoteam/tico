@@ -7,7 +7,6 @@ import pytest
 from backend import delivery
 from backend.store import H
 from backend.tests.helpers.api import claim, get, headers, post
-from backend.tests.test_api import api
 from backend.tests.helpers.mcp import call
 from backend.tests.helpers.tasks_board import bot_token
 from clients import hubcli, hubtools

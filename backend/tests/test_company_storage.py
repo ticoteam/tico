@@ -10,7 +10,6 @@ from botocore.exceptions import ClientError
 from backend import company_storage
 from backend.blobs import Blobs
 from backend.tests.helpers.api import headers, post  # noqa: F401
-from backend.tests.test_api import api  # noqa: F401
 from backend.tests.helpers.backup_bundle import ObjectStore
 from backend.tests.helpers.storage_delivery import S3, attach, task
 

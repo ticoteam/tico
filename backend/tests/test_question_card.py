@@ -5,7 +5,6 @@ the card's header and Decide's order (views.holds_up, views.card_why, views.deci
 from backend import hubdb as H
 from backend import views
 from backend.tests.helpers.api import get, headers, post, setup_attempt  # noqa: F401
-from backend.tests.test_api import api  # noqa: F401
 
 PICKS = [
     {"label": "Calls", "then": "Booked on your calendar", "recommended": True},

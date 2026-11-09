@@ -15,7 +15,6 @@ from backend import google_connect
 from backend.auth import Identity
 from backend.store import H
 from backend.tests.helpers.api import get, headers, post, runner, setup_attempt  # noqa: F401
-from backend.tests.test_api import api  # noqa: F401
 from connectors.mail import oauth
 from runner_support.connectors import ConnectorPublisher, failure_reason
 from backend.tests.helpers.google_connect import (

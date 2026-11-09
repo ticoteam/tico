@@ -10,7 +10,6 @@ import pytest
 
 from backend import audit_log
 from backend.tests.helpers.api import get  # noqa: F401
-from backend.tests.test_api import api  # noqa: F401
 
 
 def _write(api, *changes):

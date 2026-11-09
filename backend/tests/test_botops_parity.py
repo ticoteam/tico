@@ -11,7 +11,6 @@ import time
 import pytest
 
 from backend.tests.helpers.api import assign, claim, get, headers, post, put, ready, runner  # noqa: F401  (fixture)
-from backend.tests.test_api import api  # noqa: F401  (fixture)
 from backend.tests.helpers.member_bots import botops, call, close_computer, finish, register, turn  # noqa: F401  (fixtures)
 from backend.store import H
 from backend.tests.helpers.botops_parity import _wake, act, bot_id, everything, mcp_tool, vault

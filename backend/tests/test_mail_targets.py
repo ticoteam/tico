@@ -9,7 +9,6 @@ import os
 from backend import mailbox_access, routines
 from backend.store import encode
 from backend.tests.helpers.api import get, post, runner  # noqa: F401
-from backend.tests.test_api import api  # noqa: F401
 from backend.tests.helpers.mail_api import seed_org
 from runner_support.connectors import ConnectorPublisher
 from backend.tests.helpers.mail_targets import declare

@@ -9,7 +9,6 @@ from backend import groups as Groups
 from backend import people as P
 from backend.store import H, encode
 from backend.tests.helpers.api import get, post
-from backend.tests.test_api import api
 from backend import bot_settings as BS
 from backend.tests.helpers.groups import add_bots, group, roster_of, send, set_roster
 

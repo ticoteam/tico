@@ -19,7 +19,6 @@ from backend.finance import sync
 from backend.finance.core import feeds as F
 from backend.finance.mercury import IP_HINT, Answer, Mercury, dollars, error_text
 from backend.tests.helpers.api import post  # noqa: F401
-from backend.tests.test_api import api  # noqa: F401
 from backend.tests.helpers.triggers import hook
 from backend.tests.helpers.finance_fixtures import (
     AT,

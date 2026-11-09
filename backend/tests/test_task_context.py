@@ -7,7 +7,6 @@ from backend.auth import Identity
 from backend.store import H, encode
 from backend.tests.slug_ids import bot_ids_are_their_slugs  # noqa: F401
 from backend.tests.helpers.api import assign, claim, get, headers, post, ready, restrict, runner  # noqa: F401
-from backend.tests.test_api import api  # noqa: F401
 from backend.tests.helpers.cards import page as seed_page
 from backend.tests.helpers.files import turn
 from backend.tests.helpers.meeting_items import record

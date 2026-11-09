@@ -3,7 +3,6 @@ and started at Tico HQ with the install's gateway key; a start HQ refuses while 
 so in plain words with its account page; an install HQ hosts nothing for shows no section. HQ is a fake opener."""
 
 from backend.tests.helpers.api import get, post  # noqa: F401
-from backend.tests.test_api import api  # noqa: F401
 from backend.tests.helpers.company_billing import KEY, URL, hq  # noqa: F401
 
 TICO, BOTS = "pv-" + "a" * 16, "pv-" + "b" * 16

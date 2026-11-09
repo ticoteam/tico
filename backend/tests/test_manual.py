@@ -4,7 +4,6 @@ import os
 from pathlib import Path
 
 from backend import manual
-from backend.tests.test_api import api  # noqa: F401  (the api fixture)
 from backend.tests.helpers.docs import call, make
 
 ROOT = Path(__file__).resolve().parents[2]

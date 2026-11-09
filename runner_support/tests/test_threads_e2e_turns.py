@@ -19,7 +19,6 @@ import pytest
 
 from backend.tests.live import live  # noqa: F401  (the live fixture the Computer listens through)
 from backend.tests.helpers.api import assign, claim, post, ready, runner  # noqa: F401  (the api fixture)
-from backend.tests.test_api import api  # noqa: F401  (the api fixture)
 from backend.tests.threads_e2e import call, create_thread, home_id, ok, require_threads_api, say, timeline
 from runner_support.tests.helpers.conformance import Computer, computer, harness, rust_binary, setup, until  # noqa: F401
 

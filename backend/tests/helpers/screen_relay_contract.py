@@ -14,7 +14,7 @@ import uvicorn
 from fastapi.testclient import TestClient
 from websockets.sync.client import connect
 from backend.app import create_app
-from backend.tests import test_api as api_helpers  # the api fixture and the api_settings it reads
+from backend.tests.helpers import api_app as api_helpers  # the api fixture's body and the api_settings it reads
 from backend.tests.helpers.api import headers, post, runner
 from backend.tests.helpers.screen import offer
 
@@ -68,7 +68,7 @@ class Service:
         original = api_helpers.api_settings
         api_helpers.api_settings = lambda _: self.settings
         try:
-            self.initial = api_helpers.api.__wrapped__(root, None)
+            self.initial = api_helpers.api_client(root, None)
             self.api = next(self.initial)
         finally:
             api_helpers.api_settings = original

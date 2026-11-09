@@ -6,7 +6,6 @@ from datetime import date, timedelta
 from backend import openapi_v2, updates
 from backend.store import H
 from backend.tests.helpers.api import as_member, get, headers, post, restrict, setup_attempt  # noqa: F401
-from backend.tests.test_api import api  # noqa: F401
 
 
 SLIDES = {

@@ -6,7 +6,6 @@ import re
 from fastapi import Request
 
 from backend.tests.helpers.api import assign, claim, get, headers, post, ready  # noqa: F401  (fixture)
-from backend.tests.test_api import api  # noqa: F401  (fixture)
 from backend.tests.helpers.member_bots import botops, finish  # noqa: F401  (fixture)
 from backend.store import H
 

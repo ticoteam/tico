@@ -9,7 +9,7 @@ import pytest
 
 from backend.tests.slug_ids import bot_ids_are_their_slugs  # noqa: F401  (each bot's id is its slug)
 from backend.store import H
-from backend.tests.test_api import api, assign, claim, headers, ready, runner  # noqa: F401
+from backend.tests.helpers.api import assign, claim, headers, ready, runner  # noqa: F401
 
 _ids = itertools.count(0xC1000000)
 
@@ -42,7 +42,7 @@ def builder_runs(api, task_id):
 
 @pytest.fixture(autouse=True)
 def private_tasks_have_an_unrelated_manager(api):
-    from backend.tests.test_api import unrelated_task_managers
+    from backend.tests.helpers.api import unrelated_task_managers
 
     with api.app.state.store.transaction() as c:
         unrelated_task_managers(c)

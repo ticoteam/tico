@@ -12,7 +12,6 @@ from backend.auth import Identity
 from backend.store import H, Problem
 from backend.tests.slug_ids import bot_ids_are_their_slugs  # noqa: F401  (each bot's id is its slug)
 from backend.tests.helpers.api import as_member, headers, post  # noqa: F401
-from backend.tests.test_api import api  # noqa: F401
 from backend.tests.helpers.threads_note_boundaries import bot_runner, bot_says, drain, finish, new_thread, say
 from backend.tests.helpers.assistant import assistant_turn
 

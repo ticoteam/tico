@@ -7,7 +7,6 @@ from urllib.parse import quote
 
 from backend.store import H, encode
 from backend.tests.helpers.api import get, headers, post  # noqa: F401
-from backend.tests.test_api import api  # noqa: F401
 from backend.tests.helpers.strategy_bot_level import level
 from backend.tests.helpers.strategy_bot_suggests import bot_task
 from backend.tests.helpers.company import bot, with_strategy_bot

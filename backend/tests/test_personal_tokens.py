@@ -5,7 +5,6 @@ import pytest
 from backend.personal_tokens import FIELDS
 from backend.store import H
 from backend.tests.helpers.api import get, headers, post  # noqa: F401
-from backend.tests.test_api import api  # noqa: F401
 
 OWNER, ADMIN, PLAIN = "ana-test", "ben-test", "cara-test"
 

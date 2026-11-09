@@ -8,7 +8,6 @@ from backend.tests.helpers.migrations import restore_config  # the column back f
 from backend import invites
 from backend.store import sweep_idempotency
 from backend.tests.helpers.api import headers  # noqa: F401  (the api fixture)
-from backend.tests.test_api import api  # noqa: F401  (the api fixture)
 from backend.tests.helpers.invites import owner  # noqa: F401
 from backend.tests.helpers.oidc import provider, signin  # noqa: F401  (the fixtures)
 

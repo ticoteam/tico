@@ -5,7 +5,6 @@ import pytest
 from backend import google_workspace as workspace, mailbox_access, routines
 from backend.store import H, encode, readiness_document
 from backend.tests.helpers.api import as_member, get, post, ready, runner, setup_attempt  # noqa: F401
-from backend.tests.test_api import api  # noqa: F401
 from backend.tests.helpers.assistant import assistant_turn
 from backend.tests.helpers.connectors import mail_message
 from backend.tests.helpers.gmail_live import gmail_http  # noqa: F401

@@ -20,7 +20,6 @@ from unittest import mock
 import pytest
 
 from backend.tests.helpers.api import assign, claim, get, headers, post, ready, runner  # noqa: F401
-from backend.tests.test_api import api  # noqa: F401
 from backend.tests.helpers.botops_parity import act
 from backend.tests.helpers.member_bots import botops, turn  # noqa: F401
 from backend.tests.live import live  # noqa: F401

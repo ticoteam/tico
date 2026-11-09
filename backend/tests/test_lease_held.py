@@ -5,7 +5,6 @@ On v0.4.14 the write lock was held for up to a minute: renewals reached the serv
 
 from backend.store import H, Problem
 from backend.tests.helpers.api import claim, expire, headers, post, setup_attempt  # noqa: F401
-from backend.tests.test_api import api  # noqa: F401
 
 
 def lock_timeout(*args, **kwargs):

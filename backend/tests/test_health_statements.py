@@ -7,7 +7,6 @@ import uuid
 
 from backend import bot_settings as BS
 from backend.store import H
-from backend.tests.test_api import api  # noqa: F401  (the fixture)
 from backend.tests.helpers.api import assign, headers, post, runner
 from backend.tests.helpers.claim_statements import seed, traced
 from backend.tests.helpers.getting_started import heartbeat

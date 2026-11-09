@@ -9,7 +9,6 @@ import json
 from backend import bot_settings as BS
 from backend.store import encode
 from backend.tests.helpers.api import get, headers  # noqa: F401  (the api fixture)
-from backend.tests.test_api import api  # noqa: F401  (the api fixture)
 import pytest
 
 

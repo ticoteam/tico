@@ -4,7 +4,6 @@ import json
 from backend import shared_bots
 from backend.store import H
 from backend.tests.helpers.api import get, post, runner, restrict, ready, claim  # noqa: F401
-from backend.tests.test_api import api  # noqa: F401
 from backend import bot_settings as BS
 from backend.tests.helpers.shared_bots import branch, revision, share
 

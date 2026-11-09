@@ -5,7 +5,6 @@ import shlex
 
 import pytest
 
-from backend.tests.test_api import api  # noqa: F401
 from backend.tests.helpers.automation_cli import Client
 from backend.tests.helpers.gmail_live import BOX, NEXT, gmail_http  # noqa: F401
 from backend.tests.helpers.google_workspace_authz import workspace_key  # noqa: F401

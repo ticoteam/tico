@@ -3,7 +3,6 @@ query says might be waiting, and reads each step name once. The numbers match th
 
 from backend import auto_tasks, hubdb as H, question_tasks as QT
 from backend.tests.helpers.api import post  # noqa: F401
-from backend.tests.test_api import api  # noqa: F401
 from backend.tests.helpers.status_reads import setup
 from backend.tests.hold_rows import set_holds
 

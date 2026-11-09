@@ -2,7 +2,7 @@
 the sweep keeps each check's state for Health and raises no task (Check health files the firing checks, see
 tests/test_maintenance_health.py); Health lists the firing checks for owners and admins only;
 the scheduler runs the sweep with no model; every check reads through an index. Synthetic fixtures only (Ana owns the
-team, Cara is a member; the bots are those of backend/tests/test_api.py)."""
+team, Cara is a member; the bots are those of backend/tests/helpers/api_app.py)."""
 
 import json
 from datetime import datetime, timedelta, timezone
@@ -12,7 +12,6 @@ from backend import invariants as I
 from backend.scheduler import Scheduler
 from backend.store import H
 from backend.tests.helpers.api import get, post, setup_attempt  # noqa: F401
-from backend.tests.test_api import api  # noqa: F401
 
 NOW = datetime.now(timezone.utc)
 EPOCH = int(NOW.timestamp())

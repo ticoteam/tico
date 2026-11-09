@@ -7,7 +7,6 @@ from backend import login_holds
 from backend.store import H
 from backend.scheduler import Scheduler
 from backend.tests.helpers.api import post, get, claim, ready
-from backend.tests.test_api import api
 from backend.tests.helpers.execution_review import add_recovery_reviewer, restarted_mid_turn, rival, sweep, job_state
 from backend.tests.helpers.login_holds import at, signed_in, two_bots, limit, events, health_detail
 from backend import bot_settings as BS

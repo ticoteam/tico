@@ -8,7 +8,6 @@ import yaml
 from backend import market as M
 from backend.blobs import Blobs
 from backend.tests.helpers.api import get, post  # noqa: F401
-from backend.tests.test_api import api  # noqa: F401
 from backend.tests.helpers.market import FIXTURE_REGISTRY
 from clients.routines import validate_schedules
 

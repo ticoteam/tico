@@ -18,7 +18,6 @@ from pathlib import Path
 
 import pytest
 
-from backend.tests.test_api import api  # noqa: F401  (the fixture)
 from e2e import scenario
 from e2e.normalize import normalize
 from e2e.server import serve, settings_for, snapshot

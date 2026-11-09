@@ -5,7 +5,6 @@ import pytest
 from backend.hubdb import Refused
 from backend.store import H
 from backend.tests.helpers.api import post  # noqa: F401
-from backend.tests.test_api import api  # noqa: F401
 from backend.tests.helpers.subtask_results import queued_in
 from backend.tests.helpers.task_lanes import task_bot
 

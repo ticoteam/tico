@@ -11,7 +11,6 @@ from backend import org_rules as O
 from backend import rule_due as D
 from backend.store import encode
 from backend.tests.helpers.api import get, headers, post, put  # noqa: F401  (the api fixture)
-from backend.tests.test_api import api  # noqa: F401  (the api fixture)
 from backend import bot_settings as BS
 from backend.tests.helpers.org_rules import as_bot, edit, org, rule
 

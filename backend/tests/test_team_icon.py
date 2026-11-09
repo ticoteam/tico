@@ -3,7 +3,6 @@ import io
 from PIL import Image
 
 from backend.tests.helpers.api import headers, setup_attempt  # noqa: F401
-from backend.tests.test_api import api  # noqa: F401
 from backend.tests.helpers.team_icon import image
 
 

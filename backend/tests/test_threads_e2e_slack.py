@@ -14,7 +14,6 @@ from backend.tests.slug_ids import bot_ids_are_their_slugs  # noqa: F401  (each 
 from backend import screening
 from backend import slack_gateway as G
 from backend.tests.helpers.api import headers  # noqa: F401  (the api fixture)
-from backend.tests.test_api import api  # noqa: F401  (the api fixture)
 from backend.tests.helpers.slack_threads import BOT_USER, MARKETING, TEAM, APP, FakeJudge, FakeSlack, Clock
 from backend.tests.threads_e2e import call, create_thread, ok, require_threads_api, say, timeline
 

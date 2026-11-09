@@ -11,7 +11,6 @@ from backend.tests.helpers.api import (
     assign,
     claim,
 )
-from backend.tests.test_api import api
 
 
 def test_revocation_invalidates_running_bot_credential(api):

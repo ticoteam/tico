@@ -5,7 +5,6 @@ chat, and each turn there is handed both layers as they are when it starts, so a
 next turn."""
 
 from backend.tests.helpers.api import assign, get, headers, post, ready, runner  # noqa: F401
-from backend.tests.test_api import api  # noqa: F401
 from backend.tests.helpers.assistant import say
 from backend.tests.helpers.botops_parity import act
 from backend.tests.helpers.strategy_bot_chat import strategy_bot, personal

@@ -6,7 +6,6 @@ import pytest
 
 from backend.auth import Identity
 from backend.tests.helpers.api import get, headers, post  # noqa: F401
-from backend.tests.test_api import api  # noqa: F401
 from backend.tests.helpers.org_rules import rule
 from backend.tests.helpers.page_audience import edit
 from backend.tests.helpers.page_audience_review4 import public_page

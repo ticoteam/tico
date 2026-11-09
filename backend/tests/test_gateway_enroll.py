@@ -12,7 +12,6 @@ import sys
 import pytest
 
 from backend.tests.helpers.api import assign, claim, get, post, runner  # noqa: F401
-from backend.tests.test_api import api  # noqa: F401
 from backend.tests.helpers.decide_gateway import answer_all
 from backend.tests.helpers.gateway_connection import delete, everything, handed_to, put_bot_on, ready, save
 from backend.tests.helpers.judge import QUESTIONS

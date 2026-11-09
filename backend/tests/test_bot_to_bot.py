@@ -6,7 +6,6 @@ Builder sample, Oct 18: 74 of 168 wakes were QA updates, a bot telling another b
 from backend import bot_to_bot as B
 from backend import hubdb as H
 from backend.tests.helpers.api import assign, get, post, ready, runner  # noqa: F401
-from backend.tests.test_api import api  # noqa: F401
 from backend.tests.hold_rows import set_holds
 
 

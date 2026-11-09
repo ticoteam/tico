@@ -4,7 +4,6 @@ import uuid
 
 
 from backend.tests.helpers.api import as_member, assign, get, post, restrict, runner  # noqa: F401
-from backend.tests.test_api import api  # noqa: F401
 from backend.tests.helpers.shared_logins import queued_login
 
 

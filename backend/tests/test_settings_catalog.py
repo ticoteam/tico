@@ -15,7 +15,6 @@ from backend.assistant import valid_operation
 from backend.settings_entries import ALIASES, ENTRIES, NO_CARD_YET, NOT_SETTINGS, SETTINGS_FILES
 from backend.store import H, Problem
 from backend.tests.helpers.api import get, post  # noqa: F401  (fixture)
-from backend.tests.test_api import api  # noqa: F401  (fixture)
 from backend.tests.helpers.mcp import call as mcp
 from backend.tests.helpers.member_bots import botops, finish, turn  # noqa: F401  (fixtures)
 

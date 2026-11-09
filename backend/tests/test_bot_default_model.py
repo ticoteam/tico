@@ -9,7 +9,6 @@ import json
 from backend import gateway_tiers
 from backend.store import H
 from backend.tests.helpers.api import headers, post  # noqa: F401  (fixture)
-from backend.tests.test_api import api  # noqa: F401  (fixture)
 from backend import bot_settings as BS
 
 

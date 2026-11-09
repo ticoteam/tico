@@ -12,7 +12,6 @@ import pytest
 
 from backend import company_server as CS
 from backend.tests.helpers.api import as_member, headers  # noqa: F401
-from backend.tests.test_api import api  # noqa: F401
 
 CODE = "synthetic_" + "s" * 33
 INSTALL_ID = "cc4a8541-2661-4eb8-a1d3-a34e913571c0"

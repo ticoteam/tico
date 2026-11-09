@@ -17,7 +17,6 @@ import pytest
 from backend import auto_tasks, execution, flight, org_turns
 from backend.store import H, encode, _pooled
 from backend.tests.helpers.api import assign, headers, post, runner  # noqa: F401
-from backend.tests.test_api import api  # noqa: F401
 from backend.enqueue import enqueue_stored
 from backend import bot_settings as BS
 

@@ -8,7 +8,6 @@ from unittest.mock import patch
 import pytest
 
 from backend import ui_build, ui_bundle
-from backend.tests.test_api import api  # noqa: F401
 
 AUTH = {"Authorization": "Bearer ana-test"}
 # TICO_UI_BUNDLE=off runs the suite on the separate files: what is about the served bundle does not apply then.

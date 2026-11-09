@@ -4,7 +4,6 @@ import pytest
 from backend.auth import Identity
 from backend.store import H, digest
 from backend.tests.helpers.api import headers, post
-from backend.tests.test_api import api
 
 
 @pytest.fixture

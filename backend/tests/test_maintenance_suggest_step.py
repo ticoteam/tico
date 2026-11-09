@@ -16,7 +16,6 @@ from backend.maintenance_steps import suggest as step
 from backend.maintenance_steps import update as update_step
 from backend.store import H, Problem
 from backend.tests.helpers.api import get, put  # noqa: F401
-from backend.tests.test_api import api  # noqa: F401
 from backend.tests.helpers.maintenance_learn_step import complete, queue, start
 
 

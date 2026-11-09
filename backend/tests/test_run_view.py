@@ -6,7 +6,6 @@ import json
 from backend.store import H
 from backend.tests.helpers.shared_logins import queued_login  # noqa: F401
 from backend.tests.helpers.api import assign, claim, expire, get, post, put, ready, runner  # noqa: F401
-from backend.tests.test_api import api  # noqa: F401
 from backend.tests.helpers.execution_review import aged, sweep
 from backend.enqueue import enqueue_stored
 from backend.tests.helpers.run_view import DEV_563_NOTE, botops_decides, events, task_attempt

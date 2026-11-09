@@ -5,7 +5,6 @@ so the spend cap counts it; `assistant:<person>` makes the person's Assistant ro
 import json
 
 from backend.tests.helpers.api import assign, claim, get, post, put, ready, runner  # noqa: F401
-from backend.tests.test_api import api  # noqa: F401
 from backend.tests.helpers.automation_turns import draft_then_tell, finish
 
 

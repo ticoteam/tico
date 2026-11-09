@@ -7,7 +7,6 @@ import pytest
 from backend import cards
 from backend.store import H, encode
 from backend.tests.helpers.api import as_member, assign, get, headers, post, ready, restrict, runner  # noqa: F401
-from backend.tests.test_api import api  # noqa: F401
 from backend.tests.helpers.assistant import assistant_turn, say
 from backend.tests.helpers.files import turn
 from backend.tests.helpers.meeting_items import record

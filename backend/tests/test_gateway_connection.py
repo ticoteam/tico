@@ -13,7 +13,6 @@ import pytest
 from backend.credentials import CredentialCipher
 from backend.store import H
 from backend.tests.helpers.api import assign, claim, get, headers, post, put, runner  # noqa: F401
-from backend.tests.test_api import api  # noqa: F401  (fixture; test_api stays allowlisted here)
 from backend.tests.helpers.credentials import FakeKMS  # noqa: F401
 from backend.tests.helpers.decide_gateway import answer_all  # noqa: F401
 from backend.tests.helpers.judge import QUESTIONS  # noqa: F401

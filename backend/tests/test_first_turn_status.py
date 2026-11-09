@@ -4,7 +4,6 @@ from backend import events as E
 from backend.auth import Identity
 from backend.store import H
 from backend.tests.helpers.api import as_member, assign, claim, get, post, ready, restrict, runner  # noqa: F401
-from backend.tests.test_api import api  # noqa: F401
 from backend.tests.helpers.run_view import events, task_attempt
 from backend.tests.helpers.shared_logins import queued_login  # noqa: F401
 

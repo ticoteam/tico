@@ -9,7 +9,6 @@ from backend.auth import Identity
 from backend.store import H
 from backend.tests.slug_ids import bot_ids_are_their_slugs  # noqa: F401
 from backend.tests.helpers.api import get, headers, post  # noqa: F401
-from backend.tests.test_api import api  # noqa: F401
 from backend.tests.helpers.counsel import counsel_on, counsel_run, source, store_file
 from backend.tests.helpers.groups import send
 from backend.tests.helpers.org_rules import as_bot, org

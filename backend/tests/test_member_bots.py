@@ -6,7 +6,6 @@ add teammates through BotOps, which acts as her, checked with her full rights.
 
 from backend.store import H, encode
 from backend.tests.helpers.api import claim, get, headers, post, put, runner
-from backend.tests.test_api import api
 from backend.tests.helpers.member_bots import botops, call, close_computer, finish, register, turn
 
 

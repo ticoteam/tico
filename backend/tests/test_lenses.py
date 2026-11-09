@@ -10,7 +10,6 @@ from backend import lenses as L
 from backend import strategy as S
 from backend.store import H
 from backend.tests.helpers.api import get, post  # noqa: F401
-from backend.tests.test_api import api  # noqa: F401
 from backend.tests.helpers.company import bot, with_strategy_bot
 from backend.tests.helpers.goal_asks import asks, sync
 from backend.tests.helpers.strategy import draft, publish, ready, write

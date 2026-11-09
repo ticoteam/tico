@@ -12,7 +12,6 @@ import pytest
 from backend import settings_catalog
 from backend.settings_entries import ENTRIES
 from backend.tests.helpers.api import runner
-from backend.tests.test_api import api
 from backend.tests.helpers.member_bots import botops, finish, turn  # noqa: F401  (fixtures)
 from backend.tests.helpers.settings_parity import KNOWN_GAPS, NOT_PROVEN, PEOPLE, _objects, ask, expected
 

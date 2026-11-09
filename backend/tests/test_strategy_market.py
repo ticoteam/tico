@@ -4,7 +4,6 @@ segment, and the competitors. Examples use Acme and Northwind."""
 from datetime import datetime, timedelta, timezone
 
 from backend.tests.helpers.api import get, post, setup_attempt  # noqa: F401
-from backend.tests.test_api import api  # noqa: F401
 from backend.tests.helpers.market import _librarian
 from backend.tests.helpers.market_spend import defined, evidence
 

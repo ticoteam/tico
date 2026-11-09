@@ -3,7 +3,6 @@ the job's state and GET its MP4 read it through the server. The Gateway is faked
 at its Finance budget's cutoff is refused before anything is sent."""
 
 from backend.tests.helpers.api import headers  # noqa: F401
-from backend.tests.test_api import api  # noqa: F401
 from clients import gateway as G
 
 JOB = "gv_" + "c" * 24

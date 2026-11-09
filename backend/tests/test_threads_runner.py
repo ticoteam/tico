@@ -12,7 +12,6 @@ from backend.tests.slug_ids import bot_ids_are_their_slugs  # noqa: F401  (each 
 from backend import execution, org_rule_check, threads
 from backend.store import H
 from backend.tests.helpers.api import assign, claim, post, ready, runner  # noqa: F401  (the api fixture)
-from backend.tests.test_api import api  # noqa: F401  (the api fixture)
 from backend.tests.helpers.threads_runner import make_thread, say, write
 
 

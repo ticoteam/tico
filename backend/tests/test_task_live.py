@@ -2,7 +2,6 @@
 
 from backend import events
 from backend.tests.helpers.api import headers, post, restrict  # noqa: F401
-from backend.tests.test_api import api  # noqa: F401
 
 
 def test_task_presence_sessions_expire_and_require_current_task_access(api):

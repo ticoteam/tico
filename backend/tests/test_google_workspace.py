@@ -18,7 +18,6 @@ from backend.auth import Identity
 from backend.credentials import SEALED
 from backend.store import H, Problem
 from backend.tests.helpers.api import headers  # noqa: F401
-from backend.tests.test_api import api  # noqa: F401
 from backend.tests.helpers.google_workspace import (
     CALENDAR,
     GMAIL,

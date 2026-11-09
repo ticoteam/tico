@@ -6,7 +6,6 @@ import pytest
 
 from backend import hubdb as H, letters as L
 from backend.tests.helpers.api import get, post, put, headers  # noqa: F401
-from backend.tests.test_api import api  # noqa: F401
 from backend.tests.helpers.agents import hermes_bot, credential, bot_id
 from backend.tests.helpers.mcp import call
 from backend.tests.helpers.botops_parity import act

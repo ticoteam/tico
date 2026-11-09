@@ -10,7 +10,6 @@ import pytest
 from backend import automations, cloud_access, company_billing, routines
 from backend.store import H
 from backend.tests.helpers.api import assign, claim, get, headers, post, ready, runner  # noqa: F401
-from backend.tests.test_api import api  # noqa: F401
 from backend.tests.helpers.company_billing import ANSWER, KEY, URL, FakeHQ
 from backend.tests.helpers.gateway_enroll import fake_hq
 from backend.tests.helpers.gateway_enroll import setup as enroll_setup

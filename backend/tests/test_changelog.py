@@ -2,7 +2,7 @@
 
 from backend import changelog
 from backend.store import H
-from backend.tests.test_api import api, headers  # noqa: F401
+from backend.tests.helpers.api import headers  # noqa: F401
 from backend.tests.helpers.mcp import call, rpc
 from backend.tests.helpers.openapi_v2 import conforms
 

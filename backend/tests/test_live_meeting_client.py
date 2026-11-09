@@ -7,7 +7,7 @@ import pytest
 
 from backend import hubdb as H
 from backend.tests.helpers.api import get, post, headers
-from backend.tests.helpers.live_meetings import api, live, chunk  # noqa: F401
+from backend.tests.helpers.live_meetings import live, chunk  # noqa: F401
 
 
 def test_client_validation_and_legacy_idempotency(live):

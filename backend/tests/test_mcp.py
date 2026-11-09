@@ -11,7 +11,6 @@ import pytest
 
 from backend.mcp import ApiProblem, InProcessApi
 from backend.tests.helpers.api import assign, claim, get, headers, post, ready, restrict, runner, setup_attempt  # noqa: F401
-from backend.tests.test_api import api  # noqa: F401
 from clients import bot_files as BF, hubcli, hubtools
 from clients.tico import MultipartBody
 from backend import bot_settings as BS

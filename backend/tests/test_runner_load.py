@@ -5,7 +5,6 @@ import time
 
 from backend import models as M, performance as P
 from backend.tests.helpers.api import get, headers, post, setup_attempt  # noqa: F401
-from backend.tests.test_api import api  # noqa: F401
 from backend.tests.helpers.bot_access import world  # noqa: F401
 from backend.tests.helpers.runner_load import point
 

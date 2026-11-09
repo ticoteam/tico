@@ -2,7 +2,7 @@
 
 import pytest
 
-from backend.tests.helpers.meeting_items import api, record, add, items, change, headers  # noqa: F401
+from backend.tests.helpers.meeting_items import record, add, items, change, headers  # noqa: F401
 from backend.tests.helpers.meeting_task_links import task, get
 from backend.tests.helpers.recorder_audience import live_meeting, readable
 from backend.tests.helpers.api import post

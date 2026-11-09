@@ -7,7 +7,7 @@ import httpx
 import pytest
 
 from backend.granola_mcp import GranolaError, GranolaMCP
-from backend.tests.helpers.granola_mcp import BASE, Provider, api, headers  # noqa: F401
+from backend.tests.helpers.granola_mcp import BASE, Provider, headers  # noqa: F401
 
 
 GET_MEETINGS = '''<meetings_data from="Feb 4, 2026" to="Feb 4, 2026" count="1">

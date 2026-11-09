@@ -8,7 +8,6 @@ import pytest
 from backend import task_relations as TR
 from backend.store import H
 from backend.tests.helpers.api import get, headers, post, put
-from backend.tests.test_api import api
 from backend.tests.helpers.tasks_board import bot_token
 from backend.tests.helpers.task_readers import dry_run, refused, run_on, subtask, task
 

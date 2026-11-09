@@ -10,7 +10,6 @@ import pytest
 from backend.finance import actions as FA
 from backend.finance.core import feeds as F
 from backend.tests.helpers.api import headers, post  # noqa: F401
-from backend.tests.test_api import api  # noqa: F401
 from backend.tests.helpers.triggers import hook
 from backend.tests.helpers.finance_fixtures import AT, MERCURY, OWNER, act
 

@@ -10,7 +10,7 @@ from backend import task_privacy
 from backend.auth import Identity
 from backend.store import H, Problem, encode
 from backend.tests.helpers.api import assign, get, headers, post, runner
-from backend.tests.helpers.live_meetings import api, attach, chunk, live, ready  # noqa: F401
+from backend.tests.helpers.live_meetings import attach, chunk, live, ready  # noqa: F401
 from backend.tests.helpers.botops_parity import act
 from backend.tests.helpers.member_bots import botops, turn as botops_turn  # noqa: F401
 from backend.tests.helpers.sql import query

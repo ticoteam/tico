@@ -5,7 +5,6 @@ whose turn on the task is its own. The same bot's other tasks still run beside i
 
 from backend.store import H
 from backend.tests.helpers.api import claim, post  # noqa: F401  (api is a fixture)
-from backend.tests.test_api import api  # noqa: F401  (api is a fixture)
 from backend.tests.helpers.task_lanes import new_task, task_bot
 
 

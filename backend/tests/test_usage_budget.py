@@ -7,7 +7,6 @@ import json
 
 from backend.store import H, encode
 from backend.tests.helpers.api import get, headers  # noqa: F401  (the api fixture)
-from backend.tests.test_api import api  # noqa: F401  (the api fixture)
 from backend.tests.helpers.groups import send
 from backend.tests.helpers.usage_limits import finish, fleet, groups, put, start
 from backend import usage_limits

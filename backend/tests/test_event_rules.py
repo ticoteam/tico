@@ -10,7 +10,6 @@ import pytest
 from backend import hubdb as H
 from backend import rules as R
 from backend.tests.helpers.api import get, post  # noqa: F401
-from backend.tests.test_api import api  # noqa: F401
 from backend.tests.helpers.wake_rules import jobs, setup
 from backend.tests.helpers.event_rules import CALL, judge, rule
 

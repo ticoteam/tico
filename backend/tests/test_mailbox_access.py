@@ -1,6 +1,6 @@
 """Who may use which mailbox (backend/mailbox_access.py), the one check every mail call goes through.
 
-The fixture's team (backend/tests/test_api.py): ana is the owner, ben an admin, cara a member, all at acme.example.
+The fixture's team (backend/tests/helpers/api_app.py): ana is the owner, ben an admin, cara a member, all at acme.example.
 """
 
 import pytest
@@ -9,7 +9,6 @@ from backend import mailbox_access as MA
 from backend.auth import Identity
 from backend.store import H, Problem
 from backend.tests.helpers.api import get, headers  # noqa: F401
-from backend.tests.test_api import api  # noqa: F401
 
 ANA, BEN, CARA = "ana@acme.example", "ben@acme.example", "cara@acme.example"
 SUPPORT = "support@acme.example"

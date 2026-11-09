@@ -5,7 +5,6 @@ own hours set when it is late."""
 from backend import step_age as SA
 from backend.store import H
 from backend.tests.helpers.api import get  # noqa: F401
-from backend.tests.test_api import api  # noqa: F401
 from backend.tests.helpers.dev_ticket_rules import dev_type
 from backend.tests.hold_rows import set_holds
 

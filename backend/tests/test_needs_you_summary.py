@@ -2,7 +2,6 @@
 
 from backend import hubdb as H
 from backend.tests.helpers.api import get, post, setup_attempt  # noqa: F401
-from backend.tests.test_api import api  # noqa: F401
 
 
 def test_summary_total_is_the_board_count_and_splits_by_bot(api):

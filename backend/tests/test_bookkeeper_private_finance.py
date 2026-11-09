@@ -10,7 +10,7 @@ import pytest
 
 from backend import bookkeeper as BK
 from backend.store import H
-from backend.tests.test_api import api, headers  # noqa: F401
+from backend.tests.helpers.api import headers  # noqa: F401
 from backend.tests.helpers.finance_bookkeeper_turns import _library_file, ask, chart, hire, mercury  # noqa: F401
 from backend.tests.helpers.finance_fixtures import OWNER  # noqa: F401
 from backend.tests.helpers.mcp import call  # noqa: F401

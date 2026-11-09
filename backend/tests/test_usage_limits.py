@@ -2,7 +2,6 @@
 finishes, the 80% notice comes once, raising the limit resumes the bot, and who may set one."""
 
 from backend.tests.helpers.api import as_member, assign, claim, get, headers, post, ready, runner  # noqa: F401
-from backend.tests.test_api import api  # noqa: F401
 from backend.tests.helpers.usage_limits import finish, fleet, groups, paused, put, start
 
 

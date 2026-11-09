@@ -1,7 +1,6 @@
 """Operations listing loads every computer's signed-out and key-cleared rows in one pass."""
 
 from backend.tests.helpers.api import runner  # noqa: F401
-from backend.tests.test_api import api  # noqa: F401
 from backend import model_login
 
 

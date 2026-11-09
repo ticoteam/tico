@@ -2,7 +2,6 @@
 
 from backend.store import H
 from backend.tests.helpers.api import get, post  # noqa: F401
-from backend.tests.test_api import api  # noqa: F401
 from backend import views
 from backend import task_privacy as privacy
 

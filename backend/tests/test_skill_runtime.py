@@ -8,7 +8,6 @@ from backend import skill_runtime as SR
 from backend import skills
 from backend.store import H
 from backend.tests.helpers.api import get, post, runner, setup_attempt  # noqa: F401
-from backend.tests.test_api import api  # noqa: F401
 from backend.tests.helpers.botops_parity import bot_id
 
 BRIEF = [{"path": "SKILL.md", "content": "---\nname: acme-brief\ndescription: Acme brief\n---\nWrite the brief.\n"}]

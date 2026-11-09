@@ -13,7 +13,6 @@ from backend import google_connect
 from backend import google_workspace as W
 from backend.auth import Identity
 from backend.tests.helpers.api import get, headers, runner  # noqa: F401
-from backend.tests.test_api import api  # noqa: F401
 from backend.tests.helpers.google_connect import FakeGoogle, app, exchanged, own_app, refresh, start  # noqa: F401
 from backend.tests.helpers.google_workspace import (
     CALENDAR,

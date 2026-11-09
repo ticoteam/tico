@@ -12,7 +12,6 @@ from backend import read_deps
 from backend import task_privacy
 from backend.store import H
 from backend.tests.helpers.api import headers, post  # noqa: F401  (fixtures and helpers)
-from backend.tests.test_api import api  # noqa: F401  (fixtures and helpers)
 from backend.tests.helpers.sql import query, world  # noqa: F401  (fixture)
 
 

@@ -9,7 +9,6 @@ from pathlib import Path
 
 import pytest
 
-from backend.tests.test_api import api  # noqa: F401  (the fixture: a fresh database and the fictional company)
 from backend.tests.helpers.events import live  # noqa: F401  (a listening server for the events catch-up)
 from e2e import renames, scenario
 from e2e.normalize import normalize

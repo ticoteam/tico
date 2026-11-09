@@ -8,7 +8,6 @@ import pytest
 from backend import read_cache
 from backend.store import H
 from backend.tests.helpers.api import assign, claim, headers, post, ready
-from backend.tests.test_api import api
 from clients import bot_files as BF
 from backend.tests.helpers.files import publish, turn
 
