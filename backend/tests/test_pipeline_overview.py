@@ -295,7 +295,7 @@ def test_engineering_factory_scoreboard_uses_last_day_stage_and_merge_times(api)
     factory = make_factory(api, "Engineering")
     typ, steps = make_type(
         api,
-        "Engineering",
+        "Scoreboard flow",
         [
             {"name": "Building", "status": "doing"},
             {"name": "In QA", "status": "review"},
