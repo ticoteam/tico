@@ -1068,6 +1068,14 @@ def test_every_job_runs_on_a_github_hosted_runner_and_only_a_ready_pull_request_
     }
 
 
+def test_a_draft_runs_no_release_command_test_and_marking_it_ready_runs_them():
+    doc = yaml.safe_load((ROOT / ".github" / "workflows" / "release-command-tests.yml").read_text())
+    assert doc[True]["pull_request"]["types"] == ["opened", "synchronize", "reopened", "ready_for_review"]
+    assert (
+        doc["jobs"]["command"]["if"] == "${{ github.event_name != 'pull_request' || !github.event.pull_request.draft }}"
+    )
+
+
 def test_a_draft_or_a_fork_runs_no_test_or_sim_leg():
     jobs = workflow_jobs()["jobs"]
     assert jobs["plan"]["if"] == "${{ !github.event.pull_request.draft }}"
