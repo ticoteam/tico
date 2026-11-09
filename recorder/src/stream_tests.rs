@@ -26,6 +26,8 @@ fn mock(sessions: Vec<Session>) -> (String, Seen, thread::JoinHandle<()>) {
             // reconnect and send; this only bounds how long a broken run hangs.
             tcp.set_read_timeout(Some(Duration::from_secs(60))).unwrap();
             let requests = requests.clone();
+            // tungstenite's handshake callback fixes its error type: a whole HTTP response.
+            #[allow(clippy::result_large_err)]
             let mut socket = tungstenite::accept_hdr(
                 tcp,
                 move |request: &tungstenite::handshake::server::Request,

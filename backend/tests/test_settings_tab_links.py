@@ -1,6 +1,7 @@
 """Every in-app link that names a Settings tab names one that exists. A link to #/settings carries the tab it means
-(data-gs-tab in the UI, a fix's "tab" from the server); ui/getting-started.js switches to it, and settingsShow
-(ui/app/settings.js) quietly falls back to Computers for a name it does not know, so a wrong name opens the wrong tab."""
+(data-gs-tab in the UI, a fix's "tab" from the server); ui/getting-started.ts switches to it, and settingsShow
+(ui/app/settings.ts) quietly falls back to Computers for a name it does not know, so a wrong name opens the wrong tab."""
+
 import ast
 import re
 from pathlib import Path
@@ -11,24 +12,38 @@ SETTINGS = "#/settings"
 # storage, now sections of General; gateway, now a card on Models), the Models section of Computers (models), History's
 # Runs view (runs), ones it sends to the Tools page (credentials, cloud), or Health, a page with no tab that General's
 # Health line opens.
-ALIASES = {"tags", "types", "providers", "models", "team", "assistant", "privacy", "storage", "runs", "credentials",
-           "cloud", "gateway", "health"}
+ALIASES = {
+    "tags",
+    "types",
+    "providers",
+    "models",
+    "team",
+    "assistant",
+    "privacy",
+    "storage",
+    "runs",
+    "credentials",
+    "cloud",
+    "gateway",
+    "health",
+}
 
 
 def settings_tabs():
-    tabs = set(re.findall(r'data-settings-tab="([a-z]+)"', (ROOT / "ui/app/settings.js").read_text()))
+    tabs = set(re.findall(r'data-settings-tab="([a-z]+)"', (ROOT / "ui/app/settings.ts").read_text()))
     assert {"devices", "bots"} <= tabs
-    assert 'id="settings-health"' in (ROOT / "ui/app/settings.js").read_text()
+    assert 'id="settings-health"' in (ROOT / "ui/app/settings.ts").read_text()
     return tabs | ALIASES
 
 
 def ui_links():
-    for path in sorted((ROOT / "ui").rglob("*.js")):
+    # The .js and the .ts sources (a converted script keeps its links), each listed by its own glob.
+    for path in sorted([*(ROOT / "ui").rglob("*.js"), *(ROOT / "ui").rglob("*.ts")]):
         rel = path.relative_to(ROOT).as_posix()
         if "/tests/" in rel or "/vendor/" in rel or "node_modules" in rel or "/assets/" in rel:
             continue
         # The whole value, so a name the tabs can't have (a hyphen, a capital, empty) fails rather than goes unseen.
-        # A value built at run time (health.js draws the server's fix.tab) is checked on the server side below.
+        # A value built at run time (health.ts draws the server's fix.tab) is checked on the server side below.
         for tab in re.findall(r'data-gs-tab="([^"]*)"', path.read_text()):
             if "${" not in tab:
                 yield rel, tab
@@ -50,7 +65,7 @@ def server_links():
             if isinstance(node, ast.Call):
                 at = [i for i, arg in enumerate(node.args) if isinstance(arg, ast.Constant) and arg.value == SETTINGS]
                 for i in at:
-                    tabs = node.args[i + 1:i + 2] + [k.value for k in node.keywords if k.arg == "tab"]
+                    tabs = node.args[i + 1 : i + 2] + [k.value for k in node.keywords if k.arg == "tab"]
                     for tab in tabs:
                         for name in strings(tab):
                             yield f"{rel}:{node.lineno}", name
@@ -65,8 +80,12 @@ def server_links():
 def test_ui_links_name_a_settings_tab_that_exists():
     tabs, links = settings_tabs(), list(ui_links())
     # The links people hit most: chat's waiting line, the heartbeat banner, first run.
-    assert {("ui/app/chat.js", "models"), ("ui/app/chat.js", "devices"), ("ui/app/heartbeat.js", "health"),
-            ("ui/first-run.js", "models")} <= set(links)
+    assert {
+        ("ui/app/chat.ts", "models"),
+        ("ui/app/chat.ts", "devices"),
+        ("ui/app/heartbeat.ts", "health"),
+        ("ui/first-run.ts", "models"),
+    } <= set(links)
     assert [(rel, tab) for rel, tab in links if tab not in tabs] == []
 
 

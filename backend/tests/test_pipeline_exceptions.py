@@ -1,5 +1,6 @@
 """Head of Engineering works by exception (backend/pipeline_exceptions.py): one list of what did not move on its own,
 read in the manager's roundup list (test_task_roundup.py), and no wake for a ticket's routine steps, subtask results, checks or verdicts."""
+
 import json
 
 from backend import check_pools, pipeline_exceptions as PE, pipeline_stats, rules, step_age, step_backlog, task_roundup
@@ -20,7 +21,9 @@ def board(c, profile="manager"):
     c.execute("UPDATE task_types SET manager='coo' WHERE id=?", (typ["id"],))
     BS.write(c, 'coo', {'name': 'coo', 'runtime': 'fake', 'status': 'active', 'profile': profile})
     if not c.execute("SELECT 1 FROM runners WHERE id='r1'").fetchone():
-        c.execute("INSERT INTO runners(id,label,owner_id,token_hash,created_at) VALUES('r1','box','ana','h',?)", (H.now(),))
+        c.execute(
+            "INSERT INTO runners(id,label,owner_id,token_hash,created_at) VALUES('r1','box','ana','h',?)", (H.now(),)
+        )
         c.execute("UPDATE runner_states SET last_seen_at=? WHERE runner_id='r1'", (H.now(),))
     return H.type_get(c, typ["id"])
 
@@ -47,21 +50,34 @@ def ticket(c, typ, title="Fix the connection", step="In Progress", minutes=0):
     if minutes:
         then = H.shift(H.now(), minutes=-minutes)
         c.execute("UPDATE tasks SET created_at=?, updated_at=? WHERE id=?", (then, then, row["id"]))
-        c.execute("UPDATE history_events SET created_at=? WHERE subject_type='task' AND subject_id=?", (then, row["id"]))
+        c.execute(
+            "UPDATE history_events SET created_at=? WHERE subject_type='task' AND subject_id=?", (then, row["id"])
+        )
     return H.task(c, row["id"])
 
 
 def run(c, row, state, minutes_ago, stop=None):
     """One finished attempt of the owner's on the task's lane, `minutes_ago`."""
     when = H.shift(H.now(), minutes=-minutes_ago)
-    msg = H._write_message(c, "human:ana", row["owner_id"], "go", H.conversation(c, row["conversation_id"]), "say",
-                           {"task": row["id"]}, None, None)
+    msg = H._write_message(
+        c,
+        "human:ana",
+        row["owner_id"],
+        "go",
+        H.conversation(c, row["conversation_id"]),
+        "say",
+        {"task": row["id"]},
+        None,
+        None,
+    )
     job = c.execute("SELECT id FROM jobs WHERE message_id=?", (msg["id"],)).fetchone()[0]
     c.execute("UPDATE jobs SET state='completed' WHERE id=?", (job,))
     aid = H.new_id()
-    c.execute("INSERT INTO attempts(id,job_id,bot_id,runner_id,generation,token_hash,state,lease_until,created_at,started_at,"
-              "finished_at,lane,stop_requested_at) VALUES(?,?,?,'r1',1,?,?,?,?,?,?,?,?)",
-              (aid, job, H.actor_id(row["owner_id"]), aid, state, when, when, when, when, "task:" + row["id"], stop))
+    c.execute(
+        "INSERT INTO attempts(id,job_id,bot_id,runner_id,generation,token_hash,state,lease_until,created_at,started_at,"
+        "finished_at,lane,stop_requested_at) VALUES(?,?,?,'r1',1,?,?,?,?,?,?,?,?)",
+        (aid, job, H.actor_id(row["owner_id"]), aid, state, when, when, when, when, "task:" + row["id"], stop),
+    )
     return when
 
 
@@ -78,15 +94,19 @@ def listed(c, typ, kind=None):
 
 
 def unheld_jobs(c, slug):
-    return c.execute("SELECT count(*) FROM jobs WHERE bot_id=? AND state='queued' AND coalesce(held,0)=0",
-                     (slug,)).fetchone()[0]
+    return c.execute(
+        "SELECT count(*) FROM jobs WHERE bot_id=? AND state='queued' AND coalesce(held,0)=0", (slug,)
+    ).fetchone()[0]
 
 
 def test_a_ticket_with_no_run_for_45_minutes_is_listed_once_with_its_owner_and_since_when(api):
     with api.app.state.store.transaction() as c:
         typ = board(c)
-        quiet, fresh, snoozed = ticket(c, typ, "Fix Cursor", minutes=50), ticket(c, typ, "Fix Muse", minutes=20), \
-            ticket(c, typ, "Fix Grok", minutes=50)
+        quiet, fresh, snoozed = (
+            ticket(c, typ, "Fix Cursor", minutes=50),
+            ticket(c, typ, "Fix Muse", minutes=20),
+            ticket(c, typ, "Fix Grok", minutes=50),
+        )
         set_holds(c, snoozed["id"], snoozed_until=H.shift(H.now(), hours=5))
         [entry] = listed(c, typ, "stuck")
         assert entry["ticket"]["id"] == quiet["id"] and entry["ticket"]["owner_id"] == "cpo"
@@ -94,8 +114,17 @@ def test_a_ticket_with_no_run_for_45_minutes_is_listed_once_with_its_owner_and_s
         assert entry["since"] == H.task(c, quiet["id"])["created_at"], "since it last had a run or entered the step"
         assert [e["key"] for e in listed(c, typ, "stuck")] == [entry["key"]], "read again: still one entry"
         # A queued run on it is work: the ticket is not stuck.
-        H._write_message(c, "human:ana", "bot:cpo", "carry on", H.conversation(c, quiet["conversation_id"]), "say",
-                         {"task": quiet["id"]}, None, None)
+        H._write_message(
+            c,
+            "human:ana",
+            "bot:cpo",
+            "carry on",
+            H.conversation(c, quiet["conversation_id"]),
+            "say",
+            {"task": quiet["id"]},
+            None,
+            None,
+        )
         assert listed(c, typ, "stuck") == []
         assert fresh["id"] and snoozed["id"]
 
@@ -107,7 +136,10 @@ def test_a_check_left_doing_with_no_run_is_listed_under_its_ticket_and_the_ticke
         check = check_of(c, row)
         check = doing(c, check)
         run(c, check, "completed", 360)
-        c.execute("UPDATE history_events SET created_at=? WHERE subject_type='task' AND subject_id=?", (H.shift(H.now(), hours=-6), check["id"]))
+        c.execute(
+            "UPDATE history_events SET created_at=? WHERE subject_type='task' AND subject_id=?",
+            (H.shift(H.now(), hours=-6), check["id"]),
+        )
         [entry] = listed(c, typ, "stuck")
         assert entry["ticket"]["id"] == row["id"] and entry["check"]["id"] == check["id"]
         assert entry["check"]["owner_id"] == "ops" and "owner ops" in entry["cause"]
@@ -133,8 +165,10 @@ def test_a_refusal_repeated_twice_on_one_ticket_is_one_entry(api):
         row, other = ticket(c, typ, "Fix Cursor"), ticket(c, typ, "Fix Muse")
 
         def refuse(task_id):
-            c.execute("INSERT INTO refusals(id,created_at,actor,rule,detail,severity) VALUES(?,?,?,?,?,?)",
-                      (H.new_id(), H.now(), "bot:cpo", "review_gate", json.dumps({"task": task_id}), "warn"))
+            c.execute(
+                "INSERT INTO refusals(id,created_at,actor,rule,detail,severity) VALUES(?,?,?,?,?,?)",
+                (H.new_id(), H.now(), "bot:cpo", "review_gate", json.dumps({"task": task_id}), "warn"),
+            )
 
         refuse(row["id"])
         refuse(other["id"])
@@ -152,8 +186,9 @@ def test_a_failed_merge_is_one_entry_with_its_pr_number_and_head(api):
         row = ticket(c, typ)
         for number in (41, 42):
             H.task_link(c, "bot:cpo", row["id"], f"https://github.com/acme/app/pull/{number}", kind="pr")
-        c.execute("UPDATE task_links SET mergeable='conflict', pr_sha=? WHERE task_id=? AND number=42",
-                  (HEAD, row["id"]))
+        c.execute(
+            "UPDATE task_links SET mergeable='conflict', pr_sha=? WHERE task_id=? AND number=42", (HEAD, row["id"])
+        )
         [entry] = listed(c, typ, "merge")
         assert entry["pr"] == 42 and entry["head"] == HEAD and entry["ticket"]["id"] == row["id"]
 
@@ -177,15 +212,25 @@ def test_an_exception_is_one_line_on_the_managers_roundup_list_and_no_wake_of_it
         assert "coo" not in task_roundup.run(c)["woke"], "nothing on the list: no turn"
         ticket(c, typ, "Fix Cursor", minutes=50)
         assert "coo" in task_roundup.run(c)["woke"]
-        assert c.execute("SELECT count(*) FROM jobs j JOIN messages m ON m.id=j.message_id WHERE j.bot_id='coo' "
-                         "AND j.state='queued' AND json_extract(m.refs,'$.wake')='task_roundup'").fetchone()[0] == 1, \
-            "the list is the manager's one queued wake"
-        listing = ("SELECT body FROM messages WHERE recipient_id='bot:coo' AND json_extract(refs,'$.wake')='task_roundup' "
-                   "ORDER BY created_at")
+        assert (
+            c.execute(
+                "SELECT count(*) FROM jobs j JOIN messages m ON m.id=j.message_id WHERE j.bot_id='coo' "
+                "AND j.state='queued' AND json_extract(m.refs,'$.wake')='task_roundup'"
+            ).fetchone()[0]
+            == 1
+        ), "the list is the manager's one queued wake"
+        listing = (
+            "SELECT body FROM messages WHERE recipient_id='bot:coo' AND json_extract(refs,'$.wake')='task_roundup' "
+            "ORDER BY created_at"
+        )
         [(first,)] = c.execute(listing).fetchall()
         assert "Fix Cursor" in first and "no run for 45 minutes" in first
-        assert c.execute("SELECT count(*) FROM messages WHERE recipient_id='bot:coo' AND json_extract(refs,'$.wake')='exceptions'"
-                         ).fetchone()[0] == 0, "no wake of its own"
+        assert (
+            c.execute(
+                "SELECT count(*) FROM messages WHERE recipient_id='bot:coo' AND json_extract(refs,'$.wake')='exceptions'"
+            ).fetchone()[0]
+            == 0
+        ), "no wake of its own"
         assert "coo" not in task_roundup.run(c, H.shift(H.now(), hours=1))["woke"], "the same entry is not listed again"
         ticket(c, typ, "Fix Muse", minutes=50)
         assert "coo" in task_roundup.run(c)["woke"], "a new entry is listed"
@@ -212,8 +257,19 @@ def test_routine_ticket_events_never_wake_a_manager_and_file_no_review_without_a
         H.task_update(c, "bot:cpo", row["id"], status="doing", note="Back on it")
         # Its own words: the same notice again is dropped as a repeat, which would hide a wake.
         H._wake(c, H.task(c, row["id"]), "bot:coo", f"A setup blocker on {title} needs you.", {"wake": "blocker"})
-        c.execute("UPDATE history_events SET created_at=? WHERE subject_type='task' AND subject_id=?", (H.shift(H.now(), hours=-5), late["id"]))
-        c.execute("UPDATE tasks SET updated_at=? WHERE id=?", (H.shift(H.now(), hours=-5), late["id"]))
+        c.execute(
+            "UPDATE history_events SET created_at=? WHERE subject_type='task' AND subject_id=?",
+            (H.shift(H.now(), hours=-5), late["id"]),
+        )
+        c.execute(
+            "UPDATE tasks SET updated_at=?, created_at=? WHERE id=?",
+            (H.shift(H.now(), hours=-5), H.shift(H.now(), hours=-5), late["id"]),
+        )
+        # The one Late rule starts the clock when the ticket entered its stage.
+        c.execute(
+            "UPDATE stage_visits SET entered_at=? WHERE task_id=? AND left_at IS NULL",
+            (H.shift(H.now(), hours=-5), late["id"]),
+        )
         H.task_update(c, "bot:cpo", row["id"], status="done", note="Shipped")
         return late
 
@@ -223,18 +279,24 @@ def test_routine_ticket_events_never_wake_a_manager_and_file_no_review_without_a
         late = routine(c, typ, "Fix Cursor")
         assert unheld_jobs(c, "coo") > before, "control: the Lead profile is woken for the blocker notice"
         assert step_backlog._targets(c, {"notify": ["manager"], "per": "step"}, late, late["owner_id"]) == ["bot:coo"]
-        assert late["id"] in [item["row"]["id"] for item in step_age.late_items(c)], "control: a lead is told of a late ticket"
+        assert late["id"] in [item["row"]["id"] for item in step_age.late_items(c)], (
+            "control: a lead is told of a late ticket"
+        )
 
         typ = board(c, profile="manager")
         settled(c)
         late = routine(c, typ, "Fix Muse")
         assert unheld_jobs(c, "coo") == 0, "no routine event woke the manager"
         assert step_backlog._targets(c, {"notify": ["manager"], "per": "step"}, late, late["owner_id"]) == []
-        assert late["id"] not in [item["row"]["id"] for item in step_age.late_items(c)], "the manager's roundup carries it"
-        settled(c)      # its owner's status check ran and left it as it was
+        assert late["id"] not in [item["row"]["id"] for item in step_age.late_items(c)], (
+            "the manager's roundup carries it"
+        )
+        settled(c)  # its owner's status check ran and left it as it was
         assert any(e["key"] == "ticket:" + late["id"] + ":stuck" for e in listed(c, typ)), "it is on the list instead"
         # Entering a check step with no linked pull request files no review.
-        c.execute("UPDATE task_steps SET check_pool=? WHERE type_id=? AND name='In QA'", (json.dumps(["ops"]), typ["id"]))
+        c.execute(
+            "UPDATE task_steps SET check_pool=? WHERE type_id=? AND name='In QA'", (json.dumps(["ops"]), typ["id"])
+        )
         fresh = ticket(c, typ, "Fix Codex")
         qa = c.execute("SELECT id FROM task_steps WHERE type_id=? AND name='In QA'", (typ["id"],)).fetchone()[0]
         c.execute("UPDATE tasks SET step_id=?, status='review' WHERE id=?", (qa, fresh["id"]))
@@ -248,7 +310,10 @@ def test_a_turn_that_ends_doing_with_nothing_queued_wakes_no_owner_and_is_listed
         row = ticket(c, typ, minutes=120)
         check = check_of(c, row)
         check = doing(c, check)
-        c.execute("UPDATE history_events SET created_at=? WHERE subject_type='task' AND subject_id=?", (H.shift(H.now(), minutes=-120), check["id"]))
+        c.execute(
+            "UPDATE history_events SET created_at=? WHERE subject_type='task' AND subject_id=?",
+            (H.shift(H.now(), minutes=-120), check["id"]),
+        )
         run(c, check, "completed", 60)
         before = unheld_jobs(c, "ops")
         assert not hasattr(step_age, "turn_ended"), "no owner wake after an idle turn: the manager's list carries it"
@@ -264,11 +329,13 @@ def test_a_verdict_a_handoff_and_a_child_or_blocker_result_are_a_note_for_a_mana
         board(c)
         parent = H.task_create(c, "bot:cpo", "Find why reviews stall", "Look.", "bot:coo", lint=False)
         conv = H.conversation(c, parent["conversation_id"])
-        cases = [("bot:ops", "say", {"task": parent["id"]}, "Looked at it.\nVERDICT: approve PR #7 head " + HEAD),
-                 ("keeper", "notice", {"task": parent["id"], "handoff": "verdict"}, "Review 1 gave changes."),
-                 ("keeper", "notice", {"task": parent["id"], "subtask": "x", "wake": "subtask_finished"}, "Done."),
-                 ("keeper", "notice", {"task": parent["id"], "blocker_done": "x"}, "The blocker finished."),
-                 ("keeper", "notice", {"task": parent["id"], "wake": "blocker"}, "A setup blocker needs you.")]
+        cases = [
+            ("bot:ops", "say", {"task": parent["id"]}, "Looked at it.\nVERDICT: approve PR #7 head " + HEAD),
+            ("keeper", "notice", {"task": parent["id"], "handoff": "verdict"}, "Review 1 gave changes."),
+            ("keeper", "notice", {"task": parent["id"], "subtask": "x", "wake": "subtask_finished"}, "Done."),
+            ("keeper", "notice", {"task": parent["id"], "blocker_done": "x"}, "The blocker finished."),
+            ("keeper", "notice", {"task": parent["id"], "wake": "blocker"}, "A setup blocker needs you."),
+        ]
         for name, outcome in (("manager", rules.NOTE), ("lead", rules.WAKE), ("doer", rules.WAKE)):
             profile(c, "coo", name)
             got = [rules.judge(c, actor, "bot:coo", kind, refs, body, conv) for actor, kind, refs, body in cases]
@@ -289,9 +356,12 @@ def test_a_verdict_a_handoff_and_a_child_or_blocker_result_are_a_note_for_a_mana
             settled(c)
             H.task_update(c, "bot:ops", child["id"], status="done", note="Three bots, one free")
             H.task_update(c, "bot:ops", upstream["id"], status="done", note="Shipped")
-            return c.execute("SELECT count(*) FROM jobs j JOIN messages m ON m.id=j.message_id WHERE j.bot_id='coo' "
-                             "AND j.state='queued' AND coalesce(j.held,0)=0 AND json_extract(m.refs,'$.task') "
-                             "IN (?,?)", (mine["id"], waits["id"])).fetchone()[0]
+            return c.execute(
+                "SELECT count(*) FROM jobs j JOIN messages m ON m.id=j.message_id WHERE j.bot_id='coo' "
+                "AND j.state='queued' AND coalesce(j.held,0)=0 AND json_extract(m.refs,'$.task') "
+                "IN (?,?)",
+                (mine["id"], waits["id"]),
+            ).fetchone()[0]
 
         assert results("doer") >= 2, "control: a doer is woken for its child's result and its blocker finishing"
         assert results("manager") == 0
@@ -304,17 +374,21 @@ def test_a_reviewers_recorded_waits_keep_its_check_off_the_list_until_it_is_real
         row = ticket(c, typ, minutes=200)
         check = doing(c, check_of(c, row))
         profile(c, "ops", "reviewer")
-        c.execute("UPDATE history_events SET created_at=? WHERE subject_type='task' AND subject_id=?", (H.shift(H.now(), minutes=-120), check["id"]))
+        c.execute(
+            "UPDATE history_events SET created_at=? WHERE subject_type='task' AND subject_id=?",
+            (H.shift(H.now(), minutes=-120), check["id"]),
+        )
         run(c, check, "completed", 60)
         upstream = H.task_create(c, "bot:cpo", "Ship the base fix", "Ship.", "bot:cpo", lint=False)
         settled(c)
-        conv = H.conversation(c, check["conversation_id"])
 
         def ask():
-            m = H._write_message(c, "bot:ops", "bot:cpo", "Which head should I review?", conv, "ask",
-                                 {"task": check["id"]}, None, None)
-            return lambda: (c.execute("DELETE FROM jobs WHERE message_id=?", (m["id"],)),
-                            c.execute("DELETE FROM messages WHERE id=?", (m["id"],)))
+            from backend import question_tasks
+
+            q = question_tasks.ask_plain(
+                c, "bot:ops", "human:ana", "Which head should I review?", parent=H.task(c, check["id"])
+            )
+            return lambda: c.execute("UPDATE tasks SET status='closed' WHERE id=?", (q["id"],))
 
         def snooze():
             set_holds(c, check["id"], snoozed_until=H.shift(H.now(), hours=3))
@@ -322,14 +396,20 @@ def test_a_reviewers_recorded_waits_keep_its_check_off_the_list_until_it_is_real
 
         def approval():
             aid = H.new_id()
-            c.execute("INSERT INTO approvals(id,kind,task_id,requested_by_id,created_at) VALUES(?,?,?,?,?)",
-                      (aid, "send", check["id"], "bot:ops", H.now()))
+            c.execute(
+                "INSERT INTO approvals(id,kind,task_id,requested_by_id,created_at) VALUES(?,?,?,?,?)",
+                (aid, "send", check["id"], "bot:ops", H.now()),
+            )
             return lambda: c.execute("DELETE FROM approvals WHERE id=?", (aid,))
 
         def blocker():
-            c.execute("INSERT INTO task_relations(from_task,to_task,kind,created_by,created_at) VALUES(?,?,?,?,?)",
-                      (upstream["id"], check["id"], "blocks", "bot:cpo", H.now()))
-            return lambda: c.execute("DELETE FROM task_relations WHERE from_task=? AND kind='blocks'", (upstream["id"],))
+            c.execute(
+                "INSERT INTO task_relations(from_task,to_task,kind,created_by,created_at) VALUES(?,?,?,?,?)",
+                (upstream["id"], check["id"], "blocks", "bot:cpo", H.now()),
+            )
+            return lambda: c.execute(
+                "DELETE FROM task_relations WHERE from_task=? AND kind='blocks'", (upstream["id"],)
+            )
 
         for wait in (ask, snooze, approval, blocker):
             undo = wait()
@@ -343,7 +423,9 @@ def test_a_reviewers_recorded_waits_keep_its_check_off_the_list_until_it_is_real
 def test_a_finished_check_is_filed_so_an_idle_ticket_is_listed_as_not_moving_on_not_as_missing_its_check(api):
     with api.app.state.store.transaction() as c:
         typ = board(c)
-        c.execute("UPDATE task_steps SET check_pool=? WHERE type_id=? AND name='In QA'", (json.dumps(["ops"]), typ["id"]))
+        c.execute(
+            "UPDATE task_steps SET check_pool=? WHERE type_id=? AND name='In QA'", (json.dumps(["ops"]), typ["id"])
+        )
         qa = c.execute("SELECT id FROM task_steps WHERE type_id=? AND name='In QA'", (typ["id"],)).fetchone()[0]
         row = ticket(c, typ, "Fix Cursor", minutes=120)
         H.task_link(c, "bot:cpo", row["id"], "https://github.com/acme/app/pull/41", kind="pr")
@@ -369,8 +451,10 @@ def test_held_notes_alone_never_wake_a_manager(api):
     with api.app.state.store.transaction() as c:
         typ = board(c)
         for day in range(7):
-            c.execute("INSERT INTO notes(id,from_actor,to_actor,body,created_at) VALUES(?,?,?,?,?)",
-                      (H.new_id(), "keeper", "bot:coo", f"Review 1 approved #{day}.", H.shift(H.now(), days=-day)))
+            c.execute(
+                "INSERT INTO notes(id,from_actor,to_actor,body,created_at) VALUES(?,?,?,?,?)",
+                (H.new_id(), "keeper", "bot:coo", f"Review 1 approved #{day}.", H.shift(H.now(), days=-day)),
+            )
         assert [task_roundup.run(c, H.shift(H.now(), hours=h))["woke"] for h in range(0, 7 * 24, 6)] == [[]] * 28
         assert unheld_jobs(c, "coo") == 0
         ticket(c, typ, "Fix Cursor", minutes=50)
@@ -382,6 +466,7 @@ def test_held_notes_alone_never_wake_a_manager(api):
 # neither named nor counted: not in a builder's slots, a step's backlog or the GitHub outage, in Pipeline or the hourly
 # wake. `finance` is a pool bot the manager does not manage; `ops` asks for its hidden tickets.
 
+
 def unread(c, typ, title, step="In QA", owner="bot:finance"):
     """A private ticket whose parties the manager neither is nor manages."""
     made = H.task_create(c, "bot:ops", title, "Build.", owner, type=typ["id"], step=step, lint=False)
@@ -392,6 +477,7 @@ def unread(c, typ, title, step="In QA", owner="bot:finance"):
 
 def outside_the_chart(c, typ):
     from backend.tests.test_api import unrelated_task_managers
+
     unrelated_task_managers(c, "coo", "ops", "finance", "cpo")
     hidden = unread(c, typ, "Hidden probe")
     assert not H.bot_reads_task(c, "bot:coo", hidden) and H.bot_reads_task(c, "bot:finance", hidden)
@@ -447,16 +533,27 @@ def test_a_steps_backlog_counts_only_the_tickets_the_manager_reads_in_pipeline_a
 
 def test_the_github_outage_folds_in_only_the_tickets_the_manager_reads_in_pipeline_and_the_hourly_wake(api):
     from backend import move_retry
+
     with api.app.state.store.transaction() as c:
         typ = board(c)
         outside_the_chart(c, typ)
         early, late = H.shift(H.now(), minutes=-30), H.shift(H.now(), minutes=-10)
 
         def held(row, since):
-            c.execute("INSERT INTO history_events(subject_type,id,subject_id,created_at,actor_id,kind,old,new,note) VALUES('task',?,?,?,?,?,?,?,'')",
-                      (H.new_id(), row["id"], H.shift(H.now(), seconds=1), H.KEEPER, move_retry.FIELD,
-                       row["step_id"], json.dumps({"state": "waiting", "outage": True, "since": since,
-                                                   "step": "Review 1", "kind": "github"})))
+            c.execute(
+                "INSERT INTO history_events(subject_type,id,subject_id,created_at,actor_id,kind,old,new,note) VALUES('task',?,?,?,?,?,?,?,'')",
+                (
+                    H.new_id(),
+                    row["id"],
+                    H.shift(H.now(), seconds=1),
+                    H.KEEPER,
+                    move_retry.FIELD,
+                    row["step_id"],
+                    json.dumps(
+                        {"state": "waiting", "outage": True, "since": since, "step": "Review 1", "kind": "github"}
+                    ),
+                ),
+            )
 
         hidden = unread(c, typ, "Hidden outage")
         held(hidden, early)

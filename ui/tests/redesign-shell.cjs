@@ -1,6 +1,6 @@
-// The redesign's shell (ui/app/redesign.js, ui/app/strategy-budget.js) against fixtures shaped per the redesign CONTRACT
+// The redesign's shell (ui/app/redesign.ts, ui/app/strategy-budget.ts) against fixtures shaped per the redesign CONTRACT
 // (fixtures/redesign-*.json, the Acme example): the sidebar's order, helpers off the Team list, old addresses
-// redirected, Settings with its System tab and no design switch, the Strategy tabs with no Strategy Bot
+// redirected (System's to Automations' System jobs), Settings with no design switch, the Strategy tabs with no Strategy Bot
 // beside them (it is a helper of the Assistant; Ask is the way in), the Budget tab drawing (its tree and edits are
 // strategy-budget.cjs), a task cap's 409 read as its message, and no "CEO Bot" anywhere. Phone first (390×844), then desktop.
 // TICO_SCREENSHOT_DIR=<dir> saves review screenshots.
@@ -62,7 +62,7 @@ async function open(browser, {route = '#/updates', viewport = PHONE, goalsDelay 
     if (url.origin !== 'http://tico-ui.test') return r.abort();
     if (p === '/') return r.fulfill({contentType: 'text/html', body: html});
     const file = p.startsWith('/tico/ui/') ? uiFile(p.slice(9)) : p.startsWith('/vendor/') ? path.join(uiDir, p) : '';
-    if (file && fs.existsSync(file)) return r.fulfill({contentType: file.endsWith('.js') ? 'application/javascript' : file.endsWith('.css') ? 'text/css' : file.endsWith('.woff2') ? 'font/woff2' : 'application/octet-stream', body: fs.readFileSync(file)});
+    if (file && fs.existsSync(file)) return r.fulfill({contentType: /\.(?:js|ts)$/.test(file) ? 'application/javascript' : file.endsWith('.css') ? 'text/css' : file.endsWith('.woff2') ? 'font/woff2' : 'application/octet-stream', body: fs.readFileSync(file)});
     if (p === '/api/v2/events') return;
     if (method !== 'GET') sent.push([method, p + url.search, req.postData() ? req.postDataJSON() : null]);
     if (p === '/api/v2/config') return json(config);
@@ -84,7 +84,7 @@ async function open(browser, {route = '#/updates', viewport = PHONE, goalsDelay 
     if (p.startsWith('/api/v2/usage/')) return json({ok: true});
     if (p === '/api/v2/tasks' && method === 'POST') return json(CAP_409, 409);
     if (p === '/api/v2/market/graph') return json({entities: [], edges: []});
-    if (p === '/api/v2/market/entities') return json({entities: [], total: 0});
+    if (p === '/api/v2/market/entities') return json({entities: [{id: 'company/self', type: 'organization', name: 'Acme'}], total: 1});
     if (p === '/api/v2/librarian/setup') return json({market: null});
     return json(unrouted(p));
   });
@@ -165,7 +165,7 @@ const noSideScroll = page => page.evaluate(() => document.documentElement.scroll
       await page.waitForFunction(n => window.__treeRead >= n, goals.asked);
       assert.equal(await page.evaluate(() => location.hash), '#/strategy/market/listening', tag + ': a goal left before it loaded keeps off the address');
       assert.equal(await page.locator('#goal-panel[open]').count(), 0, tag + ': and does not open');
-      assert.equal(await page.locator('.mkt-views [data-market-view="listening"][aria-current="page"]').count(), 1, tag + ': Listening is a Market view');
+      assert.equal(await page.locator('.mkt-pg #mkt-q-saying').count(), 1, tag + ': Listening is a question on Market');
       await page.evaluate(() => { location.hash = '#/automations'; });
       await page.locator('#au-root, #automations-root').first().waitFor({state: 'attached'});
       assert.equal(await page.locator('#side a[data-nav="automations"].cur').count(), 1, tag + ': Automations is current');
@@ -198,7 +198,7 @@ const noSideScroll = page => page.evaluate(() => document.documentElement.scroll
       const {page, errors} = await open(browser, {viewport: DESKTOP, route: '#/strategy/budget'});
       await page.locator('[data-bt-open="bot:builder"]').waitFor();
       const shown = await shownRail(page);
-      assert.deepEqual(shown, ['Company', 'Strategy', 'Growth', 'Updates', 'Tasks', 'Automations', 'Tools', 'Library', 'Docs', 'Files', 'Meetings', 'Rules'], tag + ': the rail, with no Strategy Bot entry');
+      assert.deepEqual(shown, ['Company', 'Strategy', 'Growth', 'Updates', 'Tasks', 'Automations', 'Tools', 'Library', 'Docs', 'Files', 'Skills', 'Meetings', 'Directory', 'Rules'], tag + ': the rail, with no Strategy Bot entry');
       assert.equal(await page.locator('#tree [data-org="b:goal-manager"]').count(), 0, tag + ': the Strategy Bot is off the Team list');
       assert.ok(!shown.includes('Goals'), tag + ': Goals left the rail');
       assert.equal(await page.locator('#nav-inboxes-section').isVisible(), false, tag + ': Message bots hidden');
@@ -238,11 +238,12 @@ const noSideScroll = page => page.evaluate(() => document.documentElement.scroll
       await shot(page, 'desktop-settings');
       for (const old of ['#/settings/rules', '#/settings/routines', '#/settings/recurring']) {
         await page.evaluate(h => { location.hash = h; }, old);
-        assert.ok(await hashSoon(page, '#/settings/system'), `${tag}: ${old} lands on System`);
+        assert.ok(await hashSoon(page, '#/automations/system-jobs'), `${tag}: ${old} lands on System jobs`);
       }
-      assert.equal(await page.locator('[data-settings-tab="system"][aria-selected="true"], [data-settings-tab="system"].cur, [data-settings-tab="system"][aria-current]').count(), 1, tag + ': System is the tab shown');
-      assert.equal(await page.locator('#settings-system #set-rules-card, #settings-system [data-bot-routines]').count(), 0, tag + ': no wake rules or bot routines');
-      await shot(page, 'desktop-settings-system');
+      assert.equal(await page.locator('[data-settings-tab="system"]').count(), 0, tag + ': no System tab');
+      await page.locator('#set-system-routines').waitFor();
+      assert.equal(await page.locator('#set-rules-card, [data-bot-routines]').count(), 0, tag + ': no wake rules or bot routines');
+      await shot(page, 'desktop-automations-system-jobs');
       assert.deepEqual(errors, [], tag + ': no page errors');
       await page.close();
     }

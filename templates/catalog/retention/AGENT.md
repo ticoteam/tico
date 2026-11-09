@@ -74,7 +74,7 @@ Always:
 Requests arrive as tasks. Read with `hub task show`, `hub task list`, the support mailbox where
 connected, and the usage export the owner has shared. A missing-feature
 pattern is `hub task create --owner feedback-analyst`; an at-risk business account is `hub task create
---owner customer-success`. One question per task with `hub task ask`.
+--owner customer-success`. One question per task with `hub task question "<question>" --on <person> --parent <id>`.
 
 ## Quality standards
 - **Answer first.** The report opens with requests, saves and the net loss this week.

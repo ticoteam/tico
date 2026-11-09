@@ -6,20 +6,20 @@ const {open} = require('./tasks-page.cjs');
   const browser = await chromium.launch({channel: process.env.TICO_BROWSER_CHANNEL ?? 'chrome', headless: true});
   try {
     const {page, errors, posts, tasks} = await open(browser, {hash: '#/tasks?view=done'});
-    await page.locator('#task-view [data-view="done"]').click();
+    await page.waitForFunction(() => TASKS_ST.view === 'done');
     await page.locator('[data-task-key="tt-receipt"] .tl-title').click();
     const peek = page.locator('#task-peek');
     await peek.locator('[data-task-more]').click();
-    assert.equal(await peek.getByRole('menuitem', {name: 'Close task', exact: true}).count(), 1);
+    assert.equal(await peek.getByRole('menuitem', {name: 'Close', exact: true}).count(), 1);
     await peek.getByRole('menuitem', {name: 'Open full', exact: true}).click();
     const modal = page.locator('#task-modal');
     await modal.locator('[data-task-more]').click();
-    await modal.getByRole('menuitem', {name: 'Close task', exact: true}).click();
+    await modal.getByRole('menuitem', {name: 'Close', exact: true}).click();
     await page.waitForFunction(() => document.querySelector('#task-modal [data-prop="status"]')?.textContent.includes('Closed'));
     assert.equal(tasks.find(t => t.id === 't-receipt').status, 'closed');
     assert.deepEqual(posts.filter(p => p.p === '/api/v2/tasks/t-receipt').map(p => p.body), [{version: 3, close: true}]);
     await modal.locator('[data-task-more]').click();
-    assert.equal(await modal.getByRole('menuitem', {name: 'Close task', exact: true}).count(), 0);
+    assert.equal(await modal.getByRole('menuitem', {name: 'Close', exact: true}).count(), 0);
     await page.keyboard.press('Escape');
     await page.keyboard.press('Escape');
     // Bulk accepts Done; closed work is under Closed, not Done.
@@ -31,19 +31,21 @@ const {open} = require('./tasks-page.cjs');
     assert.deepEqual(errors, []);
     await page.close();
     const viewer = await open(browser, {hash: '#/tasks?view=done', mover: false});
-    await viewer.page.locator('#task-view [data-view="done"]').click();
+    await viewer.page.waitForFunction(() => TASKS_ST.view === 'done');
     await viewer.page.locator('[data-task-key="tt-receipt"] .tl-title').click();
     await viewer.page.locator('#task-peek [data-task-more]').click();
-    assert.equal(await viewer.page.getByRole('menuitem', {name: 'Close task', exact: true}).count(), 1, 'a requester can accept without mover rights');
+    assert.equal(await viewer.page.getByRole('menuitem', {name: 'Close', exact: true}).count(), 1, 'a requester can accept without mover rights');
     await viewer.page.close();
     // The header's Done (the owner) and Close (as the "…" menu allows): one tap, no reason asked, and the window closes.
-    for (const viewport of [{width: 1440, height: 900}, {width: 390, height: 844}]) {
+    for (const viewport of [{width: 1440, height: 900}, {width: 390, height: 844}, {width: 375, height: 667}]) {
       const v = await open(browser, {viewport, hash: '#/tasks'});
       const head = v.page.locator('#task-modal .tmodal-head');
       const show = async id => { await v.page.evaluate(id => taskModalShow(TASKS_ST.tasks.find(t => t.id === id)), id); await head.waitFor(); };
       const finish = async (id, kind) => {
         await show(id);
-        const fits = await head.evaluate(h => [...h.querySelectorAll('button')].every(b => b.getBoundingClientRect().right <= innerWidth));
+        // Nothing in the header is cut off or pushed past the screen, and the header does not scroll sideways.
+        const fits = await head.evaluate(h => h.scrollWidth <= h.clientWidth + 1
+          && [...h.children].every(c => { const r = c.getBoundingClientRect(); return r.width === 0 || (r.left >= 0 && r.right <= innerWidth + 0.5); }));
         assert.ok(fits, `the header fits ${viewport.width}px`);
         await head.locator(`[data-task-finish="${kind}"]`).click();
         await v.page.waitForFunction(() => !document.querySelector('#task-modal').open);

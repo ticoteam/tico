@@ -1,5 +1,5 @@
 /* ui/styles/task-board.css — The board's owner faces, folded strips, blocked strip and a card being dragged
-   (ui/app/task-board.js); the columns and cards themselves are in task-list.css.
+   (ui/app/task-board.ts); the columns and cards themselves are in task-list.css.
    The cascade runs in the order index.html links these files; keep rules in order. */
 .board-head{display:flex;align-items:center;flex-wrap:wrap;gap:8px;min-height:28px;margin-top:2px}
 .board-head:empty{display:none}

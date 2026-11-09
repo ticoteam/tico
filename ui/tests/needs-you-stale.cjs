@@ -43,7 +43,7 @@ async function answered(browser, viewport) {
   });
   const poll = () => page.evaluate(async () => { await v2Refresh(); tasksRender(TASKS_ST); });   // what the live poll does
   await poll();
-  await page.locator('#task-view [data-view="foryou"]').click();
+  await page.locator('#task-scope').click(); await page.locator('#task-filter-pop [data-scope="you"]').click();
   await page.locator(`[data-need-card="${KEY}"]`).click();
   const shown = page.locator('#need-card [data-stale-card]');
   await shown.first().waitFor();
@@ -145,7 +145,7 @@ async function answered(browser, viewport) {
       return route.fulfill({contentType: 'application/json', body: JSON.stringify(body)});
     });
     await page.evaluate(async () => { await v2Refresh(); tasksRender(TASKS_ST); });
-    await page.locator('#task-view [data-view="foryou"]').click();
+    await page.locator('#task-scope').click(); await page.locator('#task-filter-pop [data-scope="you"]').click();
     // One automatic line with its count; nothing unfolds in the list.
     const line = page.locator(`#task-body [data-need-card="${KEY}"]`);
     assert.equal(await line.count(), 1, 'one line for every suggestion');

@@ -1,4 +1,5 @@
 """SQLite migration for durable meeting sources."""
+
 MEETING_SCHEMA = """
 CREATE TABLE IF NOT EXISTS meetings (
  id TEXT PRIMARY KEY, title TEXT NOT NULL, owner TEXT NOT NULL,
@@ -225,7 +226,9 @@ CREATE INDEX IF NOT EXISTS live_meeting_turns_pending ON live_meeting_turns(meet
 
 # Per-meeting routing limits are configurable from the connect request. Keep this separate from
 # LIVE_MEETINGS_SCHEMA: that migration has shipped, and migration indexes are append-only.
-LIVE_MEETINGS_ROUTING_LIMITS_SCHEMA = "ALTER TABLE live_meetings ADD COLUMN reply_cap INTEGER NOT NULL DEFAULT 3 CHECK (reply_cap BETWEEN 1 AND 20);"
+LIVE_MEETINGS_ROUTING_LIMITS_SCHEMA = (
+    "ALTER TABLE live_meetings ADD COLUMN reply_cap INTEGER NOT NULL DEFAULT 3 CHECK (reply_cap BETWEEN 1 AND 20);"
+)
 
 # A meeting's own reply model: NULL follows the company's meeting model (providers.py), '' is the bot's own model.
 LIVE_MEETINGS_MODEL_SCHEMA = "ALTER TABLE live_meetings ADD COLUMN meeting_model TEXT;"

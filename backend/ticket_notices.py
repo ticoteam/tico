@@ -15,13 +15,17 @@ STARTED_STATUSES = ('doing', 'review', 'ready')
 
 def _H():
     from . import hubdb
+
     return hubdb
 
 
 def _engineering(conn, row):
     from .roadmap_flow import ENGINEERING
-    return bool(row and conn.execute('SELECT 1 FROM task_types WHERE id=? AND role=?',
-                                     (row.get('type_id'), ENGINEERING)).fetchone())
+
+    return bool(
+        row
+        and conn.execute('SELECT 1 FROM task_types WHERE id=? AND role=?', (row.get('type_id'), ENGINEERING)).fetchone()
+    )
 
 
 def _name(row):
@@ -34,8 +38,10 @@ def _step(conn, row):
 
 
 def _pr(conn, row):
-    found = conn.execute("SELECT url FROM task_links WHERE task_id=? AND kind='pr' ORDER BY created_at DESC,rowid DESC "
-                         'LIMIT 1', (row['id'],)).fetchone()
+    found = conn.execute(
+        "SELECT url FROM task_links WHERE task_id=? AND kind='pr' ORDER BY created_at DESC,rowid DESC LIMIT 1",
+        (row['id'],),
+    ).fetchone()
     return found[0] if found else 'none'
 
 
@@ -47,8 +53,11 @@ def text(conn, kind, row, blocker=None, reader=None):
     """The notice for `row`. A blocker the reader may not read is named only as a private task."""
     fields = {'ticket': _name(row), 'step': _step(conn, row), 'pr': _pr(conn, row)}
     if kind == 'blocked':
-        fields['blocker'] = (f'{_name(blocker)} ({_step(conn, blocker)})' if _names_blocker(conn, kind, blocker, reader)
-                             else 'a private task')
+        fields['blocker'] = (
+            f'{_name(blocker)} ({_step(conn, blocker)})'
+            if _names_blocker(conn, kind, blocker, reader)
+            else 'a private task'
+        )
     return TEMPLATES[kind].format(**fields)
 
 
@@ -57,6 +66,7 @@ def _places(conn, row):
     item's bot (else its person); else the ticket itself, to its requester. A private ticket stays on itself."""
     from . import task_relations as TR
     from .roadmap_flow import PRODUCT, role_type
+
     H = _H()
     product = role_type(conn, PRODUCT)
     out = []
@@ -77,6 +87,7 @@ def _places(conn, row):
 def post(conn, kind, row, actor=None, blocker=None):
     """Write the notice everywhere it goes. The requester who made the change themselves is not told about it."""
     from . import task_relations as TR
+
     H = _H()
     sent = []
     for where, to in _places(conn, row):
@@ -86,16 +97,21 @@ def post(conn, kind, row, actor=None, blocker=None):
         if not conv:
             continue
         refs = {'task': where['id'], 'comment': True, 'quiet': True, 'task_notice': kind, 'ticket': row['id']}
-        if kind == 'blocked' and where['id'] == row['id'] and blocker and \
-                TR.requester_hears_block(conn, row, blocker, actor):
-            refs = {**refs, 'news': 'task_blocked'}      # the requester's wake for the block (task_relations)
+        if (
+            kind == 'blocked'
+            and where['id'] == row['id']
+            and blocker
+            and TR.requester_hears_block(conn, row, blocker, actor)
+        ):
+            refs = {**refs, 'news': 'task_blocked'}  # the requester's wake for the block (task_relations)
             del refs['quiet']
         if _names_blocker(conn, kind, blocker, to):
             # Its name and step are in the text, so the comment is read only by who may read the blocker too, then
             # and later (task_privacy.message_tasks): not a reader of the ticket only, nor anyone after the blocker narrows.
             refs['blocker'] = blocker['id']
-        msg = H._write_message(conn, H.KEEPER, to, text(conn, kind, row, blocker, reader=to), conv, 'say', refs,
-                               None, None)
+        msg = H._write_message(
+            conn, H.KEEPER, to, text(conn, kind, row, blocker, reader=to), conv, 'say', refs, None, None
+        )
         sent.append(msg['id'])
     if sent:
         H.event(conn, H.KEEPER, 'task.notice', row['id'], {'kind': kind, 'messages': sent})
@@ -110,9 +126,14 @@ def moved(conn, actor, task_id, old, new):
         return []
     if new == 'done':
         return post(conn, 'done', row, actor)
-    if new in STARTED_STATUSES and not conn.execute(
+    if (
+        new in STARTED_STATUSES
+        and not conn.execute(
             "SELECT 1 FROM events WHERE actor=? AND action='task.notice' AND target=? "
-            "AND json_extract(detail,'$.kind')='started' LIMIT 1", (H.KEEPER, task_id)).fetchone():
+            "AND json_extract(detail,'$.kind')='started' LIMIT 1",
+            (H.KEEPER, task_id),
+        ).fetchone()
+    ):
         return post(conn, 'started', row, actor)
     return []
 

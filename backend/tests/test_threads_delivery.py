@@ -1,5 +1,5 @@
-"""Who a thread message reaches, over real SQLite: following on a post or a mention, the unsolicited cap per delivery,
-routing a message that names nobody, one batched run for a bot's digest, what never wakes a bot, what a join leaves
+"""Who a thread message reaches, over real SQLite: following on a mention (never on a post), the unsolicited cap per
+delivery, a message that names nobody reaching only live followers, one batched run for a bot's digest, what never wakes a bot, what a join leaves
 unread, what an edit or delete changes, retention, and one webhook event per message. Fictional people only: ana (owner),
 ben and cara (humans); the bots come from the api fixture.
 """
@@ -10,7 +10,7 @@ import threading
 import pytest
 
 from backend.tests.slug_ids import bot_ids_are_their_slugs  # noqa: F401  (each bot's id is its slug)
-from backend import file_library, thread_bot_digest, thread_retention, thread_routing, thread_webhooks, threads
+from backend import file_library, thread_bot_digest, thread_retention, thread_webhooks, threads
 from backend.store import H
 from backend.tests.test_api import api, headers, post  # noqa: F401  (the fixture and its helpers)
 
@@ -42,8 +42,12 @@ def rows(api, sql, *args):
 
 
 def follower(api, thread_id, actor):
-    found = rows(api, "SELECT following, notify, last_read_seq FROM thread_followers WHERE thread_id=? AND actor=?",
-                 thread_id, actor)
+    found = rows(
+        api,
+        "SELECT following, notify, last_read_seq FROM thread_followers WHERE thread_id=? AND actor=?",
+        thread_id,
+        actor,
+    )
     return found[0] if found else None
 
 
@@ -75,12 +79,21 @@ def delete(api, message_id, token="ana-test"):
 
 
 # ----------------------------------------------------------------------------- following (18)
-def test_posting_follows_a_thread_only_read_so_far_and_keeps_the_read_mark(api):
+def test_posting_never_follows_but_a_reply_does_and_keeps_the_read_mark(api):
     thread = new_thread(api, audience="company")
-    seq = say(api, thread["id"], "First")["seq"]
+    first = say(api, thread["id"], "First")
+    seq = first["seq"]
     api.post(f"/api/v2/threads/{thread['id']}/read", json={"seq": seq}, headers=headers("ben-test"))
     assert follower(api, thread["id"], "human:ben")["following"] == 0
-    say(api, thread["id"], "Mine", token="ben-test")
+    mine = say(api, thread["id"], "Mine", token="ben-test")
+    assert follower(api, thread["id"], "human:ben")["following"] == 0, "posting follows nobody (D4)"
+    response = api.post(
+        f"/api/v2/threads/{thread['id']}/messages",
+        json={"text": "Noted", "in_reply_to": mine["id"]},
+        headers=headers("cara-test"),
+    )
+    assert response.status_code == 200, response.text
+    assert delivery(api, response.json()["id"], "human:ben")["reason"] == "reply"
     row = follower(api, thread["id"], "human:ben")
     assert row["following"] == 1 and row["last_read_seq"] >= seq
 
@@ -90,7 +103,9 @@ def test_a_mention_follows_and_keeps_the_notify_level_but_a_dm_delivery_never_un
     seq = say(api, thread["id"], "First")["seq"]
     api.post(f"/api/v2/threads/{thread['id']}/read", json={"seq": seq}, headers=headers("cara-test"))
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE thread_followers SET notify='digest' WHERE thread_id=? AND actor='human:cara'", (thread["id"],))
+        c.execute(
+            "UPDATE thread_followers SET notify='digest' WHERE thread_id=? AND actor='human:cara'", (thread["id"],)
+        )
     say(api, thread["id"], "Over to @cara")
     row = follower(api, thread["id"], "human:cara")
     assert (row["following"], row["notify"], row["last_read_seq"]) == (1, "digest", seq)
@@ -99,6 +114,19 @@ def test_a_mention_follows_and_keeps_the_notify_level_but_a_dm_delivery_never_un
     assert api.delete(f"/api/v2/threads/{dm['id']}/follow", headers=headers("ben-test")).status_code == 200
     say(api, dm["id"], "Still there?")
     assert follower(api, dm["id"], "human:ben")["following"] == 0
+
+
+def test_me_follows_is_whether_a_message_naming_nobody_reaches_you(api):
+    """The composer offers Follow until `me.follows`: a member who only joined a chat is not reached by a message
+    naming nobody (threads.plan), its starter and anyone who follows are."""
+    thread = new_thread(api, members=("human:ben",))
+    me = lambda token: api.get(f"/api/v2/threads/{thread['id']}", headers=headers(token)).json()["me"]  # noqa: E731
+    assert me("ben-test")["following"] is True and me("ben-test")["follows"] is False
+    assert me("ana-test")["follows"] is True, "the starter follows"
+    assert delivery(api, say(api, thread["id"], "Budget is in")["id"], "human:ben") is None
+    assert api.put(f"/api/v2/threads/{thread['id']}/follow", json={}, headers=headers("ben-test")).status_code == 200
+    assert me("ben-test")["follows"] is True
+    assert delivery(api, say(api, thread["id"], "Budget is out")["id"], "human:ben")["reason"] == "follower"
 
 
 # ----------------------------------------------------------------------------- the unsolicited cap (19)
@@ -110,7 +138,7 @@ def test_a_further_delivery_over_the_cap_is_not_delivered_and_its_author_is_told
     second = bot_post(api, "bot:ops", thread["id"], "Two for @ben")
     assert delivery(api, second["id"], "human:ben") is None
     assert {"rule": "unsolicited_cap", "actor": "human:ben"} in second["warnings"]
-    assert second["body"] == "Two for @ben"       # the message itself stays in the thread
+    assert second["body"] == "Two for @ben"  # the message itself stays in the thread
 
 
 def test_each_person_on_a_post_is_classified_on_their_own(api):
@@ -132,90 +160,57 @@ def test_opening_a_home_asks_for_nothing_but_opening_a_dm_does(api):
         assert not threads.solicited(c, home["id"], "bot:ops", "human:ben")
         assert not threads.solicited(c, home["id"], "bot:ops", "human:ben", addressed=False)
 
-    dm = api.post("/api/v2/threads/dm", json={"members": ["bot:ops"], "text": "Hello"}, headers=headers("ben-test")).json()
+    dm = api.post(
+        "/api/v2/threads/dm", json={"members": ["bot:ops"], "text": "Hello"}, headers=headers("ben-test")
+    ).json()
     bot_post(api, "bot:ops", dm["id"], "Hello")
     with api.app.state.store.transaction() as c:
         assert threads.solicited(c, dm["id"], "bot:ops", "human:ben", addressed=False)
 
 
-# ----------------------------------------------------------------------------- routing (20)
-class Model:
-    """Answers the routing questions with a score per bot; every other bot scores 0."""
-
-    def __init__(self, scores, asks=1.0):
-        self.scores, self.asks, self.calls = scores, asks, []
-
-    def __call__(self, state, questions, label=None):
-        self.calls.append((state, sorted(questions)))
-        answers = {key: {"noul": 0.0} for key in questions}
-        answers["asks"] = {"noul": self.asks}
-        answers.update({"bot:" + slug: {"noul": score} for slug, score in self.scores.items()})
-        return {"answers": answers, "usage": {"input_tokens": 10}}
+# ----------------------------------------------------------------------------- followers, no routing (20, D14)
+def on_live(api, bot, thread_id):
+    with api.app.state.store.transaction() as c:
+        threads.follow(c, threads.actor_viewer(c, bot), thread_id, notify="live")
 
 
-def routed_thread(api, bots=("bot:ops", "bot:cpo", "bot:coo", "bot:finance")):
-    return new_thread(api, members=("human:ben", *bots))
-
-
-def test_a_message_naming_nobody_wakes_at_most_three_bots_through_the_wake_rule(api):
-    store = api.app.state.store
-    thread = routed_thread(api)
-    message = say(api, thread["id"], "Who can look at the budget?")
-    assert rows(api, "SELECT 1 FROM jobs j JOIN message_deliveries d ON d.carrier_id=j.message_id WHERE d.message_id=?",
-                message["id"]) == []       # the post waits on no model
-    model = Model({"ops": 0.9, "cpo": 0.95, "coo": 0.97, "finance": 0.99})
-    woken = thread_routing.drain(store, primary=model)
-    assert sorted(woken) == ["bot:coo", "bot:cpo", "bot:finance"]
-    for bot in ("bot:coo", "bot:cpo", "bot:finance"):
-        row = delivery(api, message["id"], bot)
-        assert row["reason"] == "routing" and row["carrier_id"] and queued_job(api, row["carrier_id"]) == "queued"
+def test_a_message_naming_nobody_reaches_only_the_live_followers(api):
+    thread = new_thread(api, members=("human:ben", "bot:ops", "bot:cpo", "bot:coo"))
+    # Bots in a chat follow it at mentions: a message naming nobody wakes none of them, and nothing asks a model.
+    quiet = say(api, thread["id"], "Who can look at the budget?")
+    assert all(delivery(api, quiet["id"], b) is None for b in ("bot:ops", "bot:cpo", "bot:coo"))
+    on_live(api, "bot:cpo", thread["id"])
+    message = say(api, thread["id"], "Anyone?")
+    row = delivery(api, message["id"], "bot:cpo")
+    assert row["reason"] == "follower" and row["carrier_id"] and queued_job(api, row["carrier_id"]) == "queued"
     assert delivery(api, message["id"], "bot:ops") is None
-    assert rows(api, "SELECT 1 FROM thread_routings") == []
-    assert len(model.calls) == 1
-    assert len(rows(api, "SELECT 1 FROM events WHERE action='judge.call' AND target=?", thread_routing.JUDGE_LABEL)) == 1
-    assert thread_routing.drain(store, primary=model) == [] and len(model.calls) == 1
-
-
-def test_routing_calls_no_model_with_fewer_than_two_bots_and_for_a_named_bot_or_a_deleted_message(api):
-    store = api.app.state.store
-    model = Model({"ops": 1.0, "cpo": 1.0})
-    one = new_thread(api, members=("human:ben", "bot:ops"))
-    say(api, one["id"], "Anyone?")
-    several = routed_thread(api)
-    named = say(api, several["id"], "@ops please")
-    assert rows(api, "SELECT 1 FROM thread_routings WHERE message_id=?", named["id"]) == []
-    gone = say(api, several["id"], "Never mind this")
-    delete(api, gone["id"])
-    thread_routing.drain(store, primary=model)
-    assert model.calls == [] and rows(api, "SELECT 1 FROM thread_routings") == []
-
-
-def test_routing_wakes_nobody_below_the_bar_or_when_nothing_is_asked_or_without_a_model(api):
-    store = api.app.state.store
-    thread = routed_thread(api)
-    for label, model in (("low", Model({"ops": 0.01})), ("chat", Model({"ops": 1.0}, asks=0.0)), ("none", None)):
-        message = say(api, thread["id"], f"Message {label}")
-        store.settings.__dict__.setdefault("decisions_monthly_usd", 0)
-        assert thread_routing.drain(store, primary=model) == []
-        assert rows(api, "SELECT 1 FROM message_deliveries WHERE message_id=? AND reason='routing'", message["id"]) == []
-        assert rows(api, "SELECT 1 FROM thread_routings") == []
-    assert len(rows(api, "SELECT 1 FROM messages WHERE conversation_id=? AND body LIKE 'Message %'", thread["id"])) == 3
-
-
-def test_a_bots_unaddressed_post_is_not_routed_and_a_failed_call_waits_and_retries(api):
-    from clients import judge as J
-    store = api.app.state.store
-    thread = routed_thread(api)
-    bot_post(api, "bot:ops", thread["id"], "A status line")
-    assert rows(api, "SELECT 1 FROM thread_routings") == []
-    message = say(api, thread["id"], "Who has this?")
-
-    def down(state, questions, label=None):
-        raise J.JudgeError("provider", "down")
-    assert thread_routing.drain(store, primary=down) == []
-    row = rows(api, "SELECT attempts, next_attempt_at FROM thread_routings WHERE message_id=?", message["id"])[0]
-    assert row["attempts"] == 1 and row["next_attempt_at"] > H.now()
     assert rows(api, "SELECT 1 FROM events WHERE action='judge.call'") == []
+
+
+def test_a_bots_plain_post_reaches_a_following_bot_at_its_next_turn_and_a_mention_or_flag_wakes_it(api):
+    thread = new_thread(api, members=("human:ben", "bot:ops", "bot:cpo"))
+    on_live(api, "bot:cpo", thread["id"])
+    plain = bot_post(api, "bot:ops", thread["id"], "A status line")
+    row = delivery(api, plain["id"], "bot:cpo")
+    assert row["reason"] == "follower" and row["mode"] == "defer" and not row["carrier_id"]
+    # A bot's @mention is addressed: it goes by the way (Steer), not the bot-to-bot hold.
+    named = bot_post(api, "bot:ops", thread["id"], "@cpo can you take this?")
+    row = delivery(api, named["id"], "bot:cpo")
+    assert row["reason"] == "mention" and row["carrier_id"] and queued_job(api, row["carrier_id"]) == "queued"
+    flagged = bot_post(api, "bot:ops", thread["id"], "@cpo this one is urgent", refs={"needs_action": True})
+    row = delivery(api, flagged["id"], "bot:cpo")
+    assert row["reason"] == "mention" and row["carrier_id"] and queued_job(api, row["carrier_id"]) == "queued"
+
+
+def test_muted_and_mentions_followers_get_only_what_addresses_them(api):
+    thread = new_thread(api, audience="company")
+    say(api, thread["id"], "Hello @ben", token="ana-test")
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE thread_followers SET notify='muted' WHERE thread_id=? AND actor='human:ben'", (thread["id"],))
+    plain = say(api, thread["id"], "Plain news")
+    assert delivery(api, plain["id"], "human:ben") is None
+    named = say(api, thread["id"], "Over to @ben")
+    assert delivery(api, named["id"], "human:ben")["reason"] == "mention"
 
 
 # ----------------------------------------------------------------------------- bot digests (21)
@@ -225,8 +220,11 @@ def test_a_digest_bot_gets_one_run_for_all_its_deliveries_with_no_words_in_the_n
     second = new_thread(api, audience="company", title="Two")
     on_digest(api, "bot:ops", first["id"])
     on_digest(api, "bot:ops", second["id"])
-    sent = [say(api, first["id"], "Secret number 41"), say(api, first["id"], "Secret number 42"),
-            say(api, second["id"], "Secret number 43")]
+    sent = [
+        say(api, first["id"], "Secret number 41"),
+        say(api, first["id"], "Secret number 42"),
+        say(api, second["id"], "Secret number 43"),
+    ]
     assert all(delivery(api, m["id"], "bot:ops")["mode"] == "digest" for m in sent)
     jobs_before = rows(api, "SELECT id FROM jobs WHERE bot_id='ops'")
 
@@ -284,13 +282,19 @@ def test_the_run_a_digest_notice_starts_reads_only_the_threads_the_bot_is_still_
         on_digest(api, "bot:ops", thread["id"])
         say(api, thread["id"], "Numbers are in")
     assert thread_bot_digest.sweep(store) == 1
-    notice = rows(api, "SELECT * FROM messages WHERE sender_id=? AND recipient_id='bot:ops' "
-                  "AND json_extract(refs,'$.wake')=?", H.KEEPER, thread_bot_digest.WAKE)[0]
+    notice = rows(
+        api,
+        "SELECT * FROM messages WHERE sender_id=? AND recipient_id='bot:ops' AND json_extract(refs,'$.wake')=?",
+        H.KEEPER,
+        thread_bot_digest.WAKE,
+    )[0]
     with store.transaction() as c:
         c.execute("DELETE FROM thread_members WHERE thread_id=? AND actor='bot:ops'", (lost["id"],))
         c.execute("PRAGMA defer_foreign_keys=ON")
         thread_bot_digest.grant(c, "att-digest", notice)
-        granted = [r[0] for r in c.execute("SELECT conversation_id FROM attempt_conversations WHERE attempt_id='att-digest'")]
+        granted = [
+            r[0] for r in c.execute("SELECT conversation_id FROM attempt_conversations WHERE attempt_id='att-digest'")
+        ]
         assert granted == [kept["id"]]
         c.execute("DELETE FROM attempt_conversations WHERE attempt_id='att-digest'")
 
@@ -304,8 +308,15 @@ def test_an_import_a_replay_or_a_bots_own_message_never_starts_its_run_even_addr
         message = H.say(c, "human:ana", "bot:ops", "Coming back", conversation_id=direct["id"], refs=refs)
     assert rows(api, "SELECT 1 FROM jobs WHERE message_id=?", message["id"]) == []
     assert delivery(api, message["id"], "bot:ops")["mode"] == "none"
-    assert rows(api, "SELECT 1 FROM messages WHERE sender_id=? AND json_extract(refs,'$.carries')=?",
-                H.KEEPER, message["id"]) == []
+    assert (
+        rows(
+            api,
+            "SELECT 1 FROM messages WHERE sender_id=? AND json_extract(refs,'$.carries')=?",
+            H.KEEPER,
+            message["id"],
+        )
+        == []
+    )
 
 
 def test_a_bots_own_message_coming_back_does_not_reach_its_digest_or_its_mention(api):
@@ -313,16 +324,23 @@ def test_a_bots_own_message_coming_back_does_not_reach_its_digest_or_its_mention
     thread = new_thread(api, audience="company")
     on_digest(api, "bot:ops", thread["id"])
     with store.transaction() as c:
-        message = threads.post(c, "human:ana", thread["id"], "Back from @ops",
-                               refs={"origin": {"actor": "bot:ops", "id": "x@peer"}})
+        message = threads.post(
+            c, "human:ana", thread["id"], "Back from @ops", refs={"origin": {"actor": "bot:ops", "id": "x@peer"}}
+        )
     assert delivery(api, message["id"], "bot:ops") is None
 
 
 def test_the_same_origin_still_wakes_another_bot(api):
     with api.app.state.store.transaction() as c:
         direct = threads.dm(c, "human:ana", ["bot:cpo"])
-        message = H.say(c, "human:ana", "bot:cpo", "From ops", conversation_id=direct["id"],
-                        refs={"origin": {"actor": "bot:ops", "id": "x@peer"}})
+        message = H.say(
+            c,
+            "human:ana",
+            "bot:cpo",
+            "From ops",
+            conversation_id=direct["id"],
+            refs={"origin": {"actor": "bot:ops", "id": "x@peer"}},
+        )
     assert rows(api, "SELECT 1 FROM jobs WHERE message_id=?", message["id"])
 
 
@@ -348,7 +366,7 @@ def test_a_join_leaves_old_sub_thread_messages_read_and_a_reader_keeps_what_it_h
         assert added.status_code == 200, added.text
     assert me(api, sub, "cara-test")["unread"] == 0
     row = follower(api, sub, "human:cara")
-    assert row["following"] == 0                  # a read mark, not a follow
+    assert row["following"] == 0  # a read mark, not a follow
     assert me(api, sub, "ben-test")["unread"] == 1
     say(api, thread["id"], "New", parent=root_message["id"])
     assert me(api, sub, "cara-test")["unread"] == 1
@@ -356,6 +374,7 @@ def test_a_join_leaves_old_sub_thread_messages_read_and_a_reader_keeps_what_it_h
 
 def test_a_groups_people_join_with_it_by_their_own_read_marks(api, monkeypatch):
     from backend import teammate_access
+
     monkeypatch.setattr(teammate_access, "group_member_actors", lambda c, group: {"human:cara", "human:ben"})
     thread = new_thread(api, members=("human:ben",))
     say(api, thread["id"], "Before the group")
@@ -365,7 +384,9 @@ def test_a_groups_people_join_with_it_by_their_own_read_marks(api, monkeypatch):
 
 
 def sidebar_row(api, thread_id, token="ben-test"):
-    return next(row for row in api.get("/api/v2/threads", headers=headers(token)).json()["threads"] if row["id"] == thread_id)
+    return next(
+        row for row in api.get("/api/v2/threads", headers=headers(token)).json()["threads"] if row["id"] == thread_id
+    )
 
 
 def test_migrated_and_imported_messages_are_never_unread(api):
@@ -373,8 +394,10 @@ def test_migrated_and_imported_messages_are_never_unread(api):
     thread = new_thread(api, members=("human:ben",))
     carried = say(api, thread["id"], "Carried over")
     with store.transaction() as c:
-        c.execute("INSERT OR REPLACE INTO registry_metadata VALUES(?,?)",
-                  (threads.MIGRATION_KEY, json.dumps({"seq": carried["seq"]})))
+        c.execute(
+            "INSERT OR REPLACE INTO registry_metadata VALUES(?,?)",
+            (threads.MIGRATION_KEY, json.dumps({"seq": carried["seq"]})),
+        )
     assert me(api, thread["id"], "ben-test")["unread"] == 0
     assert sidebar_row(api, thread["id"])["me"]["unread"] == 0, "a root row counts from the same floor as its thread"
     before = rows(api, "SELECT last_unread_seq FROM conversations WHERE id=?", thread["id"])[0]["last_unread_seq"]
@@ -382,7 +405,9 @@ def test_migrated_and_imported_messages_are_never_unread(api):
         imported = threads.post(c, "human:ana", thread["id"], "Imported", refs={"import": True})
     assert imported["seq"] > carried["seq"]
     assert me(api, thread["id"], "ben-test")["unread"] == 0
-    assert rows(api, "SELECT last_unread_seq FROM conversations WHERE id=?", thread["id"])[0]["last_unread_seq"] == before
+    assert (
+        rows(api, "SELECT last_unread_seq FROM conversations WHERE id=?", thread["id"])[0]["last_unread_seq"] == before
+    )
     assert delivery(api, imported["id"], "human:ben") is None
     say(api, thread["id"], "Live")
     assert me(api, thread["id"], "ben-test")["unread"] == 1
@@ -402,7 +427,10 @@ def test_an_edit_that_adds_a_mention_delivers_it_and_the_run_starts_once(api):
 
     edit(api, message["id"], "Budget is ready, @cara and @ops please")
     assert delivery(api, message["id"], "bot:ops")["carrier_id"] == woken["carrier_id"]
-    assert len(rows(api, "SELECT 1 FROM message_deliveries WHERE message_id=? AND recipient='bot:ops'", message["id"])) == 1
+    assert (
+        len(rows(api, "SELECT 1 FROM message_deliveries WHERE message_id=? AND recipient='bot:ops'", message["id"]))
+        == 1
+    )
 
 
 def test_a_mention_taken_out_stops_its_run_and_put_back_starts_one(api):
@@ -433,12 +461,15 @@ def test_a_retried_post_after_an_edit_or_a_delete_never_replays_the_old_words(ap
     edit(api, message["id"], "New words")
     retried = say(api, thread["id"], "Old words", key="acme-retry-1")
     assert retried["id"] == message["id"] and retried["body"] == "New words"
-    assert retried["thread_id"] == thread["id"]    # what the route added beside the message stays
+    assert retried["thread_id"] == thread["id"]  # what the route added beside the message stays
 
     gone = say(api, thread["id"], "Taken back", key="acme-retry-2")
     delete(api, gone["id"])
-    response = api.post(f"/api/v2/threads/{thread['id']}/messages", json={"text": "Taken back"},
-                        headers=headers("ana-test", "acme-retry-2"))
+    response = api.post(
+        f"/api/v2/threads/{thread['id']}/messages",
+        json={"text": "Taken back"},
+        headers=headers("ana-test", "acme-retry-2"),
+    )
     assert "Taken back" not in response.text
 
 
@@ -509,8 +540,10 @@ def test_a_purge_clears_the_message_and_every_copy_of_its_words_and_leaves_a_tom
     carrier = delivery(api, old["id"], "bot:ops")["carrier_id"]
     with store.transaction() as c:
         threads._defer_note(c, H.message(c, old["id"]), "bot:cpo")
-        c.execute("INSERT INTO message_reactions(id,message_id,actor,emoji,created_at) VALUES('r1',?,'human:ben','ok',?)",
-                  (old["id"], H.now()))
+        c.execute(
+            "INSERT INTO message_reactions(id,message_id,actor,emoji,created_at) VALUES('r1',?,'human:ben','ok',?)",
+            (old["id"], H.now()),
+        )
     assert patch(api, thread["id"], {"retention_days": 30}).status_code == 200
     age(api, thread["id"])
     age(api, below["conversation_id"])
@@ -533,8 +566,9 @@ def test_a_purge_clears_the_message_and_every_copy_of_its_words_and_leaves_a_tom
     hits = api.get("/api/v2/threads/search", params={"q": "Zebrawire"}, headers=headers()).json()["hits"]
     assert hits == []
     assert api.get("/api/v2/threads/search", params={"q": "Zebrafresh"}, headers=headers()).json()["hits"]
-    retried = api.post(f"/api/v2/threads/{thread['id']}/messages", json={"text": "x"},
-                       headers=headers("ana-test", "acme-keep-1"))
+    retried = api.post(
+        f"/api/v2/threads/{thread['id']}/messages", json={"text": "x"}, headers=headers("ana-test", "acme-keep-1")
+    )
     assert "Zebrawire" not in retried.text
     assert rows(api, "SELECT 1 FROM events WHERE action='thread.purged' AND target=?", thread["id"])
     assert "Zebrawire" not in json.dumps(rows(api, "SELECT * FROM events WHERE action='thread.purged'"))
@@ -555,7 +589,9 @@ def test_a_purge_runs_in_bounded_batches_and_the_next_run_goes_on(api, monkeypat
     assert thread_retention.sweep(store) == 1
     events = rows(api, "SELECT COUNT(*) AS n FROM events")[0]["n"]
     assert thread_retention.sweep(store) == 0
-    assert rows(api, "SELECT COUNT(*) AS n FROM events")[0]["n"] == events     # a run with nothing past its time writes nothing
+    assert (
+        rows(api, "SELECT COUNT(*) AS n FROM events")[0]["n"] == events
+    )  # a run with nothing past its time writes nothing
 
 
 def test_a_purge_sends_no_tombstone_and_nothing_not_yet_sent_to_an_outside_destination(api):
@@ -564,9 +600,11 @@ def test_a_purge_sends_no_tombstone_and_nothing_not_yet_sent_to_an_outside_desti
     sent, waiting = say(api, thread["id"], "Sent already"), say(api, thread["id"], "Not sent yet")
     with store.transaction() as c:
         for message, state, delivered in ((sent, "delivered", H.now()), (waiting, "pending", None)):
-            c.execute("INSERT INTO message_deliveries(id,message_id,thread_id,root_id,recipient,mode,reason,state,revision,"
-                      "delivered_at,created_at,updated_at) VALUES(?,?,?,?,'slack:acme','none','outside',?,0,?,?,?)",
-                      ("d-" + message["id"], message["id"], thread["id"], thread["id"], state, delivered, H.now(), H.now()))
+            c.execute(
+                "INSERT INTO message_deliveries(id,message_id,thread_id,root_id,recipient,mode,reason,state,revision,"
+                "delivered_at,created_at,updated_at) VALUES(?,?,?,?,'slack:acme','none','outside',?,0,?,?,?)",
+                ("d-" + message["id"], message["id"], thread["id"], thread["id"], state, delivered, H.now(), H.now()),
+            )
     patch(api, thread["id"], {"retention_days": 1})
     age(api, thread["id"])
     assert thread_retention.sweep(store) == 2
@@ -576,6 +614,7 @@ def test_a_purge_sends_no_tombstone_and_nothing_not_yet_sent_to_an_outside_desti
 
 def test_retention_is_set_from_the_cli_and_the_tool(monkeypatch):
     from clients import hubcli, hubtools, remotecli
+
     calls = []
 
     class Api:
@@ -599,6 +638,7 @@ def test_retention_is_set_from_the_cli_and_the_tool(monkeypatch):
 @pytest.fixture
 def published(monkeypatch):
     from backend import webhooks
+
     seen = []
     monkeypatch.setattr(webhooks, "publish", lambda c, type_, subject, data, actor, **kw: seen.append((type_, subject)))
     return seen
@@ -609,7 +649,9 @@ def test_a_legacy_write_publishes_one_message_created_as_a_thread_post_does(api,
     thread = new_thread(api, audience="company")
     published.clear()
     posted = say(api, thread["id"], "For @ops")
-    assert [e for e in published if e[0] == "message.created"] == [("message.created", posted["id"])]  # the carrier adds none
+    assert [e for e in published if e[0] == "message.created"] == [
+        ("message.created", posted["id"])
+    ]  # the carrier adds none
     published.clear()
     with store.transaction() as c:
         legacy = H.say(c, "human:ana", "bot:cpo", "Direct word", conversation_id=thread["id"])
@@ -627,6 +669,7 @@ def test_a_home_made_on_first_use_publishes_thread_created_once(api, published):
 def capped_thread(api, monkeypatch, rounds=4, limit=2):
     """A thread where bots have used up an hour's wakes: `limit` went, the rest are capped."""
     from backend import rules
+
     monkeypatch.setattr(threads, "LOOP_GUARD_PER_HOUR", limit)
     # Bot-to-bot messages wake (no `bot_to_bot` wait), so each would start a run.
     monkeypatch.setattr(rules, "bot_to_bot_decision", lambda *a, **k: None)
@@ -639,8 +682,10 @@ def capped_thread(api, monkeypatch, rounds=4, limit=2):
 
 def hour_passes(api, thread_id):
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE message_deliveries SET created_at='2020-01-01T00:00:00Z' WHERE root_id=? AND state<>'capped'",
-                  (thread_id,))
+        c.execute(
+            "UPDATE message_deliveries SET created_at='2020-01-01T00:00:00Z' WHERE root_id=? AND state<>'capped'",
+            (thread_id,),
+        )
 
 
 def test_a_capped_wake_goes_by_itself_when_the_hour_reopens_with_no_new_post(api, monkeypatch):
@@ -654,7 +699,10 @@ def test_a_capped_wake_goes_by_itself_when_the_hour_reopens_with_no_new_post(api
     assert threads.reopen_due(store) == 1
     resumed = delivery(api, posted[2]["id"], "bot:ops")
     assert resumed["state"] == "pending" and queued_job(api, resumed["carrier_id"]) == "queued"
-    assert rows(api, "SELECT COUNT(*) AS n FROM messages WHERE conversation_id=? AND seq IS NOT NULL", thread["id"]) == said
+    assert (
+        rows(api, "SELECT COUNT(*) AS n FROM messages WHERE conversation_id=? AND seq IS NOT NULL", thread["id"])
+        == said
+    )
     assert rows(api, "SELECT 1 FROM events WHERE action='thread.resumed' AND target=?", thread["id"])
     assert threads.reopen_due(store) == 0
 
@@ -680,6 +728,7 @@ def test_a_person_posting_still_lets_every_capped_wake_go(api, monkeypatch):
 
 def test_the_schedulers_own_tick_lets_a_capped_wake_go(api, monkeypatch):
     from backend.scheduler import Scheduler
+
     store = api.app.state.store
     thread, posted = capped_thread(api, monkeypatch, rounds=3)
     hour_passes(api, thread["id"])
@@ -697,6 +746,7 @@ def test_with_nothing_capped_the_pass_takes_no_write(api, monkeypatch):
         if threading.get_ident() == me:
             wrote.append(a)
         return real(*a, **k)
+
     monkeypatch.setattr(store, "transaction", transaction)
     assert threads.reopen_due(store) == 0
     monkeypatch.undo()
@@ -707,28 +757,45 @@ def test_with_nothing_capped_the_pass_takes_no_write(api, monkeypatch):
 @pytest.fixture
 def told(monkeypatch):
     from backend import webhooks
+
     seen = []
-    monkeypatch.setattr(webhooks, "publish", lambda c, type_, subject, data, actor, **kw: seen.append((type_, subject, data)))
+    monkeypatch.setattr(
+        webhooks, "publish", lambda c, type_, subject, data, actor, **kw: seen.append((type_, subject, data))
+    )
     return lambda subject: [data for type_, id_, data in seen if type_ == "thread.created" and id_ == subject]
 
 
 def rule(api, owner="person:ana", token="ana-test", bot="ops"):
     step = {"id": "tell", "type": "action", "do": "wake_bot", "args": {"bot": bot, "text": "{{event.subject}}"}}
-    answer = post(api, "automations", {"name": "New threads", "owner": owner, "steps": [step],
-                                       "trigger": {"type": "event", "name": "thread.created"}}, token=token)
+    answer = post(
+        api,
+        "automations",
+        {
+            "name": "New threads",
+            "owner": owner,
+            "steps": [step],
+            "trigger": {"type": "event", "name": "thread.created"},
+        },
+        token=token,
+    )
     return answer["id"]
 
 
 def heard(api, automation_id):
-    return [json.loads(r["saved_state"])["payload"]["event"] for r in rows(
-        api, "SELECT saved_state FROM automation_runs WHERE automation_id=?", automation_id)]
+    return [
+        json.loads(r["saved_state"])["payload"]["event"]
+        for r in rows(api, "SELECT saved_state FROM automation_runs WHERE automation_id=?", automation_id)
+    ]
 
 
 def test_a_rule_hears_one_event_of_one_shape_from_the_new_route_and_the_legacy_one(api, told):
     aid = rule(api)
     made = new_thread(api, title="By the new route")
-    answer = api.post("/api/v2/conversations", json={"participants": ["human:ben", "bot:ops", "bot:cpo"], "kind": "chat",
-                                                     "subject": "By the old route"}, headers=headers())
+    answer = api.post(
+        "/api/v2/conversations",
+        json={"participants": ["human:ben", "bot:ops", "bot:cpo"], "kind": "chat", "subject": "By the old route"},
+        headers=headers(),
+    )
     assert answer.status_code == 200, answer.text
     legacy = answer.json()
 
@@ -779,8 +846,12 @@ def keep_30_days(api, thread_id):
 
 
 def attach(api, thread_id, text="See the budget", body=b"line items"):
-    sent = api.post(f"/api/v2/uploads/threads/{thread_id}/messages", data={"text": text},
-                    files={"files": ("budget.txt", body, "text/plain")}, headers=headers("ana-test"))
+    sent = api.post(
+        f"/api/v2/uploads/threads/{thread_id}/messages",
+        data={"text": text},
+        files={"files": ("budget.txt", body, "text/plain")},
+        headers=headers("ana-test"),
+    )
     assert sent.status_code == 200, sent.text
     return sent.json()["message"]
 
@@ -801,6 +872,7 @@ def blob_gone(api, blob_id):
 
 def test_a_purge_removes_a_file_nothing_else_holds_row_and_bytes(api, monkeypatch):
     from backend import blobs
+
     monkeypatch.setattr(blobs, "FRESH_SECONDS", 0)
     thread = new_thread(api, audience="company")
     message = attach(api, thread["id"])
@@ -817,8 +889,12 @@ def test_a_purge_removes_a_file_nothing_else_holds_row_and_bytes(api, monkeypatc
 
 
 def test_a_purge_takes_a_chat_uploads_library_copy_with_it(api):
-    sent = api.post("/api/v2/uploads/chat/ops", data={"text": "Here it is"},
-                    files={"files": ("budget.txt", b"chat items", "text/plain")}, headers=headers("ana-test"))
+    sent = api.post(
+        "/api/v2/uploads/chat/ops",
+        data={"text": "Here it is"},
+        files={"files": ("budget.txt", b"chat items", "text/plain")},
+        headers=headers("ana-test"),
+    )
     assert sent.status_code == 200, sent.text
     message = sent.json().get("message") or sent.json()
     item = message["refs"]["attachments"][0]
@@ -845,8 +921,12 @@ def test_a_purge_leaves_a_file_another_message_or_a_task_still_holds(api):
 
 
 def test_a_purge_leaves_a_file_someone_keeps_in_the_library(api):
-    sent = api.post("/api/v2/uploads/chat/ops", data={"text": "Here it is"},
-                    files={"files": ("budget.txt", b"kept items", "text/plain")}, headers=headers("ana-test"))
+    sent = api.post(
+        "/api/v2/uploads/chat/ops",
+        data={"text": "Here it is"},
+        files={"files": ("budget.txt", b"kept items", "text/plain")},
+        headers=headers("ana-test"),
+    )
     message = sent.json().get("message") or sent.json()
     item = message["refs"]["attachments"][0]
     with api.app.state.store.transaction() as c:  # the file is someone's now, no longer this attachment's copy

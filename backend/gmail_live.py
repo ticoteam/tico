@@ -22,7 +22,7 @@ from .store import Problem
 BASE = "https://gmail.googleapis.com/gmail/v1/users/"
 UPLOAD = "https://gmail.googleapis.com/upload/gmail/v1/users/"
 SEND_SECONDS = 60
-INLINE_RAW_MAX = 4 * 1024 * 1024        # a bigger email goes up as a multipart upload: a JSON body is capped lower
+INLINE_RAW_MAX = 4 * 1024 * 1024  # a bigger email goes up as a multipart upload: a JSON body is capped lower
 SECONDS = 10
 LIMIT_MAX = 50
 WORKERS = 10
@@ -44,8 +44,9 @@ def gmail_call(url, *, token, data=None):
         with urllib.request.urlopen(request, timeout=SECONDS) as answer:
             status, raw = answer.status, answer.read(HTTP_MAX_BYTES + 1)
     except urllib.error.HTTPError as refused:
-        refused.close()
-        return refused.code, {}
+        with refused:
+            refused.close()
+            return refused.code, {}
     except (OSError, ValueError):
         return 0, {}
     if len(raw) > HTTP_MAX_BYTES:
@@ -70,7 +71,9 @@ def _call(mailbox, path, token, *, data=None, **query):
         raise Problem("gmail_query", "Gmail refused the query or page token; check it and try again", 422)
     if status in (401, 403):
         verb = "change" if data is not None else "read"
-        raise Problem("gmail_refused", f"Gmail refused this {verb}; check the Whole Workspace connection and Gmail access", 403)
+        raise Problem(
+            "gmail_refused", f"Gmail refused this {verb}; check the Whole Workspace connection and Gmail access", 403
+        )
     if status == 404:
         raise Problem("not_found", "Gmail could not find this mailbox, thread or message", 404)
     if status == 429:
@@ -110,14 +113,24 @@ def list(c, mailbox, q="", page_token="", limit=50):
     page = _get(mailbox, "messages", token, **query)
     ids = page.get("messages", [])
     nxt = page.get("nextPageToken") or None
-    if (not isinstance(ids, builtins.list) or len(ids) > cap
-            or any(not isinstance(item, dict) or not item.get("id") for item in ids)
-            or (nxt is not None and not isinstance(nxt, str))):
+    if (
+        not isinstance(ids, builtins.list)
+        or len(ids) > cap
+        or any(not isinstance(item, dict) or not item.get("id") for item in ids)
+        or (nxt is not None and not isinstance(nxt, str))
+    ):
         raise Problem("gmail_unavailable", "Gmail returned an incomplete page; try again", 502, retryable=True)
 
     def metadata(item):
-        return _message(_get(mailbox, "messages/" + urllib.parse.quote(item["id"], safe=""), token,
-                             format="metadata", metadataHeaders=METADATA_HEADERS))
+        return _message(
+            _get(
+                mailbox,
+                "messages/" + urllib.parse.quote(item["id"], safe=""),
+                token,
+                format="metadata",
+                metadataHeaders=METADATA_HEADERS,
+            )
+        )
 
     with ThreadPoolExecutor(max_workers=WORKERS) as pool:
         messages = [item for item in pool.map(metadata, ids)]
@@ -129,8 +142,9 @@ def thread(c, mailbox, thread_id):
     messages = raw.get("messages")
     if not isinstance(messages, builtins.list) or not messages:
         raise Problem("gmail_unavailable", "Gmail returned an incomplete thread; try again", 502, retryable=True)
-    return _bounded(sorted((_message(item) for item in messages), key=lambda item: (item["epoch"], item["id"])),
-                    OPEN_MAX_BYTES)
+    return _bounded(
+        sorted((_message(item) for item in messages), key=lambda item: (item["epoch"], item["id"])), OPEN_MAX_BYTES
+    )
 
 
 def message(c, mailbox, message_id):
@@ -148,10 +162,20 @@ def message_ids(c, mailbox, query, limit=100):
             params["pageToken"] = cursor
         page = _get(mailbox, "messages", token, **params)
         rows, cursor = page.get("messages", []), page.get("nextPageToken") or ""
-        if (not isinstance(rows, builtins.list) or len(rows) > cap - len(ids)
-                or any(not isinstance(row, dict) or not isinstance(row.get("id"), str)
-                       or not row["id"] or not row["id"].isascii() or len(row["id"]) > 128 for row in rows)
-                or not isinstance(cursor, str) or cursor in seen_pages):
+        if (
+            not isinstance(rows, builtins.list)
+            or len(rows) > cap - len(ids)
+            or any(
+                not isinstance(row, dict)
+                or not isinstance(row.get("id"), str)
+                or not row["id"]
+                or not row["id"].isascii()
+                or len(row["id"]) > 128
+                for row in rows
+            )
+            or not isinstance(cursor, str)
+            or cursor in seen_pages
+        ):
             raise Problem("gmail_unavailable", "Gmail returned an incomplete page; try again", 502)
         ids.extend(row["id"] for row in rows if row["id"] not in ids)
         if not cursor:
@@ -164,10 +188,15 @@ def message_ids(c, mailbox, query, limit=100):
 
 def labels(c, mailbox):
     rows = _get(mailbox, "labels", _token(c, mailbox)).get("labels")
-    if (not isinstance(rows, builtins.list)
-            or any(not isinstance(row, dict) or not isinstance(row.get("id"), str) or not row["id"]
-                   or not isinstance(row.get("name"), str) or not row["name"]
-                   or row.get("type") not in ("user", "system") for row in rows)):
+    if not isinstance(rows, builtins.list) or any(
+        not isinstance(row, dict)
+        or not isinstance(row.get("id"), str)
+        or not row["id"]
+        or not isinstance(row.get("name"), str)
+        or not row["name"]
+        or row.get("type") not in ("user", "system")
+        for row in rows
+    ):
         raise Problem("gmail_unavailable", "Gmail returned incomplete labels; try again", 502)
     return rows
 
@@ -184,7 +213,9 @@ def resolve_label(c, mailbox, name, *, create=False):
             return row["id"]
     if not create:
         raise Problem("not_found", "Gmail could not find this label", 404)
-    token = google_workspace.mint(c, mailbox, "gmail", scopes=google_workspace.WORKSPACE_SCOPES["gmail"])["access_token"]
+    token = google_workspace.mint(c, mailbox, "gmail", scopes=google_workspace.WORKSPACE_SCOPES["gmail"])[
+        "access_token"
+    ]
     row = _call(mailbox, "labels", token, data={"name": name})
     if not row.get("id") or row.get("type") != "user":
         raise Problem("gmail_unavailable", "Gmail returned an incomplete label; try again", 502)
@@ -201,23 +232,36 @@ def organize(c, mailbox, ids, add=(), remove=()):
         raise Problem("gmail_label", "Tico may only change INBOX, UNREAD, STARRED, IMPORTANT or user labels", 422)
     if not ids:
         return
-    token = google_workspace.mint(c, mailbox, "gmail", scopes=google_workspace.WORKSPACE_SCOPES["gmail"])["access_token"]
+    token = google_workspace.mint(c, mailbox, "gmail", scopes=google_workspace.WORKSPACE_SCOPES["gmail"])[
+        "access_token"
+    ]
     for start in range(0, len(ids), 1000):
-        _call(mailbox, "messages/batchModify", token,
-              data={"ids": ids[start:start + 1000], "addLabelIds": builtins.list(add),
-                    "removeLabelIds": builtins.list(remove)})
+        _call(
+            mailbox,
+            "messages/batchModify",
+            token,
+            data={
+                "ids": ids[start : start + 1000],
+                "addLabelIds": builtins.list(add),
+                "removeLabelIds": builtins.list(remove),
+            },
+        )
 
 
 def send_call(url, *, token, body, content_type):
     """(status, JSON object) for one messages.send, or status 0 when Gmail did not answer. Tests replace this."""
-    request = urllib.request.Request(url, data=body, headers={"Accept": "application/json", "Content-Type": content_type,
-                                                              "Authorization": "Bearer " + token})
+    request = urllib.request.Request(
+        url,
+        data=body,
+        headers={"Accept": "application/json", "Content-Type": content_type, "Authorization": "Bearer " + token},
+    )
     try:
         with urllib.request.urlopen(request, timeout=SEND_SECONDS) as answer:
             status, raw = answer.status, answer.read(HTTP_MAX_BYTES)
     except urllib.error.HTTPError as refused:
-        refused.close()
-        return refused.code, {}
+        with refused:
+            refused.close()
+            return refused.code, {}
     except (OSError, ValueError):
         return 0, {}
     try:
@@ -233,18 +277,33 @@ def send(mailbox, token, raw, thread_id=""):
     path = urllib.parse.quote(mailbox, safe="") + "/messages/send"
     if len(raw) <= INLINE_RAW_MAX:
         body = {"raw": raw, **({"threadId": thread_id} if thread_id else {})}
-        status, found = send_call(BASE + path, token=token, body=json.dumps(body).encode(),
-                                  content_type="application/json")
+        status, found = send_call(
+            BASE + path, token=token, body=json.dumps(body).encode(), content_type="application/json"
+        )
     else:
         padded = raw.replace("-", "+").replace("_", "/")
         mime = base64.b64decode(padded + "=" * (-len(padded) % 4))
         boundary = "tico-" + uuid.uuid4().hex
         meta = json.dumps({"threadId": thread_id} if thread_id else {}).encode()
-        body = (b"--" + boundary.encode() + b"\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n" + meta
-                + b"\r\n--" + boundary.encode() + b"\r\nContent-Type: message/rfc822\r\n\r\n" + mime
-                + b"\r\n--" + boundary.encode() + b"--")
-        status, found = send_call(UPLOAD + path + "?uploadType=multipart", token=token, body=body,
-                                  content_type="multipart/related; boundary=" + boundary)
+        body = (
+            b"--"
+            + boundary.encode()
+            + b"\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n"
+            + meta
+            + b"\r\n--"
+            + boundary.encode()
+            + b"\r\nContent-Type: message/rfc822\r\n\r\n"
+            + mime
+            + b"\r\n--"
+            + boundary.encode()
+            + b"--"
+        )
+        status, found = send_call(
+            UPLOAD + path + "?uploadType=multipart",
+            token=token,
+            body=body,
+            content_type="multipart/related; boundary=" + boundary,
+        )
     if status in (200, 201) and found.get("id"):
         return "sent", str(found["id"])[:200], "sent"
     if 400 <= status < 500:

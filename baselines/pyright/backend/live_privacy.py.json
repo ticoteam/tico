@@ -1,0 +1,22 @@
+{
+    "files": {
+        "./backend/live_privacy.py": [
+            {
+                "code": "reportAttributeAccessIssue",
+                "range": {
+                    "startColumn": 30,
+                    "endColumn": 40,
+                    "lineCount": 1
+                }
+            },
+            {
+                "code": "reportAttributeAccessIssue",
+                "range": {
+                    "startColumn": 16,
+                    "endColumn": 26,
+                    "lineCount": 1
+                }
+            }
+        ]
+    }
+}

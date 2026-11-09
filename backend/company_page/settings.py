@@ -2,6 +2,7 @@
 
 Taking anything away happens in the caller's transaction, rebuild included, so a page is never closed in the database and
 still served from disk."""
+
 import re
 import sqlite3
 
@@ -17,7 +18,7 @@ LOGO_NAME = "company-page-logo"
 # company's in the address bar.
 SLUG = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?")
 RESERVED_SLUGS = frozenset({"www", "api", "app", "admin", "mail", "static", "assets", "hooks", "status", "help"})
-ACCENT = re.compile(r"#[0-9a-fA-F]{6}")      # it reaches the page's stylesheet, so nothing but a colour gets through
+ACCENT = re.compile(r"#[0-9a-fA-F]{6}")  # it reaches the page's stylesheet, so nothing but a colour gets through
 FILE_ID = re.compile(r"[A-Za-z0-9_-]{1,64}")
 
 
@@ -32,6 +33,7 @@ def require_person(c, actor):
 
 def rebuild(c, reason):
     from . import release
+
     release.rebuild(c, reason)
 
 
@@ -44,8 +46,10 @@ def rebuild_if_live(c, reason):
 def published_vision(c):
     """The team's vision as everyone inside reads it, with no fallback to the strategy's summary: that summary is
     written for bots and was never meant to leave. Falls back to the older profile row a team may still have."""
-    for sql in ("SELECT vision FROM strategy_versions WHERE status='published' ORDER BY n DESC LIMIT 1",
-                "SELECT vision FROM strategy_versions WHERE status='draft'"):
+    for sql in (
+        "SELECT vision FROM strategy_versions WHERE status='published' ORDER BY n DESC LIMIT 1",
+        "SELECT vision FROM strategy_versions WHERE status='draft'",
+    ):
         try:
             row = c.execute(sql).fetchone()
         except sqlite3.OperationalError:
@@ -61,24 +65,34 @@ def published_vision(c):
 def mission_for(c, audience_id):
     """The mission as this audience may read it: empty unless its disclosure says so, since Quiet means nothing."""
     from . import disclosure
+
     return published_vision(c) if disclosure.rule_for(c, audience_id, "mission")["mode"] != "hidden" else ""
 
 
 def get(c):
     row = H._one(c, "SELECT * FROM company_page_settings WHERE id='company'") or {}
     transparency = row.get("transparency")
-    return {"transparency": transparency if transparency in TRANSPARENCY else "closed", "slug": row.get("slug"),
-            "accent": row.get("accent"), "logo_file_id": row.get("logo_file_id"), "updated_at": row.get("updated_at"),
-            "updated_by": row.get("updated_by"), "mission": published_vision(c)}
+    return {
+        "transparency": transparency if transparency in TRANSPARENCY else "closed",
+        "slug": row.get("slug"),
+        "accent": row.get("accent"),
+        "logo_file_id": row.get("logo_file_id"),
+        "updated_at": row.get("updated_at"),
+        "updated_by": row.get("updated_by"),
+        "mission": published_vision(c),
+    }
 
 
 def _save(c, actor, **changed):
     ts = H.now()
     names = list(changed)
-    c.execute(f"INSERT INTO company_page_settings (id, {', '.join(names)}, updated_at, updated_by) "
-              f"VALUES ('company', {', '.join('?' * len(names))}, ?, ?) ON CONFLICT(id) DO UPDATE SET "
-              f"{', '.join(f'{n}=excluded.{n}' for n in names)}, updated_at=excluded.updated_at, "
-              "updated_by=excluded.updated_by", (*changed.values(), ts, actor))
+    c.execute(
+        f"INSERT INTO company_page_settings (id, {', '.join(names)}, updated_at, updated_by) "
+        f"VALUES ('company', {', '.join('?' * len(names))}, ?, ?) ON CONFLICT(id) DO UPDATE SET "
+        f"{', '.join(f'{n}=excluded.{n}' for n in names)}, updated_at=excluded.updated_at, "
+        "updated_by=excluded.updated_by",
+        (*changed.values(), ts, actor),
+    )
 
 
 def set_transparency(c, actor, value):
@@ -129,8 +143,10 @@ def _clean(c, name, value):
         return str(value)
     # A logo goes out on a public page, so it is only ever a picture the Company page itself uploaded. Any other file in
     # the library, however much a picture it is, would become public on this one field.
-    found = FILE_ID.fullmatch(str(value)) and c.execute(
-        "SELECT content_type, name FROM blobs WHERE id=?", (str(value),)).fetchone()
+    found = (
+        FILE_ID.fullmatch(str(value))
+        and c.execute("SELECT content_type, name FROM blobs WHERE id=?", (str(value),)).fetchone()
+    )
     if not found or not str(found[0]).startswith("image/") or not str(found[1]).startswith(LOGO_NAME):
         raise Problem(name, "The logo is an image uploaded to the Company page", 422)
     return str(value)

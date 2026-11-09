@@ -1,4 +1,5 @@
 """Repository identity checks use real Git metadata, including an installation that is itself a worktree."""
+
 import os
 import shlex
 import shutil
@@ -20,7 +21,17 @@ def test_git_metadata_aliases_of_the_install_are_refused(tmp_path, monkeypatch, 
     source = tmp_path / "source"
     source.mkdir()
     git(source, "init", "-q", "-b", "main")
-    git(source, "-c", "user.name=Fixture", "-c", "user.email=fixture@acme.example", "commit", "--allow-empty", "-qm", "init")
+    git(
+        source,
+        "-c",
+        "user.name=Fixture",
+        "-c",
+        "user.email=fixture@acme.example",
+        "commit",
+        "--allow-empty",
+        "-qm",
+        "init",
+    )
     install = tmp_path / "install" if linked_install else source
     if linked_install:
         git(source, "worktree", "add", "--detach", str(install))
@@ -48,8 +59,11 @@ def test_git_metadata_aliases_of_the_install_are_refused(tmp_path, monkeypatch, 
     wrapper.write_text(f'#!/bin/sh\nGIT_TEST_ASSUME_DIFFERENT_OWNER=1 exec {shlex.quote(shutil.which("git"))} "$@"\n')
     wrapper.chmod(0o755)
     monkeypatch.setenv("PATH", str(bin_dir) + os.pathsep + os.environ["PATH"])
-    refused = subprocess.run(["git", "-c", "safe.directory=", "-C", str(separate / "playbooks"),
-                              "rev-parse", "--git-dir"], capture_output=True, text=True)
+    refused = subprocess.run(
+        ["git", "-c", "safe.directory=", "-C", str(separate / "playbooks"), "rev-parse", "--git-dir"],
+        capture_output=True,
+        text=True,
+    )
     assert refused.returncode != 0 and "dubious ownership" in refused.stderr
     monkeypatch.setattr(repo_safety, "ROOT", install)
     # A turn's overrides do not change which repository this destination actually uses.
@@ -82,7 +96,17 @@ def test_config_error_on_either_side_refuses_a_sibling(tmp_path, monkeypatch, li
     source = tmp_path / "source"
     source.mkdir()
     git(source, "init", "-q", "-b", "main")
-    git(source, "-c", "user.name=Fixture", "-c", "user.email=fixture@acme.example", "commit", "--allow-empty", "-qm", "init")
+    git(
+        source,
+        "-c",
+        "user.name=Fixture",
+        "-c",
+        "user.email=fixture@acme.example",
+        "commit",
+        "--allow-empty",
+        "-qm",
+        "init",
+    )
     install = tmp_path / "install" if linked_install else source
     if linked_install:
         git(source, "worktree", "add", "--detach", str(install))
@@ -94,7 +118,9 @@ def test_config_error_on_either_side_refuses_a_sibling(tmp_path, monkeypatch, li
         config = Path(git(broken, "rev-parse", "--absolute-git-dir")) / "config.worktree"
         config.write_text("[invalid config\n")
         try:
-            failed = subprocess.run(["git", "-C", str(broken), "rev-parse", "--git-dir"], capture_output=True, check=False)
+            failed = subprocess.run(
+                ["git", "-C", str(broken), "rev-parse", "--git-dir"], capture_output=True, check=False
+            )
             assert failed.returncode == 128
             assert git(healthy, "rev-parse", "--git-dir")
             with pytest.raises(ValueError, match="^Cannot check repository identity") as error:
@@ -120,6 +146,7 @@ def test_probe_failures_on_either_side_are_refused(tmp_path, monkeypatch, failur
     (repo / "playbooks").mkdir()
     monkeypatch.setattr(repo_safety, "ROOT", install)
     for broken in (install, repo):
+
         def probe(args, **kwargs):
             root = Path(args[args.index("-C") + 1])
             if root == broken:
@@ -129,6 +156,7 @@ def test_probe_failures_on_either_side_are_refused(tmp_path, monkeypatch, failur
                     raise subprocess.TimeoutExpired(args, 10)
                 return subprocess.CompletedProcess(args, 128, "", "bad config")
             return subprocess.CompletedProcess(args, 0, f"{root / '.git'}\n{root / '.git'}\n", "")
+
         monkeypatch.setattr(subprocess, "run", probe)
         with pytest.raises(ValueError, match="^Cannot check repository identity") as error:
             repo_safety.outside_installation(repo / "playbooks")

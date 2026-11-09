@@ -1,5 +1,6 @@
 """The Tools proxy (backend/tool_proxy.py): a proxied tool's key never leaves the server, a token works only for its
 tool and its live run, and the caller's level picks the key and the methods. The vendor is a local fake (MockTransport)."""
+
 import base64
 import ipaddress
 import json
@@ -37,16 +38,23 @@ class Vendor:
         self.seen.append(request)
         auth = request.headers.get("authorization", "")
         got = base64.b64decode(auth[6:]).decode() if auth.startswith("Basic ") else auth
-        return httpx.Response(self.status, headers={"x-echo": got, "set-cookie": "vendor=1"},
-                              json={"echo": got, "path": request.url.path, "query": str(request.url.query, "ascii")})
+        return httpx.Response(
+            self.status,
+            headers={"x-echo": got, "set-cookie": "vendor=1"},
+            json={"echo": got, "path": request.url.path, "query": str(request.url.query, "ascii")},
+        )
 
 
-def tool(api, tid="close-crm", name="Close CRM", scheme="basic_user", delivery="proxy", base="https://api.close.example"):
+def tool(
+    api, tid="close-crm", name="Close CRM", scheme="basic_user", delivery="proxy", base="https://api.close.example"
+):
     with api.app.state.store.transaction() as c:
         now = H.now()
-        c.execute("INSERT INTO tools(id,name,service,base_url,auth_scheme,check_path,delivery,created_by,created_at,"
-                  "updated_at) VALUES(?,?,?,?,?,?,?,?,?,?)",
-                  (tid, name, "close", base, scheme, "/api/v1/me/", delivery, "human:ana", now, now))
+        c.execute(
+            "INSERT INTO tools(id,name,service,base_url,auth_scheme,check_path,delivery,created_by,created_at,"
+            "updated_at) VALUES(?,?,?,?,?,?,?,?,?,?)",
+            (tid, name, "close", base, scheme, "/api/v1/me/", delivery, "human:ana", now, now),
+        )
 
 
 def key(api, tid, secret, level="read_write", env="CLOSE_API_KEY", name=None):
@@ -77,8 +85,11 @@ def handed(api, attempt, env="CLOSE_API_KEY"):
 
 
 def call(api, method, path, token, tid="close-crm", how="bearer", **kwargs):
-    headers = {"Authorization": "Bearer " + token} if how == "bearer" else \
-        {"Authorization": "Basic " + base64.b64encode((token + ":").encode()).decode()}
+    headers = (
+        {"Authorization": "Bearer " + token}
+        if how == "bearer"
+        else {"Authorization": "Basic " + base64.b64encode((token + ":").encode()).decode()}
+    )
     return api.request(method, f"/api/v2/tool-proxy/{tid}/{path}", headers=headers, **kwargs)
 
 
@@ -149,6 +160,7 @@ def test_a_token_works_only_for_its_tool_and_its_live_run(api):
     assert api.get("/api/v2/tool-proxy/close-crm/api/v1/me/").status_code == 401
     # A token signed for another bot's attempt does not carry this bot's grant.
     from backend import tool_proxy
+
     _, other = run(api, "finance")
     with api.app.state.store.transaction() as c:
         stolen = tool_proxy.mint(c, api.app.state.vault, "close-crm", "bot:ops", attempt=other["id"])
@@ -199,14 +211,19 @@ def test_read_level_picks_the_read_key_and_with_only_a_full_key_refuses_writes(a
 
 def test_header_query_and_twilio_style_schemes_rewrite_only_the_token(api):
     from backend import tool_proxy
+
     req = type("R", (), {})()
     req.headers = httpx.Headers({"x-api-key": "Token tpx1.abc.def", "cookie": "tico_session=s", "x-forwarded-for": "1"})
     out = dict(tool_proxy.outgoing_headers(req, {"auth_scheme": "header:X-Api-Key"}, {"username": ""}, "k-1", "header"))
     assert out["X-Api-Key"] == "Token k-1" and "cookie" not in out and "x-forwarded-for" not in out
-    twilio = dict(tool_proxy.outgoing_headers(req, {"auth_scheme": "basic_password"}, {"username": "AC123"}, "k-2", "auth"))
+    twilio = dict(
+        tool_proxy.outgoing_headers(req, {"auth_scheme": "basic_password"}, {"username": "AC123"}, "k-2", "auth")
+    )
     assert twilio["Authorization"] == "Basic " + base64.b64encode(b"AC123:k-2").decode()
-    assert tool_proxy.outgoing_query("a=1&api_key=tpx1.abc.def", {"auth_scheme": "query:api_key"}, "k 3") == \
-        "a=1&api_key=k%203"
+    assert (
+        tool_proxy.outgoing_query("a=1&api_key=tpx1.abc.def", {"auth_scheme": "query:api_key"}, "k 3")
+        == "a=1&api_key=k%203"
+    )
     assert tool_proxy.logged_path("v1/x", "api_key=tpx1.abc.def&b=2") == "/v1/x?api_key=&b="
     scrub = tool_proxy.Scrubber(["secret-key"])
     assert scrub.feed(b"a secr") + scrub.feed(b"et-key b") + scrub.end() == b"a [key] b"
@@ -230,4 +247,5 @@ def test_a_name_that_resolves_to_a_private_address_is_refused_and_nothing_is_sen
         assert [r["result"] for r in c.execute("SELECT result FROM tool_calls")] == ["refused"] * 4
     # A local name is refused by its spelling, before any lookup.
     from backend import tool_proxy
+
     assert "Change it on Tools > Meta" in tool_proxy.address_problem("https://metadata.internal/", "Meta")

@@ -205,13 +205,12 @@
         more_messages: false
         tasks: []
         notices: []
-    - match: '^question answer 0b7e4c19\S*'
+    - match: '^message send bot:engineering-lead\b'
       out: {ok: true, answered: "keep it", to: "bot:engineering-lead"}
   must:
-    - '^question answer 0b7e4c19\S*'
+    - '^message send bot:engineering-lead\b'
   must_not:
-    - '^question answer 6d2b8e17\S*'
-    - '^message send(?! -h\b| --help)'
+    - '^message send(?! -h\b| --help| bot:engineering-lead\b)'
     - '^task (close|bulk close)(?! -h\b| --help)'
     - '^approval (approve|decline)(?! -h\b| --help)'
   reply: |

@@ -35,7 +35,12 @@ fn chunk_boundary(pending: &[f32]) -> Option<usize> {
     }
     let window = &pending[MIN_CHUNK_SAMPLES..pending.len().min(MAX_CHUNK_SAMPLES)];
     let energy = |frame: &[f32]| frame.iter().map(|x| x * x).sum::<f32>() / frame.len() as f32;
-    let frames: Vec<f32> = window.chunks_exact(FRAME).map(energy).collect();
+    let frames: Vec<f32> = window
+        .as_chunks::<FRAME>()
+        .0
+        .iter()
+        .map(|frame| energy(frame))
+        .collect();
     let quietest = frames.iter().copied().fold(f32::INFINITY, f32::min);
     let mean = energy(&pending[..pending.len().min(MAX_CHUNK_SAMPLES)]);
     if quietest > (0.003_f32 * 0.003).max(mean * 0.06) && pending.len() < MAX_CHUNK_SAMPLES {
@@ -194,6 +199,9 @@ fn setup_inputs(
             } else {
                 " Recording meeting audio only."
             });
+        }
+        if !warning.is_empty() {
+            crate::diag!("audio: {warning}");
         }
         inputs.warning(warning);
         Ok(())
@@ -367,9 +375,23 @@ struct Writer {
     chunk_ms: f64,
     /// Live text for this input. It gets a copy of every resampled sample and never blocks.
     feed: Option<Feed>,
+    /// Since when the device has delivered only exact zeros (a muted or seized input).
+    silent_since: Option<Instant>,
+    silence_logged: bool,
 }
 impl Writer {
     fn new(source: Source, started: Instant, offset: u64, feed: Option<Feed>) -> Result<Self> {
+        crate::diag!(
+            "audio: {} started: {} at {} Hz{}",
+            source.channel.as_str(),
+            source.name,
+            source.sample_rate,
+            if source.live_input.is_some() {
+                " with voice processing"
+            } else {
+                ""
+            }
+        );
         let base_ms = offset as f64
             + source
                 .started
@@ -386,6 +408,8 @@ impl Writer {
             base_ms,
             chunk_ms: base_ms,
             feed,
+            silent_since: Some(Instant::now()),
+            silence_logged: false,
         })
     }
     fn pump(&mut self, store: &Store, id: &str) -> Result<()> {
@@ -401,6 +425,7 @@ impl Writer {
                     + packet.start_frame as f64 * 1000. / self.source.sample_rate as f64;
             }
             self.next_frame = Some(packet.start_frame + packet.len as u64);
+            self.watch_silence(&packet.samples[..packet.len]);
             let before = self.pending.len();
             self.resampler
                 .push(&packet.samples[..packet.len], &mut self.pending);
@@ -409,27 +434,54 @@ impl Writer {
                 .live_input
                 .as_ref()
                 .is_some_and(|aid| aid.processed.load(Ordering::Acquire));
-            if !processed {
-                if let Some(feed) = &self.feed {
-                    let at_ms = self.chunk_ms + before as f64 * 1000. / OUTPUT_RATE as f64;
-                    feed.push(at_ms, &self.pending[before..]);
-                }
+            if !processed && let Some(feed) = &self.feed {
+                let at_ms = self.chunk_ms + before as f64 * 1000. / OUTPUT_RATE as f64;
+                feed.push(at_ms, &self.pending[before..]);
             }
             self.flush(store, id, false)?;
         }
         if let Some(aid) = &mut self.source.live_input {
             while let Ok(packet) = aid.consumer.pop() {
-                if aid.processed.load(Ordering::Acquire) {
-                    if let Some(feed) = &self.feed {
-                        feed.push(
-                            self.base_ms + packet.start_frame as f64 * 1000. / OUTPUT_RATE as f64,
-                            &packet.samples[..packet.len],
-                        );
-                    }
+                if aid.processed.load(Ordering::Acquire)
+                    && let Some(feed) = &self.feed
+                {
+                    feed.push(
+                        self.base_ms + packet.start_frame as f64 * 1000. / OUTPUT_RATE as f64,
+                        &packet.samples[..packet.len],
+                    );
                 }
             }
         }
         Ok(())
+    }
+    /// Logs an input that delivers only exact zeros for 10 s, and when its signal returns.
+    /// Real microphones always carry some noise, so this means the input was muted or seized.
+    fn watch_silence(&mut self, samples: &[f32]) {
+        // Meeting audio is legitimately silent while nobody talks; only a mic never is.
+        if self.source.channel != Channel::Microphone || samples.is_empty() {
+            return;
+        }
+        let channel = self.source.channel.as_str();
+        if samples.iter().any(|sample| *sample != 0.) {
+            if let Some(since) = self.silent_since.take()
+                && self.silence_logged
+            {
+                crate::diag!(
+                    "audio: {channel} signal back after {} s of silence",
+                    since.elapsed().as_secs()
+                );
+            }
+            self.silence_logged = false;
+            return;
+        }
+        let since = *self.silent_since.get_or_insert_with(Instant::now);
+        if !self.silence_logged && since.elapsed() >= Duration::from_secs(10) {
+            self.silence_logged = true;
+            crate::diag!(
+                "audio: {channel} delivered only silence for 10 s ({})",
+                self.source.name
+            );
+        }
     }
     fn flush(&mut self, store: &Store, id: &str, final_buffer: bool) -> Result<()> {
         loop {
@@ -532,10 +584,10 @@ fn record(
                 Ok(Err(error)) => Some(format!("{error:#}")),
                 Err(_) => Some("Audio input setup stopped unexpectedly".into()),
             };
-            if !publisher.canceled.load(Ordering::Acquire) {
-                if let Some(error) = error {
-                    let _ = publisher.sender.send(InputEvent::Failed(error));
-                }
+            if !publisher.canceled.load(Ordering::Acquire)
+                && let Some(error) = error
+            {
+                let _ = publisher.sender.send(InputEvent::Failed(error));
             }
         })?;
     let mut writers: Vec<Writer> = Vec::new();

@@ -1,5 +1,6 @@
 """The tax tables and the rows the tax workpapers read (spec §11). All SQL for the tax tables and their workpapers lives
 here; finance/tax.py reads these rows whole, only for a caller who sees everything."""
+
 import sqlite3
 from collections.abc import Mapping, Sequence
 from typing import Any
@@ -9,14 +10,18 @@ from ..core.feeds import CARD_KINDS
 # The SQL test that a feed row (f, with its money account m) is card money: a card kind from core/feeds (a credit or debit
 # charge, refund or fee, even on a bank money account), a card id, or a card program's row. The values are constants.
 _CARD_KINDS_SQL = ", ".join(f"'{kind}'" for kind in CARD_KINDS)
-_CARD_ROW = (f"CASE WHEN f.card_id IS NOT NULL OR f.kind IN ({_CARD_KINDS_SQL}) "
-             "OR COALESCE(m.kind, '') = 'card_program' THEN 1 ELSE 0 END")
+_CARD_ROW = (
+    f"CASE WHEN f.card_id IS NOT NULL OR f.kind IN ({_CARD_KINDS_SQL}) "
+    "OR COALESCE(m.kind, '') = 'card_program' THEN 1 ELSE 0 END"
+)
 # The feed row an entry came from, found by the entry's source id: a row's first entry has the row's id, and a repost or a
 # reclassification adds a suffix after a colon. So it is found even once the row is unposted. For the entry a line is on,
 # or the entry that line's entry reverses.
-_ORIGIN_FEED = ("SELECT f.id FROM fin_entries oe "
-                "JOIN fin_feed_txns f ON f.id=substr(oe.source_id, 1, instr(oe.source_id || ':', ':') - 1) "
-                "WHERE oe.id=COALESCE(e.reverses_id, e.id) AND oe.source IN ('bank','card')")
+_ORIGIN_FEED = (
+    "SELECT f.id FROM fin_entries oe "
+    "JOIN fin_feed_txns f ON f.id=substr(oe.source_id, 1, instr(oe.source_id || ':', ':') - 1) "
+    "WHERE oe.id=COALESCE(e.reverses_id, e.id) AND oe.source IN ('bank','card')"
+)
 
 
 def _marks(values: Sequence[object]) -> str:
@@ -33,8 +38,7 @@ def jurisdiction_named(c: sqlite3.Connection, book_id: str, code: str) -> Any:
 
 def insert_jurisdiction(c: sqlite3.Connection, row: Mapping[str, object]) -> None:
     names = ", ".join(row)
-    c.execute(f"INSERT INTO fin_tax_jurisdictions ({names}) VALUES ({_marks(list(row.values()))})",
-              tuple(row.values()))
+    c.execute(f"INSERT INTO fin_tax_jurisdictions ({names}) VALUES ({_marks(list(row.values()))})", tuple(row.values()))
 
 
 def contact_kind(c: sqlite3.Connection, book_id: str, contact_id: str) -> str:
@@ -54,18 +58,24 @@ def add_seed(c: sqlite3.Connection, key: str, rule_id: str, at: str) -> None:
 
 def vendors_1099(c: sqlite3.Connection, book_id: str) -> list[Any]:
     """The vendors flagged for a 1099: id, name, and the vault ref of their TIN (empty when none is on file)."""
-    return c.execute("SELECT id, name, COALESCE(tax_id_ref, '') AS tin_ref FROM fin_contacts WHERE book_id=? "
-                     "AND is_1099=1 AND kind IN ('vendor','both') ORDER BY name", (book_id,)).fetchall()
+    return c.execute(
+        "SELECT id, name, COALESCE(tax_id_ref, '') AS tin_ref FROM fin_contacts WHERE book_id=? "
+        "AND is_1099=1 AND kind IN ('vendor','both') ORDER BY name",
+        (book_id,),
+    ).fetchall()
 
 
 def invoice_lines(c: sqlite3.Connection, book_id: str, start: str, end: str) -> list[Any]:
     """Every line of the posted invoices dated in the window, with its account's type and subtype and whether it is
     taxable."""
-    return c.execute("SELECT i.id AS invoice_id, i.invoice_date, l.account_id, l.amount, l.taxable, a.type, a.subtype "
-                     "FROM fin_invoice_lines l JOIN fin_invoices i ON i.id=l.invoice_id "
-                     "JOIN fin_accounts a ON a.id=l.account_id WHERE i.book_id=? "
-                     "AND i.status IN ('sent','partial','paid') AND i.invoice_date BETWEEN ? AND ? "
-                     "ORDER BY i.id, l.id", (book_id, start, end)).fetchall()
+    return c.execute(
+        "SELECT i.id AS invoice_id, i.invoice_date, l.account_id, l.amount, l.taxable, a.type, a.subtype "
+        "FROM fin_invoice_lines l JOIN fin_invoices i ON i.id=l.invoice_id "
+        "JOIN fin_accounts a ON a.id=l.account_id WHERE i.book_id=? "
+        "AND i.status IN ('sent','partial','paid') AND i.invoice_date BETWEEN ? AND ? "
+        "ORDER BY i.id, l.id",
+        (book_id, start, end),
+    ).fetchall()
 
 
 def remittance_lines(c: sqlite3.Connection, book_id: str, account_ids: Sequence[str]) -> list[Any]:
@@ -80,15 +90,17 @@ def remittance_lines(c: sqlite3.Connection, book_id: str, account_ids: Sequence[
         "AND s.voided_at IS NULL) AS bill_paid "
         "FROM fin_bill_lines bl JOIN fin_bills b ON b.id=bl.bill_id "
         f"WHERE b.book_id=? AND b.status<>'void' AND bl.account_id IN ({_marks(account_ids)}) ORDER BY bl.id",
-        (book_id, *account_ids)).fetchall()
+        (book_id, *account_ids),
+    ).fetchall()
 
 
 def bill_lines(c: sqlite3.Connection, bill_ids: Sequence[str]) -> list[Any]:
     """Every line of these bills, each with the bill and the account it is on."""
     if not bill_ids:
         return []
-    return c.execute(f"SELECT bill_id, account_id FROM fin_bill_lines WHERE bill_id IN ({_marks(bill_ids)})",
-                     tuple(bill_ids)).fetchall()
+    return c.execute(
+        f"SELECT bill_id, account_id FROM fin_bill_lines WHERE bill_id IN ({_marks(bill_ids)})", tuple(bill_ids)
+    ).fetchall()
 
 
 def settlements(c: sqlite3.Connection, book_id: str, start: str, end: str) -> list[Any]:
@@ -108,7 +120,9 @@ def settlements(c: sqlite3.Connection, book_id: str, start: str, end: str) -> li
         "LEFT JOIN fin_money_accounts em ON s.from_kind='expected' AND em.id=s.from_id "
         "LEFT JOIN fin_accounts ga ON s.from_kind='account' AND ga.id=s.from_id "
         "WHERE s.book_id=? AND s.to_kind='bill' AND s.voided_at IS NULL AND s.settled_on BETWEEN ? AND ? "
-        "AND b.vendor_id IS NOT NULL ORDER BY s.id", (book_id, start, end)).fetchall()
+        "AND b.vendor_id IS NOT NULL ORDER BY s.id",
+        (book_id, start, end),
+    ).fetchall()
 
 
 def expense_lines(c: sqlite3.Connection, book_id: str, start: str, end: str) -> list[Any]:
@@ -119,11 +133,14 @@ def expense_lines(c: sqlite3.Connection, book_id: str, start: str, end: str) -> 
     post under the bill, so they are not here)."""
     feed = f"({_ORIGIN_FEED})"
     paid_on = f"COALESCE((SELECT f.txn_date FROM fin_feed_txns f WHERE f.id={feed}), l.entry_date)"
-    card = (f"CASE WHEN e.source='card' THEN 1 ELSE COALESCE((SELECT {_CARD_ROW} FROM fin_feed_txns f "
-            f"LEFT JOIN fin_money_accounts m ON m.id=f.money_account_id WHERE f.id={feed}), 0) END")
+    card = (
+        f"CASE WHEN e.source='card' THEN 1 ELSE COALESCE((SELECT {_CARD_ROW} FROM fin_feed_txns f "
+        f"LEFT JOIN fin_money_accounts m ON m.id=f.money_account_id WHERE f.id={feed}), 0) END"
+    )
     return c.execute(
         "SELECT account_id, vendor_key, amount, by_card FROM (SELECT l.id, l.account_id, l.contact_id AS vendor_key, "
         f"l.amount, {card} AS by_card, {paid_on} AS paid_on FROM fin_lines l JOIN fin_entries e ON e.id=l.entry_id "
         "JOIN fin_accounts a ON a.id=l.account_id WHERE l.book_id=? AND e.source IN ('bank','card') "
         "AND a.type='expense' AND l.contact_id<>'') WHERE paid_on BETWEEN ? AND ? ORDER BY id",
-        (book_id, start, end)).fetchall()
+        (book_id, start, end),
+    ).fetchall()

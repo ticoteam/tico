@@ -2,6 +2,7 @@
 fin_inbox by its event id, and the worker reads the provider's changes at once instead of at the next scheduled pass.
 The worker runs the mirror's pass for this install's books connection, outside any transaction. In rehearsal it calls
 no provider: the writes it would send are withheld and stay visible in the outbox (a rehearsal copy never pays)."""
+
 import logging
 import threading
 from collections.abc import Mapping, Sequence
@@ -16,11 +17,11 @@ from .store import tico
 from . import books_link, mirror, qbo, xero
 
 log = logging.getLogger(__name__)
-PROVIDERS = {"intuit": "quickbooks", "xero": "xero"}      # a trigger's preset -> the provider's name
-BOOKS = ("quickbooks", "xero")                                    # the providers a books connection can be
-ENVELOPE = "tico.finance.webhook"                          # the body HQ relays for one provider event
+PROVIDERS = {"intuit": "quickbooks", "xero": "xero"}  # a trigger's preset -> the provider's name
+BOOKS = ("quickbooks", "xero")  # the providers a books connection can be
+ENVELOPE = "tico.finance.webhook"  # the body HQ relays for one provider event
 REFUSED, KEPT, SEEN = "refused", "kept", "seen"
-SWEEP = 300.0                                              # seconds between passes without a ring
+SWEEP = 300.0  # seconds between passes without a ring
 REHEARSAL_WHY = "rehearsal copy: the write is held here and never sent to the provider"
 BELL = Bell()
 _worker: dict[str, Any] = {"thread": None, "stop": threading.Event(), "lock": threading.Lock(), "args": None}
@@ -103,8 +104,12 @@ def delivery(c: Any, preset: str, body: Mapping[str, object]) -> str:
         return REFUSED
     events = _events(provider, payload)
     if events is None:
-        log.warning("A relayed %s delivery (%s) has a payload in no shape this reads (%s): refused, nothing woken",
-                    provider, eid[:80], _shape_of(payload))
+        log.warning(
+            "A relayed %s delivery (%s) has a payload in no shape this reads (%s): refused, nothing woken",
+            provider,
+            eid[:80],
+            _shape_of(payload),
+        )
         return REFUSED
     held = [cid for cid, _, co in SX.books_connections(c, provider) if co == company]
     if len(held) != 1:
@@ -129,6 +134,7 @@ def _revoke_stopped(store: Any, vault: object, settings: Any, *, now: str) -> li
     """The grant of a book switched back to native is taken off at HQ here: the switch makes no HQ call, so the tokens
     stay until HQ has them off. Tried again on each pass, whatever mode the book is in. Returns what failed."""
     from ..hook_relay import link_of
+
     with store.read() as c:
         stopped = SX.stopped_books_grants(c)
         link = link_of(c, vault, settings) if stopped else None
@@ -141,8 +147,10 @@ def _revoke_stopped(store: Any, vault: object, settings: Any, *, now: str) -> li
         try:
             books_link.disconnect_books(store, vault, link, cid, provider, now=now)
         except books_link.BrokerFailed as failed:
-            problems.append(f"The Tico Gateway did not take off the {books_link.LABEL.get(provider, provider)} grant of a "
-                            f"stopped book ({failed.code})")
+            problems.append(
+                f"The Tico Gateway did not take off the {books_link.LABEL.get(provider, provider)} grant of a "
+                f"stopped book ({failed.code})"
+            )
     return problems
 
 
@@ -150,6 +158,7 @@ def _sync_pass(store: Any, vault: object, settings: Any, *, now: str) -> list[st
     """The books pass for this install's books connection, when its book is a provider's. A webhook waiting means the
     change feed is read now; the events it waited on are done once that read lands."""
     from ..hook_relay import link_of
+
     with store.read() as c:
         book = SL.book(c)
         if book is None or book.mode != "mirror" or not book.mirror_connection_id:
@@ -172,6 +181,7 @@ def _sync_pass(store: Any, vault: object, settings: Any, *, now: str) -> list[st
 
     def token(force: bool) -> str:
         return books_link.access_token(store, vault, link, cid, provider, now=now, force=force)
+
     if provider == "xero":
         if not tenant:
             return ["the Xero organisation is not known yet; connect Xero again"]
@@ -202,8 +212,9 @@ def start(store: Any, vault: object, settings: Any, *, rehearsal: bool = False) 
             return
         if _worker["stop"].is_set():
             _worker["stop"] = threading.Event()
-        made = threading.Thread(target=_loop, args=(store, vault, settings, rehearsal, _worker["stop"]),
-                                name="finance-books", daemon=True)
+        made = threading.Thread(
+            target=_loop, args=(store, vault, settings, rehearsal, _worker["stop"]), name="finance-books", daemon=True
+        )
         made.start()
         _worker["thread"] = made
 

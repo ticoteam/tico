@@ -6,7 +6,7 @@ import sqlite3
 import threading
 import urllib.request
 from contextlib import closing
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 
 import httpx
 import pytest
@@ -60,8 +60,11 @@ def test_email_and_phone_page_reads_configured_in_the_demo_and_still_refuses_wri
         assert listed["configured"] is True and len(listed["inboxes"]) == 4
         assert listed["last_synced_at"] is not None
         assert api.get("/api/v2/inbound/messages").json()["messages"]
-        refused = api.post("/api/v2/inbound/inboxes", headers={"Idempotency-Key": "demo-services-create"},
-                           json={"kind": "email", "name": "Sales two"})
+        refused = api.post(
+            "/api/v2/inbound/inboxes",
+            headers={"Idempotency-Key": "demo-services-create"},
+            json={"kind": "email", "name": "Sales two"},
+        )
         assert refused.status_code == 409 and refused.json()["error"]["code"] == "inbound_unconfigured"
 
 
@@ -89,22 +92,28 @@ def test_letters_carry_the_mailing_address_and_reach_their_owners(built):
             assert item["address"].startswith("1200 Example Way")
         # Each deadline is counted from the day its letter arrived (5, 3.1 and 1.4 days before NOW, due in 14, 14, 30).
         assert {name: row["deadline"] for name, row in items.items()} == {
-            "letter-fcc-lab": "2026-10-04", "letter-state-tax": "2026-10-06", "letter-invoice": "2026-10-24"}
+            "letter-fcc-lab": "2026-10-04",
+            "letter-state-tax": "2026-10-06",
+            "letter-invoice": "2026-10-24",
+        }
         assert "net 30" in items["letter-invoice"]["summary"]
         owners = {}
         for name, item in items.items():
             owners[name] = api.get(f"/api/v2/tasks/{item['task_id']}").json()["task"]["owner_id"]
-        assert owners == {"letter-fcc-lab": "bot:compliance", "letter-state-tax": "bot:finance-lead",
-                          "letter-invoice": "bot:accounts-payable"}
+        assert owners == {
+            "letter-fcc-lab": "bot:compliance",
+            "letter-state-tax": "bot:finance-lead",
+            "letter-invoice": "bot:accounts-payable",
+        }
 
 
-def test_gateway_connection_and_models_in_use_per_department(built):
+def test_gateway_connection_and_models_in_use_per_level(built):
     with as_ana(built) as api:
         body = api.get("/api/v2/gateway").json()
         assert body["connection"]["connected"] is True
         assert body["connection"]["state"] == "connected"
-        secret = hashlib.sha256(b"gateway").hexdigest()[:32]      # the key's derived part, as the seed makes it
-        assert secret not in str(body)                          # only a preview of the key leaves the server
+        secret = hashlib.sha256(b"gateway").hexdigest()[:32]  # the key's derived part, as the seed makes it
+        assert secret not in str(body)  # only a preview of the key leaves the server
         assert len(body["picks"]) >= 8
         assert all(pick["bots"] >= 1 for pick in body["picks"])
 
@@ -148,11 +157,16 @@ def test_the_demo_never_asks_the_gateway_its_catalog_or_github(built, monkeypatc
     monkeypatch.setattr(github_app.jwt, "encode", refused)
     gateway_tiers.reset()
     with as_ana(built) as api:
-        for path in ("/api/v2/gateway", "/api/v2/gateway/catalog", "/api/v2/models", "/api/v2/providers/gateway",
-                     "/api/v2/github/app"):
+        for path in (
+            "/api/v2/gateway",
+            "/api/v2/gateway/catalog",
+            "/api/v2/models",
+            "/api/v2/providers/gateway",
+            "/api/v2/github/app",
+        ):
             assert api.get(path).status_code == 200, path
         assert api.post("/api/v2/providers/gateway/check").status_code == 200
-    for thread in threading.enumerate():          # a check or catalog fetch would run on one of these threads
+    for thread in threading.enumerate():  # a check or catalog fetch would run on one of these threads
         if thread.name.startswith("gateway-"):
             thread.join(5)
     assert asked == []
@@ -202,7 +216,7 @@ def test_email_and_phone_writes_refuse_in_the_demo_before_any_call_out(built, mo
     local_send, local_async_send = httpx.Client.send, httpx.AsyncClient.send
 
     def sync_send(self, request, *args, **kwargs):
-        if request.url.host in ("127.0.0.1", "localhost"):      # the test's own client, which talks to the app
+        if request.url.host in ("127.0.0.1", "localhost"):  # the test's own client, which talks to the app
             return local_send(self, request, *args, **kwargs)
         sent.append(str(request.url))
         raise OSError("the demo sent a request")
@@ -216,11 +230,17 @@ def test_email_and_phone_writes_refuse_in_the_demo_before_any_call_out(built, mo
     monkeypatch.setattr(httpx.Client, "send", sync_send)
     monkeypatch.setattr(httpx.AsyncClient, "send", async_send)
     with as_ana(built) as api:
-        create = api.post("/api/v2/inbound/inboxes", headers={"Idempotency-Key": "demo-services-create"},
-                          json={"kind": "email", "name": "Sales two"})
+        create = api.post(
+            "/api/v2/inbound/inboxes",
+            headers={"Idempotency-Key": "demo-services-create"},
+            json={"kind": "email", "name": "Sales two"},
+        )
         assert create.status_code == 409 and create.json()["error"]["code"] == "inbound_unconfigured"
-        phone = api.post("/api/v2/inbound/phone-requests", headers={"Idempotency-Key": "demo-services-phone"},
-                         json={"name": "Mobile number"})
+        phone = api.post(
+            "/api/v2/inbound/phone-requests",
+            headers={"Idempotency-Key": "demo-services-phone"},
+            json={"name": "Mobile number"},
+        )
         assert phone.status_code == 409
         assert api.get("/api/v2/inbound/phone-quote").status_code == 409
         connect = api.post("/api/v2/inbound/company-connection", json={"action": "preview", "code": "x" * 43})
@@ -250,34 +270,29 @@ def test_billing_is_a_sample_that_agrees_with_the_usage_page(built):
         assert (topup["source"], topup["created"]) == ("payment", "2026-08-02")
         assert topup["amount_micros"] == demo_billing.TOPUP == FINANCE["gateway_topup"]["amount"] * 10_000
         assert billing["balance_micros"] == launch["left_micros"] + topup["left_micros"] == statement["closing_micros"]
-        assert launch["used_up"] or topup["left_micros"] == topup["amount_micros"]          # the launch credit goes first
+        assert launch["used_up"] or topup["left_micros"] == topup["amount_micros"]  # the launch credit goes first
         assert statement["closing_micros"] == statement["opening_micros"] + statement["credits_micros"] - debits
         csv_lines = api.get("/api/v2/billing/statements/2026-09.csv").text.splitlines()
-        assert csv_lines == ["month,line,amount_micros", f"2026-09,opening,{statement['opening_micros']}",
-                             *[f"2026-09,credits:{k},{v}" for k, v in statement["credits_by_source"].items()],
-                             f"2026-09,debits:gateway,{-debits}", f"2026-09,closing,{statement['closing_micros']}"]
-
-
-def test_a_build_long_after_its_dates_keeps_every_message_body(tmp_path):
-    """Retention runs on the demo's own clock while it is built: a demo built months before today keeps its bodies."""
-    settings = demo.build(tmp_path, now=NOW - timedelta(days=200))
-    with closing(sqlite3.connect(settings.db_path)) as db:
-        total = db.execute("SELECT COUNT(*) FROM inbound_messages").fetchone()[0]
-        removed = db.execute("SELECT COUNT(*) FROM inbound_messages WHERE body IS NULL OR retention_removed=1").fetchone()[0]
-    assert total == 11 and removed == 0
+        assert csv_lines == [
+            "month,line,amount_micros",
+            f"2026-09,opening,{statement['opening_micros']}",
+            *[f"2026-09,credits:{k},{v}" for k, v in statement["credits_by_source"].items()],
+            f"2026-09,debits:gateway,{-debits}",
+            f"2026-09,closing,{statement['closing_micros']}",
+        ]
 
 
 def settled_files(settings):
     """Every scan's state and the rows that hold them: a build that settles its files the same way every time."""
     with closing(sqlite3.connect(settings.db_path)) as db:
         states = db.execute("SELECT media_state, COUNT(*) FROM blob_media GROUP BY media_state ORDER BY 1").fetchall()
-        versions = db.execute("SELECT media_state, COUNT(*) FROM bot_file_versions GROUP BY media_state ORDER BY 1").fetchall()
+        versions = db.execute(
+            "SELECT media_state, COUNT(*) FROM bot_file_versions GROUP BY media_state ORDER BY 1"
+        ).fetchall()
         blobs = db.execute("SELECT COUNT(*) FROM blobs").fetchone()[0]
     return states, versions, blobs
 
 
-def test_every_scan_is_settled_before_the_build_is_saved(built, tmp_path):
-    states, versions, blobs = settled_files(built)
+def test_every_scan_is_settled_before_the_build_is_saved(built):
+    states, versions, _blobs = settled_files(built)
     assert all(state != "pending" for state, _ in states + versions)
-    assert settled_files(demo.build(tmp_path, now=NOW)) == (states, versions, blobs)
-

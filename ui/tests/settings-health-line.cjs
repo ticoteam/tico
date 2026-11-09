@@ -1,4 +1,4 @@
-// Health has no tab: General opens with one Health line (ui/health.js hlSummaryDraw). It counts Health's checks by
+// Health has no tab: General opens with one Health line (ui/health.ts hlSummaryDraw). It counts Health's checks by
 // severity with Settings' own issues (one a person must act on is urgent, the rest FYI), says "All good" when nothing
 // needs work, carries the alert dot, and shows a newer release with the owner's one Update (none for a member or when
 // Tico runs updates). Details opens #/settings/health: no tab highlighted, a way back to General, and the issues a
@@ -33,12 +33,12 @@ const NOTE = {kind: 'uncertain_work', title: 'Writer saved 1 stopped run for lat
       const url = new URL(route.request().url()), p = url.pathname;
       const json = (body, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
       if (url.origin !== 'https://tico-ui.test') return route.abort();
-      const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|css))$/);
+      const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/);
       if (ui && fs.existsSync(uiFile(ui[1])))
         return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]), 'utf8')});
       if (p.startsWith('/vendor/') && fs.existsSync(uiFile(p.slice(1)))) return route.fulfill({body: fs.readFileSync(uiFile(p.slice(1))),
         contentType: p.endsWith('.woff2') ? 'font/woff2' : 'application/javascript'});
-      if (p.endsWith('.js')) return route.fulfill({contentType: 'application/javascript', body: ''});
+      if (/\.(?:js|ts)$/.test(p)) return route.fulfill({contentType: 'application/javascript', body: ''});
       if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
       const config = {version: '0.5.10', app_name: 'Tico', update};
       if (p === '/api/me') return json({id: 'ana', role, name: 'Ana', email: 'ana@acme.example', cloud: true, registered: true, config});
@@ -68,11 +68,13 @@ const NOTE = {kind: 'uncertain_work', title: 'Writer saved 1 stopped run for lat
 
     await page.goto('https://tico-ui.test/#/settings');
     await page.locator('#settings-tabs').waitFor();
-    // The tab row: Health and Gateway are not tabs; More keeps System, Webhooks and Billing.
-    assert.deepEqual(await page.locator('#settings-tabs > [data-settings-tab]').evaluateAll(b => b.map(x => x.dataset.settingsTab)),
-      ['general', 'people', 'bots', 'devices', 'models', 'repos', 'tasks', 'history']);
+    // The tab row: Health, Gateway and Repositories are not tabs, Directory is a tab, Security is an admin's;
+    // More keeps Billing.
+    const tabs = await page.locator('#settings-tabs > [data-settings-tab]').evaluateAll(b => b.map(x => x.dataset.settingsTab));
+    assert.deepEqual(tabs.filter(t => t !== 'security'), ['general', 'people', 'bots', 'devices', 'models', 'tasks', 'directory', 'history']);
+    if (tabs.includes('security')) assert.equal(tabs.indexOf('security'), tabs.indexOf('history') - 1, 'Security sits before History');
     assert.deepEqual(await page.locator('#settings-more [data-settings-tab]').evaluateAll(b => b.map(x => x.dataset.settingsTab)),
-      ['system', 'webhooks', 'billing']);
+      ['billing']);
     // Bad checks and a person's issue are urgent, warn checks to fix, info checks and the rest of the issues FYI.
     await page.waitForFunction(() => document.querySelector('#settings-health-line [data-hl-count=urgent]'));
     await redraw();

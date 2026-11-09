@@ -16,10 +16,15 @@ pub struct Config {
 
 impl Config {
     pub fn load(path: &Path) -> Result<Config, String> {
-        let text = fs::read_to_string(path).map_err(|e| format!("cannot read {}: {e}", path.display()))?;
-        let value: Value = serde_json::from_str(&text).map_err(|e| format!("{} is not JSON: {e}", path.display()))?;
+        let text =
+            fs::read_to_string(path).map_err(|e| format!("cannot read {}: {e}", path.display()))?;
+        let value: Value = serde_json::from_str(&text)
+            .map_err(|e| format!("{} is not JSON: {e}", path.display()))?;
         match value {
-            Value::Object(data) => Ok(Config { path: path.to_path_buf(), data }),
+            Value::Object(data) => Ok(Config {
+                path: path.to_path_buf(),
+                data,
+            }),
             _ => Err(format!("{} is not a JSON object", path.display())),
         }
     }
@@ -31,7 +36,11 @@ impl Config {
         let tmp = dir.join(format!(".runner.json.{}", uuid::Uuid::new_v4().simple()));
         let text = serde_json::to_string_pretty(&Value::Object(self.data.clone())).unwrap();
         let result = (|| -> std::io::Result<()> {
-            let mut file = fs::OpenOptions::new().write(true).create_new(true).mode(0o600).open(&tmp)?;
+            let mut file = fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .mode(0o600)
+                .open(&tmp)?;
             file.write_all(text.as_bytes())?;
             file.sync_all()?;
             fs::set_permissions(&tmp, fs::Permissions::from_mode(0o600))?;
@@ -66,7 +75,10 @@ impl Config {
 
     /// `<config dir>/state-<runner_id>`, the directory both engines share.
     pub fn state_dir(&self) -> PathBuf {
-        self.path.parent().unwrap_or(Path::new(".")).join(format!("state-{}", self.runner_id()))
+        self.path
+            .parent()
+            .unwrap_or(Path::new("."))
+            .join(format!("state-{}", self.runner_id()))
     }
 
     /// This registration with `fresh`'s subscription profile keys in place of its own (a key `fresh` lacks is
@@ -84,7 +96,11 @@ impl Config {
 
     /// The bot's explicit checkout from `repos`, when the registration names one.
     pub fn repo_for(&self, bot: &str) -> Option<PathBuf> {
-        self.data.get("repos").and_then(|r| r.get(bot)).and_then(|p| p.as_str()).map(PathBuf::from)
+        self.data
+            .get("repos")
+            .and_then(|r| r.get(bot))
+            .and_then(|p| p.as_str())
+            .map(PathBuf::from)
     }
 }
 
@@ -125,17 +141,27 @@ pub fn machine_capacity(configured: Option<&Value>) -> usize {
     if let Some(v) = set {
         return v.clamp(1, MAX_TURNS as i64) as usize;
     }
-    let cpus = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1);
+    let cpus = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(1);
     let memory_gb = unsafe {
         let pages = libc::sysconf(libc::_SC_PHYS_PAGES);
         let size = libc::sysconf(libc::_SC_PAGESIZE);
-        if pages > 0 && size > 0 { pages as f64 * size as f64 / (1u64 << 30) as f64 } else { 8.0 }
+        if pages > 0 && size > 0 {
+            pages as f64 * size as f64 / (1u64 << 30) as f64
+        } else {
+            8.0
+        }
     };
     sized(cpus, memory_gb)
 }
 
 fn sized(cpus: usize, memory_gb: f64) -> usize {
-    4.max((cpus * TURNS_PER_CPU).min((memory_gb * TURNS_PER_GB) as usize).min(MAX_AUTO_TURNS))
+    4.max(
+        (cpus * TURNS_PER_CPU)
+            .min((memory_gb * TURNS_PER_GB) as usize)
+            .min(MAX_AUTO_TURNS),
+    )
 }
 
 /// The turns that may hold a place here: the owner's "Turns at once" from the heartbeat reply, or the machine's
@@ -174,22 +200,44 @@ mod tests {
         assert_eq!(again.data["mail_key"], serde_json::json!({"x": 1}));
         assert_eq!(again.data["zeta"], serde_json::json!([1, 2]));
         assert_eq!(again.data.keys().next().unwrap(), "runner_id");
-        assert_eq!(fs::metadata(&path).unwrap().permissions().mode() & 0o777, 0o600);
+        assert_eq!(
+            fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
         assert_eq!(again.state_dir(), dir.join("state-r1"));
         fs::remove_dir_all(dir).ok();
     }
 
     #[test]
     fn only_the_profile_keys_are_taken_from_a_fresh_read() {
-        let start: Map<String, Value> = serde_json::from_str(r#"{"url":"http://a","profiles":{"old":{"dir":"/p/old"}},"default_profile":"old"}"#).unwrap();
-        let config = Config { path: PathBuf::from("/x/runner.json"), data: start };
+        let start: Map<String, Value> = serde_json::from_str(
+            r#"{"url":"http://a","profiles":{"old":{"dir":"/p/old"}},"default_profile":"old"}"#,
+        )
+        .unwrap();
+        let config = Config {
+            path: PathBuf::from("/x/runner.json"),
+            data: start,
+        };
         let disk: Map<String, Value> = serde_json::from_str(r#"{"url":"http://b","profiles":{"new":{"dir":"/p/new"}},"bot_profiles":{"ops":"new"}}"#).unwrap();
         let now = config.with_profiles_of(&disk);
-        assert_eq!(now.data["profiles"], serde_json::json!({"new": {"dir": "/p/new"}}));
+        assert_eq!(
+            now.data["profiles"],
+            serde_json::json!({"new": {"dir": "/p/new"}})
+        );
         assert_eq!(now.data["bot_profiles"], serde_json::json!({"ops": "new"}));
-        assert!(!now.data.contains_key("default_profile"), "a key taken out of the file goes");
-        assert_eq!(now.url(), "http://a", "everything else stays as read at start");
-        assert_eq!(config.data["profiles"], serde_json::json!({"old": {"dir": "/p/old"}}));
+        assert!(
+            !now.data.contains_key("default_profile"),
+            "a key taken out of the file goes"
+        );
+        assert_eq!(
+            now.url(),
+            "http://a",
+            "everything else stays as read at start"
+        );
+        assert_eq!(
+            config.data["profiles"],
+            serde_json::json!({"old": {"dir": "/p/old"}})
+        );
     }
 
     #[test]
@@ -198,7 +246,15 @@ mod tests {
         assert_eq!(machine_capacity(Some(&Value::from("3"))), 3);
         assert_eq!(machine_capacity(Some(&Value::from(80))), 80);
         assert_eq!(machine_capacity(Some(&Value::from(1000))), 256);
-        assert_eq!((sized(2, 16.0), sized(2, 2.0), sized(1, 1.0), sized(64, 512.0)), (10, 6, 4, 64));
+        assert_eq!(
+            (
+                sized(2, 16.0),
+                sized(2, 2.0),
+                sized(1, 1.0),
+                sized(64, 512.0)
+            ),
+            (10, 6, 4, 64)
+        );
         assert!(machine_capacity(Some(&Value::from("auto"))) >= 4);
     }
 

@@ -1,4 +1,4 @@
-// A bot's editable sidebar (backend/bot_task_tabs.py, ui/app/bot-sidebar.js): until the layout arrives the rail says
+// A bot's editable sidebar (backend/bot_task_tabs.py, ui/app/bot-sidebar.ts): until the layout arrives the rail says
 // Loading; one pencil (for someone who may edit) opens edit mode in place, with Done and Cancel. There each widget
 // can be moved by its handle, hidden with its eye and given a height by its bottom edge (with Reset); every task tab is
 // a pill that can be dragged, opened (Name, Show count, conditions, Delete, Save) or added with +. Done saves it all in
@@ -25,9 +25,9 @@ const TASKS = [
   task('t-qa', 'Run the release check', {owner_id: 'bot:qa', requester_id: 'bot:lead'}),
 ];
 const TYPES = [{id: 'general', name: 'General', steps: []}, {id: 'roadmap', name: 'Product roadmap', role: 'product-roadmap', steps: []}];
-const OTHERS = {name: 'Assigned to Others', show_count: true, conditions: [{field: 'asked_by', value: 'this_bot'},
+const OTHERS = {name: 'Assigned to others', show_count: true, conditions: [{field: 'asked_by', value: 'this_bot'},
   {field: 'assigned_to', value: 'others'}, {field: 'status', value: ['open', 'doing', 'waiting']}]};
-const DEFAULT = [{builtin: 'needs', name: 'Needs You', show_count: true}, {builtin: 'active', name: 'Doing', show_count: true},
+const DEFAULT = [{builtin: 'needs', name: 'Needs you', show_count: true}, {builtin: 'active', name: 'Doing', show_count: true},
                  {builtin: 'blocked', name: 'Blocked', show_count: true}, OTHERS];
 const CONDITIONS = {
   needs: [{field: 'needs', value: 'you'}],
@@ -59,7 +59,7 @@ const matches = (bot, tab, t) => (t.owner_id === 'bot:' + bot || t.requester_id 
 
 async function open(browser, viewport, colorScheme, server) {
   const context = await browser.newContext({viewport, colorScheme, serviceWorkers: 'block'});
-  // The app is dark unless this browser saved another theme (ui/theme.js).
+  // The app is dark unless this browser saved another theme (ui/theme.ts).
   await context.addInitScript(theme => localStorage.setItem('tico.theme', theme), colorScheme);
   const page = await context.newPage();
   const errors = [];
@@ -69,7 +69,7 @@ async function open(browser, viewport, colorScheme, server) {
     const json = body => route.fulfill({contentType: 'application/json', body: JSON.stringify(body)});
     if (/\/marked\.min\.js$/.test(p)) return route.fulfill({contentType: 'application/javascript', body: 'window.marked={parse:s=>String(s)}'});
     if (url.origin !== 'https://tico-ui.test') return route.abort();
-    const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|css))$/);
+    const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/);
     if (ui && fs.existsSync(uiFile(ui[1]))) return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]), 'utf8')});
     if (p === '/vendor/fonts/material-symbols-outlined.woff2') return route.fulfill({contentType: 'font/woff2', path: uiFile('vendor/fonts/material-symbols-outlined.woff2')});
     if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
@@ -155,7 +155,7 @@ async function open(browser, viewport, colorScheme, server) {
       release();
       await page.waitForFunction(() => document.querySelector('#cnt-c3')?.textContent.trim() === '1');
       assert.equal(await rail.locator('.bot-rail-loading').isHidden(), true);
-      assert.deepEqual(await tabTexts(), ['Needs You 1', 'Doing 2', 'Blocked 1', 'Assigned to Others 1'], at);
+      assert.deepEqual(await tabTexts(), ['Needs you 1', 'Doing 2', 'Blocked 1', 'Assigned to others 1'], at);
       await pill('Blocked').click();
       assert.deepEqual(await rail.locator('#t-blocked .ttl').allInnerTexts(), ['Wait for QA']);
       assert.match(await rail.locator('#t-blocked .trow-waits').innerText(), /Waiting for the test machine.*since/);
@@ -163,7 +163,7 @@ async function open(browser, viewport, colorScheme, server) {
       // Rows come a page (here one) at a time; the counts above already leave the blocked task out of Doing.
       assert.deepEqual(await rail.locator('#t-open .ttl').allInnerTexts(), ['Ship the release notes'], at);
       assert.deepEqual(await order(), ['tasks', 'updates', 'files']);
-      await pill('Assigned to Others').click();
+      await pill('Assigned to others').click();
       assert.deepEqual(await rail.locator('#t-c3 .trow .ttl').allInnerTexts(), ['Run the release check']);
       // One pencil, no gear or board icon.
       await rail.locator('#bot-sidebar-edit:not([hidden])').waitFor();
@@ -185,10 +185,10 @@ async function open(browser, viewport, colorScheme, server) {
       await dialog.waitFor();
       await dialog.locator('[data-filter-name]').fill('Busy');
       await dialog.getByRole('button', {name: 'Save'}).click();
-      assert.deepEqual((await tabTexts()).slice(0, 2), ['Needs You 1', 'Busy 2']);
+      assert.deepEqual((await tabTexts()).slice(0, 2), ['Needs you 1', 'Busy 2']);
       await rail.locator('#bot-sidebar-cancel').click();
       assert.equal(server.puts.length, 0);
-      assert.deepEqual(await tabTexts(), ['Needs You 1', 'Doing 2', 'Blocked 1', 'Assigned to Others 1']);
+      assert.deepEqual(await tabTexts(), ['Needs you 1', 'Doing 2', 'Blocked 1', 'Assigned to others 1']);
       assert.equal(await widget('files').getAttribute('data-off'), null);
 
       // Edit again: hide Files, move Updates up by keyboard and down past Files by dragging its handle, set Tasks' height
@@ -270,14 +270,14 @@ async function open(browser, viewport, colorScheme, server) {
       for (let n = 0; n < 40; n++) await page.mouse.move(bar.x + 4 + n % 2, from.y + from.height / 2);
       await page.mouse.up();
       assert.equal(await dialog.isVisible(), false, 'a drag does not open the pop-up');
-      assert.deepEqual((await tabTexts()).map(s => s.replace(/ \d+$/, '')), ['product tasks', 'Needs You', 'Doing', 'Blocked', 'Assigned to Others']);
+      assert.deepEqual((await tabTexts()).map(s => s.replace(/ \d+$/, '')), ['product tasks', 'Needs you', 'Doing', 'Blocked', 'Assigned to others']);
       await pill('Blocked').focus();
       await page.keyboard.press('ArrowRight');
       await pill('Blocked').focus();
       await page.keyboard.press('ArrowLeft');
-      assert.deepEqual((await tabTexts()).map(s => s.replace(/ \d+$/, '')), ['product tasks', 'Needs You', 'Doing', 'Blocked', 'Assigned to Others']);
+      assert.deepEqual((await tabTexts()).map(s => s.replace(/ \d+$/, '')), ['product tasks', 'Needs you', 'Doing', 'Blocked', 'Assigned to others']);
       // Delete removes a tab.
-      await pill('Assigned to Others').click();
+      await pill('Assigned to others').click();
       await dialog.locator('[data-filter-delete]').click();
       await dialog.waitFor({state: 'hidden'});
 
@@ -313,13 +313,13 @@ async function open(browser, viewport, colorScheme, server) {
       assert.deepEqual(server.puts[1], server.puts[0]);
       assert.deepEqual(server.puts[1], {bot: 'lead', body: {
         tabs: [{name: 'product tasks', show_count: true, conditions: [{field: 'status', value: ['open', 'doing', 'waiting', 'done']}, {field: 'type', value: ['roadmap']}]},
-               {builtin: 'needs', name: 'Needs You', show_count: true, conditions: CONDITIONS.needs}, {builtin: 'active', name: 'Doing', show_count: false, conditions: CONDITIONS.active},
+               {builtin: 'needs', name: 'Needs you', show_count: true, conditions: CONDITIONS.needs}, {builtin: 'active', name: 'Doing', show_count: false, conditions: CONDITIONS.active},
                {builtin: 'blocked', name: 'Blocked', show_count: true, conditions: CONDITIONS.blocked}],
         widgets: [{id: 'tasks', hidden: false, height: null},
                   {id: 'files', hidden: true, height: null}, {id: 'updates', hidden: false, height: updatesHeight}]}});
       assert.equal(await rail.evaluate(el => el.classList.contains('editing')), false);
       await page.waitForFunction(() => document.querySelector('#cnt-c0')?.textContent.trim() === '2');
-      assert.deepEqual(await tabTexts(), ['product tasks 2', 'Needs You 1', 'Doing', 'Blocked 1']);
+      assert.deepEqual(await tabTexts(), ['product tasks 2', 'Needs you 1', 'Doing', 'Blocked 1']);
       await pill('product tasks').click();
       // A page at a time: Show more reads the next, and a refresh keeps as many as were read, also a refresh that
       // starts while Show more is on its way.
@@ -362,7 +362,7 @@ async function open(browser, viewport, colorScheme, server) {
       await dialog.getByRole('button', {name: 'Reset to default'}).click();
       assert.equal(await dialog.locator('[data-cond-field]').count(), 3);
       await dialog.getByRole('button', {name: 'Save'}).click();
-      await pill('Needs You').click();
+      await pill('Needs you').click();
       await dialog.waitFor();
       assert.equal(await dialog.locator('[data-cond-field]').inputValue(), 'needs');
       assert.equal(await dialog.locator('[data-cond-value="0"]').inputValue(), 'you');

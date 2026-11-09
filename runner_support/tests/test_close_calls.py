@@ -15,29 +15,50 @@ CREATED = "2026-09-19T18:00:00+00:00"
 
 
 def call(cid="acti_call", **changes):
-    row = {"id": cid, "lead_id": "lead_1", "contact_id": "cont_1", "user_id": "user_1",
-           "direction": "outbound", "duration": 120, "status": "completed",
-           "date_created": CREATED, "date_updated": "2026-09-19T18:03:00+00:00",
-           "activity_at": CREATED, "remote_phone": "+16195550123",
-           "recording_url": "https://api.close.com/secret-recording"}
+    row = {
+        "id": cid,
+        "lead_id": "lead_1",
+        "contact_id": "cont_1",
+        "user_id": "user_1",
+        "direction": "outbound",
+        "duration": 120,
+        "status": "completed",
+        "date_created": CREATED,
+        "date_updated": "2026-09-19T18:03:00+00:00",
+        "activity_at": CREATED,
+        "remote_phone": "+16195550123",
+        "recording_url": "https://api.close.com/secret-recording",
+    }
     row.update(changes)
     return row
 
 
 def meeting(cid="acti_meeting", **changes):
-    row = {"id": cid, "lead_id": "lead_1", "user_id": "user_1", "title": "Pricing demo",
-           "starts_at": CREATED, "ends_at": "2026-09-19T18:30:00+00:00",
-           "status": "completed", "date_created": CREATED, "activity_at": CREATED,
-           "date_updated": "2026-09-19T18:35:00+00:00",
-           "provider_calendar_event_id": "calendar-event-1", "attached_call_ids": ["acti_call"]}
+    row = {
+        "id": cid,
+        "lead_id": "lead_1",
+        "user_id": "user_1",
+        "title": "Pricing demo",
+        "starts_at": CREATED,
+        "ends_at": "2026-09-19T18:30:00+00:00",
+        "status": "completed",
+        "date_created": CREATED,
+        "activity_at": CREATED,
+        "date_updated": "2026-09-19T18:35:00+00:00",
+        "provider_calendar_event_id": "calendar-event-1",
+        "attached_call_ids": ["acti_call"],
+    }
     row.update(changes)
     return row
 
 
 def transcript(words="Please send pricing."):
-    return {"utterances": [{"speaker_label": "Dana Reyes", "speaker_side": "contact",
-                            "start": 1.2, "end": 3.4, "text": words}],
-            "summary_text": "Pricing requested."}
+    return {
+        "utterances": [
+            {"speaker_label": "Dana Reyes", "speaker_side": "contact", "start": 1.2, "end": 3.4, "text": words}
+        ],
+        "summary_text": "Pricing requested.",
+    }
 
 
 OWNER = "ana@acme.example"
@@ -78,12 +99,16 @@ class Close:
     def __call__(self, url, params=None):
         self.seen.append((url, params))
         if url == "activity/call/":
-            rows = [r for r in self.calls if params["date_created__gte"] <= r["date_created"]
-                    <= params["date_created__lte"]]
+            rows = [
+                r for r in self.calls if params["date_created__gte"] <= r["date_created"] <= params["date_created__lte"]
+            ]
             return {"data": rows if not params["_skip"] else [], "has_more": False}
         if url == "activity/meeting/":
-            rows = [r for r in self.meetings if params["date_created__gte"] <= r["date_created"]
-                    <= params["date_created__lte"]]
+            rows = [
+                r
+                for r in self.meetings
+                if params["date_created__gte"] <= r["date_created"] <= params["date_created__lte"]
+            ]
             return {"data": rows if not params["_skip"] else [], "has_more": False}
         if url.startswith("activity/call/"):
             return {**self.calls[0], "recording_transcript": self.call_transcript}
@@ -101,13 +126,18 @@ class Close:
 @pytest.fixture
 def setup():
     with tempfile.TemporaryDirectory() as directory:
+
         def build(close, hub=None):
             client = hub or Hub()
             worker = CC.CloseCallImporter(
                 {"url": "https://tico.test", "token": "runner-token", "projects_dir": directory},
-                client=client, transport=close, state=State(Path(directory) / "state"),
-                now=lambda: NOW)
+                client=client,
+                transport=close,
+                state=State(Path(directory) / "state"),
+                now=lambda: NOW,
+            )
             return worker, client
+
         yield build
 
 
@@ -132,16 +162,19 @@ def test_a_pending_activity_close_deleted_leaves_the_queue_and_the_rest_are_stil
     close = Close([call()], call_transcript=None)
     worker, hub = setup(close)
     worker.tick()
-    worker.state.close_pending("call", "acti_gone", created="2026-09-18T18:00:00+00:00", checked="2026-09-18T18:00:00+00:00")
+    worker.state.close_pending(
+        "call", "acti_gone", created="2026-09-18T18:00:00+00:00", checked="2026-09-18T18:00:00+00:00"
+    )
     plain = close.__call__
 
     def deleted(url, params=None):
         if url == "activity/call/acti_gone/":
             raise CC.CloseError("Close returned HTTP 404", 404)
         return plain(url, params)
+
     worker.transport = deleted
     worker.now = lambda: NOW.replace(hour=21)
     close.call_transcript = transcript()
-    assert worker.tick() == 1                       # the call behind it came in
+    assert worker.tick() == 1  # the call behind it came in
     assert [p["external_id"] for p in worker.state.close_pending()] == []
     assert hub.posts[-1] == ("imports/sources/close/status", {"state": "ok", "pending": 0, "imported": 1})

@@ -37,10 +37,14 @@ PAGES = 50
 TIMEOUT = 60
 MAX_RESPONSE = 5_000_000
 ID = re.compile(r"^[A-Za-z0-9_]{1,80}$")
-CALL_FIELDS = ("id,lead_id,contact_id,user_id,direction,duration,"
-               "date_created,date_updated,activity_at,phone,remote_phone,status,disposition")
-MEETING_FIELDS = ("id,lead_id,user_id,title,starts_at,ends_at,duration,actual_duration,"
-                  "status,date_created,date_updated,activity_at,provider_calendar_event_id,attached_call_ids")
+CALL_FIELDS = (
+    "id,lead_id,contact_id,user_id,direction,duration,"
+    "date_created,date_updated,activity_at,phone,remote_phone,status,disposition"
+)
+MEETING_FIELDS = (
+    "id,lead_id,user_id,title,starts_at,ends_at,duration,actual_duration,"
+    "status,date_created,date_updated,activity_at,provider_calendar_event_id,attached_call_ids"
+)
 
 
 class CloseError(RuntimeError):
@@ -116,9 +120,15 @@ def normalize_utterances(transcript):
             end = max(start, min(86_400_000, round(float(row.get("end") or 0) * 1000)))
         except (TypeError, ValueError, OverflowError):
             continue
-        out.append({"text": words, "start_ms": start, "end_ms": end,
-                    "speaker": str(row.get("speaker_label") or "").strip()[:100],
-                    "side": str(row.get("speaker_side") or "").strip()[:40]})
+        out.append(
+            {
+                "text": words,
+                "start_ms": start,
+                "end_ms": end,
+                "speaker": str(row.get("speaker_label") or "").strip()[:100],
+                "side": str(row.get("speaker_side") or "").strip()[:40],
+            }
+        )
     if len(rows) > 10_000 or sum(len(t["text"]) for t in out) > 1_000_000:
         raise CloseError("Close transcript exceeds the import limit")
     return out
@@ -127,8 +137,9 @@ def normalize_utterances(transcript):
 class CloseCallImporter:
     """Compatibility name for the installed close-calls runner; syncs calls and meetings."""
 
-    def __init__(self, config, directory=None, *, client=None, transport=None, state=None, now=None,
-                 backfill_days=None):
+    def __init__(
+        self, config, directory=None, *, client=None, transport=None, state=None, now=None, backfill_days=None
+    ):
         self.config = config
         self.client = client or Client(config["url"], config["token"], timeout=60, retries=1)
         self.projects = Path(config["projects_dir"])
@@ -156,21 +167,30 @@ class CloseCallImporter:
 
     def ready(self):
         if self.remote and not self.key():
-            raise RuntimeError("Close API key missing on this Mac: write CLOSE_API_KEY to "
-                               + SECRET_FILE + " (the same value as secrets/sales-ops.env)")
+            raise RuntimeError(
+                "Close API key missing on this Mac: write CLOSE_API_KEY to "
+                + SECRET_FILE
+                + " (the same value as secrets/sales-ops.env)"
+            )
 
     def http(self, url, params=None):
         target = API + url
         if params:
             target += "?" + urllib.parse.urlencode({k: v for k, v in params.items() if v not in (None, "")})
-        request = urllib.request.Request(target, headers={
-            "Authorization": "Basic " + base64.b64encode((self.key() + ":").encode()).decode(),
-            "Accept": "application/json", "User-Agent": "Tico-CloseTranscripts/1"})
+        request = urllib.request.Request(
+            target,
+            headers={
+                "Authorization": "Basic " + base64.b64encode((self.key() + ":").encode()).decode(),
+                "Accept": "application/json",
+                "User-Agent": "Tico-CloseTranscripts/1",
+            },
+        )
         try:
             with urllib.request.urlopen(request, timeout=TIMEOUT) as response:
                 payload = response.read(MAX_RESPONSE + 1)
         except urllib.error.HTTPError as exc:
-            raise CloseError("Close returned HTTP " + str(exc.code), exc.code) from None
+            with exc:
+                raise CloseError("Close returned HTTP " + str(exc.code), exc.code) from None
         except (urllib.error.URLError, TimeoutError, OSError):
             raise CloseError("Close could not be reached") from None
         if len(payload) > MAX_RESPONSE:
@@ -191,8 +211,10 @@ class CloseCallImporter:
     def lead(self, lead_id):
         if lead_id not in self.leads:
             row = self.lookup("lead/" + lead_id + "/", {"_fields": "display_name,url"}) if lead_id else {}
-            self.leads[lead_id] = {"name": str(row.get("display_name") or "").strip(),
-                                   "url": lead_link(lead_id, row.get("url"))}
+            self.leads[lead_id] = {
+                "name": str(row.get("display_name") or "").strip(),
+                "url": lead_link(lead_id, row.get("url")),
+            }
         return self.leads[lead_id]
 
     def user(self, user_id):
@@ -215,8 +237,7 @@ class CloseCallImporter:
         stamp = "date_created"
         rows, skip = [], 0
         for _ in range(PAGES):
-            params = {"_fields": fields, stamp + "__gte": since, stamp + "__lte": until,
-                      "_skip": skip, "_limit": PAGE}
+            params = {"_fields": fields, stamp + "__gte": since, stamp + "__lte": until, "_skip": skip, "_limit": PAGE}
             # A meeting may start after it was created. The pending queue revisits it
             # after it ends and after Close adds a transcript.
             page = self.transport("activity/" + kind + "/", params)
@@ -230,12 +251,10 @@ class CloseCallImporter:
             if not part:
                 raise CloseError("Close pagination did not advance")
         # Never move a cursor past unseen activities.
-        raise CloseError("Close returned over " + str(PAGES * PAGE) + " " + kind
-                         + " activities in one pull")
+        raise CloseError("Close returned over " + str(PAGES * PAGE) + " " + kind + " activities in one pull")
 
     def details(self, kind, activity):
-        fields = (CALL_FIELDS + ",recording_transcript" if kind == "call"
-                  else MEETING_FIELDS + ",transcripts")
+        fields = CALL_FIELDS + ",recording_transcript" if kind == "call" else MEETING_FIELDS + ",transcripts"
         row = self.transport("activity/" + kind + "/" + activity["id"] + "/", {"_fields": fields})
         if not isinstance(row, dict):
             raise CloseError("Close returned no " + kind + " details")
@@ -259,48 +278,74 @@ class CloseCallImporter:
         if not duration and turns:
             duration = max(t["end_ms"] for t in turns) / 1000
         ended = end or start + timedelta(seconds=duration)
-        context = {"lead_id": lead_id, "lead_name": lead["name"], "lead_url": lead["url"],
-                   "close_user": rep, "close_activity_id": cid,
-                   "close_type": kind}
+        context = {
+            "lead_id": lead_id,
+            "lead_name": lead["name"],
+            "lead_url": lead["url"],
+            "close_user": rep,
+            "close_activity_id": cid,
+            "close_type": kind,
+        }
         if kind == "call":
             direction = str(row.get("direction") or "").strip().lower()
-            context.update(contact_name=self.contact(ident(row.get("contact_id"))),
-                           phone=str(row.get("remote_phone") or row.get("phone") or "").strip(),
-                           direction=direction)
+            context.update(
+                contact_name=self.contact(ident(row.get("contact_id"))),
+                phone=str(row.get("remote_phone") or row.get("phone") or "").strip(),
+                direction=direction,
+            )
             title = "Call with " + (lead["name"] or "an unnamed lead") + " (" + (direction or "call") + ")"
         else:
             title = str(row.get("title") or "").strip() or "Close meeting with " + (lead["name"] or "a lead")
             direction = ""
-        return {"source": SOURCE, "resource_type": kind, "external_id": cid,
-                "owner_email": rep or self.fallback_owner(), "title": title[:300],
-                "started": start.isoformat(), "ended": ended.isoformat(),
-                "duration_ms": min(86_400_000, round(duration * 1000)),
-                "context": {k: v for k, v in context.items() if v},
-                "source_updated_at": (moment(row.get("date_updated")) or self.now()).isoformat(),
-                "transcript_index": transcript_index,
-                "summary_text": summary,
-                "turns": turns,
-                "calendar_event_id": str(row.get("provider_calendar_event_id") or "")[:500] if kind == "meeting" else "",
-                "attached_call_ids": [i for i in (row.get("attached_call_ids") or []) if ident(i)][:20]
-                if kind == "meeting" else []}
+        return {
+            "source": SOURCE,
+            "resource_type": kind,
+            "external_id": cid,
+            "owner_email": rep or self.fallback_owner(),
+            "title": title[:300],
+            "started": start.isoformat(),
+            "ended": ended.isoformat(),
+            "duration_ms": min(86_400_000, round(duration * 1000)),
+            "context": {k: v for k, v in context.items() if v},
+            "source_updated_at": (moment(row.get("date_updated")) or self.now()).isoformat(),
+            "transcript_index": transcript_index,
+            "summary_text": summary,
+            "turns": turns,
+            "calendar_event_id": str(row.get("provider_calendar_event_id") or "")[:500] if kind == "meeting" else "",
+            "attached_call_ids": [i for i in (row.get("attached_call_ids") or []) if ident(i)][:20]
+            if kind == "meeting"
+            else [],
+        }
 
     def import_activity(self, kind, row):
         cid = row["id"]
-        complete = (str(row.get("status") or "").lower() == "completed")
+        complete = str(row.get("status") or "").lower() == "completed"
         if not complete:
-            self.state.close_pending(kind, cid, created=(row.get("ends_at") if kind == "meeting" else None)
-                                     or row.get("date_created") or self.now().isoformat(),
-                                     checked=self.now().isoformat())
+            self.state.close_pending(
+                kind,
+                cid,
+                created=(row.get("ends_at") if kind == "meeting" else None)
+                or row.get("date_created")
+                or self.now().isoformat(),
+                checked=self.now().isoformat(),
+            )
             return False
         detail = self.details(kind, row)
-        transcripts = ([detail.get("recording_transcript")] if kind == "call"
-                       else detail.get("transcripts") or [])
-        usable = [(index, part) for index, part in enumerate(transcripts)
-                  if isinstance(part, dict) and normalize_utterances(part)]
+        transcripts = [detail.get("recording_transcript")] if kind == "call" else detail.get("transcripts") or []
+        usable = [
+            (index, part)
+            for index, part in enumerate(transcripts)
+            if isinstance(part, dict) and normalize_utterances(part)
+        ]
         if not usable:
-            self.state.close_pending(kind, cid, created=(detail.get("ends_at") if kind == "meeting" else None)
-                                     or row.get("date_created") or self.now().isoformat(),
-                                     checked=self.now().isoformat())
+            self.state.close_pending(
+                kind,
+                cid,
+                created=(detail.get("ends_at") if kind == "meeting" else None)
+                or row.get("date_created")
+                or self.now().isoformat(),
+                checked=self.now().isoformat(),
+            )
             return False
         changed = False
         for index, part in usable:
@@ -313,8 +358,16 @@ class CloseCallImporter:
                 owner = self.fallback_owner()
                 if body["owner_email"] == owner:
                     raise
-                log("Tico Close transcripts: " + body["owner_email"] + " is not on the Tico roster; "
-                    + kind + " " + cid + " is owned by " + owner)
+                log(
+                    "Tico Close transcripts: "
+                    + body["owner_email"]
+                    + " is not on the Tico roster; "
+                    + kind
+                    + " "
+                    + cid
+                    + " is owned by "
+                    + owner
+                )
                 result = self.client.post("imports/transcripts", {**body, "owner_email": owner})
             changed = changed or bool(result.get("changed"))
         self.state.close_pending(kind, cid, remove=True)
@@ -331,11 +384,13 @@ class CloseCallImporter:
         imported, seen = 0, set()
         for kind in ("call", "meeting"):
             source = "close-transcripts:" + kind
-            cursor = self.state.import_cursor(source) or (
-                self.now() - timedelta(days=LOOKBACK_DAYS)).isoformat()
+            cursor = self.state.import_cursor(source) or (self.now() - timedelta(days=LOOKBACK_DAYS)).isoformat()
             recent = (self.now() - timedelta(hours=RECENT_HOURS)).isoformat()
-            since = ((self.now() - timedelta(days=self.backfill_days)).isoformat()
-                     if self.backfill_days else min(cursor, recent))
+            since = (
+                (self.now() - timedelta(days=self.backfill_days)).isoformat()
+                if self.backfill_days
+                else min(cursor, recent)
+            )
             window_start = moment(since)
             until = self.now()
             while window_start < until and not self.stop.is_set():
@@ -376,15 +431,16 @@ class CloseCallImporter:
                     self.state.close_pending(kind, cid, created=pending["created"], checked=self.now().isoformat())
                 continue
             imported += bool(self.import_activity(kind, detail))
-        self.client.post("imports/sources/close/status", {
-            "state": "ok", "pending": len(self.state.close_pending(limit=1_000_000)),
-            "imported": imported})
+        self.client.post(
+            "imports/sources/close/status",
+            {"state": "ok", "pending": len(self.state.close_pending(limit=1_000_000)), "imported": imported},
+        )
         return imported
 
     def run(self):
         from .freshness import CodeWatch
-        cloud = Outage("Tico Close transcripts", "pull failed", "pull still failing",
-                       "pull working again")
+
+        cloud = Outage("Tico Close transcripts", "pull failed", "pull still failing", "pull working again")
         watch = CodeWatch("Tico Close transcripts")
         failures = 0
         while not self.stop.is_set():
@@ -397,11 +453,18 @@ class CloseCallImporter:
                 failures += 1
                 cloud.failed(exc)
                 try:
-                    self.client.post("imports/sources/close/status", {
-                        "state": "error", "error_code": "missing_key" if isinstance(exc, RuntimeError)
-                        and not isinstance(exc, CloseError) else "sync_error", "pending": len(self.state.close_pending()) if self.state else 0})
+                    self.client.post(
+                        "imports/sources/close/status",
+                        {
+                            "state": "error",
+                            "error_code": "missing_key"
+                            if isinstance(exc, RuntimeError) and not isinstance(exc, CloseError)
+                            else "sync_error",
+                            "pending": len(self.state.close_pending()) if self.state else 0,
+                        },
+                    )
                 except Exception:
                     pass
                 delay = min(INTERVAL, RETRY_SECONDS * 2 ** min(failures - 1, 3))
-            if watch.wait(self.stop, delay):    # the checkout moved: the supervisor starts it on the new code
+            if watch.wait(self.stop, delay):  # the checkout moved: the supervisor starts it on the new code
                 return

@@ -114,15 +114,14 @@ async function restrictPerson(hub) {
     const bot = await pageAs(browser, hub, 'dana');
     await bot.goto(hub.url + '/#/bot/' + BOT + '/home');
     await bot.locator('#bot-work').waitFor({timeout: t(15000)});
-    const homeTab = bot.locator('.bot-talk-switch [data-talk="home"]');
-    const dmTab = bot.locator('.bot-talk-switch [data-talk="dm"]');
-    await homeTab.waitFor({timeout: t(15000)});
-    await dmTab.click();
-    await bot.waitForFunction(() => document.querySelector('.bot-talk-switch [data-talk="dm"]')?.getAttribute('aria-selected') === 'true',
+    const incognito = bot.locator('#bot-incognito');
+    await incognito.waitFor({timeout: t(15000)});
+    await incognito.click();
+    await bot.waitForFunction(() => document.querySelector('#bot-incognito')?.getAttribute('aria-pressed') === 'true',
       null, {timeout: t(15000)});
-    assert.equal(await homeTab.getAttribute('aria-selected'), 'false', 'the DM tab replaces the Home tab as selected');
-    await homeTab.click();
-    await bot.waitForFunction(() => document.querySelector('.bot-talk-switch [data-talk="home"]')?.getAttribute('aria-selected') === 'true',
+    assert.equal(await bot.locator('#bot-incognito').getAttribute('aria-pressed'), 'true', 'incognito is the DM');
+    await incognito.click();
+    await bot.waitForFunction(() => document.querySelector('#bot-incognito')?.getAttribute('aria-pressed') === 'false',
       null, {timeout: t(15000)});
     await bot.context().close();
 
@@ -150,7 +149,7 @@ async function restrictPerson(hub) {
     await omar.waitForLoadState('networkidle');
     assert.equal(await omar.locator('#btabs [data-bt="home"]').count(), 0, 'a peer with See only on the bot gets no Home tab');
     assert.equal(await omar.locator('#btabs [data-bt="dm"]').count(), 0, 'a peer who may not write to the bot gets no DM tab');
-    assert.equal(await omar.locator('.bot-talk-switch').count(), 0, 'a peer with See only on the bot has no Home/DM switch');
+    assert.equal(await omar.locator('#bot-incognito').count(), 0, 'a peer with See only on the bot has no incognito toggle');
     assert.equal(await omar.locator('#bot-work').isVisible(), false, 'a peer with See only on the bot has no work pane');
     await omar.context().close();
 
@@ -238,10 +237,15 @@ async function restrictPerson(hub) {
     const selected = tab => phone.waitForFunction(name => document.querySelector(`#btabs [data-bt="${name}"]`)?.getAttribute('aria-selected') === 'true',
       tab, {timeout: t(15000)});
     await selected('home');
-    assert.equal(await phone.locator('#btabs [data-bt="dm"]').innerText(), 'DM');
-    await phone.locator('#btabs [data-bt="dm"]').tap();
-    await selected('dm');
-    await phone.locator('#btabs [data-bt="home"]').tap();
+    // 9d11efec7: a phone has one chat tab; the DM is Incognito, the toggle in the top line (aria-pressed = DM).
+    assert.equal(await phone.locator('#btabs [data-bt="dm"]').count(), 0, 'no DM tab: the DM is Incognito');
+    assert.equal(await phone.locator('#bot-incognito').getAttribute('aria-pressed'), 'false', 'Incognito starts off');
+    await phone.locator('#bot-incognito').tap();
+    await phone.waitForFunction(() => location.hash.endsWith('/dm') && document.querySelector('#bot-incognito')?.getAttribute('aria-pressed') === 'true',
+      null, {timeout: t(15000)});
+    await selected('home');
+    await phone.locator('#bot-incognito').tap();
+    await phone.waitForFunction(() => document.querySelector('#bot-incognito')?.getAttribute('aria-pressed') === 'false', null, {timeout: t(15000)});
     await selected('home');
     await phone.context().close();
 
@@ -250,7 +254,7 @@ async function restrictPerson(hub) {
     const dmsBefore = await dmCount();
     const talk = await pageAs(browser, hub, 'dana');
     await talk.goto(hub.url + '/#/bot/' + BOT + '/home');
-    await talk.locator('.bot-talk-switch [data-talk="dm"]').click();
+    await talk.locator('#bot-incognito').click();
     await talk.locator('#bot-thread .thv-composer .p-text').waitFor({timeout: t(15000)});
     assert.equal(await dmCount(), dmsBefore, 'opening the DM tab made no DM');
     await talk.locator('#bot-thread .thv-composer .p-text').fill('First words to the bot.');

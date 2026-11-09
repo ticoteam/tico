@@ -27,10 +27,20 @@ def test_message_authority_follows_bot_management_and_revocation(api):
     # Ben can still DM the bot after losing management: Write access alone cannot approve sending.
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE bot_config SET owner_id='ana' WHERE bot='cpo'")
-        c.execute("UPDATE registry_metadata SET value=? WHERE key='people'", (encode({"people": [
-            {"id": "ana", "email": "ana@acme.example", "primary_for": ["*"]},
-            {"id": "ben", "email": "ben@acme.example"},
-            {"id": "cara", "email": "cara@acme.example"}]}),))
+        c.execute(
+            "UPDATE registry_metadata SET value=? WHERE key='people'",
+            (
+                encode(
+                    {
+                        "people": [
+                            {"id": "ana", "email": "ana@acme.example", "primary_for": ["*"]},
+                            {"id": "ben", "email": "ben@acme.example"},
+                            {"id": "cara", "email": "cara@acme.example"},
+                        ]
+                    }
+                ),
+            ),
+        )
     post(api, "chat/cpo", {"text": "I can still message you."}, token="ben-test")
     assert get(api, path, token=attempt["token"])["sender_can_approve_send"] is False
 
@@ -50,10 +60,20 @@ def test_disabled_senders_lose_message_approval_authority(api):
     path = f"messages/{message['id']}"
     assert get(api, path, token=attempt["token"])["sender_can_approve_send"] is True
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE registry_metadata SET value=? WHERE key='people'", (encode({"people": [
-            {"id": "ana", "email": "ana@acme.example", "primary_for": ["*"]},
-            {"id": "ben", "email": "ben@acme.example", "sign_in": False},
-            {"id": "cara", "email": "cara@acme.example"}]}),))
+        c.execute(
+            "UPDATE registry_metadata SET value=? WHERE key='people'",
+            (
+                encode(
+                    {
+                        "people": [
+                            {"id": "ana", "email": "ana@acme.example", "primary_for": ["*"]},
+                            {"id": "ben", "email": "ben@acme.example", "sign_in": False},
+                            {"id": "cara", "email": "cara@acme.example"},
+                        ]
+                    }
+                ),
+            ),
+        )
     assert get(api, path, token=attempt["token"])["sender_can_approve_send"] is False
 
 

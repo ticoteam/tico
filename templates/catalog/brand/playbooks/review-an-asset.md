@@ -14,7 +14,7 @@ Done when: the verdict is on the task in one line with the path to the full revi
 
     hub task show <id>
 
-Find the item, its audience, where it will appear and the deadline. If the audience is missing, ask once with `hub task ask <id>`.
+Find the item, its audience, where it will appear and the deadline. If the audience is missing, ask once with `hub task question "<question>" --on <person> --parent <id>`.
 
 ## 2. Review copy
 

@@ -25,8 +25,8 @@ from .store import H, Problem, encode
 
 LIMIT_MAX = 100
 BYTES_MAX = 96 * 1024
-BOTS_MAX = 20            # bots named on one row; `more_bots` counts the rest
-SCAN_MAX = 500           # bots read for one row (GitHub repository access)
+BOTS_MAX = 20  # bots named on one row; `more_bots` counts the rest
+SCAN_MAX = 500  # bots read for one row (GitHub repository access)
 KINDS = ("slack", "github", "mailbox", "inbox", "meetings", "trigger", "webhook", "postal", "listening", "slack_link")
 
 
@@ -54,8 +54,10 @@ class View:
         """The Tico addresses and numbers narrowed to a group the reader is not in (backend/inbound.py)."""
         if self._hidden is None:
             from . import inbound
-            self._hidden = inbound.hidden_inboxes(self.c, self.who, self.auth) if table(self.c, "inbound_inboxes") \
-                else set()
+
+            self._hidden = (
+                inbound.hidden_inboxes(self.c, self.who, self.auth) if table(self.c, "inbound_inboxes") else set()
+            )
         return self._hidden
 
     def bots(self, slugs):
@@ -66,10 +68,13 @@ class View:
         seen = self.auth.bot_accesses(self.c, self.who, slugs)
         shown = [s for s in slugs if (seen.get(s) or {}).get("see")]
         names = self.names("bot:" + s for s in shown[:BOTS_MAX])
-        return [{"slug": s, "name": names.get("bot:" + s) or s} for s in shown[:BOTS_MAX]], max(0, len(shown) - BOTS_MAX)
+        return [{"slug": s, "name": names.get("bot:" + s) or s} for s in shown[:BOTS_MAX]], max(
+            0, len(shown) - BOTS_MAX
+        )
 
     def names(self, actors):
         from . import names
+
         wanted = {a for a in actors if a and a not in self._names}
         if wanted:
             self._names.update(names.lookup(self.c, wanted))
@@ -80,9 +85,19 @@ class View:
 
 
 def row(kind, ident, name, status, scope, readers, configure, *, detail="", bots=(), more=0, can=False):
-    return {"id": kind + ":" + ident if ident else kind, "kind": kind, "name": name, "detail": detail, "status": status,
-            "scope": scope, "readers": readers, "bots": list(bots), "more_bots": more, "configure": configure,
-            "can_configure": bool(can)}
+    return {
+        "id": kind + ":" + ident if ident else kind,
+        "kind": kind,
+        "name": name,
+        "detail": detail,
+        "status": status,
+        "scope": scope,
+        "readers": readers,
+        "bots": list(bots),
+        "more_bots": more,
+        "configure": configure,
+        "can_configure": bool(can),
+    }
 
 
 def keyed(rows, after, n):
@@ -93,12 +108,14 @@ def keyed(rows, after, n):
 
 # ---- each source: (v, after, n) -> up to n (key, row) pairs past `after`, by key, only rows the reader may see
 
+
 def slack(v, after, n):
     return keyed(slack_rows(v), after, n)
 
 
 def slack_rows(v):
     from . import slack_app
+
     state = slack_app.status(v.c)
     if not state["configured"] and not v.admin:
         return []
@@ -108,8 +125,21 @@ def slack_rows(v):
             readers += [str(r).removeprefix("bot:") for r in (H._json(raw, []) or []) if isinstance(r, str)]
     bots, more = v.bots(readers)
     status = {"off": "off", "waiting": "waiting", "connected": "on"}.get(state["state"], "error")
-    return [row("slack", "", "Slack", status, "company", "Everyone", "#/tools/slack",
-                detail=state["message"] if status == "error" else "", bots=bots, more=more, can=v.who.role == "owner")]
+    return [
+        row(
+            "slack",
+            "",
+            "Slack",
+            status,
+            "company",
+            "Everyone",
+            "#/tools/slack",
+            detail=state["message"] if status == "error" else "",
+            bots=bots,
+            more=more,
+            can=v.who.role == "owner",
+        )
+    ]
 
 
 def github(v, after, n):
@@ -117,16 +147,35 @@ def github(v, after, n):
 
 
 def github_rows(v):
-    app_row = v.c.execute("SELECT org, installation_id FROM github_app WHERE id='app'").fetchone() \
-        if table(v.c, "github_app") else None
+    app_row = (
+        v.c.execute("SELECT org, installation_id FROM github_app WHERE id='app'").fetchone()
+        if table(v.c, "github_app")
+        else None
+    )
     if not app_row and not v.admin:
         return []
-    slugs = [r[0] for r in v.c.execute("SELECT DISTINCT bot FROM bot_repo_access ORDER BY bot LIMIT ?", (SCAN_MAX,))] \
-        if app_row and table(v.c, "bot_repo_access") else []
+    slugs = (
+        [r[0] for r in v.c.execute("SELECT DISTINCT bot FROM bot_repo_access ORDER BY bot LIMIT ?", (SCAN_MAX,))]
+        if app_row and table(v.c, "bot_repo_access")
+        else []
+    )
     bots, more = v.bots(slugs)
     status = "off" if not app_row else "on" if app_row["installation_id"] else "waiting"
-    return [row("github", "", "GitHub", status, "company", "Bots with repository access", "#/tools/github",
-                detail=app_row["org"] if app_row else "", bots=bots, more=more, can=v.who.role == "owner")]
+    return [
+        row(
+            "github",
+            "",
+            "GitHub",
+            status,
+            "company",
+            "Bots with repository access",
+            "#/tools/github",
+            detail=app_row["org"] if app_row else "",
+            bots=bots,
+            more=more,
+            can=v.who.role == "owner",
+        )
+    ]
 
 
 def mailboxes(v, after, n):
@@ -136,6 +185,7 @@ def mailboxes(v, after, n):
 def mailbox_rows(v):
     """The mail bots' mailboxes: each person's inbox bot and the mailbox it keeps (one per person at most)."""
     from . import mail, routines
+
     boxes = routines.message_bot_mailboxes(v.c)
     if not boxes:
         return []
@@ -149,9 +199,21 @@ def mailbox_rows(v):
         state = synced.get(address)
         status = "error" if state and state["error"] else "on" if state and state["synced_at"] else "waiting"
         bots, more = v.bots([box["bot"]])
-        out.append(row("mailbox", address, address, status, "person", v.name("human:" + box["person_id"]),
-                       "#/tools/mailbox/" + address, detail=state["error"] or "" if state else "", bots=bots, more=more,
-                       can=v.admin or v.who.actor == "human:" + box["person_id"]))
+        out.append(
+            row(
+                "mailbox",
+                address,
+                address,
+                status,
+                "person",
+                v.name("human:" + box["person_id"]),
+                "#/tools/mailbox/" + address,
+                detail=state["error"] or "" if state else "",
+                bots=bots,
+                more=more,
+                can=v.admin or v.who.actor == "human:" + box["person_id"],
+            )
+        )
     return out
 
 
@@ -160,19 +222,41 @@ def inboxes(v, after, n):
     both, #/tools/number/<id>)."""
     from . import groups as G
     from . import inbound
+
     if not table(v.c, "inbound_inboxes"):
         return []
     clause, values = inbound.without("inbox_id", v.hidden)
     groups = G._roster(v.c).get("org_groups") or {}
     out = []
-    for r in v.c.execute("SELECT * FROM inbound_inboxes WHERE state<>'released' AND inbox_id>? AND " + clause +
-                         " ORDER BY inbox_id LIMIT ?", (after or "", *values, n)):
+    for r in v.c.execute(
+        "SELECT * FROM inbound_inboxes WHERE state<>'released' AND inbox_id>? AND "
+        + clause
+        + " ORDER BY inbox_id LIMIT ?",
+        (after or "", *values, n),
+    ):
         team = r["audience"] == "team" and r["group_id"]
         readers = (groups.get(team) or {}).get("name") or team if team else "Everyone"
-        status = "on" if r["state"] == "active" else r["state"] if r["state"] in ("off", "error", "paused") else "waiting"
+        status = (
+            "on" if r["state"] == "active" else r["state"] if r["state"] in ("off", "error", "paused") else "waiting"
+        )
         page = "#/tools/number/" + r["inbox_id"]
-        out.append((r["inbox_id"], row("inbox", r["inbox_id"], r["name"], status, "team" if team else "company",
-                                       readers, page, detail=r["address"], can=v.admin) | {"channel": r["kind"]}))
+        out.append(
+            (
+                r["inbox_id"],
+                row(
+                    "inbox",
+                    r["inbox_id"],
+                    r["name"],
+                    status,
+                    "team" if team else "company",
+                    readers,
+                    page,
+                    detail=r["address"],
+                    can=v.admin,
+                )
+                | {"channel": r["kind"]},
+            )
+        )
     return out
 
 
@@ -183,6 +267,7 @@ def meetings(v, after, n):
 def meeting_rows(v):
     from .meeting_importers import IMPORTERS, status_of
     from .updates import meeting_reader
+
     if not (v.admin or meeting_reader(v.who)):
         return []
     saved = {r["source"]: dict(r) for r in v.c.execute("SELECT * FROM meeting_importers")}
@@ -191,18 +276,30 @@ def meeting_rows(v):
         cfg = saved.get(source)
         if not cfg:
             continue
-        health = v.c.execute("SELECT last_succeeded_at,last_error,detail FROM service_health WHERE service=?",
-                             ("recording:" + source,)).fetchone()
+        health = v.c.execute(
+            "SELECT last_succeeded_at,last_error,detail FROM service_health WHERE service=?", ("recording:" + source,)
+        ).fetchone()
         state = status_of(bool(cfg.get("enabled")), health, spec["interval"], now)
         status = {"syncing": "on", "delayed": "error"}.get(state, state)
-        out.append(row("meetings", source, spec["name"], status, "company", "Meeting attendees", "#/meetings",
-                       can=v.who.role == "owner"))
+        out.append(
+            row(
+                "meetings",
+                source,
+                spec["name"],
+                status,
+                "company",
+                "Meeting attendees",
+                "#/meetings",
+                can=v.who.role == "owner",
+            )
+        )
     return out
 
 
 def triggers(v, after, n):
     """Incoming webhooks (backend/triggers.py): everyone may read them, Finance's only a finance admin."""
     from . import triggers as T
+
     if not table(v.c, "triggers") or not (v.person or v.who.role == "bot"):
         return []
     sql = "SELECT * FROM triggers WHERE deleted_at IS NULL AND id>?"
@@ -210,9 +307,22 @@ def triggers(v, after, n):
         sql += " AND coalesce(consumer,'')<>'finance'"
     out = []
     for r in v.c.execute(sql + " ORDER BY id LIMIT ?", (after or "", n)):
-        out.append((r["id"], row("trigger", r["id"], r["name"], "on", "company", "Everyone", "#/settings/webhooks",
-                                 detail="Incoming webhook",
-                                 can=v.person and (v.admin or r["created_by"] == v.who.actor))))
+        out.append(
+            (
+                r["id"],
+                row(
+                    "trigger",
+                    r["id"],
+                    r["name"],
+                    "on",
+                    "company",
+                    "Everyone",
+                    "#/automations/webhooks/" + r["id"],
+                    detail="Incoming webhook",
+                    can=v.person and (v.admin or r["created_by"] == v.who.actor),
+                ),
+            )
+        )
     return out
 
 
@@ -227,9 +337,22 @@ def webhooks(v, after, n):
     out = []
     for r in v.c.execute(sql + " ORDER BY id LIMIT ?", (*args, n)):
         status = "paused" if r["paused_reason"] else "on" if r["enabled"] else "off"
-        out.append((r["id"], row("webhook", r["id"], r["name"], status, "person", v.name(r["created_by"]),
-                                 "#/settings/webhooks/outgoing", detail=r["host"],
-                                 can=v.person and (v.admin or r["created_by"] == v.who.actor))))
+        out.append(
+            (
+                r["id"],
+                row(
+                    "webhook",
+                    r["id"],
+                    r["name"],
+                    status,
+                    "person",
+                    v.name(r["created_by"]),
+                    "#/tools/webhooks/" + r["id"],
+                    detail=r["host"],
+                    can=v.person and (v.admin or r["created_by"] == v.who.actor),
+                ),
+            )
+        )
     return out
 
 
@@ -241,16 +364,28 @@ def postal_rows(v):
     """Physical mail, when this company takes it: explicit Read grants and each letter's task readers."""
     if not table(v.c, "mail_intake") or not v.person:
         return []
-    intake = v.c.execute("SELECT m.inbox_id, i.address FROM mail_intake m LEFT JOIN inbound_inboxes i "
-                         "ON i.inbox_id=m.inbox_id WHERE m.singleton=1").fetchone()
-    if intake and intake["inbox_id"] in v.hidden:          # its inbox is narrowed to a group the reader is not in
+    intake = v.c.execute(
+        "SELECT m.inbox_id, i.address FROM mail_intake m LEFT JOIN inbound_inboxes i "
+        "ON i.inbox_id=m.inbox_id WHERE m.singleton=1"
+    ).fetchone()
+    if intake and intake["inbox_id"] in v.hidden:  # its inbox is narrowed to a group the reader is not in
         intake = {"inbox_id": intake["inbox_id"], "address": ""}
     letters = table(v.c, "mail_items") and v.c.execute("SELECT 1 FROM mail_items LIMIT 1").fetchone()
     if not intake and not letters:
         return []
-    return [row("postal", "", "Physical mail", "on", "company", "Read grants and each letter's task readers",
-                "#/tools/address/intake",
-                detail=(intake["address"] or "") if intake else "", can=v.admin)]
+    return [
+        row(
+            "postal",
+            "",
+            "Physical mail",
+            "on",
+            "company",
+            "Read grants and each letter's task readers",
+            "#/tools/address/intake",
+            detail=(intake["address"] or "") if intake else "",
+            can=v.admin,
+        )
+    ]
 
 
 def listening(v, after, n):
@@ -260,6 +395,7 @@ def listening(v, after, n):
 def listening_rows(v):
     """Listening: one row while any destination is set, for the owner, admins and whoever receives or reads one."""
     from . import listening as L
+
     try:
         dests = L.destination_list(v.c, v.settings)
     except Exception:  # noqa: BLE001 - a broken question set leaves the row out, never the page
@@ -273,15 +409,30 @@ def listening_rows(v):
         actors.update(d.get("readers") or [])
     if not (v.admin or v.who.actor in actors):
         return []
-    last = v.c.execute("SELECT status FROM listen_runs ORDER BY started_at DESC LIMIT 1").fetchone() \
-        if table(v.c, "listen_runs") else None
+    last = (
+        v.c.execute("SELECT status FROM listen_runs ORDER BY started_at DESC LIMIT 1").fetchone()
+        if table(v.c, "listen_runs")
+        else None
+    )
     status = "waiting" if not last else "error" if last["status"] in ("error", "failed") else "on"
     bots, more = v.bots(H.actor_id(a) for a in sorted(actors) if a.startswith("bot:"))
     people = [a for a in sorted(actors) if a.startswith("human:")]
     readers = ", ".join(v.name(a) for a in people[:5]) or "Its bots"
-    return [row("listening", "", "Listening", status, "company", readers, "#/strategy/market/listening",
-                detail=f"{len(dests)} destination{'s' if len(dests) != 1 else ''}", bots=bots, more=more,
-                can=v.who.role == "owner")]
+    return [
+        row(
+            "listening",
+            "",
+            "Listening",
+            status,
+            "company",
+            readers,
+            "#/strategy/market/listening",
+            detail=f"{len(dests)} destination{'s' if len(dests) != 1 else ''}",
+            bots=bots,
+            more=more,
+            can=v.who.role == "owner",
+        )
+    ]
 
 
 def thread_links(v, after, n):
@@ -292,19 +443,30 @@ def thread_link_rows(v):
     """Slack channels linked to threads (backend/slack_threads.py): a read-only row for each link whose thread the reader
     can read. Only admins may change a link, so only they get Configure. Nothing here asks Slack."""
     from . import threads as TH
+
     if not table(v.c, "slack_thread_links"):
         return []
     reader = TH.viewer(v.auth, v.who)
     out = []
-    for r in v.c.execute("SELECT * FROM slack_thread_links WHERE state IN ('active','suspended') ORDER BY id LIMIT ?",
-                         (SCAN_MAX,)):
+    for r in v.c.execute(
+        "SELECT * FROM slack_thread_links WHERE state IN ('active','suspended') ORDER BY id LIMIT ?", (SCAN_MAX,)
+    ):
         if not TH.readable(v.c, reader, r["thread_id"]):
             continue
         company = r["audience"] == "company"
-        out.append(row("slack_link", r["id"], "#" + str(r["channel_name"] or r["channel_ref"]).lstrip("#"),
-                       "on" if r["state"] == "active" else "paused", "company" if company else "team",
-                       "Everyone" if company else "Thread members", f"#/thread/{r['thread_id']}",
-                       detail="Slack channel", can=v.admin))
+        out.append(
+            row(
+                "slack_link",
+                r["id"],
+                "#" + str(r["channel_name"] or r["channel_ref"]).lstrip("#"),
+                "on" if r["state"] == "active" else "paused",
+                "company" if company else "team",
+                "Everyone" if company else "Thread members",
+                f"#/thread/{r['thread_id']}",
+                detail="Slack channel",
+                can=v.admin,
+            )
+        )
     return out
 
 
@@ -354,4 +516,3 @@ def page(v, limit, cursor):
             used += size
             last = key
     return {"connections": shown, "next": None}
-

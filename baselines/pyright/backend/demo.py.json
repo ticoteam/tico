@@ -1,0 +1,14 @@
+{
+    "files": {
+        "./backend/demo.py": [
+            {
+                "code": "reportOptionalMemberAccess",
+                "range": {
+                    "startColumn": 75,
+                    "endColumn": 80,
+                    "lineCount": 1
+                }
+            }
+        ]
+    }
+}

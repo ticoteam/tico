@@ -21,17 +21,25 @@ import os
 
 from . import PROJECTS, Refused, bot_folders, declared_tools, hub_bot, load_yaml, manifest_file, owner_handle, repo_dir
 
-OWNER = owner_handle()                    # the owner's roster handle: approvals name it; it holds no mail rights
-CONNECTOR = "connector"                   # the runner's connector job (runner_support/connectors.py)
+OWNER = owner_handle()  # the owner's roster handle: approvals name it; it holds no mail rights
+CONNECTOR = "connector"  # the runner's connector job (runner_support/connectors.py)
 MAIL_SERVICES = ("gmail", "google-calendar")
 VERBS = ("read", "organize", "draft", "send", "unsubscribe", "schedule")
 CALENDAR_VERBS = ("read", "schedule")
 CALENDAR_ACTIONS = {"calendar_read": "read", "calendar_schedule": "schedule"}
 # Commands that only move a message around inside the mailbox: they need `organize`.
-STATE_VERBS = {"label": "organize", "archive": "organize", "mark_read": "organize", "star": "organize",
-               "triaged": "organize", "rules": "organize"}
-ASK = ("Who may use a mailbox is set in Tico: Tools > the mailbox > Who can use it (its person, or an admin "
-       "for a shared inbox, decides).")
+STATE_VERBS = {
+    "label": "organize",
+    "archive": "organize",
+    "mark_read": "organize",
+    "star": "organize",
+    "triaged": "organize",
+    "rules": "organize",
+}
+ASK = (
+    "Who may use a mailbox is set in Tico: Tools > the mailbox > Who can use it (its person, or an admin "
+    "for a shared inbox, decides)."
+)
 
 # Set by the commands that carry out what the server leased this computer (mail-action, connector-event): only then
 # does the connector principal write.
@@ -57,9 +65,11 @@ def employee(slug=None, env=None):
     env = os.environ if env is None else env
     s = (slug or hub_bot(env)).strip().lower()
     if not s:
-        raise Refused("no employee: pass --as <slug>.",
-                      "The runner sets HUB_BOT for every turn; outside a turn, name the "
-                      "employee yourself. The owner uses --as " + OWNER + ".")
+        raise Refused(
+            "no employee: pass --as <slug>.",
+            "The runner sets HUB_BOT for every turn; outside a turn, name the "
+            "employee yourself. The owner uses --as " + OWNER + ".",
+        )
     return s
 
 
@@ -80,14 +90,18 @@ def _manifest(slug, manifest=None):
 
 
 def entries(manifest):
-    return [e for e in declared_tools(manifest)
-            if isinstance(e, dict) and str(e.get("service", "")).lower() in MAIL_SERVICES]
+    return [
+        e
+        for e in declared_tools(manifest)
+        if isinstance(e, dict) and str(e.get("service", "")).lower() in MAIL_SERVICES
+    ]
 
 
 def _roster():
     """The people roster, or an empty one when the file is missing in tests."""
     from backend.people import load as load_people
     from . import REGISTRY
+
     try:
         return load_people(load_yaml(REGISTRY / "people.yaml", "registry/people.yaml"))
     except Exception:
@@ -97,6 +111,7 @@ def _roster():
 def inbox_bot_for(mailbox, roster=None):
     """The inbox bot that handles this mailbox: its person's `inbox_bot`, else the nearest manager's."""
     from backend import people as P
+
     roster = roster if roster is not None else _roster()
     who, seen = P.person_by_email(mailbox, roster), set()
     while who and who["id"] not in seen:
@@ -110,6 +125,7 @@ def inbox_bot_for(mailbox, roster=None):
 def bot_repo(slug):
     """The bot's repository directory name: employees.yaml's `repo`, else the folder on disk (bot-<slug> or emp-<slug>)."""
     from . import REGISTRY
+
     try:
         rows = load_yaml(REGISTRY / "employees.yaml", "registry/employees.yaml").get("employees") or []
     except Exception:
@@ -168,6 +184,7 @@ def holdings(slug, manifest=None, roster=None):
 
 # ---------------------------------------------------------------- the server's answer
 
+
 def forget():
     """Drop the answers read so far (tests; a long-running caller)."""
     _ANSWERS.clear()
@@ -176,17 +193,22 @@ def forget():
 def _connector_answer():
     if RUNNER_ACCESS is None and os.environ.get("HUB_TOKEN"):
         # The connector job runs without a Tico token (runner_support/connectors.py mail_cli_env); a turn has one.
-        raise Refused("--as connector is the runner's connector job, not a turn.",
-                      "A turn asks Tico as itself: drop --as connector.")
+        raise Refused(
+            "--as connector is the runner's connector job, not a turn.",
+            "A turn asks Tico as itself: drop --as connector.",
+        )
     if RUNNER_ACCESS is not None:
         targets = RUNNER_ACCESS()
     else:
-        from . import oauth                             # noqa: PLC0415
+        from . import oauth
+
         try:
             targets = oauth.broker().get("connectors/mail/targets")
-        except Exception as e:                          # noqa: BLE001 - any failure is "Tico could not be asked"
-            raise Refused("this connector run could not ask Tico which mailboxes this computer may act for.",
-                          f"{e}. The runner's connector job runs it with the computer's registration.") from None
+        except Exception as e:  # noqa: BLE001 - any failure is "Tico could not be asked"
+            raise Refused(
+                "this connector run could not ask Tico which mailboxes this computer may act for.",
+                f"{e}. The runner's connector job runs it with the computer's registration.",
+            ) from None
     if not isinstance(targets, dict):
         raise Refused("Tico gave this connector run no list of mailboxes.")
     level = "read_write" if LEASED else "read"
@@ -201,21 +223,25 @@ def _connector_answer():
 def _hub_answer():
     url, token = os.environ.get("HUB_API_URL"), os.environ.get("HUB_TOKEN")
     if not url or not token:
-        raise Refused("this run cannot ask Tico which mailboxes it may use: no Tico credential.",
-                      "A bot's turn has one; a person runs mail with their own Tico token "
-                      "(HUB_API_URL and HUB_TOKEN). There is no owner bypass.")
-    from clients.tico import Client                     # noqa: PLC0415
+        raise Refused(
+            "this run cannot ask Tico which mailboxes it may use: no Tico credential.",
+            "A bot's turn has one; a person runs mail with their own Tico token "
+            "(HUB_API_URL and HUB_TOKEN). There is no owner bypass.",
+        )
+    from clients.tico import Client
+
     try:
         return Client(url, token).get("mail/access")
-    except Exception as e:                              # noqa: BLE001 - any failure is "Tico could not be asked"
-        raise Refused("this run could not ask Tico which mailboxes it may use.",
-                      f"{e}. Try again once Tico answers.") from None
+    except Exception as e:  # noqa: BLE001 - any failure is "Tico could not be asked"
+        raise Refused(
+            "this run could not ask Tico which mailboxes it may use.", f"{e}. Try again once Tico answers."
+        ) from None
 
 
 def answer(slug):
     """Tico's answer for this run: {principal, mailboxes: [{address, level, may}], company}."""
     if slug == CONNECTOR:
-        return _connector_answer()                      # read every time: LEASED may change within one process
+        return _connector_answer()  # read every time: LEASED may change within one process
     if SERVER_ACCESS is not None:
         got = SERVER_ACCESS(slug)
     else:
@@ -231,9 +257,14 @@ def _narrowed(slug, addr, level, manifest=None):
     """The verbs a level gives on `addr`, narrowed by the bot's own gmail entry for `addr` when it has one. The company's
     What Tico may do is held on every write itself (oauth.company_allows), with its own words."""
     verbs = list(VERBS) if level == "read_write" else ["read"]
-    entry = next((e for e in entries(_manifest(slug, manifest))
-                  if str(e.get("service", "")).lower() == "gmail"
-                  and str(e.get("identity") or "").strip().lower() == addr), None)
+    entry = next(
+        (
+            e
+            for e in entries(_manifest(slug, manifest))
+            if str(e.get("service", "")).lower() == "gmail" and str(e.get("identity") or "").strip().lower() == addr
+        ),
+        None,
+    )
     if entry is None:
         return verbs
     if entry.get("read_only") is True:
@@ -296,16 +327,22 @@ def resolve_calendar(slug, mailbox=None, verb="calendar_read", manifest=None, ro
         else:
             raise Refused(
                 f"{slug} may read every company calendar, so --for is required.",
-                "Company calendars: " + (", ".join(company) or "none are registered"))
+                "Company calendars: " + (", ".join(company) or "none are registered"),
+            )
     if addr not in company and addr not in explicit:
-        raise Refused(f"{addr} is not a company calendar.",
-                      "Use an address in registry/people.yaml, or declare google-calendar access explicitly.")
+        raise Refused(
+            f"{addr} is not a company calendar.",
+            "Use an address in registry/people.yaml, or declare google-calendar access explicitly.",
+        )
     verbs = ["read"]
     if need == "schedule" and "schedule" in (levels(slug, m).get(addr) or {}).get("verbs", []):
         verbs.append("schedule")
     if need not in verbs:
-        raise Refused(f"{slug} may read {addr}'s calendar, not change it: that needs Read and write on {addr} "
-                      "and the company's Change calendar.", ASK)
+        raise Refused(
+            f"{slug} may read {addr}'s calendar, not change it: that needs Read and write on {addr} "
+            "and the company's Change calendar.",
+            ASK,
+        )
     return addr, verbs
 
 
@@ -324,17 +361,21 @@ def resolve(slug, mailbox=None, verb="read", manifest=None, roster=None):
         declared = [a for a in _declared_gmail(m) if a in held]
         boxes = declared or sorted(held)
         if len(boxes) > 1:
-            raise Refused(f"{slug} may use {len(boxes)} mailboxes, so --mailbox is required.",
-                          "It may use: " + ", ".join(sorted(boxes)))
+            raise Refused(
+                f"{slug} may use {len(boxes)} mailboxes, so --mailbox is required.",
+                "It may use: " + ", ".join(sorted(boxes)),
+            )
         addr = boxes[0]
     if addr not in held:
         raise Refused(f"{slug} may not use {addr}.", "It may use: " + ", ".join(sorted(held)) + ". " + ASK)
     verbs = held[addr]["verbs"]
     if need not in verbs:
         level = "Read" if held[addr]["level"] == "read" else "Read and write"
-        raise Refused(f"{slug} may {', '.join(verbs) or 'nothing'} on {addr} ({level}), not {need}.",
-                      "Organizing, drafts and sends need Read and write on the mailbox and the company's What Tico "
-                      "may do (Tools > Settings > Email). " + ASK)
+        raise Refused(
+            f"{slug} may {', '.join(verbs) or 'nothing'} on {addr} ({level}), not {need}.",
+            "Organizing, drafts and sends need Read and write on the mailbox and the company's What Tico "
+            "may do (Tools > Settings > Email). " + ASK,
+        )
     return addr, verbs
 
 
@@ -342,12 +383,22 @@ def describe(slug, manifest=None, roster=None):
     """What `whoami` prints."""
     company_calendars = roster_mailboxes(roster if roster is not None else _roster())
     held = levels(slug, manifest)
-    return {"employee": slug, "owner": False, "connector": slug == CONNECTOR,
-            "mailboxes": [{"mailbox": a, "level": h["level"], "gmail": [v for v in h["verbs"] if v != "schedule"],
-                           "google-calendar": ["read"] + (["schedule"] if "schedule" in h["verbs"] else [])}
-                          for a, h in sorted(held.items())],
-            "company_calendars": {"mailboxes": company_calendars, "can": ["read"]},
-            "note": "" if held else "no mailbox in Tico: " + ASK}
+    return {
+        "employee": slug,
+        "owner": False,
+        "connector": slug == CONNECTOR,
+        "mailboxes": [
+            {
+                "mailbox": a,
+                "level": h["level"],
+                "gmail": [v for v in h["verbs"] if v != "schedule"],
+                "google-calendar": ["read"] + (["schedule"] if "schedule" in h["verbs"] else []),
+            }
+            for a, h in sorted(held.items())
+        ],
+        "company_calendars": {"mailboxes": company_calendars, "can": ["read"]},
+        "note": "" if held else "no mailbox in Tico: " + ASK,
+    }
 
 
 def mailbox_holders(projects=None):
