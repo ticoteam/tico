@@ -409,6 +409,22 @@ def bump_bot_session_epoch(c, bot):
     )
 
 
+def reset_bot_sessions(c, bot):
+    """Keep durable history while fencing local provider sessions for one bot."""
+    bump_bot_session_epoch(c, bot)
+    reset = 0
+    for conversation in c.execute("SELECT id,participants FROM conversations").fetchall():
+        if "bot:" + bot not in json.loads(conversation["participants"]):
+            continue
+        c.execute(
+            "INSERT INTO session_epochs VALUES(?,1,?) ON CONFLICT(conversation_id) DO UPDATE SET "
+            "epoch=epoch+1,updated_at=excluded.updated_at",
+            (conversation["id"], H.now()),
+        )
+        reset += 1
+    return reset
+
+
 def model_changed_since(c, bot, since):
     """Whether a person moved the bot to another model in Settings after `since`, a turn's lease. Only for a turn
     leased before its claim recorded the model it handed out (ran_another_model)."""
