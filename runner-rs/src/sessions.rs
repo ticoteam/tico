@@ -541,28 +541,25 @@ pub async fn ensure(
         // A previous supervisor turn may have left refs, indexes or worktree registrations behind.
         // Only this repository's real .git directory is adopted, never a mirror or an external gitdir.
         crate::isolation::adopt(&[main.join(".git")]);
-        let tracked = upstream(main, &env).await?;
-        // A private meeting's copy is never pushed, so it needs no upstream: without one it starts from the checkout's
-        // own HEAD (a repository made on this computer with no remote yet).
-        let base = if tracked.is_empty() && private {
-            "HEAD".to_string()
-        } else {
-            tracked.clone()
-        };
-        if base.is_empty() {
-            return Ok((String::new(), NO_UPSTREAM.into()));
-        }
+
+        // Reuse a task's existing worktree before consulting the bot checkout's upstream. The base checkout's
+        // current branch can change independently between turns; that must not strand a valid task worktree after a
+        // runner restart. Its own upstream is the authoritative target for subsequent task-lane syncs.
         if path.join(".git").exists() {
-            let mine = g(
+            let worktree = g(
                 path,
                 &env,
                 &["rev-parse", "--path-format=absolute", "--git-common-dir"],
                 15,
             )
-            .await?
-            .stdout
-            .trim()
-            .to_string();
+            .await?;
+            if !worktree.ok() {
+                return Ok((
+                    String::new(),
+                    format!("can't read the task's worktree: {}", git_reason(&worktree)),
+                ));
+            }
+            let mine = worktree.stdout.trim().to_string();
             let same = !common.is_empty()
                 && Path::new(&mine).canonicalize().ok() == Path::new(&common).canonicalize().ok();
             if !same {
@@ -575,7 +572,20 @@ pub async fn ensure(
                 ));
             }
             crate::isolation::adopt(&[path.to_path_buf()]);
+            let tracked = upstream(path, &env).await?;
             return Ok((tracked, String::new()));
+        }
+
+        let tracked = upstream(main, &env).await?;
+        // A private meeting's copy is never pushed, so it needs no upstream: without one it starts from the checkout's
+        // own HEAD (a repository made on this computer with no remote yet).
+        let base = if tracked.is_empty() && private {
+            "HEAD".to_string()
+        } else {
+            tracked.clone()
+        };
+        if base.is_empty() {
+            return Ok((String::new(), NO_UPSTREAM.into()));
         }
         if path.exists()
             && std::fs::read_dir(path)
