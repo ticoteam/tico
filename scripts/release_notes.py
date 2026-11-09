@@ -61,6 +61,8 @@ AREAS = (
 USER_AREAS = frozenset({"ui", "clients", "app"})
 BACKEND_AREAS = frozenset({"backend", "runner", "recorder", "templates"})
 GROUPS = (("high", "High risk"), ("user", "User-facing"), ("backend", "Backend"), ("internal", "Internal"))
+HIGH_RISK_HEADING = "## " + dict(GROUPS)["high"]
+CUT_SHORT = "The range has more commits than these notes read; the list stops at the last one read."
 
 # Per-pull-request evidence beyond the fields above. A provider takes the parsed pull request and returns the lines to
 # add under its block (a demo recording's link, say). None is registered yet, so no block prints an evidence line.
@@ -330,7 +332,7 @@ def build(api: Api, base: str, head: str) -> str:
         linked = sum(1 for pull in paged if (pull.review_page or "").startswith("http"))
         lines += ["Review pages: %d of %d" % (linked, len(paged)), ""]
     if truncated:
-        lines += ["The range has more commits than these notes read; the list stops at the last one read.", ""]
+        lines += [CUT_SHORT, ""]
     if not pulls:
         lines.append("No merged pull request names a commit in this range.")
     order = [key for key, _ in GROUPS]
@@ -347,3 +349,14 @@ def build(api: Api, base: str, head: str) -> str:
             else:
                 lines += block(pull)
     return "\n".join(lines).rstrip() + "\n"
+
+
+def high_risk(text: str) -> bool:
+    """Whether notes built here (alone, or inside an approval issue's body) list a High risk item: a pull request whose
+    Risk section or label says high. scripts/release_train.py reads it to decide whether a release needs a person."""
+    return any(line.strip() == HIGH_RISK_HEADING for line in text.splitlines())
+
+
+def cut_short(text: str) -> bool:
+    """Whether the notes stopped before the end of their range, so a High risk item may be missing from them."""
+    return CUT_SHORT in text
