@@ -2767,6 +2767,10 @@ def job_refusal(c, job, followed, ready, busy, lanes, roots, live=frozenset(), *
     message = H.message(c, job["message_id"])
     if not job_message_readable(c, job["bot_id"], message):
         return "unreadable"
+    from . import enqueue
+
+    if enqueue.parked(c, job["message_id"]):
+        return "on_ice"  # a card On ice starts no run, even one queued before a person parked it (backend/enqueue.py)
     # The bot's budget and back-off are the bot's own state: an error reading them is shared_check's, and the whole
     # bot is passed over. The checks below depend on this job, so an error in them holds this job alone.
     with shared_check():
@@ -3273,6 +3277,9 @@ def _queue_suspects(c, queue):
             tasks.append(task)
     suspect = auto_tasks.maybe_waiting(c, tasks)
     auto_tasks.prime_waits(c, [task for task in tasks if task["id"] in suspect])  # each is asked `waiting` next
+    from . import enqueue
+
+    enqueue.prime_parked(c, [job["message_id"] for job in queue])  # and job_refusal asks each whether it is On ice
     return suspect
 
 
@@ -6174,7 +6181,7 @@ class Execution:
         channel. The runner calls this endpoint only for hosts that advertise steering support.
         Re-deliver until acknowledged; a crash remains uncertain, not a new turn.
         """
-        from . import threads
+        from . import enqueue, threads
 
         attempt = self.attempt(c, who, aid, active=not if_idle)
         if if_idle and (
@@ -6272,6 +6279,8 @@ class Execution:
             # After the checks above: this reads the thread and its root, and a poll passes over a whole backlog.
             if not threads.still_addressed(c, H.message(c, row["id"]), "bot:" + attempt["bot_id"]):
                 continue  # left queued: its own claim settles it
+            if enqueue.parked(c, row["id"]):
+                continue  # a card On ice (D69) takes nothing in either: left queued, as the claim leaves it
             if attempt["bot_id"] == H.FLEET_MAINTAINER:
                 refs = json.loads(row["refs"] or "{}")
                 origin = c.execute(

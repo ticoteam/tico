@@ -1475,6 +1475,35 @@ TASKS = (
 HELD_IDS = "SELECT task_id FROM task_holds WHERE kind='%s' AND released_at IS NULL"
 # The open snooze of the task aliased `t`, for a filter: `NOT {SNOOZED % 't'}` keeps the tasks not snoozed.
 SNOOZED = "EXISTS (SELECT 1 FROM task_holds sh WHERE sh.task_id=%s.id AND sh.kind='snoozed' AND sh.released_at IS NULL)"
+# A card On ice (D69): its stage's cap is 0. It wakes no bot, starts no run, and is no bot's work until a person moves it.
+ON_ICE = "EXISTS (SELECT 1 FROM task_steps ps WHERE ps.id=%s.step_id AND ps.card_cap=0)"
+
+
+def on_ice_ids(conn, ids):
+    """The ids among these that name a card On ice (ON_ICE): what a list that would wake a bot leaves out."""
+    found = set()
+    for part in chunks(sorted({str(i) for i in ids if i})):
+        found.update(
+            r[0]
+            for r in conn.execute(
+                f"SELECT t.id FROM tasks t WHERE t.id IN ({','.join('?' * len(part))}) AND {ON_ICE % 't'}", part
+            )
+        )
+    return found
+
+
+def on_ice_row(conn, row):
+    """Whether this task row is On ice (ON_ICE), read from its step_id and the snapshot's shared step rows
+    (read_cache, roster_clock): a check a loop over many tasks can make without a statement of its own."""
+    from .read_cache import rows as shared_rows
+
+    step = (row or {}).get("step_id")
+    if not step:
+        return False
+    return any(
+        s["id"] == step and dict(s).get("card_cap") == 0
+        for s in shared_rows(conn, "SELECT * FROM task_steps ORDER BY position,id")
+    )
 
 
 def add_column(conn, table, column, declaration):
@@ -2082,7 +2111,10 @@ def refuse(conn, actor, rule, detail="", severity="normal", context=None, task=N
     scope = scope or task_quarantine.source(conn, actor, task or REFUSAL_TASK.get() or (context or {}).get("task"))
     recorded = "Private task write refused" if PRIVATE_WRITE.get() else detail
     if context and PRIVATE_WRITE.get():
-        context = {"what": context.get("what")}
+        # A private task's refusal keeps only what was refused, and the stage (and the pipeline entered, `entry`) a
+        # capped move waited for: the actor named it, and the pipeline manager lists the card as waiting for room from it
+        # (pipeline_exceptions.waiting_room), only to readers of the card.
+        context = {"what": context.get("what"), **{k: context[k] for k in ("stage", "entry") if context.get(k)}}
     row = {
         "id": new_id(),
         "created_at": now(),
@@ -2299,7 +2331,7 @@ def _escalate(conn, actor, rule, detail, severity, ts, context=None):
     # A writing correction ("start the title with a verb") is fixed by retrying, not a sign the bot
     # is reaching where it should not: it neither counts nor quarantines. A bot was quarantined by
     # ten refusals, three of them lint on one task title.
-    if rule in ("lint", "queue_full"):
+    if rule in ("lint", "queue_full", "stage_full", "on_ice"):
         return
     slug = actor_id(actor)
     day = ts[:10]
@@ -2329,7 +2361,7 @@ def _escalate(conn, actor, rule, detail, severity, ts, context=None):
     for refused in _rows(
         conn.execute(
             "SELECT rule, detail, created_at FROM refusals WHERE actor=? AND created_at>=? "
-            "AND rule NOT IN ('lint','queue_full') ORDER BY created_at, id",
+            "AND rule NOT IN ('lint','queue_full','stage_full','on_ice') ORDER BY created_at, id",
             (actor, since),
         )
     ):
@@ -4490,7 +4522,14 @@ def _task_state(conn, actor, row, status=None, type=None, step=None):
         chosen = next((s for s in reversed(typ["steps"]) if s["status"] == "closed"), None)
     else:
         # A team's own waiting step takes a task only when someone moves it there, never by a status change.
-        chosen = next((s for s in typ["steps"] if s["status"] == effective), None) if effective != "waiting" else None
+        from . import pipeline_engine
+
+        # A status with no step named lands in the stage pipeline_engine.default_step picks: never On ice while a stage has room.
+        chosen = (
+            pipeline_engine.default_step(conn, typ["steps"], effective, (row or {}).get("id") or "")
+            if effective != "waiting"
+            else None
+        )
         if effective == 'open' and row.get('status') in ('doing', 'waiting', 'review', 'done'):
             from .review_gate import engineering
 
@@ -4687,6 +4726,10 @@ def try_auto_move(conn, actor, row, *, kind="auto_move_refused", **kw):
         if isinstance(exc, Problem) and not isinstance(exc, Refused) and exc.code != "spawn_refused":
             raise
         history_event(conn, "task", row["id"], actor, kind, note=exc.detail or str(exc))
+        if isinstance(exc, Refused) and exc.rule == "stage_full":
+            from . import pipeline_engine
+
+            pipeline_engine.record_waiting(conn, actor, row["id"], exc)  # the manager lists it as waiting for room
         return False
     except BaseException:
         conn.execute("ROLLBACK TO auto_move")
@@ -4708,15 +4751,23 @@ def _set_status(
     skip_step_wake=(),
     notify_parties=True,
     cascade=True,
+    landing=False,
 ):
     """Every task status write keeps its type and step consistent, including old runners. A task
-    that enters a step joins its end; one that lands on a numbered type without a number gets one."""
+    that enters a step joins its end; one that lands on a numbered type without a number gets one.
+    `landing` is a ticket being made with a step of its own: it is not placed in the default stage first, so the step
+    its creation names is checked on its own (task_create, then task_update)."""
     from . import task_holds
 
     row = task_holds.with_holds(conn, row)
     type_id, step_id, effective = _task_state(conn, actor, row, status, type, step)
+    if landing:
+        step_id = None
     from . import pipeline_engine
 
+    if row is not None and row.get("step_id") and step_id != row.get("step_id"):
+        # Only a person takes a card out of On ice, whatever the write: a close or a decline too (pipeline_engine).
+        pipeline_engine.may_leave_ice(conn, actor, row, step_id)
     # Every forward stage move is held to the stage's requirements, not only task_update's (pipeline_engine). Cancelling
     # (a close or a decline) is not forward progress: it is never held to exit requirements.
     cancelling = pipeline_engine.is_cancellation(effective, explicit_step=step is not None)
@@ -7137,7 +7188,7 @@ def task_create(
         conn.execute("UPDATE conversations SET task_id=? WHERE id=?", (row["id"], conv["id"]))
     if number is not None:
         _task_event(conn, row["id"], actor, "number", None, number, "")
-    _set_status(conn, actor, {**row, "status": None}, status="open", type=type)
+    _set_status(conn, actor, {**row, "status": None}, status="open", type=type, landing=step is not None)
     if parent:
         # A waiting parent now waits on this subtask too: its reason names it (backend/task_holds.py).
         from . import task_holds
@@ -7586,6 +7637,7 @@ def task_update(
             f'hub task update {task_id} --status open --note "why it goes back"',
         )
     left_open = set()
+    over_cap = False  # a person's move into a full stage (pipeline_engine._room)
     if state_change:
         type_id, step_id, effective = _task_state(conn, actor, row, status, type, step)
         if status is not None or step is not None:
@@ -7670,13 +7722,19 @@ def task_update(
         # A status done with no step is held as a move into the completion stage (pipeline_engine.completion_target).
         if step == "" and row and row.get("step_id"):
             pipeline_engine.check_clear(conn, actor, row)
+
+        # A bot takes no card out of its stage (D69): a step move to nothing, or a type or status that finds the card no
+        # stage, while it sits On ice (a card On ice has no stage to fall back on).
+        if row and (step == "" or step_id is None and pipeline_engine.on_ice(conn, row)):
+            pipeline_engine.may_clear_stage(conn, actor, row)
         held_to = (
             pipeline_engine.completion_target(conn, row, type_id, step_id, effective, explicit_step=step is not None)
             if row
             else None
         )
         if held_to and row and held_to != row.get("step_id"):
-            pipeline_engine.check_move(
+            # A person's move into a full stage stands and comes back as over_cap (pipeline_engine._room).
+            over_cap = pipeline_engine.check_move(
                 conn,
                 actor,
                 {**row, "type_id": type_id},
@@ -8339,6 +8397,8 @@ def task_update(
         _parent_finished(conn, after, row["status"], actor, told=heard, wake=wake_others)
     if asked_in:
         after = {**after, "asked_in": {k: asked_in[k] for k in ("id", "title", "owner_id")}}
+    if over_cap:
+        after = {**after, "over_cap": True}
     if status in ("closed", "declined") and (row or {}).get("status") != status:
         # Last, so a wake this update queued after the status (a new owner's assignment) is stopped too. A close with a
         # step already stopped the work in task_close; this then cancels only what was queued since.
@@ -9529,7 +9589,7 @@ def tasks_only(conn, actor):
 # carries it again, and so does one that finished without working it or saying when to (backend/quiet_work.py
 # settle); a task the bot already moved on (doing, done) is its own business by then.
 NEXT_RUN_WAITING_SQL = (
-    "t.next_run=1 AND t.status='open' AND NOT " + SNOOZED % "t" + " AND t.resume IS NULL "
+    "t.next_run=1 AND t.status='open' AND NOT " + SNOOZED % "t" + " AND NOT " + ON_ICE % "t" + " AND t.resume IS NULL "
     "AND (t.carried_by IS NULL OR NOT EXISTS("
     "SELECT 1 FROM attempts a WHERE a.id=t.carried_by AND a.state IN ('leased','running','completed')))"
 )
@@ -9551,6 +9611,7 @@ def next_run_waiting(conn, row):
         or row.get("status") != "open"
         or row.get("snoozed_until")
         or row.get("resume")
+        or _on_ice(conn, row)
     ):
         return False
     if not row.get("carried_by"):
@@ -9603,7 +9664,7 @@ def own_stuck_blockers(conn, row, at=None, blockers=None):
     parent's window is released is the case seen; a question for a person in a subtask is not (it
     belongs to the person), nor is a subtask with a future due date, a snooze, a stored resume or a pending
     milestone wait (each brings it back by itself; once the date or snooze has passed, or the milestone has
-    woken it, it is quiet again). Review and a queued or active run of the subtask also move it independently.
+    woken it, it is quiet again), nor a subtask On ice (a person parked it). Review and a queued or active run of the subtask also move it independently.
     A parent or subtask waiting on a person belongs to that person. These waits exempt the parent from the
     stalled-task list."""
     from .milestone_waits import pending as milestone_pending
@@ -9630,6 +9691,7 @@ def own_stuck_blockers(conn, row, at=None, blockers=None):
             or block.get("resume")
             or milestone_pending(conn, block["id"])
             or own_job(conn, block, claimable=True)
+            or on_ice_row(conn, block)  # parked On ice (D69) by a person: the wait is theirs, never stuck
         ):
             return []
     return [block["id"] for block in blockers]
@@ -9651,7 +9713,7 @@ def prime_own_stuck(conn, blockers):
 def stuck_tasks(conn, hours=STUCK_HOURS, hidden=()):
     """Open work on an active bot that has not moved in `hours` and is waiting on nobody: no person
     owes an answer, no open task blocks it, it is not a quiet task, and no run for its bot is queued
-    or going. One BotOps sweep finds these instead of a daily run per bot.
+    or going. One BotOps sweep finds these instead of a daily run per bot. A card On ice (D69) is parked, never stuck.
 
     Also, at any age and even `waiting`, a task held only by its own quiet subtasks (own_stuck_blockers):
     that wait never ends by itself. Those carry `own_blockers`, under the same busy and next-run rules."""
@@ -9663,7 +9725,7 @@ def stuck_tasks(conn, hours=STUCK_HOURS, hidden=()):
             "AND (t.status IN ('open','doing','ready') AND coalesce(t.next_run,0)=0 AND t.updated_at<? "
             f"OR t.status IN ({','.join(repr(x) for x in ACTIVE_STATUSES)}) AND t.updated_at<? "
             "AND EXISTS (SELECT 1 FROM task_relations r WHERE r.to_task=t.id AND r.kind='blocks')) "
-            "ORDER BY t.updated_at",
+            f"AND NOT {ON_ICE % 't'} ORDER BY t.updated_at",
             (cutoff, shift(at, seconds=-STALL_MINUTES * 60)),
         )
     )
@@ -9772,7 +9834,8 @@ def stalled_tasks(conn, at=None, task_ids=None, queued_here=None):
             f"SELECT t.* FROM {TASKS} t JOIN bots b ON t.owner_id='bot:'||b.id WHERE b.state='active' "
             "AND (t.status IN ('open','doing') OR t.status='waiting' AND EXISTS "
             "(SELECT 1 FROM task_relations r WHERE r.to_task=t.id AND r.kind='blocks')) "
-            "AND t.updated_at<?"
+            "AND t.updated_at<? AND NOT "
+            + ON_ICE % "t"
             + (" AND t.id IN (" + ",".join("?" * len(task_ids)) + ")" if task_ids else "")
             + " ORDER BY t.updated_at",
             (shift(at, seconds=-STALL_MINUTES * 60), *(task_ids or ())),
@@ -10158,6 +10221,15 @@ def notes_waiting_counts(conn, bots, limit=500):
     return out
 
 
+def _on_ice(conn, task_row):
+    """Whether a ticket sits in a stage whose cap is 0 (D69, "On ice"): its cards wake no bot."""
+    step_id = (task_row or {}).get("step_id")
+    return (
+        bool(step_id)
+        and _one(conn, "SELECT 1 AS on_ice FROM task_steps WHERE id=? AND card_cap=0", (step_id,)) is not None
+    )
+
+
 def _wake(
     conn,
     task_row,
@@ -10217,6 +10289,9 @@ def _wake(
     ):
         # Nobody plans to get to a snoozed task before its date: news about it waits for its bot's next run.
         # Anyone else (a requester bot handed it for review) hears as usual.
+        refs = {**(refs or {}), "quiet": True}
+    if is_bot(target) and _on_ice(conn, task_row):
+        # On ice (D69): a card there wakes no bot, whoever it is for. The notice is written; no run starts.
         refs = {**(refs or {}), "quiet": True}
     if not target or not _actor_exists(conn, target) or not task_private_readable(conn, target, task_row):
         return None

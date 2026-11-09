@@ -49,6 +49,7 @@ PRESETS: dict[str, dict[str, Any]] = {
                 "prefix": "P",
                 "goal": "Discerning, high-quality specs for engineering",
                 "stages": _stages(
+                    ("On ice", "open"),
                     ("Ideas", "open"),
                     ("Specifying", "doing"),
                     ("Review", "review"),
@@ -57,6 +58,9 @@ PRESETS: dict[str, dict[str, Any]] = {
                     ("Done", "done"),
                     ("Declined", "closed"),
                 ),
+                # D69: On ice takes no card from a bot and wakes no one. A default fills only a stage with no cap that no
+                # person has set one on (_seed_caps), so a second run and a person's "No cap" change nothing.
+                "caps": {"On ice": 0, "Specifying": 3, "In development": 3},
                 # Every hub boots with the roadmap seed (roadmap_flow.ensure). Its stages take the preset's names in place,
                 # so their cards stay; Approved is retired into In development and Ready to ship into Done, and each goes
                 # once it is empty.
@@ -464,6 +468,21 @@ def _requirement(
     made.append(f"requirement {spec['name']} on {spec['stage']}")
 
 
+def _seed_caps(conn: sqlite3.Connection, type_id: str, spec: Row) -> None:
+    """The preset's default caps (D68, D69) on the stages that have no cap and that no person has ever set a cap on (the
+    stage.cap event the route writes). A stage that is capped, or that a person has set, is never changed, so a run that
+    finds the defaults in place changes nothing. The default is written without an event: it is the setup's, not a person's."""
+    caps: dict[str, int | None] = spec.get("caps") or {}
+    for name, cap in caps.items():
+        stage = _one(
+            conn, "SELECT id, card_cap FROM task_steps WHERE type_id = ? AND name = ? COLLATE NOCASE", (type_id, name)
+        )
+        if stage is None or stage["card_cap"] is not None:
+            continue
+        if _one(conn, "SELECT id FROM events WHERE action = 'stage.cap' AND target = ?", (str(stage["id"]),)) is None:
+            conn.execute("UPDATE task_steps SET card_cap = ? WHERE id = ?", (cap, stage["id"]))
+
+
 def _public_names(conn: sqlite3.Connection, ident: str, name: str, made: list[str]) -> None:
     """Every stage's public name is its stage name (the Product roadmap's public page shows them). Only the stages that
     differ are written, so a second run changes nothing."""
@@ -498,6 +517,7 @@ def _pipeline(
             H.type_update(conn, actor, row["id"], numbered=True, mover=True)
     if existing is not None and spec.get("adopt"):
         _adopt(conn, actor, row, spec, made, unresolved)
+    _seed_caps(conn, str(row["id"]), spec)
     ident = str(row["id"])
     _public_names(conn, ident, spec["name"], made)
     current = (
