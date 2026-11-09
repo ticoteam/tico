@@ -272,9 +272,12 @@ def may_ask(c: sqlite3.Connection, who: Any, auth: Any, task: dict[str, Any]) ->
         return
     from . import task_privacy
 
-    if who.attempt_id and task["id"] in task_privacy.attempt_tasks(c, who.attempt_id):
+    carried = cast(Callable[[sqlite3.Connection, str], set[str]], task_privacy.attempt_tasks)
+    if who.attempt_id and task["id"] in carried(c, who.attempt_id):
         return
-    raise Problem("forbidden", "Only a bot working this ticket, or a person who can read it, asks for its CI permit", 403)
+    raise Problem(
+        "forbidden", "Only a bot working this ticket, or a person who can read it, asks for its CI permit", 403
+    )
 
 
 def permit(
