@@ -640,10 +640,19 @@ def test_the_replaced_jobs_mirrors_are_retired_once():
         migration.up(c)  # a file with no automations yet
 
 
-def test_the_api_saves_the_rules_cap_beside_decides_and_shows_what_is_in_effect(api, monkeypatch):
+def test_maintenance_has_one_monthly_cap_and_ignores_a_saved_rules_cap(api, monkeypatch):
     monkeypatch.setattr(M, "_start", lambda *args, **kwargs: None)
-    body = patch(api, "maintenance", {"rules_monthly_cap_usd": 80})
-    assert body["settings"]["rules_monthly_cap_usd"] == 80
-    assert body["settings"]["rules_monthly_cap_usd_in_effect"] == 80
-    assert body["settings"]["monthly_cap_usd"] is None  # Decide's cap is not touched
-    patch(api, "maintenance", {"rules_monthly_cap_usd": -5}, expected=422)
+    store = api.app.state.store
+    with store.transaction() as c:  # a rules cap saved before the one decisions budget
+        c.execute(
+            "INSERT INTO registry_metadata VALUES('maintenance', ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+            (json.dumps({"rules_monthly_cap_usd": 0.01}),),
+        )
+    settings = get(api, "maintenance", token="ana-test")["settings"]
+    assert not any(key.startswith("rules_") for key in settings)
+    assert settings["monthly_cap_usd"] is None
+    assert settings["monthly_cap_usd_in_effect"] == store.settings.decisions_monthly_usd
+    patch(api, "maintenance", {"rules_monthly_cap_usd": 80}, expected=422)
+    body = patch(api, "maintenance", {"monthly_cap_usd": 80})
+    assert body["settings"]["monthly_cap_usd"] == body["settings"]["monthly_cap_usd_in_effect"] == 80
+    assert not any(key.startswith("rules_") for key in body["settings"])

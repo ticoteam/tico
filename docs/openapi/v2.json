@@ -33970,7 +33970,7 @@
     },
     "/api/v2/rules/stats": {
       "get": {
-        "summary": "Rule checks today: checks, unchecked, blocked, dollars left in the rules budget, and whether checks are on",
+        "summary": "Rule checks today: checks, unchecked, blocked, dollars left under the decisions monthly cap, and whether checks are on",
         "operationId": "getRuleCheckStats",
         "responses": {
           "200": {
@@ -67579,19 +67579,6 @@
               }
             ],
             "title": "Monthly Cap Usd"
-          },
-          "rules_monthly_cap_usd": {
-            "anyOf": [
-              {
-                "type": "number",
-                "maximum": 100000.0,
-                "minimum": 0.0
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Rules Monthly Cap Usd"
           },
           "steps": {
             "anyOf": [

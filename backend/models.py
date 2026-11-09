@@ -2994,7 +2994,6 @@ class MaintenanceUpdate(Contract):
     schedule: Literal["hourly", "2h", "3h", "6h", "12h", "daily"] | None = None
     paused: bool | None = None
     monthly_cap_usd: float | None = Field(default=None, ge=0, le=100000)
-    rules_monthly_cap_usd: float | None = Field(default=None, ge=0, le=100000)
     steps: list[MaintenanceStepChange] | None = Field(default=None, max_length=8)
 
 
