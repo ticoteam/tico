@@ -599,6 +599,20 @@ def step_stuck_cards(ctx: "Context") -> tuple[str, bool]:
     return SR.words_of(acted, none="No stuck cards"), not any(acted.values())
 
 
+def step_stuck_alarm(ctx: "Context") -> tuple[str, bool]:
+    # Every 10 minutes: one task to a factory's manager for each card stuck more than 4 hours, and the alarm clears itself
+    # when the card moves (backend/stuck_alarm.py). Off unless TICO_STUCK_ALARM is on. Plain SQL, no model.
+    from . import stuck_alarm
+
+    if not stuck_alarm.enabled():
+        return "Stuck alarm off", True
+    store: Any = ctx.store  # Store.transaction is untyped
+    with store.transaction() as c:
+        done = stuck_alarm.sweep(c, stamp(ctx.at))
+    acted = {"alarms raised": done["raised"], "alarms cleared": done["cleared"]}
+    return SR.words_of(acted, none="No stuck alarms"), not any(acted.values())
+
+
 class Scheduler:
     def __init__(self, store, execution, onboarding=None, auth=None, github_app=None):
         self.store, self.execution = store, execution
