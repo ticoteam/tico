@@ -1,4 +1,4 @@
-"""Cloud coding agents on the Recruit module's Cloud agents tab (ui/app/cloud-agents.js).
+"""Cloud coding agents on the Recruit module's Cloud agents tab (ui/app/cloud-agents.ts).
 
 Tico connects the agents marked supported: a person adds one and it becomes a Tico bot on the harness it runs on, placed
 under the line the person picks, or in the seat's place. Any other agent is a request. Requesting one adds a Recruiting

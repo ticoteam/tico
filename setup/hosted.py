@@ -35,9 +35,25 @@ def check_dns_identity(args, dns_name: str, dns_zone: str) -> None:
             raise MissingInput(f"--{field.replace('_', '-')} conflicts with saved DNS identity; omit it or use {saved}")
 
 
+def read_handoff(s: Settings) -> None:
+    """TICO_SETUP_HANDOFF, from the environment only (never a flag, so never in a command line or a process list, like
+    TICO_GATEWAY_INVITE): the one-time secret the owner's coding agent trades for a personal token of the owner
+    (backend/setup_handoff.py). HQ makes it and keeps it; this run keeps only its sha256, in the settings and the server's
+    .env. A re-run without it keeps the hash the first run saved."""
+    secret = os.environ.get("TICO_SETUP_HANDOFF", "")
+    if not secret:
+        return
+    if not st.HANDOFF_RE.fullmatch(secret):
+        raise MissingInput(
+            "TICO_SETUP_HANDOFF is not a setup handoff secret (32 to 128 letters, digits, - and _). It is not shown here."
+        )
+    s.setup_handoff_hash = hashlib.sha256(secret.encode()).hexdigest()
+
+
 def gather(args, s: Settings, dry: bool) -> None:
     """Our operator's flags, checked before anything is asked or created. A self-hosted install leaves all of it unset."""
     check_dns_identity(args, s.dns_name, s.dns_zone)
+    read_handoff(s)
     hosted = (getattr(args, "hosted", None) or s.hosted or "").strip().lower()
     preset = (getattr(args, "preset", None) or s.preset or "").strip().lower()
     auth = getattr(args, "auth", None) or ""
@@ -124,6 +140,12 @@ def plan_lines(s: Settings) -> list[str]:
                 if s.gateway_invite
                 else "No Gateway invite in the environment (TICO_GATEWAY_INVITE): the Gateway is not set up by this run."
             )
+        )
+    if s.setup_handoff_hash:
+        out.append(
+            "Setup handoff: the server keeps only the hash of the one-time secret in TICO_SETUP_HANDOFF. Whoever holds "
+            "the secret trades it once, within a week of the first start, for a personal token of the owner "
+            "(POST /api/v2/setup/handoff); it is never printed or saved here."
         )
     return out
 

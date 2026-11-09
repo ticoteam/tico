@@ -6,6 +6,7 @@ from .store import Problem
 from fastapi import Request
 from pydantic import ValidationError
 from . import ask_ingest
+from . import pipeline_rights
 import json
 from . import org_rule_check
 from . import task_privacy as privacy
@@ -65,8 +66,10 @@ def register(
             snoozed=f.snoozed,
             by_id=f.ids is not None or f.number is not None,
             exact=True,
+            viewer=who.task_actor or who.actor,
         )
-        visible_sql = auth.task_sql(c, who)
+        # The members-only rule too (pipeline_rights.list_sql): a non-member selects none of a hidden pipeline's tickets.
+        visible_sql = pipeline_rights.list_sql(c, who.task_actor or who.actor, auth.task_sql(c, who))
         if f.ids is not None:
             _, found = task_idents(c, who, ",".join(f.ids), visible_sql)
             filters["ids"] = [tid for tid in found.values() if tid]
@@ -250,7 +253,7 @@ def register(
                 c.execute("RELEASE bulk_dry_run")
                 del c.after_commit[queued:]
             # Each task the caller can still read is named; one a change took out of their sight is only counted.
-            visible = auth.task_sql(c, caller)
+            visible = pipeline_rights.list_sql(c, caller.task_actor or caller.actor, auth.task_sql(c, caller))
             readable = {
                 r[0]
                 for r in c.execute(

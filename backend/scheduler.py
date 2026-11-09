@@ -9,6 +9,7 @@ from zoneinfo import ZoneInfo
 from croniter import croniter
 
 from . import goals as G
+from . import pipeline_manager
 from . import placement, run_triggers
 from . import system_routines as SR
 from .batch_work import isolated
@@ -636,6 +637,8 @@ class Scheduler:
                 steps.append(("finance_documents", lambda c: finance.watch_documents(c, stamp(at))))
             if self.finance_due("period", at, timedelta(days=1)):
                 steps.append(("finance_period", lambda c: finance.open_next_period(c, stamp(at))))
+            if self.finance_due("subscriptions", at, timedelta(days=1)):  # suggests and cancels (subscriptions.py)
+                steps.append(("finance_subscriptions", lambda c: finance.detect_subscriptions(c, stamp(at))))
         failed = 0
         for name, step in steps:
             try:
@@ -773,6 +776,9 @@ class Scheduler:
             webhook_delivery.ensure()  # a delivery worker that died comes back on the next tick
         except Exception as exc:
             failures.append({"webhook_delivery": type(exc).__name__})
+        from . import pipeline_judges
+
+        pipeline_judges.dispatch(self.store, at, failures)  # bot-reviewed pipeline requirements, one guarded call
         self.finance_tick(at, failures)
         if self.swept is None or at - self.swept >= timedelta(hours=1):
             # Deadline work that cannot wait for Clean up (backend/maintenance_steps/clean_up.py holds the pruning). Marked
@@ -842,6 +848,13 @@ class Scheduler:
         if self.invariants_checked is None or at - self.invariants_checked >= timedelta(minutes=15):
             self.invariants_checked = at
             run_invariants(self.store, self.execution.auth, at, failures)
+        # Pipeline managers, their watchdog and the Factory Managers: plain code, one guarded call (backend/pipeline_manager.py).
+        pipeline_manager.run_due(self.store, at, failures)
+        if self.github_app is not None:
+            # Tico's approval checks on pull requests (backend/pipeline_github_checks.py): recorded and posted on their own thread.
+            from . import pipeline_github_checks
+
+            pipeline_github_checks.dispatch(self.store, self.github_app, failures)
         if self.tools_checked is None or at - self.tools_checked >= timedelta(minutes=5):
             # API tools on the proxy with a check path, each every 30 minutes (backend/api_tools.py): a real call with
             # each key, on its own thread, so a slow vendor never holds a tick.

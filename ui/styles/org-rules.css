@@ -1,4 +1,4 @@
-/* Rules (ui/app/org-rules.js): filters | list | side panel on a computer; on a phone the filters are a strip of pills,
+/* Rules (ui/app/org-rules.ts): filters | list | side panel on a computer; on a phone the filters are a strip of pills,
    the rows stack, and a panel is a full-screen sheet. Internal is the Reach map and its panel instead (below). The bot's
    Rules tab reuses the rows. */
 #main.ru-layout{max-width:none;padding:0;overflow:hidden;height:100%}

@@ -10,7 +10,7 @@
 .au-ph h1{margin:0;font-size:var(--t-lg);font-weight:600}
 /* a phone's two header rows (tabs and range; search, filters and + New); a computer lays their parts out in one row */
 .au-hrow{display:contents}
-.au-fbtn,.au-new>.nav-icon{display:none}
+.au-fbtn{display:none}
 .au-sp{flex:1}
 .au-sp-phone{display:none}
 .au-pad{padding:14px}
@@ -22,11 +22,12 @@
 
 /* the range: 5m, 1h, 24h, 7d */
 .au-range button{padding:3px 10px;border:0;border-radius:6px;background:none;color:var(--muted);font:inherit;font-size:var(--t-sm);font-weight:600;font-variant-numeric:tabular-nums;cursor:pointer}
+.au-range{height:var(--ctl)}
 .au-range button[aria-pressed="true"]{background:var(--raised);color:var(--ink);box-shadow:0 1px 3px rgba(0,0,0,.12)}
 
 /* the filters */
 .au-rail{display:flex;flex-direction:column;min-height:0;overflow-y:auto;border-right:1px solid var(--line)}
-.au-s{padding:12px}
+.au-s{padding:6px 12px 12px}   /* the search's middle lands on the tabs' middle (6px higher than the rail's 12px) */
 .au-facets{display:grid;align-content:start;gap:14px;padding:0 8px 16px}
 .au-fg{display:grid;align-content:start;gap:1px}
 .au-fg .au-lb{padding:0 6px 4px}
@@ -393,12 +394,12 @@ button.au-chip:hover{background:var(--surface2)}
   #main.au-layout{overflow:auto;height:auto;padding:0 0 calc(var(--mobile-nav-height) + env(safe-area-inset-bottom))}
   .au{height:auto;min-height:0}
   /* the header: Automations | Runs and the range, then the search, the filter button and + New */
-  .au-ph{flex-direction:column;align-items:stretch;gap:8px;padding:8px 12px}
-  .au-ph h1,.au-ph>.au-sp,.au-ph>.docs-ask{display:none}
+  .au-ph{flex-direction:column;align-items:stretch;gap:8px;padding:8px 12px;--add-w:40px;--add-h:40px}
+  .au-ph h1,.au-ph>.au-sp{display:none}
   .au-hrow{display:flex;align-items:center;gap:8px;min-width:0}
   .au-hrow .au-tabs{flex:none}
   .au-hrow .au-tabs button{height:36px;padding:0 10px}
-  .au-hrow .au-range{margin-left:auto}
+  .au-hrow .au-range{margin-left:auto;height:36px}
   .au-hrow .au-range button{height:32px;padding:0 9px}
   .au-hrow .au-s{flex:1;min-width:0;padding:0}
   .au-hrow .au-q{width:100%;min-width:0}
@@ -406,9 +407,6 @@ button.au-chip:hover{background:var(--surface2)}
   .au-fbtn[aria-expanded="true"]{background:var(--surface2)}
   .au-fbtn .nav-icon{font-size:18px;width:18px;height:18px}
   .au-fbn{position:absolute;top:-5px;right:-5px;min-width:16px;height:16px;padding:0 4px;border-radius:999px;background:var(--ink);color:var(--bg);font-size:var(--t-2xs);font-weight:600;line-height:16px;font-variant-numeric:tabular-nums;text-align:center}
-  .au-new{display:inline-flex;align-items:center;justify-content:center;width:40px;height:40px;padding:0}
-  .au-new>.nav-icon{display:block;font-size:22px;width:22px;height:22px;color:inherit}
-  .au-new-w{display:none}
   .au-body{display:block}
   .au-rail,.au-c,.au-side{display:none;border:0}
   .au:not([data-screen="list"]) .au-ph{display:none}

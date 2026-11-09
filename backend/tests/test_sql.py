@@ -156,7 +156,7 @@ def world(api):
 
 
 def test_the_sql_page_examples_all_run(api):
-    page = (Path(__file__).resolve().parents[2] / "ui/app/sql.js").read_text()
+    page = (Path(__file__).resolve().parents[2] / "ui/app/sql.ts").read_text()
     examples = re.findall(r"""^  \['[^']+', "(.+)"\],?$""", page, re.M)
     assert len(examples) >= 6
     for sql in examples:

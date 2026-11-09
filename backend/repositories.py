@@ -352,7 +352,7 @@ def set_access(c, bot, body, org, actor, legacy=False, team_list=False, own_clic
     for grant in body.chosen or []:
         name = repo_of(grant.full_name, org)
         if not name or name.split('/')[0].lower() != org.lower():
-            raise Problem('github_repo', 'Choose a repository in the connected organization', 422)
+            raise Problem('github_repo', 'Choose a repository in the connected account or organization', 422)
         existing = c.execute('SELECT enabled,bot_repo FROM repositories WHERE full_name=?', (name,)).fetchone()
         if legacy and not team_list and (not existing or not existing['enabled']):
             raise Problem('github_repo', 'Ask an Owner or admin to tick it in Settings > General › Repositories', 422)
@@ -404,7 +404,7 @@ def set_access(c, bot, body, org, actor, legacy=False, team_list=False, own_clic
     for grant in body.all_repos or []:
         name = repo_of(grant.full_name, org)
         if not name or name.split('/')[0].lower() != org.lower():
-            raise Problem('github_repo', 'Choose a repository in the connected organization', 422)
+            raise Problem('github_repo', 'Choose a repository in the connected account or organization', 422)
         named.setdefault(name.lower(), reach.get(name.lower()))
         for flag, _, label, verb, _ in FLAGS:
             value = getattr(grant, flag)
@@ -1075,10 +1075,13 @@ def install(app, store, service):
                 r['archived'] = archived.get(r['full_name'].lower())
                 for key in ('enabled', 'bot_repo', 'reachable'):
                     r[key] = bool(r[key])
+            github_row = service.row(c)
             return {
                 'repositories': repos,
                 'new_bot_default': metadata(c, SETTINGS).get('new_bot_default', 'own'),
-                'github_connected': bool(service.row(c)),
+                'github_connected': bool(github_row),
+                # An App that was created but never installed cannot reach any repository.
+                'github_installed': bool(github_row and github_row['installation_id']),
             }
 
     @app.get('/api/v2/repositories')

@@ -1,6 +1,6 @@
 /* ui/replay-player.ts — The history replay player: bot faces, a task board and an activity feed that play a list of
    history items (GET /api/v2/replay) back at a chosen speed, with play/pause, speeds, skip-quiet and a scrubber.
-   It mounts through `window.TicoReplay` and reads no app state: the Replay page (ui/app/replay.js) passes the app's
+   It mounts through `window.TicoReplay` and reads no app state: the Replay page (ui/app/replay.ts) passes the app's
    faces and names in through `opts`. */
 'use strict';
 

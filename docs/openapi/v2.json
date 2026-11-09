@@ -14963,6 +14963,47 @@
         ]
       }
     },
+    "/api/v2/finance/attribution/dimensions": {
+      "get": {
+        "summary": "The classes, departments (locations) and projects seen on P&L lines in the last 12 months the caller sees, largest amount first, each with its line count, amount and rule (its shares, or null); needs the finance.attribution right or admin. Set them with the attribution_map action",
+        "operationId": "listFinanceAttributionDimensions",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FinanceAttributionDimensions"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Finance"
+        ]
+      }
+    },
     "/api/v2/finance/balance-sheet": {
       "get": {
         "summary": "Assets, liabilities and equity on a day, each line with its sources. Owner-only unless granted",
@@ -15373,6 +15414,65 @@
         ]
       }
     },
+    "/api/v2/finance/brief": {
+      "get": {
+        "summary": "What changed in Finance for the caller: a few short lines about the money they may see, with as_of (when those numbers last moved) and changed_since. Empty lines when there is nothing to say. The owner may pass view_as",
+        "operationId": "getFinanceBrief",
+        "parameters": [
+          {
+            "name": "view_as",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "View As"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FinanceBrief"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Finance"
+        ]
+      }
+    },
     "/api/v2/finance/budgets": {
       "get": {
         "summary": "The budgets the caller sees, each with where it stands today, or with at=YYYY-MM-DD in the period holding that day (the version in effect then); amounts in cents. The owner may pass view_as",
@@ -15441,6 +15541,59 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/FinanceBudgets"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Finance"
+        ]
+      }
+    },
+    "/api/v2/finance/campaigns": {
+      "get": {
+        "summary": "The ad campaigns the caller sees for a month (YYYY-MM): each with its owner (a team or teammate, inherited when it is the account's bot), its spend, clicks, conversions and cost per conversion in cents, by spend, with totals",
+        "operationId": "listFinanceCampaigns",
+        "parameters": [
+          {
+            "name": "month",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^\\d{4}-(0[1-9]|1[0-2])$",
+              "title": "Month"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FinanceCampaigns"
                 }
               }
             }
@@ -16903,7 +17056,7 @@
     },
     "/api/v2/finance/metrics/{name}": {
       "get": {
-        "summary": "One number with when it was worked out (and for bank-backed numbers how fresh the data is): cash, burn, runway_months, revenue, spend, budget_remaining, budget_pct_used, ap_due, ar_overdue, uncategorized_count, unreconciled_days",
+        "summary": "One number with when it was worked out (and for bank-backed numbers how fresh the data is): cash, burn, runway_months, revenue, spend, budget_remaining, budget_pct_used, ap_due, ar_overdue, uncategorized_count, unreconciled_days, unattributed, ad_spend, per_conversion",
         "operationId": "getFinanceMetric",
         "parameters": [
           {
@@ -16924,7 +17077,11 @@
                 "uncategorized_count",
                 "unreconciled_days",
                 "duplicate_charges",
-                "price_increases"
+                "price_increases",
+                "unattributed",
+                "ad_spend",
+                "per_conversion",
+                "subscriptions_monthly"
               ],
               "type": "string",
               "title": "Name"
@@ -17523,6 +17680,117 @@
         ]
       }
     },
+    "/api/v2/finance/receipts": {
+      "get": {
+        "summary": "The receipts the caller sees, newest first: each Library file with what it reads as (amount, date, vendor) and its suggested or filed bank or card row; ?status= narrows them, and a cursor pages them",
+        "operationId": "listFinanceReceipts",
+        "parameters": [
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "unread",
+                    "suggested",
+                    "unmatched",
+                    "attached",
+                    "rejected"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Status"
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 600
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cursor"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 200,
+              "minimum": 1,
+              "default": 50,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "view_as",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "View As"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FinanceReceipts"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Finance"
+        ]
+      }
+    },
     "/api/v2/finance/recipients": {
       "get": {
         "summary": "Current payment recipients, last 4 only, for teammates who may pay",
@@ -17653,7 +17921,7 @@
     },
     "/api/v2/finance/reports/{kind}": {
       "get": {
-        "summary": "pnl (cash or accrual), balance_sheet, cash_flow, budget_vs_actual, ap_aging, ar_aging or spend_by, cut to the caller's view; compare=prior adds the window before; rows past top_n fold into one Other row (key \" other\"; the group with no vendor, team or teammate is keyed \" unattributed\": no real key starts with a space)",
+        "summary": "pnl (cash or accrual), balance_sheet, cash_flow, budget_vs_actual, ap_aging, ar_aging, spend_by or campaigns, cut to the caller's view; compare=prior adds the window before; rows past top_n fold into one Other row (key \" other\"; the group with no vendor, team or teammate is keyed \" unattributed\": no real key starts with a space)",
         "operationId": "getFinanceReport",
         "parameters": [
           {
@@ -17669,7 +17937,9 @@
                 "budget_vs_actual",
                 "ap_aging",
                 "ar_aging",
-                "spend_by"
+                "spend_by",
+                "campaigns",
+                "subscriptions"
               ],
               "type": "string",
               "title": "Kind"
@@ -17945,7 +18215,10 @@
                     "project",
                     "po",
                     "estimate",
-                    "account"
+                    "account",
+                    "vendor",
+                    "campaign",
+                    "subscription"
                   ],
                   "type": "string"
                 },
@@ -18167,6 +18440,23 @@
             }
           },
           {
+            "name": "month",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "pattern": "^\\d{4}-(0[1-9]|1[0-2])$"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Month"
+            }
+          },
+          {
             "name": "cursor",
             "in": "query",
             "required": false,
@@ -18381,6 +18671,87 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/FinanceStatements"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Finance"
+        ]
+      }
+    },
+    "/api/v2/finance/subscriptions": {
+      "get": {
+        "summary": "The subscriptions the caller sees: recurring charges the daily look suggests and the Bookkeeper confirms, each with its cadence, expected amount and monthly cost in cents, next charge, card, seats and attribution, and the monthly total of the active ones. status narrows them",
+        "operationId": "listFinanceSubscriptions",
+        "parameters": [
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "suggested",
+                    "active",
+                    "ignored",
+                    "cancelled"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Status"
+            }
+          },
+          {
+            "name": "view_as",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "View As"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FinanceSubscriptions"
                 }
               }
             }
@@ -19048,6 +19419,128 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/FinanceTransfers"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Finance"
+        ]
+      }
+    },
+    "/api/v2/finance/unattributed": {
+      "get": {
+        "summary": "The Unattributed queue: the P&L lines in the period (this month by default) with no team, teammate or attribution in force, newest first, paged by cursor, cut to what the caller sees",
+        "operationId": "listFinanceUnattributed",
+        "parameters": [
+          {
+            "name": "start",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Start"
+            }
+          },
+          {
+            "name": "end",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "End"
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 600
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cursor"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 200,
+              "minimum": 1,
+              "default": 50,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "view_as",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "View As"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FinanceUnattributed"
                 }
               }
             }
@@ -56463,6 +56956,85 @@
         "title": "FinanceAdRunRequest",
         "description": "Import a tool's ad spend now instead of at the next 4-hourly run."
       },
+      "FinanceAttributionDimensions": {
+        "type": "object",
+        "properties": {
+          "dimensions": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "type": "string"
+                },
+                "id": {
+                  "type": "string"
+                },
+                "name": {
+                  "type": "string"
+                },
+                "lines": {
+                  "type": "integer"
+                },
+                "amount": {
+                  "type": "integer"
+                },
+                "rule_id": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "splits": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "teammate": {
+                        "type": "string"
+                      },
+                      "team": {
+                        "type": "string"
+                      },
+                      "share_bps": {
+                        "type": "integer"
+                      }
+                    },
+                    "required": [
+                      "share_bps",
+                      "team",
+                      "teammate"
+                    ],
+                    "additionalProperties": true
+                  }
+                }
+              },
+              "required": [
+                "amount",
+                "id",
+                "kind",
+                "lines",
+                "name",
+                "rule_id",
+                "splits"
+              ],
+              "additionalProperties": true
+            }
+          },
+          "can_change": {
+            "type": "boolean"
+          },
+          "view_version": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "can_change",
+          "dimensions",
+          "view_version"
+        ],
+        "additionalProperties": true
+      },
       "FinanceAttributionRules": {
         "type": "object",
         "properties": {
@@ -57007,6 +57579,33 @@
         ],
         "additionalProperties": true
       },
+      "FinanceBrief": {
+        "type": "object",
+        "properties": {
+          "lines": {
+            "type": "array",
+            "items": "s"
+          },
+          "as_of": {
+            "type": "string"
+          },
+          "changed_since": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "version": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "as_of",
+          "lines",
+          "version"
+        ],
+        "additionalProperties": true
+      },
       "FinanceBudgetRow": {
         "type": "object",
         "properties": {
@@ -57089,6 +57688,144 @@
           "more",
           "on",
           "view_version"
+        ],
+        "additionalProperties": true
+      },
+      "FinanceCampaigns": {
+        "type": "object",
+        "properties": {
+          "month": {
+            "type": "string"
+          },
+          "campaigns": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "name": {
+                  "type": "string"
+                },
+                "platform": {
+                  "type": "string"
+                },
+                "ad_account": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "name": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "name"
+                  ],
+                  "additionalProperties": true
+                },
+                "owner": {
+                  "type": "object",
+                  "properties": {
+                    "team": {
+                      "type": "string"
+                    },
+                    "teammate": {
+                      "type": "string"
+                    },
+                    "inherited": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "inherited",
+                    "team",
+                    "teammate"
+                  ],
+                  "additionalProperties": true
+                },
+                "month": {
+                  "type": "object",
+                  "properties": {
+                    "spend": {
+                      "type": "integer"
+                    },
+                    "clicks": {
+                      "type": "integer"
+                    },
+                    "conversions": {
+                      "type": "number"
+                    },
+                    "per_conversion": {
+                      "type": [
+                        "integer",
+                        "null"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "clicks",
+                    "conversions",
+                    "per_conversion",
+                    "spend"
+                  ],
+                  "additionalProperties": true
+                },
+                "as_of": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "ad_account",
+                "as_of",
+                "id",
+                "month",
+                "name",
+                "owner",
+                "platform"
+              ],
+              "additionalProperties": true
+            }
+          },
+          "totals": {
+            "type": "object",
+            "properties": {
+              "spend": {
+                "type": "integer"
+              },
+              "clicks": {
+                "type": "integer"
+              },
+              "conversions": {
+                "type": "number"
+              },
+              "per_conversion": {
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "clicks",
+              "conversions",
+              "per_conversion",
+              "spend"
+            ],
+            "additionalProperties": true
+          },
+          "as_of": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "as_of",
+          "campaigns",
+          "month",
+          "totals"
         ],
         "additionalProperties": true
       },
@@ -59024,6 +59761,153 @@
         ],
         "additionalProperties": true
       },
+      "FinanceReceipts": {
+        "type": "object",
+        "properties": {
+          "rows": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "file": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "name": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "name"
+                  ],
+                  "additionalProperties": true
+                },
+                "read": {
+                  "type": "object",
+                  "properties": {
+                    "amount": {
+                      "type": [
+                        "integer",
+                        "null"
+                      ]
+                    },
+                    "date": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "vendor": {
+                      "type": [
+                        "object",
+                        "null"
+                      ],
+                      "properties": {
+                        "id": {
+                          "type": "string"
+                        },
+                        "name": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "id",
+                        "name"
+                      ],
+                      "additionalProperties": true
+                    }
+                  },
+                  "required": [
+                    "amount",
+                    "date",
+                    "vendor"
+                  ],
+                  "additionalProperties": true
+                },
+                "match": {
+                  "type": [
+                    "object",
+                    "null"
+                  ],
+                  "properties": {
+                    "feed": {
+                      "type": "object",
+                      "properties": {
+                        "id": {
+                          "type": "string"
+                        },
+                        "date": {
+                          "type": "string"
+                        },
+                        "amount": {
+                          "type": "integer"
+                        },
+                        "description": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "amount",
+                        "date",
+                        "description",
+                        "id"
+                      ],
+                      "additionalProperties": true
+                    },
+                    "confidence": {
+                      "type": [
+                        "number",
+                        "null"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "confidence",
+                    "feed"
+                  ],
+                  "additionalProperties": true
+                },
+                "status": {
+                  "type": "string"
+                },
+                "as_of": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "as_of",
+                "file",
+                "id",
+                "match",
+                "read",
+                "status"
+              ],
+              "additionalProperties": true
+            }
+          },
+          "next": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "as_of": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "as_of",
+          "next",
+          "rows"
+        ],
+        "additionalProperties": true
+      },
       "FinanceRecipients": {
         "type": "object",
         "properties": {
@@ -59189,7 +60073,8 @@
               "budget_vs_actual",
               "ap_aging",
               "ar_aging",
-              "spend_by"
+              "spend_by",
+              "campaigns"
             ]
           },
           "prior": {
@@ -59386,7 +60271,8 @@
                     "card",
                     "item",
                     "location",
-                    "project"
+                    "project",
+                    "vendor"
                   ]
                 },
                 "id": {
@@ -59530,6 +60416,128 @@
         },
         "required": [
           "statements"
+        ],
+        "additionalProperties": true
+      },
+      "FinanceSubscriptionRow": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "vendor": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "name"
+            ],
+            "additionalProperties": true
+          },
+          "status": {
+            "type": "string"
+          },
+          "cadence": {
+            "type": "string"
+          },
+          "amount": {
+            "type": "integer"
+          },
+          "monthly": {
+            "type": "integer"
+          },
+          "seats": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "next_charge_on": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "card": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              }
+            }
+          },
+          "attribution": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "to": {
+                  "type": "string"
+                },
+                "share": {
+                  "type": "number"
+                }
+              },
+              "required": [
+                "share",
+                "to"
+              ],
+              "additionalProperties": true
+            }
+          },
+          "source": {
+            "type": "string"
+          },
+          "as_of": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "amount",
+          "attribution",
+          "cadence",
+          "card",
+          "id",
+          "monthly",
+          "next_charge_on",
+          "status",
+          "vendor"
+        ],
+        "additionalProperties": true
+      },
+      "FinanceSubscriptions": {
+        "type": "object",
+        "properties": {
+          "rows": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/FinanceSubscriptionRow"
+            }
+          },
+          "monthly_total": {
+            "type": "integer"
+          },
+          "as_of": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "as_of",
+          "monthly_total",
+          "rows"
         ],
         "additionalProperties": true
       },
@@ -59793,6 +60801,117 @@
         "required": [
           "next_cursor",
           "transfers"
+        ],
+        "additionalProperties": true
+      },
+      "FinanceUnattributed": {
+        "type": "object",
+        "properties": {
+          "lines": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "date": {
+                  "type": "string"
+                },
+                "entry_id": {
+                  "type": "string"
+                },
+                "account": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "code": {
+                      "type": "string"
+                    },
+                    "name": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "code",
+                    "id",
+                    "name"
+                  ],
+                  "additionalProperties": true
+                },
+                "amount": {
+                  "type": "integer"
+                },
+                "description": {
+                  "type": "string"
+                },
+                "memo": {
+                  "type": "string"
+                },
+                "vendor": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "name": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "name"
+                  ],
+                  "additionalProperties": true
+                },
+                "source": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "account",
+                "amount",
+                "date",
+                "description",
+                "entry_id",
+                "id",
+                "memo",
+                "source",
+                "vendor"
+              ],
+              "additionalProperties": true
+            }
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "start": {
+            "type": "string"
+          },
+          "end": {
+            "type": "string"
+          },
+          "as_of": {
+            "type": "string"
+          },
+          "currency": {
+            "type": "string"
+          },
+          "view_version": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "as_of",
+          "end",
+          "lines",
+          "start",
+          "view_version"
         ],
         "additionalProperties": true
       },
@@ -61426,8 +62545,12 @@
                 "reason": {
                   "type": "string"
                 },
-                "freshness": {
-                  "type": "string"
+                "kpis": {
+                  "type": "array",
+                  "description": "kind kpi_stale: each of the person's measures whose reading is out of date, in the one ask: {kpi_id, kpi_name, freshness, reason}",
+                  "items": {
+                    "type": "object"
+                  }
                 },
                 "proposal": {
                   "type": "object"
@@ -66715,6 +67838,19 @@
             ],
             "title": "Monthly Cap Usd"
           },
+          "rules_monthly_cap_usd": {
+            "anyOf": [
+              {
+                "type": "number",
+                "maximum": 100000.0,
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rules Monthly Cap Usd"
+          },
           "steps": {
             "anyOf": [
               {
@@ -71300,10 +72436,14 @@
           },
           "github_connected": {
             "type": "boolean"
+          },
+          "github_installed": {
+            "type": "boolean"
           }
         },
         "required": [
           "github_connected",
+          "github_installed",
           "new_bot_default",
           "repositories"
         ],
@@ -71557,64 +72697,6 @@
         "additionalProperties": false,
         "type": "object",
         "title": "ReviewSettings"
-      },
-      "ReviewTarget": {
-        "properties": {
-          "comment": {
-            "anyOf": [
-              {
-                "type": "string",
-                "maxLength": 200,
-                "minLength": 1
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Comment"
-          },
-          "file": {
-            "anyOf": [
-              {
-                "type": "string",
-                "maxLength": 200,
-                "minLength": 1
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "File"
-          },
-          "version": {
-            "anyOf": [
-              {
-                "type": "integer",
-                "minimum": 1.0
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Version"
-          },
-          "task": {
-            "anyOf": [
-              {
-                "type": "string",
-                "maxLength": 200,
-                "minLength": 1
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Task"
-          }
-        },
-        "additionalProperties": false,
-        "type": "object",
-        "title": "ReviewTarget"
       },
       "ReviewedMeeting": {
         "type": "object",
@@ -71942,6 +73024,26 @@
             "type": "array",
             "maxItems": 20,
             "title": "Where"
+          },
+          "toward_scope": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "maxItems": 20,
+            "title": "Toward Scope"
+          },
+          "applies_when": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 200
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Applies When"
           }
         },
         "additionalProperties": false,
@@ -75981,6 +77083,13 @@
             "type": "string",
             "description": "A Dev ticket at a working step (In Progress, a Fixes step): when it entered that step or came back to work; absent otherwise"
           },
+          "requirements": {
+            "type": "array",
+            "description": "Where each stage requirement of the ticket's current step stands (backend/pipeline_engine.py); absent when the step has none",
+            "items": {
+              "type": "object"
+            }
+          },
           "relations": {
             "type": "object",
             "description": "Related tasks the reader may open, by kind (parent, blocks, related, duplicate_of, follow_up): each {id, title, status, owner, direction}; direction is out when this task is the subtask, blocker, duplicate or follow-up, in for the other end, both for related. Subtasks are in the task's children.",
@@ -76151,7 +77260,7 @@
       "TaskAnswer": {
         "properties": {
           "target": {
-            "$ref": "#/components/schemas/ReviewTarget"
+            "$ref": "#/components/schemas/backend__models__ReviewTarget"
           },
           "answers": {
             "additionalProperties": {
@@ -77263,6 +78372,43 @@
           "children": {
             "type": "array"
           },
+          "parent": {
+            "oneOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "id": {
+                    "type": "string"
+                  },
+                  "title": {
+                    "type": "string"
+                  },
+                  "label": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "step": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  }
+                },
+                "required": [
+                  "id",
+                  "label",
+                  "step",
+                  "title"
+                ],
+                "additionalProperties": true
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "comments": {
             "type": "array",
             "items": {
@@ -78272,6 +79418,13 @@
           "check_limit": {
             "type": "integer"
           },
+          "limit_minutes": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "The stage's Warn after time in minutes (the flow's late_hours x 60), or null"
+          },
           "flow": {
             "type": "object",
             "description": "What the step does with a ticket (docs/tasks.md, Step flow). On a check step, other_company is prefer (the default) or require."
@@ -78440,6 +79593,14 @@
               "public",
               "private"
             ]
+          },
+          "has_requirements": {
+            "type": "boolean",
+            "description": "On the list (GET /api/v2/task-types): whether the pipeline has any live stage requirement. A pipeline without one keeps today's phone layout; the one-stage phone view is for pipelines with requirements (backend/pipeline_engine.py)"
+          },
+          "can_edit_rules": {
+            "type": "boolean",
+            "description": "On the list (GET /api/v2/task-types): whether the caller may change this pipeline's rules, the pipeline's owner or an Admin (backend/pipeline_rights.py)"
           },
           "manager": {
             "type": [
@@ -78957,6 +80118,11 @@
               }
             ],
             "title": "Number"
+          },
+          "override_requirements": {
+            "type": "boolean",
+            "title": "Override Requirements",
+            "default": false
           },
           "verdict": {
             "anyOf": [
@@ -82932,6 +84098,64 @@
         "additionalProperties": false,
         "type": "object",
         "title": "Settings"
+      },
+      "backend__models__ReviewTarget": {
+        "properties": {
+          "comment": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 200,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Comment"
+          },
+          "file": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 200,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "File"
+          },
+          "version": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 1.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Version"
+          },
+          "task": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 200,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Task"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "ReviewTarget"
       },
       "backend__models__ToolUpdate": {
         "properties": {
