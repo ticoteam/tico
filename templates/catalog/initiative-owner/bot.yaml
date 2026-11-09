@@ -1,0 +1,26 @@
+name: initiative-owner                   # the slug: it matches the repository bot-initiative-owner and the label owner:initiative-owner
+display_name: "Initiative Owner"
+labels: [owner:initiative-owner]
+reads: []                        # other bot repositories this one may clone read-only
+
+# These must agree with the bot's settings on the server, or be left out of this file entirely.
+reasoning_effort: medium
+max_run_minutes: 60
+
+# The first routine is declared off (`enabled: false`) and switched on when a human starts the bot's setup
+# (Start setup, go-live). `hub bot create` seeds it once; from then on Tico's row is the routine (docs/routines.md).
+routines:
+  - id: weekly-initiative-check-in
+    title: Weekly initiative check-in
+    cron: "0 15 * * 5"
+    timezone: America/Los_Angeles     # set this to the team's own timezone
+    template: playbooks/weekly-check-in.md
+    labels: [priority:p2]
+    enabled: false
+
+# What this bot may touch. Not listed is not allowed. `env:` names the variable a credential
+# arrives in, never the value; declaring access here does not create it. Changing access is an
+# owner decision, so the bot files a task for the owner rather than editing this file.
+# The Strategy page, goals, KPIs and market pages are Tico's own data, read through hub; no outside account is declared,
+# so the bot cannot change a bet, a goal or a KPI from here.
+tools: []

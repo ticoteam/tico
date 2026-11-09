@@ -2,6 +2,7 @@
 
 conftest.py runs them before serving for every other test (TICO_START_JOBS=inline); this one checks the served way.
 """
+
 import sqlite3
 import threading
 from concurrent.futures import ThreadPoolExecutor
@@ -31,12 +32,14 @@ def test_a_server_answers_while_its_start_jobs_run_and_waits_for_them_to_stop(tm
                 entered.set()
                 release.wait()
             ran.append(name)
+
         return run
 
     monkeypatch.setattr(Onboarding, "ensure_librarian", job("librarian", wait=True))
     monkeypatch.setattr(Onboarding, "ensure_goal_manager", job("goal_manager"))
     monkeypatch.setattr(Onboarding, "ensure_task_manager", job("task_manager"))
     monkeypatch.setattr(Onboarding, "ensure_counsel", job("counsel"))
+    monkeypatch.setattr(Onboarding, "ensure_brand_owner", job("brand_owner"))
     monkeypatch.setattr(listening, "seed_market", job("market"))
     monkeypatch.setattr(message_bots, "backfill", job("message_bots"))
     monkeypatch.setattr(github, "ship_deployed", job("ship_deployed"))
@@ -52,23 +55,37 @@ def test_a_server_answers_while_its_start_jobs_run_and_waits_for_them_to_stop(tm
     with ThreadPoolExecutor(max_workers=2) as requests:
         server = requests.submit(serve)
         try:
+            # Database initialization belongs to startup, before the background-job deadline. Waiting for the
+            # serving client first still fails if an inline job blocks lifespan, without timing migrations under load.
+            client = clients.get(timeout=60)
             # The job must actually be waiting before the health request starts. Its wait cannot expire and
             # get swallowed as a job failure; the request's deadline belongs to the test thread instead.
             assert entered.wait(10), captured
-            client = clients.get(timeout=10)
             assert requests.submit(client.get, "/healthz").result(10).status_code == 200
             assert ran == []
         finally:
             release.set()
             server.result(10)
     # Stopping waited for them, and they ran in their old order, off the event loop's thread.
-    assert ran == ["librarian", "goal_manager", "task_manager", "counsel", "market", "message_bots", "ship_deployed"]
+    assert ran == [
+        "librarian",
+        "goal_manager",
+        "task_manager",
+        "counsel",
+        "brand_owner",
+        "market",
+        "message_bots",
+        "ship_deployed",
+    ]
     assert threading.get_ident() not in threads and len(threads) == 1
     assert captured == []
 
 
-@pytest.mark.parametrize("failure", [RuntimeError("synthetic"), sqlite3.OperationalError("database is locked")],
-                         ids=["job-failure", "job-busy"])
+@pytest.mark.parametrize(
+    "failure",
+    [RuntimeError("synthetic"), sqlite3.OperationalError("database is locked")],
+    ids=["job-failure", "job-busy"],
+)
 def test_a_failed_start_job_is_captured_and_the_next_one_still_runs(tmp_path, monkeypatch, failure):
     monkeypatch.delenv("TICO_START_JOBS", raising=False)
     ran, captured = [], []
@@ -98,10 +115,21 @@ def startup_jobs(tmp_path, monkeypatch):
         def run(c, *args):
             c.execute("INSERT INTO registry_metadata(key,value) VALUES(?, 'true')", ("start-test." + name,))
             ran.append(name)
+
         return run
 
-    onboarding = SimpleNamespace(**{name: job(name) for name in (
-        "ensure_librarian", "ensure_goal_manager", "ensure_task_manager", "ensure_counsel")})
+    onboarding = SimpleNamespace(
+        **{
+            name: job(name)
+            for name in (
+                "ensure_librarian",
+                "ensure_goal_manager",
+                "ensure_task_manager",
+                "ensure_counsel",
+                "ensure_brand_owner",
+            )
+        }
+    )
     monkeypatch.setattr(listening, "seed_market", job("market"))
     monkeypatch.setattr(message_bots, "backfill", job("message_bots"))
     monkeypatch.setattr(github, "ship_deployed", job("ship_deployed"))
@@ -153,12 +181,22 @@ def test_start_jobs_wait_for_write_admission_instead_of_skipping_jobs(startup_jo
         assert failures[0].sqlite_errorcode == sqlite3.SQLITE_BUSY
     else:
         assert str(failures[0]) == "database is locked"
-    expected = ["ensure_librarian", "ensure_goal_manager", "ensure_task_manager", "ensure_counsel",
-                "market", "message_bots", "ship_deployed"]
+    expected = [
+        "ensure_librarian",
+        "ensure_goal_manager",
+        "ensure_task_manager",
+        "ensure_counsel",
+        "ensure_brand_owner",
+        "market",
+        "message_bots",
+        "ship_deployed",
+    ]
     assert startup_jobs.ran == expected
     assert startup_jobs.captured == []
     with store.read() as c:
-        assert c.execute("SELECT count(*) FROM registry_metadata WHERE key LIKE 'start-test.%'").fetchone()[0] == len(expected)
+        assert c.execute("SELECT count(*) FROM registry_metadata WHERE key LIKE 'start-test.%'").fetchone()[0] == len(
+            expected
+        )
 
 
 def test_a_permanent_admission_failure_is_captured_and_the_next_job_still_runs(startup_jobs, monkeypatch):

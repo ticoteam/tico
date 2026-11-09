@@ -7,11 +7,12 @@ install's meeting model through the Gateway (backend/recorder_relay.py picks the
 
 Nothing is stored here. The caller posts the items into the call's thread as one message.
 """
+
 import json
 import re
 
 CHAT_TIMEOUT = 60
-MAX_ITEMS = 5              # as the Recorder's MAX_PER_REVIEW: one long stretch of speech cannot flood the list
+MAX_ITEMS = 5  # as the Recorder's MAX_PER_REVIEW: one long stretch of speech cannot flood the list
 MAX_TITLE = 300
 
 # recorder/src/assist.rs DRAFT_PROMPT, as the Recorder sends it: the call's lines are all NEW, with no EXISTING items.
@@ -37,7 +38,7 @@ def _object(text):
     if start < 0 or end < start:
         return None
     try:
-        found = json.loads(text[start:end + 1])
+        found = json.loads(text[start : end + 1])
     except ValueError:
         return None
     return found if isinstance(found, dict) else None
@@ -62,14 +63,24 @@ def draft(base, key, model, rows):
     the items JSON."""
     from clients import gateway as G
 
-    body = {"model": model, "stream": False, "temperature": 0.2, "max_tokens": 1200,
-            "response_format": {"type": "json_object"},
-            "messages": [
-                {"role": "system", "content": DRAFT_PROMPT},
-                {"role": "user", "content": json.dumps({"EXISTING": [], "EARLIER": [], "NEW": rows},
-                                                       ensure_ascii=False)}]}
-    status, answer = G.relay("POST", base + "/chat/completions", json.dumps(body).encode("utf-8"),
-                             {"Authorization": "Bearer " + key, "Content-Type": "application/json"}, CHAT_TIMEOUT)
+    body = {
+        "model": model,
+        "stream": False,
+        "temperature": 0.2,
+        "max_tokens": 1200,
+        "response_format": {"type": "json_object"},
+        "messages": [
+            {"role": "system", "content": DRAFT_PROMPT},
+            {"role": "user", "content": json.dumps({"EXISTING": [], "EARLIER": [], "NEW": rows}, ensure_ascii=False)},
+        ],
+    }
+    status, answer = G.relay(
+        "POST",
+        base + "/chat/completions",
+        json.dumps(body).encode("utf-8"),
+        {"Authorization": "Bearer " + key, "Content-Type": "application/json"},
+        CHAT_TIMEOUT,
+    )
     if status != 200:
         raise ItemsUnavailable(f"The Gateway answered {status}")
     try:

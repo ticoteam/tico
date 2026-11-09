@@ -1,4 +1,4 @@
-/* ui/styles/learnings.css — The Learnings page (ui/app/learnings.js): a dense rail of nights, then one night. */
+/* ui/styles/learnings.css — The Learnings page (ui/app/learnings.ts): a dense rail of nights, then one night. */
 .lrn{display:grid;grid-template-columns:200px minmax(0,1fr);min-height:100%}
 .lrn-rail{border-right:1px solid var(--line);padding:14px 8px;display:flex;flex-direction:column;gap:2px;overflow:auto}
 .lrn-rail h3,.lrn-grp>h3{font-size:var(--t-label);font-weight:600;letter-spacing:var(--track-caps);text-transform:uppercase;color:var(--muted);margin:2px 8px 8px}

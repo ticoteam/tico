@@ -26,7 +26,7 @@ const {unrouted} = require('./support/routes.cjs');
       if (p.startsWith('/tico/ui/')) {
         const name = p.slice('/tico/ui/'.length), file = uiFile(name);
         if (fs.existsSync(file)) return route.fulfill({body: fs.readFileSync(file), contentType: name.endsWith('.html') ? 'text/html'
-          : name.endsWith('.css') ? 'text/css' : name.endsWith('.js') ? 'application/javascript' : 'application/octet-stream'});
+          : name.endsWith('.css') ? 'text/css' : /\.(?:js|ts)$/.test(name) ? 'application/javascript' : 'application/octet-stream'});
       }
       if (p === '/api/me') return json({id: 'chris', email: 'chris@tico.team', role: 'owner', cloud: true, config: {company_name: 'Tico'}});
       if (p === '/api/employees') return json([]);
@@ -52,8 +52,7 @@ const {unrouted} = require('./support/routes.cjs');
     };
     const open = async target => {
       await target.goto('http://tico-ui.test/#/settings');
-      await target.locator('#settings-more > summary').click();
-      await target.locator('[data-settings-tab=health]').click();
+      await target.locator('#settings-health-line [data-hl-details]').click();   // Health has no tab: General's Health line opens it
       await target.locator('#hl-page [data-hl-findings]').waitFor();
     };
 

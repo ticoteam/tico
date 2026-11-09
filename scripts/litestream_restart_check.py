@@ -12,6 +12,7 @@ earlier is copied again at each level, with or without a restart.
 
 The binary must be Litestream 0.5.17 (docker/versions.env). Nothing reads or writes outside WORKDIR.
 """
+
 import argparse
 import glob
 import os
@@ -33,7 +34,7 @@ with TestClient(create_app(Settings.from_env())):
 THRESHOLD = 0.05
 
 sys.path.insert(0, str(ROOT / "scripts"))
-import page_churn  # noqa: E402
+import page_churn
 
 
 def environment(work, litestream):
@@ -44,33 +45,57 @@ def environment(work, litestream):
     if not link.exists():
         link.symlink_to(Path(litestream).resolve())
     data = work / "data"
-    return {"PATH": f"{bin_dir}:{Path(sys.executable).parent}:{os.environ.get('PATH', '')}",
-            "HOME": os.environ.get("HOME", ""), "PYTHONPATH": str(ROOT),
-            "TICO_DATA_DIR": str(data), "TICO_DB": str(data / "hub.sqlite"), "TICO_REGISTRY_DIR": str(data / "registry"),
-            "TICO_BLOB_DIR": str(data / "blobs"), "TICO_BACKUP_DIR": str(work / "backups"),
-            "TICO_LITESTREAM_CONFIG": str(work / "litestream.yml"),
-            "TICO_TEAM_NAME": "Acme", "TICO_OWNER_EMAIL": "owner@example.com", "TICO_APP_NAME": "Acme",
-            "TICO_ASSISTANT_NAME": "Assistant", "TICO_ENVIRONMENT_ID": "litestream-check",
-            "TICO_PUBLIC_URL": "http://127.0.0.1:8765",
-            "TICO_UPDATE_CHECK": "off", "TICO_TELEMETRY": "off", "TICO_SUPPORT": "off"}
+    return {
+        "PATH": f"{bin_dir}:{Path(sys.executable).parent}:{os.environ.get('PATH', '')}",
+        "HOME": os.environ.get("HOME", ""),
+        "PYTHONPATH": str(ROOT),
+        "TICO_DATA_DIR": str(data),
+        "TICO_DB": str(data / "hub.sqlite"),
+        "TICO_REGISTRY_DIR": str(data / "registry"),
+        "TICO_BLOB_DIR": str(data / "blobs"),
+        "TICO_BACKUP_DIR": str(work / "backups"),
+        "TICO_LITESTREAM_CONFIG": str(work / "litestream.yml"),
+        "TICO_TEAM_NAME": "Acme",
+        "TICO_OWNER_EMAIL": "owner@example.com",
+        "TICO_APP_NAME": "Acme",
+        "TICO_ASSISTANT_NAME": "Assistant",
+        "TICO_ENVIRONMENT_ID": "litestream-check",
+        "TICO_PUBLIC_URL": "http://127.0.0.1:8765",
+        "TICO_UPDATE_CHECK": "off",
+        "TICO_TELEMETRY": "off",
+        "TICO_SUPPORT": "off",
+    }
 
 
 def prepare(env):
-    result = subprocess.run(["bash", str(ENTRYPOINT), "prepare"], env=env, cwd=ROOT, capture_output=True, text=True,
-                            timeout=300, check=False)
+    result = subprocess.run(
+        ["bash", str(ENTRYPOINT), "prepare"],
+        env=env,
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        timeout=300,
+        check=False,
+    )
     if result.returncode:
         sys.exit(f"prepare failed: {result.stderr[-1000:]}")
 
 
 def replica_files(work):
-    return {os.path.relpath(p, work / "backups"): os.path.getsize(p)
-            for p in glob.glob(str(work / "backups" / "ltx" / "*" / "*.ltx"))}
+    return {
+        os.path.relpath(p, work / "backups"): os.path.getsize(p)
+        for p in glob.glob(str(work / "backups" / "ltx" / "*" / "*.ltx"))
+    }
 
 
 def start_litestream(work, env):
     log = open(work / "litestream.log", "ab")
-    return subprocess.Popen([str(work / "bin" / "litestream"), "replicate", "-config", env["TICO_LITESTREAM_CONFIG"]],
-                            env=env, stdout=log, stderr=log)
+    return subprocess.Popen(
+        [str(work / "bin" / "litestream"), "replicate", "-config", env["TICO_LITESTREAM_CONFIG"]],
+        env=env,
+        stdout=log,
+        stderr=log,
+    )
 
 
 def stop_litestream(process):
@@ -79,8 +104,9 @@ def stop_litestream(process):
 
 
 def app_start(env):
-    result = subprocess.run([sys.executable, "-c", LIFESPAN], cwd=ROOT, env=env, capture_output=True, text=True,
-                            timeout=600, check=False)
+    result = subprocess.run(
+        [sys.executable, "-c", LIFESPAN], cwd=ROOT, env=env, capture_output=True, text=True, timeout=600, check=False
+    )
     if result.returncode:
         sys.exit(f"the app's start-up failed: {result.stderr[-1000:]}")
 
@@ -131,8 +157,11 @@ def main():
         uploaded = sum(v for k, v in added.items() if k.startswith("ltx/0/"))
         compacted = sum(added.values()) - uploaded
         worst = max(worst, uploaded / size)
-        print(f"restart {number}: uploads {uploaded / 1e6:.2f} MB ({uploaded / size:.1%} of the database); "
-              f"compaction re-copies {compacted / 1e6:.2f} MB", flush=True)
+        print(
+            f"restart {number}: uploads {uploaded / 1e6:.2f} MB ({uploaded / size:.1%} of the database); "
+            f"compaction re-copies {compacted / 1e6:.2f} MB",
+            flush=True,
+        )
         for name, found in sorted(added.items()):
             print(f"    {found / 1e6:9.3f} MB  {name}", flush=True)
     if worst >= THRESHOLD:

@@ -5,6 +5,7 @@ Stripe refund reverses its sale (stripe_post._unwind), and records the row it re
 could be it, or none that fits, leave the refund new and asked, with the candidates named by id. A money-out row that
 already pays a bill is not reopened here: money back that could refund it stays new and is asked, naming the bill, so no
 posting rule can post it as income (a vendor's refund is not income)."""
+
 from datetime import date, timedelta
 from typing import Any
 
@@ -16,7 +17,7 @@ from .store import ap as SAP
 from .store import banking as SK
 from .store import ledger as SL
 
-WINDOW_DAYS = 120       # the money-out row a refund reverses is dated at most this many days before the refund
+WINDOW_DAYS = 120  # the money-out row a refund reverses is dated at most this many days before the refund
 
 
 def settle(ctx: Ctx, row: Any, money: Any, t: F.FeedTxn, card: Any) -> bool:
@@ -35,13 +36,14 @@ def settle(ctx: Ctx, row: Any, money: Any, t: F.FeedTxn, card: Any) -> bool:
     exact = [o for o, left in open_found if left == t.amount]
     fitting = [o for o, left in open_found if left >= t.amount]
     if not paid_found and exact:
-        _post(ctx, row, money, t, exact[0], card)       # the newest one of this exact amount
+        _post(ctx, row, money, t, exact[0], card)  # the newest one of this exact amount
     elif not paid_found and len(fitting) == 1:
         _post(ctx, row, money, t, fitting[0], card)
-    else:                                              # several could be it, a bill's payment could be it, or none fits
+    else:  # several could be it, a bill's payment could be it, or none fits
         open_rows = [str(o["id"]) for o, left in open_found if left > 0]
-        bills = sorted({to for o, _ in paid_found for kind, to in SAP.settled_to(ctx.c, "feed", str(o["id"]))
-                        if kind == "bill"})
+        bills = sorted(
+            {to for o, _ in paid_found for kind, to in SAP.settled_to(ctx.c, "feed", str(o["id"])) if kind == "bill"}
+        )
         banking.event(ctx, banking.CATEGORY_EVENT, fid, {"feed_id": fid, "candidates": open_rows, "bills": bills})
     return True
 
@@ -68,8 +70,11 @@ def _counter(ctx: Ctx, original: Any) -> list[stripe_post.Share]:
     there is nothing a refund can reverse (the row is not posted, or its lines are not all debits)."""
     if not original["entry_id"]:
         return []
-    lines = [(line.account_id, line.amount, dict(line.tags), line.contact_id)
-             for _, line in SL.entry_lines(ctx.c, str(original["entry_id"])) if line.role != L.MONEY_ROLE]
+    lines = [
+        (line.account_id, line.amount, dict(line.tags), line.contact_id)
+        for _, line in SL.entry_lines(ctx.c, str(original["entry_id"]))
+        if line.role != L.MONEY_ROLE
+    ]
     return lines if lines and all(amount > 0 for _, amount, _, _ in lines) else []
 
 
@@ -82,8 +87,10 @@ def _post(ctx: Ctx, row: Any, money: Any, t: F.FeedTxn, original: Any, card: Any
         banking.event(ctx, banking.CATEGORY_EVENT, fid, {"feed_id": fid, "candidates": [str(original["id"])]})
         return
     before = sum(int(x["amount"]) for x in SK.refunds_of(ctx.c, str(original["id"])))
-    lines = [banking.feed_line(account, amount, tags, contact)
-             for account, amount, tags, contact in stripe_post.reversal_shares(counter, before, before + t.amount)]
+    lines = [
+        banking.feed_line(account, amount, tags, contact)
+        for account, amount, tags, contact in stripe_post.reversal_shares(counter, before, before + t.amount)
+    ]
     day = str(original["txn_date"])
     memo = f"{t.counterparty[:140]} refund of the charge dated {day}" if SL.closed_on(ctx.c, ctx.book.id, day) else ""
     entry = banking.post_row(ctx, fid, t, lines, banking.gl_account(ctx, money).id, [], memo=memo)

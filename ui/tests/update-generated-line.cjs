@@ -1,4 +1,4 @@
-// A daily update request and the bot's turn that writes the update, in a thread's timeline (ui/app/thread-view.js): one
+// A daily update request and the bot's turn that writes the update, in a thread's timeline (ui/app/thread-view.ts): one
 // muted "› Update generated" line stands for both rows. A click shows them under the line and a second click shuts them
 // again; the keyboard does the same and the focus stays on the line, and a redraw keeps the choice. An ordinary bot reply,
 // one that does not follow a request, renders as it always did. At 390px the line has a finger's height and nothing
@@ -38,11 +38,11 @@ async function open(browser, {phone = false} = {}) {
     const req = route.request(), url = new URL(req.url()), p = url.pathname, method = req.method();
     const json = (body, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
     if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
-    const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|css))$/);
+    const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/);
     if (ui && fs.existsSync(uiFile(ui[1])))
       return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]), 'utf8')});
     if (/\/marked\.min\.js$/.test(p)) return route.fulfill({contentType: 'application/javascript', body: fs.readFileSync(uiFile('vendor/marked.min.js'), 'utf8')});
-    if (p.endsWith('.js')) return route.fulfill({contentType: 'application/javascript', body: ''});
+    if (/\.(?:js|ts)$/.test(p)) return route.fulfill({contentType: 'application/javascript', body: ''});
     if (p === '/api/me') return json({id: 'ana', name: 'Ana', role: 'owner', registered: true});
     if (p === '/api/employees') return json([{name: 'ops', display_name: 'Ops', host: 'keeper', status: 'active', state: 'active', can_chat: true, schedules: [],
       my_access: {see: true, read: true, write: true}}]);
@@ -61,10 +61,11 @@ async function open(browser, {phone = false} = {}) {
   return {page, errors};
 }
 
-const row = (page, id) => page.locator(`.th-msg[data-mid="${id}"]`);
+// A message row, or the gray line a row the server wrote is (the request: ui/app/hub-v2.js rowSource).
+const row = (page, id) => page.locator(`:is(.th-msg, .th-line)[data-mid="${id}"]`);
 const line = page => page.locator('.th-upd-btn');
 // The messages inside the panel a line controls, in order.
-const panelRows = (page, panel) => page.evaluate(id => [...document.getElementById(id).querySelectorAll('.th-msg')].map(e => e.dataset.mid), panel);
+const panelRows = (page, panel) => page.evaluate(id => [...document.getElementById(id).querySelectorAll('.th-msg, .th-line')].map(e => e.dataset.mid), panel);
 
 let browser = null;
 (async () => {
@@ -100,6 +101,8 @@ let browser = null;
     await row(page, 'u2').waitFor();
     assert.equal(await line(page).getAttribute('aria-expanded'), 'true');
     assert.deepEqual(await panelRows(page, panel), ['u1', 'u2'], 'the request, then the reply, under the line');
+    assert.equal(await page.locator('.th-line[data-mid="u1"]').count(), 1, "the server's request is a gray line, not a message");
+    assert.equal(await page.locator('.th-line[data-mid="u1"] .src-name').count(), 0, 'with no sender');
     await line(page).click();
     await row(page, 'u2').waitFor({state: 'detached'});
     assert.equal(await row(page, 'u1').count(), 0);

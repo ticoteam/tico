@@ -42,7 +42,8 @@ ensure_user() {
 fetch_source() {
   local sha=$1 rel=$BASE/releases/$1
   [ -e "$rel/src/backend/demo.py" ] && return 0
-  local dir=$rel/src-$(stamp)
+  local dir
+  dir=$rel/src-$(stamp)
   install -d -m 755 "$rel" "$dir"
   curl -fsSL --retry 3 --max-time 300 --max-filesize 500000000 "https://codeload.github.com/$REPO/tar.gz/$sha" |
     tar -xz -C "$dir" --strip-components=1 --no-same-owner
@@ -57,7 +58,8 @@ runtime() {
   # Already exported (the venv's python is an absolute link into the image, so it is not tested from out here).
   [ -f "$link/opt/tico/.venv/pyvenv.cfg" ] && [ -x "$link/usr/local/bin/tico-screen-relay" ] && return 0
   docker image inspect "$IMAGE_REPO:$tag" >/dev/null 2>&1 || docker pull -q "$IMAGE_REPO:$tag" >/dev/null
-  local dir=$BASE/runtime/$tag-$(stamp) cid
+  local dir cid
+  dir=$BASE/runtime/$tag-$(stamp)
   install -d -m 755 "$dir"
   cid=$(docker create --network none "$IMAGE_REPO:$tag")
   docker export "$cid" | tar -x -C "$dir" --numeric-owner
@@ -216,6 +218,7 @@ rotate() {
   [ -f "$CONF/demo.conf" ] || die "nothing deployed yet"
   # shellcheck disable=SC1091
   . "$CONF/demo.conf"
+  # shellcheck disable=SC2153  # demo.conf, sourced above, sets IMAGE
   deploy "$SHA" --url "$URL" --image "$IMAGE"
 }
 

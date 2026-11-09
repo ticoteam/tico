@@ -70,6 +70,7 @@ def install(app, store, auth):
                 else:
                     grants.pop(slug, None)
                 save_metadata(c, GRANTS, grants)
-                H.event(c, who.actor, "outcome_stats.granted" if body.read else "outcome_stats.revoked",
-                        "bot:" + slug, {})
+                H.event(
+                    c, who.actor, "outcome_stats.granted" if body.read else "outcome_stats.revoked", "bot:" + slug, {}
+                )
             return {"readers": readers(c)}

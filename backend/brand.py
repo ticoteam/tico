@@ -13,6 +13,7 @@ proposal is merged into the draft, never published.
 `check` is the brand's programmatic lint: avoided words, wrong spellings of names and claims the brand never makes,
 matched case-insensitively at word boundaries. No model runs.
 """
+
 import json
 import re
 
@@ -39,17 +40,29 @@ def _loads(text, default=None):
 
 def admin(auth, who):
     """The owner or an admin, a person acting on their own click: never a bot, never someone acting for them."""
-    return who.role in ("owner", "human") and not getattr(who, "via", None) and auth.company_role(who) in ("owner", "admin")
+    return (
+        who.role in ("owner", "human")
+        and not getattr(who, "via", None)
+        and auth.company_role(who) in ("owner", "admin")
+    )
 
 
 # ----------------------------------------------------------------------------- reads
 def published(c, n=None):
-    row = H._one(c, "SELECT * FROM brand_versions " + ("WHERE n=?" if n is not None else "ORDER BY n DESC LIMIT 1"),
-                 (n,) if n is not None else ())
+    row = H._one(
+        c,
+        "SELECT * FROM brand_versions " + ("WHERE n=?" if n is not None else "ORDER BY n DESC LIMIT 1"),
+        (n,) if n is not None else (),
+    )
     if not row:
         return None
-    return {"n": row["n"], "body": _body(_loads(row["body"], {})), "note": row["note"],
-            "published_by": row["published_by"], "published_at": row["published_at"]}
+    return {
+        "n": row["n"],
+        "body": _body(_loads(row["body"], {})),
+        "note": row["note"],
+        "published_by": row["published_by"],
+        "published_at": row["published_at"],
+    }
 
 
 def _body(value):
@@ -65,19 +78,29 @@ def draft(c, current=None):
     body = _body(body)
     base = (current or {}).get("body") or {}
     changed = [s for s in SECTIONS if body.get(s) != base.get(s)]
-    return {"body": body, "revision": row["revision"], "updated_by": row["updated_by"], "updated_at": row["updated_at"],
-            "changed": changed}
+    return {
+        "body": body,
+        "revision": row["revision"],
+        "updated_by": row["updated_by"],
+        "updated_at": row["updated_at"],
+        "changed": changed,
+    }
 
 
 def versions(c, limit=VERSIONS_SHOWN):
-    return H._rows(c.execute("SELECT n, note, published_by, published_at FROM brand_versions ORDER BY n DESC LIMIT ?",
-                             (limit,)))
+    return H._rows(
+        c.execute("SELECT n, note, published_by, published_at FROM brand_versions ORDER BY n DESC LIMIT ?", (limit,))
+    )
 
 
 def view(c, editor):
     current = published(c)
-    return {"published": current, "draft": draft(c, current) if editor else None, "versions": versions(c),
-            "may_edit": bool(editor)}
+    return {
+        "published": current,
+        "draft": draft(c, current) if editor else None,
+        "versions": versions(c),
+        "may_edit": bool(editor),
+    }
 
 
 def _names(items, key, limit):
@@ -93,7 +116,7 @@ def _clip(text, limit, first=False):
     text = " ".join(text.split())
     if len(text) <= limit:
         return text
-    head = text[:limit - 1]
+    head = text[: limit - 1]
     return (head.rsplit(" ", 1)[0] if " " in head else head).rstrip(" ,;:-") + "…"
 
 
@@ -128,7 +151,7 @@ def summary_text(c, current=None):
     if avoid:
         parts.append("Avoid: " + ", ".join(avoid) + ".")
     text = " ".join(parts)
-    return text if len(text) <= SUMMARY_MAX else text[:SUMMARY_MAX - 1].rstrip() + "…"
+    return text if len(text) <= SUMMARY_MAX else text[: SUMMARY_MAX - 1].rstrip() + "…"
 
 
 # ----------------------------------------------------------------------------- writes
@@ -136,8 +159,11 @@ def validate(body):
     """The body checked against the brand's shape, as stored: unset sections left out. Raises Problem 422."""
     unknown = sorted(set(body) - set(SECTIONS))
     if unknown:
-        raise Problem("validation", f"The brand page has no section {', '.join(unknown)}; its sections are "
-                      + ", ".join(SECTIONS), 422)
+        raise Problem(
+            "validation",
+            f"The brand page has no section {', '.join(unknown)}; its sections are " + ", ".join(SECTIONS),
+            422,
+        )
     try:
         model = M.BrandBody.model_validate(body)
     except ValidationError as exc:
@@ -153,8 +179,13 @@ def merge(c, actor, sections, revision=None):
     row = H._one(c, "SELECT * FROM brand_drafts WHERE id=1")
     current_revision = row["revision"] if row else 0
     if revision is not None and revision != current_revision:
-        raise Problem("stale_revision", f"The brand draft changed since it was read (revision {current_revision}); "
-                      "read it again and reapply the change", 409, extra={"revision": current_revision})
+        raise Problem(
+            "stale_revision",
+            f"The brand draft changed since it was read (revision {current_revision}); "
+            "read it again and reapply the change",
+            409,
+            extra={"revision": current_revision},
+        )
     body = _loads(row["body"]) if row else None
     if not isinstance(body, dict):
         body = dict((published(c) or {}).get("body") or {})
@@ -166,10 +197,12 @@ def merge(c, actor, sections, revision=None):
             body[name] = value
     body = validate(body)
     now = H.now()
-    c.execute("INSERT INTO brand_drafts (id, body, revision, updated_by, updated_at) VALUES (1,?,?,?,?) "
-              "ON CONFLICT(id) DO UPDATE SET body=excluded.body, revision=excluded.revision, "
-              "updated_by=excluded.updated_by, updated_at=excluded.updated_at",
-              (json.dumps(body, sort_keys=True), current_revision + 1, actor, now))
+    c.execute(
+        "INSERT INTO brand_drafts (id, body, revision, updated_by, updated_at) VALUES (1,?,?,?,?) "
+        "ON CONFLICT(id) DO UPDATE SET body=excluded.body, revision=excluded.revision, "
+        "updated_by=excluded.updated_by, updated_at=excluded.updated_at",
+        (json.dumps(body, sort_keys=True), current_revision + 1, actor, now),
+    )
     H.event(c, actor, "brand.draft", "draft", {"sections": sorted(sections or {})})
     return body
 
@@ -182,13 +215,18 @@ def publish(c, actor, note=""):
         raise Problem("no_draft", "There is no brand draft to publish", 409)
     n = (current or {}).get("n", 0) + 1
     note = " ".join(str(note or "").split())[:500]
-    c.execute("INSERT INTO brand_versions (id, n, body, note, published_by, published_at) VALUES (?,?,?,?,?,?)",
-              (H.new_id(), n, json.dumps(pending["body"], sort_keys=True), note, actor, H.now()))
-    c.execute("UPDATE brand_drafts SET body='null', revision=revision+1, updated_by=?, updated_at=? WHERE id=1",
-              (actor, H.now()))
+    c.execute(
+        "INSERT INTO brand_versions (id, n, body, note, published_by, published_at) VALUES (?,?,?,?,?,?)",
+        (H.new_id(), n, json.dumps(pending["body"], sort_keys=True), note, actor, H.now()),
+    )
+    c.execute(
+        "UPDATE brand_drafts SET body='null', revision=revision+1, updated_by=?, updated_at=? WHERE id=1",
+        (actor, H.now()),
+    )
     H.event(c, actor, "brand.publish", f"v{n}", {"n": n})
-    H.hook(c, "brand.published", f"v{n}", lambda: {"version": n, "note": note, "published_by": actor}, actor,
-           revision=0)
+    H.hook(
+        c, "brand.published", f"v{n}", lambda: {"version": n, "note": note, "published_by": actor}, actor, revision=0
+    )
     return n
 
 
@@ -214,7 +252,9 @@ def check(body, text):
         scan("avoid", word.get("word"), word.get("why") or f"Avoid \"{word.get('word')}\"", word.get("level") or "warn")
     for name in body.get("naming") or []:
         for wrong in name.get("wrong") or []:
-            scan("naming", wrong, f"Write {name.get('name')}" + (f": {name['rule']}" if name.get("rule") else ""), "warn")
+            scan(
+                "naming", wrong, f"Write {name.get('name')}" + (f": {name['rule']}" if name.get("rule") else ""), "warn"
+            )
     for claim in (body.get("claims") or {}).get("never") or []:
         scan("never_claim", claim, f"The brand never claims \"{claim}\"", "block")
     hits.sort(key=lambda h: (h["index"], h["kind"]))
@@ -255,8 +295,12 @@ def install(app, store, auth, mutate):
         if admin(auth, who):
             return
         if who.role == "bot":
-            raise Problem("propose_instead", "A bot proposes a change to the brand draft and an admin confirms it: "
-                          "hub proposal create --kind brand_draft", 403)
+            raise Problem(
+                "propose_instead",
+                "A bot proposes a change to the brand draft and an admin confirms it: "
+                "hub proposal create --kind brand_draft",
+                403,
+            )
         raise Problem("forbidden", "Only the owner or an admin writes the brand draft and publishes it", 403)
 
     @app.get("/api/v2/brand")
@@ -295,6 +339,7 @@ def install(app, store, auth, mutate):
             editor(who)
             merge(c, who.actor, body.sections, body.revision)
             return view(c, True)
+
         return mutate(request, body, work)
 
     @app.post("/api/v2/brand/publish")
@@ -306,6 +351,7 @@ def install(app, store, auth, mutate):
             editor(who)
             publish(c, who.actor, body.note)
             return view(c, True)
+
         return mutate(request, body, work)
 
     @app.post("/api/v2/brand/check")

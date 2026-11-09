@@ -27,18 +27,44 @@ log = logging.getLogger(__name__)
 COLOURS = ("red", "yellow", "green")
 BOT_STATES = ("active", "paused", "planned", "quarantined", "archived")
 # bot_status.state: what the bot is doing now (hubdb.status_set). "active" is an input to status_set, never stored.
-BOT_STATUS_STATES = ("idle", "running", "waiting_human", "waiting_bot", "blocked", "limited", "crashed", "paused",
-                     "quarantined")
+BOT_STATUS_STATES = (
+    "idle",
+    "running",
+    "waiting_human",
+    "waiting_bot",
+    "blocked",
+    "limited",
+    "crashed",
+    "paused",
+    "quarantined",
+)
 TASK_STATUSES = ("open", "doing", "waiting", "review", "ready", "done", "closed", "declined")
 JOB_STATES = ("queued", "leased", "running", "input", "completed", "failed", "uncertain", "canceled")
 ATTEMPT_STATES = ("leased", "running", "input", "completed", "failed", "interrupted", "expired")
 RUN_STATUSES = ("queued", "running", "waiting", "ok", "failed", "empty", "skipped", "held")
 WEBHOOK_SEND_STATES = ("ready", "sending", "delivered", "failed", "canceled", "withheld")
-PAYMENT_STATUSES = ("queued", "sending", "awaiting_bank_approval", "submitted", "settled", "returned", "failed",
-                    "canceled", "unknown")
+PAYMENT_STATUSES = (
+    "queued",
+    "sending",
+    "awaiting_bank_approval",
+    "submitted",
+    "settled",
+    "returned",
+    "failed",
+    "canceled",
+    "unknown",
+)
 TRANSFER_STATUSES = ("queued", "submitted", "unknown", "failed", "posted", "canceled")
-GOOGLE_CONNECT_STATUSES = ("signing_in", "ready", "finishing", "revoking", "disconnecting", "connected",
-                           "disconnected", "failed")
+GOOGLE_CONNECT_STATUSES = (
+    "signing_in",
+    "ready",
+    "finishing",
+    "revoking",
+    "disconnecting",
+    "connected",
+    "disconnected",
+    "failed",
+)
 
 
 class StatusValuesError(RuntimeError):
@@ -83,8 +109,14 @@ COLUMNS = (
     Column("webhook_sends", "state", WEBHOOK_SEND_STATES, retired=(("cancelled", "canceled"),)),
     Column("bots", "state", BOT_STATES, nullable=True, enforce="check"),
     # needs_onboarding is the spelling migration 45 rewrote (backend/statuses.py); a stale row maps, it does not abort.
-    Column("bot_config", "onboarding_state", ("needs_setup", "onboarded"), nullable=True, enforce="check",
-           retired=(("needs_onboarding", "needs_setup"),)),
+    Column(
+        "bot_config",
+        "onboarding_state",
+        ("needs_setup", "onboarded"),
+        nullable=True,
+        enforce="check",
+        retired=(("needs_onboarding", "needs_setup"),),
+    ),
     Column("bot_status", "state", BOT_STATUS_STATES, nullable=True, enforce="check"),
     Column("automation_versions", "status", ("active", "pending"), enforce="check"),
     Column("goals", "status", COLOURS + ("gray", "done", "dropped"), nullable=True, enforce="check"),
@@ -93,13 +125,19 @@ COLUMNS = (
     Column("goal_proposals", "status", ("pending", "confirmed", "rejected"), enforce="check"),
     Column("bot_files", "state", ("ready", "deleted", "not_synced"), enforce="check"),
     Column("approvals", "decision", ("approved", "declined", "withdrawn"), nullable=True, enforce="check"),
-    Column("doc_sources", "status", ("link_only", "queued", "preparing", "updating", "ready", "empty", "failed",
-                                     "access_needed"), enforce="check"),
+    Column(
+        "doc_sources",
+        "status",
+        ("link_only", "queued", "preparing", "updating", "ready", "empty", "failed", "access_needed"),
+        enforce="check",
+    ),
     Column("model_subscriptions", "status", ("new", "working", "needs_reconnect"), enforce="check"),
     Column("strategy_actions", "state", ("proposed", "done", "undone"), enforce="check"),
     Column("google_connects", "status", GOOGLE_CONNECT_STATUSES, enforce="check"),
     Column("google_workspaces", "status", ("pending", "connected", "failing"), enforce="check"),
-    Column("fin_cards", "status", ("active", "frozen", "canceled"), enforce="check", retired=(("cancelled", "canceled"),)),
+    Column(
+        "fin_cards", "status", ("active", "frozen", "canceled"), enforce="check", retired=(("cancelled", "canceled"),)
+    ),
     Column("fin_payments", "status", PAYMENT_STATUSES, enforce="check", retired=(("cancelled", "canceled"),)),
     Column("fin_transfers", "status", TRANSFER_STATUSES, enforce="check", retired=(("cancelled", "canceled"),)),
 )
@@ -121,7 +159,8 @@ def unknown_values(conn, specs=None):
         accepted = spec.in_list(spec.accepted)
         rows = conn.execute(
             f"SELECT {spec.column}, COUNT(*) FROM {spec.table} WHERE {spec.column} NOT IN ({accepted}) "
-            f"{'AND ' + spec.column + ' IS NOT NULL' if spec.nullable else ''} GROUP BY {spec.column}").fetchall()
+            f"{'AND ' + spec.column + ' IS NOT NULL' if spec.nullable else ''} GROUP BY {spec.column}"
+        ).fetchall()
         if not spec.nullable:
             nulls = conn.execute(f"SELECT COUNT(*) FROM {spec.table} WHERE {spec.column} IS NULL").fetchone()[0]
             if nulls:
@@ -137,8 +176,10 @@ def upgrade(conn):
     Runs inside the migration's transaction, with foreign keys already off."""
     problems = unknown_values(conn)
     if problems:
-        log.warning("status values outside their lists, kept as they are; map or fix these rows:\n%s",
-                    "\n".join(_describe(problems)))
+        log.warning(
+            "status values outside their lists, kept as they are; map or fix these rows:\n%s",
+            "\n".join(_describe(problems)),
+        )
     for spec in present(conn):
         # CHECK columns are mapped while their table is copied (_rebuild_with_check), not by an UPDATE the old CHECK
         # would refuse.
@@ -149,8 +190,9 @@ def upgrade(conn):
 
 
 def _describe(problems):
-    return [f"  {t}.{c} = {v!r} ({n} rows)" if v is not None else f"  {t}.{c} IS NULL ({n} rows)"
-            for t, c, v, n in problems]
+    return [
+        f"  {t}.{c} = {v!r} ({n} rows)" if v is not None else f"  {t}.{c} IS NULL ({n} rows)" for t, c, v, n in problems
+    ]
 
 
 def enforce(conn):
@@ -182,8 +224,10 @@ def _ensure_triggers(conn, spec):
     message = f"{spec.table}.{spec.column}: invalid value"
     for event, name in (("INSERT", "ins"), ("UPDATE OF " + spec.column, "upd")):
         trigger = f"status_values_{spec.table}_{spec.column}_{name}"
-        sql = (f"CREATE TRIGGER {trigger} BEFORE {event} ON {spec.table} WHEN {when} "
-               f"BEGIN SELECT RAISE(ABORT, '{message}'); END")
+        sql = (
+            f"CREATE TRIGGER {trigger} BEFORE {event} ON {spec.table} WHEN {when} "
+            f"BEGIN SELECT RAISE(ABORT, '{message}'); END"
+        )
         have = conn.execute("SELECT sql FROM sqlite_master WHERE type='trigger' AND name=?", (trigger,)).fetchone()
         if have is not None and have[0] == sql:
             continue
@@ -230,7 +274,9 @@ def _rebuild_with_check(conn, spec, constraint):
     triggers. The row count must match before the old table goes."""
     if conn.in_transaction and conn.execute("PRAGMA foreign_keys").fetchone()[0]:
         # Dropping the old table inside a transaction with foreign keys on would cascade into child rows.
-        raise RuntimeError(f"{spec.table}: a rebuild for {spec.check_name} needs foreign keys off outside a transaction")
+        raise RuntimeError(
+            f"{spec.table}: a rebuild for {spec.check_name} needs foreign keys off outside a transaction"
+        )
     with _foreign_keys_off(conn):
         own = not conn.in_transaction
         if own:
@@ -238,18 +284,28 @@ def _rebuild_with_check(conn, spec, constraint):
         legacy = conn.execute("PRAGMA legacy_alter_table").fetchone()[0]
         conn.execute("PRAGMA legacy_alter_table=ON")
         try:
-            sql = conn.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name=?",
-                               (spec.table,)).fetchone()[0]
+            sql = conn.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name=?", (spec.table,)).fetchone()[
+                0
+            ]
             body = _named_check(spec).sub("", sql)
             body = re.sub(rf"\s*CHECK \(\s*{re.escape(spec.column)} IN \([^)]*\)\s*\)", "", body).rstrip()
             if not body.endswith(")"):
                 raise RuntimeError(f"{spec.table}: unexpected table definition, cannot add {spec.check_name}")
-            new_sql = re.sub(rf"^CREATE TABLE\s+\"?{spec.table}\"?\s*\(", f"CREATE TABLE {spec.table} (",
-                             body[:-1].rstrip(), count=1) + f",\n {constraint}\n)"
+            new_sql = (
+                re.sub(
+                    rf"^CREATE TABLE\s+\"?{spec.table}\"?\s*\(",
+                    f"CREATE TABLE {spec.table} (",
+                    body[:-1].rstrip(),
+                    count=1,
+                )
+                + f",\n {constraint}\n)"
+            )
             if not new_sql.startswith(f"CREATE TABLE {spec.table} ("):
                 raise RuntimeError(f"{spec.table}: cannot read the table definition for rebuild")
-            side = conn.execute("SELECT sql FROM sqlite_master WHERE tbl_name=? AND type IN ('index','trigger') "
-                                "AND sql IS NOT NULL", (spec.table,)).fetchall()
+            side = conn.execute(
+                "SELECT sql FROM sqlite_master WHERE tbl_name=? AND type IN ('index','trigger') AND sql IS NOT NULL",
+                (spec.table,),
+            ).fetchall()
             cols = _columns(conn, spec.table)
             select, params = [], []
             for c in cols:

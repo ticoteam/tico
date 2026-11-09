@@ -2,6 +2,7 @@
 a due date" automation linked by routine_id, whose run opens the owner's task on time; completing that task marks the
 day Satisfied, a cancel or the keeper's close doesn't, and reopening takes it back; a day marked by hand is skipped; an
 edit moves the routine to the new row; removing the due date turns it off; Due soon follows its lead time."""
+
 import json
 from datetime import datetime, timedelta, timezone
 
@@ -19,8 +20,11 @@ TEXT = "File the Acme sales tax return."
 def linked(api, first="2030-03-01", repeats="once", days=14, owner="ops"):
     org(api)
     r = rule(api, {"kind": "internal", "text": TEXT, "who": {"bots": ["ops"]}})
-    due = post(api, f"rules/{r['id']}/due", {"first_due": first, "repeats": repeats, "owner": owner,
-                                              "timezone": "UTC", "task_days": days})
+    due = post(
+        api,
+        f"rules/{r['id']}/due",
+        {"first_due": first, "repeats": repeats, "owner": owner, "timezone": "UTC", "task_days": days},
+    )
     return r, due
 
 
@@ -29,8 +33,11 @@ def automation(api, aid):
 
 
 def tasks(api, aid):
-    return sql(api, "SELECT id, title, owner_id, due_at, status, occurrence FROM tasks WHERE occurrence LIKE ? ORDER BY due_at",
-               (aid + ":%",))
+    return sql(
+        api,
+        "SELECT id, title, owner_id, due_at, status, occurrence FROM tasks WHERE occurrence LIKE ? ORDER BY due_at",
+        (aid + ":%",),
+    )
 
 
 def write(api, fn, *args, **kw):
@@ -47,8 +54,14 @@ def test_turning_the_routine_on_makes_one_linked_automation_whose_run_opens_the_
     aid = due["routine_id"]
     assert aid and due["task_days"] == 14
     auto = automation(api, aid)
-    assert auto["trigger"] == {"type": "due", "first_due": "2030-03-01", "repeats": "once", "open_days": 14, "tz": "UTC",
-                               "rule_due_id": due["id"]}
+    assert auto["trigger"] == {
+        "type": "due",
+        "first_due": "2030-03-01",
+        "repeats": "once",
+        "open_days": 14,
+        "tz": "UTC",
+        "rule_due_id": due["id"],
+    }
     assert auto["owner_id"] == "bot:ops" and auto["steps"][0]["args"]["title"] == TEXT
     assert auto["steps"][0]["args"]["owner"] == "bot:ops"
     assert auto["next_due_at"] == "2030-03-01"
@@ -66,19 +79,21 @@ def test_completing_the_task_marks_the_day_and_reopening_takes_it_back(api):
     aid = due["routine_id"]
     tick(api, datetime(2030, 2, 15, 0, 0, 5, tzinfo=timezone.utc))
     [task] = tasks(api, aid)
-    write(api, H.task_update, "human:ana", task["id"], status="done")       # a mover's or manager's done is not
+    write(api, H.task_update, "human:ana", task["id"], status="done")  # a mover's or manager's done is not
     assert marks(api, due["id"]) == []
     write(api, H.task_update, "bot:ops", task["id"], status="doing")
     write(api, H.task_update, "bot:ops", task["id"], status="done")
-    assert marks(api, due["id"]) == [{"due_on": "2030-03-01", "satisfied_by": "bot:ops", "via": "routine",
-                                      "task_id": task["id"]}]
-    write(api, H.task_update, "bot:ops", task["id"], status="declined")     # a finished task declined keeps its mark
+    assert marks(api, due["id"]) == [
+        {"due_on": "2030-03-01", "satisfied_by": "bot:ops", "via": "routine", "task_id": task["id"]}
+    ]
+    write(api, H.task_update, "bot:ops", task["id"], status="declined")  # a finished task declined keeps its mark
     assert len(marks(api, due["id"])) == 1
     write(api, H.task_update, "bot:ops", task["id"], status="doing")
     assert marks(api, due["id"]) == []
-    actions = sql(api, "SELECT before, after FROM audit_log WHERE object=? AND via='routine'",
-                  ("org_rule:" + due["rule_id"],))
-    assert len(actions) == 2      # the mark and its removal are both on record
+    actions = sql(
+        api, "SELECT before, after FROM audit_log WHERE object=? AND via='routine'", ("org_rule:" + due["rule_id"],)
+    )
+    assert len(actions) == 2  # the mark and its removal are both on record
 
 
 def test_a_keeper_close_or_a_decline_marks_nothing_and_a_persons_close_does(api):
@@ -93,7 +108,7 @@ def test_a_keeper_close_or_a_decline_marks_nothing_and_a_persons_close_does(api)
     may = tasks(api, aid)[-1]
     write(api, H.task_close, "human:ana", may["id"])
     assert [(m["due_on"], m["satisfied_by"]) for m in marks(api, due["id"])] == [("2030-05-01", "human:ana")]
-    write(api, H.task_update, "bot:ops", march["id"], status="done")       # the owner's done after the keeper's close
+    write(api, H.task_update, "bot:ops", march["id"], status="done")  # the owner's done after the keeper's close
     assert sorted(m["due_on"] for m in marks(api, due["id"])) == ["2030-03-01", "2030-05-01"]
 
 
@@ -118,7 +133,7 @@ def test_a_day_marked_by_hand_is_skipped_and_opens_no_task(api):
     assert [t["occurrence"] for t in tasks(api, aid)] == [f"{aid}:2030-01-07"]
     runs = {r["trigger_ref"]: r["status"] for r in get(api, f"automations/{aid}/runs")["runs"]}
     assert runs["due:2030-01-14"] == "skipped"
-    tick(api, datetime(2030, 1, 14, 6, tzinfo=timezone.utc))      # a later pass starts nothing for that day either
+    tick(api, datetime(2030, 1, 14, 6, tzinfo=timezone.utc))  # a later pass starts nothing for that day either
     assert runs_of(api, aid) == ["due:2030-01-07", "due:2030-01-14"]
 
 
@@ -136,7 +151,7 @@ def test_an_edit_of_repeats_moves_the_routine_to_the_new_row_and_keeps_history(a
     post(api, f"rule-due/{edited['id']}", {"owner": "ana"})
     auto = automation(api, aid)
     assert auto["owner_id"] == "person:ana" and auto["steps"][0]["args"]["owner"] == "human:ana"
-    assert auto["enabled"] is False                                         # an edit never resumes a paused routine
+    assert auto["enabled"] is False  # an edit never resumes a paused routine
     # The ended row's id can't remove the routine its successor now holds.
     refused = post(api, f"rule-due/{due['id']}/remove", {}, expected=409)
     assert refused["error"]["code"] == "ended" and refused["error"]["replaced_by_id"] == edited["id"]
@@ -181,15 +196,19 @@ def test_due_soon_follows_the_routines_lead_time(api):
     r = rule(api, {"kind": "internal", "text": TEXT, "who": {"bots": ["ops"]}})
     day = (D.local_today("UTC") + timedelta(days=40)).isoformat()
     plain = post(api, f"rules/{r['id']}/due", {"first_due": day, "repeats": "once", "owner": "ops", "timezone": "UTC"})
-    early = post(api, f"rules/{r['id']}/due", {"first_due": day, "repeats": "once", "owner": "ops", "timezone": "UTC",
-                                                "task_days": 45})
-    assert plain["status"] == "upcoming" and plain["task_days"] is None    # 30 days with no routine
+    early = post(
+        api,
+        f"rules/{r['id']}/due",
+        {"first_due": day, "repeats": "once", "owner": "ops", "timezone": "UTC", "task_days": 45},
+    )
+    assert plain["status"] == "upcoming" and plain["task_days"] is None  # 30 days with no routine
     assert early["status"] == "due_soon"
 
 
 def prune_runs(api, days_after):
     """automations.prune as the nightly sweep runs it, `days_after` the latest run finished: run detail is gone."""
     from backend import automations
+
     last = sql(api, "SELECT max(finished_at) AS f FROM automation_runs")[0]["f"]
     with api.app.state.store.transaction() as c:
         automations.prune(c, H.shift(last, days=days_after))
@@ -247,8 +266,13 @@ def test_a_due_dates_owner_is_the_caller_a_teammate_in_who_or_someone_they_manag
 
 def cara_routine(api, trigger, expected=200):
     """Cara's own "Before a due date" automation, which opens a task for her."""
-    body = {"name": "Mine", "owner": "person:cara", "enabled": True, "trigger": {"type": "due", **trigger},
-            "steps": [{"id": "open", "type": "action", "do": "create_task", "args": {"title": "Mine", "owner": "cara"}}]}
+    body = {
+        "name": "Mine",
+        "owner": "person:cara",
+        "enabled": True,
+        "trigger": {"type": "due", **trigger},
+        "steps": [{"id": "open", "type": "action", "do": "create_task", "args": {"title": "Mine", "owner": "cara"}}],
+    }
     return post(api, "automations", body, token="cara-test", expected=expected)
 
 
@@ -258,20 +282,38 @@ def test_only_the_linked_routine_names_a_due_date_and_a_forged_task_satisfies_no
     # Cara's routine may not name Ana's due date, on create or on an edit.
     cara_routine(api, {**trigger, "rule_due_id": due["id"]}, expected=403)
     mine = cara_routine(api, trigger)
-    patch(api, mine["id"], {"trigger": {"type": "due", **trigger, "rule_due_id": due["id"]}}, token="cara-test",
-          expected=403)
+    patch(
+        api,
+        mine["id"],
+        {"trigger": {"type": "due", **trigger, "rule_due_id": due["id"]}},
+        token="cara-test",
+        expected=403,
+    )
     # One saved before that check (written straight to its row) opens its task without the link, whatever its input says.
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE automations SET flow=json_set(flow, '$.trigger.rule_due_id', ?) WHERE id=?",
-                  (due["id"], mine["id"]))
-    post(api, f"automations/{mine['id']}/run", {"input": {"due": {"due_on": "2030-03-01", "tz": "UTC",
-                                                                  "rule_due_id": due["id"]}}}, token="cara-test")
+        c.execute(
+            "UPDATE automations SET flow=json_set(flow, '$.trigger.rule_due_id', ?) WHERE id=?", (due["id"], mine["id"])
+        )
+    post(
+        api,
+        f"automations/{mine['id']}/run",
+        {"input": {"due": {"due_on": "2030-03-01", "tz": "UTC", "rule_due_id": due["id"]}}},
+        token="cara-test",
+    )
     [opened] = tasks(api, mine["id"])
     assert sql(api, "SELECT rule_due_id FROM tasks WHERE id=?", (opened["id"],))[0]["rule_due_id"] is None
     write(api, H.task_update, "human:cara", opened["id"], status="done")
     # A task stamped with Ana's due date by a routine that never was its routine marks nothing either.
-    forged = write(api, H.task_create, "human:cara", "Forged", "Forged", "human:cara",
-                   occurrence=f"{mine['id']}:2030-03-01", rule_due_id=due["id"])
+    forged = write(
+        api,
+        H.task_create,
+        "human:cara",
+        "Forged",
+        "Forged",
+        "human:cara",
+        occurrence=f"{mine['id']}:2030-03-01",
+        rule_due_id=due["id"],
+    )
     write(api, H.task_update, "human:cara", forged["id"], status="done")
     assert marks(api, due["id"]) == []
     # The linked routine's own task still does, and its refs name the due date.
