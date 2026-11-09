@@ -1,15 +1,16 @@
-// Renders the preview scenes with Playwright (WebKit, as on macOS) into ui/screenshots/ and
-// checks a few behaviours. Usage, from recorder/:
+// Builds the window (build-ui.cjs), then renders the preview scenes from dist/preview with Playwright (WebKit, as on
+// macOS) into ui/screenshots/ and checks a few behaviours. Usage, from recorder/:
 //   PLAYWRIGHT=<dir>/node_modules/playwright node ui/preview/shoot.mts [scene ...|checks]
 import http from 'node:http';
 import type { AddressInfo } from 'node:net';
 import fs from 'node:fs';
 import path from 'node:path';
+import { execFileSync } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import type { Browser, BrowserContext, BrowserType, Page } from 'playwright';
 
-// The preview's mock controller (preview/mock.js) as the scenes and checks read it.
+// The preview's mock controller (preview/mock.ts) as the scenes and checks read it.
 interface PreviewItem {
   id: string;
   pending?: boolean;
@@ -47,8 +48,10 @@ const { webkit, chromium }: typeof import('playwright') = require(process.env.PL
 // WebKit is the macOS engine; TICO_PREVIEW_BROWSER=chromium runs the same scenes where WebKit's libraries are missing.
 const engine: BrowserType = process.env.TICO_PREVIEW_BROWSER === 'chromium' ? chromium : webkit;
 const here = path.dirname(fileURLToPath(import.meta.url));
-const root = path.resolve(here, '..');
-const out = path.join(root, 'screenshots');
+// The page scripts are TypeScript: serve the built window (recorder/dist), and write the screenshots beside the source.
+execFileSync(process.execPath, [path.resolve(here, '../../build-ui.cjs')], { stdio: 'inherit' });
+const root = path.resolve(here, '../../dist');
+const out = path.resolve(here, '../screenshots');
 fs.mkdirSync(out, { recursive: true });
 
 // The message of a thrown value, for a failure line.

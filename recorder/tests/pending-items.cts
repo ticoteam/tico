@@ -12,7 +12,8 @@ const path: typeof import('node:path') = require('node:path');
     const page = await browser.newPage();
     const errors: string[] = [];
     page.on('pageerror', (e: Error) => errors.push(e.message));
-    const root = path.resolve(__dirname, '../ui');
+    // The built window (node recorder/build-ui.cjs; scripts/ui-tests.cts builds it first).
+    const root = path.resolve(__dirname, '../dist');
     await page.route('http://recorder.example/**', (route: import('playwright').Route) => {
       const file = path.resolve(root, '.' + new URL(route.request().url()).pathname);
       assert.ok(file.startsWith(root + path.sep));

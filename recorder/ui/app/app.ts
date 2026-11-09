@@ -2,16 +2,109 @@
 // (no polling), and calls one command per action;
 // all state that matters lives in the Rust app. Regions re-render only when their HTML changes,
 // and inputs keep their own values, so typing is never interrupted by a refresh.
+import type {
+  Actions, Block, Command, Connection, DesktopOrg, Events, Have, Invoke, InvokeArgs, Item, Library, LibraryRow, Meeting, OrgRef,
+  PickerTask, RecorderWindow, RecordingStatus, ReplyOf, Settings, SharedItem, SharedReply, Speech, Status, Tauri,
+  Transcript,
+} from '../types/bridge.d.ts';
+
+declare const window: RecorderWindow;
+/** The global isNaN, which also takes a Date (its time; NaN for an invalid date). */
+declare function isNaN(value: number | Date): boolean;
+
+type Page = 'library' | 'meeting' | 'settings' | 'signin';
+interface Pop {
+  kind: string;
+  style: string;
+  id?: string | undefined;
+  confirm?: string | undefined;
+  /** Read by the library rows; nothing sets it. */
+  anchorId?: string;
+}
+interface Pick { actor: string; name: string; bot: boolean }
+interface ShareDraft { id: string; org: string; team: boolean; picks: Pick[]; busy: boolean; error: string; copied: boolean; after: string }
+interface FinishDraft {
+  id: string; title: string; dest: string; org: string; audience: string; confirmDelete: boolean; pausedOk: boolean; fromMeeting: boolean;
+}
+interface TaskPicker {
+  rows: PickerTask[]; picks: string[]; picked: Record<string, PickerTask>; next: number | null; scope: string;
+  request?: number; loading?: boolean; error?: string;
+}
+interface Mention { start: number; query: string; left: number; top: number; max: number }
+interface ScreenDraft { destination: string; busy: boolean; error: string }
+/** Settings' form while it is open: the editable settings, saved together. */
+interface SettingsDraft {
+  microphone: string; meeting_audio: boolean; transcription_url: string; transcription_model: string; transcription_language: string;
+  calendar: boolean; streaming: boolean; streaming_model: string; speech_source?: string;
+}
+/** The form's text fields (data-model="form.<key>") and switches (data-check="<key>"). */
+type FormText = 'microphone' | 'transcription_url' | 'transcription_model' | 'transcription_language' | 'streaming_model';
+type FormFlag = 'calendar' | 'meeting_audio' | 'streaming';
+/** The plain text fields of S.ui an input's data-model names. */
+type TextModel =
+  'search' | 'ask' | 'addItem' | 'ownerQuery' | 'shareQuery' | 'tq' | 'legacy' | 'key' | 'xai' | 'editDraft' | 'taskQuery' | 'taskKind';
+type Ui = {
+  search: string; ask: string; addItem: string; ownerQuery: string; shareQuery: string; tq: string; signin: string | null;
+  legacy: string; key: string; xai: string;
+  editLine: { id: string; seq: number } | null; editDraft: string; editInitial: string; removeLine: { id: string; seq: number } | null;
+  hot: number; mention: Mention | null; address: boolean;
+  pop: Pop | null; tsearch: boolean; showAudio: boolean; confirm: string | null; hideSide: boolean;
+  share: ShareDraft | null; finish: FinishDraft | null; taskPicker: TaskPicker | null; taskQuery: string; taskKind: string;
+  form: SettingsDraft | null; saving: boolean; titleDraft: string | null; notesDraft: string | null; prevPage: Page; stick: boolean;
+  // Set once used.
+  signingDesktop?: string; profiled?: boolean; adding?: boolean; createOk?: string | null; copied?: boolean;
+  screen?: ScreenDraft | null; focusNext?: string | null; tTop?: number; hitKey?: string; hit?: number; importOpen?: boolean;
+};
+interface AppState {
+  page: Page;
+  status: Status;
+  library: Library | null;
+  meeting: Meeting | null;
+  transcript: Transcript | null;
+  settings: Settings | null;
+  desktopOrgs: DesktopOrg[];
+  hash: Have;
+  statusKey: string;
+  ui: Ui;
+  /** A region skipped while its text was being edited: it renders once focus leaves. */
+  deferred?: boolean;
+}
+/** Anything drawn as an org tile: a connection, a desktop org, a target, or a name alone. */
+interface OrgLike { name?: string | undefined; url?: string | undefined; host?: string | undefined }
+/** A row of the avatar: a person or bot of the meeting, an owner, or a pick. */
+interface AvatarRow { kind?: string; bot?: boolean; name?: string; me?: boolean }
+/** A task row: an item already in Tico, or a task linked there. */
+interface TaskRow {
+  id: string; kind: string; title: string; task_url: string; number?: number | null; task_id?: string; pending?: boolean;
+  status?: string | null; owner_name?: string; sent_to?: string; error?: string;
+}
+/** A shared item's editable part: its text and details. */
+interface Patch { text?: string; detail?: Record<string, string> }
+/** Edits to one shared item not yet in Tico, and the save under way. */
+interface SharedDraft {
+  patch: Patch; dirty: Record<string, string>; flight: Promise<SharedReply> | null; error: string; timer: number;
+  version: number | null; current: SharedItem | null;
+  base?: SharedItem; inflightPatch?: Patch | null; closed?: Patch | null; nativeRecovery?: string; closedAcknowledged?: boolean;
+  sending?: boolean;
+}
+/** An item recovered from a local closed draft, with the local item's id. */
+type Recovered = SharedItem & { localId: string };
+type Handler = (el: HTMLElement, event: MouseEvent) => unknown;
+type Line = (name: string, control: string) => string;
+type Field = (key: string, placeholder?: string, type?: string) => string;
+type Toggle = (key: string, checked: boolean, disabled?: boolean) => string;
+
 (() => {
   'use strict';
-  const invoke = (cmd, args = {}) => window.__TAURI__.core.invoke(cmd, args);
-  const esc = (value) =>
-    String(value ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
+  // The reply is the Rust command's, typed by the command map.
+  const invoke: Invoke = (cmd: string, args: object = {}) => window.__TAURI__.core.invoke(cmd, args) as Promise<never>;
+  const esc = (value: unknown) =>
+    String(value ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c as '&']);
   const icon = window.icon;
 
-  const S = {
+  const S: AppState = {
     page: 'library',
-    status: {},
+    status: {} as Status,
     library: null,
     meeting: null,
     transcript: null,
@@ -28,24 +121,24 @@
       form: null, saving: false, titleDraft: null, notesDraft: null, prevPage: 'library', stick: true,
     },
   };
-  const regions = {};
+  const regions: Record<string, string> = {};
 
   // ---- Formatting ----
-  const pad = (n) => String(n).padStart(2, '0');
-  function clock(ms) {
+  const pad = (n: number) => String(n).padStart(2, '0');
+  function clock(ms: number) {
     const s = Math.floor(ms / 1000);
     return s >= 3600 ? `${Math.floor(s / 3600)}:${pad(Math.floor(s / 60) % 60)}:${pad(s % 60)}` : `${pad(Math.floor(s / 60))}:${pad(s % 60)}`;
   }
-  function length(ms) {
+  function length(ms: number) {
     const s = Math.floor(ms / 1000);
     if (s >= 3600) return `${Math.floor(s / 3600)}h ${pad(Math.floor(s / 60) % 60)}m`;
     if (s >= 60) return `${Math.floor(s / 60)} min`;
     return s > 0 ? `${s} sec` : '';
   }
-  const timeOf = (date) => date.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
-  function dayOf(date) {
+  const timeOf = (date: Date) => date.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+  function dayOf(date: Date) {
     const today = new Date();
-    const start = (d) => new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+    const start = (d: Date) => new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
     const days = Math.round((start(today) - start(date)) / 86400000);
     if (days === 0) return 'Today';
     if (days === 1) return 'Yesterday';
@@ -53,39 +146,39 @@
     const sameYear = date.getFullYear() === today.getFullYear();
     return date.toLocaleDateString([], sameYear ? { month: 'short', day: 'numeric' } : { month: 'short', day: 'numeric', year: 'numeric' });
   }
-  function fullDate(iso) {
+  function fullDate(iso: string) {
     const date = new Date(iso);
     if (isNaN(date)) return '';
     const day = dayOf(date);
     return `${day === 'Today' || day === 'Yesterday' ? day : date.toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' })}, ${timeOf(date)}`;
   }
-  const initials = (name) =>
-    String(name || '?').replace(/[^\p{L}\p{N}\s]/gu, ' ').split(/\s+/).filter(Boolean).slice(0, 2).map((w) => w[0].toUpperCase()).join('') || '?';
-  function avatar(row, extra = '') {
+  const initials = (name: string | undefined) =>
+    String(name || '?').replace(/[^\p{L}\p{N}\s]/gu, ' ').split(/\s+/).filter(Boolean).slice(0, 2).map((w) => w[0]!.toUpperCase()).join('') || '?';
+  function avatar(row: AvatarRow, extra = '') {
     if (row.kind === 'bot' || row.bot) return `<span class="avatar bot c5 ${extra}">${icon('bot', 11)}</span>`;
     return `<span class="avatar c${tone(row.name || '')} ${extra}">${esc(initials(row.me ? 'Me' : row.name))}</span>`;
   }
-  const badge = (label, tone, extra = '') => `<span class="badge ${tone}" ${extra}>${label}</span>`;
+  const badge = (label: string, tone: string, extra = '') => `<span class="badge ${tone}" ${extra}>${label}</span>`;
 
   // ---- Orgs: the desktop rail's tiles, initials on a colour picked by the org's host ----
-  const hostOf = (url) => String(url || '').replace(/^[a-z]+:\/\//i, '').replace(/[/?#].*$/, '');
-  function tone(text) {
+  const hostOf = (url: string | null | undefined) => String(url || '').replace(/^[a-z]+:\/\//i, '').replace(/[/?#].*$/, '');
+  function tone(text: string) {
     let h = 0x811c9dc5;
     for (let i = 0; i < text.length; i++) h = Math.imul(h ^ text.charCodeAt(i), 0x01000193);
     return (h >>> 0) % 8;
   }
-  function orgInitials(name, host) {
+  function orgInitials(name: string | undefined, host: string) {
     const words = String(name || '').trim().split(/\s+/).filter(Boolean);
-    if (words.length >= 2) return (words[0][0] + words[1][0]).toUpperCase();
+    if (words.length >= 2) return (words[0]![0]! + words[1]![0]!).toUpperCase();
     return String(words[0] || host || '?').slice(0, 2).toUpperCase();
   }
-  function orgTile(org, size = '') {
+  function orgTile(org: OrgLike | null | undefined, size = '') {
     const host = hostOf(org?.url) || org?.host || org?.name || '';
     return `<span class="otile ${size} c${tone(host)}" aria-hidden="true">${esc(orgInitials(org?.name, host))}</span>`;
   }
   const macTile = (size = 's32') => `<span class="otile ${size} mac" aria-hidden="true">${icon('mac', size === 's32' ? 16 : 13)}</span>`;
   const orgs = () => S.settings?.connections || [];
-  const orgById = (id) => orgs().find((o) => o.id === id) || null;
+  const orgById = (id: string | null | undefined): Connection | null => orgs().find((o) => o.id === id) || null;
   const defaultOrg = () => orgs().find((o) => o.default) || orgs()[0] || null;
   /** The desktop app's orgs this Recorder is not signed in to yet: one tap each. */
   const desktopToAdd = () => S.desktopOrgs.filter((org) => !org.connected && org.url);
@@ -97,29 +190,29 @@
   const ticoDot = (thinking = false) => `<i class="ldot ${thinking ? 'thinking' : ''}" aria-label="Tico"></i>`;
 
   // ---- Models: inputs read and write these; values are set after rendering, never in HTML ----
-  const models = {
+  const models: Partial<Record<string, [() => string, (v: string) => void]>> = {
     title: [() => S.ui.titleDraft ?? S.meeting?.title ?? '', (v) => (S.ui.titleDraft = v)],
     notes: [() => S.ui.notesDraft ?? S.meeting?.notes.text ?? '', (v) => (S.ui.notesDraft = v)],
     signin: [() => S.ui.signin ?? S.status.suggested ?? '', (v) => (S.ui.signin = v)],
   };
-  const model = (name) => {
+  const model = (name: string): string => {
     if (models[name]) return models[name][0]();
-    if (name.startsWith('form.')) return S.ui.form?.[name.slice(5)] ?? '';
-    if (name.startsWith('finish.')) return S.ui.finish?.[name.slice(7)] ?? '';
-    return S.ui[name] ?? '';
+    if (name.startsWith('form.')) return S.ui.form?.[name.slice(5) as FormText] ?? '';
+    if (name.startsWith('finish.')) return S.ui.finish?.[name.slice(7) as 'title'] ?? '';
+    return S.ui[name as TextModel] ?? '';
   };
-  function setModel(name, value) {
+  function setModel(name: string, value: string) {
     if (models[name]) models[name][1](value);
-    else if (name.startsWith('form.')) S.ui.form[name.slice(5)] = value;
-    else if (name.startsWith('finish.')) { if (S.ui.finish) S.ui.finish[name.slice(7)] = value; }
-    else S.ui[name] = value;
+    else if (name.startsWith('form.')) S.ui.form![name.slice(5) as FormText] = value;
+    else if (name.startsWith('finish.')) { if (S.ui.finish) S.ui.finish[name.slice(7) as 'title'] = value; }
+    else S.ui[name as TextModel] = value;
   }
 
   // ---- Updates: the app emits `changed` when the view may differ and `level` while recording ----
-  let inflight = null;
-  let queued = null;
+  let inflight: Promise<void> | null = null;
+  let queued: Promise<void> | null = null;
   /** Fetches what changed; calls made while one is in flight share a single follow-up. */
-  function poll() {
+  function poll(): Promise<void> {
     if (inflight) {
       queued = queued || inflight.then(() => { queued = null; return poll(); });
       return queued;
@@ -128,7 +221,7 @@
     return inflight;
   }
   /** The clock and level bars, ten times a second while recording, without any redraw. */
-  function onLevel(payload) {
+  function onLevel(payload: Events['level']) {
     const rec = S.status.recording;
     if (!rec || rec.id !== payload.id || document.hidden) return;
     rec.elapsed_ms = payload.elapsed_ms;
@@ -138,7 +231,7 @@
     }
     live();
   }
-  function statusKey(status) {
+  function statusKey(status: Status) {
     const rec = status.recording;
     return JSON.stringify({ ...status, recording: rec && { id: rec.id, phase: rec.phase, error: rec.error, n: rec.sources.map((s) => s.label + s.no_signal) } });
   }
@@ -146,9 +239,9 @@
     try {
       const v = await invoke('view', { have: S.hash });
       let changed = false;
-      for (const part of ['library', 'meeting', 'transcript', 'settings']) {
+      for (const part of ['library', 'meeting', 'transcript', 'settings'] as const) {
         if (v[part]) {
-          S[part] = v[part].data;
+          (S as Record<typeof part, unknown>)[part] = v[part].data;
           S.hash[part] = v[part].hash;
           changed = true;
         }
@@ -189,14 +282,16 @@
     }
   }
   // Before the first view arrives a failure would leave an empty window; say what went wrong.
-  function bootError(error) {
+  function bootError(error: unknown) {
     const root = document.getElementById('app');
     if (!root || root.dataset.ready) return;
-    root.innerHTML = `<div class="boot-error">${esc(error?.message || error)}</div>`;
+    root.innerHTML = `<div class="boot-error">${esc((error as Error | null)?.message || error)}</div>`;
   }
-  async function act(cmd, args) {
+  /** Runs a command, then fetches what it changed; a failure is logged and resolves to undefined. */
+  function act<K extends Command>(cmd: K, ...args: InvokeArgs<K>): Promise<ReplyOf<K> | undefined>;
+  async function act(cmd: Command, args?: object) {
     try {
-      const result = await invoke(cmd, args);
+      const result = await (invoke as Tauri['core']['invoke'])(cmd, args);
       await poll();
       return result;
     } catch (error) {
@@ -228,7 +323,7 @@
     return `<header class="topbar" data-tauri-drag-region>${left}<div class="spacer" data-tauri-drag-region></div>${right}</header>`;
   }
   /** Share live, Finish and More. Share live shows who can join once it is shared. */
-  function meetingActions(m) {
+  function meetingActions(m: Meeting) {
     const st = S.status;
     const sending = st.sending?.id === m.id ? st.sending : null;
     let html = '';
@@ -252,7 +347,8 @@
     return html;
   }
   /** Teammates in the live meeting other than me, and names typed here. */
-  const peopleIn = (m) => m.people.rows.filter((row) => !row.me);
+  const peopleIn = (m: Meeting) => m.people.rows.filter((row) => !row.me);
+
 
   // ---- Notices ----
   function errorNotice() {
@@ -325,14 +421,14 @@
     return html + '</div>';
   }
   /** A row's pill, only when it says something: live, in Tico, still transcribing, or a problem. */
-  function rowStatus(row) {
+  function rowStatus(row: LibraryRow) {
     const status = row.status;
     if (!status) return '';
     const tone = status.tone === 'live' ? 'live' : status.tone === 'red' ? 'red' : status.tone === 'amber' ? 'amber' : '';
     const lead = status.label === 'Recording' ? '<i class="pulse"></i>' : '';
     return badge(lead + esc(status.label), tone, row.sync_error ? `title="${esc(row.sync_error)}"` : '');
   }
-  function libraryRow(row, date) {
+  function libraryRow(row: LibraryRow, date: Date) {
     const id = esc(row.id);
     if (S.ui.confirm === row.id) {
       return `<div class="row confirm"><span class="otile s32 rec">${icon('trash', 15)}</span><div class="body"><div class="title">Delete “${esc(row.title)}”?</div></div><div class="tail"><button class="btn small quiet" data-act="cancel-delete">Cancel</button><button class="btn small danger" data-act="delete" data-id="${id}">Delete</button></div></div>`;
@@ -367,7 +463,7 @@
     return html;
   }
   /** Tasks: ones already in Tico by number, then proposals drafted as people talk, each created or dismissed. */
-  function actions(a) {
+  function actions(a: Actions) {
     const recovered = nativeClosedDrafts(a);
     if (a.saved) return sharedActions(a, recovered);
     let html = `<section class="section"><div class="label head">Tasks<span class="grow"></span>${a.can_link ? '<button class="btn small" data-act="task-picker-open">Link</button>' : ''}<button class="btn small" data-act="add-open">${icon('plus', 12)}Add</button></div>`;
@@ -386,34 +482,35 @@
     if (S.ui.adding || !a.items.length) html += `<div class="add-item"><span class="check">${icon('plus', 13)}</span><input data-model="addItem" data-enter="add-item" data-blur="add-close" placeholder="Add a task" spellcheck="false" aria-label="Add a task"></div>`;
     return html + '</section>';
   }
-  const sharedDrafts = new Map();
-  const nativeDraftAcknowledged = new Set();
-  const sharedKey = id => `${S.meeting.id}:${S.meeting.actions.shared_scope || ''}:${id}`;
-  function sharedDraft(id) {
+  const sharedDrafts = new Map<string, SharedDraft>();
+  const nativeDraftAcknowledged = new Set<string>();
+  const sharedKey = (id: string) => `${S.meeting!.id}:${S.meeting!.actions.shared_scope || ''}:${id}`;
+  function sharedDraft(id: string) {
     const key = sharedKey(id);
     if (!sharedDrafts.has(key)) sharedDrafts.set(key, {patch: {}, dirty: {}, flight: null, error: '', timer: 0, version:null, current:null});
-    return sharedDrafts.get(key);
+    return sharedDrafts.get(key)!;
   }
   // The inline title is contenteditable; a refresh's fresh copy is not in the page, so read the attribute.
-  const fieldValue = f => f.hasAttribute('contenteditable') ? f.textContent : f.value;
+  // Fields are typed as inputs: a select or textarea reads the same, and the title span is read as text.
+  const fieldValue = (f: HTMLInputElement) => f.hasAttribute('contenteditable') ? f.textContent! : f.value;
   /** A field takes the server's value in place; a focused one keeps its caret. */
-  function setFieldValue(field, value) {
+  function setFieldValue(field: HTMLInputElement, value: string) {
     if (!field.hasAttribute('contenteditable')) {
-      const selection = field === document.activeElement && typeof field.selectionStart === 'number' ? [field.selectionStart, field.selectionEnd] : null;
+      const selection: [number | null, number | null] | null = field === document.activeElement && typeof field.selectionStart === 'number' ? [field.selectionStart, field.selectionEnd] : null;
       field.value = value;
       if (selection) field.setSelectionRange(...selection);
       return;
     }
-    const sel = getSelection(), range = field === document.activeElement && sel.rangeCount ? sel.getRangeAt(0) : null;
-    const at = range && field.contains(range.startContainer) ? [range.startOffset, range.endOffset] : null;
+    const sel = getSelection()!, range = field === document.activeElement && sel.rangeCount ? sel.getRangeAt(0) : null;
+    const at: [number, number] | null = range && field.contains(range.startContainer) ? [range.startOffset, range.endOffset] : null;
     field.textContent = value;
     if (!at || !field.firstChild) return;
-    const next = document.createRange(), node = field.firstChild;
+    const next = document.createRange(), node = field.firstChild as Text;
     next.setStart(node, Math.min(at[0], node.length)); next.setEnd(node, Math.min(at[1], node.length));
     sel.removeAllRanges(); sel.addRange(next);
   }
   /** A shared item's details as people read them: names for owners, a date for due. */
-  function sharedDetailParts(detail, a) {
+  function sharedDetailParts(detail: Record<string, string> | undefined, a: Actions) {
     return Object.entries(detail || {}).map(([key, value]) => {
       if (!value) return '';
       if (key === 'owner') return a.owners.find(o => o.actor === value)?.name || value;
@@ -421,20 +518,20 @@
       return value;
     }).filter(Boolean);
   }
-  const mergeShared = (a, b) => ({...a, ...b, ...((a.detail || b.detail) ? {detail: {...a.detail, ...b.detail}} : {})});
-  const sharedValue = (item, key) => (key === 'text' ? item?.text : item?.detail?.[key]) || '';
-  function sharedAccepted(draft, patch, item) {
+  const mergeShared = (a: Patch, b: Patch): Patch => ({...a, ...b, ...((a.detail || b.detail) ? {detail: {...a.detail, ...b.detail}} : {})});
+  const sharedValue = (item: Patch | undefined, key: string) => (key === 'text' ? item?.text : item?.detail?.[key]) || '';
+  function sharedAccepted(draft: SharedDraft, patch: Patch, item: SharedItem) {
     for (const key of [...('text' in patch ? ['text'] : []), ...Object.keys(patch.detail || {})]) {
       if (key === 'text' ? 'text' in draft.patch : key in (draft.patch.detail || {})) draft.dirty[key] = sharedValue(item, key);
       else delete draft.dirty[key];
     }
     draft.version = item.version; draft.base = item; draft.current = null;
   }
-  function nativeClosedDrafts(a) {
+  function nativeClosedDrafts(a: Actions): Recovered[] {
     return (a.items || []).flatMap(local => {
       const closed = local.closed_draft;
       if (!closed) return [];
-      const key = `${S.meeting.id}:${a.org}:${local.id}:${closed.item.id}`;
+      const key = `${S.meeting!.id}:${a.org}:${local.id}:${closed.item.id}`;
       if (nativeDraftAcknowledged.has(key)) return [];
       const draft = sharedDraft(closed.item.id);
       draft.closed ||= {text:closed.text, detail:closed.detail};
@@ -442,23 +539,23 @@
       return [{...closed.item, localId:local.id}];
     });
   }
-  function sharedClosedCard(it, draft, a) {
+  function sharedClosedCard(it: SharedItem, draft: SharedDraft, a: Actions) {
     clearTimeout(draft.timer);
     draft.closed ||= mergeShared(mergeShared(draft.base || it, draft.inflightPatch || {}), draft.patch);
     const text = [draft.closed.text, ...sharedDetailParts(draft.closed.detail, a)].filter(Boolean).join('\n\n');
     const name = a.owners.find(o => o.actor === it.updated_by)?.name || it.updated_by;
     return `<div class="shared-item" data-shared-row="${esc(it.id)}"><div>${it.status === 'pushed' ? 'Sent by ' : it.status === 'dismissed' ? 'Dismissed by ' : 'Changed by '}${esc(name)}</div><pre class="selectable" style="white-space:pre-wrap;overflow-wrap:anywhere">${esc(text)}</pre><div class="actions"><button class="btn small" data-act="shared-copy" data-id="${esc(it.id)}">Copy</button><button class="btn small" data-act="shared-close" data-id="${esc(it.id)}">Close</button></div></div>`;
   }
-  function sharedActions(a, recovered = []) {
+  function sharedActions(a: Actions, recovered: Recovered[] = []) {
     const data = a.shared;
     if (data?.gone) return '';
     if ((!data || !data.sections) && !recovered.length) return '<section class="section"><h2>Tasks</h2>' + (data?.gone ? '' : '<span>Loading…</span>') + '</section>';
     const here = (data?.presence?.actors || []).filter(p => p.actor !== a.actor).map(p => p.name);
-    const rows = new Map(Object.values(data?.sections || {}).flat().map(it => [it.id, it]));
+    const rows = new Map<string | null, SharedItem>(Object.values(data?.sections || {}).flat().map(it => [it.id, it]));
     for (const it of recovered) {
-      if (!rows.has(it.id) || it.version >= rows.get(it.id).version) rows.set(it.id, it);
+      if (!rows.has(it.id) || it.version >= rows.get(it.id)!.version) rows.set(it.id, it);
     }
-    const linkedIds = new Set((a.linked?.tasks || []).map(it => it.task_id));
+    const linkedIds = new Set<string | undefined>((a.linked?.tasks || []).map(it => it.task_id));
     const local = (a.items || []).filter(it => !it.closed_draft && !rows.has(it.server_item_id) && (it.unsaved || !linkedIds.has(it.task_id)));
     const extras = `<div data-shared-row="local-tasks"><ul class="items">${local.map(it => it.sent ? task(it) : proposal(it)).join('')}</ul></div>` +
       `<div data-shared-row="linked-tasks"><ul class="items tasks">${(a.linked?.tasks || []).map(it => task({...it,id:`server:${it.task_id}`,kind:'link',task_url:`${a.linked_browser}/#/task/${it.task_id}`})).join('')}</ul>${a.linked?.next_cursor ? '<button class="link" data-act="more-task-links">More</button>' : ''}</div>` +
@@ -472,12 +569,14 @@
         if (it.status === 'dismissed' || (draft.closedAcknowledged && it.status !== 'proposed')) return '';
         if (it.status === 'pushed' && linkedIds.has(it.result_ref)) return '';
         if (it.status === 'pushed') return `<div class="item sent" data-shared-row="${esc(it.id)}">${esc(it.text)} · Sent${it.result_ref && a.shared_url ? ` · <button class="link" data-act="open-url" data-url="${esc(a.shared_url + '/#/task/' + encodeURIComponent(it.result_ref))}">Open</button>` : ''}</div>`;
-        const server = draft.base?.version > it.version ? draft.base : it;
+        // A newer copy than this view's: the reply of a save that landed after it was read.
+        const server = draft.base?.version! > it.version ? draft.base! : it;
         const current = mergeShared(mergeShared(server, draft.inflightPatch || {}), draft.patch), detail = current.detail || {};
         if (!draft.flight && !draft.sending && !Object.keys(draft.dirty).length) { draft.version = server.version; draft.base = server; }
         // A task card is Title and Owner (below); a due date or details it already holds go out on Send.
         const fields = it.section === 'doc' ? ['document', 'change', 'why'] : ['side', 'app', 'area'];
-        const owners = a.owners.filter(o => !data.audience || data.audience.includes(o.actor));
+        // `data` is here: only recovered drafts come without it, and they all return above as closed cards.
+        const owners = a.owners.filter(o => !data!.audience || data!.audience.includes(o.actor));
         const edited = it.updated_by ? esc((a.owners.find(o => o.actor === it.updated_by)?.name || it.updated_by) + ' edited') : '';
         const notSaved = `<div class="error" data-shared-error ${draft.error ? '' : 'hidden'}>Not saved · <button class="link" data-act="shared-retry" data-id="${esc(it.id)}">Retry</button></div>`;
         const currentLine = `<div class="error" data-shared-current ${draft.current ? '' : 'hidden'}>${draft.current ? `Current: ${esc([draft.current.text, ...sharedDetailParts(draft.current.detail, a)].filter(Boolean).join(' · '))}` : ''}</div>`;
@@ -487,8 +586,8 @@
           const at = it.quote && it.at_ms != null ? `<span class="at" title="${esc(it.quote)}">${clock(it.at_ms)}</span><span>·</span>` : '';
           const owner = `<span class="owner-pick"><span class="owner ${ownerName ? '' : 'empty'}" data-shared-owner>${esc(ownerName || 'Owner')}</span><select data-defer data-shared-field="owner" aria-label="Owner"><option value="">Owner</option>${owners.map(o => `<option value="${esc(o.actor)}" ${o.actor === detail.owner ? 'selected' : ''}>${esc(o.name)}</option>`).join('')}</select></span>`;
           const go = it.proposed_task_id
-            ? `<button class="btn small" data-act="shared-link" data-id="${esc(it.id)}" ${draft.sending || !data.can_send ? 'disabled' : ''}>Link${it.proposed_number ? ' #' + esc(it.proposed_number) : ''}</button>`
-            : `<button class="btn small" data-act="shared-send" data-id="${esc(it.id)}" ${draft.sending || !data.can_send ? 'disabled' : ''}>Send</button>`;
+            ? `<button class="btn small" data-act="shared-link" data-id="${esc(it.id)}" ${draft.sending || !data!.can_send ? 'disabled' : ''}>Link${it.proposed_number ? ' #' + esc(it.proposed_number) : ''}</button>`
+            : `<button class="btn small" data-act="shared-send" data-id="${esc(it.id)}" ${draft.sending || !data!.can_send ? 'disabled' : ''}>Send</button>`;
           return `<div class="item proposal live" data-shared-row="${esc(it.id)}" data-shared-item="${esc(it.id)}"><span class="check dashed"></span>
             <div class="content"><span class="title" contenteditable="true" data-defer data-shared-field="text" spellcheck="false" role="textbox" aria-label="Title">${esc(current.text)}</span><div class="sub">${at}${owner}<span data-shared-edited>${edited ? '· ' + edited : ''}</span></div>${notSaved}${currentLine}</div>
             <div class="item-tail actions">${go}<button class="icon-btn tiny" data-act="shared-dismiss" data-id="${esc(it.id)}" title="Dismiss" aria-label="Dismiss">${icon('close', 12)}</button></div></div>`;
@@ -496,111 +595,112 @@
         return `<div class="shared-item" data-shared-row="${esc(it.id)}" data-shared-item="${esc(it.id)}"><label>Title<textarea data-defer data-shared-field="text" aria-label="Title">${esc(current.text)}</textarea></label>` + fields.map(key => {
           return `<label>${key}<input data-defer data-shared-field="${key}" aria-label="${key}" value="${esc(detail[key] || '')}"></label>`;
         }).join('') + `<div class="aside" data-shared-edited>${edited}</div>${notSaved}${currentLine}
-          <div class="actions"><button class="btn small" data-act="shared-dismiss" data-id="${esc(it.id)}">Dismiss</button>${it.proposed_task_id ? `<button class="btn small primary" data-act="shared-link" data-id="${esc(it.id)}" ${draft.sending || !data.can_send ? 'disabled' : ''}>Link${it.proposed_number ? ' #' + esc(it.proposed_number) : ''}</button>` : `<button class="btn small primary" data-act="shared-send" data-id="${esc(it.id)}" ${draft.sending || !data.can_send ? 'disabled' : ''}>Send${detail.owner ? ' to ' + esc(owners.find(o => o.actor === detail.owner)?.name || detail.owner) : ''}</button>`}</div></div>`;
+          <div class="actions"><button class="btn small" data-act="shared-dismiss" data-id="${esc(it.id)}">Dismiss</button>${it.proposed_task_id ? `<button class="btn small primary" data-act="shared-link" data-id="${esc(it.id)}" ${draft.sending || !data!.can_send ? 'disabled' : ''}>Link${it.proposed_number ? ' #' + esc(it.proposed_number) : ''}</button>` : `<button class="btn small primary" data-act="shared-send" data-id="${esc(it.id)}" ${draft.sending || !data!.can_send ? 'disabled' : ''}>Send${detail.owner ? ' to ' + esc(owners.find(o => o.actor === detail.owner)?.name || detail.owner) : ''}</button>`}</div></div>`;
       }).join('') + extras + '</section>';
   }
-  function sharedRefresh(element, content) {
+  function sharedRefresh(element: HTMLElement, content: string) {
     const panel = element.querySelector('[data-shared-panel]');
     if (!panel) return;
     const template = document.createElement('template'); template.innerHTML = content;
     const next = template.content.querySelector('[data-shared-panel]');
     if (!next) return;
-    panel.querySelector('.section-head').innerHTML = next.querySelector('.section-head').innerHTML;
-    for (const row of panel.querySelectorAll('[data-shared-row]')) {
-      if (![...next.querySelectorAll('[data-shared-row]')].some(n => n.dataset.sharedRow === row.dataset.sharedRow)) row.remove();
+    panel.querySelector('.section-head')!.innerHTML = next.querySelector('.section-head')!.innerHTML;
+    for (const row of panel.querySelectorAll<HTMLElement>('[data-shared-row]')) {
+      if (![...next.querySelectorAll<HTMLElement>('[data-shared-row]')].some(n => n.dataset.sharedRow === row.dataset.sharedRow)) row.remove();
     }
-    for (const row of next.querySelectorAll('[data-shared-row]')) {
-      const old = [...panel.querySelectorAll('[data-shared-row]')].find(n => n.dataset.sharedRow === row.dataset.sharedRow);
+    for (const row of next.querySelectorAll<HTMLElement>('[data-shared-row]')) {
+      const old = [...panel.querySelectorAll<HTMLElement>('[data-shared-row]')].find(n => n.dataset.sharedRow === row.dataset.sharedRow);
       if (!old) { panel.append(row); continue; }
       if (!old.hasAttribute('data-shared-item') || !row.hasAttribute('data-shared-item')) {
         if (old.innerHTML !== row.innerHTML && !old.contains(document.activeElement)) old.replaceWith(row);
         continue;
       }
       // Keep field nodes in place so a refresh never interrupts typing or moves the caret.
-      for (const field of old.querySelectorAll('[data-shared-field]')) {
-        const value = row.querySelector(`[data-shared-field="${field.dataset.sharedField}"]`);
+      for (const field of old.querySelectorAll<HTMLInputElement>('[data-shared-field]')) {
+        const value = row.querySelector<HTMLInputElement>(`[data-shared-field="${field.dataset.sharedField}"]`)!;
         if (field.tagName === 'SELECT' && field.innerHTML !== value.innerHTML) field.innerHTML = value.innerHTML;
         if (fieldValue(field) !== fieldValue(value)) setFieldValue(field, fieldValue(value));
       }
       for (const selector of ['[data-shared-edited]', '[data-shared-error]', '[data-shared-current]', '[data-shared-owner]', '.actions']) {
-        const target = old.querySelector(selector), value = row.querySelector(selector);
+        const target = old.querySelector<HTMLElement>(selector), value = row.querySelector<HTMLElement>(selector);
         if (!target || !value) continue;
         target.innerHTML = value.innerHTML; target.hidden = value.hidden; target.className = value.className;
       }
     }
   }
-  function sharedChanged(field) {
-    const id = field.closest('[data-shared-item]').dataset.sharedItem, draft = sharedDraft(id), key = field.dataset.sharedField;
+  function sharedChanged(field: HTMLInputElement) {
+    const id = field.closest<HTMLElement>('[data-shared-item]')!.dataset.sharedItem!, draft = sharedDraft(id), key = field.dataset.sharedField!;
     if (!(key in draft.dirty)) draft.dirty[key] = sharedValue(draft.base, key);
     if (key === 'text') draft.patch.text = fieldValue(field);
     else (draft.patch.detail ||= {})[key] = field.value;
     const shown = key === 'owner' && field.closest('.owner-pick')?.querySelector('[data-shared-owner]');
-    if (shown) { shown.textContent = field.value ? field.selectedOptions[0].textContent : 'Owner'; shown.classList.toggle('empty', !field.value); }
+    if (shown) { shown.textContent = field.value ? (field as HTMLElement as HTMLSelectElement).selectedOptions[0]!.textContent : 'Owner'; shown.classList.toggle('empty', !field.value); }
     clearTimeout(draft.timer);
     if (!draft.error) draft.timer = setTimeout(() => sharedSave(id), 700);
   }
-  async function sharedSave(id) {
+  async function sharedSave(id: string) {
     const draft = sharedDraft(id);
     clearTimeout(draft.timer);
     if (draft.closed || draft.closedAcknowledged || draft.flight || draft.sending || !Object.keys(draft.patch).length) return draft.flight?.catch(() => {});
     const patch = draft.patch; draft.patch = {}; draft.error = '';
     draft.inflightPatch = patch;
     draft.flight = invoke('shared_item', {id, body:{...patch, version:draft.version}});
-    try { const reply = await draft.flight; if (reply.conflict) { draft.current=reply.conflict; draft.version=reply.conflict.version; draft.base=reply.conflict; throw new Error('This item changed'); } sharedAccepted(draft, patch, reply.item); }
+    try { const reply = await draft.flight; if (reply.conflict) { draft.current=reply.conflict; draft.version=reply.conflict.version; draft.base=reply.conflict; throw new Error('This item changed'); } sharedAccepted(draft, patch, reply.item!); }
     catch (e) { draft.patch = mergeShared(patch, draft.patch); draft.error = String(e); }
     finally { draft.flight = null; draft.inflightPatch = null; }
     if (!draft.error && Object.keys(draft.patch).length && !draft.sending) return sharedSave(id);
     await poll();
-    const node = [...document.querySelectorAll('[data-shared-item]')].find(n => n.dataset.sharedItem === id);
-    if (node) node.querySelector('[data-shared-error]').hidden = !draft.error;
+    const node = [...document.querySelectorAll<HTMLElement>('[data-shared-item]')].find(n => n.dataset.sharedItem === id);
+    if (node) node.querySelector<HTMLElement>('[data-shared-error]')!.hidden = !draft.error;
     render();
   }
-  async function sharedFinish(button, send) {
-    const id = button.dataset.id, draft = sharedDraft(id), node = button.closest('[data-shared-item]');
+  /** Send (true), Link ('link') or Dismiss (false) a shared item. */
+  async function sharedFinish(button: HTMLElement, send: boolean | 'link') {
+    const id = button.dataset.id!, draft = sharedDraft(id), node = button.closest<HTMLElement>('[data-shared-item]')!;
     if (draft.sending) return;
-    draft.sending = true; clearTimeout(draft.timer); node.querySelectorAll('button,input,textarea,select').forEach(f => f.disabled = true); node.querySelectorAll('[contenteditable]').forEach(f => f.contentEditable = 'false');
+    draft.sending = true; clearTimeout(draft.timer); node.querySelectorAll<HTMLButtonElement>('button,input,textarea,select').forEach(f => f.disabled = true); node.querySelectorAll<HTMLElement>('[contenteditable]').forEach(f => f.contentEditable = 'false');
     try {
       if (draft.flight) { try { await draft.flight; } catch {} if(draft.error) throw new Error(draft.error); }
       if (send === 'link' && Object.keys(draft.patch).length) {
         const saved = await invoke('shared_item', {id, body:{...draft.patch,version:draft.version}});
         if (saved.conflict) { draft.current=saved.conflict; draft.version=saved.conflict.version; draft.base=saved.conflict; throw new Error('This item changed'); }
-        sharedAccepted(draft, draft.patch, saved.item); draft.patch = {};
+        sharedAccepted(draft, draft.patch, saved.item!); draft.patch = {};
       }
       const reply = await invoke('shared_item', {id, action:send === 'link' ? 'link' : send ? 'send' : null, body:send === 'link' ? {} : send ? {...draft.patch,version:draft.version} : {status:'dismissed',version:draft.version}});
       if (reply.conflict) { draft.current=reply.conflict; draft.version=reply.conflict.version; draft.base=reply.conflict; throw new Error('This item changed'); }
       if (send && reply.pushed === false && Object.keys(draft.dirty).length) {
-        draft.closed ||= mergeShared(draft.base, draft.patch);
+        draft.closed ||= mergeShared(draft.base!, draft.patch);
       } else {
         draft.patch = {}; draft.dirty = {}; draft.error = ''; draft.current=null; draft.closed=null;
       }
     } catch (e) { draft.error = String(e); }
-    finally { draft.sending = false; node.querySelectorAll('button,input,textarea,select').forEach(f => f.disabled = false); node.querySelectorAll('[contenteditable]').forEach(f => f.contentEditable = 'true'); }
+    finally { draft.sending = false; node.querySelectorAll<HTMLButtonElement>('button,input,textarea,select').forEach(f => f.disabled = false); node.querySelectorAll<HTMLElement>('[contenteditable]').forEach(f => f.contentEditable = 'true'); }
     await poll(); render();
   }
-  async function sharedClose(id, copy) {
+  async function sharedClose(id: string, copy: boolean) {
     const draft = sharedDraft(id);
     if (!draft.closed) return;
-    if (copy) await copyText([draft.closed.text, ...sharedDetailParts(draft.closed.detail, S.meeting.actions)].filter(Boolean).join('\n\n'));
+    if (copy) await copyText([draft.closed.text, ...sharedDetailParts(draft.closed.detail, S.meeting!.actions)].filter(Boolean).join('\n\n'));
     if (draft.nativeRecovery) nativeDraftAcknowledged.add(draft.nativeRecovery);
     draft.closedAcknowledged = true; draft.closed = null; draft.patch = {}; draft.dirty = {};
     render();
   }
   /** Tico's task number, when the task's id or link ends in one. */
-  function taskNumber(it) {
+  function taskNumber(it: TaskRow) {
     if (it.number) return String(it.number);
     const id = String(it.task_id || '');
     if (/^\d+$/.test(id)) return id;
     const tail = /\/(\d+)\/?(?:[?#].*)?$/.exec(String(it.task_url || ''));
     return tail ? tail[1] : '';
   }
-  function task(it) {
+  function task(it: TaskRow) {
     const n = taskNumber(it);
     // The whole row opens the task in Tico, where it is edited.
     const open = it.task_url ? ` open" role="button" tabindex="0" title="Open in Tico" data-act="open-url" data-url="${esc(it.task_url)}` : '';
     const sub = [it.pending ? 'Linking' : it.status, it.owner_name, it.sent_to].filter(Boolean).map(esc).join(' · ');
     return `<li class="item task${open}"><span class="check ${it.pending ? '' : 'done'}">${it.pending ? '<span class="spin"></span>' : icon(it.kind === 'link' ? 'link' : 'check', 11)}</span><div class="content"><div class="title selectable">${n ? `<span class="num">#${esc(n)}</span> ` : ''}${esc(it.title)}</div><div class="sub">${sub}</div>${it.error ? `<div class="error selectable">${esc(it.error)}</div>` : ''}</div>${it.kind === 'link' ? `<button class="icon-btn tiny" data-act="unlink-item" data-id="${esc(it.id)}" aria-label="Unlink" title="Unlink">${icon('close', 12)}</button>` : ''}</li>`;
   }
-  function proposal(it) {
+  function proposal(it: Item) {
 
     const id = esc(it.id);
     const picking = S.ui.pop?.kind === 'owner' && S.ui.pop.id === it.id;
@@ -623,10 +723,10 @@
   }
 
   // ---- Transcript sidebar ----
-  let taskSearchTimer;
-  let taskTypes = { scope: null, list: [] };
+  let taskSearchTimer: number | undefined;
+  let taskTypes: { scope: string | null; list: OrgRef[] } = { scope: null, list: [] };
   /** The org's task types, once per org, for the picker's filter. */
-  async function loadTaskTypes(picker) {
+  async function loadTaskTypes(picker: TaskPicker) {
     if (taskTypes.scope === picker.scope) return;
     try {
       const list = await invoke('task_types');
@@ -653,7 +753,8 @@
     picker.loading = true; picker.error = '';
     render();
     try {
-      const reply = await invoke('task_picker', { query: S.ui.taskQuery.trim(), kind: S.ui.taskKind || '', offset: more ? picker.next : 0 });
+      // More shows only while there is a next page.
+      const reply = await invoke('task_picker', { query: S.ui.taskQuery.trim(), kind: S.ui.taskKind || '', offset: more ? picker.next! : 0 });
       if (S.ui.taskPicker !== picker || picker.request !== request || picker.scope !== JSON.stringify(S.meeting?.actions.link_scope)) return;
       picker.rows = more ? picker.rows.concat(reply.tasks) : reply.tasks;
       picker.next = reply.next_offset;
@@ -670,8 +771,8 @@
     if (!S.meeting?.actions.can_link || p.scope !== JSON.stringify(S.meeting.actions.link_scope)) { S.ui.taskPicker = null; return ''; }
     // Picked tasks stay on top while the search moves on, so a pick never vanishes from view.
     const shown = new Set(p.rows.map((t) => t.id));
-    const rows = [...p.picks.filter((id) => !shown.has(id) && p.picked[id]).map((id) => p.picked[id]), ...p.rows];
-    const row = (task) => {
+    const rows = [...p.picks.filter((id) => !shown.has(id) && p.picked[id]).map((id) => p.picked[id]!), ...p.rows];
+    const row = (task: PickerTask) => {
       const on = p.picks.includes(task.id);
       return `<button class="menu-item task-row ${on ? 'on' : ''}" data-act="task-pick" data-id="${esc(task.id)}" aria-pressed="${on}"><span class="pick">${on ? icon('check', 11) : ''}</span><span class="grow">${task.number ? `<span class="num">#${esc(task.number)}</span> ` : ''}${esc(task.title)}<span class="faint"> · ${esc(task.status)}</span></span></button>`;
     };
@@ -682,13 +783,13 @@
     return `<div class="scrim" data-act="task-picker-close"></div><div class="sheet tasks" id="sheet" role="dialog" aria-modal="true" aria-label="Link tasks"><h2>Link tasks</h2><div class="task-search"><label class="search-box">${icon('search', 13)}<input class="field" data-model="taskQuery" placeholder="Search or #number" spellcheck="false" aria-label="Search tasks">${p.loading ? '<span class="spin"></span>' : ''}</label>${filter}</div><div class="pop-list ${p.loading ? 'stale' : ''}" aria-busy="${!!p.loading}">${rows.map(row).join('')}</div>${!p.loading && !rows.length && !p.error ? '<div class="pop-text">No tasks</div>' : ''}${p.error ? `<div class="sheet-error">${esc(p.error)}</div>` : ''}<div class="sheet-foot">${p.next != null ? `<button class="link" data-act="task-picker-more" ${p.loading ? 'disabled' : ''}>More</button>` : ''}<span class="grow"></span><button class="btn quiet" data-act="task-picker-close">Cancel</button><button class="btn primary" data-act="task-picker-link" ${!count ? 'disabled' : ''}>${count ? `Link ${count}` : 'Link'}</button></div></div>`;
   }
   // ---- Transcript sidebar ----
-  function speakerColors(blocks) {
-    const colors = {};
+  function speakerColors(blocks: Block[]) {
+    const colors: Record<string, string> = {};
     let n = 0;
     for (const b of blocks) if (!(b.speaker in colors)) colors[b.speaker] = `var(--speaker-${(n++ % 6) + 1})`;
     return colors;
   }
-  function highlight(text, q) {
+  function highlight(text: string, q: string) {
     if (!q) return esc(text);
     const lower = text.toLowerCase();
     let out = '';
@@ -700,18 +801,18 @@
     return out + esc(text.slice(at));
   }
   /** Live text per channel: nothing extra while it works, a quiet note while it reconnects. */
-  function streamState(rec) {
+  function streamState(rec: RecordingStatus | null | undefined) {
     const list = rec?.stream || [];
     const bad = list.find((x) => x.state === 'retrying' && x.error) || list.find((x) => x.state === 'stopped' && x.error);
     const note = bad?.error || '';
     return { live: list.some((x) => x.state === 'live'), bad, note };
   }
   function transcriptBlocks() {
-    const m = S.meeting;
+    const m = S.meeting!;
     return S.transcript?.id === m.id ? S.transcript.blocks : [];
   }
   /** The sidebar's frame. Its rows are patched into #tbody one by one (see `patchTranscript`). */
-  function sidebar(m) {
+  function sidebar(m: Meeting) {
     const a = m.audio;
     const rec = S.status.recording;
     const stream = rec && rec.id === m.id ? streamState(rec) : null;
@@ -746,8 +847,8 @@
     return html + `<div class="side-foot">${foot}</div></aside>`;
   }
   /** Private questions to Tico and their answers, as cards between the turns they followed. */
-  function askCards(m) {
-    const cards = [];
+  function askCards(m: Meeting) {
+    const cards: { at: number; html: string }[] = [];
     let question = '';
     for (const msg of m.chat.messages) {
       if (!msg.private) continue;
@@ -756,7 +857,7 @@
       } else if (msg.me) {
         question = msg.text;
       } else {
-        const at = new Date(msg.time).getTime();
+        const at = new Date(msg.time!).getTime();
         const text = esc(msg.text).split(/\n{2,}/).map((p) => `<p>${p.replace(/\n/g, '<br>')}</p>`).join('');
         cards.push({ at: isNaN(at) ? Infinity : at, html: `<div class="asked" title="${esc(question)}">${ticoDot()}<div class="grow"><div class="head">You asked · only you see this</div><div class="text">${text}</div></div></div>` });
         question = '';
@@ -766,7 +867,7 @@
   }
   /** One string per row of the sidebar: turns, private answers, and the softer words still being spoken. */
   function transcriptItems() {
-    const m = S.meeting;
+    const m = S.meeting!;
     const a = m.audio;
     const blocks = transcriptBlocks();
     const q = S.ui.tsearch ? S.ui.tq.trim().toLowerCase() : '';
@@ -781,17 +882,17 @@
     let card = 0;
     for (const b of blocks) {
       const at = start + b.start_ms;
-      while (card < cards.length && cards[card].at <= at) items.push(cards[card++].html);
+      while (card < cards.length && cards[card]!.at <= at) items.push(cards[card++]!.html);
       const when = isNaN(at) ? clock(b.start_ms) : timeOf(new Date(at));
       items.push(`<div class="turn ${b.partial ? 'partial' : ''} ${b.removed ? 'removed' : ''}"><div class="who"><b style="color:${colors[b.speaker]}">${esc(b.speaker)}</b><span class="time">${esc(when)}</span></div><div class="said">${sharedLine(b, q)}</div></div>`);
     }
-    while (card < cards.length) items.push(cards[card++].html);
+    while (card < cards.length) items.push(cards[card++]!.html);
     const tail = blocks[blocks.length - 1];
     if (tail && a.pending && !m.setup.length && !recording && !q && !tail.partial) items.push(`<div class="turn"><div class="typing"><i></i><i></i><i></i></div></div>`);
     return items;
   }
   /** A line shared live: its text, or the edit form or removal question while one is open. */
-  function sharedLine(b, q) {
+  function sharedLine(b: Block, q: string) {
     const seq = b.seq ?? null;
     const current = S.transcript?.id;
     if (seq !== null && S.ui.editLine?.id === current && S.ui.editLine?.seq === seq) {
@@ -811,7 +912,7 @@
     return html;
   }
   /** Replaces only the rows that changed, so a partial turn grows in place instead of jumping. */
-  function patchTranscript(body) {
+  function patchTranscript(body: HTMLElement & { _items?: string[] }) {
     const items = transcriptItems();
     const before = body._items || [];
     if (before.length === items.length && before.every((item, i) => item === items[i])) return;
@@ -822,17 +923,17 @@
     items.forEach((item, i) => {
       if (before[i] === item && body.children[i]) return;
       template.innerHTML = item;
-      const row = template.content.firstElementChild;
-      if (body.children[i]) body.replaceChild(row, body.children[i]);
+      const row = template.content.firstElementChild!;
+      if (body.children[i]) body.replaceChild(row, body.children[i]!);
       else body.appendChild(row);
     });
-    while (body.children.length > items.length) body.lastElementChild.remove();
+    while (body.children.length > items.length) body.lastElementChild!.remove();
     body._items = items;
     if (stick) body.scrollTop = body.scrollHeight;
     else if (fresh) body.scrollTop = S.ui.tTop || 0;
   }
   /** The current search match: outlined, counted, and scrolled to only when the search moves. */
-  function showHit(body, step = 0) {
+  function showHit(body: HTMLElement, step = 0) {
     const counter = document.getElementById('thits');
     const q = S.ui.tsearch ? S.ui.tq.trim().toLowerCase() : '';
     const marks = [...body.querySelectorAll('mark')];
@@ -846,10 +947,11 @@
       if (counter) counter.textContent = q ? '0/0' : '';
       return;
     }
-    S.ui.hit = (Math.min(S.ui.hit, marks.length - 1) + step + marks.length) % marks.length;
+    // Set above whenever the search changes, so it is there from the first search on.
+    S.ui.hit = (Math.min(S.ui.hit!, marks.length - 1) + step + marks.length) % marks.length;
     marks.forEach((mark, i) => mark.classList.toggle('now', i === S.ui.hit));
     if (counter) counter.textContent = `${S.ui.hit + 1}/${marks.length}`;
-    if (jump) marks[S.ui.hit].scrollIntoView({ block: 'center' });
+    if (jump) marks[S.ui.hit]!.scrollIntoView({ block: 'center' });
   }
 
   // ---- Floating bars ----
@@ -862,7 +964,8 @@
     const st = S.status;
     const rec = st.recording;
     const caret = `<button class="caret ${S.ui.pop?.kind === 'source' ? 'on' : ''}" data-act="pop" data-pop="source" title="Audio sources" aria-label="Audio sources">${icon('down', 12)}</button>`;
-    const stop = (title) => `<button class="rec stop" data-act="stop" title="${title}" aria-label="Stop"><i></i>${streamState(rec).bad ? '<span class="rec-dot"></span>' : ''}</button>`;
+    const stop = (title: string) =>
+ `<button class="rec stop" data-act="stop" title="${title}" aria-label="Stop"><i></i>${streamState(rec).bad ? '<span class="rec-dot"></span>' : ''}</button>`;
     let bar = '';
     let foot = st.message || '';
     let side = 'center';
@@ -966,7 +1069,7 @@
       : `<button class="btn primary" data-act="share-go" ${busy || !d.org ? 'disabled' : ''}>${d.busy ? '<span class="spin"></span>' : ''}Share live</button>`;
     return html + `</div></div>`;
   }
-  async function copyMeetingLink(d) {
+  async function copyMeetingLink(d: ShareDraft) {
     const m = S.meeting;
     if (!m) return;
     try {
@@ -976,12 +1079,12 @@
       d.copied = true;
       d.error = '';
     } catch (error) {
-      d.error = String(error?.message || error);
+      d.error = String((error as Error | null)?.message || error);
     }
     await poll();
     render();
   }
-  async function copyText(text) {
+  async function copyText(text: string) {
     if (navigator.clipboard?.writeText) {
       try { await navigator.clipboard.writeText(text); return; } catch { /* Use the selected text fallback. */ }
     }
@@ -991,16 +1094,16 @@
   }
 
   // ---- Finish: where it is saved and who can see it ----
-  function finishSource(id) {
+  function finishSource(id: string) {
     if (S.meeting?.id === id) {
-      const m = S.meeting;
+      const m = S.meeting!;
       return { id, title: m.title, live_org: m.live_org, team: m.people.team, live: !!m.live && !m.kept_local, targets: m.targets, paused: m.paused_warning, blocked: m.send_blocked, sent: m.sent, connected: m.connected };
     }
     const row = S.library?.rows.find((r) => r.id === id);
     if (!row) return null;
-    return { id, title: row.title, live_org: row.live_org, team: true, live: !!row.live_org, targets: row.targets, paused: row.paused_warning, blocked: null, sent: row.sent, connected: S.library.connected };
+    return { id, title: row.title, live_org: row.live_org, team: true, live: !!row.live_org, targets: row.targets, paused: row.paused_warning, blocked: null, sent: row.sent, connected: S.library!.connected };
   }
-  function openFinish(id) {
+  function openFinish(id: string) {
     const src = finishSource(id);
     if (!src) return;
     S.ui.pop = null;
@@ -1058,7 +1161,8 @@
     const live = src && !done && src.live && src.live_org && src.targets.some((t) => t.id === src.live_org && !t.already);
     if (live && m?.live_state !== 'paused' && !src.paused && !S.status.busy) {
       // Save stops the recording first, waits for the last words, then ends the live meeting in Tico.
-      await act('save_meeting', { id, destination: src.live_org, audience: src.team ? 'team' : 'participants', title: src.title, pausedConfirmed: false });
+      // `live` holds only with a live org.
+      await act('save_meeting', { id, destination: src.live_org!, audience: src.team ? 'team' : 'participants', title: src.title, pausedConfirmed: false });
       if (S.status.recording?.id !== id) return;
     }
     // Refused or not shared: stop here and ask where it goes (This Mac or an org), as Finish does.
@@ -1069,16 +1173,17 @@
     const f = S.ui.finish;
     const src = f && finishSource(f.id);
     if (!src || S.status.busy) return;
-    const toOrg = f.dest !== 'local';
-    if (toOrg && src.paused && !f.pausedOk) { f.pausedOk = true; render(); return; }
+    const toOrg = f!.dest !== 'local';
+    if (toOrg && src.paused && !f!.pausedOk) { f!.pausedOk = true; render(); return; }
     S.ui.finish = null;
-    const title = (f.title || '').trim() || src.title;
-    act('save_meeting', { id: f.id, destination: toOrg ? f.dest : 'local', audience: toOrg ? f.audience : '', title, pausedConfirmed: toOrg && src.paused && f.pausedOk });
+    const title = (f!.title || '').trim() || src.title;
+    act('save_meeting', { id: f!.id, destination: toOrg ? f!.dest : 'local', audience: toOrg ? f!.audience : '', title, pausedConfirmed: toOrg && src.paused && f!.pausedOk });
   }
 
   // ---- Settings ----
+  /** Only while Settings has its settings. */
   function settingsForm() {
-    const s = S.settings;
+    const s = S.settings!;
     if (!S.ui.form) {
       S.ui.form = {
         microphone: s.microphone, meeting_audio: s.meeting_audio, transcription_url: s.transcription_url,
@@ -1091,10 +1196,10 @@
     }
     return S.ui.form;
   }
-  const speechSource = (speech, s) => s.speech_source || (speech.source === 'own' || (speech.source === 'none' && !s.connections.length) ? 'own' : 'tico');
-  const FORM_KEYS = ['microphone', 'meeting_audio', 'transcription_url', 'transcription_model', 'transcription_language', 'calendar', 'streaming', 'streaming_model'];
+  const speechSource = (speech: Speech, s: Settings) => s.speech_source || (speech.source === 'own' || (speech.source === 'none' && !s.connections.length) ? 'own' : 'tico');
+  const FORM_KEYS = ['microphone', 'meeting_audio', 'transcription_url', 'transcription_model', 'transcription_language', 'calendar', 'streaming', 'streaming_model'] as const;
   function formDirty() {
-    const s = S.settings;
+    const s = S.settings!;
     const f = S.ui.form;
     if (!f) return false;
     const speech = S.status.speech;
@@ -1106,10 +1211,10 @@
     if (!s) return '';
     const f = settingsForm();
     const st = S.status;
-    const line = (name, control) => `<div class="line"><div class="name">${name}</div>${control}</div>`;
-    const field = (key, placeholder = '', type = 'text') =>
+    const line: Line = (name, control) => `<div class="line"><div class="name">${name}</div>${control}</div>`;
+    const field: Field = (key, placeholder = '', type = 'text') =>
       `<input class="field" type="${type}" data-model="${key}" placeholder="${esc(placeholder)}" spellcheck="false" autocomplete="off">`;
-    const toggle = (key, checked, disabled = false) =>
+    const toggle: Toggle = (key, checked, disabled = false) =>
       `<label class="switch"><input type="checkbox" data-check="${key}" ${checked ? 'checked' : ''} ${disabled ? 'disabled' : ''}><i></i></label>`;
     let html = `<div class="column narrow"><h1 class="page-title">Settings</h1>${errorNotice()}`;
     html += `<div class="settings-group"><div class="label">Orgs</div><div class="inset">`;
@@ -1142,7 +1247,7 @@
     // macOS only: Meet names need Accessibility, asked for here rather than at launch.
     if (st.speaker_access != null && f.meeting_audio) html += line('Meet speaker names', st.speaker_access ? '<span class="faint">On</span>' : `<button class="btn small" data-act="allow-speaker-names">Allow</button>`);
     html += `</div></div>`;
-    // Updates: version, Check for updates, Move to Applications (update.js).
+    // Updates: version, Check for updates, Move to Applications (update.ts).
     html += window.ticoUpdateRow?.(st.update) || '';
     html += `<div class="settings-group"><details class="more" ${S.ui.importOpen ? 'open' : ''} data-details="importOpen"><summary>${icon('right', 12)}Import an older recorder library</summary><div class="inset" style="margin-top:8px"><div class="line">${field('legacy', 'Folder path')}<button class="btn" data-act="import" ${st.busy || s.recording ? 'disabled' : ''}>Import</button></div></div></details></div>`;
     const dirty = formDirty();
@@ -1151,22 +1256,23 @@
     return html + '</div>';
   }
   /** Speech: through your Tico (no keys of your own), or your own providers and keys. */
-  function speechGroup(s, f, line, field, toggle) {
+  function speechGroup(s: Settings, f: SettingsDraft, line: Line, field: Field, toggle: Toggle) {
     const speech = S.status.speech;
     const own = !speech || f.speech_source === 'own';
     let html = `<div class="settings-group"><div class="label">Speech</div><div class="inset">`;
     if (speech) {
-      const seg = (value, label) => `<button class="${f.speech_source === value ? 'on' : ''}" data-act="speech-source" data-source="${value}" aria-pressed="${f.speech_source === value}">${label}</button>`;
+      const seg = (value: string, label: string) => `<button class="${f.speech_source === value ? 'on' : ''}" data-act="speech-source" data-source="${value}" aria-pressed="${f.speech_source === value}">${label}</button>`;
       html += line('Source', `<div class="seg" role="group" aria-label="Speech source">${seg('tico', 'Your Tico')}${seg('own', 'Own keys')}</div>`);
     }
     if (!own) {
-      const name = speech.tico || s.connections[0]?.name || '';
+      // Not `own`: Speech is here.
+      const name = speech!.tico || s.connections[0]?.name || '';
       const state = !s.connections.length
         ? `<span class="value faint">Sign in first</span>`
-        : speech.transcribe ? `<span class="value">${esc(name)}</span>` : `<span class="value warn">Not available on ${esc(name || 'this Tico')}</span>`;
+        : speech!.transcribe ? `<span class="value">${esc(name)}</span>` : `<span class="value warn">Not available on ${esc(name || 'this Tico')}</span>`;
       html += line('Transcription', state);
       html += line('Language', field('form.transcription_language', 'Auto'));
-      const stream = !!speech.stream;
+      const stream = !!speech!.stream;
       html += line(`<span ${stream ? '' : `title="Not available on ${esc(name || 'this Tico')}"`}>Live text</span>`, toggle('streaming', f.streaming && stream, !stream));
     } else {
       html += line('Endpoint', field('form.transcription_url', 'https://openrouter.ai/api/v1'));
@@ -1194,12 +1300,12 @@
     else if (pop.kind === 'share-org') body = orgList('share-set-org', S.ui.share?.org);
     else if (pop.kind === 'finish-org') {
       const src = S.ui.finish && finishSource(S.ui.finish.id);
-      body = src ? orgList('finish-set-org', S.ui.finish.org, src.targets.filter((t) => !t.already).map((t) => t.id)) : '';
+      body = src ? orgList('finish-set-org', S.ui.finish!.org, src.targets.filter((t) => !t.already).map((t) => t.id)) : '';
     }
     if (!body) return '';
     return `<div class="popover" id="popover" style="${pop.style}">${body}</div>`;
   }
-  function orgList(act, current, only = null) {
+  function orgList(act: string, current: string | null | undefined, only: string[] | null = null) {
     return orgs().filter((o) => !only || only.includes(o.id)).map((o) => `<button class="menu-item" data-act="${act}" data-id="${esc(o.id)}">${orgTile(o, 's18')}<span class="grow">${esc(o.name)}</span>${o.id === current ? `<span class="check">${icon('check')}</span>` : ''}</button>`).join('');
   }
   function orgsPop() {
@@ -1207,7 +1313,7 @@
     const add = toAdd.map((org) => `<button class="menu-item" data-act="signin-desktop" data-url="${esc(org.url)}" ${S.status.busy ? 'disabled' : ''} aria-label="Connect ${esc(org.name)}">${orgTile(org, 's18')}<span class="grow">${esc(org.name)}</span>${icon('plus')}</button>`).join('');
     return orgList('make-default', defaultOrg()?.id) + `<div class="menu-sep"></div>${add}${toAdd.length ? `<button class="menu-item" data-act="settings"><span class="otile s18 add">+</span><span class="grow">Other address</span></button>` : `<button class="menu-item" data-act="settings">${icon('plus')}<span class="grow">Add org</span></button>`}`;
   }
-  function morePop(pop) {
+  function morePop(pop: Pop) {
     const m = S.meeting;
     if (!m) return '';
     if (pop.confirm === 'delete') {
@@ -1216,7 +1322,7 @@
     if (pop.confirm === 'discard') {
       return `<div class="pop-title">Remove it from Tico?</div><div class="pop-text">It stays on this Mac.</div><div class="pop-foot"><span class="grow"></span><button class="btn small quiet" data-act="close-pop">Cancel</button><button class="btn small danger" data-act="keep-local">Discard</button></div>`;
     }
-    const item = (act, glyph, label, extra = '') => `<button class="menu-item" data-act="${act}" ${extra}>${icon(glyph)}<span class="grow">${label}</span></button>`;
+    const item = (act: string, glyph: string, label: string, extra = '') => `<button class="menu-item" data-act="${act}" ${extra}>${icon(glyph)}<span class="grow">${label}</span></button>`;
     let html = '';
     if (!S.status.screen?.active && m.can_share_screen && m.connected) html += item('share-screen', 'screen', 'Share screen');
     if (m.connected && !m.kept_local && !m.discarded) html += item('copy-link', 'link', 'Copy meeting link');
@@ -1230,7 +1336,7 @@
     html += `<button class="menu-item danger" data-act="confirm-more" data-confirm="delete" ${m.recording_here ? 'disabled title="Stop recording first"' : ''}>${icon('trash')}<span class="grow">Delete recording…</span></button>`;
     return html;
   }
-  function ownerPop(pop) {
+  function ownerPop(pop: Pop) {
     const a = S.meeting?.actions;
     if (!a) return '';
     if (a.mode === 'signin') return `<div class="pop-text">Sign in to choose an owner.</div><button class="menu-item" data-act="settings">${icon('gear')}<span class="grow">Settings</span></button>`;
@@ -1289,7 +1395,7 @@
       await invoke('share_screen', { id: m.id, expectedTeam: !!m.people.team });
       S.ui.screen = null;
       await poll();
-    } catch (error) { if (S.ui.screen === d) d.error = String(error?.message || error); }
+    } catch (error) { if (S.ui.screen === d) d.error = String((error as Error | null)?.message || error); }
     finally { d.busy = false; render(); }
   }
 
@@ -1301,7 +1407,7 @@
     return library();
   }
   function render() {
-    const root = document.getElementById('app');
+    const root = document.getElementById('app')!;
     if (!root.dataset.ready) {
       root.innerHTML = '<div id="r-top"></div><main class="page" id="r-page"></main><div id="r-dock"></div><div id="r-sheet"></div><div id="r-pop"></div><div id="r-mention"></div><div id="r-connect"></div>';
       root.dataset.ready = '1';
@@ -1311,17 +1417,18 @@
     if (first && S.page === 'library') S.page = 'signin';
     else if (!first && S.page === 'signin') S.page = 'library';
     const html = { top: topbar(), page: page(), dock: dock(), sheet: shareSheet() + finishSheet() + taskPickerSheet(), pop: popover(), mention: mentionPop(), connect: connectCard() + screenCard() };
-    const active = document.activeElement;
+    // Read as an input: a key or model is only on the fields, and the selection is read only where there is one.
+    const active = document.activeElement as HTMLInputElement | null;
     const key = active?.dataset?.key || active?.dataset?.model;
-    const selection = key && 'selectionStart' in active ? [active.selectionStart, active.selectionEnd] : null;
-    const pageEl = document.getElementById('r-page');
+    const selection: [number, number] | null = key && 'selectionStart' in active! ? [active.selectionStart!, active.selectionEnd!] : null;
+    const pageEl = document.getElementById('r-page')!;
     pageEl.classList.toggle('meeting', S.page === 'meeting');
     pageEl.classList.toggle('signin-page', S.page === 'signin');
     for (const [name, content] of Object.entries(html)) {
       if (regions[name] === content) continue;
-      const element = document.getElementById(`r-${name}`);
+      const element = document.getElementById(`r-${name}`)!;
       // Never replace text the person is editing; it renders once they leave it.
-      if (element.contains(active) && active.matches('[data-defer]') && !(name === 'page' && S.meeting?.actions?.shared?.gone)) {
+      if (element.contains(active) && active!.matches('[data-defer]') && !(name === 'page' && S.meeting?.actions?.shared?.gone)) {
         if (name === 'page') sharedRefresh(element, content);
         S.deferred = true;
         continue;
@@ -1332,23 +1439,23 @@
       const reopened = (name === 'pop' || name === 'mention') && regions[name];
       element.innerHTML = content;
       // A popover that was already open updates in place; only a fresh one rises in.
-      if (reopened && element.firstElementChild) element.firstElementChild.style.animation = 'none';
-      if (name === 'sheet' && regions.sheet && element.querySelector('.sheet')) element.querySelector('.sheet').style.animation = 'none';
+      if (reopened && element.firstElementChild) (element.firstElementChild as HTMLElement).style.animation = 'none';
+      if (name === 'sheet' && regions.sheet && element.querySelector('.sheet')) element.querySelector<HTMLElement>('.sheet')!.style.animation = 'none';
       regions[name] = content;
       if (name === 'page') {
         const again = S.page === 'meeting' ? document.getElementById('main') : element;
         if (again) again.scrollTop = top;
         regions.pageKind = S.page + (S.meeting?.id || '');
       }
-      for (const input of element.querySelectorAll('[data-model]')) {
-        if (input.tagName !== 'SELECT') input.value = model(input.dataset.model);
+      for (const input of element.querySelectorAll<HTMLInputElement>('[data-model]')) {
+        if (input.tagName !== 'SELECT') input.value = model(input.dataset.model!);
       }
-      for (const area of element.querySelectorAll('textarea.notes')) {
+      for (const area of element.querySelectorAll<HTMLTextAreaElement>('textarea.notes')) {
         grow(area);
         paintMentions(area);
       }
       if (key) {
-        const again = element.querySelector(`[data-key="${CSS.escape(key)}"], [data-model="${CSS.escape(key)}"]`);
+        const again = element.querySelector<HTMLInputElement>(`[data-key="${CSS.escape(key)}"], [data-model="${CSS.escape(key)}"]`);
         if (again && again !== document.activeElement) {
           again.focus();
           if (selection && 'setSelectionRange' in again) {
@@ -1363,7 +1470,7 @@
       showHit(tbody);
     }
     if (S.ui.focusNext) {
-      const target = document.querySelector(S.ui.focusNext);
+      const target = document.querySelector<HTMLElement>(S.ui.focusNext);
       S.ui.focusNext = null;
       if (target) target.focus();
     }
@@ -1377,36 +1484,36 @@
     if (elapsed) elapsed.textContent = clock(rec.elapsed_ms);
     const level = Math.max(0, ...rec.sources.map((s) => s.level || 0));
     const shape = [0.45, 0.8, 1, 0.65, 0.35];
-    document.querySelectorAll('#levels b').forEach((bar, i) => (bar.style.height = `${Math.round(4 + 14 * level * shape[i])}px`));
+    document.querySelectorAll<HTMLElement>('#levels b').forEach((bar, i) => (bar.style.height = `${Math.round(4 + 14 * level * shape[i]!)}px`));
     for (const src of rec.sources) {
-      const meter = document.querySelector(`[data-meter="${CSS.escape(src.channel)}"]`);
+      const meter = document.querySelector<HTMLElement>(`[data-meter="${CSS.escape(src.channel)}"]`);
       if (meter) meter.style.width = `${Math.round(src.level * 100)}%`;
     }
   }
-  function grow(area) {
+  function grow(area: HTMLElement) {
     area.style.height = 'auto';
     area.style.height = `${Math.max(96, area.scrollHeight)}px`;
   }
-  const startsWord = (name, q) => name.toLowerCase().split(/[\s.@_-]+/).some((word) => word.startsWith(q));
+  const startsWord = (name: string, q: string) => name.toLowerCase().split(/[\s.@_-]+/).some((word) => word.startsWith(q));
   /** Names containing `q`, those with a word starting with it first. */
-  const ranked = (rows, q) => {
+  const ranked = <T extends { name: string }>(rows: T[], q: string) => {
     const hits = rows.filter((row) => row.name.toLowerCase().includes(q));
     return [...hits.filter((row) => startsWord(row.name, q)), ...hits.filter((row) => !startsWord(row.name, q))];
   };
-  function moveHot(box, step) {
+  function moveHot(box: Element | null, step: number) {
     const options = box ? [...box.querySelectorAll('[data-opt]')] : [];
     if (!options.length) return;
     S.ui.hot = Math.max(0, Math.min(options.length - 1, Math.min(S.ui.hot, options.length - 1) + step));
     options.forEach((o, i) => o.classList.toggle('hot', i === S.ui.hot));
-    options[S.ui.hot].scrollIntoView({ block: 'nearest' });
+    options[S.ui.hot]!.scrollIntoView({ block: 'nearest' });
   }
 
   // ---- @mentions in Notes and task text: stored as plain "@Name" text, drawn as chips behind Notes' words ----
   const roster = () => S.meeting?.actions?.owners || [];
   /** The field the open mention list types into: Notes, Add a task, or a shared task's title. */
-  let mentionField = null;
-  const mentionable = (el) => el?.dataset && (el.dataset.model === 'notes' || el.dataset.model === 'addItem');
-  function paintMentions(area) {
+  let mentionField: HTMLTextAreaElement | HTMLInputElement | null = null;
+  const mentionable = (el: HTMLElement | null | undefined) => el?.dataset && (el.dataset.model === 'notes' || el.dataset.model === 'addItem');
+  function paintMentions(area: HTMLTextAreaElement | HTMLInputElement) {
     const back = area.previousElementSibling;
     if (!back?.classList.contains('notes-backdrop')) return;
     const names = roster().map((o) => o.name).filter(Boolean).sort((a, b) => b.length - a.length);
@@ -1420,20 +1527,21 @@
     let at = 0;
     for (const match of text.matchAll(pattern)) {
       html += esc(text.slice(at, match.index)) + `<mark>${esc(match[0])}</mark>`;
-      at = match.index + match[0].length;
+      at = match.index! + match[0].length;
     }
     back.innerHTML = html + esc(text.slice(at)) + '​';
   }
   /** The "@query" just before the caret, if the person is typing a mention. */
-  function findMention(area) {
-    const before = area.value.slice(0, area.selectionStart);
+  function findMention(area: HTMLTextAreaElement | HTMLInputElement) {
+    const before = area.value.slice(0, area.selectionStart!);
     const match = /(^|[\s(])@([\p{L}\p{N}._-]{0,24})$/u.exec(before);
     if (!match || !roster().length || area.selectionStart !== area.selectionEnd) {
       if (S.ui.mention) closeMention();
       return;
     }
-    const start = before.length - match[2].length - 1;
-    const query = match[2].toLowerCase();
+    const start = before.length - match[2]!.length - 1;
+    const query = match[2]!.toLowerCase();
+
     if (S.ui.mention?.start !== start || S.ui.mention.query !== query || mentionField !== area) S.ui.hot = 0;
     mentionField = area;
     S.ui.mention = { start, query, left: 0, top: 0, max: 260 };
@@ -1461,11 +1569,11 @@
     const hot = Math.min(S.ui.hot, matches.length - 1);
     return `<div class="popover mention" id="mention" style="left:${m.left}px;top:${m.top}px"><div class="pop-list" style="max-height:${m.max}px">${matches.map((o, i) => `<button class="menu-item ${i === hot ? 'hot' : ''}" data-opt data-name="${esc(o.name)}" tabindex="-1">${avatar(o)}<span class="grow">${esc(o.name)}</span></button>`).join('')}</div></div>`;
   }
-  function insertMention(area, name) {
+  function insertMention(area: HTMLTextAreaElement | HTMLInputElement, name: string) {
     const m = S.ui.mention;
     if (!m) return;
     const value = area.value;
-    const end = area.selectionStart;
+    const end = area.selectionStart!;
     const text = `@${name} `;
     area.value = value.slice(0, m.start) + text + value.slice(end);
     const caret = m.start + text.length;
@@ -1475,10 +1583,10 @@
     render();
   }
   /** Where a character of a textarea sits on screen, measured with a mirror of its text. */
-  function caretPoint(area, index) {
+  function caretPoint(area: HTMLTextAreaElement | HTMLInputElement, index: number) {
     const style = getComputedStyle(area);
     const mirror = document.createElement('div');
-    for (const prop of ['fontFamily', 'fontSize', 'fontWeight', 'lineHeight', 'letterSpacing', 'paddingTop', 'paddingLeft', 'paddingRight', 'borderTopWidth', 'borderLeftWidth', 'boxSizing']) mirror.style[prop] = style[prop];
+    for (const prop of ['fontFamily', 'fontSize', 'fontWeight', 'lineHeight', 'letterSpacing', 'paddingTop', 'paddingLeft', 'paddingRight', 'borderTopWidth', 'borderLeftWidth', 'boxSizing'] as const) mirror.style[prop] = style[prop];
     Object.assign(mirror.style, { position: 'absolute', visibility: 'hidden', whiteSpace: 'pre-wrap', overflowWrap: 'break-word', width: `${area.clientWidth}px`, top: '0', left: '0' });
     mirror.textContent = area.value.slice(0, index);
     const mark = document.createElement('span');
@@ -1490,7 +1598,7 @@
     const lineTop = rect.top + mark.offsetTop;
     mirror.remove();
     const width = 260;
-    const point = { left: Math.round(Math.max(12, Math.min(rect.left + mark.offsetLeft - 8, window.innerWidth - width - 12))) };
+    const point: { left: number; top?: number; max?: number } = { left: Math.round(Math.max(12, Math.min(rect.left + mark.offsetLeft - 8, window.innerWidth - width - 12))) };
     // Below the line, like any text field's suggestions, scrolling if it is short of room; above
     // only when not even four names fit below.
     const want = Math.min(260, 34 * mentionCount()) + 10;
@@ -1509,7 +1617,7 @@
   const mentionCount = () => Math.max(1, mentionMatches().length);
 
   // ---- Navigation ----
-  async function openMeeting(id) {
+  async function openMeeting(id: string) {
     S.ui.taskPicker = null;
     S.ui.pop = null;
     S.ui.share = null;
@@ -1566,8 +1674,8 @@
   }
 
   // ---- Popover placement ----
-  const POP_WIDTH = { owner: 240, orgs: 240, 'share-org': 240, 'finish-org': 220, more: 230, source: 250 };
-  function openPop(kind, anchor, extra = {}) {
+  const POP_WIDTH: Record<string, number> = { owner: 240, orgs: 240, 'share-org': 240, 'finish-org': 220, more: 230, source: 250 };
+  function openPop(kind: string, anchor: HTMLElement, extra: { id?: string | undefined } = {}) {
     if (S.ui.pop?.kind === kind && S.ui.pop.id === extra.id) {
       S.ui.pop = null;
       render();
@@ -1588,9 +1696,9 @@
   }
 
   // ---- Actions ----
-  let notesTimer = null;
+  let notesTimer: number | null = null;
   async function flushNotes() {
-    clearTimeout(notesTimer);
+    clearTimeout(notesTimer as number);
     if (S.ui.notesDraft !== null && S.meeting && S.ui.notesDraft !== S.meeting.notes.text) {
       await invoke('set_notes', { notes: S.ui.notesDraft });
     }
@@ -1615,7 +1723,8 @@
     S.ui.focusNext = '[data-model="ask"]';
     act('ask', { question: text });
   }
-  function sharePick(actor, name, bot) {
+  function sharePick(actor: string, name: string, bot: boolean) {
+
     const d = S.ui.share;
     const m = S.meeting;
     if (!d || !m) return;
@@ -1640,23 +1749,23 @@
   const handlers = {
     back,
     settings,
-    open: (el) => openMeeting(el.dataset.id),
+    open: (el) => openMeeting(el.dataset.id!),
     'open-active': () => S.status.recording && openMeeting(S.status.recording.id),
     record: async () => {
       const id = await act('record', { event: null });
       if (id) openMeeting(id);
     },
     'record-event': async (el) => {
-      const event = S.library.events[Number(el.dataset.index)];
+      const event = S.library!.events[Number(el.dataset.index)]!;
       const id = await act('record', { event });
       if (id) openMeeting(id);
     },
     'signin-desktop': async (el) => {
       // From the org menu, Settings shows the sign-in as it waits.
       if (el.closest('#popover')) settings();
-      S.ui.signingDesktop = el.dataset.url;
+      S.ui.signingDesktop = el.dataset.url!;
       // Builds without the desktop contract fall back to typing an address.
-      try { await invoke('sign_in_desktop', { url: el.dataset.url }); await poll(); } catch (error) { console.error(error); S.ui.signingDesktop = ''; S.ui.address = true; render(); }
+      try { await invoke('sign_in_desktop', { url: el.dataset.url! }); await poll(); } catch (error) { console.error(error); S.ui.signingDesktop = ''; S.ui.address = true; render(); }
     },
     'address-on': () => { S.ui.address = true; S.ui.focusNext = '[data-model="signin"]'; render(); },
     'address-off': () => { S.ui.address = false; render(); },
@@ -1672,13 +1781,13 @@
         act('set_team', { team });
       } else { d.team = team; render(); }
     },
-    'share-pick': (el) => sharePick(el.dataset.actor, el.dataset.name, !!el.dataset.bot),
+    'share-pick': (el) => sharePick(el.dataset.actor!, el.dataset.name!, !!el.dataset.bot),
     'share-unpick': (el) => { const d = S.ui.share; if (d) { d.picks = d.picks.filter((x) => x.actor !== el.dataset.actor); render(); } },
     'share-set-org': (el) => {
       const d = S.ui.share;
       S.ui.pop = null;
       if (!d || S.meeting?.live) return render();
-      d.org = el.dataset.id;
+      d.org = el.dataset.id!;
       d.picks = [];
       act('choose_people_org', { id: d.org });
     },
@@ -1694,47 +1803,47 @@
       openShare();
       if (S.meeting?.live && S.ui.share) copyMeetingLink(S.ui.share);
     },
-    'finish-open': (el) => openFinish(el.dataset.id),
+    'finish-open': (el) => openFinish(el.dataset.id!),
     'finish-close': () => { S.ui.finish = null; render(); },
     'finish-dest': (el) => {
       const f = S.ui.finish;
       if (!f) return;
       if (el.dataset.dest !== 'local' && f.dest !== 'local' && el.dataset.more) { openPop('finish-org', el); return; }
-      f.dest = el.dataset.dest;
+      f.dest = el.dataset.dest!;
       f.pausedOk = false;
       render();
     },
-    'finish-set-org': (el) => { const f = S.ui.finish; S.ui.pop = null; if (f) { f.org = el.dataset.id; f.dest = f.org; } render(); },
-    'finish-audience': (el) => { if (S.ui.finish) { S.ui.finish.audience = el.dataset.audience; render(); } },
+    'finish-set-org': (el) => { const f = S.ui.finish; S.ui.pop = null; if (f) { f.org = el.dataset.id!; f.dest = f.org; } render(); },
+    'finish-audience': (el) => { if (S.ui.finish) { S.ui.finish.audience = el.dataset.audience!; render(); } },
     'finish-save': saveFinish,
     'finish-ask-delete': () => { if (S.ui.finish) { S.ui.finish.confirmDelete = true; render(); } },
     'finish-keep': () => { if (S.ui.finish) { S.ui.finish.confirmDelete = false; render(); } },
     'finish-delete': () => { const f = S.ui.finish; S.ui.finish = null; if (f) act('delete_recording', { id: f.id }); },
     'keep-local': () => { S.ui.pop = null; if (S.meeting) act('keep_local', { id: S.meeting.id }); },
-    'confirm-more': (el) => { S.ui.pop = { ...S.ui.pop, confirm: el.dataset.confirm }; render(); },
+    'confirm-more': (el) => { S.ui.pop = { ...S.ui.pop!, confirm: el.dataset.confirm }; render(); },
     'share-screen': () => {
       const m = S.meeting;
       if (!m) return;
       S.ui.pop = null;
       const targets = m.targets || [];
-      S.ui.screen = { destination: m.live_org || (targets.length === 1 ? targets[0].id : defaultOrg()?.id || ''), busy: false, error: '' };
+      S.ui.screen = { destination: m.live_org || (targets.length === 1 ? targets[0]!.id : defaultOrg()?.id || ''), busy: false, error: '' };
       render();
     },
-    'screen-org': (el) => { if (S.ui.screen && !S.ui.screen.busy) { S.ui.screen.destination = el.dataset.id; render(); } },
+    'screen-org': (el) => { if (S.ui.screen && !S.ui.screen.busy) { S.ui.screen.destination = el.dataset.id!; render(); } },
     'screen-cancel': () => { S.ui.screen = null; render(); },
     'screen-go': () => shareScreen(),
     'stop-screen': () => act('stop_screen'),
     stop: stopAndFinish,
-    'ask-delete': (el) => { S.ui.confirm = el.dataset.id; render(); },
+    'ask-delete': (el) => { S.ui.confirm = el.dataset.id!; render(); },
     'cancel-delete': () => { S.ui.confirm = null; render(); },
     delete: async (el) => {
       S.ui.confirm = null;
       S.ui.pop = null;
-      await act('delete_recording', { id: el.dataset.id });
+      await act('delete_recording', { id: el.dataset.id! });
     },
-    pop: (el) => openPop(el.dataset.pop, el, { id: el.dataset.id }),
+    pop: (el) => openPop(el.dataset.pop!, el, { id: el.dataset.id }),
     'close-pop': () => { S.ui.pop = null; render(); },
-    'control-live': (el) => { S.ui.pop = null; act('control_live', { action: el.dataset.action }); },
+    'control-live': (el) => { S.ui.pop = null; act('control_live', { action: el.dataset.action! }); },
     'edit-line': (el) => {
       const seq = Number(el.dataset.seq);
       const id = S.transcript?.id;
@@ -1745,7 +1854,7 @@
       S.ui.editDraft = S.ui.editInitial;
       S.ui.removeLine = null;
       render();
-      document.querySelector('.line-edit')?.focus();
+      document.querySelector<HTMLElement>('.line-edit')?.focus();
     },
     'cancel-line': () => { S.ui.editLine = null; render(); },
     'save-line': async () => {
@@ -1761,7 +1870,7 @@
         render();
       }
     },
-    'ask-remove-line': (el) => { S.ui.removeLine = { id: S.transcript?.id, seq: Number(el.dataset.seq) }; S.ui.editLine = null; render(); },
+    'ask-remove-line': (el) => { S.ui.removeLine = { id: S.transcript?.id as string, seq: Number(el.dataset.seq) }; S.ui.editLine = null; render(); },
     'cancel-remove-line': () => { S.ui.removeLine = null; render(); },
     'remove-line': async (el) => {
       const removal = S.ui.removeLine;
@@ -1775,7 +1884,7 @@
         render();
       }
     },
-    retry: (el) => { S.ui.pop = null; act('retry', { id: el.dataset.id }); },
+    retry: (el) => { S.ui.pop = null; act('retry', { id: el.dataset.id! }); },
     'audio-status': () => { S.ui.pop = null; S.ui.hideSide = false; S.ui.showAudio = !S.ui.showAudio; render(); },
     'toggle-audio': () => { S.ui.showAudio = !S.ui.showAudio; render(); },
     'toggle-side': () => { S.ui.pop = null; S.ui.hideSide = !S.ui.hideSide; S.ui.stick = true; render(); },
@@ -1806,7 +1915,7 @@
     'task-picker-more': () => loadTaskPicker(true),
     'task-pick': (el) => {
       const p = S.ui.taskPicker; if (!p) return;
-      const id = el.dataset.id, task = p.rows.find((t) => t.id === id);
+      const id = el.dataset.id!, task = p.rows.find((t) => t.id === id);
       if (task) p.picked[id] = task;
       p.picks = p.picks.includes(id) ? p.picks.filter((x) => x !== id) : [...p.picks, id]; render();
     },
@@ -1814,16 +1923,16 @@
       const p = S.ui.taskPicker; if (!p?.picks.length) return;
       S.ui.taskPicker = null; act('link_selected_tasks', { ids: p.picks }); render();
     },
-    'accept-link-item': (el) => act('accept_link_item', { id: el.dataset.id }),
-    'unlink-item': (el) => act('unlink_item', { id: el.dataset.id }),
+    'accept-link-item': (el) => act('accept_link_item', { id: el.dataset.id! }),
+    'unlink-item': (el) => act('unlink_item', { id: el.dataset.id! }),
     'more-task-links': () => act('more_task_links'),
-    'shared-retry': el => sharedSave(el.dataset.id),
-    'shared-copy': el => sharedClose(el.dataset.id, true),
-    'shared-close': el => sharedClose(el.dataset.id, false),
+    'shared-retry': el => sharedSave(el.dataset.id!),
+    'shared-copy': el => sharedClose(el.dataset.id!, true),
+    'shared-close': el => sharedClose(el.dataset.id!, false),
     'shared-send': el => sharedFinish(el, true),
     'shared-link': el => sharedFinish(el, 'link'),
     'shared-dismiss': el => sharedFinish(el, false),
-    'remove-item': (el) => act('remove_item', { id: el.dataset.id }),
+    'remove-item': (el) => act('remove_item', { id: el.dataset.id! }),
     'add-open': () => { S.ui.adding = true; S.ui.focusNext = '[data-model="addItem"]'; render(); },
     // Create files the proposal as a private Tico task; one that may quote paused speech asks twice.
     'create-item': (el) => {
@@ -1834,10 +1943,10 @@
       S.ui.createOk = null;
       act('send_item', { id: it.id, owner: it.owner, pausedConfirmed: confirmed });
     },
-    'set-owner': (el) => { S.ui.pop = null; act('set_owner', { id: el.dataset.id, owner: el.dataset.actor }); },
-    'choose-org': (el) => { S.ui.pop = null; act('choose_org', { id: el.dataset.id }); },
-    'remove-access': (el) => act('remove_access', { actor: el.dataset.actor }),
-    'open-url': (el) => act('open_url', { url: el.dataset.url }),
+    'set-owner': (el) => { S.ui.pop = null; act('set_owner', { id: el.dataset.id!, owner: el.dataset.actor! }); },
+    'choose-org': (el) => { S.ui.pop = null; act('choose_org', { id: el.dataset.id! }); },
+    'remove-access': (el) => act('remove_access', { actor: el.dataset.actor! }),
+    'open-url': (el) => act('open_url', { url: el.dataset.url! }),
     'dismiss-error': () => act('dismiss_error'),
     'dismiss-notice': () => act('dismiss_notice'),
     'allow-speaker-names': () => act('allow_speaker_names'),
@@ -1845,17 +1954,17 @@
     'connect-ok': () => act('confirm_connect'),
     'connect-cancel': () => act('dismiss_connect'),
     signin: () => { const address = model('signin').trim(); if (address) { S.ui.signingDesktop = ''; act('sign_in', { address }); } },
-    'sign-out': (el) => act('sign_out', { id: el.dataset.id }),
-    'make-default': (el) => { S.ui.pop = null; act('make_default', { id: el.dataset.id }); },
+    'sign-out': (el) => act('sign_out', { id: el.dataset.id! }),
+    'make-default': (el) => { S.ui.pop = null; act('make_default', { id: el.dataset.id! }); },
     import: () => { const directory = S.ui.legacy.trim(); if (directory) act('import_legacy', { directory }); },
     'save-settings': () => {
       S.ui.saving = true;
       act('save_settings', { form: { ...S.ui.form, key: S.ui.key, xai_key: S.ui.xai } });
     },
-    'speech-source': (el) => { S.ui.form.speech_source = el.dataset.source; render(); },
-    'set-mic': (el) => act('set_audio', { microphone: el.dataset.mic, meeting: S.settings.meeting_audio }),
-    'toggle-meeting-audio': () => act('set_audio', { microphone: S.settings.microphone, meeting: !S.settings.meeting_audio }),
-  };
+    'speech-source': (el) => { S.ui.form!.speech_source = el.dataset.source!; render(); },
+    'set-mic': (el) => act('set_audio', { microphone: el.dataset.mic!, meeting: S.settings!.meeting_audio }),
+    'toggle-meeting-audio': () => act('set_audio', { microphone: S.settings!.microphone, meeting: !S.settings!.meeting_audio }),
+  } satisfies Record<string, Handler>;
   const enter = {
     rename: (el) => el.blur(),
     'add-item': () => {
@@ -1873,13 +1982,13 @@
     signin: () => handlers.signin(),
     'finish-save': saveFinish,
     'owner-first': () => {
-      const first = document.querySelector('#popover [data-opt].hot') || document.querySelector('#popover [data-act="set-owner"]');
+      const first = document.querySelector<HTMLElement>('#popover [data-opt].hot') || document.querySelector<HTMLElement>('#popover [data-act="set-owner"]');
       if (first) first.click();
     },
     'share-enter': () => {
       const text = S.ui.shareQuery.trim();
       if (!text) return;
-      const first = document.querySelector('#sheet [data-opt].hot') || document.querySelector('#sheet [data-act="share-pick"]');
+      const first = document.querySelector<HTMLElement>('#sheet [data-opt].hot') || document.querySelector<HTMLElement>('#sheet [data-act="share-pick"]');
       if (first) first.click();
       else {
         // Someone not in the org: a name on this recording only.
@@ -1888,36 +1997,36 @@
         act('add_participant', { name: text });
       }
     },
-  };
+  } satisfies Record<string, (el: HTMLElement) => unknown>;
 
   document.addEventListener('click', (event) => {
-    const target = event.target.closest('[data-act]');
+    const target = (event.target as Element).closest<HTMLButtonElement>('[data-act]');
     const act = target?.dataset.act;
     // Clicks outside an open popover close it.
-    if (S.ui.pop && !event.target.closest('#popover') && act !== 'pop' && act !== 'finish-dest') {
+    if (S.ui.pop && !(event.target as Element).closest('#popover') && act !== 'pop' && act !== 'finish-dest') {
       S.ui.pop = null;
       if (!target) render();
     }
     // Clicks outside the Share live sheet close it.
-    if (S.ui.share && !event.target.closest('#sheet, #popover') && act !== 'share-open' && act !== 'copy-link' && event.target.isConnected) {
+    if (S.ui.share && !(event.target as Element).closest('#sheet, #popover') && act !== 'share-open' && act !== 'copy-link' && (event.target as Element).isConnected) {
       S.ui.share = null;
       if (!target) render();
     }
     if (!target || target.disabled) {
-      if (S.ui.confirm && !event.target.closest('.row.confirm')) {
+      if (S.ui.confirm && !(event.target as Element).closest('.row.confirm')) {
         S.ui.confirm = null;
         render();
       }
       return;
     }
-    const handler = handlers[act];
+    const handler = (handlers as Record<string, Handler | undefined>)[act!];
     if (handler) {
       event.preventDefault();
       handler(target, event);
     }
   });
   document.addEventListener('input', (event) => {
-    const el = event.target;
+    const el = event.target as HTMLInputElement;
     if (el.dataset.sharedField) sharedChanged(el);
     if (mentionable(el) && el.dataset.model !== 'notes') findMention(el);
     if (el.dataset.model) {
@@ -1927,7 +2036,7 @@
         grow(el);
         paintMentions(el);
         findMention(el);
-        clearTimeout(notesTimer);
+        clearTimeout(notesTimer as number);
         notesTimer = setTimeout(() => flushNotes(), 700);
       }
       if (el.dataset.model === 'ownerQuery' || el.dataset.model === 'shareQuery') S.ui.hot = 0;
@@ -1935,7 +2044,7 @@
     }
   });
   document.addEventListener('mouseover', (event) => {
-    const option = event.target.closest?.('[data-opt]');
+    const option = (event.target as Element).closest?.('[data-opt]');
     if (!option || option.classList.contains('hot')) return;
     const box = option.closest('#popover, #mention, #sheet');
     if (!box) return;
@@ -1945,16 +2054,17 @@
   });
   // Choosing a mention with the mouse keeps the caret in Notes.
   document.addEventListener('mousedown', (event) => {
-    const option = event.target.closest?.('#mention [data-opt]');
+    const option = (event.target as Element).closest?.<HTMLElement>('#mention [data-opt]');
     if (!option) return;
     event.preventDefault();
-    if (mentionField?.isConnected) insertMention(mentionField, option.dataset.name);
+    if (mentionField?.isConnected) insertMention(mentionField, option.dataset.name!);
   });
   document.addEventListener('change', (event) => {
-    const el = event.target;
-    if (el.dataset.sharedField) { const id = el.closest('[data-shared-item]').dataset.sharedItem; if (!sharedDraft(id).error) sharedSave(id); }
+    const el = event.target as HTMLInputElement;
+    if (el.dataset.sharedField) { const id = el.closest<HTMLElement>('[data-shared-item]')!.dataset.sharedItem!; if (!sharedDraft(id).error) sharedSave(id); }
     if (el.dataset.check) {
-      S.ui.form[el.dataset.check] = el.checked;
+      // Switches show only on Settings, which has its form.
+      S.ui.form![el.dataset.check as FormFlag] = el.checked;
       render();
     } else if (el.tagName === 'SELECT' && el.dataset.model) {
       setModel(el.dataset.model, el.value);
@@ -1963,11 +2073,11 @@
     }
   });
   document.addEventListener('toggle', (event) => {
-    if (event.target.dataset?.details) S.ui[event.target.dataset.details] = event.target.open;
+    if ((event.target as HTMLDetailsElement).dataset?.details) S.ui[(event.target as HTMLDetailsElement).dataset.details as 'importOpen'] = (event.target as HTMLDetailsElement).open;
   }, true);
   document.addEventListener('focusout', async (event) => {
-    const el = event.target;
-    if (el.dataset.sharedField) { const id = el.closest('[data-shared-item]').dataset.sharedItem; if (!sharedDraft(id).error) await sharedSave(id); }
+    const el = event.target as HTMLInputElement;
+    if (el.dataset.sharedField) { const id = el.closest<HTMLElement>('[data-shared-item]')!.dataset.sharedItem!; if (!sharedDraft(id).error) await sharedSave(id); }
     if (el.dataset?.blur === 'rename' && S.ui.titleDraft !== null) {
       const title = S.ui.titleDraft;
       S.ui.titleDraft = null;
@@ -1977,14 +2087,14 @@
     // Closes when left empty; not when a render only replaced it and focus moved to the new field (Enter adds the next).
     if (el.dataset?.blur === 'add-close') {
       setTimeout(() => {
-        if (S.ui.adding && !S.ui.addItem.trim() && document.activeElement?.dataset?.model !== 'addItem') {
+        if (S.ui.adding && !S.ui.addItem.trim() && (document.activeElement as HTMLElement | null)?.dataset?.model !== 'addItem') {
           S.ui.adding = false;
           render();
         }
       }, 0);
     }
     if (el.dataset?.editItem) {
-      const text = el.textContent.replace(/\s+/g, ' ').trim();
+      const text = el.textContent!.replace(/\s+/g, ' ').trim();
       const it = S.meeting?.actions.items.find((i) => i.id === el.dataset.editItem);
       if (it && text && text !== it.title) await act('edit_item', { id: it.id, title: text });
       else if (!text && it) el.textContent = it.title;
@@ -2000,7 +2110,7 @@
     }
   });
   document.addEventListener('keydown', (event) => {
-    const el = event.target;
+    const el = event.target as HTMLInputElement;
     // A list picked from a text field: ↑/↓ move the highlight, Enter takes it (below), Esc closes.
     if (el.dataset?.list !== undefined && (event.key === 'ArrowDown' || event.key === 'ArrowUp')) {
       event.preventDefault();
@@ -2014,10 +2124,10 @@
         return;
       }
       if (event.key === 'Enter' || event.key === 'Tab') {
-        const hot = document.querySelector('#mention [data-opt].hot');
+        const hot = document.querySelector<HTMLElement>('#mention [data-opt].hot');
         if (hot) {
           event.preventDefault();
-          insertMention(el, hot.dataset.name);
+          insertMention(el, hot.dataset.name!);
           return;
         }
       }
@@ -2042,7 +2152,8 @@
     if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) {
       if (el.dataset?.enter) {
         event.preventDefault();
-        enter[el.dataset.enter]?.(el);
+        (enter as Record<string, ((el: HTMLElement) => unknown) | undefined>)[el.dataset.enter]?.(el);
+
         return;
       }
       // A task's title is one line: Enter keeps it (Shift+Enter still breaks the line).
@@ -2095,8 +2206,8 @@
     }
   });
   document.addEventListener('scroll', (event) => {
-    if (event.target.id === 'tbody') {
-      const body = event.target;
+    if ((event.target as HTMLElement).id === 'tbody') {
+      const body = event.target as HTMLElement;
       S.ui.stick = body.scrollHeight - body.scrollTop - body.clientHeight < 40;
       S.ui.tTop = body.scrollTop;
     }
@@ -2108,7 +2219,7 @@
     if (!document.hidden) poll();
   });
 
-  // update.js redraws after its own clicks.
+  // update.ts redraws after its own clicks.
   window.ticoRedraw = render;
   window.addEventListener('error', (event) => bootError(event.message));
   window.addEventListener('DOMContentLoaded', () => {
@@ -2119,8 +2230,8 @@
       if (event.payload?.capture_id !== S.status.screen?.capture_id) return;
       let preview = document.getElementById('screen-preview');
       if (!event.payload.url || !S.status.screen?.active) { preview?.remove(); return; }
-      if (!preview) { preview = document.createElement('div'); preview.id = 'screen-preview'; preview.innerHTML = '<img alt="Your shared screen"><div>Screen · a few times a second</div>'; document.getElementById('app').appendChild(preview); }
-      preview.querySelector('img').src = event.payload.url;
+      if (!preview) { preview = document.createElement('div'); preview.id = 'screen-preview'; preview.innerHTML = '<img alt="Your shared screen"><div>Screen · a few times a second</div>'; document.getElementById('app')!.appendChild(preview); }
+      preview.querySelector('img')!.src = event.payload.url;
     });
     events.listen('level', (event) => onLevel(event.payload));
     // The app menu's Check for Updates…: Settings at the Updates row; the app runs the check.

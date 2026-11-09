@@ -9,7 +9,8 @@
 # differs from CI.
 # Checks: lint.sh (ruff baseline and ruff format), shell_lint.sh (shellcheck), actionlint (workflows), migration order,
 # check_ui_types.sh (generated API types, tsc), check_ui_strict.py (every UI script TypeScript, strict ratchet),
-# check_node_types.py (the .cts/.mts scripts under scripts/ and recorder/ type-check strictly), the
+# check_node_types.py (the .cts/.mts scripts under scripts/ and recorder/, and the Recorder window's .ts, type-check
+# strictly), the
 # OpenAPI document (backend.openapi_v2 --check), check_ui_lint.sh (Biome), check_ui_routes.sh (API paths),
 # check_wire_contract.py (runner wire contract), check_types.sh (basedpyright on the backend against its baseline), and
 # cargo fmt for the Rust crates scripts/rust_checks.sh formats (the merge queue runs that one; the static job does not).
@@ -217,8 +218,8 @@ else
   skip "ui strict (TypeScript, strict ratchet)" "no UI file changed"
 fi
 
-# 6c'. The TypeScript Node runs directly outside ui/ (scripts/ and recorder/ .cts, .mts and .d.ts files) type-checks
-# strictly, with no baseline (scripts/check_node_types.py). Any TypeScript file outside ui/ is an input: it must sit in
+# 6c'. The TypeScript outside ui/ (scripts/ and recorder/ .cts, .mts and .d.ts files Node runs, and the Recorder
+# window's .ts files under recorder/ui) type-checks strictly, with no baseline (scripts/check_node_types.py). Any TypeScript file outside ui/ is an input: it must sit in
 # a project. The base config and the npm packages whose types the scripts read are inputs too.
 if touched '^([^u]|u[^i]|ui[^/])[^[:space:]]*\.([cm]?ts|tsx)$|(^|/)tsconfig(\.node)?\.json$|^package(-lock)?\.json$|^scripts/check_node_types\.py$'; then
   job "node types (scripts/, recorder/ TypeScript)" python3 scripts/check_node_types.py

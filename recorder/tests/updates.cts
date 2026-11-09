@@ -2,14 +2,15 @@
 import type {RecorderWindow} from './globals.d.ts';
 // The page's window, file-local (no global augmentation): the preview script in this program types it its own way.
 declare const window: Window & typeof globalThis & RecorderWindow;
-// Run from the repository root: node recorder/tests/updates.cts
+// Run from the repository root: node recorder/build-ui.cjs && node recorder/tests/updates.cts
 const {chromium}: typeof import('playwright') = require('playwright');
 const assert: typeof import('node:assert/strict') = require('node:assert/strict');
 const path: typeof import('node:path') = require('node:path');
 
 async function open(context: import('playwright').BrowserContext, query: string): Promise<import('playwright').Page> {
   const page = await context.newPage();
-  const root = path.resolve(__dirname, '../../recorder/ui');
+  // The built window (node recorder/build-ui.cjs): the preview page and the scripts it loads, as JavaScript.
+  const root = path.resolve(__dirname, '../../recorder/dist');
   await page.route('**/*', async (route: import('playwright').Route) => {
     const url = new URL(route.request().url());
     assert.equal(url.origin, 'http://recorder.example');

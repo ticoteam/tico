@@ -1,4 +1,5 @@
-// Native window click wiring only: every command uses synthetic Tauri state, no server or bots.
+// Native window click wiring only: every command uses synthetic Tauri state, no server or bots. It loads the window's
+// compiled scripts from recorder/dist (node recorder/build-ui.cjs; scripts/ui-tests.cts builds it first).
 import type {Browser, Page} from 'playwright';
 const fs: typeof import('node:fs') = require('node:fs');
 const path: typeof import('node:path') = require('node:path');
@@ -28,7 +29,7 @@ async function recorderPause(browser: Browser): Promise<void> {
       : route.abort());
     await page.goto('https://recorder.test/');
     await page.evaluate(() => { window.setInterval = (() => 0) as unknown as typeof window.setInterval; });
-    await page.addScriptTag({content: fs.readFileSync(path.resolve(__dirname, '../../../recorder/ui/preview/mock.js'), 'utf8')});
+    await page.addScriptTag({content: fs.readFileSync(path.resolve(__dirname, '../../../recorder/dist/preview/mock.js'), 'utf8')});
     await page.evaluate(() => {
       const state = window.__PREVIEW__.state, meeting = state.meetings.m1!;
       Object.assign(meeting, {live: 'Team can join', live_org: 'team', live_state: 'live', can_control: true, can_discard: true, paused_warning: false});
@@ -51,8 +52,8 @@ async function recorderPause(browser: Browser): Promise<void> {
         return original(cmd, args);
       };
     });
-    await page.addScriptTag({content: fs.readFileSync(path.resolve(__dirname, '../../../recorder/ui/app/icons.js'), 'utf8')});
-    await page.addScriptTag({content: fs.readFileSync(path.resolve(__dirname, '../../../recorder/ui/app/app.js'), 'utf8')});
+    await page.addScriptTag({content: fs.readFileSync(path.resolve(__dirname, '../../../recorder/dist/app/icons.js'), 'utf8')});
+    await page.addScriptTag({content: fs.readFileSync(path.resolve(__dirname, '../../../recorder/dist/app/app.js'), 'utf8')});
     await page.evaluate(() => window.dispatchEvent(new Event('DOMContentLoaded')));
     await page.locator('.row[data-id="m1"]').click();
     const more = () => page.locator('[data-pop="more"]').click();
