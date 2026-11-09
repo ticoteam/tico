@@ -5,8 +5,8 @@ const {chromium} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const {html, uiFile} = require('./support/page.cjs') as typeof import('./support/page.cjs');
-const {unrouted} = require('./support/routes.cjs') as typeof import('./support/routes.cjs');
+const {html, uiFile} = require('./support/page.cts') as import('./support/page.cts').Api;
+const {unrouted} = require('./support/routes.cts') as import('./support/routes.cts').Api;
 // Page globals this spec reads (file-local; see ui/tests/tsconfig.json moduleDetection).
 declare const window: Window & typeof globalThis & {
   __cloudRequest: {name: string; supported: boolean; team: string} | undefined;

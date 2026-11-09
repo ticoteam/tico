@@ -5,9 +5,9 @@
 const {chromium}: typeof import('playwright') = require('playwright');
 const assert: typeof import('node:assert/strict') = require('node:assert/strict');
 const fs: typeof import('node:fs') = require('node:fs');
-const {html, uiFile} = require('./support/page.cjs') as typeof import('./support/page.cjs');
-const {unrouted} = require('./support/routes.cjs') as typeof import('./support/routes.cjs');
-const {assistantView} = require('./support/assistant-chat.cjs') as typeof import('./support/assistant-chat.cjs');
+const {html, uiFile} = require('./support/page.cts') as import('./support/page.cts').Api;
+const {unrouted} = require('./support/routes.cts') as import('./support/routes.cts').Api;
+const {assistantView} = require('./support/assistant-chat.cts') as import('./support/assistant-chat.cts').Api;
 const launch = () => chromium.launch({headless: true, channel: (process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined) as string});
 
 async function open(browser: import('playwright').Browser, viewport: {width: number; height: number}, touch: boolean, {messages, goal, theme = ''}: {messages: unknown[]; goal: unknown; theme?: string}): Promise<{errors: string[]; page: import('playwright').Page}> {

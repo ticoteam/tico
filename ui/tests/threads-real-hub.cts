@@ -1,4 +1,4 @@
-// Threads on a real hub (ui/tests/support/real-hub.cjs): a company thread and a members-only thread, made through the API as
+// Threads on a real hub (ui/tests/support/real-hub.cts): a company thread and a members-only thread, made through the API as
 // Dana. Dana, on a desktop, reads the company thread and replies in its composer; a sub-thread reply under one of its
 // messages shows in time order, quoting that message, and the sub-thread still opens on its own; and her bot page
 // switches between the bot's Home and DM. Omar, a teammate on the
@@ -8,12 +8,12 @@
 // on the rail, sees its composer, and the page does not scroll sideways. Dana, on a phone, finds a late sub-thread reply
 // on its root's row, reads DMs by who they are with, and switches a bot's Home and DM.
 import type {Locator} from 'playwright';
-import type * as RealHubSupport from './support/real-hub.cjs';
+import type * as RealHubSupport from './support/real-hub.cts';
 const {chromium} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
 const crypto = require('node:crypto');
-const {startHub, pageAs} = require('./support/real-hub.cjs') as typeof RealHubSupport;
-const {t} = require('./support/load.cjs') as {t: (ms: number) => number};
+const {startHub, pageAs} = require('./support/real-hub.cts') as RealHubSupport.Api;
+const {t} = require('./support/load.cts') as {t: (ms: number) => number};
 
 const PLAN = 'Launch is Tuesday';
 const SECRET = 'Pricing war room only';

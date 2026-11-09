@@ -19,8 +19,8 @@ const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const {html, uiFile} = require('./support/page.cjs');
-const {unrouted} = require('./support/routes.cjs');
+const {html, uiFile} = require('./support/page.cts');
+const {unrouted} = require('./support/routes.cts');
 
 const shots = process.env.TICO_SCREENSHOT_DIR || path.join(require('node:os').tmpdir(), 'threads-archive-shots');
 const at = (min: number) => new Date(Date.now() - min * 60000).toISOString();

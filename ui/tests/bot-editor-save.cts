@@ -1,5 +1,5 @@
-import type * as PageSupport from './support/page.cjs';
-import type * as Routes from './support/routes.cjs';
+import type * as PageSupport from './support/page.cts';
+import type * as Routes from './support/routes.cts';
 // Bot editor Save never drops a Model or Fallback picked but not Applied (TK-BLOG3EDS, Tico 0.3.54):
 //  - a Fallback pick goes to POST /v2/bots/{bot}/fallback (the body Apply sends, with expected_revision) before the
 //    definition, and reopening shows it;
@@ -19,8 +19,8 @@ import type * as Routes from './support/routes.cjs';
 const {chromium}: typeof import('playwright') = require('playwright');
 const assert: typeof import('node:assert/strict') = require('node:assert/strict');
 const fs: typeof import('node:fs') = require('node:fs');
-const {html, uiFile} = require('./support/page.cjs') as typeof PageSupport;
-const {unrouted} = require('./support/routes.cjs') as typeof Routes;
+const {html, uiFile} = require('./support/page.cts') as PageSupport.Api;
+const {unrouted} = require('./support/routes.cts') as Routes.Api;
 type Call = {what: string | undefined; body: Record<string, unknown>};
 declare const S: {emps: {id: string; name: string; slug?: string; revision?: number; fallback?: {model: string}}[]};
 declare const SETTINGS_DATA: {models?: unknown[]};

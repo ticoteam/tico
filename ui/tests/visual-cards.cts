@@ -7,9 +7,9 @@ const {chromium, webkit}: typeof import('playwright') = require('playwright');
 const assert: typeof import('node:assert/strict') = require('node:assert/strict');
 const path: typeof import('node:path') = require('node:path');
 const {execFileSync}: typeof import('node:child_process') = require('node:child_process');
-const {html, uiFile} = require('./support/page.cjs') as typeof import('./support/page.cjs');
-const {unrouted} = require('./support/routes.cjs') as typeof import('./support/routes.cjs');
-const {threadsFake} = require('./support/threads-fake.cjs') as typeof import('./support/threads-fake.cjs');
+const {html, uiFile} = require('./support/page.cts') as import('./support/page.cts').Api;
+const {unrouted} = require('./support/routes.cts') as import('./support/routes.cts').Api;
+const {threadsFake} = require('./support/threads-fake.cts') as import('./support/threads-fake.cts').Api;
 const fs: typeof import('node:fs') = require('node:fs');
 // Page globals read inside page.evaluate (types: tasks-page.cts).
 declare var TASKS_ST: Tasks.Globals['TASKS_ST'];

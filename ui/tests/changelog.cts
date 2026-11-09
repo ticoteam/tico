@@ -1,13 +1,13 @@
-import type * as PageSupport from './support/page.cjs';
-import type * as Routes from './support/routes.cjs';
+import type * as PageSupport from './support/page.cts';
+import type * as Routes from './support/routes.cts';
 // Opening the changelog acknowledges what it shows (older pages too), keeps those entries listed for the visit,
 // and the read state survives another sign-in.
 const {chromium}: typeof import('playwright') = require('playwright');
 const assert: typeof import('node:assert/strict') = require('node:assert/strict');
 const fs: typeof import('node:fs') = require('node:fs');
 const path: typeof import('node:path') = require('node:path');
-const {html, uiFile} = require('./support/page.cjs') as typeof PageSupport;
-const {unrouted} = require('./support/routes.cjs') as typeof Routes;
+const {html, uiFile} = require('./support/page.cts') as PageSupport.Api;
+const {unrouted} = require('./support/routes.cts') as Routes.Api;
 type Hold = {promise: Promise<void>; release: () => void};
 declare function setDrawer(open: boolean): void;
 const shots = process.env.TICO_SCREENSHOT_DIR;

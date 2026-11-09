@@ -11,8 +11,8 @@ const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const {html, isUiPath, serveUi} = require('./support/page.cjs');
-const {unrouted} = require('./support/routes.cjs');
+const {html, isUiPath, serveUi} = require('./support/page.cts');
+const {unrouted} = require('./support/routes.cts');
 
 const stamp = '2026-11-08T09:00:00Z';
 const SHOTS = process.env.TICO_UI_SHOTS;

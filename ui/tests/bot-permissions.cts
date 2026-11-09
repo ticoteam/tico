@@ -6,20 +6,20 @@
 //  - roles: Settings > Bots lists who owns each bot and saves co-owners as a diff with Save bot; Settings > Computers has an
 //    admin-only "Accepts members' bots" toggle; a Confirm card BotOps left in a person's Assistant chat renders, and
 //    only their click confirms it.
-import type * as PageSupport from './support/page.cjs';
-import type * as Routes from './support/routes.cjs';
-import type * as ThreadsFake from './support/threads-fake.cjs';
-import type * as AssistantChat from './support/assistant-chat.cjs';
+import type * as PageSupport from './support/page.cts';
+import type * as Routes from './support/routes.cts';
+import type * as ThreadsFake from './support/threads-fake.cts';
+import type * as AssistantChat from './support/assistant-chat.cts';
 const {chromium}: typeof import('playwright') = require('playwright');
 const assert: typeof import('node:assert/strict') = require('node:assert/strict');
 const fs: typeof import('node:fs') = require('node:fs');
 const path: typeof import('node:path') = require('node:path');
 export type NodePath = typeof path;
-const {html, uiFile} = require('./support/page.cjs') as typeof PageSupport;
-const {unrouted} = require('./support/routes.cjs') as typeof Routes;
-const {threadsFake} = require('./support/threads-fake.cjs') as typeof ThreadsFake;
-const {assistantView} = require('./support/assistant-chat.cjs') as typeof AssistantChat;
-const {t}: {t: (ms: number) => number} = (() => { try { return require('./support/load.cjs') as {t: (ms: number) => number}; } catch { return {t: (ms: number) => ms}; } })();   // load.cjs arrives with #254
+const {html, uiFile} = require('./support/page.cts') as PageSupport.Api;
+const {unrouted} = require('./support/routes.cts') as Routes.Api;
+const {threadsFake} = require('./support/threads-fake.cts') as ThreadsFake.Api;
+const {assistantView} = require('./support/assistant-chat.cts') as AssistantChat.Api;
+const {t}: {t: (ms: number) => number} = (() => { try { return require('./support/load.cts') as {t: (ms: number) => number}; } catch { return {t: (ms: number) => ms}; } })();   // load.cjs arrives with #254
 type Json = {[key: string]: unknown};
 interface PageWin { botTaskSettingsOpen: () => void }
 declare const S: {route: string};

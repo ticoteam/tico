@@ -6,13 +6,13 @@
 // member who may change nothing; a desktop app's state and a sign-in several bots take turns on. Every request is
 // intercepted.
 import type {LaunchOptions, Locator, Route} from 'playwright';
-import type * as PageSupport from './support/page.cjs';
-import type * as RouteSupport from './support/routes.cjs';
+import type * as PageSupport from './support/page.cts';
+import type * as RouteSupport from './support/routes.cts';
 const {chromium} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
-const {html, uiFile} = require('./support/page.cjs') as typeof PageSupport;
-const {unrouted} = require('./support/routes.cjs') as typeof RouteSupport;
+const {html, uiFile} = require('./support/page.cts') as PageSupport.Api;
+const {unrouted} = require('./support/routes.cts') as RouteSupport.Api;
 // Read shipped capabilities so the browser flow cannot drift from its manifest.
 const manifestCaps = JSON.parse(require('node:child_process').execFileSync(process.env.TICO_PYTHON || 'python3', ['-c',
   'import json; from clients.harness_manifests import load; print(json.dumps({k: v["capabilities"] for k, v in load().items()}))'],

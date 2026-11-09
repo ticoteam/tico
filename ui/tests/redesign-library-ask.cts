@@ -3,9 +3,9 @@
 // groups fold behind a chevron (kept per browser, open again on their own pages).
 // Desktop only: the folds are the desktop sidebar's, and the phone's Ask is the same panel (ask-panel.cjs).
 import type {Page} from 'playwright';
-import type * as RE from './support/redesign-e2e.cjs';
+import type * as RE from './support/redesign-e2e.cts';
 const assert = require('node:assert/strict');
-const {run, open, go, sideways, shot, t} = require('./support/redesign-e2e.cjs') as typeof RE;
+const {run, open, go, sideways, shot, t} = require('./support/redesign-e2e.cts') as RE.Api;
 
 const libOpen = (page: Page) => page.locator('#rd-lib').evaluate(el => !(el as HTMLElement).hidden && el.checkVisibility());
 const at = (page: Page, hash: string) => go(page, hash).then(() => page.waitForFunction(h => location.hash.split('?')[0] === h, hash.split('?')[0]!));

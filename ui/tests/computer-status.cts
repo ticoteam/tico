@@ -1,8 +1,8 @@
 // Machine status uses live runner presence ahead of a stale cloud lifecycle record, at desktop and phone widths.
-import type * as PageSupport from './support/page.cjs';
+import type * as PageSupport from './support/page.cts';
 const {chromium} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
-const {uiFile} = require('./support/page.cjs') as typeof PageSupport;
+const {uiFile} = require('./support/page.cts') as PageSupport.Api;
 
 // Defined by app/computer-detail.ts and app/cloud-machines.ts, which the page loads below.
 declare function machineNowWords(machine: unknown): string;

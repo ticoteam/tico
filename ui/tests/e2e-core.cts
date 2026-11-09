@@ -4,10 +4,10 @@
 // Strategy with goals (strategy). Each step opens its own page, keeps its own assertions and names itself in a
 // failure ("[needsYou] ..."). Runs on a phone and a desktop.
 import type {Page} from 'playwright';
-import type * as E2E from './support/e2e.cjs';
-import type {PassContext} from './support/e2e.cjs';
+import type * as E2E from './support/e2e.cts';
+import type {PassContext} from './support/e2e.cts';
 const assert: typeof import('node:assert/strict') = require('node:assert/strict');
-const {journey, open, go, must, call, assertClean, drawn, expectFailure, shot, until, t} = require('./support/e2e.cjs') as typeof E2E;
+const {journey, open, go, must, call, assertClean, drawn, expectFailure, shot, until, t} = require('./support/e2e.cts') as E2E.Api;
 
 interface TaskType {
   id: string;

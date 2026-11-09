@@ -2,15 +2,15 @@
 // refuses, or answers without a message (a sign-in page), says so and keeps the draft; Return during a send that is
 // still out sends after it; text that arrived without an input event (autofill, a tool filling the box) still sends on
 // a click and shows in the thread. A bot's DM composer is in threads.cjs.
-import type * as PageSupport from './support/page.cjs';
-import type * as Routes from './support/routes.cjs';
-import type * as AssistantChat from './support/assistant-chat.cjs';
+import type * as PageSupport from './support/page.cts';
+import type * as Routes from './support/routes.cts';
+import type * as AssistantChat from './support/assistant-chat.cts';
 const {chromium}: typeof import('playwright') = require('playwright');
 const assert: typeof import('node:assert/strict') = require('node:assert/strict');
 const fs: typeof import('node:fs') = require('node:fs');
-const {html, uiFile} = require('./support/page.cjs') as typeof PageSupport;
-const {unrouted} = require('./support/routes.cjs') as typeof Routes;
-const {assistantView} = require('./support/assistant-chat.cjs') as typeof AssistantChat;
+const {html, uiFile} = require('./support/page.cts') as PageSupport.Api;
+const {unrouted} = require('./support/routes.cts') as Routes.Api;
+const {assistantView} = require('./support/assistant-chat.cts') as AssistantChat.Api;
 interface ThreadMessage {id: string; sender_id: string; body: string; created_at: string}
 declare const V2C: {loaded?: boolean} | null;
 const launch = () => chromium.launch({headless: true, channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined} as import('playwright').LaunchOptions);
