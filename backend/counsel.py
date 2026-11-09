@@ -36,6 +36,7 @@ from clients import doc_fetch
 
 from . import credentials as C
 from . import file_library
+from .entities import store as ES
 from . import groups as G
 from . import files as F
 from . import hubdb as H
@@ -222,9 +223,7 @@ def suggested_who(c, source_name, who=None, auth=None):
 
 def _source(c, who, body):
     """The From a document is read for: an existing one by id or name, or a new one when `kind` is given."""
-    found = c.execute(
-        "SELECT * FROM rule_sources WHERE id=? OR lower(name)=lower(?)", (body.source_id, body.source_id)
-    ).fetchall()
+    found = ES.rule_source_named(c, body.source_id)
     if len(found) > 1:
         raise Problem("validation", f"{body.source_id} is more than one From: use its id", 422)
     if found:

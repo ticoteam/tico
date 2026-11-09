@@ -3,7 +3,7 @@ still has the seed's stage names (Approved, Building, Shipped) or pipeline_setup
 Done). Setup keeps the stage ids, so the sync finds each stage by its id or by either name."""
 
 from backend import hubdb as H
-from backend import pipeline_setup, roadmap_flow
+from backend import pipeline_review, pipeline_setup, roadmap_flow
 from backend.tests.test_pipeline_foundation import ANA, boot, hub, step_id
 
 T = "2026-11-07T09:00:00.000000Z"
@@ -34,6 +34,26 @@ def card_in(c, stage_name, stage_id=None):
     product = roadmap_flow.role_type(c, roadmap_flow.PRODUCT)
     step = stage_id or step_id(c, product, stage_name)
     row = H.task_create(c, ANA, "Dark mode", "", ANA, type=product, step=step, lint=False)
+    c.commit()
+    return row["id"]
+
+
+def card_past_spec(c):
+    """A Product card in Review while its requirements are live: made at Ideas, moved to Specifying, its Spec page met by the
+    owner, then moved on, as a real card is."""
+    product = roadmap_flow.role_type(c, roadmap_flow.PRODUCT)
+    specifying = step_id(c, product, "Specifying")
+    row = H.task_create(c, ANA, "Dark mode", "", ANA, type=product, lint=False)
+    c.commit()
+    H.task_update(c, ANA, row["id"], step=specifying, mover=True)
+    c.commit()
+    spec_page = c.execute(
+        "SELECT id FROM stage_requirements WHERE pipeline_stage_id = ? AND name = 'Spec page' AND retired_at IS NULL",
+        (specifying,),
+    ).fetchone()[0]
+    pipeline_review.mark_met(c, ANA, row["id"], spec_page, "Spec page written in the test")
+    c.commit()
+    H.task_update(c, ANA, row["id"], step=step_id(c, product, "Review"), mover=True)
     c.commit()
     return row["id"]
 
@@ -89,7 +109,7 @@ def test_after_setup_a_card_follows_its_shipped_ticket_to_done(tmp_path):
 
 def test_after_setup_with_requirements_live_the_legacy_sync_moves_nothing(tmp_path):
     c = setup_ran(tmp_path)
-    card = card_in(c, "Review")
+    card = card_past_spec(c)
     task = ticket(c, card, "Todo")
     move(c, task, "Doing")
     assert stage_of(c, card) == "Review"
@@ -115,6 +135,32 @@ def test_a_new_hub_starts_with_its_product_and_engineering_pipelines(tmp_path):
     c.close()
     again = H.connect(str(tmp_path / "fresh.db"))  # a second start adds nothing
     assert again.execute("SELECT COUNT(*) FROM task_types WHERE role IS NOT NULL AND role<>''").fetchone()[0] == 2
+
+
+def test_a_type_with_no_manager_stays_without_one_when_the_roles_are_ensured(tmp_path):
+    """Criterion 2: the legacy slug is written only into a type this creates. An existing role type with no manager
+    stays with none, so the manager column never holds a dangling 'none' or a legacy name it did not have."""
+    c = H.connect(str(tmp_path / "hub.db"))
+    engineering = roadmap_flow.role_type(c, roadmap_flow.ENGINEERING)
+    c.execute("UPDATE task_types SET manager=NULL WHERE id=?", (engineering,))
+    roadmap_flow.ensure(c)
+    assert tuple(c.execute("SELECT manager, role FROM task_types WHERE id=?", (engineering,)).fetchone()) == (
+        None,
+        roadmap_flow.ENGINEERING,
+    )
+    c.close()
+
+
+def test_a_manager_change_on_engineering_keeps_the_role_holder_found(tmp_path):
+    """Criterion 3 (A5): routing finds the role holder through task_types.role, so a changed manager neither moves
+    the role nor adds a second holder, and ensure never overwrites the manager a type has."""
+    c = H.connect(str(tmp_path / "hub.db"))
+    engineering = roadmap_flow.role_type(c, roadmap_flow.ENGINEERING)
+    c.execute("UPDATE task_types SET manager='bot:someone-else' WHERE id=?", (engineering,))
+    roadmap_flow.ensure(c)
+    assert roadmap_flow.role_type(c, roadmap_flow.ENGINEERING) == engineering
+    assert c.execute("SELECT manager FROM task_types WHERE id=?", (engineering,)).fetchone()[0] == 'bot:someone-else'
+    c.close()
 
 
 def test_a_hub_that_deleted_its_product_pipeline_does_not_get_it_back_on_restart(tmp_path):

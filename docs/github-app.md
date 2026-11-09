@@ -85,6 +85,12 @@ it on:
 
 ## Set up
 
+Until the app is connected and installed, Tico says so where a bot's work would go: the Health check is an
+informational note while the team has only the built-in bots, and a warning once a bot someone made exists,
+since that bot's files and memory live on its computer with no backup. A bot's page and a **Build a bot** task
+show a card with **Connect GitHub** for the owner; anyone else who sees it is asked to ask the owner. The card
+goes away once the app is connected and installed.
+
 1. As the owner, open Tools, GitHub. Enter the GitHub account or organization (a personal account
    works too; Tico tells which one it is) and optionally rename the app. **Let BotOps create bot repositories** is ticked; leave it ticked unless a person should
    create every bot's repository by hand. Select Connect GitHub.

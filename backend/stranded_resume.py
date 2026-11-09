@@ -15,6 +15,18 @@ Every SWEEP_MINUTES the scheduler calls `sweep`. A task is stranded when:
   wait (auto_tasks.waiting, H.recorded_wait). A due date ahead is not a wait for work already in progress;
 - nothing changed on it for QUIET_MINUTES after its last run ended.
 
+A bot's ticket in review at a flow check step (Review 1, Review 2, In QA: a step whose flow has an `on_pass` or
+`on_fail`) is in the same place once its check is over: the builder owns the next move (merge once CI is green, fix a
+failed CI run, ask for the check again), and nothing else moves it. Nov 8: PR 3055's QA passed, its CI was cancelled,
+and the failure never reached the builder, so the ticket sat at In QA for hours with nothing to catch it. Such a ticket
+is stranded on the same terms, and also needs: no open check (an open subtask is a recorded wait) and none waiting
+for a free reviewer (`_check_waiting`), no CI still going
+or merge queued on an open pull request (`_ci_going`: github wakes the builder when it finishes), and nothing changed
+on it or under it (a check finishing, so the verdict's move goes first) for REVIEW_QUIET_MINUTES. A queued resume is
+dropped at claim once CI starts, the merge is queued or a check under it changes. A resume dropped before it ran does
+not count toward NO_PROGRESS_LIMIT. Any other review (a
+person's look, Pending Release, Post Release QA) waits on someone else and is not the sweep's.
+
 Such a task gets one wake for its owner on the task (`refs.wake` "resume", `refs.stranded` true) through the ordinary
 wake path, so the claim's fences (turn limits, budgets, back-off, lanes, the build limit) all still apply. As an awaited
 result it wakes a bot whatever its profile says about other news, a reviewer included. Each wake is a `resumed` row in
@@ -39,13 +51,14 @@ import sqlite3
 from typing import Any, cast
 
 from . import bot_settings as BS
-from . import hubdb
+from . import company_pause, hubdb
 
 # hubdb is untyped: each of its functions is partially unknown, and a cast cannot clear that on the attribute.
 H: Any = hubdb
 
 SWEEP_MINUTES = 10
 QUIET_MINUTES = 15
+REVIEW_QUIET_MINUTES = 60  # a ticket at a check step: room for a verdict's move and a round's filing to land first
 SWEEP_CAP = 25
 PER_COMPUTER = 5
 NO_PROGRESS_LIMIT = 3
@@ -58,6 +71,14 @@ LIVE_JOBS = ("queued", "leased", "running", "input", "uncertain")
 # What a run writes on its own task that is bookkeeping, not progress.
 BOOKKEEPING = ("lint", "number", "reader", "private", "check_model", "rank", "session", "run_model", RESUMED, STOPPED)
 _MARKS = ",".join("?" * len(LIVE_JOBS))
+# An open pull request link `l` with CI still going or queued to merge (_ci_going). Binds nothing.
+_CI_GOING = (
+    "l.kind='pr' AND l.state IN ('open','draft') "
+    "AND (l.checks='pending' OR json_extract(l.detail,'$.merge_queue.state')='queued' "
+    # A failure outranks a running check, so a failing link may still have CI going, kept or left out of its copy.
+    "OR json_extract(l.detail,'$.checks_dropped')='pending' OR json_extract(l.detail,'$.checks_dropped_pending')=1 "
+    "OR EXISTS (SELECT 1 FROM json_each(l.detail,'$.checks') WHERE value='pending'))"
+)
 _BOOKKEEPING = ",".join("?" * len(BOOKKEEPING))
 
 
@@ -95,12 +116,16 @@ def run(c: sqlite3.Connection, at: str | None = None) -> dict[str, int]:
 
 def plan(c: sqlite3.Connection, at: str) -> tuple[list[str], list[str]]:
     """([task ids to resume], [task ids to stop resuming]), oldest first, within the sweep's limits. Reads only."""
+    if company_pause.record(c) is not None:
+        # While the company is paused no resume is woken, so a turn the pause holds never uses up one of the resumes
+        # (spec item 11). The counts themselves are unchanged.
+        return [], []
     rows = cast(
         list[dict[str, Any]],
         H._rows(
             c.execute(
                 f"SELECT tasks.* FROM {H.TASKS} tasks JOIN bots b ON tasks.owner_id='bot:'||b.id "
-                "WHERE tasks.status='doing' AND b.state='active' AND tasks.updated_at<=? "
+                "WHERE tasks.status IN ('doing','review') AND b.state='active' AND tasks.updated_at<=? "
                 "ORDER BY tasks.updated_at, tasks.id",
                 (cast(str, H.shift(at, minutes=-QUIET_MINUTES)),),
             )
@@ -152,11 +177,18 @@ def act(c: sqlite3.Connection, task_id: str, at: str) -> str | None:
     if not _bot_ready(c, cast(str, H.actor_id(row["owner_id"]))):
         return None
     n = found["since"] + 1
+    where = (
+        "This task is still in progress, but no run is going on it and nothing is recorded to wait on. Carry on with "
+        "it: finish it, hand it on, or record what it waits on (a subtask, a blocker, a question, or hub task later)."
+        if row["status"] == "doing"
+        else f"This ticket is at {_step_name(c, row)} with no check open, no CI going, no run on it and nothing "
+        "recorded to wait on. Make the next move: merge if its check passed and CI is green, fix or re-run CI that "
+        "failed or was cancelled, ask for the check again, or record what it waits on (a subtask, a blocker, a "
+        "question, or hub task later)."
+    )
     body = (
-        f"Resume: {row['title']}\nThis task is still in progress, but no run is going on it and nothing is recorded "
-        "to wait on. Carry on with it: finish it, hand it on, or record what it waits on (a subtask, a blocker, a "
-        f"question, or hub task later). Automatic resume {n} of {NO_PROGRESS_LIMIT}: after {NO_PROGRESS_LIMIT} with "
-        "no progress, Tico stops and lists it for your manager."
+        f"Resume: {row['title']}\n{where} Automatic resume {n} of {NO_PROGRESS_LIMIT}: after {NO_PROGRESS_LIMIT} "
+        "with no progress, Tico stops and lists it for your manager."
     )
     try:
         sent = cast(
@@ -226,14 +258,22 @@ def state(c: sqlite3.Connection, row: dict[str, Any], at: str) -> dict[str, Any]
         "AND sender_id IS NOT NULL AND sender_id NOT IN (?,?)",
         (row["conversation_id"], H.KEEPER, row["owner_id"]),
     ).fetchone()[0]
+    under = None
+    if row["status"] == "review":  # a check that just finished: its verdict moves the ticket first
+        under = c.execute(
+            "SELECT max(t.updated_at) FROM task_relations r JOIN tasks t ON t.id=r.from_task "
+            "WHERE r.to_task=? AND r.kind='parent'",
+            (tid,),
+        ).fetchone()[0]
     quiet_since: str = max(
         t
-        for t in (row["updated_at"], progress, last_run, others, resumes[-1] if resumes else None, "")
+        for t in (row["updated_at"], progress, last_run, others, under, resumes[-1] if resumes else None, "")
         if t is not None
     )
-    if quiet_since > cast(str, H.shift(at, minutes=-QUIET_MINUTES)):
+    quiet = QUIET_MINUTES if row["status"] == "doing" else REVIEW_QUIET_MINUTES
+    if quiet_since > cast(str, H.shift(at, minutes=-quiet)):
         return None
-    since = sum(1 for r in resumes if r > progress)
+    since = sum(1 for r in resumes if r > progress) - _dropped_resumes(c, row, progress)
     if since >= NO_PROGRESS_LIMIT:
         if c.execute(
             "SELECT 1 FROM history_events WHERE subject_type='task' AND subject_id=? AND kind=? AND created_at>? LIMIT 1",
@@ -255,7 +295,7 @@ def stranded(c: sqlite3.Connection, row: dict[str, Any] | None, at: str) -> bool
     auto_tasks: Any = _auto_tasks
     task_holds: Any = _task_holds
 
-    if not row or row.get("status") != "doing" or not cast(bool, H.is_bot(row.get("owner_id"))):
+    if not in_scope(c, row):
         return False
     row = cast(dict[str, Any] | None, task_holds.with_holds(c, row))
     if row is None:
@@ -285,21 +325,40 @@ def stranded(c: sqlite3.Connection, row: dict[str, Any] | None, at: str) -> bool
         return False
     if cast(bool, auto_tasks.waiting(c, row)):
         return False
+    if row["status"] == "review" and (_ci_going(c, row["id"]) or _check_waiting(c, row)):
+        return False
     # A due date ahead says when to look again at work not begun; work in progress does not wait for it.
     return H.recorded_wait(c, {**row, "due_at": None}, at) is None
 
 
-def handles(c: sqlite3.Connection, row: dict[str, Any] | None) -> bool:
-    """Whether the sweep has this task in hand: a bot's task in progress that it has not stopped resuming. The task
-    roundup's quiet line and Health's stuck-task check leave such a task to it."""
-    if not row or row.get("status") != "doing" or not cast(bool, H.is_bot(row.get("owner_id"))):
+def in_scope(c: sqlite3.Connection, row: dict[str, Any] | None) -> bool:
+    """Whether the task is the sweep's kind (the module's docstring): a bot's task in progress, or a bot's ticket in
+    review at a flow check step."""
+    if not row or not cast(bool, H.is_bot(row.get("owner_id"))):
         return False
+    if row.get("status") == "doing":
+        return True
+    if row.get("status") != "review" or not row.get("step_id"):
+        return False
+    from . import step_flow as _step_flow
+
+    step_flow: Any = _step_flow
+    found = step_flow.step(c, row["step_id"])
+    return bool(found) and cast(bool, step_flow.is_check(found))
+
+
+def handles(c: sqlite3.Connection, row: dict[str, Any] | None) -> bool:
+    """Whether the sweep has this task in hand: a task of its kind (in_scope) that it has not stopped resuming. The task
+    roundup's quiet line and Health's stuck-task check leave such a task to it."""
+    if not in_scope(c, row):
+        return False
+    assert row is not None
     progress = _progress(c, row)
     since = c.execute(
         "SELECT count(*) FROM history_events WHERE subject_type='task' AND subject_id=? AND kind=? AND created_at>?",
         (row["id"], RESUMED, progress),
     ).fetchone()[0]
-    return since < NO_PROGRESS_LIMIT
+    return since - _dropped_resumes(c, row, progress) < NO_PROGRESS_LIMIT
 
 
 def hears(c: sqlite3.Connection, row: dict[str, Any]) -> str:
@@ -334,7 +393,7 @@ def stops_for(c: sqlite3.Connection, actor: str, at: str) -> list[tuple[Any, Any
         (STOPPED, cast(str, H.shift(at, days=-STOP_LOOKBACK_DAYS)), actor),
     ).fetchall():
         row = cast(dict[str, Any] | None, H.task(c, task_id))
-        if row and row["status"] == "doing" and cast(bool, H.is_bot(row["owner_id"])) and _progress(c, row) < when:
+        if row and in_scope(c, row) and _progress(c, row) < when:
             out.append((event_id, when, row))
     return out
 
@@ -353,7 +412,8 @@ def told(c: sqlite3.Connection, at: str) -> set[str]:
 
 def obsolete_sql() -> str:
     """The condition, for execution.obsolete_notices_sql (m: the notice's message, j: its queued job, t: its task), that
-    a queued stranded resume is out of date: its task is no longer in progress, its owner changed, or it moved on since
+    a queued stranded resume is out of date: its task is no longer in progress or in review, a review ticket's CI started
+    or its merge was queued (_ci_going), a check under it changed or began waiting for a reviewer, its owner changed, or it moved on since
     the notice was written by _progress's signal (a step, status or owner change, a note or message its owner wrote, a
     subtask filed under it). The claim cancels it, as it cancels any other out-of-date keeper notice. A resume whose turn
     already started is the rest of that turn, so it is never obsolete. Binds no parameters: the claim's queries bind
@@ -362,7 +422,7 @@ def obsolete_sql() -> str:
     return (
         "json_extract(m.refs,'$.wake')='resume' AND json_extract(m.refs,'$.stranded')=1 "
         "AND NOT EXISTS (SELECT 1 FROM attempts ya WHERE ya.id=j.attempt_id AND ya.started_at IS NOT NULL) "
-        "AND (t.status<>'doing' OR t.owner_id<>'bot:'||j.bot_id "
+        "AND (t.status NOT IN ('doing','review') OR t.owner_id<>'bot:'||j.bot_id "
         "OR EXISTS (SELECT 1 FROM history_events e WHERE e.subject_type='task' AND e.subject_id=t.id "
         "AND e.created_at>m.created_at AND (e.kind IN ('status','step','owner') "
         f"OR (e.actor_id=t.owner_id AND e.kind NOT IN ({kinds})))) "
@@ -370,7 +430,13 @@ def obsolete_sql() -> str:
         "AND s.deleted_at IS NULL AND s.created_at>m.created_at "
         f"AND NOT EXISTS (SELECT 1 FROM messages n WHERE n.id=s.in_reply_to AND n.sender_id='{H.KEEPER}' "
         "AND json_extract(n.refs,'$.stranded')=1)) "
-        "OR EXISTS (SELECT 1 FROM task_relations r WHERE r.to_task=t.id AND r.kind='parent' AND r.created_at>m.created_at))"
+        "OR EXISTS (SELECT 1 FROM task_relations r WHERE r.to_task=t.id AND r.kind='parent' AND r.created_at>m.created_at) "
+        f"OR t.status='review' AND EXISTS (SELECT 1 FROM task_links l WHERE l.task_id=t.id AND {_CI_GOING}) "
+        # A check under a review ticket reopened or changed, or began waiting for a free reviewer: the sweep looks again.
+        "OR t.status='review' AND EXISTS (SELECT 1 FROM history_events e WHERE e.subject_type='task' "
+        "AND e.subject_id=t.id AND e.kind='check_waiting' AND e.created_at>m.created_at) "
+        "OR t.status='review' AND EXISTS (SELECT 1 FROM task_relations r JOIN tasks k ON k.id=r.from_task "
+        "WHERE r.to_task=t.id AND r.kind='parent' AND k.updated_at>m.created_at))"
     )
 
 
@@ -410,6 +476,43 @@ def _live(c: sqlite3.Connection, row: dict[str, Any]) -> bool:
         ).fetchone()
         is not None
     )
+
+
+def _dropped_resumes(c: sqlite3.Connection, row: dict[str, Any], progress: str) -> int:
+    """Resumes since `progress` that the claim dropped before they ran (obsolete_sql): they gave the bot no run, so they
+    do not count toward NO_PROGRESS_LIMIT."""
+    return int(
+        c.execute(
+            "SELECT count(*) FROM messages m JOIN jobs j ON j.message_id=m.id WHERE m.sender_id=? AND m.created_at>? "
+            "AND json_extract(m.refs,'$.wake')='resume' AND json_extract(m.refs,'$.stranded')=1 "
+            "AND json_extract(m.refs,'$.task')=? AND j.state='canceled' "
+            "AND NOT EXISTS (SELECT 1 FROM attempts a WHERE a.id=j.attempt_id AND a.started_at IS NOT NULL)",
+            (H.KEEPER, progress, row["id"]),
+        ).fetchone()[0]
+    )
+
+
+def _check_waiting(c: sqlite3.Connection, row: dict[str, Any]) -> bool:
+    """Whether the ticket's check at its step waits for a free reviewer (check_pools: a `check_waits` row, no check
+    filed yet): the pool files it when a member frees up."""
+    from . import check_pools as _check_pools
+
+    check_pools: Any = _check_pools
+    return bool(check_pools.waiting(c, row["id"], row.get("step_id")))
+
+
+def _ci_going(c: sqlite3.Connection, task_id: str) -> bool:
+    """Whether an open pull request on the task has CI still going or sits in a merge queue: github wakes the builder
+    when either ends (pr_checks_done, the merge or its failure)."""
+    return (
+        c.execute(f"SELECT 1 FROM task_links l WHERE l.task_id=? AND {_CI_GOING} LIMIT 1", (task_id,)).fetchone()
+        is not None
+    )
+
+
+def _step_name(c: sqlite3.Connection, row: dict[str, Any]) -> str:
+    found = c.execute("SELECT name FROM task_steps WHERE id=?", (row.get("step_id") or "",)).fetchone()
+    return str(found[0]) if found else "its check step"
 
 
 def _bot_ready(c: sqlite3.Connection, slug: str) -> bool:

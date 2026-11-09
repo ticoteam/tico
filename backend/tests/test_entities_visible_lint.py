@@ -16,7 +16,7 @@ EXCLUDED_DIRS = ("migrations", "tests")
 NEW_TABLES = re.compile(
     r"\b(from|join)\s+(entity_types|link_types|entity_attributes|entity_values|entity_value_history|"
     r"entity_external_refs|entity_activities|entity_connections|entity_notes|entity_views|entity_mentions|"
-    r"entity_suppressions|entity_sources|entity_merges)\b",
+    r"entity_suppressions|entity_sources|entity_merges|entity_lookups)\b",
     re.IGNORECASE,
 )
 GRAPH_TABLES = re.compile(r"\b(from|join)\s+(entities|entity_links|entity_identifiers|entity_watches)\b", re.IGNORECASE)
@@ -29,6 +29,12 @@ LEGACY_GRAPH_READERS = {
     "strategy_market.py",
     "system_routines.py",
 }
+# Finance's contacts live on the Directory (spec §3 "Fold in"). finance/store/contacts.py writes a contact's entity,
+# identifiers and links (reading back only what it writes); finance/store/schema.py makes the fin_contacts and
+# fin_vendor_aliases views over entities and entity_identifiers. Who sees a contact there is Finance's rule
+# (finance/visible.py), as it was for the tables those views replace. finance/directory.py writes the contacts' links to
+# self when self arrives, reading back only those links.
+FINANCE_CONTACTS = {"finance/store/contacts.py", "finance/store/schema.py", "finance/directory.py"}
 
 
 def _hits(pattern, allowed):
@@ -48,7 +54,10 @@ def test_no_read_outside_the_rule_selects_a_directory_table():
 
 
 def test_no_new_read_of_the_graph_tables_skips_the_rule():
-    assert _hits(GRAPH_TABLES, allowed=lambda rel: rel.name in LEGACY_GRAPH_READERS) == []
+    assert (
+        _hits(GRAPH_TABLES, allowed=lambda rel: rel.name in LEGACY_GRAPH_READERS or rel.as_posix() in FINANCE_CONTACTS)
+        == []
+    )
 
 
 def test_the_lint_catches_a_read():

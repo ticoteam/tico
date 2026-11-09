@@ -1,0 +1,14 @@
+{
+    "files": {
+        "./backend/skill_marketplace.py": [
+            {
+                "code": "reportPossiblyUnboundVariable",
+                "range": {
+                    "startColumn": 21,
+                    "endColumn": 26,
+                    "lineCount": 1
+                }
+            }
+        ]
+    }
+}

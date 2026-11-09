@@ -265,6 +265,9 @@ class Settings:
     cognito_logout_url: str = ""
     # TICO_AUTH_PROXY=owner-link: the sha256 of the owner's first sign-in link, from the installer (backend/owner_link.py).
     owner_link_hash: str = ""
+    # The sha256 of the one-time secret the installer hands the owner's coding agent for a personal token before the owner
+    # has signed in (backend/setup_handoff.py). Only the hash is here; the installer reads the secret from TICO_SETUP_HANDOFF.
+    setup_handoff_hash: str = ""
     # Built-in sign-in (TICO_AUTH_PROXY=oidc, backend/oidc.py). The secret is read from its file
     # when one is named; the session secret defaults to a generated file beside the database.
     oidc_issuer: str = ""
@@ -353,10 +356,9 @@ class Settings:
     decisions_jev_usd_per_mtok_input: float = 0.042
     decisions_jev_usd_per_mtok_output: float = 0.0
     # Org rule checks (backend/org_rule_check.py): their own monthly USD cap, apart from Decide's, so checks and
-    # screening never spend each other's; the Decide level they ask at; how many `hub rules check` drafts one bot
+    # screening never spend each other's (a cap saved in Automations > Maintenance wins); how many `hub rules check` drafts one bot
     # may check in a UTC day; and how many checks run at once (past that, an output goes through unchecked, `busy`).
     rules_monthly_usd: float = 50.0
-    rule_check_level: str = "medium"
     rules_check_daily_drafts: int = 200
     rule_check_concurrency: int = 8
     # Idea triage on the public roadmap's suggestion form (backend/idea_triage.py, questions/idea-triage.json): off by
@@ -464,6 +466,10 @@ class Settings:
         identity_proxy.check(self)
         self.runner_url = (self.runner_url or self.public_url).rstrip("/")
         self.owner_email = (self.owner_email or self._roster_owner()).strip().lower()
+        if self.setup_handoff_hash:
+            from . import setup_handoff
+
+            setup_handoff.check(self)
         # Unless the server names its credential administrators, they are whoever owns the environment now and its
         # Admins (backend/auth.py sync_access follows a transfer and the Admins list).
         self.credential_admins_follow_owner = not _emails(",".join(self.credential_admins))
@@ -594,6 +600,7 @@ class Settings:
             server_network=os.environ.get("TICO_SERVER_NETWORK", "tico_default"),
             hosted=os.environ.get("TICO_HOSTED", ""),
             owner_link_hash=os.environ.get("TICO_OWNER_LINK_HASH", "").strip().lower(),
+            setup_handoff_hash=os.environ.get("TICO_SETUP_HANDOFF_HASH", "").strip().lower(),
             runner_url=os.environ.get("TICO_RUNNER_URL", "").rstrip("/"),
             screen_relay_url=os.environ.get("TICO_SCREEN_RELAY_URL", ""),
             screen_relay_key=os.environ.get("TICO_SCREEN_RELAY_KEY", ""),
@@ -676,9 +683,6 @@ class Settings:
                 0.0, float(os.environ.get("TICO_DECISIONS_JEV_USD_PER_MTOK_OUTPUT", "") or 0)
             ),
             rules_monthly_usd=max(0.0, float(os.environ.get("TICO_RULES_MONTHLY_USD", "") or 50.0)),
-            rule_check_level=(os.environ.get("TICO_RULE_CHECK_LEVEL", "").strip().lower() or "medium")
-            if os.environ.get("TICO_RULE_CHECK_LEVEL", "").strip().lower() in ("", "low", "medium", "high")
-            else "medium",
             rules_check_daily_drafts=max(0, int(os.environ.get("TICO_RULES_CHECK_DAILY", "") or 200)),
             rule_check_concurrency=max(1, int(os.environ.get("TICO_RULE_CHECK_CONCURRENCY", "") or 8)),
             decisions_idea_triage=not rehearsal and os.environ.get("TICO_DECISIONS_IDEA_TRIAGE", "0") == "1",
