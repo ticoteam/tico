@@ -126,8 +126,10 @@ Use `/api/v2/roadmaps/settings`, `/api/v2/roadmap-tasks`, and `/api/v2/tasks/{id
 (GET/POST), `/requesters/{requester_id}` (POST partial update), and `/requesters/{requester_id}/delete`
 (POST). Internal writes require the usual Idempotency-Key. Requester lists are paged and do not
 return tokens; an internal add shows its token once and an idempotent retry returns only its id. Task updates accept `visibility`, `public_title`, `public_summary`, `size`, and
-`approval_id` (`size: null` clears an estimate); type updates accept `default_visibility`. A type's manager is fixed
-by its role: a type update naming `manager` gets 422, which points to `suggestions_bot`. Public title and summary
+`approval_id` (`size: null` clears an estimate); type updates accept `default_visibility`. A type update naming
+`manager` sets that pipeline's manager. The caller must be a mover and the pipeline's owner or an admin. A bot that is
+not active gets 422 and nothing changes ([Stuck cards](tasks.md#stuck-cards)). The bot that receives roadmap suggestions
+is `suggestions_bot`, a separate setting. Public title and summary
 start empty and are only what someone writes for them; task creation accepts `public_title` and `public_summary`
 beside `visibility`. Publishing (`visibility: public`, at creation or later) needs a public title, and is refused
 with a clear error without one.

@@ -830,6 +830,11 @@ Each pipeline sets the hours in its editor (the ✎ pencil) or `PATCH /api/v2/pi
 `null` uses the default; `GET` returns the defaults as `stuck_rule_defaults`. A pipeline with no manager has no stuck
 rule.
 
+A pipeline's manager is set in the editor's **Pipeline Manager** field, with `manager_id` on the same settings route, or
+with `hub pipeline-manager`. The field offers only active bots, so a paused, planned or archived bot is not offered. An
+empty `manager_id` clears the manager; leaving it out or sending `null` keeps it. If the saved manager is no longer
+active, the field shows **Not set** and says "The saved manager is not an active bot. Pick one." until someone picks one.
+
 ## Wake rules
 
 Who a message in a task's thread reaches comes first: whoever it @mentions or replies to, and the task's
@@ -1178,7 +1183,13 @@ hub task create --owner ben --title "(B/F) Fix the account page" --type "Dev tic
 hub task show '#18945'
 hub task update '#18945' --step "On deck" --step-rank 2.5
 hub task list --type "Dev ticket" --sort step
+hub pipeline-manager Marketing marketing-lead
+hub pipeline-manager Marketing --clear
 ```
+
+`hub pipeline-manager <pipeline> [bot]` sets a pipeline's manager, and `--clear` removes it. The pipeline is named by its
+id or its name. The bot must be active. Only the pipeline's owner and admins may run it. `hub_pipeline_manager` takes
+`pipeline`, `bot` and `clear`.
 
 A bare template name is an address too: `--owner marketing-lead` reaches the one live bot built from that template when
 no bot or person has that name and no open seat has that template.
@@ -1203,8 +1214,9 @@ explicit positions are provided. Omitted steps are removed; new steps omit `id`.
 
 `GET/POST /api/v2/task-types` list and create types. `GET/POST /api/v2/task-types/{id}` read and
 update one. `DELETE /api/v2/task-types/{id}`, or `POST /api/v2/task-types/{id}/delete`, deletes an
-unused type. Create and update accept `numbered` and `steps_only`; updates accept `name` and a replacement `steps`
-array, retaining existing step ids. A type's answer includes `role`: `product-roadmap` or `engineering` on the types
+unused type. Create and update accept `numbered` and `steps_only`. Updates accept `name`, a replacement `steps` array
+(retaining existing step ids), and `manager`, which a mover who is the pipeline's owner or an admin may set
+([Stuck cards](#stuck-cards)). A type's answer includes `role`: `product-roadmap` or `engineering` on the types
 roadmaps follow ([roadmaps](roadmaps.md)), else null; Tico sets it, no write does. All writes use the existing
 Idempotency-Key contract. Task
 create and update accept `type`, `step` and `number`, and update accepts `step_rank` and `title`; task answers
