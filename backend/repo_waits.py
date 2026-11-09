@@ -69,8 +69,8 @@ def create_url(org, name=""):
 
 
 def fixes(c, row, slug=""):
-    """The two ways out, as links: create the repository (prefilled), or let BotOps create repositories. A personal
-    account has only the first: Tico does not create repositories in one yet."""
+    """The two ways out, as links: create the repository (prefilled), or let BotOps create repositories. In a personal
+    account the second is authorizing Tico to create empty repositories there, which is shown in the task instead."""
     from .github_app import account_kind
 
     name = H.bot_repository_name(c, slug) if slug else ""  # named for the bot, id or slug in
@@ -86,9 +86,10 @@ def _body(found):
     repository = found["repository"]
     if found.get("account_type") == "User":
         return (
-            f"BotOps could not create the GitHub repository {repository}: Tico does not create repositories in a personal "
-            "account yet. The bot is built and waits on its computer until the repository exists:\n\n"
-            f"1. Create {repository} on GitHub as an empty private repository (no README, no licence): "
+            f"BotOps could not create the GitHub repository {repository}. The bot is built and waits on its computer "
+            "until the repository exists. Either is enough:\n\n"
+            "1. Authorize Tico in Tools > GitHub: Tico then creates the empty repository in your account itself.\n"
+            f"2. Create {repository} on GitHub as an empty private repository (no README, no licence): "
             f"{found['create_url']}\n\n"
             "Tico checks every few minutes and finishes on its own: the bot's computer publishes its history, and this "
             "task closes. If the app is installed on selected repositories only, also add the new repository to the "
@@ -175,7 +176,10 @@ def resume(service):
     if not row:
         return done
     with _lock:
-        allowed = service.can_create_repos(refresh=True)
+        # A template repository needs Administration; an empty one in a personal account also the owner's authorization
+        # (github_app.can_create_repos), so each waiting bot is checked against what its own repository needs.
+        allowed = {"template": service.can_create_repos(refresh=True)}
+        allowed["empty"] = service.can_create_repos(empty=True)
         for bot, wait in pending.items():
             try:
                 how = _resume_one(service, row, allowed, bot, wait)
@@ -203,11 +207,11 @@ def _resume_one(service, row, allowed, bot, wait):
         how = f"{repository} exists on GitHub now; the bot's computer publishes its history on its next run."
     except (Problem, ValueError, KeyError):
         pass
-    if how is None and allowed:
+    template = wait.get("template") or ""
+    if how is None and allowed["template" if template else "empty"]:
         try:
             # Empty for a bot built on a computer (its runner publishes the history); from the template
             # when that is what was asked for.
-            template = wait.get("template") or ""
             service.create_repo(bot, template, empty=not template)
             how = f"BotOps created {repository}; the bot's computer publishes its history on its next run."
             with service.store.transaction() as c:

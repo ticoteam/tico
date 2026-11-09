@@ -1574,6 +1574,46 @@ class LinkTypeRow(TypedDict):
     archived_at: str | None
 
 
+class FinStatementUploadRow(TypedDict):
+    """One statement file posted to a money account (backend/finance/statement_upload.py). Integer cents."""
+
+    id: str
+    book_id: str
+    money_account_id: str
+    file_hash: str
+    file_name: str
+    file_format: str
+    start_date: str
+    end_date: str
+    opening_balance: int | None
+    closing_balance: int | None
+    ends_at: int
+    off_by: int
+    row_count: int
+    new_count: int
+    duplicate_count: int
+    skipped_count: int
+    statement_id: str | None
+    action_id: str
+    created_at: str
+    created_by: str
+    undone_at: str | None
+    undone_by: str | None
+
+
+class FinStatementPreviewRow(TypedDict):
+    """A statement review's token, kept only as its hash, until a post uses it or it expires."""
+
+    token_hash: str
+    book_id: str
+    money_account_id: str
+    file_hash: str
+    new_digest: str
+    created_at: str
+    created_by: str
+    expires_at: str
+
+
 class SetupHandoffRow(TypedDict):
     token_hash: str
     created_at: str
