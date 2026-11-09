@@ -1,0 +1,6 @@
+{
+  "backend/read_deps.py": {
+    "BLE001": 1,
+    "F401": 3
+  }
+}

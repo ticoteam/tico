@@ -1075,10 +1075,13 @@ def install(app, store, service):
                 r['archived'] = archived.get(r['full_name'].lower())
                 for key in ('enabled', 'bot_repo', 'reachable'):
                     r[key] = bool(r[key])
+            github_row = service.row(c)
             return {
                 'repositories': repos,
                 'new_bot_default': metadata(c, SETTINGS).get('new_bot_default', 'own'),
-                'github_connected': bool(service.row(c)),
+                'github_connected': bool(github_row),
+                # An App that was created but never installed cannot reach any repository.
+                'github_installed': bool(github_row and github_row['installation_id']),
             }
 
     @app.get('/api/v2/repositories')

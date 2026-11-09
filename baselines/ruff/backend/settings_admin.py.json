@@ -1,0 +1,6 @@
+{
+  "backend/settings_admin.py": {
+    "B905": 1,
+    "F401": 2
+  }
+}
