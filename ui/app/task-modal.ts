@@ -132,6 +132,7 @@ async function taskModalShow(task, d = taskModal(), opts = {}) {
   taskLiveFocusKeep(d);
   const keptForm = sameTask ? taskFormCapture(d) : {fields: [], folds: []};
   d.innerHTML = hubModalHTML(task, taskItem(task), {peek, thread: d.classList.contains('thread')});
+  void taskRequirementsLoad(d);
   adopt(); taskFormAdopt(d, keptForm);
   taskModalBind(d, task);
   taskPropFocus(d); taskLiveFocusRestore(d); taskFormRestore(d, keptForm);
@@ -161,7 +162,7 @@ async function taskModalShow(task, d = taskModal(), opts = {}) {
   if (d.liveTask && Number(detail.task.version) < Number(d.liveTask.version)) return;   // a save landed since this was asked for
   // The task's own model sits beside the task in the detail (GET /v2/tasks/{id} `run_model`), as its children do, with
   // whether this reader may set it (`can_set_run_model`).
-  const full = {...detail.task, children: detail.children || [], ...('run_model' in detail
+  const full = {...detail.task, children: detail.children || [], parent: detail.parent || null, ...('run_model' in detail
     ? {run_model: detail.run_model, can_set_run_model: detail.can_set_run_model} : {})};
   // the redraw keeps the focus where it was (a header button, the title, a property)
   const a = d.contains(document.activeElement) ? document.activeElement : null;
@@ -173,6 +174,7 @@ async function taskModalShow(task, d = taskModal(), opts = {}) {
   taskLiveFocusKeep(d);
   const fullForm = taskFormCapture(d);
   d.innerHTML = hubModalHTML(full, taskItem(full), {peek, thread: d.classList.contains('thread')});
+  void taskRequirementsLoad(d);
   adopt(); taskFormAdopt(d, fullForm);
   taskModalBind(d, full, true);
   if (keep) $(keep, d)?.focus({preventScroll: true});
@@ -183,6 +185,7 @@ async function taskModalShow(task, d = taskModal(), opts = {}) {
   else void taskChatLoad(task.id, d, detail);
   void tfLoad(d, task.id);
   void taskRunsLoad(d, task.id);
+  void githubNudgeTask(d, full);
 }
 // A task's own thread: the full modal showing only its header and its conversation, so what is typed there is plainly
 // said in the task (POST /v2/tasks/{id}/comments), never in the bot's main chat. Back returns to the chat.
@@ -1068,6 +1071,7 @@ function hubModalHTML(t, it, opts = {}) {
     ${t.goal_id ? `<div class="muted tmeta"><a href="#/goals/${encodeURIComponent(t.goal_id)}" class="task-goal" data-goal-title="${esc(t.goal_id)}">serves a goal</a></div>` : ''}
     <div class="tmodal-body task-layout">
       <div class="tmodal-main">
+      ${githubNudgeTaskHostHTML(t)}
       <section class="task-pages" data-task-pages aria-label="Pages" hidden></section>
       <section class="rule-holds" data-rule-holds aria-label="Held by a rule" hidden></section>
       ${askToYou && qcardItem(t) ? qcardBoxHTML(t) : waitLabel && waitText ? (askToYou ? `<div class="task-ask"${taskQcardWait(t)}><div class="lbl">${esc(waitLabel)}</div><div class="task-ask-body">${esc(waitText)}</div></div>`
@@ -1077,6 +1081,7 @@ function hubModalHTML(t, it, opts = {}) {
       ${note && ![waitText, botWait && clipLine(botWait.reason, 400)].includes(note.replace(/\s+/g, ' ').trim()) ? `<details class="task-orig"><summary>Progress</summary><div class="tdesc md">${safeMd(note)}</div></details>` : ''}
       ${(t.acceptance_criteria || []).length ? `<section class="tsec"><h3 class="rail-h">Done looks like</h3><ul class="tcriteria">${t.acceptance_criteria.map(a => `<li>${esc(a)}</li>`).join('')}</ul></section>` : ''}
       <div class="tsecs">
+      ${taskRequirementsHTML(t)}
       <section class="tsec task-links${links.length ? '' : ' tsec-empty'}"><h3 class="rail-h">Links<button type="button" class="prop-add" data-link-add aria-label="Add a link" title="Add a link">${TL_ICON.plus}</button></h3>
         ${links.length ? `<div class="tlinks">${links.map(l => `<span class="tlink ${esc(l.kind)} ${esc(l.state || '')}"><a href="${esc(l.url)}" target="_blank" rel="noopener">${esc(l.title || l.url)}</a>${l.state && l.state !== 'open' ? ` · ${esc(l.state)}` : ''}${mover ? `<button type="button" class="x" data-drop-link="${esc(l.id)}" aria-label="Remove link">×</button>` : ''}</span>`).join('')}</div>` : ''}
         <form class="inline task-link-add" data-modal-link hidden><input type="url" inputmode="url" autocomplete="off" spellcheck="false" placeholder="https://…" aria-label="Add a link"></form></section>

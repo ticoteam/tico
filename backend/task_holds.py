@@ -54,7 +54,8 @@ def _line(text, limit=160):
 
 def holds(conn, row):
     """Every hold Tico tracks on a task, in the order `wait_detail` reads them: [{"kind", "on", "what"}]. `on` is the
-    actor holding it (None for an external hold or an approval with nobody named), `what` a short subject."""
+    actor holding it (None for an external hold or an approval with nobody named), `what` a short subject. A child or
+    blocker hold also names its task (`task`)."""
     from . import hubdb as H, task_relations as TR, profiles, review_gate
 
     out = []
@@ -109,7 +110,7 @@ def _task_hold(conn, row, kind, other):
 
     if H.task_private(conn, other) and not H.subtask_flows_up(conn, other, row):
         return {"kind": "private", "on": None, "what": "a private task"}
-    return {"kind": kind, "on": other["owner_id"], "what": _line(other["title"])}
+    return {"kind": kind, "on": other["owner_id"], "what": _line(other["title"]), "task": other["id"]}
 
 
 def words(conn, found):
@@ -173,7 +174,10 @@ def refresh(conn, task_id, cleared=None, at=None):
             task_blocked.bump(conn, row)
             return "open"
         note = f"{cleared}; nothing left to wait on"
-        H._set_status(conn, H.KEEPER, row, "open", note=note)
+        # The restore is automatic, so the stage's rules may refuse it: then only the restore is undone, it is logged on the
+        # parent (auto_move_refused), and the child's change that cleared the hold stands.
+        if not H.try_auto_move(conn, H.KEEPER, row, status="open", note=note):
+            return None
         conn.execute("UPDATE tasks SET note=? WHERE id=?", (note, task_id))
         task_blocked.bump(conn, row)
         H._task_event(conn, task_id, H.KEEPER, "note", row.get("note"), note, "")

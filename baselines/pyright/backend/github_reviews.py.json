@@ -1,0 +1,22 @@
+{
+    "files": {
+        "./backend/github_reviews.py": [
+            {
+                "code": "reportIncompatibleMethodOverride",
+                "range": {
+                    "startColumn": 8,
+                    "endColumn": 22,
+                    "lineCount": 1
+                }
+            },
+            {
+                "code": "reportAssignmentType",
+                "range": {
+                    "startColumn": 8,
+                    "endColumn": 30,
+                    "lineCount": 1
+                }
+            }
+        ]
+    }
+}

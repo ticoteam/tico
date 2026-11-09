@@ -1363,9 +1363,14 @@ def queued_label(c, bot, location, settings=None, human=False, behind=False, que
     bot_state = H.bot(c, bot)["state"]
     label, readiness_reason = "Saved — queued", ""
     draining = c.execute("SELECT 1 FROM bot_control WHERE bot=? AND draining=1", (bot,)).fetchone()
+    from . import company_pause
+
+    company = company_pause.record(c)
     # A drain is either Tico updating itself (the deploy finishes each
     # bot's current run, then holds new ones until it is back) or a person pausing it.
-    if draining and deploy_draining(c, bot):
+    if company is not None:
+        label = "Saved — waiting: " + company_pause.waiting_words(company)
+    elif draining and deploy_draining(c, bot):
         label = "Saved — Tico is updating; this starts when the update finishes"
     elif draining:
         label = "Saved — this bot is paused; this starts when it's resumed"
@@ -2260,7 +2265,11 @@ def approval_files(c, auth, who, payload):
 
 
 # The roadmap steps at which a question that holds up an item comes before the rest in Decide.
-ROADMAP_LIVE_STEPS = ("Approved", "Building")
+ROADMAP_LIVE_STEPS = (
+    "Approved",
+    "Building",
+    "In development",
+)  # the last is the Tico Team name (D64); the others predate it
 SOON_BUSINESS_DAYS = 2
 
 

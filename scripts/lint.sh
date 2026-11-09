@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# The Python lint gate: pinned ruff against ruff-baseline.toml (see scripts/lint_baseline.py), then the pinned formatter
-# in check mode (its settings are the [format] section of ruff.toml). Takes seconds.
+# The Python lint gate: pinned ruff against the per-file ruff baseline in baselines/ruff (see scripts/lint_baseline.py,
+# which writes the generated ruff-baseline.toml, an extension of ruff.toml, and runs ruff with it), then the pinned
+# formatter in check mode (its settings are the [format] section of ruff.toml, which needs no baseline). Takes seconds.
 # CI sets LINT_BASE_REF (for example origin/main) on pull requests so a grown baseline or suppression set fails too.
 set -euo pipefail
 cd "$(dirname "$0")/.."

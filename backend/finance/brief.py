@@ -17,7 +17,8 @@ start (`delivered_fingerprint`); when they do not, it reads and compares and wri
 as standing lines (runner-rs/src/prompt.rs). `hub_finance_brief` and GET /api/v2/finance/brief return `brief` on demand
 and never move the delivered fingerprint.
 
-Later steps hook in at `_later_lines`: campaign and receipt lines (steps 5 and 7) add nothing yet.
+Later steps hook in at `_later_lines`: subscription lines (step 6, subscriptions.py) and the receipt line (step 7,
+receipts.brief_lines) are in.
 """
 
 from __future__ import annotations
@@ -31,7 +32,9 @@ from datetime import date
 from typing import Any, cast
 
 from .. import hubdb as H
+from . import receipts as RCP
 from . import reads as R
+from . import subscriptions as SUB
 from .context import Ctx, is_set_up, load
 from .core import dates
 from .core.errors import FinanceError
@@ -180,8 +183,8 @@ def _company_lines(c: sqlite3.Connection, reader: str, at: str) -> list[str]:
 
 
 def _later_lines(c: sqlite3.Connection, reader: str, at: str) -> list[str]:
-    """Campaign and receipt lines (plan steps 5 and 7) arrive here; until then, none."""
-    return []
+    """Subscription lines (subscriptions.py), then the receipt line (receipts.py)."""
+    return SUB.brief_lines(c, reader, at) + RCP.brief_lines(c, reader, at)
 
 
 def compute(c: sqlite3.Connection, reader: str, at: str) -> list[str]:

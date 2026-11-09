@@ -1187,7 +1187,10 @@ def test_a_strategy_block_imports_as_an_unconfirmed_draft_with_its_market_watche
         definition = MS.definition(c)
     assert definition["includes"] == ["Scheduling, field and project tools for builders"]
     assert definition["excludes"] == ["Design and CAD tools"] and definition["year"] == 2026
-    edges = {(r["src"], r["rel"], r["dst"]) for r in rows(api, "SELECT src, rel, dst FROM market_edges")}
+    edges = {
+        (r["src"], r["rel"], r["dst"])
+        for r in rows(api, "SELECT from_entity_id AS src, link_key AS rel, to_entity_id AS dst FROM entity_links")
+    }
     root = definition["root"]
     assert {
         ("segment/gc-suites", "member_of", root),
@@ -1195,9 +1198,9 @@ def test_a_strategy_block_imports_as_an_unconfirmed_draft_with_its_market_watche
         ("segment/bim", "member_of", root),
         ("segment/specialty-pm", "member_of", root),
         ("company/self", "operates_in", "segment/schedules"),
-        ("company/trestle", "operates_in", "segment/gc-suites"),
-        ("company/fieldcraft", "operates_in", "segment/schedules"),
-        ("company/trestle", "competes_with", "company/self"),
+        ("organization/trestle", "operates_in", "segment/gc-suites"),
+        ("organization/fieldcraft", "operates_in", "segment/schedules"),
+        ("organization/trestle", "competes_with", "company/self"),
     } <= edges
     sizes = {r["segment_id"]: r for r in rows(api, "SELECT * FROM market_sizes")}
     assert set(sizes) == {"segment/gc-suites", "segment/schedules", "segment/bim"}  # no evidence, no size
@@ -1210,13 +1213,13 @@ def test_a_strategy_block_imports_as_an_unconfirmed_draft_with_its_market_watche
         (sizes["segment/bim"]["evidence_ids"],),
     )
     assert cited == [{"source_url": "https://example.com/bim"}]
-    assert '"next": true' in rows(api, "SELECT properties FROM market_entities WHERE id='segment/bim'")[0]["properties"]
+    assert '"next": true' in rows(api, "SELECT properties FROM entities WHERE id='segment/bim'")[0]["properties"]
     # Rival sites are watched; the posts wait as new insights for the Librarian's curate.
     assert {
-        (r["entity_id"], r["url"], r["kind"]) for r in rows(api, "SELECT * FROM market_watches WHERE active=1")
+        (r["entity_id"], r["url"], r["kind"]) for r in rows(api, "SELECT * FROM entity_watches WHERE active=1")
     } == {
-        ("company/trestle", "https://example.com/trestle", "home"),
-        ("company/fieldcraft", "https://example.com/fieldcraft", "home"),
+        ("organization/trestle", "https://example.com/trestle", "home"),
+        ("organization/fieldcraft", "https://example.com/fieldcraft", "home"),
     }
     insights = rows(api, "SELECT claim, source_url, status FROM market_insights ORDER BY reported_at")
     assert [(i["source_url"], i["status"]) for i in insights] == [
@@ -1233,7 +1236,7 @@ def test_a_0_2_file_without_a_strategy_imports_as_before_and_adds_nothing_to_str
     assert "version: 0.2\n" in text
     assert "strategy" not in preview_and_import(api, text)
     assert api.get("/api/v2/strategy", headers=signed_in()).json()["bets"] == []
-    for table in ("market_entities", "market_sizes", "market_watches", "market_insights"):
+    for table in ("entities", "market_sizes", "entity_watches", "market_insights"):
         assert rows(api, f"SELECT * FROM {table}") == [], table
     assert {r["bet_id"] for r in rows(api, "SELECT bet_id FROM goals")} <= {None}
 
@@ -1249,11 +1252,14 @@ def test_a_segment_named_like_the_root_gets_its_own_id_and_keeps_its_size_childr
     preview_and_import(api, C.to_yaml(draft))
     with api.app.state.store.read() as c:
         assert MS.definition(c)["root"] == "segment/gc-suites"
-    edges = {(r["src"], r["rel"], r["dst"]) for r in rows(api, "SELECT src, rel, dst FROM market_edges")}
+    edges = {
+        (r["src"], r["rel"], r["dst"])
+        for r in rows(api, "SELECT from_entity_id AS src, link_key AS rel, to_entity_id AS dst FROM entity_links")
+    }
     assert {
         ("segment/gc-suites-2", "member_of", "segment/gc-suites"),
         ("segment/schedules", "member_of", "segment/gc-suites-2"),
-        ("company/trestle", "operates_in", "segment/gc-suites-2"),
+        ("organization/trestle", "operates_in", "segment/gc-suites-2"),
     } <= edges
     assert "segment/gc-suites-2" in {r["segment_id"] for r in rows(api, "SELECT segment_id FROM market_sizes")}
     assert api.get("/api/v2/setup", headers=signed_in()).json()["company_import"]["strategy"]["skipped"] == []
@@ -1273,9 +1279,9 @@ def test_an_address_with_a_user_name_never_lands_in_market_evidence_whatever_wro
         CI.import_strategy(c, "human:owner", strategy, "Acme Build")
     assert not [r for r in rows(api, "SELECT source_url FROM market_evidence") if "alice" in r["source_url"]]
     assert not [r for r in rows(api, "SELECT source_url FROM market_insights") if "alice" in r["source_url"]]
-    assert {r["entity_id"] for r in rows(api, "SELECT entity_id FROM market_watches")} == {"company/fieldcraft"}
+    assert {r["entity_id"] for r in rows(api, "SELECT entity_id FROM entity_watches")} == {"organization/fieldcraft"}
     assert "segment/gc-suites" not in {r["segment_id"] for r in rows(api, "SELECT segment_id FROM market_sizes")}
-    assert rows(api, "SELECT id FROM market_entities WHERE id='company/trestle'")  # the player still lands
+    assert rows(api, "SELECT id FROM entities WHERE id='organization/trestle'")  # the player still lands
 
 
 # A made-up company (Acme Build): two sales teams, a sales seat with no team, and one whose team is "sales" in lower
@@ -1346,10 +1352,10 @@ def test_import_keeps_where_the_company_serves_and_each_segments_own_places(envi
     preview_and_import(api, C.to_yaml(draft))
     with api.app.state.store.read() as c:
         assert O.load(c)["answers"]["regions"] == ["Worldwide", "united states"]
-    gc = rows(api, "SELECT properties, summary FROM market_entities WHERE id='segment/gc-suites'")[0]
+    gc = rows(api, "SELECT properties, summary FROM entities WHERE id='segment/gc-suites'")[0]
     assert gc["summary"] == "Serves: Texas."
     assert "regions" not in json.loads(gc["properties"] or "{}")
-    bim = rows(api, "SELECT properties, summary FROM market_entities WHERE id='segment/bim'")[0]
+    bim = rows(api, "SELECT properties, summary FROM entities WHERE id='segment/bim'")[0]
     assert bim["summary"] == "" and "regions" not in json.loads(bim["properties"] or "{}")
 
 

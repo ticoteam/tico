@@ -1,0 +1,142 @@
+{
+    "files": {
+        "./backend/granola_mcp.py": [
+            {
+                "code": "reportPossiblyUnboundVariable",
+                "range": {
+                    "startColumn": 23,
+                    "endColumn": 28,
+                    "lineCount": 1
+                }
+            },
+            {
+                "code": "reportPossiblyUnboundVariable",
+                "range": {
+                    "startColumn": 34,
+                    "endColumn": 39,
+                    "lineCount": 1
+                }
+            },
+            {
+                "code": "reportPossiblyUnboundVariable",
+                "range": {
+                    "startColumn": 111,
+                    "endColumn": 116,
+                    "lineCount": 1
+                }
+            },
+            {
+                "code": "reportPossiblyUnboundVariable",
+                "range": {
+                    "startColumn": 36,
+                    "endColumn": 41,
+                    "lineCount": 1
+                }
+            },
+            {
+                "code": "reportPossiblyUnboundVariable",
+                "range": {
+                    "startColumn": 46,
+                    "endColumn": 51,
+                    "lineCount": 1
+                }
+            },
+            {
+                "code": "reportPossiblyUnboundVariable",
+                "range": {
+                    "startColumn": 37,
+                    "endColumn": 42,
+                    "lineCount": 1
+                }
+            },
+            {
+                "code": "reportPossiblyUnboundVariable",
+                "range": {
+                    "startColumn": 19,
+                    "endColumn": 24,
+                    "lineCount": 1
+                }
+            },
+            {
+                "code": "reportPossiblyUnboundVariable",
+                "range": {
+                    "startColumn": 24,
+                    "endColumn": 29,
+                    "lineCount": 1
+                }
+            },
+            {
+                "code": "reportPossiblyUnboundVariable",
+                "range": {
+                    "startColumn": 66,
+                    "endColumn": 71,
+                    "lineCount": 1
+                }
+            },
+            {
+                "code": "reportPossiblyUnboundVariable",
+                "range": {
+                    "startColumn": 72,
+                    "endColumn": 80,
+                    "lineCount": 1
+                }
+            },
+            {
+                "code": "reportPossiblyUnboundVariable",
+                "range": {
+                    "startColumn": 95,
+                    "endColumn": 103,
+                    "lineCount": 1
+                }
+            },
+            {
+                "code": "reportOptionalMemberAccess",
+                "range": {
+                    "startColumn": 74,
+                    "endColumn": 79,
+                    "lineCount": 1
+                }
+            },
+            {
+                "code": "reportArgumentType",
+                "range": {
+                    "startColumn": 12,
+                    "endColumn": 28,
+                    "lineCount": 1
+                }
+            },
+            {
+                "code": "reportAttributeAccessIssue",
+                "range": {
+                    "startColumn": 24,
+                    "endColumn": 29,
+                    "lineCount": 1
+                }
+            },
+            {
+                "code": "reportCallIssue",
+                "range": {
+                    "startColumn": 22,
+                    "endColumn": 63,
+                    "lineCount": 1
+                }
+            },
+            {
+                "code": "reportArgumentType",
+                "range": {
+                    "startColumn": 53,
+                    "endColumn": 62,
+                    "lineCount": 1
+                }
+            },
+            {
+                "code": "reportArgumentType",
+                "range": {
+                    "startColumn": 51,
+                    "endColumn": 61,
+                    "lineCount": 1
+                }
+            }
+        ]
+    }
+}

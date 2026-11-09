@@ -46,6 +46,8 @@ function pageTasks(forced, openId = '') {
       <header class="tl-head">
         <h1>Tasks</h1>
         <button type="button" class="tl-scope" id="task-scope" aria-haspopup="menu" aria-expanded="false"></button>
+        <button type="button" class="tl-ib tl-pipeline-edit" id="task-pipeline-edit" aria-label="Edit pipeline" title="Edit pipeline" hidden><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M4 20h4L19 9l-4-4L4 16v4z"/><path d="M13.5 6.5l4 4"/></svg></button>
+        <span class="tl-play" id="task-play" hidden></span>
         <span class="spacer"></span>
         <span class="tl-who-wrap" id="task-who-wrap" hidden></span>
         <div class="tl-search">${TL_ICON.search}<input type="search" id="task-q" spellcheck="false" aria-label="Search tasks" placeholder="Search" autocomplete="off"><kbd aria-hidden="true">/</kbd></div>
@@ -57,7 +59,7 @@ function pageTasks(forced, openId = '') {
         <button type="button" class="tl-ib" id="task-archive" aria-pressed="false" aria-label="Finished" title="Finished tasks">${TL_ICON.archive}</button>
         <button type="button" class="tl-decide" data-go-through hidden></button>
         <button type="button" class="tl-ib" id="task-more" aria-haspopup="menu" aria-expanded="false" aria-label="More" title="More">${TL_ICON.dots}</button>
-        <button class="primary tl-new" type="button" id="task-new" aria-label="New task" title="New task (C)">${TL_ICON.plus}</button>
+        <button class="primary add-ctl" type="button" id="task-new" aria-label="New task" title="New task (C)">${TL_ICON.plus}</button>
       </header>
       <div class="tl-bar" id="task-bar" hidden>
         <span class="tl-finished-bar"></span>
@@ -652,6 +654,8 @@ function tasksRender(state) {
     row?.classList.add('peeked'); row?.querySelector('[data-open-task]')?.setAttribute('aria-current', 'true');
   }
   tasksSelectionPaint(state);
-  if (tasksScopePaint(state)) tasksHeadFit(state);
+  const scopeChanged = tasksScopePaint(state), playChanged = pipelinePlayPaint(state);
+  if (scopeChanged || playChanged) tasksHeadFit(state);
+  pipelineRailSync(state);
   fbSync();
 }

@@ -25,6 +25,9 @@ SCENARIOS += _receipt_wording
 from .recovery import SCENARIOS as _recovery
 
 SCENARIOS += _recovery
+from .review_pages import SCENARIOS as _review_pages
+
+SCENARIOS += _review_pages
 from .snoozed_ticket import SCENARIOS as _snoozed_ticket
 
 SCENARIOS += _snoozed_ticket
@@ -34,3 +37,15 @@ SCENARIOS += _verdict_past_open_sibling
 from .source_outages import SCENARIOS as _source_outages
 
 SCENARIOS += _source_outages
+from .pipeline_requirements import SCENARIOS as _pipeline_requirements
+
+SCENARIOS += _pipeline_requirements
+from .pipeline_attach import SCENARIOS as _pipeline_attach
+
+SCENARIOS += _pipeline_attach
+from .pipeline_review import SCENARIOS as _pipeline_review
+
+SCENARIOS += _pipeline_review
+from .pipeline_manager import SCENARIOS as _pipeline_manager
+
+SCENARIOS += _pipeline_manager

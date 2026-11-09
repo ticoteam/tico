@@ -215,6 +215,15 @@ const screenshotDir = process.env.TICO_SCREENSHOT_DIR;
     assert.equal(await page.locator('#task-scope .tl-scope-l').innerText(), 'You');
     assert.equal((await page.locator('#task-new').innerText()).trim(), '');
     assert.equal(await page.locator('#task-new').getAttribute('aria-label'), 'New task');
+    // The + is the scope's control height, square, and centred on the row beside it.
+    const desktopPlus = await page.evaluate(() => {
+      const r = s => document.querySelector(s).getBoundingClientRect();
+      const add = r('#task-new'), scope = r('#task-scope');
+      return {w: add.width, h: add.height, scopeH: scope.height, mid: add.top + add.height / 2, scopeMid: scope.top + scope.height / 2};
+    });
+    assert.equal(desktopPlus.h, desktopPlus.scopeH, 'the + is the scope control height: ' + JSON.stringify(desktopPlus));
+    assert.equal(desktopPlus.w, desktopPlus.h, 'the + is square: ' + JSON.stringify(desktopPlus));
+    assert.ok(Math.abs(desktopPlus.mid - desktopPlus.scopeMid) < 1, 'the + is centred on the row: ' + JSON.stringify(desktopPlus));
     for (const id of ['#task-filter', '#task-archive', '#task-more', '#task-layout [data-layout="list"]', '#task-layout [data-layout="board"]'])
       assert.ok(await page.locator(id).getAttribute('aria-label') && await page.locator(id).getAttribute('title'), id + ' is named');
     assert.equal(await page.locator('.tl-search').isHidden(), true, 'You has no search');
@@ -408,11 +417,21 @@ const screenshotDir = process.env.TICO_SCREENSHOT_DIR;
     await page.waitForFunction(() => TASKS_ST.view === 'list');
     const mobile = await page.evaluate(() => {
       const head = document.querySelector('.tl-head');
-      const tops = new Set([...head.children].filter(c => c.getClientRects().length && c.getBoundingClientRect().width)
+      // The page title is visually hidden on a phone (it sits outside the rows), so it is not a row of the header.
+      const tops = new Set([...head.children].filter(c => c.tagName !== 'H1' && c.getClientRects().length && c.getBoundingClientRect().width)
         .map(c => Math.round(c.getBoundingClientRect().top / 8)));
       return {rows: tops.size, right: head.querySelector('#task-new').getBoundingClientRect().right, edge: head.getBoundingClientRect().right};
     });
     assert(mobile.rows <= 2 && mobile.right <= mobile.edge + 1, 'phone header fits: ' + JSON.stringify(mobile));
+    // The phone + is the row's 30-wide icon width at the 32px control height, centred on the first row's ⋯ beside it.
+    const phonePlus = await page.evaluate(() => {
+      const r = s => document.querySelector(s).getBoundingClientRect();
+      const add = r('#task-new'), more = r('#task-more');
+      return {w: add.width, h: add.height, mid: add.top + add.height / 2, searchMid: more.top + more.height / 2};
+    });
+    assert.equal(phonePlus.w, 30, 'phone + width: ' + JSON.stringify(phonePlus));
+    assert.equal(phonePlus.h, 32, 'phone + height: ' + JSON.stringify(phonePlus));
+    assert.ok(Math.abs(phonePlus.mid - phonePlus.searchMid) < 1, 'phone + is centred on the first row: ' + JSON.stringify(phonePlus));
     // An empty search is its icon; tapped, it takes the row; emptied, it is an icon again.
     const searchRow = () => page.evaluate(() => {
       const r = s => document.querySelector(s).getBoundingClientRect();
@@ -447,7 +466,9 @@ const screenshotDir = process.env.TICO_SCREENSHOT_DIR;
     await page.keyboard.press('Escape');
     assert.equal(await page.locator('#task-filter-pop').evaluate(el => el.matches(':popover-open')), false);
     await page.locator('#task-filter').click();
-    await page.locator('.tl-head h1').click();
+    // An outside tap, at the page title's place (the title is visually hidden on a phone): the sheet closes on the tap, wherever it lands.
+    const title = await page.locator('.tl-head h1').boundingBox();
+    await page.mouse.click(title.x + title.width / 2, title.y + title.height / 2);
     assert.equal(await page.locator('#task-filter-pop').evaluate(el => el.matches(':popover-open')), false, 'outside tap closes the sheet');
     for (const theme of ['light', 'dark']) {
       await page.evaluate(theme => document.documentElement.dataset.theme = theme, theme);

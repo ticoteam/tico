@@ -9,6 +9,8 @@ interface GithubWaitingBot { bot?: string; repository?: string; create_url?: str
 interface GithubAppState {
   connected?: boolean; org?: string; slug?: string; installed?: boolean; administration?: boolean; account_type?: string;
   waiting?: GithubWaitingBot[]; permissions_url?: string | null; install_url?: string | null; uninstall_url?: string | null;
+  /** Why no check is posted on pull requests (backend/github_app.py CHECKS_WITHHELD), or null when Checks is accepted. */
+  checks_withheld?: string | null;
 }
 interface GithubManifestSetup { action: string; manifest: unknown; }
 interface Window {
@@ -41,6 +43,7 @@ window.mountGithubConnect = async function (host) {
     host.innerHTML = `<p>Connected to <strong>${text(state.org)}</strong> through the app <strong>${text(state.slug)}</strong>.
       <span data-gh-install>${state.installed ? `Installed on the ${personal ? 'account' : 'organization'}.` : 'Not installed yet.'}</span></p>
       ${repos}
+      ${state.checks_withheld ? `<p class="muted" data-gh-checks-withheld>${text(state.checks_withheld)}</p>` : ''}
       <p class="muted">Connected before release tracking? In <a data-gh-events target="_blank" rel="noopener">the app's events on GitHub</a>, tick <strong>Release</strong>. Pushed tags work without it.</p>
       ${state.installed ? '' : `<p class="muted">Choose <strong>All repositories</strong> when GitHub asks. Each bot's token still covers only its own repository.</p>`}
       <div class="row">${state.installed ? '' : `<a class="primary" role="button" data-gh-install-link target="_blank" rel="noopener">Install on ${text(state.org)}</a>`}
