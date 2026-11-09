@@ -3193,6 +3193,9 @@ def _queue_suspects(c, queue):
             tasks.append(task)
     suspect = auto_tasks.maybe_waiting(c, tasks)
     auto_tasks.prime_waits(c, [task for task in tasks if task["id"] in suspect])  # each is asked `waiting` next
+    from . import enqueue
+
+    enqueue.prime_parked(c, [job["message_id"] for job in queue])  # and job_refusal asks each whether it is On ice
     return suspect
 
 
