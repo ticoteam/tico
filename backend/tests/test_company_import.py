@@ -50,7 +50,18 @@ def company_text(
     return C.to_yaml(draft) + "models:\n  source: gateway\n  by_department:\n    finance: mid\n"
 
 
-BUILTINS = {"coo", "botops", "librarian", "goal-manager", "task-manager", "bookkeeper", "tico-counsel", "brand"}
+BUILTINS = {
+    "coo",
+    "botops",
+    "librarian",
+    "goal-manager",
+    "task-manager",
+    "bookkeeper",
+    "tico-counsel",
+    "brand",
+    "updates-owner",
+    "automations-owner",
+}
 TWELVE = (
     "finance-lead",
     "controller",
@@ -129,11 +140,11 @@ def test_a_chosen_chart_of_12_roles_lays_out_12_recruiting_seats_and_only_the_bu
     assert not rows(api, "SELECT id FROM tasks WHERE title LIKE 'Set up %'")
     assert not rows(
         api,
-        "SELECT bot FROM bot_config WHERE bot NOT IN ('coo','botops','librarian','goal-manager','task-manager','bookkeeper','tico-counsel','brand')",
+        "SELECT bot FROM bot_config WHERE bot NOT IN ('coo','botops','librarian','goal-manager','task-manager','bookkeeper','tico-counsel','brand','updates-owner','automations-owner')",
     )
     assert not rows(
         api,
-        "SELECT bot FROM assignments WHERE bot NOT IN ('coo','botops','librarian','goal-manager','task-manager','bookkeeper','tico-counsel','brand')",
+        "SELECT bot FROM assignments WHERE bot NOT IN ('coo','botops','librarian','goal-manager','task-manager','bookkeeper','tico-counsel','brand','updates-owner','automations-owner')",
     )
     machine(api)
     assert {r["bot"] for r in rows(api, "SELECT bot FROM assignments")} <= BUILTINS
@@ -1107,27 +1118,27 @@ def test_the_starter_charts_full_company_file_with_all_31_goals_imports(environm
     assert len(rows(api, "SELECT id FROM goals")) == 31
 
 
-def test_a_325_goal_company_file_imports_and_a_326_goal_file_is_refused_plainly(environment):
-    """325 = 3 company goals + 2 for each department + 1 for each of the most bots a chart holds, as tico-services
+def test_a_329_goal_company_file_imports_and_a_330_goal_file_is_refused_plainly(environment):
+    """329 = 3 company goals + 2 for each department + 1 for each of the most bots a chart holds, as tico-services
     allows; one past it is still refused, before anything is created."""
     from backend.company_file import draft as D
     from backend.tests.test_company_file import chart
 
-    assert C.LIMITS["goals"] == 325 >= 3 + 2 * len(D.DEPARTMENTS) + C.LIMITS["bots"]
+    assert C.LIMITS["goals"] == 329 >= 3 + 2 * len(D.DEPARTMENTS) + C.LIMITS["bots"]
     draft = every_goal(chart(300))
     draft["company"].update(name="Acme Finance", about="We help small firms manage their books.")
     assert 20 < len(draft["goals"]) <= C.LIMITS["goals"]  # every goal /goals writes for a full chart
     while len(draft["goals"]) < C.LIMITS["goals"]:  # a visitor's own goals fill the rest
         draft["goals"].append({**draft["goals"][0], "id": "goal-%d" % (len(draft["goals"]) + 1)})
     text = C.to_yaml(draft)
-    assert len(C.from_yaml(text)["goals"]) == 325
+    assert len(C.from_yaml(text)["goals"]) == 329
     assert (
         len(starter.canonical(starter.load(text)).encode()) <= starter.MAX_BYTES
     )  # our largest file fits our own check
     api = environment()
-    # Written by hand: our own writer refuses to make a 326-goal file.
+    # Written by hand: our own writer refuses to make a 330-goal file.
     extra = (
-        "  - id: goal-326\n    title: One goal too many\n    owner: %s\n    measure: null\n    unit: ''\n"
+        "  - id: goal-330\n    title: One goal too many\n    owner: %s\n    measure: null\n    unit: ''\n"
         "    direction: up\n" % draft["goals"][0]["owner"]
     )
     over = text.replace("\nrules:\n", "\n" + extra + "rules:\n", 1)
@@ -1137,10 +1148,10 @@ def test_a_325_goal_company_file_imports_and_a_326_goal_file_is_refused_plainly(
             "/api/v2/onboarding/company/" + path, json={"company_yaml": over, **body}, headers=signed_in()
         )
         assert refused.status_code == 422 and refused.json()["error"]["code"] == "company_file", refused.text
-        assert "goals has more than 325 entries" in refused.text
+        assert "goals has more than 329 entries" in refused.text
     assert not rows(api, "SELECT id FROM goals")
     preview = preview_and_import(api, text)
-    assert len(preview["goals"]) == 325 and len(rows(api, "SELECT id FROM goals")) == 325
+    assert len(preview["goals"]) == 329 and len(rows(api, "SELECT id FROM goals")) == 329
 
 
 # ------------------------------------------------------------------------------------- the strategy block (format 0.3)

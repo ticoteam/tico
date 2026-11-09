@@ -4004,6 +4004,8 @@ PRODUCT_BOT_SLUGS = frozenset(
         "market-analyst",
         "listening",
         "cpo",
+        "updates-owner",
+        "automations-owner",
     }
 )
 

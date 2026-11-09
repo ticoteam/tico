@@ -380,9 +380,18 @@ def _ranked(card):
     return bool(named) and named[-1][0] in RANKS and not card.get("lead")
 
 
+# A department whose cards are also the jobs of another pinned department: Corporate's Legal Owner is a legal job, so
+# "Legal Owner" finds it and not the Legal Operations Manager.
+UMBRELLA = {"corporate": {"legal", "finance"}}
+
+
+def _in_pins(department, pins):
+    return department in pins or bool(UMBRELLA.get(department, set()) & pins)
+
+
 def _fit(card, t):
     """How much of the title's work the card's name holds, 0 when the card is not the job (see _best_card)."""
-    if not t["work"] or (t["pins"] and card["department"] not in t["pins"]):
+    if not t["work"] or (t["pins"] and not _in_pins(card["department"], t["pins"])):
         return 0
     name = {stem for stem, _ in _name_words(card["name"])}
     kind = t["kind"]

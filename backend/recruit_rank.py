@@ -14,7 +14,19 @@ import hashlib
 import json
 import re
 
-DEPARTMENT_IDS = ("sales", "marketing", "support", "finance", "operations", "legal", "hr", "product", "engineering")
+DEPARTMENT_IDS = (
+    "sales",
+    "marketing",
+    "support",
+    "finance",
+    "operations",
+    "legal",
+    "hr",
+    "product",
+    "engineering",
+    "success",
+    "corporate",
+)
 # A card written before departments existed has only a `pack`; this is the department it sits in.
 PACK_DEPARTMENT = {
     "sales": "sales",
