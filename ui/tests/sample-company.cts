@@ -34,7 +34,9 @@ const SAMPLE_BOTS = ([['coo', 'Assistant'], ['botops', 'BotOps'], ['head-of-prod
       const request = route.request(), p = new URL(request.url()).pathname;
       const json = (body: unknown) => route.fulfill({contentType: 'application/json', body: JSON.stringify(body)});
       if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
-      const module = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/);
+      // index.html loads marked from /vendor: a stub, so the page's own script errors do not hold the recovery card up.
+      if (/\/marked\.min\.js$/.test(p)) return route.fulfill({contentType: 'application/javascript', body: 'window.marked={parse:s=>String(s)}'});
+      const module =p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/);
       if (module) {
         const file = uiFile(module[1]!);
         if (fs.existsSync(file)) return route.fulfill({contentType: module[1]!.endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(file, 'utf8')});
