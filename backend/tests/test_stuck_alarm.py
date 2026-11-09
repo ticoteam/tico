@@ -3,8 +3,10 @@
 factory's manager for a card stuck more than 4 hours, once, and clears itself when the card moves. It ships off.
 Synthetic fixtures only (test_pipeline_exceptions helpers)."""
 
+from backend import devcopy
 from backend import stuck_alarm as SA
-from backend.store import H
+from backend.config import Settings
+from backend.store import H, Store
 from backend.tests.helpers.pipeline_exceptions import board, listed, run, ticket
 
 ENGINEERING = "engineering-pipeline-manager"
@@ -117,3 +119,33 @@ def test_a_card_that_moves_clears_its_alarm_and_the_alarm_task_is_closed(api, mo
         assert _open_alarms(c) == 0
         assert H.task(c, alarm["id"])["status"] not in H.ACTIVE_STATUSES
         assert SA.sweep(c, H.now()) == {"raised": 0, "cleared": 0}
+
+
+def test_a_dev_copy_keeps_the_alarm_ledger_so_the_copy_files_no_second_alarm(api, monkeypatch, tmp_path):
+    monkeypatch.setenv(SA.ENV, "on")
+    live = api.app.state.store
+    with live.transaction() as c:
+        fid = _factory(c)
+        _engineering_bot(c)
+        typ = _pipeline(c, fid)
+        ticket(c, typ, "Fix Cursor", minutes=300)
+        assert SA.sweep(c, H.now()) == {"raised": 1, "cleared": 0}
+        before = [tuple(row) for row in c.execute("SELECT * FROM stuck_alarms ORDER BY id")]
+    assert len(before) == 1
+    # Close the live store's idle connections so the copy reads a file with everything checkpointed (as in test_devcopy).
+    for conn in live.pool:
+        conn.close()
+    live.pool.clear()
+    dest = tmp_path / "copy" / "hub.sqlite"
+    devcopy.build(live.settings.db_path, dest, days=30)
+    copied = Store(Settings(db_path=dest))
+    with copied.transaction() as c:
+        assert [tuple(row) for row in c.execute("SELECT * FROM stuck_alarms ORDER BY id")] == before, (
+            "the copy keeps the ledger row of the alarm already filed"
+        )
+        # Guard against a pass for the wrong reason: a copy that lost the card or its manager would also sweep to zero.
+        assert SA.count(c, fid) == 1, "the card is still stuck in the copy"
+        assert H.bot(c, H.bot_actor(ENGINEERING)), "the copy still has the factory's manager"
+        assert SA.sweep(c, H.now()) == {"raised": 0, "cleared": 0}, "the copy files no second alarm"
+        assert len(_alarm_tasks(c)) == 1
+        assert _open_alarms(c) == 1
