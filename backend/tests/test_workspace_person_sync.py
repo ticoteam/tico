@@ -4,12 +4,13 @@ import pytest
 
 from backend import google_workspace as workspace, mailbox_access, routines
 from backend.store import H, encode, readiness_document
-from backend.tests.test_api import api, as_member, get, post, ready, runner, setup_attempt  # noqa: F401
-from backend.tests.test_assistant import assistant_turn
-from backend.tests.test_connectors import mail_message
-from backend.tests.test_gmail_live import gmail_http  # noqa: F401
-from backend.tests.test_google_workspace import personal
-from backend.tests.test_google_workspace_authz import (  # noqa: F401
+from backend.tests.helpers.api import as_member, get, post, ready, runner, setup_attempt  # noqa: F401
+from backend.tests.test_api import api  # noqa: F401
+from backend.tests.helpers.assistant import assistant_turn
+from backend.tests.helpers.connectors import mail_message
+from backend.tests.helpers.gmail_live import gmail_http  # noqa: F401
+from backend.tests.helpers.google_workspace import personal
+from backend.tests.helpers.google_workspace_authz import (
     BOX,
     PERSONAL,
     health,
@@ -19,8 +20,8 @@ from backend.tests.test_google_workspace_authz import (  # noqa: F401
     token,
     workspace_key,
 )
-from backend.tests.test_mail_api import ORG, seed_org
-from backend.tests.test_mail_targets import declare
+from backend.tests.helpers.mail_api import ORG, seed_org
+from backend.tests.helpers.mail_targets import declare
 
 
 @pytest.fixture

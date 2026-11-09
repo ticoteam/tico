@@ -7,7 +7,7 @@ import pytest
 
 from backend import github as G, hubdb as H, milestone_waits as MW
 from backend import task_delete as TD, task_relations as TR, task_rules as R, worktree_waits as WW
-from backend.tests.test_github import api, get, post, pr_event, PR  # noqa: F401
+from backend.tests.helpers.github import api, get, post, pr_event, PR  # noqa: F401
 
 AT = "2026-10-26T12:00:00.000000Z"
 OLD = "2026-10-25T11:00:00.000000Z"

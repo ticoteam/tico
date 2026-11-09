@@ -21,13 +21,7 @@ from backend.finance.store import banking as SK
 from backend.finance.store import ledger as SL
 from backend.finance.store import mirror as SX
 from backend.finance.store import tico as T
-from backend.tests.test_finance_fixtures import (  # noqa: F401
-    AT,
-    OWNER,
-    books,
-    finance_template,
-    store,
-)
+from backend.tests.helpers.finance_fixtures import AT, OWNER, books, finance_template, store
 
 LATER = "2026-10-15T12:40:00Z"
 BASE = "https://updates.tico.team/v1/gateway"

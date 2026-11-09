@@ -9,8 +9,8 @@ import pytest
 from websockets.exceptions import ConnectionClosed
 
 from backend.browser_exit import today
-from backend.tests.test_api import assign, get, post, runner
-from backend.tests.test_screen_relay_contract import running_service
+from backend.tests.helpers.api import assign, get, post, runner
+from backend.tests.helpers.screen_relay_contract import running_service
 
 pytestmark = pytest.mark.slow
 

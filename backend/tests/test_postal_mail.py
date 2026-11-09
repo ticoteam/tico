@@ -13,11 +13,12 @@ import pytest
 
 from backend import hubdb as H
 from backend import postal_mail as P
-from backend.tests.test_api import api, get, post, put  # noqa: F401
-from backend.tests.test_api import headers
-from backend.tests.test_api import setup_attempt
-from backend.tests.test_hook_relay import hq, service  # noqa: F401
-from backend.tests.test_mcp import call, rpc
+from backend.tests.helpers.api import get, post, put  # noqa: F401
+from backend.tests.test_api import api  # noqa: F401
+from backend.tests.helpers.api import headers
+from backend.tests.helpers.api import setup_attempt
+from backend.tests.helpers.hook_relay import hq, service  # noqa: F401
+from backend.tests.helpers.mcp import call, rpc
 from backend import bot_settings as BS
 
 SYSTEM = "hr_00000000000000a1"  # the install's `_tico` system relay
@@ -375,7 +376,7 @@ def test_mail_grants_are_paged(api):
 
 def test_delegated_mail_needs_both_the_person_and_the_actual_bot(api, hq, mail):
     from backend import task_privacy
-    from backend.tests.test_assistant import assistant_turn
+    from backend.tests.helpers.assistant import assistant_turn
 
     letter(api, "161", "legal", summary="Private court papers")
     deliver(hq, "161", assignment_id="as_de")
@@ -429,8 +430,8 @@ def test_delegated_mail_needs_both_the_person_and_the_actual_bot(api, hq, mail):
 def test_claimed_builtin_counsel_can_read_granted_and_routed_mail_only(api, hq, mail):
     from backend.auth import Identity
     from backend.blobs import register
-    from backend.tests.test_api import assign, ready, runner
-    from backend.tests.test_counsel import counsel_on, store_file
+    from backend.tests.helpers.api import assign, ready, runner
+    from backend.tests.helpers.counsel import counsel_on, store_file
 
     counsel_on(api)
     with api.app.state.store.transaction() as c:

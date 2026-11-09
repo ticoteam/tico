@@ -7,7 +7,7 @@ import pytest
 from botocore.exceptions import ClientError, EndpointConnectionError, NoCredentialsError
 
 from backend import aws_identity
-from backend.tests.test_replication import ROOT, entrypoint, prepare
+from backend.tests.helpers.replication import ROOT, entrypoint, prepare
 
 ACCOUNT = "123456789012"
 ASSUMED = f"arn:aws:sts::{ACCOUNT}:assumed-role/tico-server/i-0abc"

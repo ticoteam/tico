@@ -15,7 +15,7 @@ import uuid
 
 import pytest
 
-from backend.tests.test_databases import FakeHub, workspace
+from backend.tests.helpers.databases import FakeHub, workspace
 from clients import dbmongo as M
 from clients import dbquery as D
 from clients.tico import APIError

@@ -6,12 +6,14 @@ import pytest
 
 from backend import cards
 from backend.store import H, encode
-from backend.tests.test_api import api, as_member, assign, get, headers, post, ready, restrict, runner  # noqa: F401
-from backend.tests.test_assistant import assistant_turn, say
-from backend.tests.test_files import turn
-from backend.tests.test_meeting_items import record
-from backend.tests.test_meeting_task_links import link, task
-from backend.tests.test_pages import HTML
+from backend.tests.helpers.api import as_member, assign, get, headers, post, ready, restrict, runner  # noqa: F401
+from backend.tests.test_api import api  # noqa: F401
+from backend.tests.helpers.assistant import assistant_turn, say
+from backend.tests.helpers.files import turn
+from backend.tests.helpers.meeting_items import record
+from backend.tests.helpers.meeting_task_links import link, task
+from backend.tests.helpers.pages import HTML
+from backend.tests.helpers.make_page import start
 
 
 def page(api, turn, **fields):
@@ -22,20 +24,6 @@ def page(api, turn, **fields):
         content=data,
         headers={**headers(turn["token"]), "Content-Type": "text/html"},
     )
-
-
-def start(api, tid, person="ben-test", key=None, machine=None):
-    if machine is None:
-        machine = runner(api)
-        assign(api, machine, "coo")
-        ready(api, machine, ["coo"], capabilities=["make_page"])
-    sent = post(api, f"tasks/{tid}/make-page", {"text": "Make the alert flow with three scenario tabs."}, person, key)
-    attempt = post(api, "jobs/claim", {"next_run": True}, machine["token"], key="claim:" + sent["message"]["id"])[
-        "attempt"
-    ]
-    assert attempt["message"]["id"] == sent["message"]["id"]
-    post(api, f"attempts/{attempt['id']}/started", {"thread_id": "make-page-test"}, machine["token"])
-    return machine, attempt, sent["message"]
 
 
 def status(api, tid, person="ben-test"):
@@ -185,7 +173,7 @@ def test_make_page_files_and_pins_clean_html_as_the_person_with_authenticated_at
 
 
 def test_make_page_output_uses_page_audience_and_restores_after_clearing_it(api):
-    from backend.tests.test_page_audience import edit
+    from backend.tests.helpers.page_audience import edit
 
     t = task(api, private=False)
     _, attempt, _ = start(api, t["id"])
@@ -338,7 +326,7 @@ def test_make_page_is_queued_separately_from_an_already_running_assistant_turn(a
 
 
 def test_mcp_offers_page_publish_to_the_assistant_and_keeps_the_person_and_attempt(api):
-    from backend.tests.test_mcp import call, rpc
+    from backend.tests.helpers.mcp import call, rpc
 
     t = task(api, private=False)
     _, attempt, _ = start(api, t["id"])
@@ -417,7 +405,7 @@ def test_make_page_has_normal_reads_beyond_context_and_no_source_publish_recheck
     # An unlinked source remains readable through ordinary tools, just like in any Assistant turn.
     get(api, "meetings/transcript?id=" + mid, token)
     assert api.get("/api/v2/files/" + fid, headers=headers(token)).status_code == 200
-    from backend.tests.test_page_audience import edit
+    from backend.tests.helpers.page_audience import edit
 
     edit(api, fid, {"people": ["ana"]}, token="ana-test")
     get(api, "pages/" + fid, token, expected=404)
@@ -430,8 +418,8 @@ def test_make_page_has_normal_reads_beyond_context_and_no_source_publish_recheck
 
 
 def test_make_page_keeps_normal_assistant_learning_and_tools(api):
-    from backend.tests.test_learned import learn
-    from backend.tests.test_mcp import rpc
+    from backend.tests.helpers.learned import learn
+    from backend.tests.helpers.mcp import rpc
 
     learn(api, "Use a calm page layout", token="ana-test")
     t = task(api, private=False)

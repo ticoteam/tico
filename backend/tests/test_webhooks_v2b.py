@@ -10,13 +10,14 @@ import httpx
 from backend import hubdb as H
 from backend import trigger_presets as P
 from backend import webhooks as W
-from backend.tests.test_api import api, get, post  # noqa: F401
-from backend.tests.test_event_rules import CALL, judge, rule
-from backend.tests.test_task_rules import department
-from backend.tests.test_triggers import hook, sig
-from backend.tests.test_triggers_incoming import as_bot, stored_rows
-from backend.tests.test_wake_rules import setup
-from backend.tests.test_webhooks import due, make, net, publish, run, sends, verify  # noqa: F401
+from backend.tests.helpers.api import get, post  # noqa: F401
+from backend.tests.test_api import api  # noqa: F401
+from backend.tests.helpers.event_rules import CALL, judge, rule
+from backend.tests.helpers.task_rules import department
+from backend.tests.helpers.triggers import hook, sig
+from backend.tests.helpers.triggers_incoming import as_bot, stored_rows
+from backend.tests.helpers.wake_rules import setup
+from backend.tests.helpers.webhooks import due, make, net, publish, run, sends, verify  # noqa: F401
 from backend import bot_settings as BS
 
 # Slack's published request-signing example (api.slack.com/authentication/verifying-requests-from-slack): its

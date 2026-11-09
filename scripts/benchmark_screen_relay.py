@@ -18,7 +18,7 @@ import time
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import conftest  # noqa: F401  isolates registry and AWS credentials just as the contract tests do
-from backend.tests.test_screen_relay_contract import running_service
+from backend.tests.helpers.screen_relay_contract import running_service
 
 
 def main():

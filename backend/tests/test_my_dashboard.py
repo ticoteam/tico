@@ -6,10 +6,11 @@ Ana owns the company, Ben is an admin, Cara is a member (the base fixture)."""
 
 from backend.tests.slug_ids import bot_ids_are_their_slugs  # noqa: F401  (each bot's id is its slug)
 from backend.store import H
-from backend.tests.test_api import api, get, post, put  # noqa: F401  (fixture)
-from backend.tests.test_botops_parity import act
-from backend.tests.test_cards import delete, page, patch, place, task
-from backend.tests.test_member_bots import botops, turn  # noqa: F401  (fixture)
+from backend.tests.helpers.api import get, post, put  # noqa: F401  (fixture)
+from backend.tests.test_api import api  # noqa: F401  (fixture)
+from backend.tests.helpers.botops_parity import act
+from backend.tests.helpers.cards import delete, page, patch, place, task
+from backend.tests.helpers.member_bots import botops, turn  # noqa: F401  (fixture)
 
 
 def templates(view):
@@ -98,7 +99,7 @@ def test_botops_arranges_it_for_its_person_only(api, botops):
 
 
 def test_a_bot_has_no_my_dashboard_and_an_unknown_person_is_no_place(api):
-    from backend.tests.test_api import setup_attempt
+    from backend.tests.helpers.api import setup_attempt
 
     attempt = setup_attempt(api)[2]
     get(api, "places/person:me", attempt["token"], expected=404)
@@ -141,7 +142,7 @@ def test_unread_threads_reads_cores_sidebar_and_only_what_is_unread(api, monkeyp
 
 def test_home_builds_thread_attention_once_for_both_cards_and_rechecks_on_the_next_read(api, monkeypatch):
     from backend import thread_attention
-    from backend.tests.test_thread_attention import members_thread, say
+    from backend.tests.helpers.thread_attention import members_thread, say
 
     tid = members_thread(api)
     mention = say(api, tid, "@ana please check.")
@@ -175,7 +176,7 @@ def test_home_builds_thread_attention_once_for_both_cards_and_rechecks_on_the_ne
 def test_its_writes_leave_events_that_name_nothing(api):
     """The event log is the company's (the owner reads it whole, `hub sql` included): a write to My dashboard leaves
     its event and names no card, page, template or place, before or after the card is gone."""
-    from backend.tests.test_api import headers
+    from backend.tests.helpers.api import headers
 
     shared = page(api, "ops")
     made = post(api, "cards", {"template": "my_tasks", "settings": {"count": 3}, "place": "person:me"}, "cara-test")

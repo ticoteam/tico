@@ -9,7 +9,8 @@ import pytest
 
 from backend import hubdb as H, personal_alerts as A
 from backend.auth import Identity
-from backend.tests.test_api import api, get, post, put, headers  # noqa: F401
+from backend.tests.helpers.api import get, post, put, headers  # noqa: F401
+from backend.tests.test_api import api  # noqa: F401
 
 PHONE = "+14155550123"
 OTHER = "+14155550124"

@@ -5,64 +5,18 @@ read the task, and coverage says unknown rather than unused where Tico has no da
 Ana owns the company, Ben is an admin, Cara is a member (the base fixture).
 """
 
-from datetime import datetime, timedelta, timezone
+from datetime import timedelta
 
 import pytest
 
 from backend import bot_settings as BS
 from backend import skill_usage as U
 from backend.store import H
-from backend.tests.test_api import api, get, headers, restrict  # noqa: F401  (fixture)
-from backend.tests.test_botops_parity import bot_id
-from backend.tests.test_skills import publish
-
-NOW = datetime.now(timezone.utc).replace(hour=12, minute=0, second=0, microsecond=0)
-
-
-def ts(at):
-    return at.strftime("%Y-%m-%dT%H:%M:%S.%f") + "Z"
-
-
-def skill_id(api, name="triage"):
-    with api.app.state.store.read() as c:
-        return c.execute("SELECT id FROM skills WHERE name=?", (name,)).fetchone()[0]
-
-
-def use(
-    api,
-    actor=("Human", "cara"),
-    *,
-    days=0.0,
-    trigger="model",
-    created=None,
-    name="triage",
-    task_id=None,
-    thread_id=None,
-    requested_by=None,
-    source="helper",
-):
-    """One raw use, as the runner, the helper or a typed /name writes it."""
-    at = NOW - timedelta(days=days)
-    with api.app.state.store.transaction() as c:
-        c.execute(
-            "INSERT INTO skill_usages (skill_id, sha256, actor_type, actor_id, requested_by_id, trigger, source, session_key, "
-            "tool_use_id, task_id, thread_id, used_at, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
-            (
-                skill_id(api, name),
-                None,
-                actor[0],
-                actor[1],
-                requested_by,
-                trigger,
-                source,
-                H.new_id(),
-                H.new_id(),
-                task_id,
-                thread_id,
-                ts(at),
-                ts(created or at),
-            ),
-        )
+from backend.tests.helpers.api import get, headers, restrict  # noqa: F401  (fixture)
+from backend.tests.test_api import api  # noqa: F401  (fixture)
+from backend.tests.helpers.botops_parity import bot_id
+from backend.tests.helpers.skills import publish
+from backend.tests.helpers.skill_usage import NOW, skill_id, ts, use
 
 
 def dailies(api):

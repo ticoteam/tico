@@ -1,6 +1,7 @@
 """Operations listing loads every computer's own keys in one pass."""
 
-from backend.tests.test_api import api, runner  # noqa: F401
+from backend.tests.helpers.api import runner  # noqa: F401
+from backend.tests.test_api import api  # noqa: F401
 from backend import computer_keys
 
 

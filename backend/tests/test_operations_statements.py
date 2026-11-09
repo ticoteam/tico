@@ -5,8 +5,9 @@ import collections
 import re
 
 from backend.store import H, encode
-from backend.tests.test_api import api, assign, get, post, ready, runner  # noqa: F401
-from backend.tests.test_task_privacy_reads import traced
+from backend.tests.helpers.api import assign, get, post, ready, runner  # noqa: F401
+from backend.tests.test_api import api  # noqa: F401
+from backend.tests.helpers.task_privacy_reads import traced
 from backend import bot_settings as BS
 
 HARNESSES = ("claude", "codex", "gemini", "pi")  # gemini and pi hold a key per bot, so each check reads the grants

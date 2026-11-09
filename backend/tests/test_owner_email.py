@@ -17,7 +17,7 @@ from backend.app import create_app
 from backend.auth import Identity
 from backend.config import Settings
 from backend.store import H, encode
-from backend.tests.test_onboarding import (
+from backend.tests.helpers.onboarding import (
     ASSISTANT_AGENT,
     ASSISTANT_CARD,
     BOTOPS_CARD,
@@ -29,10 +29,11 @@ from backend.tests.test_onboarding import (
     SUPPORT_AGENT,
     SUPPORT_CARD,
     TOKEN,
+    environment,
     signed_in,
     write_catalog,
 )
-from backend.tests.test_people_access import HeaderProxy, call, person_headers, view
+from backend.tests.helpers.people_access import HeaderProxy, call, person_headers, view
 from backend import bot_settings as BS
 
 NEW = "morgan@new.example"

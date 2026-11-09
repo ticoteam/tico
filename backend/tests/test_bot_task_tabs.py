@@ -6,7 +6,8 @@ import json
 from datetime import datetime, timedelta, timezone
 
 from backend import hubdb as H, question_tasks as QT, task_relations as TR
-from backend.tests.test_api import api, as_member, get, headers, post, put, setup_attempt  # noqa: F401  (api is a fixture)
+from backend.tests.helpers.api import as_member, get, headers, post, put, setup_attempt  # noqa: F401  (api is a fixture)
+from backend.tests.test_api import api  # noqa: F401  (api is a fixture)
 from backend.tests.hold_rows import set_holds
 
 ACTIVE = ["open", "doing", "waiting"]

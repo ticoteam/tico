@@ -4,47 +4,9 @@ the spend a pick approves, and `hub file approved` reading it back."""
 import pytest
 
 from backend.store import H
-from backend.tests.test_api import api, headers, post, setup_attempt  # noqa: F401  (fixtures)
-
-
-def publish(api, token, text, name="cut.md", path=None):
-    r = api.post(
-        "/api/v2/files/uploads",
-        json={"name": name, "text": text, **({"path": path} if path else {})},
-        headers=headers(token),
-    )
-    assert r.status_code == 200, r.text
-    return r.json()["file"]
-
-
-def ask(api, token, review, on="ana", expected=200, question="Is this cut ready?", **body):
-    r = api.post(
-        "/api/v2/task-questions",
-        json={"on": on, "question": question, "review": review, **body},
-        headers=headers(token),
-    )
-    assert r.status_code == expected, r.text
-    return r.json()
-
-
-def answer(api, made, labels, other="", token="ana-test", expected=200):
-    return post(
-        api,
-        f"tasks/{made['task']['id']}/answers",
-        {
-            "target": {"task": made["task"]["id"]},
-            "answers": {"decision": labels},
-            **({"other": other} if other else {}),
-        },
-        token,
-        expected=expected,
-    )
-
-
-def approved(api, token, **query):
-    r = api.get("/api/v2/file-approvals", params=query, headers=headers(token))
-    assert r.status_code == 200, r.text
-    return r.json()
+from backend.tests.helpers.api import headers, post, setup_attempt  # noqa: F401  (fixtures)
+from backend.tests.test_api import api  # noqa: F401  (fixtures)
+from backend.tests.helpers.file_reviews import answer, approved, ask, publish
 
 
 def test_approve_binds_to_the_version_and_request_changes_supersedes_it(api):

@@ -52,7 +52,7 @@ def test_operational_health_never_advances_backup_time_after_failed_upload(api):
 
 def test_failed_restore_check_does_not_advance_prior_success(api, tmp_path):
     store = api.app.state.store
-    from backend.tests.test_backup_bundle import ObjectStore
+    from backend.tests.helpers.backup_bundle import ObjectStore
 
     s3, cw = ObjectStore(), Mock()
     backup(store, s3, cw, "bucket")
@@ -85,7 +85,7 @@ def test_failed_restore_check_does_not_advance_prior_success(api, tmp_path):
 
 def test_backup_notifications_follow_active_implementation_without_rewriting_history(api, monkeypatch):
     from backend import replication
-    from backend.tests.test_api import headers
+    from backend.tests.helpers.api import headers
 
     old = H.shift(H.now(), hours=-50)
     with api.app.state.store.transaction() as c:
@@ -125,7 +125,7 @@ def test_backup_notifications_follow_active_implementation_without_rewriting_his
 def test_the_scheduled_backup_carries_the_key_files_and_the_restore_check_reads_them(api, tmp_path):
     import json
 
-    from backend.tests.test_backup_bundle import ObjectStore
+    from backend.tests.helpers.backup_bundle import ObjectStore
 
     store = api.app.state.store
     data = store.settings.db_path.parent

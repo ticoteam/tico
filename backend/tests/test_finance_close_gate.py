@@ -9,7 +9,7 @@ from backend import hubdb as H
 from backend.finance import actions as FA
 from backend.finance import reads as FR
 from backend.finance.core.errors import CONFLICT
-from backend.tests.test_finance_fixtures import (  # noqa: F401
+from backend.tests.helpers.finance_fixtures import (
     AT,
     MERCURY,
     OWNER,

@@ -6,24 +6,10 @@ import json
 
 from backend import profiles as P, redesign_migration, release_flow, rules as R
 from backend.store import H
-from backend.tests.test_api import api, headers  # noqa: F401
-from backend.tests.test_profiles import add_bot, put
-
-
-def dev_type(c):
-    return H.type_create(
-        c,
-        H.KEEPER,
-        "Dev tickets",
-        [
-            {"name": "In Progress", "status": "doing"},
-            {"name": "In QA", "status": "review"},
-            {"name": "QA Fixes", "status": "doing"},
-            {"name": "Pending Release", "status": "review"},
-            {"name": "Done", "status": "done"},
-        ],
-        bots="work",
-    )
+from backend.tests.helpers.api import headers  # noqa: F401
+from backend.tests.test_api import api  # noqa: F401
+from backend.tests.helpers.profiles import add_bot, put
+from backend.tests.helpers.dev_ticket_rules import dev_type
 
 
 def rows_of(c, type_id):

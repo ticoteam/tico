@@ -12,7 +12,8 @@ from backend import sql
 from backend.auth import Identity
 from backend.store import H
 from backend.tests.old_asks import old_answer, old_ask
-from backend.tests.test_api import api, get, headers, post, setup_attempt  # noqa: F401
+from backend.tests.helpers.api import get, headers, post, setup_attempt  # noqa: F401
+from backend.tests.test_api import api  # noqa: F401
 
 
 def seed(api):
@@ -319,7 +320,7 @@ def test_pages_keep_all_source_and_id_ties_in_order(api):
 
 
 def test_bot_slug_filters_resolve_uuid_actors_and_csv_uses_their_display_names(api):
-    from backend.tests.test_bot_access import bot, bot_id
+    from backend.tests.helpers.bot_access import bot, bot_id
 
     bot(api, "mira")
     ident = bot_id(api, "mira")

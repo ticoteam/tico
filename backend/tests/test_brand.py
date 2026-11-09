@@ -4,8 +4,9 @@ check finds avoided words, wrong names and never-made claims. Examples use Acme.
 import json
 
 from backend import brand as B
-from backend.tests.test_api import api, get, post, put  # noqa: F401
-from backend.tests.test_company import bot
+from backend.tests.helpers.api import get, post, put  # noqa: F401
+from backend.tests.test_api import api  # noqa: F401
+from backend.tests.helpers.company import bot
 
 BRAND = {
     "positioning": "Home cleaning you book in a minute and never think about again",
@@ -154,7 +155,7 @@ def test_growth_facing_bots_get_the_brand_in_their_turn(api):
 
 def test_the_hub_tools_reach_every_brand_route(api):
     """Each MCP tool's path and body match its route, run through the server as the MCP endpoint runs them."""
-    from backend.tests.test_mcp import call
+    from backend.tests.helpers.mcp import call
 
     ok = lambda name, args=None, token="ana-test": call(api, name, args, token)  # noqa: E731
     err, out = ok("hub_brand_draft", {"section": "words", "body": '{"avoid": [{"word": "cheap", "level": "block"}]}'})

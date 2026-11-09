@@ -9,14 +9,7 @@ from backend.company_file import starter
 from setup import aws, envfile, settings, wizard
 from setup.tests.fakes import aws_clients
 from setup.ui import MissingInput
-
-
-def chart(seats=20):
-    """A first chart cut to `seats` bots. Every company model is over the 8 KB parameter the installer packs a plan
-    into today; carrying a whole model chart waits on the plan-bucket transport (hosted signup, Org chart models)."""
-    draft = C.Turn(C.blank()).finish()
-    draft["bots"] = draft["bots"][:seats]
-    return draft
+from setup.tests.helpers.company_file import chart
 
 
 def test_company_file_reaches_private_env_and_secure_parameter_without_public_state_or_sample(tmp_path):
@@ -93,7 +86,7 @@ def test_a_whole_model_chart_is_accepted_before_choosing_its_file_transport(tmp_
 
 def test_hosted_cli_carries_selected_file_through_machine_and_dns_setup(tmp_path, monkeypatch):
     from setup import verify
-    from setup.tests.test_preview_flags import CREATE, go, world
+    from setup.tests.helpers.preview_flags import CREATE, go, world
 
     monkeypatch.setenv("TICO_OIDC_CLIENT_SECRET", "test-client-private-value")
     monkeypatch.setattr(verify, "run_all", lambda **kw: [verify.Check("stub", True, "ok")])

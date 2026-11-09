@@ -6,10 +6,10 @@ import json
 
 from backend import login_holds
 from backend.store import H
-from backend.tests.test_api import claim, get, post
+from backend.tests.helpers.api import claim, get, post
 from backend.tests.test_api import api  # noqa: F401
-from backend.tests.test_execution_review import job_state, sweep
-from backend.tests.test_login_holds import at, signed_in, two_bots
+from backend.tests.helpers.execution_review import job_state, sweep
+from backend.tests.helpers.login_holds import at, signed_in, two_bots
 from backend import bot_settings as BS
 
 WEEKLY = "You've hit your weekly limit · resets Oct 26, 8pm (UTC)"

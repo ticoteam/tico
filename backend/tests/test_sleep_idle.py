@@ -10,7 +10,8 @@ import pytest
 
 from backend import botops_act, maintenance, releases, routines, scheduler, sleep_idle
 from backend import hubdb as H
-from backend.tests.test_api import api, assign, claim, get, post, ready, runner, setup_attempt  # noqa: F401
+from backend.tests.helpers.api import assign, claim, get, post, ready, runner, setup_attempt  # noqa: F401
+from backend.tests.test_api import api  # noqa: F401
 
 KEY = "tgw_acme_test_key"
 

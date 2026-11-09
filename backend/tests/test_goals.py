@@ -1,7 +1,8 @@
 """Goals: every node on the org chart says what it is for; colours, not percentages; KPIs anyone
 may log."""
 
-from backend.tests.test_api import api, get, post  # noqa: F401
+from backend.tests.helpers.api import get, post  # noqa: F401
+from backend.tests.test_api import api  # noqa: F401
 
 
 def company_goal(api, title="Grow revenue 30% this year"):

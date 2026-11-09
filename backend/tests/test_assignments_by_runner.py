@@ -1,6 +1,7 @@
 """Operations and Computers listing load every computer's assignments in one pass."""
 
-from backend.tests.test_api import api, assign, get, runner  # noqa: F401
+from backend.tests.helpers.api import assign, get, runner  # noqa: F401
+from backend.tests.test_api import api  # noqa: F401
 from backend import views
 
 

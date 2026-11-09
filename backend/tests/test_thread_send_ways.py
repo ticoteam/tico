@@ -4,9 +4,10 @@ turn; defer starts no run until its deadline; a deadline takes the right to mess
 
 from backend import delivery, task_privacy
 from backend.store import H
-from backend.tests.test_api import api, claim, headers, post  # noqa: F401  (the fixture and its helpers)
-from backend.tests.test_delivery import fired, job_of, rows, setup, tick
-from backend.tests.test_thread_api import set_bot_access
+from backend.tests.helpers.api import claim, headers, post  # noqa: F401  (the fixture and its helpers)
+from backend.tests.test_api import api  # noqa: F401  (the fixture and its helpers)
+from backend.tests.helpers.delivery import fired, job_of, rows, setup, tick
+from backend.tests.helpers.thread_api import set_bot_access
 
 
 def dm(api, text, token="ana-test", **way):

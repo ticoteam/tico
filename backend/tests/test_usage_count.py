@@ -8,7 +8,8 @@ import pytest
 
 from backend import census, releases
 from backend.store import H, Problem
-from backend.tests.test_onboarding import as_person, environment, signed_in  # noqa: F401
+from backend.tests.helpers.onboarding import as_person, environment, signed_in  # noqa: F401
+from backend.tests.helpers.usage_count import complete_a_bot_turn
 
 RELEASE = {
     "tag_name": "v0.2.0",
@@ -31,15 +32,6 @@ def counting(api):
     """The install, with its owner shown the notice (nothing is counted before that)."""
     api.post("/api/v2/system/usage-count/notice", json={"state": "shown"}, headers=signed_in())
     return api.app.state.census
-
-
-def complete_a_bot_turn(api, when, bot="coo"):
-    with sqlite3.connect(str(api.app.state.store.settings.db_path)) as c:
-        c.execute(
-            "INSERT INTO attempts(id,job_id,bot_id,runner_id,generation,token_hash,state,lease_until,created_at,finished_at) "
-            "VALUES(?,'j1',?,'r1',1,?,'completed',?,?,?)",
-            ("a-" + bot, bot, "h-" + bot, when, when, when),
-        )
 
 
 def wire(monkeypatch, api, hq=True):

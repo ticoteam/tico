@@ -1,7 +1,8 @@
 """A waiting task's Blocked reason names what really holds it, and follows every change to its holds; a question to a
 person is a question task that lives and dies with the task it was asked under (backend/task_holds.py, Dev 627)."""
 
-from backend.tests.test_api import api, post  # noqa: F401
+from backend.tests.helpers.api import post  # noqa: F401
+from backend.tests.test_api import api  # noqa: F401
 from backend.store import H
 from backend import question_tasks as QT, still_needed, task_holds
 from backend.tests.hold_rows import set_holds

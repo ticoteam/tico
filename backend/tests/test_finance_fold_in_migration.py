@@ -19,7 +19,7 @@ from backend.entities import store as ES
 from backend.entities import visible as EV
 from backend.finance.store import ap as SAP
 from backend.store import Problem
-from backend.tests.test_finance_fixtures import AT, OWNER, account, act, books, finance_template, store  # noqa: F401
+from backend.tests.helpers.finance_fixtures import AT, OWNER, account, act, books, finance_template, store  # noqa: F401
 
 MIGRATION = Path(__file__).resolve().parents[1] / "migrations" / "20261108203140_finance_fold_in.py"
 LEDGER = ("fin_bills", "fin_invoices", "fin_estimates", "fin_purchase_orders", "projects")

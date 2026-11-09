@@ -7,8 +7,8 @@ import json
 from backend.finance import actions as FA
 from backend.finance import jobs
 from backend.finance.store import tico as T
-from backend.tests.test_finance_ap import _bill, _vendor
-from backend.tests.test_finance_fixtures import OWNER, account, act, books, finance_template, store  # noqa: F401
+from backend.tests.helpers.finance_ap import _bill, _vendor
+from backend.tests.helpers.finance_fixtures import OWNER, account, act, books, finance_template, store  # noqa: F401
 
 DEC_15 = "2026-12-15T12:00:00.000000Z"  # November and December have come for a line starting in November
 

@@ -11,7 +11,8 @@ import uuid
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 
-from backend.tests.test_api import api, post  # noqa: F401
+from backend.tests.helpers.api import post  # noqa: F401
+from backend.tests.test_api import api  # noqa: F401
 from backend import routines
 from backend.scheduler import Scheduler, stamp
 from backend.store import H

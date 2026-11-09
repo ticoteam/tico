@@ -16,7 +16,7 @@ from backend.finance.core.errors import CONFLICT, DENIED, INVALID, NOT_FOUND, Fi
 from backend.finance.core.kinds import ALL, LIVE, NEEDS
 from backend.finance.store import attribution as ATT
 from backend.finance.store import ledger as SL
-from backend.tests.test_finance_fixtures import (  # noqa: F401
+from backend.tests.helpers.finance_fixtures import (
     AT,
     OWNER,
     account,

@@ -10,7 +10,7 @@ from backend import hubdb as H
 from backend.finance import actions as FA
 from backend.finance.mercury import Answer
 from backend.finance.store import schema
-from backend.tests.test_finance_fixtures import (  # noqa: F401
+from backend.tests.helpers.finance_fixtures import (
     AT,
     MERCURY,
     OWNER,

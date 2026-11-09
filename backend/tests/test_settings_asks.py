@@ -9,10 +9,11 @@ database, made-up bots, and no request leaves the test server.
 import json
 
 from backend.store import H
-from backend.tests.test_api import api, get, headers, post, runner  # noqa: F401  (fixture)
-from backend.tests.test_botops_parity import act
-from backend.tests.test_mcp import call as mcp
-from backend.tests.test_member_bots import botops, finish, turn  # noqa: F401  (fixtures)
+from backend.tests.helpers.api import get, headers, post, runner  # noqa: F401  (fixture)
+from backend.tests.test_api import api  # noqa: F401  (fixture)
+from backend.tests.helpers.botops_parity import act
+from backend.tests.helpers.mcp import call as mcp
+from backend.tests.helpers.member_bots import botops, finish, turn  # noqa: F401  (fixtures)
 
 
 def asks(api, person):
@@ -276,9 +277,9 @@ def test_a_members_raw_refused_write_names_who_may_as_hub_settings_does(api, bot
 def test_the_assistant_asks_an_admin_on_the_members_cited_yes_and_never_without_it(api, botops):
     """The same from Cara's Assistant: with her words cited, Ben gets the request and she is told in her Assistant
     chat; without them, nothing is asked. The raw refusal of her release time names who may, as `hub settings` does."""
-    from backend.tests.test_api import as_member
-    from backend.tests.test_assistant import assistant_turn
-    from backend.tests.test_settings_assistant import mcp as assistant_mcp
+    from backend.tests.helpers.api import as_member
+    from backend.tests.helpers.assistant import assistant_turn
+    from backend.tests.helpers.settings_assistant import mcp as assistant_mcp
 
     as_member(api, "cara@acme.example")
     r, attempt = assistant_turn(api, "cara-test", "Yes, ask an admin to set the release to 09:30")

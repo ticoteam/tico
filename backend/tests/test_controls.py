@@ -1,4 +1,5 @@
-from backend.tests.test_api import api, claim, expire, get, post, setup_attempt
+from backend.tests.helpers.api import claim, expire, get, post, setup_attempt
+from backend.tests.test_api import api
 
 
 def test_drain_finishes_current_run_but_does_not_claim_more_work(api):

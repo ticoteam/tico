@@ -8,13 +8,14 @@ from backend import counsel, events, files, sql as S, threads, visuals
 from backend.auth import Identity
 from backend.store import H
 from backend.tests.slug_ids import bot_ids_are_their_slugs  # noqa: F401
-from backend.tests.test_api import api, get, headers, post  # noqa: F401
-from backend.tests.test_counsel import counsel_on, counsel_run, source, store_file
-from backend.tests.test_groups import send
-from backend.tests.test_org_rules import as_bot, org
-from backend.tests.test_files import turn
-from backend.tests.test_pages import page
-from backend.tests.test_page_audience import edit, promoted, read
+from backend.tests.helpers.api import get, headers, post  # noqa: F401
+from backend.tests.test_api import api  # noqa: F401
+from backend.tests.helpers.counsel import counsel_on, counsel_run, source, store_file
+from backend.tests.helpers.groups import send
+from backend.tests.helpers.org_rules import as_bot, org
+from backend.tests.helpers.files import turn
+from backend.tests.helpers.pages import page
+from backend.tests.helpers.page_audience import edit, promoted, read
 
 
 @pytest.mark.parametrize("running", [False, True], ids=["queued", "running"])

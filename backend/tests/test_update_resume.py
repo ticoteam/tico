@@ -12,7 +12,8 @@ import pytest
 
 from backend import execution, org_turns
 from backend.store import H
-from backend.tests.test_api import api, assign, claim, get, post, runner  # noqa: F401
+from backend.tests.helpers.api import assign, claim, get, post, runner  # noqa: F401
+from backend.tests.test_api import api  # noqa: F401
 
 OLD, NEW = "0.4.15", "0.4.16"
 CAPPED = "Paused at the computer's drain time limit; work and session saved, queued to continue"
