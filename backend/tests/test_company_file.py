@@ -204,7 +204,7 @@ def test_6_a_person_fills_a_seat_with_no_bot_yet():
     assert A.find_role("CRO") is None and A.find_role("cro bot") is None and A.find_role("the pipeline") is None
     assert A.find_role("sales pipeline") is None and A.find_role("pipeline") is None
     assert A.find_role("Pipeline Owner")["slug"] == "pipeline"
-    assert A.find_role("Conversion Rate Optimization Owner")["slug"] == "cro"
+    assert A.find_role("Conversion Rate Optimization Owner")["slug"] == "cro-owner"
     assert A.find_role("release manager")["slug"] == "release-notes"
 
 
