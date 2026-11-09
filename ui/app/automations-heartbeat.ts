@@ -9,38 +9,48 @@
    screen is open and the page visible it reads the first page again once a minute, and once on coming back. */
 'use strict';
 
+type HeartbeatView = import('../types/api').HeartbeatView;
+type HeartbeatBeat = import('../types/api').HeartbeatBeat;
+type HeartbeatStep = import('../types/api').HeartbeatStep;
+type HeartbeatBeatStep = HeartbeatBeat['steps'][number];
+type AutomationRow = import('../types/api').Automation;
+// A list row the page builds: the list's own flags (builtin, readonly) are not in api.d.ts.
+type ListRow = AutomationRow & {builtin: boolean; readonly: boolean; description: string};
+type SystemRoutineSaved = import('../types/api').SystemRoutineSaved;
+
 const AU_HEART = 'heartbeat';
 const AU_HEART_INTERVALS = [5, 10, 15, 20, 30, 45, 60];
-const AU_HEART_KINDS = [['due', 'Due times'], ['recovery', 'Recovery'], ['poll', 'Outside polls']];
+const AU_HEART_KINDS: Array<[string, string]> = [['due', 'Due times'], ['recovery', 'Recovery'], ['poll', 'Outside polls']];
 const AU_HEART_POLL_MS = 60000;
 const AU_HEART_PAGE = 20;
-const auHeartOk = h => !!h && Array.isArray(h.steps) && Number.isFinite(Number(h.interval_s));
-const auHeartStep = key => (AU?.heart?.steps || []).find(s => s.key === key);
+const auHeartOk = (h: HeartbeatView | null | undefined): h is HeartbeatView => !!h && Array.isArray(h.steps) && Number.isFinite(Number(h.interval_s));
+const auHeartStep = (key: string): HeartbeatStep | undefined => (AU?.heart?.steps || []).find((s: HeartbeatStep) => s.key === key);
 // The last beat failed when a loaded beat that failed is it (a folded repeat's last time counts); a quiet beat is not logged.
-const auHeartLastFailed = h => (h.beats || []).some(b => Number(b.failed) > 0
+const auHeartLastFailed = (h: HeartbeatView): boolean => (h.beats || []).some((b: HeartbeatBeat) => Number(b.failed) > 0
   && [b.started_at, b.last_repeated_at].includes(h.last_beat_at));
 
 // The list row: a read-only built-in of kind system, Tico's own, always on.
-function auHeartRow(h) {
+function auHeartRow(h: HeartbeatView): ListRow {
   return {id: AU_HEART, name: 'Heartbeat', kind: 'system', builtin: true, readonly: true, owner_id: AU_MAINT_OWNER,
     enabled: true, schedule: `Every ${h.interval_s} s`, trigger: {type: 'schedule'}, steps: [],
     description: h.steps.map(s => s.name).join(' '), can_edit: false, can_pause: false,
     ...(h.last_beat_at ? {last_run: {id: 'hb', started_at: h.last_beat_at, status: auHeartLastFailed(h) ? 'failed' : 'ok'}} : {})};
 }
 // The Heartbeat's row goes right after Maintenance (first when there is none); an older hub leaves the list as it is.
-function auHeartList(list, h) {
+// Generic: a list comes back as the type it went in (automations.js passes one it has not typed).
+function auHeartList<T extends AutomationRow[] | null | undefined>(list: T, h: HeartbeatView | null | undefined): T {
   if (!auHeartOk(h) || !Array.isArray(list)) return list;
-  const rest = list.filter(a => a.id !== AU_HEART), at = rest.findIndex(a => a.id === AU_MAINT) + 1;
-  return [...rest.slice(0, at), auHeartRow(h), ...rest.slice(at)];
+  const rest = (list as AutomationRow[]).filter(a => a.id !== AU_HEART), at = rest.findIndex(a => a.id === AU_MAINT) + 1;
+  return [...rest.slice(0, at), auHeartRow(h), ...rest.slice(at)] as T;
 }
 // A fresh listing: kept, its first page of beats merged into the log, the list row matched, and what is shown drawn.
-function auHeartAdopt(state, h) {
+function auHeartAdopt(state: AutomationsState, h: HeartbeatView): void {
   if (!auHeartOk(h) || AU !== state) return;
   state.heart = h;
   const log = state.hbLog;
   if (!log) state.hbLog = {rows: h.beats || [], next: h.next || null, open: new Set(), loading: false, error: ''};
   else {
-    const fresh = new Map((h.beats || []).map(b => [b.id, b]));
+    const fresh = new Map((h.beats || []).map((b): [string, HeartbeatBeat] => [b.id, b]));
     log.rows = [...(h.beats || []).filter(b => !log.rows.some(x => x.id === b.id)), ...log.rows.map(x => fresh.get(x.id) || x)];
     if (!log.rows.length) log.next = h.next || null;
   }
@@ -49,25 +59,25 @@ function auHeartAdopt(state, h) {
   auHeartDrawHead(); auDrawPane();
 }
 // The header is not drawn again while its interval select is focused (or open): only its meta line changes.
-function auHeartDrawHead() {
+function auHeartDrawHead(): void {
   const sel = document.activeElement?.closest?.('[data-hb-interval]');
   const meta = sel && document.querySelector('[data-hb-meta]');
   if (meta && AU.heart) meta.textContent = auHeartMeta(AU.heart);
   else auDrawHead();
 }
-async function auHeartLoad(state) {
+async function auHeartLoad(state: AutomationsState): Promise<void> {
   const gen = state.hbGen;
   try {
-    const h = await get('/v2/heartbeat');
+    const h = await get<HeartbeatView>('/v2/heartbeat');
     if (AU !== state || state.hbGen !== gen) return;
     state.heartError = auHeartOk(h) ? '' : 'The Heartbeat needs a newer hub';
     if (auHeartOk(h)) auHeartAdopt(state, h);
-  } catch (e) { if (AU === state && state.hbGen === gen) state.heartError = [403, 404].includes(e.status) ? 'The Heartbeat needs a newer hub' : e.message; }
+  } catch (e) { if (AU === state && state.hbGen === gen) { const status = errorStatus(e); state.heartError = status !== undefined && [403, 404].includes(status) ? 'The Heartbeat needs a newer hub' : errorMessage(e, ''); } }
   if (AU === state && state.id === AU_HEART && !state.heart) auDrawPane();
 }
 // The safety poll: once a minute while the screen is open and the page visible; leaving it (or the page) ends it.
-function auHeartPoll(state) {
-  clearTimeout(state.hbPoll);
+function auHeartPoll(state: AutomationsState): void {
+  if (state.hbPoll !== null) clearTimeout(state.hbPoll);   // N: clearTimeout(null) is a no-op
   state.hbPoll = null;
   if (AU !== state || state.id !== AU_HEART) return;
   state.hbPoll = setTimeout(async () => {
@@ -84,11 +94,11 @@ document.addEventListener('visibilitychange', () => {
 });
 
 // -------------------------------------------------------------------------------------------- drawing
-const auHeartMeta = h => [h.last_beat_at ? 'Last beat ' + auRunTime(h.last_beat_at) : 'No beat yet',
+const auHeartMeta = (h: HeartbeatView): string => [h.last_beat_at ? 'Last beat ' + auRunTime(h.last_beat_at) : 'No beat yet',
   `${Number(h.beats_24h || 0).toLocaleString()} in 24 h`].join(' · ');
-const auHeartMs = ms => ms == null ? '' : Number(ms) < 1000 ? `${Number(ms)} ms` : `${(Number(ms) / 1000).toFixed(1)} s`;
+const auHeartMs = (ms: number | null | undefined): string => ms == null ? '' : Number(ms) < 1000 ? `${Number(ms)} ms` : `${(Number(ms) / 1000).toFixed(1)} s`;
 
-function auHeartHead(hd) {
+function auHeartHead(hd: HTMLElement): void {
   const h = AU.heart;
   if (!h) { hd.innerHTML = '<h2 class="au-name">Heartbeat</h2>'; return; }
   const off = !h.can_change || AU.hbBusy, cur = Number(h.interval_s);
@@ -107,7 +117,7 @@ function auHeartHead(hd) {
     </div>`;
 }
 
-function auHeartPane(pane) {
+function auHeartPane(pane: HTMLElement): void {
   const h = AU.heart;
   if (!h) { pane.innerHTML = AU.heartError ? `<p class="err au-pad">${esc(AU.heartError)}</p>` : '<p class="muted au-pad">Loading…</p>'; return; }
   // A redraw keeps the place; Steps and Log each open at the top.
@@ -117,8 +127,8 @@ function auHeartPane(pane) {
   pane.scrollTop = top;
 }
 
-function auHeartStepsHTML(h) {
-  const kinds = Array.isArray(h.kinds) && h.kinds.length ? h.kinds.map(k => [k.key, k.name]) : AU_HEART_KINDS;
+function auHeartStepsHTML(h: HeartbeatView): string {
+  const kinds: Array<[string, string]> = Array.isArray(h.kinds) && h.kinds.length ? h.kinds.map((k): [string, string] => [k.key, k.name]) : AU_HEART_KINDS;
   const groups = kinds.map(([kind, title]) => {
     const steps = h.steps.filter(s => s.kind === kind);
     if (!steps.length) return '';
@@ -128,7 +138,7 @@ function auHeartStepsHTML(h) {
   return `<div class="mt hb">${groups}</div>`;
 }
 
-function auHeartStepHTML(s) {
+function auHeartStepHTML(s: HeartbeatStep): string {
   const on = s.on !== false, off = !s.can_change || AU.hbBusy;
   const last = s.last_run_at ? `<span title="${esc(fmt(s.last_run_at))}">${esc(auRunTime(s.last_run_at))}</span>` : 'Not run yet';
   const result = s.last_result ? ' · ' + esc(s.last_result) : '';
@@ -154,15 +164,15 @@ function auHeartStepHTML(s) {
   </li>`;
 }
 
-function auHeartLogHTML() {
-  const r = AU.hbLog;
+function auHeartLogHTML(): string {
+  const r: AuRunList<HeartbeatBeat> | null = AU.hbLog;
   if (!r) return '<p class="muted au-pad">Loading…</p>';
   if (r.error && !r.rows.length) return `<p class="err au-pad">${esc(r.error)}</p>`;
   if (!r.rows.length) return '<p class="muted au-pad">No beat has done anything yet</p>';
-  const name = x => x.name || auHeartStep(x.key)?.name || auCap(String(x.key || '').replace(/_/g, ' '));
-  const outcome = b => (b.steps || []).map(x => x.error ? `${name(x)} failed` : `${name(x)}: ${x.text || 'Done'}`).join(' · ');
+  const name = (x: HeartbeatBeatStep): string => x.name || auHeartStep(x.key)?.name || auCap(String(x.key || '').replace(/_/g, ' '));
+  const outcome = (b: HeartbeatBeat): string => (b.steps || []).map(x => x.error ? `${name(x)} failed` : `${name(x)}: ${x.text || 'Done'}`).join(' · ');
   // The same failure beat after beat is one row: how many times, and the last.
-  const repeats = b => Number(b.repeats) > 1 ? ` <span class="muted" data-hb-repeats title="${esc(fmt(b.last_repeated_at))}">×${esc(String(b.repeats))}, last ${esc(auRunTime(b.last_repeated_at))}</span>` : '';
+  const repeats = (b: HeartbeatBeat): string => Number(b.repeats) > 1 ? ` <span class="muted" data-hb-repeats title="${esc(fmt(b.last_repeated_at))}">×${esc(String(b.repeats))}, last ${esc(auRunTime(b.last_repeated_at))}</span>` : '';
   return `<table class="au-runs mt-runs hb-log"><thead><tr><th>Time</th><th><span class="au-vh">Result</span></th><th>Outcome</th><th class="au-n">Time taken</th></tr></thead><tbody>
     ${r.rows.map(b => {
       const open = r.open.has(b.id), bad = Number(b.failed) > 0;
@@ -181,65 +191,67 @@ function auHeartLogHTML() {
 }
 
 // The log's next page: the same read, `before` the last page's `next`.
-async function auHeartMore(state) {
+async function auHeartMore(state: AutomationsState): Promise<void> {
   const r = state.hbLog;
   if (!r || r.loading || !r.next) return;
   r.loading = true; r.error = '';
   auDrawPane();
   try {
-    const page = await get(`/v2/heartbeat?limit=${AU_HEART_PAGE}&before=${encodeURIComponent(r.next)}`);
+    const page = await get<HeartbeatView>(`/v2/heartbeat?limit=${AU_HEART_PAGE}&before=${encodeURIComponent(r.next)}`);
     if (state.hbLog !== r) return;
     const have = new Set(r.rows.map(x => x.id));
     r.rows = r.rows.concat((page.beats || []).filter(x => !have.has(x.id)));
     r.next = page.next || null;
-  } catch (e) { r.error = e.message; }
+  } catch (e) { r.error = errorMessage(e, ''); }
   r.loading = false;
   if (AU === state && state.id === AU_HEART && state.view === 'runs') auDrawPane();
 }
 
 // -------------------------------------------------------------------------------------------- writes
 // One write; a refusal says why and draws the saved values back.
-async function auHeartWrite(work) {
-  const state = AU;
+async function auHeartWrite(work: (state: AutomationsState) => Promise<void>): Promise<void> {
+  const state: AutomationsState | null = AU;
+  if (!state) return;   // G: the page was left; the old code threw a TypeError on the null AU here
   if (state.hbBusy) return;
   state.hbBusy = true; state.hbGen++;
   auDrawHead(); auDrawPane();
   try {
     await work(state);
-  } catch (e) { toast(e.message, true); }
+  } catch (e) { toast(errorMessage(e, ''), true); }
   state.hbBusy = false; state.hbGen++;   // a read that started during the write holds the old values
   if (AU === state && state.id === AU_HEART) { auDrawHead(); auDrawPane(); }
 }
-const auHeartInterval = seconds => auHeartWrite(async state => {
-  const h = await put('/v2/heartbeat', {interval_s: seconds});
+const auHeartInterval = (seconds: number) => auHeartWrite(async state => {
+  const h: HeartbeatView = await put('/v2/heartbeat', {interval_s: seconds});
   state.hbBusy = false;
   auHeartAdopt(state, h);
 });
 // A step's switch is its job's (PUT /v2/system-routines/{key}); the answer is the step's row.
-const auHeartSwitch = (key, on) => auHeartWrite(async state => {
-  const out = await put('/v2/system-routines/' + encodeURIComponent(key), {on});
+const auHeartSwitch = (key: string, on: boolean) => auHeartWrite(async state => {
+  const out: SystemRoutineSaved = await put('/v2/system-routines/' + encodeURIComponent(key), {on});
   if (AU !== state || !state.heart || !out?.job) return;
   state.heart = {...state.heart, steps: state.heart.steps.map(s => s.key === key ? {...s, ...out.job} : s)};
 });
 
 // -------------------------------------------------------------------------------------------- events
-function auHeartClick(t) {
+function auHeartClick(t: Element): boolean {
   if (AU.id !== AU_HEART) return false;
   if (t.closest('a[href]')) return false;   // the tabs are links
-  const beat = t.closest('tr[data-hb-beat]');
+  const beat = t.closest<HTMLElement>('tr[data-hb-beat]');
   if (beat) {
-    const r = AU.hbLog, id = beat.dataset.hbBeat;
+    const r = AU.hbLog, id = String(beat.dataset.hbBeat);   // C: the selector guarantees the attribute
     if (r) { if (r.open.has(id)) r.open.delete(id); else r.open.add(id); auDrawPane(); }
     return true;
   }
   if (t.closest('[data-hb-more]')) { void auHeartMore(AU); return true; }
   return false;
 }
-function auHeartChange(e) {
-  const t = e.target;
-  if (!AU || AU.id !== AU_HEART || !t.closest?.('.au-hd,.au-pane')) return;
+function auHeartChange(e: Event): void {
+  const t = eventElement(e);
+  if (!AU || AU.id !== AU_HEART || !t?.closest?.('.au-hd,.au-pane')) return;
   if (AU.hbBusy) { auDrawHead(); auDrawPane(); return; }
+  if (!(t instanceof HTMLInputElement || t instanceof HTMLSelectElement)) return;   // G: a change on another element threw on .dataset
   const d = t.dataset;
   if ('hbInterval' in d) void auHeartInterval(Number(t.value));
-  else if (d.hbOn) void auHeartSwitch(d.hbOn, t.checked);
+  else if (d.hbOn && t instanceof HTMLInputElement) void auHeartSwitch(d.hbOn, t.checked);   // N: data-hb-on is only on a switch input
 }

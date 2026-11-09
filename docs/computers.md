@@ -41,8 +41,9 @@ session of that tool there starts fresh. When tasks are running, Tico asks first
 subscription does the same on each computer that had it. A computer on an older Tico says **Needs update** instead of a
 picker until it updates.
 
-Each row shows how many computers use it and its usage: the share of the 5-hour or weekly window used, or an API key's
-cost this month. **Reconnect** means the saved login stopped working; connect again or paste a new one from the row's menu. A new value
+Each row shows how many computers use it and its usage: the share of the 5-hour or weekly window used and the time until
+that window resets (such as `4d 15h`), or an API key's cost this month. Hover the usage to see the share left and the
+reset time. **Reconnect** means the saved login stopped working; connect again or paste a new one from the row's menu. A new value
 restarts the running tasks on each computer that has the subscription, as a switch does, so no run goes on with the
 old one. The page asks first and says how many.
 
@@ -98,10 +99,12 @@ with **waiting: computer not reporting**, because a computer that stops reportin
 never reported is not held. The server also ends a run that has gone silent (no heartbeat or event for 5 minutes)
 once it is past its bot's max_run_minutes plus 5 minutes, without waiting for the computer.
 This includes turns with a reservation that have not started yet. Running turns continue. New starts resume when
-the hold clears. A person's own message to a bot (a chat, a message in its task) passes CPU overload and stale
-reports, ahead of the waiting turns, when the computer has a free turn. On Linux computers (including cloud machines
-and Docker), memory pressure also holds a person's messages. On Macs and computers whose platform is unknown,
-a person's messages pass the server's memory hold too.
+the hold clears. A person's own message to a bot passes CPU overload and stale reports, ahead of the waiting turns, when
+the computer has a free turn. That covers a chat, a message in its task, a reply to a question the bot asked, and a
+person's message in a thread that wakes the bot, such as an @mention. Tico's routine notices, sweeps and rule wake-ups
+wait, and so do messages between bots. On Linux computers (including cloud machines and Docker), memory pressure also
+holds a person's messages. On Macs and computers whose platform is unknown, a person's messages pass the server's memory
+hold too.
 
 The Linux runner also checks current memory before starting a harness or preparing its thread, including when a
 fallback is the first harness for the turn. Its local hold uses the same 85% and 80% thresholds, even with diagnostics
