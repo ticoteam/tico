@@ -1290,7 +1290,7 @@ async function thvComposerTask(view: ThvView, text: string) {
     thvComposerClear(view); thvChips(view);
     toast(`Task for ${empName(slug)} created`);
     await v2Refresh();
-    if (BOT?.slug === slug) void loadBotTasksV2(slug);
+    if (slug !== null && BOT?.slug === slug) void loadBotTasksV2(slug);
   } catch (e) { toast(errorMessage(e, ''), true); }
 }
 // /new in a DM: the DM is archived and the next message starts a fresh one, as the old chat's New chat did.

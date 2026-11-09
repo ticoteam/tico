@@ -31,15 +31,10 @@ interface BotPillState {
   slug: string;
 }
 
-// A need's own text or time, as the page reads it: a string or nothing (the rows carry more fields than NeedsItem names).
-function needString(it: NeedsItem, key: string): string | null {
-  const value = it[key];
-  return typeof value === 'string' ? value : null;
-}
-// The person or bot a need's ask is put to (`ask.recipient_id`), or null.
-function needAskRecipient(it: NeedsItem): string | null {
-  const ask = it.ask;
-  return typeof ask === 'object' && ask !== null && 'recipient_id' in ask && typeof ask.recipient_id === 'string' ? ask.recipient_id : null;
+// The text a need row shows (the rows carry these fields beside what NeedsItem names).
+interface NeedsItem {
+  first_line?: string;
+  title?: string;
 }
 
 // ---- tasks on a keeper bot's page: hub.db instead of Issues ----
@@ -73,10 +68,8 @@ function v2TaskRow(t: TaskRow, slug?: string | null, showStatus = true, below = 
   const ownerIsMe = actorPerson(t.owner_id) === S.me?.id, mineOpen = t.status === 'open' && ownerIsMe;
   const statusShown = !slug || !(mineOpen || taskStatusLabel(t) === 'Doing');
   const holderShown = !slug || !(actorSlug(t.owner_id) === slug || ownerIsMe);
-  const pillClass: Record<string, string> = V2_PILL;
-  const holdWord: Record<string, string> = {open: !actorPerson(t.owner_id) ? 'Doing · starting' : ownerIsMe ? 'Needs you' : 'To do', waiting: taskBlockedHold(t) ? 'Blocked' : 'Waiting', doing: 'Doing'};
   return `<div class="trow${showStatus ? '' : ' status-in-heading'}" data-task-detail="${esc(t.id)}" data-task-version="${esc(t.version || '')}"${card ? ` data-need-card="${esc(card)}"` : ''}><div class="trow-head">
-      ${showStatus ? `<span class="pill ${pillClass[t.status] ?? ''}">${esc(holdWord[t.status] || t.status || '')}</span>${statusShown ? taskStatusText(t) : ''}` : ''}
+      ${showStatus ? `<span class="pill ${(V2_PILL as Record<string, string | undefined>)[t.status] ?? ''}">${esc(({open: !actorPerson(t.owner_id) ? 'Doing · starting' : ownerIsMe ? 'Needs you' : 'To do', waiting: taskBlockedHold(t) ? 'Blocked' : 'Waiting', doing: 'Doing'} as Record<string, string | undefined>)[t.status] || t.status || '')}</span>${statusShown ? taskStatusText(t) : ''}` : ''}
       <a class="ttl" data-task-detail-open href="#/task/${encodeURIComponent(t.id)}" title="${esc(`${t.title || ''} · ${taskStateLabel(t)} · ${age}`)}">${esc(t.title || '')}</a>${prStateBadge(t.pr_state)}
       <span class="tags">${actorChip(other)}</span>${holderShown ? actorAvatarOnly(t.owner_id) : ''}
       <span class="muted tnum" title="${esc(taskAgeTitle(t))}">${esc(age)}</span></div>${below ? `<div class="trow-waits muted">${esc(below)}</div>` : ''}</div>`;
@@ -157,7 +150,7 @@ function botTaskTabDefaults(tab: BotSidebarTab): BotSidebarTab {
   return rows && !Array.isArray(tab.conditions) ? {...tab, conditions: JSON.parse(JSON.stringify(rows))} : tab;
 }
 // The tab a person picked on each bot's page, for this visit; until they pick, Needs you leads while it has rows.
-const BOT_TASK_TAB = new Map<string, string>();
+const BOT_TASK_TAB = new Map<string, string | undefined>();
 // The bot's tabs in order, each with its key: a built-in's own, or c0, c1… for its filters by place. They come from
 // the bot's sidebar layout (ui/app/bot-sidebar.ts); while it edits, from the draft.
 function botTaskTabList(slug: string): BotTaskTabEntry[] {
@@ -171,7 +164,7 @@ function botTaskTabs(slug: string): [string | undefined, string | undefined, str
 // A tab's count; a tab the bot does not show has none to set.
 function botTaskCount(id: string, n: number | undefined) {
   const el = document.getElementById(id);
-  if (el) el.textContent = String(['cnt-needs', 'cnt-active', 'cnt-blocked'].includes(id) ? n : n || '');
+  if (el) el.textContent = String(['cnt-needs', 'cnt-active', 'cnt-blocked'].includes(id) ? n ?? '' : n || '');
 }
 // A tab whose count is off keeps it in the page, unseen, so a redraw has one place to write it.
 function botTaskTabsBarHTML(slug: string): string {
@@ -194,18 +187,18 @@ function botTaskTabsPaint(slug: string) {
   else botTaskTabShow(slug, botTaskTabFirst(slug, needsMeCount(slug)));
 }
 // Until a person picks: Needs you while it has rows, else Doing, else the first tab there is.
-function botTaskTabFirst(slug: string, needed: number): string {
+function botTaskTabFirst(slug: string, needed: number): string | undefined {
   const keys = botTaskTabList(slug).map(tab => tab.key), picked = BOT_TASK_TAB.get(slug);
   if (picked !== undefined && keys.includes(picked)) return picked;
-  return (needed && keys.includes('needs') && 'needs') || (keys.includes('active') && 'active') || (keys[0] ?? '');
+  return (needed && keys.includes('needs') && 'needs') || (keys.includes('active') && 'active') || keys[0];
 }
 // A redraw (the 30 s refresh, a live event) only re-applies the tab; a person's pick also brings the tab into view, sideways
 // within the tab bar, so neither moves the rail away from what someone is reading. A key the bot has no tab for shows
 // its first. One tab is one list: no tab bar over it, except while editing.
-function botTaskTabShow(slug: string, key: string, picked = false) {
+function botTaskTabShow(slug: string, key: string | undefined, picked = false) {
   const rail = $('#pane-tasks'), keys = botTaskTabs(slug).map(([k]) => k);
   if (!rail || BOT?.slug !== slug || !keys.length) return;
-  if (!keys.includes(key)) key = keys[0] ?? '';
+  if (!keys.includes(key)) key = keys[0];
   const bar = rail.querySelector('.bot-task-tabs');
   if (bar) bar.hidden = keys.length < 2 && BOT_EDIT?.slug !== slug;
   for (const k of new Set([...BOT_TASK_TABS.map(([k]) => k), ...keys])) {
@@ -234,7 +227,7 @@ function botTaskTabKey(slug: string, ev: KeyboardEvent) {
   const to = moves[ev.key];
   if (to === undefined) return;
   ev.preventDefault();
-  const key = keys[(to + keys.length) % keys.length] ?? '';
+  const key = keys[(to + keys.length) % keys.length];
   BOT_TASK_TAB.set(slug, key);
   botTaskTabShow(slug, key, true);
   $('#bot-tab-t-' + key)?.focus({preventScroll: true});
@@ -347,16 +340,16 @@ function botTaskWaitsOn(t: TaskRow): string {
 }
 // Questions and approvals remain in Needs you even when its task filter is changed.
 function botNeedsExtras(slug: string): NeedsItem[] {
-  return botNeeds(slug).filter(it => ['question', 'approval'].includes(it.kind) || needAskRecipient(it) === myActor());
+  return botNeeds(slug).filter(it => ['question', 'approval'].includes(it.kind) || it.ask?.recipient_id === myActor());
 }
 // An approval or a question asked outside any task, one line in the rail: a tap opens its card (decide.js).
 function botNeedRow(it: NeedsItem): string {
-  const from = it.requester_id || '', title = approvalTitle(it) || needString(it, 'first_line') || needString(it, 'title') || '';
+  const from = it.requester_id || '', title = approvalTitle(it) || it.first_line || it.title || '';
   return `<div class="trow" data-need-card="${esc(decideItemKey(it))}"><div class="trow-head">
       <span class="pill needs">${it.kind === 'approval' ? 'Approval' : 'Question'}</span>
       <a class="ttl" href="${esc(NEEDS_YOU)}" aria-haspopup="dialog" title="${esc(plainActors(title))}">${esc(plainActors(title))}</a>
       <span class="tags">${actorChip(from)}</span>
-      <span class="muted tnum" title="${esc(fmt(needString(it, 'created_at')))}">${esc(ageShort(needString(it, 'created_at')))}</span></div></div>`;
+      <span class="muted tnum" title="${esc(fmt(it.created_at))}">${esc(ageShort(it.created_at))}</span></div></div>`;
 }
 // Keep questions, approvals and matching tasks once each; one answered on a card leaves at once.
 function botNeedsPaint(slug: string): Set<string> {
@@ -414,7 +407,11 @@ function botTasksRender(slug: string, owned: {tasks: TaskRow[]}) {
 function botTaskList(host: Element, rows: string[], empty: string, tail = '') {
   if (!rows.length) return void patchHTML(host, empty);
   let list = host.querySelector<HTMLElement>(':scope > .bot-task-list');
-  if (!list) { patchHTML(host, '<div class="bot-task-list"></div>'); list = host.querySelector<HTMLElement>(':scope > .bot-task-list'); }
+  if (!list) {
+    patchHTML(host, '<div class="bot-task-list"></div>');
+    const first = host.firstElementChild;
+    list = first instanceof HTMLElement ? first : null;
+  }
   if (!list) return;
   patchHTML(list, rows.join(''));
   const end = host.querySelector<HTMLElement>(':scope > .bot-task-tail');
