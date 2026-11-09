@@ -1,0 +1,16 @@
+﻿2026-11-07T17:52:39.1419838Z Current runner version: '2.338.2'
+2026-11-07T17:52:39.1446042Z ##[group]Runner Image Provisioner
+2026-11-07T17:52:39.1447028Z Hosted Compute Agent
+2026-11-07T18:01:54.1420902Z E           AssertionError: Affiliate Marketing Manager
+2026-11-07T18:01:54.1427361Z E           assert {'template': 'affiliates', 'name': 'Affiliates Owner', 'department': 'marketing', 'icon': 'link', ...} is None
+2026-11-07T18:01:54.1441207Z E            +  where {'template': 'affiliates', 'name': 'Affiliates Owner', 'department': 'marketing', 'icon': 'link', ...} = <function _best_card at 0x7fa653f7eb90>([{'template': 'account-manager', 'name': 'Account Manager', 'department': 'sales', 'icon': 'manage_accounts', ...}, {'... {'template': 'benefits', 'name': 'Benefits Administrator', 'department': 'hr', 'icon': 'health_and_safety', ...}, ...], 'Affiliate Marketing Manager')
+2026-11-07T18:01:54.1448363Z E            +    where <function _best_card at 0x7fa653f7eb90> = recruiting._best_card
+2026-11-07T18:01:54.1448837Z 
+2026-11-07T18:01:54.1454450Z backend/tests/test_recruiting.py:276: AssertionError
+2026-11-07T18:01:54.1459115Z =========================== short test summary info ============================
+2026-11-07T18:01:54.1474754Z FAILED backend/tests/test_recruiting.py::test_marketing_and_engineering_titles_draft_from_the_template_that_is_the_job_by_any_of_its_names - AssertionError: Affiliate Marketing Manager
+2026-11-07T18:01:54.1479343Z assert {'template': 'affiliates', 'name': 'Affiliates Owner', 'department': 'marketing', 'icon': 'link', ...} is None
+2026-11-07T18:01:54.1484142Z  +  where {'template': 'affiliates', 'name': 'Affiliates Owner', 'department': 'marketing', 'icon': 'link', ...} = <function _best_card at 0x7fa653f7eb90>([{'template': 'account-manager', 'name': 'Account Manager', 'department': 'sales', 'icon': 'manage_accounts', ...}, {'... {'template': 'benefits', 'name': 'Benefits Administrator', 'department': 'hr', 'icon': 'health_and_safety', ...}, ...], 'Affiliate Marketing Manager')
+2026-11-07T18:01:54.1490213Z  +    where <function _best_card at 0x7fa653f7eb90> = recruiting._best_card
+2026-11-07T18:01:54.1492829Z 1 failed, 836 passed in 433.94s (0:07:13)
+2026-11-07T18:01:55.1892181Z ##[error]Process completed with exit code 1.

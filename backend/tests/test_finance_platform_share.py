@@ -17,6 +17,7 @@ from backend.finance import platform_share as PS
 from backend.finance.context import load
 from backend.finance.core.org import SYSTEM
 from backend.finance.store import ads as SA
+from backend.finance.store import ap as SAP
 from backend.finance.store import attribution as ATT
 from backend.store import Store
 from backend.tests.test_finance_ad_spend import http, meta
@@ -264,7 +265,7 @@ def test_a_mirrored_book_follows_the_split_and_its_outbox_stays_untouched(books:
     put(books, g["b"], [("2026-10-06", 40_000)], "2026-10-01", "2026-10-15")
     with books.transaction() as c:
         spend(c, "6300", 100_000, day="2026-10-12", vendor=g["vendor"])
-        c.execute("UPDATE fin_contacts SET name='Google' WHERE id=?", (g["vendor"],))
+        SAP.update(c, "fin_contacts", g["vendor"], {"name": "Google"})
         c.execute("UPDATE fin_books SET mode='mirror'")
     put(books, g["a"], [("2026-10-05", 30_000)], "2026-10-01", "2026-10-15")
     put(books, g["b"], [("2026-10-06", 70_000)], "2026-10-01", "2026-10-15")

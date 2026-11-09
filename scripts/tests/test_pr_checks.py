@@ -8,6 +8,7 @@ import re
 import subprocess
 import sys
 from types import SimpleNamespace
+import weakref
 
 import pytest
 import yaml
@@ -505,6 +506,27 @@ def test_hub_change_selects_every_test_that_imports_it_transitively_and_no_other
     loops = checks.selection(["backend/task_loops.py"])
     assert "backend/tests/test_scheduler.py" in loops["python"] and not loops["caddy"]
     assert checks.selection(["backend/caddy_assets.py"])["caddy"]
+
+
+def test_the_map_holds_one_syntax_tree_at_a_time(tmp_path, monkeypatch):
+    # Every tree held at once peaked near 2.3 GB on this checkout, which the allocator keeps: four workers that each
+    # built the map ran a merge queue VM out of memory. Each tree is let go before the next file is parsed.
+    for n in range(3):
+        source(tmp_path, f"m{n}.py", "import os\nVALUE = 1\n")
+    source(tmp_path, "broken.py", "syntax error !\n")
+    parse, trees, held = checks.ast.parse, [], []
+
+    def tracked(*args, **kwargs):
+        held.append(sum(tree() is not None for tree in trees))  # trees still alive when the next parse starts
+        tree = parse(*args, **kwargs)
+        trees.append(weakref.ref(tree))
+        return tree
+
+    monkeypatch.setattr(checks.ast, "parse", tracked)
+    graph = checks.DependencyMap(tmp_path)
+    monkeypatch.undo()  # pytest parses source itself to report a failure
+    assert max(held) <= 1, held  # at most the one the caller is about to replace
+    assert len(trees) == 6 and graph.unparsed == {"broken.py"}  # each readable file twice: imports, then the scans
 
 
 def test_docs_changelog_and_workflow_edits_run_the_tests_that_read_them_not_the_suite(tmp_path, mapped):
@@ -1672,7 +1694,7 @@ def test_a_queue_group_packs_toward_six_test_jobs_of_up_to_twelve_minutes():
     assert sized["target"] == checks.JOB_SECONDS and len(sized["split"]) == 1
 
 
-def test_queue_jobs_start_only_for_a_change_to_their_folders_and_all_start_for_an_unreadable_diff():
+def test_queue_jobs_start_only_for_a_change_to_their_folders_and_all_start_for_an_unreadable_diff(mapped):
     assert checks.queue_jobs(["backend/task_loops.py", "ui/app/chat.ts"]) == dict.fromkeys(
         checks.QUEUE_JOB_PATHS, False
     )
