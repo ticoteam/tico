@@ -15,12 +15,13 @@ What it makes:
 - the incoming trigger the webhook routine listens for; its secret is kept to post to the old address after the cutover
 - custom wake rules: two on Builder (Claude) (wake, note), one on Builder (OpenAI) (batch)
 - each bot's profile, as the release before's start set it (the Librarian's Custom rows join the wake rules)
-- a task rule; the system jobs' controls (Stale ticket review off and hourly; Still wanted? daily at 10:00)
+- a task rule; the system jobs' controls (Stale ticket review off and hourly)
 - two inboxes, Dana's and Priya's, each read by its own Inbox Manager bot (the roster's inbox_bot and mailbox)
 - listening destinations: market (the Librarian) and leads (the Engineering Lead)
 - hourly spend limits 3.00, 5.00 and 0.25; team turn budgets below the guard (120 an hour, 1,000 a day) and one bot
   above it (600 an hour)
 - a goal; and the CEO Bot (named so), the Health Monitor and the Librarian as org bots (FIXTURE_BOTS)"""
+
 import json
 
 from ..harness import CLAUDE_ID, DANA_ID, LEAD_ID, OPENAI_ID, PRIYA_ID, RELEASE_ID, W5, Unmet
@@ -31,22 +32,56 @@ STRATEGY, LIBRARIAN, HEALTH = "goal-manager", "librarian", "health-monitor"
 # The name an install before this release stored for the Strategy Bot; the migration renames it to "Strategy Bot".
 OLD_NAME = "CEO Bot"
 INBOX_DANA, INBOX_PRIYA = "inbox-manager-dana", "inbox-manager-priya"
-FIXTURE_BOTS = {STRATEGY: ("strategy", "claude"), LIBRARIAN: ("librarian", "claude"), HEALTH: ("health", "claude"),
-                INBOX_DANA: ("inbox", "claude"), INBOX_PRIYA: ("inbox", "claude")}
+FIXTURE_BOTS = {
+    STRATEGY: ("strategy", "claude"),
+    LIBRARIAN: ("librarian", "claude"),
+    HEALTH: ("health", "claude"),
+    INBOX_DANA: ("inbox", "claude"),
+    INBOX_PRIYA: ("inbox", "claude"),
+}
 
 HOOK_ID = "deploy-failed"
 # name -> (bot, the routine as the old `schedules` row held it: title, text, cron + timezone or an event)
 ROUTINES = {
-    "standup": (CLAUDE_ID, {"title": "Morning standup notes", "text": "Post yesterday's work and today's plan.",
-                            "cron": "0 9 * * *", "timezone": "Europe/London"}),
-    "pr_sweep": (OPENAI_ID, {"title": "Open PR sweep", "text": "Nudge every pull request that has waited a day.",
-                             "cron": "30 * * * *", "timezone": "UTC"}),
-    "release_notes": (RELEASE_ID, {"title": "Release notes", "text": "Write the notes for the new release.",
-                                   "on": "release_published"}),
-    "deploy_triage": (LEAD_ID, {"title": "Deploy failure triage", "text": "Find why the deploy failed and file a fix.",
-                                "on": "webhook." + HOOK_ID}),
-    "briefing": (LIBRARIAN, {"title": "Market briefing", "text": "Write today's market briefing from the graph.",
-                             "cron": "0 7 * * 1-5", "timezone": "America/Los_Angeles"}),
+    "standup": (
+        CLAUDE_ID,
+        {
+            "title": "Morning standup notes",
+            "text": "Post yesterday's work and today's plan.",
+            "cron": "0 9 * * *",
+            "timezone": "Europe/London",
+        },
+    ),
+    "pr_sweep": (
+        OPENAI_ID,
+        {
+            "title": "Open PR sweep",
+            "text": "Nudge every pull request that has waited a day.",
+            "cron": "30 * * * *",
+            "timezone": "UTC",
+        },
+    ),
+    "release_notes": (
+        RELEASE_ID,
+        {"title": "Release notes", "text": "Write the notes for the new release.", "on": "release_published"},
+    ),
+    "deploy_triage": (
+        LEAD_ID,
+        {
+            "title": "Deploy failure triage",
+            "text": "Find why the deploy failed and file a fix.",
+            "on": "webhook." + HOOK_ID,
+        },
+    ),
+    "briefing": (
+        LIBRARIAN,
+        {
+            "title": "Market briefing",
+            "text": "Write today's market briefing from the graph.",
+            "cron": "0 7 * * 1-5",
+            "timezone": "America/Los_Angeles",
+        },
+    ),
 }
 CRON = ("standup", "pr_sweep", "briefing")
 # name -> (bot, event, outcome): custom rows in the rules table, each a bot-scope wake rule (backend/rules.py)
@@ -55,19 +90,25 @@ WAKE_RULES = {
     "claude_step": (CLAUDE_ID, "step_entered", "note"),
     "openai_comment": (OPENAI_ID, "comment", "batch"),
 }
-TASK_RULE = {"name": "Close 48h after done", "department": "engineering",
-             "triggers": [{"key": "done_untouched", "hours": 48}], "actions": ["close"], "preset": "hourly"}
-SYSTEM_JOBS = {"stale_review": {"on": False, "preset": "hourly"},           # PLAN §8: keeps Off + hourly
-               "still_wanted": {"on": True, "preset": "daily", "migrated_at": "10:00"}}   # a control a built-in keeps
-BUILTIN_JOBS = ("assigned_tasks", "assignment_recovery")   # "Start assigned tasks", "Recover unstarted assignments"
+TASK_RULE = {
+    "name": "Close 48h after done",
+    "department": "engineering",
+    "triggers": [{"key": "done_untouched", "hours": 48}],
+    "actions": ["close"],
+    "preset": "hourly",
+}
+SYSTEM_JOBS = {"stale_review": {"on": False, "preset": "hourly"}}  # PLAN §8: keeps Off + hourly
+BUILTIN_JOBS = ("assigned_tasks", "assignment_recovery")  # "Start assigned tasks", "Recover unstarted assignments"
 # person -> (their Inbox Manager bot, the mailbox it reads)
 INBOXES = {DANA_ID: (INBOX_DANA, "dana@acme.example"), PRIYA_ID: (INBOX_PRIYA, "priya@acme.example")}
-DESTINATIONS = {"market": {"category": "market", "threshold": 0.6, "receiver": LIBRARIAN},
-                "leads": {"category": "lead", "threshold": 0.7, "receiver": LEAD_ID}}
+DESTINATIONS = {
+    "market": {"category": "market", "threshold": 0.6, "receiver": LIBRARIAN},
+    "leads": {"category": "lead", "threshold": 0.7, "receiver": LEAD_ID},
+}
 HOURLY = {OPENAI_ID: 3.00, CLAUDE_ID: 5.00, RELEASE_ID: 0.25}
 TEAM_BUDGET = {"turns_per_hour": 120, "turns_per_day": 1000}
-GUARD = {"turns_per_hour": 300, "turns_per_day": 2500}   # CONTRACT §1 run guard defaults
-BOT_BUDGET = (OPENAI_ID, {"turns_per_hour": 600})         # set above the guard: kept
+GUARD = {"turns_per_hour": 300, "turns_per_day": 2500}  # CONTRACT §1 run guard defaults
+BOT_BUDGET = (OPENAI_ID, {"turns_per_hour": 600})  # set above the guard: kept
 GOAL = {"title": "Ship the v2 billing page", "owner": LEAD_ID}
 
 
@@ -105,6 +146,7 @@ def old_rows(org):
     from backend import bot_settings, profiles, redesign_migration as M, turn_budgets as TB
     from backend.scheduler import next_due, stamp
     from backend.store import H
+
     now, made = org.now(), {}
     with org.store.transaction() as c:
         # The release before never ran the cutover: no record, nothing marked.
@@ -115,16 +157,22 @@ def old_rows(org):
         profiles.migrate(c)
         for name, (bot, r) in ROUTINES.items():
             due = stamp(next_due(r["cron"], now, r["timezone"])) if "cron" in r else None
-            c.execute("INSERT INTO schedules(id, bot, cron, event_name, title, playbook, next_due_at, updated_at) "
-                      "VALUES(?,?,?,?,?,?,?,?)", (routine_id(name), bot, r.get("cron"), r.get("on"), r["title"],
-                                                  r["text"], due, H.now()))
-            c.execute("INSERT INTO schedule_config(schedule_id, timezone, enabled) VALUES(?,?,1)",
-                      (routine_id(name), r.get("timezone", "UTC")))
+            c.execute(
+                "INSERT INTO schedules(id, bot, cron, event_name, title, playbook, next_due_at, updated_at) "
+                "VALUES(?,?,?,?,?,?,?,?)",
+                (routine_id(name), bot, r.get("cron"), r.get("on"), r["title"], r["text"], due, H.now()),
+            )
+            c.execute(
+                "INSERT INTO schedule_config(schedule_id, timezone, enabled) VALUES(?,?,1)",
+                (routine_id(name), r.get("timezone", "UTC")),
+            )
             made[name] = due
         for n, (name, (bot, event, outcome)) in enumerate(WAKE_RULES.items()):
-            c.execute("INSERT INTO rules(id, scope_kind, scope_id, event, then_outcome, position, created_by, created_at, "
-                      "updated_at) VALUES(?,?,?,?,?,?,?,?,?)", (rule_id(name), "bot", bot, event, outcome, n,
-                                                             "human:" + DANA_ID, H.now(), H.now()))
+            c.execute(
+                "INSERT INTO rules(id, scope_kind, scope_id, event, then_outcome, position, created_by, created_at, "
+                "updated_at) VALUES(?,?,?,?,?,?,?,?,?)",
+                (rule_id(name), "bot", bot, event, outcome, n, "human:" + DANA_ID, H.now(), H.now()),
+            )
         for bot, usd in HOURLY.items():
             usage_limits.save_own(c, bot, {**usage_limits.own(c, bot), "hourly_usd": usd}, None)
         c.execute("INSERT OR REPLACE INTO registry_metadata VALUES(?,?)", (TB.TEAM_KEY, json.dumps(TEAM_BUDGET)))
@@ -153,19 +201,24 @@ def install_fixture(org, facts):
     if url:
         secret = url.rstrip("/").rsplit("/", 1)[-1]
     old = not isinstance(facts.get("fx:old"), Unmet)
-    ids = {"routines": {name: routine_id(name) if old else None for name in ROUTINES},
-           "due": facts["fx:old"]["due"] if old else {},
-           "rule_bots": facts["fx:old"]["rule_bots"] if old else [],   # every bot with wake rules of its own
-           "hook": {"id": _id(facts, "fx:trigger", "trigger", "id"), "secret": secret},
-           "rules": {name: rule_id(name) if old else None for name in WAKE_RULES},
-           "task_rule": _id(facts, "fx:task_rule", "job", "key"),
-           "jobs": [job for job in SYSTEM_JOBS if _id(facts, "fx:job:" + job, "job", "key")],
-           "inboxes": {person: {"bot": bot, "mailbox": mailbox} for person, (bot, mailbox) in INBOXES.items()
-                       if _id(facts, "fx:inbox:" + person, "person")},
-           "destinations": [key for key in DESTINATIONS if _id(facts, "fx:destination:" + key, "destination", "key")],
-           "limits": dict(HOURLY) if old else {},
-           "goal": _id(facts, "fx:goal", "goal", "id"),
-           "bots": {"strategy": STRATEGY, "librarian": LIBRARIAN, "health": HEALTH}}
+    ids = {
+        "routines": {name: routine_id(name) if old else None for name in ROUTINES},
+        "due": facts["fx:old"]["due"] if old else {},
+        "rule_bots": facts["fx:old"]["rule_bots"] if old else [],  # every bot with wake rules of its own
+        "hook": {"id": _id(facts, "fx:trigger", "trigger", "id"), "secret": secret},
+        "rules": {name: rule_id(name) if old else None for name in WAKE_RULES},
+        "task_rule": _id(facts, "fx:task_rule", "job", "key"),
+        "jobs": [job for job in SYSTEM_JOBS if _id(facts, "fx:job:" + job, "job", "key")],
+        "inboxes": {
+            person: {"bot": bot, "mailbox": mailbox}
+            for person, (bot, mailbox) in INBOXES.items()
+            if _id(facts, "fx:inbox:" + person, "person")
+        },
+        "destinations": [key for key in DESTINATIONS if _id(facts, "fx:destination:" + key, "destination", "key")],
+        "limits": dict(HOURLY) if old else {},
+        "goal": _id(facts, "fx:goal", "goal", "id"),
+        "bots": {"strategy": STRATEGY, "librarian": LIBRARIAN, "health": HEALTH},
+    }
     facts["fixture"] = ids
     return ids
 
@@ -173,6 +226,7 @@ def install_fixture(org, facts):
 def upgrade(org):
     """This release's first start on the install, as Store.initialize runs it: the cutover (with no record yet)."""
     from backend import redesign_migration as M
+
     with org.store.transaction() as c:
         c.execute("DELETE FROM registry_metadata WHERE key=?", (M.CUTOVER,))
     return M.cutover(org.store)
@@ -181,11 +235,12 @@ def upgrade(org):
 def report(org):
     """backend/redesign_migration.py `report`: the cutover's record, counts and inventory, as the CLI prints it."""
     from backend import redesign_migration as M
+
     with org.store.read() as c:
         return M.report(c)
 
 
-OLD_ROWS = ("routine", "rule", "limit", "budget")   # written by one SQL step, fx:old
+OLD_ROWS = ("routine", "rule", "limit", "budget")  # written by one SQL step, fx:old
 
 
 def installed(facts, *names):

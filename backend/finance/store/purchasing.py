@@ -2,6 +2,7 @@
 lines bill against an order line, and the one-time link from an estimate to its invoice. Callers check rights, views
 and states; this module writes rows and reads sums. A stored status is what was done to a document. The status a
 reader sees can be derived: an approved order billed in part is partial, and an estimate with an invoice is invoiced."""
+
 import json
 import sqlite3
 from collections.abc import Mapping, Sequence
@@ -17,17 +18,21 @@ HEAD = {"po": "fin_purchase_orders", "estimate": "fin_estimates"}
 DATED = {"po": "po_date", "estimate": "estimate_date"}
 # What the bills on an order's lines have billed: the lines of every bill but a void one, and what a bill keeps billed
 # on a line its provider lines no longer name (fin_bill_retained).
-_BILLED_ON = ("SELECT COALESCE(SUM(x.amount), 0) FROM ("
-              "SELECT bl.amount AS amount FROM fin_bill_lines bl JOIN fin_bills b ON b.id=bl.bill_id "
-              "JOIN fin_po_lines l ON l.id=bl.po_line_id WHERE l.po_id={po} AND b.status!='void' "
-              "UNION ALL "
-              "SELECT r.amount AS amount FROM fin_bill_retained r JOIN fin_bills b ON b.id=r.bill_id "
-              "JOIN fin_po_lines l ON l.id=r.po_line_id WHERE l.po_id={po} AND b.status!='void') x")
+_BILLED_ON = (
+    "SELECT COALESCE(SUM(x.amount), 0) FROM ("
+    "SELECT bl.amount AS amount FROM fin_bill_lines bl JOIN fin_bills b ON b.id=bl.bill_id "
+    "JOIN fin_po_lines l ON l.id=bl.po_line_id WHERE l.po_id={po} AND b.status!='void' "
+    "UNION ALL "
+    "SELECT r.amount AS amount FROM fin_bill_retained r JOIN fin_bills b ON b.id=r.bill_id "
+    "JOIN fin_po_lines l ON l.id=r.po_line_id WHERE l.po_id={po} AND b.status!='void') x"
+)
 # What one order line has been billed: the same two sums, on the line.
-_BILLED_LINE = ("SELECT COALESCE((SELECT SUM(bl.amount) FROM fin_bill_lines bl JOIN fin_bills b ON b.id=bl.bill_id "
-                "WHERE bl.po_line_id=? AND b.status!='void'), 0) + COALESCE((SELECT SUM(r.amount) "
-                "FROM fin_bill_retained r JOIN fin_bills b ON b.id=r.bill_id WHERE r.po_line_id=? "
-                "AND b.status!='void'), 0)")
+_BILLED_LINE = (
+    "SELECT COALESCE((SELECT SUM(bl.amount) FROM fin_bill_lines bl JOIN fin_bills b ON b.id=bl.bill_id "
+    "WHERE bl.po_line_id=? AND b.status!='void'), 0) + COALESCE((SELECT SUM(r.amount) "
+    "FROM fin_bill_retained r JOIN fin_bills b ON b.id=r.bill_id WHERE r.po_line_id=? "
+    "AND b.status!='void'), 0)"
+)
 
 
 def insert(c: sqlite3.Connection, table: str, row: Mapping[str, object]) -> str:
@@ -39,8 +44,14 @@ def insert(c: sqlite3.Connection, table: str, row: Mapping[str, object]) -> str:
     return str(values["id"])
 
 
-def update(c: sqlite3.Connection, table: str, row_id: str, fields: Mapping[str, object], where: str = "",
-           args: Sequence[object] = ()) -> int:
+def update(
+    c: sqlite3.Connection,
+    table: str,
+    row_id: str,
+    fields: Mapping[str, object],
+    where: str = "",
+    args: Sequence[object] = (),
+) -> int:
     """Set `fields` on one row, only when `where` also holds. How many rows changed."""
     assert table in TABLES
     if not fields:
@@ -84,8 +95,11 @@ def number_taken(c: sqlite3.Connection, table: str, book_id: str, number: str) -
 
 def po_line(c: sqlite3.Connection, po_line_id: str) -> Any:
     """An order line with its order's book, vendor and status."""
-    return c.execute("SELECT l.*, p.book_id, p.vendor_id, p.status FROM fin_po_lines l "
-                     "JOIN fin_purchase_orders p ON p.id=l.po_id WHERE l.id=?", (po_line_id,)).fetchone()
+    return c.execute(
+        "SELECT l.*, p.book_id, p.vendor_id, p.status FROM fin_po_lines l "
+        "JOIN fin_purchase_orders p ON p.id=l.po_id WHERE l.id=?",
+        (po_line_id,),
+    ).fetchone()
 
 
 def billed(c: sqlite3.Connection, po_line_id: str) -> int:
@@ -96,8 +110,10 @@ def billed(c: sqlite3.Connection, po_line_id: str) -> int:
 
 def bill_retained(c: sqlite3.Connection, bill_id: str) -> dict[str, int]:
     """What a bill keeps billed on the order lines its provider lines no longer name, by order line."""
-    return {str(r[0]): int(r[1]) for r in c.execute(
-        "SELECT po_line_id, amount FROM fin_bill_retained WHERE bill_id=?", (bill_id,))}
+    return {
+        str(r[0]): int(r[1])
+        for r in c.execute("SELECT po_line_id, amount FROM fin_bill_retained WHERE bill_id=?", (bill_id,))
+    }
 
 
 def set_bill_retained(c: sqlite3.Connection, bill_id: str, amounts: Mapping[str, int]) -> None:
@@ -105,20 +121,26 @@ def set_bill_retained(c: sqlite3.Connection, bill_id: str, amounts: Mapping[str,
     c.execute("DELETE FROM fin_bill_retained WHERE bill_id=?", (bill_id,))
     for po_line_id, amount in amounts.items():
         if amount > 0:
-            c.execute("INSERT INTO fin_bill_retained(bill_id, po_line_id, amount) VALUES(?, ?, ?)",
-                      (bill_id, po_line_id, amount))
+            c.execute(
+                "INSERT INTO fin_bill_retained(bill_id, po_line_id, amount) VALUES(?, ?, ?)",
+                (bill_id, po_line_id, amount),
+            )
 
 
 # A bill write held against an order line's room until it is refused outright or confirmed. Confirmed writes are in
 # billed(); a write refused outright (failed, not unknown) bills nothing.
-_HELD_WRITES = ("SELECT payload FROM fin_outbox WHERE op='bill.create' AND "
-                "NOT (status='sent' OR (status='failed' AND unknown=0)) AND instr(payload, ?) > 0")
+_HELD_WRITES = (
+    "SELECT payload FROM fin_outbox WHERE op='bill.create' AND "
+    "NOT (status='sent' OR (status='failed' AND unknown=0)) AND instr(payload, ?) > 0"
+)
 # The writes that may already have reached the books before a write is sent: an unknown answer, or a retry that is
 # sent again without a check. A write still waiting for its first try has taken no room, so of two that wait the one
 # sent first keeps it and the second is refused when its turn comes.
-_LANDED_WRITES = ("SELECT payload FROM fin_outbox WHERE op='bill.create' AND "
-                  "((status='failed' AND unknown=1) OR (status IN ('pending','withheld') AND attempts>0)) "
-                  "AND instr(payload, ?) > 0")
+_LANDED_WRITES = (
+    "SELECT payload FROM fin_outbox WHERE op='bill.create' AND "
+    "((status='failed' AND unknown=1) OR (status IN ('pending','withheld') AND attempts>0)) "
+    "AND instr(payload, ?) > 0"
+)
 
 
 def _billed_on(c: sqlite3.Connection, query: str, po_line_id: str) -> int:
@@ -162,17 +184,24 @@ def shown_estimate(status: str, invoice_id: object) -> str:
 
 def bill_orders(c: sqlite3.Connection, bill_id: str) -> list[str]:
     """The orders a bill bills a line of, in id order: its own lines, and the lines it keeps billed."""
-    return [str(r[0]) for r in c.execute(
-        "SELECT DISTINCT p.id FROM (SELECT bill_id, po_line_id FROM fin_bill_lines UNION "
-        "SELECT bill_id, po_line_id FROM fin_bill_retained) bl JOIN fin_po_lines l ON l.id=bl.po_line_id "
-        "JOIN fin_purchase_orders p ON p.id=l.po_id WHERE bl.bill_id=? ORDER BY p.id", (bill_id,))]
+    return [
+        str(r[0])
+        for r in c.execute(
+            "SELECT DISTINCT p.id FROM (SELECT bill_id, po_line_id FROM fin_bill_lines UNION "
+            "SELECT bill_id, po_line_id FROM fin_bill_retained) bl JOIN fin_po_lines l ON l.id=bl.po_line_id "
+            "JOIN fin_purchase_orders p ON p.id=l.po_id WHERE bl.bill_id=? ORDER BY p.id",
+            (bill_id,),
+        )
+    ]
 
 
 def claim_invoice(c: sqlite3.Connection, estimate_id: str, invoice_id: str, at: str) -> int:
     """Link an accepted estimate to the invoice made from it. Only an estimate not yet invoiced takes the link; its
     stored status stays accepted, and it shows as invoiced."""
-    return c.execute("UPDATE fin_estimates SET invoice_id=?, updated_at=? "
-                     "WHERE id=? AND status='accepted' AND invoice_id IS NULL", (invoice_id, at, estimate_id)).rowcount
+    return c.execute(
+        "UPDATE fin_estimates SET invoice_id=?, updated_at=? WHERE id=? AND status='accepted' AND invoice_id IS NULL",
+        (invoice_id, at, estimate_id),
+    ).rowcount
 
 
 def _billed_expr(kind: str) -> str:
@@ -194,14 +223,25 @@ def _status_clause(kind: str, status: str) -> tuple[str, list[object]]:
     return "d.status=? AND d.invoice_id IS NULL", [status]
 
 
-def listing(c: sqlite3.Connection, kind: str, *, book_id: str, status: str = "", contact_id: str = "", q: str = "",
-            before: tuple[str, str] | None = None, most: int = 200) -> list[sqlite3.Row]:
+def listing(
+    c: sqlite3.Connection,
+    kind: str,
+    *,
+    book_id: str,
+    status: str = "",
+    contact_id: str = "",
+    q: str = "",
+    before: tuple[str, str] | None = None,
+    most: int = 200,
+) -> list[sqlite3.Row]:
     """A book's orders or estimates, newest first by date (then id), with the contact's name and what each order has
     billed. A status (as shown), a contact, a search over number, memo and contact name, and a cursor (the date and id
     of the last row before) narrow them."""
     table, contact, dated = HEAD[kind], CONTACT[kind], DATED[kind]
-    sql = (f"SELECT d.*, k.name AS contact_name, {_billed_expr(kind)} AS billed FROM {table} d "
-           f"JOIN fin_contacts k ON k.id = d.{contact} WHERE d.book_id=?")
+    sql = (
+        f"SELECT d.*, k.name AS contact_name, {_billed_expr(kind)} AS billed FROM {table} d "
+        f"JOIN fin_contacts k ON k.id = d.{contact} WHERE d.book_id=?"
+    )
     args: list[object] = [book_id]
     if status:
         clause, extra = _status_clause(kind, status)
@@ -221,5 +261,8 @@ def listing(c: sqlite3.Connection, kind: str, *, book_id: str, status: str = "",
 
 def head(c: sqlite3.Connection, kind: str, doc_id: str) -> sqlite3.Row | None:
     """One order or estimate with its contact's name and what it has billed."""
-    return c.execute(f"SELECT d.*, k.name AS contact_name, {_billed_expr(kind)} AS billed FROM {HEAD[kind]} d "
-                     f"JOIN fin_contacts k ON k.id = d.{CONTACT[kind]} WHERE d.id=?", (doc_id,)).fetchone()
+    return c.execute(
+        f"SELECT d.*, k.name AS contact_name, {_billed_expr(kind)} AS billed FROM {HEAD[kind]} d "
+        f"JOIN fin_contacts k ON k.id = d.{CONTACT[kind]} WHERE d.id=?",
+        (doc_id,),
+    ).fetchone()

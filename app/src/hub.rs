@@ -3,10 +3,10 @@
 //! to the hub into each request, so the badge shares the signed-in Cloudflare Access session without
 //! persisting or exposing it elsewhere.
 
-use serde_json::Value;
 use reqwest::header::{HeaderMap, HeaderName, LOCATION, WWW_AUTHENTICATE};
 use reqwest::StatusCode;
 use reqwest_updater::header::HeaderValue;
+use serde_json::Value;
 use tauri::{AppHandle, Manager, Runtime};
 use url::Url;
 
@@ -30,15 +30,26 @@ enum Failure {
 /// Cloudflare Access answers a lapsed session itself, before the hub sees the request: a redirect to its login page
 /// on `<team>.cloudflareaccess.com`, or a 401 carrying `WWW-Authenticate: Cloudflare-Access`.
 pub(crate) fn access_signed_out(status: StatusCode, headers: &HeaderMap) -> bool {
-    let header = |name: HeaderName| headers.get(name).and_then(|v| v.to_str().ok()).unwrap_or("");
+    let header = |name: HeaderName| {
+        headers
+            .get(name)
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("")
+    };
     if status.is_redirection() {
-        return Url::parse(header(LOCATION)).ok().is_some_and(|to| is_access_login(&to));
+        return Url::parse(header(LOCATION))
+            .ok()
+            .is_some_and(|to| is_access_login(&to));
     }
-    status == StatusCode::UNAUTHORIZED && header(WWW_AUTHENTICATE).to_ascii_lowercase().contains("cloudflare-access")
+    status == StatusCode::UNAUTHORIZED
+        && header(WWW_AUTHENTICATE)
+            .to_ascii_lowercase()
+            .contains("cloudflare-access")
 }
 
 fn is_access_login(url: &Url) -> bool {
-    url.host_str().is_some_and(|host| host.ends_with(".cloudflareaccess.com"))
+    url.host_str()
+        .is_some_and(|host| host.ends_with(".cloudflareaccess.com"))
 }
 
 pub struct Client {
@@ -50,16 +61,28 @@ pub struct Client {
 
 impl Client {
     pub fn new(config: Config, label: String) -> Client {
-        Client { config, label, http: http_client() }
+        Client {
+            config,
+            label,
+            http: http_client(),
+        }
     }
 
-    pub(crate) async fn cookie_header<R: Runtime>(&self, app: &AppHandle<R>, url: &Url) -> Option<String> {
+    pub(crate) async fn cookie_header<R: Runtime>(
+        &self,
+        app: &AppHandle<R>,
+        url: &Url,
+    ) -> Option<String> {
         if self.config.is_local() || !same_origin(&self.config.hub, url) {
             return None;
         }
         let webview = app.get_webview(&self.label)?;
         let cookies = crate::cookies::for_url(&webview, url).await?;
-        let header = cookies.iter().map(|(name, value)| format!("{name}={value}")).collect::<Vec<_>>().join("; ");
+        let header = cookies
+            .iter()
+            .map(|(name, value)| format!("{name}={value}"))
+            .collect::<Vec<_>>()
+            .join("; ");
         (!header.is_empty()).then_some(header)
     }
 
@@ -72,18 +95,29 @@ impl Client {
         let mut status = HubStatus::default();
         match self.get(app, self.config.api("status")).await {
             Ok(st) => status.cloud = st.get("cloud").and_then(Value::as_bool).unwrap_or(false),
-            Err(Failure::SignedOut) => { status.signed_out = true; return status; }
+            Err(Failure::SignedOut) => {
+                status.signed_out = true;
+                return status;
+            }
             Err(Failure::Other) => {}
         }
         // The badge shows only the number: `count=1` answers with it instead of the full list
         // (over 100 KB every 30 s). An older hub ignores the query and sends the items.
-        let needs = if status.cloud { self.config.api("v2/needs-you?count=1") } else { self.config.api("issues?needs_human=1") };
+        let needs = if status.cloud {
+            self.config.api("v2/needs-you?count=1")
+        } else {
+            self.config.api("issues?needs_human=1")
+        };
         let needs = self.get(app, needs).await;
         status.signed_out = needs == Err(Failure::SignedOut);
         if let Ok(value) = needs {
             status.needs = if status.cloud {
-                value.get("count").and_then(Value::as_u64).map(|n| n as usize)
-                    .or_else(|| value.get("items").and_then(Value::as_array).map(Vec::len)).unwrap_or(0)
+                value
+                    .get("count")
+                    .and_then(Value::as_u64)
+                    .map(|n| n as usize)
+                    .or_else(|| value.get("items").and_then(Value::as_array).map(Vec::len))
+                    .unwrap_or(0)
             } else {
                 value.as_array().map(Vec::len).unwrap_or(0)
             };
@@ -110,7 +144,11 @@ fn http_client() -> reqwest::Client {
         .unwrap()
 }
 
-async fn read_json(http: &reqwest::Client, url: Url, cookie: Option<String>) -> Result<Value, Failure> {
+async fn read_json(
+    http: &reqwest::Client,
+    url: Url,
+    cookie: Option<String>,
+) -> Result<Value, Failure> {
     let mut request = http.get(url);
     if let Some(cookie) = cookie {
         request = request.header("Cookie", cookie);
@@ -129,16 +167,23 @@ pub(crate) fn same_origin(a: &Url, b: &Url) -> bool {
     a.scheme() == b.scheme()
         && a.host_str() == b.host_str()
         && a.port_or_known_default() == b.port_or_known_default()
-        && a.username().is_empty() && a.password().is_none()
-        && b.username().is_empty() && b.password().is_none()
+        && a.username().is_empty()
+        && a.password().is_none()
+        && b.username().is_empty()
+        && b.password().is_none()
 }
 
 pub(crate) fn company_cookie_header(hub: &Url, request: &Url, cookie: &str) -> Option<HeaderValue> {
-    if cookie.is_empty() || !same_origin(hub, request) { return None; }
+    if cookie.is_empty() || !same_origin(hub, request) {
+        return None;
+    }
     cookie.parse::<HeaderValue>().ok()
 }
 
-pub(crate) fn company_update_endpoint(hub: &Url, configured: Option<&str>) -> Result<Url, url::ParseError> {
+pub(crate) fn company_update_endpoint(
+    hub: &Url,
+    configured: Option<&str>,
+) -> Result<Url, url::ParseError> {
     match configured.filter(|endpoint| *endpoint != crate::config::GENERIC_UPDATER) {
         Some(endpoint) => Url::parse(endpoint),
         None => hub.join("download/latest.json"),
@@ -155,12 +200,21 @@ pub(crate) struct CompanyUpdatePolicy {
 impl CompanyUpdatePolicy {
     pub(crate) fn new(hub: Url, endpoint: Url, cookie: Option<&str>) -> CompanyUpdatePolicy {
         let cookie = cookie.and_then(|cookie| company_cookie_header(&hub, &endpoint, cookie));
-        CompanyUpdatePolicy { hub, endpoint, cookie }
+        CompanyUpdatePolicy {
+            hub,
+            endpoint,
+            cookie,
+        }
     }
 
-    pub(crate) fn endpoint(&self) -> &Url { &self.endpoint }
+    pub(crate) fn endpoint(&self) -> &Url {
+        &self.endpoint
+    }
 
-    pub(crate) fn has_cookie(&self) -> bool { self.cookie.is_some() }
+    #[cfg(test)]
+    pub(crate) fn has_cookie(&self) -> bool {
+        self.cookie.is_some()
+    }
 
     pub(crate) fn allows_download(&self, download: &Url) -> bool {
         !same_origin(&self.hub, &self.endpoint) || self.is_hub_artifact(download)
@@ -172,7 +226,9 @@ impl CompanyUpdatePolicy {
         }
         let base_path = self.hub.path().trim_end_matches('/');
         let route = format!("{base_path}/download/file/");
-        let Some(path) = url.path().strip_prefix(&route) else { return false };
+        let Some(path) = url.path().strip_prefix(&route) else {
+            return false;
+        };
         let mut segments = path.split('/');
         matches!(
             (segments.next(), segments.next(), segments.next()),
@@ -182,7 +238,8 @@ impl CompanyUpdatePolicy {
     }
 
     fn allows_hub_artifact_redirect(&self, source: &Url, target: &Url) -> bool {
-        if !self.is_hub_artifact(source) || same_origin(source, target) || !has_s3_signature(target) {
+        if !self.is_hub_artifact(source) || same_origin(source, target) || !has_s3_signature(target)
+        {
             return false;
         }
         if target.scheme() == "https" {
@@ -191,7 +248,8 @@ impl CompanyUpdatePolicy {
         #[cfg(test)]
         {
             target.scheme() == "http"
-                && target.host_str()
+                && target
+                    .host_str()
                     .and_then(|host| host.parse::<std::net::IpAddr>().ok())
                     .map(|ip| ip.is_loopback())
                     .unwrap_or(false)
@@ -202,24 +260,38 @@ impl CompanyUpdatePolicy {
         }
     }
 
-    fn redirect_attempt(&self, attempt: reqwest_updater::redirect::Attempt<'_>) -> reqwest_updater::redirect::Action {
+    fn redirect_attempt(
+        &self,
+        attempt: reqwest_updater::redirect::Attempt<'_>,
+    ) -> reqwest_updater::redirect::Action {
         let allowed = attempt.status() == reqwest_updater::StatusCode::FOUND
             && attempt.previous().len() == 1
-            && attempt.previous().last()
+            && attempt
+                .previous()
+                .last()
                 .map(|source| self.allows_hub_artifact_redirect(source, attempt.url()))
                 .unwrap_or(false);
-        if allowed { attempt.follow() } else { attempt.stop() }
+        if allowed {
+            attempt.follow()
+        } else {
+            attempt.stop()
+        }
     }
 
     // A hub feed may carry its Access cookie to the manifest and versioned hub artifact. Follow
     // only that artifact's one signed-storage redirect; reqwest strips sensitive headers when
     // the redirect changes origin. A configured public runner feed gets no hub credentials.
-    pub(crate) fn configure_client(&self, builder: reqwest_updater::ClientBuilder) -> reqwest_updater::ClientBuilder {
-        if !same_origin(&self.hub, &self.endpoint) { return builder; }
+    pub(crate) fn configure_client(
+        &self,
+        builder: reqwest_updater::ClientBuilder,
+    ) -> reqwest_updater::ClientBuilder {
+        if !same_origin(&self.hub, &self.endpoint) {
+            return builder;
+        }
         let redirect_policy = self.clone();
-        let builder = builder.redirect(reqwest_updater::redirect::Policy::custom(
-            move |attempt| redirect_policy.redirect_attempt(attempt),
-        ));
+        let builder = builder.redirect(reqwest_updater::redirect::Policy::custom(move |attempt| {
+            redirect_policy.redirect_attempt(attempt)
+        }));
         if let Some(cookie) = &self.cookie {
             let mut headers = reqwest_updater::header::HeaderMap::new();
             headers.insert(reqwest_updater::header::COOKIE, cookie.clone());
@@ -255,7 +327,9 @@ fn has_s3_signature(url: &Url) -> bool {
                     && value.ends_with('Z')
             }
             "X-Amz-Expires" => expires = value.parse::<u32>().map(|n| n > 0).unwrap_or(false),
-            "X-Amz-SignedHeaders" => signed_headers = value.split(';').any(|header| header == "host"),
+            "X-Amz-SignedHeaders" => {
+                signed_headers = value.split(';').any(|header| header == "host")
+            }
             _ => {}
         }
     }
@@ -272,15 +346,27 @@ mod updater_auth_tests {
     #[test]
     fn company_update_endpoint_keeps_public_runner_and_maps_default_feed_to_selected_hub() {
         let hub = Url::parse("https://tico.example.test/team/").unwrap();
-        assert_eq!(company_update_endpoint(&hub, Some(crate::config::GENERIC_UPDATER)).unwrap(),
-                   hub.join("download/latest.json").unwrap());
-        assert_eq!(company_update_endpoint(&hub, Some("https://runner.example.test/download/latest.json")).unwrap(),
-                   Url::parse("https://runner.example.test/download/latest.json").unwrap());
-        assert_eq!(company_update_endpoint(&hub, None).unwrap(), hub.join("download/latest.json").unwrap());
+        assert_eq!(
+            company_update_endpoint(&hub, Some(crate::config::GENERIC_UPDATER)).unwrap(),
+            hub.join("download/latest.json").unwrap()
+        );
+        assert_eq!(
+            company_update_endpoint(
+                &hub,
+                Some("https://runner.example.test/download/latest.json")
+            )
+            .unwrap(),
+            Url::parse("https://runner.example.test/download/latest.json").unwrap()
+        );
+        assert_eq!(
+            company_update_endpoint(&hub, None).unwrap(),
+            hub.join("download/latest.json").unwrap()
+        );
     }
 
     #[tokio::test]
-    async fn selected_hub_updater_client_uses_cookie_for_feed_and_artifact_and_rejects_foreign_downloads() {
+    async fn selected_hub_updater_client_uses_cookie_for_feed_and_artifact_and_rejects_foreign_downloads(
+    ) {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let address = listener.local_addr().unwrap();
         let server = thread::spawn(move || {
@@ -288,17 +374,31 @@ mod updater_auth_tests {
             for _ in 0..2 {
                 let (mut socket, _) = listener.accept().unwrap();
                 seen.push(read_request(&mut socket));
-                socket.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok").unwrap();
+                socket
+                    .write_all(
+                        b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok",
+                    )
+                    .unwrap();
             }
             seen
         });
         let base = Url::parse(&format!("http://{address}/")).unwrap();
         let feed = base.join("download/latest.json").unwrap();
-        let policy = CompanyUpdatePolicy::new(base.clone(), feed.clone(), Some("CF_Authorization=synthetic"));
-        let client = policy.configure_client(reqwest_updater::Client::builder()).build().unwrap();
+        let policy = CompanyUpdatePolicy::new(
+            base.clone(),
+            feed.clone(),
+            Some("CF_Authorization=synthetic"),
+        );
+        let client = policy
+            .configure_client(reqwest_updater::Client::builder())
+            .build()
+            .unwrap();
         for path in ["download/latest.json", "download/file/0.3.21/Tico.tar.gz"] {
             let url = base.join(path).unwrap();
-            assert_eq!(policy.allows_download(&url), url.path().contains("/download/file/"));
+            assert_eq!(
+                policy.allows_download(&url),
+                url.path().contains("/download/file/")
+            );
             let response = client.get(url).send().await.unwrap();
             assert_eq!(response.status(), reqwest_updater::StatusCode::OK);
         }
@@ -307,7 +407,9 @@ mod updater_auth_tests {
         let seen = server.join().unwrap();
         assert!(seen[0].starts_with("GET /download/latest.json "));
         assert!(seen[1].starts_with("GET /download/file/0.3.21/Tico.tar.gz "));
-        assert!(seen.iter().all(|r| r.to_ascii_lowercase().contains("cookie: cf_authorization=synthetic")));
+        assert!(seen.iter().all(|r| r
+            .to_ascii_lowercase()
+            .contains("cookie: cf_authorization=synthetic")));
     }
 
     #[tokio::test]
@@ -322,11 +424,19 @@ mod updater_auth_tests {
         });
         let base = Url::parse(&format!("http://{address}/")).unwrap();
         let feed = base.join("download/latest.json").unwrap();
-        let policy = CompanyUpdatePolicy::new(base, feed.clone(), Some("CF_Authorization=synthetic"));
-        let client = policy.configure_client(reqwest_updater::Client::builder()).build().unwrap();
+        let policy =
+            CompanyUpdatePolicy::new(base, feed.clone(), Some("CF_Authorization=synthetic"));
+        let client = policy
+            .configure_client(reqwest_updater::Client::builder())
+            .build()
+            .unwrap();
         let response = client.get(feed).send().await.unwrap();
         assert_eq!(response.status(), reqwest_updater::StatusCode::FOUND);
-        assert!(server.join().unwrap().to_ascii_lowercase().contains("cookie: cf_authorization=synthetic"));
+        assert!(server
+            .join()
+            .unwrap()
+            .to_ascii_lowercase()
+            .contains("cookie: cf_authorization=synthetic"));
     }
 
     #[tokio::test]
@@ -338,7 +448,11 @@ mod updater_auth_tests {
             for _ in 0..2 {
                 let (mut socket, _) = listener.accept().unwrap();
                 seen.push(read_request(&mut socket));
-                socket.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok").unwrap();
+                socket
+                    .write_all(
+                        b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok",
+                    )
+                    .unwrap();
             }
             seen
         });
@@ -346,12 +460,25 @@ mod updater_auth_tests {
         let feed = hub.join("download/latest.json").unwrap();
         let policy = CompanyUpdatePolicy::new(hub.clone(), feed.clone(), None);
         assert!(!policy.has_cookie());
-        let client = policy.configure_client(reqwest_updater::Client::builder()).build().unwrap();
+        let client = policy
+            .configure_client(reqwest_updater::Client::builder())
+            .build()
+            .unwrap();
         for url in [feed, hub.join("download/file/0.3.21/Tico.tar.gz").unwrap()] {
-            assert_eq!(policy.allows_download(&url), url.path().contains("/download/file/"));
-            assert_eq!(client.get(url).send().await.unwrap().status(), reqwest_updater::StatusCode::OK);
+            assert_eq!(
+                policy.allows_download(&url),
+                url.path().contains("/download/file/")
+            );
+            assert_eq!(
+                client.get(url).send().await.unwrap().status(),
+                reqwest_updater::StatusCode::OK
+            );
         }
-        assert!(server.join().unwrap().iter().all(|request| !request.to_ascii_lowercase().contains("cookie:")));
+        assert!(server
+            .join()
+            .unwrap()
+            .iter()
+            .all(|request| !request.to_ascii_lowercase().contains("cookie:")));
     }
 
     #[tokio::test]
@@ -363,17 +490,28 @@ mod updater_auth_tests {
             for _ in 0..2 {
                 let (mut socket, _) = listener.accept().unwrap();
                 seen.push(read_request(&mut socket));
-                socket.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok").unwrap();
+                socket
+                    .write_all(
+                        b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok",
+                    )
+                    .unwrap();
             }
             seen
         });
         let hub = Url::parse("https://tico.example.test/team/").unwrap();
         let endpoint = Url::parse(&format!("http://{address}/download/latest.json")).unwrap();
-        let policy = CompanyUpdatePolicy::new(hub, endpoint.clone(), Some("CF_Authorization=synthetic"));
+        let policy =
+            CompanyUpdatePolicy::new(hub, endpoint.clone(), Some("CF_Authorization=synthetic"));
         assert!(!policy.has_cookie());
-        let artifact = Url::parse(&format!("http://{address}/download/file/0.3.21/Tico.tar.gz")).unwrap();
+        let artifact = Url::parse(&format!(
+            "http://{address}/download/file/0.3.21/Tico.tar.gz"
+        ))
+        .unwrap();
         assert!(policy.allows_download(&artifact));
-        let client = policy.configure_client(reqwest_updater::Client::builder()).build().unwrap();
+        let client = policy
+            .configure_client(reqwest_updater::Client::builder())
+            .build()
+            .unwrap();
         for url in [endpoint, artifact] {
             let response = client.get(url).send().await.unwrap();
             assert_eq!(response.status(), reqwest_updater::StatusCode::OK);
@@ -381,7 +519,9 @@ mod updater_auth_tests {
         let seen = server.join().unwrap();
         assert!(seen[0].starts_with("GET /download/latest.json "));
         assert!(seen[1].starts_with("GET /download/file/0.3.21/Tico.tar.gz "));
-        assert!(seen.iter().all(|request| !request.to_ascii_lowercase().contains("cookie:")));
+        assert!(seen
+            .iter()
+            .all(|request| !request.to_ascii_lowercase().contains("cookie:")));
     }
 
     #[test]
@@ -389,15 +529,15 @@ mod updater_auth_tests {
         let hub = Url::parse("https://tico.example.test/").unwrap();
         let feed = hub.join("download/latest.json").unwrap();
         let policy = CompanyUpdatePolicy::new(hub, feed.clone(), None);
-        assert!(policy.allows_download(&Url::parse(
-            "https://tico.example.test/download/file/0.3.21/Tico.tar.gz"
-        ).unwrap()));
+        assert!(policy.allows_download(
+            &Url::parse("https://tico.example.test/download/file/0.3.21/Tico.tar.gz").unwrap()
+        ));
         let nested_hub = Url::parse("https://tico.example.test/team/").unwrap();
         let nested_feed = nested_hub.join("download/latest.json").unwrap();
         let nested_policy = CompanyUpdatePolicy::new(nested_hub, nested_feed, None);
-        assert!(nested_policy.allows_download(&Url::parse(
-            "https://tico.example.test/team/download/file/0.3.21/Tico.tar.gz"
-        ).unwrap()));
+        assert!(nested_policy.allows_download(
+            &Url::parse("https://tico.example.test/team/download/file/0.3.21/Tico.tar.gz").unwrap()
+        ));
         for url in [
             "https://tico.example.test/download/latest.json",
             "https://tico.example.test/download/file/0.3.21/Tico.tar.gz?redirect=elsewhere",
@@ -413,9 +553,8 @@ mod updater_auth_tests {
         let hub = Url::parse("https://tico.example.test/").unwrap();
         let feed = hub.join("download/latest.json").unwrap();
         let policy = CompanyUpdatePolicy::new(hub, feed.clone(), None);
-        let source = Url::parse(
-            "https://tico.example.test/download/file/0.3.21/Tico.tar.gz"
-        ).unwrap();
+        let source =
+            Url::parse("https://tico.example.test/download/file/0.3.21/Tico.tar.gz").unwrap();
         let signed = Url::parse(
             "https://bucket.s3.example.test/object?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=synthetic%2Fscope&X-Amz-Date=20261004T170000Z&X-Amz-Expires=60&X-Amz-SignedHeaders=host&X-Amz-Signature=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
         ).unwrap();
@@ -427,20 +566,24 @@ mod updater_auth_tests {
         ] {
             assert!(!policy.allows_hub_artifact_redirect(&source, &Url::parse(target).unwrap()), "{target}");
         }
-        assert!(!policy.allows_hub_artifact_redirect(
-            &feed,
-            &signed,
-        ));
+        assert!(!policy.allows_hub_artifact_redirect(&feed, &signed,));
     }
 
     #[test]
     fn follows_the_redirect_the_server_signs_for_a_company_artifact() {
         // The server's real presigned URL; backend/tests/test_update_signature_contract.py keeps it in step.
         let hub = Url::parse("https://tico.example.test/").unwrap();
-        let policy = CompanyUpdatePolicy::new(hub.clone(), hub.join("download/latest.json").unwrap(), None);
-        let source = hub.join("download/file/0.3.49/Acme%20Tico.app.tar.gz").unwrap();
-        let signed = Url::parse(include_str!("testdata/presigned-artifact-url.txt").trim()).unwrap();
-        assert!(policy.allows_hub_artifact_redirect(&source, &signed), "{signed}");
+        let policy =
+            CompanyUpdatePolicy::new(hub.clone(), hub.join("download/latest.json").unwrap(), None);
+        let source = hub
+            .join("download/file/0.3.49/Acme%20Tico.app.tar.gz")
+            .unwrap();
+        let signed =
+            Url::parse(include_str!("testdata/presigned-artifact-url.txt").trim()).unwrap();
+        assert!(
+            policy.allows_hub_artifact_redirect(&source, &signed),
+            "{signed}"
+        );
     }
 
     #[tokio::test]
@@ -462,10 +605,22 @@ mod updater_auth_tests {
         });
         let url = Url::parse(&format!("http://{address}/api/v2/needs-you?count=1")).unwrap();
         let http = http_client();
-        assert_eq!(read_json(&http, url.clone(), None).await, Err(Failure::SignedOut));
-        assert_eq!(read_json(&http, url.clone(), None).await, Err(Failure::SignedOut));
-        assert_eq!(read_json(&http, url.clone(), None).await, Err(Failure::Other));
-        assert_eq!(read_json(&http, url, None).await, Ok(serde_json::json!({"count": 3})));
+        assert_eq!(
+            read_json(&http, url.clone(), None).await,
+            Err(Failure::SignedOut)
+        );
+        assert_eq!(
+            read_json(&http, url.clone(), None).await,
+            Err(Failure::SignedOut)
+        );
+        assert_eq!(
+            read_json(&http, url.clone(), None).await,
+            Err(Failure::Other)
+        );
+        assert_eq!(
+            read_json(&http, url, None).await,
+            Ok(serde_json::json!({"count": 3}))
+        );
         server.join().unwrap();
     }
 
@@ -475,7 +630,9 @@ mod updater_auth_tests {
         loop {
             let n = socket.read(&mut chunk).unwrap();
             request.extend_from_slice(&chunk[..n]);
-            if n == 0 || request.windows(4).any(|w| w == b"\r\n\r\n") { break; }
+            if n == 0 || request.windows(4).any(|w| w == b"\r\n\r\n") {
+                break;
+            }
         }
         String::from_utf8_lossy(&request).to_string()
     }

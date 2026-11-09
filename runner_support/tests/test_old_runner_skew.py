@@ -39,9 +39,11 @@ def _replay_limited(test):
 
 
 test_the_fresh_root_thread_is_replayed_its_roots_earlier_messages = _replay_limited(
-    test_the_fresh_root_thread_is_replayed_its_roots_earlier_messages)
+    test_the_fresh_root_thread_is_replayed_its_roots_earlier_messages
+)
 test_a_public_turn_is_replayed_its_threads_public_history = _replay_limited(
-    test_a_public_turn_is_replayed_its_threads_public_history)
+    test_a_public_turn_is_replayed_its_threads_public_history
+)
 
 
 @pytest.mark.parametrize("harness", ["claude"])
@@ -61,12 +63,15 @@ def test_a_sub_thread_turn_on_an_old_runner_never_reads_a_direct_message_or_anot
     until(lambda: finished(computer) == 2, "the reply in the sub-thread")
     _kind, thread = provider_turns(computer)[-1]
     leaked = [call_ for call_ in computer.calls()[seen:] if "DM-SECRET" in json.dumps(call_)]
-    assert not leaked and thread != dm_thread, \
+    assert not leaked and thread != dm_thread, (
         f"a sub-thread turn read the direct message or its session: leaked={leaked} thread={thread} dm={dm_thread}"
+    )
 
 
-pytestmark = [pytest.mark.slow, pytest.mark.skipif(not os.environ.get("OLD_RUNNER_BINARY"),
-                                                   reason="OLD_RUNNER_BINARY names the origin/main build")]
+pytestmark = [
+    pytest.mark.slow,
+    pytest.mark.skipif(not os.environ.get("OLD_RUNNER_BINARY"), reason="OLD_RUNNER_BINARY names the origin/main build"),
+]
 
 
 @pytest.fixture(scope="session")

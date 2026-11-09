@@ -41,10 +41,22 @@ before it existed keep their rows as they were.
 `run_weekly` in `hub sql` (backend/sql.py) adds these up per week, bot, trigger and purpose. A run whose
 trigger or purpose is not known reads `unknown` for that field, and is still counted.
 """
+
 import re
 
-TRIGGERS = ("comment", "status_or_relation", "pr_checks", "stall_check", "schedule", "person_message",
-            "background_done", "release_published", "check_back", "task_roundup", "other")
+TRIGGERS = (
+    "comment",
+    "status_or_relation",
+    "pr_checks",
+    "stall_check",
+    "schedule",
+    "person_message",
+    "background_done",
+    "release_published",
+    "check_back",
+    "task_roundup",
+    "other",
+)
 OUTCOMES = ("acted", "no_change", "nothing_to_do")
 # What a person (or another bot) did with an acted run's result: `turn_result`.
 TASK_OUTCOMES = ("accepted", "edited", "overridden")
@@ -53,9 +65,15 @@ UNKNOWN = "unknown"
 
 # What a run is for when no caller said, by what woke it. The label is the work, not the wake, and stays short.
 TRIGGER_PURPOSES = {
-    "comment": "answer comment", "status_or_relation": "react to task change", "pr_checks": "handle PR checks",
-    "check_back": "follow up task", "stall_check": "check stalled task", "schedule": "run routine", "person_message": "answer person message",
-    "background_done": "resume after background work", "release_published": "follow up a release",
+    "comment": "answer comment",
+    "status_or_relation": "react to task change",
+    "pr_checks": "handle PR checks",
+    "check_back": "follow up task",
+    "stall_check": "check stalled task",
+    "schedule": "run routine",
+    "person_message": "answer person message",
+    "background_done": "resume after background work",
+    "release_published": "follow up a release",
     "task_roundup": "check the task roundup list",
 }
 # Bots whose work is one thing: a reviewer woken by a task change or a PR's checks is reviewing that PR.
@@ -73,13 +91,33 @@ def clean_purpose(value):
     text = " ".join(str(value or "").split())[:60]
     return text or None
 
+
 # Events a run leaves that change nothing anyone else sees: reads, its own status line, lint and refusals.
-BOOKKEEPING = frozenset({
-    "status.set", "sql.query", "db.query", "conversation.open", "message.read", "message.delivered",
-    "mail.read", "calendar.read", "credential.revealed", "bot.repository_read", "task.inspect",
-    "refused", "decision.outcome", "message.lint", "wake.skipped", "task.lint", "path.mentioned", "judge.call", "mcp.call", "service_key.use",
-    "subscription.sent_to_computer",
-})
+BOOKKEEPING = frozenset(
+    {
+        "status.set",
+        "sql.query",
+        "db.query",
+        "conversation.open",
+        "message.read",
+        "message.delivered",
+        "mail.read",
+        "calendar.read",
+        "credential.revealed",
+        "bot.repository_read",
+        "task.inspect",
+        "refused",
+        "decision.outcome",
+        "message.lint",
+        "wake.skipped",
+        "task.lint",
+        "path.mentioned",
+        "judge.call",
+        "mcp.call",
+        "service_key.use",
+        "subscription.sent_to_computer",
+    }
+)
 BOOKKEEPING_PREFIXES = ("attempt.", "job.", "turn.", "runner.")
 # The runner's own calls about the run (claim, events, complete) carry the run token too; they are not the run's work.
 RUNNER_PATHS = ("/api/v2/attempts/", "/api/v2/jobs/")
@@ -106,11 +144,14 @@ def backfill(conn, table="attempts", bot_column="bot_id"):
     step 39 passes the old `turns` table, which held run records until migration 0072: every row of it was a run. In
     attempts an attempt with a job and no trigger never had a run record, and gets no purpose."""
     record = "" if table == "turns" else " AND (job_id IS NULL OR trigger IS NOT NULL)"
-    pairs = conn.execute(f"SELECT DISTINCT {bot_column}, trigger_kind FROM {table} "
-                         f"WHERE purpose IS NULL{record}").fetchall()
+    pairs = conn.execute(
+        f"SELECT DISTINCT {bot_column}, trigger_kind FROM {table} WHERE purpose IS NULL{record}"
+    ).fetchall()
     for bot, kind in pairs:
-        conn.execute(f"UPDATE {table} SET purpose=? WHERE purpose IS NULL{record} "
-                     f"AND {bot_column} IS ? AND trigger_kind IS ?", (purpose_for(bot, kind), bot, kind))
+        conn.execute(
+            f"UPDATE {table} SET purpose=? WHERE purpose IS NULL{record} AND {bot_column} IS ? AND trigger_kind IS ?",
+            (purpose_for(bot, kind), bot, kind),
+        )
     return len(pairs)
 
 
@@ -139,9 +180,12 @@ def counts(action):
 
 
 # A finished run's `outcome` and `did_nothing`, set by H.turn_finish (and by a restore that ends runs it finds open).
-OUTCOME_SQL = ("CASE WHEN coalesce(writes,0)>0 THEN 'acted' "
-               "WHEN (SELECT k.status FROM tasks k WHERE k.id=attempts.task_id) IN ("
-               + ",".join(f"'{s}'" for s in OPEN_TASK) + ") THEN 'no_change' ELSE 'nothing_to_do' END")
+OUTCOME_SQL = (
+    "CASE WHEN coalesce(writes,0)>0 THEN 'acted' "
+    "WHEN (SELECT k.status FROM tasks k WHERE k.id=attempts.task_id) IN ("
+    + ",".join(f"'{s}'" for s in OPEN_TASK)
+    + ") THEN 'no_change' ELSE 'nothing_to_do' END"
+)
 SETTLE_SQL = f"outcome={OUTCOME_SQL}, did_nothing=(coalesce(writes,0)=0)"
 
 
@@ -152,8 +196,12 @@ def pushed(conn, turn_id, computer, pushes):
     row = conn.execute("SELECT task_id FROM attempts WHERE id=? AND settled_at IS NULL", (turn_id,)).fetchone()
     if not pushes or not row or not row[0]:
         return 0
-    paths = {r[0] for r in conn.execute("SELECT path FROM task_links WHERE task_id=? AND kind='worktree' "
-                                        "AND computer_id=?", (row[0], computer))}
+    paths = {
+        r[0]
+        for r in conn.execute(
+            "SELECT path FROM task_links WHERE task_id=? AND kind='worktree' AND computer_id=?", (row[0], computer)
+        )
+    }
     count = sum(p.count for p in pushes if p.path in paths)
     if count:
         conn.execute("UPDATE attempts SET writes=coalesce(writes,0)+? WHERE id=?", (count, turn_id))
@@ -165,7 +213,9 @@ def rotation(conn, turn_id, rotated):
     older one, or a run that resumed) leaves `rotated` NULL."""
     if rotated is None:
         return 0
-    return conn.execute("UPDATE attempts SET rotated=? WHERE id=? AND settled_at IS NULL", (rotated.reason, turn_id)).rowcount
+    return conn.execute(
+        "UPDATE attempts SET rotated=? WHERE id=? AND settled_at IS NULL", (rotated.reason, turn_id)
+    ).rowcount
 
 
 # Why a run started a new session, in the words a task's history uses ("Started a new session: ..."). The first six are
@@ -197,6 +247,7 @@ def session_words(why):
 def new_session(c, task_id, why, actor=None):
     """Say in the task's history that its session started anew, and why (field `session`). Nothing without a task."""
     from .store import H
+
     if task_id and c.execute("SELECT 1 FROM tasks WHERE id=?", (task_id,)).fetchone():
         H._task_event(c, task_id, actor or H.KEEPER, "session", "", "new", session_words(why))
 
@@ -207,8 +258,10 @@ def session(conn, turn_id, session):
     if session is None:
         return 0
     why = (session.why or "")[:60] or None
-    done = conn.execute("UPDATE attempts SET session_kind=?, session_why=? WHERE id=? AND settled_at IS NULL",
-                        (session.kind, why, turn_id)).rowcount
+    done = conn.execute(
+        "UPDATE attempts SET session_kind=?, session_why=? WHERE id=? AND settled_at IS NULL",
+        (session.kind, why, turn_id),
+    ).rowcount
     if done and session.kind == "new" and why != "none_saved":
         row = conn.execute("SELECT task_id FROM attempts WHERE id=?", (turn_id,)).fetchone()
         new_session(conn, row[0] if row else None, why)
@@ -229,16 +282,32 @@ def turn_result(conn, actor, row, outcome, event, to=None):
     change), when `actor` is neither its owner bot nor the keeper. `event` is H.event (this module is below hubdb).
     Returns the event row, or None when there is no result, no run, or the run already has its outcome."""
     owner = str(row.get("owner_id") or "")
-    if (outcome not in TASK_OUTCOMES or row.get("status") not in RESULT_STATES or not owner.startswith("bot:")
-            or actor in (owner, "keeper")):
+    if (
+        outcome not in TASK_OUTCOMES
+        or row.get("status") not in RESULT_STATES
+        or not owner.startswith("bot:")
+        or actor in (owner, "keeper")
+    ):
         return None
-    reached = conn.execute("SELECT max(created_at) FROM history_events WHERE subject_type='task' AND subject_id=? "
-                           "AND kind='status' AND new=?",
-                           (row["id"], row["status"])).fetchone()[0]
-    turn = conn.execute("SELECT id FROM attempts WHERE bot_id=? AND task_id=? AND (job_id IS NULL OR trigger IS NOT NULL) "
-                        "AND (? IS NULL OR created_at<=?) ORDER BY created_at DESC LIMIT 1", (owner[4:], row["id"], reached, reached)).fetchone()
-    if not turn or conn.execute("SELECT 1 FROM events WHERE target=? AND action='turn.outcome' LIMIT 1",
-                                (turn[0],)).fetchone():
+    reached = conn.execute(
+        "SELECT max(created_at) FROM history_events WHERE subject_type='task' AND subject_id=? "
+        "AND kind='status' AND new=?",
+        (row["id"], row["status"]),
+    ).fetchone()[0]
+    turn = conn.execute(
+        "SELECT id FROM attempts WHERE bot_id=? AND task_id=? AND (job_id IS NULL OR trigger IS NOT NULL) "
+        "AND (? IS NULL OR created_at<=?) ORDER BY created_at DESC LIMIT 1",
+        (owner[4:], row["id"], reached, reached),
+    ).fetchone()
+    if (
+        not turn
+        or conn.execute("SELECT 1 FROM events WHERE target=? AND action='turn.outcome' LIMIT 1", (turn[0],)).fetchone()
+    ):
         return None
-    return event(conn, actor, "turn.outcome", turn[0], {"task_id": row["id"], "outcome": outcome,
-                                                         "from": row["status"], "to": to or row["status"]})
+    return event(
+        conn,
+        actor,
+        "turn.outcome",
+        turn[0],
+        {"task_id": row["id"], "outcome": outcome, "from": row["status"], "to": to or row["status"]},
+    )

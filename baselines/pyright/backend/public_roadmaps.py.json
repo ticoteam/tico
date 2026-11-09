@@ -1,0 +1,30 @@
+{
+    "files": {
+        "./backend/public_roadmaps.py": [
+            {
+                "code": "reportOptionalSubscript",
+                "range": {
+                    "startColumn": 23,
+                    "endColumn": 45,
+                    "lineCount": 1
+                }
+            },
+            {
+                "code": "reportPossiblyUnboundVariable",
+                "range": {
+                    "startColumn": 15,
+                    "endColumn": 18,
+                    "lineCount": 1
+                }
+            },
+            {
+                "code": "reportPossiblyUnboundVariable",
+                "range": {
+                    "startColumn": 20,
+                    "endColumn": 25,
+                    "lineCount": 1
+                }
+            }
+        ]
+    }
+}

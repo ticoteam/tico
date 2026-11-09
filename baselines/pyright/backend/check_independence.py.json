@@ -1,0 +1,22 @@
+{
+    "files": {
+        "./backend/check_independence.py": [
+            {
+                "code": "reportOptionalSubscript",
+                "range": {
+                    "startColumn": 13,
+                    "endColumn": 19,
+                    "lineCount": 1
+                }
+            },
+            {
+                "code": "reportOptionalSubscript",
+                "range": {
+                    "startColumn": 46,
+                    "endColumn": 52,
+                    "lineCount": 1
+                }
+            }
+        ]
+    }
+}

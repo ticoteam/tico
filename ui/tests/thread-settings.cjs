@@ -1,4 +1,4 @@
-// Thread settings (ui/app/threads-page.js threadSettingsOpen): the ⋯ in a thread's header opens one panel whose rows
+// Thread settings (ui/app/threads-page.ts threadSettingsOpen): the ⋯ in a thread's header opens one panel whose rows
 // save as they change, with the calls the thread's routes take: the name, who can read (A team waits for a team when
 // there is a choice; the Slack row redraws after), Members, notifications (Off is a lasting mute; not following reads
 // as Off), pin for everyone and how long messages are kept, then Summarize, Mark all read and Archive. Saves go one at
@@ -47,10 +47,10 @@ async function open(browser, {phone = false} = {}) {
     const json = (body, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
     const body = () => JSON.parse(req.postData() || '{}');
     if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
-    const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|css))$/);
+    const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/);
     if (ui && fs.existsSync(uiFile(ui[1])))
       return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]), 'utf8')});
-    if (p.endsWith('.js')) return route.fulfill({contentType: 'application/javascript', body: ''});
+    if (/\.(?:js|ts)$/.test(p)) return route.fulfill({contentType: 'application/javascript', body: ''});
     if (p === '/api/me') return json({id: 'ana', name: 'Ana', role: 'owner', registered: true});
     if (p === '/api/employees') return json([{name: 'ops', display_name: 'Ops', host: 'keeper', status: 'active', state: 'active', can_chat: true, schedules: [],
       my_access: {see: true, read: true, write: true}}]);

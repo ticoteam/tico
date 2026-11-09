@@ -1,4 +1,5 @@
 """Eval contracts without a live Tico or model call."""
+
 import importlib.util
 from pathlib import Path
 
@@ -21,28 +22,38 @@ def test_exact_values_and_negation_belong_to_the_claim():
     assert not E.fact_matches("Monthly plans are refundable, but annual plans are not", fact)
     assert not E.fact_matches("Monthly plans are refundable, not annual plans", fact)
     assert not E.fact_matches("Monthly plans are not refundable. Monthly plans are refundable.", fact)
-    assert E.score({"manual": ["hermes-agents"], "contains": ["/reload-mcp"]},
-                   "Run `/reload-mcp`. [Tico manual · Hermes](https://github.com/ticoteam/tico/blob/main/docs/hermes-agents.md)", {})["cited"]
+    assert E.score(
+        {"manual": ["hermes-agents"], "contains": ["/reload-mcp"]},
+        "Run `/reload-mcp`. [Tico manual · Hermes](https://github.com/ticoteam/tico/blob/main/docs/hermes-agents.md)",
+        {},
+    )["cited"]
 
 
 def setup_eval(monkeypatch, *, fail_import=False):
     monkeypatch.setenv("TICO_URL", "http://example.com")
     monkeypatch.setenv("TICO_TOKEN", "fake-test-token")
-    monkeypatch.setattr(E, "load_questions", lambda: [{"id": "price", "question": "Price?", "cite": ["price.md"], "contains": ["$29"]}])
+    monkeypatch.setattr(
+        E, "load_questions", lambda: [{"id": "price", "question": "Price?", "cite": ["price.md"], "contains": ["$29"]}]
+    )
     calls = []
+
     class FakeTico:
         def __init__(self, *args):
             pass
+
         def call(self, method, path, body=None):
             calls.append((method, path, body))
             if path == "/api/v2/librarian":
                 return {"available": True}
             return {"doc": {"version": 1}}
+
     monkeypatch.setattr(E, "Tico", FakeTico)
+
     def load(tico, ids):
         ids[E.PREFIX + "price.md"] = "created-id"
         if fail_import:
             raise RuntimeError("second import failed")
+
     monkeypatch.setattr(E, "load_fixture", load)
     monkeypatch.setattr(E, "ask", lambda *args: ("Costs $299. [Internal doc · Pricing](doc:created-id)", 1))
     return calls
@@ -79,25 +90,37 @@ def test_value_claims_reject_negation_contradiction_wrong_subject_and_double_neg
     assert E.fact_matches("Studio costs $29 per month.", fact)
     assert E.fact_matches("Studio costs $29. Team costs $79.", fact)
     assert E.fact_matches("Studio costs $29 and Team costs $79.", fact)
-    for wrong in ["Studio does not cost $29. It costs $99.", "Studio costs $29. Studio costs $99.",
-                  "Team costs $29. Studio costs $99.", "Studio costs $299.", "Studio costs $29.99.",
-                  "Studio costs $29. Its price is $99.", "Studio costs $29. Actually, it costs $99.",
-                  "Studio costs $29–$99.", "Studio costs $29 to $99.", "Studio costs at least $29.",
-                  "Studio costs $29. Their price is $99.",
-                  "Studio costs $29. The price is $99.", "Studio costs $29. In reality, it costs $99.",
-                  "Studio costs roughly $29.", "Studio costs about $29.", "Studio costs approximately $29.",
-                  "Studio costs around $29.", "Studio costs ~$29.", "Studio costs between $29 and $99.",
-                  "Studio costs from $29 to $99.", "Studio costs $19–$29."]:
+    for wrong in [
+        "Studio does not cost $29. It costs $99.",
+        "Studio costs $29. Studio costs $99.",
+        "Team costs $29. Studio costs $99.",
+        "Studio costs $299.",
+        "Studio costs $29.99.",
+        "Studio costs $29. Its price is $99.",
+        "Studio costs $29. Actually, it costs $99.",
+        "Studio costs $29–$99.",
+        "Studio costs $29 to $99.",
+        "Studio costs at least $29.",
+        "Studio costs $29. Their price is $99.",
+        "Studio costs $29. The price is $99.",
+        "Studio costs $29. In reality, it costs $99.",
+        "Studio costs roughly $29.",
+        "Studio costs about $29.",
+        "Studio costs approximately $29.",
+        "Studio costs around $29.",
+        "Studio costs ~$29.",
+        "Studio costs between $29 and $99.",
+        "Studio costs from $29 to $99.",
+        "Studio costs $19–$29.",
+    ]:
         assert not E.fact_matches(wrong, fact), wrong
     assert E.fact_matches("Studio costs $29. Its price is $29.", fact)
     assert E.fact_matches("Studio costs $29. The price is $29.", fact)
     assert E.fact_matches("Studio costs $29. In reality, it costs $29.", fact)
     assert not E.fact_matches("Team costs $29. Its price is $29.", fact)
-    for wrong in ["Its price is $99.", "Actually, it costs $99.", "The price is $99.",
-                  "In reality, it costs $99."]:
+    for wrong in ["Its price is $99.", "Actually, it costs $99.", "The price is $99.", "In reality, it costs $99."]:
         answer = "Studio costs $29. " + wrong + " [Internal doc · Pricing](doc:d1)"
-        scored = E.score({"cite": ["sales/pricing.md"], "facts": [fact]}, answer,
-                         {E.PREFIX + "sales/pricing.md": "d1"})
+        scored = E.score({"cite": ["sales/pricing.md"], "facts": [fact]}, answer, {E.PREFIX + "sales/pricing.md": "d1"})
         assert scored["cited"] and not scored["facts"], wrong
     assert E.fact_matches("Studio costs $29 from the pricing docs, updated 2026-09-12.", fact)
     assert E.fact_matches("Studio costs $29. Team costs $99. Its price is $99.", fact)
@@ -109,8 +132,9 @@ def test_value_claims_reject_negation_contradiction_wrong_subject_and_double_neg
     assert not E.fact_matches("Monthly plans are not non-refundable.", monthly)
     assert not E.fact_matches("Monthly plans aren't not refundable.", monthly)
     cited = "Studio does not cost $29. It costs $99. [Internal doc · Pricing](doc:d1)"
-    assert not E.score({"cite": ["sales/pricing.md"], "facts": [fact]}, cited,
-                       {E.PREFIX + "sales/pricing.md": "d1"})["facts"]
+    assert not E.score({"cite": ["sales/pricing.md"], "facts": [fact]}, cited, {E.PREFIX + "sales/pricing.md": "d1"})[
+        "facts"
+    ]
     assert not E.score({"unknown": True}, "Not in the docs: no policy.", {})["unknown_ok"]
     assert E.score({"unknown": True}, "Not in the docs. No policy.", {})["unknown_ok"]
     ids = {q["id"] for q in E.load_questions()}

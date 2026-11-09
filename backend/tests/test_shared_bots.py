@@ -1,4 +1,5 @@
 """Branch creation, permissions, routing and lifecycle across the v2 contract."""
+
 import json
 from backend import shared_bots
 from backend.store import H
@@ -21,7 +22,9 @@ def share(api, enabled=True):
 
 
 def branch(api, computer=None, token='cara-test', bot='cpo', expected=200):
-    return post(api, f'bots/{bot}/copies', {'runner_id': computer['runner_id']} if computer else {}, token, expected=expected)
+    return post(
+        api, f'bots/{bot}/copies', {'runner_id': computer['runner_id']} if computer else {}, token, expected=expected
+    )
 
 
 def test_creation_is_personal_idempotent_and_requires_read_and_own_computer(api):
@@ -30,7 +33,12 @@ def test_creation_is_personal_idempotent_and_requires_read_and_own_computer(api)
     share(api)
     made = branch(api, computer)
     assert (made['slug'], made['shared_from'], made['owner_id'], made['created']) == ('cpo-cara', 'cpo', 'cara', True)
-    assert (made['repo'], made['reports_to'], made['thread_mode'], made['status']) == ('emp-cpo', 'human:cara', 'personal', 'active')
+    assert (made['repo'], made['reports_to'], made['thread_mode'], made['status']) == (
+        'emp-cpo',
+        'human:cara',
+        'personal',
+        'active',
+    )
     assert made['assignment']['runner_id'] == computer['runner_id']
     assert branch(api, computer)['created'] is False
     branch(api, token='ben-test', expected=409)
@@ -61,8 +69,14 @@ def test_follows_model_session_fallback_and_refuses_definition_edits(api):
     computer = runner(api, 'cara')
     branch(api, computer)
     with api.app.state.store.transaction() as c:
-        settings = {'runtime': 'fake', 'model': 'team-model', 'harness': 'fake', 'reasoning_effort': 'high',
-                    'session': 'task', 'fallback': {'harness': 'fake', 'model': 'fallback-model'}}
+        settings = {
+            'runtime': 'fake',
+            'model': 'team-model',
+            'harness': 'fake',
+            'reasoning_effort': 'high',
+            'session': 'task',
+            'fallback': {'harness': 'fake', 'model': 'fallback-model'},
+        }
         declared = shared_bots.declared(c, 'cpo')
         BS.write(c, 'cpo', {**declared, **settings})
     assignment = get(api, 'runners/assignments', computer['token'])[0]
@@ -76,10 +90,32 @@ def test_follows_model_session_fallback_and_refuses_definition_edits(api):
     with api.app.state.store.read() as c:
         session = c.execute("SELECT runtime,model FROM bot_sessions WHERE bot=?", (branch_id,)).fetchone()
         assert tuple(session) == ('fake', 'team-model')
-    post(api, 'bots/cpo-cara/definition', {'description': 'Mine', 'expected_revision': revision(api, 'cpo-cara')}, 'cara-test', expected=409)
-    post(api, 'bots/cpo-cara/model', {'model': 'team-model', 'expected_revision': revision(api, 'cpo-cara')}, 'cara-test', expected=409)
-    post(api, 'bots/cpo-cara/definition', {'status': 'paused', 'expected_revision': revision(api, 'cpo-cara')}, 'cara-test')
-    post(api, 'bots/cpo-cara/definition', {'status': 'active', 'expected_revision': revision(api, 'cpo-cara')}, 'cara-test')
+    post(
+        api,
+        'bots/cpo-cara/definition',
+        {'description': 'Mine', 'expected_revision': revision(api, 'cpo-cara')},
+        'cara-test',
+        expected=409,
+    )
+    post(
+        api,
+        'bots/cpo-cara/model',
+        {'model': 'team-model', 'expected_revision': revision(api, 'cpo-cara')},
+        'cara-test',
+        expected=409,
+    )
+    post(
+        api,
+        'bots/cpo-cara/definition',
+        {'status': 'paused', 'expected_revision': revision(api, 'cpo-cara')},
+        'cara-test',
+    )
+    post(
+        api,
+        'bots/cpo-cara/definition',
+        {'status': 'active', 'expected_revision': revision(api, 'cpo-cara')},
+        'cara-test',
+    )
 
 
 def test_tasks_and_chat_route_only_to_an_active_branch_while_enabled(api):
@@ -131,7 +167,10 @@ def test_archive_restores_branches_without_losing_their_work_or_assignment(api):
     with api.app.state.store.read() as c:
         assert H.bot(c, branch_id)['state'] == 'archived'
         assert H.task(c, task['id'])['owner_id'] == H.bot_actor(branch_id)
-        assert c.execute('SELECT runner_id FROM assignments WHERE bot=?', (branch_id,)).fetchone()[0] == computer['runner_id']
+        assert (
+            c.execute('SELECT runner_id FROM assignments WHERE bot=?', (branch_id,)).fetchone()[0]
+            == computer['runner_id']
+        )
     # Restore uses upstream's activation check; the original was already active before archive.
     with api.app.state.store.transaction() as c:
         BS.update(c, 'cpo', {'materialize': True})
@@ -143,10 +182,21 @@ def test_original_archive_preserves_paused_and_independently_archived_branches(a
     share(api)
     branch(api, runner(api, 'cara'))
     branch(api, token='ana-test')
-    post(api, 'bots/cpo-cara/definition', {'status': 'paused', 'expected_revision': revision(api, 'cpo-cara')}, 'cara-test')
+    post(
+        api,
+        'bots/cpo-cara/definition',
+        {'status': 'paused', 'expected_revision': revision(api, 'cpo-cara')},
+        'cara-test',
+    )
     post(api, 'bots/cpo-ana/archive', {'expected_revision': revision(api, 'cpo-ana')})
     post(api, 'bots/cpo/archive', {'expected_revision': revision(api, 'cpo')})
-    post(api, 'bots/cpo-cara/definition', {'status': 'active', 'expected_revision': revision(api, 'cpo-cara')}, 'cara-test', expected=409)
+    post(
+        api,
+        'bots/cpo-cara/definition',
+        {'status': 'active', 'expected_revision': revision(api, 'cpo-cara')},
+        'cara-test',
+        expected=409,
+    )
     post(api, 'bots/cpo-cara/status', {'state': 'active'}, 'cara-test', expected=409)
     with api.app.state.store.transaction() as c:
         BS.update(c, 'cpo', {'materialize': True})
@@ -163,7 +213,10 @@ def test_archiving_the_original_closes_a_parked_branch_setup_reminder(api):
     branch(api, runner(api, 'cara'))
     branch_id = bot_id(api, 'cpo-cara')
     with api.app.state.store.transaction() as c:
-        reminder = H._setup_reminder(c, branch_id)
+        reminder = H.task_create(
+            c, H.KEEPER, "Finish setting up cpo-cara", "Still onboarding.", "human:ben", deduplicate=False, lint=False
+        )
+        H.event(c, H.KEEPER, "bot.setup_reminder", branch_id, {"task": reminder["id"], "owner": "human:ben"})
     post(api, 'bots/cpo/archive', {'expected_revision': revision(api, 'cpo')})
     with api.app.state.store.read() as c:
         assert H.task(c, reminder['id'])['status'] == 'done'

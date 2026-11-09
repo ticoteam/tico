@@ -17,6 +17,7 @@ Where the answers come from, first match wins:
     HUB_API_URL + HUB_TOKEN                a dev install's POST /api/v2/decisions, at the install's own Decisions level
 
 Without any of them nothing is sent and the exit code is 2. No customer data belongs in cases.json."""
+
 import argparse
 import json
 import os
@@ -29,8 +30,10 @@ from clients import judge as J
 HERE = Path(__file__).parent
 CASES = HERE / "cases.json"
 KINDS = ("short", "break", "paraphrase", "near_miss", "end_of_long", "multi")
-NO_ENGINE = ("No decision model: set TICO_GATEWAY_KEY (and TICO_GATEWAY_URL for a dev Gateway), TYPESAFE_API_KEY, or "
-             "HUB_API_URL and HUB_TOKEN of a dev install. Nothing was sent. Then run: python -m evals.rule_check.run --live")
+NO_ENGINE = (
+    "No decision model: set TICO_GATEWAY_KEY (and TICO_GATEWAY_URL for a dev Gateway), TYPESAFE_API_KEY, or "
+    "HUB_API_URL and HUB_TOKEN of a dev install. Nothing was sent. Then run: python -m evals.rule_check.run --live"
+)
 
 
 def load(path=CASES):
@@ -63,12 +66,18 @@ def problems(data):
 def request(data, case):
     """(state, questions, rule ids by question id) exactly as org_rule_check.preflight builds them."""
     from backend import org_rule_check as K
+
     qset = J.load_set(K.QUESTION_SET)
     rules = [{"id": r["id"], "version": 1, "text": r["text"]} for r in data["rules"]]
     questions = K._questions(qset, rules)
-    state = {"rules": [{"id": f"r{n}", "text": r["text"]} for n, r in enumerate(rules, 1)],
-             "operation": K.OPERATIONS.get(case["operation"], case["operation"]), "output": case["output"],
-             "from": case["from"], "to": case["to"], "context": case.get("context") or {}}
+    state = {
+        "rules": [{"id": f"r{n}", "text": r["text"]} for n, r in enumerate(rules, 1)],
+        "operation": K.OPERATIONS.get(case["operation"], case["operation"]),
+        "output": case["output"],
+        "from": case["from"],
+        "to": case["to"],
+        "context": case.get("context") or {},
+    }
     return state, questions, {f"r{n}": r["id"] for n, r in enumerate(rules, 1)}, qset
 
 
@@ -78,14 +87,18 @@ def engines(levels, env=None):
     key = (env.get("TICO_GATEWAY_KEY") or "").strip()
     if key:
         from backend.config import _gateway_url
+
         url = _gateway_url()
-        return [(level, J.gateway(key, url, model=J.decide_model(level), timeout=J.decide_timeout(level)))
-                for level in levels]
+        return [
+            (level, J.gateway(key, url, model=J.decide_model(level), timeout=J.decide_timeout(level)))
+            for level in levels
+        ]
     typesafe = (env.get(J.KEY_ENV) or "").strip()
     if typesafe:
         return [("low", J.direct(typesafe))]
     if env.get("HUB_API_URL") and env.get("HUB_TOKEN"):
         from clients.tico import Client
+
         return [("install", J.through_hub(Client(env["HUB_API_URL"], env["HUB_TOKEN"], timeout=J.HUB_WAIT)))]
     return []
 
@@ -119,7 +132,9 @@ def score(data, engine, cases):
             outputs["clean"] += 1
             outputs["blocked_clean"] += bool(fp)
         for rule in sorted(fp):
-            mistakes.append(f"false block {case['id']} ({case['kind']}): {rule} at {J.noul(answers, _qid(ids, rule)):.2f}")
+            mistakes.append(
+                f"false block {case['id']} ({case['kind']}): {rule} at {J.noul(answers, _qid(ids, rule)):.2f}"
+            )
         for rule in sorted(fn):
             mistakes.append(f"miss {case['id']} ({case['kind']}): {rule} at {J.noul(answers, _qid(ids, rule)):.2f}")
     return pairs, outputs, mistakes, failed, cost
@@ -165,8 +180,10 @@ def main(argv=None):
     for level, engine in chosen:
         started = time.perf_counter()
         pairs, outputs, mistakes, failed, cost = score(data, engine, cases)
-        print(f"\n== {level}: {len(cases)} outputs x {len(data['rules'])} rules, {time.perf_counter() - started:.0f}s"
-              + (f", ${cost:.4f}" if cost else ""))
+        print(
+            f"\n== {level}: {len(cases)} outputs x {len(data['rules'])} rules, {time.perf_counter() - started:.0f}s"
+            + (f", ${cost:.4f}" if cost else "")
+        )
         print(f"   false block, pairs:   {_rate(pairs['fp'], pairs['neg'])}")
         print(f"   miss, pairs:          {_rate(pairs['fn'], pairs['pos'])}")
         print(f"   clean outputs held:   {_rate(outputs['blocked_clean'], outputs['clean'])}")

@@ -1,5 +1,6 @@
 """Slack in the Docker install: compose wiring, the manifest against the code, sealed tokens, and the
 gateway process with a fake Slack client (nothing touches the network)."""
+
 import json
 import logging
 import os
@@ -23,8 +24,13 @@ ENV = {"TICO_COMPANY_NAME": "Acme", "TICO_OWNER_EMAIL": "ana@acme.example", "TIC
 
 
 def compose(profiles=""):
-    out = subprocess.run(["docker", "compose", "config"], cwd=ROOT, capture_output=True, text=True,
-                         env={**os.environ, "COMPOSE_PROFILES": profiles, **ENV})
+    out = subprocess.run(
+        ["docker", "compose", "config"],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        env={**os.environ, "COMPOSE_PROFILES": profiles, **ENV},
+    )
     assert out.returncode == 0, out.stderr
     return yaml.safe_load(out.stdout)["services"]
 
@@ -39,18 +45,27 @@ def test_manifest_matches_the_code_and_the_yaml():
     assert manifest["settings"]["socket_mode_enabled"] is True
     # Every scope the connector CLI names in its own source is requested.
     import re
-    named = set(re.findall(r"\b(?:channels|groups|im|mpim|users|chat|app_mentions|files):[a-z.]+\b",
-                           (ROOT / "connectors" / "slack.py").read_text()))
+
+    named = set(
+        re.findall(
+            r"\b(?:channels|groups|im|mpim|users|chat|app_mentions|files):[a-z.]+\b",
+            (ROOT / "connectors" / "slack.py").read_text(),
+        )
+    )
     assert {s for s in named if s in scopes or s.endswith((":history", ":read", ":write"))} <= scopes
 
 
 def test_the_manifest_asks_for_previews_only_where_slack_can_register_a_host(tmp_path):
     text = (ROOT / "connectors" / "slack-app-manifest.json").read_text()
-    public = slack_app.with_hosts(json.loads(text), Settings(db_path=tmp_path / "hub.db", public_url="https://tico.acme.example"))
+    public = slack_app.with_hosts(
+        json.loads(text), Settings(db_path=tmp_path / "hub.db", public_url="https://tico.acme.example")
+    )
     assert public["features"]["unfurl_domains"] == ["tico.acme.example"]
     assert {"links:read", "links:write"} <= set(public["oauth_config"]["scopes"]["bot"])
     # A loopback install cannot register a host: no preview scopes, event or domains are asked for.
-    loopback = slack_app.with_hosts(json.loads(text), Settings(db_path=tmp_path / "hub.db", public_url="http://127.0.0.1:8765"))
+    loopback = slack_app.with_hosts(
+        json.loads(text), Settings(db_path=tmp_path / "hub.db", public_url="http://127.0.0.1:8765")
+    )
     assert "unfurl_domains" not in loopback["features"]
     assert not {"links:read", "links:write"} & set(loopback["oauth_config"]["scopes"]["bot"])
     assert "link_shared" not in loopback["settings"]["event_subscriptions"]["bot_events"]
@@ -58,13 +73,23 @@ def test_the_manifest_asks_for_previews_only_where_slack_can_register_a_host(tmp
 
 @pytest.fixture
 def api(tmp_path):
-    ids = {"owner-test": Identity("human:ana", "owner", "ana@acme.example"),
-           "member-test": Identity("human:ben", "human", "ben@acme.example")}
+    ids = {
+        "owner-test": Identity("human:ana", "owner", "ana@acme.example"),
+        "member-test": Identity("human:ben", "human", "ben@acme.example"),
+    }
     app = create_app(Settings(db_path=tmp_path / "hub.db", company_name="Acme", test_identities=ids))
     with TestClient(app) as client:
         with app.state.store.transaction() as c:
-            H.sync_registry(c, {}, {"people": [{"id": "ana", "email": "ana@acme.example", "team": "leadership"},
-                                               {"id": "ben", "email": "ben@acme.example", "team": "leadership"}]})
+            H.sync_registry(
+                c,
+                {},
+                {
+                    "people": [
+                        {"id": "ana", "email": "ana@acme.example", "team": "leadership"},
+                        {"id": "ben", "email": "ben@acme.example", "team": "leadership"},
+                    ]
+                },
+            )
         client.app_state = app.state
         yield client
 
@@ -77,7 +102,10 @@ def test_tokens_are_sealed_never_returned_and_never_logged(api, caplog, tmp_path
     caplog.set_level(logging.DEBUG)
     body = {"bot_token": BOT, "app_token": APP_TOKEN}
     assert api.put("/api/v2/slack/tokens", json=body, headers=h("member-test")).status_code == 403
-    assert api.put("/api/v2/slack/tokens", json={"bot_token": "nope", "app_token": APP_TOKEN}, headers=h()).status_code == 422
+    assert (
+        api.put("/api/v2/slack/tokens", json={"bot_token": "nope", "app_token": APP_TOKEN}, headers=h()).status_code
+        == 422
+    )
     assert api.put("/api/v2/slack/tokens", json=body, headers=h()).status_code == 200
     state = api.get("/api/v2/slack/app", headers=h())
     assert state.json()["configured"] is True and BOT not in state.text and APP_TOKEN not in state.text
@@ -93,6 +121,7 @@ def test_tokens_are_sealed_never_returned_and_never_logged(api, caplog, tmp_path
 
 class FakeClient:
     """Stands in for SlackAPI: auth and bot lookups succeed, the socket is a flag."""
+
     instances = []
 
     def __init__(self, bot, app):
@@ -115,16 +144,21 @@ class FakeClient:
         self.up, self.closed = False, True
 
 
-
 def test_the_gateway_opens_tokens_the_api_sealed_under_a_kms_key(tmp_path, monkeypatch, capsys):
     from backend.credentials import CredentialCipher, Vault
     from backend.store import Store
     from backend.tests.test_credentials import FakeKMS
+
     kms = FakeKMS()
     monkeypatch.setattr("boto3.client", lambda name, *a, **k: kms if name == "kms" else pytest.fail(name))
     monkeypatch.delenv("TICO_AUTH_PROXY", raising=False)
-    for name, value in {"TICO_COMPANY_NAME": "Acme", "TICO_OWNER_EMAIL": "ana@acme.example", "TICO_DB": str(tmp_path / "hub.db"), "TICO_CREDENTIAL_KMS_KEY": "test-key",
-                        "TICO_ENVIRONMENT_ID": "acme-test"}.items():
+    for name, value in {
+        "TICO_COMPANY_NAME": "Acme",
+        "TICO_OWNER_EMAIL": "ana@acme.example",
+        "TICO_DB": str(tmp_path / "hub.db"),
+        "TICO_CREDENTIAL_KMS_KEY": "test-key",
+        "TICO_ENVIRONMENT_ID": "acme-test",
+    }.items():
         monkeypatch.setenv(name, value)
     settings = Settings.from_env()
     store = Store(settings)
@@ -141,10 +175,11 @@ def test_slack_tokens_saved_before_kms_was_set_open_with_slack_key_and_are_resea
     from backend.credentials import CredentialCipher, Vault
     from backend.store import Store
     from backend.tests.test_credentials import FakeKMS
+
     settings = Settings(db_path=tmp_path / "hub.db", company_name="Acme")
     store = Store(settings)
     store.initialize()
-    slack_app.save(store, settings, "human:ana", BOT, APP_TOKEN)           # before KMS: sealed with slack.key
+    slack_app.save(store, settings, "human:ana", BOT, APP_TOKEN)  # before KMS: sealed with slack.key
     legacy = (tmp_path / "slack.key").read_bytes()
     settings.credential_kms_key = "test-key"
     vault = Vault(store, CredentialCipher("test-key", FakeKMS()))
@@ -152,7 +187,7 @@ def test_slack_tokens_saved_before_kms_was_set_open_with_slack_key_and_are_resea
     assert slack_app.load(store, settings, vault)["bot_token"] == BOT
     with store.read() as c:
         row = c.execute("SELECT * FROM slack_credentials").fetchone()
-        AESGCM(vault.cipher.key(c)).decrypt(row["nonce"], row["ciphertext"], slack_app.AAD)   # now the vault's
+        AESGCM(vault.cipher.key(c)).decrypt(row["nonce"], row["ciphertext"], slack_app.AAD)  # now the vault's
     assert any("Re-sealed slack_credentials app" in r.getMessage() for r in caplog.records)
     assert not any(BOT in r.getMessage() for r in caplog.records)
     assert slack_app.load(store, settings, vault)["app_token"] == APP_TOKEN

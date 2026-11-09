@@ -7,9 +7,21 @@ from backend.tests.test_api import api, get, post, runner  # noqa: F401  (the ap
 
 
 def heartbeat(api, r, offers):
-    readiness = {"schema_version": 1, **({"screen": {"available": True, "width": 1440, "height": 900}} if offers else {})}
-    post(api, "runners/heartbeat", {"version": "test", "platform": "test", "capabilities": ["screen_v1"] if offers else [],
-                                    "readiness": readiness}, token=r["token"])
+    readiness = {
+        "schema_version": 1,
+        **({"screen": {"available": True, "width": 1440, "height": 900}} if offers else {}),
+    }
+    post(
+        api,
+        "runners/heartbeat",
+        {
+            "version": "test",
+            "platform": "test",
+            "capabilities": ["screen_v1"] if offers else [],
+            "readiness": readiness,
+        },
+        token=r["token"],
+    )
 
 
 def restart(api, r):
@@ -26,14 +38,14 @@ def test_a_new_computer_offering_its_screen_starts_at_control_and_a_persons_choi
     r = runner(api)
     rid = r["runner_id"]
     heartbeat(api, r, False)
-    assert mode(api, rid) == "off"                      # no screen offered, nothing to view
+    assert mode(api, rid) == "off"  # no screen offered, nothing to view
     heartbeat(api, r, True)
     assert mode(api, rid) == "control"
     with api.app.state.store.read() as c:
-        rows = c.execute("SELECT actor,detail FROM events WHERE action='runner.screen' AND target=?",
-                         (rid,)).fetchall()
+        rows = c.execute("SELECT actor,detail FROM events WHERE action='runner.screen' AND target=?", (rid,)).fetchall()
     assert [(row["actor"], json.loads(row["detail"])) for row in rows] == [
-        ("system", {"mode": "control", "reason": "first offer"})]
+        ("system", {"mode": "control", "reason": "first offer"})
+    ]
     post(api, f"computers/{rid}/screen", {"mode": "view"})
     restart(api, r)
     assert mode(api, rid) == "view"
@@ -43,7 +55,7 @@ def test_a_choice_made_before_the_first_offer_stands(api):
     r = runner(api)
     rid = r["runner_id"]
     heartbeat(api, r, False)
-    post(api, f"computers/{rid}/screen", {"mode": "off"})     # Off is the one mode a computer with no screen takes
+    post(api, f"computers/{rid}/screen", {"mode": "off"})  # Off is the one mode a computer with no screen takes
     heartbeat(api, r, True)
     assert mode(api, rid) == "off"
 
@@ -51,7 +63,7 @@ def test_a_choice_made_before_the_first_offer_stands(api):
 def test_a_computer_from_before_the_default_keeps_its_screen_off_through_restarts(api):
     r = runner(api)
     rid = r["runner_id"]
-    with api.app.state.store.transaction() as c:      # what the column's default gives every existing row
+    with api.app.state.store.transaction() as c:  # what the column's default gives every existing row
         c.execute("UPDATE runners SET screen_default_pending=0 WHERE id=?", (rid,))
     heartbeat(api, r, True)
     restart(api, r)

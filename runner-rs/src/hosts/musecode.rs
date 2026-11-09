@@ -27,7 +27,9 @@ use crate::util::{log, text_of, truthy};
 
 pub const MODELS: &[&str] = &["muse-spark-1.3", "muse-wonder-1.0", "muse-wonder-full-1.0"];
 pub const DEFAULT_MODEL: &str = "muse-spark-1.3";
-const EFFORTS: &[&str] = &["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"];
+const EFFORTS: &[&str] = &[
+    "none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra",
+];
 const DEFAULT_EFFORT: &str = "medium";
 const STOP_TIMEOUT: Duration = Duration::from_secs(10);
 /// How long a process may stay up after its run's terminal record before it is stopped.
@@ -35,7 +37,11 @@ const AFTER_TERMINAL: Duration = Duration::from_secs(5);
 /// Set on every Muse process, the sign-in check's and `--version`'s too, so the launcher never updates itself. The
 /// file credential backend keeps a login whole in its config folder's auth.json: on macOS Muse otherwise keeps the token
 /// in the login Keychain, outside the files a switch moves into place or a cancel keeps.
-pub const QUIET: &[(&str, &str)] = &[("MUSE_NO_AUTO_UPDATE", "1"), ("NO_COLOR", "1"), ("TBH_CREDENTIAL_BACKEND", "file")];
+pub const QUIET: &[(&str, &str)] = &[
+    ("MUSE_NO_AUTO_UPDATE", "1"),
+    ("NO_COLOR", "1"),
+    ("TBH_CREDENTIAL_BACKEND", "file"),
+];
 
 /// The catalog id as the CLI's model id; anything else passes through, so a model Meta adds works unchanged.
 pub fn model_for(model: Option<&str>) -> String {
@@ -78,10 +84,16 @@ fn count(row: &Map<String, Value>, keys: &[&str]) -> i64 {
 fn tool_started(kind: &str, payload: &Value) -> Option<String> {
     if kind == "task.lifecycle.proposed" {
         let task = payload["event"]["task_kind"].as_str()?;
-        return task.strip_prefix("tool.").filter(|n| !n.is_empty()).map(str::to_string);
+        return task
+            .strip_prefix("tool.")
+            .filter(|n| !n.is_empty())
+            .map(str::to_string);
     }
     if kind.starts_with("tool.") && kind.ends_with(".started") {
-        let name = ["tool_name", "name", "tool"].iter().find(|k| truthy(payload.get(**k))).map(|k| text_of(&payload[*k]));
+        let name = ["tool_name", "name", "tool"]
+            .iter()
+            .find(|k| truthy(payload.get(**k)))
+            .map(|k| text_of(&payload[*k]));
         return Some(name.unwrap_or_else(|| "tool".into()));
     }
     None
@@ -90,7 +102,10 @@ fn tool_started(kind: &str, payload: &Value) -> Option<String> {
 /// A model response the run starts: real runs propose one as a `model.<provider>.response` task. Its text is a new
 /// message, not more of the one before it.
 fn response_started(kind: &str, payload: &Value) -> bool {
-    kind == "task.lifecycle.proposed" && payload["event"]["task_kind"].as_str().is_some_and(|k| k.starts_with("model."))
+    kind == "task.lifecycle.proposed"
+        && payload["event"]["task_kind"]
+            .as_str()
+            .is_some_and(|k| k.starts_with("model."))
 }
 
 /// (input, cached, output) from one event's own token counters, or None. A session's `cumulative` running totals
@@ -103,13 +118,25 @@ pub fn usage_of(payload: &Value) -> Option<(i64, i64, i64)> {
         let has = |a: &str, b: &str| row.contains_key(a) || row.contains_key(b);
         if has("inputTokens", "input_tokens") && has("outputTokens", "output_tokens") {
             let inp = count(row, &["inputTokens", "input_tokens"]);
-            let cached = count(row, &["cacheReadTokens", "cache_read_tokens", "cachedTokens", "cached_tokens"]);
+            let cached = count(
+                row,
+                &[
+                    "cacheReadTokens",
+                    "cache_read_tokens",
+                    "cachedTokens",
+                    "cached_tokens",
+                ],
+            );
             let out = count(row, &["outputTokens", "output_tokens"]);
             let (a, b, c) = found.unwrap_or_default();
             found = Some((a + inp, b + cached, c + out));
             continue;
         }
-        stack.extend(row.iter().filter(|(k, v)| *k != "cumulative" && v.is_object()).map(|(_, v)| v));
+        stack.extend(
+            row.iter()
+                .filter(|(k, v)| *k != "cumulative" && v.is_object())
+                .map(|(_, v)| v),
+        );
     }
     found
 }
@@ -119,13 +146,21 @@ pub fn usage_of(payload: &Value) -> Option<(i64, i64, i64)> {
 pub fn session_log(env: &Env, session_id: &str) -> Option<PathBuf> {
     let data = match env.get("XDG_DATA_HOME").filter(|d| !d.is_empty()) {
         Some(d) => PathBuf::from(d),
-        None => PathBuf::from(env.get("HOME").filter(|h| !h.is_empty())?).join(".local").join("share"),
+        None => PathBuf::from(env.get("HOME").filter(|h| !h.is_empty())?)
+            .join(".local")
+            .join("share"),
     };
     if session_id.is_empty() || session_id.contains('/') {
         return None;
     }
     let dirs = |p: &Path| -> Vec<PathBuf> {
-        let mut v: Vec<PathBuf> = std::fs::read_dir(p).into_iter().flatten().flatten().map(|e| e.path()).filter(|p| p.is_dir()).collect();
+        let mut v: Vec<PathBuf> = std::fs::read_dir(p)
+            .into_iter()
+            .flatten()
+            .flatten()
+            .map(|e| e.path())
+            .filter(|p| p.is_dir())
+            .collect();
         v.sort();
         v
     };
@@ -146,7 +181,11 @@ pub fn session_log(env: &Env, session_id: &str) -> Option<PathBuf> {
 /// (input, cached, output, model) summed over the `model_completed` records of `run_id` (any run when None) from
 /// byte `offset` on, or None when there are none. Records that repeat the same counts (`goal_usage_attribution`)
 /// are not counted.
-pub fn session_usage(path: &Path, offset: u64, run_id: Option<&str>) -> Option<(i64, i64, i64, String)> {
+pub fn session_usage(
+    path: &Path,
+    offset: u64,
+    run_id: Option<&str>,
+) -> Option<(i64, i64, i64, String)> {
     let mut file = std::fs::File::open(path).ok()?;
     let size = file.metadata().ok()?.len();
     if offset > 0 && offset <= size {
@@ -155,17 +194,32 @@ pub fn session_usage(path: &Path, offset: u64, run_id: Option<&str>) -> Option<(
     let mut bytes = vec![];
     file.read_to_end(&mut bytes).ok()?;
     let (mut found, mut model): (Option<(i64, i64, i64)>, String) = (None, String::new());
-    for line in String::from_utf8_lossy(&bytes).lines().filter(|l| l.contains("model_completed")) {
-        let Ok(rec) = serde_json::from_str::<Value>(line) else { continue };
+    for line in String::from_utf8_lossy(&bytes)
+        .lines()
+        .filter(|l| l.contains("model_completed"))
+    {
+        let Ok(rec) = serde_json::from_str::<Value>(line) else {
+            continue;
+        };
         let (payload, event) = (&rec["payload"], &rec["payload"]["event"]);
-        if event["kind"] != "model_completed" || run_id.is_some_and(|r| payload["run_id"].as_str() != Some(r)) {
+        if event["kind"] != "model_completed"
+            || run_id.is_some_and(|r| payload["run_id"].as_str() != Some(r))
+        {
             continue;
         }
         let empty = Map::new();
         let u = event["usage"].as_object().unwrap_or(&empty);
         let row = (
             count(u, &["input_tokens", "inputTokens"]),
-            count(u, &["cache_read_tokens", "cacheReadTokens", "cached_tokens", "cachedTokens"]),
+            count(
+                u,
+                &[
+                    "cache_read_tokens",
+                    "cacheReadTokens",
+                    "cached_tokens",
+                    "cachedTokens",
+                ],
+            ),
             count(u, &["output_tokens", "outputTokens"]),
         );
         let (a, b, c) = found.unwrap_or_default();
@@ -192,13 +246,18 @@ pub fn muse_config(servers: &[Value], env: &Env) -> (Map<String, Value>, Env) {
         let mut headers = Map::new();
         for (name, value) in s["headers"].as_object().into_iter().flatten() {
             let value = text_of(value);
-            let found: Vec<&str> = placeholder_re().captures_iter(&value).map(|c| c.get(1).unwrap().as_str()).collect();
+            let found: Vec<&str> = placeholder_re()
+                .captures_iter(&value)
+                .map(|c| c.get(1).unwrap().as_str())
+                .collect();
             if found.len() == 1 && value.trim() == format!("${{{}}}", found[0]) {
                 headers.insert(name.clone(), json!(value.trim()));
                 continue;
             }
             let var = format!("TICO_MCP_{}", extra.len() + 1);
-            let expanded = placeholder_re().replace_all(&value, |c: &regex::Captures| env.get(&c[1]).cloned().unwrap_or_default());
+            let expanded = placeholder_re().replace_all(&value, |c: &regex::Captures| {
+                env.get(&c[1]).cloned().unwrap_or_default()
+            });
             extra.insert(var.clone(), expanded.into_owned());
             headers.insert(name.clone(), json!(format!("${{{var}}}")));
         }
@@ -218,8 +277,12 @@ pub fn muse_config(servers: &[Value], env: &Env) -> (Map<String, Value>, Env) {
 pub fn mcp_overrides(settings: &Settings) -> (Vec<String>, Env) {
     let mut args = vec![];
     if let Some(hub) = hub_mcp_server(&settings.env) {
-        let vars: Map<String, Value> =
-            hub["env"].as_object().into_iter().flatten().map(|(k, _)| (k.clone(), json!(format!("${{{k}}}")))).collect();
+        let vars: Map<String, Value> = hub["env"]
+            .as_object()
+            .into_iter()
+            .flatten()
+            .map(|(k, _)| (k.clone(), json!(format!("${{{k}}}"))))
+            .collect();
         let server = json!({"transport": "stdio", "command": hub["command"], "args": hub["args"], "env": vars});
         args.extend(["-c".into(), format!("mcp_servers.hub={server}")]);
     }
@@ -245,9 +308,16 @@ enum Store {
 
 fn store(path: &Path) -> Store {
     match std::fs::symlink_metadata(path) {
-        Ok(m) if m.is_file() => {},
+        Ok(m) if m.is_file() => {}
         Ok(_) => return Store::Unknown,
-        Err(e) if matches!(e.kind(), std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory) => return Store::Empty,
+        Err(e)
+            if matches!(
+                e.kind(),
+                std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory
+            ) =>
+        {
+            return Store::Empty
+        }
         Err(_) => return Store::Unknown,
     }
     let Some(bytes) = read_auth(path, Duration::from_secs(5)).filter(|b| b.len() <= 65536) else {
@@ -257,7 +327,10 @@ fn store(path: &Path) -> Store {
         return Store::Unknown;
     };
     // 1 is the file backend's store; 2 is the one whose credentials are Keychain pointers.
-    let (Some(version @ (1 | 2)), Some(providers)) = (auth["schema_version"].as_u64(), auth["providers"].as_object()) else {
+    let (Some(version @ (1 | 2)), Some(providers)) = (
+        auth["schema_version"].as_u64(),
+        auth["providers"].as_object(),
+    ) else {
         return Store::Unknown;
     };
     let meta = match providers.get("meta") {
@@ -266,7 +339,11 @@ fn store(path: &Path) -> Store {
         Some(Value::Object(meta)) => meta,
         _ => return Store::Unknown,
     };
-    let text = |key: &str| meta.get(key).and_then(Value::as_str).is_some_and(|v| !v.trim().is_empty());
+    let text = |key: &str| {
+        meta.get(key)
+            .and_then(Value::as_str)
+            .is_some_and(|v| !v.trim().is_empty())
+    };
     match meta.get("storage") {
         Some(Value::String(s)) if s == "keychain" => return Store::Keychain,
         None if version == 1 => {}
@@ -274,7 +351,11 @@ fn store(path: &Path) -> Store {
         _ => return Store::Unknown,
     }
     let oauth = text("access_token") && meta.get("mechanism").is_none_or(|m| m == "oauth");
-    if text("api_key") || oauth { Store::Login } else { Store::Unknown }
+    if text("api_key") || oauth {
+        Store::Login
+    } else {
+        Store::Unknown
+    }
 }
 
 /// Whether Muse's saved credential store holds a Meta login of its own. Logout leaves the store with no Meta entry;
@@ -297,8 +378,14 @@ pub fn store_problem(path: &Path) -> Option<String> {
 /// Read as the CLI's user, with bounded output and time. A file swapped for a pipe after the metadata check
 /// must not stall readiness or sign-out, and credential contents never belong in diagnostics.
 fn read_auth(path: &Path, timeout: Duration) -> Option<Vec<u8>> {
-    let mut child = crate::isolation::std_command("head").args(["-c", "65537", "--"]).arg(path)
-        .stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::null()).spawn().ok()?;
+    let mut child = crate::isolation::std_command("head")
+        .args(["-c", "65537", "--"])
+        .arg(path)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .ok()?;
     let stdout = child.stdout.take()?;
     let (tx, rx) = std::sync::mpsc::sync_channel(1);
     std::thread::spawn(move || {
@@ -313,9 +400,14 @@ fn read_auth(path: &Path, timeout: Duration) -> Option<Vec<u8>> {
                 if !status.success() {
                     return None;
                 }
-                return rx.recv_timeout(deadline.saturating_duration_since(std::time::Instant::now())).ok()?.ok();
+                return rx
+                    .recv_timeout(deadline.saturating_duration_since(std::time::Instant::now()))
+                    .ok()?
+                    .ok();
             }
-            Ok(None) if std::time::Instant::now() < deadline => std::thread::sleep(Duration::from_millis(10)),
+            Ok(None) if std::time::Instant::now() < deadline => {
+                std::thread::sleep(Duration::from_millis(10))
+            }
             _ => {
                 let _ = child.kill();
                 let _ = child.wait();
@@ -344,8 +436,13 @@ pub fn config_home(profile: Option<&crate::profiles::Profile>) -> PathBuf {
 
 /// `musecode/<name>` in the runner's bot-owned host state.
 fn own_folder(name: &str) -> PathBuf {
-    let state = STATE_DIR.get().cloned().unwrap_or_else(|| std::env::temp_dir().join("tico-runner-state"));
-    crate::isolation::bot_state(&state).join("musecode").join(name)
+    let state = STATE_DIR
+        .get()
+        .cloned()
+        .unwrap_or_else(|| std::env::temp_dir().join("tico-runner-state"));
+    crate::isolation::bot_state(&state)
+        .join("musecode")
+        .join(name)
 }
 
 /// Muse Code's XDG_DATA_HOME (sessions, their locks and logs): the runner's own `musecode/data`, or
@@ -355,8 +452,17 @@ fn own_folder(name: &str) -> PathBuf {
 /// would take over a folder this check must refuse.
 pub fn data_home(profile: Option<&crate::profiles::Profile>) -> PathBuf {
     match profile.filter(|p| p.home("musecode").is_some()) {
-        Some(p) if crate::profiles::valid_name(&p.name) => own_folder("profiles").join(&p.name).join("data"),
-        Some(p) => own_folder("profiles").join(p.name.bytes().map(|b| format!("{b:02x}")).collect::<String>()).join("data"),
+        Some(p) if crate::profiles::valid_name(&p.name) => {
+            own_folder("profiles").join(&p.name).join("data")
+        }
+        Some(p) => own_folder("profiles")
+            .join(
+                p.name
+                    .bytes()
+                    .map(|b| format!("{b:02x}"))
+                    .collect::<String>(),
+            )
+            .join("data"),
         None => own_folder("data"),
     }
 }
@@ -366,11 +472,15 @@ pub fn data_home(profile: Option<&crate::profiles::Profile>) -> PathBuf {
 fn turn_can_write(path: &Path) -> bool {
     use std::os::unix::fs::MetadataExt;
     let Some((uid, gid)) = crate::isolation::identity() else {
-        let Ok(c) = std::ffi::CString::new(path.as_os_str().as_encoded_bytes()) else { return false };
+        let Ok(c) = std::ffi::CString::new(path.as_os_str().as_encoded_bytes()) else {
+            return false;
+        };
         // SAFETY: access on a NUL-terminated path.
         return unsafe { libc::access(c.as_ptr(), libc::W_OK | libc::X_OK) } == 0;
     };
-    let Ok(m) = std::fs::metadata(path) else { return false };
+    let Ok(m) = std::fs::metadata(path) else {
+        return false;
+    };
     can_write(m.mode(), (m.uid(), m.gid()), (uid, gid))
 }
 
@@ -378,7 +488,13 @@ fn turn_can_write(path: &Path) -> bool {
 /// with `--clear-groups`): the owner's bits alone when it owns it, else the group's when it is in that group, else
 /// the others'. Creating an entry needs write and search.
 fn can_write(mode: u32, owner: (u32, u32), user: (u32, u32)) -> bool {
-    let bits = if owner.0 == user.0 { 0o300 } else if owner.1 == user.1 { 0o030 } else { 0o003 };
+    let bits = if owner.0 == user.0 {
+        0o300
+    } else if owner.1 == user.1 {
+        0o030
+    } else {
+        0o003
+    };
     mode & bits == bits
 }
 
@@ -391,7 +507,12 @@ pub fn data_problem(home: &Path) -> Option<String> {
         match std::fs::symlink_metadata(&dir) {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => return None,
             Ok(m) if m.is_dir() && turn_can_write(&dir) => continue,
-            Ok(m) if !m.is_dir() => return Some(format!("Muse Code data folder {} is not a plain folder (symbolic links are refused)", dir.display())),
+            Ok(m) if !m.is_dir() => {
+                return Some(format!(
+                    "Muse Code data folder {} is not a plain folder (symbolic links are refused)",
+                    dir.display()
+                ))
+            }
             _ => {}
         }
         return Some(format!("Muse Code can't save sessions: the bot user can't write {} (another user owns it or it is read-only)", dir.display()));
@@ -407,16 +528,26 @@ pub fn prepare_data(home: &Path) -> Result<(), HostError> {
         return Err(failed(problem));
     }
     let made = if crate::isolation::enabled() {
-        crate::isolation::std_command("mkdir").args(["-p", "-m", "700", "--"]).arg(home).stdin(Stdio::null()).output().and_then(|out| {
-            if out.status.success() {
-                Ok(())
-            } else {
-                Err(std::io::Error::other(String::from_utf8_lossy(&out.stderr).trim().to_string()))
-            }
-        })
+        crate::isolation::std_command("mkdir")
+            .args(["-p", "-m", "700", "--"])
+            .arg(home)
+            .stdin(Stdio::null())
+            .output()
+            .and_then(|out| {
+                if out.status.success() {
+                    Ok(())
+                } else {
+                    Err(std::io::Error::other(
+                        String::from_utf8_lossy(&out.stderr).trim().to_string(),
+                    ))
+                }
+            })
     } else {
         use std::os::unix::fs::DirBuilderExt;
-        std::fs::DirBuilder::new().recursive(true).mode(0o700).create(home)
+        std::fs::DirBuilder::new()
+            .recursive(true)
+            .mode(0o700)
+            .create(home)
     };
     made.map_err(|e| failed(format!("Muse Code data folder {}: {e}", home.display())))?;
     data_problem(home).map_or(Ok(()), |problem| Err(failed(problem)))
@@ -427,12 +558,17 @@ pub fn prepare_data(home: &Path) -> Result<(), HostError> {
 pub fn prepare_config(home: &Path) -> Result<PathBuf, HostError> {
     for path in [home.to_path_buf(), home.join("muse")] {
         match std::fs::symlink_metadata(path) {
-            Ok(m) if !m.is_dir() => return Err(failed("Muse config directories must not be symbolic links")),
-            Err(e) if e.kind() != std::io::ErrorKind::NotFound => return Err(failed(e.to_string())),
+            Ok(m) if !m.is_dir() => {
+                return Err(failed("Muse config directories must not be symbolic links"))
+            }
+            Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
+                return Err(failed(e.to_string()))
+            }
             _ => {}
         }
     }
-    let directory = crate::isolation::mkdir(&home.join("muse"), 0o700).map_err(|e| failed(format!("Muse settings folder: {e}")))?;
+    let directory = crate::isolation::mkdir(&home.join("muse"), 0o700)
+        .map_err(|e| failed(format!("Muse settings folder: {e}")))?;
     // Only this login's Muse home, not the profile directory or the runner's private state.
     crate::isolation::adopt_store(&[home.to_path_buf()]);
     let path = directory.join("settings.json");
@@ -442,7 +578,11 @@ pub fn prepare_config(home: &Path) -> Result<PathBuf, HostError> {
         Ok(text) => serde_json::from_str::<Value>(&text).ok(),
     };
     let cleaned = match stored {
-        Some(Value::Object(m)) if !m.contains_key("mcpServers") && !m.contains_key("mcp_servers") => return Ok(directory),
+        Some(Value::Object(m))
+            if !m.contains_key("mcpServers") && !m.contains_key("mcp_servers") =>
+        {
+            return Ok(directory)
+        }
         Some(Value::Object(mut m)) => {
             m.remove("mcpServers");
             m.remove("mcp_servers");
@@ -451,7 +591,11 @@ pub fn prepare_config(home: &Path) -> Result<PathBuf, HostError> {
         _ => json!({"schema_version": 1}), // Muse refuses a broken file anyway; this one is ours to rewrite
     };
     let temporary = directory.join(format!(".settings-{}.json", uuid::Uuid::new_v4().simple()));
-    let written = std::fs::write(&temporary, serde_json::to_string_pretty(&cleaned).unwrap_or_default()).and_then(|_| {
+    let written = std::fs::write(
+        &temporary,
+        serde_json::to_string_pretty(&cleaned).unwrap_or_default(),
+    )
+    .and_then(|_| {
         crate::isolation::chown(&temporary);
         std::fs::rename(&temporary, &path)
     });
@@ -465,10 +609,18 @@ pub fn auth_file(env: &Env) -> PathBuf {
     if let Some(p) = env.get("MUSE_AUTH_PATH").filter(|p| !p.is_empty()) {
         return PathBuf::from(p);
     }
-    let config = env.get("XDG_CONFIG_HOME").filter(|p| !p.is_empty()).map(PathBuf::from).unwrap_or_else(|| {
-        let home = env.get("HOME").filter(|h| !h.is_empty()).cloned().unwrap_or_default();
-        PathBuf::from(home).join(".config")
-    });
+    let config = env
+        .get("XDG_CONFIG_HOME")
+        .filter(|p| !p.is_empty())
+        .map(PathBuf::from)
+        .unwrap_or_else(|| {
+            let home = env
+                .get("HOME")
+                .filter(|h| !h.is_empty())
+                .cloned()
+                .unwrap_or_default();
+            PathBuf::from(home).join(".config")
+        });
     config.join("muse").join("auth.json")
 }
 
@@ -500,6 +652,7 @@ struct Inner {
 }
 
 struct Shared {
+    allocation: super::Allocation,
     bot: String,
     cmd: Vec<String>,
     /// `echo` is Muse's offline provider (tests and smoke runs); it takes no model or effort.
@@ -518,15 +671,38 @@ pub struct MuseCodeHost(Arc<Shared>);
 
 impl MuseCodeHost {
     #[cfg(test)]
-    pub fn new(bot: &str, cmd: Vec<String>, provider: Option<String>, state_dir: PathBuf, tx: Events) -> MuseCodeHost {
+    pub fn new(
+        bot: &str,
+        cmd: Vec<String>,
+        provider: Option<String>,
+        state_dir: PathBuf,
+        tx: Events,
+    ) -> MuseCodeHost {
         let (config_home, data_home) = (state_dir.join("config"), state_dir.join("data"));
         Self::on_config(bot, cmd, provider, state_dir, (config_home, data_home), tx)
     }
 
     /// `homes`: Muse's (XDG_CONFIG_HOME, XDG_DATA_HOME) for every turn.
-    pub fn on_config(bot: &str, cmd: Vec<String>, provider: Option<String>, state_dir: PathBuf, homes: (PathBuf, PathBuf), tx: Events) -> MuseCodeHost {
+    pub fn on_config(
+        bot: &str,
+        cmd: Vec<String>,
+        provider: Option<String>,
+        state_dir: PathBuf,
+        homes: (PathBuf, PathBuf),
+        tx: Events,
+    ) -> MuseCodeHost {
         let (config_home, data_home) = homes;
-        MuseCodeHost(Arc::new(Shared { bot: bot.into(), cmd, provider, state_dir, config_home, data_home, tx, inner: Mutex::new(Inner::default()) }))
+        MuseCodeHost(Arc::new(Shared {
+            allocation: super::Allocation::default(),
+            bot: bot.into(),
+            cmd,
+            provider,
+            state_dir,
+            config_home,
+            data_home,
+            tx,
+            inner: Mutex::new(Inner::default()),
+        }))
     }
 
     fn inner(&self) -> std::sync::MutexGuard<'_, Inner> {
@@ -558,6 +734,10 @@ impl MuseCodeHost {
         }
     }
 
+    pub fn track_allocation(&self, turn: std::sync::Arc<std::sync::atomic::AtomicBool>) {
+        self.0.allocation.track(turn);
+    }
+
     pub fn alive(&self) -> bool {
         self.inner().up
     }
@@ -570,23 +750,48 @@ impl MuseCodeHost {
     }
 
     pub fn resume_thread(&self, thread_id: &str, settings: &Settings) -> String {
-        self.inner().threads.insert(thread_id.into(), settings.clone());
+        self.inner()
+            .threads
+            .insert(thread_id.into(), settings.clone());
         thread_id.into()
     }
 
-    pub fn argv(&self, thread_id: &str, settings: &Settings, prompt_file: &Path, effort: Option<&str>) -> Vec<String> {
+    pub fn argv(
+        &self,
+        thread_id: &str,
+        settings: &Settings,
+        prompt_file: &Path,
+        effort: Option<&str>,
+    ) -> Vec<String> {
         let mut argv = self.0.cmd.clone();
         argv.extend(
-            ["exec", "--json", "--yolo", "--approval-mode", "never", "--approval-judge", "off", "--user-input-auto-resolve", "--workspace"]
-                .map(String::from),
+            [
+                "exec",
+                "--json",
+                "--yolo",
+                "--approval-mode",
+                "never",
+                "--approval-judge",
+                "off",
+                "--user-input-auto-resolve",
+                "--workspace",
+            ]
+            .map(String::from),
         );
-        argv.extend([settings.cwd.clone(), "--session-id".into(), thread_id.into()]);
+        argv.extend([
+            settings.cwd.clone(),
+            "--session-id".into(),
+            thread_id.into(),
+        ]);
         if let Some(p) = &self.0.provider {
             argv.extend(["--provider".into(), p.clone()]);
         }
         if self.0.provider.as_deref() != Some("echo") {
             argv.extend(["--model".into(), model_for(settings.model.as_deref())]);
-            argv.extend(["--reasoning-effort".into(), effort_for(effort.or(settings.effort.as_deref()))]);
+            argv.extend([
+                "--reasoning-effort".into(),
+                effort_for(effort.or(settings.effort.as_deref())),
+            ]);
         }
         argv.extend(mcp_overrides(settings).0);
         argv.extend(["--prompt-file".into(), prompt_file.display().to_string()]);
@@ -596,14 +801,24 @@ impl MuseCodeHost {
     /// The turn's environment (this process's when the settings carry none), HOME kept, Tico's own Muse folders,
     /// QUIET and the MCP variables.
     pub fn env(&self, settings: &Settings) -> Env {
-        let mut env = if settings.env.is_empty() { std::env::vars().collect() } else { settings.env.clone() };
+        let mut env = if settings.env.is_empty() {
+            std::env::vars().collect()
+        } else {
+            settings.env.clone()
+        };
         if env.get("HOME").is_none_or(|h| h.is_empty()) {
             if let Ok(home) = std::env::var("HOME") {
                 env.insert("HOME".into(), home);
             }
         }
-        env.insert("XDG_CONFIG_HOME".into(), self.0.config_home.display().to_string());
-        env.insert("XDG_DATA_HOME".into(), self.0.data_home.display().to_string());
+        env.insert(
+            "XDG_CONFIG_HOME".into(),
+            self.0.config_home.display().to_string(),
+        );
+        env.insert(
+            "XDG_DATA_HOME".into(),
+            self.0.data_home.display().to_string(),
+        );
         env.extend(QUIET.iter().map(|(k, v)| (k.to_string(), v.to_string())));
         env.extend(mcp_overrides(settings).1);
         env
@@ -613,25 +828,51 @@ impl MuseCodeHost {
         use std::os::unix::fs::OpenOptionsExt;
         crate::isolation::mkdir(&self.0.state_dir, 0o700)?;
         crate::isolation::chown(&self.0.state_dir);
-        let path = self.0.state_dir.join(format!("prompt-{}.md", uuid::Uuid::new_v4().simple()));
-        let mut f = std::fs::OpenOptions::new().write(true).create_new(true).mode(0o600).open(&path)?;
-        if let Err(e) = f.write_all(text.as_bytes()).and_then(|_| crate::isolation::chown_file(&f)) {
+        let path = self
+            .0
+            .state_dir
+            .join(format!("prompt-{}.md", uuid::Uuid::new_v4().simple()));
+        let mut f = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(&path)?;
+        if let Err(e) = f
+            .write_all(text.as_bytes())
+            .and_then(|_| crate::isolation::chown_file(&f))
+        {
             let _ = std::fs::remove_file(&path);
             return Err(e);
         }
         Ok(path)
     }
 
-    fn command(&self, thread_id: &str, settings: &Settings, prompt: &Path, effort: Option<&str>) -> Command {
+    fn command(
+        &self,
+        thread_id: &str,
+        settings: &Settings,
+        prompt: &Path,
+        effort: Option<&str>,
+    ) -> Command {
         let argv = self.argv(thread_id, settings, prompt, effort);
         let mut command = crate::isolation::command(&argv[0]);
-        command.args(&argv[1..]).stdin(Stdio::null()).stdout(Stdio::piped())
-            .current_dir(&settings.cwd).env_clear().envs(self.env(settings));
+        command
+            .args(&argv[1..])
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .current_dir(&settings.cwd)
+            .env_clear()
+            .envs(self.env(settings));
         super::new_group(&mut command);
         command
     }
 
-    pub fn start_turn(&self, thread_id: &str, text: &str, effort: Option<&str>) -> Result<String, HostError> {
+    pub fn start_turn(
+        &self,
+        thread_id: &str,
+        text: &str,
+        effort: Option<&str>,
+    ) -> Result<String, HostError> {
         let turn = uuid::Uuid::new_v4().to_string();
         let (stdout, exited, stderr, prompt, pid, env, offset) = {
             let mut inner = self.inner();
@@ -641,19 +882,30 @@ impl MuseCodeHost {
             if inner.turn.is_some() {
                 return Err(failed("muse host already has a turn running"));
             }
-            let settings = inner.threads.get(thread_id).cloned().ok_or_else(|| failed(format!("unknown muse thread {thread_id}")))?;
+            let settings = inner
+                .threads
+                .get(thread_id)
+                .cloned()
+                .ok_or_else(|| failed(format!("unknown muse thread {thread_id}")))?;
             // The data folder first: nothing is handed to the bot user before a folder it must not have is refused.
             prepare_data(&self.0.data_home)?;
             prepare_config(&self.0.config_home)?;
             let env = self.env(&settings);
-            let offset = session_log(&env, thread_id).and_then(|p| std::fs::metadata(p).ok()).map_or(0, |m| m.len());
-            let prompt = self.prompt_file(text).map_err(|e| failed(format!("could not start muse: {e}")))?;
+            let offset = session_log(&env, thread_id)
+                .and_then(|p| std::fs::metadata(p).ok())
+                .map_or(0, |m| m.len());
+            let prompt = self
+                .prompt_file(text)
+                .map_err(|e| failed(format!("could not start muse: {e}")))?;
             let spawned = (|| {
                 // Drain stderr independently so a noisy harness cannot block its own exit.
-                let mut child = self.command(thread_id, &settings, &prompt, effort)
+                let mut child = self
+                    .command(thread_id, &settings, &prompt, effort)
                     .stderr(Stdio::piped())
                     .spawn()?;
-                let stderr = crate::run_diagnostics::Stderr::capture(&mut child, self.0.tx.clone(), &env);
+                self.0.allocation.mark();
+                let stderr =
+                    crate::run_diagnostics::Stderr::capture(&mut child, self.0.tx.clone(), &env);
                 Ok::<_, std::io::Error>((child, stderr))
             })();
             let (mut child, stderr) = match spawned {
@@ -670,11 +922,23 @@ impl MuseCodeHost {
             inner.turn = Some((thread_id.into(), turn.clone()));
             (stdout, exited, stderr, prompt, pid, env, offset)
         };
-        log(&format!("muse[{}]: turn started pid {}", self.0.bot, pid.map_or("?".into(), |p| p.to_string())));
-        self.emit(event("status", Some(thread_id), None, json!({"state": "active"})));
+        log(&format!(
+            "muse[{}]: turn started pid {}",
+            self.0.bot,
+            pid.map_or("?".into(), |p| p.to_string())
+        ));
+        self.emit(event(
+            "status",
+            Some(thread_id),
+            None,
+            json!({"state": "active"}),
+        ));
         let host = self.clone();
         let (tid, t2) = (thread_id.to_string(), turn.clone());
-        let reader = tokio::spawn(async move { host.read_loop(stdout, exited, stderr, (prompt, env, offset), tid, t2).await });
+        let reader = tokio::spawn(async move {
+            host.read_loop(stdout, exited, stderr, (prompt, env, offset), tid, t2)
+                .await
+        });
         self.inner().reader = Some(reader);
         Ok(turn)
     }
@@ -711,7 +975,10 @@ impl MuseCodeHost {
             match tokio::time::timeout(AFTER_TERMINAL, &mut exited).await {
                 Ok(status) => status.map_or(-1, |s| super::return_code(&s)),
                 Err(_) => {
-                    log(&format!("muse[{}]: run ended {} but the process stayed up; stopping it", self.0.bot, state.terminal));
+                    log(&format!(
+                        "muse[{}]: run ended {} but the process stayed up; stopping it",
+                        self.0.bot, state.terminal
+                    ));
                     let stopper = self.inner().stopper.clone();
                     if let Some(s) = stopper {
                         s.terminate(STOP_TIMEOUT);
@@ -724,7 +991,9 @@ impl MuseCodeHost {
         let _ = std::fs::remove_file(&prompt);
         if state.usage.is_none() {
             let run = Some(state.run.as_str()).filter(|r| !r.is_empty());
-            if let Some((a, b, c, model)) = session_log(&env, &tid).and_then(|p| session_usage(&p, offset, run)) {
+            if let Some((a, b, c, model)) =
+                session_log(&env, &tid).and_then(|p| session_usage(&p, offset, run))
+            {
                 state.usage = Some((a, b, c));
                 if !model.is_empty() {
                     state.model = model;
@@ -742,7 +1011,11 @@ impl MuseCodeHost {
         }
         let kind = text_of(&ev["payload_type"]);
         let empty = json!({});
-        let payload = if ev["payload"].is_object() { &ev["payload"] } else { &empty };
+        let payload = if ev["payload"].is_object() {
+            &ev["payload"]
+        } else {
+            &empty
+        };
         if let Some((a, b, c)) = usage_of(payload) {
             let (x, y, z) = state.usage.unwrap_or_default();
             state.usage = Some((x + a, y + b, z + c));
@@ -759,21 +1032,39 @@ impl MuseCodeHost {
         }
         if kind == "run.output.delta" {
             if let Some(text) = payload["text"].as_str().filter(|t| !t.is_empty()) {
-                let text = super::add_piece(&mut state.streamed, std::mem::take(&mut state.new_message), text);
-                self.emit(event("delta", Some(tid), Some(turn), json!({"text": text, "delta_kind": "text"})));
+                let text = super::add_piece(
+                    &mut state.streamed,
+                    std::mem::take(&mut state.new_message),
+                    text,
+                );
+                self.emit(event(
+                    "delta",
+                    Some(tid),
+                    Some(turn),
+                    json!({"text": text, "delta_kind": "text"}),
+                ));
             }
         } else if response_started(&kind, payload) {
             state.new_message = true;
         } else if let Some(name) = tool_started(&kind, payload) {
             state.streamed.clear(); // text before a tool call is progress, not the answer
-            self.emit(event("tool", Some(tid), Some(turn), json!({"name": name, "tool": name, "phase": "tool_execution_start"})));
+            self.emit(event(
+                "tool",
+                Some(tid),
+                Some(turn),
+                json!({"name": name, "tool": name, "phase": "tool_execution_start"}),
+            ));
         } else if kind.starts_with("run.terminal.") {
             state.terminal = if truthy(payload.get("terminal")) {
                 text_of(&payload["terminal"])
             } else {
                 kind.rsplit('.').next().unwrap_or_default().to_string()
             };
-            state.reason = if truthy(payload.get("reason")) { text_of(&payload["reason"]) } else { String::new() };
+            state.reason = if truthy(payload.get("reason")) {
+                text_of(&payload["reason"])
+            } else {
+                String::new()
+            };
             if let Some(t) = payload["text"].as_str() {
                 state.reply = t.into();
             }
@@ -800,13 +1091,32 @@ impl MuseCodeHost {
             self.emit(event("tokens", Some(tid), Some(turn), body));
         }
         if interrupted {
-            self.emit(event("turn_completed", Some(tid), Some(turn), json!({"status": "interrupted"})));
+            self.emit(event(
+                "turn_completed",
+                Some(tid),
+                Some(turn),
+                json!({"status": "interrupted"}),
+            ));
         } else if state.terminal == "completed" && rc == 0 {
-            let reply = if state.reply.is_empty() { state.streamed.trim().to_string() } else { state.reply };
+            let reply = if state.reply.is_empty() {
+                state.streamed.trim().to_string()
+            } else {
+                state.reply
+            };
             if !reply.is_empty() {
-                self.emit(event("message", Some(tid), Some(turn), json!({"text": reply, "final": true})));
+                self.emit(event(
+                    "message",
+                    Some(tid),
+                    Some(turn),
+                    json!({"text": reply, "final": true}),
+                ));
             }
-            self.emit(event("turn_completed", Some(tid), Some(turn), json!({"status": "completed"})));
+            self.emit(event(
+                "turn_completed",
+                Some(tid),
+                Some(turn),
+                json!({"status": "completed"}),
+            ));
         } else {
             let process_exit = rc < 0 || state.reason.is_empty() && rc != 0;
             let error = if !state.reason.is_empty() {
@@ -819,8 +1129,16 @@ impl MuseCodeHost {
                 format!("muse exited {rc}")
             };
             let limit = is_limit(&error);
-            let mut failure = event("turn_failed", Some(tid), Some(turn), json!({"error": error, "limit": limit}));
-            if process_exit { failure["exit_code"] = json!(rc); failure["process_exit"] = json!(true); }
+            let mut failure = event(
+                "turn_failed",
+                Some(tid),
+                Some(turn),
+                json!({"error": error, "limit": limit}),
+            );
+            if process_exit {
+                failure["exit_code"] = json!(rc);
+                failure["process_exit"] = json!(true);
+            }
             self.emit(failure);
         }
         self.emit(event("status", Some(tid), None, json!({"state": "idle"})));
@@ -839,7 +1157,9 @@ impl MuseCodeHost {
 }
 
 /// The bounded stderr retained independently of the provider stream.
-fn stderr_tail(file: &mut crate::run_diagnostics::Stderr) -> String { file.tail() }
+fn stderr_tail(file: &mut crate::run_diagnostics::Stderr) -> String {
+    file.tail()
+}
 
 #[cfg(test)]
 mod tests {
@@ -848,13 +1168,28 @@ mod tests {
 
     #[tokio::test]
     async fn turn_launch_keeps_the_bot_identity_and_prompt_access() {
-        if !super::super::isolationtests::child("hosts::musecode::tests::turn_launch_keeps_the_bot_identity_and_prompt_access") { return; }
+        if !super::super::isolationtests::child(
+            "hosts::musecode::tests::turn_launch_keeps_the_bot_identity_and_prompt_access",
+        ) {
+            return;
+        }
         let f = super::super::isolationtests::Fixture::new();
-        let host = MuseCodeHost::new("acme", f.argv(), Some("echo".into()), f.root.join("muse"), mpsc::unbounded_channel().0);
+        let host = MuseCodeHost::new(
+            "acme",
+            f.argv(),
+            Some("echo".into()),
+            f.root.join("muse"),
+            mpsc::unbounded_channel().0,
+        );
         let settings = f.settings();
         let prompt = f.root.join("muse/prompt.md");
-        super::super::isolationtests::prefix(&host.command("thread", &settings, &prompt, None), &host.argv("thread", &settings, &prompt, None));
-        if !f.actual() { return; }
+        super::super::isolationtests::prefix(
+            &host.command("thread", &settings, &prompt, None),
+            &host.argv("thread", &settings, &prompt, None),
+        );
+        if !f.actual() {
+            return;
+        }
         prepare_config(&host.0.config_home).unwrap();
         let auth = host.0.config_home.join("muse/auth.json");
         std::fs::write(&auth, "fixture login").unwrap();
@@ -862,7 +1197,12 @@ mod tests {
         prepare_data(&host.0.data_home).unwrap();
         let session = host.0.data_home.join("session-probe");
         let prompt = host.prompt_file("fixture prompt").unwrap();
-        f.run(host.command("thread", &settings, &prompt, None), &[&prompt, &auth], &[&auth, &session]).await;
+        f.run(
+            host.command("thread", &settings, &prompt, None),
+            &[&prompt, &auth],
+            &[&auth, &session],
+        )
+        .await;
         use std::os::unix::fs::MetadataExt;
         assert_eq!(prompt.metadata().unwrap().uid(), 10003);
         assert_eq!(host.0.data_home.metadata().unwrap().uid(), 10003);
@@ -900,19 +1240,33 @@ mod tests {
             let (tx, mut rx) = mpsc::unbounded_channel();
             let host = MuseCodeHost::new("acme", vec![cmd.clone()], None, dir.join("state"), tx);
             host.start();
-            let mut settings = Settings { cwd: dir.display().to_string(), ..Default::default() };
+            let mut settings = Settings {
+                cwd: dir.display().to_string(),
+                ..Default::default()
+            };
             settings.env.insert("PATH".into(), "/usr/bin:/bin".into());
-            settings.env.insert("FIXTURE".into(), path.display().to_string());
+            settings
+                .env
+                .insert("FIXTURE".into(), path.display().to_string());
             let thread = host.start_thread(&settings);
             host.start_turn(&thread, "hello", None).unwrap();
             let mut got = until_idle(&mut rx, 10).await;
             for ev in &mut got {
-                ev.as_object_mut().unwrap().retain(|k, _| k != "thread_id" && k != "turn_id");
+                ev.as_object_mut()
+                    .unwrap()
+                    .retain(|k, _| k != "thread_id" && k != "turn_id");
             }
             assert_eq!(got, expected, "{}", path.display());
         }
         // Every prompt file is gone once its turn ends.
-        assert_eq!(std::fs::read_dir(dir.join("state")).unwrap().flatten().filter(|e| e.file_name() != "config" && e.file_name() != "data").count(), 0);
+        assert_eq!(
+            std::fs::read_dir(dir.join("state"))
+                .unwrap()
+                .flatten()
+                .filter(|e| e.file_name() != "config" && e.file_name() != "data")
+                .count(),
+            0
+        );
         std::fs::remove_dir_all(dir).unwrap();
     }
 
@@ -923,39 +1277,79 @@ mod tests {
         let dir = temp("fake-muse");
         let fixtures = crate::hosts::fixtures::dir("musecode");
         let stream = fixtures.join("real-tool.jsonl");
-        let sid = serde_json::from_str::<Value>(std::fs::read_to_string(&stream).unwrap().lines().next().unwrap()).unwrap()["stream"]["id"]
+        let sid = serde_json::from_str::<Value>(
+            std::fs::read_to_string(&stream)
+                .unwrap()
+                .lines()
+                .next()
+                .unwrap(),
+        )
+        .unwrap()["stream"]["id"]
             .as_str()
             .unwrap()
             .to_string();
         // Under the turn's own XDG_DATA_HOME, not HOME's ~/.local/share.
-        let log = dir.join("state/data/muse/sessions/2026/10/14").join(&sid).join("session.jsonl");
+        let log = dir
+            .join("state/data/muse/sessions/2026/10/14")
+            .join(&sid)
+            .join("session.jsonl");
         std::fs::create_dir_all(log.parent().unwrap()).unwrap();
         std::fs::write(&log, "").unwrap(); // the session existed before this turn
-        let cmd = script(&dir, "muse", "#!/bin/sh\ncat \"$SESSION\" > \"$LOG\"\ncat \"$FIXTURE\"\n");
+        let cmd = script(
+            &dir,
+            "muse",
+            "#!/bin/sh\ncat \"$SESSION\" > \"$LOG\"\ncat \"$FIXTURE\"\n",
+        );
         let (tx, mut rx) = mpsc::unbounded_channel();
         let host = MuseCodeHost::new("coo", vec![cmd], None, dir.join("state"), tx);
         host.start();
-        let mut settings = Settings { cwd: dir.display().to_string(), ..Default::default() };
+        let mut settings = Settings {
+            cwd: dir.display().to_string(),
+            ..Default::default()
+        };
         for (k, v) in [
             ("PATH", "/usr/bin:/bin".to_string()),
             ("HOME", dir.join("home").display().to_string()),
             ("FIXTURE", stream.display().to_string()),
-            ("SESSION", fixtures.join("session-logs/real-tool.session.jsonl").display().to_string()),
+            (
+                "SESSION",
+                fixtures
+                    .join("session-logs/real-tool.session.jsonl")
+                    .display()
+                    .to_string(),
+            ),
             ("LOG", log.display().to_string()),
         ] {
             settings.env.insert(k.into(), v);
         }
         let thread = host.resume_thread(&sid, &settings);
         host.start_turn(&thread, "x", None).unwrap();
-        let tokens: Vec<Value> = until_idle(&mut rx, 10).await.into_iter().filter(|e| e["kind"] == "tokens").collect();
+        let tokens: Vec<Value> = until_idle(&mut rx, 10)
+            .await
+            .into_iter()
+            .filter(|e| e["kind"] == "tokens")
+            .collect();
         assert_eq!(tokens.len(), 1, "{tokens:?}");
-        assert_eq!(host.env(&settings)["XDG_DATA_HOME"], dir.join("state/data").display().to_string());
-        assert_eq!(tokens[0]["usage"], json!({"input": 37200, "cached": 24200, "output": 215}));
+        assert_eq!(
+            host.env(&settings)["XDG_DATA_HOME"],
+            dir.join("state/data").display().to_string()
+        );
+        assert_eq!(
+            tokens[0]["usage"],
+            json!({"input": 37200, "cached": 24200, "output": 215})
+        );
         assert_eq!(tokens[0]["model"], "muse-spark-1.3");
         let mut meter = crate::execute::Meter::default();
         meter.add(&tokens[0]);
         let r = meter.report("", "musecode", "subscription").unwrap();
-        assert_eq!((r["input_tokens"].clone(), r["cached_tokens"].clone(), r["model"].clone()), (json!(13000), json!(24200), json!("muse-spark-1.3")));
+        assert_eq!(
+            (
+                r["input_tokens"].clone(),
+                r["cached_tokens"].clone(),
+                r["model"].clone()
+            ),
+            (json!(13000), json!(24200), json!("muse-spark-1.3"))
+        );
         std::fs::remove_dir_all(dir).unwrap();
     }
 
@@ -972,36 +1366,77 @@ mod tests {
         let (tx, mut rx) = mpsc::unbounded_channel();
         let host = MuseCodeHost::new("coo", vec![cmd], None, dir.join("state"), tx);
         host.start();
-        let mut settings = Settings { cwd: dir.display().to_string(), model: Some("muse-spark-1.3".into()), ..Default::default() };
-        for (k, v) in [("PATH", "/usr/bin:/bin"), ("HOME", "/home/x"), ("HUB_API_URL", "https://hub.test"), ("HUB_TOKEN", "tok-secret"),
-                       ("HUB_BOT", "coo"), ("LINEAR_API_KEY", "lin-secret"), ("OUT", &dir.display().to_string())] {
+        let mut settings = Settings {
+            cwd: dir.display().to_string(),
+            model: Some("muse-spark-1.3".into()),
+            ..Default::default()
+        };
+        for (k, v) in [
+            ("PATH", "/usr/bin:/bin"),
+            ("HOME", "/home/x"),
+            ("HUB_API_URL", "https://hub.test"),
+            ("HUB_TOKEN", "tok-secret"),
+            ("HUB_BOT", "coo"),
+            ("LINEAR_API_KEY", "lin-secret"),
+            ("OUT", &dir.display().to_string()),
+        ] {
             settings.env.insert(k.into(), v.into());
         }
-        settings.mcp_servers = vec![json!({"name": "linear", "service": "linear", "url": "https://mcp.linear.app/mcp", "transport": "http",
-                                           "env": "LINEAR_API_KEY", "headers": {"Authorization": "Bearer ${LINEAR_API_KEY}", "X-Key": "${LINEAR_API_KEY}"}})];
+        settings.mcp_servers = vec![
+            json!({"name": "linear", "service": "linear", "url": "https://mcp.linear.app/mcp", "transport": "http",
+                                           "env": "LINEAR_API_KEY", "headers": {"Authorization": "Bearer ${LINEAR_API_KEY}", "X-Key": "${LINEAR_API_KEY}"}}),
+        ];
         let thread = host.start_thread(&settings);
         host.start_turn(&thread, "Say hi", None).unwrap();
         let got = until_idle(&mut rx, 10).await;
-        assert!(got.iter().any(|e| e["kind"] == "turn_completed" && e["status"] == "completed"), "{got:?}");
-        let argv: Vec<String> = std::fs::read_to_string(dir.join("argv")).unwrap().lines().map(String::from).collect();
+        assert!(
+            got.iter()
+                .any(|e| e["kind"] == "turn_completed" && e["status"] == "completed"),
+            "{got:?}"
+        );
+        let argv: Vec<String> = std::fs::read_to_string(dir.join("argv"))
+            .unwrap()
+            .lines()
+            .map(String::from)
+            .collect();
         let after = |flag: &str| argv[argv.iter().position(|a| a == flag).unwrap() + 1].clone();
         assert_eq!(&argv[..2], &["exec", "--json"]);
         assert_eq!(after("--session-id"), thread);
         assert_eq!(after("--model"), "muse-spark-1.3");
         assert_eq!(after("--reasoning-effort"), "medium");
-        assert_eq!(std::fs::read_to_string(dir.join("prompt")).unwrap(), "Say hi");
-        assert!(!argv.iter().any(|a| a.contains("Say hi") || a.contains("secret")), "{argv:?}");
-        let overrides: Vec<&String> = argv.iter().filter(|a| a.starts_with("mcp_servers.")).collect();
-        let hub: Value = serde_json::from_str(overrides[0].strip_prefix("mcp_servers.hub=").unwrap()).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(dir.join("prompt")).unwrap(),
+            "Say hi"
+        );
+        assert!(
+            !argv
+                .iter()
+                .any(|a| a.contains("Say hi") || a.contains("secret")),
+            "{argv:?}"
+        );
+        let overrides: Vec<&String> = argv
+            .iter()
+            .filter(|a| a.starts_with("mcp_servers."))
+            .collect();
+        let hub: Value =
+            serde_json::from_str(overrides[0].strip_prefix("mcp_servers.hub=").unwrap()).unwrap();
         assert_eq!(hub["transport"], "stdio");
         assert_eq!(hub["env"]["HUB_TOKEN"], "${HUB_TOKEN}");
-        let linear: Value = serde_json::from_str(overrides[1].strip_prefix("mcp_servers.linear=").unwrap()).unwrap();
-        assert_eq!(linear, json!({"transport": "streamable_http", "url": "https://mcp.linear.app/mcp",
-                                  "headers": {"Authorization": "${TICO_MCP_1}", "X-Key": "${LINEAR_API_KEY}"}}));
+        let linear: Value =
+            serde_json::from_str(overrides[1].strip_prefix("mcp_servers.linear=").unwrap())
+                .unwrap();
+        assert_eq!(
+            linear,
+            json!({"transport": "streamable_http", "url": "https://mcp.linear.app/mcp",
+                                  "headers": {"Authorization": "${TICO_MCP_1}", "X-Key": "${LINEAR_API_KEY}"}})
+        );
         let env = std::fs::read_to_string(dir.join("env")).unwrap();
         assert!(env.lines().any(|l| l == "TICO_MCP_1=Bearer lin-secret"));
         assert!(env.lines().any(|l| l == "MUSE_NO_AUTO_UPDATE=1"));
-        assert!(env.lines().any(|l| l == "TBH_CREDENTIAL_BACKEND=file"), "a turn must never fall back to the shared Keychain");
+        assert!(
+            env.lines().any(|l| l == "TBH_CREDENTIAL_BACKEND=file"),
+            "a turn must never fall back to the shared Keychain"
+        );
         // A restarted runner resumes the same session by its id.
         assert_eq!(host.resume_thread(&thread, &settings), thread);
         std::fs::remove_dir_all(dir).unwrap();
@@ -1014,7 +1449,10 @@ mod tests {
         let (tx, mut rx) = mpsc::unbounded_channel();
         let host = MuseCodeHost::new("coo", vec![cmd], None, dir.join("state"), tx);
         host.start();
-        let mut settings = Settings { cwd: dir.display().to_string(), ..Default::default() };
+        let mut settings = Settings {
+            cwd: dir.display().to_string(),
+            ..Default::default()
+        };
         settings.env.insert("PATH".into(), "/usr/bin:/bin".into());
         let thread = host.start_thread(&settings);
         let turn = host.start_turn(&thread, "x", None).unwrap();
@@ -1025,7 +1463,11 @@ mod tests {
         }
         host.interrupt(&thread, &turn);
         let got = until_idle(&mut rx, 15).await;
-        assert!(got.iter().any(|e| e["kind"] == "turn_completed" && e["status"] == "interrupted"), "{got:?}");
+        assert!(
+            got.iter()
+                .any(|e| e["kind"] == "turn_completed" && e["status"] == "interrupted"),
+            "{got:?}"
+        );
         assert!(!got.iter().any(|e| e["kind"] == "turn_failed"));
         std::fs::remove_dir_all(dir).unwrap();
     }
@@ -1036,22 +1478,38 @@ mod tests {
     async fn a_terminal_failure_settles_the_turn_while_the_process_stays_up() {
         let dir = temp("fake-muse");
         let limit = crate::hosts::fixtures::dir("musecode").join("limit.jsonl");
-        let cmd = script(&dir, "muse", "#!/bin/sh\ncat \"$FIXTURE\"\nsleep 20 &\nexec sleep 30\n");
+        let cmd = script(
+            &dir,
+            "muse",
+            "#!/bin/sh\ncat \"$FIXTURE\"\nsleep 20 &\nexec sleep 30\n",
+        );
         let (tx, mut rx) = mpsc::unbounded_channel();
         let host = MuseCodeHost::new("coo", vec![cmd], None, dir.join("state"), tx);
         host.start();
-        let mut settings = Settings { cwd: dir.display().to_string(), ..Default::default() };
+        let mut settings = Settings {
+            cwd: dir.display().to_string(),
+            ..Default::default()
+        };
         settings.env.insert("PATH".into(), "/usr/bin:/bin".into());
-        settings.env.insert("FIXTURE".into(), limit.display().to_string());
+        settings
+            .env
+            .insert("FIXTURE".into(), limit.display().to_string());
         let thread = host.start_thread(&settings);
         host.start_turn(&thread, "x", None).unwrap();
         let got = until_idle(&mut rx, 15).await;
         let failed: Vec<&Value> = got.iter().filter(|e| e["kind"] == "turn_failed").collect();
         assert_eq!(failed.len(), 1, "{got:?}");
         assert_eq!(failed[0]["limit"], true);
-        assert_eq!(failed[0]["error"], "provider error: rate limit exceeded (status 429)");
+        assert_eq!(
+            failed[0]["error"],
+            "provider error: rate limit exceeded (status 429)"
+        );
         assert!(failed[0].get("auth_retry").is_none());
-        assert!(got.last().is_some_and(|e| e["kind"] == "status" && e["state"] == "idle"), "{got:?}");
+        assert!(
+            got.last()
+                .is_some_and(|e| e["kind"] == "status" && e["state"] == "idle"),
+            "{got:?}"
+        );
         assert!(host.inner().turn.is_none() && host.inner().stopper.is_none());
         std::fs::remove_dir_all(dir).unwrap();
     }
@@ -1059,10 +1517,26 @@ mod tests {
     #[test]
     fn tool_calls_follow_the_real_muse_stream() {
         let proposed = |task: &str| json!({"event": {"kind": "proposed", "task_kind": task}});
-        assert_eq!(tool_started("task.lifecycle.proposed", &proposed("tool.mcp__hub__hub_task_list")).as_deref(), Some("mcp__hub__hub_task_list"));
-        assert_eq!(tool_started("task.lifecycle.proposed", &proposed("model.meta.response")), None);
-        assert_eq!(tool_started("task.lifecycle.started", &json!({"task_id": "t"})), None);
-        assert_eq!(tool_started("tool.bash.started", &json!({"tool_name": "bash"})).as_deref(), Some("bash"));
+        assert_eq!(
+            tool_started(
+                "task.lifecycle.proposed",
+                &proposed("tool.mcp__hub__hub_task_list")
+            )
+            .as_deref(),
+            Some("mcp__hub__hub_task_list")
+        );
+        assert_eq!(
+            tool_started("task.lifecycle.proposed", &proposed("model.meta.response")),
+            None
+        );
+        assert_eq!(
+            tool_started("task.lifecycle.started", &json!({"task_id": "t"})),
+            None
+        );
+        assert_eq!(
+            tool_started("tool.bash.started", &json!({"tool_name": "bash"})).as_deref(),
+            Some("bash")
+        );
     }
 
     #[test]
@@ -1078,40 +1552,87 @@ mod tests {
         assert_eq!(usage_of(&json!({"text": "x"})), None);
         let mut env = Env::new();
         env.insert("HOME".into(), "/home/x".into());
-        assert_eq!(auth_file(&env), PathBuf::from("/home/x/.config/muse/auth.json"));
+        assert_eq!(
+            auth_file(&env),
+            PathBuf::from("/home/x/.config/muse/auth.json")
+        );
         env.insert("XDG_CONFIG_HOME".into(), "/cfg".into());
         assert_eq!(auth_file(&env), PathBuf::from("/cfg/muse/auth.json"));
-        assert!(crate::hosts::is_auth_rejected("invalid run configuration: missing Meta credentials"));
+        assert!(crate::hosts::is_auth_rejected(
+            "invalid run configuration: missing Meta credentials"
+        ));
         // A config folder the runner cannot read is "could not be checked", not "signed out".
         use std::os::unix::fs::PermissionsExt;
         let dir = temp("muse-auth");
         assert_eq!(signed_in(&dir.join("auth.json")), Some(false));
         std::fs::write(dir.join("auth.json"), "malformed").unwrap();
         assert_eq!(signed_in(&dir.join("auth.json")), None);
-        std::fs::write(dir.join("auth.json"), r#"{"schema_version":1,"providers":{}}"#).unwrap();
+        std::fs::write(
+            dir.join("auth.json"),
+            r#"{"schema_version":1,"providers":{}}"#,
+        )
+        .unwrap();
         assert_eq!(signed_in(&dir.join("auth.json")), Some(false));
-        std::fs::write(dir.join("auth.json"), r#"{"schema_version":1,"providers":{"meta":{"api_key":"fixture"}}}"#).unwrap();
+        std::fs::write(
+            dir.join("auth.json"),
+            r#"{"schema_version":1,"providers":{"meta":{"api_key":"fixture"}}}"#,
+        )
+        .unwrap();
         assert_eq!(signed_in(&dir.join("auth.json")), Some(true));
         // Field names as Muse 1.4.9 writes them: the file backend's inline login, the Keychain backend's pointer.
         let keychain = r#"{"schema_version":2,"providers":{"meta":{"storage":"keychain","subs_active":true}}}"#;
         for (store, expected) in [
             (r#"{"schema_version":2,"providers":{}}"#, Some(false)),
             (r#"{"schema_version":3,"providers":{}}"#, None),
-            (r#"{"schema_version":1,"providers":{"meta":{}}}"#, Some(false)),
-            (r#"{"schema_version":1,"providers":{"meta":null}}"#, Some(false)),
-            (r#"{"schema_version":1,"providers":{"meta":{"mechanism":"oauth","access_token":"t","obtained_via":"device_code"}}}"#, Some(true)),
-            (r#"{"schema_version":1,"providers":{"meta":{"storage":"file","api_key":"k"}}}"#, Some(true)),
+            (
+                r#"{"schema_version":1,"providers":{"meta":{}}}"#,
+                Some(false),
+            ),
+            (
+                r#"{"schema_version":1,"providers":{"meta":null}}"#,
+                Some(false),
+            ),
+            (
+                r#"{"schema_version":1,"providers":{"meta":{"mechanism":"oauth","access_token":"t","obtained_via":"device_code"}}}"#,
+                Some(true),
+            ),
+            (
+                r#"{"schema_version":1,"providers":{"meta":{"storage":"file","api_key":"k"}}}"#,
+                Some(true),
+            ),
             (keychain, None),
-            (r#"{"schema_version":1,"providers":{"meta":{"storage":"keychain"}}}"#, None),
-            (r#"{"schema_version":2,"providers":{"meta":{"api_key":"k"}}}"#, None),
-            (r#"{"schema_version":1,"providers":{"meta":{"subs_active":true,"user_email":"a@acme.example"}}}"#, None),
-            (r#"{"schema_version":1,"providers":{"meta":{"api_key":" "}}}"#, None),
-            (r#"{"schema_version":1,"providers":{"meta":{"mechanism":"other","access_token":"t"}}}"#, None),
-            (r#"{"schema_version":1,"providers":{"meta":{"storage":"vault","api_key":"k"}}}"#, None),
+            (
+                r#"{"schema_version":1,"providers":{"meta":{"storage":"keychain"}}}"#,
+                None,
+            ),
+            (
+                r#"{"schema_version":2,"providers":{"meta":{"api_key":"k"}}}"#,
+                None,
+            ),
+            (
+                r#"{"schema_version":1,"providers":{"meta":{"subs_active":true,"user_email":"a@acme.example"}}}"#,
+                None,
+            ),
+            (
+                r#"{"schema_version":1,"providers":{"meta":{"api_key":" "}}}"#,
+                None,
+            ),
+            (
+                r#"{"schema_version":1,"providers":{"meta":{"mechanism":"other","access_token":"t"}}}"#,
+                None,
+            ),
+            (
+                r#"{"schema_version":1,"providers":{"meta":{"storage":"vault","api_key":"k"}}}"#,
+                None,
+            ),
         ] {
             std::fs::write(dir.join("auth.json"), store).unwrap();
             assert_eq!(signed_in(&dir.join("auth.json")), expected, "{store}");
-            assert_eq!(store_problem(&dir.join("auth.json")).is_some(), store.contains(r#""storage":"keychain""#), "{store}");
+            assert_eq!(
+                store_problem(&dir.join("auth.json")).is_some(),
+                store.contains(r#""storage":"keychain""#),
+                "{store}"
+            );
         }
         std::fs::write(dir.join("auth.json"), " ".repeat(65537)).unwrap();
         assert_eq!(signed_in(&dir.join("auth.json")), None);
@@ -1119,7 +1640,11 @@ mod tests {
         std::os::unix::fs::symlink(dir.join("target.json"), dir.join("auth.json")).unwrap();
         assert_eq!(signed_in(&dir.join("auth.json")), None);
         std::fs::remove_file(dir.join("auth.json")).unwrap();
-        std::fs::write(dir.join("auth.json"), r#"{"schema_version":1,"providers":{}}"#).unwrap();
+        std::fs::write(
+            dir.join("auth.json"),
+            r#"{"schema_version":1,"providers":{}}"#,
+        )
+        .unwrap();
         std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o000)).unwrap();
         let locked = signed_in(&dir.join("auth.json"));
         std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)).unwrap();
@@ -1146,22 +1671,39 @@ mod tests {
     #[tokio::test]
     #[ignore]
     async fn real_muse_two_turns_share_one_session() {
-        let Ok(bin) = std::env::var("MUSE_BIN") else { return };
+        let Ok(bin) = std::env::var("MUSE_BIN") else {
+            return;
+        };
         let dir = temp("real-muse");
         std::fs::create_dir_all(dir.join("repo")).unwrap();
         let (tx, mut rx) = mpsc::unbounded_channel();
-        let host = MuseCodeHost::new("coo", vec![bin.clone()], Some("echo".into()), dir.join("state"), tx);
+        let host = MuseCodeHost::new(
+            "coo",
+            vec![bin.clone()],
+            Some("echo".into()),
+            dir.join("state"),
+            tx,
+        );
         host.start();
-        let mut settings = Settings { cwd: dir.join("repo").display().to_string(), ..Default::default() };
+        let mut settings = Settings {
+            cwd: dir.join("repo").display().to_string(),
+            ..Default::default()
+        };
         settings.env = std::env::vars().collect();
-        settings.env.insert("HUB_API_URL".into(), "http://127.0.0.1:9".into());
+        settings
+            .env
+            .insert("HUB_API_URL".into(), "http://127.0.0.1:9".into());
         settings.env.insert("HUB_TOKEN".into(), "tok-test".into());
         settings.env.insert("HUB_BOT".into(), "coo".into());
         let thread = host.start_thread(&settings);
         for text in ["first", "second"] {
             host.start_turn(&thread, text, None).unwrap();
             let got = until_idle(&mut rx, 120).await;
-            let messages: Vec<&Value> = got.iter().filter(|e| e["kind"] == "message").map(|e| &e["text"]).collect();
+            let messages: Vec<&Value> = got
+                .iter()
+                .filter(|e| e["kind"] == "message")
+                .map(|e| &e["text"])
+                .collect();
             assert_eq!(messages, vec![&json!(format!("echo: {text}"))], "{got:?}");
         }
         println!("session {thread}");
@@ -1176,17 +1718,33 @@ mod tests {
         let settings = home.join("muse").join("settings.json");
         std::fs::write(&settings, r#"{"schema_version": 1, "theme": "dark", "mcpServers": {"mine": {}}, "mcp_servers": {}}"#).unwrap();
         prepare_config(&home).unwrap();
-        let kept: Value = serde_json::from_str(&std::fs::read_to_string(&settings).unwrap()).unwrap();
+        let kept: Value =
+            serde_json::from_str(&std::fs::read_to_string(&settings).unwrap()).unwrap();
         assert_eq!(kept, json!({"schema_version": 1, "theme": "dark"}));
         std::fs::write(&settings, "not json").unwrap();
         prepare_config(&home).unwrap();
-        assert_eq!(serde_json::from_str::<Value>(&std::fs::read_to_string(&settings).unwrap()).unwrap(), json!({"schema_version": 1}));
+        assert_eq!(
+            serde_json::from_str::<Value>(&std::fs::read_to_string(&settings).unwrap()).unwrap(),
+            json!({"schema_version": 1})
+        );
         let (tx, _rx) = mpsc::unbounded_channel();
         let data = dir.join("data");
-        let host = MuseCodeHost::on_config("coo", vec!["muse".into()], None, dir.join("state"), (home.clone(), data.clone()), tx);
-        let mut s = Settings { cwd: dir.display().to_string(), ..Default::default() };
-        s.env.insert("XDG_CONFIG_HOME".into(), "/operator/.config".into());
-        s.env.insert("XDG_DATA_HOME".into(), "/operator/.local/share".into());
+        let host = MuseCodeHost::on_config(
+            "coo",
+            vec!["muse".into()],
+            None,
+            dir.join("state"),
+            (home.clone(), data.clone()),
+            tx,
+        );
+        let mut s = Settings {
+            cwd: dir.display().to_string(),
+            ..Default::default()
+        };
+        s.env
+            .insert("XDG_CONFIG_HOME".into(), "/operator/.config".into());
+        s.env
+            .insert("XDG_DATA_HOME".into(), "/operator/.local/share".into());
         assert_eq!(host.env(&s)["XDG_CONFIG_HOME"], home.display().to_string());
         assert_eq!(host.env(&s)["XDG_DATA_HOME"], data.display().to_string());
         let _ = std::fs::remove_dir_all(dir);
@@ -1197,19 +1755,42 @@ mod tests {
     fn each_login_keeps_its_sessions_in_its_own_data_folder() {
         use crate::profiles::Profile;
         let dir = temp("muse-data");
-        let (a, b) = (Profile::new("a", &dir.join("a").display().to_string(), false), Profile::new("b", &dir.join("b").display().to_string(), false));
-        assert_eq!(data_home(Some(&a)), config_home(None).with_file_name("profiles").join("a/data"));
+        let (a, b) = (
+            Profile::new("a", &dir.join("a").display().to_string(), false),
+            Profile::new("b", &dir.join("b").display().to_string(), false),
+        );
+        assert_eq!(
+            data_home(Some(&a)),
+            config_home(None).with_file_name("profiles").join("a/data")
+        );
         assert_ne!(data_home(Some(&a)), data_home(Some(&b)));
-        assert_eq!(data_home(Some(&Profile::new("mine", "~", true))), data_home(None)); // the operator's own logins
+        assert_eq!(
+            data_home(Some(&Profile::new("mine", "~", true))),
+            data_home(None)
+        ); // the operator's own logins
         assert_eq!(data_home(None).parent(), config_home(None).parent());
         assert_ne!(data_home(None), config_home(None));
         // Never inside a folder that is handed to the bot user whole: a config home or the profile's own folder.
-        for (p, home) in [(Some(&a), &dir.join("a")), (Some(&b), &dir.join("b")), (None, &config_home(None))] {
-            assert!(!data_home(p).starts_with(home) && !data_home(p).starts_with(config_home(p)), "{p:?}");
+        for (p, home) in [
+            (Some(&a), &dir.join("a")),
+            (Some(&b), &dir.join("b")),
+            (None, &config_home(None)),
+        ] {
+            assert!(
+                !data_home(p).starts_with(home) && !data_home(p).starts_with(config_home(p)),
+                "{p:?}"
+            );
         }
         let mut env = Env::new();
-        assert!(crate::hosts::use_own_config_home("musecode", Some(&b), &mut env));
-        assert_eq!(env["XDG_DATA_HOME"], data_home(Some(&b)).display().to_string());
+        assert!(crate::hosts::use_own_config_home(
+            "musecode",
+            Some(&b),
+            &mut env
+        ));
+        assert_eq!(
+            env["XDG_DATA_HOME"],
+            data_home(Some(&b)).display().to_string()
+        );
         let _ = std::fs::remove_dir_all(dir);
     }
 
@@ -1222,30 +1803,54 @@ mod tests {
         let data = dir.join("data");
         assert_eq!(data_problem(&data), None);
         prepare_data(&data).unwrap();
-        assert_eq!(std::fs::metadata(&data).unwrap().permissions().mode() & 0o777, 0o700);
+        assert_eq!(
+            std::fs::metadata(&data).unwrap().permissions().mode() & 0o777,
+            0o700
+        );
         std::os::unix::fs::symlink(&data, dir.join("link")).unwrap();
-        assert!(prepare_data(&dir.join("link")).unwrap_err().to_string().contains("not a plain folder"));
+        assert!(prepare_data(&dir.join("link"))
+            .unwrap_err()
+            .to_string()
+            .contains("not a plain folder"));
         let sessions = data.join("muse/sessions");
         std::fs::create_dir_all(&sessions).unwrap();
         std::fs::set_permissions(&sessions, std::fs::Permissions::from_mode(0o555)).unwrap();
         let cmd = script(&dir, "muse", "#!/bin/sh\ntouch \"$OUT\"\n");
         let (tx, _rx) = mpsc::unbounded_channel();
-        let host = MuseCodeHost::on_config("coo", vec![cmd], None, dir.join("state"), (dir.join("config"), data.clone()), tx);
+        let host = MuseCodeHost::on_config(
+            "coo",
+            vec![cmd],
+            None,
+            dir.join("state"),
+            (dir.join("config"), data.clone()),
+            tx,
+        );
         host.start();
-        let mut settings = Settings { cwd: dir.display().to_string(), ..Default::default() };
+        let mut settings = Settings {
+            cwd: dir.display().to_string(),
+            ..Default::default()
+        };
         settings.env.insert("PATH".into(), "/usr/bin:/bin".into());
-        settings.env.insert("OUT".into(), dir.join("ran").display().to_string());
+        settings
+            .env
+            .insert("OUT".into(), dir.join("ran").display().to_string());
         let thread = host.start_thread(&settings);
         let started = host.start_turn(&thread, "x", None);
         let problem = data_problem(&data);
         std::fs::set_permissions(&sessions, std::fs::Permissions::from_mode(0o755)).unwrap();
         if unsafe { libc::geteuid() } != 0 {
             let error = started.unwrap_err().to_string();
-            assert!(error.contains(&sessions.display().to_string()) && error.contains("can't write"), "{error}");
+            assert!(
+                error.contains(&sessions.display().to_string()) && error.contains("can't write"),
+                "{error}"
+            );
             assert_eq!(problem.as_deref(), Some(error.as_str()));
             assert!(!dir.join("ran").exists(), "muse never started");
             // Refused before the config home was prepared, so nothing was handed to the bot user first.
-            assert!(!dir.join("config").exists(), "config home prepared before the data check");
+            assert!(
+                !dir.join("config").exists(),
+                "config home prepared before the data check"
+            );
             assert_eq!(crate::hosts::data_problem("claude", None), None);
         }
         let _ = std::fs::remove_dir_all(dir);
@@ -1255,7 +1860,11 @@ mod tests {
     /// user owns, like the ~/.local/share/muse pre-isolation turns left, is judged by the turn's uid and named.
     #[test]
     fn under_isolation_a_data_folder_another_user_owns_is_named() {
-        if !super::super::isolationtests::child("hosts::musecode::tests::under_isolation_a_data_folder_another_user_owns_is_named") { return; }
+        if !super::super::isolationtests::child(
+            "hosts::musecode::tests::under_isolation_a_data_folder_another_user_owns_is_named",
+        ) {
+            return;
+        }
         use std::os::unix::fs::PermissionsExt;
         let dir = temp("muse-data");
         let data = dir.join("data");
@@ -1263,7 +1872,10 @@ mod tests {
         std::fs::set_permissions(&data, std::fs::Permissions::from_mode(0o700)).unwrap();
         let problem = data_problem(&data).expect("a folder the bot user does not own");
         assert!(problem.contains(&data.display().to_string()), "{problem}");
-        assert!(prepare_data(&data).unwrap_err().to_string().contains(&data.display().to_string()));
+        assert!(prepare_data(&data)
+            .unwrap_err()
+            .to_string()
+            .contains(&data.display().to_string()));
         let _ = std::fs::remove_dir_all(dir);
     }
 
@@ -1275,18 +1887,22 @@ mod tests {
         let (bot, other_group) = ((10003, 10002), (10003, 20000));
         for (mode, owner, user, writable) in [
             (0o700, (10003, 10002), bot, true),          // owner
-            (0o077, (10003, 10002), bot, false),         // owner precedence: group and others' bits don't count
-            (0o500, (10003, 10002), bot, false),         // owner, no write
-            (0o600, (10003, 10002), bot, false),         // owner, no search
-            (0o770, (10002, 10002), bot, true),          // group
-            (0o707, (10002, 10002), bot, false),         // group precedence: others' bits don't count
-            (0o750, (10002, 10002), bot, false),         // group, no write (the pre-isolation ~/.local/share/muse)
-            (0o760, (10002, 10002), bot, false),         // group, no search
-            (0o777, (10002, 10002), other_group, true),  // other
+            (0o077, (10003, 10002), bot, false), // owner precedence: group and others' bits don't count
+            (0o500, (10003, 10002), bot, false), // owner, no write
+            (0o600, (10003, 10002), bot, false), // owner, no search
+            (0o770, (10002, 10002), bot, true),  // group
+            (0o707, (10002, 10002), bot, false), // group precedence: others' bits don't count
+            (0o750, (10002, 10002), bot, false), // group, no write (the pre-isolation ~/.local/share/muse)
+            (0o760, (10002, 10002), bot, false), // group, no search
+            (0o777, (10002, 10002), other_group, true), // other
             (0o775, (10002, 10002), other_group, false), // other, no write
             (0o776, (10002, 10002), other_group, false), // other, no search
         ] {
-            assert_eq!(can_write(mode, owner, user), writable, "{mode:o} owner {owner:?} user {user:?}");
+            assert_eq!(
+                can_write(mode, owner, user),
+                writable,
+                "{mode:o} owner {owner:?} user {user:?}"
+            );
         }
     }
 }

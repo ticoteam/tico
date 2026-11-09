@@ -8,6 +8,7 @@ Events API from its cursor (90 days kept) into fin_inbox, deduped with webhook d
 transaction event read whole and taken in once by its version; the outbox (recipients, cards); payments (send, find
 an unknown one by its key, poll Mercury's approval queue); statements once a day. A rehearsal copy calls nothing and
 marks what it would send as withheld. The token is a Tico credential read at use time."""
+
 import logging
 import threading
 from collections.abc import Callable, Mapping
@@ -15,7 +16,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, cast
 
 from .. import outbox as O
-from . import banking, cards, payments, stripe_sync, transfers
+from . import banking, brex_sync, cards, payments, stripe_sync, transfers
 from .context import is_set_up, load
 from .core import feeds as F
 from .core.errors import FinanceError
@@ -27,22 +28,22 @@ from .store import tico
 
 log = logging.getLogger(__name__)
 
-SWEEP = 300.0                     # seconds between sweeps without a ring
-POLL_MINUTES = 15                 # how often a connection is read without a webhook
-BACKFILL_PAGES = 4                # /transactions pages per step: the first backfill is paced across steps
+SWEEP = 300.0  # seconds between sweeps without a ring
+POLL_MINUTES = 15  # how often a connection is read without a webhook
+BACKFILL_PAGES = 4  # /transactions pages per step: the first backfill is paced across steps
 EVENTS_PAGES = 4
 INBOX_MOST, OUTBOX_MOST, PAY_MOST = 200, 50, 50
 STATEMENT_HOURS = 24
 RETRY = (60, 300, 1800, 3600)
-WRITE_SCHEDULE = O.Waits(RETRY, repeat_last=True)     # a failed write waits this long; the last wait repeats
+WRITE_SCHEDULE = O.Waits(RETRY, repeat_last=True)  # a failed write waits this long; the last wait repeats
 # Never sent again on their own once a call may have landed. Mercury documents no idempotency for recipients and cards;
 # a transfer is listed by choice: its key is sent, but an unknown result goes to a person, never to a resend.
 NO_KEY_OPS = ("card_create", "recipient_create", "transfer_create")
-CLAIM_MINUTES = 10                # a write claimed this long ago with no answer recorded was cut off mid-call
-UNOWNED_HOURS = 24               # an event no connection could read (404) is retried this long before it is nobody's
-MISSING = "404"                   # in an inbox row's tried list: some connection's read came back 404 this round
-GONE_TRIES = 5                    # a transaction Mercury keeps answering 404 for is given up after this many reads
-REQUEST_PAGES = 10                # pages of Mercury's approval requests read to find an unknown payment
+CLAIM_MINUTES = 10  # a write claimed this long ago with no answer recorded was cut off mid-call
+UNOWNED_HOURS = 24  # an event no connection could read (404) is retried this long before it is nobody's
+MISSING = "404"  # in an inbox row's tried list: some connection's read came back 404 this round
+GONE_TRIES = 5  # a transaction Mercury keeps answering 404 for is given up after this many reads
+REQUEST_PAGES = 10  # pages of Mercury's approval requests read to find an unknown payment
 # The documented filters of Mercury's request list: one list call each (it shows no sent status, so a sent request is
 # found by its transaction, read back, not by this list).
 REQUEST_STATUSES = ("pendingApproval", "approved", "rejected", "cancelled")
@@ -75,15 +76,32 @@ def probe(provider: Provider) -> tuple[dict[str, object], str]:
         if str(a.get("type") or "mercury") != "mercury":
             continue
         four = F.last4(a.get("accountNumber"))
-        rows.append({"id": str(a.get("id")),
-                     "name": F.bare_name(a.get("nickname") or a.get("name") or "Mercury", four)[:120],
-                     "kind": str(a.get("kind") or ""), "status": str(a.get("status") or "active"),
-                     "last4": four, "current": _cents(a.get("currentBalance")),
-                     "available": _cents(a.get("availableBalance"))})
-    found: dict[str, object] = {"accounts": rows, "credit": [
-        {"id": str(a.get("id")), "status": str(a.get("status") or "active"), "current": _cents(a.get("currentBalance")),
-         "available": _cents(a.get("availableBalance")), "kind": str(a.get("kind") or "")}
-        for a in listed(credit, "accounts")] if credit.ok else []}
+        rows.append(
+            {
+                "id": str(a.get("id")),
+                "name": F.bare_name(a.get("nickname") or a.get("name") or "Mercury", four)[:120],
+                "kind": str(a.get("kind") or ""),
+                "status": str(a.get("status") or "active"),
+                "last4": four,
+                "current": _cents(a.get("currentBalance")),
+                "available": _cents(a.get("availableBalance")),
+            }
+        )
+    found: dict[str, object] = {
+        "accounts": rows,
+        "credit": [
+            {
+                "id": str(a.get("id")),
+                "status": str(a.get("status") or "active"),
+                "current": _cents(a.get("currentBalance")),
+                "available": _cents(a.get("availableBalance")),
+                "kind": str(a.get("kind") or ""),
+            }
+            for a in listed(credit, "accounts")
+        ]
+        if credit.ok
+        else [],
+    }
     if users.ok:
         found["users"] = user_rows(users)
     return found, ""
@@ -91,10 +109,15 @@ def probe(provider: Provider) -> tuple[dict[str, object], str]:
 
 def user_rows(users: Answer) -> list[dict[str, object]]:
     """Mercury's users as Finance keeps them: id, name, email (lowercased) and role."""
-    return [{"id": str(u.get("userId") or ""), "email": str(u.get("email") or "").lower(),
-             "role": str(u.get("organizationRole") or ""),
-             "name": " ".join(str(u.get(k) or "").strip() for k in ("firstName", "lastName")).strip()[:120]}
-            for u in listed(users, "users")]
+    return [
+        {
+            "id": str(u.get("userId") or ""),
+            "email": str(u.get("email") or "").lower(),
+            "role": str(u.get("organizationRole") or ""),
+            "name": " ".join(str(u.get(k) or "").strip() for k in ("firstName", "lastName")).strip()[:120],
+        }
+        for u in listed(users, "users")
+    ]
 
 
 def provider_users(store: Any, provider: Provider, cid: str, now: str) -> None:
@@ -105,8 +128,9 @@ def provider_users(store: Any, provider: Provider, cid: str, now: str) -> None:
             SK.set_provider_users(c, cid, user_rows(users), now)
 
 
-def probe_credential(store: Any, vault: Any, credential_id: str, make: Make | None = None
-                     ) -> tuple[dict[str, object], str]:
+def probe_credential(
+    store: Any, vault: Any, credential_id: str, make: Make | None = None
+) -> tuple[dict[str, object], str]:
     """Read the token from its credential (outside any transaction) and probe Mercury with it."""
     with store.read() as c:
         if not tico.credential_exists(c, credential_id) and make is None:
@@ -136,8 +160,7 @@ def delivery(c: Any, connection_id: str | None, body: Mapping[str, object], at: 
         # connection tries it with its own token and only the one that owns the account takes it in.
         live = [str(r["id"]) for r in SK.connections(c, "mercury") if str(r["status"]) in ("active", "error")]
         connection_id = live[0] if len(live) == 1 else None
-    kept = SK.inbox_add(c, connection_id=connection_id, provider="mercury", event_id=eid, payload=body,
-                        at=at or _now())
+    kept = SK.inbox_add(c, connection_id=connection_id, provider="mercury", event_id=eid, payload=body, at=at or _now())
     if kept:
         tico.after_commit(c, ring)
     return kept
@@ -165,6 +188,7 @@ def stripe_delivery(c: Any, body: Mapping[str, object], at: str | None = None) -
 
 
 stripe_probe = stripe_sync.probe_credential
+brex_probe = brex_sync.probe_credential
 
 
 # ------------------------------------------------------------------------------------------------ one step
@@ -173,7 +197,7 @@ def step(store: Any, vault: Any, *, rehearsal: bool = False, make: Make | None =
     with store.read() as c:
         if not is_set_up(c):
             return
-        rows = [r for r in SK.connections(c) if str(r["provider"]) in ("mercury", "stripe")]
+        rows = [r for r in SK.connections(c) if str(r["provider"]) in ("mercury", "stripe", "brex")]
     for row in rows:
         if str(row["status"]) not in ("active", "error"):
             continue
@@ -191,20 +215,26 @@ def _provider(store: Any, vault: Any, ref: str, make: Make | None) -> Provider |
     return Mercury(token, base=base_url()) if token else None
 
 
-def connection(store: Any, vault: Any, cid: str, *, rehearsal: bool = False, make: Make | None = None,
-               at: str | None = None) -> str:
+def connection(
+    store: Any, vault: Any, cid: str, *, rehearsal: bool = False, make: Make | None = None, at: str | None = None
+) -> str:
     """Sync one connection. `withheld` in rehearsal, `no_token`, else `ok` or `failed`."""
     now = at or _now()
     with store.read() as c:
         row = SK.get(c, "fin_connections", cid)
         inbox = len(SK.inbox_waiting(c, 1, cid, now)) > 0
-        owed = len(SK.outbox_due(c, now, 1, cid)) > 0 or len(SK.payments_due(c, now, 1, cid)) > 0 or \
-            len(SK.unknown_transfers(c, cid)) > 0 or \
-            len(SK.outbox_stuck(c, _after(now, -CLAIM_MINUTES * 60), cid)) > 0
+        owed = (
+            len(SK.outbox_due(c, now, 1, cid)) > 0
+            or len(SK.payments_due(c, now, 1, cid)) > 0
+            or len(SK.unknown_transfers(c, cid)) > 0
+            or len(SK.outbox_stuck(c, _after(now, -CLAIM_MINUTES * 60), cid)) > 0
+        )
     if row is None or str(row["status"]) == "disconnected":
         return "gone"
     if str(row["provider"]) == "stripe":
         return stripe_sync.connection(store, vault, cid, rehearsal=rehearsal, make=make, at=now)
+    if str(row["provider"]) == "brex":
+        return brex_sync.connection(store, vault, cid, rehearsal=rehearsal, make=make, at=now)
     if rehearsal:
         with store.transaction() as c:
             for o in SK.outbox_due(c, now, OUTBOX_MOST, cid):
@@ -218,7 +248,7 @@ def connection(store: Any, vault: Any, cid: str, *, rehearsal: bool = False, mak
         _failed(store, cid, "the Mercury token is missing; store it again in Settings", now, str(row["status"]))
         return "no_token"
     problems: list[str] = []
-    if due or inbox:       # balances come from webhooks (§9): an event waiting reads them now; the poll stays 15 minutes
+    if due or inbox:  # balances come from webhooks (§9): an event waiting reads them now; the poll stays 15 minutes
         problems += balances(store, provider, cid, now)
     if due:
         provider_users(store, provider, cid, now)
@@ -231,7 +261,7 @@ def connection(store: Any, vault: Any, cid: str, *, rehearsal: bool = False, mak
     problems += pay(store, provider, now, cid)
     if due:
         problems += statements(store, provider, cid, now)
-        with store.transaction() as c:      # the balance this pass read and every row it took in (inbox too) agree now
+        with store.transaction() as c:  # the balance this pass read and every row it took in (inbox too) agree now
             ctx = load(c, now)
             banking.pair_card_payments(ctx, cid)
             banking.refresh_connection_openings(ctx, cid)
@@ -253,8 +283,8 @@ def connection(store: Any, vault: Any, cid: str, *, rehearsal: bool = False, mak
     return "failed" if problems else "ok"
 
 
-CARD_PAGES = 20                   # Mercury card-list pages read for one user before giving up (500 a page)
-LOOK_HOURS = 24                   # an uncertain card's candidates are looked up again after this long
+CARD_PAGES = 20  # Mercury card-list pages read for one user before giving up (500 a page)
+LOOK_HOURS = 24  # an uncertain card's candidates are looked up again after this long
 
 
 def _user_cards(provider: Provider, user: str) -> tuple[list[dict[str, Any]], str]:
@@ -277,8 +307,10 @@ def uncertain_cards(store: Any, provider: Provider, cid: str, now: str) -> list[
     confirm (card_resolve). Nothing is decided here: Mercury echoes nothing unique Finance set (a nickname is a
     person's to change), so neither a match nor an empty list proves anything; the reservation stays meanwhile."""
     with store.read() as c:
-        waiting = [(str(k["id"]), str(SK.card_create_payload(c, str(k["id"])).get("user_id") or ""))
-                   for k in SK.cards_uncertain(c, cid, _after(now, -LOOK_HOURS * 3600))]
+        waiting = [
+            (str(k["id"]), str(SK.card_create_payload(c, str(k["id"])).get("user_id") or ""))
+            for k in SK.cards_uncertain(c, cid, _after(now, -LOOK_HOURS * 3600))
+        ]
     problems: list[str] = []
     for card_id, user in waiting:
         if not user:
@@ -293,17 +325,25 @@ def uncertain_cards(store: Any, provider: Provider, cid: str, now: str) -> list[
                 continue
             ctx = load(c, now)
             why = cards.candidates(ctx, card, found)
-            tico.needs_you(c, payments.admin_person(ctx), f"Confirm a Mercury card for {card['holder']}",
-                           f"{why} Card {card_id}: confirm its Mercury card (card_resolve with provider_card_id), or "
-                           "confirm Mercury never issued it (card_resolve with none). Its reservation stays until "
-                           "then.")
+            tico.needs_you(
+                c,
+                payments.admin_person(ctx),
+                f"Confirm a Mercury card for {card['holder']}",
+                f"{why} Card {card_id}: confirm its Mercury card (card_resolve with provider_card_id), or "
+                "confirm Mercury never issued it (card_resolve with none). Its reservation stays until "
+                "then.",
+            )
     return problems
 
 
 def _failed(store: Any, cid: str, why: str, now: str, prior: str) -> None:
     with store.transaction() as c:
-        SK.update(c, "fin_connections", cid, {"status": "error", "last_error": why, "updated_at": now,
-                                              "next_sync_at": _after(now, POLL_MINUTES * 60)})
+        SK.update(
+            c,
+            "fin_connections",
+            cid,
+            {"status": "error", "last_error": why, "updated_at": now, "next_sync_at": _after(now, POLL_MINUTES * 60)},
+        )
         banking.sync_failed(load(c, now), cid, prior, why)
 
 
@@ -321,8 +361,9 @@ def balances(store: Any, provider: Provider, cid: str, now: str) -> list[str]:
                 continue
             a = found.get(str(m["provider_account_id"] or ""))
             if a is not None:
-                banking.set_balance(ctx, str(m["id"]), _cents(a.get("currentBalance")),
-                                    _cents(a.get("availableBalance")), now)
+                banking.set_balance(
+                    ctx, str(m["id"]), _cents(a.get("currentBalance")), _cents(a.get("availableBalance")), now
+                )
             banking.tidy_name(ctx, str(m["id"]))
     return []
 
@@ -348,12 +389,18 @@ def _ingest_all(store: Any, cid: str, raws: list[dict[str, Any]], now: str, vers
         for raw in raws:
             try:
                 _take(ctx, cid, F.mercury_txn(raw, version))
-            except Exception:                       # one bad transaction must not stop the page
+            except Exception:  # one bad transaction must not stop the page
                 log.exception("Finance will retry a Mercury transaction")
                 tid = str(raw.get("id") or "")
                 if tid:
-                    SK.inbox_add(c, connection_id=cid, provider="mercury", event_id=f"retry:{tid}",
-                                 payload={"resourceType": "transaction", "resourceId": tid}, at=now)
+                    SK.inbox_add(
+                        c,
+                        connection_id=cid,
+                        provider="mercury",
+                        event_id=f"retry:{tid}",
+                        payload={"resourceType": "transaction", "resourceId": tid},
+                        at=now,
+                    )
 
 
 def backfill(store: Any, provider: Provider, cid: str, now: str) -> list[str]:
@@ -370,7 +417,7 @@ def backfill(store: Any, provider: Provider, cid: str, now: str) -> list[str]:
         with store.transaction() as c:
             SK.update(c, "fin_connections", cid, {"events_cursor": str(first[0].get("id")) if first else "start"})
     cursor = str(row["cursor"] or "") or None
-    repeat = False                      # the page before was all rows already taken in
+    repeat = False  # the page before was all rows already taken in
     for _ in range(BACKFILL_PAGES):
         page = provider.transactions(cursor)
         if not page.ok:
@@ -388,8 +435,15 @@ def backfill(store: Any, provider: Provider, cid: str, now: str) -> list[str]:
         repeat = seen
         with store.transaction() as c:
             fresh = _settings(SK.get(c, "fin_connections", cid))
-            SK.update(c, "fin_connections", cid, {"cursor": cursor, "settings": SK.dump(
-                {**fresh, "backfilled": True, "opened": []}) if done else SK.dump(fresh)})
+            SK.update(
+                c,
+                "fin_connections",
+                cid,
+                {
+                    "cursor": cursor,
+                    "settings": SK.dump({**fresh, "backfilled": True, "opened": []}) if done else SK.dump(fresh),
+                },
+            )
             if done:
                 # The balances read at the start of this pass and the whole feed: each account's opening balance. One
                 # with no balance read yet gets its opening on a later pass (banking.refresh_opening).
@@ -397,7 +451,9 @@ def backfill(store: Any, provider: Provider, cid: str, now: str) -> list[str]:
                 mine = [m for m in SK.money_accounts(c, ctx.book.id) if str(m["connection_id"] or "") == cid]
                 for m in mine:
                     banking.opening_balance(ctx, str(m["id"]))
-                banking.mark_opened(ctx, cid, [str(m["id"]) for m in mine if m["balance"] is not None and m["account_id"]])
+                banking.mark_opened(
+                    ctx, cid, [str(m["id"]) for m in mine if m["balance"] is not None and m["account_id"]]
+                )
         if done:
             break
     return []
@@ -451,12 +507,17 @@ def process_inbox(store: Any, provider: Provider, cid: str, now: str) -> list[st
             return [error_text(got)]
         attempts = int(r["attempts"]) + 1
         with store.transaction() as c:
-            if not got.ok:                                       # 404: not this token's, or not there yet
+            if not got.ok:  # 404: not this token's, or not there yet
                 if owned and attempts >= GONE_TRIES:
                     SK.inbox_done(c, str(r["id"]), "gone", now)
                 elif owned:
-                    SK.inbox_later(c, str(r["id"]), attempts=attempts, tried=tried,
-                                   next_try_at=_after(now, RETRY[min(attempts - 1, len(RETRY) - 1)]))
+                    SK.inbox_later(
+                        c,
+                        str(r["id"]),
+                        attempts=attempts,
+                        tried=tried,
+                        next_try_at=_after(now, RETRY[min(attempts - 1, len(RETRY) - 1)]),
+                    )
                 else:
                     _tried(c, r, tried + [cid], others, now, missing=True)
                 continue
@@ -464,10 +525,15 @@ def process_inbox(store: Any, provider: Provider, cid: str, now: str) -> list[st
             raw = str(body.get("resourceVersion") or "0")
             try:
                 fid = _take(ctx, cid, F.mercury_txn(got.body, int(raw) if raw.isdigit() else 0))
-            except Exception:                       # rolled back; it stays in the inbox to try again
+            except Exception:  # rolled back; it stays in the inbox to try again
                 log.exception("Finance will retry a Mercury event")
-                SK.inbox_later(c, str(r["id"]), attempts=attempts, tried=tried,
-                               next_try_at=_after(now, RETRY[min(attempts - 1, len(RETRY) - 1)]))
+                SK.inbox_later(
+                    c,
+                    str(r["id"]),
+                    attempts=attempts,
+                    tried=tried,
+                    next_try_at=_after(now, RETRY[min(attempts - 1, len(RETRY) - 1)]),
+                )
                 continue
             if fid is None and not owned:
                 _tried(c, r, tried + [cid], others, now)
@@ -487,8 +553,13 @@ def _tried(c: Any, r: Any, tried: list[str], connections: list[str], now: str, m
         return
     if MISSING in tried and str(r["created_at"]) > _after(now, -UNOWNED_HOURS * 3600):
         attempts = int(r["attempts"]) + 1
-        SK.inbox_later(c, str(r["id"]), attempts=attempts, tried=[],
-                       next_try_at=_after(now, RETRY[min(attempts - 1, len(RETRY) - 1)]))
+        SK.inbox_later(
+            c,
+            str(r["id"]),
+            attempts=attempts,
+            tried=[],
+            next_try_at=_after(now, RETRY[min(attempts - 1, len(RETRY) - 1)]),
+        )
         return
     SK.inbox_done(c, str(r["id"]), "ignored", now)
 
@@ -511,8 +582,8 @@ def outbox(store: Any, provider: Provider, now: str, cid: str) -> list[str]:
                 ctx = load(c, now)
                 fresh: list[Any] = []
                 if transfers.recheck(ctx, o, fresh):
-                    continue      # re-checked at use: canceled or held, so nothing is sent
-                transfers.reserve(ctx, o, fresh)         # with the claim: newly applicable limits move once
+                    continue  # re-checked at use: canceled or held, so nothing is sent
+                transfers.reserve(ctx, o, fresh)  # with the claim: newly applicable limits move once
         body = SK.loads(o["payload"])
         answer = _send(store, provider, str(o["op"]), body)
         with store.transaction() as c:
@@ -528,8 +599,9 @@ def _cut_off(c: Any, o: Any, now: str) -> None:
         SK.update(c, "fin_outbox", str(o["id"]), {"claimed_at": None, "updated_at": now})
         return
     why = "the call was cut off; it may have gone through: check Mercury before trying again"
-    SK.update(c, "fin_outbox", str(o["id"]), {"status": "failed", "claimed_at": None, "last_error": why,
-                                              "updated_at": now})
+    SK.update(
+        c, "fin_outbox", str(o["id"]), {"status": "failed", "claimed_at": None, "last_error": why, "updated_at": now}
+    )
     body = SK.loads(o["payload"])
     ctx = load(c, now)
     if op == "transfer_create":
@@ -538,10 +610,14 @@ def _cut_off(c: Any, o: Any, now: str) -> None:
     if op == "card_create" and body.get("card_id"):
         cards.uncertain(ctx, str(body["card_id"]), why)
     what = "a card" if op == "card_create" else f"recipient {body.get('name') or ''}".strip()
-    tico.needs_you(c, payments.admin_person(ctx), f"Check Mercury for {what}",
-                   f"Finance was creating {what} in Mercury when it stopped, so it may or may not exist there. "
-                   f"Check Mercury; Finance will not create it again on its own (outbox {o['id']}). For a card, "
-                   "confirm its Mercury card or that there is none on the card (card_resolve).")
+    tico.needs_you(
+        c,
+        payments.admin_person(ctx),
+        f"Check Mercury for {what}",
+        f"Finance was creating {what} in Mercury when it stopped, so it may or may not exist there. "
+        f"Check Mercury; Finance will not create it again on its own (outbox {o['id']}). For a card, "
+        "confirm its Mercury card or that there is none on the card (card_resolve).",
+    )
 
 
 def _send(store: Any, provider: Provider, op: str, body: Mapping[str, Any]) -> Answer:
@@ -561,7 +637,7 @@ def _send(store: Any, provider: Provider, op: str, body: Mapping[str, Any]) -> A
             if str(card["status"]) == "canceled":
                 return Answer(200, {"skipped": "canceled before it was issued"})
             with store.read() as c:
-                limit = cards.issue_limit(c, card)          # its allocation now, never a stale limit
+                limit = cards.issue_limit(c, card)  # its allocation now, never a stale limit
             if limit <= 0:
                 return Answer(200, {"skipped": "held back: the card has no allocation", "waiting": True})
             got = provider.create_card(str(body.get("user_id")), str(body.get("nickname")), limit)
@@ -602,7 +678,7 @@ def _send_recipient(store: Any, provider: Provider, body: Mapping[str, Any]) -> 
     with store.read() as c:
         try:
             details = payments.open_details(c, str(body.get("details_ref") or ""))
-        except Exception:                    # no vault, or the row will not open: never a crash, never plaintext
+        except Exception:  # no vault, or the row will not open: never a crash, never plaintext
             log.exception("Finance could not open a recipient's sealed bank details")
             details = {}
     if not details.get("accountNumber") or not details.get("routingNumber"):
@@ -616,13 +692,18 @@ def _recipient_body(body: Mapping[str, Any]) -> dict[str, object]:
     if body.get("method") == "check":
         out["checkInfo"] = {"address": address}
     elif body.get("method") == "wire":
-        out["domesticWireRoutingInfo"] = {"accountNumber": body.get("accountNumber"),
-                                          "routingNumber": body.get("routingNumber"), "address": address}
+        out["domesticWireRoutingInfo"] = {
+            "accountNumber": body.get("accountNumber"),
+            "routingNumber": body.get("routingNumber"),
+            "address": address,
+        }
     else:
-        out["electronicRoutingInfo"] = {"accountNumber": body.get("accountNumber"),
-                                        "routingNumber": body.get("routingNumber"),
-                                        "electronicAccountType": body.get("account_type") or "businessChecking",
-                                        "address": address}
+        out["electronicRoutingInfo"] = {
+            "accountNumber": body.get("accountNumber"),
+            "routingNumber": body.get("routingNumber"),
+            "electronicAccountType": body.get("account_type") or "businessChecking",
+            "address": address,
+        }
     return out
 
 
@@ -635,8 +716,12 @@ def _record(c: Any, o: Any, body: Mapping[str, Any], answer: Answer, now: str) -
     card_id = str(body.get("card_id") or "")
     if answer.ok:
         if op == "recipient_create":
-            SK.update(c, "fin_recipients", str(body["recipient_id"]), {
-                "provider_recipient_id": str(answer.body.get("id") or ""), "updated_at": now})
+            SK.update(
+                c,
+                "fin_recipients",
+                str(body["recipient_id"]),
+                {"provider_recipient_id": str(answer.body.get("id") or ""), "updated_at": now},
+            )
             kept = {"recipient_id": body["recipient_id"]}
             SK.update(c, "fin_outbox", str(o["id"]), {"payload": SK.dump(kept)})
             # A payment waiting on this recipient goes in this pass (pay runs after outbox); the ring covers one paid
@@ -646,40 +731,82 @@ def _record(c: Any, o: Any, body: Mapping[str, Any], answer: Answer, now: str) -
             transfers.sent(load(c, now), body, answer.body)
         elif op == "card_create" and answer.body.get("waiting"):
             # Not issued and not canceled: it is issued once it has an allocation again (cards.sync).
-            SK.update(c, "fin_cards", card_id, {"sync_status": cards.WAITING, "updated_at": now,
-                                                "sync_error": "Not issued until it has an allocation"})
+            SK.update(
+                c,
+                "fin_cards",
+                card_id,
+                {
+                    "sync_status": cards.WAITING,
+                    "updated_at": now,
+                    "sync_error": "Not issued until it has an allocation",
+                },
+            )
         elif op == "card_create" and not answer.body.get("skipped"):
-            limit = int(answer.body.get("sent_limit") or body["monthly"])     # what was asked for, not a later edit
-            SK.update(c, "fin_cards", card_id, {
-                "provider_card_id": str(answer.body.get("id") or ""),
-                "last4": str(answer.body.get("lastFour") or "")[-4:] or None, "provider_status": "active",
-                "provider_limit": limit, "sync_status": "ok", "synced_at": now, "updated_at": now})
+            limit = int(answer.body.get("sent_limit") or body["monthly"])  # what was asked for, not a later edit
+            SK.update(
+                c,
+                "fin_cards",
+                card_id,
+                {
+                    "provider_card_id": str(answer.body.get("id") or ""),
+                    "last4": str(answer.body.get("lastFour") or "")[-4:] or None,
+                    "provider_status": "active",
+                    "provider_limit": limit,
+                    "sync_status": "ok",
+                    "synced_at": now,
+                    "updated_at": now,
+                },
+            )
             cards.created(load(c, now), card_id, str(o["action_id"] or ""), str(o["id"]))
         elif op == "card_create":
             cards.not_issued(load(c, now), card_id)
         elif op == "card_adopt" and card_id:
             cards.adopt(load(c, now), card_id, answer.body, str(body.get("user_id") or ""), str(o["id"]))
         elif op in ("card_sync", "card_limit", "card_state") and card_id:
-            cards.confirmed(load(c, now), card_id, cast(dict[str, Any], answer.body.get("confirmed") or {}),
-                            str(o["action_id"] or ""), follow=str(o["id"]))
-        SK.update(c, "fin_outbox", str(o["id"]), {"status": "sent", "attempts": attempts, "claimed_at": None,
-                                                  "last_error": str(answer.body.get("skipped") or "") or None,
-                                                  "updated_at": now})
+            cards.confirmed(
+                load(c, now),
+                card_id,
+                cast(dict[str, Any], answer.body.get("confirmed") or {}),
+                str(o["action_id"] or ""),
+                follow=str(o["id"]),
+            )
+        SK.update(
+            c,
+            "fin_outbox",
+            str(o["id"]),
+            {
+                "status": "sent",
+                "attempts": attempts,
+                "claimed_at": None,
+                "last_error": str(answer.body.get("skipped") or "") or None,
+                "updated_at": now,
+            },
+        )
         return ""
     if op in ("card_sync", "card_limit", "card_state") and card_id and answer.body.get("confirmed"):
         cards.confirmed(load(c, now), card_id, cast(dict[str, Any], answer.body.get("confirmed")))
     why = error_text(answer, write=True)
-    final = answer.status is not None and 300 <= answer.status < 500 and not answer.refused_write and \
-        answer.status != 429                     # a redirect (never followed) is no better on a retry
+    final = (
+        answer.status is not None and 300 <= answer.status < 500 and not answer.refused_write and answer.status != 429
+    )  # a redirect (never followed) is no better on a retry
     if op in NO_KEY_OPS and (answer.status is None or answer.status >= 500):
         # Mercury takes no idempotency key for these: a call that may have landed is never sent again on its own.
         final, why = True, f"{why}; it may have gone through: check Mercury before trying again"
-    SK.update(c, "fin_outbox", str(o["id"]), {
-        "status": "failed" if final else "pending", "attempts": attempts, "last_error": why, "claimed_at": None,
-        "next_try_at": None if final else _after(now, WRITE_SCHEDULE.wait_for(attempts)), "updated_at": now})
+    SK.update(
+        c,
+        "fin_outbox",
+        str(o["id"]),
+        {
+            "status": "failed" if final else "pending",
+            "attempts": attempts,
+            "last_error": why,
+            "claimed_at": None,
+            "next_try_at": None if final else _after(now, WRITE_SCHEDULE.wait_for(attempts)),
+            "updated_at": now,
+        },
+    )
     if op == "transfer_create" and final:
-        transfers.not_sent(load(c, now), body, why, unknown=answer.status is None or answer.status >= 500,
-                           started=now)
+        transfers.not_sent(load(c, now), body, why, unknown=answer.status is None or answer.status >= 500, started=now)
     if op == "card_create" and card_id and (answer.status is None or answer.status >= 500):
         cards.uncertain(load(c, now), card_id, why)
     elif op.startswith("card_") and card_id:
@@ -705,8 +832,11 @@ def pay(store: Any, provider: Provider, now: str, cid: str) -> list[str]:
             with store.transaction() as c:
                 payments.cut_off(load(c, now), SK.get(c, "fin_payments", pid))
             continue
-        if status in ("awaiting_bank_approval", "submitted", "unknown") and p["provider_request_id"] \
-                and str(p["mode"]) != "direct":
+        if (
+            status in ("awaiting_bank_approval", "submitted", "unknown")
+            and p["provider_request_id"]
+            and str(p["mode"]) != "direct"
+        ):
             answer = provider.send_request(str(p["provider_request_id"]))
             with store.transaction() as c:
                 ctx = load(c, now)
@@ -725,7 +855,7 @@ def pay(store: Any, provider: Provider, now: str, cid: str) -> list[str]:
                 ctx = load(c, now)
                 row = SK.get(c, "fin_payments", pid)
                 if payments.found(ctx, row, requests, back):
-                    banking.payment_linked(ctx, SK.get(c, "fin_payments", pid))   # a debit taken in before it
+                    banking.payment_linked(ctx, SK.get(c, "fin_payments", pid))  # a debit taken in before it
                 elif complete and (whole or not asked):
                     payments.not_found(ctx, row)
                 elif complete:
@@ -741,12 +871,15 @@ def pay(store: Any, provider: Provider, now: str, cid: str) -> list[str]:
                 continue
             if not SK.payment_claim(c, pid, now, _after(now, payments.SENDING_MINUTES * 60)):
                 continue
-            payments.reserve(ctx, row, fresh)         # with the claim: newly applicable limits move once
+            payments.reserve(ctx, row, fresh)  # with the claim: newly applicable limits move once
             rec = SK.get(c, "fin_recipients", str(p["recipient_id"]))
             claimed = SK.get(c, "fin_payments", pid)
         body = payments.request_body(claimed, rec)
-        answer = provider.create_transaction(account, body) if str(claimed["mode"]) == "direct" \
+        answer = (
+            provider.create_transaction(account, body)
+            if str(claimed["mode"]) == "direct"
             else provider.request_send_money(account, body)
+        )
         with store.transaction() as c:
             ctx = load(c, now)
             payments.sent(ctx, SK.get(c, "fin_payments", pid), answer)
@@ -766,7 +899,7 @@ def _requests(provider: Provider, account: str) -> tuple[list[dict[str, Any]], b
     return out, whole
 
 
-TXN_PAGES = 1000                  # pages one read back may take of an account's transactions (500 a page)
+TXN_PAGES = 1000  # pages one read back may take of an account's transactions (500 a page)
 
 
 def _read_back(provider: Provider, account: str, pay: Any, now: str) -> tuple[list[dict[str, Any]], bool]:
@@ -780,8 +913,10 @@ def _read_back(provider: Provider, account: str, pay: Any, now: str) -> tuple[li
     end = (datetime.fromisoformat(now.replace("Z", "+00:00")) + timedelta(days=1)).date().isoformat()
     request = "" if str(pay["mode"]) == "direct" else str(pay["provider_request_id"] or "")
     search = None if request else f"{payments.NOTE}{pay['idempotency_key']}"
-    return _offset_pages(lambda offset: provider.account_transactions(account, search, start, end, offset,
-                                                                      request or None), "transactions")
+    return _offset_pages(
+        lambda offset: provider.account_transactions(account, search, start, end, offset, request or None),
+        "transactions",
+    )
 
 
 def _offset_pages(read: Callable[[int], Answer], rows_key: str) -> tuple[list[dict[str, Any]], bool]:
@@ -873,6 +1008,7 @@ def _read_from(provider: Provider, after: str | None) -> tuple[list[dict[str, An
         break
     return rows, cursor
 
+
 def statements(store: Any, provider: Provider, cid: str, now: str) -> list[str]:
     """Statements for reconciliation, once a day: IO credit statements (what is owed, sign normalized once) and the
     last three months of depository statements (an ending balance only)."""
@@ -894,10 +1030,19 @@ def statements(store: Any, provider: Provider, cid: str, now: str) -> list[str]:
             for s in listed(got, "statements"):
                 try:
                     starting, ending = F.credit_owed(s) if program else (None, F.bank_ending(s))
-                    SK.upsert_statement(c, money_account_id=str(m["id"]), provider_id=str(s.get("id") or ""),
-                                        start=F.day_of(s.get("startDate") or s.get("endDate")),
-                                        end=F.day_of(s.get("endDate")), starting=starting, ending=ending,
-                                        currency=str(m["balance_currency"] or "USD"), source="api", by=SYSTEM, at=now)
+                    SK.upsert_statement(
+                        c,
+                        money_account_id=str(m["id"]),
+                        provider_id=str(s.get("id") or ""),
+                        start=F.day_of(s.get("startDate") or s.get("endDate")),
+                        end=F.day_of(s.get("endDate")),
+                        starting=starting,
+                        ending=ending,
+                        currency=str(m["balance_currency"] or "USD"),
+                        source="api",
+                        by=SYSTEM,
+                        at=now,
+                    )
                 except FinanceError:
                     continue
     with store.transaction() as c:
@@ -926,8 +1071,9 @@ def start(store: Any, vault: Any, *, rehearsal: bool = False, make: Make | None 
             return
         if cast(threading.Event, _worker["stop"]).is_set():
             _worker["stop"] = threading.Event()
-        made = threading.Thread(target=_loop, args=(store, vault, rehearsal, make, _worker["stop"]),
-                                name="finance-banking", daemon=True)
+        made = threading.Thread(
+            target=_loop, args=(store, vault, rehearsal, make, _worker["stop"]), name="finance-banking", daemon=True
+        )
         made.start()
         _worker["thread"] = made
 

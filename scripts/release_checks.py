@@ -7,8 +7,8 @@
 
 A PR runs only the tests for what it changed, so the full suite runs here, once, right before a release. `--release`
 runs the journey's previous-release install while it builds the candidate images once. After all builds finish,
-it runs Python tests except Docker isolation (`pytest -m "slow or not slow"`) and every browser test
-(`node scripts/ui-tests.cjs --all`), alongside the Docker isolation tests
+it runs Python tests except Docker isolation (parallel, then `alone` wall-clock budget tests with no workers) and
+every browser test (`node scripts/ui-tests.cjs --all`), alongside the Docker isolation tests
 and whole-product checks against the successfully built images: docker/smoke.sh,
 docker/side-jobs-smoke.sh and `scripts/journey-test.sh --release` (install and seed the previous release, upgrade
 to the candidate, bot turns on the previous and the candidate runner, roll back a migrating update, a second updater
@@ -25,7 +25,7 @@ runs on this machine, as before, with the desktop part only where the Linux app 
 `--shard K/N` without `--release` runs the Kth of N file groups of the default Python suite (plain `pytest`, what PR
 checks run), balanced the same way, so the PR-check Python job can spread over several VMs. The N groups together run
 every file the single default run collects, each once. Groups balance by each file's recorded seconds in
-scripts/test-timings.json (a file with no record by its test count); refresh it with `--record-timings DEFAULT_XML
+scripts/test-timings.json (a file with no record by its estimated test count); refresh it with `--record-timings DEFAULT_XML
 SLOW_XML` from junit reports of a full run. Browser shards balance by the 'browser' seconds there; refresh those with
 `--record-browser-timings LOG...` from the browser logs of a release validation, every shard's.
 
@@ -37,13 +37,19 @@ Existing pytest and TICO_UI_JOBS settings still select concurrency for the defau
 Run locally, it first takes one of the computer's heavy-job slots (scripts/heavy.sh): at most TICO_HEAVY_SLOTS heavy
 runs at once on a box, the others waiting their turn. Hosted CI goes straight on.
 """
+
 import argparse
+import ast
+from collections import deque
+import configparser
+import fnmatch
 import ipaddress
 import json
 import os
 from pathlib import Path
 import socket
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -56,17 +62,19 @@ from xml.etree import ElementTree
 ROOT = Path(__file__).resolve().parents[1]
 BUDGET_SECONDS = 480
 DEFAULT_BUDGET_SECONDS = 300
-CANDIDATE = 'v9.9.9'   # what scripts/journey-test.sh calls a local build
+CANDIDATE = 'v9.9.9'  # what scripts/journey-test.sh calls a local build
 # Checks whose failure is reported but does not fail the gate: none by default. The upgrade journey blocks, since it
 # finds real upgrade bugs (v0.5.54: two crashes on an upgraded database). TICO_RELEASE_OPTIONAL_CHECKS=journey
 # (comma-separated) waives a check for one release.
 OPTIONAL_CHECKS = frozenset(name for name in os.environ.get('TICO_RELEASE_OPTIONAL_CHECKS', '').split(',') if name)
 # The edge network range (A.B.C.0/28, see docker/edge-env.sh) of each compose stack the gate runs side by side. A
 # separate project and host port do not separate networks: Docker refuses a second network on a range in use.
-EDGE = {'journey': '172.30.252', 'smoke': '172.30.253', 'backup-test': '172.30.251'}   # the journey runs backup-test
-IMAGES = (('server', 'ghcr.io/ticoteam/tico', 'tico-rc'),
-          ('runner', 'ghcr.io/ticoteam/tico-runner', 'tico-rc-runner'),
-          ('updater', 'ghcr.io/ticoteam/tico-updater', 'tico-rc-updater'))
+EDGE = {'journey': '172.30.252', 'smoke': '172.30.253', 'backup-test': '172.30.251'}  # the journey runs backup-test
+IMAGES = (
+    ('server', 'ghcr.io/ticoteam/tico', 'tico-rc'),
+    ('runner', 'ghcr.io/ticoteam/tico-runner', 'tico-rc-runner'),
+    ('updater', 'ghcr.io/ticoteam/tico-updater', 'tico-rc-updater'),
+)
 
 
 def load():
@@ -77,19 +85,26 @@ def full():
     started, initial_load = time.monotonic(), load()
     env = {**os.environ, 'TICO_PYTHON': sys.executable}
     for name, command in (
-            ('Python', [sys.executable, '-m', 'pytest', '-q']),
-            ('Browser', ['node', 'scripts/ui-tests.cjs'])):
+        ('Python', [sys.executable, '-m', 'pytest', '-q']),
+        ('Browser', ['node', 'scripts/ui-tests.cjs']),
+    ):
         before = time.monotonic()
         result = subprocess.run(command, cwd=ROOT, env=env)
         print(f'{name} checks: exit {result.returncode}, {time.monotonic() - before:.2f}s', flush=True)
         if result.returncode:
-            print(f'Release checks failed after {time.monotonic() - started:.2f}s; load {initial_load} -> {load()}', flush=True)
+            print(
+                f'Release checks failed after {time.monotonic() - started:.2f}s; load {initial_load} -> {load()}',
+                flush=True,
+            )
             return 1
     elapsed = time.monotonic() - started
     # The time is reported, never a failure: there is no budget on how many tests run.
     slow = elapsed >= DEFAULT_BUDGET_SECONDS
-    print(f'Release checks {"passed, slow" if slow else "passed"}: {elapsed:.2f}s / '
-          f'{DEFAULT_BUDGET_SECONDS}s; load {initial_load} -> {load()}', flush=True)
+    print(
+        f'Release checks {"passed, slow" if slow else "passed"}: {elapsed:.2f}s / '
+        f'{DEFAULT_BUDGET_SECONDS}s; load {initial_load} -> {load()}',
+        flush=True,
+    )
     return 0
 
 
@@ -116,11 +131,14 @@ class Check:
         self.seconds = time.monotonic() - self.started
         self.stream.close()
         # A test step that ran nothing (every test filtered out or skipped) proves nothing, so it fails.
-        summary = re.sub(r'\x1b\[[0-9;]*m', '', self.tail(5))   # a coloured summary reads the same
+        summary = re.sub(r'\x1b\[[0-9;]*m', '', self.tail(5))  # a coloured summary reads the same
         if self.tests and self.code == 0 and not re.search(r'(?<!\d)[1-9]\d* passed\b', summary):
             print(f'  {self.name}: no test passed; a release test step must run tests', flush=True)
             self.code = 1
-        print(f'  {self.name}: {"ok" if self.code == 0 else f"FAILED (exit {self.code})"} in {self.seconds:.0f}s', flush=True)
+        print(
+            f'  {self.name}: {"ok" if self.code == 0 else f"FAILED (exit {self.code})"} in {self.seconds:.0f}s',
+            flush=True,
+        )
 
     def join(self):
         self.thread.join()
@@ -132,8 +150,9 @@ class Check:
 
 def edge_settings(prefix):
     """The edge settings docker/edge-env.sh writes for one range, as the stacks append them to their env files."""
-    output = subprocess.run(['bash', 'docker/edge-env.sh', prefix], cwd=ROOT, capture_output=True, text=True,
-                            check=True).stdout
+    output = subprocess.run(
+        ['bash', 'docker/edge-env.sh', prefix], cwd=ROOT, capture_output=True, text=True, check=True
+    ).stdout
     return dict(line.split('=', 1) for line in output.splitlines())
 
 
@@ -146,18 +165,43 @@ def edge_networks(ranges=EDGE):
     overlap = 'tico-rc-edgecheck-overlap'
 
     def create(network, edge):
-        return subprocess.Popen(['docker', 'network', 'create', '--subnet', edge['TICO_EDGE_SUBNET'],
-                                 '--ip-range', edge['TICO_EDGE_DYNAMIC_RANGE'], network],
-                                stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+        return subprocess.Popen(
+            [
+                'docker',
+                'network',
+                'create',
+                '--subnet',
+                edge['TICO_EDGE_SUBNET'],
+                '--ip-range',
+                edge['TICO_EDGE_DYNAMIC_RANGE'],
+                network,
+            ],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+        )
 
     def remove():
         subprocess.run(['docker', 'network', 'rm', *probes.values(), overlap], capture_output=True, text=True)
 
     def holders():
         ids = subprocess.run(['docker', 'network', 'ls', '-q'], capture_output=True, text=True).stdout.split()
-        listing = subprocess.run(['docker', 'network', 'inspect', '--format',
-                                  '{{.Name}} {{range .IPAM.Config}}{{.Subnet}} {{end}}', *ids],
-                                 capture_output=True, text=True).stdout if ids else ''
+        listing = (
+            subprocess.run(
+                [
+                    'docker',
+                    'network',
+                    'inspect',
+                    '--format',
+                    '{{.Name}} {{range .IPAM.Config}}{{.Subnet}} {{end}}',
+                    *ids,
+                ],
+                capture_output=True,
+                text=True,
+            ).stdout
+            if ids
+            else ''
+        )
         wanted = [ipaddress.ip_network(edge['TICO_EDGE_SUBNET']) for edge in settings.values()]
         clashing = []
         for line in listing.splitlines():
@@ -171,23 +215,30 @@ def edge_networks(ranges=EDGE):
                     clashing.append(f'{name} {subnet}')
         return '; '.join(clashing)
 
-    remove()   # leftovers of an interrupted check
+    remove()  # leftovers of an interrupted check
     try:
-        started = {name: create(probes[name], edge) for name, edge in settings.items()}   # all at once, as in the gate
+        started = {name: create(probes[name], edge) for name, edge in settings.items()}  # all at once, as in the gate
         outputs = {name: process.communicate()[0].strip() for name, process in started.items()}
         failed = [name for name, process in started.items() if process.returncode]
         if failed:
-            return False, (f'edge networks: could not create {", ".join(failed)} beside the others: '
-                           + ' | '.join(outputs[name] for name in failed)
-                           + f'; networks on these ranges: {holders() or "none listed"}')
+            return False, (
+                f'edge networks: could not create {", ".join(failed)} beside the others: '
+                + ' | '.join(outputs[name] for name in failed)
+                + f'; networks on these ranges: {holders() or "none listed"}'
+            )
         first = next(iter(settings))
         second = create(overlap, settings[first])
         refusal = second.communicate()[0].strip()
         if second.returncode == 0 or 'overlap' not in refusal.lower():
-            return False, (f'edge networks: Docker did not refuse a second network on {first}\'s '
-                           f'{settings[first]["TICO_EDGE_SUBNET"]} ({refusal or "created"}), so this check proves nothing')
-        return True, ('edge networks: ' + ', '.join(f'{name} {edge["TICO_EDGE_SUBNET"]}' for name, edge in settings.items())
-                      + f' created at once; a second network on {first}\'s range refused as expected')
+            return False, (
+                f'edge networks: Docker did not refuse a second network on {first}\'s '
+                f'{settings[first]["TICO_EDGE_SUBNET"]} ({refusal or "created"}), so this check proves nothing'
+            )
+        return True, (
+            'edge networks: '
+            + ', '.join(f'{name} {edge["TICO_EDGE_SUBNET"]}' for name, edge in settings.items())
+            + f' created at once; a second network on {first}\'s range refused as expected'
+        )
     finally:
         remove()
 
@@ -218,6 +269,50 @@ def parse_shard(text):
 RELEASE_SELECTION = ('-m', 'slow or not slow', f'--ignore={ISOLATION_FILE}')
 
 
+def python_test_commands(workers, files):
+    """Both release passes cover the same files; collection and weighting still include every test."""
+    common = [f'--ignore={ISOLATION_FILE}', '--api-database-snapshots', *files]
+    pytest = [sys.executable, '-m', 'pytest', '-q']
+    # Count-based batches can strand several expensive migration tests on one worker when a shard also has
+    # hundreds of cheap tests. Keep batches small so the other workers can share the expensive tests.
+    return [
+        pytest + ['-n', workers, '--maxschedchunk=2', '-m', '(slow or not slow) and not alone', *common],
+        pytest + ['-n', '0', '-m', 'alone', *common],
+    ]
+
+
+def python_tests(workers, files):
+    """Run parallel then alone in one Check, preserving both summaries and the hosted gate's junit report."""
+    commands = python_test_commands(workers, files)
+    # CI supplies its report path through PYTEST_ADDOPTS. The alone pass must not overwrite the parallel cases.
+    parser = argparse.ArgumentParser(add_help=False, allow_abbrev=False)
+    parser.add_argument('--junitxml', '--junit-xml')
+    report = parser.parse_known_args(shlex.split(os.environ.get('PYTEST_ADDOPTS', '')))[0].junitxml
+    summaries = []
+    with tempfile.TemporaryDirectory(prefix='tico-alone-junit-') as directory:
+        alone_report = Path(directory) / 'alone.xml'
+        if report:
+            commands[1].append(f'--junitxml={alone_report}')
+        for label, command in zip(('Parallel Python', 'Alone Python'), commands, strict=True):
+            process = subprocess.Popen(command, cwd=ROOT, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+            tail = deque(maxlen=5)
+            with process.stdout:
+                for line in process.stdout:
+                    print(line, end='', flush=True)
+                    tail.append(line.strip())
+            code = process.wait()
+            summaries.append(f'{label}: ' + ' | '.join(tail))
+            if label == 'Parallel Python' and code:
+                return code
+        if report:
+            combined = ElementTree.parse(report)
+            combined.getroot().extend(ElementTree.parse(alone_report).getroot())
+            combined.write(report, encoding='utf-8', xml_declaration=True)
+    # An empty alone pass can print enough lines to hide the parallel pass from Check's no-test-passed guard.
+    print('\n'.join(summaries), flush=True)
+    return 0 if code == 5 else code  # a shard need not contain any alone tests
+
+
 # Each test file's recorded seconds, per selection ('default' for PR checks, 'release' for the release Python step), so
 # shards balance by time. Refresh with --record-timings after a full run with junit output (see record_timings)
 # when the shard logs show many unrecorded files or shard times drift apart: a stale record never drops a test, it
@@ -227,14 +322,19 @@ TIMINGS = ROOT / 'scripts' / 'test-timings.json'
 
 # Test files that run the release's own native binaries (runner-rs, relay-rs), by what their source names. The release
 # gate gives them python shards 1-2 (NATIVE_SHARDS), the only python VMs that wait for the native-linux build; the rest start at once.
-NATIVE_TEST = re.compile(r'rust_binary|TICO_RUNNER_BIN|TICO_SCREEN_RELAY_BIN|target/release|"target" / "release"|'
-                         r'engine\.current|screen_binary|from runner(?:_support)? import engine|runner(?:_support)?\.engine|'
-                         # scripts/tico runs the checkout's runner (install, status: runner_support/engine.py finds the binary).
-                         r'"scripts" / "tico"\)|scripts/tico"')
+NATIVE_TEST = re.compile(
+    r'rust_binary|TICO_RUNNER_BIN|TICO_SCREEN_RELAY_BIN|target/release|"target" / "release"|'
+    r'engine\.current|screen_binary|from runner(?:_support)? import engine|runner(?:_support)?\.engine|'
+    # scripts/tico-computer runs the checkout's runner (install, status: runner_support/engine.py finds
+    # the binary).
+    r'"scripts" / "tico(?:-computer)?"\)|scripts/tico(?:-computer)?"'
+)
 NATIVE_BINARIES = ('runner-rs/target/release/tico-runner', 'relay-rs/target/release/tico-screen-relay')
 # A test module importing another test module (test_screen borrows test_screen_relay_contract's running_service).
-TEST_IMPORT = re.compile(r'from\s+((?:backend|runner_support|scripts)\.tests(?:\.\w+)*)\s+import\s+([\w, ]+)|'
-                         r'import\s+((?:backend|runner_support|scripts)\.tests(?:\.\w+)+)')
+TEST_IMPORT = re.compile(
+    r'from\s+((?:backend|runner_support|scripts)\.tests(?:\.\w+)*)\s+import\s+([\w, ]+)|'
+    r'import\s+((?:backend|runner_support|scripts)\.tests(?:\.\w+)+)'
+)
 
 
 def native_test_files(names):
@@ -247,7 +347,7 @@ def native_test_files(names):
         if name not in texts:
             try:
                 texts[name] = (ROOT / name).read_text(errors='replace')
-            except OSError:   # not a file here (a test's stand-in name, a package): nothing to run natively
+            except OSError:  # not a file here (a test's stand-in name, a package): nothing to run natively
                 texts[name] = ''
         return texts[name]
 
@@ -263,8 +363,10 @@ def native_test_files(names):
         if name not in verdicts:
             source = text(name)
             verdicts[name] = bool(NATIVE_TEST.search(source)) or any(
-                native(path, (*seen, name)) for path in imports(source) if path not in seen and path != name)
+                native(path, (*seen, name)) for path in imports(source) if path not in seen and path != name
+            )
         return verdicts[name]
+
     return {name for name in names if native(name)}
 
 
@@ -272,21 +374,152 @@ def native_test_files(names):
 NATIVE_SHARDS = 2
 
 
-def shard_files(index, total, env, selection=RELEASE_SELECTION, native_first=False):
-    """The test files of shard `index` of `total`: every file pytest collects with `selection` (by default the
-    release Python step's), grouped so each shard takes about the same time: the slowest file by its recorded
-    seconds first, into the lightest shard. A file with no record weighs its test count times the recorded files'
-    seconds per test. Deterministic, so the N shards together cover each collected file exactly once."""
-    result = subprocess.run([sys.executable, '-m', 'pytest', '--collect-only', '-q', '-n', '0', *selection],
-                            cwd=ROOT, env=env, capture_output=True, text=True)
+def test_file_counts(selection=RELEASE_SELECTION, env=None, root=None):
+    """Filesystem candidates and cheap test-count estimates, without importing pytest or any test module.
+
+    Read pytest.ini's discovery settings (pytest defaults when absent), literal conftest collect_ignore/glob lists,
+    and --ignore/--ignore-glob in the selection and addopts. Markers deliberately do not affect the file list: a
+    slow-only or dynamically generated module still belongs to one shard. check_shard_coverage verifies this
+    discovery against real collection once in CI, outside the per-shard startup path.
+    """
+    root = ROOT if root is None else root
+    config = configparser.ConfigParser(interpolation=None)
+    config.read(root / 'pytest.ini')
+    patterns = shlex.split(config.get('pytest', 'python_files', fallback='test_*.py *_test.py'))
+    norecurse = shlex.split(
+        config.get('pytest', 'norecursedirs', fallback='*.egg .* _darcs build CVS dist node_modules venv {arch}')
+    )
+    testpaths = shlex.split(config.get('pytest', 'testpaths', fallback=''))
+    starts = sorted({path for pattern in testpaths for path in root.glob(pattern)}) or [root]
+    parser = argparse.ArgumentParser(add_help=False, allow_abbrev=False)
+    parser.add_argument('--ignore', action='append', default=[])
+    parser.add_argument('--ignore-glob', action='append', default=[])
+    options, _ = parser.parse_known_args(
+        [
+            *shlex.split(config.get('pytest', 'addopts', fallback='')),
+            *shlex.split((os.environ if env is None else env).get('PYTEST_ADDOPTS', '')),
+            *selection,
+        ]
+    )
+    ignored = {Path(os.path.abspath(root / name)) for name in options.ignore}
+    ignored_globs = [str(root / pattern) for pattern in options.ignore_glob]
+    counts = {}
+
+    def matches(pattern, path):
+        # pytest's fnmatch_ex matches a basename unless the pattern contains a separator.
+        value = str(path) if '/' in pattern else path.name
+        if '/' in pattern and not os.path.isabs(pattern):
+            pattern = '*/' + pattern
+        return fnmatch.fnmatch(value, pattern)
+
+    def conftest_ignores(folder, inherited):
+        path = folder / 'conftest.py'
+        values = dict(inherited)
+        if path.is_file():
+            for node in ast.parse(path.read_bytes(), filename=str(path)).body:
+                targets = (
+                    node.targets
+                    if isinstance(node, ast.Assign)
+                    else [node.target]
+                    if isinstance(node, ast.AnnAssign)
+                    else []
+                )
+                for target in targets:
+                    if isinstance(target, ast.Name) and target.id in ('collect_ignore', 'collect_ignore_glob'):
+                        try:
+                            entries = ast.literal_eval(node.value)
+                            if not isinstance(entries, (list, tuple)) or not all(isinstance(n, str) for n in entries):
+                                raise ValueError('expected a literal list of paths')
+                        except (ValueError, TypeError) as error:
+                            raise RuntimeError(f'{path}: sharding requires literal {target.id}') from error
+                        values[target.id] = [os.path.abspath(folder / name) for name in entries]
+        return values
+
+    def visit(folder, inherited):
+        ignores = conftest_ignores(folder, inherited)
+        with os.scandir(folder) as scan:
+            entries = sorted(scan, key=lambda entry: entry.name)
+        for entry in entries:
+            path = Path(entry.path)
+            if path.name == '__pycache__' or path in ignored or str(path) in ignores.get('collect_ignore', ()):
+                continue
+            if any(
+                fnmatch.fnmatch(str(path), pattern)
+                for pattern in [*ignored_globs, *ignores.get('collect_ignore_glob', ())]
+            ):
+                continue
+            if entry.is_dir():
+                if (
+                    any(matches(pattern, path) for pattern in norecurse)
+                    or (path / 'pyvenv.cfg').is_file()
+                    or (path / 'conda-meta/history').is_file()
+                ):
+                    continue
+                visit(path, ignores)
+            elif entry.is_file() and path.suffix == '.py' and any(matches(pattern, path) for pattern in patterns):
+                add(path)
+
+    def add(path):
+        # Parametrization and generated tests need no special handling for coverage. A module with no visible
+        # test functions still weighs at least one test, so new dynamically generated tests get a shard too.
+        counts[path.relative_to(root).as_posix()] = max(
+            1, len(re.findall(r'^\s*(?:async\s+)?def\s+test_\w*\s*\(', path.read_text(errors='replace'), re.M))
+        )
+
+    for start in starts:
+        inherited = {}
+        for parent in reversed(start.relative_to(root).parents):
+            inherited = conftest_ignores(root / parent, inherited)
+        if start.is_dir():
+            visit(start, inherited)
+        elif start.is_file() and start.suffix == '.py':
+            add(start)
+    return dict(sorted(counts.items()))
+
+
+def validate_shard_coverage(collected, selection=RELEASE_SELECTION, env=None, root=None):
+    """Fail if real collection contains a file the filesystem plan would omit; empty candidates are harmless."""
+    listed = set(test_file_counts(selection, env, root))
+    missing = sorted(set(collected) - listed)
+    if missing:
+        raise RuntimeError('collected test files absent from the shard file list: ' + ', '.join(missing))
+    print(
+        f'Shard coverage: {len(collected)} collected files covered; '
+        f'{len(listed - set(collected))} additional candidates (empty or deselected)',
+        flush=True,
+    )
+    return 0
+
+
+def check_shard_coverage(env, selection=RELEASE_SELECTION):
+    """One real single-process collection, shared by the gate rather than repeated on every shard."""
+    result = subprocess.run(
+        [sys.executable, '-m', 'pytest', '--collect-only', '-q', '-n', '0', *selection],
+        cwd=ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+    )
     if result.returncode:
         print(result.stdout[-4000:] + result.stderr[-4000:], flush=True)
         raise RuntimeError(f'test collection failed (exit {result.returncode})')
-    counts = {}
-    for line in result.stdout.splitlines():
-        if '::' in line and not line.startswith(' '):
-            name = line.split('::', 1)[0]
-            counts[name] = counts.get(name, 0) + 1
+    collected = {
+        line.split('::', 1)[0] for line in result.stdout.splitlines() if '::' in line and not line.startswith(' ')
+    }
+    if not collected:
+        raise RuntimeError('test collection returned no test files')
+    return validate_shard_coverage(collected, selection, env)
+
+
+def shard_files(index, total, env, selection=RELEASE_SELECTION, native_first=False):
+    """Choose shard `index` of `total` without pytest collection: discover filesystem candidates using pytest.ini,
+    conftest ignores and selection ignores, then put the slowest file into the lightest shard, by recorded seconds.
+    Unrecorded files weigh their source test-function estimate times recorded seconds per estimated test. Sorted
+    paths break ties, so identical checkouts yield identical plans and every candidate belongs to exactly one shard.
+    CI's once-per-plan collection guard verifies every collected file is a candidate; empty/deselected files are
+    allowed. Native-first reserves shards 1..NATIVE_SHARDS for native files and bins the remainder separately.
+    """
+    counts = test_file_counts(selection, env)
     if len(counts) < total:
         raise RuntimeError(f'{len(counts)} test files cannot fill {total} shards')
     timings = recorded_timings('release' if selection else 'default')
@@ -300,9 +533,11 @@ def shard_files(index, total, env, selection=RELEASE_SELECTION, native_first=Fal
         if index <= NATIVE_SHARDS:
             groups, loads, _ = bin_shards({name: counts[name] for name in native}, timings, NATIVE_SHARDS)
             mine = sorted(groups[index - 1])
-            print(f'Python shard {index}/{total}: {len(mine)} of the {len(native)} native test files, '
-                  f'{sum(counts[n] for n in mine)} of {sum(counts.values())} tests, about {loads[index - 1]:.0f} seconds',
-                  flush=True)
+            print(
+                f'Python shard {index}/{total}: {len(mine)} of the {len(native)} native test files, '
+                f'{sum(counts[n] for n in mine)} estimated tests, about {loads[index - 1]:.0f} seconds',
+                flush=True,
+            )
             return mine
         counts = {name: n for name, n in counts.items() if name not in native}
         groups, loads, unrecorded = bin_shards(counts, timings, total - NATIVE_SHARDS)
@@ -310,9 +545,12 @@ def shard_files(index, total, env, selection=RELEASE_SELECTION, native_first=Fal
     else:
         groups, loads, unrecorded = bin_shards(counts, timings, total)
     mine = groups[index - 1]
-    print(f'Python shard {index}/{total}: {len(mine)} files, {sum(counts[name] for name in mine)} of '
-          f'{sum(counts.values())} tests, about {loads[index - 1]:.0f} of {sum(loads):.0f} seconds, recorded or estimated '
-          f'({len(unrecorded)} of {len(counts)} files unrecorded, weighed by test count)', flush=True)
+    print(
+        f'Python shard {index}/{total}: {len(mine)} files, {sum(counts[name] for name in mine)} of '
+        f'{sum(counts.values())} estimated tests, about {loads[index - 1]:.0f} of {sum(loads):.0f} seconds, recorded or estimated '
+        f'({len(unrecorded)} of {len(counts)} files unrecorded, weighed by source test count)',
+        flush=True,
+    )
     return sorted(mine)
 
 
@@ -331,8 +569,9 @@ def bin_shards(counts, timings, total):
 def browser_shard(index, total):
     """The browser scripts of shard `index` of `total` of `ui-tests.cjs --all`, grouped like the Python files: by
     recorded seconds ('browser' in TIMINGS) where there are any, otherwise one script weighs as much as another."""
-    scripts = subprocess.run(['node', 'scripts/ui-tests.cjs', '--list', '--all'], cwd=ROOT, capture_output=True,
-                             text=True, check=True).stdout.split()
+    scripts = subprocess.run(
+        ['node', 'scripts/ui-tests.cjs', '--list', '--all'], cwd=ROOT, capture_output=True, text=True, check=True
+    ).stdout.split()
     if len(scripts) < total:
         raise RuntimeError(f'{len(scripts)} browser scripts cannot fill {total} shards')
     weights, _ = file_weights(dict.fromkeys(scripts, 1), recorded_timings('browser'))
@@ -355,9 +594,9 @@ def recorded_timings(kind):
 
 
 def file_weights(counts, timings):
-    """Each collected file's weight: its recorded seconds, or for a file with no record its test count times the
-    recorded files' seconds per test (1 when nothing is recorded). Also the unrecorded files."""
-    recorded = [name for name in counts if name in timings]   # a recorded 0.0 (a file under 5 ms) is a record
+    """Each file's weight: its recorded seconds, or for a file with no record its count estimate times the
+    recorded files' seconds per estimated test (1 when nothing is recorded). Also the unrecorded files."""
+    recorded = [name for name in counts if name in timings]  # a recorded 0.0 (a file under 5 ms) is a record
     tests = sum(counts[name] for name in recorded)
     per_test = sum(timings[name] for name in recorded) / tests if tests else 1.0
     weights = {name: timings[name] if name in recorded else counts[name] * per_test for name in counts}
@@ -384,20 +623,26 @@ def record_timings(default_report, slow_report):
     release = dict(default)
     for name, seconds in junit_seconds(slow_report).items():
         release[name] = release.get(name, 0.0) + seconds
-    timings = {kind: {name: round(seconds, 2) for name, seconds in sorted(table.items())}
-               for kind, table in (('default', default), ('release', release))}
+    timings = {
+        kind: {name: round(seconds, 2) for name, seconds in sorted(table.items())}
+        for kind, table in (('default', default), ('release', release))
+    }
     browser = recorded_timings('browser')
     TIMINGS.write_text(json.dumps({**timings, **({'browser': browser} if browser else {})}, indent=1) + '\n')
-    print(f'Recorded {len(default)} default and {len(release)} release test files in {TIMINGS.name}: '
-          f'{sum(default.values()):.0f}s and {sum(release.values()):.0f}s', flush=True)
+    print(
+        f'Recorded {len(default)} default and {len(release)} release test files in {TIMINGS.name}: '
+        f'{sum(default.values()):.0f}s and {sum(release.values()):.0f}s',
+        flush=True,
+    )
     return 0
 
 
 def record_shard_timings(report_dir):
     """Refresh the 'release' seconds in TIMINGS from the per-shard junit reports of a release validation (every `*.xml`
-    under `report_dir`, written with `-o junit_family=xunit1`). Each file's tests run in one shard, so its seconds are
-    the sum of its cases. A file that did not run keeps its recorded seconds while it still exists in the checkout;
-    the 'default' record is only pruned, since these reports are the release selection's. Browser seconds are kept."""
+    under `report_dir`, written with `-o junit_family=xunit1`). Each file's tests run in one shard; its seconds sum
+    all cases across the parallel and alone suites. A file that did not run keeps its recorded seconds while it
+    still exists in the checkout; the 'default' record is only pruned, since these reports are the release selection's.
+    Browser seconds are kept."""
     reports = sorted(Path(report_dir).rglob('*.xml'))
     if not reports:
         raise RuntimeError(f'no junit reports under {report_dir}')
@@ -410,17 +655,24 @@ def record_shard_timings(report_dir):
     except FileNotFoundError:
         recorded = {}
     exists = lambda name: (ROOT / name).is_file()
-    release = {name: seconds for name, seconds in recorded.get('release', {}).items() if name not in fresh and exists(name)}
+    release = {
+        name: seconds for name, seconds in recorded.get('release', {}).items() if name not in fresh and exists(name)
+    }
     release.update(fresh)
     default = {name: seconds for name, seconds in recorded.get('default', {}).items() if exists(name)}
-    timings = {'default': dict(sorted(default.items())),
-               'release': {name: round(seconds, 2) for name, seconds in sorted(release.items())}}
+    timings = {
+        'default': dict(sorted(default.items())),
+        'release': {name: round(seconds, 2) for name, seconds in sorted(release.items())},
+    }
     if recorded.get('browser'):
         timings['browser'] = recorded['browser']
     TIMINGS.write_text(json.dumps(timings, indent=1) + '\n')
-    print(f'Recorded {len(fresh)} files from {len(reports)} junit reports into {TIMINGS.name}; '
-          f'kept {len(release) - len(fresh)} release and {len(default)} default records: '
-          f'{sum(release.values()):.0f}s release', flush=True)
+    print(
+        f'Recorded {len(fresh)} files from {len(reports)} junit reports into {TIMINGS.name}; '
+        f'kept {len(release) - len(fresh)} release and {len(default)} default records: '
+        f'{sum(release.values()):.0f}s release',
+        flush=True,
+    )
     return 0
 
 
@@ -450,17 +702,22 @@ def python_shard(index, total):
     env = {**os.environ, 'TICO_PYTHON': sys.executable}
     # Alone on its VM, a shard uses every core rather than pytest.ini's shared-box cap.
     workers = str(os.cpu_count() or 2)
-    result = subprocess.run([sys.executable, '-m', 'pytest', '-q', '-n', workers, '--api-database-snapshots']
-                            + shard_files(index, total, env, selection=()),
-                            cwd=ROOT, env=env)
-    print(f'Python shard {index}/{total}: exit {result.returncode}, {time.monotonic() - started:.2f}s; '
-          f'load {initial_load} -> {load()}', flush=True)
+    result = subprocess.run(
+        [sys.executable, '-m', 'pytest', '-q', '-n', workers, '--api-database-snapshots']
+        + shard_files(index, total, env, selection=()),
+        cwd=ROOT,
+        env=env,
+    )
+    print(
+        f'Python shard {index}/{total}: exit {result.returncode}, {time.monotonic() - started:.2f}s; '
+        f'load {initial_load} -> {load()}',
+        flush=True,
+    )
     return result.returncode
 
 
 def phase_table(checks, started, not_run=()):
-    print('\n| Phase | Start offset (s) | Duration (s) | Exit |\n'
-          '| --- | ---: | ---: | --- |', flush=True)
+    print('\n| Phase | Start offset (s) | Duration (s) | Exit |\n| --- | ---: | ---: | --- |', flush=True)
     for check in sorted(checks, key=lambda check: check.started):
         print(f'| {check.name} | {check.started - started:.1f} | {check.seconds:.1f} | {check.code} |', flush=True)
     for name in not_run:
@@ -475,7 +732,9 @@ def prebuilt_images():
         return {}
     missing = [target for target, _, _ in IMAGES if target not in given]
     if missing or not os.environ.get('TICO_RELEASE_VERSION'):
-        raise SystemExit(f'TICO_RELEASE_IMAGES needs every image and TICO_RELEASE_VERSION; missing {missing or "the version"}')
+        raise SystemExit(
+            f'TICO_RELEASE_IMAGES needs every image and TICO_RELEASE_VERSION; missing {missing or "the version"}'
+        )
     return given
 
 
@@ -483,10 +742,12 @@ def release(args):
     part, shard = getattr(args, 'part', None), getattr(args, 'shard', None)
     runs = lambda name: part in (None, name)
     started, initial_load = time.monotonic(), load()
-    commit = subprocess.run(['git', 'rev-parse', 'HEAD'], cwd=ROOT, capture_output=True, text=True, check=True).stdout.strip()
+    commit = subprocess.run(
+        ['git', 'rev-parse', 'HEAD'], cwd=ROOT, capture_output=True, text=True, check=True
+    ).stdout.strip()
     logs = Path(tempfile.mkdtemp(prefix='tico-release-check-'))
     ready = logs / 'images-ready'
-    base_env = {**os.environ, 'DOCKER_BUILDKIT': '1'}
+    base_env = {**os.environ, 'DOCKER_BUILDKIT': '1', 'TICO_E2E_CLI_ALL': '1'}  # a release runs every hub command live
     # Alone on its VM the Python slice can use every core; beside builds and browsers, half of them.
     default_workers = (os.cpu_count() or 2) if part == 'python' else max(1, (os.cpu_count() or 2) // 2)
     workers = str(max(1, int(os.environ.get('TICO_PYTHON_WORKERS', default_workers))))
@@ -504,32 +765,74 @@ def release(args):
         if not edge_ok:
             print('Release check failed: the gate stacks cannot hold their edge networks side by side', flush=True)
             return 1
-        journey_env = {**base_env, 'TICO_JOURNEY_IMAGES_READY': str(ready), 'TICO_JOURNEY_EDGE': EDGE['journey'],
-                       'TICO_BACKUP_EDGE': EDGE['backup-test'], 'TICO_JOURNEY_CANDIDATE': candidate}
-        journey_cmd = ['bash', 'scripts/journey-test.sh', '--release'] + (['--previous', args.previous] if args.previous else [])
-        checks.append(Check('journey', journey_cmd, logs, journey_env))   # installs the previous release while the images build
+        journey_env = {
+            **base_env,
+            'TICO_JOURNEY_IMAGES_READY': str(ready),
+            'TICO_JOURNEY_EDGE': EDGE['journey'],
+            'TICO_BACKUP_EDGE': EDGE['backup-test'],
+            'TICO_JOURNEY_CANDIDATE': candidate,
+        }
+        journey_cmd = ['bash', 'scripts/journey-test.sh', '--release'] + (
+            ['--previous', args.previous] if args.previous else []
+        )
+        checks.append(
+            Check('journey', journey_cmd, logs, journey_env)
+        )  # installs the previous release while the images build
 
         if prebuilt:
             # The images the release will publish, by digest: tested here, never rebuilt.
-            builds = [Check(f'pull-{target}', ['bash', '-c', 'docker pull -q "$0" && docker tag "$0" "$1" && docker tag "$0" "$2"',
-                                               prebuilt[target], f'{published}:{candidate}', f'{local}:local'], logs, base_env)
-                      for target, published, local in IMAGES]
+            builds = [
+                Check(
+                    f'pull-{target}',
+                    [
+                        'bash',
+                        '-c',
+                        'docker pull -q "$0" && docker tag "$0" "$1" && docker tag "$0" "$2"',
+                        prebuilt[target],
+                        f'{published}:{candidate}',
+                        f'{local}:local',
+                    ],
+                    logs,
+                    base_env,
+                )
+                for target, published, local in IMAGES
+            ]
         else:
-            builds = [Check(f'build-{target}', ['docker', 'build', '-q', '--target', target,
-                                                '--build-arg', f'TICO_VERSION={CANDIDATE}', '--build-arg', f'TICO_COMMIT={commit}',
-                                                '--build-arg', f'TICO_REPOSITORY={os.environ.get("TICO_JOURNEY_REPOSITORY", "ticoteam/tico")}',
-                                                '-t', f'{published}:{CANDIDATE}', '-t', f'{local}:local', '.'], logs, base_env)
-                      for target, published, local in IMAGES]
+            builds = [
+                Check(
+                    f'build-{target}',
+                    [
+                        'docker',
+                        'build',
+                        '-q',
+                        '--target',
+                        target,
+                        '--build-arg',
+                        f'TICO_VERSION={CANDIDATE}',
+                        '--build-arg',
+                        f'TICO_COMMIT={commit}',
+                        '--build-arg',
+                        f'TICO_REPOSITORY={os.environ.get("TICO_JOURNEY_REPOSITORY", "ticoteam/tico")}',
+                        '-t',
+                        f'{published}:{CANDIDATE}',
+                        '-t',
+                        f'{local}:local',
+                        '.',
+                    ],
+                    logs,
+                    base_env,
+                )
+                for target, published, local in IMAGES
+            ]
         build_codes = [build.join() for build in builds]  # wait for every build, including after a failed one
         built = all(code == 0 for code in build_codes)
         ready.write_text('ok' if built else 'failed')
     if runs('python'):
-        python_cmd = [sys.executable, '-m', 'pytest', '-q', '-n', workers, '-m', 'slow or not slow',
-                      f'--ignore={ISOLATION_FILE}', '--api-database-snapshots']
+        python_cmd = [sys.executable, str(ROOT / 'scripts/release_checks.py'), '--python-tests', workers]
         name = 'all-python'
         if shard:
             files = shard_files(shard[0], shard[1], test_env, native_first=True)
-            # Never skip a native test for want of its binary: only shard 1's VM waits for the native-linux build.
+            # Never skip a native test for want of its binary: the native shards' VMs wait for the native-linux build.
             missing = [b for b in NATIVE_BINARIES if not (ROOT / b).exists()]
             if missing and native_test_files(files):
                 raise RuntimeError(f'python shard {shard[0]} has native tests but no release binaries: {missing}')
@@ -538,8 +841,14 @@ def release(args):
         checks.append(Check(name, python_cmd, logs, test_env, tests=True))
     if runs('browser'):
         if shard:
-            checks.append(Check(f'browser-{shard[0]}-of-{shard[1]}',
-                                ['node', 'scripts/ui-tests.cjs', *browser_shard(shard[0], shard[1])], logs, test_env))
+            checks.append(
+                Check(
+                    f'browser-{shard[0]}-of-{shard[1]}',
+                    ['node', 'scripts/ui-tests.cjs', *browser_shard(shard[0], shard[1])],
+                    logs,
+                    test_env,
+                )
+            )
         else:
             checks.append(Check('all-browser', ['node', 'scripts/ui-tests.cjs', '--all'], logs, test_env))
     # Its own VM in the hosted gate; a whole local gate runs it where the app can build and says when it cannot.
@@ -548,21 +857,52 @@ def release(args):
     elif part is None:
         not_run += ('desktop-update',)
     if runs('product') and built:
-        local_env = {**base_env, 'TICO_IMAGE': 'tico-rc', 'TICO_TAG': 'local', 'TICO_RUNNER_IMAGE': 'tico-rc-runner',
-                     'TICO_UPDATER_IMAGE': 'tico-rc-updater'}
-        checks.append(Check('smoke', ['bash', 'docker/smoke.sh'], logs,
-                            {**local_env, 'TICO_SMOKE_PROJECT': 'tico-rc-smoke', 'TICO_SMOKE_PORT': str(free_port()),
-                             'TICO_SMOKE_EDGE': EDGE['smoke']}))
-        checks.append(Check('side-jobs', ['bash', 'docker/side-jobs-smoke.sh'], logs,
-                            {**local_env, 'TICO_SIDEJOBS_NAME': 'tico-rc-sidejobs'}))
-        checks.append(Check('isolation', [sys.executable, '-m', 'pytest', '-q', '-n', workers, '-m', 'slow or not slow',
-                                         ISOLATION_FILE], logs,
-                            {**test_env,
-                             'TICO_RUNNER_TEST_IMAGE': f"{local_env['TICO_RUNNER_IMAGE']}:{local_env['TICO_TAG']}",
-                             # The session handoff starts from the release the journey upgrades from (newest tag by default).
-                             **({'TICO_RUNNER_PREVIOUS_IMAGE': f'ghcr.io/ticoteam/tico-runner:{args.previous}'}
-                                if args.previous else {})},
-                            tests=True))
+        local_env = {
+            **base_env,
+            'TICO_IMAGE': 'tico-rc',
+            'TICO_TAG': 'local',
+            'TICO_RUNNER_IMAGE': 'tico-rc-runner',
+            'TICO_UPDATER_IMAGE': 'tico-rc-updater',
+        }
+        checks.append(
+            Check(
+                'smoke',
+                ['bash', 'docker/smoke.sh'],
+                logs,
+                {
+                    **local_env,
+                    'TICO_SMOKE_PROJECT': 'tico-rc-smoke',
+                    'TICO_SMOKE_PORT': str(free_port()),
+                    'TICO_SMOKE_EDGE': EDGE['smoke'],
+                },
+            )
+        )
+        checks.append(
+            Check(
+                'side-jobs',
+                ['bash', 'docker/side-jobs-smoke.sh'],
+                logs,
+                {**local_env, 'TICO_SIDEJOBS_NAME': 'tico-rc-sidejobs'},
+            )
+        )
+        checks.append(
+            Check(
+                'isolation',
+                [sys.executable, '-m', 'pytest', '-q', '-n', workers, '-m', 'slow or not slow', ISOLATION_FILE],
+                logs,
+                {
+                    **test_env,
+                    'TICO_RUNNER_TEST_IMAGE': f"{local_env['TICO_RUNNER_IMAGE']}:{local_env['TICO_TAG']}",
+                    # The session handoff starts from the release the journey upgrades from (newest tag by default).
+                    **(
+                        {'TICO_RUNNER_PREVIOUS_IMAGE': f'ghcr.io/ticoteam/tico-runner:{args.previous}'}
+                        if args.previous
+                        else {}
+                    ),
+                },
+                tests=True,
+            )
+        )
     elif runs('product'):
         print('  isolation: not run (candidate image builds failed)', flush=True)
         not_run += ('smoke', 'side-jobs', 'isolation')
@@ -571,7 +911,10 @@ def release(args):
         print(f'\n--- {check.name} (last lines of {check.log}) ---\n{check.tail()}', flush=True)
     warned = [check for check in failed if check.name in OPTIONAL_CHECKS]
     for check in warned:
-        print(f'::warning::{check.name} failed; it is optional (OPTIONAL_CHECKS), so the gate does not fail on it', flush=True)
+        print(
+            f'::warning::{check.name} failed; it is optional (OPTIONAL_CHECKS), so the gate does not fail on it',
+            flush=True,
+        )
     failed = [check for check in failed if check not in warned]
     phase_table(builds + checks, started, not_run)
     elapsed = time.monotonic() - started
@@ -582,19 +925,43 @@ def release(args):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.split('\n')[0])
-    parser.add_argument('--release', action='store_true', help='every test and the whole-product checks (the release gate)')
-    parser.add_argument('--previous', help='with --release: the release the journey upgrades from (default: newest tag)')
+    parser.add_argument(
+        '--release', action='store_true', help='every test and the whole-product checks (the release gate)'
+    )
+    parser.add_argument(
+        '--check-shard-coverage',
+        action='store_true',
+        help='collect once and verify filesystem sharding covers every collected file; --release includes slow tests',
+    )
+    parser.add_argument(
+        '--previous', help='with --release: the release the journey upgrades from (default: newest tag)'
+    )
     parser.add_argument('--part', choices=PARTS, help='with --release: run only this slice of the gate')
-    parser.add_argument('--record-timings', nargs=2, metavar=('DEFAULT_XML', 'SLOW_XML'),
-                        help='rewrite scripts/test-timings.json from junit reports of the default suite and the slow tests')
-    parser.add_argument('--record-shard-timings', metavar='JUNIT_DIR',
-                        help="refresh the 'release' seconds in scripts/test-timings.json from the per-shard junit reports "
-                             "(xunit1) of a release validation, a directory of python-K-of-N.xml files")
-    parser.add_argument('--record-browser-timings', nargs='+', metavar='LOG',
-                        help="rewrite the 'browser' seconds in scripts/test-timings.json from browser-test logs")
-    parser.add_argument('--shard', type=parse_shard,
-                        help='run file group K of N (K/N) of the Python tests: alone, of the default suite (PR checks); '
-                             'with --release --part python, of the release set; with --part browser, of every script')
+    parser.add_argument('--python-tests', nargs='+', help=argparse.SUPPRESS)  # the Python Check's subprocess
+    parser.add_argument(
+        '--record-timings',
+        nargs=2,
+        metavar=('DEFAULT_XML', 'SLOW_XML'),
+        help='rewrite scripts/test-timings.json from junit reports of the default suite and the slow tests',
+    )
+    parser.add_argument(
+        '--record-shard-timings',
+        metavar='JUNIT_DIR',
+        help="refresh the 'release' seconds in scripts/test-timings.json from the per-shard junit reports "
+        "(xunit1) of a release validation, a directory of python-K-of-N.xml files",
+    )
+    parser.add_argument(
+        '--record-browser-timings',
+        nargs='+',
+        metavar='LOG',
+        help="rewrite the 'browser' seconds in scripts/test-timings.json from browser-test logs",
+    )
+    parser.add_argument(
+        '--shard',
+        type=parse_shard,
+        help='run file group K of N (K/N) of the Python tests: alone, of the default suite (PR checks); '
+        'with --release --part python, of the release set; with --part browser, of every script',
+    )
     args = parser.parse_args(argv)
     if args.part and not args.release:
         parser.error('--part needs --release')
@@ -606,6 +973,10 @@ def main(argv=None):
         return record_shard_timings(args.record_shard_timings)
     if args.record_browser_timings:
         return record_browser_timings(*args.record_browser_timings)
+    if args.python_tests:
+        return python_tests(args.python_tests[0], args.python_tests[1:])
+    if args.check_shard_coverage:
+        return check_shard_coverage(dict(os.environ), RELEASE_SELECTION if args.release else ())
     if args.release:
         return release(args)
     return python_shard(*args.shard) if args.shard else full()
@@ -617,7 +988,12 @@ def in_slot(env=os.environ):
 
 
 if __name__ == '__main__':
-    if not in_slot() and not {'--record-timings', '--record-shard-timings', '--record-browser-timings'} & set(sys.argv):
+    if not in_slot() and not {
+        '--record-timings',
+        '--record-shard-timings',
+        '--record-browser-timings',
+        '--check-shard-coverage',
+    } & set(sys.argv):
         # A local run first takes one of the box's heavy-job slots, at low priority (scripts/heavy.sh).
         os.execvp('bash', ['bash', str(ROOT / 'scripts/heavy.sh'), sys.executable, __file__, *sys.argv[1:]])
     raise SystemExit(main())

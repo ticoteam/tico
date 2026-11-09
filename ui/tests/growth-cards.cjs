@@ -1,4 +1,4 @@
-// The Growth page's cards (ui/app/growth-page.js on ui/app/dashboard.js's grid, backend/cards.py place `growth`) against
+// The Growth page's cards (ui/app/growth-page.ts on ui/app/dashboard.ts's grid, backend/cards.py place `growth`) against
 // a fake server shaped as GET /api/v2/places/growth[?month=], /api/v2/cards/choices?place=growth, POST /api/v2/cards and
 // /api/v2/growth/*: the head has the North Star line, the month picker, the Growth board link and Settings; the five
 // cards draw (a Number's value, change and trend; the Funnel's five stages, its North Star and the loop; Channels with
@@ -77,6 +77,12 @@ function server(me) {
   };
   return {reads, writes, handle(method, p, body, query) {
     if (method !== 'GET' && /^\/api\/v2\/(places|pins|cards|growth)\b/.test(p)) writes.push([method, p, body]);
+    if (p === '/api/v2/places/dashboard' && method === 'GET') return [200, {
+      place: 'dashboard', kind: 'dashboard', saved: true, can_edit: me.company_role !== 'member',
+      pins: [{id: 'overview-pin', item: 'card:overview-card', position: 0, size: 'small', made_by: 'human:ana',
+        card: {id: 'overview-card', template: 'kpi', title: 'Company activation', heading: 'Company activation', name: 'KPI',
+          settings: {kpi: 'k2'}, team_name: '', hidden: false, data: {name: 'Activated', unit: '', value: 210, spark: []}}}],
+    }];
     if (p === '/api/v2/places/growth') {
       const month = query.get('month') || MONTHS.at(-1);
       reads.push(month);
@@ -112,7 +118,7 @@ async function open(browser, {viewport = DESKTOP, hash = '#/growth', me = OWNER,
     if (url.origin !== 'http://tico-ui.test') return route.abort();
     if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
     const file = p.startsWith('/tico/ui/') ? uiFile(p.slice(9)) : p.startsWith('/vendor/') ? path.join(uiDir, p) : '';
-    if (file && fs.existsSync(file)) return route.fulfill({contentType: file.endsWith('.js') ? 'application/javascript' : file.endsWith('.css') ? 'text/css' : file.endsWith('.html') ? 'text/html' : 'application/octet-stream', body: fs.readFileSync(file)});
+    if (file && fs.existsSync(file)) return route.fulfill({contentType: /\.(?:js|ts)$/.test(file) ? 'application/javascript' : file.endsWith('.css') ? 'text/css' : file.endsWith('.html') ? 'text/html' : 'application/octet-stream', body: fs.readFileSync(file)});
     if (p === '/api/v2/events' || p.endsWith('/watch')) return;
     if (p === '/api/v2/config') return json(config);
     if (p === '/api/me') return json({...me, config});
@@ -233,7 +239,11 @@ async function shot(page, name) {
       assert.equal(await page.locator('#dash-grid .grc-ret-t tbody tr').count(), 2);
       // Opened at that address, the page reads that month.
       await page.evaluate(() => { location.hash = '#/overview'; });
+      // Both pages use #dash-grid: wait for Company before accepting any pins from it.
+      await page.getByRole('heading', {name: 'Company', exact: true}).waitFor();
       await page.locator('#dash-grid .dash-pin').first().waitFor();
+      assert.deepEqual(await headings(page), ['Company activation'], 'Company draws its own cards');
+      assert.equal(await page.locator('#dash-grid .dash-big strong').innerText(), '210');
       await page.evaluate(() => { location.hash = '#/growth?m=2026-09'; });
       await page.waitForFunction(() => document.querySelector('[data-gr-month]')?.value === '2026-09');
       assert.equal(fake.reads.at(-1), '2026-09');
