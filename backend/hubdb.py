@@ -4759,7 +4759,9 @@ def _set_status(
     # Direct internal writers (roadmap sync, hold restoration) have the automatic finish contract.
     # task_update/task_close preflight explicit finishes before any write and handle their own cascade.
     finishing = cascade and effective in ("done", "closed") and row.get("status") != effective
-    left_open = _check_finish_children(conn, actor, row, None, strict=False) if finishing else set()
+    left_open = (
+        _check_finish_children(conn, actor, row, None, strict=False, done=effective == "done") if finishing else set()
+    )
     ts = now()
     from .task_blocked import transition
 
@@ -7623,7 +7625,7 @@ def task_update(
             and step is not None
             and row["status"] != "closed"
         ):
-            left_open = _check_finish_children(conn, actor, row, mover, strict=strict)
+            left_open = _check_finish_children(conn, actor, row, mover, strict=strict, done=status == "done")
         if effective == "done":
             from . import profiles
             from .wake_rules import verdict_fields
@@ -8728,22 +8730,26 @@ def _closed_with_note(parent):
     return f"Closed with #{parent['number']}" if parent.get("number") is not None else "Closed with its parent task"
 
 
-def _handed_on(conn, parent_id):
-    """The live subtasks an `enter` pipeline spawn filed from this card, and their own subtasks. A finish leaves them
-    alone (pipeline_engine.handed_on_open): a Qualified Lead's Opportunity is not closed with the Lead."""
+def _handed_on(conn, parent_id, done):
+    """The live subtasks an `enter` pipeline spawn filed from this card, and their own subtasks. A finish as done leaves
+    them alone (pipeline_engine.handed_on_open): a Qualified Lead's Opportunity is not closed with the Lead. A close
+    (a cancel) still takes them with it."""
     from . import pipeline_engine
 
     kept = set()
+    if not done:
+        return kept
     for tid in pipeline_engine.handed_on_open(conn, parent_id):
         kept.add(tid)
         kept.update(kid["id"] for kid in descendants(conn, tid))
     return kept
 
 
-def _check_finish_children(conn, actor, parent, mover, *, strict=True):
-    """Check the whole tree before closing anything, including children below finished subtasks."""
+def _check_finish_children(conn, actor, parent, mover, *, strict=True, done=False):
+    """Check the whole tree before closing anything, including children below finished subtasks. `done` is true when
+    the parent finishes as done (not closed), so its handed-on spawns stay open (_handed_on)."""
     left_open = set()
-    kept = _handed_on(conn, parent["id"])
+    kept = _handed_on(conn, parent["id"], done)
     for kid in descendants(conn, parent["id"]):
         if kid["status"] not in ACTIVE_STATUSES or kid["id"] in kept:
             continue
@@ -8782,7 +8788,7 @@ def _finish_children(conn, actor, parent, mover=None, quiet=False, *, left_open=
     # The summary keeps ids only: each reader's text names what that reader may open (_children_said, task_reads).
     changed = {"closed": [], "open": []}
     kids = descendants(conn, parent["id"])
-    kept = _handed_on(conn, parent["id"])
+    kept = _handed_on(conn, parent["id"], parent.get("status") == "done")
     # A dependent inside this cascade needs no new run just before it closes. Keep removing its blocker links.
     closing_tasks = {parent["id"]} | {
         kid["id"] for kid in kids if kid["status"] in ACTIVE_STATUSES and kid["id"] not in left_open | kept

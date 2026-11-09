@@ -902,6 +902,20 @@ def test_a_lead_moved_to_qualified_is_done_and_files_one_opportunity_and_closing
     assert rows(c, "SELECT status FROM tasks WHERE id=?", closing) == [{"status": "closed"}]
 
 
+def test_a_qualified_lead_closed_afterwards_takes_its_open_opportunity_with_it(tmp_path):
+    """Only a finish as done leaves the spawned Opportunity open; closing (cancelling) the card still closes it."""
+    c = fresh(tmp_path)
+    S.apply_factory_setup(c, ANA, preset="company_default")
+    lead = pipeline_id(c, "Lead")
+    link = rows(c, "SELECT id FROM pipeline_links WHERE from_pipeline_id=? AND retired_at IS NULL", lead)[0]["id"]
+    card = H.task_create(c, ANA, "Acme lead", "", ANA, type=lead, step="Replies", lint=False)["id"]
+    assert E.advance(c, ANA, card)["moved"]
+    opportunity = L.handoffs(c, link)[0]["target_task_id"]
+    assert rows(c, "SELECT status FROM tasks WHERE id=?", opportunity)[0]["status"] != "closed"
+    H.task_close(c, ANA, card, note="wrong company")
+    assert rows(c, "SELECT status FROM tasks WHERE id=?", opportunity) == [{"status": "closed"}]
+
+
 def test_a_lead_entering_qualified_files_one_opportunity_and_re_entering_files_none(tmp_path):
     c = fresh(tmp_path)
     S.apply_factory_setup(c, ANA, preset="company_default")
