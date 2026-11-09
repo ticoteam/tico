@@ -23,6 +23,8 @@ def run_with(clean_at, moved_at, end):
     world = SimpleNamespace(
         sql=lambda query, args=(): rows,
         title=lambda tid: "Ticket 7",
+        pr_of=lambda tid: 7,
+        head_at=lambda number, when: "a" * 40 if when < clean_at else "b" * 40,
         H=SimpleNamespace(
             parse_ts=lambda text: datetime.strptime(text, "%Y-%m-%dT%H:%M:%S.%fZ").replace(tzinfo=timezone.utc)
         ),

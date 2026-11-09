@@ -1735,14 +1735,14 @@ def test_a_vm_planned_past_the_target_gets_a_warning():
 
 def test_the_factory_legs_hold_about_two_minutes_of_work_per_vcpu_each():
     # The sim's work is fixed by its scenarios, not by the selection: enough legs that each takes about
-    # FACTORY_LEG_SECONDS of scenario time per vCPU (four legs for the recorded 2,000 s of scenarios).
+    # FACTORY_LEG_SECONDS of scenario time per vCPU (five legs for the recorded 2,270 s of scenarios).
     from evals.factory import run as factory
 
     timings = factory.timings()
     pairs = [(name, 1) for name in sorted(timings)]
     total = sum(timings[name] for name, _ in pairs)
     legs = max(1, min(len(pairs), math.ceil(total / (factory.REMOTE_CPUS * checks.FACTORY_LEG_SECONDS))))
-    assert len(checks.factory_shards()) == legs == 4
+    assert len(checks.factory_shards()) == legs == 5
     assert legs == 1 or total / legs / factory.REMOTE_CPUS <= checks.FACTORY_LEG_SECONDS
 
 
