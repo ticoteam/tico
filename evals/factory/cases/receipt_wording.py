@@ -119,11 +119,7 @@ def retried_after_receipt(run):
                 (
                     p
                     for p in receipts
-                    if p[1] == tid
-                    and p[0] >= when
-                    and p[3] == "clean"
-                    and pr
-                    and p[2] == run.w.head_at(pr, p[0])
+                    if p[1] == tid and p[0] >= when and p[3] == "clean" and pr and p[2] == run.w.head_at(pr, p[0])
                 ),
                 None,
             )
