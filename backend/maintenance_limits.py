@@ -12,6 +12,7 @@ or a second process sees the same counts. Every count is by actor (Keeper). A ta
 (actor, action, target, created_at); the fleet count names no target, so it reads events_actor_action_created
 (actor, action, created_at), which seeks its hour.
 """
+
 from .store import H
 
 WAKES_PER_BOT_RUN = 1
@@ -20,10 +21,13 @@ WAKES_PER_HOUR = 50
 BOT_ACTION = "maintenance.wake"
 TASK_ACTION = "maintenance.wake.task"
 # INDEXED BY pins each count's index, as backend/batch.py does: the planner otherwise takes events_action_ts.
-COUNT_TARGET = ("SELECT count(*) FROM events INDEXED BY events_task_origin "
-                "WHERE actor=? AND action=? AND target=? AND created_at>=?")
-COUNT_FLEET = ("SELECT count(*) FROM events INDEXED BY events_actor_action_created "
-               "WHERE actor=? AND action=? AND created_at>=?")
+COUNT_TARGET = (
+    "SELECT count(*) FROM events INDEXED BY events_task_origin "
+    "WHERE actor=? AND action=? AND target=? AND created_at>=?"
+)
+COUNT_FLEET = (
+    "SELECT count(*) FROM events INDEXED BY events_actor_action_created WHERE actor=? AND action=? AND created_at>=?"
+)
 
 
 def _count(c, action, target, since):
@@ -33,8 +37,9 @@ def _count(c, action, target, since):
 def allow(c, bot_id, task_id=None):
     """Whether one more Maintenance wake may go to this bot, for this task, now."""
     now = H.now()
-    live = c.execute("SELECT started_at FROM maintenance_runs WHERE finished_at IS NULL "
-                     "ORDER BY started_at DESC LIMIT 1").fetchone()
+    live = c.execute(
+        "SELECT started_at FROM maintenance_runs WHERE finished_at IS NULL ORDER BY started_at DESC LIMIT 1"
+    ).fetchone()
     # Outside a live run the window is the last hour, so a wake is never unlimited.
     if _count(c, BOT_ACTION, bot_id, live[0] if live else H.shift(now, hours=-1)) >= WAKES_PER_BOT_RUN:
         return False

@@ -1,10 +1,10 @@
-// The sidebar is whole from the first paint (ui/index.html, ui/theme.js): no row appears, goes or moves once the app's
+// The sidebar is whole from the first paint (ui/index.html, ui/theme.ts): no row appears, goes or moves once the app's
 // code runs or its reads answer. Each visit records the rail three times: painted (the page's markup and styles, its
 // scripts held back), ran (the scripts run, every /api read held back) and settled (every read answered); at 1440 px and
 // at 390 px with the phone drawer (More) open, with the bottom bar. Finance shows as the last answer this browser had
 // for the same person: none kept is hidden, a kept "shown" stands until /v2/finance/access says no (403, or a list with
 // nothing in view), a failed read changes nothing, and a sign-out or another person drops what was kept. Finish setup and
-// the folds (Library, Rules, Team) are kept the same way. A sign-out in one tab stops every other tab keeping anything,
+// the folds (Company, Library, Rules, Team) are kept the same way. A sign-out in one tab stops every other tab keeping anything,
 // and an Ask tap made before /me never opens Ask over the setup wizard.
 const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
@@ -62,10 +62,10 @@ async function visit(context, {phone = false, who = 'ana', finance = 'no', onboa
     if (p === '/api/v2/logout') return r.fulfill({contentType: 'text/html', body: '<!doctype html><title>Signed out</title>'});
     const file = p.startsWith('/tico/ui/') ? uiFile(p.slice(9)) : p.startsWith('/vendor/') ? path.join(uiDir, p) : '';
     if (file && fs.existsSync(file)) {
-      // The page's scripts wait (theme.js in the head runs, as it does before the first paint), so the rail is
+      // The page's scripts wait (theme.ts in the head runs, as it does before the first paint), so the rail is
       // recorded as its markup and styles draw it.
-      if (gates.holdScripts && p.endsWith('.js') && !p.endsWith('/theme.js')) await new Promise(go => gates.scripts.push(go));
-      return r.fulfill({contentType: file.endsWith('.js') ? 'application/javascript' : file.endsWith('.css') ? 'text/css' : file.endsWith('.woff2') ? 'font/woff2' : 'application/octet-stream', body: fs.readFileSync(file)});
+      if (gates.holdScripts && /\.(?:js|ts)$/.test(p) && !p.endsWith('/theme.ts')) await new Promise(go => gates.scripts.push(go));
+      return r.fulfill({contentType: /\.(?:js|ts)$/.test(file) ? 'application/javascript' : file.endsWith('.css') ? 'text/css' : file.endsWith('.woff2') ? 'font/woff2' : 'application/octet-stream', body: fs.readFileSync(file)});
     }
     if (p === '/api/v2/events') return r.abort();
     if (p.startsWith('/api/') && gates.holdReads) await new Promise(go => gates.reads.push(go));
@@ -133,8 +133,9 @@ const newContext = (browser, phone) => browser.newContext({viewport: phone ? PHO
         const v = await visit(context, {phone, finance: 'no'});
         same(v, tag + ', no Finance');
         const keys = v.painted.rows.filter(r => r.on).map(r => r.key);
-        assert.deepEqual(keys.slice(0, 12), ['overview', 'strategy', 'growth', 'updates', 'tasks', 'automations', 'tools', 'library',
-          'Library pages', 'docs', 'files', 'meetings'], tag + ': the order, from the first paint');
+        assert.deepEqual(keys.slice(0, 14), ['overview', 'Company pages', 'strategy', 'growth', 'updates', 'tasks', 'automations', 'tools',
+          'library', 'Library pages', 'docs', 'files', 'skills', 'meetings'], tag + ': the order, from the first paint');
+        assert.equal(await v.page.locator('#side a[data-nav="overview"]').evaluate(a => a.textContent.trim()), 'Company', tag + ': Overview is Company');
         assert.ok(!keys.includes('connections'), tag + ': Connections is part of Tools');
         assert.ok(keys.includes('threads') && keys.includes('organisation'), tag + ': Threads and the Team section too');
         if (phone) assert.deepEqual(v.painted.bar, ['org', 'threads', 'mobile-ask', 'tasks', 'updates', 'more'], tag + ': the bottom bar');
@@ -156,7 +157,7 @@ const newContext = (browser, phone) => browser.newContext({viewport: phone ? PHO
         same(again, tag + ', Finance kept');
         assert.equal(shows(again.painted, 'finance'), true, tag + ': Finance from the first paint');
         const order = again.painted.rows.filter(r => r.on).map(r => r.key);
-        assert.deepEqual(order.slice(0, 4), ['overview', 'strategy', 'growth', 'finance'], tag + ': Finance under Growth');
+        assert.deepEqual(order.slice(0, 5), ['overview', 'Company pages', 'strategy', 'finance', 'growth'], tag + ': Finance between Strategy and Growth');
         assert.deepEqual(again.errors, []);
         await again.page.close();
       }
@@ -293,6 +294,7 @@ const newContext = (browser, phone) => browser.newContext({viewport: phone ? PHO
     {
       const context = await newContext(browser, false);
       await context.addInitScript(() => {
+        localStorage.setItem('tico.nav.company', 'closed');
         localStorage.setItem('tico.nav.library', 'closed');
         localStorage.setItem('tico.nav.rules', 'open');
         localStorage.setItem('hub.nav.collapsed', JSON.stringify(['organisation']));
@@ -300,6 +302,8 @@ const newContext = (browser, phone) => browser.newContext({viewport: phone ? PHO
       const first = await visit(context, {onboarding: true});
       assert.equal(shows(first.settled, 'welcome'), true, 'Finish setup for an owner mid-setup');
       assert.equal(shows(first.painted, 'docs'), false, 'Library folded from the first paint');
+      assert.equal(shows(first.painted, 'strategy'), false, 'Company folded from the first paint');
+      assert.equal(shows(first.painted, 'overview'), true, 'its own row stays');
       assert.equal(shows(first.painted, 'rules-due'), true, 'Rules open from the first paint');
       assert.equal(await first.page.locator('#nav-organisation').isVisible(), false, 'Team folded');
       await first.page.close();
@@ -316,6 +320,12 @@ const newContext = (browser, phone) => browser.newContext({viewport: phone ? PHO
       same(after, 'setup done');
       assert.equal(shows(after.painted, 'welcome'), false);
       await after.page.close();
+      // On one of its pages a folded Company is open, from the first paint.
+      const inside = await visit(context, {hash: '#/growth'});
+      same(inside, 'Company folded, on Growth');
+      assert.equal(shows(inside.painted, 'growth'), true, 'Company open on Growth');
+      assert.equal(await inside.page.locator('#side a[data-nav="growth"]').getAttribute('aria-current'), 'page', 'Growth is the current row');
+      await inside.page.close();
       await context.close();
     }
   } finally {

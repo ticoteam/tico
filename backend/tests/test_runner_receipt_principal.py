@@ -1,4 +1,5 @@
 """Runner receipts keep the initiating person's rights after a lost response and a finished lease."""
+
 import importlib
 
 import pytest
@@ -10,8 +11,20 @@ from backend.tests.test_make_page import start
 from backend.tests.test_meeting_task_links import task
 
 
-ATTEMPT_RECEIPTS = ("claim", "start-place", "started", "thread", "events", "renew", "capture", "diagnostics",
-                    "inputs", "ack", "background-done", "complete")
+ATTEMPT_RECEIPTS = (
+    "claim",
+    "start-place",
+    "started",
+    "thread",
+    "events",
+    "renew",
+    "capture",
+    "diagnostics",
+    "inputs",
+    "ack",
+    "background-done",
+    "complete",
+)
 
 
 @pytest.mark.parametrize("endpoint", ATTEMPT_RECEIPTS)
@@ -32,11 +45,15 @@ def test_private_make_page_receipts_replay_after_finish_and_recheck_person_and_c
     if endpoint != "claim":
         suffix = endpoint
         body = {
-            "start-place": {}, "started": {"thread_id": "receipt-thread"},
+            "start-place": {},
+            "started": {"thread_id": "receipt-thread"},
             "thread": {"thread_id": "receipt-thread"},
             "events": {"events": [{"seq": 1, "kind": "status", "payload": {"text": "Making the plan"}}]},
-            "renew": {}, "capture": {"provider": "test", "frames": "{}\n"},
-            "diagnostics": {"tail": "Progress saved"}, "inputs": {}, "ack": {},
+            "renew": {},
+            "capture": {"provider": "test", "frames": "{}\n"},
+            "diagnostics": {"tail": "Progress saved"},
+            "inputs": {},
+            "ack": {},
             "background-done": {"commands": [{"description": "Write the plan", "exit": 0}]},
             "complete": {"outcome": "completed", "last_seq": 0, "text": "The plan is ready."},
         }[endpoint]
@@ -53,17 +70,26 @@ def test_private_make_page_receipts_replay_after_finish_and_recheck_person_and_c
             patch.setattr(S, "is_poll", lambda operation, result: False)
             patch.setattr(api.app.state.execution, "idle_inputs", lambda *args: None)
             real_renew = api.app.state.execution.renew
-            patch.setattr(api.app.state.execution, "renew", lambda *args, **kw:
-                          None if kw.get("if_fresh") else real_renew(*args, **kw))
+            patch.setattr(
+                api.app.state.execution,
+                "renew",
+                lambda *args, **kw: None if kw.get("if_fresh") else real_renew(*args, **kw),
+            )
             first = post(api, path, body, machine["token"], key)
         with api.app.state.store.read() as c:
-            assert c.execute("SELECT 1 FROM idempotency WHERE actor=? AND operation=? AND key=? AND binding IS NULL",
-                             ("runner:" + machine["runner_id"], "/api/v2/" + path, key)).fetchone()
+            assert c.execute(
+                "SELECT 1 FROM idempotency WHERE actor=? AND operation=? AND key=? AND binding IS NULL",
+                ("runner:" + machine["runner_id"], "/api/v2/" + path, key),
+            ).fetchone()
     if endpoint != "complete":
         if endpoint in ("claim", "start-place"):
             post(api, f"attempts/{aid}/started", {"thread_id": "receipt-thread"}, machine["token"])
-        post(api, f"attempts/{aid}/complete", {"outcome": "completed", "last_seq": int(endpoint == "events")},
-             machine["token"])
+        post(
+            api,
+            f"attempts/{aid}/complete",
+            {"outcome": "completed", "last_seq": int(endpoint == "events")},
+            machine["token"],
+        )
     with api.app.state.store.read() as c:
         row = c.execute("SELECT state,acting_person FROM attempts WHERE id=?", (aid,)).fetchone()
         assert tuple(row) == ("completed", "human:ben")
@@ -127,5 +153,7 @@ def test_acting_person_migration_adds_the_column_without_rewriting_rows(api):
         c.execute("ALTER TABLE attempts DROP COLUMN acting_person")
         migration.up(c)
         assert tuple(c.execute("SELECT state,acting_person FROM attempts WHERE id=?", (attempt["id"],)).fetchone()) == (
-            "completed", None)
-        migration.up(c)     # running it again is a no-op
+            "completed",
+            None,
+        )
+        migration.up(c)  # running it again is a no-op

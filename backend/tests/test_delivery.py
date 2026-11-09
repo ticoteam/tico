@@ -25,8 +25,10 @@ def setup(api):
 def rows(api, **where):
     sql = " AND ".join(f"{k}=?" for k in where) or "1"
     with api.app.state.store.read() as c:
-        return [dict(r) for r in c.execute(f"SELECT * FROM deferrals WHERE {sql} ORDER BY created_at",
-                                           tuple(where.values()))]
+        return [
+            dict(r)
+            for r in c.execute(f"SELECT * FROM deferrals WHERE {sql} ORDER BY created_at", tuple(where.values()))
+        ]
 
 
 def job_of(api, message_id):
@@ -37,7 +39,9 @@ def job_of(api, message_id):
 
 def tick(api, minutes):
     """One scheduler pass `minutes` from now, by a new Scheduler, as after a restart."""
-    Scheduler(api.app.state.store, api.app.state.execution).tick(datetime.now(timezone.utc) + timedelta(minutes=minutes))
+    Scheduler(api.app.state.store, api.app.state.execution).tick(
+        datetime.now(timezone.utc) + timedelta(minutes=minutes)
+    )
 
 
 def fired(api):
@@ -47,8 +51,17 @@ def fired(api):
 
 def test_a_deadline_starts_one_run_for_its_session_once(api):
     machine = setup(api)
-    task = post(api, "tasks", {"owner": "ops", "title": "Plan the launch", "body": "For the team.",
-                               "delivery": "defer", "defer_for": "never"})
+    task = post(
+        api,
+        "tasks",
+        {
+            "owner": "ops",
+            "title": "Plan the launch",
+            "body": "For the team.",
+            "delivery": "defer",
+            "defer_for": "never",
+        },
+    )
     path = f"tasks/{task['id']}/comments"
     first = post(api, path, {"text": "Billing first.", "delivery": "defer", "defer_for": "30m"})["comment"]
     second = post(api, path, {"text": "Then the docs.", "delivery": "defer", "defer_for": "2h"})["comment"]
@@ -74,8 +87,14 @@ def test_a_deadline_starts_one_run_for_its_session_once(api):
 
 def test_deferred_tasks_batch_into_one_run_that_carries_them_all(api):
     machine = setup(api)
-    tasks = [post(api, "tasks", {"owner": "ops", "title": title, "body": "Check on your next run.",
-                                 "delivery": "defer", "defer_for": "1h"}) for title in ("Refunds", "Signups")]
+    tasks = [
+        post(
+            api,
+            "tasks",
+            {"owner": "ops", "title": title, "body": "Check on your next run.", "delivery": "defer", "defer_for": "1h"},
+        )
+        for title in ("Refunds", "Signups")
+    ]
     assert all(t["next_run"] and t["next_run_waiting"] for t in tasks)
     assert [r["kind"] for r in rows(api, bot="ops")] == ["task", "task"]
 
@@ -100,8 +119,9 @@ def test_the_stalled_task_check_leaves_a_deferred_task_to_its_deadline(api):
 def test_a_paused_bot_is_not_woken_until_it_is_active_again(api):
     setup(api)
     task = post(api, "tasks", {"owner": "ops", "title": "Plan the launch", "body": "For the team."})
-    held = post(api, f"tasks/{task['id']}/comments", {"text": "Billing first.", "delivery": "defer",
-                                                       "defer_for": "30m"})["comment"]
+    held = post(
+        api, f"tasks/{task['id']}/comments", {"text": "Billing first.", "delivery": "defer", "defer_for": "30m"}
+    )["comment"]
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE bots SET state='paused' WHERE slug='ops'")
         assert delivery.next_due(c) is None, "a paused bot's deadline keeps no server awake"
@@ -117,64 +137,92 @@ def test_a_paused_bot_is_not_woken_until_it_is_active_again(api):
 def test_a_deferred_item_already_gone_starts_nothing(api):
     setup(api)
     task = post(api, "tasks", {"owner": "ops", "title": "Plan the launch", "body": "For the team."})
-    held = post(api, f"tasks/{task['id']}/comments", {"text": "Billing first.", "delivery": "defer",
-                                                       "defer_for": "30m"})["comment"]
+    held = post(
+        api, f"tasks/{task['id']}/comments", {"text": "Billing first.", "delivery": "defer", "defer_for": "30m"}
+    )["comment"]
     post(api, f"tasks/{task['id']}/comments/{held['id']}/delete", {})
     tick(api, 31)
     assert fired(api) == [] and rows(api, item=held["id"])[0]["how"] == "moot"
 
 
-@pytest.mark.parametrize("status", H.TASK_ENDED)
-def test_ending_a_task_cancels_its_deferrals_permanently(api, status):
+def test_ending_a_task_cancels_its_deferrals_permanently(api):
     setup(api)
-    task = post(api, "tasks", {"owner": "ops", "title": "Plan the launch", "body": "For the team.",
-                               "delivery": "defer", "defer_for": "never"})
-    held = post(api, f"tasks/{task['id']}/comments", {"text": "Billing first.", "delivery": "defer",
-                                                       "defer_for": "24h"})["comment"]
-    with api.app.state.store.transaction() as c:
-        if status == "closed":
-            H.task_close(c, "human:ana", task["id"], quiet=True)
-        else:
-            H.task_update(c, "human:ana", task["id"], status=status, quiet=True)
-        assert H.task(c, task["id"])["status"] == status
-    settled = [rows(api, item=item)[0] for item in (task["id"], held["id"])]
-    assert all(r["settled_at"] and r["how"] == "moot" for r in settled)
-    with api.app.state.store.transaction() as c:
-        assert delivery.due(c, H.shift(H.now(), hours=25)) == []
-        H.task_update(c, "human:ana", task["id"], status="open", quiet=True)
-        assert delivery.due(c, H.shift(H.now(), hours=26)) == []
-    assert job_of(api, held["id"]) is None and fired(api) == []
-    assert [rows(api, item=item)[0] for item in (task["id"], held["id"])] == settled
+    for status in H.TASK_ENDED:
+        task = post(
+            api,
+            "tasks",
+            {
+                "owner": "ops",
+                "title": f"Plan the launch {status}",
+                "body": "For the team.",
+                "delivery": "defer",
+                "defer_for": "never",
+            },
+        )
+        held = post(
+            api, f"tasks/{task['id']}/comments", {"text": "Billing first.", "delivery": "defer", "defer_for": "24h"}
+        )["comment"]
+        with api.app.state.store.transaction() as c:
+            if status == "closed":
+                H.task_close(c, "human:ana", task["id"], quiet=True)
+            else:
+                H.task_update(c, "human:ana", task["id"], status=status, quiet=True)
+            assert H.task(c, task["id"])["status"] == status
+        settled = [rows(api, item=item)[0] for item in (task["id"], held["id"])]
+        assert all(r["settled_at"] and r["how"] == "moot" for r in settled)
+        with api.app.state.store.transaction() as c:
+            assert delivery.due(c, H.shift(H.now(), hours=25)) == []
+            H.task_update(c, "human:ana", task["id"], status="open", quiet=True)
+            assert delivery.due(c, H.shift(H.now(), hours=26)) == []
+        assert job_of(api, held["id"]) is None and fired(api) == []
+        assert [rows(api, item=item)[0] for item in (task["id"], held["id"])] == settled
 
 
-@pytest.mark.parametrize("via", ("room", "refs"))
-def test_a_closed_tasks_deferred_message_is_moot_without_the_close_hook(api, via):
+def test_a_closed_tasks_deferred_message_is_moot_without_the_close_hook(api):
     setup(api)
-    task = post(api, "tasks", {"owner": "ops", "title": "Plan the launch", "body": "For the team.",
-                               "delivery": "defer", "defer_for": "never"})
-    held = post(api, f"tasks/{task['id']}/comments", {"text": "Billing first.", "delivery": "defer",
-                                                       "defer_for": "24h"})["comment"]
-    with api.app.state.store.transaction() as c:
-        if via == "room":
-            c.execute("UPDATE messages SET refs=json_remove(refs,'$.task') WHERE id=?", (held["id"],))
-        else:
-            c.execute("UPDATE deferrals SET kind='message',conversation_id='' WHERE item=?", (held["id"],))
-        c.execute("UPDATE tasks SET status='closed' WHERE id=?", (task["id"],))
-    assert rows(api, item=held["id"])[0]["settled_at"] is None
-    with api.app.state.store.transaction() as c:
-        assert delivery.due(c, H.shift(H.now(), hours=25)) == []
-    [row] = rows(api, item=held["id"])
-    assert row["settled_at"] and row["how"] == "moot"
-    assert job_of(api, held["id"]) is None and fired(api) == []
+    for via in ("room", "refs"):
+        task = post(
+            api,
+            "tasks",
+            {
+                "owner": "ops",
+                "title": f"Plan the launch {via}",
+                "body": "For the team.",
+                "delivery": "defer",
+                "defer_for": "never",
+            },
+        )
+        held = post(
+            api, f"tasks/{task['id']}/comments", {"text": "Billing first.", "delivery": "defer", "defer_for": "24h"}
+        )["comment"]
+        with api.app.state.store.transaction() as c:
+            if via == "room":
+                c.execute("UPDATE messages SET refs=json_remove(refs,'$.task') WHERE id=?", (held["id"],))
+            else:
+                c.execute("UPDATE deferrals SET kind='message',conversation_id='' WHERE item=?", (held["id"],))
+            c.execute("UPDATE tasks SET status='closed' WHERE id=?", (task["id"],))
+        assert rows(api, item=held["id"])[0]["settled_at"] is None
+        with api.app.state.store.transaction() as c:
+            assert delivery.due(c, H.shift(H.now(), hours=25)) == []
+        [row] = rows(api, item=held["id"])
+        assert row["settled_at"] and row["how"] == "moot"
+        assert job_of(api, held["id"]) is None and fired(api) == []
 
 
 def test_ending_a_task_filed_from_a_shared_room_leaves_the_rooms_other_messages(api):
     setup(api)
-    open_task, ended = [post(api, "tasks", {"owner": "ops", "title": title, "body": "For the team.",
-                                            "delivery": "defer", "defer_for": "never"})
-                        for title in ("Plan the launch", "Draft the FAQ")]
-    msgs = {key: post(api, "chat/ops", {"text": text, "delivery": "defer", "defer_for": "24h"})
-            for key, text in (("open", "Billing first."), ("plain", "Some day: the docs."), ("ended", "Skip the FAQ."))}
+    open_task, ended = [
+        post(
+            api,
+            "tasks",
+            {"owner": "ops", "title": title, "body": "For the team.", "delivery": "defer", "defer_for": "never"},
+        )
+        for title in ("Plan the launch", "Draft the FAQ")
+    ]
+    msgs = {
+        key: post(api, "chat/ops", {"text": text, "delivery": "defer", "defer_for": "24h"})
+        for key, text in (("open", "Billing first."), ("plain", "Some day: the docs."), ("ended", "Skip the FAQ."))
+    }
     room = msgs["open"]["conversation_id"]
     with api.app.state.store.transaction() as c:
         # Both tasks were filed from the chat room: it is no task's dedicated room.
@@ -194,10 +242,20 @@ def test_ending_a_task_filed_from_a_shared_room_leaves_the_rooms_other_messages(
 
 def test_an_open_tasks_deferred_comment_still_fires(api):
     setup(api)
-    task = post(api, "tasks", {"owner": "ops", "title": "Plan the launch", "body": "For the team.",
-                               "delivery": "defer", "defer_for": "never"})
-    held = post(api, f"tasks/{task['id']}/comments", {"text": "Billing first.", "delivery": "defer",
-                                                       "defer_for": "24h"})["comment"]
+    task = post(
+        api,
+        "tasks",
+        {
+            "owner": "ops",
+            "title": "Plan the launch",
+            "body": "For the team.",
+            "delivery": "defer",
+            "defer_for": "never",
+        },
+    )
+    held = post(
+        api, f"tasks/{task['id']}/comments", {"text": "Billing first.", "delivery": "defer", "defer_for": "24h"}
+    )["comment"]
     with api.app.state.store.transaction() as c:
         assert delivery.due(c, H.shift(H.now(), hours=25)) == [held["id"]]
     [row] = rows(api, item=held["id"])
@@ -208,11 +266,17 @@ def test_an_open_tasks_deferred_comment_still_fires(api):
 @pytest.mark.parametrize("state", ("queued", "running"))
 def test_closing_a_task_cancels_only_its_spent_deadline_runs(api, state):
     setup(api)
-    first, second = [post(api, "tasks", {"owner": "ops", "title": title, "body": "For the team.",
-                                        "delivery": "defer", "defer_for": "1h"})
-                     for title in ("Plan the launch", "Draft the FAQ")]
-    held = post(api, f"tasks/{first['id']}/comments", {"text": "Billing first.", "delivery": "defer",
-                                                        "defer_for": "1h"})["comment"]
+    first, second = [
+        post(
+            api,
+            "tasks",
+            {"owner": "ops", "title": title, "body": "For the team.", "delivery": "defer", "defer_for": "1h"},
+        )
+        for title in ("Plan the launch", "Draft the FAQ")
+    ]
+    held = post(
+        api, f"tasks/{first['id']}/comments", {"text": "Billing first.", "delivery": "defer", "defer_for": "1h"}
+    )["comment"]
     with api.app.state.store.transaction() as c:
         # Task-thread messages use the same cancellation rule as comments.
         c.execute("UPDATE deferrals SET kind='message' WHERE item=?", (held["id"],))
@@ -250,28 +314,37 @@ def test_a_defer_rides_along_only_on_a_turn_in_its_own_session(api):
     assert rows(api, item=here["comment"]["id"]) == []
 
 
-def test_on_a_task_a_bot_filed_a_comment_defers_a_day_and_an_at_mention_queues(api):
+def test_on_a_task_a_bot_filed_a_comment_reaches_it_only_by_an_at_mention(api):
     token = bot_token(api, "ops")
     task = post(api, "tasks", {"owner": "ben", "title": "Fix the sign-in check", "body": "x"}, token=token)
-    before = H.now()
     plain = post(api, f"tasks/{task['id']}/comments", {"text": "On it today."}, token="ben-test")
-    assert plain["woke"] is False and plain["sent_as"]["delivery"] == "defer"
-    assert H.shift(before, hours=24) <= plain["sent_as"]["until"] <= H.shift(H.now(), hours=24)
+    assert plain["woke"] is False and "sent_as" not in plain, "the filer does not follow: no bot gets it"
     named = post(api, f"tasks/{task['id']}/comments", {"text": "@ops which app is it?"}, token="ben-test")
-    assert named["woke"] is True and named["sent_as"]["delivery"] == "queue"
-    # Named, it still goes by the sender's choice.
-    chosen = post(api, f"tasks/{task['id']}/comments", {"text": "@ops later is fine.", "delivery": "defer",
-                                                         "defer_for": "never"}, token="ben-test")
-    assert chosen["woke"] is False and chosen["sent_as"] == {"delivery": "defer", "until": None}
+    assert named["woke"] is True and named["sent_as"]["delivery"] == "steer"
+    # Defer never still reaches the bot it names, queued (D6).
+    chosen = post(
+        api,
+        f"tasks/{task['id']}/comments",
+        {"text": "@ops later is fine.", "delivery": "defer", "defer_for": "never"},
+        token="ben-test",
+    )
+    assert chosen["woke"] is True and chosen["sent_as"] == {"delivery": "queue", "until": None}
+    # Mentioned once, the bot follows: a later plain comment steers it.
+    later = post(api, f"tasks/{task['id']}/comments", {"text": "Fixed it."}, token="ben-test")
+    assert later["sent_as"]["delivery"] == "steer"
 
 
 def test_a_new_task_takes_queue_or_defer_but_not_steer(api):
     setup(api)
-    r = api.post("/api/v2/tasks", json={"owner": "ops", "title": "Plan", "body": "x", "delivery": "steer"},
-                 headers=headers())
+    r = api.post(
+        "/api/v2/tasks", json={"owner": "ops", "title": "Plan", "body": "x", "delivery": "steer"}, headers=headers()
+    )
     assert r.status_code == 422, r.text
-    r = api.post("/api/v2/tasks", json={"owner": "ops", "title": "Plan", "body": "x", "delivery": "queue",
-                                        "next_run": True}, headers=headers())
+    r = api.post(
+        "/api/v2/tasks",
+        json={"owner": "ops", "title": "Plan", "body": "x", "delivery": "queue", "next_run": True},
+        headers=headers(),
+    )
     assert r.status_code == 422, r.text
     queued = post(api, "tasks", {"owner": "ops", "title": "Plan", "body": "x", "delivery": "queue"})
     assert queued["next_run"] is False
@@ -290,8 +363,12 @@ def test_a_chat_message_steers_by_default_queues_when_asked_and_defers_with_no_d
     assert queued["sent_as"]["delivery"] == "queue" and steered["sent_as"]["delivery"] == "steer"
     taken = [m["id"] for m in post(api, f"attempts/{attempt['id']}/inputs", {}, machine["token"])["messages"]]
     assert steered["id"] in taken and queued["id"] not in taken
-    post(api, f"attempts/{attempt['id']}/complete", {"outcome": "completed", "text": "Done.", "last_seq": 0},
-         machine["token"])
+    post(
+        api,
+        f"attempts/{attempt['id']}/complete",
+        {"outcome": "completed", "text": "Done.", "last_seq": 0},
+        machine["token"],
+    )
     assert first["conversation_id"] == queued["conversation_id"]
 
     held = post(api, "chat/ops", {"text": "Some day: the yearly view.", "delivery": "defer"})
@@ -310,8 +387,9 @@ def test_notes_take_a_deadline_and_the_old_names_still_work(api):
     parse = hubcli.parser().parse_args
     for flag in ("--next-run", "--quiet"):
         assert parse(["task", "create", "--owner", "ops", "--title", "Watch refunds", flag]).next_run is True
-    assert hubcli.delivery_of(parse(["task", "create", "--owner", "ops", "--title", "Watch refunds", "--defer", "4h"])) == {
-        "delivery": "defer", "defer_for": "4h"}
+    assert hubcli.delivery_of(
+        parse(["task", "create", "--owner", "ops", "--title", "Watch refunds", "--defer", "4h"])
+    ) == {"delivery": "defer", "defer_for": "4h"}
     assert parse(["task", "defer", "T1", "--next-run"]).fn == parse(["task", "later", "T1", "--next-run"]).fn
     assert hubtools.CALL_ALIASES["hub_task_defer"] == "hub_task_later" and "hub_task_defer" not in hubtools.BY_NAME
     task = post(api, "tasks", {"owner": "ops", "title": "Watch refunds", "body": "x", "next_run": True})
@@ -321,16 +399,16 @@ def test_notes_take_a_deadline_and_the_old_names_still_work(api):
     assert is_error is False, payload
 
 
-@pytest.mark.parametrize("body", [
-    {"text": "x", "delivery": "steer", "defer_for": "4h"},
-    {"text": "x", "delivery": "defer", "defer_for": "0m"},
-    {"text": "x", "delivery": "defer", "defer_for": "731d"},
-    {"text": "x", "delivery": "later"},
-])
-def test_a_chat_delivery_that_cannot_apply_is_refused(api, body):
+def test_a_chat_delivery_that_cannot_apply_is_refused(api):
     setup(api)
-    r = api.post("/api/v2/chat/ops", json=body, headers=headers())
-    assert r.status_code == 422, r.text
+    for body in [
+        {"text": "x", "delivery": "steer", "defer_for": "4h"},
+        {"text": "x", "delivery": "defer", "defer_for": "0m"},
+        {"text": "x", "delivery": "defer", "defer_for": "731d"},
+        {"text": "x", "delivery": "later"},
+    ]:
+        r = api.post("/api/v2/chat/ops", json=body, headers=headers())
+        assert r.status_code == 422, (body, r.text)
 
 
 def test_someone_off_the_task_cannot_wake_its_bot_with_a_deadline(api):
@@ -338,8 +416,11 @@ def test_someone_off_the_task_cannot_wake_its_bot_with_a_deadline(api):
     task = post(api, "tasks", {"owner": "ops", "title": "Plan the launch", "body": "For the team."})
     path = f"tasks/{task['id']}/comments"
     # Ben is not on the task: a deadline would wake the bot as a steer would.
-    r = api.post(f"/api/v2/{path}", json={"text": "Mine first.", "delivery": "defer", "defer_for": "1m"},
-                 headers=headers("ben-test"))
+    r = api.post(
+        f"/api/v2/{path}",
+        json={"text": "Mine first.", "delivery": "defer", "defer_for": "1m"},
+        headers=headers("ben-test"),
+    )
     assert r.status_code == 403 and "delivery" in r.text, r.text
     # A defer with no deadline named takes none from him (a person on the task gets a day).
     held = post(api, path, {"text": "When you can.", "delivery": "defer"}, token="ben-test")
@@ -354,8 +435,17 @@ def test_someone_off_the_task_cannot_wake_its_bot_with_a_deadline(api):
 
 def test_deferred_comments_older_than_the_history_page_are_written_out_not_dropped(api, monkeypatch):
     machine = setup(api)
-    task = post(api, "tasks", {"owner": "ops", "title": "Plan the launch", "body": "For the team.",
-                               "delivery": "defer", "defer_for": "never"})
+    task = post(
+        api,
+        "tasks",
+        {
+            "owner": "ops",
+            "title": "Plan the launch",
+            "body": "For the team.",
+            "delivery": "defer",
+            "defer_for": "never",
+        },
+    )
     path = f"tasks/{task['id']}/comments"
     old = post(api, path, {"text": "Billing first.", "delivery": "defer", "defer_for": "30m"})["comment"]
     # The room fills past one history page before the bot's next turn.
@@ -376,8 +466,17 @@ def test_deferred_comments_older_than_the_history_page_are_written_out_not_dropp
 
 def test_deadlines_in_one_session_share_one_run_and_another_turn_cancels_it(api):
     machine = setup(api)
-    task = post(api, "tasks", {"owner": "ops", "title": "Plan the launch", "body": "For the team.",
-                               "delivery": "defer", "defer_for": "never"})
+    task = post(
+        api,
+        "tasks",
+        {
+            "owner": "ops",
+            "title": "Plan the launch",
+            "body": "For the team.",
+            "delivery": "defer",
+            "defer_for": "never",
+        },
+    )
     path = f"tasks/{task['id']}/comments"
     first = post(api, path, {"text": "Billing first.", "delivery": "defer", "defer_for": "30m"})["comment"]
     tick(api, 31)

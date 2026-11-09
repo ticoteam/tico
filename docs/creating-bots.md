@@ -21,9 +21,9 @@ Finish setup, and the wizard uses the same templates. A starter is created parke
 materializes the repository, and **Set up** opens its first conversation. Answer its questions and review its first draft.
 For another template, a task goes to BotOps to build the repository, apply the reviewed Instructions and check readiness.
 You can also ask BotOps for a custom bot in a DM; it takes the bot through placement and setup as you.
-Assistant, BotOps, Librarian and Strategy Bot are the four Built-in bots; they cannot be archived or deleted.
+Assistant, BotOps, Librarian, Strategy Bot, Task Manager, Bookkeeper and Brand Owner are Built-in bots; they cannot be archived or deleted.
 
-The 99 role templates, in nine groups with a Leadership extra, are described in
+The 104 role templates, in nine groups with a Leadership extra, are described in
 [Starter bots](starter-bots.md), with the card fields and the quality bar this page's advice is
 measured against.
 
@@ -82,7 +82,7 @@ Describe the change and choose **Send changes to BotOps**. BotOps receives your 
 The app displays the Instructions from the latest repository snapshot; refresh after BotOps finishes.
 New repositories default to `bot-<slug>`.
 
-New bots start with their own repository unless the team selected all ticked repositories in Settings → Repositories. An Owner or admin can choose own only, all ticked or chosen repositories, with read or write access. Existing extra repositories keep write access automatically. See [Repositories](repositories.md).
+New bots start with their own repository unless the team set **New bots get** to **All repos in use** in Settings → General → Repositories. An Owner or admin can choose own only, all ticked or chosen repositories, with read or write access. Existing extra repositories keep write access automatically. See [Repositories](repositories.md).
 
 ## Subscribe to updates
 
@@ -184,7 +184,8 @@ repository (BotOps gets a short-lived token for it only as a person who may read
 
 A skill is a folder, `skills/<name>/`, in a bot's repository, and each bot owns its own. BotOps copies one to other bots when you ask
 ("give the support bot the triage skill the scribe has"), or run `hub skill copy <skill> --from <bot> --to <bot> [<bot> ...]`: a commit in
-each target's repository, for bots whose source you may read and whose repositories you manage. A target that already has a different
+each target's repository, for bots whose source you may read and whose repositories you manage. To offer a skill to the whole company,
+`hub skill submit <skill>` proposes it to the Skills directory, where an admin approves it and installs say who has it ([Skills directory](skills.md)). A target that already has a different
 skill of that name is left alone unless you say to replace it. Nothing stays linked (`playbooks/copy-a-skill.md`).
 
 ## Message bots
@@ -325,7 +326,7 @@ Every run is the same shape, and `AGENT.md` should say so plainly:
 5. **Report in the task thread.** The result goes in the task's completion note, first line
    first. A chart or a mockup can go with the comment as a titled [visual](visuals.md); every bot's instructions already say when to add one ([When a bot adds a visual](visuals.md#when-a-bot-adds-a-visual)), so `AGENT.md` needn't. Put the ask first and stay under 120 words. The lint checks that the first line is not empty; it does not judge its meaning.
 6. **When blocked, ask through the task**, having read the record first, since most questions a bot
-   wants to ask are already answered there. One open clarifying question per task, phrased so the
+   wants to ask are already answered there. One open question per topic (`--topic`), phrased so the
    question is the only thing the human has to read. Internal routing, reminders, task closure,
    branches and draft pull requests are the bot's work, not questions for a human. An optional approval
    request can clarify an uncertain action; granted Tools and the outbound send switch govern access.
@@ -633,14 +634,14 @@ Levers set in **Settings → Bots**, not in the repository:
   `grok`, `cursor` / Cursor Agent, `musecode` / Muse Code, `pi`). A harness whose provider is off still
   shows in the picker, greyed out, with where to turn it on. **Model**: the latest model in that family (Sol, Astra, Grok 4.6, Gemini Flash,
   Claude Opus 5, Claude Fable 5.1). While the [Tico AI Gateway](ai-gateway.md) is connected, the harness list
-  also offers **Tico AI Gateway**: instead of a model list it shows Department (the bot's group's), Level, Fast and Version,
+  also offers **Tico AI Gateway**: instead of a model list it shows Level, Fast and Version,
   with the model underneath and its price on one line. Search the picker: `grok` shows `grok/grok 4.6` at every
   effort; `sol` shows `openai/gpt 5.6 sol`. The same levers set the built-in BotOps bot: it may
   run on any harness and model here, limited in practice to the providers the company enabled
   and what its computer is signed in to.
 - **Reasoning effort**: how hard it thinks. The main cost control, and the one to reach for first.
 - **Fallback**: one optional harness/model if the primary is unavailable (billing, capacity,
-  the runtime refused). **None (fail)** is the default. A pick is saved with
+  the runtime refused). **None** is the default; History shows it as *None (fail)*. A pick is saved with
   **Save bot**, like every change in the bot editor ([harnesses.md](harnesses.md#choosing-a-harness-model-and-effort)). The hop runs in a side session of its own; the primary's session is kept for its next turn. OpenRouter
   is not a bot harness. With none set, a usage limit still moves the turn to another provider signed in on
   the bot's computer unless the owner turned that off in **Settings → Models** (docs/how-it-works.md).
@@ -670,8 +671,8 @@ Levers set in **Settings → Bots**, not in the repository:
   A branch picks its own. The old **Wakes** setting (`wake_preset`) is still read and set by older clients: it changes only
   the Doer's window.
 - **`max_run_minutes`**: the ceiling on one run. Set it from the longest real routine, not hope.
-- **`gateway:`** (optional, in a template's `bot.yaml`): `level: low | medium | high` and `fast: true` (Fast costs more and runs on another vendor, so no template turns it on). A bot made from the
-  template that runs on the [Tico AI Gateway](ai-gateway.md) with no model of its own starts on its department's pick at that
+- **`gateway:`** (optional, in a template's `bot.yaml`): `level: xlow | low | medium | high | xhigh` and `fast: true` (Fast costs more and runs on another vendor, so no template turns it on). A bot made from the
+  template that runs on the [Tico AI Gateway](ai-gateway.md) with no model of its own starts on that
   level, for example `gateway: {level: low}` on a mail watcher, or `level: high` on an engineering builder. It
   is read once when the bot is created and kept in the bot's settings; the pick in **Settings → Bots** replaces it. Left
   out, it is Medium and not Fast. The Inbox, Dispatcher, Issue Triage and Spend Watcher templates use Low;
@@ -742,7 +743,7 @@ Drawn from real bot reviews, stated generically.
   credential that was in the environment for another reason. Declare it or stop.
 - **The completion note buries the result.** Lead with the result, under 120 words, link the rest.
 - **Near-duplicate knowledge files** instead of an edit to the file that already covers the topic.
-- **Asking a human what the record already answers.** Read first; one open clarifying question per task.
+- **Asking a human what the record already answers.** Read first; one open question per topic.
 - **Asking a human to coordinate bots.** Route the child task, reminder, completion or draft pull
   request yourself. Escalate the choice, not the task plumbing.
 - **Too much effort, too many routines, too early.** Output nobody reads, billed daily, out of a
@@ -764,10 +765,11 @@ has nothing to do with `bot-sales` in another's. Paths in instructions should th
 relative to the repository, or relative to the environment's workspace, never hard-coded to one
 computer's home directory.
 
-GitHub is optional. A plain git repository in the environment's workspace is enough for a bot to
-run: the runner reads the checkout on the computer, and the bot commits into it. A remote buys backup,
-review, and editing from somewhere other than the runner's computer, which is why preflight flags a
-missing remote. The bot's repository link is recorded on the bot in **Settings**, and that same
+GitHub is optional for a bot to run. A plain git repository in the environment's workspace is enough: the
+runner reads the checkout on the computer, and the bot commits into it. A remote buys backup, review, and editing
+from somewhere other than the runner's computer, which is why preflight flags a missing remote. Until GitHub is
+connected in **Tools**, under GitHub, a bot's files and memory exist only on its computer, with no backup, and Health
+and the bot's page say so. The bot's repository link is recorded on the bot in **Settings**, and that same
 repository can be cloned into another environment's workspace as a starting point there.
 
 Two consequences when you run more than one environment:

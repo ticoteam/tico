@@ -1,5 +1,6 @@
 """Reads of the locations, items and projects tables on the caller's connection. Rows only: who may see them is the
 caller's question."""
+
 import sqlite3
 from typing import Any
 
@@ -26,8 +27,15 @@ def names(c: sqlite3.Connection, table: str) -> dict[str, str]:
     return {str(r[0]): str(r[1]) for r in c.execute(f"SELECT id, name FROM {table}")}
 
 
-def search(c: sqlite3.Connection, table: str, text: str = "", *, active: bool | None = True,
-           after: tuple[str, str] | None = None, most: int = 200) -> list[Any]:
+def search(
+    c: sqlite3.Connection,
+    table: str,
+    text: str = "",
+    *,
+    active: bool | None = True,
+    after: tuple[str, str] | None = None,
+    most: int = 200,
+) -> list[Any]:
     """Rows whose name (or sku, for items) contains the text, by name then id, past the cursor `after`. `active` None
     lists archived rows too; an empty text lists every row."""
     assert table in ROW_TABLES

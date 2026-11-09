@@ -1,4 +1,5 @@
 """The tables behind the Tico Gateway relay client (backend/hook_relay.py); hubdb.MIGRATIONS applies them."""
+
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS trigger_relays (
   relay_id TEXT PRIMARY KEY, trigger_id TEXT NOT NULL, address_prefix TEXT NOT NULL,

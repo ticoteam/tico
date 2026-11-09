@@ -1,4 +1,4 @@
-/* ui/styles/lenses.css — the Strategy section's Lenses tab (ui/lenses-page.js): the list and past runs, the run panel, and a
+/* ui/styles/lenses.css — the Strategy section's Lenses tab (ui/lenses-page.ts): the list and past runs, the run panel, and a
    run's page with its charts. The heading and tabs are strategy.css's. */
 :root{
   /* The other lines of a value curve: muted, apart from each other and from the accent that Us wears. */

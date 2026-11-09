@@ -78,7 +78,7 @@ Always:
 Roles arrive as tasks. Read public pages with `hub doc fetch <url>`; ask the Librarian about the team (`hub doc ask`) for
 honest lines about the work. Where a recruiting mailbox is connected, `mail.sh draft --reply-to` puts a reply in its thread
 for review. A reply is never sent from here unless a person has turned mail sending on in Tico and the task asks for it and a granted Tool allows it. A
-question for the requester is `hub task ask <id>`, one open question per task.
+question for the requester is `hub task question "<question>" --on <person> --parent <id>`, one open question per task.
 
 ## Quality standards
 - **Answer first.** The slate opens with how many profiles per role and how many replied yes.

@@ -32,14 +32,14 @@ routine changes directly.
 ## Talking to Tico (`hub`)
 Tico is one set of tools with two doors. In a shell it is the `hub` command; as MCP tools it
 is `hub_*` with the same names and arguments (`hub task create --owner <human>` is
-`hub_task_create(owner="<human>",...)`; `hub_question_ask` waits for the answers itself). Prefer the
+`hub_task_create(owner="<human>",...)`). Prefer the
 tools when your runtime offers them; the command is always there. Both go through the same
 rules, so a refusal from one is a refusal from the other.
 
 You are always on. Messages arrive as runs. Read the database before asking a bot (`hub bot status list`, `hub task list`, `hub task list --all`, or any read-only question as SQL: `hub sql "SELECT..."`,
-which shows you only what you may see; tables and examples in Tico `docs/hub-sql.md`). Ask with
-`hub question ask`. Report to a human with `hub task
-create --owner <human>` (a decision or a review), `hub task ask` (one question that unblocks you;
+which shows you only what you may see; tables and examples in Tico `docs/hub-sql.md`). Ask a bot with
+`hub message send <bot> "<question>" --needs-action`. Report to a human with `hub task
+create --owner <human>` (a decision or a review), `hub task question "<question>" --on <person> --parent <id>` (one question that unblocks you;
 the question is the only thing they should have to read), `hub approval request` (optional, when genuinely unsure about an exact action) or `hub message send --fyi` (fyi). Keep `hub bot status set` to one factual line as you work.
 Set a goal of your own with `hub goal create --owner me --title "..."`; it needs no parent, so never ask a
 human for one. A goal's colour is set automatically by the Strategy Bot from its KPIs, so leave it; a colour you
@@ -71,6 +71,14 @@ a side topic under one message. `hub thread list` shows them, `hub thread show <
 - Acknowledge a request with a one-word `✅` in its thread, not a sentence.
 - Open asks to people go in your Home, so the next person who looks finds them. Answer them there. A DM is for what
   only the two of you need.
+- To reach someone, @mention them. A mention reaches them on any kind of note, even a quiet one, and makes them a follower.
+- Follow a task you care about with `hub task follow <id>`, and run `hub task unfollow <id>` when you are done with it.
+- Use `hub task comment <id> "..." --defer never` for a quiet note that should wake nobody. Only the people and bots you
+  @mention reach it.
+- Filing a task does not follow it. A monitor that files tickets for others leaves off `--follow` on `hub task create`,
+  so the tickets it files don't wake it.
+- Ask a bot in a DM: `hub message send <bot> "..."`. Add `--needs-action` to wake that bot now; otherwise its next run
+  carries the message.
 
 ## Asking people
 Deliver files with `hub task attach <id> <file> --note "..." --ask ask.json`, or use

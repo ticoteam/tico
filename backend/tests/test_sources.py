@@ -36,7 +36,10 @@ def test_a_bot_line_is_named_for_the_bot_and_falls_back_to_its_slug():
 def test_the_assistant_writing_for_a_person_is_named_for_that_person():
     row = message(SRC.KEEPER, source=SRC.ASSISTANT_FOR, **{"for": "human:ana"})
     assert SRC.message_source(NAMES, row, assistant="Atlas") == {
-        "kind": "assistant_for", "name": "Ana's Atlas", "link": None}
+        "kind": "assistant_for",
+        "name": "Ana's Atlas",
+        "link": None,
+    }
     bot = message("bot:ops", **{"for": "human:ana"})
     assert SRC.message_source(NAMES, bot, assistant="Atlas")["kind"] == "assistant_for"
 
@@ -48,14 +51,16 @@ def test_a_person_the_reader_may_not_see_is_not_named_in_the_assistant_line():
 
 def test_an_automation_line_names_the_rule_and_links_to_it():
     row = message(SRC.KEEPER, source="automation:a1")
-    assert SRC.message_source(NAMES, row) == {"kind": "automation", "name": "Nightly sweep",
-                                              "link": "#/automations/a1"}
+    assert SRC.message_source(NAMES, row) == {"kind": "automation", "name": "Nightly sweep", "link": "#/automations/a1"}
     assert SRC.message_source({}, row)["name"] == "Automation"
 
 
 def test_a_builtin_key_names_the_built_in():
     assert SRC.message_source({}, message(SRC.KEEPER, source="follow-up-timer")) == {
-        "kind": "builtin", "name": "Follow-up timer", "link": None}
+        "kind": "builtin",
+        "name": "Follow-up timer",
+        "link": None,
+    }
 
 
 def test_system_keys_and_unnamed_keeper_lines_are_system_lines():
@@ -65,7 +70,10 @@ def test_system_keys_and_unnamed_keeper_lines_are_system_lines():
 
 def test_a_keeper_line_on_a_task_is_a_task_update_unless_a_source_names_it():
     assert SRC.message_source({}, message(SRC.KEEPER, task="t1")) == {
-        "kind": "task_update", "name": "Task update", "link": None}
+        "kind": "task_update",
+        "name": "Task update",
+        "link": None,
+    }
     assert SRC.message_source({}, message(SRC.KEEPER, task="t1", source="stuck-check"))["kind"] == "builtin"
 
 

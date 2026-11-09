@@ -2,6 +2,7 @@
 request bodies. No I/O (the HTTP client is finance/qbo.py). QuickBooks sends money as decimal text, so amounts go through
 Decimal and come out as integer minor units; nothing here is a float. A deleted row (CDC marks it "Deleted") is its
 identity only, and the books take it as a deletion."""
+
 import re
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import replace
@@ -16,18 +17,40 @@ MINOR_VERSION = "75"
 # The QuickBooks entities that post to the books' ledger without being a journal entry, each as one balanced entry.
 POSTED = ("Purchase", "Deposit", "Transfer", "SalesReceipt", "RefundReceipt", "VendorCredit")
 # Every QuickBooks entity the change feed reads.
-ENTITIES = ("Account", "Vendor", "Customer", "JournalEntry", "Bill", "Invoice", "CreditMemo", "BillPayment", "Payment",
-            *POSTED, "Item", "Department", "Class")
+ENTITIES = (
+    "Account",
+    "Vendor",
+    "Customer",
+    "JournalEntry",
+    "Bill",
+    "Invoice",
+    "CreditMemo",
+    "BillPayment",
+    "Payment",
+    *POSTED,
+    "Item",
+    "Department",
+    "Class",
+)
 # The QuickBooks entities behind each backfill entity, in the order the books take them in (the mirror's ENTITIES).
 PAGES: dict[str, tuple[str, ...]] = {
-    "accounts": ("Account",), "parties": ("Vendor", "Customer"), "records": ("Item", "Department", "Class"),
-    "documents": ("Bill", "Invoice", "CreditMemo"), "payments": ("BillPayment", "Payment"),
-    "entries": ("JournalEntry", *POSTED)}
+    "accounts": ("Account",),
+    "parties": ("Vendor", "Customer"),
+    "records": ("Item", "Department", "Class"),
+    "documents": ("Bill", "Invoice", "CreditMemo"),
+    "payments": ("BillPayment", "Payment"),
+    "entries": ("JournalEntry", *POSTED),
+}
 # The entities a query reads with WHERE Active IN (true,false): QuickBooks reads only the active ones otherwise.
 ACTIVE_FILTERED = ("Account", "Vendor", "Customer", "Item", "Employee", "Department", "Class")
 # QuickBooks item Type -> the books' item kind. An item of another type is not taken in.
-ITEM_KINDS = {"Service": "service", "Inventory": "inventory", "NonInventory": "non_inventory", "Group": "bundle",
-              "Category": "category"}
+ITEM_KINDS = {
+    "Service": "service",
+    "Inventory": "inventory",
+    "NonInventory": "non_inventory",
+    "Group": "bundle",
+    "Category": "category",
+}
 DOCUMENTS = ("Bill", "Invoice", "CreditMemo")
 PAYMENTS = ("BillPayment", "Payment")
 # A document line's detail. Its account is its own (a purchase on an account) or its item's: income for a sale, expense
@@ -37,25 +60,52 @@ LINE_DETAILS = ("AccountBasedExpenseLineDetail", "ItemBasedExpenseLineDetail", "
 EXPENSE_LINES = ("AccountBasedExpenseLineDetail", "ItemBasedExpenseLineDetail")
 # QuickBooks AccountType -> Tico (type, subtype). Subtypes are only the ones the default chart uses.
 TYPES: dict[str, tuple[str, str]] = {
-    "Bank": ("asset", "bank"), "Accounts Receivable": ("asset", "receivable"), "Other Current Asset": ("asset", ""),
-    "Fixed Asset": ("asset", ""), "Other Asset": ("asset", ""),
-    "Accounts Payable": ("liability", "payable"), "Credit Card": ("liability", ""),
+    "Bank": ("asset", "bank"),
+    "Accounts Receivable": ("asset", "receivable"),
+    "Other Current Asset": ("asset", ""),
+    "Fixed Asset": ("asset", ""),
+    "Other Asset": ("asset", ""),
+    "Accounts Payable": ("liability", "payable"),
+    "Credit Card": ("liability", ""),
     "Other Current Liability": ("liability", ""),
-    "Long Term Liability": ("liability", ""), "Equity": ("equity", ""), "Income": ("income", ""),
-    "Other Income": ("income", "other_income"), "Cost of Goods Sold": ("expense", ""), "Expense": ("expense", ""),
+    "Long Term Liability": ("liability", ""),
+    "Equity": ("equity", ""),
+    "Income": ("income", ""),
+    "Other Income": ("income", "other_income"),
+    "Cost of Goods Sold": ("expense", ""),
+    "Expense": ("expense", ""),
     "Other Expense": ("expense", "other_expense"),
 }
 # Payroll expenses, and the liabilities and clearing accounts wages pass through: their lines are private as payroll is
 # (spec §7.5), so the bank row that pays wages is private with the expense it came from.
 PAYROLL_SUBTYPES = frozenset({"PayrollExpenses", "PayrollClearing", "PayrollTaxPayable"})
-_OUT: dict[tuple[str, str], str] = {("asset", "bank"): "Bank", ("income", "other_income"): "Other Income",
-                                    ("expense", "other_expense"): "Other Expense",
-                                    ("liability", "payable"): "Accounts Payable",
-                                    ("asset", "receivable"): "Accounts Receivable"}
-_DEFAULT_OUT = {"asset": "Other Current Asset", "liability": "Other Current Liability", "equity": "Equity",
-                "income": "Income", "expense": "Expense"}
-Made = (M.ChartAccount | M.Party | M.Journal | M.Document | M.Settlement | M.Item | M.Location | M.Dimension | M.Project
-        | M.Ext | M.Refused)
+_OUT: dict[tuple[str, str], str] = {
+    ("asset", "bank"): "Bank",
+    ("income", "other_income"): "Other Income",
+    ("expense", "other_expense"): "Other Expense",
+    ("liability", "payable"): "Accounts Payable",
+    ("asset", "receivable"): "Accounts Receivable",
+}
+_DEFAULT_OUT = {
+    "asset": "Other Current Asset",
+    "liability": "Other Current Liability",
+    "equity": "Equity",
+    "income": "Income",
+    "expense": "Expense",
+}
+Made = (
+    M.ChartAccount
+    | M.Party
+    | M.Journal
+    | M.Document
+    | M.Settlement
+    | M.Item
+    | M.Location
+    | M.Dimension
+    | M.Project
+    | M.Ext
+    | M.Refused
+)
 
 
 def as_map(value: object) -> dict[str, Any] | None:
@@ -113,10 +163,16 @@ def account_record(row: dict[str, Any]) -> M.ChartAccount | None:
     code = _id(row.get("AcctNum")) or f"QB{ext.external_id}"
     subtype = mapped[1]
     if _id(row.get("AccountSubType")) == "SalesTaxPayable":
-        subtype = M.SALES_TAX           # where a taxed record's tax lands (the books' sales tax account)
-    return M.ChartAccount(ext, code=code, name=_id(row.get("Name")), type=mapped[0], subtype=subtype,
-                          active=bool(row.get("Active", True)),
-                          payroll=_id(row.get("AccountSubType")) in PAYROLL_SUBTYPES)
+        subtype = M.SALES_TAX  # where a taxed record's tax lands (the books' sales tax account)
+    return M.ChartAccount(
+        ext,
+        code=code,
+        name=_id(row.get("Name")),
+        type=mapped[0],
+        subtype=subtype,
+        active=bool(row.get("Active", True)),
+        payroll=_id(row.get("AccountSubType")) in PAYROLL_SUBTYPES,
+    )
 
 
 def party_record(row: dict[str, Any], kind: str) -> M.Party:
@@ -124,9 +180,13 @@ def party_record(row: dict[str, Any], kind: str) -> M.Party:
     ext = M.Ext(kind, _id(row.get("Id")), _id(row.get("SyncToken")))
     address = as_map(row.get("PrimaryEmailAddr"))
     emails = (_id(address.get("Address")),) if address is not None and address.get("Address") else ()
-    return M.Party(ext, name=_id(row.get("DisplayName")) or _id(row.get("CompanyName")),
-                   kind="vendor" if kind == "Vendor" else "customer", active=bool(row.get("Active", True)),
-                   emails=emails)
+    return M.Party(
+        ext,
+        name=_id(row.get("DisplayName")) or _id(row.get("CompanyName")),
+        kind="vendor" if kind == "Vendor" else "customer",
+        active=bool(row.get("Active", True)),
+        emails=emails,
+    )
 
 
 def _active(row: Mapping[str, Any]) -> bool:
@@ -147,29 +207,44 @@ def item_record(row: dict[str, Any]) -> M.Item | None:
     if kind is None:
         return None
     price = _units(row.get("UnitPrice")) if row.get("UnitPrice") not in (None, "") else None
-    return M.Item(ext, name=_id(row.get("Name")), sku=_id(row.get("Sku")), kind=kind, price=price,
-                  income=_account_key(row, "IncomeAccountRef"), expense=_account_key(row, "ExpenseAccountRef"),
-                  asset=_account_key(row, "AssetAccountRef"), active=_active(row))
+    return M.Item(
+        ext,
+        name=_id(row.get("Name")),
+        sku=_id(row.get("Sku")),
+        kind=kind,
+        price=price,
+        income=_account_key(row, "IncomeAccountRef"),
+        expense=_account_key(row, "ExpenseAccountRef"),
+        asset=_account_key(row, "AssetAccountRef"),
+        active=_active(row),
+    )
 
 
 def location_record(row: dict[str, Any]) -> M.Location:
     """A QuickBooks Department as a location."""
-    return M.Location(M.Ext("Department", _id(row.get("Id")), _id(row.get("SyncToken"))), name=_id(row.get("Name")),
-                   active=_active(row))
+    return M.Location(
+        M.Ext("Department", _id(row.get("Id")), _id(row.get("SyncToken"))),
+        name=_id(row.get("Name")),
+        active=_active(row),
+    )
 
 
 def dimension_record(row: dict[str, Any]) -> M.Dimension:
     """A QuickBooks Class as a class dimension."""
-    return M.Dimension(M.Ext("Class", _id(row.get("Id")), _id(row.get("SyncToken"))), name=_id(row.get("Name")),
-                       active=_active(row))
+    return M.Dimension(
+        M.Ext("Class", _id(row.get("Id")), _id(row.get("SyncToken"))), name=_id(row.get("Name")), active=_active(row)
+    )
 
 
 def project_record(row: dict[str, Any]) -> M.Project:
     """A QuickBooks job (a customer with Job set) as a project under its parent customer."""
     parent = _ref(row, "ParentRef")
-    return M.Project(M.Ext("Project", _id(row.get("Id")), _id(row.get("SyncToken"))),
-                     name=_id(row.get("DisplayName")) or _id(row.get("CompanyName")),
-                     customer=f"Customer:{parent}" if parent else "", active=_active(row))
+    return M.Project(
+        M.Ext("Project", _id(row.get("Id")), _id(row.get("SyncToken"))),
+        name=_id(row.get("DisplayName")) or _id(row.get("CompanyName")),
+        customer=f"Customer:{parent}" if parent else "",
+        active=_active(row),
+    )
 
 
 def _is_job(row: Mapping[str, Any]) -> bool:
@@ -190,7 +265,7 @@ def journal_record(row: dict[str, Any]) -> M.Journal:
         ref = as_map(detail.get("AccountRef")) if detail is not None else None
         if detail is None or ref is None or not _id(ref.get("value")):
             continue
-        units = _units(line.get("Amount")) or 0            # junk makes the entry unbalanced: it waits as unmapped
+        units = _units(line.get("Amount")) or 0  # junk makes the entry unbalanced: it waits as unmapped
         if _id(detail.get("PostingType")) == "Credit":
             units = -units
         party = ""
@@ -200,9 +275,16 @@ def journal_record(row: dict[str, Any]) -> M.Journal:
             kind = _id(entity.get("Type"))
             if kind in ("Vendor", "Customer"):
                 party = f"{kind}:{_id(entity_ref.get('value'))}"
-        lines.append(M.EntryLine(account=f"Account:{_id(ref.get('value'))}", amount=units, party=party,
-                                 description=_id(line.get("Description")), key=_id(line.get("Id")),
-                                 tags=_dims(detail)))
+        lines.append(
+            M.EntryLine(
+                account=f"Account:{_id(ref.get('value'))}",
+                amount=units,
+                party=party,
+                description=_id(line.get("Description")),
+                key=_id(line.get("Id")),
+                tags=_dims(detail),
+            )
+        )
     return M.Journal(ext, _id(row.get("TxnDate")), _memo(row), "sync", tuple(lines))
 
 
@@ -243,9 +325,14 @@ def _doc_line(raw: object, items: Mapping[str, Mapping[str, str]], location: str
         found = items.get(_ref(detail, "ItemRef"))
         account = found.get(side, "") if found is not None else ""
     item = _ref(detail, "ItemRef")
-    return M.EntryLine(account=f"Account:{account}" if account else "", amount=units,
-                       description=_id(line.get("Description")), key=_id(line.get("Id")),
-                       tags=_dims(detail, location), item=f"Item:{item}" if item else "")
+    return M.EntryLine(
+        account=f"Account:{account}" if account else "",
+        amount=units,
+        description=_id(line.get("Description")),
+        key=_id(line.get("Id")),
+        tags=_dims(detail, location),
+        item=f"Item:{item}" if item else "",
+    )
 
 
 def document_record(row: dict[str, Any], kind: str, items: Mapping[str, Mapping[str, str]]) -> M.Document:
@@ -259,10 +346,18 @@ def document_record(row: dict[str, Any], kind: str, items: Mapping[str, Mapping[
     location = _ref(row, "DepartmentRef")
     lines = tuple(x for x in (_doc_line(raw, items, location) for raw in as_list(row.get("Line"))) if x is not None)
     control = _ref(row, "APAccountRef" if kind == "Bill" else "ARAccountRef")
-    return M.Document(ext, party=f"{party_kind}:{party_value}" if party_value else "",
-                      number=_id(row.get("DocNumber")), day=_id(row.get("TxnDate")), due=_id(row.get("DueDate")),
-                      total=_units(row.get("TotalAmt")) or 0, lines=lines, memo=_memo(row), tax=_tax(row),
-                      control=f"Account:{control}" if control else "")
+    return M.Document(
+        ext,
+        party=f"{party_kind}:{party_value}" if party_value else "",
+        number=_id(row.get("DocNumber")),
+        day=_id(row.get("TxnDate")),
+        due=_id(row.get("DueDate")),
+        total=_units(row.get("TotalAmt")) or 0,
+        lines=lines,
+        memo=_memo(row),
+        tax=_tax(row),
+        control=f"Account:{control}" if control else "",
+    )
 
 
 def settlement_record(row: dict[str, Any], kind: str) -> M.Settlement:
@@ -280,10 +375,16 @@ def settlement_record(row: dict[str, Any], kind: str) -> M.Settlement:
         bank = _ref(check, "BankAccountRef") or _ref(card, "CCAccountRef")
         party_kind, party_value = "Vendor", _ref(row, "VendorRef")
         target = "Bill"
-    return M.Settlement(ext, day=_id(row.get("TxnDate")), memo=_memo(row),
-                        party=f"{party_kind}:{party_value}" if party_value else "",
-                        bank=f"Account:{bank}" if bank else "", total=_units(row.get("TotalAmt")) or 0,
-                        links=_links(row, target), credits=credits)
+    return M.Settlement(
+        ext,
+        day=_id(row.get("TxnDate")),
+        memo=_memo(row),
+        party=f"{party_kind}:{party_value}" if party_value else "",
+        bank=f"Account:{bank}" if bank else "",
+        total=_units(row.get("TotalAmt")) or 0,
+        links=_links(row, target),
+        credits=credits,
+    )
 
 
 def _links(row: Mapping[str, Any], target: str) -> tuple[tuple[str, int], ...]:
@@ -310,8 +411,11 @@ def item_accounts(rows: Iterable[object]) -> dict[str, dict[str, Any]]:
         row = as_map(raw)
         if row is None or not _id(row.get("Id")):
             continue
-        out[_id(row.get("Id"))] = {"income": _ref(row, "IncomeAccountRef"), "expense": _ref(row, "ExpenseAccountRef"),
-                                   "active": str(row.get("Active", True)).lower() != "false"}
+        out[_id(row.get("Id"))] = {
+            "income": _ref(row, "IncomeAccountRef"),
+            "expense": _ref(row, "ExpenseAccountRef"),
+            "active": str(row.get("Active", True)).lower() != "false",
+        }
     return out
 
 
@@ -391,7 +495,7 @@ def records(entity: str, rows: Iterable[object], items: Mapping[str, Mapping[str
     return out
 
 
-CHANGE_CAP = 1000       # the most objects one change feed answer holds
+CHANGE_CAP = 1000  # the most objects one change feed answer holds
 
 
 def change_through(answer: Mapping[str, Any], entity: str) -> str:
@@ -443,8 +547,14 @@ def _deposit_lines(row: Mapping[str, Any]) -> list[M.EntryLine]:
         detail: dict[str, Any] = as_map(line.get("DepositLineDetail")) or {}
         units = _units(line.get("Amount"))
         account = _ref(detail, "AccountRef")
-        out.append(M.EntryLine(f"Account:{account}" if account else "", units or 0,
-                               description=_id(line.get("Description")), key=_id(line.get("Id"))))
+        out.append(
+            M.EntryLine(
+                f"Account:{account}" if account else "",
+                units or 0,
+                description=_id(line.get("Description")),
+                key=_id(line.get("Id")),
+            )
+        )
     return out
 
 
@@ -460,11 +570,12 @@ def posted_record(row: dict[str, Any], kind: str, items: Mapping[str, Mapping[st
     doc_sign = -1 if kind in ("SalesReceipt", "VendorCredit") else 1
     if kind == "Transfer":
         amount = _units(row.get("Amount")) or 0
-        lines = [M.EntryLine(f"Account:{_ref(row, 'ToAccountRef')}", amount),
-                 M.EntryLine(f"Account:{_ref(row, 'FromAccountRef')}", -amount)]
+        lines = [
+            M.EntryLine(f"Account:{_ref(row, 'ToAccountRef')}", amount),
+            M.EntryLine(f"Account:{_ref(row, 'FromAccountRef')}", -amount),
+        ]
     elif kind == "Deposit":
-        lines = [M.EntryLine(f"Account:{_ref(row, 'DepositToAccountRef')}", total),
-                 *_scaled(_deposit_lines(row), -1)]
+        lines = [M.EntryLine(f"Account:{_ref(row, 'DepositToAccountRef')}", total), *_scaled(_deposit_lines(row), -1)]
     elif kind == "Purchase":
         lines = [M.EntryLine(f"Account:{_ref(row, 'AccountRef')}", -total), *doc_lines]
     elif kind == "SalesReceipt":
@@ -506,22 +617,33 @@ def journal_body(body: Mapping[str, Any]) -> dict[str, Any]:
             detail["Entity"] = {"Type": party[0], "EntityRef": {"type": party[0], "value": party[1]}}
         elif project:
             # A line with no party that is for a job is entered against the job's customer.
-            detail["Entity"] = {"Type": "Customer", "EntityRef": {"type": "Customer",
-                                                                  "value": _keyed(project, "Customer")}}
+            detail["Entity"] = {
+                "Type": "Customer",
+                "EntityRef": {"type": "Customer", "value": _keyed(project, "Customer")},
+            }
         classes = as_map(x.get("classes"))
         if classes:
             detail["ClassRef"] = {"value": str(next(iter(classes.values())))}
         if x.get("location"):
             detail["DepartmentRef"] = {"value": _keyed(x["location"], "Department")}
-        lines.append({"DetailType": "JournalEntryLineDetail", "Amount": decimal_text(units),
-                      "Description": str(x.get("description") or ""), "JournalEntryLineDetail": detail})
+        lines.append(
+            {
+                "DetailType": "JournalEntryLineDetail",
+                "Amount": decimal_text(units),
+                "Description": str(x.get("description") or ""),
+                "JournalEntryLineDetail": detail,
+            }
+        )
     return {"TxnDate": str(body["date"]), "PrivateNote": _note(body), "Line": lines}
 
 
 def account_body(body: Mapping[str, Any]) -> dict[str, Any]:
-    return {"Name": str(body["name"])[:100], "AcctNum": str(body["code"])[:7],
-            "AccountType": account_type(str(body["type"]), str(body.get("subtype") or "")),
-            "Active": bool(body.get("active", True))}
+    return {
+        "Name": str(body["name"])[:100],
+        "AcctNum": str(body["code"])[:7],
+        "AccountType": account_type(str(body["type"]), str(body.get("subtype") or "")),
+        "Active": bool(body.get("active", True)),
+    }
 
 
 def party_body(body: Mapping[str, Any]) -> dict[str, Any]:
@@ -580,7 +702,7 @@ def _party_id(key: object, kind: str) -> str:
 
 
 MARKER = re.compile(r"\s*\[tico:[0-9a-f-]{36}\]$")
-REFERENCE = re.compile(r"\[tico:([0-9a-f-]{36})\]")      # the write reference a record's note carries
+REFERENCE = re.compile(r"\[tico:([0-9a-f-]{36})\]")  # the write reference a record's note carries
 FOREIGN = "a record in a foreign currency: the books take home-currency records only"
 
 
@@ -594,7 +716,7 @@ def _note(body: Mapping[str, Any]) -> str:
     marker, memo = str(body.get("marker") or ""), str(body.get("memo") or "")
     if not marker:
         return memo[:4000]
-    return f"{memo[:4000 - len(marker) - 1]} {marker}".lstrip()
+    return f"{memo[: 4000 - len(marker) - 1]} {marker}".lstrip()
 
 
 def _header(body: Mapping[str, Any]) -> dict[str, Any]:
@@ -630,14 +752,30 @@ def bill_body(body: Mapping[str, Any]) -> dict[str, Any]:
     for x in body["lines"]:
         description = str(x.get("description") or "")
         if x.get("item"):
-            detail: dict[str, Any] = {"ItemRef": {"value": _keyed(x["item"], "Item")}, "Qty": 1,
-                                      "UnitPrice": decimal_text(int(x["amount"])), **_line_extras(x)}
-            lines.append({"DetailType": "ItemBasedExpenseLineDetail", "Amount": decimal_text(int(x["amount"])),
-                          "Description": description, "ItemBasedExpenseLineDetail": detail})
+            detail: dict[str, Any] = {
+                "ItemRef": {"value": _keyed(x["item"], "Item")},
+                "Qty": 1,
+                "UnitPrice": decimal_text(int(x["amount"])),
+                **_line_extras(x),
+            }
+            lines.append(
+                {
+                    "DetailType": "ItemBasedExpenseLineDetail",
+                    "Amount": decimal_text(int(x["amount"])),
+                    "Description": description,
+                    "ItemBasedExpenseLineDetail": detail,
+                }
+            )
         else:
             detail = {"AccountRef": {"value": _account_id(x["account"])}, **_line_extras(x)}
-            lines.append({"DetailType": "AccountBasedExpenseLineDetail", "Amount": decimal_text(int(x["amount"])),
-                          "Description": description, "AccountBasedExpenseLineDetail": detail})
+            lines.append(
+                {
+                    "DetailType": "AccountBasedExpenseLineDetail",
+                    "Amount": decimal_text(int(x["amount"])),
+                    "Description": description,
+                    "AccountBasedExpenseLineDetail": detail,
+                }
+            )
     out: dict[str, Any] = {**_header(body), "VendorRef": {"value": _party_id(body["party"], "Vendor")}, "Line": lines}
     location = _single((str(x.get("location") or "") for x in body["lines"]), "location")
     if location:
@@ -667,8 +805,14 @@ def invoice_body(body: Mapping[str, Any], income: Mapping[str, str]) -> dict[str
         detail: dict[str, Any] = {"ItemRef": {"value": item}, "Qty": 1, "UnitPrice": decimal_text(units)}
         if x.get("class"):
             detail["ClassRef"] = {"value": str(x["class"])}
-        lines.append({"DetailType": "SalesItemLineDetail", "Amount": decimal_text(units),
-                      "Description": str(x.get("description") or ""), "SalesItemLineDetail": detail})
+        lines.append(
+            {
+                "DetailType": "SalesItemLineDetail",
+                "Amount": decimal_text(units),
+                "Description": str(x.get("description") or ""),
+                "SalesItemLineDetail": detail,
+            }
+        )
     jobs = _single((str(x.get("project") or "") for x in body["lines"]), "job")
     customer = _keyed(jobs, "Customer") if jobs else _party_id(body["party"], "Customer")
     out: dict[str, Any] = {**_header(body), "CustomerRef": {"value": customer}, "Line": lines}
@@ -702,18 +846,27 @@ def bill_payment_body(body: Mapping[str, Any]) -> dict[str, Any]:
         method: dict[str, Any] = {"PayType": "CreditCard", "CreditCardPayment": {"CCAccountRef": account}}
     else:
         method = {"PayType": "Check", "CheckPayment": {"BankAccountRef": account}}
-    return {**_header(body), "VendorRef": {"value": _party_id(body["party"], "Vendor")}, **method,
-            "TotalAmt": decimal_text(int(body["total"])), "Line": _applied(body["links"])}
+    return {
+        **_header(body),
+        "VendorRef": {"value": _party_id(body["party"], "Vendor")},
+        **method,
+        "TotalAmt": decimal_text(int(body["total"])),
+        "Line": _applied(body["links"]),
+    }
 
 
 def payment_body(body: Mapping[str, Any]) -> dict[str, Any]:
     """A received payment: one customer's money into one bank account, applied to the invoice it settles."""
-    return {**_header(body), "CustomerRef": {"value": _party_id(body["party"], "Customer")},
-            "DepositToAccountRef": {"value": _account_id(body["bank"])},
-            "TotalAmt": decimal_text(int(body["total"])), "Line": _applied(body["links"])}
+    return {
+        **_header(body),
+        "CustomerRef": {"value": _party_id(body["party"], "Customer")},
+        "DepositToAccountRef": {"value": _account_id(body["bank"])},
+        "TotalAmt": decimal_text(int(body["total"])),
+        "Line": _applied(body["links"]),
+    }
 
 
-WRITE_OFF_ITEM = "Bad debt"     # the item a write-off is billed by: found by this name, or created once
+WRITE_OFF_ITEM = "Bad debt"  # the item a write-off is billed by: found by this name, or created once
 
 
 def item_body(name: str, account: str) -> dict[str, Any]:
@@ -724,8 +877,15 @@ def item_body(name: str, account: str) -> dict[str, Any]:
 
 # Tico's raw material and assembly labels have no books type: the books take them as a plain non-inventory item, and the
 # label stays in Tico.
-ITEM_TYPES = {"service": "Service", "inventory": "Inventory", "non_inventory": "NonInventory", "bundle": "Group",
-              "category": "Category", "raw_material": "NonInventory", "assembly": "NonInventory"}
+ITEM_TYPES = {
+    "service": "Service",
+    "inventory": "Inventory",
+    "non_inventory": "NonInventory",
+    "bundle": "Group",
+    "category": "Category",
+    "raw_material": "NonInventory",
+    "assembly": "NonInventory",
+}
 
 
 def _head(body: Mapping[str, Any], kind: str) -> dict[str, Any]:
@@ -760,16 +920,24 @@ def location_write(body: Mapping[str, Any], *, update: bool = False) -> dict[str
 
 def job_write(body: Mapping[str, Any]) -> dict[str, Any]:
     """A project as a QuickBooks job: a customer with Job set, under its parent customer (the one QuickBooks requires)."""
-    return {"DisplayName": str(body["name"])[:500], "Job": True, "Active": bool(body.get("active", True)),
-            "ParentRef": {"value": _keyed(body.get("customer"), "Customer")}}
+    return {
+        "DisplayName": str(body["name"])[:500],
+        "Job": True,
+        "Active": bool(body.get("active", True)),
+        "ParentRef": {"value": _keyed(body.get("customer"), "Customer")},
+    }
 
 
 def writeoff_body(body: Mapping[str, Any]) -> dict[str, Any]:
     """A write-off as a credit memo: one line billed by the write-off item. QuickBooks does not apply a credit through its
     lines, so the memo is applied to its invoice by credit_apply_body once it is saved."""
     total = decimal_text(int(body["total"]))
-    line = {"DetailType": "SalesItemLineDetail", "Amount": total, "Description": str(body.get("memo") or "")[:4000],
-            "SalesItemLineDetail": {"ItemRef": {"value": str(body["item"])}, "Qty": 1, "UnitPrice": total}}
+    line = {
+        "DetailType": "SalesItemLineDetail",
+        "Amount": total,
+        "Description": str(body.get("memo") or "")[:4000],
+        "SalesItemLineDetail": {"ItemRef": {"value": str(body["item"])}, "Qty": 1, "UnitPrice": total},
+    }
     return {**_header(body), "CustomerRef": {"value": _party_id(body["party"], "Customer")}, "Line": [line]}
 
 
@@ -784,8 +952,13 @@ def credit_apply_body(body: Mapping[str, Any]) -> dict[str, Any]:
     """A credit memo applied to an invoice: a payment of nothing that links the invoice and the credit memo. This is how
     QuickBooks applies a credit (no money moves)."""
     amount = decimal_text(int(body["amount"]))
-    lines = [{"Amount": amount, "LinkedTxn": [{"TxnId": _linked(body["invoice"], "Invoice"), "TxnType": "Invoice"}]},
-             {"Amount": amount, "LinkedTxn": [{"TxnId": _linked(body["credit"], "CreditMemo"),
-                                               "TxnType": "CreditMemo"}]}]
-    return {**_header(body), "CustomerRef": {"value": _party_id(body["party"], "Customer")},
-            "TotalAmt": decimal_text(0), "Line": lines}
+    lines = [
+        {"Amount": amount, "LinkedTxn": [{"TxnId": _linked(body["invoice"], "Invoice"), "TxnType": "Invoice"}]},
+        {"Amount": amount, "LinkedTxn": [{"TxnId": _linked(body["credit"], "CreditMemo"), "TxnType": "CreditMemo"}]},
+    ]
+    return {
+        **_header(body),
+        "CustomerRef": {"value": _party_id(body["party"], "Customer")},
+        "TotalAmt": decimal_text(0),
+        "Line": lines,
+    }

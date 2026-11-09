@@ -1,6 +1,7 @@
 """Managers and their reports (docs/permissions.md): a bot changes its direct reports' model, task model, and name and
 description, as itself. Two switches turn that off: the team rule `managers_manage_reports` and the manager's own
 `manages_reports`, on by default. `Auth.report_manager` decides who may make a change; this module names the parts."""
+
 import json
 
 from . import team_rules
@@ -38,18 +39,23 @@ LIFECYCLE = "lifecycle"
 EVENT = "bot.report_lifecycle"
 WINDOW_DAYS = 7
 # Each cap counts the operations it covers, through BotOps, in the rolling window; the team rule holds the limit.
-CAPS = {"create": ("report_creates_per_week", ("create",)),
-        "archive": ("report_archives_per_week", ("archive", "restore"))}
+CAPS = {
+    "create": ("report_creates_per_week", ("create",)),
+    "archive": ("report_archives_per_week", ("archive", "restore")),
+}
 
 
 def cap_used(c, manager, op, now):
     """How many operations under cap `op` this manager bot made through BotOps in the last WINDOW_DAYS."""
     from .store import H
+
     ops = CAPS[op][1]
     since = H.shift(now, days=-WINDOW_DAYS)
-    return c.execute("SELECT count(*) FROM events INDEXED BY events_task_origin WHERE action=? AND actor=? AND created_at>=? "
-                     f"AND json_extract(detail,'$.op') IN ({','.join('?' * len(ops))})",
-                     (EVENT, "bot:" + manager, since, *ops)).fetchone()[0]
+    return c.execute(
+        "SELECT count(*) FROM events INDEXED BY events_task_origin WHERE action=? AND actor=? AND created_at>=? "
+        f"AND json_extract(detail,'$.op') IN ({','.join('?' * len(ops))})",
+        (EVENT, "bot:" + manager, since, *ops),
+    ).fetchone()[0]
 
 
 def cap_limit(c, op):
@@ -60,7 +66,9 @@ def cap_limit(c, op):
 def person_above(c, slug):
     """The person a bot reports up to: the first human on its `reports_to` chain, or "" when none."""
     seen, parent = {slug}, ""
-    row = c.execute(f"SELECT bc.reports_to,{BS.CONFIG} AS config FROM bot_config bc {BS.JOIN} WHERE bc.bot=?", (slug,)).fetchone()
+    row = c.execute(
+        f"SELECT bc.reports_to,{BS.CONFIG} AS config FROM bot_config bc {BS.JOIN} WHERE bc.bot=?", (slug,)
+    ).fetchone()
     if row:
         parent = row["reports_to"] or (json.loads(row["config"] or "{}") or {}).get("reports_to") or ""
     while parent and parent not in seen:

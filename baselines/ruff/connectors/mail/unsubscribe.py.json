@@ -1,0 +1,5 @@
+{
+  "connectors/mail/unsubscribe.py": {
+    "BLE001": 2
+  }
+}

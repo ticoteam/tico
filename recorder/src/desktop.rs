@@ -104,7 +104,7 @@ pub fn matches(url: &str, destination: &Destination) -> bool {
     let Ok(candidates) = signin::candidates(url) else {
         return false;
     };
-    candidates.iter().any(|base| *base == destination.base_url)
+    candidates.contains(&destination.base_url)
         || candidates
             .first()
             .is_some_and(|base| !host(base).is_empty() && host(base) == destination.name)

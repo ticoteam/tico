@@ -1,0 +1,11 @@
+﻿2026-11-08T19:53:16.3843005Z Current runner version: '2.338.2'
+2026-11-08T19:53:16.3863767Z ##[group]Runner Image Provisioner
+2026-11-08T20:03:18.8298624Z ........................................................[gw3] node down: Not properly terminated
+2026-11-08T20:03:40.7524736Z worker 'gw3' crashed while running 'backend/tests/test_turn_fixer.py::test_dead_sweep_walks_live_runs_not_every_attempt'
+2026-11-08T20:03:40.7529810Z pooled connection check: 921 tests, 0.6 s of its own work (0.0 s joining threads); the store's own connects took 64.6 s, not counted
+2026-11-08T20:03:40.7530735Z =========================== short test summary info ============================
+2026-11-08T20:03:40.7532525Z FAILED backend/tests/test_turn_fixer.py::test_dead_sweep_walks_live_runs_not_every_attempt - worker 'gw3' crashed while running 'backend/tests/test_turn_fixer.py::test_dead_sweep_walks_live_runs_not_every_attempt'
+2026-11-08T20:03:40.7533658Z 1 failed, 922 passed in 526.52s (0:08:46)
+2026-11-08T20:03:40.8939392Z ##[error]Process completed with exit code 1.
+2026-11-08T20:03:40.9016015Z ##[group]Run actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+2026-11-08T20:03:40.9016385Z with:

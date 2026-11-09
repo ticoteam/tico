@@ -1,4 +1,5 @@
 """Hosted validation must not reclaim local data or accept a stale native binary."""
+
 from pathlib import Path
 
 import pytest
@@ -11,14 +12,20 @@ def test_inputs_and_host_are_checked_before_any_reclamation(tmp_path, monkeypatc
     for sha, previous in [('main', 'v0.3.48'), ('a' * 40, 'v0.3.48;touch unwanted')]:
         with pytest.raises(RuntimeError):
             check.inputs({'CANDIDATE_SHA': sha, 'PREVIOUS_RELEASE': previous})
-    monkeypatch.setattr(check.subprocess, 'run', lambda *a, **kw: pytest.fail('must not remove anything on a local host'))
+    monkeypatch.setattr(
+        check.subprocess, 'run', lambda *a, **kw: pytest.fail('must not remove anything on a local host')
+    )
     with pytest.raises(RuntimeError, match='never run on a user or bot host'):
         check.capacity(tmp_path, 30 * check.GIB, {'GITHUB_ACTIONS': 'true', 'TICO_HOSTED_ENVIRONMENT': 'self-hosted'})
     # A RunsOn VM counts only when its runner is the one launched on that instance for this job.
     vm = {'RUNS_ON_INSTANCE_ID': 'i-035ddcac4f42c1fed', 'RUNNER_NAME': 'runs-on--i-035ddcac4f42c1fed--40ef49e1-4'}
     assert check.runs_on(vm)
-    for bad in ({**vm, 'RUNNER_NAME': 'bot-box'}, {**vm, 'RUNS_ON_INSTANCE_ID': 'i-0'},
-                {**vm, 'RUNNER_NAME': 'runs-on--i-0aaaaaaaaaaaaaaaa--1'}, {}):
+    for bad in (
+        {**vm, 'RUNNER_NAME': 'bot-box'},
+        {**vm, 'RUNS_ON_INSTANCE_ID': 'i-0'},
+        {**vm, 'RUNNER_NAME': 'runs-on--i-0aaaaaaaaaaaaaaaa--1'},
+        {},
+    ):
         assert not check.runs_on(bad)
     with pytest.raises(RuntimeError, match='never run on a user or bot host'):
         check.capacity(tmp_path, 30 * check.GIB, {'GITHUB_ACTIONS': 'true', 'TICO_HOSTED_ENVIRONMENT': 'runs-on'})
@@ -34,9 +41,11 @@ def test_source_bytes_must_match_the_native_build_id(tmp_path, monkeypatch):
         binary.write_bytes(b'fictional binary')
     (tmp_path / 'runner-rs/harnesses').mkdir(parents=True)
     ids = {kind: check.fingerprint(tmp_path, kind) for kind in ('runner', 'relay')}
+
     def ask(args, cwd=None):
         kind = 'runner' if Path(args[0]).name == 'tico-runner' else 'relay'
         return ids[kind] if args[-1] == '--build-id' else 'tico-runner 0.3.49'
+
     monkeypatch.setattr(check, 'output', ask)
     assert check.native_binaries(tmp_path)['relay']['build_id'] == ids['relay']
     (tmp_path / 'relay-rs/src/main.rs').write_text('changed source')
@@ -68,13 +77,13 @@ def test_each_vm_runs_its_slice_and_an_older_candidate_runs_whole_on_the_product
     gate = tmp_path / 'scripts/release_checks.py'
     base = [check.sys.executable, 'scripts/release_checks.py', '--release', '--previous', 'v0.3.50']
     gate.write_text("parser.add_argument('--part', choices=PARTS)")
-    assert check.gate_command(tmp_path, 'v0.3.50', 'desktop', None) is None   # frozen before the desktop part
+    assert check.gate_command(tmp_path, 'v0.3.50', 'desktop', None) is None  # frozen before the desktop part
     gate.write_text("PARTS = ('product', 'python', 'browser', 'desktop')\nparser.add_argument('--part', choices=PARTS)")
     assert check.gate_command(tmp_path, 'v0.3.50', 'desktop', None) == base + ['--part', 'desktop']
     assert check.gate_command(tmp_path, 'v0.3.50', None, None) == base
     assert check.gate_command(tmp_path, 'v0.3.50', 'browser', None) == base + ['--part', 'browser']
     assert check.gate_command(tmp_path, 'v0.3.50', 'python', '2/4') == base + ['--part', 'python', '--shard', '2/4']
-    assert check.gate_command(tmp_path, 'v0.3.50', 'browser', '1/2') == base + ['--part', 'browser']   # before shards
+    assert check.gate_command(tmp_path, 'v0.3.50', 'browser', '1/2') == base + ['--part', 'browser']  # before shards
     assert check.gate_command(tmp_path, 'v0.3.50', 'browser', '2/2') is None
     gate.write_text(gate.read_text() + '\ndef browser_shard(index, total): ...')
     assert check.gate_command(tmp_path, 'v0.3.50', 'browser', '2/2') == base + ['--part', 'browser', '--shard', '2/2']

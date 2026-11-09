@@ -21,18 +21,23 @@ from .outage import log
 # What a turn calls the company, the application, and the assistant when the server is older
 # than GET /api/v2/config. Tico is the product's own name, which is the honest fallback for an
 # installation that has not been given one.
-DEFAULT_NAMES = {"company_name": "the company", "app_name": "Tico", "assistant_name": "Assistant",
-                 "assistant_bot": "coo"}
+DEFAULT_NAMES = {
+    "company_name": "the company",
+    "app_name": "Tico",
+    "assistant_name": "Assistant",
+    "assistant_bot": "coo",
+}
 # The two bots the runner sets up from the catalog itself, and the template each one comes from.
 # Everybody else is BotOps's to create in a turn (`hub bot create`); BotOps cannot create itself,
 # and the assistant is who the person talks to, so neither can wait for a bot that does not exist.
 BOOTSTRAP_TEMPLATES = {"coo": "assistant", "botops": "botops", "librarian": "librarian", "goal-manager": "goal-manager"}
-FETCH_RETRY_S = 120         # how long a repository that could not be cloned is left before the next try
+FETCH_RETRY_S = 120  # how long a repository that could not be cloned is left before the next try
 
 
 class BotSetup:
     """The built-in bot set-up a computer does itself (`python -m runner_support catalog`, for the Rust runner). Needs `config`,
     `client` and, for github_access without an entry, `assignments_seen`."""
+
     # This installation's names, read from the server on the first turn. A class default so a Runner built
     # with __new__ (`doctor`, tests) has one as well.
     _names = None
@@ -48,15 +53,13 @@ class BotSetup:
             return self._names
         try:
             config = self.client.get("config")
-            names = {key: str(config.get(key) or "").strip() or default
-                     for key, default in DEFAULT_NAMES.items()}
+            names = {key: str(config.get(key) or "").strip() or default for key, default in DEFAULT_NAMES.items()}
         except Exception:
             # An older server, an unreachable one, or a preflight Runner with no client: never
             # fail a turn over a display name, and ask again rather than caching the fallback.
             return dict(DEFAULT_NAMES)
         self._names = names
         return names
-
 
     def onboarding(self):
         """What the person answered while picking their bots, read with this machine's credential.
@@ -71,7 +74,6 @@ class BotSetup:
         except Exception:
             return {}
         return record if isinstance(record, dict) else {}
-
 
     def bootstrap_template(self, bot, config, cards):
         """The catalog template the runner may set this bot up from itself, or "".
@@ -88,7 +90,6 @@ class BotSetup:
             return named if card.get("bootstrap") or (card and (config or {}).get("materialize") is True) else ""
         template = BOOTSTRAP_TEMPLATES.get(bot, "")
         return template if template in cards else ""
-
 
     def history_on_github(self, bot, entry):
         """`present`, `empty` or `unknown` for the bot's GitHub repository (`git_credentials.remote_history`), or
@@ -111,7 +112,6 @@ class BotSetup:
             notes.pop(bot, None)
         return state
 
-
     def github_access(self, bot, entry=None):
         """(environment, problem) for talking to this bot's GitHub repository. The environment carries the
         bot's scoped token, or is the machine's own when no GitHub App is connected; the problem is a plain
@@ -121,7 +121,7 @@ class BotSetup:
         try:
             body = {"bot": bot}
             if not self.__dict__.get("github_token_legacy_purpose", False):
-                body["purpose"] = "git"       # checkout work is not a new 45-minute turn
+                body["purpose"] = "git"  # checkout work is not a new 45-minute turn
             try:
                 granted = git_credentials.hub_token(self.client, body)
             except APIError as exc:
@@ -141,7 +141,6 @@ class BotSetup:
                 env[git_credentials.REPOSITORY_KEY] = str(granted["repository"])
         return env, ""
 
-
     def bootstrap(self, bot, config, path, entry=None):
         """Set a bootstrap bot, or a starter bot first run created, up from the catalog. Returns (note, problem).
 
@@ -151,6 +150,7 @@ class BotSetup:
         cannot be set up must show as not ready, not stop the machine reporting the others.
         """
         from clients import catalog
+
         try:
             cards = {row["template"]: row for row in catalog.cards()}
             template = self.bootstrap_template(bot, config, cards)
@@ -170,32 +170,42 @@ class BotSetup:
             chosen = (record.get("selected") or {}).get(bot) or {}
             # A sample company bot is made already set up: its state.md says so, or it would ask the setup questions.
             setup = ((record.get("sample") or {}).get("setup") or {}).get(bot) or None
-            catalog.materialize(template, bot, Path(self.config["projects_dir"]), self.names(),
-                                record.get("answers") or {},
-                                display_name=(config or {}).get("display_name") or chosen.get("display_name"),
-                                instructions=(config or {}).get("instructions") or chosen.get("instructions"),
-                                state=setup if isinstance(setup, dict) else None,
-                                # The folder the runner works in: a bot made with a UUID id keeps its first slug's.
-                                folder=Path(path).name or None)
+            catalog.materialize(
+                template,
+                bot,
+                Path(self.config["projects_dir"]),
+                self.names(),
+                record.get("answers") or {},
+                display_name=(config or {}).get("display_name") or chosen.get("display_name"),
+                instructions=(config or {}).get("instructions") or chosen.get("instructions"),
+                state=setup if isinstance(setup, dict) else None,
+                # The folder the runner works in: a bot made with a UUID id keeps its first slug's.
+                folder=Path(path).name or None,
+            )
         except Exception as exc:
-            return "", (f"Setting {bot} up from the {template} catalog template failed: "
-                        f"{type(exc).__name__}: {exc}")[:500]
-        isolation.chown(path, recursive=True)     # made by the supervisor; the bot user works in it
+            return "", (f"Setting {bot} up from the {template} catalog template failed: {type(exc).__name__}: {exc}")[
+                :500
+            ]
+        isolation.chown(path, recursive=True)  # made by the supervisor; the bot user works in it
         log(f"Tico runner: {bot} materialized from the {template} catalog template at {path}")
         return f"materialized from catalog: {template}", ""
-
 
     def refresh_from_template(self, bot, config, path):
         """The product files of a built-in bot's template that changed, written and committed in `path` (also
         `python -m runner_support catalog`, for the Rust runner). A failure is a log line and an empty list."""
         try:
             from clients import catalog
+
             template = self.bootstrap_template(bot, config, {row["template"]: row for row in catalog.cards()})
-            changed = (template and catalog.refresh(template, path, self.names(),
-                                                    display_name=(config or {}).get("display_name"))) or []
+            changed = (
+                template
+                and catalog.refresh(template, path, self.names(), display_name=(config or {}).get("display_name"))
+            ) or []
             if changed:
                 isolation.chown(path, recursive=True)
-                log(f"Tico runner: {bot} took {len(changed)} updated file{'s' if len(changed) != 1 else ''} from the {template} template")
+                log(
+                    f"Tico runner: {bot} took {len(changed)} updated file{'s' if len(changed) != 1 else ''} from the {template} template"
+                )
             return changed
         except Exception as exc:
             log(f"Tico runner: could not refresh {bot} from its template: {exc}")

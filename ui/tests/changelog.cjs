@@ -15,7 +15,7 @@ const shots = process.env.TICO_SCREENSHOT_DIR;
     const errors = [], posts = [], read = new Set();
     let failRead = false, failLoad = false, pageSize = 50, hold = null, dropRead = false;
     const entries = [
-      {id:'release-0.3.23', title:'Tico v0.3.23', version:'0.3.23', source:'release', kind:'product', shipped_at:'2026-10-05T00:00:00Z',
+      {id:'release-0.3.23', title:'Tico v0.3.23', version:'0.3.23', source:'release', kind:'product', shipped_at:'2026-10-05T00:00:00Z', published_at:'2026-10-05T15:42:00-07:00',
        bullets:['Relate tasks to each other, including follow-ups, duplicates and blockers.', 'Long chats show an outline so you can jump back to any prompt.', 'Task and conversation updates arrive as they happen.', 'See what each bot learned from its recent work.', 'Releases reach your team faster.'],
        url:'https://github.com/ticoteam/tico/releases/tag/v0.3.23'},
       {id:'release-0.3.22', title:'Tico v0.3.22', version:'0.3.22', source:'release', kind:'product', shipped_at:'2026-10-04T00:00:00Z',
@@ -28,11 +28,11 @@ const shots = process.env.TICO_SCREENSHOT_DIR;
     await page.route('**/*', async route => {
       const req = route.request(), p = new URL(req.url()).pathname;
       const json = (body,status=200) => route.fulfill({status,contentType:'application/json',body:JSON.stringify(body)});
-      const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|css))$/);
+      const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/);
       if (ui && fs.existsSync(uiFile(ui[1]))) return route.fulfill({contentType:ui[1].endsWith('.css')?'text/css':'application/javascript',body:fs.readFileSync(uiFile(ui[1]),'utf8')});
       const asset = p.startsWith('/assets/') || p.startsWith('/vendor/') ? uiFile(p.slice(1)) : p.startsWith('/tico/ui/') ? uiFile(p.slice(9)) : '';
       if (asset && fs.existsSync(asset) && fs.statSync(asset).isFile()) return route.fulfill({body:fs.readFileSync(asset)});
-      if (p.endsWith('.js')) return route.fulfill({contentType:'application/javascript',body:''});
+      if (/\.(?:js|ts)$/.test(p)) return route.fulfill({contentType:'application/javascript',body:''});
       if (p === '/') return route.fulfill({contentType:'text/html',body:html});
       if (p === '/api/me') return json({id:'ana', role:'viewer', name:'Ana', email:'ana@acme.example', cloud:true, registered:true, config:config()});
       if (p === '/api/v2/config') return json(config());
@@ -65,6 +65,9 @@ const shots = process.env.TICO_SCREENSHOT_DIR;
     await page.locator('#changelog-notice').click();
     await page.locator('.release-entry').first().waitFor();
     assert.equal(await page.locator('.release-entry').count(),2);
+    const timed = page.locator('.release-entry', {hasText:'Tico v0.3.23'}).locator('.release-date');
+    assert.match(await timed.locator('.release-time').textContent(),/^\d{1,2}:42\s?(AM|PM)\s\S+$/,'a timed release shows its time with a zone');
+    assert.equal(await page.locator('.release-entry', {hasText:'Tico v0.3.22'}).locator('.release-time').count(),0,'a date-only release shows just the date');
     assert.equal(await page.locator('[data-add-update]').isVisible(),false);
     assert.equal(await page.locator('[data-read-changes]').count(),0,'there is no mark-as-read button');
     await page.waitForFunction(() => document.querySelector('#changelog-notice').hidden);

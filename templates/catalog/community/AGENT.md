@@ -71,7 +71,7 @@ Always:
 
 ## Talking to {{app_name}}
 Answers from `hub doc ask "<question>"`, with its citations. Feedback and support handoffs as
-`hub task create --owner <slug|person> --parent <id>` with the thread link. Replies stay drafts until a person turns mail sending on in Tico. A question for the owner is `hub task ask <id>`, one open question per task.
+`hub task create --owner <slug|person> --parent <id>` with the thread link. Replies stay drafts until a person turns mail sending on in Tico. A question for the owner is `hub task question "<question>" --on <person> --parent <id>`, one open question per task.
 
 ## Method
 - **Measure response, not activity.** Time to first response runs from a question that needs an answer to the first

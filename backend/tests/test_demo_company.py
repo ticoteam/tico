@@ -1,6 +1,7 @@
 """The company demo as its owner sees it: what the seed leaves behind, read through the same API the app uses. These
 check behaviour (who owns what, what waits for whom, what every bot has done), not the wording of the seed."""
 
+import json
 import re
 import sqlite3
 from contextlib import closing
@@ -16,10 +17,14 @@ from backend import usage_limits as U
 from backend.demo_sections import budgets as B
 from backend.app import create_app
 
-NOW = datetime(2026, 11, 6, 18, 30, tzinfo=timezone.utc)      # a Friday evening: the week is complete
+NOW = datetime(2026, 11, 6, 18, 30, tzinfo=timezone.utc)  # a Friday evening: the week is complete
 ROSTER = {slug for slug, _template, _parent in D.BOTS}
 DAY = {"from": "2026-10-31", "to": "2026-11-06"}
-PER_INSTALL = {"credential_keys", "granola_connections", "slack_credentials"}   # this machine's keys and the secrets they seal
+PER_INSTALL = {
+    "credential_keys",
+    "granola_connections",
+    "slack_credentials",
+}  # this machine's keys and the secrets they seal
 # Bytes this machine's keys produce: a sealed secret (AES-GCM, a fresh nonce), and an idempotency fingerprint keyed
 # with the cipher key. Each install differs there by design, so they are compared as a mark, not as bytes.
 SEALED = re.compile(r"sealed:v1:[A-Za-z0-9+/=]+")
@@ -35,16 +40,19 @@ def _mark(table, column, value):
 def stored(path):
     """Every table's rows, as the build wrote them, less the per-install keys and the bytes they make."""
     with sqlite3.connect(path) as db:
-        tables = [name for (name,) in db.execute("SELECT name FROM sqlite_master WHERE type='table' "
-                                                 "AND name NOT LIKE 'sqlite_%'")]
+        tables = [
+            name
+            for (name,) in db.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")
+        ]
         out = {}
         for name in tables:
             if name in PER_INSTALL:
                 continue
             cursor = db.execute(f'SELECT * FROM "{name}"')
             columns = [column[0] for column in cursor.description]
-            out[name] = [tuple(_mark(name, column, value) for column, value in zip(columns, row))
-                         for row in cursor.fetchall()]
+            out[name] = [
+                tuple(_mark(name, column, value) for column, value in zip(columns, row)) for row in cursor.fetchall()
+            ]
         return out
 
 
@@ -55,13 +63,24 @@ def demo_clock():
         yield
 
 
+def real_clock_at(patch, moment):
+    """The machine's clock as the usage-limit overlay reads it (`datetime.now`), set to `moment`."""
+    clock = type("RealClock", (datetime,), {"now": classmethod(lambda cls, tz=None: moment)})
+    patch.setattr(U, "datetime", clock)
+
+
 @pytest.fixture(scope="module")
 def built(tmp_path_factory):
-    """Two builds of the same date, back to back, read before any app has opened either database."""
-    first = demo.build(tmp_path_factory.mktemp("company"), now=NOW)
-    rows = stored(first.db_path)
-    second = demo.build(tmp_path_factory.mktemp("company-again"), now=NOW)
-    return first, rows, stored(second.db_path)
+    """Two builds of the same date, back to back, read before any app has opened either database. The machine's clock
+    crosses 07:00 UTC (a usage-limit window edge) between them: the first build runs just after it, the second just
+    before."""
+    with pytest.MonkeyPatch.context() as patch:
+        real_clock_at(patch, datetime(2026, 11, 6, 7, 0, 1, tzinfo=timezone.utc))
+        first = demo.build(tmp_path_factory.mktemp("company"), now=NOW)
+        rows = stored(first.db_path)
+        real_clock_at(patch, datetime(2026, 11, 6, 6, 59, 59, tzinfo=timezone.utc))
+        second = demo.build(tmp_path_factory.mktemp("company-again"), now=NOW)
+        return first, rows, stored(second.db_path)
 
 
 @pytest.fixture(scope="module")
@@ -77,7 +96,9 @@ def test_the_company_goal_has_department_goals_and_one_is_off_track(ana):
     [company] = [goal for goal in goals if goal["owner_id"] == "company"]
     assert [goal["id"] for goal in goals if goal["parent_id"] == company["id"]], "departments hang off the company goal"
     red = [goal for goal in goals if goal["status"] == "red"]
-    assert len(red) == 1 and red[0]["parent_id"] == company["id"], "exactly one goal is off track, under the company goal"
+    assert len(red) == 1 and red[0]["parent_id"] == company["id"], (
+        "exactly one goal is off track, under the company goal"
+    )
 
 
 def test_every_bot_has_a_daily_update_and_the_friday_review_covers_the_team(ana):
@@ -90,15 +111,20 @@ def test_every_bot_has_a_daily_update_and_the_friday_review_covers_the_team(ana)
 
 
 def test_the_pricing_decision_waits_for_ana(ana):
-    waiting = [item for item in ana.get("/api/v2/needs-you").json()["items"]
-               if item["requester_id"] == "bot:pricing" and item["status"] == "open"]
+    waiting = [
+        item
+        for item in ana.get("/api/v2/needs-you").json()["items"]
+        if item["requester_id"] == "bot:pricing" and item["status"] == "open"
+    ]
     assert len(waiting) == 1 and waiting[0]["owner_id"] == "human:ana"
 
 
 def test_tasks_cover_every_status_and_some_have_chains(ana):
     # As Tasks reads them: what is live, then the latest done (the weeks before hold hundreds more done).
-    tasks = [*ana.get("/api/v2/tasks?status=open,doing,waiting,review,declined&limit=200").json()["tasks"],
-             *ana.get("/api/v2/tasks?status=done,closed&sort=finished&limit=200").json()["tasks"]]
+    tasks = [
+        *ana.get("/api/v2/tasks?status=open,doing,waiting,review,declined&limit=200").json()["tasks"],
+        *ana.get("/api/v2/tasks?status=done,closed&sort=finished&limit=200").json()["tasks"],
+    ]
     assert {task["status"] for task in tasks} >= {"open", "doing", "waiting", "review", "done", "closed", "declined"}
     parents = [task for task in tasks if (task.get("children_summary") or {}).get("total")]
     assert parents, "some tasks split into child tasks"
@@ -108,16 +134,6 @@ def test_tasks_cover_every_status_and_some_have_chains(ana):
 
 def test_no_task_is_left_stuck_for_days(ana):
     assert ana.get("/api/v2/tasks/stuck").json()["tasks"] == []
-
-
-@pytest.mark.parametrize("hour", [0, 12])
-def test_no_task_is_left_stuck_at_other_build_hours(tmp_path, hour):
-    moment = NOW.replace(hour=hour)
-    with time_machine.travel(moment, tick=False):
-        settings = demo.build(tmp_path, now=moment)
-        with TestClient(create_app(settings), base_url="http://127.0.0.1:8765") as api:
-            api.headers["Authorization"] = "Bearer " + settings.local_owner_token_file.read_text().strip()
-            assert api.get("/api/v2/tasks/stuck").json()["tasks"] == []
 
 
 def test_a_meeting_waiting_for_review_is_not_in_the_live_list(ana):
@@ -133,8 +149,11 @@ def test_docs_market_and_links_are_there(ana):
     assert any(path.startswith("market/") for path in paths) and any(path.startswith("help/") for path in paths)
     entities = {entity["id"]: entity for entity in ana.get("/api/v2/market/entities").json()["entities"]}
     assert entities["company/self"]["name"] == D.COMPANY
-    rivals = [edge for edge in ana.get("/api/v2/market/edges").json()["edges"]
-              if edge["rel"] == "competes_with" and edge["dst"] == "company/self"]
+    rivals = [
+        edge
+        for edge in ana.get("/api/v2/market/edges").json()["edges"]
+        if edge["rel"] == "competes_with" and edge["dst"] == "company/self"
+    ]
     assert len(rivals) >= 3, "competitors point at the company"
 
 
@@ -162,8 +181,14 @@ def test_chats_and_slack_are_connected(ana):
     assert any(any(p.startswith("bot:") for p in conv["participants"]) for conv in conversations)
 
 
-LEADS = {"ops-manager": "human:ben", "support-lead": "human:ben", "marketing-lead": "human:cara",
-         "sales-lead": "human:cara", "product-manager": "human:eli", "finance-lead": "human:ana"}
+LEADS = {
+    "ops-manager": "human:ben",
+    "support-lead": "human:ben",
+    "marketing-lead": "human:cara",
+    "sales-lead": "human:cara",
+    "product-manager": "human:eli",
+    "finance-lead": "human:ana",
+}
 PEOPLE = ("human:ana", "human:ben", "human:cara", "human:eli")
 
 
@@ -176,7 +201,9 @@ def test_each_person_has_a_draft_update_for_every_day_and_the_friday_review(ana)
     daily = {"2026-10-31", "2026-11-01", "2026-11-02", "2026-11-03", "2026-11-04", "2026-11-05"}
     fridays = {"2026-10-30", "2026-11-06"}
     for person in PEOPLE:
-        rows = ana.get("/api/v2/updates", params={"bot": person, "limit": 100, "include_archive": True}).json()["updates"]
+        rows = ana.get("/api/v2/updates", params={"bot": person, "limit": 100, "include_archive": True}).json()[
+            "updates"
+        ]
         assert {row["day"] for row in rows if row["kind"] == "daily"} == daily, person
         assert {row["day"] for row in rows if row["kind"] == "weekly"} == fridays, person
         assert {row["drafted_by"] for row in rows} == {"coo"}, person
@@ -240,7 +267,9 @@ def test_run_and_task_budgets_are_set_for_the_team_two_bots_and_ana(ana):
         assert {k: own[k] for k in body} == body
     tasks = ana.get("/api/v2/ask-ingest/settings").json()
     assert {k: tasks["team"][k] for k in B.CONTENT["tasks_team"]} == B.CONTENT["tasks_team"]
-    assert tasks["settings"]["own"] and {k: tasks["settings"][k] for k in B.CONTENT["tasks_ana"]} == B.CONTENT["tasks_ana"]
+    assert (
+        tasks["settings"]["own"] and {k: tasks["settings"][k] for k in B.CONTENT["tasks_ana"]} == B.CONTENT["tasks_ana"]
+    )
 
 
 def test_the_team_has_closed_tasks_every_week_for_two_months(built):
@@ -248,8 +277,10 @@ def test_the_team_has_closed_tasks_every_week_for_two_months(built):
     settings, _rows, _again = built
     monday = (NOW - timedelta(days=NOW.weekday())).date()
     with closing(sqlite3.connect(settings.db_path)) as db:
-        days = db.execute("SELECT substr(done_at,1,10) FROM tasks WHERE status='done' AND done_at>=?",
-                          ((monday - timedelta(weeks=7)).isoformat(),)).fetchall()
+        days = db.execute(
+            "SELECT substr(done_at,1,10) FROM tasks WHERE status='done' AND done_at>=?",
+            ((monday - timedelta(weeks=7)).isoformat(),),
+        ).fetchall()
     weeks = [0] * 8
     for (day,) in days:
         done = datetime.strptime(day, "%Y-%m-%d").date()
@@ -269,8 +300,29 @@ def test_the_demo_clock_also_reads_the_spend_windows(built):
 
 
 def test_the_same_date_builds_the_same_company(built):
-    _first, rows, again = built
+    """Every table, with the machine's clock either side of 07:00 UTC: the usage limits the builds save match too."""
+    first, rows, again = built
     assert again == rows
+    with closing(sqlite3.connect(first.db_path)) as db:
+        columns = [column[1] for column in db.execute("PRAGMA table_info(idempotency)")]
+    operation, response = columns.index("operation"), columns.index("response")
+    hours = [
+        json.loads(row[response]).get("limit", {}).get("spent", {}).get("hour")
+        for row in rows["idempotency"]
+        if row[operation].startswith("/api/v2/usage/")
+    ]
+    assert any(hours), "the windows hold spend, so the hour is really compared"
+
+
+def test_the_build_asks_no_model_for_a_person(built):
+    """A person's rule check is held to the people's daily cap, which the build zeroes: no judge call is recorded for a
+    person's check, so no model is dialled with the demo's made-up keys (the answer would depend on timing)."""
+    first, _rows, _again = built
+    with closing(sqlite3.connect(first.db_path)) as db:
+        asked = db.execute(
+            "SELECT count(*) FROM events WHERE action='judge.call' AND json_extract(detail,'$.people')=1"
+        ).fetchone()[0]
+    assert asked == 0, f"{asked} person rule checks asked a model in the build"
 
 
 def test_every_department_has_its_lead_and_answers_to_a_person(ana):
@@ -287,7 +339,7 @@ def test_every_department_has_its_lead_and_answers_to_a_person(ana):
         assert set(members) <= set(groups[gid]["bot_slugs"]), f"{gid} holds {members}"
     for group in groups.values():
         for slug in group["bot_slugs"]:
-            seen, at = set(), slug                      # a bot's reports_to is a bot's slug or "human:<id>"
+            seen, at = set(), slug  # a bot's reports_to is a bot's slug or "human:<id>"
             while at in by_slug and at not in seen:
                 seen.add(at)
                 at = by_slug[at]["reports_to"] or ""

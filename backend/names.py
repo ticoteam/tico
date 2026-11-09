@@ -15,8 +15,22 @@ Nothing here reads more than the `humans` and `bots` tables, and a name is only 
 from . import fast_json, read_cache
 import re
 
-ACTOR_KEYS = ("owner_id", "requester_id", "sender_id", "recipient_id", "actor_id", "status_by_id", "decided_by_id",
-              "owner", "requester", "actor", "author", "reports_to", "status_by", "proposed_by")
+ACTOR_KEYS = (
+    "owner_id",
+    "requester_id",
+    "sender_id",
+    "recipient_id",
+    "actor_id",
+    "status_by_id",
+    "decided_by_id",
+    "owner",
+    "requester",
+    "actor",
+    "author",
+    "reports_to",
+    "status_by",
+    "proposed_by",
+)
 ID = re.compile(r"\b(human|bot):([A-Za-z0-9._-]*[A-Za-z0-9_])")
 # Tico support in a session a person opened (backend/support_access.py): no roster row, always this name.
 SUPPORT_ACTOR, SUPPORT_NAME = "human:tico-support", "Tico support"
@@ -54,12 +68,12 @@ def lookup(conn, ids):
     bots = sorted({i.split(":", 1)[1] for i in ids if i.startswith("bot:")})
     out = {SUPPORT_ACTOR: SUPPORT_NAME} if SUPPORT_ACTOR in ids else {}
     for start in range(0, len(humans), 500):
-        chunk = humans[start:start + 500]
+        chunk = humans[start : start + 500]
         sql = "SELECT id,name FROM humans WHERE id IN (%s)" % ",".join("?" * len(chunk))
         for row in read_cache.rows(conn, sql, chunk):
             out["human:" + row[0]] = (row[1] or "").strip() or _title(row[0])
     for start in range(0, len(bots), 500):
-        chunk = bots[start:start + 500]
+        chunk = bots[start : start + 500]
         sql = "SELECT id,slug,display_name FROM bots WHERE id IN (%s)" % ",".join("?" * len(chunk))
         for row in read_cache.rows(conn, sql, chunk):
             out["bot:" + row[0]] = (row[2] or "").strip() or _title(row[1])
@@ -75,8 +89,14 @@ def _apply(node, names):
                     node.setdefault(key.removesuffix("_id") + "_name", names[value])
             elif key in ("participants", "owners", "participant_ids") and isinstance(value, list):
                 if all(isinstance(v, str) for v in value) and any(v in names for v in value):
-                    node.setdefault({"participants": "participant_names", "participant_ids": "participant_names",
-                                     "owners": "owner_names"}[key], [names.get(v, v) for v in value])
+                    node.setdefault(
+                        {
+                            "participants": "participant_names",
+                            "participant_ids": "participant_names",
+                            "owners": "owner_names",
+                        }[key],
+                        [names.get(v, v) for v in value],
+                    )
             else:
                 _apply(value, names)
     elif isinstance(node, list):

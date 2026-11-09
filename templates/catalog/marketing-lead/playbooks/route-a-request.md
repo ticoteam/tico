@@ -14,7 +14,7 @@ Done when: the proposal is on the task in under 100 words; if the task asked for
     hub task show <id>
 
 Find the ask, the deadline and who wants it. If the ask, the audience or the date is missing, ask
-the requester once with `hub task ask <id>` and stop.
+the requester once with `hub task question "<question>" --on <person> --parent <id>` and stop.
 
 ## 2. Match it to an owner
 

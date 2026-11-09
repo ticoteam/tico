@@ -24,8 +24,12 @@ from backend.tests.test_tasks_board import api  # noqa: F401
 FIXTURE = Path(__file__).parent / "fixtures" / "schema_pre_cleanup.sql"
 ANA, CMO = H.human_actor("ana"), H.bot_actor("cmo")
 NOW = "2026-10-30T09:00:00Z"
-RELEASE = {"url": "https://github.com/acme/site/releases/tag/v1.2.0", "version": "1.2.0", "commit": "a1",
-           "content_sha256": "a" * 64}
+RELEASE = {
+    "url": "https://github.com/acme/site/releases/tag/v1.2.0",
+    "version": "1.2.0",
+    "commit": "a1",
+    "content_sha256": "a" * 64,
+}
 
 
 def released_hash(payload):
@@ -42,16 +46,26 @@ def upgraded(tmp_path):
     conn.executescript(FIXTURE.read_text())
     conn.close()
     conn = sqlite3.connect(path)
-    conn.execute("INSERT INTO approvals(id, kind, payload_json, payload_hash, requested_by, decided_by, decision, "
-                 "decided_at, created, ready_since, decision_owner, decided_for_json) "
-                 "VALUES('appr-open', 'publish', ?, ?, 'bot:cmo', NULL, NULL, NULL, ?, ?, 'human:ana', NULL)",
-                 (json.dumps(RELEASE, sort_keys=True), released_hash(RELEASE), NOW, NOW))
+    conn.execute(
+        "INSERT INTO approvals(id, kind, payload_json, payload_hash, requested_by, decided_by, decision, "
+        "decided_at, created, ready_since, decision_owner, decided_for_json) "
+        "VALUES('appr-open', 'publish', ?, ?, 'bot:cmo', NULL, NULL, NULL, ?, ?, 'human:ana', NULL)",
+        (json.dumps(RELEASE, sort_keys=True), released_hash(RELEASE), NOW, NOW),
+    )
     delegated = {"cited": ["msg-9"], "for": "human:ana", "run": "run-1"}
-    conn.execute("INSERT INTO approvals(id, kind, payload_json, payload_hash, requested_by, decided_by, decision, "
-                 "decided_at, created, ready_since, decision_owner, decided_for_json) "
-                 "VALUES('appr-yes', 'publish', ?, ?, 'bot:cmo', 'human:ana', 'approved', ?, ?, ?, 'human:ana', ?)",
-                 (json.dumps({**RELEASE, "commit": "b2"}, sort_keys=True), released_hash({**RELEASE, "commit": "b2"}),
-                  NOW, NOW, NOW, json.dumps(delegated, sort_keys=True)))
+    conn.execute(
+        "INSERT INTO approvals(id, kind, payload_json, payload_hash, requested_by, decided_by, decision, "
+        "decided_at, created, ready_since, decision_owner, decided_for_json) "
+        "VALUES('appr-yes', 'publish', ?, ?, 'bot:cmo', 'human:ana', 'approved', ?, ?, ?, 'human:ana', ?)",
+        (
+            json.dumps({**RELEASE, "commit": "b2"}, sort_keys=True),
+            released_hash({**RELEASE, "commit": "b2"}),
+            NOW,
+            NOW,
+            NOW,
+            json.dumps(delegated, sort_keys=True),
+        ),
+    )
     conn.commit()
     conn.close()
     Store(Settings(db_path=path)).initialize()
@@ -61,12 +75,15 @@ def upgraded(tmp_path):
     conn.close()
 
 
-def test_an_approval_asked_before_the_cutover_is_one_decision_and_is_spent_once(upgraded):
+def test_approvals_asked_and_decided_before_the_cutover_are_each_spent_once_after_it(upgraded):
+    """Both approvals share one upgraded hub (the fixture is per test, so one boot covers both stories). They touch
+    different rows, so each story's checks run in full, in order."""
     conn = upgraded
+    # An approval asked before the cutover is one decision and is spent once.
     open_ask = H.approval(conn, "appr-open")
     assert open_ask["payload"] == RELEASE and open_ask["payload_hash"] == released_hash(RELEASE)
-    assert H.payload_hash(RELEASE) == released_hash(RELEASE)            # the same payload hashes the same way
-    with pytest.raises(H.Refused) as again:                              # a re-ask of it finds the old one
+    assert H.payload_hash(RELEASE) == released_hash(RELEASE)  # the same payload hashes the same way
+    with pytest.raises(H.Refused) as again:  # a re-ask of it finds the old one
         H.approval_request(conn, CMO, "publish", RELEASE)
     assert again.value.rule == "duplicate" and "appr-open" in again.value.detail
     decided = H.approval_decide(conn, ANA, "appr-open", "approved")
@@ -76,15 +93,12 @@ def test_an_approval_asked_before_the_cutover_is_one_decision_and_is_spent_once(
     with pytest.raises(H.Refused) as twice:
         H.approval_consume(conn, CMO, "appr-open")
     assert twice.value.rule == "consumed"
-
-
-def test_an_approval_decided_before_the_cutover_is_spent_after_it_with_its_delegation(upgraded):
-    conn = upgraded
+    # An approval decided before the cutover is spent after it, with its delegation.
     approved = H.approval(conn, "appr-yes")
-    assert approved["decision"] == "approved" and approved["consumed_at"] is None
-    assert approved["decided_for"] == {"cited": ["msg-9"], "for": ANA, "run": "run-1"}
+    assert approved["decision"] == "approved" and approved["consumed_at"] is None, "appr-yes"
+    assert approved["decided_for"] == {"cited": ["msg-9"], "for": ANA, "run": "run-1"}, "appr-yes"
     spent = H.approval_consume(conn, CMO, "appr-yes")
-    assert spent["consumed_at"] and spent["decided_for"] == approved["decided_for"]
+    assert spent["consumed_at"] and spent["decided_for"] == approved["decided_for"], "appr-yes"
 
 
 def test_a_webhook_send_queued_before_the_run_rename_is_delivered_as_a_run_and_signed(api, net):
@@ -92,10 +106,12 @@ def test_a_webhook_send_queued_before_the_run_rename_is_delivered_as_a_run_and_s
     post(api, f"webhooks/{made['id']}/send", {"type": "custom.order", "data": {"order": 42}})
     (row,) = sends(api)
     released = json.loads(row["body"])
-    released["data"] = {"order": 42, "attempt_id": "att-1"}           # the body the released server queued
+    released["data"] = {"order": 42, "attempt_id": "att-1"}  # the body the released server queued
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE webhook_sends SET body=? WHERE id=?",
-                  (json.dumps(released, separators=(",", ":"), ensure_ascii=False), row["id"]))
+        c.execute(
+            "UPDATE webhook_sends SET body=? WHERE id=?",
+            (json.dumps(released, separators=(",", ":"), ensure_ascii=False), row["id"]),
+        )
     assert run(api, net) == 1
     sent = net.seen[0]
     assert json.loads(sent.content)["data"] == {"order": 42, "run_id": "att-1"}
@@ -103,8 +119,11 @@ def test_a_webhook_send_queued_before_the_run_rename_is_delivered_as_a_run_and_s
 
 
 def test_a_rule_condition_saved_under_the_old_owner_and_requester_names_still_matches_after_the_rename(monkeypatch):
-    monkeypatch.setattr(renames, "COLUMNS", renames.COLUMNS + (
-        ("tasks", "owner", "owner_id", "3"), ("tasks", "requester", "requester_id", "3")))
+    monkeypatch.setattr(
+        renames,
+        "COLUMNS",
+        renames.COLUMNS + (("tasks", "owner", "owner_id", "3"), ("tasks", "requester", "requester_id", "3")),
+    )
     row = {"id": "task-1", "status": "open", "owner_id": "bot:cmo", "requester_id": "human:ana", "type_id": "general"}
     ctx = R._Context(None, H.KEEPER, CMO, {}, None, row)
     assert ctx.matches({"owner": ["bot:cmo"]})
@@ -115,7 +134,6 @@ def test_a_rule_condition_saved_under_the_old_owner_and_requester_names_still_ma
 
 def test_a_task_received_automation_still_hears_the_requester_after_the_rename(monkeypatch):
     monkeypatch.setattr(renames, "COLUMNS", renames.COLUMNS + (("tasks", "requester", "requester_id", "3"),))
-    row = {"id": "task-1", "title": "Ship", "body": "b", "status": "open", "requester_id": "human:ana",
-           "step_id": None}
+    row = {"id": "task-1", "title": "Ship", "body": "b", "status": "open", "requester_id": "human:ana", "step_id": None}
     heard = AU._received_task(row, "bot:cmo")
     assert heard["requester"] == "human:ana" and heard["owner"] == "bot:cmo" and heard["title"] == "Ship"

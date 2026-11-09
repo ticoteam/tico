@@ -1,0 +1,3 @@
+# docs/openapi/v2.json is written by python3 -m backend.openapi_v2. A clone that registers the merge driver
+# (CONTRIBUTING.md) merges two edits to it with scripts/json_merge.py; without it git merges the text.
+docs/openapi/v2.json merge=tico-json
