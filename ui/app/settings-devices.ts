@@ -61,9 +61,9 @@ interface MachineUsageWindow {
   resets_at?: string;
 }
 interface MachineUsageState {
-  account?: MachineAccount | null;
-  weekly?: MachineUsageWindow | null;
-  five_hour?: MachineUsageWindow | null;
+  account?: MachineAccount | null | undefined;
+  weekly?: MachineUsageWindow | null | undefined;
+  five_hour?: MachineUsageWindow | null | undefined;
 }
 // The key a login runs on (readiness `key`).
 interface MachineKey {
@@ -78,14 +78,24 @@ interface MachineApp {
   detail?: string;
 }
 interface MachineUpdate {
+  release?: string;
   kind?: string;
   state?: string;
   label?: string;
   target?: string;
   outdated?: boolean;
 }
+// The readiness fields this file reads (settings.ts SettingsMachine.readiness carries them).
+interface DeviceReadiness {
+  runtimes?: Record<string, {account?: MachineAccount | null}>;
+  appdriver?: {apps?: Record<string, MachineApp>} | null;
+  bots?: Record<string, {ready?: boolean}>;
+}
+// One computer: what this file and the pop-up (computer-detail.ts DetailMachine) read from it.
 interface DeviceMachine extends SettingsMachine {
   platform?: string;
+  version?: string;
+  release?: string;
   last_seen_at?: string | null;
   update?: MachineUpdate | null;
   signed_out?: Record<string, string[]>;
@@ -93,17 +103,23 @@ interface DeviceMachine extends SettingsMachine {
   keys?: Record<string, {preview?: string}>;
   shared_keys?: Record<string, {preview?: string}>;
   shared_logins?: {runtime: string; profile?: string; bots?: string[]; count: number}[];
-  readiness?: {
-    runtimes?: Record<string, {account?: MachineAccount | null}>;
-    appdriver?: {apps?: Record<string, MachineApp>} | null;
-    bots?: Record<string, {ready?: boolean}>;
-  } | null;
-  screen?: string;
-  screen_available?: boolean;
   turn_counts?: Record<string, number>;
-  turn_limit?: number;
+  turn_limit?: number | null | undefined;
   bots?: string[];
   restarting?: boolean;
+  bot_connections?: DetailLink[];
+  bot_runtimes?: string[];
+  needed_runtimes?: string[] | null;
+  shared_with?: Record<string, DetailShared>;
+  harness_choices?: Record<string, boolean>;
+  harness_actions?: {harness: string; action: string; state: string}[];
+  turns_at_once?: number | null;
+  capacity?: number | null;
+  inbox_only?: boolean;
+  accepts_member_bots?: boolean;
+  performance?: string;
+  turn_summary?: string;
+  browser_exit?: import('../types/api').BrowserExit | null;
 }
 
 // An external agent (a Hermes profile) has no computer: the cell holds its credential instead.
@@ -393,7 +409,7 @@ function machineUsageHTML(runtime: string, state: MachineUsageState | null | und
 }
 // The sign-in cell: signed in as <account>, signed out, login expired or rejected, checking, or couldn't check (with
 // when the computer last reported).
-function machineSignInHTML(machine: DeviceMachine, online: boolean, name: string, auth: string, value: {account?: MachineAccount | null; detail?: string}) {
+function machineSignInHTML(machine: DeviceMachine, online: boolean, name: string, auth: string | undefined, value: {account?: MachineAccount | null; detail?: string}) {
   const checked = machine.last_seen_at ? ` · last checked ${ago(machine.last_seen_at)}` : '';
   if (auth !== 'ready' && machineKeyCleared(machine, name)) return '<span class="pill fail" title="Its key was cleared from Tico: the company\'s shared key does not sign it back in by itself">No key</span>';
   if (auth !== 'ready' && machineSignedOut(machine, name)) return '<span class="pill fail" title="Signed out from Tico: the company\'s shared key does not sign it back in by itself">Signed out</span>';
@@ -422,7 +438,7 @@ function machineKeyHTML(machine: DeviceMachine, runtime: string, key: MachineKey
   return ` <span class="muted machine-key" data-machine-key="${esc(key.source)}">· ${esc(whose)}${stored?.preview ? ` <code>${esc(stored.preview)}</code>` : ''}</span>`;
 }
 // Replace key / Clear key, or Add key, from the shared sign-in module (ui/model-login.ts).
-const machineKeyActions = (machine: DeviceMachine, online: boolean, runtime: string, key: MachineKey | null, signedIn: boolean) => (window.TicoModelLogin?.keyActionsHTML({
+const machineKeyActions = (machine: DeviceMachine, online: boolean, runtime: string, key: MachineKey | null | undefined, signedIn: boolean) => (window.TicoModelLogin?.keyActionsHTML({
   runnerId: machine.id, runtime, machine: machine.label, key, signedIn, online}) || '')
   + (signedIn && key ? window.TicoModelLogin?.toSubscriptionHTML({runnerId: machine.id, runtime, machine: machine.label, online,
     platform: machine.platform || ''}) || '' : '');
@@ -594,7 +610,7 @@ function renderSettingsMachines() {
   }).join('');
   const toolHead = (runtime: string) => `<th>${esc(machines.map(m => machineToolName(m, runtime)).find(Boolean) || subsToolName(runtime))}</th>`;
   el.onchange = async (event: Event & {target: Element}) => {
-    const pick = event.target.closest('[data-subs-pick]');
+    const pick = event.target.closest<HTMLSelectElement>('[data-subs-pick]');
     if (pick) { await subsPick(pick); return; }
     if (event.target.matches('[data-show-revoked-computers]') && event.target instanceof HTMLInputElement) {
       el.dataset.showRevoked = String(event.target.checked);
@@ -612,7 +628,7 @@ function renderSettingsMachines() {
       } catch (error) { toast(errorMessage(error, ''), true); choice.checked = !choice.checked; choice.disabled = false; }
       return;
     }
-    const exit = event.target.closest('[data-browser-exit], [data-browser-exit-bots] input, [data-browser-exit-cap]');
+    const exit = event.target.closest<HTMLInputElement>('[data-browser-exit], [data-browser-exit-bots] input, [data-browser-exit-cap]');
     if (exit) { await machineBrowserExitSave(exit); return; }
     const perf = event.target.closest<HTMLInputElement>('[data-performance-mode]');
     if (perf) {
@@ -652,7 +668,7 @@ function renderSettingsMachines() {
     if (dialog && event.target.closest('dialog.computer-detail a[href]:not([data-computer-bots])')) dialog.close();   // leaving for a link
     // Add, on the row or in the pop-up, opens its own pop-up (before the row's click opens the computer's).
     const add = event.target.closest<HTMLButtonElement>('[data-add-connection]');
-    if (add) { if (!add.disabled) computerAddOpen(add.dataset.addConnection); return; }
+    if (add) { if (!add.disabled) computerAddOpen(add.dataset.addConnection!); return; }
     if (event.target.closest('[data-subs-cell] select, [data-subs-reconnect]')) {
       const reconnect = event.target.closest<HTMLElement>('[data-subs-reconnect]');
       if (reconnect) subsDialog('reconnect', subsById(reconnect.dataset.subsReconnect));
@@ -660,7 +676,7 @@ function renderSettingsMachines() {
     }
     if (event.target.closest('#machine-add-dialog')) return;
     const row = event.target.closest<HTMLElement>('[data-computer-open], [data-computer-row]');
-    if (row && !event.target.closest('a')) { computerDetailOpen(row.dataset.computerOpen || row.dataset.computerRow); return; }
+    if (row && !event.target.closest('a')) { computerDetailOpen((row.dataset.computerOpen || row.dataset.computerRow)!); return; }
     const perfLink = event.target.closest<HTMLElement>('[data-computer-performance]');
     if (perfLink) { dialog?.close(); location.hash = performanceHref(String(perfLink.dataset.computerPerformance)); return; }
     const shown = event.target.closest('[data-computer-bots]');

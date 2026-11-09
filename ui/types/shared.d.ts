@@ -199,6 +199,8 @@ interface MachineHarness {
 /** An external agent's sync state (`agent`, a Grok Bot or Dots, backend/agents.py). */
 interface BotAgent {
   label?: string;
+  /** The harness the agent runs (settings-devices.ts agentKind). */
+  harness?: string;
   synced?: boolean;
   last_seen_at?: string | null;
   credential?: unknown;

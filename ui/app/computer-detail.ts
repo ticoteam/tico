@@ -8,16 +8,17 @@
 
 // What a computer reports about itself (machines[] of GET /v2/operations) and what this pop-up reads from it.
 type DetailUsage = {used_percent?: number; resets_at?: string};
-type DetailKey = {name?: string; source?: string};
+type DetailKey = MachineKey;
 type DetailShared = {name?: string; every?: boolean; computers?: {label?: string}[]};
-type DetailRuntime = {installed?: boolean; version?: string; authenticated?: string; account?: string; weekly?: DetailUsage | null; five_hour?: DetailUsage | null; profiles?: Record<string, Partial<DetailRuntime>>; key?: DetailKey | null; data_problem?: string; rejected_at?: string; rejected_reason?: string; credential_source?: string; turn_user?: string};
+type DetailRuntime = {installed?: boolean; version?: string; authenticated?: string; account?: MachineAccount | null; weekly?: DetailUsage | null; five_hour?: DetailUsage | null; profiles?: Record<string, Partial<DetailRuntime>>; key?: DetailKey | null; data_problem?: string; rejected_at?: string; rejected_reason?: string; credential_source?: string; turn_user?: string};
 type DetailHarness = {runtime: string; name?: string; installed?: boolean; version?: string; managed?: boolean; state?: string; pinned?: boolean; update_available?: boolean; latest?: string; wanted?: boolean; detail?: string};
 type DetailLink = {bot: string; runtime: string; warning?: string; problem?: string; signed_in?: boolean};
 // A computer's readiness report as the pop-up reads it (settings.ts SettingsMachine.readiness carries it too).
 type DetailReadiness = {runtimes?: Record<string, DetailRuntime>; harnesses?: Record<string, DetailHarness>; computer_profile?: string | null; engine?: {name?: string; note?: string; build?: string} | null};
-type DetailMachine = SettingsMachine & {label?: string; platform?: string; version?: string; release?: string; last_seen_at?: string; update?: {release?: string} | null; readiness?: DetailReadiness; bots?: string[]; bot_connections?: DetailLink[]; bot_runtimes?: string[]; needed_runtimes?: string[] | null; shared_with?: Record<string, DetailShared>; harness_choices?: Record<string, boolean>; harness_actions?: {harness: string; action: string; state: string}[]; turns_at_once?: number | null; turn_limit?: number | null; capacity?: number | null; inbox_only?: boolean; accepts_member_bots?: boolean; performance?: string; turn_summary?: string; browser_exit?: import('../types/api').BrowserExit | null};
+// One computer, as Settings > Computers reads it (settings-devices.ts DeviceMachine).
+type DetailMachine = DeviceMachine;
 // One AI tool's line in the pop-up: the reading it shows, and the flags the chip and its red dot read.
-type DetailReading = {signed_in: boolean | null; account: string | undefined; weekly: DetailUsage | null | undefined; five_hour: DetailUsage | null | undefined};
+type DetailReading = {signed_in: boolean | null; account: MachineAccount | null | undefined; weekly: DetailUsage | null | undefined; five_hour: DetailUsage | null | undefined};
 type DetailConnection = {key: string; runtime: string; name: string; own: boolean; auth?: string | undefined; value?: DetailRuntime | undefined; state: DetailReading; bots: string[]; shared: DetailShared | null; blocked: string; warning: string; keyCleared?: boolean; attention?: boolean; tool?: string};
 type DetailAddStep = {at?: string | undefined; runtime?: string | undefined};
 type DetailDialog = HTMLDialogElement & {restoreOpener?: () => void};
@@ -161,6 +162,7 @@ function machineConnectionHTML(machine: DetailMachine, conn: DetailConnection, o
   if (conn.blocked) signIn = `<span class="err machine-data-problem" data-data-problem="${esc(conn.runtime)}">${esc(conn.blocked)}</span>`;
   // A shared key the tool has not reported signing in with yet: nothing is claimed until it has.
   else if (conn.shared && conn.auth !== 'ready' && conn.auth !== 'rejected') signIn = `<span class="muted" data-shared-waiting>Not checked on ${esc(machine.label)} yet; it is used from the computer's next key check</span>`;
+  // @ts-expect-error conn.value is undefined on a line kept only for its bots; machineSignInHTML then reads value.detail and throws, as before.
   else signIn = machineSignInHTML(machine, online, conn.runtime, conn.auth, conn.value)
     + (conn.auth === 'ready' ? machineKeyHTML(machine, conn.runtime, conn.value?.key) : '');
   const offline = online ? '' : ' disabled title="Computer is offline"';
