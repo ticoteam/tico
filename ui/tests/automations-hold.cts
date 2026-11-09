@@ -1,11 +1,11 @@
-// The run guard's hold (backend/automations.py `_guard`) on the fake hub in support/automations-fake.cjs: a held
+// The run guard's hold (backend/automations.py `_guard`) on the fake hub in support/automations-fake.cts: a held
 // automation shows "On hold" on its row, and inside "On hold · N held" with Release and Drop for whoever may change it;
 // its held runs read "Held" in Runs. Release sends {action: release} and the line goes; a viewer without rights sees the
 // line but no buttons.
-import type * as AutomationsFakeSupport from './support/automations-fake.cjs';
+import type * as AutomationsFakeSupport from './support/automations-fake.cts';
 const {chromium} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
-const {openAutomations, DESKTOP, PHONE, sideways, shot} = require('./support/automations-fake.cjs') as typeof AutomationsFakeSupport;
+const {openAutomations, DESKTOP, PHONE, sideways, shot} = require('./support/automations-fake.cts') as AutomationsFakeSupport.Api;
 
 const HOLD = {rule: 'sustained', since: '2026-10-29T09:15:00Z', held: 3, dropped: 0, task: 'task_hold'};
 

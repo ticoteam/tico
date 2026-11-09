@@ -8,14 +8,14 @@
 import type * as PageSupport from './support/page.cjs';
 import type * as Routes from './support/routes.cjs';
 import type * as GoogleFake from './support/google-fake.cjs';
-import type * as MailboxesFake from './support/mailboxes-fake.cjs';
+import type * as MailboxesFake from './support/mailboxes-fake.cts';
 const {chromium}: typeof import('playwright') = require('playwright');
 const assert: typeof import('node:assert/strict') = require('node:assert/strict');
 const fs: typeof import('node:fs') = require('node:fs');
 const {html, uiFile} = require('./support/page.cjs') as typeof PageSupport;
 const {unrouted} = require('./support/routes.cjs') as typeof Routes;
 const {googleFake} = require('./support/google-fake.cjs') as typeof GoogleFake;
-const {mailboxesFake, shot} = require('./support/mailboxes-fake.cjs') as typeof MailboxesFake;
+const {mailboxesFake, shot} = require('./support/mailboxes-fake.cts') as MailboxesFake.Api;
 interface Body {[k: string]: unknown; action?: string; audience?: string; group_id?: string | null; name?: string}
 interface Call {p: string; query: string; method: string; body: Body; operation: string | undefined}
 interface PhoneRequest {request_id: string; name: string | undefined; state: string; price_micros: number | null; quoted_until: number | null}

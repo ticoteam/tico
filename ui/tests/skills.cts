@@ -5,13 +5,13 @@
 // an admin's Suggestions (Remove, Ask to submit as her own message to the bot, Dismiss) and Not in directory, which a
 // member never reads; a member sees no Approve; the Skills nav row; 390px with no sideways scroll.
 // TICO_UI_SHOTS=<dir> saves a dark screenshot of each page at 1440 and 390.
-import type * as MailboxesFake from './support/mailboxes-fake.cjs';
+import type * as MailboxesFake from './support/mailboxes-fake.cts';
 import type * as GoogleFake from './support/google-fake.cjs';
 const {chromium}: typeof import('playwright') = require('playwright');
 const assert: typeof import('node:assert/strict') = require('node:assert/strict');
 const fs: typeof import('node:fs') = require('node:fs');
 const path: typeof import('node:path') = require('node:path');
-const {mailboxesFake, open} = require('./support/mailboxes-fake.cjs') as typeof MailboxesFake;
+const {mailboxesFake, open} = require('./support/mailboxes-fake.cts') as MailboxesFake.Api;
 const {googleFake} = require('./support/google-fake.cjs') as typeof GoogleFake;
 
 const at = (hours: number) => new Date(Date.now() - hours * 3600000).toISOString();

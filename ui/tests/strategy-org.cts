@@ -1,14 +1,14 @@
-// Strategy › Org (ui/app/redesign-org.ts) against the fake hub in support/strategy-fake.cjs (the
+// Strategy › Org (ui/app/redesign-org.ts) against the fake hub in support/strategy-fake.cts (the
 // Acme example): the chart top down with the owner on top, groups as outlines that fold (and stay folded), helpers off
 // it, the built-ins in a folded Built-in group, pinch, the zoom toolbar above the frame and a first look that fits the
 // width (or centres the owner) with nothing clipped at either end; a teammate's sheet with its group and Move to…; the
 // owner, and a lead inside the groups it leads, move at once (PATCH /api/v2/groups), anyone else sees the group and no
 // Move to…; no proposals and no approvals. A phone first, then a computer.
 import type {Page} from 'playwright';
-import type * as StrategyFakeSupport from './support/strategy-fake.cjs';
+import type * as StrategyFakeSupport from './support/strategy-fake.cts';
 const {chromium} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
-const {openStrategy, DESKTOP, sideways, shot} = require('./support/strategy-fake.cjs') as typeof StrategyFakeSupport;
+const {openStrategy, DESKTOP, sideways, shot} = require('./support/strategy-fake.cts') as StrategyFakeSupport.Api;
 
 // Page globals from ui/app/redesign-org.ts (the page defines them; this spec reads and pokes them).
 interface RdoGroup {

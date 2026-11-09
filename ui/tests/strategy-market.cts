@@ -1,4 +1,4 @@
-// Strategy › Market, one page (ui/app/redesign-market.ts) against the fake hub in support/strategy-fake.cjs (the Acme
+// Strategy › Market, one page (ui/app/redesign-market.ts) against the fake hub in support/strategy-fake.cts (the Acme
 // example): the header and its three tiles, then the five questions in order, each with the briefing's answer line
 // when it has one and none when it does not. What changed? lists the items by kind with the bets they touch, and Read
 // opens the whole briefing; Who are we up against? marks our row and opens a player's note; What are buyers saying?
@@ -6,10 +6,10 @@
 // An old view's address scrolls to its question. No briefing and no listening leave those questions out; an empty
 // market keeps its empty state. A phone first, then a computer.
 import type {Page} from 'playwright';
-import type * as StrategyFakeSupport from './support/strategy-fake.cjs';
+import type * as StrategyFakeSupport from './support/strategy-fake.cts';
 const {chromium} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
-const {openStrategy, DESKTOP, sideways, shot} = require('./support/strategy-fake.cjs') as typeof StrategyFakeSupport;
+const {openStrategy, DESKTOP, sideways, shot} = require('./support/strategy-fake.cts') as StrategyFakeSupport.Api;
 
 const texts = (page: Page, sel: string) => page.locator(sel).allInnerTexts().then(a => a.map(t => t.trim()));
 const QUESTIONS = ['What changed?', 'Where is the money going?', 'Who are we up against?', 'How does it reach buyers?', 'What are buyers saying?'];

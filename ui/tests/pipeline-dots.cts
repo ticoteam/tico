@@ -1,10 +1,10 @@
 // Run with Playwright available: NODE_PATH=/path/to/node_modules node ui/tests/pipeline-dots.cjs
 // The requirement dots on a pipeline's cards (their names on tap or hover), a ticket's requirements with Mark met (its ⋯
 // asks for a why), and the board's ▶ count. A ticket with no requirements gets no dots. Desktop, dark and light.
-import type * as PipelineFixtureSupport from './support/pipeline-fixture.cjs';
+import type * as PipelineFixtureSupport from './support/pipeline-fixture.cts';
 const {chromium} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
-const {install} = require('./support/pipeline-fixture.cjs') as typeof PipelineFixtureSupport;
+const {install} = require('./support/pipeline-fixture.cts') as PipelineFixtureSupport.Api;
 const {t} = (() => { try { return require('./support/load.cjs') as {t: (ms: number) => number}; } catch { return {t: (ms: number) => ms}; } })();
 
 (async () => {

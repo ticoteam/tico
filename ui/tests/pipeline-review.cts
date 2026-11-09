@@ -2,11 +2,11 @@
 // Review mode: ▶ opens the queue; Approve moves on with a 10-second Undo; ⌘/Ctrl+⏎ approves only while the note has
 // focus; send-back needs a note; a refused approval (the work changed) reloads the queue; the phone layout stacks and
 // does not scroll sideways. Desktop 1440 and phone 390, dark and light.
-import type * as PipelineFixtureSupport from './support/pipeline-fixture.cjs';
+import type * as PipelineFixtureSupport from './support/pipeline-fixture.cts';
 import type {Browser} from 'playwright';
 const {chromium} = require('playwright') as typeof import('playwright');
 const assert: typeof import('node:assert/strict') = require('node:assert/strict');
-const {install} = require('./support/pipeline-fixture.cjs') as typeof PipelineFixtureSupport;
+const {install} = require('./support/pipeline-fixture.cts') as PipelineFixtureSupport.Api;
 const {t} = (() => { try { return require('./support/load.cjs') as {t: (ms: number) => number}; } catch { return {t: (ms: number) => ms}; } })();
 
 // What the fake server records for a post: the item's path, and the body the page sent.

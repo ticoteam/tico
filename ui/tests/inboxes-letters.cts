@@ -14,7 +14,7 @@
 import type * as PageSupport from './support/page.cjs';
 import type * as Routes from './support/routes.cjs';
 import type * as GoogleFake from './support/google-fake.cjs';
-import type * as MailboxesFake from './support/mailboxes-fake.cjs';
+import type * as MailboxesFake from './support/mailboxes-fake.cts';
 const {chromium}: typeof import('playwright') = require('playwright');
 const assert: typeof import('node:assert/strict') = require('node:assert/strict');
 const fs: typeof import('node:fs') = require('node:fs');
@@ -22,7 +22,7 @@ const path: typeof import('node:path') = require('node:path');
 const {html, uiFile} = require('./support/page.cjs') as typeof PageSupport;
 const {unrouted} = require('./support/routes.cjs') as typeof Routes;
 const {googleFake} = require('./support/google-fake.cjs') as typeof GoogleFake;
-const {mailboxesFake} = require('./support/mailboxes-fake.cjs') as typeof MailboxesFake;
+const {mailboxesFake} = require('./support/mailboxes-fake.cts') as MailboxesFake.Api;
 const shots = process.env.TICO_SHOTS || '';
 const AGO = (m: number) => new Date(Date.now() - m * 60000).toISOString();
 type Json = {[key: string]: unknown};

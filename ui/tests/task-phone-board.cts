@@ -4,10 +4,10 @@
 // the swipe hint under the last card (none on an empty stage), the activity bar's manager name read from Hub and its
 // "ask:" line, and General's chips in its Hub step order.
 import type {Browser, Page} from 'playwright';
-import type * as PipelineFixtureSupport from './support/pipeline-fixture.cjs';
+import type * as PipelineFixtureSupport from './support/pipeline-fixture.cts';
 const {chromium} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
-const {install, type: devType} = require('./support/pipeline-fixture.cjs') as typeof PipelineFixtureSupport;
+const {install, type: devType} = require('./support/pipeline-fixture.cts') as PipelineFixtureSupport.Api;
 const {t} = (() => { try { return require('./support/load.cjs') as {t: (ms: number) => number}; } catch { return {t: (ms: number) => ms}; } })();
 
 // Page globals from the Tasks app (the page defines them; this spec reads and pokes them).
