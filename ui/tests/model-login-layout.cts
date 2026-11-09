@@ -21,16 +21,14 @@ interface LoginWrite {
   url: string;
   body: {code?: string};
 }
-declare global {
-  interface Window {
-    S: {config: {hosted: boolean}};
-    writes: LoginWrite[];
-    row: LoginRow;
-    // Shared with other specs' Window augmentations, so the signatures must match theirs exactly.
-    post: (url: string, body?: unknown) => Promise<unknown>;
-    get: (url: string) => Promise<unknown>;
-  }
-}
+declare const window: Window & typeof globalThis & {
+  S: {config: {hosted: boolean}};
+  writes: LoginWrite[];
+  row: LoginRow;
+  // Shared with other specs' Window augmentations, so the signatures must match theirs exactly.
+  post: (url: string, body?: unknown) => Promise<unknown>;
+  get: (url: string) => Promise<unknown>;
+};
 declare let row: LoginRow;
 declare const writes: LoginWrite[];
 declare const TicoModelLogin: {

@@ -260,6 +260,23 @@ def _self_flagged(c: sqlite3.Connection) -> None:
     finance_directory.link_self(c)
 
 
+def touches_self(c: sqlite3.Connection, *, link_id: str = "", entity_ids: Sequence[str] = ()) -> bool:
+    """Whether a link (by id) or a pair of ends has our company at one end: changing where we operate is an admin's."""
+    if link_id:
+        row = _one(c, "SELECT from_entity_id, to_entity_id FROM entity_links WHERE id = ?", (link_id,))
+        entity_ids = [row["from_entity_id"], row["to_entity_id"]] if row else []
+    ids = [i for i in entity_ids if i]
+    if not ids:
+        return False
+    marks = ", ".join("?" * len(ids))
+    return _one(c, f"SELECT 1 AS found FROM entities WHERE self = 1 AND id IN ({marks})", ids) is not None
+
+
+def link_key_of(c: sqlite3.Connection, link_id: str) -> str | None:
+    row = _one(c, "SELECT link_key FROM entity_links WHERE id = ?", (link_id,))
+    return row["link_key"] if row else None
+
+
 def _set_kind(c: sqlite3.Connection, entity_id: str, kind: str, source_type: str) -> None:
     """An organization's kind, when it has none. A kind already set is left alone."""
     c.execute(
@@ -1841,7 +1858,7 @@ def self_summary(c: sqlite3.Connection, who: str) -> dict[str, Any] | None:
     cl, cparams = V.clause(reader, "o")
     places = _rows(
         c,
-        "SELECT o.id, o.name FROM entity_links l JOIN entities o "
+        "SELECT o.id, o.name, l.id AS link_id FROM entity_links l JOIN entities o "
         "ON o.id = CASE WHEN l.from_entity_id = ? THEN l.to_entity_id ELSE l.from_entity_id END "
         "WHERE (l.from_entity_id = ? OR l.to_entity_id = ?) AND l.link_key = 'operates_in' "
         f"AND (l.valid_until_on IS NULL OR l.valid_until_on > ?) AND o.status <> 'merged' AND {cl} "

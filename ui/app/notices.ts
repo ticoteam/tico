@@ -2,13 +2,27 @@
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
 'use strict';
 
+/** The desktop app's download offer for this OS (GET /api/download/<os>). */
+interface AppDownload {
+  available?: boolean;
+  version?: string;
+  url?: string;
+}
+
+/** The update the server runs (GET /v2/system/update). */
+interface UpdateStatus {
+  state?: string;
+  from?: string;
+  message?: string;
+}
+
 // A tab left open through an update keeps running the old UI. The config poll already runs, so what this page
 // loaded with is compared to the server's on every answer: its release, and the build of its script and
 // stylesheet (the `?v=` of their tags, which the config carries as `ui_build`; empty when the files are served
 // unbundled). The bar offers the reload and never reloads by itself, since the person may be typing.
 let LOADED_VERSION = '';
 const PAGE_BUILD = (() => {
-  const v = sel => (document.querySelector(sel)?.getAttribute(sel.startsWith('script') ? 'src' : 'href') || '').split('?v=')[1] || '';
+  const v = (sel: string) => (document.querySelector(sel)?.getAttribute(sel.startsWith('script') ? 'src' : 'href') || '').split('?v=')[1] || '';
   const js = v('script[src*="app.bundle.js"]'), css = v('link[href*="app.bundle.css"]');
   return js && css ? js + '.' + css : '';
 })();
@@ -21,13 +35,13 @@ function noticeUpdatedServer() {
   const build = String(S.config.ui_build || '');
   bar.hidden = v === LOADED_VERSION && !(build && PAGE_BUILD && build !== PAGE_BUILD);
 }
-document.addEventListener('click', ev => { if (ev.target.closest('#stale-reload')) location.reload(); });
+document.addEventListener('click', ev => { if (eventElement(ev)?.closest('#stale-reload')) location.reload(); });
 // The desktop app itself. Its own updater fails silently (a feed behind a sign-in, no build published, a
 // shell too old to report anything), so the page compares the app's version (window.ticoNativeVersion,
 // app/src/main.rs bridge_script) with the server's published build and says so. An app without a version
 // predates that and is out of date by definition. Checked at most hourly; Later hides it for this page.
-const verParts = v => String(v).split(/[-+]/)[0].split('.').map(n => parseInt(n, 10) || 0);
-function verLess(a, b) {
+const verParts = (v: unknown): number[] => (String(v).split(/[-+]/)[0] ?? '').split('.').map(n => parseInt(n, 10) || 0);
+function verLess(a: unknown, b: unknown): boolean {
   const x = verParts(a), y = verParts(b);
   for (let i = 0; i < 3; i++) if ((x[i] || 0) !== (y[i] || 0)) return (x[i] || 0) < (y[i] || 0);
   return false;
@@ -37,14 +51,14 @@ async function renderAppUpdate() {
   const bar = $('#app-update'), os = visitorOS();
   if (!bar || !os || appUpdateOff || appUpdateBusy || !document.body.classList.contains('native') || Date.now() - appUpdateAt < 3600e3) return;
   appUpdateAt = Date.now();
-  let d = null;
+  let d: AppDownload | null = null;
   try { const r = await fetch('/api/download/' + os, {credentials: 'same-origin'}); d = r.ok ? await r.json() : null; } catch {}
   if (!d?.available || !d.version || appUpdateOff) return;
   const mine = window.ticoNativeVersion;
   if (mine && !verLess(mine, d.version)) { bar.hidden = true; return; }
   // A link to this same host would open inside the app; only another host (runner, GitHub) opens the browser.
   appUpdateLink = '';
-  try { const u = new URL(d.url, location.href); if (u.protocol === 'https:' && u.host !== location.host) appUpdateLink = u.href; } catch {}
+  try { const u = new URL(String(d.url), location.href); if (u.protocol === 'https:' && u.host !== location.host) appUpdateLink = u.href; } catch {}
   const can = !!mine && (window.ticoNativeFeatures || []).includes('checkForUpdates');
   $('#app-update-text').textContent = can ? `App ${nvVersion(d.version)} is ready ·`
     : appUpdateLink ? 'This app is out of date ·' : `This app is out of date. Get ${nvVersion(d.version)} from ${location.host} in a browser.`;
@@ -55,8 +69,8 @@ async function renderAppUpdate() {
   bar.hidden = false;
 }
 document.addEventListener('click', ev => {
-  if (ev.target.closest('#app-update-later')) { appUpdateOff = true; $('#app-update').hidden = true; return; }
-  if (!ev.target.closest('#app-update-go') || appUpdateBusy) return;
+  if (eventElement(ev)?.closest('#app-update-later')) { appUpdateOff = true; $('#app-update').hidden = true; return; }
+  if (!eventElement(ev)?.closest('#app-update-go') || appUpdateBusy) return;
   appUpdateBusy = true;
   nativeHandler('checkForUpdates')?.postMessage();
   $('#app-update-go').hidden = true;
@@ -66,7 +80,7 @@ document.addEventListener('click', ev => {
   appUpdateTimer = setTimeout(() => appUpdateFailed(''), 120e3);
 });
 let appUpdateTimer = 0;
-function appUpdateFailed(detail) {
+function appUpdateFailed(detail: string | undefined): void {
   clearTimeout(appUpdateTimer);
   appUpdateBusy = false;
   const why = detail ? ` (${detail})` : '';
@@ -79,7 +93,7 @@ function appUpdateFailed(detail) {
   $('#app-update').hidden = false;
 }
 // Called by the shell after every check (app/src/main.rs report_update), whether the page or the timer asked.
-window.ticoAppUpdate = ({state, detail} = {}) => {
+window.ticoAppUpdate = ({state, detail}: {state?: string; detail?: string} = {}) => {
   if (state === 'installing') {
     clearTimeout(appUpdateTimer);
     appUpdateTimer = setTimeout(() => appUpdateFailed(''), 300e3);
@@ -106,7 +120,7 @@ function renderUsageNotice() {
   if (!bar.hidden && !usageNoticeShown) { usageNoticeShown = true; post('/v2/system/usage-count/notice', {state: 'shown'}).catch(() => {}); }
 }
 document.addEventListener('click', ev => {
-  if (!ev.target.closest('#usage-notice-x')) return;
+  if (!eventElement(ev)?.closest('#usage-notice-x')) return;
   S.config.usage_count_notice = false; renderUsageNotice();
   post('/v2/system/usage-count/notice', {state: 'dismissed'}).catch(() => {});
 });
@@ -122,14 +136,14 @@ function renderVersionMessage() {
   const bar = $('#version-message');
   if (!bar) return;
   if (vmDrawn) { bar.hidden = !bar.querySelector('.vm-item'); return; }
-  const update = S.config.update || {};
-  const all = (Array.isArray(update.messages) ? update.messages : [update.message]).filter(m => m && m.id != null && m.id !== '' && m.body);
-  let seen = [];
+  const update: ConfigUpdate = S.config.update || {};
+  const all = (Array.isArray(update.messages) ? update.messages : [update.message]).filter((m): m is UpdateMessage => !!(m && m.id != null && m.id !== '' && m.body));
+  let seen: string[] = [];
   try { seen = JSON.parse(localStorage.getItem(vmSeenKey()) || '[]').map(String); } catch {}
   const shown = S.me ? all.filter(m => !seen.includes(String(m.id))).slice(0, VM_MAX) : [];
   if (!shown.length) { bar.hidden = true; return; }
   bar.innerHTML = shown.map(m => {
-    const kind = ['security', 'billing', 'info'].includes(m.kind) ? m.kind : '';
+    const kind = ['security', 'billing', 'info'].includes(m.kind ?? '') ? m.kind : '';
     const link = /^https:\/\//.test(m.url || '') ? `<a href="${esc(m.url)}" target="_blank" rel="noopener noreferrer" data-vm-link>Read more</a>` : '';
     return `<div class="vm-item" data-kind="${kind}" data-vm-id="${esc(String(m.id))}"><span class="vm-text">${esc(m.body)}</span>${link}
       <button class="ghost" type="button" data-vm-x>Dismiss</button></div>`;
@@ -139,9 +153,9 @@ function renderVersionMessage() {
   try { localStorage.setItem(vmSeenKey(), JSON.stringify([...seen, ...shown.map(m => String(m.id))].slice(-40))); } catch {}
 }
 document.addEventListener('click', ev => {
-  const x = ev.target.closest('#version-message [data-vm-x]');
+  const x = eventElement(ev)?.closest('#version-message [data-vm-x]');
   if (!x) return;
-  x.closest('.vm-item').remove();
+  x.closest('.vm-item')?.remove();
   $('#version-message').hidden = !$('#version-message .vm-item');
 });
 
@@ -160,13 +174,13 @@ function renderFeedbackAsk() {
       <button class="ghost" type="button" data-skip>Skip</button><button class="primary" type="submit">Send</button></div>`;
   const done = () => { S.config.feedback_question = null; box.hidden = true; };
   box.querySelector('[data-skip]').onclick = () => { done(); post('/v2/support/feedback', {moment: ask.moment}).catch(() => {}); };
-  box.onsubmit = async ev => {
+  box.onsubmit = async (ev: Event) => {
     ev.preventDefault();
     const answer = box.elements.answer.value.trim(), buttons = [...box.querySelectorAll('button')];
     if (!answer) { box.elements.answer.focus(); return; }
     buttons.forEach(b => { b.disabled = true; });
     try { await post('/v2/support/feedback', {moment: ask.moment, answer}); done(); toast('Thanks. Sent to Tico support.'); }
-    catch (error) { toast(error.message || 'Not sent. Try again.', true); buttons.forEach(b => { b.disabled = false; }); }
+    catch (error) { toast(errorMessage(error, '') || 'Not sent. Try again.', true); buttons.forEach(b => { b.disabled = false; }); }
   };
 }
 // "Finish setup" tops the nav while the owner has not finished setup, and disappears the
@@ -195,9 +209,9 @@ function renderOnboardingNav() {
 // backend/releases.py). Dismissal is per person and version.
 const NV_KEY = 'tico.new-version.dismissed';
 const nvDismissedKey = () => NV_KEY + ':' + (S.me?.id || S.me?.email || '');
-const nvDismissed = v => { try { return localStorage.getItem(nvDismissedKey()) === v; } catch { return false; } };
+const nvDismissed = (v: string) => { try { return localStorage.getItem(nvDismissedKey()) === v; } catch { return false; } };
 let nvBusy = false;
-function nvVersion(v) { return /^\d/.test(v) ? 'v' + v : v; }
+function nvVersion(v: string | undefined): string | undefined { return /^\d/.test(v ?? '') ? 'v' + v : v; }
 function nvUpdateShown() {
   const u = S.config.update;
   // `scheduled`: the release Tico support set for this hosted server (backend/hosted_updates.py), shown until it is on it.
@@ -210,12 +224,12 @@ function renderNewVersion() {
   wrap.hidden = !show;
   window.renderChangelogNotice?.();   // the "Updated to" row keeps out of the way while this one shows
   if (!show) { setNewVersionPop(false); return; }
-  $('#new-version-label').textContent = nvBusy ? 'Updating…' : 'Update to ' + nvVersion(u.scheduled || u.latest);
+  $('#new-version-label').textContent = nvBusy ? 'Updating…' : 'Update to ' + nvVersion(u?.scheduled || u?.latest);
   if (!nvBusy) nvRenderPop();
 }
 // The row follows the start and the end of an update at once: the config poll skips while one runs.
-function nvSetBusy(busy) { nvBusy = busy; renderNewVersion(); }
-function setNewVersionPop(open) {
+function nvSetBusy(busy: boolean): void { nvBusy = busy; renderNewVersion(); }
+function setNewVersionPop(open: boolean): void {
   const pop = $('#new-version-pop'), btn = $('#new-version');
   if (!pop || pop.hidden !== open) return;       // every click elsewhere lands here: no `hidden` write unless it changes
   pop.hidden = !open;
@@ -223,6 +237,7 @@ function setNewVersionPop(open) {
 }
 function nvRenderPop() {
   const u = S.config.update, pop = $('#new-version-pop');
+  if (!u) return;
   const owner = S.me?.role === 'owner';
   const safeUrl = /^https:\/\//.test(u.url || '') ? u.url : '';
   pop.innerHTML = `${u.available ? `<p><strong>Update available.</strong> ${esc(appName())} ${esc(nvVersion(u.latest))} is out. You are on ${esc(nvVersion(u.current))}.</p>` : ''}${u.scheduled ? `
@@ -234,33 +249,34 @@ function nvRenderPop() {
 }
 // Progress shows in the sidebar's pop-up and under Health > Version's Update now, whichever started it.
 let NV_OUT_HTML = '';
-function nvOut(html) {
+function nvOut(html: string): void {
   NV_OUT_HTML = html;
   const el = $('#nv-out'); if (el) el.innerHTML = html;
-  document.querySelectorAll('[data-hl-update-out]').forEach(out => { out.innerHTML = html; });
+  document.querySelectorAll<HTMLElement>('[data-hl-update-out]').forEach(out => { out.innerHTML = html; });
 }
 async function nvStart() {
-  const u = S.config.update, from = u.current;
+  const u = S.config.update, from = u?.current;
+  if (!u) return;
   nvSetBusy(true);
   nvOut('<p class="nv-status" role="status">Updating…</p>');
   try {
     await post('/v2/system/update', {version: u.latest});
   } catch (e) {
     nvSetBusy(false);
-    const command = e.body?.error?.command;
-    if (e.status === 409 && command) {
+    const command = errorBody(e).command;
+    if (errorStatus(e) === 409 && command) {
       nvOut(`<p class="nv-status">Update from the server:</p><div class="nv-cmd"><code>${esc(command)}</code><button class="ghost" data-nv-copy type="button" data-command="${esc(command)}">Copy</button></div>`);
-    } else nvOut(`<p class="nv-status err">${esc(e.message)}</p>`);
+    } else nvOut(`<p class="nv-status err">${esc(errorMessage(e, ''))}</p>`);
     return;
   }
   // The server restarts under us; a failed poll is part of the update, not an error.
   const deadline = Date.now() + 10 * 60000;
   while (Date.now() < deadline) {
     await new Promise(r => setTimeout(r, 2000));
-    let st = null;
-    try { st = await get('/v2/system/update'); } catch { nvOut('<p class="nv-status" role="status">Updating…</p>'); continue; }
+    let st: UpdateStatus | null = null;
+    try { st = await get<UpdateStatus>('/v2/system/update'); } catch { nvOut('<p class="nv-status" role="status">Updating…</p>'); continue; }
     if (st.state === 'healthy') {
-      let cfg = null; try { cfg = await get('/v2/config'); } catch {}
+      let cfg: AppConfig | null = null; try { cfg = await get<AppConfig>('/v2/config'); } catch {}
       if (cfg && cfg.version && cfg.version !== from) { nvOut('<p class="nv-status" role="status">Updated, reloading</p>'); setTimeout(() => location.reload(), 600); return; }
       continue;
     }
@@ -272,18 +288,18 @@ async function nvStart() {
   nvOut('<p class="nv-status err">The update is taking longer than expected. Check the server.</p>');
 }
 document.addEventListener('click', ev => {
-  const t = ev.target;
-  if (t.closest('#new-version')) { setNewVersionPop($('#new-version-pop').hidden); return; }
-  if (t.closest('#nv-whatsnew')) { setNewVersionPop(false); return; }   // the link goes to What's new; the pop-up is done
-  if (t.closest('#nv-update')) { if (!nvBusy) void nvStart(); return; }
-  const copy = t.closest('[data-nv-copy]');
-  if (copy) { navigator.clipboard?.writeText(copy.dataset.command).then(() => { copy.textContent = 'Copied'; }, () => {}); return; }
-  if (t.closest('#nv-dismiss')) {
-    try { localStorage.setItem(nvDismissedKey(), S.config.update.latest); } catch {}
+  const t = eventElement(ev);
+  if (t?.closest('#new-version')) { setNewVersionPop($('#new-version-pop').hidden); return; }
+  if (t?.closest('#nv-whatsnew')) { setNewVersionPop(false); return; }   // the link goes to What's new; the pop-up is done
+  if (t?.closest('#nv-update')) { if (!nvBusy) void nvStart(); return; }
+  const copy = t?.closest<HTMLElement>('[data-nv-copy]');
+  if (copy) { navigator.clipboard?.writeText(copy.dataset.command ?? '').then(() => { copy.textContent = 'Copied'; }, () => {}); return; }
+  if (t?.closest('#nv-dismiss')) {
+    try { localStorage.setItem(nvDismissedKey(), String(S.config.update?.latest)); } catch {}
     renderNewVersion();
     return;
   }
-  if (!t.closest('#new-version-wrap')) setNewVersionPop(false);
+  if (!t?.closest('#new-version-wrap')) setNewVersionPop(false);
 });
 const refreshConfig = async () => {
   if (document.hidden || nvBusy || !authenticatedConfigPerson(S.me) || SESSION.out) return;
@@ -309,8 +325,8 @@ const assistantShownName = () => assistantName();
 // The Strategy Bot's old name never shows (state.js `strategyBotName`), wherever the roster is read.
 // Each row carries its bot's `id` (the key every route, API call and comparison uses) and its `slug` (the label people
 // type and read). A row without an id comes from before bots had one, when its name was both.
-const namedRoster = rows => rows.map(row => {
-  const e = row.id ? row : {...row, id: row.name, slug: row.slug || row.name};
+const namedRoster = (rows: Employee[]): Employee[] => rows.map(row => {
+  const e: Employee = row.id ? row : {...row, id: row.name ?? '', slug: row.slug || (row.name ?? '')};
   return e.id === assistantBot() ? {...e, display_name: assistantShownName()}
     : e.id === 'goal-manager' && strategyDefaultish(String(e.display_name || '').trim()) ? {...e, display_name: strategyDefaultName()} : e;
 });

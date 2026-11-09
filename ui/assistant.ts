@@ -65,7 +65,7 @@ interface AssistantCardAnswer {
 interface Window {
   assistantChat?: {
     cards(root: ParentNode | null, deps: AssistantCardsDeps): Promise<void>;
-    off(host: HTMLElement | null, info: import('./types/api').Assistant, deps: AssistantOffDeps): void;
+    off(host: HTMLElement | null, info: {can_turn_on?: boolean | undefined}, deps: AssistantOffDeps): void;
     settingsStrip(host: HTMLElement | null, deps: AssistantSettingsDeps): Promise<void>;
   };
 }

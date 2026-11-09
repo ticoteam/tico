@@ -3,7 +3,10 @@
    directorySettingsShow when it opens.
    Reads: GET /api/v2/entities/types, /types/<key>, /counts and /api/v2/mailboxes. The one write is the inbox switch,
    PATCH /api/v2/mailboxes/<id>/directory ({on}); its person decides, or an admin for a shared inbox. The switch is
-   drawn only for rows whose listing says `feeds_directory`, so a hub without that route shows no control at all. */
+   drawn only for rows whose listing says `feeds_directory`, so a hub without that route shows no control at all.
+   Where we operate reads GET /api/v2/entities/self; an owner or an admin adds a place (found with
+   /api/v2/entities/find/place) through POST /api/v2/entities/links and removes one through POST /api/v2/entities/unlink.
+   Everyone else sees the list without the controls, and the hub refuses their writes too. */
 'use strict';
 
 interface DirMailbox { id: string; address: string; kind: string; person_name?: string | null; feeds_directory?: boolean }
@@ -40,6 +43,7 @@ async function directorySettingsShow(box: HTMLElement): Promise<void> {
     <section class="card" data-dirs-fields><header><h2>Fields</h2><span class="spacer"></span>
       <select data-dirs-field-type aria-label="Type">${types.map(t => `<option value="${esc(t.key)}"${t.key === 'organization' ? ' selected' : ''}>${esc(t.name)}</option>`).join('')}</select></header>
       <div data-dirs-field-body>${skelRows(3, { dot: false })}</div></section>
+    <section class="card" data-dirs-operate hidden><header><h2>Where we operate</h2></header><div data-dirs-operate-body></div></section>
     ${switches ? `<section class="card" data-dirs-mail><header><h2>Every mail sender</h2></header>${switches}</section>` : ''}
     <section class="card" data-dirs-places><header><h2>Shared places</h2></header>
       <div class="dir-set-row"><span>Use shared places</span><span class="pill ok" data-dirs-places-on>On</span></div>
@@ -50,6 +54,8 @@ async function directorySettingsShow(box: HTMLElement): Promise<void> {
     select.addEventListener('change', () => { void dirsFields(fields, select.value, run); });
     void dirsFields(fields, select.value, run);
   }
+  const operate = box.querySelector<HTMLElement>('[data-dirs-operate]');
+  if (operate) void dirsOperate(operate, run);
   box.querySelectorAll<HTMLInputElement>('[data-dirs-mailbox]').forEach(input => {
     input.addEventListener('change', () => { void dirsMailSwitch(input); });
   });
@@ -96,4 +102,63 @@ async function dirsMailSwitch(input: HTMLInputElement): Promise<void> {
   } finally {
     input.disabled = false;
   }
+}
+// Where we operate: the places our company operates_in, which switch on the laws that apply there. Only an owner or an
+// admin gets the search and the remove buttons (the hub refuses anyone else).
+async function dirsOperate(card: HTMLElement, run: number): Promise<void> {
+  const us = await get<DirSelf>('/v2/entities/self', { fresh: true }).catch(() => null);
+  if (run !== DIRS_RUN) return;
+  if (!us) { card.hidden = true; return; }
+  card.hidden = false;
+  const body = card.querySelector<HTMLElement>('[data-dirs-operate-body]');
+  if (!body) return;
+  const edit = settingsIsAdmin();
+  const rows = us.operates_in.map(p => `<li class="dir-set-row" data-dirs-place="${esc(p.id)}">
+      <a href="${dirHref(p.id)}">${esc(p.name)}</a>
+      ${edit && p.link_id ? `<button type="button" class="ghost small dir-icon" data-dirs-unplace="${esc(p.link_id)}" aria-label="Remove ${esc(p.name)}"><span class="nav-icon" aria-hidden="true">close</span></button>` : ''}</li>`).join('');
+  body.innerHTML = `${rows ? `<ul class="dir-plain dir-operate">${rows}</ul>` : '<p class="muted dir-none" data-dirs-operate-empty>None yet.</p>'}
+    ${edit ? `<div class="dir-operate-add"><input type="search" class="dir-q" data-dirs-place-q placeholder="Add a place" aria-label="Add a place" autocomplete="off">
+      <ul class="dir-plain dir-operate-found" data-dirs-place-found hidden></ul></div>` : ''}`;
+  body.querySelectorAll<HTMLButtonElement>('[data-dirs-unplace]').forEach(b => {
+    b.addEventListener('click', () => { void dirsOperateChange(card, run, b, '/v2/entities/unlink', { link_id: b.dataset['dirsUnplace'] }); });
+  });
+  const input = body.querySelector<HTMLInputElement>('[data-dirs-place-q]');
+  const found = body.querySelector<HTMLElement>('[data-dirs-place-found]');
+  if (!input || !found) return;
+  const have = new Set(us.operates_in.map(p => p.id));
+  let timer = 0, asked = 0;
+  input.addEventListener('input', () => {
+    window.clearTimeout(timer);
+    timer = window.setTimeout(() => {
+      const q = input.value.trim();
+      const mine = ++asked;
+      if (!q) { found.hidden = true; found.innerHTML = ''; return; }
+      void get<DirFind>(`/v2/entities/find/place?${new URLSearchParams({ name: q, limit: '8' }).toString()}`, { fresh: true })
+        .then(page => {
+          if (mine !== asked || run !== DIRS_RUN) return;
+          const rows = page.rows.filter(r => !have.has(r.id));
+          found.hidden = false;
+          found.innerHTML = rows.length
+            ? rows.map(r => `<li><button type="button" class="ghost small" data-dirs-pick="${esc(r.id)}">${esc(r.name)}</button></li>`).join('')
+            : '<li class="muted">No matches.</li>';
+          found.querySelectorAll<HTMLButtonElement>('[data-dirs-pick]').forEach(b => {
+            b.addEventListener('click', () => {
+              void dirsOperateChange(card, run, b, '/v2/entities/links', { from_ref: us.id, link_key: 'operates_in', to_ref: b.dataset['dirsPick'] });
+            });
+          });
+        })
+        .catch((e: unknown) => { if (mine === asked) toast(e instanceof Error ? e.message : String(e), true); });
+    }, 220);
+  });
+}
+async function dirsOperateChange(card: HTMLElement, run: number, button: HTMLButtonElement, path: string, body: object): Promise<void> {
+  button.disabled = true;
+  try {
+    await post(path, body);
+  } catch (e) {
+    button.disabled = false;
+    toast(e instanceof Error ? e.message : String(e), true);
+    return;
+  }
+  await dirsOperate(card, run);
 }
