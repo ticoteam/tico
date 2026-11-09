@@ -15,6 +15,14 @@ AUTH = {"Authorization": "Bearer ana-test"}
 served = pytest.mark.skipif(not ui_bundle.enabled(), reason="TICO_UI_BUNDLE=off")
 
 
+# The routes are registered when the app is built, so the mode is set first: a test that takes bundle_mode before api
+# gets an app built in that mode. The service worker routes are served in both modes.
+@pytest.fixture(params=["on", "off"])
+def bundle_mode(request, monkeypatch):
+    monkeypatch.setenv("TICO_UI_BUNDLE", request.param)
+    return request.param
+
+
 @served
 def test_the_page_names_one_versioned_script_and_one_stylesheet(api):
     r = api.get("/", headers=AUTH)
@@ -414,7 +422,7 @@ def test_a_server_finds_node_off_path_or_says_what_is_missing(tmp_path, monkeypa
     assert tried == [str(volta / "node")] and ui_build.stale(root / "ui") == []
 
 
-def test_the_service_worker_is_served_at_the_root_as_its_compiled_classic_script(api):
+def test_the_service_worker_is_served_at_the_root_as_its_compiled_classic_script(bundle_mode, api):
     # ui/app/boot.ts registers /sw.js?v=… (scope /): the URL stays, the body is ui/sw.ts compiled, in both bundle modes.
     compiled = ui_build.compiled(ui_build.ROOT / "ui", "sw.ts").read_bytes()
     r = api.get("/sw.js?v=41", headers=AUTH)
@@ -437,9 +445,13 @@ def test_the_service_worker_is_served_at_the_root_as_its_compiled_classic_script
     assert m.json()["sources"] == ["sw.ts"]
     assert m.json()["sourcesContent"] == [(ui_build.ROOT / "ui/sw.ts").read_text()]
     assert api.head("/sw.js.map", headers=AUTH).status_code == 200
+    # Conditional like sw.js: the map's own ETag answers 304, and its JSON type is kept.
+    map_again = api.get("/sw.js.map", headers={**AUTH, "If-None-Match": m.headers["etag"]})
+    assert map_again.status_code == 304 and map_again.content == b""
+    assert map_again.headers["etag"] == m.headers["etag"]
 
 
-def test_the_service_worker_gets_a_new_etag_when_its_output_changes(api, tmp_path, monkeypatch):
+def test_the_service_worker_gets_a_new_etag_when_its_output_changes(bundle_mode, api, tmp_path, monkeypatch):
     out = tmp_path / "sw.js"
     out.write_text("self.addEventListener('install', () => {});\n")
     monkeypatch.setattr(ui_build, "compiled", lambda ui_dir, name: out)
@@ -453,7 +465,7 @@ def test_the_service_worker_gets_a_new_etag_when_its_output_changes(api, tmp_pat
     assert second.headers["etag"] != first.headers["etag"]
 
 
-def test_a_stale_service_worker_build_is_a_503_never_the_source(api, monkeypatch):
+def test_a_stale_service_worker_build_is_a_503_never_the_source(bundle_mode, api, monkeypatch):
     def stale(ui_dir, name, manifest=None):
         raise ui_build.StaleBuild(f"ui/{name} has no up-to-date compiled JavaScript in build/ui")
 
