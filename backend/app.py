@@ -3635,7 +3635,8 @@ def create_app(settings=None):
             due = delivery.defer(c, owner, "task", row["id"], task_id=row["id"], defer_for=body.defer_for)
         if run_model:
             task_run_models.set_choice(c, who.actor, row["id"], run_model, note="Set when the task was filed")
-        task_caps.record(c, row["id"], who.actor, owner)  # a send, counted against the sender's cap for this owner
+        # A send, counted against the sender's cap for this owner, at the moment the task was made.
+        task_caps.record(c, row["id"], who.actor, owner, at=row["created_at"])
         if gate:
             ask_ingest.record(c, ingest, gate, row["id"])
         for source_row in kept:
