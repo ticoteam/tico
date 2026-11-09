@@ -206,6 +206,17 @@ pub async fn git_as_bot(path: &Path, env: &Env, args: &[&str], timeout_s: u64) -
     run_as_bot(&argv, env, None, timeout_s).await
 }
 
+/// A bot checkout's fetch run outside the repository's command gate (gitlocks::command_lock). A fetch writes objects
+/// and remote-tracking refs under git's own locks, never the index or the working tree, and it can take up to two
+/// minutes; holding the gate for that would fail every other runner command on the repository. A ref git cannot lock
+/// makes the fetch fail, and the readiness check tries again.
+pub async fn fetch_ungated_as_bot(path: &Path, env: &Env, args: &[&str], timeout_s: u64) -> Ran {
+    let mut argv = vec!["git".to_string()];
+    argv.extend(crate::safegit::args(path));
+    argv.extend(args.iter().map(|a| a.to_string()));
+    run_once(&argv, env, None, timeout_s, true).await
+}
+
 /// Git outside any checkout with the safegit prefix (safe_git.PREFIX): clones, `check-ref-format`.
 pub async fn bare(env: &Env, args: &[&str], timeout_s: u64) -> Ran {
     let mut argv = vec!["git".to_string()];

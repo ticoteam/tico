@@ -27,7 +27,7 @@ MAX_THREADS = 20  # the issuer takes at most 20 threads in one email; the rest w
 TITLE_CHARS = 200  # the issuer's limit on a title
 MAX_UNREAD = 999  # the issuer's limit on a count
 WINDOW = 1000  # the newest unread messages of a thread that one run reads; a bigger backlog counts as this
-FALLBACK_TITLE = "Untitled thread"
+FALLBACK_TITLE = "Thread"
 THREAD_ID = re.compile(r"[A-Za-z0-9_-]{1,80}")
 # A thread this person follows on digest that has a message past their read mark and past the last digest.
 _BEHIND = (
@@ -101,7 +101,11 @@ def _plan(c, actor):
         listed.append(
             {
                 "thread_id": row["thread_id"],
-                "title": title_of(row["subject"]),
+                "title": title_of(
+                    row["subject"]
+                    if str(row["subject"] or "").strip()
+                    else threads.shown_name(c, viewer, row["thread_id"])
+                ),
                 "unread": min(len(readable), MAX_UNREAD),
                 "covers": window[0]["seq"],
             }

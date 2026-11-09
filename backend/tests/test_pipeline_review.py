@@ -2219,3 +2219,13 @@ def test_a_review_item_attachment_shows_a_page_the_reader_may_open(tmp_path, tic
         if not ticket:
             assert item["attachment"]["href"] == f"/api/v2/files/{fid}/versions/1", item["attachment"]
             assert item["attachment_digest"] == PAGE_DIGEST, item
+
+
+def test_a_bot_cannot_create_a_ticket_at_review_past_the_making_requirements(world):
+    """Codex GB2 round 3: a bot creating a ticket straight at a later stage is held to the earlier stages' exit
+    requirements, as a bot entering one by move is. Making's Mockup is not attached, so the create is refused."""
+    w = world
+    w.requirement("Brief", "attachment", "person", stage=w.making)
+    with pytest.raises(H.Refused) as refused_create:
+        H.task_create(w.c, "bot:cmo", "Made by a bot", "", "bot:cmo", type=w.pipeline, step="Review", lint=False)
+    assert refused_create.value.rule == "requirement"

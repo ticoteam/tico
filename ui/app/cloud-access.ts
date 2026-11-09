@@ -39,6 +39,22 @@ async function cloudAccessPoll() {
   }
   CLOUD_TIMER = setTimeout(cloudAccessPoll, CLOUD_POLL);
 }
+async function cloudAccessRefresh(button: HTMLButtonElement): Promise<void> {
+  const note = document.querySelector<HTMLElement>('[data-cloud-check]');
+  button.disabled = true;
+  if (note) note.textContent = 'Checking your plan…';
+  try {
+    const cloud = (await get('/v2/cloud-access', {fresh: true}))?.cloud ?? null;
+    cloudAccessApply(cloud);
+    if (note) note.textContent = CLOUD_SHOWN === 'locked' ? 'Your plan still needs attention. Review billing or contact support.'
+      : CLOUD_SHOWN === 'frozen' ? 'Credit is still needed for Tico-funded work.' : 'Your team is ready.';
+  } catch {
+    if (note) note.textContent = 'Couldn’t check your plan. Check your connection and try again.';
+  } finally { button.disabled = false; }
+}
+document.querySelectorAll<HTMLButtonElement>('[data-cloud-refresh]').forEach(button => {
+  button.addEventListener('click', () => { void cloudAccessRefresh(button); });
+});
 // Any request refused 402 `locked` (api.js signInRedirect): Pay to continue at once, not at the next poll.
 function cloudAccessLocked(cloud: CloudAccessState | null | undefined) {
   if (CLOUD_SHOWN !== 'locked') cloudAccessApply({...(CLOUD_ACCESS || {}), ...(cloud || {}), access: 'locked'});
@@ -52,7 +68,12 @@ function cloudAccessRender() {
   root.classList.toggle('cloud-frozen', access === 'frozen');
   root.classList.toggle('cloud-locked', access === 'locked');
   root.classList.toggle('strip', root.classList.contains('demo') || access === 'frozen');
-  document.querySelectorAll<HTMLAnchorElement>('[data-cloud-pay]').forEach(a => { if (url) a.href = url; else a.removeAttribute('href'); });
+  const banner = document.getElementById('cloud-banner'), lock = document.getElementById('cloud-lock');
+  if (banner) banner.hidden = access !== 'frozen';
+  if (lock) lock.hidden = access !== 'locked';
+  document.querySelectorAll<HTMLAnchorElement>('[data-cloud-pay]').forEach(a => {
+    a.href = url || 'https://app.tico.dev/billing';
+  });
   if (access !== 'locked') return;
   const why: HTMLElement | null = $('#cloud-lock [data-cloud-why]');
   // CLOUD_ACCESS.reason is absent when HQ sends none; '' has no entry in CLOUD_WHY, so it takes the same fallback as undefined did.

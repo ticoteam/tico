@@ -271,7 +271,7 @@ function threadSettingsHTML(view: ThvView): string {
   if (!lengths.some(([d]) => d === days)) lengths.push([days, `${days} days`]);
   return [
     manage && !oneToOne && !home && `<div class="ths-row ths-wide"><label class="ths-lbl" for="ths-name">Name</label>
-      <input id="ths-name" name="title" maxlength="200" autocomplete="off" value="${esc(threadTitle(t))}"></div>`,
+      <input id="ths-name" name="title" maxlength="200" autocomplete="off" value="${esc(t.title || '')}" placeholder="${esc(threadTitle(t))}"></div>`,
     manage && root && !home && !dm && `<div class="ths-row ths-wide"><span class="ths-lbl">Who can read</span>${threadAudienceHTML(t, {titled: true})}</div>
       <div class="ths-row ths-wide tcn-host"></div>`,
     members && `<button type="button" class="ths-row ths-link" data-ths="members"${n ? ` aria-label="Members, ${n}"` : ''}><span class="ths-lbl">Members</span>
@@ -320,7 +320,7 @@ function threadSettingsOpen(view: ThvView): void {
     const el = eventElement(ev) as HTMLInputElement | null; if (!el) return;
     if (el.id === 'ths-name') {
       const title = el.value.trim();
-      if (!title || title === threadTitle(view.thread)) { el.value = threadTitle(view.thread); return; }
+      if (!title || title === (view.thread?.title || '')) { el.value = view.thread?.title || ''; return; }
       void save(async path => patch(path, {title}));
     } else if (el.closest('.thd-aud')) {
       const audience = box.querySelector<HTMLInputElement>('[name=audience]:checked')?.value || 'members', sel = box.querySelector<HTMLSelectElement>('[name=group]');

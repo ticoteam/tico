@@ -261,7 +261,7 @@ ahead of time so it doesn't try.
     no longer shows or sets a place, so `where:` is set through the API and CLI, where a thread is named by its id.
     The API and CLI take several terms. A rule with no `where:` applies wherever its Who matches. Mail and drafts have
     no place, so a `where:` rule never matches them.
-  - People's checks are charged to the same monthly budget as bots' (`rules_monthly_usd`) and counted on the Rules
+  - People's checks are charged to the same monthly budget as bots' (Decide's one monthly cap) and counted on the Rules
     page next to its spend ("$3 on people"). A person has a daily cap of their own (`decisions_daily_calls_human`).
 - **What's judged:** the whole output, short or long. Screening's 200-character minimum, 20k cut and `free_text`
   extraction are injection heuristics and aren't reused ("My favorite color is blue" must be checked). One output is
@@ -316,9 +316,9 @@ ahead of time so it doesn't try.
     is a Health finding.
   - Model text: "Block holds what Decide catches. When Decide is off or over budget, the output goes through and is
     marked unchecked."
-- **Cost and cache:** one call per output with matching rules. Rule checks have their own monthly budget
-  (`TICO_RULES_MONTHLY_USD`, new, separate from the shared $50 `decisions_monthly_usd`, so rules can't starve
-  screening or ask ingest, nor the reverse) and the keeper pays. `hub rules check` has a per-bot daily cap; hitting
+- **Cost and cache:** one call per output with matching rules. Rule checks spend from Decide's one monthly budget
+  (`monthly_cap_usd` in Automations > Maintenance, else `TICO_DECISIONS_MONTHLY_USD`, $50) and the keeper pays.
+  Nov 8: the separate rules budget was removed. `hub rules check` has a per-bot daily cap; hitting
   it stops that bot's drafts only. The Rules header shows dollars left, and says so when it's gone.
   Verdicts are cached by a digest of the full check input (operation, author bot, resolved recipients, exact content
   or change, the object's version) plus the matched rule ids and versions, the question-set version and the Decide
@@ -507,7 +507,7 @@ government rules with citations into the same Suggested tab. Tico works fully wi
   - A clean task then a forbidden body edit / close note is held and the task is unchanged; a note to a bot and an
     automation `_wake_bot` text are checked; a BotOps write as a person is checked.
   - An output over 120k is held; Send anyway with the nonce delivers once without a second Decide call.
-  - Rules' monthly budget running out doesn't change screening's or ask ingest's.
+  - Rule checks spend from Decide's one monthly cap; once it is spent they go through unchecked (`budget`).
   - An all-bots rule covers a bot created later; a Warn rule with a named reviewer round-trips.
   - Block: not delivered, the bot gets the rule, nobody is pinged, and the bot isn't quarantined (no refusal row).
   - A completion reply that breaks a rule is held, and the thread gets the one-line note.
