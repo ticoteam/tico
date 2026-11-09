@@ -58,12 +58,13 @@ fallback() {  # <tool> <plat> <bin>: the same version from the second source, in
       chmod 755 "$TMP/wheel-shellcheck/shellcheck_py-$SHELLCHECK_VERSION.1.data/scripts/shellcheck"
       mv -f "$TMP/wheel-shellcheck/shellcheck_py-$SHELLCHECK_VERSION.1.data/scripts/shellcheck" "$bin" ;;
     actionlint)
-      # GitHub's hosted images keep Go in the tool cache even when it is not on PATH.
+      # GitHub's hosted images keep Go in the tool cache even when it is not on PATH. -modcacherw leaves the module
+      # cache writable, so the exit trap can remove it (go marks it read-only by default).
       local go
       go="$(command -v go || find /opt/hostedtoolcache/go -path '*/x64/bin/go' 2>/dev/null | sort -V | tail -1 || true)"
       [ -n "$go" ] && [ -x "$go" ] || return 1
       echo "pinned_tool: building actionlint $ACTIONLINT_VERSION with $go install" >&2
-      GOBIN="$TMP/gobin" GOFLAGS='' GOPATH="$TMP/gopath" GOCACHE="$TMP/gocache" "$go" install \
+      GOBIN="$TMP/gobin" GOFLAGS=-modcacherw GOPATH="$TMP/gopath" GOCACHE="$TMP/gocache" "$go" install \
         "github.com/rhysd/actionlint/cmd/actionlint@v$ACTIONLINT_VERSION" || return 1
       mv -f "$TMP/gobin/actionlint" "$bin" ;;
   esac
