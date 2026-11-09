@@ -234,7 +234,7 @@ function visualFullSwipe(d) {
 const PIC_ZOOM_BAR = '<button type="button" class="ghost" data-zoom="out" aria-label="Zoom out" title="Zoom out (-)">\u2212</button>'
   + '<button type="button" class="ghost" data-zoom="fit" aria-label="Fit to screen" title="Fit (0)">Fit</button>'
   + '<button type="button" class="ghost" data-zoom="in" aria-label="Zoom in" title="Zoom in (+)">+</button>';
-function picZoom(box, img, {signal, bar = null, onZoom = () => {}}) {
+function picZoom(box, img, {signal, bar = null, onZoom = () => {}}: {signal: AbortSignal; bar?: HTMLElement | null; onZoom?: (on: boolean) => void}) {
   let scale = 1, tx = 0, ty = 0, drag = null, moved = 0;
   img.style.transformOrigin = '0 0';
   const draw = () => { img.style.transform = scale > 1 ? `translate(${tx}px,${ty}px) scale(${scale})` : ''; };
