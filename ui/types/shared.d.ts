@@ -170,6 +170,17 @@ interface BotMachine {
   [key: string]: unknown;
 }
 
+/** A computer's readiness report (SettingsMachine.readiness): what each runtime and harness can do, as the computer last reported it. */
+interface MachineReadiness {
+  runtimes?: Record<string, { authenticated?: string; goals?: boolean | null } | undefined>;
+  harnesses?: Record<string, MachineHarness | undefined>;
+}
+/** One harness in a computer's readiness report: the runtime it runs on, and whether goals work there. */
+interface MachineHarness {
+  runtime?: string;
+  goals?: boolean | null;
+}
+
 /** An external agent's sync state (`agent`, a Grok Bot or Dots, backend/agents.py). */
 interface BotAgent {
   label?: string;
@@ -204,7 +215,7 @@ interface Employee {
   /** Whether the bot's computer or agent is up, and whether its setup is done (the status tooltip, ui/app/tooltip.ts, reads them). */
   online?: boolean;
   ready?: boolean;
-  readiness?: { gateway?: string | null } | null;
+  readiness?: { gateway?: string | null; goals?: boolean | null | undefined } | null;
   users?: BriefPerson[];
   bot_owners?: BriefPerson[];
   /** Read by overview.js; no server path sends it on a bot row today, so it is optional and not relied on. */
