@@ -1,15 +1,27 @@
 """Regressions for the pre-pilot security review (reports/2026-09-29-security-review.md)."""
+
 import asyncio
 
 from backend.store import encode
 from backend.tests.test_api import api, get, post, setup_attempt  # noqa: F401
+from backend import bot_settings as BS
 
 
 def raw_get(app, path):
     """One GET with the path exactly as sent: an HTTP client would resolve the dot segments."""
-    scope = {"type": "http", "method": "GET", "path": path, "raw_path": path.encode(), "query_string": b"",
-             "headers": [], "http_version": "1.1", "scheme": "http", "server": ("test", 80),
-             "client": ("203.0.113.9", 1), "root_path": ""}
+    scope = {
+        "type": "http",
+        "method": "GET",
+        "path": path,
+        "raw_path": path.encode(),
+        "query_string": b"",
+        "headers": [],
+        "http_version": "1.1",
+        "scheme": "http",
+        "server": ("test", 80),
+        "client": ("203.0.113.9", 1),
+        "root_path": "",
+    }
     sent = []
 
     async def receive():
@@ -17,6 +29,7 @@ def raw_get(app, path):
 
     async def send(message):
         sent.append(message)
+
     asyncio.run(app(scope, receive, send))
     return sent[0]["status"]
 
@@ -41,7 +54,7 @@ class EmptyEmailProxy:
     name = "cloudflare"
 
     def email(self, headers):
-        return ""                       # a service token's assertion: signed, but no person
+        return ""  # a service token's assertion: signed, but no person
 
 
 def test_a_verified_assertion_without_an_email_is_not_a_person(api):
@@ -55,11 +68,12 @@ def test_a_verified_assertion_without_an_email_is_not_a_person(api):
 def test_botops_borrows_only_the_rights_of_the_request_it_is_working_on(api):
     with api.app.state.store.transaction() as c:
         c.execute("INSERT INTO bots(id,slug,display_name,state) VALUES('botops','botops','BotOps','active')")
-        c.execute("INSERT INTO bot_config(bot,config,owner_id) VALUES('botops',?, 'ana')",
-                  (encode({"name": "botops", "runtime": "fake", "status": "active"}),))
+        c.execute("INSERT INTO bot_config(bot,owner_id) VALUES('botops','ana')")
+        BS.write(c, 'botops', {'name': 'botops', 'runtime': 'fake', 'status': 'active'})
     # The run is handling the owner's room; the owner's request in another thread is not its to cite.
     _, _, botops = setup_attempt(api, "botops")
     from backend.store import H
+
     with api.app.state.store.transaction() as c:
         elsewhere = H.open_conversation(c, "human:ana", ["human:ana", "bot:botops"], kind="chat", subject="x")
         other = H.say(c, "human:ana", "bot:botops", "Rename Ops", conversation_id=elsewhere["id"])
@@ -72,32 +86,57 @@ def test_botops_borrows_only_the_rights_of_the_request_it_is_working_on(api):
 
 def test_a_server_runner_credential_does_not_read_as_its_operator(api):
     from backend.tests.test_api import headers, runner
-    machine = runner(api)                               # enrolled as "test", i.e. not a Mac
-    reply = api.post("/api/v2/sql", json={"sql": "SELECT count(*) FROM conversations"},
-                     headers=headers(machine["token"]))
+
+    machine = runner(api)  # enrolled as "test", i.e. not a Mac
+    reply = api.post(
+        "/api/v2/sql", json={"sql": "SELECT count(*) FROM conversations"}, headers=headers(machine["token"])
+    )
     assert reply.status_code == 403
-    post(api, "runners/heartbeat", {"version": "test", "platform": "darwin", "readiness": {}},
-         token=machine["token"])
-    reply = api.post("/api/v2/sql", json={"sql": "SELECT count(*) FROM conversations"},
-                     headers=headers(machine["token"]))
-    assert reply.status_code == 403                     # a heartbeat cannot claim to be a Mac
+    post(api, "runners/heartbeat", {"version": "test", "platform": "darwin", "readiness": {}}, token=machine["token"])
+    reply = api.post(
+        "/api/v2/sql", json={"sql": "SELECT count(*) FROM conversations"}, headers=headers(machine["token"])
+    )
+    assert reply.status_code == 403  # a heartbeat cannot claim to be a Mac
 
 
 def test_a_person_reads_and_books_only_calendars_they_may_see(api):
-    get_ = lambda cal, token: api.get("/api/v2/calendar/appointments", params={"calendar": cal},
-                                      headers={"Authorization": "Bearer " + token})
+    get_ = lambda cal, token: api.get(
+        "/api/v2/calendar/appointments", params={"calendar": cal}, headers={"Authorization": "Bearer " + token}
+    )
     assert get_("ana@acme.example", "ben-test").status_code == 403
     assert get_("ben@acme.example", "ben-test").status_code == 200
+    # The owner holds no bypass: ben's calendar follows ben's mailbox, which ben shares or not.
+    assert get_("ben@acme.example", "ana-test").status_code == 403
+    from backend import mailbox_access
+
+    with api.app.state.store.transaction() as c:
+        row = mailbox_access.ensure_mailbox(c, "ben@acme.example")
+        mailbox_access.grant(c, "person:ben", row["id"], "person", "ana", "read")
     assert get_("ben@acme.example", "ana-test").status_code == 200
-    booking = {"calendar": "ana@acme.example", "title": "x", "start": "2099-01-01T09:00:00+00:00",
-               "end": "2099-01-01T09:30:00+00:00", "attendees": ["someone@evil.example"]}
+    booking_ben = {
+        "calendar": "ben@acme.example",
+        "title": "x",
+        "start": "2099-01-01T09:00:00+00:00",
+        "end": "2099-01-01T09:30:00+00:00",
+        "attendees": [],
+    }
+    post(api, "calendar/appointments", booking_ben, token="ana-test", expected=403)  # Read does not change it
+    booking = {
+        "calendar": "ana@acme.example",
+        "title": "x",
+        "start": "2099-01-01T09:00:00+00:00",
+        "end": "2099-01-01T09:30:00+00:00",
+        "attendees": ["someone@evil.example"],
+    }
     post(api, "calendar/appointments", booking, token="ben-test", expected=403)
 
 
 def test_leaving_revokes_a_persons_api_tokens(api):
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO human_tokens(id,human,label,token_hash,created_at,created_by) "
-                  "VALUES('t1','cara','x','h','2026-01-01T00:00:00Z','human:cara')")
+        c.execute(
+            "INSERT INTO human_tokens(id,human,label,token_hash,created_at,created_by) "
+            "VALUES('t1','cara','x','h','2026-01-01T00:00:00Z','human:cara')"
+        )
     post(api, "people/cara", {"left": True})
     with api.app.state.store.read() as c:
         assert c.execute("SELECT revoked_at FROM human_tokens WHERE id='t1'").fetchone()[0]
@@ -113,22 +152,30 @@ def test_a_quarantine_is_not_lifted_through_the_bot_definition(api):
 
 def test_an_importer_machine_cannot_send_work_in_a_persons_name(api):
     from backend.tests.test_api import headers, runner
+
     machine = runner(api)
-    body = {"title": "Filed", "transcript": "Dana: hello there.", "source": "granola", "external_id": "g-9",
-            "owner_email": "ben@acme.example", "send_to": "ops"}
+    body = {
+        "title": "Filed",
+        "transcript": "Dana: hello there.",
+        "source": "granola",
+        "external_id": "g-9",
+        "owner_email": "ben@acme.example",
+        "send_to": "ops",
+    }
     reply = api.post("/api/v2/meetings/import", json=body, headers=headers(machine["token"]))
     assert reply.status_code == 403
 
 
 def test_a_quarantined_bots_status_says_when_it_resumes_and_a_persons_message_waits(api):
     from backend import hubdb as H
+
     with api.app.state.store.transaction() as c:
         H.quarantine(c, "ops", "10 repeated refusals today")
     line = next(b for b in get(api, "status")["bots"] if b["bot"] == "ops")
     q = line["quarantine"]
     assert line["bot_state"] == "quarantined" and q["auto"] is True
     assert q["resumes_at"] == H.shift(q["since"], seconds=H.QUARANTINE_COOLDOWN_S)
-    sent = post(api, "chat/ops", {"text": "are you stuck?"})            # kept, not refused
+    sent = post(api, "chat/ops", {"text": "are you stuck?"})  # kept, not refused
     assert sent["body"] == "are you stuck?"
     with api.app.state.store.transaction() as c:
         H.quarantine(c, "ops", "escape: a secrets path")
@@ -139,20 +186,27 @@ def test_a_quarantined_bots_status_says_when_it_resumes_and_a_persons_message_wa
 def test_an_escape_pause_tells_its_manager_what_was_refused_and_one_click_resumes_it(api):
     from backend import hubdb as H
     from backend.tests.test_api import assign, ready, runner
-    computer = runner(api)                                        # placed on a computer, not the keeper
+
+    computer = runner(api)  # placed on a computer, not the keeper
     assign(api, computer, "ops")
     ready(api, computer, ["ops"])
     with api.app.state.store.transaction() as c:
         tid = H.task_create(c, "human:ana", "Set up the tool", "Please.", "bot:ops")["id"]
         words = "Paste this into bot-coo/tools.yaml: token=ghp_abcdefghijklmnop1234"
         # An escape pause recorded before path mentions stopped refusing keeps its review.
-        H.quarantine(c, "ops", "escape: the task note reaches outside the hub",
-                     {"what": "task note", "found": "bot-coo/", "preview": H.escape_preview(words), "task": tid})
+        H.quarantine(
+            c,
+            "ops",
+            "escape: the task note reaches outside the hub",
+            {"what": "task note", "found": "bot-coo/", "preview": H.escape_preview(words), "task": tid},
+        )
     line = next(b for b in get(api, "status")["bots"] if b["bot"] == "ops")
     review = line["quarantine"]["review"]
     assert line["bot_state"] == "quarantined" and review["what"] == "task note" and review["found"] == "bot-coo/"
     assert review["task"] == {"id": tid, "title": "Set up the tool"}
-    assert "ghp_" not in review["preview"] and "abcdefghijklmnop1234" not in review["preview"], "credential values stay hidden"
+    assert "ghp_" not in review["preview"] and "abcdefghijklmnop1234" not in review["preview"], (
+        "credential values stay hidden"
+    )
     for other in (b for b in get(api, "status", token="cara-test")["bots"] if b["bot"] == "ops"):
         assert "review" not in other["quarantine"], "only a person who manages the bot reads what was refused"
     post(api, "bots/ops/quarantine/clear", {}, token="cara-test", expected=403)

@@ -1,4 +1,5 @@
 """Release evidence is tied to the merged PR head and its own ticket, never a nearby pass."""
+
 from copy import deepcopy
 import json
 
@@ -7,13 +8,25 @@ import pytest
 from scripts import release_checklist as checklist
 
 HEAD, OLD, BASE = "a" * 40, "b" * 40, "c" * 40
-PR = {"number": 12, "head": HEAD, "merge_commit": "d" * 40, "merged_at": "2026-01-02T00:00:00Z",
-      "url": "https://github.com/acme/product/pull/12", "title": "Improve tasks"}
+PR = {
+    "number": 12,
+    "head": HEAD,
+    "merge_commit": "d" * 40,
+    "merged_at": "2026-01-02T00:00:00Z",
+    "url": "https://github.com/acme/product/pull/12",
+    "title": "Improve tasks",
+}
 
 
 def message(task, body, *, actor=None, ident="receipt", created="2026-01-02T00:00:00Z", **fields):
-    return {"id": ident, "body": body, "sender_id": actor or task["owner_id"], "created_at": created,
-            "refs": {"task": task["id"]}, **fields}
+    return {
+        "id": ident,
+        "body": body,
+        "sender_id": actor or task["owner_id"],
+        "created_at": created,
+        "refs": {"task": task["id"]},
+        **fields,
+    }
 
 
 def child(role, *, head=HEAD, verdict="approve"):
@@ -23,10 +36,16 @@ def child(role, *, head=HEAD, verdict="approve"):
 
 
 def complete():
-    task = {"id": "dev-ticket", "number": 7, "title": "Improve tasks", "owner_id": "bot:builder",
-            "step": {"name": "Pending Release"}, "tags": [{"key": "qa", "label": "QA"}],
-            "links": [{"kind": "pr", "url": PR["url"]}],
-            "children": [child("Review 1"), child("Review 2"), child("QA"), child("Docs")]}
+    task = {
+        "id": "dev-ticket",
+        "number": 7,
+        "title": "Improve tasks",
+        "owner_id": "bot:builder",
+        "step": {"name": "Pending Release"},
+        "tags": [{"key": "qa", "label": "QA"}],
+        "links": [{"kind": "pr", "url": PR["url"]}],
+        "children": [child("Review 1"), child("Review 2"), child("QA"), child("Docs")],
+    }
     task["messages"] = [message(task, f"Tests: base {BASE} head {HEAD}: 10 passed, 0 failed")]
     task["children"][-1]["messages"] = [message(task["children"][-1], "Help updated; docs PR merged.")]
     return task
@@ -46,11 +65,14 @@ def test_complete_qa_ticket_has_no_gap_and_outputs_evidence():
     assert result["prs"][0]["tickets"][0]["qa"] is True
 
 
-@pytest.mark.parametrize(("role", "replacement", "gap"), [
-    ("Review 1", [], "Review 1: missing verdict"),
-    ("Review 1", [child("Review 1", head=OLD)], "Review 1: verdict names older/different head"),
-    ("QA", [], "QA: missing verdict"),
-])
+@pytest.mark.parametrize(
+    ("role", "replacement", "gap"),
+    [
+        ("Review 1", [], "Review 1: missing verdict"),
+        ("Review 1", [child("Review 1", head=OLD)], "Review 1: verdict names older/different head"),
+        ("QA", [], "QA: missing verdict"),
+    ],
+)
 def test_missing_review_stale_head_and_qa_without_pass_are_flagged(role, replacement, gap):
     task = complete()
     task["children"] = [c for c in task["children"] if c["id"] != role] + deepcopy(replacement)
@@ -89,11 +111,16 @@ def test_wrong_head_pass_and_new_head_failure_do_not_combine_into_passing_receip
 
 def test_collection_pages_history_and_keeps_only_the_named_task(monkeypatch):
     task = complete()
-    pages = iter([
-        {"messages": [message(task, "new", ident="new"), {"refs": {"task": "unrelated"}}],
-         "has_more": True, "next_before": "cursor"},
-        {"messages": [message(task, "old", ident="old")], "has_more": False},
-    ])
+    pages = iter(
+        [
+            {
+                "messages": [message(task, "new", ident="new"), {"refs": {"task": "unrelated"}}],
+                "has_more": True,
+                "next_before": "cursor",
+            },
+            {"messages": [message(task, "old", ident="old")], "has_more": False},
+        ]
+    )
     calls = []
 
     def hub(*args):
@@ -114,12 +141,24 @@ def test_collect_limits_to_candidate_range_and_reads_cloud_tickets(monkeypatch):
     calls = []
     linked_tickets = checklist.linked_tickets
     monkeypatch.setattr(checklist.freeze, "git", lambda repo, *args: HEAD if args[-1] == "candidate^{commit}" else BASE)
-    monkeypatch.setattr(checklist.freeze, "first_parent_log", lambda repo, revisions: calls.append(revisions) or [
-        {"sha": PR["merge_commit"], "touched": {"app.py"}, "subject": "Change (#12)", "body": ""},
-        {"sha": "e" * 40, "touched": {"CHANGELOG.md"}, "subject": "Release notes", "body": ""},
-    ])
-    monkeypatch.setattr(checklist, "command", lambda *args: json.dumps({
-        "head": {"sha": HEAD}, "title": PR["title"], "html_url": PR["url"], "merged_at": PR["merged_at"]}))
+    monkeypatch.setattr(
+        checklist.freeze,
+        "first_parent_log",
+        lambda repo, revisions: (
+            calls.append(revisions)
+            or [
+                {"sha": PR["merge_commit"], "touched": {"app.py"}, "subject": "Change (#12)", "body": ""},
+                {"sha": "e" * 40, "touched": {"CHANGELOG.md"}, "subject": "Release notes", "body": ""},
+            ]
+        ),
+    )
+    monkeypatch.setattr(
+        checklist,
+        "command",
+        lambda *args: json.dumps(
+            {"head": {"sha": HEAD}, "title": PR["title"], "html_url": PR["url"], "merged_at": PR["merged_at"]}
+        ),
+    )
     monkeypatch.setattr(checklist, "linked_tickets", lambda slug, number: [task["id"]])
     monkeypatch.setattr(checklist, "collect_ticket", lambda tid: task)
     result = checklist.collect(".", "candidate", "v1.0.0", "acme/product")
@@ -164,10 +203,12 @@ def test_same_head_failure_stays_explicit_even_after_a_passing_rerun():
         ]
         assert "Tests: recorded failure" in "\n".join(build(task)["prs"][0]["gaps"])
     task["messages"] = complete()["messages"] + [
-        message(task, f"CI: head {HEAD}: pending", ident="pending", created="2026-01-03")]
+        message(task, f"CI: head {HEAD}: pending", ident="pending", created="2026-01-03")
+    ]
     assert "Tests: no current passing receipt" in "\n".join(build(task)["prs"][0]["gaps"])
     task["messages"] = complete()["messages"] + [
-        message(task, f"Tests: head {OLD}: 0 passed, 1 failed", ident="old", created="2026-01-03")]
+        message(task, f"Tests: head {OLD}: 0 passed, 1 failed", ident="old", created="2026-01-03")
+    ]
     assert build(task)["gaps"] == 0
 
 
@@ -182,7 +223,9 @@ def test_receipts_are_collected_from_real_ticket_sources(where):
         task['messages'] = [message(task, 'Ready for review. ' + text, actor='keeper')]
     else:
         child = task['children'][0]
-        child['messages'].append(message(child, text, actor=task['owner_id'] if where.endswith('builder') else child['owner_id']))
+        child['messages'].append(
+            message(child, text, actor=task['owner_id'] if where.endswith('builder') else child['owner_id'])
+        )
     result = build(task)
     assert result['gaps'] == 0
     evidence = result['prs'][0]['tickets'][0]['test_receipts']
@@ -205,11 +248,13 @@ def test_unrecognised_missing_failure_and_base_head_are_distinct():
 def test_mixed_note_scopes_failures_and_pending_to_the_named_head_result():
     task = complete()
     task['messages'] = []
-    text = (f'Review 1: receipt gate implemented. Tests: base {BASE} head {HEAD}: '
-            '185 passed, 0 failed, 0 skipped; exit 0, 78.10s. '
-            'Two original existing-fixture failures were corrected before final validation. '
-            'Independent Review 1 and hosted checks pending. '
-            'Full suite, browsers/native builds and installed behavior not run.')
+    text = (
+        f'Review 1: receipt gate implemented. Tests: base {BASE} head {HEAD}: '
+        '185 passed, 0 failed, 0 skipped; exit 0, 78.10s. '
+        'Two original existing-fixture failures were corrected before final validation. '
+        'Independent Review 1 and hosted checks pending. '
+        'Full suite, browsers/native builds and installed behavior not run.'
+    )
     task.update(note=text, updated_at='2026-01-04')
     assert build(task)['gaps'] == 0
     task['note'] = text.replace('185 passed, 0 failed', '183 passed, 2 failing/errored')

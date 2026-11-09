@@ -3,6 +3,7 @@ Hidden, and so is anything this module does not recognise.
 
 A rule's `rounding` is a few space-separated tokens. `sig:2` or `nearest:1000` say how Rounded rounds, `bands` or
 `step:1000000` say how Range groups values, and `quarterly` (with any mode but Hidden) discloses whole quarters only."""
+
 import re
 from collections import namedtuple
 
@@ -69,20 +70,34 @@ def _column(**rules):
 _SHOW = {"mode": "show", "lag_days": 0, "rounding": None}
 _DELAYED_30 = {"mode": "delayed", "lag_days": 30, "rounding": None}
 _QUARTERLY = {"mode": "rounded", "lag_days": 0, "rounding": "sig:2 quarterly"}
-_QUARTERLY_COUNT = {"mode": "rounded", "lag_days": 0, "rounding": "sig:1 quarterly"}   # small counts: 12 stays 12 at two
+_QUARTERLY_COUNT = {"mode": "rounded", "lag_days": 0, "rounding": "sig:1 quarterly"}  # small counts: 12 stays 12 at two
 _EVERYTHING = {cls: _SHOW for cls in DATA_CLASSES}
 _NUMBERS = {cls: _SHOW for cls in NUMBER_CLASSES}
 _PUBLIC_STANDARD = _column(product=_SHOW, headcount=_SHOW, mission=_SHOW)
 # A custom audience could be anyone, so a preset gives it the Public column until its owner says otherwise.
 PRESETS = {
-    "radical": {"public": {**_EVERYTHING, **{cls: _DELAYED_30 for cls in FINANCE_CLASSES}},
-                "investors": _EVERYTHING, "board": _EVERYTHING},
-    "standard": {"public": _PUBLIC_STANDARD, "investors": _column(**_NUMBERS, product=_SHOW, mission=_SHOW),
-                 "board": _EVERYTHING},
-    "quiet": {"public": _column(),
-              "investors": _column(**{**{cls: _QUARTERLY for cls in NUMBER_CLASSES}, "headcount": _QUARTERLY_COUNT,
-                                      "customers": _QUARTERLY_COUNT, "mission": _SHOW}),
-              "board": _EVERYTHING},
+    "radical": {
+        "public": {**_EVERYTHING, **{cls: _DELAYED_30 for cls in FINANCE_CLASSES}},
+        "investors": _EVERYTHING,
+        "board": _EVERYTHING,
+    },
+    "standard": {
+        "public": _PUBLIC_STANDARD,
+        "investors": _column(**_NUMBERS, product=_SHOW, mission=_SHOW),
+        "board": _EVERYTHING,
+    },
+    "quiet": {
+        "public": _column(),
+        "investors": _column(
+            **{
+                **{cls: _QUARTERLY for cls in NUMBER_CLASSES},
+                "headcount": _QUARTERLY_COUNT,
+                "customers": _QUARTERLY_COUNT,
+                "mission": _SHOW,
+            }
+        ),
+        "board": _EVERYTHING,
+    },
 }
 
 
@@ -92,8 +107,13 @@ def _plain(row):
 
 def all_rules(c, audience_id):
     """{(data class, ref id): rule}, one query, for the reads that look up many cells."""
-    return {(r["data_class"], r["ref_id"]): _plain(r) for r in c.execute(
-        "SELECT data_class, ref_id, mode, lag_days, rounding FROM disclosure_rules WHERE audience_id=?", (audience_id,))}
+    return {
+        (r["data_class"], r["ref_id"]): _plain(r)
+        for r in c.execute(
+            "SELECT data_class, ref_id, mode, lag_days, rounding FROM disclosure_rules WHERE audience_id=?",
+            (audience_id,),
+        )
+    }
 
 
 def lookup(rules, data_class, ref_id=None):
@@ -109,12 +129,16 @@ def rule_for(c, audience_id, data_class, ref_id=None):
 
 def rules(c, audience_id):
     """Every rule of an audience, for the grid."""
-    return [{"data_class": cls, "ref_id": ref, **rule} for (cls, ref), rule in sorted(all_rules(c, audience_id).items())]
+    return [
+        {"data_class": cls, "ref_id": ref, **rule} for (cls, ref), rule in sorted(all_rules(c, audience_id).items())
+    ]
 
 
 def current_revision(c, audience_id):
-    row = c.execute("SELECT id FROM disclosure_revisions WHERE audience_id=? ORDER BY created_at DESC, rowid DESC LIMIT 1",
-                    (audience_id,)).fetchone()
+    row = c.execute(
+        "SELECT id FROM disclosure_revisions WHERE audience_id=? ORDER BY created_at DESC, rowid DESC LIMIT 1",
+        (audience_id,),
+    ).fetchone()
     return row[0] if row else None
 
 
@@ -150,17 +174,22 @@ def is_loosening(old_rule, new_rule):
                 return int(new.get("lag_days") or 0) < int(old.get("lag_days") or 0)
             if before in ("rounded", "range"):
                 # An unset method is the default the row would store.
-                was = was._replace(method=was.method or ("sig" if before == "rounded" else "bands"),
-                                   n=was.n or (2 if before == "rounded" else 0))
-                now = now._replace(method=now.method or ("sig" if before == "rounded" else "bands"),
-                                   n=now.n or (2 if before == "rounded" else 0))
+                was = was._replace(
+                    method=was.method or ("sig" if before == "rounded" else "bands"),
+                    n=was.n or (2 if before == "rounded" else 0),
+                )
+                now = now._replace(
+                    method=now.method or ("sig" if before == "rounded" else "bands"),
+                    n=now.n or (2 if before == "rounded" else 0),
+                )
                 return not _coarser(was, now)
             return False
         if before == "show":
             return False
         # Sig-rounded to 1-2-5 bands is the one coarser pair across modes; a delayed value turning current is not.
-        return not (before == "rounded" and after == "range" and was.method in (None, "sig")
-                    and now.method in (None, "bands"))
+        return not (
+            before == "rounded" and after == "range" and was.method in (None, "sig") and now.method in (None, "bands")
+        )
     except (AttributeError, KeyError, TypeError, ValueError):
         return True
 
@@ -178,22 +207,39 @@ def _clean_rule(data_class, ref_id, mode, lag_days, rounding):
             raise Problem("lag_days", f"Delayed takes 1 to {LAG_MAX} days", 422)
     else:
         lag_days = 0
-    return {"data_class": data_class, "ref_id": ref, "mode": mode, "lag_days": lag_days,
-            "rounding": None if mode == "hidden" else _clean_rounding(mode, rounding)}
+    return {
+        "data_class": data_class,
+        "ref_id": ref,
+        "mode": mode,
+        "lag_days": lag_days,
+        "rounding": None if mode == "hidden" else _clean_rounding(mode, rounding),
+    }
 
 
 def _write(c, audience_id, rule, ts):
-    c.execute("INSERT INTO disclosure_rules (id, audience_id, data_class, ref_id, mode, lag_days, rounding, updated_at) "
-              "VALUES (?,?,?,?,?,?,?,?) ON CONFLICT(audience_id, data_class, ref_id) DO UPDATE SET mode=excluded.mode, "
-              "lag_days=excluded.lag_days, rounding=excluded.rounding, updated_at=excluded.updated_at",
-              (H.new_id(), audience_id, rule["data_class"], rule["ref_id"], rule["mode"], rule["lag_days"],
-               rule["rounding"], ts))
+    c.execute(
+        "INSERT INTO disclosure_rules (id, audience_id, data_class, ref_id, mode, lag_days, rounding, updated_at) "
+        "VALUES (?,?,?,?,?,?,?,?) ON CONFLICT(audience_id, data_class, ref_id) DO UPDATE SET mode=excluded.mode, "
+        "lag_days=excluded.lag_days, rounding=excluded.rounding, updated_at=excluded.updated_at",
+        (
+            H.new_id(),
+            audience_id,
+            rule["data_class"],
+            rule["ref_id"],
+            rule["mode"],
+            rule["lag_days"],
+            rule["rounding"],
+            ts,
+        ),
+    )
 
 
 def _stricter(old_rule, new_rule):
     """Whether one cell's effective rule changed to show less. A cell left as it was, or one that only widens, is not."""
+
     def key(rule):
         return rule["mode"], int(rule.get("lag_days") or 0), rule.get("rounding") or None
+
     return key(old_rule) != key(new_rule) and not is_loosening(old_rule, new_rule)
 
 
@@ -203,9 +249,12 @@ def _finish(c, actor, audience, loosened, stricter, approved, ts, action, detail
     change was, for the route to say: a change that tightens any cell leaves published editions up, so the caller reports
     how many, even when another cell in the same change loosened."""
     from . import stats
+
     revision = H.new_id()
-    c.execute("INSERT INTO disclosure_revisions (id, audience_id, created_by, created_at) VALUES (?,?,?,?)",
-              (revision, audience["id"], actor, ts))
+    c.execute(
+        "INSERT INTO disclosure_revisions (id, audience_id, created_by, created_at) VALUES (?,?,?,?)",
+        (revision, audience["id"], actor, ts),
+    )
     if approved and not loosened:
         stats.carry_board_approval(c, audience["id"])
     H.event(c, actor, action, audience["id"], {**detail, "revision": revision, "loosened": loosened})
@@ -218,13 +267,20 @@ def set_rules(c, actor, audience_id, changes):
     """Several cells, one revision. Each is compared against what that cell resolved to before, so a new cell that only
     narrows its class is a tightening. Returns {"revision", "loosened", "tightened"}."""
     from . import stats
+
     S.require_person(c, actor)
     audience = A.need(c, audience_id)
-    wanted = [_clean_rule(r["data_class"], r.get("ref_id"), r["mode"], r.get("lag_days", 0), r.get("rounding"))
-              for r in changes]
+    wanted = [
+        _clean_rule(r["data_class"], r.get("ref_id"), r["mode"], r.get("lag_days", 0), r.get("rounding"))
+        for r in changes
+    ]
     before = all_rules(c, audience_id)
-    moved = [r for r in wanted if before.get((r["data_class"], r["ref_id"])) !=
-             {"mode": r["mode"], "lag_days": r["lag_days"], "rounding": r["rounding"]}]
+    moved = [
+        r
+        for r in wanted
+        if before.get((r["data_class"], r["ref_id"]))
+        != {"mode": r["mode"], "lag_days": r["lag_days"], "rounding": r["rounding"]}
+    ]
     if not moved:
         return {"revision": current_revision(c, audience_id), "loosened": False, "tightened": False}
     approved = stats.board_approved(c, audience_id)
@@ -234,13 +290,26 @@ def set_rules(c, actor, audience_id, changes):
     ts = H.now()
     for rule in moved:
         _write(c, audience_id, rule, ts)
-    return _finish(c, actor, audience, loosened, stricter, approved, ts, "company_page.disclosure",
-                   {"cells": [[r["data_class"], r["ref_id"], r["mode"]] for r in moved][:50]})
+    return _finish(
+        c,
+        actor,
+        audience,
+        loosened,
+        stricter,
+        approved,
+        ts,
+        "company_page.disclosure",
+        {"cells": [[r["data_class"], r["ref_id"], r["mode"]] for r in moved][:50]},
+    )
 
 
 def set_rule(c, actor, audience_id, data_class, ref_id=None, mode="hidden", lag_days=0, rounding=None):
-    return set_rules(c, actor, audience_id, [{"data_class": data_class, "ref_id": ref_id, "mode": mode,
-                                              "lag_days": lag_days, "rounding": rounding}])
+    return set_rules(
+        c,
+        actor,
+        audience_id,
+        [{"data_class": data_class, "ref_id": ref_id, "mode": mode, "lag_days": lag_days, "rounding": rounding}],
+    )
 
 
 def preset_column(name, kind):
@@ -254,10 +323,13 @@ def apply_preset(c, actor, audience_id, name):
     """Replaces every rule, per-KPI and per-line ones included. Any cell it would loosen makes the whole change a
     loosening."""
     from . import stats
+
     S.require_person(c, actor)
     audience = A.need(c, audience_id)
-    column = {(cls, ""): {"mode": r["mode"], "lag_days": r["lag_days"], "rounding": r["rounding"]}
-              for cls, r in preset_column(name, audience["kind"]).items()}
+    column = {
+        (cls, ""): {"mode": r["mode"], "lag_days": r["lag_days"], "rounding": r["rounding"]}
+        for cls, r in preset_column(name, audience["kind"]).items()
+    }
     before = all_rules(c, audience_id)
     approved = stats.board_approved(c, audience_id)
     olds = [(lookup(before, cls, ref), lookup(column, cls, ref)) for cls, ref in {*before, *column}]

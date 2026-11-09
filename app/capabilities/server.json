@@ -9,6 +9,7 @@
     "allow-connect-server",
     "allow-server-address",
     "allow-setup-info",
-    "allow-cancel-setup"
+    "allow-cancel-setup",
+    "allow-tico-signin"
   ]
 }

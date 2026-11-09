@@ -20,12 +20,13 @@ from backend import threads as TH
 from backend.auth import Auth, Identity
 from backend.config import Settings
 from backend.store import Problem, Store, encode
+from backend import bot_settings as BS
 
 TEAM, APP, BOT_USER, BOT_ID = "T02F3S2SD", "A0BU75YSGT1", "U0BUS6WA4SY", "B0BUNG973DY"
 MARKETING, PRIVATE, LOUNGE, PARTNERS = "C0000000001", "G0000000001", "C0000000002", "C0000000003"
 COMPANY, MEMBERS = "T-company", "T-members"
 WHO = Identity("human:ana", "human", email="ana@acme.example")
-OWNER = Identity("human:ben", "owner", email="ben@acme.example")   # a rule author other than the sender
+OWNER = Identity("human:ben", "owner", email="ben@acme.example")  # a rule author other than the sender
 PEOPLE = [
     {"id": "ana", "name": "Ana Rivera", "email": "ana@acme.example", "team": "leadership", "primary_for": ["*"]},
     {"id": "ben", "name": "Ben", "email": "ben@acme.example", "team": "product", "primary_for": ["product"]},
@@ -34,7 +35,12 @@ PEOPLE = [
 ]
 BOTS = {
     "coo": {"display_name": "Tico", "description": "The assistant.", "reports_to": None, "status": "active"},
-    "legal": {"display_name": "Legal", "description": "Contracts, terms and legal risk.", "reports_to": None, "status": "active"},
+    "legal": {
+        "display_name": "Legal",
+        "description": "Contracts, terms and legal risk.",
+        "reports_to": None,
+        "status": "active",
+    },
 }
 USERS = {
     "U1": {"id": "U1", "team_id": TEAM, "name": "ana", "profile": {"email": "ana@acme.example"}},
@@ -50,17 +56,19 @@ CHANNELS = {
     PARTNERS: {"id": PARTNERS, "name": "partners", "is_member": True, "is_private": False, "is_ext_shared": True},
 }
 CHANNEL_MEMBERS = {MARKETING: ["U1", "U2", BOT_USER], PRIVATE: ["U1"], LOUNGE: ["U1", "U3"], PARTNERS: ["U1"]}
+
+
 class FakeSlack:
     """The Web API as the bridge sees it: canned users, channels and members, and every post, update and note."""
 
     def __init__(self):
         self.channels, self.members = copy.deepcopy(CHANNELS), copy.deepcopy(CHANNEL_MEMBERS)
-        self.pages = {}                             # channel -> top-level history
+        self.pages = {}  # channel -> top-level history
         self.posts, self.updates, self.deletes, self.ephemeral = [], [], [], []
-        self.lose = []                              # per send: None, "before" (Slack never got it), "after" (it did)
-        self.page_size = 200                        # the metadata lookups' page (a test makes it small to page)
-        self.on_post = None                         # a hook run as a post lands (a test revises the message mid-send)
-        self.down = False                           # True: Slack cannot be reached for the channel's check
+        self.lose = []  # per send: None, "before" (Slack never got it), "after" (it did)
+        self.page_size = 200  # the metadata lookups' page (a test makes it small to page)
+        self.on_post = None  # a hook run as a post lands (a test revises the message mid-send)
+        self.down = False  # True: Slack cannot be reached for the channel's check
 
     def auth_test(self):
         return {"ok": True, "team_id": TEAM, "user_id": BOT_USER, "bot_id": BOT_ID, "url": "https://acme.slack.com/"}
@@ -99,20 +107,34 @@ class FakeSlack:
 
     def history_metadata_page(self, channel, oldest, cursor=""):
         """Top-level messages only, as conversations.history gives them, with their metadata."""
-        rows = [m for m in self.posts if m["channel"] == channel and not m["thread_ts"] and float(m["ts"]) > float(oldest or 0)]
+        rows = [
+            m
+            for m in self.posts
+            if m["channel"] == channel and not m["thread_ts"] and float(m["ts"]) > float(oldest or 0)
+        ]
         return self._page(rows, cursor)
 
     def replies_metadata_page(self, channel, thread_ts, oldest, cursor=""):
         """The replies in one thread, as conversations.replies gives them (the root is not among them)."""
-        rows = [m for m in self.posts if m["channel"] == channel and m["thread_ts"] == thread_ts
-                and float(m["ts"]) > float(oldest or 0)]
+        rows = [
+            m
+            for m in self.posts
+            if m["channel"] == channel and m["thread_ts"] == thread_ts and float(m["ts"]) > float(oldest or 0)
+        ]
         return self._page(rows, cursor)
 
     def add_post(self, channel, thread_ts, text, delivery_id):
         """A message as Slack keeps it: the ts is the time it was made, so the reconcile window sees it."""
         ts = f"{time.time() + len(self.posts) * 0.001:.6f}"
-        self.posts.append({"channel": channel, "thread_ts": thread_ts, "text": text, "ts": ts,
-                           "metadata": {"event_type": "tico_thread_message", "event_payload": {"delivery_id": delivery_id}}})
+        self.posts.append(
+            {
+                "channel": channel,
+                "thread_ts": thread_ts,
+                "text": text,
+                "ts": ts,
+                "metadata": {"event_type": "tico_thread_message", "event_payload": {"delivery_id": delivery_id}},
+            }
+        )
         return ts
 
     def post_thread_message(self, channel, thread_ts, text, delivery_id):
@@ -162,25 +184,37 @@ def hub(tmp_path):
     registry = tmp_path / "hub-registry"
     registry.mkdir()
     (registry / "hub-access.yaml").write_text("owner: ana@acme.example\nallowed_domains: [acme.example]\n")
-    settings = Settings(db_path=tmp_path / "hub.db", slack_team_id=TEAM, slack_app_id=APP, registry_dir=registry,
-                        assistant_name="Tico")
+    settings = Settings(
+        db_path=tmp_path / "hub.db", slack_team_id=TEAM, slack_app_id=APP, registry_dir=registry, assistant_name="Tico"
+    )
     store = Store(settings)
     store.initialize()
     with store.transaction() as c:
-        H.sync_registry(c, {slug: {"name": slug, "runtime": "fake", **entry} for slug, entry in BOTS.items()},
-                        {"people": PEOPLE})
-        c.execute("INSERT INTO registry_metadata VALUES('people',?)", (encode({
-            "default_user": "ana", "teams": {}, "people": PEOPLE}),))
+        H.sync_registry(
+            c, {slug: {"name": slug, "runtime": "fake", **entry} for slug, entry in BOTS.items()}, {"people": PEOPLE}
+        )
+        c.execute(
+            "INSERT INTO registry_metadata VALUES('people',?)",
+            (encode({"default_user": "ana", "teams": {}, "people": PEOPLE}),),
+        )
         for slug, entry in BOTS.items():
-            c.execute("INSERT INTO bot_config(bot,config,team,owner_id,description,reports_to) VALUES(?,?,?,?,?,?)",
-                      (slug, encode({"name": slug, "runtime": "fake"}), None, "ana", entry["description"], entry["reports_to"]))
+            c.execute(
+                'INSERT INTO bot_config(bot,team,owner_id,description,reports_to) VALUES(?,?,?,?,?)',
+                (slug, None, 'ana', entry['description'], entry['reports_to']),
+            )
+            BS.write(c, slug, {'name': slug, 'runtime': 'fake'})
         now = H.now()
         for thread_id, audience, subject in ((COMPANY, "company", "Marketing"), (MEMBERS, "members", "Plans")):
-            c.execute("INSERT INTO conversations (id,kind,subject,created_at,audience,root_id,path) VALUES (?,?,?,?,?,?,'')",
-                      (thread_id, "thread", subject, now, audience, thread_id))
+            c.execute(
+                "INSERT INTO conversations (id,kind,subject,created_at,audience,root_id,path) VALUES (?,?,?,?,?,?,'')",
+                (thread_id, "thread", subject, now, audience, thread_id),
+            )
         # A members thread is read by its members: Ana is one, so the admin can see it and link it.
-        c.execute("INSERT INTO thread_members (id,thread_id,actor,role,added_by,created_at,updated_at) "
-                  "VALUES ('m-members-ana',?,'human:ana','member','human:ben',?,?)", (MEMBERS, now, now))
+        c.execute(
+            "INSERT INTO thread_members (id,thread_id,actor,role,added_by,created_at,updated_at) "
+            "VALUES ('m-members-ana',?,'human:ana','member','human:ben',?,?)",
+            (MEMBERS, now, now),
+        )
     return store
 
 
@@ -238,20 +272,55 @@ def ts(n):
 
 
 def chan_event(stamp, text, user="U1", thread_ts=None):
-    return {"op": "store", "event_id": f"Ev{stamp}", "team_id": TEAM, "api_app_id": APP, "channel": MARKETING,
-            "channel_kind": "channel", "ts": stamp, "thread_ts": thread_ts or stamp, "reply_ts": thread_ts or stamp,
-            "user_id": user, "author": "human", "author_name": None, "event_type": "message.channels", "text": text}
+    return {
+        "op": "store",
+        "event_id": f"Ev{stamp}",
+        "team_id": TEAM,
+        "api_app_id": APP,
+        "channel": MARKETING,
+        "channel_kind": "channel",
+        "ts": stamp,
+        "thread_ts": thread_ts or stamp,
+        "reply_ts": thread_ts or stamp,
+        "user_id": user,
+        "author": "human",
+        "author_name": None,
+        "event_type": "message.channels",
+        "text": text,
+    }
 
 
 def chan_edit(stamp, text, user="U1"):
-    return {"op": "edit", "event_id": f"Ed{stamp}", "team_id": TEAM, "api_app_id": APP, "channel": MARKETING, "ts": stamp,
-            "thread_ts": stamp, "reply_ts": stamp, "user_id": user, "author": "human", "event_type": "message.channels",
-            "text": text}
+    return {
+        "op": "edit",
+        "event_id": f"Ed{stamp}",
+        "team_id": TEAM,
+        "api_app_id": APP,
+        "channel": MARKETING,
+        "ts": stamp,
+        "thread_ts": stamp,
+        "reply_ts": stamp,
+        "user_id": user,
+        "author": "human",
+        "event_type": "message.channels",
+        "text": text,
+    }
 
 
 def chan_delete(stamp, user="U1"):
-    return {"op": "delete", "event_id": f"Ed{stamp}", "team_id": TEAM, "api_app_id": APP, "channel": MARKETING, "ts": stamp,
-            "thread_ts": stamp, "reply_ts": stamp, "user_id": user, "author": "human", "event_type": "message.channels"}
+    return {
+        "op": "delete",
+        "event_id": f"Ed{stamp}",
+        "team_id": TEAM,
+        "api_app_id": APP,
+        "channel": MARKETING,
+        "ts": stamp,
+        "thread_ts": stamp,
+        "reply_ts": stamp,
+        "user_id": user,
+        "author": "human",
+        "event_type": "message.channels",
+    }
 
 
 def send_as_ana(world, text, parent=None, thread=COMPANY):
@@ -260,25 +329,40 @@ def send_as_ana(world, text, parent=None, thread=COMPANY):
 
 
 def outside_members(world, thread_id=COMPANY):
-    return [r["actor"] for r in all_rows(world, "SELECT actor FROM thread_members WHERE thread_id=? "
-                                               "AND actor LIKE 'slack:%'", thread_id)]
+    return [
+        r["actor"]
+        for r in all_rows(
+            world, "SELECT actor FROM thread_members WHERE thread_id=? AND actor LIKE 'slack:%'", thread_id
+        )
+    ]
 
 
 def origin_message(world, stamp):
-    return one(world, "SELECT m.id, m.body, m.revision, m.deleted_at, m.origin_id, m.conversation_id FROM messages m "
-                      "JOIN slack_message_links l ON l.message_id = m.id WHERE l.channel_id=? AND l.ts=? AND l.direction='in'",
-               MARKETING, stamp)
+    return one(
+        world,
+        "SELECT m.id, m.body, m.revision, m.deleted_at, m.origin_id, m.conversation_id FROM messages m "
+        "JOIN slack_message_links l ON l.message_id = m.id WHERE l.channel_id=? AND l.ts=? AND l.direction='in'",
+        MARKETING,
+        stamp,
+    )
 
 
 # ----------------------------------------------------------------------------- linking
 def test_a_link_is_requested_for_one_root_thread_at_a_time(world):
     with world.hub.transaction() as c:
-        c.execute("INSERT INTO conversations (id,kind,subject,created_at,audience,root_id,parent_id,parent_message_id,path) "
-                  "VALUES ('T-reply','thread','Reply','x','company',?,?,'m1','')", (COMPANY, COMPANY))
-        c.execute("INSERT INTO conversations (id,kind,subject,created_at,audience,root_id,path) "
-                  "VALUES ('T-own','thread','Own','x','personal','T-own','')")
-        c.execute("INSERT INTO thread_members (id,thread_id,actor,role,added_by,created_at,updated_at) "
-                  "VALUES ('m-own-ana','T-own','human:ana','member','human:ana','x','x')")
+        c.execute(
+            "INSERT INTO conversations (id,kind,subject,created_at,audience,root_id,parent_id,parent_message_id,path) "
+            "VALUES ('T-reply','thread','Reply','x','company',?,?,'m1','')",
+            (COMPANY, COMPANY),
+        )
+        c.execute(
+            "INSERT INTO conversations (id,kind,subject,created_at,audience,root_id,path) "
+            "VALUES ('T-own','thread','Own','x','personal','T-own','')"
+        )
+        c.execute(
+            "INSERT INTO thread_members (id,thread_id,actor,role,added_by,created_at,updated_at) "
+            "VALUES ('m-own-ana','T-own','human:ana','member','human:ana','x','x')"
+        )
     with pytest.raises(Problem) as sub:
         request(world, "#marketing", thread="T-reply")
     assert sub.value.code == "not_root"
@@ -292,70 +376,82 @@ def test_a_link_is_requested_for_one_root_thread_at_a_time(world):
     assert link_row(world, link_id)["state"] == "requested"
 
 
-@pytest.mark.parametrize("ref, thread, why", [
-    ("#marketing", COMPANY, None),
-    ("#marketing", MEMBERS, "company thread"),       # a public channel needs a company thread
-    ("#secret", COMPANY, "members thread"),          # a private channel needs a members thread
-    ("#partners", COMPANY, "Slack Connect"),         # a shared channel is refused
-    ("#lounge", COMPANY, "don't map"),               # a member who is not admitted does not map to a roster person
-    ("#ghost", COMPANY, "No channel named"),
-])
-def test_a_channel_links_only_when_its_audience_and_every_member_allow_it(world, ref, thread, why):
-    link_id = request(world, ref, thread=thread)
-    state = gate(world, link_id)
-    if why is None:
-        assert state == "active"
-        assert link_row(world, link_id)["channel_id"] == MARKETING
-        assert outside_members(world) == [f"slack:{MARKETING}"]
-        assert [m["person_id"] for m in all_rows(world, "SELECT person_id FROM slack_link_members WHERE link_id=? "
-                                                        "ORDER BY person_id", link_id)] == ["ana", "ben"]
-    else:
-        assert state == "refused"
-        assert why in link_row(world, link_id)["reason"]
-        assert outside_members(world) == []
+def test_a_channel_links_only_when_its_audience_and_every_member_allow_it(world):
+    # The five refusals come first, so the active link's outside members are not there to mask a refused one.
+    for ref, thread, why in [
+        ("#marketing", MEMBERS, "company thread"),  # a public channel needs a company thread
+        ("#secret", COMPANY, "members thread"),  # a private channel needs a members thread
+        ("#partners", COMPANY, "Slack Connect"),  # a shared channel is refused
+        ("#lounge", COMPANY, "don't map"),  # a member who is not admitted does not map to a roster person
+        ("#ghost", COMPANY, "No channel named"),
+    ]:
+        link_id = request(world, ref, thread=thread)
+        assert gate(world, link_id) == "refused", ref
+        assert why in link_row(world, link_id)["reason"], ref
+        assert outside_members(world) == [], ref
+    link_id = request(world, "#marketing", thread=COMPANY)
+    assert gate(world, link_id) == "active"
+    assert link_row(world, link_id)["channel_id"] == MARKETING
+    assert outside_members(world) == [f"slack:{MARKETING}"]
+    assert [
+        m["person_id"]
+        for m in all_rows(world, "SELECT person_id FROM slack_link_members WHERE link_id=? ORDER BY person_id", link_id)
+    ] == ["ana", "ben"]
 
 
 # ----------------------------------------------------------------------------- suspension
-@pytest.mark.parametrize("change", ["slack connect", "unmapped member", "thread narrows"])
-def test_a_link_that_stops_fitting_is_suspended_with_one_needs_you_item(world, change):
+def test_a_link_that_stops_fitting_is_suspended_with_one_needs_you_item_and_a_second_break_reuses_it(world):
     link_id = activate_marketing(world, members=("U1",))
-    if change == "slack connect":
-        world.slack.channels[MARKETING]["is_ext_shared"] = True
-    elif change == "unmapped member":
-        world.slack.members[MARKETING].append("U3")
-    else:
-        with world.hub.transaction() as c:
-            c.execute("UPDATE conversations SET audience='members' WHERE id=?", (COMPANY,))
-    world.clock.advance(ST.CHECK_SECONDS + 1)
-    world.bridge.check_links()
-    row = link_row(world, link_id)
-    assert row["state"] == "suspended"
-    task = one(world, "SELECT id, title FROM tasks WHERE id=?", row["needs_task_id"])
-    assert "stopped" in task["title"]
-
-
-def test_a_second_break_reuses_the_open_needs_you_item(world):
-    link_id = activate_marketing(world, members=("U1",))
-    world.slack.channels[MARKETING]["is_ext_shared"] = True
-    world.clock.advance(ST.CHECK_SECONDS + 1)
-    world.bridge.check_links()
-    first = link_row(world, link_id)["needs_task_id"]
-    del world.slack.channels[MARKETING]["is_ext_shared"]
-    ST.resume_link(world.hub, WHO, link_id)
-    assert gate(world, link_id) == "active"
-    world.slack.channels[MARKETING]["is_ext_shared"] = True
-    world.clock.advance(ST.CHECK_SECONDS + 1)
-    world.bridge.check_links()
-    assert link_row(world, link_id)["needs_task_id"] == first
+    breaks = {
+        "slack connect": (
+            lambda: world.slack.channels[MARKETING].__setitem__("is_ext_shared", True),
+            lambda: world.slack.channels[MARKETING].pop("is_ext_shared"),
+        ),
+        "unmapped member": (
+            lambda: world.slack.members[MARKETING].append("U3"),
+            lambda: world.slack.members[MARKETING].remove("U3"),
+        ),
+        "thread narrows": (lambda: set_audience(world, "members"), lambda: set_audience(world, "company")),
+    }
+    first = None
+    for change, (apply, undo) in breaks.items():
+        apply()
+        world.clock.advance(ST.CHECK_SECONDS + 1)
+        world.bridge.check_links()
+        row = link_row(world, link_id)
+        assert row["state"] == "suspended", change
+        task = one(world, "SELECT id, title FROM tasks WHERE id=?", row["needs_task_id"])
+        assert "stopped" in task["title"], change
+        first = first or row["needs_task_id"]
+        assert row["needs_task_id"] == first, f"{change}: a second break reuses the open needs-you item"
+        undo()
+        ST.resume_link(world.hub, WHO, link_id)
+        assert gate(world, link_id) == "active", change
     assert len(all_rows(world, "SELECT id FROM tasks WHERE title LIKE 'Slack channel #marketing%'")) == 1
+
+
+def set_audience(world, audience):
+    with world.hub.transaction() as c:
+        c.execute("UPDATE conversations SET audience=? WHERE id=?", (audience, COMPANY))
 
 
 # ----------------------------------------------------------------------------- inbound
 def test_a_channel_message_goes_through_the_gateway_as_the_mapped_person_and_never_the_readers_pass(world):
     activate_marketing(world)
-    envelope = {"type": "event_callback", "team_id": TEAM, "api_app_id": APP, "event_id": "Ev-kickoff",
-                "event": {"type": "message", "channel": MARKETING, "channel_type": "channel", "user": "U1",
-                          "ts": ts(1), "text": "Kickoff is at 10"}}
+    envelope = {
+        "type": "event_callback",
+        "team_id": TEAM,
+        "api_app_id": APP,
+        "event_id": "Ev-kickoff",
+        "event": {
+            "type": "message",
+            "channel": MARKETING,
+            "channel_type": "channel",
+            "user": "U1",
+            "ts": ts(1),
+            "text": "Kickoff is at 10",
+        },
+    }
     assert world.gw.receive(envelope) == "posted"
     assert all_rows(world, "SELECT event_id FROM slack_events") == []
     msg = one(world, "SELECT sender_id, body, refs, origin_id FROM messages")
@@ -371,8 +467,11 @@ def test_a_slack_thread_reply_is_a_sub_thread_of_the_message_it_answers(world):
     world.bridge.receive(chan_event(ts(1), "Kickoff"))
     root = origin_message(world, ts(1))
     assert world.bridge.receive(chan_event(ts(2), "Re: kickoff", user="U2", thread_ts=ts(1))) == "posted"
-    reply = one(world, "SELECT m.conversation_id, c.parent_message_id FROM messages m JOIN conversations c "
-                       "ON c.id = m.conversation_id WHERE m.body = 'Re: kickoff'")
+    reply = one(
+        world,
+        "SELECT m.conversation_id, c.parent_message_id FROM messages m JOIN conversations c "
+        "ON c.id = m.conversation_id WHERE m.body = 'Re: kickoff'",
+    )
     assert reply["parent_message_id"] == root["id"]
 
 
@@ -449,7 +548,7 @@ def test_sub_threads_are_flattened_with_the_title_two_levels_down(world):
     reply = send_as_ana(world, "Budget: first pass", parent=root)
     reply_thread = one(world, "SELECT conversation_id FROM messages WHERE id=?", reply)["conversation_id"]
     send_as_ana(world, "Budget: final", parent=reply, thread=reply_thread)
-    with world.hub.transaction() as c:                           # the reply's own sub-thread has a title
+    with world.hub.transaction() as c:  # the reply's own sub-thread has a title
         c.execute("UPDATE conversations SET subject=? WHERE parent_message_id=?", ("Budget", reply))
     world.bridge.outbound()
     root_ts = world.slack.posts[0]["ts"]
@@ -533,8 +632,10 @@ def test_history_stops_at_the_cap(world, monkeypatch):
     monkeypatch.setattr(ST, "HISTORY_CAP", 1)
     now = time.time()
     world.slack.members[MARKETING] = ["U1", BOT_USER]
-    world.slack.pages[MARKETING] = [{"ts": f"{now - 500:.6f}", "user": "U1", "text": "first"},
-                                    {"ts": f"{now - 400:.6f}", "user": "U1", "text": "second"}]
+    world.slack.pages[MARKETING] = [
+        {"ts": f"{now - 500:.6f}", "user": "U1", "text": "first"},
+        {"ts": f"{now - 400:.6f}", "user": "U1", "text": "second"},
+    ]
     link_id = request(world, "#marketing", history=True)
     gate(world, link_id)
     world.clock.advance(61)
@@ -552,8 +653,16 @@ def test_a_duplicate_edit_event_is_one_revision(world):
     assert world.bridge.receive(first) == "edited"
     assert world.bridge.receive(dict(first, event_id="Ed-retry")) == "duplicate"
     assert origin_message(world, ts(1))["revision"] == 1
-    assert len(all_rows(world, "SELECT revision FROM message_revisions WHERE origin_id=?",
-                        origin_message(world, ts(1))["origin_id"])) == 2
+    assert (
+        len(
+            all_rows(
+                world,
+                "SELECT revision FROM message_revisions WHERE origin_id=?",
+                origin_message(world, ts(1))["origin_id"],
+            )
+        )
+        == 2
+    )
 
 
 def test_an_edit_to_the_same_text_is_not_a_revision(world):
@@ -566,7 +675,7 @@ def test_an_edit_to_the_same_text_is_not_a_revision(world):
 
 def test_messages_that_arrive_while_suspended_are_posted_on_resume_in_order(world):
     link_id = activate_marketing(world, members=("U1",))
-    world.slack.members[MARKETING].append("U3")                  # an unmapped member: the link suspends
+    world.slack.members[MARKETING].append("U3")  # an unmapped member: the link suspends
     world.clock.advance(ST.CHECK_SECONDS + 1)
     world.bridge.check_links()
     assert link_row(world, link_id)["state"] == "suspended"
@@ -577,9 +686,9 @@ def test_messages_that_arrive_while_suspended_are_posted_on_resume_in_order(worl
     ST.resume_link(world.hub, WHO, link_id)
     assert gate(world, link_id) == "active"
     world.bridge.tick()
-    assert [m["body"] for m in all_rows(world, "SELECT body FROM messages WHERE body LIKE '%while suspended%' "
-                                               "ORDER BY seq")] == [
-        "first while suspended", "second while suspended"]
+    assert [
+        m["body"] for m in all_rows(world, "SELECT body FROM messages WHERE body LIKE '%while suspended%' ORDER BY seq")
+    ] == ["first while suspended", "second while suspended"]
     assert all_rows(world, "SELECT seq FROM slack_inbound_events") == []
 
 
@@ -590,7 +699,7 @@ def test_users_info_is_asked_once_an_hour_per_user(world, monkeypatch):
     monkeypatch.setattr(world.slack, "users_info", lambda uid: asked.append(uid) or real(uid))
     world.bridge.receive(chan_event(ts(1), "one"))
     world.bridge.receive(chan_event(ts(2), "two"))
-    assert asked.count("U1") == 0                                 # linking asked already, within the hour
+    assert asked.count("U1") == 0  # linking asked already, within the hour
     world.clock.advance(ST.USER_CACHE_SECONDS + 1)
     world.bridge.receive(chan_event(ts(3), "three"))
     assert asked.count("U1") == 1
@@ -601,9 +710,20 @@ def rule_world(world, with_scope=None):
     `with_scope` narrows it to the people it names (a With rule)."""
     from backend.tests.test_org_rule_check import COLOR, Judge
     from backend import org_rules as R
+
     with world.hub.transaction() as c:
-        R.add_rule(c, Auth(world.hub), OWNER, {"kind": "internal", "text": COLOR, "who": {"everyone": True},
-                                             "with": with_scope or {}, "if_broken": "block"})
+        R.add_rule(
+            c,
+            Auth(world.hub),
+            OWNER,
+            {
+                "kind": "internal",
+                "text": COLOR,
+                "who": {"everyone": True},
+                "with": with_scope or {},
+                "if_broken": "block",
+            },
+        )
     world.gw._judge = Judge(world.hub)
     return COLOR
 
@@ -623,14 +743,18 @@ def test_a_rule_break_holds_the_slack_message_as_its_person_with_its_provenance(
 
 def test_send_anyway_carries_a_held_slack_message_in_as_its_person(world):
     from backend import org_rule_check as OR
+
     activate_marketing(world)
     rule_world(world)
     world.bridge.receive(chan_event(ts(1), "The favorite color is teal"))
     hold = one(world, "SELECT id, nonce FROM org_rule_holds")
     with world.hub.transaction() as c:
         OR.send(c, OWNER, hold["id"], hold["nonce"], auth=Auth(world.hub))
-    carried = one(world, "SELECT m.sender_id, m.body FROM messages m JOIN slack_message_links l ON l.message_id = m.id "
-                         "WHERE l.ts = ?", ts(1))
+    carried = one(
+        world,
+        "SELECT m.sender_id, m.body FROM messages m JOIN slack_message_links l ON l.message_id = m.id WHERE l.ts = ?",
+        ts(1),
+    )
     assert carried["sender_id"] == "human:ana" and carried["body"] == "The favorite color is teal"
 
 
@@ -638,7 +762,7 @@ def test_send_anyway_carries_a_held_slack_message_in_as_its_person(world):
 def test_a_narrowed_thread_stops_the_next_send_before_the_slack_check_runs_again(world):
     link_id = activate_marketing(world)
     send_as_ana(world, "Sent while allowed")
-    world.bridge.outbound()                      # the channel's Slack side is trusted for SEND_CHECK_SECONDS from here
+    world.bridge.outbound()  # the channel's Slack side is trusted for SEND_CHECK_SECONDS from here
     assert len(world.slack.posts) == 1
     send_as_ana(world, "Written after the change")
     with world.hub.transaction() as c:
@@ -647,8 +771,12 @@ def test_a_narrowed_thread_stops_the_next_send_before_the_slack_check_runs_again
     assert [r["state"] for r in out] == ["suspended"]
     assert len(world.slack.posts) == 1
     assert link_row(world, link_id)["state"] == "suspended"
-    assert [d["state"] for d in all_rows(world, "SELECT state FROM message_deliveries WHERE state='pending' AND recipient=?",
-                                         f"slack:{MARKETING}")] == ["pending"], "the message written after the change waits"
+    assert [
+        d["state"]
+        for d in all_rows(
+            world, "SELECT state FROM message_deliveries WHERE state='pending' AND recipient=?", f"slack:{MARKETING}"
+        )
+    ] == ["pending"], "the message written after the change waits"
 
 
 def test_a_member_who_can_no_longer_read_the_thread_stops_the_next_send(world, monkeypatch):
@@ -691,7 +819,7 @@ def test_a_posted_message_comes_down_when_the_channel_can_no_longer_read_it(worl
     world.bridge.outbound()
     sent_ts = world.slack.posts[0]["ts"]
     with world.hub.transaction() as c:
-        TH.edit_message(c, WHO, message_id, "Shared then withdrawn, edited")   # the edit makes Tico look at it again
+        TH.edit_message(c, WHO, message_id, "Shared then withdrawn, edited")  # the edit makes Tico look at it again
         c.execute("UPDATE messages SET restricted=1, legacy_audience='shared:legal' WHERE id=?", (message_id,))
     world.bridge.outbound()
     assert world.slack.deletes == [(MARKETING, sent_ts)]
@@ -701,18 +829,43 @@ def test_a_posted_message_comes_down_when_the_channel_can_no_longer_read_it(worl
 # ----------------------------------------------------------------------------- P1-3: one ingress for linked channels
 def test_an_app_mention_in_a_linked_channel_is_carried_once_and_its_message_form_is_a_duplicate(world):
     activate_marketing(world)
-    mention = {"type": "event_callback", "team_id": TEAM, "api_app_id": APP, "event_id": "Ev-mention-1",
-               "event": {"type": "app_mention", "channel": MARKETING, "user": "U1", "ts": ts(1),
-                         "text": f"<@{BOT_USER}> kickoff is at 10?"}}
+    mention = {
+        "type": "event_callback",
+        "team_id": TEAM,
+        "api_app_id": APP,
+        "event_id": "Ev-mention-1",
+        "event": {
+            "type": "app_mention",
+            "channel": MARKETING,
+            "user": "U1",
+            "ts": ts(1),
+            "text": f"<@{BOT_USER}> kickoff is at 10?",
+        },
+    }
     assert world.gw.receive(mention) == "posted"
-    assert all_rows(world, "SELECT event_id FROM slack_events") == [], "a linked channel's mention never reaches the readers' pass"
+    assert all_rows(world, "SELECT event_id FROM slack_events") == [], (
+        "a linked channel's mention never reaches the readers' pass"
+    )
     # The mention also wakes Tico: core's notice ('human:ana in this thread: ...') is written beside the message.
     [carried] = all_rows(world, "SELECT body FROM messages WHERE kind='say'")
     assert "kickoff is at 10?" in carried["body"] and "<@" not in carried["body"]
-    assert len(all_rows(world, "SELECT id FROM messages WHERE body LIKE '%kickoff is at 10?%'")) == 2   # message + notice
-    message = {"type": "event_callback", "team_id": TEAM, "api_app_id": APP, "event_id": "Ev-message-1",
-               "event": {"type": "message", "channel": MARKETING, "channel_type": "channel", "user": "U1", "ts": ts(1),
-                         "text": f"<@{BOT_USER}> kickoff is at 10?"}}
+    assert (
+        len(all_rows(world, "SELECT id FROM messages WHERE body LIKE '%kickoff is at 10?%'")) == 2
+    )  # message + notice
+    message = {
+        "type": "event_callback",
+        "team_id": TEAM,
+        "api_app_id": APP,
+        "event_id": "Ev-message-1",
+        "event": {
+            "type": "message",
+            "channel": MARKETING,
+            "channel_type": "channel",
+            "user": "U1",
+            "ts": ts(1),
+            "text": f"<@{BOT_USER}> kickoff is at 10?",
+        },
+    }
     assert world.gw.receive(message) == "duplicate"
     assert len(all_rows(world, "SELECT id FROM messages WHERE kind='say'")) == 1
 
@@ -756,7 +909,7 @@ def test_a_relink_exports_nothing_written_while_unlinked_and_the_new_link_sends_
 
 # ----------------------------------------------------------------------------- P1-6: the audience reaches the rule check
 def test_a_with_rule_is_checked_against_the_channel_members_who_read_the_thread(world):
-    activate_marketing(world)                    # Ana's message's audience is Ben, who maps and reads the thread
+    activate_marketing(world)  # Ana's message's audience is Ben, who maps and reads the thread
     rule_world(world, with_scope={"people": ["ben"]})
     assert world.bridge.receive(chan_event(ts(1), "The favorite color is teal")) == "held"
 
@@ -769,6 +922,7 @@ def test_a_with_rule_naming_nobody_in_the_audience_does_not_hold(world):
 
 def test_send_anyway_is_refused_when_the_audience_changed_since_the_hold(world):
     from backend import org_rule_check as OR
+
     activate_marketing(world)
     rule_world(world, with_scope={"people": ["ben"]})
     assert world.bridge.receive(chan_event(ts(1), "The favorite color is teal")) == "held"
@@ -785,6 +939,7 @@ def test_send_anyway_is_refused_when_the_audience_changed_since_the_hold(world):
 
 def test_a_message_whose_audience_moves_before_its_write_is_retried_and_then_checked_again(world, monkeypatch):
     from backend import org_rule_check as OR
+
     link_id = activate_marketing(world)
     rule_world(world, with_scope={"people": ["ben"]})
     real = OR.inbound
@@ -812,8 +967,10 @@ def test_a_busy_channel_does_not_hold_back_another_channel_in_one_pass(world, mo
     world.slack.channels[sales] = {"id": sales, "name": "sales", "is_member": True, "is_private": False}
     world.slack.members[sales] = ["U1", BOT_USER]
     with world.hub.transaction() as c:
-        c.execute("INSERT INTO conversations (id,kind,subject,created_at,audience,root_id,path) "
-                  "VALUES ('T-sales','thread','Sales','x','company','T-sales','')")
+        c.execute(
+            "INSERT INTO conversations (id,kind,subject,created_at,audience,root_id,path) "
+            "VALUES ('T-sales','thread','Sales','x','company','T-sales','')"
+        )
     assert gate(world, request(world, "#sales", thread="T-sales")) == "active"
     for n in range(10):
         send_as_ana(world, f"busy {n}")
@@ -838,7 +995,7 @@ def test_a_thread_the_admin_cannot_read_gives_the_same_404_as_a_missing_one(worl
 
 
 def test_a_listing_leaves_out_the_links_to_threads_the_admin_cannot_read(world):
-    link_id = request(world, "#secret", thread=MEMBERS)      # a members thread: Ana is a member, the outsider is not
+    link_id = request(world, "#secret", thread=MEMBERS)  # a members thread: Ana is a member, the outsider is not
     assert gate(world, link_id) == "active"
     assert [r["id"] for r in ST.list_links(world.hub, WHO, auth=Auth(world.hub))["links"]] == [link_id]
     assert ST.list_links(world.hub, OUTSIDER, auth=Auth(world.hub))["links"] == []
@@ -852,7 +1009,7 @@ def test_a_held_edit_without_a_slack_user_is_noted_to_its_author_and_does_not_cr
     activate_marketing(world)
     assert world.bridge.receive(chan_event(ts(1), "BLOCKME: the plan")) == "held"
     edit = chan_edit(ts(1), "Fixed text")
-    del edit["user_id"]                          # message_changed carries no user: the author comes from the mapping
+    del edit["user_id"]  # message_changed carries no user: the author comes from the mapping
     assert world.bridge.receive(edit) == "held"
     assert world.slack.ephemeral[-1][1] == "U1"
     assert "edit" in world.slack.ephemeral[-1][2]
@@ -881,8 +1038,15 @@ def test_a_revision_made_during_the_send_keeps_the_delivery_pending_and_is_sent_
     world.slack.on_post = revise_during_the_send
     world.bridge.outbound()
     assert world.slack.updates == []
-    pending = {r["state"] for r in all_rows(world, "SELECT state FROM message_deliveries WHERE message_id=? AND recipient=?",
-                                             message_id, f"slack:{MARKETING}")}
+    pending = {
+        r["state"]
+        for r in all_rows(
+            world,
+            "SELECT state FROM message_deliveries WHERE message_id=? AND recipient=?",
+            message_id,
+            f"slack:{MARKETING}",
+        )
+    }
     assert pending == {"pending"}, "the revision was not sent, so the delivery is not settled"
     world.slack.on_post = None
     world.bridge.outbound()
@@ -897,7 +1061,10 @@ def test_an_uncertain_reply_is_found_in_its_slack_thread_not_in_the_channel_hist
     reply = send_as_ana(world, "Budget", parent=root)
     world.slack.lose = ["after"]
     world.bridge.outbound()
-    assert one(world, "SELECT state FROM slack_message_links WHERE direction='out' AND message_id=?", reply)["state"] == "uncertain"
+    assert (
+        one(world, "SELECT state FROM slack_message_links WHERE direction='out' AND message_id=?", reply)["state"]
+        == "uncertain"
+    )
     world.clock.advance(130)
     world.bridge.reconcile()
     world.bridge.outbound()
@@ -917,8 +1084,10 @@ def test_an_uncertain_post_is_found_on_a_later_page_and_not_sent_again(world):
     world.bridge.reconcile()
     world.bridge.outbound()
     assert len(world.slack.posts) == 4, "the target was found on page two, so it is not posted again"
-    assert [d["state"] for d in all_rows(world, "SELECT state FROM message_deliveries WHERE recipient=?",
-                                         f"slack:{MARKETING}")] == ["delivered"]
+    assert [
+        d["state"]
+        for d in all_rows(world, "SELECT state FROM message_deliveries WHERE recipient=?", f"slack:{MARKETING}")
+    ] == ["delivered"]
 
 
 def test_an_uncertain_post_is_absent_only_after_every_page_of_the_window_is_read(world, monkeypatch):
@@ -957,17 +1126,22 @@ def test_an_older_edit_arriving_after_a_newer_one_is_stale_and_changes_nothing(w
 # ----------------------------------------------------------------------------- audit 38: restricted messages use fresh members
 def test_a_member_who_joins_later_is_in_the_restricted_message_check_from_the_next_send(world, monkeypatch):
     real = TH.message_readable
-    monkeypatch.setattr(TH, "message_readable",
-                        lambda c, v, m, **kw: v.actor == "human:ana" if m.get("restricted") else real(c, v, m, **kw))
+    monkeypatch.setattr(
+        TH,
+        "message_readable",
+        lambda c, v, m, **kw: v.actor == "human:ana" if m.get("restricted") else real(c, v, m, **kw),
+    )
     activate_marketing(world, members=("U1",))
     message_id = send_as_ana(world, "For Ana to read, not the channel")
     with world.hub.transaction() as c:
         c.execute("UPDATE messages SET restricted=1, legacy_audience='shared:legal' WHERE id=?", (message_id,))
-    world.slack.members[MARKETING] = ["U1", "U2", BOT_USER]          # Ben joins: a mapped member who cannot read it
+    world.slack.members[MARKETING] = ["U1", "U2", BOT_USER]  # Ben joins: a mapped member who cannot read it
     assert [r["state"] for r in world.bridge.outbound()] == ["moot"]
     assert world.slack.posts == []
-    assert [r["person_id"] for r in all_rows(world, "SELECT person_id FROM slack_link_members ORDER BY person_id")] \
-        == ["ana", "ben"]
+    assert [r["person_id"] for r in all_rows(world, "SELECT person_id FROM slack_link_members ORDER BY person_id")] == [
+        "ana",
+        "ben",
+    ]
 
 
 def test_a_restricted_message_waits_for_a_fresh_member_check_and_is_not_sent_on_a_stale_one(world):
@@ -975,12 +1149,12 @@ def test_a_restricted_message_waits_for_a_fresh_member_check_and_is_not_sent_on_
     message_id = send_as_ana(world, "Restricted, with the snapshot out of date")
     with world.hub.transaction() as c:
         c.execute("UPDATE messages SET restricted=1 WHERE id=?", (message_id,))
-    world.bridge._verified.clear()                                   # the snapshot is older than the check window
+    world.bridge._verified.clear()  # the snapshot is older than the check window
     with world.hub.read() as c:
         due = ST._due(c, MARKETING, 10)
     assert due and world.bridge.send_one(link_row(world, link_id), due[0])["state"] == "waiting"
     assert world.slack.posts == []
-    assert [r["state"] for r in world.bridge.outbound()] == ["delivered"]   # the next pass checks again, then sends
+    assert [r["state"] for r in world.bridge.outbound()] == ["delivered"]  # the next pass checks again, then sends
     assert len(world.slack.posts) == 1
 
 
@@ -991,8 +1165,10 @@ def test_a_private_channels_listed_reader_joins_its_members_thread_and_gets_the_
     link_id = request(world, "#secret", thread=MEMBERS)
     assert gate(world, link_id) == "active"
     assert one(world, "SELECT actor FROM thread_members WHERE thread_id=? AND actor='bot:legal'", MEMBERS)
-    assert one(world, "SELECT notify FROM thread_followers WHERE thread_id=? AND actor='bot:legal'", MEMBERS)["notify"] \
+    assert (
+        one(world, "SELECT notify FROM thread_followers WHERE thread_id=? AND actor='bot:legal'", MEMBERS)["notify"]
         == "digest"
+    )
 
 
 # ----------------------------------------------------------------------------- audit 23 (Slack): a terminal refusal surfaces once
@@ -1006,8 +1182,12 @@ def test_a_terminal_slack_refusal_files_one_needs_you_item_until_it_is_resolved(
     send_as_ana(world, "first")
     send_as_ana(world, "second")
     world.bridge.outbound()
-    assert [r["state"] for r in all_rows(world, "SELECT state FROM message_deliveries WHERE recipient LIKE 'slack:%' "
-                                                "ORDER BY created_at")] == ["failed", "failed"]
+    assert [
+        r["state"]
+        for r in all_rows(
+            world, "SELECT state FROM message_deliveries WHERE recipient LIKE 'slack:%' ORDER BY created_at"
+        )
+    ] == ["failed", "failed"]
     items = all_rows(world, "SELECT id FROM tasks WHERE title LIKE 'A message to Slack%'")
     assert len(items) == 1, "two refusals in one run file one item"
     assert link_row(world, link_id)["state"] == "active", "a message refusal does not suspend the channel"

@@ -79,7 +79,7 @@ Always:
 ## Talking to {{app_name}}
 Ask about policies with `hub doc ask "<topic>"` (the Librarian cites the page); read the roster with `hub team show`
 and start dates and meetings with `hub calendar list`. A question for the requester is
-`hub task ask <id>`, one open question per task. Something a human must decide or do is
+`hub task question "<question>" --on <person> --parent <id>`, one open question per task. Something a human must decide or do is
 `hub task create --owner <person>`. Where a people mailbox is connected, leave a
 draft with `mail.sh draft --reply-to`; never `send`. Finish every task.
 

@@ -10,7 +10,7 @@ from backend.tests.test_shared_logins import queued_login  # noqa: F401
 
 def scribe_id(api):
     with api.app.state.store.read() as c:
-        return H.resolve_bot(c, "scribe")["id"]     # a new bot's id is a UUID; status rows and claims key by it
+        return H.resolve_bot(c, "scribe")["id"]  # a new bot's id is a UUID; status rows and claims key by it
 
 
 def first_wait(api):
@@ -20,9 +20,19 @@ def first_wait(api):
     holder_task, holder = task_attempt(api, machine, "Count the private ledger")
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE tasks SET private=1 WHERE id=?", (holder_task,))
-    post(api, "bots", {"slug": "scribe", "display_name": "Scribe", "description": "Writes summaries",
-                       "status": "active", "model": "gpt-6.1-sol", "harness": "codex",
-                       "runner_id": machine["runner_id"]})
+    post(
+        api,
+        "bots",
+        {
+            "slug": "scribe",
+            "display_name": "Scribe",
+            "description": "Writes summaries",
+            "status": "active",
+            "model": "gpt-6.1-sol",
+            "harness": "codex",
+            "runner_id": machine["runner_id"],
+        },
+    )
     scribe = scribe_id(api)
     ready(api, machine, ["ops", scribe])
     task = post(api, "tasks", {"owner": "scribe", "title": "Count the public words", "body": "Count them."})
@@ -31,9 +41,24 @@ def first_wait(api):
     with api.app.state.store.read() as c:
         assert H.status(c, scribe) is None  # Never delete a row to manufacture the regression.
         assert c.execute("SELECT state FROM attempts WHERE id=?", (attempt["id"],)).fetchone()[0] == "leased"
-    events(api, machine, attempt["id"], [("status", {
-        "waiting": "Waiting for this computer's ChatGPT login to be free", "login": "this computer's ChatGPT login",
-        "holder": "ops", "holder_attempt": holder["id"], "since": 1_760_900_760, "position": 2})])
+    events(
+        api,
+        machine,
+        attempt["id"],
+        [
+            (
+                "status",
+                {
+                    "waiting": "Waiting for this computer's ChatGPT login to be free",
+                    "login": "this computer's ChatGPT login",
+                    "holder": "ops",
+                    "holder_attempt": holder["id"],
+                    "since": 1_760_900_760,
+                    "position": 2,
+                },
+            )
+        ],
+    )
     return machine, task, attempt
 
 
@@ -74,8 +99,7 @@ def test_first_wait_status_preserves_holder_privacy_and_bot_read_access(api, que
     assert row["task_id"] is None
     assert [s for s in get(api, "status", "ben-test")["bots"] if s and s["bot"] == scribe] == [row]
     with api.app.state.store.transaction() as c:
-        restrict(c, "scribe", see={"people": ["ana", "ben"]}, read={"people": ["ana"]},
-                 write={"people": ["ana"]})
+        restrict(c, "scribe", see={"people": ["ana", "ben"]}, read={"people": ["ana"]}, write={"people": ["ana"]})
     get(api, "status?bot=scribe", "ben-test", expected=403)
     assert not [s for s in get(api, "status", "ben-test")["bots"] if s and s["bot"] == scribe]
 
@@ -96,8 +120,9 @@ def test_wait_projection_streams_start_clear_and_termination_outside_its_convers
 
     def streamed(after, who=ana):
         with store.read() as c:
-            sent, cursor, *_ = E.read(c, auth, who, after, topics=("runs", "bots"),
-                                     conversations=("unrelated-chat",), bots=("scribe",))
+            sent, cursor, *_ = E.read(
+                c, auth, who, after, topics=("runs", "bots"), conversations=("unrelated-chat",), bots=("scribe",)
+            )
         assert not [d for _, topic, d in sent if topic == "runs"]
         return [d["status"] for _, topic, d in sent if topic == "bots"], cursor
 

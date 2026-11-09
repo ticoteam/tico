@@ -11,6 +11,7 @@ what was looked at without writing the person's address into the hub, which any 
 A named query is different: its catalog entry is already reviewed text, so the audit records the
 entry itself (with `{"$param": "name"}` in place of each value) and the parameter names.
 """
+
 import datetime
 import json
 import re
@@ -23,16 +24,38 @@ from clients.dbquery import MAX_ROWS_CEILING, Refusal
 VERBS = ("find", "aggregate", "count", "distinct", "collections")
 # Anything that writes, or evaluates JavaScript in the server, wherever it is nested (a `$unionWith`
 # or `$lookup` sub-pipeline can carry `$out` too, so the walk covers every level).
-FORBIDDEN = {"$out": "writes a collection", "$merge": "writes a collection", "$function": "runs JavaScript on the server",
-             "$accumulator": "runs JavaScript on the server", "$where": "runs JavaScript on the server"}
+FORBIDDEN = {
+    "$out": "writes a collection",
+    "$merge": "writes a collection",
+    "$function": "runs JavaScript on the server",
+    "$accumulator": "runs JavaScript on the server",
+    "$where": "runs JavaScript on the server",
+}
 # Stages that read the deployment rather than the data.
 ADMIN_STAGES = ("$currentOp", "$listSessions", "$listLocalSessions", "$listSampledQueries", "$queryStats")
 READ_PREFERENCES = ("primary", "primaryPreferred", "secondary", "secondaryPreferred", "nearest")
 DEFAULT_READ_PREFERENCE = "secondaryPreferred"
 MAX_COLLECTIONS, SAMPLE_DOCS, MAX_DEPTH = 200, 20, 60
-WRITE_ACTIONS = {"insert", "update", "remove", "convertToCapped", "collMod", "anyAction", "applyOps", "bypassDocumentValidation",
-                 "compact", "planCacheWrite", "planCacheIndexFilter", "shutdown", "setParameter", "cleanupOrphaned", "unlock"}
-WRITE_PREFIX = re.compile(r"^(create|drop|rename|update|insert|remove|grant|revoke|replSet|enableSharding|moveChunk|splitChunk)")
+WRITE_ACTIONS = {
+    "insert",
+    "update",
+    "remove",
+    "convertToCapped",
+    "collMod",
+    "anyAction",
+    "applyOps",
+    "bypassDocumentValidation",
+    "compact",
+    "planCacheWrite",
+    "planCacheIndexFilter",
+    "shutdown",
+    "setParameter",
+    "cleanupOrphaned",
+    "unlock",
+}
+WRITE_PREFIX = re.compile(
+    r"^(create|drop|rename|update|insert|remove|grant|revoke|replSet|enableSharding|moveChunk|splitChunk)"
+)
 
 
 # ----------------------------------------------------------------------------- the connection string
@@ -41,7 +64,7 @@ class Target:
     srv: bool
     hosts: str
     database: str
-    options: dict          # lower-cased option name -> value, from the query string
+    options: dict  # lower-cased option name -> value, from the query string
 
     @property
     def atlas(self):
@@ -60,20 +83,32 @@ def parse_target(url):
     srv = parts.scheme.lower() == "mongodb+srv"
     hosts = parts.netloc.rpartition("@")[2]
     if not hosts:
-        raise Refusal("url", "the connection string has no host; Atlas gives `mongodb+srv://user:pass@cluster0.xxxxx.mongodb.net/`")
+        raise Refusal(
+            "url",
+            "the connection string has no host; Atlas gives `mongodb+srv://user:pass@cluster0.xxxxx.mongodb.net/`",
+        )
     if srv and ("," in hosts or ":" in hosts):
-        raise Refusal("url", "a mongodb+srv:// string names exactly one host and no port (Atlas: `cluster0.xxxxx.mongodb.net`)")
+        raise Refusal(
+            "url", "a mongodb+srv:// string names exactly one host and no port (Atlas: `cluster0.xxxxx.mongodb.net`)"
+        )
     database = unquote(parts.path.lstrip("/"))
     if not database:
-        raise Refusal("url", "the connection string must name the database in its path, e.g. "
-                             "`mongodb+srv://user:pass@cluster0.xxxxx.mongodb.net/app` (the Atlas user's `read` role is granted on it)")
+        raise Refusal(
+            "url",
+            "the connection string must name the database in its path, e.g. "
+            "`mongodb+srv://user:pass@cluster0.xxxxx.mongodb.net/app` (the Atlas user's `read` role is granted on it)",
+        )
     options = {k.lower(): v for k, v in parse_qsl(parts.query, keep_blank_values=True)}
     return Target(srv, hosts, database, options)
 
 
 def read_preference(db):
     """The read preference: the bot's `access:` entry, else the URL's, else secondaryPreferred."""
-    wanted = str(db.options.get("read_preference") or parse_target(db.url).options.get("readpreference") or DEFAULT_READ_PREFERENCE)
+    wanted = str(
+        db.options.get("read_preference")
+        or parse_target(db.url).options.get("readpreference")
+        or DEFAULT_READ_PREFERENCE
+    )
     for name in READ_PREFERENCES:
         if name.lower() == wanted.lower():
             return name
@@ -83,11 +118,19 @@ def read_preference(db):
 def client_options(db, timeout):
     """Keyword arguments for MongoClient; they win over anything the URL says."""
     target = parse_target(db.url)
-    options = {"appname": "tico-db", "serverSelectionTimeoutMS": 10_000, "connectTimeoutMS": 10_000,
-               "socketTimeoutMS": int((timeout + 5) * 1000), "retryWrites": False, "maxPoolSize": 2,
-               "readPreference": read_preference(db)}
+    options = {
+        "appname": "tico-db",
+        "serverSelectionTimeoutMS": 10_000,
+        "connectTimeoutMS": 10_000,
+        "socketTimeoutMS": int((timeout + 5) * 1000),
+        "retryWrites": False,
+        "maxPoolSize": 2,
+        "readPreference": read_preference(db),
+    }
     if target.atlas and "authsource" not in target.options:
-        options["authSource"] = "admin"      # Atlas users live in `admin`; a database in the path would otherwise be the auth database
+        options["authSource"] = (
+            "admin"  # Atlas users live in `admin`; a database in the path would otherwise be the auth database
+        )
     return options
 
 
@@ -95,29 +138,39 @@ def connect(db, timeout):
     try:
         import pymongo
     except ImportError:
-        raise Refusal("driver", "the mongodb driver is not installed on this computer; run `pip install 'pymongo>=4.10' dnspython` "
-                                "in the runner's environment (both are in backend/requirements.txt)") from None
+        raise Refusal(
+            "driver",
+            "the mongodb driver is not installed on this computer; run `pip install 'pymongo>=4.10' dnspython` "
+            "in the runner's environment (both are in backend/requirements.txt)",
+        ) from None
     return pymongo.MongoClient(db.url, **client_options(db, timeout))
 
 
 # ----------------------------------------------------------------------------- Extended JSON and the read-only rules
 def json_options():
     from bson import json_util
-    return json_util.RELAXED_JSON_OPTIONS.with_options(tz_aware=True, tzinfo=datetime.timezone.utc)   # dates are UTC, never naive
+
+    return json_util.RELAXED_JSON_OPTIONS.with_options(
+        tz_aware=True, tzinfo=datetime.timezone.utc
+    )  # dates are UTC, never naive
 
 
 def loads(text, what):
     """Extended JSON (relaxed) text as Python values: `{"$oid": ...}` is an ObjectId, `{"$date": ...}` a datetime."""
     from bson import json_util
+
     try:
         return json_util.loads(text, json_options=json_options())
     except (ValueError, TypeError, RecursionError) as exc:
-        raise Refusal("usage", f"{what} is not valid JSON ({str(exc).splitlines()[0][:120]}); pass Extended JSON in single quotes") from None
+        raise Refusal(
+            "usage", f"{what} is not valid JSON ({str(exc).splitlines()[0][:120]}); pass Extended JSON in single quotes"
+        ) from None
 
 
 def dumps(value):
     """Relaxed Extended JSON as plain JSON values, so ObjectId and dates survive a round trip."""
     from bson import json_util
+
     return json.loads(json_util.dumps(value, json_options=json_options()))
 
 
@@ -128,8 +181,10 @@ def check_operators(node, depth=0):
     if isinstance(node, dict):
         for key, value in node.items():
             if key in FORBIDDEN:
-                raise Refusal("read_only", f"`{key}` {FORBIDDEN[key]} and is never available through `hub db`; "
-                                           "read the documents instead")
+                raise Refusal(
+                    "read_only",
+                    f"`{key}` {FORBIDDEN[key]} and is never available through `hub db`; read the documents instead",
+                )
             check_operators(value, depth + 1)
     elif isinstance(node, list):
         for value in node:
@@ -144,7 +199,9 @@ def check_pipeline(pipeline):
             raise Refusal("usage", "each pipeline stage is an object with exactly one `$stage` key")
         name = next(iter(stage))
         if name in ADMIN_STAGES:
-            raise Refusal("read_only", f"`{name}` reports on the deployment, not the data, and is not available through `hub db`")
+            raise Refusal(
+                "read_only", f"`{name}` reports on the deployment, not the data, and is not available through `hub db`"
+            )
     check_operators(pipeline)
     return pipeline
 
@@ -173,7 +230,7 @@ def shape(node, flags=False):
     `flags` keeps 0, 1 and -1 (projection and sort directions carry no data)."""
     if isinstance(node, dict):
         if len(node) == 1 and next(iter(node)) == "$param":
-            return node                                              # a named query's placeholder is not a value
+            return node  # a named query's placeholder is not a value
         return {k: shape(v, flags) for k, v in node.items()}
     if isinstance(node, list):
         items = [shape(v, flags) for v in node[:5]]
@@ -190,13 +247,18 @@ def shape(node, flags=False):
         return "<string>"
     if isinstance(node, datetime.datetime):
         return "<date>"
-    return "<" + type(node).__name__.lower() + ">"                   # ObjectId -> <objectid>, Regex -> <regex>, ...
+    return "<" + type(node).__name__.lower() + ">"  # ObjectId -> <objectid>, Regex -> <regex>, ...
 
 
 def audit_statement(call, keep_values=False):
     """One line for the audit: the operation, collection and shape (or, for a named query, the entry itself)."""
     show = (lambda v, flags=False: v) if keep_values else shape
-    parts = {"find": ("filter", "projection", "sort"), "aggregate": ("pipeline",), "count": ("filter",), "distinct": ("field", "filter")}
+    parts = {
+        "find": ("filter", "projection", "sort"),
+        "aggregate": ("pipeline",),
+        "count": ("filter",),
+        "distinct": ("field", "filter"),
+    }
     body = {}
     for key in parts.get(call["op"], ()):
         if call.get(key) is not None and call.get(key) != {}:
@@ -221,17 +283,21 @@ def coerce(text, type_, name):
             return moment if moment.tzinfo else moment.replace(tzinfo=datetime.timezone.utc)
         if type_ in ("objectid", "oid"):
             from bson import ObjectId
+
             return ObjectId(str(text))
         if type_ == "list":
             return [coerce(part.strip(), "text", name) for part in str(text).split(",") if part.strip()]
-    except Exception as exc:                                         # bson.errors.InvalidId is not a ValueError
+    except Exception as exc:  # bson.errors.InvalidId is not a ValueError
         if isinstance(exc, Refusal):
             raise
         raise Refusal("params", f"`{text}` is not a valid {type_} for {name}") from None
     if isinstance(text, str) and text.startswith("$"):
         # Inside an aggregation expression a string starting with `$` is a field path, so a value could reach another field.
-        raise Refusal("params", f"the value of {name} starts with `$`, which MongoDB reads as a field path or operator; "
-                                "named-query values are literals")
+        raise Refusal(
+            "params",
+            f"the value of {name} starts with `$`, which MongoDB reads as a field path or operator; "
+            "named-query values are literals",
+        )
     return text
 
 
@@ -257,8 +323,15 @@ def named_call(entry, values):
     """The call a catalog entry's `mongo:` block describes, with `values` in place of its placeholders."""
     spec = entry.get("mongo")
     if not isinstance(spec, dict) or spec.get("op") not in VERBS[:4] or not spec.get("collection"):
-        raise Refusal("catalog", f"query `{entry.get('id')}` has no valid `mongo:` block (op: find|aggregate|count|distinct, collection)")
-    template = {k: spec[k] for k in ("op", "collection", "filter", "projection", "sort", "limit", "pipeline", "field") if k in spec}
+        raise Refusal(
+            "catalog",
+            f"query `{entry.get('id')}` has no valid `mongo:` block (op: find|aggregate|count|distinct, collection)",
+        )
+    template = {
+        k: spec[k]
+        for k in ("op", "collection", "filter", "projection", "sort", "limit", "pipeline", "field")
+        if k in spec
+    }
     call = substitute(template, values)
     call["template"] = template
     return call
@@ -287,11 +360,16 @@ def perform(db, call, max_rows, timeout):
         if op == "find":
             want = call.get("limit")
             fetch = min(want, max_rows + 1) if want else max_rows + 1
-            cursor = coll.find(call.get("filter") or {}, call.get("projection") or None, sort=call.get("sort") or None,
-                               limit=fetch, max_time_ms=ms)
+            cursor = coll.find(
+                call.get("filter") or {},
+                call.get("projection") or None,
+                sort=call.get("sort") or None,
+                limit=fetch,
+                max_time_ms=ms,
+            )
             return rows_of(cursor, max_rows)
         if op == "aggregate":
-            pipeline = list(call["pipeline"]) + [{"$limit": max_rows + 1}]        # the cap is applied on the server
+            pipeline = list(call["pipeline"]) + [{"$limit": max_rows + 1}]  # the cap is applied on the server
             return rows_of(coll.aggregate(pipeline, maxTimeMS=ms, allowDiskUse=False), max_rows)
         if op == "count":
             return [{"count": coll.count_documents(call.get("filter") or {}, maxTimeMS=ms)}], False
@@ -305,7 +383,9 @@ def perform(db, call, max_rows, timeout):
 
 def collections(database, ms, max_rows):
     """Collection names with the field names (and types) seen in a small sample of each: enough to write a filter."""
-    names = sorted(n for n in database.list_collection_names() if not n.startswith("system."))[:min(MAX_COLLECTIONS, max_rows)]
+    names = sorted(n for n in database.list_collection_names() if not n.startswith("system."))[
+        : min(MAX_COLLECTIONS, max_rows)
+    ]
     out = []
     for name in names:
         fields = {}
@@ -322,7 +402,9 @@ def validate(call, max_rows):
     if op not in VERBS:
         raise Refusal("usage", f"`{op}` is not a MongoDB operation here; use one of {', '.join(VERBS)}")
     if op != "collections" and not re.fullmatch(r"[A-Za-z0-9_.\-]{1,120}", str(call.get("collection") or "")):
-        raise Refusal("usage", f"`hub db <name> {op} <collection> ...` needs a collection name (`collections` lists them)")
+        raise Refusal(
+            "usage", f"`hub db <name> {op} <collection> ...` needs a collection name (`collections` lists them)"
+        )
     if str(call.get("collection") or "").startswith("system."):
         raise Refusal("read_only", "system collections are not available through `hub db`")
     if op in ("find", "count", "distinct"):
@@ -344,8 +426,11 @@ def validate(call, max_rows):
 def call_from_args(verb, rest, args):
     """The call `hub db <name> <verb> <collection> ...` asks for; raises Refusal for a bad shape."""
     if verb not in VERBS:
-        raise Refusal("usage", f"`{verb}` is not a MongoDB operation; use `find`, `aggregate`, `count`, `distinct` or `collections`, "
-                               "or --query ID for a named query")
+        raise Refusal(
+            "usage",
+            f"`{verb}` is not a MongoDB operation; use `find`, `aggregate`, `count`, `distinct` or `collections`, "
+            "or --query ID for a named query",
+        )
     rest = list(rest or [])
     call = {"op": verb}
     if verb == "collections":
@@ -389,11 +474,17 @@ def execute(db, call, max_rows=None, timeout=None):
         documents, truncated = perform(db, call, max_rows, timeout)
     except Refusal:
         raise
-    except Exception as exc:                                          # noqa: BLE001 - pymongo has many error types
+    except Exception as exc:  # noqa: BLE001 - pymongo has many error types
         code, detail = classify(exc)
         raise Refusal(code, db.redact(detail)) from None
-    return {"documents": documents, "row_count": len(documents), "truncated": truncated,
-            "ms": int((time.monotonic() - started) * 1000), "operation": call["op"], "collection": call.get("collection")}
+    return {
+        "documents": documents,
+        "row_count": len(documents),
+        "truncated": truncated,
+        "ms": int((time.monotonic() - started) * 1000),
+        "operation": call["op"],
+        "collection": call.get("collection"),
+    }
 
 
 def classify(exc):
@@ -406,19 +497,36 @@ def classify(exc):
         return "timeout", "the operation ran past the timeout (maxTimeMS) and was stopped"
     if name == "AutoReconnect" and "timed out" in lowered:
         return "timeout", "the operation ran past the timeout and was stopped"
-    if name == "ConfigurationError" and ("dns" in lowered or "srv" in lowered or "resolution" in lowered or "query name" in lowered):
-        return "srv_dns", (f"the SRV record for the cluster could not be resolved ({text}). Check the host in the connection string, "
-                           "that the runner's DNS allows TXT and SRV lookups, or use Atlas's standard (non-SRV) connection string")
+    if name == "ConfigurationError" and (
+        "dns" in lowered or "srv" in lowered or "resolution" in lowered or "query name" in lowered
+    ):
+        return "srv_dns", (
+            f"the SRV record for the cluster could not be resolved ({text}). Check the host in the connection string, "
+            "that the runner's DNS allows TXT and SRV lookups, or use Atlas's standard (non-SRV) connection string"
+        )
     if name == "OperationFailure" and (code in (18, 8000) or "authentication failed" in lowered):
-        return "auth", "authentication failed: check the Atlas database user, its password (percent-encoded) and `authSource=admin`"
+        return (
+            "auth",
+            "authentication failed: check the Atlas database user, its password (percent-encoded) and `authSource=admin`",
+        )
     if name == "OperationFailure" and (code == 13 or "not authorized" in lowered or "unauthorized" in lowered):
-        return "read_only", f"the database user is not authorized for this ({text}); the role is read-only or does not cover this collection"
+        return (
+            "read_only",
+            f"the database user is not authorized for this ({text}); the role is read-only or does not cover this collection",
+        )
     if name == "ServerSelectionTimeoutError":
         if "ssl" in lowered or "tls" in lowered or "certificate" in lowered:
-            return "tls", f"the TLS handshake failed ({text[:200]}). Atlas needs TLS 1.2+; check the runner's clock and CA bundle"
-        return "unreachable", ("no server answered within 10 s. Usually the runner's public IP is not on the Atlas IP access list, "
-                               "the cluster is paused, or a private endpoint is not reachable from this computer")
-    if name in ("OperationFailure", "BulkWriteError", "WriteError") and (code in (20, 66, 67) or "read only" in lowered):
+            return (
+                "tls",
+                f"the TLS handshake failed ({text[:200]}). Atlas needs TLS 1.2+; check the runner's clock and CA bundle",
+            )
+        return "unreachable", (
+            "no server answered within 10 s. Usually the runner's public IP is not on the Atlas IP access list, "
+            "the cluster is paused, or a private endpoint is not reachable from this computer"
+        )
+    if name in ("OperationFailure", "BulkWriteError", "WriteError") and (
+        code in (20, 66, 67) or "read only" in lowered
+    ):
         return "read_only", text
     return "db_error", f"{name}: {text}"
 
@@ -445,7 +553,7 @@ def probe(db):
         client = connect(db, db.timeout)
     except Refusal:
         raise
-    except Exception as exc:                                          # noqa: BLE001 - e.g. SRV lookup fails while building the client
+    except Exception as exc:  # noqa: BLE001 - e.g. SRV lookup fails while building the client
         code, detail = classify(exc)
         raise Refusal(code, detail) from None
     try:
@@ -453,27 +561,46 @@ def probe(db):
         add("ok", "connects", f"MongoDB {info.get('version', '?')}" + (" (Atlas, mongodb+srv)" if target.srv else ""))
         add("ok", "read preference", read_preference(db))
         add("ok", "timeout and row cap", f"maxTimeMS {int(db.timeout * 1000)}, {db.max_rows} documents, set per query")
-        if not (target.srv or target.local or target.options.get("tls", target.options.get("ssl", "")).lower() == "true"):
+        if not (
+            target.srv or target.local or target.options.get("tls", target.options.get("ssl", "")).lower() == "true"
+        ):
             add("warn", "transport", "the connection is not TLS-encrypted; add `?tls=true` (Atlas always uses TLS)")
         status = client.admin.command({"connectionStatus": 1, "showPrivileges": True})["authInfo"]
         users = status.get("authenticatedUsers", [])
         if not users:
-            add("warn", "role privileges", "the connection is not authenticated; use an Atlas database user with the `read` role")
+            add(
+                "warn",
+                "role privileges",
+                "the connection is not authenticated; use an Atlas database user with the `read` role",
+            )
         else:
             privileges = status.get("authenticatedUserPrivileges", [])
             roles = [f"{r['role']}@{r['db']}" for r in status.get("authenticatedUserRoles", [])]
             bad = write_actions(privileges)
-            wide = sorted({p["resource"].get("db") for p in privileges
-                           if p.get("resource", {}).get("db") not in (None, "", target.database, "local")} |
-                          ({"(cluster)"} if any(p.get("resource", {}).get("cluster") for p in privileges) else set()))
+            wide = sorted(
+                {
+                    p["resource"].get("db")
+                    for p in privileges
+                    if p.get("resource", {}).get("db") not in (None, "", target.database, "local")
+                }
+                | ({"(cluster)"} if any(p.get("resource", {}).get("cluster") for p in privileges) else set())
+            )
             if bad:
-                add("warn", "role privileges", f"roles {', '.join(roles)} allow writes ({', '.join(bad[:8])}"
-                                               f"{'...' if len(bad) > 8 else ''}); use the built-in `read` role on `{target.database}` "
-                                               "only (docs/databases.md, step 1)")
+                add(
+                    "warn",
+                    "role privileges",
+                    f"roles {', '.join(roles)} allow writes ({', '.join(bad[:8])}"
+                    f"{'...' if len(bad) > 8 else ''}); use the built-in `read` role on `{target.database}` "
+                    "only (docs/databases.md, step 1)",
+                )
             else:
                 add("ok", "role privileges", f"roles {', '.join(roles)}: no write action")
             if wide:
-                add("warn", "role scope", f"the user can also read {', '.join(wide[:5])}; scope the role to `{target.database}` only")
+                add(
+                    "warn",
+                    "role scope",
+                    f"the user can also read {', '.join(wide[:5])}; scope the role to `{target.database}` only",
+                )
     finally:
         client.close()
     return checks

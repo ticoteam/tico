@@ -14,7 +14,7 @@ applications were summarised and which could not be read.
 
 ## 1. Read the role file first
 
-`knowledge/roles/<role>.md`. If it has no written criteria, stop and ask the manager one question with `hub task ask <id>`.
+`knowledge/roles/<role>.md`. If it has no written criteria, stop and ask the manager one question with `hub task question "<question>" --on <person> --parent <id>`.
 
 ## 2. Read the application
 

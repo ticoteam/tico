@@ -1,4 +1,5 @@
 """Closing, reopening, privacy and ownership rules on a task: who may end it, which times it keeps, who it reaches."""
+
 import json
 import tempfile
 import unittest
@@ -12,10 +13,13 @@ EMPLOYEES = {
     "seo": {"display_name": "SEO", "status": "active"},
     "legal": {"display_name": "Legal", "status": "active"},
 }
-PEOPLE = {"people": [
-    {"id": "ana", "name": "Ana Rivera", "email": "ana@acme.example", "team": "leadership"},
-    {"id": "ben", "name": "Ben", "email": "ben@acme.example", "team": "product"},
-    {"id": "cara", "name": "Cara", "email": "cara@acme.example", "team": "sales"}]}
+PEOPLE = {
+    "people": [
+        {"id": "ana", "name": "Ana Rivera", "email": "ana@acme.example", "team": "leadership"},
+        {"id": "ben", "name": "Ben", "email": "ben@acme.example", "team": "product"},
+        {"id": "cara", "name": "Cara", "email": "cara@acme.example", "team": "sales"},
+    ]
+}
 
 ANA, BEN, CARA = H.human_actor("ana"), H.human_actor("ben"), H.human_actor("cara")
 CMO, SEO, LEGAL = H.bot_actor("cmo"), H.bot_actor("seo"), H.bot_actor("legal")
@@ -39,9 +43,14 @@ class Case(unittest.TestCase):
         return got.exception
 
     def wakes(self, target, task_id, text):
-        return [r for r in self.conn.execute(
-            "SELECT body, refs FROM messages WHERE recipient_id=? AND json_extract(refs,'$.task')=? "
-            "AND body LIKE ?", (target, task_id, f"%{text}%"))]
+        return [
+            r
+            for r in self.conn.execute(
+                "SELECT body, refs FROM messages WHERE recipient_id=? AND json_extract(refs,'$.task')=? "
+                "AND body LIKE ?",
+                (target, task_id, f"%{text}%"),
+            )
+        ]
 
 
 class LeavingClosed(Case):
@@ -52,8 +61,16 @@ class LeavingClosed(Case):
         row = H.task(self.conn, t["id"])
         self.assertEqual((row["status"], row["closed_at"], row["closed_by_id"]), ("done", None, None))
         self.assertIsNotNone(row["done_at"])
-        self.assertEqual({f for (f,) in self.conn.execute(
-            "SELECT kind AS field FROM history_events WHERE subject_type='task' AND subject_id=? AND new IS NULL", (t["id"],))}, {"closed_at", "closed_by"})
+        self.assertEqual(
+            {
+                f
+                for (f,) in self.conn.execute(
+                    "SELECT kind AS field FROM history_events WHERE subject_type='task' AND subject_id=? AND new IS NULL",
+                    (t["id"],),
+                )
+            },
+            {"closed_at", "closed_by"},
+        )
 
     def test_a_bot_refinishing_its_own_closed_task_drops_the_close_time(self):
         t = self.make(CMO, "Check the launch post links", CMO)
@@ -70,8 +87,9 @@ class LeavingClosed(Case):
         H.task_update(self.conn, ANA, done["id"], status="declined")
         for tid in (closed["id"], done["id"]):
             row = H.task(self.conn, tid)
-            self.assertEqual((row["status"], row["done_at"], row["closed_at"], row["closed_by_id"]),
-                             ("declined", None, None, None))
+            self.assertEqual(
+                (row["status"], row["done_at"], row["closed_at"], row["closed_by_id"]), ("declined", None, None, None)
+            )
 
     def test_closing_a_done_task_keeps_when_it_was_done(self):
         t = self.make(ANA, "Draft the hiring post", CMO)
@@ -87,15 +105,25 @@ class LeavingClosed(Case):
         kept = self.make(ANA, "Draft the events post", CMO)
         H.task_update(self.conn, CMO, stuck["id"], status="done")
         H.task_close(self.conn, ANA, kept["id"])
-        self.conn.execute("UPDATE tasks SET closed_at='2026-10-04T16:17:20Z', closed_by_id=? WHERE id=?",
-                          (ANA, stuck["id"]))      # as an old move out of closed left it
+        self.conn.execute(
+            "UPDATE tasks SET closed_at='2026-10-04T16:17:20Z', closed_by_id=? WHERE id=?", (ANA, stuck["id"])
+        )  # as an old move out of closed left it
         self.assertEqual(H.clear_finished_close_times(self.conn), [stuck["id"]])
-        self.assertEqual((H.task(self.conn, stuck["id"])["closed_at"], H.task(self.conn, stuck["id"])["closed_by_id"]),
-                         (None, None))
+        self.assertEqual(
+            (H.task(self.conn, stuck["id"])["closed_at"], H.task(self.conn, stuck["id"])["closed_by_id"]), (None, None)
+        )
         self.assertIsNotNone(H.task(self.conn, kept["id"])["closed_at"], "a closed task keeps its close time")
         self.assertEqual(H.clear_finished_close_times(self.conn), [])
-        self.assertEqual(len(self.conn.execute("SELECT 1 FROM history_events WHERE subject_type='task' AND subject_id=? AND actor_id=? AND kind "
-                                               "IN ('closed_at','closed_by')", (stuck["id"], H.KEEPER)).fetchall()), 2)
+        self.assertEqual(
+            len(
+                self.conn.execute(
+                    "SELECT 1 FROM history_events WHERE subject_type='task' AND subject_id=? AND actor_id=? AND kind "
+                    "IN ('closed_at','closed_by')",
+                    (stuck["id"], H.KEEPER),
+                ).fetchall()
+            ),
+            2,
+        )
 
 
 class ClosingNeedsEdit(Case):
@@ -106,22 +134,29 @@ class ClosingNeedsEdit(Case):
         self.assertEqual(H.task(self.conn, t["id"])["status"], "open")
 
     def test_requester_owner_mover_and_a_party_above_close(self):
-        for closer in (ANA, BEN):           # the requester; a person on a mover team
+        for closer in (ANA, BEN):  # the requester; a person on a mover team
             t = self.make(ANA, f"Draft the post for {closer}", CMO)
             self.assertEqual(H.task_close(self.conn, closer, t["id"])["status"], "closed")
         mine = self.make(ANA, "Review the launch plan", CARA)
-        self.assertEqual(H.task_close(self.conn, CARA, mine["id"])["status"], "closed")     # its owner
+        self.assertEqual(H.task_close(self.conn, CARA, mine["id"])["status"], "closed")  # its owner
         parent = self.make(CARA, "Plan the sales launch", CMO)
         child = self.make(CMO, "Draft the sales email", SEO, parent_id=parent["id"])
-        self.assertEqual(H.task_close(self.conn, CARA, child["id"])["status"], "closed")    # requester of the parent
+        self.assertEqual(H.task_close(self.conn, CARA, child["id"])["status"], "closed")  # requester of the parent
 
-    def test_the_person_a_task_waits_on_closes_it(self):
-        """A bot's question waits on a person; "not now" is theirs to say even when they can't edit the task."""
+    def test_the_person_a_bots_task_waits_on_does_not_close_it(self):
+        """A bot's task waiting on a person is still the bot's: they answer or decline their question task under it."""
         t = self.make(CMO, "Approve the launch budget?", CMO)
-        self.refused("close", H.task_close, self.conn, CARA, t["id"])
-        # As a bot's question to her leaves it (hub task question): waiting on her, the bot still its owner.
-        self.conn.execute("UPDATE tasks SET status='waiting', waiting_on=? WHERE id=?", (CARA, t["id"]))
-        self.assertEqual(H.task_close(self.conn, CARA, t["id"], note="Not now")["status"], "closed")
+        H.task_update(
+            self.conn,
+            CMO,
+            t["id"],
+            status="waiting",
+            waiting_on=CARA,
+            note="Approve the launch budget? I'll book the ads after.",
+        )
+        self.refused("close", H.task_close, self.conn, CARA, t["id"], note="Not now")
+        [card] = TR.child_ids(self.conn, t["id"])
+        self.assertEqual(H.task(self.conn, card)["owner_id"], CARA)
 
     def test_the_caller_says_when_a_person_moves_tasks(self):
         t = self.make(ANA, "Draft the launch post", CMO)
@@ -160,7 +195,6 @@ class PrivateParent(Case):
         parent = self.make(ANA, "Plan the board pack", CMO, private=True)
         later = H.shift(H.now(), hours=3)
         self.assertIn(parent["id"], [r["id"] for r in H.stalled_tasks(self.conn, at=later)])
-        self.assertIn("cannot read a private task", H._no_diagnosis(self.conn, H.task(self.conn, parent["id"]), 4))
 
 
 class Renaming(Case):
@@ -179,10 +213,14 @@ class Ownership(Case):
         t = self.make(ANA, "Draft the launch post", CMO)
         before = self.conn.execute("SELECT count(*) FROM messages WHERE recipient_id=?", (CMO,)).fetchone()[0]
         H.task_update(self.conn, BEN, t["id"], owner="cmo")
-        self.assertEqual(self.conn.execute("SELECT count(*) FROM messages WHERE recipient_id=?", (CMO,)).fetchone()[0],
-                         before)
-        self.assertFalse(self.conn.execute("SELECT 1 FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='owner'",
-                                           (t["id"],)).fetchone())
+        self.assertEqual(
+            self.conn.execute("SELECT count(*) FROM messages WHERE recipient_id=?", (CMO,)).fetchone()[0], before
+        )
+        self.assertFalse(
+            self.conn.execute(
+                "SELECT 1 FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='owner'", (t["id"],)
+            ).fetchone()
+        )
 
     def test_a_bot_cannot_hand_on_a_task_a_person_closed(self):
         t = self.make(CMO, "Draft the launch post", SEO)

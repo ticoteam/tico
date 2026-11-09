@@ -2,6 +2,7 @@
 account tree it closed with, so later moves and renames do not change it. The snapshot keeps the month's totals too,
 so a later change to a closed month (a restatement, §10) is flagged on it. Amounts still come from the posted rows
 the viewer may see; the snapshot never bypasses suppression."""
+
 import json
 import sqlite3
 from collections.abc import Iterable
@@ -24,9 +25,17 @@ def take(ctx: Ctx, period_id: str, month: str, start: str, end: str, by: str) ->
     accrual = _sums(SL.rollup_rows(c, book, start, end))
     cash = _sums([*SL.rollup_rows(c, book, start, end), *SAP.cash_rows(c, book, start, end, ids)])
     tree = [asdict(a) for a in ctx.accounts.values()]
-    SL.insert_snapshot(c, book, period_id, month, json.dumps(tree, sort_keys=True),
-                       json.dumps({"accrual": accrual, "cash": cash}, sort_keys=True),
-                       json.dumps(SK.balances(c, book, end, ids), sort_keys=True), by, ctx.at)
+    SL.insert_snapshot(
+        c,
+        book,
+        period_id,
+        month,
+        json.dumps(tree, sort_keys=True),
+        json.dumps({"accrual": accrual, "cash": cash}, sort_keys=True),
+        json.dumps(SK.balances(c, book, end, ids), sort_keys=True),
+        by,
+        ctx.at,
+    )
 
 
 def frozen(ctx: Ctx, month: str) -> Ctx | None:

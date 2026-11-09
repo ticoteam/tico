@@ -1,14 +1,14 @@
-// A bot's Home and DM keep the bot chat's composer (ui/app/thread-view.js, ui/app/chat-goal.js): one line (Attach, the
-// words, the ways caret, Send) in one frame, with no question-card outline around it, on a phone and a computer, dark
-// and light. Send shows the person's kept way (Steer, Queue, Defer; pill.js) and every message names it; the caret, a
+// A bot's Home and DM keep the bot chat's composer (ui/app/thread-view.ts, ui/app/chat-goal.ts): one line (Attach, the
+// words, the ways caret, Send) in one frame, with no question-card outline around it, on a phone (dark) and a computer
+// (light). Send shows the person's kept way (Steer, Queue, Defer; pill.js) and every message names it; the caret, a
 // right-click or a long press opens the ways, and a pick sticks across a reload. Set as goal is in that menu, for one
 // goal: a Goal chip, then Send sets the text as the thread's goal through the goal route
 // (POST /api/v2/conversations/<thread>/goal, never a message); the pinned goal shows in its bar with Edit, Pause and
 // Clear, and the refusals are the old chat's. An empty DM's first goal makes the DM first, as its first message would.
 // A person-to-person thread keeps a plain Send. The /goal messages are not shown; a met goal is its one line. The old bar's
-// other pieces are back too: on a phone the bot's avatar at the left edge opens the bot switcher (ui/app/org-fan.js);
+// other pieces are back too: on a phone the bot's avatar at the left edge opens the bot switcher (ui/app/org-fan.ts);
 // Stop takes Send's place while the bot runs (read from the thread's conversation snapshot) and posts the stop; "/"
-// opens the commands menu, and a command does what it did in the old chat (ui/app/slash-commands.js). Fixtures only.
+// opens the commands menu, and a command does what it did in the old chat (ui/app/slash-commands.ts). Fixtures only.
 // TICO_SCREENSHOT_DIR=<dir> also saves the screenshots.
 const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
@@ -19,7 +19,7 @@ const {unrouted} = require('./support/routes.cjs');
 const {threadsFake} = require('./support/threads-fake.cjs');
 const launch = () => chromium.launch({headless: true, channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined});
 const shots = process.env.TICO_SCREENSHOT_DIR;
-const BOT = 'engineering-manager', HOME = `t-home-${BOT}`, DM = `t-dm-${BOT}`;
+const BOT = 'engineering-manager', HOME = `t-home-${BOT}`, DM = `t-dm-${BOT}`, CHAN = 't-launch';
 
 const COMMANDS = [
   {name: 'goal', args: '<objective>', help: 'Pin a goal the bot works toward', kind: 'tico', sub: ['pause', 'resume', 'clear', 'edit']},
@@ -38,7 +38,8 @@ async function open(browser, {width = 390, theme = 'dark', tab = 'home', support
     } catch {}
   }, [theme, BOT, goalMode, recent]);
   const api = {errors: [], sent: [], goalPosts: [], goalReads: [], dmMade: [], goals: {}, page, dm: dmMade, execution,
-               stops: [], commands: [], tasks: [], patches: [], snapshots: [], prefs: {...prefs}, slowRead: false, uploads: []};
+               stops: [], commands: [], tasks: [], patches: [], snapshots: [], prefs: {...prefs}, slowRead: false, uploads: [],
+               reachReads: [], reachOut: 0, reachMax: 0, reachSlow: 0, follows: [], chanFollows: false};
   page.on('pageerror', e => api.errors.push(e.message));
   const fake = threadsFake({bot: BOT, home, sent: api.sent});
   const now = () => new Date().toISOString();
@@ -46,10 +47,10 @@ async function open(browser, {width = 390, theme = 'dark', tab = 'home', support
     const req = route.request(), url = new URL(req.url()), p = url.pathname, method = req.method();
     const json = (body, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
     if (url.origin !== 'https://tico-ui.test') return route.abort();
-    const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|css))$/);
+    const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/);
     if (ui && fs.existsSync(uiFile(ui[1]))) return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]), 'utf8')});
     if (p.startsWith('/vendor/fonts/') && fs.existsSync(uiFile(p.slice(1)))) return route.fulfill({contentType: 'font/woff2', body: fs.readFileSync(uiFile(p.slice(1)))});
-    if (p.endsWith('.js')) return route.fulfill({contentType: 'application/javascript', body: ''});
+    if (/\.(?:js|ts)$/.test(p)) return route.fulfill({contentType: 'application/javascript', body: ''});
     if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
     if (p === '/api/me') return json({id: 'ana', name: 'Ana', role, cloud: true});
     const bot = (name, display_name) => ({name, display_name, host: 'keeper', status: 'active', can_chat: true, schedules: [],
@@ -78,6 +79,27 @@ async function open(browser, {width = 390, theme = 'dark', tab = 'home', support
       return json({key: pref[1], value});
     }
     if (p === '/api/v2/events' || p.endsWith('/watch')) return route.abort();
+    // "Who it reaches" (GET /v2/threads/{id}/reach, backend/threads.py reaches): the Home's bot, or #launch's followers
+    // (Designer at All, Ben), plus whom the words @mention; @zed can't see #launch. Reads in flight are counted.
+    const reach = p.match(/^\/api\/v2\/threads\/([^/]+)\/reach$/);
+    if (reach) {
+      const q = Object.fromEntries(url.searchParams), way = q.delivery || 'steer';
+      api.reachReads.push({thread: reach[1], ...q}); api.reachMax = Math.max(api.reachMax, ++api.reachOut);
+      if (api.reachSlow) await new Promise(done => setTimeout(done, api.reachSlow));
+      api.reachOut--;
+      const bot = actor => ({actor, reason: 'follower', mode: way === 'defer' && q.defer_for === 'never' ? 'defer' : way, defer_for: way === 'defer' ? q.defer_for || null : null});
+      const rows = reach[1] === CHAN ? [bot('bot:designer'), ...(way === 'defer' && q.defer_for === 'never' ? [] : [{actor: 'human:ben', reason: 'follower', mode: 'queue', defer_for: null}])]
+        : [{...bot('bot:' + BOT), reason: 'home'}];
+      if ((q.text || '').includes('@sales-lead')) rows.unshift({actor: 'bot:sales-lead', reason: 'mention', mode: way, defer_for: null});
+      return json({thread_id: reach[1], way, reaches: rows.map(r => ({...r, adds_reader: false})), outside: (q.text || '').includes('@zed') ? ['human:zed'] : []});
+    }
+    // #launch: a company chat Ana joined but does not follow (`me.follows`), until she does.
+    const chan = () => ({id: CHAN, title: 'launch', audience: 'company', root_id: CHAN, path: [CHAN], last_seq: 1, last_unread_seq: 0, last_message_at: now(),
+      me: {member: true, following: true, follows: api.chanFollows, notify: 'live', last_read_seq: 1, unread: 0, activity: false, can_post: true, can_manage: false}});
+    if (p === `/api/v2/threads/${CHAN}/timeline`)
+      return json({thread: chan(), breadcrumb: [], next_cursor: null,
+        messages: [{id: 'l1', seq: 1, depth: 0, thread_id: CHAN, sender_id: 'human:ben', body: 'Launch is Friday.', created_at: now()}]});
+    if (p === `/api/v2/threads/${CHAN}/follow` && method === 'PUT') { api.follows.push(req.postDataJSON()); api.chanFollows = true; return json({thread_id: CHAN, following: true, notify: 'live'}); }
     // An empty DM: none until the first message or goal makes it (POST /v2/threads/dm with no body).
     if (p === '/api/v2/threads/dm' && method === 'GET' && !api.dm) return json({error: {code: 'no_dm', detail: 'No DM yet'}}, 404);
     if (p === '/api/v2/threads/dm' && method === 'POST' && !req.postDataJSON()?.body) { api.dmMade.push(req.postDataJSON()); api.dm = true; }
@@ -123,7 +145,8 @@ const layout = page => page.locator('#bot-thread .thv-composer').evaluate(host =
 });
 
 async function looks(browser) {
-  for (const [width, theme] of [[390, 'dark'], [390, 'light'], [1280, 'dark'], [1280, 'light']]) {
+  // One run per width: nothing here reads a colour, so dark and light drew the same boxes (the theme only changes the screenshots).
+  for (const [width, theme] of [[390, 'dark'], [1280, 'light']]) {
     const api = await open(browser, {width, theme}), {page} = api;
     await page.locator('#bot-thread .p-way:not([hidden])').waitFor();
     const l = await layout(page), name = `${width}-${theme}`;
@@ -156,6 +179,11 @@ async function pick(page, way) {
   assert.equal(await menuOf(page).isHidden(), true, 'a pick closes the menu');
 }
 const shows = page => page.locator('#bot-thread .p-send').getAttribute('data-shows');
+// The kept way is saved by a request the page sends after its timer clears: wait for the saved value itself. A value
+// that never lands is still a failure, at the assertion that follows.
+async function keptWay(api, way) {
+  for (let i = 0; i < 400 && api.prefs['compose.send_way'] !== way; i++) await new Promise(done => setTimeout(done, 25));
+}
 
 async function goalMode(browser) {
   const api = await open(browser, {width: 1280}), {page} = api;
@@ -210,7 +238,7 @@ async function goalMode(browser) {
   await page.waitForFunction(() => !document.querySelector('#bot-thread .th-pending'));
   assert.deepEqual(api.sent, [{text: 'Plain words', delivery: 'queue'}]);
   assert.equal(api.goalPosts.length, 3);
-  await page.waitForFunction(() => !SEND_WAY_TIMER);
+  await keptWay(api, 'queue');
   assert.equal(api.prefs['compose.send_way'], 'queue', 'goal is never kept');
   // In goal mode a file goes as a message, the kept way: never a delivery of "goal".
   await pick(page, 'goal');
@@ -258,7 +286,7 @@ async function ways(browser) {
   assert.equal(await send.getAttribute('aria-label'), 'Send, queue');
   assert.deepEqual(await say('After this run'), {text: 'After this run', delivery: 'queue'});
   assert.equal(await shows(page), 'queue:', 'the pick sticks after a send');
-  await page.waitForFunction(() => !SEND_WAY_TIMER);
+  await keptWay(api, 'queue');
   assert.equal(api.prefs['compose.send_way'], 'queue');
 
   // A right-click on Send opens the ways and sends nothing; Escape closes them and puts focus on the caret; a press
@@ -280,7 +308,7 @@ async function ways(browser) {
   await page.evaluate(async () => { const read = sendWaySync(); sendWayPick('defer:2d'); await read; });
   api.slowRead = false;
   assert.equal(await shows(page), 'defer:2d', 'a late read loses to the pick');
-  await page.waitForFunction(() => !SEND_WAY_TIMER);
+  await keptWay(api, 'defer:2d');
   assert.equal(api.prefs['compose.send_way'], 'defer:2d');
   // A reload reads the kept way back.
   await page.reload();
@@ -548,6 +576,112 @@ async function slash(browser) {
   await page.close();
 }
 
+// Under the box: Follow (posting never follows; ticked, the send follows the thread, and the choice is kept per kind of
+// thread) and the reach line ("To Designer and Ben"), whose list says who the message reaches and how. It follows the way Send shows and the
+// @mentions typed, reading one at a time after a pause; a DM shows neither.
+async function followReach(browser) {
+  for (const theme of ['light', 'dark']) {
+    let api = await open(browser, {width: 1280, theme}), {page} = api;
+    const home = page.locator('#bot-thread'), reachBtn = home.locator('.p-reach'), pop = home.locator('.p-reach-pop');
+    for (let i = 0; i < 200 && !api.reachReads.length; i++) await new Promise(done => setTimeout(done, 25));
+    assert.equal(api.reachReads[0].delivery, 'steer', 'the Home asks for the way Send shows');
+    assert.equal(await home.locator('.p-follow, [data-compose-follow]').count(), 0, 'no Follow under the box: following lives on the thread');
+    assert.equal(await reachBtn.isHidden(), true, 'reaching only the bot you are messaging: no line');
+    const said = loc => loc.locator('.p-reach-row').evaluateAll(xs => xs.map(x => [x.querySelector('.p-reach-name').textContent, x.querySelector('.p-reach-mode').textContent]));
+    await pick(page, 'queue');
+    for (let i = 0; i < 200 && api.reachReads.at(-1).delivery !== 'queue'; i++) await new Promise(done => setTimeout(done, 25));
+    assert.equal(api.reachReads.at(-1).delivery, 'queue', 'a new way asks again');
+    // Typing asks after a pause, one read at a time, and only the @mentions go; then the line names who it reaches.
+    const asked = api.reachReads.length;
+    api.reachSlow = 400;
+    await home.locator('.p-text').pressSequentially('Plain words, then @sales-lead please', {delay: 15});
+    await home.locator('.p-text').dispatchEvent('input');
+    await reachBtn.filter({hasText: /^To Sales Lead and Engineering Manager$/}).waitFor();
+    api.reachSlow = 0;
+    assert.equal(api.reachMax, 1, 'one read at a time');
+    assert.ok(api.reachReads.length - asked <= 3, `a pause between reads (${api.reachReads.length - asked})`);
+    assert.equal(api.reachReads.at(-1).text, '@sales-lead please', 'only what follows an @');
+    assert.ok(api.reachReads.slice(asked).every(r => r.text !== undefined), 'words with no @ ask nothing new');
+    await reachBtn.click();
+    assert.deepEqual(await said(pop), [['Sales Lead', 'After its turn'], ['Engineering Manager', 'After its turn']]);
+    await page.locator('#bot-thread .thv-scroll, #bot-thread').first().dispatchEvent('pointerdown');
+    assert.equal(await pop.isHidden(), true, 'a press elsewhere closes the list');
+    await home.locator('.p-text').fill('');
+    await home.locator('.p-text').dispatchEvent('input');
+    await reachBtn.waitFor({state: 'hidden'});
+    // Set as goal is not a message: no line.
+    await pick(page, 'goal');
+    await home.locator('.p-foot').waitFor({state: 'hidden'});
+    await pick(page, 'steer');
+
+    // #launch: the line names its two followers, and no Follow under the box.
+    await page.evaluate(() => {
+      const host = document.createElement('div');
+      host.id = 'chan-thread';
+      Object.assign(host.style, {position: 'fixed', left: '20px', right: '20px', bottom: '20px', height: '360px', zIndex: '60', background: 'var(--bg)'});
+      document.body.append(host);
+      threadMount(host, {id: 't-launch', header: false});
+    });
+    const chan = page.locator('#chan-thread'), cReach = chan.locator('.p-reach'), cPop = chan.locator('.p-reach-pop');
+    await cReach.filter({hasText: /^To Designer and /}).waitFor();
+    assert.equal(await chan.locator('.p-follow').count(), 0, 'no Follow under the box');
+    assert.equal('delivery' in api.reachReads.at(-1), false, 'a chat with no ways asks for the server\'s Steer');
+    // @mentions: one reached, one who can't see #launch.
+    await chan.locator('.p-text').fill('@sales-lead and @zed, the deck is ready');
+    await cReach.filter({hasText: /^To Sales Lead, Designer \+1$/}).waitFor();
+    await cReach.click();
+    const rows = await said(cPop);
+    assert.deepEqual(rows.map(r => r[1]), ['Now', 'Now', 'Notified', 'Not reached']);
+    assert.deepEqual(rows.slice(0, 2).map(r => r[0]), ['Sales Lead', 'Designer']);
+    assert.match(rows[2][0], /ben/i); assert.match(rows[3][0], /zed/i);
+    const fits = await cPop.evaluate(m => { const r = m.getBoundingClientRect(); return r.left >= 0 && r.right <= innerWidth && r.top >= 0; });
+    assert.ok(fits, 'the list fits');
+    await cPop.evaluate(m => Promise.all(m.getAnimations().map(a => a.finished)));
+    await shot(page, `follow-reach-${theme}`);
+    await page.keyboard.press('Escape');
+    assert.equal(await cPop.isHidden(), true, 'Escape closes the list');
+    // Send: posting never follows.
+    await chan.locator('.p-send').click();
+    await page.waitForFunction(() => !document.querySelector('#chan-thread .th-pending') && !document.querySelector('#chan-thread .p-text').value);
+    assert.equal(api.sent.at(-1).text, '@sales-lead and @zed, the deck is ready');
+    assert.equal('follow' in api.sent.at(-1), false, 'posting itself never follows');
+    assert.deepEqual(api.follows, [], 'a send follows nothing');
+    assert.deepEqual(api.errors, []);
+    await page.close();
+
+    // On a phone the reach list fits; a send follows nothing. A DM shows no reach line.
+    ({page} = api = await open(browser, {width: 390, theme}));
+    await page.evaluate(() => {
+      const host = document.createElement('div');
+      host.id = 'chan-thread';
+      Object.assign(host.style, {position: 'fixed', left: '0', right: '0', bottom: '0', height: '360px', zIndex: '60', background: 'var(--bg)'});
+      document.body.append(host);
+      threadMount(host, {id: 't-launch', header: false});
+    });
+    await page.locator('#chan-thread .p-reach').filter({hasText: /^To Designer and /}).waitFor();
+    await page.locator('#chan-thread .p-reach').click();
+    const phoneFits = await page.locator('#chan-thread .p-reach-pop').evaluate(m => { const r = m.getBoundingClientRect(); return r.left >= 0 && r.right <= innerWidth; });
+    assert.ok(phoneFits, 'the list fits a phone');
+    await page.locator('#chan-thread .p-reach-pop').evaluate(m => Promise.all(m.getAnimations().map(a => a.finished)));
+    await shot(page, `follow-reach-phone-${theme}`);
+    await page.keyboard.press('Escape');
+    await page.locator('#chan-thread .p-text').fill('Thanks');
+    await page.locator('#chan-thread .p-send').click();
+    await page.waitForFunction(() => !document.querySelector('#chan-thread .th-pending') && !document.querySelector('#chan-thread .p-text').value);
+    assert.deepEqual(api.follows, []);
+    await page.evaluate(() => {
+      const host = document.createElement('div');
+      host.id = 'dm-thread';
+      document.body.append(host);
+      threadMount(host, {dm: 'human:ben', header: false});
+    });
+    await page.locator('#dm-thread .p-text').waitFor();
+    assert.equal(await page.locator('#dm-thread .p-foot').isHidden(), true, 'a DM shows no reach line');
+    assert.deepEqual(api.errors, []);
+    await page.close();
+  }
+}
+
 (async () => {
   const browser = await launch();
   try {
@@ -560,6 +694,7 @@ async function slash(browser) {
     await botSwitch(browser);
     await stop(browser);
     await slash(browser);
-    console.log('thread composer: one line, one frame, ways to send, goal mode on Home and DM, refusals, goal lines, bot switcher, Stop, "/" commands: ok');
+    await followReach(browser);
+    console.log('thread composer: one line, one frame, ways to send, goal mode on Home and DM, refusals, goal lines, bot switcher, Stop, "/" commands, Follow and who it reaches: ok');
   } finally { await browser.close(); }
 })().catch(e => { console.error(e); process.exit(1); });

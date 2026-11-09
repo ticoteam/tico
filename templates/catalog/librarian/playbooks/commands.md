@@ -34,6 +34,8 @@ does and what it returns. For any other command, run `hub <group> --help` first.
 - `hub market apply <insight id> --source-kind <kind> --quote "<words>" --our-read "<one line>"`, with
   `--entity-type --entity-name --summary --tier` for a new entity, or `--edge-src --edge-rel --edge-dst` for an edge:
   writes the evidence, then the entity or edge, and marks the insight applied. It cannot set a property such as a price.
+  `--last-verified-at YYYY-MM-DD` sets the date the entity was last checked, on `--entity-id` or on a new entity; that date
+  starts the staleness clock (60 days, 30 for a core company). Only a plain YYYY-MM-DD date is sent; a timestamp is refused, not cut.
 - `hub market resolve <insight id> --status <merged|rejected|needs-human> --resolution "<one sentence>"`: closes an
   insight without writing to the graph.
 - `hub market import <file.jsonl> [--dry-run] --note "<where it came from>"`: a verified batch, one JSON line per entity
@@ -46,8 +48,9 @@ does and what it returns. For any other command, run `hub <group> --help` first.
 - `hub market watch list [--entity <entity id>]`: the watched pages and when each was last read.
 - `hub market watch check`: reads the watched pages now.
 - `hub market watch stop <watch id>`: stops one watch. The row is kept.
-- `hub market briefing post --week <YYYY-Www> --title "<title>" --body-file <file.md> [--items-file <items.json>]`:
-  posts the week's briefing with its tagged items (`playbooks/write-the-briefing.md`, step 3). The same week again replaces it.
+- `hub market briefing post --week <YYYY-Www> --title "<title>" --body-file <file.md> [--items-file <items.json>] [--answers-file <answers.json>]`:
+  posts the week's briefing with its tagged items and the Market page's answer lines (`playbooks/write-the-briefing.md`,
+  step 3). The same week again replaces it; without `--answers-file` the week's answers stay.
 - `hub market briefing latest`: the newest briefing, with its items and the bets it touches.
 - `hub strategy show`: the published strategy: its bets and what each one cites.
 - `hub lens list --market` and `hub lens run where-to-play --answers-file <file.json>`: the market lenses, and a lens run.

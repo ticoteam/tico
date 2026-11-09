@@ -4,27 +4,31 @@
 // source builds every company's app on macOS, Windows and Linux: the name, icon, identifier and server
 // URL come in at build time (scripts/app.sh). A generic macOS build keeps a list of servers (orgs): each
 // org's page is a child of the main window on its own data store, and a rail on the left switches them.
-#![cfg_attr(all(not(debug_assertions), target_os = "windows"), windows_subsystem = "windows")]
+#![cfg_attr(
+    all(not(debug_assertions), target_os = "windows"),
+    windows_subsystem = "windows"
+)]
 
 mod applog;
+mod bridge;
 mod config;
+mod cookies;
 mod hub;
 mod orgs;
+mod recorder;
+mod signin;
+mod timing;
 mod visual_origin;
-mod bridge;
 mod windows;
 
-
-use std::collections::HashSet;
-use std::sync::atomic::AtomicBool;
+use std::collections::{HashMap, HashSet};
 use std::sync::Mutex;
 use std::time::Duration;
 
 use serde_json::Value;
 use tauri::menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem, Submenu};
-use tauri::{AppHandle, Emitter, EventTarget, Manager, State, WindowEvent};
-#[cfg(target_os = "macos")]
 use tauri::RunEvent;
+use tauri::{AppHandle, Emitter, EventTarget, Manager, State, WindowEvent};
 use tauri_plugin_dialog::{DialogExt, MessageDialogButtons};
 
 use bridge::{app_log, bridge};
@@ -33,7 +37,10 @@ use hub::{Client, HubStatus};
 use orgs::{Document, Org, Orgs};
 #[cfg(target_os = "macos")]
 use windows::clear_store;
-use windows::{build_server_window, build_window, eval, forget_owned, layout, main_window, open_search, org_label, remember_frame, reload, show_window, switch_to, sync_rail, take_owned, RAIL};
+use windows::{
+    active_webview, build_server_window, build_window, eval, forget_owned, layout, main_window,
+    open_search, org_page, reload, show_window, switch_to, sync_rail, take_owned, RAIL,
+};
 
 const USER_AGENT: &str = "TicoHub/2.0 Tauri";
 const MIN_WIDTH: u32 = 360;
@@ -41,22 +48,40 @@ const MIN_HEIGHT: u32 = 400;
 // Lines of the shell's log a Support diagnostics bundle carries.
 pub(crate) const LOG_LINES: usize = 200;
 
-/// The shell's state. When more than one lock is held, they are taken in this order: orgs, connection, visual_origin.
+/// The shell's state. When more than one lock is held, they are taken in this order: changing, orgs, prefetch,
+/// connection, visual_origin, parked_visual, shown, kept, capture.
 struct AppState {
     connection: Mutex<Option<Config>>,
     visual_origin: Mutex<Option<visual_origin::VisualOrigin>>,
     status: Mutex<HubStatus>,
-    // Set while the shell itself places the window, so that placement is not saved as the person's.
-    applying_frame: AtomicBool,
     // The orgs this run shows, and which one is open. The open one's server is `connection`.
     orgs: Mutex<Orgs>,
     // The windows an org opened (hub files, meetings) as (window label, org id): removing the org closes them.
     owned: Mutex<Vec<(String, String)>>,
-    // The orgs whose page capability is granted. Ids are never reused, so a grant never has to be taken back.
+    // The org capabilities granted this run, by identifier: one per org (see windows::server_capability). Org ids
+    // are never reused, so a grant never has to be taken back.
     granted: Mutex<HashSet<String>>,
     // Held while the open org changes or an org goes, so a switch and a removal never interleave. Never taken on
     // the main thread: a switch waits on it for webview work.
     pub(crate) changing: Mutex<()>,
+    // The orgs whose pages are open, least recently shown first: the open org's last, and before it those kept
+    // hidden since a switch away (`kept`), windows::KEEP_ALIVE in all at most. A prefetched page is not among them.
+    shown: Mutex<Vec<String>>,
+    // The pages kept hidden after a switch away, each closing windows::KEEP_FOR after it went hidden unless it is
+    // shown again first, with the visual allowance each had when open.
+    kept: Mutex<windows::Kept>,
+    // What each org's page says it captures (bridge `capture`): a hint for whether a switch away keeps that page
+    // hidden or closes it (windows::keeps).
+    capture: Mutex<HashMap<String, windows::CaptureNote>>,
+    // The page built hidden for the org the pointer rests on in the rail, and the visual allowance it sent while
+    // hidden, which becomes the open one when it is shown.
+    prefetch: Mutex<windows::Prefetch>,
+    parked_visual: Mutex<Option<visual_origin::VisualOrigin>>,
+    // Switches being timed, for the log.
+    traces: Mutex<Vec<timing::Trace>>,
+    // When each org page's webview was built, by its label: its first `bootTiming` report says how long the open
+    // took from there (bridge.rs). Taken last: no other lock is taken while it is held.
+    page_opened: Mutex<HashMap<String, std::time::Instant>>,
 }
 
 impl AppState {
@@ -65,22 +90,56 @@ impl AppState {
             connection: Mutex::new(connection),
             visual_origin: Mutex::new(None),
             status: Mutex::new(HubStatus::default()),
-            applying_frame: AtomicBool::new(false),
             orgs: Mutex::new(orgs),
             owned: Mutex::new(Vec::new()),
             granted: Mutex::new(HashSet::new()),
             changing: Mutex::new(()),
+            shown: Mutex::new(Vec::new()),
+            kept: Mutex::new(windows::Kept::default()),
+            capture: Mutex::new(HashMap::new()),
+            prefetch: Mutex::new(windows::Prefetch::default()),
+            parked_visual: Mutex::new(None),
+            traces: Mutex::new(Vec::new()),
+            page_opened: Mutex::new(HashMap::new()),
         }
     }
 }
 
 type App = AppHandle<tauri::Wry>;
 
+/// The autostart entry is named by the bundle identifier, which each environment's build sets (scripts/app.sh).
+/// Product names are not unique, and the package name is the same for every build, so two apps would share one entry.
+fn autostart_plugin(identifier: String) -> tauri::plugin::TauriPlugin<tauri::Wry> {
+    let builder = tauri_plugin_autostart::Builder::new().app_name(identifier);
+    #[cfg(target_os = "macos")]
+    let builder = builder.macos_launcher(tauri_plugin_autostart::MacosLauncher::LaunchAgent);
+    builder.build()
+}
+
+fn opener_plugin<R: tauri::Runtime>() -> impl tauri::plugin::Plugin<R> {
+    // Native navigation/new-window handlers enforce which page may open a link and keep hub files signed in.
+    // The plugin's click interceptor cancels anchors before those handlers and calls IPC org pages cannot use.
+    tauri_plugin_opener::Builder::new()
+        .open_js_links_on_click(false)
+        .build::<R>()
+}
+
+#[test]
+fn the_opener_leaves_anchor_clicks_to_the_native_window_policy() {
+    use tauri::plugin::Plugin;
+    assert!(opener_plugin::<tauri::test::MockRuntime>()
+        .initialization_script()
+        .is_none());
+}
+
 fn main() {
     applog::init();
+    // Read before the builder: the autostart plugin needs the identifier, which only the context carries.
+    let context = tauri::generate_context!();
+    let identifier = context.config().identifier.clone();
     let builder = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
-        .plugin(tauri_plugin_opener::init())
+        .plugin(opener_plugin())
         .plugin(tauri_plugin_deep_link::init())
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_updater::Builder::new().build());
@@ -88,17 +147,53 @@ fn main() {
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             show_window(app);
         }))
+        // The main window's frame between launches. The plugin restores it while the window is built, before the app
+        // shows the window, and only the main window is tracked (see windows::tracks_frame).
+        .plugin(
+            tauri_plugin_window_state::Builder::new()
+                .with_state_flags(windows::frame_flags())
+                .with_filter(windows::tracks_frame)
+                .build(),
+        )
+        .plugin(autostart_plugin(identifier))
         // The real list is read in setup, once the app's folders are known.
         .manage(AppState::new(Orgs::new(Document::default(), None), None))
-        .invoke_handler(tauri::generate_handler![app_log, bridge, connect_server, server_address, setup_info, cancel_setup, rail_orgs, rail_switch, rail_add, rail_menu])
+        .invoke_handler(tauri::generate_handler![
+            app_log,
+            bridge,
+            bridge::page_dialog,
+            connect_server,
+            server_address,
+            setup_info,
+            cancel_setup,
+            rail_orgs,
+            rail_switch,
+            rail_hover,
+            rail_add,
+            rail_menu,
+            signin::tico_signin
+        ])
         .setup(move |app| {
             match applog::attach(log_dir(app.handle()).as_deref()) {
-                Some(path) => log::info!("{} {} starting; this log is {}", config::app_name(), app.package_info().version, applog::shown(&path)),
-                None => log::warn!("{} {} starting; no log file, so this log goes to stderr only", config::app_name(), app.package_info().version),
+                Some(path) => log::info!(
+                    "{} {} starting; this log is {}",
+                    config::app_name(),
+                    app.package_info().version,
+                    applog::shown(&path)
+                ),
+                None => log::warn!(
+                    "{} {} starting; no log file, so this log goes to stderr only",
+                    config::app_name(),
+                    app.package_info().version
+                ),
             }
             // The orgs this run shows: orgs.json on a build that keeps a list, otherwise the one server the app
             // has always used (server.txt, or the build's own address).
-            let file = if orgs::multi_org_build() { Some(app.path().app_config_dir()?.join(orgs::FILE_NAME)) } else { None };
+            let file = if orgs::multi_org_build() {
+                Some(app.path().app_config_dir()?.join(orgs::FILE_NAME))
+            } else {
+                None
+            };
             let legacy = || -> Result<Option<url::Url>, String> {
                 let path = server_path(app.handle()).map_err(|e| e.to_string())?;
                 Ok(Config::load(&path)?.map(|config| config.hub))
@@ -108,6 +203,9 @@ fn main() {
             let state: State<AppState> = app.state();
             *state.orgs.lock().unwrap() = found;
             select_connection(&state, connection);
+            // Data stores a run that quit left behind: a sign-in window open at Cmd-Q, or orgs it was adding.
+            #[cfg(target_os = "macos")]
+            signin::clean_up_last_run(app.handle());
             build_window(app.handle())?;
             build_menu(app.handle())?;
             #[cfg(not(target_os = "macos"))]
@@ -126,7 +224,8 @@ fn main() {
             }
             start_polling(app.handle().clone());
             start_updates(app.handle().clone());
-            show_window(app.handle());
+            // Once the org page has painted, so the window never shows blank first.
+            windows::show_when_painted(app.handle());
             Ok(())
         })
         .on_window_event(|window, event| {
@@ -134,6 +233,7 @@ fn main() {
                 // A window an org opened belongs to that org only while it is open.
                 if let WindowEvent::Destroyed = event {
                     forget_owned(window.app_handle(), window.label());
+                    signin::closed(window.app_handle(), window.label());
                 }
                 return;
             }
@@ -143,31 +243,36 @@ fn main() {
                 #[cfg(target_os = "macos")]
                 WindowEvent::CloseRequested { api, .. } => {
                     api.prevent_close();
+                    // The open org's next page, after a quit too, opens where this one is.
+                    windows::remember_open_place(window.app_handle());
                     let _ = window.hide();
                 }
                 // A meeting window left open must not keep the app running with no main window.
                 #[cfg(not(target_os = "macos"))]
                 WindowEvent::Destroyed => window.app_handle().exit(0),
                 // The rail and the org's page are placed by the shell, so both follow the window's size.
-                WindowEvent::Resized(_) => {
-                    layout(window.app_handle());
-                    remember_frame(window.app_handle());
-                }
-                WindowEvent::Moved(_) => remember_frame(window.app_handle()),
+                WindowEvent::Resized(_) => layout(window.app_handle()),
                 _ => {}
             }
         })
         .on_menu_event(|app, event| menu_event(app, event.id().as_ref()))
-        .build(tauri::generate_context!())
+        .build(context)
         .expect("the app could not start")
         .run(|app, event| {
+            // Quitting: the open org's next page, at the next launch, opens where this one is.
+            if let RunEvent::Exit = event {
+                windows::remember_open_place(app);
+            }
             // A click on the Dock icon while the main window is hidden.
             #[cfg(target_os = "macos")]
             if let RunEvent::Reopen { .. } = event {
-                if !main_window(app).and_then(|w| w.is_visible().ok()).unwrap_or(false) { show_window(app); }
+                if !main_window(app)
+                    .and_then(|w| w.is_visible().ok())
+                    .unwrap_or(false)
+                {
+                    show_window(app);
+                }
             }
-            #[cfg(not(target_os = "macos"))]
-            let _ = (app, event);
         });
 }
 
@@ -194,7 +299,12 @@ fn server_path(app: &App) -> tauri::Result<std::path::PathBuf> {
 
 /// The open org, if there is one.
 pub(crate) fn active_org(app: &App) -> Option<Org> {
-    app.state::<AppState>().orgs.lock().unwrap().active().cloned()
+    app.state::<AppState>()
+        .orgs
+        .lock()
+        .unwrap()
+        .active()
+        .cloned()
 }
 
 /// How many orgs this run shows.
@@ -204,17 +314,23 @@ pub(crate) fn org_count(app: &App) -> usize {
 
 /// The label of the open org's page, or "" with none (no webview has that label).
 fn active_label(app: &App) -> String {
-    active_org(app).map(|org| org_label(&org.id)).unwrap_or_default()
+    active_webview(app)
+        .map(|page| page.label().to_string())
+        .unwrap_or_default()
 }
 
 #[tauri::command]
 fn server_address(app: App) -> String {
-    connection(&app).map(|c| c.hub.to_string()).unwrap_or_default()
+    connection(&app)
+        .map(|c| c.hub.to_string())
+        .unwrap_or_default()
 }
 
 #[tauri::command]
 async fn connect_server(app: App, address: String) -> Result<(), String> {
-    if !config::is_generic() { return Err("This app uses its built-in server.".into()); }
+    if !config::is_generic() {
+        return Err("This app uses its built-in server.".into());
+    }
     let hub = config::validate_server(&address).await?;
     if orgs::multi_org_build() {
         // An org already on this server is opened; otherwise the server is added as an org on a store of its own.
@@ -222,11 +338,10 @@ async fn connect_server(app: App, address: String) -> Result<(), String> {
             let state = app.state::<AppState>();
             let mut list = state.orgs.lock().unwrap();
             let existing = list.find_hub(&hub).map(|org| org.id.clone());
-            let id = match existing {
+            match existing {
                 Some(id) => id,
                 None => list.add(&hub)?.id,
-            };
-            id
+            }
         };
         switch_to(&app, &id).map_err(|e| e.to_string())?;
         // The main window may be hidden (macOS keeps it so when closed): the org must be seen once the setup window goes.
@@ -235,10 +350,14 @@ async fn connect_server(app: App, address: String) -> Result<(), String> {
         return Ok(());
     }
     let path = server_path(&app).map_err(|_| "Could not open the app's settings folder.")?;
-    std::fs::create_dir_all(path.parent().unwrap()).map_err(|_| "Could not create the app's settings folder.")?;
+    std::fs::create_dir_all(path.parent().unwrap())
+        .map_err(|_| "Could not create the app's settings folder.")?;
     let temporary = path.with_extension("tmp");
-    std::fs::write(&temporary, hub.as_str()).and_then(|_| std::fs::rename(&temporary, &path))
-        .map_err(|_| "Could not save the server address. Check free disk space and folder permissions.")?;
+    std::fs::write(&temporary, hub.as_str())
+        .and_then(|_| std::fs::rename(&temporary, &path))
+        .map_err(|_| {
+            "Could not save the server address. Check free disk space and folder permissions."
+        })?;
     // Runtime capabilities are additive. Restart so only the newly selected origin
     // receives permissions, and no permissions from the previous connection survive.
     select_connection(&app.state::<AppState>(), None);
@@ -278,13 +397,19 @@ fn rail_list(app: &App) -> Value {
     let open = list.active().map(|org| org.id.clone());
     // The rail is the app's own page, so it may show each org's address and email (its initials and color come from
     // them); org pages never receive this list.
-    let items: Vec<Value> = list.orgs().iter().map(|org| serde_json::json!({
-        "id": org.id,
-        "url": org.url,
-        "name": org.name,
-        "email": org.email,
-        "active": open.as_deref() == Some(org.id.as_str()),
-    })).collect();
+    let items: Vec<Value> = list
+        .orgs()
+        .iter()
+        .map(|org| {
+            serde_json::json!({
+                "id": org.id,
+                "url": org.url,
+                "name": org.name,
+                "email": org.email,
+                "active": open.as_deref() == Some(org.id.as_str()),
+            })
+        })
+        .collect();
     Value::Array(items)
 }
 
@@ -307,7 +432,9 @@ pub(crate) fn add_org(app: &App) {
 pub(crate) fn popup_orgs(app: &App) {
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
-        let (Some(window), Ok(menu)) = (main_window(&app), org_menu(&app)) else { return };
+        let (Some(window), Ok(menu)) = (main_window(&app), org_menu(&app)) else {
+            return;
+        };
         let _ = window.popup_menu(&menu);
     });
 }
@@ -322,12 +449,31 @@ fn org_menu(app: &App) -> tauri::Result<Menu<tauri::Wry>> {
     let menu = Menu::new(app)?;
     for org in &list {
         let checked = open.as_ref().is_some_and(|open| open.id == org.id);
-        menu.append(&CheckMenuItem::with_id(app, format!("org-switch:{}", org.id), org.title(), true, checked, None::<&str>)?)?;
+        menu.append(&CheckMenuItem::with_id(
+            app,
+            format!("org-switch:{}", org.id),
+            org.title(),
+            true,
+            checked,
+            None::<&str>,
+        )?)?;
     }
     menu.append(&PredefinedMenuItem::separator(app)?)?;
-    menu.append(&MenuItem::with_id(app, "org-add", "Add Organization…", true, None::<&str>)?)?;
+    menu.append(&MenuItem::with_id(
+        app,
+        "org-add",
+        "Add Organization…",
+        true,
+        None::<&str>,
+    )?)?;
     if let Some(open) = &open {
-        menu.append(&MenuItem::with_id(app, "org-remove", format!("Remove {}…", open.title()), true, None::<&str>)?)?;
+        menu.append(&MenuItem::with_id(
+            app,
+            "org-remove",
+            format!("Remove {}…", open.title()),
+            true,
+            None::<&str>,
+        )?)?;
     }
     Ok(menu)
 }
@@ -349,9 +495,14 @@ fn ask_remove(app: &App, org: &Org) {
 /// Removes an org: its windows and page close, its data store is deleted, and the list is saved. Removing the open
 /// org opens the first one left, or the setup window when none is left.
 async fn remove_org(app: &App, id: &str) {
+    // A session being renewed into the org's store finishes first (see signin::RENEWING); one that starts after this
+    // finds the org gone.
+    let renewing = signin::RENEWING.lock().await;
     let (removed, was_open) = {
         let state = app.state::<AppState>();
         let _changing = state.changing.lock().unwrap();
+        // A dialog the org's page has open is answered first.
+        bridge::DIALOGS.wait_closed();
         let (removed, was_open) = {
             let mut list = state.orgs.lock().unwrap();
             let was_open = list.active().is_some_and(|org| org.id == id);
@@ -362,37 +513,27 @@ async fn remove_org(app: &App, id: &str) {
                 let _ = window.close();
             }
         }
-        if let Some(page) = app.get_webview(&org_label(id)) {
+        windows::forget_page(app, id);
+        if let Some(page) = org_page(app, id) {
             let _ = page.close();
         }
         (removed, was_open)
     };
     #[cfg_attr(not(target_os = "macos"), allow(unused_variables))]
-    let Some(removed) = removed else { return };
+    let Some(removed) = removed
+    else {
+        return;
+    };
+    // Its page is closed. Its store is noted for deletion before anything else, so a deletion that fails (or a quit
+    // first) is retried at the next launch; the org is no longer in the list, so nothing keeps the store.
     #[cfg(target_os = "macos")]
-    {
-        match removed.store_id() {
-            Some(store) => {
-                // A page that just closed holds its store for a moment, so try again a few times before clearing.
-                let mut removed_store = app.remove_data_store(*store.as_bytes()).await;
-                for _ in 0..6 {
-                    if removed_store.is_ok() { break; }
-                    tokio::time::sleep(Duration::from_millis(500)).await;
-                    removed_store = app.remove_data_store(*store.as_bytes()).await;
-                }
-                if let Err(e) = removed_store {
-                    // The store is still in use: its data is cleared at least, and the list no longer names it.
-                    log::warn!("could not delete an org's data store, so clearing it instead: {e}");
-                    if let Err(e) = clear_store(app, &removed) { log::warn!("could not clear an org's data store: {e}"); }
-                }
-            }
-            // The org moved over from server.txt uses the default store, which cannot be deleted: clear it, so its
-            // sign-in goes too. Every other org has a store of its own, so nothing of theirs is in it.
-            None => {
-                if let Err(e) = clear_store(app, &removed) { log::warn!("could not clear the default data store: {e}"); }
-            }
-        }
+    let store = removed.store_id();
+    #[cfg(target_os = "macos")]
+    if let Some(store) = store {
+        signin::note_removed_store(app, store);
     }
+    drop(renewing);
+    // The next org opens (and the rail drops the removed one) before the store is deleted, which can take seconds.
     if was_open {
         match active_org(app) {
             Some(next) => {
@@ -404,18 +545,41 @@ async fn remove_org(app: &App, id: &str) {
                 let state = app.state::<AppState>();
                 // Checked again under the lock: an org added meanwhile opens through its own switch, which waits on it.
                 let _changing = state.changing.lock().unwrap();
-                if active_org(app).is_some() { return refresh_chrome(app); }
-                select_connection(&state, None);
-                *state.status.lock().unwrap() = HubStatus::default();
-                // The setup window first, so that the app keeps a window while the main one goes.
-                let _ = build_server_window(app);
-                if let Some(window) = main_window(app) {
-                    let _ = window.destroy();
+                if active_org(app).is_none() {
+                    select_connection(&state, None);
+                    *state.status.lock().unwrap() = HubStatus::default();
+                    state.shown.lock().unwrap().clear();
+                    *state.kept.lock().unwrap() = windows::Kept::default();
+                    state.capture.lock().unwrap().clear();
+                    // The setup window first, so that the app keeps a window while the main one goes.
+                    let _ = build_server_window(app);
+                    if let Some(window) = main_window(app) {
+                        let _ = window.destroy();
+                    }
                 }
             }
         }
     }
     refresh_chrome(app);
+    #[cfg(target_os = "macos")]
+    match store {
+        // The org moved over from server.txt uses the default store, which cannot be deleted: cleared, so its sign-in
+        // goes too. Every other org has a store of its own, so nothing of theirs is in it.
+        None => {
+            if let Err(e) = clear_store(app, &removed).await {
+                log::warn!("could not clear the default data store: {e}");
+            }
+        }
+        Some(store) => {
+            if !signin::delete_store(app, store).await {
+                // Still in use: its data is cleared at least, and the next launch deletes it.
+                log::warn!("could not delete an org's data store, so clearing it now; the next launch deletes it");
+                if let Err(e) = clear_store(app, &removed).await {
+                    log::warn!("could not clear an org's data store: {e}");
+                }
+            }
+        }
+    }
 }
 
 #[tauri::command]
@@ -424,10 +588,33 @@ fn rail_orgs(app: App, webview: tauri::Webview) -> Result<Value, String> {
     Ok(rail_list(&app))
 }
 
+/// A click on an org in the rail, sent for every click (the rail's own idea of the open org can be a draw behind).
+/// Not async, so it runs on the main thread in the order the clicks came, and numbers each one there; the switch
+/// itself runs apart, and a click that a later one overtook does nothing (`windows::switch_for_click`).
 #[tauri::command]
-async fn rail_switch(app: App, webview: tauri::Webview, id: String) -> Result<(), String> {
+fn rail_switch(app: App, webview: tauri::Webview, id: String) -> Result<(), String> {
     only_rail(&webview)?;
-    switch_to(&app, &id).map_err(|e| e.to_string())
+    timing::click(&app, &id, "click");
+    let click = windows::next_click();
+    tauri::async_runtime::spawn(async move {
+        if let Err(e) = windows::switch_for_click(&app, &id, click) {
+            log::warn!("could not switch organization: {e}");
+        }
+    });
+    Ok(())
+}
+
+/// The pointer rested on an org in the rail (`id`), or left it (none): its page is built hidden ahead of a click.
+#[tauri::command]
+async fn rail_hover(app: App, webview: tauri::Webview, id: Option<String>) -> Result<(), String> {
+    only_rail(&webview)?;
+    match id {
+        Some(id) => windows::prefetch(&app, &id).map_err(|e| e.to_string()),
+        None => {
+            windows::leave(&app);
+            Ok(())
+        }
+    }
 }
 
 #[tauri::command]
@@ -440,43 +627,79 @@ async fn rail_add(app: App, webview: tauri::Webview) -> Result<(), String> {
 #[tauri::command]
 fn rail_menu(app: App, webview: tauri::Webview, id: String) -> Result<(), String> {
     only_rail(&webview)?;
-    let Some(org) = app.state::<AppState>().orgs.lock().unwrap().get(&id).cloned() else { return Ok(()) };
+    let Some(org) = app
+        .state::<AppState>()
+        .orgs
+        .lock()
+        .unwrap()
+        .get(&id)
+        .cloned()
+    else {
+        return Ok(());
+    };
     let app = app.clone();
     // One org's menu at the pointer: Remove that org (the rail's own right-click). Spawned, like every popup.
     tauri::async_runtime::spawn(async move {
-        let Some(window) = main_window(&app) else { return };
-        let Ok(menu) = Menu::with_items(&app, &[
-            &match MenuItem::with_id(&app, format!("org-remove:{}", org.id), format!("Remove {}…", org.title()), true, None::<&str>) {
+        let Some(window) = main_window(&app) else {
+            return;
+        };
+        let Ok(menu) = Menu::with_items(
+            &app,
+            &[&match MenuItem::with_id(
+                &app,
+                format!("org-remove:{}", org.id),
+                format!("Remove {}…", org.title()),
+                true,
+                None::<&str>,
+            ) {
                 Ok(item) => item,
                 Err(_) => return,
-            },
-        ]) else { return };
+            }],
+        ) else {
+            return;
+        };
         let _ = window.popup_menu(&menu);
     });
     Ok(())
 }
 
-/// The setup page asks whether it is adding an org (one is already open), so it can offer Cancel.
+/// The setup page asks whether it is adding an org (one is already open), so it can offer Cancel, and whether Tico
+/// sign-in is offered (a build that keeps a list of orgs), so it can make that the default.
 #[tauri::command]
 fn setup_info(app: App) -> Value {
-    serde_json::json!({"hasOrgs": orgs::multi_org_build() && org_count(&app) > 0})
+    let multi = orgs::multi_org_build();
+    serde_json::json!({"hasOrgs": multi && org_count(&app) > 0, "signIn": multi})
 }
 
-/// Cancel on the setup page while adding an org: the setup window closes and the open org stays.
+/// Cancel on the setup page while adding an org: the setup window closes, with any Tico sign-in, and the open org stays.
 #[tauri::command]
 fn cancel_setup(app: App) {
-    if org_count(&app) > 0 { close_setup_later(&app); }
+    if org_count(&app) > 0 {
+        signin::close(&app);
+        close_setup_later(&app);
+    }
 }
 
 /// The org commands are the rail's alone; the org pages have no use for them.
 fn only_rail(webview: &tauri::Webview) -> Result<(), String> {
-    if webview.label() == RAIL { Ok(()) } else { Err("Only the org list may call this.".into()) }
+    if webview.label() == RAIL {
+        Ok(())
+    } else {
+        Err("Only the org list may call this.".into())
+    }
 }
 
 // ----------------------------------------------------------------------------- deep links
-// tico://meetings/<id> and any other hub path land on the page in the app rather than a browser.
+// tico://meetings/<id> and any other hub path land on the page in the app rather than a browser. tico://open is Tico
+// Recorder asking to show an org's approval page (recorder.rs).
 fn open_deep_link(app: &App, url: &url::Url) {
-    let path = format!("{}{}", url.host_str().unwrap_or(""), url.path()).trim_matches('/').to_string();
+    if url.host_str() == Some("open") {
+        recorder::open_link(app, url);
+        return;
+    }
+    let path = format!("{}{}", url.host_str().unwrap_or(""), url.path())
+        .trim_matches('/')
+        .to_string();
     if path.is_empty() {
         show_window(app);
         return;
@@ -489,35 +712,85 @@ fn open_deep_link(app: &App, url: &url::Url) {
 // ----------------------------------------------------------------------------- app menu
 fn build_menu(app: &App) -> tauri::Result<()> {
     let name = config::app_name();
-    let app_menu = Submenu::new(app, &name, true)?;
-    app_menu.append(&PredefinedMenuItem::about(app, Some(&format!("About {name}")), None)?)?;
-    app_menu.append(&MenuItem::with_id(app, "updates", "Check for Updates…", true, None::<&str>)?)?;
+    let app_menu = Submenu::new(app, name, true)?;
+    app_menu.append(&PredefinedMenuItem::about(
+        app,
+        Some(&format!("About {name}")),
+        None,
+    )?)?;
+    app_menu.append(&MenuItem::with_id(
+        app,
+        "updates",
+        "Check for Updates…",
+        true,
+        None::<&str>,
+    )?)?;
     if orgs::multi_org_build() {
-        app_menu.append(&MenuItem::with_id(app, "org-add", "Add Organization…", true, None::<&str>)?)?;
+        app_menu.append(&MenuItem::with_id(
+            app,
+            "org-add",
+            "Add Organization…",
+            true,
+            None::<&str>,
+        )?)?;
         if let Some(open) = active_org(app) {
-            app_menu.append(&MenuItem::with_id(app, "org-remove", format!("Remove {}…", open.title()), true, None::<&str>)?)?;
+            app_menu.append(&MenuItem::with_id(
+                app,
+                "org-remove",
+                format!("Remove {}…", open.title()),
+                true,
+                None::<&str>,
+            )?)?;
         }
     } else if config::is_generic() {
-        app_menu.append(&MenuItem::with_id(app, "server", "Change server…", true, None::<&str>)?)?;
+        app_menu.append(&MenuItem::with_id(
+            app,
+            "server",
+            "Change server…",
+            true,
+            None::<&str>,
+        )?)?;
     }
+    #[cfg(target_os = "macos")]
+    app_menu.append(&open_at_login_item(app)?)?;
     app_menu.append_items(&[
         &PredefinedMenuItem::separator(app)?,
         &PredefinedMenuItem::hide(app, None)?,
         &PredefinedMenuItem::quit(app, Some(&format!("Quit {name}")))?,
     ])?;
-    let edit = Submenu::with_items(app, "Edit", true, &[
-        &PredefinedMenuItem::undo(app, None)?, &PredefinedMenuItem::redo(app, None)?, &PredefinedMenuItem::separator(app)?,
-        &PredefinedMenuItem::cut(app, None)?, &PredefinedMenuItem::copy(app, None)?, &PredefinedMenuItem::paste(app, None)?,
-        &PredefinedMenuItem::select_all(app, None)?,
-    ])?;
-    let view = Submenu::with_items(app, "View", true, &[
-        &MenuItem::with_id(app, "search", "Search…", true, Some("CmdOrCtrl+K"))?,
-        &PredefinedMenuItem::separator(app)?,
-        &MenuItem::with_id(app, "reload", "Reload", true, Some("CmdOrCtrl+R"))?,
-    ])?;
-    let window = Submenu::with_items(app, "Window", true, &[
-        &PredefinedMenuItem::close_window(app, None)?, &PredefinedMenuItem::minimize(app, None)?,
-    ])?;
+    let edit = Submenu::with_items(
+        app,
+        "Edit",
+        true,
+        &[
+            &PredefinedMenuItem::undo(app, None)?,
+            &PredefinedMenuItem::redo(app, None)?,
+            &PredefinedMenuItem::separator(app)?,
+            &PredefinedMenuItem::cut(app, None)?,
+            &PredefinedMenuItem::copy(app, None)?,
+            &PredefinedMenuItem::paste(app, None)?,
+            &PredefinedMenuItem::select_all(app, None)?,
+        ],
+    )?;
+    let view = Submenu::with_items(
+        app,
+        "View",
+        true,
+        &[
+            &MenuItem::with_id(app, "search", "Search…", true, Some("CmdOrCtrl+K"))?,
+            &PredefinedMenuItem::separator(app)?,
+            &MenuItem::with_id(app, "reload", "Reload", true, Some("CmdOrCtrl+R"))?,
+        ],
+    )?;
+    let window = Submenu::with_items(
+        app,
+        "Window",
+        true,
+        &[
+            &PredefinedMenuItem::close_window(app, None)?,
+            &PredefinedMenuItem::minimize(app, None)?,
+        ],
+    )?;
     app.set_menu(Menu::with_items(app, &[&app_menu, &edit, &view, &window])?)?;
     Ok(())
 }
@@ -525,12 +798,21 @@ fn build_menu(app: &App) -> tauri::Result<()> {
 fn menu_event(app: &App, id: &str) {
     // Switching runs as its own task: it opens a page, which a menu event should not wait for.
     if let Some(org) = id.strip_prefix("org-remove:") {
-        let found = app.state::<AppState>().orgs.lock().unwrap().get(org).cloned();
-        if let Some(found) = found { ask_remove(app, &found); }
+        let found = app
+            .state::<AppState>()
+            .orgs
+            .lock()
+            .unwrap()
+            .get(org)
+            .cloned();
+        if let Some(found) = found {
+            ask_remove(app, &found);
+        }
         return;
     }
     if let Some(org) = id.strip_prefix("org-switch:") {
         let (app, org) = (app.clone(), org.to_string());
+        timing::click(&app, &org, "menu");
         tauri::async_runtime::spawn(async move {
             if let Err(e) = switch_to(&app, &org) {
                 log::warn!("could not open the org: {e}");
@@ -539,7 +821,9 @@ fn menu_event(app: &App, id: &str) {
         return;
     }
     match id {
-        "server" => { let _ = build_server_window(app); }
+        "server" => {
+            let _ = build_server_window(app);
+        }
         "org-add" => add_org(app),
         "org-remove" => {
             if let Some(open) = active_org(app) {
@@ -549,8 +833,44 @@ fn menu_event(app: &App, id: &str) {
         "search" => open_search(app),
         "reload" => reload(app),
         "updates" => update_now(app),
+        #[cfg(target_os = "macos")]
+        "open-at-login" => toggle_open_at_login(app),
         _ => {}
     }
+}
+
+/// Open at Login, checked while the app starts at login. It is off until the person turns it on.
+#[cfg(target_os = "macos")]
+fn open_at_login_item(app: &App) -> tauri::Result<CheckMenuItem<tauri::Wry>> {
+    use tauri_plugin_autostart::ManagerExt;
+    let enabled = app.autolaunch().is_enabled().unwrap_or(false);
+    CheckMenuItem::with_id(
+        app,
+        "open-at-login",
+        "Open at Login",
+        true,
+        enabled,
+        None::<&str>,
+    )
+}
+
+/// Turns Open at Login on or off, then rebuilds the menu so its check shows what the system now has. Spawned: a menu
+/// cannot be rebuilt inside the menu event that asked for the change.
+#[cfg(target_os = "macos")]
+fn toggle_open_at_login(app: &App) {
+    use tauri_plugin_autostart::ManagerExt;
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        let autolaunch = app.autolaunch();
+        let result = match autolaunch.is_enabled() {
+            Ok(true) => autolaunch.disable(),
+            _ => autolaunch.enable(),
+        };
+        if let Err(e) = result {
+            log::warn!("could not change Open at Login: {e}");
+        }
+        let _ = build_menu(&app);
+    });
 }
 
 // ----------------------------------------------------------------------------- Dock badge
@@ -559,10 +879,14 @@ fn menu_event(app: &App, id: &str) {
 /// there is no one count to show, so the badge is cleared.
 fn render_badge(app: &App) {
     let several = !polls_status(org_count(app));
-    let HubStatus { needs, signed_out, .. } = app.state::<AppState>().status.lock().unwrap().clone();
+    let HubStatus {
+        needs, signed_out, ..
+    } = app.state::<AppState>().status.lock().unwrap().clone();
     let handle = app.clone();
     let _ = app.run_on_main_thread(move || {
-        let Some(window) = main_window(&handle) else { return };
+        let Some(window) = main_window(&handle) else {
+            return;
+        };
         if several {
             let _ = window.set_badge_count(None);
         } else if signed_out {
@@ -630,9 +954,9 @@ fn configure_company_updater(
 ) -> Result<tauri_plugin_updater::UpdaterBuilder, tauri_plugin_updater::Error> {
     let endpoint = policy.endpoint().clone();
     let policy = policy.clone();
-    builder.endpoints(vec![endpoint]).map(|builder| {
-        builder.configure_client(move |client| policy.configure_client(client))
-    })
+    builder
+        .endpoints(vec![endpoint])
+        .map(|builder| builder.configure_client(move |client| policy.configure_client(client)))
 }
 
 /// Checks now, from the menu or the page; a check already running is not doubled.
@@ -645,49 +969,86 @@ static CHECKING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::
 
 async fn check_for_update(app: &App) {
     use std::sync::atomic::Ordering;
-    if CHECKING.swap(true, Ordering::SeqCst) { return; }
+    if CHECKING.swap(true, Ordering::SeqCst) {
+        return;
+    }
     check_for_update_once(app).await;
     CHECKING.store(false, Ordering::SeqCst);
 }
 
-/// Tells the page how a check went (`window.ticoAppUpdate` in ui/app/notices.js), so a failed update is
+/// Tells the page how a check went (`window.ticoAppUpdate` in ui/app/notices.ts), so a failed update is
 /// shown with its reason instead of only reaching the log.
 fn report_update(app: &App, state: &str, detail: &str) {
     match state {
         "failed" => log::warn!("update check failed: {detail}"),
         "current" => log::info!("update check: {} is current", app.package_info().version),
-        _ => log::info!("update check: {state} {detail} (from {})", app.package_info().version),
+        _ => log::info!(
+            "update check: {state} {detail} (from {})",
+            app.package_info().version
+        ),
     }
     let body = serde_json::json!({"state": state, "detail": detail});
-    eval(app, &format!("window.ticoAppUpdate && window.ticoAppUpdate({body})"));
+    eval(
+        app,
+        &format!("window.ticoAppUpdate && window.ticoAppUpdate({body})"),
+    );
 }
 
 async fn check_for_update_once(app: &App) {
     use tauri_plugin_updater::UpdaterExt;
     let selected = connection(app);
-    if !config::is_generic() && selected.as_ref().map(|c| c.is_local()).unwrap_or(true) { return; }
+    if !config::is_generic() && selected.as_ref().map(|c| c.is_local()).unwrap_or(true) {
+        return;
+    }
     let builder = app.updater_builder();
-    let company_policy = if config::is_generic() { None } else {
-        let Some(connection) = selected.as_ref() else { return };
+    let company_policy = if config::is_generic() {
+        None
+    } else {
+        let Some(connection) = selected.as_ref() else {
+            return;
+        };
         if connection.hub.scheme() != "https" {
-            report_update(app, "failed", "the update feed needs an HTTPS server address");
+            report_update(
+                app,
+                "failed",
+                "the update feed needs an HTTPS server address",
+            );
             return;
         }
-        let configured = app.config().plugins.0.get("updater").and_then(|p| p.get("endpoints"))
-            .and_then(Value::as_array).and_then(|a| a.first()).and_then(Value::as_str);
+        let configured = app
+            .config()
+            .plugins
+            .0
+            .get("updater")
+            .and_then(|p| p.get("endpoints"))
+            .and_then(Value::as_array)
+            .and_then(|a| a.first())
+            .and_then(Value::as_str);
         let endpoint = match hub::company_update_endpoint(&connection.hub, configured) {
             Ok(endpoint) if endpoint.scheme() == "https" => endpoint,
-            Ok(_) => { report_update(app, "failed", "the update feed is not HTTPS"); return; }
-            Err(_) => { report_update(app, "failed", "the update feed address is invalid"); return; }
+            Ok(_) => {
+                report_update(app, "failed", "the update feed is not HTTPS");
+                return;
+            }
+            Err(_) => {
+                report_update(app, "failed", "the update feed address is invalid");
+                return;
+            }
         };
         let cookie = if hub::same_origin(&connection.hub, &endpoint) {
-            Client::new(connection.clone(), active_label(app)).cookie_header(app, &endpoint)
+            Client::new(connection.clone(), active_label(app))
+                .cookie_header(app, &endpoint)
+                .await
         } else {
             None
         };
         // A cookie is optional: public team feeds work without an Access session. CompanyUpdatePolicy
         // drops it for a configured runner_url on another origin and limits hub downloads/redirects.
-        Some(hub::CompanyUpdatePolicy::new(connection.hub.clone(), endpoint, cookie.as_deref()))
+        Some(hub::CompanyUpdatePolicy::new(
+            connection.hub.clone(),
+            endpoint,
+            cookie.as_deref(),
+        ))
     };
     let updater_result = if let Some(policy) = &company_policy {
         configure_company_updater(builder, policy).and_then(|builder| builder.build())
@@ -696,10 +1057,24 @@ async fn check_for_update_once(app: &App) {
     };
     let updater = match updater_result {
         Ok(updater) => updater,
-        Err(e) => { report_update(app, "failed", &format!("updater unavailable: {e}")); return; }
+        Err(e) => {
+            report_update(app, "failed", &format!("updater unavailable: {e}"));
+            return;
+        }
     };
-    log::info!("update check: reading the {} feed", if company_policy.is_some() { "company" } else { "release" });
-    match install_update(&updater, company_policy.as_ref(), |version| report_update(app, "installing", version)).await {
+    log::info!(
+        "update check: reading the {} feed",
+        if company_policy.is_some() {
+            "company"
+        } else {
+            "release"
+        }
+    );
+    match install_update(&updater, company_policy.as_ref(), |version| {
+        report_update(app, "installing", version)
+    })
+    .await
+    {
         Ok(false) => report_update(app, "current", ""),
         Ok(true) => app.restart(),
         Err(detail) => report_update(app, "failed", &detail),
@@ -727,7 +1102,10 @@ async fn install_update(
         }
     }
     installing(&update.version);
-    update.download_and_install(|_, _| {}, || {}).await.map_err(|e| format!("install failed: {e}"))?;
+    update
+        .download_and_install(|_, _| {}, || {})
+        .await
+        .map_err(|e| format!("install failed: {e}"))?;
     Ok(true)
 }
 
@@ -749,10 +1127,16 @@ async fn refresh_status(app: &App) {
         render_badge(app);
         return;
     }
-    let Some(config) = connection(app) else { return };
-    let fresh = Client::new(config.clone(), active_label(app)).status(app).await;
+    let Some(config) = connection(app) else {
+        return;
+    };
+    let fresh = Client::new(config.clone(), active_label(app))
+        .status(app)
+        .await;
     // A status request for the previous server may finish after someone changes the address.
-    if connection(app).map(|c| c.hub) != Some(config.hub) { return; }
+    if connection(app).map(|c| c.hub) != Some(config.hub) {
+        return;
+    }
     *state.status.lock().unwrap() = fresh;
     render_badge(app);
 }
@@ -760,36 +1144,46 @@ async fn refresh_status(app: &App) {
 #[cfg(test)]
 mod updater_integration_tests {
     use super::*;
-    use url::Url;
-    use minisign::{KeyPair, sign};
     use base64::Engine;
+    use minisign::{sign, KeyPair};
     use std::io::{Cursor, Read, Write};
     use std::net::{SocketAddr, TcpListener, TcpStream};
     use std::thread;
     use std::time::Duration;
     use tauri_plugin_updater::UpdaterExt;
+    use url::Url;
 
     const VERSION: &str = "0.3.21";
     const TARGET: &str = "tico-updater-test";
     const COOKIE: &str = "CF_Authorization=synthetic-test-session";
 
-    fn key_and_signature(bytes: &[u8]) -> (String, String) {
+    /// Signs `bytes` the way `cargo tauri build` does: the trusted comment records the version, which the updater
+    /// (2.14+) checks against the version the feed announces.
+    fn key_and_signature(bytes: &[u8], version: &str) -> (String, String) {
         let pair = KeyPair::generate_unencrypted_keypair().unwrap();
         let public_key = pair.pk.to_box().unwrap().to_string();
+        let comment = format!("timestamp:0\tfile:Tico.tar.gz\tversion:{version}");
         let signature = sign(
             Some(&pair.pk),
             &pair.sk,
             Cursor::new(bytes.to_vec()),
-            Some("version: 0.3.21"),
+            Some(&comment),
             Some("synthetic updater test"),
-        ).unwrap().into_string();
-        (base64::engine::general_purpose::STANDARD.encode(public_key),
-         base64::engine::general_purpose::STANDARD.encode(signature))
+        )
+        .unwrap()
+        .into_string();
+        (
+            base64::engine::general_purpose::STANDARD.encode(public_key),
+            base64::engine::general_purpose::STANDARD.encode(signature),
+        )
     }
 
     fn test_app() -> tauri::App<tauri::test::MockRuntime> {
         let mut context = tauri::test::mock_context(tauri::test::noop_assets());
-        context.config_mut().plugins.0.insert("updater".into(), serde_json::json!({"pubkey": "", "dangerousInsecureTransportProtocol": true}));
+        context.config_mut().plugins.0.insert(
+            "updater".into(),
+            serde_json::json!({"pubkey": "", "dangerousInsecureTransportProtocol": true}),
+        );
         tauri::test::mock_builder()
             .plugin(tauri_plugin_updater::Builder::new().build())
             .build(context)
@@ -806,7 +1200,8 @@ mod updater_integration_tests {
             .join("Contents")
             .join("MacOS")
             .join("Tico");
-        configure_company_updater(builder, policy).unwrap()
+        configure_company_updater(builder, policy)
+            .unwrap()
             .pubkey(public_key)
             .target(TARGET)
             .version_comparator(|_, _| true)
@@ -838,11 +1233,14 @@ mod updater_integration_tests {
             "version": VERSION,
             "app_kind": "company",
             "platforms": platforms
-        }).to_string()
+        })
+        .to_string()
     }
 
     fn read_request(socket: &mut TcpStream) -> String {
-        socket.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+        socket
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .unwrap();
         let mut request = Vec::new();
         let mut chunk = [0; 1024];
         loop {
@@ -889,27 +1287,43 @@ mod updater_integration_tests {
         let (bundles, installed_dir) = (scratch.join("bundles"), scratch.join("installed"));
         std::fs::create_dir_all(&bundles).unwrap();
         std::fs::create_dir_all(&installed_dir).unwrap();
-        let candidate = b"#!/bin/sh\necho Acme Tico 0.3.99\n";
-        let (public_key, signature) = key_and_signature(candidate);
-        let (other_key, _) = key_and_signature(candidate);
+        // The updater installs only ELF AppImages, and `infer` needs a full 64-byte ELF header to call it one.
+        let mut candidate = b"\x7fELF Acme Tico 0.3.99".to_vec();
+        candidate.resize(64, 0);
+        let (public_key, signature) = key_and_signature(&candidate, CANDIDATE);
+        let (other_key, _) = key_and_signature(&candidate, CANDIDATE);
         // The file names `cargo tauri build --bundles appimage` writes, which app_release.py classifies.
         let appimage = bundles.join(format!("Acme Tico_{CANDIDATE}_amd64.AppImage"));
-        std::fs::write(&appimage, candidate).unwrap();
-        std::fs::write(bundles.join(format!("Acme Tico_{CANDIDATE}_amd64.AppImage.sig")), &signature).unwrap();
+        std::fs::write(&appimage, &candidate).unwrap();
+        std::fs::write(
+            bundles.join(format!("Acme Tico_{CANDIDATE}_amd64.AppImage.sig")),
+            &signature,
+        )
+        .unwrap();
         let installed = installed_dir.join("Acme Tico.AppImage");
         let previous = b"#!/bin/sh\necho Acme Tico 0.3.98\n";
         std::fs::write(&installed, previous).unwrap();
         std::fs::set_permissions(&installed, std::fs::Permissions::from_mode(0o755)).unwrap();
 
-        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .unwrap();
         let python = std::env::var("TICO_PYTHON").unwrap_or_else(|_| "python3".into());
         let mut feed = std::process::Command::new(python)
-            .arg(root.join("app/tests/update_hub.py")).arg(&bundles).arg(CANDIDATE).arg(COOKIE)
-            .stdin(std::process::Stdio::piped()).stdout(std::process::Stdio::piped())
-            .spawn().expect("start app/tests/update_hub.py");
+            .arg(root.join("app/tests/update_hub.py"))
+            .arg(&bundles)
+            .arg(CANDIDATE)
+            .arg(COOKIE)
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .spawn()
+            .expect("start app/tests/update_hub.py");
         let mut ready = String::new();
-        std::io::BufReader::new(feed.stdout.take().unwrap()).read_line(&mut ready).unwrap();
-        let ready: serde_json::Value = serde_json::from_str(&ready).expect("update_hub.py did not start");
+        std::io::BufReader::new(feed.stdout.take().unwrap())
+            .read_line(&mut ready)
+            .unwrap();
+        let ready: serde_json::Value =
+            serde_json::from_str(&ready).expect("update_hub.py did not start");
         let hub = Url::parse(ready["hub"].as_str().unwrap()).unwrap();
         // A company build's configured endpoint: <url>/download/latest.json on the hub it connects to.
         let configured = hub.join("download/latest.json").unwrap();
@@ -917,60 +1331,101 @@ mod updater_integration_tests {
 
         let updater = |key: &str, cookie: Option<&str>| {
             let mut context = tauri::test::mock_context(tauri::test::noop_assets());
-            context.config_mut().plugins.0.insert("updater".into(),
+            context.config_mut().plugins.0.insert(
+                "updater".into(),
                 serde_json::json!({"pubkey": key, "endpoints": [configured.as_str()],
-                                   "dangerousInsecureTransportProtocol": true}));
+                                   "dangerousInsecureTransportProtocol": true}),
+            );
             context.package_info_mut().version = "0.3.98".parse().unwrap();
             let app = tauri::test::mock_builder()
                 .plugin(tauri_plugin_updater::Builder::new().build())
-                .build(context).expect("build mock Tauri app");
+                .build(context)
+                .expect("build mock Tauri app");
             let policy = hub::CompanyUpdatePolicy::new(hub.clone(), endpoint.clone(), cookie);
-            let updater = configure_company_updater(app.updater_builder(), &policy).unwrap()
-                .executable_path(&installed).build().expect("build updater");
+            let updater = configure_company_updater(app.updater_builder(), &policy)
+                .unwrap()
+                .executable_path(&installed)
+                .build()
+                .expect("build updater");
             (app, updater, policy)
         };
         async fn run(
-            (app, updater, policy): (tauri::App<tauri::test::MockRuntime>, tauri_plugin_updater::Updater,
-                                     hub::CompanyUpdatePolicy),
+            (app, updater, policy): (
+                tauri::App<tauri::test::MockRuntime>,
+                tauri_plugin_updater::Updater,
+                hub::CompanyUpdatePolicy,
+            ),
         ) -> (Result<bool, String>, Option<String>) {
             let mut offered = None;
-            let result = install_update(&updater, Some(&policy), |version| offered = Some(version.to_string())).await;
+            let result = install_update(&updater, Some(&policy), |version| {
+                offered = Some(version.to_string())
+            })
+            .await;
             drop(app);
             (result, offered)
         }
 
         let (signed_out, _) = run(updater(&public_key, None)).await;
-        assert!(signed_out.is_err(), "without the hub session the feed is Access's sign-in page: {signed_out:?}");
+        assert!(
+            signed_out.is_err(),
+            "without the hub session the feed is Access's sign-in page: {signed_out:?}"
+        );
         let (updated, offered) = run(updater(&public_key, Some(COOKIE))).await;
         assert_eq!(offered.as_deref(), Some(CANDIDATE), "{updated:?}");
         assert_eq!(updated, Ok(true), "the published update did not install");
         assert_eq!(std::fs::read(&installed).unwrap(), candidate);
-        assert_eq!(std::fs::metadata(&installed).unwrap().permissions().mode() & 0o777, 0o755);
+        assert_eq!(
+            std::fs::metadata(&installed).unwrap().permissions().mode() & 0o777,
+            0o755
+        );
         // The same download under another updater key: only the signature check can refuse it now.
         std::fs::write(&installed, previous).unwrap();
         let (wrong_key, offered) = run(updater(&other_key, Some(COOKIE))).await;
         assert_eq!(offered.as_deref(), Some(CANDIDATE), "{wrong_key:?}");
-        assert!(wrong_key.as_ref().is_err_and(|e| e.starts_with("install failed")),
-                "an update signed by another key must not install: {wrong_key:?}");
-        assert_eq!(std::fs::read(&installed).unwrap(), previous, "a refused update must leave the app in place");
+        assert!(
+            wrong_key
+                .as_ref()
+                .is_err_and(|e| e.starts_with("install failed")),
+            "an update signed by another key must not install: {wrong_key:?}"
+        );
+        assert_eq!(
+            std::fs::read(&installed).unwrap(),
+            previous,
+            "a refused update must leave the app in place"
+        );
 
         drop(feed.stdin.take());
         feed.wait().unwrap();
-        let requests: Vec<serde_json::Value> = std::fs::read_to_string(ready["log"].as_str().unwrap()).unwrap()
-            .lines().map(|line| serde_json::from_str(line).unwrap()).collect();
-        let downloads: Vec<_> = requests.iter()
-            .filter(|r| r["service"] == "bucket" && r["method"] == "GET"
-                && r["path"].as_str().unwrap().contains("X-Amz-Signature="))
+        let requests: Vec<serde_json::Value> =
+            std::fs::read_to_string(ready["log"].as_str().unwrap())
+                .unwrap()
+                .lines()
+                .map(|line| serde_json::from_str(line).unwrap())
+                .collect();
+        let downloads: Vec<_> = requests
+            .iter()
+            .filter(|r| {
+                r["service"] == "bucket"
+                    && r["method"] == "GET"
+                    && r["path"].as_str().unwrap().contains("X-Amz-Signature=")
+            })
             .collect();
-        assert_eq!(downloads.len(), 2, "one download per installing attempt: {requests:?}");
-        assert!(downloads.iter().all(|r| r["cookie"] == false), "the hub session reached the bucket: {downloads:?}");
+        assert_eq!(
+            downloads.len(),
+            2,
+            "one download per installing attempt: {requests:?}"
+        );
+        assert!(
+            downloads.iter().all(|r| r["cookie"] == false),
+            "the hub session reached the bucket: {downloads:?}"
+        );
         let _ = std::fs::remove_dir_all(&scratch);
     }
 
     #[tokio::test]
     async fn tauri_updater_rejects_access_login_redirect_without_requesting_login_origin() {
         let expected = b"synthetic Tico updater artifact";
-        let (public_key, signature) = key_and_signature(expected);
+        let (public_key, signature) = key_and_signature(expected, VERSION);
         let (hub_listener, hub_address) = bind();
         let (login_listener, login_address) = bind();
         login_listener.set_nonblocking(true).unwrap();
@@ -982,12 +1437,18 @@ mod updater_integration_tests {
                 match login_listener.accept() {
                     Ok((mut socket, _)) => {
                         let request = read_request(&mut socket);
-                        respond(&mut socket, "200 OK", &[("Content-Type", "application/json")],
-                                login_manifest.as_bytes());
+                        respond(
+                            &mut socket,
+                            "200 OK",
+                            &[("Content-Type", "application/json")],
+                            login_manifest.as_bytes(),
+                        );
                         return Some(request);
                     }
-                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock
-                        && std::time::Instant::now() < deadline => {
+                    Err(error)
+                        if error.kind() == std::io::ErrorKind::WouldBlock
+                            && std::time::Instant::now() < deadline =>
+                    {
                         thread::sleep(Duration::from_millis(10));
                     }
                     Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => return None,
@@ -1006,17 +1467,24 @@ mod updater_integration_tests {
         let policy = new_hub_policy(hub_address);
         let app = test_app();
         let updater = test_updater(app.updater_builder(), &policy, public_key);
-        assert!(updater.check().await.is_err(), "login redirects are not updater manifests");
+        assert!(
+            updater.check().await.is_err(),
+            "login redirects are not updater manifests"
+        );
         let hub_request = hub_server.join().unwrap();
-        assert!(hub_request.to_ascii_lowercase().contains(&format!("cookie: {COOKIE}").to_ascii_lowercase()));
-        assert!(login_server.join().unwrap().is_none(),
-                "the updater must not request Cloudflare Access login endpoints");
+        assert!(hub_request
+            .to_ascii_lowercase()
+            .contains(&format!("cookie: {COOKIE}").to_ascii_lowercase()));
+        assert!(
+            login_server.join().unwrap().is_none(),
+            "the updater must not request Cloudflare Access login endpoints"
+        );
     }
 
     #[tokio::test]
     async fn tauri_updater_keeps_configured_public_runner_feed_and_artifact_unauthenticated() {
         let bytes = b"synthetic public runner artifact";
-        let (public_key, signature) = key_and_signature(bytes);
+        let (public_key, signature) = key_and_signature(bytes, VERSION);
         let (runner_listener, runner_address) = bind();
         let hub = Url::parse("https://tico.example.test/").unwrap();
         let endpoint = url(runner_address, "/download/latest.json");
@@ -1027,16 +1495,30 @@ mod updater_integration_tests {
         let runner = thread::spawn(move || {
             let (mut feed_socket, _) = runner_listener.accept().unwrap();
             let feed_request = read_request(&mut feed_socket);
-            respond(&mut feed_socket, "200 OK", &[("Content-Type", "application/json")], body.as_bytes());
+            respond(
+                &mut feed_socket,
+                "200 OK",
+                &[("Content-Type", "application/json")],
+                body.as_bytes(),
+            );
             let (mut artifact_socket, _) = runner_listener.accept().unwrap();
             let artifact_request = read_request(&mut artifact_socket);
-            respond(&mut artifact_socket, "200 OK", &[("Content-Type", "application/octet-stream")], bytes);
+            respond(
+                &mut artifact_socket,
+                "200 OK",
+                &[("Content-Type", "application/octet-stream")],
+                bytes,
+            );
             (feed_request, artifact_request)
         });
 
         let app = test_app();
         let updater = test_updater(app.updater_builder(), &policy, public_key);
-        let update = updater.check().await.unwrap().expect("public runner update");
+        let update = updater
+            .check()
+            .await
+            .unwrap()
+            .expect("public runner update");
         assert_eq!(update.download_url, artifact_url);
         assert!(policy.allows_download(&update.download_url));
         let downloaded = update.download(|_, _| {}, || {}).await.unwrap();

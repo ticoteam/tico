@@ -7,8 +7,9 @@ import re
 from backend.store import H, encode
 from backend.tests.test_api import api, assign, get, post, ready, runner  # noqa: F401
 from backend.tests.test_task_privacy_reads import traced
+from backend import bot_settings as BS
 
-HARNESSES = ("claude", "codex", "gemini", "pi")       # gemini and pi hold a key per bot, so each check reads the grants
+HARNESSES = ("claude", "codex", "gemini", "pi")  # gemini and pi hold a key per bot, so each check reads the grants
 
 
 def shape(sql):
@@ -20,21 +21,37 @@ def seed(api, computers, first, last):
     store = api.app.state.store
     slugs = [f"bot{i:03d}" for i in range(first, last)]
     with store.transaction() as c:
-        H.sync_registry(c, {s: {"name": s, "runtime": "fake", "status": "active"} for s in slugs},
-                        {"people": [{"id": p, "email": p + "@acme.example"} for p in ("ana", "ben", "cara")]})
+        H.sync_registry(
+            c,
+            {s: {"name": s, "runtime": "fake", "status": "active"} for s in slugs},
+            {"people": [{"id": p, "email": p + "@acme.example"} for p in ("ana", "ben", "cara")]},
+        )
         for i, s in enumerate(slugs, first):
             harness = HARNESSES[i % len(HARNESSES)]
-            c.execute("INSERT INTO bot_config(bot,config,team,owner_id) VALUES(?,?,?,?)",
-                      (s, encode({"name": s, "runtime": harness, "harness": harness}), None, "ana"))
+            c.execute('INSERT INTO bot_config(bot,team,owner_id) VALUES(?,?,?)', (s, None, 'ana'))
+            BS.write(c, s, {'name': s, 'runtime': harness, 'harness': harness})
     for k, r in enumerate(computers):
-        mine = slugs[k::len(computers)]
+        mine = slugs[k :: len(computers)]
         for s in mine:
             assign(api, r, s)
-        post(api, "runners/heartbeat", {"version": "test", "platform": "test", "capabilities": ["computer_logins_v1"],
-             "readiness": {"schema_version": 1, "runtimes": {rt: {"installed": True, "authenticated": "ready",
-                           "account": {"kind": "subscription"}} for rt in HARNESSES},
-                           "bots": {s: {"runtime": HARNESSES[int(s[3:]) % len(HARNESSES)], "ready": True} for s in mine}}},
-             r["token"])
+        post(
+            api,
+            "runners/heartbeat",
+            {
+                "version": "test",
+                "platform": "test",
+                "capabilities": ["computer_logins_v1"],
+                "readiness": {
+                    "schema_version": 1,
+                    "runtimes": {
+                        rt: {"installed": True, "authenticated": "ready", "account": {"kind": "subscription"}}
+                        for rt in HARNESSES
+                    },
+                    "bots": {s: {"runtime": HARNESSES[int(s[3:]) % len(HARNESSES)], "ready": True} for s in mine},
+                },
+            },
+            r["token"],
+        )
 
 
 def counted(api, token="ana-test"):
@@ -42,7 +59,9 @@ def counted(api, token="ana-test"):
     shapes = collections.Counter(shape(s) for s in statements)
     return page, {
         "computer rows": sum(n for s, n in shapes.items() if s.startswith("SELECT id,label,last_seen_at,revoked_at")),
-        "placement reads": sum(n for s, n in shapes.items() if "JOIN runners r ON r.id=a.runner_id WHERE a.bot_id=?" in s),
+        "placement reads": sum(
+            n for s, n in shapes.items() if "JOIN runners r ON r.id=a.runner_id WHERE a.bot_id=?" in s
+        ),
         "credential reads": sum(n for s, n in shapes.items() if s.startswith("SELECT id,env FROM credentials")),
         "statements": len(statements),
     }

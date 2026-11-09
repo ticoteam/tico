@@ -79,7 +79,7 @@ Always:
 Read contracts with `hub doc search` and `hub doc read`; invoices and renewal notices arrive as
 tasks, or through a connected mailbox read with `$HUB_DIR/scripts/mail.sh search "<vendor>"` (draft
 only, never send). Ask the vendor's owner with `hub task create --owner <human>`; ask
-the requester with `hub task ask <id>`, one question per task.
+the requester with `hub task question "<question>" --on <person> --parent <id>`, one question per task.
 
 ## Quality standards
 - **Answer first.** Line one: how many notice deadlines fall in the next 90 days and the soonest one.
