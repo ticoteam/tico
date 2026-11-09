@@ -12,7 +12,7 @@ from backend.config import Settings
 from backend.finance.store import access as SA
 from backend.finance.store import tico
 from backend.store import Store
-from backend.tests.test_migrations import restore_config
+from backend.tests.helpers.migrations import restore_config
 
 FIXTURES = Path(__file__).parent / "fixtures"
 NAMES = {name for name, _, _ in tico.ORG_TRIGGERS}

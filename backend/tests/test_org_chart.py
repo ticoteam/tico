@@ -4,20 +4,11 @@ the one rule is that you may edit yourself and whatever reports up to you (backe
 
 import json
 
-from backend.store import H, encode
-from backend.tests.test_api import api, as_member, get, post  # noqa: F401
+from backend.store import H
+from backend.tests.helpers.api import as_member, get, post  # noqa: F401
+from backend.tests.test_api import api  # noqa: F401
 from backend import bot_settings as BS
-
-
-def roster(api, people):
-    with api.app.state.store.transaction() as c:
-        c.execute("UPDATE registry_metadata SET value=? WHERE key='people'", (encode({"people": people}),))
-
-
-def revision(api, bot):
-    with api.app.state.store.read() as c:
-        bot = (H.resolve_bot(c, bot) or {}).get("id", bot)
-        return c.execute("SELECT revision FROM bot_config WHERE bot=?", (bot,)).fetchone()[0]
+from backend.tests.helpers.org_chart import revision, roster
 
 
 def tree(api, token="ana-test"):
@@ -76,7 +67,7 @@ def test_people_and_bots_move_under_people_and_bots_and_only_managers_move_them(
 def test_botops_applies_a_persons_bot_change_as_that_person(api):
     # Ana, 2026-09-25: "i told you to set scribe's reports to to ben and move it there".
     from backend.store import H
-    from backend.tests.test_api import setup_attempt
+    from backend.tests.helpers.api import setup_attempt
 
     roster(
         api,

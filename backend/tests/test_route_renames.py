@@ -3,7 +3,8 @@ for a release, marked deprecated."""
 
 import pytest
 
-from backend.tests.test_api import api, headers  # noqa: F401
+from backend.tests.helpers.api import headers  # noqa: F401
+from backend.tests.test_api import api  # noqa: F401
 
 PAIRS = [("/api/humans", "/api/people")]
 

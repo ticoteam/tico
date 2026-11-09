@@ -2,8 +2,9 @@
 
 import json
 
-from backend.tests.test_api import api, assign, claim, get, post, put, ready, runner  # noqa: F401
-from backend import bot_settings as BS
+from backend.tests.helpers.api import assign, claim, get, post, put, ready, runner  # noqa: F401
+from backend.tests.test_api import api  # noqa: F401
+from backend.tests.helpers.subscriptions import set_runtime
 
 
 def test_the_api_refuses_a_bot_its_own_sign_in(api):
@@ -167,13 +168,6 @@ def test_a_refused_bot_key_marks_only_that_bot_and_a_computer_refusal_marks_ever
     refused = report()
     assert refused['bots']['gamma']['ready'] is False and refused['bots']['delta']['ready'] is False
     assert refused['runtimes']['claude']['authenticated'] == 'rejected'
-
-
-def set_runtime(api, runtime, harness=None, bot="ops"):
-    with api.app.state.store.transaction() as c:
-        config = BS.read(c, bot)
-        config.update(runtime=runtime, harness=harness or runtime)
-        BS.write(c, bot, config)
 
 
 def test_a_login_whose_turns_cannot_save_a_session_names_the_folder_not_a_sign_in(api):

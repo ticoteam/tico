@@ -1,47 +1,13 @@
 """People and access managed in the app: the owner, the allow list, and who has left."""
 
-import uuid
-
 from backend.auth import Identity
-from backend.store import H, digest
-from backend.tests.test_onboarding import OWNER_EMAIL, environment, signed_in  # noqa: F401
-
-
-def person_headers(api, pid):
-    """A personal API token: its role is decided by the person's email, as a browser's is."""
-    secret = "tok-" + pid + "-" + uuid.uuid4().hex
-    with api.app.state.store.transaction() as c:
-        c.execute(
-            "INSERT INTO human_tokens(id,human,label,token_hash,created_at,created_by) VALUES(?,?,?,?,?,?)",
-            (uuid.uuid4().hex, pid, "test", digest(secret), H.now(), "test"),
-        )
-    return {"Authorization": "Bearer " + secret, "Idempotency-Key": str(uuid.uuid4())}
-
-
-def view(api, headers=None, expected=200):
-    r = api.get("/api/v2/access", headers=headers or signed_in())
-    assert r.status_code == expected, r.text
-    return r.json()
-
-
-def call(api, method, path, body, headers=None, expected=200):
-    r = api.request(method, "/api/v2/access" + path, json=body, headers=headers or signed_in())
-    assert r.status_code == expected, r.text
-    return r.json()
+from backend.tests.helpers.onboarding import OWNER_EMAIL, environment, signed_in  # noqa: F401
+from backend.tests.helpers.people_access import HeaderProxy, call, person_headers, view
 
 
 def transfer(api, person, headers=None, expected=200, **fields):
     body = {"person": person, "expected_revision": view(api)["owner"]["revision"], "confirm": True, **fields}
     return call(api, "POST", "/owner", body, headers, expected)
-
-
-class HeaderProxy:
-    """An identity proxy that trusts a test header instead of a signed assertion."""
-
-    name = "cloudflare"
-
-    def email(self, headers):
-        return headers.get("x-test-email")
 
 
 def test_only_owners_and_admins_read_access_and_only_the_owner_changes_who_signs_in(environment):

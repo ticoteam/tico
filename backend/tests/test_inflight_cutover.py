@@ -17,9 +17,9 @@ from backend import rules as R
 from backend.config import Settings
 from backend.migrations import renames
 from backend.store import Store
-from backend.tests.test_hubdb import EMPLOYEES, PEOPLE
-from backend.tests.test_webhooks import make, net, post, run, sends, verify  # noqa: F401
-from backend.tests.test_tasks_board import api  # noqa: F401
+from backend.tests.helpers.hubdb import EMPLOYEES, PEOPLE
+from backend.tests.helpers.webhooks import make, net, post, run, sends, verify  # noqa: F401
+from backend.tests.helpers.tasks_board import api  # noqa: F401
 
 FIXTURE = Path(__file__).parent / "fixtures" / "schema_pre_cleanup.sql"
 ANA, CMO = H.human_actor("ana"), H.bot_actor("cmo")

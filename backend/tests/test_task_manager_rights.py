@@ -5,8 +5,8 @@ import json
 import pytest
 
 from backend import hubdb as H, task_relations as TR
-from backend.tests.test_tasks_board import api, bot_token, get, headers, post  # noqa: F401
-from backend.tests.test_api import hold
+from backend.tests.helpers.tasks_board import api, bot_token, get, headers, post  # noqa: F401
+from backend.tests.helpers.api import hold
 from backend import bot_settings as BS
 
 

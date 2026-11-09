@@ -4,7 +4,8 @@ bot's task wakes the bot on the parent."""
 import json
 
 from backend.store import H
-from backend.tests.test_api import api, assign, claim, get, post, runner  # noqa: F401  (api is a fixture)
+from backend.tests.helpers.api import assign, claim, get, post, runner  # noqa: F401  (api is a fixture)
+from backend.tests.test_api import api  # noqa: F401  (api is a fixture)
 from runner_support import state
 from backend import bot_settings as BS
 

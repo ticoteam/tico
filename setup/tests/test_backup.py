@@ -5,7 +5,7 @@ import pytest
 from setup import backup, dns, state
 from setup.tests import fakes
 from setup.tests.fakes import aws_clients
-from setup.tests.test_wizard import BASE, SECRET, go, secret_env  # noqa: F401
+from setup.tests.helpers.wizard import BASE, SECRET, go, secret_env  # noqa: F401
 
 
 class Missing(Exception):

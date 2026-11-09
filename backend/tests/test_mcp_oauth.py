@@ -5,7 +5,8 @@ import hashlib
 import re
 from urllib.parse import parse_qs, urlsplit
 
-from backend.tests.test_api import api, get, headers, post  # noqa: F401
+from backend.tests.helpers.api import get, headers, post  # noqa: F401
+from backend.tests.test_api import api  # noqa: F401
 
 REDIRECT = "https://agent.example/callback"
 VERIFIER = "v" * 50

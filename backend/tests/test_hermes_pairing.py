@@ -1,18 +1,10 @@
 """Pairing a Hermes profile with its bot, restoring an archived bot, and what an archived Hermes bot's agent leaves behind."""
 
 from backend.store import H
-from backend.tests.test_agents import beat, credential, hermes_bot
-from backend.tests.test_api import api, get, headers, post  # noqa: F401
-
-
-def pair(api, profile="scout", ip=None, harness="hermes"):
-    extra = {"cf-connecting-ip": ip} if ip else {}
-    r = api.post(
-        "/api/v2/agents/pairings",
-        json={"profile": profile, "harness": harness, "host": "mac-mini", "version": "1.0"},
-        headers=extra,
-    )
-    return r
+from backend.tests.helpers.agents import beat, credential, hermes_bot
+from backend.tests.helpers.api import get, headers, post  # noqa: F401
+from backend.tests.test_api import api  # noqa: F401
+from backend.tests.helpers.hermes_pairing import approve, pair
 
 
 def poll(api, pairing, secret=None):
@@ -25,10 +17,6 @@ def poll(api, pairing, secret=None):
 def bot_id(api, slug="scout"):
     with api.app.state.store.read() as c:
         return H.resolve_bot(c, slug)["id"]
-
-
-def approve(api, code, bot="scout", token="ana-test"):
-    return api.post("/api/v2/agents/pairings/approve", json={"code": code, "bot": bot}, headers=headers(token))
 
 
 def openclaw_bot(api, slug="claw"):

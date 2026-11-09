@@ -1,38 +1,8 @@
 """A new computer signs its model in from the team's model credential, and says so on Health when it cannot."""
 
-from backend.credentials import CredentialCipher
-from backend.tests.test_credentials import FakeKMS
-from backend.tests.test_getting_started import add_bot, heartbeat  # noqa: F401
-from backend.tests.test_onboarding import OWNER_EMAIL, environment, signed_in  # noqa: F401
-
-
-def vault(api):
-    settings = api.app.state.store.settings
-    settings.credential_kms_key, settings.credential_admins = "test-key", (OWNER_EMAIL,)
-    api.app.state.vault.cipher = CredentialCipher("test-key", FakeKMS())
-
-
-def store(api, env, value, **kwargs):
-    r = api.post("/api/v2/credentials", json={"name": env, "env": env, "secret": value, **kwargs}, headers=signed_in())
-    assert r.status_code == 200, r.text
-    return r.json()["id"]
-
-
-def grant(api, cid, subject, expected=200):
-    r = api.post(f"/api/v2/credentials/{cid}/grants", json={"subject": subject}, headers=signed_in())
-    assert r.status_code == expected, r.text
-    return r
-
-
-def computer_asks(api, token, runtime="codex"):
-    return api.get(
-        "/api/v2/runner-model-credentials", params={"runtime": runtime}, headers={"Authorization": "Bearer " + token}
-    )
-
-
-def new_computer(api, label="Tico Team mail"):
-    code = api.post("/api/v2/enrollments", json={"operator": "morgan"}, headers=signed_in()).json()["code"]
-    return api.post("/api/v2/runners/enroll", json={"code": code, "label": label, "platform": "linux"}).json()
+from backend.tests.helpers.getting_started import add_bot, heartbeat  # noqa: F401
+from backend.tests.helpers.onboarding import environment, signed_in
+from backend.tests.helpers.computer_signin import computer_asks, grant, new_computer, store, vault
 
 
 def test_a_computer_gets_the_team_model_key_and_nothing_a_bot_holds(environment):

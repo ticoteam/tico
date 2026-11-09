@@ -7,10 +7,10 @@ from pathlib import Path
 
 from backend import maintenance_health, login_holds
 from backend.store import H
-from backend.tests.test_api import api, assign, claim, expire, get, headers, post, ready, runner
+from backend.tests.helpers.api import assign, claim, expire, get, headers, post, ready, runner
+from backend.tests.test_api import api
 from backend import bot_settings as BS
-
-CLAUDE = "You've hit your session limit · resets 2:40am (UTC)"
+from backend.tests.helpers.login_holds import CLAUDE, QUOTA, at, done, events, health_detail, limit, signed_in, two_bots
 
 
 def test_a_reset_in_words_is_honored_and_a_past_or_unreadable_one_falls_back_to_the_backoff():
@@ -27,38 +27,6 @@ def test_a_reset_in_words_is_honored_and_a_past_or_unreadable_one_falls_back_to_
     assert login_holds.believable("2026-10-19T01:00:00Z", hit) is None
     assert login_holds.believable("2026-10-23T09:00:00Z", hit)
     assert login_holds.believable("2026-11-19T09:00:00Z", hit) is None
-
-
-def limit(api, machine, attempt, errors=(CLAUDE,), **extra):
-    post(api, f"attempts/{attempt['id']}/started", {"thread_id": "limit-" + attempt["id"]}, machine["token"])
-    events = [
-        {"seq": n, "kind": "error", "payload": {"error": text, "limit": True}} for n, text in enumerate(errors, 1)
-    ]
-    post(api, f"attempts/{attempt['id']}/events", {"events": events}, machine["token"])
-    return post(
-        api,
-        f"attempts/{attempt['id']}/complete",
-        {"outcome": "failed", "last_seq": len(events), "limited": True, "text": "", **extra},
-        machine["token"],
-    )
-
-
-def done(api, machine, attempt):
-    post(api, f"attempts/{attempt['id']}/started", {"thread_id": "ok-" + attempt["id"]}, machine["token"])
-    post(
-        api,
-        f"attempts/{attempt['id']}/complete",
-        {"outcome": "completed", "last_seq": 0, "text": "Done."},
-        machine["token"],
-    )
-
-
-def at(monkeypatch, when, api=None):
-    """The clock reads `when`; the test computer has been reporting in all along, not waking from a silence."""
-    monkeypatch.setattr(H, "now", lambda: when)
-    if api is not None:
-        with api.app.state.store.transaction() as c:
-            c.execute("UPDATE runner_states SET last_seen_at=?,awake_since=NULL", (when,))
 
 
 def test_thirteen_queued_jobs_after_a_limit_start_one_probe_at_the_reset_not_thirteen_turns(api, monkeypatch):
@@ -198,19 +166,6 @@ def test_try_now_on_a_shared_login_starts_one_probe_across_bots_and_a_second_lim
     assert {claim(api, machine)["bot"], claim(api, machine)["bot"]} == {"ops", "finance"}
 
 
-def signed_in(api, machine, bots, runtimes):
-    """A heartbeat from a computer whose bots are ready and on which `runtimes` are signed in."""
-    report = {
-        "schema_version": 1,
-        "runtimes": {name: {"installed": True, "authenticated": "ready"} for name in runtimes},
-        "bots": {
-            bot: {"ready": True, "runtime": "fake", "repository_present": True, "configuration_valid": True}
-            for bot in bots
-        },
-    }
-    post(api, "runners/heartbeat", {"version": "test", "platform": "test", "readiness": report}, token=machine["token"])
-
-
 def test_a_held_login_sends_the_turn_to_a_ready_fallback_and_waits_only_when_none_is_free(api, monkeypatch):
     # Dev 137's rule: a bot whose own login is spent runs on its fallback when one is ready. The hold only keeps the
     # turn off the spent login; it waits only when every fallback is held too, or there is none.
@@ -346,50 +301,6 @@ def test_a_bot_whose_fallback_is_off_or_not_signed_in_waits_out_the_hold(api, mo
         BS.update(c, 'ops', {'fallback': {'off': True}})
     signed_in(api, machine, ["ops"], ["codex"])
     assert claim(api, machine) is None  # the bot turned its fallback off
-
-
-def providers_on(api):
-    view = get(api, "providers")
-    api.put(
-        "/api/v2/providers",
-        json={
-            "enabled": ["openai", "anthropic"],
-            "model": view["default"]["model"] or "",
-            "expected_revision": view["revision"],
-        },
-        headers={**headers(), "Idempotency-Key": f"providers-{view['revision']}"},
-    ).raise_for_status()
-
-
-def two_bots(api, monkeypatch, runtimes=("codex",)):
-    providers_on(api)
-    at(monkeypatch, "2026-10-19T01:46:47.000000Z")
-    machine = runner(api)
-    for bot in ("ops", "finance"):
-        assign(api, machine, bot)
-    with api.app.state.store.transaction() as c:
-        c.execute("UPDATE runner_states SET capacity=16 WHERE runner_id=?", (machine["runner_id"],))
-    signed_in(api, machine, ["ops", "finance"], runtimes)
-    return machine
-
-
-def events(api, machine, attempt, rows):
-    post(
-        api,
-        f"attempts/{attempt['id']}/events",
-        {
-            "events": [
-                {
-                    "seq": n,
-                    "kind": kind,
-                    "payload": {"error": text, "limit": True} if kind == "error" else {"text": text},
-                }
-                for n, (kind, text) in enumerate(rows, 1)
-            ]
-        },
-        machine["token"],
-    )
-    return len(rows)
 
 
 def test_a_fallback_that_finishes_the_turn_keeps_the_spent_login_held_for_every_bot(api, monkeypatch):
@@ -759,9 +670,6 @@ def test_a_named_fallback_that_is_not_ready_here_leaves_the_job_waiting_not_leas
     assert claim(api, machine)["config"]["primary_held"]
 
 
-QUOTA = "Quota exceeded. Check your plan and billing details."
-
-
 def fallback_turn(api, machine, rows, **result):
     attempt = claim(api, machine)
     post(api, f"attempts/{attempt['id']}/started", {"thread_id": "t-" + attempt["id"]}, machine["token"])
@@ -773,12 +681,6 @@ def fallback_turn(api, machine, rows, **result):
         machine["token"],
     )
     return attempt
-
-
-def health_detail(api, bot):
-    return next(i for i in api.get("/api/status", headers=headers()).json()["health_issues"] if i.get("bot") == bot)[
-        "detail"
-    ]
 
 
 def test_a_fallbacks_quota_names_the_fallback_and_never_holds_the_primary(api, monkeypatch):

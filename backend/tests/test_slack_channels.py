@@ -9,11 +9,12 @@ import json
 
 from backend import slack_channels as SC
 from backend.auth import Identity
-from backend.tests.test_api import api, get, post, setup_attempt  # noqa: F401  (fixture)
-from backend.tests.test_botops_parity import act
-from backend.tests.test_mcp import call as mcp
-from backend.tests.test_member_bots import botops, finish, turn  # noqa: F401  (fixture)
-from backend.tests.test_slack_gateway import CHANNELS, MARKETING, QUIET, channel_message, digests, readers  # noqa: F401  (fixture)
+from backend.tests.helpers.api import get, post, setup_attempt  # noqa: F401  (fixture)
+from backend.tests.test_api import api  # noqa: F401  (fixture)
+from backend.tests.helpers.botops_parity import act
+from backend.tests.helpers.mcp import call as mcp
+from backend.tests.helpers.member_bots import botops, finish, turn  # noqa: F401  (fixture)
+from backend.tests.helpers.slack_gateway import CHANNELS, MARKETING, QUIET, channel_message, digests, readers  # noqa: F401  (fixture)
 
 
 # ------------------------------------------------------------------ who may change the list, and what an entry holds

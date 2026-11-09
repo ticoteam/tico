@@ -5,7 +5,9 @@ import json
 
 from backend import hubdb as H
 from backend import question_tasks as QT
-from backend.tests.test_api import api, get, post, setup_attempt, legacy_send_approval  # noqa: F401
+from backend.tests.helpers.api import get, post, setup_attempt
+from backend.tests.test_api import api
+from backend.tests.helpers.batch import approval_for_ana
 
 
 def ask_ana(api, bot, text, title="Pick the outbound tool", token=None, parent=None):
@@ -13,16 +15,6 @@ def ask_ana(api, bot, text, title="Pick the outbound tool", token=None, parent=N
     task = parent or post(api, "tasks", {"title": title, "body": "Decide", "owner": bot})["id"]
     with api.app.state.store.transaction() as c:
         return QT.ask_plain(c, H.bot_actor(H.resolve_bot(c, bot)["id"]), "human:ana", text, parent=H.task(c, task))
-
-
-def approval_for_ana(api, bot="finance", kind="spend", payload=None, task=None, token=None):
-    if kind == "send":
-        return legacy_send_approval(api, payload, actor="bot:" + bot, task_id=task)
-    attempt = {"token": token} if token else setup_attempt(api, bot)[2]
-    body = {"kind": kind, "payload": payload or {"amount": 1200, "account": "ads", "what": "LinkedIn ads"}}
-    if task:
-        body["task_id"] = task
-    return post(api, "approvals", body, token=attempt["token"])
 
 
 def test_responses_are_recorded_not_applied_and_commit_applies_them_with_the_persons_identity(api):

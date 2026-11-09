@@ -6,10 +6,10 @@ Synthetic fixture team only (backend/tests/test_api.py); ops is the bot, its com
 
 from backend import hubdb as H
 from backend import stranded_resume as SR
-from backend.tests import test_stranded_resume as SRT
+from backend.tests.helpers import stranded_resume as SRT
 from backend.tests.test_api import api, claim, post  # noqa: F401  (api is a fixture)
-from backend.tests.test_claim_refusals import forget_claims  # noqa: F401  (autouse fixture)
-from backend.tests.test_task_lanes import new_task, task_bot
+from backend.tests.helpers.claim_refusals import forget_claims  # noqa: F401
+from backend.tests.helpers.task_lanes import new_task, task_bot  # noqa: F401
 
 
 def _held_lines(api, task_id):

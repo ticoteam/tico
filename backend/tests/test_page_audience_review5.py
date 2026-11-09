@@ -5,10 +5,11 @@ import json
 from backend import files
 from backend.auth import Identity
 from backend.store import H
-from backend.tests.test_api import api, get, headers, post  # noqa: F401
-from backend.tests.test_file_reviews import ask as review_ask, answer as review_answer
-from backend.tests.test_page_audience import edit
-from backend.tests.test_page_audience_review4 import public_page
+from backend.tests.helpers.api import get, headers, post  # noqa: F401
+from backend.tests.test_api import api  # noqa: F401
+from backend.tests.helpers.file_reviews import ask as review_ask, answer as review_answer
+from backend.tests.helpers.page_audience import edit
+from backend.tests.helpers.page_audience_review4 import public_page
 
 
 def test_spend_pick_history_events_and_notice_keep_the_label_source(api):
@@ -55,8 +56,8 @@ def test_spend_pick_history_events_and_notice_keep_the_label_source(api):
 
 
 def test_held_review_pick_text_keeps_its_page_source(api):
-    from backend.tests.test_org_rule_check import Judge
-    from backend.tests.test_org_rules import rule
+    from backend.tests.helpers.org_rule_check import Judge
+    from backend.tests.helpers.org_rules import rule
 
     tid, _, fid = public_page(api)
     text = "Never publish an unreviewed draft."

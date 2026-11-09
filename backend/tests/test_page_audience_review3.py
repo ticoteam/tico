@@ -9,13 +9,14 @@ from backend import counsel, events, files, org_rules, task_privacy
 from backend.auth import Identity, bot_reads_task
 from backend.store import H
 from backend.tests.slug_ids import bot_ids_are_their_slugs  # noqa: F401
-from backend.tests.test_api import api, get, headers, post, restrict  # noqa: F401
-from backend.tests.test_counsel import counsel_on, source
-from backend.tests.test_files import turn
-from backend.tests.test_events import live  # noqa: F401
-from backend.tests.test_org_rules import org
-from backend.tests.test_page_audience import edit, promoted
-from backend.tests.test_pages import HTML, page
+from backend.tests.helpers.api import get, headers, post, restrict  # noqa: F401
+from backend.tests.test_api import api  # noqa: F401
+from backend.tests.helpers.counsel import counsel_on, source
+from backend.tests.helpers.files import turn
+from backend.tests.helpers.events import live  # noqa: F401
+from backend.tests.helpers.org_rules import org
+from backend.tests.helpers.page_audience import edit, promoted
+from backend.tests.helpers.pages import HTML, page
 
 
 def test_deletion_retains_denials_for_counsel_copies_and_citations(api):
@@ -156,11 +157,11 @@ def test_restricted_page_leak_matrix_across_stored_shapes_transports_and_deletio
     api, live, monkeypatch, disabled_guard
 ):
     """One canary follows every persisted attachment form through both outsider identities and a real SSE socket."""
-    from backend.tests.test_api import assign, ready, runner
-    from backend.tests.test_events import ready as stream_ready
-    from backend.tests.test_assistant import room
-    from backend.tests.test_file_reviews import ask as review_ask, answer as review_answer
-    from backend.tests.test_page_audience_review6 import held_answers
+    from backend.tests.helpers.api import assign, ready, runner
+    from backend.tests.helpers.events import ready as stream_ready
+    from backend.tests.helpers.assistant import room
+    from backend.tests.helpers.file_reviews import ask as review_ask, answer as review_answer
+    from backend.tests.helpers.page_audience_review6 import held_answers
 
     org(api)
     counsel_on(api)

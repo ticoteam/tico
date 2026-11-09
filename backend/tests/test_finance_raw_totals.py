@@ -19,7 +19,7 @@ from backend.finance.store import schema as SCH
 import importlib
 
 MIGRATION = importlib.import_module("backend.migrations.0037_finance_combined")
-from backend.tests.test_finance_fixtures import (  # noqa: F401
+from backend.tests.helpers.finance_fixtures import (
     AT,
     MERCURY,
     OWNER,

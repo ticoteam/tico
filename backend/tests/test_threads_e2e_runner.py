@@ -14,7 +14,8 @@ import pytest
 
 from backend.tests.slug_ids import bot_ids_are_their_slugs  # noqa: F401  (each bot's id is its slug)
 from backend.tests.live import live  # noqa: F401  (a listening server; `live` is its origin)
-from backend.tests.test_api import api, post  # noqa: F401  (the api fixture)
+from backend.tests.helpers.api import post  # noqa: F401  (the api fixture)
+from backend.tests.test_api import api  # noqa: F401  (the api fixture)
 
 pytestmark = pytest.mark.slow
 ROOT = Path(__file__).resolve().parents[2]

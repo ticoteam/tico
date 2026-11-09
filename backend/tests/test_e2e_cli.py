@@ -30,8 +30,9 @@ from pathlib import Path
 import pytest
 
 from backend.tests.live import block_outside_network, live  # noqa: F401
-from backend.tests.test_api import api, post  # noqa: F401
-from backend.tests.test_automation_api import NOTE_STEP
+from backend.tests.helpers.api import post  # noqa: F401
+from backend.tests.test_api import api  # noqa: F401
+from backend.tests.helpers.automation_api import NOTE_STEP
 from clients import hubcli
 
 ROOT = Path(__file__).resolve().parents[2]

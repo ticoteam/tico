@@ -1,7 +1,8 @@
 """GET /api/v2/factories is a page at a time and byte-capped (Track J4): each page's `next` cursor continues it until it is
 null, and a page of long factories stops short of the limit rather than passing the cap."""
 
-from backend.tests.test_api import api, headers  # noqa: F401  (api is a fixture)
+from backend.tests.helpers.api import headers  # noqa: F401  (api is a fixture)
+from backend.tests.test_api import api  # noqa: F401  (api is a fixture)
 
 STAMP = "2026-11-07T09:00:00.000000Z"
 

@@ -2,13 +2,9 @@ import io
 
 from PIL import Image
 
-from backend.tests.test_api import api, headers, setup_attempt  # noqa: F401
-
-
-def image(kind="PNG", colour="red"):
-    out = io.BytesIO()
-    Image.new("RGB", (16, 16), colour).save(out, kind)
-    return out.getvalue()
+from backend.tests.helpers.api import headers, setup_attempt  # noqa: F401
+from backend.tests.test_api import api  # noqa: F401
+from backend.tests.helpers.team_icon import image
 
 
 def test_icon_owner_rights_public_png_cache_and_replacement(api):

@@ -7,20 +7,15 @@ import pytest
 from backend import assigned_start as A, health, maintenance_health, queue_refusals, task_roundup
 from backend import question_tasks as QT
 from backend.store import H
-from backend.tests.test_api import api, claim, get, post  # noqa: F401
-from backend.tests.test_auto_tasks import deck, finish, set_cap, take
-from backend.tests.test_profiles import put
-from backend.tests.test_task_lanes import new_task, task_bot
+from backend.tests.helpers.api import claim, get, post  # noqa: F401
+from backend.tests.test_api import api  # noqa: F401
+from backend.tests.helpers.auto_tasks import deck, finish, set_cap, take
+from backend.tests.helpers.profiles import put
+from backend.tests.helpers.task_lanes import new_task, task_bot
 from backend.enqueue import enqueue_stored
 from backend import bot_settings as BS
 from backend.tests.hold_rows import set_holds
-
-
-@pytest.fixture
-def clock(monkeypatch):
-    value = ['2026-10-20T00:00:00.000000Z']
-    monkeypatch.setattr(H, 'now', lambda: value[0])
-    return value
+from backend.tests.helpers.assigned_start import advance, cancel, clock, sweep
 
 
 def wait_on_ana(c, task_ids):
@@ -50,27 +45,6 @@ def wait_on_ana(c, task_ids):
     return card
 
 
-def advance(api, clock, hours):
-    clock[0] = H.shift(clock[0], hours=hours)
-    with api.app.state.store.transaction() as c:
-        c.execute('UPDATE runner_states SET last_seen_at=?', (H.now(),))
-
-
-def sweep(api):
-    """One roundup run now, as the scheduler runs it: the tasks it listed as assigned, not started (their ledger rows are
-    the ones it wrote)."""
-    store = api.app.state.store
-    # Diffed by event id: a task listed again (a reassignment) has the same target as its earlier ledger row.
-    with store.read() as c:
-        before = {r[0] for r in c.execute('SELECT id FROM events WHERE action=?', (A.EVENT,))}
-    with store.transaction() as c:
-        task_roundup.run(c, H.now())
-    with store.read() as c:
-        return sorted(
-            {r[1] for r in c.execute('SELECT id,target FROM events WHERE action=?', (A.EVENT,)) if r[0] not in before}
-        )
-
-
 def roundups(api, slug='ops'):
     """The bodies of the roundup messages the bot was sent, oldest first."""
     with api.app.state.store.read() as c:
@@ -96,11 +70,6 @@ def record_all(store):
                 {'assignment': key, 'assigned_at': since, 'rewoken_at': H.now(), 'refusal': None},
             )
     return sorted(row['id'] for row, *_ in found)
-
-
-def cancel(api):
-    with api.app.state.store.transaction() as c:
-        c.execute("UPDATE jobs SET state='canceled'")
 
 
 def test_canceled_assignment_is_listed_once_at_one_hour_and_clears_once_started(api, clock):

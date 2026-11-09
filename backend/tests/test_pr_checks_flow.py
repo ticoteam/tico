@@ -7,8 +7,8 @@ from backend import hubdb as H
 from backend import task_relations as TR
 from backend.repositories import metadata, save_metadata
 from backend.tests.test_api import api  # noqa: F401
-from backend.tests.test_rules import plain_task
-from backend.tests.test_wake_rules import jobs, setup
+from backend.tests.helpers.rules import plain_task
+from backend.tests.helpers.wake_rules import jobs, setup
 
 
 def due(c, task):

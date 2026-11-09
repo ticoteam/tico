@@ -6,39 +6,15 @@ person, by its manager, and by anyone it asked something of.
 """
 
 from backend.store import H
-from backend.tests.test_api import api, get, headers, post  # noqa: F401
+from backend.tests.helpers.api import get, headers, post  # noqa: F401
+from backend.tests.test_api import api  # noqa: F401
+from backend.tests.helpers.bot_contact import bot, token
 
 
 def actor(api, slug):
     """A bot's actor is `bot:<id>`: the id (not the slug) is what tasks, messages and chats are addressed to."""
     with api.app.state.store.read() as c:
         return H.bot_actor(H.resolve_bot(c, slug)["id"])
-
-
-def bot(api, slug, name, reports_to=None):
-    return post(
-        api,
-        "bots",
-        {
-            "slug": slug,
-            "display_name": name,
-            "description": "A test bot.",
-            "reports_to": reports_to,
-            "status": "active",
-            "repo": "emp-" + slug,
-            "thread_mode": "personal",
-            "model": "hermes-profile",
-            "effort": "as-configured",
-            "harness": "hermes",
-            "operator": "ana",
-            "owners": ["ana"],
-            "runner_id": None,
-        },
-    )
-
-
-def token(api, slug):
-    return post(api, "bots/" + slug + "/agent-credential", {})["token"]
 
 
 def quiet(api, slug, mode="replies", revision=1):

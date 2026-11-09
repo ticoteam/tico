@@ -15,8 +15,8 @@ from backend.app import create_app
 from backend.auth import Identity
 from backend.config import Settings
 from backend.store import H, encode
-from backend.tests.test_api import headers
-from backend.tests.test_oidc import provider, signin  # noqa: F401  (fixtures)
+from backend.tests.helpers.api import headers
+from backend.tests.helpers.oidc import provider, signin  # noqa: F401  (fixtures)
 from backend import bot_settings as BS
 
 APP = "http://localhost:5173"

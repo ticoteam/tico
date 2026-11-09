@@ -5,7 +5,8 @@ import threading
 
 import pytest
 
-from backend.tests.test_api import api, headers, post  # noqa: F401
+from backend.tests.helpers.api import headers, post  # noqa: F401
+from backend.tests.test_api import api  # noqa: F401
 
 
 @pytest.mark.parametrize("kind", ["task_multipart"])

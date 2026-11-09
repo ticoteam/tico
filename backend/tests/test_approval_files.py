@@ -2,7 +2,8 @@
 
 import hashlib
 
-from backend.tests.test_api import api, headers, post, setup_attempt, legacy_send_approval  # noqa: F401
+from backend.tests.helpers.api import headers, post, setup_attempt, legacy_send_approval  # noqa: F401
+from backend.tests.test_api import api  # noqa: F401
 
 
 def meta(name, data, file_id):

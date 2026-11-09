@@ -17,11 +17,11 @@ from backend import threads as T
 from backend import views
 from backend.auth import Identity
 from backend.store import H, Problem
-from backend.tests.test_api import get, headers, post  # noqa: F401
-from backend.tests.test_org_rule_check import COLOR, bodies, chat, color_rule, events, hold_row, ruled  # noqa: F401
-from backend.tests.test_org_rules import api, as_bot, org, rule  # noqa: F401
-from backend.tests.test_thread_api import new_thread, say  # noqa: F401
-from backend.tests.test_bot_home_merge import merge as merge_homes, room as chat_room_with
+from backend.tests.helpers.api import get, headers, post  # noqa: F401
+from backend.tests.helpers.org_rule_check import COLOR, bodies, chat, color_rule, events, hold_row, ruled  # noqa: F401
+from backend.tests.helpers.org_rules import api, as_bot, org, rule  # noqa: F401
+from backend.tests.helpers.thread_api import new_thread, say  # noqa: F401
+from backend.tests.helpers.bot_home_merge import merge as merge_homes, room as chat_room_with
 
 EVERYONE = {"everyone": True}
 

@@ -5,7 +5,8 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from backend import strategy_bot, goals as G, hubdb as H, kpis as K
-from backend.tests.test_api import api, post  # noqa: F401
+from backend.tests.helpers.api import post  # noqa: F401
+from backend.tests.test_api import api  # noqa: F401
 
 NOW = datetime(2026, 10, 26, 12, tzinfo=timezone.utc)
 ACTOR = "human:ana"

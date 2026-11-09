@@ -3,7 +3,8 @@
 import pytest
 
 from backend import releases, runner_versions
-from backend.tests.test_api import api, assign, get, post, ready, runner  # noqa: F401
+from backend.tests.helpers.api import assign, get, post, ready, runner  # noqa: F401
+from backend.tests.test_api import api  # noqa: F401
 
 
 @pytest.fixture(autouse=True)

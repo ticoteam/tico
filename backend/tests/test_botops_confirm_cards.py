@@ -5,26 +5,13 @@ secret's value back are theirs alone. Ana owns the team, Ben is an admin, Cara i
 import json
 
 from backend.store import H
-from backend.tests.test_api import api, assign, claim, get, headers, post, put, ready, runner, setup_attempt  # noqa: F401  (fixture)
-from backend.tests.test_botops_parity import act
-from backend.tests.test_credential_sharing import JIRA, jira, local
-from backend.tests.test_member_bots import botops, finish, turn  # noqa: F401  (fixtures)
+from backend.tests.helpers.api import assign, claim, get, headers, post, put, ready, runner, setup_attempt  # noqa: F401  (fixture)
+from backend.tests.test_api import api  # noqa: F401  (fixture)
+from backend.tests.helpers.botops_parity import act
+from backend.tests.helpers.credential_sharing import JIRA, jira, local
+from backend.tests.helpers.member_bots import botops, finish, turn  # noqa: F401  (fixtures)
 from backend import usage_limits
-
-
-def card_in_chat(api, card, person):
-    """The card's message is in the person's own chat with BotOps, and the action is theirs and still waiting."""
-    with api.app.state.store.read() as c:
-        msg = H.message(c, card["message_id"])
-        room = H.conversation(c, msg["conversation_id"])
-        row = c.execute("SELECT owner,status FROM assistant_actions WHERE id=?", (card["action"]["id"],)).fetchone()
-    assert msg["sender_id"] == "bot:botops" and msg["recipient_id"] == "human:" + person
-    assert set(room["participants"]) == {"human:" + person, "bot:botops"}
-    assert (row["owner"], row["status"]) == ("human:" + person, "pending")
-
-
-def confirm(api, card, token):
-    return post(api, f"assistant/actions/{card['action']['id']}/confirm", {}, token=token)
+from backend.tests.helpers.botops_confirm_cards import card_in_chat, confirm
 
 
 def test_a_role_change_waits_for_the_owners_tap_and_then_runs(api, botops):
@@ -141,7 +128,7 @@ def test_a_body_the_route_refuses_gets_no_card_and_its_value_goes_nowhere(api, b
 def test_a_bulk_step_its_route_refuses_gets_no_card_and_its_value_goes_nowhere(api):
     # The bulk card's own body takes any step: each step is checked against its own route, as a direct call is.
     from backend import assistant
-    from backend.tests.test_assistant import assistant_turn
+    from backend.tests.helpers.assistant import assistant_turn
 
     with api.app.state.store.transaction() as c:
         tasks = [H.task_create(c, "human:ben", f"Old task {i}", "Stale.", "bot:ops") for i in range(2)]
@@ -175,7 +162,7 @@ def test_a_bulk_step_its_route_refuses_gets_no_card_and_its_value_goes_nowhere(a
 
 def test_botops_direct_off_turns_the_gateway_off_and_automatic_into_cards(api, botops, monkeypatch):
     from backend import gateway_connection
-    from backend.tests.test_gateway_connection import KEY, fake_gateway, save, setup
+    from backend.tests.helpers.gateway_connection import KEY, fake_gateway, save, setup
 
     setup(api, monkeypatch)
     monkeypatch.setattr(gateway_connection, "check_later", lambda *args, **kwargs: None)
@@ -212,7 +199,7 @@ def test_botops_direct_off_turns_the_gateway_off_and_automatic_into_cards(api, b
 
 def test_gateway_address_change_with_saved_key_waits_for_the_owners_tap(api, botops, monkeypatch):
     from backend import gateway_connection
-    from backend.tests.test_gateway_connection import KEY, fake_gateway, save, setup
+    from backend.tests.helpers.gateway_connection import KEY, fake_gateway, save, setup
 
     setup(api, monkeypatch)
     monkeypatch.setattr(gateway_connection, "check_later", lambda *args, **kwargs: None)
@@ -314,7 +301,7 @@ def test_gateway_address_change_with_saved_key_waits_for_the_owners_tap(api, bot
 
 
 def test_gateway_address_change_with_an_environment_key_is_refused_at_once(api, botops, monkeypatch):
-    from backend.tests.test_gateway_connection import KEY, fake_gateway, setup
+    from backend.tests.helpers.gateway_connection import KEY, fake_gateway, setup
 
     setup(api, monkeypatch)
     with fake_gateway() as proposed:
@@ -397,7 +384,7 @@ def test_updating_tico_and_rules_on_botops_own_powers_always_ask(api, botops):
 
 
 def test_botops_lists_a_seats_candidates_but_the_pick_is_the_persons_tap(api, botops):
-    from backend.tests.test_recruiting import providers
+    from backend.tests.helpers.recruiting import providers
 
     providers(api, "anthropic", "openai")
     seat = post(api, "seats", {"title": "Support lead", "reports_to": "coo"})
@@ -616,7 +603,7 @@ def test_teammates_find_waiting_cards_by_proposer_and_owner(api, botops):
 
 def test_the_withdraw_and_list_tools_are_offered_to_bots_and_work(api, botops):
     from clients import hubtools
-    from backend.tests.test_mcp import call
+    from backend.tests.helpers.mcp import call
 
     _, card = waiting_card(api, botops)
     aid = card["action"]["id"]

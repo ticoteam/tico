@@ -6,9 +6,11 @@ import pytest
 
 from backend import login_holds, source_outages
 from backend.store import H
-from backend.tests.test_api import api, assign, claim, expire, get, post, ready, runner  # noqa: F401
-from backend.tests.test_login_holds import at, events, limit, done, signed_in
+from backend.tests.helpers.api import assign, claim, expire, get, post, ready, runner  # noqa: F401
+from backend.tests.test_api import api  # noqa: F401
+from backend.tests.helpers.login_holds import at, events, limit, done, signed_in
 from backend import bot_settings as BS
+from backend.tests.helpers.source_outages import managers, notices
 
 
 def fallback_off(c, bot):
@@ -16,14 +18,6 @@ def fallback_off(c, bot):
     fallback = BS.read(c, bot).get("fallback")
     if isinstance(fallback, dict):
         BS.update(c, bot, {"fallback": {**fallback, "off": True}})
-
-
-def notices(c):
-    return [dict(r) for r in c.execute("SELECT * FROM messages WHERE json_extract(refs,'$.source_outage') IS NOT NULL")]
-
-
-def managers(c):
-    c.execute("UPDATE task_types SET manager='coo',role='engineering' WHERE id='general'")
 
 
 def test_source_start_and_end_are_once_across_repeated_observations_and_restarts(api, monkeypatch):
@@ -55,7 +49,7 @@ def test_source_start_and_end_are_once_across_repeated_observations_and_restarts
 
 def test_a_six_hour_hold_does_not_lease_again_or_hold_another_subscription(api, monkeypatch):
     at(monkeypatch, '2026-10-27T01:00:00.000000Z')
-    from backend.tests.test_login_holds import providers_on
+    from backend.tests.helpers.login_holds import providers_on
 
     providers_on(api)
     machine = runner(api)
@@ -99,7 +93,7 @@ def test_a_six_hour_hold_does_not_lease_again_or_hold_another_subscription(api, 
 
 @pytest.mark.parametrize('outcome', ['failed', 'interrupted'])
 def test_mid_turn_fallback_quota_is_saved_and_resumes_at_its_own_reset(api, monkeypatch, outcome):
-    from backend.tests.test_login_holds import two_bots
+    from backend.tests.helpers.login_holds import two_bots
 
     machine = two_bots(api, monkeypatch)
     post(api, 'tasks', {'owner': 'ops', 'title': 'Read the startup instructions', 'body': 'Continue the task.'})
@@ -184,7 +178,7 @@ def test_thirty_human_closures_make_one_note_and_no_wakes_for_a_paused_bot(api):
 
 
 def test_twenty_minutes_of_busy_server_renewals_keep_the_running_lease_and_thread(api, monkeypatch):
-    from backend.tests.test_api import headers, setup_attempt
+    from backend.tests.helpers.api import headers, setup_attempt
     from backend.store import Problem
 
     machine, _, attempt = setup_attempt(api)
@@ -222,7 +216,7 @@ def test_twenty_minutes_of_busy_server_renewals_keep_the_running_lease_and_threa
 
 
 def test_a_safe_lost_lease_resumes_once_then_waits_without_a_botops_task(api, monkeypatch):
-    from backend.tests.test_api import setup_attempt
+    from backend.tests.helpers.api import setup_attempt
     from backend.execution import STALL_MAX
 
     machine, _, first = setup_attempt(api)
@@ -388,7 +382,7 @@ def test_strict_lease_recovery_preserves_unknown_effects_and_late_final_answers(
     api, monkeypatch, evidence, source_live
 ):
     from backend.execution import retry_facts
-    from backend.tests.test_api import setup_attempt
+    from backend.tests.helpers.api import setup_attempt
 
     machine, _, attempt = setup_attempt(api)
     post(
@@ -449,7 +443,7 @@ def test_strict_lease_recovery_preserves_unknown_effects_and_late_final_answers(
 
 
 def test_mid_turn_primary_quota_uses_strict_saved_session_even_with_a_ready_fallback(api, monkeypatch):
-    from backend.tests.test_login_holds import two_bots
+    from backend.tests.helpers.login_holds import two_bots
 
     machine = two_bots(api, monkeypatch)
     post(
@@ -503,7 +497,7 @@ def test_mid_turn_primary_quota_uses_strict_saved_session_even_with_a_ready_fall
 def test_a_turn_that_only_reported_its_limit_runs_fresh_after_the_reset(api, monkeypatch, notice, evidence, continued):
     """Claude Code writes its limit as an assistant message: that line alone is no work to continue, and a new session
     (a switched subscription, say) must not stop the next turn with CONTINUE_LOST."""
-    from backend.tests.test_login_holds import two_bots
+    from backend.tests.helpers.login_holds import two_bots
 
     machine = two_bots(api, monkeypatch)
     beat = {'version': 'test', 'platform': 'test', 'readiness': {'ops': True}, 'capabilities': ['capacity_continue_v1']}
@@ -569,7 +563,7 @@ def test_same_timestamp_backlog_keeps_the_newest_notice_when_ids_sort_backwards(
 
 
 def test_negotiated_fallback_continuation_keeps_its_provider_and_refuses_an_old_runner(api, monkeypatch):
-    from backend.tests.test_login_holds import two_bots
+    from backend.tests.helpers.login_holds import two_bots
 
     machine = two_bots(api, monkeypatch)
     caps = ['capacity_continue_v1', 'source_continue_v1']
@@ -626,7 +620,7 @@ def test_negotiated_fallback_continuation_keeps_its_provider_and_refuses_an_old_
 
 
 def test_saved_fallback_capacity_uses_its_own_thread_after_the_short_hold(api, monkeypatch):
-    from backend.tests.test_login_holds import two_bots
+    from backend.tests.helpers.login_holds import two_bots
 
     machine = two_bots(api, monkeypatch)
     caps = ['capacity_continue_v1', 'source_continue_v1']
@@ -675,7 +669,7 @@ def test_saved_fallback_capacity_uses_its_own_thread_after_the_short_hold(api, m
 
 def test_live_fallback_handoff_survives_a_lease_loss_without_replacing_the_primary(api, monkeypatch):
     from backend.execution import STALL_MAX
-    from backend.tests.test_execution_recovery_dependencies import setup_attempt
+    from backend.tests.helpers.execution_recovery_dependencies import setup_attempt
 
     machine, _, first = setup_attempt(api)
     caps = ['capacity_continue_v1', 'source_continue_v1']
@@ -763,7 +757,7 @@ def test_live_fallback_handoff_survives_a_lease_loss_without_replacing_the_prima
 
 def test_an_unconfirmed_fallback_never_resumes_the_old_primary_after_a_lost_lease(api, monkeypatch):
     from backend.execution import retry_facts
-    from backend.tests.test_execution_recovery_dependencies import setup_attempt
+    from backend.tests.helpers.execution_recovery_dependencies import setup_attempt
 
     machine, _, first = setup_attempt(api)
     post(
