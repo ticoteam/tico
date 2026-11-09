@@ -1210,7 +1210,7 @@ class WaitingWithDependency(HubCase):
         ]
         self.assertEqual(len(told), 1, told)
         self.assertEqual((needs(), H.needs_you(self.conn, 'ana')['tasks']), (0, []))
-        # No is an answer too.
+        # A direct answer of No is still an answer; Declined is reserved for closing without one.
         other = H.task_create(self.conn, CMO, 'Buy a signing key', '', CMO, private=False)
         card = H.task_update(
             self.conn,
@@ -1220,7 +1220,7 @@ class WaitingWithDependency(HubCase):
             waiting_on='ana',
             note='Buy a signing key for $5? If yes, I will order it today.',
         )['asked_in']
-        H.task_update(self.conn, ANA, card['id'], status='declined', note='No. Use the old one.')
+        H.task_update(self.conn, ANA, card['id'], status='done', note='No. Use the old one.')
         self.assertEqual(
             (
                 H.task(self.conn, other['id'])['status'],
