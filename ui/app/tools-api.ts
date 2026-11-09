@@ -440,7 +440,7 @@ function taExpiresDialog(): void {
   const dialog = whDialog('Expires', `${keys.length > 1 ? `<label>Key<select name="key">${keys.map(k => `<option value="${esc(k.id)}">${esc(k.name)}</option>`).join('')}</select></label>` : ''}
     <label>Date<input name="expires_on" type="date" value="${esc(keys[0]?.expires_on || '')}"></label>`, '<button class="primary" type="submit">Save</button>');
   whSubmit(dialog, async (data: FormData) => {
-    await patch(taPath(state.id, '/keys/' + encodeURIComponent(String(data.get('key') || keys[0]?.id))), {expires_on: data.get('expires_on') || null});
+    await patch(taPath(state.id, '/keys/' + encodeURIComponent(String(data.get('key') || keys[0]!.id))), {expires_on: data.get('expires_on') || null});
     dialog.close(); toast('Saved');
     await taLoad(); if (TA === state) taDrawOverview();
   });
