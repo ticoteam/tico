@@ -70,11 +70,9 @@ WORKER_LIB = ["ES2022", "WebWorker"]
 WORKER_TSC = ["npx", "--yes", "-p", "typescript@5.9.3", "tsc", "-p", WORKER_CONFIG, "--pretty", "false"]
 # The one generated bundle (npm run build:observability): the only JavaScript that may sit under ui/ outside tests/.
 ALLOWED_JS = {"ui/assets/observability-vendors.js"}
-# Classic scripts that stay JavaScript, each with its reason. Each declares a global or a JSDoc-typed function that a strict
-# .ts file reads. As .ts, the script loses its JSDoc types or its initial values type as never or implicit any, and the
-# reader stops type-checking. Typing these by hand is the follow-up. scripts/ui_flip.py keeps them as they are.
-KEPT_JS = {
-}
+# Classic scripts that stay JavaScript, each with its reason (path: reason). None is left: every UI script is a .ts file.
+# scripts/ui_flip.py keeps any listed here as they are.
+KEPT_JS: dict[str, str] = {}
 SKIP_TS = ("ui/vendor/", "ui/assets/", "ui/node_modules/")
 DIRECTIVE = re.compile(r"@ts-(nocheck|ignore)\b")
 

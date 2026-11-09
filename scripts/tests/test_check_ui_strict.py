@@ -78,12 +78,13 @@ def test_the_old_single_file_layout_is_the_base_at_a_ref(monkeypatch):
 
 
 def test_javascript_under_ui_is_refused_except_the_generated_bundle_and_the_kept_files(monkeypatch):
+    monkeypatch.setattr(strict, "KEPT_JS", {"ui/app/kept.js": "a reason"})
     monkeypatch.setattr(
         strict,
         "js_on_disk",
         lambda: [
             "ui/app/new.js",
-            "ui/app/automations.js",
+            "ui/app/kept.js",
             "ui/assets/observability-vendors.js",
             "ui/tests/x.cjs",
             "ui/vendor/marked.js",
@@ -95,7 +96,7 @@ def test_javascript_under_ui_is_refused_except_the_generated_bundle_and_the_kept
 
 
 def test_every_kept_javascript_file_is_a_js_file_with_a_reason():
-    assert strict.KEPT_JS and all(rel.endswith(".js") and reason for rel, reason in strict.KEPT_JS.items())
+    assert all(rel.endswith(".js") and reason for rel, reason in strict.KEPT_JS.items())
 
 
 def test_a_repeated_cast_is_a_hit_and_a_single_cast_is_not():
