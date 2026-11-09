@@ -102,6 +102,9 @@ Marketing ideas are tasks of type **Marketing**. They live on the Tasks page, on
 
 Existing idea tasks stay as tasks, with their history.
 
+A company set up with the default structure has no Marketing board: its growth ideas are cards in the **Growth Experiments**
+pipeline (Ideas, Running, Measuring, then Kept or Dropped), which the Growth Team Manager files and closes out.
+
 Bets are company claims and live on the Strategy page. A marketing task does not link to a bet, so this page has no bet
 view.
 

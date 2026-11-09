@@ -32,9 +32,10 @@ Choose the file, check the preview (the built-ins that work from day one, then e
 then press **Use this team**. Tico lays out exactly that chart: each role is a Recruiting seat with the file's title,
 a job description from its template card (what it owns, and the file's reason for the role) and its reporting line,
 a role under a role included (`seat:<id>`). Only the built-ins and the file's `live` seats become bots, once each: a live bot is made from its
-template, fills its seat and reports where the seat's line ends. The Finance Owner (the bookkeeper) moves into the team its file gives
-(Corporate in the default structure), and the factory pipelines are set up once after the teams, best effort: a failure is recorded
-(`onboarding.pipelines_failed`), rolled back, and the team stays. Import retries do not duplicate
+template, fills its seat and reports where the seat's line ends. The Finance Owner (the bookkeeper) keeps a seat on its line in the team
+its file gives (Corporate in the default structure), filled by the built-in bot itself, so a Corporate Team Manager hired later takes it
+along. Then the factory pipelines are set up once, best effort: a failure is recorded (`onboarding.pipelines_failed`), rolled back,
+and the team stays. Import retries do not duplicate
 a seat, and an import cannot replace a company whose setup is complete. A file named at install
 (`TICO_COMPANY_FILE_B64` or `TICO_COMPANY_FILE`) is imported when the server starts; if it cannot be read or applied,
 the server still starts, **no sample team is set up in its place**, and the owner sees why on the welcome page and on
@@ -192,6 +193,12 @@ second). It reaches no computer.
   with the card's summary as its description, `bot-<slug>` as its repository, the card's runtime, model and reasoning effort, the human
   it reports to, and the owner as its owner. A model a deployment does not offer falls back to the product default. They are
   Active on day one.
+- **A new company's first Create ends like an import** (`company_import.finish_new_company`): the live seats' bots, then the default
+  factories and their nine pipelines, once, best effort, and only while the company has no task type beyond the ones every server
+  starts with. Its Marketing board goes while it is empty: growth ideas are filed in Growth Experiments. A company set up before
+  keeps its Marketing board. **With nothing picked**, the chart is the default one: the chart formula's own
+  (`backend/company_file/chart_formula.py`, no segment or bet, the default channels), the chart the public setup page's file
+  gives a company that picked nothing, so it starts with the same live bots and seats.
 - **Everything else picked is a Recruiting seat** (`seats` on the record: `{pick: seat id}`), with the reviewed name as its
   title, a job description from the card and the reviewed instructions, the reporting line picked (a pick under another pick
   reports to that seat) and the pick's group. No bot, repository, computer slot or BotOps task exists for it. The bullets

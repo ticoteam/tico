@@ -29,8 +29,10 @@ from . import kpis as K
 from . import market as MK
 from . import market_spend as MS
 from . import market_watch as MW
+from . import marketing_tasks as MT
 from . import models as M
 from . import onboarding as O
+from . import roadmap_flow as RF
 from . import strategy as S
 from . import strategy_setup as SS
 from .company_file import draft as D
@@ -147,6 +149,20 @@ def plan(onboarding, c, who, text):
                 "team": bot.get("team", ""),
                 "live": bool(bot.get("live")),
             }
+        # A built-in that sits in a team (the Finance Owner is the Bookkeeper) keeps a seat on its line, filled by the
+        # built-in bot itself: a manager hired above it later takes it along (recruiting._follow_filled).
+        for slug, (bot, card) in builtins.items():
+            if slug in IN_TEAM_BUILT_INS:
+                seats[slug] = {
+                    "title": M.SeatCreate(title=bot["title"]).title,
+                    "template": card["template"],
+                    "description": O.job_description(card, display, bot["reason"]),
+                    "reports_to": line(bot)[0],
+                    "waits_on": None,
+                    "team": bot.get("team", ""),
+                    "live": False,
+                    "fills": slug,
+                }
     except ValidationError:
         raise Problem(
             "company_file", "A company name, title or instruction is too long for this Tico setup", 422
@@ -193,6 +209,7 @@ def plan(onboarding, c, who, text):
                 **({"live": True} if seat["live"] else {}),
             }
             for key, seat in seats.items()
+            if not seat.get("fills")  # a built-in's seat: it works from day one, under `employees`
         ],
         "people": people,
         "goals": [
@@ -200,9 +217,6 @@ def plan(onboarding, c, who, text):
             for goal in draft["goals"]
         ],
         "builtins": sorted(required),
-        "built_in_teams": {
-            slug: bot["team"] for slug, (bot, _) in builtins.items() if bot.get("team") and slug in IN_TEAM_BUILT_INS
-        },
         "deferred": deferred,
     }
     if D.has_strategy(saved):
@@ -605,7 +619,7 @@ def apply(onboarding, c, who, text, fingerprint):
         else ({}, None)
     )
     onboarding.save(c, who, staging)
-    onboarding.complete(c, who)
+    onboarding.complete(c, who, finish=False)  # the file's own chart is laid out below, then finished
 
     # complete() preserves existing definitions, including the seeded built-ins'
     # managers. Apply the confirmed chart after all targets exist, parents first
@@ -621,26 +635,8 @@ def apply(onboarding, c, who, text, fingerprint):
             onboarding.admin.update_bot(
                 c, who, slug, M.BotDefinitionUpdate(reports_to=parent, expected_revision=row["revision"])
             )
-    # Every other role on the chart is a Recruiting seat: no bot, repository, computer slot or BotOps task. A seat with a
-    # team goes in the group of that name; one without goes in its template's group, as it always has.
-    teams = Groups.seat_teams(
-        c, onboarding.settings, sorted({seat["template"] for seat in seats.values() if not seat["team"]})
-    )
-    built_in_teams = summary["built_in_teams"]
-    named = Groups.team_groups(
-        c, [seat["team"] for seat in seats.values() if seat["team"]] + list(built_in_teams.values())
-    )
-    chart = {}
-    for key, seat in seats.items():
-        team = named.get(seat["team"]) or teams.get(seat["template"], "")
-        chart[key] = {**seat, "team": team, "description_by": "chart"}
-    made = lifecycle.lay_out(c, who.actor, chart)
-    _go_live(onboarding, c, who, seats, made, {key: seat["team"] for key, seat in chart.items()})
-    for slug, team in built_in_teams.items():
-        found = H.resolve_bot(c, slug)  # a built-in on the chart (the Finance Owner is the Bookkeeper) goes to its team
-        if found and named.get(team):
-            Groups.move_bot(c, found["id"], named[team])
-    _factory_setup(c, who, made)
+    made, teams = lay_out_chart(onboarding, c, who, seats)
+    finish_new_company(onboarding, c, who, seats, made, teams)
     owners = {goal["id"]: goal["owner"] for goal in summary["goals"]}
     import_goals(c, who.actor, [(goal, owners[goal["id"]]) for goal in saved["goals"]], bets)
     record = O.load(c)
@@ -656,7 +652,7 @@ def apply(onboarding, c, who, text, fingerprint):
         "imported_at": H.now(),
         "by": who.actor,
         "deferred": summary["deferred"],
-        "seats": len(made),
+        "seats": sum(1 for key in made if not seats[key].get("fills")),
         "people": people,
         **({"strategy": strategy} if strategy else {}),
     }
@@ -671,7 +667,7 @@ def apply(onboarding, c, who, text, fingerprint):
         who.actor,
         "onboarding.company_imported",
         "",
-        {"fingerprint": fingerprint, "bots": sorted(body.selected), "seats": len(made)},
+        {"fingerprint": fingerprint, "bots": sorted(body.selected), "seats": record["company_import"]["seats"]},
     )
     return onboarding.view(c, who)
 
@@ -717,6 +713,95 @@ def _go_live(onboarding, c, who, seats, made, teams):
         lifecycle.fill_seat(c, who, seat_id, bot_id)
 
 
+def lay_out_chart(onboarding, c, who, seats):
+    """A chart's seats (plan()'s `seats` shape) laid out as Recruiting seats. A seat with a team goes in the group of that
+    name, one per name, made if missing; one without goes in its template's group, as it always has. A built-in's seat
+    (`fills`: the Finance Owner's is the Bookkeeper's) is filled at once by that bot as it is, which goes in the seat's
+    group: no second bot and no setup task. `placed_under` keeps the line it is on, so a manager hired above its seat
+    later takes it along (recruiting._follow_filled). Returns ({key: seat id}, {key: group id})."""
+    teams = Groups.seat_teams(
+        c, onboarding.settings, sorted({seat["template"] for seat in seats.values() if not seat["team"]})
+    )
+    named = Groups.team_groups(c, [seat["team"] for seat in seats.values() if seat["team"]])
+    chart = {}
+    for key, seat in seats.items():
+        team = named.get(seat["team"]) or teams.get(seat["template"], "")
+        chart[key] = {**seat, "team": team, "description_by": "chart"}
+    made = lifecycle.lay_out(c, who.actor, chart)
+    for key in sorted((key for key in seats if seats[key].get("fills")), key=lambda key: _depth(key, seats)):
+        found = H.resolve_bot(c, seats[key]["fills"])
+        if not found:
+            continue
+        line = c.execute("SELECT reports_to FROM bot_config WHERE bot=?", (found["id"],)).fetchone()
+        declared = onboarding._declared(c, found["id"])
+        declared["placed_under"] = (line["reports_to"] if line else "") or ""
+        onboarding._write_config(c, found["id"], declared)
+        if chart[key]["team"]:
+            Groups.move_bot(c, found["id"], chart[key]["team"])
+        lifecycle.fill_seat(c, who, made[key], found["id"])
+    return made, {key: seat["team"] for key, seat in chart.items()}
+
+
+# The task types every hub boots with (hubdb's General, roadmap_flow's two role types, marketing_tasks' Marketing). A
+# company with any other type has set its work up already.
+BOOT_TYPES = (H.GENERAL_TYPE, RF.PRODUCT, RF.ENGINEERING, MT.TYPE_ID)
+FINISHED_KEY = "new_company_finished"  # on the onboarding record: when the finish ran, so it never runs twice
+
+
+def new_company(c):
+    """Whether this company's work is still only what every hub boots with: no task type beyond BOOT_TYPES."""
+    marks = ",".join("?" * len(BOOT_TYPES))
+    return not c.execute("SELECT 1 FROM task_types WHERE id NOT IN (%s) LIMIT 1" % marks, BOOT_TYPES).fetchone()
+
+
+def finish_new_company(onboarding, c, who, seats, made, teams):
+    """The finish every way a new company is set up shares (a company file, the setup page's chart, or no chart at all):
+    the chart's live seats get their bots (_go_live), then company_default's factories and pipelines with each one's
+    manager (_factory_setup), then the boot's Marketing board goes, since Growth Experiments holds that work now. Only for
+    a new company (new_company), and once: a company already set up, or one finished before, is left as it is. True
+    when it ran."""
+    if O.load(c).get(FINISHED_KEY) or not new_company(c):
+        return False
+    _go_live(onboarding, c, who, seats, made, teams)
+    if _factory_setup(c, who, made):
+        MT.retire(c, who.actor)
+    record = O.load(c)
+    record[FINISHED_KEY] = H.now()
+    onboarding._store(c, record, who.actor)
+    return True
+
+
+def default_chart(onboarding, c, home):
+    """The chart a new company starts with when setup picked none: the chart formula's own default
+    (backend/company_file/chart_formula.py: no segment or bet picked, the default channels), which is the chart the
+    site's company file gives a company that picked nothing, in plan()'s `seats` shape. A seat whose template this
+    install lacks is left out, and a seat under it reports to the owner. The Finance Owner's seat is filled by the
+    Bookkeeper, as on import."""
+    from .company_file import chart_formula as F
+
+    cards = {card["template"]: card for card in O.read_cards(onboarding.settings)}
+    display = O.display_names(onboarding.settings, O.load(c))
+    rows = [row for row in F.build({})["employees"] if row["template"] in cards]
+    keys = {row["id"] for row in rows}
+    seats = {}
+    for row in rows:
+        card = cards[row["template"]]
+        built_in = onboarding._bot_slug(card["slug"]) if card["required"] else ""
+        if built_in and built_in not in IN_TEAM_BUILT_INS:
+            continue  # every other built-in is a bot already, in the Built-in group
+        seats[row["id"]] = {
+            "title": M.SeatCreate(title=row["title"]).title,
+            "template": row["template"],
+            "description": O.job_description(card, display, row["reason"]),
+            "reports_to": row["reports_to"] if row["reports_to"] in keys else home,
+            "waits_on": None,
+            "team": row["team"],
+            "live": bool(row["live"]) and not built_in,
+            **({"fills": built_in} if built_in else {}),
+        }
+    return seats
+
+
 # The pipelines of company_default (backend/pipeline_setup.py) and what manages each: a bot by its slug, or a seat by its
 # chart key. A chart key that is not on the chart leaves its pipeline to the name match, as apply_factory_setup always did.
 FACTORY_BINDINGS = {
@@ -735,7 +820,7 @@ FACTORY_BINDINGS = {
 def _factory_setup(c, who, made):
     """The company's factories and pipelines, once the bots and seats exist: one call, with each pipeline's manager. A
     bot is named by its slug (a live seat's bot is made under its chart key). Best effort, as onboarding's market task
-    is: a failure rolls back its own writes, is recorded, and the team stays set up."""
+    is: a failure rolls back its own writes, is recorded, and the team stays set up. True when the pipelines were made."""
     bindings = {}
     for name, (kind, key) in FACTORY_BINDINGS.items():
         if kind == "seat":
@@ -759,8 +844,9 @@ def _factory_setup(c, who, made):
         H.event(
             c, who.actor, "onboarding.pipelines_failed", "", {"error": str(err)[:200], "bindings": sorted(bindings)}
         )
-        return
+        return False
     c.execute("RELEASE company_factories")
+    return True
 
 
 def add_invitee(onboarding, c, who, key, email):

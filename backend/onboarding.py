@@ -741,15 +741,23 @@ class Onboarding:
         elif reports_to == slug:
             raise Problem("hierarchy", "A bot cannot report to itself", 422)
 
-    def complete(self, c, who, models=None, seats=True):
+    def complete(self, c, who, models=None, seats=True, finish=True):
         """Deploy the chart setup picked (docs/onboarding.md, "Setup picks the chart"): the built-ins (BotOps, the
         Librarian, the Strategy Bot and the Assistant) are created as bots, Active from day one, and every other role is
         laid out as a Recruiting seat with its reporting line: no bot, repository, computer slot or BotOps task until
         someone recruits it. `seats` False creates every pick as a bot, as the sample company does
         (backend/sample_company.py). `models` names the model a new bot runs on, by slug, in place of its card's (the
-        sample company spreads its bots over two subscriptions); a model whose provider is off is ignored."""
+        sample company spreads its bots over two subscriptions); a model whose provider is off is ignored.
+
+        A new company's first completion ends with the finish every setup path shares (company_import.finish_new_company:
+        the live seats' bots and company_default's pipelines). With no role picked at all, its chart is the default one
+        (company_import.default_chart), the chart the site's file gives a company that picked nothing. `finish` False
+        leaves both to the caller: a company file's import lays out its own chart after this, then finishes."""
+        from . import company_import
+
         self._owner(who)
         record = load(c)
+        first = not record["completed"]
         names = display_names(self.settings, record)
         cards = {card["template"]: card for card in read_cards(self.settings)}
         plan = self._plan(record, cards, names)
@@ -801,6 +809,11 @@ class Onboarding:
         before = set(Groups._roster(c)["org_groups"])
         Groups.place(c, self.settings, [ids[slug] for slug in plan], group_order=record["answers"]["departments"])
         laid = self._lay_out(c, who, record, roles, cards, names, home)
+        chart, teams = {}, {}
+        finishing = finish and seats and first
+        if finishing and not roles and not laid and company_import.new_company(c):
+            chart = company_import.default_chart(self, c, home)
+            laid, teams = company_import.lay_out_chart(self, c, who, chart)
         self._link_bets(c, record, before)
         if not record["completed"]:
             # A new company starts caught up: the releases shipped before it existed are not news to its owner.
@@ -811,10 +824,10 @@ class Onboarding:
         record.update(selected={**plan, **roles}, completed=record["completed"] or H.now(), seats=laid)
         self._wire(c, record, who.actor)
         self._store(c, record, who.actor)
+        if finishing:
+            company_import.finish_new_company(self, c, who, chart, laid, teams)
         self._market_task(c, who, record)
         # Setting the team up here is one of the two ways out Health offers for a setup file that wasn't imported.
-        from . import company_import
-
         company_import.clear_failure(c)
         H.event(c, who.actor, "onboarding.completed", "", {"bots": sorted(plan), "seats": sorted(roles)})
         return self.view(c, who)

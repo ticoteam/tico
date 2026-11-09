@@ -298,7 +298,7 @@ def test_a_quiet_task_on_a_seat_only_pipeline_is_reported_like_one_with_no_manag
     api = built(environment)
     quiet = quiet_task(api)
     with api.app.state.store.transaction() as c:
-        lead = H.type_create(c, "bot:coo", "Lead", [{"name": "Targets", "status": "open"}], mover=True)
+        lead = H.type_create(c, "bot:coo", "Prospects", [{"name": "Targets", "status": "open"}], mover=True)
         c.execute("UPDATE task_types SET manager_seat='lead-pipeline-manager' WHERE id=?", (lead["id"],))
         step = c.execute("SELECT id FROM task_steps WHERE type_id=?", (lead["id"],)).fetchone()[0]
         c.execute("UPDATE tasks SET type_id=?, step_id=? WHERE id=?", (lead["id"], step, quiet))
