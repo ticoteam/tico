@@ -173,7 +173,7 @@ function roadmapCommentMark(m: RoadmapComment, taskId: string): string {
   if (!task || !taskPropRights(task).reopen) return mark;
   return mark + `<span class="roadmap-moderation"><button type="button" data-public-moderate="${m.hidden_at ? 'show' : 'hide'}" data-message="${esc(m.id)}">${m.hidden_at ? 'Restore' : 'Hide'}</button><button type="button" data-public-moderate="delete" data-message="${esc(m.id)}">Delete</button></span>`;
 }
-function roadmapCommentsBind(state: { id: string; host: HTMLElement; dialog: TaskDialog }) {
+function roadmapCommentsBind(state: TaskChatState) {
   const form = $('form', state.host);
   if (form && !$('[data-comment-public]', form) && state.dialog.liveTask?.visibility === 'public' && !state.dialog.liveTask?.private) {
     $('button[type=submit]', form).insertAdjacentHTML('beforebegin', '<label class="prop-check roadmap-check"><input type="checkbox" data-comment-public>Public</label>');
