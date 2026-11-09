@@ -288,8 +288,12 @@ def after_answer(c: Any, who: Any, row: Any, task_id: str, answers: dict[str, li
 
 def child_body(c: Any, ticket_id: Any, body: Any) -> str:
     """A child of a Dev ticket that carries a frozen spec (reviewers, QA) gets the spec's link and text too."""
-    if not ticket_id:
-        return body
+    from . import pipeline_links
+
+    if not ticket_id or body == pipeline_links.NEUTRAL_BODY:
+        return body  # a spawn whose readers may not open the source carries none of it
+    if not c.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='pages'").fetchone():
+        return body  # a bare hub database without the server's pages
     frozen = _frozen(c, ticket_id)
     if not frozen:
         return body
@@ -298,6 +302,11 @@ def child_body(c: Any, ticket_id: Any, body: Any) -> str:
         "WHERE f.id=?",
         (frozen["id"],),
     ).fetchone()
-    restricted = _audience(c, frozen["id"]) is not None
+    # A narrowed spec, or a ticket on a members-only pipeline, gives its children the link only, never the text.
+    visibility = c.execute(
+        "SELECT y.pipeline_visibility FROM tasks t JOIN task_types y ON y.id=t.type_id WHERE t.id=?", (ticket_id,)
+    ).fetchone()
+    members_only = bool(visibility) and str(visibility[0] or "company") == "members"
+    restricted = members_only or _audience(c, frozen["id"]) is not None
     text = page_text(_files.blobs.get(stored[0])) if _files and stored and not restricted else ""
     return (str(body or "").rstrip() + "\n\n" + _block(frozen["title"], frozen["id"], text)).strip()
