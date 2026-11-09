@@ -747,11 +747,6 @@ relax company recipient restrictions, message type, approver requirements, alway
 policy: company admins, an inbox's person/admin, or a bot's manager for that bot. BotOps and the Assistant cannot
 change these settings for them.
 
-**The Strategy Bot is the exception.** Its switch covers mail to people inside the company only. Sending outside the
-company stays the owner's at every level, so it has no forward addresses, and each email with anyone outside on To, Cc
-or Bcc, a reply included, waits for a Tico send approval of that exact message. A message telling it to send does not
-lift that wait, and neither does a GitHub Issue or a standing allowance ([what stays yours](strategy-bot.md#what-stays-yours)).
-
 The default always-ask rules cover a new correspondent, attachments, more than ten recipients, and legal or money
 matters. Inline and unnamed non-body MIME parts count as files. Decide reads all plain-text and sanitized HTML body representations; unavailable, incomplete or over-limit classification also asks a person, even when the legal/money prompt is off. Named primary bodies and alternative representations are classified. Non-primary inline text files also stay hashed, downloadable attachments and trigger attachment review; their text is classified too. Unsupported body alternatives or primary bodies, including named text/enriched, always need review without a new parser, even when attachment prompts are off. CSS-dependent, conditional or unsupported HTML needs review; its full frozen source is shown as inert text. This is triage, not a
 security boundary. Read/write grants, Never, sender identity, content-bound approval and caps remain deterministic.
