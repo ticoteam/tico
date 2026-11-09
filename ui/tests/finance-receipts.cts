@@ -6,12 +6,18 @@
 // and each row takes its new status from the reload. A hub with no receipts draws no section. The receipts sit above
 // the transactions table; desktop and 390px with no sideways scroll, and no page errors.
 // TICO_UI_SHOTS=<dir> saves screenshots.
-const {chromium} = require('playwright');
+import type {Browser, Page, Route} from 'playwright';
+import type * as PageSupport from './support/page.cjs';
+import type * as RouteSupport from './support/routes.cjs';
+const {chromium} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const {html, uiFile} = require('./support/page.cjs');
-const {unrouted} = require('./support/routes.cjs');
+const {html, uiFile} = require('./support/page.cjs') as typeof PageSupport;
+const {unrouted} = require('./support/routes.cjs') as typeof RouteSupport;
+type Row = Record<string, unknown>;
+interface ActionBody {kind: string; payload: {receipt_id: string; decision?: string}}
+declare const S: {me: {id: string} | null; emps: unknown[] | null};
 const uiDir = path.join(__dirname, '..');
 const PHONE = {width: 390, height: 844}, DESKTOP = {width: 1440, height: 900};
 const iso = '2026-11-08T12:00:00Z';
@@ -20,7 +26,7 @@ const MATE = {teammate: 'human:ana', kind: 'person', team: '', reports_to: '', d
   rights: ['finance.book', 'finance.budgets', 'finance.attribution', 'finance.admin']};
 const ACCESS = {teammates: [MATE], teams: [], private_lines: [], defaults: {manager: 'team_expenses', member: 'own_expenses', manager_payroll: 'totals'},
   view_version: 'v1', can_view_as: false, can_edit_defaults: false};
-const feed = (id, date, amount, description) => ({id, date, amount, description});
+const feed = (id: string, date: string, amount: number, description: string) => ({id, date, amount, description});
 const RECEIPTS = () => [
   {id: 'rc-1', file: {id: 'file-1', name: 'Canva invoice.pdf'}, read: {amount: 1200, date: '2026-11-01', vendor: {id: 'c-canva', name: 'Canva'}},
     match: {feed: feed('feed-1', '2026-11-01', -1200, 'CANVA'), confidence: 0.92}, status: 'suggested', as_of: iso},
@@ -30,17 +36,17 @@ const RECEIPTS = () => [
 
 // The hub's answers for one viewer. Accept files the suggestion (attached); Undo returns the attached receipt to its
 // suggestion; Refuse marks the receipt refused with no match, as backend/finance/receipts.py does.
-function fake(rows) {
-  const state = {rows, writes: []};
-  const answer = (p, method, body) => {
+function fake(rows: Row[]) {
+  const state: {rows: Row[]; writes: {kind: string; payload: unknown}[]} = {rows, writes: []};
+  const answer = (p: string, method: string, body: ActionBody | null) => {
     if (p === '/api/v2/finance/receipts' && method === 'GET') return {rows: structuredClone(state.rows), next: null, as_of: iso};
     if (p === '/api/v2/finance/actions' && method === 'POST') {
-      state.writes.push({kind: body.kind, payload: body.payload});
-      const r = state.rows.find(x => x.id === body.payload.receipt_id);
-      if (r && body.kind === 'receipt_match' && body.payload.decision === 'accept') r.status = 'attached';
-      if (r && body.kind === 'receipt_match' && body.payload.decision === 'reject') { r.status = 'rejected'; r.match = null; }
-      if (r && body.kind === 'receipt_match_undo') r.status = 'suggested';
-      return {action_id: 'act-' + state.writes.length, kind: body.kind, status: 'committed', code: null, reason: null, approver: null, result: {}};
+      state.writes.push({kind: body!.kind, payload: body!.payload});
+      const r = state.rows.find(x => x.id === body!.payload.receipt_id);
+      if (r && body!.kind === 'receipt_match' && body!.payload.decision === 'accept') r.status = 'attached';
+      if (r && body!.kind === 'receipt_match' && body!.payload.decision === 'reject') { r.status = 'rejected'; r.match = null; }
+      if (r && body!.kind === 'receipt_match_undo') r.status = 'suggested';
+      return {action_id: 'act-' + state.writes.length, kind: body!.kind, status: 'committed', code: null, reason: null, approver: null, result: {}};
     }
     if (p === '/api/v2/finance/access') return structuredClone(ACCESS);
     if (p === '/api/v2/finance/pnl') return {rows: [], columns: [], income: [], expense: [], net: [], excluded: false};
@@ -53,8 +59,8 @@ function fake(rows) {
   return {state, answer};
 }
 
-const sideways = page => page.evaluate(() => [document.documentElement, document.querySelector('#main')].some(el => el && el.scrollWidth > el.clientWidth + 1));
-async function shot(page, name) {
+const sideways = (page: Page) => page.evaluate(() => [document.documentElement, document.querySelector('#main')].some(el => el && el.scrollWidth > el.clientWidth + 1));
+async function shot(page: Page, name: string) {
   const dir = process.env.TICO_UI_SHOTS;
   if (!dir) return;
   fs.mkdirSync(dir, {recursive: true});
@@ -62,16 +68,16 @@ async function shot(page, name) {
 }
 
 // The owner on Transactions, answered by the fake above; the reads list records each GET so a test can wait for one.
-async function open(browser, {viewport, rows}) {
+async function open(browser: Browser, {viewport, rows}: {viewport: {width: number; height: number}; rows: Row[]}) {
   const f = fake(rows);
   const me = {id: 'ana', name: 'Ana Silva', email: 'ana@acme.example', role: 'owner', company_role: 'owner', cloud: true};
   const config = {company_name: 'Acme Lights'};
-  const reads = [], errors = [];
+  const reads: string[] = [], errors: string[] = [];
   const page = await browser.newPage({viewport, serviceWorkers: 'block', hasTouch: viewport === PHONE});
-  page.on('pageerror', e => errors.push(e.message));
-  await page.route('**/*', async route => {
+  page.on('pageerror', (e: Error) => errors.push(e.message));
+  await page.route('**/*', async (route: Route) => {
     const req = route.request(), url = new URL(req.url()), p = url.pathname, method = req.method();
-    const json = (body, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
+    const json = (body: unknown, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
     if (url.origin !== 'http://tico-ui.test') return route.abort();
     if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
     const file = p.startsWith('/tico/ui/') ? uiFile(p.slice(9)) : p.startsWith('/vendor/') ? path.join(uiDir, p) : '';
@@ -97,22 +103,22 @@ async function open(browser, {viewport, rows}) {
   return {page, errors, reads, f};
 }
 
-const buttons = (page, id) => page.locator(`[data-fin-receipt="${id}"] button`).allInnerTexts().then(t => t.map(x => x.trim()));
-const pill = (page, id) => page.locator(`[data-fin-receipt="${id}"] .pill`).innerText();
-const lines = (page, id) => page.locator(`[data-fin-receipt="${id}"] .muted`).allInnerTexts();
-async function waitPill(page, id, text) {
+const buttons = (page: Page, id: string) => page.locator(`[data-fin-receipt="${id}"] button`).allInnerTexts().then(t => t.map(x => x.trim()));
+const pill = (page: Page, id: string) => page.locator(`[data-fin-receipt="${id}"] .pill`).innerText();
+const lines = (page: Page, id: string) => page.locator(`[data-fin-receipt="${id}"] .muted`).allInnerTexts();
+async function waitPill(page: Page, id: string, text: string) {
   await page.waitForFunction(([i, t]) => document.querySelector(`[data-fin-receipt="${i}"] .pill`)?.textContent.trim() === t, [id, text]);
 }
 
 (async () => {
   const browser = await chromium.launch();
   try {
-    for (const [tag, viewport] of [['desktop', DESKTOP], ['phone', PHONE]]) {
+    for (const [tag, viewport] of [['desktop', DESKTOP], ['phone', PHONE]] as const) {
       const {page, errors, f} = await open(browser, {viewport, rows: RECEIPTS()});
       const rows = page.locator('#fin-receipts .fin-receipt');
       await rows.first().waitFor();
       assert.equal(await rows.count(), 3, `${tag}: three receipts`);
-      assert.equal(await page.evaluate(() => document.querySelector('#fin-receipts').nextElementSibling?.id), 'fin-tx', `${tag}: the list follows the receipts`);
+      assert.equal(await page.evaluate(() => document.querySelector('#fin-receipts')!.nextElementSibling?.id), 'fin-tx', `${tag}: the list follows the receipts`);
       assert.equal(await page.locator('[data-fin-receipt="rc-1"] strong').innerText(), 'Canva invoice.pdf', `${tag}: file name`);
       // A suggestion: its read, the bank row it is suggested on, and Attach or Refuse.
       assert.equal(await pill(page, 'rc-1'), 'Suggested match', `${tag}: suggested pill`);

@@ -7,118 +7,130 @@
 // shows the grips, the menus and + Card / + Page, a redraw keeps it, and Done, Escape or leaving the page ends it. The app opens on My dashboard
 // (person:me, Overview › Mine) with its own defaults.
 // TICO_UI_SHOTS=<dir> saves screenshots.
-const {chromium} = require('playwright');
+import type {Browser, Page, Route} from 'playwright';
+import type * as PageSupport from './support/page.cjs';
+import type * as RouteSupport from './support/routes.cjs';
+const {chromium} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const {html, uiFile} = require('./support/page.cjs');
-const {unrouted} = require('./support/routes.cjs');
+const {html, uiFile} = require('./support/page.cjs') as typeof PageSupport;
+const {unrouted} = require('./support/routes.cjs') as typeof RouteSupport;
 const uiDir = path.join(__dirname, '..');
 const roster = JSON.parse(fs.readFileSync(path.join(__dirname, 'fixtures', 'redesign-roster.json'), 'utf8'));
+interface Person { id: string; name: string; email: string; role: string; company_role: string; cloud: boolean; bot_admin?: boolean }
+type Settings = {team: string; weeks?: number};
+// App global: the signed-in person, and the employee list the page loads before it draws.
+declare const S: {me: Person | null; emps?: unknown[]};
 const PHONE = {width: 390, height: 844}, DESKTOP = {width: 1440, height: 900};
-const OWNER = {id: 'ana', name: 'Ana Silva', email: 'ana@acme.example', role: 'owner', company_role: 'owner', cloud: true, bot_admin: true};
-const MEMBER = {id: 'cara', name: 'Cara Diaz', email: 'cara@acme.example', role: 'human', company_role: 'member', cloud: true};
-const ago = minutes => new Date(Date.now() - minutes * 60000).toISOString();
-const NAMES = {tasks_by_status: 'Tasks by status', done_per_week: 'Done per week', needs_you: 'Needs you', latest_pages: 'Latest pages',
+const OWNER: Person = {id: 'ana', name: 'Ana Silva', email: 'ana@acme.example', role: 'owner', company_role: 'owner', cloud: true, bot_admin: true};
+const MEMBER: Person = {id: 'cara', name: 'Cara Diaz', email: 'cara@acme.example', role: 'human', company_role: 'member', cloud: true};
+const ago = (minutes: number) => new Date(Date.now() - minutes * 60000).toISOString();
+const NAMES: Record<string, string> = {tasks_by_status: 'Tasks by status', done_per_week: 'Done per week', needs_you: 'Needs you', latest_pages: 'Latest pages',
   spend: 'Spend', kpi: 'KPI', automation_runs: 'Automation runs', needs_attention: 'Needs attention', unread_threads: 'Unread threads',
   my_tasks: 'My tasks', updates: 'Updates'};
-const weeks = n => Array.from({length: n}, (_, i) => ({week: `2026-${String(8 + Math.floor(i / 4)).padStart(2, '0')}-${String(1 + i % 4 * 7).padStart(2, '0')}`, done: [3, 5, 2, 8, 6, 4, 9, 7][i % 8]}));
-const DATA = {
+const weeks = (n: number) => Array.from({length: n}, (_, i) => ({week: `2026-${String(8 + Math.floor(i / 4)).padStart(2, '0')}-${String(1 + i % 4 * 7).padStart(2, '0')}`, done: [3, 5, 2, 8, 6, 4, 9, 7][i % 8]!}));
+const DATA: Record<string, (s?: Settings) => unknown> = {
   tasks_by_status: () => ({counts: {open: 4, doing: 2, waiting: 1, done: 7}}),
-  done_per_week: s => ({weeks: weeks(s.weeks || 8)}),
+  done_per_week: s => ({weeks: weeks(s!.weeks || 8)}),
   needs_you: () => ({count: 2, items: [{id: 't1', kind: 'task', title: 'Approve the Acme launch plan', task_id: 't1'},
     {id: 'q1', kind: 'question', title: 'Pick a pricing page layout', task_id: 'q1'}]}),
   latest_pages: () => ({pages: [{file_id: 'f1', title: 'Weekly numbers', bot: 'eng-lead', updated_at: ago(90), archived: false}]}),
-  needs_attention: () => DATA.needs_you(),
+  needs_attention: () => DATA.needs_you!(),
   unread_threads: () => ({count: 0, threads: []}),
   my_tasks: () => ({count: 2, tasks: [{id: 't7', title: 'Send the Acme renewal quote', status: 'open', due_at: '2026-11-03', updated_at: ago(40)},
     {id: 't8', title: 'Review the onboarding checklist', status: 'doing', due_at: null, updated_at: ago(300)}]}),
   updates: () => ({unread: 1, updates: [{id: 'u1', author: 'eng-lead', kind: 'daily', day: '2026-11-01', headline: 'Shipped the billing fix',
     created_at: ago(60), read: false}]}),
 };
-const TEAMS = {eng: 'Engineering'};
-const card = (id, template, settings, title = '') => ({id, template, title, settings, name: NAMES[template], heading: title || NAMES[template],
-  team_name: TEAMS[settings.team] || '', hidden: false, data: DATA[template](settings), made_by: id ? 'human:ana' : null});
-const defaults = (templates, team = '') => templates.map((t, i) => ({id: null, item: null, position: i, size: 'medium', made_by: null,
+const TEAMS: Record<string, string> = {eng: 'Engineering'};
+const card = (id: string | null, template: string, settings: Settings, title = '') => ({id, template, title, settings, name: NAMES[template], heading: title || NAMES[template],
+  team_name: TEAMS[settings.team] || '', hidden: false, data: DATA[template]!(settings), made_by: id ? 'human:ana' : null});
+type CardView = ReturnType<typeof card>;
+const defaults = (templates: string[], team = '') => templates.map((t, i) => ({id: null, item: null, position: i, size: 'medium', made_by: null,
   card: card(null, t, {team, ...(t === 'done_per_week' ? {weeks: 8} : {})})}));
 const CHOICES = {templates: Object.entries(NAMES).map(([id, name]) => ({id, name, fields: id === 'done_per_week' ? ['team', 'weeks'] : id === 'kpi' ? ['kpi'] : id === 'latest_pages' ? ['team', 'count'] : ['team']})),
   teams: [{id: 'eng', name: 'Engineering', parent: null}], kpis: [],
   pages: [{file_id: 'f2', title: 'Acme launch plan', bot: 'eng-lead', updated_at: ago(30), archived: false}]};
 
-function server(me) {
+interface Audience { everyone: boolean; people: string[]; teams: string[]; bots: string[] }
+interface Body { ids?: string[]; place?: string; template?: string; settings?: Settings; title?: string; size?: string; item?: string; read?: Audience; audience?: Audience; write?: {teams: string[]}; revision?: number; see?: Audience }
+interface Pin { id: string | null; item?: string | null | undefined; position?: number; size?: string | undefined; made_by: string | null; card?: CardView; page?: unknown }
+interface Place { place: string; kind: string; saved: boolean; group?: string; name?: string; audience?: Audience; revision?: number; pins: Pin[] }
+function server(me: Person) {
   let n = 0;
-  const places = {
+  const places: Record<string, Place> = {
     dashboard: {place: 'dashboard', kind: 'dashboard', saved: false, pins: defaults(['tasks_by_status', 'done_per_week', 'needs_you', 'latest_pages'])},
     'team:eng': {place: 'team:eng', kind: 'team', saved: false, group: 'eng', name: 'Engineering', audience: {everyone: true, people: [], teams: [], bots: []},
       pins: defaults(['tasks_by_status', 'done_per_week', 'needs_you'], 'eng')},
     'person:me': {place: 'person:' + me.id, kind: 'person', saved: false,
       pins: defaults(['needs_attention', 'unread_threads', 'my_tasks', 'updates', 'latest_pages'])},
   };
-  const writes = [];
-  const view = p => ({...places[p], can_edit: places[p].kind === 'person' || me.company_role !== 'member'});
-  const save = p => {
-    const at = places[p];
+  const writes: [string, string, Body][] = [];
+  const view = (p: string) => ({...places[p], can_edit: places[p]!.kind === 'person' || me.company_role !== 'member'});
+  const save = (p: string) => {
+    const at = places[p]!;
     if (!at.saved) {
       at.saved = true;
-      at.pins = at.pins.map(pin => { const cid = 'c' + (++n); return {...pin, id: 'p' + n, item: 'card:' + cid, card: {...pin.card, id: cid}}; });
+      at.pins = at.pins.map(pin => { const cid = 'c' + (++n); return {...pin, id: 'p' + n, item: 'card:' + cid, card: {...pin.card!, id: cid}}; });
     }
   };
-  const pinPlace = pid => Object.keys(places).find(p => places[p].pins.some(x => x.id === pid));
-  return {writes, places, handle(method, p, body) {
+  const pinPlace = (pid: string) => Object.keys(places).find(p => places[p]!.pins.some(x => x.id === pid));
+  return {writes, places, handle(method: string, p: string, body: Body): [number, unknown] | null {
     if (method !== 'GET' && /^\/api\/v2\/(places|pins|cards|groups)\b/.test(p)) writes.push([method, p, body]);
-    let m;
+    let m: RegExpMatchArray | null;
     // A team page's "Seen by" is its group's See and Read (backend/teammate_access.py).
     if ((m = p.match(/^\/api\/v2\/groups\/([^/]+)\/access$/))) {
-      const at = places['team:' + decodeURIComponent(m[1])];
+      const at = places['team:' + decodeURIComponent(m[1]!)];
       if (!at || me.company_role === 'member') return [403, {error: {code: 'forbidden', detail: 'Only its leads'}}];
-      if (method === 'PUT') { at.audience = body.read; at.revision = (at.revision || 0) + 1; }
+      if (method === 'PUT') { at.audience = body.read!; at.revision = (at.revision || 0) + 1; }
       const everyone = {everyone: true, people: [], teams: [], bots: []};
-      return [200, {target: 'group:' + m[1], see: at.audience, read: at.audience, write: {everyone: false, people: [], teams: [m[1]], bots: []},
-        default: {see: everyone, read: everyone, write: {everyone: false, people: [], teams: [m[1]], bots: []}}, revision: at.revision || 0,
+      return [200, {target: 'group:' + m[1], see: at.audience, read: at.audience, write: {everyone: false, people: [], teams: [m[1]!], bots: []},
+        default: {see: everyone, read: everyone, write: {everyone: false, people: [], teams: [m[1]!], bots: []}}, revision: at.revision || 0,
         you: {see: true, read: true, write: true, manage: true}, teams: [{id: 'eng', name: 'Engineering'}]}];
     }
     if ((m = p.match(/^\/api\/v2\/places\/([^/]+)(\/order)?$/))) {
-      const place = decodeURIComponent(m[1]);
+      const place = decodeURIComponent(m[1]!);
       if (!places[place]) return [404, {error: {code: 'not_found', detail: 'No such place'}}];
-      if (method === 'PUT') { save(place); if (body.audience) places[place].audience = body.audience; }
-      if (m[2]) { const pins = places[place].pins; places[place].pins = body.ids.map(id => pins.find(x => x.id === id)); }
+      if (method === 'PUT') { save(place); if (body.audience) places[place]!.audience = body.audience; }
+      if (m[2]) { const pins = places[place]!.pins; places[place]!.pins = body.ids!.map((id: string) => pins.find(x => x.id === id)!); }
       return [200, view(place)];
     }
     if (p === '/api/v2/cards/choices') return [200, CHOICES];
     if (p === '/api/v2/cards' && method === 'POST') {
-      save(body.place);
-      const cid = 'c' + (++n), made = card(cid, body.template, {team: '', ...body.settings}, body.title);
-      places[body.place].pins.push({id: 'p' + (++n), item: 'card:' + cid, position: places[body.place].pins.length, size: body.size, made_by: 'human:ana', card: made});
+      save(body.place!);
+      const cid = 'c' + (++n), made = card(cid, body.template!, {team: '', ...body.settings}, body.title);
+      places[body.place!]!.pins.push({id: 'p' + (++n), item: 'card:' + cid, position: places[body.place!]!.pins.length, size: body.size, made_by: 'human:ana', card: made});
       return [200, {card: made, pin: 'p' + n}];
     }
     if (p === '/api/v2/pins' && method === 'POST') {
       const page = CHOICES.pages.find(x => 'page:' + x.file_id === body.item);
-      places[body.place].pins.push({id: 'p' + (++n), item: body.item, position: places[body.place].pins.length, size: body.size, made_by: 'human:ana', page});
-      return [200, {id: 'p' + n, ...view(body.place)}];
+      places[body.place!]!.pins.push({id: 'p' + (++n), item: body.item, position: places[body.place!]!.pins.length, size: body.size, made_by: 'human:ana', page});
+      return [200, {id: 'p' + n, ...view(body.place!)}];
     }
     if ((m = p.match(/^\/api\/v2\/pins\/([^/]+)$/))) {
-      const place = pinPlace(m[1]), pins = places[place].pins;
-      if (method === 'DELETE') { places[place].pins = pins.filter(x => x.id !== m[1]); return [200, {removed: m[1]}]; }
-      Object.assign(pins.find(x => x.id === m[1]), body);
+      const place = pinPlace(m[1]!)!, pins = places[place]!.pins;
+      if (method === 'DELETE') { places[place]!.pins = pins.filter(x => x.id !== m![1]); return [200, {removed: m[1]}]; }
+      Object.assign(pins.find(x => x.id === m![1])!, body);
       return [200, view(place)];
     }
     if ((m = p.match(/^\/api\/v2\/cards\/([^/]+)$/)) && method === 'PATCH') {
-      const pin = Object.values(places).flatMap(x => x.pins).find(x => x.card?.id === m[1]);
-      pin.card = card(m[1], pin.card.template, {...pin.card.settings, ...body.settings}, body.title ?? pin.card.title);
+      const pin = Object.values(places).flatMap(x => x.pins).find(x => x.card?.id === m![1])!;
+      pin.card = card(m![1]!, pin.card!.template, {...pin.card!.settings, ...body.settings}, body.title ?? pin.card!.title);
       return [200, {card: pin.card}];
     }
     return null;
   }};
 }
 
-async function open(browser, {viewport = DESKTOP, hash = '#/overview', me = OWNER} = {}) {
+async function open(browser: Browser, {viewport = DESKTOP, hash = '#/overview', me = OWNER} = {}) {
   const page = await browser.newPage({viewport, serviceWorkers: 'block', hasTouch: viewport === PHONE});
-  const errors = [], fake = server(me);
-  page.on('pageerror', e => errors.push(e.message));
+  const errors: string[] = [], fake = server(me);
+  page.on('pageerror', (e: Error) => errors.push(e.message));
   const config = {company_name: 'Acme'};
-  await page.route('**/*', async route => {
+  await page.route('**/*', async (route: Route) => {
     const req = route.request(), url = new URL(req.url()), p = url.pathname, method = req.method();
-    const json = (body, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
+    const json = (body: unknown, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
     if (url.origin !== 'http://tico-ui.test') return route.abort();
     if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
     const file = p.startsWith('/tico/ui/') ? uiFile(p.slice(9)) : p.startsWith('/vendor/') ? path.join(uiDir, p) : '';
@@ -131,7 +143,7 @@ async function open(browser, {viewport = DESKTOP, hash = '#/overview', me = OWNE
     if (p === '/api/status') return json({active: [], employees: []});
     if (p === '/api/v2/status') return json({bots: []});
     if (p === '/api/v2/groups') return json([{id: 'eng', name: 'Engineering', parent: '', people: [], bots: ['eng-lead', 'builder']}]);
-    const answer = fake.handle(method, p, req.postData() ? JSON.parse(req.postData()) : {});
+    const answer = fake.handle(method, p, req.postData() ? JSON.parse(req.postData()!) : {});
     if (answer) return json(answer[1], answer[0]);
     return json(unrouted(p));
   });
@@ -139,12 +151,12 @@ async function open(browser, {viewport = DESKTOP, hash = '#/overview', me = OWNE
   await page.waitForFunction(() => typeof S !== 'undefined' && S.me && (S.emps || []).length);
   return {page, errors, fake};
 }
-const sideways = page => page.evaluate(() => [document.documentElement, document.querySelector('#main')].some(el => el && el.scrollWidth > el.clientWidth + 1));
-const headings = page => page.locator('#dash-grid .dash-pin-head h2').allInnerTexts();
+const sideways = (page: Page) => page.evaluate(() => [document.documentElement, document.querySelector('#main')].some(el => el && el.scrollWidth > el.clientWidth + 1));
+const headings = (page: Page) => page.locator('#dash-grid .dash-pin-head h2').allInnerTexts();
 // How many of `sel` are on screen; the edit controls are in the page while viewing, just not shown.
-const shown = (page, sel) => page.locator(sel).evaluateAll(els => els.filter(el => el.checkVisibility()).length);
+const shown = (page: Page, sel: string) => page.locator(sel).evaluateAll(els => els.filter(el => el.checkVisibility()).length);
 const EDIT_CONTROLS = '[data-dash-grip], [data-dash-menu], [data-dash-add], [data-dash-mode="done"]';
-async function shot(page, name) {
+async function shot(page: Page, name: string) {
   const dir = process.env.TICO_UI_SHOTS;
   if (!dir) return;
   fs.mkdirSync(dir, {recursive: true});
@@ -174,7 +186,7 @@ async function shot(page, name) {
       assert.equal(await shown(page, '[data-dash-menu]'), 4);
       assert.equal(await shown(page, '[data-dash-add]'), 2, '+ Card and + Page');
       assert.equal(await shown(page, '[data-dash-mode="edit"]'), 0);
-      assert.equal(await page.evaluate(() => document.activeElement?.dataset.dashMode), 'done', 'focus goes to Done');
+      assert.equal(await page.evaluate(() => (document.activeElement as HTMLElement | null)?.dataset.dashMode), 'done', 'focus goes to Done');
       await shot(page, 'desktop-dashboard-editing');
 
       // The first change saves the defaults, then sends the order by pin ids.
@@ -182,18 +194,18 @@ async function shot(page, name) {
       await page.keyboard.press('ArrowRight');
       await page.waitForFunction(() => document.querySelector('#dash-grid .dash-pin h2')?.textContent.startsWith('Done'));
       assert.deepEqual(fake.writes.map(([m, p]) => m + ' ' + p), ['PUT /api/v2/places/dashboard', 'POST /api/v2/places/dashboard/order']);
-      assert.deepEqual(fake.writes[1][2].ids, ['p2', 'p1', 'p3', 'p4']);
-      assert.equal(await page.evaluate(() => document.activeElement?.closest('.dash-pin')?.dataset.at), '1', 'focus follows the card');
+      assert.deepEqual(fake.writes[1]![2].ids, ['p2', 'p1', 'p3', 'p4']);
+      assert.equal(await page.evaluate(() => document.activeElement?.closest<HTMLElement>('.dash-pin')?.dataset.at), '1', 'focus follows the card');
 
       // A pointer drag: Latest pages onto the first card.
-      const from = await page.locator('#dash-grid .dash-pin').nth(3).locator('[data-dash-grip]').boundingBox();
-      const to = await page.locator('#dash-grid .dash-pin').nth(0).boundingBox();
+      const from = (await page.locator('#dash-grid .dash-pin').nth(3).locator('[data-dash-grip]').boundingBox())!;
+      const to = (await page.locator('#dash-grid .dash-pin').nth(0).boundingBox())!;
       await page.mouse.move(from.x + from.width / 2, from.y + from.height / 2);
       await page.mouse.down();
       await page.mouse.move(to.x + 20, to.y + 20, {steps: 8});
       await page.mouse.up();
       await page.waitForFunction(() => document.querySelector('#dash-grid .dash-pin h2')?.textContent.startsWith('Latest'));
-      assert.deepEqual(fake.writes.at(-1)[2].ids, ['p4', 'p2', 'p1', 'p3']);
+      assert.deepEqual(fake.writes.at(-1)![2].ids, ['p4', 'p2', 'p1', 'p3']);
 
       // Add a card from its form: Done per week over 12 weeks, large.
       await page.locator('[data-dash-add="card"]').click();
@@ -203,7 +215,7 @@ async function shot(page, name) {
       await dlg.locator('[name="size"]').selectOption('large');
       await dlg.locator('[type="submit"]').click();
       await page.locator('#dash-grid .dash-pin').nth(4).waitFor();
-      assert.deepEqual(fake.writes.at(-1)[2], {title: '', settings: {team: '', weeks: 12}, template: 'done_per_week', place: 'dashboard', size: 'large'});
+      assert.deepEqual(fake.writes.at(-1)![2], {title: '', settings: {team: '', weeks: 12}, template: 'done_per_week', place: 'dashboard', size: 'large'});
       assert.equal(await page.locator('#dash-grid .dash-pin').nth(4).getAttribute('data-size'), 'large');
       assert.equal(await page.locator('#dash-grid .dash-pin').nth(4).locator('.dash-bars rect').count(), 12);
       assert.equal(await page.locator('#dash-dialog[open]').count(), 0, 'the form closes');
@@ -217,7 +229,7 @@ async function shot(page, name) {
       await page.waitForFunction(() => document.querySelectorAll('#dash-grid .dash-pin h2')[4]?.textContent === 'Quarter');
       await added.locator('[data-dash-menu]').click();
       await added.locator('.dash-menu [data-dash-size="small"]').click();
-      await page.waitForFunction(() => document.querySelectorAll('#dash-grid .dash-pin')[4]?.dataset.size === 'small');
+      await page.waitForFunction(() => document.querySelectorAll<HTMLElement>('#dash-grid .dash-pin')[4]?.dataset.size === 'small');
       await page.locator('#dash-grid .dash-pin').nth(4).locator('[data-dash-menu]').click();
       await page.locator('#dash-grid .dash-pin').nth(4).locator('.dash-menu [data-dash-remove]').click();
       await page.waitForFunction(() => document.querySelectorAll('#dash-grid .dash-pin').length === 4);
@@ -226,7 +238,7 @@ async function shot(page, name) {
       await page.locator('[data-dash-add="page"]').click();
       await page.locator('#dash-dialog[open] [type="submit"]').click();
       await page.locator('#dash-grid .dash-pin').nth(4).waitFor();
-      assert.deepEqual(fake.writes.at(-1).slice(1), ['/api/v2/pins', {place: 'dashboard', item: 'page:f2', size: 'medium'}]);
+      assert.deepEqual(fake.writes.at(-1)!.slice(1), ['/api/v2/pins', {place: 'dashboard', item: 'page:f2', size: 'medium'}]);
       assert.match(await page.locator('#dash-grid .dash-pin').nth(4).innerText(), /Acme launch plan/);
       await shot(page, 'desktop-dashboard-edited');
       // Every write drew the grid again and kept edit mode; Done ends it.
@@ -281,8 +293,8 @@ async function shot(page, name) {
       await page.locator('#access-editor[open] [type="submit"]').click();
       await page.waitForFunction(() => document.querySelector('[data-dash-audience]')?.textContent.includes('Seen by Ana Silva'));
       const chosen = {everyone: false, people: ['ana'], teams: [], bots: []};
-      const [method, url, body] = fake.writes.at(-1);
-      assert.deepEqual([method, url, body.see, body.read, body.write.teams, body.revision],
+      const [method, url, body] = fake.writes.at(-1)!;
+      assert.deepEqual([method, url, body.see, body.read, body.write!.teams, body.revision],
         ['PUT', '/api/v2/groups/eng/access', chosen, chosen, ['eng'], 0]);
       await shot(page, 'desktop-team');
       assert.deepEqual(errors, []);
@@ -329,7 +341,7 @@ async function shot(page, name) {
       await page.locator('#dash-grid .dash-pin').first().waitFor();
       const widths = await page.locator('#dash-grid .dash-pin').evaluateAll(els => els.map(el => Math.round(el.getBoundingClientRect().width)));
       assert.equal(new Set(widths).size, 1, 'one column');
-      assert.ok(widths[0] >= 340, 'the full width');
+      assert.ok(widths[0]! >= 340, 'the full width');
       assert.equal(await sideways(page), false, 'no sideways scroll');
       await shot(page, 'phone-dashboard');
       await page.locator('[data-dash-mode="edit"]').click();

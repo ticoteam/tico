@@ -1,25 +1,38 @@
 // The Alerts registry card: explicit consent and price, stable paid retries, opt-out, and phone-width settings.
-const {chromium} = require('playwright');
+import type {LaunchOptions, Route} from 'playwright';
+import type * as PageSupport from './support/page.cjs';
+import type * as RouteSupport from './support/routes.cjs';
+const {chromium} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
-const {html, uiFile} = require('./support/page.cjs');
-const {unrouted} = require('./support/routes.cjs');
+const {html, uiFile} = require('./support/page.cjs') as typeof PageSupport;
+const {unrouted} = require('./support/routes.cjs') as typeof RouteSupport;
+interface AlertCtx {admin: boolean; me: {id: string} | null; live: () => boolean}
+interface Write {path: string; body: Record<string, unknown>; operation: string | undefined}
+declare const S: {me: {id: string} | null};
+declare function inboxesAlerts(host: HTMLElement, ctx: AlertCtx): void | Promise<void>;
+declare global {
+  interface Window {
+    ALERT_CTX: AlertCtx;
+    ALERT_PWNED?: number;
+  }
+}
 (async () => {
-  const browser = await chromium.launch({headless: true, channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined});
+  const browser = await chromium.launch({headless: true, channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined} as LaunchOptions);
   try {
     const page = await browser.newPage({viewport: {width: 390, height: 844}, serviceWorkers: 'block'});
-    const errors = [], writes = [], receipts = new Set();
-    page.on('pageerror', e => errors.push(e.message));
-    const state = {phone: null, status: 'none', verified_at: null, call_consent: false,
+    const errors: string[] = [], writes: Write[] = [], receipts = new Set();
+    page.on('pageerror', (e: Error) => errors.push(e.message));
+    const state: {phone: string | null; status: string; verified_at: string | null; call_consent: boolean; preferences: Record<string, unknown>; monthly_spend: number; company_monthly_cap: number; company_monthly_spend: number; price_usd: number; paid_by: string; recent: unknown[]} = {phone: null, status: 'none', verified_at: null, call_consent: false,
       preferences: {urgent_needs: false, legal_mail: false, bot_stuck: false, urgent_calls: false, timezone: 'America/Los_Angeles',
         quiet_start: '22:00', quiet_end: '07:00', emergency_exception: false, monthly_cap: 10},
       monthly_spend: 0, company_monthly_cap: 50, company_monthly_spend: 0, price_usd: 1, paid_by: 'company', recent: []};
     let callConsent = false, sendAttempts = 0;
-    await page.route('**/*', route => {
+    await page.route('**/*', (route: Route) => {
       const req = route.request(), url = new URL(req.url()), path = url.pathname;
-      const json = (body, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
+      const json = (body: unknown, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
       const file = path.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/);
-      if (file && fs.existsSync(uiFile(file[1]))) return route.fulfill({contentType: file[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(file[1]), 'utf8')});
+      if (file && fs.existsSync(uiFile(file[1]!))) return route.fulfill({contentType: file[1]!.endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(file[1]!), 'utf8')});
       if (path.startsWith('/vendor/') && fs.existsSync(uiFile(path.slice(1)))) return route.fulfill({body: fs.readFileSync(uiFile(path.slice(1)))});
       if (/\.(?:js|ts)$/.test(path)) return route.fulfill({contentType: 'application/javascript', body: ''});
       if (path === '/') return route.fulfill({contentType: 'text/html', body: html});
@@ -55,9 +68,9 @@ const {unrouted} = require('./support/routes.cjs');
     // in a view transition (ui/app/router.ts routeChanged), a frame or more later, replacing #main. Draw the card after
     // that page is on the screen, or it overwrites the card and [data-alert-send-code] never appears.
     await page.waitForFunction(() => typeof inboxesAlerts === 'function' && S.me?.id && location.hash.startsWith('#/tools') && document.querySelector('#main #tools-root'));
-    const draw = admin => page.evaluate(async admin => {
-      let host = document.querySelector('#alerts-test-host');
-      if (!host) { document.querySelector('#main').innerHTML = '<div id="alerts-test-host"></div>'; host = document.querySelector('#alerts-test-host'); }
+    const draw = (admin: boolean) => page.evaluate(async (admin: boolean) => {
+      let host = document.querySelector<HTMLElement>('#alerts-test-host');
+      if (!host) { document.querySelector('#main')!.innerHTML = '<div id="alerts-test-host"></div>'; host = document.querySelector<HTMLElement>('#alerts-test-host')!; }
       window.ALERT_CTX = {admin, me: S.me, live: () => true};
       await inboxesAlerts(host, window.ALERT_CTX);
     }, admin);
@@ -69,7 +82,7 @@ const {unrouted} = require('./support/routes.cjs');
     await card.locator('[name=call_consent]').check();
     await card.locator('[data-alert-send-code]').click();
     await card.locator('[name=code]').waitFor();
-    assert.deepEqual(writes[0].body, {phone: '+14155550123', sms_consent: true, call_consent: true});
+    assert.deepEqual(writes[0]!.body, {phone: '+14155550123', sms_consent: true, call_consent: true});
     await card.locator('[name=code]').fill('123456');
     await card.locator('[data-alert-confirm] button').click();
     await card.locator('[data-alert-test]:enabled').waitFor();
@@ -77,20 +90,20 @@ const {unrouted} = require('./support/routes.cjs');
     await card.locator('[name=quiet]').uncheck();
     await card.locator('[name=monthly_cap]').first().fill('2');
     await card.locator('[data-alert-preferences] button').click();
-    await page.waitForFunction(() => document.querySelector('#ib-alert-cap')?.value === '2' && !document.querySelector('[name=quiet]')?.checked && !document.querySelector('[data-alert-preferences] button')?.disabled);
-    const saved = writes.find(w => w.path === '/api/v2/alerts/me');
+    await page.waitForFunction(() => document.querySelector<HTMLInputElement>('#ib-alert-cap')?.value === '2' && !document.querySelector<HTMLInputElement>('[name=quiet]')?.checked && !document.querySelector<HTMLButtonElement>('[data-alert-preferences] button')?.disabled);
+    const saved = writes.find(w => w.path === '/api/v2/alerts/me')!;
     assert.equal(saved.body.legal_mail, true); assert.equal(saved.body.quiet_start, ''); assert.equal(saved.body.quiet_end, '');
     assert.equal(saved.body.timezone, 'America/Los_Angeles');
     const companyCap = card.locator('[data-alert-company] input');
     await companyCap.fill('12');
     await companyCap.press('Enter');
-    await page.waitForFunction(() => document.querySelector('[data-alert-company] input')?.value === '12' && !document.querySelector('[data-alert-company] button')?.disabled);
-    assert.deepEqual(writes.find(w => w.path === '/api/v2/alerts/company').body, {monthly_cap: 12});
+    await page.waitForFunction(() => document.querySelector<HTMLInputElement>('[data-alert-company] input')?.value === '12' && !document.querySelector<HTMLButtonElement>('[data-alert-company] button')?.disabled);
+    assert.deepEqual(writes.find(w => w.path === '/api/v2/alerts/company')!.body, {monthly_cap: 12});
     await card.locator('[data-alert-test]').click();
     await page.locator('dialog.settings-confirm').waitFor();
     assert.equal(writes.filter(w => w.path.endsWith('/test')).length, 0, 'no paid send before confirming the disclosed price');
     await page.locator('[data-confirm-ok]').click();
-    await page.waitForFunction(() => [...document.querySelectorAll('.toast')].some(el => el.textContent.includes('Test accepted')));
+    await page.waitForFunction(() => [...(document.querySelectorAll('.toast') as unknown as Iterable<HTMLElement>)].some(el => el.textContent!.includes('Test accepted')));
     const tests = writes.filter(w => w.path.endsWith('/test'));
     assert.equal(tests.length, 3); assert.equal(new Set(tests.map(w => w.operation)).size, 1); assert.equal(receipts.size, 1);
     state.status = 'opted_out'; state.phone = '<img src=x onerror="window.ALERT_PWNED=1">';

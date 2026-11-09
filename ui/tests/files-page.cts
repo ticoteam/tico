@@ -4,12 +4,15 @@
 // team, pinned, archived) that shows as a count on the button and as chips under the row, and every filter is in the
 // address, so a view can be shared. Also: More paging, search, the empty, error and loading states, and opening a file.
 // Fixtures only, no network.
-const {chromium} = require('playwright');
+import type {Browser, LaunchOptions, Page, Route} from 'playwright';
+import type * as PageSupport from './support/page.cjs';
+import type * as RouteSupport from './support/routes.cjs';
+const {chromium} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const {html, uiFile} = require('./support/page.cjs');
-const {unrouted} = require('./support/routes.cjs');
+const {html, uiFile} = require('./support/page.cjs') as typeof PageSupport;
+const {unrouted} = require('./support/routes.cjs') as typeof RouteSupport;
 const shots = process.env.TICO_SCREENSHOT_DIR;
 
 const DESKTOP = {width: 1440, height: 900}, PHONE = {width: 390, height: 844};
@@ -22,15 +25,22 @@ const BOTS = [['cmo', 'AI CMO', 'marketing'], ['writer', 'Writer', 'marketing'],
   ['finance', 'Finance Bot', 'finance'], ['recruiter', 'Recruiter', 'people'], ['ops', 'Ops Lead', 'ops']]
   .map(([name, display_name, team]) => ({name, display_name, team, org_parent: '', host: 'keeper', status: 'active',
     can_chat: true, users: [], schedules: []}));
-const teamOf = bot => BOTS.find(b => b.name === bot)?.team;
+const teamOf = (bot: string) => BOTS.find(b => b.name === bot)?.team;
 
-const now = Date.now(), at = hours => new Date(now - hours * 36e5).toISOString();
-const row = (id, o) => ({id, name: o.title, title: o.title, bot: o.bot, library_kind: o.kind, locator: o.locator || 'tico_blob',
+const now = Date.now(), at = (hours: number) => new Date(now - hours * 36e5).toISOString();
+interface FileOpen {type: string; url: string}
+interface FileRow {id: string; name: string; title: string; bot: string; library_kind: string; locator: string; open: FileOpen | null | undefined;
+  last_activity_at: string; pins: string[]; archived: boolean; task_id: null}
+interface RowSpec {title: string; bot: string; kind: string; locator?: string; open?: FileOpen | null; h: number; pins?: string[]; archived?: boolean}
+interface Viewport {width: number; height: number}
+// What the fixture server was asked for and served: the page's list and search calls, and the file it opened.
+interface FetchState {files: FileRow[]; mode: string; listed: string[]; searched: (string | null)[]; opened: string[]}
+const row = (id: string, o: RowSpec): FileRow => ({id, name: o.title, title: o.title, bot: o.bot, library_kind: o.kind, locator: o.locator || 'tico_blob',
   open: 'open' in o ? o.open : {type: 'tico', url: '/api/v2/files/' + id}, last_activity_at: at(o.h), pins: o.pins || [],
   archived: !!o.archived, task_id: null});
 // A search hit carries an excerpt of its text; the list does not.
-const EXCERPT = {'file-funnel': 'Trial to paid, by week and plan'};
-const FILES = [
+const EXCERPT: Record<string, string> = {'file-funnel': 'Trial to paid, by week and plan'};
+const FILES: FileRow[] = [
   row('file-q4', {title: 'Q4 launch plan', bot: 'cmo', kind: 'document', locator: 'remote_link', open: {type: 'external', url: GDOC}, h: 0.2, pins: ['Ana']}),
   row('file-funnel', {title: 'Signup funnel', bot: 'engineer', kind: 'data', h: 2, pins: ['Ana', 'Chris']}),
   row('file-weekly', {title: 'Weekly report', bot: 'cmo', kind: 'page', h: 3, open: null}),
@@ -46,10 +56,10 @@ const FILES = [
 // Forty-six more, so the list pages: 50 a page, and More brings the other six (56 that are not archived).
 const GEN_BOTS = ['cmo', 'writer', 'sales', 'support', 'ops', 'recruiter'], GEN_KINDS = ['document', 'image', 'page', 'other', 'media'];
 for (let i = 0; i < 46; i++) FILES.push(row(`file-n${String(i).padStart(2, '0')}`, {title: `Note ${String(i + 1).padStart(2, '0')}`,
-  bot: GEN_BOTS[i % 6], kind: GEN_KINDS[i % 5], h: 100 + i * 17}));
+  bot: GEN_BOTS[i % 6]!, kind: GEN_KINDS[i % 5]!, h: 100 + i * 17}));
 
 // The server's filters, as GET /api/v2/files applies them: newest activity first.
-function listing(q, rows) {
+function listing(q: URLSearchParams, rows: FileRow[]): FileRow[] {
   const kind = q.get('kind'), bot = q.get('bot'), team = q.get('team'), since = q.get('since');
   return rows.filter(f => f.archived === (q.get('archived') === 'true') && (!kind || f.library_kind === kind)
     && (!bot || f.bot === bot) && (!team || teamOf(f.bot) === team) && (!since || f.last_activity_at >= since)
@@ -58,18 +68,18 @@ function listing(q, rows) {
 }
 
 // state: {files, mode ('error' or 'slow' or ''), listed, searched, opened} is what the page was served and asked for.
-async function open(browser, viewport, state, theme) {
+async function open(browser: Browser, viewport: Viewport, state: FetchState, theme: string) {
   const page = await browser.newPage({viewport, serviceWorkers: 'block', hasTouch: viewport.width < 760});
-  const errors = [];
-  page.on('pageerror', error => errors.push(error.message));
+  const errors: string[] = [];
+  page.on('pageerror', (error: Error) => errors.push(error.message));
   await page.addInitScript(t => { try { localStorage.setItem('tico.theme', t); } catch {} }, theme);
-  await page.route('**/*', async route => {
+  await page.route('**/*', async (route: Route) => {
     const url = new URL(route.request().url()), p = url.pathname, q = url.searchParams;
-    const json = (body, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
+    const json = (body: unknown, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
     if (/\/marked\.min\.js$/.test(p)) return route.fulfill({contentType: 'application/javascript', body: 'window.marked={parse:s=>String(s)}'});
     if (url.origin !== 'https://tico-ui.test') return route.abort();
     const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|css))$/);
-    if (ui && fs.existsSync(uiFile(ui[1]))) return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]), 'utf8')});
+    if (ui && fs.existsSync(uiFile(ui[1]!))) return route.fulfill({contentType: ui[1]!.endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]!), 'utf8')});
     if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
     // The icon font (ui/vendor/fonts): without it every icon is its ligature word.
     if (p.startsWith('/vendor/fonts/') && fs.existsSync(path.join(__dirname, '..', p))) return route.fulfill({contentType: 'font/woff2', body: fs.readFileSync(path.join(__dirname, '..', p))});
@@ -99,36 +109,38 @@ async function open(browser, viewport, state, theme) {
         .map(f => ({...f, hit: true, url: null, updated_at: f.last_activity_at, excerpt: EXCERPT[f.id] || ''}))});
     }
     const file = p.match(/^\/api\/v2\/files\/([^/]+)$/);
-    if (file) { state.opened.push(file[1]); return route.fulfill({contentType: 'text/plain', body: 'Trial,Paid\n'}); }
+    if (file) { state.opened.push(file[1]!); return route.fulfill({contentType: 'text/plain', body: 'Trial,Paid\n'}); }
     if (p.endsWith('/watch')) return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});
     return json(unrouted(p));
   });
   return {page, errors};
 }
 
-const fresh = (files = FILES, mode = '') => ({files, mode, listed: [], searched: [], opened: []});
-const titles = page => page.locator('.lf-row .lf-title').allInnerTexts();
+const fresh = (files: FileRow[] = FILES, mode = ''): FetchState => ({files, mode, listed: [], searched: [], opened: []});
+const titles = (page: Page) => page.locator('.lf-row .lf-title').allInnerTexts();
+// Kept for parity with the spike; unused today, so only its type is referenced here (no runtime change).
+export type TitlesHelper = typeof titles;
 // Waits until the rows on the page are exactly these titles, in this order (a filter change reloads the list).
-async function settle(page, want) {
-  await page.waitForFunction(w => JSON.stringify([...document.querySelectorAll('.lf-row .lf-title')].map(e => e.textContent)) === JSON.stringify(w),
+async function settle(page: Page, want: string[]) {
+  await page.waitForFunction(w => JSON.stringify([...(document.querySelectorAll('.lf-row .lf-title') as unknown as Iterable<Element>)].map(e => e.textContent)) === JSON.stringify(w),
     want, {timeout: 5000});
 }
-const popOpen = page => page.evaluate(() => document.getElementById('lf-filter-pop').matches(':popover-open'));
-async function openPopover(page) {
+const popOpen = (page: Page) => page.evaluate(() => document.getElementById('lf-filter-pop')!.matches(':popover-open'));
+async function openPopover(page: Page) {
   if (!(await popOpen(page))) await page.locator('.lf-fbtn').click();
   await page.locator('#lf-filter-pop').waitFor({state: 'visible'});
 }
 // The popover's entrance has finished (a screenshot taken mid-animation shows nothing). Looping animations (the loading
 // shimmer) never finish, so only the finite ones are waited for, and no longer than a second.
-const settled = page => page.evaluate(() => Promise.race([
+const settled = (page: Page) => page.evaluate(() => Promise.race([
   Promise.all(document.getAnimations().filter(a => a.effect?.getComputedTiming().endTime !== Infinity)
     .map(a => a.finished.catch(() => {}))),
   new Promise(r => setTimeout(r, 1000))]));
-async function until(test, ms = 5000) {
+async function until(test: () => boolean, ms = 5000) {
   for (const end = Date.now() + ms; !test(); ) { if (Date.now() > end) throw new Error('timed out'); await new Promise(r => setTimeout(r, 50)); }
 }
 
-async function desktop(browser) {
+async function desktop(browser: Browser) {
   const state = fresh();
   const {page, errors} = await open(browser, DESKTOP, state, 'dark');
   await page.goto('https://tico-ui.test/#/library/files');
@@ -141,7 +153,7 @@ async function desktop(browser) {
   assert(await page.locator('.lf-cols').isVisible(), 'desktop: the heads show');
   assert.equal(await page.locator('.lf-meta').first().isVisible(), false, 'desktop: no Kind · Bot line under the name');
   const rows = await page.locator('.lf-row').evaluateAll(els => els.slice(0, 12).map(el => {
-    const box = c => el.querySelector(c).getBoundingClientRect(), r = el.getBoundingClientRect();
+    const box = (c: string) => el.querySelector(c)!.getBoundingClientRect(), r = el.getBoundingClientRect();
     return {h: r.height, titleH: box('.lf-title').height, right: r.right, whenRight: box('.lf-when').right,
       x: ['.lf-name', '.lf-kind', '.lf-by', '.lf-team', '.lf-when'].map(c => Math.round(box(c).left))};
   }));
@@ -172,13 +184,13 @@ async function desktop(browser) {
   // The filter popover: its sections, each pick is a chip, the count on the button, the address, the ticks.
   await page.locator('.lf-fbtn').click();
   await page.locator('#lf-filter-pop').waitFor({state: 'visible'});
-  assert.deepEqual(await page.locator('#lf-filter-pop .lf-sec').evaluateAll(els => els.map(e => e.getAttribute('aria-label'))),
+  assert.deepEqual(await page.locator('#lf-filter-pop .lf-sec').evaluateAll(els => els.map((e: Element) => e.getAttribute('aria-label'))),
     ['Kind', 'Updated', 'Bot', 'Team', 'Show'], 'popover: its sections');
-  await page.waitForFunction(() => document.querySelector('.lf-fbtn').getAttribute('aria-expanded') === 'true', null, {timeout: 5000});
+  await page.waitForFunction(() => document.querySelector('.lf-fbtn')!.getAttribute('aria-expanded') === 'true', null, {timeout: 5000});
   assert.equal(await page.locator('#lf-filter-pop .tl-menu-q').count(), 1, 'popover: a find box for nine bots');
   assert.equal(await page.locator('#lf-filter-pop').evaluate(el => el.scrollTop), 0, 'popover: opens with Kind at the top');
   assert(await page.locator('#lf-filter-pop').evaluate(el => el.scrollHeight <= el.clientHeight + 1), 'popover: all of it fits a 900px window');
-  assert.equal(await page.evaluate(() => document.activeElement?.dataset.lfSet), 'kind', 'popover: focus goes to the first pick, not the bot find box');
+  assert.equal(await page.evaluate(() => (document.activeElement as HTMLElement | null)?.dataset.lfSet), 'kind', 'popover: focus goes to the first pick, not the bot find box');
   await page.locator('[data-lf-set="kind"][data-lf-value="data"]').click();
   await settle(page, ['Signup funnel', 'Budget 2026', 'Traffic export']);
   assert.equal(await page.locator('.lf-fbn').textContent(), '1', 'popover: the count on the button');
@@ -190,7 +202,7 @@ async function desktop(browser) {
 
   // The find box narrows the bot list, and a bot pick narrows the rows.
   await page.locator('#lf-filter-pop .tl-menu-q').fill('engineer');
-  const bots = await page.locator('#lf-filter-pop .lf-sec[aria-label="Bot"] .tl-mi').evaluateAll(els => els.filter(e => !e.hidden).map(e => e.dataset.lfValue));
+  const bots = await page.locator('#lf-filter-pop .lf-sec[aria-label="Bot"] .tl-mi').evaluateAll(els => els.filter(e => !(e as HTMLElement).hidden).map(e => (e as HTMLElement).dataset.lfValue));
   assert.deepEqual(bots, ['engineer'], 'popover: the find box narrows the bots');
   await page.locator('[data-lf-set="bot"][data-lf-value="engineer"]').click();
   await settle(page, ['Signup funnel']);
@@ -243,7 +255,7 @@ async function desktop(browser) {
   assert(await page.locator('.lf-row').first().evaluate(el => el.getBoundingClientRect().height) <= 44, 'search: a hit is still one line');
   assert.match(page.url(), /q=signup/, 'search: in the address');
   await page.locator('.lf-q').fill('zzz');
-  await page.waitForFunction(() => document.querySelector('.lf-list').textContent.includes('Nothing matches.'));
+  await page.waitForFunction(() => document.querySelector('.lf-list')!.textContent!.includes('Nothing matches.'));
   await page.locator('.lf-q').fill('');
   await page.waitForFunction(() => document.querySelectorAll('.lf-row').length === 50);
 
@@ -255,7 +267,7 @@ async function desktop(browser) {
   console.log('files page (desktop 1440): columns and one line a row, More, the filter popover and its chips, the address, archived, search, opening a file');
 }
 
-async function desktopLight(browser) {
+async function desktopLight(browser: Browser) {
   const {page, errors} = await open(browser, DESKTOP, fresh(), 'light');
   await page.goto('https://tico-ui.test/#/library/files');
   await page.locator('.lf-row').first().waitFor();
@@ -265,7 +277,7 @@ async function desktopLight(browser) {
   console.log('files page (desktop 1440, light): the default list');
 }
 
-async function phone(browser) {
+async function phone(browser: Browser) {
   const state = fresh();
   const {page, errors} = await open(browser, PHONE, state, 'dark');
   await page.goto('https://tico-ui.test/#/library/files');
@@ -279,17 +291,17 @@ async function phone(browser) {
   assert.match((await signup.locator('.lf-meta').innerText()).trim(), /^Data · Engineering Lead · \S/, 'phone: Kind · Bot · time under the name');
   const heights = await page.locator('.lf-row').evaluateAll(els => els.slice(0, 10).map(el => el.getBoundingClientRect().height));
   for (const h of heights) assert(h >= 48 && h <= 76, `phone: two lines a row, got ${h}`);
-  const title = await signup.locator('.lf-title').boundingBox(), meta = await signup.locator('.lf-meta').boundingBox();
+  const title = (await signup.locator('.lf-title').boundingBox())!, meta = (await signup.locator('.lf-meta').boundingBox())!;
   assert(title.y + title.height <= meta.y + 1, 'phone: the name is above its line');
   // The search and the filter button share the top row, and the page does not scroll sideways.
-  const qBox = await page.locator('.lf-q').boundingBox(), fBox = await page.locator('.lf-fbtn').boundingBox();
+  const qBox = (await page.locator('.lf-q').boundingBox())!, fBox = (await page.locator('.lf-fbtn').boundingBox())!;
   assert(Math.abs((qBox.y + qBox.height / 2) - (fBox.y + fBox.height / 2)) < 4, 'phone: the search and the filter share a row');
   assert(qBox.x < fBox.x, 'phone: the filter sits beside the search');
   assert(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), 'phone: no sideways scroll');
 
   // The popover on a phone: a sheet within the screen; a pick works.
   await openPopover(page);
-  const sheet = await page.locator('#lf-filter-pop').boundingBox();
+  const sheet = (await page.locator('#lf-filter-pop').boundingBox())!;
   assert(sheet.width <= PHONE.width, 'phone: the filters fit the screen');
   await settled(page);
   if (shots) await page.screenshot({path: path.join(shots, 'files-phone-popover-dark.png')});
@@ -297,14 +309,14 @@ async function phone(browser) {
   await settle(page, ['Signup funnel', 'Budget 2026', 'Traffic export']);
   assert.equal(await page.locator('.lf-bar .tl-chip').count(), 1, 'phone: the pick is a chip');
   await page.keyboard.press('Escape');
-  await page.waitForFunction(() => !document.getElementById('lf-filter-pop').matches(':popover-open'));
+  await page.waitForFunction(() => !document.getElementById('lf-filter-pop')!.matches(':popover-open'));
   assert(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), 'phone with chips: no sideways scroll');
   assert.deepEqual(errors, [], 'phone: page errors');
   await page.close();
   console.log('files page (phone 390): two lines a row, search and filter on one row, the filter popover as a sheet');
 }
 
-async function states(browser) {
+async function states(browser: Browser) {
   const {page: empty, errors: emptyErrors} = await open(browser, DESKTOP, fresh([]), 'dark');
   await empty.goto('https://tico-ui.test/#/library/files');
   await empty.locator('.lf-list').getByText('No files yet.').waitFor();
@@ -333,7 +345,7 @@ async function states(browser) {
 }
 
 (async () => {
-  const browser = await chromium.launch({headless: true, channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined});
+  const browser = await chromium.launch({headless: true, channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined} as LaunchOptions);
   try {
     await desktop(browser);
     await desktopLight(browser);

@@ -3,16 +3,19 @@
 // else gets the ask to the owner, with no link. Built-in bots, other tasks, done tasks and a connected, installed team
 // get no card. The team's answer is read once per page, and visiting Tools › GitHub asks again. Fixtures only, no
 // network. TICO_SCREENSHOT_DIR keeps the bot page and the task at desktop and phone width, light and dark.
-const {chromium} = require('playwright');
+import type {Browser, Page, LaunchOptions, Route} from 'playwright';
+import type * as PageSupport from './support/page.cjs';
+import type * as RouteSupport from './support/routes.cjs';
+const {chromium} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const {html, uiFile} = require('./support/page.cjs');
-const {unrouted} = require('./support/routes.cjs');
+const {html, uiFile} = require('./support/page.cjs') as typeof PageSupport;
+const {unrouted} = require('./support/routes.cjs') as typeof RouteSupport;
 const shots = process.env.TICO_SCREENSHOT_DIR;
 
-const ago = minutes => new Date(Date.now() - minutes * 60000).toISOString();
-const task = (id, title, over = {}) => ({id, title, body: 'Details.', owner_id: 'bot:botops', requester_id: 'human:ana', status: 'doing',
+const ago = (minutes: number) => new Date(Date.now() - minutes * 60000).toISOString();
+const task = (id: string, title: string, over: Record<string, unknown> = {}) => ({id, title, body: 'Details.', owner_id: 'bot:botops', requester_id: 'human:ana', status: 'doing',
   lane: 'company', rank: null, labels: [], tags: [], links: [], parts: {total: 0, done: 0}, version: 1, created_at: ago(30), updated_at: ago(5), ...over});
 const TASKS = [
   task('t-build', 'Build a bot: Ops', {body: 'Set up the Ops bot for the release checks.'}),
@@ -27,22 +30,22 @@ const BOTS = [
 ];
 
 // ownerName is the owner's name the config carries ('' for none): a non-owner's card names the owner, or says "the owner".
-async function open(browser, {viewport = {width: 1280, height: 900}, colorScheme = 'light', owner = true, connected = false, ownerName = 'Ana'}) {
+async function open(browser: Browser, {viewport = {width: 1280, height: 900}, colorScheme = 'light', owner = true, connected = false, ownerName = 'Ana'}: {viewport?: {width: number; height: number}; colorScheme?: string; owner?: boolean; connected?: boolean; ownerName?: string}) {
   const context = await browser.newContext({viewport, serviceWorkers: 'block', hasTouch: viewport.width < 760, isMobile: viewport.width < 760});
-  await context.addInitScript(theme => { try { localStorage.setItem('tico.theme', theme); } catch {} }, colorScheme);
+  await context.addInitScript((theme: string) => { try { localStorage.setItem('tico.theme', theme); } catch {} }, colorScheme);
   const page = await context.newPage();
-  const errors = [];
+  const errors: string[] = [];
   const counts = {repositories: 0};
-  page.on('pageerror', error => errors.push(error.message));
-  page.on('request', request => { if (new URL(request.url()).pathname === '/api/v2/repositories') counts.repositories += 1; });
-  await page.route('**/*', route => {
+  page.on('pageerror', (error: Error) => errors.push(error.message));
+  page.on('request', (request: {url(): string}) => { if (new URL(request.url()).pathname === '/api/v2/repositories') counts.repositories += 1; });
+  await page.route('**/*', (route: Route) => {
     const url = new URL(route.request().url()), p = url.pathname;
-    const json = body => route.fulfill({contentType: 'application/json', body: JSON.stringify(body)});
+    const json = (body: unknown) => route.fulfill({contentType: 'application/json', body: JSON.stringify(body)});
     if (/\/marked\.min\.js$/.test(p)) return route.fulfill({contentType: 'application/javascript', body: 'window.marked={parse:s=>String(s)}'});
     if (url.origin !== 'https://tico-ui.test') return route.abort();
     const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|css))$/);
-    if (ui && fs.existsSync(uiFile(ui[1])))
-      return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]), 'utf8')});
+    if (ui && fs.existsSync(uiFile(ui[1]!)))
+      return route.fulfill({contentType: ui[1]!.endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]!), 'utf8')});
     if (p.endsWith('.js')) return route.fulfill({contentType: 'application/javascript', body: ''});
     if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
     const config = {version: '0.1.0', app_name: 'Tico', ...(ownerName ? {owner_name: ownerName} : {})};
@@ -66,8 +69,8 @@ async function open(browser, {viewport = {width: 1280, height: 900}, colorScheme
 
 // The repository read the card waits for: a bot's page and a task's page ask GET /v2/repositories once per page, so a
 // later visit in the same page waits for nothing (read: false).
-async function visit(page, url, {read = true} = {}) {
-  const seen = read ? page.waitForResponse(r => r.url().endsWith('/api/v2/repositories')) : null;
+async function visit(page: Page, url: string, {read = true}: {read?: boolean} = {}) {
+  const seen = read ? page.waitForResponse((r: {url(): string}) => r.url().endsWith('/api/v2/repositories')) : null;
   await page.goto(url);
   if (seen) await seen;
   await page.locator(url.includes('/task/') ? '.tmodal-main' : '#bot-banners').first().waitFor({state: 'attached'});
@@ -77,12 +80,12 @@ async function visit(page, url, {read = true} = {}) {
 // The bot's card sits in its host; a task's card sits in the task's host. The task modal can stay open over the bot
 // page, so each card is found in its own host, never by class alone.
 const host = (inTask = false) => (inTask ? '[data-gh-nudge-task]' : '#bot-github-host');
-const card = (page, inTask = false) => page.locator(`${host(inTask)} .gh-nudge`);
-const sentence = (page, inTask = false) => card(page, inTask).locator('span').first().textContent();
-const link = (page, inTask = false) => page.locator(`${host(inTask)} .gh-nudge a[data-gh-connect]`);
+const card = (page: Page, inTask = false) => page.locator(`${host(inTask)} .gh-nudge`);
+const sentence = (page: Page, inTask = false) => card(page, inTask).locator('span').first().textContent();
+const link = (page: Page, inTask = false) => page.locator(`${host(inTask)} .gh-nudge a[data-gh-connect]`);
 
 (async () => {
-  const browser = await chromium.launch({headless: true, channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined});
+  const browser = await chromium.launch({headless: true, channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined} as LaunchOptions);
   try {
     {
       // The owner of a bot someone made gets the card with the one link, to Tools. The task on the same page draws from
@@ -102,7 +105,7 @@ const link = (page, inTask = false) => page.locator(`${host(inTask)} .gh-nudge a
       await page.evaluate(() => { location.hash = '#/tools/github'; });
       await page.waitForTimeout(300);
       const beforeReturn = counts.repositories;
-      const asked = page.waitForResponse(r => r.url().endsWith('/api/v2/repositories'));
+      const asked = page.waitForResponse((r: {url(): string}) => r.url().endsWith('/api/v2/repositories'));
       await page.evaluate(() => { location.hash = '#/bot/ops'; });
       await asked;
       await card(page).waitFor({state: 'attached'});
@@ -182,7 +185,7 @@ const link = (page, inTask = false) => page.locator(`${host(inTask)} .gh-nudge a
     if (shots) {
       // The card at both widths, in both themes; the phone pass also checks the page does not scroll sideways.
       for (const colorScheme of ['light', 'dark']) {
-        for (const [label, viewport] of [['desktop', {width: 1440, height: 900}], ['phone', {width: 390, height: 844}]]) {
+        for (const [label, viewport] of [['desktop', {width: 1440, height: 900}], ['phone', {width: 390, height: 844}]] as const) {
           const {page, context, errors} = await open(browser, {colorScheme, viewport});
           await visit(page, 'https://tico-ui.test/#/bot/ops');
           if (label === 'phone') {

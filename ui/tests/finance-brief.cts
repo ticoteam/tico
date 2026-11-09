@@ -2,12 +2,15 @@
 // lines under a "What changed" heading and the time they were last worked out; a brief with no lines leaves the slot
 // empty; a failed read leaves the page working. Phone width: no sideways scroll. The API is faked: GET
 // /api/v2/finance/brief answers with the lines the test sets. TICO_UI_SHOTS=<dir> saves screenshots.
-const {chromium} = require('playwright');
+import type {Browser, Page, Route} from 'playwright';
+import type * as PageSupport from './support/page.cjs';
+import type * as RouteSupport from './support/routes.cjs';
+const {chromium} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const {html, uiFile} = require('./support/page.cjs');
-const {unrouted} = require('./support/routes.cjs');
+const {html, uiFile} = require('./support/page.cjs') as typeof PageSupport;
+const {unrouted} = require('./support/routes.cjs') as typeof RouteSupport;
 const uiDir = path.join(__dirname, '..');
 const PHONE = {width: 390, height: 844}, DESKTOP = {width: 1440, height: 900};
 
@@ -26,15 +29,18 @@ const access = {
 };
 
 // `brief`: the body GET /api/v2/finance/brief answers with, or 'fail' for a 500.
-async function open(browser, {viewport = DESKTOP, brief = {lines: LINES, as_of: AS_OF, changed_since: null, version: 1}} = {}) {
+interface Brief {lines: string[]; as_of: string; changed_since: string | null; version: number}
+declare const S: {me?: unknown};
+
+async function open(browser: Browser, {viewport = DESKTOP, brief = {lines: LINES, as_of: AS_OF, changed_since: null, version: 1}}: {viewport?: {width: number; height: number}; brief?: Brief | 'fail'} = {}) {
   const me = {id: 'ana', name: 'Ana Silva', email: 'ana@acme.example', role: 'owner', company_role: 'owner', cloud: true};
   const config = {company_name: 'Acme Lights'};
   const page = await browser.newPage({viewport, serviceWorkers: 'block', hasTouch: viewport === PHONE});
-  const errors = [];
-  page.on('pageerror', e => errors.push(e.message));
-  await page.route('**/*', async route => {
+  const errors: string[] = [];
+  page.on('pageerror', (e: Error) => errors.push(e.message));
+  await page.route('**/*', async (route: Route) => {
     const req = route.request(), url = new URL(req.url()), p = url.pathname;
-    const json = (body, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
+    const json = (body: unknown, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
     if (url.origin !== 'http://tico-ui.test') return route.abort();
     if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
     const file = p.startsWith('/tico/ui/') ? uiFile(p.slice(9)) : p.startsWith('/vendor/') ? path.join(uiDir, p) : '';
@@ -60,8 +66,8 @@ async function open(browser, {viewport = DESKTOP, brief = {lines: LINES, as_of: 
   return {page, errors};
 }
 
-const sideways = page => page.evaluate(() => [document.documentElement, document.querySelector('#main')].some(el => el && el.scrollWidth > el.clientWidth + 1));
-async function shot(page, name) {
+const sideways = (page: Page) => page.evaluate(() => [document.documentElement, document.querySelector('#main')].some(el => el && el.scrollWidth > el.clientWidth + 1));
+async function shot(page: Page, name: string) {
   const dir = process.env.TICO_UI_SHOTS;
   if (dir) await page.screenshot({path: path.join(dir, name + '.png'), fullPage: true});
 }

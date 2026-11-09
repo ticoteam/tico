@@ -7,16 +7,19 @@
 // carries its chip, and a member cannot see one; failed, no-model and nothing-published runs say so; no page scrolls sideways
 // at 400px.
 // TICO_SCREENSHOT_DIR=<dir> saves review screenshots (desktop in both themes, and a phone).
-const {chromium} = require('playwright');
+import type {Browser, Page, Route} from 'playwright';
+import type * as PageSupport from './support/page.cjs';
+import type * as RouteSupport from './support/routes.cjs';
+const {chromium} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const {html, uiFile} = require('./support/page.cjs');
-const {unrouted} = require('./support/routes.cjs');
+const {html, uiFile} = require('./support/page.cjs') as typeof PageSupport;
+const {unrouted} = require('./support/routes.cjs') as typeof RouteSupport;
 const uiDir = path.join(__dirname, '..');
 
 const shots = process.env.TICO_SCREENSHOT_DIR;
-const shot = async (page, name, themes = ['dark', 'light']) => {
+const shot = async (page: Page, name: string, themes = ['dark', 'light']) => {
   if (!shots) return;
   for (const theme of themes) {
     await page.evaluate(t => { document.documentElement.dataset.theme = t; }, theme);
@@ -26,7 +29,9 @@ const shot = async (page, name, themes = ['dark', 'light']) => {
 };
 const PHONE = {width: 400, height: 844}, DESKTOP = {width: 1280, height: 900};
 
-const bot = (name, display_name, org_parent, over) => ({name, display_name, org_parent, host: 'keeper', status: 'active', can_chat: true, ...over});
+interface Run { id: string; lens: string; name: string; applies_to: string; on_draft: boolean; strategy_n: number | null; status: string; answers: Record<string, unknown>; result: unknown; applied: unknown[]; sharpen_tasks: Record<string, string>; proposal_id: string | null; created_by: string; created_at: string; finished_at: string | null; error: unknown }
+type Sent = [string, string, Record<string, unknown>];
+const bot = (name: string, display_name: string, org_parent: string, over?: Record<string, unknown>) => ({name, display_name, org_parent, host: 'keeper', status: 'active', can_chat: true, ...over});
 const bots = [bot('coo', 'Assistant', ''), bot('botops', 'BotOps', ''), bot('librarian', 'Librarian', ''), bot('goal-manager', 'Strategy Bot', 'p:ana', {reports_to: ''})];
 const bets = () => [
   {id: 'b-price', statement: 'Price at half the market and still make money.', why: '', rules_out: 'Premium add-ons.',
@@ -36,7 +41,7 @@ const bets = () => [
   {id: 'b-old', statement: 'Clean only offices.', why: '', rules_out: '', wrong_if: null, cites: [], status: 'retired', rank: 2, since_n: null, until_n: 1},
 ];
 
-const step = (key, ask, input, over = {}) => ({key, ask, input, ...over});
+const step = (key: string, ask: string, input: string, over: Record<string, unknown> = {}) => ({key, ask, input, ...over});
 const LENSES = [
   {id: 'playing-to-win', name: 'Playing to Win', applies_to: 'strategy', description: 'In the style of Playing to Win: where to play and how to win.', minutes: 15,
    steps: [step('aspiration', 'What does winning look like?', 'text')], output: {chart: 'cascade', sections: []}, sharpen: []},
@@ -64,7 +69,7 @@ const power = {kind: 'power_table', rows: [
 const cascade = {kind: 'cascade', steps: [{title: 'Aspiration', text: 'Every home in Austin.', weak: false}, {title: 'Where to play', text: 'Too wide.', weak: true}]};
 const table = {kind: 'table', columns: ['Segment', 'Size', 'Fit'], rows: [['Small offices', '4,200', 'High'], ['Homes', '90,000', 'Medium']]};
 
-const done = (id, lens, over = {}, result = {}) => ({id, lens, name: LENSES.find(l => l.id === lens)?.name || lens, applies_to: LENSES.find(l => l.id === lens)?.applies_to || 'strategy',
+const done = (id: string, lens: string, over: Record<string, unknown> = {}, result: Record<string, unknown> = {}) => ({id, lens, name: LENSES.find(l => l.id === lens)?.name || lens, applies_to: LENSES.find(l => l.id === lens)?.applies_to || 'strategy',
   on_draft: false, strategy_n: 1, status: 'done', answers: {rivals: ['Acme Clean']}, applied: [], sharpen_tasks: {}, proposal_id: null, created_by: 'human:ana',
   created_at: '2026-10-24T09:00:00Z', finished_at: '2026-10-24T09:01:00Z', error: null,
   result: {summary: 'Acme wins on price and setup, and loses on reporting.', sections: [{title: 'The curve today', body: 'Rivals lead on **reporting**.\n\n- Price: we lead\n- Reporting: they lead'}],
@@ -73,21 +78,21 @@ const done = (id, lens, over = {}, result = {}) => ({id, lens, name: LENSES.find
     changes: [{label: "Add 'per-seat pricing' to What we won't do", payload: {sections: {not: 'No per-seat pricing.'}}}, {label: 'Add a Reporting bet', payload: {}}],
     sharpen: ['Competitor pricing for Acme Clean', 'Review-site complaints'], ...result}, ...over});
 
-async function open(browser, {role = 'owner', route = '#/strategy/lenses', viewport = DESKTOP, published = true, runs = [], noPublished = false, slow = false} = {}) {
+async function open(browser: Browser, {role = 'owner', route = '#/strategy/lenses', viewport = DESKTOP, published = true, runs = [] as Run[], noPublished = false, slow = false} = {}) {
   const page = await browser.newPage({viewport, serviceWorkers: 'block', locale: 'en-GB'});
   // The clock is fixed in October: a run the stub starts is stamped with it, and the page shows its date ("27 Oct").
   await page.clock.install({time: new Date('2026-10-27T12:00:00Z')});
-  const errors = [], sent = [];
-  page.on('pageerror', e => errors.push(e.message));
+  const errors: string[] = [], sent: Sent[] = [];
+  page.on('pageerror', (e: Error) => errors.push(e.message));
   const owner = role === 'owner';
-  const st = {revision: 7, runs: runs.map(r => ({...r})), gets: {}, conflictOnce: true, tasks: 0};
+  const st = {revision: 7, runs: runs.map(r => ({...r})), gets: {} as Record<string, number>, conflictOnce: true, tasks: 0};
   const v1 = {id: 'v-1', n: 1, status: 'published', summary: 'Acme cleans homes and small offices.', vision: '', sections: {}, bets: bets().filter(b => b.status !== 'retired'), revision: 7};
   const strategy = () => ({...(owner ? {draft: {...v1, id: 'v-d', n: null, status: 'draft', revision: st.revision}} : {}), current: published ? v1 : null,
     bets: owner ? bets() : v1.bets, label: 'Bets', label_one: 'Bet', may_edit: owner});
-  const visible = r => owner || !r.on_draft;
-  await page.route('**/*', async route => {
+  const visible = (r: Run) => owner || !r.on_draft;
+  await page.route('**/*', async (route: Route) => {
     const req = route.request(), url = new URL(req.url()), p = url.pathname, method = req.method();
-    const json = (body, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
+    const json = (body: unknown, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
     if (url.origin !== 'http://tico-ui.test') return route.abort();
     if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
     const file = p.startsWith('/tico/ui/') ? uiFile(p.slice(9)) : p.startsWith('/vendor/') ? path.join(uiDir, p) : '';
@@ -108,7 +113,7 @@ async function open(browser, {role = 'owner', route = '#/strategy/lenses', viewp
       if (!run || !visible(run)) return json({error: {code: 'not_found', detail: 'No such run'}}, 404);
       // A run that is running answers once more as running, then as done (the page polls every two seconds).
       st.gets[run.id] = (st.gets[run.id] || 0) + 1;
-      if (run.status === 'running' && st.gets[run.id] > 1) Object.assign(run, done(run.id, run.lens, {answers: run.answers, on_draft: run.on_draft, created_at: run.created_at}));
+      if (run.status === 'running' && st.gets[run.id]! > 1) Object.assign(run, done(run.id, run.lens, {answers: run.answers, on_draft: run.on_draft, created_at: run.created_at}));
       return json(run);
     }
     const start = p.match(/^\/api\/v2\/lenses\/([^/]+)\/runs$/);
@@ -117,7 +122,7 @@ async function open(browser, {role = 'owner', route = '#/strategy/lenses', viewp
       sent.push(['POST', `/lenses/${start[1]}/runs`, body]);
       if (!owner) return json({error: {code: 'forbidden', detail: 'Only the owner'}}, 403);
       if (body.on === 'published' && (!published || noPublished)) return json({error: {code: 'no_published', detail: 'Nothing is published'}}, 422);
-      const lens = LENSES.find(l => l.id === start[1]);
+      const lens = LENSES.find(l => l.id === start[1])!;
       const run = {id: 'r-new' + st.runs.length, lens: lens.id, name: lens.name, applies_to: lens.applies_to, on_draft: body.on === 'draft', strategy_n: body.on === 'draft' ? null : 1,
         status: slow ? 'no_model' : 'running', answers: body.answers, result: null, applied: [], sharpen_tasks: {}, proposal_id: null, created_by: 'human:ana', created_at: '2026-10-27T12:00:00.000Z', finished_at: null, error: null};
       st.runs.unshift(run);
@@ -125,7 +130,7 @@ async function open(browser, {role = 'owner', route = '#/strategy/lenses', viewp
     }
     const apply = p.match(/^\/api\/v2\/lenses\/runs\/([^/]+)\/apply$/);
     if (apply) {
-      const body = req.postDataJSON(), run = st.runs.find(r => r.id === apply[1]);
+      const body = req.postDataJSON(), run = st.runs.find(r => r.id === apply[1])!;
       sent.push(['POST', '/apply', body]);
       // The first write finds the draft changed elsewhere.
       if (st.conflictOnce) { st.conflictOnce = false; st.revision++; return json({error: {code: 'conflict', detail: 'The draft changed', revision: st.revision}}, 409); }
@@ -135,10 +140,10 @@ async function open(browser, {role = 'owner', route = '#/strategy/lenses', viewp
     }
     const sharpen = p.match(/^\/api\/v2\/lenses\/runs\/([^/]+)\/sharpen\/(\d+)$/);
     if (sharpen) {
-      const run = st.runs.find(r => r.id === sharpen[1]);
+      const run = st.runs.find(r => r.id === sharpen[1])!;
       sent.push(['POST', `/sharpen/${sharpen[2]}`, req.postDataJSON()]);
-      if (!run.sharpen_tasks[sharpen[2]]) run.sharpen_tasks[sharpen[2]] = 'task-' + ++st.tasks;
-      return json({run, task_id: run.sharpen_tasks[sharpen[2]]});
+      if (!run.sharpen_tasks[sharpen[2]!]) run.sharpen_tasks[sharpen[2]!] = 'task-' + ++st.tasks;
+      return json({run, task_id: run.sharpen_tasks[sharpen[2]!]});
     }
     if (p === '/api/v2/kpis') return json({kpis: []});
     if (p === '/api/v2/goals/tree') return json({goals: [], owners: {}, other_kpis: [], proposals: []});
@@ -150,7 +155,7 @@ async function open(browser, {role = 'owner', route = '#/strategy/lenses', viewp
   return {page, errors, sent, st};
 }
 
-const sideways = page => page.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth + 1);
+const sideways = (page: Page) => page.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth + 1);
 const PAST = [done('r-blue', 'blue-ocean'), done('r-draft', 'scenarios', {on_draft: true, strategy_n: null}, {chart: matrix}),
   done('r-where', 'where-to-play', {strategy_n: null, created_by: 'bot:librarian'}, {chart: table, changes: [], sharpen: []})];
 
@@ -209,7 +214,7 @@ const PAST = [done('r-blue', 'blue-ocean'), done('r-draft', 'scenarios', {on_dra
       assert.equal(await dlg.locator('.lens-rows input').count(), 3, 'Enter adds a row');
       await page.keyboard.press('Enter');   // an empty last row moves on
       await dlg.locator('.lens-ask', {hasText: 'What do buyers weigh'}).waitFor();
-      assert.deepEqual(await dlg.locator('[data-lens-rows] input').evaluateAll(a => a.map(x => x.value)), ['']);
+      assert.deepEqual(await dlg.locator('[data-lens-rows] input').evaluateAll(a => a.map(x => (x as HTMLInputElement).value)), ['']);
       await dlg.locator('[data-lens-rows] input').fill('Price');
       await page.keyboard.press('Enter');
       await page.keyboard.type('Setup time');
@@ -220,7 +225,7 @@ const PAST = [done('r-blue', 'blue-ocean'), done('r-draft', 'scenarios', {on_dra
       await dlg.locator('.lens-scores').waitFor();
       assert.deepEqual(await dlg.locator('.lens-scores thead th:not(:first-child)').allInnerTexts(), ['Us', 'Acme Clean', 'Doing nothing']);
       assert.deepEqual(await dlg.locator('.lens-scores tbody th').allInnerTexts(), ['Price', 'Setup time', 'Reporting']);
-      const cell = (r, c) => dlg.locator(`.lens-scores input[data-r="${r}"][data-c="${c}"]`);
+      const cell = (r: number, c: number) => dlg.locator(`.lens-scores input[data-r="${r}"][data-c="${c}"]`);
       await cell(0, 0).fill('4');
       await dlg.locator('[data-lens-next]').click();
       assert.match(await dlg.locator('[data-lens-error]').innerText(), /every column/i, 'a half-filled row is refused');
@@ -231,7 +236,7 @@ const PAST = [done('r-blue', 'blue-ocean'), done('r-draft', 'scenarios', {on_dra
       await cell(2, 0).fill('1'); await cell(2, 1).fill('5'); await cell(2, 2).fill('0');
       // Back keeps the list, and coming forward again keeps the grid.
       await dlg.locator('[data-lens-back]').click();
-      assert.deepEqual(await dlg.locator('[data-lens-rows] input').evaluateAll(a => a.map(x => x.value)), ['Price', 'Setup time', 'Reporting']);
+      assert.deepEqual(await dlg.locator('[data-lens-rows] input').evaluateAll(a => a.map(x => (x as HTMLInputElement).value)), ['Price', 'Setup time', 'Reporting']);
       await dlg.locator('[data-lens-next]').click();
       assert.equal(await cell(0, 0).inputValue(), '4');
       await dlg.locator('[data-lens-next]').click();
@@ -272,14 +277,14 @@ const PAST = [done('r-blue', 'blue-ocean'), done('r-draft', 'scenarios', {on_dra
       await dlg.locator('[data-lens-skip]').click();
       await dlg.locator('[data-lens-next]').click();
       await page.locator('[data-lens-run-page]').waitFor();
-      assert.deepEqual(sent[0][2], {answers: {}, on: 'published'});
+      assert.deepEqual(sent[0]![2], {answers: {}, on: 'published'});
       await page.goto('http://tico-ui.test/#/strategy/lenses');
       await page.locator('[data-lens-run="where-to-play"]').click();
       await page.locator('#lens-flow textarea').fill('Small offices');
       assert.equal(await page.locator('#lens-flow [data-lens-on]').count(), 0, 'a market lens has no Run on');
       await page.locator('#lens-flow [data-lens-next]').click();
       await page.locator('[data-lens-run-page]').waitFor();
-      assert.deepEqual(sent[1][2], {answers: {segments: 'Small offices'}});
+      assert.deepEqual(sent[1]![2], {answers: {segments: 'Small offices'}});
       assert.deepEqual(errors, []);
       await page.close();
     }
@@ -295,7 +300,7 @@ const PAST = [done('r-blue', 'blue-ocean'), done('r-draft', 'scenarios', {on_dra
       assert.equal(await dlg.locator('[data-lens-on="draft"]').getAttribute('aria-pressed'), 'true');
       await dlg.locator('[data-lens-next]').click();
       await page.locator('[data-lens-run-page]').waitFor();
-      assert.deepEqual(sent.at(-1)[2], {answers: {u1: 'Rules'}, on: 'draft'});
+      assert.deepEqual(sent.at(-1)![2], {answers: {u1: 'Rules'}, on: 'draft'});
       assert.deepEqual(errors, []);
       await page.close();
       const racy = await open(browser, {noPublished: true});
@@ -307,7 +312,7 @@ const PAST = [done('r-blue', 'blue-ocean'), done('r-draft', 'scenarios', {on_dra
       assert.deepEqual(await d2.locator('[data-lens-on]').allInnerTexts(), ['Draft']);
       await d2.locator('[data-lens-next]').click();
       await racy.page.locator('[data-lens-run-page]').waitFor();
-      assert.equal(racy.sent.at(-1)[2].on, 'draft');
+      assert.equal(racy.sent.at(-1)![2].on, 'draft');
       assert.deepEqual([...errors, ...racy.errors], []);
       await racy.page.close();
     }
@@ -322,24 +327,24 @@ const PAST = [done('r-blue', 'blue-ocean'), done('r-draft', 'scenarios', {on_dra
       assert.equal(await page.locator('.lens-series').count(), 5);
       assert.deepEqual(await page.locator('.lens-curve .lens-grid').count(), 6);
       assert.equal(await page.locator('.lens-series.us .lens-marks > g').count(), 5);
-      const width = sel => page.locator(sel).evaluate(e => parseFloat(getComputedStyle(e).strokeWidth));
+      const width = (sel: string) => page.locator(sel).evaluate((e: Element) => parseFloat(getComputedStyle(e).strokeWidth));
       assert.ok(await width('.lens-series.us .lens-line') > 2 * await width('.lens-series.s1 .lens-line') * 0.9);
-      const stroke = sel => page.locator(sel).evaluate(e => getComputedStyle(e).stroke);
+      const stroke = (sel: string) => page.locator(sel).evaluate((e: Element) => getComputedStyle(e).stroke);
       const accent = await page.evaluate(() => { const e = document.createElement('i'); e.style.color = 'var(--accent)'; document.body.append(e); const c = getComputedStyle(e).color; e.remove(); return c; });
       assert.equal(await stroke('.lens-series.us .lens-line'), accent);
-      const others = new Set(await page.locator('.lens-series:not(.us) .lens-line').evaluateAll(a => a.map(e => getComputedStyle(e).stroke)));
+      const others = new Set(await page.locator('.lens-series:not(.us) .lens-line').evaluateAll(a => a.map((e: Element) => getComputedStyle(e).stroke)));
       assert.equal(others.size, 4, 'the other lines are four distinct colours');
       assert.ok(!others.has(accent));
       assert.deepEqual(await page.locator('.lens-legend li').allInnerTexts(), ['Us', 'Acme Clean', 'Doing nothing', 'Freelancer', 'Example Co']);
       // End labels: Us always, and none within 13px of another (Doing nothing and Freelancer both end at 0).
-      const ys = await page.locator('.lens-name-t').evaluateAll(a => a.map(e => [e.dataset.endLabel, parseFloat(e.getAttribute('y'))]));
+      const ys = await page.locator('.lens-name-t').evaluateAll((a: HTMLElement[]) => a.map((e): [string | undefined, number] => [e.dataset.endLabel, parseFloat(e.getAttribute('y')!)]));
       assert.ok(ys.some(([n]) => n === 'Us'));
       assert.ok(ys.length < 5 && ys.length >= 3, 'labels that would collide are left to the legend');
       for (const [i, [, a]] of ys.entries()) for (const [, b] of ys.slice(i + 1)) assert.ok(Math.abs(a - b) >= 13);
       await shot(page, 'run');
       // Sections are markdown; findings name the bet; the retired one is not counted.
       assert.equal(await page.locator('[data-lens-sec="section"] strong').innerText(), 'reporting');
-      assert.deepEqual(await page.locator('.lens-finding').evaluateAll(a => a.map(e => [e.querySelector('.pill').textContent, e.querySelector('.lens-bet')?.textContent || ''])),
+      assert.deepEqual(await page.locator('.lens-finding').evaluateAll(a => a.map((e: Element) => [e.querySelector('.pill')!.textContent, e.querySelector('.lens-bet')?.textContent || ''])),
         [['Challenges', 'Bet 1'], ['Supports', 'Bet 2'], ['Gap', '']]);
       assert.equal(await page.locator('.lens-bet').first().getAttribute('href'), '#/strategy?bet=b-price');
       assert.equal(await page.locator('[data-lens-sec="assumptions"] li').innerText(), 'Rivals prices assumed from their websites.');
@@ -379,27 +384,27 @@ const PAST = [done('r-blue', 'blue-ocean'), done('r-draft', 'scenarios', {on_dra
       assert.equal(await page.locator('[data-lens-proposal] a').getAttribute('href'), '#/tasks?view=foryou');
       assert.equal(await page.locator('[data-lens-change]').count(), 2);
       assert.equal(await page.locator('[data-lens-apply]').count(), 0, 'a proposed run is decided on its card');
-      assert.deepEqual(await page.locator('.lens-quad').evaluateAll(a => a.map(e => [e.dataset.q, e.querySelector('b').textContent])),
+      assert.deepEqual(await page.locator('.lens-quad').evaluateAll((a: HTMLElement[]) => a.map(e => [e.dataset.q, e.querySelector('b')!.textContent])),
         [['lh', 'Grow quietly'], ['hh', 'Race'], ['ll', 'Hold on'], ['hl', 'Brace']]);
       assert.deepEqual(await page.locator('[data-axis]').allInnerTexts(), ['Buyer budgets', 'Pace of rules']);
       assert.deepEqual(await page.locator('.lens-end').allInnerTexts(), ['Growing', 'Shrinking', 'Slow', 'Fast']);
       // The quadrants sit by their ends: x high is the right column, y high the top row.
-      const at = q => page.locator(`.lens-quad[data-q="${q}"]`).evaluate(e => { const r = e.getBoundingClientRect(); return [r.left, r.top]; });
+      const at = (q: string) => page.locator(`.lens-quad[data-q="${q}"]`).evaluate((e: Element) => { const r = e.getBoundingClientRect(); return [r.left, r.top] as [number, number]; });
       const [hh, ll, lh] = [await at('hh'), await at('ll'), await at('lh')];
       assert.ok(hh[0] > ll[0] && hh[1] < ll[1] && lh[0] < hh[0] && lh[1] === hh[1]);
       await shot(page, 'matrix');
       await page.goto('http://tico-ui.test/#/strategy/lenses/r-power');
       await page.locator('[data-lens-chart="power_table"]').waitFor();
       assert.deepEqual(await page.locator('.lens-table thead th').allTextContents(), ['Bet', 'Power', 'How', 'When']);
-      const rows = await page.locator('.lens-table tbody tr').evaluateAll(a => a.map(r => [...r.children].map(c => c.textContent)));
+      const rows = await page.locator('.lens-table tbody tr').evaluateAll((a: HTMLElement[]) => a.map(r => [...(r.children as unknown as Iterable<Element>)].map(c => c.textContent)));
       assert.deepEqual(rows, [['Bet 1 Price at half the market.', 'Process', 'Bots run the office.', 'Now'], ['Bet 2 Sell through property managers.', 'None', '', '']]);
       await page.goto('http://tico-ui.test/#/strategy/lenses/r-cascade');
       await page.locator('[data-lens-chart="cascade"]').waitFor();
-      assert.deepEqual(await page.locator('.lens-step-card').evaluateAll(a => a.map(e => e.classList.contains('weak'))), [false, true]);
+      assert.deepEqual(await page.locator('.lens-step-card').evaluateAll(a => a.map((e: Element) => e.classList.contains('weak'))), [false, true]);
       assert.match(await page.locator('[data-lens-weak]').innerText(), /Weakest/);
       await page.goto('http://tico-ui.test/#/strategy/lenses/r-table');
       await page.locator('[data-lens-chart="table"]').waitFor();
-      assert.deepEqual(await page.locator('.lens-table tbody tr').evaluateAll(a => a.map(r => [...r.children].map(c => c.textContent))), [['Small offices', '4,200', 'High'], ['Homes', '90,000', 'Medium']]);
+      assert.deepEqual(await page.locator('.lens-table tbody tr').evaluateAll((a: HTMLElement[]) => a.map(r => [...(r.children as unknown as Iterable<Element>)].map(c => c.textContent))), [['Small offices', '4,200', 'High'], ['Homes', '90,000', 'Medium']]);
       assert.deepEqual(errors, []);
       await page.close();
     }
@@ -439,7 +444,7 @@ const PAST = [done('r-blue', 'blue-ocean'), done('r-draft', 'scenarios', {on_dra
       await page.locator('#lens-flow [data-lens-next]').click();
       await page.locator('#lens-flow .lens-scores').waitFor();
       assert.equal(await sideways(page), false, 'panel');
-      assert.equal(await page.locator('#lens-flow').evaluate(d => d.scrollWidth <= d.clientWidth + 1), true, 'panel contents');
+      assert.equal(await page.locator('#lens-flow').evaluate((d: HTMLElement) => d.scrollWidth <= d.clientWidth + 1), true, 'panel contents');
       assert.equal(await page.locator('#lens-flow .lens-scores').evaluate(t => t.getBoundingClientRect().right <= innerWidth), true);
       await shot(page, 'flow-phone', ['dark']);
       await page.locator('#lens-flow [data-lens-close]').click();
@@ -452,7 +457,7 @@ const PAST = [done('r-blue', 'blue-ocean'), done('r-draft', 'scenarios', {on_dra
       }
       // The chart is drawn at the width it has: the curve is no wider than the screen and keeps its text size.
       await page.goto('http://tico-ui.test/#/strategy/lenses/r-long');
-      const svg = await page.locator('.lens-curve').evaluate(e => [e.getBoundingClientRect().width, parseFloat(getComputedStyle(e.querySelector('.lens-t')).fontSize)]);
+      const svg = await page.locator('.lens-curve').evaluate((e: Element) => [e.getBoundingClientRect().width, parseFloat(getComputedStyle(e.querySelector('.lens-t')!).fontSize)] as [number, number]);
       assert.ok(svg[0] <= 400 && svg[1] >= 10, 'the curve keeps its text size: ' + svg);
       assert.deepEqual(errors, []);
       await page.close();

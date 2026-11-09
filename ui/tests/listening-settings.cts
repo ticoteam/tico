@@ -3,29 +3,32 @@
 // saved in Settings; the form sends the category, receiver, threshold, readers, optional skip rule and what; the
 // server's refusal shows in the form; Settings sits on What are buyers saying? for admins even before anything is heard,
 // and a member with nothing heard has neither; a phone has no sideways scroll. Fixtures only.
-const {chromium} = require('playwright');
+import type {Browser, LaunchOptions, Locator, Page, Route} from 'playwright';
+import type * as PageSupport from './support/page.cjs';
+import type * as RouteSupport from './support/routes.cjs';
+const {chromium} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
-const {html, uiFile} = require('./support/page.cjs');
-const {unrouted} = require('./support/routes.cjs');
+const {html, uiFile} = require('./support/page.cjs') as typeof PageSupport;
+const {unrouted} = require('./support/routes.cjs') as typeof RouteSupport;
 
 const CATEGORIES = ['market', 'content', 'lead', 'vendor_pitch'].map(id => ({id, label: id.replace('_', ' ')}));
 const RECEIVERS = [{actor: 'bot:librarian', name: 'Librarian'}, {actor: 'bot:content', name: 'Content'}, {actor: 'bot:sales-ops', name: 'Sales Ops'}];
 
-async function open(browser, role, width = 1440) {
+async function open(browser: Browser, role: string, width = 1440) {
   const page = await browser.newPage({viewport: {width, height: 900}, serviceWorkers: 'block'});
-  const errors = [], writes = [];
+  const errors: string[] = [], writes: Record<string, unknown>[] = [];
   const dests = [
     {key: 'market', category: 'market', threshold: 0.7, receiver: 'bot:librarian', readers: [], unless: null, what: 'a post about the market', source: 'settings', overrides_yaml: false},
     {key: 'leads', category: 'lead', threshold: 0.75, receiver: 'bot:sales-ops', readers: ['bot:content'],
       unless: {category: 'vendor_pitch', threshold: 0.7}, what: 'a team lead', source: 'yaml', overrides_yaml: false}];
-  page.on('pageerror', e => errors.push(e.message));
-  await page.route('**/*', route => {
+  page.on('pageerror', (e: Error) => errors.push(e.message));
+  await page.route('**/*', (route: Route) => {
     const req = route.request(), p = new URL(req.url()).pathname;
-    const json = (body, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
+    const json = (body: unknown, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
     const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/);
-    if (ui && fs.existsSync(uiFile(ui[1])))
-      return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]), 'utf8')});
+    if (ui && fs.existsSync(uiFile(ui[1]!)))
+      return route.fulfill({contentType: ui[1]!.endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]!), 'utf8')});
     if (/\.(?:js|ts)$/.test(p)) return route.fulfill({contentType: 'application/javascript', body: ''});
     if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
     const config = {version: '0.1.0', app_name: 'Tico'};
@@ -62,10 +65,10 @@ async function open(browser, role, width = 1440) {
   }
   return {page, errors, writes, dests};
 }
-const row = (page, key) => page.locator(`[data-listen-dest="${key}"]`);
+const row = (page: Page, key: string): Locator => page.locator(`[data-listen-dest="${key}"]`);
 
 (async () => {
-  const browser = await chromium.launch({headless: true, channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined});
+  const browser = await chromium.launch({headless: true, channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined} as LaunchOptions);
   try {
     {
       const {page, errors, writes} = await open(browser, 'owner');
@@ -108,10 +111,10 @@ const row = (page, key) => page.locator(`[data-listen-dest="${key}"]`);
       await row(page, 'content').locator('[data-listen-remove]').click();
       await ask.locator('[data-confirm-ok]').click();
       await row(page, 'content').waitFor({state: 'detached'});
-      assert.equal(writes.at(-1).remove, true);
+      assert.equal(writes.at(-1)!.remove, true);
       // A phone: nothing spills sideways, in light and dark.
       for (const dark of [false, true]) {
-        await page.evaluate(d => document.documentElement.dataset.theme = d ? 'dark' : 'light', dark);
+        await page.evaluate((d: boolean) => document.documentElement.dataset.theme = d ? 'dark' : 'light', dark);
         await page.setViewportSize({width: 390, height: 844});
         await page.locator('[data-listen-add]').click();
         await page.locator('[data-listen-form]').waitFor();

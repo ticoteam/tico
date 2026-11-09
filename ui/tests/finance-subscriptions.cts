@@ -3,12 +3,17 @@
 // only; the owner (who holds finance.book) sees Confirm and Ignore on the suggestion, and Confirm posts subscription_confirm
 // then the section reads again with the new total; with no subscriptions the section is hidden. Desktop and 390px, with no
 // sideways scroll. TICO_UI_SHOTS=<dir> saves screenshots.
-const {chromium} = require('playwright');
+import type {Browser, Page, Route} from 'playwright';
+import type * as PageSupport from './support/page.cjs';
+import type * as RouteSupport from './support/routes.cjs';
+const {chromium} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const {html, uiFile} = require('./support/page.cjs');
-const {unrouted} = require('./support/routes.cjs');
+const {html, uiFile} = require('./support/page.cjs') as typeof PageSupport;
+const {unrouted} = require('./support/routes.cjs') as typeof RouteSupport;
+declare const S: {me: unknown; emps: unknown[]};
+interface Sub {id: string; vendor: {id: string; name: string}; status: string; cadence: string; amount: number; monthly: number; seats: number | null; next_charge_on: string | null; card: {id: string; name: string} | null; attribution: unknown[]; source: string; as_of: string}
 const uiDir = path.join(__dirname, '..');
 const PHONE = {width: 390, height: 844}, DESKTOP = {width: 1440, height: 900};
 
@@ -17,7 +22,7 @@ const ALL_RIGHTS = ['finance.book', 'finance.ap', 'finance.ar', 'finance.pay', '
 const access = {teams: [], private_lines: [], defaults: {manager: 'team_expenses', member: 'own_expenses', manager_payroll: 'totals'}, view_version: 'v1',
   teammates: [{teammate: 'human:ana', kind: 'person', team: '', reports_to: '', default: 'everything', grants: [], rights: ALL_RIGHTS}],
   can_view_as: false, can_edit_defaults: true};
-const SUBS = [
+const SUBS: Sub[] = [
   {id: 'sub-1', vendor: {id: 'figma', name: 'Figma'}, status: 'suggested', cadence: 'monthly', amount: 1500, monthly: 1500, seats: null,
     next_charge_on: '2026-12-05', card: {id: 'card_a', name: 'Card ending 4242'}, attribution: [], source: 'detected', as_of: iso},
   {id: 'sub-2', vendor: {id: 'adobe', name: 'Adobe'}, status: 'active', cadence: 'annual', amount: 12000, monthly: 1000, seats: 5,
@@ -28,10 +33,10 @@ const SUBS = [
 
 // The read as GET /api/v2/finance/subscriptions sends it (backend/finance/subscriptions.py read): rows, and the monthly
 // total of the active ones.
-const readSubs = rows => ({rows: structuredClone(rows), monthly_total: rows.filter(r => r.status === 'active').reduce((a, r) => a + r.monthly, 0), as_of: iso});
+const readSubs = (rows: Sub[]) => ({rows: structuredClone(rows), monthly_total: rows.filter((r: Sub) => r.status === 'active').reduce((a: number, r: Sub) => a + r.monthly, 0), as_of: iso});
 
 // The P&L read for one month, as the P&L page reads it (one expense line).
-function pnl(url) {
+function pnl(url: URL) {
   const q = url.searchParams, start = q.get('start') || '2026-11-01', end = q.get('end') || '2026-11-30';
   const cols = [{start, end, label: start.slice(0, 7), state: 'current'}];
   const rows = [{account_id: 'a-6400', code: '6400', name: 'Software', type: 'expense', section: 'operating', parent_id: null, private: false,
@@ -40,16 +45,16 @@ function pnl(url) {
     imported: [], snapshot: null, filter: {teams: [], teammates: [], who: 'both', unattributed: false}};
 }
 
-async function open(browser, {viewport = DESKTOP, subs = SUBS, hash = '#/finance/pnl'} = {}) {
+async function open(browser: Browser, {viewport = DESKTOP, subs = SUBS, hash = '#/finance/pnl'} = {}) {
   const me = {id: 'ana', name: 'Ana Silva', email: 'ana@acme.example', role: 'owner', company_role: 'owner', cloud: true};
   const config = {company_name: 'Acme Lights'};
-  const writes = [], reads = [], state = {subs: structuredClone(subs)};
+  const writes: unknown[] = [], reads: string[] = [], state = {subs: structuredClone(subs)};
   const page = await browser.newPage({viewport, serviceWorkers: 'block', hasTouch: viewport === PHONE});
-  const errors = [];
-  page.on('pageerror', e => errors.push(e.message));
-  await page.route('**/*', async route => {
+  const errors: string[] = [];
+  page.on('pageerror', (e: Error) => errors.push(e.message));
+  await page.route('**/*', async (route: Route) => {
     const req = route.request(), url = new URL(req.url()), p = url.pathname, method = req.method();
-    const json = (body, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
+    const json = (body: unknown, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
     if (url.origin !== 'http://tico-ui.test') return route.abort();
     if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
     const file = p.startsWith('/tico/ui/') ? uiFile(p.slice(9)) : p.startsWith('/vendor/') ? path.join(uiDir, p) : '';
@@ -87,14 +92,14 @@ async function open(browser, {viewport = DESKTOP, subs = SUBS, hash = '#/finance
   return {page, errors, writes, reads};
 }
 
-const sideways = page => page.evaluate(() => [document.documentElement, document.querySelector('#main')].some(el => el && el.scrollWidth > el.clientWidth + 1));
-const cell = (page, id, n) => page.locator(`#fin-subs tr[data-fin-sub="${id}"] td`).nth(n);
-async function settled(done) {
+const sideways = (page: Page) => page.evaluate(() => [document.documentElement, document.querySelector('#main')].some(el => el && el.scrollWidth > el.clientWidth + 1));
+const cell = (page: Page, id: string, n: number) => page.locator(`#fin-subs tr[data-fin-sub="${id}"] td`).nth(n);
+async function settled(done: () => boolean) {
   for (let t = Date.now(); !done() && Date.now() - t < 5000;) await new Promise(r => setTimeout(r, 20));
   assert.ok(done(), 'timed out waiting');
   await new Promise(r => setTimeout(r, 100));
 }
-async function shot(page, name) {
+async function shot(page: Page, name: string) {
   const dir = process.env.TICO_UI_SHOTS;
   if (!dir) return;
   fs.mkdirSync(dir, {recursive: true});
@@ -120,7 +125,7 @@ async function shot(page, name) {
       assert.equal(await page.locator('#fin-subs tr[data-fin-sub="sub-1"] button[data-fin-sub-status="active"]').count(), 1, `${tag}: Confirm on the suggestion`);
       assert.equal(await page.locator('#fin-subs tr[data-fin-sub="sub-1"] button[data-fin-sub-status="ignored"]').count(), 1, `${tag}: Ignore on the suggestion`);
       assert.equal(await page.locator('#fin-subs tr[data-fin-sub="sub-2"] button').count(), 0, `${tag}: no buttons on an active row`);
-      assert.equal((await page.locator('#fin-subs tr[data-fin-sub="sub-2"] .pill').textContent()).trim(), 'Active', `${tag}: active pill`);
+      assert.equal((await page.locator('#fin-subs tr[data-fin-sub="sub-2"] .pill').textContent())!.trim(), 'Active', `${tag}: active pill`);
       await shot(page, `${tag}-before`);
       // Confirm posts subscription_confirm, and the section reads again: Figma is active and the total counts it.
       await page.locator('#fin-subs tr[data-fin-sub="sub-1"] button[data-fin-sub-status="active"]').click();

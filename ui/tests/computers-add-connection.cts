@@ -2,21 +2,27 @@
 // computer's one login for that tool in the same pop-up; the chip appears once the computer reports, with no restart).
 // Each computer has one login per AI tool (#1259): named subscriptions a runner still reports are not shown, and a
 // tool already signed in has no second sign-in. Every request is intercepted.
-const {chromium} = require('playwright');
+import type {LaunchOptions, Locator, Route} from 'playwright';
+import type * as PageSupport from './support/page.cjs';
+import type * as RouteSupport from './support/routes.cjs';
+const {chromium} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
-const {html, uiFile} = require('./support/page.cjs');
-const {unrouted} = require('./support/routes.cjs');
+const {html, uiFile} = require('./support/page.cjs') as typeof PageSupport;
+const {unrouted} = require('./support/routes.cjs') as typeof RouteSupport;
+declare const S: {config: {hosted?: string}};
+declare function loadSettings(): Promise<void> | void;
+declare global { interface Window { hostedOpened: unknown[][] } }
 const SHOTS = process.env.SHOTS;
-const shot = async (locator, name) => { if (SHOTS) await locator.screenshot({path: `${SHOTS}/${name}.png`}); };
+const shot = async (locator: Locator, name: string) => { if (SHOTS) await locator.screenshot({path: `${SHOTS}/${name}.png`}); };
 (async () => {
-  const browser = await chromium.launch({headless: true, channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined});
+  const browser = await chromium.launch({headless: true, channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined} as LaunchOptions);
   try {
     const page = await browser.newPage({viewport: {width: 1440, height: 900}, serviceWorkers: 'block'});
-    const errors = [];
-    page.on('pageerror', e => errors.push(e.message));
-    const now = Date.now(), at = ms => new Date(now + ms).toISOString();
-    const tool = (name, runtime) => ({name, runtime, installed: true, version: '1.0', managed: true, state: 'idle', wanted: true, pinned: false, update_available: false, detail: ''});
+    const errors: string[] = [];
+    page.on('pageerror', (e: Error) => errors.push(e.message));
+    const now = Date.now(), at = (ms: number) => new Date(now + ms).toISOString();
+    const tool = (name: string, runtime: string) => ({name, runtime, installed: true, version: '1.0', managed: true, state: 'idle', wanted: true, pinned: false, update_available: false, detail: ''});
     const box = {id: 'box', label: 'Team box', owner_id: 'ana', bots: ['writer'], platform: 'linux', version: '0.3.53',
       last_seen_at: at(-3000), readiness_at: at(-60000), needed_runtimes: ['codex'], bot_runtimes: ['codex'],
       readiness: {runtimes: {codex: {installed: true, authenticated: 'missing'}, claude: {installed: true, authenticated: 'missing'},
@@ -26,14 +32,14 @@ const shot = async (locator, name) => { if (SHOTS) await locator.screenshot({pat
       profiles: [{name: 'acme', id: 'p-acme', display_name: 'Acme Pro', runtimes: {codex: {signed_in: true}}}],
       bot_connections: [{bot: 'writer', profile: null, source: 'computer', runtime: 'codex', harness: 'codex', signed_in: false, problem: ''}]};
     const me = {id: 'ana', role: 'owner', name: 'Ana', email: 'ana@example.com', cloud: true, registered: true};
-    const writes = [];
-    let login = null;
-    await page.route('**/*', route => {
+    const writes: {p: string; body: Record<string, unknown>}[] = [];
+    let login = null as Record<string, unknown> | null;
+    await page.route('**/*', (route: Route) => {
       const req = route.request(), p = new URL(req.url()).pathname;
-      const json = (body, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
+      const json = (body: unknown, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
       const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/);
-      if (ui && fs.existsSync(uiFile(ui[1])))
-        return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]), 'utf8')});
+      if (ui && fs.existsSync(uiFile(ui[1]!)))
+        return route.fulfill({contentType: ui[1]!.endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]!), 'utf8')});
       if (/\.(?:js|ts)$/.test(p)) return route.fulfill({contentType: 'application/javascript', body: ''});
       if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
       if (req.method() !== 'GET') {
@@ -102,11 +108,11 @@ const shot = async (locator, name) => { if (SHOTS) await locator.screenshot({pat
     assert.match(await signIn.locator('h2').innerText(), /Sign in to Codex \(ChatGPT\) on Team box/);
     assert.equal(await signIn.locator('[data-code]').innerText(), 'ABCD-1234');
     await shot(signIn, 'add-3-sign-in');
-    assert.deepEqual(writes.find(w => w.p === '/api/v2/computers/box/logins').body.profile || '', '');
+    assert.deepEqual(writes.find(w => w.p === '/api/v2/computers/box/logins')!.body.profile || '', '');
     // Signed in, and the computer reports it: the line reads signed in with no restart.
     login = {...login, state: 'signed_in', url: '', code: '', updated_at: new Date().toISOString()};
     box.readiness.runtimes.codex.authenticated = 'ready';
-    box.bot_connections[0].signed_in = true;
+    box.bot_connections[0]!.signed_in = true;
     box.readiness_at = at(60000);
     await signIn.locator('[data-status][data-state=signed_in]').waitFor({timeout: 10000});
     await signIn.locator('[data-close]').last().click();
@@ -130,16 +136,16 @@ const shot = async (locator, name) => { if (SHOTS) await locator.screenshot({pat
     await page.keyboard.press('Escape');
     // Hosted enrollment leaves the browser with no code or installer command.
     assert.equal(await page.locator('#machine-kind option[value="hosted"]').count(), 0);
-    await page.evaluate(() => { S.config.hosted = 'invited'; document.querySelector('#machine-add-dialog').remove(); return loadSettings(); });
-    await page.evaluate(() => { window.hostedOpened = []; window.open = (...args) => window.hostedOpened.push(args); });
+    await page.evaluate(() => { S.config.hosted = 'invited'; document.querySelector('#machine-add-dialog')!.remove(); return loadSettings(); });
+    await page.evaluate(() => { window.hostedOpened = []; window.open = ((...args: unknown[]) => window.hostedOpened.push(args)) as unknown as typeof window.open; });
     await page.locator('#machine-add-open').click();
     await page.locator('#machine-kind').selectOption('hosted');
     assert.equal(await page.locator('#machine-label').isVisible(), false);
     const beforeHosted = writes.length;
     await page.locator('#register-machine').click();
     const opened = await page.evaluate(() => window.hostedOpened);
-    assert.match(opened[0][0], /^https:\/\/app\.tico\.dev\/hosting\?workspace=/);
-    assert.equal(opened[0][2], 'noopener');
+    assert.match(opened[0]![0] as string, /^https:\/\/app\.tico\.dev\/hosting\?workspace=/);
+    assert.equal(opened[0]![2], 'noopener');
     assert.equal(writes.length, beforeHosted);
     assert.deepEqual(errors, []);
     console.log('PASS: Add connection (tool, the computer\'s one login signed in in one pop-up, no second sign-in), offline');

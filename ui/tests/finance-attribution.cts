@@ -7,12 +7,16 @@
 // classes and departments with a team picker; Save posts attribution_map with only the changed rows, and a teammate whose
 // dimensions read is refused sees no Classes table. Phone width: no sideways scroll.
 // TICO_UI_SHOTS=<dir> saves screenshots.
-const {chromium} = require('playwright');
+import type {Browser, Page, Route} from 'playwright';
+import type * as PageSupport from './support/page.cjs';
+import type * as RouteSupport from './support/routes.cjs';
+const {chromium} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const {html, uiFile} = require('./support/page.cjs');
-const {unrouted} = require('./support/routes.cjs');
+const {html, uiFile} = require('./support/page.cjs') as typeof PageSupport;
+const {unrouted} = require('./support/routes.cjs') as typeof RouteSupport;
+declare const S: {me: unknown; emps: unknown[]};
 const uiDir = path.join(__dirname, '..');
 const PHONE = {width: 390, height: 844}, DESKTOP = {width: 1440, height: 900};
 
@@ -22,12 +26,12 @@ const emps = [['rental-mgr', 'Rental Marketing Manager', 'rental'], ['rental-goo
   ({name, display_name, role: display_name, team, status: 'active', host: 'keeper', can_chat: true}));
 const teams = [{id: 'mkt', name: 'Marketing', parent: '', lead: 'human:ana'}, {id: 'rental', name: 'Rental', parent: 'mkt', lead: 'bot:rental-mgr'},
   {id: 'consumer', name: 'Consumer', parent: 'mkt', lead: 'bot:rental-mgr'}];
-const mate = (teammate, kind, team, def, extra = {}) => ({teammate, kind, team, reports_to: '', default: def, grants: [], rights: [], ...extra});
+const mate = (teammate: string, kind: string, team: string | undefined, def: string, extra: Record<string, unknown> = {}) => ({teammate, kind, team, reports_to: '', default: def, grants: [], rights: [], ...extra});
 const MATES = [mate('human:ana', 'person', '', 'everything', {rights: ['finance.book', 'finance.budgets', 'finance.attribution', 'finance.admin']}),
   mate('human:mia', 'person', 'mkt', 'own_expenses', {rights: ['finance.budgets']}),
   mate('human:raj', 'person', 'mkt', 'none', {rights: ['finance.attribution'], attribute: true}),
   ...emps.map(e => mate('bot:' + e.name, 'bot', e.team, 'own_expenses'))];
-const access = viewer => ({teams, private_lines: [], defaults: {manager: 'team_expenses', member: 'own_expenses', manager_payroll: 'totals'}, view_version: 'v1',
+const access = (viewer: string) => ({teams, private_lines: [], defaults: {manager: 'team_expenses', member: 'own_expenses', manager_payroll: 'totals'}, view_version: 'v1',
   teammates: viewer === 'ana' ? MATES : MATES.filter(m => m.teammate === 'human:' + viewer), can_view_as: viewer === 'ana', can_edit_defaults: viewer === 'ana'});
 
 // Bank rows: f1 split 50% Rental Google, 30% Consumer, the rest unattributed; f3 split four ways (two shown, +2);
@@ -43,7 +47,7 @@ const TX = [
   {kind: 'feed', id: 'f2', date: '2026-10-27', amount: -9900, currency: 'USD', counterparty: 'Figma', description: 'FIGMA', status: 'posted', pending: false,
     money_account: {id: 'm1', name: 'Checking', last4: '0001'}, lines: [{line_id: 'l2', account_id: 'a-6400', account: 'Marketing', amount: 9900, vendor: 'Figma', tags: {teammate: 'bot:rental-mgr'}}]}];
 
-const ATTR = {
+const ATTR: Record<string, unknown> = {
   l1: {splits: [{teammate: 'bot:rental-google', share_bps: 5000, amount: 150000}, {team: 'consumer', share_bps: 3000, amount: 90000}], source: 'person',
     set_by: 'human:ana', set_at: '2026-11-05T10:00:00Z', can_change: true,
     history: [{splits: [{teammate: 'bot:rental-google', share_bps: 5000}, {team: 'consumer', share_bps: 3000}], source: 'person', set_by: 'human:ana', set_at: '2026-11-05T10:00:00Z'},
@@ -60,17 +64,17 @@ const DIMS = [{kind: 'class', id: 'k-mkt', name: 'Marketing', lines: 4, amount: 
   {kind: 'class', id: 'k-ops', name: 'Ops', lines: 3, amount: 3200000, rule_id: null, splits: null},
   {kind: 'location', id: 'd-austin', name: 'Austin', lines: 1, amount: 70000, rule_id: null, splits: null}];
 
-async function open(browser, {viewport = DESKTOP, viewer = 'ana', hash = '#/finance/transactions'} = {}) {
-  const person = people.find(p => p.id === viewer);
+async function open(browser: Browser, {viewport = DESKTOP, viewer = 'ana', hash = '#/finance/transactions'} = {}) {
+  const person = people.find(p => p.id === viewer)!;
   const me = {id: viewer, name: person.name, email: viewer + '@acme.example', role: person.role, company_role: person.role, cloud: true};
   const config = {company_name: 'Acme Lights'};
-  const writes = [], reads = [];
+  const writes: unknown[][] = [], reads: string[] = [];
   const page = await browser.newPage({viewport, serviceWorkers: 'block', hasTouch: viewport === PHONE});
-  const errors = [];
-  page.on('pageerror', e => errors.push(e.message));
-  await page.route('**/*', async route => {
+  const errors: string[] = [];
+  page.on('pageerror', (e: Error) => errors.push(e.message));
+  await page.route('**/*', async (route: Route) => {
     const req = route.request(), url = new URL(req.url()), p = url.pathname, method = req.method();
-    const json = (body, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
+    const json = (body: unknown, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
     if (url.origin !== 'http://tico-ui.test') return route.abort();
     if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
     const file = p.startsWith('/tico/ui/') ? uiFile(p.slice(9)) : p.startsWith('/vendor/') ? path.join(uiDir, p) : '';
@@ -93,7 +97,7 @@ async function open(browser, {viewport = DESKTOP, viewer = 'ana', hash = '#/fina
     if (p === '/api/v2/finance/pay-from') return json({accounts: [{id: 'm1', name: 'Checking', last4: '0001'}]});
     if (p === '/api/v2/finance/contacts') return json({contacts: [{id: 'c-google', name: 'Google Ads', kind: 'vendor'}, {id: 'c-meta', name: 'Meta Ads', kind: 'vendor'}], next_cursor: null});
     if (p === '/api/v2/finance/transactions') return json({rows: TX, next: null});
-    if (p.startsWith('/api/v2/finance/lines/') && p.endsWith('/attribution') && method === 'GET') { const a = ATTR[decodeURIComponent(p.split('/').slice(-2)[0])]; return a ? json(a) : json({detail: 'not found'}, 404); }
+    if (p.startsWith('/api/v2/finance/lines/') && p.endsWith('/attribution') && method === 'GET') { const a = ATTR[decodeURIComponent(p.split('/').slice(-2)[0]!)]; return a ? json(a) : json({detail: 'not found'}, 404); }
     if (p === '/api/v2/finance/attribution-rules' && method === 'GET') return json({rules: viewer === 'ana' ? RULES : [], can_change: viewer === 'ana'});
     if (p === '/api/v2/finance/attribution/dimensions' && method === 'GET') return viewer === 'ana' ? json({dimensions: DIMS, can_change: true, view_version: 'v1'}) : json({detail: 'denied'}, 403);
     if (p === '/api/v2/finance/actions' && method === 'POST') return json({action_id: 'act-' + writes.length, kind: body.kind, status: 'committed', code: null, reason: null, approver: null, result: {}});
@@ -105,24 +109,24 @@ async function open(browser, {viewport = DESKTOP, viewer = 'ana', hash = '#/fina
   return {page, errors, writes, reads};
 }
 
-const tabs = page => page.locator('#fin-head [data-fin-tab]').allInnerTexts();
-const sideways = page => page.evaluate(() => [document.documentElement, document.querySelector('#main')].some(el => el && el.scrollWidth > el.clientWidth + 1));
+const tabs = (page: Page) => page.locator('#fin-head [data-fin-tab]').allInnerTexts();
+const sideways = (page: Page) => page.evaluate(() => [document.documentElement, document.querySelector('#main')].some(el => el && el.scrollWidth > el.clientWidth + 1));
 // What sticks out past the window's right edge (outermost first), to name in a failed sideways check.
-const wide = page => page.evaluate(() => {
-  const name = el => `${el.tagName.toLowerCase()}${el.id ? '#' + el.id : ''}${el.classList.length ? '.' + [...el.classList].join('.') : ''}`;
+const wide = (page: Page) => page.evaluate(() => {
+  const name = (el: Element) => `${el.tagName.toLowerCase()}${el.id ? '#' + el.id : ''}${el.classList.length ? '.' + [...(el.classList as unknown as string[])].join('.') : ''}`;
   const m = document.querySelector('#main'), d = document.documentElement;
-  const out = [...document.body.querySelectorAll('*')].filter(el => { const r = el.getBoundingClientRect(); return r.width && r.right > innerWidth + 1 && ['absolute', 'fixed'].includes(getComputedStyle(el).position); });
+  const out = [...(document.body.querySelectorAll('*') as unknown as Element[])].filter(el => { const r = el.getBoundingClientRect(); return r.width && r.right > innerWidth + 1 && ['absolute', 'fixed'].includes(getComputedStyle(el).position); });
   return `doc ${d.scrollWidth}/${d.clientWidth} main ${m && m.scrollWidth}/${m && m.clientWidth}; ` + out.slice(0, 8).map(el => { const r = el.getBoundingClientRect(); return `${name(el)} ${Math.round(r.left)}..${Math.round(r.right)}`; }).join(', ');
 });
 // The actions a page sent (not dry runs): {kind, payload} in order.
-const sent = writes => writes.filter(w => w[1] === '/api/v2/finance/actions').map(w => w[2]).filter(b => b && !b.dry_run).map(b => ({kind: b.kind, payload: b.payload}));
-const cellOf = (page, id, n) => page.locator(`tr[data-fin-tx="${id}"] td`).nth(n);
-async function settled(done) {
+const sent = (writes: unknown[][]) => writes.filter(w => w[1] === '/api/v2/finance/actions').map(w => w[2] as {kind: string; payload: unknown; dry_run?: boolean} | undefined).filter(b => b && !b.dry_run).map(b => ({kind: b!.kind, payload: b!.payload}));
+const cellOf = (page: Page, id: string, n: number) => page.locator(`tr[data-fin-tx="${id}"] td`).nth(n);
+async function settled(done: () => boolean) {
   for (let t = Date.now(); !done() && Date.now() - t < 3000;) await new Promise(r => setTimeout(r, 20));
   assert.ok(done(), 'timed out waiting');
   await new Promise(r => setTimeout(r, 100));
 }
-async function shot(page, name) {
+async function shot(page: Page, name: string) {
   const dir = process.env.TICO_UI_SHOTS;
   if (!dir) return;
   fs.mkdirSync(dir, {recursive: true});
@@ -149,8 +153,8 @@ async function shot(page, name) {
       await page.locator('tr[data-fin-tx="feed:f1"] td').first().click();
       await page.locator('[data-share-line="l1"]').waitFor();
       const sec = page.locator('[data-share-line="l1"]');
-      assert.equal((await sec.locator('h3').textContent()).trim(), 'Attributed to', tag + ': the rail section');
-      assert.deepEqual(await sec.locator(':scope > .fin-kv').evaluateAll(els => els.map(e => [...e.children].map(c => c.textContent.trim()).join(' '))),
+      assert.equal((await sec.locator('h3').textContent())!.trim(), 'Attributed to', tag + ': the rail section');
+      assert.deepEqual(await sec.locator(':scope > .fin-kv').evaluateAll(els => els.map((e: Element) => [...(e.children as unknown as Element[])].map(c => c.textContent!.trim()).join(' '))),
         ['Rental Google Ad Owner 50% · $1,500', 'Consumer 30% · $900', 'Unattributed 20%'], tag + ': each part with its share and amount');
       assert.match(await sec.locator('p.muted').innerText(), /^Set by Ana Silva · Nov 5/, tag + ': the source and when');
       assert.equal(await sec.locator('[data-share-edit="l1"]').count(), 1, tag + ': Edit when the viewer can change it');

@@ -2,39 +2,44 @@
 // Recorder (on this org, which the app knows; the page names none). In a browser, an app too old to offer it, or an
 // app without the Recorder installed, it stays the download, until Tico has seen one of the person's copies lately;
 // a copy older than the newest release shows one quiet update link. Neither shows on a phone.
-const {webkit} = require('playwright');
+import type {Browser, Page, Route} from 'playwright';
+import type * as PageSupport from './support/page.cjs';
+import type * as RouteSupport from './support/routes.cjs';
+const {webkit} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
-const {html, uiFile} = require('./support/page.cjs');
-const {unrouted} = require('./support/routes.cjs');
+const {html, uiFile} = require('./support/page.cjs') as typeof PageSupport;
+const {unrouted} = require('./support/routes.cjs') as typeof RouteSupport;
+type RW = {__posted: [string, unknown][]; __recorderAsked?: boolean; ticoNative: (name: string) => {postMessage: (body: unknown) => Promise<unknown>}; ticoNativeFeatures: string[]};
+interface Recorder {version: string; last_seen_at: string | null; recent: boolean; update_available: boolean}
 const DMG = 'https://github.com/ticoteam/tico/releases/latest/download/Tico-Recorder.dmg';
 
-async function open(browser, {features, installed, recorder, width = 1240}) {
+async function open(browser: Browser, {features, installed, recorder, width = 1240}: {features?: string[] | null; installed?: boolean; recorder?: Recorder; width?: number}) {
   const page = await browser.newPage({serviceWorkers:'block', viewport:{width, height:820},
     userAgent:'Mozilla/5.0 AppleWebKit/605.1.15 TicoHub'});
-  const errors = [];
-  page.on('pageerror', e => errors.push(e.message));
+  const errors: string[] = [];
+  page.on('pageerror', (e: Error) => errors.push(e.message));
   await page.addInitScript(({features, installed}) => {
-    window.EventSource = undefined;
-    window.__posted = [];
+    (window as unknown as {EventSource: unknown}).EventSource = undefined;
+    (window as unknown as RW).__posted = [];
     // Set once the page has asked Tico about the person's Recorder and drawn the answer.
     const fetched = window.fetch;
     window.fetch = function (...args) {
       const r = fetched.apply(window, args);
-      const done = () => setTimeout(() => { window.__recorderAsked = true; }, 50);
-      if (String(args[0]?.url || args[0]).includes('/v2/meetings/recorder')) r.then(done, done);
+      const done = () => setTimeout(() => { (window as unknown as RW).__recorderAsked = true; }, 50);
+      if (String((args[0] as Request | undefined)?.url || args[0]).includes('/v2/meetings/recorder')) r.then(done, done);
       return r;
     };
     if (!features) return;
-    window.ticoNative = name => ({postMessage: body => {
-      window.__posted.push([name, body]);
+    (window as unknown as RW).ticoNative = (name: string) => ({postMessage: (body: unknown) => {
+      (window as unknown as RW).__posted.push([name, body]);
       return Promise.resolve(name === 'hasRecorder' ? installed : null);
     }});
-    window.ticoNativeFeatures = ['openWindow', 'checkForUpdates', 'showLog', ...features];
+    (window as unknown as RW).ticoNativeFeatures = ['openWindow', 'checkForUpdates', 'showLog', ...features];
   }, {features, installed});
-  await page.route('**/*', async route => {
+  await page.route('**/*', async (route: Route) => {
     const p = new URL(route.request().url()).pathname;
-    const json = body => route.fulfill({contentType:'application/json', body:JSON.stringify(body)});
+    const json = (body: unknown) => route.fulfill({contentType:'application/json', body:JSON.stringify(body)});
     if (p === '/') return route.fulfill({contentType:'text/html', body:html});
     if (p.startsWith('/tico/ui/')) {
       const file = uiFile(p.slice('/tico/ui/'.length));
@@ -49,10 +54,10 @@ async function open(browser, {features, installed, recorder, width = 1240}) {
   });
   await page.goto('https://tico-ui.test/#/meetings', {waitUntil:'domcontentloaded'});
   await page.locator('#meet-recorder').waitFor({state:'attached'});
-  await page.waitForFunction(() => window.__recorderAsked);
+  await page.waitForFunction(() => (window as unknown as RW).__recorderAsked);
   return {page, errors};
 }
-const posted = (page, name) => page.evaluate(n => window.__posted.filter(([k]) => k === n).map(([, body]) => body), name);
+const posted = (page: Page, name: string) => page.evaluate((n: string) => (window as unknown as RW).__posted.filter(([k]) => k === n).map(([, body]) => body), name);
 
 (async () => {
   const browser = await webkit.launch({headless:true});
@@ -70,9 +75,9 @@ const posted = (page, name) => page.evaluate(n => window.__posted.filter(([k]) =
   }
 
   // Not installed, an app too old to offer it, and a browser: the download link, and nothing opens.
-  for (const [features, installed] of [[['openRecorder'], false], [[], true], [null, true]]) {
+  for (const [features, installed] of [[['openRecorder'], false], [[], true], [null, true]] as [string[] | null, boolean][]) {
     const {page, errors} = await open(browser, {features, installed});
-    if (features?.length) await page.waitForFunction(() => window.__posted.some(([n]) => n === 'hasRecorder'));
+    if (features?.length) await page.waitForFunction(() => (window as unknown as RW).__posted.some(([n]) => n === 'hasRecorder'));
     const link = page.locator('a#meet-recorder');
     assert.equal(await link.innerText(), 'Get Tico Recorder');
     assert.equal(await link.getAttribute('href'), DMG);
@@ -84,10 +89,10 @@ const posted = (page, name) => page.evaluate(n => window.__posted.filter(([k]) =
 
   // Tico has not seen a copy lately: just the download link (no hint), no update line.
   const shots = process.env.TICO_UI_SHOTS;
-  const shoot = async (page, name) => {
+  const shoot = async (page: Page, name: string) => {
     if (!shots) return;
     for (const theme of ['light', 'dark']) {
-      await page.evaluate(v => window.ticoTheme?.set(v), theme);
+      await page.evaluate((v: string) => window.ticoTheme?.set(v), theme);
       await page.locator('.meet-review-bar').screenshot({path: require('node:path').join(shots, `${name}-${theme}.png`), animations:'disabled'});
     }
   };

@@ -2,29 +2,37 @@
 // (ui/google-connect.ts). A member connects their own mailbox (read only with Tico's shared app) and sees no setup; a
 // Workspace policy denial is shown as the admin's; only Google's own sign-in page is opened, and its return address
 // (#/settings/inbox) opens Tools › Settings › Email.
-const {chromium} = require('playwright');
+import type {LaunchOptions, Route} from 'playwright';
+import type * as PageSupport from './support/page.cjs';
+import type * as RouteSupport from './support/routes.cjs';
+const {chromium} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
-const {html, uiFile} = require('./support/page.cjs');
-const {unrouted} = require('./support/routes.cjs');
+const {html, uiFile} = require('./support/page.cjs') as typeof PageSupport;
+const {unrouted} = require('./support/routes.cjs') as typeof RouteSupport;
+interface GoogleState {
+  configured?: boolean; mailbox: string; syncing?: boolean; status: string; kind?: string | null; message?: string | null;
+  hint?: string | null; can?: string[]; app?: string; acts?: {mail: boolean; calendar: boolean}; stalled?: boolean;
+}
+declare global { interface Window { mountGoogleConnect: (el: Element) => void } }
 (async () => {
-  const browser = await chromium.launch({headless: true, channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined});
+  const browser = await chromium.launch({headless: true, channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined} as LaunchOptions);
   try {
     const page = await browser.newPage({viewport: {width: 1440, height: 900}, serviceWorkers: 'block'});
-    const errors = [], writes = [];
-    page.on('pageerror', e => errors.push(e.message));
+    const errors: string[] = [], writes: unknown[] = [];
+    page.on('pageerror', (e: Error) => errors.push(e.message));
     page.on('dialog', dialog => dialog.accept());
-    let google = {configured: true, mailbox: 'cara@acme.example', syncing: true, status: 'failed', kind: 'admin_policy',
+    let google: GoogleState = {configured: true, mailbox: 'cara@acme.example', syncing: true, status: 'failed', kind: 'admin_policy',
       message: 'The Google Workspace for acme.example has a policy that blocks Tico, so Google refused the sign-in.',
       hint: 'Ask the administrator for acme.example to allow Tico in the Admin console.', can: []};
     let authUrl = 'https://accounts.google.com/o/oauth2/v2/auth?client_id=x&login_hint=cara%40acme.example';
-    await page.route('**/*', route => {
+    await page.route('**/*', (route: Route) => {
       const req = route.request(), url = new URL(req.url()), p = url.pathname;
-      const json = (body, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
+      const json = (body: unknown, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
       if (url.hostname === 'accounts.google.com') return route.fulfill({contentType: 'text/html', body: '<h1>Google sign-in</h1>'});
       const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/);
-      if (ui && fs.existsSync(uiFile(ui[1])))
-        return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]), 'utf8')});
+      if (ui && fs.existsSync(uiFile(ui[1]!)))
+        return route.fulfill({contentType: ui[1]!.endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]!), 'utf8')});
       if (/\.(?:js|ts)$/.test(p)) return route.fulfill({contentType: 'application/javascript', body: ''});
       if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
       const config = {version: '0.1.0', app_name: 'Tico', local: true};
@@ -80,20 +88,20 @@ const {unrouted} = require('./support/routes.cjs');
     // A read-only connection made with the company's own app is offered the write access on a reconnect, never forced.
     const upgrade = 'Connect Google again to let Tico also label, archive and draft mail, and add calendar events.';
     google = {...google, app: 'own', acts: {mail: false, calendar: false}, message: 'This connection only reads your mail and calendar.', hint: upgrade};
-    await page.evaluate(() => window.mountGoogleConnect(document.querySelector('#set-google')));
+    await page.evaluate(() => window.mountGoogleConnect(document.querySelector('#set-google')!));
     await page.waitForFunction(hint => (document.querySelector('#set-google')?.textContent || '').includes(hint), upgrade);
     assert.equal(await page.locator('#set-google [data-google-connect]').count(), 1);
     assert.equal(await page.locator('#set-google [data-google-disconnect]').count(), 1);
     // A grant with the mail write access only says so, and is offered just the calendar one.
     const calendarUpgrade = 'Connect Google again to let Tico also add calendar events.';
     google = {...google, acts: {mail: true, calendar: false}, message: 'This connection can label, archive and draft mail, but only reads your calendar.', hint: calendarUpgrade, can: ['read mail', 'label and archive mail']};
-    await page.evaluate(() => window.mountGoogleConnect(document.querySelector('#set-google')));
+    await page.evaluate(() => window.mountGoogleConnect(document.querySelector('#set-google')!));
     await page.waitForFunction(hint => (document.querySelector('#set-google')?.textContent || '').includes(hint), calendarUpgrade);
     const connectedLine = () => page.locator('#set-google p', {hasText: 'Connected:'}).innerText();
     assert.equal(await connectedLine(), "Connected: Tico reads cara@acme.example's mail and calendar, and can also label, archive and draft mail.");
     // Once the grant holds the write access, the offer is gone and the connected line names all of it.
     google = {...google, acts: {mail: true, calendar: true}, message: null, hint: null, can: ['read', 'label and archive mail', 'add calendar events']};
-    await page.evaluate(() => window.mountGoogleConnect(document.querySelector('#set-google')));
+    await page.evaluate(() => window.mountGoogleConnect(document.querySelector('#set-google')!));
     await page.locator('#set-google [data-google-disconnect]').waitFor();
     assert.equal(await connectedLine(), "Connected: Tico reads cara@acme.example's mail and calendar, and can also label, archive and draft mail, and add calendar events.");
     assert.equal((await page.locator('#set-google').innerText()).includes(upgrade), false);
@@ -105,7 +113,7 @@ const {unrouted} = require('./support/routes.cjs');
     // A disconnect the holding computer never takes says so, and points to Google's own page to revoke now.
     google = {...google, status: 'disconnecting', stalled: true,
       message: "The computer that holds your Google access hasn't come online, so Tico hasn't revoked it yet."};
-    await page.evaluate(() => window.mountGoogleConnect(document.querySelector('#set-google')));
+    await page.evaluate(() => window.mountGoogleConnect(document.querySelector('#set-google')!));
     await page.locator('#set-google [role=alert]').waitFor();
     assert.match(await page.locator('#set-google').innerText(), /hasn't come online/);
     assert.doesNotMatch(await page.locator('#set-google').innerText(), /within two minutes/);
@@ -113,7 +121,7 @@ const {unrouted} = require('./support/routes.cjs');
 
     // A server without Tico's Google app says so, with no button.
     google = {configured: false, mailbox: 'cara@acme.example', status: 'none'};
-    await page.evaluate(() => window.mountGoogleConnect(document.querySelector('#set-google')));
+    await page.evaluate(() => window.mountGoogleConnect(document.querySelector('#set-google')!));
     await page.waitForFunction(() => /Ask an admin to connect Google in Tools › Settings/.test(document.querySelector('#set-google')?.textContent || ''));
     assert.equal(await page.locator('#set-google [data-google-connect]').count(), 0);
     assert.deepEqual(errors, []);

@@ -5,26 +5,57 @@
 // read-only; the Tool and Version headers apart at 1024 px; no connection, offline, waiting, revoked, and a
 // member who may change nothing; a desktop app's state and a sign-in several bots take turns on. Every request is
 // intercepted.
-const {chromium} = require('playwright');
+import type {LaunchOptions, Locator, Route} from 'playwright';
+import type * as PageSupport from './support/page.cjs';
+import type * as RouteSupport from './support/routes.cjs';
+const {chromium} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
-const {html, uiFile} = require('./support/page.cjs');
-const {unrouted} = require('./support/routes.cjs');
+const {html, uiFile} = require('./support/page.cjs') as typeof PageSupport;
+const {unrouted} = require('./support/routes.cjs') as typeof RouteSupport;
 // Read shipped capabilities so the browser flow cannot drift from its manifest.
 const manifestCaps = JSON.parse(require('node:child_process').execFileSync(process.env.TICO_PYTHON || 'python3', ['-c',
   'import json; from clients.harness_manifests import load; print(json.dumps({k: v["capabilities"] for k, v in load().items()}))'],
   {cwd: require('node:path').resolve(__dirname, '../..'), encoding: 'utf8'}));
+interface Account { email?: string; plan?: string; checked_at?: string; kind?: string }
+interface Weekly { used_percent: number; resets_at: string; reported_at: string; status: string | null; source?: string }
+interface RuntimeState { installed: boolean; authenticated: string; rejected_at?: string; rejected_reason?: string; credential_source?: string; account?: Account | undefined; weekly?: Weekly | undefined }
+interface ToolState { name: string; runtime: string; installed: boolean; version: string; managed: boolean; state: string; wanted: boolean; pinned: boolean; update_available: boolean; detail: string }
+interface BotConnection { bot: string; profile: null; source: string; runtime: string; harness: string; signed_in: boolean; problem: string; warning?: string | undefined }
+interface AppDriverApp { installed: boolean; version: string; running: boolean; signed_in: boolean; background_ok: boolean; ready: boolean; state: string; detail: string }
+interface Machine {
+  id: string; label: string; owner_id: string; bots: string[]; platform: string; version: string; turn_summary: string;
+  turn_counts: {running: number; starting: number; waiting: number; queued: number; waits: unknown[]};
+  last_seen_at: string; needed_runtimes: string[]; bot_runtimes: string[]; harness_choices: Record<string, boolean>;
+  update: {state: string; label: string; target: string}; inbox_only: boolean;
+  readiness: {runtimes: {claude: RuntimeState; codex: RuntimeState; musecode: RuntimeState; cursor: RuntimeState; grok: RuntimeState};
+    harnesses: Record<string, ToolState>; appdriver?: {trusted: boolean; macos: string; detail: string; apps: Record<string, AppDriverApp>} | undefined};
+  profiles: unknown[]; bot_connections: BotConnection[];
+  shared_logins?: {runtime: string; profile: string; display_name: string; count: number; bots: string[]}[] | undefined;
+  may_manage?: boolean | undefined;
+}
+// App globals the page defines; the browser flow reads and drives them through page.evaluate.
+declare const S: {me: {id: string; role: string; bot_admin?: boolean}};
+declare const SETTINGS_DATA: {loaded: boolean; people: unknown[]; machines: {id: string; label?: string; update?: {outdated: boolean; server_release: string} | undefined}[]};
+declare const SETTINGS_PRESENCE: {at: number; checking: boolean; pending: unknown; timer: number | undefined};
+declare function loadSettings(tab?: string): Promise<void>;
+declare function settingsMachinesWatch(): void;
+declare function settingsMachinesRefresh(): Promise<void>;
+declare function renderSettingsMachines(): void;
+declare global {
+  interface Window { computerClosed?: Promise<void>; presenceDraft?: HTMLTextAreaElement; addDraft?: HTMLTextAreaElement; initialSettingsLoad?: Promise<void> }
+}
 
 (async () => {
-  const browser = await chromium.launch({headless: true, channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined});
+  const browser = await chromium.launch({headless: true, channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined} as LaunchOptions);
   try {
     const page = await browser.newPage({viewport: {width: 1440, height: 900}, serviceWorkers: 'block'});
-    const errors = [];
-    page.on('pageerror', e => errors.push(e.message));
-    const now = Date.now(), at = ms => new Date(now + ms).toISOString();
-    const tool = (name, runtime, version) => ({name, runtime, installed: true, version, managed: true, state: 'idle',
+    const errors: string[] = [];
+    page.on('pageerror', (e: Error) => errors.push(e.message));
+    const now = Date.now(), at = (ms: number) => new Date(now + ms).toISOString();
+    const tool = (name: string, runtime: string, version: string): ToolState => ({name, runtime, installed: true, version, managed: true, state: 'idle',
       wanted: true, pinned: false, update_available: false, detail: ''});
-    const box = {id: 'box', label: 'Team box', owner_id: 'ana', bots: ['helper', 'ops', 'writer'], platform: 'linux', version: '0.3.52',
+    const box: Machine = {id: 'box', label: 'Team box', owner_id: 'ana', bots: ['helper', 'ops', 'writer'], platform: 'linux', version: '0.3.52',
       turn_summary: '3 running · 1 starting · 37 waiting for shared login (oldest 2 h) · 5 queued',
       turn_counts: {running: 3, starting: 1, waiting: 37, queued: 5, waits: []},
       last_seen_at: at(-3000), needed_runtimes: ['claude', 'codex'], bot_runtimes: ['claude', 'codex'], harness_choices: {grok: false},
@@ -60,17 +91,17 @@ const manifestCaps = JSON.parse(require('node:child_process').execFileSync(proce
     const revoked = {id: 'old', label: 'Old laptop', owner_id: 'ana', bots: [], platform: 'darwin', revoked_at: at(-86400000), last_seen_at: at(-86400000),
       readiness: {runtimes: {claude: {installed: true, authenticated: 'ready'}}}};
     const me = {id: 'ana', role: 'owner', name: 'Ana', email: 'ana@example.com', cloud: true, registered: true};
-    const writes = [];
+    const writes: {p: string; body: unknown}[] = [];
     let presenceMode = 'fixed', presenceReads = 0, presenceOffset = 0;
-    const heldPresence = [];
+    const heldPresence: Route[] = [];
     let holdRename = false;
-    const heldRenames = [];
-    await page.route('**/*', route => {
+    const heldRenames: (() => Promise<void>)[] = [];
+    await page.route('**/*', (route: Route) => {
       const req = route.request(), p = new URL(req.url()).pathname;
-      const json = (body, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
+      const json = (body: unknown, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
       const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/);
-      if (ui && fs.existsSync(uiFile(ui[1])))
-        return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]), 'utf8')});
+      if (ui && fs.existsSync(uiFile(ui[1]!)))
+        return route.fulfill({contentType: ui[1]!.endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]!), 'utf8')});
       if (/\.(?:js|ts)$/.test(p)) return route.fulfill({contentType: 'application/javascript', body: ''});
       if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
       if (req.method() !== 'GET') {
@@ -85,7 +116,7 @@ const manifestCaps = JSON.parse(require('node:child_process').execFileSync(proce
       const config = {version: '0.1.0', app_name: 'Tico'};
       if (p === '/api/me') return json({...me, config});
       if (p === '/api/v2/config') return json(config);
-      if (p === '/api/employees') return json(['helper', 'ops', 'writer'].map(name => ({name, display_name: name[0].toUpperCase() + name.slice(1),
+      if (p === '/api/employees') return json(['helper', 'ops', 'writer'].map(name => ({name, display_name: name[0]!.toUpperCase() + name.slice(1),
         status: 'active', owner_id: 'ana', can_manage: true, users: [], bot_owners: [], machine: {runner_id: 'box', label: 'Team box', owner_id: 'ana'}})));
       if (p === '/api/issues') return json([]);
       if (p === '/api/humans' || p === '/api/people') return json({people: [{id: 'ana', name: 'Ana'}, {id: 'cara', name: 'Cara'}], teams: {}});
@@ -115,11 +146,11 @@ const manifestCaps = JSON.parse(require('node:child_process').execFileSync(proce
     });
     await page.goto('https://tico-ui.test/#/settings');
     await page.locator('[data-settings-tab=devices]').click();
-    const row = id => page.locator(`#set-machines tr[data-computer-row="${id}"]`);
+    const row = (id: string) => page.locator(`#set-machines tr[data-computer-row="${id}"]`);
     await row('box').waitFor();
     // Opening the tab paints the list, then re-reads presence and says "checking…" until that answers.
     await page.waitForFunction(() => SETTINGS_PRESENCE.at && !SETTINGS_PRESENCE.checking);
-    const cells = async locator => (await locator.locator('td').allInnerTexts()).map(t => t.replace(/\s+/g, ' ').trim());
+    const cells = async (locator: Locator) => (await locator.locator('td').allInnerTexts()).map(t => t.replace(/\s+/g, ' ').trim());
 
     // 1. One row per computer: status and name, bots, a column per AI tool (this server keeps no subscriptions, so each
     // shows the computer's login), and what it does now. No tool table, sign-in rows or menu inline.
@@ -162,7 +193,7 @@ const manifestCaps = JSON.parse(require('node:child_process').execFileSync(proce
     assert.deepEqual(await conns.locator('.computer-conn-head').allInnerTexts(), ['Claude Code', 'Codex', 'Muse Code']);
     assert.match(await codex.innerText(), /Weekly 30% left/);
     assert.match(await codex.innerText(), /Bots: Ops, Writer/);
-    assert.equal(await codex.locator('meter').evaluateAll(m => m.map(x => x.value)).then(v => v.join()), '30');
+    assert.equal(await codex.locator('meter').evaluateAll(m => m.map(x => (x as HTMLMeterElement).value)).then(v => v.join()), '30');
     assert.match(await dialog.locator('[data-connection="own:musecode"]').innerText(), /Login expired or rejected[\s\S]*The provider refused the login/);
     assert.equal(await dialog.locator('[data-detail-section=connections] > :last-child [data-add-connection=box]').isEnabled(), true, 'Add connection at the end');
     // Both tools can sign in the computer's one login from Add connection.
@@ -178,9 +209,9 @@ const manifestCaps = JSON.parse(require('node:child_process').execFileSync(proce
           await page.setViewportSize(viewport);
           if (process.env.SHOTS) await page.screenshot({path: `${process.env.SHOTS}/cursor-${viewport.width}.png`});
           const rect = await add.evaluate(d => {
-            const box = el => el.getBoundingClientRect().toJSON();
-            return {dialog:box(d),header:box(d.querySelector('header')),back:box(d.querySelector('[data-add-back]')),
-              action:box(d.querySelector('[data-add-own]')),body:d.querySelector('.tmodal-body').getBoundingClientRect().toJSON()};
+            const box = (el: Element) => el.getBoundingClientRect().toJSON();
+            return {dialog:box(d),header:box(d.querySelector('header')!),back:box(d.querySelector('[data-add-back]')!),
+              action:box(d.querySelector('[data-add-own]')!),body:d.querySelector('.tmodal-body')!.getBoundingClientRect().toJSON()};
           });
           assert.ok(rect.back.top >= rect.header.top && rect.back.bottom <= rect.header.bottom, 'Back is in the header');
           assert.ok(rect.action.left >= rect.body.left + 12 && rect.action.right <= rect.body.right - 12, 'sign-in action stays inside the padding');
@@ -206,7 +237,7 @@ const manifestCaps = JSON.parse(require('node:child_process').execFileSync(proce
     // 12. Tool and Version have their own room at 1024 px and wide.
     for (const width of [1440, 1024]) {
       await page.setViewportSize({width, height: 900});
-      const [first, version] = await dialog.locator('.machine-tools-2 [role=columnheader]').evaluateAll(list => list.map(h => h.getBoundingClientRect()).map(r => [r.left, r.right]));
+      const [first, version] = (await dialog.locator('.machine-tools-2 [role=columnheader]').evaluateAll(list => list.map(h => h.getBoundingClientRect()).map(r => [r.left, r.right]))) as [[number, number], [number, number]];
       assert.ok(first[1] <= version[0], `headers apart at ${width}px: ${JSON.stringify([first, version])}`);
     }
     const version = dialog.locator('[data-machine-tool=cursor] .machine-tool-version');
@@ -215,7 +246,7 @@ const manifestCaps = JSON.parse(require('node:child_process').execFileSync(proce
     // Settings: inbox-only saves; Revoke is here and not on the row.
     await dialog.locator('[data-inbox-only=box]').check();
     for (let i = 0; i < 100 && !writes.some(w => w.p === '/api/v2/runners/box/inbox-only'); i++) await page.waitForTimeout(20);
-    assert.deepEqual(writes.find(w => w.p === '/api/v2/runners/box/inbox-only').body, {enabled: true});
+    assert.deepEqual(writes.find(w => w.p === '/api/v2/runners/box/inbox-only')!.body, {enabled: true});
     // Rename: the name becomes a field; Escape and Cancel leave it; a blank name is not sent; Save renames.
     const renamed = () => writes.filter(w => w.p === '/api/v2/computers/box/label');
     const nameField = dialog.locator('[data-computer-rename-input]');
@@ -254,7 +285,7 @@ const manifestCaps = JSON.parse(require('node:child_process').execFileSync(proce
     await dialog.locator('[data-computer-rename=empty]').click();
     await nameField.fill('Spare draft');
     const writesBefore = writes.length;
-    await heldRenames.shift()();
+    await heldRenames.shift()!();
     holdRename = false;
     await page.waitForFunction(() => (SETTINGS_DATA.machines || []).find(m => m.id === 'box')?.label === 'Slow box');
     await page.evaluate(() => loadSettings());
@@ -275,7 +306,7 @@ const manifestCaps = JSON.parse(require('node:child_process').execFileSync(proce
     // API-key billing is visible before an upgrade moves bots to the computer login; account switching stays available.
     const account = box.readiness.runtimes.codex.account;
     box.readiness.runtimes.codex.account = {kind: 'api_key'};
-    box.bot_connections[1].warning = 'API credit is not checked here. Check billing or switch to the intended subscription.';
+    box.bot_connections[1]!.warning = 'API credit is not checked here. Check billing or switch to the intended subscription.';
     await page.evaluate(() => loadSettings('devices'));
     await row('box').locator('.machine-name').click();
     await dialog.locator('[data-login-warning=codex]').waitFor();
@@ -286,7 +317,7 @@ const manifestCaps = JSON.parse(require('node:child_process').execFileSync(proce
     assert.equal(await dialog.evaluate(el => el.scrollWidth <= el.clientWidth), true);
     await dialog.locator('[data-detail-close]').click();
     box.readiness.runtimes.codex.account = account;
-    delete box.bot_connections[1].warning;
+    delete box.bot_connections[1]!.warning;
     await page.setViewportSize({width: 1440, height: 900});
     await page.evaluate(() => loadSettings('devices'));
 
@@ -301,7 +332,7 @@ const manifestCaps = JSON.parse(require('node:child_process').execFileSync(proce
     await page.evaluate(() => loadSettings());
     await row('box').locator('[data-machine-status]', {hasText: 'offline'}).waitFor();
     assert.equal(await row('box').locator('[data-machine-status]').innerText(), 'offline · last seen 3h ago');
-    assert.equal(await row('box').locator('.machine-chip meter').first().evaluate(m => m.value), 30);
+    assert.equal(await row('box').locator('.machine-chip meter').first().evaluate(m => (m as HTMLMeterElement).value), 30);
     await row('box').locator('.machine-name').click();
     await dialog.locator('[data-computer-offline]').waitFor();
     assert.match(await dialog.locator('[data-computer-offline]').innerText(), /Computer is offline/);
@@ -370,7 +401,7 @@ const manifestCaps = JSON.parse(require('node:child_process').execFileSync(proce
     await online();
     assert.equal(await signIn.evaluate(node => node === document.activeElement), true, 'popup control keeps focus across polling');
     await dialog.evaluate(node => {
-      window.computerClosed = new Promise(resolve => node.addEventListener('close', () => resolve(), {once: true}));
+      window.computerClosed = new Promise<void>(resolve => node.addEventListener('close', () => resolve(), {once: true}));
     });
     await page.keyboard.press('Escape');
     await page.clock.runFor(100);
@@ -381,7 +412,7 @@ const manifestCaps = JSON.parse(require('node:child_process').execFileSync(proce
     await row('box').locator('[data-machine-status]').click();
     await page.evaluate(() => SETTINGS_PRESENCE.pending);
     await dialog.evaluate(node => {
-      window.computerClosed = new Promise(resolve => node.addEventListener('close', () => resolve(), {once: true}));
+      window.computerClosed = new Promise<void>(resolve => node.addEventListener('close', () => resolve(), {once: true}));
     });
     await page.keyboard.press('Escape');
     await page.clock.runFor(100);
@@ -392,7 +423,7 @@ const manifestCaps = JSON.parse(require('node:child_process').execFileSync(proce
     await rowButton.dispatchEvent('click');
     await page.evaluate(() => SETTINGS_PRESENCE.pending);
     await dialog.evaluate(node => {
-      window.computerClosed = new Promise(resolve => node.addEventListener('close', () => resolve(), {once: true}));
+      window.computerClosed = new Promise<void>(resolve => node.addEventListener('close', () => resolve(), {once: true}));
     });
     await page.keyboard.press('Escape');
     await page.clock.runFor(100);
@@ -421,7 +452,7 @@ const manifestCaps = JSON.parse(require('node:child_process').execFileSync(proce
     });
     await page.evaluate(() => settingsMachinesRefresh());
     assert.deepEqual(await page.evaluate(() => {
-      const field = document.querySelector('[data-presence-draft]');
+      const field = document.querySelector('[data-presence-draft]') as HTMLTextAreaElement;
       return [field === window.presenceDraft, field.value, document.activeElement === field, field.selectionStart, field.selectionEnd];
     }), [true, 'unfinished connection', true, 3, 8]);
 
@@ -434,7 +465,7 @@ const manifestCaps = JSON.parse(require('node:child_process').execFileSync(proce
     });
     await page.evaluate(() => settingsMachinesRefresh());
     assert.deepEqual(await page.evaluate(() => {
-      const field = document.querySelector('[data-add-draft]');
+      const field = document.querySelector('[data-add-draft]') as HTMLTextAreaElement;
       return [field === window.addDraft, field.value, document.activeElement === field, field.selectionStart, field.selectionEnd];
     }), [true, 'unfinished add connection', true, 2, 7]);
     await add.locator('[data-add-close]').first().click();
@@ -461,7 +492,7 @@ const manifestCaps = JSON.parse(require('node:child_process').execFileSync(proce
 
     // An outdated online computer remains in its banner while presence is stale.
     await page.evaluate(() => {
-      SETTINGS_DATA.machines.find(machine => machine.id === 'box').update = {outdated: true, server_release: '0.3.53'};
+      SETTINGS_DATA.machines.find(machine => machine.id === 'box')!.update = {outdated: true, server_release: '0.3.53'};
       renderSettingsMachines();
     });
     assert.equal(await page.locator('[data-runner-outdated-banner]').count(), 1);

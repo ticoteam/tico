@@ -1,20 +1,30 @@
 // Imported history has no runtime credential actions; real agents retain them in their Settings tab. A human's Grok Bots
 // are ordinary org-chart rows: source sections do not override their placement or ordering.
-const {chromium} = require('playwright');
+import type {Route} from 'playwright';
+import type * as PageSupport from './support/page.cjs';
+import type * as RouteSupport from './support/routes.cjs';
+const {chromium} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
-const {html, uiFile} = require('./support/page.cjs');
-const {unrouted} = require('./support/routes.cjs');
+const {html, uiFile} = require('./support/page.cjs') as typeof PageSupport;
+const {unrouted} = require('./support/routes.cjs') as typeof RouteSupport;
+declare const S: {emps: {name: string; agent: {last_seen_at: string}}[]; route: string};
+declare function settingsBotProblem(bot: unknown): string;
+declare function orgDrop(from: string, to: string): void;
+declare function refresh(full: boolean): void;
+declare const collapsed: Set<string>;
+declare function saveCollapsed(): void;
+declare function renderTree(): void;
 
 (async () => {
   const browser = await chromium.launch({headless: true});
   const page = await browser.newPage({serviceWorkers: 'block'});
   const last = new Date(Date.now() - 27 * 3600e3).toISOString();
   let fresh = false;
-  const placements = {};
-  const errors = [], writes = [];
+  const placements: Record<string, Record<string, unknown>> = {};
+  const errors: string[] = [], writes: unknown[] = [];
   page.on('pageerror', error => errors.push(error.message));
-  await page.addInitScript(() => { window.EventSource = undefined; });
+  await page.addInitScript(() => { (window as unknown as {EventSource: unknown}).EventSource = undefined; });
   const bots = () => [
     {name:'history-copy',display_name:'Imported Designer',status:'active',host:'keeper',can_chat:true,owner_id:'ana',
       online:fresh,agent:{harness:'grokbot',credential:true,synced:true,last_seen_at:last}},
@@ -22,14 +32,14 @@ const {unrouted} = require('./support/routes.cjs');
       online:false,agent:{harness:'hermes',credential:true,last_seen_at:last}},
     ...[['groky','Groky','Pinned'],['grok-scout','Grok Scout','Outreach'],['grok-poetry','Poetry Post','']].map(([name,display_name,section]) =>
       ({name,display_name,status:'active',host:'keeper',harness:'grokbot',reports_to:'human:ana',org_parent:'p:ana',owner_id:'ana',online:true,
-        revision:1,...placements[name],
+        revision:1,...placements[name!],
         agent:{harness:'grokbot',credential:true,synced:true,label:'Grok Bot',section,last_seen_at:last}})),
     {name:'dots',display_name:'Dots',status:'active',host:'keeper',harness:'dots',reports_to:'human:ana',org_parent:'p:ana',owner_id:'ana',online:true,
       agent:{harness:'dots',credential:true,synced:true,label:'Dots',section:'',last_seen_at:last}}
   ];
-  await page.route('**/*', route => {
+  await page.route('**/*', (route: Route) => {
     const request = route.request(), p = new URL(request.url()).pathname;
-    const json = body => route.fulfill({contentType:'application/json',body:JSON.stringify(body)});
+    const json = (body: unknown) => route.fulfill({contentType:'application/json',body:JSON.stringify(body)});
     // Opening a bot page saves the recently-viewed list (sidebar.js, after 800 ms); that is the page's own
     // preference, not a credential or a message, and whether it lands before the end depends on load.
     if (request.method() !== 'GET' && !p.startsWith('/api/v2/preferences/')) writes.push(p);
@@ -51,7 +61,7 @@ const {unrouted} = require('./support/routes.cjs');
     if (definition && request.method() === 'POST') {
       const body = request.postDataJSON();
       assert.equal(body.expected_revision, 1);
-      placements[definition[1]] = {reports_to:body.reports_to,
+      placements[definition[1]!] = {reports_to:body.reports_to,
         org_parent:body.reports_to.startsWith('human:') ? 'p:' + body.reports_to.slice(6) : 'b:' + body.reports_to};
       return json({});
     }
@@ -80,7 +90,7 @@ const {unrouted} = require('./support/routes.cjs');
     await page.locator('#bot-tip:not([hidden])').waitFor();
     assert.match(await page.locator('#bot-tip').innerText(),/Last sync/);
     assert.doesNotMatch(await page.locator('#bot-tip').innerText(),/Not reporting|Last seen/);
-    assert.equal(await page.evaluate(()=>S.emps.find(e=>e.name==='history-copy').agent.last_seen_at),last);
+    assert.equal(await page.evaluate(()=>S.emps.find(e=>e.name==='history-copy')!.agent.last_seen_at),last);
     assert.equal(await page.evaluate(()=>settingsBotProblem(S.emps.find(e=>e.name==='history-copy'))),'history not synced');
     if (process.env.TICO_SCREENSHOT_DIR) await page.screenshot({path:process.env.TICO_SCREENSHOT_DIR+'/imported-history.png'});
 
@@ -103,13 +113,13 @@ const {unrouted} = require('./support/routes.cjs');
     assert.deepEqual(errors,[]);
     assert.deepEqual(writes,[],'reading snapshots creates no credential or sends a message');
     await page.goto('https://tico-ui.test/#/');
-    const node = key => page.locator(`#tree [data-org="${key}"]`);
-    const children = key => node(key).locator('xpath=ancestor::li[1]').locator(':scope > ul > li > .noderow > a.node');
+    const node = (key: string) => page.locator(`#tree [data-org="${key}"]`);
+    const children = (key: string) => node(key).locator('xpath=ancestor::li[1]').locator(':scope > ul > li > .noderow > a.node');
     await node('b:groky').waitFor();
     assert.equal(await page.locator('#tree .org-cluster, #tree [data-toggle^="c:"]').count(),0);
     // Ana, the signed-in owner, is the top of the chart: her reports sit at the top level after her row, then Ben (also
     // at the top, nobody above him) and the bots that report to no one.
-    const top = () => page.locator('#tree > li > .noderow').evaluateAll(rows => rows.map(row => (row.querySelector('[data-org]') || row).dataset.org));
+    const top = () => page.locator('#tree > li > .noderow').evaluateAll(rows => rows.map(row => ((row.querySelector('[data-org]') || row) as HTMLElement).dataset.org));
     assert.deepEqual(await top(),['p:ana','g:marketing','b:dots','b:grok-scout','b:groky','b:grok-poetry','p:ben','b:history-copy','b:live-agent'],
       'Grok sections and Pinned do not override ordinary sibling ordering');
     for (const name of ['groky','grok-scout','grok-poetry']) {

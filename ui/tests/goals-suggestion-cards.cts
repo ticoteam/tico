@@ -6,29 +6,32 @@
 // "No, leave it" rejects in one click, then the card reads "Left as it is. Tell it why? (optional)" with a
 // one-line box and Send: Send saves the reason (POST .../note), a refusal shows beside the box, leaving it does nothing.
 // Fixtures only.
-const {chromium} = require('playwright');
+import type {Route} from 'playwright';
+import type * as PageSupport from './support/page.cjs';
+import type * as RouteSupport from './support/routes.cjs';
+const {chromium} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const {html, uiFile} = require('./support/page.cjs');
-const {unrouted} = require('./support/routes.cjs');
+const {html, uiFile} = require('./support/page.cjs') as typeof PageSupport;
+const {unrouted} = require('./support/routes.cjs') as typeof RouteSupport;
 const screenshotDir = process.env.TICO_SCREENSHOT_DIR;
 
-const bot = (name, display_name, org_parent, over) => ({name, display_name, org_parent, host: 'keeper', status: 'active', can_chat: true, ...over});
+const bot = (name: string, display_name: string, org_parent: string, over?: Record<string, unknown>) => ({name, display_name, org_parent, host: 'keeper', status: 'active', can_chat: true, ...over});
 const bots = [bot('coo', 'Assistant', ''), bot('botops', 'BotOps', ''), bot('librarian', 'Librarian', ''),
   bot('goal-manager', 'Strategy Bot', 'p:ana', {reports_to: ''}), bot('cmo', 'Head of Marketing', 'p:ana')];
 const GOAL = 'Double organic signups';
 const LONG = 'Signed-up accounts that finish setup, counted once per account, in the week the last setup step is done, '.repeat(8);   // long enough to wrap past four lines on Goals' full width (no rail beside it)
-const prop = (id, kind, payload, card, over) => ({id, kind, goal_id: 'g-cmo', kpi_id: null, payload, reason: 'No measure on this goal yet',
+const prop = (id: string, kind: string, payload: unknown, card: Record<string, unknown> & {kpi_name?: string}, over?: Record<string, unknown>) => ({id, kind, goal_id: 'g-cmo', kpi_id: null, payload, reason: 'No measure on this goal yet',
   proposed_by: 'bot:goal-manager', proposed_at: new Date().toISOString(), status: 'pending', card: {goal_title: GOAL, ...card}, ...over});
-const measure = (name, over) => ({name, definition: '', source_note: '', unit: '', direction: 'up', existing: false, ...over});
+const measure = (name: string, over?: Record<string, unknown>) => ({name, definition: '', source_note: '', unit: '', direction: 'up', existing: false, ...over});
 
 (async () => {
   const browser = await chromium.launch({channel: process.env.TICO_BROWSER_CHANNEL ?? 'chrome', headless: true});
   try {
     const page = await browser.newPage({viewport: {width: 1440, height: 1100}, serviceWorkers: 'block'});
-    const errors = [], posted = [], noted = [];
-    page.on('pageerror', e => errors.push(e.message));
+    const errors: string[] = [], posted: {id: string; body: unknown}[] = [], noted: {id: string; body: unknown}[] = [];
+    page.on('pageerror', (e: Error) => errors.push(e.message));
     const needs = [
       prop('p-new', 'goal_kpi', {kpi: {name: 'Weekly demos', definition: 'Demos held, per week'}},
         {measure: measure('Weekly demos', {definition: 'Demos held, per week'}), target_label: ''}),
@@ -49,13 +52,13 @@ const measure = (name, over) => ({name, definition: '', source_note: '', unit: '
       {measure: measure('Signups', {definition: 'New accounts', source_note: 'Stripe'}), target_label: 'range 40+'}), may_decide: true};
     // A recovery is out of this card's scope: in a goal's panel it keeps the recovery card's words.
     const recovery = {...prop('p-rec', 'recovery', {pick: 0, options: [{label: 'Move the demo task to Sales'}]}, {}), may_decide: true};
-    await page.route('**/*', async route => {
+    await page.route('**/*', async (route: Route) => {
       const req = route.request(), url = new URL(req.url()), p = url.pathname;
-      const json = body => route.fulfill({status: 200, contentType: 'application/json', body: JSON.stringify(body)});
+      const json = (body: unknown) => route.fulfill({status: 200, contentType: 'application/json', body: JSON.stringify(body)});
       if (url.origin !== 'http://tico-ui.test') return route.abort();
       if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
       const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/);
-      if (ui) { const file = uiFile(ui[1]); if (fs.existsSync(file)) return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(file, 'utf8')}); }
+      if (ui) { const file = uiFile(ui[1]!); if (fs.existsSync(file)) return route.fulfill({contentType: ui[1]!.endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(file, 'utf8')}); }
       if (p === '/api/v2/events') return;
       if (p === '/api/employees') return json(bots);
       if (p === '/api/me') return json({id: 'ana', name: 'Ana Silva', email: 'ana@example.test', role: 'owner', mover: true, cloud: true});
@@ -67,7 +70,7 @@ const measure = (name, over) => ({name, definition: '', source_note: '', unit: '
       if (p === '/api/v2/goals/needs-you') return json({actor: 'human:ana', items: needs});
       const decide = p.match(/^\/api\/v2\/proposals\/([^/]+)\/decide$/);
       if (decide) {
-        posted.push({id: decide[1], body: req.postDataJSON()});
+        posted.push({id: decide[1]!, body: req.postDataJSON()});
         const at = needs.findIndex(i => i.proposal.id === decide[1]);
         if (at >= 0) needs.splice(at, 1);
         // The server offers a reason to whoever turned it down, unless it is about a bot they may not read.
@@ -76,7 +79,7 @@ const measure = (name, over) => ({name, definition: '', source_note: '', unit: '
       }
       const note = p.match(/^\/api\/v2\/proposals\/([^/]+)\/note$/);
       if (note) {
-        noted.push({id: note[1], body: req.postDataJSON()});
+        noted.push({id: note[1]!, body: req.postDataJSON()});
         if (note[1] === 'p-tgt') return route.fulfill({status: 422, contentType: 'application/json', body: JSON.stringify({error: {code: 'duplicate', detail: 'It already has a reason; a reason is added once'}})});
         return json({proposal: {id: note[1], status: 'rejected', decision_note: req.postDataJSON().note, may_reason: false}});
       }
@@ -86,9 +89,9 @@ const measure = (name, over) => ({name, definition: '', source_note: '', unit: '
     assert.match(await page.locator('#goal-needs-line').innerText(), /^\d+ suggestions\s*·\s*Review$/, 'one quiet line');
     await page.locator('#goal-needs-line [data-needs-review]').click();
     await page.locator('#goal-needs .kpi-prop').first().waitFor();
-    const card = id => page.locator(`#goal-needs [data-proposal="${id}"]`);
-    const buttons = id => card(id).locator('.kpi-prop-do button').allInnerTexts();
-    const decided = async id => { for (let n = 0; n < 80 && !posted.some(x => x.id === id); n++) await page.waitForTimeout(50); return posted.find(x => x.id === id)?.body; };
+    const card = (id: string) => page.locator(`#goal-needs [data-proposal="${id}"]`);
+    const buttons = (id: string) => card(id).locator('.kpi-prop-do button').allInnerTexts();
+    const decided = async (id: string) => { for (let n = 0; n < 80 && !posted.some(x => x.id === id); n++) await page.waitForTimeout(50); return posted.find(x => x.id === id)?.body; };
 
     // No goal suggestion card reads Confirm or Reject; each yes says what it does, each no is "No, leave it".
     assert.doesNotMatch(await page.locator('#goal-needs').innerText(), /\b(Confirm|Reject)\b/);
@@ -116,7 +119,7 @@ const measure = (name, over) => ({name, definition: '', source_note: '', unit: '
     // The goal editor's target fields, folded away under "Set a target (optional)".
     const set = card('p-new').locator('details.kpi-prop-set');
     assert.equal(await set.locator('summary').innerText(), 'Set a target (optional)');
-    assert.equal(await set.evaluate(d => d.open), false, 'folded until opened');
+    assert.equal(await set.evaluate(d => (d as HTMLDialogElement).open), false, 'folded until opened');
     assert.equal(await card('p-new').locator('select[name=kind]').isVisible(), false);
 
     // New definition and new wording read Now and Proposed; long text is cut to four lines until "Show all".

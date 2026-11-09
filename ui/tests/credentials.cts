@@ -2,24 +2,33 @@
 // the tool whose variable it fills, and grants it to a bot. The secret is sent once, in the create request, and is
 // never shown again (only its preview); a member with no vault access never reads the vault and has nothing to add.
 // The old Credentials address lands here. Fixtures only, no network.
-const {chromium, webkit} = require('playwright');
+import type {Browser, LaunchOptions, Route} from 'playwright';
+import type * as PageSupport from './support/page.cjs';
+import type * as RouteSupport from './support/routes.cjs';
+const {chromium, webkit} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
-const {html, uiFile} = require('./support/page.cjs');
-const {unrouted} = require('./support/routes.cjs');
+const {html, uiFile} = require('./support/page.cjs') as typeof PageSupport;
+const {unrouted} = require('./support/routes.cjs') as typeof RouteSupport;
 
 const SECRET = 'jira-token-value-9f8e7d6c5b4a';
 
-async function open(browser, me, vault) {
+interface Grant {id: string; subject: string; can_revoke: boolean}
+interface Credential {id: string; name: string; username: string; kind: string; env: string; preview: string; source: string; revision: number;
+  stored: boolean; can_reveal: boolean; last_used_at: string | null; last_used_by: string; grants: Grant[]}
+interface Vault {credentials: Credential[]; can_manage: boolean; configured: boolean; people: {id: string; name: string; email: string}[];
+  bots: {id: string; name: string; owner_id: string}[]}
+
+async function open(browser: Browser, me: Record<string, unknown>, vault: Vault) {
   const page = await browser.newPage({viewport: {width: 1200, height: 900}, serviceWorkers: 'block'});
-  const seen = {errors: [], posts: [], vault: JSON.parse(JSON.stringify(vault)), reads: 0};
-  page.on('pageerror', e => seen.errors.push(e.message));
-  await page.route('**/*', route => {
+  const seen: {errors: string[]; posts: {path: string; body: string}[]; vault: Vault; reads: number} = {errors: [], posts: [], vault: JSON.parse(JSON.stringify(vault)) as Vault, reads: 0};
+  page.on('pageerror', (e: Error) => seen.errors.push(e.message));
+  await page.route('**/*', (route: Route) => {
     const req = route.request(), url = new URL(req.url()), p = url.pathname;
-    const json = (body, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
+    const json = (body: unknown, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
     if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
     const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/);
-    if (ui && fs.existsSync(uiFile(ui[1]))) return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]), 'utf8')});
+    if (ui && fs.existsSync(uiFile(ui[1]!))) return route.fulfill({contentType: ui[1]!.endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]!), 'utf8')});
     if (/\/marked\.min\.js$/.test(p)) return route.fulfill({contentType: 'application/javascript', body: 'window.marked={parse:s=>String(s)}'});
     if (url.origin !== 'https://tico-ui.test') return route.abort();
     if (req.method() !== 'GET') seen.posts.push({path: p, body: req.postData() || ''});
@@ -34,13 +43,13 @@ async function open(browser, me, vault) {
     if (p === '/api/v2/groups') return json([]);
     if (p === '/api/v2/credentials' && req.method() === 'GET') { seen.reads++; return json(seen.vault); }
     if (p === '/api/v2/credentials' && req.method() === 'POST') {
-      const body = JSON.parse(req.postData());
+      const body = JSON.parse(req.postData()!);
       seen.vault.credentials.push({id: 'c1', name: body.name, username: body.username, kind: body.kind, env: body.env, preview: '••••••', source: '', revision: 1,
         stored: true, can_reveal: true, last_used_at: null, last_used_by: '', grants: []});
       return json({id: 'c1', name: body.name});
     }
     if (p === '/api/v2/credentials/c1/grants') {
-      seen.vault.credentials[0].grants.push({id: 'g1', subject: JSON.parse(req.postData()).subject, can_revoke: true});
+      seen.vault.credentials[0]!.grants.push({id: 'g1', subject: JSON.parse(req.postData()!).subject, can_revoke: true});
       return json({id: 'g1'});
     }
     if (p.endsWith('/watch')) return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});
@@ -51,9 +60,9 @@ async function open(browser, me, vault) {
 
 (async () => {
   const browser = process.env.TICO_BROWSER === 'webkit' ? await webkit.launch({headless: true})
-    : await chromium.launch({channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined, headless: true});
+    : await chromium.launch({channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined, headless: true} as LaunchOptions);
   try {
-    const vault = {credentials: [], can_manage: true, configured: true,
+    const vault: Vault = {credentials: [], can_manage: true, configured: true,
       people: [{id: 'ana', name: 'Ana', email: 'ana@acme.example'}], bots: [{id: 'jira-manager', name: 'Jira Manager', owner_id: 'ana'}]};
     {
       const {page, seen} = await open(browser, {id: 'ana', name: 'Ana', role: 'owner', cloud: true, credential_access: true}, vault);
@@ -72,7 +81,7 @@ async function open(browser, me, vault) {
       await page.locator('.lc-creds [data-vault-share]').waitFor();
       const created = seen.posts.filter(r => r.path === '/api/v2/credentials');
       assert.equal(created.length, 1);
-      assert.deepEqual(JSON.parse(created[0].body), {name: 'Jira login', username: '', kind: 'api_key', env: 'JIRA_BASIC_AUTH', source: '', secret: SECRET});
+      assert.deepEqual(JSON.parse(created[0]!.body), {name: 'Jira login', username: '', kind: 'api_key', env: 'JIRA_BASIC_AUTH', source: '', secret: SECRET});
 
       // Never shown again: the tool's credential has the name, the variable and whether it is set.
       const row = await page.locator('.lc-creds').innerText();

@@ -7,30 +7,38 @@
 // A credential no tool names has its own page. The old addresses (#/library/connections/<tool>, #/integrations, #/credentials)
 // lead to Tools. A member who cannot open the vault never reads it. No secret value is ever on the page.
 // Phone first (390×844), then a computer. TICO_UI_SHOTS=<dir> saves screenshots.
-const {chromium} = require('playwright');
+import type {Browser, Page, Route} from 'playwright';
+import type * as PageSupport from './support/page.cjs';
+import type * as RouteSupport from './support/routes.cjs';
+const {chromium} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const {html, uiFile} = require('./support/page.cjs');
-const {unrouted} = require('./support/routes.cjs');
+const {html, uiFile} = require('./support/page.cjs') as typeof PageSupport;
+const {unrouted} = require('./support/routes.cjs') as typeof RouteSupport;
+declare const S: {me: {id: string} | null; emps: unknown[] | null};
+interface Me {id: string; name: string; email: string; role: string; company_role: string; cloud: boolean; credential_access: boolean; bot_admin?: boolean}
+interface Grant {id: string; subject: string; granted_by: string; parent_id: null; can_revoke: boolean}
+interface Cred {id: string; name: string; username: string; kind: string; env: string; preview: string; source: string; revision: number; created_at: string; updated_at: string; stored: boolean; can_reveal: boolean; last_used_at: string | null; last_used_by: string; grants: Grant[]}
+interface Seen {errors: string[]; writes: {method: string; path: string; body: string}[]; vaultReads: number; vault: {credentials: Cred[]}}
 const uiDir = path.join(__dirname, '..');
-const fixture = name => JSON.parse(fs.readFileSync(path.join(__dirname, 'fixtures', name), 'utf8'));
+const fixture = (name: string) => JSON.parse(fs.readFileSync(path.join(__dirname, 'fixtures', name), 'utf8'));
 const FX = fixture('redesign-tools.json');
 const roster = fixture('redesign-roster.json');
 const PHONE = {width: 390, height: 844}, DESKTOP = {width: 1440, height: 900};
 const LIST = '#/tools/keys';
 const SECRET = 'ghp-secret-value-5c4b3a';
-const OWNER = {id: 'ana', name: 'Ana Silva', email: 'ana@acme.example', role: 'owner', company_role: 'owner', cloud: true, credential_access: true, bot_admin: true};
-const MEMBER = {id: 'cara', name: 'Cara Diaz', email: 'cara@acme.example', role: 'human', company_role: 'member', cloud: true, credential_access: false};
+const OWNER: Me = {id: 'ana', name: 'Ana Silva', email: 'ana@acme.example', role: 'owner', company_role: 'owner', cloud: true, credential_access: true, bot_admin: true};
+const MEMBER: Me = {id: 'cara', name: 'Cara Diaz', email: 'cara@acme.example', role: 'human', company_role: 'member', cloud: true, credential_access: false};
 
-async function open(browser, {viewport = PHONE, hash = LIST, me = OWNER, tools = FX.tools.integrations, listGate = null, emps = roster.employees, groups = FX.groups} = {}) {
+async function open(browser: Browser, {viewport = PHONE, hash = LIST, me = OWNER, tools = FX.tools.integrations, listGate = null, emps = roster.employees, groups = FX.groups}: {viewport?: {width: number; height: number}; hash?: string; me?: Me; tools?: unknown[]; listGate?: Promise<unknown> | null; emps?: unknown[]; groups?: unknown[]} = {}) {
   const page = await browser.newPage({viewport, serviceWorkers: 'block', hasTouch: viewport === PHONE});
-  const seen = {errors: [], writes: [], vaultReads: 0, vault: JSON.parse(JSON.stringify(FX.vault))};
-  page.on('pageerror', e => seen.errors.push(e.message));
+  const seen: Seen = {errors: [], writes: [], vaultReads: 0, vault: JSON.parse(JSON.stringify(FX.vault))};
+  page.on('pageerror', (e: Error) => seen.errors.push(e.message));
   const config = {company_name: 'Acme'};
-  await page.route('**/*', async route => {
+  await page.route('**/*', async (route: Route) => {
     const req = route.request(), url = new URL(req.url()), p = url.pathname, method = req.method();
-    const json = (body, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
+    const json = (body: unknown, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
     if (url.origin !== 'http://tico-ui.test') return route.abort();
     if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
     const file = p.startsWith('/tico/ui/') ? uiFile(p.slice(9)) : p.startsWith('/vendor/') ? path.join(uiDir, p) : '';
@@ -47,7 +55,7 @@ async function open(browser, {viewport = PHONE, hash = LIST, me = OWNER, tools =
     const m = p.match(/^\/api\/v2\/(?:tools|integrations)(?:\/([^/]+))?$/);
     if (m && !m[1]) { await listGate; return json({label: 'Available tools', integrations: tools}); }
     if (m) {
-      const one = FX.pages[decodeURIComponent(m[1])];
+      const one = FX.pages[decodeURIComponent(m[1]!)];
       return one ? json(one) : json({error: {code: 'not_found', detail: 'No tool named ' + m[1]}}, 404);
     }
     if (p === '/api/v2/credentials' && method === 'GET') {
@@ -56,7 +64,7 @@ async function open(browser, {viewport = PHONE, hash = LIST, me = OWNER, tools =
       return json(seen.vault);
     }
     if (p === '/api/v2/credentials' && method === 'POST') {
-      const body = JSON.parse(req.postData());
+      const body = JSON.parse(req.postData()!);
       seen.vault.credentials.push({id: 'c9', name: body.name, username: body.username, kind: body.kind, env: body.env, preview: 'ghp-••••3a',
         source: body.source, revision: 1, created_at: '2026-10-28T09:00:00Z', updated_at: '2026-10-28T09:00:00Z', stored: true, can_reveal: true,
         last_used_at: null, last_used_by: '', grants: []});
@@ -64,8 +72,8 @@ async function open(browser, {viewport = PHONE, hash = LIST, me = OWNER, tools =
     }
     const grant = p.match(/^\/api\/v2\/credentials\/([^/]+)\/grants$/);
     if (grant) {
-      const cred = seen.vault.credentials.find(c => c.id === grant[1]);
-      cred.grants.push({id: 'g9', subject: JSON.parse(req.postData()).subject, granted_by: 'human:ana', parent_id: null, can_revoke: true});
+      const cred = seen.vault.credentials.find(c => c.id === grant[1])!;
+      cred.grants.push({id: 'g9', subject: JSON.parse(req.postData()!).subject, granted_by: 'human:ana', parent_id: null, can_revoke: true});
       return json({id: 'g9'});
     }
     return json(unrouted(p));
@@ -74,18 +82,18 @@ async function open(browser, {viewport = PHONE, hash = LIST, me = OWNER, tools =
   await page.waitForFunction(() => typeof S !== 'undefined' && S.me && (S.emps || []).length);
   return {page, seen};
 }
-const sideways = page => page.evaluate(() => [document.documentElement, document.querySelector('#main')].some(el => el && el.scrollWidth > el.clientWidth + 1));
-const hashSoon = (page, want) => page.waitForFunction(w => location.hash === w, want).then(() => true, () => false);
-async function shot(page, name) {
+const sideways = (page: Page) => page.evaluate(() => [document.documentElement, document.querySelector('#main')].some(el => el && el.scrollWidth > el.clientWidth + 1));
+const hashSoon = (page: Page, want: string) => page.waitForFunction(w => location.hash === w, want).then(() => true, () => false);
+async function shot(page: Page, name: string) {
   const dir = process.env.TICO_UI_SHOTS;
   if (!dir) return;
   fs.mkdirSync(dir, {recursive: true});
   await page.screenshot({animations: 'disabled', path: path.join(dir, name + '.png')});
 }
 // [key, icon, name · kind, issue dot, how many have it]
-const rows = page => page.locator('.lc-row').evaluateAll(els => els.map(el => [el.dataset.key,
-  el.querySelector('.nav-icon').textContent, el.querySelector('.lc-nm').innerText.trim(), !!el.querySelector('.lc-dot'), el.querySelector('.lc-n').innerText.trim()]));
-const keys = page => page.locator('.lc-row').evaluateAll(els => els.map(el => el.dataset.key));
+const rows = (page: Page) => page.locator('.lc-row').evaluateAll(els => els.map(el => [el.dataset.key,
+  el.querySelector('.nav-icon')!.textContent, el.querySelector<HTMLElement>('.lc-nm')!.innerText.trim(), !!el.querySelector('.lc-dot'), el.querySelector<HTMLElement>('.lc-n')!.innerText.trim()]));
+const keys = (page: Page) => page.locator('.lc-row').evaluateAll(els => els.map(el => el.dataset.key));
 const ROWS = [
   ['close-crm', 'api', 'Close CRM · API', true, '3'],
   ['postgres', 'inventory_2', 'Acme Postgres · SQL', false, '1'],
@@ -96,7 +104,7 @@ const ROWS = [
   ['credentials/c3', 'key_vertical', 'OpenAI key · API key', false, '1'],
   ['old-wiki', 'api', 'old-wiki · API', false, '0'],
 ];
-const noSecret = async (page, tag) => assert.ok(!(await page.content()).includes(SECRET), tag + ': no secret value on the page');
+const noSecret = async (page: Page, tag: string) => assert.ok(!(await page.content()).includes(SECRET), tag + ': no secret value on the page');
 
 (async () => {
   const browser = await chromium.launch({channel: process.env.TICO_BROWSER_CHANNEL ?? 'chrome', headless: true});
@@ -117,9 +125,9 @@ const noSecret = async (page, tag) => assert.ok(!(await page.content()).includes
       await shot(page, 'phone-tools');
 
       // Who has access: the picker lists teams (nested ones indented), people and bots.
-      const options = await page.locator('.lc-who optgroup').evaluateAll(gs => gs.map(g => [g.label, [...g.children].map(o => o.textContent.trim())]));
+      const options = await page.locator('.lc-who optgroup').evaluateAll(gs => gs.map(g => [(g as HTMLOptGroupElement).label, [...(g.children as unknown as Iterable<Element>)].map(o => o.textContent!.trim())]));
       assert.deepEqual(options.map(([label]) => label), ['Teams', 'People', 'Bots'], tag + ': teams, people, bots');
-      assert.deepEqual(options[0][1], ['Engineering', 'Platform', 'Operations'], tag + ': the teams in order');
+      assert.deepEqual(options[0]![1], ['Engineering', 'Platform', 'Operations'], tag + ': the teams in order');
       await page.locator('.lc-who').selectOption('group:eng');
       assert.deepEqual(await keys(page), ['close-crm', 'postgres', 'acme-ops'], tag + ': a team counts the teams under it');
       assert.ok(await hashSoon(page, LIST + '?who=group%3Aeng'), tag + ': the filter is in the address');
@@ -146,11 +154,11 @@ const noSecret = async (page, tag) => assert.ok(!(await page.content()).includes
       await page.locator('#int-detail h1').filter({hasText: 'Close CRM'}).waitFor();
       assert.equal(await page.locator('.lc-list').isVisible(), false, tag + ': the page alone');
       // In order: issues, access, credentials, then the page.
-      const order = await page.locator('#int-detail .card').evaluateAll(cs => cs.map(c => c.className.split(' ').find(x => x.startsWith('lc-')) || c.id || 'meta'));
+      const order = await page.locator('#int-detail .card').evaluateAll(cs => cs.map(c => (c as HTMLElement).className.split(' ').find(x => x.startsWith('lc-')) || c.id || 'meta'));
       assert.deepEqual(order.slice(0, 4), ['lc-issues-card', 'lc-access', 'lc-creds', 'meta'], tag + ': issues, access, credentials, then the page');
       assert.match(await page.locator('.lc-issues-card').innerText(), /Credential missing on Test Mac · Release Manager/);
-      const access = await page.locator('.lc-access .lc-team').evaluateAll(ts => ts.map(t => [t.querySelector('summary span').textContent,
-        [...t.querySelectorAll('.lc-who-row')].map(r => [r.querySelector('.lc-wn').textContent, r.querySelector('.pill')?.textContent || ''])]));
+      const access = await page.locator('.lc-access .lc-team').evaluateAll((ts: Element[]) => ts.map(t => [t.querySelector('summary span')!.textContent,
+        [...(t.querySelectorAll('.lc-who-row') as unknown as Iterable<Element>)].map(r => [r.querySelector('.lc-wn')!.textContent, r.querySelector('.pill')?.textContent || ''])]));
       assert.deepEqual(access, [
         ['Engineering', [['Engineering Lead', 'Approval']]],
         ['Operations', [['Ana Silva', 'Approval'], ['Release Manager', 'Read only']]],
@@ -202,7 +210,7 @@ const noSecret = async (page, tag) => assert.ok(!(await page.content()).includes
       await form.locator('[type=submit]').click();
       await page.locator('.lc-creds .lc-cred .pill').filter({hasText: 'Set'}).waitFor();
       const created = seen.writes.filter(w => w.path === '/api/v2/credentials');
-      assert.deepEqual(JSON.parse(created[0].body), {name: 'GitHub', username: '', kind: 'token', env: 'GH_TOKEN', source: 'github', secret: SECRET});
+      assert.deepEqual(JSON.parse(created[0]!.body), {name: 'GitHub', username: '', kind: 'token', env: 'GH_TOKEN', source: 'github', secret: SECRET});
       await noSecret(page, tag);
       assert.equal(seen.writes.filter(w => w.body.includes(SECRET)).length, 1, tag + ': the value is sent once, to store it');
       assert.deepEqual(seen.errors, [], tag + ': no page errors');
@@ -220,7 +228,7 @@ const noSecret = async (page, tag) => assert.ok(!(await page.content()).includes
       assert.equal(await page.locator('.lc-back').isVisible(), false, tag + ': no back link beside the list');
       assert.equal(await page.locator('.lc-row.sel').getAttribute('data-key'), 'close-crm', tag + ': the row is selected');
       const list = await page.locator('.lc-list').boundingBox(), pane = await page.locator('.lc-pane').boundingBox();
-      assert.ok(list.x + list.width <= pane.x + 1, tag + ': list | page');
+      assert.ok(list!.x + list!.width <= pane!.x + 1, tag + ': list | page');
       assert.equal(await page.locator('.lc-add button').innerText(), 'Add credential');
       await shot(page, 'desktop-tool');
 
@@ -249,7 +257,7 @@ const noSecret = async (page, tag) => assert.ok(!(await page.content()).includes
     // The list is slow and the address moves to another tool meanwhile: the later address wins, no errors.
     {
       const tag = 'desktop slow list';
-      let release;
+      let release!: (value?: unknown) => void;
       const listGate = new Promise(r => { release = r; });
       const {page, seen} = await open(browser, {viewport: DESKTOP, hash: LIST + '/close-crm', listGate});
       await page.evaluate(h => { location.hash = h; }, LIST + '/postgres');
@@ -264,7 +272,7 @@ const noSecret = async (page, tag) => assert.ok(!(await page.content()).includes
 
     // The old addresses lead to Tools: Connections and the old Tools page to the tool's own page, the old Credentials page here.
     for (const [from, want] of [['#/library/connections/postgres', '#/tools/postgres'], ['#/integrations/postgres', '#/tools/postgres'],
-                                ['#/credentials', LIST + '/credentials/c3']]) {
+                                ['#/credentials', LIST + '/credentials/c3']] as const) {
       const {page, seen} = await open(browser, {viewport: DESKTOP, hash: from});
       assert.ok(await hashSoon(page, want), `${from} leads to ${want}`);
       assert.deepEqual(seen.errors, [], from + ': no page errors');
@@ -291,7 +299,7 @@ const noSecret = async (page, tag) => assert.ok(!(await page.content()).includes
       const slugs = Array.from({length: 200}, (_, i) => 'bot-' + String(i + 1).padStart(3, '0'));
       const emps = [...roster.employees, ...slugs.map(slug => ({name: slug, display_name: 'Bot ' + slug.slice(4), status: 'active', org_parent: ''}))];
       const groups = Array.from({length: 10}, (_, g) => ({id: 'team-' + g, name: 'Team ' + (g + 1), parent: '', people: [], bots: slugs.slice(g * 20, g * 20 + 20)}));
-      const tools = FX.tools.integrations.map(t => t.service !== 'close-crm' ? t : {...t, bots: slugs,
+      const tools = FX.tools.integrations.map((t: Record<string, unknown>) => t.service !== 'close-crm' ? t : {...t, bots: slugs,
         connections: slugs.map((bot, i) => ({bot, status: i === 7 ? 'problem' : 'ready', identity: '', can: ['read'], write: 'never',
           ...(i === 7 ? {problem: 'Credential missing on Test Mac'} : {})}))});
       const {page, seen} = await open(browser, {viewport: DESKTOP, hash: LIST + '/close-crm', tools, emps, groups});

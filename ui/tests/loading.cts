@@ -1,21 +1,27 @@
 // A slow diagnostic cannot hold the app's first page; an unrelated failed read cannot mark it offline.
-const {chromium, webkit} = require('playwright');
+import type {BrowserType, Route} from 'playwright';
+import type * as PageSupport from './support/page.cjs';
+import type * as RouteSupport from './support/routes.cjs';
+const {chromium, webkit} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
-const {html, uiFile} = require('./support/page.cjs');
-const {unrouted} = require('./support/routes.cjs');
+const {html, uiFile} = require('./support/page.cjs') as typeof PageSupport;
+const {unrouted} = require('./support/routes.cjs') as typeof RouteSupport;
 
-async function check(engine, native) {
+declare const S: {status: {keeper_alive?: boolean} | null; v2: {on: boolean}; people: {id: string}[]};
+declare function refresh(quiet: boolean): void;
+
+async function check(engine: BrowserType, native: boolean) {
   const browser = await engine.launch({headless:true});
   const page = await browser.newPage({serviceWorkers:'block', viewport:{width:390,height:844},
     ...(native ? {userAgent:'Mozilla/5.0 AppleWebKit/605.1.15 TicoHub'} : {})});
-  const errors = [], waiting = [];
+  const errors: string[] = [], waiting: ((value: void) => void)[] = [];
   let hold = true, failPeople = false, failStatus = false;
-  page.on('pageerror', e => errors.push(e.message));
-  await page.addInitScript(() => { window.EventSource = undefined; });
-  await page.route('**/*', async route => {
+  page.on('pageerror', (e: Error) => errors.push(e.message));
+  await page.addInitScript(() => { (window as unknown as {EventSource?: unknown}).EventSource = undefined; });
+  await page.route('**/*', async (route: Route) => {
     const p = new URL(route.request().url()).pathname;
-    const json = (body, status=200) => route.fulfill({status,contentType:'application/json',body:JSON.stringify(body)});
+    const json = (body: unknown, status = 200) => route.fulfill({status,contentType:'application/json',body:JSON.stringify(body)});
     if (p === '/') return route.fulfill({contentType:'text/html',body:html});
     if (p.startsWith('/tico/ui/')) {
       const file = uiFile(p.slice('/tico/ui/'.length));
@@ -49,7 +55,7 @@ async function check(engine, native) {
   failPeople = true;
   await page.evaluate(() => refresh(false));
   assert.equal(await page.locator('#heartbeat').getAttribute('aria-label'),'Cloud backend connected');
-  assert.equal(await page.evaluate(() => S.people[0].id),'ana','keep the last complete roster');
+  assert.equal(await page.evaluate(() => S.people[0]!.id),'ana','keep the last complete roster');
   failStatus = true;
   await page.evaluate(() => refresh(false));
   assert.equal(await page.locator('#heartbeat').getAttribute('aria-label'),"Can't reach Tico. Trying again");

@@ -6,27 +6,38 @@
 // picked reads the cards again for it and the address keeps it; a Number added from its form sends its metric and
 // channel; Settings lists the channels with their months; a member reads and arranges nothing; a phone has one
 // column and no sideways scroll, in both themes. TICO_UI_SHOTS=<dir> saves screenshots.
-const {chromium} = require('playwright');
+import type {Browser, Locator, Page, Route} from 'playwright';
+import type * as PageSupport from './support/page.cjs';
+import type * as RouteSupport from './support/routes.cjs';
+const {chromium} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const {html, uiFile} = require('./support/page.cjs');
-const {unrouted} = require('./support/routes.cjs');
+const {html, uiFile} = require('./support/page.cjs') as typeof PageSupport;
+const {unrouted} = require('./support/routes.cjs') as typeof RouteSupport;
+// Shapes the tests read from the page and build for the fake server.
+declare const S: {me: Person | null; emps?: unknown[]};
+interface Person {id: string; name: string; email: string; role: string; company_role: string; cloud: boolean; bot_admin?: boolean}
+interface CardSettings {metric?: string; channel?: string; count?: number; months?: number}
+interface PinCard {id: string | null; template: string; settings: CardSettings; title?: string}
+interface Pin {id: string | null; item: string | null; position: number; size: string; made_by: string | null; card: PinCard}
+interface PostedCard {size: string; template: string; settings: CardSettings; title: string}
+type Write = [string, string, unknown];
 const uiDir = path.join(__dirname, '..');
 const roster = JSON.parse(fs.readFileSync(path.join(__dirname, 'fixtures', 'redesign-roster.json'), 'utf8'));
 const PHONE = {width: 390, height: 844}, DESKTOP = {width: 1440, height: 900};
-const OWNER = {id: 'ana', name: 'Ana Silva', email: 'ana@acme.example', role: 'owner', company_role: 'owner', cloud: true, bot_admin: true};
-const MEMBER = {id: 'cara', name: 'Cara Diaz', email: 'cara@acme.example', role: 'human', company_role: 'member', cloud: true};
+const OWNER: Person = {id: 'ana', name: 'Ana Silva', email: 'ana@acme.example', role: 'owner', company_role: 'owner', cloud: true, bot_admin: true};
+const MEMBER: Person = {id: 'cara', name: 'Cara Diaz', email: 'cara@acme.example', role: 'human', company_role: 'member', cloud: true};
 const MONTHS = ['2026-07', '2026-08', '2026-09', '2026-10'];
-const METRICS = [['new_customers', 'New customers', 'count', 'up'], ['cac', 'CAC', 'usd', 'down'], ['kept_d30', 'Kept 30 days', 'pct', 'up'],
+const METRICS: [string, string, string, string | null][] = [['new_customers', 'New customers', 'count', 'up'], ['cac', 'CAC', 'usd', 'down'], ['kept_d30', 'Kept 30 days', 'pct', 'up'],
   ['spend', 'Spend', 'usd', null]];
-const SERIES = {new_customers: [30, 36, 41, 48], cac: [52, 48, 45, 41], kept_d30: [62, 66, 71, null], spend: [1560, 1730, 1845, 1970]};
+const SERIES: Record<string, (number | null)[]> = {new_customers: [30, 36, 41, 48], cac: [52, 48, 45, 41], kept_d30: [62, 66, 71, null], spend: [1560, 1730, 1845, 1970]};
 const CHANNELS = [{slug: 'search', name: 'Search'}, {slug: 'referrals', name: 'Referrals'}];
-const upTo = month => MONTHS.slice(0, MONTHS.indexOf(month) + 1);
-const DATA = {
+const upTo = (month: string) => MONTHS.slice(0, MONTHS.indexOf(month) + 1);
+const DATA: Record<string, (s: CardSettings, month: string) => unknown> = {
   growth_number: (s, month) => {
-    const [metric, label, format, good] = METRICS.find(m => m[0] === s.metric), cal = upTo(month);
-    const values = cal.map((_, i) => s.channel ? Math.round(SERIES[metric][i] / 2) : SERIES[metric][i]);
+    const [metric, label, format, good] = METRICS.find(m => m[0] === s.metric)!, cal = upTo(month);
+    const values = cal.map((_, i) => s.channel ? Math.round(SERIES[metric]![i]! / 2) : SERIES[metric]![i]);
     let at = values.length - 1;
     while (at > 0 && values[at] == null && metric.startsWith('kept')) at--;
     return {metric, label, format, good, month, value: values[at], prev: values[at - 1] ?? null, from: at === values.length - 1 ? '' : cal[at],
@@ -36,9 +47,9 @@ const DATA = {
     const k = MONTHS.indexOf(month), v = [12000, 480, 210, 160, 22].map(x => Math.round(x * (0.85 + 0.05 * k)));
     const stages = ['Reach', 'Acquire', 'Activate', 'Retain', 'Refer'].map((label, i) => ({stage: label.toLowerCase(), label,
       kpi: i === 3 ? null : 'k' + i, name: i === 3 ? '' : ['Site visits', 'Signups', 'Activated', '', 'Referrals'][i], unit: '', value: i === 3 ? null : v[i],
-      prev: i === 3 ? null : Math.round(v[i] * 0.9), conv: i === 0 || i === 3 || i === 4 ? null : Math.round(v[i] / v[i - 1] * 1000) / 10,
-      north_star: i === 2, series: i === 3 ? [] : [v[i] * 0.8, v[i] * 0.9, v[i]]}));
-    return {stages, north_star: {id: 'k2', name: 'Activated', unit: '', value: stages[2].value, prev: stages[2].prev, target: 300}};
+      prev: i === 3 ? null : Math.round(v[i]! * 0.9), conv: i === 0 || i === 3 || i === 4 ? null : Math.round(v[i]! / v[i - 1]! * 1000) / 10,
+      north_star: i === 2, series: i === 3 ? [] : [v[i]! * 0.8, v[i]! * 0.9, v[i]]}));
+    return {stages, north_star: {id: 'k2', name: 'Activated', unit: '', value: stages[2]!.value, prev: stages[2]!.prev, target: 300}};
   },
   growth_channels: (s, month) => ({month, rows: [
     {slug: 'search', name: 'Search', new_customers: 31, cac: 38, ltv_cac: 3.2, ltv_from: '', series: [18, 22, 25, 31],
@@ -47,35 +58,35 @@ const DATA = {
     {slug: 'referrals', name: 'Referrals', new_customers: 17, cac: null, ltv_cac: 4.1, ltv_from: '2026-09', series: [12, 14, 16, 17], tasks: [], more: 0},
   ].slice(0, s.count || 10)}),
   growth_retention: (s, month) => ({columns: ['30 days', '90 days', '180 days'], rows: upTo(month).slice(-(s.months || 6)).map((m, i) => ({month: m,
-    new_customers: SERIES.new_customers[i], kept: [[62, 48, 35], [66, 51, null], [71, null, null], [null, null, null]][i]}))}),
+    new_customers: SERIES.new_customers![i], kept: [[62, 48, 35], [66, 51, null], [71, null, null], [null, null, null]][i]}))}),
   growth_board: s => ({lanes: [
     {stage: 'testing', label: 'Testing', count: 4, cards: [{id: 't2', title: 'Search: competitor keywords', channel: 'Search', owner_id: 'human:ana'},
       {id: 't4', title: 'Referral reward email', channel: 'Referrals', owner_id: ''}].slice(0, s.count || 3)},
     {stage: 'scaling', label: 'Scaling', count: 1, cards: [{id: 't1', title: 'Search: long-tail landing pages', channel: 'Search', owner_id: 'human:ana'}]},
     {stage: 'idea', label: 'Idea', count: 0, cards: []}]}),
 };
-const NAMES = {growth_number: 'Number', growth_funnel: 'Funnel', growth_channels: 'Channels', growth_retention: 'Retention', growth_board: 'Growth board', kpi: 'KPI'};
-const FIELDS = {growth_number: ['metric', 'channel'], growth_funnel: [], growth_channels: ['count'], growth_retention: ['months'], growth_board: ['count'], kpi: ['kpi']};
+const NAMES: Record<string, string> = {growth_number: 'Number', growth_funnel: 'Funnel', growth_channels: 'Channels', growth_retention: 'Retention', growth_board: 'Growth board', kpi: 'KPI'};
+const FIELDS: Record<string, string[]> = {growth_number: ['metric', 'channel'], growth_funnel: [], growth_channels: ['count'], growth_retention: ['months'], growth_board: ['count'], kpi: ['kpi']};
 const CHOICES = {templates: Object.entries(NAMES).map(([id, name]) => ({id, name, fields: FIELDS[id]})), teams: [], kpis: [{id: 'k2', name: 'Activated'}], pages: [],
   metrics: METRICS.map(([id, label]) => ({id, label})), channels: CHANNELS};
-const DEFAULTS = [['growth_funnel', 'large', {}], ['growth_number', 'small', {metric: 'new_customers'}], ['growth_number', 'small', {metric: 'cac'}],
+const DEFAULTS: [string, string, CardSettings][] = [['growth_funnel', 'large', {}], ['growth_number', 'small', {metric: 'new_customers'}], ['growth_number', 'small', {metric: 'cac'}],
   ['growth_number', 'small', {metric: 'kept_d30'}], ['growth_channels', 'large', {count: 10}], ['growth_retention', 'medium', {months: 6}],
   ['growth_board', 'medium', {count: 3}]];
 
-function server(me) {
+function server(me: Person) {
   let n = 0, saved = false;
-  let pins = DEFAULTS.map(([template, size, settings], i) => ({id: null, item: null, position: i, size, made_by: null, card: {id: null, template, settings}}));
-  const reads = [], writes = [];
-  const draw = (c, month) => ({...c, title: c.title || '', name: NAMES[c.template], heading: c.title || NAMES[c.template], team_name: '', hidden: false,
-    data: DATA[c.template](c.settings, month)});
-  const view = month => ({place: 'growth', kind: 'growth', saved, can_edit: me.company_role !== 'member', month, months: MONTHS,
+  let pins: Pin[] = DEFAULTS.map(([template, size, settings], i) => ({id: null, item: null, position: i, size, made_by: null, card: {id: null, template, settings}}));
+  const reads: unknown[] = [], writes: Write[] = [];
+  const draw = (c: PinCard, month: string) => ({...c, title: c.title || '', name: NAMES[c.template], heading: c.title || NAMES[c.template], team_name: '', hidden: false,
+    data: DATA[c.template]!(c.settings, month)});
+  const view = (month: string) => ({place: 'growth', kind: 'growth', saved, can_edit: me.company_role !== 'member', month, months: MONTHS,
     pins: pins.map(p => ({...p, card: draw(p.card, month)}))});
   const save = () => {
     if (saved) return;
     saved = true;
     pins = pins.map(p => { const cid = 'c' + (++n); return {...p, id: 'p' + n, item: 'card:' + cid, card: {...p.card, id: cid}}; });
   };
-  return {reads, writes, handle(method, p, body, query) {
+  return {reads, writes, handle(method: string, p: string, body: PostedCard, query: URLSearchParams): [number, unknown] | null {
     if (method !== 'GET' && /^\/api\/v2\/(places|pins|cards|growth)\b/.test(p)) writes.push([method, p, body]);
     if (p === '/api/v2/places/dashboard' && method === 'GET') return [200, {
       place: 'dashboard', kind: 'dashboard', saved: true, can_edit: me.company_role !== 'member',
@@ -84,7 +95,7 @@ function server(me) {
           settings: {kpi: 'k2'}, team_name: '', hidden: false, data: {name: 'Activated', unit: '', value: 210, spark: []}}}],
     }];
     if (p === '/api/v2/places/growth') {
-      const month = query.get('month') || MONTHS.at(-1);
+      const month = (query.get('month') || MONTHS.at(-1))!;
       reads.push(month);
       if (!MONTHS.includes(month) && month !== '2026-11') return [422, {error: {code: 'invalid', detail: 'A month as YYYY-MM'}}];
       return [200, view(month)];
@@ -96,25 +107,25 @@ function server(me) {
       const cid = 'c' + (++n);
       pins.push({id: 'p' + (++n), item: 'card:' + cid, position: pins.length, size: body.size, made_by: 'human:ana',
         card: {id: cid, template: body.template, settings: body.settings, title: body.title}});
-      return [200, {card: draw(pins.at(-1).card, MONTHS.at(-1)), pin: 'p' + n}];
+      return [200, {card: draw(pins.at(-1)!.card, MONTHS.at(-1)!), pin: 'p' + n}];
     }
     if (p === '/api/v2/growth/settings') return [200, {unit: 'customers', revenue_month: 49, margin_pct: 80}];
     if (p === '/api/v2/growth/channels') return [200, {channels: CHANNELS.map(c => ({...c, stage: 'testing', owner_ref: 'human:ana', track: 'performance'})), may_edit: true}];
-    if (p === '/api/v2/growth/cohorts') return [200, {cohorts: MONTHS.map((month, i) => ({channel: query.get('channel'), month, new_customers: SERIES.new_customers[i],
-      kept_d30: SERIES.kept_d30[i], kept_d90: null, kept_d180: null, quality: 'actual'}))}];
+    if (p === '/api/v2/growth/cohorts') return [200, {cohorts: MONTHS.map((month, i) => ({channel: query.get('channel'), month, new_customers: SERIES.new_customers![i],
+      kept_d30: SERIES.kept_d30![i], kept_d90: null, kept_d180: null, quality: 'actual'}))}];
     return null;
   }};
 }
 
-async function open(browser, {viewport = DESKTOP, hash = '#/growth', me = OWNER, theme = 'dark'} = {}) {
+async function open(browser: Browser, {viewport = DESKTOP, hash = '#/growth', me = OWNER, theme = 'dark'} = {}) {
   const page = await browser.newPage({viewport, serviceWorkers: 'block', hasTouch: viewport === PHONE});
-  const errors = [], fake = server(me);
-  page.on('pageerror', e => errors.push(e.message));
+  const errors: string[] = [], fake = server(me);
+  page.on('pageerror', (e: Error) => errors.push(e.message));
   await page.addInitScript(t => { try { localStorage.setItem('tico.theme', t); } catch { /* none */ } }, theme);
   const config = {company_name: 'Acme'};
-  await page.route('**/*', async route => {
+  await page.route('**/*', async (route: Route) => {
     const req = route.request(), url = new URL(req.url()), p = url.pathname, method = req.method();
-    const json = (body, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
+    const json = (body: unknown, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
     if (url.origin !== 'http://tico-ui.test') return route.abort();
     if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
     const file = p.startsWith('/tico/ui/') ? uiFile(p.slice(9)) : p.startsWith('/vendor/') ? path.join(uiDir, p) : '';
@@ -127,7 +138,7 @@ async function open(browser, {viewport = DESKTOP, hash = '#/growth', me = OWNER,
     if (p === '/api/status') return json({active: [], employees: []});
     if (p === '/api/v2/status') return json({bots: []});
     if (p === '/api/v2/groups') return json([]);
-    const answer = fake.handle(method, p, req.postData() ? JSON.parse(req.postData()) : {}, url.searchParams);
+    const answer = fake.handle(method, p, req.postData() ? JSON.parse(req.postData()!) : {}, url.searchParams);
     if (answer) return json(answer[1], answer[0]);
     return json(unrouted(p));
   });
@@ -135,16 +146,16 @@ async function open(browser, {viewport = DESKTOP, hash = '#/growth', me = OWNER,
   await page.waitForFunction(() => typeof S !== 'undefined' && S.me && (S.emps || []).length);
   return {page, errors, fake};
 }
-const sideways = page => page.evaluate(() => [document.documentElement, document.querySelector('#main')].some(el => el && el.scrollWidth > el.clientWidth + 1));
-const headings = page => page.locator('#dash-grid .dash-pin-head h2').allInnerTexts();
+const sideways = (page: Page) => page.evaluate(() => [document.documentElement, document.querySelector('#main')].some(el => el && el.scrollWidth > el.clientWidth + 1));
+const headings = (page: Page) => page.locator('#dash-grid .dash-pin-head h2').allInnerTexts();
 // WCAG contrast of an element's text on its own background.
-const contrast = loc => loc.evaluate(el => {
-  const rgb = c => { const ctx = document.createElement('canvas').getContext('2d'); ctx.fillStyle = c; ctx.fillRect(0, 0, 1, 1); return [...ctx.getImageData(0, 0, 1, 1).data].slice(0, 3); };
-  const lum = c => { const [r, g, b] = rgb(c).map(v => { v /= 255; return v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4; }); return 0.2126 * r + 0.7152 * g + 0.0722 * b; };
+const contrast = (loc: Locator) => loc.evaluate((el: Element) => {
+  const rgb = (c: string) => { const ctx = document.createElement('canvas').getContext('2d')!; ctx.fillStyle = c; ctx.fillRect(0, 0, 1, 1); return [...ctx.getImageData(0, 0, 1, 1).data].slice(0, 3); };
+  const lum = (c: string) => { const [r, g, b] = rgb(c).map((v: number) => { v /= 255; return v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4; }) as [number, number, number]; return 0.2126 * r + 0.7152 * g + 0.0722 * b; };
   const s = getComputedStyle(el), a = lum(s.color), b = lum(s.backgroundColor);
   return (Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05);
 });
-async function shot(page, name) {
+async function shot(page: Page, name: string) {
   const dir = process.env.TICO_UI_SHOTS;
   if (!dir) return;
   fs.mkdirSync(dir, {recursive: true});
@@ -173,7 +184,7 @@ async function shot(page, name) {
       assert.equal(await page.locator('[data-dash-add="page"]').count(), 1, 'an owner pins pages too');
       // Arranging is in edit mode: Edit shows the grips, menus and + Card / + Page; Done hides them.
       const editControls = '[data-dash-grip], [data-dash-menu], [data-dash-add], [data-dash-mode="done"]';
-      const shown = sel => page.locator(sel).evaluateAll(els => els.filter(el => el.checkVisibility()).length);
+      const shown = (sel: string) => page.locator(sel).evaluateAll(els => els.filter(el => el.checkVisibility()).length);
       assert.equal(await shown(editControls), 0, 'viewing shows no edit controls');
       await page.locator('[data-dash-mode="edit"]').click();
       assert.ok(await shown('[data-dash-grip]') > 0, 'Edit shows the grips');
@@ -245,7 +256,7 @@ async function shot(page, name) {
       assert.deepEqual(await headings(page), ['Company activation'], 'Company draws its own cards');
       assert.equal(await page.locator('#dash-grid .dash-big strong').innerText(), '210');
       await page.evaluate(() => { location.hash = '#/growth?m=2026-09'; });
-      await page.waitForFunction(() => document.querySelector('[data-gr-month]')?.value === '2026-09');
+      await page.waitForFunction(() => (document.querySelector('[data-gr-month]') as HTMLSelectElement | null)?.value === '2026-09');
       assert.equal(fake.reads.at(-1), '2026-09');
       await page.waitForFunction(() => document.querySelector('#dash-grid .grc-num-v')?.textContent === '41');
 
@@ -261,7 +272,7 @@ async function shot(page, name) {
       await dlg.locator('[name="channel"]').selectOption('search');
       await dlg.locator('[type="submit"]').click();
       await page.waitForFunction(() => document.querySelectorAll('#dash-grid .dash-pin').length === 8);
-      const sent = fake.writes.find(([m, p]) => m === 'POST' && p === '/api/v2/cards')[2];
+      const sent = fake.writes.find(([m, p]) => m === 'POST' && p === '/api/v2/cards')![2];
       assert.deepEqual(sent, {title: '', settings: {metric: 'spend', channel: 'search'}, template: 'growth_number', place: 'growth', size: 'small'});
       assert.equal((await headings(page)).at(-1), 'Spend · Search', 'its heading names the channel');
       // The other templates' fields: Channels counts rows, Retention months.
@@ -313,9 +324,9 @@ async function shot(page, name) {
       await page.locator('#dash-grid .grc-funnel').waitFor();
       const widths = await page.locator('#dash-grid .dash-pin').evaluateAll(els => els.map(el => Math.round(el.getBoundingClientRect().width)));
       assert.equal(new Set(widths).size, 1, 'one column');
-      assert.ok(widths[0] >= 340, 'the full width');
+      assert.ok(widths[0]! >= 340, 'the full width');
       assert.equal(await sideways(page), false, 'no sideways scroll');
-      const past = await page.evaluate(() => [...document.querySelectorAll('#main *')].filter(el => {
+      const past = await page.evaluate(() => [...(document.querySelectorAll('#main *') as unknown as Iterable<Element>)].filter(el => {
         const r = el.getBoundingClientRect();
         return r.width && r.right > innerWidth + 1 && !el.closest('.grc-ret');
       }).map(el => el.className || el.tagName).slice(0, 5));
@@ -325,7 +336,7 @@ async function shot(page, name) {
       for (let i = 0; i < await cells.count(); i++) assert.ok(await contrast(cells.nth(i)) >= 4.5, `retention cell ${i} reads at 4.5:1 (${theme})`);
       for (const b of await page.locator('.dash-head :is(a,button,select)').all()) {
         if (!(await b.isVisible())) continue;
-        const box = await b.boundingBox();
+        const box = (await b.boundingBox())!;
         assert.ok(box.x >= 0 && box.x + box.width <= PHONE.width + 1, 'the head fits');
       }
       await shot(page, `phone-growth-${theme}`);

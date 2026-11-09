@@ -2,45 +2,59 @@
 // inside the desktop app, Show the app's log; Settings > Health runs the Setup check with each fix, keeps the result
 // through Health's redraw and sends it to the Tico team attached; What's new opens with the Beta features and the known
 // issues in this version. (Take the tour in the account menu is in getting-started.cjs.)
-const {chromium} = require('playwright');
+import type {LaunchOptions, Page, Route} from 'playwright';
+import type * as PageSupport from './support/page.cjs';
+import type * as RouteSupport from './support/routes.cjs';
+const {chromium} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
-const {html, uiFile, beta} = require('./support/page.cjs');
-const {unrouted} = require('./support/routes.cjs');
+const {html, uiFile, beta} = require('./support/page.cjs') as typeof PageSupport;
+const {unrouted} = require('./support/routes.cjs') as typeof RouteSupport;
+declare global {
+  interface Window {
+    __posted: string[];
+    ticoNative: (name: string) => {postMessage: (body: unknown) => void};
+    ticoNativeFeatures: string[];
+    ticoNativeVersion: string;
+    ticoNativeLog: () => Promise<{version: string; lines: unknown[]}>;
+    supportOn?: (on?: boolean) => boolean;
+  }
+}
+declare function hlMount(): void;
 const ISSUES = [{id: 5, title: 'Board stays empty after a restart', since: '0.2.15', fixed_in: '0.2.18', url: 'https://github.com/ticoteam/tico/issues/700'},
   {id: 6, title: '<img src=x onerror=alert(1)>', since: '0.2.16', fixed_in: '', url: 'javascript:alert(1)'}];
 const CHECKS = [{name: 'HTTPS certificate', status: 'bad', detail: 'could not connect to tico.acme.example:443', fix: 'Open port 443 to the server.', source: 'doctor'},
   {name: '/healthz', status: 'ok', detail: 'ok', fix: 'Restart the server.', source: 'doctor'}];
 
 (async () => {
-  const browser = await chromium.launch({headless: true, channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined});
+  const browser = await chromium.launch({headless: true, channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined} as LaunchOptions);
   try {
-    const visit = async ({hash, native = false, enabled = true, update = null} = {}) => {
+    const visit = async ({hash, native = false, enabled = true, update = null}: {hash?: string; native?: boolean; enabled?: boolean; update?: Record<string, unknown> | null} = {}) => {
       const ctx = await browser.newContext({viewport: {width: 1440, height: 900}, serviceWorkers: 'block'});
       // The desktop app's bridge (app/src/main.rs BRIDGE_SCRIPT), recording what the page posts to it.
       if (native) await ctx.addInitScript(() => {
         window.__posted = [];
-        window.ticoNative = name => ({postMessage: () => window.__posted.push(name)});
+        window.ticoNative = (name: string) => ({postMessage: () => window.__posted.push(name)});
         window.ticoNativeFeatures = ['openWindow', 'checkForUpdates', 'showLog', 'appLog'];
         window.ticoNativeVersion = '0.3.48';
         window.ticoNativeLog = async () => ({version: '0.3.48', lines: []});
       });
       const page = await ctx.newPage();
-      const errors = [], calls = [];
-      page.on('pageerror', e => errors.push(e.message));
-      await page.route('**/*', route => {
+      const errors: string[] = [], calls: string[] = [];
+      page.on('pageerror', (e: Error) => errors.push(e.message));
+      await page.route('**/*', (route: Route) => {
         const req = route.request(), p = new URL(req.url()).pathname;
-        const json = (body, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
+        const json = (body: unknown, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
         const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/);
-        if (ui && fs.existsSync(uiFile(ui[1])))
-          return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]), 'utf8')});
+        if (ui && fs.existsSync(uiFile(ui[1]!)))
+          return route.fulfill({contentType: ui[1]!.endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]!), 'utf8')});
         if (/\.(?:js|ts)$/.test(p)) return route.fulfill({contentType: 'application/javascript', body: ''});
         if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
         const config = {version: '0.2.17', update, app_name: 'Tico', usage_count_notice: false, beta};
         if (p === '/api/me') return json({id: 'ana', role: 'owner', name: 'Ana', email: 'ana@acme.example', cloud: true, registered: true, config});
         if (p === '/api/v2/config') return json(config);
         if (p.startsWith('/api/v2/support/')) {
-          const rest = p.slice('/api/v2/support/'.length), body = req.postData() ? JSON.parse(req.postData()) : null;
+          const rest = p.slice('/api/v2/support/'.length), body = req.postData() ? JSON.parse(req.postData()!) : null;
           calls.push(req.method() + ' ' + rest + (body ? ' ' + JSON.stringify(body) : ''));
           if (rest === 'setup-check') return json({checks: CHECKS, failing: 1, doctor_only: 'Run tico-setup doctor on the server for the rest.'});
           if (rest === 'compose') return json({enabled: true, email: 'ana@acme.example', version: '0.2.17', install_id: 'i', to: 'updates.tico.team', max: 4000});
@@ -63,7 +77,7 @@ const CHECKS = [{name: 'HTTPS certificate', status: 'bad', detail: 'could not co
       return {page, ctx, errors, calls};
     };
     const base = {current: '0.2.17', latest: '0.2.17', available: false, url: '', published_at: '', name: ''};
-    const health = async page => {
+    const health = async (page: Page) => {
       await page.locator('#settings-health-line [data-hl-details]').click();   // Health has no tab: General's Health line opens it
       await page.locator('#hl-setup-check').waitFor({state: 'visible'});
     };
@@ -94,10 +108,10 @@ const CHECKS = [{name: 'HTTPS certificate', status: 'bad', detail: 'could not co
     assert.match(await v.page.locator('[data-report]').innerText(), /Setup check/);
     await v.page.locator('[data-compose] [data-preview]').click();
     await v.page.locator('dialog.support-modal [data-use]:not([disabled])').waitFor();
-    const previewed = JSON.parse(v.calls.filter(c => c.startsWith('POST diagnostics/capture')).at(-1).slice('POST diagnostics/capture '.length)).report;
+    const previewed = JSON.parse(v.calls.filter(c => c.startsWith('POST diagnostics/capture')).at(-1)!.slice('POST diagnostics/capture '.length)).report;
     assert.equal(previewed.kind, 'setup_check');
     assert.equal(previewed.title, '1 of 2 checks fail.');
-    assert.deepEqual(previewed.checks.map(c => [c.name, c.status, c.fix]), CHECKS.map(c => [c.name, c.status, c.fix]));
+    assert.deepEqual(previewed.checks.map((c: (typeof CHECKS)[number]) => [c.name, c.status, c.fix]), CHECKS.map(c => [c.name, c.status, c.fix]));
     assert.deepEqual(v.errors, []);
     await v.ctx.close();
 
@@ -118,18 +132,18 @@ const CHECKS = [{name: 'HTTPS certificate', status: 'bad', detail: 'could not co
     v = await visit({hash: '#/changelog', update: {...base, known_issues: ISSUES, known_issues_checked: true}});
     const top = v.page.locator('.release-page');
     await top.locator('#changelog-known-issues').waitFor();
-    assert.deepEqual(await top.evaluate(page => [...page.children].slice(0, 4).map(el => el.id || el.className)),
+    assert.deepEqual(await top.evaluate(page => [...(page.children as unknown as Iterable<Element>)].slice(0, 4).map(el => el.id || el.className)),
       ['release-header', 'changelog-beta', 'changelog-known-issues', 'release-filters']);
     assert.equal(await v.page.locator('#changelog-beta summary').innerText(), 'Beta features');
-    assert.deepEqual(await v.page.locator('#changelog-beta li').evaluateAll(rows => rows.map(li => li.firstChild.textContent)), beta.map(f => f.name));
-    assert.equal(await v.page.locator('#changelog-beta li .pill.beta').count(), beta.length);
+    assert.deepEqual(await v.page.locator('#changelog-beta li').evaluateAll(rows => rows.map(li => li.firstChild!.textContent)), (beta as {name: string}[]).map(f => f.name));
+    assert.equal(await v.page.locator('#changelog-beta li .pill.beta').count(), (beta as unknown[]).length);
     const ki = v.page.locator('#changelog-known-issues');
     assert.equal(await ki.locator('h2').textContent(), 'Known issues in your version');
     assert.equal(await ki.locator('li').count(), 2);
-    assert.equal(await ki.locator('li').first().locator('a').getAttribute('href'), ISSUES[0].url);
+    assert.equal(await ki.locator('li').first().locator('a').getAttribute('href'), ISSUES[0]!.url);
     assert.match(await ki.locator('li').first().textContent(), /Fixed in v0\.2\.18/);
     assert.equal(await ki.locator('li').nth(1).locator('a').count(), 0, 'only an https link is a link');
-    assert.equal(await ki.locator('li').nth(1).textContent(), ISSUES[1].title, 'a title is text, never HTML');
+    assert.equal(await ki.locator('li').nth(1).textContent(), ISSUES[1]!.title, 'a title is text, never HTML');
     assert.deepEqual(v.errors, []);
     await v.ctx.close();
     v = await visit({hash: '#/changelog', update: {...base, known_issues: [], known_issues_checked: true}});

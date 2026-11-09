@@ -382,4 +382,4 @@ run('growth', ['org', 'toured'], async ({hub, browser, phone, tag}) => {
 
   assert.deepEqual(removed, [], `${tag}: nothing calls a removed route`);
   noErrors('every page');
-}, {only: 'phone'});   // the sideways-scroll checks (flat) are the phone's (fix 14c16db52, growth.css's phone rules); growth-cards.cjs covers the desktop
+}, {only: 'phone'});   // the sideways-scroll checks (flat) are the phone's (fix 14c16db52, growth.css's phone rules); growth-cards.cts covers the desktop

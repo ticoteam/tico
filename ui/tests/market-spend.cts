@@ -6,16 +6,32 @@
 // growth chart draws a dot per segment; old view links scroll to their question; a phone never scrolls sideways; note
 // links and old #/market note links open the map.
 // TICO_SCREENSHOT_DIR=<dir> saves review screenshots (the page on desktop in light, on a phone in dark).
-const {chromium} = require('playwright');
+import type {Browser, Locator, Page, Route} from 'playwright';
+import type * as PageSupport from './support/page.cjs';
+import type * as RouteSupport from './support/routes.cjs';
+const {chromium} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const {html, uiFile} = require('./support/page.cjs');
-const {unrouted} = require('./support/routes.cjs');
+const {html, uiFile} = require('./support/page.cjs') as typeof PageSupport;
+const {unrouted} = require('./support/routes.cjs') as typeof RouteSupport;
 const uiDir = path.join(__dirname, '..');
+// Shapes of the market data the stand-in serves (GET /api/v2/market/spend) and of the options and reads the tests use.
+interface Viewport {width: number; height: number}
+interface Param {value: number; source?: string; judgement?: boolean}
+interface Size {id: string; segment_id: string; dimension: string; basis: string; year: number; spend_usd: number; low_usd: number; high_usd: number;
+  growth_pct: number | null; method: string; arithmetic: string; formula: string | null; params: Record<string, Param>; evidence_ids: string[];
+  confidence: string; overlaps: string; spread: string; status: string; accepted: boolean;
+  evidence?: {source_url: string; source_kind: string; quote: string; our_read: string}[]}
+interface Seg {id: string; name: string; parent: string | null; depth: number; summary: string; size: Size | null;
+  rolled_usd: {spend_usd: number; low_usd: number; high_usd: number} | null; estimates: Size[]; disagree: boolean; bases: string[]; players: unknown[]; self: boolean}
+interface Data {definition: unknown; year: number; dimension: string; basis: string; total: unknown; segments: Seg[]}
+interface LiveData {offering?: Data; chain?: typeof chain; [key: string]: unknown}
+interface OpenOpts {role?: string; route?: string; viewport?: Viewport; empty?: boolean; data?: LiveData}
+type Sent = [string, string, unknown];
 
 const shots = process.env.TICO_SCREENSHOT_DIR;
-const shot = async (page, name, theme) => {
+const shot = async (page: Page, name: string, theme: string) => {
   if (!shots) return;
   await page.evaluate(t => { document.documentElement.dataset.theme = t; }, theme);
   await page.screenshot({animations: 'disabled', path: path.join(shots, `market-spend-${name}-${theme}.png`)});
@@ -27,10 +43,10 @@ const B = 1e9;
 const definition = {root: 'segment/cleaning', description: 'What small offices and homes spend on cleaning services',
   includes: ['Recurring cleaning by a third party'], excludes: ['In-house staff'], counting_rules: ['One vendor per segment', 'Supplies are counted where they are sold'],
   year: 2025, geography: 'Global', currency: 'USD', params: {smb_share: {value: 0.35, source: 'judgement call', judgement: true}}};
-const size = (id, segment, spend, low, high, over = {}) => ({id, segment_id: segment, dimension: 'offering', basis: 'product', year: 2025,
+const size = (id: string, segment: string, spend: number, low: number, high: number, over: Partial<Size> = {}): Size => ({id, segment_id: segment, dimension: 'offering', basis: 'product', year: 2025,
   spend_usd: spend * B, low_usd: low * B, high_usd: high * B, growth_pct: null, method: 'bottom_up', arithmetic: '', formula: null, params: {}, evidence_ids: [],
   confidence: 'medium', overlaps: '', spread: '', status: 'accepted', accepted: true, ...over});
-const seg = (id, name, parent, sized, over = {}) => ({id: 'segment/' + id, name, parent: parent ? 'segment/' + parent : null, depth: parent ? 2 : 1,
+const seg = (id: string, name: string, parent: string | null, sized: Size | null, over: Partial<Seg> = {}): Seg => ({id: 'segment/' + id, name, parent: parent ? 'segment/' + parent : null, depth: parent ? 2 : 1,
   summary: '', size: sized || null, rolled_usd: sized ? {spend_usd: sized.spend_usd, low_usd: sized.low_usd, high_usd: sized.high_usd} : null,
   estimates: sized ? [sized] : [], disagree: false, bases: sized ? ['product'] : [], players: [], self: false, ...over});
 
@@ -43,7 +59,7 @@ const carpetA = size('sz-carpet-a', 'segment/carpet', 0.9, 0.4, 1.8, {confidence
 const carpetB = size('sz-carpet-b', 'segment/carpet', 2.4, 1.0, 3.0, {confidence: 'low', method: 'top_down', status: 'proposed', accepted: false});
 const buildData = (dimension = 'offering', basis = 'product') => {
   if (dimension === 'buyer') {
-    const bsize = (id, segment, spend, low, high) => size(id, segment, spend, low, high, {dimension: 'buyer'});
+    const bsize = (id: string, segment: string, spend: number, low: number, high: number) => size(id, segment, spend, low, high, {dimension: 'buyer'});
     return {definition, year: 2025, dimension, basis, total: {spend_usd: 9 * B, low_usd: 6 * B, high_usd: 13 * B}, segments: [
       seg('tiny-firms', 'Firms under 10 people', null, bsize('b1', 'segment/tiny-firms', 5, 3, 7)),
       seg('mid-firms', 'Firms of 10 to 99', null, bsize('b2', 'segment/mid-firms', 4, 3, 6), {self: true})]};
@@ -77,14 +93,14 @@ const chain = {layers: [
 const bets = [{id: 'b-price', statement: 'Price at half the market.', status: 'active', cites: ['segment/home']},
   {id: 'b-offices', statement: 'Sell to offices through managers.', status: 'active', cites: []}, {id: 'b-old', statement: 'Offices only.', status: 'retired', cites: []}];
 
-async function open(browser, {role = 'owner', route = '#/strategy/market', viewport = DESKTOP, empty = false, data} = {}) {
+async function open(browser: Browser, {role = 'owner', route = '#/strategy/market', viewport = DESKTOP, empty = false, data}: OpenOpts = {}) {
   const page = await browser.newPage({viewport, serviceWorkers: 'block', locale: 'en-GB'});
-  const errors = [], sent = [], reads = [];
-  page.on('pageerror', e => errors.push(e.message));
-  const live = {data, task: false};
-  await page.route('**/*', async route => {
+  const errors: string[] = [], sent: Sent[] = [], reads: [string, string][] = [];
+  page.on('pageerror', (e: Error) => errors.push(e.message));
+  const live: {data: LiveData | undefined; task: boolean} = {data, task: false};
+  await page.route('**/*', async (route: Route) => {
     const req = route.request(), url = new URL(req.url()), p = url.pathname, method = req.method();
-    const json = (body, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
+    const json = (body: unknown, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
     if (url.origin !== 'http://tico-ui.test') return route.abort();
     if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
     const file = p.startsWith('/tico/ui/') ? uiFile(p.slice(9)) : p.startsWith('/vendor/') ? path.join(uiDir, p) : '';
@@ -113,10 +129,10 @@ async function open(browser, {role = 'owner', route = '#/strategy/market', viewp
       const body = req.postDataJSON(); sent.push(['POST', p, body]);
       // The server recomputes the size: adoption 0.4 -> 0.5 lifts the Office estimate to 5.25B.
       const change = (live.data ||= {}).offering = buildData('offering', 'product');
-      const office = change.segments[0];
-      Object.assign(office.size, {spend_usd: 5.25 * B, low_usd: 3.6 * B, high_usd: 7.6 * B});
-      office.size.params = {...office.size.params, adoption: {...office.size.params.adoption, value: body.params.adoption}};
-      office.estimates[0] = office.size;
+      const office = change.segments[0]!;
+      Object.assign(office.size!, {spend_usd: 5.25 * B, low_usd: 3.6 * B, high_usd: 7.6 * B});
+      office.size!.params = {...office.size!.params, adoption: {...office.size!.params.adoption, value: body.params.adoption}};
+      office.estimates[0] = office.size!;
       return json({size: office.size});
     }
     const decide = p.match(/^\/api\/v2\/market\/sizes\/([^/]+)\/(accept|reject)$/);
@@ -138,19 +154,19 @@ async function open(browser, {role = 'owner', route = '#/strategy/market', viewp
 }
 
 // A box's area against its size: the same ratio everywhere, within 2%.
-async function areaRatios(scope) {
+async function areaRatios(scope: Locator) {
   return scope.evaluateAll(els => els.map(el => { const r = el.getBoundingClientRect(); return r.width * r.height / Number(el.dataset.value); }));
 }
-const within = (ratios, label) => {
+const within = (ratios: number[], label: string) => {
   assert.ok(ratios.length > 1, label + ': boxes drawn');
   const mean = ratios.reduce((a, b) => a + b, 0) / ratios.length;
-  ratios.forEach(r => assert.ok(Math.abs(r - mean) / mean < 0.02, `${label}: area off by ${(100 * Math.abs(r - mean) / mean).toFixed(1)}%`));
+  ratios.forEach((r: number) => assert.ok(Math.abs(r - mean) / mean < 0.02, `${label}: area off by ${(100 * Math.abs(r - mean) / mean).toFixed(1)}%`));
 };
-const until = async (fn, what) => {
+const until = async (fn: () => boolean, what: string) => {
   for (let i = 0; i < 100; i++) { if (fn()) return; await new Promise(r => setTimeout(r, 50)); }
   assert.fail(what);
 };
-const noSideScroll = page => page.evaluate(() => ({page: document.documentElement.scrollWidth - innerWidth, host: (() => { const h = document.querySelector('.mkt-host'); return h ? h.scrollWidth - h.clientWidth : 0; })()}));
+const noSideScroll = (page: Page) => page.evaluate(() => ({page: document.documentElement.scrollWidth - innerWidth, host: (() => { const h = document.querySelector('.mkt-host'); return h ? h.scrollWidth - h.clientWidth : 0; })()}));
 
 (async () => {
   const browser = await chromium.launch({channel: process.env.TICO_BROWSER_CHANNEL ?? 'chrome', headless: true});
@@ -231,8 +247,8 @@ const noSideScroll = page => page.evaluate(() => ({page: document.documentElemen
     }
     // A link to a note, a note id route, an old #/market link, the old Players view and Open map open the map, with a
     // way back to the page.
-    for (const [route, hash] of [['#/strategy/market?note=brief', '#/strategy/market?note=brief'], ['#/strategy/market/company/self', '#/strategy/market/company/self'],
-      ['#/market?note=brief', '#/strategy/market?note=brief'], ['#/strategy/market/players', '#/strategy/market/players'], ['#/strategy/market/map', '#/strategy/market/map']]) {
+    for (const [route, hash] of ([['#/strategy/market?note=brief', '#/strategy/market?note=brief'], ['#/strategy/market/company/self', '#/strategy/market/company/self'],
+      ['#/market?note=brief', '#/strategy/market?note=brief'], ['#/strategy/market/players', '#/strategy/market/players'], ['#/strategy/market/map', '#/strategy/market/map']] as [string, string][])) {
       const {page, errors} = await open(browser, {route});
       await page.locator('.market-shell .market-graph').waitFor();
       assert.equal(await page.evaluate(() => location.hash), hash);
@@ -258,10 +274,10 @@ const noSideScroll = page => page.evaluate(() => ({page: document.documentElemen
     for (const [view, section] of [['value-chain', 'reach'], ['growth', 'money'], ['buyers', 'money']]) {
       const {page, errors, reads} = await open(browser, {route: '#/strategy/market/' + view, viewport: {width: 1280, height: 560}});
       await page.locator('#mkt-q-' + section).waitFor();
-      await page.waitForFunction(() => document.querySelector('#market-shell').scrollTop > 0);
+      await page.waitForFunction(() => document.querySelector('#market-shell')!.scrollTop > 0);
       // At the top, or as far as the page goes when the question is the last one.
       const at = await page.evaluate(s => {
-        const shell = document.querySelector('#market-shell'), top = document.querySelector('#mkt-q-' + s).getBoundingClientRect().top - shell.getBoundingClientRect().top;
+        const shell = document.querySelector('#market-shell')!, top = document.querySelector('#mkt-q-' + s)!.getBoundingClientRect().top - shell.getBoundingClientRect().top;
         return {top, end: shell.scrollTop >= shell.scrollHeight - shell.clientHeight - 1, seen: top < shell.clientHeight};
       }, section);
       assert.ok(Math.abs(at.top) <= 30 || (at.end && at.seen), `${view}: ${section} is scrolled to (${JSON.stringify(at)})`);
@@ -289,7 +305,7 @@ const noSideScroll = page => page.evaluate(() => ({page: document.documentElemen
       const before = reads.length;
       await panel.locator('[data-mkt-param][data-name="adoption"] input').fill('0.5');
       await panel.locator('[data-mkt-param][data-name="adoption"] button').click();
-      await page.waitForFunction(() => document.querySelector('.mkt-panel[open] .mkt-kv')?.innerText.includes('$5.25B'));
+      await page.waitForFunction(() => (document.querySelector('.mkt-panel[open] .mkt-kv') as HTMLElement | null)?.innerText.includes('$5.25B'));
       assert.deepEqual(sent.find(x => x[1].endsWith('/params')), ['POST', '/api/v2/market/sizes/sz-office-bu/params', {params: {adoption: 0.5}}]);
       assert.ok(reads.length > before, 'the spend was read again');
       assert.equal(await page.locator('.mkt-gh[data-seg="segment/office"] b').innerText(), '$5.25B', 'the box moved');
@@ -377,7 +393,7 @@ const noSideScroll = page => page.evaluate(() => ({page: document.documentElemen
       await page.locator('.mkt-svg').waitFor();
       assert.equal(await page.locator('.mkt-dot').count(), 6);
       await shot(page, 'growth', 'dark');
-      assert.deepEqual(await page.locator('.mkt-dot.self text').evaluateAll(els => els.map(e => e.textContent)), ['Office cleaning']);
+      assert.deepEqual(await page.locator('.mkt-dot.self text').evaluateAll(els => els.map((e: Element) => e.textContent)), ['Office cleaning']);
       await page.locator('.mkt-dot', {hasText: 'Home cleaning'}).click();
       await page.locator('.mkt-panel[open] h2', {hasText: 'Home cleaning'}).waitFor();
       assert.equal(await page.locator('.mkt-svg text:text("log scale")').count(), 0, 'a narrow range stays linear');
@@ -385,7 +401,7 @@ const noSideScroll = page => page.evaluate(() => ({page: document.documentElemen
       await page.close();
       // A range wider than 20x goes on a log scale.
       const wide = buildData();
-      wide.segments.find(s => s.id === 'segment/specialty').size.spend_usd = 0.1 * B;
+      wide.segments.find(s => s.id === 'segment/specialty')!.size!.spend_usd = 0.1 * B;
       const log = await open(browser, {data: {offering: wide}});
       await log.page.locator('.mkt-svg').waitFor();
       assert.equal(await log.page.locator('.mkt-svg text:text("log scale")').count(), 1);

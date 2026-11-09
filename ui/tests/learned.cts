@@ -1,26 +1,31 @@
 // "What it has learned" (ui/app/learned.ts): linked from the top of your chat; the owner sees the company layer and their
 // own, everyone else only their own; edit and delete send exactly that entry's change and redraw without it. Fixtures only.
-const {chromium} = require('playwright');
+import type {Browser, LaunchOptions, Route} from 'playwright';
+import type * as PageSupport from './support/page.cjs';
+import type * as RouteSupport from './support/routes.cjs';
+const {chromium} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
-const {html, uiFile} = require('./support/page.cjs');
-const {unrouted} = require('./support/routes.cjs');
+const {html, uiFile} = require('./support/page.cjs') as typeof PageSupport;
+const {unrouted} = require('./support/routes.cjs') as typeof RouteSupport;
 
 const now = new Date().toISOString();
-const bot = (name, display_name) => ({name, display_name, host: 'keeper', status: 'active', can_chat: false});
-const entry = (id, layer, text, taught) => ({id, layer, text, created_at: now, updated_at: null, taught_in_chat: taught});
+const bot = (name: string, display_name: string) => ({name, display_name, host: 'keeper', status: 'active', can_chat: false});
+const entry = (id: string, layer: string, text: string, taught: boolean) => ({id, layer, text, created_at: now, updated_at: null, taught_in_chat: taught});
 
-async function open(browser, me, learned, chat) {
+interface ChatState {room_id: string}
+
+async function open(browser: Browser, me: Record<string, unknown>, learned: unknown, chat: ChatState) {
   const page = await browser.newPage({viewport: {width: 1280, height: 900}, serviceWorkers: 'block'});
-  const errors = [], writes = [];
-  page.on('pageerror', error => errors.push(error.message));
-  await page.route('**/*', route => {
+  const errors: string[] = [], writes: unknown[][] = [];
+  page.on('pageerror', (error: Error) => errors.push(error.message));
+  await page.route('**/*', (route: Route) => {
     const req = route.request(), url = new URL(req.url()), p = url.pathname;
-    const json = body => route.fulfill({contentType: 'application/json', body: JSON.stringify(body)});
+    const json = (body: unknown) => route.fulfill({contentType: 'application/json', body: JSON.stringify(body)});
     if (/\/marked\.min\.js$/.test(p)) return route.fulfill({contentType: 'application/javascript', body: fs.readFileSync(uiFile('vendor/marked.min.js'), 'utf8')});
     if (url.origin !== 'https://tico-ui.test') return route.abort();
     const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/);
-    if (ui && fs.existsSync(uiFile(ui[1]))) return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]), 'utf8')});
+    if (ui && fs.existsSync(uiFile(ui[1]!))) return route.fulfill({contentType: ui[1]!.endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]!), 'utf8')});
     if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
     if (p === '/api/me') return json(me);
     if (p === '/api/humans') return json({people: [{id: 'ana', name: 'Ana'}, {id: 'ben', name: 'Ben'}]});
@@ -36,7 +41,7 @@ async function open(browser, me, learned, chat) {
     if (one) {
       const body = req.postDataJSON?.() ?? null;
       writes.push([req.method(), one[1], body]);
-      if (req.method() === 'PATCH') return json({entry: {...entry(one[1], 'personal', body.text, true), updated_at: now}});
+      if (req.method() === 'PATCH') return json({entry: {...entry(one[1]!, 'personal', body.text, true), updated_at: now}});
       if (req.method() === 'DELETE') return json({deleted: one[1]});
     }
     if (p.endsWith('/watch')) return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});
@@ -45,11 +50,11 @@ async function open(browser, me, learned, chat) {
   return {page, errors, writes};
 }
 
-const chat = over => ({available: true, state: 'active', can_turn_on: false, room_id: 'room1', has_more: false, next_before: null,
+const chat = (over: Record<string, unknown>) => ({available: true, state: 'active', can_turn_on: false, room_id: 'room1', has_more: false, next_before: null,
   execution: null, actions: {}, pending: [], earlier: null, messages: [], ...over});
 
 (async () => {
-  const browser = await chromium.launch({headless: true, channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined});
+  const browser = await chromium.launch({headless: true, channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined} as LaunchOptions);
   try {
     // The owner: from their Assistant chat to the page, with both layers; they edit their own entry and delete a
     // company one.
@@ -83,7 +88,7 @@ const chat = over => ({available: true, state: 'active', can_turn_on: false, roo
       assert.equal(writes.length, 1, 'owner: nothing deleted on the first press');
       await del.click();
       await company.locator('[data-learned="c1"]').waitFor({state: 'detached'});
-      assert.deepEqual(writes[1].slice(0, 2), ['DELETE', 'c1'], 'owner: one DELETE for that entry');
+      assert.deepEqual(writes[1]!.slice(0, 2), ['DELETE', 'c1'], 'owner: one DELETE for that entry');
       assert.equal(await company.locator('[data-learned="c2"]').count(), 1, 'owner: the other entry stays');
       assert.deepEqual(errors, [], 'owner: no page errors');
       await page.close();

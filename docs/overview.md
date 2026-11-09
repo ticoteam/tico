@@ -81,7 +81,7 @@ list|add|update|remove` and `hub pin add|update|remove`, the `hub_card_*` and `h
 `PATCH|DELETE /api/v2/pins/{id}`, `GET|POST /api/v2/cards`, `PATCH|DELETE /api/v2/cards/{id}` and
 `GET /api/v2/cards/choices`. `GET /api/v2/places/growth?month=YYYY-MM` reads the Growth page for one month and answers
 `month` and `months` for its picker; `GET /api/v2/cards/choices?place=growth` adds the growth templates, the metrics and
-the live channels. Tests: `backend/tests/test_cards.py`, `backend/tests/test_growth_cards.py`, `ui/tests/dashboard.cjs`.
+the live channels. Tests: `backend/tests/test_cards.py`, `backend/tests/test_growth_cards.py`, `ui/tests/dashboard.cts`.
 
 ## Campus
 

@@ -1,24 +1,34 @@
 // One saved meeting (ui/app/meetings.ts meetPaint): a header with faces and Team / Private, Share and ⋯ beside
 // Close, one task list with each task once, Notes edited in place, and the transcript beside it (below on a phone).
 // Fixtures only, no network.
-const {chromium} = require('playwright');
+import type {Browser, LaunchOptions, Page, Route} from 'playwright';
+import type * as PageSupport from './support/page.cjs';
+import type * as RouteSupport from './support/routes.cjs';
+const {chromium} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const {html, uiFile} = require('./support/page.cjs');
-const {unrouted} = require('./support/routes.cjs');
+const {html, uiFile} = require('./support/page.cjs') as typeof PageSupport;
+const {unrouted} = require('./support/routes.cjs') as typeof RouteSupport;
 
-const ago = hours => new Date(Date.now() - hours * 36e5).toISOString();
+const ago = (hours: number) => new Date(Date.now() - hours * 36e5).toISOString();
 const PEOPLE = [{id: 'ana', name: 'Ana', email: 'ana@acme.example'}, {id: 'ben', name: 'Ben', email: 'ben@acme.example'}];
 const BOTS = [{id: 'ops', name: 'ops', display_name: 'Ops', status: 'active', schedules: []},
   {id: 'sales', name: 'sales', display_name: 'Sales', status: 'active', schedules: []}];
-const base = (id, extra = {}) => ({id, title: 'Weekly ops sync', source: 'tico-live', client: 'tico-recorder', kind: 'meeting', status: 'done',
+const base = (id: string, extra: Record<string, unknown> = {}) => ({id, title: 'Weekly ops sync', source: 'tico-live', client: 'tico-recorder', kind: 'meeting', status: 'done',
   review_state: 'live', started: ago(3), created: ago(3), duration_ms: 1800000, can_edit: true, version: 3, private: false,
   participants: [{name: 'Ana', email: 'ana@acme.example'}, {name: 'Ben', email: 'ben@acme.example'}],
   note: 'Ship on Friday.', notes: '', transcript_readable: '', outbox: {doc: [], task: [], feature: []},
   turns: [{speaker: 'Ana', start_ms: 5000, text: 'We ship the pricing page on Friday.'}, {speaker: 'Ben', start_ms: 9000, text: 'I will book the review.'}], ...extra});
 
-function world() {
+interface World {
+  meetings: Record<string, Record<string, unknown> & {version: number}>;
+  items: Record<string, Record<string, unknown>[]>;
+  linked: Record<string, Record<string, unknown>[]>;
+  sent: Record<string, unknown>[];
+  edits: Record<string, unknown>[];
+}
+function world(): World {
   return {
     meetings: {
       // Shared with Ops: its delivery task and follow-up, one created item and one linked task, overlapping on purpose.
@@ -36,20 +46,20 @@ function world() {
     sent: [], edits: [],
   };
 }
-async function open(browser, viewport, w, theme) {
+async function open(browser: Browser, viewport: {width: number; height: number}, w: World, theme: 'light' | 'dark') {
   const context = await browser.newContext({viewport, serviceWorkers: 'block', hasTouch: viewport.width < 760, isMobile: viewport.width < 760, colorScheme: theme});
-  await context.addInitScript(value => { localStorage.setItem('tico.theme', value); }, theme);
+  await context.addInitScript((value: string) => { localStorage.setItem('tico.theme', value); }, theme);
   const page = await context.newPage();
-  const errors = [];
-  page.on('pageerror', error => errors.push(error.message));
-  await page.route('**/*', route => {
+  const errors: string[] = [];
+  page.on('pageerror', (error: Error) => errors.push(error.message));
+  await page.route('**/*', (route: Route) => {
     const url = new URL(route.request().url()), p = url.pathname, method = route.request().method();
-    const json = body => route.fulfill({contentType: 'application/json', body: JSON.stringify(body)});
+    const json = (body: unknown) => route.fulfill({contentType: 'application/json', body: JSON.stringify(body)});
     const body = () => JSON.parse(route.request().postData() || '{}');
     if (/\/marked\.min\.js$/.test(p)) return route.fulfill({contentType: 'application/javascript', body: 'window.marked={parse:s=>String(s)}'});
     if (url.origin !== 'https://tico-ui.test') return route.abort();
     const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/);
-    if (ui && fs.existsSync(uiFile(ui[1]))) return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]), 'utf8')});
+    if (ui && fs.existsSync(uiFile(ui[1]!))) return route.fulfill({contentType: ui[1]!.endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]!), 'utf8')});
     if (p === '/vendor/fonts/material-symbols-outlined.woff2') return route.fulfill({contentType: 'font/woff2', body: fs.readFileSync(uiFile('vendor/fonts/material-symbols-outlined.woff2'))});
     if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
     if (p === '/api/me') return json({id: 'ana', role: 'owner', name: 'Ana', email: 'ana@acme.example', cloud: true});
@@ -61,36 +71,36 @@ async function open(browser, viewport, w, theme) {
     if (p === '/api/meetings/sources') return json({sources: []});
     if (p === '/api/v2/meetings') return json({meetings: Object.values(w.meetings), pending_count: 0});
     let m = p.match(/^\/api\/meetings\/(m\d)$/);
-    if (m) return json(w.meetings[m[1]]);
-    if ((m = p.match(/^\/api\/meetings\/(m\d)\/items$/))) return json({id: m[1], can_send: true, audience: null, sections: {task: w.items[m[1]], doc: [], feature: []}});
-    if ((m = p.match(/^\/api\/v2\/meetings\/(m\d)\/tasks$/))) return json({tasks: w.linked[m[1]], next_cursor: null});
+    if (m) return json(w.meetings[m[1]!]);
+    if ((m = p.match(/^\/api\/meetings\/(m\d)\/items$/))) return json({id: m[1], can_send: true, audience: null, sections: {task: w.items[m[1]!], doc: [], feature: []}});
+    if ((m = p.match(/^\/api\/v2\/meetings\/(m\d)\/tasks$/))) return json({tasks: w.linked[m[1]!], next_cursor: null});
     if (p === '/api/v2/live-meetings/lm1') return json({id: 'lm1', bots: [{bot: 'ops', name: 'Ops'}],
       chat: [{id: 'c1', actor: 'human:ana', role: 'human', text: 'Ops, note the Friday date.', at_ms: 6000}]});
     if ((m = p.match(/^\/api\/meetings\/(m\d)\/send$/)) && method === 'POST') {
       const b = body(); w.sent.push({id: m[1], ...b});
-      Object.assign(w.meetings[m[1]], {sent: {task: 't-new', bot: b.bot_id}, delivery: {status: 'sent', destination: b.bot_id, task_id: 't-new'}});
+      Object.assign(w.meetings[m[1]!]!, {sent: {task: 't-new', bot: b.bot_id}, delivery: {status: 'sent', destination: b.bot_id, task_id: 't-new'}});
       return json({bot: b.bot_id, task: 't-new'});
     }
     if ((m = p.match(/^\/api\/meetings\/(m\d)\/edit$/)) && method === 'POST') {
       const b = body(); w.edits.push({id: m[1], ...b});
-      const rec = w.meetings[m[1]]; Object.assign(rec, b); rec.version++;
+      const rec = w.meetings[m[1]!]!; Object.assign(rec, b); rec.version++;
       return json({version: rec.version});
     }
     return json(unrouted(p));
   });
   return {page, errors, context};
 }
-async function shot(page, name) {
+async function shot(page: Page, name: string) {
   if (!process.env.TICO_MEETINGS_SCREENSHOTS) return;
   fs.mkdirSync(process.env.TICO_MEETINGS_SCREENSHOTS, {recursive: true});
   await page.screenshot({path: path.join(process.env.TICO_MEETINGS_SCREENSHOTS, name + '.png'), animations: 'disabled'});
 }
 
 (async () => {
-  const browser = await chromium.launch({headless: true, channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined});
+  const browser = await chromium.launch({headless: true, channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined} as LaunchOptions);
   try {
     for (const [device, viewport, theme] of [['desktop', {width: 1280, height: 860}, 'light'], ['desktop', {width: 1280, height: 860}, 'dark'],
-                                             ['phone', {width: 390, height: 844}, 'light'], ['phone', {width: 390, height: 844}, 'dark']]) {
+                                             ['phone', {width: 390, height: 844}, 'light'], ['phone', {width: 390, height: 844}, 'dark']] as [string, {width: number; height: number}, 'light' | 'dark'][]) {
       const where = `${device}-${theme}`;
       const w = world();
       const {page, errors, context} = await open(browser, viewport, w, theme);
@@ -100,7 +110,7 @@ async function shot(page, name) {
       await detail.locator('[data-pending="i1"]').waitFor();
       // Faces: the people and the bot that sat in, each named on hover or tap.
       await page.locator('#meet-faces [data-face-bot="ops"]').waitFor();
-      assert.deepEqual(await page.locator('#meet-faces .mp-face').evaluateAll(els => els.map(e => e.dataset.name)), ['Ana', 'Ben', 'Ops'], where);
+      assert.deepEqual(await page.locator('#meet-faces .mp-face').evaluateAll(els => els.map(e => (e as HTMLElement).dataset.name)), ['Ana', 'Ben', 'Ops'], where);
       await shot(page, `meeting-page-${where}`);
       // One list: the created item, the linked task and the bot's follow-up that are the same task show once.
       const rows = await detail.locator('#meet-sections li .t').allInnerTexts();
@@ -129,22 +139,22 @@ async function shot(page, name) {
       assert.equal(await detail.locator('[data-tbody] mark').count(), 1, where);
       // Nothing scrolls sideways.
       const overflow = await page.evaluate(() => [document.documentElement.scrollWidth - innerWidth,
-        document.querySelector('#notes-detail').scrollWidth - document.querySelector('#notes-detail').clientWidth]);
-      assert.ok(overflow.every(n => n <= 1), `${where}: sideways scroll ${overflow}`);
+        document.querySelector('#notes-detail')!.scrollWidth - document.querySelector('#notes-detail')!.clientWidth]);
+      assert.ok(overflow.every((n: number) => n <= 1), `${where}: sideways scroll ${overflow}`);
       if (device === 'desktop') {
         const [main, side] = await Promise.all(['.mp-main', '#meet-side'].map(s => detail.locator(s).boundingBox()));
-        assert.ok(side.x >= main.x + main.width - 1, `${where}: transcript is a right column`);
+        assert.ok(side!.x >= main!.x + main!.width - 1, `${where}: transcript is a right column`);
       } else {
         const [main, side] = await Promise.all(['.mp-main', '#meet-side'].map(s => detail.locator(s).boundingBox()));
-        assert.ok(side.y >= main.y + main.height - 1, `${where}: transcript is below`);
+        assert.ok(side!.y >= main!.y + main!.height - 1, `${where}: transcript is below`);
       }
       // A shared meeting offers only the bot it went to.
       await page.getByRole('button', {name: 'Share'}).click();
       assert.equal(await page.locator('[data-share-bot]').count(), 1, where);
       assert.equal(await page.locator('[data-share-bot="ops"]').isDisabled(), true, where);
       await page.keyboard.press('Escape');
-      assert.equal(await page.locator('#meet-share').evaluate(d => d.open), false, `${where}: Escape closes the menu first`);
-      assert.equal(await page.locator('#notes-modal').evaluate(d => d.open), true, where);
+      assert.equal(await page.locator('#meet-share').evaluate(d => (d as HTMLDialogElement).open), false, `${where}: Escape closes the menu first`);
+      assert.equal(await page.locator('#notes-modal').evaluate(d => (d as HTMLDialogElement).open), true, where);
 
       if (device === 'desktop' && theme === 'light') {
         // Notes save in place.

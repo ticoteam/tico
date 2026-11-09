@@ -1,32 +1,35 @@
 // Personal review controls against local fixtures; no provider or server calls.
-const {chromium} = require('playwright');
+import type {Browser, LaunchOptions, Page, Route} from 'playwright';
+import type * as PageSupport from './support/page.cjs';
+import type * as RouteSupport from './support/routes.cjs';
+const {chromium} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const {html, uiFile} = require('./support/page.cjs');
-const {unrouted} = require('./support/routes.cjs');
+const {html, uiFile} = require('./support/page.cjs') as typeof PageSupport;
+const {unrouted} = require('./support/routes.cjs') as typeof RouteSupport;
 const evidence = process.env.TICO_REVIEW_EVIDENCE;
-const row = (id, title, owner, review_state, privateMeeting = false) => ({id, title, owner: owner, review_state, private: privateMeeting,
+const row = (id: string, title: string, owner: string, review_state: string, privateMeeting = false) => ({id, title, owner: owner, review_state, private: privateMeeting,
   kind: 'meeting', status: 'done', client: privateMeeting ? 'tico-recorder' : null, source: privateMeeting ? 'granola' : 'zoom', can_edit: true, started: '2026-10-01T14:00:00Z',
   notes: 'Review the plan and next steps.', turns: [{speaker: 'Sam', start_ms: 0, text: 'The plan is ready.'}],
   participants: [{name: 'Sam'}], outbox: {doc: [], task: [], feature: []}});
-async function open(browser, viewport, scheme, role = 'owner') {
+async function open(browser: Browser, viewport: {width: number; height: number}, scheme: 'light' | 'dark', role = 'owner') {
   const context = await browser.newContext({viewport, colorScheme: scheme, serviceWorkers: 'block', isMobile: viewport.width < 760, hasTouch: viewport.width < 760});
-  await context.addInitScript(theme => localStorage.setItem('tico.theme', theme), scheme);
-  const page = await context.newPage(), errors = [], writes = [];
-  page.on('pageerror', error => errors.push(error.message));
+  await context.addInitScript((theme: string) => localStorage.setItem('tico.theme', theme), scheme);
+  const page = await context.newPage(), errors: string[] = [], writes: Record<string, unknown>[] = [];
+  page.on('pageerror', (error: Error) => errors.push(error.message));
   const rows = [row('live', 'Shared planning', 'ana@example.com', 'live'), row('one', 'Planning review', 'ana@example.com', 'pending'),
     row('two', 'Private source notes', 'ana@example.com', 'pending', true), row('three', 'Follow-up review', 'ana@example.com', 'pending'),
     row('other', 'Other person confidential', 'sam@example.com', 'pending')];
   let settings = {auto_share: null, review_default: 'review', effective_auto_share: false};
   const pending = () => rows.filter(r => r.owner === 'ana@example.com' && r.review_state === 'pending');
-  await page.route('**/*', route => {
+  await page.route('**/*', (route: Route) => {
     const request = route.request(), url = new URL(request.url()), p = url.pathname, method = request.method();
-    const json = body => route.fulfill({contentType: 'application/json', body: JSON.stringify(body)});
+    const json = (body: unknown) => route.fulfill({contentType: 'application/json', body: JSON.stringify(body)});
     if (/\/marked\.min\.js$/.test(p)) return route.fulfill({contentType: 'application/javascript', body: 'window.marked={parse:s=>String(s)}'});
     if (url.origin !== 'https://tico-ui.test') return route.abort();
     const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/);
-    if (ui && fs.existsSync(uiFile(ui[1]))) return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]), 'utf8')});
+    if (ui && fs.existsSync(uiFile(ui[1]!))) return route.fulfill({contentType: ui[1]!.endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]!), 'utf8')});
     if (p === '/vendor/fonts/material-symbols-outlined.woff2') return route.fulfill({contentType: 'font/woff2', body: fs.readFileSync(uiFile('vendor/fonts/material-symbols-outlined.woff2'))});
     if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
     if (p === '/api/me') return json({id: 'ana', role, name: 'Ana', email: 'ana@example.com', cloud: true});
@@ -75,16 +78,16 @@ async function open(browser, viewport, scheme, role = 'owner') {
   await page.evaluate(() => { window.open = () => null; });
   return {context, page, errors, writes, rows};
 }
-async function shot(page, name) {
+async function shot(page: Page, name: string) {
   if (!evidence) return;
   fs.mkdirSync(evidence, {recursive: true});
-  await page.screenshot({path: path.join(evidence, name + '.png'), fullPage: page.viewportSize().width >= 760});
+  await page.screenshot({path: path.join(evidence, name + '.png'), fullPage: page.viewportSize()!.width >= 760});
 }
 (async () => {
-  const browser = await chromium.launch({headless: true, channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined});
+  const browser = await chromium.launch({headless: true, channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined} as LaunchOptions);
   try {
-    for (const [size, viewport] of [['desktop', {width: 1280, height: 900}], ['phone', {width: 390, height: 844}]]) {
-      for (const scheme of ['light', 'dark']) {
+    for (const [size, viewport] of [['desktop', {width: 1280, height: 900}], ['phone', {width: 390, height: 844}]] as const) {
+      for (const scheme of ['light', 'dark'] as const) {
         const {context, page, errors, writes, rows} = await open(browser, viewport, scheme);
         assert.equal(await page.locator('[data-meet-pending]').textContent(), '3');
         assert.equal(await page.locator('[data-upd-badge]:visible').count(), 0, 'Pending never adds to Updates');
@@ -94,8 +97,8 @@ async function shot(page, name) {
         assert.equal(await page.locator('html').getAttribute('data-theme'), scheme);
         if (size === 'desktop') {
           const rects = await page.locator('[data-note-row=one] > *').evaluateAll(els => els.map(el => ({x: el.getBoundingClientRect().x, y: el.getBoundingClientRect().y})));
-          assert(rects[0].x < rects[1].x && rects[1].x < rects[2].x && rects[2].x < rects[3].x, 'checkbox, source, title and actions align in a row');
-          assert(Math.abs(rects[2].y - rects[3].y) < 20);
+          assert(rects[0]!.x < rects[1]!.x && rects[1]!.x < rects[2]!.x && rects[2]!.x < rects[3]!.x, 'checkbox, source, title and actions align in a row');
+          assert(Math.abs(rects[2]!.y - rects[3]!.y) < 20);
         }
         assert(!await page.locator('#main').innerText().then(t => t.includes('Other person confidential')));
         assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
@@ -111,8 +114,8 @@ async function shot(page, name) {
         await page.locator('#notes-detail [data-review-action=approve]').click();
         await page.locator('#notes-modal').waitFor({state: 'hidden'});
         await page.waitForFunction(() => document.querySelectorAll('.meet-row').length === 2);
-        assert.equal(rows.find(r => r.id === 'two').private, false);
-        assert.equal(writes.find(w => w.path === '/api/v2/meetings/two/review').send_to, 'auto', 'Share & send hands it to a bot');
+        assert.equal(rows.find(r => r.id === 'two')!.private, false);
+        assert.equal(writes.find(w => w.path === '/api/v2/meetings/two/review')!.send_to, 'auto', 'Share & send hands it to a bot');
         await page.locator('[data-note-row=one] [data-review-action=dismiss]').click();
         await page.locator('[data-note-row=one]').waitFor({state: 'detached'});
         await page.locator('[data-review=dismissed]').click();
@@ -131,11 +134,11 @@ async function shot(page, name) {
         await settings.getByRole('button', {name: 'Save', exact: true}).click();
         await settings.waitFor({state: 'detached'});
         assert.equal(await page.locator('.meet-row').count(), 1, 'Auto-share leaves the existing queue pending');
-        assert.deepEqual(writes.at(-1).settings, {auto_share: true, review_default: 'auto'});
+        assert.deepEqual(writes.at(-1)!.settings, {auto_share: true, review_default: 'auto'});
         assert.equal(await page.locator('#meet-select-all').isHidden(), true, 'no Select all for one row');
         await page.locator('[data-note-row=three] [data-review-action=dismiss]').click();
         await page.locator('.notes-empty').waitFor();
-        assert.equal(rows.find(r => r.id === 'other').review_state, 'pending');
+        assert.equal(rows.find(r => r.id === 'other')!.review_state, 'pending');
         assert.equal(await page.locator('[data-meet-pending]:visible').count(), 0);
         await page.locator('[data-review=live]').click();
         await page.locator('[data-note-row=live]').waitFor();
@@ -150,18 +153,18 @@ async function shot(page, name) {
     await page.locator('#meet-select-all input').check();
     await page.locator('[data-review-bulk=approve_all]').click();
     await page.locator('.notes-empty').waitFor();
-    assert.equal(writes.at(-1).action, 'approve_all'); assert.deepEqual(writes.at(-1).ids, ['one', 'two', 'three']);
+    assert.equal(writes.at(-1)!.action, 'approve_all'); assert.deepEqual(writes.at(-1)!.ids, ['one', 'two', 'three']);
     await page.locator('#meet-settings').click();
     const settings = page.getByRole('dialog', {name: 'Meeting settings'});
     await settings.locator('[name=personal]').waitFor();
     assert.equal(await settings.locator('[name=team]').count(), 0, 'Team default is owner-only');
     await settings.locator('[name=personal]').selectOption('review');
     await settings.getByRole('button', {name: 'Save', exact: true}).click();
-    await settings.waitFor({state: 'detached'}); assert.deepEqual(writes.at(-1).settings, {auto_share: false});
+    await settings.waitFor({state: 'detached'}); assert.deepEqual(writes.at(-1)!.settings, {auto_share: false});
     await page.locator('#meet-settings').click();
     await settings.locator('[name=personal]').selectOption('default');
     await settings.getByRole('button', {name: 'Save', exact: true}).click();
-    await settings.waitFor({state: 'detached'}); assert.deepEqual(writes.at(-1).settings, {auto_share: null});
+    await settings.waitFor({state: 'detached'}); assert.deepEqual(writes.at(-1)!.settings, {auto_share: null});
     assert.deepEqual(errors, []); await context.close();
     for (const action of ['approve_all', 'dismiss_all']) {
       for (const filter of ['search', 'source']) {
@@ -183,9 +186,9 @@ async function shot(page, name) {
         if (action === 'approve_all' && filter === 'search') await shot(page, 'desktop-share-visible-light');
         await button.click();
         await page.locator('[data-note-row=one]').waitFor({state: 'detached'});
-        assert.deepEqual(writes.at(-1).ids, visible);
-        assert.equal(rows.find(r => r.id === 'two').review_state, 'pending', 'filtered-out private meeting stays pending');
-        assert.equal(rows.find(r => r.id === 'other').review_state, 'pending', 'another person stays private');
+        assert.deepEqual(writes.at(-1)!.ids, visible);
+        assert.equal(rows.find(r => r.id === 'two')!.review_state, 'pending', 'filtered-out private meeting stays pending');
+        assert.equal(rows.find(r => r.id === 'other')!.review_state, 'pending', 'another person stays private');
         assert.deepEqual(errors, []);
         await context.close();
       }

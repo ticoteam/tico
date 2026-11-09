@@ -3,12 +3,15 @@
 // without it. Once authorized it says Tico can create them. Either way it names the waiting bot's repository and links to the App's
 // settings and the uninstall page on github.com/settings. Without a connection, the form asks for one account or organization
 // name. Desktop and phone, light and dark: TICO_UI_SHOTS=<dir> saves the card in each.
-const {chromium} = require('playwright');
+import type {Locator, LaunchOptions, Page, Route} from 'playwright';
+import type * as PageSupport from './support/page.cjs';
+import type * as RouteSupport from './support/routes.cjs';
+const {chromium} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const {html, uiFile} = require('./support/page.cjs');
-const {unrouted} = require('./support/routes.cjs');
+const {html, uiFile} = require('./support/page.cjs') as typeof PageSupport;
+const {unrouted} = require('./support/routes.cjs') as typeof RouteSupport;
 
 const SHOTS = process.env.TICO_UI_SHOTS || '';
 const VIEWPORTS = {desktop: {width: 1440, height: 900}, phone: {width: 390, height: 844}};
@@ -25,15 +28,22 @@ const PERSONAL = {
     create_url: 'https://github.com/new?owner=ana-dev&visibility=private&name=bot-newbie'}],
 };
 const AUTHORIZED = {...PERSONAL, authorized: true};
+// What GET /api/v2/github/app answers: the App, or the not-connected answer.
+type AppState = typeof PERSONAL | {connected: false};
+
+// The Tico page's theme switch (ui/app/theme.ts), run in the page.
+declare global {
+  interface Window {ticoTheme: {set(value: string): void}}
+}
 
 // The routes the Tools page needs; the GitHub App's answer is read from `state.app` so one page can change it.
-async function serve(page, state) {
-  await page.route('**/*', route => {
+async function serve(page: Page, state: {app: AppState}) {
+  await page.route('**/*', (route: Route) => {
     const req = route.request(), p = new URL(req.url()).pathname;
-    const json = (body, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
+    const json = (body: unknown, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
     const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|css))$/);
-    if (ui && fs.existsSync(uiFile(ui[1])))
-      return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]), 'utf8')});
+    if (ui && fs.existsSync(uiFile(ui[1]!)))
+      return route.fulfill({contentType: ui[1]!.endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]!), 'utf8')});
     if (p.endsWith('.js')) return route.fulfill({contentType: 'application/javascript', body: ''});
     if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
     const config = {version: '0.1.0', app_name: 'Tico', local: true, compose_project: 'acme', server_network: 'acme_default'};
@@ -62,13 +72,13 @@ async function serve(page, state) {
 }
 
 // The text a person reads, with the layout's whitespace collapsed.
-const words = async locator => (await locator.textContent()).replace(/\s+/g, ' ').trim();
+const words = async (locator: Locator) => (await locator.textContent())!.replace(/\s+/g, ' ').trim();
 
 // The card in both themes, saved as <name>-dark.png and <name>-light.png when TICO_UI_SHOTS is set.
-async function themed(page, locator, name) {
+async function themed(page: Page, locator: Locator, name: string) {
   if (!SHOTS) return;
   for (const theme of ['dark', 'light']) {
-    await page.evaluate(v => window.ticoTheme.set(v), theme);
+    await page.evaluate((v: string) => window.ticoTheme.set(v), theme);
     await locator.screenshot({path: path.join(SHOTS, `${name}-${theme}.png`), animations: 'disabled'});
   }
   await page.evaluate(() => window.ticoTheme.set('dark'));
@@ -76,13 +86,13 @@ async function themed(page, locator, name) {
 
 (async () => {
   if (SHOTS) fs.mkdirSync(SHOTS, {recursive: true});
-  const browser = await chromium.launch({headless: true, channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined});
+  const browser = await chromium.launch({headless: true, channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined} as LaunchOptions);
   try {
-    const errors = [];
+    const errors: string[] = [];
     for (const [tag, viewport] of Object.entries(VIEWPORTS)) {
       const page = await browser.newPage({viewport, serviceWorkers: 'block'});
-      page.on('pageerror', e => errors.push(e.message));
-      const state = {app: PERSONAL};
+      page.on('pageerror', (e: Error) => errors.push(e.message));
+      const state: {app: AppState} = {app: PERSONAL};
       await serve(page, state);
       await page.goto('https://tico-ui.test/#/library/tools/github');
       const host = page.locator('#set-github'), card = page.locator('section:has(#set-github)');
@@ -103,11 +113,11 @@ async function themed(page, locator, name) {
       assert.equal(await authorize.locator('code').textContent(), CALLBACK, 'the callback hint, for an App set up before authorization');
       assert.equal(await host.locator('[data-gh-permissions], [data-gh-repo-fix]').count(), 0, 'no Administration fix when it is on');
       assert.equal(await host.locator('[data-gh-events]').getAttribute('href'), PERSONAL.permissions_url);
-      assert.equal(await host.locator('[data-gh-create="0"]').getAttribute('href'), PERSONAL.waiting[0].create_url);
+      assert.equal(await host.locator('[data-gh-create="0"]').getAttribute('href'), PERSONAL.waiting[0]!.create_url);
       assert.equal(await host.getByRole('link', {name: 'Uninstall on GitHub'}).getAttribute('href'), PERSONAL.uninstall_url);
       await themed(page, card, `github-personal-unauthorized-${tag}`);
       if (tag === 'phone') {
-        const box = await card.boundingBox();
+        const box = (await card.boundingBox())!;
         assert.ok(box.x + box.width <= viewport.width, 'the card fits a phone without a sideways scroll');
       }
 
