@@ -467,6 +467,7 @@ def run(args, who=None):
         "origin show",
         "brief",
         "pipeline",
+        "pipeline-manager",
         "mcp stats",
         "calendar list",
         "calendar status",
