@@ -1954,9 +1954,9 @@ def test_a_light_plan_caps_its_python_tests_by_priority_and_a_changed_test_alway
     # changed 50 + smoke 20 + near_short 10 = 80 of 85; near_long does not fit, and the shorter far file after it does.
     kept, left = checks.cap_tests(list(tier), tier, seconds, budget=85)
     assert kept == sorted(["changed.py", "smoke.py", "near_short.py", "far.py"]) and left == ["near_long.py"]
-    # Past the budget a changed test file still runs; what is left is listed in priority order.
+    # Past the budget a changed test file and the smoke set still run; what is left is listed in priority order.
     kept, left = checks.cap_tests(list(tier), tier, seconds, budget=10)
-    assert kept == ["changed.py"] and left == ["smoke.py", "near_short.py", "near_long.py", "far.py"]
+    assert kept == ["changed.py", "smoke.py"] and left == ["near_short.py", "near_long.py", "far.py"]
     # The budget is four VMs of about eight minutes of four workers, setup excluded.
     assert checks.narrow_budget(4) == 4 * checks.WORKERS * (
         checks.NARROW_SHARD_SECONDS - checks.SETUP_SECONDS["python"]
@@ -2123,3 +2123,45 @@ def test_a_queue_group_follows_shared_test_modules_and_reads_by_repository_liste
     assert {"backend/tests/test_reuses.py", "backend/tests/test_lists.py"} <= set(group["python"])
     light = checks.narrow(full, ["backend/leaf.py"], "pull_request", root=tmp_path)
     assert "backend/tests/test_lists.py" in light["python"] and "backend/tests/test_reuses.py" not in light["python"]
+    # The queue group runs everything its pull request's light run did.
+    assert set(light["python"]) <= set(group["python"])
+
+
+def test_a_light_plan_packs_untimed_files_with_the_cap_estimate_and_keeps_the_smoke_set_past_the_budget(
+    tmp_path, monkeypatch
+):
+    """Codex review, round 2: untimed files are packed with the seconds the cap estimated for them (not re-estimated
+    from fewer files), and the smoke set runs even when changed tests alone fill the budget."""
+    smoke_tests, _ = checks.smoke(ROOT)
+    changed = [f"backend/tests/test_changed_{i:02}.py" for i in range(12)]
+    collected = Counter(dict.fromkeys([*changed, *smoke_tests], 10))
+    monkeypatch.setattr(checks, "collect", lambda: collected)
+    monkeypatch.setattr(checks, "merge_parent", lambda base: base)
+    monkeypatch.setattr(checks, "guard_changelog", lambda base: None)
+    monkeypatch.setattr(checks, "image_checks", lambda changed: None)
+    monkeypatch.setattr(checks, "changed_files", lambda base, head="HEAD", only=None: [] if only else changed)
+    monkeypatch.setattr(checks, "DependencyMap", lambda root: "graph")
+    monkeypatch.delenv("GITHUB_OUTPUT", raising=False)
+    monkeypatch.delenv("GITHUB_STEP_SUMMARY", raising=False)
+
+    def fake_selection(changed_files, event, base=None, added=None, graph=None):
+        empty = {"browser": [], "caddy": False, "contracts": False, "conformance": False, "rust": []}
+        return {**empty, "python": [*changed, "backend/tests/test_far.py"], "reason": "measured", "uncertain": []}
+
+    def fake_narrow(picked, changed_files, event, added=None, graph=None):
+        tier = dict.fromkeys(changed, 0) | dict.fromkeys(smoke_tests, 1)
+        record = {"event": event, "depth": 1, "shards": 4, "budget_seconds": checks.narrow_budget(4), "smoke": True}
+        record |= {"left_transitive": ["backend/tests/test_far.py"], "tier": tier, "smoke_unless_capped": []}
+        return {**picked, "python": sorted({*changed, *smoke_tests}), "narrow": record}
+
+    monkeypatch.setattr(checks, "selection", fake_selection)
+    monkeypatch.setattr(checks, "narrow", fake_narrow)
+    # Twelve ten-minute changed tests fill the budget alone; the smoke set still runs.
+    monkeypatch.setattr(checks, "committed_timings", lambda: dict.fromkeys(changed, 600.0))
+    plan = checks.prepare("pull_request", "base", tmp_path / "plan.json", light=True)
+    assert set(smoke_tests) | set(changed) == set(plan["python"])
+    # One timed file and the rest untimed: the VMs' planned load is the seconds the cap selected.
+    monkeypatch.setattr(checks, "committed_timings", lambda: {changed[0]: 600.0})
+    plan = checks.prepare("pull_request", "base", tmp_path / "plan.json", light=True)
+    python = [job for job in plan["matrix"]["include"] if job["suite"].startswith("python-")]
+    assert sum(plan["estimated_seconds"][: len(python)]) == pytest.approx(plan["narrow"]["selected_seconds"], abs=1)

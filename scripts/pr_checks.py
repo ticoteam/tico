@@ -1565,11 +1565,12 @@ def narrow(picked, changed, event, added=None, root=ROOT, graph=None):
 
 def cap_tests(files, tier, seconds, budget):
     """(kept, left): `files` in priority order (tier, then measured seconds, then name) while they fit `budget` one-worker
-    seconds. A file that does not fit is left and a shorter one after it may still fit. A changed test file (tier 0) is
-    always kept: a pull request's own tests run on it."""
+    seconds. A file that does not fit is left and a shorter one after it may still fit. A changed test file (tier 0) and
+    the smoke set (tier 1, about two minutes) are always kept: a change's own tests run, and the smoke set runs whenever
+    anything is left."""
     kept, left, used = [], [], 0.0
     for name in sorted(files, key=lambda f: (tier.get(f, 1), seconds.get(f, 0.0), f)):
-        if tier.get(name, 1) == 0 or used + seconds.get(name, 0.0) <= budget:
+        if tier.get(name, 1) <= 1 or used + seconds.get(name, 0.0) <= budget:
             kept.append(name)
             used += seconds.get(name, 0.0)
         else:
@@ -1660,6 +1661,7 @@ def prepare(event, base, output, timings_path=None, head="HEAD", light=False):
         del record["smoke_unless_capped"]
         counts = Counter({f: counts[f] for f in kept})
         picked["python"] = sorted(counts)
+        timings |= {f: seconds[f] for f in kept}  # packing reuses the cap's estimates, untimed files included
         record["selected_seconds"] = round(sum(seconds[f] for f in kept), 1)
         record["left_transitive"] = sorted(set(record["left_transitive"]) - set(kept))
     factory = factory_plan(event, changed, own_inputs=light and event == "pull_request")
