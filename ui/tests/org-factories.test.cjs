@@ -52,6 +52,7 @@ function context(get = async () => { throw new Error('the test sets get'); }) {
   const ctx = vm.createContext({
     esc: s => String(s ?? '').replace(/[&<>"']/g, c => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'})[c]),
     TASKS: '#/tasks',
+    BUILT_IN_GROUP: 'built-in',
     S: {emps: EMPS, people: [], me: {id: 'ana', owner_id: 'ana'}, orgGroups: GROUPS},
     botRow, botByRef, botDisplayName,
     avatar: (id, size) => `<span class="av" data-av="${id}" style="width:${size}px"></span>`,

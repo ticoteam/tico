@@ -56,7 +56,9 @@ def test_it_is_built_for_every_company_outside_the_chart_with_its_audit_off(envi
     assert row["setup_task_id"] is None  # the runner sets it up, not BotOps
     with api.app.state.store.read() as c:
         assert H.bot(c, H.BRAND_OWNER)["state"] == "active"
-        assert not BS.read(c, H.BRAND_OWNER).get("team")  # its card names Marketing; built-ins stay outside groups
+        assert (
+            BS.read(c, H.BRAND_OWNER).get("team") == "built-in"
+        )  # its card names Marketing; built-ins sit in Built-in
         assert not c.execute("SELECT onboarding_state FROM bot_config WHERE bot=?", (H.BRAND_OWNER,)).fetchone()[0]
     assert api.app.state.auth.system_bot(H.BRAND_OWNER)
     assert audit(api)["enabled"] == 0

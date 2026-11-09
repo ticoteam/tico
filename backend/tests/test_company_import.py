@@ -1347,8 +1347,8 @@ def test_two_teams_in_one_department_import_as_two_groups_each_holding_its_own_s
     assert names.count("Lab network") == names.count("Biopharma accounts") == names.count("Sales") == 1
     assert {"lab-network", "biopharma-accounts"} <= set(by_id)
     assert names.index("Lab network") < names.index("Biopharma accounts")
-    # The Assistant and BotOps are built-ins: outside groups, whatever team the file gives them.
-    assert not [r for r in rows(api, "SELECT bot,team FROM bot_config WHERE bot IN ('coo','botops')") if r["team"]]
+    # The Assistant and BotOps are built-ins: they sit in the Built-in group, whatever team the file gives them.
+    assert {r["team"] for r in rows(api, "SELECT team FROM bot_config WHERE bot IN ('coo','botops')")} == {"built-in"}
 
 
 def test_import_keeps_where_the_company_serves_and_each_segments_own_places(environment):
@@ -1398,3 +1398,155 @@ def test_the_places_a_company_serves_reach_botops_and_the_librarian_only_when_gi
     blank = {key: "" for key in LS.QUESTIONS}
     assert "Serves: Texas. Size the market for these places." in LS.market_text(blank, ["Texas"])
     assert "Serves" not in LS.market_text(blank)
+
+
+# ----------------------------------------------------------------------------- live seats, teams and the factories
+# (title, template, the title of the seat it reports to or "" for the owner, live, team). A live seat is made as a bot
+# that fills it; the Engineering Pipeline Manager is a live seat, and the Growth one a plain seat.
+LIVE_SEATS = (
+    ("Engineering Manager", "engineering-manager", "", False, "Engineering"),
+    ("Lead Builder", "builder", "Engineering Manager", True, "Engineering"),
+    ("Code Reviewer", "pr-reviewer", "Lead Builder", True, "Engineering"),
+    ("Engineering Pipeline Manager", "pipeline", "Engineering Manager", True, "Engineering"),
+    ("Growth Experiments Pipeline Manager", "pipeline", "", False, "Growth"),
+)
+
+
+def live_text():
+    """The services chart cut to the built-ins, with the Finance Owner (the Bookkeeper, in Corporate) and LIVE_SEATS.
+    The file puts the Finance Owner's row in as the chart formula does, since a finished draft has none."""
+    from backend.company_file import draft as D
+
+    draft = C.blank()
+    draft["company"].update(name="Acme Live", about="We build things.", signals=["sells_services"])
+    draft = C.Turn(draft).finish()
+    bookkeeper = copy.deepcopy(next(b for b in draft["bots"] if b["id"] == "coo"))
+    bookkeeper.update(
+        id="bookkeeper",
+        template="bookkeeper",
+        title="Finance Owner",
+        reason="Keeps the books.",
+        team="Corporate",
+        lead=False,
+        core=True,
+    )
+    draft["bots"] = [b for b in draft["bots"] if b["template"] in ("coo", "botops")] + [bookkeeper]
+    turn = C.Turn(draft)
+    for title, template, _, _, _ in LIVE_SEATS:
+        assert turn.apply("bot_add", {"template": template, "title": title, "reason": "Does the work."})["ok"], title
+    draft = turn.finish()
+    ids = {b["title"]: b["id"] for b in draft["bots"]}
+    for title, _, parent, live, team in LIVE_SEATS:
+        bot = next(b for b in draft["bots"] if b["title"] == title)
+        bot["team"] = team
+        if live:
+            bot["live"] = True
+        bot["reports_to"] = ids[parent] if parent else D.owner_id(draft)
+    return C.to_yaml(draft)
+
+
+def bot_ids(api):
+    """{slug: bot id}: a bot made by setup has its own id, and its slug is the chart's key for it."""
+    return {r["slug"]: r["id"] for r in rows(api, "SELECT id,slug FROM bots")}
+
+
+def stored_config(api, slug):
+    with api.app.state.store.read() as c:
+        return BS.read(c, bot_ids(api)[slug])
+
+
+def stored_line(api, slug):
+    return rows(api, "SELECT reports_to FROM bot_config WHERE bot='%s'" % bot_ids(api)[slug])[0]["reports_to"]
+
+
+def test_a_live_seat_is_made_as_a_bot_that_fills_its_seat_and_reports_where_its_line_ends(environment):
+    """Spec 8.6: a live seat is created as a bot and fills its seat. A bot cannot report to a seat, so a bot under a seat
+    reports to the person or bot that seat answers to, and a live seat under a live seat reports to the bot that fills it.
+    Each gets its setup task from BotOps, as any picked role does."""
+    api = environment()
+    preview_and_import(api, live_text())
+    ids = bot_ids(api)
+    lead, review = stored_config(api, "lead-builder"), stored_config(api, "code-reviewer")
+    assert lead["template"] == "builder" and review["template"] == "pr-reviewer"
+    assert lead["placed_under"] == "human:owner" and stored_line(api, "lead-builder") == "human:owner"
+    assert review["placed_under"] == ids["lead-builder"] and stored_line(api, "code-reviewer") == ids["lead-builder"]
+    seats = {r["title"]: r for r in rows(api, "SELECT title,filled_by,closed_at FROM seats")}
+    assert seats["Lead Builder"]["filled_by"] == ids["lead-builder"] and seats["Lead Builder"]["closed_at"]
+    assert seats["Code Reviewer"]["filled_by"] == ids["code-reviewer"] and seats["Code Reviewer"]["closed_at"]
+    assert seats["Growth Experiments Pipeline Manager"]["closed_at"] is None  # a plain seat stays open
+    tasks = {r["title"] for r in rows(api, "SELECT title FROM tasks WHERE title LIKE 'Set up %'")}
+    assert {
+        "Set up Lead Builder from the builder template",
+        "Set up Code Reviewer from the pr-reviewer template",
+    } <= tasks
+
+
+def test_live_bots_and_the_finance_owner_sit_in_their_teams_and_the_built_ins_in_the_built_in_group(environment):
+    api = environment()
+    preview_and_import(api, live_text())
+    names = {g["id"]: g["name"] for g in api.get("/api/v2/groups", headers=signed_in()).json()}
+    slugs = {r["id"]: r["slug"] for r in rows(api, "SELECT id,slug FROM bots")}
+    teams = {slugs[r["bot"]]: names.get(r["team"], "") for r in rows(api, "SELECT bot,team FROM bot_config")}
+    assert teams["lead-builder"] == teams["code-reviewer"] == teams["engineering-pipeline-manager"] == "Engineering"
+    assert teams["bookkeeper"] == "Corporate"  # the Finance Owner is on the chart, not in the Built-in group
+    assert teams["coo"] == teams["botops"] == "Built-in"
+    assert names["built-in"] == "Built-in"
+    # The chart's Built-in group lists its members' ids (the UI draws the group from this row).
+    built_in = next(g for g in api.get("/api/v2/groups", headers=signed_in()).json() if g["id"] == "built-in")
+    ids = bot_ids(api)
+    assert {ids["coo"], ids["botops"]} <= set(built_in["bots"])
+    assert ids["bookkeeper"] not in built_in["bots"]
+
+
+def test_the_factories_are_set_up_once_after_the_team_with_each_pipelines_manager(environment, monkeypatch):
+    from backend import pipeline_setup
+
+    calls = []
+
+    def record(c, actor, preset="tico_default", replace=False, bindings=None):
+        calls.append((preset, bindings))
+        return {}
+
+    monkeypatch.setattr(pipeline_setup, "apply_factory_setup", record)
+    api = environment()
+    preview_and_import(api, live_text())
+    seats = {r["title"]: r["id"] for r in rows(api, "SELECT id,title FROM seats")}
+    ids = bot_ids(api)
+    assert calls == [
+        (
+            "company_default",
+            {
+                "Engineering": {"bot": ids["engineering-pipeline-manager"]},
+                "Growth Experiments": {"seat": seats["Growth Experiments Pipeline Manager"]},
+                "Finance": {"bot": ids["bookkeeper"]},
+            },
+        )
+    ]
+
+
+def test_a_factory_setup_that_fails_is_rolled_back_recorded_and_the_team_stays(environment, monkeypatch):
+    from backend import pipeline_setup
+
+    def broken(c, actor, preset="tico_default", replace=False, bindings=None):
+        c.execute("UPDATE seats SET title='Half made'")
+        raise RuntimeError("no pipelines today")
+
+    monkeypatch.setattr(pipeline_setup, "apply_factory_setup", broken)
+    api = environment()
+    preview_and_import(api, live_text())
+    assert not rows(api, "SELECT id FROM seats WHERE title='Half made'")  # its own writes were rolled back
+    assert rows(api, "SELECT action FROM events WHERE action='onboarding.pipelines_failed'")
+    assert stored_config(api, "lead-builder")["template"] == "builder"
+    assert rows(api, "SELECT id FROM seats WHERE filled_by='%s'" % bot_ids(api)["lead-builder"])
+
+
+def test_a_live_seat_whose_template_Tico_lacks_is_refused_in_the_preview(environment, monkeypatch):
+    from backend import onboarding as O
+
+    api = environment()
+    real = O.read_cards
+    monkeypatch.setattr(
+        O, "read_cards", lambda settings: [card for card in real(settings) if card["template"] != "builder"]
+    )
+    preview = api.post("/api/v2/onboarding/company/preview", json={"company_yaml": live_text()}, headers=signed_in())
+    assert preview.status_code == 422 and "live seat needs a template" in preview.text
