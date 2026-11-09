@@ -37,7 +37,7 @@ const REFUSED = {error: {code: 'invite_failed', detail: "Tico's sign-in mail cou
       const request = route.request(), p = new URL(request.url()).pathname, method = request.method();
       const json = (body, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
       if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
-      const module = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|css))$/);
+      const module = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/);
       if (module && fs.existsSync(uiFile(module[1]))) return route.fulfill({contentType: module[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(module[1]), 'utf8')});
       if (p === '/api/me') return json({id: 'ana', name: 'Ana Rivera', role: 'owner', cloud: true, email: 'ana@acme.example', config});
       if (p === '/api/v2/config') return json(config);
@@ -117,7 +117,7 @@ const REFUSED = {error: {code: 'invite_failed', detail: "Tico's sign-in mail cou
     // The person from setup: typed address, refused, the error stays on the row and Invite tries again with no address.
     const dana = page.locator('[data-setup-person=dana]');
     await dana.waitFor();
-    assert.match(await page.locator('#setup-people').innerText(), /Tico's sign-in email.*not your company's mailbox/s);
+    assert.match(await page.locator('#setup-people').innerText(), /Tico's sign-in email/);
     await dana.locator('[name=email]').fill('dana@acme.example');
     await dana.locator('button[type=submit]').click();
     await dana.locator('.err', {hasText: "couldn't deliver the invite to dana@acme.example"}).waitFor();

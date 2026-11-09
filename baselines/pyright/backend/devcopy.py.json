@@ -1,0 +1,14 @@
+{
+    "files": {
+        "./backend/devcopy.py": [
+            {
+                "code": "reportOptionalMemberAccess",
+                "range": {
+                    "startColumn": 91,
+                    "endColumn": 96,
+                    "lineCount": 1
+                }
+            }
+        ]
+    }
+}

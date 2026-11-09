@@ -226,6 +226,31 @@ def test_sql_split_over_adjacent_strings_and_writes_are_read_as_one_statement(tm
     assert found == [(2, "requester"), (3, "owner"), (4, "owner"), (4, "owner"), (4, "owner")]
 
 
+def test_a_renamed_table_is_flagged_with_its_new_name_and_fixed_only_in_hub_sql(tmp_path):
+    files = {
+        "AGENT.md": (
+            "# Entity bot\n"
+            "\n"
+            "The market_watches table is prose here, so it is not read.\n"
+            "Run `hub sql \"SELECT name FROM market_entities WHERE type = 'company'\"` to list them.\n"
+        ),
+        "scripts/graph.py": 'import sqlite3\nrows = sqlite3.connect(path).execute("SELECT count(*) FROM market_edges")\n',
+    }
+    root = tmp_path / "bot-acme"
+    for rel, text in files.items():
+        (root / rel).parent.mkdir(parents=True, exist_ok=True)
+        (root / rel).write_text(text)
+
+    assert found(root) == [
+        ("AGENT.md", 4, "market_entities", "sql", True),  # a hub sql call: the new name is the only one, so --fix runs
+        ("scripts/graph.py", 2, "market_edges", "sql", False),  # the bot's own database may have the old name
+    ]
+    assert bot_names.fix(root, bot_names.scan(root, bot_names.load_names())) == 1
+    assert "SELECT name FROM entities WHERE type" in (root / "AGENT.md").read_text()
+    assert "The market_watches table is prose" in (root / "AGENT.md").read_text()
+    assert "FROM market_edges" in (root / "scripts/graph.py").read_text()
+
+
 def test_the_shipped_map_is_the_applied_rename_data_and_the_cli_command_table():
     shipped = json.loads(MAP.read_text())
     assert shipped == runpy.run_path(str(ROOT / "scripts/cleanup/export_names.py"))["build"]()
@@ -247,7 +272,7 @@ def test_the_shipped_map_is_the_applied_rename_data_and_the_cli_command_table():
     plan = yaml.safe_load((ROOT / "scripts/cleanup/renames.yaml").read_text())
     waves = {str(k): v for k, v in plan["waves"].items()}
     assert set(shipped["columns"]) == {
-        old for w in plan["applied_waves"] for old, new in (waves[str(w)].get("global") or {}).items() if new
+        old for w in plan["applied_waves"] for old, new in (waves.get(str(w), {}).get("global") or {}).items() if new
     }
     for old, new in shipped["columns"].items():
         assert list(shipped["table_columns"][old]["renames"]) == [new]

@@ -1914,9 +1914,47 @@ def test_an_idle_dev_ticket_warns_unless_a_run_is_live_or_queued(environment):
             "UPDATE tasks SET updated_at=? WHERE id IN (?,?)",
             (H.shift(H.now(), hours=-30), idle["id"], busy["id"]),
         )
+        # Creating a task queues its owner's wake on the opening message; the idle ticket has no run live or queued,
+        # so that wake is finished here. The busy ticket keeps its queued run.
+        c.execute(
+            "UPDATE jobs SET state='completed' WHERE state='queued' AND message_id IN "
+            "(SELECT m.id FROM messages m JOIN conversations cv ON cv.id=m.conversation_id WHERE cv.task_id=?)",
+            (idle["id"],),
+        )
     check = health_of(api)[1]["dev_board_idle"]
     assert check["status"] == "warn"
     [item] = check["items"]
     assert item["task"] == idle["id"] and item["ticket"] == idle["number"]
     assert item["step"] == "In Progress" and item["hours"] >= 29
     assert item["fixes"][0]["href"] == "#/tasks/" + idle["id"]
+
+
+def test_github_is_a_note_until_a_bot_someone_made_is_backed_up_nowhere_then_clears_once_connected(environment):
+    """The built-in bots come with every install, so a team with only them is told GitHub is optional. A bot someone
+    made keeps its files and memory on a computer, so the missing backup is a warning with the one fix, and it clears
+    once the App is connected and installed."""
+    api = environment()
+    assert health_of(api)[1]["github"]["status"] == "info"
+    add_bot(api, H.COUNSEL)  # built in, added once a computer enrolls: not a bot the company made
+    assert health_of(api)[1]["github"]["status"] == "info"
+    add_bot(api, "helper")
+    check = health_of(api)[1]["github"]
+    assert check["status"] == "warn"
+    assert [fix["href"] for fix in check["fixes"]] == ["#/tools/github"]
+    state = api.app.state
+    with state.store.transaction() as c:
+        state.github_app.save(
+            c,
+            "human:ana",
+            "Acme",
+            True,
+            {
+                "id": 7,
+                "slug": "acme-tico",
+                "client_id": "Iv1.synthetic",
+                "pem": "synthetic-pem",
+                "webhook_secret": "whsec-synthetic",
+            },
+        )
+        c.execute("UPDATE github_app SET installation_id=77")
+    assert health_of(api)[1]["github"]["status"] == "ok"

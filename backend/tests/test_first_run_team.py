@@ -118,6 +118,7 @@ def test_a_starter_is_created_onboarding_and_leaves_it_only_when_a_person_above_
         "onboarding_state": "onboarded",
         "stage": "active",
         "changed": False,
+        "routine": None,  # a repeat call arms nothing: the first routine is armed once (arm_first_routine)
     }
     assert api.get("/api/v2/bots/support", headers=who).json()["stage"] == "active"
     assert api.get("/api/v2/bots/chief-of-staff", headers=who).json()["onboarding_state"] == "needs_setup"

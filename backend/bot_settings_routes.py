@@ -5,6 +5,7 @@ from fastapi import Request
 from . import (
     bot_settings as BS,
     company_billing,
+    company_pause,
     gateway_connection,
     login_holds,
     model_login,
@@ -396,6 +397,34 @@ def register(
         # HQ calls must never hold a database transaction. Only the pause bit leaves this route.
         value["company_paused"] = False if settings.demo else company_billing.paused(key, base)
         return value
+
+    @app.get("/api/v2/company/pause")
+    def company_pause_state(request: Request):
+        """The company-wide pause: whether it is on, who paused and when, the bots that stay paused on their own, and
+        whether the viewer may pause or resume it. People only."""
+        who = request.state.identity
+        auth.domain(who)
+        if who.role not in ("owner", "human"):
+            # The pause and who paused it are for people on the team; a bot or a service key does not read them.
+            raise Problem("forbidden", "Only a person on Tico Team can see the company pause", 403)
+        with store.read() as c:
+            value: dict[str, object] = {**company_pause.read(c)}
+            value["can_control"] = company_pause.may_control(auth, who)
+            return value
+
+    @app.post("/api/v2/company/pause")
+    def company_pause_set(request: Request, body: M.CompanyPause):
+        """Pause every bot on the team until someone resumes it. Only the owner and admins may; a refusal says why and
+        changes nothing. Already paused: nothing changes and the first pause stays on record."""
+        who = request.state.identity
+        return mutate(request, body, lambda c: company_pause.pause(c, auth, who))
+
+    @app.post("/api/v2/company/resume")
+    def company_pause_clear(request: Request, body: M.CompanyPause):
+        """Lift the company pause. Only the owner and admins may. Bots paused on their own stay paused. Nothing paused:
+        nothing changes."""
+        who = request.state.identity
+        return mutate(request, body, lambda c: company_pause.resume(c, auth, who))
 
     @app.post("/api/v2/bots/{bot}/control")
     def control(request: Request, bot: str, body: M.BotControl):

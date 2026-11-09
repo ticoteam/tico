@@ -88,12 +88,12 @@ async function open(browser, {role = 'owner', admin = false, connected = true, v
     const req = route.request(), url = new URL(req.url()), p = url.pathname, method = req.method();
     const json = (body, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
     if (url.origin !== 'https://tico-ui.test') return route.abort();
-    const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|css))$/);
+    const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/);
     if (ui && fs.existsSync(uiFile(ui[1])))
       return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]), 'utf8')});
     // The icon font, so the screenshots show icons rather than their names.
     if (p.startsWith('/vendor/fonts/') && fs.existsSync(uiFile(p.slice(1)))) return route.fulfill({contentType: 'font/woff2', body: fs.readFileSync(uiFile(p.slice(1)))});
-    if (p.endsWith('.js')) return route.fulfill({contentType: 'application/javascript', body: ''});
+    if (/\.(?:js|ts)$/.test(p)) return route.fulfill({contentType: 'application/javascript', body: ''});
     if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
     if (p === '/api/me') return json(me);
     if (p === '/api/employees') return json([bot]);
@@ -539,7 +539,7 @@ async function member(browser) {
 async function notConnected(browser) {
   const {page, errors} = await open(browser, {connected: false});
   await page.locator('#set-repos .repos-line').waitFor();
-  assert.equal((await page.locator('#set-repos').innerText()).replace(/\s+/g, ' '), "Repositories The GitHub App is not connected; bots use their computers' own GitHub sign-in. Connect GitHub");
+  assert.equal((await page.locator('#set-repos').innerText()).replace(/\s+/g, ' '), "Repositories GitHub is not connected; bots' repositories are not backed up. Connect GitHub");
   assert.equal(await page.locator('#set-repos a[data-repos-connect]').getAttribute('href'), '#/tools/github');
   // The bot editor has no Repositories section then.
   await page.evaluate(() => {         // note when the Repositories section has finished deciding whether to show
@@ -572,7 +572,7 @@ async function phone(browser) {
   await box.locator('.brepo-row').first().waitFor();
   await box.evaluate(el => el.scrollIntoView({block: 'start'}));
   // The bot's page replaced Settings: nothing of it is left under the editor to show through once the route's
-  // cross-fade (ui/app/router.js) has ended, so the screenshot waits for that.
+  // cross-fade (ui/app/router.ts) has ended, so the screenshot waits for that.
   await settled(page);
   assert.equal(await page.locator('#set-repos').count(), 0, 'Settings is gone from the page');
   await shot(page, 'bot-repositories-chosen-phone-dark.png');

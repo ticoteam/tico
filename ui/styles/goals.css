@@ -134,7 +134,7 @@ input.goal-ed-text:hover:not([readonly]){border-color:var(--line)}input.goal-ed-
 .gt-needs .rec-opts{margin:4px 0 0;padding-left:20px;list-style:decimal;display:flex;flex-direction:column;gap:6px}.gt-needs .rec-acts{margin:2px 0 4px;padding-left:16px;list-style:disc;font-size:var(--t-sm)}.gt-needs .rec-opts button{height:28px}
 .kpi-prop-do{display:flex;gap:8px;flex:none}.kpi-prop-do button{height:34px;padding-top:0;padding-bottom:0}
 .kpi-props{list-style:none;margin:0;padding:0}
-/* After "No, leave it": one line asking why, a one-line box and Send (ui/goals-kpis.js propLeftHtml). */
+/* After "No, leave it": one line asking why, a one-line box and Send (ui/goals-kpis.ts propLeftHtml). */
 .kpi-prop-left{display:flex;flex-wrap:wrap;align-items:center;gap:6px 8px;width:100%}.kpi-prop-left-k{color:var(--muted)}
 .kpi-prop-left input{flex:1 1 220px;min-width:0;box-sizing:border-box;height:30px;padding:0 9px;font:inherit}.kpi-prop-left button{height:30px}
 .kpi-prop-left-err{flex-basis:100%;font-size:var(--t-sm);overflow-wrap:anywhere}
@@ -219,10 +219,10 @@ input.goal-ed-text:hover:not([readonly]){border-color:var(--line)}input.goal-ed-
 }
 
 #goal-body{max-width:1180px}
-/* The search above the tree (ui/app/goals.js pageGoals): the shared search box (forms.css), as wide as the tree. */
+/* The search above the tree (ui/app/goals.ts pageGoals): the shared search box (forms.css), as wide as the tree. */
 #goal-search{display:block;max-width:1180px;margin:0 0 12px}
 .gt-none{margin:8px 0}
-/* Strategy proposals in Needs you (ui/goals-kpis.js strategyDraftPropHtml, strategyRealignPropHtml): a compact list of
+/* Strategy proposals in Needs you (ui/goals-kpis.ts strategyDraftPropHtml, strategyRealignPropHtml): a compact list of
    what changes, or one row per goal with its Keep / Retire / Move to. */
 .kpi-prop.strat-prop{align-items:flex-start}
 .gt-needs .strat-prop .kpi-prop-main,.strat-prop .kpi-prop-main{flex:1 1 auto;flex-direction:column;align-items:stretch;gap:4px}
@@ -242,7 +242,7 @@ input.goal-ed-text:hover:not([readonly]){border-color:var(--line)}input.goal-ed-
   .strat-realign-goal{flex-direction:column;align-items:stretch;gap:6px}
   .strat-realign-f{flex-basis:auto}
 }
-/* Goal suggestion cards (ui/goals-kpis.js goalPropHtml): what yes changes on one line, then what it would change, why,
+/* Goal suggestion cards (ui/goals-kpis.ts goalPropHtml): what yes changes on one line, then what it would change, why,
    and the buttons named for what they do. The target fields of an Add a KPI card stay folded until opened. */
 .kpi-prop[data-prop-kind]{align-items:flex-start}
 .kpi-prop[data-prop-kind] .kpi-prop-main{flex:1 1 auto;flex-direction:column;align-items:stretch;gap:3px}
@@ -259,7 +259,7 @@ input.goal-ed-text:hover:not([readonly]){border-color:var(--line)}input.goal-ed-
 .prop-np-clamp .prop-np-v{display:-webkit-box;-webkit-line-clamp:4;-webkit-box-orient:vertical;overflow:hidden}
 .prop-np>.linkish{justify-self:start;font-size:var(--t-sm)}
 
-/* One goal in the sheet (ui/app/goals.js goalSheetOpen): the owner's panel's frame, a side panel or a phone's sheet. */
+/* One goal in the sheet (ui/app/goals.ts goalSheetOpen): the owner's panel's frame, a side panel or a phone's sheet. */
 .gsheet .gs-h{margin:0;font-size:var(--t-md);font-weight:600;letter-spacing:var(--track-snug)}
 .gsheet .tmodal-head{gap:8px}
 .gsheet .goal-form{max-width:none}

@@ -20,10 +20,10 @@ const {unrouted} = require('./support/routes.cjs');
         const request = route.request(), p = new URL(request.url()).pathname;
         const json = body => route.fulfill({contentType: 'application/json', body: JSON.stringify(body)});
         if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
-        const module = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|css))$/);
+        const module = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/);
         if (module && fs.existsSync(uiFile(module[1]))) return route.fulfill({
           contentType: module[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(module[1]), 'utf8')});
-        if (p.endsWith('.js')) return route.fulfill({contentType: 'application/javascript', body: ''});
+        if (/\.(?:js|ts)$/.test(p)) return route.fulfill({contentType: 'application/javascript', body: ''});
         if (p === '/api/me') return json({id: 'ana', role: 'owner', cloud: true, email: 'ana@acme.example', config});
         if (p === '/api/v2/config') return json(config);
         if (p === '/api/employees' || p === '/api/issues') return json([]);

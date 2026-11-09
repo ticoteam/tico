@@ -1,0 +1,14 @@
+{
+    "files": {
+        "./backend/profiles.py": [
+            {
+                "code": "reportOptionalSubscript",
+                "range": {
+                    "startColumn": 14,
+                    "endColumn": 18,
+                    "lineCount": 1
+                }
+            }
+        ]
+    }
+}

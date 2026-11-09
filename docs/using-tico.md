@@ -22,8 +22,8 @@ phone). All four are managed in **Settings > Bots**; they stay out of the team c
 Its name, the mark for the harness it runs on, up to three tool icons and its goal across the top, the Home below,
 and a rail down the right. By default the rail shows **Tasks**, **Updates**, **Files** and **Routines**, in that order.
 **Tasks** has four default tabs, each with a count:
-**Needs You** (what the bot needs from you; it opens first while it has rows), **Doing** (tasks assigned to this bot with Status Open or Doing, newest first),
-**Blocked** (tasks assigned to this bot with Status Waiting, waiting on someone else, including an unnamed wait) and **Assigned to Others** (open tasks this bot asked someone else to do). An empty tab says so.
+**Needs you** (what the bot needs from you; it opens first while it has rows), **Doing** (tasks assigned to this bot with Status Open or Doing, newest first),
+**Blocked** (tasks assigned to this bot with Status Waiting, waiting on someone else, including an unnamed wait) and **Assigned to others** (open tasks this bot asked someone else to do). An empty tab says so.
 A bot with just one tab shows its list without a tab bar. **Tasks** grows to 500 pixels at most and scrolls inside after that.
 
 The pencil opens sidebar edit mode for someone who may edit. If you can only send this bot requests, there is no edit icon.
@@ -37,10 +37,10 @@ If you manage the bot, you see a pencil at the top right of its rail. The bot ca
 
 1. Choose the pencil. The rail switches to edit mode with **Cancel** and **Done** at the top.
 2. Drag a section by its handle to move it, use its eye to hide or show it, and drag its bottom edge to set how tall it may grow (**Reset** goes back).
-3. Drag a tab to reorder it. Choose **+** to add a tab, or choose a tab to edit it: its **Name**, **Show count** and its conditions, including **Needs You**, **Doing** and **Blocked**. **Reset to default** restores each of those tabs’ conditions.
+3. Drag a tab to reorder it. Choose **+** to add a tab, or choose a tab to edit it: its **Name**, **Show count** and its conditions, including **Needs you**, **Doing** and **Blocked**. **Reset to default** restores each of those tabs’ conditions.
    A task shows in the tab only when it matches every condition: **Status**, **Step**, **Assigned to**, **Asked by**, **Type**, **Needs**, **Waiting on**,
    **Created**, **Updated** or **Done within** a number of days, **Due** (overdue or within days) and **Label**.
-   **Needs You** defaults to **Needs: You** (assigned to you, or waiting on you) and also shows this bot’s approvals and questions for you.
+   **Needs you** defaults to **Needs: You** (assigned to you, or waiting on you) and also shows this bot’s approvals and questions for you.
    The org chart number always counts everything the bot needs from you; changing a tab’s conditions does not change that number.
    **Blocked** includes **Waiting on Someone else**, so its default does not repeat tasks waiting on you.
    **Me** and **Others** mean whoever is looking, and a tab only lists tasks that person may read. **Delete** removes the tab.

@@ -3,8 +3,9 @@
 The file holds the plan only: never `undo`, `chat`, `removed` or `pending`, and never a credential. Format 0.2 differs
 from the page's 0.1 in its goals (a measure, unit, direction and numbers in place of free-text target and due date),
 a bot's `reports_to` set by the visitor or BotOps, the one `first_job`, and an existing agent's department and reason.
-Format 0.3 adds the `strategy` block (after `goals:`) and a goal's `bet`. A plan without a strategy is still written as
-0.2, byte for byte, so its file imports on an app from before 0.3; the reader takes both.
+Format 0.3 adds the `strategy` block (after `goals:`) and a goal's `bet`. The strategy's optional `channels`, and a bet's
+optional `name` and `segment`, are written only when present. A plan without a strategy is still written as 0.2, byte
+for byte, so its file imports on an app from before 0.3; the reader takes both.
 An employee's or existing agent's optional `team` (the name of its group) is read and written in either format.
 """
 
@@ -82,6 +83,8 @@ def to_yaml(draft, created=None):
         "  about: %s" % q(company["about"]),
         "  signals: [%s]" % ", ".join(company["signals"]),
     ]
+    if company.get("regions"):
+        L.append("  regions: [%s]" % ", ".join(q(r) for r in company["regions"]))
     L.append("people:")
     if not draft["people"]:
         L += ["  - id: you", '    name: "You"', '    role: "Owner"', "    owner: true"]
@@ -169,24 +172,33 @@ def _items(key, rows, indent, lines):
     return out
 
 
+def _bet_lines(b):
+    """A bet's entry lines. The short name and the segment are written only when the bet has them, so a bet without
+    them is written as it was before."""
+    lines = [
+        "id: %s" % word(b["id"]),
+        "statement: %s" % q(b["statement"]),
+        "why: %s" % q(b["why"]),
+        "rules_out: %s" % q(b["rules_out"]),
+        "wrong_if: %s" % q(b["wrong_if"]),
+        "check_by: %s" % (b["check_by"] or q("")),
+    ]
+    if b.get("name"):
+        lines.append("name: %s" % q(b["name"]))
+    if b.get("segment"):
+        lines.append("segment: %s" % q(b["segment"]))
+    return lines
+
+
 def strategy_lines(s):
-    """The `strategy:` block, format 0.3: every part written, an empty one as "" or []."""
+    """The `strategy:` block, format 0.3: every part written, an empty one as "" or []. The channels line is written only
+    when a channel is picked."""
     market, listening = s["market"], s["listening"]
     L = ["strategy:", "  summary: %s" % q(s["summary"]), "  vision: %s" % q(s["vision"]), "  sections:"]
     L += ["    %s: %s" % (key, q(s["sections"][key])) for key in D.SECTIONS]
-    L += _items(
-        "bets",
-        s["bets"],
-        2,
-        lambda b: [
-            "id: %s" % word(b["id"]),
-            "statement: %s" % q(b["statement"]),
-            "why: %s" % q(b["why"]),
-            "rules_out: %s" % q(b["rules_out"]),
-            "wrong_if: %s" % q(b["wrong_if"]),
-            "check_by: %s" % (b["check_by"] or q("")),
-        ],
-    )
+    L += _items("bets", s["bets"], 2, _bet_lines)
+    if s.get("channels"):
+        L.append("  channels: [%s]" % ", ".join(word(key) for key in s["channels"]))
     definition = market["definition"]
     L += [
         "  market:",
@@ -200,17 +212,20 @@ def strategy_lines(s):
         "segments",
         market["segments"],
         4,
-        lambda g: [
-            "key: %s" % word(g["key"]),
-            "name: %s" % q(g["name"]),
-            "parent: %s" % ("null" if g["parent"] is None else word(g["parent"])),
-            "usd: %s" % num(g["usd"]),
-            "method: %s" % word(g["method"]),
-            "arithmetic: %s" % q(g["arithmetic"]),
-            "evidence: [%s]" % ", ".join(q(u) for u in g["evidence"]),
-            "ours: %s" % str(g["ours"]).lower(),
-            "next: %s" % str(g["next"]).lower(),
-        ],
+        lambda g: (
+            [
+                "key: %s" % word(g["key"]),
+                "name: %s" % q(g["name"]),
+                "parent: %s" % ("null" if g["parent"] is None else word(g["parent"])),
+                "usd: %s" % num(g["usd"]),
+                "method: %s" % word(g["method"]),
+                "arithmetic: %s" % q(g["arithmetic"]),
+                "evidence: [%s]" % ", ".join(q(u) for u in g["evidence"]),
+                "ours: %s" % str(g["ours"]).lower(),
+                "next: %s" % str(g["next"]).lower(),
+            ]
+            + (["regions: [%s]" % ", ".join(q(r) for r in g["regions"])] if g.get("regions") else [])
+        ),
     )
     L += _items(
         "players",
@@ -270,6 +285,13 @@ def _team(raw):
     return team.strip()[: D.LIMITS["team"]].strip() if isinstance(team, str) else team
 
 
+def _places(value):
+    """A place written as a number (regions: [1, 2.5]) is its text; a bool stays, and draft.check refuses it."""
+    if not isinstance(value, list):
+        return value
+    return [str(item) if isinstance(item, (int, float)) and not isinstance(item, bool) else item for item in value]
+
+
 def _strategy(raw):
     """The strategy block as the draft keeps it: dates as text, a missing text as "", the rest for D.check to judge."""
     raw = _part(raw)
@@ -283,6 +305,8 @@ def _strategy(raw):
             {
                 "id": _str(b.get("id")),
                 **{key: _str(b.get(key)) for key in ("statement", "why", "rules_out", "wrong_if", "check_by")},
+                # The short name and the segment are optional: a bet without them has no such keys.
+                **{key: _str(b[key]) for key in ("name", "segment") if key in b},
             }
             for b in _rows(raw, "bets")
         ],
@@ -304,6 +328,7 @@ def _strategy(raw):
                     "evidence": [_str(u) for u in g.get("evidence") or []],
                     "ours": g.get("ours") is True,
                     "next": g.get("next") is True,
+                    **({"regions": _places(g["regions"])} if g.get("regions") is not None else {}),
                 }
                 for g in _rows(market, "segments")
             ],
@@ -329,6 +354,8 @@ def _strategy(raw):
                 for p in _rows(listening, "posts")
             ],
         },
+        # The optional channels pass through as written: draft.check holds them to the channel list.
+        **({"channels": raw["channels"]} if raw.get("channels") is not None else {}),
     }
 
 
@@ -346,7 +373,8 @@ def from_yaml(text):
     if not isinstance(doc, dict) or str(doc.get("version")) not in FORMATS:
         raise D.DraftError("the file isn't a format %s company file" % " or ".join(FORMATS))
     doc, _ = scrub_all(doc)
-    company = doc.get("company") if isinstance(doc.get("company"), dict) else {}
+    company = doc.get("company")
+    company = company if isinstance(company, dict) else {}
     draft = D.blank()
     draft["step"] = "chart"
     draft["company"] = {
@@ -354,6 +382,9 @@ def from_yaml(text):
         "about": _str(company.get("about")),
         "signals": company.get("signals") or [],
     }
+    serves = company.get("regions")
+    if serves is not None:
+        draft["company"]["regions"] = _places(serves)  # draft.check holds it to the rules
     people = _rows(doc, "people")
     if len(people) == 1 and people[0] == {"id": "you", "name": "You", "role": "Owner", "owner": True}:
         people = []

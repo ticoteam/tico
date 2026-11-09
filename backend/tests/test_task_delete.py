@@ -646,7 +646,7 @@ def test_snapshot_keys_follow_every_wave_in_order(monkeypatch):
             ("tasks", "owner", "owner_id", "3"),
         ),
     )
-    monkeypatch.setattr(renames, "TABLES", (("old_reminders", "task_reminders"),))
+    monkeypatch.setattr(renames, "TABLES", (("old_reminders", "task_reminders", "3"),))
     row = {"labels_json": "[]", "started": "2026-01-01", "owner": "bot:ops", "title": "x"}
     assert renames.current_row("tasks", row) == {
         "tags": "[]",

@@ -1,4 +1,4 @@
-// Strategy › Org (ui/app/redesign-org.js) against the fake hub in support/strategy-fake.cjs (the
+// Strategy › Org (ui/app/redesign-org.ts) against the fake hub in support/strategy-fake.cjs (the
 // Acme example): the chart top down with the owner on top, groups as outlines that fold (and stay folded), helpers off
 // it, pinch, the zoom toolbar above the frame and a first look that fits the width (or centres the owner) with nothing
 // clipped at either end; a teammate's sheet with its group and Move to…; the owner, and a lead inside the

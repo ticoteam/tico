@@ -1,4 +1,4 @@
-/* Library › Skills (ui/app/skills.js). Builds on Tools' list, tabs and cards (ui/styles/tools.css); theme tokens only,
+/* Library › Skills (ui/app/skills.ts). Builds on Tools' list, tabs and cards (ui/styles/tools.css); theme tokens only,
    so light and dark follow the theme. At 760px the tables stack and nothing scrolls sideways. */
 .sk .tt-tabs{margin-bottom:12px}
 .sk-name a{display:flex;flex-direction:column;min-width:0;color:var(--ink);text-decoration:none}

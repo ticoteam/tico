@@ -31,6 +31,7 @@ from . import models as M
 from . import people as P
 from .auth import Identity
 from .connectors import EMAIL, instant
+from .entities import ingest
 from .media import (
     Note,
     Send,
@@ -549,6 +550,16 @@ def install_imports(app, store, auth, execution, mutate):
                 "VALUES(?,?,?,?,?)",
                 (*key, rid, H.now()),
             )
+        ingest.safely(
+            c,
+            "meeting",
+            ingest.from_meeting,
+            c,
+            rid,
+            audience=effective_audience(meta),
+            review_state=str(meta.get("review_state", "live")),
+            participants=people,
+        )
         H.event(
             c,
             machine.actor,

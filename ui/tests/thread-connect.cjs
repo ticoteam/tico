@@ -1,5 +1,5 @@
-// Slack links per role, at desktop and phone width (ui/app/thread-connect.js, Slack's page under Tools in
-// ui/app/redesign-library.js), against fakes of
+// Slack links per role, at desktop and phone width (ui/app/thread-connect.ts, Slack's page under Tools in
+// ui/app/redesign-library.ts), against fakes of
 // /api/v2/slack/links (backend/slack_threads.py):
 // - an admin links a thread to a Slack channel from Tools › Slack, pages the links, checks a suspended one
 //   again, unlinks one, and reads the API's refusal inline;
@@ -48,10 +48,10 @@ async function open(browser, who, {viewport = DESKTOP} = {}) {
     const refuse = (status, detail) => json({error: {code: 'refused', detail, retryable: false}}, status);
     const body = () => JSON.parse(req.postData() || '{}');
     if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
-    const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|css))$/);
+    const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/);
     if (ui && fs.existsSync(uiFile(ui[1])))
       return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]), 'utf8')});
-    if (p.endsWith('.js')) return route.fulfill({contentType: 'application/javascript', body: ''});
+    if (/\.(?:js|ts)$/.test(p)) return route.fulfill({contentType: 'application/javascript', body: ''});
     if (p.startsWith('/api/v2/slack')) seen.calls.push(`${method} ${p}${url.search}`);
     if (p === '/api/me') return json(PEOPLE[who]);
     if (p === '/api/v2/config') return json({company_name: 'Acme'});

@@ -17,6 +17,7 @@ from backend import org_rule_check as K
 from backend import thread_attention
 from backend import approval_expiry
 from backend import threads
+from backend.tests.test_question_tasks import keep_asking
 from backend import updates
 from backend.auth import Identity
 from backend.store import H
@@ -534,7 +535,8 @@ def test_a_held_write_nobody_decides_for_a_day_is_kept_unsent_and_its_bot_is_tol
     assert (row["state"], row["decided_by"]) == ("kept", H.KEEPER)
     assert ben_needs_you(api) == []
     assert bodies(api, "gold") == []  # the held text is written nowhere
-    told = sql(api, "SELECT body FROM notes WHERE to_actor='ana' AND from_actor=?", (H.KEEPER,))
+    # The bot that wrote it is told, not the person it was for.
+    told = sql(api, "SELECT body FROM notes WHERE to_actor='bot:ops' AND from_actor=?", (H.KEEPER,))
     assert len(told) == 1 and "was not sent" in told[0]["body"] and "24 hours" in told[0]["body"]
     assert sweep_holds(api) == []  # decided once
 
@@ -683,7 +685,7 @@ def test_failing_open_delivers_and_writes_unchecked(ruled, monkeypatch, how):
     api, judge = ruled
     color_rule(api)
     if how == "timeout":
-        monkeypatch.setitem(K.DEADLINES, "medium", 0.2)
+        monkeypatch.setitem(K.DEADLINES, "low", 0.2)
         judge.hold = threading.Event()
     elif how == "budget":
         api.app.state.store.settings.rules_monthly_usd = 1.0
@@ -724,7 +726,7 @@ def test_the_check_runs_under_its_levels_deadline(ruled):
 
     api.app.state.judge = engine
     assert say(api, "Our favorite color is gold")["held"]
-    assert 0 < left[0] <= K.deadline("medium")
+    assert 0 < left[0] <= K.deadline("low")
 
 
 def test_a_full_pool_goes_through_unchecked_at_once(ruled):
@@ -2031,6 +2033,7 @@ def test_a_warned_daily_with_slides_carries_its_line_on_the_stored_bullets(ruled
 def test_a_task_questions_options_and_card_lines_are_judged_with_it(ruled):
     api, judge = ruled
     color_rule(api)
+    keep_asking(api)
     options = [
         {"label": "Ship", "description": "Our favorite color is blue.", "then": "Ops ships it today"},
         {"label": "Wait", "then": "Ops waits a week"},
@@ -2380,3 +2383,50 @@ def test_the_send_queue_checks_a_bots_own_email_against_the_rules(ruled, monkeyp
     # A person's own email is not checked.
     post(api, "email/sends", {"mailbox": BOX, "raw": mime(body="Our favorite color is gold, says Ana.")})
     assert len(judge.calls) == 1
+
+
+def test_a_rule_check_asks_jev_at_low_and_never_steps_up_to_medium(ruled):
+    # Rule checks spend on Jev only: the Decide level is always Low, whatever the rule or the operation.
+    api, judge = ruled
+    color_rule(api)
+    levels = []
+
+    def engine(state, questions, label=None, level=None):
+        levels.append(level)
+        return judge(state, questions, label)
+
+    api.app.state.judge = engine
+    assert say(api, "Our favorite color is gold")["held"]
+    assert levels == ["low"]
+
+
+def test_a_rule_check_whose_jev_fails_is_unchecked_and_never_asks_the_company_model(ruled, monkeypatch):
+    from clients import judge as J
+
+    from backend import judge as B
+
+    api, judge = ruled
+    color_rule(api)
+    judge.fail = J.JudgeError("unavailable", "Jev did not answer", retryable=True)
+    company = []
+
+    def backup(state, questions, label=None, level=None):
+        company.append(label)
+        return judge(state, questions, label)
+
+    monkeypatch.setattr(B, "fallback_engine", lambda *args, **kwargs: backup)
+    assert "held" not in say(api, "Our favorite color is gold")
+    assert company == [], "the company's own model is not a rule check's fallback"
+    assert [json.loads(e["detail"])["reason"] for e in events(api, "rules.unchecked")] == ["unavailable"]
+
+
+def test_a_rule_checks_judge_call_names_the_rules_it_asked(ruled):
+    api, judge = ruled
+    made = color_rule(api)
+    say(api, "Our favorite color is gold")
+    with api.app.state.store.read() as c:
+        details = [
+            json.loads(r[0])
+            for r in c.execute("SELECT detail FROM events WHERE action='judge.call' AND target LIKE 'rule-check%'")
+        ]
+    assert details and details[-1]["rules"] == [made["id"]] and details[-1]["level"] == "low"
