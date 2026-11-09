@@ -106,14 +106,13 @@ def test_a_demo_built_early_in_the_day_in_another_year_keeps_its_invariants(tmp_
             ids = {row["name"]: row["id"] for row in api.get("/api/v2/automations?limit=100").json()["automations"]}
             runs = api.get(f"/api/v2/automations/{ids['Nightly orders to bookkeeping']}/runs?limit=100").json()["runs"]
             assert len(runs) == 6, f"{label}: nightly orders to bookkeeping has {len(runs)} runs"
-        # Finance reads its default month from the clock, so every test of test_demo_finance.py runs on this
+        # Finance reads its default month from the clock, so every check of test_demo_finance.py runs on this
         # mid-month build too.
-        for name in sorted(vars(finance)):
-            if name.startswith("test_"):
-                try:
-                    getattr(finance, name)((settings, EARLY))
-                except AssertionError as error:
-                    raise AssertionError(f"{label}: {name}") from error
+        for check in finance.CHECKS:
+            try:
+                check((settings, EARLY))
+            except AssertionError as error:
+                raise AssertionError(f"{label}: {check.__name__}") from error
 
 
 def test_a_demo_built_long_after_its_dates_keeps_its_invariants(tmp_path):
