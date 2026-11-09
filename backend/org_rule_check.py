@@ -1419,7 +1419,13 @@ def _write_hold(
             "place": verdict.get("place"),
             "origin": verdict.get("origin"),
         },
-        "input": {"context": verdict.get("context") or {}, "obj": verdict.get("obj") or ""},
+        "input": {
+            "context": verdict.get("context") or {},
+            "obj": verdict.get("obj") or "",
+            # The entities and addresses the Directory walk started from: a structured recheck (Send anyway, an
+            # approved mail or letter) walks from the same recipients. Older holds have neither and recheck without.
+            **{k: list(verdict[k]) for k in ("targets", "contacts") if verdict.get(k)},
+        },
     }
     matched = (
         verdict["matched"]
@@ -2038,7 +2044,8 @@ def current_matched(c, hold, audience=None, auth=None):
 
 
 def hold_input(hold):
-    """What a hold's check was shown besides its text and audience: its context and its object."""
+    """What a hold's check was shown besides its text and audience: its context and its object, and for a structured hold
+    the `targets` and `contacts` its Directory walk started from (absent on older holds)."""
     stored = json.loads(hold["payload"] or "{}")
     return stored.get("input") or {"context": {}, "obj": ""}
 
@@ -2657,7 +2664,17 @@ def install(app, store, auth, mutate):
             named = H.resolve_bot(c, bot) or {}
         if found[1] != "bot:" + named.get("id", bot):
             raise Problem("forbidden", "A bot checks only its own mail", 403)
-        prep = mail_prepare(store, app.state.judge, who, found[0], body.to, body.cc, body.subject, body.body)
+        prep = mail_prepare(
+            store,
+            app.state.judge,
+            who,
+            found[0],
+            body.to,
+            body.cc,
+            body.subject,
+            body.body,
+            contacts=[*body.to, *body.cc],
+        )
         return mutate(request, body, lambda c: mail_decide(c, prep))
 
     @app.get("/api/v2/rules/stats")

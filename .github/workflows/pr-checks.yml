@@ -372,8 +372,10 @@ jobs:
         run: PATH="$RUNNER_TEMP/venv/bin:$PATH" bash scripts/check_types.sh
       - name: UI types
         run: PATH="$RUNNER_TEMP/venv/bin:$PATH" bash scripts/check_ui_types.sh --base "$BASE_SHA"
-      - name: OpenAPI document (docs/openapi/v2.json is what the generator writes)
+      - name: OpenAPI spec (generated, never committed, generates the same bytes twice)
         run: PATH="$RUNNER_TEMP/venv/bin:$PATH" python3 -m backend.openapi_v2 --check
+      - name: API guide tags (docs/api.md follows the spec's tags)
+        run: PATH="$RUNNER_TEMP/venv/bin:$PATH" python3 scripts/build_api_docs.py --check
       - name: UI lint setup
         run: npm ci --ignore-scripts --no-audit --no-fund
       - name: UI lint
