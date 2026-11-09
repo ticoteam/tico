@@ -11,6 +11,7 @@ import yaml
 from fastapi.testclient import TestClient
 
 from backend import cors
+from backend.tests import api_template
 from backend.app import create_app
 from backend.auth import Identity
 from backend.config import Settings
@@ -24,25 +25,31 @@ PROD = "https://app.acme.example"
 EVIL = "https://evil.example"
 
 
-@pytest.fixture
-def api(tmp_path):
-    """The api fixture of test_api, with a frontend allowed to call it. Fixtures that ask for `api` get this one."""
-    registry = tmp_path / "hub-registry"
-    registry.mkdir()
+def _settings(directory):
+    registry = directory / "hub-registry"
+    registry.mkdir(exist_ok=True)
     (registry / "hub-access.yaml").write_text(
         yaml.safe_dump({"owner": "ana@acme.example", "bot_admins": ["ben@acme.example"]})
     )
-    app = create_app(
-        Settings(
-            db_path=tmp_path / "hub.db",
-            registry_dir=registry,
-            cors_origins=APP + ", " + PROD,
-            test_identities={
-                "ana-test": Identity("human:ana", "owner", "ana@acme.example"),
-                "ben-test": Identity("human:ben", "human", "ben@acme.example"),
-            },
-        )
+    return Settings(
+        db_path=directory / "hub.db",
+        registry_dir=registry,
+        cors_origins=APP + ", " + PROD,
+        test_identities={
+            "ana-test": Identity("human:ana", "owner", "ana@acme.example"),
+            "ben-test": Identity("human:ben", "human", "ben@acme.example"),
+        },
     )
+
+
+@pytest.fixture
+def api(request, tmp_path_factory, tmp_path):
+    """The api fixture of test_api, with a frontend allowed to call it. Fixtures that ask for `api` get this one."""
+    settings = _settings(tmp_path)
+    api_template.copy_into(
+        api_template.template(request, tmp_path_factory, "frontend-access", _settings), settings.db_path
+    )
+    app = create_app(settings)
     with TestClient(app) as client:
         with app.state.store.transaction() as c:
             H.sync_registry(
