@@ -629,7 +629,8 @@ async function pipelineSettings(pipelineId: string): Promise<PipelineSettings> {
 }
 
 /**
- * Save some of a pipeline's settings: a field left out stays as it is. An empty goal clears it;
+ * Save some of a pipeline's settings: a field left out stays as it is. An empty goal clears it, and an empty manager_id
+ * clears the manager (a bot's id, active only; the server refuses any other);
  * visibility "members" takes the pipeline out of its factory, which the server clears.
  */
 async function pipelinePatchSettings(pipelineId: string, fields: Record<string, unknown>): Promise<void> {

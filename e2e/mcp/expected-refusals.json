@@ -188,6 +188,7 @@
  "hub_pin_add": "404 not_found",
  "hub_pin_remove": "404 not_found",
  "hub_pin_update": "404 not_found",
+ "hub_pipeline_manager": "usage",
  "hub_proposal_create": "422 lint",
  "hub_proposal_decide": "404 not_found",
  "hub_relay_set": "404 not_found",

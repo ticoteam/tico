@@ -4,7 +4,7 @@ from fastapi import Request
 
 from . import hubdb as H
 from . import models as M
-from . import pipeline_engine, pipeline_rights
+from . import pipeline_engine, pipeline_requirements as PR, pipeline_rights
 from .store import Problem
 
 
@@ -90,20 +90,24 @@ def install_task_types(app, store, auth, mutate, mover):
             who = request.state.identity
             require_mover(c, who)
             steps = [step.model_dump() for step in body.steps] if body.steps is not None else None
-            return {
-                "type": H.type_update(
-                    c,
-                    who.actor,
-                    type_id,
-                    body.name,
-                    steps,
-                    mover=True,
-                    bots=body.bots,
-                    numbered=body.numbered,
-                    steps_only=body.steps_only,
-                    default_visibility=body.default_visibility,
-                )
-            }
+            type_after = H.type_update(
+                c,
+                who.actor,
+                type_id,
+                body.name,
+                steps,
+                mover=True,
+                bots=body.bots,
+                numbered=body.numbered,
+                steps_only=body.steps_only,
+                default_visibility=body.default_visibility,
+            )
+            if body.manager is not None:  # the pipeline's owner and admins; the active-bot check is set_manager's
+                if type_after is None:
+                    raise Problem("not_found", "No such task type", 404)
+                PR.set_manager(c, who.actor, type_after["id"], body.manager)
+                type_after = H.type_get(c, type_after["id"])
+            return {"type": type_after}
 
         return mutate(request, body, work)
 

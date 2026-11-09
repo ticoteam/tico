@@ -31,13 +31,15 @@ const steps = () => [
   {id: 's3', name: 'Done', status: 'done', limit_minutes: null},
 ];
 
-async function open(browser: import('playwright').Browser, {viewport = {width: 1280, height: 820}, may = true, mover = true} = {}) {
+const LEAD = {name: 'lead', display_name: 'Lead Manager', status: 'active', state: 'active', users: [], bot_owners: [], my_access: {see: true, read: true, write: true}};
+
+async function open(browser: import('playwright').Browser, {viewport = {width: 1280, height: 820}, may = true, mover = true, emps = [LEAD], manager = null}: {viewport?: {width: number; height: number}; may?: boolean; mover?: boolean; emps?: unknown[]; manager?: string | null} = {}) {
   const page = await browser.newPage({viewport, serviceWorkers: 'block', hasTouch: viewport.width < 600, isMobile: viewport.width < 600});
   const errors: unknown[] = [], writes: Write[] = [];
-  const state: State = {type: {id: 'dev', name: 'Dev tickets', prefix: 'D', pipeline_owner_id: 'human:ana', manager: null, steps: steps()},
+  const state: State = {type: {id: 'dev', name: 'Dev tickets', prefix: 'D', pipeline_owner_id: 'human:ana', manager, steps: steps()},
     reqs: {s2: [{id: 'r1', name: 'Screenshot', kind: 'attachment', needs: {formats: ['image'], newer_than_change: true, is_work: false}, reviewed_by: 'nobody', reviewer_id: null}]},
     links: [], stageReads: 0,
-    settings: {id: 'dev', name: 'Dev tickets', prefix: 'D', goal: 'Ship tickets fast', visibility: 'company', factory_id: 'f1', owner_id: 'human:ana', manager_id: null, members: []},
+    settings: {id: 'dev', name: 'Dev tickets', prefix: 'D', goal: 'Ship tickets fast', visibility: 'company', factory_id: 'f1', owner_id: 'human:ana', manager_id: manager, members: []},
     factories: [{id: 'f1', name: 'Product', goal: null, owner_id: null, manager_id: null, position: 0}, {id: 'f2', name: 'Growth', goal: null, owner_id: null, manager_id: null, position: 1}]};
   page.on('pageerror', (e: Error) => errors.push(e.message));
   await page.addInitScript(() => { try { localStorage.setItem('tico.theme', 'dark'); } catch {} });
@@ -52,8 +54,7 @@ async function open(browser: import('playwright').Browser, {viewport = {width: 1
     const body = method === 'GET' ? null : req.postDataJSON();
     if (method !== 'GET') writes.push({method, p, body});
     if (p === '/api/me') return json(me);
-    if (p === '/api/employees') return json([{name: 'auditor', display_name: 'Auditor', status: 'active', state: 'active', users: [], bot_owners: [], my_access: {see: true, read: true, write: true}},
-      {name: 'lead', display_name: 'Lead Manager', status: 'active', state: 'active', users: [], bot_owners: [], my_access: {see: true, read: true, write: true}}]);
+    if (p === '/api/employees') return json(emps);
     if (p === '/api/humans') return json({people: [{id: 'ana', name: 'Ana Ruiz', role: 'owner'}, {id: 'sam', name: 'Sam Okafor', role: 'member'}], teams: {}, org_groups: []});
     if (p === '/api/status') return json({cloud: true, active: [], queued: [], recent_runs: [], keeper_alive: true, health_issues: []});
     if (p === '/api/v2/status') return json({bots: []});
@@ -93,7 +94,7 @@ async function open(browser: import('playwright').Browser, {viewport = {width: 1
       const s = state.settings;
       if ('prefix' in body) { s.prefix = body.prefix; state.type.prefix = body.prefix; }
       if ('owner_id' in body) { s.owner_id = body.owner_id; state.type.pipeline_owner_id = body.owner_id; }
-      if ('manager_id' in body) { s.manager_id = body.manager_id; state.type.manager = body.manager_id?.replace(/^bot:/, '') ?? null; }  // the type read gives a bare slug, like the server
+      if ('manager_id' in body) { s.manager_id = body.manager_id; state.type.manager = body.manager_id; }
       if ('goal' in body) s.goal = body.goal || null;
       if (body.visibility) { s.visibility = body.visibility; if (body.visibility === 'members') s.factory_id = null; }
       if ('factory_id' in body) s.factory_id = body.factory_id || null;
@@ -134,10 +135,6 @@ async function desktop(browser: import('playwright').Browser) {
   await page.locator('[data-pe-setting=manager_id]').selectOption('bot:lead');
   await page.waitForFunction(() => (document.querySelector('[data-pe-setting=manager_id]')! as HTMLInputElement).value === 'bot:lead');
   assert.deepEqual(last(writes, '/api/v2/pipelines/dev/settings'), {manager_id: 'bot:lead'});
-  // Reopened, the saved manager (a bare slug in the type read) shows as itself, not as the first bot in the list.
-  await page.locator('[data-pe-close]').click();
-  await page.locator('#task-pipeline-edit').click();
-  await page.waitForFunction(() => (document.querySelector('[data-pe-setting=manager_id]') as HTMLSelectElement | null)?.value === 'bot:lead');
   // Goal saves on blur; Factory picks a live one;
   // Private sends the visibility, then who may see it, and a private pipeline has no factory.
   const nextSettings = () => page.waitForRequest(r => r.method() === 'PATCH' && new URL(r.url()).pathname === '/api/v2/pipelines/dev/settings');
@@ -254,7 +251,7 @@ async function nobodySaves(browser: import('playwright').Browser) {
   await page.close();
 }
 
-// FHI11: an owner cannot be cleared, so there is no empty choice; an unset manager shows a disabled "Not set".
+// FHI11: an owner cannot be cleared, so there is no empty choice. The manager can be cleared, so Not set is a choice.
 async function unsetChoices(browser: import('playwright').Browser) {
   const {page, errors} = await open(browser);
   await page.waitForFunction(() => !document.getElementById('task-pipeline-edit')!.hidden);
@@ -262,12 +259,77 @@ async function unsetChoices(browser: import('playwright').Browser) {
   await page.locator('.pe-stage').first().waitFor();
   const enabled = (sel: string) => page.locator(`${sel} option:not([disabled])`).evaluateAll((os: HTMLElement[]) => os.map(o => (o as HTMLOptionElement).value));
   assert.deepEqual(await enabled('[data-pe-setting=owner_id]'), ['human:ana', 'human:sam'], 'the owner has no empty choice');
-  assert.deepEqual(await enabled('[data-pe-setting=manager_id]'), ['bot:auditor', 'bot:lead'], 'an unset manager has no empty choice');
+  assert.deepEqual(await enabled('[data-pe-setting=manager_id]'), ['', 'bot:lead'], 'the manager can be cleared to Not set');
   assert.equal(await page.locator('[data-pe-setting=manager_id] option').first().innerText(), 'Not set', 'an unset manager says so');
-  assert.equal(await page.locator('[data-pe-setting=manager_id] option').first().evaluate(o => (o as HTMLOptionElement).disabled), true, 'the placeholder cannot be chosen');
+  assert.equal(await page.locator('[data-pe-setting=manager_id] option').first().evaluate((o: HTMLOptionElement) => o.disabled), false, 'Not set can be chosen');
+  assert.equal(await page.locator('[data-pe-manager-stale]').count(), 0, 'an unset manager has no warning line');
   assert.deepEqual(errors, [], 'unset choices: no page errors');
   await page.close();
 }
+
+// The Pipeline Manager field: only active bots are offered; a saved manager that is not active shows Not set with a line
+// under it; with no active bot the field reads No active bots and is disabled; anyone who may not change the rules reads the name.
+async function managerChoices(browser: import('playwright').Browser) {
+  const PAUSED = {name: 'pausy', display_name: 'Paused Bot', status: 'paused', state: 'paused'};
+  const PLANNED = {name: 'later', display_name: 'Planned Bot', status: 'planned', state: 'planned'};
+  const roster: unknown[] = [LEAD, PAUSED, PLANNED];
+  {
+    const {page, errors} = await open(browser, {emps: roster, manager: 'pausy'});
+    await page.waitForFunction(() => !document.getElementById('task-pipeline-edit')!.hidden);
+    await page.locator('#task-pipeline-edit').click();
+    await page.locator('.pe-stage').first().waitFor();
+    const options = await page.locator('[data-pe-setting=manager_id] option').evaluateAll((os: HTMLOptionElement[]) => os.map(o => o.value));
+    assert.deepEqual(options, ['', 'bot:lead'], 'paused and planned bots are not offered');
+    assert.equal(await page.locator('[data-pe-setting=manager_id]').inputValue(), '', 'a paused saved manager shows as Not set');
+    assert.equal(await page.locator('[data-pe-manager-stale]').innerText(), 'The saved manager is not an active bot. Pick one.');
+    await page.locator('[data-pe-setting=manager_id]').selectOption('bot:lead');
+    await settled(page);
+    assert.equal(await page.locator('[data-pe-manager-stale]').count(), 0, 'the warning goes once an active bot is picked');
+    assert.deepEqual(errors, [], 'manager choices: no page errors');
+    await page.close();
+  }
+  {
+    const {page, errors} = await open(browser, {emps: [PAUSED, PLANNED], manager: null});
+    await page.waitForFunction(() => !document.getElementById('task-pipeline-edit')!.hidden);
+    await page.locator('#task-pipeline-edit').click();
+    await page.locator('.pe-stage').first().waitFor();
+    assert.equal(await page.locator('[data-pe-setting=manager_id]').isDisabled(), true, 'no active bot: the field is disabled');
+    assert.equal(await page.locator('[data-pe-setting=manager_id] option').innerText(), 'No active bots');
+    assert.deepEqual(errors, [], 'no active bots: no page errors');
+    await page.close();
+  }
+  {
+    // A reader who may not change the rules reads the name; the picker is not offered (the pencil is hidden to them, so the
+    // editor is opened directly here).
+    const {page, errors} = await open(browser, {may: false, manager: 'lead'});
+    await page.evaluate(() => (window as unknown as {openPipelineEditor: (id: string) => void}).openPipelineEditor('dev'));
+    await page.locator('.pe-stage').first().waitFor();
+    assert.equal(await page.locator('[data-pe-manager-readonly]').innerText(), 'Lead Manager', 'the manager name is read-only');
+    assert.equal(await page.locator('[data-pe-setting=manager_id]').count(), 0, 'no manager picker for a reader who may not change it');
+    assert.deepEqual(errors, [], 'read-only: no page errors');
+    await page.close();
+  }
+  {
+    // A reader who may not change the rules still sees whose the manager is when it is paused, with its state.
+    const {page, errors} = await open(browser, {may: false, emps: [LEAD, PAUSED], manager: 'pausy'});
+    await page.evaluate(() => (window as unknown as {openPipelineEditor: (id: string) => void}).openPipelineEditor('dev'));
+    await page.locator('.pe-stage').first().waitFor();
+    assert.equal(await page.locator('[data-pe-manager-readonly]').innerText(), 'Paused Bot (paused)', 'a paused manager is named read-only');
+    assert.equal(await page.locator('[data-pe-setting=manager_id]').count(), 0, 'no picker for the paused manager either');
+    assert.deepEqual(errors, [], 'read-only paused: no page errors');
+    await page.close();
+  }
+  {
+    // An archived manager is left out of the roster: the reader is told it is no longer on the team.
+    const {page, errors} = await open(browser, {may: false, manager: 'gone'});
+    await page.evaluate(() => (window as unknown as {openPipelineEditor: (id: string) => void}).openPipelineEditor('dev'));
+    await page.locator('.pe-stage').first().waitFor();
+    assert.equal(await page.locator('[data-pe-manager-readonly]').innerText(), 'A bot no longer on the team', 'an archived manager is not shown as Not set');
+    assert.deepEqual(errors, [], 'read-only archived: no page errors');
+    await page.close();
+  }
+}
+
 
 // FHI16: a new requirement says how many open cards it would apply to right now, and reads again when the label changes.
 async function affectedNote(browser: import('playwright').Browser) {
@@ -357,7 +419,7 @@ async function phone(browser: import('playwright').Browser) {
   const browser = await chromium.launch({headless: true, channel: (process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined) as string});
   try {
     await desktop(browser); await hiddenAndRestricted(browser); await phone(browser);
-    await nobodySaves(browser); await unsetChoices(browser); await affectedNote(browser); await keepsMembers(browser); await goalEnter(browser);
+    await nobodySaves(browser); await unsetChoices(browser); await managerChoices(browser); await affectedNote(browser); await keepsMembers(browser); await goalEnter(browser);
     await typingSurvivesRedraw(browser);
     console.log('pipeline-editor: ok');
   } finally { await browser.close(); }
