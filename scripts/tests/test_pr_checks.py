@@ -1979,7 +1979,6 @@ def test_a_light_pull_request_plan_runs_at_most_four_python_vms_and_lists_what_i
     files = {f"backend/tests/test_{i:02}.py": 1 for i in range(40)}
     monkeypatch.setattr(checks, "collect", lambda: Counter(files))
     monkeypatch.setattr(checks, "merge_parent", lambda base: base)
-    monkeypatch.setattr(checks, "guard_changelog", lambda base: None)
     monkeypatch.setattr(checks, "image_checks", lambda changed: None)
     monkeypatch.setattr(checks, "changed_files", lambda base, head="HEAD", only=None: [] if only else ["backend/x.py"])
     monkeypatch.setattr(checks, "committed_timings", lambda: dict.fromkeys(files, 600.0))  # ten minutes each
@@ -2090,7 +2089,6 @@ def test_a_light_plan_adds_the_smoke_set_only_when_it_drops_a_test_and_packs_wit
     collected = Counter(dict.fromkeys([*direct, *smoke_tests], 1))
     monkeypatch.setattr(checks, "collect", lambda: collected)
     monkeypatch.setattr(checks, "merge_parent", lambda base: base)
-    monkeypatch.setattr(checks, "guard_changelog", lambda base: None)
     monkeypatch.setattr(checks, "image_checks", lambda changed: None)
     monkeypatch.setattr(checks, "changed_files", lambda base, head="HEAD", only=None: [] if only else ["backend/x.py"])
     monkeypatch.setattr(checks, "DependencyMap", lambda root: "graph")
@@ -2149,7 +2147,6 @@ def test_a_light_plan_packs_untimed_files_with_the_cap_estimate_and_keeps_the_sm
     collected = Counter(dict.fromkeys([*changed, *smoke_tests], 10))
     monkeypatch.setattr(checks, "collect", lambda: collected)
     monkeypatch.setattr(checks, "merge_parent", lambda base: base)
-    monkeypatch.setattr(checks, "guard_changelog", lambda base: None)
     monkeypatch.setattr(checks, "image_checks", lambda changed: None)
     monkeypatch.setattr(checks, "changed_files", lambda base, head="HEAD", only=None: [] if only else changed)
     monkeypatch.setattr(checks, "DependencyMap", lambda root: "graph")
