@@ -186,3 +186,63 @@ def test_shift_left_reads_only_the_strict_files_without_a_piece(monkeypatch):
     problems = strict.check_shift_left({"ui/app/piece.ts": 2})
     assert problems[0] == "SHIFT-LEFT ui/app/bad.ts: 1 hit(s)"
     assert len(problems) == 2 and problems[1].startswith("    ui/app/bad.ts:1: uses `any`")
+
+
+def worker_root(tmp_path, monkeypatch, config=None):
+    """A checkout holding only the worker config, today's unless `config` replaces it."""
+    if config is None:
+        config = json.loads((strict.ROOT / strict.WORKER_CONFIG).read_text(encoding="utf-8"))
+    (tmp_path / "ui").mkdir()
+    (tmp_path / strict.WORKER_CONFIG).write_text(json.dumps(config))
+    monkeypatch.setattr(strict, "ROOT", tmp_path)
+    return config
+
+
+def test_the_worker_config_is_strict_and_names_only_the_service_worker():
+    assert strict.check_worker_config() == []
+    assert "./sw.ts" in json.loads((strict.ROOT / strict.CONFIG).read_text())["exclude"]
+
+
+def test_a_worker_finding_fails_the_gate_with_no_baseline(monkeypatch):
+    found = [strict.Finding("ui/sw.ts", 8, 49, "TS2551", "Property 'skipWaitin' does not exist.")]
+    monkeypatch.setattr(strict, "check_worker_config", lambda: [])
+    monkeypatch.setattr(strict, "run_tsc", lambda command, config: (found, []))
+    problems = strict.check_worker()
+    assert problems[0].startswith("WORKER: 1 finding(s)") and "ui/sw.ts:8:49: TS2551" in problems[1]
+    assert strict.main(["--worker-only"]) == 1
+
+
+@pytest.mark.parametrize(
+    ("change", "expected"),
+    [
+        (lambda c: c["compilerOptions"].update(strict=False), "strict must be true"),
+        (lambda c: c["compilerOptions"].pop("noUncheckedIndexedAccess"), "noUncheckedIndexedAccess must be true"),
+        (lambda c: c["compilerOptions"].update(strictNullChecks=False), "strictNullChecks may not be false"),
+        (lambda c: c["compilerOptions"].update(allowJs=True), "allowJs must be false"),
+        (lambda c: c["compilerOptions"].update(lib=["ES2022", "WebWorker", "DOM"]), "lib must be"),
+        (lambda c: c["compilerOptions"].update(types=["node"]), "types must be []"),
+        (lambda c: c["compilerOptions"].update(noCheck=True), "noCheck is not allowed"),
+        (lambda c: c.update(extends="./tsconfig.json"), "extends not allowed"),
+        (lambda c: c.update(include=["./**/*.ts"]), "include must be []"),
+    ],
+)
+def test_weakening_the_worker_config_fails(tmp_path, monkeypatch, change, expected):
+    config = worker_root(tmp_path, monkeypatch)
+    change(config)
+    (tmp_path / strict.WORKER_CONFIG).write_text(json.dumps(config))
+    problems = strict.check_worker_config()
+    assert any(expected in problem for problem in problems), problems
+
+
+def test_dropping_the_service_worker_from_the_worker_program_fails(tmp_path, monkeypatch):
+    config = worker_root(tmp_path, monkeypatch)
+    for files in ([], ["other.ts"], ["sw.ts", "other.ts"]):
+        config["files"] = files
+        (tmp_path / strict.WORKER_CONFIG).write_text(json.dumps(config))
+        assert any("files must be" in p for p in strict.check_worker_config()), files
+    (tmp_path / strict.WORKER_CONFIG).unlink()
+    assert "cannot be read as JSON" in strict.check_worker_config()[0]
+
+
+def test_the_page_config_may_exclude_the_service_worker_and_nothing_else_new():
+    assert "./sw.ts" in strict.ALLOWED_EXCLUDE and "./app/**" not in strict.ALLOWED_EXCLUDE

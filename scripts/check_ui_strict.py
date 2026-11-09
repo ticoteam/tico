@@ -5,6 +5,7 @@
     python3 scripts/check_ui_strict.py --base REF     also fail when a count rose against REF
     python3 scripts/check_ui_strict.py --write        lower each strict count to today's (never raise one; a file at
                                                       zero loses its piece)
+    python3 scripts/check_ui_strict.py --worker-only  rule 9 alone (scripts/check_ui_types.sh runs it)
 
 Mirrors scripts/check_pyright_ratchet.py. The rules:
 
@@ -23,8 +24,11 @@ Mirrors scripts/check_pyright_ratchet.py. The rules:
 6. A strict file carries no // @ts-nocheck or // @ts-ignore. // @ts-expect-error, with its reason, is allowed.
 7. ui/tsconfig.strict.json keeps every strict flag on, and its include and exclude lists stay as they are.
 8. ui/index.html has a blank line between two <script src> tags.
+9. The service worker, ui/sw.ts, is its own program: ui/tsconfig.worker.json (the WebWorker lib, not the DOM's; the two
+   page configs exclude exactly ./sw.ts). Its config keeps every strict flag on and names exactly that file, and tsc
+   reports nothing in it: any finding fails, with no baseline.
 
-Runs in a few seconds: one tsc pass over the UI. The pinned TypeScript is fetched with npx, as ui_baseline.py does.
+Runs in a few seconds: one tsc pass over the UI and one over the worker. The pinned TypeScript is fetched with npx, as ui_baseline.py does.
 """
 
 import argparse
@@ -55,8 +59,15 @@ REQUIRED_FLAGS = (
     "noUnusedLocals",
 )
 REQUIRED_INCLUDE = ("./**/*.ts", "./**/*.js")
-# Vendored, generated and npm-package code: the only folders the config leaves out.
-ALLOWED_EXCLUDE = {"./vendor/**", "./assets/**", "./node_modules/**", "./observability-vendors.ts"}
+# Vendored, generated and npm-package code: the only folders the config leaves out. And the service worker, which
+# ui/tsconfig.worker.json checks instead (rule 9).
+ALLOWED_EXCLUDE = {"./vendor/**", "./assets/**", "./node_modules/**", "./observability-vendors.ts", "./sw.ts"}
+# Rule 9: the service worker's program. Its global is ServiceWorkerGlobalScope (lib WebWorker), which the DOM lib of the
+# page configs contradicts, so it is checked alone, strictly and with no baseline. The page configs exclude it.
+WORKER_CONFIG = "ui/tsconfig.worker.json"
+WORKER_FILES = ["sw.ts"]
+WORKER_LIB = ["ES2022", "WebWorker"]
+WORKER_TSC = ["npx", "--yes", "-p", "typescript@5.9.3", "tsc", "-p", WORKER_CONFIG, "--pretty", "false"]
 # The one generated bundle (npm run build:observability): the only JavaScript that may sit under ui/ outside tests/.
 ALLOWED_JS = {"ui/assets/observability-vendors.js"}
 # Classic scripts that stay JavaScript, each with its reason. Each declares a global or a JSDoc-typed function that a strict
@@ -69,7 +80,6 @@ KEPT_JS = {
     "ui/app/bot-page.js": "the global BOT: as .ts it is implicit any where a strict .ts file reads it",
     "ui/app/welcome.js": "the global ONB: as .ts it is implicit any where a strict .ts file reads it",
     "ui/app/settings-webhooks.js": "the global WH_TRIGGERS: as .ts it is implicit any where a strict .ts file reads it",
-    "ui/sw.js": "service worker, served raw at /sw.js",
 }
 SKIP_TS = ("ui/vendor/", "ui/assets/", "ui/node_modules/")
 DIRECTIVE = re.compile(r"@ts-(nocheck|ignore)\b")
@@ -123,16 +133,16 @@ def read(rel):
     return (ROOT / rel).read_text(encoding="utf-8")
 
 
-def run_tsc():
+def run_tsc(command=TSC, config=CONFIG):
     """(findings in source files, configuration errors). A TS5xxx code is an option error, reported on the config
     file or with no file at all: a config error, whichever file tsc names."""
-    done = subprocess.run(TSC, cwd=ROOT, capture_output=True, text=True, check=False)
+    done = subprocess.run(command, cwd=ROOT, capture_output=True, text=True, check=False)
     findings, config_errors = [], []
     for raw in done.stdout.splitlines():
         m = TSC_LINE.match(raw)
         if m:
             file = m["file"].replace("\\", "/")
-            if file == CONFIG or m["code"].startswith("TS5"):
+            if file == config or m["code"].startswith("TS5"):
                 config_errors.append(raw)
             else:
                 findings.append(Finding(file, int(m["line"]), int(m["col"]), m["code"], m["msg"]))
@@ -199,6 +209,53 @@ def check_config():
     for pattern in config.get("exclude", []):
         if pattern not in ALLOWED_EXCLUDE:
             problems.append(f"{CONFIG}: exclude {pattern} is not allowed (excluded code is not checked)")
+    return problems
+
+
+def check_worker_config():
+    """Rule 9: ui/tsconfig.worker.json checks exactly ui/sw.ts, with the WebWorker lib and every strict flag."""
+    try:
+        config = json.loads((ROOT / WORKER_CONFIG).read_text(encoding="utf-8"))
+    except (OSError, ValueError) as error:
+        return [f"{WORKER_CONFIG}: cannot be read as JSON ({error})"]
+    problems = []
+    extra = sorted(set(config) - {"compilerOptions", "files", "include"})
+    if extra:
+        problems.append(f"{WORKER_CONFIG}: {', '.join(extra)} not allowed (the worker program is this file alone)")
+    if config.get("files") != WORKER_FILES:
+        problems.append(f"{WORKER_CONFIG}: files must be {json.dumps(WORKER_FILES)} (the service worker, and only it)")
+    if config.get("include") != []:
+        problems.append(f"{WORKER_CONFIG}: include must be [] (the worker program reads no other file)")
+    options = config.get("compilerOptions", {})
+    for flag in (*REQUIRED_FLAGS, "noEmit"):
+        if options.get(flag) is not True:
+            problems.append(f"{WORKER_CONFIG}: {flag} must be true (the strict rule)")
+    if options.get("allowJs") is not False:
+        problems.append(f"{WORKER_CONFIG}: allowJs must be false (the worker is TypeScript)")
+    if options.get("lib") != WORKER_LIB:
+        problems.append(f"{WORKER_CONFIG}: lib must be {json.dumps(WORKER_LIB)} (a service worker has no DOM)")
+    if options.get("types") != []:
+        problems.append(f"{WORKER_CONFIG}: types must be [] (no ambient package types)")
+    for flag, value in sorted(options.items()):
+        if value is False and flag != "allowJs":
+            problems.append(f"{WORKER_CONFIG}: {flag} may not be false (it turns a check off)")
+    if "noCheck" in options:
+        problems.append(f"{WORKER_CONFIG}: noCheck is not allowed (it turns the checks off)")
+    return problems
+
+
+def check_worker():
+    """Rule 9: the config, then a tsc pass over the worker program, which must report nothing."""
+    problems = check_worker_config()
+    if problems:
+        return problems
+    findings, config_errors = run_tsc(WORKER_TSC, WORKER_CONFIG)
+    problems += config_errors
+    if findings:
+        problems.append(
+            f"WORKER: {len(findings)} finding(s) in the service worker program; it has no baseline, fix them"
+        )
+        problems += [f"    {f.text()}" for f in sorted(findings, key=lambda f: (f.file, f.line, f.col, f.code))]
     return problems
 
 
@@ -515,7 +572,14 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     parser.add_argument("--base", metavar="REF", help="git ref whose counts must not be exceeded (e.g. origin/main)")
     parser.add_argument("--write", action="store_true", help="lower the strict pieces to today's counts (never raise)")
+    parser.add_argument("--worker-only", action="store_true", help="check the service worker program alone (rule 9)")
     args = parser.parse_args(argv)
+    if args.worker_only:
+        problems = check_worker()
+        for problem in problems:
+            print(problem)
+        print(f"ui strict (worker): {WORKER_CONFIG}; {f'{len(problems)} problem(s)' if problems else 'ok'}")
+        return 1 if problems else 0
     if args.base and git("rev-parse", "--verify", "--quiet", f"{args.base}^{{commit}}").returncode != 0:
         sys.exit(f"--base {args.base}: no such commit in this checkout (fetch it first)")
 
@@ -534,6 +598,7 @@ def main(argv=None):
         return write(by_file, pieces, on_disk)
 
     problems = check_config()
+    problems += check_worker()
     problems += check_js()
     problems += check_strict(by_file, pieces, on_disk)
     problems += check_directives(pieces)
