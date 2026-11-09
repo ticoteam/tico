@@ -176,7 +176,7 @@ ticket stays at its step with a Waiting tag.
 A ticket that a spawn link files gets an owner the way a new ticket at the pipeline's first stage does. Tico picks the
 least busy active bot in that stage's assign pool that has a free slot. If no pool bot has one, it picks the least
 busy active pool bot, even one with no free slot. If the stage has no assign pool, or no pool bot is active, the
-card's owner gets the ticket. The Pipeline Manager never owns a spawned ticket.
+card's owner gets the ticket. The Pipeline Manager is never chosen for a spawned ticket.
 
 ## The roadmap
 
