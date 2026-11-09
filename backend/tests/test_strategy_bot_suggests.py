@@ -4,16 +4,15 @@ exactly and in the Strategy Bot's name; several bots asking the owner the same t
 each of them; what can't be done comes back saying why; after 10 approvals in a row the Monday note may offer level 3,
 once a month."""
 
-from backend import strategy_suggest
+from backend import question_tasks as QT, strategy_merge, strategy_suggest
 from backend.store import H
-from backend.tests.test_api import api, get, post  # noqa: F401
-from backend.tests.test_strategy_bot_level import level
-from backend.tests.test_company import bot, with_strategy_bot
-from backend.tests import test_goal_asks
-from backend.tests.test_goal_asks import asks, needs_tasks, sync
-from backend.tests.test_kpis import goal_with_kpi, log
-
-OWNER, STRATEGY_BOT = "human:ana", "bot:goal-manager"
+from backend.tests.helpers.api import get, post  # noqa: F401
+from backend.tests.helpers.strategy_bot_level import level
+from backend.tests.helpers.company import bot, with_strategy_bot
+from backend.tests.helpers import goal_asks as test_goal_asks
+from backend.tests.helpers.goal_asks import asks, needs_tasks, sync
+from backend.tests.helpers.kpis import goal_with_kpi, log
+from backend.tests.helpers.strategy_bot_suggests import OWNER, STRATEGY_BOT, ask_ana, bot_task
 
 
 def red_goal(api):
@@ -22,29 +21,37 @@ def red_goal(api):
     return goal
 
 
-def bot_task(api, slug, title, status="open"):
-    with api.app.state.store.transaction() as c:
-        made = H.task_create(c, "bot:" + slug, title, "Work it.", "bot:" + slug, lint=False)
-        if status != "open":
-            H.task_update(c, "bot:" + slug, made["id"], status=status)
-    return made["id"]
-
-
 def recovery(api, goal_id, ops_task, token, expected=200):
-    payload = {"evidence": "Activation fell from 40% to 10% this week.", "pick": 0, "options": [
-        {"label": "Ops fixes setup first", "actions": [
-            {"do": "create", "owner": "ops", "title": "Fix the setup step that drops new accounts"},
-            {"do": "reorder", "task_id": ops_task}]},
-        {"label": "Finance pauses the campaign", "actions": [
-            {"do": "create", "owner": "finance", "title": "Pause the signup campaign"}]}]}
-    out = post(api, "goal-proposals", {"kind": "recovery", "goal_id": goal_id, "payload": payload,
-                                       "reason": "Red for a week"}, token=token, expected=expected)
+    payload = {
+        "evidence": "Activation fell from 40% to 10% this week.",
+        "pick": 0,
+        "options": [
+            {
+                "label": "Ops fixes setup first",
+                "actions": [
+                    {"do": "create", "owner": "ops", "title": "Fix the setup step that drops new accounts"},
+                    {"do": "reorder", "task_id": ops_task},
+                ],
+            },
+            {
+                "label": "Finance pauses the campaign",
+                "actions": [{"do": "create", "owner": "finance", "title": "Pause the signup campaign"}],
+            },
+        ],
+    }
+    out = post(
+        api,
+        "goal-proposals",
+        {"kind": "recovery", "goal_id": goal_id, "payload": payload, "reason": "Red for a week"},
+        token=token,
+        expected=expected,
+    )
     return out.get("proposal")
 
 
 def tasks_of(api, owner):
     with api.app.state.store.read() as c:
-        return [dict(r) for r in c.execute("SELECT * FROM tasks WHERE owner=? ORDER BY created", (owner,))]
+        return [dict(r) for r in c.execute("SELECT * FROM tasks WHERE owner_id=? ORDER BY created_at", (owner,))]
 
 
 def test_at_level_2_a_red_goal_gets_one_recovery_the_owner_approves_exactly(api):
@@ -56,23 +63,36 @@ def test_at_level_2_a_red_goal_gets_one_recovery_the_owner_approves_exactly(api)
     goal = red_goal(api)
     first = bot_task(api, "ops", "Write the onboarding email")
     second = bot_task(api, "ops", "Clean up old reports")
-    recovery(api, goal["id"], second, strategy_token, expected=422)                     # level 1: it suggests nothing
+    recovery(api, goal["id"], second, strategy_token, expected=422)  # level 1: it suggests nothing
     level(api, 2)
-    recovery(api, goal["id"], second, bot(api, "ops"), expected=403)        # only the Strategy Bot proposes one
+    recovery(api, goal["id"], second, bot(api, "ops"), expected=403)  # only the Strategy Bot proposes one
     # A task for a person stays the person's to make, at every level.
-    post(api, "goal-proposals", {"kind": "recovery", "goal_id": goal["id"], "payload": {
-        "evidence": "x", "options": [{"label": "Ana does it", "actions": [
-            {"do": "create", "owner": OWNER, "title": "Fix it yourself"}]}]}}, token=strategy_token, expected=422)
+    post(
+        api,
+        "goal-proposals",
+        {
+            "kind": "recovery",
+            "goal_id": goal["id"],
+            "payload": {
+                "evidence": "x",
+                "options": [
+                    {"label": "Ana does it", "actions": [{"do": "create", "owner": OWNER, "title": "Fix it yourself"}]}
+                ],
+            },
+        },
+        token=strategy_token,
+        expected=422,
+    )
     before = {t["id"]: t["rank"] for t in tasks_of(api, "bot:ops")}
     proposal = recovery(api, goal["id"], second, strategy_token)
     sync(api)
     mine = asks(api, OWNER)
-    assert [a["kind"] for a in mine if a["kind"] in ("kpi_red", "recovery")] == ["recovery"]   # one item, not two
+    assert [a["kind"] for a in mine if a["kind"] in ("kpi_red", "recovery")] == ["recovery"]  # one item, not two
     [item] = [a for a in mine if a["kind"] == "recovery"]
     assert item["title"] == "Approve a recovery for Raise activation"
     assert "Activation fell" in item["body"]
     assert "Option 1: Ops fixes setup first (the Strategy Bot's pick)" in item["body"]
-    assert {t["id"]: t["rank"] for t in tasks_of(api, "bot:ops")} == before                      # nothing yet
+    assert {t["id"]: t["rank"] for t in tasks_of(api, "bot:ops")} == before  # nothing yet
     assert [i["kind"] for i in get(api, "goals/needs-you")["items"]].count("recovery") == 1
     # Ben may not decide Ana's company goal; Ana approves the pick.
     post(api, f"goal-proposals/{proposal['id']}/decide", {"decision": "confirm"}, token="cara-test", expected=403)
@@ -81,11 +101,14 @@ def test_at_level_2_a_red_goal_gets_one_recovery_the_owner_approves_exactly(api)
     assert decided["result"]["left"] == [] and decided["result"]["follow_up"] is None
     ops = tasks_of(api, "bot:ops")
     [made] = [t for t in ops if t["id"] not in before]
-    assert (made["title"], made["requester"], made["goal_id"]) == \
-        ("Fix the setup step that drops new accounts", STRATEGY_BOT, goal["id"])
+    assert (made["title"], made["requester_id"], made["goal_id"]) == (
+        "Fix the setup step that drops new accounts",
+        STRATEGY_BOT,
+        goal["id"],
+    )
     live = sorted((t for t in ops if t["status"] in H.ACTIVE_STATUSES), key=lambda t: t["rank"])
-    assert live[0]["id"] == second and first in {t["id"] for t in live}                            # moved to the top
-    assert tasks_of(api, "bot:finance") == []                                                      # the other option: no
+    assert live[0]["id"] == second and first in {t["id"] for t in live}  # moved to the top
+    assert tasks_of(api, "bot:finance") == []  # the other option: no
     with api.app.state.store.read() as c:
         closed = H.task(c, item["id"])
     assert closed["status"] == "closed" and "Done: New task for ops" in closed["note"]
@@ -138,127 +161,190 @@ def test_a_retry_approved_while_still_blocked_comes_back_again_and_then_applies(
     assert [t["title"] for t in tasks_of(api, "bot:finance")] == ["Pause the signup campaign"]
 
 
-def ask_ana(api, slug, title):
-    """A bot's task Ana asked for, where the bot asks her a question back."""
-    with api.app.state.store.transaction() as c:
-        made = H.task_create(c, OWNER, title, "Please.", "bot:" + slug)
-        H.task_ask(c, "bot:" + slug, made["id"], "Which pricing page goes live first?")
-    return made["id"]
+def card_of(api, task_id):
+    """The id of the question task Ana owns that the task waits on."""
+    with api.app.state.store.read() as c:
+        return strategy_merge._question_of(c, H.task(c, task_id), OWNER)["id"]
+
+
+def _mark(api):
+    with api.app.state.store.read() as c:
+        return c.execute("SELECT coalesce(max(rowid), 0) FROM messages").fetchone()[0]
+
+
+def _heard(api, bot, since, text):
+    with api.app.state.store.read() as c:
+        return [
+            r[0]
+            for r in c.execute(
+                "SELECT body FROM messages WHERE recipient_id=? AND rowid>? ORDER BY rowid", (bot, since)
+            )
+            if text in (r[0] or "")
+        ]
+
+
+def _answer(api, task_id, text):
+    """The person answers a question task with no options in Needs you ("answer"): their words as Other."""
+    return post(api, f"tasks/{task_id}/answers", {"target": {"task": task_id}, "answers": {}, "other": text})
 
 
 def test_three_bots_asking_the_same_thing_are_one_item_and_the_answer_reaches_each(api):
-    """Spec test 13: three bots ask the owner the same thing (a question on a task, a task waiting on her, a task filed
-    for her); the Strategy Bot merges them and Needs you shows one item, not three. Her one answer reaches each bot that
-    asked, and the item is done. A merged item that ends unanswered puts the originals back."""
+    """Spec test 13: three bots ask the owner the same thing (a task waiting on her through a question task, a second
+    one the same way, a task filed for her); the Strategy Bot merges them and Needs you shows one item, not three. The item
+    is a question task she owns; her one answer reaches each bot that asked, and the item is done. A merged item that
+    ends unanswered puts the originals back."""
     strategy_token = with_strategy_bot(api)
     asked = ask_ana(api, "ops", "Ship the pricing page")
+    asked_card = card_of(api, asked)
     waiting = bot_task(api, "coo", "Plan the launch")
     with api.app.state.store.transaction() as c:
-        H.task_comment(c, "bot:coo", waiting, "Which pricing page first?", ask={"who": OWNER})     # `hub task question`
-        H.task_update(c, "bot:coo", waiting, status="waiting", waiting_on=OWNER, note="Which pricing page first?")
+        card = H.task_update(
+            c,
+            "bot:coo",
+            waiting,
+            status="waiting",
+            waiting_on=OWNER,
+            note="Which pricing page goes first? I'll plan the launch around it.",
+        )["asked_in"]["id"]
         filed = H.task_create(c, "bot:finance", "Pick the pricing page to launch", "Which one?", OWNER)["id"]
     originals = [asked, waiting, filed]
-    assert set(originals) <= needs_tasks(api, "ana-test")
-    body = {"person": OWNER, "title": "Which pricing page goes live first?",
-            "question": "Ops, COO and Finance each need to know which pricing page launches first.", "tasks": originals}
-    post(api, "strategy-bot/merge", body, token=strategy_token, expected=422)                 # level 1: no merging
+    # Each waiting task is in her Needs you as the question task it waits on.
+    assert {asked_card, card, filed} <= needs_tasks(api, "ana-test")
+    body = {
+        "person": OWNER,
+        "title": "Which pricing page goes live first?",
+        "question": "Ops, COO and Finance each need to know which pricing page launches first.",
+        "tasks": originals,
+    }
+    post(api, "strategy-bot/merge", body, token=strategy_token, expected=422)  # level 1: no merging
     level(api, 2)
-    post(api, "strategy-bot/merge", body, token=bot(api, "ops"), expected=403)    # only the Strategy Bot
+    post(api, "strategy-bot/merge", body, token=bot(api, "ops"), expected=403)  # only the Strategy Bot
     merged = post(api, "strategy-bot/merge", body, token=strategy_token)
     item = merged["task"]
-    assert (item["owner"], item["status"], item["waiting_on"]) == (STRATEGY_BOT, "waiting", OWNER)
+    assert (item["owner_id"], item["requester_id"], item["status"]) == (OWNER, STRATEGY_BOT, "open")
+    [question] = item["questions"]
+    assert question["question"] == body["question"] and question["options"] == []
     assert [o["task_id"] for o in merged["originals"]] == originals
     shown = needs_tasks(api, "ana-test")
-    assert item["id"] in shown and not set(originals) & shown                # one item, not three
-    # It names the originals, so the Tasks page, which lists Needs you from its own copy of the tasks, leaves them out.
+    assert item["id"] in shown and not {*originals, asked_card, card} & shown  # one item, not three
+    # It names the originals and the cards the waiting ones stood behind, so the Tasks page, which lists Needs you from
+    # its own copy of the tasks, leaves them out.
     page = test_goal_asks.get(api, "needs-you", "ana-test")["items"]
-    assert next(i for i in page if i["id"] == item["id"])["merged"] == originals
-    # it counts toward the 5 a day, with the vision ask
+    assert set(next(i for i in page if i["id"] == item["id"])["merged"]) == {*originals, asked_card, card}
+    # it counts toward the 5 a day once, with the vision ask
     assert get(api, "strategy-bot")["asked_today"] == {OWNER: 2}
     # already merged
     post(api, "strategy-bot/merge", {**body, "tasks": originals[:2]}, token=strategy_token, expected=422)
     # Ana answers once, on the merged item.
-    post(api, f"tasks/{item['id']}/comments", {"text": "The landlord page first."})
+    since = _mark(api)
+    _answer(api, item["id"], "The landlord page first.")
     with api.app.state.store.read() as c:
         assert H.task(c, item["id"])["status"] == "done"
-        for task_id, to in ((asked, "bot:ops"), (waiting, "bot:coo")):
-            reply = c.execute("SELECT * FROM messages WHERE kind='answer' AND to_actor=? "
-                              "AND json_extract(refs_json,'$.task')=?", (to, task_id)).fetchone()
-            assert reply and "The landlord page first." in reply["body"] and '"quiet"' not in reply["refs_json"]
-            assert not H.open_task_asks(c, H.task(c, task_id))
-        said = c.execute("SELECT body FROM messages WHERE from_actor=? AND to_actor='bot:finance' AND "
-                         "json_extract(refs_json,'$.task')=? ORDER BY created DESC", (STRATEGY_BOT, filed)).fetchone()
+        # Each waiting task's question task is answered as hers: Ops and COO hear it once, and nothing waits on her.
+        assert H.task(c, asked_card)["status"] == "done" and H.task(c, card)["status"] == "done"
+        assert "The landlord page first." in QT.fields(H.task(c, asked_card))["answer"]["text"]
+        assert QT.waiting_on(c, H.task(c, asked)) is None
+        assert QT.waiting_on(c, H.task(c, waiting)) is None and not H._waits_on(c, H.task(c, waiting), OWNER)
+        said = c.execute(
+            "SELECT body FROM messages WHERE sender_id=? AND recipient_id='bot:finance' AND "
+            "json_extract(refs,'$.task')=? ORDER BY created_at DESC",
+            (STRATEGY_BOT, filed),
+        ).fetchone()
         assert said and "The landlord page first." in said[0]
-        assert H.task(c, waiting)["waiting_on"] is None
-        assert {r[0] for r in c.execute("SELECT state FROM "
-                                        "strategy_merges WHERE merged_into=?", (item["id"],))} == {"answered"}
-    assert not set(originals + [item["id"]]) & needs_tasks(api, "ana-test")
-    # Another merge whose item ends unanswered: its originals are back in Needs you.
+        assert {r[0] for r in c.execute("SELECT state FROM strategy_merges WHERE merged_into=?", (item["id"],))} == {
+            "answered"
+        }
+    assert len(_heard(api, "bot:ops", since, "The landlord page first.")) == 1
+    assert len(_heard(api, "bot:coo", since, "The landlord page first.")) == 1
+    assert not {*originals, asked_card, card, item["id"]} & needs_tasks(api, "ana-test")
+    # Another merge whose item ends unanswered: Ana declines it, and its originals are back in Needs you.
     again = [ask_ana(api, "ops", "Ship the docs page"), ask_ana(api, "coo", "Ship the help page")]
+    again_cards = [card_of(api, t) for t in again]
     second = post(api, "strategy-bot/merge", {**body, "tasks": again}, token=strategy_token)["task"]
-    assert not set(again) & needs_tasks(api, "ana-test")
+    assert not {*again, *again_cards} & needs_tasks(api, "ana-test")
     with api.app.state.store.transaction() as c:
-        H.task_update(c, STRATEGY_BOT, second["id"], status="declined", note="Not the same question after all.")
-    assert set(again) <= needs_tasks(api, "ana-test")
+        H.task_update(c, OWNER, second["id"], status="declined", note="Not the same question after all.")
+    assert set(again_cards) <= needs_tasks(api, "ana-test")
     # A new question after the answer was passed on is back in her Needs you, and may be merged again.
     with api.app.state.store.transaction() as c:
-        H.task_comment(c, "bot:ops", asked, "And which price goes on it?", ask={"who": OWNER})
-        H.task_comment(c, "bot:coo", waiting, "Which day do we launch?", ask={"who": OWNER})
-        H.task_update(c, "bot:coo", waiting, status="waiting", waiting_on=OWNER, note="Which day do we launch?")
-    assert {asked, waiting} <= needs_tasks(api, "ana-test") and filed not in needs_tasks(api, "ana-test")
-    post(api, "strategy-bot/merge", {**body, "title": "Price and launch day?", "tasks": [asked, waiting]},
-         token=strategy_token)
-    # Answered as an open question (the "answer" step in Needs you) rather than a reply: the same pass-on.
+        more = QT.ask_plain(c, "bot:ops", OWNER, "And which price goes on it?", parent=H.task(c, asked))["id"]
+        H.task_update(c, "bot:ops", asked, status="waiting", waiting_on=OWNER, note="")
+        later = H.task_update(
+            c,
+            "bot:coo",
+            waiting,
+            status="waiting",
+            waiting_on=OWNER,
+            note="Which day do we launch? I'll book the venue after.",
+        )["asked_in"]["id"]
+    assert later != card
+    assert {more, later} <= needs_tasks(api, "ana-test") and filed not in needs_tasks(api, "ana-test")
+    post(
+        api,
+        "strategy-bot/merge",
+        {**body, "title": "Price and launch day?", "tasks": [asked, waiting]},
+        token=strategy_token,
+    )
+    # Closed Done with a note rather than answered in Needs you: the same pass-on.
     third = post(api, "strategy-bot/merge", {**body, "tasks": again}, token=strategy_token)["task"]
     with api.app.state.store.transaction() as c:
-        ask = next(a for a in H.open_task_asks(c, H.task(c, third["id"])) if a["to_actor"] == OWNER)
-        H.answer(c, OWNER, ask["id"], "The help page first.")
+        H.task_update(c, OWNER, third["id"], status="done", note="The help page first.")
     with api.app.state.store.read() as c:
         assert H.task(c, third["id"])["status"] == "done"
-        assert not any(H.open_task_asks(c, H.task(c, t)) for t in again)
+        assert all(QT.waiting_on(c, H.task(c, t)) is None for t in again)
 
 
 def test_a_merged_item_names_only_the_originals_its_reader_may_read(api):
     """The merged item's list of originals is the reader's: one Ana can no longer read is left out of it."""
     strategy_token = with_strategy_bot(api)
     asked = ask_ana(api, "ops", "Ship the pricing page")
-    from backend.tests.test_api import unrelated_task_managers
+    from backend.tests.helpers.api import unrelated_task_managers
+
     with api.app.state.store.transaction() as c:
         unrelated_task_managers(c)
     with api.app.state.store.transaction() as c:
         filed = H.task_create(c, "bot:finance", "Pick the pricing page to launch", "Which one?", OWNER)["id"]
     level(api, 2)
-    item = post(api, "strategy-bot/merge",
-                {"person": OWNER, "title": "Which pricing page first?", "question": "Which one?",
-                 "tasks": [asked, filed]}, token=strategy_token)["task"]
-    with api.app.state.store.transaction() as c:      # Ops' task becomes its own private task, out of Ana's reach
-        c.execute("UPDATE tasks SET private=1, requester='bot:ops', guest=NULL WHERE id=?", (asked,))
+    item = post(
+        api,
+        "strategy-bot/merge",
+        {"person": OWNER, "title": "Which pricing page first?", "question": "Which one?", "tasks": [asked, filed]},
+        token=strategy_token,
+    )["task"]
+    with api.app.state.store.transaction() as c:  # Ops' task becomes its own private task, out of Ana's reach
+        c.execute("UPDATE tasks SET private=1, requester_id='bot:ops', readers=NULL WHERE id=?", (asked,))
     page = test_goal_asks.get(api, "needs-you", "ana-test")["items"]
-    assert next(i for i in page if i["id"] == item["id"])["merged"] == [filed]
+    named = next(i for i in page if i["id"] == item["id"])["merged"]
+    assert filed in named and asked not in named
 
 
-def test_a_merged_answer_never_settles_a_question_asked_after_the_merge(api):
-    """Ana answers one original where it was asked, and that bot asks her something else; her answer on the merged
-    item reaches the other bot only, and the new question stays open in her Needs you."""
+def test_a_merged_answer_skips_an_original_already_answered_where_it_was_asked(api):
+    """Ana answers one original's question task on its own, before the merged item: her answer on the merged item
+    reaches the other bot only, and the first is let go (released) without being told twice."""
     strategy_token = with_strategy_bot(api)
     level(api, 2)
     first, second = ask_ana(api, "ops", "Ship the pricing page"), ask_ana(api, "coo", "Plan the launch")
-    item = post(api, "strategy-bot/merge",
-                {"person": OWNER, "title": "Which pricing page first?", "question": "Which one?",
-                 "tasks": [first, second]}, token=strategy_token)["task"]
+    first_card, second_card = card_of(api, first), card_of(api, second)
+    item = post(
+        api,
+        "strategy-bot/merge",
+        {"person": OWNER, "title": "Which pricing page first?", "question": "Which one?", "tasks": [first, second]},
+        token=strategy_token,
+    )["task"]
     with api.app.state.store.transaction() as c:
-        [old] = H.open_task_asks(c, H.task(c, first))
-        H.answer(c, OWNER, old["id"], "The landlord page.")
-        H.task_comment(c, "bot:ops", first, "Which price goes on it?", ask={"who": OWNER})
-    assert first in needs_tasks(api, "ana-test") and second not in needs_tasks(api, "ana-test")
-    post(api, f"tasks/{item['id']}/comments", {"text": "The tenant page first."})
+        H.task_update(c, OWNER, first_card, status="done", note="The landlord page.")
+    since = _mark(api)
+    _answer(api, item["id"], "The tenant page first.")
     with api.app.state.store.read() as c:
-        [new] = H.open_task_asks(c, H.task(c, first))
-        assert new["body"] == "Which price goes on it?" and not H.open_task_asks(c, H.task(c, second))
-        states = dict(c.execute("SELECT original, state FROM "
-                                "strategy_merges WHERE merged_into=?", (item["id"],)).fetchall())
+        assert QT.waiting_on(c, H.task(c, first)) is None and QT.waiting_on(c, H.task(c, second)) is None
+        assert "tenant" not in str(QT.fields(H.task(c, first_card))["answer"])
+        assert "The tenant page first." in QT.fields(H.task(c, second_card))["answer"]["text"]
+        states = dict(
+            c.execute("SELECT original, state FROM strategy_merges WHERE merged_into=?", (item["id"],)).fetchall()
+        )
     assert states == {first: "released", second: "answered"}
-    assert first in needs_tasks(api, "ana-test")
+    assert not _heard(api, "bot:ops", since, "The tenant page first.")
+    assert len(_heard(api, "bot:coo", since, "The tenant page first.")) == 1
 
 
 def test_ten_approvals_in_a_row_offer_level_3_once_a_month(api):
@@ -275,17 +361,17 @@ def test_ten_approvals_in_a_row_offer_level_3_once_a_month(api):
             assert get(api, "strategy-bot")["level3_offer"]["streak"] == 0
         if n == 11:
             assert get(api, "strategy-bot", token=strategy_token)["level3_offer"]["due"] is False
-            post(api, "strategy-bot/level3-offer", {}, token=strategy_token, expected=422)            # not due yet
+            post(api, "strategy-bot/level3-offer", {}, token=strategy_token, expected=422)  # not due yet
     offer = get(api, "strategy-bot", token=strategy_token)["level3_offer"]
     assert (offer["streak"], offer["due"]) == (10, True)
-    post(api, "strategy-bot/level3-offer", {}, token="ana-test", expected=403)          # the Strategy Bot's note only
+    post(api, "strategy-bot/level3-offer", {}, token="ana-test", expected=403)  # the Strategy Bot's note only
     made = post(api, "strategy-bot/level3-offer", {}, token=strategy_token)["level3_offer"]
     assert made["due"] is False and made["last_offered_at"]
     # not again this month
     post(api, "strategy-bot/level3-offer", {}, token=strategy_token, expected=422)
     # never raises its own level
     level(api, 3, token=strategy_token, expected=403)
-    with api.app.state.store.transaction() as c:                                   # a month on, it may again
+    with api.app.state.store.transaction() as c:  # a month on, it may again
         record = strategy_suggest.strategy_bot._record(c)
         record["level3_offers"] = [H.shift(H.now(), days=-31)]
         strategy_suggest.strategy_bot._save(c, record)

@@ -8,7 +8,7 @@ import pytest
 from backend import backup
 from backend.backup import checkpoint, compact, inspect, snapshot, upload_snapshot
 from backend.config import Settings
-from backend.tests.test_api import api, assign, claim, post, ready, runner  # noqa: F401
+from backend.tests.helpers.api import assign, claim, post, ready, runner  # noqa: F401
 from backend.store import IDEMPOTENCY_RETENTION_HOURS, H, Store, sweep_idempotency
 
 
@@ -38,10 +38,12 @@ def test_deployment_checkpoint_is_an_exact_copy_that_skips_the_integrity_scan(tm
         c.execute("INSERT INTO messages VALUES('Committed in WAL')")
         c.commit()
         scans = []
+
         class Traced(sqlite3.Connection):
             def execute(self, sql, *args):
                 scans.append(sql)
                 return super().execute(sql, *args)
+
         connect = sqlite3.connect
         monkeypatch.setattr(backup.sqlite3, "connect", lambda *a, **k: connect(*a, factory=Traced, **k))
         report = checkpoint(source, dest)
@@ -62,9 +64,11 @@ def test_failed_upload_never_reports_success_or_deletes_source(tmp_path):
     source = tmp_path / "live.sqlite"
     with closing(sqlite3.connect(source)) as c:
         c.execute("CREATE TABLE data(x)")
+
     class FailingS3:
         def upload_file(self, *args, **kwargs):
             raise RuntimeError("upload unavailable")
+
     with pytest.raises(RuntimeError, match="upload unavailable"):
         upload_snapshot(source, "bucket", "backup", FailingS3())
     assert inspect(source)["integrity"] == ["ok"]
@@ -75,14 +79,19 @@ def test_backup_success_requires_verified_download(tmp_path):
     object_path = tmp_path / "s3-object"
     with closing(sqlite3.connect(source)) as c:
         c.execute("CREATE TABLE data(x)")
+
     class S3:
         manifest = None
+
         def upload_file(self, source, *args, **kwargs):
             shutil.copyfile(source, object_path)
+
         def download_file(self, bucket, key, dest):
             shutil.copyfile(object_path, dest)
+
         def put_object(self, **kwargs):
             self.manifest = kwargs
+
     s3 = S3()
     result = upload_snapshot(source, "bucket", "backup", s3)
     assert result["verified"] is True

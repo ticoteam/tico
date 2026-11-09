@@ -3,9 +3,11 @@
   "attempt_id": "00000000-0000-4000-8000-000000000001",
   "message": {
    "answered_by": null,
+   "answered_by_id": null,
    "body": "Acme's summary is ready",
    "conversation_id": "00000000-0000-4000-8000-000000000003",
    "created": "2026-01-01T00:00:00.000000Z",
+   "created_at": "2026-01-01T00:00:00.000000Z",
    "deleted_at": null,
    "delivered_at": null,
    "edited_at": null,
@@ -15,12 +17,19 @@
    "id": "00000000-0000-4000-8000-000000000002",
    "in_reply_to": "00000000-0000-4000-8000-000000000004",
    "kind": "say",
+   "legacy_audience": null,
+   "origin_id": "00000000-0000-4000-8000-000000000005@00000000-0000-4000-8000-000000000006",
    "public": 0,
    "read_at": null,
+   "recipient_id": "human:ana",
    "refs": {
     "turn_id": "00000000-0000-4000-8000-000000000001"
    },
    "refs_json": "{\"turn_id\": \"00000000-0000-4000-8000-000000000001\"}",
+   "restricted": 1,
+   "revision": 0,
+   "sender_id": "bot:ops",
+   "seq": 2,
    "superseded_at": null,
    "to_actor": "human:ana",
    "wait_s": null

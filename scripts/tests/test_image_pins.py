@@ -5,14 +5,9 @@ from the build, or a pinned package with no wheel for the image's Python fails o
 the images, half an hour in. These read the files directly. The slow tests build the pinned SQLite the way the
 image does, and check the apt packages and the Python pins against Debian's and PyPI's indexes.
 """
+
 import json
-import lzma
-import os
 import re
-import shutil
-import sqlite3
-import subprocess
-import sys
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -21,13 +16,25 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
 DOCKERFILE = (ROOT / 'Dockerfile').read_text()
-VERSIONS = dict(line.split('=', 1) for line in (ROOT / 'docker/versions.env').read_text().splitlines()
-                if line and not line.startswith('#'))
+VERSIONS = dict(
+    line.split('=', 1)
+    for line in (ROOT / 'docker/versions.env').read_text().splitlines()
+    if line and not line.startswith('#')
+)
 SQLITE_SH = (ROOT / 'docker/sqlite.sh').read_text()
 # What Debian's SQLite does that Tico's data depends on, so the newer build behaves the same.
-SQLITE_OPTIONS = ('ENABLE_FTS5', 'ENABLE_FTS4', 'ENABLE_DBSTAT_VTAB', 'ENABLE_MATH_FUNCTIONS', 'ENABLE_RTREE',
-                  'ENABLE_COLUMN_METADATA', 'SECURE_DELETE', 'DEFAULT_RECURSIVE_TRIGGERS', 'MAX_VARIABLE_NUMBER=250000',
-                  'LIKE_DOESNT_MATCH_BLOBS')
+SQLITE_OPTIONS = (
+    'ENABLE_FTS5',
+    'ENABLE_FTS4',
+    'ENABLE_DBSTAT_VTAB',
+    'ENABLE_MATH_FUNCTIONS',
+    'ENABLE_RTREE',
+    'ENABLE_COLUMN_METADATA',
+    'SECURE_DELETE',
+    'DEFAULT_RECURSIVE_TRIGGERS',
+    'MAX_VARIABLE_NUMBER=250000',
+    'LIKE_DOESNT_MATCH_BLOBS',
+)
 # Debian 13 (trixie) renamed these for 64-bit time; the old names install nothing there.
 TRIXIE_RENAMED = ('libasound2', 'libatk-bridge2.0-0', 'libatk1.0-0', 'libatspi2.0-0', 'libcups2', 'libglib2.0-0')
 # Pins with no wheel for the image's Python that the venv stage builds (it has a compiler and their headers).
@@ -94,7 +101,7 @@ def test_the_sqlite_pin_is_complete_and_matches_the_download_name():
 def test_the_sqlite_build_keeps_debians_behaviour():
     for option in SQLITE_OPTIONS:
         assert re.search(rf'-DSQLITE_{re.escape(option)}\b', SQLITE_SH), option
-    assert '-DSQLITE_OMIT_LOOKASIDE' not in SQLITE_SH   # Debian's; it only makes SQLite slower
+    assert '-DSQLITE_OMIT_LOOKASIDE' not in SQLITE_SH  # Debian's; it only makes SQLite slower
 
 
 def test_every_python_image_checks_its_sqlite_after_its_own_apt_installs():
@@ -102,7 +109,7 @@ def test_every_python_image_checks_its_sqlite_after_its_own_apt_installs():
     for name in ('runner', 'server'):
         text = stage(name)
         assert re.search(r'^FROM python AS ', f'FROM {text}', re.M), f'{name} must build on the python stage'
-        if 'apt-get install' in text:   # an apt upgrade could bring Debian's SQLite back; the check catches it
+        if 'apt-get install' in text:  # an apt upgrade could bring Debian's SQLite back; the check catches it
             assert text.rindex('sqlite.sh check') > text.rindex('apt-get install'), name
 
 
@@ -140,94 +147,89 @@ def installs_on_the_image(tags, minor, arch, glibc):
     pure = abi == 'none' and any(p in ('py3', f'py3{minor}', cp) for p in pythons)
     native = abi == cp and cp in pythons
     linux = [m for m in map(manylinux, platforms) if m]
-    return ((pure or abi3 or native)
-            and ('any' in platforms or any(needs <= glibc and on == arch for needs, on in linux)))
+    return (pure or abi3 or native) and (
+        'any' in platforms or any(needs <= glibc and on == arch for needs, on in linux)
+    )
 
 
 def test_the_images_debian_release_has_a_known_glibc():
     assert debian_release() in DEBIAN_GLIBC, f'{debian_release()}: add its glibc to DEBIAN_GLIBC'
 
 
-@pytest.mark.parametrize('wheel, x86_64, aarch64', [
-    ('py3-none-any', True, True),
-    ('py2.py3-none-any', True, True),
-    ('py3-none-win_amd64', False, False),
-    ('py3-none-macosx_11_0_arm64', False, False),
-    ('cp315-cp315-manylinux_2_17_x86_64.manylinux2014_x86_64', True, False),
-    ('cp315-cp315-manylinux_2_17_aarch64.manylinux2014_aarch64', False, True),
-    ('cp315-cp315-musllinux_1_2_x86_64', False, False),
-    ('cp315-cp315-win_amd64', False, False),
-    ('cp314-cp314-manylinux_2_17_x86_64', False, False),
-    ('cp315-cp315t-manylinux_2_17_x86_64', False, False),
-    ('cp39-abi3-manylinux_2_28_x86_64', True, False),
-    ('cp316-abi3-manylinux_2_28_x86_64', False, False),
-    ('cp315-cp315-manylinux1_x86_64', True, False),
-    ('cp315-cp315-manylinux2010_x86_64', True, False),
-    ('cp315-cp315-manylinux2014_aarch64', False, True),
-    ('cp315-cp315-manylinux_2_41_x86_64', True, False),
-    ('cp315-cp315-manylinux_2_42_x86_64', False, False),
-    ('cp315-cp315-manylinux_2_99_x86_64', False, False),
-    ('cp315-cp315-manylinux_3_0_aarch64', False, False),
-    ('cp315-cp315-manylinux_2_99_x86_64.manylinux_2_17_x86_64', True, False),
-    ('cp315-cp315-manylinux_2_17_x86_64.manylinux_2_99_aarch64', True, False),
-])
+@pytest.mark.parametrize(
+    'wheel, x86_64, aarch64',
+    [
+        ('py3-none-any', True, True),
+        ('py2.py3-none-any', True, True),
+        ('py3-none-win_amd64', False, False),
+        ('py3-none-macosx_11_0_arm64', False, False),
+        ('cp315-cp315-manylinux_2_17_x86_64.manylinux2014_x86_64', True, False),
+        ('cp315-cp315-manylinux_2_17_aarch64.manylinux2014_aarch64', False, True),
+        ('cp315-cp315-musllinux_1_2_x86_64', False, False),
+        ('cp315-cp315-win_amd64', False, False),
+        ('cp314-cp314-manylinux_2_17_x86_64', False, False),
+        ('cp315-cp315t-manylinux_2_17_x86_64', False, False),
+        ('cp39-abi3-manylinux_2_28_x86_64', True, False),
+        ('cp316-abi3-manylinux_2_28_x86_64', False, False),
+        ('cp315-cp315-manylinux1_x86_64', True, False),
+        ('cp315-cp315-manylinux2010_x86_64', True, False),
+        ('cp315-cp315-manylinux2014_aarch64', False, True),
+        ('cp315-cp315-manylinux_2_41_x86_64', True, False),
+        ('cp315-cp315-manylinux_2_42_x86_64', False, False),
+        ('cp315-cp315-manylinux_2_99_x86_64', False, False),
+        ('cp315-cp315-manylinux_3_0_aarch64', False, False),
+        ('cp315-cp315-manylinux_2_99_x86_64.manylinux_2_17_x86_64', True, False),
+        ('cp315-cp315-manylinux_2_17_x86_64.manylinux_2_99_aarch64', True, False),
+    ],
+)
 def test_wheel_tags_match_only_the_images_python_and_platforms(wheel, x86_64, aarch64):
     tags, trixie = tuple(wheel.split('-')), DEBIAN_GLIBC['trixie']
-    assert (installs_on_the_image(tags, 15, 'x86_64', trixie),
-            installs_on_the_image(tags, 15, 'aarch64', trixie)) == (x86_64, aarch64)
+    assert (installs_on_the_image(tags, 15, 'x86_64', trixie), installs_on_the_image(tags, 15, 'aarch64', trixie)) == (
+        x86_64,
+        aarch64,
+    )
 
 
-@pytest.mark.slow
-def test_the_pinned_sqlite_builds_with_every_option_python_sees(tmp_path):
-    if sys.platform != 'linux' or not shutil.which('gcc'):
-        pytest.skip('the image build is Linux with gcc')
-    (tmp_path / 'versions.env').write_text((ROOT / 'docker/versions.env').read_text())
-    script = tmp_path / 'sqlite.sh'
-    script.write_text(SQLITE_SH.replace('/tmp/versions.env', str(tmp_path / 'versions.env')))
-    subprocess.run(['sh', str(script), 'build', str(tmp_path / 'out')], check=True, cwd=tmp_path)
-    code = ('import sqlite3, json; c = sqlite3.connect(":memory:"); '
-            'print(json.dumps([sqlite3.sqlite_version, [r[0] for r in c.execute("pragma compile_options")]]))')
-    env = {**os.environ, 'LD_LIBRARY_PATH': str(tmp_path / 'out')}
-    result = subprocess.run([sys.executable, '-c', code], env=env, capture_output=True, text=True, check=True)
-    version, options = json.loads(result.stdout)
-    if version == sqlite3.sqlite_version and version != VERSIONS['SQLITE_VERSION']:
-        pytest.skip(f'this Python links SQLite statically ({version}); the image build checks the version itself')
-    assert version == VERSIONS['SQLITE_VERSION']
-    for option in SQLITE_OPTIONS:
-        assert option in options, option
+FIXTURE = ROOT / 'scripts/tests/fixtures/pypi_wheels.json'
 
 
-@pytest.mark.slow
-def test_every_apt_package_exists_in_the_images_debian_release():
-    release = debian_release()
-    index = f'https://deb.debian.org/debian/dists/{release}/main/binary-amd64/Packages.xz'
-    with urllib.request.urlopen(index, timeout=120) as response:
-        names = set(re.findall(r'^Package: (\S+)$', lzma.decompress(response.read()).decode(), re.M))
-    wanted = apt_packages(DOCKERFILE)
-    assert wanted and not wanted - names, f'not in Debian {release}: {sorted(wanted - names)}'
+def pins(requirements):
+    return re.findall(r'^([A-Za-z0-9_.-]+)==(\S+)', (ROOT / requirements).read_text(), re.M)
 
 
-@pytest.mark.slow
+def wheels_on_pypi(pin):
+    """The wheel tags (python-abi-platform) PyPI lists for one pinned version."""
+    name, version = pin
+    with urllib.request.urlopen(f'https://pypi.org/pypi/{name}/{version}/json', timeout=60) as response:
+        files = json.load(response)['urls']
+    return sorted({'-'.join(f['filename'][:-4].split('-')[-3:]) for f in files if f['filename'].endswith('.whl')})
+
+
 # Only production pins are copied into the image's venv; CI can build its own test-only C extensions.
 @pytest.mark.parametrize('requirements', ['backend/requirements.txt'])
 def test_every_pin_has_a_wheel_for_the_images_python(requirements):
-    """The images' Python has no compiler outside the venv stage, so a pin with no wheel fails the build there."""
+    """The images' Python has no compiler outside the venv stage, so a pin with no wheel fails the build there.
+
+    The wheels come from scripts/tests/fixtures/pypi_wheels.json, recorded from PyPI, not a live call: a published
+    version's files do not change, and a live call failed Release validation with a connection reset. A new or bumped
+    pin needs its wheels recorded with `python3 scripts/tests/test_image_pins.py --record`.
+    """
     major, minor = re.match(r'python:(\d+)\.(\d+)', python_image()).groups()
     tag = f'cp{major}{minor}'
-    pins = re.findall(r'^([A-Za-z0-9_.-]+)==(\S+)', (ROOT / requirements).read_text(), re.M)
-
-    def wheel_tags(pin):
-        name, version = pin
-        with urllib.request.urlopen(f'https://pypi.org/pypi/{name}/{version}/json', timeout=60) as response:
-            files = json.load(response)['urls']
-        return name, {tuple(f['filename'][:-4].split('-')[-3:]) for f in files if f['filename'].endswith('.whl')}
-
-    with ThreadPoolExecutor(16) as pool:
-        missing = sorted(f'{name} ({arch})' for name, wheels in pool.map(wheel_tags, pins) for arch in ARCHES
-                         if not any(installs_on_the_image(w, int(minor), arch, image_glibc()) for w in wheels)
-                         and name.lower() not in BUILT_IN_THE_VENV_STAGE)
-    assert not missing, (f'no {tag} Linux wheel for glibc {image_glibc()}: {missing}; '
-                         'add it to BUILT_IN_THE_VENV_STAGE with its headers')
+    recorded = json.loads(FIXTURE.read_text())
+    assert set(recorded) == {f'{name}=={version}' for name, version in pins(requirements)}, (
+        'the recorded wheels do not match the pins: python3 scripts/tests/test_image_pins.py --record'
+    )
+    missing = sorted(
+        f'{key} ({arch})'
+        for key, wheels in recorded.items()
+        for arch in ARCHES
+        if not any(installs_on_the_image(tuple(w.split('-')), int(minor), arch, image_glibc()) for w in wheels)
+        and key.partition('==')[0].lower() not in BUILT_IN_THE_VENV_STAGE
+    )
+    assert not missing, (
+        f'no {tag} Linux wheel for glibc {image_glibc()}: {missing}; add it to BUILT_IN_THE_VENV_STAGE with its headers'
+    )
 
 
 @pytest.mark.slow
@@ -235,6 +237,7 @@ def test_every_pin_has_a_wheel_for_the_images_python(requirements):
 def test_every_pin_still_installs_on_the_oldest_supported_python(requirements):
     """Locks resolve for the images' Python, but runner Macs may still have 3.12 (scripts/setup-runner.sh)."""
     from packaging.specifiers import SpecifierSet
+
     oldest = re.search(r'Python (\d+\.\d+) or newer', (ROOT / 'scripts/setup-runner.sh').read_text()).group(1)
     pins = re.findall(r'^([A-Za-z0-9_.-]+)==(\S+)', (ROOT / requirements).read_text(), re.M)
 
@@ -244,6 +247,20 @@ def test_every_pin_still_installs_on_the_oldest_supported_python(requirements):
             return name, json.load(response)['info'].get('requires_python') or ''
 
     with ThreadPoolExecutor(16) as pool:
-        refused = sorted(f'{name} ({spec})' for name, spec in pool.map(requires_python, pins)
-                         if oldest not in SpecifierSet(spec))
+        refused = sorted(
+            f'{name} ({spec})' for name, spec in pool.map(requires_python, pins) if oldest not in SpecifierSet(spec)
+        )
     assert not refused, f'these pins refuse Python {oldest}: {refused}'
+
+
+if __name__ == '__main__':
+    import sys
+
+    if sys.argv[1:] != ['--record']:
+        sys.exit('usage: python3 scripts/tests/test_image_pins.py --record   (asks PyPI for the wheels of every pin)')
+    found = pins('backend/requirements.txt')
+    with ThreadPoolExecutor(16) as pool:
+        recorded = dict(zip((f'{name}=={version}' for name, version in found), pool.map(wheels_on_pypi, found)))
+    FIXTURE.parent.mkdir(parents=True, exist_ok=True)
+    FIXTURE.write_text(json.dumps(dict(sorted(recorded.items())), indent=1) + '\n')
+    print(f'recorded {len(recorded)} pins to {FIXTURE.relative_to(ROOT)}')

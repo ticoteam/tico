@@ -1,17 +1,20 @@
 """History replay shows a viewer only what the task list, chats, runs and statuses already show them, in time order."""
+
 from datetime import datetime, timedelta, timezone
 from urllib.parse import urlencode
 
 from backend import replay
 from backend.store import H
-from backend.tests.test_api import api, get, post  # noqa: F401
+from backend.tests.helpers.api import get, post  # noqa: F401
 
 
 def test_replay_is_ordered_and_never_shows_a_viewer_more_than_they_can_see(api, monkeypatch):
     started = datetime.now(timezone.utc) - timedelta(minutes=1)
     store = api.app.state.store
     with store.transaction() as c:
-        public = H.task_create(c, "human:cara", "Refresh the Acme pricing page", "", "bot:ops", lint=False, private=False)
+        public = H.task_create(
+            c, "human:cara", "Refresh the Acme pricing page", "", "bot:ops", lint=False, private=False
+        )
         secret = H.task_create(c, "human:ana", "Acme layoffs plan", "", "human:ben", lint=False, private=True)
         mail = H.task_create(c, "human:ana", "Sort the inbox", "", "bot:inbox", lint=False, private=False)
         H.task_update(c, "bot:ops", public["id"], status="doing", note="On it")
@@ -29,7 +32,9 @@ def test_replay_is_ordered_and_never_shows_a_viewer_more_than_they_can_see(api, 
     span = urlencode({"from": started.isoformat(), "to": ended.isoformat()})
 
     def texts(data):
-        return " ".join(str(i.get("text", "")) + " " + str((i.get("task") or {}).get("title", "")) for i in data["items"])
+        return " ".join(
+            str(i.get("text", "")) + " " + str((i.get("task") or {}).get("title", "")) for i in data["items"]
+        )
 
     owner = get(api, "replay?" + span)
     assert all(w in texts(owner) for w in ("Acme layoffs plan", "Owner-only note", "Forward the bank email"))
@@ -39,8 +44,17 @@ def test_replay_is_ordered_and_never_shows_a_viewer_more_than_they_can_see(api, 
     assert stamps == sorted(stamps)
     seen = texts(cara)
     assert "Refresh the Acme pricing page" in seen and "Hello from Cara" in seen and "Hi Cara" in seen
-    assert any(i["kind"] == "task.status" and i["task"]["id"] == public["id"] and i["new"] == "doing" for i in cara["items"])
-    for hidden in ("Acme layoffs", "Owner-only note", "Forward the bank email", "Sort the inbox", "Typo", "owner's mail"):
+    assert any(
+        i["kind"] == "task.status" and i["task"]["id"] == public["id"] and i["new"] == "doing" for i in cara["items"]
+    )
+    for hidden in (
+        "Acme layoffs",
+        "Owner-only note",
+        "Forward the bank email",
+        "Sort the inbox",
+        "Typo",
+        "owner's mail",
+    ):
         assert hidden not in seen
     assert not any(i.get("bot") == "inbox" or i.get("who") == "bot:inbox" for i in cara["items"])
     assert secret["id"] not in str(cara) and mail["id"] not in str(cara)
@@ -52,11 +66,14 @@ def test_replay_is_ordered_and_never_shows_a_viewer_more_than_they_can_see(api, 
     assert short["truncated"] and short["items"] and all(i["at"] < short["next"] for i in short["items"])
 
 
-
 def test_replay_refuses_a_time_too_far_out_to_convert(api):
-    for start, end in (("0001-01-01T00:00:00+14:00", "0001-01-02T00:00:00+14:00"),
-                       ("9999-12-30T00:00:00-14:00", "9999-12-31T23:59:59-14:00")):
-        r = api.get("/api/v2/replay?" + urlencode({"from": start, "to": end}), headers={"Authorization": "Bearer ana-test"})
+    for start, end in (
+        ("0001-01-01T00:00:00+14:00", "0001-01-02T00:00:00+14:00"),
+        ("9999-12-30T00:00:00-14:00", "9999-12-31T23:59:59-14:00"),
+    ):
+        r = api.get(
+            "/api/v2/replay?" + urlencode({"from": start, "to": end}), headers={"Authorization": "Bearer ana-test"}
+        )
         assert r.status_code == 422, r.text
         assert "out of range" in r.text
 

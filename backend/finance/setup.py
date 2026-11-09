@@ -1,7 +1,9 @@
 """Setting Finance up on an install: the book, the default chart, this fiscal year's monthly periods, the default views
 and the three default budgets, none with an amount until a person sets one (the company usage cap keeps its own pause in
 backend/usage_limits.py). Safe to run again: it fills in what is missing and changes nothing a person set."""
+
 import sqlite3
+from collections.abc import Collection
 from dataclasses import dataclass
 
 from .context import APPROVER_KEY, OWNER_KEY, now
@@ -23,6 +25,7 @@ CHART = (
     ("1100", "Gateway credit", "asset", "prepaid", ""),
     ("1200", "Accounts receivable", "asset", "receivable", ""),
     ("2000", "Accounts payable", "liability", "payable", ""),
+    ("2100", "Accrued expenses", "liability", "accrued", ""),
     ("3000", "Owner's equity", "equity", "", ""),
     ("3900", "Opening balance equity", "equity", "opening", ""),
     ("4000", "Revenue", "income", "", ""),
@@ -31,19 +34,38 @@ CHART = (
     ("5200", "Video production", "expense", "video", "5000"),
     ("6000", "Operating expenses", "expense", "", ""),
     ("6100", "Software", "expense", "software", "6000"),
+    ("6150", "CI", "expense", "ci", "6000"),
     ("6900", "Other expenses", "expense", "other", "6000"),
 )
 AI, VIDEO = "5100", "5200"
-# (name, account code or "" for the catch-all, at-limit action)
-BUDGETS = (("AI services", AI, "decline"), ("Video production", VIDEO, "decline"), ("Other expenses", "", "ask"))
+# Build time on remote test runs and CI (backend/ci_runs.py) posts here against Accrued expenses (2100).
+CI, ACCRUED = "6150", "2100"
+ADDED_SUBTYPES = ("accrued", "ci")  # the accounts CI adds to every book (the rows above)
+
+
+def _free_code(base: str, taken: Collection[str]) -> str:
+    code = int(base)
+    while str(code) in taken:
+        code += 1
+    return str(code)
+
+
+# (name, account code or "" for the catch-all, at-limit action). CI warns and never refuses: its daily share is set by
+# the amount a person gives it, and the permit (ci_runs.permit) is what refuses a builder's run, not this budget.
+BUDGETS = (
+    ("AI services", AI, "decline"),
+    ("Video production", VIDEO, "decline"),
+    ("Other expenses", "", "ask"),
+    ("CI", CI, "warn"),
+)
 
 
 @dataclass(frozen=True)
 class SetupResult:
     book_id: str
     created: bool
-    accounts: dict[str, str]          # code -> id
-    budgets: dict[str, str]           # name -> id
+    accounts: dict[str, str]  # code -> id
+    budgets: dict[str, str]  # name -> id
 
 
 def _actor(owner_id: str) -> str:
@@ -53,8 +75,14 @@ def _actor(owner_id: str) -> str:
     return text if text.startswith(("human:", "bot:")) else "human:" + text
 
 
-def setup(c: sqlite3.Connection, owner_id: str, at: str | None = None, *, base_currency: str = "USD",
-          finance_approver: str = "") -> SetupResult:
+def setup(
+    c: sqlite3.Connection,
+    owner_id: str,
+    at: str | None = None,
+    *,
+    base_currency: str = "USD",
+    finance_approver: str = "",
+) -> SetupResult:
     """Set Finance up for `owner_id` (who owns it when Tico has no owner record). Runs in the caller's transaction."""
     at = at or now()
     by = _actor(owner_id)
@@ -70,9 +98,20 @@ def setup(c: sqlite3.Connection, owner_id: str, at: str | None = None, *, base_c
         SL.set_setting(c, APPROVER_KEY, _actor(finance_approver), by, at)
     accounts = {a.code: a for a in SL.accounts(c, book.id).values()}
     for code, name, kind, subtype, parent in CHART:
+        if subtype in ADDED_SUBTYPES:  # the first free code from the chart's, on a book whose code is another account
+            if any(a.subtype == subtype for a in accounts.values()):
+                continue
+            code = _free_code(code, accounts)
         if code not in accounts:
-            made = Account(id=SL.new_id(), book_id=book.id, code=code, name=name, type=kind, subtype=subtype,
-                           parent_id=accounts[parent].id if parent in accounts else "")
+            made = Account(
+                id=SL.new_id(),
+                book_id=book.id,
+                code=code,
+                name=name,
+                type=kind,
+                subtype=subtype,
+                parent_id=accounts[parent].id if parent in accounts else "",
+            )
             SL.insert_account(c, made, by, at)
             accounts[code] = made
     first = dates.fiscal_bounds(dates.day(at), 12, book.fiscal_year_start)[0]
@@ -81,22 +120,34 @@ def setup(c: sqlite3.Connection, owner_id: str, at: str | None = None, *, base_c
         SL.insert_period(c, book.id, start.isoformat(), dates.month_end(start).isoformat(), by, at)
     SA.seed_defaults(c, by, at)
     for rid, name, words, when, outcome, examples in G.DEFAULTS:
-        SK.seed_rule(c, rule_id=rid, name=name, words=words, when=when, outcome=outcome, examples=examples, by=by,
-                     at=at)
+        SK.seed_rule(
+            c, rule_id=rid, name=name, words=words, when=when, outcome=outcome, examples=examples, by=by, at=at
+        )
     if SA.view_version(c) == 0:
         SA.bump_view(c, "setup", at)
     existing = SB.budgets(c, book.id)
     named = {(b.account_id, b.catch_all): b.id for b in existing.values() if not b.parent_id}
     ids: dict[str, str] = {}
     for name, code, at_limit in BUDGETS:
-        account_id = accounts[code].id if code else ""
+        # CI's account is the one of subtype ci: its code may be another account's on an older book.
+        account = next((a for a in accounts.values() if a.subtype == "ci"), None) if code == CI else accounts.get(code)
+        account_id = account.id if code and account else ""
         key = (account_id, not code)
         if key in named:
             ids[name] = named[key]
             continue
-        b = B.Budget(id=SL.new_id(), book_id=book.id, name=name, period="month", account_id=account_id,
-                     catch_all=not code, owner=tico.owner_person(c, by), warn_pct=80, at_limit=at_limit,
-                     created_at=at)
+        b = B.Budget(
+            id=SL.new_id(),
+            book_id=book.id,
+            name=name,
+            period="month",
+            account_id=account_id,
+            catch_all=not code,
+            owner=tico.owner_person(c, by),
+            warn_pct=80,
+            at_limit=at_limit,
+            created_at=at,
+        )
         SB.insert_budget(c, b, by, at)
         ids[name] = b.id
     for old in existing.values():
@@ -104,8 +155,7 @@ def setup(c: sqlite3.Connection, owner_id: str, at: str | None = None, *, base_c
             _unseed(c, old)
     if created:
         tico.audit(c, by, "finance.setup", book.id, {"accounts": len(accounts), "budgets": sorted(ids)})
-    return SetupResult(book_id=book.id, created=created, accounts={k: v.id for k, v in accounts.items()},
-                       budgets=ids)
+    return SetupResult(book_id=book.id, created=created, accounts={k: v.id for k, v in accounts.items()}, budgets=ids)
 
 
 def _unseed(c: sqlite3.Connection, b: B.Budget) -> None:

@@ -4,32 +4,44 @@ GitHub refusing a reviewer's review (403), GitHub unreadable at a review move (s
 dispatch refused: none needs a decision, only someone who can fix access or the service. Tico files one task for it to
 the company's DevOps bot, and to the type's manager (Head of Engineering on Dev tickets) only when there is no active
 DevOps bot. One open task per kind and place: the same blocker again reuses it."""
+
 import hashlib
 
 from . import hubdb as H
+from . import bot_settings as BS
 
 # The DevOps bot template (templates/); a team that renamed the bot still built it from that template.
 TEMPLATE = "devops"
+# The new org's DevOps bot (templates/catalog/infrastructure-owner) comes after the old ones.
+NEW_TEMPLATE = "infrastructure-owner"
 SLUGS = ("devops-engineer", "devops")
 GONE = ("paused", "planned", "archived", "quarantined")
 
 
+def _built(c, template):
+    """The ids of the bots made from `template`, in id order."""
+    if not H._has_table(c, "bot_config"):
+        return []
+    return [
+        r[0] for r in c.execute(f"SELECT bot FROM bot_config bc {BS.JOIN} WHERE s.template=? ORDER BY bot", (template,))
+    ]
+
+
 def devops(c):
-    """The slug of the active DevOps bot, or None."""
-    built = [r[0] for r in c.execute("SELECT bot FROM bot_config WHERE json_extract(config_json,'$.template')=? "
-                                     "ORDER BY bot", (TEMPLATE,))] if H._has_table(c, "bot_config") else []
-    for slug in (*built, *SLUGS):
-        row = H.bot(c, slug)
+    """The id of the active DevOps bot, or None."""
+    for ident in (*_built(c, TEMPLATE), *SLUGS, *_built(c, NEW_TEMPLATE)):
+        row = H.resolve_bot(c, ident)
         if row and row.get("state") not in GONE:
-            return slug
+            return row["id"]
     return None
 
 
 def ticket_of_pr(c, repository, number):
     """The open task a pull request is linked on, or None: whose type manager hears when there is no DevOps."""
     url = f"https://github.com/{repository}/pull/{int(number)}".lower()
-    for (task_id,) in c.execute("SELECT task_id FROM task_links WHERE kind='pr' AND lower(url)=? ORDER BY created DESC",
-                                (url,)):
+    for (task_id,) in c.execute(
+        "SELECT task_id FROM task_links WHERE kind='pr' AND lower(url)=? ORDER BY created_at DESC", (url,)
+    ):
         row = H.task(c, task_id)
         if row and row["status"] in H.ACTIVE_STATUSES:
             return row
@@ -46,26 +58,41 @@ def route(c, key, title, body, about=None):
     hidden = bool(about) and H.task_private(c, about)
     if hidden:
         key = "private:" + hashlib.sha256(key.encode()).hexdigest()[:24]
-    previous = H._one(c, "SELECT detail_json FROM events WHERE action='blocker.routed' AND target=? "
-                         "ORDER BY rowid DESC LIMIT 1", (key,))
-    open_task = H.task(c, (H._json(previous["detail_json"], {}) or {}).get("task")) if previous else None
+    previous = H._one(
+        c, "SELECT detail FROM events WHERE action='blocker.routed' AND target=? ORDER BY rowid DESC LIMIT 1", (key,)
+    )
+    open_task = H.task(c, (H._json(previous["detail"], {}) or {}).get("task")) if previous else None
     if open_task and open_task["status"] in H.ACTIVE_STATUSES:
         return open_task
-    slug = devops(c)
-    owner = H.bot_actor(slug) if slug else None
+    devops_id = devops(c)
+    owner = H.bot_actor(devops_id) if devops_id else None
     if not owner and about:
         manager = H.type_manager(c, about)
         owner = H.bot_actor(manager) if manager else None
     if not owner:
         return None
-    stopped = ("" if not about else "\n\nIt stopped a private task." if hidden else
-               f"\n\nIt stopped task {about['id']} ({about['title'][:120]}).")
-    text = body + stopped + \
-        "\n\nThis is a permission or outage blocker, not a decision: fix the access or the service, then mark this done."
-    if not slug:
+    stopped = (
+        ""
+        if not about
+        else "\n\nIt stopped a private task."
+        if hidden
+        else f"\n\nIt stopped task {about['id']} ({about['title'][:120]})."
+    )
+    text = (
+        body
+        + stopped
+        + "\n\nThis is a permission or outage blocker, not a decision: fix the access or the service, then mark this done."
+    )
+    if not devops_id:
         text += " There is no active DevOps bot, so it came to the type's manager."
-    made = H.task_create(c, H.KEEPER, title[:150], text, owner, deduplicate=False, lint=False,
-                         private=True if hidden else None)
-    H.event(c, H.KEEPER, "blocker.routed", key, {"task": made["id"], "owner": owner,
-                                                 **({"about": about["id"]} if about and not hidden else {})})
+    made = H.task_create(
+        c, H.KEEPER, title[:150], text, owner, deduplicate=False, lint=False, private=True if hidden else None
+    )
+    H.event(
+        c,
+        H.KEEPER,
+        "blocker.routed",
+        key,
+        {"task": made["id"], "owner": owner, **({"about": about["id"]} if about and not hidden else {})},
+    )
     return made

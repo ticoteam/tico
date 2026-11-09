@@ -3,7 +3,7 @@
 The first time the owner opens a new environment, the app is a wizard at `#/welcome`: say what the team is building
 and confirm its first bets (a strategy draft), name the team, say what it does, build its team chart group by group, add a computer (a Linux Docker runner or a Mac), optionally connect your own
 external agent, and press **Create my team**. Every team gets the assistant, BotOps, the Librarian and the Strategy Bot, and none of them can be archived.
-**Setup picks the chart, not the bots:** those built-ins are the only bots on day one, and they work at once. Every other role
+**Setup picks the chart, not the bots:** the built-ins and any seat a company file marks `live` are the bots on day one, and they work at once. Every other role
 you picked is laid out as a **Recruiting** seat with its job description and reporting line: no bot, repository, computer slot
 or BotOps task until someone picks a bot for it ([A bot's stages](#a-bots-stages)).
 
@@ -31,7 +31,11 @@ If you already chose a team on the public setup page, the first screen also acce
 Choose the file, check the preview (the built-ins that work from day one, then every other role marked **Recruiting**),
 then press **Use this team**. Tico lays out exactly that chart: each role is a Recruiting seat with the file's title,
 a job description from its template card (what it owns, and the file's reason for the role) and its reporting line,
-a role under a role included (`seat:<id>`). Only the built-ins become bots, once each. Import retries do not duplicate
+a role under a role included (`seat:<id>`). Only the built-ins and the file's `live` seats become bots, once each: a live bot is made from its
+template, fills its seat and reports where the seat's line ends. The Finance Owner (the bookkeeper) keeps a seat on its line in the team
+its file gives (Corporate in the default structure), filled by the built-in bot itself, so a Corporate Team Manager hired later takes it
+along. Then the factory pipelines are set up once, best effort: a failure is recorded (`onboarding.pipelines_failed`), rolled back,
+and the team stays. Import retries do not duplicate
 a seat, and an import cannot replace a company whose setup is complete. A file named at install
 (`TICO_COMPANY_FILE_B64` or `TICO_COMPANY_FILE`) is imported when the server starts; if it cannot be read or applied,
 the server still starts, **no sample team is set up in its place**, and the owner sees why on the welcome page and on
@@ -45,12 +49,12 @@ from the file, or the group that already has it. Without one, a role goes in its
 
 **Unreleased:** A file from the setup page's Strategy step (format 0.3, with a `strategy` block) also brings the strategy
 it drafted, for the owner to confirm; nothing is published. The preview lists it under `strategy`. The import writes the
-[strategy draft](strategy.md#setup): the summary and vision, and the four sections marked
+[strategy draft](strategy.md#setup): the summary and vision, and the file's four sections (Who we serve, What we sell, What we know that others don't, What we won't do) marked
 `_Unconfirmed: drafted from the company file._` (only where empty), with the file's listening requests as a
 **Watching** section; each bet `proposed`, its wrong-if a text test due on the file's check date (90 days out when it
 has none); and each goal on the bet it came from. With a market not defined yet it adds the
 [market by spend](librarian.md#market-spend): the definition and its segments, each sized segment's size `proposed`
-on its own evidence (a segment with none stays unsized), the company in its `ours` segment, and each player as a company
+on its own evidence (a segment with none stays unsized), the company in each of its `ours` segments, and each player as a company
 on the market graph with its site a watched page. The posts the page found are filed as new market insights, so the
 Librarian's next curate sees them. A part the app refuses (a name the market graph already has, say) is left out and
 named on the setup record (`company_import.strategy.skipped`). A format 0.2 file imports exactly as before.
@@ -64,16 +68,16 @@ external agents and custom rules are refused with an explanation. The file's goa
 [Goals](goals-and-kpis.md): the owner's goals, goals the file gives a built-in bot such as the Assistant (Goals keeps the
 built-ins out of its tree) and goals of roles that are seats (a seat holds no work) become company goals, each with the
 goal's measure as a KPI carrying the file's baseline and target (the file holds no readings, so a new KPI starts with
-no history). A file holds up to 325 goals: the company's 3, 2 for each department and 1 for each of up to 300 roles,
+no history). A file holds up to 329 goals: the company's 3, 2 for each department and 1 for each of up to 300 roles,
 which covers every goal the setup page suggests; a file with more is refused before anything is created. First jobs,
 routines, model choices and tool connections are saved for later setup and listed in the preview; the team uses its
 currently configured AI providers.
 
 The implementation is `backend/onboarding.py` (the record, creating the team), `ui/setup-strategy.js` (What are you
 building and Your bets, over `backend/strategy_setup.py`), `backend/recruit.py` and `backend/recruit_rank.py`
-(the team builder's templates and suggestions), `ui/org-builder.js` (the team chart screen), `ui/first-run.js` (who reports to whom, the review
+(the team builder's templates and suggestions), `ui/org-builder.ts` (the team chart screen), `ui/first-run.ts` (who reports to whom, the review
 and the screen after Create), Tico HQ's `POST /v1/recruit` ([its API](tico-hq.md), for HQ's suggestions), `clients/catalog.py` (turning a template into a repository),
-`runner/catalog_job.py` (the bots the computer sets up itself, run by the runner as `python -m runner catalog`) and `templates/catalog/` (the templates). The quick start in the
+`runner_support/catalog_job.py` (the bots the computer sets up itself, run by the runner as `python -m runner_support catalog`) and `templates/catalog/` (the templates). The quick start in the
 [README](../README.md) is the same flow with the commands in it.
 
 ## The screens
@@ -83,8 +87,8 @@ Every **Next** saves the whole draft with `PUT /api/v2/setup`, so a closed tab l
 | Screen | What it asks | What it stores |
 |---|---|---|
 | AI providers | Only while no provider is chosen yet; otherwise the wizard starts at What are you building. Choose [how bots get their models](ai-gateway.md#choose-how-bots-get-their-models). To choose later, select **Your company's plans or API keys**, untick its providers and press **Skip for now** | The team's providers, as Settings > Models saves them |
-| What are you building | **Website** (optional) and **What you're building**: the team's one line, or a new idea in a few sentences. **Next** with either starts the strategy research (`POST /api/v2/strategy/draft-from`); an address that is not a public website keeps you on the step with the reason. To retry interrupted research, see [Recover from interrupted strategy research](#recover-from-interrupted-strategy-research) | `names.website` and `answers.building`. The website is stored as an `https://` address (a bare `acme.example` gets the scheme; anything that is not a public web address is refused with 422); finishing setup files the Librarian's market task from it |
-| Your bets | The research's bets to **Keep**, **Edit** or **Strike** (Strike retires one), **Add** for your own, and **What we won't do**; the draft (Who we serve, What we sell, kept bets, won't do) fills in beside them, below them on a phone. While the research runs the step polls `GET /api/v2/strategy/draft-from/latest`. Without a model provider, or when the research failed, it is the same fields as a plain form; when it gave up because the draft changed meanwhile, it lists what it found, each with **Add**. **Next** waits for one active bet with Rules out and Wrong if, and a line under What we won't do ([Strategy](strategy.md#setup)) | The strategy **draft** and its bets (`/api/v2/strategy`). Nothing is published |
+| What are you building | **Website** (optional) and **What you're building**: the team's one line, or a new idea in a few sentences. **Next** with either starts the strategy research (`POST /api/v2/strategy/draft-from`), which drafts the sections the site supports, *How we know they want it* and *Why now* included when the pages show it, each marked unconfirmed; an address that is not a public website keeps you on the step with the reason. To retry interrupted research, see [Recover from interrupted strategy research](#recover-from-interrupted-strategy-research) | `names.website` and `answers.building`. The website is stored as an `https://` address (a bare `acme.example` gets the scheme; anything that is not a public web address is refused with 422); finishing setup files the Librarian's market task from it |
+| Your bets | The research's bets to **Keep**, **Edit** or **Strike** (Strike retires one), **Add** for your own, and **What we won't do**; the draft (Who we serve, What we sell, kept bets, won't do) fills in beside them, below them on a phone. While the research runs the step polls `GET /api/v2/strategy/draft-from/latest`. Without a model provider, or when the research failed, it is the same fields as a plain form; when it gave up because the draft changed meanwhile, it lists what it found, each with **Add**. **Next** waits for one active bet and a line under What we won't do ([Strategy](strategy.md#setup)); Rules out and Wrong if are optional | The strategy **draft** and its bets (`/api/v2/strategy`). Nothing is published |
 | Names | **Team/Company name**, app name, and optionally your own name | `names`. From the moment they are saved they override `TICO_TEAM_NAME` (the old `TICO_COMPANY_NAME` remains an alias) and `TICO_APP_NAME` everywhere, including in the template cards. **Your name** (`names.owner_name`) is saved on the owner's roster entry, so the team chart and the sidebar show it instead of the address; it is prefilled from the roster, or from the display name the sign-in proxy vouches for (a `name` claim from Cloudflare Access or the AWS load balancer), and left blank it changes nothing. **Team email domain** (`names.team_domain`) is asked only when the owner signs in with public email such as gmail.com and no team address is on the roster; it is optional, and lets members add teammates at that domain (it does not let anyone sign in). The wizard does not ask for an assistant name: the tab is always called Assistant, and `names.assistant_name` is `TICO_ASSISTANT_NAME`, which is `Assistant` unless set (a name equal to the team's reads as `Assistant`) |
 | About the team | What you do (prefilled from What you're building), who you sell to, whether software is your product, and team size | `answers`. Whether software is the product decides which groups start picked, and the description helps the suggestions. It is also written into every bot's `knowledge/company.md` |
 | Your team chart | The groups, then one question per group and the bots to recruit into it, with the chart growing beside it, and the message bot switch under the finished chart ([The team builder](#the-team-builder)) | `answers.departments`, `answers.briefings` and `selected`: for each chosen slug, its template, display name, the `AGENT.md` text and `reports_to` (a human `human:<id>` or a bot slug). Nothing is created yet |
@@ -129,7 +133,7 @@ chart: there is no fixed team any more.
    **Back** and **Skip group** are always there. Each group answered or skipped saves the draft.
 3. **The chart.** The owner at the top (CEO), each group hanging off one line and its bots under it, the head first. Each bot wears
    the blob avatar it will have, with its template's icon. A group not yet reached is dashed; a skipped one says so. A bot animates
-   in once, when it is first checked. Built-in bots and the message bot are not on the chart.
+   in once, when it is first checked. The built-in bots sit in a Built-in group under the chart, folded until opened; the message bot is not on the chart.
 4. **Finish.** The finished chart, "5 groups · 11 bots". Click a bot to rename it, point it at another human or bot, or remove it;
    click a group to go back to it. Below it, **Message bots** has one switch per message bot card, off by default;
    switched on, it asks whose mailbox the bot reads. **Next** continues to the computer.
@@ -189,6 +193,11 @@ second). It reaches no computer.
   with the card's summary as its description, `bot-<slug>` as its repository, the card's runtime, model and reasoning effort, the human
   it reports to, and the owner as its owner. A model a deployment does not offer falls back to the product default. They are
   Active on day one.
+- **A new company's first Create ends like an import** (`company_import.finish_new_company`): the live seats' bots, then the default
+  factories and their nine pipelines, once, best effort, and only while the company has no task type beyond the ones every server
+  starts with. **With nothing picked**, the chart is the default one: the chart formula's own
+  (`backend/company_file/chart_formula.py`, no segment or bet, the default channels), the chart the public setup page's file
+  gives a company that picked nothing, so it starts with the same live bots and seats.
 - **Everything else picked is a Recruiting seat** (`seats` on the record: `{pick: seat id}`), with the reviewed name as its
   title, a job description from the card and the reviewed instructions, the reporting line picked (a pick under another pick
   reports to that seat) and the pick's group. No bot, repository, computer slot or BotOps task exists for it. The bullets
@@ -199,18 +208,18 @@ second). It reaches no computer.
   `planned`; when the owner's computer enrolls, the bots are placed on it and activated. Until then the after-Create screen says
   "Waiting for a computer" or "Add an AI provider".
 - Each bot goes in the **group** its template belongs to (Marketing, Product, Engineering ...); the group is made if the team has none yet,
-  and one it already has by that name is reused ([the team chart](org-chart.md#groups)). Built-in bots stay outside groups. A group
-  made here that clearly serves one of the strategy draft's bets (the org builder's `bet`) stores it as its `bet_id`.
+  and one it already has by that name is reused ([the team chart](org-chart.md#groups)). Built-in bots stay in the Built-in group, which Tico keeps; the Finance Owner
+  (the bookkeeper) goes in the team its file gives. A group made here that clearly serves one of the strategy draft's bets (the org builder's `bet`) stores it as its `bet_id`.
 - With a website (`names.website`), the Librarian's "Set up the market map" is filed now, once, from the website and `building`,
   unless the owner already filed it from the Market page ([An empty Market page](#an-empty-market-page)).
 - The template and the reviewed instructions are stored in the bot's server-side config, with the **template version** (the release whose
   templates it came from: `template_version`).
-- A **starter** template (a card with a `first_routine` and an `onboarding` conversation) is created whole and parked:
+- A **starter** template (a card with a `first_routine` and an `onboarding` thread) is created whole and parked:
   - `onboarding_state: needs_setup`, exposed on `/api/v2/bots`, `/api/v2/bots/{bot}` and `/api/v2/org`;
   - its first routine is seeded off (the template declares `enabled: false`) and goes on when its setup starts (**Set up**, a first message from someone who manages it, or go-live), so nobody approves it separately;
   - **no task is filed for BotOps**: the computer materializes its repository from its template as soon as the bot is placed on it
     (`materialize: true` in its config, which only the wizard writes), and the bot is activated as soon as it is placed;
-  - the scheduler skips it, and only a human's chat message is claimed for it (a task message, a Slack route, a bot's request or a routine
+  - the scheduler skips it, and only a human's message is claimed for it (a task message, a Slack route, a bot's request or a routine
     waits), so nothing runs until it is set up;
   - it does not count toward a member's bot limit while parked.
   The built-ins and every other template are not parked.
@@ -239,11 +248,11 @@ Every bot goes **Recruiting -> Onboarding -> Active** (`backend/lifecycle.py`).
   repeated key, or an identical request sent at the same time, shares that one seat and ticket. A first task whose title
   matches an open task is refused (`409`, `duplicate`) before Tico hears of it. The first task waits on the seat as a task
   its person owns; `GET /api/v2/seats/{id}/request` shows it to anyone who may read it. While a request is filing, being
-  cancelled, or open, the seat cannot be closed, filled, hired, or renamed, moved or given another team (`409`).
-  **Cancel request** (`POST /api/v2/seats/{id}/cancel-request`) marks the seat `cancelling`, tells Tico on the same
+  canceled, or open, the seat cannot be closed, filled, hired, or renamed, moved or given another team (`409`).
+  **Cancel request** (`POST /api/v2/seats/{id}/cancel-request`) marks the seat `canceling`, tells Tico on the same
   ticket, closes the seat and lets go of the first task: it is declined if the person may update it, else it stays with
   its owner. If Tico cannot be reached, or the last step fails, the seat goes back to `requested` and can be tried again.
-  A request a stopped process left `filing` or `cancelling` is recovered by the next request or cancel on its seat once it
+  A request a stopped process left `filing` or `canceling` is recovered by the next request or cancel on its seat once it
   is older than two minutes, and every such request is recovered when the store starts. A request for a seat in a team
   needs the right to add to that team (`403`), as an add does.
 - **Claude Code and Codex** are added, not requested: `POST /api/v2/cloud-agents/{claude|codex}/add` with `{seat_id}`
@@ -251,15 +260,20 @@ Every bot goes **Recruiting -> Onboarding -> Active** (`backend/lifecycle.py`).
   seat, so it lands exactly as a hire of that template does: in Onboarding, in the seat's place on the chart, with its
   repository built by its computer (a starter) or by BotOps (any other template). It joins the seat's team and runs under
   its own bot identity, with no personal token issued. An add with `{team, reports_to}` and no seat first opens a
-  *Software engineer* seat there and names the bot for the agent. A seat no template fits is refused (`409`) and leaves
+  *Software engineer* seat there and names the bot for the agent. A seat under a seat that is still open is filled the same
+  way, the agent reporting to the person or bot above until that seat is filled. A seat no template fits is refused (`409`) and leaves
   nothing behind: a bot needs a role to build its repository (`backend/cloud_agents.py`).
 - **Onboarding** replaces *Set up*. A starter is created Onboarding: the team chart shows a small amber gear (hover it for
   *Onboarding*) and its page an **Onboarding** pill. **Start onboarding** sends it "Let's set you up." as the person, in their
-  own chat with it (the **Chat** tab); any first message from a person does the same. It learns only: it answers and asks in
-  chat, reads, connects tools and talks with its manager. It takes no task, files none, runs no routine (timed or on an event),
+  own DM with it (the **Chat** tab); any first message from a person does the same. Every bot interviews top-down
+  (runner-rs `SETUP_TURN`): the company (its market, target segments and who it loses to), then its goals, then its own job
+  from its playbook. It reads what Tico knows first and never asks what that says, adds what it learns about the company to
+  the shared doc `onboarding/interview.md` so the next bot only asks whether anything changed, and suggests the person open
+  the mic and just talk; the Onboarding pill carries the same tip. It learns only: it answers and asks in
+  its thread, reads, connects tools and talks with its manager. It takes no task, files none, runs no routine (timed or on an event),
   comments on, asks about or attaches to no task (one it held before included), asks no approval, sends no email and posts
   nothing on Slack, and sends messages, answers and notes only to its manager, the people above it and a person it answers in
-  chat. A run that cannot confirm its stage with Tico sends no email or Slack post either. Each attempt is refused with a
+  a thread. A run that cannot confirm its stage with Tico sends no email or Slack post either. Each attempt is refused with a
   plain reason. Any number of bots may be onboarding at once.
 - When it has learned enough, the bot says so with `hub bot ready --summary "..."` (MCP `hub_bot_ready`); its page shows the
   summary. Only a person above it on the org chart (its manager, their managers, the owner) sees **Mark onboarding complete**
@@ -284,7 +298,7 @@ whole change. Members can add seats under themselves or someone below them; only
   *Waiting for a computer* once and offers **Add a computer** (Settings > Computers); with a computer but no AI provider,
   **Add an AI provider**; otherwise **Open Tasks** at the bottom. **Show me around** starts the tour.
 - The Recruiting seats are on the sidebar's team chart, each marked **Recruiting** where its reporting line puts it.
-- Each bot, in the team chart's groups and order (bots outside any group first, the built-ins last), with one status:
+- Each bot, in the team chart's groups and order (bots outside any group first, the Built-in group last), with one status:
   *Waiting* while the team waits on a computer or provider, *Setting up* until a starter's repository exists, then its
   **Set up** button; *Active*; or a link to the setup task BotOps is working.
 - **AI providers**: the first link opens Settings > Models so bots can start working.
@@ -295,7 +309,7 @@ whole change. Members can add seats under themselves or someone below them; only
   until you add a domain and sign-in; adding an admin still saves their roster entry.
 - **Who owns each bot**: add a human as an owner of any bot (`POST /api/v2/bots/{bot}/co-owners`; [permissions](permissions.md#bot-owners)).
 - **Tools**: links to Credentials and Tools, where credentials go. Credentials
-  are entered in those fields, **never in a chat with a bot**; the BotOps playbook says the same, and a credential pasted into a chat is treated as
+  are entered in those fields, **never in a message to a bot**; the BotOps playbook says the same, and a credential pasted into a message is treated as
   leaked.
 
 ## After the wizard
@@ -339,7 +353,7 @@ The last question's **Start research** calls `POST /api/v2/librarian/setup/marke
 `playbooks/market-setup.md` researches the answers and writes the market pages and graph ([librarian.md](librarian.md)). The page
 then shows "The Librarian is researching your market. This usually takes 5–10 minutes." with a link to the task, until the market
 has content (at least two minutes, at most thirty), kept in the browser, polling the market every 30 seconds. Then the normal
-Market page is drawn. The code is `ui/market-page.js`. When setup was given the team's website (`names.website`), finishing setup files "Set up the
+Market page is drawn. The code is `ui/market-page.ts`. When setup was given the team's website (`names.website`), finishing setup files "Set up the
 market map" from it and the market page opens on the researching notice; the Librarian reads that website from `hub strategy show`
 when the task has none, and the four questions stay for a team that gave no website.
 
@@ -356,8 +370,8 @@ the caller's own choices. Runners and bots get `403`.
 | `POST /api/v2/setup/getting-started/state` | Any human, for themselves |
 | `POST /api/v2/setup/getting-started/market` | Owner |
 
-The code is `backend/getting_started.py` and `ui/getting-started.js`. Tests: `backend/tests/test_getting_started.py`
-and `ui/tests/getting-started.cjs`.
+The code is `backend/getting_started.py` and `ui/getting-started.ts`. Tests: `backend/tests/test_getting_started.py`
+and `ui/tests/getting-started.cts`.
 
 ## What finishing creates
 
@@ -392,9 +406,9 @@ read the task, `hub bot create --template <template> --name "<Display>"` (Tico p
 instructions into `AGENT.md` (or tailor the template's to the answers), run `hub bot check <slug>`
 and fix every failure, then commit the result.
 
-For a human's authorized chat request, BotOps finishes the work: it places the bot on a computer,
+For a human's authorized request, BotOps finishes the work: it places the bot on a computer,
 turns it on, starts Setup, opens [Credential cards](credential-vault.md#credentials-asked-for-in-the-chat)
-for missing values, runs one small test and reports the result in chat. It stores and grants
+for missing values, runs one small test and reports the result in the thread. It stores and grants
 Credentials with the requester's rights; values stay out of messages.
 
 An unattended setup task prepares and checks the repository, then reports readiness, the repository
@@ -424,6 +438,12 @@ and a computer is enrolled). Its routines start paused: the server arms the dail
 weekly goals review (the Monday note) is started too, since every install starts at **Suggests actions**; choosing
 **Passive** pauses it ([Your Strategy Bot](strategy-bot.md)).
 
+The Brand Owner (`brand`) keeps the brand book and the Brand card. It is built the same way (a required, bootstrap card; a
+team from before it existed gets it on update once a model is chosen and a computer is enrolled) and sits outside the chart
+like the others. A team that already hired a bot under the slug `brand` (a Brand Manager)
+keeps that bot as it is and gets no second one. Its monthly brand audit starts off and goes on, once, when it runs
+`hub bot setup-done` at the end of its setup; one a person turned off stays off.
+
 A team that set the assistant aside before it was built in (v0.2.1 to v0.2.9 let the wizard skip it) keeps it archived
 on update: nothing restores it automatically. Its owner sees "The Assistant is off" on the Assistant page and at the top of
 Settings > General, and one click on **Turn on** brings the same bot back with its history (or adds it from its
@@ -445,7 +465,7 @@ Only an active bot is given work. Finishing setup activates the assistant and Bo
 as a computer hosts them (and again when a computer is enrolled later), because BotOps cannot be
 handed setup tasks while it is planned. A starter is activated the same way once placed, and is still parked: it answers a human and
 nothing else until it is set up. A ready bot has an **Activate** action when its repository is
-reported present. BotOps can activate it for an authorized human chat request; an unattended
+reported present. BotOps can activate it for an authorized human request; an unattended
 setup task reports readiness for the owner to act.
 
 Automatic placement when a Computer enrolls skips only archived teammates. Paused or draining teammates
@@ -461,12 +481,12 @@ Applicants page ([Recruiting a seat](#recruiting-a-seat)).
 **Settings → Bots → Add bot** (Tico Recruit) starts with a role title and job description, then offers **Post a job**
 (the same Recruiting seat), a template, an existing agent or a bot from scratch. The optional tools and
 reviewer answers carry into the selected template's instructions. Choosing a template there uses `POST /api/v2/bots`
-and creates a planned bot that waits for its setup conversation. External services link to their own setup instructions.
+and creates a planned bot that waits for its setup thread. External services link to their own setup instructions.
 
 ### Recruiting a seat
 
 Open a seat from its row on the team chart (`#/seat/<id>`) or right after Post a job makes it.
-`backend/recruiting.py` does the work; the pages are `ui/app/recruit.js`.
+`backend/recruiting.py` does the work; the pages are `ui/app/recruit.ts`.
 
 - **The job description.** Leaving the title asks `POST /api/v2/seats/draft` (`{title, team, reports_to}`), which answers
   and stores nothing: the catalog template that is the job the title names (its name shares a word of the work with
@@ -477,18 +497,27 @@ Open a seat from its row on the team chart (`#/seat/<id>`) or right after Post a
   "model"`), or nothing comes back without a model (`source: "none"`). **Redraft** (`redraft: true`) also asks the team's model for one rewrite, given five seconds; if
   there is no model or it fails, the composed text comes back. A description typed by hand is never replaced by the first
   draft. Anyone who may change the seat edits it later from **Job post** (`PATCH /api/v2/seats/{id}`). Reading is
-  `GET /api/v2/seats/{id}`, with `description_by` (`chart` or `person`) and `can_edit`.
+  `GET /api/v2/seats/{id}`, with `description_by` (`chart` or `person`), `can_edit`, and for a seat under another seat
+  `reports_now` (`{name, until}`: the person or bot its bot reports to until then, and that open seat's title).
 - **Applicants** (`POST /api/v2/seats/{id}/recruit`) answers at once, on this Tico, with no outside service and no trial
   task: up to eight Tico catalog templates matched against the title and description. Each has `match`: `strong` when
   the template's name shares a word of the work with the title (not "Engineer" alone), `good` when it fits at all, else empty; strong ones come
   first. Each carries a one-line summary, tags, what it owns and never does, its onboarding questions, what it needs (each
   `connected`, `on_hire` or `not_set`) and the model it suggests among the providers the team has turned on, with the list
-  of those models to choose another. Built-in bots (BotOps, the Strategy Bot, the message bot) are never applicants. Each
+  of those models to choose another. Built-in bots (BotOps, the Strategy Bot, the message bot) are never applicants. A
+  seat placed with a template (`seats.template`) has that template as its one, strong applicant; hiring it with a
+  different template is refused, and retitling the seat clears the pin. Each
   applicant has its own page (`#/seat/<id>/<template>`) with a **Hire** box: name, reports to, computer and model.
+  A seat under another open seat lists that seat in **Reports to**, marked *not hired yet*, and a line inside the box,
+  under **Reports to**, names who the bot reports to until it is hired: *Reports to Ana until Head of Marketing is hired.*
+  Choosing any other entry in **Reports to** hides the line.
 - **Hire** (`POST /api/v2/seats/{id}/hire`, `{template, model, name?, runner_id?}`) creates the bot through the same checks
-  as any new bot: named as given (the seat's title by default), in the seat's place on the chart (`reports_to`) and
-  group, owned by the person who hired, with the template's instructions plus the job description, and **Onboarding**. The
-  seat is then filled and leaves the chart; open seats that reported to it move under the new bot. Only then is its
+  as any new bot: named as given (the seat's title by default), in the seat's place on the chart and group, owned by the
+  person who hired, with the template's instructions plus the job description, and **Onboarding**. A bot reports to a
+  person or a bot, never a seat: under a seat that is still open it reports to the nearest person or bot above it, and
+  `reports_now` on the seat says who and until which seat is hired. The seat is then filled and leaves the chart; open
+  seats that reported to it move under the new bot, and so do bots hired under it that still report where they were
+  placed. A bot someone moved by hand keeps that manager. Only then is its
   repository made: a starter template's by the computer (`materialize`), any other's by a BotOps "Set up" task. A filled
   seat, a template that is not an applicant, a name already taken or a model the team has not turned on is refused and
   nothing is made.
@@ -507,7 +536,7 @@ session on that site grants no access to your Tico. Older installs can select th
   every run's environment.
 - **An agent you already run elsewhere**: a [Hermes](hermes-agents.md) or [OpenClaw](openclaw-agents.md) profile
   becomes a bot with a pairing code, no template; see [Connect an external agent](connect-an-agent.md#an-agent-that-is-a-bot-not-you).
-- **By hand on the Mac**: `scripts/tico -e <env> bot create <slug> --template <template>`. This
+- **By hand on the Mac**: `scripts/tico-computer -e <env> bot create <slug> --template <template>`. This
   materializes from the same templates with the environment's names but without the wizard
   answers, so `knowledge/company.md` says nobody has answered them. Register the bot in
   **Settings → Bots** afterwards.
@@ -517,7 +546,7 @@ the same template is one of the two command line routes; Tico gives it a slug of
 
 ## Adding a template
 
-Tico ships 98 role templates, by group, each with a card. `templates/catalog/` also holds the four built-in bots and three helper bots, 105 cards in all. [Starter bots](starter-bots.md) lists the 98.
+Tico ships 125 role templates, by group, each with a card. `templates/catalog/` holds 139 folders in all: those 125, four built-in bots (`assistant`, `botops`, `goal-manager`, `librarian`), seven helper bots (`bookkeeper`, `brand`, `inbox`, `task-manager`, `tico-counsel`, `updates-owner`, `automations-owner`), and three retired templates kept for existing installs (`bookkeeping`, `cro`, `lead-generation`). [Starter bots](starter-bots.md) lists the 125.
 
 `templates/catalog/<template>/` is one template. The folder name is what `--template` takes.
 
@@ -597,11 +626,11 @@ and that the key is a slug: lowercase letters, digits and single hyphens.
 offer, and the bots screen says so. On a hosted server that means the release did not carry
 `templates/catalog`, or `TICO_CATALOG_DIR` points somewhere empty.
 
-**A starter does not answer, or a routine never runs.** While it is `needs_setup` it answers only a human's chat message: a task
-message, a Slack route, a bot's request and its routines wait. Press **Set up**, or say anything to it in its chat, and answer its
+**A starter does not answer, or a routine never runs.** While it is `needs_setup` it answers only a human's message: a task
+message, a Slack route, a bot's request and its routines wait. Press **Set up**, or say anything to it in its DM, and answer its
 questions. When its setup is done it calls `hub bot setup-done`. If it cannot (a member's bot at their limit answers
 `bot_limit`), archive a bot you no longer need or ask an admin to raise the limit in Settings > People. An owner or a bot's manager can
-also call `POST /api/v2/bots/{bot}/onboarded` to release a bot whose conversation went wrong.
+also call `POST /api/v2/bots/{bot}/onboarded` to release a bot whose thread went wrong.
 
 In **AI providers**, choose **Your company's plans or API keys** to show the provider checkboxes.
 With none ticked, **Skip for now** continues without a provider; bots wait until one is added.

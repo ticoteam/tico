@@ -1,4 +1,4 @@
-"""A real Tico server for the custom-frontend browser test (ui/tests/custom-frontend.cjs).
+"""A real Tico server for the custom-frontend browser test (ui/tests/custom-frontend.cts).
 
     python3 ui/tests/support/frontend_server.py --auth none|oidc --origin http://localhost:5173
 
@@ -31,6 +31,7 @@ from cryptography.hazmat.primitives.asymmetric import rsa  # noqa: E402
 
 from backend.app import create_app  # noqa: E402
 from backend.auth import Identity  # noqa: E402
+from backend import bot_settings  # noqa: E402
 from backend.config import Settings  # noqa: E402
 from backend.store import H, encode  # noqa: E402
 
@@ -68,11 +69,30 @@ def provider(email):
             url = urlparse(self.path)
             issuer = "http://127.0.0.1:%d" % server.server_port
             if url.path.endswith("/openid-configuration"):
-                self.send({"issuer": issuer, "authorization_endpoint": issuer + "/authorize", "token_endpoint": issuer + "/token",
-                           "jwks_uri": issuer + "/keys", "id_token_signing_alg_values_supported": ["RS256"]})
+                self.send(
+                    {
+                        "issuer": issuer,
+                        "authorization_endpoint": issuer + "/authorize",
+                        "token_endpoint": issuer + "/token",
+                        "jwks_uri": issuer + "/keys",
+                        "id_token_signing_alg_values_supported": ["RS256"],
+                    }
+                )
             elif url.path == "/keys":
-                self.send({"keys": [{"kty": "RSA", "kid": "k1", "use": "sig", "alg": "RS256",
-                                     "n": b64(size(numbers.n)), "e": b64(size(numbers.e))}]})
+                self.send(
+                    {
+                        "keys": [
+                            {
+                                "kty": "RSA",
+                                "kid": "k1",
+                                "use": "sig",
+                                "alg": "RS256",
+                                "n": b64(size(numbers.n)),
+                                "e": b64(size(numbers.e)),
+                            }
+                        ]
+                    }
+                )
             elif url.path == "/authorize":
                 query = {k: v[0] for k, v in parse_qs(url.query).items()}
                 code = "code-%d" % len(codes)
@@ -84,11 +104,23 @@ def provider(email):
         def do_POST(self):
             form = {k: v[0] for k, v in parse_qs(self.rfile.read(int(self.headers["Content-Length"])).decode()).items()}
             query = codes.pop(form.get("code"), None)
-            if not query or form.get("client_secret") != SECRET or b64(hashlib.sha256(form.get("code_verifier", "").encode()).digest()) != query["code_challenge"]:
+            if (
+                not query
+                or form.get("client_secret") != SECRET
+                or b64(hashlib.sha256(form.get("code_verifier", "").encode()).digest()) != query["code_challenge"]
+            ):
                 return self.send({"error": "invalid_grant"}, 400)
             now = int(time.time())
-            claims = {"iss": "http://127.0.0.1:%d" % server.server_port, "aud": CLIENT, "sub": "1", "iat": now, "exp": now + 300,
-                      "nonce": query["nonce"], "email": email, "email_verified": True}
+            claims = {
+                "iss": "http://127.0.0.1:%d" % server.server_port,
+                "aud": CLIENT,
+                "sub": "1",
+                "iat": now,
+                "exp": now + 300,
+                "nonce": query["nonce"],
+                "email": email,
+                "email_verified": True,
+            }
             self.send({"id_token": jwt.encode(claims, key, algorithm="RS256", headers={"kid": "k1"})})
 
     server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
@@ -98,6 +130,7 @@ def provider(email):
 
 def free_port():
     import socket
+
     with socket.socket() as s:
         s.bind(("127.0.0.1", 0))
         return s.getsockname()[1]
@@ -105,11 +138,17 @@ def free_port():
 
 def fake_runner(base, admin):
     """Enroll a computer, give it the bot `ops`, and answer whatever is queued for it."""
+
     def call(path, body, token=admin):
-        r = httpx.post(base + "/api/v2/" + path, json=body, timeout=20,
-                       headers={"Authorization": "Bearer " + token, "Idempotency-Key": H.new_id()})
+        r = httpx.post(
+            base + "/api/v2/" + path,
+            json=body,
+            timeout=20,
+            headers={"Authorization": "Bearer " + token, "Idempotency-Key": H.new_id()},
+        )
         r.raise_for_status()
         return r.json()
+
     code = call("enrollments", {"operator": "ana"})["code"]
     runner = call("runners/enroll", {"code": code, "label": "Test computer", "platform": "test"}, token="none")
     call("bots/ops/assignment", {"runner_id": runner["runner_id"], "expected_generation": 0})
@@ -129,7 +168,11 @@ def fake_runner(base, admin):
         words = reply.split(" ")
         for seq, word in enumerate(words, 1):
             time.sleep(0.1)
-            call("attempts/%s/events" % aid, {"events": [{"seq": seq, "kind": "delta", "payload": {"text": word + " "}}]}, token)
+            call(
+                "attempts/%s/events" % aid,
+                {"events": [{"seq": seq, "kind": "delta", "payload": {"text": word + " "}}]},
+                token,
+            )
         call("attempts/%s/complete" % aid, {"outcome": "completed", "text": reply, "last_seq": len(words)}, token)
 
 
@@ -144,12 +187,25 @@ def main():
     (registry / "hub-access.yaml").write_text(yaml.safe_dump({"owner": "ana@acme.example"}))
     port = free_port()
     url = "http://127.0.0.1:%d" % port
-    common = dict(db_path=tmp / "hub.db", registry_dir=registry, public_url=url, cors_origins=args.origin,
-                  company_name="Acme", app_name="Acme HQ", test_identities={"admin": Identity("human:ana", "owner", "ana@acme.example")})
+    common = dict(
+        db_path=tmp / "hub.db",
+        registry_dir=registry,
+        public_url=url,
+        cors_origins=args.origin,
+        company_name="Acme",
+        app_name="Acme HQ",
+        test_identities={"admin": Identity("human:ana", "owner", "ana@acme.example")},
+    )
     if args.auth == "oidc":
         issuer = provider("ana@acme.example")
-        settings = Settings(**common, auth_proxy="oidc", oidc_issuer=issuer, oidc_client_id=CLIENT, oidc_client_secret=SECRET,
-                            session_secret="s" * 40)
+        settings = Settings(
+            **common,
+            auth_proxy="oidc",
+            oidc_issuer=issuer,
+            oidc_client_id=CLIENT,
+            oidc_client_secret=SECRET,
+            session_secret="s" * 40,
+        )
     else:
         issuer = ""
         settings = Settings(**common, local_owner_email="ana@acme.example", local_owner_token=LOCAL_TOKEN)
@@ -158,22 +214,49 @@ def main():
     threading.Thread(target=server.run, daemon=True).start()
     while not server.started:
         time.sleep(0.05)
-    people = [{"id": "ana", "name": "Ana Rivera", "email": "ana@acme.example", "title": "CEO", "primary_for": ["*"]},
-              {"id": "ben", "name": "Ben Okafor", "email": "ben@acme.example", "title": "Engineer", "reports_to": "ana"}]
-    bots = {"coo": {"name": "coo", "display_name": "Chief of Staff", "runtime": "fake", "status": "active"},
-            "ops": {"name": "ops", "display_name": "Ops", "runtime": "fake", "status": "active", "description": "Runs operations"}}
+    people = [
+        {"id": "ana", "name": "Ana Rivera", "email": "ana@acme.example", "title": "CEO", "primary_for": ["*"]},
+        {"id": "ben", "name": "Ben Okafor", "email": "ben@acme.example", "title": "Engineer", "reports_to": "ana"},
+    ]
+    bots = {
+        "coo": {"name": "coo", "display_name": "Chief of Staff", "runtime": "fake", "status": "active"},
+        "ops": {
+            "name": "ops",
+            "display_name": "Ops",
+            "runtime": "fake",
+            "status": "active",
+            "description": "Runs operations",
+        },
+    }
     with app.state.store.transaction() as c:
         H.sync_registry(c, bots, {"people": people})
         c.execute("INSERT INTO registry_metadata VALUES('people',?)", (encode({"people": people}),))
         for slug, config in bots.items():
-            c.execute("INSERT INTO bot_config(bot,config_json,operator,reports_to,description) VALUES(?,?,?,?,?)",
-                      (slug, encode(config), "ana", "ana" if slug == "coo" else "coo", config.get("description", "")))
-        c.execute("INSERT INTO registry_metadata VALUES('onboarding',?)", (encode({"completed": "2026-01-01T00:00:00Z"}),))
-    call = lambda path, body: httpx.post(url + "/api/v2/" + path, json=body, timeout=20, headers={  # noqa: E731
-        "Authorization": "Bearer admin", "Idempotency-Key": H.new_id()}).raise_for_status()
-    call("tasks", {"title": "Review the launch plan", "body": "Please review the plan and reply.", "owner": "human:ana"})
+            c.execute(
+                "INSERT INTO bot_config(bot,owner_id,reports_to,description) VALUES(?,?,?,?)",
+                (slug, "ana", "ana" if slug == "coo" else "coo", config.get("description", "")),
+            )
+            bot_settings.write(c, slug, config)
+        c.execute(
+            "INSERT INTO registry_metadata VALUES('onboarding',?)", (encode({"completed": "2026-01-01T00:00:00Z"}),)
+        )
+    call = lambda path, body: httpx.post(
+        url + "/api/v2/" + path,
+        json=body,
+        timeout=20,
+        headers={  # noqa: E731
+            "Authorization": "Bearer admin",
+            "Idempotency-Key": H.new_id(),
+        },
+    ).raise_for_status()
+    call(
+        "tasks", {"title": "Review the launch plan", "body": "Please review the plan and reply.", "owner": "human:ana"}
+    )
     call("tasks", {"title": "Draft the weekly update", "body": "Summarize the week for the team.", "owner": "bot:ops"})
-    call("files/links", {"bot": "ops", "url": "https://docs.google.com/document/d/1AbCdEfGhIjKlMnOp/edit", "title": "Launch plan"})
+    call(
+        "files/links",
+        {"bot": "ops", "url": "https://docs.google.com/document/d/1AbCdEfGhIjKlMnOp/edit", "title": "Launch plan"},
+    )
     threading.Thread(target=fake_runner, args=(url, "admin"), daemon=True).start()
     print(json.dumps({"url": url, "token": LOCAL_TOKEN, "issuer": issuer}), flush=True)
     try:

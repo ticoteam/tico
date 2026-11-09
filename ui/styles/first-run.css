@@ -1,9 +1,9 @@
 /* ui/styles/first-run.css — First run wizard and the org builder.
    The cascade runs in the order index.html links these files; keep rules in order. */
 /* first run (#/welcome): one screen per step, then the bot catalog as cards */
-/* first run, after Create (ui/first-run.js) */
+/* first run, after Create (ui/first-run.ts) */
 
-/* first run, the org chart (ui/org-builder.js): the conversation on the left, the chart growing on the right; on a
+/* first run, the org chart (ui/org-builder.ts): the conversation on the left, the chart growing on the right; on a
    phone the chart is a strip above the card. Each department brings its own hue (--dc); --dci is that hue made
    readable on the current theme's surface. */
 .onb.onb-org{max-width:1180px}
@@ -158,7 +158,7 @@ button.oc-node:hover{border-color:color-mix(in srgb,var(--dc,var(--muted)) 50%,v
 .oc-count{margin-left:auto;display:inline-flex;align-items:center;justify-content:center;flex:none;min-width:20px;height:20px;padding:0 6px;border-radius:10px;background:var(--dc);color:#fff;font-size:var(--t-xs);font-weight:600}
 .oc-bots{position:relative;margin:0;padding:0 0 0 calc(20px + var(--arm));list-style:none}
 .oc-bot{position:relative;padding-top:6px;min-width:0}
-.oc-bot::before{content:"";position:absolute;left:calc(-1 * var(--arm));top:0;width:calc(var(--arm) - 4px);height:24px;border-left:1.5px solid var(--oc-line);border-bottom:1.5px solid var(--oc-line);border-bottom-left-radius:8px}
+.oc-bot::before{content:"";position:absolute;left:calc(-1 * var(--arm));top:0;width:calc(var(--arm) - 4px);height:24px;border-left:1.5px solid var(--oc-line);border-bottom:1.5px solid var(--oc-line);border-bottom-left-radius:var(--tree-corner)}
 .oc-bot:not(:last-child)::after{content:"";position:absolute;left:calc(-1 * var(--arm));top:0;bottom:0;border-left:1.5px solid var(--oc-line)}
 .oc-bnode{min-height:36px;padding:5px 10px 5px 5px;border-radius:10px}
 .oc-head>.oc-bnode{border-color:color-mix(in srgb,var(--dc) 45%,var(--line))}
@@ -244,6 +244,7 @@ button.oc-node:hover{border-color:color-mix(in srgb,var(--dc,var(--muted)) 50%,v
 .tree-setup .nav-icon{width:14px;height:14px;font-size:14px;color:var(--wait-ink);font-variation-settings:"FILL" 0,"wght" 400,"GRAD" 0,"opsz" 20}
 .bot-onboard{display:flex;align-items:center;gap:var(--s3);flex-wrap:wrap;margin:0 0 var(--s3);padding:10px 14px;border:1px solid color-mix(in srgb,var(--wait) 40%,var(--line));border-radius:var(--radius);background:color-mix(in srgb,var(--wait) 8%,var(--surface))}
 .bot-onboard .primary,.bot-onboard .muted{margin-left:auto}
+.bot-onboard .bot-onboard-tip{flex-basis:100%;margin:0}
 @media(max-width:760px){
   .fr-form{grid-template-columns:1fr}
   .fr-owner select{width:100%}

@@ -17,7 +17,9 @@ pub const POLL_SECONDS: f64 = 15.0;
 const TIMEOUT: Duration = Duration::from_secs(15);
 
 fn now_iso_micros() -> String {
-    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default();
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default();
     let base = text_of(&iso(&json!(now.as_secs())));
     // Python's datetime.now(timezone.utc).isoformat(): microseconds before the offset.
     base.replace("+00:00", &format!(".{:06}+00:00", now.subsec_micros()))
@@ -30,13 +32,20 @@ pub(crate) async fn rpc(
     method: &str,
     params: Value,
 ) -> Result<Value, ()> {
-    let msg = json!({"jsonrpc": "2.0", "id": id, "method": method, "params": params}).to_string() + "\n";
+    let msg =
+        json!({"jsonrpc": "2.0", "id": id, "method": method, "params": params}).to_string() + "\n";
     stdin.write_all(msg.as_bytes()).await.map_err(|_| ())?;
     let read = async {
         while let Ok(Some(line)) = lines.next_line().await {
-            let Ok(v) = serde_json::from_str::<Value>(&line) else { continue };
+            let Ok(v) = serde_json::from_str::<Value>(&line) else {
+                continue;
+            };
             if v.get("method").is_none() && v["id"] == json!(id) {
-                return if v.get("error").is_some() { Err(()) } else { Ok(v["result"].clone()) };
+                return if v.get("error").is_some() {
+                    Err(())
+                } else {
+                    Ok(v["result"].clone())
+                };
             }
         }
         Err(())
@@ -47,21 +56,35 @@ pub(crate) async fn rpc(
 /// The weekly window from a `account/rateLimits/read` reply, as the report's fields.
 pub fn weekly(reply: &Value, now: f64) -> Value {
     let buckets = &reply["rateLimitsByLimitId"];
-    let bucket = if buckets.is_object() { &buckets["codex"] } else { &reply["rateLimits"] };
+    let bucket = if buckets.is_object() {
+        &buckets["codex"]
+    } else {
+        &reply["rateLimits"]
+    };
     if !bucket.is_object() || !(bucket["limitId"].is_null() || bucket["limitId"] == "codex") {
         return json!({"state": "unavailable"});
     }
-    let windows: Vec<&Value> =
-        [&bucket["primary"], &bucket["secondary"]].into_iter().filter(|w| w.is_object() && w["windowDurationMins"] == json!(10080)).collect();
+    let windows: Vec<&Value> = [&bucket["primary"], &bucket["secondary"]]
+        .into_iter()
+        .filter(|w| w.is_object() && w["windowDurationMins"] == json!(10080))
+        .collect();
     if windows.len() != 1 {
         return json!({"state": "unavailable"});
     }
     let window = windows[0];
     let percent = &window["usedPercent"];
     let reset = iso(&window["resetsAt"]);
-    let p = percent.as_f64().filter(|p| percent.is_number() && p.is_finite() && (0.0..=100.0).contains(p));
-    let Some(p) = p else { return json!({"state": "failed"}) };
-    let left = if reset.is_null() { -1.0 } else { parse_iso(&text_of(&reset)) - now };
+    let p = percent
+        .as_f64()
+        .filter(|p| percent.is_number() && p.is_finite() && (0.0..=100.0).contains(p));
+    let Some(p) = p else {
+        return json!({"state": "failed"});
+    };
+    let left = if reset.is_null() {
+        -1.0
+    } else {
+        parse_iso(&text_of(&reset)) - now
+    };
     if !(left > 0.0 && left <= 8.0 * 86400.0) {
         return json!({"state": "failed"});
     }
@@ -73,62 +96,101 @@ pub fn weekly(reply: &Value, now: f64) -> Value {
 /// its plan.
 pub(crate) fn remember_windows(profile: &str, reply: &Value) {
     let buckets = &reply["rateLimitsByLimitId"];
-    let bucket = if buckets.is_object() { &buckets["codex"] } else { &reply["rateLimits"] };
+    let bucket = if buckets.is_object() {
+        &buckets["codex"]
+    } else {
+        &reply["rateLimits"]
+    };
     if !bucket.is_object() || !(bucket["limitId"].is_null() || bucket["limitId"] == "codex") {
         return;
     }
-    for w in [&bucket["primary"], &bucket["secondary"]].into_iter().filter(|w| w.is_object()) {
+    for w in [&bucket["primary"], &bucket["secondary"]]
+        .into_iter()
+        .filter(|w| w.is_object())
+    {
+        // The computer's own login's read, never a turn's: it counts for a plan only where the plan's account is known.
         let event = json!({"used_percent": w.get("usedPercent").cloned().unwrap_or(Value::Null),
                            "window_minutes": w.get("windowDurationMins").cloned().unwrap_or(Value::Null),
-                           "resets_at": iso(&w["resetsAt"]), "plan_type": bucket.get("planType").cloned().unwrap_or(Value::Null)});
+                           "resets_at": iso(&w["resetsAt"]), "plan_type": bucket.get("planType").cloned().unwrap_or(Value::Null),
+                           "origin": "login"});
         crate::profiles::remember_weekly(profile, "codex", &event);
     }
 }
 
 /// One read, with the profile's own Codex home and no API keys.
-pub async fn read_codex(profile: &crate::profiles::Profile, cancelled: &AtomicBool) -> Value {
-    let Some(exe) = crate::env::which("codex", &std::env::var("PATH").unwrap_or_default()) else { return json!({"state": "unavailable"}) };
+pub async fn read_codex(profile: &crate::profiles::Profile, canceled: &AtomicBool) -> Value {
+    let Some(exe) = crate::env::which("codex", &std::env::var("PATH").unwrap_or_default()) else {
+        return json!({"state": "unavailable"});
+    };
     let process: crate::env::Env = std::env::vars().collect();
     let mut env = profile.environment("codex", &process);
-    for name in ["OPENAI_API_KEY", "CODEX_API_KEY", "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN"] {
+    for name in [
+        "OPENAI_API_KEY",
+        "CODEX_API_KEY",
+        "ANTHROPIC_API_KEY",
+        "ANTHROPIC_AUTH_TOKEN",
+        "CLAUDE_CODE_OAUTH_TOKEN",
+    ] {
         env.remove(name);
     }
-    if cancelled.load(Ordering::SeqCst) {
+    if canceled.load(Ordering::SeqCst) {
         return json!({"state": "failed"});
     }
+    // A sign-out or sign-in after this point (accounts::forget) makes this read's answers stale: they are not kept.
+    let since = crate::accounts::read_started(&profile.name, "codex");
     // The bot user's, like the profile's sign-in and turns: app-server writes in CODEX_HOME.
     let mut cmd = crate::isolation::command(exe);
-    cmd.arg("app-server").env_clear().envs(&env).stdin(std::process::Stdio::piped()).stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::null()).kill_on_drop(true);
-    let Ok(mut child) = cmd.spawn() else { return json!({"state": "failed"}) };
-    let (Some(mut stdin), Some(stdout)) = (child.stdin.take(), child.stdout.take()) else { return json!({"state": "failed"}) };
+    cmd.arg("app-server")
+        .env_clear()
+        .envs(&env)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .kill_on_drop(true);
+    let Ok(mut child) = cmd.spawn() else {
+        return json!({"state": "failed"});
+    };
+    let (Some(mut stdin), Some(stdout)) = (child.stdin.take(), child.stdout.take()) else {
+        return json!({"state": "failed"});
+    };
     let mut lines = BufReader::new(stdout).lines();
+    let mut account = None;
     let result = async {
         rpc(&mut stdin, &mut lines, 1, "initialize", json!({"clientInfo": {"name": "tico-keeper", "title": "Tico keeper", "version": "0.1"}})).await?;
         let note = json!({"jsonrpc": "2.0", "method": "initialized", "params": {}}).to_string() + "\n";
         stdin.write_all(note.as_bytes()).await.map_err(|_| ())?;
-        if cancelled.load(Ordering::SeqCst) {
+        if canceled.load(Ordering::SeqCst) {
             return Err(());
         }
         let limits = rpc(&mut stdin, &mut lines, 2, "account/rateLimits/read", json!({})).await?;
         // The same session names the account and plan, read without a token refresh (crate::accounts).
         if let Ok(reply) = rpc(&mut stdin, &mut lines, 3, "account/read", json!({"refreshToken": false})).await {
-            if let Some(account) = crate::accounts::from_app_server(&reply) {
-                crate::accounts::remember(&profile.name, "codex", account);
-            }
+            account = crate::accounts::from_app_server(&reply);
         }
         Ok(limits)
     }
     .await;
-    if let Ok(reply) = &result {
-        remember_windows(&profile.name, reply);
-    }
+    // A read begun before a sign-in or sign-out is someone else's usage: not kept here, and not reported either.
+    let current = crate::accounts::keep_if_current(&profile.name, "codex", since, || {
+        if let Some(account) = account {
+            crate::accounts::remember(&profile.name, "codex", account);
+        }
+        if let Ok(reply) = &result {
+            remember_windows(&profile.name, reply);
+        }
+    });
     drop(stdin);
-    if tokio::time::timeout(Duration::from_secs(5), child.wait()).await.is_err() {
+    if tokio::time::timeout(Duration::from_secs(5), child.wait())
+        .await
+        .is_err()
+    {
         let _ = child.kill().await;
     }
+    // Again after the child's shutdown wait: a sign-in during it makes this read someone else's as well.
+    let current = current && crate::accounts::read_started(&profile.name, "codex") == since;
     match result {
-        Ok(reply) => weekly(&reply, crate::util::epoch_s()),
-        Err(()) => json!({"state": "failed"}),
+        Ok(reply) if current => weekly(&reply, crate::util::epoch_s()),
+        _ => json!({"state": "failed"}),
     }
 }
 
@@ -138,29 +200,41 @@ pub struct Refreshes {
     worker: Option<tokio::task::JoinHandle<()>>,
     result: Arc<Mutex<Option<Value>>>,
     work: Option<Value>,
-    pub cancelled: Arc<AtomicBool>,
+    pub canceled: Arc<AtomicBool>,
 }
 
 impl Default for Refreshes {
     fn default() -> Self {
-        Refreshes { polled: None, worker: None, result: Arc::new(Mutex::new(None)), work: None, cancelled: Arc::new(AtomicBool::new(false)) }
+        Refreshes {
+            polled: None,
+            worker: None,
+            result: Arc::new(Mutex::new(None)),
+            work: None,
+            canceled: Arc::new(AtomicBool::new(false)),
+        }
     }
 }
 
 impl Refreshes {
     /// A read under way or a result not yet delivered: followed on its own timer.
     pub fn busy(&self) -> bool {
-        self.result.lock().unwrap().is_some() || self.worker.as_ref().is_some_and(|w| !w.is_finished())
+        self.result.lock().unwrap().is_some()
+            || self.worker.as_ref().is_some_and(|w| !w.is_finished())
     }
 
     /// `ask`: whether to ask the server for work; None, every POLL_SECONDS.
     pub async fn poll(&mut self, runner: &Arc<Runner>, ask: Option<bool>) -> Result<(), ApiError> {
-        if self.cancelled.load(Ordering::SeqCst) {
+        if self.canceled.load(Ordering::SeqCst) {
             return Ok(());
         }
         let ask = match ask {
             Some(a) => a,
-            None if self.polled.is_some_and(|t| t.elapsed().as_secs_f64() < POLL_SECONDS) => return Ok(()),
+            None if self
+                .polled
+                .is_some_and(|t| t.elapsed().as_secs_f64() < POLL_SECONDS) =>
+            {
+                return Ok(())
+            }
             None => true,
         };
         self.polled = Some(Instant::now());
@@ -170,7 +244,18 @@ impl Refreshes {
             for (k, v) in result.as_object().cloned().unwrap_or_default() {
                 body[k] = v;
             }
-            if let Err(e) = runner.client.post(&format!("runner-subscription-refreshes/{}/report", text_of(&work["id"])), &body, None).await {
+            if let Err(e) = runner
+                .client
+                .post(
+                    &format!(
+                        "runner-subscription-refreshes/{}/report",
+                        text_of(&work["id"])
+                    ),
+                    &body,
+                    None,
+                )
+                .await
+            {
                 if ![404, 409, 422].contains(&e.status) {
                     return Err(e);
                 }
@@ -182,18 +267,27 @@ impl Refreshes {
             return Ok(());
         }
         let wanted = runner.client.get("runner-subscription-refreshes").await?;
-        let Some(work) = wanted["refreshes"].as_array().and_then(|a| a.first()).cloned() else { return Ok(()) };
+        let Some(work) = wanted["refreshes"]
+            .as_array()
+            .and_then(|a| a.first())
+            .cloned()
+        else {
+            return Ok(());
+        };
         let config = runner.config_now();
         let name = text_of(&work["profile"]);
         // An isolated profile, captured once: never the global or default profile.
-        let profile = (!name.is_empty()).then(|| crate::profiles::select(&config.data, Some(&name))).flatten();
+        let profile = (!name.is_empty())
+            .then(|| crate::profiles::select(&config.data, Some(&name)))
+            .flatten();
         // Only a runtime whose weekly window a refresh can read (`weekly_usage = "refresh"`).
-        let refreshable = crate::harness_tools::caps(&text_of(&work["runtime"]), "").weekly_usage == "refresh";
+        let refreshable =
+            crate::harness_tools::caps(&text_of(&work["runtime"]), "").weekly_usage == "refresh";
         self.work = Some(work);
-        let (slot, cancelled) = (self.result.clone(), self.cancelled.clone());
+        let (slot, canceled) = (self.result.clone(), self.canceled.clone());
         self.worker = Some(tokio::spawn(async move {
             let result = match profile {
-                Some(p) if refreshable => read_codex(&p, &cancelled).await,
+                Some(p) if refreshable => read_codex(&p, &canceled).await,
                 _ => json!({"state": "unavailable"}),
             };
             *slot.lock().unwrap() = Some(result);
@@ -202,7 +296,7 @@ impl Refreshes {
     }
 
     pub fn stop(&self) {
-        self.cancelled.store(true, Ordering::SeqCst);
+        self.canceled.store(true, Ordering::SeqCst);
     }
 }
 
@@ -222,6 +316,9 @@ mod tests {
         assert_eq!(got["weekly"]["resets_at"], "2027-01-15T09:00:00+00:00");
         let stale = json!({"rateLimits": {"secondary": {"windowDurationMins": 10080, "usedPercent": 1, "resetsAt": now - 1.0}}});
         assert_eq!(weekly(&stale, now)["state"], "failed");
-        assert_eq!(weekly(&json!({"rateLimitsByLimitId": {"other": {}}}), now)["state"], "unavailable");
+        assert_eq!(
+            weekly(&json!({"rateLimitsByLimitId": {"other": {}}}), now)["state"],
+            "unavailable"
+        );
     }
 }

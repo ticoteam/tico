@@ -3,9 +3,13 @@
 - A charge counts against the deepest budget that matches it and every parent of it (most specific wins); the
   catch-all takes expense lines no tree covers. Overlapping siblings are rejected.
 - Children share the parent's period and together never pass it.
-- Remaining = amount - posted actuals - active holds. A hold reserves in the whole chain at once.
+- Remaining = amount - posted actuals - active holds - unused allocations (§4.4). It refuses new holds and new
+  allocations. A hold reserves in the whole chain at once.
+- Spend = posted actuals + active holds. Warn and cutoff read spend, not remaining: an unused allocation keeps capacity
+  set aside for its target, but it is not spent, so a card whose limit is its whole budget runs until the money is spent.
 - Amounts live in versions with an effective-from day; a budget with no version has no amount and never cuts off.
 """
+
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date
@@ -57,6 +61,7 @@ class Version:
 @dataclass(frozen=True)
 class Charge:
     """What a spend is for: the P&L account and, when known, the team, teammate and vendor (a contact id)."""
+
     account_id: str
     team: str = ""
     teammate: str = ""
@@ -70,18 +75,24 @@ class State:
     period_end: str
     amount: int | None
     actual: int
-    held: int
+    held: int  # active holds plus what unused allocations reserve (remaining counts both)
+    spent: int  # actual + active holds: what warn and cutoff read (never the reserves)
     remaining: int | None
     pct: Decimal | None
-    crossed_warn: bool
-    at_limit: bool
-    excluded: bool = False          # a budget read netted out settled private lines (marked excluded)
+    crossed_warn: bool  # spend reached the warn level
+    at_limit: bool  # spend reached the amount (the cutoff)
+    excluded: bool = False  # a budget read netted out settled private lines (marked excluded)
+    pace_end: int | None = None  # the period's spend at today's daily rate (month and quarter budgets)
+    spent_from: str = "books"  # a live read: books | platform (ad platforms' daily spend) | mixed
+    as_of: str | None = None  # a live read: the platforms' last import, when their spend counts
+    reported: int | None = None  # a live read: an ad budget's platform spend shown beside actual, never in it
 
 
 @dataclass(frozen=True)
 class Decision:
     """What a hold request meets: `allowed`, the strictest at-limit `action` among budgets it would pass ("ok" when it
     passes none), the budget that set it, and every budget it brings to or past its warn level."""
+
     allowed: bool
     action: str
     limit_budget: str
@@ -93,8 +104,9 @@ def amount_at(versions: Iterable[Version], at: date) -> int | None:
     """The amount in force on `at`: the latest version effective on or before it."""
     best: Version | None = None
     for v in versions:
-        if dates.day(v.effective_from) <= at and (best is None or (v.effective_from, v.version) >
-                                                   (best.effective_from, best.version)):
+        if dates.day(v.effective_from) <= at and (
+            best is None or (v.effective_from, v.version) > (best.effective_from, best.version)
+        ):
             best = v
     return best.amount if best else None
 
@@ -107,8 +119,9 @@ def period_of(budget: Budget, at: date, fiscal_start: int, versions: Sequence[Ve
         return dates.fiscal_bounds(at, 3, fiscal_start)
     if budget.period == "year":
         return dates.fiscal_bounds(at, 12, fiscal_start)
-    starts = [dates.day(v.effective_from) for v in versions] or \
-        ([dates.day(budget.created_at)] if budget.created_at else [at])
+    starts = [dates.day(v.effective_from) for v in versions] or (
+        [dates.day(budget.created_at)] if budget.created_at else [at]
+    )
     return min(starts), ONCE_END
 
 
@@ -145,28 +158,51 @@ def in_window(budget: Budget, versions: Sequence[Version], window: tuple[date, d
     return total if seen else None
 
 
-def state(budget: Budget, period: tuple[date, date], amount: int | None, actual: int, held: int) -> State:
+def state(
+    budget: Budget, period: tuple[date, date], amount: int | None, actual: int, holds: int, reserved: int = 0
+) -> State:
+    """A budget's figures. `holds` are its active holds (and settled ones no entry took yet); `reserved` is what unused
+    allocations keep set aside in its subtree. Remaining counts both, since it refuses new holds and allocations. Warn
+    and cutoff count only spend (actuals and holds): a reserve is capacity for its target, not money out."""
+    held = holds + reserved
     used = actual + held
+    spent = actual + holds
     remaining = None if amount is None else amount - used
-    return State(budget_id=budget.id, period_start=period[0].isoformat(), period_end=period[1].isoformat(),
-                 amount=amount, actual=actual, held=held, remaining=remaining, pct=money.percent(used, amount),
-                 crossed_warn=amount is not None and amount > 0 and used * 100 >= amount * budget.warn_pct,
-                 at_limit=remaining is not None and remaining <= 0)
+    return State(
+        budget_id=budget.id,
+        period_start=period[0].isoformat(),
+        period_end=period[1].isoformat(),
+        amount=amount,
+        actual=actual,
+        held=held,
+        spent=spent,
+        remaining=remaining,
+        pct=money.percent(used, amount),
+        crossed_warn=amount is not None and amount > 0 and spent * 100 >= amount * budget.warn_pct,
+        at_limit=amount is not None and spent >= amount,
+    )
 
 
-def decide(chain: Sequence[tuple[Budget, State]], amount: int) -> Decision:
-    """A hold of `amount` against a budget and every parent at once. Passing a budget triggers its at-limit action;
-    the strictest one wins, and only `warn` lets the hold through. A refund (negative amount) always goes through."""
+def decide(chain: Sequence[tuple[Budget, State]], amount: int, past_reserves: bool = False) -> Decision:
+    """A hold of `amount` against a budget and every parent at once. A hold the budget has no remaining room for (reserves
+    count, §4.4) passes into its at-limit action; the strictest one wins, and only `warn` lets the hold through. The warn
+    level is read on spend, as the crossing event is, so an unused allocation never warns a budget by itself. A refund
+    (negative amount) always goes through. `past_reserves` fits the hold against spend alone: a run claim is work, not a
+    request for budget, so what unused allocations set aside does not refuse it (only a budget at its limit does)."""
     action, limit = "ok", ""
     warns: list[str] = []
     for budget, s in chain:
         if s.amount is None:
             continue
-        used = s.actual + s.held + amount
-        if amount > 0 and s.remaining is not None and amount > s.remaining and \
-                (action == "ok" or STRICTNESS[budget.at_limit] > STRICTNESS[action]):
+        room = s.amount - s.spent if past_reserves else s.remaining
+        if (
+            amount > 0
+            and room is not None
+            and amount > room
+            and (action == "ok" or STRICTNESS[budget.at_limit] > STRICTNESS[action])
+        ):
             action, limit = budget.at_limit, budget.id
-        if amount > 0 and s.amount > 0 and used * 100 >= s.amount * budget.warn_pct:
+        if amount > 0 and s.amount > 0 and (s.spent + amount) * 100 >= s.amount * budget.warn_pct:
             warns.append(budget.id)
     return Decision(allowed=action in ("ok", "warn"), action=action, limit_budget=limit, warn_budgets=tuple(warns))
 
@@ -185,10 +221,12 @@ def chain(budgets: Mapping[str, Budget], leaf: str) -> list[Budget]:
 def matches(budget: Budget, charge: Charge, accounts: Mapping[str, Account], org: Org) -> bool:
     if budget.catch_all or not budget.active:
         return False
-    return budget.account_id in ancestors(accounts, charge.account_id) and \
-        (not budget.team or charge.team in org.below(budget.team)) and \
-        (not budget.teammate or charge.teammate == budget.teammate) and \
-        (not budget.vendor or charge.vendor == budget.vendor)
+    return (
+        budget.account_id in ancestors(accounts, charge.account_id)
+        and (not budget.team or charge.team in org.below(budget.team))
+        and (not budget.teammate or charge.teammate == budget.teammate)
+        and (not budget.vendor or charge.vendor == budget.vendor)
+    )
 
 
 def covered(budgets: Mapping[str, Budget], accounts: Mapping[str, Account]) -> set[str]:
@@ -206,14 +244,15 @@ def catch_all_accounts(budgets: Mapping[str, Budget], accounts: Mapping[str, Acc
 
 
 def find(budgets: Mapping[str, Budget], charge: Charge, accounts: Mapping[str, Account], org: Org) -> Budget | None:
-    """The budget a charge belongs to: the deepest matching one, else the catch-all for an uncovered expense line."""
+    """The budget a charge belongs to: the matching one on the narrowest P&L line (then the deepest in its tree), else
+    the catch-all for an uncovered expense line."""
     best: Budget | None = None
-    best_depth = -1
+    best_key = (-1, -1)
     for b in budgets.values():
         if matches(b, charge, accounts, org):
-            depth = len(chain(budgets, b.id))
-            if depth > best_depth:
-                best, best_depth = b, depth
+            key = (len(ancestors(accounts, b.account_id)), len(chain(budgets, b.id)))
+            if key > best_key:
+                best, best_key = b, key
     if best is not None:
         return best
     account = accounts.get(charge.account_id)
@@ -226,19 +265,38 @@ def _teams_meet(org: Org, a: str, b: str) -> bool:
     return not a or not b or a in org.below(b) or b in org.below(a)
 
 
+def _nested(outer: Budget, inner: Budget, accounts: Mapping[str, Account], org: Org) -> bool:
+    """Whether `inner` sits inside `outer`: its P&L line is strictly under outer's, and it is no wider by team, teammate
+    or vendor. Only such a pair may both hold a charge; find() counts it against the narrower one."""
+    if outer.account_id == inner.account_id or outer.account_id not in ancestors(accounts, inner.account_id):
+        return False
+    if outer.team and inner.team != outer.team and inner.team not in org.below(outer.team):
+        return False
+    if outer.teammate and inner.teammate != outer.teammate:
+        return False
+    return not outer.vendor or inner.vendor == outer.vendor
+
+
 def overlaps(a: Budget, b: Budget, accounts: Mapping[str, Account], org: Org) -> bool:
-    """Whether one charge could count against both `a` and `b`."""
+    """Whether two budgets clash: one charge could count against both, and neither is nested inside the other."""
     if a.catch_all or b.catch_all:
         return a.catch_all and b.catch_all
     if a.account_id not in ancestors(accounts, b.account_id) and b.account_id not in ancestors(accounts, a.account_id):
+        return False
+    if _nested(a, b, accounts, org) or _nested(b, a, accounts, org):
         return False
     if not _teams_meet(org, a.team, b.team):
         return False
     if a.teammate and b.teammate and a.teammate != b.teammate:
         return False
     for one, other in ((a, b), (b, a)):
-        if one.teammate and not one.team and other.team and not other.teammate and \
-                org.team_of.get(one.teammate, "") not in org.below(other.team):
+        if (
+            one.teammate
+            and not one.team
+            and other.team
+            and not other.teammate
+            and org.team_of.get(one.teammate, "") not in org.below(other.team)
+        ):
             return False
     return not (a.vendor and b.vendor and a.vendor != b.vendor)
 
@@ -247,7 +305,7 @@ def clash(budgets: Mapping[str, Budget], accounts: Mapping[str, Account], org: O
     """Two active sibling budgets one charge could count against (what renaming a vendor to another's name makes)."""
     live = [b for b in budgets.values() if b.active and not b.catch_all]
     for i, a in enumerate(live):
-        for b in live[i + 1:]:
+        for b in live[i + 1 :]:
             if a.parent_id == b.parent_id and a.book_id == b.book_id and overlaps(a, b, accounts, org):
                 return a, b
     return None
@@ -257,8 +315,13 @@ def _unseen(_budget: Budget) -> bool:
     return False
 
 
-def check(new: Budget, budgets: Mapping[str, Budget], accounts: Mapping[str, Account], org: Org,
-          seen: Callable[[Budget], bool] = _unseen) -> None:
+def check(
+    new: Budget,
+    budgets: Mapping[str, Budget],
+    accounts: Mapping[str, Account],
+    org: Org,
+    seen: Callable[[Budget], bool] = _unseen,
+) -> None:
     """A new or changed budget's place in its tree. Raises `invalid` for anything that would let a charge count twice
     or a child sit outside its parent. `seen` says which budgets the asker may see: a sibling is named in the refusal
     only where it is seen, else the refusal says another budget."""
@@ -307,12 +370,20 @@ def check(new: Budget, budgets: Mapping[str, Budget], accounts: Mapping[str, Acc
             raise invalid("a child budget is inside its parent's vendor")
         if parent.vendor and (new.team != parent.team or new.teammate != parent.teammate):
             raise invalid("split by team or teammate before vendor")
-        if (new.account_id, new.team, new.teammate, new.vendor) == \
-                (parent.account_id, parent.team, parent.teammate, parent.vendor):
+        if (new.account_id, new.team, new.teammate, new.vendor) == (
+            parent.account_id,
+            parent.team,
+            parent.teammate,
+            parent.vendor,
+        ):
             raise invalid("a child budget is narrower than its parent")
     for sibling in others.values():
-        if sibling.parent_id == new.parent_id and not sibling.catch_all and sibling.book_id == new.book_id and \
-                overlaps(new, sibling, accounts, org):
+        if (
+            sibling.parent_id == new.parent_id
+            and not sibling.catch_all
+            and sibling.book_id == new.book_id
+            and overlaps(new, sibling, accounts, org)
+        ):
             named = Named((sibling.id,), "it overlaps budget {0}", "it overlaps another budget")
             raise named_refusal(INVALID, named, [sibling.name], seen(sibling))
 
@@ -320,12 +391,18 @@ def check(new: Budget, budgets: Mapping[str, Budget], accounts: Mapping[str, Acc
 def fit_points(change_from: date, versions: Iterable[Version]) -> list[date]:
     """The days on which a change from `change_from` on could make children pass their parent: that day and every
     later version change."""
-    points = {change_from} | {dates.day(v.effective_from) for v in versions if dates.day(v.effective_from) > change_from}
+    points = {change_from} | {
+        dates.day(v.effective_from) for v in versions if dates.day(v.effective_from) > change_from
+    }
     return sorted(points)
 
 
-def check_fit(parent: Budget, parent_versions: Sequence[Version], children: Mapping[str, Sequence[Version]],
-              points: Iterable[date]) -> None:
+def check_fit(
+    parent: Budget,
+    parent_versions: Sequence[Version],
+    children: Mapping[str, Sequence[Version]],
+    points: Iterable[date],
+) -> None:
     """Children's amounts together never pass the parent's on any of `points`. A parent with no amount bounds
     nothing."""
     for at in points:
@@ -334,7 +411,12 @@ def check_fit(parent: Budget, parent_versions: Sequence[Version], children: Mapp
             continue
         total = sum(amount_at(v, at) or 0 for v in children.values())
         if total > cap:
-            named = Named((parent.id,), f"its children would total {total}, more than {{0}}'s {cap}",
-                          "it does not fit: not enough left", numbers=True, on=at.isoformat())
+            named = Named(
+                (parent.id,),
+                f"its children would total {total}, more than {{0}}'s {cap}",
+                "it does not fit: not enough left",
+                numbers=True,
+                on=at.isoformat(),
+            )
             # The caller re-raises this only where the asker may see the parent's numbers (handlers._fit).
             raise named_refusal(INVALID, named, [parent.name], shown=True)

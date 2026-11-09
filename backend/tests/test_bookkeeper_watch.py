@@ -1,5 +1,6 @@
 """The Bookkeeper's Watch and weekly rules digest (backend/bookkeeper.py): silent unless a check finds something new;
 news opens one private Watch task, once; the digest's precheck skips a week with no new posting rule. Synthetic fixtures."""
+
 from datetime import timedelta
 
 from backend import bookkeeper as BK
@@ -7,11 +8,15 @@ from backend import system_routines as SR
 from backend.finance import reads as FR
 from backend.scheduler import Scheduler
 from backend.store import H
-from backend.tests.test_bookkeeper import built, checks, ensure
-from backend.tests.test_onboarding import environment  # noqa: F401
+from backend.tests.helpers.bookkeeper import built, checks, ensure
+from backend.tests.helpers.onboarding import environment  # noqa: F401
 
-FINDING = {"kind": "duplicate_charge", "key": "duplicate_charge:f9", "stamp": {"amount": 1200, "gap": 1},
-           "label": "Acme: 12.00 charged again 1 day(s) after"}
+FINDING = {
+    "kind": "duplicate_charge",
+    "key": "duplicate_charge:f9",
+    "stamp": {"amount": 1200, "gap": 1},
+    "label": "Acme: 12.00 charged again 1 day(s) after",
+}
 
 
 def test_the_watch_is_silent_with_nothing_to_watch(environment):
@@ -38,7 +43,9 @@ def test_news_opens_one_private_watch_task_and_the_same_news_is_silent(environme
     assert again["words"] == "Nothing new to watch" and len(checks(api)) == 1
 
 
-def test_the_rules_digest_skips_a_week_with_no_new_rule_and_lists_the_new_ones_as_a_visible_task(environment, monkeypatch):
+def test_the_rules_digest_skips_a_week_with_no_new_rule_and_lists_the_new_ones_as_a_visible_task(
+    environment, monkeypatch
+):
     api = built(environment)
     ensure(api)
     store = api.app.state.store
@@ -52,15 +59,16 @@ def test_the_rules_digest_skips_a_week_with_no_new_rule_and_lists_the_new_ones_a
     assert made["items"] == 1 and made["state"] == "opened"
     (task,) = checks(api)
     assert task["title"] == "Rules digest (1)" and task["private"] == 1 and "rul_1" in task["body"]
-    # Private: the company owner reads the digest (the guest), and a teammate who is not the owner does not.
+    # Private: the company owner reads the digest (a reader), and a teammate who is not the owner does not.
     with store.read() as c:
         row = H.task(c, task["id"])
         assert H.task_private_readable(c, BK._owner(c, api.app.state.auth), row)
         assert not H.task_private_readable(c, "human:nobody", row)
 
 
-def test_the_watch_runs_daily_and_the_digest_weekly_on_their_own_cadence_and_neither_is_a_switch(environment,
-                                                                                               monkeypatch):
+def test_the_watch_runs_daily_and_the_digest_weekly_on_their_own_cadence_and_neither_is_a_switch(
+    environment, monkeypatch
+):
     api = built(environment)
     ensure(api)
     store = api.app.state.store
@@ -72,13 +80,15 @@ def test_the_watch_runs_daily_and_the_digest_weekly_on_their_own_cadence_and_nei
         def run(c, auth, at):
             calls[name] += 1
             return real(c, auth, at)
+
         return run
+
     monkeypatch.setattr(BK, "watch", counted("watch", real_watch))
     monkeypatch.setattr(BK, "rules_digest", counted("digest", real_digest))
     at = H.parse_ts(H.now())
-    scheduler.tick(at)                                  # both run once: never run before
-    scheduler.tick(at + timedelta(seconds=30))          # neither is due again
-    scheduler.tick(at + timedelta(days=1, minutes=1))   # the watch is due a day on; the digest is a week on
+    scheduler.tick(at)  # both run once: never run before
+    scheduler.tick(at + timedelta(seconds=30))  # neither is due again
+    scheduler.tick(at + timedelta(days=1, minutes=1))  # the watch is due a day on; the digest is a week on
     assert calls == {"watch": 2, "digest": 1}
     assert "bookkeeper_watch" not in SR.CONTROLS and "bookkeeper_rules_digest" not in SR.CONTROLS
 
@@ -100,8 +110,12 @@ def test_a_reviewed_finding_is_not_news_again_after_a_day_but_is_when_its_facts_
         assert BK.watch(c, api.app.state.auth, H.shift(later, hours=1))["items"] == 1
 
 
-NEWER = {"kind": "duplicate_charge", "key": "duplicate_charge:f10", "stamp": {"amount": 500, "gap": 2},
-         "label": "Beta: 5.00 charged again 2 day(s) after"}
+NEWER = {
+    "kind": "duplicate_charge",
+    "key": "duplicate_charge:f10",
+    "stamp": {"amount": 500, "gap": 2},
+    "label": "Beta: 5.00 charged again 2 day(s) after",
+}
 
 
 def test_a_finished_watch_task_is_not_listed_again_when_a_new_finding_arrives(environment, monkeypatch):
@@ -153,8 +167,9 @@ def _seen(api) -> set[str]:
         return {str(row[0]) for row in c.execute("SELECT key FROM bookkeeper_seen")}
 
 
-def test_the_most_important_finding_is_named_first_and_one_the_body_cannot_hold_is_not_stamped_seen(environment,
-                                                                                                    monkeypatch):
+def test_the_most_important_finding_is_named_first_and_one_the_body_cannot_hold_is_not_stamped_seen(
+    environment, monkeypatch
+):
     """Grok's repro: 25 long duplicate charges and 25 long price rises fill the body's bytes before runway, the most
     important. Runway is still named, and a finding the body cannot hold is not stamped seen: it is news again once
     there is room for it."""
@@ -180,13 +195,16 @@ def test_the_most_important_finding_is_named_first_and_one_the_body_cannot_hold_
     assert all(d["key"] in task["body"] for d in dropped)
 
 
-def test_a_finding_past_a_kinds_line_limit_is_not_stamped_seen_and_is_listed_once_there_is_room(environment,
-                                                                                               monkeypatch):
+def test_a_finding_past_a_kinds_line_limit_is_not_stamped_seen_and_is_listed_once_there_is_room(
+    environment, monkeypatch
+):
     api = built(environment)
     ensure(api)
     store = api.app.state.store
-    spend = [{"kind": "unusual_spend", "key": f"unusual_spend:{n:02d}", "stamp": {"n": n}, "label": f"Acme spend {n}"}
-             for n in range(BK.PER_KIND + 1)]
+    spend = [
+        {"kind": "unusual_spend", "key": f"unusual_spend:{n:02d}", "stamp": {"n": n}, "label": f"Acme spend {n}"}
+        for n in range(BK.PER_KIND + 1)
+    ]
     monkeypatch.setattr(FR, "watch_findings", lambda c, viewer, at: list(spend))
     with store.transaction() as c:
         BK.watch(c, api.app.state.auth, H.now())
@@ -207,8 +225,12 @@ def test_an_open_watch_task_still_lists_an_item_whose_key_holds_a_space(environm
     api = built(environment)
     ensure(api)
     store = api.app.state.store
-    spaced = {"kind": "unusual_spend", "key": "unusual_spend:Acme Supplies:2026-10", "stamp": {"amount": 4000},
-              "label": "Acme Supplies: 40.00 this month, above its usual"}
+    spaced = {
+        "kind": "unusual_spend",
+        "key": "unusual_spend:Acme Supplies:2026-10",
+        "stamp": {"amount": 4000},
+        "label": "Acme Supplies: 40.00 this month, above its usual",
+    }
     monkeypatch.setattr(FR, "watch_findings", lambda c, viewer, at: [dict(spaced), dict(FINDING)])
     with store.transaction() as c:
         BK.watch(c, api.app.state.auth, H.now())

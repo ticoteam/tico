@@ -23,6 +23,7 @@ Scoring, per document:
 
 Writes evals/counsel/results.md (the table, the command and the date) unless --self-check or --suggestions with --no-write.
 """
+
 import argparse
 import datetime
 import difflib
@@ -39,8 +40,10 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 DOCS = HERE / "docs"
 STRAIGHT = str.maketrans({"‘": "'", "’": "'", "‚": "'", "“": '"', "”": '"', "„": '"', "–": "-", "—": "-", " ": " "})
-STOP = frozenset("the and for with that this from are can our your you any all not does into over under about what when "
-                 "which will may must shall".split())
+STOP = frozenset(
+    "the and for with that this from are can our your you any all not does into over under about what when "
+    "which will may must shall".split()
+)
 
 
 def normal(text):
@@ -121,23 +124,39 @@ def score(docs, suggestions):
                 wrong += 1
             else:
                 extra += 1
-        rows.append({"slug": slug, "from": meta["from"]["name"], "expected": len(expected), "found": len(found),
-                     "missed": len(expected) - len(found), "extra": extra, "wrong_scope": wrong,
-                     "quote_not_in_source": missing_quote, "suggested": len(mine),
-                     "missed_text": [expected[i]["text"] for i in range(len(expected)) if i not in found]})
+        rows.append(
+            {
+                "slug": slug,
+                "from": meta["from"]["name"],
+                "expected": len(expected),
+                "found": len(found),
+                "missed": len(expected) - len(found),
+                "extra": extra,
+                "wrong_scope": wrong,
+                "quote_not_in_source": missing_quote,
+                "suggested": len(mine),
+                "missed_text": [expected[i]["text"] for i in range(len(expected)) if i not in found],
+            }
+        )
     return rows, bad
 
 
 def table(rows):
     head = ["document", "expected", "found", "missed", "extra", "wrong scope", "quote not in source", "suggested"]
     lines = ["| " + " | ".join(head) + " |", "|" + "|".join(["---"] * len(head)) + "|"]
-    tot = {k: sum(r[k] for r in rows) for k in ("expected", "found", "missed", "extra", "wrong_scope",
-                                                 "quote_not_in_source", "suggested")}
+    tot = {
+        k: sum(r[k] for r in rows)
+        for k in ("expected", "found", "missed", "extra", "wrong_scope", "quote_not_in_source", "suggested")
+    }
     for r in rows:
-        lines.append(f"| {r['slug']} | {r['expected']} | {r['found']} | {r['missed']} | {r['extra']} | "
-                     f"{r['wrong_scope']} | {r['quote_not_in_source']} | {r['suggested']} |")
-    lines.append(f"| **total** | {tot['expected']} | {tot['found']} | {tot['missed']} | {tot['extra']} | "
-                 f"{tot['wrong_scope']} | {tot['quote_not_in_source']} | {tot['suggested']} |")
+        lines.append(
+            f"| {r['slug']} | {r['expected']} | {r['found']} | {r['missed']} | {r['extra']} | "
+            f"{r['wrong_scope']} | {r['quote_not_in_source']} | {r['suggested']} |"
+        )
+    lines.append(
+        f"| **total** | {tot['expected']} | {tot['found']} | {tot['missed']} | {tot['extra']} | "
+        f"{tot['wrong_scope']} | {tot['quote_not_in_source']} | {tot['suggested']} |"
+    )
     recall = tot["found"] / tot["expected"] if tot["expected"] else 0.0
     return "\n".join(lines), recall
 
@@ -153,32 +172,49 @@ def live(docs, url, token, only, wait=3600):
     to POST /rules/read, as here. Each read waits for Counsel's run on its task to end (every run finished, and the task
     done, which Tico sets when the run completes), then reads every page of that From's suggestions."""
     import time
+
     base = url.rstrip("/") + "/api/v2/"
 
     def call(method, path, body=None):
         data = json.dumps(body).encode() if body is not None else None
-        req = urllib.request.Request(base + path, data=data, method=method, headers={
-            "Authorization": "Bearer " + token, "Accept": "application/json", "Content-Type": "application/json",
-            "Idempotency-Key": str(uuid.uuid4())})
+        req = urllib.request.Request(
+            base + path,
+            data=data,
+            method=method,
+            headers={
+                "Authorization": "Bearer " + token,
+                "Accept": "application/json",
+                "Content-Type": "application/json",
+                "Idempotency-Key": str(uuid.uuid4()),
+            },
+        )
         try:
             with urllib.request.urlopen(req, timeout=120) as response:
                 return json.load(response)
         except urllib.error.HTTPError as exc:
-            raise SystemExit(f"{method} {path}: {exc.code} {exc.read()[:300]!r}") from None
+            with exc:
+                raise SystemExit(f"{method} {path}: {exc.code} {exc.read()[:300]!r}") from None
 
     def run_ended(task_id):
         """(ended, status, runs, finished): ended once the task is finished and every run on it has finished."""
         got = call("GET", f"tasks/{task_id}")
         status = (got.get("task") or got).get("status")
         runs = got.get("runs") or []
-        finished = sum(1 for r in runs if r.get("finished"))
+        finished = sum(1 for r in runs if r.get("finished_at"))
         return status in FINISHED and runs and finished == len(runs), status, len(runs), finished
 
     me = call("GET", "me")["actor"]
     # One holder per run: an open one from an earlier run would make this a duplicate ask.
     started = datetime.datetime.now(datetime.UTC).strftime("%Y-%m-%d %H:%M UTC")
-    holder = call("POST", "tasks", {"owner": me, "title": f"Documents for the Counsel eval ({started})",
-                                    "body": "Each document the Counsel eval adds to Rules, attached here."})
+    holder = call(
+        "POST",
+        "tasks",
+        {
+            "owner": me,
+            "title": f"Documents for the Counsel eval ({started})",
+            "body": "Each document the Counsel eval adds to Rules, attached here.",
+        },
+    )
     holder_id = (holder.get("task") or holder)["id"]
     suggestions = {}
     for slug, doc in docs.items():
@@ -197,14 +233,20 @@ def live(docs, url, token, only, wait=3600):
             if ended:
                 break
             if time.time() >= deadline:
-                print(f"{slug}: Counsel's run on task {task_id} did not end within {wait}s (task {status}, "
-                      f"{finished} of {runs} runs finished); scoring the suggestions it wrote so far", file=sys.stderr)
+                print(
+                    f"{slug}: Counsel's run on task {task_id} did not end within {wait}s (task {status}, "
+                    f"{finished} of {runs} runs finished); scoring the suggestions it wrote so far",
+                    file=sys.stderr,
+                )
                 break
             time.sleep(10)
         listed, cursor = [], ""
         while True:
-            page = call("GET", f"rules?status=suggested&source={urllib.parse.quote(source_id)}&limit=100"
-                        + (f"&cursor={urllib.parse.quote(cursor)}" if cursor else ""))
+            page = call(
+                "GET",
+                f"rules?status=suggested&source={urllib.parse.quote(source_id)}&limit=100"
+                + (f"&cursor={urllib.parse.quote(cursor)}" if cursor else ""),
+            )
             listed += page["rules"]
             cursor = page.get("next_cursor")
             if not cursor:
@@ -214,8 +256,14 @@ def live(docs, url, token, only, wait=3600):
             cite = rule.get("cite") or {}
             if cite.get("file_id") != file_id:
                 continue
-            out.append({"text": rule["text"], "quote": cite.get("quote", ""), "section": cite.get("section", ""),
-                        "who": rule.get("who")})
+            out.append(
+                {
+                    "text": rule["text"],
+                    "quote": cite.get("quote", ""),
+                    "section": cite.get("section", ""),
+                    "who": rule.get("who"),
+                }
+            )
         suggestions[slug] = out
         print(f"{slug}: {len(out)} suggestions, task {status}", file=sys.stderr, flush=True)
     return suggestions
@@ -240,8 +288,10 @@ def main(argv):
             print("FAIL", p)
         n_expected = sum(len(d["meta"].get("expected", [])) for d in docs.values())
         n_not_ours = sum(len(d["meta"].get("not_ours", [])) for d in docs.values())
-        print(f"{len(docs)} documents, {n_expected} expected obligations, {n_not_ours} not-ours quotes: "
-              f"{'all quotes in their documents' if not problems else str(len(problems)) + ' problems'}")
+        print(
+            f"{len(docs)} documents, {n_expected} expected obligations, {n_not_ours} not-ours quotes: "
+            f"{'all quotes in their documents' if not problems else str(len(problems)) + ' problems'}"
+        )
         return 1 if problems else 0
 
     if args.suggestions:
@@ -261,9 +311,11 @@ def main(argv):
     print(f"\nrecall {recall:.2f}; quotes not in source: {len(bad)}")
     if not args.no_write:
         stamp = datetime.datetime.now(datetime.UTC).date().isoformat()
-        body = (f"# Counsel eval results\n\nRun {stamp}: `{command}`\n\n{text}\n\nRecall (found / expected): {recall:.2f}."
-                f" Quotes not in the source: {len(bad)}.\n\nWrong scope counts suggestions that match a not-ours "
-                "sentence (a vendor's own duty). Extra counts suggestions that match no label.\n")
+        body = (
+            f"# Counsel eval results\n\nRun {stamp}: `{command}`\n\n{text}\n\nRecall (found / expected): {recall:.2f}."
+            f" Quotes not in the source: {len(bad)}.\n\nWrong scope counts suggestions that match a not-ours "
+            "sentence (a vendor's own duty). Extra counts suggestions that match no label.\n"
+        )
         (HERE / "results.md").write_text(body, encoding="utf-8")
         print(f"wrote {HERE / 'results.md'}")
     return 0

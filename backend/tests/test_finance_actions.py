@@ -1,9 +1,16 @@
 """The write path: idempotency, dry runs, denials, and the approval flow end to end (approve commits once, a changed
 payload voids and asks again, decline denies, a withdrawn or expired approval ends the action)."""
+
+import sqlite3
+from contextlib import closing
+
+from backend import devcopy
 from backend import hubdb as H
+from backend.config import Settings
 from backend.finance import actions as FA
 from backend.finance import reads as FR
-from backend.tests.test_finance_fixtures import AT, OWNER, account, act, books, finance_template, store  # noqa: F401
+from backend.store import Store
+from backend.tests.helpers.finance_fixtures import open_views, AT, OWNER, account, act, books, finance_template, store  # noqa: F401
 
 
 def _software(c):
@@ -13,8 +20,20 @@ def _software(c):
 
 def _coder_asks(c, parent, key="coder-1", amount=5_000, **kw):
     """The coder bot (no finance.budgets right) asks for its own budget: its manager, Cara, decides."""
-    return act(c, "bot:coder", "budget_create", {"name": "Coder tools", "account_id": account(c, "6100"),
-                                                 "teammate": "bot:coder", "parent_id": parent, "amount": amount}, key, **kw)
+    return act(
+        c,
+        "bot:coder",
+        "budget_create",
+        {
+            "name": "Coder tools",
+            "account_id": account(c, "6100"),
+            "teammate": "bot:coder",
+            "parent_id": parent,
+            "amount": amount,
+        },
+        key,
+        **kw,
+    )
 
 
 def _count(c, table):
@@ -39,15 +58,21 @@ def test_same_key_same_result_and_dry_runs_write_nothing(books):
         assert (refused.status, refused.code) == ("failed", "invalid")
         assert act(c, OWNER, "bill_create", {"amount": 1}, "p1").action_id == refused.action_id
         assert act(c, OWNER, "teleport", {}, "t1").code == "invalid"
-        audit = c.execute("SELECT detail_json FROM events WHERE action='finance.account_create' AND target=?",
-                          (first.action_id,)).fetchone()
+        audit = c.execute(
+            "SELECT detail FROM events WHERE action='finance.account_create' AND target=?", (first.action_id,)
+        ).fetchone()
         assert audit and '"committed"' in audit[0]
 
 
 def test_rights_are_checked_and_granted_only_by_admins(books):
     with books.transaction() as c:
-        body = {"date": "2026-10-03", "lines": [{"account_id": account(c, "6900"), "amount": 10},
-                                                {"account_id": account(c, "1000"), "amount": -10}]}
+        body = {
+            "date": "2026-10-03",
+            "lines": [
+                {"account_id": account(c, "6900"), "amount": 10},
+                {"account_id": account(c, "1000"), "amount": -10},
+            ],
+        }
         assert act(c, "human:eve", "journal", body).code == "denied"
         assert act(c, "human:eve", "right_grant", {"teammate": "human:fay", "right": "finance.book"}).code == "denied"
         assert act(c, OWNER, "right_grant", {"teammate": OWNER, "right": "finance.book"}).code == "denied"
@@ -67,11 +92,22 @@ def test_dry_run_reports_the_approval_and_budget_impact(books):
         dry = _coder_asks(c, parent, dry_run=True)
         assert dry.status == "needs_approval" and dry.approver == "human:cara"
         assert dry.rule == "default:budget-request" and _count(c, "approvals") == 0
-        spend = act(c, OWNER, "journal", {"date": "2026-10-03", "lines": [
-            {"account_id": account(c, "6100"), "amount": 1_000}, {"account_id": account(c, "1000"), "amount": -1_000}]},
-            dry_run=True)
-        assert spend.impact["budgets"] == [{"budget_id": parent, "name": "Software", "remaining": 50_000,
-                                            "remaining_after": 49_000, "excluded": False}]
+        spend = act(
+            c,
+            OWNER,
+            "journal",
+            {
+                "date": "2026-10-03",
+                "lines": [
+                    {"account_id": account(c, "6100"), "amount": 1_000},
+                    {"account_id": account(c, "1000"), "amount": -1_000},
+                ],
+            },
+            dry_run=True,
+        )
+        assert spend.impact["budgets"] == [
+            {"budget_id": parent, "name": "Software", "remaining": 50_000, "remaining_after": 49_000, "excluded": False}
+        ]
 
 
 def test_approval_commits_once(books):
@@ -86,7 +122,7 @@ def test_approval_commits_once(books):
         done = FA.approval_decided(c, asked.approval_id, AT)
         again = FA.approval_decided(c, asked.approval_id, AT)
         assert done.status == again.status == "committed" and done.result["budget_id"] and again.result == {}
-        assert _count(c, "fin_budgets") == 5
+        assert _count(c, "fin_budgets") == 6
         assert H.approval(c, asked.approval_id)["consumed_at"]
         assert act(c, "bot:coder", "x", {}, "coder-1").code == "conflict"
         assert _coder_asks(c, parent).action_id == asked.action_id
@@ -100,7 +136,7 @@ def test_a_changed_payload_voids_the_approval_and_asks_again(books):
         c.execute("UPDATE approvals SET payload_hash='tampered' WHERE id=?", (asked.approval_id,))
         redo = FA.approval_decided(c, asked.approval_id, AT)
         assert redo.status == "needs_approval" and redo.approval_id != asked.approval_id
-        assert _count(c, "fin_budgets") == 4
+        assert _count(c, "fin_budgets") == 5
         assert FA.approval_decided(c, asked.approval_id, AT) is None
         H.approval_decide(c, "human:cara", redo.approval_id, "approved")
         assert FA.approval_decided(c, redo.approval_id, AT).status == "committed"
@@ -114,13 +150,15 @@ def test_decline_someone_else_and_a_lost_right_never_commit(books):
         assert (FA.approval_decided(c, no.approval_id, AT).status) == "denied"
         other = _coder_asks(c, parent, "k-other", 4_000)
         H.approval_decide(c, "human:cara", other.approval_id, "approved")
-        c.execute("UPDATE approvals SET decided_by='human:dan' WHERE id=?", (other.approval_id,))
-        assert FA.approval_decided(c, other.approval_id, AT).status == "denied"
+        c.execute("UPDATE approvals SET decided_by_id='human:dan' WHERE id=?", (other.approval_id,))
+        # Decided by someone other than the person it was sent to: the approval is void and asked again (§5), not denied.
+        asked_again = FA.approval_decided(c, other.approval_id, AT)
+        assert asked_again.status == "needs_approval" and asked_again.approval_id != other.approval_id
         late = _coder_asks(c, parent, "k-late", 3_000)
         H.approval_decide(c, "human:cara", late.approval_id, "approved")
         c.execute("UPDATE fin_budgets SET active=0 WHERE id=?", (parent,))
         assert FA.approval_decided(c, late.approval_id, AT).status == "failed"
-        assert _count(c, "fin_budgets") == 4
+        assert _count(c, "fin_budgets") == 5
 
 
 def test_withdrawn_and_expired_approvals_end_the_action(books):
@@ -129,7 +167,7 @@ def test_withdrawn_and_expired_approvals_end_the_action(books):
         gone = _coder_asks(c, parent, "k-gone")
         H.approval_withdraw(c, gone.approval_id, "No decision in 14 days.")
         old = _coder_asks(c, parent, "k-old", 4_000)
-        c.execute("UPDATE approvals SET created='2026-09-01T00:00:00.000000Z' WHERE id=?", (old.approval_id,))
+        c.execute("UPDATE approvals SET created_at='2026-09-01T00:00:00.000000Z' WHERE id=?", (old.approval_id,))
         H.approval_withdraw(c, old.approval_id, "No decision in 14 days.")
         done = {r.action_id: r.status for r in FA.approvals_sweep(c, AT)}
         assert done == {gone.action_id: "withdrawn", old.action_id: "expired"}
@@ -145,17 +183,115 @@ def test_default_gates_send_close_and_large_bot_entries_to_one_person(books):
         assert (close.status, close.approver, close.rule) == ("needs_approval", OWNER, "default:close")
         act(c, OWNER, "right_grant", {"teammate": "bot:coder", "right": "finance.book"})
         act(c, OWNER, "view_grant", {"subject": "bot:coder", "what": "everything"})
-        big = {"date": "2026-10-03", "lines": [{"account_id": account(c, "6900"), "amount": 600_000},
-                                               {"account_id": account(c, "1000"), "amount": -600_000}]}
+        big = {
+            "date": "2026-10-03",
+            "lines": [
+                {"account_id": account(c, "6900"), "amount": 600_000},
+                {"account_id": account(c, "1000"), "amount": -600_000},
+            ],
+        }
         asked = act(c, "bot:coder", "journal", big)
         assert (asked.status, asked.approver) == ("needs_approval", OWNER)
         FA.setup(c, OWNER, AT, finance_approver="human:dan")
+        open_views(c)
         assert act(c, "bot:coder", "journal", big).approver == "human:dan"
-        assert act(c, "bot:coder", "account_create", {"code": "6400", "name": "Ads", "type": "expense"}).status == \
-            "needs_approval"
-        grant = act(c, "bot:coder", "view_grant", {"subject": "human:eve", "what": "expenses", "whose": "team",
-                                                   "whose_team": "web"})
-        assert grant.code == "denied"            # the coder leads no team
+        assert (
+            act(c, "bot:coder", "account_create", {"code": "6400", "name": "Ads", "type": "expense"}).status
+            == "needs_approval"
+        )
+        grant = act(
+            c,
+            "bot:coder",
+            "view_grant",
+            {"subject": "human:eve", "what": "expenses", "whose": "team", "whose_team": "web"},
+        )
+        assert grant.code == "denied"  # the coder leads no team
+
+
+def _provider_rows(c):
+    """A books connection and its outbox row, the rows a dev copy must not keep acting on."""
+    c.execute(
+        "INSERT INTO fin_connections(id,provider,purpose,created_at,created_by) "
+        "VALUES('fc1','quickbooks','books',?,'morgan')",
+        (H.now(),),
+    )
+    c.execute(
+        "INSERT INTO fin_outbox(id,connection_id,op,idempotency_key,created_at,created_by) "
+        "VALUES('ob1','fc1','journal.create','k1',?,'morgan')",
+        (H.now(),),
+    )
+
+
+def test_a_dev_copy_scrub_empties_the_provider_rows_with_keys_on(tmp_path):
+    store = Store(Settings(db_path=tmp_path / "hub.sqlite"))
+    store.initialize(seed_market=False)
+    with closing(sqlite3.connect(store.settings.db_path)) as c:
+        c.execute("PRAGMA foreign_keys=ON")
+        _provider_rows(c)
+        removed = FA.scrub_dev_copy(c, H.now())
+        assert removed["fin_connections"] == 1 and removed["fin_outbox"] == 1 and removed["fin_actions"] == 0
+        assert [t for t in FA.DEV_COPY_EMPTIED if _count(c, t)] == []
+        c.commit()
+
+
+def test_a_dev_copy_build_reports_the_rows_finance_emptied(tmp_path):
+    source = Store(Settings(db_path=tmp_path / "live" / "hub.sqlite"))
+    source.initialize(seed_market=False)
+    with closing(sqlite3.connect(source.settings.db_path)) as c:
+        c.execute("PRAGMA foreign_keys=ON")
+        _provider_rows(c)
+        c.commit()
+    for conn in source.pool:
+        conn.close()
+    source.pool.clear()
+    dest = tmp_path / "copy" / "hub.sqlite"
+    removed, _ = devcopy.build(source.settings.db_path, dest, days=30)
+    assert removed["fin_connections"] == 1 and removed["fin_outbox"] == 1
+    with closing(sqlite3.connect(dest)) as c:
+        assert [t for t in FA.DEV_COPY_EMPTIED if _count(c, t)] == []
+
+
+def test_a_dev_copy_keeps_the_prepaid_postings_so_a_month_is_not_expensed_twice(tmp_path):
+    """A prepaid month's posting record is what stops amortize from expensing that month again. A dev copy keeps it
+    whole (DEV_COPY_KEPT), so the table is neither kept-by-accident nor one of the unclassified tables the copy empties."""
+    store = Store(Settings(db_path=tmp_path / "hub.sqlite"))
+    store.initialize(seed_market=False)
+    with closing(sqlite3.connect(store.settings.db_path)) as c:
+        assert "fin_prepaid_postings" in FA.DEV_COPY_KEPT
+        assert "fin_prepaid_postings" not in devcopy.emptied(c)
+
+
+def test_a_dev_copy_scrub_with_one_emptied_table_missing_still_empties_the_others(tmp_path):
+    store = Store(Settings(db_path=tmp_path / "hub.sqlite"))
+    store.initialize(seed_market=False)
+    with closing(sqlite3.connect(store.settings.db_path)) as c:
+        c.execute("PRAGMA foreign_keys=ON")
+        _provider_rows(c)
+        c.commit()
+        c.execute("PRAGMA foreign_keys=OFF")  # as devcopy's copy runs: a missing child is not checked
+        c.execute("DROP TABLE fin_cards")
+        removed = FA.scrub_dev_copy(c, H.now())
+        assert "fin_cards" not in removed and removed["fin_connections"] == 1
+        assert _count(c, "fin_connections") == 0 and _count(c, "fin_outbox") == 0
+        c.commit()
+
+
+def test_a_dev_copy_build_still_empties_finance_when_one_of_its_tables_is_missing(tmp_path):
+    source = Store(Settings(db_path=tmp_path / "live" / "hub.sqlite"))
+    source.initialize(seed_market=False)
+    with closing(sqlite3.connect(source.settings.db_path)) as c:
+        c.execute("PRAGMA foreign_keys=ON")
+        _provider_rows(c)
+        c.execute("DROP TABLE fin_cards")
+        c.commit()
+    for conn in source.pool:
+        conn.close()
+    source.pool.clear()
+    dest = tmp_path / "copy" / "hub.sqlite"
+    removed, _ = devcopy.build(source.settings.db_path, dest, days=30)
+    assert removed["fin_connections"] == 1
+    with closing(sqlite3.connect(dest)) as c:
+        assert _count(c, "fin_connections") == 0
 
 
 def test_a_changed_approver_voids_the_decision_and_asks_the_new_one(books):
@@ -164,18 +300,18 @@ def test_a_changed_approver_voids_the_decision_and_asks_the_new_one(books):
         H.approval_decide(c, "human:cara", asked.approval_id, "approved")
         c.execute("UPDATE bot_config SET reports_to='human:ben' WHERE bot='coder'")
         redo = FA.approval_decided(c, asked.approval_id, AT)
-        assert (redo.status, redo.approver) == ("needs_approval", "human:ben") and _count(c, "fin_budgets") == 4
+        assert (redo.status, redo.approver) == ("needs_approval", "human:ben") and _count(c, "fin_budgets") == 5
 
 
 def test_defaults_are_fixed_when_asked_not_when_approved(books):
     with books.transaction() as c:
         parent = _software(c)
         asked = _coder_asks(c, parent)
-        stored = c.execute("SELECT payload_json FROM fin_actions WHERE id=?", (asked.action_id,)).fetchone()[0]
+        stored = c.execute("SELECT payload FROM fin_actions WHERE id=?", (asked.action_id,)).fetchone()[0]
         assert '"effective_from": "2026-10-01"' in stored
-        assert _coder_asks(c, parent).action_id == asked.action_id         # a retry without it is the same request
+        assert _coder_asks(c, parent).action_id == asked.action_id  # a retry without it is the same request
         H.approval_decide(c, "human:cara", asked.approval_id, "approved")
-        done = FA.approval_decided(c, asked.approval_id, "2026-11-02T09:00:00.000000Z")
+        done = FA.approval_decided(c, asked.approval_id, "2026-10-20T09:00:00.000000Z")
         assert done.status == "committed" and done.result["effective_from"] == "2026-10-01"
 
 
@@ -183,10 +319,15 @@ def test_the_bot_gate_counts_the_whole_entry(books):
     with books.transaction() as c:
         act(c, OWNER, "right_grant", {"teammate": "bot:coder", "right": "finance.book"})
         act(c, OWNER, "view_grant", {"subject": "bot:coder", "what": "everything"})
-        split = {"date": "2026-10-03", "lines": [{"account_id": account(c, "6900"), "amount": 300_000},
-                                                 {"account_id": account(c, "6100"), "amount": 300_000},
-                                                 {"account_id": account(c, "1000"), "amount": -300_000},
-                                                 {"account_id": account(c, "2000"), "amount": -300_000}]}
+        split = {
+            "date": "2026-10-03",
+            "lines": [
+                {"account_id": account(c, "6900"), "amount": 300_000},
+                {"account_id": account(c, "6100"), "amount": 300_000},
+                {"account_id": account(c, "1000"), "amount": -300_000},
+                {"account_id": account(c, "2000"), "amount": -300_000},
+            ],
+        }
         assert act(c, "bot:coder", "journal", split).status == "needs_approval"
 
 
@@ -196,12 +337,17 @@ def test_a_recheck_refusal_that_named_a_sibling_hides_its_name_once_the_asker_ca
         parent = _software(c)
         grant = act(c, OWNER, "view_grant", {"subject": "human:eve", "what": "everything"})
         assert grant.status == "committed"
-        asked = act(c, "human:eve", "budget_create", {**body, "account_id": account(c, "6100"),
-                                                      "parent_id": parent}, "eng-ask")
+        asked = act(
+            c, "human:eve", "budget_create", {**body, "account_id": account(c, "6100"), "parent_id": parent}, "eng-ask"
+        )
         assert (asked.status, asked.approver) == ("needs_approval", "human:cara")
         # Before the manager decides, an overlapping sibling is added; the recheck at approval refuses naming it.
-        payroll = act(c, OWNER, "budget_create", {"name": "Payroll", "team": "eng", "amount": 5_000,
-                                                  "account_id": account(c, "6100"), "parent_id": parent})
+        payroll = act(
+            c,
+            OWNER,
+            "budget_create",
+            {"name": "Payroll", "team": "eng", "amount": 5_000, "account_id": account(c, "6100"), "parent_id": parent},
+        )
         assert payroll.status == "committed"
         H.approval_decide(c, "human:cara", asked.approval_id, "approved")
         closed = FA.approval_decided(c, asked.approval_id, AT)
@@ -209,13 +355,15 @@ def test_a_recheck_refusal_that_named_a_sibling_hides_its_name_once_the_asker_ca
         assert act(c, OWNER, "view_revoke", {"grant_id": grant.result["grant_id"]}).status == "committed"
         stored = c.execute("SELECT reason FROM fin_actions WHERE id=?", (asked.action_id,)).fetchone()[0]
         assert "Payroll" not in stored
-        replay = act(c, "human:eve", "budget_create", {**body, "account_id": account(c, "6100"),
-                                                       "parent_id": parent}, "eng-ask")
+        replay = act(
+            c, "human:eve", "budget_create", {**body, "account_id": account(c, "6100"), "parent_id": parent}, "eng-ask"
+        )
         assert replay.replayed and "Payroll" not in replay.reason
         assert "Payroll" not in FR.action_for(c, "human:eve", asked.action_id)["reason"]
         assert act(c, OWNER, "view_grant", {"subject": "human:eve", "what": "everything"}).status == "committed"
-        again = act(c, "human:eve", "budget_create", {**body, "account_id": account(c, "6100"),
-                                                      "parent_id": parent}, "eng-ask")
+        again = act(
+            c, "human:eve", "budget_create", {**body, "account_id": account(c, "6100"), "parent_id": parent}, "eng-ask"
+        )
         assert again.replayed and "Payroll" in again.reason
 
 
@@ -225,8 +373,13 @@ def test_an_approval_that_no_longer_fits_stores_no_figure(books):
     with books.transaction() as c:
         parent = _software(c)
         assert act(c, OWNER, "view_grant", {"subject": "bot:coder", "what": "pnl"}, "coder-view").status == "committed"
-        asked = act(c, "bot:coder", "allocation_set", {"budget_id": parent, "target_kind": "teammate",
-                                                       "target_id": "bot:coder", "amount": 5_000}, "coder-set")
+        asked = act(
+            c,
+            "bot:coder",
+            "allocation_set",
+            {"budget_id": parent, "target_kind": "teammate", "target_id": "bot:coder", "amount": 5_000},
+            "coder-set",
+        )
         assert (asked.status, asked.approver) == ("needs_approval", "human:cara"), asked
         assert act(c, OWNER, "budget_update", {"budget_id": parent, "amount": 1_000}, "cut").status == "committed"
         H.approval_decide(c, "human:cara", asked.approval_id, "approved")

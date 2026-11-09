@@ -1,22 +1,38 @@
 """The faster defaults for permissions: what BotOps does with requester rights (docs/permissions.md). Ana owns the Team, Ben is an admin, Cara is a member (the base fixture)."""
 
 from backend import botops_act as B
-from backend.tests.test_api import api, post, put, ready  # noqa: F401  (fixture)
-from backend.tests.test_botops_parity import act
-from backend.tests.test_member_bots import botops, call, turn  # noqa: F401  (fixtures)
+from backend.tests.helpers.api import post, put, ready  # noqa: F401  (fixture)
+from backend.tests.helpers.botops_parity import act
+from backend.tests.helpers.member_bots import botops, call, turn  # noqa: F401  (fixtures)
 
 
 def test_which_routes_run_without_a_card_and_which_still_need_one():
     to_bot = lambda name: str(name).startswith("bot:")
-    direct = [("POST", "runners/r1/restart", None), ("POST", "credentials/c1/grants/g1/revoke", None),
-              ("PUT", "usage/limits/ops", None), ("PUT", "usage/limits", None), ("PUT", "providers", None),
-              ("POST", "chat/ops", None), ("POST", "messages", {"to": "bot:ops"}), ("POST", "runners/r1/logins", None),
-              ("GET", "runners/r1/logins/l1", None), ("POST", "runners/r1/inbox-only", None),
-              ("PUT", "bots/ops/github-repos", None), ("POST", "bots/ops/archive", None),
-              ("POST", "system/update", None), ("PUT", "access/rules", None)]
-    cards = [("POST", "runners/r1/revoke", None), ("POST", "runners/r1/member-bots", None), ("PUT", "access/allow", None),
-             ("PUT", "access/limits", None),
-             ("POST", "messages", {"to": "human:ben"}), ("POST", "messages", {"to": "nobody"}), ("POST", "messages", None)]
+    direct = [
+        ("POST", "runners/r1/restart", None),
+        ("POST", "credentials/c1/grants/g1/revoke", None),
+        ("PUT", "usage/limits/ops", None),
+        ("PUT", "usage/limits", None),
+        ("PUT", "providers", None),
+        ("POST", "chat/ops", None),
+        ("POST", "messages", {"to": "bot:ops"}),
+        ("POST", "runners/r1/logins", None),
+        ("GET", "runners/r1/logins/l1", None),
+        ("POST", "runners/r1/inbox-only", None),
+        ("PUT", "bots/ops/github-repos", None),
+        ("POST", "bots/ops/archive", None),
+        ("POST", "system/update", None),
+        ("PUT", "access/rules", None),
+    ]
+    cards = [
+        ("POST", "runners/r1/revoke", None),
+        ("POST", "runners/r1/member-bots", None),
+        ("PUT", "access/allow", None),
+        ("PUT", "access/limits", None),
+        ("POST", "messages", {"to": "human:ben"}),
+        ("POST", "messages", {"to": "nobody"}),
+        ("POST", "messages", None),
+    ]
     for method, path, body in direct:
         assert B.classify(method, path, body, None, to_bot) == "do", (method, path)
     for method, path, body in cards:
@@ -28,7 +44,11 @@ def test_which_routes_run_without_a_card_and_which_still_need_one():
     tight = {"botops_direct": False}
     for method, path in (("PUT", "providers"), ("PUT", "usage/limits"), ("PUT", "usage/limits/ops")):
         assert B.classify(method, path, {}, tight, to_bot) == "confirm", path
-    for method, path in (("POST", "runners/r1/restart"), ("POST", "chat/ops"), ("POST", "credentials/c1/grants/g1/revoke")):
+    for method, path in (
+        ("POST", "runners/r1/restart"),
+        ("POST", "chat/ops"),
+        ("POST", "credentials/c1/grants/g1/revoke"),
+    ):
         assert B.classify(method, path, {}, tight, to_bot) == "do", path
 
 
@@ -42,18 +62,23 @@ def test_botops_restarts_a_computer_and_starts_a_model_sign_in_without_a_card(ap
     read = act(api, ana, "GET", f"runners/{botops['runner_id']}/logins/{started.json()['id']}")
     assert read.status_code == 200
     # Requester rights reach the code route; its sign-in state check still applies.
-    assert act(api, ana, "POST", f"runners/{botops['runner_id']}/logins/{started.json()['id']}/code", {"code": "abcdef"}).status_code == 409
+    assert (
+        act(
+            api, ana, "POST", f"runners/{botops['runner_id']}/logins/{started.json()['id']}/code", {"code": "abcdef"}
+        ).status_code
+        == 409
+    )
     with api.app.state.store.read() as c:
         assert c.execute("SELECT count(*) FROM assistant_actions").fetchone()[0] == 0
-        row = c.execute("SELECT actor,detail_json FROM events WHERE action='runner.restart'").fetchone()
-        assert row["actor"] == "human:ana" and '"via": "botops"' in row["detail_json"]
+        row = c.execute("SELECT actor,detail FROM events WHERE action='runner.restart'").fetchone()
+        assert row["actor"] == "human:ana" and '"via": "botops"' in row["detail"]
 
 
 def test_botops_keeps_a_computer_for_inbox_bots_as_the_person_who_asked(api, botops):
     ana = turn(api, botops, person="ana-test", text="Stop keeping this computer for inbox bots")
     path = f"runners/{botops['runner_id']}/inbox-only"
     assert act(api, ana, "POST", path, {"enabled": False}).json() == {"enabled": False}
-    refused = act(api, ana, "POST", path, {"enabled": True})          # BotOps itself runs there
+    refused = act(api, ana, "POST", path, {"enabled": True})  # BotOps itself runs there
     assert refused.status_code == 409 and "Move these bots" in refused.json()["error"]["detail"]
 
 
@@ -61,6 +86,6 @@ def test_a_member_makes_a_personal_token_until_the_owner_says_otherwise(api):
     assert post(api, "me/tokens", {"label": "laptop"}, "cara-test")["token"].startswith("tico_pt_")
     assert put(api, "access/rules", {"member_tokens": False}, "ana-test")["member_tokens"] is False
     assert call(api, "post", "me/tokens", "cara-test", {"label": "again"}).status_code == 403
-    assert call(api, "get", "me/tokens", "cara-test").json()["can_create"] is False      # no Connect on her row
+    assert call(api, "get", "me/tokens", "cara-test").json()["can_create"] is False  # no Connect on her row
     assert call(api, "get", "me/tokens", "ben-test").json()["can_create"] is True
-    assert post(api, "me/tokens", {"label": "admin's"}, "ben-test")["token"]          # admins and the owner still do
+    assert post(api, "me/tokens", {"label": "admin's"}, "ben-test")["token"]  # admins and the owner still do

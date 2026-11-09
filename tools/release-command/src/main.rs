@@ -177,7 +177,7 @@ fn freeze(options: &HashMap<String, String>, path: &PathBuf) -> Result<()> {
         writer_task: None,
     }
     .save(path)?;
-    println!("Frozen. Run publish to validate and tag this commit; release notes are written after publication.");
+    println!("Frozen. Run publish to validate and tag this commit; its release notes are on the release-approval issue.");
     Ok(())
 }
 fn publish(options: &HashMap<String, String>, path: &PathBuf) -> Result<()> {
@@ -284,7 +284,7 @@ fn validate_and_tag(
         if status.success() {
             break;
         }
-        rerun_cancelled(state, candidate, id)?;
+        rerun_canceled(state, candidate, id)?;
     }
     verify_run(state, candidate, id, true)?;
     unchanged(candidate)?;
@@ -301,8 +301,8 @@ fn validate_and_tag(
     );
     Ok(())
 }
-// A run a bot cancelled is rerun in place: same id, title and candidate, so the freeze stays valid. Anything else refuses.
-fn rerun_cancelled(state: &Freeze, candidate: &str, id: u64) -> Result<()> {
+// A run a bot canceled is rerun in place: same id, title and candidate, so the freeze stays valid. Anything else refuses.
+fn rerun_canceled(state: &Freeze, candidate: &str, id: u64) -> Result<()> {
     let run = gh(&["api", &format!("repos/{}/actions/runs/{id}", state.repo)])?;
     require(
         run["status"] == "completed" && run["conclusion"] == "cancelled",
@@ -312,7 +312,7 @@ fn rerun_cancelled(state: &Freeze, candidate: &str, id: u64) -> Result<()> {
     let attempt = run["run_attempt"].as_u64().unwrap_or(1);
     require(
         attempt <= 2,
-        "Release validation was cancelled after 2 reruns; no tag pushed; inspect Actions",
+        "Release validation was canceled after 2 reruns; no tag pushed; inspect Actions",
     )?;
     verify_run(state, candidate, id, false)?;
     unchanged(candidate)?;
@@ -323,7 +323,7 @@ fn rerun_cancelled(state: &Freeze, candidate: &str, id: u64) -> Result<()> {
     for _ in 0..20 {
         let run = gh(&["api", &format!("repos/{}/actions/runs/{id}", state.repo)])?;
         if run["status"] != "completed" {
-            println!("Validation run {id} was cancelled; rerunning it (rerun {attempt} of 2).");
+            println!("Validation run {id} was canceled; rerunning it (rerun {attempt} of 2).");
             return Ok(());
         }
         thread::sleep(Duration::from_secs(3));
@@ -376,9 +376,9 @@ fn file_writer_task(
         .unwrap_or("docs-writer");
     let range = format!("{}..{}", state.previous, state.version);
     let body = format!(
-        "{version} is published. Write its section in CHANGELOG.md from the pull requests merged in {range} \
-         (https://github.com/{repo}/compare/{range}), moving their lines out of ## [Unreleased]. Land it as a \
-         CHANGELOG-only pull request whose commits carry the trailer `Changelog-Release: {version}`.",
+        "{version} is published. Its release notes are on its release-approval issue (label release-approval), built \
+         from the pull requests merged in {range} (https://github.com/{repo}/compare/{range}). There is no notes file \
+         to update.",
         version = state.version,
         repo = state.repo,
     );

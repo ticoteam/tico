@@ -1,20 +1,38 @@
 """Source discovery is identical over HTTP and MCP, with no private-source leakage."""
+
 from backend import market, meetings
-from backend.tests.test_api import api, headers, setup_attempt, runner  # noqa: F401
-from backend.tests.test_mcp import call
+from backend.tests.helpers.api import headers, setup_attempt, runner  # noqa: F401
+from backend.tests.helpers.mcp import call
 
 
 def seed(api):
     with api.app.state.store.transaction() as c:
-        market.create_evidence(c, market.SEED_ACTOR, quote="Cancellation terms in the market",
-                               source_url="https://example.test/market")
+        market.create_evidence(
+            c, market.SEED_ACTOR, quote="Cancellation terms in the market", source_url="https://example.test/market"
+        )
         for rid, kind, private in (("shared", "meeting", False), ("private", "meeting", True), ("note", "note", False)):
-            meetings.snapshot({"id": rid, "title": "Pricing discussion", "kind": kind,
-                "private": private, "owner": "ben@acme.example", "status": "done",
-                "calendar": {"attendees": ["ben@acme.example"]},
-                "turns": [{"text": "Cancellation window is seven days", "speaker": "Dana",
-                           "start_ms": 1000, "end_ms": 4000}]},
-                transcript="Cancellation window is seven days", readable="Cancellation window is seven days", conn=c)
+            meetings.snapshot(
+                {
+                    "id": rid,
+                    "title": "Pricing discussion",
+                    "kind": kind,
+                    "private": private,
+                    "owner": "ben@acme.example",
+                    "status": "done",
+                    "calendar": {"attendees": ["ben@acme.example"]},
+                    "turns": [
+                        {
+                            "text": "Cancellation window is seven days",
+                            "speaker": "Dana",
+                            "start_ms": 1000,
+                            "end_ms": 4000,
+                        }
+                    ],
+                },
+                transcript="Cancellation window is seven days",
+                readable="Cancellation window is seven days",
+                conn=c,
+            )
 
 
 def test_meetings_search_and_full_transcript_respect_source_access(api):

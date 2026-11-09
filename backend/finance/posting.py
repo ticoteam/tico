@@ -1,19 +1,24 @@
 """Posting to the books: the invariant checks, the period, the rollups and budget crossings, all in the caller's
 transaction. Entries never change after this; a correction is a reversal."""
+
 import sqlite3
 from collections.abc import Mapping, Sequence
 from dataclasses import replace
 
 from . import budgeting
+from . import platform_share as PS
 from .context import Ctx, load
+from .core import attribution as CA
 from .core import dates
 from .core import ledger as L
 from .core import validate as V
 from .core.errors import CONFLICT, NOT_FOUND, PERIOD_CLOSED, FinanceError, invalid
 from .core.org import SYSTEM
 from .store import ap as SAP
+from .store import attribution as ATT
 from .store import budgets as SB
 from .store import ledger as SL
+from .store import raw_totals as SR
 
 
 def ensure_period(ctx: Ctx, day: str) -> str:
@@ -34,35 +39,113 @@ def with_team(ctx: Ctx, tags: Mapping[str, str]) -> dict[str, str]:
     return out
 
 
-def post(ctx: Ctx, e: L.Entry, *, by: str, action_id: str = "", reverses_id: str = "",
-         reversing: bool = False, touch: bool = True, importing: bool = False) -> tuple[str, list[str]]:
+def post(
+    ctx: Ctx,
+    e: L.Entry,
+    *,
+    by: str,
+    action_id: str = "",
+    reverses_id: str = "",
+    reversing: bool = False,
+    touch: bool = True,
+    importing: bool = False,
+    claims: Mapping[int, ATT.Claim] | None = None,
+) -> tuple[str, list[str]]:
     """Check and post one entry. The entry id and its line ids. `touch=False` leaves the budget crossings to the
-    caller, for once everything that goes with the entry is written."""
+    caller, for once everything that goes with the entry is written. `claims` gives lines an attribution by index: a
+    reversal carries its original's over; otherwise the book's rules judge each P&L line as it posts."""
     # A plain vendor name is keyed folded (L.name_key; a contact's id is its own key) and keeps its text as the key's
     # label; a reversal keeps its keys.
     if not reversing:
         for raw in {x.contact_id for x in e.lines if x.contact_id.strip()}:
             if not SAP.is_contact(ctx.c, raw):
-                key = L.name_key(raw)       # a stored key posted again (a reclass) only fills a missing label
+                key = L.name_key(raw)  # a stored key posted again (a reclass) only fills a missing label
                 SL.label_vendor(ctx.c, ctx.book.id, key, raw.strip(), e.entry_date, weak=raw.strip() == key)
-    e = replace(e, lines=tuple(replace(x, tags=with_team(ctx, x.tags),
-                                       contact_id=x.contact_id if reversing else L.name_key(x.contact_id))
-                               for x in e.lines))
+    e = replace(
+        e,
+        lines=tuple(
+            replace(x, tags=with_team(ctx, x.tags), contact_id=x.contact_id if reversing else L.name_key(x.contact_id))
+            for x in e.lines
+        ),
+    )
     closed = SL.closed_on(ctx.c, ctx.book.id, e.entry_date)
     L.check(e, ctx.book, ctx.accounts, closed, reversing, importing)
+    if not reversing and not _raw_entry(e):
+        _no_raw_month(ctx, e.entry_date)
     period_id = ensure_period(ctx, e.entry_date)
     entry_id = SL.new_id()
-    line_ids = SL.insert_entry(ctx.c, e, entry_id=entry_id, period_id=period_id, action_id=action_id,
-                               reverses_id=reverses_id, by=by, at=ctx.at)
+    if claims is None:
+        claims = {} if reversing else _claims(ctx, e)
+    line_ids = SL.insert_entry(
+        ctx.c,
+        e,
+        entry_id=entry_id,
+        period_id=period_id,
+        action_id=action_id,
+        reverses_id=reverses_id,
+        by=by,
+        at=ctx.at,
+        claims=claims,
+        team_of=ctx.org.team_of,
+    )
     if not e.cash_view():
         # The cash P&L leaves this entry's P&L lines out; a bill's or invoice's come back as it is paid (settlements).
-        for x in e.lines:
+        # Each line's correction moves with its parts, as its accrual rollups do.
+        for n, x in enumerate(e.lines):
             account = ctx.accounts.get(x.account_id)
             if account is not None and account.type in L.PNL_TYPES:
-                SAP.cash_roll(ctx.c, ctx.book.id, e.entry_date, x.account_id, x.tags, x.contact_id, -x.amount)
+                splits = claims[n].splits if n in claims else ()
+                for tags, amount in CA.spread(x.tags, -x.amount, splits, ctx.org.team_of):
+                    SAP.cash_roll(ctx.c, ctx.book.id, e.entry_date, x.account_id, tags, x.contact_id, amount)
+    if not reversing:
+        # A charge posting changes the window of the charge after it on its vendor (platform_share.py).
+        from .attribution import after_post  # lazy: attribution imports this module
+
+        after_post(ctx, e.lines, e.entry_date, by)
     if touch:
         touched(ctx, e.lines, by)
     return entry_id, line_ids
+
+
+def _claims(ctx: Ctx, e: L.Entry) -> dict[int, ATT.Claim]:
+    """The attribution each P&L line of an entry takes as it posts: the enabled rule its vendor, its money account (the
+    entry's first line on a balance sheet account), its account, or its class, location or project matches, by
+    precedence (ATT.PRECEDENCE); else an ad platform's share (platform_share.py) when its vendor is a platform's own
+    contact."""
+    rules = ATT.rules(ctx.c, ctx.book.id)
+    money = ""
+    for x in e.lines:
+        account = ctx.accounts.get(x.account_id)
+        if account is not None and account.type not in L.PNL_TYPES:
+            money = x.account_id
+            break
+    out: dict[int, ATT.Claim] = {}
+    for n, x in enumerate(e.lines):
+        account = ctx.accounts.get(x.account_id)
+        if account is None or account.type not in L.PNL_TYPES:
+            continue
+        keys = ATT.vendor_keys_of(ctx.c, ctx.book.id, x.contact_id)
+        claim = ATT.claim_for(rules, ATT.facts_of_tags(x.account_id, keys, money, x.tags)) if rules else None
+        if claim is None:
+            claim = PS.claim_at_posting(ctx, keys, e.entry_date)
+        if claim is not None:
+            out[n] = claim
+    return out
+
+
+def _raw_entry(e: L.Entry) -> bool:
+    """The entry a spreadsheet's raw totals post as (store/raw_totals), the one import that may post into its own month."""
+    return e.source == "import" and e.source_id.startswith("raw_totals:")
+
+
+def _no_raw_month(ctx: Ctx, day: str) -> None:
+    """A month holding live raw totals takes nothing else: every itemized posting and every journal dated in it waits
+    until that month's raw entry is reversed (spec §4.1). The refusal names the month, never the entry."""
+    start, end = dates.month_bounds(dates.day(day))
+    if SR.live_entry_in(ctx.c, ctx.book.id, start.isoformat(), end.isoformat()) is not None:
+        raise FinanceError(
+            CONFLICT, f"{day[:7]} holds raw totals: reverse that month's raw entry before anything else posts there"
+        )
 
 
 def touched(ctx: Ctx, lines: Sequence[L.Line], by: str) -> None:
@@ -72,8 +155,9 @@ def touched(ctx: Ctx, lines: Sequence[L.Line], by: str) -> None:
         account = ctx.accounts.get(item.account_id)
         if account is None or account.type != "expense":
             continue
-        b = budgeting.leaf(ctx, item.account_id, item.tags.get("team", ""), item.tags.get("teammate", ""),
-                           item.contact_id)
+        b = budgeting.leaf(
+            ctx, item.account_id, item.tags.get("team", ""), item.tags.get("teammate", ""), item.contact_id
+        )
         if b is not None:
             ids += budgeting.chain_of(ctx, b.id)
     if ids:
@@ -90,15 +174,38 @@ def reverse(ctx: Ctx, entry_id: str, *, day: str | None, memo: str, by: str, act
         raise FinanceError(CONFLICT, "that entry is already reversed")
     if row["reverses_id"]:
         raise FinanceError(CONFLICT, "that entry is itself a reversal; post a new entry instead")
-    lines = [line for _, line in SL.entry_lines(ctx.c, entry_id)]
+    rows = SL.entry_lines(ctx.c, entry_id)
+    lines = [line for _, line in rows]
+    # The reversal takes each line's attribution as it stands, so it undoes exactly the parts the original rolled.
+    claims = {
+        n: claim for n, (r, _) in enumerate(rows) if (claim := ATT.claim_of_line(ctx.c, str(r["id"]))) is not None
+    }
     when = day or str(row["entry_date"])
     if SL.closed_on(ctx.c, ctx.book.id, when):
         raise FinanceError(PERIOD_CLOSED, f"the period holding {when} is closed; reverse on an open date")
-    e = L.Entry(book_id=ctx.book.id, entry_date=when, memo=memo or f"Reverses {entry_id}", source=str(row["source"]),
-                source_id=str(row["source_id"]), lines=L.reversal(lines), basis=str(row["basis"] or "both"))
-    rid, _ = post(ctx, e, by=by, action_id=action_id, reverses_id=entry_id, reversing=True)
+    from .banking import opening_terms, refresh_covered  # lazy: banking imports this module
+
+    raw_month = str(row["source"]) == "import" and str(row["source_id"]).startswith("raw_totals:")
+    before = (
+        opening_terms(ctx) if raw_month else {}
+    )  # the openings' terms before this month uncovers rows and moves its line
+    e = L.Entry(
+        book_id=ctx.book.id,
+        entry_date=when,
+        memo=memo or f"Reverses {entry_id}",
+        source=str(row["source"]),
+        source_id=str(row["source_id"]),
+        lines=L.reversal(lines),
+        basis=str(row["basis"] or "both"),
+    )
+    rid, _ = post(ctx, e, by=by, action_id=action_id, reverses_id=entry_id, reversing=True, claims=claims)
     if SL.mark_reversed(ctx.c, entry_id) != 1:
         raise FinanceError(CONFLICT, "that entry is already reversed")
+    from .attribution import after_reversal  # lazy: attribution imports this module
+
+    after_reversal(ctx, entry_id, by)  # the charges it undid leave the windows of the charges after them
+    if raw_month:
+        refresh_covered(ctx, before)  # a reversed raw-totals month uncovers the feed rows behind it (§4.1)
     return rid
 
 
@@ -108,14 +215,27 @@ def system_entry(raw: object, ctx: Ctx) -> L.Entry:
     V.only(p, ("date", "memo", "source", "source_id", "lines", "basis"))
     source = V.choice(p, "source", tuple(s for s in L.SOURCES if s != "manual"))
     lines = tuple(L.line(item, ctx.book.base_currency) for item in V.items(p.get("lines"), "lines", L.MAX_LINES))
-    return L.Entry(book_id=ctx.book.id, entry_date=V.day(p, "date"), memo=V.opt_text(p, "memo") or "",
-                   source=source, source_id=V.opt_text(p, "source_id", 200) or "", lines=lines,
-                   basis=V.choice(p, "basis", L.BASES, "both"))
+    return L.Entry(
+        book_id=ctx.book.id,
+        entry_date=V.day(p, "date"),
+        memo=V.opt_text(p, "memo") or "",
+        source=source,
+        source_id=V.opt_text(p, "source_id", 200) or "",
+        lines=lines,
+        basis=V.choice(p, "basis", L.BASES, "both"),
+    )
 
 
-def post_entry(c: sqlite3.Connection, entry: Mapping[str, object], *, by: str = SYSTEM,
-               hold_ids: Sequence[str] = (), at: str | None = None, touch: bool = True,
-               roles: Mapping[int, str] | None = None) -> dict[str, object]:
+def post_entry(
+    c: sqlite3.Connection,
+    entry: Mapping[str, object],
+    *,
+    by: str = SYSTEM,
+    hold_ids: Sequence[str] = (),
+    at: str | None = None,
+    touch: bool = True,
+    roles: Mapping[int, str] | None = None,
+) -> dict[str, object]:
     """Post an entry from Tico itself (Gateway and video usage, imports) and absorb the settled holds it stands for,
     so the spend counts once. A re-sent (source, source_id) returns the first entry and posts nothing. `touch=False`
     leaves the budget crossings to a caller posting several entries that belong together. `roles` marks lines by
@@ -139,5 +259,5 @@ def post_entry(c: sqlite3.Connection, entry: Mapping[str, object], *, by: str = 
         elif row["status"] == "settled":
             SB.absorb(c, hid, entry_id)
     if touch:
-        touched(ctx, e.lines, by)   # after the holds are taken in: the entry and its holds never count twice
+        touched(ctx, e.lines, by)  # after the holds are taken in: the entry and its holds never count twice
     return {"entry_id": entry_id, "line_ids": line_ids, "posted": True}

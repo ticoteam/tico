@@ -5,6 +5,7 @@ is the dedupe ledger: one row per accepted delivery id, kept 30 days, apart from
 display log, so a late retry is still a duplicate. A trigger's `preset` says how its calls are verified (`hmac` for
 every trigger that already had a signing secret); `hourly` NULL means the default cap; `unheard` is `log` or `note`.
 """
+
 SCHEMA = """
 ALTER TABLE triggers ADD COLUMN preset TEXT NOT NULL DEFAULT 'none';
 ALTER TABLE triggers ADD COLUMN type_from TEXT NOT NULL DEFAULT '';
@@ -19,7 +20,7 @@ ALTER TABLE trigger_deliveries ADD COLUMN rules INTEGER NOT NULL DEFAULT 0;
 CREATE TABLE IF NOT EXISTS trigger_bodies (
   trigger_id TEXT NOT NULL, delivery TEXT NOT NULL, received_at TEXT NOT NULL, expires_at TEXT NOT NULL,
   type TEXT NOT NULL DEFAULT '', via TEXT NOT NULL DEFAULT 'direct',
-  headers_json TEXT NOT NULL DEFAULT '{}', body BLOB NOT NULL,
+  headers TEXT NOT NULL DEFAULT '{}', body BLOB NOT NULL,
   PRIMARY KEY(trigger_id, delivery));
 CREATE INDEX IF NOT EXISTS trigger_bodies_expires ON trigger_bodies(expires_at);
 CREATE TABLE IF NOT EXISTS trigger_seen (

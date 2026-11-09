@@ -2,13 +2,8 @@ import io
 
 from PIL import Image
 
-from backend.tests.test_api import api, headers, setup_attempt  # noqa: F401
-
-
-def image(kind="PNG", colour="red"):
-    out = io.BytesIO()
-    Image.new("RGB", (16, 16), colour).save(out, kind)
-    return out.getvalue()
+from backend.tests.helpers.api import headers, setup_attempt  # noqa: F401
+from backend.tests.helpers.team_icon import image
 
 
 def test_icon_owner_rights_public_png_cache_and_replacement(api):
@@ -32,6 +27,7 @@ def test_icon_owner_rights_public_png_cache_and_replacement(api):
 
 def test_icon_strips_metadata_makes_square_and_weak_etag_matches(api):
     from PIL.PngImagePlugin import PngInfo
+
     source = io.BytesIO()
     metadata = PngInfo()
     metadata.add_text("private", "acme internal")
@@ -42,4 +38,22 @@ def test_icon_strips_metadata_makes_square_and_weak_etag_matches(api):
     with Image.open(io.BytesIO(response.content)) as result:
         assert result.size == (300, 300) and not result.info
         assert result.getpixel((0, 0))[3] == 0
-    assert api.get("/api/v2/team/icon", headers={"If-None-Match": '"other", W/' + response.headers["etag"]}).status_code == 304
+    assert (
+        api.get("/api/v2/team/icon", headers={"If-None-Match": '"other", W/' + response.headers["etag"]}).status_code
+        == 304
+    )
+
+
+def test_apple_touch_icon_is_opaque_180_square_with_the_logo_fitted_and_padded():
+    from backend import team_icon
+
+    logo = Image.new("RGBA", (40, 40), (0, 0, 0, 0))
+    logo.paste((255, 0, 0, 255), (10, 10, 30, 30))
+    source = io.BytesIO()
+    logo.save(source, "PNG")
+    with Image.open(io.BytesIO(team_icon.touch_png(source.getvalue()))) as icon:
+        assert icon.format == "PNG" and icon.size == (180, 180) and icon.mode == "RGB"
+        assert icon.getpixel((0, 0)) == (255, 255, 255)  # the padding is white, not the transparent black of the logo
+        assert icon.getpixel((20, 20)) == (255, 255, 255)  # inside the fitted box, where the logo is transparent
+        red = icon.getpixel((90, 90))  # the logo's own colour, in the middle
+        assert red[0] > 240 and red[1] < 15 and red[2] < 15

@@ -5,21 +5,33 @@ from datetime import date, timedelta
 
 from backend import openapi_v2, updates
 from backend.store import H
-from backend.tests.test_api import api, as_member, get, headers, post, restrict, setup_attempt  # noqa: F401
+from backend.tests.helpers.api import as_member, get, headers, post, restrict, setup_attempt  # noqa: F401
 
 
-SLIDES = {"goal": "Grow signups to 400 a month; at 310 and on pace.", "kpis": [],
-          "done": ["Shipped the signup page"], "focus": ["Check conversion"], "blockers": []}
+SLIDES = {
+    "goal": "Grow signups to 400 a month; at 310 and on pace.",
+    "kpis": [],
+    "done": ["Shipped the signup page"],
+    "focus": ["Check conversion"],
+    "blockers": [],
+}
 
 
 def day_offset(offset):
     return (date.fromisoformat(updates.today()) + timedelta(days=offset)).isoformat()
 
 
+def bot_id(c, slug):
+    """A bot's id by its slug: updates are written under the bot's id."""
+    return H.resolve_bot(c, slug)["id"]
+
+
 def allow_redo(api, bot, kind, day):
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO update_queue(id,bot,kind,day,rank,state,redo) VALUES(?,?,?,?,0,'queued',1)",
-                  (H.new_id(), bot, kind, day))
+        c.execute(
+            "INSERT INTO update_queue(id,bot,kind,day,rank,state,redo) VALUES(?,?,?,?,0,'queued',1)",
+            (H.new_id(), bot_id(c, bot), kind, day),
+        )
 
 
 def publish(api, bot_token, kind, day, key, *, body="- Finished the work", slides=None):
@@ -46,8 +58,9 @@ def test_logical_days_restore_and_archive_are_personal_and_kind_scoped(api):
     assert ids(get(api, f"updates?bot=ops&kind=daily")) == [current["id"]]
     archive = get(api, "updates?bot=ops&kind=daily&archive=true")
     assert ids(archive) == [old["id"]] and archive["updates"][0]["archived"] is True
-    assert archive["unread"] == get(api, "updates?bot=ops&kind=daily")["unread"], \
+    assert archive["unread"] == get(api, "updates?bot=ops&kind=daily")["unread"], (
         "archive rows do not inflate the inbox count for the active filter"
+    )
     assert ids(get(api, "updates?bot=ops&kind=weekly")) == [old_week["id"]], "daily posts do not supersede weekly posts"
     history = get(api, "updates?bot=ops&kind=daily&include_archive=true")
     assert {u["id"] for u in history["updates"]} == {old["id"], current["id"]}
@@ -71,11 +84,13 @@ def test_logical_days_restore_and_archive_are_personal_and_kind_scoped(api):
     post(api, "updates/archive", {"ids": [old["id"]], "archived": False}, key="restore-old")
     assert ids(get(api, "updates?bot=ops&kind=daily")) == [old["id"]]
     assert ids(get(api, "updates?bot=ops&kind=daily", token="ben-test")) == [current["id"]]
-    replacement = publish(api, attempt["token"], "daily", current_day, "replace-current",
-                          body="- Finished the work with a correction")
+    replacement = publish(
+        api, attempt["token"], "daily", current_day, "replace-current", body="- Finished the work with a correction"
+    )
     assert replacement.status_code == 200 and replacement.json()["update"]["id"] == current["id"]
-    retry = publish(api, attempt["token"], "daily", current_day, "replace-current",
-                    body="- Finished the work with a correction")
+    retry = publish(
+        api, attempt["token"], "daily", current_day, "replace-current", body="- Finished the work with a correction"
+    )
     assert retry.status_code == 200 and retry.json()["update"]["id"] == current["id"]
     assert ids(get(api, "updates?bot=ops&kind=daily")) == [old["id"]], "same-ID retry did not rearchive restore"
 
@@ -92,14 +107,15 @@ def test_logical_days_restore_and_archive_are_personal_and_kind_scoped(api):
     post(api, "updates/archive", {"ids": [restored_backdate_id], "archived": False}, key="restore-backdated")
     backdated = publish(api, attempt["token"], "daily", backdated_day, "backdated-daily")
     assert backdated.status_code == 200, backdated.text
-    assert set(ids(get(api, "updates?bot=ops&kind=daily"))) == {future_id, restored_backdate_id}, \
+    assert set(ids(get(api, "updates?bot=ops&kind=daily"))) == {future_id, restored_backdate_id}, (
         "a backdated redo cannot hide a newer day or cancel an unrelated restore"
+    )
     archive_ids = set(ids(get(api, "updates?bot=ops&kind=daily&archive=true")))
     assert {old["id"], current["id"], backdated.json()["update"]["id"]} <= archive_ids
 
     # Other bots keep independent daily histories.
     with api.app.state.store.transaction() as c:
-        other_bot = updates.post(c, "cpo", "- CPO's daily update", kind="daily", day=current_day)
+        other_bot = updates.post(c, bot_id(c, "cpo"), "- CPO's daily update", kind="daily", day=current_day)
     assert ids(get(api, "updates?bot=cpo&kind=daily")) == [other_bot["id"]]
 
     # A failed publication has no supersession side effects: the already restored older item stays
@@ -109,29 +125,37 @@ def test_logical_days_restore_and_archive_are_personal_and_kind_scoped(api):
     post(api, "updates/archive", {"ids": [restore_old["id"]], "archived": False}, key="restore-before-fail")
     failed_day = day_offset(2)
     allow_redo(api, "ops", "daily", failed_day)
-    failed = api.post("/api/v2/updates", json={"kind": "daily", "day": failed_day, "body": ""},
-                      headers=headers(attempt["token"], "invalid-future"))
+    failed = api.post(
+        "/api/v2/updates",
+        json={"kind": "daily", "day": failed_day, "body": ""},
+        headers=headers(attempt["token"], "invalid-future"),
+    )
     assert failed.status_code == 422
     assert restore_old["id"] in ids(get(api, "updates?bot=ops&kind=daily"))
 
 
 def test_the_tree_leaves_out_what_this_reader_archived_and_keeps_the_reports_below(api, monkeypatch):
-    from backend.tests.test_bot_contact import bot
+    from backend.tests.helpers.bot_contact import bot
+
     monkeypatch.setattr(updates, "today", lambda at=None: "2026-09-29")
     bot(api, "boss", "Manager", reports_to="human:ana")
     bot(api, "analyst", "Analyst", reports_to="boss")
     with api.app.state.store.transaction() as c:
-        mine = updates.post(c, "boss", "- Planned the launch", day="2026-09-29")
-        updates.post(c, "analyst", "- Sized the market", day="2026-09-29")
-    find = lambda nodes, key: next((n for n in nodes if n["key"] == key), None) or next(
-        (hit for n in nodes if (hit := find(n["children"], key))), None)
-    boss = lambda token="ana-test": find(get(api, "updates/tree?scope=all", token=token)["roots"], "b:boss")
+        boss_id = bot_id(c, "boss")
+        mine = updates.post(c, boss_id, "- Planned the launch", day="2026-09-29")
+        updates.post(c, bot_id(c, "analyst"), "- Sized the market", day="2026-09-29")
+    find = lambda nodes, key: (
+        next((n for n in nodes if n["key"] == key), None)
+        or next((hit for n in nodes if (hit := find(n["children"], key))), None)
+    )
+    boss = lambda token="ana-test": find(get(api, "updates/tree?scope=all", token=token)["roots"], "b:" + boss_id)
 
     post(api, "updates/archive", {"ids": [mine["id"]], "archived": True}, key="tree-archive")
     archived = boss()
     assert archived["update"] is None, "an archived card stays out of the tree on the next load"
-    assert [k["update"]["body"] for k in archived["children"]] == ["- Sized the market"], \
+    assert [k["update"]["body"] for k in archived["children"]] == ["- Sized the market"], (
         "the manager stays in the tree with its reports below it"
+    )
     assert boss("ben-test")["update"]["id"] == mine["id"], "the archive is this reader's only"
     assert mine["id"] not in ids(get(api, "updates")) and mine["id"] in ids(get(api, "updates?archive=true"))
 
@@ -144,34 +168,56 @@ def test_archive_batches_are_human_only_permission_checked_and_atomic(api):
     _, _, attempt = setup_attempt(api, "ops")
     ops_update = publish(api, attempt["token"], "daily", updates.today(), "ops-visible").json()["update"]
     with api.app.state.store.transaction() as c:
-        private_update = updates.post(c, "inbox", "- Ana's private update", kind="daily", day=updates.today())
+        private_update = updates.post(
+            c, bot_id(c, "inbox"), "- Ana's private update", kind="daily", day=updates.today()
+        )
         restrict(c, "inbox", people=["ana"])
 
     # Ben can read ops but cannot see Ana's inbox-manager update. A mixed request must reject
     # before archiving the valid first ID or creating an audit event.
-    rejected = api.post("/api/v2/updates/archive", json={"ids": [ops_update["id"], private_update["id"]],
-                                                        "archived": True},
-                        headers=headers("ben-test", "mixed-archive"))
+    rejected = api.post(
+        "/api/v2/updates/archive",
+        json={"ids": [ops_update["id"], private_update["id"]], "archived": True},
+        headers=headers("ben-test", "mixed-archive"),
+    )
     assert rejected.status_code == 404
     with api.app.state.store.read() as c:
-        assert c.execute("SELECT 1 FROM update_archive_overrides WHERE update_id=? AND actor='human:ben'",
-                         (ops_update["id"],)).fetchone() is None
-        assert c.execute("SELECT 1 FROM events WHERE target=? AND action='update.archive'",
-                         (ops_update["id"],)).fetchone() is None
+        assert (
+            c.execute(
+                "SELECT 1 FROM update_archive_overrides WHERE update_id=? AND actor='human:ben'", (ops_update["id"],)
+            ).fetchone()
+            is None
+        )
+        assert (
+            c.execute("SELECT 1 FROM events WHERE target=? AND action='update.archive'", (ops_update["id"],)).fetchone()
+            is None
+        )
 
-    rejected_read = api.post("/api/v2/updates/read", json={"ids": [ops_update["id"], private_update["id"]]},
-                             headers=headers("ben-test", "mixed-read"))
+    rejected_read = api.post(
+        "/api/v2/updates/read",
+        json={"ids": [ops_update["id"], private_update["id"]]},
+        headers=headers("ben-test", "mixed-read"),
+    )
     assert rejected_read.status_code == 404
     with api.app.state.store.read() as c:
-        assert c.execute("SELECT 1 FROM update_reads WHERE update_id=? AND actor='human:ben'",
-                         (ops_update["id"],)).fetchone() is None
+        assert (
+            c.execute(
+                "SELECT 1 FROM update_reads WHERE update_id=? AND actor='human:ben'", (ops_update["id"],)
+            ).fetchone()
+            is None
+        )
 
-    bot_attempt = api.post("/api/v2/updates/archive", json={"ids": [ops_update["id"]], "archived": True},
-                           headers=headers(attempt["token"], "bot-archive"))
+    bot_attempt = api.post(
+        "/api/v2/updates/archive",
+        json={"ids": [ops_update["id"]], "archived": True},
+        headers=headers(attempt["token"], "bot-archive"),
+    )
     assert bot_attempt.status_code == 403
     with api.app.state.store.read() as c:
-        assert c.execute("SELECT 1 FROM update_archive_overrides WHERE update_id=?",
-                         (ops_update["id"],)).fetchone() is None
+        assert (
+            c.execute("SELECT 1 FROM update_archive_overrides WHERE update_id=?", (ops_update["id"],)).fetchone()
+            is None
+        )
 
     # Ana can archive her private update; it remains absent from Ben's inbox and archive.
     post(api, "updates/archive", {"ids": [private_update["id"]], "archived": True}, key="ana-private-archive")
@@ -186,7 +232,7 @@ def test_archive_schema_is_created_for_fresh_and_existing_databases():
     # The prior schema has update content/read state but no slides or archive tables.
     c.executescript("""
       CREATE TABLE updates(id TEXT PRIMARY KEY, bot TEXT NOT NULL, kind TEXT NOT NULL, day TEXT NOT NULL,
-        headline TEXT NOT NULL, body TEXT NOT NULL DEFAULT '', created TEXT NOT NULL, updated TEXT NOT NULL,
+        headline TEXT NOT NULL, body TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
         UNIQUE(bot,kind,day));
       CREATE TABLE update_reads(update_id TEXT NOT NULL, actor TEXT NOT NULL, read_at TEXT NOT NULL,
         PRIMARY KEY(update_id,actor));
@@ -201,7 +247,7 @@ def test_archive_schema_is_created_for_fresh_and_existing_databases():
     c.executescript(updates.SCHEMA)
     updates.ensure_schema(c)
     assert c.execute("SELECT id,body FROM updates").fetchone()[:] == ("existing", "- Old content")
-    assert {r["name"] for r in c.execute("PRAGMA table_info(updates)")} >= {"slides_json"}
+    assert {r["name"] for r in c.execute("PRAGMA table_info(updates)")} >= {"slides"}
     assert {r["name"] for r in c.execute("PRAGMA table_info(update_queue)")} >= {"tries", "redo"}
     assert c.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='update_archive_overrides'").fetchone()
     c.close()
@@ -218,7 +264,7 @@ def test_archive_and_explicit_history_filters_are_in_the_stable_contract(api):
     result_schema = operation["responses"]["200"]["content"]["application/json"]["schema"]
     assert result_schema["$ref"].endswith("/UpdateArchiveResult")
     with api.app.state.store.transaction() as c:
-        item = updates.post(c, "ops", "- Retain this history", kind="daily")
+        item = updates.post(c, bot_id(c, "ops"), "- Retain this history", kind="daily")
     response = api.post("/api/v2/updates/archive", json={"ids": [item["id"]], "archived": True}, headers=headers())
     assert response.status_code == 200, response.text
     assert set(response.json()) == {"updated", "archived", "unread"}

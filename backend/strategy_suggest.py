@@ -57,7 +57,7 @@ def _bot(c, value):
 def _live_bot_task(c, task_id):
     """A task a recovery may move: live, owned by a bot, and one the Strategy Bot may read."""
     row = H.task(c, str(task_id or ""))
-    if not row or row["status"] not in H.ACTIVE_STATUSES or not H.is_bot(row["owner"]):
+    if not row or row["status"] not in H.ACTIVE_STATUSES or not H.is_bot(row["owner_id"]):
         return None
     if not H.task_private_readable(c, STRATEGY_BOT, row):
         return None
@@ -126,7 +126,7 @@ def _action_error(c, action):
 # ----------------------------------------------------------------------------- what the person reads
 def _name(c, actor):
     found = H.bot(c, H.actor_id(actor)) if H.is_bot(actor) else None
-    return (found or {}).get("display_name") or H.actor_id(actor or "")
+    return (found or {}).get("display_name") or (found or {}).get("slug") or H.actor_id(actor or "")
 
 
 def _title(c, task_id):
@@ -140,14 +140,17 @@ def describe(c, action):
         return f'New task for {_name(c, action["owner"])}: "{action["title"]}"'
     if action["do"] == "reorder":
         row = H.task(c, action["task_id"]) or {}
-        return f'Move {_title(c, action["task_id"])} to the top of {_name(c, row.get("owner", ""))}\'s queue'
+        return f'Move {_title(c, action["task_id"])} to the top of {_name(c, row.get("owner_id", ""))}\'s queue'
     return f'Settle a clash: {_title(c, action["first"])} goes before {_title(c, action["then"])} ({action["why"]})'
 
 
 def offline(c, action):
     """Why the bot this action reaches can't take it now, in plain words, or None."""
-    owners = [action["owner"]] if action["do"] == "create" else \
-        [(H.task(c, action.get(k)) or {}).get("owner") for k in ("task_id", "first", "then") if action.get(k)]
+    owners = (
+        [action["owner"]]
+        if action["do"] == "create"
+        else [(H.task(c, action.get(k)) or {}).get("owner_id") for k in ("task_id", "first", "then") if action.get(k)]
+    )
     for owner in owners:
         state = (H.bot(c, H.actor_id(owner or "")) or {}).get("state") if owner else None
         if owner and state != "active":
@@ -158,9 +161,16 @@ def offline(c, action):
 def options_view(c, proposal):
     """[{label, pick, actions: [{text, note}]}]: each option in plain words, `note` saying why a part can't happen now."""
     payload = proposal["payload"]
-    return [{"label": option["label"], "pick": n == payload["pick"],
-             "actions": [{"text": describe(c, action), "note": offline(c, action) or ""} for action in option["actions"]]}
-            for n, option in enumerate(payload["options"])]
+    return [
+        {
+            "label": option["label"],
+            "pick": n == payload["pick"],
+            "actions": [
+                {"text": describe(c, action), "note": offline(c, action) or ""} for action in option["actions"]
+            ],
+        }
+        for n, option in enumerate(payload["options"])
+    ]
 
 
 def ask_text(c, proposal, goal_title):
@@ -174,13 +184,18 @@ def ask_text(c, proposal, goal_title):
         lines.append(f"Option {n + 1}: {option['label']}{mark}")
         for action in option["actions"]:
             note = action["note"]
-            lines.append(f"  - {action['text']}" + (f". Note: {note}; this part would come back to you." if note else ""))
+            lines.append(
+                f"  - {action['text']}" + (f". Note: {note}; this part would come back to you." if note else "")
+            )
     said = f"\nWhy now: {proposal['reason']}" if proposal.get("reason") else ""
-    body = (f"{title}. The {strategy_bot.name(c)} suggests how the bots could get this goal back on track.\n"
-            f"Evidence: {payload['evidence']}{said}\n" + "\n".join(lines) +
-            "\nApprove one option or reject them all under Needs you on the Goals page. Approving applies exactly that "
-            f"option, in the {strategy_bot.name(c)}'s name; nothing changes until you do. This closes by "
-            "itself once it is decided.")
+    body = (
+        f"{title}. The {strategy_bot.name(c)} suggests how the bots could get this goal back on track.\n"
+        f"Evidence: {payload['evidence']}{said}\n"
+        + "\n".join(lines)
+        + "\nApprove one option or reject them all under Needs you on the Goals page. Approving applies exactly that "
+        f"option, in the {strategy_bot.name(c)}'s name; nothing changes until you do. This closes by "
+        "itself once it is decided."
+    )
     return title, body
 
 
@@ -188,6 +203,7 @@ def ask_text(c, proposal, goal_title):
 def _may_move(c, approver):
     """Whether the person approving may reorder any bot's queue themselves: the environment owner or a mover."""
     from . import people as P, views
+
     roster = views.roster(c) or {}
     owner = P.person(roster.get("default_user"), roster) or {}
     return bool(owner.get("id")) and approver == H.human_actor(owner["id"]) or H.can_move(c, approver)
@@ -212,22 +228,37 @@ def _blocked(c, action, approver):
 
 
 def _apply(c, action, goal_id, approver, proposal_id):
-    who = _name(c, approver) if H.is_bot(approver) else ((H.human(c, H.actor_id(approver)) or {}).get("name")
-                                                          or H.actor_id(approver))
+    who = (
+        _name(c, approver)
+        if H.is_bot(approver)
+        else ((H.human(c, H.actor_id(approver)) or {}).get("name") or H.actor_id(approver))
+    )
     if action["do"] == "create":
-        made = H.task_create(c, STRATEGY_BOT, action["title"],
-                             (action["body"] + "\n\n" if action["body"] else "") +
-                             f"Suggested by the {strategy_bot.name(c)} to recover a goal; approved by {who}.",
-                             action["owner"], goal_id=goal_id or None, lane="company")
+        made = H.task_create(
+            c,
+            STRATEGY_BOT,
+            action["title"],
+            (action["body"] + "\n\n" if action["body"] else "")
+            + f"Suggested by the {strategy_bot.name(c)} to recover a goal; approved by {who}.",
+            action["owner"],
+            goal_id=goal_id or None,
+            lane="company",
+        )
         return {"task_id": made["id"]}
     if action["do"] == "reorder":
         row = H.task(c, action["task_id"])
-        H.task_update(c, STRATEGY_BOT, row["id"], rank=H._queue_end(c, row["owner"], top=True), mover=True, quiet=True)
+        H.task_update(
+            c, STRATEGY_BOT, row["id"], rank=H._queue_end(c, row["owner_id"], top=True), mover=True, quiet=True
+        )
         return {"task_id": row["id"]}
     first, then = H.task(c, action["first"]), H.task(c, action["then"])
-    H.task_update(c, STRATEGY_BOT, first["id"], rank=H._queue_end(c, first["owner"], top=True), mover=True, quiet=True)
-    said = (f"The {strategy_bot.name(c)} settled a clash, approved by {who}: \"{first['title']}\" goes before "
-            f"\"{then['title']}\". {action['why']}")
+    H.task_update(
+        c, STRATEGY_BOT, first["id"], rank=H._queue_end(c, first["owner_id"], top=True), mover=True, quiet=True
+    )
+    said = (
+        f"The {strategy_bot.name(c)} settled a clash, approved by {who}: \"{first['title']}\" goes before "
+        f"\"{then['title']}\". {action['why']}"
+    )
     for row in (first, then):
         # The order is the approved change; a paused owner's full held queue withholds only its note.
         H.unless_queue_full(c, lambda: H.task_comment(c, STRATEGY_BOT, row["id"], said))
@@ -259,16 +290,27 @@ def apply(c, approver, proposal, option):
 def follow_up(c, proposal, left):
     """What couldn't be made comes back as a new recovery with one option, saying why, so nothing is dropped."""
     from . import goals as G
+
     # Only what could still be made later comes back: a task finished since has nothing left to move, and says so in
     # the closed ask (`result_text`).
     again = [x for x in left if not _action_error(c, dict(x["action"]))]
     if not again:
         return None
     reasons = "; ".join(sorted({x["why"] for x in again}))
-    payload = {"evidence": proposal["payload"]["evidence"], "pick": 0,
-               "options": [{"label": "Try again: the part that couldn't be done", "actions": [x["action"] for x in again]}]}
-    return G.propose(c, STRATEGY_BOT, KIND, proposal["goal_id"], None, payload,
-                     f"Not done when you approved it: {reasons}. Approve to try again, or reject to leave it.")
+    payload = {
+        "evidence": proposal["payload"]["evidence"],
+        "pick": 0,
+        "options": [{"label": "Try again: the part that couldn't be done", "actions": [x["action"] for x in again]}],
+    }
+    return G.propose(
+        c,
+        STRATEGY_BOT,
+        KIND,
+        proposal["goal_id"],
+        None,
+        payload,
+        f"Not done when you approved it: {reasons}. Approve to try again, or reject to leave it.",
+    )
 
 
 def result_text(c, proposal):
@@ -278,8 +320,10 @@ def result_text(c, proposal):
         return None
     done = [describe(c, x["action"]) for x in result["done"]]
     left = [f"{describe(c, x['action'])}: {x['why']}" for x in result["left"]]
-    text = f"Approved by {H.actor_id(proposal['decided_by'] or '')}; option {result['option'] + 1} applied by the " \
-           f"{strategy_bot.name(c)}."
+    text = (
+        f"Approved by {H.actor_name(c, proposal['decided_by'] or '')}; option {result['option'] + 1} applied by the "
+        f"{strategy_bot.name(c)}."
+    )
     if done:
         text += " Done: " + "; ".join(done) + "."
     if left:
@@ -292,8 +336,11 @@ def withdraw(c):
     """Lowering the level to Passive withdraws every recovery still waiting: Passive suggests no task changes. Tico
     decides it, not a person, so no streak counts it as a rejection: neither `streak` nor an older release's, which
     knows only the note it wrote (strategy_bot.OLD_WITHDRAWN). Who lowered the level is in its event."""
-    c.execute("UPDATE goal_proposals SET status='rejected', decided_by=?, decided_at=?, decision_note=? "
-              "WHERE status='pending' AND kind=?", (H.KEEPER, H.now(), WITHDRAWN, KIND))
+    c.execute(
+        "UPDATE goal_proposals SET status='rejected', decided_by=?, decided_at=?, decision_note=? "
+        "WHERE status='pending' AND kind=?",
+        (H.KEEPER, H.now(), WITHDRAWN, KIND),
+    )
 
 
 # ----------------------------------------------------------------------------- the level 3 offer
@@ -301,11 +348,16 @@ def streak(c):
     """How many of its recovery suggestions in a row the owner approved with the Strategy Bot's pick unchanged, newest
     first. A rejection or another option ends it; a withdrawn one is no decision and is passed over."""
     n = 0
-    for row in H._rows(c.execute("SELECT status, decided_by, decision_note, result_json FROM goal_proposals "
-                                 "WHERE kind=? AND status!='pending' ORDER BY decided_at DESC", (KIND,))):
+    for row in H._rows(
+        c.execute(
+            "SELECT status, decided_by, decision_note, result FROM goal_proposals "
+            "WHERE kind=? AND status!='pending' ORDER BY decided_at DESC",
+            (KIND,),
+        )
+    ):
         if row["decision_note"] == WITHDRAWN or not H.is_human(row["decided_by"] or ""):
             continue
-        result = H._json(row["result_json"], None) or {}
+        result = H._json(row["result"], None) or {}
         if row["status"] != "confirmed" or not result.get("unchanged"):
             break
         n += 1
@@ -322,16 +374,23 @@ def offer_view(c):
     stamp = H.parse_ts(last) if last else None
     recent = bool(stamp) and stamp > H.parse_ts(H.now()) - timedelta(days=OFFER_EVERY_DAYS)
     n = streak(c) if strategy_bot.level(c) == 2 else 0
-    return {"streak": n, "needed": STREAK_FOR_OFFER, "due": n >= STREAK_FOR_OFFER and not recent,
-            "last_offered_at": last or ""}
+    return {
+        "streak": n,
+        "needed": STREAK_FOR_OFFER,
+        "due": n >= STREAK_FOR_OFFER and not recent,
+        "last_offered_at": last or "",
+    }
 
 
 def offer_made(c, actor):
     """The Strategy Bot records that its Monday note offered level 3. Refused unless the offer is due, so it is made
     once and never more often than every 30 days."""
     if not offer_view(c)["due"]:
-        raise H.Refused("state", f"Level 3 can be offered after {STREAK_FOR_OFFER} approvals in a row at level 2, "
-                                 f"at most once every {OFFER_EVERY_DAYS} days; it is not due now")
+        raise H.Refused(
+            "state",
+            f"Level 3 can be offered after {STREAK_FOR_OFFER} approvals in a row at level 2, "
+            f"at most once every {OFFER_EVERY_DAYS} days; it is not due now",
+        )
     record = strategy_bot._record(c)
     record["level3_offers"] = (_offered(c) + [H.now()])[-12:]
     strategy_bot._save(c, record)

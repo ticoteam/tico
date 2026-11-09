@@ -13,7 +13,7 @@ from websockets.http11 import Headers, Response
 from clients import gateway as G
 from backend import gateway_connection, providers, recorder_relay
 from backend.store import H, digest
-from backend.tests.test_api import api, headers  # noqa: F401
+from backend.tests.helpers.api import headers  # noqa: F401
 
 HUMAN, BOT = "ana-test", "synthetic-recorder-bot-agent"
 OFF = {"transcribe": False, "assist": False, "stream": False}
@@ -25,7 +25,7 @@ def relay(api, monkeypatch):
     """The install has a Gateway key; HQ's calls go to `calls` through `answers`, which a test sets."""
     with api.app.state.store.transaction() as c:
         c.execute(
-            "INSERT OR REPLACE INTO agents(bot,harness,token_hash,created,created_by) VALUES(?,?,?,?,?)",
+            "INSERT OR REPLACE INTO agents(bot,harness,token_hash,created_at,created_by) VALUES(?,?,?,?,?)",
             ("ops", "hermes", digest(BOT), H.now(), "human:ana"),
         )
     settings = api.app.state.store.settings

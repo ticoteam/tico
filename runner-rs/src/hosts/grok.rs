@@ -36,7 +36,11 @@ pub fn hand_login_to_bot() {
 /// A default home created after startup must also allow API-key turns to save their sessions.
 /// Match the effective home, but never let a profile or custom auth path choose a privileged handoff target.
 pub fn prepare_home(env: &Env) {
-    if std::env::var("HOME").ok().filter(|home| !home.is_empty()).is_some_and(|home| env.get("HOME") == Some(&home)) {
+    if std::env::var("HOME")
+        .ok()
+        .filter(|home| !home.is_empty())
+        .is_some_and(|home| env.get("HOME") == Some(&home))
+    {
         hand_login_to_bot();
     }
 }
@@ -44,11 +48,20 @@ pub fn prepare_home(env: &Env) {
 /// Grok has no status subcommand. Its scoped auth store is the local sign-in; an empty store after logout is not.
 /// Paths and entry fields follow xai-org/grok-build's xai-grok-login storage.rs and model.rs.
 pub fn sign_in_detail(env: &Env) -> Option<&'static str> {
-    let path = env.get("GROK_AUTH_PATH").filter(|v| !v.is_empty()).map(std::path::PathBuf::from).or_else(|| {
-        env.get("GROK_HOME").filter(|v| !v.is_empty()).map(std::path::PathBuf::from)
-            .or_else(|| env.get("HOME").map(|h| std::path::Path::new(h).join(".grok")))
-            .map(|h| h.join("auth.json"))
-    })?;
+    let path = env
+        .get("GROK_AUTH_PATH")
+        .filter(|v| !v.is_empty())
+        .map(std::path::PathBuf::from)
+        .or_else(|| {
+            env.get("GROK_HOME")
+                .filter(|v| !v.is_empty())
+                .map(std::path::PathBuf::from)
+                .or_else(|| {
+                    env.get("HOME")
+                        .map(|h| std::path::Path::new(h).join(".grok"))
+                })
+                .map(|h| h.join("auth.json"))
+        })?;
     // This runs in the supervisor's heartbeat path against a bot-writable store. No component may be a link the
     // bot planted (the fixed label would still answer "does this path parse"), opening a FIFO must not wait for a
     // writer, and devices or growing files must not supply an unbounded stream.
@@ -64,13 +77,16 @@ pub fn sign_in_detail(env: &Env) -> Option<&'static str> {
     }
     // A second name for a file someone else owns (a supervisor file linked into the store) is not the store.
     use std::os::unix::fs::MetadataExt;
-    let owner = crate::isolation::identity().map_or_else(|| unsafe { libc::geteuid() }, |(uid, _)| uid);
+    let owner =
+        crate::isolation::identity().map_or_else(|| unsafe { libc::geteuid() }, |(uid, _)| uid);
     if metadata.nlink() != 1 && metadata.uid() != owner {
         return None;
     }
     let mut text = String::new();
     // The descriptor can grow after metadata was checked; allow one extra byte to detect overflow.
-    file.take(MAX_AUTH_BYTES + 1).read_to_string(&mut text).ok()?;
+    file.take(MAX_AUTH_BYTES + 1)
+        .read_to_string(&mut text)
+        .ok()?;
     if text.len() as u64 > MAX_AUTH_BYTES {
         return None;
     }
@@ -79,8 +95,12 @@ pub fn sign_in_detail(env: &Env) -> Option<&'static str> {
     }
     let store = serde_json::from_str::<Value>(&text).ok()?;
     let entries = store.as_object()?;
-    let modes = || entries.values().filter(|entry| entry["key"].as_str().is_some_and(|k| !k.trim().is_empty()))
-        .filter_map(|entry| entry["auth_mode"].as_str());
+    let modes = || {
+        entries
+            .values()
+            .filter(|entry| entry["key"].as_str().is_some_and(|k| !k.trim().is_empty()))
+            .filter_map(|entry| entry["auth_mode"].as_str())
+    };
     if modes().any(|mode| matches!(mode, "oidc" | "external")) {
         Some("Signed in with a Grok account")
     } else if modes().any(|mode| mode == "api_key") {
@@ -101,7 +121,11 @@ const DEFAULT_EFFORT: &str = "high";
 /// The operator's own MCP servers Grok would pick up from other tools' files (~/.claude.json, ~/.cursor/mcp.json)
 /// and from the xAI account: off, so a bot gets its declared servers. Grok has no switch for servers in its own
 /// ~/.grok/config.toml or in plugins; those still load.
-pub const NO_OPERATOR_MCP: &[(&str, &str)] = &[("GROK_CLAUDE_MCPS_ENABLED", "false"), ("GROK_CURSOR_MCPS_ENABLED", "false"), ("GROK_MANAGED_MCPS_ENABLED", "false")];
+pub const NO_OPERATOR_MCP: &[(&str, &str)] = &[
+    ("GROK_CLAUDE_MCPS_ENABLED", "false"),
+    ("GROK_CURSOR_MCPS_ENABLED", "false"),
+    ("GROK_MANAGED_MCPS_ENABLED", "false"),
+];
 
 /// Grok 4.6's four reasoning levels; anything else is the provider default.
 pub fn effort_for(effort: Option<&str>) -> &'static str {
@@ -115,15 +139,32 @@ pub fn effort_for(effort: Option<&str>) -> &'static str {
 
 /// `grok agent -m <model> --reasoning-effort <effort> --always-approve --no-leader stdio`.
 pub fn argv(program: &str, model: Option<&str>, effort: Option<&str>) -> Vec<String> {
-    let model = model.map(str::trim).filter(|m| !m.is_empty()).unwrap_or(DEFAULT_MODEL);
-    [program, "agent", "-m", model, "--reasoning-effort", effort_for(effort), "--always-approve", "--no-leader", "stdio"].map(String::from).to_vec()
+    let model = model
+        .map(str::trim)
+        .filter(|m| !m.is_empty())
+        .unwrap_or(DEFAULT_MODEL);
+    [
+        program,
+        "agent",
+        "-m",
+        model,
+        "--reasoning-effort",
+        effort_for(effort),
+        "--always-approve",
+        "--no-leader",
+        "stdio",
+    ]
+    .map(String::from)
+    .to_vec()
 }
 
 /// The answer to `session/request_permission`: Grok runs with --always-approve, so an allow option is chosen;
-/// an unknown option shape is cancelled rather than guessed.
+/// an unknown option shape is canceled rather than guessed.
 pub fn permission(params: &Value) -> Value {
     let options = params["options"].as_array().cloned().unwrap_or_default();
-    let chosen = ["allow_always", "allow_once"].iter().find_map(|kind| options.iter().find(|o| o["kind"] == *kind));
+    let chosen = ["allow_always", "allow_once"]
+        .iter()
+        .find_map(|kind| options.iter().find(|o| o["kind"] == *kind));
     match chosen.filter(|o| truthy(o.get("optionId"))) {
         Some(o) => json!({"outcome": {"outcome": "selected", "optionId": o["optionId"]}}),
         None => json!({"outcome": {"outcome": "cancelled"}}),
@@ -135,12 +176,16 @@ type Reply = Result<Value, Value>;
 enum Slot {
     Wait(oneshot::Sender<Reply>),
     /// A `session/prompt`: its response ends the turn.
-    Prompt { session: String, turn: String },
+    Prompt {
+        session: String,
+        turn: String,
+    },
 }
 
 type Running = (Vec<String>, Env, super::Stopper, Arc<AtomicBool>);
 
 struct Shared {
+    allocation: super::Allocation,
     bot: String,
     program: String,
     tx: Events,
@@ -163,6 +208,7 @@ pub struct GrokHost(Arc<Shared>);
 impl GrokHost {
     pub fn new(bot: &str, program: &str, tx: Events) -> GrokHost {
         GrokHost(Arc::new(Shared {
+            allocation: super::Allocation::default(),
             bot: bot.into(),
             program: program.into(),
             tx,
@@ -182,28 +228,59 @@ impl GrokHost {
         let _ = self.0.tx.send(ev);
     }
 
+    pub fn track_allocation(&self, turn: std::sync::Arc<std::sync::atomic::AtomicBool>) {
+        self.0.allocation.track(turn);
+    }
+
     pub fn alive(&self) -> bool {
-        self.0.child.lock().unwrap().as_ref().is_some_and(|(_, _, _, gone)| !gone.load(Ordering::SeqCst))
+        self.0
+            .child
+            .lock()
+            .unwrap()
+            .as_ref()
+            .is_some_and(|(_, _, _, gone)| !gone.load(Ordering::SeqCst))
     }
 
     /// Start `grok agent` with `cmd` in `env` and say `initialize`.
     async fn launch(&self, cmd: Vec<String>, env: Env) -> Result<(), HostError> {
         let mut command = crate::isolation::command(&cmd[0]);
         let mut full = env.clone();
-        full.extend(NO_OPERATOR_MCP.iter().map(|(k, v)| (k.to_string(), v.to_string())));
-        command.args(&cmd[1..]).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).env_clear().envs(&full);
+        full.extend(
+            NO_OPERATOR_MCP
+                .iter()
+                .map(|(k, v)| (k.to_string(), v.to_string())),
+        );
+        command
+            .args(&cmd[1..])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .env_clear()
+            .envs(&full);
         super::new_group(&mut command);
-        let mut child = command.spawn().map_err(|e| failed(format!("could not start grok agent: {e}")))?;
+        let mut child = command
+            .spawn()
+            .map_err(|e| failed(format!("could not start grok agent: {e}")))?;
+        self.0.allocation.mark();
         let _stderr = crate::run_diagnostics::Stderr::capture(&mut child, self.0.tx.clone(), &full);
-        let stdout = child.stdout.take().ok_or_else(|| failed("grok agent has no stdout"))?;
+        let stdout = child
+            .stdout
+            .take()
+            .ok_or_else(|| failed("grok agent has no stdout"))?;
         *self.0.stdin.lock().await = child.stdin.take();
-        log(&format!("grok[{}]: agent started pid {}", self.0.bot, child.id().map_or("?".into(), |p| p.to_string())));
+        log(&format!(
+            "grok[{}]: agent started pid {}",
+            self.0.bot,
+            child.id().map_or("?".into(), |p| p.to_string())
+        ));
         let (stopper, exited) = super::own(child);
         let gone = Arc::new(AtomicBool::new(false));
         let flag = gone.clone();
         let diagnostics = self.0.tx.clone();
         tokio::spawn(async move {
-            let status = exited.await.unwrap_or_else(|_| Err(std::io::Error::other("grok reaper ended")));
+            let status = exited
+                .await
+                .unwrap_or_else(|_| Err(std::io::Error::other("grok reaper ended")));
             _stderr.drained().await;
             let code = super::return_code(&status);
             let _ = diagnostics.send(json!({"kind": "error", "error": crate::run_diagnostics::process_reason(code, &_stderr.tail()), "exit_code": code, "process_exit": true}));
@@ -219,7 +296,14 @@ impl GrokHost {
                 }
             }
             gone.store(true, Ordering::SeqCst);
-            let slots: Vec<Slot> = host.0.pending.lock().unwrap().drain().map(|(_, s)| s).collect();
+            let slots: Vec<Slot> = host
+                .0
+                .pending
+                .lock()
+                .unwrap()
+                .drain()
+                .map(|(_, s)| s)
+                .collect();
             for slot in slots {
                 host.answer(slot, Err(json!({"message": "grok agent exited"})));
             }
@@ -247,18 +331,41 @@ impl GrokHost {
 
     /// The process for these settings: started, or restarted when the bot's command or environment changed.
     async fn configure(&self, settings: &Settings) -> Result<(), HostError> {
-        let cmd = argv(&self.0.program, settings.model.as_deref(), settings.effort.as_deref());
-        let current = self.0.child.lock().unwrap().as_ref().map(|(c, e, _, _)| (c.clone(), e.clone()));
-        let env = if !settings.env.is_empty() { settings.env.clone() } else { current.as_ref().map(|(_, e)| e.clone()).unwrap_or_else(crate::env::process_environment) };
+        let cmd = argv(
+            &self.0.program,
+            settings.model.as_deref(),
+            settings.effort.as_deref(),
+        );
+        let current = self
+            .0
+            .child
+            .lock()
+            .unwrap()
+            .as_ref()
+            .map(|(c, e, _, _)| (c.clone(), e.clone()));
+        let env = if !settings.env.is_empty() {
+            settings.env.clone()
+        } else {
+            current
+                .as_ref()
+                .map(|(_, e)| e.clone())
+                .unwrap_or_else(crate::env::process_environment)
+        };
         // A supervisor-owned store can appear while the agent stays alive (including API-key sessions).
         // Repair before every new or resumed thread, even when the process can be reused.
         prepare_home(&env);
-        if self.alive() && current.as_ref().is_some_and(|(c, e)| *c == cmd && *e == env) {
+        if self.alive()
+            && current
+                .as_ref()
+                .is_some_and(|(c, e)| *c == cmd && *e == env)
+        {
             return Ok(());
         }
         if current.is_some() {
             if !self.0.turns.lock().unwrap().is_empty() {
-                return Err(failed("cannot change the Grok tool environment during a turn"));
+                return Err(failed(
+                    "cannot change the Grok tool environment during a turn",
+                ));
             }
             self.stop().await;
         }
@@ -271,7 +378,9 @@ impl GrokHost {
         }
         let line = msg.to_string() + "\n";
         let mut stdin = self.0.stdin.lock().await;
-        let Some(s) = stdin.as_mut() else { return Err(failed("grok agent stdin closed")) };
+        let Some(s) = stdin.as_mut() else {
+            return Err(failed("grok agent stdin closed"));
+        };
         async {
             s.write_all(line.as_bytes()).await?;
             s.flush().await
@@ -283,7 +392,10 @@ impl GrokHost {
     async fn send(&self, method: &str, params: Value, slot: Slot) -> Result<i64, HostError> {
         let id = self.0.next_id.fetch_add(1, Ordering::SeqCst) + 1;
         self.0.pending.lock().unwrap().insert(id, slot);
-        if let Err(e) = self.write(&json!({"jsonrpc": "2.0", "id": id, "method": method, "params": params})).await {
+        if let Err(e) = self
+            .write(&json!({"jsonrpc": "2.0", "id": id, "method": method, "params": params}))
+            .await
+        {
             self.0.pending.lock().unwrap().remove(&id);
             return Err(e);
         }
@@ -296,7 +408,9 @@ impl GrokHost {
         match tokio::time::timeout(Duration::from_secs(REQUEST_TIMEOUT), rx).await {
             Err(_) => {
                 self.0.pending.lock().unwrap().remove(&id);
-                Err(failed(format!("{method} timed out after {REQUEST_TIMEOUT}s")))
+                Err(failed(format!(
+                    "{method} timed out after {REQUEST_TIMEOUT}s"
+                )))
             }
             Ok(Err(_)) => Err(failed(format!("{method}: grok agent exited"))),
             Ok(Ok(Ok(result))) => Ok(result),
@@ -317,11 +431,17 @@ impl GrokHost {
         let id = msg.get("id").filter(|i| !i.is_null()).cloned();
         match (id, msg.get("method").and_then(|m| m.as_str())) {
             (Some(id), None) => {
-                if let Some(slot) = id.as_i64().and_then(|i| self.0.pending.lock().unwrap().remove(&i)) {
-                    self.answer(slot, match msg.get("error") {
-                        Some(e) => Err(e.clone()),
-                        None => Ok(msg.get("result").cloned().unwrap_or(Value::Null)),
-                    });
+                if let Some(slot) = id
+                    .as_i64()
+                    .and_then(|i| self.0.pending.lock().unwrap().remove(&i))
+                {
+                    self.answer(
+                        slot,
+                        match msg.get("error") {
+                            Some(e) => Err(e.clone()),
+                            None => Ok(msg.get("result").cloned().unwrap_or(Value::Null)),
+                        },
+                    );
                 }
             }
             (Some(id), Some(method)) => {
@@ -334,7 +454,11 @@ impl GrokHost {
                 let _ = self.write(&reply).await;
             }
             (None, method) => {
-                let p = msg.get("params").filter(|p| p.is_object()).cloned().unwrap_or(json!({}));
+                let p = msg
+                    .get("params")
+                    .filter(|p| p.is_object())
+                    .cloned()
+                    .unwrap_or(json!({}));
                 self.on_notification(method.unwrap_or_default(), &p);
             }
         }
@@ -345,9 +469,18 @@ impl GrokHost {
             return; // _x.ai/* announcements are informational
         }
         let sid = text_of(&p["sessionId"]);
-        let Some(turn) = self.0.turns.lock().unwrap().get(&sid).cloned() else { return };
+        let Some(turn) = self.0.turns.lock().unwrap().get(&sid).cloned() else {
+            return;
+        };
         let u = &p["update"];
-        let text = if u["content"].is_object() { u["content"].get("text").filter(|t| truthy(Some(t))).cloned() } else { None };
+        let text = if u["content"].is_object() {
+            u["content"]
+                .get("text")
+                .filter(|t| truthy(Some(t)))
+                .cloned()
+        } else {
+            None
+        };
         let (s, t) = (Some(sid.as_str()), Some(turn.as_str()));
         match (u["sessionUpdate"].as_str().unwrap_or_default(), text) {
             ("agent_message_chunk", Some(text)) => {
@@ -359,20 +492,41 @@ impl GrokHost {
                     }
                     // A chunk names its message: one of another message than the chunk before it starts a new one.
                     let id = u["messageId"].as_str().filter(|i| !i.is_empty());
-                    let new_message = id.is_some_and(|id| self.0.message.lock().unwrap().insert(turn.clone(), id.into()).is_some_and(|last| last != id));
+                    let new_message = id.is_some_and(|id| {
+                        self.0
+                            .message
+                            .lock()
+                            .unwrap()
+                            .insert(turn.clone(), id.into())
+                            .is_some_and(|last| last != id)
+                    });
                     super::add_piece(r, new_message, &text_of(&text))
                 };
-                self.emit(event("delta", s, t, json!({"text": piece, "delta_kind": "text"})));
+                self.emit(event(
+                    "delta",
+                    s,
+                    t,
+                    json!({"text": piece, "delta_kind": "text"}),
+                ));
             }
             ("tool_call", _) => {
                 // A new tool call separates progress from the answer that follows; the call is reported by its
                 // kind (read, execute, ...), never its title or input.
                 self.0.boundary.lock().unwrap().insert(turn.clone());
-                let kind = u.get("kind").filter(|k| truthy(Some(k))).map(text_of).unwrap_or_else(|| "tool".into());
+                let kind = u
+                    .get("kind")
+                    .filter(|k| truthy(Some(k)))
+                    .map(text_of)
+                    .unwrap_or_else(|| "tool".into());
                 self.emit(event("tool", s, t, json!({"tool": kind, "status": "started", "item_id": u.get("toolCallId").cloned().unwrap_or(Value::Null)})));
             }
             ("agent_thought_chunk", Some(text)) => {
-                self.emit(event("delta", s, t, json!({"text": text, "delta_kind": "thought"})));
+                self.emit(event(
+                    "delta",
+                    s,
+                    t,
+                    json!({"text": text, "delta_kind": "thought"}),
+                ));
             }
             _ => {}
         }
@@ -383,45 +537,88 @@ impl GrokHost {
             return;
         }
         self.0.turns.lock().unwrap().remove(sid);
-        let text = self.0.reply.lock().unwrap().remove(turn).unwrap_or_default();
+        let text = self
+            .0
+            .reply
+            .lock()
+            .unwrap()
+            .remove(turn)
+            .unwrap_or_default();
         self.0.boundary.lock().unwrap().remove(turn);
         self.0.message.lock().unwrap().remove(turn);
         let (s, t) = (Some(sid), Some(turn));
         let result = match reply {
             Err(err) => {
                 let msg = error_text(&err);
-                self.emit(event("turn_failed", s, t, json!({"error": msg, "limit": is_limit(&msg)})));
+                self.emit(event(
+                    "turn_failed",
+                    s,
+                    t,
+                    json!({"error": msg, "limit": is_limit(&msg)}),
+                ));
                 return;
             }
             Ok(result) => result,
         };
-        let stop = result.get("stopReason").filter(|v| truthy(Some(v))).map(text_of).unwrap_or_else(|| "end_turn".into());
+        let stop = result
+            .get("stopReason")
+            .filter(|v| truthy(Some(v)))
+            .map(text_of)
+            .unwrap_or_else(|| "end_turn".into());
         if !text.is_empty() && stop != "cancelled" {
             self.emit(event("message", s, t, json!({"text": text, "final": true})));
         }
         if stop == "refusal" || stop == "error" {
-            self.emit(event("turn_failed", s, t, json!({"error": format!("stopReason {stop}"), "limit": false})));
+            self.emit(event(
+                "turn_failed",
+                s,
+                t,
+                json!({"error": format!("stopReason {stop}"), "limit": false}),
+            ));
         } else {
-            let status = if stop == "cancelled" { "interrupted" } else { "completed" };
-            self.emit(event("turn_completed", s, t, json!({"status": status, "stop_reason": stop})));
+            let status = if stop == "cancelled" {
+                "interrupted"
+            } else {
+                "completed"
+            };
+            self.emit(event(
+                "turn_completed",
+                s,
+                t,
+                json!({"status": status, "stop_reason": stop}),
+            ));
         }
         self.emit(event("status", s, None, json!({"state": "idle"})));
     }
 
     fn servers(settings: &Settings) -> Value {
-        json!(crate::mcp::grok_config(&settings.mcp_servers, &settings.env))
+        json!(crate::mcp::grok_config(
+            &settings.mcp_servers,
+            &settings.env
+        ))
     }
 
     pub async fn start_thread(&self, bot: &str, settings: &Settings) -> Result<String, HostError> {
         self.configure(settings).await?;
-        let res = self.request("session/new", json!({"cwd": settings.cwd, "mcpServers": Self::servers(settings)})).await?;
+        let res = self
+            .request(
+                "session/new",
+                json!({"cwd": settings.cwd, "mcpServers": Self::servers(settings)}),
+            )
+            .await?;
         match res["sessionId"].as_str().filter(|s| !s.is_empty()) {
             Some(sid) => Ok(sid.into()),
-            None => Err(failed(format!("session/new for {bot} returned no session id"))),
+            None => Err(failed(format!(
+                "session/new for {bot} returned no session id"
+            ))),
         }
     }
 
-    pub async fn resume_thread(&self, thread_id: &str, settings: &Settings) -> Result<String, HostError> {
+    pub async fn resume_thread(
+        &self,
+        thread_id: &str,
+        settings: &Settings,
+    ) -> Result<String, HostError> {
         self.configure(settings).await?;
         self.request("session/load", json!({"sessionId": thread_id, "cwd": settings.cwd, "mcpServers": Self::servers(settings)})).await?;
         Ok(thread_id.into())
@@ -429,10 +626,26 @@ impl GrokHost {
 
     pub async fn start_turn(&self, thread_id: &str, text: &str) -> Result<String, HostError> {
         let turn = uuid::Uuid::new_v4().to_string();
-        self.0.turns.lock().unwrap().insert(thread_id.into(), turn.clone());
-        self.0.reply.lock().unwrap().insert(turn.clone(), String::new());
-        let slot = Slot::Prompt { session: thread_id.into(), turn: turn.clone() };
-        self.send("session/prompt", json!({"sessionId": thread_id, "prompt": [{"type": "text", "text": text}]}), slot).await?;
+        self.0
+            .turns
+            .lock()
+            .unwrap()
+            .insert(thread_id.into(), turn.clone());
+        self.0
+            .reply
+            .lock()
+            .unwrap()
+            .insert(turn.clone(), String::new());
+        let slot = Slot::Prompt {
+            session: thread_id.into(),
+            turn: turn.clone(),
+        };
+        self.send(
+            "session/prompt",
+            json!({"sessionId": thread_id, "prompt": [{"type": "text", "text": text}]}),
+            slot,
+        )
+        .await?;
         Ok(turn)
     }
 
@@ -442,7 +655,10 @@ impl GrokHost {
 }
 
 fn error_text(err: &Value) -> String {
-    err.get("message").filter(|m| truthy(Some(m))).map(text_of).unwrap_or_else(|| text_of(err))
+    err.get("message")
+        .filter(|m| truthy(Some(m)))
+        .map(text_of)
+        .unwrap_or_else(|| text_of(err))
 }
 
 #[cfg(test)]
@@ -460,8 +676,14 @@ mod tests {
         for (text, expected) in [
             ("", Some("")),
             ("{}", Some("")),
-            (r#"{"acme":{"auth_mode":"oidc","key":"synthetic"}}"#, Some("Signed in with a Grok account")),
-            (r#"{"acme":{"auth_mode":"api_key","key":"synthetic"}}"#, Some("Signed in with an API key")),
+            (
+                r#"{"acme":{"auth_mode":"oidc","key":"synthetic"}}"#,
+                Some("Signed in with a Grok account"),
+            ),
+            (
+                r#"{"acme":{"auth_mode":"api_key","key":"synthetic"}}"#,
+                Some("Signed in with an API key"),
+            ),
             ("broken", None),
         ] {
             std::fs::write(&path, text).unwrap();
@@ -495,14 +717,26 @@ mod tests {
             assert_eq!(sign_in_detail(&env), None);
             std::fs::remove_dir(&path).unwrap();
             let target = root.join("synthetic.json");
-            std::fs::write(&target, r#"{"acme":{"auth_mode":"oidc","key":"synthetic"}}"#).unwrap();
+            std::fs::write(
+                &target,
+                r#"{"acme":{"auth_mode":"oidc","key":"synthetic"}}"#,
+            )
+            .unwrap();
             symlink(&target, &path).unwrap();
-            assert_eq!(sign_in_detail(&env), None, "do not follow a regular-file link");
+            assert_eq!(
+                sign_in_detail(&env),
+                None,
+                "do not follow a regular-file link"
+            );
             std::fs::remove_file(&path).unwrap();
             symlink("/dev/zero", &path).unwrap();
             assert_eq!(sign_in_detail(&env), None, "do not follow a device link");
             let device_env = Env::from([("GROK_AUTH_PATH".into(), "/dev/zero".into())]);
-            assert_eq!(sign_in_detail(&device_env), None, "reject a direct device override too");
+            assert_eq!(
+                sign_in_detail(&device_env),
+                None,
+                "reject a direct device override too"
+            );
             return;
         }
         // Run the synchronous probe in a child so a regression can be killed without stranding
@@ -510,8 +744,14 @@ mod tests {
         let root = std::env::temp_dir().join(format!("grok-special-auth-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(root.join(".grok")).unwrap();
         let mut child = std::process::Command::new(std::env::current_exe().unwrap())
-            .args(["--exact", "hosts::grok::tests::auth_status_rejects_special_files_without_blocking", "--nocapture"])
-            .env(CHILD_HOME, &root).spawn().unwrap();
+            .args([
+                "--exact",
+                "hosts::grok::tests::auth_status_rejects_special_files_without_blocking",
+                "--nocapture",
+            ])
+            .env(CHILD_HOME, &root)
+            .spawn()
+            .unwrap();
         let deadline = std::time::Instant::now() + Duration::from_secs(5);
         let result = loop {
             if let Some(status) = child.try_wait().unwrap() {
@@ -525,23 +765,43 @@ mod tests {
             std::thread::sleep(Duration::from_millis(10));
         };
         std::fs::remove_dir_all(root).unwrap();
-        assert!(result.is_some_and(|status| status.success()), "credential status blocked or accepted a special file: {result:?}");
+        assert!(
+            result.is_some_and(|status| status.success()),
+            "credential status blocked or accepted a special file: {result:?}"
+        );
     }
 
     #[test]
     fn auth_status_never_follows_a_linked_ancestor() {
         // A link a root test run makes is a trusted system alias, so only an ordinary user can plant one here.
-        if unsafe { libc::geteuid() } == 0 { return; }
+        if unsafe { libc::geteuid() } == 0 {
+            return;
+        }
         let root = std::env::temp_dir().join(format!("grok-linked-auth-{}", uuid::Uuid::new_v4()));
         let elsewhere = root.join("elsewhere");
         std::fs::create_dir_all(&elsewhere).unwrap();
-        std::fs::write(elsewhere.join("auth.json"), r#"{"acme":{"auth_mode":"oidc","key":"synthetic"}}"#).unwrap();
+        std::fs::write(
+            elsewhere.join("auth.json"),
+            r#"{"acme":{"auth_mode":"oidc","key":"synthetic"}}"#,
+        )
+        .unwrap();
         let real = Env::from([("GROK_HOME".into(), elsewhere.display().to_string())]);
-        assert_eq!(sign_in_detail(&real), Some("Signed in with a Grok account"), "the real folder still reads");
+        assert_eq!(
+            sign_in_detail(&real),
+            Some("Signed in with a Grok account"),
+            "the real folder still reads"
+        );
         std::os::unix::fs::symlink(&elsewhere, root.join(".grok")).unwrap();
         let env = Env::from([("HOME".into(), root.display().to_string())]);
-        assert_eq!(sign_in_detail(&env), None, "a planted .grok link is not followed");
-        let env = Env::from([("GROK_AUTH_PATH".into(), root.join(".grok/auth.json").display().to_string())]);
+        assert_eq!(
+            sign_in_detail(&env),
+            None,
+            "a planted .grok link is not followed"
+        );
+        let env = Env::from([(
+            "GROK_AUTH_PATH".into(),
+            root.join(".grok/auth.json").display().to_string(),
+        )]);
         assert_eq!(sign_in_detail(&env), None, "nor through a direct path");
         std::fs::remove_dir_all(root).unwrap();
     }
@@ -552,14 +812,30 @@ mod tests {
         for (path, expected) in crate::hosts::fixtures::cases("grok") {
             let (tx, mut rx) = mpsc::unbounded_channel();
             let host = GrokHost::new("acme", "grok", tx);
-            host.0.turns.lock().unwrap().insert("sess-1".into(), "turn-1".into());
-            host.0.pending.lock().unwrap().insert(3, Slot::Prompt { session: "sess-1".into(), turn: "turn-1".into() });
-            for line in std::fs::read_to_string(&path).unwrap().lines().filter(|l| !l.trim().is_empty()) {
+            host.0
+                .turns
+                .lock()
+                .unwrap()
+                .insert("sess-1".into(), "turn-1".into());
+            host.0.pending.lock().unwrap().insert(
+                3,
+                Slot::Prompt {
+                    session: "sess-1".into(),
+                    turn: "turn-1".into(),
+                },
+            );
+            for line in std::fs::read_to_string(&path)
+                .unwrap()
+                .lines()
+                .filter(|l| !l.trim().is_empty())
+            {
                 host.on_message(serde_json::from_str(line).unwrap()).await;
             }
             let mut got = vec![];
             while let Ok(mut ev) = rx.try_recv() {
-                ev.as_object_mut().unwrap().retain(|k, _| k != "thread_id" && k != "turn_id");
+                ev.as_object_mut()
+                    .unwrap()
+                    .retain(|k, _| k != "thread_id" && k != "turn_id");
                 got.push(ev);
             }
             assert_eq!(got, expected, "{}", path.display());
@@ -568,10 +844,22 @@ mod tests {
 
     #[test]
     fn the_command_line_and_permission_answers_follow_the_python_host() {
-        assert_eq!(argv("grok", None, Some("XHigh")).join(" "), "grok agent -m grok-4.6 --reasoning-effort xhigh --always-approve --no-leader stdio");
-        assert_eq!(argv("grok", Some("grok-5"), Some("max"))[3..6], ["grok-5", "--reasoning-effort", "high"]);
+        assert_eq!(
+            argv("grok", None, Some("XHigh")).join(" "),
+            "grok agent -m grok-4.6 --reasoning-effort xhigh --always-approve --no-leader stdio"
+        );
+        assert_eq!(
+            argv("grok", Some("grok-5"), Some("max"))[3..6],
+            ["grok-5", "--reasoning-effort", "high"]
+        );
         let options = json!({"options": [{"kind": "allow_once", "optionId": "once"}, {"kind": "allow_always", "optionId": "always"}]});
-        assert_eq!(permission(&options), json!({"outcome": {"outcome": "selected", "optionId": "always"}}));
-        assert_eq!(permission(&json!({"options": [{"kind": "reject_once", "optionId": "no"}]})), json!({"outcome": {"outcome": "cancelled"}}));
+        assert_eq!(
+            permission(&options),
+            json!({"outcome": {"outcome": "selected", "optionId": "always"}})
+        );
+        assert_eq!(
+            permission(&json!({"options": [{"kind": "reject_once", "optionId": "no"}]})),
+            json!({"outcome": {"outcome": "cancelled"}})
+        );
     }
 }

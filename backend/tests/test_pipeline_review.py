@@ -1,0 +1,2246 @@
+"""Pipeline review mode (backend/pipeline_review.py): who sees a ▶ item, claims, Approve with its version check and
+advance, the 10-second undo, send-back, Message manager and Mark met. The concurrency cases use real connections to one
+file: the database decides, not a Python lock."""
+
+import json
+import sqlite3
+import threading
+import time
+from contextlib import closing, contextmanager
+from types import SimpleNamespace
+from pathlib import Path
+
+import pytest
+from fastapi.testclient import TestClient
+
+from backend import access
+from backend import hubdb as H
+from backend import pipeline_links as L
+from backend import pipeline_overview
+from backend import pipeline_engine as E
+from backend import pipeline_review as R
+from backend import question_tasks as QT
+from backend import requirement_attachments as A
+from backend.app import create_app
+from backend.auth import Identity
+from backend.config import Settings
+from backend.store import Problem, Store
+
+ANA, BEN, CHRIS = "human:ana", "human:ben", "human:chris"
+FIXTURES = Path(__file__).parent / "fixtures"
+STEPS = [
+    {"name": "Making", "status": "doing"},
+    {"name": "Review", "status": "doing"},
+    {"name": "Shipped", "status": "done"},
+]
+
+
+BOOTED = {}
+
+
+@pytest.fixture(scope="module", autouse=True)
+def booted_hub(tmp_path_factory):
+    """One boot for the module (Store.initialize is the slow part); each World copies this file instead."""
+    path = tmp_path_factory.mktemp("pipeline-review") / "booted.sqlite"
+    Store(Settings(db_path=path, registry_dir=FIXTURES / "registry")).initialize(seed_market=False)
+    BOOTED["path"] = path
+    yield path
+
+
+class World:
+    """A Design pipeline: Making, Review (a Mockup attachment and a Sign-off approval, both ana's) and Shipped."""
+
+    def __init__(self, path, reviewed_by="person", conn=None, steps=STEPS):
+        self.path = path
+        if conn is None:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            with closing(sqlite3.connect(BOOTED["path"])) as source, closing(sqlite3.connect(path)) as target:
+                source.backup(target)
+            conn = H.connect(path)
+        self.c = conn
+        H.sync_registry(
+            self.c,
+            {"cmo": {"name": "cmo", "runtime": "fake", "status": "active"}},
+            {
+                "people": [
+                    {"id": "ana", "email": "ana@acme.example"},
+                    {"id": "ben", "email": "ben@acme.example"},
+                    {"id": "chris", "email": "chris@acme.example"},
+                ]
+            },
+        )
+        c = self.c
+        self.pipeline = H.type_create(c, ANA, "Design", steps, mover=True)["id"]
+        c.execute("UPDATE task_types SET pipeline_owner_id=? WHERE id=?", (ANA, self.pipeline))
+        self.making, self.review, self.shipped = (self.step(n) for n in ("Making", "Review", "Shipped"))
+        self.mockup = self.requirement("Mockup", "attachment", reviewed_by)
+        self.signoff = self.requirement("Sign-off", "approval", "person")
+        self.task = self.ticket("Logo")
+
+    def step(self, name):
+        return self.c.execute("SELECT id FROM task_steps WHERE type_id=? AND name=?", (self.pipeline, name)).fetchone()[
+            0
+        ]
+
+    def requirement(self, name, kind, reviewed_by, reviewer=ANA, stage=None, **extra):
+        rid = f"r-{name.lower().replace(' ', '-')}"
+        values = {
+            "id": rid,
+            "pipeline_id": self.pipeline,
+            "pipeline_stage_id": stage or self.review,
+            "name": name,
+            "kind": kind,
+            "reviewed_by": reviewed_by,
+            "reviewer_id": reviewer,
+            "created_at": H.now(),
+            "updated_at": H.now(),
+            **extra,
+        }
+        self.c.execute(
+            f"INSERT INTO stage_requirements ({', '.join(values)}) VALUES ({', '.join('?' * len(values))})",
+            tuple(values.values()),
+        )
+        return rid
+
+    def ticket(self, title, step="Review", owner="bot:cmo"):
+        task = H.task_create(self.c, ANA, title, "", owner, type=self.pipeline, step=step, lint=False)
+        return task["id"]
+
+    def attach(self, task=None, requirement=None, digest="d1", attachment_id=None):
+        values = (
+            attachment_id or f"a-{digest}-{time.monotonic_ns()}",
+            task or self.task,
+            requirement or self.mockup,
+            "link",
+            "https://example.test/mockup",
+            digest,
+            self.revision(task),
+            H.now(),
+        )
+        self.c.execute(
+            "INSERT INTO requirement_attachments (id, task_id, stage_requirement_id, source, url, digest, work_version, "
+            "created_at) VALUES (?,?,?,?,?,?,?,?)",
+            values,
+        )
+
+    def revision(self, task=None):
+        return self.c.execute("SELECT work_revision FROM tasks WHERE id=?", (task or self.task,)).fetchone()[0]
+
+    def push(self, task=None):
+        self.c.execute("UPDATE tasks SET work_revision=work_revision+1 WHERE id=?", (task or self.task,))
+
+    def step_of(self, task=None):
+        return self.c.execute("SELECT step_id FROM tasks WHERE id=?", (task or self.task,)).fetchone()[0]
+
+    def visit(self, task=None, at=None, step=None):
+        """The ticket's open visit at `step`: the one the engine opened at creation is moved there, else one is opened
+        (a ticket has one open visit at a time)."""
+        ticket, when, stage = task or self.task, at or H.now(), step or self.review
+        open_visit = self.c.execute(
+            "SELECT id FROM stage_visits WHERE task_id=? AND left_at IS NULL", (ticket,)
+        ).fetchone()
+        if open_visit:
+            self.c.execute(
+                "UPDATE stage_visits SET pipeline_stage_id=?, entered_at=? WHERE id=?", (stage, when, open_visit[0])
+            )
+            return
+        self.c.execute(
+            "INSERT INTO stage_visits (id, task_id, pipeline_id, pipeline_stage_id, direction, entered_at) "
+            "VALUES (?,?,?,?,?,?)",
+            (f"v-{time.monotonic_ns()}", ticket, self.pipeline, stage, "initial", when),
+        )
+
+    def decide(self, requirement, verdict, judge="llm", task=None, **extra):
+        values = {
+            "id": f"d-{time.monotonic_ns()}",
+            "task_id": task or self.task,
+            "pipeline_stage_id": self.review,
+            "stage_requirement_id": requirement,
+            "work_version": self.revision(task),
+            "judge": judge,
+            "verdict": verdict,
+            "created_at": H.now(),
+            **extra,
+        }
+        self.c.execute(
+            f"INSERT INTO stage_decisions ({', '.join(values)}) VALUES ({', '.join('?' * len(values))})",
+            tuple(values.values()),
+        )
+
+    def view(self, requirement=None, task=None):
+        """What ana's queue shows for the item: the versions she would send back with Approve."""
+        item = next(
+            i
+            for i in R.queue_for(self.c, ANA)
+            if i["task_id"] == (task or self.task) and i["requirement_id"] == (requirement or self.mockup)
+        )
+        return {
+            "work_version": item["work_version"],
+            "attachment_digest": item["attachment_digest"],
+            "requirement_version": item["requirement_version"],
+        }
+
+    def approve(self, requirement=None, actor=ANA, task=None, **kw):
+        seen = {} if kw.get("seen") is False else self.view(requirement, task)
+        kw.pop("seen", None)
+        return R.approve(self.c, actor, task or self.task, requirement or self.mockup, **{**seen, **kw})
+
+
+@pytest.fixture
+def world(tmp_path):
+    w = World(tmp_path / "hub.sqlite")
+    w.attach()
+    yield w
+    w.c.close()
+
+
+def refused(code, fn, *args, **kw):
+    with pytest.raises(Problem) as caught:
+        fn(*args, **kw)
+    assert caught.value.code == code, (caught.value.code, caught.value.detail)
+    return caught.value
+
+
+def test_only_the_reviewer_the_route_and_the_asked_backup_see_an_item(world):
+    w = world
+    assert {i["requirement_id"] for i in R.queue_for(w.c, ANA)} == {w.mockup, w.signoff}
+    assert R.queue_for(w.c, BEN) == [] and R.queue_for(w.c, "bot:cmo") == []
+    # A backup sees it only after the manager asked them.
+    w.c.execute("UPDATE stage_requirements SET backup_reviewer_id=? WHERE id=?", (BEN, w.mockup))
+    assert R.queue_for(w.c, BEN) == []
+    refused("not_yours", R.claim, w.c, BEN, w.task, w.mockup)
+    w.visit()
+    visit = w.c.execute("SELECT id FROM stage_visits").fetchone()[0]
+    w.c.execute(
+        "INSERT INTO pipeline_manager_actions (id, pipeline_id, pipeline_manager_run_id, task_id, stage_visit_id, "
+        "stage_requirement_id, action, created_at) VALUES ('pa1',?,'run1',?,?,?,'ask_backup',?)",
+        (w.pipeline, w.task, visit, w.mockup, H.now()),
+    )
+    assert [i["why"] for i in R.queue_for(w.c, BEN)] == ["backup"]
+    # A person who may edit the pipeline still does not see a review that is not theirs.
+    assert R.queue_for(w.c, CHRIS) == []
+
+
+def test_the_queue_lists_oldest_first_within_a_stage_and_narrows_to_a_stage(world):
+    w = world
+    w.c.execute("UPDATE task_steps SET limit_minutes=60 WHERE id=?", (w.review,))
+    now = H.now()
+    fresh = w.ticket("Fresh")
+    old = w.ticket("Old, within limit")
+    late = w.ticket("Late")
+    for task in (fresh, old, late):
+        w.attach(task, w.mockup, "x")
+    w.visit(fresh, now)
+    w.visit(old, H.shift(now, minutes=-30))
+    w.visit(late, H.shift(now, minutes=-90))
+    items = [i for i in R.queue_for(w.c, ANA) if i["requirement_id"] == w.mockup and i["task_id"] != w.task]
+    assert [i["task_id"] for i in items] == [late, old, fresh]
+    assert [i["late"] for i in items] == [True, False, False]
+    assert R.queue_for(w.c, ANA, w.pipeline, w.making) == []
+    assert {i["stage_id"] for i in R.queue_for(w.c, ANA, w.pipeline, w.review)} == {w.review}
+    assert R.queue_for(w.c, ANA, "other-pipeline") == []
+
+
+def test_late_counts_only_the_time_off_hold_and_a_held_card_is_not_late(world):
+    from backend import task_holds
+
+    w = world
+    w.c.execute("UPDATE task_steps SET limit_minutes=60 WHERE id=?", (w.review,))
+    now = H.now()
+    held = w.ticket("Worked, then held")
+    late = w.ticket("Late")
+    for task in (held, late):
+        w.attach(task, w.mockup, "x")
+    w.visit(held, H.shift(now, minutes=-130))
+    w.visit(late, H.shift(now, minutes=-90))
+    # Ten minutes of work, two hours on hold (not counted), ten minutes of work again: 20 minutes of the 60.
+    task_holds.put(w.c, held, "blocked", H.shift(now, minutes=-120))
+    task_holds.release(w.c, held, "blocked", H.shift(now, minutes=-10))
+    items = [i for i in R.queue_for(w.c, ANA) if i["requirement_id"] == w.mockup and i["task_id"] != w.task]
+    assert [i["task_id"] for i in items] == [held, late]
+    assert [i["late"] for i in items] == [False, True]
+    # Still on hold: never late, however long the hold has run.
+    task_holds.put(w.c, late, "blocked", H.shift(now, minutes=-80))
+    items = [i for i in R.queue_for(w.c, ANA) if i["requirement_id"] == w.mockup and i["task_id"] != w.task]
+    assert [i["late"] for i in items] == [False, False]
+
+
+def test_a_second_reviewer_cannot_claim_or_approve_while_the_claim_is_held(world, monkeypatch):
+    w = world
+    w.c.execute("UPDATE stage_requirements SET backup_reviewer_id=? WHERE id=?", (BEN, w.mockup))
+    w.visit()
+    visit = w.c.execute("SELECT id FROM stage_visits").fetchone()[0]
+    w.c.execute(
+        "INSERT INTO pipeline_manager_actions (id, pipeline_id, pipeline_manager_run_id, task_id, stage_visit_id, "
+        "stage_requirement_id, action, created_at) VALUES ('pa1',?,'run1',?,?,?,'ask_backup',?)",
+        (w.pipeline, w.task, visit, w.mockup, H.now()),
+    )
+    claim = R.claim(w.c, ANA, w.task, w.mockup)
+    assert claim["claimed_by"] == ANA
+    assert R.claim(w.c, ANA, w.task, w.mockup)["claimed_by"] == ANA  # her own claim is refreshed, not doubled
+    error = refused("claimed", R.claim, w.c, BEN, w.task, w.mockup)
+    assert error.extra["claimed_by"] == ANA
+    seen = w.view()
+    refused("claimed", R.approve, w.c, BEN, w.task, w.mockup, **seen)
+    refused("claimed", R.send_back, w.c, BEN, w.task, w.mockup, "No")
+    mine = next(i for i in R.queue_for(w.c, ANA) if i["requirement_id"] == w.mockup)
+    theirs = next(i for i in R.queue_for(w.c, BEN) if i["requirement_id"] == w.mockup)
+    assert mine["claimed_by_me"] and mine["claimed_by"] is None
+    assert theirs["claimed_by"] == ANA and not theirs["claimed_by_me"]
+    assert w.c.execute("SELECT count(*) FROM review_claims WHERE released_at IS NULL").fetchone()[0] == 1
+    # An expired claim counts as released.
+    later = H.shift(H.now(), minutes=R.CLAIM_MINUTES + 1)
+    monkeypatch.setattr(R, "_now", lambda: later)
+    assert R.claim(w.c, BEN, w.task, w.mockup)["claimed_by"] == BEN
+    rows = w.c.execute("SELECT claimed_by, released_at FROM review_claims ORDER BY claimed_at").fetchall()
+    assert [(r[0], r[1] is None) for r in rows] == [(ANA, False), (BEN, True)]
+
+
+def test_approve_is_refused_after_a_push_an_attachment_swap_or_a_rule_change(world):
+    w = world
+    seen = w.view()
+    w.push()
+    error = refused("stale", R.approve, w.c, ANA, w.task, w.mockup, **seen)
+    assert error.extra["reason"] == "work"
+    seen = w.view()
+    w.attach(digest="d2")  # the attachment was swapped under her
+    assert refused("stale", R.approve, w.c, ANA, w.task, w.mockup, **seen).extra["reason"] == "attachment"
+    seen = w.view()
+    w.c.execute("UPDATE stage_requirements SET version=2 WHERE id=?", (w.mockup,))
+    error = refused("stale", R.approve, w.c, ANA, w.task, w.mockup, **seen)
+    assert error.extra["reason"] == "requirement"
+    assert w.c.execute("SELECT count(*) FROM stage_decisions").fetchone()[0] == 0
+    assert w.step_of() == w.review
+
+
+def test_a_bot_never_approves_and_a_requirement_nobody_reviews_by_person_is_not_a_review(world):
+    w = world
+    seen = w.view()
+    refused("not_person", R.approve, w.c, "bot:cmo", w.task, w.mockup, **seen)
+    refused("not_person", R.claim, w.c, "bot:cmo", w.task, w.mockup)
+    refused("not_person", R.mark_met, w.c, "bot:cmo", w.task, w.mockup, "ok")
+    botted = w.requirement("Lint", "run", "bot", stage=w.review)
+    refused("not_person_reviewed", R.approve, w.c, ANA, w.task, botted, work_version=0, requirement_version=1)
+    # The table itself will not let an approval be reviewed by a bot.
+    with pytest.raises(Exception, match="CHECK"):
+        w.requirement("Bot sign-off", "approval", "bot")
+    assert w.c.execute("SELECT count(*) FROM stage_decisions").fetchone()[0] == 0
+
+
+def test_the_last_requirement_moves_the_ticket_on_and_an_earlier_one_does_not(world):
+    w = world
+    first = w.approve(w.mockup)
+    assert first["advanced"] is False and w.step_of() == w.review
+    second = w.approve(w.signoff, note="Looks right")
+    assert second["advanced"] is True and w.step_of() == w.shipped
+    decision = dict(w.c.execute("SELECT * FROM stage_decisions WHERE id=?", (second["decision_id"],)).fetchone())
+    assert decision["judge"] == "person" and decision["verdict"] == "met" and decision["judge_actor"] == ANA
+    assert decision["reason"] == "Looks right" and decision["requirement_version"] == 1
+    assert '"advanced"' in decision["outcome"]
+    # Nothing is left to approve at the stage the ticket has left.
+    refused("moved", R.approve, w.c, ANA, w.task, w.signoff, work_version=0, requirement_version=1)
+
+
+def test_a_met_requirement_goes_stale_when_the_work_changes_and_is_approved_again(world):
+    w = world
+    seen = w.view()
+    R.approve(w.c, ANA, w.task, w.mockup, **seen)
+    mockup = dict(w.c.execute("SELECT * FROM stage_requirements WHERE id=?", (w.mockup,)).fetchone())
+    assert R.requirement_state(w.c, H.task(w.c, w.task), mockup) == "met"
+    refused("already_met", R.approve, w.c, ANA, w.task, w.mockup, **seen)
+    w.push()
+    assert w.view()["work_version"] == 1  # back in the queue at the new version, with the attachment it was met on
+    w.attach(digest="d2")  # the work changed, so the mockup is attached again before it can be approved
+    assert w.approve(w.mockup)["verdict"] == "met"
+
+
+def test_undo_inside_ten_seconds_reverts_the_decision_and_the_move(world, monkeypatch):
+    w = world
+    w.approve(w.mockup)
+    w.visit()  # (the engine would have kept the open visit)
+    done = w.approve(w.signoff)
+    assert w.step_of() == w.shipped
+    refused("not_found", R.undo, w.c, BEN, done["decision_id"])  # only the approver
+    assert R.undo(w.c, ANA, done["decision_id"]) == {
+        "decision_id": done["decision_id"],
+        "undone": True,
+        "moved_back": True,
+    }
+    assert w.step_of() == w.review
+    row = w.c.execute("SELECT undone_at, undone_by FROM stage_decisions WHERE id=?", (done["decision_id"],)).fetchone()
+    assert row[0] and row[1] == ANA
+    refused("already_undone", R.undo, w.c, ANA, done["decision_id"])
+    # The undone approval no longer counts, so it can be approved again.
+    assert w.approve(w.signoff)["advanced"] is True
+
+
+def test_an_undone_approval_across_a_link_leaves_no_edge_in_the_flow_map(world):
+    w = world
+    success = H.type_create(
+        w.c,
+        ANA,
+        "Success",
+        [{"name": "Onboarding", "status": "open"}, {"name": "Live", "status": "done"}],
+        mover=True,
+    )["id"]
+    L.create_link(w.c, ANA, w.review, success, "move")
+    w.approve(w.mockup)
+    w.visit()
+    done = w.approve(w.signoff)
+    assert w.step_of() != w.review  # the ticket went across the link
+    edges = pipeline_overview.read(w.c, ANA, visible_sql="1=1")["edges"]
+    assert [e["count"] for e in edges] == [1]
+    assert R.undo(w.c, ANA, done["decision_id"])["moved_back"] is True
+    assert w.step_of() == w.review
+    assert pipeline_overview.read(w.c, ANA, visible_sql="1=1")["edges"] == []  # an undone handoff is no edge
+    returned = w.c.execute("SELECT returned_at FROM pipeline_handoffs").fetchone()[0]
+    assert returned is not None
+
+
+def test_undo_is_refused_after_ten_seconds_and_after_the_ticket_moved_on(world, monkeypatch):
+    w = world
+    w.approve(w.mockup)
+    late = w.approve(w.signoff)
+    soon = H.shift(H.now(), seconds=R.UNDO_SECONDS + 1)
+    with monkeypatch.context() as patched:
+        patched.setattr(R, "_now", lambda: soon)
+        refused("too_late", R.undo, w.c, ANA, late["decision_id"])
+    # Inside the window, but the ticket was already moved on by someone else.
+    H.task_update(w.c, ANA, w.task, step="Making")
+    refused("moved_on", R.undo, w.c, ANA, late["decision_id"])
+    assert w.step_of() == w.making
+
+
+def test_send_back_leaves_the_queue_comments_and_returns_to_the_sender_on_the_next_attachment(tmp_path):
+    w = World(tmp_path / "hub.sqlite", reviewed_by="bot_then_person")
+    try:
+        w.attach()
+        # The bot has not passed it up: the person does not see it yet.
+        assert not [i for i in R.queue_for(w.c, ANA) if i["requirement_id"] == w.mockup]
+        w.decide(w.mockup, "unsure")
+        seen = w.view()
+        refused("note_required", R.send_back, w.c, ANA, w.task, w.mockup, "  ")
+        sent = R.send_back(w.c, ANA, w.task, w.mockup, "The logo is too small")
+        assert sent["verdict"] == "sent_back"
+        assert not [i for i in R.queue_for(w.c, ANA) if i["requirement_id"] == w.mockup]
+        texts = [m["body"] for m in H.task_comments(w.c, w.task) if "body" in m]
+        assert any("The logo is too small" in t for t in texts)
+        # New work arrives: it returns to her at once, with no bot pass in between.
+        time.sleep(0.01)
+        w.attach(digest="d2")
+        back = [i for i in R.queue_for(w.c, ANA) if i["requirement_id"] == w.mockup]
+        assert len(back) == 1 and back[0]["attachment_digest"] == "d2"
+        assert w.c.execute("SELECT count(*) FROM stage_decisions WHERE judge IN ('llm','bot')").fetchone()[0] == 1
+        assert seen["attachment_digest"] == "d1"
+        # A push alone also brings it back; a send-back never leaves the work stuck.
+    finally:
+        w.c.close()
+
+
+def test_a_send_back_is_held_off_until_something_new_arrives(world):
+    w = world
+    R.send_back(w.c, ANA, w.task, w.mockup, "Redo it")
+    assert not [i for i in R.queue_for(w.c, ANA) if i["requirement_id"] == w.mockup]
+    w.push()
+    assert len([i for i in R.queue_for(w.c, ANA) if i["requirement_id"] == w.mockup]) == 1
+
+
+def test_message_manager_writes_to_the_manager_with_the_context(world):
+    w = world
+    refused("no_manager", R.message_manager, w.c, ANA, w.task, w.mockup, "Can this wait?")
+    w.c.execute("UPDATE task_types SET manager='cmo' WHERE id=?", (w.pipeline,))
+    sent = R.message_manager(w.c, ANA, w.task, w.mockup, "Can this wait?")
+    assert sent["to"] == "bot:cmo"
+    bodies = [m["body"] for m in H.task_comments(w.c, w.task) if "body" in m]
+    assert any("Review of Mockup at Review" in b and "Can this wait?" in b for b in bodies)
+    refused("not_yours", R.message_manager, w.c, BEN, w.task, w.mockup, "Hi")
+
+
+def test_only_a_rule_editor_marks_met_and_it_goes_stale_with_new_work(world, monkeypatch):
+    w = world
+    monkeypatch.setattr(access, "owner_and_admin_emails", lambda conn: ["chris@acme.example"])
+    refused("forbidden", R.mark_met, w.c, BEN, w.task, w.mockup, "It is fine")
+    refused("why_required", R.mark_met, w.c, ANA, w.task, w.mockup, "  ")
+    refused("not_found", R.mark_met, w.c, ANA, w.task, "no-such-requirement", "ok")
+    done = R.mark_met(w.c, CHRIS, w.task, w.mockup, "The client approved it by phone")
+    row = dict(w.c.execute("SELECT * FROM stage_decisions WHERE id=?", (done["decision_id"],)).fetchone())
+    assert row["verdict"] == "override" and row["judge"] == "person" and row["judge_actor"] == CHRIS
+    assert row["work_version"] == w.revision() and row["reason"] == "The client approved it by phone"
+    assert w.step_of() == w.review  # marking met does not move the ticket
+    task = H.task(w.c, w.task)
+    mockup = dict(w.c.execute("SELECT * FROM stage_requirements WHERE id=?", (w.mockup,)).fetchone())
+    assert R.requirement_state(w.c, task, mockup) == "met"
+    refused("already_met", R.mark_met, w.c, ANA, w.task, w.mockup, "again")
+    w.push()
+    assert R.requirement_state(w.c, H.task(w.c, w.task), mockup) == "waiting"
+
+
+def test_two_reviewers_racing_to_approve_give_exactly_one_decision(world):
+    w = world
+    w.c.execute("UPDATE stage_requirements SET backup_reviewer_id=? WHERE id=?", (BEN, w.mockup))
+    w.visit()
+    visit = w.c.execute("SELECT id FROM stage_visits").fetchone()[0]
+    w.c.execute(
+        "INSERT INTO pipeline_manager_actions (id, pipeline_id, pipeline_manager_run_id, task_id, stage_visit_id, "
+        "stage_requirement_id, action, created_at) VALUES ('pa1',?,'run1',?,?,?,'ask_backup',?)",
+        (w.pipeline, w.task, visit, w.mockup, H.now()),
+    )
+    seen = w.view()
+    mine = H.connect(w.path)
+    outcomes: dict[str, object] = {}
+
+    ready, go = threading.Event(), threading.Event()
+
+    def second():
+        theirs = H.connect(w.path)
+        ready.set()
+        go.wait(10)
+        try:
+            outcomes["ben"] = R.approve(theirs, BEN, w.task, w.mockup, **seen)
+        except Problem as problem:
+            outcomes["ben"] = problem.code
+        finally:
+            theirs.close()
+
+    # Ana is inside her write when Ben's approve starts: his waits for the write lock, then sees what she did.
+    runner = threading.Thread(target=second)
+    runner.start()
+    assert ready.wait(20)
+    mine.execute("BEGIN IMMEDIATE")
+    go.set()
+    time.sleep(0.3)
+    outcomes["ana"] = R.approve(mine, ANA, w.task, w.mockup, **seen)
+    mine.execute("COMMIT")
+    runner.join(10)
+    assert not runner.is_alive()
+    assert isinstance(outcomes["ana"], dict) and outcomes["ben"] == "already_met"
+    assert w.c.execute("SELECT count(*) FROM stage_decisions WHERE verdict='met'").fetchone()[0] == 1
+    mine.close()
+
+
+def test_an_approve_racing_a_push_is_refused_when_the_push_commits_first(world):
+    w = world
+    seen = w.view()
+    pusher = H.connect(w.path)
+    result: dict[str, object] = {}
+
+    ready, go = threading.Event(), threading.Event()
+
+    def approve():
+        reviewer = H.connect(w.path)
+        ready.set()
+        go.wait(10)
+        try:
+            result["approve"] = R.approve(reviewer, ANA, w.task, w.mockup, **seen)
+        except Problem as problem:
+            result["approve"] = problem.code
+        finally:
+            reviewer.close()
+
+    runner = threading.Thread(target=approve)
+    runner.start()
+    assert ready.wait(20)
+    pusher.execute("BEGIN IMMEDIATE")
+    pusher.execute("UPDATE tasks SET work_revision=work_revision+1 WHERE id=?", (w.task,))
+    go.set()
+    time.sleep(0.3)
+    pusher.execute("COMMIT")
+    runner.join(10)
+    assert result["approve"] == "stale"
+    assert w.c.execute("SELECT count(*) FROM stage_decisions").fetchone()[0] == 0
+    pusher.close()
+
+
+def test_the_routes_serve_the_queue_and_approve_and_undo_for_a_person_only(tmp_path):
+    ids = {
+        "ana-test": Identity("human:ana", "owner", "ana@acme.example"),
+        "ben-test": Identity("human:ben", "human", "ben@acme.example"),
+    }
+    app = create_app(Settings(db_path=tmp_path / "hub.db", company_name="Acme", test_identities=ids))
+    with TestClient(app) as client:
+        with app.state.store.transaction() as c:
+            w = World(tmp_path / "hub.db", conn=c)
+            w.attach()
+            w.approve(w.mockup)  # only the sign-off is left
+        ana, ben = (
+            {"Authorization": "Bearer " + name, "Idempotency-Key": f"k-{name}"} for name in ("ana-test", "ben-test")
+        )
+        queue = client.get("/api/v2/pipelines/review/queue", headers=ana)
+        assert queue.status_code == 200, queue.text
+        (item,) = queue.json()["items"]
+        assert item["requirement_id"] == w.signoff and item["pipeline"] == "Design" and item["stage"] == "Review"
+        assert client.get(f"/api/v2/pipelines/{w.pipeline}/stages/{w.review}/review/queue", headers=ana).json()["items"]
+        assert client.get("/api/v2/pipelines/review/queue", headers=ben).json()["items"] == []
+        path = f"/api/v2/pipelines/tasks/{w.task}/requirements/{w.signoff}"
+        body = {
+            "work_version": item["work_version"],
+            "attachment_digest": item["attachment_digest"],
+            "requirement_version": item["requirement_version"],
+        }
+        refused_by_ben = client.post(path + "/approve", json=body, headers=ben)
+        assert refused_by_ben.status_code == 422 and refused_by_ben.json()["error"]["code"] == "not_yours"
+        stale = client.post(
+            path + "/approve", json={**body, "work_version": 9}, headers={**ana, "Idempotency-Key": "k2"}
+        )
+        assert stale.status_code == 422 and stale.json()["error"]["code"] == "stale"
+        done = client.post(path + "/approve", json=body, headers={**ana, "Idempotency-Key": "k3"})
+        assert done.status_code == 200 and done.json()["advanced"] is True
+        again = client.post(path + "/approve", json=body, headers={**ana, "Idempotency-Key": "k3"})
+        assert again.json() == done.json()  # a retry with the same key is the same answer, not a second decision
+        undone = client.post(
+            f"/api/v2/pipelines/decisions/{done.json()['decision_id']}/undo",
+            json={},
+            headers={**ana, "Idempotency-Key": "k4"},
+        )
+        assert undone.status_code == 200 and undone.json()["moved_back"] is True
+        with app.state.store.read() as c:
+            assert c.execute("SELECT step_id FROM tasks WHERE id=?", (w.task,)).fetchone()[0] == w.review
+            assert c.execute("SELECT count(*) FROM stage_decisions WHERE undone_at IS NOT NULL").fetchone()[0] == 1
+
+
+def test_the_engine_calls_approve_and_mark_met_with_no_versions_and_catches_hubdb_refused(world, monkeypatch):
+    w = world
+    monkeypatch.setattr(access, "owner_and_admin_emails", lambda conn: [])
+    assert R.approve(w.c, ANA, w.task, w.mockup, requirement_version=1)["verdict"] == "met"
+    with pytest.raises(H.Refused) as caught:
+        R.approve(w.c, BEN, w.task, w.signoff, requirement_version=1)
+    assert caught.value.rule == "not_yours"
+    with pytest.raises(H.Refused):
+        R.mark_met(w.c, BEN, w.task, w.signoff, "note")
+    refused("protected_approval", R.mark_met, w.c, ANA, w.task, w.signoff, "note")  # an approval is never overridden
+    refused("already_met", R.mark_met, w.c, ANA, w.task, w.mockup, "note")
+
+
+def mixed_queue(path):
+    """Tickets that between them fill every kind of queue row: a person's review and a bot's (Badge, judged unsure), a
+    claim held by each of two people, an attachment and none, a send-back routed on, a backup the manager asked, Late and
+    not, a last requirement that moves the ticket on, and a ticket with no open visit (its time is its last step event).
+    Returns the world and each ticket's title by id, since ids are random."""
+    w = World(path)
+    w.c.execute("UPDATE task_steps SET limit_minutes=60 WHERE id=?", (w.review,))
+    judge = w.requirement("Judge", "attachment", "bot_then_person", stage=w.making)
+    titles = {w.task: "Logo"}
+    w.attach(w.task, w.mockup, "logo", attachment_id="a-logo")
+    w.visit(w.task, "2026-11-01T09:00:00.000000Z")
+    R.claim(w.c, ANA, w.task, w.mockup)
+
+    def ticket(title, owner=None, step="Review"):
+        tid = w.ticket(title, step=step)
+        titles[tid] = title
+        if owner:
+            w.c.execute("UPDATE tasks SET owner_id=? WHERE id=?", (owner, tid))
+        return tid
+
+    poster = ticket("Poster", owner=BEN)
+    w.attach(poster, w.mockup, "poster", attachment_id="a-poster")
+    w.visit(poster, "2999-01-01T00:00:00.000000Z")
+    w.c.execute(
+        "INSERT INTO review_claims (id, task_id, stage_requirement_id, claimed_by, claimed_at, expires_at) "
+        "VALUES ('rc-poster',?,?,?,?,'2999-01-01T00:00:00.000000Z')",
+        (poster, w.mockup, BEN, H.now()),
+    )
+    done = ticket("Done")
+    w.attach(done, w.mockup, "done", attachment_id="a-done")
+    w.visit(done, "2026-11-05T09:00:00.000000Z")
+    R.approve(w.c, ANA, done, w.mockup, requirement_version=1)
+    sent = ticket("Sent")
+    w.attach(sent, w.mockup, "sent", attachment_id="a-sent")
+    w.visit(sent, "2026-11-02T10:00:00.000000Z")
+    w.decide(
+        w.mockup,
+        "sent_back",
+        judge="person",
+        task=sent,
+        judge_actor=ANA,
+        route_next_to=BEN,
+        reason="Make the logo bigger",
+        created_at="2026-11-02T10:30:00.000000Z",
+    )
+    backup = ticket("Backup")
+    w.attach(backup, w.mockup, "backup", attachment_id="a-backup")
+    w.visit(backup, "2999-01-03T00:00:00.000000Z")
+    visit = w.c.execute("SELECT id FROM stage_visits WHERE task_id=?", (backup,)).fetchone()[0]
+    w.c.execute(
+        "INSERT INTO pipeline_manager_actions (id, pipeline_id, pipeline_manager_run_id, task_id, stage_visit_id, "
+        "stage_requirement_id, action, created_at) VALUES ('pa-backup',?,'run1',?,?,?,'ask_backup',?)",
+        (w.pipeline, backup, visit, w.mockup, H.now()),
+    )
+    w.c.execute("UPDATE stage_requirements SET backup_reviewer_id=? WHERE id=?", (BEN, w.mockup))
+    badge = ticket("Badge", step="Making")
+    w.attach(badge, judge, "badge", attachment_id="a-badge")
+    w.visit(badge, "2026-11-03T08:00:00.000000Z", step=w.making)
+    w.decide(judge, "unsure", judge="bot", task=badge, pipeline_stage_id=w.making, reason="The badge is too small")
+    blank = ticket("Blank")
+    w.c.execute("DELETE FROM stage_visits WHERE task_id=?", (blank,))  # creation opened one; this ticket has none
+    H.history_event(w.c, "task", blank, ANA, "step", new=w.review, created_at="2999-02-01T00:00:00.000000Z")
+    return w, titles
+
+
+def shaped_rows(w, titles, items):
+    """The queue rows with their random ids replaced by titles and names, so they compare with a fixture."""
+    names = {w.pipeline: "Design", w.making: "Making", w.review: "Review", w.shipped: "Shipped"}
+    rows = []
+    for item in items:
+        row = {**item, "task_id": titles[item["task_id"]], "pipeline_id": names[item["pipeline_id"]]}
+        row["stage_id"] = names[item["stage_id"]]
+        row.pop("stage_visit_id")  # a random id; test_not_validated_refuses_an_attachment_or_a_visit_... reads it
+        if item["moves_to"]:
+            row["moves_to"] = {**item["moves_to"], "stage_id": names[item["moves_to"]["stage_id"]]}
+        rows.append(row)
+    return rows
+
+
+def _queue_statements(w):
+    statements = []
+    w.c.set_trace_callback(statements.append)
+    try:
+        items = R.queue_for(w.c, ANA)
+    finally:
+        w.c.set_trace_callback(None)
+    return len(statements), len(items)
+
+
+def test_the_queue_query_count_does_not_grow_with_its_rows(world):
+    """The queue reads each kind of row once over all its items, so ten items and thirty take the same queries (the
+    count was 141 and 421 per queue before the reads were batched)."""
+    w = world
+    for i in range(4):
+        w.attach(w.ticket(f"Ten {i}"), w.mockup, f"ten-{i}")
+    ten, ten_items = _queue_statements(w)
+    for i in range(10):
+        w.attach(w.ticket(f"Thirty {i}"), w.mockup, f"thirty-{i}")
+    thirty, thirty_items = _queue_statements(w)
+    assert (ten_items, thirty_items) == (10, 30)
+    assert thirty - ten <= 5
+
+
+def test_a_mixed_queue_gives_the_rows_the_one_row_at_a_time_queue_gave(tmp_path, monkeypatch):
+    """Every kind of row at once (a person's review and a bot's, a claim held by each of two people, an attachment and
+    none, a send-back routed on, a backup asked, Late and not, a move to the next stage, a ticket whose time is its last
+    step event) comes out with the same keys, values and order as before the reads were batched. The rows were captured
+    from that version."""
+    monkeypatch.setattr(access, "owner_and_admin_emails", lambda conn: [])
+    w, titles = mixed_queue(tmp_path / "hub.sqlite")
+    expected = {
+        ANA: [
+            {
+                "task_id": "Logo",
+                "title": "Logo",
+                "body": "",
+                "acceptance_criteria": [],
+                "checkpoint": "",
+                "manager": None,
+                "number": None,
+                "pipeline_id": "Design",
+                "pipeline": "Design",
+                "stage_id": "Review",
+                "stage": "Review",
+                "requirement_id": "r-mockup",
+                "requirement": "Mockup",
+                "requirement_version": 1,
+                "kind": "attachment",
+                "work_version": 0,
+                "attachment": {
+                    "id": "a-logo",
+                    "source": "link",
+                    "url": "https://example.test/mockup",
+                    "blob_id": None,
+                    "file_id": None,
+                    "file_version": None,
+                    "commit_sha": None,
+                    "format": "link",
+                    "name": "https://example.test/mockup",
+                    "href": "https://example.test/mockup",
+                },
+                "attachment_digest": "logo",
+                "why": "reviewer",
+                "since": "2026-11-01T09:00:00.000000Z",
+                "late": True,
+                "claimed_by": None,
+                "claimed_by_me": True,
+                "assignee": {"id": "bot:cmo", "name": "cmo"},
+                "bot_note": "",
+                "reviewer_id": "human:ana",
+                "can_mark_met": True,
+                "can_not_validate": False,
+                "moves_to": None,
+            },
+            {
+                "task_id": "Logo",
+                "title": "Logo",
+                "body": "",
+                "acceptance_criteria": [],
+                "checkpoint": "",
+                "manager": None,
+                "number": None,
+                "pipeline_id": "Design",
+                "pipeline": "Design",
+                "stage_id": "Review",
+                "stage": "Review",
+                "requirement_id": "r-sign-off",
+                "requirement": "Sign-off",
+                "requirement_version": 1,
+                "kind": "approval",
+                "work_version": 0,
+                "attachment": None,
+                "attachment_digest": None,
+                "why": "reviewer",
+                "since": "2026-11-01T09:00:00.000000Z",
+                "late": True,
+                "claimed_by": None,
+                "claimed_by_me": False,
+                "assignee": {"id": "bot:cmo", "name": "cmo"},
+                "bot_note": "",
+                "reviewer_id": "human:ana",
+                "can_mark_met": False,
+                "can_not_validate": False,
+                "moves_to": None,
+            },
+            {
+                "task_id": "Sent",
+                "title": "Sent",
+                "body": "",
+                "acceptance_criteria": [],
+                "checkpoint": "",
+                "manager": None,
+                "number": None,
+                "pipeline_id": "Design",
+                "pipeline": "Design",
+                "stage_id": "Review",
+                "stage": "Review",
+                "requirement_id": "r-mockup",
+                "requirement": "Mockup",
+                "requirement_version": 1,
+                "kind": "attachment",
+                "work_version": 0,
+                "attachment": {
+                    "id": "a-sent",
+                    "source": "link",
+                    "url": "https://example.test/mockup",
+                    "blob_id": None,
+                    "file_id": None,
+                    "file_version": None,
+                    "commit_sha": None,
+                    "format": "link",
+                    "name": "https://example.test/mockup",
+                    "href": "https://example.test/mockup",
+                },
+                "attachment_digest": "sent",
+                "why": "reviewer",
+                "since": "2026-11-02T10:00:00.000000Z",
+                "late": True,
+                "claimed_by": None,
+                "claimed_by_me": False,
+                "assignee": {"id": "bot:cmo", "name": "cmo"},
+                "bot_note": "",
+                "reviewer_id": "human:ana",
+                "can_mark_met": True,
+                "can_not_validate": False,
+                "moves_to": None,
+            },
+            {
+                "task_id": "Sent",
+                "title": "Sent",
+                "body": "",
+                "acceptance_criteria": [],
+                "checkpoint": "",
+                "manager": None,
+                "number": None,
+                "pipeline_id": "Design",
+                "pipeline": "Design",
+                "stage_id": "Review",
+                "stage": "Review",
+                "requirement_id": "r-sign-off",
+                "requirement": "Sign-off",
+                "requirement_version": 1,
+                "kind": "approval",
+                "work_version": 0,
+                "attachment": None,
+                "attachment_digest": None,
+                "why": "reviewer",
+                "since": "2026-11-02T10:00:00.000000Z",
+                "late": True,
+                "claimed_by": None,
+                "claimed_by_me": False,
+                "assignee": {"id": "bot:cmo", "name": "cmo"},
+                "bot_note": "",
+                "reviewer_id": "human:ana",
+                "can_mark_met": False,
+                "can_not_validate": False,
+                "moves_to": None,
+            },
+            {
+                "task_id": "Done",
+                "title": "Done",
+                "body": "",
+                "acceptance_criteria": [],
+                "checkpoint": "",
+                "manager": None,
+                "number": None,
+                "pipeline_id": "Design",
+                "pipeline": "Design",
+                "stage_id": "Review",
+                "stage": "Review",
+                "requirement_id": "r-sign-off",
+                "requirement": "Sign-off",
+                "requirement_version": 1,
+                "kind": "approval",
+                "work_version": 0,
+                "attachment": None,
+                "attachment_digest": None,
+                "why": "reviewer",
+                "since": "2026-11-05T09:00:00.000000Z",
+                "late": True,
+                "claimed_by": None,
+                "claimed_by_me": False,
+                "assignee": {"id": "bot:cmo", "name": "cmo"},
+                "bot_note": "",
+                "reviewer_id": "human:ana",
+                "can_mark_met": False,
+                "can_not_validate": False,
+                "moves_to": {"stage_id": "Shipped", "name": "Shipped"},
+            },
+            {
+                "task_id": "Badge",
+                "title": "Badge",
+                "body": "",
+                "acceptance_criteria": [],
+                "checkpoint": "",
+                "manager": None,
+                "number": None,
+                "pipeline_id": "Design",
+                "pipeline": "Design",
+                "stage_id": "Making",
+                "stage": "Making",
+                "requirement_id": "r-judge",
+                "requirement": "Judge",
+                "requirement_version": 1,
+                "kind": "attachment",
+                "work_version": 0,
+                "attachment": {
+                    "id": "a-badge",
+                    "source": "link",
+                    "url": "https://example.test/mockup",
+                    "blob_id": None,
+                    "file_id": None,
+                    "file_version": None,
+                    "commit_sha": None,
+                    "format": "link",
+                    "name": "https://example.test/mockup",
+                    "href": "https://example.test/mockup",
+                },
+                "attachment_digest": "badge",
+                "why": "reviewer",
+                "since": "2026-11-03T08:00:00.000000Z",
+                "late": False,
+                "claimed_by": None,
+                "claimed_by_me": False,
+                "assignee": {"id": "bot:cmo", "name": "cmo"},
+                "bot_note": "The badge is too small",
+                "reviewer_id": "human:ana",
+                "can_mark_met": True,
+                "can_not_validate": False,
+                "moves_to": {"stage_id": "Review", "name": "Review"},
+            },
+            {
+                "task_id": "Poster",
+                "title": "Poster",
+                "body": "",
+                "acceptance_criteria": [],
+                "checkpoint": "",
+                "manager": None,
+                "number": None,
+                "pipeline_id": "Design",
+                "pipeline": "Design",
+                "stage_id": "Review",
+                "stage": "Review",
+                "requirement_id": "r-mockup",
+                "requirement": "Mockup",
+                "requirement_version": 1,
+                "kind": "attachment",
+                "work_version": 0,
+                "attachment": {
+                    "id": "a-poster",
+                    "source": "link",
+                    "url": "https://example.test/mockup",
+                    "blob_id": None,
+                    "file_id": None,
+                    "file_version": None,
+                    "commit_sha": None,
+                    "format": "link",
+                    "name": "https://example.test/mockup",
+                    "href": "https://example.test/mockup",
+                },
+                "attachment_digest": "poster",
+                "why": "reviewer",
+                "since": "2999-01-01T00:00:00.000000Z",
+                "late": False,
+                "claimed_by": "human:ben",
+                "claimed_by_me": False,
+                "assignee": {"id": "human:ben", "name": "Ben"},
+                "bot_note": "",
+                "reviewer_id": "human:ben",
+                "can_mark_met": True,
+                "can_not_validate": False,
+                "moves_to": None,
+            },
+            {
+                "task_id": "Poster",
+                "title": "Poster",
+                "body": "",
+                "acceptance_criteria": [],
+                "checkpoint": "",
+                "manager": None,
+                "number": None,
+                "pipeline_id": "Design",
+                "pipeline": "Design",
+                "stage_id": "Review",
+                "stage": "Review",
+                "requirement_id": "r-sign-off",
+                "requirement": "Sign-off",
+                "requirement_version": 1,
+                "kind": "approval",
+                "work_version": 0,
+                "attachment": None,
+                "attachment_digest": None,
+                "why": "reviewer",
+                "since": "2999-01-01T00:00:00.000000Z",
+                "late": False,
+                "claimed_by": None,
+                "claimed_by_me": False,
+                "assignee": {"id": "human:ben", "name": "Ben"},
+                "bot_note": "",
+                "reviewer_id": "human:ana",
+                "can_mark_met": False,
+                "can_not_validate": False,
+                "moves_to": None,
+            },
+            {
+                "task_id": "Backup",
+                "title": "Backup",
+                "body": "",
+                "acceptance_criteria": [],
+                "checkpoint": "",
+                "manager": None,
+                "number": None,
+                "pipeline_id": "Design",
+                "pipeline": "Design",
+                "stage_id": "Review",
+                "stage": "Review",
+                "requirement_id": "r-mockup",
+                "requirement": "Mockup",
+                "requirement_version": 1,
+                "kind": "attachment",
+                "work_version": 0,
+                "attachment": {
+                    "id": "a-backup",
+                    "source": "link",
+                    "url": "https://example.test/mockup",
+                    "blob_id": None,
+                    "file_id": None,
+                    "file_version": None,
+                    "commit_sha": None,
+                    "format": "link",
+                    "name": "https://example.test/mockup",
+                    "href": "https://example.test/mockup",
+                },
+                "attachment_digest": "backup",
+                "why": "reviewer",
+                "since": "2999-01-03T00:00:00.000000Z",
+                "late": False,
+                "claimed_by": None,
+                "claimed_by_me": False,
+                "assignee": {"id": "bot:cmo", "name": "cmo"},
+                "bot_note": "",
+                "reviewer_id": "human:ana",
+                "can_mark_met": True,
+                "can_not_validate": False,
+                "moves_to": None,
+            },
+            {
+                "task_id": "Backup",
+                "title": "Backup",
+                "body": "",
+                "acceptance_criteria": [],
+                "checkpoint": "",
+                "manager": None,
+                "number": None,
+                "pipeline_id": "Design",
+                "pipeline": "Design",
+                "stage_id": "Review",
+                "stage": "Review",
+                "requirement_id": "r-sign-off",
+                "requirement": "Sign-off",
+                "requirement_version": 1,
+                "kind": "approval",
+                "work_version": 0,
+                "attachment": None,
+                "attachment_digest": None,
+                "why": "reviewer",
+                "since": "2999-01-03T00:00:00.000000Z",
+                "late": False,
+                "claimed_by": None,
+                "claimed_by_me": False,
+                "assignee": {"id": "bot:cmo", "name": "cmo"},
+                "bot_note": "",
+                "reviewer_id": "human:ana",
+                "can_mark_met": False,
+                "can_not_validate": False,
+                "moves_to": None,
+            },
+            {
+                "task_id": "Blank",
+                "title": "Blank",
+                "body": "",
+                "acceptance_criteria": [],
+                "checkpoint": "",
+                "manager": None,
+                "number": None,
+                "pipeline_id": "Design",
+                "pipeline": "Design",
+                "stage_id": "Review",
+                "stage": "Review",
+                "requirement_id": "r-sign-off",
+                "requirement": "Sign-off",
+                "requirement_version": 1,
+                "kind": "approval",
+                "work_version": 0,
+                "attachment": None,
+                "attachment_digest": None,
+                "why": "reviewer",
+                "since": "2999-02-01T00:00:00.000000Z",
+                "late": False,
+                "claimed_by": None,
+                "claimed_by_me": False,
+                "assignee": {"id": "bot:cmo", "name": "cmo"},
+                "bot_note": "",
+                "reviewer_id": "human:ana",
+                "can_mark_met": False,
+                "can_not_validate": False,
+                "moves_to": None,
+            },
+        ],
+        BEN: [
+            {
+                "task_id": "Sent",
+                "title": "Sent",
+                "body": "",
+                "acceptance_criteria": [],
+                "checkpoint": "",
+                "manager": None,
+                "number": None,
+                "pipeline_id": "Design",
+                "pipeline": "Design",
+                "stage_id": "Review",
+                "stage": "Review",
+                "requirement_id": "r-mockup",
+                "requirement": "Mockup",
+                "requirement_version": 1,
+                "kind": "attachment",
+                "work_version": 0,
+                "attachment": {
+                    "id": "a-sent",
+                    "source": "link",
+                    "url": "https://example.test/mockup",
+                    "blob_id": None,
+                    "file_id": None,
+                    "file_version": None,
+                    "commit_sha": None,
+                    "format": "link",
+                    "name": "https://example.test/mockup",
+                    "href": "https://example.test/mockup",
+                },
+                "attachment_digest": "sent",
+                "why": "sent_back",
+                "since": "2026-11-02T10:00:00.000000Z",
+                "late": True,
+                "claimed_by": None,
+                "claimed_by_me": False,
+                "assignee": {"id": "bot:cmo", "name": "cmo"},
+                "bot_note": "",
+                "reviewer_id": "human:ana",
+                "can_mark_met": False,
+                "can_not_validate": False,
+                "moves_to": None,
+            },
+            {
+                "task_id": "Backup",
+                "title": "Backup",
+                "body": "",
+                "acceptance_criteria": [],
+                "checkpoint": "",
+                "manager": None,
+                "number": None,
+                "pipeline_id": "Design",
+                "pipeline": "Design",
+                "stage_id": "Review",
+                "stage": "Review",
+                "requirement_id": "r-mockup",
+                "requirement": "Mockup",
+                "requirement_version": 1,
+                "kind": "attachment",
+                "work_version": 0,
+                "attachment": {
+                    "id": "a-backup",
+                    "source": "link",
+                    "url": "https://example.test/mockup",
+                    "blob_id": None,
+                    "file_id": None,
+                    "file_version": None,
+                    "commit_sha": None,
+                    "format": "link",
+                    "name": "https://example.test/mockup",
+                    "href": "https://example.test/mockup",
+                },
+                "attachment_digest": "backup",
+                "why": "backup",
+                "since": "2999-01-03T00:00:00.000000Z",
+                "late": False,
+                "claimed_by": None,
+                "claimed_by_me": False,
+                "assignee": {"id": "bot:cmo", "name": "cmo"},
+                "bot_note": "",
+                "reviewer_id": "human:ana",
+                "can_mark_met": False,
+                "can_not_validate": False,
+                "moves_to": None,
+            },
+        ],
+    }
+    actual = {who: shaped_rows(w, titles, R.queue_for(w.c, who)) for who in (ANA, BEN)}
+    # The rows are the same as before, with their form; the order is now each pipeline's stages left to right, then age.
+    order = {"Making": 0, "Review": 1, "Shipped": 2}
+    by_value = lambda rows: sorted(rows, key=lambda row: json.dumps(row, sort_keys=True))  # noqa: E731
+    assert {who: by_value(rows) for who, rows in actual.items()} == {
+        who: by_value([{"form": "review", **row} for row in rows]) for who, rows in expected.items()
+    }
+    for rows in actual.values():
+        keys = [(order[row["stage_id"]], row["since"]) for row in rows]
+        assert keys == sorted(keys)
+    w.c.close()
+
+
+def test_a_bot_reviewed_item_carries_its_bot_note_and_a_person_reviewed_one_carries_none(world):
+    w = world
+    w.c.execute("UPDATE tasks SET owner_id=? WHERE id=?", (BEN, w.task))
+    judge = w.requirement("Judge", "attachment", "bot_then_person")
+    w.attach(requirement=judge, digest="judge")
+    w.decide(judge, "unsure", judge="bot", reason="The logo is too small")
+    items = {i["requirement_id"]: i for i in R.queue_for(w.c, ANA)}
+    bot = items[judge]
+    assert bot["bot_note"] == "The logo is too small"
+    assert bot["reviewer_id"] == ANA and bot["can_mark_met"] is True
+    assert bot["assignee"] == {"id": BEN, "name": H.actor_name(w.c, BEN)}
+    assert bot["moves_to"] is None  # the sign-off and the mockup are still unmet
+    person = items[w.mockup]
+    assert person["bot_note"] == "" and person["reviewer_id"] == ANA
+    assert person["assignee"] == {"id": BEN, "name": H.actor_name(w.c, BEN)}
+
+
+def test_moves_to_is_the_next_stage_only_when_the_item_is_the_last_one_unmet(world):
+    w = world
+    (before,) = [i for i in R.queue_for(w.c, ANA) if i["requirement_id"] == w.signoff and i["task_id"] == w.task]
+    assert before["moves_to"] is None  # the mockup is unmet, so the ticket stays
+    w.approve(w.mockup)
+    (last,) = [i for i in R.queue_for(w.c, ANA) if i["task_id"] == w.task]
+    assert last["requirement_id"] == w.signoff
+    assert last["moves_to"] == {"stage_id": w.shipped, "name": "Shipped"}
+
+
+def test_reviewer_id_is_the_claimant_and_a_plain_member_cannot_mark_met(world, monkeypatch):
+    w = world
+    monkeypatch.setattr(access, "owner_and_admin_emails", lambda conn: [])
+    w.c.execute("UPDATE stage_requirements SET backup_reviewer_id=? WHERE id=?", (BEN, w.signoff))
+    w.visit()
+    visit = w.c.execute("SELECT id FROM stage_visits").fetchone()[0]
+    w.c.execute(
+        "INSERT INTO pipeline_manager_actions (id, pipeline_id, pipeline_manager_run_id, task_id, stage_visit_id, "
+        "stage_requirement_id, action, created_at) VALUES ('pa2',?,'run1',?,?,?,'ask_backup',?)",
+        (w.pipeline, w.task, visit, w.signoff, H.now()),
+    )
+    (asked,) = R.queue_for(w.c, BEN)
+    assert asked["reviewer_id"] == ANA and asked["can_mark_met"] is False
+    R.claim(w.c, BEN, w.task, w.signoff)
+    assert R.queue_for(w.c, BEN)[0]["reviewer_id"] == BEN
+    (seen_by_ana,) = [i for i in R.queue_for(w.c, ANA) if i["requirement_id"] == w.signoff]
+    assert seen_by_ana["reviewer_id"] == BEN
+
+
+def test_not_validated_is_offered_only_after_an_in_development_stage_that_waits_on_subtasks(world):
+    """Not validated works only on a stage that directly follows an In development stage holding a `subtasks` run, with
+    a spawn link from an earlier stage. The queue flag and the action share that rule. A bot never gets it."""
+    w = world
+    item = lambda: next(i for i in R.queue_for(w.c, ANA) if i["requirement_id"] == w.mockup)  # noqa: E731
+    engineering = H.type_create(w.c, ANA, "Build Team", STEPS, mover=True)["id"]
+    L.create_link(w.c, ANA, w.making, engineering, mode="spawn")
+    rev = w.revision()
+    # Review's requirement sits after Making, which waits on nothing: refused, and the queue does not offer it.
+    assert item()["can_not_validate"] is False
+    refused(
+        "not_validatable", R.not_validated, w.c, ANA, w.task, w.mockup, "No", work_version=rev, requirement_version=1
+    )
+    # Making now waits on its Engineering subtasks: Review is the Validate stage and Not validated is offered.
+    w.requirement("Subtasks", "run", "bot", stage=w.making, needs=json.dumps({"source": "subtasks"}))
+    # The follow-up goes through the link that filed this ticket's subtasks, so a real spawn handoff is recorded first.
+    link_row = w.c.execute("SELECT * FROM pipeline_links WHERE from_pipeline_stage_id=?", (w.making,)).fetchone()
+    first_follow_up = L.spawn(w.c, link_row, w.task)
+    assert first_follow_up is not None
+    # The first follow-up ships before Not validated files a second one: an open twin would be refused as a duplicate.
+    _ship(w, first_follow_up)
+    assert item()["can_not_validate"] is True
+    assert R._not_validated_route(w.c, "bot:cmo", w.pipeline, w.review, w.task) is None, "a bot never gets the route"
+    # A stale work version or requirement version refuses, inside the transaction.
+    refused("stale", R.not_validated, w.c, ANA, w.task, w.mockup, "No", work_version=rev + 1, requirement_version=1)
+    refused("stale", R.not_validated, w.c, ANA, w.task, w.mockup, "No", work_version=rev, requirement_version=2)
+    assert w.c.execute("SELECT count(*) FROM stage_decisions WHERE task_id=?", (w.task,)).fetchone()[0] == 0
+    done = R.not_validated(
+        w.c, ANA, w.task, w.mockup, "Screenshots never validated", work_version=rev, requirement_version=1
+    )
+    assert done["moved_back_to"] == "Making" and done["follow_up"]
+
+
+def _reassign(w, child):
+    """An open subtask gets its own owner, so the next spawn of the same ticket is not a duplicate of it (same title and
+    owner under one parent)."""
+    H.task_update(w.c, ANA, child, owner="human:ben")
+
+
+def _ship(w, child):
+    """A subtask shipped: moved into the Shipped stage of its pipeline, the output stage the engine reads as shipment."""
+    shipped = w.c.execute(
+        "SELECT s.id FROM task_steps s JOIN tasks t ON t.type_id = s.type_id WHERE t.id = ? AND s.name = 'Shipped'",
+        (child,),
+    ).fetchone()[0]
+    H.task_update(w.c, ANA, child, step=shipped, mover=True)
+
+
+def test_not_validated_files_through_the_link_that_delivered_shipped_work_not_the_earlier_handoff(tmp_path):
+    """Two spawn links sit before Validate: Planning's (Engineering) and Making's (Support). Planning's handoff came first,
+    but its subtask is still open; Making's came later and shipped. Not validated files through Support, the link whose
+    shipped subtask satisfied the run: a handoff's chronology does not decide it."""
+    w = World(tmp_path / "hub.sqlite", steps=[{"name": "Planning", "status": "doing"}, *STEPS])
+    engineering = H.type_create(w.c, ANA, "Build Team", STEPS, mover=True)["id"]
+    support = H.type_create(w.c, ANA, "Support Team", STEPS, mover=True)["id"]
+    eng_link = L.create_link(w.c, ANA, w.step("Planning"), engineering, mode="spawn")["id"]
+    support_link = L.create_link(w.c, ANA, w.making, support, mode="spawn")["id"]
+    w.requirement("Subtasks", "run", "bot", stage=w.making, needs=json.dumps({"source": "subtasks"}))
+    first = L.spawn(w.c, w.c.execute("SELECT * FROM pipeline_links WHERE id=?", (eng_link,)).fetchone(), w.task)
+    assert first is not None
+    _reassign(w, first)
+    second = L.spawn(w.c, w.c.execute("SELECT * FROM pipeline_links WHERE id=?", (support_link,)).fetchone(), w.task)
+    assert second is not None
+    _ship(w, second)
+    # Make the Planning handoff the earlier one regardless of clock resolution.
+    w.c.execute("UPDATE pipeline_handoffs SET created_at='0000' WHERE pipeline_link_id=?", (eng_link,))
+    rev = w.revision()
+    done = R.not_validated(
+        w.c, ANA, w.task, w.mockup, "Screens never validated", work_version=rev, requirement_version=1
+    )
+    assert done["moved_back_to"] == "Making"
+    assert w.c.execute("SELECT type_id FROM tasks WHERE id=?", (done["follow_up"],)).fetchone()[0] == support
+
+
+def test_not_validated_follows_the_engineering_link_after_a_marketing_spawn_from_an_earlier_stage(tmp_path):
+    """Codex R3 F8: Specifying spawns Marketing discovery work, and later Planning (Product's Review exit) spawns Engineering.
+    After the Engineering subtask ships, Not validated files into Engineering, not Marketing, whatever came first."""
+    w = World(
+        tmp_path / "hub.sqlite",
+        steps=[{"name": "Specifying", "status": "doing"}, {"name": "Planning", "status": "doing"}, *STEPS],
+    )
+    engineering = H.type_create(w.c, ANA, "Build Team", STEPS, mover=True)["id"]
+    marketing = H.type_create(w.c, ANA, "Marketing Team", STEPS, mover=True)["id"]
+    mkt_link = L.create_link(w.c, ANA, w.step("Specifying"), marketing, mode="spawn")
+    eng_link = L.create_link(w.c, ANA, w.step("Planning"), engineering, mode="spawn")
+    w.requirement("Subtasks", "run", "bot", stage=w.making, needs=json.dumps({"source": "subtasks"}))
+    discovery = L.spawn(w.c, mkt_link, w.task)
+    _reassign(w, discovery)
+    build = L.spawn(w.c, eng_link, w.task)
+    assert discovery is not None and build is not None
+    _ship(w, build)  # the Marketing discovery stays open
+    done = R.not_validated(
+        w.c, ANA, w.task, w.mockup, "Screens never validated", work_version=w.revision(), requirement_version=1
+    )
+    assert done["moved_back_to"] == "Making"
+    assert w.c.execute("SELECT type_id FROM tasks WHERE id=?", (done["follow_up"],)).fetchone()[0] == engineering
+
+
+def test_not_validated_refuses_unless_exactly_one_spawn_link_delivered_shipped_work(tmp_path):
+    """No shipped subtask through any spawn link refuses, and so does shipped work through two links: the route is not
+    guessed, the queue does not offer it, and nothing is written."""
+    w = World(tmp_path / "hub.sqlite", steps=[{"name": "Planning", "status": "doing"}, *STEPS])
+    w.attach()
+    engineering = H.type_create(w.c, ANA, "Build Team", STEPS, mover=True)["id"]
+    support = H.type_create(w.c, ANA, "Support Team", STEPS, mover=True)["id"]
+    eng_link = L.create_link(w.c, ANA, w.step("Planning"), engineering, mode="spawn")
+    support_link = L.create_link(w.c, ANA, w.making, support, mode="spawn")
+    w.requirement("Subtasks", "run", "bot", stage=w.making, needs=json.dumps({"source": "subtasks"}))
+    eng_child = L.spawn(w.c, eng_link, w.task)
+    _reassign(w, eng_child)
+    support_child = L.spawn(w.c, support_link, w.task)
+    rev = w.revision()
+    item = lambda: next(i for i in R.queue_for(w.c, ANA) if i["requirement_id"] == w.mockup)  # noqa: E731
+    assert item()["can_not_validate"] is False
+    refused(
+        "development_link", R.not_validated, w.c, ANA, w.task, w.mockup, "No", work_version=rev, requirement_version=1
+    )
+    _ship(w, eng_child)
+    _ship(w, support_child)
+    assert item()["can_not_validate"] is False
+    refused(
+        "development_link", R.not_validated, w.c, ANA, w.task, w.mockup, "No", work_version=rev, requirement_version=1
+    )
+    assert w.c.execute("SELECT count(*) FROM stage_decisions WHERE task_id=?", (w.task,)).fetchone()[0] == 0
+
+
+def test_an_approval_refuses_an_attachment_attached_before_the_last_change(world):
+    w = world
+    w.push()
+    seen = w.view()
+    error = refused("stale", R.approve, w.c, ANA, w.task, w.mockup, **seen)
+    assert "attached before the last change" in error.detail
+    assert w.c.execute("SELECT count(*) FROM stage_decisions WHERE verdict='met'").fetchone()[0] == 0
+
+
+def test_the_approve_route_refuses_a_body_without_the_requirement_version(tmp_path):
+    ids = {"ana-test": Identity("human:ana", "owner", "ana@acme.example")}
+    app = create_app(Settings(db_path=tmp_path / "hub.db", company_name="Acme", test_identities=ids))
+    with TestClient(app) as client:
+        with app.state.store.transaction() as c:
+            w = World(tmp_path / "hub.db", conn=c)
+            w.attach()
+            w.approve(w.mockup)
+        ana = {"Authorization": "Bearer ana-test", "Idempotency-Key": "k-ana"}
+        (item,) = client.get("/api/v2/pipelines/review/queue", headers=ana).json()["items"]
+        body = {"work_version": item["work_version"], "attachment_digest": item["attachment_digest"]}
+        path = f"/api/v2/pipelines/tasks/{w.task}/requirements/{w.signoff}"
+        response = client.post(path + "/approve", json=body, headers=ana)
+        assert response.status_code == 422, response.text
+
+
+def test_undo_of_an_approval_that_did_not_move_the_ticket_is_refused_once_the_ticket_moved_on(world):
+    w = world
+    done = w.approve(w.mockup)
+    assert done["advanced"] is False
+    H.task_update(
+        w.c, ANA, w.task, step="Making"
+    )  # an editor moves it back: it is no longer where the approval left it
+    refused("moved_on", R.undo, w.c, ANA, done["decision_id"])
+
+
+def test_removing_the_attachment_a_person_approved_takes_the_approval_back(world):
+    w = world
+    w.approve(w.mockup)
+    mockup = dict(w.c.execute("SELECT * FROM stage_requirements WHERE id=?", (w.mockup,)).fetchone())
+    assert R.requirement_state(w.c, H.task(w.c, w.task), mockup) == "met"
+    w.c.execute(
+        "UPDATE requirement_attachments SET removed_at=?, removed_by=? WHERE task_id=? AND stage_requirement_id=?",
+        (H.now(), ANA, w.task, w.mockup),
+    )
+    assert R.requirement_state(w.c, H.task(w.c, w.task), mockup) != "met"
+
+
+def test_an_earlier_stage_requirement_is_approved_in_place_and_does_not_move_the_ticket(world):
+    w = world
+    w.approve(w.mockup)
+    H.task_update(w.c, ANA, w.task, step="Making")  # the ticket left Review, and Making is still open
+    w.push()
+    w.attach(digest="d2")  # the mockup went stale when the work changed; it is attached again
+    done = w.approve(w.mockup)
+    assert done["advanced"] is False and w.step_of() == w.making
+
+
+def test_an_llm_judges_reason_shows_on_the_queue_row(world):
+    w = world
+    w.decide(w.mockup, "unsure", judge="llm", reason="The logo is blurry")
+    (item,) = [i for i in R.queue_for(w.c, ANA) if i["requirement_id"] == w.mockup]
+    assert item["bot_note"] == "The logo is blurry"
+
+
+def test_a_queue_item_carries_the_card_and_the_names_its_buttons_reach(world):
+    """With nothing attached the review screen shows the card: its body, acceptance criteria and checkpoint. The item names
+    who the two Message buttons reach, the owner bot and the pipeline's manager bot, by display name."""
+    w = world
+    people = {"people": [{"id": p, "email": f"{p}@acme.example"} for p in ("ana", "ben", "chris")]}
+    H.sync_registry(
+        w.c,
+        {
+            "cmo": {"name": "cmo", "display_name": "Pipeline Manager", "runtime": "fake", "status": "active"},
+            "builder": {"name": "builder", "display_name": "Product Manager", "runtime": "fake", "status": "active"},
+        },
+        people,
+    )
+    w.c.execute("UPDATE task_types SET manager='cmo' WHERE id=?", (w.pipeline,))
+    w.c.execute(
+        "UPDATE tasks SET owner_id='bot:builder', body=?, acceptance=?, checkpoint=? WHERE id=?",
+        (
+            "Let the assistant approve a spec.",
+            json.dumps(["Approved in one tap", "Works on a phone"]),
+            "Shot 2 is cropped.",
+            w.task,
+        ),
+    )
+    w.c.execute("UPDATE requirement_attachments SET removed_at=? WHERE task_id=?", (H.now(), w.task))
+
+    def signoff():
+        (item,) = [i for i in R.queue_for(w.c, ANA) if i["task_id"] == w.task and i["requirement_id"] == w.signoff]
+        return item
+
+    item = signoff()
+    assert item["title"] == "Logo" and item["attachment"] is None
+    assert item["body"] == "Let the assistant approve a spec."
+    assert item["acceptance_criteria"] == ["Approved in one tap", "Works on a phone"]
+    assert item["checkpoint"] == "Shot 2 is cropped."
+    assert (item["requirement"], item["pipeline"]) == ("Sign-off", "Design")
+    assert item["assignee"] == {"id": "bot:builder", "name": "Product Manager"}
+    assert item["manager"] == {"id": "bot:cmo", "name": "Pipeline Manager"}
+
+    w.c.execute("UPDATE task_types SET manager=NULL WHERE id=?", (w.pipeline,))
+    assert signoff()["manager"] is None
+
+
+def _ticket_file(w, name, content_type):
+    blob = f"blob-{name}"
+    w.c.execute(
+        "INSERT INTO blobs (id, owner, digest, size, name, content_type, created_at) VALUES (?,?,?,?,?,?,?)",
+        (blob, "bot:cmo", "sha256:file", 42, name, content_type, H.now()),
+    )
+    w.c.execute("INSERT INTO task_assets (task_id, blob_id) VALUES (?,?)", (w.task, blob))
+    return blob
+
+
+@pytest.mark.parametrize(
+    ("name", "content_type", "expected"),
+    [
+        ("Pipeline manager spec v1.md", "text/markdown", "text"),
+        ("notes.txt", "", "text"),
+        ("shot.png", "image/png", "image"),
+    ],
+)
+def test_a_file_on_the_ticket_is_the_items_attachment_when_the_requirement_has_none(
+    world, name, content_type, expected
+):
+    """A ticket's own file is what the reviewer reads when nothing is attached to the requirement. It is shown (markdown and
+    plain text as text, an image as an image) but it is not the requirement's evidence: the item has no digest, and an
+    Approve of what was seen still goes through."""
+    w = world
+    blob = _ticket_file(w, name, content_type)
+    (item,) = [i for i in R.queue_for(w.c, ANA) if i["task_id"] == w.task and i["requirement_id"] == w.signoff]
+    shown = item["attachment"]
+    assert (shown["id"], shown["source"], shown["format"], shown["name"], shown["href"]) == (
+        blob,
+        "ticket",
+        expected,
+        name,
+        f"/api/v2/files/{blob}",
+    )
+    assert item["attachment_digest"] is None
+    w.approve(w.signoff)
+    assert w.signoff not in {i["requirement_id"] for i in R.queue_for(w.c, ANA) if i["task_id"] == w.task}
+
+
+def test_the_requirement_attachment_wins_over_a_file_on_the_ticket(world):
+    w = world
+    _ticket_file(w, "spec.md", "text/markdown")
+    (item,) = [i for i in R.queue_for(w.c, ANA) if i["task_id"] == w.task and i["requirement_id"] == w.mockup]
+    assert item["attachment"]["source"] == "link"
+    assert item["attachment"]["url"] == "https://example.test/mockup"
+    assert item["attachment_digest"] == "d1"
+
+
+def test_a_requirement_for_one_label_is_not_asked_of_a_ticket_without_that_label(world):
+    w = world
+    legal = w.requirement("Legal OK", "approval", "person", applies_to_label="legal")
+    assert legal not in {i["requirement_id"] for i in R.queue_for(w.c, ANA)}
+    w.c.execute(
+        "INSERT INTO tags (id, key, label, created_at, updated_at) VALUES ('tg-legal', 'legal', 'Legal', ?, ?)",
+        (H.now(), H.now()),
+    )
+    w.c.execute("INSERT INTO task_tags (task_id, tag_id) VALUES (?, 'tg-legal')", (w.task,))
+    assert legal in {i["requirement_id"] for i in R.queue_for(w.c, ANA)}
+
+
+def test_protected_approval_is_not_offered_mark_met_in_the_queue(world):
+    """An approval can never be overridden, so the queue does not advertise Mark met for it even to an editor, while an
+    attachment requirement the same editor reviews still offers it."""
+    w = world
+    rows = {i["requirement_id"]: i for i in R.queue_for(w.c, ANA)}
+    assert rows[w.signoff]["can_mark_met"] is False
+    assert rows[w.mockup]["can_mark_met"] is True
+
+
+def _company_owner_is_chris(monkeypatch):
+    """The company owner sees every members-only pipeline; in these tests it is Chris, so ana is only a reviewer."""
+    monkeypatch.setattr(access, "owner_email", lambda conn: "chris@acme.example")
+
+
+def _members_only(w, title, owner):
+    """A members-only pipeline owned by `owner` (ana is not a member and not its owner), with one stage."""
+    pipeline = H.type_create(w.c, ANA, title, [{"name": f"{title} intake", "status": "open"}], mover=True)["id"]
+    w.c.execute(
+        "UPDATE task_types SET pipeline_owner_id=?, pipeline_visibility='members' WHERE id=?", (owner, pipeline)
+    )
+    return pipeline, w.c.execute("SELECT id FROM task_steps WHERE type_id=?", (pipeline,)).fetchone()[0]
+
+
+def test_the_queue_leaves_out_a_ticket_the_reader_cannot_open(world):
+    """A ticket on a visible pipeline that is private to its owner and requester is not in ana's queue, though her review
+    of its requirements would be (ST2, O1)."""
+    w = world
+    secret = w.ticket("Secret")
+    w.c.execute("UPDATE tasks SET private=1, owner_id=?, requester_id=? WHERE id=?", (BEN, BEN, secret))
+    w.attach(task=secret)
+    assert {i["task_id"] for i in R.queue_for(w.c, ANA)} == {w.task}
+
+
+def test_the_queue_keeps_a_visited_stage_row_for_the_ticket_requester_on_a_hidden_pipeline(world, monkeypatch):
+    """Design's Review is left (both its requirements were approved), then the work changes, so Mockup is out of date on
+    a stage the ticket has left and waits on ana. The ticket then moves to a members-only pipeline ana may not see. Ana
+    requested the ticket, so she keeps her review item (D67: a ticket's own owner and requester still read it), while the
+    requirement's own pipeline is the one that decides what she is shown."""
+    w = world
+    _company_owner_is_chris(monkeypatch)
+    legal, legal_step = _members_only(w, "Legal", BEN)
+    w.approve(w.mockup)
+    w.approve(w.signoff)  # the stage's last requirement: the ticket moves on to Shipped
+    assert w.step_of() == w.shipped
+    w.c.execute(
+        "UPDATE tasks SET status='doing' WHERE id=?", (w.task,)
+    )  # Shipped is a done stage; the card is still open
+    w.push()  # the work changed: both requirements of the stage it left are out of date, and wait on ana again
+    assert any(i["requirement_id"] == w.mockup for i in R.queue_for(w.c, ANA))
+    # The card is now on Legal (its row is written as the move would leave it: Shipped's requirements are out of date, so
+    # the engine would hold a move out of Shipped; the visibility rule is what this test is about).
+    w.c.execute("UPDATE tasks SET type_id=?, step_id=? WHERE id=?", (legal, legal_step, w.task))
+    assert {i["requirement_id"] for i in R.queue_for(w.c, ANA) if i["task_id"] == w.task} == {w.mockup, w.signoff}
+
+
+def test_a_reviewer_who_is_not_the_ticket_owner_or_requester_loses_its_visited_row_on_a_hidden_pipeline(
+    world, monkeypatch
+):
+    """The same stale row, for a reviewer who is neither the ticket's owner nor its requester: once the ticket is on a
+    members-only pipeline they may not see, the row is left out (D67)."""
+    w = world
+    _company_owner_is_chris(monkeypatch)
+    legal, legal_step = _members_only(w, "Legal", BEN)
+    w.approve(w.mockup)
+    w.approve(w.signoff)
+    w.c.execute("UPDATE tasks SET status='doing', owner_id=?, requester_id=? WHERE id=?", (BEN, BEN, w.task))
+    w.push()
+    assert any(i["requirement_id"] == w.mockup for i in R.queue_for(w.c, ANA))
+    w.c.execute("UPDATE tasks SET type_id=?, step_id=? WHERE id=?", (legal, legal_step, w.task))
+    assert [i for i in R.queue_for(w.c, ANA) if i["task_id"] == w.task] == []
+
+
+def test_moves_to_never_names_a_destination_pipeline_the_reader_may_not_see(world, monkeypatch):
+    w = world
+    _company_owner_is_chris(monkeypatch)
+    legal, legal_step = _members_only(w, "Legal", BEN)
+    L.create_link(w.c, ANA, w.review, legal, "move")
+    w.approve(w.mockup)  # the sign-off is now the stage's last unmet requirement
+    item = next(i for i in R.queue_for(w.c, ANA) if i["requirement_id"] == w.signoff)
+    assert item["moves_to"] is None
+    assert R.queue_for(w.c, BEN) == []  # and Ben, who may see Legal, is not a reviewer of Design
+
+
+def test_a_hidden_pipeline_and_an_unknown_one_answer_the_queue_the_same(tmp_path, monkeypatch):
+    ids = {
+        "ana-test": Identity("human:ana", "owner", "ana@acme.example"),
+        "ben-test": Identity("human:ben", "human", "ben@acme.example"),
+    }
+    _company_owner_is_chris(monkeypatch)
+    _company_owner_is_chris(monkeypatch)
+    app = create_app(Settings(db_path=tmp_path / "hub.db", company_name="Acme", test_identities=ids))
+    with TestClient(app) as client:
+        with app.state.store.transaction() as c:
+            w = World(tmp_path / "hub.db", conn=c)
+            legal, legal_step = _members_only(w, "Legal", BEN)
+        ana = {"Authorization": "Bearer ana-test"}
+        answers = []
+        for pipeline in (legal, "pl-does-not-exist"):
+            for path in (
+                f"/api/v2/pipelines/{pipeline}/review/queue",
+                f"/api/v2/pipelines/{pipeline}/stages/{legal_step}/review/queue",
+            ):
+                response = client.get(path, headers=ana)
+                answers.append((response.status_code, response.json()))
+        assert answers[0] == answers[2] and answers[1] == answers[3]
+        assert answers[0][0] == answers[1][0] == 404
+
+
+def test_not_validated_is_not_offered_while_another_reviewer_holds_the_claim(world):
+    w = world
+    engineering = H.type_create(w.c, ANA, "Build Team", STEPS, mover=True)["id"]
+    L.create_link(w.c, ANA, w.making, engineering, mode="spawn")
+    w.requirement("Subtasks", "run", "bot", stage=w.making, needs=json.dumps({"source": "subtasks"}))
+    link_row = w.c.execute("SELECT * FROM pipeline_links WHERE from_pipeline_stage_id=?", (w.making,)).fetchone()
+    _ship(w, L.spawn(w.c, link_row, w.task))  # the route follows shipped work, so the subtask ships
+    item = lambda: next(i for i in R.queue_for(w.c, ANA) if i["requirement_id"] == w.mockup)  # noqa: E731
+    assert item()["can_not_validate"] is True
+    w.c.execute(
+        "INSERT INTO review_claims (id, task_id, stage_requirement_id, claimed_by, work_version, claimed_at, expires_at) "
+        "VALUES ('rc-ben', ?, ?, ?, 0, ?, ?)",
+        (w.task, w.mockup, BEN, H.now(), H.shift(H.now(), minutes=10)),
+    )
+    assert item()["claimed_by"] == BEN
+    assert item()["can_not_validate"] is False
+
+
+def test_not_validated_refuses_an_attachment_or_a_visit_the_reviewer_did_not_see(world):
+    """Not validated names the attachment (id and digest) and the stage visit the reviewer saw, inside the write (ST8). A
+    replaced attachment, even at the same work version, or another visit refuses it, and nothing is decided or filed."""
+    w = world
+    engineering = H.type_create(w.c, ANA, "Build Team", STEPS, mover=True)["id"]
+    L.create_link(w.c, ANA, w.making, engineering, mode="spawn")
+    w.requirement("Subtasks", "run", "bot", stage=w.making, needs=json.dumps({"source": "subtasks"}))
+    link_row = w.c.execute("SELECT * FROM pipeline_links WHERE from_pipeline_stage_id=?", (w.making,)).fetchone()
+    _ship(w, L.spawn(w.c, link_row, w.task))  # the route follows shipped work, so the subtask ships
+    w.visit()
+    visit = w.c.execute("SELECT id FROM stage_visits WHERE task_id=? AND left_at IS NULL", (w.task,)).fetchone()[0]
+    seen = w.c.execute(
+        "SELECT id, digest FROM requirement_attachments WHERE task_id=? AND stage_requirement_id=? AND removed_at IS NULL",
+        (w.task, w.mockup),
+    ).fetchone()
+    rev = w.revision()
+    w.attach(digest="d2", attachment_id="a-replaced")  # the attachment is swapped at the same work version
+    seen_kw = dict(work_version=rev, requirement_version=1)
+    error = refused(
+        "stale",
+        R.not_validated,
+        w.c,
+        ANA,
+        w.task,
+        w.mockup,
+        "No",
+        attachment_id=seen["id"],
+        attachment_digest=seen["digest"],
+        stage_visit_id=visit,
+        **seen_kw,
+    )
+    assert error.extra == {"reason": "attachment"}
+    error = refused(
+        "stale",
+        R.not_validated,
+        w.c,
+        ANA,
+        w.task,
+        w.mockup,
+        "No",
+        attachment_id="a-replaced",
+        attachment_digest="d2",
+        stage_visit_id="v-another-visit",
+        **seen_kw,
+    )
+    assert error.extra == {"reason": "visit"}
+    assert w.c.execute("SELECT count(*) FROM stage_decisions WHERE task_id=?", (w.task,)).fetchone()[0] == 0
+    done = R.not_validated(
+        w.c,
+        ANA,
+        w.task,
+        w.mockup,
+        "Screenshots never validated",
+        attachment_id="a-replaced",
+        attachment_digest="d2",
+        stage_visit_id=visit,
+        **seen_kw,
+    )
+    assert done["verdict"] == "failed"
+
+
+def _attach_link(w, requirement, url):
+    """The real attach API: the same evidence, judged by the same writer checks a person's or a bot's attach goes through."""
+    return A.attach(
+        w.c,
+        SimpleNamespace(task=lambda *a: None),
+        SimpleNamespace(actor=ANA),
+        w.task,
+        requirement,
+        {"source": "link", "url": url},
+    )
+
+
+def _digests(w, requirement):
+    rows = w.c.execute(
+        "SELECT digest, work_version FROM requirement_attachments WHERE task_id=? AND stage_requirement_id=? "
+        "ORDER BY created_at",
+        (w.task, requirement),
+    ).fetchall()
+    return [(r[0], r[1]) for r in rows]
+
+
+def test_the_same_evidence_attached_again_keeps_its_earliest_work_version(world):
+    """B4: a digest attached again on the same ticket keeps the earliest work version it was attached at (D33), so old
+    evidence cannot look fresh after the work changed; new evidence takes the current version."""
+    w = world
+    _attach_link(w, w.mockup, "https://example.test/first")
+    w.push()
+    _attach_link(w, w.mockup, "https://example.test/first")  # the same link again, after the work changed
+    first, again = _digests(w, w.mockup)[1:3]
+    assert first[0] == again[0]
+    assert [v for _, v in _digests(w, w.mockup)[1:3]] == [0, 0]
+    _attach_link(w, w.mockup, "https://example.test/second")  # new evidence is at the current work version
+    assert _digests(w, w.mockup)[-1][1] == w.revision()
+
+
+def test_a_stale_requirement_of_a_stage_the_ticket_left_takes_attachments_in_place(world):
+    """B9: a requirement of a stage the ticket has left, created before it left, takes evidence in place and does not move
+    the ticket; one created after it left is not held to, and the attach is refused."""
+    w = world
+    w.approve(w.mockup)
+    w.approve(w.signoff)  # the last requirement of Review: the ticket moves on
+    assert w.step_of() == w.shipped
+    _attach_link(w, w.mockup, "https://example.test/after-the-move")
+    assert w.step_of() == w.shipped
+    late = w.requirement("Late check", "attachment", "person", created_at="9999-12-31T00:00:00Z")
+    refused("conflict", _attach_link, w, late, "https://example.test/late")
+
+
+def _engine_state(w, requirement):
+    """The engine's standing of one requirement on the ticket, as the scheduler and the card read it."""
+    found = E.standings(w.c, [H.task(w.c, w.task)])[w.task]
+    return next(s.state for s in found if s.requirement["id"] == requirement)
+
+
+def _queued(w, requirement):
+    return any(i["requirement_id"] == requirement for i in R.queue_for(w.c, ANA))
+
+
+def test_a_mark_met_survives_its_attachment_being_removed_and_the_queue_agrees_with_the_engine(world):
+    w = world
+    R.mark_met(w.c, ANA, w.task, w.mockup, "Checked by hand")
+    w.c.execute("UPDATE requirement_attachments SET removed_at=?, removed_by=? WHERE task_id=?", (H.now(), ANA, w.task))
+    assert _engine_state(w, w.mockup) == "met"
+    assert (
+        R.requirement_state(
+            w.c,
+            H.task(w.c, w.task),
+            dict(w.c.execute("SELECT * FROM stage_requirements WHERE id=?", (w.mockup,)).fetchone()),
+        )
+        == "met"
+    )
+    assert not _queued(w, w.mockup)  # no stale row offered
+
+
+def test_an_approval_of_evidence_since_replaced_by_the_same_digest_is_not_met_in_the_queue_either(world):
+    w = world
+    w.approve(w.mockup)  # bound to the attachment attached now
+    w.c.execute("UPDATE requirement_attachments SET removed_at=?, removed_by=? WHERE task_id=?", (H.now(), ANA, w.task))
+    w.attach(digest="d1", attachment_id="a-same-evidence-again")  # the same digest, a different attachment
+    assert _engine_state(w, w.mockup) == "waiting"
+    mockup = dict(w.c.execute("SELECT * FROM stage_requirements WHERE id=?", (w.mockup,)).fetchone())
+    assert R.requirement_state(w.c, H.task(w.c, w.task), mockup) == "waiting"
+    assert _queued(w, w.mockup)
+
+
+def test_a_legacy_bot_then_person_field_row_is_not_listed_as_waiting_on_a_judge(world):
+    w = world
+    field = w.requirement("Owner set", "field", "bot_then_person", reviewer=ANA)
+    assert not _queued(w, field)
+    refused("not_person_reviewed", R.approve, w.c, ANA, w.task, field, work_version=0, requirement_version=1)
+
+
+def test_a_mark_met_expires_on_a_work_change_even_when_its_attachment_takes_no_freshness(world):
+    """Codex W3 #2: a Mark met is an override, and the engine expires it with the work whatever the attachment's own
+    freshness rule says. The review reads the same standing, so the item is waiting again and is listed."""
+    w = world
+    w.c.execute("UPDATE stage_requirements SET needs=? WHERE id=?", ('{"newer_than_change": false}', w.mockup))
+    R.mark_met(w.c, ANA, w.task, w.mockup, "Checked by hand")
+    w.push()
+    assert _engine_state(w, w.mockup) == "out_of_date"
+    mockup = dict(w.c.execute("SELECT * FROM stage_requirements WHERE id=?", (w.mockup,)).fetchone())
+    assert R.requirement_state(w.c, H.task(w.c, w.task), mockup) == "waiting"
+    assert _queued(w, w.mockup)
+
+
+def test_a_mark_met_survives_a_different_digest_replacing_its_attachment_and_the_last_approval_advances(world):
+    """Codex W3 #2: an override names no attachment (the engine's binding rule), so replacing the evidence with another
+    digest leaves it met, and the stage's last approval moves the ticket on."""
+    w = world
+    R.mark_met(w.c, ANA, w.task, w.mockup, "Checked by hand")
+    w.c.execute("UPDATE requirement_attachments SET removed_at=?, removed_by=? WHERE task_id=?", (H.now(), ANA, w.task))
+    w.attach(digest="d2", attachment_id="a-replacement")
+    assert _engine_state(w, w.mockup) == "met"
+    assert w.approve(w.signoff)["advanced"] is True
+    assert w.step_of() == w.shipped
+
+
+def test_a_satisfied_legacy_bot_then_person_field_lets_the_last_approval_advance(world):
+    """Codex W3 #3: a field whose source is set is met by the engine, whatever its legacy review says. The review reads the
+    same standing, so the stage's last approval advances the ticket instead of leaving the queue empty and the card stuck."""
+    w = world
+    w.requirement("Owner set", "field", "bot_then_person", reviewer=ANA, needs=json.dumps({"field": "assignee"}))
+    w.approve(w.mockup)
+    assert w.approve(w.signoff)["advanced"] is True
+    assert w.step_of() == w.shipped
+
+
+def _spawn_row(w, link_id):
+    return w.c.execute("SELECT * FROM pipeline_links WHERE id=?", (link_id,)).fetchone()
+
+
+def test_named_not_validated_files_into_the_nearest_link_when_two_links_into_the_named_pipeline_both_shipped(tmp_path):
+    """Codex r5 blocker 3: the subtasks run names Engineering, and two spawn links into Engineering (Planning's and
+    Making's) both delivered shipped work. Every candidate files into the named pipeline, so the route is not ambiguous:
+    Not validated files one Engineering subtask through the nearest link (Making's), and the queue offers it."""
+    w = World(tmp_path / "hub.sqlite", steps=[{"name": "Planning", "status": "doing"}, *STEPS])
+    w.attach()
+    engineering = H.type_create(w.c, ANA, "Build Team", STEPS, mover=True)["id"]
+    planning_link = L.create_link(w.c, ANA, w.step("Planning"), engineering, mode="spawn")["id"]
+    making_link = L.create_link(w.c, ANA, w.making, engineering, mode="spawn")["id"]
+    w.requirement(
+        "Subtasks", "run", "bot", stage=w.making, needs=json.dumps({"source": "subtasks", "pipeline": engineering})
+    )
+    first = L.spawn(w.c, _spawn_row(w, planning_link), w.task)
+    assert first is not None
+    _reassign(w, first)
+    _ship(w, first)
+    second = L.spawn(w.c, _spawn_row(w, making_link), w.task)
+    assert second is not None
+    _ship(w, second)
+    item = lambda: next(i for i in R.queue_for(w.c, ANA) if i["requirement_id"] == w.mockup)  # noqa: E731
+    assert item()["can_not_validate"] is True
+    done = R.not_validated(
+        w.c, ANA, w.task, w.mockup, "Screens never validated", work_version=w.revision(), requirement_version=1
+    )
+    assert done["moved_back_to"] == "Making"
+    assert w.c.execute("SELECT type_id FROM tasks WHERE id=?", (done["follow_up"],)).fetchone()[0] == engineering
+    filed = w.c.execute(
+        "SELECT pipeline_link_id FROM pipeline_handoffs WHERE target_task_id=?", (done["follow_up"],)
+    ).fetchone()[0]
+    assert filed == making_link
+
+
+def test_named_not_validated_files_through_the_one_delivering_link_of_two_into_the_named_pipeline(tmp_path):
+    """With the subtasks run naming Engineering, and two spawn links into it, only Planning's link delivered shipped work
+    (Making's subtask is still open). Not validated files through Planning's link, the farther one, and the queue offers it."""
+    w = World(tmp_path / "hub.sqlite", steps=[{"name": "Planning", "status": "doing"}, *STEPS])
+    w.attach()
+    engineering = H.type_create(w.c, ANA, "Build Team", STEPS, mover=True)["id"]
+    planning_link = L.create_link(w.c, ANA, w.step("Planning"), engineering, mode="spawn")["id"]
+    making_link = L.create_link(w.c, ANA, w.making, engineering, mode="spawn")["id"]
+    w.requirement(
+        "Subtasks", "run", "bot", stage=w.making, needs=json.dumps({"source": "subtasks", "pipeline": engineering})
+    )
+    shipped = L.spawn(w.c, _spawn_row(w, planning_link), w.task)
+    assert shipped is not None
+    _reassign(w, shipped)
+    _ship(w, shipped)
+    open_child = L.spawn(w.c, _spawn_row(w, making_link), w.task)
+    assert open_child is not None
+    _reassign(w, open_child)
+    item = lambda: next(i for i in R.queue_for(w.c, ANA) if i["requirement_id"] == w.mockup)  # noqa: E731
+    assert item()["can_not_validate"] is True
+    done = R.not_validated(
+        w.c, ANA, w.task, w.mockup, "Screens never validated", work_version=w.revision(), requirement_version=1
+    )
+    filed = w.c.execute(
+        "SELECT pipeline_link_id FROM pipeline_handoffs WHERE target_task_id=?", (done["follow_up"],)
+    ).fetchone()[0]
+    assert filed == planning_link
+
+
+def test_named_not_validated_still_refuses_when_no_link_files_into_the_named_pipeline(tmp_path):
+    """The 409 stays: the subtasks run names Engineering, but the only spawn link from an earlier stage files into Support.
+    Not validated refuses (`development_link`), the queue does not offer it, and nothing is written."""
+    w = World(tmp_path / "hub.sqlite", steps=[{"name": "Planning", "status": "doing"}, *STEPS])
+    w.attach()
+    engineering = H.type_create(w.c, ANA, "Build Team", STEPS, mover=True)["id"]
+    support = H.type_create(w.c, ANA, "Support Team", STEPS, mover=True)["id"]
+    support_link = L.create_link(w.c, ANA, w.making, support, mode="spawn")["id"]
+    w.requirement(
+        "Subtasks", "run", "bot", stage=w.making, needs=json.dumps({"source": "subtasks", "pipeline": engineering})
+    )
+    child = L.spawn(w.c, _spawn_row(w, support_link), w.task)
+    assert child is not None
+    _ship(w, child)
+    item = lambda: next(i for i in R.queue_for(w.c, ANA) if i["requirement_id"] == w.mockup)  # noqa: E731
+    assert item()["can_not_validate"] is False
+    refused(
+        "development_link",
+        R.not_validated,
+        w.c,
+        ANA,
+        w.task,
+        w.mockup,
+        "No",
+        work_version=w.revision(),
+        requirement_version=1,
+    )
+    assert w.c.execute("SELECT count(*) FROM stage_decisions WHERE task_id=?", (w.task,)).fetchone()[0] == 0
+
+
+def _question(w, text, on, options=("Yes", "No"), sources=None):
+    """A question for `on` that holds the ticket: a subtask of it that carries the question (question_tasks.store).
+    `sources` maps an option label to the page file it names (an option's `source`)."""
+    qid = H.task_create(w.c, ANA, text, "", on, parent_id=w.task, lint=False)["id"]
+    sources = sources or {}
+    QT.store(
+        w.c,
+        qid,
+        {
+            "questions": [
+                {
+                    "id": "decision",
+                    "header": "",
+                    "question": text,
+                    "why": "",
+                    "options": [
+                        {
+                            "label": o,
+                            "description": "",
+                            "then": "",
+                            "recommended": False,
+                            **({"source": {"file": sources[o]}} if o in sources else {}),
+                        }
+                        for o in options
+                    ],
+                    "multi": False,
+                }
+            ]
+        },
+    )
+    return qid
+
+
+def _subtask(w, text, owner, card=None):
+    return H.task_create(w.c, ANA, text, "", owner, parent_id=card or w.task, lint=False)["id"]
+
+
+def test_a_question_and_a_subtask_of_mine_on_an_open_card_are_in_my_queue_and_nobody_elses(world):
+    w = world
+    question = _question(w, "Does close all include bot tasks?", CHRIS)
+    subtask = _subtask(w, "Check the bulk close", CHRIS)
+    _question(w, "Anas question", ANA)  # asked of Ana, not Chris
+    ben_subtask = _subtask(w, "Bens subtask", BEN)
+    mine = [i for i in R.queue_for(w.c, CHRIS) if i["form"] != "review"]
+    assert {(i["form"], i["subject_id"]) for i in mine} == {("question", question), ("subtask", subtask)}
+    for item in mine:
+        assert (item["task_id"], item["pipeline_id"], item["stage_id"]) == (w.task, w.pipeline, w.review)
+    held = next(i for i in mine if i["form"] == "question")
+    assert held["ask"]["recipient_id"] == CHRIS and held["ask"]["refs"]["questions"][0]["options"]
+    assert held["holds_up"] == {"id": w.task, "title": "Logo"}
+    assert {i["subject_id"] for i in R.queue_for(w.c, BEN) if i["form"] != "review"} == {ben_subtask}
+    # The count on the Overview's ▶ is the same queue: a held question and an owned subtask are both one each.
+    assert pipeline_overview._for_you(w.c, CHRIS, [w.pipeline], "1=1") == {w.pipeline: 2}
+    # Answered or done, they leave the queue and the count drops.
+    w.c.execute("UPDATE tasks SET answer='{}' WHERE id=?", (question,))
+    w.c.execute("UPDATE tasks SET status='done' WHERE id=?", (subtask,))
+    assert pipeline_overview._for_you(w.c, CHRIS, [w.pipeline], "1=1") == {}
+
+
+def test_the_queue_puts_a_stage_before_a_later_one_then_the_oldest_first(world):
+    w = world
+    early = w.ticket("Early", step="Making")
+    later_question = _question(w, "Review-stage question", CHRIS)  # asked first, so it is the older one
+    early_subtask = _subtask(w, "Making-stage subtask", CHRIS, card=early)
+    rows = [i for i in R.queue_for(w.c, CHRIS) if i["form"] != "review"]
+    assert [i["subject_id"] for i in rows] == [early_subtask, later_question]
+    assert [i["stage_id"] for i in rows] == [w.making, w.review]
+    assert [i["subject_id"] for i in R.queue_for(w.c, CHRIS, w.pipeline, w.making) if i["form"] != "review"] == [
+        early_subtask
+    ]
+    assert [i["subject_id"] for i in R.queue_for(w.c, CHRIS, w.pipeline, w.review) if i["form"] != "review"] == [
+        later_question
+    ]
+
+
+def _restricted_page(c, title, people):
+    """A page only `people` may open: any other reader sees it as a page they can't open (page_audience)."""
+    fid = "file-" + format(5, "024x")
+    stamp = H.now()
+    c.execute(
+        "INSERT INTO bot_files(id,bot_id,scope,identity,title,kind,mime,locator,current_version,first_activity_at,last_activity_at) "
+        "VALUES(?,'cmo','bot',?,?,'page','text/html','tico_blob',1,?,?)",
+        (fid, fid, title, stamp, stamp),
+    )
+    c.execute(
+        "INSERT INTO pages(file_id,audience,created_at,updated_at) VALUES(?,?,?,?)",
+        (fid, json.dumps({"people": people}), stamp, stamp),
+    )
+    return fid
+
+
+def test_a_held_question_redacts_a_source_page_the_reader_cannot_open_as_the_question_view_does(tmp_path):
+    ids = {
+        "ana-test": Identity("human:ana", "owner", "ana@acme.example"),
+        "chris-test": Identity("human:chris", "human", "chris@acme.example"),
+    }
+    app = create_app(Settings(db_path=tmp_path / "hub.db", company_name="Acme", test_identities=ids))
+    with TestClient(app) as client:
+        with app.state.store.transaction() as c:
+            w = World(tmp_path / "hub.db", conn=c)
+            w.attach()
+            fid = _restricted_page(c, "Pipeline spec v1.md", ["ben"])
+            question = _question(
+                w,
+                "Which spec wins?",
+                CHRIS,
+                options=("Pipeline spec v1.md", "Neither"),
+                sources={"Pipeline spec v1.md": fid},
+            )
+        chris = {"Authorization": "Bearer chris-test", "Idempotency-Key": "k-chris"}
+        queue = client.get("/api/v2/pipelines/review/queue", headers=chris)
+        assert queue.status_code == 200, queue.text
+        (held,) = [i for i in queue.json()["items"] if i["form"] == "question"]
+        shown = json.dumps(held)
+        assert held["subject_id"] == question
+        assert "Pipeline spec v1.md" not in shown and fid not in shown, shown
+        assert "A page you can't open" in shown
+        # The question view redacts the same refs the same way (task_view runs readable_page_refs over the task).
+        task = client.get(f"/api/v2/tasks/{question}", headers=chris).json()["task"]
+        assert held["ask"]["refs"] == task["ask"]["refs"]
+        assert held["ask"]["refs"]["questions"][0]["options"][0] == {"removed": True, "label": "A page you can't open"}
+
+
+def test_a_held_subtask_carries_its_body_criteria_and_files_and_a_question_none_of_them(world):
+    w = world
+    subtask = _subtask(w, "Check the bulk close", CHRIS)
+    question = _question(w, "Does close all include bot tasks?", CHRIS)
+    w.c.execute(
+        "UPDATE tasks SET body=?, acceptance=? WHERE id=?",
+        ("Crop the second shot to the frame.", json.dumps(["Shot 2 is cropped", " "]), subtask),
+    )
+    w.c.execute(
+        "INSERT INTO blobs(id,owner,digest,size,name,content_type,created_at) VALUES(?,?,?,?,?,?,?)",
+        ("blob-crop-notes", CHRIS, "e" * 64, 120, "crop-notes.txt", "text/plain", H.now()),
+    )
+    w.c.execute("INSERT INTO task_assets VALUES(?,?)", (subtask, "blob-crop-notes"))
+    by_subject = {i["subject_id"]: i for i in R.queue_for(w.c, CHRIS) if i["form"] != "review"}
+    assert by_subject[subtask]["body"] == "Crop the second shot to the frame."
+    assert by_subject[subtask]["acceptance_criteria"] == ["Shot 2 is cropped"]
+    assert by_subject[subtask]["task_files"] == [
+        {
+            "id": "blob-crop-notes",
+            "name": "crop-notes.txt",
+            "size": 120,
+            "content_type": "text/plain",
+            "url": "/api/v2/files/blob-crop-notes",
+        }
+    ]
+    assert by_subject[question]["body"] == "" and by_subject[question]["acceptance_criteria"] == []
+    assert by_subject[question]["task_files"] == []
+
+
+PAGE_DIGEST = "9" * 64  # a page version's content digest, which its file attachment carries too
+CHRIS_HEADERS = {"Authorization": "Bearer chris-test"}
+
+
+def _page_version(c, fid, name):
+    """A page's first version, named as the library names it: its name is what a review item's attachment shows."""
+    blob = "blob-" + fid
+    c.execute(
+        "INSERT INTO blobs(id,owner,digest,size,name,content_type,created_at) VALUES(?,?,?,?,?,?,?)",
+        (blob, CHRIS, PAGE_DIGEST, 10, name, "text/html", H.now()),
+    )
+    c.execute(
+        "INSERT INTO bot_file_versions(file_id,version,blob_id,digest,size,name,mime,actor,created_at) "
+        "VALUES(?,?,?,?,?,?,?,?,?)",
+        (fid, 1, blob, PAGE_DIGEST, 10, name, "text/html", ANA, H.now()),
+    )
+
+
+def _file_attachment(w, fid):
+    """The Mockup's attachment is a company page, at its first version, as a person attaches a file."""
+    w.c.execute(
+        "INSERT INTO requirement_attachments(id, task_id, stage_requirement_id, source, file_id, file_version, digest, "
+        "work_version, created_at) VALUES(?,?,?,?,?,?,?,?,?)",
+        ("a-page", w.task, w.mockup, "file", fid, 1, PAGE_DIGEST, w.revision(), H.now()),
+    )
+
+
+@contextmanager
+def _page_review(tmp_path, people, ticket=False):
+    """Chris reviews the Mockup, whose attachment is a page open only to `people`; he reads his queue as a plain human
+    (an owner may manage every page, so the page rule only shows for a human). `ticket` attaches the page to the
+    ticket instead of the requirement, which is shown when the requirement has no attachment of its own. Yields the
+    client, the page's id and the one review item that shows the page, as Chris sees it."""
+    ids = {"chris-test": Identity(CHRIS, "human", "chris@acme.example")}
+    app = create_app(Settings(db_path=tmp_path / "hub.db", company_name="Acme", test_identities=ids))
+    with TestClient(app) as client:
+        with app.state.store.transaction() as c:
+            w = World(tmp_path / "hub.db", conn=c)
+            # A ticket's file is shown on a requirement with no attachment of its own: the Sign-off approval.
+            reviewed = w.signoff if ticket else w.mockup
+            c.execute("UPDATE stage_requirements SET reviewer_id=? WHERE id=?", (CHRIS, reviewed))
+            fid = _restricted_page(c, "Pipeline spec v1.md", people)
+            _page_version(c, fid, "Pipeline spec v1.md")
+            if ticket:
+                c.execute("INSERT INTO task_assets(task_id, blob_id) VALUES(?,?)", (w.task, "blob-" + fid))
+            else:
+                _file_attachment(w, fid)
+        queue = client.get("/api/v2/pipelines/review/queue", headers=CHRIS_HEADERS)
+        assert queue.status_code == 200, queue.text
+        (item,) = [i for i in queue.json()["items"] if i["form"] == "review" and i["attachment"]]
+        yield client, fid, item
+
+
+@pytest.mark.parametrize("ticket", [False, True], ids=["attachment", "ticket_file"])
+def test_a_review_item_attachment_redacts_a_page_the_reader_cannot_open_as_the_task_view_does(tmp_path, ticket):
+    with _page_review(tmp_path, ["ben"], ticket=ticket) as (_client, fid, item):  # an audience names people by id
+        shown = json.dumps(item)
+        for secret in ("Pipeline spec v1.md", fid, "blob-" + fid, PAGE_DIGEST, "a-page"):
+            assert secret not in shown, (secret, shown)
+        assert item["attachment_digest"] is None, item
+        assert item["attachment"] == {
+            "id": None,
+            "source": "ticket" if ticket else "file",
+            "format": "file",
+            "name": "A page you can't open",
+            "url": None,
+            "href": None,
+            "file_id": None,
+            "file_version": None,
+            "blob_id": None,
+            "commit_sha": None,
+            "removed": True,
+        }, item["attachment"]
+
+
+@pytest.mark.parametrize("ticket", [False, True], ids=["attachment", "ticket_file"])
+def test_approve_is_refused_for_an_attachment_the_reader_cannot_open(tmp_path, ticket):
+    with _page_review(tmp_path, ["ben"], ticket=ticket) as (client, _fid, item):
+        path = f"/api/v2/pipelines/tasks/{item['task_id']}/requirements/{item['requirement_id']}/approve"
+        body = {
+            "work_version": item["work_version"],
+            "attachment_digest": item["attachment_digest"],
+            "requirement_version": item["requirement_version"],
+        }
+        refused = client.post(path, json=body, headers={**CHRIS_HEADERS, "Idempotency-Key": "k-approve"})
+        assert refused.status_code == 403, refused.text
+        error = refused.json()["error"]
+        assert error["code"] == "forbidden", refused.text
+        detail = "You can't open this page, so you can't approve it. Send it back or ask its owner to share it."
+        assert error["detail"] == detail, refused.text
+        queue = client.get("/api/v2/pipelines/review/queue", headers=CHRIS_HEADERS).json()["items"]
+        assert item["requirement_id"] in [i["requirement_id"] for i in queue], "the item still waits, undecided"
+
+
+@pytest.mark.parametrize("ticket", [False, True], ids=["attachment", "ticket_file"])
+def test_approve_goes_ahead_for_an_attachment_the_reader_may_open(tmp_path, ticket):
+    with _page_review(tmp_path, ["chris"], ticket=ticket) as (client, _fid, item):
+        path = f"/api/v2/pipelines/tasks/{item['task_id']}/requirements/{item['requirement_id']}/approve"
+        body = {
+            "work_version": item["work_version"],
+            "attachment_digest": item["attachment_digest"],
+            "requirement_version": item["requirement_version"],
+        }
+        done = client.post(path, json=body, headers={**CHRIS_HEADERS, "Idempotency-Key": "k-approve"})
+        assert done.status_code == 200, done.text
+
+
+@pytest.mark.parametrize("ticket", [False, True], ids=["attachment", "ticket_file"])
+def test_a_review_item_attachment_shows_a_page_the_reader_may_open(tmp_path, ticket):
+    with _page_review(tmp_path, ["chris"], ticket=ticket) as (_client, fid, item):
+        assert item["attachment"]["name"] == "Pipeline spec v1.md", item["attachment"]
+        if not ticket:
+            assert item["attachment"]["href"] == f"/api/v2/files/{fid}/versions/1", item["attachment"]
+            assert item["attachment_digest"] == PAGE_DIGEST, item
+
+
+def test_a_bot_cannot_create_a_ticket_at_review_past_the_making_requirements(world):
+    """Codex GB2 round 3: a bot creating a ticket straight at a later stage is held to the earlier stages' exit
+    requirements, as a bot entering one by move is. Making's Mockup is not attached, so the create is refused."""
+    w = world
+    w.requirement("Brief", "attachment", "person", stage=w.making)
+    with pytest.raises(H.Refused) as refused_create:
+        H.task_create(w.c, "bot:cmo", "Made by a bot", "", "bot:cmo", type=w.pipeline, step="Review", lint=False)
+    assert refused_create.value.rule == "requirement"

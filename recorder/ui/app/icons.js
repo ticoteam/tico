@@ -1,6 +1,8 @@
 // Small line icons, drawn on a 16px grid in the current text colour.
 (() => {
   const paths = {
+    screen: '<rect x="1.5" y="2" width="13" height="9" rx="1.5"/><path d="M8 11v3M5 14h6M5.5 6.5 8 4l2.5 2.5M8 4v5"/>',
+    link: '<path d="m6.5 9.5 3-3M5.5 5l1.2-1.2a3 3 0 0 1 4.3 4.3L9.8 9.3M6.2 6.7 5 7.9a3 3 0 0 0 4.3 4.3l1.2-1.2"/>',
     back: '<path d="M10 3.5 5.5 8l4.5 4.5"/>',
     down: '<path d="m4.5 6.5 3.5 3.5 3.5-3.5"/>',
     up: '<path d="m4.5 10 3.5-3.5 3.5 3.5"/>',
@@ -9,6 +11,7 @@
     copy: '<rect x="5.5" y="5.5" width="8" height="8" rx="1.8"/><path d="M10.5 3.6V3.3A1.8 1.8 0 0 0 8.7 1.5H3.3a1.8 1.8 0 0 0-1.8 1.8v5.4a1.8 1.8 0 0 0 1.8 1.8h.3"/>',
     minimize: '<path d="M3.5 8h9"/>',
     close: '<path d="m4 4 8 8M12 4l-8 8"/>',
+    pencil: '<path d="M10.9 2.9a1.6 1.6 0 0 1 2.2 2.2L5.6 12.6 2.5 13.5l.9-3.1z"/>',
     trash: '<path d="M2.75 4.25h10.5M6.25 4.25V2.75h3.5v1.5M4 4.25l.6 8.1a1.5 1.5 0 0 0 1.5 1.4h3.8a1.5 1.5 0 0 0 1.5-1.4l.6-8.1"/>',
     send: '<path d="M14 2 7 9M14 2l-4.5 12-2.5-5-5-2.5z"/>',
     arrowUp: '<path d="M8 13V3.5M4 7.5l4-4 4 4"/>',
@@ -32,6 +35,7 @@
     calendar: '<rect x="2.25" y="3.25" width="11.5" height="10.5" rx="2"/><path d="M2.25 6.75h11.5M5.25 1.75v3M10.75 1.75v3"/>',
     flag: '<path d="M3.5 14V2.5M3.5 3h8l-1.5 3 1.5 3h-8"/>',
     clock: '<circle cx="8" cy="8" r="6"/><path d="M8 4.75V8l2.25 1.5"/>',
+    mac: '<rect x="2.75" y="3.25" width="10.5" height="7.5" rx="1.25"/><path d="M1.25 12.75h13.5"/>',
     import: '<path d="M8 2v8M4.75 7 8 10.25 11.25 7M2.75 12v1.25h10.5V12"/>',
   };
   window.icon = (name, size = 16) =>

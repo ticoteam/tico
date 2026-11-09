@@ -1,4 +1,4 @@
-from backend.tests.test_api import api, claim, expire, get, post, setup_attempt
+from backend.tests.helpers.api import claim, expire, get, post, setup_attempt
 
 
 def test_drain_finishes_current_run_but_does_not_claim_more_work(api):
@@ -20,4 +20,3 @@ def test_pause_fences_current_credential_even_after_resume(api):
     post(api, "bots/ops/control", {"action": "resume", "expected_revision": 2})
     get(api, "me", a["token"], expected=409)
     assert claim(api, r) is None  # Interrupted external effects still require reconciliation.
-

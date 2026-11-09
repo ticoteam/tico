@@ -1,6 +1,7 @@
 """Tico file hosting 1b, the app half (Dev 458): a page or SVG held in Tico's bucket shows inline from the company's
 ticofiles.com address, from a cleaned copy stored beside it with the policy slots the edge reads (Dev 457, docs/files.md),
 through a five-minute signed link handed out only after the reader is checked. Fake S3, HQ and edge: no network."""
+
 import base64
 import hashlib
 import hmac
@@ -10,10 +11,10 @@ import urllib.request
 
 from backend import file_metadata, tico_storage
 from backend import visuals as V
-from backend.tests.test_api import api, headers, post  # noqa: F401
-from backend.tests.test_storage_delivery import task
-from backend.tests.test_tico_storage import ADDRESS, SIGNING, Owner, on, tico  # noqa: F401
-from backend.tests.test_visuals import task_with_file
+from backend.tests.helpers.api import headers, post  # noqa: F401
+from backend.tests.helpers.storage_delivery import task
+from backend.tests.helpers.tico_storage import ADDRESS, SIGNING, Owner, on, tico  # noqa: F401
+from backend.tests.helpers.visuals import task_with_file
 
 PAGE = '<p>funnel</p><img src="https://tracker.example/p.gif"><script>steal()</script>'
 SVG = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10"><rect width="10" height="10"/></svg>'
@@ -24,14 +25,22 @@ def page_and_svg(api, tid=None, private=False):
     if tid is None:
         tid, page, _ = task_with_file(api, private=private, name="funnel.html", text=PAGE)
     else:
-        made = api.post(f"/api/v2/tasks/{tid}/files", json={"name": "funnel.html", "text": PAGE}, headers=headers("ben-test"))
+        made = api.post(
+            f"/api/v2/tasks/{tid}/files", json={"name": "funnel.html", "text": PAGE}, headers=headers("ben-test")
+        )
         assert made.status_code == 200, made.text
         page = made.json()["file_id"]
     svg = api.post(f"/api/v2/tasks/{tid}/files", json={"name": "logo.svg", "text": SVG}, headers=headers("ben-test"))
     assert svg.status_code == 200, svg.text
     svg = svg.json()["file_id"]
-    r = api.post(f"/api/v2/tasks/{tid}/comments", json={"text": "Both", "attachments": [
-        {"ref": f"{page}@1", "title": "Funnel"}, {"ref": f"{svg}@1", "title": "Logo"}]}, headers=headers("ben-test"))
+    r = api.post(
+        f"/api/v2/tasks/{tid}/comments",
+        json={
+            "text": "Both",
+            "attachments": [{"ref": f"{page}@1", "title": "Funnel"}, {"ref": f"{svg}@1", "title": "Logo"}],
+        },
+        headers=headers("ben-test"),
+    )
     assert r.status_code == 200, r.text
     return tid, {"page": page, "svg": svg}, r.json()["comment"]
 
@@ -39,7 +48,10 @@ def page_and_svg(api, tid=None, private=False):
 def items(api, tid, comment, who="ben-test"):
     listed = api.get(f"/api/v2/tasks/{tid}/comments", headers=headers(who))
     assert listed.status_code == 200, listed.text
-    return {a["kind"]: a for a in next(m for m in listed.json()["comments"] if m["id"] == comment["id"])["refs"]["attachments"]}
+    return {
+        a["kind"]: a
+        for a in next(m for m in listed.json()["comments"] if m["id"] == comment["id"])["refs"]["attachments"]
+    }
 
 
 def visuals_in(bucket):
@@ -83,13 +95,16 @@ def test_a_page_and_an_svg_uploaded_to_tico_storage_show_inline_from_the_company
     assert len(copies) == 3, sorted(bucket.objects)
     delivered = hq.edge.delivered.get(ADDRESS, 0)
 
-    class Unread:                                        # a read there is through the company's address, as delivery
+    class Unread:  # a read there is through the company's address, as delivery
         directory = api.app.state.blobs.directory
 
         def open_range(self, *args, **kwargs):
             raise AssertionError("the media worker read an SVG it derives nothing from")
+
     with api.app.state.store.read() as c:
-        svg = dict(c.execute("SELECT *, NULL AS poster_blob_id FROM blobs WHERE content_type='image/svg+xml'").fetchone())
+        svg = dict(
+            c.execute("SELECT *, NULL AS poster_blob_id FROM blobs WHERE content_type='image/svg+xml'").fetchone()
+        )
     file_metadata.Metadata(api.app.state.store, Unread()).process(svg)
 
     shown = items(api, tid, comment)
@@ -105,8 +120,10 @@ def test_a_page_and_an_svg_uploaded_to_tico_storage_show_inline_from_the_company
         meta = bucket.metadata[key]
         assert how == "inline" and meta["tico-visual-policy-version"] == "1"
         assert meta["sha256"] == hashlib.sha256(body).hexdigest()
-        assert meta["tico-visual-ancestors"].split() == [x for x in V.ancestors(settings)
-                                                         if tico_storage.ANCESTOR.match(x)][:8]
+        assert (
+            meta["tico-visual-ancestors"].split()
+            == [x for x in V.ancestors(settings) if tico_storage.ANCESTOR.match(x)][:8]
+        )
         if kind == "page":
             assert kind_type == "text/html; charset=utf-8"
             assert meta["tico-visual-script"] == "'" + V.REPORTER_HASH + "'"
@@ -117,10 +134,11 @@ def test_a_page_and_an_svg_uploaded_to_tico_storage_show_inline_from_the_company
         # The edge serves the copy on that link.
         served = hq.edge(urllib.request.Request(location), 60).read()
         assert served == body
-        delivered += len(served)                         # this test's own read on the link, counted as delivery
+        delivered += len(served)  # this test's own read on the link, counted as delivery
 
-    assert hq.edge.delivered.get(ADDRESS, 0) == delivered, \
+    assert hq.edge.delivered.get(ADDRESS, 0) == delivered, (
         "made at upload and checked by S3's own SHA-256: nothing read back through the edge for it"
+    )
     # The app's own route never serves the page itself: a HEAD is sent on too, and nothing on it streams the bytes.
     assert api.head(shown["page"]["src"], follow_redirects=False).status_code == 302
 
@@ -152,7 +170,7 @@ def test_an_old_page_in_tico_storage_gets_its_copy_on_first_view(api, tico):
     sync(on())
     tid, files, comment = page_and_svg(api)
     bucket = made["AKIATICOHOSTING0001"]
-    for key in list(visuals_in(bucket)):                 # as if stored before this change
+    for key in list(visuals_in(bucket)):  # as if stored before this change
         del bucket.objects[key]
     api.app.state.blobs._edge_seen.clear()
     shown = items(api, tid, comment)
@@ -169,13 +187,17 @@ def test_an_old_page_in_tico_storage_gets_its_copy_on_first_view(api, tico):
 
 def test_move_existing_files_stores_the_copy_and_until_then_a_page_on_disk_stays_a_card(api, tico):
     made, hq, sync = tico
-    tid, files, comment = page_and_svg(api)              # on the server's disk, before file hosting
+    tid, files, comment = page_and_svg(api)  # on the server's disk, before file hosting
     sync(on())
     shown = items(api, tid, comment)
     for kind in ("page", "svg"):
         assert shown[kind]["src"] is None and shown[kind]["open"] is True, "not in Tico's bucket yet: a card"
-        token = V.mint(V.key_for(api.app, api.app.state.store.settings), "human:ben", shown[kind]["file_id"],
-                       shown[kind]["version"])
+        token = V.mint(
+            V.key_for(api.app, api.app.state.store.settings),
+            "human:ben",
+            shown[kind]["file_id"],
+            shown[kind]["version"],
+        )
         assert api.get("/visuals/" + token, follow_redirects=False).status_code == 404
     size = api.get("/api/v2/system/storage/move", headers=headers()).json()["estimate"]["bytes"]
     delivered = dict(hq.edge.delivered)
@@ -206,8 +228,11 @@ def test_a_copy_that_does_not_check_out_is_never_linked(api, tico):
     assert refused.status_code == 404 and "location" not in refused.headers
     assert b"evil" not in refused.content
     bucket.objects[key] = copy
-    for meta in ({"tico-visual-ancestors": "*"}, {"tico-visual-script": "'unsafe-inline'"},
-                 {"tico-visual-sandbox": "allow-same-origin"}):
+    for meta in (
+        {"tico-visual-ancestors": "*"},
+        {"tico-visual-script": "'unsafe-inline'"},
+        {"tico-visual-sandbox": "allow-same-origin"},
+    ):
         saved = dict(bucket.metadata[key])
         bucket.metadata[key].update(meta)
         api.app.state.blobs._edge_seen.clear()
@@ -232,8 +257,9 @@ def test_when_credits_run_out_pages_with_a_copy_stay_inline_and_one_without_is_a
     assert shown["page"]["src"] is None and shown["page"]["open"] is True
     assert follow(api, shown["svg"]["src"])[1] == svg_path
     puts = len(bucket.calls)
-    token = V.mint(V.key_for(api.app, api.app.state.store.settings), "human:ben", files["page"],
-                   shown["page"]["version"])
+    token = V.mint(
+        V.key_for(api.app, api.app.state.store.settings), "human:ben", files["page"], shown["page"]["version"]
+    )
     assert api.get("/visuals/" + token, follow_redirects=False).status_code == 404
     assert len(bucket.calls) == puts, "nothing written to a place that takes no new files"
 
@@ -243,13 +269,13 @@ def test_pictures_still_redirect_and_other_files_are_unchanged(api, tico):
     made, hq, sync = tico
     sync(on())
     tid = task(api)
-    made_file = api.post(f"/api/v2/tasks/{tid}/files", files={"file": ("notes.txt", b"plain words")},
-                         headers=headers("ana-test"))
+    made_file = api.post(
+        f"/api/v2/tasks/{tid}/files", files={"file": ("notes.txt", b"plain words")}, headers=headers("ana-test")
+    )
     assert made_file.status_code == 200
     assert not visuals_in(made["AKIATICOHOSTING0001"])
     assert tico_storage.visual_kind("text/plain", 10) is None and tico_storage.visual_kind("image/png", 10) is None
     assert tico_storage.visual_kind("text/html", V.LIMITS["page"] + 1) is None
-
 
 
 def config(api, who="ben-test"):
@@ -274,8 +300,9 @@ def test_config_says_pages_show_from_file_hosting_and_names_its_address_for_the_
     assert outside.status_code == 401 and ADDRESS not in outside.text
     sync(on("credits_out"))
     seen = config(api)
-    assert (seen["visuals"], seen["visual_files"]) == ("media", "https://" + ADDRESS), \
+    assert (seen["visuals"], seen["visual_files"]) == ("media", "https://" + ADDRESS), (
         "pages with a copy still show from there, so the app keeps following frames to it"
+    )
     sync(on())
     monkeypatch.setattr(settings, "visual_origin", "https://visuals.acme.example")
     seen = config(api)
@@ -307,12 +334,18 @@ def test_a_local_install_may_frame_pages_from_either_loopback_spelling(api):
     """A local install's address is http://127.0.0.1:8765, and the same app opens at localhost:8765 (or the desktop
     app is pointed there): the copy's ancestors slot names both, and the edge accepts both (docs/files.md)."""
     from dataclasses import replace
+
     settings = api.app.state.store.settings
-    for own, twin in (("http://127.0.0.1:8765", "http://localhost:8765"), ("http://localhost:8877", "http://127.0.0.1:8877")):
+    for own, twin in (
+        ("http://127.0.0.1:8765", "http://localhost:8765"),
+        ("http://localhost:8877", "http://127.0.0.1:8877"),
+    ):
         found = V.ancestors(replace(settings, public_url=own, cors_origins=()))
         assert found == ["'self'", own, twin] and all(tico_storage.ANCESTOR.match(x) for x in found)
-    assert V.ancestors(replace(settings, public_url="https://tico.acme.example", cors_origins=())) == \
-        ["'self'", "https://tico.acme.example"]
+    assert V.ancestors(replace(settings, public_url="https://tico.acme.example", cors_origins=())) == [
+        "'self'",
+        "https://tico.acme.example",
+    ]
 
 
 def test_an_edge_link_is_accepted_by_an_edge_whose_clock_is_a_little_behind(api, tico):

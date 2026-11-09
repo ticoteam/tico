@@ -494,7 +494,7 @@ fn writer_lock(hub: &mut impl Hub, path: &Path) -> Result<File> {
     if who["actor"] != "bot:upgrades"
         || who["role"] != "bot"
         || who["agent"].as_str().is_some_and(|s| !s.is_empty())
-        || who["attempt_id"].as_str().is_none_or(str::is_empty)
+        || who["run_id"].as_str().is_none_or(str::is_empty)
         || who["runner_id"].as_str().is_none_or(str::is_empty)
         || who["runner_id"] != assigned["assignment"]["runner_id"]
         || assigned["state"] != "active"

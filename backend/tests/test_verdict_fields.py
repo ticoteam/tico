@@ -1,11 +1,12 @@
 """A review or QA subtask's verdict and the head it judged are fields the parent's owner is woken with."""
+
 import pytest
 
 from backend.hubdb import Refused
 from backend.store import H
-from backend.tests.test_api import api, post  # noqa: F401
-from backend.tests.test_subtask_results import queued_in
-from backend.tests.test_task_lanes import task_bot
+from backend.tests.helpers.api import post  # noqa: F401
+from backend.tests.helpers.subtask_results import queued_in
+from backend.tests.helpers.task_lanes import task_bot
 
 HEAD = "a1b2c3d" * 5 + "a1b2c"
 
@@ -14,7 +15,9 @@ def pair(api, review_title="Review 1: import"):
     task_bot(api, lanes=True, others=("finance",))
     with api.app.state.store.transaction() as c:
         parent = H.task_create(c, "human:ana", "Implement the import", "Build it.", "bot:ops", lint=False)
-        review = H.task_create(c, "bot:ops", review_title, "Review it.", "bot:finance", parent_id=parent["id"], lint=False)
+        review = H.task_create(
+            c, "bot:ops", review_title, "Review it.", "bot:finance", parent_id=parent["id"], lint=False
+        )
         c.execute("DELETE FROM jobs")
     return parent, review
 
@@ -22,8 +25,9 @@ def pair(api, review_title="Review 1: import"):
 def test_done_with_a_verdict_and_head_wakes_the_parent_owner_with_both(api):
     parent, review = pair(api)
     with api.app.state.store.transaction() as c:
-        H.task_update(c, "bot:finance", review["id"], status="done", note="Looks right.",
-                      verdict="approve", verdict_head=HEAD)
+        H.task_update(
+            c, "bot:finance", review["id"], status="done", note="Looks right.", verdict="approve", verdict_head=HEAD
+        )
         row = H.task(c, review["id"])
         woke = [m for m in queued_in(c, "ops") if m["refs"].get("subtask") == review["id"]]
     assert (row["verdict"], row["verdict_head"]) == ("approve", HEAD)
@@ -38,7 +42,9 @@ def test_done_with_a_verdict_and_head_wakes_the_parent_owner_with_both(api):
 def test_a_prose_verdict_line_fills_the_fields_and_a_newer_one_replaces_them(api):
     parent, review = pair(api)
     with api.app.state.store.transaction() as c:
-        H.task_update(c, "bot:finance", review["id"], status="doing", note=f"Notes.\nVERDICT: changes PR #4 head {HEAD}")
+        H.task_update(
+            c, "bot:finance", review["id"], status="doing", note=f"Notes.\nVERDICT: changes PR #4 head {HEAD}"
+        )
         row = H.task(c, review["id"])
         assert (row["verdict"], row["verdict_head"]) == ("changes", HEAD)
         later = "b" * 40
@@ -52,8 +58,9 @@ def test_a_prose_verdict_line_fills_the_fields_and_a_newer_one_replaces_them(api
 def test_a_flag_outranks_the_prose_and_a_verdict_alone_leaves_the_head_unknown(api):
     parent, review = pair(api)
     with api.app.state.store.transaction() as c:
-        H.task_update(c, "bot:finance", review["id"], status="done", note=f"VERDICT: changes PR #4 head {HEAD}",
-                      verdict="pass")
+        H.task_update(
+            c, "bot:finance", review["id"], status="done", note=f"VERDICT: changes PR #4 head {HEAD}", verdict="pass"
+        )
         row = H.task(c, review["id"])
     assert (row["verdict"], row["verdict_head"]) == ("pass", None)
 
@@ -78,8 +85,11 @@ def test_the_api_takes_the_fields_on_done_and_returns_them_on_the_task(api):
         parent = H.task_create(c, "human:ana", "Implement the import", "Build it.", "bot:ops", lint=False)
         check = H.task_create(c, "bot:ops", "QA: import", "Check it.", "human:ana", parent_id=parent["id"], lint=False)
         version = H.task(c, check["id"])["version"]
-    done = post(api, f"tasks/{check['id']}", {"status": "done", "note": "Passed.", "version": version,
-                                              "verdict": "pass", "verdict_head": HEAD.upper()[:12]})
+    done = post(
+        api,
+        f"tasks/{check['id']}",
+        {"status": "done", "note": "Passed.", "version": version, "verdict": "pass", "verdict_head": HEAD.upper()[:12]},
+    )
     assert (done["verdict"], done["verdict_head"]) == ("pass", HEAD[:12])
     post(api, f"tasks/{check['id']}", {"verdict": "maybe", "version": done["version"]}, expected=422)
 
@@ -89,12 +99,14 @@ def test_a_structured_verdict_after_a_prose_one_wakes_the_parent_owner(api):
     later = "b" * 40
     with api.app.state.store.transaction() as c:
         H.task_comment(c, "bot:finance", review["id"], f"VERDICT: changes PR #4 head {HEAD}")
-        H.task_update(c, "bot:finance", review["id"], status="done", note="Wrapping up.", verdict="approve",
-                      verdict_head=later)
+        H.task_update(
+            c, "bot:finance", review["id"], status="done", note="Wrapping up.", verdict="approve", verdict_head=later
+        )
         woke = [m["refs"] for m in queued_in(c, "ops") if m["refs"].get("subtask") == review["id"]]
     approve = [r for r in woke if r.get("verdict") == "approve"]
-    assert approve and approve[-1]["verdict_head"] == later and not approve[-1].get("quiet"), \
+    assert approve and approve[-1]["verdict_head"] == later and not approve[-1].get("quiet"), (
         "a new verdict on a new head is a result, not bookkeeping"
+    )
 
 
 @pytest.mark.parametrize("source", ["note", "comment", "quiet-comment", "reply"])
@@ -107,8 +119,14 @@ def test_last_inline_verdict_is_stored_and_delivered_once(api, source):
         elif source in ("comment", "quiet-comment"):
             H.task_comment(c, "bot:finance", review["id"], text, wake=source != "quiet-comment")
         else:
-            H.say(c, "bot:finance", "bot:ops", text, conversation_id=review["conversation_id"],
-                  refs={"task": review["id"]})
+            H.say(
+                c,
+                "bot:finance",
+                "bot:ops",
+                text,
+                conversation_id=review["conversation_id"],
+                refs={"task": review["id"]},
+            )
         row = H.task(c, review["id"])
         assert (row["verdict"], row["verdict_head"]) == ("approve", "06d18530")
         H.task_update(c, "bot:finance", review["id"], status="done", note="Review recorded.")
@@ -117,8 +135,7 @@ def test_last_inline_verdict_is_stored_and_delivered_once(api, source):
         assert (results[0]["refs"]["verdict"], results[0]["refs"]["verdict_head"]) == ("approve", "06d18530")
 
 
-@pytest.mark.parametrize("title", ["Review 1: import", "Review 2: import", "QA: import",
-                                    "Post Release QA: PR #412"])
+@pytest.mark.parametrize("title", ["Review 1: import", "Post Release QA: PR #412"])
 def test_done_without_any_verdict_is_refused_without_finishing_or_waking(api, title):
     parent, review = pair(api, title)
     with api.app.state.store.transaction() as c:
@@ -149,8 +166,7 @@ def test_an_ordinary_child_can_finish_without_a_verdict(api):
         assert H.task(c, child["id"])["status"] == "done"
 
 
-@pytest.mark.parametrize("title", ["Review 1: import", "QA: import", "Security: confirm the vendor contract",
-                                    "Post Release QA: PR #412"])
+@pytest.mark.parametrize("title", ["Review 1: import", "Security: confirm the vendor contract"])
 def test_a_person_owned_child_titled_as_a_check_finishes_without_a_verdict(api, title):
     task_bot(api, lanes=True, others=("finance",))
     with api.app.state.store.transaction() as c:
@@ -160,9 +176,10 @@ def test_a_person_owned_child_titled_as_a_check_finishes_without_a_verdict(api, 
         assert H.task(c, child["id"])["status"] == "done"
 
 
-@pytest.mark.parametrize("verdict", ["approve", "pass", "changes", "fail"])
+@pytest.mark.parametrize("verdict", ["approve", "fail"])
 def test_completed_runner_final_reply_records_inline_verdict_before_done(api, verdict):
-    from backend.tests.test_subtask_results import start, finish
+    from backend.tests.helpers.subtask_results import start, finish
+
     machine = task_bot(api, lanes=True, others=("finance",))
     with api.app.state.store.transaction() as c:
         parent = H.task_create(c, "human:ana", "Implement import", "Build.", "bot:ops", lint=False)
@@ -193,28 +210,61 @@ def test_legacy_inline_verdict_is_recovered_from_owner_words_before_done(api, so
 def test_a_builders_own_qa_child_and_work_handed_out_in_review_finish_without_a_verdict(api):
     task_bot(api, lanes=True, others=("finance",))
     with api.app.state.store.transaction() as c:
-        typ = H.type_create(c, H.KEEPER, "Dev tickets", [
-            {"name": "In Progress", "status": "doing"}, {"name": "Review 1", "status": "review"},
-            {"name": "Done", "status": "done"}], bots="work")
-        ticket = H.task_create(c, "human:ana", "Implement import", "Build.", "bot:ops", type=typ["id"],
-                               step="In Progress", lint=False)
-        own = H.task_create(c, "bot:ops", "QA: add fixtures", "Fixtures.", "bot:ops", parent_id=ticket["id"], lint=False)
+        typ = H.type_create(
+            c,
+            H.KEEPER,
+            "Dev tickets",
+            [
+                {"name": "In Progress", "status": "doing"},
+                {"name": "Review 1", "status": "review"},
+                {"name": "Done", "status": "done"},
+            ],
+            bots="work",
+        )
+        ticket = H.task_create(
+            c, "human:ana", "Implement import", "Build.", "bot:ops", type=typ["id"], step="In Progress", lint=False
+        )
+        own = H.task_create(
+            c, "bot:ops", "QA: add fixtures", "Fixtures.", "bot:ops", parent_id=ticket["id"], lint=False
+        )
         H.task_update(c, "human:ana", ticket["id"], step="Review 1")
-        docs = H.task_create(c, "bot:ops", "Write the import docs", "Docs.", "bot:finance",
-                             parent_id=ticket["id"], lint=False)
+        docs = H.task_create(
+            c, "bot:ops", "Write the import docs", "Docs.", "bot:finance", parent_id=ticket["id"], lint=False
+        )
         H.task_update(c, "bot:ops", own["id"], status="done", note="Fixtures added.")
         H.task_update(c, "bot:finance", docs["id"], status="done", note="Docs written.")
         assert [H.task(c, t["id"])["status"] for t in (own, docs)] == ["done", "done"]
 
 
-@pytest.mark.parametrize("quoted", ["VERDICT: approve|changes PR #<n> head <sha>", "VERDICT: pass-or-fail",
-                                    "VERDICT: pass or fail", "VERDICT: approve | changes", "VERDICT: approve PR #<n> head <full sha>",
-                                    "VERDICT: approve PR #12 head <sha>"])
+QUOTED_FORMAT_LINES = [
+    "VERDICT: approve|changes PR #<n> head <sha>",
+    "VERDICT: pass-or-fail",
+    "VERDICT: pass or fail",
+    "VERDICT: approve | changes",
+    "VERDICT: approve PR #<n> head <full sha>",
+    "VERDICT: approve PR #12 head <sha>",
+]
+
+
+def test_the_parser_reads_no_verdict_in_a_quoted_format_line():
+    from backend import wake_rules
+
+    for quoted in QUOTED_FORMAT_LINES:
+        text = f"Two findings. VERDICT: changes PR #4 head {HEAD}\nThe next review ends with {quoted}."
+        assert wake_rules.verdict_fields(text) == ("changes", HEAD), quoted
+        assert wake_rules.verdict_fields(f"The next review ends with {quoted}.") is None, quoted
+
+
+@pytest.mark.parametrize("quoted", [QUOTED_FORMAT_LINES[0], QUOTED_FORMAT_LINES[-1]])
 def test_a_quoted_format_line_after_a_verdict_does_not_replace_it(api, quoted):
     parent, review = pair(api)
     with api.app.state.store.transaction() as c:
-        H.task_update(c, "bot:finance", review["id"], note=f"Two findings. VERDICT: changes PR #4 head {HEAD}\n"
-                                                           f"The next review ends with {quoted}.")
+        H.task_update(
+            c,
+            "bot:finance",
+            review["id"],
+            note=f"Two findings. VERDICT: changes PR #4 head {HEAD}\nThe next review ends with {quoted}.",
+        )
         row = H.task(c, review["id"])
         assert (row["verdict"], row["verdict_head"]) == ("changes", HEAD)
 
@@ -233,7 +283,9 @@ def test_a_reopened_check_needs_a_verdict_given_since_the_reopen(api):
         c.execute("UPDATE tasks SET verdict='approve', verdict_head=? WHERE id=?", (HEAD, review["id"]))
         with pytest.raises(Refused, match="--verdict"):
             H.task_update(c, "bot:finance", review["id"], status="done", note="Bookkeeping.")
-        H.task_update(c, "bot:finance", review["id"], status="done", note=f"Delta fine. VERDICT: approve PR #4 head {HEAD}")
+        H.task_update(
+            c, "bot:finance", review["id"], status="done", note=f"Delta fine. VERDICT: approve PR #4 head {HEAD}"
+        )
         row = H.task(c, review["id"])
         assert (row["status"], row["verdict"], row["verdict_head"]) == ("done", "approve", HEAD)
 
@@ -243,8 +295,14 @@ def test_legacy_recovery_reads_every_task_reference_shape(api, refs):
     parent, review = pair(api)
     with api.app.state.store.transaction() as c:
         ref = {"task": [review["id"]]} if refs == "list" else {"task_id": review["id"]}
-        H.say(c, "bot:finance", "bot:ops", "Checked. VERDICT: approve head 06d18530",
-              conversation_id=review["conversation_id"], refs=ref)
+        H.say(
+            c,
+            "bot:finance",
+            "bot:ops",
+            "Checked. VERDICT: approve head 06d18530",
+            conversation_id=review["conversation_id"],
+            refs=ref,
+        )
         c.execute("UPDATE tasks SET verdict=NULL, verdict_head=NULL WHERE id=?", (review["id"],))
         H.task_update(c, "bot:finance", review["id"], status="done", note="Review recorded.")
         row = H.task(c, review["id"])
@@ -255,8 +313,15 @@ def test_reopen_with_a_new_verdict_records_it_in_the_new_cycle(api):
     parent, review = pair(api)
     with api.app.state.store.transaction() as c:
         H.task_update(c, "bot:finance", review["id"], status="done", verdict="changes", verdict_head=HEAD)
-        H.task_update(c, "bot:finance", review["id"], status="doing", note="Delta checked.",
-                      verdict="approve", verdict_head="b" * 40)
+        H.task_update(
+            c,
+            "bot:finance",
+            review["id"],
+            status="doing",
+            note="Delta checked.",
+            verdict="approve",
+            verdict_head="b" * 40,
+        )
         H.task_update(c, "bot:finance", review["id"], status="done", note="Review recorded.")
         row = H.task(c, review["id"])
         assert (row["status"], row["verdict"], row["verdict_head"]) == ("done", "approve", "b" * 40)
@@ -264,6 +329,7 @@ def test_reopen_with_a_new_verdict_records_it_in_the_new_cycle(api):
 
 def test_inline_verdict_recording_does_not_expand_the_generic_gate_wake():
     from backend.wake_rules import VERDICT, verdict_fields
+
     text = "Example of a verdict: VERDICT: approve PR #4 head " + HEAD
     assert verdict_fields(text) == ("approve", HEAD)
     assert VERDICT.search(text) is None

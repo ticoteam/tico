@@ -3,6 +3,7 @@
 Transport contains plan data only, never chat, browser state or authority. The
 compressed value travels beside the install's secrets, not in command arguments.
 """
+
 import base64
 import binascii
 import gzip
@@ -13,20 +14,25 @@ from . import draft as D
 from .keys import scrub_all
 from .yamlfile import from_yaml, to_yaml
 
-MAX_BYTES = 524288          # a 300-seat plan, normalized, with room (about 320 KB at 300 bots and 325 goals, every text at full length)
+MAX_BYTES = (
+    524288  # a 300-seat plan, normalized, with room (about 320 KB at 300 bots and 329 goals, every text at full length)
+)
 # A packed plan HQ carries to the server as a file (the hosted plan bucket): gzip+base64 of MAX_BYTES is about 700 KB.
 MAX_PACKED = 1048576
 # A packed plan carried in TICO_COMPANY_FILE_B64 (self-install, and AWS without --plan-bucket): Parameter Store's 8 KB
 # with the install settings, and far below Linux's 128 KB limit on one environment string.
 ENV_PACKED = 7168
-# The in-app path for a plan setup cannot carry: ui/app/welcome.js onbCompanyFileHTML (keep the labels in step).
-IMPORT_IN_APP = ("Run setup again without --company-file; then, on the first Welcome step in Tico, under \"Already chose "
-                 "your team?\", choose the file in \"Company YAML file\" and click \"Use this team\".")
+# The in-app path for a plan setup cannot carry: ui/app/welcome.ts onbCompanyFileHTML (keep the labels in step).
+IMPORT_IN_APP = (
+    "Run setup again without --company-file; then, on the first Welcome step in Tico, under \"Already chose "
+    "your team?\", choose the file in \"Company YAML file\" and click \"Use this team\"."
+)
 
 
 def load(source):
     if isinstance(source, str):
         import yaml
+
         draft = from_yaml(source)
         document = yaml.safe_load(source)
     elif isinstance(source, dict):
@@ -39,14 +45,21 @@ def load(source):
     # A coworker comes along only as the person who holds a seat; they join the team in Tico, never by import.
     holders = {b.get("person") for b in draft["bots"]}
     if any(not p["owner"] and p["id"] not in holders for p in draft["people"]):
-        raise D.DraftError("This import supports the owner, AI employees and the people who hold seats; add other coworkers in Tico first")
+        raise D.DraftError(
+            "This import supports the owner, AI employees and the people who hold seats; add other coworkers in Tico first"
+        )
     if draft["rules"]["mode"] != "defaults":
         raise D.DraftError("Review custom rules in Tico; this starter import uses the default rules")
     # Match the app's setup fields before a cloud installer creates anything.
-    if (not draft["company"]["name"].strip() or len(draft["company"]["name"]) > 100
-            or len(draft["company"]["about"]) > 2000
-            or any(len(person["name"]) > 100 for person in draft["people"])):
-        raise D.DraftError("Use a company/owner name up to 100 characters and a company description up to 2000 characters")
+    if (
+        not draft["company"]["name"].strip()
+        or len(draft["company"]["name"]) > 100
+        or len(draft["company"]["about"]) > 2000
+        or any(len(person["name"]) > 100 for person in draft["people"])
+    ):
+        raise D.DraftError(
+            "Use a company/owner name up to 100 characters and a company description up to 2000 characters"
+        )
     saved = D.plan_of(draft)
     if "models" in document:
         models = document["models"]

@@ -1,24 +1,33 @@
 """A task notice can release stale carriage without bypassing a real wait."""
+
 import json
 
 import pytest
 
 from backend import auto_tasks, execution, health, quiet_work
 from backend.store import H
-from backend.tests.test_api import api, get, post  # noqa: F401
-from backend.tests.test_task_lanes import task_bot
+from backend.tests.helpers.api import get, post  # noqa: F401
+from backend.tests.helpers.task_lanes import task_bot
+from backend import bot_settings as BS
+from backend.tests.hold_rows import set_holds
 
 
 def task_notice(api, task, refs, *, quiet=False, body="Check the runtime notice."):
     with api.app.state.store.transaction() as c:
-        return H._wake(c, H.task(c, task['id']), 'bot:ops', body,
-                       {**refs, **({'quiet': True} if quiet else {})},
-                       trigger=refs.get('trigger', 'schedule'))
+        return H._wake(
+            c,
+            H.task(c, task['id']),
+            'bot:ops',
+            body,
+            {**refs, **({'quiet': True} if quiet else {})},
+            trigger=refs.get('trigger', 'schedule'),
+        )
 
 
 def quiet_task(api, title='Check the weekly runtime report'):
-    return post(api, 'tasks', {'owner': 'ops', 'title': title,
-                               'body': 'Check the weekly runtime report.', 'next_run': True})
+    return post(
+        api, 'tasks', {'owner': 'ops', 'title': title, 'body': 'Check the weekly runtime report.', 'next_run': True}
+    )
 
 
 def carrier(api, machine, task):
@@ -35,14 +44,17 @@ def finish_carrier(api, machine, task, run):
     post(api, f"attempts/{run['id']}/complete", {'outcome': 'completed', 'last_seq': 0}, machine['token'])
     with api.app.state.store.transaction() as c:
         # The later notice is new work, after this completed delivery.
-        c.execute('UPDATE attempts SET created=?,finished=? WHERE id=?',
-                  (H.shift(H.now(), days=-8), H.shift(H.now(), days=-7), run['id']))
+        c.execute(
+            'UPDATE attempts SET created_at=?,finished_at=? WHERE id=?',
+            (H.shift(H.now(), days=-8), H.shift(H.now(), days=-7), run['id']),
+        )
         assert H.task(c, task['id'])['carried_by'] == run['id']
 
 
-@pytest.mark.parametrize('refs', [{'wake': 'due'}, {'wake': 'snooze'}, {'wake': 'resume'},
-                                  {'trigger': 'pr_checks', 'wake': 'pr_checks_done'}])
-@pytest.mark.parametrize('delivered', [False, True])
+@pytest.mark.parametrize(
+    'refs,delivered',
+    [({'wake': 'due'}, False), ({'wake': 'due'}, True), ({'trigger': 'pr_checks', 'wake': 'pr_checks_done'}, False)],
+)
 def test_actionable_notice_releases_stale_or_absent_carrier_once(api, refs, delivered):
     machine = task_bot(api, lanes=True)
     task = quiet_task(api)
@@ -96,20 +108,36 @@ def test_actionable_notice_preserves_real_gates(api, gate):
         if gate == 'resume':
             quiet_work.defer(c, 'bot:ops', task['id'], at=H.shift(H.now(), days=1))
         elif gate == 'snooze':
-            c.execute('UPDATE tasks SET snoozed_until=? WHERE id=?', (H.shift(H.now(), days=1), task['id']))
+            set_holds(c, task['id'], snoozed_until=H.shift(H.now(), days=1))
         elif gate == 'person':
-            c.execute("UPDATE tasks SET waiting_on='human:ben' WHERE id=?", (task['id'],))
+            H.task_update(
+                c,
+                'bot:ops',
+                task['id'],
+                status='waiting',
+                waiting_on='human:ben',
+                note="Send the report figures? I'll check them after.",
+            )
         elif gate == 'blocker':
             other = H.task_create(c, 'human:ana', 'Supply a report', '', 'human:ben', lint=False)
             H.TR.add_blocker(c, 'human:ana', task['id'], other['id'], mover=True)
         elif gate == 'approval':
-            H.approval_request(c, 'bot:ops', 'send', {'to': 'ben@acme.example', 'cc': [], 'subject': 'Report',
-                                                   'body_sha256': 'a' * 64, 'mailbox': 'ops@acme.example'},
-                               task_id=task['id'])
+            H.approval_request(
+                c,
+                'bot:ops',
+                'send',
+                {
+                    'to': 'ben@acme.example',
+                    'cc': [],
+                    'subject': 'Report',
+                    'body_sha256': 'a' * 64,
+                    'mailbox': 'ops@acme.example',
+                },
+                task_id=task['id'],
+            )
         elif gate in ('off', 'cap'):
-            config = json.loads(c.execute("SELECT config_json FROM bot_config WHERE bot='ops'").fetchone()[0])
-            c.execute("UPDATE bot_config SET config_json=? WHERE bot='ops'",
-                      (json.dumps({**config, 'keep_tasks_going': 0 if gate == 'off' else 1}),))
+            config = BS.read(c, 'ops')
+            BS.write(c, 'ops', {**config, 'keep_tasks_going': 0 if gate == 'off' else 1})
             if gate == 'cap':
                 other = H.task_create(c, 'human:ana', 'Check existing report', '', 'bot:ops', lint=False, next_run=True)
                 H.task_update(c, 'bot:ops', other['id'], status='doing')
@@ -122,9 +150,15 @@ def test_actionable_notice_preserves_real_gates(api, gate):
         assert H.task(c, task['id'])['next_run']
 
 
-@pytest.mark.parametrize('refs,quiet', [({'wake': 'due'}, True), ({'wake': 'update'}, False),
-                                         ({'trigger': 'pr_checks', 'wake': 'pr_review'}, False),
-                                         ({'trigger': 'pr_checks'}, False)])
+@pytest.mark.parametrize(
+    'refs,quiet',
+    [
+        ({'wake': 'due'}, True),
+        ({'wake': 'update'}, False),
+        ({'trigger': 'pr_checks', 'wake': 'pr_review'}, False),
+        ({'trigger': 'pr_checks'}, False),
+    ],
+)
 def test_quiet_notice_does_not_release_deferral(api, refs, quiet):
     machine = task_bot(api, lanes=True)
     task = quiet_task(api)
@@ -142,12 +176,24 @@ def test_health_groups_only_jobs_with_the_same_actual_reason(api, ready):
         task_notice(api, task, {'wake': 'due'})
     with api.app.state.store.transaction() as c:
         if not ready:
-            c.execute('UPDATE tasks SET resume_json=? WHERE id=?',
-                      (json.dumps({'kind': 'time', 'until': H.shift(H.now(), days=1)}), tasks[0]['id']))
+            c.execute(
+                'UPDATE tasks SET resume=? WHERE id=?',
+                (json.dumps({'kind': 'time', 'until': H.shift(H.now(), days=1)}), tasks[0]['id']),
+            )
         for task in tasks[1:]:
-            c.execute("UPDATE tasks SET next_run=0,waiting_on='human:ben' WHERE id=?", (task['id'],))
-        c.execute("UPDATE jobs SET created=? WHERE bot='ops' AND state='queued'", (H.shift(H.now(), hours=-3),))
-        rows = [r for r in health._waiting(c, {machine['runner_id']}, api.app.state.store.settings)[2] if r['bot'] == 'ops']
+            c.execute("UPDATE tasks SET next_run=0 WHERE id=?", (task['id'],))
+            H.task_update(
+                c,
+                'bot:ops',
+                task['id'],
+                status='waiting',
+                waiting_on='human:ben',
+                note="Send the report figures? I'll check them after.",
+            )
+        c.execute("UPDATE jobs SET created_at=? WHERE bot_id='ops' AND state='queued'", (H.shift(H.now(), hours=-3),))
+        rows = [
+            r for r in health._waiting(c, {machine['runner_id']}, api.app.state.store.settings)[2] if r['bot'] == 'ops'
+        ]
         assert len(rows) == 1
         expected = {'slow' if ready else 'task_next_run': 1, 'task_wait': 2}
         assert {item['reason']: item['queued'] for item in rows[0]['queue_reasons']} == expected

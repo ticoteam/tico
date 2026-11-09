@@ -30,7 +30,12 @@ struct Watched {
 
 fn watched() -> &'static Mutex<Watched> {
     static W: std::sync::OnceLock<Mutex<Watched>> = std::sync::OnceLock::new();
-    W.get_or_init(|| Mutex::new(Watched { turns: vec![], redactors: Default::default() }))
+    W.get_or_init(|| {
+        Mutex::new(Watched {
+            turns: vec![],
+            redactors: Default::default(),
+        })
+    })
 }
 
 fn save(dir: &Path, turns: &[Value]) {
@@ -46,7 +51,15 @@ fn save(dir: &Path, turns: &[Value]) {
 }
 
 /// Watch the shells a turn kept (the host's `background_kept` event). `deadline`: the run's time limit, epoch seconds.
-pub fn keep(dir: &Path, aid: &str, bot: &str, session: &str, deadline: f64, event: &Value, redactor: Option<&Arc<Redactor>>) {
+pub fn keep(
+    dir: &Path,
+    aid: &str,
+    bot: &str,
+    session: &str,
+    deadline: f64,
+    event: &Value,
+    redactor: Option<&Arc<Redactor>>,
+) {
     let now = epoch_s();
     let commands: Vec<Value> = event["kept"]
         .as_array()
@@ -87,7 +100,13 @@ pub fn still_running(bot: &str, session: &str) -> Option<String> {
         .filter(|t| t["bot"] == bot && t["session"] == session)
         .flat_map(|t| t["commands"].as_array().cloned().unwrap_or_default())
         .filter(|c| c["ended"].is_null())
-        .map(|c| format!("\"{}\" (kept since {})", text_of(&c["description"]), text_of(&crate::util::iso(&c["kept_at"])).replace("+00:00", "Z")))
+        .map(|c| {
+            format!(
+                "\"{}\" (kept since {})",
+                text_of(&c["description"]),
+                text_of(&crate::util::iso(&c["kept_at"])).replace("+00:00", "Z")
+            )
+        })
         .collect();
     (!running.is_empty()).then(|| {
         format!(
@@ -101,7 +120,8 @@ pub fn still_running(bot: &str, session: &str) -> Option<String> {
 fn holds(pid: u32, output_file: &str) -> bool {
     #[cfg(target_os = "linux")]
     {
-        std::fs::read_link(format!("/proc/{pid}/fd/1")).is_ok_and(|o| o.display().to_string() == output_file)
+        std::fs::read_link(format!("/proc/{pid}/fd/1"))
+            .is_ok_and(|o| o.display().to_string() == output_file)
     }
     #[cfg(not(target_os = "linux"))]
     {
@@ -112,7 +132,9 @@ fn holds(pid: u32, output_file: &str) -> bool {
 /// The last `TAIL_CHARS` characters of a command's output.
 fn tail(path: &str) -> String {
     use std::io::{Read, Seek, SeekFrom};
-    let Ok(mut f) = std::fs::File::open(path) else { return String::new() };
+    let Ok(mut f) = std::fs::File::open(path) else {
+        return String::new();
+    };
     let len = f.metadata().map(|m| m.len()).unwrap_or(0);
     let _ = f.seek(SeekFrom::Start(len.saturating_sub(4 * TAIL_CHARS as u64)));
     let mut bytes = vec![];
@@ -147,10 +169,15 @@ fn kill_workload(pid: u32) {
 
 /// Moves one turn's commands on; true when every one has ended.
 fn poll(turn: &mut Value, now: f64) -> bool {
-    let codes = turn["status_file"].as_str().map(|p| crate::reap::statuses(Path::new(p))).unwrap_or_default();
+    let codes = turn["status_file"]
+        .as_str()
+        .map(|p| crate::reap::statuses(Path::new(p)))
+        .unwrap_or_default();
     let late = turn["deadline"].as_f64().is_some_and(|d| now >= d);
     let reaped = !turn["status_file"].is_null();
-    let Some(commands) = turn["commands"].as_array_mut() else { return true };
+    let Some(commands) = turn["commands"].as_array_mut() else {
+        return true;
+    };
     for c in commands.iter_mut().filter(|c| c["ended"].is_null()) {
         let pid = c["pid"].as_u64().unwrap_or(0) as u32;
         if let Some(code) = codes.get(&pid) {
@@ -177,9 +204,25 @@ const WITHHELD: &str = "[output withheld: the runner restarted while this comman
 /// recorded) and whose redactor this runner no longer has, after a restart, gets no output at all: fail closed.
 fn report(turn: &Value, redactor: Option<&Arc<Redactor>>) -> Value {
     let blind = redactor.is_none() && turn["secrets"] != false;
-    let scrub = |t: &str| redactor.map(|r| r.scrub_text(t)).unwrap_or_else(|| t.to_string());
-    let description = |c: &Value| if blind && turn["secrets"].is_null() { UNNAMED.to_string() } else { scrub(&text_of(&c["description"])) };
-    let output = |c: &Value| if blind { WITHHELD.to_string() } else { scrub(&tail(&text_of(&c["output_file"]))) };
+    let scrub = |t: &str| {
+        redactor
+            .map(|r| r.scrub_text(t).into_owned())
+            .unwrap_or_else(|| t.to_string())
+    };
+    let description = |c: &Value| {
+        if blind && turn["secrets"].is_null() {
+            UNNAMED.to_string()
+        } else {
+            scrub(&text_of(&c["description"]))
+        }
+    };
+    let output = |c: &Value| {
+        if blind {
+            WITHHELD.to_string()
+        } else {
+            scrub(&tail(&text_of(&c["output_file"])))
+        }
+    };
     let commands: Vec<Value> = turn["commands"]
         .as_array()
         .into_iter()
@@ -217,12 +260,23 @@ async fn tick(runner: &Runner) {
     for turn in done {
         let aid = text_of(&turn["aid"]);
         let body = report(&turn, redactors.get(&aid));
-        let sent = runner.client.post(&format!("attempts/{aid}/background-done"), &body, Some(&format!("background-done:{aid}"))).await;
+        let sent = runner
+            .client
+            .post(
+                &format!("attempts/{aid}/background-done"),
+                &body,
+                Some(&format!("background-done:{aid}")),
+            )
+            .await;
         if let Err(e) = &sent {
             if e.retryable {
                 continue; // the next tick tries again
             }
-            log(&format!("Tico runner: {}: the wake for background commands of {aid} was refused: {}", text_of(&turn["bot"]), e.detail));
+            log(&format!(
+                "Tico runner: {}: the wake for background commands of {aid} was refused: {}",
+                text_of(&turn["bot"]),
+                e.detail
+            ));
         }
         let mut w = watched().lock().unwrap();
         w.turns.retain(|t| t["aid"] != turn["aid"]);
@@ -242,7 +296,12 @@ const UNNAMED: &str = "A background command";
 /// wake): its descriptions become `UNNAMED`, its commands are dropped, and it counts as holding secrets.
 fn restore(dir: &Path) {
     let path: PathBuf = dir.join(FILE);
-    let Some(mut turns) = std::fs::read_to_string(&path).ok().and_then(|t| serde_json::from_str::<Vec<Value>>(&t).ok()) else { return };
+    let Some(mut turns) = std::fs::read_to_string(&path)
+        .ok()
+        .and_then(|t| serde_json::from_str::<Vec<Value>>(&t).ok())
+    else {
+        return;
+    };
     for t in turns.iter_mut().filter(|t| t["secrets"].is_null()) {
         t["secrets"] = json!(true);
         for c in t["commands"].as_array_mut().into_iter().flatten() {
@@ -271,7 +330,9 @@ mod tests {
     use super::*;
     use std::os::unix::process::ExitStatusExt;
 
-    struct WatchGuard { _one: std::sync::MutexGuard<'static, ()> }
+    struct WatchGuard {
+        _one: std::sync::MutexGuard<'static, ()>,
+    }
     impl Drop for WatchGuard {
         fn drop(&mut self) {
             let mut w = watched().lock().unwrap();
@@ -284,40 +345,72 @@ mod tests {
     /// or deliver to its server, including when it simulates a restart.
     fn serial() -> WatchGuard {
         static S: Mutex<()> = Mutex::new(());
-        WatchGuard { _one: S.lock().unwrap_or_else(|e| e.into_inner()) }
+        WatchGuard {
+            _one: S.lock().unwrap_or_else(|e| e.into_inner()),
+        }
     }
 
     struct Child(std::process::Child);
     impl std::ops::Deref for Child {
         type Target = std::process::Child;
-        fn deref(&self) -> &Self::Target { &self.0 }
+        fn deref(&self) -> &Self::Target {
+            &self.0
+        }
     }
     impl std::ops::DerefMut for Child {
-        fn deref_mut(&mut self) -> &mut Self::Target { &mut self.0 }
+        fn deref_mut(&mut self) -> &mut Self::Target {
+            &mut self.0
+        }
     }
     impl Drop for Child {
-        fn drop(&mut self) { let _ = self.0.kill(); let _ = self.0.wait(); }
+        fn drop(&mut self) {
+            let _ = self.0.kill();
+            let _ = self.0.wait();
+        }
     }
 
     #[test]
     fn a_kept_command_is_reported_once_it_ends_and_killed_at_the_runs_limit() {
         let _one = serial();
-        let dir = std::env::temp_dir().join(format!("afterwatch-{}", uuid::Uuid::new_v4().simple()));
+        let dir =
+            std::env::temp_dir().join(format!("afterwatch-{}", uuid::Uuid::new_v4().simple()));
         std::fs::create_dir_all(&dir).unwrap();
         // Events from lsof name the real path, including /private/var on macOS.
         let dir = std::fs::canonicalize(dir).unwrap();
         let out = dir.join("s1.output");
         // A kept shell: writing to its output file, its exit code to come from its reaping parent's status file.
-        let mut shell = Child(std::process::Command::new("sh").arg("-c").arg("echo '3790 passed'; exec sleep 30").stdout(std::fs::File::create(&out).unwrap()).spawn().unwrap());
+        let mut shell = Child(
+            std::process::Command::new("sh")
+                .arg("-c")
+                .arg("echo '3790 passed'; exec sleep 30")
+                .stdout(std::fs::File::create(&out).unwrap())
+                .spawn()
+                .unwrap(),
+        );
         let status = dir.join("status");
         std::fs::write(&status, "").unwrap();
         let event = json!({"kept": [{"task_id": "s1", "description": "Run the full suite", "pid": shell.id(), "output_file": out.display().to_string()}], "status_file": status});
-        keep(&dir, "a1", "acme-afterwatch", "task:t1", epoch_s() + 3600.0, &event, None);
+        keep(
+            &dir,
+            "a1",
+            "acme-afterwatch",
+            "task:t1",
+            epoch_s() + 3600.0,
+            &event,
+            None,
+        );
         std::thread::sleep(Duration::from_millis(100));
         let line = still_running("acme-afterwatch", "task:t1").expect("a line for the next turn");
         assert!(line.contains("\"Run the full suite\""), "{line}");
         assert!(still_running("acme-afterwatch", "task:t2").is_none());
-        let mut turn = watched().lock().unwrap().turns.iter().find(|t| t["aid"] == "a1").unwrap().clone();
+        let mut turn = watched()
+            .lock()
+            .unwrap()
+            .turns
+            .iter()
+            .find(|t| t["aid"] == "a1")
+            .unwrap()
+            .clone();
         assert!(!poll(&mut turn, epoch_s()), "still running");
         std::fs::write(&status, format!("{} 1\n", shell.id())).unwrap();
         assert!(poll(&mut turn, epoch_s()));
@@ -335,7 +428,10 @@ mod tests {
         different["commands"][0]["output_file"] = json!(dir.join("another.output"));
         assert!(poll(&mut different, epoch_s()));
         assert!(different["commands"][0]["killed"].is_null());
-        assert!(shell.try_wait().unwrap().is_none(), "a different process was killed");
+        assert!(
+            shell.try_wait().unwrap().is_none(),
+            "a different process was killed"
+        );
         assert!(poll(&mut late, epoch_s()));
         assert_eq!(shell.wait().unwrap().signal(), Some(libc::SIGKILL));
         assert_eq!(report(&late, None)["commands"][0]["killed"], true);
@@ -350,43 +446,80 @@ mod tests {
             return true;
         }
         #[cfg(target_os = "linux")]
-        { std::fs::read_to_string(format!("/proc/{pid}/stat")).is_ok_and(|s| s.rsplit_once(')').is_some_and(|(_, r)| r.trim_start().starts_with('Z'))) }
+        {
+            std::fs::read_to_string(format!("/proc/{pid}/stat")).is_ok_and(|s| {
+                s.rsplit_once(')')
+                    .is_some_and(|(_, r)| r.trim_start().starts_with('Z'))
+            })
+        }
         #[cfg(not(target_os = "linux"))]
-        { std::process::Command::new("ps").args(["-p", &pid.to_string(), "-o", "stat="]).output().is_ok_and(|o| String::from_utf8_lossy(&o.stdout).trim_start().starts_with('Z')) }
+        {
+            std::process::Command::new("ps")
+                .args(["-p", &pid.to_string(), "-o", "stat="])
+                .output()
+                .is_ok_and(|o| {
+                    String::from_utf8_lossy(&o.stdout)
+                        .trim_start()
+                        .starts_with('Z')
+                })
+        }
     }
 
     #[test]
     fn the_run_limit_ends_a_kept_commands_whole_workload_and_nothing_else() {
         use std::os::unix::process::CommandExt;
-        let dir = std::env::temp_dir().join(format!("afterwatch-tree-{}", uuid::Uuid::new_v4().simple()));
+        let dir =
+            std::env::temp_dir().join(format!("afterwatch-tree-{}", uuid::Uuid::new_v4().simple()));
         std::fs::create_dir_all(&dir).unwrap();
         let dir = std::fs::canonicalize(dir).unwrap();
         let out = dir.join("s1.output");
         // The child writes `ready` only after its worker has started; the parent snapshot then describes the whole
         // workload rather than racing shell startup.
         let ready = dir.join("ready");
-        let mut shell = Child(std::process::Command::new("sh")
-            .arg("-c")
-            .arg(format!("sh -c 'sleep 30 & echo ready > {}; wait; true'; true", ready.display()))
-            .stdout(std::fs::File::create(&out).unwrap())
-            .process_group(0)
-            .spawn()
-            .unwrap());
+        let mut shell = Child(
+            std::process::Command::new("sh")
+                .arg("-c")
+                .arg(format!(
+                    "sh -c 'sleep 30 & echo ready > {}; wait; true'; true",
+                    ready.display()
+                ))
+                .stdout(std::fs::File::create(&out).unwrap())
+                .process_group(0)
+                .spawn()
+                .unwrap(),
+        );
         // Another command's job, in a group of its own.
-        let mut other = Child(std::process::Command::new("sleep").arg("30").stdout(std::process::Stdio::null()).process_group(0).spawn().unwrap());
+        let mut other = Child(
+            std::process::Command::new("sleep")
+                .arg("30")
+                .stdout(std::process::Stdio::null())
+                .process_group(0)
+                .spawn()
+                .unwrap(),
+        );
         // A long timeout is only a deadlock guard. Normal progress is driven by the child readiness marker.
         let setup_deadline = std::time::Instant::now() + Duration::from_secs(30);
         while !ready.exists() {
-            assert!(std::time::Instant::now() < setup_deadline, "the suite worker did not start");
+            assert!(
+                std::time::Instant::now() < setup_deadline,
+                "the suite worker did not start"
+            );
             std::thread::yield_now();
         }
         let workload = loop {
             let parent = crate::hosts::claude::parents();
-            let under: Vec<u32> = parent.iter().filter(|(_, &p)| p == shell.id() || parent.get(&p) == Some(&shell.id())).map(|(&c, _)| c).collect();
+            let under: Vec<u32> = parent
+                .iter()
+                .filter(|(_, &p)| p == shell.id() || parent.get(&p) == Some(&shell.id()))
+                .map(|(&c, _)| c)
+                .collect();
             if under.len() >= 2 {
                 break under;
             }
-            assert!(std::time::Instant::now() < setup_deadline, "the suite process tree did not appear");
+            assert!(
+                std::time::Instant::now() < setup_deadline,
+                "the suite process tree did not appear"
+            );
             std::thread::yield_now();
         };
         assert_eq!(workload.len(), 2, "the suite and its worker");
@@ -401,14 +534,20 @@ mod tests {
             if left.is_empty() {
                 break;
             }
-            assert!(std::time::Instant::now() < reap_deadline, "the killed suite workload did not exit: {left:?}");
+            assert!(
+                std::time::Instant::now() < reap_deadline,
+                "the killed suite workload did not exit: {left:?}"
+            );
             std::thread::yield_now();
         }
         let other_alive = !gone(other.id());
         let _ = other.kill();
         let _ = other.wait();
         std::fs::remove_dir_all(dir).unwrap();
-        assert!(left.is_empty(), "the suite ran on after its shell was killed: {left:?}");
+        assert!(
+            left.is_empty(),
+            "the suite ran on after its shell was killed: {left:?}"
+        );
         assert!(other_alive, "another command's job was killed");
         assert_eq!(report(&turn, None)["commands"][0]["killed"], true);
     }
@@ -420,18 +559,34 @@ mod tests {
     /// the list up again from background.json, as a new runner would. Returns each POST the server saw over two ticks.
     async fn deliver(restart: bool) -> Vec<String> {
         let _one = serial();
-        let (url, seen) = crate::client::tests::serve(vec![(200, r#"{"woke": true}"#), (200, r#"{"woke": false}"#)]).await;
-        let dir = std::env::temp_dir().join(format!("afterwatch-redact-{}", uuid::Uuid::new_v4().simple()));
+        let (url, seen) = crate::client::tests::serve(vec![
+            (200, r#"{"woke": true}"#),
+            (200, r#"{"woke": false}"#),
+        ])
+        .await;
+        let dir = std::env::temp_dir().join(format!(
+            "afterwatch-redact-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
         std::fs::create_dir_all(dir.join("projects")).unwrap();
         let path = dir.join("runner.json");
         std::fs::write(&path, json!({"url": url, "token": "t", "runner_id": "r1", "projects_dir": dir.join("projects")}).to_string()).unwrap();
         let config = crate::config::Config::load(&path).unwrap();
         let mut client = crate::client::Client::new(&config.url(), &config.token(), 5, 0).unwrap();
         client.backoff_scale = 0.0;
-        let runner = Runner::new(config, client, crate::state::State::open(&dir.join("state")).unwrap());
+        let runner = Runner::new(
+            config,
+            client,
+            crate::state::State::open(&dir.join("state")).unwrap(),
+        );
         let state = runner.state.directory.clone();
         let out = state.join("s1.output");
-        let mut shell = std::process::Command::new("sh").arg("-c").arg(format!("echo 'token={MARKER}'; echo '12 passed'")).stdout(std::fs::File::create(&out).unwrap()).spawn().unwrap();
+        let mut shell = std::process::Command::new("sh")
+            .arg("-c")
+            .arg(format!("echo 'token={MARKER}'; echo '12 passed'"))
+            .stdout(std::fs::File::create(&out).unwrap())
+            .spawn()
+            .unwrap();
         shell.wait().unwrap();
         let status = state.join("status");
         std::fs::write(&status, format!("{} 0\n", shell.id())).unwrap();
@@ -439,9 +594,20 @@ mod tests {
         let event = json!({"kept": [{"task_id": "s1", "description": format!("Deploy with {MARKER}"), "command": format!("deploy --key {MARKER}"),
                                      "pid": shell.id(), "output_file": out.display().to_string()}], "status_file": status});
         let redactor = Arc::new(Redactor::new(&[MARKER.to_string()]));
-        keep(&state, &aid, "acme-afterwatch", "task:t9", epoch_s() + 3600.0, &event, Some(&redactor));
+        keep(
+            &state,
+            &aid,
+            "acme-afterwatch",
+            "task:t9",
+            epoch_s() + 3600.0,
+            &event,
+            Some(&redactor),
+        );
         let stored = std::fs::read_to_string(state.join(FILE)).unwrap();
-        assert!(!stored.contains(MARKER), "a granted value was written to the watch list: {stored}");
+        assert!(
+            !stored.contains(MARKER),
+            "a granted value was written to the watch list: {stored}"
+        );
         if restart {
             {
                 let mut w = watched().lock().unwrap();
@@ -452,11 +618,21 @@ mod tests {
         }
         tick(&runner).await;
         tick(&runner).await;
-        assert!(!watched().lock().unwrap().turns.iter().any(|t| t["aid"] == aid.as_str()), "the turn is done with");
+        assert!(
+            !watched()
+                .lock()
+                .unwrap()
+                .turns
+                .iter()
+                .any(|t| t["aid"] == aid.as_str()),
+            "the turn is done with"
+        );
         assert!(!state.join(FILE).exists());
         std::fs::remove_dir_all(dir).ok();
         let seen = seen.lock().unwrap().clone();
-        seen.into_iter().filter(|r| r.starts_with(&format!("POST /api/v2/attempts/{aid}/background-done"))).collect()
+        seen.into_iter()
+            .filter(|r| r.starts_with(&format!("POST /api/v2/attempts/{aid}/background-done")))
+            .collect()
     }
 
     fn body_of(request: &str) -> Value {
@@ -467,28 +643,48 @@ mod tests {
     async fn after_a_restart_a_turn_that_held_secrets_gets_one_wake_with_its_output_withheld() {
         let posts = deliver(true).await;
         assert_eq!(posts.len(), 1, "one wake for the turn: {posts:?}");
-        assert!(!posts[0].contains(MARKER), "a granted value reached the server: {}", posts[0]);
+        assert!(
+            !posts[0].contains(MARKER),
+            "a granted value reached the server: {}",
+            posts[0]
+        );
         let c = &body_of(&posts[0])["commands"][0];
         assert_eq!(c["exit"], 0);
         assert_eq!(c["tail"], WITHHELD);
-        assert_eq!(c["description"], format!("Deploy with {}", crate::redact::MASK));
+        assert_eq!(
+            c["description"],
+            format!("Deploy with {}", crate::redact::MASK)
+        );
     }
 
     #[tokio::test]
     async fn without_a_restart_the_output_is_sent_scrubbed() {
         let posts = deliver(false).await;
         assert_eq!(posts.len(), 1, "one wake for the turn: {posts:?}");
-        assert!(!posts[0].contains(MARKER), "a granted value reached the server: {}", posts[0]);
+        assert!(
+            !posts[0].contains(MARKER),
+            "a granted value reached the server: {}",
+            posts[0]
+        );
         let c = &body_of(&posts[0])["commands"][0];
         assert_eq!(c["exit"], 0);
-        assert_eq!(c["tail"], format!("token={}\n12 passed\n", crate::redact::MASK));
-        assert_eq!(c["description"], format!("Deploy with {}", crate::redact::MASK));
+        assert_eq!(
+            c["tail"],
+            format!("token={}\n12 passed\n", crate::redact::MASK)
+        );
+        assert_eq!(
+            c["description"],
+            format!("Deploy with {}", crate::redact::MASK)
+        );
     }
 
     #[test]
     fn a_restored_legacy_watch_names_no_raw_description_in_the_next_turns_prompt() {
         let _one = serial();
-        let dir = std::env::temp_dir().join(format!("afterwatch-legacy-{}", uuid::Uuid::new_v4().simple()));
+        let dir = std::env::temp_dir().join(format!(
+            "afterwatch-legacy-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
         std::fs::create_dir_all(&dir).unwrap();
         let aid = format!("a-{}", uuid::Uuid::new_v4().simple());
         // Stored by an earlier runner, before `secrets` was recorded: raw description and command, still running.
@@ -499,11 +695,28 @@ mod tests {
         watched().lock().unwrap().redactors.remove(&aid);
         restore(&dir);
         let line = still_running("acme-legacy", "task:t7").expect("the reminder for the next turn");
-        let held = watched().lock().unwrap().turns.iter().find(|t| t["aid"] == aid.as_str()).cloned().unwrap();
-        watched().lock().unwrap().turns.retain(|t| t["aid"] != aid.as_str());
+        let held = watched()
+            .lock()
+            .unwrap()
+            .turns
+            .iter()
+            .find(|t| t["aid"] == aid.as_str())
+            .cloned()
+            .unwrap();
+        watched()
+            .lock()
+            .unwrap()
+            .turns
+            .retain(|t| t["aid"] != aid.as_str());
         std::fs::remove_dir_all(dir).ok();
-        assert!(!line.contains(MARKER), "a raw description reached the prompt: {line}");
-        assert!(line.contains(&format!("\"{UNNAMED}\"")) && line.contains("Do not start them again"), "{line}");
+        assert!(
+            !line.contains(MARKER),
+            "a raw description reached the prompt: {line}"
+        );
+        assert!(
+            line.contains(&format!("\"{UNNAMED}\"")) && line.contains("Do not start them again"),
+            "{line}"
+        );
         assert!(!held.to_string().contains(MARKER), "{held}");
         assert_eq!(report(&held, None)["commands"][0]["tail"], WITHHELD);
     }

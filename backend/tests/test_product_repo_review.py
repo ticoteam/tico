@@ -1,11 +1,12 @@
 """Preserve a repository-create operation's target after an ambiguous external result."""
+
 import httpx
 import pytest
 from fastapi.testclient import TestClient
 
 from backend import github_app as G
 from backend.app import create_app
-from backend.tests.test_github_app import api, gh, connect, product_repo_request  # noqa: F401
+from backend.tests.helpers.github_app import api, gh, connect, product_repo_request  # noqa: F401
 
 
 def test_product_create_lost_response_keeps_key_bound_to_original_name(api, gh, monkeypatch):
@@ -21,16 +22,18 @@ def test_product_create_lost_response_keeps_key_bound_to_original_name(api, gh, 
         return response
 
     monkeypatch.setattr(G, 'TRANSPORT', httpx.MockTransport(lose_first_creation_response))
-    body = {'org': 'Acme', 'name': 'tico-recorder', 'visibility': 'private',
-            'auto_init': False, 'confirmed': True}
+    body = {'org': 'Acme', 'name': 'tico-recorder', 'visibility': 'private', 'auto_init': False, 'confirmed': True}
     first = product_repo_request(api, body, key='lost-response-key')
     assert first.status_code == 409
     assert first.json()['error']['code'] == 'github_create_outcome_unknown'
     assert gh.created_repositories == {'Acme/tico-recorder'}
 
     changed = product_repo_request(api, {**body, 'name': 'another-product'}, key='lost-response-key')
-    assert changed.status_code == 409, {'status': changed.status_code, 'body': changed.json(),
-                                       'created': sorted(gh.created_repositories)}
+    assert changed.status_code == 409, {
+        'status': changed.status_code,
+        'body': changed.json(),
+        'created': sorted(gh.created_repositories),
+    }
     assert changed.json()['error']['code'] == 'idempotency_conflict'
     assert gh.created_repositories == {'Acme/tico-recorder'}
 
@@ -44,18 +47,18 @@ def test_product_operation_survives_app_restart_cache_cleanup_and_disconnect(api
     lost_response = True
     connect(api, administration='true')
     gh.permissions = {'administration': 'write', 'metadata': 'read'}
-    body = {'org': 'Acme', 'name': 'tico-recorder', 'visibility': 'private',
-            'auto_init': False, 'confirmed': True}
+    body = {'org': 'Acme', 'name': 'tico-recorder', 'visibility': 'private', 'auto_init': False, 'confirmed': True}
     gh.lose_next_product_create_response = lost_response
     first = product_repo_request(api, body, key='durable-restart')
     assert first.status_code == (409 if lost_response else 200)
     with api.app_state.store.transaction() as c:
-        c.execute('DELETE FROM idempotency')
+        c.execute('DELETE FROM idempotency WHERE binding IS NULL')  # the answers; the bindings stay
         c.execute('DELETE FROM github_app')
 
     # A new application and service lock reopen only the disposable fixture database.
     restarted = create_app(api.app_state.store.settings)
     with TestClient(restarted, follow_redirects=False) as retry:
+
         def forbid_github(request):
             raise AssertionError('Durable replay must not contact GitHub')
 
@@ -80,8 +83,7 @@ def test_separate_api_service_cannot_create_while_first_operation_is_in_flight(a
 
     connect(api, administration='true')
     gh.permissions = {'administration': 'write', 'metadata': 'read'}
-    body = {'org': 'Acme', 'name': 'tico-recorder', 'visibility': 'private',
-            'auto_init': False, 'confirmed': True}
+    body = {'org': 'Acme', 'name': 'tico-recorder', 'visibility': 'private', 'auto_init': False, 'confirmed': True}
     started, release = Event(), Event()
     # These waits only bound a hang. Under a loaded full-suite run the first request can take well over
     # ten seconds to reach GitHub, so none of them is a timing expectation.
@@ -103,7 +105,9 @@ def test_separate_api_service_cannot_create_while_first_operation_is_in_flight(a
             # Wait for the create to start, but stop as soon as the request ends without reaching it.
             deadline = time.monotonic() + hang
             while not started.wait(0.05):
-                assert not pending.done(), f'The request ended before the create: {pending.result().status_code} {pending.result().text}'
+                assert not pending.done(), (
+                    f'The request ended before the create: {pending.result().status_code} {pending.result().text}'
+                )
                 assert time.monotonic() < deadline, 'Synthetic create did not start'
             same = product_repo_request(other, body, key='separate-service')
             assert same.status_code == 409

@@ -70,7 +70,7 @@ Always:
 ## Talking to {{app_name}}
 Exports and invoices arrive as task attachments. A delivery complaint may reach you from `support` as
 a task; answer that task with the tracking facts and the customer update ready. Ask one question per
-task with `hub task ask <id>`.
+task with `hub task question "<question>" --on <person> --parent <id>`.
 
 ## Quality standards
 - **Answer first.** Line one: on-time rate this week, open exceptions, and the oldest one.

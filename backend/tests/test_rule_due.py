@@ -1,18 +1,23 @@
 """Due dates on rules (docs/rules-plan.md §1, §4): occurrences, the month-end clamp, and when an occurrence turns overdue.
 These are pure: the day "today" is passed in, so no test depends on the clock."""
+
 from datetime import date
 
 from backend import rule_due as D
 
 
 def row(first, repeats="once", zone="America/Los_Angeles"):
-    return {"first_due": first, "repeats": repeats, "timezone": zone}
+    return {"first_due_on": first, "repeats": repeats, "timezone": zone}
 
 
 def test_monthly_from_the_31st_falls_on_each_month_end_and_never_drifts_back():
     first = date(2026, 1, 31)
     assert [D.occurrence(first, "monthly", n).isoformat() for n in range(4)] == [
-        "2026-01-31", "2026-02-28", "2026-03-31", "2026-04-30"]
+        "2026-01-31",
+        "2026-02-28",
+        "2026-03-31",
+        "2026-04-30",
+    ]
     # The 31st comes back in March: the repeat counts from the first date, not from the month before.
     assert D.occurrence(first, "monthly", 2) == date(2026, 3, 31)
 

@@ -17,7 +17,7 @@ anonymised. No one was contacted.
 ## Opportunities under "raise class fill rate"
 | Opportunity | Sources | Label |
 |---|---|---|
-| Waitlist notified too late to fill a cancelled spot | 4 (calls of 09-08, 09-15, 09-22, 09-29) | pattern |
+| Waitlist notified too late to fill a canceled spot | 4 (calls of 09-08, 09-15, 09-22, 09-29) | pattern |
 | Owners can't see which classes are chronically under-filled | 2 | emerging |
 | New clients don't know how to book a second class | 1 | anecdote |
 

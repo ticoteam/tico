@@ -14,16 +14,16 @@ Done when: the proposal is on the task in under 100 words; if the task asked for
     hub task show <id>
 
 Find the ask, the deadline and who wants it. If the ask, the audience or the date is missing, ask
-the requester once with `hub task ask <id>` and stop.
+the requester once with `hub task question "<question>" --on <person> --parent <id>` and stop.
 
 ## 2. Match it to an owner
 
 Use `knowledge/routing.md`, then the team's lines in `AGENT.md`: a post or article (`content`), a
 search or AI-visibility question (`seo-visibility`), a social post or what people say publicly
 (`listening`), a campaign email (`email-marketing`), a launch or positioning (`product-marketing`),
-competitor facts (`hub market report`, which the Librarian curates), reviews (`reputation`), ads (`paid-media`), an event (`events`),
+competitor facts (`hub market report`, which the Librarian curates), reviews (`reputation`), ads (`social-ads-owner` for paid social, `search-ads-owner` for paid search, `paid-media` only when neither is on the team), an event (`events`),
 press (`pr`), the community (`community`), brand and voice (`brand`), tracking and lead handoff
-(`marketing-ops`). If two owners could take it, say why one fits better. If none fits and the same
+(`marketing-ops`). A segment's growth goes to its segment marketing owner first, and a conversion problem to `cro-owner` before any other owner. If two owners could take it, say why one fits better. If none fits and the same
 kind of request keeps coming, propose a hire (`AGENT.md`, Hiring) instead of routing it to a human
 again.
 

@@ -7,8 +7,8 @@ import yaml
 
 from backend import market as M
 from backend.blobs import Blobs
-from backend.tests.test_api import api, get, post  # noqa: F401
-from backend.tests.test_market import FIXTURE_REGISTRY
+from backend.tests.helpers.api import get, post  # noqa: F401
+from backend.tests.helpers.market import FIXTURE_REGISTRY
 from clients.routines import validate_schedules
 
 CATALOG = Path(__file__).resolve().parents[2] / "templates" / "catalog" / "librarian"
@@ -20,8 +20,15 @@ def test_the_market_bootstrap_creates_the_customer_themes_page_and_leaves_an_edi
         M.seed(c, {}, Blobs(store.settings), document=M.load_snapshot(FIXTURE_REGISTRY))
         page = M.read_page(c, "market/customer-themes")
         assert page and page["title"] == "Customer themes"
-        M.write_page(c, "human:ana", "market/customer-themes", "Customer themes", "# Customer themes\n\n## Slow exports\nSeen 3 times",
-                     "Market / Customers", replace=True)
+        M.write_page(
+            c,
+            "human:ana",
+            "market/customer-themes",
+            "Customer themes",
+            "# Customer themes\n\n## Slow exports\nSeen 3 times",
+            "Market / Customers",
+            replace=True,
+        )
         M.seed_pages(c)
         assert "Slow exports" in M.read_page(c, "market/customer-themes")["content"]
 

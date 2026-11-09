@@ -1,7 +1,9 @@
 """Server defaults stay independent of computer-local provider credentials."""
+
 import json
 
-from backend.tests.test_api import api, assign, claim, get, post, put, ready, runner  # noqa: F401
+from backend.tests.helpers.api import assign, claim, get, post, put, ready, runner  # noqa: F401
+from backend.tests.helpers.subscriptions import set_runtime
 
 
 def test_the_api_refuses_a_bot_its_own_sign_in(api):
@@ -12,7 +14,9 @@ def test_the_api_refuses_a_bot_its_own_sign_in(api):
         assert not c.execute('SELECT 1 FROM subscription_assignments').fetchone()
     assert 'assignments' not in get(api, 'subscriptions')
     # Nor a second, named login on the computer for a bot to run on: a different account means another computer.
-    refused = post(api, f"runners/{r['runner_id']}/logins", {'runtime': 'codex', 'profile': 'engineering'}, expected=422)
+    refused = post(
+        api, f"runners/{r['runner_id']}/logins", {'runtime': 'codex', 'profile': 'engineering'}, expected=422
+    )
     assert refused['error']['code'] == 'one_login'
 
 
@@ -24,12 +28,35 @@ def test_sign_in_permissions(api):
     seen = next(m for m in get(api, 'operations', 'cara-test')['computers'] if m['id'] == rid)
     assert seen['may_manage'] is False
     post(api, f"runners/{rid}/logins", {'runtime': 'codex'}, token='cara-test', expected=403)
-    put(api, 'subscriptions/name', {'runner_id': rid, 'profile': 'x', 'display_name': 'X'}, token='cara-test', expected=403)
-    put(api, 'subscriptions/weekly', {'runner_id': rid, 'profile': 'x', 'runtime': 'codex', 'used_percent': 10},
-        token='cara-test', expected=403)
-    post(api, 'subscriptions/refresh', {'runner_id': rid, 'profile': 'x', 'runtime': 'codex'}, token='cara-test', expected=403)
-    for path, body in [('inbox-only', {'enabled': True}), ('screen', {'mode': 'view'}), ('performance', {'mode': 'on'}),
-                       ('harness-choices', {'harness': 'codex', 'enabled': True}), ('restart', {}), ('revoke', {})]:
+    put(
+        api,
+        'subscriptions/name',
+        {'runner_id': rid, 'profile': 'x', 'display_name': 'X'},
+        token='cara-test',
+        expected=403,
+    )
+    put(
+        api,
+        'subscriptions/weekly',
+        {'runner_id': rid, 'profile': 'x', 'runtime': 'codex', 'used_percent': 10},
+        token='cara-test',
+        expected=403,
+    )
+    post(
+        api,
+        'subscriptions/refresh',
+        {'runner_id': rid, 'profile': 'x', 'runtime': 'codex'},
+        token='cara-test',
+        expected=403,
+    )
+    for path, body in [
+        ('inbox-only', {'enabled': True}),
+        ('screen', {'mode': 'view'}),
+        ('performance', {'mode': 'on'}),
+        ('harness-choices', {'harness': 'codex', 'enabled': True}),
+        ('restart', {}),
+        ('revoke', {}),
+    ]:
         post(api, f"runners/{rid}/{path}", body, token='cara-test', expected=403)
     login = post(api, f"runners/{r['runner_id']}/logins", {'runtime': 'codex'})
     assert login['profile'] == ''
@@ -42,6 +69,7 @@ def test_sign_in_permissions(api):
 
 def test_botops_signin_uses_requester_rights_by_default():
     from backend.botops_act import default_delegable
+
     assert not default_delegable('PUT', 'subscriptions')
     assert default_delegable('POST', 'runners/computer-a/logins', {'runtime': 'codex'})
     assert default_delegable('GET', 'runners/computer-a/logins/login-a')
@@ -50,6 +78,7 @@ def test_botops_signin_uses_requester_rights_by_default():
 
 def test_subscriptions_migrations_are_repeatable_and_follow_repositories(api):
     from backend import hubdb as H
+
     assert H.MIGRATIONS[16:19] == [H.REPOSITORIES_SCHEMA, H.TASK_LINKS_V2_SCHEMA, H.SUBSCRIPTIONS_SCHEMA]
     with api.app.state.store.transaction() as c:
         H._apply(c, H.SUBSCRIPTIONS_SCHEMA)
@@ -72,15 +101,26 @@ def test_subscription_computers_use_computer_visibility(api):
 
 def test_server_rejection_blocks_only_matching_profile(api):
     from backend.execution import Execution
+
     r = runner(api)
-    body = {'version': 'test', 'platform': 'test', 'readiness': {'schema_version': 1,
-        'runtimes': {'codex': {'installed': True, 'authenticated': 'ready'}},
-        'bots': {'ops': {'ready': True, 'runtime': 'codex', 'profile': 'one'},
-                 'cpo': {'ready': True, 'runtime': 'codex', 'profile': 'two'}}}}
+    body = {
+        'version': 'test',
+        'platform': 'test',
+        'readiness': {
+            'schema_version': 1,
+            'runtimes': {'codex': {'installed': True, 'authenticated': 'ready'}},
+            'bots': {
+                'ops': {'ready': True, 'runtime': 'codex', 'profile': 'one'},
+                'cpo': {'ready': True, 'runtime': 'codex', 'profile': 'two'},
+            },
+        },
+    }
     post(api, 'runners/heartbeat', body, token=r['token'])
     with api.app.state.store.transaction() as c:
         Execution.mark_rejected(c, r['runner_id'], 'codex', 'Unauthorized', 'one')
-        report = json.loads(c.execute('SELECT readiness_json FROM runners WHERE id=?', (r['runner_id'],)).fetchone()[0])
+        report = json.loads(
+            c.execute('SELECT readiness FROM runners_with_state WHERE id=?', (r['runner_id'],)).fetchone()[0]
+        )
     assert report['bots']['ops']['ready'] is False
     assert report['bots']['cpo']['ready'] is True
     assert report['runtimes']['codex']['authenticated'] == 'ready'
@@ -88,17 +128,32 @@ def test_server_rejection_blocks_only_matching_profile(api):
 
 def test_a_refused_bot_key_marks_only_that_bot_and_a_computer_refusal_marks_every_bot(api):
     from backend.execution import Execution
+
     r = runner(api)
-    body = {'version': 'test', 'platform': 'test', 'readiness': {'schema_version': 1,
-        'runtimes': {'pi': {'installed': True, 'authenticated': 'ready'},
-                     'claude': {'installed': True, 'authenticated': 'ready'}},
-        'bots': {'alpha': {'ready': True, 'runtime': 'pi'}, 'beta': {'ready': True, 'runtime': 'pi'},
-                 'gamma': {'ready': True, 'runtime': 'claude'}, 'delta': {'ready': True, 'runtime': 'claude'}}}}
+    body = {
+        'version': 'test',
+        'platform': 'test',
+        'readiness': {
+            'schema_version': 1,
+            'runtimes': {
+                'pi': {'installed': True, 'authenticated': 'ready'},
+                'claude': {'installed': True, 'authenticated': 'ready'},
+            },
+            'bots': {
+                'alpha': {'ready': True, 'runtime': 'pi'},
+                'beta': {'ready': True, 'runtime': 'pi'},
+                'gamma': {'ready': True, 'runtime': 'claude'},
+                'delta': {'ready': True, 'runtime': 'claude'},
+            },
+        },
+    }
     post(api, 'runners/heartbeat', body, token=r['token'])
 
     def report():
         with api.app.state.store.transaction() as c:
-            return json.loads(c.execute('SELECT readiness_json FROM runners WHERE id=?', (r['runner_id'],)).fetchone()[0])
+            return json.loads(
+                c.execute('SELECT readiness FROM runners_with_state WHERE id=?', (r['runner_id'],)).fetchone()[0]
+            )
 
     with api.app.state.store.transaction() as c:
         Execution.mark_rejected(c, r['runner_id'], 'pi', 'Unauthorized', None, 'alpha')
@@ -114,13 +169,6 @@ def test_a_refused_bot_key_marks_only_that_bot_and_a_computer_refusal_marks_ever
     assert refused['runtimes']['claude']['authenticated'] == 'rejected'
 
 
-def set_runtime(api, runtime, harness=None, bot="ops"):
-    with api.app.state.store.transaction() as c:
-        config = json.loads(c.execute("SELECT config_json FROM bot_config WHERE bot=?", (bot,)).fetchone()[0])
-        config.update(runtime=runtime, harness=harness or runtime)
-        c.execute("UPDATE bot_config SET config_json=? WHERE bot=?", (json.dumps(config), bot))
-
-
 def test_a_login_whose_turns_cannot_save_a_session_names_the_folder_not_a_sign_in(api):
     """Muse Code signed in, but the bot user can't write its data folder (Dev 329): the runner says so apart from the
     sign-in, and the bot's line names the folder instead of "Signed out"."""
@@ -129,13 +177,40 @@ def test_a_login_whose_turns_cannot_save_a_session_names_the_folder_not_a_sign_i
     assign(api, r, 'ops')
     assert get(api, 'config', r['token'])['readiness_data_problem'] is True
     problem = "Muse Code can't save sessions: the bot user can't write /home/x/musecode/data/muse/sessions (read-only)"
-    post(api, 'runners/heartbeat', {'version': 'test', 'platform': 'test', 'readiness': {'schema_version': 1,
-         'runtimes': {'musecode': {'installed': True, 'authenticated': 'failed', 'detail': problem, 'data_problem': problem,
-                                   'profiles': {'': {'installed': True, 'authenticated': 'failed', 'data_problem': problem}}}},
-         'bots': {'ops': {'ready': False, 'runtime': 'musecode', 'sign_in': 'failed', 'data_problem': problem,
-                          'problems': [problem]}}}}, token=r['token'])
+    post(
+        api,
+        'runners/heartbeat',
+        {
+            'version': 'test',
+            'platform': 'test',
+            'readiness': {
+                'schema_version': 1,
+                'runtimes': {
+                    'musecode': {
+                        'installed': True,
+                        'authenticated': 'failed',
+                        'detail': problem,
+                        'data_problem': problem,
+                        'profiles': {'': {'installed': True, 'authenticated': 'failed', 'data_problem': problem}},
+                    }
+                },
+                'bots': {
+                    'ops': {
+                        'ready': False,
+                        'runtime': 'musecode',
+                        'sign_in': 'failed',
+                        'data_problem': problem,
+                        'problems': [problem],
+                    }
+                },
+            },
+        },
+        token=r['token'],
+    )
     line = get(api, 'bots/ops/subscription')
     assert (line['signed_in'], line['problem'], line['source']) == (None, problem, 'computer')
     machine = next(m for m in get(api, 'operations')['machines'] if m['id'] == r['runner_id'])
     assert machine['readiness']['runtimes']['musecode']['data_problem'] == problem
-    assert [(row['bot'], row['signed_in'], row['problem']) for row in machine['bot_connections']] == [('ops', None, problem)]
+    assert [(row['bot'], row['signed_in'], row['problem']) for row in machine['bot_connections']] == [
+        ('ops', None, problem)
+    ]

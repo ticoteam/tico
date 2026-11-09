@@ -1,10 +1,11 @@
 """Money is an integer count of minor units (cents) plus an ISO currency code; FX rates are Decimal. No floats."""
+
 import re
 from decimal import ROUND_HALF_EVEN, Decimal, InvalidOperation
 
 from .errors import invalid
 
-MAX_MINOR = 2**63 - 1               # the 64-bit range both SQLite and Postgres BIGINT hold
+MAX_MINOR = 2**63 - 1  # the 64-bit range both SQLite and Postgres BIGINT hold
 CURRENCY = re.compile(r"[A-Z]{3}")
 # Minor-unit exponents that are not 2. Anything else (USD, EUR, GBP, ...) has cents.
 EXPONENTS = {"JPY": 0, "KRW": 0, "VND": 0, "CLP": 0, "ISK": 0, "BHD": 3, "KWD": 3, "JOD": 3, "OMR": 3, "TND": 3}

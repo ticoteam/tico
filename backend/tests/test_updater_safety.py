@@ -1,16 +1,23 @@
 """docker/updater.py: the database snapshot around an update, and the updater replacing itself."""
+
 import json
 
 import pytest
 
-from backend.tests.test_updater_runner import Moby, load
+from backend.tests.helpers.updater_runner import Moby, load
 
 
 class Fake:
     """`docker`: records argv, and answers inspect/ps/config from tables. `fail` names a compose verb that exits 1."""
 
     def __init__(self, module, monkeypatch, healthy=(True,), fail=(), container=None, config=None):
-        self.calls, self.answers, self.fail, self.container, self.config = [], list(healthy), set(fail), container, config
+        self.calls, self.answers, self.fail, self.container, self.config = (
+            [],
+            list(healthy),
+            set(fail),
+            container,
+            config,
+        )
         monkeypatch.setattr(module, "docker_run", self.run)
         monkeypatch.setattr(module, "healthy", lambda seconds: self.answers.pop(0))
         monkeypatch.setattr(module, "running_image", lambda: ("sha256:old", "v0.1.0"))
@@ -18,14 +25,17 @@ class Fake:
         monkeypatch.setattr(module, "check_switched", lambda version, release, seconds=None: None)
 
     def verbs(self):
-        return [next(x for x in a[a.index("--project-directory") + 2:] if not x.startswith("-")) for a, _ in self.calls
-                if a[:2] == ["docker", "compose"]]
+        return [
+            next(x for x in a[a.index("--project-directory") + 2 :] if not x.startswith("-"))
+            for a, _ in self.calls
+            if a[:2] == ["docker", "compose"]
+        ]
 
     def run(self, argv, env=None, **kw):
         self.calls.append((argv, env))
         out, code = "", 0
         if argv[:2] == ["docker", "compose"]:
-            verb = next(x for x in argv[argv.index("--project-directory") + 2:] if not x.startswith("-"))
+            verb = next(x for x in argv[argv.index("--project-directory") + 2 :] if not x.startswith("-"))
             code = 1 if verb in self.fail else 0
             out = "updater-1\n" if "ps" in argv else json.dumps(self.config) if verb == "config" else ""
         elif argv[:2] == ["docker", "inspect"]:
@@ -40,41 +50,106 @@ def test_a_snapshot_is_taken_before_the_switch_and_left_alone_when_the_update_wo
     assert updater.status["state"] == "healthy" and updater.status["snapshot"].startswith("pre-update-v0.1.0-")
     verbs = docker.verbs()
     assert verbs.index("exec") < verbs.index("up") and "run" not in verbs and updater.status["restored"] is False
-    exec_call = next(a for a, _ in docker.calls if "exec" in a)
-    assert "/data/snapshots" in exec_call and "hub.sqlite" in updater.SNAPSHOT_SCRIPT and "backup(" in updater.SNAPSHOT_SCRIPT
+    exec_call = next(a for a, _ in docker.calls if "exec" in a and "/data/snapshots" in a)
+    assert (
+        "/data/snapshots" in exec_call
+        and "hub.sqlite" in updater.SNAPSHOT_SCRIPT
+        and "backup(" in updater.SNAPSHOT_SCRIPT
+    )
+    assert 'target.execute("PRAGMA quick_check")' in updater.SNAPSHOT_SCRIPT
 
+    assert any("/data/snapshots" in a for a, _ in docker.calls)
+    assert "hub.sqlite" in updater.SNAPSHOT_SCRIPT and "backup(" in updater.SNAPSHOT_SCRIPT
+
+
+def test_the_snapshot_allowance_scales_with_the_database_and_the_env_override_wins(monkeypatch, tmp_path):
+    gigabyte = 1024**3
+    updater = load(monkeypatch, "", tmp_path)
+    assert updater.snapshot_seconds(None) == updater.SNAPSHOT_FLOOR_SECONDS
+    assert updater.snapshot_seconds(int(3.6 * gigabyte)) == updater.SNAPSHOT_FLOOR_SECONDS
+    assert updater.snapshot_seconds(10 * gigabyte) == 3000
+    monkeypatch.setenv("TICO_UPDATER_SNAPSHOT_SECONDS", "1800")
+    fixed = load(monkeypatch, "", tmp_path)
+    assert fixed.snapshot_seconds(10 * gigabyte) == fixed.snapshot_seconds(None) == 1800
+    monkeypatch.setenv("TICO_UPDATER_SNAPSHOT_SECONDS", "")
+    assert load(monkeypatch, "", tmp_path).snapshot_seconds(10 * gigabyte) == 10 * updater.SNAPSHOT_SECONDS_PER_GB
+
+
+def test_the_status_names_the_database_size_while_the_snapshot_runs(monkeypatch, tmp_path):
+    updater = load(monkeypatch, "", tmp_path)
+    Fake(updater, monkeypatch, [True])
+    monkeypatch.setattr(updater, "database_bytes", lambda: int(3.6 * 1024**3))
+    seen, taken = [], updater.take_snapshot
+
+    def watched(previous, seconds):
+        seen.append((updater.status["state"], updater.status["message"], seconds))
+        return taken(previous, seconds)
+
+    monkeypatch.setattr(updater, "take_snapshot", watched)
+    updater.update("v0.2.0")
+    assert seen == [("snapshotting", "snapshotting, 3.6 GB", updater.SNAPSHOT_FLOOR_SECONDS)]
+    assert updater.status["state"] == "healthy"
+
+
+def test_the_quick_check_on_the_snapshot_is_always_on_and_has_no_switch(monkeypatch, tmp_path):
+    sent = []
+    updater = load(monkeypatch, "", tmp_path)
+    monkeypatch.setattr(updater, "compose", lambda *a, tag=None, **k: sent.append(a) or "")
+    updater.take_snapshot("v0.1.0", 1200)
+    assert sent[-1][-1] == str(max(1200 - 60, 1200 * 4 // 5))  # the limit is the last argument: no check flag after it
+    assert "quick_check" in updater.SNAPSHOT_SCRIPT and "page_count" not in updater.SNAPSHOT_SCRIPT
+    assert not hasattr(updater, "FULL_CHECK")
+    monkeypatch.setenv("TICO_UPDATER_FULL_CHECK", "0")  # an old setting does nothing now
+    assert "quick_check" in load(monkeypatch, "", tmp_path).SNAPSHOT_SCRIPT
 
 
 def test_the_snapshot_script_removes_parts_left_by_an_attempt_that_ran_out_of_time(monkeypatch, tmp_path):
     import sqlite3, subprocess, sys
+
     updater = load(monkeypatch, "", tmp_path)
     db, folder = tmp_path / "hub.sqlite", tmp_path / "snapshots"
     with sqlite3.connect(db) as conn:
-        conn.execute("create table t(x)"); conn.executemany("insert into t values (?)", [(i,) for i in range(5000)])
-    folder.mkdir(); (folder / "pre-update-v0.0.9-1.sqlite.part").write_bytes(b"x")
+        conn.execute("create table t(x)")
+        conn.executemany("insert into t values (?)", [(i,) for i in range(5000)])
+    folder.mkdir()
+    (folder / "pre-update-v0.0.9-1.sqlite.part").write_bytes(b"x")
     script = updater.SNAPSHOT_SCRIPT.replace("/data/hub.sqlite", str(db))
-    done = subprocess.run([sys.executable, "-c", script, str(folder), "pre-update-v0.1.0-1.sqlite", "3", "60"],
-                          capture_output=True, text=True)
+    done = subprocess.run(
+        [sys.executable, "-c", script, str(folder), "pre-update-v0.1.0-1.sqlite", "3", "60"],
+        capture_output=True,
+        text=True,
+    )
     assert done.returncode == 0, done.stderr
     assert sorted(p.name for p in folder.iterdir()) == ["pre-update-v0.1.0-1.sqlite"]
     # Out of time: the server holds the database, so the copy cannot finish. The worker's SQLite deletes the copy's
     # -journal at the end of each write transaction, so a listed part can vanish before it is removed; the listing
     # names one that is already gone, and the process must still end with its message.
-    vanishing = ("import glob\nlisted = glob.glob\nglob.glob = lambda pattern, **kw: listed(pattern, **kw) + "
-                 "([pattern[:-1] + '-journal'] if pattern.endswith('.part*') else [])\n")
+    vanishing = (
+        "import glob\nlisted = glob.glob\nglob.glob = lambda pattern, **kw: listed(pattern, **kw) + "
+        "([pattern[:-1] + '-journal'] if pattern.endswith('.part*') else [])\n"
+    )
     blocker = sqlite3.connect(db, isolation_level=None)
     blocker.execute("begin exclusive")
     try:
-        late = subprocess.run([sys.executable, "-c", vanishing + script, str(folder), "pre-update-v0.1.0-2.sqlite", "3",
-                               "0.2"], capture_output=True, text=True, timeout=30)
+        late = subprocess.run(
+            [sys.executable, "-c", vanishing + script, str(folder), "pre-update-v0.1.0-2.sqlite", "3", "0.2"],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
     finally:
-        blocker.execute("rollback"); blocker.close()
-    assert late.returncode == 1 and "did not finish" in late.stderr and "Traceback" not in late.stderr, late.stderr
+        blocker.execute("rollback")
+        blocker.close()
+    assert late.returncode == 1 and "Traceback" not in late.stderr, late.stderr
+    assert "database snapshot check exceeded 0.2 seconds on a " in late.stderr and "GB database" in late.stderr, (
+        late.stderr
+    )
     # The next attempt sweeps whatever partial copy an attempt like that reached.
     for leftover in (".part", ".part-journal"):
         (folder / ("pre-update-v0.1.0-2.sqlite" + leftover)).write_bytes(b"x")
     subprocess.run([sys.executable, "-c", script, str(folder), "pre-update-v0.1.0-3.sqlite", "3", "60"], check=True)
     assert sorted(p.name for p in folder.iterdir()) == ["pre-update-v0.1.0-1.sqlite", "pre-update-v0.1.0-3.sqlite"]
+
 
 def test_a_failed_health_check_restores_the_snapshot_because_migrations_may_have_run(monkeypatch, tmp_path):
     updater = load(monkeypatch, "", tmp_path)
@@ -84,24 +159,31 @@ def test_a_failed_health_check_restores_the_snapshot_because_migrations_may_have
     assert status["state"] == "rolled_back" and status["restored"] is True and status["snapshot"] in status["message"]
     assert "Went back to v0.1.0" in status["message"] and "Restored the database" in status["message"]
     verbs = docker.verbs()
-    assert verbs[-3:] == ["stop", "run", "up"]                       # server stopped, snapshot back, old image up
+    assert verbs[-3:] == ["stop", "run", "up"]  # server stopped, snapshot back, old image up
     run_call, env = next((a, e) for a, e in docker.calls if "run" in a and a[:2] == ["docker", "compose"])
-    assert env["TICO_TAG"] == "v0.1.0" and "--entrypoint" in run_call     # the OLD image puts it back
+    assert env["TICO_TAG"] == "v0.1.0" and "--entrypoint" in run_call  # the OLD image puts it back
     assert json.loads((tmp_path / ".updater-status.json").read_text())["restored"] is True
 
 
 def test_the_restore_script_swaps_the_database_and_clears_litestreams_tracking(monkeypatch, tmp_path):
     import sqlite3, subprocess, sys
+
     updater = load(monkeypatch, "", tmp_path)
     for name, value in (("snap.sqlite", "before"), ("hub.sqlite", "migrated")):
         db = sqlite3.connect(tmp_path / name)
-        db.execute("CREATE TABLE t(v)"); db.execute("INSERT INTO t VALUES(?)", (value,)); db.commit(); db.close()
+        db.execute("CREATE TABLE t(v)")
+        db.execute("INSERT INTO t VALUES(?)", (value,))
+        db.commit()
+        db.close()
     (tmp_path / ".hub.sqlite-litestream").mkdir()
     (tmp_path / ".hub.sqlite-litestream" / "ltx").write_text("x")
     (tmp_path / "hub.sqlite-wal").write_text("stale")
-    subprocess.run([sys.executable, "-c", updater.RESTORE_SCRIPT, str(tmp_path / "snap.sqlite"), str(tmp_path / "hub.sqlite")], check=True)
+    subprocess.run(
+        [sys.executable, "-c", updater.RESTORE_SCRIPT, str(tmp_path / "snap.sqlite"), str(tmp_path / "hub.sqlite")],
+        check=True,
+    )
     value = lambda name: sqlite3.connect(tmp_path / name).execute("SELECT v FROM t").fetchone()[0]
-    recovered, = tmp_path.glob("hub.sqlite.failed-update-*/recovery.sqlite")
+    (recovered,) = tmp_path.glob("hub.sqlite.failed-update-*/recovery.sqlite")
     assert value("hub.sqlite") == "before" and value(recovered) == "migrated"
     assert not (tmp_path / ".hub.sqlite-litestream").exists() and not (tmp_path / "hub.sqlite-wal").exists()
     assert not (tmp_path / "hub.sqlite.restoring").exists()
@@ -110,14 +192,16 @@ def test_the_restore_script_swaps_the_database_and_clears_litestreams_tracking(m
 def test_a_snapshot_restore_that_runs_over_is_not_called_a_rollback(monkeypatch, tmp_path):
     """A killed `compose run` restore may still put the snapshot in place later: the outcome is unknown."""
     import subprocess
+
     updater = load(monkeypatch, "", tmp_path)
     docker = Fake(updater, monkeypatch, [False, True])
     run = docker.run
 
     def hang(argv, env=None, **kw):
         if argv[:2] == ["docker", "compose"] and "run" in argv:
-            raise subprocess.TimeoutExpired(argv, kw.get("timeout"))
+            raise updater.Stalled(argv, kw.get("timeout"))
         return run(argv, env=env, **kw)
+
     monkeypatch.setattr(updater, "docker_run", hang)
     settled = []
     monkeypatch.setattr(updater, "settle", lambda tag, outcome: settled.append((tag, outcome)))
@@ -131,21 +215,28 @@ def test_a_killed_snapshot_restore_ends_before_the_server_is_started_again(monke
     the snapshot in place. The old server starts only after it has ended, and the hold lasts until then."""
     updater = load(monkeypatch, "", tmp_path)
     docker = Moby(updater, monkeypatch, lambda argv, tag, n: "run" in argv, lag=8)
-    monkeypatch.setattr(updater, "healthy", lambda seconds: any(docker.containers[c]["tag"] == "v0.1.0" for c in docker.live()))
+    monkeypatch.setattr(
+        updater, "healthy", lambda seconds: any(docker.containers[c]["tag"] == "v0.1.0" for c in docker.live())
+    )
     updater.update("v0.2.0")
-    assert docker.restored == [([], "uncertain")]                    # the database was replaced under no live server
+    assert docker.restored == [([], "uncertain")]  # the database was replaced under no live server
     assert updater.status["state"] == "rolled_back" and docker.ended == [("rolled_back", [])]
-    assert "may or may not have put" in updater.status["message"] and "confirmed the server on v0.1.0" in updater.status["message"]
+    assert (
+        "may or may not have put" in updater.status["message"]
+        and "confirmed the server on v0.1.0" in updater.status["message"]
+    )
     assert [v["tag"] for v in docker.containers.values()] == ["v0.1.0"]
     waits = [i for i, (argv, _, _) in enumerate(docker.calls) if "{{.State.Status}}" in " ".join(argv)]
     recreate = next(i for i, (argv, _, _) in enumerate(docker.calls) if "--force-recreate" in argv)
-    assert len([i for i in waits if i < recreate]) > 2               # it waited, asking more than once
+    assert len([i for i in waits if i < recreate]) > 2  # it waited, asking more than once
 
 
 def test_a_server_stop_that_runs_over_is_not_called_a_restore(monkeypatch, tmp_path):
     updater = load(monkeypatch, "", tmp_path)
     docker = Moby(updater, monkeypatch, lambda argv, tag, n: "stop" in argv)
-    monkeypatch.setattr(updater, "healthy", lambda seconds: any(docker.containers[c]["tag"] == "v0.1.0" for c in docker.live()))
+    monkeypatch.setattr(
+        updater, "healthy", lambda seconds: any(docker.containers[c]["tag"] == "v0.1.0" for c in docker.live())
+    )
     original = docker.run
 
     def run(argv, env=None, timeout=None, **kw):
@@ -153,9 +244,13 @@ def test_a_server_stop_that_runs_over_is_not_called_a_restore(monkeypatch, tmp_p
             docker.calls.append((argv, None, updater.status["state"]))
             raise docker.expired(argv, timeout)
         return original(argv, env=env, timeout=timeout, **kw)
+
     monkeypatch.setattr(updater, "docker_run", run)
     updater.update("v0.2.0")
-    assert updater.status["state"] == "rolled_back" and "Could not restore the database snapshot" in updater.status["message"]
+    assert (
+        updater.status["state"] == "rolled_back"
+        and "Could not restore the database snapshot" in updater.status["message"]
+    )
     assert not any("run" in argv for argv, _, _ in docker.calls)
 
 
@@ -164,13 +259,17 @@ def test_settling_removes_a_restore_that_never_started_and_leaves_an_ended_one(m
     once it is: removing it lets the settle finish instead of holding forever. One that exited can do nothing more."""
     updater = load(monkeypatch, "", tmp_path)
     docker = Moby(updater, monkeypatch, lambda argv, tag, n: False)
-    docker.containers = {"c1": {"tag": "v0.2.0", "running": True},
-                         "r1": {"tag": "v0.1.0", "running": False, "oneoff": True, "state": "created"},
-                         "r2": {"tag": "v0.1.0", "running": False, "oneoff": True, "state": "exited"}}
+    docker.containers = {
+        "c1": {"tag": "v0.2.0", "running": True},
+        "r1": {"tag": "v0.1.0", "running": False, "oneoff": True, "state": "created"},
+        "r2": {"tag": "v0.1.0", "running": False, "oneoff": True, "state": "exited"},
+    }
     monkeypatch.setattr(updater, "healthy", lambda seconds: True)
     updater.settle("v0.1.0", "the restore did not report back")
     assert updater.status["state"] == "rolled_back" and docker.ended == [("rolled_back", [])]
-    assert (["docker", "rm", "r1"], None, "uncertain") in docker.calls and not any(a[-1:] == ["r2"] and "rm" in a for a, _, _ in docker.calls)
+    assert (["docker", "rm", "r1"], None, "uncertain") in docker.calls and not any(
+        a[-1:] == ["r2"] and "rm" in a for a, _, _ in docker.calls
+    )
     assert set(docker.containers) == {"r2", next(c for c in docker.containers if c.startswith("c"))}
 
 
@@ -188,8 +287,12 @@ def rendered(updater, server, slack=None):
     return {"services": {**services, **({"slack": {"image": slack}} if slack else {})}}
 
 
-@pytest.mark.parametrize("server, slack, pinned", [("ghcr.io/ticoteam/tico:v0.2.0", "ghcr.io/acme/tico:v0.1.0", "slack")])
-def test_an_override_that_pins_the_image_is_refused_before_anything_changes(monkeypatch, tmp_path, server, slack, pinned):
+@pytest.mark.parametrize(
+    "server, slack, pinned", [("ghcr.io/ticoteam/tico:v0.2.0", "ghcr.io/acme/tico:v0.1.0", "slack")]
+)
+def test_an_override_that_pins_the_image_is_refused_before_anything_changes(
+    monkeypatch, tmp_path, server, slack, pinned
+):
     updater = load(monkeypatch, "", tmp_path)
     check = updater.pinned_services
     docker = Fake(updater, monkeypatch, config=rendered(updater, server, slack))
@@ -197,23 +300,32 @@ def test_an_override_that_pins_the_image_is_refused_before_anything_changes(monk
     updater.update("v0.2.0")
     assert updater.status["state"] == "failed"
     assert "compose.override.yaml pins the image for %s; remove `image:`" % pinned in updater.status["message"]
-    assert docker.verbs() == ["config"] and docker.calls[0][1]["TICO_TAG"] == "v0.2.0"   # rendered with the target tag
+    assert docker.verbs() == ["config"] and docker.calls[0][1]["TICO_TAG"] == "v0.2.0"  # rendered with the target tag
 
 
 def switch(monkeypatch, tmp_path, release, after="sha256:new", tag="v0.1.0"):
     """An update to v0.2.0 with the real preflight and post-switch checks; the new server reports `release`."""
     import io
+
     updater = load(monkeypatch, "", tmp_path)
     (tmp_path / ".env").write_text("TICO_TEAM_NAME=Acme\n")
     checks = updater.pinned_services, updater.check_switched
-    docker = Fake(updater, monkeypatch, [True, True], container=lambda ref: {"Id": "sha256:new"},
-                  config=rendered(updater, "ghcr.io/ticoteam/tico:v0.2.0", "ghcr.io/ticoteam/tico:v0.2.0"))
+    docker = Fake(
+        updater,
+        monkeypatch,
+        [True, True],
+        container=lambda ref: {"Id": "sha256:new"},
+        config=rendered(updater, "ghcr.io/ticoteam/tico:v0.2.0", "ghcr.io/ticoteam/tico:v0.2.0"),
+    )
     monkeypatch.setattr(updater, "pinned_services", checks[0])
     monkeypatch.setattr(updater, "check_switched", checks[1])
     images = iter([("sha256:old", tag), (after, "v0.2.0")])
     monkeypatch.setattr(updater, "running_image", lambda: next(images))
-    monkeypatch.setattr(updater.urllib.request, "urlopen",
-                        lambda url, timeout=0: io.BytesIO(json.dumps({"ok": True, "release": release}).encode()))
+    monkeypatch.setattr(
+        updater.urllib.request,
+        "urlopen",
+        lambda url, timeout=0: io.BytesIO(json.dumps({"ok": True, "release": release}).encode()),
+    )
     return updater, docker
 
 
@@ -224,14 +336,21 @@ def test_a_correct_render_and_the_new_release_pass(monkeypatch, tmp_path):
     assert docker.verbs()[0] == "config" and "TICO_TAG=v0.2.0" in (tmp_path / ".env").read_text()
 
 
-@pytest.mark.parametrize("release, after, reason", [("v0.1.0", "sha256:new", "the server reports v0.1.0, not v0.2.0"),
-                                                    ("v0.2.0", "sha256:old", "not running the v0.2.0 image")])
+@pytest.mark.parametrize(
+    "release, after, reason",
+    [
+        ("v0.1.0", "sha256:new", "the server reports v0.1.0, not v0.2.0"),
+        ("v0.2.0", "sha256:old", "not running the v0.2.0 image"),
+    ],
+)
 def test_the_wrong_version_after_the_switch_is_rolled_back(monkeypatch, tmp_path, release, after, reason):
     # An untagged image: the release to go back to is the one the server reported.
     updater, docker = switch(monkeypatch, tmp_path, release, after=after, tag="latest")
     updater.update("v0.2.0", running="0.1.0")
     status = updater.status
-    assert status["state"] == "rolled_back" and reason in status["message"] and "Went back to v0.1.0" in status["message"]
+    assert (
+        status["state"] == "rolled_back" and reason in status["message"] and "Went back to v0.1.0" in status["message"]
+    )
     assert ["docker", "tag", "sha256:old", updater.IMAGE + ":v0.1.0"] in [a for a, _ in docker.calls]
     assert docker.verbs()[-3:] == ["stop", "run", "up"] and docker.calls[-1][1]["TICO_TAG"] == "v0.1.0"
     assert "TICO_TAG" not in (tmp_path / ".env").read_text()
@@ -239,8 +358,14 @@ def test_the_wrong_version_after_the_switch_is_rolled_back(monkeypatch, tmp_path
 
 def container(updater, mode_dir, tag="v0.1.0"):
     def inspect(ref):
-        return {"Image": "sha256:oldupdater", "Name": "/tico-updater-1", "Config": {"Image": "ghcr.io/ticoteam/tico-updater:" + tag},
-                "Mounts": [{"Destination": updater.PROJECT, "Source": str(mode_dir)}], "State": {"Running": True}}
+        return {
+            "Image": "sha256:oldupdater",
+            "Name": "/tico-updater-1",
+            "Config": {"Image": "ghcr.io/ticoteam/tico-updater:" + tag},
+            "Mounts": [{"Destination": updater.PROJECT, "Source": str(mode_dir)}],
+            "State": {"Running": True},
+        }
+
     return inspect
 
 
@@ -259,7 +384,11 @@ def test_after_an_update_a_helper_from_the_new_image_replaces_the_updater(monkey
     run = next(a for a, _ in docker.calls if a[:3] == ["docker", "run", "-d"])
     joined = " ".join(run)
     assert "ghcr.io/ticoteam/tico-updater:v0.2.0 python /usr/local/bin/tico-updater replace-self" in joined
-    assert "/srv/tico:/srv/tico" in joined and "TICO_PROJECT_DIR=/srv/tico" in joined and "TICO_SWAP_OLD_ID=sha256:oldupdater" in joined
+    assert (
+        "/srv/tico:/srv/tico" in joined
+        and "TICO_PROJECT_DIR=/srv/tico" in joined
+        and "TICO_SWAP_OLD_ID=sha256:oldupdater" in joined
+    )
     assert "TICO_UPDATER_MODE=" + mode in joined
     assert ("TICO_COMPOSE_FILE=runner.compose.yaml" in joined) == (mode == "runner")
 
@@ -278,16 +407,18 @@ def helper(monkeypatch, tmp_path, image_after):
 
 
 def test_the_helper_puts_the_old_updater_back_when_the_new_one_does_not_stay_up(monkeypatch, tmp_path):
-    updater, docker = helper(monkeypatch, tmp_path, "sha256:oldupdater")    # still the old image: it never got replaced
+    updater, docker = helper(monkeypatch, tmp_path, "sha256:oldupdater")  # still the old image: it never got replaced
     assert updater.replace_self() == 1
-    assert ["docker", "tag", "sha256:oldupdater", "ghcr.io/ticoteam/tico-updater:v0.1.0"] in [a for a, _ in docker.calls]
+    assert ["docker", "tag", "sha256:oldupdater", "ghcr.io/ticoteam/tico-updater:v0.1.0"] in [
+        a for a, _ in docker.calls
+    ]
     assert [e["TICO_UPDATER_TAG"] for a, e in docker.calls if "up" in a] == ["v0.2.0", "v0.1.0"]
-    assert "TICO_UPDATER_TAG=v0.1.0" in (tmp_path / ".env").read_text()      # the pin never moved
+    assert "TICO_UPDATER_TAG=v0.1.0" in (tmp_path / ".env").read_text()  # the pin never moved
 
 
 def test_the_new_updater_does_not_inherit_the_helpers_pull_and_bundle_settings(monkeypatch, tmp_path):
     updater, docker = helper(monkeypatch, tmp_path, "sha256:newupdater")
-    monkeypatch.setenv("TICO_UPDATER_PULL", "never")     # how replace_updater starts the helper
+    monkeypatch.setenv("TICO_UPDATER_PULL", "never")  # how replace_updater starts the helper
     monkeypatch.setenv("TICO_UPDATER_BUNDLE", "never")
     assert updater.replace_self() == 0
     up = next(e for a, e in docker.calls if "up" in a)
@@ -296,12 +427,17 @@ def test_the_new_updater_does_not_inherit_the_helpers_pull_and_bundle_settings(m
 
 def crashed_database(tmp_path):
     import sqlite3, subprocess, sys
+
     for name in ("snapshot.sqlite", "hub.sqlite"):
         with sqlite3.connect(tmp_path / name) as db:
             db.execute("CREATE TABLE t(v)")
             db.execute("INSERT INTO t VALUES('before')")
     # An abrupt exit leaves a committed row solely in the WAL, as a crashed server can.
-    subprocess.run([sys.executable, "-c", """
+    subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            """
 import os, sqlite3, sys
 c = sqlite3.connect(sys.argv[1])
 c.execute('PRAGMA journal_mode=WAL')
@@ -309,7 +445,11 @@ c.execute('PRAGMA wal_autocheckpoint=0')
 c.execute("INSERT INTO t VALUES('after snapshot')")
 c.commit()
 os._exit(0)
-""", str(tmp_path / "hub.sqlite")], check=True)
+""",
+            str(tmp_path / "hub.sqlite"),
+        ],
+        check=True,
+    )
     assert (tmp_path / "hub.sqlite-wal").stat().st_size > 0
     return tmp_path / "snapshot.sqlite", tmp_path / "hub.sqlite"
 
@@ -317,19 +457,21 @@ os._exit(0)
 def read_values(path):
     import sqlite3
     from contextlib import closing
+
     with closing(sqlite3.connect(path.as_uri() + "?mode=ro", uri=True)) as db:
         return [r[0] for r in db.execute("SELECT v FROM t")]
 
 
 def test_rollback_keeps_wal_commits_and_all_prior_recovery_evidence(monkeypatch, tmp_path):
     import subprocess, sys
+
     updater = load(monkeypatch, "", tmp_path)
     snapshot, db = crashed_database(tmp_path)
     old = tmp_path / "hub.sqlite.failed-update"
     old.write_bytes(b"prior evidence")
     assert read_values(db) == ["before", "after snapshot"]
     subprocess.run([sys.executable, "-c", updater.RESTORE_SCRIPT, str(snapshot), str(db)], check=True)
-    recovered, = tmp_path.glob("hub.sqlite.failed-update-*/recovery.sqlite")
+    (recovered,) = tmp_path.glob("hub.sqlite.failed-update-*/recovery.sqlite")
     assert read_values(recovered) == ["before", "after snapshot"]
     assert read_values(db) == ["before"]
     assert not (tmp_path / "hub.sqlite-wal").exists()
@@ -341,13 +483,17 @@ def test_rollback_keeps_wal_commits_and_all_prior_recovery_evidence(monkeypatch,
 
 def test_unreadable_failed_database_keeps_a_raw_main_and_sidecar_set(monkeypatch, tmp_path):
     import subprocess, sys
+
     updater = load(monkeypatch, "", tmp_path)
     snapshot, db = crashed_database(tmp_path)
     db.write_bytes(b"unreadable fictional database")
-    evidence = {suffix: (tmp_path / ("hub.sqlite" + suffix)).read_bytes() for suffix in ("", "-wal")
-                if (tmp_path / ("hub.sqlite" + suffix)).exists()}
+    evidence = {
+        suffix: (tmp_path / ("hub.sqlite" + suffix)).read_bytes()
+        for suffix in ("", "-wal")
+        if (tmp_path / ("hub.sqlite" + suffix)).exists()
+    }
     subprocess.run([sys.executable, "-c", updater.RESTORE_SCRIPT, str(snapshot), str(db)], check=True)
-    raw, = tmp_path.glob("hub.sqlite.failed-update-*/raw")
+    (raw,) = tmp_path.glob("hub.sqlite.failed-update-*/raw")
     assert (raw / "hub.sqlite-shm").exists()  # SQLite may rebuild this index while opening read-only.
     for suffix, data in evidence.items():
         assert (raw / ("hub.sqlite" + suffix)).read_bytes() == data
@@ -358,6 +504,7 @@ def test_unreadable_failed_database_keeps_a_raw_main_and_sidecar_set(monkeypatch
 @pytest.mark.parametrize("failure", ["sync"])
 def test_preservation_failure_leaves_the_live_database_and_wal_untouched(monkeypatch, tmp_path, failure):
     import subprocess, sys
+
     updater = load(monkeypatch, "", tmp_path)
     snapshot, db = crashed_database(tmp_path)
     tracking = tmp_path / ".hub.sqlite-litestream"
@@ -378,7 +525,9 @@ def fail(*args, **kwargs):
         prefix += "count = 0\ndef fsync(fd):\n    global count\n    count += 1\n    return fail() if count > 1 else real_fsync(fd)\nos.fsync = fsync\n"
     else:
         prefix += "def checked_open(path, mode='r', *a, **kw):\n    if '/raw/' in str(path) and 'w' in mode: fail()\n    return real_open(path, mode, *a, **kw)\nbuiltins.open = checked_open\n"
-    result = subprocess.run([sys.executable, "-c", prefix + updater.RESTORE_SCRIPT, str(snapshot), str(db)], capture_output=True)
+    result = subprocess.run(
+        [sys.executable, "-c", prefix + updater.RESTORE_SCRIPT, str(snapshot), str(db)], capture_output=True
+    )
     assert result.returncode != 0 and b"fictional preservation failure" in result.stderr
     assert tracking.exists()
     assert (tmp_path / "hub.sqlite-shm").exists()
@@ -390,13 +539,16 @@ def fail(*args, **kwargs):
 
 def test_a_slow_first_answer_after_the_switch_is_tried_again_not_rolled_back(monkeypatch, tmp_path):
     import io
+
     updater, docker = switch(monkeypatch, tmp_path, "v0.2.0")
     answers = iter([OSError("connection refused"), json.dumps({"ok": True, "release": "v0.2.0"})])
+
     def urlopen(url, timeout=0):
         answer = next(answers)
         if isinstance(answer, Exception):
             raise answer
         return io.BytesIO(answer.encode())
+
     monkeypatch.setattr(updater.urllib.request, "urlopen", urlopen)
     monkeypatch.setattr(updater.time, "sleep", lambda s: None)
     images = iter([("sha256:old", "v0.1.0"), ("sha256:new", "v0.2.0"), ("sha256:new", "v0.2.0")])
@@ -413,23 +565,36 @@ def test_prune_keeps_future_releases_and_removes_only_older_and_own_dangling_ima
         calls.append(argv)
         out = ""
         if argv[:3] == ["docker", "image", "ls"] and "dangling=true" in argv:
-            out = {"ghcr.io/ticoteam/tico": "sha256:aaa\nsha256:old\n", "ghcr.io/ticoteam/tico-updater": "sha256:bbb\n"}[argv[3]]
+            out = {
+                "ghcr.io/ticoteam/tico": "sha256:aaa\nsha256:old\n",
+                "ghcr.io/ticoteam/tico-updater": "sha256:bbb\n",
+            }[argv[3]]
         elif argv[:3] == ["docker", "image", "ls"]:
             out = "v0.3.46\n0.3.46\nv0.3.45\nv9.9.9\n9.9.9\nv0.3.100\n0.4.0\nv0.3.9\nlatest\n<none>\n"
         return type("R", (), {"returncode": 0, "stdout": out, "stderr": ""})()
+
     monkeypatch.setattr(updater, "docker_run", run)
     updater.prune_images(keep={"0.3.46", "v0.3.45"}, keep_ids={"sha256:old"})
     # Future staged releases and both spellings of the current release stay; only the older release and dangling IDs go.
     assert [a[2] for a in calls if a[:2] == ["docker", "rmi"]] == [
-        "ghcr.io/ticoteam/tico:v0.3.9", "sha256:aaa", "ghcr.io/ticoteam/tico-updater:v0.3.9", "sha256:bbb"]
+        "ghcr.io/ticoteam/tico:v0.3.9",
+        "sha256:aaa",
+        "ghcr.io/ticoteam/tico-updater:v0.3.9",
+        "sha256:bbb",
+    ]
     assert all(a[3].startswith("ghcr.io/ticoteam/tico") for a in calls if a[:3] == ["docker", "image", "ls"])
 
 
-@pytest.mark.parametrize("stderr, hinted", [
-    ("Error response from daemon: invalid pool request: Pool overlaps with other one on this address space", True),
-    ("Error response from daemon: no space left on device", False)])
+@pytest.mark.parametrize(
+    "stderr, hinted",
+    [
+        ("Error response from daemon: invalid pool request: Pool overlaps with other one on this address space", True),
+        ("Error response from daemon: no space left on device", False),
+    ],
+)
 def test_a_subnet_clash_names_the_settings_that_move_the_edge_network(monkeypatch, tmp_path, stderr, hinted):
     import subprocess
+
     updater = load(monkeypatch, "", tmp_path)
     monkeypatch.setattr(updater, "docker_run", lambda argv, **kw: subprocess.CompletedProcess(argv, 1, "", stderr))
     with pytest.raises(RuntimeError) as failed:
@@ -438,3 +603,286 @@ def test_a_subnet_clash_names_the_settings_that_move_the_edge_network(monkeypatc
     assert message.startswith(stderr)
     assert ("TICO_EDGE_SUBNET" in message and "update again" in message) is hinted
     assert ("docker compose down, then docker compose up -d, then update again" in message) is hinted
+
+
+def test_compose_passes_the_snapshot_settings_from_env_to_the_updater():
+    import yaml
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[2]
+    environment = yaml.safe_load((root / "compose.yaml").read_text())["services"]["updater"]["environment"]
+    # Empty when .env does not set it, so the updater scales its allowance; the full check has no setting.
+    assert environment["TICO_UPDATER_SNAPSHOT_SECONDS"] == "${TICO_UPDATER_SNAPSHOT_SECONDS:-}"
+    assert "TICO_UPDATER_FULL_CHECK" not in environment
+
+
+@pytest.mark.parametrize("override", ["soon", "0", "-30"])
+def test_a_bad_snapshot_override_falls_back_to_the_scaled_allowance(monkeypatch, tmp_path, capsys, override):
+    monkeypatch.setenv("TICO_UPDATER_SNAPSHOT_SECONDS", override)
+    updater = load(monkeypatch, "", tmp_path)
+    assert updater.SNAPSHOT_SECONDS is None and updater.snapshot_seconds(10 * 1024**3) == 3000
+    assert "TICO_UPDATER_SNAPSHOT_SECONDS" in capsys.readouterr().err
+
+
+def test_a_snapshot_check_that_runs_over_names_its_limit_and_the_database_size(monkeypatch, tmp_path):
+    """The snapshot script ends itself at its own limit and says so with the size; the update says it went back."""
+    updater = load(monkeypatch, "", tmp_path)
+    docker = Fake(updater, monkeypatch, [True])
+    run = docker.run
+
+    def stall(argv, env=None, timeout=None, **kw):
+        if "exec" in argv:
+            raise updater.Stalled(argv, timeout)  # what docker_run raises when the exec runs past its whole limit
+        return run(argv, env=env, timeout=timeout, **kw)
+
+    monkeypatch.setattr(updater, "docker_run", stall)
+    monkeypatch.setattr(updater, "database_note", lambda: " on a 12.3 GB database")
+    updater.update("v0.2.0")
+    assert updater.status["state"] == "rolled_back"
+    assert updater.status["message"] == (
+        "could not snapshot the database first (the database snapshot check exceeded "
+        "%d seconds on a 12.3 GB database). Went back to v0.1.0." % updater.SNAPSHOT_FLOOR_SECONDS
+    )
+    assert "exec" not in docker.verbs() and updater.status["restored"] is False and "stop" not in docker.verbs()
+
+
+def test_a_stalled_pull_names_its_step_and_limit_and_the_previous_version_keeps_running(monkeypatch, tmp_path):
+    updater = load(monkeypatch, "", tmp_path)
+    docker = Moby(updater, monkeypatch, lambda argv, tag, n: False)
+    monkeypatch.setattr(
+        updater, "healthy", lambda seconds: any(docker.containers[c]["tag"] == "v0.1.0" for c in docker.live())
+    )
+    run = docker.run
+
+    def stall(argv, env=None, timeout=None, **kw):
+        if "pull" in argv:
+            raise updater.Stalled(argv, timeout)  # what docker_run raises when the pull runs past its limit
+        return run(argv, env=env, timeout=timeout, **kw)
+
+    monkeypatch.setattr(updater, "docker_run", stall)
+    updater.update("v0.2.0")
+    assert updater.status["state"] == "rolled_back"
+    assert updater.status["message"] == "Pulling the new server image exceeded 600 seconds. Went back to v0.1.0."
+    assert [docker.containers[c]["tag"] for c in docker.live()] == ["v0.1.0"]  # the old server never stopped
+
+
+def test_a_docker_call_that_runs_over_is_killed_and_named_by_the_step_it_was_in(monkeypatch, tmp_path):
+    import subprocess
+
+    updater = load(monkeypatch, "", tmp_path)
+    with updater.step("Pulling the new server image"):
+        with pytest.raises(updater.Stalled) as caught:
+            updater.docker_run(["sleep", "30"], timeout=0.2)
+    assert str(caught.value) == "Pulling the new server image exceeded 0.2 seconds"
+    assert isinstance(caught.value, subprocess.TimeoutExpired) and isinstance(caught.value, RuntimeError)
+
+
+def test_a_prune_that_runs_over_after_a_healthy_update_keeps_the_update(monkeypatch, tmp_path):
+    """Once the new version answers, rolling it back would undo a good update: the overrun is said, not rolled back."""
+    updater = load(monkeypatch, "", tmp_path)
+    docker = Fake(updater, monkeypatch, [True])
+
+    def prune(keep, keep_ids=()):
+        raise updater.Stalled(["docker", "rmi"], 120)
+
+    monkeypatch.setattr(updater, "prune_images", prune)
+    updater.update("v0.2.0")
+    assert updater.status["state"] == "healthy"
+    assert (
+        updater.status["message"]
+        == "Updated, but old images were not removed: Removing old images exceeded 120 seconds."
+    )
+    assert "stop" not in docker.verbs() and "run" not in docker.verbs()
+
+
+def test_a_stall_reading_the_front_door_before_any_change_rolls_back_cleanly(monkeypatch, tmp_path):
+    """Reading the front door sits inside the rollback path: a stall there is said by its step and the old server stays up."""
+    updater = load(monkeypatch, "", tmp_path)
+    docker = Moby(updater, monkeypatch, lambda argv, tag, n: False)
+    monkeypatch.setattr(
+        updater, "healthy", lambda seconds: any(docker.containers[c]["tag"] == "v0.1.0" for c in docker.live())
+    )
+
+    def stalled():
+        raise updater.Stalled(["docker", "compose", "config"], 600)
+
+    monkeypatch.setattr(updater, "selected_caddy", stalled)
+    updater.update("v0.2.0")
+    assert updater.status["state"] == "rolled_back"
+    assert updater.status["message"] == "Reading the server's services exceeded 600 seconds. Went back to v0.1.0."
+    assert [docker.containers[c]["tag"] for c in docker.live()] == ["v0.1.0"]
+
+
+def test_a_service_that_does_not_restart_after_a_healthy_update_is_named_and_the_update_is_kept(monkeypatch, tmp_path):
+    """After the new version is healthy, a service that does not restart is named with its limit; the update is kept."""
+    updater = load(monkeypatch, "", tmp_path)
+    docker = Moby(updater, monkeypatch, lambda argv, tag, n: False)
+    monkeypatch.setattr(updater, "healthy", lambda seconds: True)
+    monkeypatch.setattr(updater, "BUNDLE", "always")
+    monkeypatch.setattr(updater, "fetch_bundle", lambda release, into: {})
+    monkeypatch.setattr(updater, "tunnel_services", lambda: [])
+    monkeypatch.setattr(updater, "other_services", lambda: ["slack"])
+    run = docker.run
+
+    def stall(argv, env=None, timeout=None, **kw):
+        if "slack" in argv and "up" in argv:
+            raise updater.Stalled(argv, timeout)  # what docker_run raises when the start runs past its limit
+        return run(argv, env=env, timeout=timeout, **kw)
+
+    monkeypatch.setattr(updater, "docker_run", stall)
+    updater.update("v0.2.0")
+    assert updater.status["state"] == "healthy"
+    assert (
+        updater.status["message"]
+        == "Updated, but slack did not restart: Starting slack exceeded 600 seconds. It may still start."
+    )
+    assert [docker.containers[c]["tag"] for c in docker.live()] == ["v0.2.0"]  # the new version is still running
+
+
+def test_a_service_list_that_runs_over_after_a_healthy_update_says_the_other_services_are_unknown_and_keeps_the_update(
+    monkeypatch, tmp_path
+):
+    updater = load(monkeypatch, "", tmp_path)
+    docker = Moby(updater, monkeypatch, lambda argv, tag, n: False)
+    monkeypatch.setattr(updater, "healthy", lambda seconds: True)
+    monkeypatch.setattr(updater, "BUNDLE", "always")
+    monkeypatch.setattr(updater, "fetch_bundle", lambda release, into: {})
+    monkeypatch.setattr(updater, "tunnel_services", lambda: [])
+    monkeypatch.setattr(updater, "selected_caddy", lambda: False)
+    run = docker.run
+
+    def stall(argv, env=None, timeout=None, **kw):
+        if "--services" in argv:
+            raise updater.Stalled(argv, timeout)  # the service list read after the switch, not the one before it
+        return run(argv, env=env, timeout=timeout, **kw)
+
+    monkeypatch.setattr(updater, "docker_run", stall)
+    updater.update("v0.2.0")
+    assert updater.status["state"] == "healthy"
+    assert updater.status["message"] == (
+        "Updated, but the status of the other services is unknown: Reading the server's services exceeded 600 seconds."
+    )
+    assert "did not start" not in updater.status["message"]
+    assert [docker.containers[c]["tag"] for c in docker.live()] == ["v0.2.0"]
+
+
+def test_a_front_door_start_that_runs_over_after_a_healthy_update_is_named_and_the_snapshot_is_not_restored(
+    monkeypatch, tmp_path
+):
+    updater = load(monkeypatch, "", tmp_path)
+    docker = Moby(updater, monkeypatch, lambda argv, tag, n: False)
+    monkeypatch.setattr(updater, "healthy", lambda seconds: True)
+    monkeypatch.setattr(updater, "BUNDLE", "always")
+    monkeypatch.setattr(updater, "fetch_bundle", lambda release, into: {})
+    monkeypatch.setattr(updater, "tunnel_services", lambda: [])
+    monkeypatch.setattr(updater, "selected_caddy", lambda: True)
+    monkeypatch.setattr(updater, "other_services", lambda: [])
+    monkeypatch.setattr(updater, "containers_of_service", lambda service: {})
+    run = docker.run
+
+    def stall(argv, env=None, timeout=None, **kw):
+        if "--force-recreate" in argv:
+            raise updater.Stalled(argv, timeout)  # the front door's recreate runs past its limit
+        return run(argv, env=env, timeout=timeout, **kw)
+
+    monkeypatch.setattr(updater, "docker_run", stall)
+    updater.update("v0.2.0")
+    assert updater.status["state"] == "healthy"
+    limit = updater.HEALTH_SECONDS + updater.INSPECT_SECONDS  # the front door's recreate limit
+    assert updater.status["message"] == (
+        "Updated, but the front door did not start: Starting the front door exceeded %d seconds."
+        " It may still start." % limit
+    )
+    assert updater.status["restored"] is False and docker.restored == []  # no rollback, so no snapshot restore
+    assert [docker.containers[c]["tag"] for c in docker.live()] == ["v0.2.0"]
+
+
+class Script:
+    """Answers one call after another from a list; the last item repeats. An exception item is raised instead."""
+
+    def __init__(self, *items):
+        self.items, self.n = list(items), 0
+
+    def next(self):
+        item = self.items[min(self.n, len(self.items) - 1)]
+        self.n += 1
+        if isinstance(item, Exception):
+            raise item
+        return item
+
+
+class Reply:
+    status = 200
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+
+def server_wait(monkeypatch, tmp_path, rows, answers):
+    """healthy() in server mode: `rows` answers each container inspect, `answers` each health request."""
+    import subprocess
+
+    updater = load(monkeypatch, "", tmp_path)
+    monkeypatch.setattr(updater, "POLL_SECONDS", 0.001)
+    monkeypatch.setattr(updater, "compose", lambda *args, **kw: "abc123\n")
+    inspected, asked = Script(*rows), Script(*answers)
+
+    def run(argv, **kw):
+        out = inspected.next()
+        return subprocess.CompletedProcess(argv, 0, out, "")
+
+    def urlopen(url, timeout=0):
+        if asked.next() == "up":
+            return Reply()
+        raise OSError("connection refused")
+
+    monkeypatch.setattr(updater, "docker_run", run)
+    monkeypatch.setattr(updater.urllib.request, "urlopen", urlopen)
+    return updater, inspected, asked
+
+
+def test_a_server_container_that_exited_during_start_ends_the_health_wait_early(monkeypatch, tmp_path):
+    import time
+
+    updater, inspected, asked = server_wait(monkeypatch, tmp_path, ["exited|0|False"], ["down"])
+    started = time.time()
+    assert updater.healthy(60) is False
+    assert time.time() - started < 5  # the window is 60 s; the wait ends at the first poll
+    assert inspected.n == 1 and asked.n == 1
+    assert "the server container exited during start" in updater.HEALTH_GAVE_UP
+
+
+def test_a_server_container_restarting_in_a_loop_ends_the_health_wait_early(monkeypatch, tmp_path):
+    import time
+
+    # The restart count is read when the wait begins (5); two restarts since then is a crash loop, not a slow start.
+    updater, inspected, asked = server_wait(
+        monkeypatch, tmp_path, ["running|5|False", "running|6|False", "restarting|7|False"], ["down"]
+    )
+    started = time.time()
+    assert updater.healthy(60) is False
+    assert time.time() - started < 5
+    assert inspected.n == 3
+    assert "restarted 2 times during start" in updater.HEALTH_GAVE_UP
+
+
+def test_a_running_server_with_no_restarts_waits_the_whole_window(monkeypatch, tmp_path):
+    import time
+
+    updater, inspected, asked = server_wait(monkeypatch, tmp_path, ["running|0|False"], ["down"])
+    started = time.time()
+    assert updater.healthy(0.3) is False
+    assert time.time() - started >= 0.3  # it kept polling until the deadline
+    assert inspected.n > 1 and asked.n > 1
+    assert updater.HEALTH_GAVE_UP == ""
+
+
+def test_a_failed_container_inspect_keeps_polling_and_does_not_give_up(monkeypatch, tmp_path):
+    updater, inspected, asked = server_wait(
+        monkeypatch, tmp_path, [OSError("docker is busy"), "running|0|False"], ["down", "down", "up"]
+    )
+    assert updater.healthy(60) is True  # the failed inspect ends nothing: the poll goes on and the server answers
+    assert inspected.n == 2 and asked.n == 3 and updater.HEALTH_GAVE_UP == ""

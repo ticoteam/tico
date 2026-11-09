@@ -1,6 +1,7 @@
 """Every task-to-task relationship lives in task_relations: the migration moves parent_id and blocked_by
 into it and drops both columns, the table keeps one parent a task and `related` stored once, and a
 bot's run sees the relations it may read and nothing of the ones it may not."""
+
 import gzip
 import shutil
 import sqlite3
@@ -9,14 +10,17 @@ import pytest
 
 from backend import hubdb as H
 from backend import task_relations as TR
-from backend.tests.test_api import api, assign, claim, post, ready, runner  # noqa: F401  (fixtures)
-from backend.tests.test_upgrade import FIXTURES, boot
+from backend.tests.helpers.api import assign, claim, post, ready, runner  # noqa: F401  (fixtures)
+from backend.tests.helpers.upgrade import FIXTURES, boot
 
 
 def hub(path):
     c = H.connect(path)
-    H.sync_registry(c, {"cmo": {"name": "cmo", "runtime": "fake", "status": "active"}},
-                    {"people": [{"id": "ana", "email": "ana@acme.example"}]})
+    H.sync_registry(
+        c,
+        {"cmo": {"name": "cmo", "runtime": "fake", "status": "active"}},
+        {"people": [{"id": "ana", "email": "ana@acme.example"}]},
+    )
     return c
 
 
@@ -42,7 +46,7 @@ def test_the_migration_backfills_both_columns_drops_them_and_runs_twice(tmp_path
     c.execute("DELETE FROM task_relations")
     old_columns(c)
     c.execute("UPDATE tasks SET parent_id=?, blocked_by=? WHERE id=?", (parent["id"], blocker["id"], child["id"]))
-    c.execute("UPDATE tasks SET parent_id='gone' WHERE id=?", (orphan["id"],))     # a parent purged long ago
+    c.execute("UPDATE tasks SET parent_id='gone' WHERE id=?", (orphan["id"],))  # a parent purged long ago
     c.execute("PRAGMA user_version=30")
     c.close()
     c = H.connect(path)
@@ -63,10 +67,11 @@ def test_a_previous_release_database_upgrades_through_the_cloud_store(tmp_path):
     with gzip.open(FIXTURES / "hub-v0.2.1.sqlite.gz") as source, open(path, "wb") as target:
         shutil.copyfileobj(source, target)
     with sqlite3.connect(path) as c:
-        ids = [r[0] for r in c.execute("SELECT id FROM tasks ORDER BY created, id")]
+        ids = [r[0] for r in c.execute("SELECT id FROM tasks ORDER BY created, id")]  # v0.2.1, before the renames
         c.execute("UPDATE tasks SET parent_id=? WHERE id=?", (ids[0], ids[1]))
-    boot(path)
-    boot(path)
+    # Below the bridge (test_migrations), so this is the legacy import path: adopt_legacy, as manage.migrate_legacy boots.
+    boot(path, adopt_legacy=True)
+    boot(path, adopt_legacy=True)
     with sqlite3.connect(path) as c:
         assert not {"parent_id", "blocked_by"} & columns(c)
         assert c.execute("SELECT from_task,to_task,kind FROM task_relations").fetchall() == [(ids[1], ids[0], "parent")]
@@ -76,7 +81,7 @@ def test_a_previous_release_database_upgrades_through_the_cloud_store(tmp_path):
 def test_the_table_keeps_one_parent_and_related_stored_once(tmp_path):
     c = hub(tmp_path / "hub.db")
     a, b, d = (H.task_create(c, "human:ana", f"Write part {n}", "", "bot:cmo", lint=False)["id"] for n in "abc")
-    insert = "INSERT INTO task_relations(from_task,to_task,kind,created) VALUES(?,?,?,'now')"
+    insert = "INSERT INTO task_relations(from_task,to_task,kind,created_at) VALUES(?,?,?,'now')"
     c.execute(insert, (a, b, "parent"))
     with pytest.raises(sqlite3.IntegrityError):
         c.execute(insert, (a, d, "parent"))
@@ -90,46 +95,60 @@ def test_the_table_keeps_one_parent_and_related_stored_once(tmp_path):
     TR.relate(c, "human:ana", a, d, "parent", mover=True)
     assert TR.parent_of(c, a) == d and TR.child_ids(c, b) == []
     with pytest.raises(H.Refused):
-        TR.relate(c, "human:ana", d, a, "parent", mover=True)             # its own ancestor
+        TR.relate(c, "human:ana", d, a, "parent", mover=True)  # its own ancestor
     TR.relate(c, "human:ana", b, a, "blocks", mover=True)
     with pytest.raises(H.Refused):
-        TR.relate(c, "human:ana", d, a, "blocks", mover=True)            # a cannot wait for its own parent
+        TR.relate(c, "human:ana", d, a, "blocks", mover=True)  # a cannot wait for its own parent
     other = H.task_create(c, "human:ana", "Write another part", "", "bot:cmo", lint=False)["id"]
     TR.relate(c, "human:ana", other, a, "blocks", mover=True)
     assert TR.blocker_ids(c, a) == [b, other]
     with pytest.raises(H.Refused):
-        TR.relate(c, "human:ana", a, b, "blocks", mover=True)             # b already blocks a
+        TR.relate(c, "human:ana", a, b, "blocks", mover=True)  # b already blocks a
 
 
 def test_a_bot_run_sees_the_relations_it_may_read_and_nothing_of_the_rest(api):
     r = runner(api)
     assign(api, r, "ops")
     ready(api, r, ["ops"])
-    secret = post(api, "tasks", {"owner": "cara", "title": "Secret salary review", "body": "x", "private": True},
-                  token="ben-test")
+    secret = post(
+        api, "tasks", {"owner": "cara", "title": "Secret salary review", "body": "x", "private": True}, token="ben-test"
+    )
     blocker = post(api, "tasks", {"owner": "cpo", "title": "Write the refund copy", "body": "x"})
-    task = post(api, "tasks", {"owner": "ops", "title": "Ship the refund page", "body": "x",
-                               "relations": [{"task": blocker["id"], "kind": "blocked_by"}]})
+    task = post(
+        api,
+        "tasks",
+        {
+            "owner": "ops",
+            "title": "Ship the refund page",
+            "body": "x",
+            "relations": [{"task": blocker["id"], "kind": "blocked_by"}],
+        },
+    )
     post(api, "tasks/" + secret["id"] + "/relations", {"task": task["id"]}, token="ben-test")
     assert claim(api, r, "ops") is None, "an unfinished blocker prevents automatic pickup"
     post(api, "tasks/" + task["id"] + "/comments", {"text": "Describe the visible dependencies."})
     attempt = claim(api, r, "ops")
     assert attempt["task"]["id"] == task["id"]
-    assert attempt["task"]["relations"] == [{"kind": "blocks", "direction": "in", "id": blocker["id"],
-                                             "title": "Write the refund copy", "status": "open"}]
+    assert attempt["task"]["relations"] == [
+        {"kind": "blocks", "direction": "in", "id": blocker["id"], "title": "Write the refund copy", "status": "open"}
+    ]
     assert secret["id"] not in str(attempt) and "Secret salary" not in str(attempt)
 
 
 def test_sparse_relations_on_a_large_page_do_not_probe_all_task_pairs():
     with sqlite3.connect(':memory:') as c:
         c.row_factory = sqlite3.Row
-        c.execute('CREATE TABLE tasks(id TEXT PRIMARY KEY,title TEXT,status TEXT,owner TEXT,private INTEGER)')
+        c.execute('CREATE TABLE tasks(id TEXT PRIMARY KEY,title TEXT,status TEXT,owner_id TEXT,private INTEGER)')
         ids = [f'task-{i:04}' for i in range(1000)]
-        c.executemany('INSERT INTO tasks VALUES(?,?,?,?,?)',
-                      [(tid, tid, 'open', 'bot:cmo', int(i == 999)) for i, tid in enumerate(ids)])
+        c.executemany(
+            'INSERT INTO tasks VALUES(?,?,?,?,?)',
+            [(tid, tid, 'open', 'bot:cmo', int(i == 999)) for i, tid in enumerate(ids)],
+        )
         c.executescript(TR.SCHEMA)
-        c.executemany("INSERT INTO task_relations(from_task,to_task,kind,created) VALUES(?,?,'blocks','now')",
-                      [(ids[0], ids[600]), (ids[700], ids[1]), (ids[0], ids[999])])
+        c.executemany(
+            "INSERT INTO task_relations(from_task,to_task,kind,created_at) VALUES(?,?,'blocks','now')",
+            [(ids[0], ids[600]), (ids[700], ids[1]), (ids[0], ids[999])],
+        )
         operations = [0]
 
         def budget():

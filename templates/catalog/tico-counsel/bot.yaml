@@ -1,5 +1,5 @@
 name: tico-counsel               # the slug: it matches the repository bot-tico-counsel and the label owner:tico-counsel
-display_name: "Counsel"
+display_name: "Rules Owner"
 labels: [owner:tico-counsel]
 reads: []                        # other bot repositories this one may clone read-only
 
@@ -12,9 +12,6 @@ private_tasks_default: true
 # nightly learnings skip it (backend/hubdb.py stateless, STATELESS_BY_TEMPLATE).
 stateless: true
 max_run_minutes: 60
-
-# Counsel sends nothing. It answers the person or bot that asked, on its task, and suggests rules.
-outbound_send: false
 
 # No routines and no watchers: Counsel only runs on a task (a document added, or a question asked).
 routines: []

@@ -5,7 +5,7 @@
     write  send it messages, ask it, give it tasks or notes, comment on its tasks
 
 Each level names an audience: everyone, or lists of people (roster ids), groups (stored under `teams`, the
-name they had first) and bots (slugs). `bot_config.access_json` holds the three; NULL means Open
+name they had first) and bots (ids). `bot_config.access` holds the three; NULL means Open
 (everyone for all three), which is what every new bot starts with. Whoever may read or write can
 see, whatever the See list says. The rules that decide a caller live in `Auth.bot_access`
 (backend/auth.py); this module is the pure part: the stored shape and who an audience names.
@@ -63,7 +63,7 @@ def is_open(doc):
 
 
 def stored(doc):
-    """What `access_json` holds: NULL for Open, so a bot nobody restricted has no row to keep."""
+    """What `access` holds: NULL for Open, so a bot nobody restricted has no row to keep."""
     return None if is_open(doc) else json.dumps(doc, sort_keys=True, separators=(",", ":"))
 
 
@@ -94,12 +94,15 @@ def names(level, person="", team="", bot=""):
     if level["everyone"]:
         return True
     groups = [team] if isinstance(team, str) else list(team or ())
-    return bool((person and person in level["people"]) or any(g and g in level["teams"] for g in groups)
-                or (bot and bot in level["bots"]))
+    return bool(
+        (person and person in level["people"])
+        or any(g and g in level["teams"] for g in groups)
+        or (bot and bot in level["bots"])
+    )
 
 
 def owner_ids(raw):
-    """The people a bot's owners list names (`bot_config.bot_owners_json`); the creator and any co-owners."""
+    """The people a bot's owners list names (`bot_config.bot_owners`); the creator and any co-owners."""
     try:
         value = json.loads(raw) if isinstance(raw, str) else raw
     except ValueError:
@@ -109,7 +112,12 @@ def owner_ids(raw):
 
 def summary(doc):
     """The three levels as short words, for the audit trail: 'everyone' or a count of entries."""
+
     def word(level):
-        return "everyone" if level["everyone"] else "; ".join(
-            f"{len(level[key])} {key}" for key in LISTS if level[key]) or "nobody"
+        return (
+            "everyone"
+            if level["everyone"]
+            else "; ".join(f"{len(level[key])} {key}" for key in LISTS if level[key]) or "nobody"
+        )
+
     return {level: word(doc[level]) for level in LEVELS}

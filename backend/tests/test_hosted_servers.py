@@ -2,12 +2,17 @@
 and started at Tico HQ with the install's gateway key; a start HQ refuses while the company is paused for credit says
 so in plain words with its account page; an install HQ hosts nothing for shows no section. HQ is a fake opener."""
 
-from backend.tests.test_api import api, get, post  # noqa: F401
-from backend.tests.test_company_billing import KEY, URL, hq  # noqa: F401
+from backend.tests.helpers.api import get, post  # noqa: F401
+from backend.tests.helpers.company_billing import KEY, URL, hq  # noqa: F401
 
 TICO, BOTS = "pv-" + "a" * 16, "pv-" + "b" * 16
-LISTED = {"servers": [{"server_id": TICO, "kind": "tico", "power": "on"},
-                      {"server_id": BOTS, "kind": "bot_computer", "power": "stopped"}], "deactivated": False}
+LISTED = {
+    "servers": [
+        {"server_id": TICO, "kind": "tico", "power": "on"},
+        {"server_id": BOTS, "kind": "bot_computer", "power": "stopped"},
+    ],
+    "deactivated": False,
+}
 PAUSED = "Paused: out of credit. Add credit to start this computer."
 
 
@@ -15,20 +20,29 @@ def test_owner_and_admins_see_the_hosted_servers_and_members_are_refused(api, hq
     hq.answers["/servers"] = (200, LISTED, "application/json")
     assert get(api, "hosted-servers") == {"state": "ok", "servers": LISTED["servers"]}
     assert hq.calls == [(URL + "/servers", "Bearer " + KEY)]
-    assert get(api, "hosted-servers", "ben-test")["state"] == "ok"                     # an admin
-    r = api.get("/api/v2/hosted-servers", headers={"Authorization": "Bearer cara-test"})   # a member
+    assert get(api, "hosted-servers", "ben-test")["state"] == "ok"  # an admin
+    r = api.get("/api/v2/hosted-servers", headers={"Authorization": "Bearer cara-test"})  # a member
     assert r.status_code == 403
     r = api.post("/api/v2/hosted-servers/%s/start" % BOTS, headers={"Authorization": "Bearer cara-test"})
-    assert r.status_code == 403 and len(hq.calls) == 2                                  # a refusal never asks HQ
+    assert r.status_code == 403 and len(hq.calls) == 2  # a refusal never asks HQ
 
 
 def test_a_start_while_paused_for_credit_says_so_with_the_account_page(api, hq):  # noqa: F811
-    hq.answers["/servers/%s/start" % BOTS] = (409, {"error": "paused", "detail": "anything HQ says",
-                                                    "credit_url": "https://app.tico.dev"}, "application/json")
+    hq.answers["/servers/%s/start" % BOTS] = (
+        409,
+        {"error": "paused", "detail": "anything HQ says", "credit_url": "https://app.tico.dev"},
+        "application/json",
+    )
     assert post(api, "hosted-servers/%s/start" % BOTS, {}) == {
-        "state": "paused", "message": PAUSED, "credit_url": "https://app.tico.dev"}
-    hq.answers["/servers/%s/start" % BOTS] = (409, {"error": "paused", "credit_url": "javascript:alert(1)"},
-                                              "application/json")
+        "state": "paused",
+        "message": PAUSED,
+        "credit_url": "https://app.tico.dev",
+    }
+    hq.answers["/servers/%s/start" % BOTS] = (
+        409,
+        {"error": "paused", "credit_url": "javascript:alert(1)"},
+        "application/json",
+    )
     assert post(api, "hosted-servers/%s/start" % BOTS, {})["credit_url"] is None
     hq.answers["/servers/%s/start" % BOTS] = (200, {"machine_id": BOTS, "power": "on"}, "application/json")
     assert post(api, "hosted-servers/%s/start" % BOTS, {}) == {"state": "started"}
@@ -45,9 +59,12 @@ def test_a_shut_down_company_another_server_and_nothing_hosted(api, hq, monkeypa
     assert get(api, "hosted-servers") == {"state": "none"}
     hq.answers["/servers"] = (200, {"servers": [], "deactivated": False}, "application/json")
     assert get(api, "hosted-servers") == {"state": "none"}
-    hq.answers["/servers"] = (200, {"servers": [{"server_id": "../key", "kind": "tico", "power": "on"}]},
-                              "application/json")
-    assert get(api, "hosted-servers") == {"state": "none"}                            # nothing odd reaches the page
+    hq.answers["/servers"] = (
+        200,
+        {"servers": [{"server_id": "../key", "kind": "tico", "power": "on"}]},
+        "application/json",
+    )
+    assert get(api, "hosted-servers") == {"state": "none"}  # nothing odd reaches the page
     monkeypatch.delenv("TICO_GATEWAY_KEY")
     calls = len(hq.calls)
     assert get(api, "hosted-servers") == {"state": "no_gateway"} and len(hq.calls) == calls

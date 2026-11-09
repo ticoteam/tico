@@ -7,16 +7,26 @@ import signal
 import socket
 import sqlite3
 import tempfile
+from dataclasses import replace
 from datetime import datetime, timezone
+from pathlib import Path
 
 import pytest
+import time_machine
 from fastapi.testclient import TestClient
 
-from backend import demo, screen_binary
+from backend import demo, demo_seed, screen_binary, usage_limits
 from backend import server as serving
 from backend.app import create_app
 
-NOW = datetime(2026, 9, 25, 18, 30, tzinfo=timezone.utc)      # a Friday, so a week in review exists
+NOW = datetime(2026, 9, 25, 18, 30, tzinfo=timezone.utc)  # a Friday, so a week in review exists
+
+
+@pytest.fixture(scope="module", autouse=True)
+def demo_clock():
+    """Builds and API reads see the same day, including clocks outside hubdb.now."""
+    with time_machine.travel(NOW, tick=False):
+        yield
 
 
 @pytest.fixture(scope="module")
@@ -27,11 +37,20 @@ def built(tmp_path_factory):
 
 def rows(path):
     with sqlite3.connect(path) as db:
-        tables = [table for (table,) in db.execute("SELECT name FROM sqlite_master WHERE type='table' "
-                                                   "AND name NOT LIKE 'sqlite_%' ORDER BY name")]
+        tables = [
+            table
+            for (table,) in db.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name"
+            )
+        ]
         # Ordered by the first two columns, or the only one.
-        return {table: db.execute(f'SELECT * FROM "{table}" ORDER BY ' + ("1" if len(
-            db.execute(f'PRAGMA table_info("{table}")').fetchall()) == 1 else "1,2")).fetchall() for table in tables}
+        return {
+            table: db.execute(
+                f'SELECT * FROM "{table}" ORDER BY '
+                + ("1" if len(db.execute(f'PRAGMA table_info("{table}")').fetchall()) == 1 else "1,2")
+            ).fetchall()
+            for table in tables
+        }
 
 
 def signed_in(settings):
@@ -40,23 +59,44 @@ def signed_in(settings):
     return client
 
 
-def test_saved_demo_reopens_with_edits_and_the_same_owner_session(built, monkeypatch):
-    directory, settings = built
+def _saved_demo_reopens_with_edits_and_the_same_owner_session(built):
+    with pytest.MonkeyPatch.context() as monkeypatch:
+        directory, settings = built
+        with signed_in(settings) as api:
+            response = api.post(
+                "/api/v2/tasks",
+                json={"title": "Keep this demo edit", "body": "Sample work", "owner": "bot:support"},
+                headers={"Idempotency-Key": "restart-edit"},
+            )
+            assert response.status_code == 200
+            task_id = response.json()["task"]["id"]
+        before = rows(settings.db_path)
+        token = settings.local_owner_token_file.read_bytes()
+        from backend import demo_seed
+
+        monkeypatch.setattr(demo_seed, "populate", lambda *args: pytest.fail("saved demo was reseeded"))
+        reopened = demo.build(directory, now=NOW)
+        assert reopened.local_owner_token_file.read_bytes() == token
+        assert rows(reopened.db_path) == before
+        with signed_in(reopened) as api:
+            assert api.get("/api/v2/tasks/" + task_id).json()["task"]["title"] == "Keep this demo edit"
+
+
+def _every_bot_has_a_profile_and_no_one_is_told_of_a_change(built):
+    """The demo is made with its bots, so a start finds no bot to give a profile to, and no owner gets the notice that
+    explains a change (it would read as just now, at the top of Threads)."""
+    _, settings = built
     with signed_in(settings) as api:
-        response = api.post("/api/v2/tasks", json={"title": "Keep this demo edit", "body": "Sample work",
-                                                 "owner": "bot:support"},
-                            headers={"Idempotency-Key": "restart-edit"})
-        assert response.status_code == 200
-        task_id = response.json()["task"]["id"]
-    before = rows(settings.db_path)
-    token = settings.local_owner_token_file.read_bytes()
-    from backend import demo_seed
-    monkeypatch.setattr(demo_seed, "populate", lambda *args: pytest.fail("saved demo was reseeded"))
-    reopened = demo.build(directory, now=NOW)
-    assert reopened.local_owner_token_file.read_bytes() == token
-    assert rows(reopened.db_path) == before
-    with signed_in(reopened) as api:
-        assert api.get("/api/v2/tasks/" + task_id).json()["task"]["title"] == "Keep this demo edit"
+        assert api.get("/api/v2/tasks", params={"limit": 1}).status_code == 200  # a start has run
+    with sqlite3.connect(settings.db_path) as db:
+        told = db.execute("SELECT count(*) FROM messages WHERE body LIKE 'Tico gave each of your bots a profile%'")
+        assert told.fetchone()[0] == 0
+        from backend import profiles
+        from backend.store import H
+        from backend import bot_settings as BS
+
+        configs = [H._json(config, {}) for (config,) in db.execute(f"SELECT {BS.CONFIG} FROM bot_config bc {BS.JOIN}")]
+        assert configs and all(profiles.name_of(config) for config in configs)
 
 
 def test_demo_refuses_existing_unrecognized_data_without_writing(tmp_path):
@@ -68,7 +108,7 @@ def test_demo_refuses_existing_unrecognized_data_without_writing(tmp_path):
     assert list(tmp_path.iterdir()) == [database]
 
 
-def test_only_localhost_may_ask(built):
+def _only_localhost_may_ask(built):
     with signed_in(built[1]) as api:
         assert api.get("/api/v2/config", headers={"Host": "192.168.1.20:8765"}).status_code == 421
         assert api.get("/api/v2/config", headers={"Host": "localhost:8765"}).status_code == 200
@@ -78,13 +118,30 @@ def test_a_public_demo_is_read_only(tmp_path):
     settings = demo.build(tmp_path, now=NOW, url="https://demo.example.com", public=True)
     with signed_in(settings) as api:
         api.headers["Host"] = "demo.example.com"
-        assert api.get("/api/v2/config").status_code == 200
-        blocked = api.post("/api/v2/tasks", json={"title": "x", "owner": "bot:support"}, headers={"Idempotency-Key": "p1"})
+        assert api.get("/api/v2/config").json()["demo_public"] is True  # the strip at the top says "Read only demo"
+        # A link preview or monitor asks with HEAD and is sent to the same sign-in as a browser.
+        first = TestClient(create_app(settings), base_url="https://demo.example.com", follow_redirects=False)
+        assert first.head("/").status_code == 302 and first.head("/").headers["location"].startswith(
+            "/api/v2/local-signin"
+        )
+        blocked = api.post(
+            "/api/v2/tasks", json={"title": "x", "owner": "bot:support"}, headers={"Idempotency-Key": "p1"}
+        )
         assert blocked.status_code == 403 and blocked.json()["error"]["code"] == "demo"
         assert api.post("/api/v2/updates/read", json={"ids": []}, headers={"Idempotency-Key": "p2"}).status_code == 200
+        # A read that would write (a DM page makes the DM it shows) draws its page and keeps nothing.
+        count = lambda: sqlite3.connect(settings.db_path).execute("SELECT count(*) FROM conversations").fetchone()[0]
+        before = count()
+        assert api.get("/api/v2/threads/dm", params={"with": "human:eli"}).status_code == 200
+        assert count() == before
+    # The server copies the settings to add its screen relay; the copy is checked again and must still pass.
+    assert (
+        replace(settings, screen_relay_url="http://127.0.0.1:1", screen_relay_key="k" * 32).public_url
+        == "https://demo.example.com"
+    )
 
 
-def test_nothing_leaves_the_machine(built):
+def _nothing_leaves_the_machine(built):
     server = socket.socket()
     server.bind(("127.0.0.1", 0))
     server.listen()
@@ -95,20 +152,52 @@ def test_nothing_leaves_the_machine(built):
                 socket.create_connection(target, timeout=1)
         with pytest.raises(OSError):
             socket.getaddrinfo("api.github.com", 443)
-        socket.create_connection(server.getsockname(), timeout=1).close()      # this machine is fine
-        with signed_in(built[1]) as api:                                       # and so is every page of the demo
+        socket.create_connection(server.getsockname(), timeout=1).close()  # this machine is fine
+        with signed_in(built[1]) as api:  # and so is every page of the demo
             for path in ("/api/v2/config", "/api/v2/health", "/api/v2/updates", "/api/v2/market/entities"):
                 assert api.get(path).status_code == 200
-            assert api.post("/api/v2/market/ask", json={"question": "Who competes with us?"},
-                            headers={"Idempotency-Key": "net-1"}).status_code == 200      # falls back to the graph, no model
+            assert (
+                api.post(
+                    "/api/v2/market/ask",
+                    json={"question": "Who competes with us?"},
+                    headers={"Idempotency-Key": "net-1"},
+                ).status_code
+                == 200
+            )  # falls back to the graph, no model
+            from backend import market
+
+            assert market.complete.__module__ == "backend.market"  # the demo never replaces the model call for everyone
     server.close()
-    assert demo.ATTEMPTS == ["example.com", "93.184.216.34", "api.github.com"]     # only the three we tried
-    with pytest.raises(OSError):                                                   # and the block is gone outside
+    assert demo.ATTEMPTS == ["example.com", "93.184.216.34", "api.github.com"]  # only the three we tried
+    with pytest.raises(OSError):  # and the block is gone outside
         socket.create_connection(("192.0.2.1", 9), timeout=0.2)
 
 
+def test_the_built_demo_keeps_its_edits_profiles_hosts_and_network(built, subtests):
+    """One demo build for these checks, in file order, each as its own subtest. The public demo is a different, read-only
+    build, so it is checked on its own above."""
+    for check in (
+        _saved_demo_reopens_with_edits_and_the_same_owner_session,
+        _every_bot_has_a_profile_and_no_one_is_told_of_a_change,
+        _only_localhost_may_ask,
+        _nothing_leaves_the_machine,
+    ):
+        with subtests.test(check.__name__):
+            check(built)
+
+
 # ----------------------------------------------------------------------------- the folder a demo runs in
-ENDINGS = [("returns", None), ("ctrl-c", KeyboardInterrupt), ("sigterm", SystemExit)]
+# Ctrl-C leaves demo.main through the same `finally` as SIGTERM (there is no KeyboardInterrupt branch); SIGTERM is the
+# ending with its own handler, so it stands for both.
+ENDINGS = [("returns", None), ("sigterm", SystemExit)]
+
+
+def stub_build(directory, now=None, url="", public=False):
+    """The seed is not what these tests check: the folder gets the database file that the run looks for, and no more."""
+    directory = Path(directory)
+    directory.mkdir(parents=True, exist_ok=True)
+    (directory / "hub.sqlite").touch()
+    return demo.prepare(directory, url, public)
 
 
 def stub_server(monkeypatch, tmp_path, ending):
@@ -116,13 +205,12 @@ def stub_server(monkeypatch, tmp_path, ending):
     the demo ran in; temporary folders are made under tmp_path."""
     monkeypatch.setattr(tempfile, "tempdir", str(tmp_path))
     monkeypatch.setattr(screen_binary, "prepare", lambda: None)
+    monkeypatch.setattr(demo, "build", stub_build)
     running = []
 
     def run(*, settings, **kw):
         running.append(settings.db_path.parent)
         assert settings.db_path.exists()
-        if ending == "ctrl-c":
-            raise KeyboardInterrupt
         if ending == "sigterm":
             os.kill(os.getpid(), signal.SIGTERM)
 
@@ -146,4 +234,16 @@ def test_a_data_dir_is_never_removed(tmp_path, monkeypatch, ending, raised):
     with pytest.raises(raised) if raised else contextlib.nullcontext():
         demo.main(["--data-dir", str(data)])
     assert running == [data] and (data / "hub.sqlite").exists()
-    assert not any(tmp_path.glob("tico-demo-*"))         # and no temporary folder was made for it
+    assert not any(tmp_path.glob("tico-demo-*"))  # and no temporary folder was made for it
+
+
+def real_clock_at(monkeypatch, moment):
+    """The machine's clock as the usage-limit overlay reads it (`datetime.now`), set to `moment`."""
+    clock = type("RealClock", (datetime,), {"now": classmethod(lambda cls, tz=None: moment)})
+    monkeypatch.setattr(usage_limits, "datetime", clock)
+
+
+def test_the_usage_windows_follow_the_demo_clock_not_the_machines(monkeypatch):
+    real_clock_at(monkeypatch, datetime(2026, 9, 25, 7, 0, 1, tzinfo=timezone.utc))
+    with demo_seed.fixed(demo_seed.Clock(NOW)):
+        assert usage_limits.bounds() == usage_limits.bounds(NOW)

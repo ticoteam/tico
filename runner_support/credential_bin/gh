@@ -1,0 +1,2 @@
+#!/bin/sh
+exec "$TICO_GITHUB_PYTHON" -c 'import sys; from pathlib import Path; sys.path.insert(0, str(Path(sys.argv[1]).resolve().parents[2])); from runner_support.git_credentials import gh_main; sys.exit(gh_main(sys.argv[2:]))' "$0" "$@"

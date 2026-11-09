@@ -15,7 +15,7 @@
   scripts/mail.sh draft --as influencer --to a@b.example --subject "..." --body-file f --issue 128
   scripts/mail.sh draft --as legal --reply-to 18f... --body-file f --attach private/letter.pdf
   scripts/mail.sh discard r-88... --as legal          (only a draft this bot made, never sent mail)
-  scripts/mail.sh send  --as influencer --draft r-88... --issue 128 [--approval-issue 131]
+  scripts/mail.sh send  --as influencer --draft r-88... --issue 128 [--approval <message id>]
   scripts/mail.sh reply --as legal --thread 18f... --body-file f --issue 128
   scripts/mail.sh lint  --body-file f --subject "..." [--check-calendar]
   scripts/mail.sh slots --for ana@acme.example --n 2 --minutes 20
@@ -32,31 +32,32 @@ which mailbox comes from the employee's `access:` block, never from a prompt
 (hub policies/access.md). Every read of a body and every state change is audited to
 <projects>/runtime/mail/audit.jsonl and mail.db.
 
-Every write goes through five gates in order: policy (registry/mail-policy.yaml plus
-employee.yaml), lint (connectors/mail/lint.py), a second model from another vendor
-(connectors/mail/review.py), execution with an idempotency key, and the audit log. A gate that
-refuses a *send* never errors and never drops the words: the send becomes a draft with the
-reason attached, exit 0. Every write command takes --dry-run.
+A draft is linted here (connectors/mail/lint.py) as writing feedback. Every send goes through one door: the
+Gmail draft is built or kept, then queued with Tico (policy.queue_send, POST /api/v2/email/sends), which decides
+the send - the sending policy, blocked recipients, asks, the lint and second reviewer, the org rule check,
+approvals - and dispatches it after an undo window. A send Tico blocks never errors and never drops the words:
+the draft stays with Tico's reason, exit 0. Every write command takes --dry-run.
 
 Exit codes: 0 ok, 1 failure (missing key, network, Google said no), 2 policy refusal.
 """
 
-import argparse, fnmatch, hashlib, json, mimetypes, os, shlex, sys, uuid, weakref
+import argparse, contextvars, fnmatch, hashlib, json, mimetypes, os, shlex, sys
 from datetime import datetime, timedelta
 from pathlib import Path
 
 from . import AUDIT_PATH, DB_PATH, DEFAULT_TZ, INTERNAL_DOMAIN, Failure, RULES_FILE, Refused
 from . import now_utc, parse_since, repo_dir, report, stamp, zone
 from . import access, audit as audit_log, auth, db, gmail as gm, labels as lb, rules as rl
-from . import calendar as cal, compose, judge as jd, lint as ln, oauth, policy as pl, review as rv
+from . import calendar as cal, compose, judge as jd, lint as ln, oauth, policy as pl
 
-MAX_SEARCH = 50                         # docs/mail-service.md: search is bounded to 50 results
-REVIEW_FRESH_HOURS = 24                 # a send re-uses a verdict only while it is this new
-SYNC_LIMIT = 500                        # default page for `mail sync` backfill / export
-HISTORY_FALLBACK = timedelta(days=2)    # when a history id has expired: after:<last_run − 2d>
+MAX_SEARCH = 50  # docs/mail-service.md: search is bounded to 50 results
+SANDBOX_ENV = "TICO_MAIL_SANDBOX"  # the only mailbox `doctor --e2e` touches: it sends real mail
+SYNC_LIMIT = 500  # default page for `mail sync` backfill / export
+HISTORY_FALLBACK = timedelta(days=2)  # when a history id has expired: after:<last_run − 2d>
 
 
 # ---------------------------------------------------------------- seams (tests replace these)
+
 
 def open_gmail(mailbox):
     """The only place a real Gmail service is built."""
@@ -67,11 +68,18 @@ def open_calendar(mailbox):
     return auth.calendar_service(mailbox)
 
 
+# The connections the command running on this thread opened (Ctx). main() closes them when the command ends, on the
+# thread that opened them: a finalizer would close one on whichever thread the garbage collector runs on, and sqlite
+# refuses to close a connection from another thread.
+_COMMAND_CONNECTIONS = contextvars.ContextVar("mail_command_connections", default=None)
+
+
 def open_db():
     return db.connect(DB_PATH)
 
 
 # ---------------------------------------------------------------- context
+
 
 class Ctx:
     """Employee, mailbox, verbs, database - resolved once per command."""
@@ -87,34 +95,55 @@ class Ctx:
             try:
                 self.mailbox, self.verbs = access.resolve(self.slug, want, verb)
             except Refused:
-                if not soft:                            # `lint` and `review` need no mailbox
+                if not soft:  # `lint` needs no mailbox
                     raise
         self.conn = open_db()
-        self._close_conn = weakref.finalize(self, self.conn.close)
-        self._gmail, self._calendar, self._policy = None, None, None
+        opened = _COMMAND_CONNECTIONS.get()
+        if opened is not None:
+            opened.append(self.conn)
+        self._gmail, self._calendar, self._internal = None, None, None
+        self._company = ()  # () not read yet; read at the first write (Ctx.company)
+        self.read_company = lambda: pl.company(self.slug)
+
+    def company(self):
+        """What the company lets Tico do here, from Tico, read once and only when a write asks. Every Gmail and
+        Calendar write checks it, whichever credential this run holds."""
+        if self._company == ():
+            self._company = self.read_company()
+        return self._company
 
     @property
     def gmail(self):
         if self._gmail is None:
             self._gmail = open_gmail(self.mailbox)
+            self._gmail.company = self.company
         return self._gmail
 
     @property
     def calendar(self):
         if self._calendar is None:
             self._calendar = cal.Calendar(open_calendar(self.mailbox), self.mailbox)
+            self._calendar.company = self.company
         return self._calendar
 
     @property
-    def policy(self):
-        if self._policy is None:
-            self._policy = pl.load(slug=self.slug)
-        return self._policy
+    def internal_domains(self):
+        """The team's own mail domains (policy.team_domains), read once: "internal" for the lint and the unsubscribe
+        guard."""
+        if self._internal is None:
+            self._internal = list(pl.team_domains(self.slug))
+        return self._internal
 
     def audit(self, action, target="", detail=None):
-        return audit_log.record(self.slug, action, self.mailbox or "", target,
-                                dict(detail or {}, **({"dry_run": True} if self.dry else {})),
-                                self.issue, conn=self.conn)
+        return audit_log.record(
+            self.slug,
+            action,
+            self.mailbox or "",
+            target,
+            dict(detail or {}, **({"dry_run": True} if self.dry else {})),
+            self.issue,
+            conn=self.conn,
+        )
 
     def normalize(self, raw):
         return gm.normalize(raw, self.gmail.labels())
@@ -129,6 +158,7 @@ def out(args, payload, text):
 
 
 # ---------------------------------------------------------------- doctor
+
 
 class Checks:
     def __init__(self):
@@ -150,15 +180,17 @@ class Checks:
     def render(self):
         lines = []
         for r in self.rows:
-            lines.append(f"{r['status']:<5} {r['check']}"
-                         + (f": {r['detail']}" if r["detail"] else ""))
+            lines.append(f"{r['status']:<5} {r['check']}" + (f": {r['detail']}" if r["detail"] else ""))
             if r["fix"]:
                 lines.append(f"      fix: {r['fix']}")
         n = len(self.failed)
         skipped = sum(1 for r in self.rows if r["status"] == "skip")
-        lines += ["", f"{len(self.rows) - n - skipped} ok, {n} failing"
-                  + (f", {skipped} not checked" if skipped else "")
-                  + ("" if n else " - mail is ready.")]
+        lines += [
+            "",
+            f"{len(self.rows) - n - skipped} ok, {n} failing"
+            + (f", {skipped} not checked" if skipped else "")
+            + ("" if n else " - mail is ready."),
+        ]
         return "\n".join(lines) + "\n"
 
 
@@ -169,22 +201,22 @@ def cmd_e2e(args):
     throwaway event -> create and delete a second draft. Everything it makes, it removes; the
     one thing it leaves behind is the sent message in the sandbox mailbox.
     """
-    policy = pl.load()
-    box = policy["sandbox_mailbox"]
+    box = os.environ.get(SANDBOX_ENV, "").strip().lower()
     if not box:
-        raise Refused("no sandbox_mailbox in registry/mail-policy.yaml.",
-                      "Set sandbox_mailbox: hub-test@acme.example there; --e2e will not touch a "
-                      "real mailbox.")
+        raise Refused(
+            f"no sandbox mailbox: set {SANDBOX_ENV}.",
+            f"{SANDBOX_ENV}=hub-test@acme.example; --e2e will not touch a real mailbox.",
+        )
     asked = (args.mailbox or "").strip().lower()
     if asked and asked != box:
-        raise Refused(f"--e2e only ever runs against the sandbox mailbox {box}, not {asked}.",
-                      "It sends real mail. If you want a different sandbox, change "
-                      "sandbox_mailbox in registry/mail-policy.yaml, which is a hub PR.")
+        raise Refused(
+            f"--e2e only ever runs against the sandbox mailbox {box}, not {asked}.",
+            f"It sends real mail. Point {SANDBOX_ENV} at a different sandbox to change it.",
+        )
     c = Checks()
     tag = stamp().replace(":", "").replace("-", "")
     subject = f"hub mail e2e {tag}"
-    body = ("This is the hub mail service checking itself end to end.\n\nNothing here needs "
-            "an answer.\n\nAna\n")
+    body = "This is the hub mail service checking itself end to end.\n\nNothing here needs an answer.\n\nAna\n"
     g, draft_id, event_id, second = None, "", "", ""
     try:
         g = open_gmail(box)
@@ -199,29 +231,23 @@ def cmd_e2e(args):
             c.ok("label the draft", lb.DRAFTED)
         except Failure as e:
             c.fail("label the draft", e.msg, e.hint)
-        sent = g.send_draft(draft_id)
-        draft_id = ""
-        c.ok("send to itself", f"message {sent.get('id', '?')}")
-        found = g.list_ids(f'subject:"{subject}"', limit=5)
-        if found:
-            c.ok("search it back", f"{len(found)} hit(s) for subject:\"{subject}\"")
-        else:
-            c.fail("search it back", f"no hit for subject:\"{subject}\"",
-                   "Gmail may not have indexed it yet; run doctor --e2e again in a minute.")
+        queued = pl.queue_send(box, raw, draft_id=draft_id)
+        c.ok("queue test email", f"send {queued['id']}: {queued['state']}")
+        c.ok("delivery", "The shared queue dispatches after approval and the undo window")
         try:
             calendar = cal.Calendar(open_calendar(box), box)
             start = datetime.now(zone(DEFAULT_TZ)) + timedelta(days=2)
             start = start.replace(hour=12, minute=0, second=0, microsecond=0)
-            ev = calendar.create_event(start, start + timedelta(minutes=15),
-                                       f"hub mail e2e {tag} (delete me)")
+            ev = calendar.create_event(start, start + timedelta(minutes=15), f"hub mail e2e {tag} (delete me)")
             event_id = ev.get("id", "")
             calendar.delete_event(event_id)
             event_id = ""
             c.ok("throwaway event", "created and deleted")
         except Failure as e:
             c.fail("throwaway event", e.msg, e.hint)
-        second = (g.create_draft(compose.build([box], subject + " (draft only)", body,
-                                               from_addr=box)) or {}).get("id", "")
+        second = (g.create_draft(compose.build([box], subject + " (draft only)", body, from_addr=box)) or {}).get(
+            "id", ""
+        )
         g.delete_draft(second)
         second = ""
         c.ok("delete a draft", "created and deleted")
@@ -232,9 +258,8 @@ def cmd_e2e(args):
             if cleanup and g:
                 try:
                     g.delete_draft(cleanup)
-                except Failure:                          # pragma: no cover
-                    c.fail("cleanup", f"could not delete the {what} {cleanup}",
-                           f"Delete it by hand in {box}'s Drafts.")
+                except Failure:  # pragma: no cover
+                    c.fail("cleanup", f"could not delete the {what} {cleanup}", f"Delete it by hand in {box}'s Drafts.")
     rc = 1 if c.failed else 0
     if args.json:
         print(json.dumps({"ok": rc == 0, "mailbox": box, "checks": c.rows}, indent=2))
@@ -246,7 +271,7 @@ def cmd_e2e(args):
 
 def cmd_mint_token(args):
     """A short-lived access token for one mailbox, for the runner's supervisor to hand a turn
-    (runner/credential_socket.py). Prints the token and its expiry; the key itself never leaves."""
+    (runner_support/credential_socket.py). Prints the token and its expiry; the key itself never leaves."""
     try:
         token, expiry, granted = auth.mint_token(args.mailbox, args.service)
     except oauth.SignInFailed as e:
@@ -263,23 +288,41 @@ def cmd_google_connect(args):
     path = oauth.grants_path()
     client = oauth.read_client(args.client_file) if args.client_file else oauth.load(path).get("client")
     if not client or not client.get("client_id"):
-        raise Failure("no Google OAuth client on this computer yet",
-                      "Pass --client-file with the JSON of a Desktop app OAuth client from your Google Cloud project "
-                      "(docs/mail.md, Connect your Google account). It is kept with the grant, not in any bot's reach.")
+        raise Failure(
+            "no Google OAuth client on this computer yet",
+            "Pass --client-file with the JSON of a Desktop app OAuth client from your Google Cloud project "
+            "(docs/mail.md, Connect your Google account). It is kept with the grant, not in any bot's reach.",
+        )
     capabilities = sorted({c.strip() for raw in args.allow or [] for c in raw.split(",") if c.strip()})
     flow = oauth.authorization(client, mailbox, capabilities)
     out = sys.stderr
-    print(f"Connect {mailbox} to Tico on this computer: read-only"
-          + (f", plus {', '.join(capabilities)}" if capabilities else "") + ".", file=out)
-    print("1. Open this address in a browser and sign in to Google as " + mailbox + ":\n\n" + flow["url"] + "\n", file=out)
-    print("2. Approve. The browser then goes to http://127.0.0.1:8765/ and shows that it cannot connect: that is "
-          "expected.\n3. Copy that whole address from the browser's address bar and paste it here.", file=out)
+    print(
+        f"Connect {mailbox} to Tico on this computer: read-only"
+        + (f", plus {', '.join(capabilities)}" if capabilities else "")
+        + ".",
+        file=out,
+    )
+    print(
+        "1. Open this address in a browser and sign in to Google as " + mailbox + ":\n\n" + flow["url"] + "\n", file=out
+    )
+    print(
+        "2. Approve. The browser then goes to http://127.0.0.1:8765/ and shows that it cannot connect: that is "
+        "expected.\n3. Copy that whole address from the browser's address bar and paste it here.",
+        file=out,
+    )
     try:
         answer = input("Address: ")
     except EOFError:
         answer = ""
-    found = oauth.connect(mailbox, client, oauth.code_from(answer, flow["state"]), flow["verifier"], capabilities,
-                          path, flow["redirect_uri"])
+    found = oauth.connect(
+        mailbox,
+        client,
+        oauth.code_from(answer, flow["state"]),
+        flow["verifier"],
+        capabilities,
+        path,
+        flow["redirect_uri"],
+    )
     audit_log.record("owner", "google.connect", mailbox, "", {"can": found["can"]})
     if args.json:
         print(json.dumps(found, indent=2))
@@ -296,8 +339,13 @@ def cmd_google_finish(args):
     except ValueError:
         request = {}
     result = oauth.finish(request if isinstance(request, dict) else {})
-    audit_log.record("owner", "google.connect", result.get("mailbox", ""), "",
-                     {k: result.get(k) for k in ("status", "kind", "can") if result.get(k)})
+    audit_log.record(
+        "owner",
+        "google.connect",
+        result.get("mailbox", ""),
+        "",
+        {k: result.get(k) for k in ("status", "kind", "can") if result.get(k)},
+    )
     print(json.dumps(result))
     return 0 if result["status"] == "connected" else 1
 
@@ -318,7 +366,7 @@ def cmd_google_revoke(args):
     mailbox = args.mailbox.strip().lower()
     if args.json and not oauth.grant(mailbox):
         print(json.dumps({"status": "revoked", "mailbox": mailbox, "google_confirmed": False, "absent": True}))
-        return 0                                        # already gone here: repeating a revoke is not an error
+        return 0  # already gone here: repeating a revoke is not an error
     confirmed = oauth.revoke(mailbox)
     audit_log.record("owner", "google.revoke", mailbox, "", {"google_confirmed": confirmed})
     if args.json:
@@ -326,8 +374,10 @@ def cmd_google_revoke(args):
     elif confirmed:
         print(f"revoked {mailbox} at Google and removed it from this computer")
     else:
-        print(f"removed {mailbox} from this computer; Google did not confirm the revocation, so also remove "
-              "the app at myaccount.google.com/permissions")
+        print(
+            f"removed {mailbox} from this computer; Google did not confirm the revocation, so also remove "
+            "the app at myaccount.google.com/permissions"
+        )
     return 0
 
 
@@ -346,8 +396,10 @@ def cmd_doctor(args):
             connected = []
             c.fail("google accounts", e.msg, e.hint)
         if connected:
-            c.ok("google accounts", f"{len(connected)} connected without delegation: "
-                 + ", ".join(row["mailbox"] for row in connected))
+            c.ok(
+                "google accounts",
+                f"{len(connected)} connected without delegation: " + ", ".join(row["mailbox"] for row in connected),
+            )
         try:
             info = auth.key_info()
             c.ok("service-account key", f"{info['path']} (mode 600, parses)")
@@ -360,76 +412,103 @@ def cmd_doctor(args):
                 c.fail("service-account key", e.msg, e.hint)
 
     try:
-        import google.oauth2                              # noqa: F401
-        import googleapiclient                            # noqa: F401
+        import google.oauth2  # noqa: F401
+        import googleapiclient  # noqa: F401
+
         c.ok("google client libraries", "installed")
     except ImportError:
-        c.fail("google client libraries", "not importable",
-               "Run mail through scripts/mail.sh; it builds the venv from "
-               "connectors/mail/requirements.txt on first use.")
+        c.fail(
+            "google client libraries",
+            "not importable",
+            "Run mail through scripts/mail.sh; it builds the venv from connectors/mail/requirements.txt on first use.",
+        )
 
     holders = access.mailbox_holders()
     if args.mailbox and args.all_mailboxes:
         raise Refused("--mailbox and --all-mailboxes ask for different things; pick one.")
     boxes = [args.mailbox.strip().lower()] if args.mailbox else sorted(holders)
     if not boxes:
-        c.fail("mailboxes", "no employee declares a gmail identity",
-               "Add a `tools:` entry with service: gmail and an identity to a "
-               "bot's bot.yaml (hub policies/access.md).")
+        c.fail(
+            "mailboxes",
+            "no employee declares a gmail identity",
+            "Add a `tools:` entry with service: gmail and an identity to a bot's bot.yaml (hub policies/access.md).",
+        )
 
     for box in boxes:
         slugs = holders.get(box) or []
-        if c.failed:                                      # no key, no libraries: nothing to try
-            c.skip(box, "impersonation, labels and calendar not checked",
-                   "fix the failures above, then run doctor again")
+        if c.failed:  # no key, no libraries: nothing to try
+            c.skip(
+                box, "impersonation, labels and calendar not checked", "fix the failures above, then run doctor again"
+            )
             continue
         personal = not socket_mode and auth.source(box) == "oauth"
         if not personal and not socket_mode and info is None:
-            c.fail(f"{box} access", "no connected Google account and no service-account key",
-                   f"Connect it: {oauth.connect_command(box)}")
+            c.fail(
+                f"{box} access",
+                "no connected Google account and no service-account key",
+                f"Connect it: {oauth.connect_command(box)}",
+            )
             continue
         try:
             g = open_gmail(box)
             prof = g.profile()
             if personal:
-                c.ok(f"{box} google account", f"{prof.get('emailAddress', box)}, {prof.get('messagesTotal', '?')} "
-                     "messages, connected without delegation" + (f", used by {', '.join(slugs)}" if slugs else ""))
+                c.ok(
+                    f"{box} google account",
+                    f"{prof.get('emailAddress', box)}, {prof.get('messagesTotal', '?')} "
+                    "messages, connected without delegation" + (f", used by {', '.join(slugs)}" if slugs else ""),
+                )
             else:
-                c.ok(f"{box} impersonation",
-                     f"{prof.get('emailAddress', box)}, {prof.get('messagesTotal', '?')} messages"
-                     + (f", used by {', '.join(slugs)}" if slugs else ""))
+                c.ok(
+                    f"{box} impersonation",
+                    f"{prof.get('emailAddress', box)}, {prof.get('messagesTotal', '?')} messages"
+                    + (f", used by {', '.join(slugs)}" if slugs else ""),
+                )
         except Failure as e:
-            c.fail(f"{box} impersonation", e.msg,
-                   e.hint or auth.delegation_hint(auth.GMAIL_SCOPE,
-                                                  (info or {}).get("client_id", "NNN")))
+            c.fail(
+                f"{box} impersonation",
+                e.msg,
+                e.hint or auth.delegation_hint(auth.GMAIL_SCOPE, (info or {}).get("client_id", "NNN")),
+            )
             continue
         except Exception as e:
-            c.fail(f"{box} impersonation", f"unexpected {type(e).__name__}",
-                   "Check the runner credential socket and mailbox access, then run doctor again.")
+            c.fail(
+                f"{box} impersonation",
+                f"unexpected {type(e).__name__}",
+                "Check the runner credential socket and mailbox access, then run doctor again.",
+            )
             continue
         want = sorted({n for s in (slugs or [access.OWNER]) for n in lb.wanted(s)})
         try:
             existing = g.label_ids()
             missing = [name for name in want if name not in existing]
             if missing:
-                c.fail(f"{box} hub labels", f"{len(missing)} missing: {', '.join(missing)}",
-                       "Create the missing hub/* labels in Gmail, then rerun doctor.")
+                c.fail(
+                    f"{box} hub labels",
+                    f"{len(missing)} missing: {', '.join(missing)}",
+                    "Create the missing hub/* labels in Gmail, then rerun doctor.",
+                )
             else:
                 c.ok(f"{box} hub labels", f"{len(want)} present")
         except Failure as e:
             c.fail(f"{box} hub labels", e.msg, e.hint)
         except Exception as e:
-            c.fail(f"{box} hub labels", f"unexpected {type(e).__name__}",
-                   "Check mailbox label access, then rerun doctor.")
+            c.fail(
+                f"{box} hub labels", f"unexpected {type(e).__name__}", "Check mailbox label access, then rerun doctor."
+            )
         try:
             open_calendar(box).calendarList().list(maxResults=1).execute()
             c.ok(f"{box} calendar", "readable")
         except Failure as e:
             c.fail(f"{box} calendar", e.msg, e.hint)
         except Exception as e:
-            c.fail(f"{box} calendar", str(e),
-                   oauth.refresh_failed_hint(box) if personal else
-                   auth.delegation_hint(auth.CALENDAR_SCOPE, (info or {}).get("client_id", "NNN")))
+            c.fail(
+                f"{box} calendar",
+                str(e),
+                oauth.refresh_failed_hint(box)
+                if personal
+                else auth.delegation_hint(auth.CALENDAR_SCOPE, (info or {}).get("client_id", "NNN")),
+            )
 
     rc = 1 if c.failed else 0
     if args.json:
@@ -441,6 +520,7 @@ def cmd_doctor(args):
 
 # ---------------------------------------------------------------- whoami
 
+
 def cmd_whoami(args):
     slug = access.employee(args.as_slug)
     d = access.describe(slug)
@@ -449,27 +529,29 @@ def cmd_whoami(args):
     if args.json:
         print(json.dumps(d, indent=2))
         return 0
-    print(f"employee  {d['employee']}" + ("  (owner: every verb on every mailbox)"
-                                          if d["owner"] else ""))
+    print(
+        f"employee  {d['employee']}"
+        + ("  (the runner's connector: read; writes only what Tico leased)" if d.get("connector") else "")
+    )
     calendars = d.get("company_calendars") or {}
     if calendars.get("mailboxes"):
-        print(f"calendars company-wide: {', '.join(calendars['can'])} on "
-              f"{', '.join(calendars['mailboxes'])}")
+        print(f"calendars company-wide: {', '.join(calendars['can'])} on {', '.join(calendars['mailboxes'])}")
     if not d["mailboxes"]:
-        print("mailboxes none declared" + (f" - {d['note']}" if d["note"] else ""))
-        print("          Adding one is the owner's call: open an Issue with owner:" + access.OWNER + " and "
-              "type:decision (policies/access.md).")
+        print("mailboxes none" + (f" - {d['note']}" if d["note"] else ""))
         return 0
     for m in d["mailboxes"]:
-        print(f"mailbox   {m['mailbox']}")
-        print(f"          gmail: {', '.join(m['gmail']) or 'none'}"
-              f"   calendar: {', '.join(m['google-calendar']) or 'none'}")
-    print("          read also allows label, archive, mark-read, star and triaged on that "
-          "mailbox (docs/mail.md).")
+        level = "Read" if m.get("level") == "read" else "Read and write"
+        print(f"mailbox   {m['mailbox']}  ({level})")
+        print(
+            f"          gmail: {', '.join(m['gmail']) or 'none'}"
+            f"   calendar: {', '.join(m['google-calendar']) or 'none'}"
+        )
+    print("          organize covers label, archive, mark-read, star, triaged and rules (docs/mail.md).")
     return 0
 
 
 # ---------------------------------------------------------------- reading
+
 
 def remember_message(ctx, msg):
     """Opportunistic local persist. No-op on dry-run or a ctx without a db."""
@@ -508,8 +590,9 @@ def command_mailboxes(args, verb):
     if getattr(args, "all_mailboxes", False):
         boxes = access.readable_mailboxes(slug, verb)
         if not boxes:
-            raise Refused(f"{slug} has no mailbox for {verb}.",
-                          "Declare gmail access or set inbox_bot / org_read on the roster.")
+            raise Refused(
+                f"{slug} has no mailbox for {verb}.", "Declare gmail access or set inbox_bot / org_read on the roster."
+            )
         return boxes
     box, _ = access.resolve(slug, getattr(args, "mailbox", None), verb)
     return [box]
@@ -534,9 +617,17 @@ def cmd_inbox(args):
             payloads.append(payload)
             texts.append(text.rstrip())
             total += payload.get("count") or 0
-        return out(args, {"ok": True, "employee": access.employee(args.as_slug),
-                          "all_mailboxes": True, "count": total, "mailboxes": payloads},
-                   "\n\n".join(texts) + "\n")
+        return out(
+            args,
+            {
+                "ok": True,
+                "employee": access.employee(args.as_slug),
+                "all_mailboxes": True,
+                "count": total,
+                "mailboxes": payloads,
+            },
+            "\n\n".join(texts) + "\n",
+        )
     ctx = Ctx(args, "read", mailbox=boxes[0])
     if args.untriaged:
         return inbox_untriaged(ctx, args)
@@ -567,12 +658,20 @@ def inbox_listed(ctx, args, emit=True):
         for m in msgs:
             db.mark_seen(ctx.conn, ctx.mailbox, ctx.slug, m["id"], m["thread_id"])
         db.set_watermark(ctx.conn, ctx.mailbox, ctx.slug, _history_id(ctx))
-    ctx.audit("inbox", ctx.mailbox,
-              {"count": len(msgs), "new_only": bool(args.new), "query": " ".join(q),
-               "ids": [m["id"] for m in msgs]})
+    ctx.audit(
+        "inbox",
+        ctx.mailbox,
+        {"count": len(msgs), "new_only": bool(args.new), "query": " ".join(q), "ids": [m["id"] for m in msgs]},
+    )
     title = f"Inbox for {ctx.mailbox} ({'new to ' + ctx.slug if args.new else 'all'})"
-    payload = {"ok": True, "mailbox": ctx.mailbox, "employee": ctx.slug,
-               "query": " ".join(q), "count": len(msgs), "messages": msgs}
+    payload = {
+        "ok": True,
+        "mailbox": ctx.mailbox,
+        "employee": ctx.slug,
+        "query": " ".join(q),
+        "count": len(msgs),
+        "messages": msgs,
+    }
     if getattr(args, "judge", False):
         payload["judge"] = judge_listing(ctx, msgs)
     text = render(args, msgs, title)
@@ -591,15 +690,35 @@ def inbox_untriaged(ctx, args, emit=True):
         q.append(f'label:"{args.label}"')
     limit = args.limit or UNTRIAGED_LIMIT
     ids = ctx.gmail.list_ids(" ".join(q), limit=limit)
-    msgs = [m for m in fetch(ctx, ids)                  # Gmail's index can lag a relabel
-            if not any(str(l).startswith(lb.PREFIX) for l in m["labels"])]
-    ctx.audit("inbox", ctx.mailbox,
-              {"untriaged": True, "count": len(msgs), "limit": limit, "query": " ".join(q),
-               "excluded_labels": excluded, "ids": [m["id"] for m in msgs]})
+    msgs = [
+        m
+        for m in fetch(ctx, ids)  # Gmail's index can lag a relabel
+        if not any(str(l).startswith(lb.PREFIX) for l in m["labels"])
+    ]
+    ctx.audit(
+        "inbox",
+        ctx.mailbox,
+        {
+            "untriaged": True,
+            "count": len(msgs),
+            "limit": limit,
+            "query": " ".join(q),
+            "excluded_labels": excluded,
+            "ids": [m["id"] for m in msgs],
+        },
+    )
     title = f"Inbox for {ctx.mailbox} (untriaged: no hub/* label)"
-    payload = {"ok": True, "mailbox": ctx.mailbox, "employee": ctx.slug,
-               "untriaged": True, "excluded_labels": excluded, "query": " ".join(q),
-               "limit": limit, "count": len(msgs), "messages": msgs}
+    payload = {
+        "ok": True,
+        "mailbox": ctx.mailbox,
+        "employee": ctx.slug,
+        "untriaged": True,
+        "excluded_labels": excluded,
+        "query": " ".join(q),
+        "limit": limit,
+        "count": len(msgs),
+        "messages": msgs,
+    }
     if getattr(args, "judge", False):
         payload["judge"] = judge_listing(ctx, msgs)
     text = render(args, msgs, title)
@@ -635,15 +754,18 @@ def cmd_thread(args):
     for m in msgs:
         remember_message(ctx, m)
     ctx.audit("thread", args.thread_id, {"messages": len(msgs)})
-    return out(args, {"ok": True, "mailbox": ctx.mailbox, "thread": args.thread_id,
-                      "count": len(msgs), "messages": msgs},
-               render(args, msgs, f"Thread {args.thread_id} ({ctx.mailbox})"))
+    return out(
+        args,
+        {"ok": True, "mailbox": ctx.mailbox, "thread": args.thread_id, "count": len(msgs), "messages": msgs},
+        render(args, msgs, f"Thread {args.thread_id} ({ctx.mailbox})"),
+    )
 
 
 def unsubscribe_message(ctx, message_id):
     """Shared by the explicit command and the deterministic rules pass."""
     import base64
     from . import unsubscribe as unsub
+
     access.resolve(ctx.slug, ctx.mailbox, "unsubscribe")
     raw = ctx.gmail.get(message_id, fmt="raw")
     ctx.audit("unsubscribe-read", message_id)
@@ -664,49 +786,64 @@ def cmd_unsubscribe(args):
     ctx = Ctx(args, "unsubscribe")
     result = unsubscribe_message(ctx, args.message_id)
     if args.archive and result.get("accepted") and not ctx.dry:
-        modify(ctx, [args.message_id], remove=["INBOX"], action="archive",
-               detail={"after_unsubscribe": True})
+        modify(ctx, [args.message_id], remove=["INBOX"], action="archive", detail={"after_unsubscribe": True})
         result["archived"] = True
-    return out(args, result, "Unsubscribe: " + result["status"] +
-               ("; sender accepted the request" if result["accepted"] else
-                "; no successful cancellation confirmed") + "\n")
+    return out(
+        args,
+        result,
+        "Unsubscribe: "
+        + result["status"]
+        + ("; sender accepted the request" if result["accepted"] else "; no successful cancellation confirmed")
+        + "\n",
+    )
 
 
 def cmd_search(args):
     ctx = Ctx(args, "read")
     if args.limit > MAX_SEARCH:
-        raise Refused(f"search is bounded to {MAX_SEARCH} results, --limit was {args.limit}.",
-                      "Narrow the query instead: Gmail's own operators (from:, newer_than:, "
-                      "has:attachment) are cheaper than a big page.")
+        raise Refused(
+            f"search is bounded to {MAX_SEARCH} results, --limit was {args.limit}.",
+            "Narrow the query instead: Gmail's own operators (from:, newer_than:, "
+            "has:attachment) are cheaper than a big page.",
+        )
     ids = ctx.gmail.list_ids(args.query, limit=args.limit)
     msgs = fetch(ctx, ids)
     ctx.audit("search", args.query, {"count": len(msgs), "ids": [m["id"] for m in msgs]})
-    return out(args, {"ok": True, "mailbox": ctx.mailbox, "query": args.query,
-                      "count": len(msgs), "messages": msgs},
-               render(args, msgs, f"Search: {args.query}"))
+    return out(
+        args,
+        {"ok": True, "mailbox": ctx.mailbox, "query": args.query, "count": len(msgs), "messages": msgs},
+        render(args, msgs, f"Search: {args.query}"),
+    )
 
 
 def _public_attachment(item):
-    return {k: item[k] for k in ("ref", "name", "type", "size", "part_id",
-                                  "attachment_id", "inline")}
+    return {k: item[k] for k in ("ref", "name", "type", "size", "part_id", "attachment_id", "inline")}
 
 
 def cmd_attachments(args):
     ctx = Ctx(args, "read")
     raw = ctx.gmail.get(args.message_id)
-    attachments = [_public_attachment(a)
-                   for a in gm.attachment_refs((raw or {}).get("payload") or {})]
-    ctx.audit("attachments", args.message_id,
-              {"count": len(attachments), "refs": [a["ref"] for a in attachments]})
+    attachments = [_public_attachment(a) for a in gm.attachment_refs((raw or {}).get("payload") or {})]
+    ctx.audit("attachments", args.message_id, {"count": len(attachments), "refs": [a["ref"] for a in attachments]})
     lines = [f"attachments for {args.message_id} in {ctx.mailbox}"]
-    lines += [f"{a['ref']}  {a['name']}  {a['type']}  {a['size']}B"
-              f"  attachment_id={a['attachment_id'] or '-'}  part_id={a['part_id']}"
-              for a in attachments]
+    lines += [
+        f"{a['ref']}  {a['name']}  {a['type']}  {a['size']}B"
+        f"  attachment_id={a['attachment_id'] or '-'}  part_id={a['part_id']}"
+        for a in attachments
+    ]
     if not attachments:
         lines.append("no downloadable attachments")
-    return out(args, {"ok": True, "mailbox": ctx.mailbox, "message_id": args.message_id,
-                      "count": len(attachments), "attachments": attachments},
-               "\n".join(lines) + "\n")
+    return out(
+        args,
+        {
+            "ok": True,
+            "mailbox": ctx.mailbox,
+            "message_id": args.message_id,
+            "count": len(attachments),
+            "attachments": attachments,
+        },
+        "\n".join(lines) + "\n",
+    )
 
 
 def _private_output_path(value):
@@ -716,8 +853,10 @@ def _private_output_path(value):
         raise Refused("--out must be an explicit file path.")
     candidate = Path(text)
     if any(part == ".." for part in candidate.parts):
-        raise Refused("--out may not contain '..' path traversal.",
-                      "Choose the exact destination file without parent-directory shortcuts.")
+        raise Refused(
+            "--out may not contain '..' path traversal.",
+            "Choose the exact destination file without parent-directory shortcuts.",
+        )
     if candidate.name in ("", ".", ".."):
         raise Refused("--out must name a file, not a directory.")
     target = candidate if candidate.is_absolute() else Path.cwd() / candidate
@@ -725,17 +864,21 @@ def _private_output_path(value):
     for part in target.parts[1:-1]:
         current = current / part
         if current.is_symlink():
-            raise Refused(f"--out may not pass through symlink {current}.",
-                          "Choose a real directory and a new destination filename.")
+            raise Refused(
+                f"--out may not pass through symlink {current}.",
+                "Choose a real directory and a new destination filename.",
+            )
     if not target.parent.exists() or not target.parent.is_dir():
-        raise Failure(f"the output directory does not exist: {target.parent}",
-                      "Create the private destination directory first.")
+        raise Failure(
+            f"the output directory does not exist: {target.parent}", "Create the private destination directory first."
+        )
     if target.is_symlink():
-        raise Refused(f"--out may not be a symlink: {target}",
-                      "Choose a new destination filename.")
+        raise Refused(f"--out may not be a symlink: {target}", "Choose a new destination filename.")
     if target.exists():
-        raise Refused(f"refusing to overwrite existing file: {target}",
-                      "Choose a new --out path; attachment downloads never overwrite.")
+        raise Refused(
+            f"refusing to overwrite existing file: {target}",
+            "Choose a new --out path; attachment downloads never overwrite.",
+        )
     return target
 
 
@@ -745,8 +888,10 @@ def _write_private(target, data):
     try:
         fd = os.open(target, flags, 0o600)
     except FileExistsError:
-        raise Refused(f"refusing to overwrite existing file: {target}",
-                      "Choose a new --out path; attachment downloads never overwrite.")
+        raise Refused(
+            f"refusing to overwrite existing file: {target}",
+            "Choose a new --out path; attachment downloads never overwrite.",
+        )
     except OSError as e:
         raise Failure(f"could not create private output file {target}: {e}")
     try:
@@ -770,19 +915,24 @@ def cmd_attachment(args):
     # Resolve the employee's read authority before either Gmail call can happen.
     ctx = Ctx(args, "read")
     if not gm.valid_attachment_ref(args.attachment_ref):
-        raise Refused(f"unsafe attachment reference: {args.attachment_ref!r}.",
-                      "Run `mail attachments MESSAGE_ID` and use a reference like a1.")
+        raise Refused(
+            f"unsafe attachment reference: {args.attachment_ref!r}.",
+            "Run `mail attachments MESSAGE_ID` and use a reference like a1.",
+        )
     target = _private_output_path(args.out)
     raw = ctx.gmail.get(args.message_id)
     attachments = gm.attachment_refs((raw or {}).get("payload") or {})
     item = next((a for a in attachments if a["ref"] == args.attachment_ref), None)
     if item is None:
-        raise Refused(f"message {args.message_id} has no attachment {args.attachment_ref}.",
-                      "Run `mail attachments MESSAGE_ID` to list valid references.")
+        raise Refused(
+            f"message {args.message_id} has no attachment {args.attachment_ref}.",
+            "Run `mail attachments MESSAGE_ID` to list valid references.",
+        )
     if item["size"] > gm.MAX_ATTACHMENT_BYTES:
-        raise Failure(f"attachment is {item['size']} bytes; the download limit is "
-                      f"{gm.MAX_ATTACHMENT_BYTES} bytes.",
-                      "Retrieve unusually large files directly in Gmail.")
+        raise Failure(
+            f"attachment is {item['size']} bytes; the download limit is {gm.MAX_ATTACHMENT_BYTES} bytes.",
+            "Retrieve unusually large files directly in Gmail.",
+        )
     if item["inline"]:
         encoded, declared = item["_data"], item["size"]
     elif item["attachment_id"]:
@@ -794,24 +944,43 @@ def cmd_attachment(args):
             fetched_size = 0
         declared = max(item["size"], fetched_size)
     else:
-        raise Failure(f"attachment {args.attachment_ref} has neither inline data nor a Gmail "
-                      "attachment id.", "Open the message in Gmail and retrieve the file there.")
+        raise Failure(
+            f"attachment {args.attachment_ref} has neither inline data nor a Gmail attachment id.",
+            "Open the message in Gmail and retrieve the file there.",
+        )
     data = gm.attachment_bytes(encoded, declared)
     _write_private(target, data)
-    detail = {"ref": item["ref"], "attachment_id": item["attachment_id"],
-              "part_id": item["part_id"], "type": item["type"], "bytes": len(data),
-              "path": str(target)}
+    detail = {
+        "ref": item["ref"],
+        "attachment_id": item["attachment_id"],
+        "part_id": item["part_id"],
+        "type": item["type"],
+        "bytes": len(data),
+        "path": str(target),
+    }
     ctx.audit("attachment-download", args.message_id, detail)
-    payload = {"ok": True, "mailbox": ctx.mailbox, "message_id": args.message_id,
-               "attachment_ref": item["ref"], "attachment_id": item["attachment_id"],
-               "part_id": item["part_id"], "name": item["name"], "type": item["type"],
-               "size": len(data), "path": str(target)}
-    return out(args, payload,
-               f"saved {len(data)} bytes from message {args.message_id} attachment "
-               f"{item['ref']} ({item['attachment_id'] or item['part_id']}) to {target}\n")
+    payload = {
+        "ok": True,
+        "mailbox": ctx.mailbox,
+        "message_id": args.message_id,
+        "attachment_ref": item["ref"],
+        "attachment_id": item["attachment_id"],
+        "part_id": item["part_id"],
+        "name": item["name"],
+        "type": item["type"],
+        "size": len(data),
+        "path": str(target),
+    }
+    return out(
+        args,
+        payload,
+        f"saved {len(data)} bytes from message {args.message_id} attachment "
+        f"{item['ref']} ({item['attachment_id'] or item['part_id']}) to {target}\n",
+    )
 
 
 # ---------------------------------------------------------------- state changes
+
 
 def modify(ctx, ids, add=(), remove=(), action="modify", detail=None):
     """One state change over a list of messages, audited per message."""
@@ -829,38 +998,49 @@ def modify(ctx, ids, add=(), remove=(), action="modify", detail=None):
 def cmd_label(args):
     ctx = Ctx(args, "label")
     if len(args.rest) < 2:
-        raise Refused("label needs at least one message id and one label name.",
-                      "mail label add <msg-id> [<msg-id> ...] hub/needs-owner")
+        raise Refused(
+            "label needs at least one message id and one label name.",
+            "mail label add <msg-id> [<msg-id> ...] hub/needs-owner",
+        )
     ids, name = args.rest[:-1], lb.check_name(args.rest[-1])
     add, remove = ([name], []) if args.op == "add" else ([], [name])
     done = modify(ctx, ids, add, remove, f"label-{args.op}", {"label": name})
-    return out(args, {"ok": True, "op": args.op, "label": name, "messages": done,
-                      "dry_run": ctx.dry},
-               f"{'would ' if ctx.dry else ''}{args.op} {name} "
-               f"{'to' if args.op == 'add' else 'from'} {len(done)} message(s) in {ctx.mailbox}")
+    return out(
+        args,
+        {"ok": True, "op": args.op, "label": name, "messages": done, "dry_run": ctx.dry},
+        f"{'would ' if ctx.dry else ''}{args.op} {name} "
+        f"{'to' if args.op == 'add' else 'from'} {len(done)} message(s) in {ctx.mailbox}",
+    )
 
 
 def cmd_archive(args):
     ctx = Ctx(args, "archive")
     done = modify(ctx, args.ids, remove=["INBOX"], action="archive")
-    return out(args, {"ok": True, "messages": done, "dry_run": ctx.dry},
-               f"{'would archive' if ctx.dry else 'archived'} {len(done)} message(s) "
-               f"in {ctx.mailbox}")
+    return out(
+        args,
+        {"ok": True, "messages": done, "dry_run": ctx.dry},
+        f"{'would archive' if ctx.dry else 'archived'} {len(done)} message(s) in {ctx.mailbox}",
+    )
 
 
 def cmd_mark_read(args):
     ctx = Ctx(args, "mark_read")
     done = modify(ctx, args.ids, remove=["UNREAD"], action="mark-read")
-    return out(args, {"ok": True, "messages": done, "dry_run": ctx.dry},
-               f"{'would mark' if ctx.dry else 'marked'} {len(done)} message(s) read "
-               f"in {ctx.mailbox}")
+    return out(
+        args,
+        {"ok": True, "messages": done, "dry_run": ctx.dry},
+        f"{'would mark' if ctx.dry else 'marked'} {len(done)} message(s) read in {ctx.mailbox}",
+    )
 
 
 def cmd_star(args):
     ctx = Ctx(args, "star")
     done = modify(ctx, [args.msg_id], add=["STARRED"], action="star")
-    return out(args, {"ok": True, "messages": done, "dry_run": ctx.dry},
-               f"{'would star' if ctx.dry else 'starred'} {args.msg_id} in {ctx.mailbox}")
+    return out(
+        args,
+        {"ok": True, "messages": done, "dry_run": ctx.dry},
+        f"{'would star' if ctx.dry else 'starred'} {args.msg_id} in {ctx.mailbox}",
+    )
 
 
 def cmd_triaged(args):
@@ -871,11 +1051,15 @@ def cmd_triaged(args):
         for mid in done:
             db.mark_triaged(ctx.conn, ctx.mailbox, ctx.slug, mid)
         db.set_watermark(ctx.conn, ctx.mailbox, ctx.slug, _history_id(ctx))
-    return out(args, {"ok": True, "label": name, "messages": done, "dry_run": ctx.dry},
-               f"{'would mark' if ctx.dry else 'marked'} {len(done)} message(s) {name}")
+    return out(
+        args,
+        {"ok": True, "label": name, "messages": done, "dry_run": ctx.dry},
+        f"{'would mark' if ctx.dry else 'marked'} {len(done)} message(s) {name}",
+    )
 
 
 # ---------------------------------------------------------------- rules
+
 
 def rule_set(ctx):
     return rl.load(RULES_FILE, ctx.mailbox, access.bot_rules_file(ctx.mailbox))
@@ -884,8 +1068,7 @@ def rule_set(ctx):
 def with_thread_state(ctx, msgs):
     """Fill in last_reply_by, but only when a rule actually needs it."""
     for m in msgs:
-        m["last_reply_by"] = gm.thread_last_reply_by(
-            [ctx.normalize(x) for x in ctx.gmail.thread(m["thread_id"])])
+        m["last_reply_by"] = gm.thread_last_reply_by([ctx.normalize(x) for x in ctx.gmail.thread(m["thread_id"])])
     return msgs
 
 
@@ -910,9 +1093,10 @@ def judge_line(judged):
         return ""
     if judged.get("skipped"):
         return f"decision rules skipped ({', '.join(judged['sets'])}): no decision model available to this process"
-    return "judged with " + ", ".join(f"{s['label']} over {s['count']} message(s)"
-                                      + (f", {s['errors']} failed" if s["errors"] else "")
-                                      for s in judged.values())
+    return "judged with " + ", ".join(
+        f"{s['label']} over {s['count']} message(s)" + (f", {s['errors']} failed" if s["errors"] else "")
+        for s in judged.values()
+    )
 
 
 def apply_plan(ctx, msg, plan):
@@ -939,10 +1123,8 @@ def apply_plan(ctx, msg, plan):
         remember_message(ctx, msg)
     for hit in plan["hits"]:
         if not ctx.dry:
-            db.record_rule_hit(ctx.conn, ctx.mailbox, ctx.slug, msg["id"], hit["rule"],
-                               hit["actions"])
-        ctx.audit("rule", msg["id"], {"rule": hit["rule"], "actions": hit["actions"],
-                                      "subject": msg["subject"][:120]})
+            db.record_rule_hit(ctx.conn, ctx.mailbox, ctx.slug, msg["id"], hit["rule"], hit["actions"])
+        ctx.audit("rule", msg["id"], {"rule": hit["rule"], "actions": hit["actions"], "subject": msg["subject"][:120]})
 
 
 def rules_run_one(ctx, args):
@@ -961,15 +1143,28 @@ def rules_run_one(ctx, args):
         apply_plan(ctx, m, plan)
         for hit in plan["hits"]:
             counts[hit["rule"]] = counts.get(hit["rule"], 0) + 1
-        lines.append({"id": m["id"], "from": m["from"], "subject": m["subject"],
-                      "mailbox": ctx.mailbox,
-                      "rules": [h["rule"] for h in plan["hits"]], "labels": plan["labels"],
-                      "archive": plan["archive"], "mark_read": plan["mark_read"],
-                      "star": plan["star"], "never_archive": plan["never_archive"],
-                      "blocked": plan["blocked"], "stopped_by": plan["stopped_by"],
-                      "unsubscribe": plan.get("unsubscribe_result")})
-    body = [f"# Rules for {ctx.mailbox}" + (" (dry run, nothing changed)" if ctx.dry else ""), "",
-            f"{len(msgs)} message(s) since {args.since or '24h'}, {len(lines)} touched"]
+        lines.append(
+            {
+                "id": m["id"],
+                "from": m["from"],
+                "subject": m["subject"],
+                "mailbox": ctx.mailbox,
+                "rules": [h["rule"] for h in plan["hits"]],
+                "labels": plan["labels"],
+                "archive": plan["archive"],
+                "mark_read": plan["mark_read"],
+                "star": plan["star"],
+                "never_archive": plan["never_archive"],
+                "blocked": plan["blocked"],
+                "stopped_by": plan["stopped_by"],
+                "unsubscribe": plan.get("unsubscribe_result"),
+            }
+        )
+    body = [
+        f"# Rules for {ctx.mailbox}" + (" (dry run, nothing changed)" if ctx.dry else ""),
+        "",
+        f"{len(msgs)} message(s) since {args.since or '24h'}, {len(lines)} touched",
+    ]
     if judged:
         body.append(judge_line(judged))
     body += ["", f"{'rule':<40} messages"]
@@ -979,18 +1174,31 @@ def rules_run_one(ctx, args):
         body.append("(no rule fired)")
     body.append("")
     for ln in lines:
-        acts = ", ".join(filter(None, [
-            "label " + "+".join(ln["labels"]) if ln["labels"] else "",
-            "archive" if ln["archive"] else "",
-            "mark-read" if ln["mark_read"] else "",
-            "star" if ln["star"] else "",
-            "never_archive" if ln["never_archive"] else ""]))
+        acts = ", ".join(
+            filter(
+                None,
+                [
+                    "label " + "+".join(ln["labels"]) if ln["labels"] else "",
+                    "archive" if ln["archive"] else "",
+                    "mark-read" if ln["mark_read"] else "",
+                    "star" if ln["star"] else "",
+                    "never_archive" if ln["never_archive"] else "",
+                ],
+            )
+        )
         body.append(f"- {ln['id']} {ln['from']}: {ln['subject'][:60]}")
         body.append(f"    {', '.join(ln['rules'])} -> {acts or 'nothing'}")
         for b in ln["blocked"]:
             body.append(f"    blocked: {b['rule']} wanted {b['action']} ({b['reason']})")
-    payload = {"ok": True, "mailbox": ctx.mailbox, "dry_run": ctx.dry,
-               "scanned": len(msgs), "counts": counts, "messages": lines, "judge": judged}
+    payload = {
+        "ok": True,
+        "mailbox": ctx.mailbox,
+        "dry_run": ctx.dry,
+        "scanned": len(msgs),
+        "counts": counts,
+        "messages": lines,
+        "judge": judged,
+    }
     return payload, "\n".join(body) + "\n"
 
 
@@ -1008,9 +1216,18 @@ def cmd_rules_run(args):
         scanned += payload.get("scanned") or 0
         for rid, n in (payload.get("counts") or {}).items():
             counts[rid] = counts.get(rid, 0) + n
-    return out(args, {"ok": True, "all_mailboxes": True, "dry_run": bool(getattr(args, "dry_run", False)),
-                      "scanned": scanned, "counts": counts, "mailboxes": payloads},
-               "\n".join(texts) + "\n")
+    return out(
+        args,
+        {
+            "ok": True,
+            "all_mailboxes": True,
+            "dry_run": bool(getattr(args, "dry_run", False)),
+            "scanned": scanned,
+            "counts": counts,
+            "mailboxes": payloads,
+        },
+        "\n".join(texts) + "\n",
+    )
 
 
 def cmd_rules_explain(args):
@@ -1022,21 +1239,30 @@ def cmd_rules_explain(args):
     with_judgments(ctx, rules, [msg])
     detail = rl.explain(rules, msg)
     plan = rl.apply(rules, msg)
-    body = [f"# {args.msg_id} in {ctx.mailbox}", "",
-            f"from: {msg['from']}", f"subject: {msg['subject']}",
-            f"unsubscribe: {'yes' if msg['unsubscribe'] else 'no'}",
-            f"internal: {msg['is_internal']}", ""]
+    body = [
+        f"# {args.msg_id} in {ctx.mailbox}",
+        "",
+        f"from: {msg['from']}",
+        f"subject: {msg['subject']}",
+        f"unsubscribe: {'yes' if msg['unsubscribe'] else 'no'}",
+        f"internal: {msg['is_internal']}",
+        "",
+    ]
     for d in detail:
         body.append(f"{'FIRES ' if d['fired'] else '     '} {d['rule']}")
         for w in d["why"]:
             body.append(f"        {w}")
         if d["fired"]:
             body.append(f"        do: {json.dumps(d['do'], sort_keys=True)}")
-    body += ["", "outcome: " + json.dumps(
-        {k: plan[k] for k in ("labels", "archive", "mark_read", "star", "never_archive",
-                              "stopped_by")}, sort_keys=True)]
-    return out(args, {"ok": True, "id": args.msg_id, "rules": detail, "outcome": plan},
-               "\n".join(body) + "\n")
+    body += [
+        "",
+        "outcome: "
+        + json.dumps(
+            {k: plan[k] for k in ("labels", "archive", "mark_read", "star", "never_archive", "stopped_by")},
+            sort_keys=True,
+        ),
+    ]
+    return out(args, {"ok": True, "id": args.msg_id, "rules": detail, "outcome": plan}, "\n".join(body) + "\n")
 
 
 def cmd_rules_test(args):
@@ -1056,25 +1282,32 @@ def cmd_rules_test(args):
         msg.setdefault("last_reply_by", case.get("last_reply_by", ""))
         if case.get("last_reply_by"):
             msg["last_reply_by"] = case["last_reply_by"]
-        if case.get("judgments"):             # what the judge said, recorded with the fixture; offline
+        if case.get("judgments"):  # what the judge said, recorded with the fixture; offline
             msg["judgments"] = case["judgments"]
-        plan = rl.apply(rl.load(args.rules or RULES_FILE, mailbox,
-                                None if args.rules else access.bot_rules_file(mailbox)), msg)
-        got = {"labels": sorted(plan["labels"]), "archive": plan["archive"],
-               "mark_read": plan["mark_read"], "star": plan["star"],
-               "never_archive": plan["never_archive"],
-               "rules": [h["rule"] for h in plan["hits"]]}
+        plan = rl.apply(
+            rl.load(args.rules or RULES_FILE, mailbox, None if args.rules else access.bot_rules_file(mailbox)), msg
+        )
+        got = {
+            "labels": sorted(plan["labels"]),
+            "archive": plan["archive"],
+            "mark_read": plan["mark_read"],
+            "star": plan["star"],
+            "never_archive": plan["never_archive"],
+            "rules": [h["rule"] for h in plan["hits"]],
+        }
         expect = case.get("expect") or {}
 
-        def norm(v):                     # lists (labels, rules) compare as sets; order is a rules-file test
+        def norm(v):  # lists (labels, rules) compare as sets; order is a rules-file test
             return sorted(v) if isinstance(v, list) else v
-        diff = {k: {"want": norm(v), "got": got.get(k)}
-                for k, v in expect.items() if norm(v) != norm(got.get(k))}
+
+        diff = {k: {"want": norm(v), "got": got.get(k)} for k, v in expect.items() if norm(v) != norm(got.get(k))}
         bad += 1 if diff else 0
         results.append({"fixture": f.name, "ok": not diff, "got": got, "diff": diff})
-    body = [f"{'PASS' if r['ok'] else 'FAIL'}  {r['fixture']}"
-            + ("" if r["ok"] else "  " + json.dumps(r["diff"], sort_keys=True))
-            for r in results]
+    body = [
+        f"{'PASS' if r['ok'] else 'FAIL'}  {r['fixture']}"
+        + ("" if r["ok"] else "  " + json.dumps(r["diff"], sort_keys=True))
+        for r in results
+    ]
     body.append(f"\n{len(results) - bad}/{len(results)} fixtures match")
     out(args, {"ok": bad == 0, "results": results}, "\n".join(body) + "\n")
     return 1 if bad else 0
@@ -1083,19 +1316,28 @@ def cmd_rules_test(args):
 # ---------------------------------------------------------------- rules backtest (a read)
 
 CONFLICT_LABELS = (lb.NEEDS_OWNER, lb.DRAFTED, lb.handled("owner"))
-MACHINE_LOCAL_PARTS = ("noreply", "no-reply", "no_reply", "donotreply", "do-not-reply",
-                       "notifications", "notification", "mailer-daemon", "postmaster")
-BACKTEST_SAMPLES = 5                    # sample subjects per rule
-BACKTEST_LISTED = 40                    # subjects per diff bucket in md; json carries them all
+MACHINE_LOCAL_PARTS = (
+    "noreply",
+    "no-reply",
+    "no_reply",
+    "donotreply",
+    "do-not-reply",
+    "notifications",
+    "notification",
+    "mailer-daemon",
+    "postmaster",
+)
+BACKTEST_SAMPLES = 5  # sample subjects per rule
+BACKTEST_LISTED = 40  # subjects per diff bucket in md; json carries them all
 BUCKETS = (
-    ("newly_archived", "newly archived",
-     lambda cur, cand: not cur["archive"] and cand["archive"]),
-    ("no_longer_archived", "no longer archived",
-     lambda cur, cand: cur["archive"] and not cand["archive"]),
-    ("newly_protected", "newly protected",
-     lambda cur, cand: not cur["never_archive"] and cand["never_archive"]),
-    ("no_longer_protected", "no longer protected",
-     lambda cur, cand: cur["never_archive"] and not cand["never_archive"]),
+    ("newly_archived", "newly archived", lambda cur, cand: not cur["archive"] and cand["archive"]),
+    ("no_longer_archived", "no longer archived", lambda cur, cand: cur["archive"] and not cand["archive"]),
+    ("newly_protected", "newly protected", lambda cur, cand: not cur["never_archive"] and cand["never_archive"]),
+    (
+        "no_longer_protected",
+        "no longer protected",
+        lambda cur, cand: cur["never_archive"] and not cand["never_archive"],
+    ),
 )
 LISTED_BUCKETS = ("newly_archived", "no_longer_protected")
 
@@ -1111,21 +1353,30 @@ def human_internal_sender(addr):
 
 def outcome(plan):
     """The slice of a rule plan the backtest keeps per message: no body, no why-lines."""
-    return {"archive": bool(plan["archive"]), "never_archive": bool(plan["never_archive"]),
-            "unsubscribe": bool(plan["unsubscribe"]), "labels": list(plan["labels"]),
-            "hits": [{"rule": h["rule"], "actions": h["actions"]} for h in plan["hits"]]}
+    return {
+        "archive": bool(plan["archive"]),
+        "never_archive": bool(plan["never_archive"]),
+        "unsubscribe": bool(plan["unsubscribe"]),
+        "labels": list(plan["labels"]),
+        "hits": [{"rule": h["rule"], "actions": h["actions"]} for h in plan["hits"]],
+    }
 
 
 def line_of(row):
-    return {"id": row["id"], "thread_id": row["thread_id"], "from": row["from"],
-            "subject": gm.clip(row["subject"] or "(no subject)", 80)}
+    return {
+        "id": row["id"],
+        "thread_id": row["thread_id"],
+        "from": row["from"],
+        "subject": gm.clip(row["subject"] or "(no subject)", 80),
+    }
 
 
 def rule_stats(rules, rows, key):
     """Per rule, in file order: how often it fired and what those hits did."""
+
     def blank(rid):
-        return {"rule": rid, "hits": 0, "archive": 0, "protect": 0, "unsubscribe": 0,
-                "blocked": 0, "samples": []}
+        return {"rule": rid, "hits": 0, "archive": 0, "protect": 0, "unsubscribe": 0, "blocked": 0, "samples": []}
+
     stats = {}
     for r in rules:
         stats.setdefault(r["id"], blank(r["id"]))
@@ -1193,12 +1444,14 @@ def cmd_rules_backtest(args):
     sets = sorted(set(rl.uses_judge(current)) | set(rl.uses_judge(candidate) if candidate is not None else []))
     engine = jd.engine() if sets else None
     if sets and engine is None:
-        raise Failure(f"the rules name a decision set ({', '.join(sets)}) and no decision model is available here.",
-                      jd.unavailable_hint())
+        raise Failure(
+            f"the rules name a decision set ({', '.join(sets)}) and no decision model is available here.",
+            jd.unavailable_hint(),
+        )
     now, last_reply, rows, skipped, judged = now_utc(), {}, [], [], {}
-    for start in range(0, len(ids), jd.PARALLEL):    # judged a few at a time, bodies dropped after
+    for start in range(0, len(ids), jd.PARALLEL):  # judged a few at a time, bodies dropped after
         batch = []
-        for i in ids[start:start + jd.PARALLEL]:
+        for i in ids[start : start + jd.PARALLEL]:
             # a replay over thousands of messages must not die on one Gmail refusal (a thread in
             # spam or trash answers 400): skip it, count it, say so in the report
             try:
@@ -1210,36 +1463,42 @@ def cmd_rules_backtest(args):
                 tid = m["thread_id"]
                 if tid not in last_reply:
                     try:
-                        last_reply[tid] = gm.thread_last_reply_by(
-                            [ctx.normalize(x) for x in ctx.gmail.thread(tid)])
+                        last_reply[tid] = gm.thread_last_reply_by([ctx.normalize(x) for x in ctx.gmail.thread(tid)])
                     except Failure:
                         last_reply[tid] = ""
                 m["last_reply_by"] = last_reply[tid]
             batch.append(m)
         if sets and batch:
             for sid, stat in jd.judge_sets(batch, sets, engine, ctx.mailbox, ctx.conn).items():
-                total = judged.setdefault(sid, {"label": stat["label"], "count": 0, "errors": 0,
-                                                "cached": 0})
+                total = judged.setdefault(sid, {"label": stat["label"], "count": 0, "errors": 0, "cached": 0})
                 total["count"] += stat["count"]
                 total["errors"] += stat["errors"]
                 total["cached"] += stat["cached"]
         for m in batch:
-            row = {"id": m["id"], "thread_id": m["thread_id"], "from": m["from"],
-                   "subject": m["subject"], "labels": list(m["labels"]),
-                   "in_inbox": "INBOX" in m["labels"], "current": outcome(rl.apply(current, m, now))}
+            row = {
+                "id": m["id"],
+                "thread_id": m["thread_id"],
+                "from": m["from"],
+                "subject": m["subject"],
+                "labels": list(m["labels"]),
+                "in_inbox": "INBOX" in m["labels"],
+                "current": outcome(rl.apply(current, m, now)),
+            }
             if candidate is not None:
                 row["candidate"] = outcome(rl.apply(candidate, m, now))
-            rows.append(row)                            # the body goes with m, here
+            rows.append(row)  # the body goes with m, here
     key = "candidate" if candidate is not None else "current"
 
     def tally(k):
         archived = sum(1 for r in rows if r[k]["archive"])
-        return {"archived": archived,
-                "protected": sum(1 for r in rows if r[k]["never_archive"]),
-                "unsubscribed": sum(1 for r in rows if r[k]["unsubscribe"]),
-                "reach_model": len(rows) - archived,
-                "reach_model_in_inbox": sum(1 for r in rows
-                                            if r["in_inbox"] and not r[k]["archive"])}
+        return {
+            "archived": archived,
+            "protected": sum(1 for r in rows if r[k]["never_archive"]),
+            "unsubscribed": sum(1 for r in rows if r[k]["unsubscribe"]),
+            "reach_model": len(rows) - archived,
+            "reach_model_in_inbox": sum(1 for r in rows if r["in_inbox"] and not r[k]["archive"]),
+        }
+
     summary = {"current": tally("current")}
     if candidate is not None:
         summary["candidate"] = tally("candidate")
@@ -1247,45 +1506,82 @@ def cmd_rules_backtest(args):
     buckets = diff_buckets(rows) if candidate is not None else None
     conflicts = find_conflicts(ctx, rows, key)
     rules_file = str(args.rules) if args.rules else str(RULES_FILE)
-    ctx.audit("backtest", ctx.mailbox,                  # counts only: no subject, no id
-              {"since": args.since, "window_start": floor.isoformat(), "query": q,
-               "limit": limit, "messages": len(rows), "skipped": len(skipped),
-               "baseline": str(args.baseline or ""),
-               "candidate": rules_file if candidate is not None else "",
-               "summary": summary, "judge": judged or None,
-               "diff": {k: len(v) for k, v in buckets.items()} if buckets is not None else None,
-               "conflicts": len(conflicts)})
+    ctx.audit(
+        "backtest",
+        ctx.mailbox,  # counts only: no subject, no id
+        {
+            "since": args.since,
+            "window_start": floor.isoformat(),
+            "query": q,
+            "limit": limit,
+            "messages": len(rows),
+            "skipped": len(skipped),
+            "baseline": str(args.baseline or ""),
+            "candidate": rules_file if candidate is not None else "",
+            "summary": summary,
+            "judge": judged or None,
+            "diff": {k: len(v) for k, v in buckets.items()} if buckets is not None else None,
+            "conflicts": len(conflicts),
+        },
+    )
 
-    payload = {"ok": True, "mailbox": ctx.mailbox, "employee": ctx.slug, "since": args.since,
-               "window_start": floor.isoformat(), "query": q, "limit": limit,
-               "messages": len(rows), "skipped": skipped, "rules_file": rules_file,
-               "baseline": str(args.baseline or ""), "judge": judged or None,
-               "reported": key, "summary": summary, "rules": stats,
-               "diff": ({k: {"count": len(v), "messages": v} for k, v in buckets.items()}
-                        if buckets is not None else None),
-               "conflicts": conflicts, "outcomes": rows}
+    payload = {
+        "ok": True,
+        "mailbox": ctx.mailbox,
+        "employee": ctx.slug,
+        "since": args.since,
+        "window_start": floor.isoformat(),
+        "query": q,
+        "limit": limit,
+        "messages": len(rows),
+        "skipped": skipped,
+        "rules_file": rules_file,
+        "baseline": str(args.baseline or ""),
+        "judge": judged or None,
+        "reported": key,
+        "summary": summary,
+        "rules": stats,
+        "diff": ({k: {"count": len(v), "messages": v} for k, v in buckets.items()} if buckets is not None else None),
+        "conflicts": conflicts,
+        "outcomes": rows,
+    }
     return out(args, payload, render_backtest(payload, stats, buckets, conflicts))
 
 
 def render_backtest(payload, stats, buckets, conflicts):
     n, key, summary = payload["messages"], payload["reported"], payload["summary"]
     against = payload.get("baseline") or "the registry"
-    which = ("candidate " + payload["rules_file"] + " against " + against
-             if key == "candidate" else "registry " + payload["rules_file"])
-    body = [f"# Rules backtest for {payload['mailbox']} (a read: nothing changed)", "",
-            f"window: since {payload['since']} ({payload['window_start'][:16]}), "
-            f"{n} message(s) of all mail, not only the inbox (limit {payload['limit']})"
-            + (f"; {len(payload['skipped'])} skipped (Gmail refused them)" if payload.get("skipped") else ""),
-            f"rules: {which}",
-            "", f"## Per rule ({key})", "",
-            f"{'rule':<40} {'hits':>5} {'archive':>8} {'protect':>8} {'unsub':>6} {'blocked':>8}"]
+    which = (
+        "candidate " + payload["rules_file"] + " against " + against
+        if key == "candidate"
+        else "registry " + payload["rules_file"]
+    )
+    body = [
+        f"# Rules backtest for {payload['mailbox']} (a read: nothing changed)",
+        "",
+        f"window: since {payload['since']} ({payload['window_start'][:16]}), "
+        f"{n} message(s) of all mail, not only the inbox (limit {payload['limit']})"
+        + (f"; {len(payload['skipped'])} skipped (Gmail refused them)" if payload.get("skipped") else ""),
+        f"rules: {which}",
+        "",
+        f"## Per rule ({key})",
+        "",
+        f"{'rule':<40} {'hits':>5} {'archive':>8} {'protect':>8} {'unsub':>6} {'blocked':>8}",
+    ]
     if payload.get("judge"):
-        body.insert(4, "decisions: " + "; ".join(
-            f"{sid} {stat['count']} judged, {stat['cached']} cached, {stat['errors']} errors"
-            for sid, stat in payload["judge"].items()))
+        body.insert(
+            4,
+            "decisions: "
+            + "; ".join(
+                f"{sid} {stat['count']} judged, {stat['cached']} cached, {stat['errors']} errors"
+                for sid, stat in payload["judge"].items()
+            ),
+        )
     for s in stats:
-        body.append(f"{s['rule']:<40} {s['hits']:>5} {s['archive']:>8} {s['protect']:>8} "
-                    f"{s['unsubscribe']:>6} {s['blocked']:>8}")
+        body.append(
+            f"{s['rule']:<40} {s['hits']:>5} {s['archive']:>8} {s['protect']:>8} "
+            f"{s['unsubscribe']:>6} {s['blocked']:>8}"
+        )
         body += [f"    - {subj}" for subj in s["samples"]]
     if not stats:
         body.append("(no rules for this mailbox)")
@@ -1296,67 +1592,83 @@ def render_backtest(payload, stats, buckets, conflicts):
             if k not in LISTED_BUCKETS or not buckets[k]:
                 continue
             body += ["", f"### {label} ({len(buckets[k])})"]
-            body += [f"- {x['id']} {x['from']}: {x['subject']}"
-                     for x in buckets[k][:BACKTEST_LISTED]]
+            body += [f"- {x['id']} {x['from']}: {x['subject']}" for x in buckets[k][:BACKTEST_LISTED]]
             if len(buckets[k]) > BACKTEST_LISTED:
-                body.append(f"- ... and {len(buckets[k]) - BACKTEST_LISTED} more "
-                            "(--format json lists them all)")
+                body.append(f"- ... and {len(buckets[k]) - BACKTEST_LISTED} more (--format json lists them all)")
     body += ["", f"## Conflicts ({len(conflicts)})", ""]
     if conflicts:
         body.append(f"Messages the {key} rules would archive that a human still owns:")
         for c in conflicts:
             body.append(f"- {c['id']} {c['from']}: {c['subject']}")
-            body.append(f"    would archive ({', '.join(c['rules']) or '?'}); "
-                        + "; ".join(c["why"]))
+            body.append(f"    would archive ({', '.join(c['rules']) or '?'}); " + "; ".join(c["why"]))
     else:
         body.append("none")
     body += ["", "## Would reach the model", ""]
     for k in ("current", "candidate"):
         if k in summary:
             t = summary[k]
-            body.append(f"{k}: {t['reach_model']} of {n} not archived by the rules "
-                        f"(of which {t['reach_model_in_inbox']} in the inbox now); "
-                        f"{t['archived']} archived, {t['protected']} protected, "
-                        f"{t['unsubscribed']} unsubscribed")
+            body.append(
+                f"{k}: {t['reach_model']} of {n} not archived by the rules "
+                f"(of which {t['reach_model_in_inbox']} in the inbox now); "
+                f"{t['archived']} archived, {t['protected']} protected, "
+                f"{t['unsubscribed']} unsubscribed"
+            )
     return "\n".join(body) + "\n"
 
 
 # ---------------------------------------------------------------- writing (stage 2)
 
-REVIEW_RULES = (
-    "forbidden phrases from docs/company.md",
-    "URLs: acme.example hosts only, no calendly, no presigned links, the employee's required CTA",
-    "placeholders, secret-shaped strings, internal paths and Issue numbers",
-    "subject and body length, exclamation marks, a signature, one external recipient",
-    "times offered: at least two, chronological, future, weekdays, business hours, named zone",
-    "no confirmation without an invite",
-)
-
 
 def body_of(path):
     p = Path(path)
     if not p.exists():
-        raise Failure(f"there is no body file at {p}",
-                      "Write the message to a file first: --body-file <path>.")
+        raise Failure(f"there is no body file at {p}", "Write the message to a file first: --body-file <path>.")
     text = p.read_text(errors="replace").strip()
     if not text:
         raise Refused(f"{p} is empty; there is nothing to draft.")
     return text
 
 
-MAX_ATTACH_BYTES = gm.MAX_ATTACHMENT_BYTES   # Gmail's own limit, for all of a message's files
+MAX_ATTACH_BYTES = gm.MAX_ATTACHMENT_BYTES  # Gmail's own limit, for all of a message's files
 
 
 # Names and folders that usually hold keys, passwords or tokens. A file matching one is never
-# attached, even from the bot's own folder: the reviewer sees only a file's name and size, so the
+# attached, even from the bot's own folder: Tico's reviewer sees only a file's name and size, so the
 # name is the one thing the connector can judge. Matched case-insensitively against every part of
 # the path below the workspace; an entry ending in "/" is a folder anywhere on that path.
 SECRET_FILES = (
-    ".env", ".env.*", "*.env", ".envrc", "*.pem", "*.key", "*.p12", "*.pfx", "*.jks", "*.keystore",
-    "id_rsa*", "id_dsa*", "id_ecdsa*", "id_ed25519*", ".netrc", "_netrc", ".npmrc", ".pypirc",
-    ".pgpass", ".git-credentials", "credentials*", "*secret*", "*token*",
-    "secrets/", "private keys/", "private_keys/", "private-keys/", ".ssh/", ".aws/", ".gnupg/",
-    ".config/gh/", ".git/",
+    ".env",
+    ".env.*",
+    "*.env",
+    ".envrc",
+    "*.pem",
+    "*.key",
+    "*.p12",
+    "*.pfx",
+    "*.jks",
+    "*.keystore",
+    "id_rsa*",
+    "id_dsa*",
+    "id_ecdsa*",
+    "id_ed25519*",
+    ".netrc",
+    "_netrc",
+    ".npmrc",
+    ".pypirc",
+    ".pgpass",
+    ".git-credentials",
+    "credentials*",
+    "*secret*",
+    "*token*",
+    "secrets/",
+    "private keys/",
+    "private_keys/",
+    "private-keys/",
+    ".ssh/",
+    ".aws/",
+    ".gnupg/",
+    ".config/gh/",
+    ".git/",
 )
 
 
@@ -1383,34 +1695,32 @@ def _attach_path(path, root):
     """The real path of one `--attach` file, refused unless it is a regular file inside `root`
     and not a secret-looking one. A relative path is read from `root`."""
     text = str(path or "")
-    hint = (f"Attach only files from this bot's own folder ({root}); copy what you mean to send "
-            "there first.")
+    hint = f"Attach only files from this bot's own folder ({root}); copy what you mean to send there first."
     if not text or "\0" in text:
         raise Refused("--attach must name a file.", hint)
     given = Path(text).expanduser()
     if any(part == ".." for part in given.parts):
         raise Refused(f"--attach may not contain '..' path traversal: {text}.", hint)
-    target = (given if given.is_absolute() else root / given).resolve()   # follows every symlink
+    target = (given if given.is_absolute() else root / given).resolve()  # follows every symlink
     try:
         rel = target.relative_to(root)
     except ValueError:
-        raise Refused(f"{text} is outside this bot's folder ({target}); attachments come only "
-                      "from there.", hint)
+        raise Refused(f"{text} is outside this bot's folder ({target}); attachments come only from there.", hint)
     no_send = [Path(auth.key_path()).expanduser(), DB_PATH.parent, Path(access.PROJECTS) / "secrets"]
     for place in no_send:
         place = place.resolve()
         if target == place or place in target.parents:
-            raise Refused(f"{text} is in Tico's own data or secrets ({place}); it is never attached.",
-                          hint)
+            raise Refused(f"{text} is in Tico's own data or secrets ({place}); it is never attached.", hint)
     hit = _secret_match([p.lower() for p in rel.parts]) or _secret_match([given.name.lower()])
     if hit:
-        raise Refused(f"{text} looks like a key, password or token file (matches {hit!r}); "
-                      "it is never attached.",
-                      "Send the document itself, not credentials. If the name only looks like one, "
-                      "rename the copy you attach.")
+        raise Refused(
+            f"{text} looks like a key, password or token file (matches {hit!r}); it is never attached.",
+            "Send the document itself, not credentials. If the name only looks like one, rename the copy you attach.",
+        )
     if not target.is_file():
-        raise Refused(f"there is no file to attach at {target}.",
-                      "Pass the path of a file in this bot's folder: --attach <path>.")
+        raise Refused(
+            f"there is no file to attach at {target}.", "Pass the path of a file in this bot's folder: --attach <path>."
+        )
     return target
 
 
@@ -1421,50 +1731,42 @@ def attachments_of(paths, root):
     if not paths:
         return []
     if root is None:
-        raise Refused("this employee has no folder of its own to attach files from.",
-                      "Attachments come only from the bot's own folder under the projects "
-                      "directory. Attach the file in Gmail instead.")
+        raise Refused(
+            "this employee has no folder of its own to attach files from.",
+            "Attachments come only from the bot's own folder under the projects "
+            "directory. Attach the file in Gmail instead.",
+        )
     targets = [_attach_path(path, root) for path in paths]
     total = 0
     for target in targets:
         total += os.stat(target).st_size
         if total > MAX_ATTACH_BYTES:
-            raise Refused(f"the attachments come to more than {MAX_ATTACH_BYTES // (1024 * 1024)} MB, "
-                          "Gmail's limit for one message.",
-                          "Attach fewer or smaller files, or put the big one on the task and link it.")
+            raise Refused(
+                f"the attachments come to more than {MAX_ATTACH_BYTES // (1024 * 1024)} MB, "
+                "Gmail's limit for one message.",
+                "Attach fewer or smaller files, or put the big one on the task and link it.",
+            )
     found, total = [], 0
     for target in targets:
-        with open(target, "rb") as f:                   # read no more than the limit allows
+        with open(target, "rb") as f:  # read no more than the limit allows
             data = f.read(MAX_ATTACH_BYTES - total + 1)
         total += len(data)
-        if total > MAX_ATTACH_BYTES:                    # the file grew after it was sized
-            raise Refused(f"the attachments come to more than {MAX_ATTACH_BYTES // (1024 * 1024)} MB, "
-                          "Gmail's limit for one message.",
-                          "Attach fewer or smaller files, or put the big one on the task and link it.")
+        if total > MAX_ATTACH_BYTES:  # the file grew after it was sized
+            raise Refused(
+                f"the attachments come to more than {MAX_ATTACH_BYTES // (1024 * 1024)} MB, "
+                "Gmail's limit for one message.",
+                "Attach fewer or smaller files, or put the big one on the task and link it.",
+            )
         kind = mimetypes.guess_type(target.name)[0] or "application/octet-stream"
-        found.append({"name": gm.safe_filename(target.name), "type": kind, "size": len(data),
-                      "sha256": hashlib.sha256(data).hexdigest(), "data": data})
-    return found
-
-
-def draft_files(ctx, draft):
-    """[{name, type, size, sha256}] of the files in a Gmail draft as it stands, hashed from the bytes
-    Gmail holds, so a send is checked against what would actually go out."""
-    message = (draft or {}).get("message") or {}
-    found, total = [], 0
-    for item in gm.attachment_refs(message.get("payload") or {}):
-        if item["inline"]:
-            encoded, declared = item["_data"], item["size"]
-        elif item["attachment_id"]:
-            fetched = ctx.gmail.get_attachment(message.get("id", ""), item["attachment_id"]) or {}
-            encoded, declared = fetched.get("data"), item["size"]
-        else:
-            raise Failure(f"draft attachment {item['name']} has neither data nor a Gmail attachment id.",
-                          "Open the draft in Gmail and attach the file again.")
-        data = gm.attachment_bytes(encoded, declared, limit=MAX_ATTACH_BYTES - total)
-        total += len(data)
-        found.append({"name": item["name"], "type": item["type"], "size": len(data),
-                      "sha256": hashlib.sha256(data).hexdigest()})
+        found.append(
+            {
+                "name": gm.safe_filename(target.name),
+                "type": kind,
+                "size": len(data),
+                "sha256": hashlib.sha256(data).hexdigest(),
+                "data": data,
+            }
+        )
     return found
 
 
@@ -1485,6 +1787,7 @@ def _default_task_attach(task_id, name, data, key):
         return ""
     import base64, tempfile
     from clients.tico import Client
+
     api = Client(url, token)
     path = f"tasks/{task_id}/files"
     if api.features().get("task_files_multipart"):
@@ -1492,9 +1795,8 @@ def _default_task_attach(task_id, name, data, key):
             upload = Path(tmp) / "upload"
             upload.write_bytes(data)
             result = api.post_multipart(path, {"file": upload}, {"name": name}, key=key)
-    elif len(data) <= 10_000_000:                       # an older server takes JSON bodies up to 10 MB
-        result = api.post(path, {"name": name, "content_base64": base64.b64encode(data).decode()},
-                          key=key)
+    elif len(data) <= 10_000_000:  # an older server takes JSON bodies up to 10 MB
+        result = api.post(path, {"name": name, "content_base64": base64.b64encode(data).decode()}, key=key)
     else:
         return ""
     return str((result or {}).get("file_id") or "")
@@ -1506,7 +1808,7 @@ TASK_ATTACH = _default_task_attach
 def attach_to_task(ctx, task_id, draft_id, attachments):
     """Put each `--attach` file on the draft's task so the approver can open it. Returns
     {sha256: file id} for the files that went up; a missing task or a failed upload leaves the
-    draft as it is and the approval request without links."""
+    draft as it is and the optional approval request without links."""
     if not task_id or not draft_id or ctx.dry:
         return {}
     ids = {}
@@ -1514,9 +1816,8 @@ def attach_to_task(ctx, task_id, draft_id, attachments):
         key = f"mail-draft-attach:{task_id}:{draft_id}:{a['sha256']}"
         try:
             fid = str(TASK_ATTACH(task_id, a["name"], a["data"], key) or "")
-        except Exception as exc:                        # the approval check never depends on this
-            ctx.audit("task-attach", task_id, {"name": a["name"], "ok": False,
-                                              "error": str(exc)[:200]})
+        except Exception as exc:  # the approval check never depends on this
+            ctx.audit("task-attach", task_id, {"name": a["name"], "ok": False, "error": str(exc)[:200]})
             continue
         if fid:
             ids[a["sha256"]] = fid
@@ -1525,50 +1826,67 @@ def attach_to_task(ctx, task_id, draft_id, attachments):
 
 
 def approval_request(ctx, draft_id, to, cc, subject, body, files, file_ids=None, task_id=""):
-    """The Tico send approval a human decides for a draft with files: the existing `send` payload
-    plus this draft's id and each file's name, size and sha256, which the send checks again.
-    `file_ids` ({sha256: Tico file id}) adds a `file_id` to the files that are on the task, so the
-    approval card can open them; the send never compares it."""
+    """A draft summary and command that enters the frozen send queue; metadata alone never requests approval."""
     file_ids = file_ids or {}
-    payload = {"to": list(to), "cc": list(cc), "subject": subject,
-               "body_sha256": hashlib.sha256((body or "").encode()).hexdigest(),
-               "mailbox": ctx.mailbox, "draft": draft_id,
-               "attachments": [{"name": a["name"], "size": a["size"], "sha256": a["sha256"],
-                                **({"file_id": file_ids[a["sha256"]]} if a["sha256"] in file_ids
-                                   else {})}
-                               for a in files]}
-    task = f" --task {task_id}" if task_id else ""
-    command = ("hub approval request --kind send --payload "
-               + shlex.quote(json.dumps(payload, sort_keys=True)) + task)
-    lines = [f"Send from {ctx.mailbox} to {', '.join(to)}" + (f", cc {', '.join(cc)}" if cc else ""),
-             f"Subject: {subject}", f"Draft: {draft_id or '(dry run: no draft yet)'}"]
-    lines += [f"Attach: {a['name']} ({a['size']} bytes, sha256 {a['sha256'][:12]})"
-              + (f", on task {task_id} as file {file_ids[a['sha256']]}" if a["sha256"] in file_ids else "")
-              for a in files]
+    payload = {
+        "to": list(to),
+        "cc": list(cc),
+        "subject": subject,
+        "body_sha256": hashlib.sha256((body or "").encode()).hexdigest(),
+        "mailbox": ctx.mailbox,
+        "draft": draft_id,
+        "attachments": [
+            {
+                "name": a["name"],
+                "size": a["size"],
+                "sha256": a["sha256"],
+                **({"file_id": file_ids[a["sha256"]]} if a["sha256"] in file_ids else {}),
+            }
+            for a in files
+        ],
+    }
+    command = (
+        "mail send --as "
+        + shlex.quote(ctx.slug)
+        + " --for "
+        + shlex.quote(ctx.mailbox)
+        + " --draft "
+        + shlex.quote(draft_id)
+    )
+    lines = [
+        f"Send from {ctx.mailbox} to {', '.join(to)}" + (f", cc {', '.join(cc)}" if cc else ""),
+        f"Subject: {subject}",
+        f"Draft: {draft_id or '(dry run: no draft yet)'}",
+    ]
+    lines += [
+        f"Attach: {a['name']} ({a['size']} bytes, sha256 {a['sha256'][:12]})"
+        + (f", on task {task_id} as file {file_ids[a['sha256']]}" if a["sha256"] in file_ids else "")
+        for a in files
+    ]
     return {"kind": "send", "payload": payload, "command": command, "text": "\n".join(lines)}
 
 
 def attachment_meta(atts):
-    """What the audit, the payload and the reviewer see of each file: never its bytes."""
-    return [{k: a.get(k) for k in ("name", "type", "size", "sha256") if a.get(k) is not None}
-            for a in atts or []]
+    """What the audit and the payload see of each file: never its bytes."""
+    return [{k: a.get(k) for k in ("name", "type", "size", "sha256") if a.get(k) is not None} for a in atts or []]
 
 
 def thread_context(ctx, thread_id):
     """(messages, in-reply-to, references, subject, participants) for a reply."""
     raw = ctx.gmail.thread(thread_id)
     if not raw:
-        raise Refused(f"there is no thread {thread_id} in {ctx.mailbox}.",
-                      "Take the thread id from `mail inbox` or `mail thread`.")
+        raise Refused(
+            f"there is no thread {thread_id} in {ctx.mailbox}.",
+            "Take the thread id from `mail inbox` or `mail thread`.",
+        )
     msgs = sorted((ctx.normalize(m) for m in raw), key=lambda m: m["epoch"])
     mid, refs, subject, people = compose.thread_headers(msgs)
     return msgs, mid, refs, subject, people
 
 
 def thread_text(msgs, limit=6000):
-    """The incoming conversation as plain text, for the reviewer."""
-    blocks = [f"From: {m['from']}   Date: {m['date']}\nSubject: {m['subject']}\n\n{m['body']}"
-              for m in msgs or []]
+    """The incoming conversation as plain text, for the judge's draft gate."""
+    blocks = [f"From: {m['from']}   Date: {m['date']}\nSubject: {m['subject']}\n\n{m['body']}" for m in msgs or []]
     return "\n\n----\n\n".join(blocks)[:limit]
 
 
@@ -1577,61 +1895,76 @@ def busy_window(ctx, days=60):
     return ctx.calendar.busy(now, now + timedelta(days=days))
 
 
-def run_review(ctx, body, subject, incoming="", attachments=()):
-    """The reviewer sees what the employee is *for*: its Role, plus its standing allowance.
-
-    Without the allowance an approved standing offer reads as a fresh commitment, and every
-    cold message fails. With it, the reviewer judges the draft against the permission the
-    employee actually has, and anything past that edge is still a commitment.
-    """
-    purpose = rv.purpose_of(ctx.slug)
-    if ctx.slug == access.OWNER:
-        purpose = ("The owner, the founder, using the mail tool by hand from their own "
-                   "mailboxes. What they write is their own decision; judge only accuracy and tone.")
-    try:
-        allowance = pl.allowance_for(ctx.policy, ctx.slug, ctx.mailbox)
-    except Failure:                                     # a broken policy file: draft has already
-        allowance = None                                # refused, but review must not crash
-    if allowance and allowance.get("purpose"):
-        purpose = (purpose + "\n\nStanding allowance (registry/mail-policy.yaml): "
-                   + allowance["purpose"]).strip()
-    if attachments:                                     # the reviewer reads the text; it is told the files
-        body = (body + "\n\n[Attached files: "
-                + "; ".join(f"{a['name']} ({a.get('type') or '?'}, {a.get('size') or 0} bytes)"
-                            for a in attachments) + "]")
-    return rv.review(body, subject, incoming, purpose=purpose,
-                     company=rv.company_context(), rules=REVIEW_RULES)
-
-
 def lint_line(res):
     return "; ".join(f"{x['id']} {x['message']}" for x in res["errors"])
 
 
-def label_thread(ctx, name, msgs, fallback_ids=()):
+def label_thread(ctx, name, msgs, fallback_ids=(), part_of=None):
+    """`part_of` is the draft or send this marker records (Gmail.marking): the company's box for that write holds it."""
     ids = [m["id"] for m in msgs or []] or [i for i in fallback_ids if i]
     if ids:
-        modify(ctx, ids, add=[name], action="label-add", detail={"label": name})
+        if part_of and not ctx.dry:
+            with ctx.gmail.marking(part_of):
+                modify(ctx, ids, add=[name], action="label-add", detail={"label": name})
+        else:
+            modify(ctx, ids, add=[name], action="label-add", detail={"label": name})
     return ids
 
 
-def make_draft(ctx, to, subject, body, reply_to="", cc=(), slot=None,
-               check_calendar=False, minutes=cal.DEFAULT_MINUTES, approval=None, attachments=()):
-    """Policy -> lint -> reviewer -> the Gmail draft. Raises Refused when a gate says no.
+def lint_draft(
+    ctx,
+    body,
+    subject,
+    to,
+    cc,
+    thread_id="",
+    participants=None,
+    busy=None,
+    check_calendar=False,
+    slot=None,
+    minutes=cal.DEFAULT_MINUTES,
+):
+    """The lint on a draft, with what this run knows: the team's own domains, the mailbox's own name as the
+    signature. Writing feedback for the bot; Tico lints the queued send again and decides there."""
+    return ln.run(
+        body,
+        subject=subject,
+        to=to,
+        cc=cc,
+        slug=ctx.slug,
+        reply_to=thread_id,
+        thread_participants=participants,
+        internal_domains=tuple(ctx.internal_domains),
+        signature_names=pl.signature_names(ctx.mailbox) if ctx.mailbox else None,
+        busy=busy,
+        check_calendar=check_calendar,
+        slot=slot,
+        minutes=minutes,
+    )
 
-    `approval` is `--approval-issue`: a GitHub Issue number, a Tico send approval id, or
-    the owner's Tico message telling this employee to send. A full yes (matching Issue, approved
-    send payload, or owner instruction) allows external Cc and skips lint L056. The send half
-    checks the same id again.
 
-    Returns (payload, state). `state` carries the thread and the verdict so `reply` and
-    `schedule` can go straight on to the send half without doing the work twice.
+def make_draft(
+    ctx,
+    to,
+    subject,
+    body,
+    reply_to="",
+    cc=(),
+    slot=None,
+    check_calendar=False,
+    minutes=cal.DEFAULT_MINUTES,
+    attachments=(),
+):
+    """Lint -> the Gmail draft. Raises Refused when the lint finds an error. Who may receive it, and whether it is
+    sent at all, is Tico's to decide when the draft is queued (attempt_send).
+
+    Returns (payload, state). `state` carries the thread so `reply` and `schedule` can go straight on to the send
+    half without doing the work twice.
     """
-    policy = ctx.policy
     msgs, in_reply_to, references, participants = [], "", "", None
     thread_id = str(reply_to or "").strip()
     if thread_id:
-        msgs, in_reply_to, references, thread_subject, participants = thread_context(ctx,
-                                                                                    thread_id)
+        msgs, in_reply_to, references, thread_subject, participants = thread_context(ctx, thread_id)
         subject = subject or thread_subject
         if not to:
             to = [msgs[-1]["from"]] if msgs else []
@@ -1639,167 +1972,154 @@ def make_draft(ctx, to, subject, body, reply_to="", cc=(), slot=None,
     cc = [str(a).strip().lower() for a in (cc or []) if str(a).strip()]
     if not to:
         raise Refused("no recipient.", "Pass --to, or --reply-to a thread that has one.")
-    outside = pl.externals(policy, cc)
-    appr = (pl.approval_check(approval, pl.externals(policy, to), outside, thread_id,
-                              slug=ctx.slug, body=body) if approval else None)
-    approved = bool(appr and appr["full"])
-    if outside and not approved:
-        raise Refused(f"Cc outside {', '.join(policy['internal_domains'])} is not allowed "
-                      f"({', '.join(outside)})."
-                      + (f" {appr['detail']}." if appr else ""),
-                      "Cc colleagues only. An external person on the message is a recipient, "
-                      "and the policy allows one of those. The exception is --approval-issue: "
-                      "a GitHub Issue that names every address, a Tico send approval, or "
-                      "The owner's Tico message telling this employee to send.")
-    pl.check_draft(policy, ctx.slug, ctx.mailbox, to, cc, attachments=len(attachments or ()),
-                   is_reply=bool(thread_id))
     files = attachment_meta(attachments)
 
-    allowance = pl.allowance_for(policy, ctx.slug, ctx.mailbox)
     busy = busy_window(ctx) if check_calendar else None
-    res = ln.run(body, subject=subject, to=to, cc=cc, slug=ctx.slug, reply_to=thread_id,
-                 allowance=allowance, thread_participants=participants,
-                 internal_domains=policy["internal_domains"],
-                 forbidden_phrases=policy["forbidden_phrases"],
-                 signature_names=pl.signature_names(policy, ctx.mailbox), busy=busy,
-                 check_calendar=check_calendar, slot=slot, minutes=minutes,
-                 approved_externals=approved, forwarding=pl.is_forward(policy, ctx.slug, to))
+    res = lint_draft(ctx, body, subject, to, cc, thread_id, participants, busy, check_calendar, slot, minutes)
     target = thread_id or ",".join(to)
-    ctx.audit("lint", target, {"ok": res.ok, "errors": [x["id"] for x in res["errors"]],
-                               "warnings": [x["id"] for x in res["warnings"]]})
+    ctx.audit(
+        "lint",
+        target,
+        {"ok": res.ok, "errors": [x["id"] for x in res["errors"]], "warnings": [x["id"] for x in res["warnings"]]},
+    )
     if not res.ok:
         raise Refused("the lint refused this draft: " + lint_line(res), res["errors"][0]["fix"])
 
-    # The judge's gate, when this process has one: advisory, recorded, printed; the reviewer decides.
+    # The judge's gate, when this process has one: advisory, recorded, printed; Tico decides the send.
     judge = jd.engine()
-    gate = (jd.draft_gate(judge, body, subject, thread_text(msgs), ctx.mailbox, ctx.slug)
-            if judge is not None else None)
+    gate = jd.draft_gate(judge, body, subject, thread_text(msgs), ctx.mailbox, ctx.slug) if judge is not None else None
     if gate is not None:
-        ctx.audit("gate", target, {"set": gate["set"], "available": gate["available"],
-                                   "ok": gate["ok"], "flags": gate["flags"],
-                                   "probabilities": gate["probabilities"], "error": gate.get("error")})
-    verdict = run_review(ctx, body, subject, thread_text(msgs), files)
-    review_id = db.record_review(ctx.conn, ctx.slug, ctx.mailbox, target, verdict)
-    ctx.audit("review", target, {"backend": verdict.get("backend"), "ok": verdict.get("ok"),
-                                 "available": verdict.get("available"),
-                                 "attachments": [a["name"] for a in files],
-                                 "commitments": verdict.get("commitments"),
-                                 "claims_not_in_thread": verdict.get("claims_not_in_thread"),
-                                 "problems": verdict.get("problems")})
-    # A reviewer "no" does not drop the work: the draft is still written, but it is the owner's to
-    # send, so it carries hub/needs-owner and the JSON says why (docs/mail-service.md, guardrails).
-    review_no = bool(verdict.get("available") and not verdict.get("ok"))
-    review_why = "; ".join((verdict.get("commitments") or []) + (verdict.get("claims_not_in_thread")
-                                                                or []) + (verdict.get("problems")
-                                                                          or []) or ["no reason"])
+        ctx.audit(
+            "gate",
+            target,
+            {
+                "set": gate["set"],
+                "available": gate["available"],
+                "ok": gate["ok"],
+                "flags": gate["flags"],
+                "probabilities": gate["probabilities"],
+                "error": gate.get("error"),
+            },
+        )
 
     key = compose.draft_key(ctx.slug, ctx.issue, to, subject, body, files)
     row = db.get_draft(ctx.conn, key)
-    raw = compose.build(to, subject, body, from_addr=ctx.mailbox, cc=cc,
-                        in_reply_to=in_reply_to, references=references, attachments=attachments)
+    raw = compose.build(
+        to,
+        subject,
+        body,
+        from_addr=ctx.mailbox,
+        cc=cc,
+        in_reply_to=in_reply_to,
+        references=references,
+        attachments=attachments,
+    )
     draft_id = (row or {}).get("draft_id", "")
     message_id, created = "", not row
     if not ctx.dry:
-        d = (ctx.gmail.update_draft(draft_id, raw, thread_id) if draft_id
-             else ctx.gmail.create_draft(raw, thread_id))
+        d = ctx.gmail.update_draft(draft_id, raw, thread_id) if draft_id else ctx.gmail.create_draft(raw, thread_id)
         draft_id = d.get("id") or draft_id
         message_id = (d.get("message") or {}).get("id") or ""
         thread_id = (d.get("message") or {}).get("threadId") or thread_id
-        db.put_draft(ctx.conn, key, ctx.slug, ctx.mailbox, ctx.issue, to, subject,
-                     thread_id, draft_id, message_id, review_id)
-        label_thread(ctx, lb.DRAFTED, msgs, [message_id])
-        if review_no:
-            label_thread(ctx, lb.NEEDS_OWNER, msgs, [message_id])
-    ctx.audit("draft", draft_id or key[:12],
-              {"to": to, "cc": cc, "subject": subject, "thread": thread_id, "key": key,
-               "created": created, "reply": bool(reply_to), "chars": len(body),
-               "attachments": files, "review": verdict.get("backend"),
-               "review_ok": None if not verdict.get("available") else verdict.get("ok")})
-    # The files go on the draft's task before the request is printed, so the approver can open them.
+        db.put_draft(ctx.conn, key, ctx.slug, ctx.mailbox, ctx.issue, to, subject, thread_id, draft_id, message_id)
+        label_thread(ctx, lb.DRAFTED, msgs, [message_id], part_of="drafts")
+    ctx.audit(
+        "draft",
+        draft_id or key[:12],
+        {
+            "to": to,
+            "cc": cc,
+            "subject": subject,
+            "thread": thread_id,
+            "key": key,
+            "created": created,
+            "reply": bool(reply_to),
+            "chars": len(body),
+            "attachments": files,
+        },
+    )
+    # Keep the files on the task, with links in the optional send approval payload.
     task_id = draft_task(ctx) if files else ""
     file_ids = attach_to_task(ctx, task_id, draft_id, attachments) if files else {}
-    payload = {"ok": True, "employee": ctx.slug, "mailbox": ctx.mailbox, "issue": ctx.issue,
-               "draft": draft_id, "key": key, "thread": thread_id, "message": message_id,
-               "to": to, "cc": cc, "subject": subject, "reply_to": reply_to or "",
-               "attachments": files, "created": created, "updated": not created, "dry_run": ctx.dry,
-               "body_sha256": hashlib.sha256(body.encode()).hexdigest(),   # what a send approval names
-               "send_needs_approval": bool(files),     # check_send: an attached send needs a yes
-               "approval_request": (approval_request(ctx, draft_id, to, cc, subject, body, files,
-                                                     file_ids, task_id) if files else None),
-               "label": lb.DRAFTED if not review_no else f"{lb.DRAFTED}+{lb.NEEDS_OWNER}",
-               "needs_owner": review_no,
-               "why_needs_owner": review_why if review_no else "",
-               "lint": {"ok": res.ok, "findings": res["findings"], "summary": res["summary"]},
-               "review": ("unavailable" if not verdict.get("available")
-                          else ("ok" if verdict.get("ok") else "not ok")),
-               "review_detail": verdict, "gate": gate}
-    state = {"msgs": msgs, "verdict": verdict, "to": to, "cc": cc, "subject": subject,
-             "body": body, "thread_id": thread_id, "draft_id": draft_id, "lint": res,
-             "attachments": files}
+    payload = {
+        "ok": True,
+        "employee": ctx.slug,
+        "mailbox": ctx.mailbox,
+        "issue": ctx.issue,
+        "draft": draft_id,
+        "key": key,
+        "thread": thread_id,
+        "message": message_id,
+        "to": to,
+        "cc": cc,
+        "subject": subject,
+        "reply_to": reply_to or "",
+        "attachments": files,
+        "created": created,
+        "updated": not created,
+        "dry_run": ctx.dry,
+        "body_sha256": hashlib.sha256(body.encode()).hexdigest(),
+        "approval_request": (
+            approval_request(ctx, draft_id, to, cc, subject, body, files, file_ids, task_id) if files else None
+        ),
+        "label": lb.DRAFTED,
+        "lint": {"ok": res.ok, "findings": res["findings"], "summary": res["summary"]},
+        "gate": gate,
+    }
+    state = {
+        "msgs": msgs,
+        "to": to,
+        "cc": cc,
+        "subject": subject,
+        "body": body,
+        "thread_id": thread_id,
+        "draft_id": draft_id,
+        "lint": res,
+        "attachments": files,
+    }
     return payload, state
 
 
 def draft_text(p):
-    lines = [("would draft" if p["dry_run"] else
-              ("updated draft" if p["updated"] else "created draft"))
-             + f" in {p['mailbox']} as {p['employee']}",
-             f"  to:      {', '.join(p['to'])}" + (f"   cc: {', '.join(p['cc'])}"
-                                                   if p["cc"] else ""),
-             f"  subject: {p['subject']}",
-             f"  thread:  {p['thread'] or '(new)'}",
-             *(["  attach:  " + ", ".join(f"{a['name']} ({a['size']} bytes)"
-                                          for a in p["attachments"])
-                + "; sending it needs the approval below"] if p.get("attachments") else []),
-             f"  draft:   {p['draft'] or '(not created: dry run)'}",
-             f"  key:     {p['key'][:16]}...",
-             f"  lint:    {p['lint']['summary']}",
-             f"  review:  {p['review']} ({p['review_detail'].get('backend', '?')})"]
+    lines = [
+        ("would draft" if p["dry_run"] else ("updated draft" if p["updated"] else "created draft"))
+        + f" in {p['mailbox']} as {p['employee']}",
+        f"  to:      {', '.join(p['to'])}" + (f"   cc: {', '.join(p['cc'])}" if p["cc"] else ""),
+        f"  subject: {p['subject']}",
+        f"  thread:  {p['thread'] or '(new)'}",
+        *(
+            ["  attach:  " + ", ".join(f"{a['name']} ({a['size']} bytes)" for a in p["attachments"])]
+            if p.get("attachments")
+            else []
+        ),
+        f"  draft:   {p['draft'] or '(not created: dry run)'}",
+        f"  key:     {p['key'][:16]}...",
+        f"  lint:    {p['lint']['summary']}",
+    ]
     if p.get("gate"):
         lines.append(jd.render_gate(p["gate"]))
     for x in p["lint"]["findings"]:
         lines.append(f"  {x['severity']} {x['id']}: {x['message']}")
-    if p["review"] == "unavailable":
-        lines.append("  the reviewer was unreachable: the draft stands, a send would be "
-                     "downgraded to a draft.")
     if not p["dry_run"]:
         lines.append(f"  labelled {p['label']}; the owner can see it in Gmail.")
-    if p.get("approval_request"):
-        req = p["approval_request"]
-        lines += ["", "  sending it needs this approval (a person decides it; then "
-                      "`mail send --draft ... --approval-issue <approval id>`):",
-                  *("    " + line for line in req["text"].splitlines()),
-                  "  request it with:", "    " + req["command"]]
     return "\n".join(lines) + "\n"
 
 
 def cmd_draft(args):
     ctx = Ctx(args, "draft")
-    if args.attach:                                     # the policy says no before any file is read
-        pl.check_attachments_allowed(ctx.policy, ctx.mailbox)
-    payload, _ = make_draft(ctx, args.to, args.subject, body_of(args.body_file),
-                            reply_to=args.reply_to, cc=args.cc or [],
-                            approval=args.approval_issue,
-                            attachments=attachments_of(args.attach, attach_root(ctx.slug)))
+    payload, _ = make_draft(
+        ctx,
+        args.to,
+        args.subject,
+        body_of(args.body_file),
+        reply_to=args.reply_to,
+        cc=args.cc or [],
+        attachments=attachments_of(args.attach, attach_root(ctx.slug)),
+    )
     return out(args, payload, draft_text(payload))
 
 
 # -- the send half -------------------------------------------------
-
-def fresh_verdict(conn, row, now=None):
-    """A stored verdict, if there is one and it is less than 24 hours old."""
-    if not row or not row.get("review_id"):
-        return None
-    rec = db.get_review(conn, row["review_id"])
-    if not rec:
-        return None
-    now = now or datetime.now(zone("UTC"))
-    try:
-        age = now - parse_since(rec["ts"], now=now, tz_name="UTC")
-    except Failure:                                     # pragma: no cover
-        return None
-    if age > timedelta(hours=REVIEW_FRESH_HOURS):
-        return None
-    return rec["verdict"]
 
 
 def send_result(ctx, payload):
@@ -1808,198 +2128,176 @@ def send_result(ctx, payload):
     return 0
 
 
-def attempt_send(ctx, draft_id, to, cc, subject, thread_id, msgs, verdict, approval=None,
-                 extra=None, attachments=(), body=None):
-    """The full send chain. Returns a payload; a policy problem is a downgrade, not an error.
-    Attachments ride the same chain: they need allow_attachments and a per-message approval
-    whoever the recipient is, are named in the audit, and lift nothing. `body` is the text the
-    draft carries; a Tico send approval covers only the text it names by sha256."""
+def no_send_verb(ctx):
+    """Why this run holds no `send` on its mailbox: an access matter (Tico's level, bot.yaml's `can:`), read before
+    anything is queued, so a bot that only drafts never puts a send in front of a person."""
+    return f"{ctx.slug} may {', '.join(ctx.verbs or ['nothing'])} on {ctx.mailbox}, not send"
+
+
+SEND_NOTES = {
+    "pending": "Queued in Tico; it goes out after the undo window unless someone cancels it.",
+    "waiting_approval": "A person must approve this send in Tico before it goes out.",
+    "sent": "Tico already sent this exact email.",
+}
+
+
+def attempt_send(ctx, draft_id, to, cc, subject, thread_id, msgs, approval="", extra=None, attachments=()):
+    """Queue the draft with Tico and report what Tico answered. Nothing here refuses a send: Tico decides it
+    (policy.py). A send Tico blocks is a downgrade, not an error - the draft stays, with Tico's reason.
+    `approval` is the id of the person's Tico approval or message this send relies on; Tico checks it."""
     names = [a["name"] for a in attachments or ()]
-    files = list(attachments or ())
-    base = {"ok": True, "employee": ctx.slug, "mailbox": ctx.mailbox, "issue": ctx.issue,
-            "draft": draft_id, "to": to, "cc": cc, "subject": subject, "thread": thread_id,
-            "attachments": names, "dry_run": ctx.dry}
+    base = {
+        "ok": True,
+        "employee": ctx.slug,
+        "mailbox": ctx.mailbox,
+        "issue": ctx.issue,
+        "draft": draft_id,
+        "to": to,
+        "cc": cc,
+        "subject": subject,
+        "thread": thread_id,
+        "attachments": names,
+        "dry_run": ctx.dry,
+    }
     base.update(extra or {})
-
-    def downgrade(reason, gate="", checks=None):
-        ctx.audit("send-downgraded", draft_id or thread_id,
-                  {"reason": reason, "gate": gate, "to": to, "attachments": names})
-        return dict(base, sent=False, downgraded="draft", reason=reason, gate=gate,
-                    checks=checks or [],
-                    note=f"the draft is still in {ctx.mailbox} Drafts; the owner can send it, or "
-                         "close the gate that refused it.")
-
-    # A per-message approval (the Issue names every address on this message) is the owner's own
-    # yes to these exact words and recipients. The second reviewer still runs and its verdict
-    # is recorded, but it advises rather than blocks: it does not get to overrule the owner.
-    appr = (pl.approval_check(approval, pl.externals(ctx.policy, to),
-                              pl.externals(ctx.policy, cc), thread_id,
-                              slug=ctx.slug, attachments=files or None, draft=draft_id, body=body)
-            if approval else None)
-    full = bool(appr and appr["full"])
-    review_note = ""
-    if not verdict.get("available"):
-        why = ("the second reviewer is unavailable: " + str(verdict.get("error", "unknown")))
-        if not full:
-            return downgrade(why + " (a draft may stand without it, a send may not)", "review")
-        review_note = why + "; sent anyway under " + appr["detail"]
-    elif not verdict.get("ok"):
-        why = ("the second reviewer refused the draft: "
-               + "; ".join((verdict.get("commitments") or [])
-                           + (verdict.get("claims_not_in_thread") or [])
-                           + (verdict.get("problems") or []) or ["no reason given"]))
-        if not full:
-            return downgrade(why, "review")
-        review_note = why + "; sent anyway under " + appr["detail"]
-    if review_note:
-        ctx.audit("review-advisory", draft_id or thread_id,
-                  {"reason": review_note, "approval": appr["issue"], "to": to, "cc": cc})
-        base["review_advisory"] = review_note
-
-    # The org rules that apply to this bot, checked by Tico before the send's own gates: held, it stays a draft and
-    # the bot is told the rule and whom to appeal to. A failed check lets it through, as every check failure does,
-    # logged and named in the answer.
-    check_id = str(uuid.uuid4())                        # the check's Idempotency-Key, and its miss's id if it fails
-    ruled = pl.rule_check(ctx.slug, to, cc, subject, body, key=check_id)
-    if ruled and not ruled.get("failed") and not ctx.dry:
-        # Tico answers again: the sends whose check it never answered are told to it now, forgotten once it took them.
-        db.drop_mail_check_misses(ctx.conn, pl.report_misses(ctx.slug, db.mail_check_misses(ctx.conn, ctx.slug)))
-    if ruled and ruled.get("failed"):
-        ctx.audit("rule-check-failed", draft_id or thread_id, {"reason": ruled["failed"], "to": to, "cc": cc})
-        base["rule_check"] = "unchecked: the org rule check failed (" + str(ruled["failed"]) + ")"
-    if ruled and ruled.get("outcome") == "held":
-        return downgrade((ruled.get("held") or {}).get("text") or "held by an org rule", "rules")
-    warning_line = ""
-    if ruled and ruled.get("outcome") == "warn":
-        base["rule_warning"] = (ruled.get("rule_warning") or {}).get("text") or ""
-        warning_line = str(ruled.get("warning_line") or "")
-
-    decision = pl.check_send(ctx.policy, ctx.slug, ctx.mailbox, to, cc,
-                             attachments=files, draft=draft_id, thread_id=thread_id,
-                             approval=approval, verbs=None, conn=ctx.conn, body=body,
-                             thread_senders=pl.inbound_senders(msgs, ctx.mailbox))
-    if not decision.allowed:
-        return downgrade(decision["reason"], decision["gate"], decision["checks"])
+    if "send" not in (ctx.verbs or []):
+        return dict(
+            base,
+            sent=False,
+            downgraded="draft",
+            reason=no_send_verb(ctx),
+            gate="verb",
+            note=f"the draft is still in {ctx.mailbox} Drafts; nothing was queued.",
+        )
     if ctx.dry:
-        return dict(base, sent=False, would_send=True, checks=decision["checks"],
-                    reason="", note="dry run: every gate passed, nothing was sent.")
+        return dict(base, sent=False, would_queue=True, reason="", note="dry run: nothing was queued.")
 
-    if warning_line and draft_id:
-        # A Warn rule: the warning line goes on the recipient's copy, written onto the draft just before it is sent.
-        ctx.gmail.update_draft(draft_id, compose.with_warning(ctx.gmail.get_draft_raw(draft_id), warning_line),
-                               thread_id)
-        ctx.audit("rule-warning", draft_id, {"to": to, "cc": cc})
-    key = compose.send_key(ctx.slug, ctx.issue, draft_id)
-    day = datetime.now(zone(DEFAULT_TZ)).strftime("%Y-%m-%d")
-    row, claimed = db.claim_send(ctx.conn, key, ctx.slug, ctx.mailbox, ctx.issue, to, subject,
-                                 thread_id, draft_id, day)
-    if not claimed:
-        ctx.audit("send-duplicate", draft_id, {"key": key, "message": row.get("message_id")})
-        return dict(base, sent=True, already_sent=True, message=row.get("message_id", ""),
-                    key=key, note="this exact send was already made; nothing was sent again.")
-    try:
-        res = ctx.gmail.send_draft(draft_id)
-    except Failure:
-        db.drop_send(ctx.conn, key)                     # never sent: let a retry try again
-        raise
-    message_id = res.get("id", "")
-    thread_id = res.get("threadId") or thread_id
-    # Out with no verdict: the check's id is kept with the finished send, for Tico to hear of once it answers again.
-    db.finish_send(ctx.conn, key, message_id, "sent",
-                   miss=(ctx.slug, check_id) if ruled and ruled.get("failed") else None)
-    handled = lb.handled(ctx.slug)
-    label_thread(ctx, handled, msgs, [message_id])
-    ctx.audit("send", message_id or draft_id,
-              {"to": to, "cc": cc, "subject": subject, "thread": thread_id, "key": key,
-               "draft": draft_id, "attachments": names, "review": verdict.get("backend")})
-    return dict(base, sent=True, message=message_id, thread=thread_id, key=key,
-                label=handled, checks=decision["checks"])
+    original = next((m for m in reversed(msgs or []) if m.get("from", "").lower() != ctx.mailbox.lower()), {})
+    queued = pl.queue_send(
+        ctx.mailbox,
+        ctx.gmail.get_draft_raw(draft_id),
+        thread_id,
+        original.get("id", ""),
+        approval or "",
+        draft_id=draft_id,
+    )
+    state = str(queued.get("state") or "")
+    decision = queued.get("decision") if isinstance(queued.get("decision"), dict) else {}
+    detail = str(queued.get("detail") or "")
+    answer = dict(
+        base,
+        sent=state == "sent",
+        queued=state in ("pending", "waiting_approval"),
+        send_id=queued.get("id", ""),
+        state=state,
+        send_after=queued.get("send_after"),
+        approval_id=queued.get("approval_id") or "",
+        detail=detail,
+        reasons=list(decision.get("reasons") or []),
+    )
+    if state == "blocked":
+        reason = detail or "Tico blocked this send"
+        ctx.audit(
+            "send-downgraded",
+            draft_id or thread_id,
+            {
+                "reason": reason,
+                "send_id": answer["send_id"],
+                "reasons": answer["reasons"],
+                "to": to,
+                "attachments": names,
+            },
+        )
+        return dict(
+            answer,
+            downgraded="draft",
+            reason=reason,
+            note=f"the draft is still in {ctx.mailbox} Drafts; Tico's sending policy blocked the send.",
+        )
+    if state in ("pending", "waiting_approval", "sent"):
+        ctx.conn.execute("INSERT OR REPLACE INTO queued_drafts VALUES(?,?,?)", (ctx.mailbox, draft_id, queued["id"]))
+        ctx.conn.commit()
+    ctx.audit(
+        "send-queued",
+        answer["send_id"],
+        {
+            "to": to,
+            "cc": cc,
+            "state": state,
+            "approval_id": answer["approval_id"],
+            "reasons": answer["reasons"],
+            "attachments": names,
+        },
+    )
+    return dict(answer, reason="", note=SEND_NOTES.get(state, detail or f"Tico answered {state or 'nothing'}."))
 
 
 def cmd_send(args):
     ctx = Ctx(args, "draft")
-    policy = ctx.policy
     draft = ctx.gmail.get_draft(args.draft)
     msg = ctx.normalize(draft.get("message") or {})
-    to, cc, subject, body = msg["to"], msg["cc"], msg["subject"], msg["body"]
-    thread_id = msg["thread_id"]
-    files = draft_files(ctx, draft)                     # hashed as they stand in Gmail now
-    sent_text = gm.body_text((draft.get("message") or {}).get("payload") or {})[0]   # and the text
+    to, cc, subject, thread_id = msg["to"], msg["cc"], msg["subject"], msg["thread_id"]
     if not to:
-        raise Refused(f"draft {args.draft} has no recipient.",
-                      "Draft it again with --to; a draft with no To: cannot be sent.")
-    pl.check_draft(policy, ctx.slug, ctx.mailbox, to, cc, attachments=len(files),
-                   is_reply=bool(thread_id))
+        raise Refused(
+            f"draft {args.draft} has no recipient.", "Draft it again with --to; a draft with no To: cannot be sent."
+        )
     msgs = []
     if thread_id:
         try:
-            msgs = [m for m in (ctx.normalize(x) for x in ctx.gmail.thread(thread_id))
-                    if m["id"] != msg["id"]]
+            msgs = [m for m in (ctx.normalize(x) for x in ctx.gmail.thread(thread_id)) if m["id"] != msg["id"]]
         except Failure:
             msgs = []
-    participants = compose.thread_headers(msgs)[3] + to if msgs else None
-
-    allowance = pl.allowance_for(policy, ctx.slug, ctx.mailbox)
-    appr = (pl.approval_check(args.approval_issue, pl.externals(policy, to),
-                              pl.externals(policy, cc), thread_id, slug=ctx.slug, body=sent_text)
-            if args.approval_issue else None)
-    res = ln.run(body, subject=subject, to=to, cc=cc, slug=ctx.slug,
-                 reply_to=thread_id if msgs else "", allowance=allowance,
-                 thread_participants=participants,
-                 internal_domains=policy["internal_domains"],
-                 forbidden_phrases=policy["forbidden_phrases"],
-                 signature_names=pl.signature_names(policy, ctx.mailbox), slot=args.slot,
-                 approved_externals=bool(appr and appr["full"]),
-                 forwarding=pl.is_forward(policy, ctx.slug, to))
-    ctx.audit("lint", args.draft, {"ok": res.ok, "errors": [x["id"] for x in res["errors"]],
-                                   "warnings": [x["id"] for x in res["warnings"]]})
-    if not res.ok:
-        ctx.audit("send-downgraded", args.draft, {"reason": "lint", "gate": "lint"})
-        return send_result(ctx, {
-            "ok": True, "sent": False, "downgraded": "draft", "gate": "lint",
-            "reason": "the lint refused the draft: " + lint_line(res),
-            "employee": ctx.slug, "mailbox": ctx.mailbox, "draft": args.draft, "to": to,
-            "subject": subject, "thread": thread_id, "dry_run": ctx.dry,
-            "lint": {"ok": False, "findings": res["findings"]}})
-
-    row = db.draft_by_gmail_id(ctx.conn, ctx.mailbox, args.draft)
-    # A draft with files is reviewed again as it stands: the files may have changed in Gmail
-    # since the stored verdict was given.
-    verdict = None if files else fresh_verdict(ctx.conn, row)
-    reused = verdict is not None
-    if verdict is None:
-        verdict = run_review(ctx, body, subject, thread_text(msgs), files)
-        db.record_review(ctx.conn, ctx.slug, ctx.mailbox, args.draft, verdict)
-        ctx.audit("review", args.draft,
-                  {"backend": verdict.get("backend"), "ok": verdict.get("ok"),
-                   "available": verdict.get("available"),
-                   "attachments": [a["name"] for a in files]})
-    payload = attempt_send(ctx, args.draft, to, cc, subject, thread_id, msgs, verdict,
-                           approval=args.approval_issue, attachments=files, body=sent_text,
-                           extra={"lint": {"ok": True, "findings": res["findings"]},
-                                  "review": ("ok" if verdict.get("ok") else
-                                             ("unavailable" if not verdict.get("available")
-                                              else "not ok")),
-                                  "review_reused": reused,
-                                  "review_backend": verdict.get("backend", "")})
-    return send_result(ctx, payload)
+    return send_result(
+        ctx,
+        attempt_send(
+            ctx,
+            args.draft,
+            to,
+            cc,
+            subject,
+            thread_id,
+            msgs,
+            approval=args.approval,
+            attachments=msg.get("attachments") or [],
+        ),
+    )
 
 
 def cmd_reply(args):
     ctx = Ctx(args, "draft")
-    payload, state = make_draft(ctx, args.to, None, body_of(args.body_file),
-                                reply_to=args.thread, cc=args.cc or [],
-                                approval=args.approval_issue)
-    sent = attempt_send(ctx, state["draft_id"], state["to"], state["cc"], state["subject"],
-                        state["thread_id"], state["msgs"], state["verdict"],
-                        approval=args.approval_issue, attachments=state["attachments"],
-                        body=state["body"])
+    payload, state = make_draft(ctx, args.to, None, body_of(args.body_file), reply_to=args.thread, cc=args.cc or [])
+    sent = attempt_send(
+        ctx,
+        state["draft_id"],
+        state["to"],
+        state["cc"],
+        state["subject"],
+        state["thread_id"],
+        state["msgs"],
+        approval=args.approval,
+        attachments=state["attachments"],
+    )
     payload = dict(payload, sent=sent.get("sent", False))
-    for k in ("downgraded", "reason", "gate", "message", "key", "already_sent", "would_send",
-              "note", "checks"):
+    for k in SEND_KEYS:
         if k in sent:
             payload[k] = sent[k]
     return send_result(ctx, payload)
+
+
+# What `reply` and `schedule` copy from the send half into their own answer.
+SEND_KEYS = (
+    "downgraded",
+    "reason",
+    "note",
+    "would_queue",
+    "queued",
+    "send_id",
+    "state",
+    "send_after",
+    "approval_id",
+    "detail",
+    "reasons",
+)
 
 
 def cmd_discard(args):
@@ -2009,17 +2307,30 @@ def cmd_discard(args):
     did = str(args.draft_id or "").strip()
     row = db.draft_by_gmail_id(ctx.conn, ctx.mailbox, did) if did else None
     if not row or row["employee"] != ctx.slug:
-        ctx.audit("discard-refused", did, {"reason": "not this employee's draft",
-                                           "made_by": (row or {}).get("employee", "")})
-        raise Refused(f"draft {did} in {ctx.mailbox} was not made by {ctx.slug}; "
-                      "only a draft this employee wrote with `mail draft` can be discarded.",
-                      "Leave it for the person who wrote it, or ask the owner to delete it in Gmail.")
+        ctx.audit(
+            "discard-refused", did, {"reason": "not this employee's draft", "made_by": (row or {}).get("employee", "")}
+        )
+        raise Refused(
+            f"draft {did} in {ctx.mailbox} was not made by {ctx.slug}; "
+            "only a draft this employee wrote with `mail draft` can be discarded.",
+            "Leave it for the person who wrote it, or ask the owner to delete it in Gmail.",
+        )
+    queued = ctx.conn.execute(
+        "SELECT send_id FROM queued_drafts WHERE mailbox=? AND draft_id=?", (ctx.mailbox, did)
+    ).fetchone()
+    if queued:
+        send = (pl.HUB_GET("email/sends/" + queued["send_id"]) or {}).get("send") or {}
+        if send.get("state") not in ("canceled", "failed", "blocked"):
+            raise Refused(
+                "This draft has a frozen email in Tico's send queue.",
+                "Cancel it first with `hub email cancel " + queued["send_id"] + "`.",
+            )
     if db.draft_was_sent(ctx.conn, ctx.mailbox, did):
         ctx.audit("discard-refused", did, {"reason": "already sent"})
         raise Refused(f"draft {did} was already sent; sent mail is never deleted.")
-    draft = ctx.gmail.get_draft(did)                    # notFound: gone already, a Failure
+    draft = ctx.gmail.get_draft(did)  # notFound: gone already, a Failure
     labels = set((draft.get("message") or {}).get("labelIds") or [])
-    if "SENT" in labels:                                # pragma: no cover - Gmail drafts carry DRAFT
+    if "SENT" in labels:  # pragma: no cover - Gmail drafts carry DRAFT
         ctx.audit("discard-refused", did, {"reason": "already sent"})
         raise Refused(f"draft {did} was already sent; sent mail is never deleted.")
     thread_id = row["thread_id"]
@@ -2027,25 +2338,38 @@ def cmd_discard(args):
         ctx.gmail.delete_draft(did)
         db.drop_draft(ctx.conn, ctx.mailbox, did)
         if thread_id and thread_id not in db.draft_thread_ids(ctx.conn, ctx.mailbox):
-            try:                                        # no hub draft left on the thread
+            try:  # no hub draft left on the thread
                 ids = [m["id"] for m in ctx.gmail.thread(thread_id) or []]
-                modify(ctx, ids, remove=[lb.DRAFTED], action="label-remove",
-                       detail={"label": lb.DRAFTED})
+                with ctx.gmail.marking("drafts"):
+                    modify(ctx, ids, remove=[lb.DRAFTED], action="label-remove", detail={"label": lb.DRAFTED})
             except (Failure, Refused):
                 pass
-    ctx.audit("discard", did, {"key": row["key"], "to": row["recipients"].split(","),
-                               "subject": row["subject"], "thread": thread_id})
-    return out(args, {"ok": True, "employee": ctx.slug, "mailbox": ctx.mailbox, "draft": did,
-                      "discarded": not ctx.dry, "thread": thread_id, "subject": row["subject"],
-                      "dry_run": ctx.dry},
-               f"{'would discard' if ctx.dry else 'discarded'} draft {did} in {ctx.mailbox} "
-               f"({row['subject']})")
+    ctx.audit(
+        "discard",
+        did,
+        {"key": row["key"], "to": row["recipients"].split(","), "subject": row["subject"], "thread": thread_id},
+    )
+    return out(
+        args,
+        {
+            "ok": True,
+            "employee": ctx.slug,
+            "mailbox": ctx.mailbox,
+            "draft": did,
+            "discarded": not ctx.dry,
+            "thread": thread_id,
+            "subject": row["subject"],
+            "dry_run": ctx.dry,
+        },
+        f"{'would discard' if ctx.dry else 'discarded'} draft {did} in {ctx.mailbox} ({row['subject']})",
+    )
 
 
 # -- the record ----------------------------------------------------
 
+
 def reconcile_sent(ctx, since, limit=200):
-    """The owner's own sends, so a bot's cooldown counts them (docs/mail-service.md, Execution)."""
+    """The owner's own sends, so the sent log shows them beside the bots' (docs/mail-service.md, Execution)."""
     floor = parse_since(since or "7d")
     ids = ctx.gmail.list_ids(f"in:sent after:{int(floor.timestamp())}", limit=limit)
     known = db.send_message_ids(ctx.conn, ctx.mailbox)
@@ -2056,13 +2380,23 @@ def reconcile_sent(ctx, since, limit=200):
         day = (m["date"] or "")[:10]
         for addr in m["to"] or []:
             key = compose.key("gmail-sent", ctx.mailbox, m["id"], addr)
-            row, claimed = db.claim_send(ctx.conn, key, "human", ctx.mailbox, "", [addr],
-                                         m["subject"], m["thread_id"], "", day, "gmail-sent",
-                                         when=stamp(parse_since(m["date"])) if m["date"] else None)
+            row, claimed = db.claim_send(
+                ctx.conn,
+                key,
+                "human",
+                ctx.mailbox,
+                "",
+                [addr],
+                m["subject"],
+                m["thread_id"],
+                "",
+                day,
+                "gmail-sent",
+                when=stamp(parse_since(m["date"])) if m["date"] else None,
+            )
             if claimed:
                 db.finish_send(ctx.conn, key, m["id"], "sent")
-                added.append({"message": m["id"], "to": addr, "subject": m["subject"],
-                              "date": m["date"]})
+                added.append({"message": m["id"], "to": addr, "subject": m["subject"], "date": m["date"]})
     if added:
         ctx.audit("reconcile", ctx.mailbox, {"added": len(added)})
     return added
@@ -2073,69 +2407,72 @@ def cmd_sent_log(args):
     added = reconcile_sent(ctx, args.since) if args.reconcile else []
     since = stamp(parse_since(args.since)) if args.since else None
     rows = db.send_rows(ctx.conn, employee=args.employee, mailbox=ctx.mailbox, since=since)
-    body = [f"# Sent from {ctx.mailbox}"
-            + (f" since {args.since}" if args.since else ""), ""]
+    body = [f"# Sent from {ctx.mailbox}" + (f" since {args.since}" if args.since else ""), ""]
     for r in rows:
-        body.append(f"{r['ts']}  {r['employee']:<12} {r['recipient']:<32} "
-                    f"{(r['subject'] or '')[:50]}  [{r['source']}/{r['status']}]")
+        body.append(
+            f"{r['ts']}  {r['employee']:<12} {r['recipient']:<32} "
+            f"{(r['subject'] or '')[:50]}  [{r['source']}/{r['status']}]"
+        )
     body.append("")
-    body.append(f"{len(rows)} send(s)"
-                + (f", {len(added)} newly reconciled from Gmail's Sent folder" if args.reconcile
-                   else "")
-                + ". Cooldowns count every row here, including the owner's own sends.")
-    return out(args, {"ok": True, "mailbox": ctx.mailbox, "count": len(rows), "sends": rows,
-                      "reconciled": added}, "\n".join(body) + "\n")
+    body.append(
+        f"{len(rows)} send(s)"
+        + (f", {len(added)} newly reconciled from Gmail's Sent folder" if args.reconcile else "")
+        + "."
+    )
+    return out(
+        args,
+        {"ok": True, "mailbox": ctx.mailbox, "count": len(rows), "sends": rows, "reconciled": added},
+        "\n".join(body) + "\n",
+    )
 
 
-# -- lint and review, standalone -----------------------------------
+# -- lint, standalone ---------------------------------------------
+
 
 def cmd_lint(args):
     ctx = Ctx(args, "read", soft=True)
-    policy = ctx.policy
     body = body_of(args.body_file)
     participants = None
     if args.reply_to and ctx.mailbox:
         participants = thread_context(ctx, args.reply_to)[4]
     if args.check_calendar and not ctx.mailbox:
-        raise Refused("--check-calendar needs a mailbox to read the calendars of.",
-                      "Pass --as <slug> for an employee that declares one, or --mailbox.")
+        raise Refused(
+            "--check-calendar needs a mailbox to read the calendars of.",
+            "Pass --as <slug> for an employee that declares one, or --mailbox.",
+        )
     busy = busy_window(ctx) if args.check_calendar else None
-    res = ln.run(body, subject=args.subject or "", to=args.to or [], slug=ctx.slug,
-                 reply_to=args.reply_to or "",
-                 allowance=pl.allowance_for(policy, ctx.slug, ctx.mailbox),
-                 thread_participants=participants,
-                 internal_domains=policy["internal_domains"],
-                 forbidden_phrases=policy["forbidden_phrases"],
-                 signature_names=pl.signature_names(policy, ctx.mailbox), busy=busy,
-                 check_calendar=bool(args.check_calendar), slot=args.slot,
-                 minutes=args.minutes)
-    ctx.audit("lint", args.body_file, {"ok": res.ok, "errors": [x["id"] for x in res["errors"]],
-                                       "warnings": [x["id"] for x in res["warnings"]]})
-    out(args, dict(res, employee=ctx.slug, mailbox=ctx.mailbox, body_file=args.body_file),
-        ln.render(res, f"Lint {args.body_file}"))
+    res = lint_draft(
+        ctx,
+        body,
+        args.subject or "",
+        args.to or [],
+        [],
+        args.reply_to or "",
+        participants,
+        busy,
+        bool(args.check_calendar),
+        args.slot,
+        args.minutes,
+    )
+    ctx.audit(
+        "lint",
+        args.body_file,
+        {"ok": res.ok, "errors": [x["id"] for x in res["errors"]], "warnings": [x["id"] for x in res["warnings"]]},
+    )
+    out(
+        args,
+        dict(res, employee=ctx.slug, mailbox=ctx.mailbox, body_file=args.body_file),
+        ln.render(res, f"Lint {args.body_file}"),
+    )
     return 0 if res.ok else 2
 
 
-def cmd_review(args):
-    ctx = Ctx(args, "read", soft=True)
-    body = body_of(args.body_file)
-    incoming = ""
-    msgs = []
-    if args.thread and ctx.mailbox:
-        msgs = thread_context(ctx, args.thread)[0]
-        incoming = thread_text(msgs)
-    verdict = run_review(ctx, body, args.subject or "", incoming)
-    db.record_review(ctx.conn, ctx.slug, ctx.mailbox or "", args.thread or args.body_file,
-                     verdict)
-    ctx.audit("review", args.thread or args.body_file,
-              {"backend": verdict.get("backend"), "ok": verdict.get("ok"),
-               "available": verdict.get("available")})
-    out(args, dict(verdict, employee=ctx.slug, thread=args.thread or ""),
-        rv.render(verdict, f"Review of {args.body_file}"))
-    return 0 if verdict.get("ok") else (1 if not verdict.get("available") else 2)
+MODE_NAMES = {"on_their_own": "On their own", "ask_first": "Ask first", "never": "Never"}
 
 
 def cmd_policy_show(args):
+    """What Tico's sending policy says for this bot (and inbox), as Tico answers it. The answer describes; it does
+    not decide - every send is still decided by Tico when it is queued."""
     slug = access.employee(args.as_slug)
     mailbox = args.mailbox
     if not mailbox:
@@ -2143,50 +2480,45 @@ def cmd_policy_show(args):
             mailbox, _ = access.resolve(slug, None, "read")
         except Refused:
             mailbox = ""
-    policy = pl.load(slug=slug)
-    d = pl.describe(policy, slug, mailbox)
-    manifest = access.load(slug)
-    d["scheduling_send"] = (pl.scheduling_enabled(policy, slug, mailbox)
-                            and manifest.get("scheduling_send") is True)
-    d["scheduling_scope"] = "template-only influencer and BD-confirmed scheduling; excludes legal and investors"
+    view = pl.sending_policy(slug, mailbox)
+    may = pl.company(slug)
+    d = {
+        "employee": slug,
+        "mailbox": mailbox or "",
+        "read": view is not None,
+        "policy": view,
+        "effective": (view or {}).get("effective") or {},
+        "company": may if isinstance(may, dict) else None,
+        "company_read": may != pl.UNREAD,
+    }
     if args.json:
         print(json.dumps(d, indent=2, default=str))
         return 0
-    lines = [f"policy for {slug}" + (f" as {mailbox}" if mailbox else ""), "",
-             f"  global send switch      {'on' if d['send_enabled'] else 'OFF (everything is a draft)'}",
-             f"  mailbox paused          {d['mailbox_paused']}",
-             f"  outbound_send           {d['outbound_send']} (general email; {d['mail_setting']})",
-             f"  forward_to              {', '.join(d['forward_to']) or '(none)'} (approved in Tico)",
-             f"  bot.yaml asks           outbound_send {d['bot_yaml_asks']['outbound_send']}, forward_to "
-             f"{', '.join(d['bot_yaml_asks']['forward_to']) or '(none)'} (a request; Tico's setting decides)",
-             f"  policy                  {d['policy_source']}",
-             f"  scheduling_send         {d['scheduling_send']} (mail scheduling only)",
-             f"  internal domains        {', '.join(d['internal_domains'])}",
-             f"  sends per day           {d['caps']['max_sends_per_day']}",
-             f"  per-recipient cooldown  {d['caps']['per_recipient_cooldown_days']} days",
-             f"  external recipients     {d['caps']['max_external_recipients']}",
-             f"  cc outside acme.example     {d['caps']['allow_cc_external']}",
-             f"  attachments             {d['caps']['allow_attachments']}"]
-    if d["allowance"]:
-        a = d["allowance"]
-        lines += ["", "  standing allowance", f"    purpose   {a['purpose']}",
-                  f"    from      {a['recipients'].get('path') or 'the list in the policy file'}",
-                  f"    table     {a['table']}",
-                  f"    caps      {json.dumps(a['caps'], sort_keys=True)}",
-                  f"    urls      {a['urls']['required_pattern'] or '(no required pattern)'}"]
+    eff = d["effective"]
+    lines = [f"sending policy for {slug}" + (f" as {mailbox}" if mailbox else ""), ""]
+    if view is None:
+        lines.append("  Tico did not answer; every send is still decided by Tico when it is queued.")
     else:
-        lines += ["", "  no standing allowance. With outbound_send on, a send to an internal address, to a forward_to "
-                      "target, or as a reply to the sender of the thread needs no approval; any other external "
-                      "send needs --approval-issue (a matching GitHub Issue, a Tico send approval, or the "
-                      "owner's message telling this employee to send)."]
+        lines.append(f"  mode           {MODE_NAMES.get(eff.get('mode'), eff.get('mode') or '?')}")
+        for key in sorted(k for k in eff if k not in ("mode", "sources")):
+            value = eff[key]
+            if isinstance(value, list) and all(isinstance(v, str) for v in value):
+                value = ", ".join(value) or "(none)"
+            if isinstance(value, (str, int, float, bool)) or value is None:
+                lines.append(f"  {key:<14} {value}")
+    if isinstance(may, dict):
+        lines.append("  company allows " + (", ".join(k.replace("_", " ") for k, v in may.items() if v) or "nothing"))
+    lines += ["", "  Change it in Tico: Settings > Bots > " + slug + " > Email sending."]
     print("\n".join(lines))
     return 0
 
 
 # ---------------------------------------------------------------- calendar
 
+
 def cmd_scheduling(args):
     from . import scheduling
+
     ctx = Ctx(args, "schedule")
     payload = scheduling.run(ctx, args)
     return out(args, payload, json.dumps(payload, indent=2))
@@ -2197,23 +2529,27 @@ def cmd_slots(args):
     tz = zone(DEFAULT_TZ)
     now = datetime.now(tz)
     start_after = parse_since(args.start_after) if args.start_after else now
-    if pl.scheduling_enabled(ctx.policy, ctx.slug, ctx.mailbox):
-        from . import scheduling
+    from . import scheduling
+
+    if scheduling.settings(ctx):
         minutes = int(scheduling.DURATION.total_seconds() // 60)
         if args.minutes != minutes:
             raise Refused(f"This mailbox's meetings are {minutes} minutes; use --minutes {minutes}.")
-        slots = scheduling.slots(ctx.calendar, n=args.n, days=args.days,
-                                 start_after=start_after, now=now)
+        slots = scheduling.slots(ctx.calendar, n=args.n, days=args.days, start_after=start_after, now=now)
         busy = []  # availability was checked within scheduling.slots
     else:
         busy = ctx.calendar.busy(start_after, start_after + timedelta(days=args.days + 1))
-        slots = cal.free_slots(busy, n=args.n, minutes=args.minutes, days=args.days,
-                               start_after=start_after, now=now)
-    ctx.audit("slots", ctx.mailbox, {"n": args.n, "minutes": args.minutes, "days": args.days,
-                                     "found": len(slots), "busy_spans": len(busy)})
-    return out(args, {"ok": True, "mailbox": ctx.mailbox, "minutes": args.minutes,
-                      "count": len(slots), "slots": cal.as_json(slots)},
-               cal.render(slots, ctx.mailbox))
+        slots = cal.free_slots(busy, n=args.n, minutes=args.minutes, days=args.days, start_after=start_after, now=now)
+    ctx.audit(
+        "slots",
+        ctx.mailbox,
+        {"n": args.n, "minutes": args.minutes, "days": args.days, "found": len(slots), "busy_spans": len(busy)},
+    )
+    return out(
+        args,
+        {"ok": True, "mailbox": ctx.mailbox, "minutes": args.minutes, "count": len(slots), "slots": cal.as_json(slots)},
+        cal.render(slots, ctx.mailbox),
+    )
 
 
 def cmd_upcoming(args):
@@ -2221,17 +2557,18 @@ def cmd_upcoming(args):
     ctx = Ctx(args, "calendar_read", mailbox=args.for_mailbox)
     now = datetime.now(zone("UTC"))
     include_private = bool(getattr(args, "include_private", False))
-    events = ctx.calendar.upcoming(now - timedelta(minutes=2),
-                                   now + timedelta(hours=max(1, min(args.hours, 168))),
-                                   include_private=include_private)
+    events = ctx.calendar.upcoming(
+        now - timedelta(minutes=2), now + timedelta(hours=max(1, min(args.hours, 168))), include_private=include_private
+    )
     # This endpoint is background-polled. It exposes no message body or event description, and
     # deliberately does not add one audit row per poll.
     body = [f"# Upcoming meetings on {ctx.mailbox}", ""]
     body += [f"{event['start']}  {event['title']}" for event in events]
     if not events:
         body.append("No upcoming meetings.")
-    return out(args, {"ok": True, "mailbox": ctx.mailbox, "count": len(events),
-                      "events": events}, "\n".join(body) + "\n")
+    return out(
+        args, {"ok": True, "mailbox": ctx.mailbox, "count": len(events), "events": events}, "\n".join(body) + "\n"
+    )
 
 
 def cmd_calendar_list(args):
@@ -2252,8 +2589,9 @@ def cmd_calendar_list(args):
     body += [f"{event['start']}  {event['title']}" for event in events]
     if not events:
         body.append("No events.")
-    return out(args, {"ok": True, "mailbox": ctx.mailbox, "count": len(events), "events": events},
-               "\n".join(body) + "\n")
+    return out(
+        args, {"ok": True, "mailbox": ctx.mailbox, "count": len(events), "events": events}, "\n".join(body) + "\n"
+    )
 
 
 def cmd_calendar_get(args):
@@ -2291,20 +2629,25 @@ def cmd_calendar_hold(args):
         raise Refused("--minutes must be between 1 and 1440.")
 
     attendees = []
-    for raw in (getattr(args, "attendee", None) or []):
+    for raw in getattr(args, "attendee", None) or []:
         addr = str(raw or "").strip().lower()
         if addr and addr != ctx.mailbox and addr not in attendees:
             attendees.append(addr)
     if os.environ.get("TICO_BLOCK_EXTERNAL_INVITES") == "1":
         from . import access
+
         company = set(access.roster_mailboxes())
         outside = [addr for addr in attendees if addr not in company]
         if outside:
-            raise Refused("calendar add only accepts company-roster attendees: " + ", ".join(outside),
-                          "External invitations are turned off (TICO_BLOCK_EXTERNAL_INVITES). For partner/influencer scheduling, use the approved scheduling workflow.")
+            raise Refused(
+                "calendar add only accepts company-roster attendees: " + ", ".join(outside),
+                "External invitations are turned off (TICO_BLOCK_EXTERNAL_INVITES). For partner/influencer scheduling, use the approved scheduling workflow.",
+            )
     if len(attendees) > 50:
         raise Refused("a calendar hold accepts at most 50 attendees.")
     attendees.sort()
+    if attendees:
+        pl.sending_preflight(ctx.mailbox)
 
     description = ""
     if getattr(args, "description_file", None):
@@ -2316,12 +2659,17 @@ def cmd_calendar_hold(args):
     if uid:
         event_id = "tico" + hashlib.sha256(str(uid).encode()).hexdigest()[:28]
     else:
-        key_material = json.dumps([ctx.slug, ctx.mailbox, start.isoformat(), end.isoformat(),
-                                   summary, attendees], separators=(",", ":"), ensure_ascii=False)
+        key_material = json.dumps(
+            [ctx.slug, ctx.mailbox, start.isoformat(), end.isoformat(), summary, attendees],
+            separators=(",", ":"),
+            ensure_ascii=False,
+        )
         event_id = "tico" + hashlib.sha256(key_material.encode()).hexdigest()[:28]
 
     # Fail-closed duplicate detection: query existing events in window WITH include_private=True
-    existing_events = ctx.calendar.upcoming(start - timedelta(minutes=5), end + timedelta(minutes=5), include_private=True)
+    existing_events = ctx.calendar.upcoming(
+        start - timedelta(minutes=5), end + timedelta(minutes=5), include_private=True
+    )
 
     for ev in existing_events:
         ev_id = str(ev.get("id") or ev.get("event_id") or "")
@@ -2330,43 +2678,87 @@ def cmd_calendar_hold(args):
         ev_title = str(ev.get("title") or ev.get("summary") or "").strip().lower()
         matches_id = bool(ev_id and ev_id == event_id)
         matches_uid = bool(uid and ev_uid and (ev_uid == str(uid).strip() or ev_uid.startswith(str(uid).strip())))
-        matches_slot = (ev_title == summary.lower() and (ev_start == start.isoformat() or (ev_start and start.isoformat().startswith(ev_start[:16]))))
+        matches_slot = ev_title == summary.lower() and (
+            ev_start == start.isoformat() or (ev_start and start.isoformat().startswith(ev_start[:16]))
+        )
         if matches_id or matches_uid or matches_slot:
             url = ev.get("htmlLink") or f"https://calendar.google.com/calendar/event?eid={ev_id}"
-            payload = {"ok": True, "mailbox": ctx.mailbox, "event": ev_id, "event_url": url,
-                       "summary": summary, "start": start.isoformat(), "end": end.isoformat(),
-                       "attendees": attendees, "duplicate": True, "dry_run": ctx.dry}
-            ctx.audit("calendar-hold-duplicate", ev_id, {"summary": summary, "start": start.isoformat(), "end": end.isoformat()})
+            payload = {
+                "ok": True,
+                "mailbox": ctx.mailbox,
+                "event": ev_id,
+                "event_url": url,
+                "summary": summary,
+                "start": start.isoformat(),
+                "end": end.isoformat(),
+                "attendees": attendees,
+                "duplicate": True,
+                "dry_run": ctx.dry,
+            }
+            if attendees and not ctx.dry:
+                raw = compose.build(attendees, summary, description or summary, from_addr=ctx.mailbox)
+                raw = compose.with_invitation(raw, {**ev, "id": ev_id}, ctx.mailbox, attendees, start, end, summary)
+                invitation = pl.queue_send(ctx.mailbox, raw)
+                payload.update(invitation_send_id=invitation["id"], invitation_state=invitation["state"])
+            ctx.audit(
+                "calendar-hold-duplicate",
+                ev_id,
+                {"summary": summary, "start": start.isoformat(), "end": end.isoformat()},
+            )
             return out(args, payload, f"existing event {summary} ({ev_id}) already on {ctx.mailbox}\n")
 
-    payload = {"ok": True, "mailbox": ctx.mailbox, "event": event_id,
-               "summary": summary, "start": start.isoformat(), "end": end.isoformat(),
-               "attendees": attendees, "dry_run": ctx.dry}
+    payload = {
+        "ok": True,
+        "mailbox": ctx.mailbox,
+        "event": event_id,
+        "summary": summary,
+        "start": start.isoformat(),
+        "end": end.isoformat(),
+        "attendees": attendees,
+        "dry_run": ctx.dry,
+    }
     if ctx.dry:
-        return out(args, payload, f"would hold {summary} on {ctx.mailbox} from {start.isoformat()} to {end.isoformat()}\n")
+        return out(
+            args, payload, f"would hold {summary} on {ctx.mailbox} from {start.isoformat()} to {end.isoformat()}\n"
+        )
 
     event = ctx.calendar.create_event(
-        start, end, summary, attendees=attendees,
+        start,
+        end,
+        summary,
+        attendees=attendees,
         description=description or f"Private hold placed by {ctx.slug} through Tico.",
-        send_updates="all" if attendees else "none", status="confirmed", event_id=event_id)
+        send_updates="all" if attendees else "none",
+        status="confirmed",
+        event_id=event_id,
+    )
 
     real_id = event.get("id") or event_id
     url = event.get("htmlLink") or f"https://calendar.google.com/calendar/event?eid={real_id}"
     payload["event"] = real_id
     payload["event_url"] = url
+    if attendees:
+        raw = compose.build(attendees, summary, description or summary, from_addr=ctx.mailbox)
+        raw = compose.with_invitation(raw, event, ctx.mailbox, attendees, start, end, summary)
+        invitation = pl.queue_send(ctx.mailbox, raw)
+        payload.update(invitation_send_id=invitation["id"], invitation_state=invitation["state"])
 
-    ctx.audit("event-create", real_id, {
-        "summary": summary, "start": start.isoformat(), "end": end.isoformat(),
-        "attendees": attendees, "hold": True
-    })
+    ctx.audit(
+        "event-create",
+        real_id,
+        {"summary": summary, "start": start.isoformat(), "end": end.isoformat(), "attendees": attendees, "hold": True},
+    )
     return out(args, payload, f"held {summary} on {ctx.mailbox}: {url}\n")
+
 
 cmd_calendar_add = cmd_calendar_hold
 
 
 def cmd_schedule(args):
+    """A silent calendar event and the confirmation that carries its invitation, both or neither: Tico queues the
+    confirmation, and an event whose confirmation Tico blocks or does not queue is deleted again."""
     ctx = Ctx(args, "draft")
-    policy = ctx.policy
+    pl.sending_preflight(ctx.mailbox)
     body = body_of(args.body_file)
     start = parse_since(args.slot)
     end = start + timedelta(minutes=args.minutes)
@@ -2374,45 +2766,81 @@ def cmd_schedule(args):
     attendee = (args.attendee or (msgs[-1]["from"] if msgs else "")).strip().lower()
     if not attendee:
         raise Refused("no attendee.", "Pass --attendee <address>.")
-    decision = pl.check_send(policy, ctx.slug, ctx.mailbox, [attendee], thread_id=args.thread,
-                             approval=args.approval_issue, conn=ctx.conn, body=body)
-    would = {"start": start.isoformat(), "end": end.isoformat(), "attendee": attendee,
-             "summary": args.summary or subject or "Intro call",
-             "mailbox": ctx.mailbox, "minutes": args.minutes}
+    would = {
+        "start": start.isoformat(),
+        "end": end.isoformat(),
+        "attendee": attendee,
+        "summary": args.summary or subject or "Intro call",
+        "mailbox": ctx.mailbox,
+        "minutes": args.minutes,
+    }
+    unbooked = (
+        "nothing was put on the calendar: the confirmation and the invite go together or not at all "
+        "(policies/shared-rules.md)."
+    )
 
-    if not decision.allowed or ctx.dry:
-        payload, state = make_draft(ctx, [attendee], None, body, reply_to=args.thread,
-                                    slot=args.slot, minutes=args.minutes)
-        payload.update({"scheduled": False, "would_schedule": would, "sent": False,
-                        "reason": decision["reason"] or "dry run",
-                        "gate": decision["gate"], "checks": decision["checks"],
-                        "note": "nothing was put on the calendar: the confirmation and the "
-                                "invite go together or not at all "
-                                "(policies/shared-rules.md)."})
+    may_send = "send" in (ctx.verbs or [])
+    if not may_send or ctx.dry:
+        payload, state = make_draft(
+            ctx, [attendee], None, body, reply_to=args.thread, slot=args.slot, minutes=args.minutes
+        )
+        payload.update(
+            {
+                "scheduled": False,
+                "would_schedule": would,
+                "sent": False,
+                "reason": "dry run" if may_send else no_send_verb(ctx),
+                "gate": "" if may_send else "verb",
+                "note": unbooked,
+            }
+        )
         return send_result(ctx, payload)
 
-    event = ctx.calendar.create_event(start, end, would["summary"], attendees=[attendee],
-                                      description=f"Booked by the hub mail service for "
-                                                  f"{ctx.slug}, Issue {ctx.issue or '-'}.",
-                                      send_updates="all")
+    event = ctx.calendar.create_event(
+        start,
+        end,
+        would["summary"],
+        attendees=[attendee],
+        description=f"Booked by the hub mail service for {ctx.slug}, Issue {ctx.issue or '-'}.",
+        send_updates="none",
+    )
     ctx.audit("event-create", event.get("id", ""), dict(would, thread=args.thread))
-    try:
-        payload, state = make_draft(ctx, [attendee], None, body, reply_to=args.thread,
-                                    slot=args.slot, minutes=args.minutes)
-        sent = attempt_send(ctx, state["draft_id"], state["to"], state["cc"], state["subject"],
-                            state["thread_id"], state["msgs"], state["verdict"],
-                            approval=args.approval_issue, body=state["body"])
-        if not sent.get("sent"):
-            raise Refused(sent.get("reason", "the confirmation was not sent"),
-                          "The event was rolled back; nothing is on the calendar and nothing "
-                          "was said. Fix the reason and run it again.")
-    except (Failure, Refused):
+
+    def rollback(why):
         ctx.calendar.delete_event(event.get("id", ""))
-        ctx.audit("event-rollback", event.get("id", ""),
-                  {"why": "the confirmation did not send", "thread": args.thread})
+        ctx.audit("event-rollback", event.get("id", ""), {"why": why, "thread": args.thread})
+
+    try:
+        payload, state = make_draft(
+            ctx, [attendee], None, body, reply_to=args.thread, slot=args.slot, minutes=args.minutes
+        )
+        raw = compose.with_invitation(
+            ctx.gmail.get_draft_raw(state["draft_id"]), event, ctx.mailbox, [attendee], start, end, would["summary"]
+        )
+        ctx.gmail.update_draft(state["draft_id"], raw, state["thread_id"])
+        sent = attempt_send(
+            ctx,
+            state["draft_id"],
+            state["to"],
+            state["cc"],
+            state["subject"],
+            state["thread_id"],
+            state["msgs"],
+            approval=args.approval,
+        )
+    except (Failure, Refused):
+        rollback("the confirmation was not queued")
         raise
-    payload.update({"scheduled": True, "event": event.get("id", ""), "slot": would,
-                    "sent": True, "message": sent.get("message", ""), "key": sent.get("key")})
+    for k in SEND_KEYS:
+        if k in sent:
+            payload[k] = sent[k]
+    if not sent.get("sent") and not sent.get("queued"):
+        rollback(sent.get("reason") or "the confirmation was not queued")
+        payload.update(
+            {"scheduled": False, "would_schedule": would, "sent": False, "downgraded": "draft", "note": unbooked}
+        )
+        return send_result(ctx, payload)
+    payload.update({"scheduled": True, "event": event.get("id", ""), "slot": would, "sent": bool(sent.get("sent"))})
     return send_result(ctx, payload)
 
 
@@ -2420,17 +2848,17 @@ def cmd_connector_event(args):
     """Execute one server-validated Hub calendar action from stdin.
 
     This is the provider-local half of `hub_calendar_schedule`; the runner claims the durable
-    action first and invokes this command as the human owner, so employee mail permissions and
-    generic email sending are not broadened.
+    action first and invokes this command as the connector (`--as connector`), which writes only
+    what the server leased it, so employee mail permissions and generic email sending are not broadened.
     """
+    access.LEASED = True  # the server checked who asked, when it leased this
     try:
         request = json.load(sys.stdin)
     except (ValueError, TypeError) as exc:
         raise Failure("The connector calendar action is not valid JSON.") from exc
     if not isinstance(request, dict):
         raise Refused("The connector calendar action must be an object.")
-    required = [key for key in ("id", "calendar", "title", "start", "end")
-                if not str(request.get(key) or "").strip()]
+    required = [key for key in ("id", "calendar", "title", "start", "end") if not str(request.get(key) or "").strip()]
     if required:
         raise Refused("The connector calendar action is missing " + ", ".join(required) + ".")
     mailbox = str(request["calendar"]).strip().lower()
@@ -2444,17 +2872,57 @@ def cmd_connector_event(args):
     if end <= start or (end - start) > timedelta(days=7):
         raise Refused("The connector calendar action has an invalid interval.")
     ctx = Ctx(args, "schedule", mailbox=mailbox)
+    # A claimed action is never retried, so What Tico may do unread refuses it here (exit 2: nothing was created)
+    # rather than as a failure the runner must report as unknown.
+    if ctx.company() == pl.UNREAD:
+        raise Refused(
+            "Tico couldn't check the company's mail settings; try again",
+            "Nothing was sent to Google. Schedule it again once Tico answers.",
+        )
     event_id = hashlib.sha256(str(request["id"]).encode()).hexdigest()[:32]
-    event = ctx.calendar.create_hub_event(
-        start, end, str(request["title"]).strip(), attendees, event_id,
-        str(request.get("description") or ""), bool(request.get("add_meet", True)))
+    if attendees:
+        pl.sending_preflight(mailbox, str(request["id"]))
+    try:
+        event = ctx.calendar.create_hub_event(
+            start,
+            end,
+            str(request["title"]).strip(),
+            attendees,
+            event_id,
+            str(request.get("description") or ""),
+            bool(request.get("add_meet", True)),
+        )
+    except cal.ConferencePending as exc:
+        out(
+            args,
+            {"ok": False, "kind": "conference_pending", "retryable": True, "event_id": event_id, "error": str(exc)},
+            str(exc) + "\n",
+        )
+        return 75
     meeting_url = cal._meeting_url(event)  # normalized URL only; descriptions never leave here
     provider_id = str(event.get("id") or event_id)
-    ctx.audit("event-create", provider_id,
-              {"action": request["id"], "attendees": len(attendees),
-               "start": start.isoformat(), "end": end.isoformat()})
-    return out(args, {"ok": True, "event_id": provider_id, "meeting_url": meeting_url},
-               provider_id + "\n")
+    invitation = None
+    if attendees:
+        raw = compose.build(
+            attendees, str(request["title"]), str(request.get("description") or request["title"]), from_addr=mailbox
+        )
+        raw = compose.with_invitation(raw, event, mailbox, attendees, start, end, str(request["title"]))
+        invitation = pl.queue_send(mailbox, raw, calendar_action_id=str(request["id"]))
+    ctx.audit(
+        "event-create",
+        provider_id,
+        {"action": request["id"], "attendees": len(attendees), "start": start.isoformat(), "end": end.isoformat()},
+    )
+    return out(
+        args,
+        {
+            "ok": True,
+            "event_id": provider_id,
+            "meeting_url": meeting_url,
+            "invitation_send_id": invitation["id"] if invitation else None,
+        },
+        provider_id + "\n",
+    )
 
 
 def cmd_mail_action(args):
@@ -2463,16 +2931,23 @@ def cmd_mail_action(args):
     The runner claims it from the hub and reports what this prints: always one JSON object with `ok`, `detail` and
     `retry` (false when trying again cannot help: a refusal, a message that is gone)."""
     from . import actions
+
+    access.LEASED = True  # the server checked the automation's owner when it leased this
     try:
         request = json.load(sys.stdin)
     except (ValueError, TypeError):
         request = None
     if not isinstance(request, dict) or not all(str(request.get(k) or "").strip() for k in ("id", "mailbox", "action")):
-        print(json.dumps({"ok": False, "retry": False, "detail": "the mail action is not an object with id, "
-                                                                 "mailbox and action"}))
+        print(
+            json.dumps(
+                {"ok": False, "retry": False, "detail": "the mail action is not an object with id, mailbox and action"}
+            )
+        )
         return 2
     try:
         ctx = Ctx(args, actions.verb(request["action"]), mailbox=str(request["mailbox"]).strip().lower())
+        # An automation is Tico too, so What Tico may do holds it, read from Tico (policy.company): whatever the action
+        # on stdin says of it (a `company` field included) is ignored, since anything that can run this command writes it.
         result = actions.perform(ctx, request)
     except Refused as e:
         print(json.dumps({"ok": False, "retry": False, "detail": e.msg[:900]}))
@@ -2480,13 +2955,17 @@ def cmd_mail_action(args):
     except Failure as e:
         print(json.dumps({"ok": False, "retry": True, "detail": e.msg[:900]}))
         return 1
-    ctx.audit("automation-" + request["action"], str(request.get("msg_id") or ""),
-              {"action": request["id"], **{k: result[k] for k in ("detail", "draft", "message") if result.get(k)}})
+    ctx.audit(
+        "automation-" + request["action"],
+        str(request.get("msg_id") or ""),
+        {"action": request["id"], **{k: result[k] for k in ("detail", "draft", "message") if result.get(k)}},
+    )
     print(json.dumps(result, default=str))
     return 0
 
 
 # ---------------------------------------------------------------- local persist (inbox bots phase 1)
+
 
 def sync_targets(args):
     """Mailboxes this sync run will touch: one, or every address on the people roster."""
@@ -2494,13 +2973,10 @@ def sync_targets(args):
     if getattr(args, "mailbox", None) and getattr(args, "all_roster", False):
         raise Refused("--mailbox and --all-roster ask for different things; pick one.")
     if getattr(args, "all_roster", False):
-        boxes = access.roster_mailboxes()
-        if slug != access.OWNER:
-            allowed = set(access.readable_mailboxes(slug, "read"))
-            boxes = [b for b in boxes if b in allowed]
+        allowed = set(access.readable_mailboxes(slug, "read"))
+        boxes = [b for b in access.roster_mailboxes() if b in allowed]
         if not boxes:
-            raise Refused(f"{slug} has no roster mailbox to sync.",
-                          "Pass --mailbox, or run as the owner with --all-roster.")
+            raise Refused(f"{slug} has no roster mailbox to sync.", "Pass --mailbox. " + access.ASK)
         return boxes
     box, _ = access.resolve(slug, getattr(args, "mailbox", None), "read")
     return [box]
@@ -2571,12 +3047,24 @@ def sync_one(ctx, args):
             for mid in deleted_ids:
                 db.mark_deleted(ctx.conn, ctx.mailbox, mid)
                 deleted += 1
-            db.set_sync_state(ctx.conn, ctx.mailbox, history_id=current_hid,
-                              last_full_at=stamp() if mode == "backfill" else None,
-                              last_run_at=stamp(), last_error="",
-                              message_count=db.message_count(ctx.conn, ctx.mailbox))
-        detail = {"mode": mode, "fetched": fetched, "deleted": deleted, "skipped": skipped,
-                  "limit": limit, "backfill": backfill, "history_id": current_hid}
+            db.set_sync_state(
+                ctx.conn,
+                ctx.mailbox,
+                history_id=current_hid,
+                last_full_at=stamp() if mode == "backfill" else None,
+                last_run_at=stamp(),
+                last_error="",
+                message_count=db.message_count(ctx.conn, ctx.mailbox),
+            )
+        detail = {
+            "mode": mode,
+            "fetched": fetched,
+            "deleted": deleted,
+            "skipped": skipped,
+            "limit": limit,
+            "backfill": backfill,
+            "history_id": current_hid,
+        }
         ctx.audit("sync", ctx.mailbox, detail)
         return dict(ok=True, mailbox=ctx.mailbox, employee=ctx.slug, dry_run=ctx.dry, **detail)
     except Failure as e:
@@ -2599,11 +3087,15 @@ def cmd_sync_run(args):
     payload = {"ok": failed == 0, "count": len(results), "mailboxes": results}
     if len(results) == 1:
         payload.update(results[0])
-    lines = [f"{'ok' if r.get('ok') else 'FAIL'}  {r.get('mailbox', '?')}  "
-             + (r.get("error") or
-                f"{r.get('mode', '')} fetched={r.get('fetched', 0)} deleted={r.get('deleted', 0)}"
-                + (" (dry run)" if r.get("dry_run") else ""))
-             for r in results]
+    lines = [
+        f"{'ok' if r.get('ok') else 'FAIL'}  {r.get('mailbox', '?')}  "
+        + (
+            r.get("error")
+            or f"{r.get('mode', '')} fetched={r.get('fetched', 0)} deleted={r.get('deleted', 0)}"
+            + (" (dry run)" if r.get("dry_run") else "")
+        )
+        for r in results
+    ]
     rc = out(args, payload, "\n".join(lines) + "\n")
     return 1 if failed else rc
 
@@ -2615,22 +3107,26 @@ def cmd_sync_export(args):
     if mailbox:
         access.resolve(slug, mailbox, "read")
         boxes = [mailbox]
-    elif slug == access.OWNER:
-        boxes = None
     else:
         boxes = access.readable_mailboxes(slug, "read")
     conn = open_db()
     try:
-        rows = db.unpushed(conn, mailbox=mailbox if mailbox else None,
-                           mailboxes=None if mailbox or boxes is None else boxes,
-                           limit=getattr(args, "limit", None) or SYNC_LIMIT)
+        rows = db.unpushed(
+            conn,
+            mailbox=mailbox if mailbox else None,
+            mailboxes=None if mailbox or boxes is None else boxes,
+            limit=getattr(args, "limit", None) or SYNC_LIMIT,
+        )
+        db.annotate_known_senders(conn, rows)
     finally:
         conn.close()
     payload = {"ok": True, "count": len(rows), "messages": rows}
-    lines = [f"{r['mailbox']}  {r['id']}  {(r.get('date') or '-')[:16]}  "
-             f"{(r.get('from_addr') or '-'):<28} {(r.get('subject') or '')[:50]}"
-             + ("  [deleted]" if r.get("deleted_at") else "")
-             for r in rows]
+    lines = [
+        f"{r['mailbox']}  {r['id']}  {(r.get('date') or '-')[:16]}  "
+        f"{(r.get('from_addr') or '-'):<28} {(r.get('subject') or '')[:50]}"
+        + ("  [deleted]" if r.get("deleted_at") else "")
+        for r in rows
+    ]
     if not lines:
         lines = ["no unpushed messages"]
     return out(args, payload, "\n".join(lines) + "\n")
@@ -2644,8 +3140,9 @@ def cmd_sync_ack(args):
     mailbox = getattr(args, "mailbox", None)
     if ids:
         if not mailbox:
-            raise Refused("ack with message ids needs --mailbox.",
-                          "Or pass --json with a list of {mailbox, id} objects on stdin.")
+            raise Refused(
+                "ack with message ids needs --mailbox.", "Or pass --json with a list of {mailbox, id} objects on stdin."
+            )
         access.resolve(slug, mailbox, "read")
         items = [(mailbox, mid) for mid in ids]
     else:
@@ -2669,8 +3166,11 @@ def cmd_sync_ack(args):
                 access.resolve(slug, box, "read")
                 seen.add(box)
     if getattr(args, "dry_run", False):
-        return out(args, {"ok": True, "acked": 0, "would_ack": len(items), "dry_run": True},
-                   f"would ack {len(items)} message(s)\n")
+        return out(
+            args,
+            {"ok": True, "acked": 0, "would_ack": len(items), "dry_run": True},
+            f"would ack {len(items)} message(s)\n",
+        )
     conn = open_db()
     try:
         by_box = {}
@@ -2680,8 +3180,7 @@ def cmd_sync_ack(args):
             db.mark_pushed(conn, box, mids)
     finally:
         conn.close()
-    return out(args, {"ok": True, "acked": len(items), "dry_run": False},
-               f"acked {len(items)} message(s)\n")
+    return out(args, {"ok": True, "acked": len(items), "dry_run": False}, f"acked {len(items)} message(s)\n")
 
 
 def cmd_sync(args):
@@ -2695,6 +3194,7 @@ def cmd_sync(args):
 
 # ---------------------------------------------------------------- audit
 
+
 def cmd_audit(args):
     conn = open_db()
     since = stamp(parse_since(args.since)) if args.since else ""
@@ -2703,31 +3203,34 @@ def cmd_audit(args):
         print(json.dumps({"ok": True, "count": len(rows), "rows": rows}, indent=2))
         return 0
     if not rows:
-        print(f"no audit lines" + (f" since {args.since}" if args.since else "")
-              + f" (file: {AUDIT_PATH})")
+        print(f"no audit lines" + (f" since {args.since}" if args.since else "") + f" (file: {AUDIT_PATH})")
         return 0
     for r in rows:
         extra = {k: v for k, v in (r["detail"] or {}).items() if k not in ("ids",)}
-        print(f"{r['ts']}  {r['employee']:<14} {r['action']:<12} {r['mailbox']:<18} "
-              f"{r['target'][:30]:<30} {json.dumps(extra, sort_keys=True)[:100]}")
+        print(
+            f"{r['ts']}  {r['employee']:<14} {r['action']:<12} {r['mailbox']:<18} "
+            f"{r['target'][:30]:<30} {json.dumps(extra, sort_keys=True)[:100]}"
+        )
     print(f"{len(rows)} line(s) - full record in {AUDIT_PATH}")
     return 0
 
 
 # ---------------------------------------------------------------- cli
 
+
 def build_parser():
-    p = argparse.ArgumentParser(prog="mail", description=__doc__,
-                                formatter_class=argparse.RawDescriptionHelpFormatter)
+    p = argparse.ArgumentParser(prog="mail", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = p.add_subparsers(dest="cmd", required=True)
 
     def base(sp, mailbox=True, employee=True):
         if employee:
-            sp.add_argument("--as", dest="as_slug", default=None,
-                            help="employee slug; defaults to HUB_BOT from the runner")
+            sp.add_argument(
+                "--as", dest="as_slug", default=None, help="employee slug; defaults to HUB_BOT from the runner"
+            )
         if mailbox:
-            sp.add_argument("--mailbox", default=None,
-                            help="the address to act as; required when the employee holds several")
+            sp.add_argument(
+                "--mailbox", default=None, help="the address to act as; required when the employee holds several"
+            )
         sp.add_argument("--issue", default=None, help="hub Issue number, recorded in the audit log")
         sp.add_argument("--json", action="store_true", help="machine-readable output and errors")
         return sp
@@ -2737,15 +3240,15 @@ def build_parser():
         return sp
 
     d = base(sub.add_parser("doctor", help="is mail set up, and for which mailboxes"))
-    d.add_argument("--all-mailboxes", action="store_true",
-                   help="every mailbox any employee declares (the default)")
-    d.add_argument("--e2e", action="store_true",
-                   help="really draft, label, send, search, and make an event, in the sandbox "
-                        "mailbox only")
+    d.add_argument("--all-mailboxes", action="store_true", help="every mailbox any employee declares (the default)")
+    d.add_argument(
+        "--e2e",
+        action="store_true",
+        help="really draft, label, queue a send and make an event, in the sandbox mailbox (TICO_MAIL_SANDBOX) only",
+    )
     d.set_defaults(func=cmd_doctor)
 
-    w = base(sub.add_parser("whoami", help="which employee, which mailboxes, which verbs"),
-             mailbox=False)
+    w = base(sub.add_parser("whoami", help="which employee, which mailboxes, which verbs"), mailbox=False)
     w.set_defaults(func=cmd_whoami)
 
     u = writes(base(sub.add_parser("unsubscribe", help="submit a signed one-click unsubscribe request")))
@@ -2756,20 +3259,34 @@ def build_parser():
     i = base(sub.add_parser("inbox", help="INBOX messages this employee has not triaged"))
     i.add_argument("--new", action="store_true", help="only what this employee has not seen")
     i.add_argument("--since", default=None, help="24h, 7d, today, yesterday, or an ISO time")
-    i.add_argument("--untriaged", action="store_true",
-                   help="in:inbox minus every message with a hub/* label; label-based and "
-                        "idempotent (no seen row, no watermark). Not with --new or --since")
+    i.add_argument(
+        "--untriaged",
+        action="store_true",
+        help="in:inbox minus every message with a hub/* label; label-based and "
+        "idempotent (no seen row, no watermark). Not with --new or --since",
+    )
     i.add_argument("--label", default=None, help="restrict to one Gmail label")
-    i.add_argument("--limit", type=int, default=None,
-                   help="default %d, or %d with --untriaged" % (INBOX_LIMIT, UNTRIAGED_LIMIT))
-    i.add_argument("--format", choices=["md", "brief", "json"], default="md",
-                   help="brief is the listing without bodies; open threads with `thread`")
-    i.add_argument("--all-mailboxes", action="store_true",
-                   help="every mailbox this employee may read (own plus reports)")
-    i.add_argument("--decisions", "--judge", dest="judge", action="store_true",
-                   help="ask the decision model about every listed message (questions/mail-triage.json): a decision: "
-                        "line per message with a suggestion, before any thread is opened; "
-                        "read-only, inside a hub turn or with TYPESAFE_API_KEY")
+    i.add_argument(
+        "--limit", type=int, default=None, help="default %d, or %d with --untriaged" % (INBOX_LIMIT, UNTRIAGED_LIMIT)
+    )
+    i.add_argument(
+        "--format",
+        choices=["md", "brief", "json"],
+        default="md",
+        help="brief is the listing without bodies; open threads with `thread`",
+    )
+    i.add_argument(
+        "--all-mailboxes", action="store_true", help="every mailbox this employee may read (own plus reports)"
+    )
+    i.add_argument(
+        "--decisions",
+        "--judge",
+        dest="judge",
+        action="store_true",
+        help="ask the decision model about every listed message (questions/mail-triage.json): a decision: "
+        "line per message with a suggestion, before any thread is opened; "
+        "read-only, inside a hub turn or with TYPESAFE_API_KEY",
+    )
     i.set_defaults(func=cmd_inbox, _parser=i)
 
     t = base(sub.add_parser("thread", help="a whole thread, oldest first"))
@@ -2791,8 +3308,7 @@ def build_parser():
     at = base(sub.add_parser("attachment", help="download one attachment to a new private file"))
     at.add_argument("message_id", metavar="MESSAGE_ID")
     at.add_argument("attachment_ref", metavar="ATTACHMENT_REF")
-    at.add_argument("--out", required=True, metavar="PATH",
-                    help="explicit destination file; must not already exist")
+    at.add_argument("--out", required=True, metavar="PATH", help="explicit destination file; must not already exist")
     at.add_argument("--format", choices=["md", "json"], default="md")
     at.set_defaults(func=cmd_attachment)
 
@@ -2822,8 +3338,7 @@ def build_parser():
     rr = writes(base(rsub.add_parser("run", help="apply registry/mail-rules.yaml to new mail")))
     rr.add_argument("--since", default="24h")
     rr.add_argument("--limit", type=int, default=200)
-    rr.add_argument("--all-mailboxes", action="store_true",
-                    help="run each mailbox's own rules (own plus reports)")
+    rr.add_argument("--all-mailboxes", action="store_true", help="run each mailbox's own rules (own plus reports)")
     rr.set_defaults(func=cmd_rules_run)
     re_ = base(rsub.add_parser("explain", help="which rules fire on one message, and why"))
     re_.add_argument("msg_id")
@@ -2833,65 +3348,97 @@ def build_parser():
     rt.add_argument("--rules", default=None, help="a rules file other than the registry one")
     rt.add_argument("--json", action="store_true")
     rt.set_defaults(func=cmd_rules_test)
-    rb = base(rsub.add_parser("backtest", help="replay the rules over a window of all mail "
-                                               "and report; a read, nothing changes"))
+    rb = base(
+        rsub.add_parser(
+            "backtest", help="replay the rules over a window of all mail and report; a read, nothing changes"
+        )
+    )
     rb.add_argument("--since", default="14d", help="the window: 14d, 30d, or an ISO time")
-    rb.add_argument("--rules", default=None, metavar="FILE",
-                    help="a candidate rules file; its outcomes are diffed against the registry")
-    rb.add_argument("--baseline", default=None, metavar="FILE",
-                    help="diff against this rules file instead of the registry (e.g. the previous "
-                         "version, to measure a change already on disk)")
+    rb.add_argument(
+        "--rules",
+        default=None,
+        metavar="FILE",
+        help="a candidate rules file; its outcomes are diffed against the registry",
+    )
+    rb.add_argument(
+        "--baseline",
+        default=None,
+        metavar="FILE",
+        help="diff against this rules file instead of the registry (e.g. the previous "
+        "version, to measure a change already on disk)",
+    )
     rb.add_argument("--limit", type=int, default=2000)
     rb.add_argument("--format", choices=["md", "json"], default="md")
     rb.set_defaults(func=cmd_rules_backtest)
 
     # -- writing ------------------------------------------------------------
-    df = writes(base(sub.add_parser("draft", help="write a draft (policy, lint, reviewer)")))
-    df.add_argument("--to", action="append", default=None, metavar="ADDR",
-                    help="recipient; repeat for several. Omit when --reply-to says who.")
+    df = writes(base(sub.add_parser("draft", help="write a draft (lint, then the Gmail draft)")))
+    df.add_argument(
+        "--to",
+        action="append",
+        default=None,
+        metavar="ADDR",
+        help="recipient; repeat for several. Omit when --reply-to says who.",
+    )
     df.add_argument("--subject", default=None, help="required unless this is a reply")
     df.add_argument("--body-file", required=True, help="a text file holding the message")
-    df.add_argument("--reply-to", default=None, metavar="THREAD",
-                    help="thread id: keeps In-Reply-To, References and the subject")
-    df.add_argument("--cc", action="append", default=None, metavar="ADDR",
-                    help="internal addresses only, unless --approval-issue names every address")
-    df.add_argument("--approval-issue", default=None, metavar="N",
-                    help="GitHub Issue, Tico send approval id, or the owner's Tico message id; "
-                         "a full yes allows external Cc")
-    df.add_argument("--attach", action="append", default=None, metavar="PATH",
-                    help="a file in this bot's own folder to attach (relative paths start "
-                         "there); repeat for several (25 MB in all). Needs allow_attachments in "
-                         "the mailbox's policy, and sending it needs --approval-issue")
+    df.add_argument(
+        "--reply-to", default=None, metavar="THREAD", help="thread id: keeps In-Reply-To, References and the subject"
+    )
+    df.add_argument(
+        "--cc",
+        action="append",
+        default=None,
+        metavar="ADDR",
+        help="copy someone; Tico's sending policy decides outside Cc when the draft is sent",
+    )
+    df.add_argument(
+        "--attach",
+        action="append",
+        default=None,
+        metavar="PATH",
+        help="a file in this bot's own folder to attach (relative paths start "
+        "there); repeat for several (25 MB in all). Sent like mail without files",
+    )
     df.set_defaults(func=cmd_draft)
 
     dc = writes(base(sub.add_parser("discard", help="delete an unsent draft this employee made")))
     dc.add_argument("draft_id", metavar="DRAFT_ID", help="the Gmail draft id from `mail draft`")
     dc.set_defaults(func=cmd_discard)
 
-    sd = writes(base(sub.add_parser("send", help="send a draft (the full policy chain)")))
+    sd = writes(base(sub.add_parser("send", help="queue a draft with Tico, which decides the send")))
     sd.add_argument("--draft", required=True, help="the Gmail draft id from `mail draft`")
-    sd.add_argument("--approval-issue", default=None, metavar="N",
-                    help="GitHub Issue, Tico send approval id, or the owner's Tico message id; "
-                         "a full yes lifts recipient caps and outbound_send: false")
-    sd.add_argument("--slot", default=None,
-                    help="the ISO time this message confirms, when it confirms one")
+    sd.add_argument(
+        "--approval",
+        default=None,
+        metavar="ID",
+        help="the id of the Tico approval or message from a person that allows this send; Tico checks it",
+    )
     sd.set_defaults(func=cmd_send)
 
-    rp = writes(base(sub.add_parser("reply", help="draft a reply, then send it if policy allows")))
+    rp = writes(base(sub.add_parser("reply", help="draft a reply, then queue it with Tico")))
     rp.add_argument("--thread", required=True)
     rp.add_argument("--body-file", required=True)
-    rp.add_argument("--to", action="append", default=None, metavar="ADDR",
-                    help="defaults to the last sender on the thread")
+    rp.add_argument(
+        "--to", action="append", default=None, metavar="ADDR", help="defaults to the last sender on the thread"
+    )
     rp.add_argument("--cc", action="append", default=None, metavar="ADDR")
-    rp.add_argument("--approval-issue", default=None, metavar="N")
+    rp.add_argument(
+        "--approval",
+        default=None,
+        metavar="ID",
+        help="the id of the Tico approval or message from a person that allows this send; Tico checks it",
+    )
     rp.set_defaults(func=cmd_reply)
 
     sl = base(sub.add_parser("sent-log", help="what has been sent from this mailbox"))
     sl.add_argument("--since", default=None, help="24h, 7d, today, or an ISO time")
     sl.add_argument("--employee", default=None, help="filter the log by employee slug")
-    sl.add_argument("--reconcile", action="store_true",
-                    help="also read Gmail's Sent folder, so the owner's own sends count for the "
-                         "cooldowns")
+    sl.add_argument(
+        "--reconcile",
+        action="store_true",
+        help="also read Gmail's Sent folder, so the owner's own sends are listed too",
+    )
     sl.set_defaults(func=cmd_sent_log)
 
     li = base(sub.add_parser("lint", help="run the deterministic rules over a body file"))
@@ -2901,20 +3448,14 @@ def build_parser():
     li.add_argument("--reply-to", default=None, metavar="THREAD")
     li.add_argument("--slot", default=None, help="the ISO time this body confirms, if any")
     li.add_argument("--minutes", type=int, default=cal.DEFAULT_MINUTES)
-    li.add_argument("--check-calendar", action="store_true",
-                    help="also check every time offered against the mailbox's calendars")
+    li.add_argument(
+        "--check-calendar", action="store_true", help="also check every time offered against the mailbox's calendars"
+    )
     li.set_defaults(func=cmd_lint)
 
-    rv_ = base(sub.add_parser("review", help="ask the second model about a body file"))
-    rv_.add_argument("--body-file", required=True)
-    rv_.add_argument("--thread", default=None, help="the incoming thread it answers")
-    rv_.add_argument("--subject", default=None)
-    rv_.set_defaults(func=cmd_review)
-
-    po = sub.add_parser("policy", help="what the mail policy allows this employee")
+    po = sub.add_parser("policy", help="this bot's sending policy, as Tico answers it")
     posub = po.add_subparsers(dest="policy_cmd", required=True)
-    ps = base(posub.add_parser("show", help="the gates, the caps and the allowance"),
-              mailbox=True)
+    ps = base(posub.add_parser("show", help="the mode, the caps and what the company allows"), mailbox=True)
     ps.set_defaults(func=cmd_policy_show)
 
     # -- calendar -----------------------------------------------------------
@@ -2928,8 +3469,9 @@ def build_parser():
     ss.set_defaults(func=cmd_scheduling)
 
     so = base(sub.add_parser("slots", help="real free slots, buffer applied"))
-    so.add_argument("--for", dest="for_mailbox", default=None, metavar="ADDR",
-                    help="the mailbox whose calendars to read")
+    so.add_argument(
+        "--for", dest="for_mailbox", default=None, metavar="ADDR", help="the mailbox whose calendars to read"
+    )
     so.add_argument("--n", type=int, default=2)
     so.add_argument("--minutes", type=int, default=30)
     so.add_argument("--days", type=int, default=cal.DEFAULT_DAYS)
@@ -2937,32 +3479,40 @@ def build_parser():
     so.set_defaults(func=cmd_slots)
 
     up = base(sub.add_parser("upcoming", help="recordable meetings in the next few hours"))
-    up.add_argument("--for", dest="for_mailbox", required=True, metavar="ADDR",
-                    help="the roster mailbox whose calendars to read")
-    up.add_argument("--hours", type=int, default=24,
-                    help="look-ahead window, clamped to 1-168 hours")
+    up.add_argument(
+        "--for", dest="for_mailbox", required=True, metavar="ADDR", help="the roster mailbox whose calendars to read"
+    )
+    up.add_argument("--hours", type=int, default=24, help="look-ahead window, clamped to 1-168 hours")
     up.add_argument("--include-private", action="store_true", help="include private holds and solo calendar events")
     up.set_defaults(func=cmd_upcoming)
 
     ca = sub.add_parser("calendar", help="read or add events on company calendars")
     casub = ca.add_subparsers(dest="calendar_cmd", required=True)
     for p_name in ("add", "hold"):
-        cad = writes(base(casub.add_parser(p_name, help="add an event or private hold to a roster person's calendar"),
-                          mailbox=False))
-        cad.add_argument("--for", dest="for_mailbox", required=True, metavar="ADDR",
-                         help="the roster person's calendar")
+        cad = writes(
+            base(
+                casub.add_parser(p_name, help="add an event or private hold to a roster person's calendar"),
+                mailbox=False,
+            )
+        )
+        cad.add_argument(
+            "--for", dest="for_mailbox", required=True, metavar="ADDR", help="the roster person's calendar"
+        )
         cad.add_argument("--start", required=True, help="ISO start time, preferably with an offset")
         cad.add_argument("--minutes", type=int, default=30)
         cad.add_argument("--end", default=None, help="optional ISO end time (overrides --minutes)")
         cad.add_argument("--summary", required=True, help="event title, 1-240 characters")
         cad.add_argument("--description", default="", help="optional event description")
         cad.add_argument("--description-file", default=None, help="path to description file")
-        cad.add_argument("--attendee", action="append", default=None, metavar="ADDR",
-                         help="attendee to invite; repeat for several")
+        cad.add_argument(
+            "--attendee", action="append", default=None, metavar="ADDR", help="attendee to invite; repeat for several"
+        )
         cad.add_argument("--uid", default=None, help="optional UID from ICS file")
         cad.set_defaults(func=cmd_calendar_hold)
 
-    cl = base(casub.add_parser("list", help="list events on a company calendar, including private holds"), mailbox=False)
+    cl = base(
+        casub.add_parser("list", help="list events on a company calendar, including private holds"), mailbox=False
+    )
     cl.add_argument("--for", dest="for_mailbox", required=True, metavar="ADDR", help="the roster person's calendar")
     cl.add_argument("--start", default=None, help="ISO start time")
     cl.add_argument("--end", default=None, help="ISO end time")
@@ -2976,16 +3526,16 @@ def build_parser():
     cg.set_defaults(func=cmd_calendar_get)
 
     hd = writes(base(sub.add_parser("hold", help="add an audited private calendar hold"), mailbox=False))
-    hd.add_argument("--for", dest="for_mailbox", required=True, metavar="ADDR",
-                    help="the roster person's calendar")
+    hd.add_argument("--for", dest="for_mailbox", required=True, metavar="ADDR", help="the roster person's calendar")
     hd.add_argument("--start", required=True, help="ISO start time, preferably with an offset")
     hd.add_argument("--minutes", type=int, default=30)
     hd.add_argument("--end", default=None, help="optional ISO end time (overrides --minutes)")
     hd.add_argument("--summary", required=True, help="event title, 1-240 characters")
     hd.add_argument("--description", default="", help="optional event description")
     hd.add_argument("--description-file", default=None, help="path to description file")
-    hd.add_argument("--attendee", action="append", default=None, metavar="ADDR",
-                    help="attendee to invite; repeat for several")
+    hd.add_argument(
+        "--attendee", action="append", default=None, metavar="ADDR", help="attendee to invite; repeat for several"
+    )
     hd.add_argument("--uid", default=None, help="optional UID from ICS file")
     hd.set_defaults(func=cmd_calendar_hold)
 
@@ -2996,17 +3546,33 @@ def build_parser():
     sc.add_argument("--attendee", default=None, help="defaults to the last sender on the thread")
     sc.add_argument("--body-file", required=True)
     sc.add_argument("--summary", default=None, help="the event title")
-    sc.add_argument("--approval-issue", default=None, metavar="N")
+    sc.add_argument(
+        "--approval",
+        default=None,
+        metavar="ID",
+        help="the id of the Tico approval or message from a person that allows this send; Tico checks it",
+    )
     sc.set_defaults(func=cmd_schedule)
 
     go = sub.add_parser("google", help="connect, list or revoke one person's own Google account (no delegation)")
     gosub = go.add_subparsers(dest="google_cmd", required=True)
     gc = gosub.add_parser("connect", help="sign in as one mailbox and store its grant on this computer")
-    gc.add_argument("--mailbox", required=True, metavar="ADDR", help="the address that signs in; nothing else is accepted")
-    gc.add_argument("--client-file", default=None, metavar="PATH",
-                    help="Desktop app OAuth client JSON from your Google Cloud project (once; kept for later connects)")
-    gc.add_argument("--allow", action="append", default=None, metavar="CAP",
-                    help="add a write capability to read-only access: " + ", ".join(sorted(oauth.CAPABILITIES)))
+    gc.add_argument(
+        "--mailbox", required=True, metavar="ADDR", help="the address that signs in; nothing else is accepted"
+    )
+    gc.add_argument(
+        "--client-file",
+        default=None,
+        metavar="PATH",
+        help="Desktop app OAuth client JSON from your Google Cloud project (once; kept for later connects)",
+    )
+    gc.add_argument(
+        "--allow",
+        action="append",
+        default=None,
+        metavar="CAP",
+        help="add a write capability to read-only access: " + ", ".join(sorted(oauth.CAPABILITIES)),
+    )
     gc.add_argument("--json", action="store_true")
     gc.set_defaults(func=cmd_google_connect)
     gf = gosub.add_parser("finish", help=argparse.SUPPRESS)
@@ -3036,12 +3602,15 @@ def build_parser():
     au.add_argument("--json", action="store_true")
     au.set_defaults(func=cmd_audit)
 
-    sy = writes(base(sub.add_parser(
-        "sync", help="persist mailbox mail locally; export/ack a batch without a hub token")))
-    sy.add_argument("--all-roster", action="store_true",
-                    help="every address on registry/people.yaml this employee may read")
-    sy.add_argument("--backfill", default="90d",
-                    help="first-run window when there is no history cursor (90d, 30d, ...)")
+    sy = writes(
+        base(sub.add_parser("sync", help="persist mailbox mail locally; export/ack a batch without a hub token"))
+    )
+    sy.add_argument(
+        "--all-roster", action="store_true", help="every address on registry/people.yaml this employee may read"
+    )
+    sy.add_argument(
+        "--backfill", default="90d", help="first-run window when there is no history cursor (90d, 30d, ...)"
+    )
     sy.add_argument("--limit", type=int, default=SYNC_LIMIT)
     sy.set_defaults(func=cmd_sync, sync_cmd=None)
     sysub = sy.add_subparsers(dest="sync_cmd", required=False)
@@ -3056,15 +3625,16 @@ def build_parser():
 
 def main(argv=None):
     import connectors.mail as pkg
+
     argv = list(sys.argv[1:] if argv is None else argv)
-    if argv[:2] == ["draft", "discard"]:                # a draft's own verb reads as `draft discard`
+    if argv[:2] == ["draft", "discard"]:  # a draft's own verb reads as `draft discard`
         argv = ["discard", *argv[2:]]
     args = build_parser().parse_args(argv)
-    if getattr(args, "untriaged", False) and (getattr(args, "new", False)
-                                              or getattr(args, "since", None)):
-        args._parser.error("--untriaged is label-based and cannot be combined with --new "
-                           "or --since")
+    if getattr(args, "untriaged", False) and (getattr(args, "new", False) or getattr(args, "since", None)):
+        args._parser.error("--untriaged is label-based and cannot be combined with --new or --since")
     pkg.JSON_ERRORS = bool(getattr(args, "json", False) or getattr(args, "format", "") == "json")
+    opened = []
+    scope = _COMMAND_CONNECTIONS.set(opened)
     try:
         return args.func(args) or 0
     except Refused as e:
@@ -3073,6 +3643,11 @@ def main(argv=None):
     except Failure as e:
         report(e, "failed")
         return 1
+    finally:
+        access.LEASED = False  # a lease covers the one command that carried it out
+        _COMMAND_CONNECTIONS.reset(scope)
+        for conn in opened:
+            conn.close()
 
 
 if __name__ == "__main__":

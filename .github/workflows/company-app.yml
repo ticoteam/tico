@@ -10,7 +10,25 @@ permissions:
   contents: read
   id-token: write
 jobs:
+  # Checks the company icon before any build. A download outage skips this company's build and publish with a
+  # warning instead of failing the release run. The builds fetch their own copy with the same validation.
+  icon:
+    runs-on: ubuntu-latest
+    outputs:
+      available: ${{ steps.icon.outputs.available }}
+    env:
+      TICO_COMPANY_APPS: ${{ secrets.TICO_COMPANY_APPS }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - name: Check the private company icon
+        id: icon
+        shell: bash
+        run: python3 scripts/company_apps.py icon --company '${{ inputs.company }}'
   build:
+    needs: icon
+    if: needs.icon.outputs.available == 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -35,6 +53,9 @@ jobs:
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: '3.15'
+      - name: Configure private company app
+        shell: bash
+        run: python scripts/company_apps.py configure --company '${{ inputs.company }}'
       - name: Artifact encryption dependency
         shell: bash
         run: python -m pip install "$(grep '^cryptography==' backend/requirements.txt)"
@@ -56,9 +77,6 @@ jobs:
           sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libpulse-dev
       - name: Tauri CLI
         run: cargo install tauri-cli --version "^2" --locked
-      - name: Configure private company app
-        shell: bash
-        run: python scripts/company_apps.py configure --company '${{ inputs.company }}'
       - name: Apple signing identity
         if: runner.os == 'macOS'
         env:
@@ -66,14 +84,21 @@ jobs:
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
         run: |
           # Keychain output can contain certificate subject names.
+          exec 3>&2
+          trap 'echo "::error::Company app Apple signing failed during $signing_step; verify APPLE_CERTIFICATE and APPLE_CERTIFICATE_PASSWORD" >&3' ERR
           exec >/dev/null 2>&1
           [ -n "$APPLE_CERTIFICATE" ] || exit 0
+          signing_step='decoding APPLE_CERTIFICATE'
           echo "$APPLE_CERTIFICATE" | base64 --decode > certificate.p12
+          signing_step='keychain setup'
           security create-keychain -p ci build.keychain
           security default-keychain -s build.keychain
           security unlock-keychain -p ci build.keychain
+          signing_step='importing APPLE_CERTIFICATE'
           security import certificate.p12 -k build.keychain -P "$APPLE_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+          signing_step='keychain signing access'
           security set-key-partition-list -S apple-tool:,apple: -s -k ci build.keychain
+          signing_step='certificate file cleanup'
           rm certificate.p12
       - name: Apple signing and notarization, only when the secrets exist
         if: runner.os == 'macOS'
@@ -104,7 +129,8 @@ jobs:
           if-no-files-found: error
 
   publish:
-    needs: build
+    needs: [icon, build]
+    if: ${{ !cancelled() && needs.icon.outputs.available == 'true' && needs.build.result == 'success' }}
     runs-on: ubuntu-latest
     env:
       TICO_COMPANY_APPS: ${{ secrets.TICO_COMPANY_APPS }}

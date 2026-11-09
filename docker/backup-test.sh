@@ -73,7 +73,7 @@ import os, sqlite3, sys
 from pathlib import Path
 from backend.blobs import Blobs
 from backend.config import Settings
-row = sqlite3.connect("/data/hub.sqlite").execute("SELECT value_json FROM registry_metadata WHERE key='backup-test'").fetchone()
+row = sqlite3.connect("/data/hub.sqlite").execute("SELECT value FROM registry_metadata WHERE key='backup-test'").fetchone()
 assert row and row[0] == '"survives"', row
 blobs = Blobs(Settings(db_path=Path("/data/hub.sqlite"), blob_dir=Path("/data/blobs")))
 assert blobs.get(sys.argv[1]) == b"attachment that must survive"

@@ -9,16 +9,25 @@ import pytest
 from backend import lenses as L
 from backend import strategy as S
 from backend.store import H
-from backend.tests.test_api import api, get, post  # noqa: F401
-from backend.tests.test_company import bot, with_strategy_bot
-from backend.tests.test_goal_asks import asks, sync
-from backend.tests.test_strategy import draft, publish, ready, write
+from backend.tests.helpers.api import get, post  # noqa: F401
+from backend.tests.helpers.company import bot, with_strategy_bot
+from backend.tests.helpers.goal_asks import asks, sync
+from backend.tests.helpers.strategy import draft, publish, ready, write
+from backend import bot_settings as BS
 
-ANSWERS = {"rivals": ["Globex", "Doing it by hand"], "factors": ["Price", "Setup time"],
-           "scores": {"columns": ["Us", "Globex", "Doing it by hand"],
-                      "rows": [{"factor": "Price", "scores": [4, 2, 5]}, {"factor": "Setup time", "scores": [3, 3, 1]}]}}
-CURVE = {"kind": "value_curve", "factors": ["Price", "Setup time"],
-         "series": [{"name": "Us", "scores": [4, 3]}, {"name": "Globex", "scores": [2, 3]}]}
+ANSWERS = {
+    "rivals": ["Globex", "Doing it by hand"],
+    "factors": ["Price", "Setup time"],
+    "scores": {
+        "columns": ["Us", "Globex", "Doing it by hand"],
+        "rows": [{"factor": "Price", "scores": [4, 2, 5]}, {"factor": "Setup time", "scores": [3, 3, 1]}],
+    },
+}
+CURVE = {
+    "kind": "value_curve",
+    "factors": ["Price", "Setup time"],
+    "series": [{"name": "Us", "scores": [4, 3]}, {"name": "Globex", "scores": [2, 3]}],
+}
 
 
 @pytest.fixture
@@ -29,29 +38,50 @@ def model(monkeypatch):
     def write_(system, user):
         state["sent"].append(json.loads(user))
         return state["result"]
+
     monkeypatch.setattr(L, "spawn", lambda work: work())
     monkeypatch.setattr(L, "writer", lambda c, settings, store: write_ if state["writer"] else None)
     return state
 
 
 def result(bet_id, **more):
-    return {"summary": "Price is where Acme stands out.", "sections": [{"title": "The curve today", "body": "Cheap."}],
-            "chart": CURVE, "findings": [{"kind": "supports", "bet_id": bet_id, "text": "Two rivals score 2 on price."}],
-            "assumptions": [], "changes": [], "sharpen": ["Globex pricing and plan limits"], **more}
+    return {
+        "summary": "Price is where Acme stands out.",
+        "sections": [{"title": "The curve today", "body": "Cheap."}],
+        "chart": CURVE,
+        "findings": [{"kind": "supports", "bet_id": bet_id, "text": "Two rivals score 2 on price."}],
+        "assumptions": [],
+        "changes": [],
+        "sharpen": ["Globex pricing and plan limits"],
+        **more,
+    }
 
 
 def two_bets(api):
     first = ready(api)
-    second = post(api, "strategy/bets", {"statement": "Landlords refer landlords", "rules_out": "Paid ads", "status": "active",
-                                         "wrong_if": {"kind": "text", "text": "Referrals stay under 5%", "check_by": "2099-01-01"}})["bet"]
+    second = post(
+        api,
+        "strategy/bets",
+        {
+            "statement": "Landlords refer landlords",
+            "rules_out": "Paid ads",
+            "status": "active",
+            "wrong_if": {"kind": "text", "text": "Referrals stay under 5%", "check_by": "2099-01-01"},
+        },
+    )["bet"]
     publish(api)
     return first, second
 
 
 def start(api, lens="blue-ocean", answers=None, token="ana-test", expected=202, **more):
     """Starts a run; the POST answers `running` and the (inline) job finishes after it, so read the run again."""
-    out = post(api, f"lenses/{lens}/runs", {"answers": ANSWERS if answers is None else answers, **more}, token=token,
-               expected=expected)
+    out = post(
+        api,
+        f"lenses/{lens}/runs",
+        {"answers": ANSWERS if answers is None else answers, **more},
+        token=token,
+        expected=expected,
+    )
     if expected != 202 or out["status"] != "running":
         return out
     return get(api, f"lenses/runs/{out['id']}", token=token)
@@ -64,19 +94,33 @@ def run_row(api, run_id):
 
 def librarian(api):
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO bots(slug,display_name,runtime,model,effort,cwd,host,state,created) "
-                  "VALUES('librarian','Librarian','fake','','','','keeper','active',?)", (H.now(),))
-        c.execute("INSERT INTO bot_config(bot,config_json,team,operator) VALUES('librarian','{}',NULL,'ana')")
+        c.execute(
+            "INSERT INTO bots(id,slug,display_name,effort,state,created_at) "
+            "VALUES('librarian','librarian','Librarian','','active',?)",
+            (H.now(),),
+        )
+        c.execute("INSERT INTO bot_config(bot,team,owner_id) VALUES('librarian',NULL,'ana')")
+        BS.write(c, 'librarian', {"runtime": "fake", "host": "keeper"})
     return bot(api, "librarian")
 
 
 def test_every_shipped_lens_loads_and_the_list_puts_strategy_first_and_hides_the_unlisted(api):
     every = {x["id"]: x for x in L.lenses()}
     assert {"ogsm", "v2mom", "plain"} <= set(every) and not any(every[k]["listed"] for k in ("ogsm", "v2mom", "plain"))
-    for token in ("cara-test", bot(api, "ops")):          # a member and a bot read the list
+    for token in ("cara-test", bot(api, "ops")):  # a member and a bot read the list
         listed = get(api, "lenses", token=token)["lenses"]
-        assert [x["id"] for x in listed] == ["playing-to-win", "blue-ocean", "scenarios", "seven-powers", "good-strategy",
-                                             "pre-mortem", "positioning", "where-to-play", "five-forces"]
+        assert [x["id"] for x in listed] == [
+            "playing-to-win",
+            "blue-ocean",
+            "scenarios",
+            "seven-powers",
+            "good-strategy",
+            "startup-idea",
+            "pre-mortem",
+            "positioning",
+            "where-to-play",
+            "five-forces",
+        ]
     assert [x["id"] for x in get(api, "lenses?applies_to=market")["lenses"]] == ["where-to-play", "five-forces"]
     assert get(api, "lenses?applies_to=nope", expected=422)["error"]["code"] == "validation"
 
@@ -105,12 +149,12 @@ def test_only_the_owner_the_strategy_bot_and_for_market_lenses_the_librarian_sta
     for token in ("ben-test", "cara-test", other):
         start(api, token=token, expected=403)
         start(api, "where-to-play", {"segments": ["Landlords"]}, token=token, expected=403)
-    start(api, token=lib, expected=403)                                 # the Librarian runs market lenses only
+    start(api, token=lib, expected=403)  # the Librarian runs market lenses only
     assert start(api, "where-to-play", {"segments": ["Landlords"]}, token=lib)["created_by"] == "bot:librarian"
     assert start(api, token=strategy_token)["created_by"] == "bot:goal-manager"
     # a draft run is the owner's own click
     start(api, on="draft", token=strategy_token, expected=403)
-    start(api, "where-to-play", {}, on="draft", token=lib)             # market lenses ignore `on`
+    start(api, "where-to-play", {}, on="draft", token=lib)  # market lenses ignore `on`
     assert get(api, "lenses/runs?lens=where-to-play")["runs"][0]["on_draft"] is False
     assert start(api, "nope", {}, expected=404)["error"]["code"] == "not_found"
 
@@ -118,17 +162,23 @@ def test_only_the_owner_the_strategy_bot_and_for_market_lenses_the_librarian_sta
 def test_skipped_steps_are_accepted_and_told_to_the_model_while_bad_answer_shapes_are_refused(api, model):
     first, _ = two_bets(api)
     model["result"] = result(first["id"], assumptions=["Globex's price assumed from its public plans."])
-    run = start(api, answers={"rivals": ["Globex"]})                    # three steps skipped
+    run = start(api, answers={"rivals": ["Globex"]})  # three steps skipped
     assert run["status"] == "done" and run["answers"] == {"rivals": ["Globex"]}
     assert run["result"]["assumptions"] == ["Globex's price assumed from its public plans."]
     steps = {s["key"]: s["answer"] for s in model["sent"][-1]["lens"]["steps"]}
     assert steps["rivals"] == ["Globex"] and steps["errc"].startswith("not answered: assume")
-    assert start(api, answers={})["answers"] == {}                      # every step skipped is still a run
-    bad = [{"nope": "x"}, {"rivals": "Globex"}, {"rivals": ["x"] * 13}, {"rivals": [7]}, {"errc": "x" * 2001},
-           {"scores": {"columns": ["Us"], "rows": [{"factor": "Price", "scores": [6]}]}},
-           {"scores": {"columns": ["Us", "Globex"], "rows": [{"factor": "Price", "scores": [3]}]}},
-           {"scores": {"columns": ["Us"] * 7, "rows": []}},
-           {"scores": {"columns": ["Us"], "rows": [{"factor": "Price", "scores": [True]}]}}]
+    assert start(api, answers={})["answers"] == {}  # every step skipped is still a run
+    bad = [
+        {"nope": "x"},
+        {"rivals": "Globex"},
+        {"rivals": ["x"] * 13},
+        {"rivals": [7]},
+        {"errc": "x" * 2001},
+        {"scores": {"columns": ["Us"], "rows": [{"factor": "Price", "scores": [6]}]}},
+        {"scores": {"columns": ["Us", "Globex"], "rows": [{"factor": "Price", "scores": [3]}]}},
+        {"scores": {"columns": ["Us"] * 7, "rows": []}},
+        {"scores": {"columns": ["Us"], "rows": [{"factor": "Price", "scores": [True]}]}},
+    ]
     for answers in bad:
         assert start(api, answers=answers, expected=422)["error"]["code"] == "invalid", answers
     assert start(api, "scenarios", {"horizon": "Ten years"}, expected=422)["error"]["code"] == "invalid"
@@ -139,7 +189,7 @@ def test_with_no_model_the_answers_are_saved_and_nothing_runs(api, model):
     two_bets(api)
     model["writer"] = False
     run = start(api)
-    assert run["status"] == "no_model" and run["result"] is None and run["finished"] and run["answers"] == ANSWERS
+    assert run["status"] == "no_model" and run["result"] is None and run["finished_at"] and run["answers"] == ANSWERS
     assert get(api, f"lenses/runs/{run['id']}") == run and not model["sent"]
 
 
@@ -150,7 +200,7 @@ def test_a_strategy_lens_needs_a_published_version_unless_the_owner_runs_it_on_t
     run = start(api, on="draft")
     assert run["status"] == "done" and run["strategy_n"] is None
     assert "Unpublished landlords." in json.dumps(model["sent"][-1]["strategy"])
-    assert start(api, "where-to-play", {})["status"] == "done"          # a market lens needs no published strategy
+    assert start(api, "where-to-play", {})["status"] == "done"  # a market lens needs no published strategy
 
 
 def test_the_models_result_is_checked_part_by_part_and_what_fails_is_dropped(api, model):
@@ -158,37 +208,56 @@ def test_the_models_result_is_checked_part_by_part_and_what_fails_is_dropped(api
     good = {"summary": "Add a won't-do.", "sections": {"not": "No per-seat pricing."}}
     model["result"] = {
         "summary": "x" * 900,
-        "sections": [{"title": "One", "body": "y" * 5000}, {"title": "Empty", "body": " "}] + [{"title": str(i), "body": "b"} for i in range(12)],
+        "sections": [{"title": "One", "body": "y" * 5000}, {"title": "Empty", "body": " "}]
+        + [{"title": str(i), "body": "b"} for i in range(12)],
         "chart": {"kind": "value_curve", "factors": ["Price"], "series": [{"name": "Us", "scores": [9]}]},
-        "findings": [{"kind": "supports", "bet_id": first["id"], "text": "Real bet."},
-                     {"kind": "challenges", "bet_id": "not-a-bet", "text": "Made up."},
-                     {"kind": "unknown", "bet_id": None, "text": "Not a kind."},
-                     {"kind": "gap", "bet_id": None, "text": "About the strategy as a whole."}],
+        "findings": [
+            {"kind": "supports", "bet_id": first["id"], "text": "Real bet."},
+            {"kind": "challenges", "bet_id": "not-a-bet", "text": "Made up."},
+            {"kind": "unknown", "bet_id": None, "text": "Not a kind."},
+            {"kind": "gap", "bet_id": None, "text": "About the strategy as a whole."},
+        ],
         "assumptions": ["a"] * 14,
-        "changes": [{"label": "Add to what we won't do", "payload": {"sections": {"not": "No per-seat pricing."}}},
-                    {"label": "A made-up bet", "payload": {"bets": [{"id": "not-a-bet", "status": "retired"}]}},
-                    {"label": "Unknown key", "payload": {"summary": "Fine.", "price": 3}},
-                    {"label": "No check date", "payload": {"bets": [{"statement": "New", "wrong_if": {"kind": "text", "text": "x"}}]}},
-                    {"label": "Active with nothing behind it", "payload": {"bets": [{"statement": "New", "status": "active"}]}},
-                    {"label": "", "payload": {"summary": "No label."}},
-                    {"label": "Source is the server's", "payload": {**good, "source": "bet_tripped", "lens": "x"}}],
-        "sharpen": ["one", "two", "three", "four", "five", "six", "seven"]}
+        "changes": [
+            {"label": "Add to what we won't do", "payload": {"sections": {"not": "No per-seat pricing."}}},
+            {"label": "A made-up bet", "payload": {"bets": [{"id": "not-a-bet", "status": "retired"}]}},
+            {"label": "Unknown key", "payload": {"summary": "Fine.", "price": 3}},
+            {
+                "label": "No check date",
+                "payload": {"bets": [{"statement": "New", "wrong_if": {"kind": "text", "text": "x"}}]},
+            },
+            {"label": "Active with nothing behind it", "payload": {"bets": [{"statement": "New", "status": "active"}]}},
+            {"label": "", "payload": {"summary": "No label."}},
+            {"label": "Source is the server's", "payload": {**good, "source": "bet_tripped", "lens": "x"}},
+        ],
+        "sharpen": ["one", "two", "three", "four", "five", "six", "seven"],
+    }
     out = start(api)["result"]
-    assert len(out["summary"]) <= L.SUMMARY_MAX and out["chart"] is None                # a bad chart: result kept
+    assert len(out["summary"]) <= L.SUMMARY_MAX and out["chart"] is None  # a bad chart: result kept
     assert len(out["sections"]) == L.SECTIONS_MAX and len(out["sections"][0]["body"]) <= L.BODY_MAX
     assert [f["text"] for f in out["findings"]] == ["Real bet.", "About the strategy as a whole."]
     assert len(out["assumptions"]) == L.ASSUMPTIONS_MAX and len(out["sharpen"]) == L.SHARPEN_MAX
     # Rules out and Wrong if are optional, so a bare active bet is a change like any other.
-    assert [c["label"] for c in out["changes"]] == ["Add to what we won't do", "Active with nothing behind it",
-                                                     "Source is the server's"]
-    assert out["changes"][2]["payload"] == good                                          # source and lens are never the model's
+    assert [c["label"] for c in out["changes"]] == [
+        "Add to what we won't do",
+        "Active with nothing behind it",
+        "Source is the server's",
+    ]
+    assert out["changes"][2]["payload"] == good  # source and lens are never the model's
     model["result"] = {"summary": "", "sections": [], "chart": None, "findings": [], "changes": []}
     empty = start(api)
     assert empty["status"] == "failed" and empty["error"]["code"] == "empty"
     model["result"] = {"chart": {"kind": "matrix_2x2"}, "summary": "Kept without its chart."}
     assert start(api)["result"]["chart"] is None
-    model["result"] = {"summary": "Rows.", "chart": {"kind": "power_table", "rows": [
-        {"bet_id": "not-a-bet", "bet": "Landlords refer landlords", "power": "network", "how": "h", "when": "w"}]}}
+    model["result"] = {
+        "summary": "Rows.",
+        "chart": {
+            "kind": "power_table",
+            "rows": [
+                {"bet_id": "not-a-bet", "bet": "Landlords refer landlords", "power": "network", "how": "h", "when": "w"}
+            ],
+        },
+    }
     assert start(api, "seven-powers", {})["result"]["chart"]["rows"][0]["bet_id"] is None
 
 
@@ -197,10 +266,14 @@ def test_a_strategy_bot_run_files_exactly_one_strategy_draft_proposal_and_never_
     # above Passive, so the owner is asked
     strategy_token = with_strategy_bot(api, level=2)
     before = draft(api)
-    model["result"] = result(first["id"], changes=[
-        {"label": "Retire Bet 2", "payload": {"bets": [{"id": second["id"], "status": "retired"}]}},
-        {"label": "Sharper summary", "payload": {"summary": "Acme runs rentals with bots for small landlords."}},
-        {"label": "Won't do", "payload": {"sections": {"not": "No per-seat pricing."}}}])
+    model["result"] = result(
+        first["id"],
+        changes=[
+            {"label": "Retire Bet 2", "payload": {"bets": [{"id": second["id"], "status": "retired"}]}},
+            {"label": "Sharper summary", "payload": {"summary": "Acme runs rentals with bots for small landlords."}},
+            {"label": "Won't do", "payload": {"sections": {"not": "No per-seat pricing."}}},
+        ],
+    )
     run = start(api, token=strategy_token)
     assert run["status"] == "done" and run["proposal_id"]
     pending = [p for p in get(api, "goal-proposals")["proposals"] if p["kind"] == "strategy_draft"]
@@ -209,7 +282,7 @@ def test_a_strategy_bot_run_files_exactly_one_strategy_draft_proposal_and_never_
     assert payload["source"] == "lens" and payload["lens"] == "blue-ocean" and pending[0]["lens_name"] == "Blue Ocean"
     assert payload["summary"].startswith("Acme runs rentals") and payload["sections"] == {"not": "No per-seat pricing."}
     assert payload["bets"] == [{"id": second["id"], "status": "retired"}]
-    assert draft(api) == before                                                    # the draft is the owner's to change
+    assert draft(api) == before  # the draft is the owner's to change
     sync(api)
     [ask] = [a for a in asks(api) if a["kind"] == "proposal"]
     assert ask["title"] == "Decide a suggested change to your strategy from the Blue Ocean lens"
@@ -217,7 +290,9 @@ def test_a_strategy_bot_run_files_exactly_one_strategy_draft_proposal_and_never_
     # No change, no proposal; an owner's run never files one.
     model["result"] = result(first["id"])
     assert start(api, token=strategy_token)["proposal_id"] is None
-    model["result"] = result(first["id"], changes=[{"label": "Sharper summary", "payload": {"summary": "Owner's run."}}])
+    model["result"] = result(
+        first["id"], changes=[{"label": "Sharper summary", "payload": {"summary": "Owner's run."}}]
+    )
     assert start(api)["proposal_id"] is None
     assert len([p for p in get(api, "goal-proposals")["proposals"] if p["kind"] == "strategy_draft"]) == 1
 
@@ -225,8 +300,10 @@ def test_a_strategy_bot_run_files_exactly_one_strategy_draft_proposal_and_never_
 def test_a_run_sent_as_a_proposal_cannot_also_be_added_to_the_draft(api, model):
     first, second = two_bets(api)
     strategy_token = with_strategy_bot(api, level=2)
-    model["result"] = result(first["id"], changes=[
-        {"label": "Retire Bet 2", "payload": {"bets": [{"id": second["id"], "status": "retired"}]}}])
+    model["result"] = result(
+        first["id"],
+        changes=[{"label": "Retire Bet 2", "payload": {"bets": [{"id": second["id"], "status": "retired"}]}}],
+    )
     run = start(api, token=strategy_token)
     assert run["proposal_id"]
     before = draft(api)
@@ -237,28 +314,44 @@ def test_a_run_sent_as_a_proposal_cannot_also_be_added_to_the_draft(api, model):
 
 def test_the_owner_applies_each_change_once_against_the_draft_revision(api, model):
     first, _ = two_bets(api)
-    model["result"] = result(first["id"], changes=[
-        {"label": "Won't do", "payload": {"sections": {"not": "No per-seat pricing."}}},
-        {"label": "Summary", "payload": {"summary": "A sharper summary."}}])
+    model["result"] = result(
+        first["id"],
+        changes=[
+            {"label": "Won't do", "payload": {"sections": {"not": "No per-seat pricing."}}},
+            {"label": "Summary", "payload": {"summary": "A sharper summary."}},
+        ],
+    )
     run = start(api)
     revision = draft(api)["revision"]
     post(api, f"lenses/runs/{run['id']}/apply", {"index": 0, "revision": revision - 1}, expected=409)
     assert run_row(api, run["id"])["applied"] == "[]"
     done = post(api, f"lenses/runs/{run['id']}/apply", {"index": 0, "revision": revision})
     assert done["run"]["applied"] == [0] and done["strategy"]["draft"]["sections"]["not"] == "No per-seat pricing."
-    assert done["strategy"]["draft"]["revision"] > revision and done["strategy"]["current"]["n"] == 1   # nothing published
+    assert (
+        done["strategy"]["draft"]["revision"] > revision and done["strategy"]["current"]["n"] == 1
+    )  # nothing published
     again = post(api, f"lenses/runs/{run['id']}/apply", {"index": 0, "revision": draft(api)["revision"]}, expected=409)
     assert again["error"]["code"] == "applied"
     post(api, f"lenses/runs/{run['id']}/apply", {"index": 5, "revision": draft(api)["revision"]}, expected=422)
-    post(api, f"lenses/runs/{run['id']}/apply", {"index": 1, "revision": draft(api)["revision"]}, token="ben-test", expected=403)
-    assert post(api, f"lenses/runs/{run['id']}/apply", {"index": 1, "revision": draft(api)["revision"]})["run"]["applied"] == [0, 1]
+    post(
+        api,
+        f"lenses/runs/{run['id']}/apply",
+        {"index": 1, "revision": draft(api)["revision"]},
+        token="ben-test",
+        expected=403,
+    )
+    assert post(api, f"lenses/runs/{run['id']}/apply", {"index": 1, "revision": draft(api)["revision"]})["run"][
+        "applied"
+    ] == [0, 1]
     assert draft(api)["summary"] == "A sharper summary."
 
 
 def test_asking_the_librarian_to_sharpen_files_one_task_per_ask(api, model):
     first, _ = two_bets(api)
     librarian(api)
-    model["result"] = result(first["id"], sharpen=["Globex pricing and plan limits", "Review-site complaints about Globex"])
+    model["result"] = result(
+        first["id"], sharpen=["Globex pricing and plan limits", "Review-site complaints about Globex"]
+    )
     run = start(api)
     post(api, f"lenses/runs/{run['id']}/sharpen/0", {}, token="ben-test", expected=403)
     filed = post(api, f"lenses/runs/{run['id']}/sharpen/0", {})
@@ -268,19 +361,21 @@ def test_asking_the_librarian_to_sharpen_files_one_task_per_ask(api, model):
     assert second["task_id"] != filed["task_id"] and second["run"]["sharpen_tasks"].keys() == {"0", "1"}
     post(api, f"lenses/runs/{run['id']}/sharpen/2", {}, expected=422)
     with api.app.state.store.read() as c:
-        tasks = [dict(r) for r in c.execute("SELECT title, body FROM tasks WHERE owner='bot:librarian'")]
+        tasks = [dict(r) for r in c.execute("SELECT title, body FROM tasks WHERE owner_id='bot:librarian'")]
     assert len(tasks) == 2 and "Globex pricing and plan limits" in tasks[0]["body"] and "Blue Ocean" in tasks[0]["body"]
     assert "market/open-questions" in tasks[0]["body"]
 
 
-def test_a_run_cut_off_reads_failed_and_start_up_fails_the_running_ones_and_a_late_answer_writes_nothing(api, monkeypatch):
+def test_a_run_cut_off_reads_failed_and_start_up_fails_the_running_ones_and_a_late_answer_writes_nothing(
+    api, monkeypatch
+):
     first, _ = two_bets(api)
-    monkeypatch.setattr(L, "spawn", lambda work: None)                          # the run never answers by itself
+    monkeypatch.setattr(L, "spawn", lambda work: None)  # the run never answers by itself
     monkeypatch.setattr(L, "writer", lambda c, settings, store: lambda system, user: result(first["id"]))
     run = start(api)
     assert run["status"] == "running" and get(api, f"lenses/runs/{run['id']}")["error"] is None
-    with api.app.state.store.transaction() as c:                                # older than the stale limit
-        c.execute("UPDATE lens_runs SET created=? WHERE id=?", (H.shift(H.now(), seconds=-L.STALE_S - 1), run["id"]))
+    with api.app.state.store.transaction() as c:  # older than the stale limit
+        c.execute("UPDATE lens_runs SET created_at=? WHERE id=?", (H.shift(H.now(), seconds=-L.STALE_S - 1), run["id"]))
     stale = get(api, f"lenses/runs/{run['id']}")
     assert stale["status"] == "failed" and stale["error"]["code"] == "interrupted"
     with api.app.state.store.transaction() as c:
@@ -291,19 +386,23 @@ def test_a_run_cut_off_reads_failed_and_start_up_fails_the_running_ones_and_a_la
         L.stop_running(c)
     for found in (fresh, other):
         gone = get(api, f"lenses/runs/{found['id']}")
-        assert gone["status"] == "failed" and gone["error"]["code"] == "interrupted" and gone["finished"]
+        assert gone["status"] == "failed" and gone["error"]["code"] == "interrupted" and gone["finished_at"]
 
 
 def test_a_retried_start_runs_the_model_once_and_a_failing_model_leaves_a_failed_run(api, monkeypatch):
     first, _ = two_bets(api)
     calls = []
     monkeypatch.setattr(L, "spawn", lambda work: work())
-    monkeypatch.setattr(L, "writer", lambda c, settings, store: lambda system, user: calls.append(1) or result(first["id"]))
+    monkeypatch.setattr(
+        L, "writer", lambda c, settings, store: lambda system, user: calls.append(1) or result(first["id"])
+    )
     run = start(api)
-    L.run(api.app.state.store, run["id"])                                       # a replayed POST spawns the job again
+    L.run(api.app.state.store, run["id"])  # a replayed POST spawns the job again
     assert len(calls) == 1
+
     def broken(system, user):
         raise RuntimeError("boom")
+
     monkeypatch.setattr(L, "writer", lambda c, settings, store: broken)
     failed = start(api)
     assert failed["status"] == "failed" and failed["error"]["code"] == "failed" and failed["result"] is None
@@ -311,8 +410,11 @@ def test_a_retried_start_runs_the_model_once_and_a_failing_model_leaves_a_failed
 
 def test_the_prompt_is_capped_and_carries_the_published_strategy_not_the_draft(api, model):
     first, _ = two_bets(api)
-    write(api, summary="Unannounced: a franchise model", sections={"serve": "s" * 3900, "sell": "t" * 3900, "know": "k" * 3900,
-                                                                    "not": "n" * 3900})
+    write(
+        api,
+        summary="Unannounced: a franchise model",
+        sections={"serve": "s" * 3900, "sell": "t" * 3900, "know": "k" * 3900, "not": "n" * 3900},
+    )
     model["result"] = result(first["id"])
     run = start(api, answers={"rivals": ["r" * 200] * 12, "errc": "e" * 2000})
     assert run["status"] == "done"
@@ -320,7 +422,10 @@ def test_the_prompt_is_capped_and_carries_the_published_strategy_not_the_draft(a
     assert "Unannounced" not in json.dumps(model["sent"][-1]["strategy"])
     assert [b["id"] for b in model["sent"][-1]["strategy"]["bets"]][0] == first["id"]
     start(api, on="draft")
-    assert "Unannounced" in json.dumps(model["sent"][-1]["strategy"]) and len(json.dumps(model["sent"][-1])) <= L.PROMPT_CHARS
+    assert (
+        "Unannounced" in json.dumps(model["sent"][-1]["strategy"])
+        and len(json.dumps(model["sent"][-1])) <= L.PROMPT_CHARS
+    )
 
 
 def test_a_draft_whose_guide_file_moved_falls_back_to_the_default_guide(api):
@@ -331,8 +436,9 @@ def test_a_draft_whose_guide_file_moved_falls_back_to_the_default_guide(api):
     assert S.guide("rumelt")["id"] == "default" and [g["id"] for g in get(api, "strategy/guides")] == ["default"]
 
 
-def test_a_market_lens_reads_the_market_definition_and_sizes_and_a_strategy_lens_does_not(api, model):
-    from backend.tests.test_market_spend import B, defined, size
+def test_a_market_lens_and_the_startup_idea_check_read_the_market_sizes_and_other_strategy_lenses_do_not(api, model):
+    from backend.tests.helpers.market_spend import B, defined, size
+
     first, second, _ = defined(api)
     size(api, first, 4 * B, accept=True)
     model["result"] = result(None)
@@ -344,3 +450,22 @@ def test_a_market_lens_reads_the_market_definition_and_sizes_and_a_strategy_lens
     two_bets(api)
     start(api)
     assert model["sent"][-1]["market_spend"] is None
+    # "How big could it get" is weighed against the sizes the Librarian keeps, not a number the model makes up.
+    idea = start(api, "startup-idea", {"want": "Yes", "tarpit": "Many tried listing sites; none ran the units."})
+    assert idea["status"] == "done" and model["sent"][-1]["market_spend"]["segments"][0]["id"] in sized
+    steps = {x["key"]: x for x in model["sent"][-1]["lens"]["steps"]}
+    assert steps["tarpit"]["answer"].startswith("Many tried") and steps["now"]["answer"].startswith("not answered")
+    start(api, "startup-idea", {"want": "Maybe"}, expected=422)  # a choice is one of its options
+
+
+def test_a_lens_choice_of_a_bare_yes_or_no_is_refused_at_load(tmp_path):
+    """YAML reads a bare Yes or No as true or false, which would make the step's only valid answers "True" and "False"."""
+    path = tmp_path / "idea.yaml"
+    path.write_text(
+        "id: idea\nname: Idea\napplies_to: strategy\nminutes: 5\nsteps:\n"
+        "  - {key: want, ask: 'Do you want it', input: choice, options: [Yes, No]}\n"
+    )
+    with pytest.raises(ValueError, match="quote a Yes or a No"):
+        L._load(path)
+    path.write_text(path.read_text().replace("[Yes, No]", "['Yes', 'No']"))
+    assert L._load(path)["steps"][0]["options"] == ["Yes", "No"]

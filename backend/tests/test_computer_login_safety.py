@@ -1,27 +1,47 @@
 """A computer login cannot silently turn subscription-dependent bots into API-billed work."""
+
 import json
 
 import pytest
 
 from backend import readiness
 from backend.store import H
-from backend.tests.test_api import api, assign, get, post, runner  # noqa: F401
-from backend.tests.test_subscriptions import set_runtime
-from backend.tests.test_openapi_v2 import conforms
+from backend.tests.helpers.api import assign, get, post, runner  # noqa: F401
+from backend.tests.helpers.subscriptions import set_runtime
+from backend.tests.helpers.openapi_v2 import conforms
+from backend import bot_settings as BS
 
 
 def beat(api, machine, *, codex='ready', kind='api_key', selected=None):
     selected = selected if selected is not None else codex
     # A retained named home is the computer default, not a second bot login. A dormant home must not decide it.
-    state = {'installed': True, 'authenticated': codex,
-             'account': {'kind': kind, 'email': 'billing@acme.example'},
-             'profiles': {'work': {'installed': True, 'authenticated': selected},
-                          'dormant': {'installed': True, 'authenticated': 'missing'}}}
-    return post(api, 'runners/heartbeat', {'version': 'test', 'platform': 'test',
-        'capabilities': ['computer_logins_v1'], 'readiness': {'schema_version': 1, 'computer_profile': 'work',
-        'runtimes': {'codex': state, 'claude': {'installed': True, 'authenticated': 'ready'}},
-        'bots': {'ops': {'runtime': 'codex', 'ready': selected == 'ready', 'sign_in': selected,
-                         'profile': 'work'}}}}, machine['token'])
+    state = {
+        'installed': True,
+        'authenticated': codex,
+        'account': {'kind': kind, 'email': 'billing@acme.example'},
+        'profiles': {
+            'work': {'installed': True, 'authenticated': selected},
+            'dormant': {'installed': True, 'authenticated': 'missing'},
+        },
+    }
+    return post(
+        api,
+        'runners/heartbeat',
+        {
+            'version': 'test',
+            'platform': 'test',
+            'capabilities': ['computer_logins_v1'],
+            'readiness': {
+                'schema_version': 1,
+                'computer_profile': 'work',
+                'runtimes': {'codex': state, 'claude': {'installed': True, 'authenticated': 'ready'}},
+                'bots': {
+                    'ops': {'runtime': 'codex', 'ready': selected == 'ready', 'sign_in': selected, 'profile': 'work'}
+                },
+            },
+        },
+        machine['token'],
+    )
 
 
 def checks(api, token='ana-test'):
@@ -36,8 +56,11 @@ def test_api_login_warns_across_readiness_connections_and_health_without_inventi
     document = get(api, 'openapi.json')
     declared = document['components']['schemas']['BotSubscription']
     # Limit this regression to the additive warning; legacy identity fields predate this change.
-    warning_contract = {'type': 'object', 'properties': {'warning': declared['properties']['warning']},
-                        'required': [key for key in declared['required'] if key == 'warning']}
+    warning_contract = {
+        'type': 'object',
+        'properties': {'warning': declared['properties']['warning']},
+        'required': [key for key in declared['required'] if key == 'warning'],
+    }
     with api.app.state.store.read() as c:
         result = readiness.can_run(c, 'ops', 'codex')
     assert result['can_run'] is True  # Paid API work remains allowed; a missing plan is not an exhausted API balance.
@@ -65,9 +88,9 @@ def test_health_flags_an_unusable_fallback_before_work_is_queued_and_ignores_ina
     assign(api, machine, 'ops')
     set_runtime(api, 'claude')
     with api.app.state.store.transaction() as c:
-        config = json.loads(c.execute("SELECT config_json FROM bot_config WHERE bot='ops'").fetchone()[0])
+        config = BS.read(c, 'ops')
         config['fallback'] = {'harness': 'codex', 'model': 'gpt-5-codex'}
-        c.execute("UPDATE bot_config SET config_json=? WHERE bot='ops'", (json.dumps(config),))
+        BS.write(c, 'ops', config)
         c.execute("INSERT INTO subscription_assignments VALUES('bot','ops','old-plan',NULL,NULL)")
         H._apply(c, H.ONE_LOGIN_PER_COMPUTER_SCHEMA)
         assert not c.execute("SELECT 1 FROM subscription_assignments WHERE scope='bot'").fetchone()
@@ -100,9 +123,17 @@ def test_health_preserves_folder_failure_reason_without_exposing_it_to_members(a
         if explicit_problem:
             row['data_problem'] = reason
             row['detail'] = 'Sign-in check failed'
-        post(api, 'runners/heartbeat', {'version': 'test', 'platform': 'test',
-            'capabilities': ['computer_logins_v1'], 'readiness': {'schema_version': 1,
-            'runtimes': {'musecode': row}}}, machine['token'])
+        post(
+            api,
+            'runners/heartbeat',
+            {
+                'version': 'test',
+                'platform': 'test',
+                'capabilities': ['computer_logins_v1'],
+                'readiness': {'schema_version': 1, 'runtimes': {'musecode': row}},
+            },
+            machine['token'],
+        )
         issue = checks(api)['computer_logins']
         assert issue['status'] == 'bad' and reason in issue['summary']
         assert 'Sign in or switch account' not in issue['summary']
@@ -110,17 +141,30 @@ def test_health_preserves_folder_failure_reason_without_exposing_it_to_members(a
         assert member['status'] == 'bad' and member['fixes'] == []
         assert '/srv/acme' not in member['summary'] and 'Acme workstation' not in member['summary']
     # A normal signed-out report includes detail too, but its fix is to sign in, not inspect a folder.
-    post(api, 'runners/heartbeat', {'version': 'test', 'platform': 'test',
-        'capabilities': ['computer_logins_v1'], 'readiness': {'schema_version': 1,
-        'runtimes': {'musecode': {'installed': True, 'authenticated': 'missing',
-                                'detail': 'Muse Code login required'}}}}, machine['token'])
+    post(
+        api,
+        'runners/heartbeat',
+        {
+            'version': 'test',
+            'platform': 'test',
+            'capabilities': ['computer_logins_v1'],
+            'readiness': {
+                'schema_version': 1,
+                'runtimes': {
+                    'musecode': {'installed': True, 'authenticated': 'missing', 'detail': 'Muse Code login required'}
+                },
+            },
+        },
+        machine['token'],
+    )
     summary = checks(api)['computer_logins']['summary']
     assert 'Sign in or switch account in Settings > Computers' in summary
     assert reason not in summary and '/srv/acme' not in summary
 
 
-@pytest.mark.parametrize(('aggregate', 'selected'), [('missing', 'ready'), ('failed', 'ready'),
-                                                    ('ready', 'missing'), ('ready', 'failed')])
+@pytest.mark.parametrize(
+    ('aggregate', 'selected'), [('missing', 'ready'), ('failed', 'ready'), ('ready', 'missing'), ('ready', 'failed')]
+)
 def test_retained_default_overrides_conflicting_aggregate_but_keeps_account_metadata(api, aggregate, selected):
     machine = runner(api)
     assign(api, machine, 'ops')

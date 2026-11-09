@@ -1,4 +1,5 @@
 """Reading an action's payload: every field is checked and typed here, so nothing downstream handles raw JSON."""
+
 import re
 from collections.abc import Mapping, Sequence
 from typing import cast
@@ -25,6 +26,13 @@ _DASHES = "\\-\u2010-\u2015\u2212"
 _GAP = re.compile(rf"[\s\u00ad\u200b-\u200d\u2060\ufeff{_DASHES}]*")
 _DASH = re.compile(rf"[{_DASHES}]")
 _WORD = re.compile(r"\w")
+# A CVC (or CVV, security code) typed beside its three or four digits, in any sentence: `CVC 123`, `cvv2: 4567`,
+# `security code 987`, `CVC is 123`. Its digits are the code, whatever else the text says (§8.3, §13). A bare CSC is
+# not matched: a memo can name a year or an invoice with it (`CSC 2026`).
+_CVC_TEXT = re.compile(
+    r"(?i)\b(?:cvc2?|cvv2?|security\s+code)(?![a-z])(?:\s*(?:is|was|no\.?|number|code)\b)?"
+    r"[\W_]{0,3}\d{3,4}(?!\d)"
+)
 
 
 def _luhn(digits: str) -> bool:
@@ -41,8 +49,9 @@ def _card_int(n: int) -> bool:
 
 def _joined_right(text: str, at: int) -> bool:
     """Whether an id runs on past `at`: a letter or digit right there, or a dash with one after it."""
-    return _WORD.match(text, at) is not None or \
-        (_DASH.match(text, at) is not None and _WORD.match(text, at + 1) is not None)
+    return _WORD.match(text, at) is not None or (
+        _DASH.match(text, at) is not None and _WORD.match(text, at + 1) is not None
+    )
 
 
 def _joined_left(text: str, at: int) -> bool:
@@ -57,8 +66,11 @@ def _code_after(text: str, spans: list[tuple[int, int]], j: int) -> bool:
     if j + 1 >= len(spans):
         return False
     code_start, code_end = spans[j + 1]
-    return _GAP.fullmatch(text, spans[j][1], code_start) is not None and 1 <= code_end - code_start <= _CODE_MAX \
+    return (
+        _GAP.fullmatch(text, spans[j][1], code_start) is not None
+        and 1 <= code_end - code_start <= _CODE_MAX
         and not _joined_right(text, code_end)
+    )
 
 
 def _code_before(text: str, spans: list[tuple[int, int]], i: int) -> bool:
@@ -66,11 +78,16 @@ def _code_before(text: str, spans: list[tuple[int, int]], i: int) -> bool:
     if i < 1:
         return False
     code_start, code_end = spans[i - 1]
-    return _GAP.fullmatch(text, code_end, spans[i][0]) is not None and 1 <= code_end - code_start <= _CODE_MAX \
+    return (
+        _GAP.fullmatch(text, code_end, spans[i][0]) is not None
+        and 1 <= code_end - code_start <= _CODE_MAX
         and not _joined_left(text, code_start)
+    )
 
 
 def _card_text(text: str) -> bool:
+    if _CVC_TEXT.search(text):
+        return True
     spans = [m.span() for m in _DIGITS.finditer(text)]
     for i, (start, _) in enumerate(spans):
         if _joined_left(text, start) and not _code_before(text, spans, i):
@@ -79,7 +96,7 @@ def _card_text(text: str) -> bool:
         for j in range(i, len(spans)):
             if j > i and _GAP.fullmatch(text, spans[j - 1][1], spans[j][0]) is None:
                 break
-            digits += text[spans[j][0]:spans[j][1]]
+            digits += text[spans[j][0] : spans[j][1]]
             if len(digits) > 19:
                 break
             end = spans[j][1]
@@ -89,9 +106,10 @@ def _card_text(text: str) -> bool:
 
 
 def has_card_number(value: object) -> bool:
-    """Whether a payload (or part of one) holds a card number: a field named like one, or text or a JSON number with a
-    Luhn-valid run of 13 to 19 digits standing as its own token (not inside an id). Tico never takes or keeps one (spec
-    §8.3), so such a payload is refused before it is stored."""
+    """Whether a payload (or part of one) holds a card number or a CVC: a field named like one, text or a JSON number
+    with a Luhn-valid run of 13 to 19 digits standing as its own token (not inside an id), or text with a CVC typed
+    beside its digits. Tico never takes or keeps either (spec §8.3, §13), so such a payload is refused before it is
+    stored."""
     if isinstance(value, Mapping):
         items_ = cast(Mapping[object, object], value).items()
         return any(str(k).lower() in CARD_NUMBER_KEYS or has_card_number(v) for k, v in items_)

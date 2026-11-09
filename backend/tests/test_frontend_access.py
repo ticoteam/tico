@@ -15,8 +15,9 @@ from backend.app import create_app
 from backend.auth import Identity
 from backend.config import Settings
 from backend.store import H, encode
-from backend.tests.test_api import headers
-from backend.tests.test_oidc import provider, signin  # noqa: F401  (fixtures)
+from backend.tests.helpers.api import headers
+from backend.tests.helpers.oidc import provider, signin  # noqa: F401  (fixtures)
+from backend import bot_settings as BS
 
 APP = "http://localhost:5173"
 PROD = "https://app.acme.example"
@@ -28,20 +29,45 @@ def api(tmp_path):
     """The api fixture of test_api, with a frontend allowed to call it. Fixtures that ask for `api` get this one."""
     registry = tmp_path / "hub-registry"
     registry.mkdir()
-    (registry / "hub-access.yaml").write_text(yaml.safe_dump({"owner": "ana@acme.example", "bot_admins": ["ben@acme.example"]}))
-    app = create_app(Settings(db_path=tmp_path / "hub.db", registry_dir=registry, cors_origins=APP + ", " + PROD, test_identities={
-        "ana-test": Identity("human:ana", "owner", "ana@acme.example"),
-        "ben-test": Identity("human:ben", "human", "ben@acme.example")}))
+    (registry / "hub-access.yaml").write_text(
+        yaml.safe_dump({"owner": "ana@acme.example", "bot_admins": ["ben@acme.example"]})
+    )
+    app = create_app(
+        Settings(
+            db_path=tmp_path / "hub.db",
+            registry_dir=registry,
+            cors_origins=APP + ", " + PROD,
+            test_identities={
+                "ana-test": Identity("human:ana", "owner", "ana@acme.example"),
+                "ben-test": Identity("human:ben", "human", "ben@acme.example"),
+            },
+        )
+    )
     with TestClient(app) as client:
         with app.state.store.transaction() as c:
-            H.sync_registry(c, {"ops": {"name": "ops", "runtime": "fake", "status": "active"}},
-                            {"people": [{"id": p, "email": p + "@acme.example"} for p in ("ana", "ben")]})
-            c.execute("INSERT INTO registry_metadata VALUES('people',?)", (encode({"people": [
-                {"id": "ana", "email": "ana@acme.example", "primary_for": ["*"]},
-                {"id": "ben", "email": "ben@acme.example"}]}),))
-            c.execute("INSERT INTO bot_config(bot,config_json,operator) VALUES('ops',?,'ana')",
-                      (encode({"name": "ops", "runtime": "fake", "status": "active"}),))
-            c.execute("INSERT INTO registry_metadata VALUES('onboarding',?)", (encode({"completed": "2026-01-01T00:00:00Z"}),))
+            H.sync_registry(
+                c,
+                {"ops": {"name": "ops", "runtime": "fake", "status": "active"}},
+                {"people": [{"id": p, "email": p + "@acme.example"} for p in ("ana", "ben")]},
+            )
+            c.execute(
+                "INSERT INTO registry_metadata VALUES('people',?)",
+                (
+                    encode(
+                        {
+                            "people": [
+                                {"id": "ana", "email": "ana@acme.example", "primary_for": ["*"]},
+                                {"id": "ben", "email": "ben@acme.example"},
+                            ]
+                        }
+                    ),
+                ),
+            )
+            c.execute("INSERT INTO bot_config(bot,owner_id) VALUES('ops','ana')")
+            BS.write(c, 'ops', {'name': 'ops', 'runtime': 'fake', 'status': 'active'})
+            c.execute(
+                "INSERT INTO registry_metadata VALUES('onboarding',?)", (encode({"completed": "2026-01-01T00:00:00Z"}),)
+            )
         yield client
 
 
@@ -54,6 +80,7 @@ CHALLENGE = challenge_for(VERIFIER)
 
 
 # ---- CORS -------------------------------------------------------------------------------
+
 
 def test_cors_answers_allowed_origins_only(api):
     r = api.get("/api/v2/me", headers={**headers(), "Origin": APP})
@@ -78,9 +105,13 @@ def test_the_allowlist_takes_exact_origins_only(value):
 
 # ---- sign-in for a frontend on another origin -----------------------------------------------
 
+
 def start(signin, target=APP + "/", challenge=CHALLENGE, **query):
-    return signin.api.get("/auth/login", params={"next": target, **({"code_challenge": challenge} if challenge else {}), **query},
-                          follow_redirects=False)
+    return signin.api.get(
+        "/auth/login",
+        params={"next": target, **({"code_challenge": challenge} if challenge else {}), **query},
+        follow_redirects=False,
+    )
 
 
 def sign_in(signin, target=APP + "/", claims=None):
@@ -97,15 +128,23 @@ def tico_code(response):
 
 
 def exchange(signin, code, verifier=VERIFIER, origin=APP):
-    return signin.api.post("/auth/token", json={"code": code, "code_verifier": verifier},
-                           headers={"Origin": origin} if origin else {})
+    return signin.api.post(
+        "/auth/token", json={"code": code, "code_verifier": verifier}, headers={"Origin": origin} if origin else {}
+    )
 
 
 def test_a_frontend_signs_in_and_gets_a_code_then_a_bearer_session(signin):
     done = sign_in(signin, APP + "/app/?tab=tasks")
     location, code = tico_code(done)
-    assert (location.scheme, location.netloc, location.path, location.query) == ("http", "localhost:5173", "/app/", "tab=tasks")
-    assert "tico_session" not in done.headers.get("set-cookie", "") and signin.sessions() == []      # no cookie, no session yet
+    assert (location.scheme, location.netloc, location.path, location.query) == (
+        "http",
+        "localhost:5173",
+        "/app/",
+        "tab=tasks",
+    )
+    assert (
+        "tico_session" not in done.headers.get("set-cookie", "") and signin.sessions() == []
+    )  # no cookie, no session yet
     assert me_status(signin, {}) == 401
 
     made = exchange(signin, code)
@@ -119,7 +158,7 @@ def test_a_frontend_signs_in_and_gets_a_code_then_a_bearer_session(signin):
     assert who.status_code == 200 and who.json()["actor"] == "human:ben" and who.json()["role"] == "human"
     assert who.headers["access-control-allow-credentials"] == "true"
     # Only a hash is kept, and the session answers as a cookie session would.
-    assert token["access_token"][len("tico_st_"):] not in json.dumps([dict(r) for r in signin.sessions()])
+    assert token["access_token"][len("tico_st_") :] not in json.dumps([dict(r) for r in signin.sessions()])
     signin.api.cookies.clear()
     assert signin.api.get("/api/v2/needs-you", headers=bearer).status_code == 200
 
@@ -134,11 +173,17 @@ def test_alias_entry_preserves_frontend_pkce_without_moving_cookies_or_api_calls
     public, alias = "https://tico.acme.example", "https://old.acme.example"
     signin.start(public_url=public)
     target = PROD + "/app/?tab=tasks"
-    entry = signin.api.get(alias + "/auth/login", params={
-        "next": target, "code_challenge": CHALLENGE, "fresh": "1", "unknown": "drop-me"}, follow_redirects=False)
+    entry = signin.api.get(
+        alias + "/auth/login",
+        params={"next": target, "code_challenge": CHALLENGE, "fresh": "1", "unknown": "drop-me"},
+        follow_redirects=False,
+    )
     assert entry.status_code == 302 and "set-cookie" not in entry.headers
     assert parse_qs(urlparse(entry.headers["location"]).query) == {
-        "next": [target], "code_challenge": [CHALLENGE], "fresh": ["1"]}
+        "next": [target],
+        "code_challenge": [CHALLENGE],
+        "fresh": ["1"],
+    }
     began = signin.api.get(entry.headers["location"], follow_redirects=False)
     query = parse_qs(urlparse(began.headers["location"]).query)
     assert query["redirect_uri"] == [public + "/auth/callback"] and query["prompt"] == ["select_account"]
@@ -146,7 +191,11 @@ def test_alias_entry_preserves_frontend_pkce_without_moving_cookies_or_api_calls
     done = signin.api.get(query["redirect_uri"][0], params={"code": code, "state": state}, follow_redirects=False)
     location, code = tico_code(done)
     assert (location.scheme, location.netloc, location.path, location.query) == (
-        "https", "app.acme.example", "/app/", "tab=tasks")
+        "https",
+        "app.acme.example",
+        "/app/",
+        "tab=tasks",
+    )
     assert "tico_session" not in done.headers.get("set-cookie", "")
     made = exchange(signin, code, origin=PROD)
     assert made.status_code == 200
@@ -163,7 +212,7 @@ def me_status(signin, extra):
 
 def test_the_code_is_single_use_and_bound_to_the_verifier_and_the_origin(signin):
     _, code = tico_code(sign_in(signin))
-    assert exchange(signin, code, verifier="w" * 64).status_code == 400          # wrong verifier burns the code
+    assert exchange(signin, code, verifier="w" * 64).status_code == 400  # wrong verifier burns the code
     assert exchange(signin, code).status_code == 400
     _, code = tico_code(sign_in(signin))
     assert exchange(signin, code, origin=EVIL).status_code == 400

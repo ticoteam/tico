@@ -2,6 +2,7 @@
 in transit until a Stripe deposit clears it, an invoice paid through Stripe, backfill and catch-up that take each balance
 transaction once across passes, the opening balance from a read the Stripe balance did not move through, a reconnect that reuses its money account, daily
 summaries, and webhook signatures. Runs on an in-memory fake of Stripe's API and the Mercury fixtures the bank tests use."""
+
 import json
 import time
 from datetime import datetime, timezone
@@ -18,14 +19,25 @@ from backend.finance.store import banking as store_banking
 from backend.finance.core import feeds as F
 from backend.finance.core.errors import FinanceError
 from backend.finance.mercury import Answer
-from backend.tests.test_api import api, get, headers  # noqa: F401
-from backend.tests.test_finance_fixtures import (  # noqa: F401
-    AT, OWNER, FakeMercury, account, act, books, connect, finance_template, store)
+from backend.tests.helpers.api import get, headers  # noqa: F401
+from backend.tests.helpers.finance_fixtures import (
+    AT,
+    OWNER,
+    FakeMercury,
+    account,
+    act,
+    books,
+    close_month,
+    connect,
+    finance_template,
+    reopen_rows,
+    store,
+)
 
 DAY = int(datetime(2026, 10, 10, 12, tzinfo=timezone.utc).timestamp())
 WEBHOOK_SECRET = "whsec_test_secret_0123456789abcdef"
 ACCOUNT = "acct_test000001"
-STALE_AT = "2026-10-20T12:00:00.000000Z"            # seven days past the first charges' day, plus the margin
+STALE_AT = "2026-10-20T12:00:00.000000Z"  # seven days past the first charges' day, plus the margin
 
 
 def _source(kind: str, tid: str, link: str, name: str) -> dict[str, Any]:
@@ -51,24 +63,49 @@ class FakeStripe:
         self.txns: list[dict[str, Any]] = []
         self.page = page
         self.start = start
-        self.reads = 0                      # balance reads so far
-        self.race: Callable[[], None] | None = None    # runs once, on read number `race_on`, before or after the sum
+        self.reads = 0  # balance reads so far
+        self.race: Callable[[], None] | None = None  # runs once, on read number `race_on`, before or after the sum
         self.race_on = 0
         self.race_when = "before"
 
-    def add(self, kind: str, amount: int, fee: int = 0, name: str = "", link: str = "",
-            created: int | None = None, source: str = "") -> str:
+    def add(
+        self,
+        kind: str,
+        amount: int,
+        fee: int = 0,
+        name: str = "",
+        link: str = "",
+        created: int | None = None,
+        source: str = "",
+    ) -> str:
         """`source` is the refund a refund failure undoes. Left empty, a refund failure names the latest refund of its
         charge, as Stripe does."""
         tid = f"txn_{len(self.txns) + 1:04d}"
         if kind == "refund_failure" and not source:
-            source = next((str(t["source"]["id"]) for t in reversed(self.txns)
-                           if t["type"] == "refund" and t["source"]["charge"] == link), "")
+            source = next(
+                (
+                    str(t["source"]["id"])
+                    for t in reversed(self.txns)
+                    if t["type"] == "refund" and t["source"]["charge"] == link
+                ),
+                "",
+            )
         src = {"id": source, "object": "refund", "charge": link} if source else _source(kind, tid, link, name)
-        self.txns.append({"id": tid, "object": "balance_transaction", "type": kind, "amount": amount, "fee": fee,
-                          "net": amount - fee, "currency": "usd", "status": "available",
-                          "created": created if created is not None else DAY + 60 * (len(self.txns) + 1),
-                          "description": kind, "source": src})
+        self.txns.append(
+            {
+                "id": tid,
+                "object": "balance_transaction",
+                "type": kind,
+                "amount": amount,
+                "fee": fee,
+                "net": amount - fee,
+                "currency": "usd",
+                "status": "available",
+                "created": created if created is not None else DAY + 60 * (len(self.txns) + 1),
+                "description": kind,
+                "source": src,
+            }
+        )
         return tid
 
     def account(self) -> Answer:
@@ -87,7 +124,7 @@ class FakeStripe:
     def transactions(self, starting_after: str | None = None, limit: int = 100) -> Answer:
         newest = list(reversed(self.txns))
         start = [t["id"] for t in newest].index(starting_after) + 1 if starting_after else 0
-        page = newest[start:start + min(limit, self.page)]
+        page = newest[start : start + min(limit, self.page)]
         return Answer(200, {"object": "list", "data": page, "has_more": start + len(page) < len(newest)})
 
     def total(self) -> int:
@@ -98,8 +135,7 @@ def connect_stripe(store: Any, fake: FakeStripe, credential: str = "cred-stripe"
     found, why = stripe_sync.probe(fake)  # type: ignore[arg-type]
     assert not why, why
     with store.transaction() as c:
-        done = act(c, OWNER, "connection_create", {"provider": "stripe", "credential_id": credential,
-                                                   "probe": found})
+        done = act(c, OWNER, "connection_create", {"provider": "stripe", "credential_id": credential, "probe": found})
     assert done.status == "committed", done
     return str(done.result["connection_id"])
 
@@ -118,25 +154,45 @@ def deposit(store: Any, amount: int, pid: str, day: str = "2026-10-12", counterp
     """A Mercury deposit taken in the way the bank worker takes one in (banking.ingest, one transaction)."""
     with store.transaction() as c:
         ctx = load(c, AT)
-        cid, acct = c.execute("SELECT connection_id, provider_account_id FROM fin_money_accounts "
-                              "WHERE provider='mercury' AND kind='bank' ORDER BY created_at LIMIT 1").fetchone()
-        fid = banking.ingest(ctx, str(cid), F.FeedTxn(provider_id=pid, account_id=str(acct), amount=amount,
-                                                      txn_date=day, status=F.POSTED, kind="externalTransfer",
-                                                      counterparty=counterparty))
+        cid, acct = c.execute(
+            "SELECT connection_id, provider_account_id FROM fin_money_accounts "
+            "WHERE provider='mercury' AND kind='bank' ORDER BY created_at LIMIT 1"
+        ).fetchone()
+        fid = banking.ingest(
+            ctx,
+            str(cid),
+            F.FeedTxn(
+                provider_id=pid,
+                account_id=str(acct),
+                amount=amount,
+                txn_date=day,
+                status=F.POSTED,
+                kind="externalTransfer",
+                counterparty=counterparty,
+            ),
+        )
     return str(fid)
 
 
 def _sum(c: Any, code: str) -> int:
     """What the entries put on one account, by code. A reversed entry and its reversal both count, so each pair nets
     to nothing; the status filter would keep only the reversal."""
-    return int(c.execute("SELECT COALESCE(SUM(l.amount),0) FROM fin_lines l JOIN fin_accounts a ON a.id=l.account_id "
-                         "WHERE a.code=?", (code,)).fetchone()[0])
+    return int(
+        c.execute(
+            "SELECT COALESCE(SUM(l.amount),0) FROM fin_lines l JOIN fin_accounts a ON a.id=l.account_id WHERE a.code=?",
+            (code,),
+        ).fetchone()[0]
+    )
 
 
 def _named_sum(c: Any, name: str) -> int:
     """What the entries put on one account, by its name (the transit account is found by name)."""
-    return int(c.execute("SELECT COALESCE(SUM(l.amount),0) FROM fin_lines l JOIN fin_accounts a ON a.id=l.account_id "
-                         "WHERE a.name=?", (name,)).fetchone()[0])
+    return int(
+        c.execute(
+            "SELECT COALESCE(SUM(l.amount),0) FROM fin_lines l JOIN fin_accounts a ON a.id=l.account_id WHERE a.name=?",
+            (name,),
+        ).fetchone()[0]
+    )
 
 
 def _every_entry_balances(c: Any) -> bool:
@@ -144,8 +200,12 @@ def _every_entry_balances(c: Any) -> bool:
 
 
 def _bank_code(c: Any) -> str:
-    return str(c.execute("SELECT a.code FROM fin_money_accounts m JOIN fin_accounts a ON a.id=m.account_id "
-                         "WHERE m.provider='mercury' AND m.kind='bank' ORDER BY m.created_at LIMIT 1").fetchone()[0])
+    return str(
+        c.execute(
+            "SELECT a.code FROM fin_money_accounts m JOIN fin_accounts a ON a.id=m.account_id "
+            "WHERE m.provider='mercury' AND m.kind='bank' ORDER BY m.created_at LIMIT 1"
+        ).fetchone()[0]
+    )
 
 
 def _feed(c: Any, provider_id: str) -> Any:
@@ -155,13 +215,20 @@ def _feed(c: Any, provider_id: str) -> Any:
 def _asked(c: Any, provider_id: str, period: str = "") -> int:
     """How many times a person was asked about this Stripe row (for its key, `period`)."""
     row = _feed(c, provider_id)
-    return int(c.execute("SELECT COUNT(*) FROM fin_events WHERE name='finance.feed.needs_category' AND subject=? AND "
-                         "period_key=?", (str(row["id"]), period)).fetchone()[0])
+    return int(
+        c.execute(
+            "SELECT COUNT(*) FROM fin_events WHERE name='finance.feed.needs_category' AND subject=? AND period_key=?",
+            (str(row["id"]), period),
+        ).fetchone()[0]
+    )
 
 
 def _entries(c: Any, prefix: str) -> int:
-    return int(c.execute("SELECT COUNT(*) FROM fin_entries WHERE status='posted' AND source_id LIKE ?",
-                         (prefix + "%",)).fetchone()[0])
+    return int(
+        c.execute(
+            "SELECT COUNT(*) FROM fin_entries WHERE status='posted' AND source_id LIKE ?", (prefix + "%",)
+        ).fetchone()[0]
+    )
 
 
 def _customer(store: Any, name: str) -> str:
@@ -171,8 +238,16 @@ def _customer(store: Any, name: str) -> str:
 
 def _invoice(store: Any, customer: str, amount: int) -> str:
     with store.transaction() as c:
-        made = act(c, OWNER, "invoice_create", {"customer_id": customer, "invoice_date": "2026-10-01",
-                                                "lines": [{"account_id": account(c, "4000"), "amount": amount}]})
+        made = act(
+            c,
+            OWNER,
+            "invoice_create",
+            {
+                "customer_id": customer,
+                "invoice_date": "2026-10-01",
+                "lines": [{"account_id": account(c, "4000"), "amount": amount}],
+            },
+        )
         assert act(c, OWNER, "invoice_send", {"invoice_id": made.result["invoice_id"]}).status == "committed"
     return str(made.result["invoice_id"])
 
@@ -468,7 +543,7 @@ def test_the_opening_balance_counts_each_transaction_once_when_a_charge_lands_du
     for i in range(3):
         stripe.add("charge", 1_000, 0, "Acme Buyer", created=DAY + 60 * (i + 1))
     stripe.reads = 0
-    stripe.race_on, stripe.race_when = 2, when          # read 1 is the pass's balance, read 2 is the cut's
+    stripe.race_on, stripe.race_when = 2, when  # read 1 is the pass's balance, read 2 is the cut's
     stripe.race = lambda: stripe.add("charge", 500, 0, "Acme Late", created=DAY + 2_000)
     stripe_pass(books, stripe)
     with books.read() as c:
@@ -486,8 +561,7 @@ def test_backfill_reads_every_page_once_and_a_repeat_changes_nothing(books):
     stripe_pass(books, stripe, AT)
     with books.read() as c:
         assert c.execute("SELECT COUNT(*) FROM fin_feed_txns").fetchone()[0] == 5
-        settings = json.loads(c.execute("SELECT settings_json FROM fin_connections WHERE provider='stripe'"
-                                        ).fetchone()[0])
+        settings = json.loads(c.execute("SELECT settings FROM fin_connections WHERE provider='stripe'").fetchone()[0])
         assert settings["backfilled"] is True
         before = (_sum(c, "4000"), _sum(c, "6200"), _sum(c, "1050"))
         entries = c.execute("SELECT COUNT(*) FROM fin_entries").fetchone()[0]
@@ -578,8 +652,9 @@ def test_a_second_live_connection_to_the_same_stripe_account_is_refused(books):
     found, why = stripe_sync.probe(stripe)  # type: ignore[arg-type]
     assert not why, why
     with books.transaction() as c:
-        done = act(c, OWNER, "connection_create", {"provider": "stripe", "credential_id": "cred-stripe-2",
-                                                   "probe": found})
+        done = act(
+            c, OWNER, "connection_create", {"provider": "stripe", "credential_id": "cred-stripe-2", "probe": found}
+        )
     assert done.status != "committed"
     with books.read() as c:
         assert c.execute("SELECT COUNT(*) FROM fin_money_accounts WHERE provider='stripe'").fetchone()[0] == 1
@@ -600,8 +675,9 @@ def test_the_connections_route_takes_a_stripe_key_through_the_stripe_probe(api, 
 
     monkeypatch.setattr(FA, "stripe_probe", stripe_probe)
     monkeypatch.setattr(FA, "mercury_probe", no_mercury)
-    res = api.post("/api/v2/finance/connections", json={"provider": "stripe", "credential_id": "cred-stripe"},
-                   headers=headers())
+    res = api.post(
+        "/api/v2/finance/connections", json={"provider": "stripe", "credential_id": "cred-stripe"}, headers=headers()
+    )
     assert res.status_code == 200, res.text
     assert probed == ["cred-stripe"]
     assert res.json()["status"] == "committed", res.json()
@@ -615,8 +691,12 @@ def test_a_marked_payment_paid_through_stripe_still_posts_the_fee_so_the_balance
     connect_stripe(books, stripe)
     iid = _invoice(books, _customer(books, "Acme Retail"), 10_000)
     with books.transaction() as c:
-        made = act(c, OWNER, "invoice_record_payment", {"invoice_id": iid, "money_account_id": _stripe_money(books),
-                                                        "date": "2026-10-10"})
+        made = act(
+            c,
+            OWNER,
+            "invoice_record_payment",
+            {"invoice_id": iid, "money_account_id": _stripe_money(books), "date": "2026-10-10"},
+        )
         assert made.status == "committed", made
     stripe.add("charge", 10_000, 320, "Acme Retail")
     stripe_pass(books, stripe)
@@ -673,8 +753,13 @@ def test_a_held_sale_applied_in_full_by_hand_cannot_be_categorized_again(books):
     connect_stripe(books, stripe)
     iid = _invoice(books, _customer(books, "Acme Retail"), 10_000)
     with books.transaction() as c:
-        rule = {"kind": "posting", "name": "Hold", "when": {"counterparty": "Acme Hold"}, "outcome": {"outcome": "ask"},
-                "examples": [{"input": {"counterparty": "Acme Hold"}, "expect": "ask"}]}
+        rule = {
+            "kind": "posting",
+            "name": "Hold",
+            "when": {"counterparty": "Acme Hold"},
+            "outcome": {"outcome": "ask"},
+            "examples": [{"input": {"counterparty": "Acme Hold"}, "expect": "ask"}],
+        }
         assert act(c, OWNER, "rule_create", rule).status == "committed"
     stripe.add("charge", 10_000, 300, "Acme Hold")
     stripe_pass(books, stripe)
@@ -697,8 +782,13 @@ def test_a_refund_gives_back_no_more_than_each_settlement_received_and_the_rest_
     connect_stripe(books, stripe)
     iid = _invoice(books, _customer(books, "Acme Retail"), 5_000)
     with books.transaction() as c:
-        rule = {"kind": "posting", "name": "Hold", "when": {"counterparty": "Acme Hold"}, "outcome": {"outcome": "ask"},
-                "examples": [{"input": {"counterparty": "Acme Hold"}, "expect": "ask"}]}
+        rule = {
+            "kind": "posting",
+            "name": "Hold",
+            "when": {"counterparty": "Acme Hold"},
+            "outcome": {"outcome": "ask"},
+            "examples": [{"input": {"counterparty": "Acme Hold"}, "expect": "ask"}],
+        }
         assert act(c, OWNER, "rule_create", rule).status == "committed"
     stripe.add("charge", 10_000, 0, "Acme Hold")
     stripe_pass(books, stripe)
@@ -724,8 +814,9 @@ def test_separate_refunds_of_a_sale_that_settled_two_invoices_leave_each_invoice
     money = _stripe_money(books)
     with books.transaction() as c:
         for iid in (first, second):
-            paid = act(c, OWNER, "invoice_record_payment", {"invoice_id": iid, "money_account_id": money,
-                                                            "date": "2026-10-10"})
+            paid = act(
+                c, OWNER, "invoice_record_payment", {"invoice_id": iid, "money_account_id": money, "date": "2026-10-10"}
+            )
             assert paid.status == "committed", paid
     stripe.add("charge", 10_100, 0, "Acme Retail")
     stripe_pass(books, stripe)
@@ -747,20 +838,36 @@ def test_a_day_of_many_sales_under_a_split_rule_posts_as_journals_under_the_line
     connect_stripe(books, stripe)
     with books.transaction() as c:
         accounts = [account(c, "4000")] + [
-            str(act(c, OWNER, "account_create", {"code": f"41{i}0", "name": f"Line {i}", "type": "income"}
-                    ).result["account_id"]) for i in range(1, 5)]
+            str(
+                act(c, OWNER, "account_create", {"code": f"41{i}0", "name": f"Line {i}", "type": "income"}).result[
+                    "account_id"
+                ]
+            )
+            for i in range(1, 5)
+        ]
         split = [{"account_id": a, "share": 2_000} for a in accounts]
-        rule = {"kind": "posting", "name": "Split", "when": {"direction": "in"},
-                "outcome": {"outcome": "post", "split": split},
-                "examples": [{"input": {"direction": "in"}, "expect": "post"}]}
+        rule = {
+            "kind": "posting",
+            "name": "Split",
+            "when": {"direction": "in"},
+            "outcome": {"outcome": "post", "split": split},
+            "examples": [{"input": {"direction": "in"}, "expect": "post"}],
+        }
         assert act(c, OWNER, "rule_create", rule).status == "committed"
     for n in range(100):
         stripe.add("charge", 1_000, 30, f"Buyer {n:03d}")
     stripe_pass(books, stripe)
     with books.read() as c:
-        assert c.execute("SELECT COUNT(*) FROM fin_feed_txns WHERE kind='charge' AND status='posted'").fetchone()[0] == 100
-        sizes = [int(r[0]) for r in c.execute("SELECT COUNT(*) FROM fin_lines l JOIN fin_entries e ON e.id=l.entry_id "
-                                              "WHERE e.status='posted' GROUP BY e.id")]
+        assert (
+            c.execute("SELECT COUNT(*) FROM fin_feed_txns WHERE kind='charge' AND status='posted'").fetchone()[0] == 100
+        )
+        sizes = [
+            int(r[0])
+            for r in c.execute(
+                "SELECT COUNT(*) FROM fin_lines l JOIN fin_entries e ON e.id=l.entry_id "
+                "WHERE e.status='posted' GROUP BY e.id"
+            )
+        ]
         assert len(sizes) == 2 and max(sizes) <= 500, sizes
         assert _every_entry_balances(c)
         assert (_sum(c, "1050"), _sum(c, "6200")) == (97_000, 3_000)
@@ -776,10 +883,16 @@ def test_summarized_sales_reconcile_to_the_statement_one_row_at_a_time(books):
     stripe_pass(books, stripe)
     with books.transaction() as c:
         mid = _stripe_money(books)
-        ids = [str(r[0]) for r in c.execute("SELECT id FROM fin_feed_txns WHERE money_account_id=? ORDER BY provider_id",
-                                            (mid,))]
-        done = act(c, OWNER, "reconcile", {"money_account_id": mid, "statement_end": "2026-10-14",
-                                           "statement_balance": 16_460, "cleared": ids})
+        ids = [
+            str(r[0])
+            for r in c.execute("SELECT id FROM fin_feed_txns WHERE money_account_id=? ORDER BY provider_id", (mid,))
+        ]
+        done = act(
+            c,
+            OWNER,
+            "reconcile",
+            {"money_account_id": mid, "statement_end": "2026-10-14", "statement_balance": 16_460, "cleared": ids},
+        )
         assert done.status == "committed", done
         assert done.result["status"] == "done" and done.result["difference"] == 0, done.result
 
@@ -788,11 +901,16 @@ def test_a_posting_rule_sets_the_sale_account_in_the_summary_and_a_refund_revers
     stripe = FakeStripe()
     connect_stripe(books, stripe)
     with books.transaction() as c:
-        services = str(act(c, OWNER, "account_create", {"code": "4100", "name": "Services", "type": "income"}
-                           ).result["account_id"])
-        rule = {"kind": "posting", "name": "Cloud", "when": {"counterparty": "Acme Cloud"},
-                "outcome": {"outcome": "post", "account_id": services},
-                "examples": [{"input": {"counterparty": "Acme Cloud"}, "expect": "post"}]}
+        services = str(
+            act(c, OWNER, "account_create", {"code": "4100", "name": "Services", "type": "income"}).result["account_id"]
+        )
+        rule = {
+            "kind": "posting",
+            "name": "Cloud",
+            "when": {"counterparty": "Acme Cloud"},
+            "outcome": {"outcome": "post", "account_id": services},
+            "examples": [{"input": {"counterparty": "Acme Cloud"}, "expect": "post"}],
+        }
         assert act(c, OWNER, "rule_create", rule).status == "committed"
     stripe.add("charge", 10_000, 320, "Acme Cloud")
     stripe.add("charge", 5_000, 160, "Acme Buyer")
@@ -811,8 +929,13 @@ def test_a_sale_a_posting_rule_asks_about_is_held_and_a_person_is_asked(books):
     stripe = FakeStripe()
     connect_stripe(books, stripe)
     with books.transaction() as c:
-        rule = {"kind": "posting", "name": "Hold", "when": {"counterparty": "Acme Hold"}, "outcome": {"outcome": "ask"},
-                "examples": [{"input": {"counterparty": "Acme Hold"}, "expect": "ask"}]}
+        rule = {
+            "kind": "posting",
+            "name": "Hold",
+            "when": {"counterparty": "Acme Hold"},
+            "outcome": {"outcome": "ask"},
+            "examples": [{"input": {"counterparty": "Acme Hold"}, "expect": "ask"}],
+        }
         assert act(c, OWNER, "rule_create", rule).status == "committed"
     stripe.add("charge", 3_000, 90, "Acme Hold")
     stripe_pass(books, stripe)
@@ -828,8 +951,13 @@ def test_a_held_sale_a_person_categorizes_posts_its_gross_income_and_its_fee_lik
     stripe = FakeStripe()
     connect_stripe(books, stripe)
     with books.transaction() as c:
-        rule = {"kind": "posting", "name": "Hold", "when": {"counterparty": "Acme Hold"}, "outcome": {"outcome": "ask"},
-                "examples": [{"input": {"counterparty": "Acme Hold"}, "expect": "ask"}]}
+        rule = {
+            "kind": "posting",
+            "name": "Hold",
+            "when": {"counterparty": "Acme Hold"},
+            "outcome": {"outcome": "ask"},
+            "examples": [{"input": {"counterparty": "Acme Hold"}, "expect": "ask"}],
+        }
         assert act(c, OWNER, "rule_create", rule).status == "committed"
     stripe.add("charge", 3_000, 90, "Acme Hold")
     stripe_pass(books, stripe)
@@ -849,8 +977,13 @@ def test_a_held_sale_applied_by_hand_to_an_invoice_posts_its_gross_and_fee_so_a_
     connect_stripe(books, stripe)
     iid = _invoice(books, _customer(books, "Acme Retail"), 10_000)
     with books.transaction() as c:
-        rule = {"kind": "posting", "name": "Hold", "when": {"counterparty": "Acme Hold"}, "outcome": {"outcome": "ask"},
-                "examples": [{"input": {"counterparty": "Acme Hold"}, "expect": "ask"}]}
+        rule = {
+            "kind": "posting",
+            "name": "Hold",
+            "when": {"counterparty": "Acme Hold"},
+            "outcome": {"outcome": "ask"},
+            "examples": [{"input": {"counterparty": "Acme Hold"}, "expect": "ask"}],
+        }
         assert act(c, OWNER, "rule_create", rule).status == "committed"
     stripe.add("charge", 10_000, 300, "Acme Hold")
     stripe_pass(books, stripe)
@@ -903,17 +1036,23 @@ def test_a_stripe_charge_with_a_fee_is_linked_to_marked_payments_that_add_up_to_
     iids = [_invoice(books, customer, amount) for amount in (6_000, 4_000, 6_000, 4_000)]
     with books.transaction() as c:
         for iid in iids:
-            paid = act(c, OWNER, "invoice_record_payment", {"invoice_id": iid, "money_account_id": money,
-                                                            "date": "2026-10-10"})
+            paid = act(
+                c, OWNER, "invoice_record_payment", {"invoice_id": iid, "money_account_id": money, "date": "2026-10-10"}
+            )
             assert paid.status == "committed", paid
     stripe.add("charge", 10_000, 320, "Unknown Shopper")
     stripe_pass(books, stripe)
     with books.transaction() as c:
         row = str(_feed(c, "txn_0001")["id"])
         assert _feed(c, "txn_0001")["status"] == "new"
-        pair = [str(r[0]) for r in c.execute(
-            "SELECT id FROM fin_settlements WHERE to_id IN (?, ?) AND from_kind='expected' AND voided_at IS NULL "
-            "ORDER BY amount DESC", (iids[0], iids[1])).fetchall()]
+        pair = [
+            str(r[0])
+            for r in c.execute(
+                "SELECT id FROM fin_settlements WHERE to_id IN (?, ?) AND from_kind='expected' AND voided_at IS NULL "
+                "ORDER BY amount DESC",
+                (iids[0], iids[1]),
+            ).fetchall()
+        ]
         linked = act(c, OWNER, "feed_match", {"feed_id": row, "settlement_ids": pair})
         assert linked.status == "committed", linked
     with books.read() as c:
@@ -940,18 +1079,23 @@ def test_a_summarized_sale_recategorized_after_its_month_closed_still_reconciles
     stripe_pass(books, stripe)
     money = _stripe_money(books)
     with books.transaction() as c:
-        assert act(c, OWNER, "close_period", {"month": "2026-10"}, at="2026-11-05T12:00:00.000000Z").status == "committed"
+        assert close_month(c, "2026-10", at="2026-11-05T12:00:00.000000Z").status == "committed"
+        reopen_rows(c)
         row = str(_feed(c, "txn_0001")["id"])
-        moved = act(c, OWNER, "categorize", {"feed_id": row, "account_id": account(c, "4000")},
-                    at="2026-11-05T12:00:00.000000Z")
+        moved = act(
+            c, OWNER, "categorize", {"feed_id": row, "account_id": account(c, "4000")}, at="2026-11-05T12:00:00.000000Z"
+        )
         assert moved.status == "committed", moved
     with books.read() as c:
         gl = str(c.execute("SELECT account_id FROM fin_money_accounts WHERE id=?", (money,)).fetchone()[0])
         book = str(c.execute("SELECT id FROM fin_books").fetchone()[0])
-        effects = [(int(r["through_amount"]), int(r["live_amount"]))
-                   for r in store_banking.row_effects(c, book, money, gl, "2026-10-31") if str(r["id"]) == row]
+        effects = [
+            (int(r["through_amount"]), int(r["live_amount"]))
+            for r in store_banking.row_effects(c, book, money, gl, "2026-10-31")
+            if str(r["id"]) == row
+        ]
         assert effects == [(9_680, 9_680)]
-        assert "summary" not in json.loads(_feed(c, "txn_0001")["raw_json"])
+        assert "summary" not in json.loads(_feed(c, "txn_0001")["raw"])
 
 
 def test_a_refund_of_a_posted_sale_applied_by_hand_reopens_the_receivable_it_gives_back(books):
@@ -982,10 +1126,22 @@ def test_a_webhook_with_a_bad_or_stale_signature_is_refused():
     now = int(time.time())
     good = {"stripe-signature": F.sign(body, WEBHOOK_SECRET, now)}
     assert P.verify("stripe_finance", good, body, WEBHOOK_SECRET, now) == (True, "")
-    assert P.verify("stripe_finance", {"stripe-signature": F.sign(body, "whsec_other_0123456789abcdef", now)},
-                    body, WEBHOOK_SECRET, now)[0] is False
-    assert P.verify("stripe_finance", {"stripe-signature": F.sign(body, WEBHOOK_SECRET, now - 3600)},
-                    body, WEBHOOK_SECRET, now)[0] is False
+    assert (
+        P.verify(
+            "stripe_finance",
+            {"stripe-signature": F.sign(body, "whsec_other_0123456789abcdef", now)},
+            body,
+            WEBHOOK_SECRET,
+            now,
+        )[0]
+        is False
+    )
+    assert (
+        P.verify(
+            "stripe_finance", {"stripe-signature": F.sign(body, WEBHOOK_SECRET, now - 3600)}, body, WEBHOOK_SECRET, now
+        )[0]
+        is False
+    )
     assert P.verify("stripe_finance", {}, body, WEBHOOK_SECRET, now)[0] is False
     assert "stripe_finance" in P.FINANCE
 
@@ -993,15 +1149,60 @@ def test_a_webhook_with_a_bad_or_stale_signature_is_refused():
 def test_a_webhook_is_kept_once_for_the_one_stripe_connection_and_then_reads_the_balance(books):
     event = {"id": "evt_stripe_1", "type": "charge.succeeded", "data": {}}
     with books.transaction() as c:
-        assert sync.stripe_delivery(c, event, AT) is False          # no Stripe connection yet: not kept
+        assert sync.stripe_delivery(c, event, AT) == "no_connection"  # no Stripe connection yet: refused, not seen
     stripe = FakeStripe()
     connect_stripe(books, stripe)
     stripe.add("charge", 4_000, 120, "Acme Buyer")
     with books.transaction() as c:
-        assert sync.stripe_delivery(c, event, AT) is True
+        assert sync.stripe_delivery(c, event, AT) == "kept"
     with books.transaction() as c:
-        assert sync.stripe_delivery(c, event, AT) is False          # a replay is not kept again
+        assert sync.stripe_delivery(c, event, AT) == "seen"  # a replay is not kept again
     stripe_pass(books, stripe)
     with books.read() as c:
         assert c.execute("SELECT status FROM fin_inbox WHERE provider_event_id='evt_stripe_1'").fetchone()[0] == "done"
         assert _sum(c, "1050") == 3_880
+
+
+def _stripe_opening(c: Any) -> int:
+    """The live opening balance entry's amount on the Stripe line (1050)."""
+    return int(
+        c.execute(
+            "SELECT coalesce(sum(l.amount), 0) FROM fin_entries e JOIN fin_lines l ON l.entry_id=e.id "
+            "JOIN fin_accounts a ON a.id=l.account_id WHERE e.source='sync' AND e.source_id LIKE 'opening:%' "
+            "AND e.status='posted' AND e.reverses_id IS NULL AND a.code='1050'"
+        ).fetchone()[0]
+    )
+
+
+def test_a_stripe_opening_moves_by_a_raw_post_and_back_by_its_reversal(books):
+    """Phase 2 #2 (§4.1 opening): a Stripe row a raw-totals month covers moves the opening the way a bank row does: the
+    opening takes its amount in, with no balance read, and its reversal takes it back out. The Stripe line is the
+    provider's balance once the row is covered; before and after, the unposted row is the only difference."""
+    sep = int(datetime(2026, 9, 10, 12, tzinfo=timezone.utc).timestamp())
+    stripe = FakeStripe(start=7_000)
+    connect_stripe(books, stripe)
+    stripe.add("transfer", 500, created=sep)  # a balance type nothing posts: the balance holds it, it is asked
+    stripe.add("charge", 2_000, 0, "Acme Buyer")  # October: posted as a sale
+    stripe_pass(books, stripe)
+    with books.transaction() as c:
+        assert _stripe_opening(c) == 7_000
+        assert _sum(c, "1050") == 9_000  # the asked transfer is the one row the books do not carry
+        assert _asked(c, "txn_0001") == 1
+    csv = "month,line,amount,team\n2026-09,Sales revenue,250000,sales\n"
+    with books.transaction() as c:
+        r = act(
+            c,
+            OWNER,
+            "import_raw_totals",
+            {"csv": csv, "basis": "cash", "mapping": {"Sales revenue": "4000"}, "source_name": "Stripe history"},
+        )
+        assert r.status == "committed", r.reason
+        entry = r.result["months"][0]["entry_id"]
+        assert _stripe_opening(c) == 7_500
+        assert _sum(c, "1050") == stripe.total() == 9_500
+        assert _every_entry_balances(c)
+    with books.transaction() as c:
+        assert act(c, OWNER, "journal", {"reverses": entry}).status == "committed"
+        assert _stripe_opening(c) == 7_000
+        assert _sum(c, "1050") == stripe.total() - 500
+        assert _feed(c, "txn_0001")["status"] == "new"  # uncovered again: it waits for a person

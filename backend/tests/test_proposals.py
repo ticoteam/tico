@@ -1,10 +1,11 @@
 """Proposals (redesign/CONTRACT.md §5, backend/proposals.py): a bot's change to a spend limit is an approval the top of
 the org decides; on approve the hub applies it as that person, audited with via approval:<id>, spends the approval and
 sends BotOps one notice. An org change is no proposal (test_org_by_request.py)."""
+
 from backend.store import H
-from backend.tests.test_api import api, get, headers, post  # noqa: F401  (the api fixture)
-from backend.tests.test_groups import add_bots, send
-from backend.tests.test_groups_leads import as_bot
+from backend.tests.helpers.api import get, headers, post  # noqa: F401  (the api fixture)
+from backend.tests.helpers.groups import add_bots, send
+from backend.tests.helpers.groups_leads import as_bot
 
 
 def setup_org(api):
@@ -29,13 +30,18 @@ def audit(api, obj):
 
 def botops_notices(api):
     with api.app.state.store.read() as c:
-        return [dict(r) for r in c.execute("SELECT body, refs_json FROM messages WHERE from_actor=? AND to_actor=? "
-                                           "AND kind='notice'", (H.KEEPER, "bot:botops"))]
+        return [
+            dict(r)
+            for r in c.execute(
+                "SELECT body, refs FROM messages WHERE sender_id=? AND recipient_id=? AND kind='notice'",
+                (H.KEEPER, "bot:botops"),
+            )
+        ]
 
 
 def test_a_payload_the_hub_could_not_apply_is_refused_when_filed(api):
     setup_org(api)
-    propose(api, "spend_limit", {"daily_usd": 5}, expected=422)                         # no bot, no pool
+    propose(api, "spend_limit", {"daily_usd": 5}, expected=422)  # no bot, no pool
     propose(api, "spend_limit", {"bot": "ops", "pool": "company", "daily_usd": 5}, expected=422)
     propose(api, "spend_limit", {"pool": "team", "daily_usd": 5}, expected=422)
 
@@ -73,9 +79,14 @@ def test_a_declined_proposal_changes_nothing_and_tells_nobody(api):
 def test_spend_and_group_changes_by_hand_are_audited(api):
     send(api, "PUT", "usage/limits/ops", {"daily_usd": 3})
     send(api, "PUT", "usage/limits/ops", {"daily_usd": 4})
-    send(api, "PUT", "usage/limits/ops", {"daily_usd": 4})                              # no change, no row
+    send(api, "PUT", "usage/limits/ops", {"daily_usd": 4})  # no change, no row
     row, first = audit(api, "spend:ops")
-    assert first["after"]["daily_usd"] == 3 and row["before"]["daily_usd"] == 3 and row["after"]["daily_usd"] == 4 and row["via"] is None
+    assert (
+        first["after"]["daily_usd"] == 3
+        and row["before"]["daily_usd"] == 3
+        and row["after"]["daily_usd"] == 4
+        and row["via"] is None
+    )
     gid = send(api, "POST", "groups", {"name": "Loud"})["id"]
     send(api, "DELETE", f"groups/{gid}")
     created, deleted = reversed(audit(api, f"group:{gid}"))
@@ -84,10 +95,31 @@ def test_spend_and_group_changes_by_hand_are_audited(api):
 
 def test_an_approved_spend_limit_changes_only_what_it_names(api):
     eng, _ = setup_org(api)
-    for payload in ({"bot": "ops", "per_30m_usd": 1.5}, {"bot": "ops", "daily_usd": 20},
-                    {"pool": f"group:{eng}", "per_30m_usd": 3}, {"pool": f"group:{eng}", "daily_usd": 40}):
+    for payload in (
+        {"bot": "ops", "per_30m_usd": 1.5},
+        {"bot": "ops", "daily_usd": 20},
+        {"pool": f"group:{eng}", "per_30m_usd": 3},
+        {"pool": f"group:{eng}", "daily_usd": 40},
+    ):
         post(api, f"approvals/{propose(api, 'spend_limit', payload)['approval']}", {"decision": "approved"})
     limits = get(api, "usage/limits")
     assert limits["bots"]["ops"]["per_30m_usd"] == 1.5 and limits["bots"]["ops"]["daily_usd"] == 20
     pool = limits["pools"]["groups"][eng]
     assert pool["per_30m_usd"] == 3 and pool["daily_usd"] == 40
+
+
+def test_an_approved_older_mail_ask_turns_sending_on_and_keeps_no_forward_addresses(api):
+    """An older mail ask, approved, sets the bot's sending policy to On their own; forward addresses are retired."""
+    setup_org(api)
+    with api.app.state.store.transaction() as c:
+        asked = H.approval_request(
+            c, "bot:botops", "mail_alert", {"bot": "ops", "outbound_send": True, "forward_to": ["b@acme.example"]}
+        )
+    aid = asked["id"] if isinstance(asked, dict) else asked
+    post(api, f"approvals/{aid}", {"decision": "approved"})
+    from backend import email_sending
+
+    with api.app.state.store.read() as c:
+        assert email_sending.saved(c, "bot:ops")["mode"] == "on_their_own"
+        assert email_sending.sends_on_own(c, "ops")
+    assert get(api, "bots/ops/mail-settings")["forward_to"] == []

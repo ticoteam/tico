@@ -2,7 +2,7 @@
 candidates, a one-character slip is suggested and never acted on, and none of it names a task the
 caller may not see."""
 
-from backend.tests.test_api import api, get, post  # noqa: F401  (fixtures)
+from backend.tests.helpers.api import get, post  # noqa: F401  (fixtures)
 
 
 def make(api, owner="ops", title="Write the report", token="ana-test"):
@@ -11,7 +11,7 @@ def make(api, owner="ops", title="Write the report", token="ana-test"):
 
 def slip(ident, at=20):
     """The id with one character changed."""
-    return ident[:at] + ("a" if ident[at] != "a" else "b") + ident[at + 1:]
+    return ident[:at] + ("a" if ident[at] != "a" else "b") + ident[at + 1 :]
 
 
 def renumber(api, old, new):

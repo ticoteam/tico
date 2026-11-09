@@ -4,6 +4,7 @@ fonts it refers to from its own folder are embedded as data: URIs, so it still s
 Only files inside the bot's checkout are read, with the same checks as a published file (clients/bot_files.py
 local_file: no leaving the checkout, no symbolic links, no credential-like names). Remote addresses are never
 fetched: they are listed, and the server removes them from the stored copy (backend/visuals.py clean)."""
+
 import base64
 import mimetypes
 import posixpath
@@ -12,9 +13,18 @@ from pathlib import Path
 
 from . import bot_files as BF
 
-EMBED_TYPES = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".gif": "image/gif",
-               ".webp": "image/webp", ".svg": "image/svg+xml", ".woff": "font/woff", ".woff2": "font/woff2",
-               ".ttf": "font/ttf", ".otf": "font/otf"}
+EMBED_TYPES = {
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".gif": "image/gif",
+    ".webp": "image/webp",
+    ".svg": "image/svg+xml",
+    ".woff": "font/woff",
+    ".woff2": "font/woff2",
+    ".ttf": "font/ttf",
+    ".otf": "font/otf",
+}
 PAGE_TYPES = {".html": "text/html", ".htm": "text/html", ".svg": "image/svg+xml"}
 MAX_EMBED = 10 * 1024 * 1024
 # Where a page names another file: src/href/poster/xlink:href attribute values, srcset entries and CSS url().
@@ -54,8 +64,9 @@ def embed(root, rel):
         uri = None
         if ext in EMBED_TYPES:
             try:
-                local, _ = BF.local_file(root, posixpath.normpath(posixpath.join(folder, target)),
-                                         extra_types=tuple(EMBED_TYPES))
+                local, _ = BF.local_file(
+                    root, posixpath.normpath(posixpath.join(folder, target)), extra_types=tuple(EMBED_TYPES)
+                )
                 data = local.read_bytes()
                 if len(data) <= MAX_EMBED:
                     uri = "data:" + EMBED_TYPES[ext] + ";base64," + base64.b64encode(data).decode()

@@ -6,8 +6,8 @@ import re
 from pathlib import Path
 
 from backend import beta
-from backend.tests.test_onboarding import environment, signed_in  # noqa: F401
-from backend.tests.test_support import hq  # noqa: F401  (the fake HQ, autouse)
+from backend.tests.helpers.onboarding import environment, signed_in  # noqa: F401
+from backend.tests.helpers.support import hq  # noqa: F401  (the fake HQ, autouse)
 
 DOCS = Path(__file__).resolve().parents[2] / "docs"
 
@@ -18,7 +18,9 @@ def test_the_manual_marks_exactly_the_beta_headings():
         lines = page.read_text().splitlines()
         for n, line in enumerate(lines):
             if line.startswith(beta.MARKER):
-                assert n >= 2 and lines[n - 1] == "" and lines[n - 2].startswith("#"), f"{page.name}:{n + 1} is not under a heading"
+                assert n >= 2 and lines[n - 1] == "" and lines[n - 2].startswith("#"), (
+                    f"{page.name}:{n + 1} is not under a heading"
+                )
                 heading = lines[n - 2]
                 marked.append((page.name, None if heading.startswith("# ") else heading.lstrip("#").strip()))
     assert sorted(marked, key=str) == sorted((d for f in beta.FEATURES for d in f.docs), key=str)
@@ -31,15 +33,18 @@ def test_the_app_gets_the_list_and_diagnostics_name_what_is_on(environment):
     # A fresh team has none on; the Mac app asking for support is the Mac app in use.
     got = api.get("/api/v2/support/diagnostics?performance_hours=0", headers=owner)
     assert json.loads(got.json()["text"])["beta"] == []
-    got = api.post("/api/v2/support/diagnostics/capture", headers=owner,
-                   json={"app": {"version": "0.3.51", "lines": [], "mac": True}, "performance_hours": 0})
+    got = api.post(
+        "/api/v2/support/diagnostics/capture",
+        headers=owner,
+        json={"app": {"version": "0.3.51", "lines": [], "mac": True}, "performance_hours": 0},
+    )
     assert got.status_code == 200, got.text
     assert json.loads(got.json()["text"])["beta"] == ["mac_app"]
 
 
 UI = Path(__file__).resolve().parents[2] / "ui"
-# A pill the app draws by id: `betaPill('id')` in a script, or `data-beta="id"` in a static spot. ui/app/state.js
-# defines both and is left out.
+# A pill the app draws by id: `betaPill('id')` in a script (.js, or .ts once converted), or `data-beta="id"` in a static
+# spot. ui/app/state.ts defines both and is left out.
 SPOT = re.compile(r"""betaPill\(['"]([a-z_]+)['"]\)|data-beta="([a-z_]+)\"""")
 
 
@@ -47,7 +52,7 @@ def _spots():
     used = {}
     for path in sorted(UI.rglob("*")):
         rel = path.relative_to(UI)
-        if path.suffix not in (".js", ".html") or "tests" in rel.parts or rel.as_posix() == "app/state.js":
+        if path.suffix not in (".js", ".ts", ".html") or "tests" in rel.parts or rel.as_posix() == "app/state.ts":
             continue
         for match in SPOT.finditer(path.read_text()):
             used.setdefault(match.group(1) or match.group(2), []).append(rel.as_posix())
@@ -74,5 +79,6 @@ def test_market_is_not_beta_while_message_bots_still_is():
 
 def test_diagnostics_keep_beta_only_as_a_list():
     from backend import diagnostics
+
     assert diagnostics.allowed({"beta": ["listening"]}) == {"beta": ["listening"]}
     assert diagnostics.allowed({"beta": {"listening": "x"}}) == {"beta": []}

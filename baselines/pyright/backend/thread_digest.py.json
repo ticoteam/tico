@@ -1,0 +1,14 @@
+{
+    "files": {
+        "./backend/thread_digest.py": [
+            {
+                "code": "reportOptionalMemberAccess",
+                "range": {
+                    "startColumn": 17,
+                    "endColumn": 23,
+                    "lineCount": 1
+                }
+            }
+        ]
+    }
+}

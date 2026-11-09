@@ -5,9 +5,8 @@ import logging
 
 import pytest
 
-from backend.tests.test_api import api  # noqa: F401  (the api fixture)
-from backend.tests.test_invites import owner
-from backend.tests.test_oidc import CLIENT, SECRET, provider, signin  # noqa: F401  (the fixtures)
+from backend.tests.helpers.invites import owner
+from backend.tests.helpers.oidc import CLIENT, SECRET, provider, signin  # noqa: F401  (the fixtures)
 
 PASSWORD = "abcde-fghjk-mnpqr-stuvw"
 
@@ -22,14 +21,14 @@ def test_an_owner_makes_an_account_and_sees_its_password_once_and_tico_keeps_non
     signin.fake.accounts = [(201, {"status": "created", "email": "cara@acme.example", "password": PASSWORD})]
     headers = owner(signin)
     assert signin.api.get("/api/v2/access", headers=headers).json()["account_password"] is True
-    made = signin.api.post("/api/v2/access/humans/cara/password", json={}, headers=headers)     # the page's path
+    made = signin.api.post("/api/v2/access/humans/cara/password", json={}, headers=headers)  # the page's path
     assert made.status_code == 200, made.text
     assert made.json() == {"person": "cara", "email": "cara@acme.example", "password": PASSWORD}
     assert made.headers["cache-control"].startswith("no-store")
     # Only the address goes, with the install's own client id and secret.
     assert signin.fake.account_calls == [{"client_id": CLIENT, "client_secret": SECRET, "email": "cara@acme.example"}]
     dump = everything(signin)
-    assert PASSWORD not in dump and "person.account_created" in dump          # not stored, not in an event
+    assert PASSWORD not in dump and "person.account_created" in dump  # not stored, not in an event
     assert PASSWORD not in caplog.text
     # The same request again (a lost answer) never asks twice and never shows the password again.
     again = signin.api.post("/api/v2/access/humans/cara/password", json={}, headers=headers)
@@ -38,15 +37,19 @@ def test_an_owner_makes_an_account_and_sees_its_password_once_and_tico_keeps_non
     assert len(signin.fake.account_calls) == 1
 
 
-@pytest.mark.parametrize("answer, code, words", [
-    ((409, {"error": "account_exists"}), "password_exists", "Cara already has a Tico account; use Invite."),
-    ((429, {"error": "too_many", "retry_after": 3600}), "password_limited", "Too many new accounts"),
-    ((201, {"status": "created", "password": "short"}), "password_failed", "no account was made"),
-], ids=["exists", "too-many", "weak"])
+@pytest.mark.parametrize(
+    "answer, code, words",
+    [
+        ((409, {"error": "account_exists"}), "password_exists", "Cara already has a Tico account; use Invite."),
+        ((429, {"error": "too_many", "retry_after": 3600}), "password_limited", "Too many new accounts"),
+        ((201, {"status": "created", "password": "short"}), "password_failed", "no account was made"),
+    ],
+    ids=["exists", "too-many", "weak"],
+)
 def test_a_refused_account_is_a_plain_422(signin, answer, code, words):  # noqa: F811
     signin.fake.accounts = [answer]
     refused = signin.api.post("/api/v2/access/people/cara/password", json={}, headers=owner(signin))
-    assert refused.status_code == 422, refused.text      # never 429 or 502: the browser would retry those
+    assert refused.status_code == 422, refused.text  # never 429 or 502: the browser would retry those
     assert refused.json()["error"]["code"] == code and words in refused.json()["error"]["detail"], refused.text
 
 

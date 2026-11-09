@@ -1,85 +1,35 @@
 """Restore complete API-owned sources from independent binary backup copies."""
 
-import base64
-import hashlib
-import io
 import stat
-from pathlib import Path
 from unittest.mock import Mock
 
 import pytest
-from botocore.exceptions import ClientError
 from fastapi.testclient import TestClient
 
 from backend.app import create_app
-from backend.backup import blob_inventory, restore_bundle, upload_bundle
+from backend.backup import blob_inventory, restore_bundle
 from backend.blobs import Blobs
-from backend.config import Settings
 from backend.operations import backup
 from backend.store import Problem
-from backend.tests.test_api import api, headers, post, setup_attempt  # noqa: F401
-
-
-class ObjectStore:
-    """Offline S3 semantics, including conditional writes, independent GETs and HEADs."""
-    def __init__(self):
-        self.objects = {}
-        self.gets = []
-        self.heads = []
-        self.after_put = None
-
-    def put_object(self, **kw):
-        slot = (kw["Bucket"], kw["Key"])
-        assert kw["IfNoneMatch"] == "*" and kw["ServerSideEncryption"] == "AES256"
-        if slot in self.objects:
-            raise ClientError({"Error": {"Code": "PreconditionFailed"}}, "PutObject")
-        data = kw["Body"].read() if hasattr(kw["Body"], "read") else kw["Body"]
-        assert base64.b64encode(hashlib.sha256(data).digest()).decode() == kw["ChecksumSHA256"]
-        self.objects[slot] = data
-        if self.after_put:
-            self.after_put(slot)
-        return {"VersionId": "test-version"}
-
-    def get_object(self, **kw):
-        slot = (kw["Bucket"], kw["Key"])
-        self.gets.append(slot)
-        if slot not in self.objects:
-            raise ClientError({"Error": {"Code": "NoSuchKey"}}, "GetObject")
-        return {"Body": io.BytesIO(self.objects[slot])}
-
-    def head_object(self, **kw):
-        # S3 reports the checksum it verified on receipt, only when asked for it.
-        slot = (kw["Bucket"], kw["Key"])
-        self.heads.append(slot)
-        if slot not in self.objects:
-            raise ClientError({"Error": {"Code": "404"}}, "HeadObject")
-        data = self.objects[slot]
-        head = {"ContentLength": len(data)}
-        if kw.get("ChecksumMode") == "ENABLED":
-            head["ChecksumSHA256"] = base64.b64encode(hashlib.sha256(data).digest()).decode()
-        return head
-
-    def download_file(self, bucket, key, destination):
-        with self.get_object(Bucket=bucket, Key=key)["Body"] as stream:
-            Path(destination).write_bytes(stream.read())
+from backend.tests.helpers.api import headers, post, setup_attempt  # noqa: F401
+from backend.tests.helpers.backup_bundle import ObjectStore, bundle, target
 
 
 def sources(api):
-    note = api.post("/api/notes", data={"text": "Private attachment to recover"},
-                    files={"files": ("draft.txt", b"Exact private draft")}, headers=headers("ben-test")).json()
+    note = api.post(
+        "/api/notes",
+        data={"text": "Private attachment to recover"},
+        files={"files": ("draft.txt", b"Exact private draft")},
+        headers=headers("ben-test"),
+    ).json()
     payload = b"\x03\x00" * 16000
-    rid = api.post("/api/v2/meetings/import", data={"title": "Recover source media", "notes": "Keep typed notes",
-                                                    "transcript": "Ana: Keep this call."},
-                   files={"files": ("call.m4a", payload)}, headers=headers()).json()["id"]
+    rid = api.post(
+        "/api/v2/meetings/import",
+        data={"title": "Recover source media", "notes": "Keep typed notes", "transcript": "Ana: Keep this call."},
+        files={"files": ("call.m4a", payload)},
+        headers=headers(),
+    ).json()["id"]
     return note, rid, payload
-
-
-def target(tmp_path):
-    return Settings(db_path=tmp_path / "restore" / "hub.sqlite", blob_dir=tmp_path / "restore" / "files")
-
-
-def bundle(api, s3, key="backups/test.sqlite"):
-    return upload_bundle(api.app.state.store.settings.db_path, "backup-bucket", key, s3, api.app.state.blobs)
 
 
 def test_restore_from_independent_objects_preserves_private_sources_and_fences_bots(api, tmp_path):
@@ -121,7 +71,7 @@ def test_incomplete_source_never_publishes_manifest_or_advances_backup_health(ap
     assert not any(key.endswith(".manifest.json") for _, key in s3.objects)
     with api.app.state.store.read() as c:
         row = c.execute("SELECT * FROM service_health WHERE service='backup'").fetchone()
-        assert row["last_success"] is None and row["last_error"]
+        assert row["last_succeeded_at"] is None and row["last_error"]
     assert metrics.put_metric_data.call_args.kwargs["MetricData"][0]["Value"] == 0
 
 
@@ -140,9 +90,11 @@ def test_corrupt_backups_fail_before_creating_restored_database(api, tmp_path):
 def test_backup_detects_corruption_during_independent_download(api):
     sources(api)
     s3 = ObjectStore()
+
     def corrupt(slot):
         if slot[1].startswith("recovery/"):
             s3.objects[slot] = b"Storage returned wrong bytes"
+
     s3.after_put = corrupt
     with pytest.raises(Problem, match="integrity"):
         bundle(api, s3)
@@ -159,10 +111,21 @@ def hand_run_backup(api, s3, monkeypatch, key="backups/hand.sqlite"):
     import boto3
 
     from backend import manage
+
     settings = api.app.state.store.settings
     monkeypatch.setattr(boto3, "client", lambda name, *a, **k: s3 if name == "s3" else pytest.fail(name))
-    manage.main(["backup", str(settings.db_path), "--bucket", "backup-bucket", "--key", key,
-                 "--blob-dir", str(api.app.state.blobs.directory)])
+    manage.main(
+        [
+            "backup",
+            str(settings.db_path),
+            "--bucket",
+            "backup-bucket",
+            "--key",
+            key,
+            "--blob-dir",
+            str(api.app.state.blobs.directory),
+        ]
+    )
 
 
 def test_a_hand_run_backup_carries_the_key_files_and_restore_brings_them_back(api, tmp_path, monkeypatch, capsys):
@@ -198,7 +161,9 @@ def test_a_hand_run_backup_carries_only_the_key_files_present_and_refuses_a_brok
     s3 = ObjectStore()
     hand_run_backup(api, s3, monkeypatch)
     settings = target(tmp_path)
-    assert restore_bundle("backup-bucket", "backups/hand.sqlite", settings, s3)["key_files"] == {"github-app.key": "restored"}
+    assert restore_bundle("backup-bucket", "backups/hand.sqlite", settings, s3)["key_files"] == {
+        "github-app.key": "restored"
+    }
     assert not (settings.db_path.parent / "credential.key").exists()
     # A key file that is not 32 bytes is no key: the bundle is not published rather than carry it.
     (data / "slack.key").write_bytes(b"short")

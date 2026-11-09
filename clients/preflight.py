@@ -10,6 +10,7 @@ Usage:
   preflight.py <slug> [<slug> ...]
   preflight.py --all
 """
+
 import os
 import re
 import shutil
@@ -20,25 +21,27 @@ from pathlib import Path
 
 import yaml
 
-if __package__ in (None, ""):                          # run as a script: python clients/preflight.py
+if __package__ in (None, ""):  # run as a script: python clients/preflight.py
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from clients import registry as REG  # noqa: E402
-from clients import harness_manifests  # noqa: E402
-from clients.manifest import manifest_path, repo_dir, routines_of, tools_of  # noqa: E402
-from clients.routines import MAX_CONTENT, validate_schedules  # noqa: E402
-from runner.op import OP_REF, resolve_op_refs  # noqa: E402
+from clients import registry as REG
+from clients import harness_manifests
+from clients.manifest import manifest_path, repo_dir, routines_of, tools_of
+from clients.routines import MAX_CONTENT, validate_schedules
+from runner_support.op import OP_REF, resolve_op_refs
 
 TEMPLATE = REG.HUB_DIR / "templates/employee-repo"
 SECRETS = REG.ROOT / "secrets"
-SCAN_DIRS = ["playbooks", "memory"]          # plus AGENT.md, scanned for stale references
+SCAN_DIRS = ["playbooks", "memory"]  # plus AGENT.md, scanned for stale references
 STALE = [
     (re.compile(r"/workspace/"), "path `/workspace/` (repos live in the projects folder)"),
     (re.compile(r"Chief of Staff", re.I), "'Chief of Staff' (that role no longer exists)"),
     (re.compile(r"\btell\s+Chief\b", re.I), "'tell Chief' (ask the owner in the hub instead)"),
-    (re.compile(r"\bChief\b(?!\s+(?:Executive|Technical|Product|Marketing|Financial|Operating))"),
-     "'Chief' as an actor"),
+    (
+        re.compile(r"\bChief\b(?!\s+(?:Executive|Technical|Product|Marketing|Financial|Operating))"),
+        "'Chief' as an actor",
+    ),
 ]
-STALE_MAX = 20                               # keep a messy repo from burying the rest of the report
+STALE_MAX = 20  # keep a messy repo from burying the rest of the report
 
 
 class Report:
@@ -52,9 +55,14 @@ class Report:
         self.counts[level] += 1
         print(f"{level:4} {text}")
 
-    def ok(self, text): self.line("PASS", text)
-    def warn(self, text): self.line("WARN", text)
-    def fail(self, text): self.line("FAIL", text)
+    def ok(self, text):
+        self.line("PASS", text)
+
+    def warn(self, text):
+        self.line("WARN", text)
+
+    def fail(self, text):
+        self.line("FAIL", text)
 
 
 # ----------------------------------------------------------------------------- checks
@@ -117,8 +125,7 @@ def check_instructions(r, d):
         if not owns:
             r.fail("AGENT.md: no `## Owns` section")
         else:
-            bullets = [l.strip()[1:].strip() for l in owns.group(1).splitlines()
-                       if l.strip()[:1] in ("-", "*")]
+            bullets = [l.strip()[1:].strip() for l in owns.group(1).splitlines() if l.strip()[:1] in ("-", "*")]
             filled = [b for b in bullets if b]
             if filled:
                 r.ok(f"AGENT.md: `## Owns` has {len(filled)} bullet{'s' if len(filled) != 1 else ''}")
@@ -198,8 +205,10 @@ def check_access(r, slug, m):
     # reviewed instructions. Left in, it refuses at the first run instead of here.
     for access in declared:
         if isinstance(access, dict) and "{{" in str(access.get("identity") or ""):
-            r.fail(f"tools: {access.get('service', '?')} identity is still the template placeholder "
-                   f"{access['identity']!r}; fill it from the Mailbox: line in the instructions")
+            r.fail(
+                f"tools: {access.get('service', '?')} identity is still the template placeholder "
+                f"{access['identity']!r}; fill it from the Mailbox: line in the instructions"
+            )
     if not keys:
         r.ok("tools: no secrets required")
         return
@@ -231,13 +240,14 @@ def check_access(r, slug, m):
     token = (env.get("OP_SERVICE_ACCOUNT_TOKEN", ("", None))[0] or "").strip()
     # `vault: hub` on an access entry: the value is granted in Settings -> Credentials and arrives
     # only during a run (docs/credential-vault.md), so there is nothing on disk to check here.
-    hub_keys = {str(a["env"]) for a in declared
-                if isinstance(a, dict) and a.get("env") and a.get("vault") == "hub"}
+    hub_keys = {str(a["env"]) for a in declared if isinstance(a, dict) and a.get("env") and a.get("vault") == "hub"}
     for k in keys:
         v, where = env.get(k, ("", None))
         if k in hub_keys and not v:
-            r.ok(f"secrets: {k} is granted through the hub vault (Settings -> Credentials); "
-                 "confirm the grant to this bot is still in place")
+            r.ok(
+                f"secrets: {k} is granted through the hub vault (Settings -> Credentials); "
+                "confirm the grant to this bot is still in place"
+            )
         elif v.startswith(OP_REF):
             # A 1Password reference: prove it resolves, the way the runner will at turn start.
             probe = {k: v, "OP_SERVICE_ACCOUNT_TOKEN": token}
@@ -253,13 +263,13 @@ def check_access(r, slug, m):
 
 
 # ----------------------------------------------------------------------------- mail
-_mail_tests = None                           # the unit suite runs once per preflight process
+_mail_tests = None  # the unit suite runs once per preflight process
 
 
 def gmail_identities(m):
     """Every gmail identity this employee declares, from its tools: block (older: access:)."""
     out = []
-    for a in (tools_of(m) or []):
+    for a in tools_of(m) or []:
         if isinstance(a, dict) and str(a.get("service", "")).lower() == "gmail":
             addr = str(a.get("identity") or "").strip()
             if addr and addr not in out:
@@ -271,9 +281,12 @@ def mail_suite():
     """connectors/mail's own tests. Offline, about half a second, cached for this process."""
     global _mail_tests
     if _mail_tests is None:
-        p = subprocess.run([sys.executable, "-m", "unittest", "discover", "-s",
-                            "connectors/mail/tests"], cwd=str(REG.HUB_DIR),
-                           capture_output=True, text=True)
+        p = subprocess.run(
+            [sys.executable, "-m", "unittest", "discover", "-s", "connectors/mail/tests"],
+            cwd=str(REG.HUB_DIR),
+            capture_output=True,
+            text=True,
+        )
         tail = (p.stderr or p.stdout or "").strip().splitlines()
         _mail_tests = (p.returncode == 0, tail[-1] if tail else "no output")
     return _mail_tests
@@ -285,30 +298,30 @@ def check_mail(r, slug, m):
     if not boxes:
         return
     ok, summary = mail_suite()
-    (r.ok if ok else r.fail)(f"mail: connectors/mail tests {summary}"
-                             + ("" if ok else "  (cd hub && python3 -m unittest discover "
-                                              "-s connectors/mail/tests)"))
-    who = subprocess.run([str(REG.HUB_DIR / "scripts" / "mail.sh"), "whoami", "--as", slug],
-                         capture_output=True, text=True)
+    (r.ok if ok else r.fail)(
+        f"mail: connectors/mail tests {summary}"
+        + ("" if ok else "  (cd hub && python3 -m unittest discover -s connectors/mail/tests)")
+    )
+    who = subprocess.run(
+        [str(REG.HUB_DIR / "scripts" / "mail.sh"), "whoami", "--as", slug], capture_output=True, text=True
+    )
     if who.returncode == 0:
         r.ok(f"mail: whoami --as {slug} resolves {', '.join(boxes)}")
     else:
-        r.fail(f"mail: whoami --as {slug} failed: "
-               f"{(who.stderr or who.stdout).strip().splitlines()[0][:120]}")
+        r.fail(f"mail: whoami --as {slug} failed: {(who.stderr or who.stdout).strip().splitlines()[0][:120]}")
     key = Path(os.environ.get("GOOGLE_SA_KEY") or (SECRETS / "google-sa.json")).expanduser()
     if not key.exists():
-        r.warn(f"mail: no Google key at {key} yet, so doctor was not run "
-               "(docs/mail-service.md, 'What the owner does')")
+        r.warn(f"mail: no Google key at {key} yet, so doctor was not run (docs/mail-service.md, 'What the owner does')")
         return
     for box in boxes:
-        doc = subprocess.run([str(REG.HUB_DIR / "scripts" / "mail.sh"), "doctor", "--mailbox", box],
-                             capture_output=True, text=True)
+        doc = subprocess.run(
+            [str(REG.HUB_DIR / "scripts" / "mail.sh"), "doctor", "--mailbox", box], capture_output=True, text=True
+        )
         if doc.returncode == 0:
             r.ok(f"mail: doctor --mailbox {box}")
         else:
             bad = [l for l in (doc.stdout or "").splitlines() if l.startswith("FAIL")]
-            r.fail(f"mail: doctor --mailbox {box} failed: "
-                   + (bad[0] if bad else (doc.stderr or "").strip()[:120]))
+            r.fail(f"mail: doctor --mailbox {box} failed: " + (bad[0] if bad else (doc.stderr or "").strip()[:120]))
 
 
 def check_stale(r, d):
@@ -361,16 +374,13 @@ def check_runtime(r, entry, defaults):
     runtime = e.get("runtime")
     if not runtime or runtime == "default":
         # The registry names no runtime: the company's provider choice decides on the server.
-        r.warn("runtime: none in the registry; the bot runs on the company default "
-               "(Settings > Computers)")
-        r.ok(f"outbound_send requested in bot.yaml: {bool(e.get('outbound_send'))} (a person turns sending on in Tico)")
+        r.warn("runtime: none in the registry; the bot runs on the company default (Settings > Computers)")
         return
     # A CLI that reads the registry's model and effort its own way (Grok Build) translates them first.
     model_for, effort_for = REG.CLI_SETTINGS.get(runtime, (None, None))
     model = model_for(e) if model_for else e.get("model", "default")
     effort = (effort_for(e) or "default") if effort_for else e.get("reasoning_effort", "default")
-    r.ok(f"runtime: {runtime} model={model} "
-         f"effort={effort} max_run_minutes={e.get('max_run_minutes', 60)}")
+    r.ok(f"runtime: {runtime} model={model} effort={effort} max_run_minutes={e.get('max_run_minutes', 60)}")
     harness = harness_manifests.get(runtime)
     binary = harness["executable"] if harness else ""
     if not binary:
@@ -388,7 +398,6 @@ def check_runtime(r, entry, defaults):
                 r.fail(f"runtime: `{' '.join(argv)}` does not offer {model}")
     else:
         r.fail(f"runtime: `{binary}` is not on PATH")
-    r.ok(f"outbound_send requested in bot.yaml: {bool(e.get('outbound_send'))} (a person turns sending on in Tico)")
 
 
 # ----------------------------------------------------------------------------- driver
@@ -431,8 +440,10 @@ def main(argv):
     failed = [r.slug for r in reports if r.counts["FAIL"]]
     if len(reports) > 1:
         warned = sum(1 for r in reports if r.counts["WARN"] and not r.counts["FAIL"])
-        print(f"\n{len(reports)} checked, {len(reports) - len(failed)} ready ({warned} with warnings), "
-              f"{len(failed)} not ready" + (": " + ", ".join(failed) if failed else ""))
+        print(
+            f"\n{len(reports)} checked, {len(reports) - len(failed)} ready ({warned} with warnings), "
+            f"{len(failed)} not ready" + (": " + ", ".join(failed) if failed else "")
+        )
     return 1 if failed else 0
 
 

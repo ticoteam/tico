@@ -54,12 +54,12 @@ KEY = "company-server"
 CONTEXT = "company-server:key"
 PROOF_PATH = "/api/v2/company-connection/proof"
 HQ_ALLOWED = ("https://api.tico.dev", "https://updates.tico.team")
-PENDING_S = 120          # a proof answers HQ this long after Connect
-FRESH_S = 60             # Settings reads HQ's word on the company at most this often
+PENDING_S = 120  # a proof answers HQ this long after Connect
+FRESH_S = 60  # Settings reads HQ's word on the company at most this often
 HEARTBEAT_S = 23 * 3600  # the hourly sweep sends the version once this long has passed, or sooner once it changes
-WAIT_S = 25              # HQ's whole answer, including its 10-second fetch of the proof
+WAIT_S = 25  # HQ's whole answer, including its 10-second fetch of the proof
 MAX_ANSWER = 4096
-TRANSPORT = None         # tests replace it with an httpx.MockTransport: nothing reaches the network
+TRANSPORT = None  # tests replace it with an httpx.MockTransport: nothing reaches the network
 SYSTEM = "system:company"
 UNAVAILABLE = "Tico could not confirm the connection. Try again in a minute."
 ERRORS = {
@@ -71,6 +71,8 @@ ERRORS = {
     "rate_limited": (429, "Too many tries. Wait a few minutes and try again."),
 }
 COMPANY_NAME_MAX = 100
+PORTAL_HOME = "https://app.tico.dev/"
+TICO_ISSUERS = ("https://accounts.tico.dev", "https://accounts.tico.team")
 SLUG = re.compile(r"[a-z0-9][a-z0-9-]{0,62}")
 WORKSPACE = re.compile(r"[A-Za-z0-9_-]{1,100}")
 SERVER_KEY = re.compile(r"tsk_[A-Za-z0-9_-]{16,200}")
@@ -101,7 +103,7 @@ def _hold(digest):
 
 
 def _row(c):
-    row = c.execute("SELECT value_json FROM registry_metadata WHERE key=?", (KEY,)).fetchone()
+    row = c.execute("SELECT value FROM registry_metadata WHERE key=?", (KEY,)).fetchone()
     try:
         stored = json.loads(row[0]) if row else {}
     except ValueError:
@@ -110,8 +112,10 @@ def _row(c):
 
 
 def _write(c, record):
-    c.execute("INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json",
-              (KEY, json.dumps(record, sort_keys=True)))
+    c.execute(
+        "INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+        (KEY, json.dumps(record, sort_keys=True)),
+    )
 
 
 def _forget(c, actor, action, sealed):
@@ -123,7 +127,8 @@ def _forget(c, actor, action, sealed):
     c.execute("DELETE FROM registry_metadata WHERE key=?", (KEY,))
     H.event(c, actor, action, record.get("workspace_id", ""), {"company_id": record.get("company", {}).get("id", "")})
     from . import gateway_connection
-    gateway_connection.company_ended(c)        # HQ revoked the Gateway key the link gave
+
+    gateway_connection.company_ended(c)  # HQ revoked the Gateway key the link gave
 
 
 def linked(c, settings=None):
@@ -136,8 +141,38 @@ def view(c):
     record = _row(c)
     if not record.get("key"):
         return {"company": None}
-    return {k: record.get(k) for k in ("company", "workspace_id", "portal_url", "credit", "checked", "heartbeat",
-                                       "connected_at")}
+    return {
+        k: record.get(k)
+        for k in ("company", "workspace_id", "portal_url", "credit", "checked", "heartbeat", "connected_at")
+    }
+
+
+def administration_url(c, settings):
+    """The account portal, using only local configuration: opening the menu never asks HQ."""
+    if off(settings):
+        return ""
+    record = _row(c)
+    if record.get("key"):
+        return _admin_destination(record.get("portal_url"))
+    from . import cloud_access
+
+    cloud = cloud_access.state(c)
+    if cloud:
+        return _admin_destination(cloud.get("billing_url"))
+    # Hosting alone says nothing about a portal account; the configured Tico issuer does.
+    tico_signin = (
+        settings.proxy_kind == "oidc" and settings.oidc_client_id and settings.oidc_issuer.rstrip("/") in TICO_ISSUERS
+    )
+    return PORTAL_HOME if tico_signin else ""
+
+
+def _admin_destination(value):
+    """A page on the portal itself, path only: a custom Gateway can name any https address, and a query or fragment
+    could carry a token, so anything else is the portal home."""
+    parsed = urlparse(value) if isinstance(value, str) and _text(value, 2048) else None
+    if not parsed or parsed.scheme != "https" or parsed.netloc != urlparse(PORTAL_HOME).netloc:
+        return PORTAL_HOME
+    return f"{PORTAL_HOME.rstrip('/')}{parsed.path or '/'}"
 
 
 def manager(auth, who):
@@ -174,8 +209,9 @@ async def _exchange(method, path, body, key):
         headers["Authorization"] = "Bearer " + key
     try:
         async with asyncio.timeout(WAIT_S):
-            async with httpx.AsyncClient(transport=TRANSPORT, timeout=WAIT_S, trust_env=False,
-                                         follow_redirects=False) as client:
+            async with httpx.AsyncClient(
+                transport=TRANSPORT, timeout=WAIT_S, trust_env=False, follow_redirects=False
+            ) as client:
                 async with client.stream(method, _base() + path, json=body, headers=headers) as response:
                     if 300 <= response.status_code < 400:
                         raise ValueError("redirect")
@@ -194,14 +230,20 @@ async def _exchange(method, path, body, key):
 
 
 def _text(value, most):
-    return isinstance(value, str) and 1 <= len(value) <= most and not any(ord(ch) < 32 or ord(ch) == 127 for ch in value)
+    return (
+        isinstance(value, str) and 1 <= len(value) <= most and not any(ord(ch) < 32 or ord(ch) == 127 for ch in value)
+    )
 
 
 def _company(value):
     if not isinstance(value, dict) or set(value) != {"id", "name", "slug"}:
         raise ValueError("company")
-    if not _text(value["id"], 64) or not _text(value["name"], COMPANY_NAME_MAX) or not isinstance(value["slug"], str) \
-            or not SLUG.fullmatch(value["slug"]):
+    if (
+        not _text(value["id"], 64)
+        or not _text(value["name"], COMPANY_NAME_MAX)
+        or not isinstance(value["slug"], str)
+        or not SLUG.fullmatch(value["slug"])
+    ):
         raise ValueError("company")
     uuid.UUID(value["id"])
     return {"id": value["id"], "name": value["name"], "slug": value["slug"]}
@@ -250,6 +292,7 @@ def connect(store, vault, settings, who, body, install_id):
         raise Problem("company_connection_unavailable", UNAVAILABLE, 503, retryable=True)
     address = public_url(settings)
     from .releases import version
+
     if not _connecting.acquire(blocking=False):
         raise Problem("company_connection_busy", "Another connect is in progress. Try again in a minute.", 409)
     try:
@@ -257,9 +300,19 @@ def connect(store, vault, settings, who, body, install_id):
         if not body.preview:
             _hold(hashlib.sha256(proof.encode()).hexdigest())
         try:
-            answered, result = _call(settings, "POST", "/v1/portal/server-connection", {
-                "code": body.code, "public_url": address, "install_id": install_id, "version": version(),
-                "proof": proof, "preview": body.preview})
+            answered, result = _call(
+                settings,
+                "POST",
+                "/v1/portal/server-connection",
+                {
+                    "code": body.code,
+                    "public_url": address,
+                    "install_id": install_id,
+                    "version": version(),
+                    "proof": proof,
+                    "preview": body.preview,
+                },
+            )
         finally:
             _hold("")
     except ValueError:
@@ -273,8 +326,11 @@ def connect(store, vault, settings, who, body, install_id):
             if answered != 200 or not isinstance(result, dict) or set(result) != {"company"}:
                 raise ValueError("answer")
             return {"company": _company(result["company"]), "preview": True}
-        if answered != 201 or not isinstance(result, dict) or \
-                set(result) != {"company", "workspace_id", "server_key", "portal_url"}:
+        if (
+            answered != 201
+            or not isinstance(result, dict)
+            or set(result) != {"company", "workspace_id", "server_key", "portal_url"}
+        ):
             raise ValueError("answer")
         company, workspace = _company(result["company"]), _workspace(result["workspace_id"])
         portal = _portal_url(result["portal_url"])
@@ -284,13 +340,28 @@ def connect(store, vault, settings, who, body, install_id):
         raise Problem("company_connection_unavailable", UNAVAILABLE, 503, retryable=True) from None
     with store.transaction() as c:
         at = H.now()
-        _write(c, {"key": vault.cipher.seal(c, CONTEXT, result["server_key"]), "company": company,
-                   "workspace_id": workspace, "portal_url": portal, "credit": None, "checked": "", "heartbeat": at,
-                   "version": version(), "connected_at": at, "connected_by": who.actor})
-        H.event(c, who.actor, "company_server.connected", workspace, {"company_id": company["id"], "name": company["name"]})
+        _write(
+            c,
+            {
+                "key": vault.cipher.seal(c, CONTEXT, result["server_key"]),
+                "company": company,
+                "workspace_id": workspace,
+                "portal_url": portal,
+                "credit": None,
+                "checked": "",
+                "heartbeat": at,
+                "version": version(),
+                "connected_at": at,
+                "connected_by": who.actor,
+            },
+        )
+        H.event(
+            c, who.actor, "company_server.connected", workspace, {"company_id": company["id"], "name": company["name"]}
+        )
     from . import gateway_connection
-    gateway_connection.check_soon(store, vault, settings)   # its Gateway key, if it has none, on its own thread
-    return status(store, vault)          # unchecked: reads the company's credit now
+
+    gateway_connection.check_soon(store, vault, settings)  # its Gateway key, if it has none, on its own thread
+    return status(store, vault)  # unchecked: reads the company's credit now
 
 
 def _key(store, vault):
@@ -311,8 +382,12 @@ def status(store, vault, now=None):
             elif code == 200:
                 if not isinstance(result, dict) or set(result) != {"company", "workspace_id", "portal_url", "credit"}:
                     raise ValueError("answer")
-                fresh = {"company": _company(result["company"]), "workspace_id": _workspace(result["workspace_id"]),
-                         "portal_url": _portal_url(result["portal_url"]), "credit": _credit(result["credit"])}
+                fresh = {
+                    "company": _company(result["company"]),
+                    "workspace_id": _workspace(result["workspace_id"]),
+                    "portal_url": _portal_url(result["portal_url"]),
+                    "credit": _credit(result["credit"]),
+                }
                 with store.transaction() as c:
                     if _row(c).get("key") == record["key"]:
                         _write(c, {**_row(c), **fresh, "checked": H.now()})
@@ -325,7 +400,9 @@ def status(store, vault, now=None):
 def disconnect(store, vault, who):
     """End the link on HQ, then forget the key. A key HQ already refuses is forgotten as well."""
     if off(store.settings):
-        raise Problem("company_connection_unavailable", "A rehearsal or demo server cannot change the Tico company link.", 409)
+        raise Problem(
+            "company_connection_unavailable", "A rehearsal or demo server cannot change the Tico company link.", 409
+        )
     key, record = _key(store, vault)
     if key:
         try:
@@ -348,8 +425,9 @@ def gateway_key(store, vault, install, secret):
     if not key:
         return 401, {}, "unauthorized"
     try:
-        code, result = _call(store.settings, "POST", "/v1/portal/server/gateway", {"install": install, "secret": secret},
-                             key=key)
+        code, result = _call(
+            store.settings, "POST", "/v1/portal/server/gateway", {"install": install, "secret": secret}, key=key
+        )
     except ValueError:
         return 0, {}, ""
     if code == 401:
@@ -357,7 +435,11 @@ def gateway_key(store, vault, install, secret):
             _forget(c, SYSTEM, "company_server.revoked", record["key"])
         return code, {}, "unauthorized"
     if code == 201:
-        if isinstance(result, dict) and set(result) == GATEWAY_ANSWER and all(_text(result[k], 200) for k in GATEWAY_ANSWER):
+        if (
+            isinstance(result, dict)
+            and set(result) == GATEWAY_ANSWER
+            and all(_text(result[k], 200) for k in GATEWAY_ANSWER)
+        ):
             return code, result, ""
         return 0, {}, ""
     error = result.get("error") if isinstance(result, dict) else None
@@ -375,15 +457,23 @@ def heartbeat_due(store, now=None):
     """A day since the last heartbeat, or the running version is not the one HQ last heard (an update, or a record from
     before `version` was kept): app.tico.dev and admin see the new version within the hour, not the next day."""
     from .releases import version
+
     with store.read() as c:
         record = _row(c)
-    return bool(record.get("key")) and not off(store.settings) and (
-        record.get("version") != version() or (now or time.time()) - _seconds(record.get("heartbeat")) >= HEARTBEAT_S)
+    return (
+        bool(record.get("key"))
+        and not off(store.settings)
+        and (
+            record.get("version") != version()
+            or (now or time.time()) - _seconds(record.get("heartbeat")) >= HEARTBEAT_S
+        )
+    )
 
 
 def heartbeat(store, vault):
     """Tell HQ this server's version. 'sent', 'gone' (HQ refused the key, now forgotten) or 'failed'."""
     from .releases import version
+
     if not _heartbeat.acquire(blocking=False):
         return "failed"
     try:
@@ -417,15 +507,16 @@ def heartbeat_later(store):
         try:
             heartbeat(store, Vault(store))
         except Exception:
-            pass                       # the next hour tries again
+            pass  # the next hour tries again
+
     thread = threading.Thread(target=run, name="company-heartbeat", daemon=True)
     thread.start()
     return thread
 
 
 def install(app, store, settings, auth):
-    def actor(who):
-        return app.state.inbound.connection_actor(who, what="this server", code="company_connection")
+    def actor(who, tap=False):
+        return app.state.inbound.connection_actor(who, what="this server", code="company_connection", tap=tap)
 
     @app.get(PROOF_PATH)
     async def company_connection_proof():
@@ -452,7 +543,9 @@ def install(app, store, settings, auth):
             body = ServerConnection.model_validate(connection_json(raw))
         except (ValueError, TypeError, ValidationError, RecursionError):
             raise Problem("invalid", ERRORS["invalid"][1], 422) from None
-        return await asyncio.to_thread(connect, store, app.state.vault, settings, who, body, proof["reported_install_id"])
+        return await asyncio.to_thread(
+            connect, store, app.state.vault, settings, who, body, proof["reported_install_id"]
+        )
 
     @app.get("/api/v2/company/server-connection")
     def company_server_view(request: Request):
@@ -462,5 +555,5 @@ def install(app, store, settings, auth):
     @app.delete("/api/v2/company/server-connection")
     def company_server_disconnect(request: Request):
         who = request.state.identity
-        actor(who)
+        actor(who, tap=True)
         return disconnect(store, app.state.vault, who)
