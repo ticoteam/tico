@@ -16,7 +16,7 @@
 // Playwright's Chromium (`npx playwright install chromium`, what CI does). TICO_PYTHON picks the interpreter.
 import type {AddressInfo} from 'node:net';
 import type {Page as BrowserPage, ViewportSize} from 'playwright';
-import type {Selection} from './select.cts';
+import type {Classification, Page as SelectPage, Selection} from './select.cts';
 
 // The page globals the capture reads and the demo's pages provide.
 declare global {
@@ -31,7 +31,17 @@ const fs: typeof import('node:fs') = require('node:fs');
 const net: typeof import('node:net') = require('node:net');
 const os: typeof import('node:os') = require('node:os');
 const path: typeof import('node:path') = require('node:path');
-const select: typeof import('./select.cts') = require('./select.cts');
+// The module is CommonJS (module.exports), so its shape is written out here rather than read from its exports.
+interface SelectModule {
+  SHARED: string[];
+  UNSHOWN: string[];
+  NON_RENDERING: string[];
+  DARK_FILES: string[];
+  globToRegExp: (glob: string) => RegExp;
+  classify: (file: string, pages: SelectPage[]) => Classification;
+  selectPages: (paths: string[], pages: SelectPage[], darkPaths?: string[]) => Selection;
+}
+const select: SelectModule = require('./select.cts');
 
 // One width the pages are shot at: the browser viewport and pixel density, and touch for the phone.
 interface WidthSpec {
@@ -414,7 +424,7 @@ async function capture(): Promise<void> {
           }
           await verify(page, problems, label);
           // A focused cell or field draws its focus ring, and animations are finished: neither is part of the page's content.
-          await page.evaluate(() => document.activeElement?.blur());
+          await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
           await page.screenshot({path: path.join(out, label + '.png'), animations: 'disabled', caret: 'hide'});
           written.push(label + '.png');
         }

@@ -112,7 +112,7 @@ function toRgba(samples: Buffer, pixels: number, colorType: number): Uint8Array 
 // Decodes one PNG to RGBA bytes, or throws an error that names the file when the PNG is one this does not handle.
 function decodePng(file: string): Decoded {
   const data = fs.readFileSync(file);
-  const refuse = (reason: string): never => {
+  const refuse: (reason: string) => never = (reason) => {
     throw new Error(`${file}: ${reason}`);
   };
   if (data.length < 8 || !data.subarray(0, 8).equals(SIGNATURE)) refuse('not a PNG file');
