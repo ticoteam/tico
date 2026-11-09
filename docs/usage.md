@@ -65,9 +65,7 @@ Usage row and Settings > Bots open its limit too. None is set until someone sets
 `GET /api/v2/usage/limits`, `PUT /api/v2/usage/limits` (the default), `PUT /api/v2/usage/limits/{bot}` (a field set to null follows the default; one left out stays),
 `PUT /api/v2/usage/pools/company` and `PUT /api/v2/usage/pools/groups/{group}` (a field set to null removes it; one left out stays).
 
-Each amount is stored as a budget node (`budget_nodes`): an amount in nanodollars, a period, and a scope (`bot`, `team` for a
-group, or `company`; a `company` node with `per_bot` set is the default for each bot). Hand-off caps, run budgets and loop
-guards are separate safety controls and stay where they are.
+Hand-off caps, run budgets and loop guards are separate safety controls. The limits on this page do not replace them.
 
 **Clear automatic queue** (Usage, owner and administrators) cancels queued automatic wakes and waits for the whole team or one group and its subgroups. Tasks stay on their current step. Messages from people stay queued, including keeper notices carrying their messages or reporting their own acts. A run that has already started finishes. `POST /api/v2/usage/queues/purge` with `{"scope": "company"}` or `{"scope": "group:<id>"}`.
 
@@ -99,14 +97,13 @@ appear in both groups, while the overall run count counts it once. Token and cos
 portions. API spend and subscription API-equivalent estimates stay separate, including when the
 fallback uses a different billing method. Existing spend limits use the same portions.
 
-## Where the numbers come from
+## What is counted, and what Finance books
 
-Every measured portion of a run is one usage fact (`usage_facts`, append-only): its run, bot and task, provider, model and
-maker, billing, input, cached and output tokens, and its list-price estimate in nanodollars (`source: estimate`). The usage
-page, limits and Finance's attribution all add these up; a run that counted nothing has no fact, and its run row says why.
-For spend billed through the Tico AI Gateway, the Gateway's meter is the amount of record: each daily read adds a
-`source: meter` fact per model for what the meter moved, under the same `meter_key` (`gateway:<month>:<model>`) as the
-estimates it covers, and Finance's reconcile shows each model's estimate beside its meter.
+Each measured part of a run (the primary model, and a fallback if one ran) is counted once, and recorded counts are never
+edited. The usage page and the limits add these up. A run that counted nothing has no count, and its row says why.
+
+Spend billed through the Tico AI Gateway is booked in Finance from the Gateway's meter, the amount the Gateway charges. Finance
+reads the meter once a day. The usage page still shows the estimate, which can differ from the meter.
 
 Older runs retain their recorded totals. Unreported harness, effort or subscription values are shown
 as **Not recorded / not applicable**, never filled from current bot settings. Automatic model choices

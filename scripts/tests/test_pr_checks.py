@@ -1146,6 +1146,14 @@ def test_every_job_runs_on_a_github_hosted_runner_and_only_a_ready_pull_request_
     }
 
 
+def test_a_draft_runs_no_release_command_test_and_marking_it_ready_runs_them():
+    doc = yaml.safe_load((ROOT / ".github" / "workflows" / "release-command-tests.yml").read_text())
+    assert doc[True]["pull_request"]["types"] == ["opened", "synchronize", "reopened", "ready_for_review"]
+    assert (
+        doc["jobs"]["command"]["if"] == "${{ github.event_name != 'pull_request' || !github.event.pull_request.draft }}"
+    )
+
+
 def test_a_draft_or_a_fork_runs_no_test_or_sim_leg():
     jobs = workflow_jobs()["jobs"]
     assert jobs["plan"]["if"] == "${{ !github.event.pull_request.draft }}"
@@ -1963,3 +1971,283 @@ def test_the_queue_and_pr_suites_pass_the_flag_and_release_validation_never_does
     assert "scripts/pr_checks.py run --quarantine" in step["run"]
     for name in ("ci.yml", "release.yml", "hotfix.yml", "train.yml"):
         assert "quarantine" not in (workflows / name).read_text(), name
+
+
+def light_tree(root):
+    """leaf <- helper <- outer, each with its own test; the Caddy entry point runs the helper and a core browser script
+    names outer, so each check sits a known number of levels from a change to leaf."""
+    source(root, "backend/__init__.py", "")
+    source(root, "backend/leaf.py", "LEAF = 1\n")
+    source(root, "backend/helper.py", "from backend.leaf import LEAF\n")
+    source(root, "backend/outer.py", "from backend.helper import LEAF\n")
+    source(root, "backend/caddy_assets.py", "from backend.helper import LEAF\n")
+    source(root, "backend/tests/test_leaf.py", "from backend.leaf import LEAF\ndef test_x(): pass\n")
+    source(root, "backend/tests/test_helper.py", "from backend.helper import LEAF\ndef test_x(): pass\n")
+    source(root, "backend/tests/test_outer.py", "from backend.outer import LEAF\ndef test_x(): pass\n")
+    source(root, "ui/tests/page.cjs", "require('../../backend/outer.py');\n")
+    smoke_tree(root)
+
+
+def test_a_light_pull_request_runs_the_tests_a_change_reaches_directly_and_the_smoke_set(tmp_path):
+    light_tree(tmp_path)
+    smoke_tests, _ = checks.smoke(tmp_path)
+    full = checks.selection(["backend/leaf.py"], root=tmp_path, core=["page"])
+    reached = {"backend/tests/test_leaf.py", "backend/tests/test_helper.py", "backend/tests/test_outer.py"}
+    assert reached <= set(full["python"]) and full["browser"] == ["page"] and full["caddy"]
+    light = checks.narrow(full, ["backend/leaf.py"], "pull_request", root=tmp_path)
+    # Only the test that imports leaf itself, and the smoke set because the plan dropped two; never more than the full
+    # selection and the smoke set.
+    assert set(light["python"]) == {"backend/tests/test_leaf.py"} | set(smoke_tests)
+    assert set(light["python"]) <= set(full["python"]) | set(smoke_tests)
+    record = light["narrow"]
+    assert record["left_transitive"] == ["backend/tests/test_helper.py", "backend/tests/test_outer.py"]
+    assert record["tier"]["backend/tests/test_leaf.py"] == 2 and {record["tier"][t] for t in smoke_tests} == {1}
+    # The browser script and the Caddy job reach leaf only through other files: left for the queue.
+    assert light["browser"] == [] and record["browser_left"] == ["page"] and not light["caddy"]
+    # One level nearer, they run: outer is named by the script, helper is run by the Caddy entry point.
+    outer = checks.narrow(
+        checks.selection(["backend/outer.py"], root=tmp_path, core=["page"]),
+        ["backend/outer.py"],
+        "pull_request",
+        root=tmp_path,
+    )
+    assert outer["browser"] == ["page"]
+    helper = checks.narrow(
+        checks.selection(["backend/helper.py"], root=tmp_path, core=["page"]),
+        ["backend/helper.py"],
+        "pull_request",
+        root=tmp_path,
+    )
+    assert helper["caddy"] and "backend/tests/test_helper.py" in helper["python"]
+    # A changed test file is tier 0. A change that drops nothing by depth carries the smoke set only for the cap: prepare
+    # removes it when the cap drops nothing too.
+    name = "backend/tests/test_outer.py"
+    own = checks.narrow(checks.selection([name], root=tmp_path, core=[]), [name], "pull_request", root=tmp_path)
+    assert set(own["python"]) == {name} | set(smoke_tests) and own["narrow"]["tier"][name] == 0
+    assert not own["narrow"]["smoke"] and own["narrow"]["smoke_unless_capped"] == sorted(smoke_tests)
+    # The selection is the same for both events (release validation's incremental runs use it too); main passes as is.
+    assert checks.selection(["backend/leaf.py"], "merge_group", root=tmp_path, core=["page"]) == full
+    main = checks.selection(["backend/leaf.py"], "push", root=tmp_path, core=[])
+    assert checks.narrow(main, ["backend/leaf.py"], "push", root=tmp_path) is main
+    # An empty diff is uncertain: its smoke-set plan passes unchanged.
+    empty = checks.selection([], root=tmp_path, core=[])
+    assert checks.narrow(empty, [], "pull_request", root=tmp_path) is empty
+
+
+def test_a_light_plan_caps_its_python_tests_by_priority_and_a_changed_test_always_runs():
+    tier = {"changed.py": 0, "smoke.py": 1, "near_short.py": 2, "near_long.py": 2, "far.py": 3}
+    seconds = {"changed.py": 50, "smoke.py": 20, "near_short.py": 10, "near_long.py": 40, "far.py": 5}
+    # changed 50 + smoke 20 + near_short 10 = 80 of 85; near_long does not fit, and the shorter far file after it does.
+    kept, left = checks.cap_tests(list(tier), tier, seconds, budget=85)
+    assert kept == sorted(["changed.py", "smoke.py", "near_short.py", "far.py"]) and left == ["near_long.py"]
+    # Past the budget a changed test file and the smoke set still run; what is left is listed in priority order.
+    kept, left = checks.cap_tests(list(tier), tier, seconds, budget=10)
+    assert kept == ["changed.py", "smoke.py"] and left == ["near_short.py", "near_long.py", "far.py"]
+    # The budget is four VMs of about eight minutes of four workers, setup excluded.
+    assert checks.narrow_budget(4) == 4 * checks.WORKERS * (
+        checks.NARROW_SHARD_SECONDS - checks.SETUP_SECONDS["python"]
+    )
+
+
+def test_a_light_pull_request_plan_runs_at_most_four_python_vms_and_lists_what_it_left(tmp_path, monkeypatch):
+    files = {f"backend/tests/test_{i:02}.py": 1 for i in range(40)}
+    monkeypatch.setattr(checks, "collect", lambda: Counter(files))
+    monkeypatch.setattr(checks, "merge_parent", lambda base: base)
+    monkeypatch.setattr(checks, "guard_changelog", lambda base: None)
+    monkeypatch.setattr(checks, "image_checks", lambda changed: None)
+    monkeypatch.setattr(checks, "changed_files", lambda base, head="HEAD", only=None: [] if only else ["backend/x.py"])
+    monkeypatch.setattr(checks, "committed_timings", lambda: dict.fromkeys(files, 600.0))  # ten minutes each
+    monkeypatch.setattr(checks, "DependencyMap", lambda root: "graph")
+    far = "backend/tests/test_far.py"
+
+    def fake_selection(changed, event, base=None, added=None, graph=None):
+        empty = {"browser": [], "caddy": False, "contracts": False, "conformance": False, "rust": []}
+        return {**empty, "python": [*sorted(files), far], "reason": "measured", "uncertain": []}
+
+    narrowed = []
+
+    def fake_narrow(picked, changed, event, added=None, graph=None):
+        narrowed.append((event, graph))
+        tier = {name: 0 if name.endswith("_00.py") else 2 for name in files}
+        record = {"event": event, "depth": 1, "shards": 4, "budget_seconds": checks.narrow_budget(4), "smoke": True}
+        record["smoke_unless_capped"] = []
+        return {**picked, "python": sorted(files), "narrow": {**record, "left_transitive": [far], "tier": tier}}
+
+    monkeypatch.setattr(checks, "selection", fake_selection)
+    monkeypatch.setattr(checks, "narrow", fake_narrow)
+    summary = tmp_path / "summary"
+    monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(summary))
+    monkeypatch.setenv("GITHUB_OUTPUT", str(tmp_path / "output"))
+    plan = checks.prepare("pull_request", "base", tmp_path / "plan.json", light=True)
+    assert narrowed == [("pull_request", "graph")]  # one map for the selection and the narrowing
+    python = [job for job in plan["matrix"]["include"] if job["suite"].startswith("python-")]
+    kept = sorted(sum((job["files"] for job in python), []))
+    assert 1 <= len(python) <= 4
+    assert len(kept) == int(checks.narrow_budget(4) // 600) and "backend/tests/test_00.py" in kept
+    left = plan["narrow"]["left_over_budget"]
+    assert sorted(left + kept) == sorted(files) and "tier" not in plan["narrow"]
+    text = summary.read_text()
+    assert all(f"`{name}`" in text for name in left) and f"`{far}`" in text and "merge queue group" in text
+    # Without --light, or for main, nothing is narrowed: the full selection runs.
+    narrowed.clear()
+    for event, light in (("pull_request", False), ("push", True)):
+        assert checks.prepare(event, "base", tmp_path / "plan.json", light=light).get("narrow") is None, event
+    assert narrowed == []
+    # A queue group plans light too, from its own base and head, with one map.
+    checks.prepare("merge_group", "queue-base", tmp_path / "plan.json", head="queue-head", light=True)
+    assert narrowed == [("merge_group", "graph")]
+
+
+def test_a_light_pull_request_runs_the_sim_only_for_its_own_inputs(monkeypatch):
+    monkeypatch.setattr(checks, "factory_shards", lambda: ["1/2", "2/2"])
+    # backend/app.py is on the sim's recorded call path, so the full plan runs it; the light one leaves it to the queue.
+    assert checks.factory_plan("pull_request", ["backend/app.py"])["run"]
+    assert not checks.factory_plan("pull_request", ["backend/app.py"], own_inputs=True)["run"]
+    for name in (
+        "evals/factory/run.py",
+        checks.PR_WORKFLOW,
+        "templates/catalog/x/role.yaml",
+        "backend/requirements.txt",
+    ):
+        assert checks.factory_plan("pull_request", [name], own_inputs=True)["run"], name
+    assert checks.factory_plan("pull_request", [], own_inputs=True)["run"]  # an unreadable diff runs it
+
+
+def test_both_tiers_plan_light_and_the_required_check_keeps_its_contract():
+    jobs = workflow_jobs()["jobs"]
+    step = next(s for s in jobs["plan"]["steps"] if s.get("id") == "plan")
+    assert step["run"].endswith("--light")
+    # NARROW decides per event: a pull request one level and four VMs, a queue group two levels and eight VMs.
+    assert checks.NARROW == {"pull_request": {"depth": 1, "shards": 4}, "merge_group": {"depth": 2, "shards": 8}}
+    # `checks` still needs every job and runs after any of them (a draft skips it with everything else).
+    assert jobs["checks"]["if"] == "${{ always() && !github.event.pull_request.draft }}"
+    assert set(jobs["checks"]["needs"]) == set(jobs) - {"checks", "timings"}
+
+
+def test_a_queue_group_runs_the_tests_two_levels_from_a_change_and_keeps_its_other_jobs(tmp_path, monkeypatch):
+    light_tree(tmp_path)
+    smoke_tests, _ = checks.smoke(tmp_path)
+    full = checks.selection(["backend/leaf.py"], "merge_group", root=tmp_path, core=["page"])
+    group = checks.narrow(full, ["backend/leaf.py"], "merge_group", root=tmp_path)
+    # leaf's test (level 1) and helper's (level 2: it runs helper, which runs leaf); outer's is three levels away.
+    assert set(group["python"]) == {"backend/tests/test_leaf.py", "backend/tests/test_helper.py"} | set(smoke_tests)
+    record = group["narrow"]
+    assert record["left_transitive"] == ["backend/tests/test_outer.py"] and record["shards"] == 8
+    assert record["tier"]["backend/tests/test_leaf.py"] == 2 and record["tier"]["backend/tests/test_helper.py"] == 3
+    # A queue group keeps its browser scripts, Caddy job and contracts as the selection decided.
+    assert (group["browser"], group["caddy"], group["contracts"]) == (full["browser"], full["caddy"], full["contracts"])
+    assert "browser_left" not in record
+    # A hub (more than HUB_TEST_USERS tests run it directly) is not followed to the second level.
+    monkeypatch.setattr(checks, "HUB_TEST_USERS", 0)
+    hub = checks.narrow(full, ["backend/leaf.py"], "merge_group", root=tmp_path)
+    assert "backend/tests/test_helper.py" not in hub["python"]
+    # A light queue group's summary says where the rest runs.
+    assert "release validation" in checks.narrow_summary({**record, "left_over_budget": []})
+
+
+def test_release_validation_selects_the_full_closure_so_it_runs_what_a_queue_group_leaves_out():
+    """A queue group drops tests more than two levels away; release validation's incremental runs (every change since the
+    last full validation, which runs once in 24 hours) select with pr_checks.selection, which narrowing never changes."""
+    source = (ROOT / "scripts/release_increment.py").read_text()
+    assert "pr_checks.selection(" in source and "narrow" not in source and "--light" not in source
+    for name in ("ci.yml", "train.yml", "release.yml", "hotfix.yml"):
+        assert "--light" not in (ROOT / ".github/workflows" / name).read_text(), name
+
+
+def test_a_light_plan_adds_the_smoke_set_only_when_it_drops_a_test_and_packs_with_the_seconds_it_capped_by(
+    tmp_path, monkeypatch
+):
+    """Codex review: the cap alone can drop tests, so the smoke set waits for it; and the VMs are packed with the same
+    seconds the cap used (the committed table under the run's timings), so a VM is not planned from a guess."""
+    smoke_tests, _ = checks.smoke(ROOT)
+    direct = [f"backend/tests/test_direct_{i:02}.py" for i in range(14)]
+    collected = Counter(dict.fromkeys([*direct, *smoke_tests], 1))
+    monkeypatch.setattr(checks, "collect", lambda: collected)
+    monkeypatch.setattr(checks, "merge_parent", lambda base: base)
+    monkeypatch.setattr(checks, "guard_changelog", lambda base: None)
+    monkeypatch.setattr(checks, "image_checks", lambda changed: None)
+    monkeypatch.setattr(checks, "changed_files", lambda base, head="HEAD", only=None: [] if only else ["backend/x.py"])
+    monkeypatch.setattr(checks, "DependencyMap", lambda root: "graph")
+    monkeypatch.delenv("GITHUB_OUTPUT", raising=False)
+    monkeypatch.delenv("GITHUB_STEP_SUMMARY", raising=False)
+    size = {"n": 14}
+
+    def fake_selection(changed, event, base=None, added=None, graph=None):
+        empty = {"browser": [], "caddy": False, "contracts": False, "conformance": False, "rust": []}
+        return {**empty, "python": direct[: size["n"]], "reason": "measured", "uncertain": []}
+
+    def fake_narrow(picked, changed, event, added=None, graph=None):
+        tier = dict.fromkeys(picked["python"], 2) | dict.fromkeys(smoke_tests, 1)
+        record = {"event": event, "depth": 1, "shards": 4, "budget_seconds": checks.narrow_budget(4), "smoke": False}
+        record |= {"left_transitive": [], "tier": tier, "smoke_unless_capped": sorted(smoke_tests)}
+        return {**picked, "python": sorted({*picked["python"], *smoke_tests}), "narrow": record}
+
+    monkeypatch.setattr(checks, "selection", fake_selection)
+    monkeypatch.setattr(checks, "narrow", fake_narrow)
+    monkeypatch.setattr(checks, "committed_timings", lambda: dict.fromkeys(direct, 600.0))
+    # Fourteen ten-minute files: the cap drops some, so the smoke set runs (it ranks before them).
+    plan = checks.prepare("pull_request", "base", tmp_path / "plan.json", light=True)
+    assert plan["narrow"]["left_over_budget"] and plan["narrow"]["smoke"]
+    assert set(smoke_tests) <= set(plan["python"])
+    # Packed from the same seconds: no VM carries more than its share of the budget plus one file.
+    python = [job for job in plan["matrix"]["include"] if job["suite"].startswith("python-")]
+    assert len(python) == 4 and max(plan["estimated_seconds"][: len(python)]) <= checks.narrow_budget(4) / 4 + 600
+    # Two files fit: nothing is dropped, so the smoke set does not run.
+    size["n"] = 2
+    plan = checks.prepare("pull_request", "base", tmp_path / "plan.json", light=True)
+    assert plan["python"] == direct[:2] and not plan["narrow"]["smoke"] and not plan["narrow"]["left_over_budget"]
+
+
+def test_a_queue_group_follows_shared_test_modules_and_reads_by_repository_listers(tmp_path):
+    light_tree(tmp_path)
+    source(tmp_path, "backend/tests/test_shared.py", "from backend.leaf import LEAF\ndef test_x(): pass\n")
+    source(tmp_path, "backend/tests/test_reuses.py", "from backend.tests.test_shared import LEAF\ndef test_y(): pass\n")
+    source(tmp_path, "backend/tests/test_lists.py", "import importlib\nimportlib.import_module(name)\n")
+    full = checks.selection(["backend/leaf.py"], "merge_group", root=tmp_path, core=[])
+    group = checks.narrow(full, ["backend/leaf.py"], "merge_group", root=tmp_path)
+    # A test module that other tests import is followed like any module; a file that may load anything is level 1.
+    assert {"backend/tests/test_reuses.py", "backend/tests/test_lists.py"} <= set(group["python"])
+    light = checks.narrow(full, ["backend/leaf.py"], "pull_request", root=tmp_path)
+    assert "backend/tests/test_lists.py" in light["python"] and "backend/tests/test_reuses.py" not in light["python"]
+    # The queue group runs everything its pull request's light run did.
+    assert set(light["python"]) <= set(group["python"])
+
+
+def test_a_light_plan_packs_untimed_files_with_the_cap_estimate_and_keeps_the_smoke_set_past_the_budget(
+    tmp_path, monkeypatch
+):
+    """Codex review, round 2: untimed files are packed with the seconds the cap estimated for them (not re-estimated
+    from fewer files), and the smoke set runs even when changed tests alone fill the budget."""
+    smoke_tests, _ = checks.smoke(ROOT)
+    changed = [f"backend/tests/test_changed_{i:02}.py" for i in range(12)]
+    collected = Counter(dict.fromkeys([*changed, *smoke_tests], 10))
+    monkeypatch.setattr(checks, "collect", lambda: collected)
+    monkeypatch.setattr(checks, "merge_parent", lambda base: base)
+    monkeypatch.setattr(checks, "guard_changelog", lambda base: None)
+    monkeypatch.setattr(checks, "image_checks", lambda changed: None)
+    monkeypatch.setattr(checks, "changed_files", lambda base, head="HEAD", only=None: [] if only else changed)
+    monkeypatch.setattr(checks, "DependencyMap", lambda root: "graph")
+    monkeypatch.delenv("GITHUB_OUTPUT", raising=False)
+    monkeypatch.delenv("GITHUB_STEP_SUMMARY", raising=False)
+
+    def fake_selection(changed_files, event, base=None, added=None, graph=None):
+        empty = {"browser": [], "caddy": False, "contracts": False, "conformance": False, "rust": []}
+        return {**empty, "python": [*changed, "backend/tests/test_far.py"], "reason": "measured", "uncertain": []}
+
+    def fake_narrow(picked, changed_files, event, added=None, graph=None):
+        tier = dict.fromkeys(changed, 0) | dict.fromkeys(smoke_tests, 1)
+        record = {"event": event, "depth": 1, "shards": 4, "budget_seconds": checks.narrow_budget(4), "smoke": True}
+        record |= {"left_transitive": ["backend/tests/test_far.py"], "tier": tier, "smoke_unless_capped": []}
+        return {**picked, "python": sorted({*changed, *smoke_tests}), "narrow": record}
+
+    monkeypatch.setattr(checks, "selection", fake_selection)
+    monkeypatch.setattr(checks, "narrow", fake_narrow)
+    # Twelve ten-minute changed tests fill the budget alone; the smoke set still runs.
+    monkeypatch.setattr(checks, "committed_timings", lambda: dict.fromkeys(changed, 600.0))
+    plan = checks.prepare("pull_request", "base", tmp_path / "plan.json", light=True)
+    assert set(smoke_tests) | set(changed) == set(plan["python"])
+    # One timed file and the rest untimed: the VMs' planned load is the seconds the cap selected.
+    monkeypatch.setattr(checks, "committed_timings", lambda: {changed[0]: 600.0})
+    plan = checks.prepare("pull_request", "base", tmp_path / "plan.json", light=True)
+    python = [job for job in plan["matrix"]["include"] if job["suite"].startswith("python-")]
+    assert sum(plan["estimated_seconds"][: len(python)]) == pytest.approx(plan["narrow"]["selected_seconds"], abs=1)

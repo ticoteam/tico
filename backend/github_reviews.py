@@ -11,7 +11,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from . import hubdb as H
 from .auth import validate_identity
-from .github_app import GitHubApp, LIVE_TTL, REFRESH_MARGIN, repo_of
+from .github_app import GitHubApp, LIVE_TTL, REFRESH_MARGIN, account_kind, repo_of
 from .store import Problem, digest, encode
 
 
@@ -47,7 +47,13 @@ class ReviewerApp(GitHubApp):
                 "or clear TICO_GITHUB_REVIEWER_BOTS to roll back to the shared App and COMMENT",
                 409,
             )
-        return {"app_id": int(app_id), "org": primary["org"], "installation_id": int(installation)}
+        # The reviewer App is installed on the same account as the primary, so it has the primary's account type.
+        return {
+            "app_id": int(app_id),
+            "org": primary["org"],
+            "installation_id": int(installation),
+            "account_type": account_kind(primary),
+        }
 
     def private_key(self, c, row):
         try:

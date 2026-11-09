@@ -83,6 +83,7 @@ Changing a task's type preserves its status and finds a matching step in the new
 empty step to clear just the step. Status permissions, completion notes, closing and reopening
 work the same way for step changes. Moving between two steps with the same status changes only
 the step, without another completion note or notice. Step changes appear in the task history.
+Closing or declining a task stops the bot work on it: its queued runs are canceled and its running turns are asked to stop, except the turn that makes the close. A stopped turn's answer is kept on its run rather than posted into the closed task, and the history records how many runs were stopped or canceled.
 
 Movers (the owner and humans on the leadership, product or engineering teams) create, rename,
 reorder and delete types and steps. Move every task off a step before deleting it, including
@@ -546,13 +547,13 @@ it. A change applies to the next item; nothing already on a plate moves. It ship
 stored Rehearsal reads as On. An old stored `chores_budget` is ignored.
 **Replay a day** judges one past day's existing bot items with your settings. Each item is judged against the tasks you
 own today that were created before it and were open at its time. A snooze on a task also leaves it out while the snooze
-is not yet released and lasts past that item's time, however late it was set; a snooze released by now does not count.
-For a task item, that task is left out of the count; a question item leaves nothing out. Nothing moves. Refused writes
-have no saved item text to replay. Older items kept with a bot before refusals were introduced can still be replayed. A
-bot handing its own task to you (one or many) is judged like a task filed for you. A bot's handoff of a task to you is
-also listed when the filter was Off at the time, because no ask row was written. Replay reads it from the task's owner
-history. A handoff by a person is not listed. Each handoff appears once, on the day the bot handed it over. An owner or
-admin replaying someone else's day sees only the titles they may read.
+is not yet released and lasts past that item's time, however late it was set. A snooze released by now does not count.
+For a task item, that task is left out of the count and the list; a question or loose item leaves nothing out. Nothing
+moves. Refused writes have no saved item text to replay. Older items kept with a bot before refusals were introduced
+can still be replayed. A bot handing its own task to you (one or many) is judged like a task filed for you. A bot's
+handoff of a task to you is also listed when the filter was Off at the time, because no ask row was written. Replay
+reads it from the task's owner history. A handoff by a person is not listed. Each handoff appears once, on the day the
+bot handed it over. An owner or admin replaying someone else's day sees only the titles they may read.
 
 API: `GET`/`PUT`/`DELETE /api/v2/ask-ingest/settings` (`mode` is `off` or `on`; a `rehearsal` sent is saved as `on`),
 `POST /api/v2/ask-ingest/replay` (`person`, `date`, `offset`, a page of up to 25; the person, or an owner or admin).
@@ -785,7 +786,8 @@ specific wins (the **What wakes** automations on the Automations page). The mess
 An event no rule names waits as a note (`default_note`): the bot reads it on its next run. Work still wakes the bot: an
 assignment or a task handed back to it, a review or QA request, a blocker, a routine, a schedule, a due date, a snooze
 ending, a requested update, a release published, the Task Manager's report, a pull request's
-checks finishing, a subtask or a blocker finishing, and a task the bot asked for being finished, declined
+checks finishing, a pull request merging on a card waiting or blocked on it (its own, a card it blocks, or its parent: once
+per merge, `_merge_wakes` in backend/github.py), a subtask or a blocker finishing, and a task the bot asked for being finished, declined
 or blocked on someone else (`task_blocked`). A plain
 comment, another bot's status or step move, and the bot's own write (`own_write`, ignored) do not. A rule's outcome is
 `ignore`, `note`, `batch`, `wake`, `ask` or `action`. **Ask** writes the message as a note and puts one item in the
@@ -963,15 +965,17 @@ changed one update each, as before. Close can be undone for ten seconds either w
 ```sh
 hub task bulk step "Legal review" --where-type idea --where-step Draft --where-label launch --dry-run
 hub task bulk close --where-owner me --where-status waiting --note "Not needed this quarter"
+hub task bulk close --where-not-owner me --where-status open --where-status doing --dry-run
 hub task bulk tags --add q4 --remove backlog --where-label backlog
 hub task bulk status open --where-label q4 --where-status closed
 ```
 
 `POST /api/v2/task-bulk` takes a `filter` with the filters of `GET /api/v2/tasks` (`owner`, `requester`, `status`,
 `lane`, `label`, `type`, `step`, `number`, `updated_since`, `member`, `role`, `snoozed`, and `ids`, a list of up to
-100 task ids or numbers), one `action` (`step`, `status`, `owner`, `tags` with `add` and `remove`, or `close`), an
+100 task ids or numbers), `exclude_owner` (everything not that owner's, the caller's own included only when it is
+named; `--where-not-owner` in the CLI), one `action` (`step`, `status`, `owner`, `tags` with `add` and `remove`, or `close`), an
 optional `note` and `dry_run`. `hub_task_bulk` takes the same. The filter must name something: an empty one, or an
-owner or requester who is nobody, is refused rather than read as every task. Each matching task is changed by the
+owner, exclude owner or requester who is nobody, is refused rather than read as every task. Each matching task is changed by the
 same update a single change makes, with the caller's own rights: its events, wakes and refusals are that task's.
 A task the caller may not change is skipped with the reason and the rest still change; a task already that way
 counts as `unchanged`. The answer gives `matched`, `changed`, `unchanged` and `skipped`, and names the tasks changed
@@ -1367,10 +1371,12 @@ notices, notes and replies go there, and the thread it was filed from gets one q
 (`refs.task_started`), written into that thread's history only: task news reaches no person's Inbox or digest. A bot's
 say or notice in its task's thread reaches a person only when it @-mentions them. To get someone's attention on a task,
 the bot @-mentions them; otherwise the comment stays on the task, with no Inbox row, digest or push. A bot's ask in its
-task's thread goes to the person or bot it names. With no name, the owner bot's ask goes to the requester,
-and the requester's or a manager's ask goes to the owner. When the recipient is a person, that person's
-**Needs you** lists the task, with no Inbox row, digest or push unless the asking bot @-mentions them. When
-the recipient is a bot, the ask goes to that bot on the task, and no person's **Needs you** lists it. A bot's
+task's thread goes to the person or bot it names. With no name, the requester's or a manager's ask goes to the
+owner, and anyone else's ask, the owner's included, goes to the requester. A named recipient on a private task must
+be able to read it (its parties, the managers of a bot party, and its one guest), or the ask is refused. When the
+recipient is a person, that person's **Needs you** lists the task, with no Inbox row, digest or push unless the asking bot @-mentions
+them. When the recipient is a bot, the ask goes to that bot on the task and adds nothing to a person's
+**Needs you**; a task already waiting on a person stays on that person's list for its wait. A bot's
 open task filed into a thread before this moves to a thread of its own the next time a turn on it is claimed;
 its earlier messages stay in the thread, and the new thread opens with a line saying so. A person's own tasks,
 and the Assistant's (whose turns act for the person of the thread), keep their thread.
