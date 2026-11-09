@@ -1227,7 +1227,7 @@ class WaitingWithDependency(HubCase):
                 H.task(self.conn, other['id'])['note'],
                 TR.blocker_ids(self.conn, other['id']),
             ),
-                ('open', 'Question closed (declined): Buy a signing key for $5?\nNo. Use the old one.', []),
+            ('open', 'Question closed (declined): Buy a signing key for $5?\nNo. Use the old one.', []),
         )
         told = [
             m['body']
