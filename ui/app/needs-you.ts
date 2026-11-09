@@ -54,7 +54,7 @@ const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'obj
 // ---- Needs you: hub.db items, rendered as the same request rows the Issues use ----
 // What a card takes, in the order Needs you lists the groups (the server sets each card's `need`, backend/views.py
 // NEED_GROUPS): all the yes/no and pick cards can be cleared in one sitting.
-const NEED_GROUPS = [['decide', 'Answer'], ['pay', 'Pay'], ['connect', 'Connect'], ['review', 'Review'], ['do', 'Do']];
+const NEED_GROUPS: [string, string][] = [['decide', 'Answer'], ['pay', 'Pay'], ['connect', 'Connect'], ['review', 'Review'], ['do', 'Do']];
 const NEED_RANK = Object.fromEntries(NEED_GROUPS.map(([k], i) => [k, i]));
 const needLabel = (need: string | undefined) => (NEED_GROUPS.find(([k]) => k === need) || NEED_GROUPS.at(-1))?.[1];
 let NEEDS_MEMO: NeedsMemo | null = null;

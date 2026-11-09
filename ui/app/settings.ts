@@ -5,20 +5,31 @@
 // What this file reads from the server and keeps in SETTINGS_DATA. The other settings files read these through the
 // globals declared here, so each type names the fields its readers use; a field nobody reads is left out.
 type SettingsPerson = import('../types/api').Person & {hidden?: boolean; owner?: boolean; role?: string};
-type SettingsMachine = {id: string; label?: string; owner_id?: string; revoked_at?: string | null; cloud_machine?: boolean; screen?: string | null; screen_available?: boolean; online?: boolean};
+type SettingsMachine = {id: string; label?: string; owner_id?: string; revoked_at?: string | null; cloud_machine?: boolean; screen?: string | null; screen_available?: boolean; online?: boolean; readiness?: MachineReadiness};
 // A catalog row (backend/providers.py MODEL_CATALOG): every row has an id, a provider and a label.
-type SettingsModel = {id: string; provider: string; label: string; deprecated?: boolean; meeting?: boolean};
+type SettingsModel = {id: string; provider: string; label: string; deprecated?: boolean; meeting?: boolean; harnesses?: string[]; runtime?: string;
+  efforts?: string[]; default_effort?: string; description?: string; context_tokens?: number | null};
 type SettingsService = {name?: string; service?: string; last_error?: string | null; last_succeeded_at?: string | null};
 type SettingsIssue = {kind?: string; title: string; detail: string; action?: string; bot?: string; restart?: unknown; machine?: unknown};
 type SettingsHistory = {changes: SettingsChange[]; transitions: SettingsTransition[]; transitions_truncated?: boolean; next_before?: string | null};
 // clients/harness_manifests.py: the sign-in commands are strings (empty when there is no sign-in), the rest flags.
 type HarnessCaps = {api_keys?: string; api_key_login?: boolean; api_key_check?: boolean; browser_sign_in?: boolean; compaction?: boolean; container_login?: string; resume_command?: string; sign_out?: boolean; switch_unavailable_on?: string[]; terminal_login?: string};
-type HarnessRow = {id: string; name?: string; external?: boolean; capabilities?: HarnessCaps};
+type HarnessRow = {id: string; name?: string; label?: string; runtime?: string; external?: boolean; capabilities?: HarnessCaps};
+// What a bot's computer cannot run, per bot and harness (backend/readiness.py `can_run`, /v2/operations `runnable`).
+type SettingsRunAnswer = {can_run?: boolean; problem?: string; short?: string; computer?: {id?: string} | null;
+  sign_in?: {runner_id?: string; computer?: string} | null; move?: {id: string; label: string} | null};
+type SettingsRunnable = Record<string, Record<string, SettingsRunAnswer> | undefined>;
+// GET /v2/models `gateway` (backend/gateway_tiers.py): the Tico AI Gateway's levels and its tiers by id (tico-{level}[-fast]).
+type SettingsTierVersion = {version: string; model: string; context?: number | null; price: {input: number; output: number}};
+type SettingsTier = {name: string; level: string; fast: boolean; current: string; versions: SettingsTierVersion[]};
+type SettingsGatewayTiers = {tiers: Record<string, SettingsTier>; levels: {id: string; name: string}[]};
+// GET /v2/usage/limits: each bot's use limit and the company's default (ui/app/usage.ts draws them).
+type SettingsLimits = {bots?: Record<string, unknown>; default?: unknown};
 // GET /v2/operations: the computers, services and issues that the Computers and Health views draw.
-type SettingsOperations = {machines: SettingsMachine[]; services: SettingsService[]; issues?: SettingsIssue[]; runnable?: unknown; agents?: unknown; scheduler_enabled?: boolean};
+type SettingsOperations = {machines: SettingsMachine[]; services: SettingsService[]; issues?: SettingsIssue[]; runnable?: SettingsRunnable; agents?: unknown; scheduler_enabled?: boolean};
 // GET /v2/models: the model catalogue, the harness manifests (HARNESS_ROWS), the Tico Gateway and the enabled providers.
-type SettingsCatalog = {models: SettingsModel[]; harnesses?: HarnessRow[]; gateway?: unknown; enabled_providers?: string[]; default?: {model?: string}};
-type SettingsData = {people: SettingsPerson[]; machines: SettingsMachine[]; services: SettingsService[]; models: SettingsModel[]; issues: SettingsIssue[]; history: SettingsHistory; loaded?: boolean; schedulerEnabled?: boolean; runnable?: unknown; agents?: unknown; harnesses?: HarnessRow[]; gateway?: unknown; enabledProviders?: string[]; defaultModel?: string; limits?: unknown};
+type SettingsCatalog = {models: SettingsModel[]; harnesses?: HarnessRow[]; gateway?: SettingsGatewayTiers | null; enabled_providers?: string[]; default?: {model?: string}};
+type SettingsData = {people: SettingsPerson[]; machines: SettingsMachine[]; services: SettingsService[]; models: SettingsModel[]; issues: SettingsIssue[]; history: SettingsHistory; loaded?: boolean; schedulerEnabled?: boolean; runnable?: SettingsRunnable; agents?: unknown; harnesses?: HarnessRow[]; gateway?: SettingsGatewayTiers | null; enabledProviders?: string[]; defaultModel?: string; limits?: SettingsLimits | null};
 type SettingsPresence = {interval: number; timeout: number; at: number; checking: boolean; failed: boolean; timer: number | null; pending: Promise<unknown> | null; request: number; applied: number};
 type SettingsDestinationHeld = {name?: string; credentials?: string[]; old?: {address?: string}; new?: {address?: string}; path?: string};
 type SettingsAssistantDecision = {id: string; decision: string; what: string; decided_at: string; decided_for?: {words?: string} | null; consumed_at?: string | null; can_undo?: boolean};

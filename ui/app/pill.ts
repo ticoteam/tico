@@ -10,7 +10,7 @@ const ICON_STOP = '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="7" y="7"
 const ICON_SEND = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 12h15M13 6l6 6-6 6"/></svg>';
 const clock = ms => { const t = Math.max(0, Math.round((ms || 0) / 1000)), h = Math.floor(t / 3600);
   return (h ? `${h}:` : '') + String(Math.floor(t % 3600 / 60)).padStart(2, '0') + ':' + String(t % 60).padStart(2, '0'); };
-const PILLS = new Set();
+const PILLS: Set<PillState> = new Set();
 let PILL_WHY_N = 0;
 // running/stopping are set by chatStopSync (chat.ts) while the bot runs.
 let BOT_PILL: (ReturnType<typeof makePill> & {running?: {run_id: string | null} | null; stopping?: boolean}) | null = null;

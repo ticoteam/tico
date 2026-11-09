@@ -123,6 +123,11 @@ def test_names_that_only_contain_any_or_are_members_are_not_hits():
     assert strict.shift_left_hits("let anything: string = o.any;\nconst anyway = 1;\n") == []
 
 
+def test_a_key_named_any_is_not_a_hit():
+    assert strict.shift_left_hits("const words = {week: 'Next 7 days', any: 'Has a date'};\n") == []
+    assert len(strict.shift_left_hits("const f = (a: string, b: any) => b;\n")) == 1
+
+
 def test_comments_and_strings_are_not_read():
     text = "// x as Foo\n/* y as Foo */\nconst s = 'z as Foo';\nconst t = `q as Foo`; // any\n"
     assert strict.shift_left_hits(text) == []

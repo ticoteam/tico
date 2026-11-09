@@ -90,13 +90,13 @@ interface AutomationsState {
 
   // Maintenance (automations-maintenance.js), its own screen.
   /** /v2/maintenance (automations.js auLoadList). */
-  maint: Record<string, unknown> | null;
+  maint: MaintView | null;
   /** The message of a failed maintenance read or save ('' when none). */
   maintError: string;
   /** Bumped on each save or read; a read that started before a save keeps the old values. */
   mtGen: number;
   /** Maintenance runs, read a page at a time (automations-maintenance.js). */
-  mtRuns: AuRunList<Record<string, unknown>> | null;
+  mtRuns: MaintRunList | null;
   /** Maintenance run rows the viewer opened. */
   mtOpen: Set<string>;
   /** Maintenance is saving (automations-maintenance.js). */

@@ -23,7 +23,7 @@ type SettingsValue = SettingsValueObject | string | number | boolean | string[] 
 function settingsValue(field: string, value: SettingsValue) {
   const obj = (value ?? {}) as SettingsValueObject;
   if (field === 'owners') return value === null ? 'registry defaults' : ((value as string[] | undefined) || []).map(settingsPersonName).join(', ') || 'nobody';
-  if (field === 'access') return accessSummary(value);
+  if (field === 'access') return accessSummary(value as SaPolicy | null | undefined);
   if (field === 'model') return settingsChoiceLabel(obj.harness || obj.runtime, obj.model, obj.effort);
   if (field === 'fallback') return value ? settingsChoiceLabel(obj.harness, obj.model, obj.reasoning_effort || obj.effort) : 'None (fail)';
   if (field === 'profile') return profileHistoryWords(value);
