@@ -178,7 +178,7 @@ function fileKeepTrim(cache, keep) {
   }
 }
 const VIEW_FILES = new Map();                 // Tico file id -> {promise: Promise<{blob, url, name, kind}>, url, bytes}
-function viewFile(id, fallbackName, version = null) {
+function viewFile(id, fallbackName, version: number | null = null) {
   const key = version ? `${id}?v=${version}` : id;
   return fileKeep(VIEW_FILES, key, async () => {
     const response = await fetch(`${API}/v2/files/${encodeURIComponent(id)}${version ? '?v=' + version : ''}`, {credentials: 'same-origin'});
