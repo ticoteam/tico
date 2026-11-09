@@ -33,7 +33,7 @@ prerequisites:
     required: true
 first_routine:
   title: "Dev ticket build"
-  cadence: "When a Dev ticket reaches In Progress"
+  cadence: "When a Dev ticket reaches Build"
   output: "a pull request linked to the ticket, with a test that fails on the old code and passes on the change, and the checks run at its head"
   draft_only: true
 onboarding:

@@ -1,7 +1,7 @@
 # Build a Dev ticket
 
-Triggered when a Dev ticket is on your step In Progress and you are its owner. Budget as long as the change needs. A ticket
-that has sat at In Progress for more than four hours gets a note to Head of Engineering on the ticket, not a silent wait.
+Triggered when a Dev ticket is on your step Build and you are its owner. Budget as long as the change needs. A ticket
+that has sat at Build for more than four hours gets a note to Head of Engineering on the ticket, not a silent wait.
 
 Inputs: the ticket and its conversation (`hub task show <id>`), its acceptance tests if Head of Product wrote them,
 `knowledge/standards.md` and `knowledge/patterns.md`.

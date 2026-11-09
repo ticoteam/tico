@@ -36,7 +36,7 @@ branches, the test commands, the merge rules, and the risky paths with the perso
 ## 5. Show the first result
 
 Find the oldest Dev ticket on the step where work starts. Post on that ticket what you would build and the test that would
-prove it, in three lines. Do not start a build during setup; start when the ticket reaches In Progress.
+prove it, in three lines. Do not start a build during setup; start when the ticket reaches Build.
 
 ## 6. Finish
 
