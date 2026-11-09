@@ -220,11 +220,12 @@ function learnNewestFirst(text: string | null | undefined) {
     return lead.concat(...groups.map(g => g.items));
   };
   const dateOf = (item: string[]): string => (item.join('\n').match(/added:\s*(20\d\d-\d\d-\d\d)/) || [])[1] || when((item[0]?.match(/^[-*]\s+\W{0,3}(.{0,12})/) ?? [])[1] ?? '');
+  const noLines: string[] = [];                                    // what entries concat onto (concat leaves it empty)
   const split = (rows: string[]): [string[], string[]] => {                                         // [prose ahead of the first entry, entries newest first]
     const [head = [], ...items] = blocks(rows, l => /^[-*] /.test(l));
-    return [head, ([] as string[]).concat(...newest(items, dateOf))];
+    return [head, noLines.concat(...newest(items, dateOf))];
   };
-  const entries = (rows: string[]): string[] => [].concat(...split(rows));
+  const entries = (rows: string[]): string[] => noLines.concat(...split(rows));
   // A flat log (the template's `# Learnings`, a line of intro, then entries) has no `## ` at all: its entries are
   // the intro's, sorted too, and they follow the rules.
   const [intro = [], ...sections] = blocks(lines, l => /^## /.test(l));

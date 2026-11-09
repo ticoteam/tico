@@ -932,6 +932,13 @@ def run_sample(case, sample, args, outdir):
             hit = [l for l in lines if visible(rx, l) and re.search(rx, l)]
             if hit:
                 fails.append(f"forbidden call {hit[0][:120]}")
+    # Length limits for the reply, checked here rather than by the judge: words, and non-empty lines (a list is one line
+    # per item, so a long walk-through shows up as lines, not only as words).
+    if case.get("reply_max_words") and len(reply.split()) > int(case["reply_max_words"]):
+        fails.append(f"reply has {len(reply.split())} words, over {case['reply_max_words']}")
+    kept_lines = [l for l in reply.splitlines() if l.strip()]
+    if case.get("reply_max_lines") and len(kept_lines) > int(case["reply_max_lines"]):
+        fails.append(f"reply has {len(kept_lines)} lines, over {case['reply_max_lines']}")
     bad = [c for c in calls if c.get("invalid")]
     if case.get("no_invalid"):
         for c in bad:

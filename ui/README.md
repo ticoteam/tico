@@ -14,6 +14,11 @@ globals (`S`, `$`, `esc`, `get`, `post`, `route`, ...). A script is JavaScript o
     tests/*.cjs       browser tests (`npm run test:ui`)
     sw.ts             the service worker, compiled to build/ui/sw.js and served as /sw.js; it caches nothing (below)
 
+The opening recovery card and its small stylesheet live in `index.html`, outside the bundles, so a failed asset
+download still leaves a styled Reload and Contact support screen. `theme.ts` dismisses it only after the app's
+`tico:app-loaded` event and all stylesheets have loaded without an asset error. Keep billing notices `hidden` in the
+markup: only a confirmed cloud access state may reveal them. A failed page load is not evidence of exhausted credit.
+
 ## One request each: the bundle
 
 The many files are for editing. The server (`backend/ui_bundle.py`) concatenates the files listed between the

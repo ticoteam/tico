@@ -47,8 +47,6 @@ const UNSHOWN = [
   // The Settings Inboxes tab is gone (its page was removed from the table); its files are a feature no page shows now.
   'ui/app/inboxes*.js', 'ui/app/inboxes*.ts', 'ui/app/tools*.ts', 'ui/app/redesign-library.ts', 'ui/styles/inboxes.css', 'ui/styles/inbound.css',
   'ui/styles/tools.css', 'ui/styles/redesign-library.css',
-  // Library › Directory: the demo seeds no people or organizations yet, so no page has a line to wait for.
-  'ui/app/directory*.ts', 'ui/styles/directory.css',
 ];
 
 // A change to one of these can change the dark theme on every page, whatever its lines say.

@@ -50,7 +50,7 @@ interface QcAttachment {
 }
 /** The refs an ask carries: its questions, its files, its review, its spend, what happens if nobody answers, its target. */
 interface QcRefs {
-  questions?: QcQuestion[];
+  questions?: QcQuestion[] | null;
   attachments?: QcAttachment[];
   review?: QcReview | null;
   spend?: { label?: string; amount?: string | number; account?: string; what?: string } | null;
@@ -246,7 +246,7 @@ function qcardDetailsHTML(it: QcItem, q: QcQuestion, {link = true}: {link?: bool
 
 // The answer a card sends, as requests run in order: the picks (and the note, as the question's Other text when it
 // takes one, else a comment). `labels` are the picks said yes to; the rest of several picks are "not this one".
-function qcardWrites(it: QcItem, q: QcQuestion, labels: string[], note: string): {path: string; body: unknown}[] {
+function qcardWrites(it: QcItem, q: QcQuestion, labels: (string | undefined)[], note: string | undefined): {path: string; body: unknown}[] {
   const ask = it.ask, id = encodeURIComponent(it.id), t = ask?.refs?.target;
   // A question task (its ask is the task itself) answers with {task}; its answer closes it.
   const target = t?.task ? {task: t.task} : t?.file ? {file: t.file, version: Number(t.version)} : {comment: ask?.id};

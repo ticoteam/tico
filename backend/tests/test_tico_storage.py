@@ -305,7 +305,7 @@ def test_new_keys_for_the_same_place_are_swapped_in_and_asked_for_before_they_en
 
     # The scheduler asks only when due, one answer at a time.
     with tico_storage._lock:
-        tico_storage._live[id(store)] = (store, api.app.state.vault, blobs)
+        assert store.file_store == (api.app.state.vault, blobs)
         tico_storage._due[id(store)] = time.monotonic() + 100
     assert tico_storage.sync_later(store, due_only=True) is None
     hq.answer = OFF

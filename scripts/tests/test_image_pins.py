@@ -190,29 +190,43 @@ def test_wheel_tags_match_only_the_images_python_and_platforms(wheel, x86_64, aa
     )
 
 
-@pytest.mark.slow
+FIXTURE = ROOT / 'scripts/tests/fixtures/pypi_wheels.json'
+
+
+def pins(requirements):
+    return re.findall(r'^([A-Za-z0-9_.-]+)==(\S+)', (ROOT / requirements).read_text(), re.M)
+
+
+def wheels_on_pypi(pin):
+    """The wheel tags (python-abi-platform) PyPI lists for one pinned version."""
+    name, version = pin
+    with urllib.request.urlopen(f'https://pypi.org/pypi/{name}/{version}/json', timeout=60) as response:
+        files = json.load(response)['urls']
+    return sorted({'-'.join(f['filename'][:-4].split('-')[-3:]) for f in files if f['filename'].endswith('.whl')})
+
+
 # Only production pins are copied into the image's venv; CI can build its own test-only C extensions.
 @pytest.mark.parametrize('requirements', ['backend/requirements.txt'])
 def test_every_pin_has_a_wheel_for_the_images_python(requirements):
-    """The images' Python has no compiler outside the venv stage, so a pin with no wheel fails the build there."""
+    """The images' Python has no compiler outside the venv stage, so a pin with no wheel fails the build there.
+
+    The wheels come from scripts/tests/fixtures/pypi_wheels.json, recorded from PyPI, not a live call: a published
+    version's files do not change, and a live call failed Release validation with a connection reset. A new or bumped
+    pin needs its wheels recorded with `python3 scripts/tests/test_image_pins.py --record`.
+    """
     major, minor = re.match(r'python:(\d+)\.(\d+)', python_image()).groups()
     tag = f'cp{major}{minor}'
-    pins = re.findall(r'^([A-Za-z0-9_.-]+)==(\S+)', (ROOT / requirements).read_text(), re.M)
-
-    def wheel_tags(pin):
-        name, version = pin
-        with urllib.request.urlopen(f'https://pypi.org/pypi/{name}/{version}/json', timeout=60) as response:
-            files = json.load(response)['urls']
-        return name, {tuple(f['filename'][:-4].split('-')[-3:]) for f in files if f['filename'].endswith('.whl')}
-
-    with ThreadPoolExecutor(16) as pool:
-        missing = sorted(
-            f'{name} ({arch})'
-            for name, wheels in pool.map(wheel_tags, pins)
-            for arch in ARCHES
-            if not any(installs_on_the_image(w, int(minor), arch, image_glibc()) for w in wheels)
-            and name.lower() not in BUILT_IN_THE_VENV_STAGE
-        )
+    recorded = json.loads(FIXTURE.read_text())
+    assert set(recorded) == {f'{name}=={version}' for name, version in pins(requirements)}, (
+        'the recorded wheels do not match the pins: python3 scripts/tests/test_image_pins.py --record'
+    )
+    missing = sorted(
+        f'{key} ({arch})'
+        for key, wheels in recorded.items()
+        for arch in ARCHES
+        if not any(installs_on_the_image(tuple(w.split('-')), int(minor), arch, image_glibc()) for w in wheels)
+        and key.partition('==')[0].lower() not in BUILT_IN_THE_VENV_STAGE
+    )
     assert not missing, (
         f'no {tag} Linux wheel for glibc {image_glibc()}: {missing}; add it to BUILT_IN_THE_VENV_STAGE with its headers'
     )
@@ -237,3 +251,16 @@ def test_every_pin_still_installs_on_the_oldest_supported_python(requirements):
             f'{name} ({spec})' for name, spec in pool.map(requires_python, pins) if oldest not in SpecifierSet(spec)
         )
     assert not refused, f'these pins refuse Python {oldest}: {refused}'
+
+
+if __name__ == '__main__':
+    import sys
+
+    if sys.argv[1:] != ['--record']:
+        sys.exit('usage: python3 scripts/tests/test_image_pins.py --record   (asks PyPI for the wheels of every pin)')
+    found = pins('backend/requirements.txt')
+    with ThreadPoolExecutor(16) as pool:
+        recorded = dict(zip((f'{name}=={version}' for name, version in found), pool.map(wheels_on_pypi, found)))
+    FIXTURE.parent.mkdir(parents=True, exist_ok=True)
+    FIXTURE.write_text(json.dumps(dict(sorted(recorded.items())), indent=1) + '\n')
+    print(f'recorded {len(recorded)} pins to {FIXTURE.relative_to(ROOT)}')

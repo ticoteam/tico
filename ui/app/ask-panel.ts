@@ -50,13 +50,6 @@ interface AskExecution {
 interface NeedsItem {
   created_at?: string;
 }
-// A question as the question card reads it (qcardQuestion), with its options.
-interface AskQuestion {
-  id?: unknown;
-  question: string;
-  options: { label: string; recommended?: boolean }[];
-  multi?: boolean;
-}
 // The reply forms: a choice of options has a named select, a free answer a named text box.
 interface AskChoiceForm extends HTMLFormElement {
   readonly elements: HTMLFormControlsCollection & { pick: HTMLSelectElement };
@@ -214,7 +207,7 @@ const ASK_Q_LONG = 160;
 // id) and kept as its label: the thread is drawn again whenever the chat changes. Questions no longer shown drop out.
 const askPicks = new Map<string, string>(), askPickKey = (it: NeedsItem, q: {id?: unknown}) => `${it.id}:${q.id}`;
 function askQuestionHTML(it: NeedsItem) {
-  const q: AskQuestion | null = it.kind === 'question' ? qcardQuestion(it) : null, who = askAsker(it.ask?.sender_id);
+  const q: QcQuestion | null = it.kind === 'question' ? qcardQuestion(it) : null, who = askAsker(it.ask?.sender_id);
   const text = plainActors(q ? q.question : it.ask?.body);
   const body = `<div class="ask-card-who">${esc(who)} asks</div>${text.length > ASK_Q_LONG
     ? `<button type="button" class="ask-card-q" data-ask-more aria-expanded="false">${esc(text)}</button>` : `<div class="ask-card-q">${esc(text)}</div>`}`;
@@ -233,7 +226,7 @@ function askQuestionHTML(it: NeedsItem) {
 async function askAnswer(card: HTMLElement | null, {pick, text}: {pick?: number; text?: string}) {
   const it = (S.v2?.needs || []).find(x => String(x.id) === card?.dataset.askQ);
   if (!it || !card || card.dataset.busy) return;
-  const q: AskQuestion | null = it.kind === 'question' ? qcardQuestion(it) : null, who = askAsker(it.ask?.sender_id);
+  const q: QcQuestion | null = it.kind === 'question' ? qcardQuestion(it) : null, who = askAsker(it.ask?.sender_id);
   const writes = pick !== undefined && q ? qcardWrites(it, q, [q.options[pick]?.label], undefined)
     : [{path: `/v2/tasks/${encodeURIComponent(String(it.id))}/comments`, body: {text}}];
   card.dataset.busy = '1';
@@ -274,9 +267,9 @@ async function askLoad(chat: AskChat) {
     const cards: AskRow[] = pending.filter(a => !here.has(a.id)).map(a => ({at: a.created_at || late,
       html: `<div class="conv-run chat"><div data-action-host="${esc(a.id)}"><div class="asst-state">Loading the card…</div></div></div>`}))
       .concat(asks.map(it => ({at: it.ask?.created_at || it.created_at || late, html: askQuestionHTML(it)})));
-    const listed = new Set(asks.map(it => { const q: AskQuestion | null | false = it.kind === 'question' && qcardQuestion(it); return q ? askPickKey(it, q) : ''; }));
+    const listed = new Set(asks.map(it => { const q: QcQuestion | null | false = it.kind === 'question' && qcardQuestion(it); return q ? askPickKey(it, q) : ''; }));
     for (const k of askPicks.keys()) if (!listed.has(k)) askPicks.delete(k);
-    const rows: string[] = messages.slice(-30).map((m): AskRow => ({at: m.created_at, html: v2MessageHTML({...m, run: null} as ChatMessage)}))
+    const rows: string[] = messages.slice(-30).map((m): AskRow => ({at: m.created_at, html: v2MessageHTML({...m, run: null})}))
       .concat(cards)
       .map((r, i) => ({...r, i})).sort((a, b) => at(a.at) - at(b.at) || a.i - b.i).map(r => r.html);
     const live = execution && execution.state !== 'completed' ? execution.text : '';

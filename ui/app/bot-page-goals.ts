@@ -49,7 +49,6 @@ async function botGoalsCardLoad(slug: string) {
 async function botGoalAdd(slug: string) {
   const goals = await goalOptions();
   if (BOT?.slug !== slug) return;
-  // @ts-expect-error goalSheetOpen types its state as the whole Goals page's (GkState); a new goal's sheet reads only goals (overview-graph.ts makes the same call)
   goalSheetOpen({goals}, {owner: 'bot:' + slug});
 }
 // The top line's goal: a target, the first goal cut to fit, and "+N" for the rest. A tap lists them all with
