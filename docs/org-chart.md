@@ -8,7 +8,7 @@ and bots, with the groups inside it below them. A group's name opens its team pa
 one more level: the owner, when nobody is above them and they are in no group (else the only human nobody is above), is a
 row of its own, and the groups, then the humans and bots, that report to them sit beside it rather than under it. Any other
 human nobody is above follows as an ordinary row with their reports under them. With no such top person it nests as before. The built-in bots (the Assistant, BotOps, the
-Librarian, the Strategy Bot) stay out of the chart and the Goals tree. **Tico Assistant** opens the Assistant from any page except its own and setup, even while the signed-out banner shows, and the Assistant hands BotOps what needs it;
+Librarian, the Strategy Bot) sit in a Built-in group under the chart, folded until someone opens it, and stay out of the Goals tree. **Tico Assistant** opens the Assistant from any page except its own and setup, even while the signed-out banner shows, and the Assistant hands BotOps what needs it;
 the Librarian is reached from Docs and Market, the Strategy Bot from its panel beside the Strategy tabs. Settings > Bots lists all four.
 
 Your unread messages in a one-to-one DM with a teammate show as a count on that teammate's row, for people as well as bots.
@@ -23,7 +23,7 @@ chart lays out roles under roles, `reports_to: seat:<id>`). Hover it for its job
 is dropped on it; under a bot you may not see it hangs from the next row up, and it is left out of the recently-opened list.
 The sidebar reads seats from `seats` on `GET /api/humans`, the same rows as `seats` on `GET /api/v2/org`.
 The built-in **Strategy Bot** ([Your Strategy Bot](strategy-bot.md)) is on every install. The server hangs the Heads, each in its department's group, and the bots that report to no one under it; since it is not on the chart, the app shows them under the owner.
-Built-ins and explicitly marked helper bots stay apart. Only the chart moves: nobody's `reports_to` and
+Explicitly marked helper bots stay apart; the built-in bots are in the Built-in group. Only the chart moves: nobody's `reports_to` and
 nobody's access changes, and `hub team show` still gives each bot the `reports_to` it has.
 Assigning a mailbox to a bot does not make it a helper: it stays on Team and Goals under its manager, or at the top
 when nobody is above it. Its mailboxes and Slack channels are listed under its Team row. Sources whose bot is off the
@@ -112,7 +112,7 @@ Owners and admins change groups; everyone else reads them.
 - **In the API**: `GET /api/v2/groups` lists them with their humans and the bots you may see; `POST /api/v2/groups` adds one
   (`{"name", "parent", "add": {"people": [], "bots": []}}`); `PATCH /api/v2/groups/{id}` renames it, moves it (`"parent": ""` is the top) and
   adds or removes teammates (`"add"`, `"remove"`); `DELETE /api/v2/groups/{id}` removes it, and the groups and teammates in it move up to
-  its parent. A group cannot go under itself or a group inside it, and a built-in bot cannot join one.
+  its parent. A group cannot go under itself or a group inside it, and a built-in bot cannot join one. The Built-in group is kept by Tico: it cannot be renamed, moved or deleted (422), and no bot can be added to it by hand.
 - **With the tools**: `hub group list`, `hub group update [<group>] [--name] [--parent] [--lead] [--add-human] [--add-bot] [--remove-human]
   [--remove-bot]` and `hub group delete <group>` (`hub_group_list`, `hub_group_update`, `hub_group_delete`); with no group given, `update`
   creates one from `--name`. `hub org reports-to <bot:slug|human:id> <manager>` (`hub_org_reports_to`) changes who a teammate reports to.

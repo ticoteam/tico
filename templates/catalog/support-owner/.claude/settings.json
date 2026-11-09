@@ -1,0 +1,37 @@
+{
+  "permissions": {
+    "allow": [
+      "Read",
+      "Edit",
+      "Write",
+      "Bash(git *)",
+      "Bash(gh issue list *)",
+      "Bash(gh issue view *)",
+      "Bash(gh search issues *)",
+      "Bash(gh pr list *)",
+      "Bash(gh pr view *)",
+      "Bash(software/hq-tickets list *)",
+      "Bash(software/hq-tickets show *)",
+      "Bash(software/hq-tickets payload *)",
+      "Bash(software/hq-tickets reply *)"
+    ],
+    "deny": [
+      "Bash(gh issue comment *)",
+      "Bash(gh issue edit *)",
+      "Bash(gh issue close *)",
+      "Bash(gh issue reopen *)",
+      "Bash(gh issue delete *)",
+      "Bash(gh issue lock *)",
+      "Bash(gh issue transfer *)",
+      "Bash(gh issue create *)",
+      "Bash(gh pr comment *)",
+      "Bash(gh pr review *)",
+      "Bash(gh pr edit *)",
+      "Bash(gh pr close *)",
+      "Bash(gh pr merge *)",
+      "Bash(gh api *)",
+      "Bash(gh repo delete *)",
+      "Bash(git push --force*)"
+    ]
+  }
+}

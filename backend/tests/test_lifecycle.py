@@ -255,3 +255,52 @@ def test_a_seat_may_report_to_an_open_seat_and_hangs_under_it_until_that_seat_cl
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE seats SET reports_to=? WHERE id=?", ("seat:" + c_seat["id"], b["id"]))
     post(api, "seats", {"title": "E", "reports_to": "seat:" + d["id"]}, token="cara-test", expected=403)
+
+
+def test_a_bots_own_setup_done_keeps_the_summary_it_gave_when_ready(api):
+    onboarding(api, "ops")
+    as_member(api, "ben@acme.example")
+    token = as_bot(api, "ops")
+    first = post(api, "bots/ops/onboarded", {"summary": "I know the audit checklist."}, token=token)
+
+    # `hub bot setup-done` by the bot itself sends no summary: the one it gave with `hub bot ready` stays.
+    done = post(api, "bots/ops/onboarded", {}, token=token)
+    assert done["stage"] == "onboarding" and done["ready"]["summary"] == "I know the audit checklist."
+    shown = get(api, "bots/ops", token="ben-test")
+    assert shown["onboarding_ready"]["summary"] == "I know the audit checklist."
+    # Nothing new is recorded: the summary keeps the time it was given.
+    assert done["ready"]["at"] == shown["onboarding_ready"]["at"] == first["ready"]["at"]
+
+    # A new summary said with the ready call replaces it.
+    post(api, "bots/ops/onboarded", {"summary": "Now the queue too."}, token=token)
+    assert get(api, "bots/ops", token="ben-test")["onboarding_ready"]["summary"] == "Now the queue too."
+
+
+def test_renaming_a_seat_to_another_role_drops_the_template_it_was_set_up_with(api):
+    seat = post(api, "seats", {"title": "Marketing lead", "description": "Runs marketing.", "reports_to": "coo"})
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE seats SET template='marketing-lead' WHERE id=?", (seat["id"],))
+
+    def template():
+        with api.app.state.store.read() as c:
+            return c.execute("SELECT template FROM seats WHERE id=?", (seat["id"],)).fetchone()[0]
+
+    # The same role said again, and a new description, keep the template the seat was set up with.
+    same = api.patch(f"/api/v2/seats/{seat['id']}", json={"title": " Marketing lead "}, headers=headers())
+    assert same.status_code == 200, same.text
+    described = api.patch(
+        f"/api/v2/seats/{seat['id']}", json={"description": "Runs all of marketing."}, headers=headers()
+    )
+    assert described.status_code == 200, described.text
+    # Only the capitals change: the same role, so the template stays.
+    recased = api.patch(f"/api/v2/seats/{seat['id']}", json={"title": "MARKETING LEAD"}, headers=headers())
+    assert recased.status_code == 200, recased.text
+    assert template() == "marketing-lead"
+    pinned = post(api, f"seats/{seat['id']}/recruit", {})["candidates"]
+    assert [c["template"] for c in pinned] == ["marketing-lead"]
+
+    # A different role is a different job: the seat is no longer pinned to that template.
+    renamed = api.patch(f"/api/v2/seats/{seat['id']}", json={"title": "Support lead"}, headers=headers())
+    assert renamed.status_code == 200, renamed.text
+    assert template() == ""
+    assert len(post(api, f"seats/{seat['id']}/recruit", {})["candidates"]) > 1

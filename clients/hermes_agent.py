@@ -1313,7 +1313,7 @@ def cmd_reinstall(args):
     )
 
 
-# Tools renamed in Tico 0.2.21 (CHANGELOG, Breaking changes) or taken away with asks (0.5), old -> new. Names ending
+# Tools renamed in Tico 0.2.21 (breaking changes) or taken away with asks (0.5), old -> new. Names ending
 # in `_` are prefixes.
 RENAMED_TOOLS = {
     "hub_say": "hub_message_send",

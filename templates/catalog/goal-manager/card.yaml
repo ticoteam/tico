@@ -1,8 +1,8 @@
-# The Strategy Bot. Installed with every environment: it proposes the strategy to the owner, keeps the KPIs and sets the
+# The Strategy Owner. Installed with every environment: it proposes the strategy to the owner, keeps the KPIs and sets the
 # goals' automatic colours.
 template: goal-manager
 slug: goal-manager
-name: Strategy Bot
+name: Strategy Owner
 required: true
 bootstrap: true
 icon: target
