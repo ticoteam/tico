@@ -304,13 +304,14 @@ declare function settingsShow(tab: string): void;
     brief.relations = {blocks: [{id: 'legal-review', title: 'Legal review', status: 'doing', owner_id: 'human:ana', direction: 'in'}, opsBlocker]};
     await page.evaluate(() => tasksLoad(TASKS_ST));
     await page.waitForFunction(() => document.querySelector<HTMLElement>('#task-body [data-board-blocked="tbrief"] span')?.innerText === 'Blocked: Legal review');
-    // A task that waits on a person keeps their ask: on them directly, or through the ask card a bot's task files,
-    // which the server serves as a blocker the person owns, linked after the bot's.
-    for (const held of [{waiting_on: 'human:ana'}, {relations: {blocks: [opsBlocker,
-      {id: 'ask-ana', title: 'Approve the launch post?', status: 'open', owner_id: 'human:ana', direction: 'in'}]}}]) {
+    // A task that waits on a person names them: "Waiting on Ana", not "Blocked:" with the blocker (b509011d9). Through
+    // the ask card a bot's task files, which the server serves as a blocker the person owns linked after the bot's,
+    // the bot's blocker still leads.
+    for (const [held, label] of [[{waiting_on: 'human:ana'}, 'Waiting on Ana'], [{relations: {blocks: [opsBlocker,
+      {id: 'ask-ana', title: 'Approve the launch post?', status: 'open', owner_id: 'human:ana', direction: 'in'}]}}, 'Blocked: Plan the launch']] as const) {
       Object.assign(brief, {relations: {blocks: [opsBlocker]}, waiting_on: null}, held);
       await page.evaluate(() => tasksLoad(TASKS_ST));
-      await page.waitForFunction(() => document.querySelector<HTMLElement>('#task-body [data-board-blocked="tbrief"] span')?.innerText === 'Blocked: Plan the launch');
+      await page.waitForFunction(want => document.querySelector<HTMLElement>('#task-body [data-board-blocked="tbrief"] span')?.innerText === want, label);
     }
     Object.assign(brief, {status: 'review', note: '', waiting_on: null, relations: {blocks: [opsBlocker]}});
     await page.evaluate(() => tasksLoad(TASKS_ST));
