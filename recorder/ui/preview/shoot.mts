@@ -29,17 +29,15 @@ interface PreviewMeeting {
 }
 
 interface PreviewState {
-  meetings: Record<string, PreviewMeeting>;
+  meetings: Record<string, PreviewMeeting> & { m1: PreviewMeeting }; // the mock always seeds m1
   library: { rows: { id: string; title: string; audience: string; sent: boolean }[] };
   status: { recording: boolean; speech: { source: string } };
   desktop_orgs: { name: string; connected: boolean }[];
 }
 
-declare global {
-  interface Window {
-    __PREVIEW__: { state: PreviewState };
-  }
-}
+// The page's window as this file's evaluate callbacks read it. File-local, not a global augmentation: the recorder tests
+// share this program and type the same global with their own fixture (recorder/tests/globals.d.ts).
+declare const window: Window & typeof globalThis & { __PREVIEW__: { state: PreviewState } };
 
 // One step of a scene or a check: it drives the page once the scene has loaded.
 type Step = (page: Page) => Promise<void>;

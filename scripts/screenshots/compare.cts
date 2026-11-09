@@ -68,16 +68,16 @@ function unfilter(raw: Buffer, width: number, height: number, channels: number, 
   const stride = width * channels;
   const out = Buffer.alloc(stride * height);
   for (let y = 0; y < height; y++) {
-    const type = raw[y * (stride + 1)];
+    const type = raw[y * (stride + 1)]!;
     if (type > 4) throw new Error(`${file}: unknown scanline filter ${type}`);
     const src = y * (stride + 1) + 1;
     const row = y * stride;
     const up = row - stride;
     for (let i = 0; i < stride; i++) {
-      const x = raw[src + i];
-      const a = i >= channels ? out[row + i - channels] : 0;
-      const b = y > 0 ? out[up + i] : 0;
-      const c = y > 0 && i >= channels ? out[up + i - channels] : 0;
+      const x = raw[src + i]!;
+      const a = i >= channels ? out[row + i - channels]! : 0;
+      const b = y > 0 ? out[up + i]! : 0;
+      const c = y > 0 && i >= channels ? out[up + i - channels]! : 0;
       let value: number;
       switch (type) {
         case 0: value = x; break;
@@ -94,17 +94,17 @@ function unfilter(raw: Buffer, width: number, height: number, channels: number, 
 
 // Gray is copied into all three color channels; a missing alpha is opaque.
 function toRgba(samples: Buffer, pixels: number, colorType: number): Uint8Array {
-  const channels = CHANNELS[colorType];
+  const channels = CHANNELS[colorType]!;
   const gray = colorType === 0 || colorType === 4;
   const hasAlpha = colorType === 4 || colorType === 6;
   const rgba = new Uint8Array(pixels * 4);
   for (let p = 0; p < pixels; p++) {
     const s = p * channels;
     const o = p * 4;
-    rgba[o] = samples[s];
-    rgba[o + 1] = gray ? samples[s] : samples[s + 1];
-    rgba[o + 2] = gray ? samples[s] : samples[s + 2];
-    rgba[o + 3] = hasAlpha ? samples[s + channels - 1] : 255;
+    rgba[o] = samples[s]!;
+    rgba[o + 1] = gray ? samples[s]! : samples[s + 1]!;
+    rgba[o + 2] = gray ? samples[s]! : samples[s + 2]!;
+    rgba[o + 3] = hasAlpha ? samples[s + channels - 1]! : 255;
   }
   return rgba;
 }
@@ -130,11 +130,11 @@ function decodePng(file: string): Decoded {
       header = {
         width: data.readUInt32BE(start),
         height: data.readUInt32BE(start + 4),
-        bitDepth: data[start + 8],
-        colorType: data[start + 9],
-        compression: data[start + 10],
-        filter: data[start + 11],
-        interlace: data[start + 12],
+        bitDepth: data[start + 8]!,
+        colorType: data[start + 9]!,
+        compression: data[start + 10]!,
+        filter: data[start + 11]!,
+        interlace: data[start + 12]!,
       };
     } else if (kind === 'IDAT') {
       if (!header) refuse('IDAT before IHDR');
@@ -161,11 +161,11 @@ function decodePng(file: string): Decoded {
   } catch (error) {
     refuse(`corrupt image data: ${(error as Error).message}`);
   }
-  const stride = width * CHANNELS[colorType];
+  const stride = width * CHANNELS[colorType]!;
   if (raw.length !== height * (stride + 1)) {
     refuse(`image data is ${raw.length} bytes, expected ${height * (stride + 1)}`);
   }
-  const samples = unfilter(raw, width, height, CHANNELS[colorType], file);
+  const samples = unfilter(raw, width, height, CHANNELS[colorType]!, file);
   return {width, height, rgba: toRgba(samples, width * height, colorType)};
 }
 
@@ -182,8 +182,8 @@ function compareFiles(beforeFile: string, afterFile: string): Omit<Result, 'key'
   const db = b.rgba;
   let changed = 0;
   for (let i = 0; i < da.length; i += 4) {
-    if (Math.abs(da[i] - db[i]) > TOLERANCE || Math.abs(da[i + 1] - db[i + 1]) > TOLERANCE
-      || Math.abs(da[i + 2] - db[i + 2]) > TOLERANCE || Math.abs(da[i + 3] - db[i + 3]) > TOLERANCE) {
+    if (Math.abs(da[i]! - db[i]!) > TOLERANCE || Math.abs(da[i + 1]! - db[i + 1]!) > TOLERANCE
+      || Math.abs(da[i + 2]! - db[i + 2]!) > TOLERANCE || Math.abs(da[i + 3]! - db[i + 3]!) > TOLERANCE) {
       changed++;
     }
   }

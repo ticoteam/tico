@@ -2,6 +2,7 @@
 the shift-left rules."""
 
 import json
+import subprocess
 import sys
 from pathlib import Path
 
@@ -249,10 +250,14 @@ def test_the_page_config_may_exclude_the_service_worker_and_nothing_else_new():
     assert "./sw.ts" in strict.ALLOWED_EXCLUDE and "./app/**" not in strict.ALLOWED_EXCLUDE
 
 
-def _tests_root(tmp_path, config):
+def _tests_root(tmp_path, monkeypatch, config, effective=None):
+    """A ui/tests folder holding one script and `config` as its raw tsconfig.json. tsc --showConfig is not run: the gate
+    reads `effective` (the raw config when not given) as the options in effect, extends followed."""
     (tmp_path / "ui/tests").mkdir(parents=True)
     (tmp_path / "ui/tests/x.cts").write_text("export {};\n")
     (tmp_path / "ui/tests/tsconfig.json").write_text(json.dumps(config))
+    monkeypatch.setattr(strict, "ROOT", tmp_path)
+    monkeypatch.setattr(strict, "show_tests_config", lambda: config if effective is None else effective)
     return tmp_path
 
 
@@ -265,10 +270,11 @@ GOOD_TESTS_CONFIG = {
     },
     "include": ["./**/*.cts"],
 }
+EXTENDING_TESTS_CONFIG = {"extends": "../../tsconfig.node.json", "include": ["./**/*.cts"]}
 
 
 def test_a_diagnostic_in_a_test_script_fails_the_tests_gate(tmp_path, monkeypatch):
-    monkeypatch.setattr(strict, "ROOT", _tests_root(tmp_path, GOOD_TESTS_CONFIG))
+    _tests_root(tmp_path, monkeypatch, GOOD_TESTS_CONFIG)
     monkeypatch.setattr(
         strict, "run_tests_tsc", lambda: (2, "ui/tests/x.cts(1,7): error TS2322: Type 'number' is not assignable.\n")
     )
@@ -279,7 +285,7 @@ def test_a_diagnostic_in_a_test_script_fails_the_tests_gate(tmp_path, monkeypatc
 
 def test_a_weakened_test_config_fails_without_running_tsc(tmp_path, monkeypatch):
     weak = {"compilerOptions": {"strict": False, "verbatimModuleSyntax": True}, "include": ["./**/*.cts"]}
-    monkeypatch.setattr(strict, "ROOT", _tests_root(tmp_path, weak))
+    _tests_root(tmp_path, monkeypatch, weak)
     monkeypatch.setattr(strict, "run_tests_tsc", lambda: pytest.fail("tsc must not run on a weakened config"))
     problems = strict.check_tests_gate()
     assert any("strict must be true" in p for p in problems)
@@ -287,10 +293,9 @@ def test_a_weakened_test_config_fails_without_running_tsc(tmp_path, monkeypatch)
 
 
 def test_a_declare_global_in_a_test_script_fails_without_running_tsc(tmp_path, monkeypatch):
-    root = _tests_root(tmp_path, GOOD_TESTS_CONFIG)
+    root = _tests_root(tmp_path, monkeypatch, GOOD_TESTS_CONFIG)
     (root / "ui/tests/y.cts").write_text("declare global {\n  var post: () => void;\n}\nexport {};\n")
     (root / "ui/tests/z.d.cts").write_text("declare global {\n  var helper: number;\n}\nexport {};\n")
-    monkeypatch.setattr(strict, "ROOT", root)
     monkeypatch.setattr(strict, "run_tests_tsc", lambda: pytest.fail("tsc must not run with a declare global"))
     problems = strict.check_tests_gate()
     assert len(problems) == 1 and problems[0].startswith("ui/tests/y.cts: `declare global` is not allowed")
@@ -301,8 +306,52 @@ def test_the_test_config_must_keep_module_detection_force(tmp_path, monkeypatch)
         **GOOD_TESTS_CONFIG,
         "compilerOptions": {**GOOD_TESTS_CONFIG["compilerOptions"], "moduleDetection": "auto"},
     }
-    monkeypatch.setattr(strict, "ROOT", _tests_root(tmp_path, loose))
+    _tests_root(tmp_path, monkeypatch, loose)
     monkeypatch.setattr(strict, "run_tests_tsc", lambda: pytest.fail("tsc must not run on a weakened config"))
     assert strict.check_tests_gate() == [
         'ui/tests/tsconfig.json: moduleDetection must be "force" (each script is its own scope)'
     ]
+
+
+def test_options_inherited_through_extends_count(tmp_path, monkeypatch):
+    # The raw file names none of the flags; the base it extends holds them all, as tsconfig.node.json does.
+    _tests_root(tmp_path, monkeypatch, EXTENDING_TESTS_CONFIG, effective=GOOD_TESTS_CONFIG)
+    monkeypatch.setattr(strict, "run_tests_tsc", lambda: (0, ""))
+    assert strict.check_tests_gate() == []
+
+
+def test_a_base_that_turns_module_detection_off_fails_though_the_raw_file_looks_strict(tmp_path, monkeypatch):
+    in_effect = {**GOOD_TESTS_CONFIG, "compilerOptions": {**GOOD_TESTS_CONFIG["compilerOptions"]}}
+    in_effect["compilerOptions"].pop("moduleDetection")
+    in_effect["compilerOptions"]["verbatimModuleSyntax"] = False
+    _tests_root(tmp_path, monkeypatch, GOOD_TESTS_CONFIG, effective=in_effect)
+    monkeypatch.setattr(strict, "run_tests_tsc", lambda: pytest.fail("tsc must not run on a weakened config"))
+    assert strict.check_tests_gate() == [
+        "ui/tests/tsconfig.json: verbatimModuleSyntax must be true (the test scripts' strict rule)",
+        'ui/tests/tsconfig.json: moduleDetection must be "force" (each script is its own scope)',
+    ]
+
+
+def test_the_test_config_is_read_with_show_config_from_the_root(tmp_path, monkeypatch):
+    calls = []
+
+    def run(command, **kwargs):
+        calls.append((command, kwargs["cwd"]))
+        return subprocess.CompletedProcess(command, 0, json.dumps(GOOD_TESTS_CONFIG), "")
+
+    monkeypatch.setattr(strict, "ROOT", tmp_path)
+    monkeypatch.setattr(strict.node_types.subprocess, "run", run)
+    assert strict.show_tests_config() == GOOD_TESTS_CONFIG
+    [(command, cwd)] = calls
+    assert command[-3:] == ["-p", strict.TESTS_CONFIG, "--showConfig"] and cwd == tmp_path
+
+
+def test_a_test_config_tsc_cannot_read_fails_without_running_tsc(tmp_path, monkeypatch):
+    _tests_root(tmp_path, monkeypatch, GOOD_TESTS_CONFIG)
+
+    def unreadable():
+        raise strict.node_types.ConfigError("ui/tests/tsconfig.json: tsc --showConfig exited 1: error TS5083")
+
+    monkeypatch.setattr(strict, "show_tests_config", unreadable)
+    monkeypatch.setattr(strict, "run_tests_tsc", lambda: pytest.fail("tsc must not run on an unreadable config"))
+    assert strict.check_tests_gate() == ["ui/tests/tsconfig.json: tsc --showConfig exited 1: error TS5083"]

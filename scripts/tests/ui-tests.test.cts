@@ -155,7 +155,7 @@ test('a hung browser script is named with its pending call; it and everything it
 test('newPage and page.close fail with their name instead of waiting forever', {timeout: 30000}, async () => {
   const never = (): Promise<never> => new Promise(() => {});
   const page = {setDefaultTimeout() {}, setDefaultNavigationTimeout() {}, close: never};
-  const context: FakeContext = {setDefaultTimeout() {}, setDefaultNavigationTimeout() {}, on: (event: string, callback: unknown) => { context.onPage = callback as FakeContext['onPage']; },
+  const context: FakeContext = {setDefaultTimeout() {}, setDefaultNavigationTimeout() {}, on: (event: string, callback: unknown) => { context.onPage = callback as NonNullable<FakeContext['onPage']>; },
                    newPage: never};
   const engine = () => ({launch: async () => ({newContext: async () => context}), launchPersistentContext: async () => context});
   const playwright = {chromium: engine(), firefox: engine(), webkit: engine()};

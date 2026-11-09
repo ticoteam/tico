@@ -1,7 +1,9 @@
 // Recorder meeting polish: task search that follows the typing, a type filter, obvious picks, @me in Add a task,
 // Enter to add, the transcript's copy button, Stop as the one end action, and suggested tasks without a Details
 // sheet: a created task's row opens it in Tico.
-import type {Route} from 'playwright';
+import type {RecorderWindow} from './globals.d.ts';
+// The page's window, file-local (no global augmentation): the preview script in this program types it its own way.
+declare const window: Window & typeof globalThis & RecorderWindow;
 require('../../ui/tests/support/browser.cts');
 const {chromium}: typeof import('playwright') = require('playwright');
 const assert: typeof import('node:assert/strict') = require('node:assert/strict');
@@ -152,7 +154,7 @@ const rows = (page: import('playwright').Page): Promise<string[]> => page.locato
     await page.evaluate(() => {
       const s = window.__PREVIEW__.state;
       s.status.recording = {id:'m2', elapsed_ms:1000, phase:'recording', error:'', sources:[], stream:[]};
-      Object.assign(s.meetings.m2, {state:'recording', recording_here:true});
+      Object.assign(s.meetings.m2!, {state:'recording', recording_here:true}); // the live scene seeds m2
       const original = window.__TAURI__.core.invoke;
       window.__TAURI__.core.invoke = async (cmd: string, args: Record<string, string>) => {
         if (cmd === 'save_meeting') window.saved = args;

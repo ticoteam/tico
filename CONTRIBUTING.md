@@ -50,7 +50,8 @@ main fetched last time), `scripts/check.sh`, and `scripts/check_conflicts.sh`. A
 do. `check.sh` prints one line per check with its time; a check whose inputs did not change prints SKIP.
 
 `check.sh` runs the checks CI's static job runs, on what you changed: the Python lint baseline and ruff format, shellcheck,
-actionlint, the migration order, the UI API types, UI strict (every script TypeScript), the UI source suffix check, the
+actionlint, the migration order, the UI API types, UI strict (every script TypeScript), node types (the scripts/ and
+recorder/ TypeScript), the UI source suffix check, the
 OpenAPI spec (generated, never committed), Biome,
 the UI's API paths, the runner wire contract, and basedpyright on the backend against its baseline. It also runs cargo fmt on the Rust crates. `scripts/check.sh --all` runs every check on every tracked
 file, which is what CI's static job runs on each pull request.
@@ -95,6 +96,9 @@ all seconds long. Each counts findings per file against its own baseline file: `
 merge. The counts only shrink: after you fix findings, lower the baseline with
 `python3 scripts/check_ui_strict.py --write` (or `python3 scripts/ui_baseline.py tsc --write`, or `biome`).
 `ui/index.html` must keep the blank lines: `python3 scripts/ui_baseline.py migrate` adds them.
+The TypeScript that Node runs directly outside `ui/` (the `.cts` and `.mts` scripts under `scripts/` and `recorder/`)
+has its own strict check with no baseline, `python3 scripts/check_node_types.py`: each folder's `tsconfig.json` extends
+`tsconfig.node.json`, which `ui/tests/tsconfig.json` extends too, and every TypeScript file outside `ui/` must be in one.
 The UI's API calls are checked against the backend's routes by `bash scripts/check_ui_routes.sh`: it imports the app and
 walks its routes (no server), and counts the calls that match no route per file in `ui/routes-baseline.json`, which
 only shrinks the same way. Fix a call by pointing it at the route it should reach; the baseline is written with

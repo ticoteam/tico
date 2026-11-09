@@ -345,7 +345,8 @@ jobs:
     # job instead, scripts/ci/merge_commit_checks.sh): pinned ruff against its baseline (no new findings or
     # suppressions), basedpyright on the backend against its baseline (strict for new modules), migration names, the UI's generated API types, the
     # OpenAPI document, the runner wire contract, shell scripts (shellcheck) and workflows (actionlint). Seconds each
-    # once installed; tools are pinned. The UI's strict TypeScript rule (scripts/check_ui_strict.py) runs here too.
+    # once installed; tools are pinned. The UI's strict TypeScript rule (scripts/check_ui_strict.py) runs here too, and
+    # its Node counterpart for scripts/ and recorder/ (scripts/check_node_types.py).
     name: static checks
     if: ${{ github.event_name == 'pull_request' && !github.event.pull_request.draft }}
     runs-on: ubuntu-24.04
@@ -399,6 +400,8 @@ jobs:
         run: bash scripts/check_ui_lint.sh --base "$BASE_SHA"
       - name: UI strict (new UI code is TypeScript; each .ts file type-checks strictly)
         run: python3 scripts/check_ui_strict.py --base "$BASE_SHA"
+      - name: Node types (the .cts/.mts scripts under scripts/ and recorder/ type-check strictly, no baseline)
+        run: python3 scripts/check_node_types.py
       - name: UI routes
         run: PATH="$RUNNER_TEMP/venv/bin:$PATH" bash scripts/check_ui_routes.sh --base "$BASE_SHA"
       - name: UI source suffixes (each .js UI scanner also reads .ts; text only)
