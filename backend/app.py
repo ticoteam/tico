@@ -85,7 +85,6 @@ from .execution import (
     AWAKE_GAP,
     Execution,
     bot_repository,
-    bump_bot_session_epoch,
     flag_cut,
     reset_bot_sessions,
 )
