@@ -21,8 +21,8 @@ from backend.tests.test_mcp import call
 from clients import hubcli, remotecli
 from clients.tico import APIError
 
-BODY = "A long reply about the launch plan and its checks. " * 110     # about 5.5 KB a message
-CHAT_PAGE = {"limit": 50, "max_bytes": 163840}                         # the web app's chat page (ui/app/chat.js)
+BODY = "A long reply about the launch plan and its checks. " * 110  # about 5.5 KB a message
+CHAT_PAGE = {"limit": 50, "max_bytes": 163840}  # the web app's chat page (ui/app/chat.ts)
 
 
 def read(api, cid, token="ana-test", **query):
@@ -60,7 +60,9 @@ def test_the_conversation_list_is_the_callers_own_and_only_the_owner_filters_by_
     # The fields the chat list reads: which room it is, its kind, and whether it belongs to a task.
     assert {"id", "kind", "task_id", "participants"} <= set(rows[0])
     ids = lambda r: {c["id"] for c in r.json()["conversations"]}
-    assert mine["conversation_id"] in ids(api.get("/api/v2/conversations", params={"chat_with": "ops"}, headers=headers()))
+    assert mine["conversation_id"] in ids(
+        api.get("/api/v2/conversations", params={"chat_with": "ops"}, headers=headers())
+    )
     owner_view = api.get("/api/v2/conversations", params={"bot": "ops"}, headers=headers())
     assert owner_view.status_code == 200 and mine["conversation_id"] in ids(owner_view)
     assert theirs["conversation_id"] not in ids(owner_view), "a personal chat is its person's, owner or not"
@@ -87,8 +89,11 @@ def test_a_chat_another_person_may_not_read_looks_missing_and_leaks_no_text(api)
     # A hidden chat looks missing (Auth.conversation answers 404 not_found, docs/dev/threads-contract.md): the same answer
     # as a chat that does not exist, so no reader can tell them apart.
     nowhere = "00000000-0000-4000-8000-000000000000"
-    reads = [("GET", f"conversations/{cid}/messages"), ("GET", f"conversations/{cid}/snapshot"),
-             ("GET", f"conversations/{cid}/outline")]
+    reads = [
+        ("GET", f"conversations/{cid}/messages"),
+        ("GET", f"conversations/{cid}/snapshot"),
+        ("GET", f"conversations/{cid}/outline"),
+    ]
     for method, path in reads:
         r = api.request(method, "/api/v2/" + path, headers=headers("ben-test"))
         missing = api.request(method, "/api/v2/" + path.replace(cid, nowhere), headers=headers("ben-test"))
@@ -96,7 +101,9 @@ def test_a_chat_another_person_may_not_read_looks_missing_and_leaks_no_text(api)
         assert r.status_code == missing.status_code and r.json()["error"] == missing.json()["error"], path
         assert secret not in r.text, path
     r = api.post(f"/api/v2/conversations/{cid}/messages", json={"text": "Injected"}, headers=headers("ben-test"))
-    missing = api.post(f"/api/v2/conversations/{nowhere}/messages", json={"text": "Injected"}, headers=headers("ben-test"))
+    missing = api.post(
+        f"/api/v2/conversations/{nowhere}/messages", json={"text": "Injected"}, headers=headers("ben-test")
+    )
     assert r.status_code == 404 and r.json()["error"] == missing.json()["error"] and secret not in r.text
     listed = api.get("/api/v2/conversations", headers=headers("ben-test")).json()["conversations"]
     assert cid not in {c["id"] for c in listed}
@@ -150,11 +157,24 @@ def test_an_older_chat_stays_in_the_list_behind_many_newer_conversations(api):
         row = dict(c.execute("SELECT * FROM conversations WHERE id=?", (cid,)).fetchone())
         later = H.shift(H.now(), seconds=3600)
         # Ben's chats, newer than Ana's: no room key, so they do not collide with her room's unique key.
-        rows = [dict(row, id=H.new_id(), subject=f"Newer {n}", created_at=later, last_message_at=later,
-                     participants='["human:ben"]', owner_id="human:ben", room_key=None) for n in range(520)]
+        rows = [
+            dict(
+                row,
+                id=H.new_id(),
+                subject=f"Newer {n}",
+                created_at=later,
+                last_message_at=later,
+                participants='["human:ben"]',
+                owner_id="human:ben",
+                room_key=None,
+            )
+            for n in range(520)
+        ]
         cols = list(row)
-        c.executemany(f"INSERT INTO conversations({','.join(cols)}) VALUES({','.join('?' * len(cols))})",
-                      [[r[k] for k in cols] for r in rows])
+        c.executemany(
+            f"INSERT INTO conversations({','.join(cols)}) VALUES({','.join('?' * len(cols))})",
+            [[r[k] for k in cols] for r in rows],
+        )
     everything = {c["id"] for c in api.get("/api/v2/conversations", headers=headers()).json()["conversations"]}
     assert cid in everything
     by_bot = api.get("/api/v2/conversations", params={"bot": "ops"}, headers=headers()).json()["conversations"]
@@ -176,8 +196,12 @@ def test_hub_history_is_the_conversation_show_alias_and_pages_back_like_the_rest
     assert hubcli.main(["history", cid]) == 0
     newest = json.loads(capsys.readouterr().out)
     rest = read(api, cid)
-    assert newest == {"conversation": rest["conversation"], "messages": rest["messages"],
-                      "has_more": rest["has_more"], "next_before": rest["next_before"]}
+    assert newest == {
+        "conversation": rest["conversation"],
+        "messages": rest["messages"],
+        "has_more": rest["has_more"],
+        "next_before": rest["next_before"],
+    }
     assert [m["id"] for m in newest["messages"]] == order[-200:] and newest["has_more"] is True
     # The runner's prompt tells a bot to read further back with `--before` and the page's `next_before`.
     assert hubcli.main(["conversation", "show", cid, "--before", newest["next_before"]]) == 0
@@ -209,11 +233,14 @@ def test_an_old_mcp_name_is_refused_with_its_new_name_and_writes_nothing(api):
     # The new names answer the same request, so a bot that retries under them gets its answer.
     err, page = call(api, "hub_conversation_show", {"conversation": cid})
     rest = read(api, cid)
-    assert not err and page == {"conversation": rest["conversation"], "messages": rest["messages"],
-                                "has_more": rest["has_more"], "next_before": rest["next_before"]}
+    assert not err and page == {
+        "conversation": rest["conversation"],
+        "messages": rest["messages"],
+        "has_more": rest["has_more"],
+        "next_before": rest["next_before"],
+    }
     # hub_message_send answers with the message itself (POST /messages), not wrapped as the reply route wraps it.
-    err, sent = call(api, "hub_message_send", {"to": "ops", "text": "Said under the new name",
-                                               "conversation_id": cid})
+    err, sent = call(api, "hub_message_send", {"to": "ops", "text": "Said under the new name", "conversation_id": cid})
     assert not err and sent["conversation_id"] == cid and sent["body"] == "Said under the new name"
     assert "Said under the new name" in [m["body"] for m in read(api, cid)["messages"]]
     err, _ = call(api, "hub_message_mark_read", {"message_id": note})
@@ -242,15 +269,19 @@ def test_a_legacy_reply_and_a_to_send_reach_ben_in_a_native_dm_ana_started(api):
     reply = api.post(f"/api/v2/conversations/{cid}/messages", json={"text": "Legacy reply"}, headers=headers())
     assert reply.status_code == 200, reply.text
 
-    send = api.post("/api/v2/messages", json={"to": "human:ben", "text": "Legacy send",
-                                              "conversation_id": cid}, headers=headers())
+    send = api.post(
+        "/api/v2/messages", json={"to": "human:ben", "text": "Legacy send", "conversation_id": cid}, headers=headers()
+    )
     assert send.status_code == 200, send.text
 
-    stranger = api.post("/api/v2/messages", json={"to": "human:cara", "text": "Not for Cara",
-                                                  "conversation_id": cid}, headers=headers())
-    assert stranger.status_code == 403, stranger.text             # a non-member is still refused
+    stranger = api.post(
+        "/api/v2/messages", json={"to": "human:cara", "text": "Not for Cara", "conversation_id": cid}, headers=headers()
+    )
+    assert stranger.status_code == 403, stranger.text  # a non-member is still refused
 
     with api.app.state.store.read() as c:
-        texts = {r[0] for r in c.execute("SELECT body FROM messages WHERE conversation_id=? AND recipient_id='human:ben'",
-                                         (cid,))}
+        texts = {
+            r[0]
+            for r in c.execute("SELECT body FROM messages WHERE conversation_id=? AND recipient_id='human:ben'", (cid,))
+        }
     assert {"Legacy reply", "Legacy send"} <= texts

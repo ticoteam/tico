@@ -16,6 +16,7 @@ def role_type(c, role):
     """The id of the first type with this role, or None. Only one type is the Product roadmap; Engineering and a
     Dev tickets type made later may both carry the engineering role."""
     from .read_cache import one
+
     row = one(c, 'SELECT id FROM task_types WHERE role=? ORDER BY created_at,id LIMIT 1', (role,))
     return row[0] if row else None
 
@@ -32,6 +33,7 @@ def migrate(c):
     The column, its backfill and the index commit together: startup runs in autocommit, and a start stopped after
     the column alone would see it next time and never backfill a renamed type that claim() can't recognise."""
     from . import hubdb as H
+
     c.execute('SAVEPOINT roadmap_roles')
     try:
         columns = {r[1] for r in c.execute('PRAGMA table_info(task_types)')}
@@ -39,14 +41,22 @@ def migrate(c):
             H.add_column(c, 'task_types', 'role', 'TEXT')
 
             def ids(sql, *args):
-                return [r[0] for r in c.execute('SELECT id FROM task_types WHERE ' + sql + ' ORDER BY created_at,id', args)]
-            managed = (lambda role: ids('manager=?', LEGACY_MANAGERS[role])) if 'manager' in columns else (lambda role: [])
-            for role, chosen in ((PRODUCT, (managed(PRODUCT) or ids('id=?', PRODUCT))[:1]),
-                                 (ENGINEERING, managed(ENGINEERING) + ids('id=?', ENGINEERING))):
+                return [
+                    r[0] for r in c.execute('SELECT id FROM task_types WHERE ' + sql + ' ORDER BY created_at,id', args)
+                ]
+
+            managed = (
+                (lambda role: ids('manager=?', LEGACY_MANAGERS[role])) if 'manager' in columns else (lambda role: [])
+            )
+            for role, chosen in (
+                (PRODUCT, (managed(PRODUCT) or ids('id=?', PRODUCT))[:1]),
+                (ENGINEERING, managed(ENGINEERING) + ids('id=?', ENGINEERING)),
+            ):
                 for ident in chosen:
                     c.execute('UPDATE task_types SET role=? WHERE id=? AND role IS NULL', (role, ident))
-        c.execute("CREATE UNIQUE INDEX IF NOT EXISTS task_types_product_role ON task_types(role) "
-                  "WHERE role='product-roadmap'")
+        c.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS task_types_product_role ON task_types(role) WHERE role='product-roadmap'"
+        )
         claim(c)
     except BaseException:  # an interrupted start too: releasing a half-done backfill would commit it
         c.execute('ROLLBACK TO roadmap_roles')
@@ -62,53 +72,100 @@ def claim(c):
         if _dev(row):
             c.execute('UPDATE task_types SET role=? WHERE id=?', (ENGINEERING, row[0]))
     if not role_type(c, PRODUCT):
-        row = c.execute('SELECT id FROM task_types WHERE role IS NULL AND (id=? OR name=? COLLATE NOCASE) '
-                        'ORDER BY id=? DESC LIMIT 1', (PRODUCT, 'Product roadmap', PRODUCT)).fetchone()
+        row = c.execute(
+            'SELECT id FROM task_types WHERE role IS NULL AND (id=? OR name=? COLLATE NOCASE) '
+            'ORDER BY id=? DESC LIMIT 1',
+            (PRODUCT, 'Product roadmap', PRODUCT),
+        ).fetchone()
         if row:
             c.execute('UPDATE task_types SET role=? WHERE id=?', (PRODUCT, row[0]))
     # A Dev tickets type gets its hand-off wake rules once (rules.seed_dev); they are rows a person can edit.
     from .rules import seed_dev
+
     seed_dev(c)
     # ...and its check steps their pools of reviewers and QA (backend/check_pools.py), once.
     from .check_pools import seed as seed_pools
+
     seed_pools(c)
 
 
 def ensure(c):
-    """Create the two role types when they are missing. An existing type keeps the manager it has; one with
-    none gets the default."""
+    """Create the two role types when they are missing. An existing type keeps the manager it has, or none: a type
+    with no manager stays without one. The legacy manager names fill only a type this creates."""
     from . import hubdb as H
+
     for ident, name, manager, steps in (
-        (PRODUCT, 'Product roadmap', LEGACY_MANAGERS[PRODUCT], [
-            ('Suggested', 'open'), ('Exploring', 'doing'), ('Spec', 'review'),
-            ('Approved', 'review'), ('Building', 'doing'), ('Shipped', 'done'), ('Declined', 'declined')]),
-        (ENGINEERING, 'Engineering', LEGACY_MANAGERS[ENGINEERING], [
-            ('Todo', 'open'), ('Doing', 'doing'),
-            ('In review', 'review'), ('Ready to ship', 'ready'), ('Done', 'closed')]),
+        (
+            PRODUCT,
+            'Product roadmap',
+            LEGACY_MANAGERS[PRODUCT],
+            [
+                ('Suggested', 'open'),
+                ('Exploring', 'doing'),
+                ('Spec', 'review'),
+                ('Approved', 'review'),
+                ('Building', 'doing'),
+                ('Shipped', 'done'),
+                ('Declined', 'declined'),
+            ],
+        ),
+        (
+            ENGINEERING,
+            'Engineering',
+            LEGACY_MANAGERS[ENGINEERING],
+            [
+                ('Todo', 'open'),
+                ('Doing', 'doing'),
+                ('In review', 'review'),
+                ('Ready to ship', 'ready'),
+                ('Done', 'closed'),
+            ],
+        ),
     ):
         existing = role_type(c, ident)
         if not existing and ident == ENGINEERING:
-            existing = next((r[0] for r in c.execute('SELECT id,name FROM task_types WHERE role IS NULL ORDER BY id')
-                             if _dev(r)), None)
+            existing = next(
+                (r[0] for r in c.execute('SELECT id,name FROM task_types WHERE role IS NULL ORDER BY id') if _dev(r)),
+                None,
+            )
         if not existing:
-            row = c.execute('SELECT id FROM task_types WHERE (id=? OR name=? COLLATE NOCASE) AND role IS NULL',
-                            (ident, name)).fetchone()
+            row = c.execute(
+                'SELECT id FROM task_types WHERE (id=? OR name=? COLLATE NOCASE) AND role IS NULL', (ident, name)
+            ).fetchone()
             existing = row[0] if row else None
         if existing:
-            c.execute('UPDATE task_types SET role=?,manager=coalesce(manager,?) WHERE id=?', (ident, manager, existing))
+            c.execute('UPDATE task_types SET role=? WHERE id=?', (ident, existing))
             continue
-        c.execute('INSERT INTO task_types(id,name,bots,manager,role,steps_only,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)',
-                  (ident, name, 'work', manager, ident, int(ident == PRODUCT), H.now(), H.now()))
+        c.execute(
+            'INSERT INTO task_types(id,name,bots,manager,role,steps_only,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)',
+            (ident, name, 'work', manager, ident, int(ident == PRODUCT), H.now(), H.now()),
+        )
         for position, (step, status) in enumerate(steps):
-            c.execute('INSERT INTO task_steps(id,type_id,name,position,status) VALUES(?,?,?,?,?)',
-                      (ident + '-' + str(position), ident, step, position, status))
+            c.execute(
+                'INSERT INTO task_steps(id,type_id,name,position,status) VALUES(?,?,?,?,?)',
+                (ident + '-' + str(position), ident, step, position, status),
+            )
 
 
 # The roadmap steps a linked Dev ticket moves an item between, in order. Ready to ship is optional: a type without it
 # goes from Building straight to Shipped.
 FLOW = ('Approved', 'Building', 'Ready to ship', 'Shipped')
 READY_STEP = 'Ready to ship'
-READY_FROM = 'pending release'     # a Dev tickets step: it and every step after it are "ready to ship"
+# The stage each FLOW step is after pipeline_setup: it keeps the ids and renames the stages, and retires Approved into
+# In development. A stage is found by its id first, then by either of its names, so a setup hub keeps its roadmap.
+FLOW_IDS = {
+    'product-roadmap-3': 'Approved',
+    'product-roadmap-4': 'Building',
+    'product-roadmap-5': 'Shipped',
+    'product-roadmap-ready': READY_STEP,
+}
+FLOW_NAMES = {
+    'Approved': ('Approved', 'Review'),
+    'Building': ('Building', 'In development'),
+    'Ready to ship': (READY_STEP,),
+    'Shipped': ('Shipped', 'Done'),
+}
+READY_FROM = 'pending release'  # a Dev tickets step: it and every step after it are "ready to ship"
 READY_MARKER = 'roadmap_ready_to_ship_step'
 
 
@@ -117,14 +174,17 @@ def tickets(c, task_id):
     once, as (id, status, type_id, step position, closed straight from done, type has a done step)."""
     return c.execute(
         "SELECT t.id,t.status,t.type_id,s.position,"
-        # The unary + keeps SQLite on the per-task index: without ANALYZE it picks task_events(field, ts) and reads
+        # The unary + keeps SQLite on the per-task index: without ANALYZE it picks history_events(subject_type, kind, created_at) and reads
         # every status change on the server.
-        "t.status='closed' AND (SELECT e.old FROM task_events e WHERE e.task_id=t.id AND +e.field='status' "
+        "t.status='closed' AND (SELECT e.old FROM history_events e WHERE e.subject_type='task' AND e.subject_id=t.id "
+        "AND +e.kind='status' "
         "ORDER BY e.created_at DESC,e.rowid DESC LIMIT 1)='done',"
         "EXISTS (SELECT 1 FROM task_steps d WHERE d.type_id=t.type_id AND d.status='done') "
         "FROM tasks t LEFT JOIN task_steps s ON s.id=t.step_id "
         "WHERE t.id IN (SELECT r.from_task FROM task_relations r WHERE r.to_task=? AND r.kind IN ('parent','blocks')) "
-        "AND t.type_id IN (SELECT id FROM task_types WHERE role=?)", (task_id, ENGINEERING)).fetchall()
+        "AND t.type_id IN (SELECT id FROM task_types WHERE role=?)",
+        (task_id, ENGINEERING),
+    ).fetchall()
 
 
 def stage(c, ticket, marks):
@@ -141,15 +201,22 @@ def stage(c, ticket, marks):
     if status in ('closed', 'declined'):
         return None
     if type_id not in marks:
-        steps = c.execute('SELECT position,name,status FROM task_steps WHERE type_id=? ORDER BY position',
-                          (type_id,)).fetchall()
+        steps = c.execute(
+            'SELECT position,name,status FROM task_steps WHERE type_id=? ORDER BY position', (type_id,)
+        ).fetchall()
         first = steps[0][0] if steps else None
         ready = next((s[0] for s in steps if s[2] == 'ready' or (s[1] or '').strip().lower() == READY_FROM), None)
         marks[type_id] = (first, ready)
     first, ready = marks[type_id]
     if status == 'ready' or position is not None and ready is not None and position >= ready:
         return 'ready'
-    if position is not None and first is not None and position > first or position is None and status in ('doing', 'review'):
+    if (
+        position is not None
+        and first is not None
+        and position > first
+        or position is None
+        and status in ('doing', 'review')
+    ):
         return 'started'
     return 'waiting'
 
@@ -168,27 +235,45 @@ def wanted(stages):
     return 'Building' if any(s != 'waiting' for s in counted) else 'Approved'
 
 
+def _flow_of(step):
+    """The FLOW step a roadmap stage stands for, or None: by its id, else by its old or new name."""
+    if step['id'] in FLOW_IDS:
+        return FLOW_IDS[step['id']]
+    return next((flow for flow, names in FLOW_NAMES.items() if step['name'] in names), None)
+
+
 def sync(c, task_id):
     from . import hubdb as H
+
     row = H.task(c, task_id)
     if not row or row.get('type_id') != role_type(c, PRODUCT):
         return
+    from . import pipeline_engine
+
+    if pipeline_engine.has_requirements(c, row['type_id']):
+        return  # a pipeline with stage requirements moves its cards by their requirements, never by this sync
     typ = H.type_get(c, row['type_id'])
-    current = next((s['name'] for s in typ['steps'] if s['id'] == row['step_id']), None)
+    if not typ:
+        return
+    current = next((_flow_of(s) for s in typ['steps'] if s['id'] == row['step_id']), None)
     if current not in FLOW:
         return
     marks = {}
     goal = wanted([stage(c, t, marks) for t in tickets(c, task_id)])
-    names = {s['name'] for s in typ['steps']}
-    if goal == READY_STEP and goal not in names:
+    steps = {}
+    for s in typ['steps']:
+        if _flow_of(s):
+            steps.setdefault(_flow_of(s), s)
+    if goal == READY_STEP and goal not in steps:
         goal = 'Building'
-    step = next((s for s in typ['steps'] if s['name'] == goal), None)
+    step = steps.get(goal)
     if not step or current == goal:
         return
-    H._set_status(c, H.KEEPER, row, step=step['id'])
+    # The parent's own move is automatic: a refusal (its requirements) is logged on the card and leaves the child's change.
+    if not H.try_auto_move(c, H.KEEPER, row, step=step['id']):
+        return
     version = ',version=version+1' if 'version' in {r[1] for r in c.execute('PRAGMA table_info(tasks)')} else ''
-    c.execute('UPDATE tasks SET done_at=?' + version + ' WHERE id=?',
-              (H.now() if goal == 'Shipped' else None, task_id))
+    c.execute('UPDATE tasks SET done_at=?' + version + ' WHERE id=?', (H.now() if goal == 'Shipped' else None, task_id))
     H._recount(c, row['owner_id'])
     H.event(c, H.KEEPER, 'task.update', task_id, {'step': step['id']})
 
@@ -197,8 +282,13 @@ def delivers(c, item, ticket):
     """Whether `ticket` is an engineering ticket that `item`, a roadmap item, waits on: its link stays when the
     ticket is done, so the item still counts it (Shipped is every linked ticket done) and follows it if it reopens."""
     product = role_type(c, PRODUCT)
-    return bool(product and (item or {}).get('type_id') == product and c.execute(
-        'SELECT 1 FROM task_types WHERE id=? AND role=?', ((ticket or {}).get('type_id'), ENGINEERING)).fetchone())
+    return bool(
+        product
+        and (item or {}).get('type_id') == product
+        and c.execute(
+            'SELECT 1 FROM task_types WHERE id=? AND role=?', ((ticket or {}).get('type_id'), ENGINEERING)
+        ).fetchone()
+    )
 
 
 def ready_step(c):
@@ -207,12 +297,15 @@ def ready_step(c):
     renames the step does not get it back: the marker is set once a roadmap type has been looked at. Runs after
     roadmaps.migrate, which makes the public_name column and the registry_metadata table."""
     from . import hubdb as H
+
     if c.execute('SELECT 1 FROM registry_metadata WHERE key=?', (READY_MARKER,)).fetchone():
         return
     type_id = role_type(c, PRODUCT)
     if not type_id:
         return
-    steps = c.execute('SELECT id,name,position FROM task_steps WHERE type_id=? ORDER BY position', (type_id,)).fetchall()
+    steps = c.execute(
+        'SELECT id,name,position FROM task_steps WHERE type_id=? ORDER BY position', (type_id,)
+    ).fetchall()
     building = next((s for s in steps if s[1] == 'Building'), None)
     c.execute('SAVEPOINT roadmap_ready_step')
     try:
@@ -225,8 +318,10 @@ def ready_step(c):
             for later in sorted((s for s in steps if s[2] > building[2]), key=lambda s: -s[2]):
                 c.execute('UPDATE task_steps SET position=position+1 WHERE id=?', (later[0],))
             public = c.execute('SELECT public_name FROM task_steps WHERE id=?', (building[0],)).fetchone()[0]
-            c.execute('INSERT INTO task_steps(id,type_id,name,position,status,public_name) VALUES(?,?,?,?,?,?)',
-                      (ident, type_id, READY_STEP, building[2] + 1, 'doing', public or 'In progress'))
+            c.execute(
+                'INSERT INTO task_steps(id,type_id,name,position,status,public_name) VALUES(?,?,?,?,?,?)',
+                (ident, type_id, READY_STEP, building[2] + 1, 'doing', public or 'In progress'),
+            )
             c.execute('UPDATE task_types SET updated_at=? WHERE id=?', (H.now(), type_id))
         c.execute('INSERT INTO registry_metadata(key,value) VALUES(?,?)', (READY_MARKER, '{"done": true}'))
     except BaseException:
@@ -240,6 +335,7 @@ def changed(c, task_id, itself=True):
     """A task changed: sync it, its parent and every task it blocks (a roadmap item waits on its Dev tickets).
     `itself=False` leaves the task's own step alone: someone just moved it there by hand."""
     from . import task_relations as TR
+
     if itself:
         sync(c, task_id)
     for item in dict.fromkeys([TR.parent_of(c, task_id), *TR.blocked_ids(c, task_id)]):

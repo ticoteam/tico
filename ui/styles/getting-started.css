@@ -1,6 +1,6 @@
 /* ui/styles/getting-started.css — After the wizard: the tour.
    The cascade runs in the order index.html links these files; keep rules in order. */
-/* After the wizard: the tour under the org list (ui/getting-started.js) */
+/* After the wizard: the tour under the org list (ui/getting-started.ts) */
 .help-actions{display:flex;align-items:center;gap:var(--s4);margin-top:var(--s4);flex-wrap:wrap}
 .gs-field{display:grid;gap:3px;margin:0 0 8px;max-width:520px}
 .gs-field[hidden]{display:none}
@@ -19,7 +19,7 @@
 .hl-fixes{display:flex;gap:var(--s2);flex-wrap:wrap}
 .hl-check.ok .hl-icon{color:var(--ok, #2f8f4e)}.hl-check.warn .hl-icon{color:var(--wait-ink)}.hl-check.bad .hl-icon{color:var(--fail)}.hl-check.unknown .hl-icon,.hl-check.info .hl-icon{color:var(--muted)}
 .hl-check-result{color:var(--ink)!important}.hl-check-result.err{color:var(--fail)!important}
-/* Setup check on Health (ui/health.js): a card under the list, its result in the same rows. */
+/* Setup check on Health (ui/health.ts): a card under the list, its result in the same rows. */
 .hl-setup{max-width:760px}.hl-setup>p{margin:0 0 var(--s2);font-size:var(--t-base)}
 .hl-setup-result:empty{display:none}.hl-setup-result{margin-top:var(--s3)}
 .hl-setup-head{font-weight:600;margin:0}.hl-setup-fix{color:var(--ink)!important;font-size:var(--t-sm)!important}
@@ -40,7 +40,7 @@
 .hl-models{margin-top:2px;color:var(--muted);font-size:var(--t-sm)}.hl-bots li{padding:3px 0;font-size:var(--t-base)}
 .hl-stuck{display:flex;align-items:baseline;flex-wrap:wrap;column-gap:var(--s2);row-gap:2px}.hl-stuck>.muted{flex:1;min-width:12ch}
 .hl-stuck .ghost{padding:2px 8px;font-size:var(--t-base)}
-.hl-monitor{margin:var(--s3) 0;padding:var(--s3) 0;border-top:1px solid var(--line);border-bottom:1px solid var(--line)}
+.hl-findings{margin:var(--s3) 0;padding:var(--s3) 0;border-top:1px solid var(--line);border-bottom:1px solid var(--line)}
 .hl-monitor-row{display:flex;align-items:flex-start;gap:var(--s2);padding:4px 0;font-size:var(--t-base)}.hl-monitor-row input{margin-top:3px;flex:none}
 .hl-alert{display:inline-block;vertical-align:middle;width:8px;height:8px;margin-left:6px;flex:none;border-radius:50%;background:var(--fail)}.hl-alert[hidden]{display:none}.nav-link .hl-alert{margin-left:auto}
 .gs-form{width:min(520px,calc(100vw - 32px))}

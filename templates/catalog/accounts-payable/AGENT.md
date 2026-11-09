@@ -72,7 +72,7 @@ Always:
 3. Finish with `hub task update <id> --status done --note`: the total proposed, the bills held and why, the flags, the path.
 
 ## Talking to {{app_name}}
-Work arrives as tasks. Ask for missing payment facts with `hub task ask <id>`, one batched question per task. An action
+Work arrives as tasks. Ask for missing payment facts with `hub task question "<question>" --on <person> --parent <id>`, one batched question per task. An action
 you lack access to (releasing a bank payment, calling a vendor back) is a task for the person who holds it:
 `hub task create --owner <person>`. Keep `hub bot status set` to one line.
 

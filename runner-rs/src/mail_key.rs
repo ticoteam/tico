@@ -18,7 +18,10 @@ use crate::util::log;
 pub const FILE: &str = "google-sa.json";
 /// People's own connected Google accounts (connectors/mail/oauth.py), beside the key and protected the same way.
 pub const GRANTS: &str = "google-oauth.json";
-const CARRY_MARKERS: &[(&str, &str)] = &[(FILE, ".mail-key-carried"), (GRANTS, ".google-oauth-carried")];
+const CARRY_MARKERS: &[(&str, &str)] = &[
+    (FILE, ".mail-key-carried"),
+    (GRANTS, ".google-oauth-carried"),
+];
 pub const SERVICES: &[&str] = &["gmail", "calendar"];
 
 /// Where the key lives when isolation is on: the supervisor's state directory.
@@ -36,7 +39,12 @@ pub fn mail_secret_path(config: &Config) -> PathBuf {
     if let Ok(named) = std::env::var("GOOGLE_SA_KEY") {
         if !named.is_empty() {
             let home = std::env::var("HOME").unwrap_or_default();
-            return PathBuf::from(named.strip_prefix("~/").map(|r| format!("{home}/{r}")).unwrap_or(named));
+            return PathBuf::from(
+                named
+                    .strip_prefix("~/")
+                    .map(|r| format!("{home}/{r}"))
+                    .unwrap_or(named),
+            );
         }
     }
     if crate::isolation::enabled() {
@@ -71,7 +79,10 @@ pub fn protect(config: &Config) -> bool {
 }
 
 fn protect_one(config: &Config, name: &str) -> bool {
-    let (old, new) = (workspace_path(config).with_file_name(name), protected_path(config).with_file_name(name));
+    let (old, new) = (
+        workspace_path(config).with_file_name(name),
+        protected_path(config).with_file_name(name),
+    );
     let moved = (|| -> std::io::Result<bool> {
         let meta = match std::fs::symlink_metadata(&old) {
             Ok(m) if m.is_file() => m,
@@ -83,11 +94,18 @@ fn protect_one(config: &Config, name: &str) -> bool {
             data = merged_grants(&std::fs::read(&new)?, &data);
         }
         if let Some(parent) = new.parent() {
-            std::fs::DirBuilder::new().recursive(true).mode(0o700).create(parent)?;
+            std::fs::DirBuilder::new()
+                .recursive(true)
+                .mode(0o700)
+                .create(parent)?;
         }
         let tmp = new.with_file_name(format!("{name}.new"));
         let _ = std::fs::remove_file(&tmp);
-        let mut f = std::fs::OpenOptions::new().write(true).create_new(true).mode(0o600).open(&tmp)?;
+        let mut f = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(&tmp)?;
         f.write_all(&data)?;
         std::fs::rename(&tmp, &new)?;
         std::fs::remove_file(&old)?;
@@ -100,7 +118,10 @@ fn protect_one(config: &Config, name: &str) -> bool {
         }
         Ok(false) => false,
         Err(e) => {
-            log(&format!("Tico runner: could not move {name} out of the bots' reach ({:?})", e.kind()));
+            log(&format!(
+                "Tico runner: could not move {name} out of the bots' reach ({:?})",
+                e.kind()
+            ));
             false
         }
     }
@@ -109,8 +130,13 @@ fn protect_one(config: &Config, name: &str) -> bool {
 /// The protected grants with the workspace's merged in (connectors/mail/oauth.py merge_into): each incoming
 /// mailbox replaces its own entry and every other one is kept, so a move never drops a protected grant.
 fn merged_grants(protected: &[u8], incoming: &[u8]) -> Vec<u8> {
-    let mut kept: Value = serde_json::from_slice(protected).ok().filter(|v: &Value| v.is_object()).unwrap_or_else(|| json!({}));
-    let Ok(new) = serde_json::from_slice::<Value>(incoming) else { return protected.to_vec() };
+    let mut kept: Value = serde_json::from_slice(protected)
+        .ok()
+        .filter(|v: &Value| v.is_object())
+        .unwrap_or_else(|| json!({}));
+    let Ok(new) = serde_json::from_slice::<Value>(incoming) else {
+        return protected.to_vec();
+    };
     if !kept["grants"].is_object() {
         kept["grants"] = json!({});
     }
@@ -128,10 +154,16 @@ fn merged_grants(protected: &[u8], incoming: &[u8]) -> Vec<u8> {
 /// `protected`, `exposed` (a key bots can read) or None (no key on this computer).
 pub fn status(config: &Config) -> Option<&'static str> {
     if crate::isolation::enabled() {
-        if [FILE, GRANTS].iter().any(|n| workspace_path(config).with_file_name(n).is_file()) {
+        if [FILE, GRANTS]
+            .iter()
+            .any(|n| workspace_path(config).with_file_name(n).is_file())
+        {
             return Some("exposed");
         }
-        return [FILE, GRANTS].iter().any(|n| protected_path(config).with_file_name(n).is_file()).then_some("protected");
+        return [FILE, GRANTS]
+            .iter()
+            .any(|n| protected_path(config).with_file_name(n).is_file())
+            .then_some("protected");
     }
     credential_present(config).then_some("exposed")
 }
@@ -139,7 +171,9 @@ pub fn status(config: &Config) -> Option<&'static str> {
 /// Whether this computer holds the Google key or a connected account's grant for its bots (isolated, side jobs supervised here, key present):
 /// a bot's GOOGLE_SA_KEY then counts as present though its turn never has it.
 pub fn held_by_computer(config: &Config) -> bool {
-    crate::isolation::enabled() && std::env::var("TICO_SIDE_JOBS").as_deref() == Ok("1") && credential_present(config)
+    crate::isolation::enabled()
+        && std::env::var("TICO_SIDE_JOBS").as_deref() == Ok("1")
+        && credential_present(config)
 }
 
 /// Recover the mail key after re-enrollment, only from this operator's previous registration
@@ -155,7 +189,10 @@ pub fn carry_protected(config: &Config) -> bool {
 
 fn carry_one(config: &Config, file: &str, marker: &str) -> bool {
     let config_path = &config.path;
-    let name = config_path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+    let name = config_path
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_default();
     let stale = config_path.with_file_name(format!("{name}.stale"));
     let mut temporary: Option<PathBuf> = None;
     let result = carry(config, &stale, &mut temporary, file, marker);
@@ -164,7 +201,12 @@ fn carry_one(config: &Config, file: &str, marker: &str) -> bool {
     }
     match result {
         Ok(done) => done,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound || e.kind() == std::io::ErrorKind::AlreadyExists => false,
+        Err(e)
+            if e.kind() == std::io::ErrorKind::NotFound
+                || e.kind() == std::io::ErrorKind::AlreadyExists =>
+        {
+            false
+        }
         Err(e) => {
             if stale.exists() {
                 log(&format!(
@@ -177,22 +219,43 @@ fn carry_one(config: &Config, file: &str, marker: &str) -> bool {
     }
 }
 
-fn carry(config: &Config, stale: &Path, temporary: &mut Option<PathBuf>, file: &str, marker_name: &str) -> std::io::Result<bool> {
+fn carry(
+    config: &Config,
+    stale: &Path,
+    temporary: &mut Option<PathBuf>,
+    file: &str,
+    marker_name: &str,
+) -> std::io::Result<bool> {
     // SAFETY: getuid has no preconditions.
     let uid = unsafe { libc::getuid() };
     let dir = config.path.parent().unwrap_or(Path::new("."));
     let parent = std::fs::metadata(dir)?;
     let info = std::fs::symlink_metadata(stale)?;
-    if !info.is_file() || info.uid() != uid || info.dev() != parent.dev() || info.mode() & 0o077 != 0 {
+    if !info.is_file()
+        || info.uid() != uid
+        || info.dev() != parent.dev()
+        || info.mode() & 0o077 != 0
+    {
         return Ok(false);
     }
-    let Ok(previous) = serde_json::from_str::<Value>(&std::fs::read_to_string(stale)?) else { return Ok(false) };
-    let Some(previous) = previous.as_object() else { return Ok(false) };
+    let Ok(previous) = serde_json::from_str::<Value>(&std::fs::read_to_string(stale)?) else {
+        return Ok(false);
+    };
+    let Some(previous) = previous.as_object() else {
+        return Ok(false);
+    };
     let now = &config.data;
-    if !crate::util::truthy(now.get("operator")) || ["operator", "url"].iter().any(|k| previous.get(*k) != now.get(*k)) {
+    if !crate::util::truthy(now.get("operator"))
+        || ["operator", "url"]
+            .iter()
+            .any(|k| previous.get(*k) != now.get(*k))
+    {
         return Ok(false);
     }
-    if crate::util::truthy(previous.get("environment")) && crate::util::truthy(now.get("environment")) && previous.get("environment") != now.get("environment") {
+    if crate::util::truthy(previous.get("environment"))
+        && crate::util::truthy(now.get("environment"))
+        && previous.get("environment") != now.get("environment")
+    {
         return Ok(false);
     }
     let ident = |v: Option<&Value>| match v {
@@ -200,11 +263,22 @@ fn carry(config: &Config, stale: &Path, temporary: &mut Option<PathBuf>, file: &
         Some(Value::Null) | None => String::new(),
         Some(other) => other.to_string(),
     };
-    let (old_id, new_id) = (ident(previous.get("runner_id")), ident(now.get("runner_id")));
-    if old_id.is_empty() || new_id.is_empty() || [&old_id, &new_id].iter().any(|i| i.contains('/') || *i == "." || *i == "..") {
+    let (old_id, new_id) = (
+        ident(previous.get("runner_id")),
+        ident(now.get("runner_id")),
+    );
+    if old_id.is_empty()
+        || new_id.is_empty()
+        || [&old_id, &new_id]
+            .iter()
+            .any(|i| i.contains('/') || *i == "." || *i == "..")
+    {
         return Ok(false);
     }
-    let (old, new) = (dir.join(format!("state-{old_id}")), dir.join(format!("state-{new_id}")));
+    let (old, new) = (
+        dir.join(format!("state-{old_id}")),
+        dir.join(format!("state-{new_id}")),
+    );
     match std::fs::DirBuilder::new().mode(0o700).create(&new) {
         Ok(()) => {}
         Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
@@ -221,7 +295,14 @@ fn carry(config: &Config, stale: &Path, temporary: &mut Option<PathBuf>, file: &
     if std::fs::symlink_metadata(&marker).is_ok() {
         return Ok(false);
     }
-    let carried = || std::fs::OpenOptions::new().write(true).create_new(true).mode(0o600).open(&marker).map(|_| ());
+    let carried = || {
+        std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(&marker)
+            .map(|_| ())
+    };
     if std::fs::symlink_metadata(new.join(file)).is_ok() {
         carried()?;
         return Ok(false);
@@ -229,7 +310,11 @@ fn carry(config: &Config, stale: &Path, temporary: &mut Option<PathBuf>, file: &
     if !safe_directory(&old)? {
         return Ok(false);
     }
-    let mut source = match std::fs::OpenOptions::new().read(true).custom_flags(libc::O_NOFOLLOW).open(old.join(file)) {
+    let mut source = match std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW)
+        .open(old.join(file))
+    {
         Ok(f) => f,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
             carried()?;
@@ -238,13 +323,21 @@ fn carry(config: &Config, stale: &Path, temporary: &mut Option<PathBuf>, file: &
         Err(e) => return Err(e),
     };
     let meta = source.metadata()?;
-    if !meta.is_file() || meta.uid() != uid || meta.dev() != parent.dev() || meta.mode() & 0o077 != 0 {
+    if !meta.is_file()
+        || meta.uid() != uid
+        || meta.dev() != parent.dev()
+        || meta.mode() & 0o077 != 0
+    {
         return Ok(false);
     }
     let mut data = vec![];
     source.read_to_end(&mut data)?;
     let tmp = new.join(format!(".{file}-{}", uuid::Uuid::new_v4().simple()));
-    let mut out = std::fs::OpenOptions::new().write(true).create_new(true).mode(0o600).open(&tmp)?;
+    let mut out = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(&tmp)?;
     *temporary = Some(tmp.clone());
     out.write_all(&data)?;
     out.set_permissions(std::fs::Permissions::from_mode(meta.mode() & 0o7777))?;
@@ -276,7 +369,11 @@ static MINT: OnceLock<Mint> = OnceLock::new();
 pub fn init(config: &Config) {
     let (url, token) = (config.url(), config.token());
     let broker = (!url.is_empty() && !token.is_empty()).then_some((url, token));
-    let _ = MINT.set(Mint { script: crate::env::root().join("scripts").join("mail.sh"), key: protected_path(config), broker });
+    let _ = MINT.set(Mint {
+        script: crate::env::root().join("scripts").join("mail.sh"),
+        key: protected_path(config),
+        broker,
+    });
 }
 
 /// One short-lived token: the mail CLI, run here with the key, prints {"token", "expiry"}.
@@ -291,7 +388,8 @@ async fn mint(how: &Mint, service: &str, mailbox: &str) -> Result<Value, String>
         .stdin(std::process::Stdio::null())
         .kill_on_drop(true);
     if let Some((url, token)) = &how.broker {
-        cmd.env("TICO_GOOGLE_BROKER_URL", url).env("TICO_GOOGLE_BROKER_AUTH", token);
+        cmd.env("TICO_GOOGLE_BROKER_URL", url)
+            .env("TICO_GOOGLE_BROKER_AUTH", token);
     }
     if crate::isolation::enabled() {
         // The mail CLI's database is shared with message bots in the same group (connectors.mail_umask).
@@ -309,17 +407,28 @@ async fn mint(how: &Mint, service: &str, mailbox: &str) -> Result<Value, String>
         .map_err(|_| "FileNotFoundError".to_string())?;
     if !out.status.success() {
         // A connected account's refusal names its reason (signin, admin_policy, ...) so the turn can say what to do.
-        let kind = serde_json::from_slice::<Value>(&out.stdout).ok().and_then(|v| v["error_kind"].as_str().map(String::from));
-        return Err(kind.filter(|k| k.len() <= 40 && k.chars().all(|c| c.is_ascii_lowercase() || c == '_')).unwrap_or_else(|| "RuntimeError".into()));
+        let kind = serde_json::from_slice::<Value>(&out.stdout)
+            .ok()
+            .and_then(|v| v["error_kind"].as_str().map(String::from));
+        return Err(kind
+            .filter(|k| k.len() <= 40 && k.chars().all(|c| c.is_ascii_lowercase() || c == '_'))
+            .unwrap_or_else(|| "RuntimeError".into()));
     }
     serde_json::from_slice(&out.stdout).map_err(|_| "JSONDecodeError".to_string())
 }
 
 /// The socket's answer to `{"mail": {"service", "mailbox"}}` for an attempt the hub named `allowed` for.
 pub async fn answer(allowed: &BTreeSet<String>, asked: &Value) -> Value {
-    let service = asked.get("service").and_then(|s| s.as_str()).unwrap_or_default();
-    let mailbox = crate::manifest::text_or_empty(asked.get("mailbox")).trim().to_lowercase();
-    let Some(how) = MINT.get() else { return json!({"error": "no mail access"}) };
+    let service = asked
+        .get("service")
+        .and_then(|s| s.as_str())
+        .unwrap_or_default();
+    let mailbox = crate::manifest::text_or_empty(asked.get("mailbox"))
+        .trim()
+        .to_lowercase();
+    let Some(how) = MINT.get() else {
+        return json!({"error": "no mail access"});
+    };
     if !asked.is_object() || !SERVICES.contains(&service) {
         return json!({"error": "no mail access"});
     }
@@ -345,7 +454,13 @@ pub async fn answer(allowed: &BTreeSet<String>, asked: &Value) -> Value {
 
 /// The mailboxes an attempt may open, as the socket compares them.
 pub fn mailboxes(attempt: &Value) -> BTreeSet<String> {
-    attempt["mailboxes"].as_array().into_iter().flatten().map(|m| crate::manifest::py_str(m).trim().to_lowercase()).filter(|m| !m.is_empty()).collect()
+    attempt["mailboxes"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|m| crate::manifest::py_str(m).trim().to_lowercase())
+        .filter(|m| !m.is_empty())
+        .collect()
 }
 
 #[cfg(test)]
@@ -365,38 +480,91 @@ mod tests {
 
     #[test]
     fn the_key_follows_a_re_enrollment_once_and_only_from_the_same_operator() {
-        let dir = std::env::temp_dir().join(format!("tico-mailkey-{}", uuid::Uuid::new_v4().simple()));
+        let dir =
+            std::env::temp_dir().join(format!("tico-mailkey-{}", uuid::Uuid::new_v4().simple()));
         std::fs::create_dir_all(dir.join("state-old")).unwrap();
-        std::fs::set_permissions(dir.join("state-old"), std::fs::Permissions::from_mode(0o700)).unwrap();
+        std::fs::set_permissions(
+            dir.join("state-old"),
+            std::fs::Permissions::from_mode(0o700),
+        )
+        .unwrap();
         private_file(&dir.join("state-old").join(FILE), "{\"key\": 1}");
-        let config = registration(&dir, json!({"runner_id": "new", "operator": "op-1", "url": "https://t.example"}));
-        private_file(&dir.join("runner.json.stale"), &json!({"runner_id": "old", "operator": "op-2", "url": "https://t.example"}).to_string());
-        assert!(!carry_protected(&config), "another operator's registration is never a source");
-        private_file(&dir.join("runner.json.stale"), &json!({"runner_id": "old", "operator": "op-1", "url": "https://t.example"}).to_string());
+        let config = registration(
+            &dir,
+            json!({"runner_id": "new", "operator": "op-1", "url": "https://t.example"}),
+        );
+        private_file(
+            &dir.join("runner.json.stale"),
+            &json!({"runner_id": "old", "operator": "op-2", "url": "https://t.example"})
+                .to_string(),
+        );
+        assert!(
+            !carry_protected(&config),
+            "another operator's registration is never a source"
+        );
+        private_file(
+            &dir.join("runner.json.stale"),
+            &json!({"runner_id": "old", "operator": "op-1", "url": "https://t.example"})
+                .to_string(),
+        );
         assert!(carry_protected(&config));
         let carried = dir.join("state-new").join(FILE);
         assert_eq!(std::fs::read_to_string(&carried).unwrap(), "{\"key\": 1}");
-        assert_eq!(std::fs::metadata(&carried).unwrap().permissions().mode() & 0o777, 0o600);
-        assert!(dir.join("state-old").join(FILE).exists(), "the old key stays for a rollback");
+        assert_eq!(
+            std::fs::metadata(&carried).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+        assert!(
+            dir.join("state-old").join(FILE).exists(),
+            "the old key stays for a rollback"
+        );
         std::fs::remove_file(&carried).unwrap();
-        assert!(!carry_protected(&config), "a key deleted after the carry stays deleted");
+        assert!(
+            !carry_protected(&config),
+            "a key deleted after the carry stays deleted"
+        );
         assert!(!dir.join("state-new").join(FILE).exists());
-        assert_eq!(std::fs::read_dir(dir.join("state-new")).unwrap().count(), 2, "only the two markers, no temporary file");
+        assert_eq!(
+            std::fs::read_dir(dir.join("state-new")).unwrap().count(),
+            2,
+            "only the two markers, no temporary file"
+        );
         std::fs::remove_dir_all(dir).ok();
     }
 
     #[test]
     fn connected_account_grants_follow_a_re_enrollment_beside_the_key() {
-        let dir = std::env::temp_dir().join(format!("tico-grants-{}", uuid::Uuid::new_v4().simple()));
+        let dir =
+            std::env::temp_dir().join(format!("tico-grants-{}", uuid::Uuid::new_v4().simple()));
         std::fs::create_dir_all(dir.join("state-old")).unwrap();
-        std::fs::set_permissions(dir.join("state-old"), std::fs::Permissions::from_mode(0o700)).unwrap();
+        std::fs::set_permissions(
+            dir.join("state-old"),
+            std::fs::Permissions::from_mode(0o700),
+        )
+        .unwrap();
         private_file(&dir.join("state-old").join(GRANTS), "{\"grants\": {}}");
-        let config = registration(&dir, json!({"runner_id": "new", "operator": "op-1", "url": "https://t.example"}));
-        private_file(&dir.join("runner.json.stale"), &json!({"runner_id": "old", "operator": "op-1", "url": "https://t.example"}).to_string());
-        assert!(carry_protected(&config), "grants alone are carried: no service-account key is needed");
+        let config = registration(
+            &dir,
+            json!({"runner_id": "new", "operator": "op-1", "url": "https://t.example"}),
+        );
+        private_file(
+            &dir.join("runner.json.stale"),
+            &json!({"runner_id": "old", "operator": "op-1", "url": "https://t.example"})
+                .to_string(),
+        );
+        assert!(
+            carry_protected(&config),
+            "grants alone are carried: no service-account key is needed"
+        );
         let carried = dir.join("state-new").join(GRANTS);
-        assert_eq!(std::fs::read_to_string(&carried).unwrap(), "{\"grants\": {}}");
-        assert_eq!(std::fs::metadata(&carried).unwrap().permissions().mode() & 0o777, 0o600);
+        assert_eq!(
+            std::fs::read_to_string(&carried).unwrap(),
+            "{\"grants\": {}}"
+        );
+        assert_eq!(
+            std::fs::metadata(&carried).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
         assert!(!dir.join("state-new").join(FILE).exists());
         assert!(!carry_protected(&config), "once per registration");
         std::fs::remove_dir_all(dir).ok();
@@ -416,42 +584,132 @@ mod tests {
 
     #[test]
     fn a_stale_registration_others_could_read_is_not_trusted() {
-        let dir = std::env::temp_dir().join(format!("tico-mailkey-{}", uuid::Uuid::new_v4().simple()));
+        let dir =
+            std::env::temp_dir().join(format!("tico-mailkey-{}", uuid::Uuid::new_v4().simple()));
         std::fs::create_dir_all(dir.join("state-old")).unwrap();
-        std::fs::set_permissions(dir.join("state-old"), std::fs::Permissions::from_mode(0o700)).unwrap();
+        std::fs::set_permissions(
+            dir.join("state-old"),
+            std::fs::Permissions::from_mode(0o700),
+        )
+        .unwrap();
         private_file(&dir.join("state-old").join(FILE), "k");
-        let config = registration(&dir, json!({"runner_id": "new", "operator": "op-1", "url": "u"}));
-        private_file(&dir.join("runner.json.stale"), &json!({"runner_id": "old", "operator": "op-1", "url": "u"}).to_string());
-        std::fs::set_permissions(dir.join("runner.json.stale"), std::fs::Permissions::from_mode(0o644)).unwrap();
+        let config = registration(
+            &dir,
+            json!({"runner_id": "new", "operator": "op-1", "url": "u"}),
+        );
+        private_file(
+            &dir.join("runner.json.stale"),
+            &json!({"runner_id": "old", "operator": "op-1", "url": "u"}).to_string(),
+        );
+        std::fs::set_permissions(
+            dir.join("runner.json.stale"),
+            std::fs::Permissions::from_mode(0o644),
+        )
+        .unwrap();
         assert!(!carry_protected(&config));
-        std::fs::set_permissions(dir.join("runner.json.stale"), std::fs::Permissions::from_mode(0o600)).unwrap();
-        std::fs::set_permissions(dir.join("state-old").join(FILE), std::fs::Permissions::from_mode(0o640)).unwrap();
-        assert!(!carry_protected(&config), "a key others could read is not carried");
-        assert!(!dir.join("state-new").join(".mail-key-carried").exists(), "and it stays retryable");
+        std::fs::set_permissions(
+            dir.join("runner.json.stale"),
+            std::fs::Permissions::from_mode(0o600),
+        )
+        .unwrap();
+        std::fs::set_permissions(
+            dir.join("state-old").join(FILE),
+            std::fs::Permissions::from_mode(0o640),
+        )
+        .unwrap();
+        assert!(
+            !carry_protected(&config),
+            "a key others could read is not carried"
+        );
+        assert!(
+            !dir.join("state-new").join(".mail-key-carried").exists(),
+            "and it stays retryable"
+        );
         std::fs::remove_dir_all(dir).ok();
+    }
+
+    /// The one stub `mail.sh` the answer tests share. MINT is set once per process, so every test sees this script and
+    /// this key path, and no file is ever created at that path: a computer with no key file.
+    fn stub() -> &'static (PathBuf, PathBuf) {
+        static STUB: OnceLock<(PathBuf, PathBuf)> = OnceLock::new();
+        STUB.get_or_init(|| {
+            let dir = std::env::temp_dir().join(format!("tico-mint-{}", uuid::Uuid::new_v4().simple()));
+            std::fs::create_dir_all(&dir).unwrap();
+            let script = dir.join("mail.sh");
+            crate::util::write_script(&script, "#!/bin/sh\n[ -z \"$HUB_TOKEN\" ] || exit 9\n[ \"$TICO_GOOGLE_BROKER_URL $TICO_GOOGLE_BROKER_AUTH\" = \"https://t.example runner-token\" ] || exit 8\ncase \"$3\" in ben@*) s=', \"scopes\": [\"gmail.readonly\"]';; *) s='';; esac\nprintf '{\"token\": \"ya29.%s-%s\", \"expiry\": \"soon\", \"key\": \"%s\"%s}' \"$3\" \"$5\" \"$GOOGLE_SA_KEY\" \"$s\"\n");
+            // The server that refreshes a Connect Google grant reaches the CLI; the hub token never does.
+            let broker = Some(("https://t.example".to_string(), "runner-token".to_string()));
+            let key = dir.join(FILE);
+            let _ = MINT.set(Mint { script, key: key.clone(), broker });
+            (dir, key)
+        })
+    }
+
+    #[tokio::test]
+    async fn a_computer_with_no_key_file_still_answers_the_socket_with_a_token() {
+        let (_dir, key) = stub();
+        // The mint runs the mail CLI, which asks the server for a Workspace token when this computer has no key file
+        // (connectors/mail/auth.py). The socket must not gate on that file.
+        assert!(!key.exists(), "this computer holds no Google key");
+        let allowed: BTreeSet<String> = mailboxes(&json!({"mailboxes": ["ana@acme.example"]}));
+        let got = answer(
+            &allowed,
+            &json!({"service": "gmail", "mailbox": "ana@acme.example"}),
+        )
+        .await;
+        assert_eq!(
+            got,
+            json!({"token": "ya29.ana@acme.example-gmail", "expiry": "soon"})
+        );
     }
 
     #[tokio::test]
     async fn mail_answers_name_the_mailboxes_and_mint_only_for_one_of_them() {
-        let dir = std::env::temp_dir().join(format!("tico-mint-{}", uuid::Uuid::new_v4().simple()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let script = dir.join("mail.sh");
-        crate::util::write_script(&script, "#!/bin/sh\n[ -z \"$HUB_TOKEN\" ] || exit 9\n[ \"$TICO_GOOGLE_BROKER_URL $TICO_GOOGLE_BROKER_AUTH\" = \"https://t.example runner-token\" ] || exit 8\ncase \"$3\" in ben@*) s=', \"scopes\": [\"gmail.readonly\"]';; *) s='';; esac\nprintf '{\"token\": \"ya29.%s-%s\", \"expiry\": \"soon\", \"key\": \"%s\"%s}' \"$3\" \"$5\" \"$GOOGLE_SA_KEY\" \"$s\"\n");
-        // The server that refreshes a Connect Google grant reaches the CLI; the hub token never does.
-        let broker = Some(("https://t.example".to_string(), "runner-token".to_string()));
-        let _ = MINT.set(Mint { script, key: dir.join(FILE), broker });
-        let allowed: BTreeSet<String> = mailboxes(&json!({"mailboxes": ["Ana@Acme.example", "ben@acme.example"]}));
-        assert_eq!(answer(&allowed, &json!({"service": "drive", "mailbox": "ana@acme.example"})).await, json!({"error": "no mail access"}));
-        assert_eq!(answer(&BTreeSet::new(), &json!({"service": "gmail", "mailbox": "x@y"})).await, json!({"error": "no mailbox", "mailboxes": []}));
+        stub();
+        let allowed: BTreeSet<String> =
+            mailboxes(&json!({"mailboxes": ["Ana@Acme.example", "ben@acme.example"]}));
         assert_eq!(
-            answer(&allowed, &json!({"service": "gmail", "mailbox": "eve@acme.example"})).await,
+            answer(
+                &allowed,
+                &json!({"service": "drive", "mailbox": "ana@acme.example"})
+            )
+            .await,
+            json!({"error": "no mail access"})
+        );
+        assert_eq!(
+            answer(
+                &BTreeSet::new(),
+                &json!({"service": "gmail", "mailbox": "x@y"})
+            )
+            .await,
+            json!({"error": "no mailbox", "mailboxes": []})
+        );
+        assert_eq!(
+            answer(
+                &allowed,
+                &json!({"service": "gmail", "mailbox": "eve@acme.example"})
+            )
+            .await,
             json!({"error": "not this bot's mailbox", "mailboxes": ["ana@acme.example", "ben@acme.example"]})
         );
-        let got = answer(&allowed, &json!({"service": "calendar", "mailbox": " ANA@acme.example "})).await;
-        assert_eq!(got, json!({"token": "ya29.ana@acme.example-calendar", "expiry": "soon"}));
-        let got = answer(&allowed, &json!({"service": "gmail", "mailbox": "ben@acme.example"})).await;
-        assert_eq!(got, json!({"token": "ya29.ben@acme.example-gmail", "expiry": "soon", "scopes": ["gmail.readonly"]}),
-                   "a connected account's granted scopes reach the turn");
-        std::fs::remove_dir_all(dir).ok();
+        let got = answer(
+            &allowed,
+            &json!({"service": "calendar", "mailbox": " ANA@acme.example "}),
+        )
+        .await;
+        assert_eq!(
+            got,
+            json!({"token": "ya29.ana@acme.example-calendar", "expiry": "soon"})
+        );
+        let got = answer(
+            &allowed,
+            &json!({"service": "gmail", "mailbox": "ben@acme.example"}),
+        )
+        .await;
+        assert_eq!(
+            got,
+            json!({"token": "ya29.ben@acme.example-gmail", "expiry": "soon", "scopes": ["gmail.readonly"]}),
+            "a connected account's granted scopes reach the turn"
+        );
     }
 }

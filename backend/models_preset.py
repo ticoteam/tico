@@ -2,7 +2,7 @@
 
 Four choices, kept on the providers record (backend/providers.py) as `preset`:
 - `subscriptions-gateway` (recommended): bots' main work runs on the person's Claude and ChatGPT subscriptions; until
-  a bot's runtime is signed in on its computer, its turns run on its department's Medium tier through the Tico AI Gateway, and a
+  a bot's runtime is signed in on its computer, its turns run on the Medium tier through the Tico AI Gateway, and a
   used-up subscription falls back to the Gateway last.
 - `subscriptions`: subscriptions only; the Gateway is never spent for a bot that does not name a Tico model.
 - `gateway`: the Gateway only; a used-up login falls back to the Gateway last as well.
@@ -13,17 +13,19 @@ A Tico model runs only on a computer that runs bots as their own user (runner-rs
 reports it as `isolated` in its readiness. A runner that does not say so counts as not isolated, so no Gateway turn is
 handed to it and the bot waits for a sign-in instead (it never fails for it).
 """
+
 import json
 
 from . import gateway_tiers
+from . import bot_settings as BS
 
 RECOMMENDED = "subscriptions-gateway"
 PRESETS = (RECOMMENDED, "subscriptions", "gateway", "own-keys")
 GATEWAY_PRESETS = frozenset((RECOMMENDED, "gateway"))
-# What a bot's main work runs on before its subscription is signed in, and the Gateway fallback: its department's tier at
-# the current version, pinned (backend/gateway_tiers.py `bot_model`), so a new price is a deliberate pick. A bot's
-# `gateway:` block in bot.yaml (`level`, `fast`) changes the tier; the company-wide row names General Medium.
-WAITING_MODEL = "tico-general-medium-1.0"
+# What a bot's main work runs on before its subscription is signed in, and the Gateway fallback: Medium at the current
+# version, pinned (backend/gateway_tiers.py `bot_model`), so a new price is a deliberate pick. A bot's `gateway:` block in
+# bot.yaml (`level`, `fast`) changes the tier; the company-wide row names Medium.
+WAITING_MODEL = "tico-medium-1.0"
 GATEWAY_RUNTIME = "pi"
 # The runtimes a person signs in to with a subscription (Settings > Computers "Sign in").
 SUBSCRIPTION_RUNTIMES = frozenset(("claude", "codex"))
@@ -60,6 +62,7 @@ def signed_in(ready, runtime):
 
 def gateway_on(record):
     from .providers import PROVIDER_BY_ID
+
     return any((PROVIDER_BY_ID.get(name) or {}).get("gateway") for name in record.get("enabled") or ())
 
 
@@ -68,33 +71,42 @@ def waiting(record, ready, config):
     subscription is not signed in on this computer yet: only under the recommended choice, with the Gateway connected,
     on an isolated computer, for a bot on a subscription runtime that names no Tico model of its own."""
     from .gateway_connection import is_tico
+
     config = config if isinstance(config, dict) else {}
     runtime = str(config.get("runtime") or "")
-    return (of(record) == RECOMMENDED and gateway_on(record) and runs_gateway(ready)
-            and runtime in SUBSCRIPTION_RUNTIMES and not is_tico(config.get("model"))
-            and not signed_in(ready, runtime))
+    return (
+        of(record) == RECOMMENDED
+        and gateway_on(record)
+        and runs_gateway(ready)
+        and runtime in SUBSCRIPTION_RUNTIMES
+        and not is_tico(config.get("model"))
+        and not signed_in(ready, runtime)
+    )
 
 
 def pick(model=None):
     """The Gateway model a waiting or fallback turn runs on: `model` (an id, or a function that finds it only when it
-    is needed), else the company-wide General Medium."""
+    is needed), else the company-wide Medium."""
     model = model() if callable(model) else model
     return model or gateway_tiers.default_model()
 
 
 def model_for_bot(c, settings, bot, config):
-    """The Gateway model for `bot` when nothing named one: the tier of its org-chart department (Medium unless its
-    bot.yaml `gateway:` says otherwise) at the current version. A bot in no department is General."""
-    from .task_manager import Chart
-    department = gateway_tiers.department_of(Chart(c, settings).of("bot:" + bot))
-    return gateway_tiers.bot_model(department, (config or {}).get("gateway"))
+    """The Gateway model for `bot` when nothing named one: Medium unless its bot.yaml `gateway:` names a level or Fast,
+    at the current version. `c`, `settings` and `bot` are kept for the callers; the org chart no longer picks it."""
+    return gateway_tiers.bot_model((config or {}).get("gateway"))
 
 
 def on_gateway(config, model=None):
     """`config` moved to the Gateway for one turn. The bot's own choice is untouched: once it is signed in, the next
     claim runs it there again, with no restart."""
-    return {**config, "runtime": GATEWAY_RUNTIME, "harness": GATEWAY_RUNTIME, "model": pick(model),
-            "waiting_for_sign_in": str(config.get("runtime") or "")}
+    return {
+        **config,
+        "runtime": GATEWAY_RUNTIME,
+        "harness": GATEWAY_RUNTIME,
+        "model": pick(model),
+        "waiting_for_sign_in": str(config.get("runtime") or ""),
+    }
 
 
 def main_config(record, ready, config, model=None):
@@ -106,9 +118,16 @@ def with_gateway_fallback(record, ready, config, model=None):
     """`config` with the Gateway as the last fallback when the choice spends it, the computer can run it and the bot
     names no fallback of its own; the runner tries the company's other signed-in providers first."""
     from .gateway_connection import is_tico
+
     fallback = config.get("fallback") if isinstance(config.get("fallback"), dict) else {}
-    if (not spends_gateway(record) or not record.get("auto_fallback") or not gateway_on(record)
-            or not runs_gateway(ready) or fallback or is_tico(config.get("model"))):
+    if (
+        not spends_gateway(record)
+        or not record.get("auto_fallback")
+        or not gateway_on(record)
+        or not runs_gateway(ready)
+        or fallback
+        or is_tico(config.get("model"))
+    ):
         return config
     return {**config, "gateway_fallback": pick(model)}
 
@@ -145,16 +164,20 @@ def gateway_line(c, bot, ready, settings=None, config=None):
     bot's own, filled from the company's choice, when not given. A computer without the Gateway's own runtime holds
     the turn (as the claim does)."""
     from .providers import fill, load
+
     if ((ready.get("runtimes") or {}).get(GATEWAY_RUNTIME) or {}).get("installed") is not True:
         return ""
     record = load(c, settings)
     if config is None:
-        row = c.execute("SELECT config FROM bot_config WHERE bot=?", (bot,)).fetchone()
+        row = c.execute(BS.ONE_SQL, (bot,)).fetchone()
         config = fill(record, json.loads(row[0] or "{}") if row else {})
     if not waiting(record, ready, config):
         return ""
-    return "Using Tico AI Gateway; sign in to " + LOGIN_NAMES.get(config["runtime"], config["runtime"]) \
+    return (
+        "Using Tico AI Gateway; sign in to "
+        + LOGIN_NAMES.get(config["runtime"], config["runtime"])
         + " to use your subscription"
+    )
 
 
 def as_served(c, bot, ready, check, settings=None):
@@ -162,8 +185,12 @@ def as_served(c, bot, ready, check, settings=None):
     because its subscription is not signed in there, the missing sign-in is not a problem and `gateway` says what
     runs instead. What the claim still holds such a turn for (its checkout, its settings, the Gateway's own runtime)
     keeps the row as reported. The route itself is chosen at the claim, never here."""
-    if (not isinstance(check, dict) or check.get("ready") is True or check.get("repository_present") is not True
-            or check.get("configuration_valid") is not True):
+    if (
+        not isinstance(check, dict)
+        or check.get("ready") is True
+        or check.get("repository_present") is not True
+        or check.get("configuration_valid") is not True
+    ):
         return check
     line = gateway_line(c, bot, ready, settings)
     return {**check, "ready": True, "problems": [], "gateway": line} if line else check
@@ -172,22 +199,32 @@ def as_served(c, bot, ready, check, settings=None):
 def computer_of(c, bot):
     """The readiness document of the computer `bot` is on, or {}."""
     from .store import readiness_document
-    row = c.execute("SELECT r.readiness FROM assignments a JOIN runners r ON r.id=a.runner_id "
-                    "WHERE a.bot=? AND r.revoked_at IS NULL", (bot,)).fetchone()
+
+    row = c.execute(
+        "SELECT r.readiness FROM assignments a JOIN runners_with_state r ON r.id=a.runner_id "
+        "WHERE a.bot=? AND r.revoked_at IS NULL",
+        (bot,),
+    ).fetchone()
     return readiness_document(row[0]) if row else {}
 
 
 def runnable_fallbacks(record, ready, rows):
     """The company's fallback rows a bot on the computer `ready` can use: the Gateway row only where it can run it."""
-    return [row for row in rows if not gateway_tiers.resolve(row.get("model")) or row.get("runtime") != GATEWAY_RUNTIME
-            or runs_gateway(ready)]
+    return [
+        row
+        for row in rows
+        if not gateway_tiers.resolve(row.get("model")) or row.get("runtime") != GATEWAY_RUNTIME or runs_gateway(ready)
+    ]
 
 
 SIGN_IN_TITLE = "Sign in to Claude and ChatGPT, or add API keys"
-SIGN_IN_LINE = ("Sign in with your own Claude and ChatGPT accounts in Settings > Computers. "
-                "Don't share one login across your team.")
-NOT_ISOLATED_LINE = ("This computer can't run Gateway work without the Docker runner; sign in to Claude and ChatGPT "
-                     "or add API keys. Until then its bots wait.")
+SIGN_IN_LINE = (
+    "Sign in with your own Claude and ChatGPT accounts in Settings > Computers. Don't share one login across your team."
+)
+NOT_ISOLATED_LINE = (
+    "This computer can't run Gateway work without the Docker runner; sign in to Claude and ChatGPT "
+    "or add API keys. Until then its bots wait."
+)
 
 
 def card(c, settings=None):
@@ -196,14 +233,26 @@ def card(c, settings=None):
     It says so plainly when no computer can run Gateway work meanwhile, so bots that wait are not silently stuck."""
     from .providers import load
     from .store import readiness_document
+
     record = load(c, settings)
     if of(record) != RECOMMENDED:
         return None
-    documents = [readiness_document(row[0]) for row in
-                 c.execute("SELECT readiness FROM runners WHERE revoked_at IS NULL ORDER BY id").fetchall()]
+    documents = [
+        readiness_document(row[0])
+        for row in c.execute("SELECT readiness FROM runners_with_state WHERE revoked_at IS NULL ORDER BY id").fetchall()
+    ]
     if all(any(signed_in(d, runtime) for d in documents) for runtime in SUBSCRIPTION_RUNTIMES):
         return None
     lines = [SIGN_IN_LINE] + ([] if any(runs_gateway(d) for d in documents) else [NOT_ISOLATED_LINE])
-    return {"kind": "setup", "id": "setup:sign-in", "title": SIGN_IN_TITLE, "first_line": " ".join(lines),
-            "created_at": record.get("updated_at") or "", "requester_id": None, "origin_actor": None, "from_person": None,
-            "link": "#/settings", "link_label": "Open Settings > Computers"}
+    return {
+        "kind": "setup",
+        "id": "setup:sign-in",
+        "title": SIGN_IN_TITLE,
+        "first_line": " ".join(lines),
+        "created_at": record.get("updated_at") or "",
+        "requester_id": None,
+        "origin_actor": None,
+        "from_person": None,
+        "link": "#/settings",
+        "link_label": "Open Settings > Computers",
+    }

@@ -39,6 +39,6 @@ row, never recomputed by hand. Add confirmed patterns to `knowledge/vendors.md` 
 
 ## 5. Finish
 
-Attach the table to the task. `hub task ask <id>` once with the numbered questions. Commit, then
+Attach the table to the task. `hub task question "<question>" --on <person> --parent <id>` once with the numbered questions. Commit, then
 `hub task update <id> --status done --note`: rows worked, rows proposed, rows asked about, and any
 export you could not read. When the file would not open, say so; an unread export is not an empty one.

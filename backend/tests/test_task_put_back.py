@@ -1,4 +1,5 @@
 """Owners can return work to the queue without an immediate automatic restart."""
+
 import pytest
 
 from backend import auto_tasks
@@ -10,8 +11,13 @@ from backend.tests.test_task_lanes import task_bot
 
 def update(api, task, token, status, note=None, expected=200):
     version = get(api, 'tasks/' + task['id'])['task']['version']
-    return post(api, 'tasks/' + task['id'], {'version': version, 'status': status,
-                **({'note': note} if note is not None else {})}, token, expected=expected)
+    return post(
+        api,
+        'tasks/' + task['id'],
+        {'version': version, 'status': status, **({'note': note} if note is not None else {})},
+        token,
+        expected=expected,
+    )
 
 
 def settle(api, machine, attempt):
@@ -35,14 +41,14 @@ def test_owner_put_back_requires_note_and_holds_queued_and_missing_starts_for_an
         H._wake(c, row, row['owner_id'], 'Start assigned task', {'auto_start': True})
     monkeypatch.setattr(H, 'now', lambda: H.shift(returned, minutes=59))
     with api.app.state.store.transaction() as c:
-        c.execute('UPDATE runners SET last_seen_at=?', (H.now(),))
+        c.execute('UPDATE runner_states SET last_seen_at=?', (H.now(),))
     assert take(api, machine) is None
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE jobs SET state='canceled' WHERE state='queued'")
     assert take(api, machine) is None
     monkeypatch.setattr(H, 'now', lambda: H.shift(returned, minutes=60))
     with api.app.state.store.transaction() as c:
-        c.execute('UPDATE runners SET last_seen_at=?', (H.now(),))
+        c.execute('UPDATE runner_states SET last_seen_at=?', (H.now(),))
     assert take(api, machine)['task']['id'] == task['id']
 
 
@@ -97,7 +103,7 @@ def test_linking_a_blocker_reverses_only_an_automatic_start_before_a_finished_ru
     blocker = post(api, 'tasks', {'owner': 'ana', 'title': 'Finish prerequisite', 'body': 'Finish it.'})
     with api.app.state.store.read() as c:
         jobs = c.execute('SELECT count(*) FROM jobs').fetchone()[0]
-        turns = c.execute('SELECT count(*) FROM turns').fetchone()[0]
+        turns = c.execute('SELECT count(*) FROM attempts').fetchone()[0]
     for task in tasks:
         post(api, 'tasks/' + task['id'] + '/relations', {'kind': 'blocked_by', 'task': blocker['id']})
     rows = [get(api, 'tasks/' + t['id'])['task'] for t in tasks]
@@ -105,7 +111,7 @@ def test_linking_a_blocker_reverses_only_an_automatic_start_before_a_finished_ru
     assert rows[2]['step']['name'] == 'On Deck'
     with api.app.state.store.read() as c:
         assert c.execute('SELECT count(*) FROM jobs').fetchone()[0] == jobs
-        assert c.execute('SELECT count(*) FROM turns').fetchone()[0] == turns
+        assert c.execute('SELECT count(*) FROM attempts').fetchone()[0] == turns
         assert auto_tasks.waiting(c, H.task(c, tasks[2]['id']))
 
 
@@ -114,8 +120,13 @@ def test_done_task_question_refusal_gives_owner_command_and_nonowner_route(api):
     [task] = deck(api, 1)
     attempt = take(api, machine)
     update(api, task, attempt['token'], 'done', 'Finished the requested change.')
-    result = post(api, 'tasks/' + task['id'] + '/ask', {'text': 'Which date should I use?'},
-                  attempt['token'], expected=422)
+    result = post(
+        api,
+        'task-questions',
+        {'on': 'human:ana', 'question': 'Which date should I use?', 'parent': task['id']},
+        attempt['token'],
+        expected=422,
+    )
     assert f"hub task update {task['id']} --status doing" in result['error']['detail']
     assert 'or file a new task' in result['error']['detail']
     with api.app.state.store.transaction() as c:
@@ -137,12 +148,32 @@ def test_done_task_question_refusal_gives_owner_command_and_nonowner_route(api):
 
 def test_dev_return_prefers_on_deck_over_backlog_and_owner_can_reopen_steps_only_done(api):
     machine = task_bot(api, lanes=True)
-    typ = post(api, 'task-types', {'name': 'Dev tickets', 'steps_only': True, 'steps': [
-        {'name': 'Backlog', 'status': 'open'}, {'name': 'On Deck', 'status': 'open'},
-        {'name': 'In Progress', 'status': 'doing'}, {'name': 'Review 1', 'status': 'review'},
-        {'name': 'Done', 'status': 'done'}]})['type']
-    task = post(api, 'tasks', {'owner': 'ops', 'title': 'Build requested feature',
-                             'body': 'Build the requested feature.', 'type': typ['id'], 'step': 'On Deck'})
+    typ = post(
+        api,
+        'task-types',
+        {
+            'name': 'Dev tickets',
+            'steps_only': True,
+            'steps': [
+                {'name': 'Backlog', 'status': 'open'},
+                {'name': 'On Deck', 'status': 'open'},
+                {'name': 'In Progress', 'status': 'doing'},
+                {'name': 'Review 1', 'status': 'review'},
+                {'name': 'Done', 'status': 'done'},
+            ],
+        },
+    )['type']
+    task = post(
+        api,
+        'tasks',
+        {
+            'owner': 'ops',
+            'title': 'Build requested feature',
+            'body': 'Build the requested feature.',
+            'type': typ['id'],
+            'step': 'On Deck',
+        },
+    )
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE jobs SET state='canceled'")
     attempt = take(api, machine)
@@ -163,12 +194,32 @@ def test_dev_return_prefers_on_deck_over_backlog_and_owner_can_reopen_steps_only
 @pytest.mark.parametrize('release', ['manual', 'remove', 'finish'])
 def test_put_back_from_blocked_keeps_queue_destination_and_hold(api, monkeypatch, release):
     from backend import task_relations as TR
+
     machine = task_bot(api, lanes=True)
-    typ = post(api, 'task-types', {'name': 'Dev tickets', 'steps': [
-        {'name': 'Backlog', 'status': 'open'}, {'name': 'On Deck', 'status': 'open'},
-        {'name': 'In Progress', 'status': 'doing'}, {'name': 'Done', 'status': 'done'}]})['type']
-    task = post(api, 'tasks', {'owner': 'ops', 'title': 'Build the queued feature',
-                             'body': 'Build it.', 'type': typ['id'], 'step': 'In Progress'})
+    typ = post(
+        api,
+        'task-types',
+        {
+            'name': 'Dev tickets',
+            'steps': [
+                {'name': 'Backlog', 'status': 'open'},
+                {'name': 'On Deck', 'status': 'open'},
+                {'name': 'In Progress', 'status': 'doing'},
+                {'name': 'Done', 'status': 'done'},
+            ],
+        },
+    )['type']
+    task = post(
+        api,
+        'tasks',
+        {
+            'owner': 'ops',
+            'title': 'Build the queued feature',
+            'body': 'Build it.',
+            'type': typ['id'],
+            'step': 'In Progress',
+        },
+    )
     blocker = post(api, 'tasks', {'owner': 'ana', 'title': 'Supply a dependency', 'body': 'Supply it.'})
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE jobs SET state='canceled'")
@@ -203,27 +254,45 @@ def test_put_back_from_blocked_keeps_queue_destination_and_hold(api, monkeypatch
     else:
         monkeypatch.setattr(H, 'now', lambda: H.shift(returned, minutes=59))
         with api.app.state.store.transaction() as c:
-            c.execute('UPDATE runners SET last_seen_at=?', (H.now(),))
+            c.execute('UPDATE runner_states SET last_seen_at=?', (H.now(),))
         assert take(api, machine) is None
         monkeypatch.setattr(H, 'now', lambda: H.shift(returned, minutes=60))
         with api.app.state.store.transaction() as c:
-            c.execute('UPDATE runners SET last_seen_at=?', (H.now(),))
+            c.execute('UPDATE runner_states SET last_seen_at=?', (H.now(),))
         assert take(api, machine)['task']['id'] == task['id']
 
 
 def test_auto_start_back_off_on_engineering_board_keeps_queue_resume_without_a_turn(api):
     machine = task_bot(api, lanes=True)
-    typ = post(api, 'task-types', {'name': 'Dev tickets', 'steps': [
-        {'name': 'On Deck', 'status': 'open'}, {'name': 'In Progress', 'status': 'doing'},
-        {'name': 'Done', 'status': 'done'}]})['type']
-    task = post(api, 'tasks', {'owner': 'ops', 'title': 'Build the dependent feature',
-                             'body': 'Build it.', 'type': typ['id'], 'step': 'On Deck'})
+    typ = post(
+        api,
+        'task-types',
+        {
+            'name': 'Dev tickets',
+            'steps': [
+                {'name': 'On Deck', 'status': 'open'},
+                {'name': 'In Progress', 'status': 'doing'},
+                {'name': 'Done', 'status': 'done'},
+            ],
+        },
+    )['type']
+    task = post(
+        api,
+        'tasks',
+        {
+            'owner': 'ops',
+            'title': 'Build the dependent feature',
+            'body': 'Build it.',
+            'type': typ['id'],
+            'step': 'On Deck',
+        },
+    )
     blocker = post(api, 'tasks', {'owner': 'ana', 'title': 'Prepare the dependency', 'body': 'Prepare it.'})
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE jobs SET state='canceled'")
     assert take(api, machine)['task']['id'] == task['id']
     with api.app.state.store.read() as c:
-        counts = [c.execute('SELECT count(*) FROM ' + table).fetchone()[0] for table in ('jobs', 'turns')]
+        counts = [c.execute('SELECT count(*) FROM ' + table).fetchone()[0] for table in ('jobs', 'attempts')]
     post(api, 'tasks/' + task['id'] + '/relations', {'kind': 'blocked_by', 'task': blocker['id']})
     result = get(api, 'tasks/' + task['id'])['task']
     assert result['status'] == 'waiting' and result['step']['name'] == 'On Deck'
@@ -231,4 +300,4 @@ def test_auto_start_back_off_on_engineering_board_keeps_queue_resume_without_a_t
         row = H.task(c, task['id'])
         resume = H._one(c, 'SELECT name FROM task_steps WHERE id=?', (row['blocked_from_step'],))
         assert resume['name'] == 'On Deck' and row['blocked_from_status'] == 'open'
-        assert [c.execute('SELECT count(*) FROM ' + table).fetchone()[0] for table in ('jobs', 'turns')] == counts
+        assert [c.execute('SELECT count(*) FROM ' + table).fetchone()[0] for table in ('jobs', 'attempts')] == counts

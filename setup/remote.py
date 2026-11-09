@@ -1,4 +1,5 @@
 """Doing things on the server: a command runner (SSH or SSM), the bootstrap script, and the install steps."""
+
 from __future__ import annotations
 
 import base64
@@ -64,16 +65,26 @@ class SSMShell:
                 return Result(124, "", "timed out waiting for Systems Manager")
             try:
                 online = not ready_timeout or any(
-                    row.get("PingStatus") == "Online" for row in self.ssm.describe_instance_information(
-                        Filters=[{"Key": "InstanceIds", "Values": [self.iid]}])["InstanceInformationList"])
+                    row.get("PingStatus") == "Online"
+                    for row in self.ssm.describe_instance_information(
+                        Filters=[{"Key": "InstanceIds", "Values": [self.iid]}]
+                    )["InstanceInformationList"]
+                )
                 if online:
-                    sent = self.ssm.send_command(InstanceIds=[self.iid], DocumentName="AWS-RunShellScript",
-                                                 Parameters={"commands": [cmd]}, TimeoutSeconds=900)
+                    sent = self.ssm.send_command(
+                        InstanceIds=[self.iid],
+                        DocumentName="AWS-RunShellScript",
+                        Parameters={"commands": [cmd]},
+                        TimeoutSeconds=900,
+                    )
                     break
             except Exception as exc:
                 # Online can precede Run Command registration. Retry only this pre-acceptance refusal,
                 # never a failed/uncertain invocation, an explicit access denial, or a transport failure.
-                if not ready_timeout or getattr(exc, "response", {}).get("Error", {}).get("Code") != "InvalidInstanceId":
+                if (
+                    not ready_timeout
+                    or getattr(exc, "response", {}).get("Error", {}).get("Code") != "InvalidInstanceId"
+                ):
                     raise
             self.sleep(min(5, max(0, deadline - time.monotonic())))
         cid = sent["Command"]["CommandId"]
@@ -99,9 +110,11 @@ def fetch_and_run(url: str, args: str = "") -> str:
     Each failure exits on its own, since under `set -e` a failure on the left of `&&` does not stop the script."""
     u = shlex.quote(url)
     run = f'sh "$f" {args}'.rstrip()
-    return (f'f=$(mktemp) || exit 1; if ! curl -fsSL {u} -o "$f"; then rm -f "$f"; '
-            f'echo "tico-setup: could not download {url}" >&2; exit 1; fi; '
-            f'{run} || {{ rc=$?; rm -f "$f"; exit "$rc"; }}; rm -f "$f"')
+    return (
+        f'f=$(mktemp) || exit 1; if ! curl -fsSL {u} -o "$f"; then rm -f "$f"; '
+        f'echo "tico-setup: could not download {url}" >&2; exit 1; fi; '
+        f'{run} || {{ rc=$?; rm -f "$f"; exit "$rc"; }}; rm -f "$f"'
+    )
 
 
 def _sh(cmd: str, root: bool) -> str:
@@ -126,7 +139,9 @@ class Host:
     def ex(self, cmd: str, what: str, input: bytes | None = None) -> Result:
         res = self.r.run(_sh(cmd, not self.root), input)
         if res.returncode:
-            raise StepFailed(f"{what} failed (exit {res.returncode}): {self.scrub((res.stderr or res.stdout).strip()[-600:])}")
+            raise StepFailed(
+                f"{what} failed (exit {res.returncode}): {self.scrub((res.stderr or res.stdout).strip()[-600:])}"
+            )
         return res
 
     def connect(self) -> None:
@@ -134,11 +149,16 @@ class Host:
         if res.returncode and isinstance(self.r, LocalShell):
             raise StepFailed("Could not run commands on this machine: " + self.scrub(res.stderr.strip()[-400:]))
         if res.returncode:
-            raise StepFailed("Could not connect over SSH: " + self.scrub(res.stderr.strip()[-400:])
-                             + "\nCheck `ssh <host>` works from this terminal with your key or agent.")
+            raise StepFailed(
+                "Could not connect over SSH: "
+                + self.scrub(res.stderr.strip()[-400:])
+                + "\nCheck `ssh <host>` works from this terminal with your key or agent."
+            )
         self.root = res.stdout.strip() == "0"
         if not self.root and self.r.run("sudo -n true").returncode:
-            raise StepFailed("This user cannot run sudo without a password. Use root, or a user with passwordless sudo.")
+            raise StepFailed(
+                "This user cannot run sudo without a password. Use root, or a user with passwordless sudo."
+            )
 
     def docker(self) -> None:
         if self.r.run(_sh(DOCKER_OK, not self.root)).returncode == 0:
@@ -152,9 +172,16 @@ class Host:
         self.ex(f"umask 077; cat > {path}.new && mv {path}.new {path} && chmod 600 {path}", what, data)
 
 
-def ssh_steps(r: Shell, *, env_text: str, compose: bytes | None, compose_url: str,
-              say: Callable[[str], None] = print, scrub: Callable[[str], str] = lambda s: s,
-              company_file_data: str = "") -> list[Step]:
+def ssh_steps(
+    r: Shell,
+    *,
+    env_text: str,
+    compose: bytes | None,
+    compose_url: str,
+    say: Callable[[str], None] = print,
+    scrub: Callable[[str], str] = lambda s: s,
+    company_file_data: str = "",
+) -> list[Step]:
     """Idempotent: each step checks before it changes, so a re-run only does what is missing."""
     d = contract.REMOTE_DIR
     h = Host(r, say, scrub)
@@ -166,15 +193,25 @@ def ssh_steps(r: Shell, *, env_text: str, compose: bytes | None, compose_url: st
             f = f"{d}/{contract.COMPANY_FILE_DIR}/{contract.COMPANY_FILE_NAME}"
             sha = hashlib.sha256(company_file_data.encode("ascii")).hexdigest()
             # The payload travels only on SSH stdin; verify and set the container user's ownership before rename.
-            h.ex(f"umask 077; cat > {f}.new && "
-                 f'test "$(sha256sum {f}.new | cut -d\" \" -f1)" = {sha} && '
-                 f"chown 10001:10001 {f}.new && chmod 600 {f}.new && mv {f}.new {f} "
-                 f"|| {{ rm -f {f}.new; exit 1; }}", "Writing the starter plan", company_file_data.encode("ascii"))
+            h.ex(
+                f"umask 077; cat > {f}.new && "
+                f'test "$(sha256sum {f}.new | cut -d" " -f1)" = {sha} && '
+                f"chown 10001:10001 {f}.new && chmod 600 {f}.new && mv {f}.new {f} "
+                f"|| {{ rm -f {f}.new; exit 1; }}",
+                "Writing the starter plan",
+                company_file_data.encode("ascii"),
+            )
         if compose is not None:
-            h.ex(f"cat > {d}/compose.yaml.new && mv {d}/compose.yaml.new {d}/compose.yaml", "Writing compose.yaml", compose)
+            h.ex(
+                f"cat > {d}/compose.yaml.new && mv {d}/compose.yaml.new {d}/compose.yaml",
+                "Writing compose.yaml",
+                compose,
+            )
         else:
-            h.ex(f"curl -fsSL {shlex.quote(compose_url)} -o {d}/compose.yaml.new && mv {d}/compose.yaml.new {d}/compose.yaml",
-                 "Downloading compose.yaml")
+            h.ex(
+                f"curl -fsSL {shlex.quote(compose_url)} -o {d}/compose.yaml.new && mv {d}/compose.yaml.new {d}/compose.yaml",
+                "Downloading compose.yaml",
+            )
         want = hashlib.sha256(env_text.encode()).hexdigest()
         cur = r.run(_sh(f"sha256sum {d}/.env 2>/dev/null", not h.root)).stdout.split()[:1]
         if cur == [want]:
@@ -185,14 +222,29 @@ def ssh_steps(r: Shell, *, env_text: str, compose: bytes | None, compose_url: st
 
     def up() -> None:
         if company_file_data:
-            h.ex("\n".join(["set -eu", f"cd {d}", "docker compose pull --quiet",
-                             *plan_read_lines(running=False), "docker compose up -d", *plan_read_lines()]),
-                 "Starting Tico with the selected starter plan")
+            h.ex(
+                "\n".join(
+                    [
+                        "set -eu",
+                        f"cd {d}",
+                        "docker compose pull --quiet",
+                        *plan_read_lines(running=False),
+                        "docker compose up -d",
+                        *plan_read_lines(),
+                    ]
+                ),
+                "Starting Tico with the selected starter plan",
+            )
         else:
             h.ex(f"cd {d} && docker compose pull --quiet && docker compose up -d", "docker compose up -d")
 
     return [
-        Step("Check this machine's access (root or sudo)" if isinstance(r, LocalShell) else "Connect over SSH and check sudo", h.connect),
+        Step(
+            "Check this machine's access (root or sudo)"
+            if isinstance(r, LocalShell)
+            else "Connect over SSH and check sudo",
+            h.connect,
+        ),
         Step("Install Docker + Compose if missing", h.docker),
         Step(f"Write {d}/compose.yaml and {d}/.env (mode 0600)", files),
         Step("docker compose pull && docker compose up -d", up),
@@ -205,12 +257,18 @@ def _b64gz(data: bytes) -> str:
 
 def docker_install_lines(os_family: str, need_aws_cli: bool) -> list[str]:
     if os_family == "al2023":
-        return ["dnf install -y docker awscli >/dev/null", "systemctl enable --now docker",
-                "mkdir -p /usr/local/lib/docker/cli-plugins",
-                'curl -fsSL "https://github.com/docker/compose/releases/download/v2.29.7/docker-compose-linux-$(uname -m)"'
-                " -o /usr/local/lib/docker/cli-plugins/docker-compose", "chmod +x /usr/local/lib/docker/cli-plugins/docker-compose"]
-    lines = [f"if ! docker compose version >/dev/null 2>&1; then {fetch_and_run('https://get.docker.com')}; fi",
-             "systemctl enable --now docker"]
+        return [
+            "dnf install -y docker awscli >/dev/null",
+            "systemctl enable --now docker",
+            "mkdir -p /usr/local/lib/docker/cli-plugins",
+            'curl -fsSL "https://github.com/docker/compose/releases/download/v2.29.7/docker-compose-linux-$(uname -m)"'
+            " -o /usr/local/lib/docker/cli-plugins/docker-compose",
+            "chmod +x /usr/local/lib/docker/cli-plugins/docker-compose",
+        ]
+    lines = [
+        f"if ! docker compose version >/dev/null 2>&1; then {fetch_and_run('https://get.docker.com')}; fi",
+        "systemctl enable --now docker",
+    ]
     return lines + (["command -v aws >/dev/null || snap install aws-cli --classic"] if need_aws_cli else [])
 
 
@@ -310,8 +368,17 @@ def selected_runtime(directory):
 '''
 
 
-def bootstrap_script(*, os_family: str, domain: str, front_door: str, compose: bytes | None, compose_url: str,
-                     env_b64: str = "", env_param: tuple[str, str] | None = None, wait_for_ip: str = "") -> str:
+def bootstrap_script(
+    *,
+    os_family: str,
+    domain: str,
+    front_door: str,
+    compose: bytes | None,
+    compose_url: str,
+    env_b64: str = "",
+    env_param: tuple[str, str] | None = None,
+    wait_for_ip: str = "",
+) -> str:
     """One script that installs Docker and starts Tico. Used as EC2 user-data (env from a SecureString parameter)
     and as the pasted install command (env embedded)."""
     d = contract.REMOTE_DIR
@@ -325,27 +392,48 @@ def bootstrap_script(*, os_family: str, domain: str, front_door: str, compose: b
         L += [f"curl -fsSL {q(compose_url)} -o {d}/compose.yaml"]
     if env_param:
         name, region = env_param
-        L += [f"cat > {d}/pull-env.sh <<'EOS'", "#!/bin/sh", "set -eu", "umask 077",
-              f"aws ssm get-parameter --region {q(region)} --name {q(name)} --with-decryption "
-              f"--query Parameter.Value --output text > {d}/.env.new && mv {d}/.env.new {d}/.env",
-              *plan_copy_lines(), "EOS",
-              f"chmod 700 {d}/pull-env.sh", f"{d}/pull-env.sh"]
+        L += [
+            f"cat > {d}/pull-env.sh <<'EOS'",
+            "#!/bin/sh",
+            "set -eu",
+            "umask 077",
+            f"aws ssm get-parameter --region {q(region)} --name {q(name)} --with-decryption "
+            f"--query Parameter.Value --output text > {d}/.env.new && mv {d}/.env.new {d}/.env",
+            *plan_copy_lines(),
+            "EOS",
+            f"chmod 700 {d}/pull-env.sh",
+            f"{d}/pull-env.sh",
+        ]
     else:
         L += ["umask 077", f"echo {env_b64} | base64 -d > {d}/.env"]
     L += [f"chmod 600 {d}/.env"]
     if front_door == "caddy" and wait_for_ip:
-        L += ["# Caddy asks for its certificate at first start; wait until the name points here or that fails.",
-              f"for i in $(seq 1 80); do getent hosts {q(domain)} | grep -q {q(wait_for_ip)} && break; sleep 15; done"]
-    L += [f"cd {d} && docker compose pull --quiet && docker compose up -d", f"touch {d}/.bootstrapped",
-          "echo tico-setup: done",
-          "# Optional operator source follows the actual running release; failure does not gate the app.",
-          "if command -v python3 >/dev/null 2>&1; then", "python3 -B - <<'TICO_VISUAL_BUNDLE' || true",
-          VISUAL_BOOTSTRAP,
-          "import signal", "def expired(_signum,_frame): raise TimeoutError()",
-          "signal.signal(signal.SIGALRM,expired)", "signal.alarm(40)",
-          "try:", f"    version,runtime=selected_runtime({d!r})", f"    install({d!r},version,runtime)",
-          "except Exception:", "    print('tico-setup: optional visual operator pending')",
-          "finally:", "    signal.alarm(0)", "TICO_VISUAL_BUNDLE", "fi"]
+        L += [
+            "# Caddy asks for its certificate at first start; wait until the name points here or that fails.",
+            f"for i in $(seq 1 80); do getent hosts {q(domain)} | grep -q {q(wait_for_ip)} && break; sleep 15; done",
+        ]
+    L += [
+        f"cd {d} && docker compose pull --quiet && docker compose up -d",
+        f"touch {d}/.bootstrapped",
+        "echo tico-setup: done",
+        "# Optional operator source follows the actual running release; failure does not gate the app.",
+        "if command -v python3 >/dev/null 2>&1; then",
+        "python3 -B - <<'TICO_VISUAL_BUNDLE' || true",
+        VISUAL_BOOTSTRAP,
+        "import signal",
+        "def expired(_signum,_frame): raise TimeoutError()",
+        "signal.signal(signal.SIGALRM,expired)",
+        "signal.alarm(40)",
+        "try:",
+        f"    version,runtime=selected_runtime({d!r})",
+        f"    install({d!r},version,runtime)",
+        "except Exception:",
+        "    print('tico-setup: optional visual operator pending')",
+        "finally:",
+        "    signal.alarm(0)",
+        "TICO_VISUAL_BUNDLE",
+        "fi",
+    ]
     return "\n".join(L) + "\n"
 
 
@@ -355,10 +443,13 @@ BOOT_LOG = "/var/log/tico-setup.log"
 def finish_boot_guard_lines() -> list[str]:
     """A re-run touches a server whose boot either finished (.bootstrapped) or stopped: its log's last tico-setup line is
     its FAILED one. A first boot still going is left alone. Not a lock: two re-runs started at once both pass it."""
-    return [f"if [ ! -f {contract.REMOTE_DIR}/.bootstrapped ] && ! grep 'tico-setup:' {BOOT_LOG} 2>/dev/null | tail -n 1 "
-            "| grep -q 'tico-setup: FAILED'; then",
-            '  echo "tico-setup: the first boot is still running; not taking it over. Re-run setup once it ends." >&2',
-            '  exit 5', 'fi']
+    return [
+        f"if [ ! -f {contract.REMOTE_DIR}/.bootstrapped ] && ! grep 'tico-setup:' {BOOT_LOG} 2>/dev/null | tail -n 1 "
+        "| grep -q 'tico-setup: FAILED'; then",
+        '  echo "tico-setup: the first boot is still running; not taking it over. Re-run setup once it ends." >&2',
+        '  exit 5',
+        'fi',
+    ]
 
 
 def rerun_script(*, compose: bytes | None, compose_url: str, plan: bool) -> str:
@@ -370,24 +461,37 @@ def rerun_script(*, compose: bytes | None, compose_url: str, plan: bool) -> str:
     L = ["set -eu", "umask 077", *finish_boot_guard_lines()]
     if plan:
         L += company_file_dir_lines()
-        L += [f"echo {_b64gz(compose)} | base64 -d | gunzip > {d}/compose.yaml.new" if compose is not None else
-              f"curl -fsSL {q(compose_url)} -o {d}/compose.yaml.new", f"mv {d}/compose.yaml.new {d}/compose.yaml"]
+        L += [
+            f"echo {_b64gz(compose)} | base64 -d | gunzip > {d}/compose.yaml.new"
+            if compose is not None
+            else f"curl -fsSL {q(compose_url)} -o {d}/compose.yaml.new",
+            f"mv {d}/compose.yaml.new {d}/compose.yaml",
+        ]
     L += [f"{d}/pull-env.sh"]
     if plan:
         L += plan_copy_lines()
-    L += [f"cd {d}", *(["docker compose pull --quiet", *plan_read_lines(running=False)] if plan else []), "docker compose up -d"]
+    L += [
+        f"cd {d}",
+        *(["docker compose pull --quiet", *plan_read_lines(running=False)] if plan else []),
+        "docker compose up -d",
+    ]
     if plan:
         L += plan_read_lines()
-    L += [f"if [ ! -f {d}/.bootstrapped ]; then",
-          f"  touch {d}/.bootstrapped && echo \"tico-setup: done, finished by a re-run of setup $(date -u)\" >> {BOOT_LOG}", "fi"]
+    L += [
+        f"if [ ! -f {d}/.bootstrapped ]; then",
+        f"  touch {d}/.bootstrapped && echo \"tico-setup: done, finished by a re-run of setup $(date -u)\" >> {BOOT_LOG}",
+        "fi",
+    ]
     return "\n".join(L) + "\n"
 
 
 # Run by the server's image with the plan's sha256: exits 0 only when the app's own reader returns exactly that plan, so
 # an image from before TICO_COMPANY_FILE, an older plan left in place or a plan in the env never passes.
-PLAN_READ = ("import hashlib, sys; from backend.config import _company_file_data as f; "
-             "data, _, _ = f(); "
-             "sys.exit(0 if hashlib.sha256(data.encode('ascii')).hexdigest() == sys.argv[1] else 1)")
+PLAN_READ = (
+    "import hashlib, sys; from backend.config import _company_file_data as f; "
+    "data, _, _ = f(); "
+    "sys.exit(0 if hashlib.sha256(data.encode('ascii')).hexdigest() == sys.argv[1] else 1)"
+)
 
 
 def plan_read_lines(running: bool = True) -> list[str]:
@@ -395,15 +499,23 @@ def plan_read_lines(running: bool = True) -> list[str]:
     one-off container of the pulled image checks it, so an image that cannot read it is never started; after, the running
     server checks it."""
     d, q = contract.REMOTE_DIR, shlex.quote
-    run = ("docker compose exec -T server python" if running else
-           "docker compose run --rm --no-deps -T --entrypoint python server")
-    return [f"plan_sha=$(sed -n 's/^TICO_COMPANY_FILE_SHA256=//p' {d}/.env)",
-            "plan_try=1",
-            f'until {run} -c {q(PLAN_READ)} "$plan_sha" >/dev/null 2>&1; do',
-            '  [ "$plan_try" -ge ' + ("12" if running else "1") + ' ] && { echo "tico-setup: FAILED: the '
-            + ("running app" if running else "image") + ' does not read the starter plan; the plan is kept for a retry" >&2; exit 6; }',
-            "  plan_try=$((plan_try + 1)); sleep 10",
-            "done"]
+    run = (
+        "docker compose exec -T server python"
+        if running
+        else "docker compose run --rm --no-deps -T --entrypoint python server"
+    )
+    return [
+        f"plan_sha=$(sed -n 's/^TICO_COMPANY_FILE_SHA256=//p' {d}/.env)",
+        "plan_try=1",
+        f'until {run} -c {q(PLAN_READ)} "$plan_sha" >/dev/null 2>&1; do',
+        '  [ "$plan_try" -ge '
+        + ("12" if running else "1")
+        + ' ] && { echo "tico-setup: FAILED: the '
+        + ("running app" if running else "image")
+        + ' does not read the starter plan; the plan is kept for a retry" >&2; exit 6; }',
+        "  plan_try=$((plan_try + 1)); sleep 10",
+        "done",
+    ]
 
 
 def company_file_dir_lines() -> list[str]:
@@ -419,31 +531,38 @@ def plan_copy_lines() -> list[str]:
     place with the right sha256 is kept: setup deletes the bucket's copy once the server is up."""
     d = contract.REMOTE_DIR
     f = f"{d}/{contract.COMPANY_FILE_DIR}/{contract.COMPANY_FILE_NAME}"
-    return [f"plan_src=$(sed -n 's/^TICO_COMPANY_FILE_S3=//p' {d}/.env)",
-            'if [ -n "$plan_src" ]; then',
-            f"  plan_sha=$(sed -n 's/^TICO_COMPANY_FILE_SHA256=//p' {d}/.env)",
-            f"  plan_region=$(sed -n 's/^TICO_COMPANY_FILE_S3_REGION=//p' {d}/.env)",
-            f'  if [ "$(sha256sum {f} 2>/dev/null | cut -d" " -f1)" != "$plan_sha" ]; then',
-            f'    rm -f {f}.new',
-            # A role just given the read (a reused server) can take a few seconds to be allowed it.
-            '    plan_try=1',
-            f'    until aws s3 cp --only-show-errors --region "$plan_region" "$plan_src" {f}.new; do',
-            '      [ "$plan_try" -ge 6 ] && { echo "tico-setup: FAILED: cannot copy the starter plan from $plan_src" >&2; exit 4; }',
-            '      plan_try=$((plan_try + 1)); sleep 10',
-            '    done',
-            f'    plan_got=$(sha256sum {f}.new | cut -d" " -f1)',
-            '    if [ "$plan_got" != "$plan_sha" ]; then',
-            f'      rm -f {f}.new',
-            '      echo "tico-setup: FAILED: the starter plan from $plan_src has sha256 $plan_got, not $plan_sha; '
-            'not starting Tico" >&2',
-            '      exit 3',
-            '    fi',
-            # Each step fails on its own: under `set -e` a failure on the left of `&&` does not stop the script.
-            *[f'    {step} || {{ rm -f {f}.new; echo "tico-setup: FAILED: cannot {what} the starter plan; not starting Tico" >&2; exit 7; }}'
-              for step, what in ((f"chown 10001:10001 {f}.new", "give the server's user"),
-                                 (f"chmod 0400 {f}.new", "make read-only"), (f"mv -f {f}.new {f}", "put in place"))],
-            '  fi',
-            'fi']
+    return [
+        f"plan_src=$(sed -n 's/^TICO_COMPANY_FILE_S3=//p' {d}/.env)",
+        'if [ -n "$plan_src" ]; then',
+        f"  plan_sha=$(sed -n 's/^TICO_COMPANY_FILE_SHA256=//p' {d}/.env)",
+        f"  plan_region=$(sed -n 's/^TICO_COMPANY_FILE_S3_REGION=//p' {d}/.env)",
+        f'  if [ "$(sha256sum {f} 2>/dev/null | cut -d" " -f1)" != "$plan_sha" ]; then',
+        f'    rm -f {f}.new',
+        # A role just given the read (a reused server) can take a few seconds to be allowed it.
+        '    plan_try=1',
+        f'    until aws s3 cp --only-show-errors --region "$plan_region" "$plan_src" {f}.new; do',
+        '      [ "$plan_try" -ge 6 ] && { echo "tico-setup: FAILED: cannot copy the starter plan from $plan_src" >&2; exit 4; }',
+        '      plan_try=$((plan_try + 1)); sleep 10',
+        '    done',
+        f'    plan_got=$(sha256sum {f}.new | cut -d" " -f1)',
+        '    if [ "$plan_got" != "$plan_sha" ]; then',
+        f'      rm -f {f}.new',
+        '      echo "tico-setup: FAILED: the starter plan from $plan_src has sha256 $plan_got, not $plan_sha; '
+        'not starting Tico" >&2',
+        '      exit 3',
+        '    fi',
+        # Each step fails on its own: under `set -e` a failure on the left of `&&` does not stop the script.
+        *[
+            f'    {step} || {{ rm -f {f}.new; echo "tico-setup: FAILED: cannot {what} the starter plan; not starting Tico" >&2; exit 7; }}'
+            for step, what in (
+                (f"chown 10001:10001 {f}.new", "give the server's user"),
+                (f"chmod 0400 {f}.new", "make read-only"),
+                (f"mv -f {f}.new {f}", "put in place"),
+            )
+        ],
+        '  fi',
+        'fi',
+    ]
 
 
 def env_b64(env_text: str) -> str:

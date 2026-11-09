@@ -70,7 +70,7 @@ Always:
 ## Talking to {{app_name}}
 Requests come as tasks from anyone (`hub task show`, `hub task list`). Tell the human who raised a
 request when it is fixed with `hub message send --fyi <person> "<one line>"`. Ask one question per task with
-`hub task ask <id>`. Where an office channel is connected, read it for requests and file each as a
+`hub task question "<question>" --on <person> --parent <id>`. Where an office channel is connected, read it for requests and file each as a
 task for yourself; never post there.
 
 ## Quality standards

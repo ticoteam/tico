@@ -1,6 +1,7 @@
 """Placing or moving a bot brings its repository: the server names it on the assignment, refuses a move that
 would strand the only copy, forgets the old computer's report, and Health and `hub health check` say why a
 bot has no repository on its computer."""
+
 from backend.tests.test_api import api, assign, get, post, runner
 from backend.tests.test_settings_transitions import _company_default
 
@@ -9,23 +10,51 @@ GENERIC = "Missing bot repository or AGENT.md"
 
 
 def report(api, machine, present, published=None, problems=(), ready=None, repository=""):
-    row = {"ready": (not problems) if ready is None else ready, "runtime": "codex", "model": "gpt-6-sol",
-           "repository_present": present, "repository_revision": "abc" if present else "",
-           "configuration_valid": True, "problems": list(problems), "warnings": []}
+    row = {
+        "ready": (not problems) if ready is None else ready,
+        "runtime": "codex",
+        "model": "gpt-6-sol",
+        "repository_present": present,
+        "repository_revision": "abc" if present else "",
+        "configuration_valid": True,
+        "problems": list(problems),
+        "warnings": [],
+    }
     if repository:
         row["repository"] = repository
     if published is not None:
         row["published"] = published
-    post(api, "runners/heartbeat", {"version": "0.5.4", "platform": "linux", "capacity": 4, "readiness": {
-        "schema_version": 1, "runtimes": {"codex": {"installed": True, "authenticated": "ready", "models": [],
-                                                     "controls": ["interrupt", "new-session"]}},
-        "bots": {"ops": row}}}, machine["token"])
+    post(
+        api,
+        "runners/heartbeat",
+        {
+            "version": "0.5.4",
+            "platform": "linux",
+            "capacity": 4,
+            "readiness": {
+                "schema_version": 1,
+                "runtimes": {
+                    "codex": {
+                        "installed": True,
+                        "authenticated": "ready",
+                        "models": [],
+                        "controls": ["interrupt", "new-session"],
+                    }
+                },
+                "bots": {"ops": row},
+            },
+        },
+        machine["token"],
+    )
 
 
 def stored(api, machine):
     with api.app.state.store.read() as c:
         import json
-        return json.loads(c.execute("SELECT readiness FROM runners WHERE id=?", (machine["runner_id"],)).fetchone()[0])
+
+        return json.loads(
+            c.execute("SELECT readiness FROM runners_with_state WHERE id=?", (machine["runner_id"],)).fetchone()[0]
+        )
 
 
 def two_computers(api):
@@ -43,9 +72,17 @@ def test_a_move_that_would_strand_the_only_copy_is_refused_and_names_the_cause(a
     report(api, new, present=False, problems=[GENERIC])
     failure = post(api, "bots/ops/assignment", {"runner_id": new["runner_id"], "expected_generation": 1}, expected=409)
     assert failure["error"]["code"] == "repository_unpublished"
-    assert "Old Mac" in failure["error"]["detail"] and REPO in failure["error"]["detail"] and "GitHub" in failure["error"]["detail"]
-    settings_move = post(api, "bots/ops/transitions", {"kind": "machine", "runner_id": new["runner_id"],
-                                                        "expected_revision": 1, "expected_generation": 1}, expected=409)
+    assert (
+        "Old Mac" in failure["error"]["detail"]
+        and REPO in failure["error"]["detail"]
+        and "GitHub" in failure["error"]["detail"]
+    )
+    settings_move = post(
+        api,
+        "bots/ops/transitions",
+        {"kind": "machine", "runner_id": new["runner_id"], "expected_revision": 1, "expected_generation": 1},
+        expected=409,
+    )
     assert settings_move["error"]["code"] == "repository_unpublished"
     with api.app.state.store.read() as c:
         assert c.execute("SELECT runner_id FROM assignments WHERE bot='ops'").fetchone()[0] == old["runner_id"]
@@ -56,11 +93,14 @@ def test_a_published_bot_moves_and_the_old_computer_stops_claiming_it(api):
     report(api, old, present=True, published=True)
     report(api, new, present=False, problems=[GENERIC])
     # The destination has nothing to report ready until the runner there clones it: assigning is what starts that.
-    post(api, "bots/ops/transitions", {"kind": "machine", "runner_id": new["runner_id"],
-                                        "expected_revision": 1, "expected_generation": 1})
+    post(
+        api,
+        "bots/ops/transitions",
+        {"kind": "machine", "runner_id": new["runner_id"], "expected_revision": 1, "expected_generation": 1},
+    )
     with api.app.state.store.read() as c:
         assert c.execute("SELECT runner_id FROM assignments WHERE bot='ops'").fetchone()[0] == new["runner_id"]
-    assert "ops" not in stored(api, old)["bots"]                                # dropped at the move
+    assert "ops" not in stored(api, old)["bots"]  # dropped at the move
     # Its next heartbeat still lists the bot (it could host it, and an old checkout is there), but that is not
     # this computer running it: the computers view does not show it as ready here.
     report(api, old, present=True, published=True)
@@ -75,17 +115,43 @@ def test_a_bot_moves_to_a_computer_that_can_run_it_but_not_to_one_signed_out(api
 
     def runtimes(authenticated):
         # A computer reports only the bots it hosts: the destination says nothing of `ops`, only its runtimes.
-        post(api, "runners/heartbeat", {"version": "0.5.4", "platform": "linux", "capacity": 4, "readiness": {
-            "schema_version": 1, "runtimes": {"codex": {"installed": True, "authenticated": authenticated, "models": [],
-                                                         "controls": ["interrupt", "new-session"], "detail": ""}},
-            "bots": {}}}, new["token"])
+        post(
+            api,
+            "runners/heartbeat",
+            {
+                "version": "0.5.4",
+                "platform": "linux",
+                "capacity": 4,
+                "readiness": {
+                    "schema_version": 1,
+                    "runtimes": {
+                        "codex": {
+                            "installed": True,
+                            "authenticated": authenticated,
+                            "models": [],
+                            "controls": ["interrupt", "new-session"],
+                            "detail": "",
+                        }
+                    },
+                    "bots": {},
+                },
+            },
+            new["token"],
+        )
 
     runtimes("missing")
-    refused = post(api, "bots/ops/transitions", {"kind": "machine", "runner_id": new["runner_id"],
-                                                  "expected_revision": 1, "expected_generation": 1}, expected=409)
+    refused = post(
+        api,
+        "bots/ops/transitions",
+        {"kind": "machine", "runner_id": new["runner_id"], "expected_revision": 1, "expected_generation": 1},
+        expected=409,
+    )
     assert refused["error"]["code"] == "runner_not_ready" and "not signed in" in refused["error"]["detail"]
     runtimes("ready")
-    post(api, "bots/ops/transitions", {"kind": "machine", "runner_id": new["runner_id"],
-                                        "expected_revision": 1, "expected_generation": 1})
+    post(
+        api,
+        "bots/ops/transitions",
+        {"kind": "machine", "runner_id": new["runner_id"], "expected_revision": 1, "expected_generation": 1},
+    )
     with api.app.state.store.read() as c:
         assert c.execute("SELECT runner_id FROM assignments WHERE bot='ops'").fetchone()[0] == new["runner_id"]

@@ -8,9 +8,22 @@ and SSE renderings in core's privacy fixture; these tests check the API a sideba
 
 from backend.tests.slug_ids import bot_ids_are_their_slugs  # noqa: F401  (each bot's id is its slug)
 from backend.tests.test_api import api, restrict  # noqa: F401  (the api fixture)
-from backend.tests.threads_e2e import (add_member, home_id, call, can_read, create_thread, make_group, ok,
-                                       read_status, remove_member, require_threads_api, say, search_ids, sidebar_ids,
-                                       timeline)
+from backend.tests.threads_e2e import (
+    add_member,
+    home_id,
+    call,
+    can_read,
+    create_thread,
+    make_group,
+    ok,
+    read_status,
+    remove_member,
+    require_threads_api,
+    say,
+    search_ids,
+    sidebar_ids,
+    timeline,
+)
 
 
 def test_a_new_thread_is_private_to_its_starter_and_a_hidden_one_looks_missing(api):
@@ -77,8 +90,7 @@ def test_a_sub_thread_is_never_more_open_than_its_root_and_follows_root_changes(
 
 def test_a_dm_is_read_by_its_two_people_and_not_by_the_owner(api):
     require_threads_api(api)
-    dm = ok(call(api, "POST", "threads", "ben-test", {"audience": "personal", "members": ["human:cara"],
-                                                       "title": ""}))
+    dm = ok(call(api, "POST", "threads", "ben-test", {"audience": "personal", "members": ["human:cara"], "title": ""}))
     assert can_read(api, "ben-test", dm["id"])
     assert can_read(api, "cara-test", dm["id"])
     assert read_status(api, "ana-test", dm["id"]) == 404, "the owner does not read a person's DM"
@@ -88,9 +100,13 @@ def test_a_dm_is_read_by_its_two_people_and_not_by_the_owner(api):
 def test_a_person_without_a_bots_access_cannot_open_its_home(api):
     require_threads_api(api)
     with api.app.state.store.transaction() as c:
-        restrict(c, "cpo", see={"everyone": True, "people": [], "teams": [], "bots": []},
-                 read={"everyone": False, "people": ["ana"], "teams": [], "bots": []},
-                 write={"everyone": False, "people": ["ana"], "teams": [], "bots": []})
+        restrict(
+            c,
+            "cpo",
+            see={"everyone": True, "people": [], "teams": [], "bots": []},
+            read={"everyone": False, "people": ["ana"], "teams": [], "bots": []},
+            write={"everyone": False, "people": ["ana"], "teams": [], "bots": []},
+        )
     thread_id = home_id(api, "cpo")
     home = call(api, "GET", f"threads/{thread_id}", "ana-test")
     assert home.status_code == 200, "the owner reads the bot's Home: " + home.text

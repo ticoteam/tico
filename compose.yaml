@@ -61,6 +61,8 @@ services:
       TICO_AUTH_PROXY:
       # TICO_AUTH_PROXY=owner-link: the hash of the hosted owner's first sign-in link (backend/owner_link.py).
       TICO_OWNER_LINK_HASH:
+      # The hash of the one-time secret the owner's coding agent trades for a personal token (backend/setup_handoff.py).
+      TICO_SETUP_HANDOFF_HASH:
       TICO_OIDC_ISSUER:
       TICO_OIDC_CLIENT_ID:
       TICO_OIDC_CLIENT_SECRET:
@@ -123,13 +125,11 @@ services:
       TICO_DECISIONS_JEV_USD_PER_MTOK_INPUT:
       TICO_DECISIONS_JEV_USD_PER_MTOK_OUTPUT:
       TICO_RULES_MONTHLY_USD:
-      TICO_RULE_CHECK_LEVEL:
       TICO_RULES_CHECK_DAILY:
       TICO_RULE_CHECK_CONCURRENCY:
       TICO_DECISIONS_IDEA_TRIAGE:
       TICO_STALE_REVIEW:
       TICO_TOPIC_FRESH:
-      TICO_STALL_TRIAGE:
       TICO_UPDATER_URL:
       TICO_UPDATE_CHECK:
       TICO_SUPPORT:
@@ -421,6 +421,8 @@ services:
       TICO_IMAGE: ${TICO_IMAGE:-ghcr.io/ticoteam/tico}
       DOCKER_CONFIG: /tmp/.docker
       TICO_UPDATER_BUNDLE: ${TICO_UPDATER_BUNDLE:-always}   # never: releases that exist only as local tags (docker/smoke.sh)
+      # Unset: the pre-update snapshot's time scales with the database size. Set in .env to fix it in seconds.
+      TICO_UPDATER_SNAPSHOT_SECONDS: ${TICO_UPDATER_SNAPSHOT_SECONDS:-}
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - tico-control:/control:ro

@@ -30,7 +30,6 @@ button.requester-row:hover,button.requester-row:focus-visible{background:var(--h
 .roadmap-moderation button{border:0;padding:0;background:transparent;color:var(--muted);font-size:var(--t-xs)}
 .tcomment:hover .roadmap-moderation,.tcomment:focus-within .roadmap-moderation,.roadmap-moderation:focus-within{opacity:1}
 .tcomment-head:has([data-public-moderate]){flex-wrap:wrap}
-.tl-tabs .tl-ranked{color:var(--muted);text-decoration:none;align-self:center;padding:6px 10px;font-size:var(--t-sm)}
 .roadmap-page{max-width:1200px;margin:auto}
 .roadmap-sort{display:flex;align-items:center;gap:8px;margin:18px 0}
 .roadmap-table{width:100%;border-collapse:collapse;table-layout:fixed}

@@ -11,8 +11,14 @@ SHA = "a" * 40
 
 
 def commit(sha=SHA, **extra):
-    return {"sha": sha, "subject": "Check the live PR before saying a release shipped", "author": "ops",
-            "committed": "2026-10-05T10:00:00+02:00", "files": ["memory/learnings.md"], **extra}
+    return {
+        "sha": sha,
+        "subject": "Check the live PR before saying a release shipped",
+        "author": "ops",
+        "committed": "2026-10-05T10:00:00+02:00",
+        "files": ["memory/learnings.md"],
+        **extra,
+    }
 
 
 def history(api, who, bot="ops"):
@@ -27,8 +33,10 @@ def test_a_reported_update_shows_its_source_only_to_readers_of_that_chat(api):
     ready(api, machine, ["ops"])
     post(api, "chat/ops", {"text": "Remember to check the live PR"}, "ben-test")
     attempt = claim(api, machine, "ops")
-    body = {"commits": [commit(attempt=attempt["id"], shared=True, diff="+- Check the live PR")],
-            "documents": {"memory/learnings.md": "# Learnings\n- Check the live PR\n", "secrets/x": "no"}}
+    body = {
+        "commits": [commit(attempt=attempt["id"], shared=True, diff="+- Check the live PR")],
+        "documents": {"memory/learnings.md": "# Learnings\n- Check the live PR\n", "secrets/x": "no"},
+    }
     assert post(api, "bots/ops/memory/report", body, machine["token"])["recorded"] == 1
     # The same report again, or one naming a run of another bot, changes nothing.
     assert post(api, "bots/ops/memory/report", body, machine["token"])["recorded"] == 0
@@ -36,10 +44,10 @@ def test_a_reported_update_shows_its_source_only_to_readers_of_that_chat(api):
     mine = history(api, "ben-test")["updates"][0]
     assert mine["source"]["conversation"] and "live PR" in mine["source"]["excerpt"]
     assert mine["when"] == "2026-10-05T08:00:00.000000Z" and mine["shared"] and mine["diff"]
-    with api.app.state.store.transaction() as c:       # a repository on GitHub gives each pushed commit a link
+    with api.app.state.store.transaction() as c:  # a repository on GitHub gives each pushed commit a link
         c.execute("UPDATE bot_config SET repo='acme/bot-ops' WHERE bot='ops'")
     assert history(api, "ben-test")["updates"][0]["url"] == "https://github.com/acme/bot-ops/commit/" + SHA
-    for other in ("ana-test", "cara-test"):      # the owner included: a direct chat is not theirs
+    for other in ("ana-test", "cara-test"):  # the owner included: a direct chat is not theirs
         theirs = history(api, other)
         assert theirs["updates"][0]["source"] is None and "live PR" not in str(theirs["updates"][0]["source"])
     files = api.get("/api/employees/ops/files", headers=headers("ben-test")).json()
@@ -70,21 +78,28 @@ def test_large_documents_round_trip_and_report_allowance_is_runner_route_only(ap
     assert small.json()["document_status"]["memory/learnings.md"]["updated_at"]
     assert len(small.content) < 10_000
     # Worst-case JSON escaping, both files at the byte ceiling, and all 50 diffs also fit.
-    body = {"documents": {path: "\x01" * MAX_DOCUMENT_BYTES
-                          for path in ("memory/learnings.md", "memory/decisions.md")},
-            "commits": [commit(f"{i:040x}", diff="\x01" * 20_000) for i in range(50)]}
+    body = {
+        "documents": {path: "\x01" * MAX_DOCUMENT_BYTES for path in ("memory/learnings.md", "memory/decisions.md")},
+        "commits": [commit(f"{i:040x}", diff="\x01" * 20_000) for i in range(50)],
+    }
     encoded = json.dumps(body).encode()
     assert 8_000_000 < len(encoded) < MAX_REPORT_BYTES
-    r = api.post("/api/v2/bots/ops/memory/report", content=encoded,
-                 headers={**headers(machine["token"]), "Content-Type": "application/json"})
+    r = api.post(
+        "/api/v2/bots/ops/memory/report",
+        content=encoded,
+        headers={**headers(machine["token"]), "Content-Type": "application/json"},
+    )
     assert r.status_code == 200, r.text
     saved = history(api, "ben-test")["documents"]
     assert saved == body["documents"]
     post(api, "bots/ops/memory/report", {"documents": {"memory/learnings.md": text}}, "ben-test", expected=413)
     post(api, "bots/ops/memory/seen", {"padding": text}, machine["token"], expected=413)
     # Reject an excessive declared length before reading a potentially enormous request.
-    r = api.post("/api/v2/bots/ops/memory/report", content=b"{}",
-                 headers={**headers(machine["token"]), "Content-Length": str(MAX_REPORT_BYTES + 1)})
+    r = api.post(
+        "/api/v2/bots/ops/memory/report",
+        content=b"{}",
+        headers={**headers(machine["token"]), "Content-Length": str(MAX_REPORT_BYTES + 1)},
+    )
     assert r.status_code == 413
 
 

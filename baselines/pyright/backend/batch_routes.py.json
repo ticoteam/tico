@@ -1,0 +1,22 @@
+{
+    "files": {
+        "./backend/batch_routes.py": [
+            {
+                "code": "reportOptionalMemberAccess",
+                "range": {
+                    "startColumn": 65,
+                    "endColumn": 71,
+                    "lineCount": 1
+                }
+            },
+            {
+                "code": "reportOptionalMemberAccess",
+                "range": {
+                    "startColumn": 80,
+                    "endColumn": 86,
+                    "lineCount": 1
+                }
+            }
+        ]
+    }
+}

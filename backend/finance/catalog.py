@@ -3,6 +3,7 @@ payload
 and the asker's right, then writes the record when the action commits. In a mirrored book the write goes to the provider
 first (mirror.queue_record) and the local record changes when the provider confirms it. The gate for an item's price
 change asks a finance admin, since a price changes what every new line posts."""
+
 import json
 from collections.abc import Callable
 from typing import Any
@@ -65,9 +66,11 @@ def _item_fields(ctx: Ctx, who: str, p: V.Payload, create: bool) -> dict[str, ob
         price = RC.price(V.opt_amount(p, "price"))
         out["price"] = price
         out["currency"] = ctx.book.base_currency if price is not None else ""
-    for key, types, what in (("income_account_id", ("income",), "income"),
-                             ("expense_account_id", ("expense",), "expense"),
-                             ("asset_account_id", ("asset",), "asset")):
+    for key, types, what in (
+        ("income_account_id", ("income",), "income"),
+        ("expense_account_id", ("expense",), "expense"),
+        ("asset_account_id", ("asset",), "asset"),
+    ):
         if create or key in p:
             out[key] = _account(ctx, who, V.opt_text(p, key, 80), types, what)
     if not create:
@@ -122,12 +125,24 @@ def _hides_item(ctx: Ctx, who: str, item: Any) -> bool:
     """Whether the item names an account the asker's view does not cover. Its price and accounts are then not theirs to
     see, so the item is not found to them, as a missing one is, whatever they ask to change."""
     view = ctx.view(who)
-    return any(account is not None and not view.sees_account(account) for account in
-               (ctx.accounts.get(str(item[key] or "")) for key, _ in mirror.ITEM_ACCOUNTS))
+    return any(
+        account is not None and not view.sees_account(account)
+        for account in (ctx.accounts.get(str(item[key] or "")) for key, _ in mirror.ITEM_ACCOUNTS)
+    )
 
 
-def _create(ctx: Ctx, who: str, aid: str, op: str, table: str, record_id: str, fields: dict[str, object],
-            key: str, *, books: bool) -> Result:
+def _create(
+    ctx: Ctx,
+    who: str,
+    aid: str,
+    op: str,
+    table: str,
+    record_id: str,
+    fields: dict[str, object],
+    key: str,
+    *,
+    books: bool,
+) -> Result:
     """A new record: written here, or queued for the provider under the id it will have once confirmed. A record the
     books do not take is written here alone."""
     if books:
@@ -137,13 +152,26 @@ def _create(ctx: Ctx, who: str, aid: str, op: str, table: str, record_id: str, f
     return {key: record_id}
 
 
-def _update(ctx: Ctx, who: str, aid: str, op: str, table: str, record_id: str, fields: dict[str, object],
-            key: str, *, books: bool) -> Result:
+def _update(
+    ctx: Ctx,
+    who: str,
+    aid: str,
+    op: str,
+    table: str,
+    record_id: str,
+    fields: dict[str, object],
+    key: str,
+    *,
+    books: bool,
+) -> Result:
     """A changed record: written here, or queued for the provider as the change alone (the record it lands on is read
     when the write is sent)."""
     if books:
-        return {key: record_id, "outbox_id": mirror.queue_record_update(ctx, who, aid, op, record_id, fields),
-                "status": "queued"}
+        return {
+            key: record_id,
+            "outbox_id": mirror.queue_record_update(ctx, who, aid, op, record_id, fields),
+            "status": "queued",
+        }
     RS.update(ctx.c, table, record_id, {**fields, "updated_at": ctx.at, "updated_by_id": who})
     return {key: record_id}
 
@@ -157,6 +185,7 @@ def item_create(ctx: Ctx, who: str, p: V.Payload) -> Plan:
 
     def apply(aid: str) -> Result:
         return _create(ctx, who, aid, "item.create", "items", item_id, f, "item_id", books=_mirrored(ctx))
+
     return Plan(K.default_gate(ctx.org, who, "item_create"), f"Add item {f['name']}"[:200], apply)
 
 
@@ -164,8 +193,9 @@ def _books_kind_change(old: str, new: str) -> None:
     """Refuses a kind change that crosses the item type the books hold, since the books keep an item's type."""
     held = mirror.books_item_type(old)
     if held != mirror.books_item_type(new):
-        raise invalid(f"an item the books hold as {held} cannot change to {mirror.books_item_type(new)}: "
-                      "add a new item instead")
+        raise invalid(
+            f"an item the books hold as {held} cannot change to {mirror.books_item_type(new)}: add a new item instead"
+        )
 
 
 def item_update(ctx: Ctx, who: str, p: V.Payload) -> Plan:
@@ -192,6 +222,7 @@ def item_update(ctx: Ctx, who: str, p: V.Payload) -> Plan:
 
     def apply(aid: str) -> Result:
         return _update(ctx, who, aid, "item.update", "items", item_id, f, "item_id", books=_mirrored(ctx))
+
     return Plan(gate, f"Change item {old['name']}"[:200], apply)
 
 
@@ -205,6 +236,7 @@ def location_create(ctx: Ctx, who: str, p: V.Payload) -> Plan:
 
     def apply(aid: str) -> Result:
         return _create(ctx, who, aid, "location.create", "locations", location_id, f, "location_id", books=books)
+
     return Plan(K.default_gate(ctx.org, who, "location_create"), f"Add location {f['name']}"[:200], apply)
 
 
@@ -223,8 +255,8 @@ def location_update(ctx: Ctx, who: str, p: V.Payload) -> Plan:
         mirror.record_in_provider(ctx, "locations", location_id)
 
     def apply(aid: str) -> Result:
-        return _update(ctx, who, aid, "location.update", "locations", location_id, f, "location_id",
-                       books=books)
+        return _update(ctx, who, aid, "location.update", "locations", location_id, f, "location_id", books=books)
+
     return Plan(K.default_gate(ctx.org, who, "location_update"), f"Change location {location_id}"[:200], apply)
 
 
@@ -239,6 +271,7 @@ def project_create(ctx: Ctx, who: str, p: V.Payload) -> Plan:
 
     def apply(aid: str) -> Result:
         return _create(ctx, who, aid, "project.create", "projects", project_id, f, "project_id", books=_mirrored(ctx))
+
     return Plan(K.default_gate(ctx.org, who, "project_create"), f"Add project {f['name']}"[:200], apply)
 
 
@@ -251,12 +284,16 @@ def project_update(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     f = _shape(lambda: _project_fields(ctx, p, create=False))
 
     def apply(aid: str) -> Result:
-        return _update(ctx, who, aid, "project.update", "projects", project_id, f, "project_id",
-                       books=_mirrored(ctx))
+        return _update(ctx, who, aid, "project.update", "projects", project_id, f, "project_id", books=_mirrored(ctx))
+
     return Plan(K.default_gate(ctx.org, who, "project_update"), f"Change project {project_id}"[:200], apply)
 
 
 PLANNERS: dict[str, Planner] = {
-    "item_create": item_create, "item_update": item_update, "location_create": location_create,
-    "location_update": location_update, "project_create": project_create, "project_update": project_update,
+    "item_create": item_create,
+    "item_update": item_update,
+    "location_create": location_create,
+    "location_update": location_update,
+    "project_create": project_create,
+    "project_update": project_update,
 }

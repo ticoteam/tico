@@ -1,6 +1,7 @@
 """Where queued_reasons (Health) says a queued job is handed out, the claim must hand it out: a bot whose own login and
 codex are held while claude is free on this computer, and a queued keeper notice that is obsolete ahead of a
 real one."""
+
 from backend import login_holds
 from backend import wake_presets as W
 from backend.execution import queued_reasons
@@ -16,7 +17,7 @@ def test_claim_hands_out_the_queued_job_to_the_free_claude_fallback_that_health_
     machine = runner(api)
     assign(api, machine, "ops")
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE runners SET capacity=8 WHERE id=?", (machine["runner_id"],))
+        c.execute("UPDATE runner_states SET capacity=8 WHERE runner_id=?", (machine["runner_id"],))
     signed_in(api, machine, ["ops"], ["codex", "claude"])
     hit, reset = "2026-10-20T10:00:00.000000Z", "2026-10-20T12:00:00.000000Z"
     with api.app.state.store.transaction() as c:
@@ -43,10 +44,24 @@ def test_claim_hands_out_the_real_notice_behind_an_obsolete_one_that_health_says
         c.execute("UPDATE jobs SET state='completed' WHERE id=?", (original["job_id"],))
         c.execute("UPDATE tasks SET status='done' WHERE id=?", (task["id"],))
         refs = {"task": task["id"], "trigger": "other", "wake": "update"}
-        obsolete = H.say(c, H.KEEPER, "bot:ops", "PR #7 checks passed", kind="notice",
-                         conversation_id=task["conversation_id"], refs=refs)
-        real = H.say(c, H.KEEPER, "bot:ops", "Task closed by human:ana", kind="notice",
-                     conversation_id=task["conversation_id"], refs={**refs, "caused_by": "human:ana"})
+        obsolete = H.say(
+            c,
+            H.KEEPER,
+            "bot:ops",
+            "PR #7 checks passed",
+            kind="notice",
+            conversation_id=task["conversation_id"],
+            refs=refs,
+        )
+        real = H.say(
+            c,
+            H.KEEPER,
+            "bot:ops",
+            "Task closed by human:ana",
+            kind="notice",
+            conversation_id=task["conversation_id"],
+            refs={**refs, "caused_by": "human:ana"},
+        )
         # The obsolete notice is the older of the two, so the candidate's own order reaches it first.
         c.execute("UPDATE jobs SET created_at=? WHERE message_id=?", (H.shift(H.now(), minutes=-5), obsolete["id"]))
         W.tick(c, H.shift(H.now(), minutes=2))
