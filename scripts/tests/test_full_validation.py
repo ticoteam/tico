@@ -115,15 +115,15 @@ def test_a_new_failure_names_the_prs_that_skipped_it_and_files_one_issue(tmp_pat
     text = fv.report(_plan(tmp_path), results(tmp_path), record, gh, ENV, git_log)
     assert seen == [(PREV, HEAD)]
     # test_new failed but did not pass before (a new test or one already red): only test_broke is new.
-    assert "`backend/tests/test_a.py::test_broke`: merged without running it: #7" in text
+    assert f"`backend/tests/test_a.py::test_broke` (passed at {PREV[:12]}): merged without running it: #7" in text
     assert "#8" not in text.split("test_broke")[1].split("\n")[0]
     assert f"{unread[:12]} (no pull request)" in text
     assert "No results from python-2" in text and "Issue: https://gh/o/r/issues/9" in text
     [issue] = gh.issues
     assert "`backend/tests/test_a.py::test_broke`" in issue and "merged without running it: #7" in issue
-    assert f"Commit range: {PREV[:12]}..{HEAD[:12]}" in issue
+    assert f"commit range: {PREV[:12]}..{HEAD[:12]}" in issue
     saved = json.loads(record.read_text())
-    assert saved["sha"] == PREV and "backend/tests/test_a.py::test_ok" in saved["passed"]  # python-2 is missing
+    assert saved["sha"] == HEAD and saved["passed"]["backend/tests/test_a.py::test_ok"] == HEAD
     assert "backend/tests/test_a.py::test_broke" in saved["failed"]
 
 
@@ -166,23 +166,34 @@ def test_a_failed_report_leaves_no_record_so_the_next_run_compares_with_the_olde
     assert not record.exists()
 
 
-def test_a_run_with_a_suite_missing_keeps_the_previous_commit_and_passes_as_the_baseline(tmp_path):
-    # python-2 (test_b) left no results: test_b's earlier pass stays, so its failure on a later run is still new.
-    previous = {"sha": PREV, "passed": ["backend/tests/test_b.py::test_later", "backend/tests/test_a.py::test_broke"]}
+def test_a_test_the_run_did_not_reach_keeps_the_commit_where_it_last_passed(tmp_path):
+    # python-2 (test_b) left no results: test_b keeps PREV, so a later failure is new and its range starts at PREV.
+    older = "c" * 40
+    previous = {
+        "sha": PREV,
+        "passed": {
+            "backend/tests/test_b.py::test_later": older,
+            "backend/tests/test_a.py::test_broke": PREV,
+            "backend/tests/test_gone.py::test_x": PREV,
+        },
+    }
     record = tmp_path / "record.json"
     fv.report(_plan(tmp_path), results(tmp_path), record, FakeGitHub(previous, {}), ENV, lambda b, h: "")
     saved = json.loads(record.read_text())
-    assert saved["sha"] == PREV  # the range of a later failure still starts where test_b last passed
-    assert "backend/tests/test_b.py::test_later" in saved["passed"]
-    assert "backend/tests/test_a.py::test_ok" in saved["passed"]
-    assert "backend/tests/test_a.py::test_broke" in saved["failed"]
-    assert "backend/tests/test_a.py::test_broke" not in saved["passed"]
-    # A complete run moves the baseline to its own commit and its own passes.
-    junit(tmp_path / "ci-results" / "python-2.xml", [("backend.tests.test_b", "test_now", "")])
-    fv.report(_plan(tmp_path), tmp_path / "ci-results", record, FakeGitHub(previous, {}), ENV, lambda b, h: "")
-    saved = json.loads(record.read_text())
-    assert saved["sha"] == HEAD and "backend/tests/test_b.py::test_now" in saved["passed"]
-    assert "backend/tests/test_b.py::test_later" not in saved["passed"]
+    assert saved["sha"] == HEAD
+    assert saved["passed"]["backend/tests/test_b.py::test_later"] == older
+    assert saved["passed"]["backend/tests/test_a.py::test_ok"] == HEAD
+    assert "backend/tests/test_a.py::test_broke" not in saved["passed"]  # failing now
+    assert "backend/tests/test_gone.py::test_x" not in saved["passed"]  # its file is no longer planned
+
+    # The next run fails test_b: its range starts at the commit where it last passed, not at this run's.
+    later = {**ENV, "GITHUB_SHA": "d" * 40, "GITHUB_RUN_ID": "50"}
+    (tmp_path / "ci-results").rename(tmp_path / "first")
+    results(tmp_path)
+    junit(tmp_path / "ci-results" / "python-2.xml", [("backend.tests.test_b", "test_later", "<failure/>")])
+    seen, gh = [], FakeGitHub(saved, {})
+    text = fv.report(_plan(tmp_path), tmp_path / "ci-results", record, gh, later, lambda b, h: seen.append(b) or "")
+    assert sorted(seen) == [older] and f"`backend/tests/test_b.py::test_later` (passed at {older[:12]})" in text
 
 
 def test_a_missing_artifact_is_none_but_a_failed_download_raises(monkeypatch):

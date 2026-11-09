@@ -9,8 +9,8 @@ gated it: its merge queue group's (pr-checks.yml on the merge commit) and its pu
 whose plans all left the test out is one the selector skipped it for; one with no plan to read is listed as unknown.
 The run summary lists both, and the issue ISSUE_TITLE gets the test, the commit range and those pull requests (a new
 issue, or a comment on the open one). Nothing is reverted. Each run's record (its commit, failures and passes) is the
-next run's previous one, written only once the run has reported; a run where a suite left no results keeps the
-previous commit and passes as its baseline.
+next run's previous one, written only once the run has reported. A test the run did not reach keeps the commit
+where it last passed.
 """
 
 import argparse
@@ -85,6 +85,22 @@ def included(plan, test):
     return plan.get("python") is None or path in plan["python"] or any(path in job.get("files", ()) for job in jobs)
 
 
+def planned(plan, test):
+    """Whether this run's plan has a job for the test's file or browser script (it still exists)."""
+    path, jobs = file_of(test), plan["matrix"]["include"]
+    if path.startswith("ui/tests/") and path.endswith(".cjs"):
+        return any(Path(path).stem in job["files"] for job in jobs if job["suite"].startswith("browser-"))
+    return any(path in job["files"] for job in jobs)
+
+
+def passes(previous):
+    """{test: the commit of the full run where it last passed} from a record."""
+    if previous is None:
+        return {}
+    passed = previous.get("passed", {})
+    return dict(passed) if isinstance(passed, dict) else dict.fromkeys(passed, previous["sha"])
+
+
 def merged_prs(log):
     """[(sha, pr number or None, subject)] from `git log --first-parent --format=%H%x09%s` output, oldest first."""
     found = []
@@ -132,7 +148,7 @@ def report_text(head, previous, failed, new, found, missing, server, repo, run_u
     for test in sorted(new)[:LISTED]:
         entry = found[test]
         skipped = ", ".join(label(*m) for m in entry["skipped"]) or "none"
-        lines.append(f"- `{test}`: merged without running it: {skipped}")
+        lines.append(f"- `{test}` (passed at {entry['since'][:12]}): merged without running it: {skipped}")
         if entry["unknown"]:
             lines.append(
                 f"  - no plan to read (direct pushes, expired runs): {', '.join(label(*m) for m in entry['unknown'])}"
@@ -143,17 +159,19 @@ def report_text(head, previous, failed, new, found, missing, server, repo, run_u
 
 
 def issue_text(head, previous, new, found, server, repo, run_url):
-    compare = f"{server}/{repo}/compare/{previous['sha'][:12]}...{head[:12]}"
+    """The issue's text. Each test's range starts at the full run where it last passed (usually the previous one; an
+    older one when a run since then did not reach it)."""
     lines = [
-        f"The full validation of main at {head[:12]} ({run_url}) found tests failing that passed on the previous full "
-        f"run at {previous['sha'][:12]}.",
-        "",
-        f"Commit range: {previous['sha'][:12]}..{head[:12]} ({compare})",
+        f"The full validation of main at {head[:12]} ({run_url}) found tests failing that passed on an earlier full "
+        "run.",
         "",
     ]
     for test in sorted(new)[:LISTED]:
         entry = found[test]
+        since = entry["since"]
+        compare = f"{server}/{repo}/compare/{since[:12]}...{head[:12]}"
         lines.append(f"- `{test}`")
+        lines.append(f"  - commit range: {since[:12]}..{head[:12]} ({compare})")
         lines.append(f"  - merged without running it: {', '.join(label(*m) for m in entry['skipped']) or 'none'}")
         if entry["unknown"]:
             lines.append(f"  - no plan to read: {', '.join(label(*m) for m in entry['unknown'])}")
@@ -270,29 +288,35 @@ def report(plan_path, results, record_path, gh, env, git_log):
     run_url = f"{server}/{repo}/actions/runs/{run_id}"
     failed, passed, missing = outcomes(plan, results)
     previous = gh.previous(run_id)
-    new, found = set(), {}
-    if previous is not None:
-        new = failed & set(previous.get("passed", ()))
-        if new:
-            found = trail(new, merged_prs(git_log(previous["sha"], head)), gh.plans_of)
+    last = passes(previous)
+    new, found = failed & set(last), {}
+    known = {}
+
+    def plans_of(pr, sha):  # ranges overlap when tests last passed on different runs: read each merge's plans once
+        if sha not in known:
+            known[sha] = gh.plans_of(pr, sha)
+        return known[sha]
+
+    for since in sorted({last[t] for t in new}):
+        tests = {t for t in new if last[t] == since}
+        for test, entry in trail(tests, merged_prs(git_log(since, head)), plans_of).items():
+            found[test] = {**entry, "since": since}
     text = report_text(head, previous, failed, new, found, missing, server, repo, run_url)
     if new:
         text += f"\nIssue: {gh.file_issue(issue_text(head, previous, new, found, server, repo, run_url))}\n"
     # The record is the next run's baseline only once this run has reported: after a failed lookup or issue the next
     # run compares with the older record again, so a new failure is not lost.
-    Path(record_path).write_text(json.dumps(record(failed, passed, missing, previous, head)) + "\n")
+    Path(record_path).write_text(json.dumps(record(failed, passed, plan, last, head)) + "\n")
     return text
 
 
-def record(failed, passed, missing, previous, head):
-    """This run's record. When a suite left no results, its tests were not seen, so the baseline does not move: the
-    record keeps the previous commit and the previous passes (less what fails now). A later failure of an unseen test
-    is still new, and its commit range still starts where it last passed. Passes seen now join under that older commit,
-    which only widens their range."""
-    if missing and previous is not None:
-        passed = (passed | set(previous.get("passed", ()))) - failed
-        head = previous["sha"]
-    return {"sha": head, "failed": sorted(failed), "passed": sorted(passed)}
+def record(failed, passed, plan, last, head):
+    """This run's record: each passing test with the commit where it last passed. A test this run passed has this
+    commit. One it did not reach (a job with no results, a cut-short junit file) keeps its earlier commit, so a later
+    failure is still new and its range starts where it last passed. A failing test, or one whose file is gone from the
+    plan, drops out."""
+    kept = {t: sha for t, sha in last.items() if t not in failed and t not in passed and planned(plan, t)}
+    return {"sha": head, "failed": sorted(failed), "passed": {**kept, **dict.fromkeys(sorted(passed), head)}}
 
 
 def git_log(base, head):
