@@ -41,6 +41,11 @@ route_memo.install()
 import re  # noqa: E402
 import pytest  # noqa: E402
 
+from backend.tests import connection_guard  # noqa: E402
+
+# The per-test check of pooled connections: a test that leaves one open fails at its own teardown.
+from backend.tests.connection_guard import pooled_connections_closed  # noqa: E402, F401
+
 
 def pytest_addoption(parser):
     parser.addoption(
@@ -53,6 +58,26 @@ def pytest_addoption(parser):
         action="store_true",
         help="Build API fixture databases from empty paths (migration checks and benchmarks)",
     )
+    _flake_quarantine().addoption(parser)
+
+
+def _flake_quarantine():
+    """scripts/flake_quarantine.py, loaded by path like scripts/heavy_slot.py (scripts/ is not on every sys.path)."""
+    import importlib.util
+
+    name = "tico_flake_quarantine"
+    if name not in sys.modules:
+        spec = importlib.util.spec_from_file_location(name, Path(__file__).parent / "scripts/flake_quarantine.py")
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[name] = module
+        spec.loader.exec_module(module)
+    return sys.modules[name]
+
+
+def pytest_collection_modifyitems(config, items):
+    """PR checks and the merge queue pass --quarantine (scripts/pr_checks.py run --quarantine): each test listed in
+    ci/quarantine/ runs as a non-strict xfail. Release validation never passes it."""
+    _flake_quarantine().modify(config, items)
 
 
 def unix_socket_path_under_tmp_path(address, basetemp=None):
@@ -147,91 +172,42 @@ def pytest_sessionfinish(session, exitstatus):
         )
 
 
-def _flaky_ledger():
-    """scripts/flaky_ledger.py, loaded by path the way pytest_configure loads heavy_slot."""
-    import importlib.util
-
-    spec = importlib.util.spec_from_file_location(
-        "tico_flaky_ledger", Path(__file__).parent / "scripts/flaky_ledger.py"
-    )
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
-
-
-_flaky_passed = []  # "nodeid: why the first attempt failed", one per listed test that passed on its one retry
-
-
-def pytest_collection_modifyitems(config, items):
-    """A test on the flaky ledger (scripts/flaky-tests.json, still in date) gets the `flaky` marker: one retry."""
-    ledger = _flaky_ledger()
-    listed = [entry["id"] for entry in ledger.active(ledger.load(ledger.LEDGER))]
-    for item in items:
-        if any(ledger.matches(item.nodeid, test_id) for test_id in listed):
-            item.add_marker(pytest.mark.flaky)
-
-
-def _summary_line(report):
-    text = str(report.longrepr or "").strip().splitlines()
-    return (text[-1] if text else f"{report.when} failed")[:200]
-
-
-@pytest.hookimpl(tryfirst=True)
-def pytest_runtest_protocol(item, nextitem):
-    """A listed test runs a second time when its first attempt fails. The second attempt's reports stand, so a second
-    failure fails the run as before; a pass on the retry is listed in the terminal summary and the job summary."""
-    if item.get_closest_marker("flaky") is None:
-        return None
-    from _pytest.runner import runtestprotocol
-
-    ihook = item.ihook
-    ihook.pytest_runtest_logstart(nodeid=item.nodeid, location=item.location)
-    reports = runtestprotocol(item, nextitem=nextitem, log=False)
-    failed = [report for report in reports if report.failed]
-    if failed:
-        why = f"first attempt failed in {failed[0].when}: {_summary_line(failed[0])}"
-        item._request = False  # the second attempt sets its fixtures up again, as pytest-rerunfailures does
-        item.funcargs = None
-        reports = runtestprotocol(item, nextitem=nextitem, log=False)
-        for report in reports:
-            if report.when == "call":
-                report.user_properties.append(("flaky_retry", why))
-    for report in reports:
-        ihook.pytest_runtest_logreport(report=report)
-    ihook.pytest_runtest_logfinish(nodeid=item.nodeid, location=item.location)
-    return True
-
-
-def pytest_runtest_logreport(report):
-    for key, why in report.user_properties:
-        if key == "flaky_retry" and report.when == "call" and report.passed:
-            _flaky_passed.append(f"{report.nodeid}: {why}")
-
-
-def pytest_terminal_summary(terminalreporter):
-    if not _flaky_passed:
-        return
-    terminalreporter.write_sep("-", f"{len(_flaky_passed)} listed test(s) passed on their one retry")
-    for line in _flaky_passed:
-        terminalreporter.write_line(line)
-    summary = os.environ.get("GITHUB_STEP_SUMMARY")
-    if summary:
-        with open(summary, "a", encoding="utf-8") as handle:
-            handle.write("### Flaky tests that passed on their one retry\n")
-            handle.writelines(f"- `{line}`\n" for line in _flaky_passed)
-
-
 @pytest.fixture(autouse=True)
-def maintenance_runs_end(tmp_path):
+def maintenance_runs_end(pooled_connections_closed, tmp_path):
     """A scheduler tick starts its maintenance run on a thread that outlives the test. Join those runs here, before the
     test's tmp_path is removed at teardown: a run still going would find its database gone (tmp_path is the dependency
-    that makes this teardown run first)."""
+    that makes this teardown run first). It takes the pooled-connection guard as a parameter so the guard is set up
+    first and tears down last: a run this join waits for can still hold a connection the guard checks."""
     yield
     for thread in threading.enumerate():
         if thread.name == "maintenance-run":
             thread.join(timeout=60)
             if thread.is_alive():
                 pytest.fail("maintenance run still going 60 s after the test")
+
+
+@pytest.fixture(autouse=True)
+def store_pools_close(pooled_connections_closed):
+    """A store's idle connections stay open until the store is freed, and a store in a reference cycle is freed only by
+    the garbage collector, possibly during a later test, which then warns about the connections. Closing every store
+    the test made, when the test ends, closes those connections on the spot. A closed store still works: its next read
+    opens a new connection. Takes the guard as a parameter, so it tears down before the guard (see maintenance_runs_end)."""
+    yield
+    connection_guard.close_stores()
+
+
+def pytest_runtest_logreport(report):
+    """Under xdist the workers' teardown reports reach the controller here, so the check's cost is summed over them."""
+    if report.when == "teardown":
+        connection_guard.add_report(report)
+
+
+def pytest_terminal_summary(terminalreporter):
+    cost = connection_guard.SUMMED
+    terminalreporter.write_line(
+        f"pooled connection check: {cost['tests']} tests, {cost['seconds']:.1f} s of its own work "
+        f"({cost['joined']:.1f} s joining threads); the store's own connects took {cost['connect']:.1f} s, not counted"
+    )
 
 
 @pytest.fixture(scope="session")

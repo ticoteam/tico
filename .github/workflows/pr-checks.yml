@@ -1,16 +1,28 @@
-# Two tiers. Each push to a pull request runs only the cheap checks (plan, static) on free GitHub-hosted
-# Ubuntu runners, so a push costs no RunsOn minutes. Hosted runners cannot read RunsOn's cache, so those jobs start cold.
-# A merge queue group (the merge_group event, once per queue group) runs everything else on RunsOn Spot VMs in Tico's
-# own AWS account: the tests the group's merged change selects, the Rust and desktop checks, the macOS recorder tests
-# and the Linux Caddy image. The group selects from its own base and head. Static checks run in the group too: its merge
-# commit is the one that lands on main, and a migration timestamp can collide with a change queued ahead of it.
+# PR checks and the merge queue run on GitHub-hosted Ubuntu runners (free for this public repository), so they cost no
+# RunsOn minutes. RunsOn runs only release validation (ci.yml) and remote-run.yml.
+# Two tiers. Each push to a pull request runs the cheap checks (plan, static). A ready pull request from this repository
+# also runs the plan's selected tests and factory simulation, so its `checks` passes only when they pass. A fork's pull
+# request keeps the cheap checks only, and a draft runs nothing.
+# A ready pull request from this repository also runs every other job a queue group runs, under the same conditions, so
+# a failure shows before the change is enqueued: the Rust lint, desktop, macOS recorder and Linux Caddy jobs when the
+# change touches what they check. The plan decides (scripts/pr_checks.py queue_jobs, caddy), so an untouched job starts
+# no VM, on a pull request and in a group alike. Only the cosmetic timing receipt is queue-only.
+# A merge queue group (the merge_group event, once per queue group) runs them all again on its merge commit: the tests
+# the group's merged change selects, the factory simulation when the change reaches what it runs (scripts/pr_checks.py
+# factory_reason), and the same Rust lint, desktop, recorder and Caddy jobs. The group's base is the head of the group
+# queued ahead of it (main for the first), so it selects from its own pull request's change, tested on top of everything
+# ahead of it. The static checks job runs on the pull request only; the group's plan job runs every static check again
+# on the merge commit that lands on main (scripts/ci/merge_commit_checks.sh), since a change queued ahead can break one
+# (a migration timestamp, a route, a lint rule).
+# A failed `tests` or `factory-sim` leg cancels its whole run (its last step), in a queue group or a pull request. The
+# `checks` job still runs (always()) and fails, so the queue drops a failing group within about a minute.
 # `checks` is the one required check. It fails when a job it needs failed or was cancelled; a skipped job passes. A draft
 # pull request runs nothing.
 # A skipped run proves nothing on its own: Tico reads a head whose every check was skipped as pending (backend/github.py
 # _overall). Converting a pull request back to a draft starts no run: such a run would cancel the one in progress on the
 # same head, and a cancelled check keeps the review gate blocking that head (backend/review_gate.py).
-# A pull request's own push runs on hosted runners whether or not it comes from a fork. A fork's change runs on RunsOn
-# only once a maintainer queues it.
+# A pull request's own push runs the cheap checks whether or not it comes from a fork. A fork's tests run only once a
+# maintainer queues it.
 # Without main pushes, pr-cache.yml keeps the main-branch caches the queue groups restore from fresh.
 name: PR checks
 
@@ -37,12 +49,19 @@ concurrency:
 jobs:
   plan:
     if: ${{ !github.event.pull_request.draft }}
-    runs-on: ${{ github.event_name == 'merge_group' && format('runs-on={0}/volume=30gb:gp3:125mbs:3000iops/runner=2cpu-linux-x64/family=m8+m7+m6+r8+r7/extras=s3-cache', github.run_id) || 'ubuntu-24.04' }}
+    runs-on: ubuntu-24.04
     timeout-minutes: 12
+    permissions:
+      contents: read
+      actions: write # cancels the older merge queue groups of the same pull request
     outputs:
       matrix: ${{ steps.plan.outputs.matrix }}
       caddy: ${{ steps.plan.outputs.caddy }}
-      recorder: ${{ steps.recorder.outputs.run }}
+      factory: ${{ steps.plan.outputs.factory }}
+      factory_shards: ${{ steps.plan.outputs.factory_shards }}
+      rust_lint: ${{ steps.plan.outputs.rust_lint }}
+      desktop: ${{ steps.plan.outputs.desktop }}
+      recorder: ${{ steps.plan.outputs.recorder }}
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
@@ -81,20 +100,46 @@ jobs:
             case $log in *'failed permanently'*) ;; *) break ;; esac
           done
           [ -f previous-timings/durations.json ] || echo "No measured timings yet; use collected counts this run"
+      # A merge queue group supersedes the older groups of its pull request: a rebuilt queue entry has a new head. The
+      # concurrency group cannot key on the number (an expression cannot read it from head_ref), so this step cancels
+      # those older queued and running runs. It runs for merge_group only, so a pull request's own runs are never listed,
+      # and it never cancels its own run. Continue-on-error: a failed cancel leaves the older group to finish alone.
+      - name: Cancel older queue groups for this pull request
+        if: github.event_name == 'merge_group'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HEAD_REF: ${{ github.event.merge_group.head_ref }}
+        run: |
+          for status in queued in_progress; do
+            gh api --paginate --slurp "repos/$GITHUB_REPOSITORY/actions/workflows/pr-checks.yml/runs?event=merge_group&status=$status&per_page=100" > "$RUNNER_TEMP/runs-$status.json"
+          done
+          "$RUNNER_TEMP/venv/bin/python" scripts/pr_checks.py cancel-superseded --head-ref "$HEAD_REF" --run-number "$GITHUB_RUN_NUMBER" "$RUNNER_TEMP/runs-queued.json" "$RUNNER_TEMP/runs-in_progress.json"
+      # A queue group's merge commit is what lands on main, and a change queued ahead can break this one's static checks
+      # (a migration timestamp, a route one removes and the other calls, a lint rule one turns on). The group runs every
+      # static check on it here (scripts/ci/merge_commit_checks.sh), beside the test selection (which uses one core),
+      # rather than on a static checks VM. The step after the selection reports the result.
+      - name: Start the merge commit checks
+        if: github.event_name == 'merge_group'
+        env:
+          QUEUE_HEAD: ${{ github.event.merge_group.head_sha }}
+        run: |
+          # set +e: the step's shell runs with -e, and a failed check must still write its status.
+          ( set +e; PATH="$RUNNER_TEMP/venv/bin:$PATH" bash scripts/ci/merge_commit_checks.sh "$BASE_SHA" "$QUEUE_HEAD"
+            echo "$?" > "$RUNNER_TEMP/merge-checks.status" ) > "$RUNNER_TEMP/merge-checks.log" 2>&1 &
       - name: Select affected tests and size measured Python and browser groups
         id: plan
         env:
           EVENT: ${{ github.event_name }}
           CHECK_HEAD: ${{ github.event.merge_group.head_sha || 'HEAD' }}
         run: '"$RUNNER_TEMP/venv/bin/python" scripts/pr_checks.py plan --event "$EVENT" --base "$BASE_SHA" --head "$CHECK_HEAD" --timings previous-timings/durations.json'
-      # Tico Recorder changed (recorder/): the recorder job runs its macOS checks in a merge queue group. Detected here
-      # on both tiers, so no VM starts only to diff the branch; the plan's checkout is full-depth.
-      - name: Recorder changed
-        id: recorder
+      - name: Merge commit checks
+        if: github.event_name == 'merge_group'
+        timeout-minutes: 8
         run: |
-          if git diff --name-only "$BASE_SHA"...HEAD | grep -q '^recorder/'; then
-            echo "run=true" >> "$GITHUB_OUTPUT"
-          fi
+          until [ -f "$RUNNER_TEMP/merge-checks.status" ]; do sleep 2; done
+          cat "$RUNNER_TEMP/merge-checks.log"
+          exit "$(cat "$RUNNER_TEMP/merge-checks.status")"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: pr-check-plan
@@ -105,12 +150,17 @@ jobs:
           { echo '### Test selection'; echo '```json'; cat ci-plan.json; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
 
   tests:
-    # Merge queue groups only.
+    # Merge queue groups, and a pull request from this repository once it is ready (a draft has no plan; a fork's pull
+    # request runs none of these).
     needs: plan
-    if: ${{ github.event_name == 'merge_group' }}
+    if: ${{ github.event_name == 'merge_group' || (github.event_name == 'pull_request' && !github.event.pull_request.draft && github.event.pull_request.head.repo.full_name == github.repository) }}
+    permissions:
+      contents: read
+      actions: write # the last step cancels the run when a suite fails
     name: ${{ matrix.suite }}
-    runs-on: ${{ format('runs-on={0}/volume=30gb:gp3:125mbs:3000iops/runner=4cpu-linux-x64/family=m8+m7+m6+r8+r7/extras=s3-cache', github.run_id) }}
-    timeout-minutes: 20
+    runs-on: ubuntu-24.04
+    # A queue group's VMs are sized up to 12 minutes of tests (pr_checks.QUEUE_MAX_JOB_SECONDS), plus setup.
+    timeout-minutes: 25
     strategy:
       fail-fast: false
       matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
@@ -118,6 +168,8 @@ jobs:
       PYTHONUNBUFFERED: '1'
       TICO_BROWSER_CHANNEL: ''
     steps:
+      - name: Free disk (GitHub-hosted runners start with about 14 GB free)
+        run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc && df -h /
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           persist-credentials: false
@@ -169,22 +221,89 @@ jobs:
         env:
           SUITE: ${{ matrix.suite }}
           TICO_PYTHON: ${{ runner.temp }}/venv/bin/python
-        run: PATH="$RUNNER_TEMP/venv/bin:$PATH" "$RUNNER_TEMP/venv/bin/python" scripts/pr_checks.py run "$SUITE"
-      - if: always() && (startsWith(matrix.suite, 'python-') || startsWith(matrix.suite, 'browser-') || matrix.suite == 'contracts')
+        # --quarantine: a test listed in ci/quarantine/ (it failed and passed on one commit) runs but cannot fail the
+        # suite. Release validation never passes it (scripts/flake_quarantine.py).
+        run: PATH="$RUNNER_TEMP/venv/bin:$PATH" "$RUNNER_TEMP/venv/bin/python" scripts/pr_checks.py run --quarantine "$SUITE"
+      - if: always() && (startsWith(matrix.suite, 'python-') || startsWith(matrix.suite, 'browser-') || matrix.suite == 'contracts' || matrix.suite == 'conformance')
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: results-${{ matrix.suite }}
           path: ci-results/*
           retention-days: 7
           if-no-files-found: warn
+      # Fail fast: a failed suite stops the other legs and any other job in the run at once. `checks` still reports it.
+      - name: Cancel the run when a suite failed
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: gh run cancel "$GITHUB_RUN_ID"
+
+  factory-sim:
+    # Merge queue groups, and a pull request from this repository once it is ready, when the plan selects the factory
+    # simulation (scripts/pr_checks.py factory_reason). Seed 1 of every scenario, in one VM per group of the sim's own
+    # packing (timings.json; run.py --shard), four scenarios at a time on each. Release validation runs seeds 1-3 (ci.yml).
+    # A draft and a fork's pull request never run it.
+    needs: plan
+    if: ${{ (github.event_name == 'merge_group' || (github.event_name == 'pull_request' && !github.event.pull_request.draft && github.event.pull_request.head.repo.full_name == github.repository)) && needs.plan.outputs.factory == 'true' }}
+    permissions:
+      contents: read
+      actions: write # the last step cancels the run when the sim fails
+    name: factory sim ${{ matrix.shard }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ${{ fromJSON(needs.plan.outputs.factory_shards) }}
+    env:
+      PYTHONUNBUFFERED: '1'
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.15'
+          cache: pip
+          cache-dependency-path: backend/requirements-dev.txt
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: package-lock.json
+      - name: Install (five minutes per attempt, one retry)
+        timeout-minutes: 11
+        run: bash scripts/ci_install.sh python
+      - name: Run this group of the factory sim
+        env:
+          SHARD: ${{ matrix.shard }}
+        run: |
+          set -o pipefail
+          "$RUNNER_TEMP/venv/bin/python" -W ignore -m evals.factory.run --seeds 1 --shard "$SHARD" -j 4 2>&1 \
+            | tee "$RUNNER_TEMP/sim.log"
+      - if: always()
+        name: Summary
+        run: |
+          { echo '### Factory sim, group ${{ matrix.shard }}'; echo '```'
+            awk '/^== /{h=$0; next} /^ +(FAIL|NOTE) /{if(h){print h; h=""} print} /scenario runs in/' "$RUNNER_TEMP/sim.log"
+            echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+      - name: Cancel the run when the sim failed
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: gh run cancel "$GITHUB_RUN_ID"
 
   static:
-    # Every change, on both tiers: pinned ruff against its baseline (no new findings or suppressions), pyright on the
-    # boundary modules, migration names, the UI's generated API types, the runner wire contract, shell scripts
-    # (shellcheck) and workflows (actionlint). Seconds each once installed; tools are pinned.
+    # Every push to a pull request that is not a draft (a queue group runs the same list on its merge commit in its plan
+    # job instead, scripts/ci/merge_commit_checks.sh): pinned ruff against its baseline (no new findings or
+    # suppressions), basedpyright on the backend against its baseline (strict for new modules), migration names, the UI's generated API types, the
+    # OpenAPI document, the runner wire contract, shell scripts (shellcheck) and workflows (actionlint). Seconds each
+    # once installed; tools are pinned. The UI's strict TypeScript rule (scripts/check_ui_strict.py) runs here too.
     name: static checks
-    if: ${{ !github.event.pull_request.draft }}
-    runs-on: ${{ github.event_name == 'merge_group' && format('runs-on={0}/volume=30gb:gp3:125mbs:3000iops/runner=2cpu-linux-x64/family=m8+m7+m6+r8+r7/extras=s3-cache', github.run_id) || 'ubuntu-24.04' }}
+    if: ${{ github.event_name == 'pull_request' && !github.event.pull_request.draft }}
+    runs-on: ubuntu-24.04
     timeout-minutes: 12
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
@@ -193,16 +312,9 @@ jobs:
           fetch-depth: 0
       - name: New migrations have unique UTC timestamps
         env:
-          EVENT: ${{ github.event_name }}
           BASE_BRANCH: ${{ github.base_ref }}
           PR_HEAD: ${{ github.event.pull_request.head.sha }}
-          QUEUE_HEAD: ${{ github.event.merge_group.head_sha }}
         run: |
-          if [ "$EVENT" = merge_group ]; then
-            # The group's own base and merge commit: every change queued ahead of it is already in the base.
-            python3 scripts/check_migration_order.py --base "$BASE_SHA" --head "$QUEUE_HEAD" --base-name main
-            exit 0
-          fi
           # Checkout has full history; refresh the base tip because the PR event's base SHA can be stale.
           git fetch --no-tags origin "+refs/heads/$BASE_BRANCH:refs/remotes/origin/$BASE_BRANCH"
           python3 scripts/check_migration_order.py --base "refs/remotes/origin/$BASE_BRANCH" --head "$PR_HEAD" --base-name "$BASE_BRANCH"
@@ -217,20 +329,26 @@ jobs:
       - name: Install (five minutes per attempt, one retry)
         timeout-minutes: 11
         run: bash scripts/ci_install.sh python && "$RUNNER_TEMP/venv/bin/python" -m pip install --disable-pip-version-check uv==0.13.0
-      - name: Flaky test ledger (owner, reason, exit date; stdlib only)
-        run: python3 scripts/flaky_ledger.py --base "$BASE_SHA"
       - name: Python lint
         run: PATH="$RUNNER_TEMP/venv/bin:$PATH" LINT_BASE_REF="$BASE_SHA" bash scripts/lint.sh
-      - name: Boundary types
+      - name: Types (basedpyright baseline, strict new modules)
+        env:
+          PYRIGHT_BASE_REF: ${{ env.BASE_SHA }}
         run: PATH="$RUNNER_TEMP/venv/bin:$PATH" bash scripts/check_types.sh
       - name: UI types
         run: PATH="$RUNNER_TEMP/venv/bin:$PATH" bash scripts/check_ui_types.sh --base "$BASE_SHA"
+      - name: OpenAPI document (docs/openapi/v2.json is what the generator writes)
+        run: PATH="$RUNNER_TEMP/venv/bin:$PATH" python3 -m backend.openapi_v2 --check
       - name: UI lint setup
         run: npm ci --ignore-scripts --no-audit --no-fund
       - name: UI lint
         run: bash scripts/check_ui_lint.sh --base "$BASE_SHA"
+      - name: UI strict (new UI code is TypeScript; each .ts file type-checks strictly)
+        run: python3 scripts/check_ui_strict.py --base "$BASE_SHA"
       - name: UI routes
         run: PATH="$RUNNER_TEMP/venv/bin:$PATH" bash scripts/check_ui_routes.sh --base "$BASE_SHA"
+      - name: UI source suffixes (each .js UI scanner also reads .ts; text only)
+        run: '"$RUNNER_TEMP/venv/bin/python" scripts/check_ui_source_suffixes.py'
       - name: Runner wire contract
         run: '"$RUNNER_TEMP/venv/bin/python" scripts/check_wire_contract.py'
       - name: Shell scripts (shellcheck, pinned)
@@ -239,25 +357,22 @@ jobs:
         run: bash scripts/pinned_tool.sh actionlint
 
   rust-lint:
-    # Merge queue groups only: a cold clippy build on a hosted runner (no RunsOn cache) is slower than a pull request's
-    # checks should be. rustfmt and clippy -D warnings (scripts/rust_checks.sh) when a crate it checks changed.
+    # Merge queue groups, and a ready pull request from this repository: rustfmt and clippy -D warnings
+    # (scripts/rust_checks.sh) when the plan sees a change to a crate it checks (pr_checks.QUEUE_JOB_PATHS). No VM starts
+    # when none changed.
     name: rust lint
-    if: ${{ github.event_name == 'merge_group' }}
-    runs-on: ${{ format('runs-on={0}/volume=30gb:gp3:125mbs:3000iops/runner=4cpu-linux-x64/family=m8+m7+m6+r8+r7/extras=s3-cache', github.run_id) }}
+    needs: plan
+    if: ${{ (github.event_name == 'merge_group' || (github.event_name == 'pull_request' && !github.event.pull_request.draft && github.event.pull_request.head.repo.full_name == github.repository)) && needs.plan.outputs.rust_lint == 'true' }}
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
+      - name: Free disk (GitHub-hosted runners start with about 14 GB free)
+        run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc && df -h /
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           persist-credentials: false
           fetch-depth: 0
-      - name: Rust changed
-        id: changed
-        run: |
-          if git diff --name-only "$BASE_SHA"...HEAD | grep -qE '^(runner-rs|relay-rs|tools/release-command|tools/trust-list-check|contracts/runner)/|^scripts/rust_checks\.sh$'; then
-            echo "run=true" >> "$GITHUB_OUTPUT"
-          fi
-      - if: steps.changed.outputs.run == 'true'
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           workspaces: |
             runner-rs -> target
@@ -265,32 +380,27 @@ jobs:
             tools/release-command -> target
             tools/trust-list-check -> target
           shared-key: pr-rust-lint
-      - if: steps.changed.outputs.run == 'true'
-        run: bash scripts/rust_checks.sh
+      - run: bash scripts/rust_checks.sh
 
   desktop-app:
-    # Merge queue groups only. The Tauri desktop app (app/): rustfmt, clippy -D warnings and its unit tests, on Linux with
-    # the build dependencies app.yml installs. Nothing runs when no app file changed.
+    # Merge queue groups, and a ready pull request from this repository. The Tauri desktop app (app/): rustfmt, clippy
+    # -D warnings and its unit tests, on Linux with the build dependencies app.yml installs. No VM starts when the plan
+    # sees no app file changed.
     name: desktop app
-    if: ${{ github.event_name == 'merge_group' }}
-    runs-on: ${{ format('runs-on={0}/volume=30gb:gp3:125mbs:3000iops/runner=4cpu-linux-x64/family=m8+m7+m6+r8+r7/extras=s3-cache', github.run_id) }}
+    needs: plan
+    if: ${{ (github.event_name == 'merge_group' || (github.event_name == 'pull_request' && !github.event.pull_request.draft && github.event.pull_request.head.repo.full_name == github.repository)) && needs.plan.outputs.desktop == 'true' }}
+    runs-on: ubuntu-24.04
     timeout-minutes: 45
     steps:
+      - name: Free disk (GitHub-hosted runners start with about 14 GB free)
+        run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc && df -h /
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           persist-credentials: false
           fetch-depth: 0
-      - name: App changed
-        id: changed
-        run: |
-          if git diff --name-only "$BASE_SHA"...HEAD | grep -q '^app/'; then
-            echo "run=true" >> "$GITHUB_OUTPUT"
-          fi
-      - if: steps.changed.outputs.run == 'true'
-        name: Rust 1.92.0 with rustfmt and clippy (the version scripts/rust_checks.sh pins)
+      - name: Rust 1.92.0 with rustfmt and clippy (the version scripts/rust_checks.sh pins)
         run: rustup toolchain install 1.92.0 --profile minimal --component clippy,rustfmt
-      - if: steps.changed.outputs.run == 'true'
-        name: Linux build dependencies (the ones app.yml installs)
+      - name: Linux build dependencies (the ones app.yml installs)
         run: |
           sudo sed -i \
             -e 's|mirror+file:/etc/apt/apt-mirrors.txt|https://archive.ubuntu.com/ubuntu/|g' \
@@ -298,28 +408,23 @@ jobs:
             /etc/apt/sources.list.d/ubuntu.sources
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libpulse-dev
-      - if: steps.changed.outputs.run == 'true'
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           workspaces: app -> target
           shared-key: pr-desktop
           # A failing run keeps its compiled dependencies, so the next push does not start from nothing.
           cache-on-failure: true
-      - if: steps.changed.outputs.run == 'true'
-        name: rustfmt
+      - name: rustfmt
         working-directory: app
         run: cargo +1.92.0 fmt --check
-      - if: steps.changed.outputs.run == 'true'
-        name: clippy
+      - name: clippy
         working-directory: app
         run: cargo +1.92.0 clippy --locked --all-targets -- -D warnings
-      - if: steps.changed.outputs.run == 'true'
-        name: Python for the updater test (the hub backend it serves from, installed as the Python suites install it)
+      - name: Python for the updater test (the hub backend it serves from, installed as the Python suites install it)
         run: |
           python3 -m venv "$RUNNER_TEMP/venv"
           "$RUNNER_TEMP/venv/bin/python" -m pip install --disable-pip-version-check --retries 1 --timeout 30 -r backend/requirements-dev.txt
-      - if: steps.changed.outputs.run == 'true'
-        name: unit tests
+      - name: unit tests
         working-directory: app
         env:
           TICO_PYTHON: ${{ runner.temp }}/venv/bin/python
@@ -327,10 +432,10 @@ jobs:
 
   recorder:
     # The Rust crate with the desktop feature (the window, the updater), on macOS: it links the system frameworks.
-    # Merge queue groups only, when the plan sees a change under recorder/.
+    # Merge queue groups, and a ready pull request from this repository, when the plan sees a change under recorder/.
     name: recorder tests
     needs: plan
-    if: ${{ github.event_name == 'merge_group' && needs.plan.outputs.recorder == 'true' }}
+    if: ${{ (github.event_name == 'merge_group' || (github.event_name == 'pull_request' && !github.event.pull_request.draft && github.event.pull_request.head.repo.full_name == github.repository)) && needs.plan.outputs.recorder == 'true' }}
     runs-on: macos-latest
     timeout-minutes: 45
     steps:
@@ -356,11 +461,11 @@ jobs:
         run: cargo test --locked --features desktop,cli
 
   caddy-linux:
-    # Merge queue groups only, when the plan selects the Caddy image.
+    # Merge queue groups, and a ready pull request from this repository, when the plan selects the Caddy image.
     needs: plan
-    if: ${{ github.event_name == 'merge_group' && needs.plan.outputs.caddy == 'true' }}
+    if: ${{ (github.event_name == 'merge_group' || (github.event_name == 'pull_request' && !github.event.pull_request.draft && github.event.pull_request.head.repo.full_name == github.repository)) && needs.plan.outputs.caddy == 'true' }}
     name: caddy-linux-${{ matrix.arch }}
-    runs-on: ${{ format('runs-on={0}/volume=30gb:gp3:125mbs:3000iops/runner=4cpu-linux-{1}{2}/extras=s3-cache', github.run_id, matrix.arch == 'arm64' && 'arm64' || 'x64', matrix.arch != 'arm64' && '/family=m8+m7+m6+r8+r7' || '') }}
+    runs-on: ${{ matrix.arch == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
     timeout-minutes: 35
     strategy:
       fail-fast: false
@@ -375,6 +480,8 @@ jobs:
       TICO_CADDY_TEST_IMAGE: tico-caddy-qa:current
       DOCKER_BUILD_RECORD_UPLOAD: 'false'
     steps:
+      - name: Free disk (GitHub-hosted runners start with about 14 GB free)
+        run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc && df -h /
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           persist-credentials: false
@@ -407,7 +514,9 @@ jobs:
       - name: Actual pinned Linux Caddy runtime and lifecycle
         env:
           TICO_CADDY_TEST_OUTPUT: ${{ runner.temp }}/caddy-runtime-evidence
-        run: '"$RUNNER_TEMP/venv/bin/python" -m pytest -q -m slow -n 0 backend/tests/test_caddy_container.py'
+        # --quarantine: as in the python legs (scripts/flake_quarantine.py). The JUnit report is the per-test evidence a
+        # later run reads, uploaded below as results-<job>.
+        run: 'mkdir -p ci-results && "$RUNNER_TEMP/venv/bin/python" -m pytest -q -m slow -n 0 --quarantine --junitxml=ci-results/caddy-linux-${{ matrix.arch }}.xml backend/tests/test_caddy_container.py'
       - name: Preserve fixture receipts and redacted failure logs
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -415,14 +524,22 @@ jobs:
           name: caddy-runtime-${{ matrix.arch }}
           path: ${{ runner.temp }}/caddy-runtime-evidence/
           if-no-files-found: warn
+      - name: Upload the JUnit report (quarantine evidence)
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: results-caddy-linux-${{ matrix.arch }}
+          path: ci-results/*
+          retention-days: 7
+          if-no-files-found: warn
 
   timings:
     name: PR job timings
-    # Merge queue groups only. Failed runs keep their timing receipt, but a canceled run ends here: a final job queued
-    # after the cancellation can wait for a RunsOn runner that never comes. It gates nothing: the receipt is cosmetic.
+    # Merge queue groups only. A failed tests or factory-sim leg cancels the run, and a canceled run ends here: a final job
+    # queued after the cancellation can wait for a RunsOn runner that never comes. It gates nothing: the receipt is cosmetic.
     if: ${{ !cancelled() && github.event_name == 'merge_group' }}
-    needs: [plan, tests, caddy-linux, static, rust-lint, desktop-app, recorder]
-    runs-on: ${{ format('runs-on={0}/volume=30gb:gp3:125mbs:3000iops/runner=2cpu-linux-x64/family=m8+m7+m6+r8+r7/extras=s3-cache', github.run_id) }}
+    needs: [plan, tests, factory-sim, caddy-linux, static, rust-lint, desktop-app, recorder]
+    runs-on: ubuntu-24.04
     # Four minutes: checkout and the artifact download run before the receipt, which is capped at one minute below.
     # A hang in the receipt canceled the whole job at three minutes on #2487.
     timeout-minutes: 4
@@ -447,11 +564,12 @@ jobs:
           echo "Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" >> "$GITHUB_STEP_SUMMARY"
 
   checks:
-    # The one required check, on main and on the merge queue. It fails when a job it needs failed or was cancelled. A
-    # skipped job passes: a pull request skips the merge queue jobs, and a draft pull request skips every job.
+    # The one required check, on every pull request to main and on the merge queue. It fails when a job it needs failed or
+    # was cancelled. A skipped job passes: a change that does not reach a job skips it, a fork's pull request skips the
+    # tests, the sim and the Rust, desktop, recorder and Caddy jobs, and a draft pull request skips every job.
     name: checks
     if: ${{ always() && !github.event.pull_request.draft }}
-    needs: [plan, static, tests, rust-lint, desktop-app, recorder, caddy-linux]
+    needs: [plan, static, tests, factory-sim, rust-lint, desktop-app, recorder, caddy-linux]
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
@@ -460,6 +578,7 @@ jobs:
           PLAN: ${{ needs.plan.result }}
           STATIC: ${{ needs.static.result }}
           TESTS: ${{ needs.tests.result }}
+          FACTORY_SIM: ${{ needs.factory-sim.result }}
           RUST_LINT: ${{ needs.rust-lint.result }}
           DESKTOP_APP: ${{ needs.desktop-app.result }}
           RECORDER: ${{ needs.recorder.result }}
@@ -475,6 +594,7 @@ jobs:
           check plan "$PLAN"
           check static "$STATIC"
           check tests "$TESTS"
+          check factory-sim "$FACTORY_SIM"
           check rust-lint "$RUST_LINT"
           check desktop-app "$DESKTOP_APP"
           check recorder "$RECORDER"

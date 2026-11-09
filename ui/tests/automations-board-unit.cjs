@@ -1,4 +1,4 @@
-// No browser: the board's shape (ui/app/automations-flow.js auBoardShape) reads an inbox's rules, questions and LLM out
+// No browser: the board's shape (ui/app/automations-flow.ts auBoardShape) reads an inbox's rules, questions and LLM out
 // of a flow, auBoardFlow writes them back unchanged, and any other flow is no board (it keeps the step list).
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -6,7 +6,7 @@ const vm = require('node:vm');
 const path = require('node:path');
 
 const context = vm.createContext({AU: null});
-vm.runInContext(fs.readFileSync(path.join(__dirname, '../app/automations-flow.js'), 'utf8'), context);
+vm.runInContext(fs.readFileSync(path.join(__dirname, '../../build/ui/app/automations-flow.js'), 'utf8'), context);
 const {auBoardShape: shape, auBoardFlow: flow} = context;
 const fx = JSON.parse(fs.readFileSync(path.join(__dirname, 'fixtures/automations-board.json'), 'utf8'));
 const clone = x => JSON.parse(JSON.stringify(x));
@@ -134,7 +134,7 @@ const legacy = JSON.parse(fs.readFileSync(path.join(__dirname, 'fixtures/redesig
 for (const a of legacy) assert.equal(shape(a), null, `${a.id} keeps its step list`);
 
 // The inbox templates (backend/automation_templates) are boards as a person's message flow, so New inbox opens one.
-vm.runInContext(fs.readFileSync(path.join(__dirname, '../app/automations-new.js'), 'utf8'), context);
+vm.runInContext(fs.readFileSync(path.join(__dirname, '../../build/ui/app/automations-new.js'), 'utf8'), context);
 const tdir = path.join(__dirname, '../../backend/automation_templates');
 const templates = Object.fromEntries(fs.readdirSync(tdir).filter(f => f.endsWith('.json'))
   .map(f => [f.replace(/\.json$/, ''), JSON.parse(fs.readFileSync(path.join(tdir, f), 'utf8'))]));

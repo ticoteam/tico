@@ -68,4 +68,4 @@ The screen reads the Heartbeat again once a minute while it is open and the page
 
 API: `GET /api/v2/heartbeat` (with `limit` and `before` to page the log) and `PUT /api/v2/heartbeat` with `{"interval_s": 15}`. A step's switch uses `PUT /api/v2/system-routines/{key}`.
 
-<!-- Sources checked 2026-11-06 on feat/heartbeat: backend/heartbeat.py; backend/app.py (schedule_loop); backend/views.py (status); backend/operations.py (health); backend/migrations/20261106094503_heartbeat.py; ui/app/automations-heartbeat.js. -->
+<!-- Sources checked 2026-11-06 on feat/heartbeat: backend/heartbeat.py; backend/app.py (schedule_loop); backend/views.py (status); backend/operations.py (health); backend/migrations/20261106094503_heartbeat.py; ui/app/automations-heartbeat.ts. -->

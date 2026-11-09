@@ -43,12 +43,17 @@ def inbound_wait_timeout(method, path, body, default, *, query=None):
 
 # Routes the server answers only after a chain of model calls (backend/judge.py SLOW_CHAIN_SECONDS, 35 s with Decisions
 # at Medium or High): their callers wait past it.
-SLOW_POSTS = frozenset({"/api/v2/decisions", "/api/v2/gateway/search", "/api/v2/gateway/fetch"})
+SLOW_POSTS = frozenset(
+    {"/api/v2/decisions", "/api/v2/gateway/search", "/api/v2/gateway/fetch", "/api/v2/gateway/digest"}
+)
 SLOW_WAIT = 45
 # A file streamed from disk (a video up to the server's limit): the server stores the bytes after the last one is sent.
 STREAM_WAIT = 600
 # An image takes an image model's time (the Gateway's own try is 120 s): its caller waits past that.
 LONG_POSTS = {"/api/v2/gateway/images": 150}
+# A finished video's MP4, fetched through the server from the Gateway: the caller waits for the whole file.
+VIDEO_CONTENT = re.compile(r"/api/v2/gateway/videos/gv_[0-9a-f]{24}/content")
+VIDEO_CONTENT_WAIT = 150
 
 
 class APIError(Exception):
@@ -87,7 +92,18 @@ class Client:
             raise ValueError("Use the Tico origin URL without credentials, path, query, or fragment")
         self.opener = urllib.request.build_opener(NoRedirect())
 
-    def request(self, method, path, body=None, key=None, extra_headers=None, binary=False, raw=None, delegate=False):
+    def request(
+        self,
+        method,
+        path,
+        body=None,
+        key=None,
+        extra_headers=None,
+        binary=False,
+        raw=None,
+        delegate=False,
+        limit=20_000_000,
+    ):
         if not path.startswith("/api/v2/"):
             raise ValueError("Use a versioned Tico API path")
         key = key or str(uuid.uuid4())
@@ -143,6 +159,8 @@ class Client:
             timeout = max(timeout, STREAM_WAIT)
         if method == "POST" and path in LONG_POSTS:
             timeout = max(timeout, LONG_POSTS[path])
+        if method == "GET" and binary and VIDEO_CONTENT.fullmatch(path):
+            timeout = max(timeout, VIDEO_CONTENT_WAIT)
         for attempt in range(self.retries + 1):
             if hasattr(data, "seek"):
                 data.seek(0)
@@ -150,8 +168,8 @@ class Client:
             try:
                 with self.opener.open(req, timeout=timeout) as response:
                     if binary:
-                        data = response.read(20_000_001)
-                        if len(data) > 20_000_000 or hashlib.sha256(data).hexdigest() != response.headers.get(
+                        data = response.read(limit + 1)
+                        if len(data) > limit or hashlib.sha256(data).hexdigest() != response.headers.get(
                             "X-Content-SHA256"
                         ):
                             raise APIError(
@@ -180,8 +198,8 @@ class Client:
                             target, headers={"User-Agent": "Tico-Client/" + CLIENT_VERSION}
                         )
                         with self.opener.open(download, timeout=self.timeout) as response:
-                            data = response.read(20_000_001)
-                            if len(data) > 20_000_000 or hashlib.sha256(data).hexdigest() != digest:
+                            data = response.read(limit + 1)
+                            if len(data) > limit or hashlib.sha256(data).hexdigest() != digest:
                                 raise APIError(
                                     "file_integrity", "Tico file response failed its size or integrity check"
                                 )

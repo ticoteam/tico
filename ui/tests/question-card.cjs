@@ -1,4 +1,4 @@
-// The one question card (ui/app/question-card.js), in the Needs you card and in the task page's Needs you box: the real asker,
+// The one question card (ui/app/question-card.ts), in the Needs you card and in the task page's Needs you box: the real asker,
 // "asked N days ago" and what it holds up; the question and its why line; four picks as checkboxes, the recommended
 // ones ticked and labelled; "Yes to all" and "Send ticked (n)", each with its "what happens" line; the fallback small
 // at the foot; ids, paths and error text only under Details. Ticking 1, 2 and 4 sends those three, and the bot hears
@@ -82,19 +82,20 @@ const card = () => ({
         {text: '4. Spend cap (recommended)', then: PICKS[3].then, ticked: true}],
       buttons: [{label: 'Yes to all', then: 'All 4 go to Writer as yes'},
         {label: 'Send ticked (3)', then: 'These 3 as yes; Writer hears "not this one" for the rest'}]});
-    // 16, 17: the fallback is a small line at the foot, not a button and not styled as a pick; the run id, the error
+    // 16, 17: the fallback is a line at the foot, no larger than a pick's text (the 12 px floor, 9d11efec7, makes them
+    // equal), not a button and not styled as a pick; the run id, the error
     // and the path are only under Details, closed.
     const foot = await page.evaluate(() => {
       const body = document.querySelector('.decide .dc-body'), line = body.querySelector('.qc-fallback'), details = body.querySelector('.qc-details');
       const above = [...body.children].filter(x => x !== details).map(x => x.textContent).join(' ');
       return {line: line.textContent, last: [...body.children].slice(-2)[0] === line && body.lastElementChild === details, open: details.open,
-        small: parseFloat(getComputedStyle(line).fontSize) < parseFloat(getComputedStyle(body.querySelector('.qc-then')).fontSize),
+        notLarger: parseFloat(getComputedStyle(line).fontSize) <= parseFloat(getComputedStyle(body.querySelector('.qc-then')).fontSize),
         weight: getComputedStyle(line).fontWeight, inButton: !!line.closest('button'),
         leaks: ['8719e1a6', 'ValueError', 'reports/chat-plan.md'].filter(x => above.includes(x)),
         detail: ['8719e1a6', 'ValueError', 'reports/chat-plan.md'].every(x => details.textContent.includes(x))};
     });
     const day = new Date('2026-10-23T16:00:00Z').toLocaleDateString(undefined, {weekday: 'short', month: 'short', day: 'numeric'});
-    assert.deepEqual(foot, {line: `If you don't answer by ${day}: It stays a draft`, last: true, open: false, small: true, weight: '400',
+    assert.deepEqual(foot, {line: `If you don't answer by ${day}: It stays a draft`, last: true, open: false, notLarger: true, weight: '400',
       inButton: false, leaks: [], detail: true});
 
     // 12: untick pick 3 stays unticked; tick changes count. Untick 4, tick it back: Send ticked (3) sends 1, 2 and 4.

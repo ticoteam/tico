@@ -15,6 +15,7 @@ from backend.tests.test_files import turn
 from backend.tests.test_org_rules import org
 from backend.tests.test_page_audience import edit
 from backend.tests.test_pages import HTML, page
+from backend.tests.test_question_tasks import keep_asking
 
 
 def public_page(api):
@@ -160,6 +161,7 @@ def test_legacy_exact_title_labels_are_task_local_and_survive_title_purge(api, p
 def test_automatic_defaults_keep_label_and_body_provenance(api, kind, outcome):
     from backend import ask_deadlines
 
+    keep_asking(api)
     tid, _, fid = public_page(api)
     ordinary = post(api, f"tasks/{tid}/files", {"name": "public.txt", "text": "Public choice"})["file_id"]
     made = review_ask(
@@ -173,6 +175,7 @@ def test_automatic_defaults_keep_label_and_body_provenance(api, kind, outcome):
         if_no_answer={"do": "Confidential draft", "kind": kind, "by": H.shift(H.now(), days=1)},
     )
     assert made["question"]["refs"]["if_no_answer"]["source"] == {"file": fid, "version": 1}
+    keep_asking(api, on=True)
     with api.app.state.store.transaction() as c:
         settled = ask_deadlines.sweep(c, H.shift(H.now(), days=6))
         assert made["question"]["id"] in settled[outcome]
@@ -219,6 +222,7 @@ def test_identical_content_in_another_task_resolves_its_own_live_review(api):
 
 
 def test_review_defaults_are_scrubbed_on_the_recipients_needs_you(api):
+    keep_asking(api)
     tid, _, fid = public_page(api)
     ordinary = post(api, f"tasks/{tid}/files", {"name": "public.txt", "text": "Public choice"})["file_id"]
     review_ask(

@@ -1,0 +1,14 @@
+{
+    "files": {
+        "./backend/scim.py": [
+            {
+                "code": "reportOptionalMemberAccess",
+                "range": {
+                    "startColumn": 18,
+                    "endColumn": 23,
+                    "lineCount": 1
+                }
+            }
+        ]
+    }
+}

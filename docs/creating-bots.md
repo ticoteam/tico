@@ -21,9 +21,9 @@ Finish setup, and the wizard uses the same templates. A starter is created parke
 materializes the repository, and **Set up** opens its first conversation. Answer its questions and review its first draft.
 For another template, a task goes to BotOps to build the repository, apply the reviewed Instructions and check readiness.
 You can also ask BotOps for a custom bot in a DM; it takes the bot through placement and setup as you.
-Assistant, BotOps, Librarian and Strategy Bot are the four Built-in bots; they cannot be archived or deleted.
+Assistant, BotOps, Librarian, Strategy Bot, Task Manager, Bookkeeper and Brand Owner are Built-in bots; they cannot be archived or deleted.
 
-The 99 role templates, in nine groups with a Leadership extra, are described in
+The 104 role templates, in nine groups with a Leadership extra, are described in
 [Starter bots](starter-bots.md), with the card fields and the quality bar this page's advice is
 measured against.
 
@@ -765,10 +765,11 @@ has nothing to do with `bot-sales` in another's. Paths in instructions should th
 relative to the repository, or relative to the environment's workspace, never hard-coded to one
 computer's home directory.
 
-GitHub is optional. A plain git repository in the environment's workspace is enough for a bot to
-run: the runner reads the checkout on the computer, and the bot commits into it. A remote buys backup,
-review, and editing from somewhere other than the runner's computer, which is why preflight flags a
-missing remote. The bot's repository link is recorded on the bot in **Settings**, and that same
+GitHub is optional for a bot to run. A plain git repository in the environment's workspace is enough: the
+runner reads the checkout on the computer, and the bot commits into it. A remote buys backup, review, and editing
+from somewhere other than the runner's computer, which is why preflight flags a missing remote. Until GitHub is
+connected in **Tools**, under GitHub, a bot's files and memory exist only on its computer, with no backup, and Health
+and the bot's page say so. The bot's repository link is recorded on the bot in **Settings**, and that same
 repository can be cloned into another environment's workspace as a starting point there.
 
 Two consequences when you run more than one environment:

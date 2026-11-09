@@ -531,7 +531,9 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
     hub gateway catalog [QUERY]            the Tico AI Gateway's lineup: models, decision levels, services (skills/gateway)
     hub gateway search QUERY [--max 5]     web search through the Gateway: results, answer, cost
     hub gateway fetch URL [--max-tokens N] read a web page or PDF through the Gateway: title, content, cost
-    hub gateway image PROMPT --category C [--ref FILE]... [--size WxH] [--count N] --out PATH
+    hub gateway image PROMPT [--model low|high|svg] [--category C] [--quality Q] [--ref FILE]... [--size WxH] [--count N] --out PATH
+    hub gateway video PROMPT [--seconds N] [--resolution R] [--aspect A] [--audio|--no-audio] [--first-frame FILE] [--last-frame FILE]
+    hub gateway video-status ID --out PATH.mp4    check a video job; save it once it is done
                                            make an image (storyboard, photo, character or graphic) and save it;
                                            PATH.json beside it says how it was made
     hub decision readout [--days 7]        per question set: calls, cost, Jev or fallback, answer spread; and the
@@ -606,6 +608,10 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
                                            delete a group; its teammates and groups move up to its parent
     hub group access <group> [--see V] [--read V] [--write V]
                                            show or set who sees, reads, writes to a group (a lead or an admin)
+    hub setup show                         where Finish setup stands: the wizard, the company file's people, the checklist
+    hub setup complete                     the owner finishes the welcome wizard with its saved answers (Create my team)
+    hub setup invite <person_key> [--email E]
+                                           the owner invites a person the company file from setup names (docs/onboarding.md)
     hub api GET|POST|PUT|PATCH|DELETE <path> ['{json}']
                                            BotOps: any v2 route, as the person who asked; a Confirm card for what
                                            always needs their click. Never a secret in the body
@@ -644,12 +650,20 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
                     [--start D] [--end D] [--period month] [--compare prior] [--top-n N] [--by vendor] [--month YYYY-MM]
                     [--year YYYY]
     hub finance metric <name> [--budget-id B] [--start D] [--end D] [--days N]   one number, with its as-of time
+    hub finance brief                      what changed in the money you may see: a few short lines
     hub finance act <kind|help> [--payload JSON|-] [--dry-run] [--operation-id KEY]
                                            ask for one Finance action; help lists kinds, `help --payload
                                            '{"kind":"bill_create"}'` one kind's fields. The key makes a retry land once
     hub finance action <action-id>         an action's status and result
     hub finance inbox [--kind K] [--cursor C] [--limit N]   your Finance work queue, with counts per kind; --kind pages one kind
-    hub finance card-fill                  fill your card into a checkout (not available yet)
+    hub directory self | types | describe <type>        who we are, the types, one type's attributes and links
+    hub directory find <type> [--name N] [--status S] [--link K] [--after C] [--limit N] [--text]
+    hub directory get <id|email|domain|name> [--text]   one entity: values, links, records, your notes
+    hub directory upsert <type> --match email=x [--set k=v ...] [--name N] [--evidence ID] [--confidence F]
+    hub directory link <a> <link> <b> [--from D] [--until D]; unlink <link-id>; merge <keep> <drop>; unmerge <drop>
+    hub directory history <ref> [--attribute K]; note <ref> <text> [--audience me|company]; rules <ref>
+    hub directory attribute add <type> <key> --name N --value-type T --description D [--option k=label]
+    hub directory type add <key> --name N --description D; hub directory link-type add <key> --name N --inverse N --description D
     hub task-manager status                the Task Manager: bot, hourly report switch and schedule, last run, each department
     hub task-manager on|off                the hourly department report (the owner or an admin)
     hub task-manager schedule <business|hourly|4h|daily> [--at HH:MM]
@@ -910,6 +924,14 @@ def on_off(word):
     if word not in ("on", "off"):
         raise argparse.ArgumentTypeError("use on or off")
     return word == "on"
+
+
+def _pair(text):
+    """`KEY=VALUE` on a command line, split at the first `=`: a match, a value or an option of `hub directory`."""
+    key, sep, value = str(text).partition("=")
+    if not sep or not key.strip():
+        raise argparse.ArgumentTypeError(f"{text} is not KEY=VALUE")
+    return key.strip(), value
 
 
 def _finance_payload(text):
@@ -2113,14 +2135,16 @@ def parser():
     s.add_argument(
         "--if-no-answer",
         dest="if_no_answer",
-        help="what you will do if they don't answer: an option (\"Yes\") or one plain sentence",
+        help="what you will do if they don't answer: an option (\"Yes\") or one plain sentence. Only for a step that "
+        "sends, spends or deletes: a reversible, internal default is refused (ask_default_go_ahead), so just do it and "
+        "note it on your task",
     )
     s.add_argument(
         "--default-kind",
         dest="default_kind",
         choices=["reversible", "send", "spend", "delete"],
-        help="what that step is, required with --if-no-answer; only reversible (internal, undoable) goes "
-        "ahead on its own: a send, spending or a delete waits for an answer",
+        help="what that step is, required with --if-no-answer; a reversible (internal, undoable) step is not asked: "
+        "do it and say so in one line on your task. A send, spending or a delete waits for an answer",
     )
     s.add_argument("--by", help="ISO-8601 date-time: go ahead then, instead of after the team's days (default 3)")
     s.add_argument(
@@ -2434,6 +2458,21 @@ def parser():
     s.add_argument("--poster", help="a PNG or JPEG preview")
     s.add_argument("--note", help="short note on this version (at most 500 characters)")
     s.set_defaults(fn="task attach")
+    # Pipeline requirements (backend/pipeline_requirements.py, backend/requirement_attachments.py): the MCP tools of the
+    # same names (clients/hubtools.py) run through the same commands.
+    s = sub.add_parser("requirements", help="the requirements a pipeline stage sets: kind, reviewer, version")
+    s.add_argument("stage_id", help="the pipeline stage (a task step id)")
+    s.set_defaults(fn="requirements")
+    requirement = sub.add_parser("requirement", help="evidence on a requirement of a ticket").add_subparsers(dest="sub")
+    s = requirement.add_parser("attach", help="attach a company file, an uploaded blob or a link to a requirement")
+    s.add_argument("task_id", help="the ticket, at the requirement's stage")
+    s.add_argument("requirement_id")
+    s.add_argument("--source", required=True, choices=["file", "blob", "link"])
+    s.add_argument("--file-id", help="a company file (source file)")
+    s.add_argument("--file-version", type=int, help="the file version; left out, the current one")
+    s.add_argument("--blob-id", help="an uploaded blob (source blob)")
+    s.add_argument("--url", help="an http or https address (source link)")
+    s.set_defaults(fn="requirement attach")
     s = task.add_parser("answers", help="list the task's structured answers, oldest first")
     s.add_argument("id")
     s.set_defaults(fn="task answers")
@@ -3343,7 +3382,12 @@ def parser():
     s = watch.add_parser("add", help="watch one page of an entity")
     s.add_argument("entity_id")
     s.add_argument("url")
-    s.add_argument("--kind", default="other", choices=["pricing", "careers", "changelog", "docs", "home", "other"])
+    s.add_argument(
+        "--kind",
+        default="other",
+        choices=["pricing", "careers", "changelog", "docs", "home", "other", "release"],
+        help="release: the URL is github:owner/repo or a release feed, read through the Gateway",
+    )
     s.set_defaults(fn="market watch add")
     s = watch.add_parser("list", help="the watched pages and when each was last read")
     s.add_argument("--entity", dest="entity_id")
@@ -4383,14 +4427,30 @@ def parser():
         "--max-tokens", dest="max_tokens", type=int, help="how much to return, 1,000 to 50,000 (10,000 by default)"
     )
     s.set_defaults(fn="gateway fetch")
+    s = gateway.add_parser("digest", help="group many items into one digest through the Gateway (Low prices)")
+    s.add_argument(
+        "--items-file",
+        dest="items_file",
+        required=True,
+        help='a JSON list of items, each {"title", and optionally "id", "text", "url", "source", "at"}, 1 to 300',
+    )
+    s.add_argument("--focus", help="what the reader cares about; it orders the groups")
+    s.add_argument("--style", choices=("brief", "full"), help="brief (the default) or full")
+    s.set_defaults(fn="gateway digest")
     s = gateway.add_parser("image", help="make an image through the Gateway and save it to a file")
     s.add_argument("prompt")
     s.add_argument(
-        "--category",
-        required=True,
-        choices=("storyboard", "photo", "character", "graphic"),
-        help="storyboard (fast, keeps references), photo, character (keeps people from --ref), graphic (text and layout)",
+        "--model",
+        choices=("low", "high", "svg"),
+        help="low (fast, keeps --ref; the default), high (--category), svg (a vector image, saved as .svg; --quality)",
     )
+    s.add_argument(
+        "--category",
+        choices=("storyboard", "photo", "character", "graphic"),
+        help="for --model high: photo (the default), graphic (text and layout) or character (keeps people from --ref); "
+        "without --model, the older door's choice (storyboard, photo, character or graphic)",
+    )
+    s.add_argument("--quality", choices=("standard", "pro"), help="for --model svg: standard (the default) or pro")
     s.add_argument(
         "--ref",
         dest="refs",
@@ -4408,6 +4468,19 @@ def parser():
         help="the file for the first image; more are saved as name-2.png, name-3.png...",
     )
     s.set_defaults(fn="gateway image")
+    s = gateway.add_parser("video", help="start a video through the Gateway: its job id, checked with video-status")
+    s.add_argument("prompt")
+    s.add_argument("--seconds", type=int, help="3 to 15 seconds (8 by default)")
+    s.add_argument("--resolution", choices=("360p", "720p", "1080p", "4k"), help="720p by default")
+    s.add_argument("--aspect", choices=("16:9", "9:16"), help="16:9 by default")
+    s.add_argument("--audio", action=argparse.BooleanOptionalAction, default=None, help="with sound (the default)")
+    s.add_argument("--first-frame", dest="first_frame", metavar="FILE", help="a PNG or JPEG the video starts from")
+    s.add_argument("--last-frame", dest="last_frame", metavar="FILE", help="a PNG or JPEG the video ends on")
+    s.set_defaults(fn="gateway video")
+    s = gateway.add_parser("video-status", help="check a video job; once done, save its MP4 to --out")
+    s.add_argument("id", help="the job id the video command printed")
+    s.add_argument("--out", metavar="PATH.mp4", help="the new .mp4 file for a finished video")
+    s.set_defaults(fn="gateway video-status")
     decision = sub.add_parser("decision", help="the decision model: typed questions about a state").add_subparsers(
         dest="sub"
     )
@@ -4860,6 +4933,17 @@ def parser():
     for level in ("see", "read", "write"):
         s.add_argument("--" + level, help="everyone, or a comma list: human ids, group:<id>, bot:<slug>")
     s.set_defaults(fn="group access")
+    setup = sub.add_parser("setup", help="Finish setup, the welcome wizard (the owner)").add_subparsers(dest="sub")
+    setup.add_parser(
+        "show", help="where it stands: the wizard, the people the company file names, the checklist"
+    ).set_defaults(fn="setup show")
+    setup.add_parser("complete", help="the owner finishes the wizard with its saved answers").set_defaults(
+        fn="setup complete"
+    )
+    s = setup.add_parser("invite", help="the owner invites a person the company file from setup names")
+    s.add_argument("person_key", help="their id in the company file (hub setup show: company_import.people[].id)")
+    s.add_argument("--email", help="their email; leave out to use the one they were added with")
+    s.set_defaults(fn="setup invite")
     s = sub.add_parser("api", help="BotOps: any v2 route, as the person who asked")
     s.add_argument("method", type=str.upper, choices=["GET", "POST", "PUT", "PATCH", "DELETE"])
     s.add_argument("path", help="/api/v2/... or the part after it")
@@ -5061,6 +5145,8 @@ def parser():
         s.add_argument(flag)
     s.add_argument("--days", type=int)
     s.set_defaults(fn="finance metric")
+    s = fin.add_parser("brief", help="what changed in the money you may see: a few short lines")
+    s.set_defaults(fn="finance brief")
     s = fin.add_parser("act", help="ask for one Finance action (help lists kinds)")
     s.add_argument("kind")
     s.add_argument("--payload", type=_finance_payload, help="the kind's fields as JSON, or - to read stdin")
@@ -5091,11 +5177,118 @@ def parser():
     s.add_argument("--cursor")
     s.add_argument("--limit", type=int)
     s.set_defaults(fn="finance inbox")
-    s = fin.add_parser("card-fill", help="fill your card into a checkout (not available yet)")
-    s.add_argument("card_id", nargs="?", help="your card")
-    s.add_argument("--merchant", help="the checkout's domain")
-    s.add_argument("--amount", type=int, help="minor units")
-    s.set_defaults(fn="finance card-fill")
+    # The Directory (backend/entities/routes.py): every reader sees what the read rule lets it see; writes name their actor.
+    directory = sub.add_parser(
+        "directory",
+        help="the Directory: people, organizations and places, their links, values and notes, as you see them",
+    ).add_subparsers(dest="sub")
+    s = directory.add_parser("self", help="who we are: our company, where we operate, the obligations that bind us")
+    s.add_argument("--text", dest="as_text", action="store_true", help="a short summary, not JSON")
+    s.set_defaults(fn="directory self")
+    directory.add_parser("types", help="the entity types and their descriptions, and who added each").set_defaults(
+        fn="directory types"
+    )
+    s = directory.add_parser(
+        "describe", help="one type: its attributes (owners, options) and the link types that touch it"
+    )
+    s.add_argument("type")
+    s.set_defaults(fn="directory describe")
+    s = directory.add_parser("find", help="entities of one type you can see, by name, status or a link to us")
+    s.add_argument("type")
+    s.add_argument("--name", help="a name prefix")
+    s.add_argument("--status")
+    s.add_argument("--link", help="a link to us, like customer_of")
+    s.add_argument("--after", help="the next the last page gave")
+    s.add_argument("--limit", type=int, help="up to 50")
+    s.add_argument("--text", dest="as_text", action="store_true", help="one line per entity, not JSON")
+    s.set_defaults(fn="directory find")
+    s = directory.add_parser("get", help="one entity as you see it: values with source, links, records and your notes")
+    s.add_argument("ref", metavar="id|email|domain|name")
+    s.add_argument("--text", dest="as_text", action="store_true", help="a short card, not JSON")
+    s.set_defaults(fn="directory get")
+    s = directory.add_parser("rules", help="the rules that apply to an entity (none until rules arrive)")
+    s.add_argument("ref", metavar="id|email|domain|name")
+    s.add_argument("--as", dest="as_bot", metavar="BOT", help="the bot the rules are for")
+    s.add_argument("--action", help="what you would do, like email")
+    s.set_defaults(fn="directory rules")
+    s = directory.add_parser("upsert", help="create or update one entity: --match names it, --set sets its values")
+    s.add_argument("type")
+    s.add_argument("--match", required=True, type=_pair, metavar="KEY=VALUE", help="email, domain, name or id")
+    s.add_argument(
+        "--set", dest="set_values", action="append", type=_pair, metavar="KEY=VALUE", help="one value, repeatable"
+    )
+    s.add_argument("--name")
+    s.add_argument("--evidence", dest="evidence_id", metavar="EVIDENCE_ID", help="the market evidence it rests on")
+    s.add_argument("--confidence", type=float, help="0 to 1; the default is 0.6")
+    s.set_defaults(fn="directory upsert")
+    s = directory.add_parser("link", help="a typed, dated link between two entities: a works_at b")
+    s.add_argument("from_ref", metavar="a")
+    s.add_argument("link_key", metavar="link")
+    s.add_argument("to_ref", metavar="b")
+    s.add_argument("--from", dest="valid_from_on", metavar="DATE", help="YYYY-MM-DD the link starts")
+    s.add_argument("--until", dest="valid_until_on", metavar="DATE", help="YYYY-MM-DD the link ends")
+    s.add_argument("--evidence", dest="evidence_id", metavar="EVIDENCE_ID", help="the market evidence it rests on")
+    s.add_argument("--confidence", type=float, help="0 to 1; the default is 0.6")
+    s.set_defaults(fn="directory link")
+    s = directory.add_parser("unlink", help="end a link: it stops being current today; its history stays")
+    s.add_argument("link_id")
+    s.set_defaults(fn="directory unlink")
+    s = directory.add_parser("merge", help="merge a duplicate into the entity it copies; unmerge reverses it")
+    s.add_argument("keep")
+    s.add_argument("drop")
+    s.set_defaults(fn="directory merge")
+    s = directory.add_parser("unmerge", help="reverse the last merge of a dropped entity, named by its own id")
+    s.add_argument("drop")
+    s.set_defaults(fn="directory unmerge")
+    s = directory.add_parser("history", help="past values of an entity's fields, newest first")
+    s.add_argument("ref", metavar="id|email|domain|name")
+    s.add_argument("--attribute", help="one field's history")
+    s.add_argument("--after", help="the next the last page gave")
+    s.add_argument("--limit", type=int, help="up to 50")
+    s.set_defaults(fn="directory history")
+    s = directory.add_parser("note", help="a note on an entity; --audience me keeps it to you")
+    s.add_argument("ref", metavar="id|email|domain|name")
+    s.add_argument("body")
+    s.add_argument("--audience", choices=["me", "company"])
+    s.add_argument("--evidence", dest="evidence_id", metavar="EVIDENCE_ID", help="the market evidence it cites")
+    s.set_defaults(fn="directory note")
+    attribute = directory.add_parser("attribute", help="add an attribute to a type").add_subparsers(dest="subsub")
+    s = attribute.add_parser("add", help="add an attribute: name, value type, description, and options for a select")
+    s.add_argument("type")
+    s.add_argument("key")
+    s.add_argument("--name", required=True)
+    s.add_argument("--value-type", dest="value_type", required=True, help="text, number, date, select, status ...")
+    s.add_argument("--description", required=True, help="what it holds; required")
+    s.add_argument(
+        "--option", dest="options", action="append", type=_pair, metavar="KEY=LABEL", help="a select's option"
+    )
+    s.add_argument("--multiple", action="store_true")
+    s.add_argument("--unique", dest="unique_value", action="store_true")
+    s.add_argument("--required", action="store_true")
+    s.add_argument("--sensitive", action="store_true", help="only Finance's owner and the system read it")
+    s.add_argument("--owner", help="tico (the default) or connection:<id>")
+    s.set_defaults(fn="directory attribute add")
+    kind = directory.add_parser("type", help="add an entity type").add_subparsers(dest="subsub")
+    s = kind.add_parser("add", help="add an entity type, with its description")
+    s.add_argument("key")
+    s.add_argument("--name", required=True)
+    s.add_argument("--description", required=True)
+    s.add_argument("--plural", dest="plural_name")
+    s.add_argument("--icon")
+    s.set_defaults(fn="directory type add")
+    link_type = directory.add_parser("link-type", help="add a link type").add_subparsers(dest="subsub")
+    s = link_type.add_parser("add", help="add a link type: its name both ways, its description, the ends it may join")
+    s.add_argument("key")
+    s.add_argument("--name", required=True)
+    s.add_argument("--inverse", dest="inverse_name", required=True, help="the name from the far end")
+    s.add_argument("--description", required=True)
+    s.add_argument("--from", dest="from_type", help="the type the link starts at")
+    s.add_argument("--to", dest="to_type", help="the type the link ends at")
+    s.add_argument(
+        "--inherits-rules", dest="inherits_rules", action="store_true", help="a rule toward one end reaches the other"
+    )
+    s.add_argument("--symmetric", action="store_true", help="stored once, both ways")
+    s.set_defaults(fn="directory link-type add")
     manager = sub.add_parser(
         "task-manager", help="the Task Manager's hourly department check (docs/task-manager.md)"
     ).add_subparsers(dest="sub")

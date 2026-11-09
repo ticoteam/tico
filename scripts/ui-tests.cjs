@@ -231,17 +231,6 @@ async function runScripts(files, jobs, run) {
   for (const file of files.filter(file => ALONE.includes(file))) await run(file);
 }
 
-// The browser scripts on scripts/flaky-tests.json that still get their one retry: the ids that end in .cjs, whose exit
-// date (YYYY-MM-DD, UTC) has not passed. scripts/flaky_ledger.py checks the ledger and judges dates the same way.
-function flakyScripts(entries, today) {
-  return new Set(entries.filter(entry => String(entry.id).endsWith('.cjs') && String(entry.expires) >= today)
-    .map(entry => entry.id));
-}
-
-function lastLine(text) {
-  return (String(text).trim().split('\n').at(-1) || 'failed').trim().slice(0, 200);
-}
-
 async function main() {
   const dir = path.join(__dirname, '..', 'ui', 'tests');
   const CORE = ['account-status', 'health-findings', 'bot-permissions', 'chat', 'docs', 'goals', 'inbound', 'meetings', 'meeting-page', 'meetings-pending', 'task-live', 'task-live-drafts', 'recorder-pending', 'org-rules', 'org-rules-counsel', 'people-access', 'recruit-unit',
@@ -286,50 +275,24 @@ async function main() {
   const timings = {};
   const started = Date.now();
   const env = {TICO_BROWSER: 'chromium', ...process.env, TICO_UI_SLOWDOWN: String(selected.slowdown)};
-  const flaky = flakyScripts(JSON.parse(fs.readFileSync(path.join(__dirname, 'flaky-tests.json'), 'utf8')).tests,
-                             new Date().toISOString().slice(0, 10));
-  const retried = [];
-  const passed = result => result.code === 0 && !result.timedOut;
-  const report = (file, result, label) => {
-    const {out, timedOut, secs} = result;
-    const why = timedOut ? `, stopped: still running after ${selected.timeout}s` : '';
-    const text = timedOut ? `${out.trimEnd()}\n${stoppedReport(result)}` : out.trimEnd();
-    console.log(`FAIL  ${file} (${secs.toFixed(1)}s${why}${label ? `, ${label}` : ''})\n${text.replace(/^/gm, '      ')}\n`);
-  };
   const run = async file => {
-    const name = file.replace(/\.cjs$/, '');
-    const attempt = () => runScript(path.join(dir, file), {env, timeout: selected.timeout});
-    let result = await attempt();
-    if (passed(result)) {
-      timings[name] = result.secs;
-      console.log(`ok    ${file} (${result.secs.toFixed(1)}s)`);
-      return;
+    // A walkthrough is a long tour of screens, and takes its screenshots as it goes: it gets five times the script budget.
+    const timeout = WALKTHROUGHS.includes(file.replace(/\.cjs$/, '')) ? selected.timeout * 5 : selected.timeout;
+    const result = await runScript(path.join(dir, file), {env, timeout});
+    const {code, out, timedOut, secs} = result;
+    if (code === 0 && !timedOut) {
+      timings[file.replace(/\.cjs$/, '')] = secs;
+      console.log(`ok    ${file} (${secs.toFixed(1)}s)`);
     }
-    if (flaky.has(`ui/tests/${file}`)) {
-      // A listed script gets one more run. Its first failure is printed in full, so the retry hides nothing.
-      report(file, result, 'first attempt, retrying once');
-      const first = result;
-      result = await attempt();
-      if (passed(result)) {
-        timings[name] = result.secs;
-        retried.push(`${file}: first attempt failed: ${lastLine(first.out)}`);
-        console.log(`ok    ${file} (${result.secs.toFixed(1)}s, passed on its one retry)`);
-        return;
-      }
-      report(file, result, 'retry');
+    else {
+      failed.push(file);
+      const why = timedOut ? `, stopped: still running after ${timeout}s` : '';
+      const text = timedOut ? `${out.trimEnd()}\n${stoppedReport(result)}` : out.trimEnd();
+      console.log(`FAIL  ${file} (${secs.toFixed(1)}s${why})\n${text.replace(/^/gm, '      ')}\n`);
     }
-    else report(file, result, '');
-    failed.push(file);
   };
 
   await runScripts(files, jobs, run);
-  if (retried.length) {
-    console.log(`\n${retried.length} listed script(s) passed on their one retry:\n${retried.map(line => `  ${line}`).join('\n')}`);
-    if (process.env.GITHUB_STEP_SUMMARY) {
-      fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY,
-                        `### Flaky UI scripts that passed on their one retry\n${retried.map(line => `- \`${line}\``).join('\n')}\n`);
-    }
-  }
   const secs = ((Date.now() - started) / 1000).toFixed(0);
   if (process.env.TICO_UI_TIMINGS) fs.writeFileSync(process.env.TICO_UI_TIMINGS, JSON.stringify(timings, null, 2) + '\n');
   console.log(failed.length ? `\n${failed.length} of ${files.length} UI scripts failed: ${failed.join(', ')} (all ${files.length} took ${secs}s)`
@@ -337,7 +300,7 @@ async function main() {
   process.exit(failed.length ? 1 : 0);
 }
 
-module.exports = {resources, runScript, runScripts, sampleCpu, inSlot, stopTree, stoppedReport, redact, flakyScripts};
+module.exports = {resources, runScript, runScripts, sampleCpu, inSlot, stopTree, stoppedReport, redact};
 // A local run first takes one of the box's heavy-job slots, at low priority (scripts/heavy.sh), before it samples
 // the CPU; hosted CI, a run already in a slot, or a computer without bash goes straight on.
 function inSlot(env = process.env) { return Boolean(env.CI || env.TICO_HEAVY_HELD) || process.platform === 'win32'; }

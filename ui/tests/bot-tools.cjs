@@ -62,7 +62,7 @@ async function open(browser, viewport, options = {}, data = {}) {
     // The vendored Markdown and icon font, so the page reads as it does for real.
     const vendor = p.match(/^\/vendor\/((?:fonts\/)?[\w.-]+)$/);
     if (vendor && fs.existsSync(uiFile('vendor/' + vendor[1]))) return route.fulfill({path: uiFile('vendor/' + vendor[1])});
-    const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|css))$/);
+    const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/);
     if (ui && fs.existsSync(uiFile(ui[1]))) return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]), 'utf8')});
     if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
     if (p === '/api/me') return json({id: 'ana', role: 'owner', name: 'Ana', email: 'ana@example.test', cloud: true});
@@ -106,13 +106,28 @@ const railOrder = page => page.evaluate(() => [...document.querySelectorAll('#pa
       const longGoal = 'Deliver dependable releases and keep every customer informed about important improvements across the whole team';
       const {page, errors, context} = await open(browser, {width: 1380, height: 900}, {colorScheme: scheme}, {
         bots: [{...bots[0], display_name: name}],
-        goals: [{id: 'g-engineering', title: longGoal, owner_id: 'bot:cmo', status: 'active', rank: 1}],
+        goals: [{id: 'g-engineering', title: longGoal, owner_id: 'bot:cmo', status: 'active', rank: 1},
+                {id: 'g-docs', title: 'Keep the docs current', owner_id: 'bot:cmo', status: 'active', rank: 2}],
       });
       await page.goto('https://tico-ui.test/#/bot/cmo');
       await page.locator('#bot-goal[data-status="set"] .bot-goal-title').waitFor();
       await page.locator('#bot-tasks-h').waitFor();
       assert.equal(await page.locator('#pane-tasks').isVisible(), true, scheme + ': Tasks rail is open');
       assert.equal((await page.locator('#bot-goal .bot-goal-title').innerText()).trim(), longGoal, scheme + ': unchanged goal');
+      // The goal: a target, the first goal cut to fit and "+1"; a tap lists both and Add goal. All of it on one line,
+      // right of the bot's name.
+      assert.equal(await page.locator('#bot-goal .bot-goal-n').innerText(), '+1', scheme + ': the other goal is a count');
+      const line = await page.evaluate(() => {
+        const mid = s => { const r = document.querySelector(s).getBoundingClientRect(); return {y: r.top + r.height / 2, left: r.left, right: r.right}; };
+        return {name: mid('.bot-ident h1'), goal: mid('#bot-goal-btn'), more: mid('#bot-more-btn')};
+      });
+      assert(Math.abs(line.name.y - line.goal.y) < 4 && Math.abs(line.goal.y - line.more.y) < 4, scheme + ': one line ' + JSON.stringify(line));
+      assert(line.goal.left > line.name.right && line.goal.right <= line.more.left, scheme + ': the goal sits right, by the actions');
+      await page.locator('#bot-goal-btn').click();
+      const items = await page.locator('#bot-goal-pop .tl-mi').evaluateAll(els => els.map(el =>
+        [...el.childNodes].filter(n => !n.classList?.contains('nav-icon')).map(n => n.textContent).join('').trim()));
+      assert.deepEqual(items, [longGoal, 'Keep the docs current', 'Add goal'], scheme + ': the goal menu');
+      await page.keyboard.press('Escape');
       const header = await page.locator('.bot-ident h1').evaluate(el => {
         // Measure the whole heading: the runtime mark sits inside it, and a fractional overflow ellipsizes the line.
         const range = document.createRange();
@@ -159,7 +174,7 @@ const railOrder = page => page.evaluate(() => [...document.querySelectorAll('#pa
       assert.equal((await page.locator('#bot-files [data-bf-all]').innerText()).trim(), '+2');
       // No routines on the rail: they are Automations now.
       assert.equal(await page.locator('#bot-recurring').count(), 0);
-      // Assigned to others is a tab now, not a folded section; Done Recently is a tab that stays closed.
+      // Assigned to others is a tab now, not a folded section; Done recently is a tab that stays closed.
       assert.equal(await page.locator('#bot-assigned').count(), 0);
       assert.equal(await page.locator('#pane-tasks .bot-done').isHidden(), true);
       // The top line keeps no tool icons; the Tools card under More lists them.

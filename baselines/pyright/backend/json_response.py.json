@@ -1,0 +1,14 @@
+{
+    "files": {
+        "./backend/json_response.py": [
+            {
+                "code": "reportOptionalMemberAccess",
+                "range": {
+                    "startColumn": 16,
+                    "endColumn": 24,
+                    "lineCount": 1
+                }
+            }
+        ]
+    }
+}

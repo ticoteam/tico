@@ -32,6 +32,7 @@ from pathlib import Path
 from fastapi import Request
 from fastapi.responses import JSONResponse, RedirectResponse, Response
 
+from . import demo_clock  # first: with TICO_DEMO_NOW set it freezes datetime.now() before the modules below read it
 from .auth import LOCAL_SIGNIN_PATH
 from .config import LOOPBACK, Settings
 from .store import H, Problem
@@ -382,7 +383,7 @@ def main(argv=None):
     try:
         print("Building the Acme demo ...", flush=True)
         with network_blocked():
-            settings = build(directory, url=args.url, public=args.public_demo)
+            settings = build(directory, now=demo_clock.demo_now(), url=args.url, public=args.public_demo)
             if args.port != DEFAULT_PORT and not args.public_demo and not args.url:
                 settings.public_url = settings.runner_url = f"http://127.0.0.1:{args.port}"
             browser_url = args.url.rstrip("/") if args.url else f"http://localhost:{args.port}"

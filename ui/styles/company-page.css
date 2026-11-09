@@ -1,4 +1,4 @@
-/* ui/styles/company-page.css — The Company page section (ui/app/company-page.js): one column of cards, a queue of
+/* ui/styles/company-page.css — The Company page section (ui/app/company-page.ts): one column of cards, a queue of
    editions, the disclosure grid (one audience at a time on a phone), the stats board beside its projection. */
 .cp-page{max-width:1040px}
 .cp-sec>header{align-items:center;flex-wrap:wrap}

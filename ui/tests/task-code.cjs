@@ -119,12 +119,12 @@ async function open(browser, {viewport = {width: 1440, height: 900}, theme = 'da
     const req = route.request(), url = new URL(req.url()), p = url.pathname, method = req.method();
     const json = (body, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
     if (url.origin !== 'https://tico-ui.test') return route.abort();
-    const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|css))$/);
+    const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/);
     if (ui && fs.existsSync(uiFile(ui[1])))
       return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]), 'utf8')});
     if (p.startsWith('/vendor/fonts/') && fs.existsSync(uiFile(p.slice(1)))) return route.fulfill({contentType: 'font/woff2', body: fs.readFileSync(uiFile(p.slice(1)))});
     if (p === '/vendor/marked.min.js') return route.fulfill({contentType: 'application/javascript', body: fs.readFileSync(uiFile('vendor/marked.min.js'), 'utf8')});
-    if (p.endsWith('.js')) return route.fulfill({contentType: 'application/javascript', body: ''});
+    if (/\.(?:js|ts)$/.test(p)) return route.fulfill({contentType: 'application/javascript', body: ''});
     if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
     if (p === '/api/me') return json(me);
     if (p === '/api/employees') return json(bots);
@@ -142,12 +142,12 @@ async function open(browser, {viewport = {width: 1440, height: 900}, theme = 'da
         .map(t => ({...t, links: (t.links || []).map(({detail, pr_sha, ...l}) => l)}));
       return json({tasks: rows, next_offset: null});
     }
-    // The default sidebar (backend/bot_task_tabs.py): Assigned to Others is a filter tab the server counts.
-    if (/^\/api\/v2\/bots\/[^/]+\/task-tabs$/.test(p)) return json({tabs: [{builtin: 'needs', name: 'Needs You'}, {builtin: 'active', name: 'Doing'},
-      {builtin: 'blocked', name: 'Blocked'}, {builtin: 'done', name: 'Done Recently'}, {name: 'Assigned to Others', conditions: []}], widgets: null, can_edit: false});
+    // The default sidebar (backend/bot_task_tabs.py): Assigned to others is a filter tab the server counts.
+    if (/^\/api\/v2\/bots\/[^/]+\/task-tabs$/.test(p)) return json({tabs: [{builtin: 'needs', name: 'Needs you'}, {builtin: 'active', name: 'Doing'},
+      {builtin: 'blocked', name: 'Blocked'}, {builtin: 'done', name: 'Done recently'}, {name: 'Assigned to others', conditions: []}], widgets: null, can_edit: false});
     if (/^\/api\/v2\/bots\/[^/]+\/task-tabs\/tasks$/.test(p)) {
       const others = data.tasks.filter(t => t.requester_id === 'bot:eng' && !['human:ana', 'bot:eng'].includes(t.owner_id) && ['open', 'doing', 'waiting'].includes(t.status));
-      return json({tabs: [{key: 'c4', name: 'Assigned to Others', count: others.length, ids: others.map(t => t.id)}], tasks: others});
+      return json({tabs: [{key: 'c4', name: 'Assigned to others', count: others.length, ids: others.map(t => t.id)}], tasks: others});
     }
     if (p === '/api/v2/tasks' && method === 'POST') {
       const body = req.postDataJSON(); writes.push({method, p, body});
@@ -508,7 +508,8 @@ async function botDetail(browser) {
     const d = page.locator('#task-modal'), row = page.locator('[data-task-detail="t-checkout"]');
     await row.locator('[data-task-detail-open]').waitFor();
     assert.equal(await row.locator('details, .tbody').count(), 0, 'no separate inline detail');
-    assert.equal(await row.locator('.task-status').count(), 1, 'Active needs per-task status');
+    // 9d11efec7: a Doing row drops the status its tab shares (the pill still says Doing).
+    assert.equal(await row.locator('.task-status').count(), 0, 'a Doing row drops the shared status');
     assert.equal(await page.locator('.bot-done .task-status, .bot-done .pill').count(), 0, 'Done already supplies status context');
     await page.evaluate(() => { window.botBefore = BOT; window.botWorkBefore = document.querySelector('#bot-work'); });
     await row.locator('[data-task-detail-open]').focus();

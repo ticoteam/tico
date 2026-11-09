@@ -189,6 +189,19 @@ def require_on(settings):
         raise Problem("support_off", "Contact support is not available here.", 409)
 
 
+SOURCE_COPY = "source_copy"
+
+
+def from_source():
+    """This copy runs from source (version "dev": a checkout, a test, the factory simulation) and names no HQ of its own.
+    It sends no report that no person sent (the Health Monitor's, a bot's under the team rule): its findings are about
+    unreleased code, and every run of a seeded copy is the same install filing the same ticket again. A person's own
+    request still goes. Setting TICO_HQ_URL (even to the default) sends them as a release does."""
+    from . import releases
+
+    return releases.version() == "dev" and not os.environ.get("TICO_HQ_URL", "").strip()
+
+
 def require_person(who):
     """A person at their own browser: not a personal token, not a bot or a computer, and not the Assistant or BotOps acting
     for them unless they act on the person's confirmation (`confirmed`: a yes to their read-back, or a tap on a Confirm
@@ -405,9 +418,13 @@ class Support:
             from pathlib import Path
 
             ui = Path(__file__).resolve().parent.parent / "ui"
+            # A browser event names its script by the last part of its URL, which is .ts for a TypeScript file.
             files = (
-                {p.name for p in ui.glob("*.js")}
+                {p.name for p in ui.glob("*.ts")}
+                | {p.name for p in ui.glob("*.js")}
+                | {p.name for p in (ui / "app").glob("*.ts")}
                 | {p.name for p in (ui / "app").glob("*.js")}
+                | {p.name for p in (ui / "app").glob("*.ts")}
                 | {"app.bundle.js"}
                 | {f"app.bundle.{n}.js" for n in range(2, 100)}
             )
@@ -569,7 +586,7 @@ class Support:
         send a person's yes gets: the same HQ call, day limit, source and spend. `check(c)` is the privacy check for this
         send, run under the write lock; when it refuses, the draft waits. Returns {ticket, sent, filed_as}, or None when the
         draft waits for a person: the rule is off (read under the lock, so a report queued while the owner turned it off
-        waits), or a person already decided the draft. A bot that is paused or revoked is refused and nothing is sent. A
+        waits), this copy runs from source (`from_source`), or a person already decided the draft. A bot that is paused or revoked is refused and nothing is sent. A
         spent approval answers with its ticket whatever the rule says now.
 
         A rule decision is taken back when its send fails, or when the rule is off by the time it is sent, so a draft is
@@ -595,8 +612,8 @@ class Support:
                         self._unrule(c, who, approval_id)  # the rule went off before this send: a person decides
                         return None
                 elif row["decision"] is None:
-                    if not team_rules.load(c)[RULE]:
-                        return None
+                    if not team_rules.load(c)[RULE] or from_source():
+                        return None  # a copy run from source sends no bot's report by rule: a person decides
                     try:
                         if check is not None:
                             check(c)
