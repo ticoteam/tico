@@ -179,7 +179,7 @@ window.pageChangelog = async function () {
   };
   add.onclick = () => {
     const dialog = document.createElement('dialog'); dialog.className = 'tmodal docs-proposals';
-    dialog.innerHTML = '<div class="tmodal-head"><h2>Product update</h2><span class="spacer"></span><button aria-label="Close">✕</button></div><div class="docs-proposals-body"><p class="muted">Share a team update. Shipped Tico releases appear automatically.</p><label>Title<input class="draft-title" style="width:100%" maxlength="90"></label><label>Bullets — one per line<textarea class="draft-bullets" style="width:100%" rows="4"></textarea></label><p class="row"><button class="primary" data-publish>Publish</button></p><p class="draft-status" role="status"></p></div>';
+    dialog.innerHTML = '<div class="tmodal-head"><h2>Product update</h2><span class="spacer"></span><button aria-label="Close">✕</button></div><div class="docs-proposals-body"><p class="muted">Share a team update.</p><label>Title<input class="draft-title" style="width:100%" maxlength="90"></label><label>Bullets — one per line<textarea class="draft-bullets" style="width:100%" rows="4"></textarea></label><p class="row"><button class="primary" data-publish>Publish</button></p><p class="draft-status" role="status"></p></div>';
     document.body.append(dialog); dialog.showModal();
     const close = dialog.querySelector<HTMLButtonElement>('[aria-label="Close"]'), publish = dialog.querySelector<HTMLButtonElement>('[data-publish]');
     const titleField = dialog.querySelector<HTMLInputElement>('.draft-title'), bulletsField = dialog.querySelector<HTMLTextAreaElement>('.draft-bullets');

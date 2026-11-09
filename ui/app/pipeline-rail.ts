@@ -417,6 +417,8 @@ interface PipelinePhoneColumn {
   id: string;
   name: string;
   fold?: string;
+  cap?: number | null;
+  held?: number;
   items: { task: { id: string } }[];
 }
 
@@ -429,7 +431,7 @@ function pipelinePhoneBoard(state: PipelineTasksState, columns: PipelinePhoneCol
   const chips = stages.map(column => {
     const waiting = pipelineForYouCount(column.items) > 0;
     return `<button type="button" class="pchip${column === active ? ' on' : ''}" data-pipe-chip="${esc(column.id)}" aria-pressed="${column === active}">`
-      + `${esc(column.name)}<span class="tnum pchip-n">${column.items.length}</span>${waiting ? '<span class="pchip-dot" role="img" aria-label="Waiting on you"></span>' : ''}</button>`;
+      + `${esc(column.name)}<span class="tnum pchip-n">${boardCountText(column)}</span>${waiting ? '<span class="pchip-dot" role="img" aria-label="Waiting on you"></span>' : ''}</button>`;
   }).join('');
   const after = stages[stages.indexOf(active) + 1];
   requestAnimationFrame(() => document.querySelectorAll<HTMLElement>('.pchips').forEach(pipelineChipsEdges));

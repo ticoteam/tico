@@ -204,7 +204,7 @@ def test_6_a_person_fills_a_seat_with_no_bot_yet():
     assert A.find_role("CRO") is None and A.find_role("cro bot") is None and A.find_role("the pipeline") is None
     assert A.find_role("sales pipeline") is None and A.find_role("pipeline") is None
     assert A.find_role("Pipeline Owner")["slug"] == "pipeline"
-    assert A.find_role("Conversion Rate Optimization Owner")["slug"] == "cro"
+    assert A.find_role("Conversion Rate Optimization Owner")["slug"] == "cro-owner"
     assert A.find_role("release manager")["slug"] == "release-notes"
 
 
@@ -1128,7 +1128,7 @@ def test_a_full_300_seat_chart_with_its_undo_and_chat_fits_the_draft_and_the_com
 
 
 def test_the_chat_adds_goals_up_to_the_goal_limit_and_refuses_the_next_in_plain_words():
-    """The chat's own goals stay inside the limit the file check uses (Dev 449): the 325th lands, the 326th is refused,
+    """The chat's own goals stay inside the limit the file check uses (Dev 449): the 329th lands, the 330th is refused,
     and the full plan passes the check and its file reads back."""
     draft = started()
     draft["goals"] = [
@@ -1146,10 +1146,10 @@ def test_the_chat_adds_goals_up_to_the_goal_limit_and_refuses_the_next_in_plain_
         for i in range(C.LIMITS["goals"] - 1)
     ]
     draft, (last, over) = run(draft, ("goal_add", {"title": "The last goal"}), ("goal_add", {"title": "One too many"}))
-    assert C.LIMITS["goals"] == 325 and last["ok"] and len(draft["goals"]) == 325
-    assert not over["ok"] and over["refused"] == "The plan has the most goals it can hold (325)."
+    assert C.LIMITS["goals"] == 329 and last["ok"] and len(draft["goals"]) == 329
+    assert not over["ok"] and over["refused"] == "The plan has the most goals it can hold (329)."
     assert C.Turn(draft, TODAY).finish()["goals"] == draft["goals"]
-    assert len(C.from_yaml(C.to_yaml(draft, CREATED))["goals"]) == 325
+    assert len(C.from_yaml(C.to_yaml(draft, CREATED))["goals"]) == 329
 
 
 # ------------------------------------------------------------------ goals from POST /goals keep their layer (Dev 321 parity)

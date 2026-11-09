@@ -46,6 +46,19 @@ const pipelineType = (task: PipelineTaskRef) => TASK_TYPES.find(type => type.id 
 const pipelineStepsOnly = (task: PipelineTaskRef) => !!pipelineType(task)?.steps_only;
 const pipelineSelectedType = (state: PipelineTypeChoice) => TASK_TYPES.find(type => type.id === state?.type);
 const pipelineActionStatus = (task: PipelineTaskRef, body: { status?: string; step?: string | null }) => body.status || pipelineType(task)?.steps.find(step => step.id === body.step)?.status;
+// A person's move into a full stage stands, and the server says so (over_cap, D68): one line, not a refusal.
+const taskOverCapWarn = (task: PipelineTaskRef, body: {step?: string}, data: {over_cap?: boolean} | null | undefined): void => {
+  if (!data?.over_cap) return;
+  const step = pipelineType(task)?.steps.find(s => s.id === body.step);
+  toast(`${step?.name ?? 'That stage'} is over its cap of ${step?.card_cap ?? ''}.`);
+};
+// A stage's held count on the pipeline (D68): the unfinished cards the task list holds in it now, so a card a live change
+// moved out is not still counted (the server's step.held is only as fresh as the last types read), plus step.unseen: the
+// cards there the pipeline's rule editor cannot read, which the server counts for it. Its count is then never below the
+// one the cap is enforced against.
+function pipelineStageHeld(tasks: {step_id?: string | null; status?: unknown}[], step: {id: string; unseen?: number}): number {
+  return tasks.filter(t => t.step_id === step.id && !BOARD_HIDDEN.has(String(t.status))).length + (step.unseen ?? 0);
+}
 const pipelineStepName = (id: string) => TASK_TYPES.flatMap(type => type.steps).find(step => step.id === id)?.name || id;
 // The Product roadmap and Dev tickets types go by their role (backend/roadmap_flow.py), never by who manages them.
 const pipelineRoleType = (role: string | null | undefined) => TASK_TYPES.find(type => type.role === role);
@@ -124,7 +137,7 @@ function taskPipelineBoard(items: TaskItem[], state: TaskState, head = '') {
   const phone = pipelinePhone();
   const backlog = working.slice(0, lead), folds = taskBoardFolds(state, type, backlog.length);
   const inStep = (step: PipelineStep) => items.filter(item => item.task.step_id === step.id);
-  const stepColumn = (step: PipelineStep) => ({id: step.id, name: step.name, drop: step.id, items: inStep(step), scope: {type: type.id, step: step.id}, limit: step.limit_minutes});
+  const stepColumn = (step: PipelineStep) => ({id: step.id, name: step.name, drop: step.id, items: inStep(step), scope: {type: type.id, step: step.id}, limit: step.limit_minutes, cap: step.card_cap ?? null, held: pipelineStageHeld(state.tasks || [], step)});
   const strip = (fold: string, run: PipelineStep[], drop: string, name: string) => ({id: 'fold-' + fold, fold, drop, items: [], name: run.length === 1 ? run[0]!.name : name,
     hint: run.map(step => step.name).join(', '), count: fold === 'backlog' ? run.reduce((n, step) => n + inStep(step).length, 0) : ''});
   const columns: BoardColumn[] = [];

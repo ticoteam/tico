@@ -3,6 +3,7 @@ slug: cro
 name: Conversion Rate Optimization Owner
 required: false
 bootstrap: false
+retired: true
 group: marketing
 pack: marketing
 icon: tour

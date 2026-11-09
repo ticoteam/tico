@@ -74,9 +74,9 @@ interface QcItem {
   title?: string | null;
   why?: string | null;
   body?: string | null;
-  created_at?: string | null;
-  holds_up?: { title?: string | null } | null;
-  ask?: QcAsk | null;
+  created_at?: string | null | undefined;
+  holds_up?: { title?: string | null } | null | undefined;
+  ask?: QcAsk | null | undefined;
 }
 /** The task a card belongs to: its id is all the card reads of it. */
 interface QcTaskRef {
@@ -102,6 +102,16 @@ function qcardQuestion(it: QcItem): QcQuestion | null {
   const q = qs[0], n = (q?.options || []).length;
   if (!q || n < 2 || n > QC_MAX_OPTIONS || ask.recipient_id !== myActor() || ask.sender_id === myActor()) return null;
   return q;
+}
+// A question with no picks (no options, one, or more than six): this person's one question, answered in words.
+function qcardPlain(it: QcItem | null | undefined): QcQuestion | null {
+  const ask = it?.ask;
+  const qs = ask?.refs?.questions;
+  if (!ask || !Array.isArray(qs) || qs.length !== 1 || ask.recipient_id !== myActor() || ask.sender_id === myActor()) return null;
+  const q = qs[0];
+  if (!q) return null;
+  const n = (q.options || []).length;
+  return n < 2 || n > QC_MAX_OPTIONS ? q : null;
 }
 // Who really asks: the bot by its name, or Tico for its own checks. Never the assistant's name or "You asked".
 const qcardAsker = (actor?: string | null) => !actor || actor === 'keeper' || !/^(bot|human):/.test(actor) ? KEEPER_LABEL : actorLabel(actor);
@@ -307,11 +317,30 @@ function qcardShown(box: HTMLElement): QcFound | null {
 function qcardRedraw(box: HTMLElement): void {
   box.outerHTML = qcardBoxHTML({id: box.dataset.qcard});
 }
+// Questions shown outside Needs you (the pipeline review's ▶ queue) are held here by id, so the same box and answer
+// serve them. The holds belong to the open ▶: closing it drops them (qcardReleaseHeld). Fresh Needs you data that has
+// the question wins over a hold. An answered one is dropped and "qcard:answered" tells the view that drew it.
+const QC_HELD = new Map<string, QcItem>();
+function qcardHold(it: QcItem): void { QC_HELD.set(String(it.id), it); }
+function qcardReleaseHeld(): void { QC_HELD.clear(); }
 function qcardItem(t: QcTaskRef): QcFound | null {
-  const it: QcItem | undefined = [...(S.v2?.needs || []), needsOneHeld(t?.id)].find(x => x && String(x.id) === String(t?.id) && ['question', 'waiting', 'task'].includes(x.kind));
+  const id = String(t?.id);
+  const fresh: QcItem | undefined = [...(S.v2?.needs || []), needsOneHeld(t?.id)].find(x => x && String(x.id) === id && ['question', 'waiting', 'task'].includes(x.kind));
+  const it = fresh || QC_HELD.get(id);
   if (!it) return null;
   const q = qcardQuestion(it);
   return q ? {it, q} : null;
+}
+// A plain question's answer from ▶: the words go as Other, the same answer call the task page makes for a plain question
+// (qcardWrites with no picks). The question leaves the queue through "qcard:answered", as an answered card does.
+async function qcardAnswerPlain(it: QcItem, text: string) {
+  const q = qcardPlain(it);
+  if (!q) throw new Error('This question has picks: answer it on its card.');
+  for (const w of qcardWrites(it, q, [], text)) await post(w.path, w.body, newRequestId());
+  QC_HELD.delete(String(it.id));
+  toast(`Sent to ${qcardAsker(it.ask?.sender_id)}`);
+  document.dispatchEvent(new CustomEvent('qcard:answered', {detail: {id: String(it.id)}}));
+  void v2Refresh();
 }
 function qcardBoxHTML(t: QcTaskRef): string {
   const found = qcardItem(t);
@@ -375,6 +404,8 @@ document.addEventListener('click', async ev => {
     for (const w of qcardWrites(it, q, labels, note)) await post(w.path, w.body, newRequestId());
     QC_DRAFTS.delete(qcardDraftKey(it, q));
     toast(qcardSaid(it, q, labels));
+    QC_HELD.delete(String(it.id));
+    document.dispatchEvent(new CustomEvent('qcard:answered', {detail: {id: String(it.id)}}));
     void v2Refresh();
   } catch (e) {
     box.querySelectorAll<HTMLButtonElement | HTMLInputElement | HTMLTextAreaElement>('button, input, textarea').forEach(x => { x.disabled = false; });

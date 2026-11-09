@@ -104,7 +104,7 @@ Engineering leave the suggestion with the receiving bot exactly as without triag
 (limit, full queue, no receiver) makes no call: a suggestion in triage has already spent the visitor's action and holds its queue place, so one arriving meanwhile is refused without a call, and a suggestion refused after triage gives both back. Each call is a `judge.call` audit row labelled `idea-triage@1` with
 the answers, route and model, never the visitor's text.
 
-While at least one public label is enabled, **Settings > Health** tells owners and admins when suggestions don't reach
+While at least one public label is enabled, **Settings > General > Health > Details** tells owners and admins when suggestions don't reach
 the bot they expect, from the same rule that routes them:
 - **No bot receives roadmap suggestions**: visitors are being turned away. Choose an active bot, or make a Product
   Manager or Head of Product bot active for Automatic.

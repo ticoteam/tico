@@ -71,7 +71,17 @@ PINNED_SQL = (
     "(r.pinned_for_everyone_at IS NOT NULL AND NOT EXISTS (SELECT 1 FROM thread_pins p WHERE p.thread_id=r.id "
     "AND p.actor=:me AND p.pinned=0)))"
 )
-ROOT_OPEN = "r.parent_id IS NULL AND r.archived_at IS NULL AND r.closed_at IS NULL"
+
+
+def root_open(c, v):
+    """The roots the rail, Browse and Catch up list for this reader: not archived or closed, and not hidden for a
+    finished task (T.task_open_sql, which a post the reader reads brings back)."""
+    return (
+        "r.parent_id IS NULL AND r.archived_at IS NULL AND r.closed_at IS NULL AND "
+        f"{T.task_open_sql(c, v, 'r', T.revived_roots(c, v))}"
+    )
+
+
 ACTIVITY = (
     f"COALESCE((SELECT MAX(s.last_seq) FROM conversations s WHERE s.root_id=r.id AND {T._SUBTREE_OPEN}),r.last_seq,0)"
 )
@@ -286,7 +296,7 @@ def rail(c, v, *, cursor=None, limit=RAIL_LIMIT):
     extra, marks = _names(v, c)
     args = {"me": v.actor, **extra}
     kind = f"({_audience()} IN ('company','team','members') OR {_group_dm()})"
-    base = [ROOT_OPEN, kind, T.readable_sql(c, v, "r")]
+    base = [root_open(c, v), kind, T.readable_sql(c, v, "r")]
     v._members = {}
     try:
         pinned_rows, pinned_more = (
@@ -331,7 +341,7 @@ def browse(c, v, *, q=None, cursor=None, limit=BROWSE_LIMIT):
     after = _decode(cursor, 2)
     extra, marks = _names(v, c)
     args = {"me": v.actor, **extra}
-    where = [ROOT_OPEN, f"{_audience()} IN ('company','team')", T.readable_sql(c, v, "r"), f"NOT {_in(marks)}"]
+    where = [root_open(c, v), f"{_audience()} IN ('company','team')", T.readable_sql(c, v, "r"), f"NOT {_in(marks)}"]
     text = str(q or "").strip()
     if text:
         args["q"] = "%" + text.lower().replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
@@ -370,6 +380,56 @@ def browse(c, v, *, q=None, cursor=None, limit=BROWSE_LIMIT):
     items, cut = _fits(
         [{**shown[r["id"]], "member_count": counts.get(r["id"], 0)} for r in rows], T.MAX_PAGE_BYTES // 2
     )
+    last = rows[len(items) - 1] if items else None
+    return {
+        "threads": items,
+        "next_cursor": _encode([last["activity"], last["id"]]) if (more or cut) and last else None,
+    }
+
+
+def archived(c, v, *, cursor=None, limit=None):
+    """The roots the reader archived and may still manage (only a manager can unarchive), newest activity first: Browse
+    threads' Archived view, in pages. A deleted thread is not listed. Each row is the thread view, as a list shows it.
+    The page is filled from the rows that pass the read and manage checks, so a reader with many archived threads they
+    cannot manage still gets a full page and the cursor reaches the rest."""
+    v = _viewer(v)
+    limit = _limit(limit, BROWSE_LIMIT, T.MAX_PAGE)
+    after = _decode(cursor, 2)
+    args = {"me": v.actor, **{f"name{i}": n for i, n in enumerate(v.member_names(c))}}
+    where = ["r.parent_id IS NULL", "r.archived_at IS NOT NULL", "r.deleted_at IS NULL", T.readable_sql(c, v, "r")]
+    rows, position, fetch = [], after, limit + 20
+    more = False
+    while True:
+        cond, at = "", {}
+        if position:
+            cond = " WHERE activity<:at_seq OR (activity=:at_seq AND id<:at_id)"
+            at = {"at_seq": int(position[0]), "at_id": str(position[1])}
+        found = [
+            T.thread_row(c, dict(r))
+            for r in c.execute(
+                f"SELECT * FROM (SELECT r.*, {ACTIVITY} AS activity FROM conversations r WHERE {' AND '.join(where)})"
+                f"{cond} ORDER BY activity DESC, id DESC LIMIT :fetch",
+                {**args, **at, "fetch": fetch},
+            )
+        ]
+        for r in found:
+            if not r:
+                continue
+            position = [r["activity"], r["id"]]
+            if not (T.thread_readable(c, v, r) and T.can_manage(c, v, r)):
+                continue
+            if len(rows) >= limit:
+                more = True
+                break
+            rows.append(r)
+        if more or len(found) < fetch:
+            break
+    v._members = {}
+    try:
+        shown = _views(c, v, rows)
+    finally:
+        v._members = None
+    items, cut = _fits([shown[r["id"]] for r in rows], T.MAX_PAGE_BYTES // 2)
     last = rows[len(items) - 1] if items else None
     return {
         "threads": items,
@@ -548,7 +608,7 @@ def _walk(c, v, flags, after=None):
     is_mention = "r.id IN (SELECT value FROM json_each(:mentions))"
     audience = _audience()
     where = [
-        ROOT_OPEN,
+        root_open(c, v),
         T.readable_sql(c, v, "r"),
         f"(({audience} IN ('company','team','members','personal','participants','task') AND "
         f"({_in(marks)} OR {PINNED_SQL})) OR ({audience}='home' AND r.owner_id=:me) OR {is_flagged})",

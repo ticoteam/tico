@@ -81,6 +81,9 @@ function taskBlockedStrip(it: TaskItem) {
   if (!held && !open.length) return '';
   const age = held ? taskHeldFor(held.since) : '', head = `Blocked${age ? ' ' + age : ''}`;
   const line = (what: string) => `<span>${esc(what ? `${head}: ${what}` : head)}</span>`;
+  // A card a person's question holds waits on that person: "Waiting on Chris", not "Blocked:" with the question in it.
+  const person = taskWaitingOn(t);
+  if (person && !open.length) return `<div class="bcard-blocked" title="${esc(taskBlockedLine(t))}"><span>${esc(`Waiting on ${personDisplay(actorPerson(person))}`)}</span></div>`;
   if (!open.length) {
     if (!held) return '';          // the early return above leaves a hold here
     const why = String(held.reason || '').trim();
@@ -92,7 +95,8 @@ function taskBlockedStrip(it: TaskItem) {
   const first = open[0];
   if (!first) return '';           // open has a blocker here
   const name = first.title || '#' + (first.number ?? first.id);
-  const label = bot ? `<span>${esc(`Waiting on ${bot.name}`)}</span>` : line(name);
+  const label = bot ? `<span>${esc(`Waiting on ${bot.name}`)}</span>`
+    : person ? `<span>${esc(`Waiting on ${personDisplay(actorPerson(person))}`)}</span>` : line(name);
   const tip = `${bot ? taskWaitLine(t) : held ? taskBlockedLine(t) : ''}${bot || held ? '\n' : ''}Blocked by ${all}`;
   return `<button type="button" class="bcard-blocked" data-board-blocked="${esc(it.key)}"${bot ? ' data-board-waits-bot' : ''} title="${esc(tip)}">${label}${open.length > 1 ? `<span class="tnum">+${open.length - 1}</span>` : ''}</button>`;
 }
@@ -383,6 +387,7 @@ function taskBoardSave(stateIn: unknown, taskIn: unknown, body: Record<string, u
   void (async () => {
     try {
       const data = await post(`/v2/tasks/${encodeURIComponent(id)}`, body);
+      taskOverCapWarn(t, body, data);
       if (TASKS_ST !== state) return;
       const move = state.boardMoves?.get(id); if (move) move.pending = false;
       if (data?.task) state.tasks = mergeTaskRows(state.tasks, [data.task]);

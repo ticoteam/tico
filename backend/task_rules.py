@@ -294,6 +294,8 @@ DUE_SQL = (
 
 
 def tick(store, now, failures):
+    from . import pipeline_engine
+
     remaining = CLOSE_LIMIT
     try:
         with store.read() as c:
@@ -323,8 +325,10 @@ def tick(store, now, failures):
                     task = dict(candidate)
                     if not safe(c, task) or not all(TRIGGERS[t["key"]][1](c, task, t["hours"], now) for t in triggers):
                         continue
-                    for action in dict.fromkeys(actions):
-                        ACTIONS[action][1](c, task, rule)
+                    # A Task Rule is an automation: its close takes no subtask out of On ice (D69).
+                    with pipeline_engine.automation():
+                        for action in dict.fromkeys(actions):
+                            ACTIONS[action][1](c, task, rule)
                     count += 1
                 run.did(
                     SR.count_words(count, "task closed", "tasks closed") if count else "No eligible done tasks",
