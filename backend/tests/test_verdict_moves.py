@@ -22,6 +22,16 @@ STEPS = [
     ("Post Release QA", "review"),
     ("Done", "done"),
 ]
+NO_QA_STEPS = [
+    ("On Deck", "open"),
+    ("In Progress", "doing"),
+    ("Review 1", "review"),
+    ("Review 1 Fixes", "doing"),
+    ("Review 2", "review"),
+    ("Review 2 Fixes", "doing"),
+    ("Pending Release", "review"),
+    ("Done", "done"),
+]
 
 
 def receipt(api, task, head=HEAD):
@@ -52,9 +62,9 @@ def usage(c, task_id, bot, model="claude-sonnet-5-5", provider="anthropic", runt
     return turn
 
 
-def ticket(api, step="Review 1", labels=()):
+def ticket(api, step="Review 1", labels=(), steps=STEPS):
     with api.app.state.store.transaction() as c:
-        typ = H.type_create(c, H.KEEPER, "Dev tickets", [{"name": n, "status": s} for n, s in STEPS])
+        typ = H.type_create(c, H.KEEPER, "Dev tickets", [{"name": n, "status": s} for n, s in steps])
         rules.seed_dev(c)
     task = post(
         api,
@@ -353,6 +363,44 @@ def test_a_board_without_qa_merges_after_its_last_review_once_ci_is_green(api):
     assert len([m for m in builder_jobs(api) if m["refs"].get(V.HANDOFF) == "merge"]) == 1, "once per head"
     hook(api, "pull_request", pr_event("closed", merged=True, merge_commit_sha="e" * 40, head={"sha": HEAD}))
     assert step(api, task) == "Pending Release"
+
+
+def test_a_board_without_qa_merges_once_review_2_approves_and_ci_is_green(api):
+    """The Dev board's own settings, with no flow set here: a board without QA steps hands Review 2's approval to the
+    merge, which waits for green CI."""
+    task = ticket(api, step="Review 2", steps=NO_QA_STEPS)
+    verdict(api, check(api, task, "Review 2: PR #412"), "approve")
+    assert step(api, task) == "Review 2"
+    assert not builder_jobs(api), "nothing to do until CI is green"
+    _suite(api, "github-actions", "completed", "success", sha=HEAD)
+    merges = [m for m in builder_jobs(api) if m["refs"].get(V.HANDOFF) == "merge"]
+    assert len(merges) == 1 and merges[0]["refs"]["pr_head"] == HEAD
+    hook(api, "pull_request", pr_event("closed", merged=True, merge_commit_sha="e" * 40, head={"sha": HEAD}))
+    assert step(api, task) == "Pending Release"
+
+
+def test_a_board_without_qa_files_an_unanswered_review_2_again_and_never_passes_it_on(api):
+    """Review 2 on the recommended board is filed again, not skipped: the stale check is closed and the change stays at
+    Review 2, with no merge handed off by the timeout."""
+    from datetime import timedelta
+
+    task = ticket(api, step="Review 2", steps=NO_QA_STEPS)
+    review = check(api, task, "Review 2: PR #412")
+    with api.app.state.store.transaction() as c:
+        later = H.parse_ts(H.now()) + timedelta(hours=2)
+        assert V.timeouts(c, later.strftime("%Y-%m-%dT%H:%M:%S.%fZ")) == [], "a refile moves no ticket"
+        assert H.task(c, review["id"])["status"] == "closed"
+    assert step(api, task) == "Review 2"
+    with api.app.state.store.read() as c:
+        events = {
+            (r[0], r[1])
+            for r in c.execute(
+                "SELECT subject_id, kind FROM history_events WHERE subject_id IN (?, ?)", (task["id"], review["id"])
+            )
+        }
+    assert (task["id"], "check_refiled") in events, "the stale check is recorded as refiled"
+    assert not {kind for _, kind in events} & {"round_skipped", "verdict_move"}, "the timeout passes nothing on"
+    assert not [m for m in builder_jobs(api) if "merge PR" in str(m)], "no merge is handed off by the timeout"
 
 
 def test_a_ticket_tagged_with_a_steps_skip_tag_passes_it_by_and_the_skip_is_recorded(api):

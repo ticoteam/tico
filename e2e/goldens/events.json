@@ -556,6 +556,7 @@
           "pinned_for_everyone": false,
           "retention_days": null,
           "root_id": "<id12>",
+          "task_hidden": true,
           "task_id": "<task>",
           "title": "Draft the launch plan"
         },
@@ -1028,6 +1029,7 @@
           "stale_asked_at": null,
           "status": "closed",
           "step": {
+            "card_cap": null,
             "id": "general-closed",
             "limit_minutes": null,
             "name": "Closed",
@@ -1336,6 +1338,7 @@
           "stale_asked_at": null,
           "status": "open",
           "step": {
+            "card_cap": null,
             "id": "general-open",
             "limit_minutes": null,
             "name": "Open",

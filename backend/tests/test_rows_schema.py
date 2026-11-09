@@ -100,6 +100,8 @@ TABLES = {
     rows.SkillSuggestionRow: "skill_suggestions",
     rows.SkillDeviceRow: "skill_devices",
     rows.SkillDeviceCodeRow: "skill_device_codes",
+    rows.CiRunRow: "ci_runs",
+    rows.CiRunExtensionRow: "ci_run_extensions",
     rows.EntityActivityRow: "entity_activities",
     rows.EntityAttributeRow: "entity_attributes",
     rows.EntityConnectionRow: "entity_connections",

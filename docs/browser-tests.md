@@ -15,7 +15,7 @@ privacy policy, browser engine or release check changes. The removed coverage is
 | rails.cjs | tasks-page.cjs keeps saved-view preference persistence | Sidebar drag width, arrow-key/end limits, device/account width restore, double-click reset and hidden phone edge; these rail-specific assertions have no remaining equivalent |
 | subscriptions-weekly.cjs | None: named subscriptions left the page with one login per AI tool per computer (#1259), and subscription-identity.cjs with them; backend/tests/test_subscription_refresh.py covers refresh state and access | Pure wording/state rendering matrix and exact JavaScript polling schedule/stop assertion |
 | subscriptions-refresh.cjs | None, as above (#1259); backend/tests/test_subscription_refresh.py keeps the server contract | Repeated weekly-copy assertions and phone overflow measurement |
-| sweep-fixes.cjs | getting-started.cjs and docs.cjs keep Market paths; bot-tools.cjs, assistant.cjs and meetings.cts keep their feature paths | Light-theme pixel colors, exact display-name/credential wording, tag-row alignment and filter clipping |
+| sweep-fixes.cjs | getting-started.cjs and docs.cjs keep Market paths; bot-tools.cjs, assistant.cts and meetings.cts keep their feature paths | Light-theme pixel colors, exact display-name/credential wording, tag-row alignment and filter clipping |
 
 Within retained scripts:
 
@@ -31,7 +31,7 @@ Within retained scripts:
   repeated light-theme runs, picker logo/initials matrix and picker/steps width assertions.
 - goals.cjs removes row-height/alignment and long-title ellipsis/tooltip checks. Goal/KPI writes,
   confirmations, evidence, escaped live Markdown and read-only controls remain.
-- team-icon.cjs and changelog.cjs remove phone overflow assertions; owner controls, retries,
+- team-icon.cjs and changelog.cts remove phone overflow assertions; owner controls, retries,
   persisted read state and content escaping remain.
 - task-detail-state.cjs removes the exact 390px dialog width; pending drafts, version ordering,
   failed-write preservation and dialog ownership remain.

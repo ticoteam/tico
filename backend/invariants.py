@@ -91,7 +91,7 @@ def task_stuck(c, ctx):
     since = _ago(ctx, minutes=TASK_QUIET_MINUTES)
     rows = c.execute(
         f"SELECT t.id FROM tasks t WHERE t.status='doing' AND t.owner_id LIKE 'bot:%' AND t.updated_at<? "
-        f"AND NOT EXISTS (SELECT 1 FROM jobs j JOIN messages m ON m.id=j.message_id "
+        f"AND NOT {H.ON_ICE % 't'} AND NOT EXISTS (SELECT 1 FROM jobs j JOIN messages m ON m.id=j.message_id "
         f"JOIN conversations cv ON cv.id=m.conversation_id "
         f"WHERE j.bot_id=substr(t.owner_id, 5) AND j.state IN ({','.join('?' * len(LIVE_JOBS))}) "
         f"AND {H.MESSAGE_TASK_SQL}=t.id) "

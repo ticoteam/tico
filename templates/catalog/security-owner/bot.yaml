@@ -1,0 +1,34 @@
+name: security-owner               # the slug: it matches the repository bot-security-owner and the label owner:security-owner
+display_name: "Security Owner"
+labels: [owner:security-owner]
+reads: []                        # other bot repositories this one may clone read-only
+
+# These must agree with the bot's settings on the server, or be left out of this file entirely.
+reasoning_effort: high
+max_run_minutes: 60
+
+# What the Tico AI Gateway gives this bot when nobody picked a model: its group's pick at this level.
+gateway:
+  level: high
+
+# The first routine is declared off (`enabled: false`) and switched on when a human starts the bot's setup
+# (Start setup, go-live). `hub bot create` seeds it once; from then on Tico's row is the routine (docs/routines.md).
+routines:
+  - id: weekly-security-report
+    title: Weekly dependency and advisory report
+    cron: "0 8 * * 1"
+    timezone: America/Los_Angeles     # set this to the team's own timezone
+    template: playbooks/weekly-security-report.md
+    labels: [priority:p2]
+    enabled: false
+
+# What this bot may touch. Not listed is not allowed. The team's GitHub App gives the bot a short-lived
+# token for the repositories the owner lists for it in Settings (docs/github-app.md).
+tools:
+  - service: github
+    identity: "the product repositories the owner lists for this bot"
+    can: [read]
+    note: "reads Dependabot pull requests, lockfiles and code to trace reachability; never dismisses an alert, merges or changes a setting"
+# The token can write, so the only thing between this bot and a change on GitHub is this entry and
+# .claude/settings.json, which denies gh api, every pull request write and every push. Keep it read only:
+# engineers merge the upgrades the patch plan lists.

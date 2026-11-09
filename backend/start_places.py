@@ -567,6 +567,7 @@ def _summaries(c, runner_ids, settings, default=None, classify=True):
         'bot_limit': 'at its turn limit',
         'task_wait': 'a snooze, prerequisite, person or check',
         'task_next_run': 'the next run or a stored resume condition',
+        'on_ice': 'a card On ice',
     }
     for row in c.execute(
         f"SELECT a.runner_id,j.bot_id,count(*) n,min(j.created_at) oldest,{BS.CONFIG} AS config,b.state bot_state "
