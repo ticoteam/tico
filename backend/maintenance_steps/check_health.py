@@ -554,6 +554,8 @@ def _digest(c, now, botops, details, wakes):
     the marker waits for it."""
     groups = {}
     for row in _open_rows(c):
+        if row["kind"] == MH.BUG:  # a Tico bug is reported, not tasked: the normal run reports it (reports_due)
+            continue
         groups.setdefault(row["signature"], []).append(row)
     uncovered = {sig: rows for sig, rows in groups.items() if task_of(c, sig) is None}
     if not uncovered:

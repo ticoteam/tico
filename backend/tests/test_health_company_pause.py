@@ -6,6 +6,7 @@ Synthetic fixture team only (backend/tests/test_environment.py via test_maintena
 
 from backend import hubdb as H
 from backend import invariants
+from backend import maintenance_health as MH
 from backend.maintenance_steps import check_health
 from backend.tests.test_maintenance_health import (  # noqa: F401  (fixtures)
     botops_tasks,
@@ -100,3 +101,19 @@ def test_a_bot_its_owner_paused_is_not_a_stuck_task(environment):
         c.execute("UPDATE bots SET state='paused' WHERE id='botops'")
         assert invariants.task_stuck(c, ctx) == []  # paused by its owner: not stuck
         c.execute("UPDATE bots SET state='active' WHERE id='botops'")
+
+
+def test_a_held_tico_bug_is_reported_on_resume_and_not_folded_into_the_digest(environment, code_findings):
+    api, _ = built(environment)
+    code_findings[:] = [
+        item("push_stuck", key="push_stuck:one", title="Pushes are stuck one", subject="one"),
+        item("push_stuck", key="push_stuck:bug", title="A Tico bug", kind=MH.BUG, subject="bug"),
+    ]
+    _company(api, "pause")
+    run(api)
+    _company(api, "resume")
+    result = run(api)
+    (digest,) = _digests(api)
+    assert "1 health findings" in digest["title"]  # the setup finding only: the bug is not in the digest
+    assert result["details"]["reports_due"] == [MH.signature("push_stuck", "bug")]
+    assert botops_tasks(api) == [digest]  # and no task was opened for the bug
