@@ -1,4 +1,4 @@
-// BotOps' Confirm cards in the Assistant's chat (ui/assistant.js; BotOps has no DM of its own now), fixtures only.
+// BotOps' Confirm cards in the Assistant's chat (ui/assistant.ts; BotOps has no DM of its own now), fixtures only.
 //  - plain words: the card's title is the server's sentence, never the method and path; a card stored with no readable
 //    description gets a plain sentence too. The method, path and fields sit behind a closed Details.
 //  - no jump on Confirm: in a chat scrolled partway down with several cards, a click changes only that card. The thread
@@ -79,7 +79,7 @@ async function open(browser, state) {
     const json = body => route.fulfill({contentType: 'application/json', body: JSON.stringify(body)});
     if (/\/marked\.min\.js$/.test(p)) return route.fulfill({contentType: 'application/javascript', body: fs.readFileSync(path.join(__dirname, '../vendor/marked.min.js'), 'utf8')});
     if (url.origin !== 'https://tico-ui.test') return route.abort();
-    const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|css))$/);
+    const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/);
     if (ui && fs.existsSync(uiFile(ui[1]))) return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]), 'utf8')});
     if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
     if (p === '/api/me') return json({id: 'ana', name: 'Ana', role: 'owner', cloud: true});

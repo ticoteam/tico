@@ -29,7 +29,7 @@
    "restricted": 1,
    "revision": 0,
    "sender_id": "bot:ops",
-   "seq": 2,
+   "seq": 3,
    "superseded_at": null,
    "to_actor": "human:ana",
    "wait_s": null

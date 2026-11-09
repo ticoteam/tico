@@ -1,4 +1,4 @@
-// A bot's Home and DM keep the bot chat's composer (ui/app/thread-view.js, ui/app/chat-goal.js): one line (Attach, the
+// A bot's Home and DM keep the bot chat's composer (ui/app/thread-view.ts, ui/app/chat-goal.ts): one line (Attach, the
 // words, the ways caret, Send) in one frame, with no question-card outline around it, on a phone (dark) and a computer
 // (light). Send shows the person's kept way (Steer, Queue, Defer; pill.js) and every message names it; the caret, a
 // right-click or a long press opens the ways, and a pick sticks across a reload. Set as goal is in that menu, for one
@@ -6,9 +6,9 @@
 // (POST /api/v2/conversations/<thread>/goal, never a message); the pinned goal shows in its bar with Edit, Pause and
 // Clear, and the refusals are the old chat's. An empty DM's first goal makes the DM first, as its first message would.
 // A person-to-person thread keeps a plain Send. The /goal messages are not shown; a met goal is its one line. The old bar's
-// other pieces are back too: on a phone the bot's avatar at the left edge opens the bot switcher (ui/app/org-fan.js);
+// other pieces are back too: on a phone the bot's avatar at the left edge opens the bot switcher (ui/app/org-fan.ts);
 // Stop takes Send's place while the bot runs (read from the thread's conversation snapshot) and posts the stop; "/"
-// opens the commands menu, and a command does what it did in the old chat (ui/app/slash-commands.js). Fixtures only.
+// opens the commands menu, and a command does what it did in the old chat (ui/app/slash-commands.ts). Fixtures only.
 // TICO_SCREENSHOT_DIR=<dir> also saves the screenshots.
 const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
@@ -47,10 +47,10 @@ async function open(browser, {width = 390, theme = 'dark', tab = 'home', support
     const req = route.request(), url = new URL(req.url()), p = url.pathname, method = req.method();
     const json = (body, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
     if (url.origin !== 'https://tico-ui.test') return route.abort();
-    const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|css))$/);
+    const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/);
     if (ui && fs.existsSync(uiFile(ui[1]))) return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]), 'utf8')});
     if (p.startsWith('/vendor/fonts/') && fs.existsSync(uiFile(p.slice(1)))) return route.fulfill({contentType: 'font/woff2', body: fs.readFileSync(uiFile(p.slice(1)))});
-    if (p.endsWith('.js')) return route.fulfill({contentType: 'application/javascript', body: ''});
+    if (/\.(?:js|ts)$/.test(p)) return route.fulfill({contentType: 'application/javascript', body: ''});
     if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
     if (p === '/api/me') return json({id: 'ana', name: 'Ana', role, cloud: true});
     const bot = (name, display_name) => ({name, display_name, host: 'keeper', status: 'active', can_chat: true, schedules: [],

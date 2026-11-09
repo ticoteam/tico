@@ -69,12 +69,22 @@ def test_each_frequency_is_due_on_its_own_clock():
     assert not M.due(row("day", la(4, 6)), la(5, 4, 30)), "04:30 is still yesterday's day"
     assert M.due(row("day", la(4, 6)), la(5, 5, 30)), "after 05:00 the day is new"
     old = datetime(2026, 10, 28, 14, 0, tzinfo=timezone.utc)  # absolute time: the clocks changed on Nov 1
-    assert not M.due(row("week", old), old + timedelta(days=7) - timedelta(minutes=1)), (
-        "six days and a bit is not a week"
+    assert not M.due(row("week", old), old + timedelta(days=7) - timedelta(hours=1)), (
+        "six days and 23 hours is not a week"
+    )
+    assert M.due(row("week", old), old + timedelta(days=7) - timedelta(seconds=4)), (
+        "a run that starts a few seconds earlier in its bucket than last week's is still due"
     )
     assert M.due(row("week", old), old + timedelta(days=7)), "seven days after the last attempt is due"
     assert not M.due(row("custom", la(4, 6), 3, "hours"), la(4, 8)), "every 3 hours: two hours is not enough"
     assert M.due(row("custom", la(4, 6), 3, "hours"), la(4, 9)), "every 3 hours: three hours is due"
+    last = datetime(2026, 11, 8, 14, 0, 7, 781692, tzinfo=timezone.utc)
+    assert M.due(row("custom", last, 6, "hours"), datetime(2026, 11, 8, 20, 0, 4, 265769, tzinfo=timezone.utc)), (
+        "every 6 hours: a run 3.5 seconds earlier in its bucket than the last is due, not put off a whole hour"
+    )
+    assert not M.due(row("custom", last, 6, "hours"), datetime(2026, 11, 8, 19, 0, 4, tzinfo=timezone.utc)), (
+        "every 6 hours: the bucket before is not"
+    )
     assert not M.due(row("custom", la(2, 6), 2, "days"), la(3, 6)), "every 2 days: one day is not enough"
     assert M.due(row("custom", la(2, 6), 2, "days"), la(4, 6)), "every 2 days: two days is due"
 
@@ -638,3 +648,12 @@ def test_the_replaced_jobs_mirrors_are_retired_once():
         )
     with sqlite3.connect(":memory:") as c:
         migration.up(c)  # a file with no automations yet
+
+
+def test_the_api_saves_the_rules_cap_beside_decides_and_shows_what_is_in_effect(api, monkeypatch):
+    monkeypatch.setattr(M, "_start", lambda *args, **kwargs: None)
+    body = patch(api, "maintenance", {"rules_monthly_cap_usd": 80})
+    assert body["settings"]["rules_monthly_cap_usd"] == 80
+    assert body["settings"]["rules_monthly_cap_usd_in_effect"] == 80
+    assert body["settings"]["monthly_cap_usd"] is None  # Decide's cap is not touched
+    patch(api, "maintenance", {"rules_monthly_cap_usd": -5}, expected=422)

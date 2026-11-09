@@ -1,4 +1,4 @@
-// Finished goals on the Goals page (ui/app/goals.js goalFinishedMount): under an owner's live goals, "Finished (N)",
+// Finished goals on the Goals page (ui/app/goals.ts goalFinishedMount): under an owner's live goals, "Finished (N)",
 // closed until opened, newest first, the latest 20 until "Show all"; a row opens read only; Reopen only for whoever may set
 // the goal's colour; "Goal removed" offers Undo, which puts the colour back. Fixtures only, no network.
 const {chromium} = require('playwright');
@@ -38,7 +38,7 @@ const goals = [
       const json = (body, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
       if (url.origin !== 'http://tico-ui.test') return route.abort();
       if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
-      const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|css))$/);
+      const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/);
       if (ui) { const file = uiFile(ui[1]); if (fs.existsSync(file)) return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(file, 'utf8')}); }
       if (p === '/api/v2/events') return;
       const body = post ? req.postDataJSON() : null;

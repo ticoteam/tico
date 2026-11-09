@@ -8,7 +8,7 @@ import json
 import re
 import sqlite3
 from collections.abc import Iterable, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any
 
 from .ledger import new_id
@@ -236,6 +236,8 @@ class SpendRow:
     campaign_name: str
     amount_cents: int
     currency: str
+    clicks: int = 0
+    conversions: float = 0.0  # the platform's count of conversions it attributes to the campaign that day
 
 
 def replace_spend(
@@ -259,20 +261,35 @@ def replace_spend(
                 r.campaign_name or had.campaign_name,
                 had.amount_cents + r.amount_cents,
                 r.currency,
+                had.clicks + r.clicks,
+                had.conversions + r.conversions,
             )
         )
     for r in merged.values():
         c.execute(
             "INSERT INTO fin_ad_spends(id, ad_account_id, day, campaign_external_id, campaign_name, amount_cents, "
-            "currency, fetched_at) VALUES(?,?,?,?,?,?,?,?)",
-            (new_id(), ad_account_id, r.day, r.campaign_id, r.campaign_name, r.amount_cents, r.currency.upper(), at),
+            "currency, fetched_at, clicks, conversions) VALUES(?,?,?,?,?,?,?,?,?,?)",
+            (
+                new_id(),
+                ad_account_id,
+                r.day,
+                r.campaign_id,
+                r.campaign_name,
+                r.amount_cents,
+                r.currency.upper(),
+                at,
+                r.clicks,
+                r.conversions,
+            ),
         )
     return len(merged)
 
 
 @dataclass(frozen=True)
 class LiveSpend:
-    """One counting ad account's spend over a window: an active account of an enabled import (`import_id`)."""
+    """One counting ad account's spend over a window: an active account of an enabled import (`import_id`). `mate` and
+    `team` are whom the spend counts for: the campaign owner's teammate ("bot:…" / "human:…") and/or team. With no
+    campaign owner set they are the account's bot and "" (so `bot_slug` alone decides, as before campaigns)."""
 
     ad_account_id: str
     platform: str
@@ -281,6 +298,8 @@ class LiveSpend:
     currency: str
     amount: int
     import_id: str = ""
+    mate: str = ""
+    team: str = ""
 
 
 def live_spend(c: sqlite3.Connection, start: str, end: str) -> list[LiveSpend]:
@@ -300,22 +319,78 @@ def live_spend(c: sqlite3.Connection, start: str, end: str) -> list[LiveSpend]:
     first: dict[tuple[str, str], str] = {}
     for r in rows:
         first.setdefault((str(r["platform"]), str(r["external_id"])), str(r["id"]))
-    return sorted(
-        (
-            LiveSpend(
-                r["id"],
-                r["platform"],
-                r["bot_slug"],
-                r["account_id"] or "",
-                r["currency"],
-                int(r["amount"]),
-                r["import_id"],
+    found = [
+        LiveSpend(
+            r["id"],
+            r["platform"],
+            r["bot_slug"],
+            r["account_id"] or "",
+            r["currency"],
+            int(r["amount"]),
+            r["import_id"],
+            f"bot:{r['bot_slug']}" if r["bot_slug"] else "",
+        )
+        for r in rows
+        if first[(str(r["platform"]), str(r["external_id"]))] == str(r["id"])
+    ]
+    owned = _owned_campaigns(c)
+    if owned:
+        found = _by_owner(c, found, owned, start, end)
+    return sorted(found, key=lambda x: (x.ad_account_id, x.currency, x.mate, x.team))
+
+
+def _owned_campaigns(c: sqlite3.Connection) -> dict[tuple[str, str], tuple[str, str]]:
+    """{(ad account id, campaign external id): (teammate, team)} for the campaigns whose owner is set (none: the account's
+    bot counts them all)."""
+    out: dict[tuple[str, str], tuple[str, str]] = {}
+    for r in c.execute(
+        "SELECT ad_account_id, external_id, COALESCE(teammate, '') AS teammate, COALESCE(team_id, '') AS team_id "
+        "FROM fin_ad_campaigns WHERE (teammate IS NOT NULL AND teammate<>'') OR (team_id IS NOT NULL AND team_id<>'')"
+    ):
+        out[(str(r["ad_account_id"]), str(r["external_id"]))] = (str(r["teammate"]), str(r["team_id"]))
+    return out
+
+
+def _by_owner(
+    c: sqlite3.Connection,
+    found: list[LiveSpend],
+    owned: dict[tuple[str, str], tuple[str, str]],
+    start: str,
+    end: str,
+) -> list[LiveSpend]:
+    """The accounts with a campaign owner set, split: each campaign's spend counts for its owner (the campaign's own, else
+    the account's bot). An account's rows keep their currency; one owner-row per owner and currency."""
+    accounts = {aid for aid, _ in owned}
+    ids = sorted({x.ad_account_id for x in found if x.ad_account_id in accounts})
+    if not ids:
+        return found
+    marks = ",".join("?" * len(ids))
+    spent: dict[tuple[str, str, str], int] = {}
+    for r in c.execute(
+        "SELECT ad_account_id, campaign_external_id, currency, COALESCE(SUM(amount_cents), 0) FROM fin_ad_spends "
+        f"WHERE day BETWEEN ? AND ? AND ad_account_id IN ({marks}) GROUP BY ad_account_id, campaign_external_id, currency",
+        (start, end, *ids),
+    ):
+        spent[(str(r[0]), str(r[1]), str(r[2]))] = int(r[3])
+    out: list[LiveSpend] = []
+    for x in found:
+        if x.ad_account_id not in accounts:
+            out.append(x)
+            continue
+        parts: dict[tuple[str, str], int] = {}
+        for (aid, ext, cur), amount in spent.items():
+            if aid != x.ad_account_id or cur != x.currency:
+                continue
+            key = owned.get((aid, ext), (x.mate, ""))
+            parts[key] = parts.get(key, 0) + amount
+        if not parts:
+            out.append(x)
+            continue
+        for (mate, team), amount in parts.items():
+            out.append(
+                replace(x, amount=amount, mate=mate, team=team, bot_slug=mate[4:] if mate.startswith("bot:") else "")
             )
-            for r in rows
-            if first[(str(r["platform"]), str(r["external_id"]))] == str(r["id"])
-        ),
-        key=lambda x: (x.ad_account_id, x.currency),
-    )
+    return out
 
 
 def account_label(platform: str, external_id: str) -> str:
@@ -498,3 +573,116 @@ def holds_for(c: sqlite3.Connection, budget_ids: Sequence[str], start: str, end:
             contact = str(found[0] or "") if found is not None else ""
         out.append(HeldFor(int(r[0]), source, contact, text))
     return out
+
+
+# ------------------------------------------------------------------------------------------------ campaigns
+@dataclass(frozen=True)
+class Campaign:
+    """A campaign an ad account reports (fin_ad_campaigns). Its owner is `teammate` ("bot:…" / "human:…") and/or
+    `team_id`; both empty: the account's bot (campaigns.campaign_owner)."""
+
+    id: str
+    ad_account_id: str
+    external_id: str
+    name: str
+    team_id: str
+    teammate: str
+    owner_set_at: str | None
+    owner_set_by: str
+    prior_team_id: str
+    prior_teammate: str
+    first_seen_on: str
+    last_seen_on: str
+
+
+def _campaign(r: Any) -> Campaign:
+    return Campaign(
+        id=r["id"],
+        ad_account_id=r["ad_account_id"],
+        external_id=r["external_id"],
+        name=r["name"] or "",
+        team_id=r["team_id"] or "",
+        teammate=r["teammate"] or "",
+        owner_set_at=r["owner_set_at"],
+        owner_set_by=r["owner_set_by"] or "",
+        prior_team_id=r["prior_team_id"] or "",
+        prior_teammate=r["prior_teammate"] or "",
+        first_seen_on=r["first_seen_on"],
+        last_seen_on=r["last_seen_on"],
+    )
+
+
+def upsert_campaign(
+    c: sqlite3.Connection,
+    ad_account_id: str,
+    external_id: str,
+    name: str,
+    first_day: str,
+    last_day: str,
+    at: str,
+) -> None:
+    """A campaign the import saw: created with no owner, or renamed to the platform's current name; the days it was seen on
+    widen. Its owner stays."""
+    c.execute(
+        "INSERT INTO fin_ad_campaigns(id, ad_account_id, external_id, name, first_seen_on, last_seen_on, created_at, "
+        "updated_at) VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(ad_account_id, external_id) DO UPDATE SET "
+        "name=CASE WHEN excluded.name<>'' THEN excluded.name ELSE fin_ad_campaigns.name END, "
+        "first_seen_on=MIN(fin_ad_campaigns.first_seen_on, excluded.first_seen_on), "
+        "last_seen_on=MAX(fin_ad_campaigns.last_seen_on, excluded.last_seen_on), updated_at=excluded.updated_at",
+        (new_id(), ad_account_id, external_id, name, first_day, last_day, at, at),
+    )
+
+
+def campaigns(c: sqlite3.Connection, ad_account_id: str = "") -> list[Campaign]:
+    if not ready(c):
+        return []
+    if ad_account_id:
+        rows = c.execute(
+            "SELECT * FROM fin_ad_campaigns WHERE ad_account_id=? ORDER BY name, external_id", (ad_account_id,)
+        )
+    else:
+        rows = c.execute("SELECT * FROM fin_ad_campaigns ORDER BY ad_account_id, name, external_id")
+    return [_campaign(r) for r in rows]
+
+
+def campaign(c: sqlite3.Connection, campaign_id: str) -> Campaign | None:
+    if not ready(c):
+        return None
+    row = c.execute("SELECT * FROM fin_ad_campaigns WHERE id=?", (campaign_id,)).fetchone()
+    return _campaign(row) if row else None
+
+
+def set_owner(
+    c: sqlite3.Connection, campaign_id: str, team: str, teammate: str, by: str, at: str, *, undo: bool = False
+) -> None:
+    """Put an owner on a campaign ("" for both: back to the account's bot). The owner it had goes to prior_* (so an undo
+    puts it back); an undo swaps the two."""
+    cur = campaign(c, campaign_id)
+    if cur is None:
+        return
+    if undo:
+        team, teammate = cur.prior_team_id, cur.prior_teammate
+    c.execute(
+        "UPDATE fin_ad_campaigns SET prior_team_id=?, prior_teammate=?, team_id=?, teammate=?, owner_set_at=?, "
+        "owner_set_by=?, updated_at=? WHERE id=?",
+        (cur.team_id or None, cur.teammate or None, team or None, teammate or None, at, by, at, campaign_id),
+    )
+
+
+def campaign_month(c: sqlite3.Connection, start: str, end: str) -> list[dict[str, Any]]:
+    """Each campaign's spend, clicks and conversions over [start, end] (days), per currency, with its ad account."""
+    if not ready(c):
+        return []
+    return [
+        dict(r)
+        for r in c.execute(
+            "SELECT g.id AS campaign_id, g.external_id, g.name, g.ad_account_id, g.team_id, g.teammate, "
+            "g.last_seen_on, a.name AS account_name, a.platform, a.bot_slug, a.currency AS account_currency, "
+            "s.currency AS currency, COALESCE(SUM(s.amount_cents), 0) AS spend, COALESCE(SUM(s.clicks), 0) AS clicks, "
+            "COALESCE(SUM(s.conversions), 0) AS conversions, MAX(s.fetched_at) AS fetched_at "
+            "FROM fin_ad_campaigns g JOIN fin_ad_accounts a ON a.id=g.ad_account_id "
+            "LEFT JOIN fin_ad_spends s ON s.ad_account_id=g.ad_account_id AND s.campaign_external_id=g.external_id "
+            "AND s.day BETWEEN ? AND ? WHERE g.first_seen_on <= ? AND g.last_seen_on >= ? GROUP BY g.id, s.currency ORDER BY g.id",
+            (start, end, end, start),
+        )
+    ]

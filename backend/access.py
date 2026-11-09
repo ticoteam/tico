@@ -14,6 +14,7 @@ The roster stays the gate for sign-in: a person on it (and not marked as left) i
 address on `allowed`, or at an allowed domain, joins the roster on its first verified sign-in.
 """
 
+from typing import Any
 import json
 import logging
 import re
@@ -119,12 +120,18 @@ def load_owner(c, settings):
     }
 
 
-def owner_and_admin_emails(c):
+def owner_and_admin_emails(c: Any) -> list[str]:
     """The owner's address, then the Admins', as stored at database initialization (`seed`) and revised since: for code
     with no settings at hand that must find someone who can act (an org rule hold's reviewer, backend/org_rule_check.py)."""
     owner = (_load_json(c, OWNER) or {}).get("email")
     stored = _load_json(c, ACCESS) or {}
     return emails([owner, *(stored["admins"] if "admins" in stored else stored.get("bot_admins") or [])])
+
+
+def owner_email(c: Any) -> str:
+    """The company owner's address as stored, lowercase, or "" when none is stored: a members-only pipeline shows to the
+    person with this address (backend/pipeline_rights.py)."""
+    return str((_load_json(c, OWNER) or {}).get("email") or "").strip().lower()
 
 
 def load_access(c, settings):

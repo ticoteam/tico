@@ -73,7 +73,7 @@ def finish(api, machine, attempt, started=False, **tokens):
 
 
 def employee(api, bot):
-    """The row Settings and the branch editor read (ui/app/settings.js loads /employees)."""
+    """The row Settings and the branch editor read (ui/app/settings.ts loads /employees)."""
     return {e["name"]: e for e in api.get("/api/employees", headers=headers()).json()}[bot]
 
 

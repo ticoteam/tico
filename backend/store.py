@@ -1213,6 +1213,15 @@ class Store:
             factory=factory or self.factory,
             check_same_thread=check_same_thread,
         )
+        try:
+            self._configure(c)
+        except BaseException:
+            # The caller never receives the connection, so nothing else would close it.
+            c.close()
+            raise
+        return c
+
+    def _configure(self, c):
         H.leave_wal_for_litestream(c)
         c.row_factory = sqlite3.Row
         c.execute("PRAGMA foreign_keys=ON")
@@ -1230,7 +1239,6 @@ class Store:
         c.execute("PRAGMA mmap_size=268435456")
         # The WAL file is cut back to this size after a checkpoint; a large write (a migration) otherwise keeps its peak.
         c.execute(f"PRAGMA journal_size_limit={H.WAL_SIZE_LIMIT}")
-        return c
 
     @SRC.scoped("system:migration")
     def migrate(self):
@@ -1313,6 +1321,9 @@ class Store:
 
             _step_flow.ensure(c)
             _step_flow.seed(c)
+            from . import pipeline_engine as _pipeline_engine
+
+            _pipeline_engine.boot(c)  # prefixes D and P, default Warn after, open stage visits
             _rules.drop_step_noise(c)
             from . import owner_link as _owner_link
 
@@ -2068,7 +2079,6 @@ class Store:
                 # Notes a completed run carried are settled (hubdb.notes_settle): one pass settles the ones from before the
                 # column, in one UPDATE. Unversioned and idempotent; it reads only the small unsettled-carried index.
                 H.notes_settle_catch_up(c, None)
-                H.ensure_market_reads(c)
                 # Setup commands cleared in Settings before a clear released the row (backend/repositories.py).
                 # Unversioned and idempotent like the trash below: it matches nothing once those rows are released.
                 from .repositories import release_cleared_overrides
@@ -2331,6 +2341,11 @@ class Store:
                 from . import market as Market
 
                 Market.mark_seeded_pages(c)
+                # The Directory's boot step: flags Market's company/self as self, and the kind of each organization Market
+                # wrote without one (backend/entities/store.py boot). Idempotent.
+                from .entities import store as Directory
+
+                Directory.boot(c)
                 # Finished tasks still holding an earlier close time (H.clear_finished_close_times). Idempotent.
                 H.clear_finished_close_times(c)
                 # Teams, org groups and derived departments become groups, once (backend/groups.py). Idempotent,
@@ -2436,6 +2451,12 @@ class Store:
         # Once per install: routines and wake rules become automations (backend/redesign_migration.py). Each object
         # in its own write, so a restart part way goes on where it stopped.
         redesign_migration.cutover(self)
+
+    def close(self):
+        """Closes the store's idle read connections now, as the finalizer does once the store is freed. A connection
+        still in use is closed when _give receives it, since the finalizer is no longer alive."""
+        with self.pool_lock:
+            self._pool_finalizer()
 
     @contextmanager
     def read(self):
@@ -2776,14 +2797,17 @@ class Store:
             raise refusal
         return result
 
-    def write(self, identity, fn):
+    def write(self, identity, fn, *, validate=True):
         """`mutate` without an idempotency record, for a route whose request is its own: the same
-        identity check under the write lock, and the same all-or-nothing refusal."""
+        identity check under the write lock, and the same all-or-nothing refusal. `validate=False` is for a write the
+        server makes for itself on a bot's behalf (backend/files.py, a review page): it has no credential to check, and
+        `fn` checks the records it writes."""
         refusal = logged = None
         with self.transaction() as c:
-            from .auth import validate_identity
+            if validate:
+                from .auth import validate_identity
 
-            validate_identity(c, identity)
+                validate_identity(c, identity)
             # Who made the changes this write logs (backend/events.py).
             from . import events as changes
 

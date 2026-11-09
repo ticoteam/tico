@@ -1,0 +1,22 @@
+{
+    "files": {
+        "./backend/task_links_routes.py": [
+            {
+                "code": "reportOptionalSubscript",
+                "range": {
+                    "startColumn": 22,
+                    "endColumn": 40,
+                    "lineCount": 1
+                }
+            },
+            {
+                "code": "reportArgumentType",
+                "range": {
+                    "startColumn": 25,
+                    "endColumn": 61,
+                    "lineCount": 1
+                }
+            }
+        ]
+    }
+}

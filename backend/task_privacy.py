@@ -599,6 +599,10 @@ def page(c, who, cid, *, before=None, since=None, limit=200, task_id=None, max_b
             # reader it leaves the page, and a run's claim, which checks every message it hands out, is not refused for it.
             if '"carries"' in (stored.get("refs") or "") and not message_readable(c, reader, stored, current=True):
                 return False
+            # A row that names a live meeting, or replies to one at any depth, is read only by someone who may read that
+            # meeting (message_readable's meeting check, which walks the reply chain): a page shows the same answer.
+            if not meeting_sources(c).message_readable(reader, stored):
+                return False
             tasks = message_tasks(c, stored, current=True)
             if task_id and task_id not in tasks:
                 return False
