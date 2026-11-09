@@ -12,6 +12,7 @@ from backend.auth import Identity
 from backend.config import Settings
 from backend.store import encode
 from backend import bot_settings as BS
+from backend import blockers as B
 from backend.tests.hold_rows import set_holds
 
 BOTS = ("cpo", "cmo", "qa", "devops-engineer")
@@ -416,3 +417,10 @@ def test_a_check_waiting_on_a_task_on_ice_asks_no_bot_about_the_ticket(api, chec
         c.execute("UPDATE task_steps SET card_cap=0 WHERE id=?", (stage,))
         c.execute("UPDATE tasks SET type_id=?, step_id=? WHERE id=?", (ice["id"], stage, dependency["id"]))
         assert task_roundup._blocked_waits(c, H.now()).get("devops-engineer", []) == []
+
+
+def test_devops_is_found_as_a_new_org_infrastructure_owner_when_no_old_devops_bot_is_active(api):
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE bots SET state='archived' WHERE slug='devops-engineer'")
+        BS.update(c, "qa", {"template": "infrastructure-owner"})
+        assert B.devops(c) == "qa"

@@ -174,7 +174,7 @@ def test_private_subtask_refuses_the_whole_finish_without_detaching_or_leaking_i
     )
     assert not H.task_private_readable(c, ANA, secret)
     before = [(H.task(c, kid["id"]), history(c, kid)) for kid in (parent, visible, secret)]
-    with pytest.raises(H.Refused, match="The open subtask a subtask is not yours") as exc:
+    with pytest.raises(H.Refused, match="An open subtask under it is not yours to close") as exc:
         if operation == "close":
             H.task_close(c, ANA, parent["id"])
         else:

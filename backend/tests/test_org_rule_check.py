@@ -259,6 +259,62 @@ def test_a_mixed_bulk_change_holds_only_the_breaking_task(ruled):
     assert [s.get("code") for s in r.json()["tasks"]["skipped"]] == ["held"]
 
 
+def test_a_bulk_close_holds_a_subtask_and_its_parent_is_skipped_not_closed(ruled):
+    """The rule holds only the subtask. The subtask stays open, so the parent is skipped with subtasks_left_out: closing
+    the parent would close the held subtask through its cascade, which runs no rule check."""
+    api, _ = ruled
+    parent = post(
+        api, "tasks", {"owner": "ops", "title": "Launch the spring campaign", "body": "Plan it."}, token="ops-test"
+    )
+    kid = post(
+        api,
+        "tasks",
+        {
+            "owner": "ops",
+            "title": "Our favorite color is red",
+            "body": "Pick a palette.",
+            "relations": [{"task": parent["id"], "kind": "parent"}],
+        },
+        token="ops-test",
+    )
+    color_rule(api)  # after the two tasks exist: their own creation would be held by the same rule
+    r = api.post(
+        "/api/v2/task-bulk",
+        json={"filter": {"ids": [parent["id"], kid["id"]]}, "action": "close", "note": "Closing the batch"},
+        headers=headers("ops-test"),
+    )
+    assert r.status_code == 200, r.text
+    out = r.json()
+    assert (out["matched"], out["changed"]) == (2, 0)
+    assert {(t["id"], t["code"]) for t in out["tasks"]["skipped"]} == {
+        (kid["id"], "held"),
+        (parent["id"], "subtasks_left_out"),
+    }
+    rows = sql(api, "SELECT id, status FROM tasks WHERE id IN (?,?)", (parent["id"], kid["id"]))
+    assert {row["id"]: row["status"] for row in rows} == {parent["id"]: "open", kid["id"]: "open"}
+
+
+def test_a_dry_run_does_not_run_the_rule_check(ruled):
+    """A dry run skips the org rule check (a judge call per task, whose spend a rollback cannot take back): the task a rule
+    would hold counts as changed in the dry run, and the real run holds it."""
+    api, judge = ruled
+    kid = post(
+        api,
+        "tasks",
+        {"owner": "ops", "title": "Our favorite color is red", "body": "Pick a palette."},
+        token="ops-test",
+    )
+    color_rule(api)  # after the task exists: its own creation would be held by the same rule
+    body = {"filter": {"ids": [kid["id"]]}, "action": "close", "note": "Closing it"}
+    dry = api.post("/api/v2/task-bulk", json={**body, "dry_run": True}, headers=headers("ops-test"))
+    assert dry.status_code == 200, dry.text
+    assert (dry.json()["changed"], dry.json()["skipped"]) == (1, 0) and judge.calls == []
+    real = api.post("/api/v2/task-bulk", json=body, headers=headers("ops-test"))
+    assert real.status_code == 200, real.text
+    assert [(t["id"], t["code"]) for t in real.json()["tasks"]["skipped"]] == [(kid["id"], "held")]
+    assert len(judge.calls) == 1
+
+
 def test_a_note_to_a_bot_and_a_wake_bot_step_are_checked(ruled):
     api, judge = ruled
     rule(api, {"kind": "internal", "text": COLOR, "who": {"bots": ["ops"]}})

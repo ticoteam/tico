@@ -753,3 +753,9 @@ def test_migration_is_idempotent_and_preserves_receipts():
         with pytest.raises(sqlite3.IntegrityError):
             c.execute("UPDATE suggestions SET status='unknown'")
         assert c.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
+
+
+def test_engineering_lead_role_goes_to_a_new_org_engineering_team_manager(install, api):
+    with install.transaction() as c:
+        BS.update(c, "ops", {"template": "engineering-team-manager"})
+        assert suggestions.owner(c, "engineering_lead") == "ops"
