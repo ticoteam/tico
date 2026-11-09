@@ -25,6 +25,15 @@ UI_MAP = {
 }
 
 
+def browser_script(root, stem):
+    """The file a browser script name runs, ui/tests/<stem>.cjs or .cts; None when neither exists."""
+    for suffix in (".cjs", ".cts"):
+        path = root / "ui/tests" / f"{stem}{suffix}"
+        if path.is_file():
+            return path
+    return None
+
+
 def ui_map_key(name):
     """The UI_MAP key for a ui/ file. A script converted to TypeScript (ui/app/x.ts) keeps the entry its .js name has."""
     return name[:-3] + ".js" if name.startswith("ui/") and name.endswith(".ts") else name
@@ -148,9 +157,14 @@ def is_test(name):
     return base.endswith(".py") and (base.startswith("test_") or base.endswith("_test.py"))
 
 
+def is_script_name(name):
+    """A browser script name: ui/tests/<name>.cjs (JavaScript) or <name>.cts (TypeScript). A .d.cts is a declaration file."""
+    return name.endswith((".cjs", ".cts")) and not name.endswith(".d.cts")
+
+
 def is_check(name):
-    """A Python test file or a browser script (ui/tests/*.cjs)."""
-    return is_test(name) or (str(Path(name).parent) == "ui/tests" and name.endswith(".cjs"))
+    """A Python test file or a browser script (ui/tests/*.cjs or *.cts)."""
+    return is_test(name) or (str(Path(name).parent) == "ui/tests" and is_script_name(name))
 
 
 def dotted_name(node):
@@ -909,7 +923,7 @@ def pinned(name):
 
 
 def is_browser(name):
-    return Path(name).parent == Path("ui/tests") and name.endswith(".cjs")
+    return Path(name).parent == Path("ui/tests") and is_script_name(name)
 
 
 def smoke(root=ROOT):
@@ -1117,7 +1131,7 @@ def selection(changed, event="pull_request", root=ROOT, graph=None, base=None, a
     for name in live:  # rule 4: a UI_MAP file runs its mapped scripts
         if ui_map_key(name) in UI_MAP:
             scripts = UI_MAP[ui_map_key(name)]
-            missing = [s for s in scripts if not (root / "ui/tests" / f"{s}.cjs").is_file()]
+            missing = [s for s in scripts if browser_script(root, s) is None]
             browser |= set(scripts) - set(missing)
             if missing:
                 smoke_browser = True
@@ -1237,9 +1251,7 @@ def smoke_check(root=ROOT):
                 problems.append(f"{kind} {name}: needs a one-line reason")
             if kind == "python" and (not is_test(name) or not (root / name).is_file()):
                 problems.append(f"python {name}: no such test file")
-            if kind == "browser" and (
-                not (root / "ui/tests" / f"{name}.cjs").is_file() or (core is not None and name not in core)
-            ):
+            if kind == "browser" and (browser_script(root, name) is None or (core is not None and name not in core)):
                 problems.append(f"browser {name}: no such core script")
         if len(set(names)) != len(names):
             problems.append(f"{kind}: an entry is repeated")
@@ -1247,7 +1259,7 @@ def smoke_check(root=ROOT):
             problems.append(f"{kind} smoke set takes {total:.0f}s: more than one VM")
     for name, scripts in UI_MAP.items():
         for script in scripts:
-            if not (root / "ui/tests" / f"{script}.cjs").is_file():
+            if browser_script(root, script) is None:
                 problems.append(f"UI_MAP {name} names a missing script: {script}")
     return problems
 
@@ -1467,6 +1479,7 @@ def prepare(event, base, output, timings_path=None, head="HEAD"):
     browser = None
     if picked["browser"] != []:
         scripts = browser_scripts(picked["browser"] or [])
+        # Timings are keyed by script stem (the runner writes stems), so a .cts script keeps its .cjs-shaped key.
         browser_times = {name: timings.get(f"ui/tests/{name}.cjs") for name in scripts}
         browser = (Counter(dict.fromkeys(scripts, 1)), browser_times)
     fixed = int(bool(picked["conformance"])) + int(bool(picked["contracts"]))
