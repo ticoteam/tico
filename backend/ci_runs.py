@@ -50,6 +50,7 @@ PAGES = 5  # 100 runs a page
 REMOTE_TITLE = re.compile(r"Remote run ([0-9a-f]{12})")
 REMOTE_ID = re.compile(r"[0-9a-f]{12}")
 CPU_LABEL = re.compile(r"(\d+)cpu")
+HOSTED_IMAGES = ("ubuntu-", "macos-", "windows-")  # GitHub-hosted runner images: no RunsOn cost
 WORKFLOW_KINDS = {
     "ci.yml": "ci",
     "pr-checks.yml": "pr",
@@ -119,12 +120,13 @@ def cents_for(minutes: float, cpus: int, rate: float) -> int:
 
 def _runner(labels: list[str]) -> tuple[int, bool]:
     """(vCPUs, hosted) of a job from its runner labels: a RunsOn runner names its size (`4cpu-linux-x64`); a GitHub-hosted
-    Ubuntu runner has no size in its label and costs Tico nothing. Anything else is taken as a 4-vCPU runner."""
+    runner (an `ubuntu-`, `macos-` or `windows-` image) has no size in its label and costs Tico nothing. Anything else is
+    taken as a 4-vCPU runner."""
     for label in labels:
         found = CPU_LABEL.search(str(label))
         if found:
             return int(found.group(1)), False
-    if any(str(label).startswith("ubuntu-") for label in labels):
+    if any(str(label).startswith(HOSTED_IMAGES) for label in labels):
         return CPU_BASE, True
     return CPU_BASE, False
 

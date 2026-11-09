@@ -64,11 +64,12 @@ def test_a_job_minute_costs_the_rate_scaled_by_vcpus_and_hosted_runs_are_free():
     jobs = [
         job("2026-11-07T10:00:00Z", "2026-11-07T10:50:30Z", ["runs-on=1/runner=4cpu-linux-x64"]),  # 51 minutes
         job("2026-11-07T10:00:00Z", "2026-11-07T10:10:00Z", ["ubuntu-24.04"]),  # hosted: minutes, no cost
+        job("2026-11-07T10:00:00Z", "2026-11-07T10:05:00Z", ["macos-latest"]),  # hosted too
         job("2026-11-07T10:00:00Z", "2026-11-07T10:00:00Z", ["runs-on=1/runner=4cpu-linux-x64"]),  # zero length
         job(None, None, ["runs-on=1/runner=4cpu-linux-x64"]),  # skipped
     ]
-    # 51 billed minutes at 4 vCPUs cost 8 cents; 10 hosted minutes count but cost nothing.
-    assert ci_runs.price(jobs, 0.0016) == (61, 8)
+    # 51 billed minutes at 4 vCPUs cost 8 cents; 15 hosted minutes count but cost nothing.
+    assert ci_runs.price(jobs, 0.0016) == (66, 8)
 
 
 def test_the_run_kind_comes_from_its_workflow_file_or_the_merge_queue():

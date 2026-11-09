@@ -250,16 +250,24 @@ def wait_for_capacity(cap):
 def permit(run_id, cpus, minutes, environ=os.environ):
     """Tico's answer for a builder's run: None to go ahead, or the one line that refuses it. A run with no hub credential
     (one a person starts from a terminal) needs no permit. A builder whose Tico cannot be asked is refused, so its
-    minutes are never spent unrecorded."""
+    minutes are never spent unrecorded. A persistent harness's `tico-file:<path>` token is read from that file, as
+    clients/tico.py does; the run id is the write's Idempotency-Key, so a retried ask is the same permit."""
     url, token, task = (environ.get(name, '').strip() for name in ('HUB_API_URL', 'HUB_TOKEN', 'HUB_TASK_ID'))
     if not (url and token and task):
         return None
+    if token.startswith('tico-file:'):
+        try:
+            token = Path(token[len('tico-file:') :]).read_text().strip()
+        except OSError:
+            token = ''
+        if not token:
+            return 'no active Tico turn to ask for the CI cap; not starting the run'
     body = json.dumps({'task_id': task, 'remote_id': run_id, 'cpus': int(cpus), 'minutes': int(minutes)}).encode()
     request = urllib.request.Request(
         url.rstrip('/') + '/api/v2/ci/permits',
         data=body,
         method='POST',
-        headers={'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json'},
+        headers={'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json', 'Idempotency-Key': run_id},
     )
     try:
         with urllib.request.urlopen(request, timeout=PERMIT_TIMEOUT) as response:

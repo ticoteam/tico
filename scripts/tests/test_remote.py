@@ -358,3 +358,43 @@ def test_a_bad_command_line_exits_2():
     with pytest.raises(SystemExit) as exit:
         remote.main(['--'])
     assert exit.value.code == 2
+
+
+class _Answer:
+    def __init__(self, body):
+        self.body = body
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def read(self):
+        return self.body
+
+
+def test_a_permit_is_one_keyed_write_with_the_turn_token_from_its_file(monkeypatch, tmp_path):
+    """The permit route is an idempotent write (an Idempotency-Key is required), and a persistent harness's HUB_TOKEN is
+    a `tico-file:` reference to the live turn's token."""
+    (tmp_path / 'token').write_text('live-token\n')
+    sent = []
+
+    def urlopen(request, timeout):
+        sent.append(request)
+        return _Answer(b'{"allowed": true}')
+
+    monkeypatch.setattr(remote.urllib.request, 'urlopen', urlopen)
+    environ = {'HUB_API_URL': 'http://hub/', 'HUB_TOKEN': f'tico-file:{tmp_path / "token"}', 'HUB_TASK_ID': 't1'}
+    assert remote.permit('0123456789ab', '4', 50, environ) is None
+    (request,) = sent
+    assert request.full_url == 'http://hub/api/v2/ci/permits'
+    assert request.get_header('Authorization') == 'Bearer live-token'
+    assert request.get_header('Idempotency-key') == '0123456789ab'
+    assert json.loads(request.data) == {'task_id': 't1', 'remote_id': '0123456789ab', 'cpus': 4, 'minutes': 50}
+
+
+def test_a_permit_with_no_live_turn_token_refuses_without_asking(monkeypatch, tmp_path):
+    monkeypatch.setattr(remote.urllib.request, 'urlopen', lambda *a, **k: pytest.fail('asked Tico'))
+    environ = {'HUB_API_URL': 'http://hub', 'HUB_TOKEN': f'tico-file:{tmp_path / "gone"}', 'HUB_TASK_ID': 't1'}
+    assert 'no active Tico turn' in remote.permit('0123456789ab', '4', 50, environ)
