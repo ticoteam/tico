@@ -195,11 +195,13 @@ else
   skip "ui types (tsc, API types)" "no UI, Python or API schema change"
 fi
 
-# 6b. docs/openapi/v2.json is what the generator writes from the app's routes, so any Python change can make it stale.
-if touched '\.pyi?$|^docs/openapi/|^scripts/json_merge\.py$'; then
-  job "openapi document (v2.json)" python3 -m backend.openapi_v2 --check
+# 6b. The API spec is generated from the app's routes and never committed: it must generate, and the same bytes twice.
+#     The API guide's operation table (docs/api.md) follows the same tags.
+if touched '^backend/.*\.pyi?$|^docs/api\.md$|^scripts/build_api_docs\.py$'; then
+  job "openapi spec (generates the same bytes twice)" python3 -m backend.openapi_v2 --check
+  job "API guide tags (docs/api.md)" python3 scripts/build_api_docs.py --check
 else
-  skip "openapi document (v2.json)" "no Python or OpenAPI file changed"
+  skip "openapi spec (generates the same bytes twice)" "no backend Python or API guide changed"
 fi
 
 # 6c. Every UI script is TypeScript, and every .ts file type-checks strictly (scripts/check_ui_strict.py).

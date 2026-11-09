@@ -223,7 +223,7 @@ def test_a_stage_with_no_requirements_moves_exactly_as_before(tmp_path):
     assert [(s["old"], s["new"]) for s in steps][-2:] == [(drafting, editing), (editing, drafting)]
     for table in ("stage_visits", "stage_decisions", "requirement_attachments", "review_claims", "pipeline_links"):
         assert c.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0] == 0, table
-    assert pipeline_engine.check_move(c, ANA, dict(task), editing) is None
+    assert pipeline_engine.check_move(c, ANA, dict(task), editing) is False  # no cap, so no move is over one
     assert pipeline_engine.dots_many(c, [dict(task)]) == {}
     c.close()
 

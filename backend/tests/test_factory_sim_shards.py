@@ -44,3 +44,18 @@ def test_every_scenario_is_listed_whichever_module_is_imported_first():
     assert {"happy_path", "freeze_combined", "github_read_outage"} <= set(names) and len(set(names)) == len(names)
     for first in ("evals.factory.cases", "evals.factory.cases.freezes", "evals.factory.cases.source_outages"):
         assert listed(first) == names, first
+
+
+def test_factory_legs_plan_under_the_seven_minute_cap_at_both_tiers():
+    # The planner's target is 330 s a VM, setup included (scripts/pr_checks.py JOB_SECONDS). A pull request or queue leg
+    # runs seed 1 in four legs (FACTORY_LEG_SECONDS); release validation runs seeds 1-3 in twelve (ci.yml --shard K/12).
+    # A leg's planned tests per vCPU plus its setup (about 40 s of checkout and install) stay under the target.
+    target, setup = 330, 40
+    seconds = run.timings()
+    for seeds, legs in (((1,), 4), ((1, 2, 3), 12)):
+        pairs = [(name, seed) for seed in seeds for name in sorted(seconds)]
+        groups = [run.pack(pairs, legs, seconds)[index] for index in range(legs)]
+        assert sorted(pair for group in groups for pair in group) == sorted(pairs)
+        for group in groups:
+            planned = sum(seconds[name] for name, _ in group) / run.REMOTE_CPUS
+            assert planned + setup <= target + max(seconds.values()) / run.REMOTE_CPUS, (seeds, planned)

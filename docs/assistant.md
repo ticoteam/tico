@@ -362,7 +362,7 @@ as everywhere.
 
 ## API
 
-Stable v2 (`docs/openapi/v2.json`, tag **Assistant**). All signed-in humans; the confirm and cancel routes need your
+Stable v2 (`GET /api/v2/openapi.json`, tag **Assistant**). All signed-in humans; the confirm and cancel routes need your
 own session, not a personal token.
 
 | Request | Answer |

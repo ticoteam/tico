@@ -164,7 +164,7 @@ def _ideas_step(c):
     it (the setup renames it, D64). Visitor suggestions land there."""
     found = c.execute(
         "SELECT s.name FROM task_steps s JOIN task_types ty ON ty.id=s.type_id WHERE ty.role='product-roadmap' "
-        "ORDER BY s.position, s.id LIMIT 1"
+        "AND s.card_cap IS NOT 0 ORDER BY s.position, s.id LIMIT 1"  # not On ice (D69): suggestions are new work
     ).fetchone()
     return found[0] if found else "Suggested"
 

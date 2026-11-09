@@ -242,9 +242,6 @@ def collect(repo, head, previous=None, slug=None):
     for commit in reversed(changes):
         number = freeze.pr_number(repo, commit)
         if number is None:
-            # Direct release notes are already covered by the freeze guard.
-            if commit["touched"] <= freeze.NOTES_FILES:
-                continue
             raise freeze.GuardError(f"commit {commit['sha']} has no identifiable PR; run the freeze guard")
         if number in seen:
             continue

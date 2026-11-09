@@ -70,10 +70,10 @@ def ticket(api, receipt):
     return task
 
 
-def busy(api, slug, title="Review 1: PR #77"):
-    """An open check `slug` holds on another ticket."""
+def busy(api, slug, title="Review 1: PR #77", change=None):
+    """An open check `slug` holds on another ticket (of the change `change`, unless it is the first for this slug)."""
     with api.app.state.store.transaction() as c:
-        other = H.task_create(c, "bot:cpo", f"Another change for {slug}", "x", "bot:cpo")
+        other = H.task_create(c, "bot:cpo", change or f"Another change for {slug}", "x", "bot:cpo")
         return H.task_create(c, "bot:cpo", title, "Check it.", "bot:" + slug, parent_id=other["id"])
 
 

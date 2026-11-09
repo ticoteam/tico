@@ -1925,6 +1925,35 @@ def test_an_idle_dev_ticket_warns_unless_a_run_is_live_or_queued(environment):
     assert item["fixes"][0]["href"] == "#/tasks/" + idle["id"]
 
 
+def test_an_idle_dev_ticket_on_ice_is_kept_not_stuck(environment):
+    """A stage On ice (D69, cap 0) keeps its tickets and nothing works them: an idle ticket there is not the board
+    stalling, while an idle ticket in an ordinary stage still is (the control)."""
+    api = environment()
+    add_bot(api, "helper")
+    with api.app.state.store.transaction() as c:
+        typ = H.type_create(
+            c,
+            H.KEEPER,
+            "Dev tickets",
+            [{"name": "On ice", "status": "open"}, {"name": "In Progress", "status": "doing"}],
+            numbered=True,
+        )
+        c.execute("UPDATE task_steps SET card_cap=0 WHERE type_id=? AND name='On ice'", (typ["id"],))
+        parked = H.task_create(
+            c, "human:morgan", "Parked ticket", "x", "bot:helper", type=typ["id"], step="On ice", private=False
+        )
+        idle = H.task_create(
+            c, "human:morgan", "Idle ticket", "x", "bot:helper", type=typ["id"], step="In Progress", private=False
+        )
+        c.execute(
+            "UPDATE tasks SET updated_at=? WHERE id IN (?,?)",
+            (H.shift(H.now(), hours=-30), parked["id"], idle["id"]),
+        )
+        c.execute("UPDATE jobs SET state='completed' WHERE state='queued'")
+    check = health_of(api)[1]["dev_board_idle"]
+    assert [item["task"] for item in check["items"]] == [idle["id"]]
+
+
 def test_github_is_a_note_until_a_bot_someone_made_is_backed_up_nowhere_then_clears_once_connected(environment):
     """The built-in bots come with every install, so a team with only them is told GitHub is optional. A bot someone
     made keeps its files and memory on a computer, so the missing backup is a warning with the one fix, and it clears

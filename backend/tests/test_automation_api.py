@@ -3,9 +3,38 @@ delete, built-ins, run now and its run record, and paged lists."""
 
 import json
 
-from backend.tests.helpers.api import get, headers, post  # noqa: F401
-from backend.tests.test_api import api  # noqa: F401
-from backend.tests.helpers.automation_api import NOTE_STEP, as_bot, audit_rows, flow, make, patch
+from backend import bot_settings as BS
+from backend.tests.test_api import api, get, headers, post  # noqa: F401
+
+NOTE_STEP = {"id": "tell", "type": "action", "enabled": True, "do": "wake_bot", "args": {"bot": "ops", "text": "Look"}}
+
+
+def flow(**extra):
+    return {
+        "name": "Morning check",
+        "owner": "person:ana",
+        "trigger": {"type": "schedule", "cron": "0 9 * * *", "tz": "UTC"},
+        "steps": [NOTE_STEP],
+        **extra,
+    }
+
+
+def make(api, token="ana-test", expected=200, **extra):
+    return post(api, "automations", flow(**extra), token, expected=expected)
+
+
+def patch(api, aid, body, token="ana-test", expected=200):
+    r = api.patch(f"/api/v2/automations/{aid}", json=body, headers=headers(token))
+    assert r.status_code == expected, r.text
+    return r.json()
+
+
+def audit_rows(api, aid):
+    """The automation's audit rows, oldest first, with before and after read back."""
+    from backend import audit_log
+
+    with api.app.state.store.read() as c:
+        return audit_log.rows(c, obj="automation:" + aid, limit=200)["rows"][::-1]
 
 
 def builtin(api, key="triage", owner="bot:ops"):
@@ -23,6 +52,28 @@ def builtin(api, key="triage", owner="bot:ops"):
         automations.ensure_builtins(c, [spec])
         automations.ensure_builtins(c, [spec])  # idempotent
     return "auto_builtin_" + key
+
+
+def as_bot(api, slug):
+    """A test token that signs in as the bot named by slug (its id, or its slug if it is new), as bot:<id>."""
+    from backend.auth import Identity
+    from backend.store import H
+
+    with api.app.state.store.transaction() as c:
+        found = H.resolve_bot(c, slug)
+        bot_id = found["id"] if found else slug
+        if not found:
+            c.execute(
+                "INSERT INTO bots(id,slug,display_name,created_at) VALUES(?,?,?,?)", (bot_id, slug, slug, H.now())
+            )
+            c.execute("INSERT INTO bot_config(bot,owner_id) VALUES(?,'ana')", (bot_id,))
+            BS.write(c, bot_id, {"runtime": "fake"})
+        c.execute(
+            "INSERT INTO agents(bot,harness,token_hash,created_at,created_by) VALUES(?,?,?,?,?)",
+            (bot_id, "test", "x-" + bot_id, H.now(), "human:ana"),
+        )
+    api.app.state.auth.settings.test_identities[slug + "-test"] = Identity(H.bot_actor(bot_id), "bot", agent="test")
+    return slug + "-test"
 
 
 EVENING = {"type": "schedule", "cron": "0 18 * * *", "tz": "UTC"}
@@ -202,7 +253,7 @@ def test_runs_are_paged_newest_first_by_run_id(api):
 
 
 def test_the_answers_match_the_published_contract(api):
-    """Each automation read and write against its docs/openapi/v2.json shape."""
+    """Each automation read and write against its v2 spec shape."""
     from backend.tests.helpers.openapi_v2 import conforms
 
     document = api.get("/api/v2/openapi.json", headers=headers()).json()
