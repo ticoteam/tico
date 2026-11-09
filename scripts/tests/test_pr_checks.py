@@ -462,13 +462,17 @@ def test_free_disk_removes_the_unused_sdks_only_under_the_space_a_job_needs(tmp_
     assert subprocess.run(["bash", str(ROOT / "scripts/ci/free_disk.sh")], env=env, capture_output=True).returncode
 
 
+def test_a_route_change_selects_the_contract_tests(repo_map):
+    # The spec is generated from the code, so no committed spec file in a route's diff reaches the contract test any more.
+    # The route's module reaches it through the app's imports, and the generator reaches it directly.
+    for changed in ("backend/computers_routes.py", "backend/openapi_v2.py"):
+        assert "backend/tests/test_openapi_v2.py" in checks.selection([changed], graph=repo_map)["python"], changed
+
+
 def test_docs_plan_has_an_explicit_no_test_job_and_never_calls_pytest(tmp_path, monkeypatch, mapped):
     # Exercise selector inputs independently of the separate release-notes guard.
     monkeypatch.setattr(checks, "guard_changelog", lambda _: None)
-    for read, reader in (
-        ("docs/openapi/v2.json", "backend/tests/test_openapi_v2.py"),
-        ("CHANGELOG.md", "scripts/tests/test_release_checklist.py"),
-    ):
+    for read, reader in (("CHANGELOG.md", "scripts/tests/test_release_checklist.py"),):
         both = checks.selection(["backend/task_loops.py", read])["python"]
         assert reader in both and "backend/tests/test_scheduler.py" in both, read
     monkeypatch.setattr(

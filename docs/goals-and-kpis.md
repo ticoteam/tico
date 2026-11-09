@@ -383,7 +383,7 @@ puts the KPI back on every goal it was linked to, with its target, and recompute
 require the KPI's owner or someone above them; each transition is audited, and neither changes its definition history,
 goal links, readings, privacy or owner. The Strategy Bot cannot archive a KPI.
 
-The stable v2 routes are in [openapi/v2.json](openapi/v2.json):
+The stable v2 routes are in [the v2 spec](api.md#the-contract):
 
 | Route | What it does |
 |---|---|

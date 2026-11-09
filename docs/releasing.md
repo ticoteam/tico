@@ -702,6 +702,8 @@ hosted gate.
 
 The workflow then:
 
+- generates `openapi-v2.json` from the tag (`python3 -m backend.openapi_v2`, with the runtime requirements the image installs),
+  the same document `GET /api/v2/openapi.json` serves, and attaches it;
 - runs `scripts/build_install_bundle.py`, which attaches the one-line installers: `install.sh` and the Windows
   `install-wsl.ps1` with the tag baked into them, `tico-bundle-vX.Y.Z.tar.gz` (`compose.yaml`, `.env.example`,
   `docker/runner.compose.yaml` and the `setup/` wizard) and `SHA256SUMS` over all three. `install.sh` checks the bundle against `SHA256SUMS` before it unpacks anything;
@@ -853,8 +855,10 @@ run on the server: `docker compose pull && docker compose up -d`.
 
 ## Publish the release docs
 
-The tagged repository is the source for that release's manual. Run `python -m backend.openapi_v2` and
-`python scripts/build_api_docs.py` after changing API descriptions; check the spec and API guide together.
+The tagged repository is the source for that release's manual. The API spec is generated, not committed: release.yml
+generates `openapi-v2.json` from the tag and attaches it to the release, and the public docs link to
+`https://github.com/ticoteam/tico/releases/latest/download/openapi-v2.json`. Run `python3 scripts/build_api_docs.py` after
+changing API descriptions or tags; check the spec and API guide together.
 
 Publish the public site's docs from the same tag, including the docs landing page's three reader paths and its **Use Tico** and
 **Glossary** links. The website source and publishing process live outside this repository. Check that its install and demo pages

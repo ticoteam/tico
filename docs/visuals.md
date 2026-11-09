@@ -119,7 +119,7 @@ already in Tico instead: a file on that task, or in that thread for a message. A
 Each is `"<file id>@<version>"` or `{"ref": "<file id>@<version>", "title": "…"}`. Upload the file first: to the task
 with `POST /api/v2/tasks/{id}/files`, or, from a bot's run, with `POST /api/v2/files/uploads` (it lands in the
 thread the run is in). A person's upload to a bot's thread, `POST /api/v2/uploads/chat/{bot}`, takes `titles`, one per
-file in upload order. A title is at most 200 characters. The schema is `VisualRef` in `docs/openapi/v2.json`.
+file in upload order. A title is at most 200 characters. The schema is `VisualRef` in the v2 spec (`GET /api/v2/openapi.json`).
 
 ## What gets stored
 
