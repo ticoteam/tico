@@ -39,15 +39,16 @@ interface AuStep {
   do?: string; args?: AuArgs;
   paths?: AuPath[]; otherwise?: { steps?: AuStep[] };
 }
-/** A flow's trigger: its type, and the fields of each type. */
+/** A flow's trigger: its type, and the fields of each type. The type is missing only where auNormal (automations.ts)
+ *  gave a row with no trigger an empty one. */
 interface AuFlowTrigger {
-  type: string; name?: string; id?: string; inbox?: string; to?: string; cron?: string; tz?: string; destination?: string;
+  type?: string; name?: string; id?: string; inbox?: string; to?: string; cron?: string; tz?: string; destination?: string;
   first_due?: string; repeats?: string; open_days?: number | string; rule_due_id?: string; filters?: AuCond[];
 }
 /** A destination on a board flow. */
 interface AuDest { id: string; name?: string; color?: string | undefined; then?: Array<AuAct | string> }
 /** A flow: an automation, or a version's flow. */
-interface AuFlow { trigger?: AuFlowTrigger; steps?: AuStep[]; destinations?: AuDest[] }
+interface AuFlow { trigger?: AuFlowTrigger; steps?: AuStep[]; destinations?: AuDest[] | null }
 /** A rule, a question or a destination as auBoardShape (automations-flow.ts) lists it: one shape for the three. */
 interface AuBoardPart {
   when?: AuCond[]; match?: string; next?: string; stop?: boolean; to?: string;
@@ -56,7 +57,7 @@ interface AuBoardPart {
   then?: Array<AuAct | string>;
 }
 /** The board's LLM (auBoardShape): Sort, or a draft or reply turn, over the destinations' ids. */
-interface AuBoardLlm { mode: string; prompt: string; to: string[]; default: string; min?: number | ''; as: string }
+interface AuBoardLlm { mode: string; prompt: string; to: string[]; default: string; min?: number | '' | null | undefined; as: string }
 /** A flow drawn as a board (auBoardShape); llm is set on every board auBoardShape returns. */
 interface AuBoard {
   rules: AuBoardPart[]; questions: AuBoardPart[]; llm: AuBoardLlm | null; dests: AuDest[];
@@ -70,7 +71,7 @@ interface AuBoardItem extends Omit<AuBoardPart, 'then' | 'to'> {
   then?: AuBoardAct[]; to?: string | string[];
 }
 /** An automation as a write answers it (automations.js auWrite). */
-type AuSaved = import('../types/api').Automation;
+type AuSaved = AuRow;
 /** A version of an automation (GET .../versions); a proposal is a pending one, with its diff open or shut. */
 type AuVersion = import('../types/api').AutomationVersions['versions'][number];
 type AuProp = AuVersion & { diff: boolean };
@@ -89,8 +90,6 @@ interface AuStepEd {
   kind: 'step'; id: string; step: AuStep; path?: string | null | undefined; insert?: { key: string; index: number };
   qs?: AuQRow[]; custom?: boolean;
 }
-/** A Decide step's editor: auEdOpen gives it its question rows (auDecideQs) before it is drawn. */
-interface AuDecideEd extends AuStepEd { qs: AuQRow[]; custom: boolean }
 /** The trigger's editor: the copy edited, the saved one (to go back to its kind), and whether the event is Custom. */
 interface AuTriggerEd { kind: 'trigger'; trigger: AuFlowTrigger; saved?: AuFlowTrigger; evCustom?: boolean | undefined }
 interface AuSpendEd { kind: 'spend'; value?: unknown }
@@ -98,7 +97,23 @@ interface AuRunEd { kind: 'run'; text: string }
 interface AuVersionsEd { kind: 'versions'; rows?: AuVersion[] | null; props?: AuProp[]; error?: string }
 /** A board pop-up: its part (rule, q, dest, llm), the part's index (-1 for a new one) and the copy edited. */
 interface AuBoardEd { kind: 'board'; part: string | undefined; i: number; item: AuBoardItem }
-type AuEd = AuStepEd | AuTriggerEd | AuSpendEd | AuRunEd | AuVersionsEd | AuBoardEd;
+type AuEdKind = AuStepEd | AuTriggerEd | AuSpendEd | AuRunEd | AuVersionsEd | AuBoardEd;
+/** Every field of any kind's editor (the conditional spreads over the union). */
+type AuKeysOf<T> = T extends unknown ? keyof T : never;
+type AuEdField = AuKeysOf<AuEdKind>;
+/** One kind's editor, the other kinds' fields absent: AU.ed?.step is undefined on a trigger's editor, as the page reads it. */
+type AuEdOnly<E> = E & { [K in Exclude<AuEdField, keyof E>]?: undefined };
+/** The editor open in the side panel (AU.ed), one type per kind. */
+type AuEd = AuEdOnly<AuStepEd> | AuEdOnly<AuTriggerEd> | AuEdOnly<AuSpendEd> | AuEdOnly<AuRunEd> | AuEdOnly<AuVersionsEd>
+  | AuEdOnly<AuBoardEd>;
+/** The editor a field or a button belongs to: auEdHTML draws each data-b field and each data-op button only in its own
+ *  kind's editor (evpick and ttype the trigger's, set and step.* a step's, del a step's, bdel and bmode a board's), and
+ *  a proposal's buttons only in Versions, so this never stops a click. */
+function auEdIs<K extends AuEd['kind']>(ed: AuEd | null, kind: K): asserts ed is Extract<AuEd, {kind: K}> {
+  if (ed?.kind !== kind) throw new Error(`Not the ${kind} editor`);
+}
+/** The open automation's trigger: auNormal (automations.ts) gives every row it reads one. */
+const auCurTrigger = () => auNeed(auCur().trigger, 'the trigger');
 /** auFrame's options. */
 interface AuFrameOpts {
   tag?: string | undefined; icon?: string | undefined; save?: boolean; del?: boolean; label?: string; delOp?: string;
@@ -113,23 +128,26 @@ const AU_TRIGGER_FIELDS: Record<string, string[]> = {message: ['message.from', '
 
 function auEdOpen(ed: AuEd) {
   auMenuClose();
+  auHave(AU);   // auMenuClose read it
   AU.ed = ed;
   if (ed.kind === 'step' && ed.step.type === 'decide') auDecideQs(ed);
   if (ed.kind === 'step' && ed.step.type === 'filter') for (const r of ed.step.rules || []) r.then = (r.then || []).map(x => typeof x === 'string' ? {do: x, args: {}} : x);
-  if (ed.kind === 'spend') ed.value = AU.cur.spend_cap?.per_30m ?? '';   // before drawing: a blank field would save no limit
+  if (ed.kind === 'spend') ed.value = auCur().spend_cap?.per_30m ?? '';   // before drawing: a blank field would save no limit
   auDrawPane(); auDrawSide();
+  auDrawn(AU);   // auDrawPane drew into it
   if (ed.kind === 'versions') void auVersionsLoad(ed);
   if (ed.kind === 'step' && ed.step.type === 'decide') void auLastRun(ed);
   if (ed.kind === 'step' && ed.step.type === 'decide' && AU.sets === null) void auSetsLoad(ed);
   // @ts-expect-error TS7005: task-modal.ts declares TASK_RUN_ROWS untyped (`let TASK_RUN_ROWS = null`); its rows are TaskRunRow
   if (ed.kind === 'step' && ed.step.type === 'bot_turn' && !TASK_RUN_ROWS) void auModelsLoad(ed);
   // A phone would open its keyboard over the sheet; a computer starts in the first field.
-  if (!auPhone()) AU.root.querySelector('.au-ed .au-edb :is(input,textarea,select):not([disabled])')?.focus({preventScroll: true});
+  if (!auPhone()) AU.root.querySelector<HTMLElement>('.au-ed .au-edb :is(input,textarea,select):not([disabled])')?.focus({preventScroll: true});
   AU.root.querySelector('.au-ed .au-rb.focus')?.scrollIntoView({block: 'nearest'});
 }
 function auEdOpenStep(id: string, path?: string | null) {
+  auHave(AU);
   if (!AU.cur) return;
-  if (id === 'trigger') { auEdOpen({kind: 'trigger', trigger: auClone(AU.cur.trigger)}); return; }
+  if (id === 'trigger') { auEdOpen({kind: 'trigger', trigger: auClone(auCurTrigger())}); return; }
   const hit = auFind(AU.cur.steps, id);
   if (hit) auEdOpen({kind: 'step', id, step: auClone(hit.step), path: path ?? null});
 }
@@ -138,7 +156,7 @@ function auEdClose() { if (!AU?.ed) return; AU.ed = null; auDrawPane(); auDrawSi
 // A Decide step's questions as rows: inline ones, else the saved set's (read-only until one is changed, which makes
 // them the step's own, "Custom").
 function auDecideQs(ed: AuStepEd) {
-  const s = ed.step, qs: Record<string, AuQuestion> = s.questions || (AU.sets || []).find((x: AuSet) => x.id === s.set)?.questions || {};
+  const s = ed.step, qs: Record<string, AuQuestion> = s.questions || (auPage().sets || []).find((x: AuSet) => x.id === s.set)?.questions || {};
   ed.qs = Object.entries(qs).map(([id, q]) => ({...q, id, ask: auAskText(q.instructions), opts: q.type === 'choice' ? auChoiceKeys(q).join(', ') : ''}));
   ed.custom = !s.set;
 }
@@ -146,15 +164,17 @@ function auDecideQs(ed: AuStepEd) {
 const auAskText = (v: unknown): string => typeof v === 'string' ? v : v == null ? '' : JSON.stringify(v);
 const auChoiceKeys = (q: AuQuestion) => Array.isArray(q.criteria) ? q.criteria.map(String) : Object.keys(q.criteria || {});
 async function auSetsLoad(ed: AuStepEd) {
+  auHave(AU);
   AU.sets = [];
-  try { AU.sets = (await get<import('../types/api').QuestionSets>('/v2/automations/question-sets')).sets || []; } catch { /* the select keeps the step's own set */ }
+  try { AU.sets = (await get<{ sets: AuSet[] }>('/v2/automations/question-sets')).sets || []; } catch { /* the select keeps the step's own set */ }
   if (AU?.ed === ed) { if (!ed.custom && !ed.qs!.length) auDecideQs(ed); auDrawSide(); auDrawPane(); }
 }
 // The last run's answers for this Decide step: one bar each.
 async function auLastRun(ed: AuEd) {
+  auHave(AU);
   if (AU.lastRun === undefined) {
     AU.lastRun = null;
-    try { AU.lastRun = (await get(auApi(AU.cur.id) + '/runs?limit=1')).runs?.[0] || null; } catch { /* no bars */ }
+    try { AU.lastRun = (await get(auApi(auCur().id) + '/runs?limit=1')).runs?.[0] || null; } catch { /* no bars */ }
     if (AU?.ed === ed) auDrawSide();
   }
 }
@@ -165,7 +185,7 @@ const auBots = () => (S.emps || []).filter(e => e.id !== AU_BOT && e.status !== 
 const auPeople = () => (S.people || []).map(p => ['person:' + p.id, p.name || p.id]);
 function auFld(label: string, control: string, cls = '') { return `<label class="au-f${cls ? ' ' + cls : ''}"><span class="au-lb">${esc(label)}</span>${control}</label>`; }
 function auBox(label: string, body: string) { return `<div class="au-f"><span class="au-lb">${esc(label)}</span>${body}</div>`; }
-const auRO = () => !AU.cur?.can_edit;
+const auRO = () => !auPage().cur?.can_edit;
 const auDis = () => auRO() ? ' disabled' : '';
 const auIn = (b: string, v: unknown, ph = '', extra = '') => `<input type="text" data-b="${b}" value="${esc(v ?? '')}"${ph ? ` placeholder="${esc(ph)}"` : ''}${auDis()} ${extra}>`;
 const auSel = (b: string, list: readonly AuOption[], v: unknown, extra = '') => `<select data-b="${b}"${auDis()} ${extra}>${auOpt(list, v)}</select>`;
@@ -175,14 +195,16 @@ const auPlus = (at: string, tpl: string, label: string) => auRO() ? '' : `<butto
 
 // The fields a condition can test: the trigger's, and every Decide or LLM output in the flow.
 function auFieldsList() {
-  const out = [...(AU_TRIGGER_FIELDS[AU.cur.trigger.type] || [])];
+  const out = [...(AU_TRIGGER_FIELDS[auCurTrigger().type ?? ''] || [])];   // C: no '' or 'undefined' kind
   const walk = (steps: AuStep[] | undefined) => (steps || []).forEach(s => {
     if (s.type === 'decide' && s.out) auQuestionIds(s).forEach(q => out.push(`${s.out}.${q}`));
     if (s.type === 'llm' && s.out) out.push(s.out);
     if (s.type === 'paths') [...(s.paths || []), s.otherwise || {}].forEach((p: AuPath) => walk(p.steps));
   });
-  walk(AU.cur.steps);
-  if (AU.ed?.step?.type === 'decide' && AU.ed.step.out) AU.ed.qs.forEach((q: AuQRow) => out.push(`${AU.ed.step.out}.${q.id}`));
+  auHave(AU);   // auCurTrigger read it
+  walk(auCur().steps);
+  const ed = AU.ed;
+  if (ed?.step?.type === 'decide' && ed.step.out) { const o = ed.step.out; auNeed(ed.qs, 'the questions').forEach((q: AuQRow) => out.push(`${o}.${q.id}`)); }
   return [...new Set(out)];
 }
 function auCondRows(at: string, when: AuCond[] | undefined, min = true) {
@@ -195,19 +217,20 @@ function auCondRows(at: string, when: AuCond[] | undefined, min = true) {
 }
 
 function auEdHTML() {
+  auHave(AU);
   const ed = AU.ed;
   if (!ed || !AU.cur) return '';
   if (ed.kind === 'versions') return auFrame('Versions', auVersionsHTML(ed), {save: false});
   if (ed.kind === 'spend') return auFrame('Spend limit', auFld('$ per 30 min',
     `<input type="number" data-b="value" min="0" step="0.10" value="${esc(ed.value ?? '')}" placeholder="Bot’s limit" inputmode="decimal">`)
     + `<button class="linkish au-plus" type="button" data-op="nocap">Use the bot’s limit</button>`, {});
-  if (ed.kind === 'trigger') return auFrame('Trigger', auTriggerFields(ed.trigger, ed), {icon: AU_TRIGGER_ICONS[ed.trigger.type]});
+  if (ed.kind === 'trigger') return auFrame('Trigger', auTriggerFields(ed.trigger, ed), {icon: AU_TRIGGER_ICONS[ed.trigger.type ?? '']});
   if (ed.kind === 'run') return auFrame('Test run', auFld('Sample input', auTa('text', ed.text, 9), 'au-mono'), {icon: 'play_arrow', label: 'Run'});
   if (ed.kind === 'board') return auBoardEdHTML(ed);
   const s = ed.step;
-  const fields: Record<string, (s: AuStep, ed: AuDecideEd) => string> = {filter: auFilterFields, decide: auDecideFields, llm: auLlmFields, find: auFindFields, bot_turn: auBotFields,
+  const fields: Record<string, (s: AuStep, ed: AuStepEd) => string> = {filter: auFilterFields, decide: auDecideFields, llm: auLlmFields, find: auFindFields, bot_turn: auBotFields,
     paths: auPathsFields, action: auActionFields};
-  const body = fields[s.type]?.(s, ed) || '';
+  const body = fields[s.type ?? '']?.(s, ed) || '';
   return auFrame(auStepTitle(s), body, {tag: s.type, del: !ed.insert});
 }
 function auFrame(title: string | undefined, body: string, {tag = '', icon = '', save = true, del = false, label = 'Save', delOp = 'del', delLabel = 'Delete step'}: AuFrameOpts = {}) {
@@ -241,9 +264,9 @@ function auTriggerFields(t: AuFlowTrigger, ed?: AuTriggerEd) {
       + auFld('Repeats', auSel('trigger.repeats', AU_REPEATS, t.repeats || 'yearly'))
       + auBox('Open task', `<span class="au-ir au-days"><input type="number" data-b="trigger.open_days" data-num min="0" max="366" step="1" value="${esc(t.open_days ?? 14)}" aria-label="Days before"${auDis()}><span class="muted">days before</span></span>`)
       + auFld('Time zone', auIn('trigger.tz', t.tz))};
-  const src = fields[t.type];
+  const src = fields[t.type ?? ''];
   // When: a schedule, an event or a due date (a kind made elsewhere, such as a message, shows as itself).
-  const when = auFld('When', auSel('ttype', auWithCur(AU_WHEN, t.type, AU_TRIGGER_WORDS[t.type] || t.type), t.type));
+  const when = auFld('When', auSel('ttype', auWithCur(AU_WHEN, t.type, AU_TRIGGER_WORDS[t.type ?? ''] || t.type), t.type));
   return when + (src ? src() : '')
     + auBox('Filters', auCondRows('trigger.filters', t.filters) + auPlus('trigger.filters', 'cond', 'Filter'));
 }
@@ -258,15 +281,17 @@ function auFilterFields(s: AuStep) {
     <label class="au-chk"><input type="checkbox" data-b="step.rules.${i}.stop"${auRuleNext(r) === 'end' ? ' checked' : ''}${auDis()}>Stop here</label></div>`).join('')
     + auPlus('step.rules', 'rule', 'Rule'));
 }
-function auDecideFields(s: AuStep, ed: AuDecideEd) {
+function auDecideFields(s: AuStep, ed: AuStepEd) {
+  auHave(AU);
   const sets = auWithCur((AU.sets || []).map((x: AuSet) => [x.id, auSetWords(x.id)]), s.set, auSetWords(s.set));
-  const qs = ed.qs.map((q, i) => `<div class="au-rb"><div class="au-ir">
+  const rows = auNeed(ed.qs, 'the questions');   // auEdOpen gave a Decide step's editor its rows (auDecideQs)
+  const qs = rows.map((q, i) => `<div class="au-rb"><div class="au-ir">
       ${auIn(`qs.${i}.id`, q.id, 'Name', 'aria-label="Question name"')}${auSel(`qs.${i}.type`, AU_QTYPES, q.type, 'data-redraw aria-label="Answer"')}${auX('qs', i, 'Remove question')}</div>
       ${auIn(`qs.${i}.ask`, q.ask, 'What to ask', 'aria-label="Instructions"')}
       ${q.type === 'choice' ? auIn(`qs.${i}.opts`, q.opts, 'Options, comma separated', 'aria-label="Options"') : ''}</div>`).join('');
   const run = (AU.lastRun?.steps || []).find((x: AuBag) => x.id === s.id);
   const bars = run ? Object.entries(run.outputs || {}).filter(([, v]) => v && typeof v === 'object').map(([q, v]) => {
-    const {text, p} = auAnswer(q, v as AuJudge, ed.qs.find(x => x.id === q));
+    const {text, p} = auAnswer(q, v as AuJudge, rows.find(x => x.id === q));
     return `<div class="au-eb"><span>${esc(text)}</span><span class="au-bar"><i style="width:${Math.round(Math.max(0, Math.min(1, p)) * 100)}%"></i></span></div>`;
   }).join('') : '';
   return auFld('Question set', auSel('set', [['', 'Custom'], ...sets], ed.custom ? '' : s.set, 'data-redraw'))
@@ -314,7 +339,7 @@ function auBotRunsFields(s: AuStep) {
 // The models the Runs on field lists (the task picker's catalog, read once); the editor draws again when they arrive.
 async function auModelsLoad(ed: AuEd) {
   await taskRunCatalog();
-  if (AU.ed === ed) auDrawSide();
+  if (auPage().ed === ed) auDrawSide();
 }
 function auActionFields(s: AuStep) {
   const a = s.args || {};
@@ -366,9 +391,10 @@ function auEdWire(box: HTMLElement) {
     else if (t.hasAttribute('data-slug')) v = String(v).replace(/^bot:/, '');
     if (b === 'evpick') {
       if (e.type !== 'change') return;
+      auEdIs(ed, 'trigger');
       ed.evCustom = v === AU_EV_CUSTOM;
-      if (!ed.evCustom) ed.trigger.name = v;
-      else if (AU_EVENTS[ed.trigger.name] || AU_EVENT_MORE[ed.trigger.name]) ed.trigger.name = '';
+      if (!ed.evCustom) ed.trigger.name = String(v);   // C: a select's value
+      else if (AU_EVENTS[ed.trigger.name ?? ''] || AU_EVENT_MORE[ed.trigger.name ?? '']) ed.trigger.name = '';
       auDrawSide();
       if (ed.evCustom) box.querySelector<HTMLElement>('[data-b="trigger.name"]')?.focus();
       return;
@@ -376,13 +402,14 @@ function auEdWire(box: HTMLElement) {
     if (b === 'ttype') {
       // Another kind of trigger starts fresh (its filters test another kind's fields); back to the saved kind restores it.
       if (e.type !== 'change') return;
-      ed.saved ??= auClone(AU.cur.trigger);
-      ed.trigger = v === ed.saved.type ? auClone(ed.saved) : auNewTrigger(v);
+      auEdIs(ed, 'trigger');
+      ed.saved ??= auClone(auCurTrigger());
+      ed.trigger = v === ed.saved.type ? auClone(ed.saved) : auNewTrigger(String(v));   // C: a select's value
       ed.evCustom = undefined;
       auDrawSide();
       return;
     }
-    if (b === 'set') { ed.custom = !v; if (v) { ed.step.set = v; delete ed.step.questions; auDecideQs(ed); } auDrawSide(); return; }
+    if (b === 'set') { auEdIs(ed, 'step'); ed.custom = !v; if (v) { ed.step.set = String(v); delete ed.step.questions; auDecideQs(ed); } auDrawSide(); return; }
     if (b.startsWith('qs.')) ed.custom = true;
     auPathSet(ed, b, v);
     // An action's text edited under its own name: the other names the hub reads first go, so the edit is what runs.
@@ -391,11 +418,11 @@ function auEdWire(box: HTMLElement) {
     if (argAt && act && typeof act === 'object') auArgsMark(act.args, argAt[2]!);
     // Stop here changes where a rule goes: a rule that names its next gets the new one (a rule that moved on, unstopped,
     // goes to the next step); a rule that doesn't goes by stop alone.
-    const stopAt = /^step\.rules\.(\d+)\.stop$/.exec(b), sr = stopAt && ed.step?.rules?.[stopAt[1]!];
+    const stopAt = /^step\.rules\.(\d+)\.stop$/.exec(b), sr = stopAt && ed.step?.rules?.[Number(stopAt[1])];   // C: the same index
     if (sr && 'next' in sr) sr.next = v ? 'end' : sr.next === 'end' ? 'step' : sr.next;
     // Another model has its own harnesses and efforts: the ones kept for the last model do not carry over.
     if (b === 'step.model') { auPathSet(ed, 'step.harness', undefined); auPathSet(ed, 'step.effort', undefined); }
-    if (t.hasAttribute('data-redraw') && e.type === 'change') { if (b === 'step.do') ed.step.args = {}; auDrawSide(); }
+    if (t.hasAttribute('data-redraw') && e.type === 'change') { if (b === 'step.do') { auEdIs(ed, 'step'); ed.step.args = {}; } auDrawSide(); }
   };
   box.addEventListener('input', onField);
   box.addEventListener('change', onField);
@@ -406,9 +433,9 @@ function auEdWire(box: HTMLElement) {
     const op = m.dataset.op!;   // [data-op]
     if (op === 'close') { auEdClose(); return; }
     if (op === 'save') { void auEdSave(m); return; }
-    if (op === 'del') { void auStepDelete(ed.id); return; }
-    if (op === 'bdel') { void auBoardDelete(ed, m); return; }
-    if (op === 'bmode') { ed.item.mode = m.dataset.v; auDrawSide(); return; }
+    if (op === 'del') { auEdIs(ed, 'step'); void auStepDelete(ed.id); return; }
+    if (op === 'bdel') { auEdIs(ed, 'board'); void auBoardDelete(ed, m); return; }
+    if (op === 'bmode') { auEdIs(ed, 'board'); ed.item.mode = m.dataset.v ?? ''; auDrawSide(); return; }   // C: each bmode button has data-v
     if (op === 'nocap') { void auSpendSave(null); return; }
     if (op === 'restore') { void auRestore(Number(m.dataset.n)); return; }
     if (['diff', 'prop-on', 'discard'].includes(op)) { void auPropAct(op, Number(m.dataset.n), m); return; }
@@ -429,6 +456,7 @@ function auEdWire(box: HTMLElement) {
 }
 
 async function auEdSave(button?: HTMLButtonElement) {
+  auHave(AU);
   const ed = AU.ed, a = AU.cur;
   if (!ed || auRO()) return;
   if (ed.kind === 'spend') { const v = String(ed.value ?? '').trim(); await auSpendSave(v === '' ? null : Number(v)); return; }
@@ -448,9 +476,9 @@ async function auEdSave(button?: HTMLButtonElement) {
     }
   }
   else {
-    const step = auClone(ed.step);
+    const step = auClone(auNeed(ed.step, 'the step'));
     if (step.type === 'decide' && ed.custom) {
-      const old = step.questions || {}, kept = ed.qs.filter((q: AuQRow) => q.id.trim());
+      const old = step.questions || {}, kept = auNeed(ed.qs, 'the questions').filter((q: AuQRow) => q.id.trim());
       if (kept.some((q: AuQRow) => !String(q.ask ?? '').trim())) { toast('Each question needs what to ask', true); if (button) button.disabled = false; return; }
       step.questions = Object.fromEntries(kept.map(({id, opts, ask, ...q}: AuQRow) => {
         const def = {...(old[id] || {}), ...q}, was = old[id]?.instructions;
@@ -469,7 +497,7 @@ async function auEdSave(button?: HTMLButtonElement) {
     // A rule's own next is what runs, so a stop it carries follows it (the hub refuses the two disagreeing); a stop it
     // never had stays off the rule.
     if (step.type === 'filter') for (const r of step.rules || []) if ('next' in r && 'stop' in r) r.stop = r.next === 'end';
-    const steps = auClone(a.steps);
+    const steps = auClone(auNeed(a, 'the open automation').steps);
     if (ed.insert) auContainer(steps, ed.insert.key)?.arr.splice(ed.insert.index, 0, step);
     else { const hit = auFind(steps, ed.id); if (hit) hit.arr[hit.i] = step; }
     body = auFlowBody(steps);
@@ -479,7 +507,8 @@ async function auEdSave(button?: HTMLButtonElement) {
   else if (button?.isConnected) button.disabled = false;
 }
 async function auStepDelete(id: string) {
-  const steps = auClone(AU.cur.steps), hit = auFind(steps, id);
+  auHave(AU);
+  const steps = auClone(auCur().steps), hit = auFind(steps, id);
   if (!hit) return;
   hit.arr.splice(hit.i, 1);
   const ed = AU.ed;
@@ -488,6 +517,7 @@ async function auStepDelete(id: string) {
 }
 async function auSpendSave(v: number | null) {
   if (v != null && !(v >= 0)) { toast('Enter an amount in dollars', true); return; }
+  auHave(AU);
   const ed = AU.ed;
   const out = await auWrite({spend_cap: v == null ? null : {per_30m: Math.round(v * 100) / 100}}, (x: AuSaved) => 'Spend limit · ' + auSpendWords(x));
   if (out && AU?.ed === ed) { AU.ed = null; auDrawSide(); }
@@ -496,7 +526,7 @@ async function auSpendSave(v: number | null) {
 // Versions: newest first; any but the current one restores as a new version. Proposals (pending) come first.
 async function auVersionsLoad(ed: AuVersionsEd) {
   try {
-    const r = await get<import('../types/api').AutomationVersions>(auApi(AU.cur.id) + '/versions');
+    const r = await get<import('../types/api').AutomationVersions>(auApi(auCur().id) + '/versions');
     const all = (r.versions || []).sort((x, y) => y.n - x.n);
     ed.rows = all.filter(v => v.status !== 'pending');
     ed.props = all.filter(v => v.status === 'pending').map(v => ({...v, diff: false}));
@@ -508,11 +538,13 @@ function auVersionsHTML(ed: AuVersionsEd) {
   if (!ed.rows) return '<p class="muted">Loading…</p>';
   return `${auPropsHTML(ed)}<div class="au-vers">${ed.rows.map(v => `<div class="au-vr"><strong>v${esc(v.n)}</strong>
     <span class="muted" title="${esc(fmt(v.created_at))}">${esc(auActorName(v.actor))} · ${esc(auRunTime(v.created_at))}</span><span class="au-sp"></span>
-    ${v.n === AU.cur.version ? '<span class="pill ok">Current</span>' : AU.cur.can_edit ? `<button class="ghost" type="button" data-op="restore" data-n="${esc(v.n)}">Restore</button>` : ''}</div>`).join('')}</div>`;
+    ${v.n === auCur().version ? '<span class="pill ok">Current</span>' : auCur().can_edit ? `<button class="ghost" type="button" data-op="restore" data-n="${esc(v.n)}">Restore</button>` : ''}</div>`).join('')}</div>`;
 }
 async function auRestore(n: number) {
+  auHave(AU);
   const a = AU.cur, ed = AU.ed, state = AU;
   try {
+    auSure(a, 'the open automation');
     const out = auNormal(await post(`${auApi(a.id)}/versions/${n}/restore`, {}));
     if (AU !== state) return null;
     auAdopt(out);
@@ -526,7 +558,7 @@ async function auRestore(n: number) {
 // A bot's proposal is a pending version, listed above the versions: View diff, Turn on restores it (POST
 // .../versions/{n}/restore, keeping its number), Discard deletes it; either way Versions is read again.
 function auPropsHTML(ed: AuVersionsEd) {
-  const a = AU.cur;
+  const a = auPage().cur;
   return (ed.props || []).map(p => {
     const lines = auDiff(a, p.flow || {});
     const summary = p.summary || lines.slice(0, 2).join(' · ') || 'No changes';
@@ -535,16 +567,17 @@ function auPropsHTML(ed: AuVersionsEd) {
       <div class="au-prop-x">${esc(summary)}</div>
       ${p.diff ? `<pre class="au-diff">${lines.map(l => `<span class="${l[0] === '+' ? 'add' : 'del'}">${esc(l)}</span>`).join('\n') || 'No changes'}</pre>` : ''}
       <div class="au-prop-b"><button class="ghost" type="button" data-op="diff" data-n="${esc(p.n)}" aria-expanded="${!!p.diff}">View diff</button>
-        ${a.can_edit ? `<button class="primary" type="button" data-op="prop-on" data-n="${esc(p.n)}">Turn on</button><button class="linkish" type="button" data-op="discard" data-n="${esc(p.n)}">Discard</button>` : ''}</div>
+        ${auNeed(a, 'the open automation').can_edit ? `<button class="primary" type="button" data-op="prop-on" data-n="${esc(p.n)}">Turn on</button><button class="linkish" type="button" data-op="discard" data-n="${esc(p.n)}">Discard</button>` : ''}</div>
     </div>`;
   }).join('');
 }
 // A proposal settled: the list row stops counting it as pending.
 function auPendingDone(id: string) {
-  const row = (AU.list || []).find((x: import('../types/api').Automation) => x.id === id);
+  const row = (auPage().list || []).find(x => x.id === id);
   if (row?.pending) row.pending -= 1;
 }
 async function auPropAct(op: string, n: number, button: HTMLButtonElement) {
+  auHave(AU);
   const ed = AU.ed, a = AU.cur, state = AU, p = (ed?.props || []).find((x: AuProp) => x.n === n);
   if (!p || !a) return;
   if (op === 'diff') { p.diff = !p.diff; auDrawSide(); return; }
@@ -562,7 +595,7 @@ async function auPropAct(op: string, n: number, button: HTMLButtonElement) {
       auPendingDone(a.id); auDrawList(); auDrawHead();
       toast(`v${n} discarded`);
     }
-    if (AU.ed === ed) { ed.rows = null; auDrawSide(); void auVersionsLoad(ed); }
+    if (AU.ed === ed) { auEdIs(ed, 'versions'); ed.rows = null; auDrawSide(); void auVersionsLoad(ed); }
   } catch (e) { toast(errorMessage(e, ''), true); if (button.isConnected) button.disabled = false; }
 }
 
@@ -573,7 +606,7 @@ const auThenFull = (then: Array<AuAct | string> | undefined) => (then || []).map
     .map(([n, v]) => `${n}: ${typeof v === 'object' ? JSON.stringify(v) : v}`).join(', ');
   return (AU_ACTIONS[k] || AU_BOARD_ACTS[k] || k) + (args ? ` (${args})` : '');
 });
-function auFlowLines(flow: AuFlow) {
+function auFlowLines(flow: AuFlow | null) {
   const out: string[] = [];
   const t: Partial<AuFlowTrigger> = flow?.trigger || {};
   out.push(`trigger ${AU_TRIGGER_WORDS[String(t.type)] || t.type || ''} · ${auSource(t)}`.trim());
@@ -606,7 +639,7 @@ function auFlowLines(flow: AuFlow) {
   return out;
 }
 // The changed lines between two flows (a longest-common-subsequence diff): "+ added", "- removed".
-function auDiff(before: AuFlow, after: AuFlow) {
+function auDiff(before: AuFlow | null, after: AuFlow) {
   const a = auFlowLines(before), b = auFlowLines(after), n = a.length, m = b.length;
   const L = Array.from({length: n + 1}, () => new Array(m + 1).fill(0));
   for (let i = n - 1; i >= 0; i--) {
@@ -641,9 +674,11 @@ async function auRunNow(ed: AuRunEd, button?: HTMLButtonElement) {
   let input: unknown;
   try { input = String(ed.text || '').trim() ? JSON.parse(ed.text) : undefined; }
   catch { toast('Sample input isn’t valid JSON', true); return; }
+  auHave(AU);
   const a = AU.cur, state = AU;
   if (button) button.disabled = true;
   try {
+    auSure(a, 'the open automation');
     const out = await post(auApi(a.id) + '/run', input ? {input} : {});
     if (AU !== state) return;
     if (out.dropped) { toast('Dropped by the trigger’s filters'); if (button?.isConnected) button.disabled = false; return; }
@@ -667,11 +702,12 @@ function auDestId(name: string | undefined, dests: AuDest[]) {
   return `${base}_${n}`;
 }
 function auBoardOpen(key: string) {
+  auHave(AU);
   const a = AU.cur, b: AuBoard | null = a && auBoardShape(a);
-  if (!b) return;
+  if (!a || !b) return;   // b is null without a
   const [part, at] = key.split(':'), i = at === 'new' ? -1 : Number(at);
   if (i < 0 && !a.can_edit) return;
-  const field = (AU_TRIGGER_FIELDS[a.trigger?.type] || [])[0] || '';
+  const field = (AU_TRIGGER_FIELDS[a.trigger?.type ?? ''] || [])[0] || '';
   const parts: Record<string, () => AuBoardPart | AuBoardLlm | null | undefined> = {
     rule: () => i < 0 ? {when: [{field, op: 'contains', value: ''}], match: 'all', then: [], next: 'end'} : b.rules[i],
     q: () => i < 0 ? {id: auFreeId(b.questions.map(q => q.id), 'q'), text: '', min: AU_Q_MIN, then: [], to: ''} : b.questions[i],
@@ -680,7 +716,7 @@ function auBoardOpen(key: string) {
   };
   const found = parts[part!]?.();
   if (!found) return;
-  const item: AuBoardItem = auClone(found);   // the copy; its actions are given args below
+  const item = auClone(found) as AuBoardItem;   // the copy; its actions are given args below (a part's may be bare names)
   if (item.then) item.then = item.then.map(x => typeof x === 'string' ? {do: x, args: {}} : {...x, args: x.args || {}});
   for (const x of item.then || []) AU_ARGS_OPENED.add(x.args);
   auEdOpen({kind: 'board', part, i, item});
@@ -688,7 +724,7 @@ function auBoardOpen(key: string) {
 // The actions a chain offers: mail actions first on a message flow; off mail, none of them (there is no message).
 function auBoardActs() {
   const all = Object.entries(AU_BOARD_ACTS);
-  return AU.cur?.trigger?.type === 'message' ? all : all.filter(([k]) => !AU_MAIL_ACTS.includes(k));
+  return auPage().cur?.trigger?.type === 'message' ? all : all.filter(([k]) => !AU_MAIL_ACTS.includes(k));
 }
 const auBoardNewAct = () => AU?.cur?.trigger?.type === 'message' ? {do: 'archive', args: {}} : {do: 'create_task', args: {title: ''}};
 const auBoardTa = (b: string, v: unknown, ph: string) => `<textarea data-b="${b}" rows="3" spellcheck="true" placeholder="${esc(ph)}" aria-label="${esc(ph)}"${auDis()}>${esc(v ?? '')}</textarea>`;
@@ -729,7 +765,7 @@ function auEndRow(it: AuBoardItem, n: number, move: boolean, dests: AuDest[]) {
     <select data-end aria-label="Then"${auDis()}>${auOpt([['end', 'End'], ...(move ? [['rule', 'Move on']] : [])], v)}${go}</select></div>`;
 }
 function auBoardEdHTML(ed: AuBoardEd) {
-  const it = ed.item, fresh = ed.i < 0, dests = auBoardShape(AU.cur)?.dests || [];
+  const it = ed.item, fresh = ed.i < 0, dests = auBoardShape(auPage().cur)?.dests || [];
   const chain = (move: boolean, end = true) => auBox('Then, in order', auActRows('item.then', it.then)
     + (end ? auEndRow(it, (it.then || []).length + 1, move, dests) : '') + auPlus('item.then', 'bact', 'Action'));
   let title: string | undefined = '', body = '';
@@ -750,7 +786,7 @@ function auBoardEdHTML(ed: AuBoardEd) {
       + chain(false, false);
   } else if (ed.part === 'llm') {
     title = 'LLM';
-    const modes = auBoardModes(AU.cur), to = it.to as string[];   // the LLM's destination ids
+    const modes = auBoardModes(auPage().cur), to = it.to as string[];   // the LLM's destination ids
     body = (modes.length < 2 ? '' : auBox('Mode', `<span class="au-bseg" role="group" aria-label="Mode">${modes.map(([k, w]) =>
         `<button type="button" data-op="bmode" data-v="${k}" aria-pressed="${it.mode === k}"${auDis()}>${esc(w)}</button>`).join('')}</span>`))
       // Sort with one destination asks nothing (everything goes there), so it has no instructions to keep.
@@ -772,11 +808,17 @@ function auBoardField(t: HTMLInputElement, e: Event, ed: AuBoardEd) {
   } else {
     const on = new Set((ed.item.to as string[]).filter(x => x !== bto));   // the LLM's ids
     if (t.checked) on.add(bto!);
-    ed.item.to = (auBoardShape(AU.cur)?.dests || []).map(d => d.id).filter(id => on.has(id));
+    ed.item.to = (auBoardShape(auPage().cur)?.dests || []).map(d => d.id).filter(id => on.has(id));
     if (!ed.item.to.includes(ed.item.default!)) ed.item.default = ed.item.to[0] || '';
   }
   auDrawSide();
   return true;
+}
+// A board item put back as its part: a destination's copy keeps its id (auBoardShape lists none without one) or gets
+// one (auDestId never gives ''); the LLM's copy keeps its destination ids (auBoardField sets them as a list).
+function auDestItem(it: AuBoardItem): asserts it is AuBoardItem & {id: string} { auSure(it.id, 'the destination id'); }
+function auLlmItem(it: AuBoardItem): asserts it is AuBoardItem & {to: string[]} {
+  if (!Array.isArray(it.to)) throw new Error('Missing the LLM destinations');
 }
 // Arguments as the hub reads them: a field the editor set and left blank says nothing. An argument nobody touched
 // stays as it was, empty or not (a webhook's data: [] is a payload); a new action's are all the editor's.
@@ -791,9 +833,10 @@ const auArgsClean = (a: AuArgs) => {
   return Object.fromEntries(Object.entries(a || {}).filter(([k, v]) => (kept && !set?.has(k)) || (v != null && String(v).trim() !== '')));
 };
 async function auBoardEdSave(ed: AuBoardEd, button?: HTMLButtonElement) {
+  auHave(AU);
   const a = AU.cur, b = auBoardShape(a);
   if (!b?.llm) return;   // auBoardShape sets llm on every board it returns
-  const it = auClone(ed.item), mail = a.trigger?.type === 'message', put = (list: AuBoardPart[], x: AuBoardPart) => { if (ed.i < 0) list.push(x); else list[ed.i] = x; };
+  const it = auClone(ed.item), mail = auNeed(a, 'the open automation').trigger?.type === 'message', put = (list: Array<AuBoardPart | AuBoardItem>, x: AuBoardItem) => { if (ed.i < 0) list.push(x); else list[ed.i] = x; };
   // Mail actions queue on the message and the rest run at once, so a chain lists them first.
   const isMail = (x: AuBoardAct) => AU_MAIL_ACTS.includes(auActKey(x));
   if (it.then) {
@@ -811,9 +854,10 @@ async function auBoardEdSave(ed: AuBoardEd, button?: HTMLButtonElement) {
   } else if (ed.part === 'dest') {
     it.name = String(it.name || '').trim();
     if (!it.name) problem = 'Name the destination';
-    else if (ed.i < 0) { it.id = auDestId(it.name, b.dests); b.dests.push(it); b.llm.to.push(it.id); }
-    else b.dests[ed.i] = it;
+    else if (ed.i < 0) { it.id = auDestId(it.name, b.dests); auDestItem(it); b.dests.push(it); b.llm.to.push(it.id); }
+    else { auDestItem(it); b.dests[ed.i] = it; }
   } else if (ed.part === 'llm') {
+    auLlmItem(it);
     if (!it.to.length) problem = 'Pick a destination';
     const llm: AuBoardLlm = {...b.llm, ...it, prompt: String(it.prompt || '').trim()};
     b.llm = llm;
@@ -827,7 +871,7 @@ async function auBoardEdSave(ed: AuBoardEd, button?: HTMLButtonElement) {
 }
 // Delete a rule, a question or a destination; whatever went to that destination ends instead.
 async function auBoardDelete(ed: AuBoardEd, button: HTMLButtonElement) {
-  const b = auBoardShape(AU.cur);
+  const b = auBoardShape(auPage().cur);
   if (!b?.llm || ed.i < 0) return;   // auBoardShape sets llm on every board it returns
   if (ed.part === 'rule') b.rules.splice(ed.i, 1);
   else if (ed.part === 'q') b.questions.splice(ed.i, 1);
@@ -847,8 +891,8 @@ async function auBoardDelete(ed: AuBoardEd, button: HTMLButtonElement) {
 }
 // The LLM card's mode switch saves at once, as a step's own switch does.
 async function auBoardMode(mode: string) {
-  const a = AU.cur, b = a?.can_edit && auBoardShape(a);
-  if (!b || b.llm.mode === mode) return;
+  const a = auPage().cur, b = a?.can_edit && auBoardShape(a);
+  if (!b || !b.llm || b.llm.mode === mode) return;   // auBoardShape sets llm on every board it returns
   b.llm.mode = mode;
   if (mode !== 'sort') b.llm.as ||= auOwnerAs(a);
   await auWrite(auBoardFlow(b), (x: AuSaved) => `Saved · v${x.version}`);
