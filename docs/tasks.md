@@ -349,7 +349,8 @@ the task's readers. Task list filters are unchanged: `?snoozed=only|all` lists s
 blocked task is a `waiting` one (`?status=waiting`).
 
 Each hold is a row of `task_holds` in the hub database (one open row per kind; a released one keeps its
-`released_at` as history), readable in hub SQL with its task ([Hub SQL](hub-sql.md)).
+`released_at` as history), readable in hub SQL with its task ([Hub SQL](hub-sql.md)). `reason_changed_at` is when its reason last changed
+to a new one: a new reason is progress for [Stuck cards](#stuck-cards).
 
 ### Waiting for a milestone, not the whole task
 
@@ -777,7 +778,7 @@ Health names a task waiting on a recipient who cannot read or answer.
 A bot's question may say what it will do if nobody answers (`hub task question ... --if-no-answer "Yes"
 --default-kind reversible [--by <date>]`; MCP `if_no_answer: {do, kind, by}`), and the card says it: "If you don't
 answer by Fri, Oct 16, Writer goes ahead: Yes". When that step is reversible and internal and the person has said
-nothing by then (at `by`, or after the team's days when that is later: 3 by default; `by` is at most 14 days away,
+nothing by then (at `by`, or after the team's days when that is later: 3 by default; `by` is at most 7 days away,
 and `--default-kind` is required with `--if-no-answer`), Tico answers for them with "No answer from Ana by
 Oct 16, so Writer goes ahead with what it said it would do: Yes", which wakes the bot with that choice. A send,
 spending money or a delete never goes ahead without an answer: the card says so, and on its date the question closes and the bot decides without it. The owner turns this off,
@@ -793,8 +794,37 @@ when its task or any task above it is done, closed or declined (a done task keep
 requester to accept the result, asked once it is done), when the person replies to it or writes on its task to the bot
 that asked, and when the bot asks them a newer question on the same task.
 
-A task a bot handed a person (they own it, the bot asked for it) that they have not touched in 14 days closes, unless it
+A task a bot handed a person (they own it, the bot asked for it) that they have not touched in 7 days closes, unless it
 is due later or waits on someone else, and the bot hears why. Hourly, `backend/ask_deadlines.py`.
+
+No question waits on a person for more than 7 days (`EXPIRE_DAYS` in `backend/ask_deadlines.py`). A question with no
+`by` date that is still open 7 days after it was asked closes with the note "No answer from Ana in 7 days, so this
+question expired and closed. Writer: ask again if it still matters." A pipeline may set its own days
+([Stuck cards](#stuck-cards)): they apply to a question on that pipeline, under one of its cards or holding one up, and
+to a task handed to a person there.
+
+### Stuck cards
+
+A card on a pipeline that has a manager bot never stays stuck without someone hearing. Plain code, every 10 minutes in
+the [Heartbeat](heartbeat.md) (`backend/stuck_cards.py`); no model is called.
+
+- A card is stuck when it is open and has had no progress for 4 hours. Progress is a stage or status move, a new owner,
+  a turn of its owner on it (a run going now, or its checkpoint), a comment or receipt, a stage decision, or a hold that
+  began or changed to a new reason. Tico's notices and the manager's own comments are not progress.
+- A card waiting with **Nothing tracked to wait on** is stuck at once.
+- A card waiting on a named person, with a question or approval asked under 24 hours ago, is not stuck. Nor is a
+  snoozed card or one On ice.
+- When a card becomes stuck, its pipeline's manager bot is woken once, on the card, with the card's hold. It is asked to
+  unblock, reassign, split or close the card and to leave one line saying which. It is not woken again until the card
+  moves and gets stuck again (a new spell, one row of `stuck_spells`).
+- Still stuck after 24 hours: the pipeline's owner (else the company owner) gets one question on their Needs you, a
+  subtask of the card asked by Tico. One question per card, ever. When it is answered or expires, the manager hears the
+  answer once, on the card.
+
+Each pipeline sets the hours in its editor (the ✎ pencil) or `PATCH /api/v2/pipelines/{id}/settings`:
+`stuck_after_hours` (default 4), `ask_person_after_hours` (default 24) and `question_expiry_days` (default 7). Empty or
+`null` uses the default; `GET` returns the defaults as `stuck_rule_defaults`. A pipeline with no manager has no stuck
+rule.
 
 ## Wake rules
 

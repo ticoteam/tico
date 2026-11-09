@@ -727,13 +727,16 @@ def take_recommendation(
 # ---- dates: ask_deadlines and still_needed run on question tasks --------------------------------------------------
 
 
-def open_rows(conn: sqlite3.Connection) -> list[dict[str, Any]]:
+def open_rows(conn: sqlite3.Connection, keeper: bool = False) -> list[dict[str, Any]]:
     """Open question tasks a bot put to a person, oldest question first. A question On ice (D69) is left out, as a snoozed
-    one is: a parked card is never late, so no sweep sends it back or closes it on its date."""
+    one is: a parked card is never late, so no sweep sends it back or closes it on its date. `keeper` adds Tico's own
+    questions (the stuck rule's, backend/stuck_cards.py), which only the expiry sweep closes (backend/ask_deadlines.py)."""
+    askers = "(requester_id LIKE 'bot:%' OR requester_id=?)" if keeper else "requester_id LIKE 'bot:%'"
     rows: list[dict[str, Any]] = H._rows(
         conn.execute(
             f"SELECT * FROM {H.TASKS} t WHERE {OPEN_SQL} AND NOT {H.ON_ICE % 't'} "
-            "AND owner_id LIKE 'human:%' AND requester_id LIKE 'bot:%' ORDER BY coalesce(asked_at, created_at)"
+            f"AND owner_id LIKE 'human:%' AND {askers} ORDER BY coalesce(asked_at, created_at)",
+            (H.KEEPER,) if keeper else (),
         )
     )
     return [r for r in rows if not H.TS.snoozed(r)]

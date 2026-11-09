@@ -606,6 +606,11 @@ interface PipelineSettings {
   judge_models: string[];
   /** The judge a pipeline has when its judge_model is null. */
   default_judge_model: string;
+  /** The stuck rule: null is the default in stuck_rule_defaults. */
+  stuck_after_hours: number | null;
+  ask_person_after_hours: number | null;
+  question_expiry_days: number | null;
+  stuck_rule_defaults: {stuck_after_hours: number; ask_person_after_hours: number; question_expiry_days: number};
 }
 
 /** A live factory, as GET /v2/factories lists it. */
