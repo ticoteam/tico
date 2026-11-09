@@ -30,22 +30,23 @@ declare const metrics: Metrics;
 declare const S: {route: string};
 declare const MARKET_VIEW: {cite(ids: string[]): void};
 declare function pageMarket(): Promise<void>;
-declare global {
-  interface Window {
-    S: {route: string; status: object; me: {role: string}};
-    $: (selector: string) => Element | null;
-    esc: (text: unknown) => string;
-    get: (url: string) => Promise<unknown>;
-    safeMd: (text: string) => string;
-    toast: (text: string) => never;
-    metrics: Omit<Metrics, 'start'>;
-  }
-}
+// The page's window as the evaluate callbacks set it up. File-local, not a global augmentation: every script under
+// scripts/ shares one program (scripts/tsconfig.json).
+declare const window: Window & typeof globalThis & {
+  S: {route: string; status: object; me: {role: string}};
+  $: (selector: string) => Element | null;
+  esc: (text: unknown) => string;
+  get: (url: string) => Promise<unknown>;
+  safeMd: (text: string) => string;
+  toast: (text: string) => never;
+  metrics: Omit<Metrics, 'start'>;
+};
 
 const data: Fixtures = JSON.parse(fs.readFileSync(path.join(dir, 'fixtures.json')) as unknown as string);
 
 (async () => {
-  const browser = await chromium.launch({headless: true, channel: process.env.TICO_BROWSER_CHANNEL || undefined});
+  // Playwright reads an undefined channel as none (its bundled Chromium); the type has no room for undefined.
+  const browser = await chromium.launch({headless: true, channel: process.env.TICO_BROWSER_CHANNEL || undefined} as import('playwright').LaunchOptions);
   const result: Record<string, Measured> = {};
   try {
     for (const mode of process.argv.includes('--after-only') ? ['after'] : ['before', 'after']) {
@@ -66,7 +67,7 @@ const data: Fixtures = JSON.parse(fs.readFileSync(path.join(dir, 'fixtures.json'
         if (p.startsWith('/api/company-docs/')) body = {content: '<h1>Overview</h1>'};
         if (key) {
           body = data[key];
-          await new Promise(resolve => setTimeout(resolve, data.api[key].ms));
+          await new Promise(resolve => setTimeout(resolve, data.api[key]!.ms));
         }
         return route.fulfill({contentType: 'application/json', body: JSON.stringify(body)});
       });
@@ -75,7 +76,7 @@ const data: Fixtures = JSON.parse(fs.readFileSync(path.join(dir, 'fixtures.json'
       await page.evaluate(() => {
         window.S = {route: '#/strategy/market', status: {}, me: {role: 'owner'}};
         window.$ = (selector: string) => document.querySelector(selector);
-        window.esc = (text: unknown) => String(text).replace(/[&<>"']/g, (ch: string) => (({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'} as Record<string, string>)[ch]));
+        window.esc = (text: unknown) => String(text).replace(/[&<>"']/g, (ch: string) => (({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'} as Record<string, string>)[ch]!));
         window.get = async (url: string) => { const response = await fetch('/api' + url); if (!response.ok) throw Error('API failed'); return response.json(); };
         window.safeMd = (text: string) => text;
         window.toast = (text: string) => { throw Error(text); };
@@ -101,16 +102,16 @@ const data: Fixtures = JSON.parse(fs.readFileSync(path.join(dir, 'fixtures.json'
       await page.waitForFunction(() => metrics.draws >= 15);
       const measured = await page.evaluate<Measured>(() => {
         const sorted = metrics.durations.slice(0, 15).sort((a, b) => a - b);
-        return {first_draw_ms: +metrics.firstDraw!.toFixed(2), frame_median_ms: +sorted[7].toFixed(2),
+        return {first_draw_ms: +metrics.firstDraw!.toFixed(2), frame_median_ms: +sorted[7]!.toFixed(2),
           frame_max_ms: +Math.max(...sorted).toFixed(2), list_rows: document.querySelectorAll('#market-index [data-market-note]').length};
       });
       result[mode] = measured;
       if (mode === 'after') {
         // Exercise an entity absent from the opening subset, its evidence, citations, and reset.
         await page.locator('[data-market-next]').click();
-        await page.locator(`#market-index a[data-market-note="${data.next_list.entities[0].id}"]`).waitFor();
+        await page.locator(`#market-index a[data-market-note="${data.next_list.entities[0]!.id}"]`).waitFor();
         assert.equal(await page.locator('#market-index [data-market-note]').count(), 50);
-        const target = data.search.entities[0];
+        const target = data.search.entities[0]!;
         await page.locator('#market-filter').fill(target.name);
         await page.locator(`#market-index a[data-market-note="${target.id}"]`).waitFor();
         await page.locator(`#market-index a[data-market-note="${target.id}"]`).click();
