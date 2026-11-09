@@ -21,6 +21,7 @@ from . import lifecycle
 from . import bot_access as A
 from . import models as M
 from . import changelog as CL
+from . import releases
 from . import visuals
 from . import app_delivery, login_holds, providers, runner_versions, runs
 from .harnesses import resolve_harness
@@ -3894,20 +3895,17 @@ def install_views(app, store, auth, mutate, task_view):
         kind: Literal["product", "activity", "all"] = "all",
         unread: bool = False,
         q: str = "",
-        since_version: str | None = None,
         limit: int = Query(250, ge=1, le=250),
         offset: int = Query(0, ge=0),
     ):
         who = request.state.identity
         human_only(who)
-        if since_version is not None and CL.releases.parse(since_version) is None:
-            raise Problem("version", "since_version must be a version such as 0.3.0", 422)
         with store.read() as c:
             read = CL.read_ids(c, who.actor)
             products = [{**row, "unread": row["id"] not in read} for row in CL.products(c, store.settings)]
             entries = []
             # Newest readable bot-owned done tasks with a long enough note. Filter with task_sql in one pass
-            # (not auth.task per candidate); 120 is the activity cap beside product releases.
+            # (not auth.task per candidate); 120 is the activity cap beside product updates.
             activity = (
                 [
                     dict(r)
@@ -3917,7 +3915,7 @@ def install_views(app, store, auth, mutate, task_view):
                         "ORDER BY COALESCE(NULLIF(done_at,''),updated_at) DESC LIMIT 120"
                     )
                 ]
-                if kind != "product" and not unread and since_version is None
+                if kind != "product" and not unread
                 else []
             )
             for task in activity:
@@ -3936,15 +3934,13 @@ def install_views(app, store, auth, mutate, task_view):
                     }
                 )
             entries.sort(key=lambda row: row["shipped_at"] or "", reverse=True)
-            # Busy bot activity cannot push shipped releases out of the product view.
+            # Busy bot activity cannot push product updates out of the product view.
             entries = products + entries
             entries.sort(key=lambda row: row["shipped_at"] or "", reverse=True)
             if kind != "all":
                 entries = [row for row in entries if row["kind"] == kind]
             if unread:
                 entries = [row for row in entries if row.get("unread")]
-            if since_version is not None:
-                entries = [row for row in entries if CL.releases.newer(row.get("version"), since_version)]
             if q.strip():
                 words = q.lower().split()
                 entries = [
@@ -3957,7 +3953,7 @@ def install_views(app, store, auth, mutate, task_view):
                 "entries": entries[offset : offset + limit],
                 "next_offset": next_offset,
                 "unread_count": sum(row["unread"] for row in products),
-                "current_version": CL.releases.version(),
+                "current_version": releases.version(),
                 "drafts": [],
                 "can_review": False,
                 "can_add": who.role == "owner",

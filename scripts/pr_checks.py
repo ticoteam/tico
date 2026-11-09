@@ -70,10 +70,6 @@ RUST_INPUTS = {
         "contracts/runner/",
     ),
 }
-CHANGELOG_REFUSAL = (
-    "No PR edits CHANGELOG.md; the Technical Writer writes notes at the release cut. Remove your CHANGELOG.md changes."
-)
-RELEASE_TRAILER = re.compile(r"^Changelog-Release:[ \t]*v?(\d+\.\d+\.\d+)[ \t]*$", re.M)
 # Each check VM has 4 vCPUs (the largest size these checks use) and runs 4 test workers. Groups are sized so a VM
 # finishes in about TICO_CI_JOB_SECONDS (330 s), setup included: under 7 minutes with room for estimate error. Measured
 # on Nov 9 (queue run 42558912296): a Python VM's setup is 2.2-2.5 minutes (SETUP_SECONDS), and its tests ran about 1.3x
@@ -99,54 +95,6 @@ FACTORY_LEG_SECONDS = 130
 # tests spread across the workers.
 PYTEST_FLAGS = ("--api-database-snapshots", "--maxschedchunk=2")
 UNTIMED_SCRIPT_SECONDS = 20  # a browser script with no measured time yet
-
-
-def guard_changelog(base, head="HEAD", root=None):
-    """Refuse PR notes before test selection; allow the documented notes-only release cut.
-
-    Compare the PR diff, not the last commit or the working tree. A trailer on an
-    earlier commit cannot exempt a later ordinary notes edit. Direct release cuts
-    on main never enter this PR-only gate; shipped-section guards still run.
-    """
-
-    def git(*args):
-        return subprocess.check_output(["git", *args], cwd=root or ROOT, text=True)
-
-    if not base:
-        raise RuntimeError("Cannot check CHANGELOG.md without the PR base commit")
-    ancestor = git("merge-base", base, head).strip()
-    changed = git("diff", "--name-only", "--no-renames", "-z", ancestor, head).rstrip("\0").split("\0")
-    if "CHANGELOG.md" not in changed:
-        return
-    # Release notes are a separate CHANGELOG-only cut. Do not exempt product PRs
-    # that happen to contain a release trailer or a commit from an older cut.
-    commits = git("log", "--no-merges", "--format=%H", f"{base}..{head}", "--", "CHANGELOG.md").splitlines()
-    # A merge that writes notes of its own (a line added or removed against every parent) needs its own trailer;
-    # bringing main's notes in, a clean union of the parents, stays allowed.
-    commits += [
-        merge
-        for merge in git("log", "--merges", "--format=%H", f"{base}..{head}").splitlines()
-        if merge_writes(git("show", "--cc", "--format=", merge, "--", "CHANGELOG.md"))
-    ]
-    if (
-        changed == ["CHANGELOG.md"]
-        and commits
-        and all(RELEASE_TRAILER.search(git("show", "-s", "--format=%B", commit)) for commit in commits)
-    ):
-        return
-    raise RuntimeError(CHANGELOG_REFUSAL)
-
-
-def merge_writes(combined):
-    """Whether a merge's combined diff (`git show --cc`) has a line that is new against every parent: in a hunk
-    headed by n+1 @s, the first n columns all + or all -. A line from one parent marks only its own column."""
-    parents = 0
-    for line in combined.splitlines():
-        if line.startswith("@@@"):
-            parents = len(line) - len(line.lstrip("@")) - 1
-        elif parents and line[:parents] in ("+" * parents, "-" * parents):
-            return True
-    return False
 
 
 def is_test(name):
@@ -902,17 +850,15 @@ def owned_reason(owned):
 
 
 def unread(name):
-    """No test or script reads screenshots, retired designs or the top-level pages other than CHANGELOG.md."""
-    return name.startswith(("docs/images/", "docs/history/")) or (
-        "/" not in name and name.endswith(".md") and name != "CHANGELOG.md"
-    )
+    """No test or script reads screenshots, retired designs or the top-level pages."""
+    return name.startswith(("docs/images/", "docs/history/")) or ("/" not in name and name.endswith(".md"))
 
 
 def read_only(name):
-    """Data that code reads but no test imports: docs pages (the manual, the OpenAPI copy, the API guide), CHANGELOG.md
-    (the changelog API, release-notes guards) and GitHub files (release tests parse the workflows). A change runs the
-    tests that read it (DependencyMap.read_by_tests), not everything that imports a reader."""
-    return name == "CHANGELOG.md" or name.startswith(("docs/", ".github/"))
+    """Data that code reads but no test imports: docs pages (the manual, the OpenAPI copy, the API guide) and GitHub
+    files (release tests parse the workflows). A change runs the tests that read it (DependencyMap.read_by_tests), not
+    everything that imports a reader."""
+    return name.startswith(("docs/", ".github/"))
 
 
 def pinned(name):
@@ -1008,7 +954,7 @@ def selection(changed, event="pull_request", root=ROOT, graph=None, base=None, a
 
     0. A file under an OWNED_DATA folder runs the tests listed for that folder, and no other test.
     1. A file gone from the tree (a deletion, or the old side of a rename) runs the tests and browser scripts that name,
-       import or read it directly. Data that code reads (docs, CHANGELOG.md, GitHub files) runs the tests that read it.
+       import or read it directly. Data that code reads (docs, GitHub files) runs the tests that read it.
        A gone file that code other than a check names or reads adds the smoke set.
     2. A pin (FULL_SUITE, requirements*.txt) runs the tests and browser scripts that read it directly, and the smoke set.
        A conftest that changed or was deleted runs the tests below it while there are at most CONFTEST_BELOW_LIMIT (and the
@@ -1359,7 +1305,7 @@ def size_groups(counts, timings, browser=None, fixed=0, shards=0, ceiling=CEILIN
 def merge_parent(base, head="HEAD", root=None):
     """The base a pull request is checked against. GitHub checks out the PR merged into the current base branch, while
     the event's base sha is the branch tip when the PR was last updated; diffing from that older sha would count
-    everything main gained since as the PR's own change, CHANGELOG.md included."""
+    everything main gained since as the PR's own change."""
 
     def git(*args):
         return subprocess.run(["git", *args], cwd=root or ROOT, capture_output=True, text=True)
@@ -1644,11 +1590,10 @@ def narrow_summary(record):
 
 def prepare(event, base, output, timings_path=None, head="HEAD", light=False):
     """`head` is the commit under test: the checkout for a pull request, the queue group's merge commit for a
-    merge_group. A group's base is its own base sha, so it needs no merge_parent or changelog guard. `light` narrows the
+    merge_group. A group's base is its own base sha, so it needs no merge_parent. `light` narrows the
     plan for an event in NARROW; any other event ignores it."""
     if event == "pull_request":
         base = merge_parent(base)
-        guard_changelog(base)
     changed = changed_files(base, head) if base else []
     added = changed_files(base, head, only="A") if base else None
     if base:

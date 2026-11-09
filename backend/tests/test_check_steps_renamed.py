@@ -30,7 +30,11 @@ def rename(post, type_id, steps):
 
 
 def test_the_dev_board_seeds_each_check_step_with_its_kind():
-    assert {n: f.get("check") for n, f in step_flow.DEV.items() if f.get("check")} == {
+    def kinds(flows):
+        return {n: f.get("check") for n, f in flows.items() if f.get("check")}
+
+    assert kinds(step_flow.DEV) == {"Review 1": "review", "Review 2": "review"}
+    assert kinds(step_flow.QA_DEV) == {
         "Review 1": "review",
         "Review 2": "review",
         "In QA": "qa",

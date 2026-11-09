@@ -13,26 +13,22 @@ RELEASE_URL = "https://github.com/ticoteam/tico/releases/tag/v1.2.3"
 LEAVE_OUT = "do not ask anyone for their names"
 
 
-def _team(api):
-    """cmo is the Release Manager and cpo the Technical Writer (by starter template); Dev tickets has a Pending Release."""
+def _team(api, steps=None):
+    """cmo is the Release Manager and cpo the Technical Writer (by starter template); Dev tickets has a Pending Release.
+    `steps` replaces the QA board's steps, for a board without QA."""
     with api.app.state.store.transaction() as c:
         bots = {slug: {"name": slug, "runtime": "fake", "status": "active"} for slug in ("cpo", "cmo", "qab")}
         H.sync_registry(c, bots, {"people": [{"id": "ana", "email": "ana@acme.example", "team": "leadership"}]})
         for slug, template in (("cmo", RF.MANAGER), ("cpo", RF.WRITER), ("qab", RF.QA)):
             c.execute('INSERT OR REPLACE INTO bot_config(bot,team,owner_id) VALUES(?,?,?)', (slug, 'product', 'ana'))
             BS.write(c, slug, {**bots[slug], 'template': template})
-        dev = H.type_create(
-            c,
-            "human:ana",
-            "Dev tickets",
-            numbered=True,
-            steps=[
-                {"name": "In QA", "status": "review"},
-                {"name": "Pending Release", "status": "review"},
-                {"name": "Post Release QA", "status": "review"},
-                {"name": "Done", "status": "done"},
-            ],
-        )
+        steps = steps or [
+            {"name": "In QA", "status": "review"},
+            {"name": "Pending Release", "status": "review"},
+            {"name": "Post Release QA", "status": "review"},
+            {"name": "Done", "status": "done"},
+        ]
+        dev = H.type_create(c, "human:ana", "Dev tickets", numbered=True, steps=steps)
     return dev
 
 
@@ -386,6 +382,13 @@ def test_a_published_release_moves_its_carried_tickets_to_post_release_qa(api):
     # a second delivery for the same tag changes nothing; a ticket moved on by hand is left where it is
     _published(api)
     assert _step_of(api, carried) == "Post Release QA"
+
+
+def test_a_published_release_on_a_board_without_qa_moves_its_carried_tickets_to_done(api):
+    dev = _team(api, steps=[{"name": "Pending Release", "status": "review"}, {"name": "Done", "status": "done"}])
+    carried = _ticket(api, dev, "Visual replies", 412)
+    _published(api)
+    assert _step_of(api, carried) == "Done"
 
 
 def test_a_ticket_without_a_merged_pull_request_in_the_repository_stays_at_pending_release(api):

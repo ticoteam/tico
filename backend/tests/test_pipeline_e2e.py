@@ -40,7 +40,7 @@ FIXTURES = Path(__file__).parent / "fixtures"
 
 # The booted stage names (the preset's own names are overridden by the seed that a booted hub already has).
 STAGES = {
-    "Product": ["Ideas", "Specifying", "Review", "In development", "Validate", "Done", "Declined"],
+    "Product": ["On ice", "Ideas", "Specifying", "Review", "In development", "Validate", "Done", "Declined"],
     "Engineering": ["Todo", "Doing", "In review", "Ready to ship", "Done"],
     "Marketing": ["On deck", "In development", "Live", "Working", "Paused", "Review", "Ready", "Done", "Closed"],
     "Sales": ["Lead", "Talking", "Proposal", "Closing", "Won", "Lost"],

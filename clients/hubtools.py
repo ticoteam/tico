@@ -5166,6 +5166,8 @@ CADENCE = {"enum": ["none", "daily", "weekly", "monthly"], "description": "Updat
 
 def _page_fields(args):
     fields = {k: args[k] for k in ("title", "cadence", "as_of", "task", "replaces", "scope") if args.get(k)}
+    if args.get("spec"):
+        fields["spec"] = True
     if "audience" in args and args["audience"] is not None:
         fields["audience"] = audience(args["audience"])
     return fields
@@ -5186,6 +5188,7 @@ def _page_fields(args):
         "replaces": {"type": "string"},
         "scope": {"enum": ["task", "bot"]},
         "path": _s("Repo-relative path"),
+        "spec": {"type": "boolean", "description": "A visual spec for the Product roadmap card in task"},
     },
     required=("name", "text"),
     writes=True,
@@ -9419,15 +9422,13 @@ def grokbot_sync(api, args):
 # ----------------------------------------------------------------------------- updates
 @tool(
     "hub_changelog_list",
-    "Shipped Tico releases and team product announcements, with your own read state and full change bullets. "
+    "Product announcements, with your own read state and full change bullets. "
     "Use unread=true to catch up since your last look; reading does not mark anything read. "
-    "Only releases installed on this server or earlier appear. since_version selects releases newer than that version. "
     "next_offset reads the next page; unread_count counts all unread product entries, independently of filters.",
     {
         "kind": _s("product (default), activity, or all", enum=["product", "activity", "all"]),
         "unread": {"type": "boolean", "description": "Only product changes you have not acknowledged"},
         "q": _s("Search titles and change bullets"),
-        "since_version": _s("Only releases newer than this version, e.g. 0.3.0"),
         "offset": {"type": "integer", "minimum": 0, "description": "next_offset from the preceding page"},
         "limit": {"type": "integer", "minimum": 1, "maximum": 250},
     },
@@ -9438,7 +9439,6 @@ def changelog_list(api, args):
         kind=args.get("kind") or "product",
         unread="true" if args.get("unread") else None,
         q=args.get("q"),
-        since_version=args.get("since_version"),
         offset=args.get("offset"),
         limit=args.get("limit"),
     )
@@ -13733,7 +13733,7 @@ def listing(local=False, kind=None):
     ]
 
 
-# The tools Tico 0.2.21 renamed outright (CHANGELOG 0.2.21, Breaking changes). A call by an old name is answered with the new
+# The tools Tico 0.2.21 renamed outright (its breaking changes). A call by an old name is answered with the new
 # one. A family renamed by prefix (`hub_docs_*` is `hub_doc_*`) is answered only when the new name exists.
 RENAMED_TOOLS = {
     "hub_say": "hub_message_send",
