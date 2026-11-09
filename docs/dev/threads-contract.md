@@ -414,7 +414,8 @@ Unread counts come from counters (§5), not one row per reader.
 Per (message, bot) that §4.1 reaches, deduplicated, first match wins:
 1. a DM, or an explicit @mention / ask / assign of the bot → `queue` (`steer` when it is running in that root); a person's
    @mention queues, and so does a bot's: an @mention is addressed, so it goes by the message's way, never the
-   `bot_to_bot` hold (always-wake `mention`, rule `bot_mention`; the loop guard still caps it, §4.5);
+   `bot_to_bot` hold (always-wake `mention`, rule `bot_mention`), except an escalation from the sender's own pipeline
+   card to its active manager follows §4.5;
 2. the bot's Home → `queue`;
 3. a reply in a sub-thread the bot last posted in → `queue`;
 3a. a reply (`in_reply_to`, §4.9) to the bot's message in the same root → `queue`, reason `reply` (`steer` when it is
@@ -476,6 +477,8 @@ deliveries resume in order (`threads.resume_capped(c, root_id)`) when a human po
 reopens (the scheduler's tick calls `threads.reopen_due(store)`, plain SQL with no model). Each wake the window lets go
 counts in the window from then (its `created_at` moves), so a backlog goes at the guard's rate, not at once. A person's
 post lets them all go at their original times.
+An actionable escalation from a bot's own pipeline card to its active manager is excluded from this count; after six such
+wakes in a root's rolling hour, later escalations wait as notes carried by at most one `thread_notes` wake.
 
 ### 4.6 Readers rekeyed to deliveries
 The inbox (`H.inbox_pages`, `H.inbox`, `H.undelivered`), `H.mark_delivered`/`mark_read`, `_reach` and the

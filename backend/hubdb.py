@@ -310,6 +310,7 @@ APPROVAL_KINDS = (
 )
 
 CAP_PER_HOUR = 20  # rule 3: messages in one conversation between bots, per hour
+PIPELINE_MANAGER_PATH = "_pipeline_manager_path"
 UNSOLICITED_PER_DAY = int(os.environ.get("TICO_UNSOLICITED_PER_DAY", "10"))  # rule 4: per human, per bot, per UTC day
 HELD_QUEUE_ITEMS = int(os.environ.get("TICO_HELD_QUEUE_ITEMS", "200"))
 HELD_QUEUE_BYTES = int(os.environ.get("TICO_HELD_QUEUE_BYTES", "2097152"))
@@ -3417,6 +3418,41 @@ def unless_queue_full(conn, write):
     return out, None
 
 
+def _pipeline_manager_path_actor(conn, actor, target, body, kind, refs, conv):
+    """The active manager a bot is escalating to from its own pipeline card, or None.
+
+    A private ref is stamped only after the card owner, pipeline manager and actionable recipient are
+    resolved. Callers cannot grant themselves the exemption by supplying the ref.
+    """
+    if not is_bot(actor):
+        return None
+    task_id = message_task_id({"refs": refs}, conv)
+    card = task(conn, task_id) if task_id else None
+    if not card or card.get("owner_id") != actor or not card.get("type_id"):
+        return None
+    pipeline = type_get(conn, card["type_id"])
+    if not pipeline:
+        return None
+    from .pipeline_manager import manager_bot
+
+    manager_id = manager_bot(conn, pipeline)
+    if not manager_id:
+        return None
+    manager = "bot:" + manager_id
+    from . import threads
+
+    mentioned = any(who == manager for who, _kind in threads.mentions(conn, conv, body, author=actor))
+    actionable = (
+        ("needs_action" in refs and refs.get("needs_action") is not False)
+        or kind in ("ask", "assign")
+        or bool(refs.get("questions") or refs.get("assign"))
+        or mentioned
+    )
+    if mentioned or (target == manager and actionable):
+        return manager
+    return None
+
+
 def _write_message(
     conn,
     actor,
@@ -3434,6 +3470,8 @@ def _write_message(
     check_cap=False,
     decided=None,
 ):
+    refs = dict(refs or {})
+    refs.pop(PIPELINE_MANAGER_PATH, None)  # only the writer may mark a manager escalation
     if actor == "bot:librarian":
         body = librarian_text(body)
     if conv and ("closed_at" not in conv or conv.get("closed_at")):
@@ -3472,6 +3510,9 @@ def _write_message(
         held = decision.reason
         if held:
             refs = {**refs, "quiet": True, wake_rules.MARK: held}
+    manager_path_actor = _pipeline_manager_path_actor(conn, actor, target, body, kind, refs, conv)
+    if manager_path_actor:
+        refs[PIPELINE_MANAGER_PATH] = manager_path_actor
     row = {
         "id": new_id(),
         "conversation_id": conv["id"],
@@ -3504,10 +3545,11 @@ def _write_message(
         # the cap on messages of which many were notices or the owner's.
         n = conn.execute(
             "SELECT COUNT(*) FROM messages WHERE conversation_id=? AND created_at>=? "
-            "AND sender_id LIKE 'bot:%' AND recipient_id LIKE 'bot:%' AND kind<>'notice'",
+            "AND sender_id LIKE 'bot:%' AND recipient_id LIKE 'bot:%' AND kind<>'notice' "
+            "AND NOT (json_valid(refs) AND json_extract(refs, '$." + PIPELINE_MANAGER_PATH + "') IS NOT NULL)",
             (conv["id"], since),
         ).fetchone()[0]
-        if n >= CAP_PER_HOUR:
+        if n >= CAP_PER_HOUR and not manager_path_actor:
             refuse(conn, actor, "cap", f"{n} messages in this conversation in the last hour; the cap is {CAP_PER_HOUR}")
     conn.execute(
         "INSERT INTO messages (id, conversation_id, sender_id, recipient_id, kind, body, refs, "

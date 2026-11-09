@@ -798,7 +798,13 @@ def settings_for(c, bot, ctx=None):
             "edit": None,
         }
     )
-    out.append({"text": f"{HD.CAP_PER_HOUR} bot-to-bot messages an hour in one chat", "source": "hubdb", "edit": None})
+    out.append(
+        {
+            "text": f"{HD.CAP_PER_HOUR} bot-to-bot messages an hour in one chat; an escalation from your own pipeline card to its active manager does not count",
+            "source": "hubdb",
+            "edit": None,
+        }
+    )
     return out
 
 

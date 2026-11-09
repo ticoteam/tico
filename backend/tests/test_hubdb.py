@@ -24,6 +24,7 @@ from backend import task_relations as TR
 from backend import wake_presets as WP
 from backend import bot_settings as BS
 from backend.tests.helpers.hubdb import ANA, CMO, EMPLOYEES, HubCase, PEOPLE, with_legacy_run_tables
+from backend.tests.helpers.pipeline_manager import pipeline
 
 # The table's DDL: migration 0070 owns it (bot_settings.py has none).
 _BOT_SETTINGS_TABLE = importlib.import_module("backend.migrations.0070_bot_settings").TABLE
@@ -457,6 +458,60 @@ class Rule3Caps(HubCase):
         for i in range(H.CAP_PER_HOUR):
             H.say(self.conn, CMO, SEO, f"line {i}", conversation_id=conv["id"])
         self.refused("cap", H.say, self.conn, CMO, SEO, "one more", conversation_id=conv["id"])
+
+    def test_pipeline_manager_escalations_skip_rule_three_but_other_bot_chat_does_not(self):
+        type_id = pipeline(self.conn, manager="coo", name="Launch escalation cap")
+        card = H.task_create(
+            self.conn,
+            ANA,
+            "Review the launch card",
+            "Synthetic card for the rule 3 regression.",
+            SEO,
+            type=type_id,
+            step="Building",
+            lint=False,
+            private=False,
+        )
+        conv = H.open_conversation(self.conn, CMO, [CMO, SEO, COO], subject="the launch")
+        for i in range(H.CAP_PER_HOUR):
+            H.say(self.conn, SEO, CMO, f"line {i}", conversation_id=conv["id"])
+
+        before = [r for r in H.refusals_for(self.conn, SEO) if r["rule"] == "cap"]
+        escalation = H.say(
+            self.conn,
+            SEO,
+            COO,
+            "Please review the launch card",
+            conversation_id=conv["id"],
+            refs={"task": card["id"], "needs_action": True},
+        )
+        after_escalation = [r for r in H.refusals_for(self.conn, SEO) if r["rule"] == "cap"]
+        self.assertEqual(before, [])
+        self.assertEqual(after_escalation, [], "an escalation has no rule 3 refusal row")
+        self.assertEqual(escalation["refs"][H.PIPELINE_MANAGER_PATH], COO)
+
+        mentioned = H.say(
+            self.conn,
+            SEO,
+            CMO,
+            "@coo please review the launch card",
+            conversation_id=conv["id"],
+            refs={"task": card["id"]},
+        )
+        self.assertEqual(mentioned["refs"][H.PIPELINE_MANAGER_PATH], COO)
+        self.assertEqual([r for r in H.refusals_for(self.conn, SEO) if r["rule"] == "cap"], [])
+
+        self.refused(
+            "cap",
+            H.say,
+            self.conn,
+            SEO,
+            CMO,
+            "one more non-manager message",
+            conversation_id=conv["id"],
+            refs={"needs_action": True},
+        )
+        self.assertEqual(len([r for r in H.refusals_for(self.conn, SEO) if r["rule"] == "cap"]), 1)
 
 
 # ----------------------------------------------------------------------------- rule 4

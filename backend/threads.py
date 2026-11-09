@@ -1789,11 +1789,19 @@ def _deliver_bot(c, thread, root, message, bot, reason, replay=False, entry=None
         return None
     way = entry["mode"] if entry["mode"] in ("queue", "defer") else None
     state = "pending"
-    if mode in ("queue", "steer") and _cause(author) == "bot" and _over_guard(c, root["id"]):
+    manager_path = _manager_path(message, bot)
+    manager_fold = (
+        manager_path
+        and mode in ("queue", "steer")
+        and _manager_guard_used(c, root["id"], message["id"]) >= LOOP_GUARD_PER_HOUR
+    )
+    if mode in ("queue", "steer") and _cause(author) == "bot" and not manager_path and _over_guard(c, root["id"]):
         state = "capped"
     did = _insert_delivery(c, message, bot, thread, root, mode, reason, state=state)
     if state == "capped":
         _capped_notice(c, root)
+    elif manager_fold and _fold_manager_escalation(c, thread, root, message, bot):
+        return {"recipient": bot, "mode": "defer", "reason": reason, "state": "pending"}
     elif mode in ("queue", "steer"):
         carrier = _carrier(c, thread, message, bot, reason, rule, way=way)
         if carrier is None:
@@ -2290,12 +2298,21 @@ def _defer_note(c, message, bot):
     """A deferred delivery rides to the bot's next run as a quiet note, as bot_to_bot.hold leaves one."""
     try:
         body, refs = H.sourced_text(str(message.get("body") or "")[:2000], refs={"message_id": message["id"]})
+        row = {
+            "id": _new_id(),
+            "from_actor": message.get("sender_id") or H.KEEPER,
+            "to_actor": bot,
+            "body": body,
+            "created_at": _now(),
+            "message_id": refs["message_id"],
+        }
         c.execute(
             "INSERT INTO notes(id,from_actor,to_actor,body,created_at,message_id) VALUES(?,?,?,?,?,?)",
-            (_new_id(), message.get("sender_id") or H.KEEPER, bot, body, _now(), refs["message_id"]),
+            (row["id"], row["from_actor"], row["to_actor"], row["body"], row["created_at"], row["message_id"]),
         )
-    except Exception:  # noqa: BLE001, S110 - a bare hub database has no notes table
-        pass
+        return row
+    except Exception:  # noqa: BLE001 - a bare hub database has no notes table
+        return None
 
 
 # ----------------------------------------------------------------------------- the loop guard
@@ -2303,11 +2320,14 @@ def _guard_window():
     return H.shift(_now(), hours=-1)
 
 
-def _guard_used(c, root_id):
+def _guard_used(c, root_id, exclude_message_id=None):
     return c.execute(
-        "SELECT COUNT(*) FROM message_deliveries WHERE root_id=? AND created_at>=? AND cause='bot' "
-        "AND recipient LIKE 'bot:%' AND mode IN ('steer','queue') AND state<>'capped'",
-        (root_id, _guard_window()),
+        "SELECT COUNT(*) FROM message_deliveries d JOIN messages m ON m.id=d.message_id "
+        "WHERE d.root_id=? AND d.created_at>=? AND d.cause='bot' "
+        "AND d.recipient LIKE 'bot:%' AND d.mode IN ('steer','queue') AND d.state<>'capped' "
+        "AND d.message_id<>coalesce(?, '') "
+        "AND coalesce(json_extract(m.refs, '$." + H.PIPELINE_MANAGER_PATH + "'),'')<>d.recipient",
+        (root_id, _guard_window(), exclude_message_id),
     ).fetchone()[0]
 
 
@@ -2319,11 +2339,13 @@ def _guard_primary(c, root, message, bot):
     """A bot's message to a bot through `post`, past the guard: the run it would start waits (`capped`), never lost."""
     if _cause(message.get("sender_id")) != "bot" or (message.get("refs") or {}).get("quiet"):
         return
-    n = c.execute(
-        "SELECT COUNT(*) FROM message_deliveries WHERE root_id=? AND created_at>=? AND cause='bot' "
-        "AND recipient LIKE 'bot:%' AND mode IN ('steer','queue') AND state<>'capped' AND message_id<>?",
-        (root["id"], _guard_window(), message["id"]),
-    ).fetchone()[0]
+    if _manager_path(message, bot):
+        if _manager_guard_used(c, root["id"], message["id"]) >= LOOP_GUARD_PER_HOUR:
+            thread = thread_row(c, message.get("conversation_id"))
+            if thread:
+                _fold_manager_escalation(c, thread, root, message, bot)
+        return
+    n = _guard_used(c, root["id"], message["id"])
     if n < LOOP_GUARD_PER_HOUR:
         return
     c.execute(
@@ -2333,6 +2355,48 @@ def _guard_primary(c, root, message, bot):
     if c.execute("SELECT 1 FROM jobs WHERE id=? AND state='queued'", (message["id"],)).fetchone():
         c.execute("UPDATE jobs SET state='canceled' WHERE id=? AND state='queued'", (message["id"],))
     _capped_notice(c, root)
+
+
+def _manager_path(message, bot):
+    refs = _refs_of(message)
+    return _cause(message.get("sender_id")) == "bot" and refs.get(H.PIPELINE_MANAGER_PATH) == bot
+
+
+def _manager_guard_used(c, root_id, exclude_message_id=None):
+    return c.execute(
+        "SELECT COUNT(*) FROM message_deliveries d JOIN messages m ON m.id=d.message_id "
+        "WHERE d.root_id=? AND d.created_at>=? AND d.cause='bot' "
+        "AND d.mode IN ('steer','queue') AND d.state<>'capped' AND d.message_id<>coalesce(?, '') "
+        "AND json_valid(m.refs) AND json_extract(m.refs, '$." + H.PIPELINE_MANAGER_PATH + "')=d.recipient",
+        (root_id, _guard_window(), exclude_message_id),
+    ).fetchone()[0]
+
+
+def _note_wake_pending(c, bot, root_id):
+    return c.execute(
+        "SELECT 1 FROM jobs j JOIN message_refs m ON m.id=j.message_id JOIN conversations t ON t.id=m.conversation_id "
+        "WHERE j.bot_id=? AND j.state='queued' AND m.ref_wake=? "
+        "AND coalesce(t.root_id,t.id)=? LIMIT 1",
+        (H.actor_id(bot), NOTE_WAKE, root_id),
+    ).fetchone()
+
+
+def _fold_manager_escalation(c, thread, root, message, bot):
+    """Keep an over-budget escalation as a note, with one queued notes wake for its root."""
+    note = _defer_note(c, message, bot)
+    if not note:
+        return False  # A missing note store must leave the direct wake intact.
+    wake_note_threads(c, bot, [note])
+    if not _note_wake_pending(c, bot, root["id"]):
+        return False  # If the manager cannot read this source, do not cancel its direct wake.
+    c.execute(
+        "UPDATE message_deliveries SET mode='defer', updated_at=? WHERE message_id=? AND recipient=? AND state<>'capped'",
+        (_now(), message["id"], bot),
+    )
+    c.execute(
+        "UPDATE jobs SET state='canceled' WHERE id=? AND bot_id=? AND state='queued'", (message["id"], H.actor_id(bot))
+    )
+    return True
 
 
 def _capped_notice(c, root):
