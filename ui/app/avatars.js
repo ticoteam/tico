@@ -143,6 +143,7 @@ function blobShape(slug, size) {
 }
 const blobBreath = shape => `animation-delay:${shape.delay}s`;
 // Working: running a turn by the status poll, or answering in the chat that is open (the dots are moving).
+/** @param {string} slug */
 function botWorking(slug) {
   if (S.v2?.status?.[slug]?.state === 'running' || S.status?.active?.some(a => a.employee === slug)) return true;
   return !!(V2C?.slug === slug && V2C.live && (V2C.live.text || v2PendingText(V2C).mode === 'run'));
@@ -157,11 +158,11 @@ function botAvatar(bot, size = 18, state) {
   const meta = BOT_AVATARS[slug], hue = avHue(slug);
   const icon = !meta?.tico && TEMPLATE_ICON.test(row?.icon || '') ? row.icon : '';
   const kind = meta?.tico ? 'bot-tico' : icon ? 'bot-glyph' : meta?.icon ? 'bot-symbol' : 'av-initials';
-  const fill = meta?.tico ? '#172221' : meta?.color || `hsl(${hue} 38% 45%)`;
+  const fill = meta?.tico ? '#172221' : meta?.color || `hsl(${hue} 38% 33%)`;
   const vars = kind === 'bot-symbol' ? `;--bot-color:${meta.color};--bot-icon:url('/assets/bot-symbols/${meta.icon}.svg')`
     : kind === 'av-initials' ? `;--hue:${hue};font-size:${Math.round(size * 0.42)}px` : '';
   const inner = kind === 'bot-glyph' ? `<span class="av-glyph" style="font-size:${Math.round(size * 0.7)}px">${esc(icon)}</span>`
-    : kind === 'av-initials' ? esc(avInitials(row?.slug || slug)) : '';
+    : kind === 'av-initials' ? esc(avInitials(row?.display_name || row?.slug || slug)) : '';
   const breathes = size >= BLOB_MORPH_MIN, shape = blobShape(slug, size);
   const working = breathes && (state === 'running' || state === 'working' || botWorking(slug));
   return `<span class="av blob ${kind} ${state || ''}${working ? ' morph' : ''}" data-av="${esc(slug)}"${breathes ? ' data-breathe' : ''} style="width:${size}px;height:${size}px;--av-fill:${fill}${vars}" aria-hidden="true">`
@@ -220,7 +221,7 @@ const RUNTIME_LABELS = {codex: 'Codex', claude: 'Claude Code', gemini: 'Gemini',
 const RUNTIME_MARKS = {codex: 'openai', claude: 'anthropic', gemini: 'google', antigravity: 'google', grok: 'xai',
   grokbot: 'xai', 'grok-bot': 'xai', cursor: 'cursor', pi: 'openrouter', openrouter: 'openrouter'};
 // Hover and screen readers say harness, model and effort in words: "Claude Code Opus 5.5 Med", "Codex GPT 6.1 Sol High".
-// The model is modelWords (ui/app/format.js) without a first word the harness already says; no effort, nothing after.
+// The model is modelWords (ui/app/format.ts) without a first word the harness already says; no effort, nothing after.
 const EFFORT_SHORT = {low: 'Low', medium: 'Med', high: 'High', xhigh: 'XHigh', max: 'Max', ultra: 'Ultra'};
 function runtimeTag(e) {
   const raw = String(e?.harness || e?.resolved_runtime || e?.runtime || '').trim().toLowerCase();

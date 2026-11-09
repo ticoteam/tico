@@ -25,7 +25,7 @@ async function open(browser, viewport, scheme, role = 'owner') {
     const json = body => route.fulfill({contentType: 'application/json', body: JSON.stringify(body)});
     if (/\/marked\.min\.js$/.test(p)) return route.fulfill({contentType: 'application/javascript', body: 'window.marked={parse:s=>String(s)}'});
     if (url.origin !== 'https://tico-ui.test') return route.abort();
-    const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|css))$/);
+    const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/);
     if (ui && fs.existsSync(uiFile(ui[1]))) return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]), 'utf8')});
     if (p === '/vendor/fonts/material-symbols-outlined.woff2') return route.fulfill({contentType: 'font/woff2', body: fs.readFileSync(uiFile('vendor/fonts/material-symbols-outlined.woff2'))});
     if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
@@ -103,9 +103,8 @@ async function shot(page, name) {
         await page.locator('[data-note-row=two] .note-title').click();
         await page.locator('#meet-review-private').waitFor();
         assert.equal(await page.locator('#meet-review-private').inputValue(), 'private');
-        assert.match(await page.locator('#notes-detail').innerText(), /From Tico Recorder/);
-        assert.equal(await page.locator('#meet-send, #meet-sections').count(), 0, 'Pending has no Send or Push controls');
-        await page.locator('[data-note-section=transcript]').click();
+        assert.match(await page.locator('#notes-detail').innerText(), /Tico Recorder/);
+        assert.equal(await page.locator('#meet-share, #meet-sections').count(), 0, 'Pending has no Share or task controls');
         assert.match(await page.locator('#notes-detail').innerText(), /The plan is ready/);
         await shot(page, `${size}-review-${scheme}`);
         await page.locator('#meet-review-private').selectOption('team');

@@ -1,6 +1,7 @@
 """Spreadsheet history as raw totals (spec §4.1): a CSV of month, line and amount (and an optional team) read into
 rows, the content hash that makes a re-import the same import, and each month's lines once the sheet's lines are
 mapped to accounts. No I/O: the planner in finance/raw_totals.py reads the books and posts."""
+
 import csv
 import hashlib
 import io
@@ -20,28 +21,28 @@ MAX_BYTES = 512 * 1024
 MAX_ROWS = 5000
 MAX_NAME = 200
 MAX_TEAM = 80
-MONTH = re.compile(r"[0-9]{4}-(0[1-9]|1[0-2])")      # ASCII only: \d also matches Arabic-Indic and fullwidth digits
+MONTH = re.compile(r"[0-9]{4}-(0[1-9]|1[0-2])")  # ASCII only: \d also matches Arabic-Indic and fullwidth digits
 AMOUNT = re.compile(r"-?[0-9]{1,18}")
 DEBIT_NORMAL = ("asset", "expense")
-OFFSET_SUBTYPE = "opening"             # Opening balance equity: what each month's lines are balanced against
+OFFSET_SUBTYPE = "opening"  # Opening balance equity: what each month's lines are balanced against
 BOM = "\ufeff"
 
 
 @dataclass(frozen=True)
 class Row:
-    month: str                         # YYYY-MM
-    line: str                          # the sheet's name for the line, as written
-    key: str                           # its name_key: what a mapping matches
-    amount: int                        # minor units, positive on the account's normal side (see natural)
-    team: str                          # "" for none
+    month: str  # YYYY-MM
+    line: str  # the sheet's name for the line, as written
+    key: str  # its name_key: what a mapping matches
+    amount: int  # minor units, positive on the account's normal side (see natural)
+    team: str  # "" for none
 
 
 @dataclass(frozen=True)
 class Sheet:
     basis: str
-    rows: tuple[Row, ...]              # the nonzero rows, in file order
-    zero_rows: int                     # rows of 0: they move nothing and are left out
-    digest: str                        # the content hash: the same rows and basis, in any order, under any mapping
+    rows: tuple[Row, ...]  # the nonzero rows, in file order
+    zero_rows: int  # rows of 0: they move nothing and are left out
+    digest: str  # the content hash: the same rows and basis, in any order, under any mapping
 
 
 def parse(text: str, basis: str) -> Sheet:
@@ -89,6 +90,7 @@ def parse(text: str, basis: str) -> Sheet:
 def _row(cells: list[str], where: Mapping[str, int], n: int) -> Row:
     def cell(name: str) -> str:
         return cells[where[name]] if name in where else ""
+
     month, line, team, amount = cell("month"), line_name(cell("line")), cell("team"), cell("amount")
     if not MONTH.fullmatch(month):
         raise invalid(f"row {n}: month is YYYY-MM")
@@ -130,8 +132,10 @@ def cents_warning(sheet: Sheet) -> str:
     amounts = [abs(r.amount) for r in sheet.rows]
     if len(amounts) < 2 or any(amount % 100 for amount in amounts):
         return ""
-    return ("Every amount ends in 00. Amounts are whole cents (290000 is 2,900.00). If this sheet is in dollars, "
-            "each total posts at a hundredth of its value.")
+    return (
+        "Every amount ends in 00. Amounts are whole cents (290000 is 2,900.00). If this sheet is in dollars, "
+        "each total posts at a hundredth of its value."
+    )
 
 
 def unknown_teams(sheet: Sheet, teams: Collection[str]) -> list[str]:
@@ -152,8 +156,9 @@ def month_end(month: str) -> str:
     return dates.month_end(dates.month(month)).isoformat()
 
 
-def lines_by_month(sheet: Sheet, by_key: Mapping[str, Account], opening: Account, base: str
-                   ) -> dict[str, tuple[Line, ...]]:
+def lines_by_month(
+    sheet: Sheet, by_key: Mapping[str, Account], opening: Account, base: str
+) -> dict[str, tuple[Line, ...]]:
     """Each month's lines, in file order: every row on its mapped account, then one offset on the opening-balance
     equity line for the month's net (none when the month already sums to zero). Every month sums to zero."""
     out: dict[str, list[Line]] = {}
@@ -161,14 +166,28 @@ def lines_by_month(sheet: Sheet, by_key: Mapping[str, Account], opening: Account
     for r in sheet.rows:
         account = by_key[r.key]
         amount = natural(r.amount, account.type)
-        out.setdefault(r.month, []).append(Line(account_id=account.id, amount=amount, currency=base,
-                                                original_amount=amount, description=r.line,
-                                                tags={"team": r.team} if r.team else {}))
+        out.setdefault(r.month, []).append(
+            Line(
+                account_id=account.id,
+                amount=amount,
+                currency=base,
+                original_amount=amount,
+                description=r.line,
+                tags={"team": r.team} if r.team else {},
+            )
+        )
         net[r.month] = net.get(r.month, 0) + amount
     for month, total in net.items():
         if total:
-            out[month].append(Line(account_id=opening.id, amount=-total, currency=base, original_amount=-total,
-                                   description=f"Raw totals {month}"))
+            out[month].append(
+                Line(
+                    account_id=opening.id,
+                    amount=-total,
+                    currency=base,
+                    original_amount=-total,
+                    description=f"Raw totals {month}",
+                )
+            )
     for month, lines in out.items():
         if len(lines) > MAX_LINES:
             raise invalid(f"{month} has more than {MAX_LINES} lines")

@@ -1,10 +1,12 @@
 """The roster's whole-table reads shared between snapshots (backend/roster_clock.py): read once per change, and never
 older or newer than the reader's own snapshot."""
+
 from backend import read_cache
 from backend.store import H
 from backend.tests.test_api import api, post  # noqa: F401  (fixture)
+from backend import bot_settings as BS
 
-CONFIGS = "SELECT * FROM bot_config"
+CONFIGS = BS.ROW_SQL
 STEPS = "SELECT * FROM task_steps ORDER BY position,id"
 
 
@@ -18,8 +20,8 @@ def snapshot_rows(store, statement=CONFIGS):
         direct = [dict(r) for r in c.execute(statement)]
         c.set_trace_callback(None)
         c.commit()
-    assert found == direct          # identical to reading the table in the same snapshot
-    return found, len(ran) - 1      # less the direct read
+    assert found == direct  # identical to reading the table in the same snapshot
+    return found, len(ran) - 1  # less the direct read
 
 
 def test_later_snapshots_share_the_rows_until_a_roster_table_changes(api):
@@ -62,7 +64,7 @@ def test_a_reader_in_an_older_snapshot_keeps_its_own_rows(api):
     bot = snapshot_rows(store)[0][0]["bot"]
     with store.read() as old:
         old.execute("BEGIN")
-        old.execute("SELECT 1 FROM bots").fetchone()          # the snapshot starts here
+        old.execute("SELECT 1 FROM bots").fetchone()  # the snapshot starts here
         with store.transaction() as c:
             c.execute("UPDATE bot_config SET reports_to='human:new' WHERE bot=?", (bot,))
         # A newer snapshot reads, and shares, the new rows first.
@@ -74,7 +76,7 @@ def test_a_reader_in_an_older_snapshot_keeps_its_own_rows(api):
 def test_reads_outside_a_transaction_share_the_roster_too(api):
     """Most request reads run in a plain `store.read()`, not a read transaction: they must share the roster as well."""
     store = api.app.state.store
-    snapshot_rows(store)                                          # the roster is read once and published
+    snapshot_rows(store)  # the roster is read once and published
     ran = []
     with store.read() as c:
         c.set_trace_callback(lambda sql: ran.append(sql) if sql == CONFIGS else None)
@@ -101,7 +103,9 @@ def test_type_list_reads_task_steps_from_the_shared_rows(api):
     store = api.app.state.store
     ran = []
     with store.transaction() as c:
-        c.execute("UPDATE task_steps SET name='Listed step' WHERE id=(SELECT id FROM task_steps ORDER BY position,id LIMIT 1)")
+        c.execute(
+            "UPDATE task_steps SET name='Listed step' WHERE id=(SELECT id FROM task_steps ORDER BY position,id LIMIT 1)"
+        )
     with store.read() as c:
         c.set_trace_callback(lambda sql: ran.append(sql) if sql == STEPS else None)
         listed = H.type_list(c)
@@ -120,6 +124,7 @@ def test_type_list_reads_task_steps_from_the_shared_rows(api):
 def test_entries_are_built_once_across_snapshots_and_rebuilt_after_a_bot_config_write(api, monkeypatch):
     """The entries every bot list asks for are built from bot_config alone, so later snapshots share the built value."""
     from backend import views
+
     store = api.app.state.store
     built, real = [], views._entries
     monkeypatch.setattr(views, "_entries", lambda c, owner="": built.append(owner) or real(c, owner))
@@ -130,10 +135,11 @@ def test_entries_are_built_once_across_snapshots_and_rebuilt_after_a_bot_config_
             found = views.entries(c, shared=True)
             c.commit()
         return found
+
     slug = snapshot_rows(store)[0][0]["bot"]
     first = read_entries()
     assert read_entries() is first and len(built) == 1
-    with store.read() as c:                     # a caller that changes its copy changes nothing shared
+    with store.read() as c:  # a caller that changes its copy changes nothing shared
         mine = views.entries(c)
         mine[slug]["repo"] = "changed-by-a-caller"
         assert views.entries(c)[slug]["repo"] != "changed-by-a-caller"
@@ -146,9 +152,11 @@ def test_entries_are_built_once_across_snapshots_and_rebuilt_after_a_bot_config_
 
 def _counters(store):
     with store.read() as c:
-        return (c.execute("SELECT value FROM roster_clock WHERE id=1").fetchone()[0],
-                [tuple(r) for r in c.execute("SELECT name,value FROM row_clock ORDER BY name")],
-                c.execute("SELECT value FROM provenance_clock WHERE id=1").fetchone()[0])
+        return (
+            c.execute("SELECT value FROM roster_clock WHERE id=1").fetchone()[0],
+            [tuple(r) for r in c.execute("SELECT name,value FROM row_clock ORDER BY name")],
+            c.execute("SELECT value FROM provenance_clock WHERE id=1").fetchone()[0],
+        )
 
 
 def test_a_restart_that_changes_nothing_leaves_the_change_counters_where_they_were(api):
@@ -157,6 +165,7 @@ def test_a_restart_that_changes_nothing_leaves_the_change_counters_where_they_we
     The first restart applies what the seeded rows still need; the second must change nothing."""
     from fastapi.testclient import TestClient
     from backend.app import create_app
+
     post(api, "tasks", {"owner": "ops", "title": "Restart probe", "body": "Nothing changes on a restart."})
     post(api, "tasks", {"owner": "cpo", "title": "Private restart probe", "body": "Nor does this.", "private": True})
     settings = api.app.state.store.settings

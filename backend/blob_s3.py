@@ -14,6 +14,7 @@ S3_MODULES = ("botocore", "boto3", "s3transfer", "urllib3")
 
 class Sources:
     """One process's selected attachment identity, shared with desktop downloads."""
+
     def __init__(self, settings):
         self.settings = settings
         self.selected = None
@@ -42,10 +43,12 @@ class Sources:
             if task is None or (task[0].is_set() and time.monotonic() - task[2] >= 30):
                 done, errors = threading.Event(), []
                 task = self._building[cache_key] = done, errors, time.monotonic()
+
                 def build():
                     try:
                         if reads:
                             from botocore.config import Config
+
                             config = Config(connect_timeout=2, read_timeout=5, retries={"total_max_attempts": 1})
                             s3 = client(self.settings, kind=kind, config=config, region_name=region_name)
                         else:
@@ -56,6 +59,7 @@ class Sources:
                         errors.append(exc)
                     finally:
                         done.set()
+
                 # Credential providers (including IMDS) run before SDK socket timeouts apply.
                 # At most one construction per kind/access mode survives a caller timeout.
                 threading.Thread(target=build, name="tico-s3-client", daemon=True).start()
@@ -72,8 +76,13 @@ class Sources:
         return self.client_for(self.kind)
 
     def read_s3(self, operation, **options):
-        return read(lambda kind: self.client_for(kind, reads=True), self.kind,
-                    kinds(self.settings, reads=True), operation, **options)
+        return read(
+            lambda kind: self.client_for(kind, reads=True),
+            self.kind,
+            kinds(self.settings, reads=True),
+            operation,
+            **options,
+        )
 
     def presign_get(self, s3, bucket, key, expires):
         """A GET URL signed by `s3`'s identity for the bucket's own region. SigV4 signs one region,
@@ -98,9 +107,17 @@ class Sources:
 
 def region(settings, env=None):
     env = os.environ if env is None else env
-    return (settings.blob_region or
-            (env.get("TICO_BACKUP_REGION") if not settings.blob_endpoint and not env.get("TICO_BACKUP_ENDPOINT") else None) or
-            env.get("AWS_REGION") or env.get("AWS_DEFAULT_REGION") or None)
+    return (
+        settings.blob_region
+        or (
+            env.get("TICO_BACKUP_REGION")
+            if not settings.blob_endpoint and not env.get("TICO_BACKUP_ENDPOINT")
+            else None
+        )
+        or env.get("AWS_REGION")
+        or env.get("AWS_DEFAULT_REGION")
+        or None
+    )
 
 
 def kinds(settings, env=None, reads=False):
@@ -113,8 +130,11 @@ def kinds(settings, env=None, reads=False):
         return [mode]
     candidates = []
     for kind, prefix in (("keys", "TICO_BLOB"), ("backup", "LITESTREAM")):
-        if ((kind == "keys" or settings.blob_bucket) and env.get(prefix + "_ACCESS_KEY_ID")
-                and env.get(prefix + "_SECRET_ACCESS_KEY")):
+        if (
+            (kind == "keys" or settings.blob_bucket)
+            and env.get(prefix + "_ACCESS_KEY_ID")
+            and env.get(prefix + "_SECRET_ACCESS_KEY")
+        ):
             candidates.append(kind)
     return candidates + ["role"]
 
@@ -122,35 +142,47 @@ def kinds(settings, env=None, reads=False):
 def bucket_region(s3, bucket):
     """The bucket's region from HeadBucket, which S3 names even when it refuses the request."""
     from botocore.exceptions import ClientError
+
     try:
         response = s3.head_bucket(Bucket=bucket)
     except ClientError as exc:
         response = exc.response
     except Exception:
         return None
-    return (response.get("ResponseMetadata", {}).get("HTTPHeaders", {}).get("x-amz-bucket-region")
-            or response.get("BucketRegion") or None)
+    return (
+        response.get("ResponseMetadata", {}).get("HTTPHeaders", {}).get("x-amz-bucket-region")
+        or response.get("BucketRegion")
+        or None
+    )
 
 
 def client(settings, config=None, kind=None, region_name=None):
     import boto3
     from botocore.config import Config
+
     # botocore presigns S3 URLs with SigV2 unless SigV4 is chosen explicitly. The desktop app
     # follows a download redirect only to a SigV4 URL (app/src/hub.rs has_s3_signature).
     signing = Config(signature_version="s3v4")
-    options = {"region_name": region_name or region(settings), "endpoint_url": settings.blob_endpoint or None,
-               "config": signing if config is None else config.merge(signing)}
+    options = {
+        "region_name": region_name or region(settings),
+        "endpoint_url": settings.blob_endpoint or None,
+        "config": signing if config is None else config.merge(signing),
+    }
     kind = kind or kinds(settings)[0]
     if kind == "company":
         # (key ID, secret), or with a session token for Tico file hosting's keys (backend/tico_storage.py).
         key, secret, *token = settings.blob_keys
-        options.update(aws_access_key_id=key, aws_secret_access_key=secret,
-                       **({"aws_session_token": token[0]} if token and token[0] else {}))
+        options.update(
+            aws_access_key_id=key,
+            aws_secret_access_key=secret,
+            **({"aws_session_token": token[0]} if token and token[0] else {}),
+        )
     elif kind != "role":
         prefix = "TICO_BLOB" if kind == "keys" else "LITESTREAM"
         key, secret = os.environ.get(prefix + "_ACCESS_KEY_ID"), os.environ.get(prefix + "_SECRET_ACCESS_KEY")
         if not key or not secret:
             from botocore.exceptions import NoCredentialsError
+
             raise NoCredentialsError()
         options.update(aws_access_key_id=key, aws_secret_access_key=secret)
     return boto3.client("s3", **options)
@@ -179,8 +211,18 @@ def read(client_for, selected, candidates, operation, **options):
 def write_error(exc, bucket, cleanup=False):
     # Only known error codes or the exception type: SDK messages can contain credential material.
     code = getattr(exc, "response", {}).get("Error", {}).get("Code")
-    known = {"AccessDenied", "InvalidAccessKeyId", "SignatureDoesNotMatch", "ExpiredToken", "InvalidToken",
-             "NoSuchBucket", "AuthorizationHeaderMalformed", "RequestTimeTooSkewed", "SlowDown", "ServiceUnavailable"}
+    known = {
+        "AccessDenied",
+        "InvalidAccessKeyId",
+        "SignatureDoesNotMatch",
+        "ExpiredToken",
+        "InvalidToken",
+        "NoSuchBucket",
+        "AuthorizationHeaderMalformed",
+        "RequestTimeTooSkewed",
+        "SlowDown",
+        "ServiceUnavailable",
+    }
     reason = code if code in known else type(exc).__name__
     if code is None and not isinstance(exc, OSError) and type(exc).__module__.split(".")[0] not in S3_MODULES:
         # Not from S3 or the network to it (a busy database, a bug here): saying "S3" sends people to the wrong place.

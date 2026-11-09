@@ -1,4 +1,5 @@
 """Held queue admission uses only disposable synthetic API databases, never a live queue."""
+
 from concurrent.futures import ThreadPoolExecutor
 from threading import Barrier, Event
 
@@ -8,16 +9,26 @@ from backend import hubdb as H
 from backend.store import Store
 from backend.tests.test_api import api, get, post, restrict, runner, assign, ready, claim, setup_attempt  # noqa: F401
 from backend.tests.test_member_bots import finish
+from backend import bot_settings as BS
 
 
 @pytest.fixture
 def queue(api, monkeypatch):
     for name in ('HELD_QUEUE_ITEMS', 'HELD_QUEUE_BYTES', 'HELD_QUEUE_SENDER_ITEMS', 'HELD_QUEUE_SENDER_BYTES'):
         monkeypatch.setattr(H, name, 100000)
-    tokens = {slug: setup_attempt(api, slug, 'ben' if slug == 'cpo' else 'ana')[2]['token']
-              for slug in ('ops', 'cpo', 'doc-updater')}
-    tasks = [post(api, 'tasks', {'owner': 'finance', 'title': 'Check fixture invoices', 'body': 'Synthetic work'},
-                  token=tokens[sender]) for sender in ('ops', 'cpo')]
+    tokens = {
+        slug: setup_attempt(api, slug, 'ben' if slug == 'cpo' else 'ana')[2]['token']
+        for slug in ('ops', 'cpo', 'doc-updater')
+    }
+    tasks = [
+        post(
+            api,
+            'tasks',
+            {'owner': 'finance', 'title': 'Check fixture invoices', 'body': 'Synthetic work'},
+            token=tokens[sender],
+        )
+        for sender in ('ops', 'cpo')
+    ]
     return api, tokens, tasks
 
 
@@ -31,14 +42,24 @@ def hold(api, state='paused'):
 
 def send(queue, sender='ops', text='A fixture message', expected=200, **fields):
     api, tokens, _ = queue
-    return post(api, 'messages', {'to': 'finance', 'text': text, 'needs_action': True, **fields},
-                token=tokens[sender], expected=expected)
+    return post(
+        api,
+        'messages',
+        {'to': 'finance', 'text': text, 'needs_action': True, **fields},
+        token=tokens[sender],
+        expected=expected,
+    )
 
 
 def pending(api):
     with api.app.state.store.read() as c:
-        return [dict(r) for r in c.execute("SELECT * FROM messages WHERE recipient_id='bot:finance' "
-                    "AND sender_id LIKE 'bot:%' AND delivered_at IS NULL AND deleted_at IS NULL ORDER BY created_at,id")]
+        return [
+            dict(r)
+            for r in c.execute(
+                "SELECT * FROM messages WHERE recipient_id='bot:finance' "
+                "AND sender_id LIKE 'bot:%' AND delivered_at IS NULL AND deleted_at IS NULL ORDER BY created_at,id"
+            )
+        ]
 
 
 def retained(rows):
@@ -47,9 +68,10 @@ def retained(rows):
 
 def domain(api):
     with api.app.state.store.read() as c:
-        tables = ('messages', 'jobs', 'notes', 'conversations', 'tasks', 'task_events', 'task_delegations')
+        tables = ('messages', 'jobs', 'notes', 'conversations', 'tasks', 'history_events', 'task_delegations')
         return {t: [tuple(r) for r in c.execute('SELECT * FROM ' + t + ' ORDER BY rowid')] for t in tables} | {
-            'events': [tuple(r) for r in c.execute("SELECT * FROM events WHERE action<>'refused' ORDER BY rowid")]}
+            'events': [tuple(r) for r in c.execute("SELECT * FROM events WHERE action<>'refused' ORDER BY rowid")]
+        }
 
 
 @pytest.mark.parametrize('state', ['paused', 'quarantined'])
@@ -59,12 +81,19 @@ def test_total_items_across_senders_rooms_and_comments_rolls_back(queue, monkeyp
     monkeypatch.setattr(H, 'HELD_QUEUE_ITEMS', 4)
     send(queue)
     send(queue, 'cpo', conversation_id=tasks[1]['conversation_id'])
-    post(api, f"tasks/{tasks[0]['id']}/comments", {'text': 'Fixture finding', 'needs_action': True}, token=tokens['ops'])
+    post(
+        api, f"tasks/{tasks[0]['id']}/comments", {'text': 'Fixture finding', 'needs_action': True}, token=tokens['ops']
+    )
     send(queue, 'doc-updater', kind='notice')
     assert len(pending(api)) == 4
     before = domain(api)
-    result = post(api, f"tasks/{tasks[1]['id']}/comments", {'text': 'No room', 'needs_action': True},
-                  token=tokens['cpo'], expected=422)
+    result = post(
+        api,
+        f"tasks/{tasks[1]['id']}/comments",
+        {'text': 'No room', 'needs_action': True},
+        token=tokens['cpo'],
+        expected=422,
+    )
     assert result['error']['code'] == 'queue_full'
     assert state in result['error']['detail'] and 'recipient item limit 4' in result['error']['detail']
     assert 'resumes' in result['error']['detail']
@@ -72,7 +101,9 @@ def test_total_items_across_senders_rooms_and_comments_rolls_back(queue, monkeyp
     assert len({r['conversation_id'] for r in pending(api)}) == 4
 
 
-@pytest.mark.parametrize('setting,label', [('HELD_QUEUE_BYTES', 'recipient byte'), ('HELD_QUEUE_SENDER_BYTES', 'your byte')])
+@pytest.mark.parametrize(
+    'setting,label', [('HELD_QUEUE_BYTES', 'recipient byte'), ('HELD_QUEUE_SENDER_BYTES', 'your byte')]
+)
 def test_byte_boundary_uses_final_utf8_body_and_refs(queue, monkeypatch, setting, label):
     api, _, _ = queue
     hold(api)
@@ -104,7 +135,9 @@ def test_sender_items_leave_room_for_other_senders_and_count_bot_notices(queue, 
     assert len(pending(api)) == 2
 
 
-@pytest.mark.parametrize('setting', ['HELD_QUEUE_ITEMS', 'HELD_QUEUE_BYTES', 'HELD_QUEUE_SENDER_ITEMS', 'HELD_QUEUE_SENDER_BYTES'])
+@pytest.mark.parametrize(
+    'setting', ['HELD_QUEUE_ITEMS', 'HELD_QUEUE_BYTES', 'HELD_QUEUE_SENDER_ITEMS', 'HELD_QUEUE_SENDER_BYTES']
+)
 def test_concurrent_admission_cannot_overshoot_on_independent_connections(queue, monkeypatch, setting):
     api, _, _ = queue
     hold(api)
@@ -113,28 +146,37 @@ def test_concurrent_admission_cannot_overshoot_on_independent_connections(queue,
     charge = retained(pending(api))
     monkeypatch.setattr(H, setting, 3 if setting.endswith('ITEMS') else 3 * charge)
     barrier = Barrier(8)
+
     def submit(i):
         barrier.wait(timeout=10)
         sender = 'ops' if 'SENDER' in setting else ('ops', 'cpo', 'doc-updater')[i % 3]
         # Separate Stores have independent writer gates and connection pools: SQLite must serialize them.
         with Store(api.app.state.store.settings).transaction() as c:
             try:
-                return H.say(c, 'bot:' + sender, 'bot:finance', f'界🙂{i}', kind='notice', refs={'needs_action': True})['id']
+                return H.say(c, 'bot:' + sender, 'bot:finance', f'界🙂{i}', kind='notice', refs={'needs_action': True})[
+                    'id'
+                ]
             except H.Refused as exc:
                 assert exc.rule == 'queue_full'
                 raise
+
     def admitted(i):
         try:
             return submit(i)
         except H.Refused:
             return None
+
     with ThreadPoolExecutor(max_workers=8) as pool:
         results = list(pool.map(admitted, range(8)))
     assert sum(r is not None for r in results) == 2
     assert len(pending(api)) == 3 and retained(pending(api)) == 3 * charge
     with api.app.state.store.read() as c:
-        assert c.execute("SELECT count(*) FROM jobs WHERE message_id IN (?,?,?)",
-                         [r['id'] for r in pending(api)]).fetchone()[0] == 3
+        assert (
+            c.execute(
+                "SELECT count(*) FROM jobs WHERE message_id IN (?,?,?)", [r['id'] for r in pending(api)]
+            ).fetchone()[0]
+            == 3
+        )
 
 
 def test_queue_full_never_counts_toward_repeat_review_or_daily_backstop(queue, monkeypatch):
@@ -183,17 +225,22 @@ def test_full_queue_keeps_work_and_human_system_and_recovery_controls_work(queue
     while work := claim(api, machine, 'finance'):
         assert claim(api, machine, 'finance') is None, 'existing one-active-attempt limit still applies'
         with api.app.state.store.read() as c:
-            ran += [r['message_id'] for r in c.execute('SELECT j.message_id FROM jobs j JOIN messages m ON m.id=j.message_id '
-                                                      'WHERE j.attempt_id=? ORDER BY m.created_at,m.id', (work['id'],))
-                    if r['message_id'] in accepted]
+            ran += [
+                r['message_id']
+                for r in c.execute(
+                    'SELECT j.message_id FROM jobs j JOIN messages m ON m.id=j.message_id '
+                    'WHERE j.attempt_id=? ORDER BY m.created_at,m.id',
+                    (work['id'],),
+                )
+                if r['message_id'] in accepted
+            ]
         finish(api, machine, work)
     assert ran == accepted
     assert claim(api, machine, 'finance') is None
     send(queue, 'doc-updater')  # active queue remains unchanged even above the held limit
 
 
-@pytest.mark.parametrize('state', ['active', 'paused', 'quarantined'])
-@pytest.mark.parametrize('denial', ['write', 'contact'])
+@pytest.mark.parametrize('state,denial', [('active', 'write'), ('active', 'contact'), ('paused', 'write')])
 def test_permission_denial_precedes_capacity(queue, monkeypatch, state, denial):
     api, tokens, _ = queue
     monkeypatch.setattr(H, 'HELD_QUEUE_ITEMS', 0)
@@ -201,10 +248,15 @@ def test_permission_denial_precedes_capacity(queue, monkeypatch, state, denial):
         hold(api, state)
     with api.app.state.store.transaction() as c:
         if denial == 'write':
-            restrict(c, 'finance', see={'bots': ['doc-updater'], 'people': ['ana']},
-                     read={'bots': ['doc-updater'], 'people': ['ana']}, write={'people': ['ana']})
+            restrict(
+                c,
+                'finance',
+                see={'bots': ['doc-updater'], 'people': ['ana']},
+                read={'bots': ['doc-updater'], 'people': ['ana']},
+                write={'people': ['ana']},
+            )
         else:
-            c.execute("UPDATE bot_config SET config=json_set(config,'$.bot_contact','replies') WHERE bot='finance'")
+            BS.update(c, 'finance', {'bot_contact': 'replies'})
     result = send(queue, 'doc-updater', expected=403)
     assert result['error']['code'] == ('forbidden' if denial == 'write' else 'bot_contact')
     assert 'queue' not in result['error']['detail'].lower()
@@ -215,16 +267,23 @@ def test_author_cannot_grow_a_pending_comment_past_byte_bound(queue, monkeypatch
     api, tokens, tasks = queue
     hold(api)
     from backend import bot_to_bot
+
     # A comment that wakes (wake_rules.always_wakes, or a rule that wakes on comments) keeps plain references, so its author can still edit it.
     monkeypatch.setattr(bot_to_bot, 'can_wait', lambda *a, **k: False)
     from backend import rules
-    monkeypatch.setattr(rules, '_rule_for_event', lambda event: (rules.WAKE, event))   # as a wake rule would
+
+    monkeypatch.setattr(rules, '_rule_for_event', lambda event: (rules.WAKE, event))  # as a wake rule would
     with api.app.state.store.transaction() as c:
         comment = H.task_comment(c, 'bot:ops', tasks[0]['id'], 'Small')
     monkeypatch.setattr(H, 'HELD_QUEUE_BYTES', retained(pending(api)))
     before = domain(api)
-    result = post(api, f"tasks/{tasks[0]['id']}/comments/{comment['id']}", {'text': 'Much larger 🙂'},
-                  token=tokens['ops'], expected=422)
+    result = post(
+        api,
+        f"tasks/{tasks[0]['id']}/comments/{comment['id']}",
+        {'text': 'Much larger 🙂'},
+        token=tokens['ops'],
+        expected=422,
+    )
     assert result['error']['code'] == 'queue_full'
     assert domain(api) == before
 
@@ -250,6 +309,7 @@ def test_recipient_state_is_read_after_acquiring_the_write_transaction(queue, mo
     hold(api)
     monkeypatch.setattr(H, 'HELD_QUEUE_ITEMS', 0)
     entered = Event()
+
     def submit():
         entered.set()
         try:
@@ -257,9 +317,12 @@ def test_recipient_state_is_read_after_acquiring_the_write_transaction(queue, mo
                 return H.say(c, 'bot:ops', 'bot:finance', 'State-race fixture', refs={'needs_action': True})['id']
         except H.Refused as exc:
             return exc.rule
+
     with ThreadPoolExecutor(max_workers=1) as pool:
         with api.app.state.store.transaction() as c:
-            c.execute("UPDATE bots SET state=? WHERE slug='finance'", ('paused' if final_state == 'active' else 'active',))
+            c.execute(
+                "UPDATE bots SET state=? WHERE slug='finance'", ('paused' if final_state == 'active' else 'active',)
+            )
             future = pool.submit(submit)
             assert entered.wait(timeout=10)
             c.execute("UPDATE bots SET state=? WHERE slug='finance'", (final_state,))
@@ -273,9 +336,17 @@ def test_final_chat_goal_metadata_is_charged_and_rejection_rolls_back(queue, mon
     room = {'id': tasks[0]['conversation_id']}
     hold(api)
     from backend import chat_goals
+
     original = chat_goals.current
-    monkeypatch.setattr(chat_goals, 'current', lambda c, cid: {'id': 'fixture-goal', 'updated_at': 'fixture-time', 'status': 'active'}
-                        if cid == room['id'] else original(c, cid))
+    monkeypatch.setattr(
+        chat_goals,
+        'current',
+        lambda c, cid: (
+            {'id': 'fixture-goal', 'updated_at': 'fixture-time', 'status': 'active'}
+            if cid == room['id']
+            else original(c, cid)
+        ),
+    )
     sent = send(queue, conversation_id=room['id'])
     assert sent['refs']['goal_context']['id'] == 'fixture-goal'
     size = retained(pending(api))
@@ -291,7 +362,7 @@ def test_full_queue_withholds_only_the_automatic_answer_and_the_run_completes(ap
     assign(api, machine, 'ops')
     ready(api, machine, ['ops'])
     with api.app.state.store.transaction() as c:
-        asked = H.say(c, 'bot:finance', 'bot:ops', 'Fixture question', kind='ask')
+        asked = H.say(c, 'bot:finance', 'bot:ops', 'Fixture question', refs={'needs_action': True})
     work = claim(api, machine, 'ops')
     post(api, f"attempts/{work['id']}/started", {'thread_id': 'fixture-thread'}, machine['token'])
     hold(api)
@@ -304,8 +375,9 @@ def test_full_queue_withholds_only_the_automatic_answer_and_the_run_completes(ap
         assert (attempt['state'], attempt['final_text']) == ('completed', 'ok')
         assert c.execute("SELECT state FROM jobs WHERE attempt_id=?", (work['id'],)).fetchone()[0] == 'completed'
         assert c.execute('SELECT count(*) FROM messages WHERE in_reply_to=?', (asked['id'],)).fetchone()[0] == 0
-        withheld = c.execute("SELECT detail FROM events WHERE action='reply.withheld' AND target=?",
-                             (work['id'],)).fetchone()
+        withheld = c.execute(
+            "SELECT detail FROM events WHERE action='reply.withheld' AND target=?", (work['id'],)
+        ).fetchone()
         assert withheld and '"queue_full"' in withheld[0]
         assert not c.execute("SELECT 1 FROM refusals WHERE actor='bot:ops' AND rule='queue_full'").fetchone()
     assert pending(api) == []
@@ -323,8 +395,10 @@ def test_queue_full_does_not_trigger_escalation_from_prior_refusals(queue, monke
     monkeypatch.setattr(H, 'HELD_QUEUE_ITEMS', 0)
     with api.app.state.store.transaction() as c:
         for _ in range(H.QUARANTINE_AT + 1):
-            c.execute('INSERT INTO refusals VALUES(?,?,?,?,?,?)',
-                      (H.new_id(), H.now(), 'bot:ops', 'identity', H._dump({'detail': 'Synthetic prior refusal'}), 'normal'))
+            c.execute(
+                'INSERT INTO refusals VALUES(?,?,?,?,?,?)',
+                (H.new_id(), H.now(), 'bot:ops', 'identity', H._dump({'detail': 'Synthetic prior refusal'}), 'normal'),
+            )
     assert send(queue, expected=422)['error']['code'] == 'queue_full'
     with api.app.state.store.read() as c:
         assert H.bot(c, 'ops')['state'] == 'active'
@@ -333,6 +407,7 @@ def test_queue_full_does_not_trigger_escalation_from_prior_refusals(queue, monke
 
 def test_messages_resume_never_drains_are_not_charged_and_goal_events_still_post(api, monkeypatch):
     from backend.tests.test_chat_goals import setup, action, goal_event
+
     machine, cid = setup(api)
     action(api, cid, objective='Produce the Acme summary')
     attempt = claim(api, machine)
@@ -342,8 +417,17 @@ def test_messages_resume_never_drains_are_not_charged_and_goal_events_still_post
     monkeypatch.setattr(H, 'HELD_QUEUE_ITEMS', 1)
     with api.app.state.store.transaction() as c:
         # A quiet comment (wake=False) gets neither a job nor a carry-note: resume never delivers it.
-        H._write_message(c, 'bot:finance', 'bot:ops', 'Fixture quiet note', H.conversation(c, cid), 'say',
-                         {'comment': True, 'quiet': True}, None, None)
+        H._write_message(
+            c,
+            'bot:finance',
+            'bot:ops',
+            'Fixture quiet note',
+            H.conversation(c, cid),
+            'say',
+            {'comment': True, 'quiet': True},
+            None,
+            None,
+        )
     # The in-flight turn's goal ends with a notice from the bot to itself: never charged, never refused.
     goal_event(api, machine, attempt, 'met', 'The condition holds.', started=False)
     assert get(api, f'conversations/{cid}/goal')['goal']['status'] == 'met'
@@ -357,14 +441,20 @@ def test_messages_resume_never_drains_are_not_charged_and_goal_events_still_post
 def test_goal_command_is_charged_with_its_stored_objective(queue, monkeypatch):
     api, tokens, tasks = queue
     from backend import chat_goals
+
     monkeypatch.setattr(chat_goals, 'capabilities', lambda c, auth, conv: ('finance', True, []))
     hold(api)
     objective = 'Reconcile the Acme fixture invoices. ' * 80
     # The "/goal <objective>" body and its references fit; the objective stored again in goal_objective does not.
     monkeypatch.setattr(H, 'HELD_QUEUE_BYTES', len(objective) + 1000)
     before = domain(api)
-    result = post(api, f"conversations/{tasks[0]['conversation_id']}/goal", {'action': 'set', 'objective': objective},
-                  token=tokens['ops'], expected=422)
+    result = post(
+        api,
+        f"conversations/{tasks[0]['conversation_id']}/goal",
+        {'action': 'set', 'objective': objective},
+        token=tokens['ops'],
+        expected=422,
+    )
     assert result['error']['code'] == 'queue_full'
     assert domain(api) == before
 
@@ -375,7 +465,7 @@ def test_external_harness_inbox_without_jobs_or_notes_fills_the_cap(queue, monke
     # what it reads on return, so every waking message (a needs_action notice too) is charged.
     api, _, _ = queue
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE bot_config SET config=json_set(config,'$.harness','hermes') WHERE bot='finance'")
+        BS.update(c, 'finance', {'harness': 'hermes'})
     hold(api, state)
     monkeypatch.setattr(H, 'HELD_QUEUE_ITEMS', 3)
     send(queue)

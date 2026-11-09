@@ -24,12 +24,20 @@ async fn op_read(reference: &str, token: &str) -> String {
         return String::new();
     }
     let mut cmd = tokio::process::Command::new("op");
-    cmd.args(["read", "--no-newline", reference]).env("OP_SERVICE_ACCOUNT_TOKEN", token.trim()).stdin(std::process::Stdio::null()).kill_on_drop(true);
+    cmd.args(["read", "--no-newline", reference])
+        .env("OP_SERVICE_ACCOUNT_TOKEN", token.trim())
+        .stdin(std::process::Stdio::null())
+        .kill_on_drop(true);
     match tokio::time::timeout(OP_TIMEOUT, cmd.output()).await {
-        Ok(Ok(out)) if out.status.success() && !out.stdout.is_empty() => String::from_utf8_lossy(&out.stdout).into_owned(),
+        Ok(Ok(out)) if out.status.success() && !out.stdout.is_empty() => {
+            String::from_utf8_lossy(&out.stdout).into_owned()
+        }
         Ok(Ok(out)) => {
             let err = String::from_utf8_lossy(&out.stderr);
-            log(&format!("op: value did not resolve from 1Password: {}", err.trim().lines().last().unwrap_or("op failed")));
+            log(&format!(
+                "op: value did not resolve from 1Password: {}",
+                err.trim().lines().last().unwrap_or("op failed")
+            ));
             String::new()
         }
         Ok(Err(_)) => {
@@ -37,14 +45,21 @@ async fn op_read(reference: &str, token: &str) -> String {
             String::new()
         }
         Err(_) => {
-            log(&format!("op: op read timed out after {}s", OP_TIMEOUT.as_secs()));
+            log(&format!(
+                "op: op read timed out after {}s",
+                OP_TIMEOUT.as_secs()
+            ));
             String::new()
         }
     }
 }
 
 pub async fn import_credential(runner: &Arc<Runner>, item: &Value) -> Result<(), ApiError> {
-    let (iid, bot, key) = (text_of(&item["id"]), text_of(&item["bot"]), text_of(&item["env"]));
+    let (iid, bot, key) = (
+        text_of(&item["id"]),
+        text_of(&item["bot"]),
+        text_of(&item["env"]),
+    );
     let bot_re = Regex::new(r"^[a-z0-9]+(?:-[a-z0-9]+)*$").unwrap();
     let key_re = Regex::new(r"^[A-Z_][A-Z0-9_]*$").unwrap();
     let (mut value, mut problem) = (String::new(), String::new());
@@ -52,24 +67,50 @@ pub async fn import_credential(runner: &Arc<Runner>, item: &Value) -> Result<(),
         problem = "That is not a variable or bot this computer can read".into();
     } else {
         let secrets = runner.config.projects_dir().join("secrets");
-        value = read_env(&secrets.join(format!("{bot}.env"))).get(&key).cloned().unwrap_or_default();
+        value = read_env(&secrets.join(format!("{bot}.env")))
+            .get(&key)
+            .cloned()
+            .unwrap_or_default();
         if value.starts_with(OP_REF) {
             // A 1Password reference: hand over what it resolves to, as a run would.
-            let token = read_env(&secrets.join("_shared.env")).get("OP_SERVICE_ACCOUNT_TOKEN").cloned().unwrap_or_default();
+            let token = read_env(&secrets.join("_shared.env"))
+                .get("OP_SERVICE_ACCOUNT_TOKEN")
+                .cloned()
+                .unwrap_or_default();
             value = op_read(&value, &token).await;
             if value.is_empty() {
-                problem = format!("{key} in that bot's file is a 1Password reference that did not resolve");
+                problem = format!(
+                    "{key} in that bot's file is a 1Password reference that did not resolve"
+                );
             }
         } else if value.is_empty() {
             problem = format!("{key} is not in that bot's secrets file on this computer");
         }
     }
-    let body = if !value.is_empty() { json!({"value": value}) } else { json!({"error": problem}) };
-    let sent = runner.client.post(&format!("runner-credential-imports/{iid}/report"), &body, None).await;
+    let body = if !value.is_empty() {
+        json!({"value": value})
+    } else {
+        json!({"error": problem})
+    };
+    let sent = runner
+        .client
+        .post(
+            &format!("runner-credential-imports/{iid}/report"),
+            &body,
+            None,
+        )
+        .await;
     drop(body);
     drop(value);
     sent?;
-    log(&format!("Tico runner: credential import for {bot} {}", if problem.is_empty() { "sent" } else { "could not be read" }));
+    log(&format!(
+        "Tico runner: credential import for {bot} {}",
+        if problem.is_empty() {
+            "sent"
+        } else {
+            "could not be read"
+        }
+    ));
     Ok(())
 }
 

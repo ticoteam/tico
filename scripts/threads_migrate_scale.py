@@ -15,6 +15,7 @@ so the old schema is main's own, not this branch's. Example (on RunsOn, see the 
     python3 scripts/threads_migrate_scale.py start --db DB --out OUT.json [--kill-after SECONDS]
     python3 scripts/threads_migrate_scale.py compare --db DB --reference REF.sqlite
 """
+
 import argparse
 import hashlib
 import json
@@ -35,10 +36,31 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 HUMANS, BOTS = 100, 200
-SHARED_OPEN_MAX = BOTS                  # one open shared room per bot, as the old code left them
-ROOMS = ("assistant", "ceo", "docs", "coo", "cfo", "cmo", "cto", "hr", "ops", "sales", "support", "legal",
-         "finance", "people", "product", "growth", "design", "data", "security", "strategy")
+SHARED_OPEN_MAX = BOTS  # one open shared room per bot, as the old code left them
+ROOMS = (
+    "assistant",
+    "ceo",
+    "docs",
+    "coo",
+    "cfo",
+    "cmo",
+    "cto",
+    "hr",
+    "ops",
+    "sales",
+    "support",
+    "legal",
+    "finance",
+    "people",
+    "product",
+    "growth",
+    "design",
+    "data",
+    "security",
+    "strategy",
+)
 EPOCH = datetime(2025, 1, 1, tzinfo=timezone.utc)
+
 
 def uid(n):
     return str(uuid.UUID(int=n + 1, version=4))
@@ -54,11 +76,14 @@ def build(args):
     if db.exists():
         raise SystemExit(f"{db} exists; remove it first")
     db.parent.mkdir(parents=True, exist_ok=True)
-    make = ("import sys; from backend import hubdb; hubdb.connect(sys.argv[1]).close(); "
-            "print('user_version', hubdb.connect(sys.argv[1]).execute('PRAGMA user_version').fetchone()[0])")
+    make = (
+        "import sys; from backend import hubdb; hubdb.connect(sys.argv[1]).close(); "
+        "print('user_version', hubdb.connect(sys.argv[1]).execute('PRAGMA user_version').fetchone()[0])"
+    )
     env = dict(os.environ, PYTHONPATH=args.schema_src)
-    out = subprocess.run([sys.executable, "-c", make, str(db)], cwd=args.schema_src, env=env,
-                         capture_output=True, text=True, check=False)
+    out = subprocess.run(
+        [sys.executable, "-c", make, str(db)], cwd=args.schema_src, env=env, capture_output=True, text=True, check=False
+    )
     if out.returncode != 0:
         raise SystemExit("schema build failed:\n" + out.stderr[-3000:])
     print("pre-threads schema:", out.stdout.strip(), flush=True)
@@ -70,15 +95,22 @@ def build(args):
     humans = [f"human:h{i:03d}" for i in range(HUMANS)]
     bots = [f"bot:b{i:03d}" for i in range(BOTS)]
     conn.execute("BEGIN")
-    conn.executemany("INSERT INTO humans(id,name,email,teams) VALUES(?,?,?,?)",
-                     [(h[6:], f"Person {i}", f"person{i}@acme.example", "[]") for i, h in enumerate(humans)])
-    conn.executemany("INSERT INTO bots(id,slug,display_name,state,created_at) VALUES(?,?,?,?,?)",
-                     [(b[4:], b[4:], f"Bot {i}", "active", stamp(0)) for i, b in enumerate(bots)])
+    conn.executemany(
+        "INSERT INTO humans(id,name,email,teams) VALUES(?,?,?,?)",
+        [(h[6:], f"Person {i}", f"person{i}@acme.example", "[]") for i, h in enumerate(humans)],
+    )
+    conn.executemany(
+        "INSERT INTO bots(id,slug,display_name,state,created_at) VALUES(?,?,?,?,?)",
+        [(b[4:], b[4:], f"Bot {i}", "active", stamp(0)) for i, b in enumerate(bots)],
+    )
 
     # Conversation mix: direct, shared rooms (one open per bot, the rest closed), personal, task. Main's unique
     # indexes allow one open personal room per (owner, room) and one open shared room per room key.
-    mix = [("direct", args.conversations * 40 // 100), ("shared", args.conversations * 20 // 100),
-           ("personal", args.conversations * 20 // 100)]
+    mix = [
+        ("direct", args.conversations * 40 // 100),
+        ("shared", args.conversations * 20 // 100),
+        ("personal", args.conversations * 20 // 100),
+    ]
     mix.append(("task", args.conversations - sum(n for _, n in mix)))
     convs, tasks, conv_rows = [], [], []
     n_conv = 0
@@ -90,29 +122,73 @@ def build(args):
             bot = bots[rng.randrange(BOTS)]
             task_id = f"{10_000_000 + n_conv:032x}"
             if kind == "direct":
-                row = dict(scope="direct", kind="direct", room_key=None, owner_id=None, task_id=None,
-                           people=[human, bot], closed=None)
+                row = dict(
+                    scope="direct",
+                    kind="direct",
+                    room_key=None,
+                    owner_id=None,
+                    task_id=None,
+                    people=[human, bot],
+                    closed=None,
+                )
             elif kind == "shared":
                 # The first 200 are each bot's one open room (its Home once migrated); the rest are closed rooms.
-                row = dict(scope="shared", kind="shared", room_key=bots[k % BOTS][4:], owner_id=None, task_id=None,
-                           people=[human, bot], closed=None if k < SHARED_OPEN_MAX else stamp(n_conv * 60))
+                row = dict(
+                    scope="shared",
+                    kind="shared",
+                    room_key=bots[k % BOTS][4:],
+                    owner_id=None,
+                    task_id=None,
+                    people=[human, bot],
+                    closed=None if k < SHARED_OPEN_MAX else stamp(n_conv * 60),
+                )
             elif kind == "personal":
                 # One open personal room per (owner, room): the first 2,000 are open (100 people x 20 rooms).
                 owner = humans[k % HUMANS]
-                row = dict(scope="personal", kind="personal", room_key=ROOMS[(k // HUMANS) % len(ROOMS)],
-                           owner_id=owner, task_id=None, people=[owner, bot],
-                           closed=None if k < 2000 else stamp(n_conv * 60))
+                row = dict(
+                    scope="personal",
+                    kind="personal",
+                    room_key=ROOMS[(k // HUMANS) % len(ROOMS)],
+                    owner_id=owner,
+                    task_id=None,
+                    people=[owner, bot],
+                    closed=None if k < 2000 else stamp(n_conv * 60),
+                )
             else:
                 tasks.append((task_id, f"Task {n_conv}", "open", stamp(n_conv)))
-                row = dict(scope="task", kind="task", room_key=None, owner_id=None, task_id=task_id,
-                           people=[human, bot], closed=None)
+                row = dict(
+                    scope="task",
+                    kind="task",
+                    room_key=None,
+                    owner_id=None,
+                    task_id=task_id,
+                    people=[human, bot],
+                    closed=None,
+                )
             convs.append((cid, row))
-            conv_rows.append((cid, row["kind"], row["scope"], row["room_key"], row["owner_id"], row["task_id"],
-                              json.dumps(row["people"]), stamp(n_conv), None, row["closed"]))
-    conn.executemany("INSERT INTO tasks(id,title,status,created_at,updated_at) VALUES(?,?,?,?,?)",
-                     [(t[0], t[1], t[2], t[3], t[3]) for t in tasks])
-    conn.executemany("INSERT INTO conversations(id,kind,scope,room_key,owner_id,task_id,participants,created_at,"
-                     "last_message_at,closed_at) VALUES(?,?,?,?,?,?,?,?,?,?)", conv_rows)
+            conv_rows.append(
+                (
+                    cid,
+                    row["kind"],
+                    row["scope"],
+                    row["room_key"],
+                    row["owner_id"],
+                    row["task_id"],
+                    json.dumps(row["people"]),
+                    stamp(n_conv),
+                    None,
+                    row["closed"],
+                )
+            )
+    conn.executemany(
+        "INSERT INTO tasks(id,title,status,created_at,updated_at) VALUES(?,?,?,?,?)",
+        [(t[0], t[1], t[2], t[3], t[3]) for t in tasks],
+    )
+    conn.executemany(
+        "INSERT INTO conversations(id,kind,scope,room_key,owner_id,task_id,participants,created_at,"
+        "last_message_at,closed_at) VALUES(?,?,?,?,?,?,?,?,?,?)",
+        conv_rows,
+    )
     conn.execute("COMMIT")
 
     # Messages, in SQL (a Python row loop is too slow for 2M rows): one statement per conversation, ids and times
@@ -139,22 +215,35 @@ def build(args):
         "delivered_at,read_at,deleted_at) "
         "SELECT id, :cid, sender_id, recipient_id, kind, body, refs, in_reply_to, created_at, "
         "  CASE WHEN r1<90 THEN created_at END, CASE WHEN r1<90 AND r2<80 THEN created_at END, "
-        "  CASE WHEN r3<10 THEN created_at END FROM raw")
+        "  CASE WHEN r3<10 THEN created_at END FROM raw"
+    )
     for index, ((cid, row), count) in enumerate(zip(convs, counts, strict=True)):
-        params = {"count": count, "start": start, "cid": cid, "human": row["people"][0], "bot": row["people"][1],
-                  "other": bots[rng.randrange(BOTS)], "is_task": 1 if row["kind"] == "task" else 0,
-                  "task": row["task_id"] or tasks[rng.randrange(len(tasks))][0]}
+        params = {
+            "count": count,
+            "start": start,
+            "cid": cid,
+            "human": row["people"][0],
+            "bot": row["people"][1],
+            "other": bots[rng.randrange(BOTS)],
+            "is_task": 1 if row["kind"] == "task" else 0,
+            "task": row["task_id"] or tasks[rng.randrange(len(tasks))][0],
+        }
         conn.execute(insert, params)
-        conn.execute("UPDATE conversations SET last_message_at=(SELECT created_at FROM messages WHERE id=?) WHERE id=?",
-                     (f"{start + count:032x}", cid))
+        conn.execute(
+            "UPDATE conversations SET last_message_at=(SELECT created_at FROM messages WHERE id=?) WHERE id=?",
+            (f"{start + count:032x}", cid),
+        )
         start += count
         if index % 5000 == 4999:
             conn.execute("COMMIT")
             conn.execute("BEGIN")
     conn.execute("COMMIT")
     conn.close()
-    print(f"built {n_conv} conversations, {start} messages, {BOTS} bots, {HUMANS} people, {len(tasks)} tasks "
-          f"in {time.time() - t0:.1f}s; file {db.stat().st_size / 1e6:.0f} MB", flush=True)
+    print(
+        f"built {n_conv} conversations, {start} messages, {BOTS} bots, {HUMANS} people, {len(tasks)} tasks "
+        f"in {time.time() - t0:.1f}s; file {db.stat().st_size / 1e6:.0f} MB",
+        flush=True,
+    )
 
 
 # ----------------------------------------------------------------------------- start
@@ -200,7 +289,7 @@ def files_bytes(db):
 
 def peak_rss_mb():
     peak = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
-    return peak / (1024 * 1024) if sys.platform == "darwin" else peak / 1024      # bytes on macOS, KB on Linux
+    return peak / (1024 * 1024) if sys.platform == "darwin" else peak / 1024  # bytes on macOS, KB on Linux
 
 
 def start(args):
@@ -218,10 +307,18 @@ def start(args):
     done = conn.execute("SELECT 1 FROM registry_metadata WHERE key='threads-migration'").fetchone() is not None
     messages = conn.execute("SELECT COUNT(*) FROM messages").fetchone()[0]
     conn.close()
-    result = {"seconds": round(total, 2), "longest_lock_hold_s": round(max(probe.holds, default=0), 2),
-              "lock_holds_over_5s": sum(1 for h in probe.holds if h > 5), "lock_holds": len(probe.holds),
-              "peak_rss_mb": round(peak_rss_mb()), "db_bytes_before": before, "db_bytes_after": files_bytes(db),
-              "wal_max_bytes": probe.wal_max, "threads_migrated": done, "messages": messages}
+    result = {
+        "seconds": round(total, 2),
+        "longest_lock_hold_s": round(max(probe.holds, default=0), 2),
+        "lock_holds_over_5s": sum(1 for h in probe.holds if h > 5),
+        "lock_holds": len(probe.holds),
+        "peak_rss_mb": round(peak_rss_mb()),
+        "db_bytes_before": before,
+        "db_bytes_after": files_bytes(db),
+        "wal_max_bytes": probe.wal_max,
+        "threads_migrated": done,
+        "messages": messages,
+    }
     print(json.dumps(result), flush=True)
     if args.out:
         Path(args.out).write_text(json.dumps(result, indent=2) + "\n")
@@ -244,14 +341,23 @@ def start_then_kill(args):
 
 
 # ----------------------------------------------------------------------------- compare
-DELIVERY_COLUMNS = ("message_id", "recipient", "mode", "reason", "cause", "state", "revision", "delivered_at",
-                    "read_at")
+DELIVERY_COLUMNS = (
+    "message_id",
+    "recipient",
+    "mode",
+    "reason",
+    "cause",
+    "state",
+    "revision",
+    "delivered_at",
+    "read_at",
+)
 CHECKS = {
     "conversations": "SELECT id,audience,owner_id,root_id,path,last_seq,last_unread_seq,archived_at,scope,room_key "
-                     "FROM conversations ORDER BY id",
+    "FROM conversations ORDER BY id",
     "messages": "SELECT id,conversation_id,seq,restricted,legacy_audience,deleted_at,revision FROM messages ORDER BY id",
     "message_deliveries": "SELECT " + ",".join(DELIVERY_COLUMNS) + " FROM message_deliveries "
-                          "ORDER BY message_id, recipient",
+    "ORDER BY message_id, recipient",
 }
 
 
@@ -271,10 +377,12 @@ def origin_ok(db):
     conn = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
     try:
         missing = conn.execute("SELECT COUNT(*) FROM messages WHERE origin_id IS NULL").fetchone()[0]
-        dupes = conn.execute("SELECT COUNT(*) FROM (SELECT origin_id FROM messages GROUP BY origin_id "
-                             "HAVING COUNT(*)>1)").fetchone()[0]
-        seq_dupes = conn.execute("SELECT COUNT(*) FROM (SELECT seq FROM messages GROUP BY seq HAVING COUNT(*)>1)"
-                                 ).fetchone()[0]
+        dupes = conn.execute(
+            "SELECT COUNT(*) FROM (SELECT origin_id FROM messages GROUP BY origin_id HAVING COUNT(*)>1)"
+        ).fetchone()[0]
+        seq_dupes = conn.execute(
+            "SELECT COUNT(*) FROM (SELECT seq FROM messages GROUP BY seq HAVING COUNT(*)>1)"
+        ).fetchone()[0]
         return {"origin_missing": missing, "origin_duplicates": dupes, "seq_duplicates": seq_dupes}
     finally:
         conn.close()
@@ -286,6 +394,7 @@ def reader_sample(db, sample, viewers):
     sets. Viewers are bare Identity objects (no Auth), so this checks the stored rows and their audiences; the column
     digests above cover the rest of what the migration writes."""
     from backend import threads
+
     conn = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
     conn.row_factory = sqlite3.Row
     try:
@@ -299,7 +408,7 @@ def reader_sample(db, sample, viewers):
                     try:
                         if threads.readable(conn, viewer, dict(row)):
                             found.append(f"{table}:{row['id']}:{index}")
-                    except sqlite3.OperationalError as error:       # a table the bare hub lacks (bot_config)
+                    except sqlite3.OperationalError as error:  # a table the bare hub lacks (bot_config)
                         errors[str(error)] = errors.get(str(error), 0) + 1
                         found.append(f"{table}:{row['id']}:{index}:error:{error}")
         if errors:
@@ -317,15 +426,23 @@ def compare(args):
     rng = random.Random(3)
     humans = [f"human:h{i:03d}" for i in range(HUMANS)]
     from backend.auth import Identity
+
     viewers = [Identity(a, "human", email="") for a in rng.sample(humans, 20)]
     viewers += [Identity(f"bot:b{i:03d}", "bot", agent="standing") for i in rng.sample(range(BOTS), 20)]
     sampled = reader_sample(args.db, args.sample, viewers)
     reference = reader_sample(args.reference, args.sample, viewers)
-    report["reader_sets_sample"] = {"pairs": sampled[0], "digest": sampled[1], "reference_digest": reference[1],
-                                    "same": sampled == reference}
+    report["reader_sets_sample"] = {
+        "pairs": sampled[0],
+        "digest": sampled[1],
+        "reference_digest": reference[1],
+        "same": sampled == reference,
+    }
     report["message_checks"] = origin_ok(args.db)
-    report["same"] = (all(report[c]["same"] for c in CHECKS) and report["reader_sets_sample"]["same"]
-                      and not any(report["message_checks"].values()))
+    report["same"] = (
+        all(report[c]["same"] for c in CHECKS)
+        and report["reader_sets_sample"]["same"]
+        and not any(report["message_checks"].values())
+    )
     print(json.dumps(report, indent=2))
     if not report["same"]:
         raise SystemExit(1)

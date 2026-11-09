@@ -4,6 +4,7 @@
 ok, detail}` each, so a rule that failed (a wake for a planned bot) shows why on the delivery. `rules` counts only the
 ones that worked.
 """
+
 SCHEMA = """
 ALTER TABLE trigger_deliveries ADD COLUMN rule_results TEXT NOT NULL DEFAULT '';
 """

@@ -119,12 +119,12 @@ async function open(browser, {viewport = {width: 1440, height: 900}, theme = 'da
     const req = route.request(), url = new URL(req.url()), p = url.pathname, method = req.method();
     const json = (body, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
     if (url.origin !== 'https://tico-ui.test') return route.abort();
-    const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|css))$/);
+    const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/);
     if (ui && fs.existsSync(uiFile(ui[1])))
       return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]), 'utf8')});
     if (p.startsWith('/vendor/fonts/') && fs.existsSync(uiFile(p.slice(1)))) return route.fulfill({contentType: 'font/woff2', body: fs.readFileSync(uiFile(p.slice(1)))});
     if (p === '/vendor/marked.min.js') return route.fulfill({contentType: 'application/javascript', body: fs.readFileSync(uiFile('vendor/marked.min.js'), 'utf8')});
-    if (p.endsWith('.js')) return route.fulfill({contentType: 'application/javascript', body: ''});
+    if (/\.(?:js|ts)$/.test(p)) return route.fulfill({contentType: 'application/javascript', body: ''});
     if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
     if (p === '/api/me') return json(me);
     if (p === '/api/employees') return json(bots);
@@ -142,12 +142,12 @@ async function open(browser, {viewport = {width: 1440, height: 900}, theme = 'da
         .map(t => ({...t, links: (t.links || []).map(({detail, pr_sha, ...l}) => l)}));
       return json({tasks: rows, next_offset: null});
     }
-    // The default sidebar (backend/bot_task_tabs.py): Assigned to Others is a filter tab the server counts.
-    if (/^\/api\/v2\/bots\/[^/]+\/task-tabs$/.test(p)) return json({tabs: [{builtin: 'needs', name: 'Needs You'}, {builtin: 'active', name: 'Doing'},
-      {builtin: 'blocked', name: 'Blocked'}, {builtin: 'done', name: 'Done Recently'}, {name: 'Assigned to Others', conditions: []}], widgets: null, can_edit: false});
+    // The default sidebar (backend/bot_task_tabs.py): Assigned to others is a filter tab the server counts.
+    if (/^\/api\/v2\/bots\/[^/]+\/task-tabs$/.test(p)) return json({tabs: [{builtin: 'needs', name: 'Needs you'}, {builtin: 'active', name: 'Doing'},
+      {builtin: 'blocked', name: 'Blocked'}, {builtin: 'done', name: 'Done recently'}, {name: 'Assigned to others', conditions: []}], widgets: null, can_edit: false});
     if (/^\/api\/v2\/bots\/[^/]+\/task-tabs\/tasks$/.test(p)) {
       const others = data.tasks.filter(t => t.requester_id === 'bot:eng' && !['human:ana', 'bot:eng'].includes(t.owner_id) && ['open', 'doing', 'waiting'].includes(t.status));
-      return json({tabs: [{key: 'c4', name: 'Assigned to Others', count: others.length, ids: others.map(t => t.id)}], tasks: others});
+      return json({tabs: [{key: 'c4', name: 'Assigned to others', count: others.length, ids: others.map(t => t.id)}], tasks: others});
     }
     if (p === '/api/v2/tasks' && method === 'POST') {
       const body = req.postDataJSON(); writes.push({method, p, body});
@@ -222,6 +222,21 @@ async function desktop(browser) {
     return out;
   });
   assert.match(bare.text, /^unknown repo\s*·\s*tico\/t-check-misc/);
+  const retired = await page.evaluate(() => {
+    const host = document.createElement('ul');
+    host.innerHTML = taskCodeLineHTML({id: 'retired', kind: 'worktree', repo: 'acme/web', branch: 'tico/retired',
+      state: 'retired', detail: {checkout_state: 'retired', last_commit: 'abcdef0123456789', ahead: 2,
+        cleanup_gave_up: true, error: 'Left on a retired computer: 2 unpushed commits'}}, true);
+    const recovered = document.createElement('ul');
+    recovered.innerHTML = taskCodeLineHTML({kind: 'worktree', repo: 'acme/web', state: 'present',
+      detail: {retired_worktree: {ahead: 2, last_commit: 'abcdef0123456789'}}}, true);
+    return {text: host.textContent, retry: !!host.querySelector('[data-code-retry]'), recovered: recovered.textContent};
+  });
+  assert.match(retired.text, /retired computer/);
+  assert.match(retired.text, /abcdef012345/);
+  assert.match(retired.text, /↑2/);
+  assert.equal(retired.retry, false, 'a retired computer cannot retry cleanup');
+  assert.match(retired.recovered, /2 unpushed commits stayed on the retired computer/);
   // A check waiting for a free reviewer (backend/check_pools.py) shows under Code, even on a task with no links yet.
   const waiting = await page.evaluate(() => {
     const host = document.createElement('div');
@@ -493,7 +508,8 @@ async function botDetail(browser) {
     const d = page.locator('#task-modal'), row = page.locator('[data-task-detail="t-checkout"]');
     await row.locator('[data-task-detail-open]').waitFor();
     assert.equal(await row.locator('details, .tbody').count(), 0, 'no separate inline detail');
-    assert.equal(await row.locator('.task-status').count(), 1, 'Active needs per-task status');
+    // 9d11efec7: a Doing row drops the status its tab shares (the pill still says Doing).
+    assert.equal(await row.locator('.task-status').count(), 0, 'a Doing row drops the shared status');
     assert.equal(await page.locator('.bot-done .task-status, .bot-done .pill').count(), 0, 'Done already supplies status context');
     await page.evaluate(() => { window.botBefore = BOT; window.botWorkBefore = document.querySelector('#bot-work'); });
     await row.locator('[data-task-detail-open]').focus();
@@ -609,9 +625,37 @@ async function botDetail(browser) {
   console.log('bot task detail parity, files, comments, related tasks and return: ok');
 }
 
+async function retirementHistory(browser) {
+  for (const width of [1440, 390]) {
+    const {page, errors} = await open(browser, {viewport: {width, height: 900}});
+    const rail = page.locator('#task-modal [data-task-rail]');
+    await rail.locator('.code-line').first().waitFor();
+    await rail.evaluate(el => {
+      const first = {computer_id: 'first', ahead: 2, dirty_files: 1, last_commit: 'a'.repeat(40)};
+      const second = {computer_id: 'second', ahead: 4, dirty_files: 3, last_commit: 'b'.repeat(40)};
+      const host = document.createElement('ul'); host.className = 'code-list';
+      host.innerHTML = taskCodeLineHTML({id: 'recovered-twice', kind: 'worktree', repo: 'acme/web', state: 'present',
+        detail: {retired_worktree: second, retired_worktrees: [first, second]}}, true);
+      el.append(host);
+    });
+    const warning = rail.locator('[data-code-link="recovered-twice"] .code-error');
+    await warning.scrollIntoViewIfNeeded();
+    assert.equal(await warning.isVisible(), true);
+    const text = await warning.innerText();
+    assert.match(text, /2 unpushed commits/); assert.match(text, /4 unpushed commits/);
+    assert.match(text, /1 changed files/); assert.match(text, /3 changed files/);
+    assert.ok(text.includes('a'.repeat(40)) && text.includes('b'.repeat(40)));
+    assert.equal(text.split('4 unpushed commits').length - 1, 1, 'the latest report appears once');
+    assert.ok(await warning.evaluate(el => el.scrollWidth - el.clientWidth <= 1), 'retired heads wrap inside the rail');
+    assert.deepEqual(errors, []);
+    await page.close();
+  }
+  console.log('worktree retirement history at desktop and phone widths: ok');
+}
+
 module.exports = {open};
 if (require.main === module) (async () => {
   const browser = await chromium.launch({channel: process.env.TICO_BROWSER_CHANNEL ?? 'chrome', headless: true});
-  try { await desktop(browser); await phone(browser); await member(browser); await botPage(browser); await botDetail(browser); }
+  try { await desktop(browser); await phone(browser); await member(browser); await botPage(browser); await botDetail(browser); await retirementHistory(browser); }
   finally { await browser.close(); }
 })().catch(e => { console.error(e); process.exit(1); });

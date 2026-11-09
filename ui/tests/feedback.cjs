@@ -1,4 +1,4 @@
-// 👍 / 👎 on a bot's work (ui/app/feedback.js), against a fake of the feedback routes (backend/feedback.py). Fixtures only.
+// 👍 / 👎 on a bot's work (ui/app/feedback.ts), against a fake of the feedback routes (backend/feedback.py). Fixtures only.
 //  - an older server (404 on the batched read) shows no control at all, and nothing asks for reasons;
 //  - one batched read per subject type for what is drawn, never one per message, and never a person's own message;
 //  - 👍 saves in one tap and a second tap removes it; 👎 saves, then its sheet offers recent reasons as chips, says
@@ -80,7 +80,7 @@ async function chatPage(browser, {phone = false, theme = 'dark', off = false, ha
     const p = new URL(route.request().url()).pathname;
     const json = body => route.fulfill({contentType: 'application/json', body: JSON.stringify(body)});
     if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
-    const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|css))$/);
+    const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/);
     if (ui && fs.existsSync(uiFile(ui[1]))) return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]), 'utf8')});
     if (/\/marked\.min\.js$/.test(p)) return route.fulfill({contentType: 'application/javascript', body: fs.readFileSync(uiFile('vendor/marked.min.js'), 'utf8')});
     if (p.startsWith('/vendor/fonts/') && fs.existsSync(uiFile(p.slice(1)))) return route.fulfill({contentType: 'font/woff2', body: fs.readFileSync(uiFile(p.slice(1)))});
@@ -382,7 +382,7 @@ async function threadMessage(browser) {
     if (/\/marked\.min\.js$/.test(p)) return route.fulfill({contentType: 'application/javascript', body: fs.readFileSync(uiFile('vendor/marked.min.js'), 'utf8')});
     if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
     if (p.startsWith('/vendor/fonts/') && fs.existsSync(uiFile(p.slice(1)))) return route.fulfill({contentType: 'font/woff2', body: fs.readFileSync(uiFile(p.slice(1)))});
-    const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|css))$/);
+    const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/);
     if (ui && fs.existsSync(uiFile(ui[1]))) return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]), 'utf8')});
     if (p === '/api/me') return json({id: 'ana', name: 'Ana', role: 'owner', cloud: true});
     if (p === '/api/employees') return json([bot]);
@@ -401,7 +401,7 @@ async function threadMessage(browser) {
   await page.waitForFunction(() => document.body.classList.contains('fb-on'));
   assert.equal(await page.locator('.th-msg[data-mid="h1"] [data-fb]').count(), 0);
   await msg.hover();
-  assert.deepEqual(await msg.locator('.th-acts button').evaluateAll(bs => bs.map(b => b.getAttribute('aria-label'))), ['Acknowledge', 'Message menu'], 'the toolbar is as it was');
+  assert.deepEqual(await msg.locator('.th-acts button').evaluateAll(bs => bs.map(b => b.getAttribute('aria-label'))), ['React', 'Reply', 'Copy'], 'the hover bar');
   assert.deepEqual(await msg.locator('.fb-row button').evaluateAll(bs => bs.map(b => b.getAttribute('aria-label'))), ['Copy message', 'Good', 'Not good']);
   const under = await msg.evaluate(m => m.querySelector('.fb-row').getBoundingClientRect().top >= m.querySelector('.th-react').getBoundingClientRect().bottom - 1);
   assert.equal(under, true, 'the row sits under the words and reactions');

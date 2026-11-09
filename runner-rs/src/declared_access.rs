@@ -14,24 +14,69 @@ pub const MAX_ENTRIES: usize = 30;
 pub const MAX_CAN: usize = 20;
 pub const MAX_SCOPE: usize = 20;
 pub const MAX_FORWARD: usize = 20;
-const DATABASE_SERVICES: &[&str] = &["postgres", "postgresql", "mysql", "mariadb", "sqlite", "mongodb"];
+const DATABASE_SERVICES: &[&str] = &[
+    "postgres",
+    "postgresql",
+    "mysql",
+    "mariadb",
+    "sqlite",
+    "mongodb",
+];
 /// The fields, beyond service, identity, can, env and note, that say what a tool is scoped to.
 pub const SCOPE_KEYS: &[&str] = &[
-    "database", "channels", "channel", "project", "projects", "mailbox", "mailboxes", "sites", "site", "repo", "repos",
-    "repositories", "org", "organization", "workspace", "account", "region", "domain", "domains", "calendars", "folders",
-    "drive", "drives", "bucket", "buckets", "table", "tables", "dataset", "datasets", "collections", "read_only", "org_read",
-    "max_rows", "timeout_seconds", "read_preference",
+    "database",
+    "channels",
+    "channel",
+    "project",
+    "projects",
+    "mailbox",
+    "mailboxes",
+    "sites",
+    "site",
+    "repo",
+    "repos",
+    "repositories",
+    "org",
+    "organization",
+    "workspace",
+    "account",
+    "region",
+    "domain",
+    "domains",
+    "calendars",
+    "folders",
+    "drive",
+    "drives",
+    "bucket",
+    "buckets",
+    "table",
+    "tables",
+    "dataset",
+    "datasets",
+    "collections",
+    "read_only",
+    "org_read",
+    "max_rows",
+    "timeout_seconds",
+    "read_preference",
 ];
 
 /// `" ".join(str(value).split())[:limit]`.
 pub fn one_line(value: &str, limit: usize) -> String {
-    value.split_whitespace().collect::<Vec<_>>().join(" ").chars().take(limit).collect()
+    value
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .chars()
+        .take(limit)
+        .collect()
 }
 
 /// A field as one line of text with any URL password taken out; "" for a missing one.
 pub fn text(value: Option<&Value>, limit: usize) -> String {
     static URL_PASSWORD: OnceLock<Regex> = OnceLock::new();
-    let re = URL_PASSWORD.get_or_init(|| Regex::new(r"(?i)(\b[a-z][a-z0-9+.-]*://)[^/\s:@]+:[^/\s@]+@").unwrap());
+    let re = URL_PASSWORD
+        .get_or_init(|| Regex::new(r"(?i)(\b[a-z][a-z0-9+.-]*://)[^/\s:@]+:[^/\s@]+@").unwrap());
     match value {
         None | Some(Value::Null) => String::new(),
         Some(v) => one_line(&re.replace_all(&py_str(v), "$1"), limit),
@@ -52,7 +97,13 @@ pub fn scope_of(entry: &Value) -> Map<String, Value> {
     for key in SCOPE_KEYS {
         match entry.get(*key) {
             Some(Value::Array(items)) => {
-                let kept: Vec<Value> = items.iter().take(20).map(|i| scalar(i, 100)).filter(|s| !s.is_empty()).map(Value::String).collect();
+                let kept: Vec<Value> = items
+                    .iter()
+                    .take(20)
+                    .map(|i| scalar(i, 100))
+                    .filter(|s| !s.is_empty())
+                    .map(Value::String)
+                    .collect();
                 if !kept.is_empty() {
                     result.insert(key.to_string(), Value::Array(kept));
                 }
@@ -75,11 +126,15 @@ pub fn scope_of(entry: &Value) -> Map<String, Value> {
 
 /// The variable the credential arrives in: the declared one, else the database default.
 pub fn env_name(entry: &Value) -> String {
-    let name = crate::manifest::text_or_empty(entry.get("env")).trim().to_string();
+    let name = crate::manifest::text_or_empty(entry.get("env"))
+        .trim()
+        .to_string();
     if !name.is_empty() {
         return name;
     }
-    let database = crate::manifest::text_or_empty(entry.get("database")).trim().to_string();
+    let database = crate::manifest::text_or_empty(entry.get("database"))
+        .trim()
+        .to_string();
     let service = crate::manifest::text_or_empty(entry.get("service")).to_lowercase();
     if !database.is_empty() && DATABASE_SERVICES.contains(&service.as_str()) {
         return format!("DB_{}_URL", database.to_uppercase().replace('-', "_"));
@@ -95,16 +150,32 @@ pub fn credential_state(entry: &Value, name: &str, environment: &Env) -> &'stati
     if name.is_empty() {
         return "not-declared";
     }
-    if environment.get(name).is_some_and(|v| !v.trim().is_empty()) { "present" } else { "missing" }
+    if environment.get(name).is_some_and(|v| !v.trim().is_empty()) {
+        "present"
+    } else {
+        "missing"
+    }
 }
 
 fn has_mcp(entry: &Value) -> bool {
-    !matches!(entry.get("mcp"), None | Some(Value::Null)) && entry["mcp"] != json!({}) && entry["mcp"] != json!("")
+    !matches!(entry.get("mcp"), None | Some(Value::Null))
+        && entry["mcp"] != json!({})
+        && entry["mcp"] != json!("")
 }
 
 /// The entries a report row is made for: objects with a service, in order.
 pub fn reported_entries(access: &Value) -> Vec<&Value> {
-    access.as_array().into_iter().flatten().filter(|e| e.is_object() && !crate::manifest::text_or_empty(e.get("service")).trim().is_empty()).collect()
+    access
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|e| {
+            e.is_object()
+                && !crate::manifest::text_or_empty(e.get("service"))
+                    .trim()
+                    .is_empty()
+        })
+        .collect()
 }
 
 /// The report rows for one bot's tools; [] when absent or malformed. `held` names variables this computer keeps
@@ -118,12 +189,20 @@ pub fn declared_tools(access: &Value, environment: &Env, held: &[String]) -> Vec
             Some(Value::Array(a)) => a.clone(),
             _ => vec![],
         };
-        let verbs: Vec<Value> = can.iter().take(MAX_CAN).map(|v| text(Some(v), 40)).filter(|v| !v.is_empty()).map(Value::String).collect();
+        let verbs: Vec<Value> = can
+            .iter()
+            .take(MAX_CAN)
+            .map(|v| text(Some(v), 40))
+            .filter(|v| !v.is_empty())
+            .map(Value::String)
+            .collect();
         let scope: Map<String, Value> = scope_of(entry)
             .into_iter()
             .map(|(k, v)| {
                 let v = match v {
-                    Value::Array(items) => Value::Array(items.iter().map(|i| json!(text(Some(i), 100))).collect()),
+                    Value::Array(items) => {
+                        Value::Array(items.iter().map(|i| json!(text(Some(i), 100))).collect())
+                    }
                     other => json!(text(Some(&other), 200)),
                 };
                 (k, v)
@@ -141,7 +220,12 @@ pub fn declared_tools(access: &Value, environment: &Env, held: &[String]) -> Vec
         if has_mcp(entry) {
             match crate::mcp::clean_mcp(&entry["mcp"], &name) {
                 Ok(m) => row["mcp"] = m,
-                Err(e) => row["problem"] = json!(text(Some(&json!(format!("The MCP block is not valid: {e}"))), 300)),
+                Err(e) => {
+                    row["problem"] = json!(text(
+                        Some(&json!(format!("The MCP block is not valid: {e}"))),
+                        300
+                    ))
+                }
             }
         }
         if crate::manifest::text_or_empty(entry.get("identity")).contains("{{") {
@@ -193,19 +277,39 @@ mod tests {
             {"service": "docs", "env": "K", "mcp": {"url": "https://u:pw@x.example/mcp"}, "identity": "see https://bob:hunter2@x.example/"},
             {"no": "service"}, "text"
         ]);
-        let env: Env = [("POSTHOG_KEY".to_string(), "phc_value".to_string())].into_iter().collect();
+        let env: Env = [("POSTHOG_KEY".to_string(), "phc_value".to_string())]
+            .into_iter()
+            .collect();
         let rows = declared_tools(&access, &env, &["GOOGLE_SA_KEY".to_string()]);
         assert_eq!(rows.len(), 6);
-        assert_eq!(rows[0], json!({"service": "PostHog", "identity": "analytics@acme.example", "can": ["read"], "scope": {},
-                                   "env": "POSTHOG_KEY", "note": "dashboards only", "credential": "present"}));
+        assert_eq!(
+            rows[0],
+            json!({"service": "PostHog", "identity": "analytics@acme.example", "can": ["read"], "scope": {},
+                                   "env": "POSTHOG_KEY", "note": "dashboards only", "credential": "present"})
+        );
         assert_eq!(rows[1]["env"], "DB_WARE_HOUSE_URL");
         assert_eq!(rows[1]["credential"], "missing");
-        assert_eq!(rows[1]["scope"], json!({"database": "ware-house", "channels": ["#a", "7"], "read_only": "yes"}));
-        assert_eq!((rows[2]["credential"].as_str(), rows[2]["held"].as_bool()), (Some("present"), Some(true)));
-        assert_eq!(rows[2]["problem"], "The identity is still the template placeholder");
+        assert_eq!(
+            rows[1]["scope"],
+            json!({"database": "ware-house", "channels": ["#a", "7"], "read_only": "yes"})
+        );
+        assert_eq!(
+            (rows[2]["credential"].as_str(), rows[2]["held"].as_bool()),
+            (Some("present"), Some(true))
+        );
+        assert_eq!(
+            rows[2]["problem"],
+            "The identity is still the template placeholder"
+        );
         assert_eq!(rows[3]["credential"], "hub-vault");
-        assert!(rows[4]["problem"].as_str().unwrap().starts_with("The MCP block is not valid: mcp.url must be https"));
-        assert!(rows[5]["problem"].as_str().unwrap().contains("plain address"));
+        assert!(rows[4]["problem"]
+            .as_str()
+            .unwrap()
+            .starts_with("The MCP block is not valid: mcp.url must be https"));
+        assert!(rows[5]["problem"]
+            .as_str()
+            .unwrap()
+            .contains("plain address"));
         assert_eq!(rows[5]["identity"], "see https://x.example/");
         assert!(!serde_json::to_string(&rows).unwrap().contains("phc_value"));
         assert!(declared_tools(&json!("x"), &env, &[]).is_empty());
@@ -216,9 +320,14 @@ mod tests {
         assert_eq!(mail_request(&json!({"name": "ops"})), None);
         assert_eq!(mail_request(&json!({"outbound_send": "yes"})), None);
         assert_eq!(
-            mail_request(&json!({"forward_to": "A@x.example; b@x.example,not-an-address, a@x.example"})),
+            mail_request(
+                &json!({"forward_to": "A@x.example; b@x.example,not-an-address, a@x.example"})
+            ),
             Some(json!({"outbound_send": false, "forward_to": ["a@x.example", "b@x.example"]}))
         );
-        assert_eq!(mail_request(&json!({"outbound_send": true})), Some(json!({"outbound_send": true, "forward_to": []})));
+        assert_eq!(
+            mail_request(&json!({"outbound_send": true})),
+            Some(json!({"outbound_send": true, "forward_to": []}))
+        );
     }
 }

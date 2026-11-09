@@ -63,11 +63,13 @@ def check(settings):
             raise RuntimeError("TICO_ALB_REGION must be an AWS region such as us-west-2")
     if kind == "oidc":
         from . import oidc, owner_link
+
         oidc.check(settings)
         if owner_link.break_glass(settings):
             owner_link.check(settings)
     if kind == "owner-link":
         from . import owner_link
+
         owner_link.check(settings)
     if settings.cognito_logout_url and not settings.cognito_logout_url.startswith("https://"):
         raise RuntimeError("TICO_COGNITO_LOGOUT_URL must be an https URL")
@@ -80,15 +82,18 @@ def build(settings, store=None):
         return AwsAlb(settings)
     if settings.proxy_kind == "oidc":
         from . import oidc
+
         return oidc.Oidc(settings, store)
     if settings.proxy_kind == "owner-link":
         from . import owner_link
+
         return owner_link.OwnerLink(settings, store)
     return None
 
 
 def _cookies(headers):
     from .auth import cookies
+
     return cookies(headers)
 
 
@@ -98,8 +103,9 @@ class CloudflareAccess:
     def __init__(self, settings, jwks=None):
         self.settings = settings
         self.jwks = jwks
-        url = (settings.access_jwks_url
-               or ((settings.access_issuer + "/cdn-cgi/access/certs") if settings.access_issuer else ""))
+        url = settings.access_jwks_url or (
+            (settings.access_issuer + "/cdn-cgi/access/certs") if settings.access_issuer else ""
+        )
         if jwks is None and url:
             # Keys are kept for a day: the default 5-minute lifespan re-downloaded them on the
             # first request after every pause, once per concurrent request of a page load. An
@@ -120,10 +126,14 @@ class CloudflareAccess:
             raise Problem("identity", "Sign in to " + self.settings.app_name, 401)
         try:
             key = self.jwks.get_signing_key_from_jwt(assertion).key
-            return jwt.decode(assertion, key, algorithms=["RS256"],
-                              issuer=self.settings.access_issuer,
-                              audience=self.settings.access_audience,
-                              options={"require": ["exp", "iat", "iss", "aud", "sub"]})
+            return jwt.decode(
+                assertion,
+                key,
+                algorithms=["RS256"],
+                issuer=self.settings.access_issuer,
+                audience=self.settings.access_audience,
+                options={"require": ["exp", "iat", "iss", "aud", "sub"]},
+            )
         except jwt.PyJWTError as exc:
             raise _invalid() from exc
 
@@ -144,15 +154,14 @@ class AwsAlb:
 
     def __init__(self, settings):
         self.settings = settings
-        base = settings.alb_keys_url or ("https://public-keys.auth.elb." + settings.alb_region
-                                         + ".amazonaws.com")
+        base = settings.alb_keys_url or ("https://public-keys.auth.elb." + settings.alb_region + ".amazonaws.com")
         self.keys_url = base.rstrip("/")
         self._keys = {}
         self._missing = {}
         self._lock = threading.Lock()
 
     def warm(self):
-        pass                            # keys are per kid, and only known from a token
+        pass  # keys are per kid, and only known from a token
 
     def _key(self, kid):
         now = time.monotonic()
@@ -205,8 +214,12 @@ class AwsAlb:
         kid = header.get("kid")
         # Everything checked here happens before the network: an attacker's token must not
         # choose which URL is fetched or make us fetch at all.
-        if (header.get("alg") != "ES256" or not isinstance(kid, str) or not ALB_KID.fullmatch(kid)
-                or header.get("signer") != self.settings.alb_arn):
+        if (
+            header.get("alg") != "ES256"
+            or not isinstance(kid, str)
+            or not ALB_KID.fullmatch(kid)
+            or header.get("signer") != self.settings.alb_arn
+        ):
             raise _invalid()
         # The ALB signs its base64url segments with their "=" padding, so the signature covers
         # the header and payload exactly as received; re-encoding them first breaks every token.

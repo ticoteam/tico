@@ -18,6 +18,7 @@ ASSUMED_ROLE_ARN = re.compile(r"arn:aws[\w-]*:sts::(\d{12}):assumed-role/([\w+=,
 def sts_client(env):
     import boto3
     from botocore.config import Config
+
     # Short timeouts and few retries: an unreachable STS refuses the start rather than hanging it.
     config = Config(connect_timeout=10, read_timeout=10, retries={"max_attempts": 2, "mode": "standard"})
     region = env.get("AWS_REGION") or env.get("AWS_DEFAULT_REGION") or "us-east-1"
@@ -44,11 +45,15 @@ def check(env=os.environ, client=sts_client):
     if role:
         arn = ROLE_ARN.fullmatch(role)
         if arn and arn.group(1) != account:
-            return False, f"TICO_EXPECTED_AWS_ROLE is in account {arn.group(1)}, not TICO_EXPECTED_AWS_ACCOUNT {account}"
+            return (
+                False,
+                f"TICO_EXPECTED_AWS_ROLE is in account {arn.group(1)}, not TICO_EXPECTED_AWS_ACCOUNT {account}",
+            )
         if not arn and not ROLE_NAME.fullmatch(role):
             return False, "TICO_EXPECTED_AWS_ROLE must be a role name or arn:aws:iam::<account>:role/<name>"
         role_name = arn.group(2) if arn else role
     from botocore.exceptions import ClientError, NoCredentialsError
+
     try:
         identity = client(env).get_caller_identity()
     except NoCredentialsError:

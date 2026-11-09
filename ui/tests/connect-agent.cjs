@@ -1,4 +1,4 @@
-// Connect an agent (ui/connect-agent.js): one tile per agent with its logo; picking Grok shows only
+// Connect an agent (ui/connect-agent.ts): one tile per agent with its logo; picking Grok shows only
 // Grok's steps with the MCP URL; Create token shows the token once and fills the snippet; polling the
 // token list flips to Connected when the agent's first call lands; the token never reaches storage, a
 // URL or the console; an existing connection can be revoked. Desktop and phone, including the protected MCP hostname.
@@ -34,7 +34,7 @@ async function open(browser, viewport, colorScheme, bypass) {
     const json = (body, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
     if (/\/marked\.min\.js$/.test(p)) return route.fulfill({contentType: 'application/javascript', body: 'window.marked={parse:s=>String(s)}'});
     if (url.origin !== 'https://tico-ui.test') return route.abort();
-    const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|css))$/);
+    const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/);
     if (ui && fs.existsSync(uiFile(ui[1]))) return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]), 'utf8')});
     if (p.startsWith('/vendor/fonts/') && p.endsWith('.woff2')) return route.fulfill({contentType: 'font/woff2', body: fs.readFileSync(path.join(__dirname, '..', p))});
     if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
