@@ -6,7 +6,7 @@ import hashlib
 import json
 import sqlite3
 import threading
-from contextlib import contextmanager
+from contextlib import closing, contextmanager
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -24,6 +24,24 @@ from backend.store import Store
 from clients import judge as J
 
 from .test_pipeline_foundation import ANA, boot, hub, step_id
+
+BOOTED = {}
+
+
+@pytest.fixture(scope="module", autouse=True)
+def booted_hub(tmp_path_factory):
+    """One boot for the module (Store.initialize is the slow part); each test copies this file."""
+    path = tmp_path_factory.mktemp("pipeline-judges") / "booted.sqlite"
+    boot(path)
+    BOOTED["path"] = path
+    yield path
+
+
+def copy_booted(path):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with closing(sqlite3.connect(BOOTED["path"])) as source, closing(sqlite3.connect(path)) as target:
+        source.backup(target)
+
 
 FIXTURES = Path(__file__).parent / "fixtures"
 BEN = "human:ben"
@@ -51,7 +69,7 @@ def _engine(p, *, reason="ok"):
 
 def test_the_bands_decide_met_not_met_or_unsure(tmp_path):
     path = tmp_path / "hub.sqlite"
-    boot(path)
+    copy_booted(path)
     c = hub(path)
     settings = _settings(path)
 
@@ -69,7 +87,7 @@ def test_a_failed_model_call_is_unsure_and_no_engine_means_unsure(tmp_path, monk
         P, "_installed_store", None
     )  # no installed app: no production engine, so no engine means unsure
     path = tmp_path / "hub.sqlite"
-    boot(path)
+    copy_booted(path)
     c = hub(path)
     settings = _settings(path)
 
@@ -82,7 +100,7 @@ def test_a_failed_model_call_is_unsure_and_no_engine_means_unsure(tmp_path, monk
 
 def test_the_spend_cap_stops_the_call_and_the_answer_is_unsure(tmp_path, monkeypatch):
     path = tmp_path / "hub.sqlite"
-    boot(path)
+    copy_booted(path)
     c = hub(path)
     called = []
     monkeypatch.setattr(backend_judge, "over_spend_cap", lambda conn, settings, *a, **k: (12.0, 10.0))
@@ -98,7 +116,7 @@ def test_the_spend_cap_stops_the_call_and_the_answer_is_unsure(tmp_path, monkeyp
 
 def test_a_pipeline_with_no_choice_is_judged_by_haiku_and_an_unknown_model_is_refused(tmp_path):
     path = tmp_path / "hub.sqlite"
-    boot(path)
+    copy_booted(path)
     c = hub(path)
     assert P.judge_model_of(c, None) == "haiku-5.5"
     assert P.judge_model_of(c, "no-such-pipeline") == "haiku-5.5"
@@ -106,7 +124,7 @@ def test_a_pipeline_with_no_choice_is_judged_by_haiku_and_an_unknown_model_is_re
 
 def test_a_bot_reviewed_attachment_is_judged_once_and_the_decision_is_recorded(tmp_path, monkeypatch):
     path = tmp_path / "hub.sqlite"
-    boot(path)
+    copy_booted(path)
     c = hub(path)
     dev = H.type_create(
         c, ANA, "Dev", [{"name": "Review", "status": "doing"}, {"name": "Done", "status": "done"}], mover=True
@@ -155,7 +173,7 @@ def test_a_bot_reviewed_attachment_is_judged_once_and_the_decision_is_recorded(t
 
 def test_the_model_is_never_called_while_a_write_transaction_is_open(tmp_path, monkeypatch):
     path = tmp_path / "hub.sqlite"
-    boot(path)
+    copy_booted(path)
     c = hub(path)
     dev = H.type_create(
         c, ANA, "Dev", [{"name": "Review", "status": "doing"}, {"name": "Done", "status": "done"}], mover=True
@@ -206,7 +224,7 @@ def test_the_model_is_never_called_while_a_write_transaction_is_open(tmp_path, m
 
 def test_a_bot_then_person_requirement_sends_an_unsure_answer_to_its_person(tmp_path, monkeypatch):
     path = tmp_path / "hub.sqlite"
-    boot(path)
+    copy_booted(path)
     c = hub(path)
     dev = H.type_create(
         c, ANA, "Dev", [{"name": "Review", "status": "doing"}, {"name": "Done", "status": "done"}], mover=True
@@ -247,7 +265,7 @@ def test_a_bot_then_person_requirement_sends_an_unsure_answer_to_its_person(tmp_
 
 def test_a_tick_over_the_decide_cap_records_unsure_and_never_asks_the_model(tmp_path, monkeypatch):
     path = tmp_path / "hub.sqlite"
-    boot(path)
+    copy_booted(path)
     c = hub(path)
     dev = H.type_create(
         c, ANA, "Dev", [{"name": "Review", "status": "doing"}, {"name": "Done", "status": "done"}], mover=True
@@ -302,7 +320,7 @@ def test_a_stale_mark_met_does_not_stop_the_judge_once_the_work_changed(tmp_path
     from backend import pipeline_engine, pipeline_review
 
     path = tmp_path / "hub.sqlite"
-    boot(path)
+    copy_booted(path)
     c = hub(path)
     dev = H.type_create(
         c, ANA, "Dev", [{"name": "Review", "status": "doing"}, {"name": "Done", "status": "done"}], mover=True
@@ -346,7 +364,7 @@ def test_a_stale_mark_met_does_not_stop_the_judge_once_the_work_changed(tmp_path
 
 def _waiting_store(tmp_path):
     path = tmp_path / "hub.sqlite"
-    boot(path)
+    copy_booted(path)
     c = hub(path)
     dev = H.type_create(
         c, ANA, "Dev", [{"name": "Review", "status": "doing"}, {"name": "Done", "status": "done"}], mover=True
@@ -446,7 +464,7 @@ def test_the_model_is_asked_with_no_read_snapshot_open(tmp_path, monkeypatch):
 
 def test_the_judge_is_told_the_tickets_current_work_version_and_the_attachments_own(tmp_path, monkeypatch):
     path = tmp_path / "hub.sqlite"
-    boot(path)
+    copy_booted(path)
     c = hub(path)
     dev = H.type_create(
         c, ANA, "Dev", [{"name": "Review", "status": "doing"}, {"name": "Done", "status": "done"}], mover=True
@@ -496,7 +514,7 @@ def test_the_judge_is_told_the_tickets_current_work_version_and_the_attachments_
 
 def test_a_page_or_text_file_reaches_the_judge_cut_at_its_cap_and_an_image_has_no_text(tmp_path, monkeypatch):
     path = tmp_path / "hub.sqlite"
-    boot(path)
+    copy_booted(path)
     c = hub(path)
     settings = _settings(path)
     blobs = BL.Blobs(settings)
@@ -585,7 +603,7 @@ def test_a_bot_only_unsure_answer_goes_to_a_person_and_a_bot_task_owner_is_no_ro
 def test_the_judge_with_no_engine_given_uses_the_installed_production_engine(tmp_path, monkeypatch):
     """B11: judge_once's default engine is the installed store's live engine, not a permanent unsure."""
     path = tmp_path / "hub.sqlite"
-    boot(path)
+    copy_booted(path)
     c = hub(path)
     asked = []
 
@@ -605,7 +623,7 @@ def test_the_judge_with_no_engine_given_uses_the_installed_production_engine(tmp
 def test_an_answer_is_refused_once_its_attachment_is_gone(tmp_path):
     """B7: the answer is checked against the attachment (and the rest of the state it was read in) before it is recorded."""
     path = tmp_path / "hub.sqlite"
-    boot(path)
+    copy_booted(path)
     c = hub(path)
     job = {
         "id": "no-such-attachment",
@@ -751,7 +769,7 @@ def test_evidence_the_judge_cannot_read_in_full_is_unsure_whatever_the_model_say
     """Fix L2-2: no text (an image, or a text Tico could not read) or a cut text is unsure, even at p 0.95; readable text is
     still judged by the bands. Through the engine seam; the Haiku path is tested below."""
     path = tmp_path / "hub.sqlite"
-    boot(path)
+    copy_booted(path)
     c = hub(path)
     settings = _settings(path)
     image = {**ATTACHMENT, "id": "att-shot", "source": "blob", "text": None}
@@ -770,7 +788,7 @@ def test_a_met_on_truncated_text_through_the_default_haiku_path_is_unsure(tmp_pa
     from backend import gateway_connection
 
     path = tmp_path / "hub.sqlite"
-    boot(path)
+    copy_booted(path)
     c = hub(path)
     settings = _settings(path)
     store = Store(settings)
@@ -803,7 +821,7 @@ def test_a_marked_met_attachment_on_a_finished_ticket_is_never_asked_the_model(t
     from backend import pipeline_review
 
     path = tmp_path / "hub.sqlite"
-    boot(path)
+    copy_booted(path)
     c = hub(path)
     dev = H.type_create(
         c, ANA, "Dev", [{"name": "Review", "status": "doing"}, {"name": "Done", "status": "done"}], mover=True
@@ -904,7 +922,7 @@ def test_an_attachment_with_no_id_is_not_met_and_the_model_is_never_called():
 
 def test_the_waiting_rows_carry_the_work_title_spec_repo_pr_and_author(tmp_path, monkeypatch):
     path = tmp_path / "hub.sqlite"
-    boot(path)
+    copy_booted(path)
     c = hub(path)
     monkeypatch.setattr(A, "_file_readable", lambda *a, **k: True)
     dev = H.type_create(
@@ -963,7 +981,7 @@ def test_the_waiting_rows_carry_the_work_title_spec_repo_pr_and_author(tmp_path,
 def _judged_world(tmp_path, *, title="Dark mode toggle on Settings", body="Add a Dark mode toggle."):
     """A bot-reviewed link requirement on a ticket owned by Ana, with its link attached. Returns (path, task id, req id)."""
     path = tmp_path / "hub.sqlite"
-    boot(path)
+    copy_booted(path)
     c = hub(path)
     dev = H.type_create(
         c, ANA, "Dev", [{"name": "Review", "status": "doing"}, {"name": "Done", "status": "done"}], mover=True
@@ -1056,7 +1074,7 @@ def test_the_pr_judged_against_is_the_newest_open_else_merged_else_closed(tmp_pa
 def test_a_met_on_a_cut_spec_is_unsure_and_a_not_met_stays_not_met(tmp_path):
     """Codex P2: a rubric may need the whole spec, and the judge saw only its start: its met is not trusted."""
     path = tmp_path / "hub.sqlite"
-    boot(path)
+    copy_booted(path)
     c = hub(path)
     settings = _settings(path)
     long = _work_fields(task_spec="Acceptance: " + "x" * P.SPEC_CHARS)
@@ -1558,7 +1576,7 @@ def test_standings_read_the_work_of_judged_tickets_in_one_query(tmp_path, monkey
 def test_no_evidence_is_not_met_even_over_the_cap_or_with_an_unknown_model(tmp_path, monkeypatch):
     """Codex round 2, P2: missing evidence is decided before the model and the cap are looked at."""
     path = tmp_path / "hub.sqlite"
-    boot(path)
+    copy_booted(path)
     c = hub(path)
     no_evidence = _work_fields()
     del no_evidence["id"]
