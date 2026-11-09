@@ -719,6 +719,7 @@ Thread view (`threads.view(c, viewer, row)`):
  "me": {"member": true, "following": true, "follows": true, "notify": "live", "last_read_seq": 4400, "unread": 3,
         "activity": true, "can_post": true, "can_manage": true, "pinned": false},
  "pinned_for_everyone": false,                   // §10.1
+ "name": "Bea, Cy",                              // what it is called: the title, else its people (Naming, §10)
  "dm_with": [{"actor": "human:bea", "name": "Bea"}], "dm_with_count": 1,   // DM roots: the others, at most 4 named
  "new_at": {"thread_id": "t_sub", "message_id": "m_1"}}                    // list rows only; see below
 ```
@@ -829,6 +830,15 @@ Naming. Only a DM with one teammate may be unnamed. `threads.create`, `threads.d
 422 `name_required`, "Group chats need a name.", and for a bot the same text plus how to pass a title (`title` in
 `hub_thread_create` and `hub_thread_dm_group`, `--title` on the commands). Opening a group DM that already exists needs
 no title, and existing unnamed group DMs stay readable: clients name them from `dm_with`.
+
+A thread with no title that is not a Home is named by `name` (`threads._thread_name`, the same for every reader): the
+people and bots in it and its groups, the viewer left out, sorted by name, the first three and `+N` for the rest;
+`You` when nobody else is in it; `Thread` when the viewer may not see anyone in it. A reader who is not a member is
+told only of the people they may see. Nothing is stored: a rename wins, an empty title brings the names back, and a
+change of members changes the name. A DM keeps its other person's name. Where a name is shown, it is `name` (the thread
+view, list and rail rows, the breadcrumb's `title` and a search hit's `title` for a thread with none, and the
+Catch up, Needs you, digest and attention items; `threads.shown_name` and `threads.shown_names` for the rest). A
+thread's stored `title` is still what the Name field and the title sort use.
 
 Events. `threads` topic, kind `pinned`, `{"thread_id", "root_id", "kind": "pinned", "actor", "pinned",
 "pinned_for_everyone"}` (`pinned` is the receiver's own state). A reader's own pin (`thread_pins`, `ref` = actor) goes

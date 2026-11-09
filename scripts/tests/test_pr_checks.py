@@ -8,6 +8,7 @@ import re
 import subprocess
 import sys
 from types import SimpleNamespace
+import weakref
 
 import pytest
 import yaml
@@ -507,6 +508,27 @@ def test_hub_change_selects_every_test_that_imports_it_transitively_and_no_other
     assert checks.selection(["backend/caddy_assets.py"])["caddy"]
 
 
+def test_the_map_holds_one_syntax_tree_at_a_time(tmp_path, monkeypatch):
+    # Every tree held at once peaked near 2.3 GB on this checkout, which the allocator keeps: four workers that each
+    # built the map ran a merge queue VM out of memory. Each tree is let go before the next file is parsed.
+    for n in range(3):
+        source(tmp_path, f"m{n}.py", "import os\nVALUE = 1\n")
+    source(tmp_path, "broken.py", "syntax error !\n")
+    parse, trees, held = checks.ast.parse, [], []
+
+    def tracked(*args, **kwargs):
+        held.append(sum(tree() is not None for tree in trees))  # trees still alive when the next parse starts
+        tree = parse(*args, **kwargs)
+        trees.append(weakref.ref(tree))
+        return tree
+
+    monkeypatch.setattr(checks.ast, "parse", tracked)
+    graph = checks.DependencyMap(tmp_path)
+    monkeypatch.undo()  # pytest parses source itself to report a failure
+    assert max(held) <= 1, held  # at most the one the caller is about to replace
+    assert len(trees) == 6 and graph.unparsed == {"broken.py"}  # each readable file twice: imports, then the scans
+
+
 def test_docs_changelog_and_workflow_edits_run_the_tests_that_read_them_not_the_suite(tmp_path, mapped):
     # The manual reads docs/ and the app imports the manual: a page edit runs the tests that read docs/ and the tests of
     # the manual itself, not every test that imports the app. A deleted page still runs everything.
@@ -667,8 +689,9 @@ def test_a_listing_that_uses_only_names_sees_added_files_and_a_content_listing_s
 
 
 def test_groups_are_sized_to_the_job_target_and_browser_scripts_split_by_measured_time(tmp_path, monkeypatch, mapped):
-    # One VM holds WORKERS x (target - setup) seconds of one-worker test time; never 0 VMs, never past the cap.
-    per_python = checks.WORKERS * (checks.JOB_SECONDS - checks.SETUP_SECONDS["python"])
+    # One VM holds WORKERS x (target - setup) seconds of one-worker test time, and at least WORKERS x MIN_JOB_SECONDS;
+    # never 0 VMs, never past the cap.
+    per_python = checks.WORKERS * max(checks.JOB_SECONDS - checks.SETUP_SECONDS["python"], checks.MIN_JOB_SECONDS)
     assert checks.job_count(0, "python") == 1
     # One VM past the target by a file's worth is still one VM: 1 s more is 0.25 s more wall time on each of its workers.
     assert checks.job_count(per_python, "python") == 1 and checks.job_count(per_python + 1, "python") == 1
@@ -684,7 +707,8 @@ def test_groups_are_sized_to_the_job_target_and_browser_scripts_split_by_measure
     assert len(checks.groups(Counter({"a.py": 3}), {"a.py": 200})[0]) == 1
     counts = Counter({f"t{i}.py": 1 for i in range(30)})
     split, loads = checks.groups(counts, {name: 100 for name in counts})
-    assert len(split) == checks.job_count(3000, "python") and max(loads) <= per_python
+    # A remainder under the minimum folds into the VMs before it, so a VM holds under two minimums.
+    assert len(split) == checks.job_count(3000, "python") and max(loads) < 2 * checks.WORKERS * checks.MIN_JOB_SECONDS
     assert sorted(sum(split, [])) == sorted(counts)
 
     names = [f"s{i}" for i in range(40)]
@@ -1017,7 +1041,13 @@ def test_every_job_runs_on_a_github_hosted_runner_and_only_a_ready_pull_request_
     )
     for name in ("tests", "factory-sim", "rust-lint", "desktop-app", "recorder", "caddy-linux"):
         assert ready in jobs[name]["if"], name
-    for name, output in (("factory-sim", "factory"), ("recorder", "recorder"), ("caddy-linux", "caddy")):
+    for name, output in (
+        ("factory-sim", "factory"),
+        ("rust-lint", "rust_lint"),
+        ("desktop-app", "desktop"),
+        ("recorder", "recorder"),
+        ("caddy-linux", "caddy"),
+    ):
         assert f"needs.plan.outputs.{output} == 'true'" in jobs[name]["if"], name
     # Only the cosmetic timing receipt runs in the merge queue alone; nothing waits on it.
     assert "github.event_name == 'merge_group'" in jobs["timings"]["if"]
@@ -1587,10 +1617,13 @@ def test_a_ui_file_converted_to_typescript_keeps_the_map_entry_its_js_name_had(t
     assert not any("is not in UI_MAP" in note for note in plan["uncertain"])
 
 
-def test_a_remainder_under_four_minutes_of_work_a_vm_folds_into_one_vm():
-    # A VM carries at least MIN_JOB_SECONDS of tests (per worker, setup excluded): a 1,100 s selection is one VM
-    # of about 5 minutes, not two VMs of 2.3 minutes that each spend their setup on a small share of tests.
+def test_a_remainder_under_five_minutes_of_work_a_vm_folds_into_one_vm():
+    # A VM carries at least MIN_JOB_SECONDS (5 minutes) of tests per worker, setup excluded: a 1,100 s selection is one
+    # VM of about 5 minutes, not two VMs of 2.3 minutes that each spend their setup on a small share of tests.
+    assert checks.MIN_JOB_SECONDS >= 300
     assert checks.job_count(1100, "python") == 1
+    # Under twice the minimum stays one VM; a selection only splits once each VM gets 5 minutes.
+    assert checks.job_count(checks.WORKERS * checks.MIN_JOB_SECONDS * 2 - 1, "python") == 1
     assert checks.job_count(checks.WORKERS * checks.MIN_JOB_SECONDS * 2, "python") == 2
     counts = Counter({f"t{i}.py": 1 for i in range(11)})
     split, loads = checks.groups(counts, {name: 100 for name in counts})
@@ -1604,9 +1637,11 @@ def test_the_factory_legs_hold_four_minutes_of_work_each():
     timings = factory.timings()
     pairs = [(name, 1) for name in sorted(timings)]
     total = sum(timings[name] for name, _ in pairs)
-    legs = max(1, min(factory.groups_for(pairs, timings), int(total // (factory.REMOTE_CPUS * checks.MIN_JOB_SECONDS))))
+    legs = max(
+        1, min(factory.groups_for(pairs, timings), int(total // (factory.REMOTE_CPUS * checks.FACTORY_LEG_SECONDS)))
+    )
     assert len(checks.factory_shards()) == legs
-    assert legs == 1 or total / legs / factory.REMOTE_CPUS >= checks.MIN_JOB_SECONDS
+    assert legs == 1 or total / legs / factory.REMOTE_CPUS >= checks.FACTORY_LEG_SECONDS
 
 
 def test_size_groups_raises_the_target_to_meet_a_ceiling_and_stops_at_the_cap():
@@ -1624,6 +1659,148 @@ def test_size_groups_raises_the_target_to_meet_a_ceiling_and_stops_at_the_cap():
     big = Counter({f"t{i}.py": 1 for i in range(1000)})
     capped = checks.size_groups(big, {name: 100 for name in big}, shards=2, ceiling=8)
     assert capped["target"] == checks.MAX_JOB_SECONDS and capped["tests"] > 8
+
+
+def test_a_queue_group_packs_toward_six_test_jobs_of_up_to_twelve_minutes():
+    """Every queue group shares the organisation's ~60 concurrent hosted jobs, so a group packs its tests into fewer,
+    longer VMs than a pull request: each VM spends about two minutes on setup. A selection too big for six VMs at the cap
+    keeps the cap's VMs: only a narrower selection brings it within six."""
+    assert checks.CEILING["merge_group"] == 6 and checks.QUEUE_MAX_JOB_SECONDS > checks.MAX_JOB_SECONDS
+    # Nov 8's typical backend group: about 930 files, 22,300 one-worker seconds, a browser group, the contract tests and
+    # two factory legs. At the pull request's cap it takes 13 Python VMs; the queue's cap takes fewer.
+    counts = Counter({f"backend/tests/test_{i}.py": 1 for i in range(930)})
+    timings = {name: 22300 / 930 for name in counts}
+    browser = (Counter(dict.fromkeys([f"s{i}" for i in range(32)], 1)), dict.fromkeys([f"s{i}" for i in range(32)], 50))
+    pr = checks.size_groups(counts, timings, browser=browser, fixed=1, shards=2, ceiling=checks.CEILING["merge_group"])
+    queue = checks.size_groups(
+        counts,
+        timings,
+        browser=browser,
+        fixed=1,
+        shards=2,
+        ceiling=checks.CEILING["merge_group"],
+        cap=checks.QUEUE_MAX_JOB_SECONDS,
+    )
+    assert queue["target"] == checks.QUEUE_MAX_JOB_SECONDS and len(queue["split"]) < len(pr["split"])
+    # 13 test jobs (9 Python, a browser, the contracts, 2 factory legs) against 17 at the pull request's cap.
+    assert queue["tests"] == 13 and pr["tests"] == 17
+    # No VM is planned past the cap by more than one file's worth.
+    assert max(queue["loads"]) / checks.WORKERS + checks.SETUP_SECONDS["python"] <= checks.QUEUE_MAX_JOB_SECONDS + 30
+    # A small group stays at the usual target in one or two VMs: 30 minutes of one-worker tests is one VM.
+    small = Counter({f"t{i}.py": 1 for i in range(20)})
+    sized = checks.size_groups(
+        small, {n: 90 for n in small}, ceiling=checks.CEILING["merge_group"], cap=checks.QUEUE_MAX_JOB_SECONDS
+    )
+    assert sized["target"] == checks.JOB_SECONDS and len(sized["split"]) == 1
+
+
+def test_queue_jobs_start_only_for_a_change_to_their_folders_and_all_start_for_an_unreadable_diff(mapped):
+    assert checks.queue_jobs(["backend/task_loops.py", "ui/app/chat.ts"]) == dict.fromkeys(
+        checks.QUEUE_JOB_PATHS, False
+    )
+    # The screen relay is a Rust crate the lint checks, and the Caddy image compiles it.
+    assert checks.queue_jobs(["relay-rs/src/main.rs"]) == {"rust_lint": True, "desktop": False, "recorder": False}
+    assert checks.selection(["relay-rs/src/main.rs"])["caddy"]
+    for name in ("runner-rs/src/sessions.rs", "tools/release-command/src/main.rs", "contracts/runner/schema.json"):
+        assert checks.queue_jobs([name])["rust_lint"], name
+    assert checks.queue_jobs(["scripts/rust_checks.sh"])["rust_lint"]
+    assert checks.queue_jobs(["app/src/main.rs"]) == {"rust_lint": False, "desktop": True, "recorder": False}
+    assert checks.queue_jobs(["recorder/src/lib.rs"]) == {"rust_lint": False, "desktop": False, "recorder": True}
+    # Anchored at the root: a folder named app/ or recorder/ deeper in the tree is not the desktop app or the recorder.
+    assert checks.queue_jobs(
+        ["backend/app/x.py", "docs/recorder/x.md", "scripts/tests/rust_checks.sh"]
+    ) == dict.fromkeys(checks.QUEUE_JOB_PATHS, False)
+    # A diff that could not be read (or is empty) never skips a job.
+    assert checks.queue_jobs([]) == dict.fromkeys(checks.QUEUE_JOB_PATHS, True)
+
+
+def test_the_plan_decides_the_queue_jobs_on_both_tiers_and_a_group_checks_its_merge_commit_without_a_static_vm(
+    tmp_path, monkeypatch, mapped
+):
+    monkeypatch.setattr(checks, "collect", lambda: Counter({"backend/tests/test_task_loops.py": 2}))
+    monkeypatch.setattr(checks, "image_checks", lambda changed: None)
+    monkeypatch.setattr(
+        checks,
+        "changed_files",
+        lambda base, head="HEAD", only=None: [] if only else ["app/src/main.rs", "backend/task_loops.py"],
+    )
+    output = tmp_path / "github-output"
+    monkeypatch.setenv("GITHUB_OUTPUT", str(output))
+    plan = checks.prepare("merge_group", "queue-base", tmp_path / "plan.json", head="queue-head")
+    assert plan["queue_jobs"] == {"rust_lint": False, "desktop": True, "recorder": False}
+    lines = output.read_text().splitlines()
+    assert {"rust_lint=false", "desktop=true", "recorder=false"} <= set(lines)
+    # A ready pull request runs the same jobs under the same conditions (PR checks == queue checks), so its plan writes
+    # the same outputs from its own diff.
+    monkeypatch.setattr(checks, "merge_parent", lambda base: base)
+    monkeypatch.setattr(checks, "guard_changelog", lambda base: None)
+    output.write_text("")
+    plan = checks.prepare("pull_request", "pr-base", tmp_path / "plan.json")
+    assert plan["queue_jobs"] == {"rust_lint": False, "desktop": True, "recorder": False}
+    assert {"rust_lint=false", "desktop=true", "recorder=false"} <= set(output.read_text().splitlines())
+
+    jobs = workflow_jobs()["jobs"]
+    outputs = jobs["plan"]["outputs"]
+    for job, output_name in (("rust-lint", "rust_lint"), ("desktop-app", "desktop"), ("recorder", "recorder")):
+        assert outputs[output_name] == f"${{{{ steps.plan.outputs.{output_name} }}}}", job
+        assert jobs[job]["needs"] == "plan", job
+        assert f"needs.plan.outputs.{output_name} == 'true'" in jobs[job]["if"], job
+        # The plan decided: no step inside the job diffs the branch again.
+        assert not any("git diff" in str(step.get("run", "")) for step in jobs[job]["steps"]), job
+    # The static checks VM runs on pull requests only; a queue group's plan checks its merge commit in its place.
+    assert "github.event_name == 'pull_request'" in jobs["static"]["if"]
+
+
+def test_a_queue_group_runs_every_whole_tree_static_check_on_its_merge_commit_beside_its_selection(tmp_path):
+    """Two pull requests can pass their own static checks and break a whole-tree one together (a route one removes and
+    the other calls), so a queue group runs those on its merge commit. The plan job starts them before the selection and
+    reports them after it, so they cost no VM and little wall time."""
+    jobs = workflow_jobs()["jobs"]
+    steps = jobs["plan"]["steps"]
+    names = [str(step.get("name", "")) for step in steps]
+    start = names.index("Start the merge commit checks")
+    select = names.index("Select affected tests and size measured Python and browser groups")
+    report = names.index("Merge commit checks")
+    assert names.index("Install (five minutes per attempt, one retry)") < start < select < report
+    for index in (start, report):
+        assert steps[index]["if"] == "github.event_name == 'merge_group'"
+    assert 'merge_commit_checks.sh "$BASE_SHA" "$QUEUE_HEAD"' in steps[start]["run"]
+    assert "set +e" in steps[start]["run"] and steps[start]["run"].rstrip().endswith("&")
+    assert steps[report]["timeout-minutes"] <= 10 and 'exit "$(cat' in steps[report]["run"]
+    script = (ROOT / "scripts/ci/merge_commit_checks.sh").read_text()
+    # Every static check runs on the merge commit too, the per-file ones included: they share configuration (a lint rule
+    # one pull request turns on can fail the other's new code).
+    static = [str(step.get("run", "")) for step in jobs["static"]["steps"] if step.get("run")]
+    found = {re.search(r"scripts/[\w/]+\.(?:py|sh)", run).group(0) for run in static if "scripts/" in run}
+    found -= {"scripts/ci_install.sh"}  # the static job's install, which the plan job has already done
+    found |= {"-m backend.openapi_v2 --check", "npm ci --ignore-scripts", "pinned_tool.sh actionlint"}
+    assert found >= {"scripts/check_migration_order.py", "scripts/lint.sh", "scripts/check_ui_lint.sh"}
+    for name in found:
+        assert name in script, name
+    assert 'LINT_BASE_REF="$base"' in script and 'PYRIGHT_BASE_REF="$base"' in script
+
+    # Each check runs even after one fails, and any failure fails the script.
+    fake = tmp_path / "repo"
+    (fake / "scripts/ci").mkdir(parents=True)
+    (fake / "scripts/ci/merge_commit_checks.sh").write_text(script)
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    log = tmp_path / "calls"
+    for tool, code in (("python3", 0), ("bash", 1), ("uvx", 0), ("npm", 0)):
+        stub = bin_dir / tool
+        stub.write_text(f'#!/bin/sh\necho "{tool} $*" >> {log}\nexit {code}\n')
+        stub.chmod(0o755)
+    result = subprocess.run(
+        ["/bin/bash", str(fake / "scripts/ci/merge_commit_checks.sh"), "base", "head"],
+        env={"PATH": f"{bin_dir}:/usr/bin:/bin", "HOME": str(tmp_path)},
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 1
+    calls = log.read_text().splitlines()
+    bash_checks = sum(line.startswith("check bash ") for line in script.splitlines())
+    assert sum(call.startswith("bash ") for call in calls) == bash_checks  # every check ran past the first failure
+    assert calls[-1] == "bash scripts/pinned_tool.sh actionlint"
 
 
 def test_a_queue_group_supersedes_only_the_older_queue_groups_of_its_own_pull_request():
