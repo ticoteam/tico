@@ -290,3 +290,18 @@ def test_the_switch_the_schedule_run_now_and_the_status_work_through_the_api(env
     assert api.post("/api/v2/task-manager/turn-off", json={}, headers=owner()).status_code == 200
     assert report(api)["words"] == "The Task Manager is off"
     assert api.post("/api/v2/task-manager/turn-on", json={}, headers=owner()).status_code == 200
+
+
+def test_a_quiet_task_on_a_seat_only_pipeline_is_reported_like_one_with_no_manager(environment):
+    """Task Manager reads tasks by owner and state, never by pipeline, so a pipeline whose only manager is a seat (manager
+    NULL, manager_seat set) is covered as a managerless one is. Nothing is skipped; this pins it."""
+    api = built(environment)
+    quiet = quiet_task(api)
+    with api.app.state.store.transaction() as c:
+        lead = H.type_create(c, "bot:coo", "Lead", [{"name": "Targets", "status": "open"}], mover=True)
+        c.execute("UPDATE task_types SET manager_seat='lead-pipeline-manager' WHERE id=?", (lead["id"],))
+        step = c.execute("SELECT id FROM task_steps WHERE type_id=?", (lead["id"],)).fetchone()[0]
+        c.execute("UPDATE tasks SET type_id=?, step_id=? WHERE id=?", (lead["id"], step, quiet))
+    assert report(api)["items"] == 1
+    (check,) = checks(api)
+    assert quiet in check["body"]

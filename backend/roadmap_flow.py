@@ -89,11 +89,23 @@ def claim(c):
     seed_pools(c)
 
 
+def _onboarded(c):
+    """Whether the company has finished onboarding. A hub that has not (a new one) gets no legacy manager: its company
+    setup binds the pipeline managers instead (pipeline_setup, seat and bot bindings)."""
+    from . import onboarding
+
+    if not c.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='registry_metadata'").fetchone():
+        return False
+    return bool(onboarding.load(c)["completed"])
+
+
 def ensure(c):
     """Create the two role types when they are missing. An existing type keeps the manager it has, or none: a type
-    with no manager stays without one. The legacy manager names fill only a type this creates."""
+    with no manager stays without one. A type this creates takes the legacy manager name only once onboarding is
+    complete (_onboarded); a company still onboarding gets none."""
     from . import hubdb as H
 
+    onboarded = _onboarded(c)
     for ident, name, manager, steps in (
         (
             PRODUCT,
@@ -138,7 +150,7 @@ def ensure(c):
             continue
         c.execute(
             'INSERT INTO task_types(id,name,bots,manager,role,steps_only,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)',
-            (ident, name, 'work', manager, ident, int(ident == PRODUCT), H.now(), H.now()),
+            (ident, name, 'work', manager if onboarded else None, ident, int(ident == PRODUCT), H.now(), H.now()),
         )
         for position, (step, status) in enumerate(steps):
             c.execute(

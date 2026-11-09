@@ -891,3 +891,20 @@ def test_a_seat_set_up_with_a_template_is_that_job_and_a_coding_one_in_engineeri
     marketing = pinned("Rust engineer", "marketing-lead")
     assert [c["template"] for c in marketing["candidates"]] == ["marketing-lead"]
     assert marketing["department"] == "marketing" and marketing["agents"] == []
+
+
+def test_hiring_a_seat_makes_its_bot_the_manager_of_the_pipeline_bound_to_the_seat(api):
+    providers(api, "anthropic", "openai")
+    seat = post(api, "seats", {"title": "Lead pipeline manager", "reports_to": "coo", "description": "Runs Lead."})
+    with api.app.state.store.transaction() as c:
+        lead = H.type_create(c, "human:cara", "Lead", [{"name": "Targets", "status": "open"}], mover=True)
+        c.execute("UPDATE task_types SET manager_seat=? WHERE id=?", (seat["id"], lead["id"]))
+    offered = post(api, f"seats/{seat['id']}/recruit", {})["candidates"]
+    post(api, f"seats/{seat['id']}/hire", {"template": offered[0]["template"]})
+    with api.app.state.store.read() as c:
+        filled = c.execute("SELECT filled_by FROM seats WHERE id=?", (seat["id"],)).fetchone()[0]
+        manager = c.execute("SELECT manager FROM task_types WHERE id=?", (lead["id"],)).fetchone()[0]
+        logged = c.execute(
+            "SELECT COUNT(*) FROM events WHERE action='pipeline.manager_seated' AND target=?", (lead["id"],)
+        ).fetchone()[0]
+    assert filled and manager == filled and logged == 1  # filled_by is the hired bot's id
