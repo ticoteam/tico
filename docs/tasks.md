@@ -267,11 +267,16 @@ which does not start its own open work. A sweep every 10 minutes wakes at most 2
 and five per computer. It skips a bot that is paused, held, draining, busy with another run, or whose computer is offline.
 A task is resumed at most six times a day.
 
+A bot's Dev ticket in review at a check step (Review 1, Review 2, In QA) is resumed the same way once its check is
+over: the builder owns the next move (merge once CI is green, fix or re-run CI that failed or was cancelled, ask for the
+check again). It needs no check open or waiting for a free reviewer, no CI going and no merge queued on its pull request, and nothing changed on it or
+on a check under it for an hour.
+
 Progress is a status, step or owner change, a note, comment or message by the bot on the task, or a subtask or question
 filed under it. After three resumes in a row with no progress, Tico stops resuming the task and lists it once on the
 task roundup of the bot's manager (another bot on the org chart), or on the bot's own roundup when it has none. A person
-is never told. Progress makes the task eligible again. People's tasks, and tasks that are open, waiting or in review, are
-never resumed this way. **Automations → System jobs** lists the sweep as **Resume stranded work**.
+is never told. Progress makes the task eligible again. People's tasks, tasks that are open or waiting, and tasks in
+review anywhere but a check step are never resumed this way. **Automations → System jobs** lists the sweep as **Resume stranded work**.
 
 ## Work that is waiting
 
@@ -466,7 +471,9 @@ worktree holds, and people's tasks are never reopened this way.
 
 The task roundup leaves a task off its bot's list while the bot has a run queued or running on it, or while the task
 waits on something recorded: a blocker, an open subtask, a pending approval, an unanswered question, a due date, a
-snooze, a stored resume, a pull request link armed with `--wake-once` or a milestone wait. A bot whose profile has its
+snooze, a stored resume, a pull request link armed with `--wake-once` or a milestone wait. A task waiting only on
+bots is listed to the bot it waits on, except while that bot has a run queued or running on the subtask or blocker
+that holds it. A bot whose profile has its
 sweeps off (a reviewer, lead, responder or monitor) is listed only its unanswered questions and its own follow-up
 times. The Task Manager's stalled-task list does not use these skips, so a task no check lists
 still reaches its report.
@@ -536,13 +543,13 @@ it. A change applies to the next item; nothing already on a plate moves. It ship
 stored Rehearsal reads as On. An old stored `chores_budget` is ignored.
 **Replay a day** judges one past day's existing bot items with your settings. Each item is judged against the tasks you
 own today that were created before it and were open at its time. A snooze on a task also leaves it out while the snooze
-is not yet released and lasts past that item's time, however late it was set; a snooze released by now does not count.
-For a task item, that task is left out of the count; a question item leaves nothing out. Nothing moves. Refused writes
-have no saved item text to replay. Older items kept with a bot before refusals were introduced can still be replayed. A
-bot handing its own task to you (one or many) is judged like a task filed for you. A bot's handoff of a task to you is
-also listed when the filter was Off at the time, because no ask row was written. Replay reads it from the task's owner
-history. A handoff by a person is not listed. Each handoff appears once, on the day the bot handed it over. An owner or
-admin replaying someone else's day sees only the titles they may read.
+is not yet released and lasts past that item's time, however late it was set. A snooze released by now does not count.
+For a task item, that task is left out of the count and the list; a question or loose item leaves nothing out. Nothing
+moves. Refused writes have no saved item text to replay. Older items kept with a bot before refusals were introduced
+can still be replayed. A bot handing its own task to you (one or many) is judged like a task filed for you. A bot's
+handoff of a task to you is also listed when the filter was Off at the time, because no ask row was written. Replay
+reads it from the task's owner history. A handoff by a person is not listed. Each handoff appears once, on the day the
+bot handed it over. An owner or admin replaying someone else's day sees only the titles they may read.
 
 API: `GET`/`PUT`/`DELETE /api/v2/ask-ingest/settings` (`mode` is `off` or `on`; a `rehearsal` sent is saved as `on`),
 `POST /api/v2/ask-ingest/replay` (`person`, `date`, `offset`, a page of up to 25; the person, or an owner or admin).

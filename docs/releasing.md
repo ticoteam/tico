@@ -78,6 +78,13 @@ Tico's own releases (ticoteam/tico) ship from release windows (one every hour, 1
   the new head, one validation at a time. A red or cancelled head waits for the next push; it is not run again, except
   by a manual run (below), which validates it again (a flaky check). A window still red at the next open carries on.
   The next window that ships closes the issue.
+- **Main is red.** A red Release validation run on main reviews, once per break, each merged pull request that changed
+  a file a failing test uses (a review, so Tico routes it to the pull request's owner). With more than three such
+  pull requests and only pytest tests failing, the bisect job on RunsOn runs the failing tests at the commits between
+  the last green run and the red one, twice each, and reviews only the merge where they first fail. A mix of results is
+  flaky: nothing is reviewed, and the test is a candidate for `ci/quarantine/` (see Quarantined tests). One open `main-red` issue lists
+  the suspects, the verdict and the likely flaky tests. The next green run on main closes it. See
+  `scripts/main_red.py`.
 - **Canary and stable.** The canary is Tico Team's install, stable is TIDY's. Both are updated through their update
   keys ([Service keys](service-keys.md#update-keys)) with `GET`/`POST /api/v2/system/update`, never a browser or SSH.
 - **Approval.** Stable takes the canary's release only when someone has approved it (see [Approval](#approval)), its
@@ -839,7 +846,7 @@ directly and sends no ID.
 
 The updater contract is `POST {TICO_UPDATER_URL}/update` with `{"version": "X.Y.Z"}` and
 `GET {TICO_UPDATER_URL}/status`, which answers `{state, from, to, message}` where `state` is one of
-`idle`, `pulling`, `restarting`, `healthy`, `rolled_back` or `failed`. Both carry
+`idle`, `pulling`, `snapshotting`, `restarting`, `uncertain`, `healthy`, `rolled_back` or `failed`. Both carry
 `Authorization: Bearer <TICO_UPDATER_TOKEN>`. Without an updater, "Update now" shows the command to
 run on the server: `docker compose pull && docker compose up -d`.
 

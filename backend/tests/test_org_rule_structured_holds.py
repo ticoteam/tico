@@ -153,3 +153,59 @@ def test_the_third_structured_block_in_a_day_escalates_with_one_review_task(bloc
     assert [e["actor"] for e in events(api, "rules.escalated")] == ["bot:ops"] * 2
     assert len(events(api, "rules.blocked")) == 2
     assert len(sql(api, "SELECT id FROM tasks WHERE title = 'Rule review'")) == 1
+
+
+# ---- letters: a do-not-contact by letter holds a bot's letter (backend/letters.py) --------------------------------
+from backend.tests.test_letters import RECIPIENT, grant, hq, quote, send  # noqa: E402, F401
+
+JANE_DNC = "Do not contact Jane Doe by letter."
+
+
+@pytest.fixture
+def jane_letter(ruled, hq):
+    api, _judge = ruled
+    with api.app.state.store.transaction() as c:
+        c.execute(
+            "INSERT INTO entities (id, type, name, name_key, created_by, created_at, updated_at) "
+            "VALUES ('person/jane-doe', 'person', 'Jane Doe', 'jane doe', 'seed', ?, ?)",
+            (H.now(), H.now()),
+        )
+    rule(
+        api,
+        {
+            "kind": "internal",
+            "text": JANE_DNC,
+            "who": {"bots": ["ops"]},
+            "toward_scope": ["entity:person/jane-doe", "channel:letter"],
+            "if_broken": "block",
+        },
+    )
+    grant(api, "ops")
+    return api, hq, quote(api, token="ops-test", recipient={**RECIPIENT, "name": "Jane Doe"})
+
+
+def test_a_letter_to_a_person_with_a_letter_dnc_is_held_and_nothing_is_mailed(jane_letter):
+    api, hq, row = jane_letter
+    sent = send(api, row, token="ops-test")
+    hold = hold_row(api, sent["held"]["id"])
+    assert hold["operation"] == "letter" and hold["check_kind"] == "structured"
+    assert sent["held"]["rules"][0]["text"] == JANE_DNC
+    assert sent["status"] == "quoted" and not sent["approval_id"] and hq.provider_submits == 0
+    # The same rule on another channel does not reach a letter: only the letter channel is named.
+    with api.app.state.store.transaction() as c:
+        c.execute(
+            "UPDATE org_rules SET toward_scope=? WHERE text=?", ('["entity:person/jane-doe","channel:sms"]', JANE_DNC)
+        )
+    assert "held" not in send(api, row, token="ops-test")
+
+
+def test_a_letter_check_that_errors_holds_the_letter(jane_letter, monkeypatch):
+    api, hq, row = jane_letter
+
+    def broken(*args, **kwargs):
+        raise RuntimeError("the walk failed")
+
+    monkeypatch.setattr(ES, "walk", broken)
+    sent = send(api, row, token="ops-test")
+    assert json.loads(hold_row(api, sent["held"]["id"])["verdict"])["error"] == "RuntimeError"
+    assert sent["status"] == "quoted" and hq.provider_submits == 0

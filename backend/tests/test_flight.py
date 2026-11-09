@@ -7,7 +7,7 @@ import logging
 import sqlite3
 import threading
 import time
-from contextlib import contextmanager
+from contextlib import closing, contextmanager
 
 import httpx
 import pytest
@@ -24,8 +24,25 @@ from backend.store import H, Store
 MINUTE = 1_700_000_040
 
 
+@pytest.fixture(scope="module")
+def initialized(tmp_path_factory, request):
+    """One initialized database per worker for this module, which each `store` copies: the copy's initialize only
+    checks the schema where an empty path builds it (~3 s). Off unless --api-database-snapshots, and off with
+    --fresh-api-databases, like conftest's api_database."""
+    if request.config.getoption("--fresh-api-databases") or not request.config.getoption("--api-database-snapshots"):
+        return None
+    folder = tmp_path_factory.mktemp("flight-schema")
+    template = Store(Settings(db_path=folder / "hub.db", registry_dir=folder), flight.Recorder())
+    template.initialize(seed_market=False)
+    template.close()
+    return folder / "hub.db"
+
+
 @pytest.fixture
-def store(tmp_path):
+def store(tmp_path, initialized):
+    if initialized is not None:
+        with closing(sqlite3.connect(initialized)) as source, closing(sqlite3.connect(tmp_path / "hub.db")) as target:
+            source.backup(target)
     s = Store(Settings(db_path=tmp_path / "hub.db", registry_dir=tmp_path), flight.Recorder())
     s.initialize(seed_market=False)
     return s
