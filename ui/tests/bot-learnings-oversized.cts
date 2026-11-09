@@ -1,7 +1,33 @@
 // Exercise the actual panel with current, stale and never-saved files, including its entry button.
-const assert = require('node:assert/strict');
-const path = require('node:path');
-const {chromium} = require('playwright');
+const assert: typeof import('node:assert/strict') = require('node:assert/strict');
+const path: typeof import('node:path') = require('node:path');
+const {chromium} = require('playwright') as typeof import('playwright');
+
+// Page-side globals: the test installs some on window, and bot-learnings.js defines the rest in the page.
+interface LearnDocStatus {
+  oversized: boolean;
+  updated_at: string;
+}
+interface LearnData {
+  documents?: Record<string, string>;
+  document_status?: Record<string, LearnDocStatus>;
+}
+declare const esc: (value: unknown) => string;
+declare function learnOpen(bot: string, data: LearnData): void;
+declare function botLearningsLoad(bot: string): Promise<void>;
+declare global {
+  interface Window {
+    $: (selector: string, root?: ParentNode) => Element | null;
+    esc: (value: unknown) => string;
+    md: (text: string) => string;
+    BOT: {slug: string};
+    post: (url: string, body?: unknown) => Promise<unknown>;
+    toast: (message: string) => void;
+    reads: string[];
+    ago: () => string;
+    get: (url: string) => Promise<unknown>;
+  }
+}
 
 (async () => {
   const browser = await chromium.launch({headless: true});
@@ -12,7 +38,7 @@ const {chromium} = require('playwright');
     await page.addStyleTag({path: path.join(__dirname, '../styles/bot-learnings.css')});
     await page.evaluate(() => {
       window.$ = (selector, root = document) => root.querySelector(selector);
-      window.esc = value => String(value).replace(/[&<>"']/g, ch => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[ch]));
+      window.esc = value => String(value).replace(/[&<>"']/g, ch => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'} as Record<string, string>)[ch]!);
       window.md = text => `<p>${esc(text)}</p>`;
       window.BOT = {slug: 'ops'};
       window.post = async () => ({});
@@ -31,7 +57,7 @@ const {chromium} = require('playwright');
         assert.equal(await page.locator('.learn-warning').count(), 1);
         assert.ok((await page.locator('.learn-warning').innerText()).includes('2026'));
         assert.equal(await page.locator('.learn-body .md').innerText(), 'The saved copy');
-        assert.ok(await page.locator('.learn-warning').evaluate(el => Boolean(el.compareDocumentPosition(el.nextElementSibling) & Node.DOCUMENT_POSITION_FOLLOWING)));
+        assert.ok(await page.locator('.learn-warning').evaluate(el => Boolean(el.compareDocumentPosition(el.nextElementSibling!) & Node.DOCUMENT_POSITION_FOLLOWING)));
         await page.locator('[data-learn-close]').click();
         await page.evaluate(file => learnOpen('ops', {
           documents: {[file]: 'The current copy'}, document_status: {[file]: {oversized: false, updated_at: '2026-10-27T10:00:00Z'}},
@@ -46,7 +72,7 @@ const {chromium} = require('playwright');
     await page.evaluate(async () => {
       window.reads = [];
       const status = {'memory/learnings.md': {oversized: false, updated_at: '2026-10-27T10:00:00Z'}};
-      const row = subject => ({subject, author: 'ops', when: '2026-10-27T10:00:00Z', files: ['memory/learnings.md']});
+      const row = (subject: string) => ({subject, author: 'ops', when: '2026-10-27T10:00:00Z', files: ['memory/learnings.md']});
       window.ago = () => 'today';
       window.get = async url => {
         if (url.endsWith('/dream')) return {dream: null};          // the panel's dream read, not a memory read
@@ -59,15 +85,15 @@ const {chromium} = require('playwright');
       await botLearningsLoad('ops');
     });
     assert.equal((await page.evaluate(() => reads)).length, 1);
-    assert.ok((await page.evaluate(() => reads))[0].includes('include_documents=false'));
+    assert.ok((await page.evaluate(() => reads))[0]!.includes('include_documents=false'));
     assert.equal(await page.locator('#bot-learn').isVisible(), true, 'saved status exposes a file without downloading it');
     await page.locator('#bot-learn').click();
     await page.locator('[data-learn-more]').click();
     await page.locator('.learn-row').nth(1).waitFor();
-    const reads = await page.evaluate(() => reads);
+    const reads: string[] = await page.evaluate(() => reads);
     assert.equal(reads.length, 3);
-    assert.ok(!reads[1].includes('include_documents=false'), 'opening requests current contents');
-    assert.ok(reads[2].includes('include_documents=false'), 'More does not re-download the documents');
+    assert.ok(!reads[1]!.includes('include_documents=false'), 'opening requests current contents');
+    assert.ok(reads[2]!.includes('include_documents=false'), 'More does not re-download the documents');
     await page.locator('[data-learn-view="memory/learnings.md"]').click();
     assert.equal(await page.locator('.learn-body .md').innerText(), 'Latest copy fetched on open');
     await page.locator('[data-learn-close]').click();

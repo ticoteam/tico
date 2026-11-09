@@ -1,14 +1,14 @@
 // No browser: the Learnings panel's memory files (ui/app/bot-learnings.ts learnNewestFirst) open on the working
 // rules, then the newest entry. Bots append at the bottom, so file order opened on the oldest (Dev 301).
-const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const vm = require('node:vm');
-const path = require('node:path');
+const assert: typeof import('node:assert/strict') = require('node:assert/strict');
+const fs: typeof import('node:fs') = require('node:fs');
+const vm: typeof import('node:vm') = require('node:vm');
+const path: typeof import('node:path') = require('node:path');
 
 const context = vm.createContext({});
 vm.runInContext(fs.readFileSync(path.join(__dirname, '../../build/ui/app/bot-learnings.js'), 'utf8'), context);
-const order = text => context.learnNewestFirst(text);
-const headings = text => order(text).split('\n').filter(l => /^#|^- /.test(l));
+const order = (text?: string) => context.learnNewestFirst(text);
+const headings = (text: string) => order(text).split('\n').filter((l: string) => /^#|^- /.test(l));
 
 // Appended at the bottom: dated sections come back newest first, under the title and intro, each section whole.
 const appended = [

@@ -10,11 +10,12 @@
 // (a manager reads a bot report's private tasks, but nothing else private); Gina sees T1 and P2 (a reader). A private
 // task a teammate may not read is refused by the hub, and the page does not open it. Runs on a desktop only. task-list.js and task-modal.js do branch on the phone (the sheet is a modal there),
 // but the asserts are about the hub's answers to each teammate, which no width changes, and e2e-core opens the sheet on both.
-const assert = require('node:assert/strict');
-const {journey, open, go, must, call, assertClean, expectFailure, t, SEEDS} = require('./support/e2e.cjs');
+import type * as E2E from './support/e2e.cjs';
+const assert: typeof import('node:assert/strict') = require('node:assert/strict');
+const {journey, open, go, must, call, assertClean, expectFailure, t, SEEDS} = require('./support/e2e.cjs') as typeof E2E;
 
-const TITLES = {T1: 'Team launch checklist', P1: 'Omar private review', P2: 'Private release cut'};
-const SEES = {
+const TITLES: Record<string, string> = {T1: 'Team launch checklist', P1: 'Omar private review', P2: 'Private release cut'};
+const SEES: Record<string, Record<string, boolean>> = {
   dana: {T1: true, P1: true, P2: true},
   omar: {T1: true, P1: true, P2: false},
   priya: {T1: true, P1: false, P2: true},
@@ -23,7 +24,7 @@ const SEES = {
 
 journey('e2e-roles', async ({hub, browser, phone}) => {
   const where = phone ? 'phone' : 'desktop';
-  const idOf = reply => (reply.task || reply).id;
+  const idOf = (reply: {task?: {id: string}; id?: string}) => (reply.task || reply).id!;
 
   const T1 = idOf(await must(hub, 'dana', 'POST', 'tasks', {title: TITLES.T1, body: 'Everyone reads this one.',
     owner: 'engineering-lead'}, 'the public task'));
@@ -39,31 +40,31 @@ journey('e2e-roles', async ({hub, browser, phone}) => {
     owner: 'builder-claude', private: true}, 'the bot-only private task'));
   await must(hub, 'builder-claude', 'POST', 'tasks', {title: 'Gina checks the cut', body: 'Gina is brought in here.',
     owner: 'gina', private: true, relations: [{task: P2, kind: 'parent'}]}, 'builder-claude brings Gina in');
-  const ids = {T1, P1, P2};
+  const ids: Record<string, string> = {T1, P1, P2};
 
   for (const who of Object.keys(SEES)) {
     const page = await open(browser, hub, who, {phone, hash: '#/tasks?view=list'});
-    await page.locator('.tl-row', {hasText: TITLES.T1}).first().waitFor({timeout: t(20000)});
+    await page.locator('.tl-row', {hasText: TITLES.T1!}).first().waitFor({timeout: t(20000)});
     for (const key of ['T1', 'P1', 'P2']) {
-      const shown = await page.locator('.tl-row', {hasText: TITLES[key]}).count();
-      assert.equal(shown > 0, SEES[who][key], `${where}: ${who} ${SEES[who][key] ? 'sees' : 'does not see'} ${key}`);
+      const shown = await page.locator('.tl-row', {hasText: TITLES[key]!}).count();
+      assert.equal(shown > 0, SEES[who]![key], `${where}: ${who} ${SEES[who]![key] ? 'sees' : 'does not see'} ${key}`);
     }
     assertClean(page, `${where}: ${who} list`);
 
     // A task the teammate may read opens its sheet; one they may not is refused by the hub and does not open.
     for (const key of ['P1', 'P2']) {
-      if (SEES[who][key]) {
+      if (SEES[who]![key]) {
         go(page, `#/task/${ids[key]}`);
-        await page.waitForFunction(title => document.querySelector('#task-modal')?.open
-          && document.querySelector('#task-modal .tmodal-title')?.textContent.trim() === title, TITLES[key], {timeout: t(20000)});
+        await page.waitForFunction(title => (document.querySelector('#task-modal') as HTMLDialogElement | null)?.open
+          && document.querySelector<HTMLElement>('#task-modal .tmodal-title')?.textContent!.trim() === title, TITLES[key], {timeout: t(20000)});
       } else {
         const refused = await call(hub, who, 'GET', `tasks/${ids[key]}`);
         assert.ok(refused.status === 403 || refused.status === 404, `${where}: ${who} is refused ${key}: ${refused.status}`);
         expectFailure(page, refused.status, `^/api/v2/tasks/${ids[key]}$`, 'GET');
         go(page, `#/task/${ids[key]}`);
         await page.waitForTimeout(t(2000));
-        const opened = await page.evaluate(title => document.querySelector('#task-modal')?.open
-          && document.querySelector('#task-modal .tmodal-title')?.textContent.trim() === title, TITLES[key]);
+        const opened = await page.evaluate(title => (document.querySelector('#task-modal') as HTMLDialogElement | null)?.open
+          && document.querySelector<HTMLElement>('#task-modal .tmodal-title')?.textContent!.trim() === title, TITLES[key]);
         assert.ok(!opened, `${where}: ${who} does not open ${key}`);
       }
       assertClean(page, `${where}: ${who} ${key}`);

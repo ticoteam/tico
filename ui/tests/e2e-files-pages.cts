@@ -3,11 +3,24 @@
 // task (filesPages). Then Make page's task box and progress card, which were make-page.cjs (makePage; the request and pin use a real hub,
 // the authenticated publish and durable status contracts are in backend/tests/test_make_page.py). Runs on a phone: the
 // desktop row (kind, bot) is redesign-e2e-pages.cjs's, and Make page's fit is checked where it is tightest.
-const assert = require('node:assert/strict');
-const {journey, open, go, call, must, expectFailure, assertClean, drawn, shot, t, SEEDS} = require('./support/e2e.cjs');
+import type * as E2E from './support/e2e.cjs';
+import type {PassContext} from './support/e2e.cjs';
+const assert: typeof import('node:assert/strict') = require('node:assert/strict');
+const {journey, open, go, call, must, expectFailure, assertClean, drawn, shot, t, SEEDS} = require('./support/e2e.cjs') as typeof E2E;
+
+// Page-side globals the app defines (the scripts call them inside page.evaluate).
+declare function liveEmit(stream: string, payload: unknown): void;
+declare const LIVE: {es: {readyState: number; url: string} | null | undefined};
+
+// What the Make page card's request holds: the queued message, its run, and the state the card shows.
+interface MakeStatus {
+  message_id: string;
+  conversation_id: string;
+  state: string;
+}
 
 
-async function filesPages({hub, browser, phone}) {
+async function filesPages({hub, browser, phone}: PassContext) {
     const where = phone ? 'phone' : 'desktop';
     const page = await open(browser, hub, 'dana', {phone, hash: '#/library/files'});
     for (const title of ['Launch plan', 'Engineering weekly', 'Signup funnel']) {
@@ -62,8 +75,8 @@ async function filesPages({hub, browser, phone}) {
     assert.equal(await audienceReader.locator('[data-pg-audience], .pg-lock').count(), 0);
     assertClean(audienceReader, `${where}: audienceReader regains the page`);
     const audienceId = new URL((await saved).url()).pathname.split('/').pop();
-    const legal = await must(hub, 'dana', 'POST', 'groups', {name: 'Legal'});
-    const contracts = await must(hub, 'dana', 'POST', 'groups', {name: 'Contracts', parent: legal.id, add: {people: ['priya']}});
+    const legal = await must<{id: string}>(hub, 'dana', 'POST', 'groups', {name: 'Legal'});
+    const contracts = await must<{id: string}>(hub, 'dana', 'POST', 'groups', {name: 'Contracts', parent: legal.id, add: {people: ['priya']}});
     await must(hub, 'dana', 'PATCH', 'pages/' + audienceId, {audience: {teams: [legal.id]}});
     await audienceReader.locator('#pg-view .pg-title').waitFor();
     await must(hub, 'dana', 'PATCH', 'groups/' + contracts.id, {remove: {people: ['priya']}});
@@ -89,10 +102,10 @@ async function filesPages({hub, browser, phone}) {
     assert.ok(overflow <= 1, `${where}: files page scrolls sideways by ${overflow}px`);
     assertClean(page, `${where}: back on files`);
 
-    const task = await must(hub, 'dana', 'POST', 'tasks', {owner: 'person:dana', title: 'Review the linked plan', body: 'Review.'});
-    const id = (task.task || task).id;
+    const task = await must<{task?: {id: string}; id?: string}>(hub, 'dana', 'POST', 'tasks', {owner: 'person:dana', title: 'Review the linked plan', body: 'Review.'});
+    const id = (task.task || task).id!;
     const reader = await open(browser, hub, 'priya', {phone, hash: '#/task/' + id});
-    const permissions = await must(hub, 'priya', 'GET', 'places/task:' + id);
+    const permissions = await must<{can_edit: boolean; can_link: boolean}>(hub, 'priya', 'GET', 'places/task:' + id);
     assert.equal(permissions.can_edit, false, `${where}: the reader cannot arrange the task's cards`);
     assert.equal(permissions.can_link, true, `${where}: the reader can link a page`);
     go(page, '#/task/' + id);
@@ -127,18 +140,18 @@ async function filesPages({hub, browser, phone}) {
     await page.context().close();
 }
 
-async function makePage({hub, browser, phone}) {
+async function makePage({hub, browser, phone}: PassContext) {
     await must(hub, 'dana', 'POST', 'assistant/turn-on', {});
-    const made = await must(hub, 'dana', 'POST', 'tasks', {owner: 'human:dana', title: 'Prepare the alert flow', body: 'Three scenarios.'});
-    const id = (made.task || made).id;
+    const made = await must<{task?: {id: string}; id?: string}>(hub, 'dana', 'POST', 'tasks', {owner: 'human:dana', title: 'Prepare the alert flow', body: 'Three scenarios.'});
+    const id = (made.task || made).id!;
     const page = await open(browser, hub, 'priya', {phone, hash: '#/task/' + id});
-    let status = null, cap = false;
+    let status = null as MakeStatus | null, cap = false;
     await page.route('**/api/v2/tasks/' + id + '/make-page', async route => {
       if (route.request().method() === 'GET') return route.fulfill({json: {make_page: status}});
       if (cap) return route.fulfill({status: 409, json: {error: {code: 'conflict', detail: 'This task has 60 pins', retryable: false}}});
       const response = await route.fetch();
       assert.equal(response.status(), 200, await response.text());
-      const sent = (await response.json()).message;
+      const sent = (await response.json() as {message: {id: string; conversation_id: string; sender_id: string; refs: {make_page: unknown}}}).message;
       assert.deepEqual(sent.refs.make_page, {task: id});
       assert.equal(sent.sender_id, 'human:priya');
       status = {message_id: sent.id, conversation_id: sent.conversation_id, state: 'making'};
@@ -149,19 +162,19 @@ async function makePage({hub, browser, phone}) {
     await section.getByRole('button', {name: 'Make page', exact: true}).click();
     const card = section.locator('.tp-making');
     await card.filter({hasText: 'Making page…'}).waitFor({timeout: t(10000)});
-    status.state = 'update_required';
-    await page.evaluate(cid => liveEmit('runs', {conversation_id: cid, state: 'queued'}), status.conversation_id);
+    status!.state = 'update_required';
+    await page.evaluate(cid => liveEmit('runs', {conversation_id: cid, state: 'queued'}), status!.conversation_id);
     const retry = card.getByRole('button', {name: 'Retry', exact: true});
     await retry.waitFor({timeout: t(10000)});
     assert.match(await card.innerText(), /Update this computer to make pages/);
-    const pendingMessage = status.message_id;
+    const pendingMessage = status!.message_id;
     await retry.click();
     await page.waitForFunction(() => {
-      const button = document.querySelector('[data-tp-retry]');
+      const button = document.querySelector<HTMLButtonElement>('[data-tp-retry]');
       return button && !button.disabled;
     }, null, {timeout: t(10000)});
-    assert.equal(status.message_id, pendingMessage, 'Retry preserves the queued request');
-    status.state = 'making';
+    assert.equal(status!.message_id, pendingMessage, 'Retry preserves the queued request');
+    status!.state = 'making';
     await card.getByRole('button', {name: 'Retry', exact: true}).click();
     await card.filter({hasText: 'Making page…'}).waitFor({timeout: t(10000)});
     assert.equal(await field.evaluate(el => el.matches(':user-invalid')), false, 'a sent request leaves no validation error');
@@ -174,13 +187,13 @@ async function makePage({hub, browser, phone}) {
     await card.filter({hasText: 'Making page…'}).waitFor({timeout: t(10000)});
     await page.waitForFunction(cid => LIVE.es?.readyState === EventSource.OPEN &&
       new URL(LIVE.es.url).searchParams.get('conversation')?.split(',').includes(cid),
-      status.conversation_id, {timeout: t(10000)});
-    status.state = 'made';
-    const published = await must(hub, 'engineering-lead', 'POST', 'pages', {name: 'alert-flow.html', title: 'Alert flow', task: id,
+      status!.conversation_id, {timeout: t(10000)});
+    status!.state = 'made';
+    const published = await must<{page: {file_id: string}}>(hub, 'engineering-lead', 'POST', 'pages', {name: 'alert-flow.html', title: 'Alert flow', task: id,
       text: '<h1>Alert flow</h1><p>Three scenarios.</p>'});
     await section.locator('.pg-card[data-page="' + published.page.file_id + '"]').waitFor({timeout: t(15000)}).catch(async e => {
       const state = await page.evaluate(() => ({route: location.hash, stream: LIVE.es?.url,
-        open: document.querySelector('#task-modal')?.open, section: document.querySelector('[data-task-pages]')?.innerText}));
+        open: (document.querySelector('#task-modal') as HTMLDialogElement | null)?.open, section: document.querySelector<HTMLElement>('[data-task-pages]')?.innerText}));
       assert.fail(e.message + '\n' + JSON.stringify({state, errors: page.watch.errors,
         pins: await must(hub, 'priya', 'GET', 'places/task:' + id)}));
     });
@@ -189,8 +202,8 @@ async function makePage({hub, browser, phone}) {
     await field.fill('A second page.');
     await section.getByRole('button', {name: 'Make page', exact: true}).click();
     await card.filter({hasText: 'Making page…'}).waitFor({timeout: t(10000)});
-    status.state = 'failed';
-    await page.evaluate(cid => liveEmit('runs', {conversation_id: cid, state: 'completed'}), status.conversation_id);
+    status!.state = 'failed';
+    await page.evaluate(cid => liveEmit('runs', {conversation_id: cid, state: 'completed'}), status!.conversation_id);
     await card.getByRole('link', {name: 'Open chat'}).waitFor({timeout: t(10000)});
     assert.match(await card.innerText(), /Not made/);
     await card.getByRole('link', {name: 'Open chat'}).click();
@@ -213,7 +226,7 @@ async function makePage({hub, browser, phone}) {
 journey('e2e-files-pages', async ctx => {
   for (const [name, step] of Object.entries({filesPages, makePage})) {
     try { await step(ctx); }
-    catch (error) { error.message = `[${name}, ${ctx.phone ? 'phone' : 'desktop'}] ${error.message}`; throw error; }
+    catch (error) { (error as Error).message = `[${name}, ${ctx.phone ? 'phone' : 'desktop'}] ${(error as Error).message}`; throw error; }
     finally { for (const context of ctx.browser.contexts()) await context.close().catch(() => {}); }
   }
 }, [...SEEDS, 'pages'], {only: 'phone'});

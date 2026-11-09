@@ -1,32 +1,57 @@
 // Exercise the real pinned Sentry browser SDK and final wire scrubber with synthetic config only.
-const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const path = require('node:path');
-const {chromium} = require('playwright');
-const {scrubSentry} = require('../../build/ui/observability.js');
+const assert: typeof import('node:assert/strict') = require('node:assert/strict');
+const fs: typeof import('node:fs') = require('node:fs');
+const path: typeof import('node:path') = require('node:path');
+const {chromium} = require('playwright') as typeof import('playwright');
+// The built module (ui/observability.ts), as far as this script reads it.
+interface ScrubbedSentry {
+  exception: {values: {stacktrace: {frames: {filename: string; lineno: number}[]}}[]};
+}
+interface SentryEnvelopeEvent {
+  extra: Record<string, unknown>;
+  tags: {source: string};
+  user: {id: string};
+  release: string;
+}
+const {scrubSentry} = require('../../build/ui/observability.js') as {scrubSentry: (event: unknown, identity: unknown,
+  environment: unknown, release: string | undefined) => ScrubbedSentry};
+
+// Page-side globals: the observability bundle the page loads, and the report function the script installs.
+declare const TicoObservability: {
+  start(): Promise<void>;
+  chatSend(): (payload: Record<string, unknown>) => void;
+  response(status: number): void;
+  reset(): void;
+};
+declare const report: (payload: Record<string, unknown>) => void;
+declare global {
+  interface Window {
+    report: (payload: Record<string, unknown>) => void;
+  }
+}
 
 const scrubbed = scrubSentry({message:'PRIVATE', request:{url:'PRIVATE'}, breadcrumbs:[{message:'PRIVATE'}],
   exception:{values:[{value:'PRIVATE',stacktrace:{frames:[
     {filename:'https://private.test/tico/ui/app/pill.js?token=PRIVATE',lineno:42,function:'PRIVATE'},
     {filename:'https://private.test/tico/ui/app.bundle.js',lineno:7},
     {filename:'https://private.test/customer-PRIVATE.js',lineno:1}]}}]}}, 'tico:' + 'a'.repeat(64),'test','test-503');
-assert.deepEqual(scrubbed.exception.values[0].stacktrace.frames,[{filename:'app/pill.js',lineno:42},{filename:'app.bundle.js',lineno:7}]);
+assert.deepEqual(scrubbed.exception.values[0]!.stacktrace.frames,[{filename:'app/pill.js',lineno:42},{filename:'app.bundle.js',lineno:7}]);
 assert.doesNotMatch(JSON.stringify(scrubbed),/PRIVATE|private\.test|request|breadcrumbs/);
 
 (async () => {
   const browser = await chromium.launch({headless:true});
   try {
     const page = await browser.newPage();
-    const events = [];
+    const events: SentryEnvelopeEvent[] = [];
     let identity = 'a', enabled = false, vendorLoads = 0;
     const cors = {'access-control-allow-origin':'*', 'access-control-allow-methods':'POST, OPTIONS', 'access-control-allow-headers':'*'};
     await page.route('**/*', async route => {
       const url = new URL(route.request().url());
       if (url.hostname === 'o123.ingest.us.sentry.io') {
         if (route.request().method() === 'OPTIONS') return route.fulfill({headers:cors,body:''});
-        const envelope = route.request().postData().split('\n');
+        const envelope = route.request().postData()!.split('\n');
         for (let i = 1; i + 1 < envelope.length; i += 2)
-          if (JSON.parse(envelope[i]).type === 'event') events.push(JSON.parse(envelope[i + 1]));
+          if (JSON.parse(envelope[i]!).type === 'event') events.push(JSON.parse(envelope[i + 1]!));
         return route.fulfill({headers:cors,body:'{}'});
       }
       assert.equal(url.hostname, 'fixture.test', 'no unexpected reporting destination');
@@ -34,7 +59,7 @@ assert.doesNotMatch(JSON.stringify(scrubbed),/PRIVATE|private\.test|request|brea
       if (url.pathname === '/assets/observability-vendors.js') vendorLoads++;
       if (url.pathname === '/api/v2/observability') return route.fulfill({json:{app:'tico', environment:'test', distinct_id:'tico:' + identity.repeat(64),
         sentry_dsn:'https://' + 'b'.repeat(32) + '@o123.ingest.us.sentry.io/123', release:'test-503'}});
-      const file = {'/observability.ts': path.join(__dirname, '..', '..', 'build', 'ui', 'observability.js'), '/assets/observability-vendors.js': path.join(__dirname, '..', 'assets', 'observability-vendors.js')}[url.pathname];
+      const file = ({'/observability.ts': path.join(__dirname, '..', '..', 'build', 'ui', 'observability.js'), '/assets/observability-vendors.js': path.join(__dirname, '..', 'assets', 'observability-vendors.js')} as Record<string, string>)[url.pathname];
       return route.fulfill({contentType:file ? 'text/javascript' : 'text/html',body:file ? fs.readFileSync(file,'utf8') : '<script src="/observability.ts"></script>'});
     });
     await page.goto('http://fixture.test/');
@@ -48,7 +73,7 @@ assert.doesNotMatch(JSON.stringify(scrubbed),/PRIVATE|private\.test|request|brea
       report({outcome:'slow',duration_ms:5001,retries:1,status:503,text:'PRIVATE MESSAGE',url:location.href});
       report({outcome:'refused',duration_ms:6300,retries:2,status:422,error:'PRIVATE ERROR',email:'private@fixture.test'});
     });
-    const waitFor = async n => {
+    const waitFor = async (n: number) => {
       const deadline = Date.now() + 10000;
       while (events.length < n && Date.now() < deadline) await page.evaluate(() => new Promise(resolve => requestAnimationFrame(resolve)));
       assert.equal(events.length,n,'actual SDK event receipt');
@@ -62,7 +87,7 @@ assert.doesNotMatch(JSON.stringify(scrubbed),/PRIVATE|private\.test|request|brea
     assert.doesNotMatch(JSON.stringify(events), /PRIVATE|fixture\.test|private@|request|breadcrumbs/);
     await page.evaluate(() => { report({outcome:'unconfirmed',duration_ms:10,retries:0,status:401}); TicoObservability.response(401); report({outcome:'refused',status:401}); });
     await waitFor(3);
-    assert.equal(events[2].extra.status,401,'auth failure reaches Sentry before reset');
+    assert.equal(events[2]!.extra.status,401,'auth failure reaches Sentry before reset');
     identity = 'c';
     await page.evaluate(async () => {
       await TicoObservability.start();
@@ -70,8 +95,8 @@ assert.doesNotMatch(JSON.stringify(scrubbed),/PRIVATE|private\.test|request|brea
       TicoObservability.chatSend()({outcome:'network',duration_ms:100,retries:0,status:0});
     });
     await waitFor(4);
-    assert.equal(events[3].user.id, 'tico:' + 'c'.repeat(64));
-    assert.equal(events[3].extra.outcome,'network');
+    assert.equal(events[3]!.user.id, 'tico:' + 'c'.repeat(64));
+    assert.equal(events[3]!.extra.outcome,'network');
     await page.evaluate(() => TicoObservability.reset());
     console.log('real Sentry send diagnostics, wire privacy and account-generation fence: ok');
   } finally { await browser.close(); }

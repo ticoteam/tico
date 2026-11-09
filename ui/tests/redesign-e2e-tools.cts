@@ -2,8 +2,9 @@
 // Engineering Lead's Acme Billing, read and refund, from the runner's heartbeat) under In use, with how many have it, and
 // its row opens the tool: who has it (the Engineering Lead, free to change things there), then its page. The old
 // Tools address (#/integrations) leads to Tools. Desktop only: nothing here differs on a phone, and e2e-tools.cjs runs Tools on a phone.
+import type * as RE from './support/redesign-e2e.cjs';
 const assert = require('node:assert/strict');
-const {run, open, ok, sideways, shot, t} = require('./support/redesign-e2e.cjs');
+const {run, open, ok, sideways, shot, t} = require('./support/redesign-e2e.cjs') as typeof RE;
 
 run('redesign-e2e-tools', ['org', 'toured', 'connection'], async ({hub, browser, phone, tag}) => {
   const page = await open(browser, hub, 'dana', {phone, hash: '#/integrations'});
@@ -32,7 +33,7 @@ run('redesign-e2e-tools', ['org', 'toured', 'connection'], async ({hub, browser,
   await access.first().waitFor();
   assert.match(await access.first().innerText(), /engineering.lead/i, `${tag}: who has it`);
   assert.equal(await access.first().locator('.pill').innerText(), 'Freely', `${tag}: refund is a write`);
-  assert.equal(await page.locator('#int-detail .int-meta dd').evaluateAll(dd => dd.filter(d => !d.textContent.trim()).length), 0,
+  assert.equal(await page.locator('#int-detail .int-meta dd').evaluateAll(dd => dd.filter(d => !d.textContent!.trim()).length), 0,
     `${tag}: no label without a value`);
   assert.equal(await sideways(page), false);
   await shot(page, `${tag}-02-tool`);
