@@ -747,12 +747,11 @@ def _factory_setup(c, who, made):
     try:
         from . import pipeline_setup
 
-        # `bindings` is the pipelines branch's parameter (org-v2-pipes); until that lands, this call raises and is recorded.
         pipeline_setup.apply_factory_setup(
             c,
             who.actor,
             preset="company_default",
-            bindings=bindings,  # pyright: ignore[reportCallIssue]
+            bindings=bindings,
         )
     except Exception as err:  # noqa: BLE001 - best effort: setup never fails on the factories
         c.execute("ROLLBACK TO company_factories")

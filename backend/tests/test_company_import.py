@@ -1535,6 +1535,24 @@ def test_the_factories_are_set_up_once_after_the_team_with_each_pipelines_manage
     ]
 
 
+def test_the_real_factory_setup_makes_the_nine_pipelines_with_their_managers(environment):
+    """Not monkeypatched: the import makes company_default's pipelines, the live Pipeline Manager (still planned while
+    BotOps sets it up) runs Engineering, an open seat waits on Growth Experiments, and nothing is recorded as failed."""
+    api = environment()
+    preview_and_import(api, live_text())
+    assert not rows(api, "SELECT action FROM events WHERE action='onboarding.pipelines_failed'")
+    types = {r["name"]: r for r in rows(api, "SELECT name,manager,manager_seat FROM task_types")}
+    for name in ("Product", "Engineering", "Growth Experiments", "Lead", "Opportunity", "Customer",
+                 "Success Experiments", "Legal", "Finance"):
+        assert name in types, name
+    ids = bot_ids(api)
+    seats = {r["title"]: r["id"] for r in rows(api, "SELECT id,title FROM seats")}
+    assert types["Engineering"]["manager"] == ids["engineering-pipeline-manager"]
+    assert types["Finance"]["manager"] == ids["bookkeeper"]
+    assert types["Growth Experiments"]["manager"] is None
+    assert types["Growth Experiments"]["manager_seat"] == seats["Growth Experiments Pipeline Manager"]
+
+
 def test_a_factory_setup_that_fails_is_rolled_back_recorded_and_the_team_stays(environment, monkeypatch):
     from backend import pipeline_setup
 
